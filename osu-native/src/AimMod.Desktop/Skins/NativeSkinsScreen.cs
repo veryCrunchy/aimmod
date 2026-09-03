@@ -18,12 +18,15 @@ public partial class NativeSkinsScreen : CompositeDrawable
     private Func<InstalledLazerSkin, CancellationToken, Task>? applySkin;
     private readonly CancellationTokenSource lifetime = new();
     private readonly OsuTextBox searchBox;
-    private readonly SpriteText status;
+    private readonly TruncatingSpriteText status;
     private readonly FillFlowContainer list;
+    private readonly Container searchPanel;
+    private readonly Container listPanel;
+    private readonly Container detailPanel;
     private readonly Container preview;
-    private readonly SpriteText selectedName;
-    private readonly SpriteText selectedCreator;
-    private readonly SpriteText selectedDetails;
+    private readonly TruncatingSpriteText selectedName;
+    private readonly TruncatingSpriteText selectedCreator;
+    private readonly TruncatingSpriteText selectedDetails;
     private readonly ApplyButton applyButton;
     private InstalledLazerSkin? selected;
     private Guid? lazerSkinId;
@@ -55,7 +58,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
                 Font = new FontUsage(size: 10, weight: "Bold"),
                 Colour = AimModPalette.Cyan,
             },
-            new CircularContainer
+            searchPanel = new CircularContainer
             {
                 Y = 97,
                 Width = 560,
@@ -73,7 +76,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
                     },
                 },
             },
-            status = new SpriteText
+            status = new TruncatingSpriteText
             {
                 Y = 158,
                 Text = source is null ? "Waiting for the local lazer library..." : "Loading installed skins...",
@@ -86,7 +89,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
                 Padding = new MarginPadding { Top = 188 },
                 Children = new Drawable[]
                 {
-                    new Container
+                    listPanel = new Container
                     {
                         RelativeSizeAxes = Axes.Both,
                         Width = 0.6f,
@@ -111,7 +114,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
                             },
                         },
                     },
-                    new Container
+                    detailPanel = new Container
                     {
                         Anchor = Anchor.TopRight,
                         Origin = Anchor.TopRight,
@@ -160,9 +163,9 @@ public partial class NativeSkinsScreen : CompositeDrawable
                                 Spacing = new(8),
                                 Children = new Drawable[]
                                 {
-                                    selectedName = detailText(24, AimModPalette.Text, "Bold", "Select a skin"),
-                                    selectedCreator = detailText(13, AimModPalette.Cyan, "SemiBold", "Installed skin details appear here."),
-                                    selectedDetails = detailText(12, AimModPalette.Muted, "Regular", string.Empty),
+                                    selectedName = truncatingDetailText(24, AimModPalette.Text, "Bold", "Select a skin"),
+                                    selectedCreator = truncatingDetailText(13, AimModPalette.Cyan, "SemiBold", "Installed skin details appear here."),
+                                    selectedDetails = truncatingDetailText(12, AimModPalette.Muted, "Regular", string.Empty),
                                     applyButton = new ApplyButton(applySelected),
                                 },
                             },
@@ -171,6 +174,29 @@ public partial class NativeSkinsScreen : CompositeDrawable
                 },
             },
         };
+    }
+
+    protected override void Update()
+    {
+        base.Update();
+
+        float availableWidth = Math.Max(0, DrawWidth);
+        searchPanel.Width = Math.Clamp(availableWidth, 280, 560);
+        status.MaxWidth = availableWidth;
+
+        const float panelGap = 16;
+        float listWidth = Math.Max(300, (availableWidth - panelGap) * 0.6f);
+        listWidth = Math.Min(listWidth, Math.Max(0, availableWidth - 280 - panelGap));
+        listPanel.Width = listWidth;
+        listPanel.RelativeSizeAxes = Axes.Y;
+
+        detailPanel.Width = Math.Max(0, availableWidth - listWidth - panelGap);
+        detailPanel.RelativeSizeAxes = Axes.Y;
+
+        float detailTextWidth = Math.Max(80, detailPanel.DrawWidth - 44);
+        selectedName.MaxWidth = detailTextWidth;
+        selectedCreator.MaxWidth = detailTextWidth;
+        selectedDetails.MaxWidth = detailTextWidth;
     }
 
     protected override void LoadComplete()
@@ -293,6 +319,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
         preview.Clear();
         if (selected is null)
         {
+            addPreviewPlaceholder();
             selectedName.Text = "Select a skin";
             selectedCreator.Text = "Installed skin details appear here.";
             selectedDetails.Text = string.Empty;
@@ -316,6 +343,27 @@ public partial class NativeSkinsScreen : CompositeDrawable
         applyButton.SetState(
             applySkin is not null && selected.SkinId != appliedExternalSkinId,
             selected.SkinId == appliedExternalSkinId ? "Active in AimMod" : "Use for replay playback");
+    }
+
+    private void addPreviewPlaceholder()
+    {
+        preview.AddRange(new Drawable[]
+        {
+            new Box
+            {
+                RelativeSizeAxes = Axes.Both,
+                Colour = ColourInfo.GradientHorizontal(AimModPalette.PinkDark, AimModPalette.CyanDark),
+            },
+            new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas, Alpha = 0.44f },
+            new SpriteIcon
+            {
+                Anchor = Anchor.Centre,
+                Origin = Anchor.Centre,
+                Icon = FontAwesome.Solid.PaintBrush,
+                Size = new(42),
+                Colour = AimModPalette.Muted,
+            },
+        });
     }
 
     private void applySelected()
@@ -369,11 +417,21 @@ public partial class NativeSkinsScreen : CompositeDrawable
         Colour = colour,
     };
 
+    private static TruncatingSpriteText truncatingDetailText(float size, Colour4 colour, string weight, string value) => new()
+    {
+        Text = value,
+        Font = new FontUsage(size: size, weight: weight),
+        Colour = colour,
+    };
+
     private partial class SkinRow : ClickableContainer
     {
         private readonly Action action;
         private readonly Box background;
         private readonly Colour4 restingColour;
+        private readonly TruncatingSpriteText name;
+        private readonly TruncatingSpriteText creator;
+        private readonly FillFlowContainer<Drawable> badgeFlow;
 
         public SkinRow(InstalledLazerSkin skin, bool selected, bool activeInLazer, bool activeInAimMod, Action action)
         {
@@ -398,21 +456,10 @@ public partial class NativeSkinsScreen : CompositeDrawable
                     Width = 4,
                     Colour = activeInAimMod ? AimModPalette.Success : activeInLazer ? AimModPalette.Cyan : AimModPalette.Pink,
                 },
-                new FillFlowContainer
-                {
-                    Anchor = Anchor.CentreLeft,
-                    Origin = Anchor.CentreLeft,
-                    AutoSizeAxes = Axes.Both,
-                    Margin = new MarginPadding { Left = 18 },
-                    Direction = FillDirection.Vertical,
-                    Spacing = new(3),
-                    Children = new Drawable[]
-                    {
-                        detailText(16, AimModPalette.Text, "SemiBold", skin.Name),
-                        detailText(11, AimModPalette.Muted, "Regular", skin.Creator.Length > 0 ? skin.Creator : "Creator not specified"),
-                    },
-                },
-                new FillFlowContainer
+                name = truncatingDetailText(16, AimModPalette.Text, "SemiBold", skin.Name).With(text => text.Position = new(18, 17)),
+                creator = truncatingDetailText(11, AimModPalette.Muted, "Regular", skin.Creator.Length > 0 ? skin.Creator : "Creator not specified")
+                    .With(text => text.Position = new(18, 43)),
+                badgeFlow = new FillFlowContainer<Drawable>
                 {
                     Anchor = Anchor.CentreRight,
                     Origin = Anchor.CentreRight,
@@ -423,6 +470,14 @@ public partial class NativeSkinsScreen : CompositeDrawable
                     Children = badges(skin, activeInLazer, activeInAimMod),
                 },
             };
+        }
+
+        protected override void Update()
+        {
+            base.Update();
+            float textWidth = Math.Max(60, DrawWidth - badgeFlow.DrawWidth - 54);
+            name.MaxWidth = textWidth;
+            creator.MaxWidth = textWidth;
         }
 
         private static Drawable[] badges(InstalledLazerSkin skin, bool activeInLazer, bool activeInAimMod)

@@ -37,9 +37,11 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
     [Cached]
     private readonly Bindable<Guid?> selectedRowId = new();
     private readonly OsuTextBox searchBox;
-    private readonly SpriteText resultStatus;
+    private readonly TruncatingSpriteText resultStatus;
     private readonly LoadMoreButton loadMoreButton;
     private readonly AimModLoadingOverlay loadingOverlay;
+    private readonly RangeSlider starSlider;
+    private readonly OsuDropdown<LocalLibrarySort> sortDropdown;
     private readonly Bindable<LocalLibrarySort> sortMode;
     private readonly BindableDouble minimumStars = new(0) { MinValue = 0, MaxValue = 10, Default = 0 };
     private readonly BindableDouble maximumStars = new(10) { MinValue = 0, MaxValue = 10, Default = 10 };
@@ -91,7 +93,7 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
                     ? "Your lazer library, grouped by beatmap set and difficulty."
                     : "Saved local plays. Select one to watch and analyse it inside AimMod.",
                 mode == NativeLocalLibraryMode.Beatmaps ? "local library" : "play history"),
-            resultStatus = new SpriteText
+            resultStatus = new TruncatingSpriteText
             {
                 Y = 164,
                 Text = "Loading library...",
@@ -115,7 +117,7 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
                     ? "Search beatmaps, artists, mappers, or difficulties"
                     : "Search replays, players, maps, or mods",
             },
-            new RangeSlider
+            starSlider = new RangeSlider
             {
                 Anchor = Anchor.TopRight,
                 Origin = Anchor.TopRight,
@@ -138,7 +140,7 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
                 Font = new FontUsage(size: 10, weight: "Bold"),
                 Colour = AimModPalette.Cyan,
             },
-            new OsuDropdown<LocalLibrarySort>
+            sortDropdown = new OsuDropdown<LocalLibrarySort>
             {
                 Anchor = Anchor.TopRight,
                 Origin = Anchor.TopRight,
@@ -166,6 +168,29 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
             },
             loadingOverlay = new AimModLoadingOverlay(),
         };
+    }
+
+    protected override void Update()
+    {
+        base.Update();
+
+        float width = Math.Max(640, DrawWidth);
+        const float gap = 24;
+        const float sortWidth = 180;
+        float contentWidth = width - sortWidth - gap * 2;
+        float searchWidth = Math.Clamp(contentWidth * 0.48f, 198, 620);
+        float sliderWidth = Math.Clamp(contentWidth - searchWidth, 180, 420);
+
+        searchBox.Width = searchWidth;
+        starSlider.Anchor = Anchor.TopLeft;
+        starSlider.Origin = Anchor.TopLeft;
+        starSlider.Position = new(searchWidth + gap, 72);
+        starSlider.Size = new(sliderWidth, 65);
+        sortDropdown.Anchor = Anchor.TopLeft;
+        sortDropdown.Origin = Anchor.TopLeft;
+        sortDropdown.Position = new(width - sortWidth, 91);
+        sortDropdown.Width = sortWidth;
+        resultStatus.MaxWidth = width;
     }
 
     protected override void LoadComplete()

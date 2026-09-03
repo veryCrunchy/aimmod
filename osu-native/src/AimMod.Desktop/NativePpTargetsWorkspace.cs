@@ -30,11 +30,19 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
     private readonly Func<ILocalScorePpHydrationService?> localPpHydrator;
     private readonly Func<OfficialOsuApiClient?> officialApi;
     private readonly OsuTextBox search;
-    private readonly SpriteText status;
+    private readonly TruncatingSpriteText status;
     private readonly SpriteText profileSummary;
-    private readonly SpriteText resultCount;
+    private readonly TruncatingSpriteText resultCount;
     private readonly FillFlowContainer<Drawable> results;
     private readonly AimModLoadingOverlay loadingOverlay;
+    private readonly Container filterHeader;
+    private readonly Container resultViewport;
+    private readonly RangeSlider starSlider;
+    private readonly RangeSlider expectedPpSlider;
+    private readonly RangeSlider maximumPpSlider;
+    private readonly OsuDropdown<OfficialBeatmapCategory> categoryDropdown;
+    private readonly OsuEnumDropdown<TargetLength> lengthDropdown;
+    private readonly OsuEnumDropdown<TargetSort> sortDropdown;
     private readonly BindableDouble minimumStars = new(0) { MinValue = 0, MaxValue = 10, Default = 0 };
     private readonly BindableDouble maximumStars = new(10) { MinValue = 0, MaxValue = 10, Default = 10 };
     private readonly BindableDouble minimumExpectedPp = new(0) { MinValue = 0, MaxValue = 1_000, Default = 0 };
@@ -76,7 +84,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         RelativeSizeAxes = Axes.Both;
         InternalChildren = new Drawable[]
         {
-            new Container
+            filterHeader = new Container
             {
                 RelativeSizeAxes = Axes.X,
                 Height = 238,
@@ -94,7 +102,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                         Size = new(270, 44),
                         PlaceholderText = "Search title, artist, mapper, or source",
                     },
-                    new RangeSlider
+                    starSlider = new RangeSlider
                     {
                         Position = new(294, 76),
                         Size = new(220, 62),
@@ -106,7 +114,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                         TooltipSuffix = "stars",
                         NubWidth = 28,
                     },
-                    new RangeSlider
+                    expectedPpSlider = new RangeSlider
                     {
                         Position = new(536, 76),
                         Size = new(220, 62),
@@ -118,7 +126,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                         TooltipSuffix = "pp",
                         NubWidth = 28,
                     },
-                    new RangeSlider
+                    maximumPpSlider = new RangeSlider
                     {
                         Anchor = Anchor.TopRight,
                         Origin = Anchor.TopRight,
@@ -132,14 +140,14 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                         TooltipSuffix = "pp",
                         NubWidth = 28,
                     },
-                    new OsuDropdown<OfficialBeatmapCategory>
+                    categoryDropdown = new OsuDropdown<OfficialBeatmapCategory>
                     {
                         Position = new(0, 151),
                         Width = 210,
                         Items = new[] { OfficialBeatmapCategory.Ranked, OfficialBeatmapCategory.Loved, OfficialBeatmapCategory.Pending, OfficialBeatmapCategory.Any },
                         Current = category,
                     },
-                    new OsuEnumDropdown<TargetLength>
+                    lengthDropdown = new OsuEnumDropdown<TargetLength>
                     {
                         Anchor = Anchor.TopCentre,
                         Origin = Anchor.TopCentre,
@@ -147,7 +155,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                         Width = 210,
                         Current = length,
                     },
-                    new OsuEnumDropdown<TargetSort>
+                    sortDropdown = new OsuEnumDropdown<TargetSort>
                     {
                         Anchor = Anchor.TopRight,
                         Origin = Anchor.TopRight,
@@ -155,8 +163,8 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                         Width = 210,
                         Current = sort,
                     },
-                    status = text("Loading local history...", 11, AimModPalette.Muted).With(drawable => drawable.Position = new(0, 211)),
-                    resultCount = text(string.Empty, 11, AimModPalette.Muted, "SemiBold").With(drawable =>
+                    status = truncatingText("Loading local history...", 11, AimModPalette.Muted).With(drawable => drawable.Position = new(0, 211)),
+                    resultCount = truncatingText(string.Empty, 11, AimModPalette.Muted, "SemiBold").With(drawable =>
                     {
                         drawable.Anchor = Anchor.TopRight;
                         drawable.Origin = Anchor.TopRight;
@@ -164,7 +172,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                     }),
                 },
             },
-            new Container
+            resultViewport = new Container
             {
                 RelativeSizeAxes = Axes.Both,
                 Padding = new MarginPadding { Top = 245 },
@@ -185,6 +193,68 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             },
             loadingOverlay = new AimModLoadingOverlay(),
         };
+    }
+
+    protected override void Update()
+    {
+        base.Update();
+
+        float width = Math.Max(640, DrawWidth);
+        bool compact = width < 1_000;
+        float headerHeight = compact ? 318 : 238;
+        filterHeader.Height = headerHeight;
+        resultViewport.Padding = new MarginPadding { Top = headerHeight + 7 };
+
+        if (compact)
+        {
+            float halfWidth = (width - 18) / 2;
+            search.Position = new(0, 91);
+            search.Size = new(halfWidth, 44);
+            placeSlider(starSlider, width - halfWidth, 76, halfWidth);
+            placeSlider(expectedPpSlider, 0, 143, halfWidth);
+            placeSlider(maximumPpSlider, width - halfWidth, 143, halfWidth);
+
+            float dropdownWidth = (width - 24) / 3;
+            placeDropdown(categoryDropdown, 0, 220, dropdownWidth, Anchor.TopLeft);
+            placeDropdown(lengthDropdown, (width - dropdownWidth) / 2, 220, dropdownWidth, Anchor.TopLeft);
+            placeDropdown(sortDropdown, width - dropdownWidth, 220, dropdownWidth, Anchor.TopLeft);
+            status.Position = new(0, 286);
+            resultCount.Position = new(0, 286);
+        }
+        else
+        {
+            float searchWidth = Math.Clamp(width * 0.22f, 250, 310);
+            float sliderWidth = Math.Clamp((width - searchWidth - 72) / 3, 190, 260);
+            search.Position = new(0, 91);
+            search.Size = new(searchWidth, 44);
+            placeSlider(starSlider, searchWidth + 24, 76, sliderWidth);
+            placeSlider(expectedPpSlider, searchWidth + 48 + sliderWidth, 76, sliderWidth);
+            placeSlider(maximumPpSlider, width - sliderWidth, 76, sliderWidth);
+            placeDropdown(categoryDropdown, 0, 151, 210, Anchor.TopLeft);
+            placeDropdown(lengthDropdown, (width - 210) / 2, 151, 210, Anchor.TopLeft);
+            placeDropdown(sortDropdown, width - 210, 151, 210, Anchor.TopLeft);
+            status.Position = new(0, 211);
+            resultCount.Position = new(0, 211);
+        }
+
+        status.MaxWidth = width * 0.62f;
+        resultCount.MaxWidth = width * 0.34f;
+    }
+
+    private static void placeSlider(RangeSlider slider, float x, float y, float width)
+    {
+        slider.Anchor = Anchor.TopLeft;
+        slider.Origin = Anchor.TopLeft;
+        slider.Position = new(x, y);
+        slider.Size = new(width, 62);
+    }
+
+    private static void placeDropdown(Drawable dropdown, float x, float y, float width, Anchor anchor)
+    {
+        dropdown.Anchor = anchor;
+        dropdown.Origin = anchor;
+        dropdown.Position = new(x, y);
+        dropdown.Width = width;
     }
 
     protected override void LoadComplete()
@@ -581,6 +651,13 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         Colour = colour,
     };
 
+    private static TruncatingSpriteText truncatingText(string value, float size, Colour4 colour, string weight = "Regular") => new()
+    {
+        Text = value,
+        Font = new FontUsage(size: size, weight: weight),
+        Colour = colour,
+    };
+
     private enum TargetLength
     {
         Any,
@@ -606,6 +683,9 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         private readonly FillFlowContainer details;
         private readonly TruncatingSpriteText title;
         private readonly TruncatingSpriteText artist;
+        private readonly TruncatingSpriteText mapDetails;
+        private readonly TruncatingSpriteText confidenceDetails;
+        private readonly Container artwork;
         private readonly Container expectedMetric;
         private readonly Container maximumMetric;
         private bool importing;
@@ -631,7 +711,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             {
                 new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
                 new Box { RelativeSizeAxes = Axes.Y, Width = 4, Colour = difficultyColour },
-                new Container
+                artwork = new Container
                 {
                     RelativeSizeAxes = Axes.Y,
                     Width = 126,
@@ -652,8 +732,8 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                     {
                         title = new TruncatingSpriteText { Text = $"{candidate.Title} [{candidate.Difficulty}]", Font = new FontUsage(size: 15, weight: "Bold"), Colour = AimModPalette.Text, MaxWidth = 450 },
                         artist = new TruncatingSpriteText { Text = $"{candidate.Artist} / mapped by {candidate.Creator}", Font = new FontUsage(size: 11, weight: "SemiBold"), Colour = AimModPalette.Muted, MaxWidth = 450 },
-                        text($"{candidate.StarRating:0.00}*  /  {candidate.Bpm:0} BPM  /  {formatLength(candidate.TotalLengthSeconds)}  /  {mods}", 10, difficultyColour, "SemiBold"),
-                        text($"{candidate.PreferenceFit:P0} preference fit  /  {confidence}", 10, calculated ? AimModPalette.Success : AimModPalette.Muted),
+                        mapDetails = truncatingText($"{candidate.StarRating:0.00}*  /  {candidate.Bpm:0} BPM  /  {formatLength(candidate.TotalLengthSeconds)}  /  {mods}", 10, difficultyColour, "SemiBold"),
+                        confidenceDetails = truncatingText($"{candidate.PreferenceFit:P0} preference fit  /  {confidence}", 10, calculated ? AimModPalette.Success : AimModPalette.Muted),
                     },
                 },
                 expectedMetric = metric("EXPECTED", expected, "pp", AimModPalette.Cyan),
@@ -683,15 +763,20 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         protected override void Update()
         {
             base.Update();
-            const float action_column = 148;
-            const float metric_width = 120;
-            float expectedX = Math.Max(500, DrawWidth - action_column - metric_width * 2);
+            const float action_column = 166;
+            const float metric_width = 112;
+            bool compact = DrawWidth < 900;
+            artwork.Width = compact ? 84 : 126;
+            details.X = compact ? 104 : 148;
+            float expectedX = DrawWidth - action_column - metric_width * 2;
             expectedMetric.X = expectedX;
             maximumMetric.X = expectedX + metric_width;
-            float detailWidth = Math.Max(210, expectedX - 166);
+            float detailWidth = Math.Max(100, expectedX - details.X - 18);
             details.Width = detailWidth;
             title.MaxWidth = detailWidth;
             artist.MaxWidth = detailWidth;
+            mapDetails.MaxWidth = detailWidth;
+            confidenceDetails.MaxWidth = detailWidth;
         }
 
         private void beginImport()
@@ -720,12 +805,12 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
 
         private static Container metric(string caption, string value, string suffix, Colour4 colour) => new()
         {
-            Size = new(128, 108),
+            Size = new(112, 108),
             Children = new Drawable[]
             {
                 text(caption, 9, AimModPalette.Muted, "Bold").With(drawable => drawable.Position = new(0, 24)),
                 text(value, 24, colour, "Bold").With(drawable => drawable.Position = new(0, 42)),
-                text(suffix, 10, AimModPalette.Muted, "SemiBold").With(drawable => drawable.Position = new(68, 52)),
+                text(suffix, 10, AimModPalette.Muted, "SemiBold").With(drawable => drawable.Position = new(58, 52)),
             },
         };
 

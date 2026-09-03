@@ -100,9 +100,12 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
     private readonly Func<IOfficialBeatmapDiscoveryClient?> client;
     private readonly Func<OnlineBeatmapImportService?> importer;
     private readonly OsuTextBox searchBox;
-    private readonly SpriteText resultStatus;
+    private readonly TruncatingSpriteText resultStatus;
     private readonly FillFlowContainer results;
     private readonly AimModLoadingOverlay loadingOverlay;
+    private readonly RangeSlider starSlider;
+    private readonly OsuDropdown<OfficialBeatmapCategory> categoryDropdown;
+    private readonly OsuDropdown<OfficialBeatmapSort> sortDropdown;
     private readonly BindableDouble minimumStars = new(0) { MinValue = 0, MaxValue = 10, Default = 0 };
     private readonly BindableDouble maximumStars = new(10) { MinValue = 0, MaxValue = 10, Default = 10 };
     private readonly Bindable<OfficialBeatmapCategory> category = new(OfficialBeatmapCategory.Any);
@@ -142,7 +145,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                 PlaceholderText = "Search title, artist, mapper, or tag",
                 Depth = -20,
             },
-            new RangeSlider
+            starSlider = new RangeSlider
             {
                 Anchor = Anchor.TopRight,
                 Origin = Anchor.TopRight,
@@ -157,7 +160,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                 NubWidth = 30,
                 Depth = -20,
             },
-            new OsuDropdown<OfficialBeatmapCategory>
+            categoryDropdown = new OsuDropdown<OfficialBeatmapCategory>
             {
                 Y = 151,
                 Width = 190,
@@ -165,7 +168,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                 Current = category,
                 Depth = -20,
             },
-            new OsuDropdown<OfficialBeatmapSort>
+            sortDropdown = new OsuDropdown<OfficialBeatmapSort>
             {
                 Anchor = Anchor.TopRight,
                 Origin = Anchor.TopRight,
@@ -175,7 +178,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                 Current = sort,
                 Depth = -20,
             },
-            resultStatus = new SpriteText
+            resultStatus = new TruncatingSpriteText
             {
                 Y = 202,
                 Text = "Connecting to osu!...",
@@ -198,11 +201,40 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                         AutoSizeAxes = Axes.Y,
                         Direction = FillDirection.Vertical,
                         Spacing = new(8),
+                        Padding = new MarginPadding { Right = 10, Bottom = 32 },
                     },
                 },
             },
             loadingOverlay = new AimModLoadingOverlay(),
         };
+    }
+
+    protected override void Update()
+    {
+        base.Update();
+
+        float width = Math.Max(640, DrawWidth);
+        const float gap = 24;
+        bool compact = width < 1_050;
+        float searchWidth = compact ? (width - gap) * 0.52f : Math.Clamp(width * 0.43f, 360, 620);
+        float sliderWidth = compact ? width - gap - searchWidth : Math.Clamp(width * 0.34f, 300, 420);
+
+        searchBox.Width = searchWidth;
+        starSlider.Anchor = Anchor.TopLeft;
+        starSlider.Origin = Anchor.TopLeft;
+        starSlider.Position = new(searchWidth + gap, 72);
+        starSlider.Size = new(sliderWidth, 65);
+
+        float dropdownWidth = Math.Clamp((width - gap) / 2, 180, 230);
+        categoryDropdown.Anchor = Anchor.TopLeft;
+        categoryDropdown.Origin = Anchor.TopLeft;
+        categoryDropdown.Position = new(0, 151);
+        categoryDropdown.Width = dropdownWidth;
+        sortDropdown.Anchor = Anchor.TopLeft;
+        sortDropdown.Origin = Anchor.TopLeft;
+        sortDropdown.Position = new(width - dropdownWidth, 151);
+        sortDropdown.Width = dropdownWidth;
+        resultStatus.MaxWidth = width;
     }
 
     protected override void LoadComplete()
@@ -459,7 +491,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
         protected override void Update()
         {
             base.Update();
-            float available = Math.Max(140, DrawWidth - 230);
+            float available = Math.Max(80, DrawWidth - 230);
             titleText.MaxWidth = available;
             artistText.MaxWidth = available;
             detailText.MaxWidth = available;
@@ -467,11 +499,11 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
 
         private static IEnumerable<Drawable> visibleDifficulties(OfficialBeatmapSet set)
         {
-            foreach (OfficialBeatmapDifficulty difficulty in set.Difficulties.Take(4))
+            foreach (OfficialBeatmapDifficulty difficulty in set.Difficulties.Take(3))
                 yield return new DifficultyChip(difficulty);
 
-            if (set.Difficulties.Count > 4)
-                yield return new AimModPill($"+{set.Difficulties.Count - 4}", AimModPillTone.Neutral);
+            if (set.Difficulties.Count > 3)
+                yield return new AimModPill($"+{set.Difficulties.Count - 3}", AimModPillTone.Neutral);
         }
 
         private void beginImport()

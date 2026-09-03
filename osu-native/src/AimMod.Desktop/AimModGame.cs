@@ -331,7 +331,7 @@ public partial class AimModGame : OsuGameBase
 
     private void showHome()
     {
-        homeScreen ??= new HomeScreen(showBeatmaps, showReplays, showStatistics, showCoaching) { RelativeSizeAxes = Axes.Both };
+        homeScreen ??= new HomeScreen(showBeatmaps, showSkins, showReplays, showStatistics, showCoaching, showPpTargets) { RelativeSizeAxes = Axes.Both };
         switchWorkspaceRoute(NativeRoute.Home, new MarginPadding { Top = 88, Horizontal = 52, Bottom = 36 }, homeScreen);
     }
 
@@ -944,47 +944,68 @@ public partial class AimModGame : OsuGameBase
 
     private partial class HomeScreen : Container
     {
-        public HomeScreen(Action showBeatmaps, Action showReplays, Action showStatistics, Action showCoaching)
+        public HomeScreen(
+            Action showBeatmaps,
+            Action showSkins,
+            Action showReplays,
+            Action showStatistics,
+            Action showCoaching,
+            Action showPpTargets)
         {
             Children = new Drawable[]
             {
-                new FillFlowContainer
+                new AimModSectionHeader(
+                    "Your osu! workspace",
+                    "Open a focused view for your local library, replay review, performance history, or next PP target.",
+                    "aimmod!lazer"),
+                text("PLAY", 10, AimModPalette.Pink, "Bold").With(drawable => drawable.Y = 112),
+                new GridContainer
                 {
                     RelativeSizeAxes = Axes.X,
-                    AutoSizeAxes = Axes.Y,
-                    Direction = FillDirection.Vertical,
-                    Spacing = new(8),
-                    Children = new Drawable[]
+                    Height = 166,
+                    Y = 136,
+                    ColumnDimensions = new[]
                     {
-                        text("AIMMOD!LAZER", 13, AimModPalette.Pink, "Bold"),
-                        text("Your osu! history, ready to use", 34, AimModPalette.Text, "Bold"),
-                        text("Browse the local lazer library, watch saved plays, and turn them into a useful next run.", 17, AimModPalette.Muted),
+                        new Dimension(GridSizeMode.Relative, 0.5f),
+                        new Dimension(GridSizeMode.Relative, 0.5f),
+                    },
+                    RowDimensions = new[]
+                    {
+                        new Dimension(GridSizeMode.Absolute, 78),
+                        new Dimension(GridSizeMode.Absolute, 78),
+                    },
+                    Content = new[]
+                    {
+                        new Drawable[]
+                        {
+                            new WorkspaceLink(FontAwesome.Solid.Music, "Beatmaps", "Search installed and online sets", AimModPalette.Pink, showBeatmaps, rightPadding: true),
+                            new WorkspaceLink(FontAwesome.Solid.Crosshairs, "PP targets", "Find exact per-difficulty opportunities", AimModPalette.Cyan, showPpTargets),
+                        },
+                        new Drawable[]
+                        {
+                            new WorkspaceLink(FontAwesome.Solid.PaintBrush, "Skins", "Inspect and apply installed lazer skins", AimModPalette.Pink, showSkins, rightPadding: true),
+                            new WorkspaceLink(FontAwesome.Solid.Play, "Replays", "Review playback and exact judgements", AimModPalette.Cyan, showReplays),
+                        },
                     },
                 },
-                new FillFlowContainer
+                text("IMPROVE", 10, AimModPalette.Cyan, "Bold").With(drawable => drawable.Y = 330),
+                new GridContainer
                 {
                     RelativeSizeAxes = Axes.X,
-                    Height = 210,
-                    Y = 132,
-                    Direction = FillDirection.Horizontal,
-                    Spacing = new(16),
-                    Children = new Drawable[]
+                    Height = 78,
+                    Y = 354,
+                    ColumnDimensions = new[]
                     {
-                        new FeatureCard("Beatmaps", "Search installed sets, compare difficulties, and start a map.", "Browse library", AimModPalette.Pink, showBeatmaps),
-                        new FeatureCard("Replays", "Review local scores with native playback and exact judgement data.", "Open replays", AimModPalette.Cyan, showReplays),
+                        new Dimension(GridSizeMode.Relative, 0.5f),
+                        new Dimension(GridSizeMode.Relative, 0.5f),
                     },
-                },
-                new FillFlowContainer
-                {
-                    RelativeSizeAxes = Axes.X,
-                    Height = 170,
-                    Y = 360,
-                    Direction = FillDirection.Horizontal,
-                    Spacing = new(16),
-                    Children = new Drawable[]
+                    Content = new[]
                     {
-                        new FeatureCard("Statistics", "Follow score, accuracy, and consistency across your play history.", "View statistics", AimModPalette.Pink, showStatistics, compact: true),
-                        new FeatureCard("Coaching", "Find recurring mistakes and choose a useful next map.", "Review coaching", AimModPalette.Cyan, showCoaching, compact: true),
+                        new Drawable[]
+                        {
+                            new WorkspaceLink(FontAwesome.Solid.ChartLine, "Statistics", "Compare accuracy, score, and consistency", AimModPalette.Pink, showStatistics, rightPadding: true),
+                            new WorkspaceLink(FontAwesome.Solid.Bullseye, "Coaching", "Turn replay analysis into a next step", AimModPalette.Cyan, showCoaching),
+                        },
                     },
                 },
             };
@@ -1013,48 +1034,69 @@ public partial class AimModGame : OsuGameBase
         }
     }
 
-    private partial class FeatureCard : ClickableContainer
+    private partial class WorkspaceLink : ClickableContainer
     {
         private readonly Box background;
         private readonly Box accent;
-
         private readonly Action? action;
 
-        public FeatureCard(string title, string description, string actionLabel, Colour4 accentColour, Action? action = null, bool compact = false)
+        public WorkspaceLink(
+            IconUsage icon,
+            string title,
+            string description,
+            Colour4 accentColour,
+            Action? action = null,
+            bool rightPadding = false)
         {
             this.action = action;
-            RelativeSizeAxes = Axes.X;
-            Width = 0.5f;
-            Height = compact ? 170 : 210;
-            Masking = true;
-            CornerRadius = 14;
+            RelativeSizeAxes = Axes.Both;
+            Padding = rightPadding ? new MarginPadding { Right = 8, Bottom = 8 } : new MarginPadding { Left = 8, Bottom = 8 };
 
-            Children = new Drawable[]
+            Child = new Container
             {
-                background = new Box
+                RelativeSizeAxes = Axes.Both,
+                Masking = true,
+                CornerRadius = 7,
+                BorderThickness = 1,
+                BorderColour = AimModPalette.Border,
+                Children = new Drawable[]
                 {
-                    RelativeSizeAxes = Axes.Both,
-                    Colour = AimModPalette.Panel,
-                },
-                accent = new Box
-                {
-                    RelativeSizeAxes = Axes.X,
-                    Height = 3,
-                    Colour = accentColour,
-                    Alpha = 0.75f,
-                },
-                new FillFlowContainer
-                {
-                    RelativeSizeAxes = Axes.X,
-                    AutoSizeAxes = Axes.Y,
-                    Padding = new MarginPadding(24),
-                    Direction = FillDirection.Vertical,
-                    Spacing = new(11),
-                    Children = new Drawable[]
+                    background = new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
+                    accent = new Box { RelativeSizeAxes = Axes.Y, Width = 4, Colour = accentColour, Alpha = 0.8f },
+                    new SpriteIcon
                     {
-                        text(title, 23, AimModPalette.Text, "Bold"),
-                        text(description, 15, AimModPalette.Muted),
-                        text(actionLabel + "  >", 14, accentColour, "SemiBold"),
+                        Anchor = Anchor.CentreLeft,
+                        Origin = Anchor.CentreLeft,
+                        Margin = new MarginPadding { Left = 20 },
+                        Icon = icon,
+                        Size = new(18),
+                        Colour = accentColour,
+                    },
+                    new FillFlowContainer
+                    {
+                        Anchor = Anchor.CentreLeft,
+                        Origin = Anchor.CentreLeft,
+                        AutoSizeAxes = Axes.Y,
+                        RelativeSizeAxes = Axes.X,
+                        Width = 1,
+                        Margin = new MarginPadding { Left = 54 },
+                        Padding = new MarginPadding { Right = 54 },
+                        Direction = FillDirection.Vertical,
+                        Spacing = new(2),
+                        Children = new Drawable[]
+                        {
+                            text(title, 16, AimModPalette.Text, "Bold"),
+                            text(description, 11, AimModPalette.Muted),
+                        },
+                    },
+                    new SpriteIcon
+                    {
+                        Anchor = Anchor.CentreRight,
+                        Origin = Anchor.CentreRight,
+                        Margin = new MarginPadding { Right = 18 },
+                        Icon = FontAwesome.Solid.ChevronRight,
+                        Size = new(11),
+                        Colour = accentColour,
                     },
                 },
             };
