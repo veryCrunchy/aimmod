@@ -53,4 +53,28 @@ public sealed class NativeScreenConstructionTests
             Assert.DoesNotThrow(() => _ = new NativeOfficialBeatmapSearchScreen(() => null, () => null));
         });
     }
+
+    [Test]
+    public void StatisticsWorkspaceConstructsWithoutConflictingLayoutAxes()
+    {
+        Assert.DoesNotThrow(() => _ = new NativeStatisticsWorkspace(source, _ => { }));
+    }
+
+    [Test]
+    public void BeatmapDiscoveryCanReturnToInstalledTab()
+    {
+        var screen = new NativeBeatmapDiscoveryScreen(source, () => null, () => null);
+
+        screen.SelectTab(NativeBeatmapDiscoveryScreen.BeatmapDiscoveryTab.Installed);
+        object? installed = screen.GetActiveScreenForTesting();
+        screen.SelectTab(NativeBeatmapDiscoveryScreen.BeatmapDiscoveryTab.Online);
+        screen.SelectTab(NativeBeatmapDiscoveryScreen.BeatmapDiscoveryTab.Installed);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(screen.GetCurrentTabForTesting(), Is.EqualTo(NativeBeatmapDiscoveryScreen.BeatmapDiscoveryTab.Installed));
+            Assert.That(screen.GetActiveScreenTypeForTesting(), Is.EqualTo(typeof(NativeInstalledBeatmapBrowser)));
+            Assert.That(screen.GetActiveScreenForTesting(), Is.SameAs(installed));
+        });
+    }
 }

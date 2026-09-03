@@ -115,7 +115,6 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
                 .GroupBy(file => file.OwnerId, StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
 
-            bool changed = false;
             Exception? firstCalculationFailure = null;
             for (int index = 0; index < missing.Length; index++)
             {
@@ -156,7 +155,7 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
                     PpTargetEstimate estimate = createEstimate(request, expected, ceiling);
                     cache[cacheKey(request)] = new CacheEntry(cacheKey(request), DateTimeOffset.UtcNow, estimate);
                     completed[request.BeatmapId] = estimate;
-                    changed = true;
+                    await trySaveCacheAsync().ConfigureAwait(false);
                 }
                 catch (Exception error) when (error is not OperationCanceledException)
                 {
@@ -175,16 +174,105 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
             if (completed.Count == 0 && firstCalculationFailure is not null)
                 throw new InvalidOperationException("Official PP calculation failed for every requested beatmap difficulty.", firstCalculationFailure);
 
-            if (changed)
+            return completed;
+        }
+        finally
+        {
+            calculationGate.Release();
+        }
+    }
+
+    public async Task<IReadOnlyDictionary<int, double>> CalculateAccuracyCurveAsync(
+        int beatmapId,
+        string? beatmapHash,
+        IReadOnlyList<string> mods,
+        IReadOnlyList<int> accuracies,
+        CancellationToken cancellationToken = default)
+    {
+        int[] points = accuracies.Where(accuracy => accuracy is >= 0 and <= 100).Distinct().Order().ToArray();
+        if (beatmapId <= 0 || points.Length == 0)
+            return new Dictionary<int, double>();
+
+        PpTargetExactRequest[] requests = points.Select(accuracy => new PpTargetExactRequest(
+            beatmapId,
+            beatmapHash,
+            mods,
+            accuracy / 100d,
+            1)).Where(isValid).ToArray();
+        if (requests.Length == 0)
+            return new Dictionary<int, double>();
+
+        await calculationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var completed = new Dictionary<int, double>();
+            var missing = new List<(int Accuracy, PpTargetExactRequest Request)>();
+            foreach (PpTargetExactRequest request in requests)
             {
-                try
+                int accuracy = (int)Math.Round(request.ExpectedAccuracy * 100);
+                if (cache.TryGetValue(cacheKey(request), out CacheEntry? entry) && validEstimate(entry.Estimate))
+                    completed[accuracy] = accuracy == 100 ? entry.Estimate.RealisticMaximumPp : entry.Estimate.ExpectedPp;
+                else
+                    missing.Add((accuracy, request));
+            }
+            if (missing.Count == 0)
+                return completed;
+
+            await using SidecarRuntimeClient runtime = runtimeFactory();
+            var runtimeClient = new SidecarRuntimeRequestClient(runtime);
+            var assetClient = new ExternalLazerAssetClient(runtimeClient);
+            var ppClient = new PpWhatIfClient(runtimeClient);
+            string? hash = string.IsNullOrWhiteSpace(beatmapHash) ? null : beatmapHash;
+
+            await using ExternalLazerAssetStagingLease? lease = hash is null
+                ? null
+                : await assetClient.ResolveToPrivateStagingAsync(
+                    libraryRoot,
+                    new[] { hash },
+                    Array.Empty<Guid>(),
+                    cancellationToken).ConfigureAwait(false);
+            string? beatmapPath = lease?.Result.Files.FirstOrDefault(file =>
+                string.Equals(file.Kind, "Beatmap", StringComparison.Ordinal)
+                && string.Equals(file.OwnerId, hash, StringComparison.OrdinalIgnoreCase))?.StagedPath;
+            string? downloadedPath = null;
+
+            if (beatmapPath is null && difficultyClient is not null)
+            {
+                OfficialBeatmapDifficultyDownloadResult download = await difficultyClient.DownloadDifficultyAsync(
+                    beatmapId,
+                    difficultyDownloadDirectory,
+                    cancellationToken).ConfigureAwait(false);
+                if (download.Status == OfficialBeatmapRequestStatus.Success)
+                    beatmapPath = downloadedPath = download.BeatmapPath;
+            }
+            if (beatmapPath is null)
+                throw new InvalidOperationException($"Beatmap difficulty {beatmapId} could not be resolved for PP calculation.");
+
+            try
+            {
+                string stagingDirectory = Path.GetDirectoryName(beatmapPath)!;
+                IReadOnlyList<string> normalisedMods = normaliseMods(mods);
+                PpWhatIfResult ceiling = await ppClient.CalculateAsync(new PpWhatIfRequest(
+                    stagingDirectory, beatmapPath, normalisedMods, 1, 0, null), cancellationToken).ConfigureAwait(false);
+
+                foreach ((int accuracy, PpTargetExactRequest request) in missing)
                 {
-                    await saveCacheAsync(cancellationToken).ConfigureAwait(false);
-                }
-                catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or NotSupportedException)
-                {
+                    PpWhatIfResult expected = accuracy == 100
+                        ? ceiling
+                        : await ppClient.CalculateAsync(new PpWhatIfRequest(
+                            stagingDirectory, beatmapPath, normalisedMods, request.ExpectedAccuracy, 0, ceiling.MaxCombo), cancellationToken).ConfigureAwait(false);
+                    PpTargetEstimate estimate = createEstimate(request, expected, ceiling);
+                    cache[cacheKey(request)] = new CacheEntry(cacheKey(request), DateTimeOffset.UtcNow, estimate);
+                    completed[accuracy] = accuracy == 100 ? estimate.RealisticMaximumPp : estimate.ExpectedPp;
+                    await trySaveCacheAsync().ConfigureAwait(false);
                 }
             }
+            finally
+            {
+                if (downloadedPath is not null)
+                    deleteIfPresent(downloadedPath);
+            }
+
             return completed;
         }
         finally
@@ -229,29 +317,40 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
         return true;
     }
 
-    private async Task saveCacheAsync(CancellationToken cancellationToken)
+    private async Task<bool> trySaveCacheAsync()
     {
-        string? directory = Path.GetDirectoryName(cachePath);
-        if (!string.IsNullOrWhiteSpace(directory))
-            Directory.CreateDirectory(directory);
-        CacheEntry[] entries = cache.Values.OrderBy(entry => entry.CalculatedAt).TakeLast(maximum_cache_entries).ToArray();
-        string temporaryPath = $"{cachePath}.{Guid.NewGuid():N}.tmp";
         try
         {
-            await using FileStream stream = new(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, true);
-            await JsonSerializer.SerializeAsync(stream, new CacheDocument(cache_version, entries), json_options, cancellationToken).ConfigureAwait(false);
-            await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
-            File.Move(temporaryPath, cachePath, true);
-        }
-        finally
-        {
+            string? directory = Path.GetDirectoryName(cachePath);
+            if (!string.IsNullOrWhiteSpace(directory))
+                Directory.CreateDirectory(directory);
+            CacheEntry[] entries = cache.Values.OrderBy(entry => entry.CalculatedAt).TakeLast(maximum_cache_entries).ToArray();
+            string temporaryPath = $"{cachePath}.{Guid.NewGuid():N}.tmp";
             try
             {
-                File.Delete(temporaryPath);
+                await using (FileStream stream = new(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, true))
+                {
+                    await JsonSerializer.SerializeAsync(stream, new CacheDocument(cache_version, entries), json_options, CancellationToken.None).ConfigureAwait(false);
+                    await stream.FlushAsync(CancellationToken.None).ConfigureAwait(false);
+                }
+                File.Move(temporaryPath, cachePath, true);
             }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            finally
             {
+                try
+                {
+                    File.Delete(temporaryPath);
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                {
+                }
             }
+            return true;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or NotSupportedException)
+        {
+            Console.Error.WriteLine($"AimMod exact PP cache persistence failed for '{cachePath}': {error}");
+            return false;
         }
     }
 

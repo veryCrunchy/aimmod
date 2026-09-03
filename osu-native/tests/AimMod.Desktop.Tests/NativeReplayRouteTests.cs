@@ -1,7 +1,11 @@
 using AimMod.Desktop;
+using AimMod.Desktop.LocalLibrary;
 using AimMod.Desktop.Visuals;
 using AimMod.Osu.Runtime.Contracts;
+using AimMod.Osu.Runtime;
 using NUnit.Framework;
+using osu.Framework.Graphics.Containers;
+using osu.Framework.Graphics.Sprites;
 using osu.Game;
 using osu.Game.Scoring;
 using osu.Game.Scoring.Legacy;
@@ -89,6 +93,134 @@ public sealed class NativeReplayRouteTests
     }
 
     [Test]
+    public void SelectingReplayImmediatelyPresentsCompletedCachedAnalysis()
+    {
+        Guid scoreId = Guid.NewGuid();
+        ReplayAnalysisResult result = analysis("Miss");
+        var route = new NativeReplayRouteView(analyses: new Dictionary<Guid, ReplayAnalysisResult> { [scoreId] = result });
+
+        route.SetReplaySummary(replay(scoreId));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(text(route, "analysisTitle"), Is.EqualTo("Exact replay analysis"));
+            Assert.That(text(route, "analysisNextPlay"), Does.Not.Contain("will appear"));
+            Assert.That(container(route, "notableRows").Count, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void SuspendedTransportInvalidatesAlreadyScheduledActions()
+    {
+        var lifetime = new ReplayTransportLifetime();
+
+        Assert.That(lifetime.TryCapture(out int scheduledGeneration), Is.True);
+        Assert.That(lifetime.CanRun(scheduledGeneration), Is.True);
+
+        lifetime.InvalidateScheduledActions();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(lifetime.CanRun(scheduledGeneration), Is.False);
+            Assert.That(lifetime.CanAcceptCommands, Is.True);
+            Assert.That(lifetime.TryCapture(out int replacementGeneration), Is.True);
+            Assert.That(lifetime.CanRun(replacementGeneration), Is.True);
+        });
+    }
+
+    [Test]
+    public void CompletedTransportRejectsQueuedAndFutureActions()
+    {
+        var lifetime = new ReplayTransportLifetime();
+        Assert.That(lifetime.TryCapture(out int scheduledGeneration), Is.True);
+
+        Assert.That(lifetime.TryComplete(), Is.True);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(lifetime.CanRun(scheduledGeneration), Is.False);
+            Assert.That(lifetime.CanAcceptCommands, Is.False);
+            Assert.That(lifetime.TryCapture(out _), Is.False);
+            Assert.That(lifetime.TryComplete(), Is.False);
+        });
+    }
+
+    [Test]
+    public void DisposedTransportRejectsQueuedAndFutureActions()
+    {
+        var lifetime = new ReplayTransportLifetime();
+        Assert.That(lifetime.TryCapture(out int scheduledGeneration), Is.True);
+
+        lifetime.Dispose();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(lifetime.CanRun(scheduledGeneration), Is.False);
+            Assert.That(lifetime.CanAcceptCommands, Is.False);
+            Assert.That(lifetime.TryCapture(out _), Is.False);
+        });
+    }
+
+    [Test]
+    public void NewReplayAcceptsFreshAnalysisAfterPreviousHigherRevision()
+    {
+        var route = new NativeReplayRouteView();
+        route.SetReplaySummary(replay(Guid.NewGuid()));
+        route.ShowAnalysisState(new ReplayAnalysisState(12, ReplayAnalysisStatus.Completed, Result: analysis("Miss")));
+
+        route.SetReplaySummary(replay(Guid.NewGuid()));
+        route.ShowAnalysisState(new ReplayAnalysisState(1, ReplayAnalysisStatus.Completed, Result: analysis("SliderBreak")));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(text(route, "analysisTitle"), Is.EqualTo("Exact replay analysis"));
+            Assert.That(container(route, "notableRows").Count, Is.EqualTo(1));
+            Assert.That(text(route, "analysisNextPlay"), Does.Not.Contain("will appear"));
+        });
+    }
+
+    [Test]
+    public void CompletedCleanReplayShowsExplicitEmptyNotableStateAndFocus()
+    {
+        var route = new NativeReplayRouteView();
+        route.SetReplaySummary(replay(Guid.NewGuid()));
+        route.ShowAnalysisState(new ReplayAnalysisState(2, ReplayAnalysisStatus.Completed, Result: analysis("Great")));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(container(route, "notableRows").Count, Is.EqualTo(1));
+            Assert.That(text(route, "analysisNextPlay"), Is.Not.Empty);
+            Assert.That(text(route, "analysisNextPlay"), Does.Not.Contain("will appear"));
+        });
+    }
+
+    [Test]
+    public void FailedAndIdleAnalysisReplacePendingPlaceholdersWithExplicitStates()
+    {
+        var route = new NativeReplayRouteView();
+        route.SetReplaySummary(replay(Guid.NewGuid()));
+        route.ShowAnalysisState(new ReplayAnalysisState(1, ReplayAnalysisStatus.Failed,
+            Error: new ReplayAnalysisFailure("test", "Exact analysis failed.")));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(text(route, "analysisSummary"), Is.EqualTo("Exact analysis failed."));
+            Assert.That(text(route, "analysisNextPlay"), Does.Contain("unavailable"));
+            Assert.That(container(route, "notableRows").Count, Is.EqualTo(1));
+        });
+
+        route.SetReplaySummary(replay(Guid.NewGuid()));
+        route.ShowAnalysisState(new ReplayAnalysisState(0, ReplayAnalysisStatus.Idle));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(text(route, "analysisSummary"), Does.Contain("has not started"));
+            Assert.That(text(route, "analysisNextPlay"), Does.Contain("Open this run"));
+            Assert.That(container(route, "notableRows").Count, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
     public void ParsesPairedBeatmapAndReplayFiles()
     {
         string beatmap = createFile("set.osz");
@@ -151,4 +283,53 @@ public sealed class NativeReplayRouteTests
         null,
         0,
         0);
+
+    private static ReplayAnalysisResult analysis(string result) => new(
+        ReplayAnalysisProtocol.EngineVersion,
+        "gameplay-clock",
+        true,
+        ReplayAnalysisProtocol.WallClockTimeoutMs,
+        Array.Empty<int>(),
+        new[] { judgement(7, 12_345, result) },
+        result == "Great"
+            ? new ReplayJudgementSummary(1, 0, 0, 0, 0, 0)
+            : new ReplayJudgementSummary(0, 0, 0, 1, 0, 0));
+
+    private static LocalReplay replay(Guid scoreId) => new(
+        scoreId,
+        Guid.NewGuid(),
+        Guid.NewGuid(),
+        "Title",
+        "Artist",
+        "Difficulty",
+        "osu",
+        "Player",
+        DateTimeOffset.UtcNow,
+        5,
+        0.98,
+        1_000_000,
+        500,
+        1,
+        100,
+        Array.Empty<string>(),
+        true,
+        "beatmap-hash");
+
+    private static string text(NativeReplayRouteView route, string fieldName)
+    {
+        object value = field(route, fieldName);
+        return value switch
+        {
+            SpriteText spriteText => spriteText.Text.ToString(),
+            _ when value.GetType().GetProperty("Text")?.GetValue(value) is string wrappedText => wrappedText,
+            _ => throw new AssertionException($"{fieldName} is not a supported text drawable."),
+        };
+    }
+
+    private static FillFlowContainer<osu.Framework.Graphics.Drawable> container(NativeReplayRouteView route, string fieldName) =>
+        (FillFlowContainer<osu.Framework.Graphics.Drawable>)field(route, fieldName);
+
+    private static object field(NativeReplayRouteView route, string fieldName) =>
+        typeof(NativeReplayRouteView).GetField(fieldName, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)?.GetValue(route)
+        ?? throw new AssertionException($"Could not find {fieldName}.");
 }

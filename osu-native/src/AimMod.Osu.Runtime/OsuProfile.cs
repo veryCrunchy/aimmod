@@ -95,6 +95,25 @@ public sealed record OsuBestScoresFetchResult(
     bool IsFromCache = false,
     DateTimeOffset? FetchedAt = null);
 
+public sealed record OsuUserBeatmapScore(
+    long ScoreId,
+    int UserId,
+    double? PerformancePoints,
+    double Accuracy,
+    long TotalScore,
+    int MaximumCombo,
+    OsuScoreStatistics Statistics,
+    IReadOnlyList<string> Mods,
+    string ModsJson,
+    DateTimeOffset? EndedAt,
+    DateTimeOffset? CreatedAt);
+
+public sealed record OsuUserBeatmapScoresFetchResult(
+    OsuBestScoresFetchStatus Status,
+    IReadOnlyList<OsuUserBeatmapScore>? Scores = null,
+    bool IsFromCache = false,
+    DateTimeOffset? FetchedAt = null);
+
 internal sealed record OsuBestScoresCacheDocument(
     int SchemaVersion,
     string ApiVersion,
@@ -102,3 +121,12 @@ internal sealed record OsuBestScoresCacheDocument(
     DateTimeOffset FetchedAt,
     DateTimeOffset ExpiresAt,
     IReadOnlyList<OsuBestScore> Scores);
+
+internal sealed record OsuUserBeatmapScoresCacheDocument(
+    int SchemaVersion,
+    string ApiVersion,
+    int UserId,
+    int BeatmapId,
+    DateTimeOffset FetchedAt,
+    DateTimeOffset ExpiresAt,
+    IReadOnlyList<OsuUserBeatmapScore> Scores);

@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using AimMod.Desktop.Coaching;
 using AimMod.Desktop.LocalLibrary;
 using AimMod.Desktop.Visuals;
 using NUnit.Framework;
@@ -9,6 +10,7 @@ using osu.Framework;
 using osu.Framework.Allocation;
 using osu.Framework.Configuration;
 using osu.Framework.Platform;
+using osu.Game;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 
@@ -21,10 +23,13 @@ public sealed partial class OffscreenVisualCaptureTests
     [TestCase("home", 1600, 900)]
     [TestCase("home", 1100, 760)]
     [TestCase("beatmaps", 1100, 760)]
+    [TestCase("beatmaps-populated", 1100, 760)]
     [TestCase("beatmaps-populated", 1600, 900)]
     [TestCase("skins", 1100, 760)]
     [TestCase("replays", 1100, 760)]
     [TestCase("statistics", 1100, 760)]
+    [TestCase("statistics-populated", 1100, 760)]
+    [TestCase("statistics-populated", 1600, 900)]
     [TestCase("coaching", 1100, 760)]
     [TestCase("ppTargets", 1100, 760)]
     [TestCase("loading", 1100, 760)]
@@ -40,12 +45,17 @@ public sealed partial class OffscreenVisualCaptureTests
             "visual-captures",
             $"aimmod-{route}-{width}x{height}.png");
 
-        InMemoryLocalLibrarySource source = string.Equals(route, "beatmaps-populated", StringComparison.Ordinal)
+        InMemoryLocalLibrarySource source = route.EndsWith("-populated", StringComparison.Ordinal)
             ? createPopulatedLibrary()
             : new InMemoryLocalLibrarySource([], []);
 
         await WindowsPrivateDesktopCapture.CaptureAsync(
-            (host, succeeded, failed) => new CaptureAimModGame(host, source, outputPath, route, width, height, succeeded, failed),
+            (host, succeeded, failed) => route switch
+            {
+                "beatmaps-populated" => new CaptureBeatmapGame(host, source, outputPath, width, height, succeeded, failed),
+                "statistics-populated" => new CaptureStatisticsGame(host, source, outputPath, width, height, succeeded, failed),
+                _ => new CaptureAimModGame(host, source, outputPath, route, width, height, succeeded, failed),
+            },
             TimeSpan.FromSeconds(30));
 
         using Image<Rgba32> image = Image.Load<Rgba32>(outputPath);
@@ -188,6 +198,158 @@ public sealed partial class OffscreenVisualCaptureTests
                 routeMethod.Invoke(this, null);
             }
 
+            frameworkConfig.SetValue(FrameworkSetting.WindowMode, WindowMode.Windowed);
+            frameworkConfig.SetValue(FrameworkSetting.WindowedSize, new System.Drawing.Size(width, height));
+            Scheduler.AddDelayed(capture, 1500);
+        }
+
+        private void capture()
+        {
+            host.TakeScreenshotAsync().ContinueWith(task =>
+            {
+                try
+                {
+                    using Image<Rgba32> image = task.GetAwaiter().GetResult();
+                    Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+                    image.SaveAsPng(outputPath);
+                    succeeded();
+                }
+                catch (Exception error)
+                {
+                    failed(error);
+                }
+                finally
+                {
+                    host.Exit();
+                }
+            }, TaskScheduler.Default);
+        }
+    }
+
+    private sealed partial class CaptureBeatmapGame : OsuGameBase
+    {
+        private readonly GameHost host;
+        private readonly ILocalLibrarySource source;
+        private readonly string outputPath;
+        private readonly int width;
+        private readonly int height;
+        private readonly Action succeeded;
+        private readonly Action<Exception> failed;
+
+        [Resolved]
+        private FrameworkConfigManager frameworkConfig { get; set; } = null!;
+
+        public CaptureBeatmapGame(
+            GameHost host,
+            ILocalLibrarySource source,
+            string outputPath,
+            int width,
+            int height,
+            Action succeeded,
+            Action<Exception> failed)
+        {
+            this.host = host;
+            this.source = source;
+            this.outputPath = outputPath;
+            this.width = width;
+            this.height = height;
+            this.succeeded = succeeded;
+            this.failed = failed;
+        }
+
+        [BackgroundDependencyLoader]
+        private void load()
+        {
+            Add(new osu.Framework.Graphics.Containers.Container
+            {
+                RelativeSizeAxes = osu.Framework.Graphics.Axes.Both,
+                Padding = new osu.Framework.Graphics.MarginPadding(18),
+                Child = new NativeBeatmapDiscoveryScreen(source, () => null, () => null)
+                {
+                    RelativeSizeAxes = osu.Framework.Graphics.Axes.Both,
+                },
+            });
+        }
+
+        protected override void LoadComplete()
+        {
+            base.LoadComplete();
+            frameworkConfig.SetValue(FrameworkSetting.WindowMode, WindowMode.Windowed);
+            frameworkConfig.SetValue(FrameworkSetting.WindowedSize, new System.Drawing.Size(width, height));
+            Scheduler.AddDelayed(capture, 1500);
+        }
+
+        private void capture()
+        {
+            host.TakeScreenshotAsync().ContinueWith(task =>
+            {
+                try
+                {
+                    using Image<Rgba32> image = task.GetAwaiter().GetResult();
+                    Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+                    image.SaveAsPng(outputPath);
+                    succeeded();
+                }
+                catch (Exception error)
+                {
+                    failed(error);
+                }
+                finally
+                {
+                    host.Exit();
+                }
+            }, TaskScheduler.Default);
+        }
+    }
+
+    private sealed partial class CaptureStatisticsGame : OsuGameBase
+    {
+        private readonly GameHost host;
+        private readonly ILocalLibrarySource source;
+        private readonly string outputPath;
+        private readonly int width;
+        private readonly int height;
+        private readonly Action succeeded;
+        private readonly Action<Exception> failed;
+
+        [Resolved]
+        private FrameworkConfigManager frameworkConfig { get; set; } = null!;
+
+        public CaptureStatisticsGame(
+            GameHost host,
+            ILocalLibrarySource source,
+            string outputPath,
+            int width,
+            int height,
+            Action succeeded,
+            Action<Exception> failed)
+        {
+            this.host = host;
+            this.source = source;
+            this.outputPath = outputPath;
+            this.width = width;
+            this.height = height;
+            this.succeeded = succeeded;
+            this.failed = failed;
+        }
+
+        [BackgroundDependencyLoader]
+        private void load()
+        {
+            Add(new osu.Framework.Graphics.Containers.Container
+            {
+                RelativeSizeAxes = osu.Framework.Graphics.Axes.Both,
+                Padding = new osu.Framework.Graphics.MarginPadding(18),
+                Child = new NativeStatisticsWorkspace(source, _ => { })
+                {
+                    RelativeSizeAxes = osu.Framework.Graphics.Axes.Both,
+                },
+            });
+        }
+
+        protected override void LoadComplete()
+        {
+            base.LoadComplete();
             frameworkConfig.SetValue(FrameworkSetting.WindowMode, WindowMode.Windowed);
             frameworkConfig.SetValue(FrameworkSetting.WindowedSize, new System.Drawing.Size(width, height));
             Scheduler.AddDelayed(capture, 1500);

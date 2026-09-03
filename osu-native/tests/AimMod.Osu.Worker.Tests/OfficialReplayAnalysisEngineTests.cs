@@ -1,0 +1,124 @@
+using NUnit.Framework;
+using AimMod.Osu.Runtime.Contracts;
+
+namespace AimMod.Osu.Worker.Tests;
+
+[TestFixture]
+public sealed class OfficialReplayAnalysisEngineTests
+{
+    [Test]
+    public void CompletesImmediatelyWhenOfficialScoreProcessorCompletes()
+    {
+        var watchdog = new ReplayAnalysisCompletionWatchdog(120_000, 2_000);
+
+        Assert.That(watchdog.ShouldComplete(10_000, true), Is.True);
+    }
+
+    public void UsesOfficialGameplayTimelineAsTerminalFallback()
+    {
+        var watchdog = new ReplayAnalysisCompletionWatchdog(120_000, 2_000);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(watchdog.ShouldComplete(121_999.999, false), Is.False);
+            Assert.That(watchdog.ShouldComplete(122_000, false), Is.False);
+            Assert.That(watchdog.ShouldComplete(122_000, false), Is.True);
+        });
+    }
+
+    [Test]
+    public void EndsAtFinalReplayFrameWhenRecordingStopsBeforeBeatmap()
+    {
+        var watchdog = new ReplayAnalysisCompletionWatchdog(120_000, 2_000, 41_250);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(watchdog.TerminalGameplayTime, Is.EqualTo(43_250));
+            Assert.That(watchdog.ShouldComplete(43_250, false), Is.False);
+            Assert.That(watchdog.ShouldComplete(43_250, false), Is.True);
+        });
+    }
+
+    [Test]
+    public void CompletesFailedOfficialPlaybackAfterChildrenSettle()
+    {
+        var watchdog = new ReplayAnalysisCompletionWatchdog(120_000, 2_000, 80_000);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(watchdog.ShouldComplete(40_000, false, true), Is.False);
+            Assert.That(watchdog.ShouldComplete(40_000, false, true), Is.True);
+        });
+    }
+
+    [TestCase(double.NaN)]
+    [TestCase(double.NegativeInfinity)]
+    [TestCase(double.PositiveInfinity)]
+    public void DoesNotCompleteForInvalidGameplayClock(double gameplayTime)
+    {
+        var watchdog = new ReplayAnalysisCompletionWatchdog(120_000, 2_000);
+
+        Assert.That(watchdog.ShouldComplete(gameplayTime, false), Is.False);
+    }
+
+    [Test]
+    public async Task AnalysesARealSavedLazerReplayWhenAvailable()
+    {
+        string? libraryRoot = Environment.GetEnvironmentVariable("AIMMOD_REAL_LAZER_ROOT");
+        if (string.IsNullOrWhiteSpace(libraryRoot) || !Directory.Exists(libraryRoot))
+            Assert.Ignore("Set AIMMOD_REAL_LAZER_ROOT to run the official engine against a saved lazer replay.");
+        string searchText = Environment.GetEnvironmentVariable("AIMMOD_REAL_REPLAY_SEARCH") ?? string.Empty;
+
+        ExternalLazerCatalogSearchResult catalog = await new ExternalLazerCatalogBackend().SearchAsync(
+            new ExternalLazerCatalogSearchRequest(
+                libraryRoot!,
+                ExternalLazerCatalogEntryKind.Replays,
+                SearchText: searchText,
+                Sort: ExternalLazerCatalogSort.RecentlyPlayed,
+                Limit: 100),
+            CancellationToken.None);
+        ExternalLazerReplaySummary replay = catalog.Replays.FirstOrDefault(candidate =>
+                                                candidate.HasReplayFile
+                                                && !string.IsNullOrWhiteSpace(candidate.BeatmapHash))
+                                            ?? throw new AssertionException("The lazer library has no saved osu!standard replay with a beatmap.");
+
+        string assetDirectory = Directory.CreateTempSubdirectory("aimmod-real-replay-assets-").FullName;
+        string analysisDirectory = Directory.CreateTempSubdirectory("aimmod-real-replay-analysis-").FullName;
+        try
+        {
+            ExternalLazerAssetResolveResult assets = await new ExternalLazerAssetBackend().ResolveAsync(
+                new ExternalLazerAssetResolveRequest(
+                    libraryRoot!,
+                    assetDirectory,
+                    new[] { replay.BeatmapHash },
+                    new[] { replay.ScoreId }),
+                CancellationToken.None);
+            ExternalLazerResolvedAsset beatmap = assets.Files.Single(file =>
+                file.Kind == "Beatmap" && string.Equals(file.OwnerId, replay.BeatmapHash, StringComparison.OrdinalIgnoreCase));
+            ExternalLazerResolvedAsset replayFile = assets.Files.Single(file =>
+                file.Kind == "Replay" && string.Equals(file.OwnerId, replay.ScoreId.ToString(), StringComparison.OrdinalIgnoreCase));
+
+            string beatmapPath = Path.Combine(analysisDirectory, "map.osu");
+            string replayPath = Path.Combine(analysisDirectory, "replay.osr");
+            File.Copy(beatmap.StagedPath, beatmapPath);
+            File.Copy(replayFile.StagedPath, replayPath);
+
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+            ReplayAnalysisResult result = await new OfficialReplayAnalysisEngine().AnalyseAsync(
+                new ValidatedReplayInput(analysisDirectory, beatmapPath, replayPath),
+                timeout.Token);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(result.TimeBasis, Is.EqualTo("officialRulesetPlayback"));
+                Assert.That(result.Judgements, Is.Not.Empty);
+                Assert.That(result.Judgements.All(judgement => double.IsFinite(judgement.JudgementTimeMs)), Is.True);
+            });
+        }
+        finally
+        {
+            Directory.Delete(assetDirectory, recursive: true);
+            Directory.Delete(analysisDirectory, recursive: true);
+        }
+    }
+}

@@ -1,6 +1,8 @@
+using System.Diagnostics;
 using AimMod.Desktop.Coaching;
 using AimMod.Desktop.LocalLibrary;
 using AimMod.Desktop.PpTargets;
+using AimMod.Desktop.ScoreHistory;
 using AimMod.Desktop.Visuals;
 using AimMod.Osu.Runtime;
 using osu.Framework.Bindables;
@@ -29,12 +31,17 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
     private readonly Func<IPpTargetExactCalculationService?> exactCalculator;
     private readonly Func<ILocalScorePpHydrationService?> localPpHydrator;
     private readonly Func<OfficialOsuApiClient?> officialApi;
+    private readonly Func<IAccountScoreHistoryService?> accountHistory;
+    private readonly PpTargetWorkspaceCache? workspaceCache;
     private readonly OsuTextBox search;
     private readonly TruncatingSpriteText status;
-    private readonly SpriteText profileSummary;
+    private readonly TruncatingSpriteText profileSummary;
     private readonly TruncatingSpriteText resultCount;
     private readonly FillFlowContainer<Drawable> results;
     private readonly AimModLoadingOverlay loadingOverlay;
+    private readonly Container refreshProgress;
+    private readonly Box refreshProgressFill;
+    private readonly SpriteText refreshText;
     private readonly Container filterHeader;
     private readonly Container resultViewport;
     private readonly RangeSlider starSlider;
@@ -53,7 +60,9 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
     private readonly Bindable<TargetLength> length = new(TargetLength.Any);
     private readonly Bindable<TargetSort> sort = new(TargetSort.BestFit);
 
-    private CancellationTokenSource? lifetime;
+    private CancellationTokenSource? profileRefresh;
+    private CancellationTokenSource? catalogSearch;
+    private CancellationTokenSource? exactCalculation;
     private ScheduledDelegate? scheduledSearch;
     private PpTargetPreferenceProfile profile = PpTargetPreferenceProfile.Empty;
     private IReadOnlyList<OfficialBeatmapSet> catalog = Array.Empty<OfficialBeatmapSet>();
@@ -61,7 +70,10 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
     private IReadOnlyDictionary<int, PpTargetEstimate> exactEstimates = new Dictionary<int, PpTargetEstimate>();
     private Dictionary<int, OfficialBeatmapSet> setsById = new();
     private int connectionAttempts;
+    private int onlineBestCount;
     private string scoreDataStatus = string.Empty;
+    private bool hasVisibleSnapshot;
+    private bool suppressFilterEvents;
 
     public NativePpTargetsWorkspace(
         ILocalLibrarySource source,
@@ -69,7 +81,9 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         Func<OnlineBeatmapImportService?> importer,
         Func<IPpTargetExactCalculationService?>? exactCalculator = null,
         Func<ILocalScorePpHydrationService?>? localPpHydrator = null,
-        Func<OfficialOsuApiClient?>? officialApi = null)
+        Func<OfficialOsuApiClient?>? officialApi = null,
+        PpTargetWorkspaceCache? workspaceCache = null,
+        Func<IAccountScoreHistoryService?>? accountHistory = null)
     {
         this.source = source ?? throw new ArgumentNullException(nameof(source));
         this.client = client ?? throw new ArgumentNullException(nameof(client));
@@ -77,6 +91,8 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         this.exactCalculator = exactCalculator ?? (() => null);
         this.localPpHydrator = localPpHydrator ?? (() => null);
         this.officialApi = officialApi ?? (() => null);
+        this.workspaceCache = workspaceCache;
+        this.accountHistory = accountHistory ?? (() => null);
         sourceChanges = source as ILocalLibrarySourceChanged;
         if (sourceChanges is not null)
             sourceChanges.SourceChanged += sourceChanged;
@@ -95,7 +111,50 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                         "PP targets",
                         "Maps ranked against your local osu!standard history, preferred difficulty, and demonstrated PP range.",
                         "personal map finder"),
-                    profileSummary = text("Building your preference profile...", 12, AimModPalette.Muted).With(drawable => drawable.Y = 65),
+                    profileSummary = truncatingText("Building your preference profile...", 12, AimModPalette.Muted).With(drawable => drawable.Y = 65),
+                    new ClickableContainer
+                    {
+                        Anchor = Anchor.TopRight,
+                        Origin = Anchor.TopRight,
+                        Position = new(0, 55),
+                        Size = new(112, 30),
+                        Action = reloadProfile,
+                        Masking = true,
+                        CornerRadius = 6,
+                        Children = new Drawable[]
+                        {
+                            new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
+                            new SpriteIcon
+                            {
+                                Anchor = Anchor.CentreLeft,
+                                Origin = Anchor.CentreLeft,
+                                Position = new(13, 0),
+                                Size = new(12),
+                                Icon = FontAwesome.Solid.Sync,
+                                Colour = AimModPalette.Cyan,
+                            },
+                            refreshText = text("Refresh", 10, AimModPalette.Text, "SemiBold").With(drawable =>
+                            {
+                                drawable.Anchor = Anchor.CentreLeft;
+                                drawable.Origin = Anchor.CentreLeft;
+                                drawable.X = 34;
+                            }),
+                        },
+                    },
+                    refreshProgress = new Container
+                    {
+                        Position = new(0, 86),
+                        RelativeSizeAxes = Axes.X,
+                        Height = 3,
+                        Alpha = 0,
+                        Masking = true,
+                        CornerRadius = 1.5f,
+                        Children = new Drawable[]
+                        {
+                            new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
+                            refreshProgressFill = new Box { RelativeSizeAxes = Axes.Both, Width = 0, Colour = AimModPalette.Pink },
+                        },
+                    },
                     search = new OsuTextBox
                     {
                         Position = new(0, 91),
@@ -239,6 +298,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
 
         status.MaxWidth = width * 0.62f;
         resultCount.MaxWidth = width * 0.34f;
+        profileSummary.MaxWidth = Math.Max(180, width - 140);
     }
 
     private static void placeSlider(RangeSlider slider, float x, float y, float width)
@@ -260,25 +320,66 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
     protected override void LoadComplete()
     {
         base.LoadComplete();
+        PpTargetWorkspaceSnapshot? snapshot = workspaceCache?.Load();
+        if (snapshot is not null)
+            applySnapshot(snapshot);
+
         search.OnCommit += (_, _) => startCatalogSearch();
-        minimumStars.BindValueChanged(_ => scheduleCatalogSearch());
-        maximumStars.BindValueChanged(_ => scheduleCatalogSearch());
-        minimumExpectedPp.BindValueChanged(_ => renderResults());
-        maximumExpectedPp.BindValueChanged(_ => renderResults());
-        minimumMaximumPp.BindValueChanged(_ => renderResults());
-        maximumMaximumPp.BindValueChanged(_ => renderResults());
-        category.BindValueChanged(_ => startCatalogSearch());
+        minimumStars.BindValueChanged(_ => filterChanged(scheduleCatalogSearch));
+        maximumStars.BindValueChanged(_ => filterChanged(scheduleCatalogSearch));
+        minimumExpectedPp.BindValueChanged(_ => filterChanged(renderResults));
+        maximumExpectedPp.BindValueChanged(_ => filterChanged(renderResults));
+        minimumMaximumPp.BindValueChanged(_ => filterChanged(renderResults));
+        maximumMaximumPp.BindValueChanged(_ => filterChanged(renderResults));
+        category.BindValueChanged(_ => filterChanged(startCatalogSearch));
         length.BindValueChanged(_ => renderResults());
         sort.BindValueChanged(_ => renderResults());
-        reloadProfile();
+
+        if (snapshot is null)
+            reloadProfile();
+        else if (!workspaceCache!.IsFresh(snapshot))
+            reloadProfile();
+        else
+            status.Text = $"Ready from cache  /  updated {relativeAge(snapshot.CachedAt)}";
+    }
+
+    private void filterChanged(Action action)
+    {
+        if (!suppressFilterEvents)
+            action();
+    }
+
+    private void applySnapshot(PpTargetWorkspaceSnapshot snapshot)
+    {
+        suppressFilterEvents = true;
+        profile = snapshot.Profile ?? PpTargetPreferenceProfile.Empty;
+        localSets = snapshot.LocalSets ?? [];
+        catalog = snapshot.Catalog ?? [];
+        exactEstimates = snapshot.ExactEstimates ?? new Dictionary<int, PpTargetEstimate>();
+        onlineBestCount = snapshot.OnlineBestCount;
+        scoreDataStatus = snapshot.ScoreDataStatus ?? string.Empty;
+        search.Text = snapshot.SearchText ?? string.Empty;
+        minimumStars.Value = Math.Clamp(snapshot.MinimumStars, 0, 10);
+        maximumStars.Value = Math.Clamp(snapshot.MaximumStars, 0, 10);
+        category.Value = snapshot.Category;
+        suppressFilterEvents = false;
+        setsById = catalog.GroupBy(set => set.BeatmapSetId).ToDictionary(group => group.Key, group => group.First());
+        hasVisibleSnapshot = catalog.Count > 0;
+        updateProfileSummary();
+        renderResults();
     }
 
     private void reloadProfile()
     {
-        replaceLifetime();
-        status.Text = "Loading local history...";
-        loadingOverlay.ShowLoading("Building your PP profile", "Reading local osu!standard scores");
-        _ = loadProfileAsync(lifetime!.Token);
+        replaceToken(ref profileRefresh);
+        if (hasVisibleSnapshot)
+            showRefresh("Refreshing score history", 0, 0);
+        else
+        {
+            status.Text = "Loading local history...";
+            loadingOverlay.ShowLoading("Building your PP profile", "Reading local osu!standard scores");
+        }
+        _ = loadProfileAsync(profileRefresh!.Token);
     }
 
     private async Task loadProfileAsync(CancellationToken cancellationToken)
@@ -290,27 +391,21 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             if (localPpHydrator() is { } hydrator)
             {
                 if (!IsDisposed)
-                    Schedule(() => loadingOverlay.ShowLoading("Building your PP profile", $"Calculating performance for {history.Runs.Count:N0} local scores"));
+                    Schedule(() => showRefresh($"Calculating {history.Runs.Count:N0} local scores", 0, history.Runs.Count));
                 var progress = new Progress<LocalScorePpHydrationProgress>(value =>
                 {
                     if (!IsDisposed)
-                    {
-                        Schedule(() => loadingOverlay.SetProgress(
-                            $"Calculating local performance {value.Completed:N0}/{value.Total:N0}",
-                            value.Completed,
-                            value.Total));
-                    }
+                        Schedule(() => showRefresh($"Calculating local performance {value.Completed:N0}/{value.Total:N0}", value.Completed, value.Total));
                 });
                 hydration = await hydrator.HydrateAsync(history.Runs, cancellationToken, progress).ConfigureAwait(false);
             }
             IReadOnlyList<LocalBeatmapSet> loadedSets = await loadLocalSets(cancellationToken).ConfigureAwait(false);
             if (!IsDisposed)
-                Schedule(() => loadingOverlay.ShowLoading("Building your PP profile", "Refreshing submitted best scores from osu!"));
-            OsuBestScoresFetchResult? online = await loadOnlineScores(cancellationToken).ConfigureAwait(false);
-            IReadOnlyList<LocalReplay> runs = PpScoreHistoryMerger.Merge(
+                Schedule(() => showRefresh("Refreshing submitted best scores", 0, 0));
+            OnlineAccountScoreHistoryResult? online = await loadOnlineScores(cancellationToken).ConfigureAwait(false);
+            IReadOnlyList<LocalReplay> runs = ScoreHistoryMerger.MergeAsLocalReplays(
                 hydration?.Runs ?? history.Runs,
-                online?.Status == OsuBestScoresFetchStatus.Success ? online.Scores ?? [] : [],
-                loadedSets);
+                online?.Scores ?? []);
             PpTargetPreferenceProfile next = PpTargetPreferenceProfiler.Build(runs, loadedSets);
             if (!IsDisposed)
                 Schedule(() => applyProfile(next, loadedSets, hydration, online));
@@ -324,20 +419,20 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                 Schedule(() =>
                 {
                     loadingOverlay.HideLoading();
+                    hideRefresh();
                     status.Text = $"Could not build the PP profile: {error.Message}";
                 });
         }
     }
 
-    private async Task<OsuBestScoresFetchResult?> loadOnlineScores(CancellationToken cancellationToken)
+    private async Task<OnlineAccountScoreHistoryResult?> loadOnlineScores(CancellationToken cancellationToken)
     {
-        OfficialOsuApiClient? api = officialApi();
-        if (api is null)
+        IAccountScoreHistoryService? service = accountHistory();
+        if (service is null && officialApi() is { } api)
+            service = new OfficialAccountScoreHistoryService(() => api);
+        if (service is null)
             return null;
-        OsuProfileFetchResult profileResult = await api.FetchCurrentProfileAsync(cancellationToken).ConfigureAwait(false);
-        if (profileResult.Status != OsuProfileFetchStatus.Success || profileResult.Profile is null)
-            return new OsuBestScoresFetchResult(mapProfileStatus(profileResult.Status));
-        return await api.FetchBestScoresAsync(profileResult.Profile, cancellationToken).ConfigureAwait(false);
+        return await service.FetchAccountAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<IReadOnlyList<LocalBeatmapSet>> loadLocalSets(CancellationToken cancellationToken)
@@ -363,28 +458,27 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         PpTargetPreferenceProfile next,
         IReadOnlyList<LocalBeatmapSet> loadedSets,
         LocalScorePpHydrationResult? hydration,
-        OsuBestScoresFetchResult? online)
+        OnlineAccountScoreHistoryResult? online)
     {
         profile = next;
         localSets = loadedSets;
         exactEstimates = new Dictionary<int, PpTargetEstimate>();
         if (next.PreferredStarRange is { } stars)
         {
+            suppressFilterEvents = true;
             minimumStars.Value = Math.Clamp(Math.Floor((stars.Minimum - 0.5) * 10) / 10, 0, 10);
             maximumStars.Value = Math.Clamp(Math.Ceiling((stars.Maximum + 0.8) * 10) / 10, 0, 10);
+            suppressFilterEvents = false;
         }
-        string confidence = next.Confidence.ToString().ToLowerInvariant();
-        string mods = next.CommonMods.Count == 0 ? "No dominant mods" : string.Join(", ", next.CommonMods.Take(3).Select(item => item.Value));
-        int onlineCount = online?.Status == OsuBestScoresFetchStatus.Success ? online.Scores?.Count ?? 0 : 0;
-        profileSummary.Text = next.ValidRunCount == 0
-            ? "No score history is available for PP recommendations."
-            : $"{next.ValidRunCount:N0} plays / {next.PpSampleCount:N0} PP results / {onlineCount:N0} online best / {confidence} confidence / {mods}";
-        if (online is { Status: not OsuBestScoresFetchStatus.Success })
-            scoreDataStatus = onlineFailureMessage(online.Status);
+        onlineBestCount = online?.Scores.Count ?? 0;
+        updateProfileSummary();
+        if (online is not null && !online.BestCoverage.IsSuccess && !online.RecentCoverage.IsSuccess)
+            scoreDataStatus = onlineFailureMessage(online.BestCoverage.Status);
         else if (hydration is { UnavailableCount: > 0 })
             scoreDataStatus = $"{hydration.UnavailableCount:N0} local score{(hydration.UnavailableCount == 1 ? string.Empty : "s")} need complete beatmap or judgement data.";
         else
             scoreDataStatus = string.Empty;
+        loadingOverlay.HideLoading();
         startCatalogSearch();
     }
 
@@ -398,25 +492,25 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
     {
         scheduledSearch?.Cancel();
         scheduledSearch = null;
-        replaceLifetime();
+        replaceToken(ref catalogSearch);
+        cancelToken(ref exactCalculation);
         IOfficialBeatmapDiscoveryClient? currentClient = client();
         if (currentClient is null)
         {
             connectionAttempts++;
             status.Text = connectionAttempts < 10 ? "Connecting to osu!lazer..." : "A signed-in osu!lazer session is required for map suggestions.";
-            if (connectionAttempts < 10)
-                loadingOverlay.ShowLoading("Connecting to osu!", "Waiting for the signed-in lazer session");
-            else
-                loadingOverlay.HideLoading();
+            showRefresh("Waiting for the signed-in osu! session", 0, 0);
             if (connectionAttempts < 10)
                 scheduledSearch = Scheduler.AddDelayed(startCatalogSearch, 1000);
+            else
+                hideRefresh();
             return;
         }
 
         connectionAttempts = 0;
         status.Text = "Searching the osu! catalog...";
-        loadingOverlay.ShowLoading("Finding PP targets", "Searching ranked osu!standard beatmaps");
-        _ = searchCatalogAsync(currentClient, lifetime!.Token);
+        showRefresh("Searching ranked osu!standard beatmaps", 0, 0);
+        _ = searchCatalogAsync(currentClient, catalogSearch!.Token);
     }
 
     private async Task searchCatalogAsync(IOfficialBeatmapDiscoveryClient currentClient, CancellationToken cancellationToken)
@@ -443,7 +537,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                 Schedule(() =>
                 {
                     status.Text = $"Could not search the osu! catalog: {error.Message}";
-                    loadingOverlay.HideLoading();
+                    hideRefresh();
                 });
             }
         }
@@ -453,32 +547,40 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
     {
         if (response.Status != OfficialBeatmapRequestStatus.Success)
         {
-            catalog = Array.Empty<OfficialBeatmapSet>();
-            setsById.Clear();
-            results.Clear();
-            resultCount.Text = string.Empty;
+            if (!hasVisibleSnapshot)
+            {
+                catalog = Array.Empty<OfficialBeatmapSet>();
+                setsById.Clear();
+                results.Clear();
+                resultCount.Text = string.Empty;
+            }
             status.Text = failureMessage(response.Status);
-            loadingOverlay.HideLoading();
+            hideRefresh();
             return;
         }
 
         catalog = response.BeatmapSets;
+        exactEstimates = new Dictionary<int, PpTargetEstimate>();
         setsById = catalog.GroupBy(set => set.BeatmapSetId).ToDictionary(group => group.Key, group => group.First());
+        hasVisibleSnapshot = catalog.Count > 0;
         status.Text = profile.PpSampleCount == 0
             ? "No complete PP results are available for recommendations."
             : scoreDataStatus.Length > 0
                 ? scoreDataStatus
                 : "Recommendations are based on your calculated and submitted PP results.";
         renderResults();
+        saveSnapshot();
         startExactCalculations();
-        loadingOverlay.HideLoading();
     }
 
     private void startExactCalculations()
     {
         IPpTargetExactCalculationService? calculator = exactCalculator();
-        if (calculator is null || profile.TypicalAccuracy is null || catalog.Count == 0 || lifetime is null)
+        if (calculator is null || profile.TypicalAccuracy is null || catalog.Count == 0)
+        {
+            hideRefresh();
             return;
+        }
 
         PpTargetRankingResult ranked = PpTargetRanker.Rank(profile, catalog, new PpTargetFilters(Limit: 50));
         Dictionary<int, LocalBeatmapDifficulty> installed = localSets.SelectMany(set => set.Difficulties)
@@ -495,11 +597,16 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             .Take(50)
             .ToArray();
         if (requests.Length == 0)
+        {
+            hideRefresh();
             return;
+        }
 
+        replaceToken(ref exactCalculation);
         status.Text = $"Calculating PP for {requests.Length:N0} beatmap difficulties...";
-        loadingOverlay.ShowLoading("Calculating beatmap PP", "Preparing difficulty calculations", 0, requests.Length);
-        _ = calculateExactAsync(calculator, requests, lifetime.Token);
+        showRefresh("Calculating beatmap PP", 0, requests.Length);
+        renderResults();
+        _ = calculateExactAsync(calculator, requests, exactCalculation!.Token);
     }
 
     private async Task calculateExactAsync(
@@ -512,10 +619,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             var progress = new Progress<PpTargetExactCalculationProgress>(value =>
             {
                 if (!IsDisposed && !cancellationToken.IsCancellationRequested)
-                    Schedule(() => loadingOverlay.SetProgress(
-                        $"Difficulty {value.Completed:N0} of {value.Total:N0}",
-                        value.Completed,
-                        value.Total));
+                    Schedule(() => showRefresh($"Calculating difficulty {value.Completed:N0} of {value.Total:N0}", value.Completed, value.Total));
             });
             IReadOnlyDictionary<int, PpTargetEstimate> calculated = await calculator.CalculateAsync(requests, cancellationToken, progress).ConfigureAwait(false);
             if (!IsDisposed && !cancellationToken.IsCancellationRequested)
@@ -527,14 +631,13 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                         ? "Official PP could not be calculated for these difficulties."
                         : $"Official PP calculated for {calculated.Count:N0} beatmap difficult{(calculated.Count == 1 ? "y" : "ies")}.";
                     renderResults();
-                    loadingOverlay.HideLoading();
+                    hideRefresh();
+                    saveSnapshot();
                 });
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            if (!IsDisposed)
-                Schedule(loadingOverlay.HideLoading);
         }
         catch (Exception error)
         {
@@ -542,7 +645,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                 Schedule(() =>
                 {
                     status.Text = $"Official PP calculation failed: {error.Message}";
-                    loadingOverlay.HideLoading();
+                    hideRefresh();
                 });
         }
     }
@@ -579,17 +682,20 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             TargetSort.Stars => ranked.Candidates.OrderBy(candidate => candidate.StarRating).ThenByDescending(candidate => candidate.RankScore),
             _ => ranked.Candidates,
         };
-        PpTargetCandidate[] calculatedCandidates = ordered.Where(candidate => candidate.Estimate is not null).ToArray();
+        PpTargetCandidate[] visibleCandidates = ordered.ToArray();
 
         results.Clear();
-        foreach (PpTargetCandidate candidate in calculatedCandidates)
+        foreach (PpTargetCandidate candidate in visibleCandidates)
         {
             if (setsById.TryGetValue(candidate.BeatmapSetId, out OfficialBeatmapSet? set))
                 results.Add(new PpTargetRow(candidate, set, importSet));
         }
         if (results.Count == 0)
             results.Add(text("No maps match the current PP and difficulty filters.", 14, AimModPalette.Muted).With(drawable => drawable.Padding = new MarginPadding(18)));
-        resultCount.Text = $"{calculatedCandidates.Length:N0} calculated difficulties from {catalog.Count:N0} sets";
+        int calculatedCount = visibleCandidates.Count(candidate => candidate.Estimate is not null);
+        resultCount.Text = exactCalculation is not null && !exactCalculation.IsCancellationRequested
+            ? $"{visibleCandidates.Length:N0} matches  /  {calculatedCount:N0} PP values ready"
+            : $"{visibleCandidates.Length:N0} matching difficulties from {catalog.Count:N0} sets";
     }
 
     private async Task<OnlineBeatmapImportResult> importSet(OfficialBeatmapSet set)
@@ -600,11 +706,61 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             : await current.ImportAsync(set).ConfigureAwait(false);
     }
 
-    private void replaceLifetime()
+    private void updateProfileSummary()
     {
-        lifetime?.Cancel();
-        lifetime?.Dispose();
-        lifetime = new CancellationTokenSource();
+        string confidence = profile.Confidence.ToString().ToLowerInvariant();
+        string mods = profile.CommonMods.Count == 0 ? "No dominant mods" : string.Join(", ", profile.CommonMods.Take(3).Select(item => item.Value));
+        profileSummary.Text = profile.ValidRunCount == 0
+            ? "No score history is available for PP recommendations."
+            : $"{profile.ValidRunCount:N0} plays  /  {profile.PpSampleCount:N0} PP results  /  {onlineBestCount:N0} submitted  /  {confidence} confidence  /  {mods}";
+    }
+
+    private void showRefresh(string message, int completed, int total)
+    {
+        refreshText.Text = "Refreshing";
+        refreshProgress.Alpha = 1;
+        refreshProgressFill.Width = total > 0 ? Math.Clamp((float)completed / total, 0.02f, 1) : 0.18f;
+        status.Text = message;
+    }
+
+    private void hideRefresh()
+    {
+        refreshText.Text = "Refresh";
+        refreshProgress.Alpha = 0;
+        refreshProgressFill.Width = 0;
+    }
+
+    private void saveSnapshot()
+    {
+        if (workspaceCache is null || catalog.Count == 0)
+            return;
+
+        var snapshot = new PpTargetWorkspaceSnapshot(
+            DateTimeOffset.UtcNow,
+            profile,
+            localSets,
+            catalog,
+            exactEstimates,
+            onlineBestCount,
+            scoreDataStatus,
+            search.Current.Value,
+            minimumStars.Value,
+            maximumStars.Value,
+            category.Value);
+        _ = workspaceCache.SaveAsync(snapshot);
+    }
+
+    private static void replaceToken(ref CancellationTokenSource? source)
+    {
+        cancelToken(ref source);
+        source = new CancellationTokenSource();
+    }
+
+    private static void cancelToken(ref CancellationTokenSource? source)
+    {
+        source?.Cancel();
+        source?.Dispose();
+        source = null;
     }
 
     private void sourceChanged()
@@ -615,12 +771,30 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
 
     protected override void Dispose(bool isDisposing)
     {
-        lifetime?.Cancel();
-        lifetime?.Dispose();
+        cancelToken(ref profileRefresh);
+        cancelToken(ref catalogSearch);
+        cancelToken(ref exactCalculation);
         scheduledSearch?.Cancel();
         if (sourceChanges is not null)
             sourceChanges.SourceChanged -= sourceChanged;
         base.Dispose(isDisposing);
+    }
+
+    private static string relativeAge(DateTimeOffset cachedAt)
+    {
+        TimeSpan age = DateTimeOffset.UtcNow - cachedAt;
+        if (age < TimeSpan.FromMinutes(1))
+            return "just now";
+        if (age < TimeSpan.FromHours(1))
+            return $"{Math.Max(1, (int)age.TotalMinutes)}m ago";
+        return $"{Math.Max(1, (int)age.TotalHours)}h ago";
+    }
+
+    internal static string BeatmapLaunchUri(int beatmapId)
+    {
+        if (beatmapId <= 0)
+            throw new ArgumentOutOfRangeException(nameof(beatmapId));
+        return $"osu://b/{beatmapId}";
     }
 
     private static string failureMessage(OfficialBeatmapRequestStatus requestStatus) => requestStatus switch
@@ -687,12 +861,13 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
     {
         private readonly OfficialBeatmapSet set;
         private readonly Func<OfficialBeatmapSet, Task<OnlineBeatmapImportResult>> import;
-        private readonly SpriteText actionText;
-        private readonly Box actionBackground;
+        private readonly SpriteText saveText;
+        private readonly Box saveBackground;
         private readonly FillFlowContainer details;
         private readonly TruncatingSpriteText title;
         private readonly TruncatingSpriteText artist;
         private readonly TruncatingSpriteText mapDetails;
+        private readonly TruncatingSpriteText mechanicsDetails;
         private readonly TruncatingSpriteText confidenceDetails;
         private readonly Container artwork;
         private readonly Container expectedMetric;
@@ -704,17 +879,21 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             this.set = set;
             this.import = import;
             RelativeSizeAxes = Axes.X;
-            Height = 108;
+            Height = 132;
             Masking = true;
-            CornerRadius = 7;
+            CornerRadius = 6;
             BorderThickness = 1;
             BorderColour = AimModPalette.Border;
+
             Colour4 difficultyColour = AimModVisualStyle.DifficultyColour(candidate.StarRating);
             string expected = candidate.Estimate is null ? "-" : $"{candidate.Estimate.ExpectedPp:0}";
             string maximum = candidate.Estimate is null ? "-" : $"{candidate.Estimate.RealisticMaximumPp:0}";
             bool calculated = candidate.Estimate?.Method.StartsWith("Official osu! ruleset", StringComparison.Ordinal) == true;
-            string confidence = calculated ? "calculated" : $"{candidate.Estimate?.Confidence.ToString().ToLowerInvariant() ?? "insufficient"} estimate";
-            string mods = candidate.SuggestedMods.Count == 0 ? "NM preference" : string.Join(" + ", candidate.SuggestedMods);
+            string confidence = calculated ? "official osu! PP ready" : "PP calculation queued in background";
+            string mods = candidate.SuggestedMods.Count == 0 ? "NM" : string.Join(" + ", candidate.SuggestedMods);
+            OfficialBeatmapDifficulty? difficulty = set.Difficulties.FirstOrDefault(item => item.BeatmapId == candidate.BeatmapId);
+            double passRate = difficulty is { PlayCount: > 0 } ? (double)difficulty.PassCount / difficulty.PlayCount : 0;
+            string combo = candidate.MaximumCombo is > 0 ? $"{candidate.MaximumCombo:N0}x" : "-";
 
             Children = new Drawable[]
             {
@@ -723,7 +902,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                 artwork = new Container
                 {
                     RelativeSizeAxes = Axes.Y,
-                    Width = 126,
+                    Width = 136,
                     X = 4,
                     Masking = true,
                     Child = candidate.CoverUrl is null
@@ -732,38 +911,36 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                 },
                 details = new FillFlowContainer
                 {
-                    Position = new(148, 13),
+                    Position = new(158, 12),
                     Width = 450,
                     AutoSizeAxes = Axes.Y,
                     Direction = FillDirection.Vertical,
-                    Spacing = new(3),
+                    Spacing = new(2),
                     Children = new Drawable[]
                     {
-                        title = new TruncatingSpriteText { Text = $"{candidate.Title} [{candidate.Difficulty}]", Font = new FontUsage(size: 15, weight: "Bold"), Colour = AimModPalette.Text, MaxWidth = 450 },
-                        artist = new TruncatingSpriteText { Text = $"{candidate.Artist} / mapped by {candidate.Creator}", Font = new FontUsage(size: 11, weight: "SemiBold"), Colour = AimModPalette.Muted, MaxWidth = 450 },
-                        mapDetails = truncatingText($"{candidate.StarRating:0.00}*  /  {candidate.Bpm:0} BPM  /  {formatLength(candidate.TotalLengthSeconds)}  /  {mods}", 10, difficultyColour, "SemiBold"),
-                        confidenceDetails = truncatingText($"{candidate.PreferenceFit:P0} preference fit  /  {confidence}", 10, calculated ? AimModPalette.Success : AimModPalette.Muted),
+                        title = new TruncatingSpriteText { Text = candidate.Title, Font = new FontUsage(size: 15, weight: "Bold"), Colour = AimModPalette.Text, MaxWidth = 450 },
+                        artist = new TruncatingSpriteText { Text = $"{candidate.Artist}  /  mapped by {candidate.Creator}", Font = new FontUsage(size: 10, weight: "SemiBold"), Colour = AimModPalette.Muted, MaxWidth = 450 },
+                        mapDetails = truncatingText($"[{candidate.Difficulty}]   {candidate.StarRating:0.00}*   {candidate.Bpm:0} BPM   {formatLength(candidate.TotalLengthSeconds)}   {combo}   {mods}", 10, difficultyColour, "Bold"),
+                        mechanicsDetails = truncatingText(
+                            $"AR {difficulty?.ApproachRate:0.#}   OD {difficulty?.OverallDifficulty:0.#}   CS {difficulty?.CircleSize:0.#}   HP {difficulty?.DrainRate:0.#}   " +
+                            $"{set.Status.ToUpperInvariant()}   {set.PlayCount:N0} plays   {(passRate > 0 ? $"{passRate:P0} pass" : "pass rate -")}",
+                            9, AimModPalette.Muted, "SemiBold"),
+                        confidenceDetails = truncatingText($"{candidate.PreferenceFit:P0} personal fit   /   {confidence}", 9, calculated ? AimModPalette.Success : AimModPalette.Cyan, "SemiBold"),
                     },
                 },
-                expectedMetric = metric("EXPECTED", expected, "pp", AimModPalette.Cyan),
-                maximumMetric = metric(calculated ? "MAX PP" : "EST. MAX", maximum, "pp", Colour4.FromHex("FFD45A")),
-                new ClickableContainer
+                expectedMetric = metric("EXPECTED PP", expected, AimModPalette.Cyan, candidate.Estimate is null ? "calculating" : $"at {candidate.Attainability:P0} attainability"),
+                maximumMetric = metric("REALISTIC MAX", maximum, Colour4.FromHex("FFD45A"), candidate.Estimate is null ? "calculating" : $"+{Math.Max(0, candidate.EstimatedAttainableGainPp ?? 0):0} gain"),
+                new Container
                 {
                     Anchor = Anchor.CentreRight,
                     Origin = Anchor.CentreRight,
-                    Margin = new MarginPadding { Right = 18 },
-                    Size = new(130, 38),
-                    Action = beginImport,
-                    Masking = true,
-                    CornerRadius = 7,
+                    Margin = new MarginPadding { Right = 12 },
+                    Size = new(104, 88),
                     Children = new Drawable[]
                     {
-                        actionBackground = new Box { RelativeSizeAxes = Axes.Both, Colour = set.DownloadDisabled ? AimModPalette.PanelHover : AimModPalette.Pink },
-                        actionText = text(set.DownloadDisabled ? "Unavailable" : "Save map", 11, set.DownloadDisabled ? AimModPalette.Muted : AimModPalette.Canvas, "Bold").With(drawable =>
-                        {
-                            drawable.Anchor = Anchor.Centre;
-                            drawable.Origin = Anchor.Centre;
-                        }),
+                        actionButton(FontAwesome.Solid.Play, "Open osu!", AimModPalette.Cyan, () => openInOsu(candidate.BeatmapId)),
+                        actionButton(FontAwesome.Solid.Download, set.DownloadDisabled ? "Unavailable" : "Save", AimModPalette.Pink, beginImport, 48, set.DownloadDisabled,
+                            out saveBackground, out saveText),
                     },
                 },
             };
@@ -772,19 +949,22 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         protected override void Update()
         {
             base.Update();
-            const float action_column = 166;
-            const float metric_width = 112;
-            bool compact = DrawWidth < 900;
-            artwork.Width = compact ? 84 : 126;
-            details.X = compact ? 104 : 148;
-            float expectedX = DrawWidth - action_column - metric_width * 2;
+            const float actionColumn = 128;
+            float metricWidth = DrawWidth < 880 ? 88 : 106;
+            bool compact = DrawWidth < 980;
+            artwork.Width = compact ? 86 : 136;
+            details.X = compact ? 106 : 158;
+            float expectedX = DrawWidth - actionColumn - metricWidth * 2;
             expectedMetric.X = expectedX;
-            maximumMetric.X = expectedX + metric_width;
+            expectedMetric.Width = metricWidth;
+            maximumMetric.X = expectedX + metricWidth;
+            maximumMetric.Width = metricWidth;
             float detailWidth = Math.Max(100, expectedX - details.X - 18);
             details.Width = detailWidth;
             title.MaxWidth = detailWidth;
             artist.MaxWidth = detailWidth;
             mapDetails.MaxWidth = detailWidth;
+            mechanicsDetails.MaxWidth = detailWidth;
             confidenceDetails.MaxWidth = detailWidth;
         }
 
@@ -793,8 +973,8 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             if (importing || set.DownloadDisabled)
                 return;
             importing = true;
-            actionText.Text = "Saving...";
-            actionBackground.Colour = AimModPalette.PanelHover;
+            saveText.Text = "Saving...";
+            saveBackground.Colour = AimModPalette.PanelHover;
             _ = importAsync();
         }
 
@@ -806,22 +986,91 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                 Schedule(() =>
                 {
                     importing = false;
-                    actionText.Text = result.Status == OnlineBeatmapImportStatus.Success ? "Saved" : "Try again";
-                    actionBackground.Colour = result.Status == OnlineBeatmapImportStatus.Success ? AimModPalette.Success : AimModPalette.Pink;
+                    saveText.Text = result.Status == OnlineBeatmapImportStatus.Success ? "Saved" : "Try again";
+                    saveBackground.Colour = result.Status == OnlineBeatmapImportStatus.Success ? AimModPalette.Success : AimModPalette.Pink;
                 });
             }
         }
 
-        private static Container metric(string caption, string value, string suffix, Colour4 colour) => new()
+        private static Container metric(string caption, string value, Colour4 colour, string detail) => new()
         {
-            Size = new(112, 108),
+            Size = new(106, 132),
             Children = new Drawable[]
             {
-                text(caption, 9, AimModPalette.Muted, "Bold").With(drawable => drawable.Position = new(0, 24)),
-                text(value, 24, colour, "Bold").With(drawable => drawable.Position = new(0, 42)),
-                text(suffix, 10, AimModPalette.Muted, "SemiBold").With(drawable => drawable.Position = new(58, 52)),
+                text(caption, 8, AimModPalette.Muted, "Bold").With(drawable => drawable.Position = new(0, 31)),
+                text(value, 25, colour, "Bold").With(drawable => drawable.Position = new(0, 49)),
+                text("pp", 9, AimModPalette.Muted, "SemiBold").With(drawable => drawable.Position = new(49, 60)),
+                truncatingText(detail, 8, AimModPalette.Muted).With(drawable =>
+                {
+                    drawable.Position = new(0, 84);
+                    drawable.MaxWidth = 96;
+                }),
             },
         };
+
+        private static ClickableContainer actionButton(IconUsage icon, string label, Colour4 colour, Action action, float y = 0, bool disabled = false) =>
+            actionButton(icon, label, colour, action, y, disabled, out _, out _);
+
+        private static ClickableContainer actionButton(
+            IconUsage icon,
+            string label,
+            Colour4 colour,
+            Action action,
+            float y,
+            bool disabled,
+            out Box background,
+            out SpriteText labelText)
+        {
+            background = new Box
+            {
+                RelativeSizeAxes = Axes.Both,
+                Colour = disabled ? AimModPalette.PanelHover : colour,
+                Alpha = disabled ? 0.55f : 1,
+            };
+            labelText = text(label, 9, disabled ? AimModPalette.Muted : AimModPalette.Canvas, "Bold").With(drawable =>
+            {
+                drawable.Anchor = Anchor.CentreLeft;
+                drawable.Origin = Anchor.CentreLeft;
+                drawable.X = 31;
+            });
+            return new ClickableContainer
+            {
+                Position = new(0, y),
+                Size = new(104, 40),
+                Action = disabled ? null : action,
+                Masking = true,
+                CornerRadius = 6,
+                Children = new Drawable[]
+                {
+                    background,
+                    new SpriteIcon
+                    {
+                        Anchor = Anchor.CentreLeft,
+                        Origin = Anchor.CentreLeft,
+                        Position = new(12, 0),
+                        Size = new(11),
+                        Icon = icon,
+                        Colour = disabled ? AimModPalette.Muted : AimModPalette.Canvas,
+                    },
+                    labelText,
+                },
+            };
+        }
+
+        private static void openInOsu(int beatmapId)
+        {
+            if (beatmapId <= 0)
+                return;
+
+            try
+            {
+                Process.Start(new ProcessStartInfo(BeatmapLaunchUri(beatmapId)) { UseShellExecute = true });
+            }
+            catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception)
+            {
+                Console.Error.WriteLine($"[AimMod] Could not open beatmap {beatmapId} in osu!: {error.Message}");
+            }
+        }
 
         private static string formatLength(int seconds) => $"{Math.Max(0, seconds) / 60}:{Math.Max(0, seconds) % 60:00}";
     }

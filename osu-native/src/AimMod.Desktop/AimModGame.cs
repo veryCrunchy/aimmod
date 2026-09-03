@@ -25,6 +25,7 @@ using AimMod.Desktop.Coaching;
 using AimMod.Desktop.Visuals;
 using AimMod.Desktop.Skins;
 using AimMod.Desktop.PpTargets;
+using AimMod.Desktop.ScoreHistory;
 using osu.Game.Graphics.Sprites;
 
 namespace AimMod.Desktop;
@@ -46,7 +47,7 @@ public partial class AimModGame : OsuGameBase
     private HomeScreen? homeScreen;
     private NativeBeatmapDiscoveryScreen? beatmapsScreen;
     private NativeReplayRouteView? replayRoute;
-    private ReplayHistoryScreen? statisticsScreen;
+    private NativeStatisticsWorkspace? statisticsScreen;
     private CancellationTokenSource? replayAnalysisLifetime;
     private CancellationTokenSource? coachingAnalysisLifetime;
     private NativeCoachingWorkspace? coachingWorkspace;
@@ -61,6 +62,7 @@ public partial class AimModGame : OsuGameBase
     private LazerSessionMonitor? lazerSessionMonitor;
     private LazerPreferencesMonitor? lazerPreferencesMonitor;
     private OfficialOsuApiClient? officialApiClient;
+    private IAccountScoreHistoryService? accountScoreHistoryService;
     private IOfficialBeatmapDiscoveryClient? officialBeatmapDiscoveryClient;
     private OnlineBeatmapImportService? onlineBeatmapImportService;
     private IPpTargetExactCalculationService? ppTargetExactCalculationService;
@@ -230,6 +232,7 @@ public partial class AimModGame : OsuGameBase
                 cancellationToken).ConfigureAwait(false);
             lazerSessionMonitor = monitor;
             officialApiClient = new OfficialOsuApiClient(monitor);
+            accountScoreHistoryService = new OfficialAccountScoreHistoryService(() => officialApiClient);
             officialBeatmapDiscoveryClient = new CachedOfficialBeatmapDiscoveryClient(
                 new OfficialBeatmapDiscoveryClient(monitor),
                 Storage.GetFullPath("cache/official-beatmap-search-v1.json", true));
@@ -347,7 +350,8 @@ public partial class AimModGame : OsuGameBase
             localLibrary,
             () => officialBeatmapDiscoveryClient,
             () => onlineBeatmapImportService,
-            () => ppTargetExactCalculationService)
+            () => ppTargetExactCalculationService,
+            () => accountScoreHistoryService)
         {
             RelativeSizeAxes = Axes.Both,
         };
@@ -439,11 +443,10 @@ public partial class AimModGame : OsuGameBase
 
     private void showStatistics()
     {
-        statisticsScreen ??= new ReplayHistoryScreen(
+        statisticsScreen ??= new NativeStatisticsWorkspace(
             localLibrary,
-            ReplayHistoryScreenMode.Statistics,
-            replayAnalyses,
-            prepareCatalogReplay)
+            prepareCatalogReplay,
+            () => accountScoreHistoryService)
         {
             RelativeSizeAxes = Axes.Both,
         };
@@ -455,7 +458,8 @@ public partial class AimModGame : OsuGameBase
         coachingWorkspace ??= new NativeCoachingWorkspace(
             localLibrary,
             replayAnalyses,
-            prepareCatalogReplay)
+            prepareCatalogReplay,
+            () => accountScoreHistoryService)
         {
             RelativeSizeAxes = Axes.Both,
         };
@@ -471,7 +475,9 @@ public partial class AimModGame : OsuGameBase
             () => onlineBeatmapImportService,
             () => ppTargetExactCalculationService,
             () => localScorePpHydrationService,
-            () => officialApiClient)
+            () => officialApiClient,
+            new PpTargetWorkspaceCache(Storage.GetFullPath("cache/pp-target-workspace-v1.json", true)),
+            () => accountScoreHistoryService)
         {
             RelativeSizeAxes = Axes.Both,
         };

@@ -34,10 +34,19 @@ public sealed class LocalScorePpHydrationService : ILocalScorePpHydrationService
 
     private readonly string libraryRoot;
     private readonly string cachePath;
+    private readonly Func<LocalReplay, CancellationToken, Task<double?>>? scoreCalculator;
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly Dictionary<string, CacheEntry> cache;
 
     public LocalScorePpHydrationService(string libraryRoot, string cachePath)
+        : this(libraryRoot, cachePath, null)
+    {
+    }
+
+    internal LocalScorePpHydrationService(
+        string libraryRoot,
+        string cachePath,
+        Func<LocalReplay, CancellationToken, Task<double?>>? scoreCalculator)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(libraryRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(cachePath);
@@ -46,6 +55,7 @@ public sealed class LocalScorePpHydrationService : ILocalScorePpHydrationService
 
         this.libraryRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(libraryRoot));
         this.cachePath = Path.GetFullPath(cachePath);
+        this.scoreCalculator = scoreCalculator;
         cache = loadCache(this.cachePath);
     }
 
@@ -84,58 +94,97 @@ public sealed class LocalScorePpHydrationService : ILocalScorePpHydrationService
             progress?.Report(new LocalScorePpHydrationProgress(0, missing.Length));
             if (missing.Length > 0)
             {
-                await using SidecarRuntimeClient runtime = SidecarRuntimeClient.Start();
-                var runtimeClient = new SidecarRuntimeRequestClient(runtime);
-                var assetClient = new ExternalLazerAssetClient(runtimeClient);
-                var ppClient = new PpWhatIfClient(runtimeClient);
-
-                IGrouping<string, LocalReplay>[] hashGroups = missing.GroupBy(run => run.BeatmapHash, StringComparer.OrdinalIgnoreCase).ToArray();
-                foreach (IGrouping<string, LocalReplay>[] batch in hashGroups.Chunk(hashes_per_batch))
+                int pendingCacheEntries = 0;
+                try
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    string[] hashes = batch.Select(group => group.Key).ToArray();
-                    await using ExternalLazerAssetStagingLease lease = await assetClient.ResolveToPrivateStagingAsync(
-                        libraryRoot, hashes, Array.Empty<Guid>(), cancellationToken).ConfigureAwait(false);
-                    Dictionary<string, ExternalLazerResolvedAsset> beatmaps = lease.Result.Files
-                        .Where(file => string.Equals(file.Kind, "Beatmap", StringComparison.Ordinal))
-                        .GroupBy(file => file.OwnerId, StringComparer.OrdinalIgnoreCase)
-                        .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
-
-                    foreach (LocalReplay run in batch.SelectMany(group => group))
+                    if (scoreCalculator is not null)
                     {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        if (!beatmaps.TryGetValue(run.BeatmapHash, out ExternalLazerResolvedAsset? beatmap))
+                        foreach (LocalReplay run in missing)
                         {
-                            processed++;
-                            progress?.Report(new LocalScorePpHydrationProgress(processed, missing.Length));
-                            continue;
-                        }
-                        try
-                        {
-                            PpWhatIfResult result = await ppClient.CalculateAsync(new PpWhatIfRequest(
-                                Path.GetDirectoryName(beatmap.StagedPath)!,
-                                beatmap.StagedPath,
-                                run.Mods,
-                                run.Accuracy,
-                                run.MissCount,
-                                run.MaxCombo,
-                                run.HitStatistics,
-                                run.ModsJson), cancellationToken).ConfigureAwait(false);
-                            ppByScore[run.ScoreId] = result.PerformancePoints;
-                            cache[cacheKey(run)] = new CacheEntry(cacheKey(run), result.PerformancePoints, DateTimeOffset.UtcNow);
-                            calculated++;
-                        }
-                        catch (Exception error) when (error is not OperationCanceledException)
-                        {
-                        }
-                        finally
-                        {
-                            processed++;
-                            progress?.Report(new LocalScorePpHydrationProgress(processed, missing.Length));
+                            cancellationToken.ThrowIfCancellationRequested();
+                            try
+                            {
+                                double? pp = await scoreCalculator(run, cancellationToken).ConfigureAwait(false);
+                                if (validPp(pp))
+                                {
+                                    recordCalculated(run, pp.Value, ppByScore);
+                                    calculated++;
+                                    pendingCacheEntries++;
+                                    if (pendingCacheEntries >= 10 && await trySaveCacheAsync().ConfigureAwait(false))
+                                        pendingCacheEntries = 0;
+                                }
+                            }
+                            catch (Exception error) when (error is not OperationCanceledException)
+                            {
+                            }
+                            finally
+                            {
+                                processed++;
+                                progress?.Report(new LocalScorePpHydrationProgress(processed, missing.Length));
+                            }
                         }
                     }
+                    else
+                    {
+                        await using SidecarRuntimeClient runtime = SidecarRuntimeClient.Start();
+                        var runtimeClient = new SidecarRuntimeRequestClient(runtime);
+                        var assetClient = new ExternalLazerAssetClient(runtimeClient);
+                        var ppClient = new PpWhatIfClient(runtimeClient);
 
-                    await trySaveCacheAsync(cancellationToken).ConfigureAwait(false);
+                        IGrouping<string, LocalReplay>[] hashGroups = missing.GroupBy(run => run.BeatmapHash, StringComparer.OrdinalIgnoreCase).ToArray();
+                        foreach (IGrouping<string, LocalReplay>[] batch in hashGroups.Chunk(hashes_per_batch))
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            string[] hashes = batch.Select(group => group.Key).ToArray();
+                            await using ExternalLazerAssetStagingLease lease = await assetClient.ResolveToPrivateStagingAsync(
+                                libraryRoot, hashes, Array.Empty<Guid>(), cancellationToken).ConfigureAwait(false);
+                            Dictionary<string, ExternalLazerResolvedAsset> beatmaps = lease.Result.Files
+                                .Where(file => string.Equals(file.Kind, "Beatmap", StringComparison.Ordinal))
+                                .GroupBy(file => file.OwnerId, StringComparer.OrdinalIgnoreCase)
+                                .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+
+                            foreach (LocalReplay run in batch.SelectMany(group => group))
+                            {
+                                cancellationToken.ThrowIfCancellationRequested();
+                                if (!beatmaps.TryGetValue(run.BeatmapHash, out ExternalLazerResolvedAsset? beatmap))
+                                {
+                                    processed++;
+                                    progress?.Report(new LocalScorePpHydrationProgress(processed, missing.Length));
+                                    continue;
+                                }
+                                try
+                                {
+                                    PpWhatIfResult result = await ppClient.CalculateAsync(new PpWhatIfRequest(
+                                        Path.GetDirectoryName(beatmap.StagedPath)!,
+                                        beatmap.StagedPath,
+                                        run.Mods,
+                                        run.Accuracy,
+                                        run.MissCount,
+                                        run.MaxCombo,
+                                        run.HitStatistics,
+                                        run.ModsJson), cancellationToken).ConfigureAwait(false);
+                                    recordCalculated(run, result.PerformancePoints, ppByScore);
+                                    calculated++;
+                                    pendingCacheEntries++;
+                                    if (pendingCacheEntries >= 10 && await trySaveCacheAsync().ConfigureAwait(false))
+                                        pendingCacheEntries = 0;
+                                }
+                                catch (Exception error) when (error is not OperationCanceledException)
+                                {
+                                }
+                                finally
+                                {
+                                    processed++;
+                                    progress?.Report(new LocalScorePpHydrationProgress(processed, missing.Length));
+                                }
+                            }
+                        }
+                    }
+                }
+                finally
+                {
+                    if (pendingCacheEntries > 0)
+                        await trySaveCacheAsync().ConfigureAwait(false);
                 }
             }
 
@@ -155,7 +204,14 @@ public sealed class LocalScorePpHydrationService : ILocalScorePpHydrationService
         }
     }
 
-    private async Task trySaveCacheAsync(CancellationToken cancellationToken)
+    private void recordCalculated(LocalReplay run, double performancePoints, IDictionary<Guid, double> ppByScore)
+    {
+        ppByScore[run.ScoreId] = performancePoints;
+        string key = cacheKey(run);
+        cache[key] = new CacheEntry(key, performancePoints, DateTimeOffset.UtcNow);
+    }
+
+    private async Task<bool> trySaveCacheAsync()
     {
         try
         {
@@ -166,9 +222,11 @@ public sealed class LocalScorePpHydrationService : ILocalScorePpHydrationService
             string temporaryPath = $"{cachePath}.{Guid.NewGuid():N}.tmp";
             try
             {
-                await using FileStream stream = new(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, true);
-                await JsonSerializer.SerializeAsync(stream, new CacheDocument(cache_version, entries), json_options, cancellationToken).ConfigureAwait(false);
-                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                await using (FileStream stream = new(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, true))
+                {
+                    await JsonSerializer.SerializeAsync(stream, new CacheDocument(cache_version, entries), json_options, CancellationToken.None).ConfigureAwait(false);
+                    await stream.FlushAsync(CancellationToken.None).ConfigureAwait(false);
+                }
                 File.Move(temporaryPath, cachePath, true);
             }
             finally
@@ -181,9 +239,12 @@ public sealed class LocalScorePpHydrationService : ILocalScorePpHydrationService
                 {
                 }
             }
+            return true;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or NotSupportedException)
         {
+            Console.Error.WriteLine($"AimMod local score PP cache persistence failed for '{cachePath}': {error}");
+            return false;
         }
     }
 

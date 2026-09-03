@@ -15,6 +15,7 @@ public partial class NativeReplayPlayer : ReplayPlayer
     private readonly BindableBool isPaused = new(true);
     private readonly BindableDouble playbackRate = new(1);
     private readonly BindableBool isTransportReady = new();
+    private readonly ReplayTransportLifetime transportLifetime = new();
 
     /// <summary>
     /// Current replay position in milliseconds. The value follows osu!'s gameplay clock.
@@ -77,7 +78,16 @@ public partial class NativeReplayPlayer : ReplayPlayer
     {
         base.Update();
 
-        if (isTransportReady.Value)
+        if (!isTransportReady.Value)
+            return;
+
+        if (ScoreProcessor.HasCompleted.Value)
+        {
+            completeTransport();
+            return;
+        }
+
+        if (transportLifetime.CanAcceptCommands)
             updateTransportState();
     }
 
@@ -110,11 +120,21 @@ public partial class NativeReplayPlayer : ReplayPlayer
     /// </summary>
     public bool SuspendPlayback()
     {
-        if (!isTransportReady.Value)
+        if (!isTransportReady.Value || !transportLifetime.CanAcceptCommands)
             return false;
 
-        GameplayClockContainer.Stop();
-        updateTransportState();
+        transportLifetime.InvalidateScheduledActions();
+
+        try
+        {
+            GameplayClockContainer.Stop();
+            updateTransportState();
+        }
+        catch (ObjectDisposedException)
+        {
+            terminateTransport();
+        }
+
         return true;
     }
 
@@ -150,16 +170,67 @@ public partial class NativeReplayPlayer : ReplayPlayer
 
     private bool scheduleTransportAction(Action<GameplayClockContainer> action)
     {
-        if (!isTransportReady.Value)
+        if (!isTransportReady.Value || !transportLifetime.TryCapture(out int generation))
             return false;
 
         Schedule(() =>
         {
-            if (isTransportReady.Value)
+            if (!isTransportReady.Value || !transportLifetime.CanRun(generation))
+                return;
+
+            if (ScoreProcessor.HasCompleted.Value)
+            {
+                completeTransport();
+                return;
+            }
+
+            try
+            {
                 action(GameplayClockContainer);
+                updateTransportState();
+            }
+            catch (ObjectDisposedException)
+            {
+                // The game-wide working beatmap may replace and dispose the track between
+                // scheduling and execution. Treat that player as terminal rather than
+                // allowing a stale transport command to crash the update thread.
+                terminateTransport();
+            }
         });
 
         return true;
+    }
+
+    private void completeTransport()
+    {
+        if (!transportLifetime.TryComplete())
+            return;
+
+        stopClockAtTerminalState();
+    }
+
+    private void terminateTransport()
+    {
+        transportLifetime.Terminate();
+        stopClockAtTerminalState();
+    }
+
+    private void stopClockAtTerminalState()
+    {
+        isTransportReady.Value = false;
+
+        try
+        {
+            GameplayClockContainer.Stop();
+            currentTime.Value = Math.Min(Math.Max(0, GameplayClockContainer.CurrentTime), duration.Value);
+        }
+        catch (ObjectDisposedException)
+        {
+            // The source track has already been released. Public state still needs to
+            // become terminal so no later command attempts to restart it.
+        }
+
+        isPaused.Value = true;
     }
 
     private void updateTransportState()
@@ -169,5 +240,55 @@ public partial class NativeReplayPlayer : ReplayPlayer
 
         if (GameplayClockContainer is MasterGameplayClockContainer master)
             playbackRate.Value = master.UserPlaybackRate.Value;
+    }
+
+    protected override void Dispose(bool isDisposing)
+    {
+        transportLifetime.Dispose();
+        isTransportReady.Value = false;
+        isPaused.Value = true;
+        base.Dispose(isDisposing);
+    }
+}
+
+internal sealed class ReplayTransportLifetime
+{
+    private int generation;
+    private bool completed;
+    private bool disposed;
+
+    public bool CanAcceptCommands => !completed && !disposed;
+
+    public bool TryCapture(out int capturedGeneration)
+    {
+        capturedGeneration = generation;
+        return CanAcceptCommands;
+    }
+
+    public bool CanRun(int capturedGeneration) =>
+        CanAcceptCommands && capturedGeneration == generation;
+
+    public void InvalidateScheduledActions() => generation++;
+
+    public bool TryComplete()
+    {
+        if (!CanAcceptCommands)
+            return false;
+
+        completed = true;
+        generation++;
+        return true;
+    }
+
+    public void Terminate()
+    {
+        completed = true;
+        generation++;
+    }
+
+    public void Dispose()
+    {
+        disposed = true;
+        generation++;
     }
 }

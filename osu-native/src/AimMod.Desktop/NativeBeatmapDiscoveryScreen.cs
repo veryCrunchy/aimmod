@@ -1,5 +1,6 @@
 using AimMod.Desktop.LocalLibrary;
 using AimMod.Desktop.PpTargets;
+using AimMod.Desktop.ScoreHistory;
 using AimMod.Desktop.Visuals;
 using AimMod.Osu.Runtime;
 using osu.Framework.Bindables;
@@ -23,21 +24,27 @@ public partial class NativeBeatmapDiscoveryScreen : CompositeDrawable
     private readonly Func<IOfficialBeatmapDiscoveryClient?> client;
     private readonly Func<OnlineBeatmapImportService?> importer;
     private readonly Func<IPpTargetExactCalculationService?> exactCalculator;
+    private readonly Func<IAccountScoreHistoryService?> onlineScoreHistory;
     private readonly Container page = null!;
+    private readonly Container tabBar = null!;
+    private readonly OsuTabControl<BeatmapDiscoveryTab> tabs = null!;
     private readonly Bindable<BeatmapDiscoveryTab> currentTab = new(BeatmapDiscoveryTab.Installed);
     private NativeInstalledBeatmapBrowser? installedScreen;
     private NativeOfficialBeatmapSearchScreen? onlineScreen;
+    private Drawable? activeScreen;
 
     public NativeBeatmapDiscoveryScreen(
         ILocalLibrarySource localLibrary,
         Func<IOfficialBeatmapDiscoveryClient?> client,
         Func<OnlineBeatmapImportService?> importer,
-        Func<IPpTargetExactCalculationService?>? exactCalculator = null)
+        Func<IPpTargetExactCalculationService?>? exactCalculator = null,
+        Func<IAccountScoreHistoryService?>? onlineScoreHistory = null)
     {
         this.localLibrary = localLibrary ?? throw new ArgumentNullException(nameof(localLibrary));
         this.client = client ?? throw new ArgumentNullException(nameof(client));
         this.importer = importer ?? throw new ArgumentNullException(nameof(importer));
         this.exactCalculator = exactCalculator ?? (() => null);
+        this.onlineScoreHistory = onlineScoreHistory ?? (() => null);
         RelativeSizeAxes = Axes.Both;
 
         InternalChildren = new Drawable[]
@@ -46,15 +53,16 @@ public partial class NativeBeatmapDiscoveryScreen : CompositeDrawable
             {
                 RelativeSizeAxes = Axes.Both,
                 Masking = true,
+                Depth = 0,
             },
-            new Container
+            tabBar = new Container
             {
                 RelativeSizeAxes = Axes.X,
                 Height = 42,
-                Masking = true,
+                Depth = -100,
                 Children = new Drawable[]
                 {
-                    new OsuTabControl<BeatmapDiscoveryTab>
+                    tabs = new OsuTabControl<BeatmapDiscoveryTab>
                     {
                         Anchor = Anchor.TopRight,
                         Origin = Anchor.TopRight,
@@ -74,20 +82,62 @@ public partial class NativeBeatmapDiscoveryScreen : CompositeDrawable
         currentTab.BindValueChanged(tab => showTab(tab.NewValue), true);
     }
 
+    protected override void Update()
+    {
+        base.Update();
+
+        float inspectorWidth = currentTab.Value == BeatmapDiscoveryTab.Installed && DrawWidth >= 1_280
+            ? Math.Clamp(DrawWidth * 0.27f, 350, 390)
+            : 0;
+        tabs.Position = new(-inspectorWidth, 2);
+    }
+
+    internal void SelectTab(BeatmapDiscoveryTab tab)
+    {
+        currentTab.Value = tab;
+        showTab(tab);
+    }
+
+    internal BeatmapDiscoveryTab GetCurrentTabForTesting() => currentTab.Value;
+
+    internal Type? GetActiveScreenTypeForTesting() => activeScreen?.GetType();
+
+    internal Drawable? GetActiveScreenForTesting() => activeScreen;
+
     private void showTab(BeatmapDiscoveryTab tab)
     {
         if (tab == BeatmapDiscoveryTab.Installed)
         {
-            installedScreen ??= new NativeInstalledBeatmapBrowser(localLibrary, exactCalculator) { RelativeSizeAxes = Axes.Both };
-            page.Child = installedScreen;
+            if (installedScreen is null)
+            {
+                installedScreen = new NativeInstalledBeatmapBrowser(localLibrary, exactCalculator, onlineScoreHistory) { RelativeSizeAxes = Axes.Both };
+                page.Add(installedScreen);
+            }
+            setActiveScreen(installedScreen, onlineScreen);
             return;
         }
 
-        onlineScreen ??= new NativeOfficialBeatmapSearchScreen(client, importer) { RelativeSizeAxes = Axes.Both };
-        page.Child = onlineScreen;
+        if (onlineScreen is null)
+        {
+            onlineScreen = new NativeOfficialBeatmapSearchScreen(client, importer) { RelativeSizeAxes = Axes.Both };
+            page.Add(onlineScreen);
+        }
+        setActiveScreen(onlineScreen, installedScreen);
     }
 
-    private enum BeatmapDiscoveryTab
+    private void setActiveScreen(Drawable shown, Drawable? hidden)
+    {
+        shown.Alpha = 1;
+        shown.AlwaysPresent = true;
+        if (hidden is not null)
+        {
+            hidden.Alpha = 0;
+            hidden.AlwaysPresent = false;
+        }
+        activeScreen = shown;
+    }
+
+    internal enum BeatmapDiscoveryTab
     {
         Installed,
         Online,

@@ -54,8 +54,7 @@ public sealed class SidecarRuntimeClientTests
     [Test]
     public async Task CancellationAfterDispatchTerminatesWorkerAndPoisonsClient()
     {
-        requirePosixShell();
-        await using SidecarRuntimeClient client = startShell("IFS= read -r line; sleep 30");
+        await using SidecarRuntimeClient client = startBlockingResponder();
         using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(250));
 
         Assert.CatchAsync<OperationCanceledException>(async () =>
@@ -143,6 +142,26 @@ public sealed class SidecarRuntimeClientTests
         };
         startInfo.ArgumentList.Add("-c");
         startInfo.ArgumentList.Add(script);
+        return SidecarRuntimeClient.Start(startInfo);
+    }
+
+    private static SidecarRuntimeClient startBlockingResponder()
+    {
+        if (!OperatingSystem.IsWindows())
+            return startShell("IFS= read -r line; sleep 30");
+
+        var startInfo = new ProcessStartInfo("cmd.exe")
+        {
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = false,
+            CreateNoWindow = true,
+        };
+        startInfo.ArgumentList.Add("/D");
+        startInfo.ArgumentList.Add("/Q");
+        startInfo.ArgumentList.Add("/C");
+        startInfo.ArgumentList.Add("set /p request= & ping 127.0.0.1 -n 31 >nul");
         return SidecarRuntimeClient.Start(startInfo);
     }
 

@@ -386,6 +386,87 @@ public sealed class OfficialOsuApiClientTests
 
     private Task writeSignedInSessionAsync(string username, string token) => File.WriteAllTextAsync(gameIniPath, sessionContents(username, token));
 
+    [Test]
+    public async Task FetchesAllSubmittedScoresForExactBeatmap()
+    {
+        await writeSignedInSessionAsync("crunchy", access_token);
+        await using LazerSessionMonitor monitor = await LazerSessionMonitor.CreateAsync(gameIniPath);
+        var handler = new RecordingHandler(_ => jsonResponse(HttpStatusCode.OK,
+            $$"""{ "scores": [{{bestScoreJson(7, 42)}}, {{bestScoreJson(8, 42)}}] }"""));
+        using var client = new OfficialOsuApiClient(monitor, handler, Path.Combine(temporaryDirectory, "cache"), TimeProvider.System);
+
+        OsuUserBeatmapScoresFetchResult result = await client.FetchUserBeatmapScoresAsync(profile(), 1234);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(OsuBestScoresFetchStatus.Success));
+            Assert.That(result.Scores, Has.Count.EqualTo(2));
+            Assert.That(result.Scores![0].ScoreId, Is.EqualTo(7));
+            Assert.That(result.Scores[0].PerformancePoints, Is.EqualTo(321.45));
+            Assert.That(result.Scores[0].Mods, Is.EqualTo(new[] { "HD", "DT" }));
+            Assert.That(handler.RequestUri?.AbsolutePath, Is.EqualTo("/api/v2/beatmaps/1234/scores/users/42/all"));
+            Assert.That(handler.RequestUri?.Query, Is.EqualTo("?ruleset=osu"));
+        });
+    }
+
+    [Test]
+    public async Task ReusesExactBeatmapScoreCacheByUserAndBeatmap()
+    {
+        await writeSignedInSessionAsync("crunchy", access_token);
+        await using LazerSessionMonitor monitor = await LazerSessionMonitor.CreateAsync(gameIniPath);
+        string cacheDirectory = Path.Combine(temporaryDirectory, "cache");
+        var firstHandler = new RecordingHandler(_ => jsonResponse(HttpStatusCode.OK,
+            $$"""{ "scores": [{{bestScoreJson(7, 42)}}] }"""));
+        using (var first = new OfficialOsuApiClient(monitor, firstHandler, cacheDirectory, TimeProvider.System))
+            Assert.That((await first.FetchUserBeatmapScoresAsync(profile(), 1234)).Status, Is.EqualTo(OsuBestScoresFetchStatus.Success));
+
+        var secondHandler = new RecordingHandler(_ => throw new InvalidOperationException("Fresh exact-beatmap cache should avoid HTTP."));
+        using var second = new OfficialOsuApiClient(monitor, secondHandler, cacheDirectory, TimeProvider.System);
+        OsuUserBeatmapScoresFetchResult cached = await second.FetchUserBeatmapScoresAsync(profile(), 1234);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cached.Status, Is.EqualTo(OsuBestScoresFetchStatus.Success));
+            Assert.That(cached.IsFromCache, Is.True);
+            Assert.That(cached.Scores, Has.Count.EqualTo(1));
+            Assert.That(secondHandler.CallCount, Is.Zero);
+            Assert.That(Directory.GetFiles(cacheDirectory, "beatmap-scores-*-user-42-beatmap-1234.json"), Has.Length.EqualTo(1));
+            Assert.That(Directory.GetFiles(cacheDirectory, "*.tmp"), Is.Empty);
+        });
+    }
+
+    [Test]
+    public async Task FetchesRecentScoresIncludingFailsAndCachesFeedSeparately()
+    {
+        await writeSignedInSessionAsync("crunchy", access_token);
+        await using LazerSessionMonitor monitor = await LazerSessionMonitor.CreateAsync(gameIniPath);
+        string cacheDirectory = Path.Combine(temporaryDirectory, "cache");
+        var firstHandler = new RecordingHandler(_ => jsonResponse(HttpStatusCode.OK, scorePageJson(42, 2)));
+        using (var first = new OfficialOsuApiClient(monitor, firstHandler, cacheDirectory, TimeProvider.System))
+        {
+            OsuBestScoresFetchResult result = await first.FetchRecentScoresAsync(profile());
+            Assert.Multiple(() =>
+            {
+                Assert.That(result.Status, Is.EqualTo(OsuBestScoresFetchStatus.Success));
+                Assert.That(result.Scores, Has.Count.EqualTo(2));
+                Assert.That(firstHandler.RequestUri?.AbsolutePath, Is.EqualTo("/api/v2/users/42/scores/recent"));
+                Assert.That(firstHandler.RequestUri?.Query, Does.Contain("include_fails=1").And.Contain("limit=100"));
+            });
+        }
+
+        var secondHandler = new RecordingHandler(_ => throw new InvalidOperationException("Fresh recent-score cache should avoid HTTP."));
+        using var second = new OfficialOsuApiClient(monitor, secondHandler, cacheDirectory, TimeProvider.System);
+        OsuBestScoresFetchResult cached = await second.FetchRecentScoresAsync(profile());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cached.Status, Is.EqualTo(OsuBestScoresFetchStatus.Success));
+            Assert.That(cached.IsFromCache, Is.True);
+            Assert.That(secondHandler.CallCount, Is.Zero);
+            Assert.That(Directory.GetFiles(cacheDirectory, "recent-scores-*-user-42.json"), Has.Length.EqualTo(1));
+        });
+    }
+
     private static string sessionContents(string username, string token) =>
         $"Username = {username}\nToken = {token}|{DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds()}|refresh-private\n";
 

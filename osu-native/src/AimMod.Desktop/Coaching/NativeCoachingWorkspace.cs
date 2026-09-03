@@ -1,5 +1,6 @@
 using AimMod.Desktop.LocalLibrary;
 using AimMod.Desktop.Visuals;
+using AimMod.Desktop.ScoreHistory;
 using AimMod.Osu.Runtime.Contracts;
 using osu.Framework.Extensions.Color4Extensions;
 using osu.Framework.Graphics;
@@ -25,6 +26,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     private readonly ILocalLibrarySourceChanged? sourceChanges;
     private readonly IReadOnlyDictionary<Guid, ReplayAnalysisResult> analyses;
     private readonly Action<LocalReplay> openReplay;
+    private readonly Func<IAccountScoreHistoryService?> accountHistory;
 
     private readonly Container headerArtwork;
     private readonly OsuSpriteText sessionTitle;
@@ -50,11 +52,13 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     public NativeCoachingWorkspace(
         ILocalLibrarySource source,
         IReadOnlyDictionary<Guid, ReplayAnalysisResult> analyses,
-        Action<LocalReplay> openReplay)
+        Action<LocalReplay> openReplay,
+        Func<IAccountScoreHistoryService?>? accountHistory = null)
     {
         this.source = source ?? throw new ArgumentNullException(nameof(source));
         this.analyses = analyses ?? throw new ArgumentNullException(nameof(analyses));
         this.openReplay = openReplay ?? throw new ArgumentNullException(nameof(openReplay));
+        this.accountHistory = accountHistory ?? (() => null);
         sourceChanges = source as ILocalLibrarySourceChanged;
         if (sourceChanges is not null)
             sourceChanges.SourceChanged += sourceChanged;
@@ -77,7 +81,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             out sessionDuration,
             out sessionAccuracy,
             out sessionTrend));
-        content.Add(status = label("Loading your local play history...", 12, AimModPalette.Muted));
+        content.Add(status = label("Loading your score history...", 12, AimModPalette.Muted));
         content.Add(new GridContainer
         {
             RelativeSizeAxes = Axes.X,
@@ -98,8 +102,8 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         });
         content.Add(new AimModSectionHeader(
             "Choose a run",
-            "Search your local osu!standard history. Selecting a run updates every panel above.",
-            "local history"));
+            "Search submitted and local osu!standard history. Selecting a run updates every panel above.",
+            "account history"));
         content.Add(search = new OsuTextBox
         {
             RelativeSizeAxes = Axes.X,
@@ -138,8 +142,8 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         loading?.Cancel();
         loading?.Dispose();
         loading = new CancellationTokenSource();
-        status.Text = "Loading your local play history...";
-        loadingOverlay.ShowLoading("Preparing coaching", "Reading your local osu!standard history");
+        status.Text = "Loading your score history...";
+        loadingOverlay.ShowLoading("Preparing coaching", "Merging submitted and local osu!standard scores");
         _ = loadAsync(loading.Token);
     }
 
@@ -148,9 +152,13 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         try
         {
             StatisticsHistoryLoadResult history = await StatisticsHistoryLoader.LoadAsync(source, cancellationToken).ConfigureAwait(false);
-            NativeCoachingWorkspaceModel next = NativeCoachingWorkspaceModel.Build(history.Runs, analyses);
+            OnlineAccountScoreHistoryResult? online = accountHistory() is { } service
+                ? await service.FetchAccountAsync(cancellationToken).ConfigureAwait(false)
+                : null;
+            IReadOnlyList<LocalReplay> merged = ScoreHistoryMerger.MergeAsLocalReplays(history.Runs, online?.Scores ?? []);
+            NativeCoachingWorkspaceModel next = NativeCoachingWorkspaceModel.Build(merged, analyses);
             if (!IsDisposed)
-                Schedule(() => apply(history.Runs, history.TotalAvailableRunCount, next));
+                Schedule(() => apply(merged, Math.Max(history.TotalAvailableRunCount, merged.Count), next, online));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -161,18 +169,23 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                 Schedule(() =>
                 {
                     loadingOverlay.HideLoading();
-                    status.Text = $"Your local play history could not be loaded. {error.Message}";
+                    status.Text = $"Your score history could not be loaded. {error.Message}";
                 });
         }
     }
 
-    private void apply(IReadOnlyList<LocalReplay> nextReplays, int total, NativeCoachingWorkspaceModel next)
+    private void apply(
+        IReadOnlyList<LocalReplay> nextReplays,
+        int total,
+        NativeCoachingWorkspaceModel next,
+        OnlineAccountScoreHistoryResult? online)
     {
         replays = nextReplays;
         workspace = next;
+        int submitted = online?.Scores.Count ?? 0;
         status.Text = total > nextReplays.Count
-            ? $"Coaching uses your latest {nextReplays.Count:N0} of {total:N0} local osu!standard plays"
-            : $"Coaching uses {nextReplays.Count:N0} local osu!standard plays";
+            ? $"Coaching uses {nextReplays.Count:N0} merged scores ({submitted:N0} submitted) from {total:N0} available records"
+            : $"Coaching uses {nextReplays.Count:N0} merged scores ({submitted:N0} submitted)";
         loadingOverlay.HideLoading();
         updateWorkspace();
     }
@@ -375,7 +388,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         if (recommendation is null)
         {
             recommendationHost.Add(flow(
-                "Play more comparable local maps with saved replays. AimMod will recommend a focused practice target once the history is large enough.",
+                "Play more comparable maps. Saved local replays add exact mechanics, while submitted scores build the broader performance model.",
                 13,
                 AimModPalette.Muted));
             return;
@@ -396,7 +409,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             Limit: visible_run_limit));
         if (page.Items.Count == 0)
         {
-            runList.Add(flow("No local runs match this search.", 14, AimModPalette.Muted).With(text => text.Padding = new MarginPadding(18)));
+            runList.Add(flow("No account scores match this search.", 14, AimModPalette.Muted).With(text => text.Padding = new MarginPadding(18)));
             return;
         }
 

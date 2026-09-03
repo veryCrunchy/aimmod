@@ -53,7 +53,9 @@ internal sealed class OfficialReplayAnalysisEngine : IReplayAnalysisEngine
         }
     }
 
-    private static ReplayAnalysisResult analyse(ValidatedReplayInput input, CancellationToken cancellationToken)
+    private static ReplayAnalysisResult analyse(
+        ValidatedReplayInput input,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -140,7 +142,10 @@ internal sealed partial class ReplayAnalysisGame : OsuGameBase
     public ReplayAnalysisResult? Result { get; private set; }
     public ReplayAnalysisException? Failure { get; private set; }
 
-    public ReplayAnalysisGame(IBeatmap sourceBeatmap, string replayPath, CancellationToken cancellationToken)
+    public ReplayAnalysisGame(
+        IBeatmap sourceBeatmap,
+        string replayPath,
+        CancellationToken cancellationToken)
     {
         this.sourceBeatmap = sourceBeatmap;
         this.replayPath = replayPath;
@@ -180,7 +185,7 @@ internal sealed partial class ReplayAnalysisGame : OsuGameBase
 
             var stack = new OsuScreenStack { RelativeSizeAxes = Axes.Both };
             Add(stack);
-            player = new AnalysisReplayPlayer(score, complete, fail);
+            player = new AnalysisReplayPlayer(score, complete, fail, cancellationToken);
             stack.Push(player);
         }
         catch (OperationCanceledException)
@@ -267,17 +272,24 @@ internal sealed class AnalysisWorkingBeatmap : TestWorkingBeatmap
 
 internal sealed partial class AnalysisReplayPlayer : ReplayPlayer
 {
+    private const double judgement_settling_time = 2_000;
+
     private readonly Action<IReadOnlyList<ReplayObjectJudgement>> complete;
     private readonly Action<ReplayAnalysisException> fail;
+    private readonly double replayEndTime;
+    private readonly CancellationToken cancellationToken;
     private readonly List<ReplayObjectJudgement> judgements = new();
     private Dictionary<HitObject, ObjectAddress> addresses = new(ReferenceEqualityComparer.Instance);
+    private ReplayAnalysisCompletionWatchdog? completionWatchdog;
+    private bool finished;
 
     protected override bool PauseOnFocusLost => false;
 
     public AnalysisReplayPlayer(
         Score score,
         Action<IReadOnlyList<ReplayObjectJudgement>> complete,
-        Action<ReplayAnalysisException> fail)
+        Action<ReplayAnalysisException> fail,
+        CancellationToken cancellationToken)
         : base(score, new PlayerConfiguration
         {
             AllowPause = false,
@@ -287,6 +299,11 @@ internal sealed partial class AnalysisReplayPlayer : ReplayPlayer
     {
         this.complete = complete;
         this.fail = fail;
+        replayEndTime = score.Replay.Frames.Select(frame => frame.Time)
+                             .Where(time => double.IsFinite(time) && time >= 0)
+                             .DefaultIfEmpty(double.PositiveInfinity)
+                             .Max();
+        this.cancellationToken = cancellationToken;
     }
 
     protected override void LoadComplete()
@@ -299,12 +316,50 @@ internal sealed partial class AnalysisReplayPlayer : ReplayPlayer
         }
 
         addresses = indexObjects(GameplayState.Beatmap);
+        completionWatchdog = new ReplayAnalysisCompletionWatchdog(
+            GameplayState.Beatmap.GetLastObjectTime(),
+            judgement_settling_time,
+            replayEndTime);
         ScoreProcessor.NewJudgement += recordJudgement;
         ScoreProcessor.HasCompleted.BindValueChanged(completed =>
         {
             if (completed.NewValue)
-                complete(judgements.ToArray());
+                finish();
         }, true);
+
+    }
+
+    protected override void Update()
+    {
+        base.Update();
+
+        if (finished)
+            return;
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            finished = true;
+            fail(new ReplayAnalysisException("analysis_cancelled", "Replay analysis was cancelled."));
+            return;
+        }
+
+        if (completionWatchdog?.ShouldComplete(
+                GameplayClockContainer.CurrentTime,
+                ScoreProcessor.HasCompleted.Value,
+                GameplayState.HasFailed) == true)
+        {
+            finish();
+        }
+    }
+
+    private void finish()
+    {
+        if (finished)
+            return;
+
+        finished = true;
+        GameplayClockContainer.Stop();
+        complete(judgements.ToArray());
     }
 
     private void recordJudgement(JudgementResult result)
@@ -358,6 +413,46 @@ internal sealed partial class AnalysisReplayPlayer : ReplayPlayer
             result[nested] = new ObjectAddress(objectIndex, path);
             indexNested(nested, objectIndex, path, result);
         }
+    }
+}
+
+internal sealed class ReplayAnalysisCompletionWatchdog
+{
+    private readonly double terminalGameplayTime;
+    private int terminalObservations;
+
+    public ReplayAnalysisCompletionWatchdog(double lastObjectTime, double settlingTime, double replayEndTime = double.PositiveInfinity)
+    {
+        if (!double.IsFinite(lastObjectTime) || lastObjectTime < 0)
+            throw new ArgumentOutOfRangeException(nameof(lastObjectTime));
+        if (!double.IsFinite(settlingTime) || settlingTime < 0)
+            throw new ArgumentOutOfRangeException(nameof(settlingTime));
+        if (double.IsNaN(replayEndTime) || replayEndTime < 0)
+            throw new ArgumentOutOfRangeException(nameof(replayEndTime));
+
+        terminalGameplayTime = Math.Min(lastObjectTime, replayEndTime) + settlingTime;
+    }
+
+    public double TerminalGameplayTime => terminalGameplayTime;
+
+    public bool ShouldComplete(
+        double gameplayTime,
+        bool scoreProcessorHasCompleted,
+        bool officialPlaybackTerminated = false)
+    {
+        if (scoreProcessorHasCompleted)
+            return true;
+
+        if (!officialPlaybackTerminated
+            && (!double.IsFinite(gameplayTime) || gameplayTime < terminalGameplayTime))
+        {
+            terminalObservations = 0;
+            return false;
+        }
+
+        // The Player updates before its frame-stable children. Waiting for a second
+        // observation guarantees that the terminal replay frame has been applied.
+        return ++terminalObservations >= 2;
     }
 }
 

@@ -185,6 +185,206 @@ public sealed class OfficialOsuApiClient : IDisposable
         }
     }
 
+    public async Task<OsuUserBeatmapScoresFetchResult> FetchUserBeatmapScoresAsync(
+        OsuProfile profile,
+        int beatmapId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        if (profile.UserId <= 0 || string.IsNullOrWhiteSpace(profile.Username))
+            throw new ArgumentException("A valid osu! profile is required.", nameof(profile));
+        if (beatmapId <= 0)
+            throw new ArgumentOutOfRangeException(nameof(beatmapId));
+
+        try
+        {
+            await session.RefreshAsync(cancellationToken);
+        }
+        catch (ObjectDisposedException)
+        {
+            return new OsuUserBeatmapScoresFetchResult(OsuBestScoresFetchStatus.SessionUnavailable);
+        }
+
+        LazerSessionState startingState = session.Current;
+        using LazerAccessTokenLease? lease = session.TryLeaseAccessToken();
+        if (lease is null || !lease.TryGetAccessToken(out string accessToken))
+            return new OsuUserBeatmapScoresFetchResult(withoutScoreToken(startingState.Status).Status);
+        if (!string.Equals(startingState.Username, profile.Username, StringComparison.OrdinalIgnoreCase))
+        {
+            accessToken = string.Empty;
+            return new OsuUserBeatmapScoresFetchResult(OsuBestScoresFetchStatus.SessionChanged);
+        }
+
+        OsuUserBeatmapScoresCacheDocument? cached = await readBeatmapScoreCacheAsync(profile.UserId, beatmapId, cancellationToken);
+        if (cached is not null)
+        {
+            if (!isSameSession(startingState, lease, profile))
+            {
+                accessToken = string.Empty;
+                return new OsuUserBeatmapScoresFetchResult(OsuBestScoresFetchStatus.SessionChanged);
+            }
+            accessToken = string.Empty;
+            return new OsuUserBeatmapScoresFetchResult(
+                OsuBestScoresFetchStatus.Success,
+                cached.Scores,
+                true,
+                cached.FetchedAt);
+        }
+
+        try
+        {
+            Uri endpoint = new($"https://osu.ppy.sh/api/v2/beatmaps/{beatmapId}/scores/users/{profile.UserId}/all?ruleset=osu");
+            using var request = new HttpRequestMessage(HttpMethod.Get, endpoint);
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue(MediaTypeNames.Application.Json));
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+            request.Headers.TryAddWithoutValidation("x-api-version", osu_api_version);
+
+            using HttpResponseMessage response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            OsuBestScoresFetchStatus? sessionStatus = await validateScoreSessionAsync(startingState, lease, profile, cancellationToken);
+            if (sessionStatus is not null)
+                return new OsuUserBeatmapScoresFetchResult(sessionStatus.Value);
+            if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+                return new OsuUserBeatmapScoresFetchResult(OsuBestScoresFetchStatus.Unauthorized);
+            if ((int)response.StatusCode is >= 300 and < 400)
+                return new OsuUserBeatmapScoresFetchResult(OsuBestScoresFetchStatus.InvalidResponse);
+            if (!response.IsSuccessStatusCode)
+                return new OsuUserBeatmapScoresFetchResult(OsuBestScoresFetchStatus.ServerError);
+
+            UserBeatmapScoresResponse? payload = await readPayloadAsync<UserBeatmapScoresResponse>(response, maximum_scores_response_bytes, cancellationToken);
+            if (payload?.Scores is null)
+                return new OsuUserBeatmapScoresFetchResult(OsuBestScoresFetchStatus.InvalidResponse);
+
+            var scores = new List<OsuUserBeatmapScore>(payload.Scores.Count);
+            foreach (BestScoreResponse item in payload.Scores)
+            {
+                OsuUserBeatmapScore? score = parseUserBeatmapScore(item, profile.UserId);
+                if (score is null)
+                    return new OsuUserBeatmapScoresFetchResult(OsuBestScoresFetchStatus.InvalidResponse);
+                scores.Add(score);
+            }
+
+            DateTimeOffset fetchedAt = timeProvider.GetUtcNow();
+            var document = new OsuUserBeatmapScoresCacheDocument(
+                score_cache_schema_version,
+                osu_api_version,
+                profile.UserId,
+                beatmapId,
+                fetchedAt,
+                fetchedAt + score_cache_lifetime,
+                scores);
+            await tryWriteBeatmapScoreCacheAsync(document, cancellationToken);
+            return new OsuUserBeatmapScoresFetchResult(OsuBestScoresFetchStatus.Success, scores, false, fetchedAt);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is HttpRequestException or IOException or JsonException or TaskCanceledException)
+        {
+            return new OsuUserBeatmapScoresFetchResult(
+                exception is HttpRequestException or TaskCanceledException
+                    ? OsuBestScoresFetchStatus.NetworkError
+                    : OsuBestScoresFetchStatus.InvalidResponse);
+        }
+        finally
+        {
+            accessToken = string.Empty;
+        }
+    }
+
+    public async Task<OsuBestScoresFetchResult> FetchRecentScoresAsync(
+        OsuProfile profile,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        if (profile.UserId <= 0 || string.IsNullOrWhiteSpace(profile.Username))
+            throw new ArgumentException("A valid osu! profile is required.", nameof(profile));
+
+        try
+        {
+            await session.RefreshAsync(cancellationToken);
+        }
+        catch (ObjectDisposedException)
+        {
+            return new OsuBestScoresFetchResult(OsuBestScoresFetchStatus.SessionUnavailable);
+        }
+
+        LazerSessionState startingState = session.Current;
+        using LazerAccessTokenLease? lease = session.TryLeaseAccessToken();
+        if (lease is null || !lease.TryGetAccessToken(out string accessToken))
+            return withoutScoreToken(startingState.Status);
+        if (!string.Equals(startingState.Username, profile.Username, StringComparison.OrdinalIgnoreCase))
+        {
+            accessToken = string.Empty;
+            return new OsuBestScoresFetchResult(OsuBestScoresFetchStatus.SessionChanged);
+        }
+
+        OsuBestScoresCacheDocument? cached = await readScoreCacheAsync(profile.UserId, cancellationToken, "recent");
+        if (cached is not null)
+        {
+            if (!isSameSession(startingState, lease, profile))
+            {
+                accessToken = string.Empty;
+                return new OsuBestScoresFetchResult(OsuBestScoresFetchStatus.SessionChanged);
+            }
+            accessToken = string.Empty;
+            return new OsuBestScoresFetchResult(OsuBestScoresFetchStatus.Success, cached.Scores, true, cached.FetchedAt);
+        }
+
+        try
+        {
+            Uri endpoint = new($"https://osu.ppy.sh/api/v2/users/{profile.UserId}/scores/recent?mode=osu&include_fails=1&limit={scores_page_size}&offset=0");
+            using var request = new HttpRequestMessage(HttpMethod.Get, endpoint);
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue(MediaTypeNames.Application.Json));
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+            request.Headers.TryAddWithoutValidation("x-api-version", osu_api_version);
+            using HttpResponseMessage response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+
+            OsuBestScoresFetchStatus? sessionStatus = await validateScoreSessionAsync(startingState, lease, profile, cancellationToken);
+            if (sessionStatus is not null)
+                return new OsuBestScoresFetchResult(sessionStatus.Value);
+            if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+                return new OsuBestScoresFetchResult(OsuBestScoresFetchStatus.Unauthorized);
+            if ((int)response.StatusCode is >= 300 and < 400)
+                return new OsuBestScoresFetchResult(OsuBestScoresFetchStatus.InvalidResponse);
+            if (!response.IsSuccessStatusCode)
+                return new OsuBestScoresFetchResult(OsuBestScoresFetchStatus.ServerError);
+
+            List<BestScoreResponse>? payload = await readPayloadAsync<List<BestScoreResponse>>(response, maximum_scores_response_bytes, cancellationToken);
+            if (payload is null || payload.Count > scores_page_size)
+                return new OsuBestScoresFetchResult(OsuBestScoresFetchStatus.InvalidResponse);
+            var scores = new List<OsuBestScore>(payload.Count);
+            foreach (BestScoreResponse item in payload)
+            {
+                OsuBestScore? score = parseBestScore(item, profile);
+                if (score is null)
+                    return new OsuBestScoresFetchResult(OsuBestScoresFetchStatus.InvalidResponse);
+                scores.Add(score);
+            }
+
+            DateTimeOffset fetchedAt = timeProvider.GetUtcNow();
+            var document = new OsuBestScoresCacheDocument(score_cache_schema_version, osu_api_version, profile.UserId,
+                fetchedAt, fetchedAt + score_cache_lifetime, scores);
+            await tryWriteScoreCacheAsync(document, cancellationToken, "recent");
+            return new OsuBestScoresFetchResult(OsuBestScoresFetchStatus.Success, scores, false, fetchedAt);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is HttpRequestException or IOException or JsonException or TaskCanceledException)
+        {
+            return new OsuBestScoresFetchResult(
+                exception is HttpRequestException or TaskCanceledException
+                    ? OsuBestScoresFetchStatus.NetworkError
+                    : OsuBestScoresFetchStatus.InvalidResponse);
+        }
+        finally
+        {
+            accessToken = string.Empty;
+        }
+    }
+
     public async Task<OsuProfileFetchResult> FetchCurrentProfileAsync(CancellationToken cancellationToken = default)
     {
         LazerSessionState startingState = session.Current;
@@ -341,9 +541,9 @@ public sealed class OfficialOsuApiClient : IDisposable
         string.Equals(session.Current.Username, profile.Username, StringComparison.OrdinalIgnoreCase) &&
         lease.TryGetAccessToken(out _);
 
-    private async Task<OsuBestScoresCacheDocument?> readScoreCacheAsync(int userId, CancellationToken cancellationToken)
+    private async Task<OsuBestScoresCacheDocument?> readScoreCacheAsync(int userId, CancellationToken cancellationToken, string category = "best")
     {
-        string path = getScoreCachePath(userId);
+        string path = getScoreCachePath(userId, category);
         try
         {
             await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 4096,
@@ -374,10 +574,10 @@ public sealed class OfficialOsuApiClient : IDisposable
         }
     }
 
-    private async Task writeScoreCacheAsync(OsuBestScoresCacheDocument document, CancellationToken cancellationToken)
+    private async Task writeScoreCacheAsync(OsuBestScoresCacheDocument document, CancellationToken cancellationToken, string category = "best")
     {
         Directory.CreateDirectory(scoreCacheDirectory);
-        string destination = getScoreCachePath(document.UserId);
+        string destination = getScoreCachePath(document.UserId, category);
         string temporary = Path.Combine(scoreCacheDirectory, $".{Path.GetFileName(destination)}.{Guid.NewGuid():N}.tmp");
 
         try
@@ -404,11 +604,11 @@ public sealed class OfficialOsuApiClient : IDisposable
         }
     }
 
-    private async Task tryWriteScoreCacheAsync(OsuBestScoresCacheDocument document, CancellationToken cancellationToken)
+    private async Task tryWriteScoreCacheAsync(OsuBestScoresCacheDocument document, CancellationToken cancellationToken, string category = "best")
     {
         try
         {
-            await writeScoreCacheAsync(document, cancellationToken);
+            await writeScoreCacheAsync(document, cancellationToken, category);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -420,8 +620,63 @@ public sealed class OfficialOsuApiClient : IDisposable
         }
     }
 
-    private string getScoreCachePath(int userId) =>
-        Path.Combine(scoreCacheDirectory, $"best-scores-{osu_api_version}-user-{userId}.json");
+    private string getScoreCachePath(int userId, string category = "best") =>
+        Path.Combine(scoreCacheDirectory, $"{category}-scores-{osu_api_version}-user-{userId}.json");
+
+    private async Task<OsuUserBeatmapScoresCacheDocument?> readBeatmapScoreCacheAsync(int userId, int beatmapId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var stream = new FileStream(getBeatmapScoreCachePath(userId, beatmapId), FileMode.Open, FileAccess.Read, FileShare.Read, 4096,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+            if (stream.Length > maximum_scores_response_bytes)
+                return null;
+            OsuUserBeatmapScoresCacheDocument? document = await JsonSerializer.DeserializeAsync<OsuUserBeatmapScoresCacheDocument>(stream, json_options, cancellationToken);
+            return document is not null && document.SchemaVersion == score_cache_schema_version &&
+                   document.ApiVersion == osu_api_version && document.UserId == userId && document.BeatmapId == beatmapId &&
+                   document.ExpiresAt > timeProvider.GetUtcNow() && document.FetchedAt <= document.ExpiresAt &&
+                   document.Scores is not null && document.Scores.All(score => score is not null && score.UserId == userId)
+                ? document
+                : null;
+        }
+        catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException or IOException or UnauthorizedAccessException or JsonException)
+        {
+            return null;
+        }
+    }
+
+    private async Task tryWriteBeatmapScoreCacheAsync(OsuUserBeatmapScoresCacheDocument document, CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(scoreCacheDirectory);
+        string destination = getBeatmapScoreCachePath(document.UserId, document.BeatmapId);
+        string temporary = Path.Combine(scoreCacheDirectory, $".{Path.GetFileName(destination)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            await using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096,
+                             FileOptions.Asynchronous | FileOptions.WriteThrough))
+            {
+                await JsonSerializer.SerializeAsync(stream, document, json_options, cancellationToken);
+                await stream.FlushAsync(cancellationToken);
+                stream.Flush(true);
+            }
+            File.Move(temporary, destination, true);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+        }
+        finally
+        {
+            try { File.Delete(temporary); }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { }
+        }
+    }
+
+    private string getBeatmapScoreCachePath(int userId, int beatmapId) =>
+        Path.Combine(scoreCacheDirectory, $"beatmap-scores-{osu_api_version}-user-{userId}-beatmap-{beatmapId}.json");
 
     private static string getDefaultCacheDirectory() => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -485,6 +740,28 @@ public sealed class OfficialOsuApiClient : IDisposable
                 parseHttpsUri(item.Beatmapset.Covers?.Cover)));
     }
 
+    private static OsuUserBeatmapScore? parseUserBeatmapScore(BestScoreResponse item, int userId)
+    {
+        if (item.Id <= 0 || item.UserId != userId || item.Accuracy is < 0 or > 1 || item.MaxCombo < 0 ||
+            item.Statistics is null || item.Statistics.HasNegativeValue || item.Mods.ValueKind != JsonValueKind.Array)
+            return null;
+        string[] mods = parseMods(item.Mods);
+        if (mods.Length != item.Mods.GetArrayLength())
+            return null;
+        return new OsuUserBeatmapScore(
+            item.Id,
+            item.UserId,
+            item.Pp,
+            item.Accuracy,
+            item.Score,
+            item.MaxCombo,
+            new OsuScoreStatistics(item.Statistics.CountMiss, item.Statistics.Count300, item.Statistics.Count100, item.Statistics.Count50),
+            mods,
+            item.Mods.GetRawText(),
+            item.EndedAt,
+            item.CreatedAt);
+    }
+
     private static string[] parseMods(JsonElement mods)
     {
         if (mods.ValueKind != JsonValueKind.Array)
@@ -542,6 +819,11 @@ public sealed class OfficialOsuApiClient : IDisposable
 
         public ScoreBeatmapResponse? Beatmap { get; init; }
         public ScoreBeatmapSetResponse? Beatmapset { get; init; }
+    }
+
+    private sealed class UserBeatmapScoresResponse
+    {
+        public List<BestScoreResponse>? Scores { get; init; }
     }
 
     private sealed class ScoreStatisticsResponse

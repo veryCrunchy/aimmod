@@ -62,6 +62,7 @@ public partial class NativeReplayRouteView : Container
     private long analysisRevision;
     private double playbackSpeed = 1;
     private bool analysisInProgress;
+    private bool analysisHasResult;
 
     public NativeReplayRouteView(
         ILocalLibrarySource? source = null,
@@ -299,10 +300,19 @@ public partial class NativeReplayRouteView : Container
     public void SetReplaySummary(LocalReplay replay)
     {
         selectedReplay = replay;
+        analysisRevision = -1;
+        analysisInProgress = false;
+        analysisHasResult = false;
         summaryAccuracy.Text = formatAccuracy(replay.Accuracy);
         summaryPerformance.Text = replay.PerformancePoints is { } pp ? $"{pp:0.#}pp" : $"{replay.TotalScore:N0}";
         summaryMisses.Text = replay.MissCount.ToString("N0");
         summaryCombo.Text = $"{replay.MaxCombo:N0}x";
+
+        if (analyses.TryGetValue(replay.ScoreId, out ReplayAnalysisResult? cachedAnalysis))
+            showCompletedAnalysis(cachedAnalysis);
+        else
+            showPendingAnalysis();
+
         loadReplayBrowser();
     }
 
@@ -327,6 +337,9 @@ public partial class NativeReplayRouteView : Container
         statusTitle.Colour = AimModPalette.Pink;
         statusDetail.Text = message;
         statusLayer.FadeIn(120);
+
+        if (!analysisHasResult)
+            showAnalysisFailure("Replay analysis could not start because the replay did not open.", "Resolve the replay loading error, then select the run again.");
     }
 
     public void ShowAnalysisState(ReplayAnalysisState state)
@@ -339,46 +352,46 @@ public partial class NativeReplayRouteView : Container
         {
             case ReplayAnalysisStatus.Running:
                 analysisInProgress = true;
+                analysisHasResult = false;
                 loadingOverlay.HideLoading();
                 analysisTitle.Text = "Analysing exact judgements...";
                 analysisSummary.Text = "Preparing replay details";
-                notableRows.Clear();
+                showNotableState("Exact judgement analysis is in progress.", AimModPalette.Muted);
                 momentButtons.Clear();
                 judgementTimeline.ClearResult();
-                analysisNextPlay.Text = "Review the run while details load.";
+                analysisNextPlay.Text = "A measured focus will appear when exact judgement analysis completes.";
                 analysisCard.FadeIn(150);
                 break;
 
             case ReplayAnalysisStatus.Completed when state.Result is not null:
-                analysisInProgress = false;
-                loadingOverlay.HideLoading();
-                ReplayAnalysisPresentation presentation = ReplayAnalysisPresenter.Present(state.Result);
-                analysisTitle.Text = "Exact replay analysis";
-                analysisSummary.Text = wrap(presentation.Summary, 37);
-                analysisNextPlay.Text = wrap(measuredNextPlay(state.Result, presentation.NextPlay), 35);
-                judgementTimeline.SetResult(state.Result);
-                showMomentButtons(state.Result);
-                showNotableRows(state.Result);
-                analysisCard.FadeIn(150);
+                showCompletedAnalysis(state.Result);
                 break;
 
             case ReplayAnalysisStatus.Failed:
                 analysisInProgress = false;
+                analysisHasResult = false;
                 loadingOverlay.HideLoading();
-                analysisTitle.Text = "Replay analysis unavailable";
-                analysisSummary.Text = state.Error?.Message ?? "AimMod could not analyse this replay.";
-                notableRows.Clear();
-                momentButtons.Clear();
-                judgementTimeline.ClearResult();
-                analysisNextPlay.Text = "Replay playback is still available.";
-                analysisCard.FadeIn(150);
+                showAnalysisFailure(
+                    state.Error?.Message ?? "AimMod could not analyse this replay.",
+                    "Exact coaching focus is unavailable for this run. Replay playback is still available.");
                 break;
 
             case ReplayAnalysisStatus.Cancelled:
+                analysisInProgress = false;
+                analysisHasResult = false;
+                loadingOverlay.HideLoading();
+                showAnalysisFailure(
+                    "Exact replay analysis was cancelled.",
+                    "Select the run again to calculate its coaching focus.");
+                break;
+
             case ReplayAnalysisStatus.Idle:
                 analysisInProgress = false;
+                analysisHasResult = false;
                 loadingOverlay.HideLoading();
-                analysisCard.FadeOut(120);
+                showAnalysisFailure(
+                    "Exact replay analysis has not started.",
+                    "Open this run to calculate notable moments and a measured coaching focus.");
                 break;
         }
     }
@@ -386,14 +399,52 @@ public partial class NativeReplayRouteView : Container
     public void ShowAnalysisError(string message)
     {
         analysisInProgress = false;
+        analysisHasResult = false;
         loadingOverlay.HideLoading();
-        analysisTitle.Text = "Replay analysis unavailable";
-        analysisSummary.Text = message;
-        notableRows.Clear();
+        showAnalysisFailure(message, "Exact coaching focus is unavailable for this run. Replay playback is still available.");
+    }
+
+    private void showPendingAnalysis()
+    {
+        analysisTitle.Text = "Waiting for exact replay analysis";
+        analysisSummary.Text = "Opening the replay and preparing exact judgement data.";
+        showNotableState("Notable moments will appear when analysis completes.", AimModPalette.Muted);
         momentButtons.Clear();
         judgementTimeline.ClearResult();
-        analysisNextPlay.Text = "Replay playback is still available.";
+        analysisNextPlay.Text = "A measured focus will appear when exact judgement analysis completes.";
         analysisCard.FadeIn(150);
+    }
+
+    private void showCompletedAnalysis(ReplayAnalysisResult result)
+    {
+        analysisInProgress = false;
+        analysisHasResult = true;
+        loadingOverlay.HideLoading();
+        ReplayAnalysisPresentation presentation = ReplayAnalysisPresenter.Present(result);
+        analysisTitle.Text = "Exact replay analysis";
+        analysisSummary.Text = wrap(presentation.Summary, 37);
+        analysisNextPlay.Text = wrap(measuredNextPlay(result, presentation.NextPlay), 35);
+        judgementTimeline.SetResult(result);
+        showMomentButtons(result);
+        showNotableRows(result);
+        analysisCard.FadeIn(150);
+    }
+
+    private void showAnalysisFailure(string message, string nextPlay)
+    {
+        analysisTitle.Text = "Replay analysis unavailable";
+        analysisSummary.Text = message;
+        showNotableState(message, AimModPalette.Pink);
+        momentButtons.Clear();
+        judgementTimeline.ClearResult();
+        analysisNextPlay.Text = nextPlay;
+        analysisCard.FadeIn(150);
+    }
+
+    private void showNotableState(string message, Colour4 colour)
+    {
+        notableRows.Clear();
+        notableRows.Add(makeText(message, 12, colour, "SemiBold"));
     }
 
     private void loadReplayBrowser()
@@ -830,6 +881,7 @@ public partial class NativeReplayRouteView : Container
     private partial class WrappedLabel : CompositeDrawable
     {
         private readonly TextFlowContainer flow;
+        private string text = string.Empty;
 
         public WrappedLabel(string value, float size, Colour4 colour, string weight = "Regular")
         {
@@ -849,10 +901,12 @@ public partial class NativeReplayRouteView : Container
 
         public string Text
         {
+            get => text;
             set
             {
+                text = value ?? string.Empty;
                 flow.Clear();
-                flow.AddText(value ?? string.Empty);
+                flow.AddText(text);
             }
         }
     }
