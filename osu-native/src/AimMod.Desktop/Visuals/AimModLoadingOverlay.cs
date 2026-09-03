@@ -44,7 +44,8 @@ public partial class AimModLoadingOverlay : Container
                     spinner = new SpriteIcon
                     {
                         Anchor = Anchor.TopCentre,
-                        Origin = Anchor.TopCentre,
+                        Origin = Anchor.Centre,
+                        Y = 19,
                         Icon = FontAwesome.Solid.CircleNotch,
                         Size = new(38),
                         Colour = AimModPalette.Pink,
