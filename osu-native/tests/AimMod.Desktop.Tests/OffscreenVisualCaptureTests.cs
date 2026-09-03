@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using AimMod.Desktop.LocalLibrary;
+using AimMod.Desktop.Visuals;
 using NUnit.Framework;
 using osu.Framework;
 using osu.Framework.Allocation;
@@ -19,7 +20,13 @@ public sealed partial class OffscreenVisualCaptureTests
 {
     [TestCase("home", 1600, 900)]
     [TestCase("home", 1100, 760)]
+    [TestCase("beatmaps", 1100, 760)]
     [TestCase("skins", 1100, 760)]
+    [TestCase("replays", 1100, 760)]
+    [TestCase("statistics", 1100, 760)]
+    [TestCase("coaching", 1100, 760)]
+    [TestCase("ppTargets", 1100, 760)]
+    [TestCase("loading", 1100, 760)]
     [Explicit("Creates a real graphics device and writes a visual-review artifact.")]
     [SupportedOSPlatform("windows")]
     public async Task CaptureWorkspaceOnPrivateDesktop(string route, int width, int height)
@@ -53,8 +60,8 @@ public sealed partial class OffscreenVisualCaptureTests
     private static int countSampledColours(Image<Rgba32> image)
     {
         var colours = new HashSet<Rgba32>();
-        int stepX = Math.Max(1, image.Width / 32);
-        int stepY = Math.Max(1, image.Height / 18);
+        int stepX = Math.Max(1, image.Width / 128);
+        int stepY = Math.Max(1, image.Height / 72);
 
         for (int y = 0; y < image.Height; y += stepY)
         {
@@ -102,7 +109,16 @@ public sealed partial class OffscreenVisualCaptureTests
         {
             base.LoadComplete();
 
-            if (!string.Equals(route, "home", StringComparison.Ordinal))
+            if (string.Equals(route, "loading", StringComparison.Ordinal))
+            {
+                var overlay = new AimModLoadingOverlay();
+                LoadComponentAsync(overlay, loaded =>
+                {
+                    Add(loaded);
+                    loaded.ShowLoading("Calculating beatmap PP", "Difficulty 12 of 24", 12, 24);
+                });
+            }
+            else if (!string.Equals(route, "home", StringComparison.Ordinal))
             {
                 MethodInfo routeMethod = typeof(AimModGame).GetMethod($"show{char.ToUpperInvariant(route[0])}{route[1..]}", BindingFlags.Instance | BindingFlags.NonPublic)
                                          ?? throw new InvalidOperationException($"Unknown capture route '{route}'.");

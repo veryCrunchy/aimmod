@@ -274,7 +274,7 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
 
             case LocalLibraryLoadStatus.Empty:
                 resultStatus.Text = mode == NativeLocalLibraryMode.Beatmaps ? "No beatmaps found" : "No replays found";
-                loadMoreButton.SetState(false, "No results");
+                loadMoreButton.SetState(false, "No results", visible: false);
                 loadingOverlay.HideLoading();
                 break;
 
@@ -654,11 +654,11 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
             };
         }
 
-        public void SetState(bool isEnabled, string text)
+        public void SetState(bool isEnabled, string text, bool visible = true)
         {
             enabled = isEnabled;
             label.Text = text;
-            this.FadeTo(isEnabled ? 1 : 0.55f, 100);
+            this.FadeTo(visible ? (isEnabled ? 1 : 0.55f) : 0, 100);
         }
 
         protected override bool OnClick(ClickEvent e)

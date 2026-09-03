@@ -16,6 +16,7 @@ using osu.Game.Configuration;
 using osu.Game.Database;
 using osu.Game.Rulesets.Osu;
 using osu.Game.Scoring;
+using osuTK;
 using AimMod.Osu.Runtime;
 using AimMod.Osu.Runtime.Contracts;
 using AimMod.Desktop.LocalLibrary;
@@ -210,6 +211,11 @@ public partial class AimModGame : OsuGameBase
                     root.CanonicalPath,
                     SkinManager,
                     Storage.GetFullPath("cache/external-skin-mappings-v1.json", true));
+                skinsScreen?.Configure(
+                    externalSkinSource,
+                    lazerPreferencesMonitor?.Current.SkinId,
+                    appliedExternalSkinId,
+                    applySelectedSkin);
             });
 
             LazerPreferencesMonitor preferencesMonitor = await LazerPreferencesMonitor.CreateAsync(
@@ -509,6 +515,7 @@ public partial class AimModGame : OsuGameBase
         coachingAnalysisLifetime?.Cancel();
         coachingAnalysisLifetime?.Dispose();
         coachingAnalysisLifetime = CancellationTokenSource.CreateLinkedTokenSource(appLifetime.Token);
+        coachingWorkspace.BeginAnalysisProgress();
         _ = analyseRecentCoachingReplays(coachingWorkspace, replayAnalysisBatchService, coachingAnalysisLifetime.Token);
     }
 
@@ -841,7 +848,9 @@ public partial class AimModGame : OsuGameBase
 
     private partial class HeaderBar : Container
     {
-        private readonly SpriteText sessionState;
+        private readonly TruncatingSpriteText sessionState;
+        private readonly Drawable productPill;
+        private readonly FillFlowContainer<Drawable> navigation;
 
         public HeaderBar(
             Bindable<NativeRoute> currentRoute,
@@ -891,10 +900,10 @@ public partial class AimModGame : OsuGameBase
                     Children = new Drawable[]
                     {
                         text("AimMod", 26, AimModPalette.Text, "Bold"),
-                        new AimModPill("osu!lazer", AimModPillTone.Accent),
+                        productPill = new AimModPill("osu!lazer", AimModPillTone.Accent),
                     },
                 },
-                new FillFlowContainer
+                navigation = new FillFlowContainer<Drawable>
                 {
                     AutoSizeAxes = Axes.Both,
                     Anchor = Anchor.Centre,
@@ -912,13 +921,26 @@ public partial class AimModGame : OsuGameBase
                         new NavItem("PP Targets", NativeRoute.PpTargets, currentRoute, showPpTargets),
                     },
                 },
-                sessionState = text("Finding osu!lazer...", 13, AimModPalette.Muted).With(drawable =>
+                sessionState = new TruncatingSpriteText
                 {
-                    drawable.Anchor = Anchor.CentreRight;
-                    drawable.Origin = Anchor.CentreRight;
-                    drawable.Margin = new MarginPadding { Right = 28 };
-                }),
+                    Anchor = Anchor.CentreRight,
+                    Origin = Anchor.CentreRight,
+                    Margin = new MarginPadding { Right = 28 },
+                    Text = "Finding osu!lazer...",
+                    Font = new FontUsage(size: 13),
+                    Colour = AimModPalette.Muted,
+                    MaxWidth = 220,
+                },
             };
+        }
+
+        protected override void Update()
+        {
+            base.Update();
+            bool compact = DrawWidth < 1_080;
+            productPill.Alpha = compact ? 0 : 1;
+            sessionState.Alpha = compact ? 0 : 1;
+            navigation.Scale = new Vector2(DrawWidth < 900 ? 0.88f : 1);
         }
 
         public void SetSessionState(LazerSessionState state)
@@ -1038,6 +1060,8 @@ public partial class AimModGame : OsuGameBase
     {
         private readonly Box background;
         private readonly Box accent;
+        private readonly TruncatingSpriteText titleText;
+        private readonly TruncatingSpriteText descriptionText;
         private readonly Action? action;
 
         public WorkspaceLink(
@@ -1085,8 +1109,18 @@ public partial class AimModGame : OsuGameBase
                         Spacing = new(2),
                         Children = new Drawable[]
                         {
-                            text(title, 16, AimModPalette.Text, "Bold"),
-                            text(description, 11, AimModPalette.Muted),
+                            titleText = new TruncatingSpriteText
+                            {
+                                Text = title,
+                                Font = new FontUsage(size: 16, weight: "Bold"),
+                                Colour = AimModPalette.Text,
+                            },
+                            descriptionText = new TruncatingSpriteText
+                            {
+                                Text = description,
+                                Font = new FontUsage(size: 11),
+                                Colour = AimModPalette.Muted,
+                            },
                         },
                     },
                     new SpriteIcon
@@ -1100,6 +1134,14 @@ public partial class AimModGame : OsuGameBase
                     },
                 },
             };
+        }
+
+        protected override void Update()
+        {
+            base.Update();
+            float textWidth = Math.Max(80, DrawWidth - 108);
+            titleText.MaxWidth = textWidth;
+            descriptionText.MaxWidth = textWidth;
         }
 
         protected override bool OnClick(ClickEvent e)

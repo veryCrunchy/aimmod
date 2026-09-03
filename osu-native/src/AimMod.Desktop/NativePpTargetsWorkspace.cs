@@ -200,7 +200,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         base.Update();
 
         float width = Math.Max(640, DrawWidth);
-        bool compact = width < 1_000;
+        bool compact = width < 1_120;
         float headerHeight = compact ? 318 : 238;
         filterHeader.Height = headerHeight;
         resultViewport.Padding = new MarginPadding { Top = headerHeight + 7 };
@@ -295,8 +295,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                 {
                     if (!IsDisposed)
                     {
-                        Schedule(() => loadingOverlay.ShowLoading(
-                            "Building your PP profile",
+                        Schedule(() => loadingOverlay.SetProgress(
                             $"Calculating local performance {value.Completed:N0}/{value.Total:N0}",
                             value.Completed,
                             value.Total));
@@ -437,6 +436,17 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
         }
+        catch (Exception error)
+        {
+            if (!IsDisposed && !cancellationToken.IsCancellationRequested)
+            {
+                Schedule(() =>
+                {
+                    status.Text = $"Could not search the osu! catalog: {error.Message}";
+                    loadingOverlay.HideLoading();
+                });
+            }
+        }
     }
 
     private void applyCatalog(OfficialBeatmapSearchResult response)
@@ -502,8 +512,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             var progress = new Progress<PpTargetExactCalculationProgress>(value =>
             {
                 if (!IsDisposed && !cancellationToken.IsCancellationRequested)
-                    Schedule(() => loadingOverlay.ShowLoading(
-                        "Calculating beatmap PP",
+                    Schedule(() => loadingOverlay.SetProgress(
                         $"Difficulty {value.Completed:N0} of {value.Total:N0}",
                         value.Completed,
                         value.Total));

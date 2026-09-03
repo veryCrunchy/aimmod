@@ -45,6 +45,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     private CancellationTokenSource? loading;
     private IReadOnlyList<LocalReplay> replays = Array.Empty<LocalReplay>();
     private NativeCoachingWorkspaceModel? workspace;
+    private bool acceptingAnalysisProgress;
 
     public NativeCoachingWorkspace(
         ILocalLibrarySource source,
@@ -184,21 +185,27 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
 
     public void SetAnalysisProgress(int completed, int total, string currentTitle)
     {
-        if (total <= 0)
+        if (!acceptingAnalysisProgress || total <= 0)
             return;
 
         status.Text = completed >= total
             ? $"Analysed {total:N0} recent saved {(total == 1 ? "replay" : "replays")}. Updating coaching..."
             : $"Analysing recent saved replays {completed + 1:N0}/{total:N0}: {currentTitle}";
-        loadingOverlay.ShowLoading(
-            "Analysing recent replays",
+        loadingOverlay.SetProgress(
             completed >= total ? "Updating your coaching report" : currentTitle,
             completed,
             total);
     }
 
+    public void BeginAnalysisProgress()
+    {
+        acceptingAnalysisProgress = true;
+        loadingOverlay.ShowLoading("Analysing recent replays", "Preparing saved replay analysis");
+    }
+
     public void ApplyNewAnalyses(int completed, int failed)
     {
+        acceptingAnalysisProgress = false;
         Guid? selectedScoreId = workspace?.SelectedRun?.ScoreId;
         workspace = NativeCoachingWorkspaceModel.Build(replays, analyses, selectedScoreId);
         updateWorkspace();
@@ -215,6 +222,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
 
     public void SetAnalysisError()
     {
+        acceptingAnalysisProgress = false;
         loadingOverlay.HideLoading();
         status.Text = "Recent replay analysis stopped. You can still open any available replay below.";
     }
@@ -591,28 +599,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         return outer;
     }
 
-    private static Drawable sectionLine(string title, string detail) => new GridContainer
-    {
-        RelativeSizeAxes = Axes.X,
-        Height = 34,
-        ColumnDimensions = new[]
-        {
-            new Dimension(GridSizeMode.Relative, 0.58f),
-            new Dimension(GridSizeMode.Relative, 0.42f),
-        },
-        Content = new[]
-        {
-            new Drawable[]
-            {
-                label(title, 17, AimModPalette.Text, "SemiBold"),
-                label(detail, 10, AimModPalette.Muted).With(text =>
-                {
-                    text.Anchor = Anchor.CentreRight;
-                    text.Origin = Anchor.CentreRight;
-                }),
-            },
-        },
-    };
+    private static Drawable sectionLine(string title, string detail) => new SectionLine(title, detail);
 
     private static Drawable miniMetric(string title, string value, Colour4 colour) => new FillFlowContainer
     {
@@ -822,6 +809,37 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                     },
                 },
             };
+        }
+    }
+
+    private partial class SectionLine : CompositeDrawable
+    {
+        private readonly TruncatingSpriteText title;
+        private readonly TruncatingSpriteText detail;
+
+        public SectionLine(string titleText, string detailText)
+        {
+            RelativeSizeAxes = Axes.X;
+            Height = 34;
+            InternalChildren = new Drawable[]
+            {
+                title = truncatingLabel(titleText, 17, AimModPalette.Text, 200, "SemiBold"),
+                detail = truncatingLabel(detailText, 10, AimModPalette.Muted, 160).With(text =>
+                {
+                    text.Anchor = Anchor.CentreRight;
+                    text.Origin = Anchor.CentreRight;
+                }),
+            };
+        }
+
+        protected override void Update()
+        {
+            base.Update();
+            const float gap = 16;
+            float titleWidth = Math.Max(80, DrawWidth * 0.58f - gap);
+            float detailWidth = Math.Max(60, DrawWidth - titleWidth - gap);
+            title.MaxWidth = titleWidth;
+            detail.MaxWidth = detailWidth;
         }
     }
 

@@ -339,9 +339,7 @@ public partial class NativeReplayRouteView : Container
         {
             case ReplayAnalysisStatus.Running:
                 analysisInProgress = true;
-                loadingOverlay.ShowLoading(
-                    "Analysing replay",
-                    selectedReplay is null ? "Running official osu! judgement processing" : selectedReplay.Title);
+                loadingOverlay.HideLoading();
                 analysisTitle.Text = "Analysing exact judgements...";
                 analysisSummary.Text = "Preparing replay details";
                 notableRows.Clear();

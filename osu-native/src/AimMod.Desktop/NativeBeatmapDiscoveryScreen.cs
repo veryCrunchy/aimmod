@@ -305,6 +305,17 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
         }
+        catch (Exception error)
+        {
+            if (!IsDisposed && !cancellationToken.IsCancellationRequested)
+            {
+                Schedule(() =>
+                {
+                    resultStatus.Text = $"Could not search osu!: {error.Message}";
+                    loadingOverlay.HideLoading();
+                });
+            }
+        }
     }
 
     private void applySearchResult(OfficialBeatmapSearchResult response)

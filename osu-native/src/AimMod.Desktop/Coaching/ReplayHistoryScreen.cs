@@ -46,6 +46,7 @@ public partial class ReplayHistoryScreen : CompositeDrawable
     private readonly GridContainer statisticsTrendGraphs;
     private readonly OsuTextBox search;
     private readonly FillFlowContainer<Drawable> runList;
+    private readonly AimModLoadingOverlay loadingOverlay;
 
     private CancellationTokenSource? loading;
     private IReadOnlyList<LocalReplay> replays = Array.Empty<LocalReplay>();
@@ -76,18 +77,20 @@ public partial class ReplayHistoryScreen : CompositeDrawable
         rollingAccuracyGraph = graphCard("Rolling accuracy", AimModPalette.Success);
         missFreeGraph = graphCard("Rolling miss-free rate", Colour4.FromHex("FFD45A"));
 
-        InternalChild = new OsuScrollContainer
+        InternalChildren = new Drawable[]
         {
-            RelativeSizeAxes = Axes.Both,
-            Child = new FillFlowContainer
+            new OsuScrollContainer
             {
-                RelativeSizeAxes = Axes.X,
-                AutoSizeAxes = Axes.Y,
-                Direction = FillDirection.Vertical,
-                Spacing = new(16),
-                Padding = new MarginPadding { Bottom = 36 },
-                Children = new Drawable[]
+                RelativeSizeAxes = Axes.Both,
+                Child = new FillFlowContainer
                 {
+                    RelativeSizeAxes = Axes.X,
+                    AutoSizeAxes = Axes.Y,
+                    Direction = FillDirection.Vertical,
+                    Spacing = new(16),
+                    Padding = new MarginPadding { Bottom = 36 },
+                    Children = new Drawable[]
+                    {
                     new AimModSectionHeader(
                         mode == ReplayHistoryScreenMode.Statistics ? "Statistics" : "Coaching",
                         mode == ReplayHistoryScreenMode.Statistics
@@ -171,8 +174,10 @@ public partial class ReplayHistoryScreen : CompositeDrawable
                         Direction = FillDirection.Vertical,
                         Spacing = new(8),
                     },
+                    },
                 },
             },
+            loadingOverlay = new AimModLoadingOverlay(),
         };
 
         adviceCard.Alpha = mode == ReplayHistoryScreenMode.Coaching ? 1 : 0;
@@ -198,6 +203,9 @@ public partial class ReplayHistoryScreen : CompositeDrawable
         loading = new CancellationTokenSource();
         CancellationToken cancellationToken = loading.Token;
         status.Text = "Loading your local play history...";
+        loadingOverlay.ShowLoading(
+            mode == ReplayHistoryScreenMode.Statistics ? "Loading statistics" : "Preparing coaching",
+            "Reading your local osu!standard play history");
         _ = loadAsync(cancellationToken);
     }
 
@@ -234,7 +242,11 @@ public partial class ReplayHistoryScreen : CompositeDrawable
         catch (Exception error)
         {
             if (!IsDisposed)
-                Schedule(() => status.Text = $"Your play history could not be loaded. {error.Message}");
+                Schedule(() =>
+                {
+                    loadingOverlay.HideLoading();
+                    status.Text = $"Your play history could not be loaded. {error.Message}";
+                });
         }
     }
 
@@ -246,6 +258,7 @@ public partial class ReplayHistoryScreen : CompositeDrawable
     {
         replays = nextReplays;
         report = nextReport;
+        loadingOverlay.HideLoading();
 
         if (mode == ReplayHistoryScreenMode.Statistics)
         {
@@ -364,7 +377,10 @@ public partial class ReplayHistoryScreen : CompositeDrawable
 
         if (page.Items.Count == 0)
         {
-            runList.Add(label("No matching runs", 15, AimModPalette.Muted).With(text => text.Padding = new MarginPadding(20)));
+            runList.Add(label(
+                replays.Count == 0 ? "No local osu!standard runs are available yet." : "No runs match this search.",
+                15,
+                AimModPalette.Muted).With(text => text.Padding = new MarginPadding(20)));
             return;
         }
 
