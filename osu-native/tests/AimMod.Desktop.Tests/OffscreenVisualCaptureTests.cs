@@ -21,6 +21,7 @@ public sealed partial class OffscreenVisualCaptureTests
     [TestCase("home", 1600, 900)]
     [TestCase("home", 1100, 760)]
     [TestCase("beatmaps", 1100, 760)]
+    [TestCase("beatmaps-populated", 1600, 900)]
     [TestCase("skins", 1100, 760)]
     [TestCase("replays", 1100, 760)]
     [TestCase("statistics", 1100, 760)]
@@ -39,7 +40,9 @@ public sealed partial class OffscreenVisualCaptureTests
             "visual-captures",
             $"aimmod-{route}-{width}x{height}.png");
 
-        var source = new InMemoryLocalLibrarySource([], []);
+        InMemoryLocalLibrarySource source = string.Equals(route, "beatmaps-populated", StringComparison.Ordinal)
+            ? createPopulatedLibrary()
+            : new InMemoryLocalLibrarySource([], []);
 
         await WindowsPrivateDesktopCapture.CaptureAsync(
             (host, succeeded, failed) => new CaptureAimModGame(host, source, outputPath, route, width, height, succeeded, failed),
@@ -55,6 +58,65 @@ public sealed partial class OffscreenVisualCaptureTests
         });
 
         TestContext.AddTestAttachment(outputPath, $"AimMod {route} captured on a private Windows desktop");
+    }
+
+    private static InMemoryLocalLibrarySource createPopulatedLibrary()
+    {
+        LocalBeatmapSet[] sets = Enumerable.Range(0, 7).Select(setIndex =>
+        {
+            Guid setId = Guid.NewGuid();
+            LocalBeatmapDifficulty[] difficulties = Enumerable.Range(0, 6).Select(difficultyIndex => new LocalBeatmapDifficulty(
+                Guid.NewGuid(),
+                10_000 + setIndex * 10 + difficultyIndex,
+                new[] { "Bloom", "Petal", "Fleur", "Blossom", "Full Bloom", "Transcend" }[difficultyIndex],
+                "osu",
+                3.8 + setIndex * 0.08 + difficultyIndex * 0.68,
+                172 + setIndex * 4,
+                195_000 + setIndex * 13_000,
+                4 + difficultyIndex * 0.08f,
+                8.3f + difficultyIndex * 0.25f,
+                7.8f + difficultyIndex * 0.3f,
+                5,
+                difficultyIndex < 4 ? 3 + difficultyIndex : null,
+                $"hash-{setIndex}-{difficultyIndex}"))
+                .ToArray();
+
+            return new LocalBeatmapSet(
+                setId,
+                2_000 + setIndex,
+                new[] { "Hana ni Natte", "Light", "RE:RE:RE:START", "Redemption", "Parousia", "Blue Zenith", "Sidetracked Day" }[setIndex],
+                new[] { "Miyuki Nakajima", "Camellia", "Camellia", "LeaF", "xi", "xi", "VINXIS" }[setIndex],
+                new[] { "Delis", "Fuycho", "Mir", "Nevo", "Ashaasoki", "Asphyxia", "Sotarks" }[setIndex],
+                string.Empty,
+                DateTimeOffset.Now.AddDays(-setIndex - 1),
+                DateTimeOffset.Now.AddHours(-setIndex * 8),
+                difficulties,
+                8 + setIndex,
+                string.Empty);
+        }).ToArray();
+
+        LocalBeatmapDifficulty selected = sets[0].Difficulties[0];
+        LocalReplay[] replays = Enumerable.Range(0, 7).Select(index => new LocalReplay(
+            Guid.NewGuid(),
+            sets[0].SetId,
+            selected.BeatmapId,
+            sets[0].Title,
+            sets[0].Artist,
+            selected.Name,
+            "osu",
+            "verycrunchy",
+            DateTimeOffset.Now.AddDays(-7 + index),
+            selected.StarRating,
+            0.91 + index * 0.011,
+            850_000 + index * 43_000,
+            420 + index * 31,
+            Math.Max(0, 6 - index),
+            110 + index * 12,
+            Array.Empty<string>(),
+            true,
+            selected.BeatmapHash)).ToArray();
+
+        return new InMemoryLocalLibrarySource(sets, replays);
     }
 
     private static int countSampledColours(Image<Rgba32> image)
@@ -120,7 +182,8 @@ public sealed partial class OffscreenVisualCaptureTests
             }
             else if (!string.Equals(route, "home", StringComparison.Ordinal))
             {
-                MethodInfo routeMethod = typeof(AimModGame).GetMethod($"show{char.ToUpperInvariant(route[0])}{route[1..]}", BindingFlags.Instance | BindingFlags.NonPublic)
+                string routeName = route.Split('-', 2)[0];
+                MethodInfo routeMethod = typeof(AimModGame).GetMethod($"show{char.ToUpperInvariant(routeName[0])}{routeName[1..]}", BindingFlags.Instance | BindingFlags.NonPublic)
                                          ?? throw new InvalidOperationException($"Unknown capture route '{route}'.");
                 routeMethod.Invoke(this, null);
             }

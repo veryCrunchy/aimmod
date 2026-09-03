@@ -48,6 +48,7 @@ public sealed class NativeScreenConstructionTests
     {
         Assert.Multiple(() =>
         {
+            Assert.DoesNotThrow(() => _ = new NativeInstalledBeatmapBrowser(source));
             Assert.DoesNotThrow(() => _ = new NativeBeatmapDiscoveryScreen(source, () => null, () => null));
             Assert.DoesNotThrow(() => _ = new NativeOfficialBeatmapSearchScreen(() => null, () => null));
         });

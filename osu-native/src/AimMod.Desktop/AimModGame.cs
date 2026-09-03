@@ -346,7 +346,8 @@ public partial class AimModGame : OsuGameBase
         beatmapsScreen ??= new NativeBeatmapDiscoveryScreen(
             localLibrary,
             () => officialBeatmapDiscoveryClient,
-            () => onlineBeatmapImportService)
+            () => onlineBeatmapImportService,
+            () => ppTargetExactCalculationService)
         {
             RelativeSizeAxes = Axes.Both,
         };

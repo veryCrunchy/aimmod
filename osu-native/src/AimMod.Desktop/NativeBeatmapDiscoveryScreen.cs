@@ -1,4 +1,5 @@
 using AimMod.Desktop.LocalLibrary;
+using AimMod.Desktop.PpTargets;
 using AimMod.Desktop.Visuals;
 using AimMod.Osu.Runtime;
 using osu.Framework.Bindables;
@@ -21,19 +22,22 @@ public partial class NativeBeatmapDiscoveryScreen : CompositeDrawable
     private readonly ILocalLibrarySource localLibrary;
     private readonly Func<IOfficialBeatmapDiscoveryClient?> client;
     private readonly Func<OnlineBeatmapImportService?> importer;
+    private readonly Func<IPpTargetExactCalculationService?> exactCalculator;
     private readonly Container page = null!;
     private readonly Bindable<BeatmapDiscoveryTab> currentTab = new(BeatmapDiscoveryTab.Installed);
-    private NativeLocalLibraryScreen? installedScreen;
+    private NativeInstalledBeatmapBrowser? installedScreen;
     private NativeOfficialBeatmapSearchScreen? onlineScreen;
 
     public NativeBeatmapDiscoveryScreen(
         ILocalLibrarySource localLibrary,
         Func<IOfficialBeatmapDiscoveryClient?> client,
-        Func<OnlineBeatmapImportService?> importer)
+        Func<OnlineBeatmapImportService?> importer,
+        Func<IPpTargetExactCalculationService?>? exactCalculator = null)
     {
         this.localLibrary = localLibrary ?? throw new ArgumentNullException(nameof(localLibrary));
         this.client = client ?? throw new ArgumentNullException(nameof(client));
         this.importer = importer ?? throw new ArgumentNullException(nameof(importer));
+        this.exactCalculator = exactCalculator ?? (() => null);
         RelativeSizeAxes = Axes.Both;
 
         InternalChildren = new Drawable[]
@@ -41,7 +45,6 @@ public partial class NativeBeatmapDiscoveryScreen : CompositeDrawable
             page = new Container
             {
                 RelativeSizeAxes = Axes.Both,
-                Padding = new MarginPadding { Top = 48 },
                 Masking = true,
             },
             new Container
@@ -51,7 +54,6 @@ public partial class NativeBeatmapDiscoveryScreen : CompositeDrawable
                 Masking = true,
                 Children = new Drawable[]
                 {
-                    new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas },
                     new OsuTabControl<BeatmapDiscoveryTab>
                     {
                         Anchor = Anchor.TopRight,
@@ -76,7 +78,7 @@ public partial class NativeBeatmapDiscoveryScreen : CompositeDrawable
     {
         if (tab == BeatmapDiscoveryTab.Installed)
         {
-            installedScreen ??= new NativeLocalLibraryScreen(localLibrary, NativeLocalLibraryMode.Beatmaps) { RelativeSizeAxes = Axes.Both };
+            installedScreen ??= new NativeInstalledBeatmapBrowser(localLibrary, exactCalculator) { RelativeSizeAxes = Axes.Both };
             page.Child = installedScreen;
             return;
         }
