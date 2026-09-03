@@ -273,6 +273,9 @@ pub struct AppSettings {
     /// Display label for the linked AimMod Hub account.
     #[serde(default)]
     pub hub_account_label: String,
+    /// Non-secret osu! username or numeric user ID selected for profile lookups.
+    #[serde(default)]
+    pub osu_user_identifier: String,
     /// Target replay capture framerate for recorded screen frames.
     #[serde(default = "default_replay_capture_fps")]
     pub replay_capture_fps: u32,
@@ -358,6 +361,7 @@ impl Default for AppSettings {
             hub_api_base_url: default_hub_api_base_url(),
             hub_upload_token: String::new(),
             hub_account_label: String::new(),
+            osu_user_identifier: String::new(),
             replay_capture_fps: default_replay_capture_fps(),
             replay_capture_width: default_replay_capture_width(),
             replay_capture_quality: default_replay_capture_quality(),

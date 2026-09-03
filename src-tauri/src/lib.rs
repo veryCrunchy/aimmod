@@ -391,6 +391,15 @@ mod kovaaks_theme;
 mod local_llm;
 mod logger;
 mod mouse_hook;
+mod osu;
+mod osu_coaching;
+mod osu_diagnostics;
+mod osu_library;
+mod osu_profiles;
+mod osu_realm_reader;
+mod osu_replay_analytics;
+mod osu_replay_host;
+mod osu_skins;
 mod overlay_service;
 mod replay_store;
 mod sapi;
@@ -2042,6 +2051,7 @@ fn toggle_overlay(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn quit_app(app: AppHandle) {
+    osu_replay_host::stop_running_host();
     app.exit(0);
 }
 
@@ -2069,6 +2079,201 @@ fn open_stats_window(app: AppHandle) -> Result<(), String> {
         log::error!("stats window not found — check tauri.conf.json");
     }
     Ok(())
+}
+
+#[tauri::command]
+fn get_osu_lazer_status() -> osu::OsuLazerStatus {
+    osu::get_lazer_status()
+}
+
+#[tauri::command]
+fn record_osu_diagnostic(diagnostic: osu_diagnostics::OsuClientDiagnostic) {
+    osu_diagnostics::record(diagnostic);
+}
+
+#[tauri::command]
+async fn list_osu_local_beatmaps() -> osu_library::OsuLocalBeatmapLibrary {
+    osu_library::list_local_beatmaps().await
+}
+
+#[tauri::command]
+async fn list_osu_local_replays() -> osu_library::OsuLocalReplayLibrary {
+    osu_library::list_local_replays().await
+}
+
+#[tauri::command]
+async fn list_osu_local_scores() -> osu_realm_reader::OsuLocalScoreLibrary {
+    osu_realm_reader::list_local_scores().await
+}
+
+#[tauri::command]
+async fn get_osu_local_player() -> Result<Option<osu_realm_reader::OsuLocalPlayer>, String> {
+    osu_realm_reader::get_local_player().await
+}
+
+#[tauri::command]
+async fn get_osu_replay_theme() -> Result<osu_realm_reader::OsuReplayTheme, String> {
+    osu_realm_reader::get_replay_theme().await
+}
+
+#[tauri::command]
+async fn watch_osu_replay_in_aimmod_lazer(
+    replay_path: String,
+) -> Result<osu_replay_host::NativeReplayLaunchResult, String> {
+    osu_replay_host::watch_replay(replay_path).await
+}
+
+#[tauri::command]
+async fn list_installed_osu_lazer_skins()
+-> Result<Vec<osu_realm_reader::OsuInstalledLazerSkin>, String> {
+    osu_realm_reader::list_installed_lazer_skins().await
+}
+
+#[tauri::command]
+async fn get_osu_beatmap_providers(app: AppHandle) -> Result<Vec<osu::OsuBeatmapProvider>, String> {
+    osu::get_beatmap_providers(&app).await
+}
+
+#[tauri::command]
+async fn search_osu_beatmaps(
+    app: AppHandle,
+    request: osu::OsuBeatmapSearchRequest,
+) -> osu::OsuBeatmapSearchResponse {
+    osu::search_beatmaps(&app, request).await
+}
+
+#[tauri::command]
+async fn get_osu_beatmap_item(
+    app: AppHandle,
+    request: osu::OsuBeatmapItemRequest,
+) -> osu::OsuBeatmapItemResponse {
+    osu::get_beatmap_item(&app, request).await
+}
+
+#[tauri::command]
+async fn download_osu_beatmap(
+    app: AppHandle,
+    request: osu::OsuBeatmapDownloadRequest,
+) -> osu::OsuBeatmapDownloadResult {
+    osu::download_beatmap(&app, request).await
+}
+
+#[tauri::command]
+fn import_osu_lazer_files(app: AppHandle, paths: Vec<String>) -> Vec<osu::OsuImportResult> {
+    osu::import_files(&app, paths)
+}
+
+#[tauri::command]
+fn inspect_osu_replay_files(paths: Vec<String>) -> Vec<osu::OsuReplayInspection> {
+    osu::inspect_replay_files(paths)
+}
+
+#[tauri::command]
+fn analyze_osu_replay_files(
+    paths: Vec<String>,
+) -> osu_replay_analytics::OsuReplayAnalyticsResponse {
+    osu_replay_analytics::analyze_replay_files(paths)
+}
+
+#[tauri::command]
+fn analyze_osu_replay(path: String) -> Result<osu_coaching::OsuReplayCoachingAnalysis, String> {
+    osu_coaching::analyze_replay_file(&path)
+}
+
+#[tauri::command]
+fn open_osu_local_replay(app: AppHandle, path: String) -> osu::OsuImportResult {
+    osu::open_local_replay(&app, path)
+}
+
+#[tauri::command]
+async fn get_osu_official_user_profile(
+    app: AppHandle,
+    request: osu_profiles::OsuOfficialUserProfileRequest,
+) -> Result<osu_profiles::OsuOfficialUserProfileResponse, String> {
+    osu_profiles::get_official_user_profile(&app, request).await
+}
+
+#[tauri::command]
+fn get_osu_lazer_session_state() -> osu_profiles::OsuLazerSessionState {
+    osu_profiles::get_lazer_session_state()
+}
+
+#[tauri::command]
+fn get_osu_user_identifier(state: tauri::State<AppState>) -> Result<String, String> {
+    let settings = state.settings.lock().map_err(|error| error.to_string())?;
+    Ok(settings.osu_user_identifier.clone())
+}
+
+#[tauri::command]
+fn set_osu_user_identifier(
+    identifier: String,
+    state: tauri::State<AppState>,
+    app: AppHandle,
+) -> Result<String, String> {
+    let identifier = identifier.trim().to_string();
+    if identifier.len() > 64 || identifier.chars().any(char::is_control) {
+        return Err("Enter an osu! username or numeric user ID up to 64 characters.".to_string());
+    }
+    if !identifier.is_empty()
+        && identifier.bytes().all(|byte| byte.is_ascii_digit())
+        && identifier.bytes().all(|byte| byte == b'0')
+    {
+        return Err("An osu! user ID must be a positive decimal number.".to_string());
+    }
+    let persisted = {
+        let mut settings = state.settings.lock().map_err(|error| error.to_string())?;
+        settings.osu_user_identifier = identifier.clone();
+        settings.clone()
+    };
+    settings::persist(&app, &persisted).map_err(|error| error.to_string())?;
+    Ok(identifier)
+}
+
+#[tauri::command]
+async fn get_osu_skin_providers(app: AppHandle) -> Result<Vec<osu_skins::OsuSkinProvider>, String> {
+    osu_skins::get_skin_providers(&app).await
+}
+
+#[tauri::command]
+async fn search_osu_skins(
+    app: AppHandle,
+    request: osu_skins::OsuSkinSearchRequest,
+) -> osu_skins::OsuSkinSearchResponse {
+    osu_skins::search_skins(&app, request).await
+}
+
+#[tauri::command]
+async fn get_osu_skin(
+    app: AppHandle,
+    request: osu_skins::OsuSkinDetailRequest,
+) -> osu_skins::OsuSkinDetailResponse {
+    osu_skins::get_skin(&app, request).await
+}
+
+#[tauri::command]
+async fn install_osu_skin(
+    app: AppHandle,
+    request: osu_skins::OsuSkinInstallRequest,
+) -> osu_skins::OsuSkinInstallResult {
+    osu_skins::install_skin(&app, request).await
+}
+
+#[tauri::command]
+fn list_installed_osu_skins(app: AppHandle) -> Result<Vec<osu_skins::ManagedOsuSkin>, String> {
+    osu_skins::list_installed_skins(&app)
+}
+
+#[tauri::command]
+fn remove_installed_osu_skin(app: AppHandle, id: String) -> osu_skins::OsuSkinRemoveResult {
+    osu_skins::remove_installed_skin(&app, id)
+}
+
+#[tauri::command]
+fn import_osu_skin_files(
+    app: AppHandle,
+    paths: Vec<String>,
+) -> Vec<osu_skins::OsuSkinInstallResult> {
+    osu_skins::import_skin_files(&app, paths)
 }
 
 #[tauri::command]
@@ -2264,6 +2469,14 @@ fn get_cursor_pos() -> CursorPos {
 
 #[tauri::command]
 fn set_mouse_passthrough(app: AppHandle, enabled: bool) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        let _ = app;
+        window_tracker::set_force_show(!enabled);
+        return Ok(());
+    }
+
+    #[cfg(not(target_os = "linux"))]
     if let Some(win) = app.get_webview_window("overlay") {
         win.set_ignore_cursor_events(enabled)
             .map_err(|e| e.to_string())?;
@@ -2329,14 +2542,32 @@ pub fn run() {
         settings: Arc::new(Mutex::new(initial_settings)),
         local_llm: local_llm::default_runtime_state(),
     };
+    let context: tauri::Context<tauri::Wry> = tauri::generate_context!();
+    if !tauri::is_dev() {
+        for required in ["index.html", "logs.html", "stats.html"] {
+            let key = tauri::utils::assets::AssetKey::from(required);
+            let asset = context.assets().get(&key).unwrap_or_else(|| {
+                panic!("production frontend asset {required} is missing or invalid")
+            });
+            assert!(
+                !asset.is_empty(),
+                "production frontend asset {required} is empty"
+            );
+        }
+        log::info!("Embedded production frontend validated");
+    }
 
     tauri::Builder::default()
+        .register_uri_scheme_protocol("aimmod-media", |_context, request| {
+            osu::media_protocol_response(request)
+        })
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             log::info!("single-instance: forwarding launch to existing AimMod instance");
             focus_primary_window(app);
         }))
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(app_state)
@@ -2344,6 +2575,35 @@ pub fn run() {
             quit_app,
             open_logs_window,
             open_stats_window,
+            get_osu_lazer_status,
+            record_osu_diagnostic,
+            list_osu_local_beatmaps,
+            list_osu_local_replays,
+            list_osu_local_scores,
+            get_osu_local_player,
+            get_osu_replay_theme,
+            watch_osu_replay_in_aimmod_lazer,
+            list_installed_osu_lazer_skins,
+            get_osu_beatmap_providers,
+            search_osu_beatmaps,
+            get_osu_beatmap_item,
+            download_osu_beatmap,
+            import_osu_lazer_files,
+            inspect_osu_replay_files,
+            analyze_osu_replay_files,
+            analyze_osu_replay,
+            open_osu_local_replay,
+            get_osu_official_user_profile,
+            get_osu_lazer_session_state,
+            get_osu_user_identifier,
+            set_osu_user_identifier,
+            get_osu_skin_providers,
+            search_osu_skins,
+            get_osu_skin,
+            install_osu_skin,
+            list_installed_osu_skins,
+            remove_installed_osu_skin,
+            import_osu_skin_files,
             get_session_history_page,
             get_global_coaching_overview,
             get_scenario_coaching_overview,
@@ -2448,6 +2708,11 @@ pub fn run() {
             // for future use but not registered until a working voice backend is confirmed.
         ])
         .setup(|app| {
+            // Local beatmap backgrounds and audio are immutable content-addressed
+            // blobs. Only detected osu!lazer file-store roots are exposed to the
+            // webview asset protocol, including configured and sandboxed installs.
+            osu::allow_lazer_file_store_assets(app.handle());
+
             // Load persisted settings
             let loaded = settings::load(app.handle()).unwrap_or_default();
 
@@ -2558,7 +2823,10 @@ pub fn run() {
             #[cfg(not(target_os = "linux"))]
             setup_tray(app)?;
 
-            // Configure desktop overlay window and start focus tracking.
+            // Configure the game overlay on supported platforms. On Linux the
+            // hidden GTK window is not realized yet, and asking Tao to alter
+            // its input shape would panic before the stats window can open.
+            #[cfg(not(target_os = "linux"))]
             if let Some(win) = app.get_webview_window("overlay") {
                 let _ = win.set_ignore_cursor_events(true);
                 // Force the window background to fully transparent so the DWM
@@ -2591,15 +2859,58 @@ pub fn run() {
 
             Ok(())
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             if let tauri::RunEvent::Exit = event {
+                osu_replay_host::stop_running_host();
                 // Kill the llama-server child process so it doesn't become an
                 // orphan that blocks the port on the next launch.
                 local_llm::kill_child_if_running(app_handle);
             }
         });
+}
+
+#[cfg(test)]
+mod embedded_frontend_tests {
+    use std::path::PathBuf;
+    use tauri::utils::assets::AssetKey;
+
+    #[test]
+    fn production_context_contains_frontend_entrypoints() {
+        // Tauri intentionally uses an empty embedded asset store in debug
+        // builds because the webview is pointed at `devUrl`. Validate the
+        // release inputs from disk in that case; release builds additionally
+        // exercise the generated embedded context below.
+        if cfg!(debug_assertions) {
+            let dist = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../dist");
+            for required in ["index.html", "logs.html", "stats.html"] {
+                let bytes = std::fs::read(dist.join(required))
+                    .unwrap_or_else(|error| panic!("missing {required}: {error}"));
+                assert!(!bytes.is_empty(), "{required} decoded to an empty asset");
+            }
+            return;
+        }
+
+        let context: tauri::Context<tauri::Wry> = tauri::generate_context!();
+        let assets = context.assets();
+        let keys = assets
+            .iter()
+            .map(|(key, _)| key.into_owned())
+            .collect::<Vec<_>>();
+
+        for required in ["index.html", "logs.html", "stats.html"] {
+            let required_key = AssetKey::from(required);
+            assert!(
+                keys.iter().any(|key| key == required_key.as_ref()),
+                "missing {required}; embedded keys: {keys:?}"
+            );
+            let bytes = assets
+                .get(&required_key)
+                .unwrap_or_else(|| panic!("{required} is present but cannot be decoded"));
+            assert!(!bytes.is_empty(), "{required} decoded to an empty asset");
+        }
+    }
 }
 
 fn setup_tray<R: Runtime>(app: &tauri::App<R>) -> Result<(), Box<dyn std::error::Error>> {

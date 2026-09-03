@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Versioned process boundary for AimMod's trimmed osu runtime.</Description>
+  </PropertyGroup>
+</Project>

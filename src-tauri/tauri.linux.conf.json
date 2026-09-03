@@ -1,0 +1,27 @@
+{
+  "build": {
+    "beforeBuildCommand": "node ./scripts/build-frontend-if-needed.mjs && bash ./scripts/build-linux-osu-realm-reader.sh && bash ./scripts/build-linux-osu-replay-judge.sh && bash ./scripts/build-linux-osu-replay-host.sh"
+  },
+  "app": {
+    "security": {
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$HOME/.local/share/osu/files/**"
+        ]
+      }
+    }
+  },
+  "bundle": {
+    "externalBin": [
+      "bin/osu-realm-reader",
+      "bin/osu-replay-judge",
+      "bin/osu-replay-host"
+    ],
+    "targets": [
+      "deb",
+      "appimage"
+    ],
+    "resources": []
+  }
+}

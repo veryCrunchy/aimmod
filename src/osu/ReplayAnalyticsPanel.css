@@ -1,0 +1,125 @@
+.osu-replay-analytics { border-top: 1px solid var(--osu-line); margin-top: 18px; padding-top: 16px; }
+.osu-analytics-heading { align-items: center; display: flex; justify-content: space-between; margin-bottom: 14px; }
+.osu-analytics-heading > div { align-items: center; display: flex; gap: 9px; }
+.osu-analytics-heading svg { color: var(--osu-pink); }
+.osu-analytics-heading span { display: grid; gap: 2px; }
+.osu-analytics-heading strong { font-size: 15px; }
+.osu-analytics-heading small { color: var(--osu-muted); font-size: 10px; }
+.osu-analytics-state { align-items: center; border-top: 1px solid var(--osu-line); color: var(--osu-muted); display: flex; font-size: 12px; gap: 8px; margin-top: 18px; padding-top: 16px; }
+.osu-analytics-state svg { color: var(--osu-pink); }
+
+.osu-trace-viewer { background: #080a12; border: 1px solid var(--osu-line-strong); border-radius: 12px; overflow: hidden; }
+.osu-trace-viewer > header { align-items: center; background: rgba(255,255,255,.025); border-bottom: 1px solid var(--osu-line); display: flex; justify-content: space-between; min-height: 52px; padding: 8px 12px; }
+.osu-trace-viewer > header > div:first-child { align-items: center; display: flex; gap: 9px; }
+.osu-trace-viewer > header > div:first-child > svg { color: var(--osu-pink); }
+.osu-trace-viewer > header span { display: grid; gap: 2px; }
+.osu-trace-viewer > header strong { font-size: 13px; }
+.osu-trace-viewer > header small { color: var(--osu-muted); font-size: 9px; }
+.osu-native-watch { align-items: center; background: var(--osu-pink); border: 0; border-radius: 8px; color: #180811; cursor: pointer; display: flex; font-size: 10px; font-weight: 800; gap: 6px; min-height: 32px; padding: 7px 10px; }
+.osu-native-watch:hover:not(:disabled) { filter: brightness(1.08); }
+.osu-native-watch:disabled { cursor: wait; opacity: .72; }
+.osu-playfield-wrap { aspect-ratio: 4 / 3; background: #0d1019; margin: 12px auto 0; max-height: 480px; max-width: 640px; position: relative; width: calc(100% - 24px); }
+.osu-playfield { background: #11141e; display: block; height: 100%; width: 100%; }
+.osu-playfield .hit-object { fill: rgba(255,255,255,.08); stroke: rgba(255,255,255,.82); stroke-width: 3; }
+.osu-playfield .hit-object.slider { stroke: #62d9ef; }
+.osu-playfield .hit-object.spinner { stroke: #f4cb5e; }
+.osu-playfield .hit-object-inner { fill: rgba(12,14,22,.58); stroke: rgba(255,255,255,.22); stroke-width: 1; }
+.osu-playfield text { fill: #fff; font-size: 11px; font-weight: 800; pointer-events: none; }
+.osu-playfield .cursor-trail { fill: none; opacity: .72; stroke: var(--osu-pink); stroke-linecap: round; stroke-linejoin: round; stroke-width: 3; }
+.osu-playfield .cursor circle:first-child { fill: rgba(255,79,154,.14); stroke: #fff; stroke-width: 2; }
+.osu-playfield .cursor circle:last-child { fill: var(--osu-pink); }
+.osu-playfield .cursor.pressing circle:first-child { fill: rgba(98,217,239,.26); stroke: #62d9ef; }
+.osu-playfield .skin-cursor { filter: drop-shadow(0 0 3px rgba(255,255,255,.32)); pointer-events: none; transform-box: fill-box; transform-origin: center; }
+.osu-playfield .skin-cursor.pressing { transform: scale(.92); }
+.osu-playfield .skin-cursor-trail { pointer-events: none; }
+.osu-playfield-note { align-items: center; background: rgba(8,10,18,.86); bottom: 10px; color: var(--osu-sub); display: flex; font-size: 9px; gap: 7px; left: 10px; line-height: 1.4; padding: 7px 9px; position: absolute; right: 10px; }
+.osu-playfield-note svg { color: var(--osu-gold); flex: 0 0 auto; }
+.osu-viewer-controls { align-items: center; display: grid; gap: 10px; grid-template-columns: 42px minmax(0,1fr) 42px; padding: 11px 12px 13px; }
+.osu-viewer-controls > span { color: var(--osu-sub); font-family: ui-monospace, monospace; font-size: 10px; text-align: center; }
+.osu-viewer-controls input { accent-color: var(--osu-pink); cursor: pointer; width: 100%; }
+.osu-native-watch-status { align-items: center; background: rgba(98,217,239,.07); border-top: 1px solid rgba(98,217,239,.2); color: var(--osu-sub); display: flex; font-size: 10px; gap: 7px; line-height: 1.4; padding: 9px 12px; }
+.osu-native-watch-status svg { color: var(--osu-cyan); flex: 0 0 auto; }
+.osu-native-watch-status.error { background: rgba(255,78,111,.06); border-top-color: rgba(255,78,111,.2); }
+.osu-native-watch-status.error svg { color: var(--osu-red); }
+
+.osu-replay-focus { align-items: flex-start; background: rgba(98,217,239,.055); border: 1px solid rgba(98,217,239,.22); border-radius: 10px; cursor: pointer; display: flex; gap: 10px; margin-top: 12px; padding: 12px; text-align: left; width: 100%; }
+.osu-replay-focus:hover { background: rgba(98,217,239,.085); }
+.osu-replay-focus > svg { color: var(--osu-cyan); flex: 0 0 auto; margin-top: 2px; }
+.osu-replay-focus > span { display: grid; gap: 3px; }
+.osu-replay-focus small { color: var(--osu-cyan); font-size: 9px; font-weight: 750; text-transform: uppercase; }
+.osu-replay-focus strong { font-size: 14px; }
+.osu-replay-focus p { color: var(--osu-sub); font-size: 11px; line-height: 1.5; }
+.osu-judgement-summary { background: linear-gradient(135deg, rgba(237,67,142,.08), rgba(98,217,239,.035)); border: 1px solid rgba(255,255,255,.09); border-radius: 12px; display: grid; gap: 11px; margin-top: 12px; padding: 14px; }
+.osu-judgement-summary > header { align-items: center; display: flex; justify-content: space-between; }
+.osu-judgement-summary > header > div { display: grid; gap: 2px; }
+.osu-judgement-summary > header strong { font-size: 14px; }
+.osu-judgement-summary > header span, .osu-judgement-summary > header small, .osu-judgement-engine { color: var(--osu-sub); font-size: 10px; }
+.osu-judgement-events { display: grid; gap: 7px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.osu-judgement-events button { align-items: center; background: rgba(8,10,17,.7); border: 1px solid rgba(255,255,255,.08); border-radius: 8px; color: inherit; cursor: pointer; display: grid; gap: 3px; grid-template-columns: 1fr auto; padding: 9px 10px; text-align: left; }
+.osu-judgement-events button:hover { border-color: rgba(237,67,142,.55); transform: translateY(-1px); }
+.osu-judgement-events button > span { font-size: 9px; font-weight: 800; grid-column: 1 / -1; text-transform: uppercase; }
+.osu-judgement-events button > span.miss { color: #ff4e6f; }
+.osu-judgement-events button > span.slider { color: #f6f05c; }
+.osu-judgement-events button strong { font-size: 12px; }
+.osu-judgement-events button small { color: var(--osu-cyan); font-size: 10px; }
+.osu-judgement-clear { color: #9be56f; font-size: 11px; }
+.osu-hit-offsets { align-items: center; display: grid; gap: 9px; grid-template-columns: auto minmax(100px, 1fr) auto auto; }
+.osu-hit-offsets > div { display: grid; gap: 1px; }
+.osu-hit-offsets > div strong { font-size: 12px; }
+.osu-hit-offsets > div span { color: var(--osu-sub); font-size: 9px; }
+.osu-hit-offsets > i { background: rgba(255,255,255,.06); border-radius: 999px; display: flex; height: 7px; overflow: hidden; }
+.osu-hit-offsets > i b:nth-child(1) { background: #4fc0ff; }
+.osu-hit-offsets > i b:nth-child(2) { background: #7cff4f; }
+.osu-hit-offsets > i b:nth-child(3) { background: #ff8068; }
+
+.osu-analysis-groups { display: grid; gap: 8px; grid-template-columns: repeat(2,minmax(0,1fr)); margin-top: 12px; }
+.osu-analysis-groups > section { background: rgba(255,255,255,.02); border: 1px solid var(--osu-line); border-radius: 10px; overflow: hidden; }
+.osu-analysis-groups header { align-items: center; border-bottom: 1px solid var(--osu-line); color: var(--osu-sub); display: flex; gap: 7px; min-height: 38px; padding: 8px 10px; }
+.osu-analysis-groups header svg { color: var(--osu-pink); }
+.osu-analysis-groups header strong { color: var(--osu-text); font-size: 11px; }
+.osu-analysis-groups section > div { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); }
+.osu-analysis-groups article { min-width: 0; padding: 9px 10px; }
+.osu-analysis-groups article:nth-child(odd) { border-right: 1px solid var(--osu-line); }
+.osu-analysis-groups article:nth-child(n+3) { border-top: 1px solid var(--osu-line); }
+.osu-analysis-groups article span, .osu-window-inspector span { color: var(--osu-muted); display: block; font-size: 8px; letter-spacing: .05em; text-transform: uppercase; }
+.osu-analysis-groups article strong, .osu-window-inspector strong { display: block; font-size: 12px; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.osu-analysis-groups article strong.miss { color: var(--osu-red); }
+.osu-analysis-groups article strong.unavailable { color: var(--osu-gold); font-size: 10px; }
+.osu-analysis-groups section > p { border-top: 1px solid var(--osu-line); color: var(--osu-muted); font-size: 9px; line-height: 1.45; padding: 8px 10px; }
+
+.osu-analytics-chart { background: rgba(0,0,0,.16); border: 1px solid var(--osu-line); border-radius: 10px; margin-top: 12px; padding: 12px; }
+.osu-analytics-chart-heading { align-items: baseline; display: flex; justify-content: space-between; }
+.osu-analytics-chart-heading > div { display: grid; gap: 2px; }
+.osu-analytics-chart-heading strong { font-size: 12px; }
+.osu-analytics-chart-heading span, .osu-analytics-chart-heading b { color: var(--osu-muted); font-size: 9px; font-weight: 500; }
+.osu-analytics-chart svg { display: block; height: 150px; margin-top: 10px; overflow: visible; width: 100%; }
+.osu-analytics-chart rect.selected-window { fill: rgba(255,255,255,.045); }
+.osu-analytics-chart line.grid { stroke: rgba(255,255,255,.06); stroke-width: 1; }
+.osu-analytics-chart line.notable { stroke: rgba(244,203,94,.8); stroke-dasharray: 3 3; stroke-width: 1; }
+.osu-analytics-chart polyline { fill: none; stroke-linecap: round; stroke-linejoin: round; stroke-width: 2.5; vector-effect: non-scaling-stroke; }
+.osu-analytics-chart polyline.speed { stroke: var(--osu-pink); }
+.osu-analytics-chart polyline.inputs { opacity: .78; stroke: #67d8ff; }
+.osu-timeline-scrubber { display: flex; gap: 2px; min-height: 18px; overflow-x: auto; padding: 4px 0; }
+.osu-timeline-scrubber button { background: rgba(255,255,255,.09); border: 0; border-radius: 2px; cursor: pointer; flex: 1 0 8px; height: 10px; min-width: 8px; padding: 0; }
+.osu-timeline-scrubber button:hover { background: rgba(255,255,255,.22); }
+.osu-timeline-scrubber button.active { background: var(--osu-pink); }
+.osu-chart-legend { align-items: center; color: var(--osu-muted); display: flex; font-size: 8px; gap: 12px; margin-top: 5px; }
+.osu-chart-legend span { align-items: center; display: flex; gap: 4px; }
+.osu-chart-legend i { border-radius: 3px; display: inline-block; height: 3px; width: 13px; }
+.osu-chart-legend i.speed { background: var(--osu-pink); }.osu-chart-legend i.inputs { background: #67d8ff; }.osu-chart-legend i.marker { background: var(--osu-gold); }
+.osu-window-inspector { border-top: 1px solid var(--osu-line); display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); margin-top: 10px; padding-top: 10px; }
+.osu-window-inspector > div { border-right: 1px solid var(--osu-line); padding: 0 10px; }.osu-window-inspector > div:first-child { padding-left: 0; }.osu-window-inspector > div:last-child { border-right: 0; }
+
+.osu-notable-segments { border: 1px solid var(--osu-line); border-radius: 10px; margin-top: 12px; overflow: hidden; }
+.osu-notable-segments > header { align-items: center; border-bottom: 1px solid var(--osu-line); display: flex; gap: 8px; padding: 10px 12px; }
+.osu-notable-segments > header svg { color: var(--osu-gold); }
+.osu-notable-segments > header div { display: grid; gap: 2px; }.osu-notable-segments > header strong { font-size: 11px; }.osu-notable-segments > header span { color: var(--osu-muted); font-size: 9px; }
+.osu-notable-segments > div { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); }
+.osu-notable-segments button { background: transparent; border: 0; border-right: 1px solid var(--osu-line); cursor: pointer; display: grid; gap: 4px; padding: 11px 12px; text-align: left; }
+.osu-notable-segments button:last-child { border-right: 0; }.osu-notable-segments button:hover { background: rgba(255,255,255,.03); }
+.osu-notable-segments button small { color: var(--osu-gold); font-size: 8px; text-transform: uppercase; }.osu-notable-segments button strong { font-size: 12px; }.osu-notable-segments button span { color: var(--osu-sub); font-size: 10px; line-height: 1.45; }.osu-notable-segments button em { color: var(--osu-muted); font-size: 9px; font-style: normal; }
+.osu-object-link-note { align-items: flex-start; background: rgba(244,203,94,.045); border: 1px solid rgba(244,203,94,.16); border-radius: 9px; color: var(--osu-sub); display: flex; gap: 8px; margin-top: 12px; padding: 10px 11px; }
+.osu-object-link-note > svg { color: var(--osu-gold); flex: 0 0 auto; margin-top: 1px; }.osu-object-link-note > div { display: grid; gap: 3px; }.osu-object-link-note strong { color: var(--osu-text); font-size: 10px; }.osu-object-link-note span { font-size: 9px; line-height: 1.45; }
+.osu-replay-analytics .spin { animation: osu-analytics-spin .8s linear infinite; }
+@keyframes osu-analytics-spin { to { transform: rotate(360deg); } }
+@media (max-width: 720px) { .osu-analysis-groups { grid-template-columns: 1fr; }.osu-playfield-wrap { width: calc(100% - 12px); }.osu-window-inspector { grid-template-columns: repeat(2,1fr); row-gap: 10px; }.osu-notable-segments > div { grid-template-columns: 1fr; }.osu-notable-segments button { border-bottom: 1px solid var(--osu-line); border-right: 0; } }

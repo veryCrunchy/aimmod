@@ -10,10 +10,18 @@ kovaaks-bridge/target/
 
 # Local build caches
 .cache/
+.local/
 ue4ss-mod/build/
 ue4ss-mod/build-w64/
 ue4ss-mod/third_party/UE4SS.def
 ue4ss-mod/third_party/UE4SS.lib
+src-tauri/.cargo/
+src-tauri/bin/
+tools/**/bin/
+tools/**/obj/
+tools/**/publish/
+tools/**/publish-*/
+work/
 
 # Tauri
 src-tauri/gen/schemas/

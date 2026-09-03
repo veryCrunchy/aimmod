@@ -1,0 +1,372 @@
+.osu-coaching-page {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  height: 0;
+  min-height: 0;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 22px;
+  scrollbar-gutter: stable;
+}
+
+/*
+ * WebKit will otherwise shrink every section in this column until the whole
+ * coaching dashboard fits inside the window. Keep the cards at their natural
+ * size and let the page itself handle vertical scrolling.
+ */
+.osu-coaching-page > * { flex: 0 0 auto; }
+
+.osu-coaching-page .spin { animation: osu-coaching-spin .9s linear infinite; }
+@keyframes osu-coaching-spin { to { transform: rotate(360deg); } }
+
+.osu-coaching-overview-header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  margin: 2px 2px 20px;
+}
+.osu-coaching-overview-header > div > span {
+  color: var(--osu-pink);
+  display: block;
+  font-size: 12px;
+  font-weight: 850;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.osu-coaching-overview-header h1 { font-size: 32px; letter-spacing: -.03em; margin: 3px 0 0; }
+.osu-coaching-overview-header p { color: var(--osu-sub); font-size: 14px; margin-top: 4px; }
+.osu-coaching-overview-header .osu-secondary-action { min-height: 42px; padding-inline: 17px; }
+
+.osu-coaching-error,
+.osu-coaching-loading {
+  align-items: center;
+  border: 1px solid var(--osu-line);
+  border-radius: 14px;
+  display: flex;
+  gap: 13px;
+  margin-bottom: 14px;
+  padding: 17px 19px;
+}
+.osu-coaching-error { background: rgba(255,112,125,.08); border-color: rgba(255,112,125,.3); color: var(--osu-red); font-size: 13px; }
+.osu-coaching-loading { background: var(--osu-panel); flex-direction: column; justify-content: center; min-height: 260px; text-align: center; }
+.osu-coaching-loading > svg { color: var(--osu-pink); }
+.osu-coaching-loading strong { font-size: 19px; }
+.osu-coaching-loading span { color: var(--osu-sub); font-size: 13px; }
+
+.osu-coaching-global-focus,
+.osu-coaching-run-focus {
+  align-items: stretch;
+  background: linear-gradient(125deg, rgba(255,79,154,.16), rgba(255,79,154,.045) 55%, var(--osu-panel));
+  border: 1px solid rgba(255,79,154,.32);
+  border-radius: 18px;
+  display: grid;
+  gap: 18px;
+  grid-template-columns: auto minmax(0, 1.35fr) minmax(300px, .8fr);
+  overflow: hidden;
+  padding: 22px;
+}
+.osu-coaching-global-focus { min-height: 132px; }
+.osu-coaching-run-focus { min-height: 132px; }
+.osu-coaching-global-focus.progress,
+.osu-coaching-run-focus.clear { background: linear-gradient(125deg, rgba(143,230,91,.13), rgba(143,230,91,.035) 55%, var(--osu-panel)); border-color: rgba(143,230,91,.28); }
+.osu-coaching-global-focus.baseline,
+.osu-coaching-run-focus.review { background: linear-gradient(125deg, rgba(98,217,239,.12), rgba(98,217,239,.035) 55%, var(--osu-panel)); border-color: rgba(98,217,239,.26); }
+.osu-coaching-run-focus.slider { background: linear-gradient(125deg, rgba(244,203,94,.13), rgba(244,203,94,.035) 55%, var(--osu-panel)); border-color: rgba(244,203,94,.28); }
+.osu-coaching-focus-icon {
+  align-items: center;
+  background: var(--osu-pink-soft);
+  border: 1px solid rgba(255,79,154,.25);
+  border-radius: 14px;
+  color: var(--osu-pink);
+  display: flex;
+  height: 54px;
+  justify-content: center;
+  width: 54px;
+}
+.progress .osu-coaching-focus-icon,
+.clear .osu-coaching-focus-icon { background: rgba(143,230,91,.1); border-color: rgba(143,230,91,.22); color: var(--osu-green); }
+.baseline .osu-coaching-focus-icon,
+.review .osu-coaching-focus-icon { background: rgba(98,217,239,.09); border-color: rgba(98,217,239,.22); color: var(--osu-cyan); }
+.slider .osu-coaching-focus-icon { background: rgba(244,203,94,.09); border-color: rgba(244,203,94,.22); color: var(--osu-gold); }
+.osu-coaching-global-focus > div:nth-child(2) > span,
+.osu-coaching-focus-copy > span,
+.osu-coaching-global-focus aside > span,
+.osu-coaching-next-step > span {
+  color: var(--osu-pink);
+  display: block;
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+}
+.osu-coaching-global-focus h2,
+.osu-coaching-run-focus h2 { font-size: 23px; letter-spacing: -.025em; line-height: 1.15; margin: 5px 0 0; }
+.osu-coaching-global-focus p,
+.osu-coaching-run-focus p { color: var(--osu-sub); font-size: 13px; line-height: 1.5; margin-top: 8px; }
+.osu-coaching-global-focus aside,
+.osu-coaching-next-step {
+  align-self: stretch;
+  background: rgba(0,0,0,.17);
+  border-left: 1px solid var(--osu-line);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  margin: -22px;
+  margin-left: 0;
+  padding: 22px;
+}
+.osu-coaching-global-focus aside strong,
+.osu-coaching-next-step strong { font-size: 14px; line-height: 1.45; margin-top: 7px; }
+.osu-coaching-global-focus aside button {
+  align-items: center;
+  align-self: flex-start;
+  background: transparent;
+  border: 0;
+  color: var(--osu-pink);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 800;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 0;
+}
+
+.osu-coaching-overview-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-top: 14px;
+}
+.osu-coaching-overview-grid article,
+.osu-coaching-score-grid article {
+  background: var(--osu-panel);
+  border: 1px solid var(--osu-line);
+  border-radius: 14px;
+  min-height: 112px;
+  min-width: 0;
+  padding: 17px 18px;
+}
+.osu-coaching-overview-grid article > span,
+.osu-coaching-score-grid article > span { color: var(--osu-muted); display: block; font-size: 11px; font-weight: 750; }
+.osu-coaching-overview-grid article > strong,
+.osu-coaching-score-grid article > strong { display: block; font-size: 24px; letter-spacing: -.025em; margin-top: 8px; }
+.osu-coaching-overview-grid article > small,
+.osu-coaching-score-grid article > small { color: var(--osu-muted); display: block; font-size: 10px; line-height: 1.35; margin-top: 6px; }
+.osu-coaching-overview-grid article.needs-work strong,
+.osu-coaching-score-grid article.needs-work strong { color: var(--osu-red); }
+.osu-coaching-overview-grid article.positive strong,
+.osu-coaching-score-grid article.clean strong { color: var(--osu-green); }
+
+.osu-coaching-history-section,
+.osu-coaching-runs-section,
+.osu-coaching-score-section,
+.osu-coaching-progression-section,
+.osu-coaching-secondary-section,
+.osu-coaching-technical {
+  background: var(--osu-panel);
+  border: 1px solid var(--osu-line);
+  border-radius: 16px;
+  margin-top: 14px;
+}
+.osu-coaching-history-section,
+.osu-coaching-score-section,
+.osu-coaching-progression-section,
+.osu-coaching-secondary-section { padding: 19px; }
+.osu-coaching-section-heading { align-items: flex-start; display: flex; gap: 18px; justify-content: space-between; margin-bottom: 15px; }
+.osu-coaching-section-heading strong { display: block; font-size: 17px; }
+.osu-coaching-section-heading span { color: var(--osu-sub); display: block; font-size: 11px; margin-top: 3px; }
+.osu-coaching-section-heading > small { color: var(--osu-muted); font-size: 10px; padding-top: 4px; text-align: right; }
+
+.osu-coaching-history-chart { height: 232px; min-height: 232px; position: relative; }
+.osu-coaching-history-chart .chart-footer { align-items: center; color: var(--osu-muted); display: flex; font-size: 9px; justify-content: space-between; margin-top: 4px; }
+.osu-coaching-history-chart .chart-footer strong { color: var(--osu-sub); font-size: 10px; font-weight: 650; }
+.osu-coaching-history-tooltip { background: rgba(11,12,20,.97); border: 1px solid var(--osu-line-strong); border-radius: 10px; box-shadow: 0 12px 32px rgba(0,0,0,.34); min-width: 210px; padding: 11px 13px; }
+.osu-coaching-history-tooltip > strong,
+.osu-coaching-history-tooltip > span,
+.osu-coaching-history-tooltip > small { display: block; }
+.osu-coaching-history-tooltip > strong { font-size: 12px; }
+.osu-coaching-history-tooltip > span { color: var(--osu-sub); font-size: 10px; margin-top: 2px; }
+.osu-coaching-history-tooltip > small { color: var(--osu-muted); font-size: 9px; margin-top: 5px; }
+.osu-coaching-history-tooltip > div { align-items: baseline; border-top: 1px solid var(--osu-line); display: flex; justify-content: space-between; margin-top: 9px; padding-top: 8px; }
+.osu-coaching-history-tooltip > div b { color: var(--osu-pink); font-size: 14px; }
+.osu-coaching-history-tooltip > div span { color: var(--osu-sub); font-size: 9px; }
+
+.osu-coaching-runs-section { min-height: 320px; overflow: hidden; }
+.osu-coaching-runs-section > .osu-coaching-section-heading { margin: 0; padding: 19px; }
+.osu-coaching-run-tools { align-items: center; border-bottom: 1px solid var(--osu-line); border-top: 1px solid var(--osu-line); display: flex; gap: 14px; justify-content: space-between; padding: 12px 15px; }
+.osu-coaching-run-tools label { align-items: center; background: rgba(255,255,255,.035); border: 1px solid var(--osu-line); border-radius: 10px; display: flex; flex: 1; gap: 8px; max-width: 520px; padding: 0 12px; }
+.osu-coaching-run-tools label svg { color: var(--osu-muted); flex: 0 0 auto; }
+.osu-coaching-run-tools input { background: transparent; border: 0; color: var(--osu-text); flex: 1; font-size: 13px; min-height: 40px; outline: 0; }
+.osu-coaching-run-tools input::placeholder { color: var(--osu-muted); }
+.osu-coaching-run-tools > div { display: flex; gap: 5px; }
+.osu-coaching-run-tools > div button { background: transparent; border: 1px solid var(--osu-line); border-radius: 8px; color: var(--osu-sub); cursor: pointer; font-size: 10px; font-weight: 750; padding: 8px 11px; }
+.osu-coaching-run-tools > div button:hover { border-color: var(--osu-line-strong); color: var(--osu-text); }
+.osu-coaching-run-tools > div button.active { background: var(--osu-pink-soft); border-color: rgba(255,79,154,.35); color: var(--osu-pink); }
+.osu-coaching-run-list { min-height: 140px; max-height: 470px; overflow-y: auto; overscroll-behavior: contain; }
+.osu-coaching-run-list > button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--osu-line);
+  cursor: pointer;
+  display: grid;
+  gap: 13px;
+  grid-template-columns: 28px minmax(220px, 1fr) 126px 84px 82px 72px 18px;
+  min-height: 70px;
+  padding: 11px 17px;
+  text-align: left;
+  width: 100%;
+}
+.osu-coaching-run-list > button:hover { background: rgba(255,255,255,.035); }
+.osu-coaching-run-list > button:disabled { cursor: default; opacity: .54; }
+.osu-coaching-run-list > button:disabled:hover { background: transparent; }
+.osu-coaching-run-list .run-status { color: var(--osu-pink); display: grid; place-items: center; }
+.osu-coaching-run-list .run-name { min-width: 0; }
+.osu-coaching-run-list .run-name strong,
+.osu-coaching-run-list .run-name small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.osu-coaching-run-list .run-name strong { font-size: 13px; }
+.osu-coaching-run-list .run-name small { color: var(--osu-muted); font-size: 10px; margin-top: 4px; }
+.osu-coaching-run-list .run-date,
+.osu-coaching-run-list .run-misses,
+.osu-coaching-run-list .run-pp { color: var(--osu-muted); font-size: 10px; }
+.osu-coaching-run-list .run-accuracy { font-size: 13px; font-weight: 800; text-align: right; }
+.osu-coaching-run-list .run-misses { text-align: right; }
+.osu-coaching-run-list .run-misses.has-misses { color: var(--osu-red); }
+.osu-coaching-run-list .run-pp { color: var(--osu-cyan); text-align: right; }
+.osu-coaching-run-list > button > svg { color: var(--osu-muted); }
+.osu-coaching-no-runs { align-items: center; color: var(--osu-muted); display: flex; flex-direction: column; gap: 6px; justify-content: center; min-height: 190px; }
+.osu-coaching-no-runs strong { color: var(--osu-text); font-size: 15px; }
+
+.osu-coaching-toolbar {
+  align-items: end;
+  background: var(--osu-panel);
+  border: 1px solid var(--osu-line);
+  border-radius: 15px;
+  display: flex;
+  gap: 14px;
+  padding: 14px 16px;
+}
+.osu-coaching-back { align-items: center; align-self: center; background: transparent; border: 0; color: var(--osu-sub); cursor: pointer; display: flex; font-size: 12px; font-weight: 750; gap: 6px; padding: 8px; }
+.osu-coaching-back:hover { color: var(--osu-pink); }
+.osu-coaching-toolbar > div { align-items: center; display: flex; gap: 10px; margin-right: auto; min-width: 210px; }
+.osu-coaching-toolbar > div > svg { color: var(--osu-pink); flex: 0 0 auto; }
+.osu-coaching-toolbar > div strong,
+.osu-coaching-toolbar > div small { display: block; }
+.osu-coaching-toolbar > div strong { font-size: 15px; }
+.osu-coaching-toolbar > div small { color: var(--osu-muted); font-size: 10px; margin-top: 2px; }
+.osu-coaching-toolbar label { min-width: min(430px, 36vw); }
+.osu-coaching-toolbar label > span { color: var(--osu-muted); display: block; font-size: 9px; font-weight: 800; letter-spacing: .07em; margin-bottom: 5px; text-transform: uppercase; }
+.osu-coaching-toolbar .osu-secondary-action { min-height: 42px; white-space: nowrap; }
+.osu-coaching-toolbar .osu-secondary-action:disabled { cursor: wait; opacity: .58; }
+.osu-coaching-results { display: grid; gap: 0; margin-top: 14px; }
+
+.osu-coaching-score-grid { display: grid; gap: 9px; grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.osu-coaching-score-grid article > strong { font-size: 21px; }
+
+.osu-coaching-progress-list { display: grid; gap: 8px; }
+.osu-coaching-progress-row { align-items: center; background: rgba(255,255,255,.025); border: 1px solid var(--osu-line); border-radius: 12px; display: grid; gap: 17px; grid-template-columns: minmax(190px, 1fr) 100px 116px 20px 100px; min-height: 78px; padding: 12px 16px; }
+.osu-coaching-progress-label strong,
+.osu-coaching-progress-label span { display: block; }
+.osu-coaching-progress-label strong { font-size: 13px; }
+.osu-coaching-progress-label span { color: var(--osu-muted); font-size: 10px; margin-top: 4px; }
+.osu-coaching-progress-value { text-align: right; }
+.osu-coaching-progress-value small,
+.osu-coaching-progress-value strong { display: block; }
+.osu-coaching-progress-value small { color: var(--osu-muted); font-size: 9px; text-transform: uppercase; }
+.osu-coaching-progress-value strong { font-size: 17px; margin-top: 3px; }
+.osu-coaching-progress-value.late { text-align: left; }
+.osu-coaching-progress-row > svg { color: var(--osu-muted); }
+.osu-coaching-quarter-bars { align-items: end; display: flex; gap: 5px; height: 38px; }
+.osu-coaching-quarter-bars > span { background: rgba(255,255,255,.045); border-radius: 3px; display: flex; flex: 1; height: 100%; overflow: hidden; }
+.osu-coaching-quarter-bars i { align-self: end; background: linear-gradient(var(--osu-pink), rgba(255,79,154,.35)); border-radius: 3px; display: block; width: 100%; }
+.osu-coaching-progression-note { align-items: center; color: var(--osu-muted); display: flex; font-size: 10px; gap: 6px; margin-top: 11px; }
+.osu-coaching-progression-note svg { flex: 0 0 auto; }
+
+.osu-coaching-secondary-list { display: grid; gap: 9px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.osu-coaching-secondary-list article { background: rgba(255,255,255,.025); border: 1px solid var(--osu-line); border-radius: 11px; padding: 14px; }
+.osu-coaching-secondary-list article strong { font-size: 13px; }
+.osu-coaching-secondary-list article p { color: var(--osu-sub); font-size: 11px; line-height: 1.45; margin-top: 5px; }
+.osu-coaching-secondary-list article span { border-top: 1px solid var(--osu-line); color: var(--osu-muted); display: block; font-size: 10px; line-height: 1.4; margin-top: 10px; padding-top: 9px; }
+
+.osu-coaching-technical { overflow: hidden; }
+.osu-coaching-technical > summary { align-items: center; cursor: pointer; display: flex; justify-content: space-between; list-style: none; min-height: 58px; padding: 0 18px; }
+.osu-coaching-technical > summary::-webkit-details-marker { display: none; }
+.osu-coaching-technical > summary > span { align-items: center; display: flex; gap: 8px; }
+.osu-coaching-technical > summary svg { color: var(--osu-cyan); }
+.osu-coaching-technical > summary strong { font-size: 13px; }
+.osu-coaching-technical > summary small { color: var(--osu-muted); font-size: 10px; }
+.osu-coaching-technical-content { border-top: 1px solid var(--osu-line); display: grid; gap: 20px; padding: 18px; }
+.osu-coaching-technical-content h3 { font-size: 12px; margin: 0 0 10px; }
+.osu-coaching-technical-content dl { display: grid; gap: 6px; grid-template-columns: repeat(5, minmax(0, 1fr)); margin: 0; }
+.osu-coaching-technical-content dl div { background: rgba(255,255,255,.025); border: 1px solid var(--osu-line); border-radius: 9px; padding: 10px; }
+.osu-coaching-technical-content dt { color: var(--osu-muted); font-size: 9px; }
+.osu-coaching-technical-content dd { font-size: 11px; font-weight: 750; margin: 4px 0 0; overflow-wrap: anywhere; }
+.osu-coaching-technical-metrics,
+.osu-coaching-unavailable { display: grid; gap: 7px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.osu-coaching-technical-metrics article,
+.osu-coaching-unavailable article { background: rgba(255,255,255,.025); border: 1px solid var(--osu-line); border-radius: 9px; padding: 11px; }
+.osu-coaching-technical-metrics article > div { align-items: center; display: flex; gap: 6px; justify-content: space-between; }
+.osu-coaching-technical-metrics article strong,
+.osu-coaching-unavailable article strong { font-size: 10px; }
+.osu-coaching-technical-metrics article b { display: block; font-size: 14px; margin-top: 6px; }
+.osu-coaching-technical-metrics article p,
+.osu-coaching-technical-metrics article small,
+.osu-coaching-unavailable article p,
+.osu-coaching-unavailable article small,
+.osu-coaching-technical-content li { color: var(--osu-muted); font-size: 9px; line-height: 1.45; }
+.osu-coaching-technical-metrics article p,
+.osu-coaching-unavailable article p { margin: 6px 0 0; }
+.osu-coaching-technical-metrics article small,
+.osu-coaching-unavailable article small { display: block; margin-top: 5px; }
+.osu-coaching-technical-content ul { margin: 0; padding-left: 18px; }
+.osu-coaching-technical-content li + li { margin-top: 5px; }
+.osu-coaching-confidence { border: 1px solid currentColor; border-radius: 999px; display: inline-flex; font-size: 7px; font-weight: 850; letter-spacing: .05em; line-height: 1; padding: 3px 5px; text-transform: uppercase; }
+.osu-coaching-confidence.high { color: var(--osu-green); }
+.osu-coaching-confidence.medium { color: var(--osu-cyan); }
+.osu-coaching-confidence.low { color: var(--osu-gold); }
+.osu-coaching-confidence.unavailable { color: var(--osu-muted); }
+
+@media (max-width: 1180px) {
+  .osu-coaching-global-focus,
+  .osu-coaching-run-focus { grid-template-columns: auto minmax(0, 1fr); }
+  .osu-coaching-global-focus aside,
+  .osu-coaching-next-step { border-left: 0; border-top: 1px solid var(--osu-line); grid-column: 1 / -1; margin: 0 -22px -22px; padding: 16px 22px; }
+  .osu-coaching-overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .osu-coaching-score-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .osu-coaching-run-list > button { grid-template-columns: 26px minmax(190px, 1fr) 80px 72px 72px 18px; }
+  .osu-coaching-run-list .run-date { display: none; }
+  .osu-coaching-toolbar { align-items: stretch; flex-wrap: wrap; }
+  .osu-coaching-toolbar label { flex: 1 1 420px; min-width: 0; }
+}
+
+@media (max-width: 800px) {
+  .osu-coaching-page { padding: 13px; scrollbar-gutter: auto; }
+  .osu-coaching-overview-header { align-items: flex-start; gap: 12px; }
+  .osu-coaching-overview-header h1 { font-size: 26px; }
+  .osu-coaching-run-tools { align-items: stretch; flex-direction: column; }
+  .osu-coaching-run-tools label { max-width: none; }
+  .osu-coaching-run-tools > div { overflow-x: auto; }
+  .osu-coaching-run-list > button { grid-template-columns: 24px minmax(150px, 1fr) 72px 18px; }
+  .osu-coaching-run-list .run-misses,
+  .osu-coaching-run-list .run-pp { display: none; }
+  .osu-coaching-progress-row { grid-template-columns: 1fr 84px 18px 84px; }
+  .osu-coaching-quarter-bars { display: none; }
+  .osu-coaching-secondary-list,
+  .osu-coaching-technical-metrics,
+  .osu-coaching-unavailable { grid-template-columns: 1fr; }
+  .osu-coaching-technical-content dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 560px) {
+  .osu-coaching-overview-grid,
+  .osu-coaching-score-grid { grid-template-columns: 1fr; }
+  .osu-coaching-global-focus,
+  .osu-coaching-run-focus { grid-template-columns: 1fr; }
+  .osu-coaching-focus-icon { height: 46px; width: 46px; }
+  .osu-coaching-global-focus h2,
+  .osu-coaching-run-focus h2 { font-size: 20px; }
+}

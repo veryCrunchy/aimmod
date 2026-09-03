@@ -665,18 +665,13 @@ async fn generate_coaching_reply_once(
             },
         };
 
-        let resp = send_local_coach_chat_request(
-            &client,
-            &runtime.endpoint,
-            &chat,
-        )
-        .await?;
+        let resp = send_local_coach_chat_request(&client, &runtime.endpoint, &chat).await?;
 
         let parsed = resp
             .json::<OpenAiChatResponse>()
             .await
             .context("could not decode local coach response")?;
-        
+
         if response_model.is_none() {
             response_model = parsed.model.clone();
         }
@@ -1842,7 +1837,11 @@ async fn execute_tool_call(
             emit_status_event(app, stream_id, "Reading day scenario breakdown");
             build_local_day_scenario_breakdown_result(
                 app,
-                if day.is_empty() { None } else { Some(day.as_str()) },
+                if day.is_empty() {
+                    None
+                } else {
+                    Some(day.as_str())
+                },
                 ranking_metric,
                 limit,
                 retrieved_knowledge,
@@ -1893,20 +1892,53 @@ fn scenario_subtype_of(record: &crate::session_store::SessionRecord) -> String {
         .unwrap_or_else(|| "Unknown".to_string())
 }
 
-fn extract_session_metric(record: &crate::session_store::SessionRecord, metric: &str) -> Option<f64> {
+fn extract_session_metric(
+    record: &crate::session_store::SessionRecord,
+    metric: &str,
+) -> Option<f64> {
     match metric {
         "score" => Some(record.score),
         "accuracyPct" => scenario_accuracy_pct(record),
-        "avgKps" => record.stats_panel.as_ref().and_then(|panel| panel.avg_kps.map(|value| value as f64)),
-        "avgTtkMs" => record.stats_panel.as_ref().and_then(|panel| panel.avg_ttk_ms.map(|value| value as f64)),
-        "bestTtkMs" => record.stats_panel.as_ref().and_then(|panel| panel.best_ttk_ms.map(|value| value as f64)),
-        "accuracyTrend" => record.stats_panel.as_ref().and_then(|panel| panel.accuracy_trend.map(|value| value as f64)),
-        "smoothnessComposite" => record.smoothness.as_ref().map(|snapshot| snapshot.composite as f64),
-        "jitter" => record.smoothness.as_ref().map(|snapshot| snapshot.jitter as f64),
-        "correctionRatio" => record.smoothness.as_ref().map(|snapshot| snapshot.correction_ratio as f64),
-        "directionalBias" => record.smoothness.as_ref().map(|snapshot| snapshot.directional_bias as f64),
-        "avgFireToHitMs" => record.shot_timing.as_ref().and_then(|shot| shot.avg_fire_to_hit_ms.map(|value| value as f64)),
-        "avgShotsToHit" => record.shot_timing.as_ref().and_then(|shot| shot.avg_shots_to_hit.map(|value| value as f64)),
+        "avgKps" => record
+            .stats_panel
+            .as_ref()
+            .and_then(|panel| panel.avg_kps.map(|value| value as f64)),
+        "avgTtkMs" => record
+            .stats_panel
+            .as_ref()
+            .and_then(|panel| panel.avg_ttk_ms.map(|value| value as f64)),
+        "bestTtkMs" => record
+            .stats_panel
+            .as_ref()
+            .and_then(|panel| panel.best_ttk_ms.map(|value| value as f64)),
+        "accuracyTrend" => record
+            .stats_panel
+            .as_ref()
+            .and_then(|panel| panel.accuracy_trend.map(|value| value as f64)),
+        "smoothnessComposite" => record
+            .smoothness
+            .as_ref()
+            .map(|snapshot| snapshot.composite as f64),
+        "jitter" => record
+            .smoothness
+            .as_ref()
+            .map(|snapshot| snapshot.jitter as f64),
+        "correctionRatio" => record
+            .smoothness
+            .as_ref()
+            .map(|snapshot| snapshot.correction_ratio as f64),
+        "directionalBias" => record
+            .smoothness
+            .as_ref()
+            .map(|snapshot| snapshot.directional_bias as f64),
+        "avgFireToHitMs" => record
+            .shot_timing
+            .as_ref()
+            .and_then(|shot| shot.avg_fire_to_hit_ms.map(|value| value as f64)),
+        "avgShotsToHit" => record
+            .shot_timing
+            .as_ref()
+            .and_then(|shot| shot.avg_shots_to_hit.map(|value| value as f64)),
         _ => None,
     }
 }
@@ -1947,9 +1979,15 @@ fn filter_local_records(
     }
 
     let allowed_days = collect_allowed_days(&page.records, trailing_days);
-    let scenario_name = scenario_name.map(str::trim).filter(|value| !value.is_empty());
-    let scenario_type = scenario_type.map(str::trim).filter(|value| !value.is_empty());
-    let scenario_subtype = scenario_subtype.map(str::trim).filter(|value| !value.is_empty());
+    let scenario_name = scenario_name
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let scenario_type = scenario_type
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let scenario_subtype = scenario_subtype
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     let day = day.map(str::trim).filter(|value| !value.is_empty());
 
     page.records
@@ -1990,7 +2028,10 @@ fn sort_rows_by_key(rows: &mut [JsonValue], sort_by: &str, descending: bool) {
     rows.sort_by(|left, right| {
         let left_value = left.get(sort_by);
         let right_value = right.get(sort_by);
-        let ordering = match (left_value.and_then(json_value_to_f64), right_value.and_then(json_value_to_f64)) {
+        let ordering = match (
+            left_value.and_then(json_value_to_f64),
+            right_value.and_then(json_value_to_f64),
+        ) {
             (Some(left_num), Some(right_num)) => left_num
                 .partial_cmp(&right_num)
                 .unwrap_or(std::cmp::Ordering::Equal),
@@ -2004,7 +2045,11 @@ fn sort_rows_by_key(rows: &mut [JsonValue], sort_by: &str, descending: bool) {
                 left_text.cmp(&right_text)
             }
         };
-        if descending { ordering.reverse() } else { ordering }
+        if descending {
+            ordering.reverse()
+        } else {
+            ordering
+        }
     });
 }
 
@@ -2038,12 +2083,20 @@ fn query_local_sessions_result(
         .map(|value| value.clamp(1, 60) as usize)
         .unwrap_or(20);
 
-    let records = filter_local_records(app, scenario_name, scenario_type, scenario_subtype, day, days);
+    let records = filter_local_records(
+        app,
+        scenario_name,
+        scenario_type,
+        scenario_subtype,
+        day,
+        days,
+    );
     if records.is_empty() {
         return json!({
             "ok": false,
             "error": "No local sessions matched that filter"
-        }).to_string();
+        })
+        .to_string();
     }
 
     let mut rows = records
@@ -2145,14 +2198,25 @@ fn query_local_sessions_result(
     }).to_string()
 }
 
-fn grouped_metric_list(args: &JsonValue, available_metrics: &[&str], default_metrics: &[&str]) -> Vec<String> {
+fn grouped_metric_list(
+    args: &JsonValue,
+    available_metrics: &[&str],
+    default_metrics: &[&str],
+) -> Vec<String> {
     let requested = json_array_strings(args.get("metrics"));
     let mut selected = requested
         .into_iter()
-        .filter(|metric| available_metrics.iter().any(|available| available.eq_ignore_ascii_case(metric)))
+        .filter(|metric| {
+            available_metrics
+                .iter()
+                .any(|available| available.eq_ignore_ascii_case(metric))
+        })
         .collect::<Vec<_>>();
     if selected.is_empty() {
-        selected = default_metrics.iter().map(|value| (*value).to_string()).collect::<Vec<_>>();
+        selected = default_metrics
+            .iter()
+            .map(|value| (*value).to_string())
+            .collect::<Vec<_>>();
     }
     selected.truncate(4);
     selected
@@ -2168,11 +2232,15 @@ fn query_local_grouped_history_result(
         .and_then(|value| value.as_str())
         .map(str::trim)
         .unwrap_or_default();
-    if !matches!(group_by, "day" | "scenarioName" | "scenarioType" | "scenarioSubtype") {
+    if !matches!(
+        group_by,
+        "day" | "scenarioName" | "scenarioType" | "scenarioSubtype"
+    ) {
         return json!({
             "ok": false,
             "error": "groupBy must be one of day, scenarioName, scenarioType, or scenarioSubtype"
-        }).to_string();
+        })
+        .to_string();
     }
 
     let scenario_name = args.get("scenarioName").and_then(|value| value.as_str());
@@ -2188,7 +2256,13 @@ fn query_local_grouped_history_result(
         .and_then(|value| value.as_str())
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| if group_by == "day" { "day" } else { "sessionCount" });
+        .unwrap_or_else(|| {
+            if group_by == "day" {
+                "day"
+            } else {
+                "sessionCount"
+            }
+        });
     let descending = args
         .get("sortOrder")
         .and_then(|value| value.as_str())
@@ -2200,12 +2274,20 @@ fn query_local_grouped_history_result(
         .map(|value| value.clamp(1, 50) as usize)
         .unwrap_or(12);
 
-    let records = filter_local_records(app, scenario_name, scenario_type, scenario_subtype, day, days);
+    let records = filter_local_records(
+        app,
+        scenario_name,
+        scenario_type,
+        scenario_subtype,
+        day,
+        days,
+    );
     if records.is_empty() {
         return json!({
             "ok": false,
             "error": "No local sessions matched that grouped query"
-        }).to_string();
+        })
+        .to_string();
     }
 
     #[derive(Default)]
@@ -2237,7 +2319,8 @@ fn query_local_grouped_history_result(
         unique_scenarios: std::collections::HashSet<String>,
     }
 
-    let mut grouped: std::collections::HashMap<String, GroupAggregate> = std::collections::HashMap::new();
+    let mut grouped: std::collections::HashMap<String, GroupAggregate> =
+        std::collections::HashMap::new();
     for record in records {
         let key = match group_by {
             "day" => session_day_key(&record.timestamp),
@@ -2252,11 +2335,21 @@ fn query_local_grouped_history_result(
         let entry = grouped.entry(key).or_default();
         entry.session_count += 1;
         entry.score_sum += record.score;
-        entry.best_score = Some(entry.best_score.map(|existing| existing.max(record.score)).unwrap_or(record.score));
+        entry.best_score = Some(
+            entry
+                .best_score
+                .map(|existing| existing.max(record.score))
+                .unwrap_or(record.score),
+        );
         if let Some(value) = scenario_accuracy_pct(&record) {
             entry.accuracy_sum += value;
             entry.accuracy_count += 1;
-            entry.best_accuracy = Some(entry.best_accuracy.map(|existing| existing.max(value)).unwrap_or(value));
+            entry.best_accuracy = Some(
+                entry
+                    .best_accuracy
+                    .map(|existing| existing.max(value))
+                    .unwrap_or(value),
+            );
         }
         if let Some(value) = extract_session_metric(&record, "avgKps") {
             entry.kps_sum += value;
@@ -2294,17 +2387,33 @@ fn query_local_grouped_history_result(
             entry.fire_to_hit_sum += value;
             entry.fire_to_hit_count += 1;
         }
-        entry.unique_scenarios.insert(record.scenario.trim().to_string());
+        entry
+            .unique_scenarios
+            .insert(record.scenario.trim().to_string());
     }
 
     let available_metrics = [
-        "sessionCount", "uniqueScenarioCount", "avgScore", "bestScore",
-        "avgAccuracyPct", "bestAccuracyPct", "avgKps", "avgTtkMs",
-        "avgAccuracyTrend", "avgSmoothnessComposite", "avgJitter",
-        "avgCorrectionRatio", "avgDirectionalBias", "avgShotsToHit",
-        "avgFireToHitMs"
+        "sessionCount",
+        "uniqueScenarioCount",
+        "avgScore",
+        "bestScore",
+        "avgAccuracyPct",
+        "bestAccuracyPct",
+        "avgKps",
+        "avgTtkMs",
+        "avgAccuracyTrend",
+        "avgSmoothnessComposite",
+        "avgJitter",
+        "avgCorrectionRatio",
+        "avgDirectionalBias",
+        "avgShotsToHit",
+        "avgFireToHitMs",
     ];
-    let selected_metrics = grouped_metric_list(args, &available_metrics, &["sessionCount", "avgScore", "avgAccuracyPct"]);
+    let selected_metrics = grouped_metric_list(
+        args,
+        &available_metrics,
+        &["sessionCount", "avgScore", "avgAccuracyPct"],
+    );
 
     let mut rows = grouped
         .into_iter()
@@ -2347,7 +2456,10 @@ fn query_local_grouped_history_result(
             source: format!("local_grouped_history_{}", group_by),
             default_x_key: group_by.to_string(),
             rows: rows.clone(),
-            available_metrics: available_metrics.iter().map(|value| (*value).to_string()).collect::<Vec<_>>(),
+            available_metrics: available_metrics
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect::<Vec<_>>(),
             available_dimensions: vec![group_by.to_string()],
         },
     );
@@ -2359,7 +2471,13 @@ fn query_local_grouped_history_result(
             (
                 metric.as_str(),
                 humanize_metric_label(metric),
-                if group_by == "day" && count_like { "bar" } else if count_like { "bar" } else { "line" },
+                if group_by == "day" && count_like {
+                    "bar"
+                } else if count_like {
+                    "bar"
+                } else {
+                    "line"
+                },
             )
         })
         .collect::<Vec<_>>();
@@ -4984,7 +5102,10 @@ fn build_runtime_status(
     let backend = detect_runner_backend(&assets);
     let gpu_runtime_hint = if runtime.active_gpu_layers > 0 && backend == "cpu" {
         Some("GPU layers are enabled in AimMod, but the installed llama.cpp runtime is CPU-only. Install a CUDA, Vulkan, SYCL, or HIP runtime package instead of the CPU package.".to_string())
-    } else if runtime.active_gpu_layers > 0 && backend == "cuda" && !bundled_cuda_runtime_present(&assets) {
+    } else if runtime.active_gpu_layers > 0
+        && backend == "cuda"
+        && !bundled_cuda_runtime_present(&assets)
+    {
         Some("CUDA backend detected, but bundled CUDA runtime DLLs were not found next to llama-server.exe. Install the companion CUDA DLL package or make sure the matching CUDA runtime is available on PATH.".to_string())
     } else {
         None
@@ -5014,7 +5135,10 @@ fn build_runtime_status(
                     "AimMod local coach runtime is running. Backend: {}. {}",
                     backend, hint
                 ),
-                None => format!("AimMod local coach runtime is running. Backend: {}.", backend),
+                None => format!(
+                    "AimMod local coach runtime is running. Backend: {}.",
+                    backend
+                ),
             },
             true,
         )
@@ -5523,19 +5647,39 @@ fn build_user_prompt(request: &LocalCoachChatRequest) -> String {
     lines
         .push("If you create a visual, reference it inline with [[visual:visual-id]].".to_string());
     lines.push("Prefer dataset-backed visuals: after a raw data tool call, use the returned datasetId with create_visual instead of hand-writing chart points.".to_string());
-    lines.push("Do not call create_visual until a raw data tool has already returned datasetId.".to_string());
+    lines.push(
+        "Do not call create_visual until a raw data tool has already returned datasetId."
+            .to_string(),
+    );
     lines.push("If the tool result includes recommendedCreateVisual, use that as your starting point instead of inventing your own chart payload.".to_string());
     lines.push(String::new());
     if !request.conversation_history.is_empty() {
         lines.push("Conversation so far:".to_string());
-        for turn in request.conversation_history.iter().rev().take(2).collect::<Vec<_>>().into_iter().rev() {
-            lines.push(format!("User: {}", truncate_for_prompt(&turn.question, 220)));
+        for turn in request
+            .conversation_history
+            .iter()
+            .rev()
+            .take(2)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+        {
+            lines.push(format!(
+                "User: {}",
+                truncate_for_prompt(&turn.question, 220)
+            ));
             lines.push(format!("Coach: {}", truncate_for_prompt(&turn.answer, 320)));
         }
         lines.push(String::new());
-        lines.push(format!("Follow-up question: {}", truncate_for_prompt(&request.question, 260)));
+        lines.push(format!(
+            "Follow-up question: {}",
+            truncate_for_prompt(&request.question, 260)
+        ));
     } else {
-        lines.push(format!("Question: {}", truncate_for_prompt(&request.question, 260)));
+        lines.push(format!(
+            "Question: {}",
+            truncate_for_prompt(&request.question, 260)
+        ));
     }
     if !request.scenario_name.trim().is_empty() || !request.scenario_type.trim().is_empty() {
         lines.push(String::new());
@@ -5627,16 +5771,20 @@ fn metric_requested_in_question(question: &str, metric: &str) -> bool {
     let q = question.to_ascii_lowercase();
     match metric {
         "sessionCount" => q.contains("session"),
-        "uniqueScenarioCount" => q.contains("unique scenario")
-            || q.contains("scenario count")
-            || q.contains("unique scenarios"),
-        "avgScore" => q.contains("avg score")
-            || q.contains("average score")
-            || q.contains("score over"),
-        "avgAccuracyPct" => q.contains("avg accuracy")
-            || q.contains("average accuracy")
-            || q.contains("accuracy over")
-            || q.contains("accuracy %"),
+        "uniqueScenarioCount" => {
+            q.contains("unique scenario")
+                || q.contains("scenario count")
+                || q.contains("unique scenarios")
+        }
+        "avgScore" => {
+            q.contains("avg score") || q.contains("average score") || q.contains("score over")
+        }
+        "avgAccuracyPct" => {
+            q.contains("avg accuracy")
+                || q.contains("average accuracy")
+                || q.contains("accuracy over")
+                || q.contains("accuracy %")
+        }
         "plays" => q.contains("plays") || q.contains("play count"),
         "bestScore" => q.contains("best score"),
         "bestAccuracyPct" => q.contains("best accuracy"),
@@ -5689,7 +5837,11 @@ fn build_dataset_fallback_series(
 
     if selected.is_empty() {
         for metric in default_metric_priority(dataset) {
-            if dataset.available_metrics.iter().any(|available| available == &metric) {
+            if dataset
+                .available_metrics
+                .iter()
+                .any(|available| available == &metric)
+            {
                 selected.push(metric);
             }
             if selected.len() >= 4 {
@@ -5699,7 +5851,12 @@ fn build_dataset_fallback_series(
     }
 
     if selected.is_empty() {
-        selected = dataset.available_metrics.iter().take(2).cloned().collect::<Vec<_>>();
+        selected = dataset
+            .available_metrics
+            .iter()
+            .take(2)
+            .cloned()
+            .collect::<Vec<_>>();
     }
 
     let use_combo = question_prefers_time_axis(&request.question) && selected.len() > 1;

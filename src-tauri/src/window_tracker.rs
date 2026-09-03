@@ -20,7 +20,9 @@
 ///   so the WebView content is never positioned off-screen.
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::AppHandle;
+#[cfg(target_os = "windows")]
+use tauri::{Emitter, Manager};
 
 static TRACKING_RUNNING: AtomicBool = AtomicBool::new(false);
 
@@ -32,6 +34,7 @@ static FORCE_SHOW: AtomicBool = AtomicBool::new(false);
 static GAME_FOCUSED: AtomicBool = AtomicBool::new(false);
 
 /// Last known KovaaK's HWND stored as a raw pointer so focus can be restored.
+#[cfg(target_os = "windows")]
 static GAME_HWND_PTR: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Returns true if KovaaK's is currently the foreground window.
@@ -40,6 +43,7 @@ pub fn is_game_focused() -> bool {
 }
 
 /// Return the cached KovaaK's HWND, if we have seen it at least once.
+#[cfg(target_os = "windows")]
 pub fn get_game_hwnd() -> Option<windows::Win32::Foundation::HWND> {
     let ptr = GAME_HWND_PTR.load(Ordering::Relaxed);
     if ptr == 0 {
@@ -49,11 +53,17 @@ pub fn get_game_hwnd() -> Option<windows::Win32::Foundation::HWND> {
     }
 }
 
+#[cfg(target_os = "windows")]
 pub fn start(app: AppHandle) {
     if TRACKING_RUNNING.swap(true, Ordering::SeqCst) {
         return; // already running
     }
     std::thread::spawn(move || tracker_loop(app));
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn start(_app: AppHandle) {
+    GAME_FOCUSED.store(false, Ordering::Relaxed);
 }
 
 #[allow(dead_code)]
@@ -67,6 +77,7 @@ pub fn set_force_show(val: bool) {
     FORCE_SHOW.store(val, Ordering::Relaxed);
 }
 
+#[cfg(target_os = "windows")]
 fn tracker_loop(app: AppHandle) {
     use windows::Win32::Foundation::{HWND, RECT};
     use windows::Win32::Graphics::Gdi::{
@@ -231,6 +242,7 @@ fn tracker_loop(app: AppHandle) {
 
 /// Returns true if `hwnd` belongs to the KovaaK's game process.
 /// Checks window title first (fast), then process exe name (reliable after mode switch).
+#[cfg(target_os = "windows")]
 fn is_kovaaks_window(hwnd: windows::Win32::Foundation::HWND) -> bool {
     use windows::Win32::System::Threading::{
         OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,

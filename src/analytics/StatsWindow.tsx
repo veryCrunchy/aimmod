@@ -8,6 +8,7 @@ import remarkGfm from "remark-gfm";
 import { LeaderboardBrowser, ScenarioLeaderboardPanel } from "./LeaderboardBrowser";
 import { DebugTab } from "./DebugTab";
 import { HubBrowserPanel } from "./HubBrowser";
+import { OsuWorkspace } from "../osu/OsuWorkspace";
 import { MousePathViewer } from "./MousePathViewer";
 import type {
   ReplayPayloadData,
@@ -8555,12 +8556,16 @@ function ScenarioDetails({
 // ─── Root ─────────────────────────────────────────────────────────────────────
 
 type RootMode = "sessions" | "hub" | "replays" | "leaderboards" | "settings" | "debug";
+type ActiveGame = "kovaaks" | "osu";
 type ScenarioSortMode = "recent" | "plays" | "type";
 type SessionsPaneMode = "overview" | "scenario";
 
 export function StatsWindow({ embedded }: { embedded?: boolean } = {}) {
   useAppTheme();
   const { status: updateStatus, checkForUpdate, installUpdate } = useUpdater();
+  const [activeGame, setActiveGame] = useState<ActiveGame>(() =>
+    window.localStorage.getItem("aimmod.activeGame") === "osu" ? "osu" : "kovaaks",
+  );
   const [records, setRecords] = useState<SessionRecord[]>([]);
   const [search, setSearch] = useState(() => readStoredValue(STATS_WINDOW_STORAGE_KEYS.search) ?? "");
   const [selectedScenario, setSelectedScenario] = useState<string | null>(
@@ -8613,6 +8618,10 @@ export function StatsWindow({ embedded }: { embedded?: boolean } = {}) {
   const [hubResyncBusy, setHubResyncBusy] = useState(false);
   const updateCheckStartedRef = useRef(false);
 
+  useEffect(() => {
+    window.localStorage.setItem("aimmod.activeGame", activeGame);
+  }, [activeGame]);
+
   // Always-current ref prevents stale closure in event listener
   const selectedRef = useRef<string | null>(null);
   selectedRef.current = selectedScenario;
@@ -8638,6 +8647,8 @@ export function StatsWindow({ embedded }: { embedded?: boolean } = {}) {
 
   // "/" shortcut to focus search
   useEffect(() => {
+    if (activeGame !== "kovaaks") return;
+
     const handler = (e: KeyboardEvent) => {
       const tagName = (e.target as HTMLElement)?.tagName ?? "";
       const inField = ["INPUT", "TEXTAREA", "SELECT"].includes(tagName);
@@ -8657,7 +8668,7 @@ export function StatsWindow({ embedded }: { embedded?: boolean } = {}) {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, []);
+  }, [activeGame]);
 
   async function loadHistory(preserveSelection: boolean) {
     setLoading(true);
@@ -9242,7 +9253,38 @@ export function StatsWindow({ embedded }: { embedded?: boolean } = {}) {
           flexShrink: 0,
         }}
       >
-        {([
+        {(["kovaaks", "osu"] as ActiveGame[]).map((game) => {
+          const active = activeGame === game;
+          return (
+            <button
+              key={game}
+              type="button"
+              aria-pressed={active}
+              onClick={() => setActiveGame(game)}
+              style={{
+                alignItems: "center",
+                alignSelf: "center",
+                background: active
+                  ? game === "osu" ? "rgba(255,102,170,0.13)" : "rgba(var(--am-accent-rgb), 0.13)"
+                  : "transparent",
+                border: `1px solid ${active ? game === "osu" ? "rgba(255,102,170,0.45)" : C.accentBorder : C.border}`,
+                borderRadius: 7,
+                color: active ? C.text : C.textMuted,
+                cursor: "pointer",
+                display: "inline-flex",
+                fontFamily: "inherit",
+                fontSize: 10,
+                fontWeight: active ? 750 : 550,
+                marginRight: 7,
+                padding: "6px 10px",
+              }}
+            >
+              {game === "kovaaks" ? "Kovaak's" : "osu!lazer"}
+            </button>
+          );
+        })}
+        <div style={{ alignSelf: "stretch", background: C.border, margin: "8px 10px 8px 5px", width: 1 }} />
+        {activeGame === "kovaaks" && ([
           "sessions",
           "hub",
           "replays",
@@ -9284,27 +9326,36 @@ export function StatsWindow({ embedded }: { embedded?: boolean } = {}) {
             </button>
           );
         })}
-        <button
-          type="button"
-          onClick={() => setHelpOpen(true)}
-          style={{
-            marginLeft: "auto",
-            background: "none",
-            border: "none",
-            color: C.textFaint,
-            cursor: "pointer",
-            fontFamily: "inherit",
-            fontSize: 12,
-            padding: "12px 0 12px 18px",
-          }}
-          title="Shortcuts (?)"
-        >
-          ? Shortcuts
-        </button>
+        {activeGame === "osu" && (
+          <div style={{ alignItems: "center", color: C.textMuted, display: "flex", fontSize: 10, padding: "0 8px" }}>
+            osu!lazer workspace
+          </div>
+        )}
+        {activeGame === "kovaaks" && (
+          <button
+            type="button"
+            onClick={() => setHelpOpen(true)}
+            style={{
+              marginLeft: "auto",
+              background: "none",
+              border: "none",
+              color: C.textFaint,
+              cursor: "pointer",
+              fontFamily: "inherit",
+              fontSize: 12,
+              padding: "12px 0 12px 18px",
+            }}
+            title="Shortcuts (?)"
+          >
+            ? Shortcuts
+          </button>
+        )}
       </div>
 
+      {activeGame === "osu" && <OsuWorkspace />}
+
       {/* ── Sessions content ── */}
-      {rootMode === "sessions" && (
+      {activeGame === "kovaaks" && rootMode === "sessions" && (
         <div style={{ display: "flex", flex: 1, flexDirection: "column", overflow: "hidden" }}>
           {showUpdateNotice && (
             <div
@@ -9948,7 +9999,7 @@ export function StatsWindow({ embedded }: { embedded?: boolean } = {}) {
       </div>
       )}
 
-      {rootMode === "replays" && (
+      {activeGame === "kovaaks" && rootMode === "replays" && (
         <div style={{ flex: 1, overflowY: "auto", padding: "24px 28px" }}>
           <div style={{ marginBottom: 20 }}>
             <h2
@@ -9972,7 +10023,7 @@ export function StatsWindow({ embedded }: { embedded?: boolean } = {}) {
         </div>
       )}
 
-      {rootMode === "hub" && (
+      {activeGame === "kovaaks" && rootMode === "hub" && (
         <div style={{ flex: 1, overflowY: "auto", padding: "24px 28px" }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
             <HubOverviewPanel
@@ -9992,13 +10043,13 @@ export function StatsWindow({ embedded }: { embedded?: boolean } = {}) {
       )}
 
       {/* ── Leaderboards content ── */}
-      {rootMode === "leaderboards" && (
+      {activeGame === "kovaaks" && rootMode === "leaderboards" && (
         <div style={{ flex: 1, overflow: "hidden" }}>
           <LeaderboardBrowser seedQuery={leaderboardSeedQuery} />
         </div>
       )}
 
-      {rootMode === "settings" && (
+      {activeGame === "kovaaks" && rootMode === "settings" && (
         <div style={{ flex: 1, overflow: "hidden" }}>
           <Suspense
             fallback={
@@ -10019,14 +10070,14 @@ export function StatsWindow({ embedded }: { embedded?: boolean } = {}) {
       )}
 
       {/* ── Memory debug ── */}
-      {isDebugBuild && rootMode === "debug" && (
+      {activeGame === "kovaaks" && isDebugBuild && rootMode === "debug" && (
         <div style={{ flex: 1, overflowY: "auto", padding: "24px 28px" }}>
           <DebugTab />
         </div>
       )}
 
       <ShortcutHelpModal
-        open={helpOpen}
+        open={activeGame === "kovaaks" && helpOpen}
         onClose={() => setHelpOpen(false)}
         title="Session Stats Shortcuts"
         note="Use `?` from anywhere in this window. Replay rows and recent-run rows open the selected replay directly when replay data exists."

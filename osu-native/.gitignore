@@ -1,0 +1,9 @@
+bin/
+obj/
+.idea/
+.vscode/
+TestResults/
+.build/
+artifacts/
+__pycache__/
+*.pyc

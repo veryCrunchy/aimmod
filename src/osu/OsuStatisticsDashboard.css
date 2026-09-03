@@ -1,0 +1,35 @@
+.osu-statistics-dashboard { min-height: 0; overflow: auto; padding: 12px; }
+.osu-stats-toolbar { align-items: center; background: var(--osu-panel); border: 1px solid var(--osu-line); border-radius: 12px; display: flex; gap: 14px; margin-bottom: 10px; min-height: 58px; padding: 10px 14px; }
+.osu-stats-toolbar > div:first-child { align-items: center; color: var(--osu-pink); display: flex; gap: 10px; margin-right: auto; }
+.osu-stats-toolbar > div:first-child span { display: grid; gap: 2px; }
+.osu-stats-toolbar strong { color: var(--osu-text); }
+.osu-stats-toolbar small, .osu-stats-toolbar label > span { color: var(--osu-muted); font-size: 9px; }
+.osu-stats-controls { background: rgba(255,255,255,0.025); border: 1px solid var(--osu-line); border-radius: 8px; display: flex; padding: 2px; }
+.osu-stats-controls button { background: transparent; border: 0; border-radius: 6px; color: var(--osu-muted); cursor: pointer; font: inherit; font-size: 10px; padding: 7px 9px; }
+.osu-stats-controls button:hover { color: var(--osu-text); }
+.osu-stats-controls button.active { background: var(--osu-pink-soft); color: var(--osu-pink); }
+.osu-stats-toolbar label { display: grid; gap: 2px; }
+.osu-stats-toolbar select { background: var(--osu-panel-2); border: 1px solid var(--osu-line); border-radius: 7px; color: var(--osu-text); font: inherit; font-size: 10px; min-width: 140px; padding: 7px 24px 7px 8px; }
+.osu-stats-kpis { display: grid; gap: 10px; grid-template-columns: repeat(4,minmax(0,1fr)); margin: 10px 0; }
+.osu-stats-kpis article { background: var(--osu-panel); border: 1px solid var(--osu-line); border-radius: 11px; display: grid; gap: 5px; padding: 14px; }
+.osu-stats-kpis span { color: var(--osu-muted); font-size: 9px; text-transform: uppercase; }
+.osu-stats-kpis strong { font-size: 22px; letter-spacing: -.02em; }
+.osu-stats-kpis small { color: var(--osu-sub); font-size: 9px; }
+.osu-stats-grid { display: grid; gap: 10px; grid-template-columns: repeat(2,minmax(0,1fr)); }
+.osu-stats-chart-card { background: var(--osu-panel); border: 1px solid var(--osu-line); border-radius: 12px; min-width: 0; padding: 14px 14px 8px; }
+.osu-stats-chart-card:nth-child(3) { grid-column: 1 / -1; }
+.osu-stats-chart-card > header div { display: grid; gap: 3px; }
+.osu-stats-chart-card > header strong { font-size: 12px; }
+.osu-stats-chart-card > header span { color: var(--osu-muted); font-size: 9px; }
+.osu-stats-chart { height: 260px; margin-top: 10px; min-width: 0; }
+.osu-stats-chart .recharts-cartesian-axis-tick-value, .osu-stats-chart .recharts-legend-item-text { fill: var(--osu-muted); color: var(--osu-muted) !important; font-size: 9px; }
+.osu-stats-chart .recharts-cartesian-grid line { stroke: rgba(255,255,255,.06); }
+.osu-stats-chart .recharts-default-tooltip { background: #17141d !important; border: 1px solid var(--osu-line) !important; border-radius: 8px; font-size: 10px; }
+.osu-stats-chart-empty { align-items: center; border: 1px dashed var(--osu-line); border-radius: 9px; color: var(--osu-muted); display: flex; font-size: 11px; height: 100%; justify-content: center; line-height: 1.5; padding: 22px; text-align: center; }
+.osu-stats-chart-empty code { color: var(--osu-sub); margin: 0 3px; }
+.osu-stats-provenance { background: rgba(255,255,255,.018); border: 1px solid var(--osu-line); border-radius: 10px; color: var(--osu-muted); font-size: 9px; margin-top: 10px; padding: 10px 12px; }
+.osu-stats-provenance summary { color: var(--osu-sub); cursor: pointer; }
+.osu-stats-provenance div { line-height: 1.55; padding-top: 8px; }
+.osu-stats-provenance p + p { margin-top: 6px; }
+@media (max-width: 960px) { .osu-stats-toolbar { align-items: stretch; flex-wrap: wrap; }.osu-stats-toolbar > div:first-child { flex-basis: 100%; }.osu-stats-kpis { grid-template-columns: repeat(2,minmax(0,1fr)); }.osu-stats-grid { grid-template-columns: 1fr; }.osu-stats-chart-card:nth-child(3) { grid-column: auto; } }
+@media (max-width: 620px) { .osu-stats-controls { width: 100%; }.osu-stats-controls button { flex: 1; }.osu-stats-kpis { grid-template-columns: 1fr 1fr; }.osu-stats-chart { height: 230px; } }

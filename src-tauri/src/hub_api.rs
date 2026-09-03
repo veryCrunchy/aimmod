@@ -897,10 +897,21 @@ async fn post_connect_json_once<TReq: Serialize, TResp: DeserializeOwned>(
         anyhow::bail!("hub request returned {status}: {body}");
     }
 
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
     let body = response
         .text()
         .await
         .context("error reading response body")?;
+    if !content_type.to_ascii_lowercase().contains("json") {
+        anyhow::bail!(
+            "AimMod Hub did not expose the Connect API route {path} (received {content_type})"
+        );
+    }
     let mut value: serde_json::Value = serde_json::from_str(&body)
         .with_context(|| format!("error decoding response body: {body}"))?;
     strip_null_fields(&mut value);
@@ -933,7 +944,7 @@ async fn post_json_once<TReq: Serialize, TResp: DeserializeOwned>(
         .context("error decoding response body")
 }
 
-async fn post_connect_json<TReq: Serialize, TResp: DeserializeOwned>(
+pub(crate) async fn post_connect_json<TReq: Serialize, TResp: DeserializeOwned>(
     app: &AppHandle,
     path: &str,
     payload: &TReq,

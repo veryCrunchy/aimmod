@@ -24,6 +24,9 @@
     "pipeline:win:release:stripped": "pwsh ./scripts/dev-pipeline.ps1 -RuntimeProfile minimal -SettingsProfile production -StrippedModBuild $true",
     "pipeline:win:release:stripped:devsettings": "pwsh ./scripts/dev-pipeline.ps1 -RuntimeProfile minimal -SettingsProfile development -StrippedModBuild $true",
     "audit:db": "python3 ./scripts/audit_stats_db.py",
+    "build:osu-realm-reader:linux": "bash ./scripts/build-linux-osu-realm-reader.sh",
+    "build:osu-replay-judge:linux": "bash ./scripts/build-linux-osu-replay-judge.sh",
+    "build:osu-replay-host:linux": "bash ./scripts/build-linux-osu-replay-host.sh",
     "build:win": "tauri build --verbose --runner cargo-xwin --target x86_64-pc-windows-msvc",
     "build:win:dev": "tauri build --verbose --no-bundle --runner cargo-xwin --target x86_64-pc-windows-msvc -- --profile dev-windows",
     "build:bridge": "cd kovaaks-bridge && cargo xwin build --target x86_64-pc-windows-msvc --release",
@@ -33,7 +36,9 @@
     "check": "cd src-tauri && cargo check --target x86_64-unknown-linux-gnu"
   },
   "dependencies": {
+    "@phosphor-icons/react": "^2.1.10",
     "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2.7.3",
     "@tauri-apps/plugin-process": "^2",
     "@tauri-apps/plugin-store": "^2",
     "@tauri-apps/plugin-updater": "^2",

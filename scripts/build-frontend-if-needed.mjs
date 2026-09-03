@@ -72,7 +72,18 @@ function loadCachedHash() {
 }
 
 function distOutputsExist() {
-  return requiredOutputs.every((filePath) => existsSync(filePath));
+  return requiredOutputs.every((filePath) => {
+    if (!existsSync(filePath)) {
+      return false;
+    }
+
+    // Vite rewrites source entrypoints to fingerprinted /assets/ files. A
+    // partially interrupted build can leave copied development HTML behind;
+    // embedding that in Tauri produces a blank window because /src is not
+    // shipped with the release.
+    const html = readFileSync(filePath, "utf8");
+    return html.includes("/assets/") && !html.includes('src="/src/');
+  });
 }
 
 function buildVia(command, args, label) {

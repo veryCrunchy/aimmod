@@ -35,7 +35,7 @@
       },
       {
         "label": "stats",
-        "title": "AimMod — Session Stats",
+        "title": "AimMod",
         "url": "stats.html",
         "decorations": true,
         "alwaysOnTop": false,
@@ -47,7 +47,11 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": []
+      }
     }
   },
   "bundle": {

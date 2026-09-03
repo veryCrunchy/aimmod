@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>aimmod-osu-worker</AssemblyName>
+    <Description>Headless worker implementation for AimMod's selected osu runtime code.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../AimMod.Osu.Runtime/AimMod.Osu.Runtime.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="ppy.osu.Game" Version="2026.730.0" />
+    <PackageReference Include="ppy.osu.Game.Rulesets.Osu" Version="2026.730.0" />
+  </ItemGroup>
+</Project>

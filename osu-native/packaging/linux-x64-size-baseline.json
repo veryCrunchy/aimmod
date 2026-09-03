@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "measuredOn": "2026-09-02",
+  "runtimeIdentifier": "linux-x64",
+  "dotnetSdk": "8.0.424",
+  "ppyVersion": "2026.730.0",
+  "fileCount": 376,
+  "componentLogicalBytes": {
+    "app": 298222216,
+    "metadata": 657
+  },
+  "logicalBytes": 298222873,
+  "physicalBytes": 298222873,
+  "gzipArchiveBytes": 174003137,
+  "archiveSha256": "a237d7d0410d053deb9de0d8d762438f4e58333497b49cf852874280240c0bc3",
+  "releaseGate": "single-apphost-worker-mode"
+}

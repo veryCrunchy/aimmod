@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "distribution": "aimmod-osu",
+  "dotnetSdk": "8.0.424",
+  "packages": [
+    {
+      "id": "ppy.osu.Game",
+      "version": "2026.730.0",
+      "usedBy": [
+        "src/AimMod.Desktop/AimMod.Desktop.csproj",
+        "src/AimMod.Osu.Worker/AimMod.Osu.Worker.csproj"
+      ]
+    },
+    {
+      "id": "ppy.osu.Game.Rulesets.Osu",
+      "version": "2026.730.0",
+      "usedBy": [
+        "src/AimMod.Desktop/AimMod.Desktop.csproj",
+        "src/AimMod.Osu.Worker/AimMod.Osu.Worker.csproj"
+      ]
+    }
+  ],
+  "containerFallback": {
+    "image": "mcr.microsoft.com/dotnet/sdk:8.0",
+    "requiredSdk": "8.0.424",
+    "pull": false
+  }
+}

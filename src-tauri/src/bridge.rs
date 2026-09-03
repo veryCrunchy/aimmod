@@ -252,7 +252,6 @@ pub struct BridgeRunSnapshot {
     pub tick_stream_v1: Option<BridgeTickStreamV1>,
 }
 
-#[cfg(target_os = "windows")]
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct BridgeLinkedIdentity {
     #[serde(default)]
@@ -267,7 +266,6 @@ pub struct BridgeLinkedIdentity {
     pub avatar_url: String,
 }
 
-#[cfg(target_os = "windows")]
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct BridgeCurrentUserProfile {
     #[serde(default)]
@@ -288,7 +286,6 @@ pub struct BridgeCurrentUserProfile {
     pub linked_accounts: Vec<BridgeLinkedIdentity>,
 }
 
-#[cfg(target_os = "windows")]
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct BridgeSocialFriendProfile {
     #[serde(default)]
@@ -305,7 +302,6 @@ pub struct BridgeSocialFriendProfile {
     pub kovaaks_user_id: String,
 }
 
-#[cfg(target_os = "windows")]
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BridgeFriendScoreEntry {
     #[serde(default)]
@@ -320,7 +316,6 @@ pub struct BridgeFriendScoreEntry {
     pub kovaaks_plus_active: bool,
 }
 
-#[cfg(target_os = "windows")]
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BridgeFriendScoresSnapshot {
     #[serde(default)]

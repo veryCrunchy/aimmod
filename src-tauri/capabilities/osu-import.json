@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "osu-import",
+  "description": "Allow the AimMod stats window to choose osu!lazer beatmap, replay, and skin files",
+  "windows": ["stats"],
+  "permissions": [
+    "dialog:allow-open"
+  ]
+}
