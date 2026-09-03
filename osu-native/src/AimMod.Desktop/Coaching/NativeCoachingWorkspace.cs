@@ -19,7 +19,6 @@ namespace AimMod.Desktop.Coaching;
 /// </summary>
 public partial class NativeCoachingWorkspace : CompositeDrawable
 {
-    private const int history_limit = CoachingLimits.MaximumRuns;
     private const int visible_run_limit = 24;
 
     private readonly ILocalLibrarySource source;
@@ -41,6 +40,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     private readonly FillFlowContainer<Drawable> recommendationHost;
     private readonly OsuTextBox search;
     private readonly FillFlowContainer<Drawable> runList;
+    private readonly AimModLoadingOverlay loadingOverlay;
 
     private CancellationTokenSource? loading;
     private IReadOnlyList<LocalReplay> replays = Array.Empty<LocalReplay>();
@@ -80,7 +80,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         content.Add(new GridContainer
         {
             RelativeSizeAxes = Axes.X,
-            Height = 646,
+            Height = 700,
             ColumnDimensions = new[]
             {
                 new Dimension(GridSizeMode.Relative, 0.63f),
@@ -113,10 +113,15 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             Spacing = new(7),
         });
 
-        InternalChild = new OsuScrollContainer
+        InternalChildren = new Drawable[]
         {
-            RelativeSizeAxes = Axes.Both,
-            Child = content,
+            new OsuScrollContainer
+            {
+                RelativeSizeAxes = Axes.Both,
+                Depth = 10,
+                Child = content,
+            },
+            loadingOverlay = new AimModLoadingOverlay(),
         };
     }
 
@@ -133,6 +138,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         loading?.Dispose();
         loading = new CancellationTokenSource();
         status.Text = "Loading your local play history...";
+        loadingOverlay.ShowLoading("Preparing coaching", "Reading your local osu!standard history");
         _ = loadAsync(loading.Token);
     }
 
@@ -140,13 +146,10 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     {
         try
         {
-            LocalLibraryPage<LocalReplay> page = await source.SearchReplaysAsync(new LocalLibraryQuery(
-                RulesetShortName: "osu",
-                Sort: LocalLibrarySort.RecentlyPlayed,
-                Limit: history_limit), cancellationToken).ConfigureAwait(false);
-            NativeCoachingWorkspaceModel next = NativeCoachingWorkspaceModel.Build(page.Items, analyses);
+            StatisticsHistoryLoadResult history = await StatisticsHistoryLoader.LoadAsync(source, cancellationToken).ConfigureAwait(false);
+            NativeCoachingWorkspaceModel next = NativeCoachingWorkspaceModel.Build(history.Runs, analyses);
             if (!IsDisposed)
-                Schedule(() => apply(page.Items, page.Total, next));
+                Schedule(() => apply(history.Runs, history.TotalAvailableRunCount, next));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -154,7 +157,11 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         catch (Exception error)
         {
             if (!IsDisposed)
-                Schedule(() => status.Text = $"Your local play history could not be loaded. {error.Message}");
+                Schedule(() =>
+                {
+                    loadingOverlay.HideLoading();
+                    status.Text = $"Your local play history could not be loaded. {error.Message}";
+                });
         }
     }
 
@@ -165,6 +172,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         status.Text = total > nextReplays.Count
             ? $"Coaching uses your latest {nextReplays.Count:N0} of {total:N0} local osu!standard plays"
             : $"Coaching uses {nextReplays.Count:N0} local osu!standard plays";
+        loadingOverlay.HideLoading();
         updateWorkspace();
     }
 
@@ -182,6 +190,11 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         status.Text = completed >= total
             ? $"Analysed {total:N0} recent saved {(total == 1 ? "replay" : "replays")}. Updating coaching..."
             : $"Analysing recent saved replays {completed + 1:N0}/{total:N0}: {currentTitle}";
+        loadingOverlay.ShowLoading(
+            "Analysing recent replays",
+            completed >= total ? "Updating your coaching report" : currentTitle,
+            completed,
+            total);
     }
 
     public void ApplyNewAnalyses(int completed, int failed)
@@ -197,10 +210,14 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             _ when failed > 0 => "Recent saved replays could not be analysed. You can still open any available replay below.",
             _ => status.Text,
         };
+        loadingOverlay.HideLoading();
     }
 
-    public void SetAnalysisError() =>
+    public void SetAnalysisError()
+    {
+        loadingOverlay.HideLoading();
         status.Text = "Recent replay analysis stopped. You can still open any available replay below.";
+    }
 
     private void updateWorkspace()
     {
@@ -213,7 +230,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         updateSelectedRun(selected, report.Intelligence.SelectedRunPrediction);
         updateExactAnalysis(selected);
         updateChanges(report.Intelligence);
-        updateRecommendation(report.Intelligence.Recommendations.FirstOrDefault());
+        updateRecommendation(report.Intelligence.Recommendations);
         refreshRunList();
     }
 
@@ -343,13 +360,14 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             AimModPalette.Success));
     }
 
-    private void updateRecommendation(CoachingRecommendation? recommendation)
+    private void updateRecommendation(IReadOnlyList<CoachingRecommendation> recommendations)
     {
         recommendationHost.Clear();
+        CoachingRecommendation? recommendation = recommendations.FirstOrDefault();
         if (recommendation is null)
         {
             recommendationHost.Add(flow(
-                "Play more local maps with saved replays. AimMod will recommend a comparable setup once the history is large enough.",
+                "Play more comparable local maps with saved replays. AimMod will recommend a focused practice target once the history is large enough.",
                 13,
                 AimModPalette.Muted));
             return;
@@ -678,6 +696,14 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         Colour = colour,
     };
 
+    private static TruncatingSpriteText truncatingLabel(string text, float size, Colour4 colour, float maxWidth, string weight = "Regular") => new()
+    {
+        Text = text,
+        Font = new FontUsage(size: size, weight: weight),
+        Colour = colour,
+        MaxWidth = maxWidth,
+    };
+
     private static OsuTextFlowContainer flow(string text, float size, Colour4 colour, string weight = "Regular") => new(sprite =>
     {
         sprite.Font = new FontUsage(size: size, weight: weight);
@@ -764,15 +790,18 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                 {
                     Anchor = Anchor.CentreLeft,
                     Origin = Anchor.CentreLeft,
-                    AutoSizeAxes = Axes.Both,
+                    RelativeSizeAxes = Axes.X,
+                    AutoSizeAxes = Axes.Y,
+                    Width = 1,
                     Margin = new MarginPadding { Left = 18 },
+                    Padding = new MarginPadding { Right = 190 },
                     Direction = FillDirection.Vertical,
                     Spacing = new(3),
                     Children = new Drawable[]
                     {
-                        label($"{run.Title} [{run.Difficulty}]", 16, AimModPalette.Text, "Bold"),
-                        label($"{run.Artist}  //  {run.PlayedAt:yyyy-MM-dd HH:mm}", 11, AimModPalette.Muted),
-                        label($"{run.Accuracy:P2}  //  {run.MissCount:N0} misses  //  {run.MaxCombo:N0}x", 12, AimModPalette.Cyan, "SemiBold"),
+                        truncatingLabel($"{run.Title} [{run.Difficulty}]", 16, AimModPalette.Text, 520, "Bold"),
+                        truncatingLabel($"{run.Artist}  //  {run.PlayedAt:yyyy-MM-dd HH:mm}", 11, AimModPalette.Muted, 520),
+                        truncatingLabel($"{run.Accuracy:P2}  //  {run.MissCount:N0} misses  //  {run.MaxCombo:N0}x{formatPpSuffix(run.PerformancePoints)}", 12, AimModPalette.Cyan, 520, "SemiBold"),
                     },
                 },
                 new FillFlowContainer
@@ -795,6 +824,9 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             };
         }
     }
+
+    private static string formatPpSuffix(double? pp) =>
+        pp is { } value && double.IsFinite(value) && value > 0 ? $"  //  {value:0.0}pp" : string.Empty;
 
     private partial class RecommendationCard : CompositeDrawable
     {
@@ -823,7 +855,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                     Children = new Drawable[]
                     {
                         label(recommendation.Intent.ToUpperInvariant(), 9, AimModPalette.Pink, "Bold"),
-                        label($"{recommendation.Title} [{recommendation.Difficulty}]", 15, AimModPalette.Text, "Bold"),
+                        truncatingLabel($"{recommendation.Title} [{recommendation.Difficulty}]", 15, AimModPalette.Text, 440, "Bold"),
                         flow(recommendation.Reason, 10, AimModPalette.Muted),
                     },
                 },
@@ -880,14 +912,17 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                 {
                     Anchor = Anchor.CentreLeft,
                     Origin = Anchor.CentreLeft,
-                    AutoSizeAxes = Axes.Both,
+                    RelativeSizeAxes = Axes.X,
+                    AutoSizeAxes = Axes.Y,
+                    Width = 1,
                     Margin = new MarginPadding { Left = 17 },
+                    Padding = new MarginPadding { Right = 280 },
                     Direction = FillDirection.Vertical,
                     Spacing = new(2),
                     Children = new Drawable[]
                     {
-                        label($"{run.Title} [{run.Difficulty}]", 14, AimModPalette.Text, "SemiBold"),
-                        label($"{run.Artist}  //  {run.PlayedAt:MMM d, HH:mm}  //  {formatMods(run.Mods)}", 10, AimModPalette.Muted),
+                        truncatingLabel($"{run.Title} [{run.Difficulty}]", 14, AimModPalette.Text, 520, "SemiBold"),
+                        truncatingLabel($"{run.Artist}  //  {run.PlayedAt:MMM d, HH:mm}  //  {formatMods(run.Mods)}", 10, AimModPalette.Muted, 520),
                     },
                 },
                 new FillFlowContainer

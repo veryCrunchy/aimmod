@@ -214,6 +214,93 @@ public sealed record CoachingRecommendation(
     CoachingConfidence Confidence,
     int SampleCount);
 
+public sealed record CoachingPpOpportunity(
+    int Rank,
+    Guid BeatmapId,
+    Guid ScoreId,
+    string Title,
+    string Difficulty,
+    double StarRating,
+    double CurrentPp,
+    double ProjectedPp,
+    double RealisticGain,
+    double? TargetAccuracy,
+    int? TargetMissCount,
+    CoachingConfidence Confidence,
+    int SameSetupSampleCount,
+    int SimilarStarSampleCount,
+    string Reason,
+    double ProfilePpGain = 0);
+
+public sealed record CoachingPpPlan(
+    int PpRunCount,
+    double? CurrentBestScorePp,
+    double? BestOpportunityGain,
+    double? TopThreeRawGain,
+    CoachingConfidence Confidence,
+    string Summary,
+    IReadOnlyList<CoachingPpOpportunity> Opportunities,
+    double? BestProfilePpGain = null,
+    double? TopThreeProfilePpGain = null);
+
+public static class CoachingPpWeighting
+{
+    private const int maximum_weighted_scores = 100;
+    private const double score_weight = 0.95;
+
+    public static double CalculateProfileGain(
+        IReadOnlyList<LocalReplay> history,
+        Guid beatmapId,
+        double projectedPp)
+    {
+        ArgumentNullException.ThrowIfNull(history);
+        if (beatmapId == Guid.Empty || !double.IsFinite(projectedPp) || projectedPp < 0)
+            return 0;
+
+        Dictionary<Guid, double> bestByBeatmap = history.Where(run => run.BeatmapId != Guid.Empty
+                                                                       && run.PerformancePoints is { } pp
+                                                                       && double.IsFinite(pp)
+                                                                       && pp >= 0)
+                                                            .GroupBy(run => run.BeatmapId)
+                                                            .ToDictionary(
+                                                                group => group.Key,
+                                                                group => group.Max(run => run.PerformancePoints!.Value));
+        double before = weightedTotal(bestByBeatmap.Values);
+        bestByBeatmap[beatmapId] = Math.Max(projectedPp, bestByBeatmap.GetValueOrDefault(beatmapId));
+        return Math.Max(0, weightedTotal(bestByBeatmap.Values) - before);
+    }
+
+    public static double CalculateCombinedProfileGain(
+        IReadOnlyList<LocalReplay> history,
+        IEnumerable<(Guid BeatmapId, double ProjectedPp)> projections)
+    {
+        ArgumentNullException.ThrowIfNull(history);
+        ArgumentNullException.ThrowIfNull(projections);
+        Dictionary<Guid, double> bestByBeatmap = history.Where(run => run.BeatmapId != Guid.Empty
+                                                                       && run.PerformancePoints is { } pp
+                                                                       && double.IsFinite(pp)
+                                                                       && pp >= 0)
+                                                            .GroupBy(run => run.BeatmapId)
+                                                            .ToDictionary(
+                                                                group => group.Key,
+                                                                group => group.Max(run => run.PerformancePoints!.Value));
+        double before = weightedTotal(bestByBeatmap.Values);
+        foreach ((Guid targetBeatmapId, double targetPp) in projections)
+        {
+            if (targetBeatmapId == Guid.Empty || !double.IsFinite(targetPp) || targetPp < 0)
+                continue;
+            bestByBeatmap[targetBeatmapId] = Math.Max(targetPp, bestByBeatmap.GetValueOrDefault(targetBeatmapId));
+        }
+        return Math.Max(0, weightedTotal(bestByBeatmap.Values) - before);
+    }
+
+    private static double weightedTotal(IEnumerable<double> scores) =>
+        scores.OrderByDescending(score => score)
+              .Take(maximum_weighted_scores)
+              .Select((score, index) => score * Math.Pow(score_weight, index))
+              .Sum();
+}
+
 public sealed record CoachingIntelligence(
     CoachingHistoryQuality History,
     CoachingPerformanceTrend Trend,
@@ -222,6 +309,7 @@ public sealed record CoachingIntelligence(
     CoachingSetupBenchmark? SelectedRunBenchmark,
     CoachingSessionDrift SessionDrift,
     CoachingMechanicsProfile Mechanics,
+    CoachingPpPlan PpPlan,
     IReadOnlyList<CoachingRecommendation> Recommendations)
 {
     public static CoachingIntelligence Empty { get; } = new(
@@ -232,6 +320,7 @@ public sealed record CoachingIntelligence(
         null,
         new CoachingSessionDrift(0, null, null, CoachingConfidence.Insufficient, "No multi-play sessions yet."),
         new CoachingMechanicsProfile(0, 0, 0, null, null, 0, null, 0, null, null, null, null, null, Array.Empty<CoachingMapSegment>()),
+        new CoachingPpPlan(0, null, null, null, CoachingConfidence.Insufficient, "No local osu!standard plays with PP values are available yet.", Array.Empty<CoachingPpOpportunity>()),
         Array.Empty<CoachingRecommendation>());
 }
 
@@ -248,13 +337,15 @@ public sealed record CoachingReport(
 
 public static class CoachingLimits
 {
-    public const int MaximumRuns = 200;
+    public const int MaximumRuns = StatisticsHistoryLoader.MaximumRuns;
     public const double CentredTimingThresholdMilliseconds = 10;
     public const int MinimumTimingSamplesForDirectionAdvice = 10;
     public const double DirectionAdviceThresholdMilliseconds = 12;
     public const double DifficultyBandWidth = 0.5;
     public const int PredictionNeighbourLimit = 80;
     public const int RecommendationLimit = 5;
+    public const int MaximumRecommendationCandidates = 200;
+    public const int MaximumPpCandidateSetups = 600;
     public const int MinimumRunsPerDifficultyBand = 3;
     public const int MinimumPlaysPerSession = 4;
     public const int SessionGapMinutes = 45;

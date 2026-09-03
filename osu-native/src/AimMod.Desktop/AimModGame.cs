@@ -23,6 +23,7 @@ using AimMod.Desktop.Discovery;
 using AimMod.Desktop.Coaching;
 using AimMod.Desktop.Visuals;
 using AimMod.Desktop.Skins;
+using AimMod.Desktop.PpTargets;
 using osu.Game.Graphics.Sprites;
 
 namespace AimMod.Desktop;
@@ -41,10 +42,14 @@ public partial class AimModGame : OsuGameBase
     private readonly AimModLaunchOptions launchOptions;
     private readonly ILocalLibrarySource? configuredLocalLibrary;
     private Container content = null!;
+    private HomeScreen? homeScreen;
+    private NativeBeatmapDiscoveryScreen? beatmapsScreen;
     private NativeReplayRouteView? replayRoute;
+    private ReplayHistoryScreen? statisticsScreen;
     private CancellationTokenSource? replayAnalysisLifetime;
     private CancellationTokenSource? coachingAnalysisLifetime;
     private NativeCoachingWorkspace? coachingWorkspace;
+    private NativePpTargetsWorkspace? ppTargetsWorkspace;
     private readonly CancellationTokenSource appLifetime = new();
     private readonly Bindable<NativeRoute> currentRoute = new(NativeRoute.Home);
     private ILocalLibrarySource localLibrary = null!;
@@ -55,8 +60,10 @@ public partial class AimModGame : OsuGameBase
     private LazerSessionMonitor? lazerSessionMonitor;
     private LazerPreferencesMonitor? lazerPreferencesMonitor;
     private OfficialOsuApiClient? officialApiClient;
-    private OfficialBeatmapDiscoveryClient? officialBeatmapDiscoveryClient;
+    private IOfficialBeatmapDiscoveryClient? officialBeatmapDiscoveryClient;
     private OnlineBeatmapImportService? onlineBeatmapImportService;
+    private IPpTargetExactCalculationService? ppTargetExactCalculationService;
+    private ILocalScorePpHydrationService? localScorePpHydrationService;
     private ExternalLazerInstalledSkinSource? externalSkinSource;
     private ExternalLazerSkinApplyService? externalSkinApplyService;
     private NativeSkinsScreen? skinsScreen;
@@ -66,6 +73,8 @@ public partial class AimModGame : OsuGameBase
     private ExternalLazerReplayOpenService? externalReplayOpenService;
     private ReplayAnalysisBatchService? replayAnalysisBatchService;
     private readonly Dictionary<Guid, ReplayAnalysisResult> replayAnalyses = new();
+    private readonly HashSet<Guid> replayAnalysisFailures = new();
+    private readonly Dictionary<NativeRoute, Container> workspaceHosts = new();
     private ReplayAnalysisCache? replayAnalysisCache;
     private Guid? activeReplayScoreId;
     private CancellationTokenSource? profileRefreshCancellation;
@@ -128,9 +137,12 @@ public partial class AimModGame : OsuGameBase
                 content = new Container
                 {
                     RelativeSizeAxes = Axes.Both,
-                    Padding = new MarginPadding { Top = 88, Horizontal = 52, Bottom = 36 },
+                    Depth = 0,
                 },
-                header = new HeaderBar(currentRoute, showHome, showBeatmaps, showSkins, showReplays, showStatistics, showCoaching),
+                header = new HeaderBar(currentRoute, showHome, showBeatmaps, showSkins, showReplays, showStatistics, showCoaching, showPpTargets)
+                {
+                    Depth = -100,
+                },
             },
         });
 
@@ -179,6 +191,9 @@ public partial class AimModGame : OsuGameBase
             if (switchableLocalLibrary is not null)
             {
                 var externalLibrary = new ExternalLazerLocalLibrarySource(root.CanonicalPath);
+                localScorePpHydrationService = new LocalScorePpHydrationService(
+                    root.CanonicalPath,
+                    Storage.GetFullPath("cache/local-score-pp-v1.json", true));
                 Schedule(() =>
                 {
                     switchableLocalLibrary.SwitchTo(externalLibrary);
@@ -209,7 +224,14 @@ public partial class AimModGame : OsuGameBase
                 cancellationToken).ConfigureAwait(false);
             lazerSessionMonitor = monitor;
             officialApiClient = new OfficialOsuApiClient(monitor);
-            officialBeatmapDiscoveryClient = new OfficialBeatmapDiscoveryClient(monitor);
+            officialBeatmapDiscoveryClient = new CachedOfficialBeatmapDiscoveryClient(
+                new OfficialBeatmapDiscoveryClient(monitor),
+                Storage.GetFullPath("cache/official-beatmap-search-v1.json", true));
+            ppTargetExactCalculationService = new PpTargetExactCalculationService(
+                root.CanonicalPath,
+                Storage.GetFullPath("cache/pp-target-exact-v2.json", true),
+                (IOfficialBeatmapDifficultyClient)officialBeatmapDiscoveryClient,
+                Storage.GetFullPath("downloads/pp-target-difficulties", true));
             var lazerBeatmapInstallService = new LazerBeatmapInstallService(
                 Storage.GetFullPath("downloads/lazer-handoff", true));
             onlineBeatmapImportService = new OnlineBeatmapImportService(
@@ -309,46 +331,37 @@ public partial class AimModGame : OsuGameBase
 
     private void showHome()
     {
-        cancelReplayWork();
-        currentRoute.Value = NativeRoute.Home;
-        content.Padding = new MarginPadding { Top = 88, Horizontal = 52, Bottom = 36 };
-        content.Child = new HomeScreen(showBeatmaps, showReplays, showStatistics, showCoaching) { RelativeSizeAxes = Axes.Both };
+        homeScreen ??= new HomeScreen(showBeatmaps, showReplays, showStatistics, showCoaching) { RelativeSizeAxes = Axes.Both };
+        switchWorkspaceRoute(NativeRoute.Home, new MarginPadding { Top = 88, Horizontal = 52, Bottom = 36 }, homeScreen);
     }
 
     private void showBeatmaps()
     {
-        currentRoute.Value = NativeRoute.Beatmaps;
-        cancelReplayWork();
-        content.Padding = new MarginPadding { Top = 88, Horizontal = 52, Bottom = 36 };
-        content.Child = new NativeBeatmapDiscoveryScreen(
+        beatmapsScreen ??= new NativeBeatmapDiscoveryScreen(
             localLibrary,
             () => officialBeatmapDiscoveryClient,
             () => onlineBeatmapImportService)
         {
             RelativeSizeAxes = Axes.Both,
         };
+        switchWorkspaceRoute(NativeRoute.Beatmaps, new MarginPadding { Top = 88, Horizontal = 52, Bottom = 36 }, beatmapsScreen);
     }
 
     private void showReplays()
     {
-        currentRoute.Value = NativeRoute.Replays;
-        cancelReplayWork();
-        content.Padding = new MarginPadding { Top = 70, Horizontal = 12, Bottom = 12 };
-        content.Child = replayRoute = new NativeReplayRouteView(
+        replayRoute ??= new NativeReplayRouteView(
             localLibrary,
-            new Dictionary<Guid, ReplayAnalysisResult>(replayAnalyses),
+            replayAnalyses,
             prepareCatalogReplay)
         {
             RelativeSizeAxes = Axes.Both,
         };
+        switchWorkspaceRoute(NativeRoute.Replays, new MarginPadding { Top = 70, Horizontal = 12, Bottom = 12 }, replayRoute);
     }
 
     private void showSkins()
     {
-        currentRoute.Value = NativeRoute.Skins;
-        cancelReplayWork();
-        content.Padding = new MarginPadding { Top = 88, Horizontal = 52, Bottom = 36 };
-        content.Child = skinsScreen = new NativeSkinsScreen(
+        skinsScreen ??= new NativeSkinsScreen(
             externalSkinSource,
             lazerPreferencesMonitor?.Current.SkinId,
             appliedExternalSkinId,
@@ -356,6 +369,12 @@ public partial class AimModGame : OsuGameBase
         {
             RelativeSizeAxes = Axes.Both,
         };
+        skinsScreen.Configure(
+            externalSkinSource,
+            lazerPreferencesMonitor?.Current.SkinId,
+            appliedExternalSkinId,
+            applySelectedSkin);
+        switchWorkspaceRoute(NativeRoute.Skins, new MarginPadding { Top = 88, Horizontal = 52, Bottom = 36 }, skinsScreen);
     }
 
     private void followLazerSkin(Guid skinId)
@@ -413,32 +432,73 @@ public partial class AimModGame : OsuGameBase
 
     private void showStatistics()
     {
-        currentRoute.Value = NativeRoute.Statistics;
-        cancelReplayWork();
-        content.Padding = new MarginPadding { Top = 88, Horizontal = 52, Bottom = 0 };
-        content.Child = new ReplayHistoryScreen(
+        statisticsScreen ??= new ReplayHistoryScreen(
             localLibrary,
             ReplayHistoryScreenMode.Statistics,
-            new Dictionary<Guid, ReplayAnalysisResult>(replayAnalyses),
+            replayAnalyses,
             prepareCatalogReplay)
         {
             RelativeSizeAxes = Axes.Both,
         };
+        switchWorkspaceRoute(NativeRoute.Statistics, new MarginPadding { Top = 88, Horizontal = 52, Bottom = 0 }, statisticsScreen);
     }
 
     private void showCoaching()
     {
-        currentRoute.Value = NativeRoute.Coaching;
-        cancelReplayWork();
-        content.Padding = new MarginPadding { Top = 88, Horizontal = 52, Bottom = 0 };
-        content.Child = coachingWorkspace = new NativeCoachingWorkspace(
+        coachingWorkspace ??= new NativeCoachingWorkspace(
             localLibrary,
             replayAnalyses,
             prepareCatalogReplay)
         {
             RelativeSizeAxes = Axes.Both,
         };
+        switchWorkspaceRoute(NativeRoute.Coaching, new MarginPadding { Top = 88, Horizontal = 52, Bottom = 0 }, coachingWorkspace);
         startCoachingAnalysis();
+    }
+
+    private void showPpTargets()
+    {
+        ppTargetsWorkspace ??= new NativePpTargetsWorkspace(
+            localLibrary,
+            () => officialBeatmapDiscoveryClient,
+            () => onlineBeatmapImportService,
+            () => ppTargetExactCalculationService,
+            () => localScorePpHydrationService,
+            () => officialApiClient)
+        {
+            RelativeSizeAxes = Axes.Both,
+        };
+        switchWorkspaceRoute(NativeRoute.PpTargets, new MarginPadding { Top = 88, Horizontal = 52, Bottom = 24 }, ppTargetsWorkspace);
+    }
+
+    private void switchWorkspaceRoute(NativeRoute route, MarginPadding padding, Drawable screen)
+    {
+        if (workspaceHosts.TryGetValue(route, out Container? existingHost)
+            && currentRoute.Value == route
+            && existingHost.IsPresent)
+            return;
+
+        if (currentRoute.Value == NativeRoute.Replays && route != NativeRoute.Replays)
+            replayRoute?.SuspendPlayback();
+
+        foreach (Container host in workspaceHosts.Values)
+            host.Hide();
+
+        if (existingHost is null)
+        {
+            existingHost = new Container
+            {
+                RelativeSizeAxes = Axes.Both,
+                Padding = padding,
+                Alpha = 0,
+                Child = screen,
+            };
+            workspaceHosts.Add(route, existingHost);
+            content.Add(existingHost);
+        }
+
+        currentRoute.Value = route;
+        existingHost.Show();
     }
 
     private void startCoachingAnalysis()
@@ -470,8 +530,8 @@ public partial class AimModGame : OsuGameBase
             });
             ReplayAnalysisBatchResult result = await service.AnalyseRecentAsync(
                 page.Items,
-                replayAnalyses.Keys.ToArray(),
-                limit: 3,
+                replayAnalyses.Keys.Concat(replayAnalysisFailures).ToArray(),
+                limit: ReplayAnalysisBatchService.MaximumBatchSize,
                 progress,
                 cancellationToken).ConfigureAwait(false);
 
@@ -480,7 +540,13 @@ public partial class AimModGame : OsuGameBase
                 Schedule(() =>
                 {
                     foreach ((Guid scoreId, ReplayAnalysisResult analysis) in result.Completed)
+                    {
                         replayAnalyses[scoreId] = analysis;
+                        replayAnalysisFailures.Remove(scoreId);
+                    }
+
+                    foreach (Guid scoreId in result.Failed)
+                        replayAnalysisFailures.Add(scoreId);
 
                     if (result.Completed.Count > 0)
                         _ = persistReplayAnalyses();
@@ -524,14 +590,9 @@ public partial class AimModGame : OsuGameBase
         cancelReplayWork();
         activeReplayScoreId = scoreId;
         replayAnalysisLifetime = CancellationTokenSource.CreateLinkedTokenSource(appLifetime.Token);
-        currentRoute.Value = NativeRoute.Replays;
-        content.Padding = new MarginPadding { Top = 70, Horizontal = 12, Bottom = 12 };
-        content.Child = replayRoute = new NativeReplayRouteView(
-            localLibrary,
-            new Dictionary<Guid, ReplayAnalysisResult>(replayAnalyses),
-            prepareCatalogReplay);
+        showReplays();
         if (replay is not null)
-            replayRoute.SetReplaySummary(replay);
+            replayRoute!.SetReplaySummary(replay);
         return replayAnalysisLifetime.Token;
     }
 
@@ -744,15 +805,13 @@ public partial class AimModGame : OsuGameBase
         replayAnalysisLifetime = null;
         work?.Cancel();
         work?.Dispose();
-        replayRoute = null;
+        replayRoute?.SuspendPlayback();
         activeReplayScoreId = null;
 
         CancellationTokenSource? coachingWork = coachingAnalysisLifetime;
         coachingAnalysisLifetime = null;
         coachingWork?.Cancel();
         coachingWork?.Dispose();
-        coachingWorkspace = null;
-        skinsScreen = null;
     }
 
     protected override void Dispose(bool isDisposing)
@@ -763,7 +822,7 @@ public partial class AimModGame : OsuGameBase
         skinApplyLifetime?.Cancel();
         skinApplyLifetime?.Dispose();
         officialApiClient?.Dispose();
-        officialBeatmapDiscoveryClient?.Dispose();
+        (officialBeatmapDiscoveryClient as IDisposable)?.Dispose();
         if (lazerSessionMonitor is not null)
         {
             lazerSessionMonitor.StateChanged -= lazerSessionChanged;
@@ -791,7 +850,8 @@ public partial class AimModGame : OsuGameBase
             Action showSkins,
             Action showReplays,
             Action showStatistics,
-            Action showCoaching)
+            Action showCoaching,
+            Action showPpTargets)
         {
             RelativeSizeAxes = Axes.X;
             Height = 70;
@@ -840,7 +900,7 @@ public partial class AimModGame : OsuGameBase
                     Anchor = Anchor.Centre,
                     Origin = Anchor.Centre,
                     Direction = FillDirection.Horizontal,
-                    Spacing = new(10),
+                    Spacing = new(5),
                     Children = new Drawable[]
                     {
                         new NavItem("Home", NativeRoute.Home, currentRoute, showHome),
@@ -849,6 +909,7 @@ public partial class AimModGame : OsuGameBase
                         new NavItem("Replays", NativeRoute.Replays, currentRoute, showReplays),
                         new NavItem("Statistics", NativeRoute.Statistics, currentRoute, showStatistics),
                         new NavItem("Coaching", NativeRoute.Coaching, currentRoute, showCoaching),
+                        new NavItem("PP Targets", NativeRoute.PpTargets, currentRoute, showPpTargets),
                     },
                 },
                 sessionState = text("Finding osu!lazer...", 13, AimModPalette.Muted).With(drawable =>
@@ -1030,7 +1091,7 @@ public partial class AimModGame : OsuGameBase
         {
             this.action = action;
             AutoSizeAxes = Axes.Both;
-            Padding = new MarginPadding { Horizontal = 13, Vertical = 9 };
+            Padding = new MarginPadding { Horizontal = 9, Vertical = 9 };
             Children = new Drawable[]
             {
                 label = text(textValue, 14, AimModPalette.Muted),
@@ -1070,6 +1131,7 @@ public partial class AimModGame : OsuGameBase
         Replays,
         Statistics,
         Coaching,
+        PpTargets,
     }
 
     private partial class Pill : CircularContainer

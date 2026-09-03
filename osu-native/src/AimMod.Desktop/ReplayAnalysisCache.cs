@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AimMod.Desktop.LocalLibrary;
 using AimMod.Osu.Runtime.Contracts;
 
 namespace AimMod.Desktop;
@@ -9,7 +10,7 @@ namespace AimMod.Desktop;
 /// </summary>
 public sealed class ReplayAnalysisCache
 {
-    internal const int CurrentVersion = 1;
+    internal const int CurrentVersion = 2;
     internal const int MaximumEntries = 100;
     internal const long MaximumFileBytes = 64 * 1024 * 1024;
 
@@ -40,7 +41,7 @@ public sealed class ReplayAnalysisCache
                 Options = FileOptions.SequentialScan,
             });
             CacheDocument? document = JsonSerializer.Deserialize<CacheDocument>(stream, jsonOptions);
-            if (document is null || document.Version != CurrentVersion)
+            if (document is null || document.Version != CurrentVersion || document.Entries is null)
                 return new Dictionary<Guid, ReplayAnalysisResult>();
 
             return document.Entries
@@ -52,6 +53,33 @@ public sealed class ReplayAnalysisCache
         {
             return new Dictionary<Guid, ReplayAnalysisResult>();
         }
+    }
+
+    public IReadOnlyDictionary<Guid, ReplayAnalysisResult> LoadMatching(
+        IReadOnlyDictionary<Guid, ReplayAnalysisContentIdentity> currentContentIdentities)
+    {
+        ArgumentNullException.ThrowIfNull(currentContentIdentities);
+
+        return Load().Where(pair => currentContentIdentities.TryGetValue(pair.Key, out ReplayAnalysisContentIdentity? current)
+                                    && contentIdentityMatches(pair.Value.ContentIdentity, current))
+                     .ToDictionary();
+    }
+
+    public IReadOnlyDictionary<Guid, ReplayAnalysisResult> LoadMatching(IEnumerable<LocalReplay> currentReplays)
+    {
+        ArgumentNullException.ThrowIfNull(currentReplays);
+
+        Dictionary<Guid, string> beatmapIdentities = currentReplays
+                                                     .Where(replay => replay.ScoreId != Guid.Empty && isSha256(replay.BeatmapHash))
+                                                     .GroupBy(replay => replay.ScoreId)
+                                                     .ToDictionary(group => group.Key, group => group.Last().BeatmapHash);
+
+        return Load().Where(pair => beatmapIdentities.TryGetValue(pair.Key, out string? beatmapSha256)
+                                    && string.Equals(
+                                        pair.Value.ContentIdentity!.BeatmapSha256,
+                                        beatmapSha256,
+                                        StringComparison.OrdinalIgnoreCase))
+                     .ToDictionary();
     }
 
     public async Task SaveAsync(
@@ -111,8 +139,28 @@ public sealed class ReplayAnalysisCache
     private static bool isValid(ReplayAnalysisResult? result) =>
         result is not null &&
         string.Equals(result.EngineVersion, ReplayAnalysisProtocol.EngineVersion, StringComparison.Ordinal) &&
+        isValid(result.ContentIdentity) &&
+        result.Judgements is not null &&
         result.Judgements.Count <= ReplayAnalysisProtocol.MaximumJudgements &&
+        result.Pauses is not null &&
+        result.Summary is not null &&
         result.Pauses.Count <= ReplayAnalysisProtocol.MaximumPauses;
+
+    private static bool isValid(ReplayAnalysisContentIdentity? identity) =>
+        identity is not null &&
+        isSha256(identity.BeatmapSha256) &&
+        isSha256(identity.ReplaySha256);
+
+    private static bool contentIdentityMatches(
+        ReplayAnalysisContentIdentity? cached,
+        ReplayAnalysisContentIdentity? current) =>
+        isValid(cached) &&
+        isValid(current) &&
+        string.Equals(cached!.BeatmapSha256, current!.BeatmapSha256, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(cached.ReplaySha256, current.ReplaySha256, StringComparison.OrdinalIgnoreCase);
+
+    private static bool isSha256(string? value) =>
+        value is { Length: 64 } && value.All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f' or >= 'A' and <= 'F');
 
     internal sealed record CacheDocument(int Version, IReadOnlyList<CacheEntry> Entries);
     internal sealed record CacheEntry(Guid ScoreId, ReplayAnalysisResult? Result);

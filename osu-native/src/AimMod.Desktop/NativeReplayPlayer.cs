@@ -106,6 +106,19 @@ public partial class NativeReplayPlayer : ReplayPlayer
     });
 
     /// <summary>
+    /// Stops playback synchronously before this player is hidden or removed from the drawable hierarchy.
+    /// </summary>
+    public bool SuspendPlayback()
+    {
+        if (!isTransportReady.Value)
+            return false;
+
+        GameplayClockContainer.Stop();
+        updateTransportState();
+        return true;
+    }
+
+    /// <summary>
     /// Seeks to a time in milliseconds, clamped to the playable beatmap timeline.
     /// </summary>
     /// <returns>Whether the command was accepted for scheduling.</returns>

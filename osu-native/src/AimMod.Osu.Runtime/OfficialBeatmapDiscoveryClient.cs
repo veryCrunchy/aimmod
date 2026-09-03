@@ -8,10 +8,11 @@ using System.Text.Json.Serialization;
 
 namespace AimMod.Osu.Runtime;
 
-public sealed class OfficialBeatmapDiscoveryClient : IOfficialBeatmapDiscoveryClient, IDisposable
+public sealed class OfficialBeatmapDiscoveryClient : IOfficialBeatmapDiscoveryClient, IOfficialBeatmapDifficultyClient, IDisposable
 {
     private const int maximum_search_response_bytes = 8 * 1024 * 1024;
     private const long maximum_archive_bytes = 512L * 1024 * 1024;
+    private const long maximum_difficulty_bytes = 16L * 1024 * 1024;
     private const int maximum_redirects = 3;
     private static readonly Uri search_endpoint = new("https://osu.ppy.sh/api/v2/beatmapsets/search", UriKind.Absolute);
     private static readonly JsonSerializerOptions json_options = new(JsonSerializerDefaults.Web);
@@ -158,6 +159,68 @@ public sealed class OfficialBeatmapDiscoveryClient : IOfficialBeatmapDiscoveryCl
                 exception is HttpRequestException or TaskCanceledException
                     ? OfficialBeatmapRequestStatus.NetworkError
                     : OfficialBeatmapRequestStatus.InvalidResponse);
+        }
+    }
+
+    public async Task<OfficialBeatmapDifficultyDownloadResult> DownloadDifficultyAsync(
+        int beatmapId,
+        string destinationDirectory,
+        CancellationToken cancellationToken = default)
+    {
+        if (beatmapId <= 0)
+            throw new ArgumentOutOfRangeException(nameof(beatmapId));
+        ArgumentException.ThrowIfNullOrWhiteSpace(destinationDirectory);
+        if (!Path.IsPathFullyQualified(destinationDirectory))
+            throw new ArgumentException("The beatmap difficulty download directory must be absolute.", nameof(destinationDirectory));
+
+        Directory.CreateDirectory(destinationDirectory);
+        string beatmapPath = Path.Combine(destinationDirectory, $"aimmod-{beatmapId}-{Guid.NewGuid():N}.osu");
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, new Uri($"https://osu.ppy.sh/osu/{beatmapId}"));
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/plain"));
+            using HttpResponseMessage response = await httpClient.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken).ConfigureAwait(false);
+
+            OfficialBeatmapRequestStatus? failure = classifyFailure(response);
+            if (failure is not null)
+                return new OfficialBeatmapDifficultyDownloadResult(failure.Value, beatmapId);
+            if (response.Content.Headers.ContentLength is > maximum_difficulty_bytes)
+                return new OfficialBeatmapDifficultyDownloadResult(OfficialBeatmapRequestStatus.InvalidResponse, beatmapId);
+
+            long bytesWritten = await copyBoundedAsync(
+                response.Content,
+                beatmapPath,
+                maximum_difficulty_bytes,
+                "The beatmap difficulty exceeds AimMod's download limit.",
+                cancellationToken).ConfigureAwait(false);
+            if (bytesWritten <= 0 || !isExpectedDifficulty(beatmapPath, beatmapId))
+            {
+                deleteIfPresent(beatmapPath);
+                return new OfficialBeatmapDifficultyDownloadResult(OfficialBeatmapRequestStatus.InvalidResponse, beatmapId);
+            }
+
+            return new OfficialBeatmapDifficultyDownloadResult(
+                OfficialBeatmapRequestStatus.Success,
+                beatmapId,
+                beatmapPath,
+                bytesWritten);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            deleteIfPresent(beatmapPath);
+            throw;
+        }
+        catch (Exception exception) when (exception is HttpRequestException or IOException or TaskCanceledException)
+        {
+            deleteIfPresent(beatmapPath);
+            return new OfficialBeatmapDifficultyDownloadResult(
+                exception is HttpRequestException or TaskCanceledException
+                    ? OfficialBeatmapRequestStatus.NetworkError
+                    : OfficialBeatmapRequestStatus.InvalidResponse,
+                beatmapId);
         }
     }
 
@@ -348,7 +411,15 @@ public sealed class OfficialBeatmapDiscoveryClient : IOfficialBeatmapDiscoveryCl
         (string.Equals(uri.Host, "osu.ppy.sh", StringComparison.OrdinalIgnoreCase) ||
          uri.Host.EndsWith(".ppy.sh", StringComparison.OrdinalIgnoreCase));
 
-    private static async Task<long> copyBoundedAsync(HttpContent content, string path, CancellationToken cancellationToken)
+    private static Task<long> copyBoundedAsync(HttpContent content, string path, CancellationToken cancellationToken) =>
+        copyBoundedAsync(content, path, maximum_archive_bytes, "The beatmap archive exceeds AimMod's download limit.", cancellationToken);
+
+    private static async Task<long> copyBoundedAsync(
+        HttpContent content,
+        string path,
+        long maximumBytes,
+        string limitMessage,
+        CancellationToken cancellationToken)
     {
         await using Stream input = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         await using var output = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, FileOptions.Asynchronous);
@@ -360,11 +431,35 @@ public sealed class OfficialBeatmapDiscoveryClient : IOfficialBeatmapDiscoveryCl
             if (read == 0)
                 break;
             total += read;
-            if (total > maximum_archive_bytes)
-                throw new IOException("The beatmap archive exceeds AimMod's download limit.");
+            if (total > maximumBytes)
+                throw new IOException(limitMessage);
             await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
         }
         return total;
+    }
+
+    private static bool isExpectedDifficulty(string path, int beatmapId)
+    {
+        try
+        {
+            using var reader = new StreamReader(path, detectEncodingFromByteOrderMarks: true);
+            string? firstLine = reader.ReadLine();
+            if (firstLine is null || !firstLine.TrimStart('\uFEFF').StartsWith("osu file format v", StringComparison.Ordinal))
+                return false;
+
+            while (reader.ReadLine() is { } line)
+            {
+                if (!line.StartsWith("BeatmapID:", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                return int.TryParse(line.AsSpan("BeatmapID:".Length).Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out int parsed)
+                       && parsed == beatmapId;
+            }
+            return false;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     private static bool isBeatmapArchive(string path)

@@ -58,7 +58,8 @@ public sealed class ExternalLazerLocalLibrarySource : ILocalLibrarySource
                 difficulty.ApproachRate,
                 difficulty.OverallDifficulty,
                 difficulty.DrainRate,
-                difficulty.LocalScoreCount)).ToArray(),
+                difficulty.LocalScoreCount,
+                difficulty.BeatmapHash)).ToArray(),
             set.LocalReplayCount,
             artworkPaths.GetValueOrDefault(set.SetId.ToString("D"), string.Empty))).ToArray();
 
@@ -95,7 +96,10 @@ public sealed class ExternalLazerLocalLibrarySource : ILocalLibrarySource
             replay.Mods,
             replay.HasReplayFile,
             replay.BeatmapHash,
-            artworkPaths.GetValueOrDefault(replay.ScoreId.ToString("D"), string.Empty))).ToArray();
+            artworkPaths.GetValueOrDefault(replay.ScoreId.ToString("D"), string.Empty),
+            replay.HitStatistics,
+            replay.ModsJson,
+            replay.OnlineScoreId)).ToArray();
 
         return new LocalLibraryPage<LocalReplay>(replays, result.Total, result.Offset, result.Limit);
     }

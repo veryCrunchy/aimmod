@@ -1,3 +1,5 @@
+using AimMod.Osu.Runtime.Contracts;
+
 namespace AimMod.Desktop.LocalLibrary;
 
 public enum LocalLibrarySort
@@ -47,7 +49,8 @@ public sealed record LocalBeatmapDifficulty(
     float ApproachRate,
     float OverallDifficulty,
     float DrainRate,
-    int? LocalScoreCount);
+    int? LocalScoreCount,
+    string BeatmapHash = "");
 
 public sealed record LocalBeatmapSet(
     Guid SetId,
@@ -81,7 +84,10 @@ public sealed record LocalReplay(
     IReadOnlyList<string> Mods,
     bool HasReplayFile,
     string BeatmapHash = "",
-    string BackgroundPath = "");
+    string BackgroundPath = "",
+    PpScoreStatistics? HitStatistics = null,
+    string ModsJson = "",
+    long OnlineScoreId = 0);
 
 public interface ILocalLibrarySource
 {

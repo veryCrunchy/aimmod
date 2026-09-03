@@ -23,6 +23,8 @@ public partial class NativeBeatmapDiscoveryScreen : CompositeDrawable
     private readonly Func<OnlineBeatmapImportService?> importer;
     private readonly Container page = null!;
     private readonly Bindable<BeatmapDiscoveryTab> currentTab = new(BeatmapDiscoveryTab.Installed);
+    private NativeLocalLibraryScreen? installedScreen;
+    private NativeOfficialBeatmapSearchScreen? onlineScreen;
 
     public NativeBeatmapDiscoveryScreen(
         ILocalLibrarySource localLibrary,
@@ -36,19 +38,29 @@ public partial class NativeBeatmapDiscoveryScreen : CompositeDrawable
 
         InternalChildren = new Drawable[]
         {
-            page = new Container { RelativeSizeAxes = Axes.Both },
-            new FillFlowContainer
+            page = new Container
             {
-                Anchor = Anchor.TopRight,
-                Origin = Anchor.TopRight,
-                Position = new(0, 8),
-                AutoSizeAxes = Axes.Both,
-                Direction = FillDirection.Horizontal,
-                Spacing = new(6),
+                RelativeSizeAxes = Axes.Both,
+                Padding = new MarginPadding { Top = 48 },
+                Masking = true,
+            },
+            new Container
+            {
+                RelativeSizeAxes = Axes.X,
+                Height = 42,
+                Masking = true,
                 Children = new Drawable[]
                 {
-                    new DiscoveryTabButton("Installed", BeatmapDiscoveryTab.Installed, currentTab),
-                    new DiscoveryTabButton("Online", BeatmapDiscoveryTab.Online, currentTab),
+                    new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas },
+                    new OsuTabControl<BeatmapDiscoveryTab>
+                    {
+                        Anchor = Anchor.TopRight,
+                        Origin = Anchor.TopRight,
+                        Position = new(0, 2),
+                        Size = new(210, 38),
+                        AccentColour = AimModPalette.Pink,
+                        Current = currentTab,
+                    },
                 },
             },
         };
@@ -62,9 +74,15 @@ public partial class NativeBeatmapDiscoveryScreen : CompositeDrawable
 
     private void showTab(BeatmapDiscoveryTab tab)
     {
-        page.Child = tab == BeatmapDiscoveryTab.Installed
-            ? new NativeLocalLibraryScreen(localLibrary, NativeLocalLibraryMode.Beatmaps) { RelativeSizeAxes = Axes.Both }
-            : new NativeOfficialBeatmapSearchScreen(client, importer) { RelativeSizeAxes = Axes.Both };
+        if (tab == BeatmapDiscoveryTab.Installed)
+        {
+            installedScreen ??= new NativeLocalLibraryScreen(localLibrary, NativeLocalLibraryMode.Beatmaps) { RelativeSizeAxes = Axes.Both };
+            page.Child = installedScreen;
+            return;
+        }
+
+        onlineScreen ??= new NativeOfficialBeatmapSearchScreen(client, importer) { RelativeSizeAxes = Axes.Both };
+        page.Child = onlineScreen;
     }
 
     private enum BeatmapDiscoveryTab
@@ -73,49 +91,6 @@ public partial class NativeBeatmapDiscoveryScreen : CompositeDrawable
         Online,
     }
 
-    private partial class DiscoveryTabButton : ClickableContainer
-    {
-        private readonly BeatmapDiscoveryTab value;
-        private readonly Bindable<BeatmapDiscoveryTab> current;
-        private readonly Box background;
-        private readonly SpriteText label;
-
-        public DiscoveryTabButton(string text, BeatmapDiscoveryTab value, Bindable<BeatmapDiscoveryTab> current)
-        {
-            this.value = value;
-            this.current = current;
-            Size = new(92, 36);
-            Masking = true;
-            CornerRadius = 9;
-            BorderThickness = 1;
-            Children = new Drawable[]
-            {
-                background = new Box { RelativeSizeAxes = Axes.Both },
-                label = new SpriteText
-                {
-                    Anchor = Anchor.Centre,
-                    Origin = Anchor.Centre,
-                    Text = text,
-                    Font = new FontUsage(size: 12, weight: "SemiBold"),
-                },
-            };
-            current.BindValueChanged(_ => updateState(), true);
-        }
-
-        protected override bool OnClick(ClickEvent e)
-        {
-            current.Value = value;
-            return true;
-        }
-
-        private void updateState()
-        {
-            bool selected = current.Value == value;
-            background.Colour = selected ? AimModPalette.PinkDark : AimModPalette.Panel;
-            label.Colour = selected ? AimModPalette.Text : AimModPalette.Muted;
-            BorderColour = selected ? AimModPalette.Pink : AimModPalette.Border;
-        }
-    }
 }
 
 public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
@@ -125,9 +100,9 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
     private readonly Func<IOfficialBeatmapDiscoveryClient?> client;
     private readonly Func<OnlineBeatmapImportService?> importer;
     private readonly OsuTextBox searchBox;
-    private readonly SpriteText searchHint;
     private readonly SpriteText resultStatus;
     private readonly FillFlowContainer results;
+    private readonly AimModLoadingOverlay loadingOverlay;
     private readonly BindableDouble minimumStars = new(0) { MinValue = 0, MaxValue = 10, Default = 0 };
     private readonly BindableDouble maximumStars = new(10) { MinValue = 0, MaxValue = 10, Default = 10 };
     private readonly Bindable<OfficialBeatmapCategory> category = new(OfficialBeatmapCategory.Any);
@@ -149,41 +124,23 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
             new AimModSectionHeader(
                 "Discover beatmaps",
                 "Save a set in AimMod, then choose whether to send the same download to osu!lazer.",
-                "osu! API"),
+                "osu! API") { Depth = -20 },
             new SpriteText
             {
                 Y = 72,
                 Text = "SEARCH ONLINE",
                 Font = new FontUsage(size: 10, weight: "Bold"),
                 Colour = AimModPalette.Cyan,
+                Depth = -20,
             },
-            new CircularContainer
+            searchBox = new OsuTextBox
             {
                 RelativeSizeAxes = Axes.X,
                 Width = 0.43f,
                 Height = 46,
                 Y = 91,
-                Masking = true,
-                BorderThickness = 1,
-                BorderColour = AimModPalette.Border,
-                Children = new Drawable[]
-                {
-                    new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
-                    searchBox = new OsuTextBox
-                    {
-                        RelativeSizeAxes = Axes.Both,
-                        PlaceholderText = "Search title, artist, mapper, or tag",
-                    },
-                    searchHint = new SpriteText
-                    {
-                        Anchor = Anchor.CentreLeft,
-                        Origin = Anchor.CentreLeft,
-                        X = 18,
-                        Text = "Search title, artist, mapper, or tag",
-                        Font = new FontUsage(size: 13),
-                        Colour = AimModPalette.Muted,
-                    },
-                },
+                PlaceholderText = "Search title, artist, mapper, or tag",
+                Depth = -20,
             },
             new RangeSlider
             {
@@ -198,35 +155,25 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                 DefaultStringUpperBound = "10+",
                 TooltipSuffix = "stars",
                 NubWidth = 30,
+                Depth = -20,
             },
-            new FillFlowContainer
+            new OsuDropdown<OfficialBeatmapCategory>
             {
                 Y = 151,
-                AutoSizeAxes = Axes.Both,
-                Direction = FillDirection.Horizontal,
-                Spacing = new(6),
-                Children = new Drawable[]
-                {
-                    new CategoryButton("Any", OfficialBeatmapCategory.Any, category),
-                    new CategoryButton("Ranked", OfficialBeatmapCategory.Ranked, category),
-                    new CategoryButton("Loved", OfficialBeatmapCategory.Loved, category),
-                    new CategoryButton("Pending", OfficialBeatmapCategory.Pending, category),
-                },
+                Width = 190,
+                Items = new[] { OfficialBeatmapCategory.Any, OfficialBeatmapCategory.Ranked, OfficialBeatmapCategory.Loved, OfficialBeatmapCategory.Pending },
+                Current = category,
+                Depth = -20,
             },
-            new FillFlowContainer
+            new OsuDropdown<OfficialBeatmapSort>
             {
                 Anchor = Anchor.TopRight,
                 Origin = Anchor.TopRight,
                 Y = 151,
-                AutoSizeAxes = Axes.Both,
-                Direction = FillDirection.Horizontal,
-                Spacing = new(6),
-                Children = new Drawable[]
-                {
-                    new SortButton("Relevant", OfficialBeatmapSort.Relevance, sort),
-                    new SortButton("Updated", OfficialBeatmapSort.Updated, sort),
-                    new SortButton("Played", OfficialBeatmapSort.Plays, sort),
-                },
+                Width = 190,
+                Items = new[] { OfficialBeatmapSort.Relevance, OfficialBeatmapSort.Updated, OfficialBeatmapSort.Plays },
+                Current = sort,
+                Depth = -20,
             },
             resultStatus = new SpriteText
             {
@@ -234,11 +181,14 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                 Text = "Connecting to osu!...",
                 Font = new FontUsage(size: 12, weight: "SemiBold"),
                 Colour = AimModPalette.Muted,
+                Depth = -20,
             },
             new Container
             {
                 RelativeSizeAxes = Axes.Both,
                 Padding = new MarginPadding { Top = 230 },
+                Masking = true,
+                Depth = 10,
                 Child = new OsuScrollContainer
                 {
                     RelativeSizeAxes = Axes.Both,
@@ -251,6 +201,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                     },
                 },
             },
+            loadingOverlay = new AimModLoadingOverlay(),
         };
     }
 
@@ -258,7 +209,6 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
     {
         base.LoadComplete();
         searchBox.OnCommit += (_, _) => startSearch();
-        searchBox.Current.BindValueChanged(value => searchHint.Alpha = string.IsNullOrWhiteSpace(value.NewValue) ? 0.72f : 0, true);
         minimumStars.BindValueChanged(_ => scheduleSearch());
         maximumStars.BindValueChanged(_ => scheduleSearch());
         category.BindValueChanged(_ => startSearch());
@@ -288,6 +238,10 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
             resultStatus.Text = connectionAttempts < 10
                 ? "AimMod is still connecting to osu!lazer..."
                 : "AimMod could not find a usable osu!lazer session.";
+            if (connectionAttempts < 10)
+                loadingOverlay.ShowLoading("Connecting to osu!", "Waiting for the signed-in lazer session");
+            else
+                loadingOverlay.HideLoading();
             results.Clear();
             if (connectionAttempts < 10)
                 scheduledSearch = Scheduler.AddDelayed(startSearch, 1000);
@@ -297,6 +251,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
         connectionAttempts = 0;
 
         resultStatus.Text = "Searching osu!...";
+        loadingOverlay.ShowLoading("Searching beatmaps", "Loading results from the osu! catalog");
         _ = searchAsync(currentClient, cancellationToken);
     }
 
@@ -323,6 +278,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
     private void applySearchResult(OfficialBeatmapSearchResult response)
     {
         results.Clear();
+        loadingOverlay.HideLoading();
         if (response.Status != OfficialBeatmapRequestStatus.Success)
         {
             resultStatus.Text = searchFailureMessage(response.Status);
@@ -381,61 +337,14 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
         base.Dispose(isDisposing);
     }
 
-    private abstract partial class FilterButton<T> : ClickableContainer where T : struct, Enum
-    {
-        private readonly T value;
-        private readonly Bindable<T> current;
-        private readonly Box background;
-        private readonly SpriteText label;
-
-        protected FilterButton(string text, T value, Bindable<T> current, float width)
-        {
-            this.value = value;
-            this.current = current;
-            Size = new(width, 32);
-            Masking = true;
-            CornerRadius = 7;
-            BorderThickness = 1;
-            Children = new Drawable[]
-            {
-                background = new Box { RelativeSizeAxes = Axes.Both },
-                label = new SpriteText
-                {
-                    Anchor = Anchor.Centre,
-                    Origin = Anchor.Centre,
-                    Text = text,
-                    Font = new FontUsage(size: 10, weight: "SemiBold"),
-                },
-            };
-            current.BindValueChanged(_ => updateState(), true);
-        }
-
-        protected override bool OnClick(ClickEvent e)
-        {
-            current.Value = value;
-            return true;
-        }
-
-        private void updateState()
-        {
-            bool selected = EqualityComparer<T>.Default.Equals(current.Value, value);
-            background.Colour = selected ? AimModPalette.PinkDark : AimModPalette.Panel;
-            label.Colour = selected ? AimModPalette.Text : AimModPalette.Muted;
-            BorderColour = selected ? AimModPalette.Pink : AimModPalette.Border;
-        }
-    }
-
-    private partial class CategoryButton(string text, OfficialBeatmapCategory value, Bindable<OfficialBeatmapCategory> current)
-        : FilterButton<OfficialBeatmapCategory>(text, value, current, 72);
-
-    private partial class SortButton(string text, OfficialBeatmapSort value, Bindable<OfficialBeatmapSort> current)
-        : FilterButton<OfficialBeatmapSort>(text, value, current, 78);
-
     private partial class OnlineBeatmapCard : Container
     {
         private readonly OfficialBeatmapSet set;
         private readonly Func<OfficialBeatmapSet, Task<OnlineBeatmapImportResult>> import;
         private readonly Func<LazerBeatmapArchive, Task<LazerBeatmapInstallResult>> installInLazer;
+        private readonly TruncatingSpriteText titleText;
+        private readonly TruncatingSpriteText artistText;
+        private readonly TruncatingSpriteText detailText;
         private readonly SpriteText actionText;
         private readonly Box actionBackground;
         private bool importing;
@@ -485,26 +394,26 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                     Spacing = new(3),
                     Children = new Drawable[]
                     {
-                        new TruncatingSpriteText
+                        titleText = new TruncatingSpriteText
                         {
                             Text = set.Title,
                             Font = new FontUsage(size: 18, weight: "Bold"),
                             Colour = AimModPalette.Text,
-                            MaxWidth = 720,
+                            MaxWidth = 120,
                         },
-                        new TruncatingSpriteText
+                        artistText = new TruncatingSpriteText
                         {
                             Text = set.Artist,
                             Font = new FontUsage(size: 13, weight: "SemiBold"),
                             Colour = AimModPalette.Text,
-                            MaxWidth = 720,
+                            MaxWidth = 120,
                         },
-                        new TruncatingSpriteText
+                        detailText = new TruncatingSpriteText
                         {
                             Text = $"mapped by {set.Creator}  ·  {set.Status}  ·  {set.PlayCount:N0} plays  ·  {set.FavouriteCount:N0} favourites",
                             Font = new FontUsage(size: 10),
                             Colour = AimModPalette.Muted,
-                            MaxWidth = 760,
+                            MaxWidth = 120,
                         },
                     },
                 },
@@ -516,7 +425,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                     Margin = new MarginPadding { Left = 24, Bottom = 12 },
                     Direction = FillDirection.Horizontal,
                     Spacing = new(6),
-                    Children = set.Difficulties.Take(7).Select(difficulty => (Drawable)new DifficultyChip(difficulty)).ToArray(),
+                    Children = visibleDifficulties(set).ToArray(),
                 },
                 new ClickableContainer
                 {
@@ -545,6 +454,24 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                     },
                 },
             };
+        }
+
+        protected override void Update()
+        {
+            base.Update();
+            float available = Math.Max(140, DrawWidth - 230);
+            titleText.MaxWidth = available;
+            artistText.MaxWidth = available;
+            detailText.MaxWidth = available;
+        }
+
+        private static IEnumerable<Drawable> visibleDifficulties(OfficialBeatmapSet set)
+        {
+            foreach (OfficialBeatmapDifficulty difficulty in set.Difficulties.Take(4))
+                yield return new DifficultyChip(difficulty);
+
+            if (set.Difficulties.Count > 4)
+                yield return new AimModPill($"+{set.Difficulties.Count - 4}", AimModPillTone.Neutral);
         }
 
         private void beginImport()
@@ -662,12 +589,13 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                 Children = new Drawable[]
                 {
                     new Box { RelativeSizeAxes = Axes.Both, Colour = colour, Alpha = 0.2f },
-                    new SpriteText
+                    new TruncatingSpriteText
                     {
                         Text = $"{difficulty.Name}  {difficulty.StarRating:0.00}*",
                         Font = new FontUsage(size: 10, weight: "SemiBold"),
                         Colour = colour,
                         Padding = new MarginPadding { Horizontal = 10, Vertical = 4 },
+                        MaxWidth = 150,
                     },
                 };
             }

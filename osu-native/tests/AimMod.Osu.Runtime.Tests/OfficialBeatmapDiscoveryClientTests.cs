@@ -126,6 +126,52 @@ public sealed class OfficialBeatmapDiscoveryClientTests
     }
 
     [Test]
+    public async Task DownloadsAndValidatesOneExactDifficultyByBeatmapId()
+    {
+        await writeSignedInSessionAsync("crunchy", access_token);
+        await using LazerSessionMonitor monitor = await LazerSessionMonitor.CreateAsync(gameIniPath);
+        const string beatmap = "osu file format v14\n\n[Metadata]\nBeatmapID:456\nBeatmapSetID:123\n";
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(beatmap, Encoding.UTF8, "text/plain"),
+        });
+        using var client = new OfficialBeatmapDiscoveryClient(monitor, handler);
+
+        OfficialBeatmapDifficultyDownloadResult result = await client.DownloadDifficultyAsync(456, temporaryDirectory);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(OfficialBeatmapRequestStatus.Success));
+            Assert.That(result.BeatmapId, Is.EqualTo(456));
+            Assert.That(result.BeatmapPath, Is.Not.Null.And.EndsWith(".osu"));
+            Assert.That(File.ReadAllText(result.BeatmapPath!), Does.Contain("BeatmapID:456"));
+            Assert.That(handler.Requests.Single().Uri, Is.EqualTo(new Uri("https://osu.ppy.sh/osu/456")));
+            Assert.That(handler.Requests.Single().Authorization, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task RejectsDifficultyWhoseMetadataDoesNotMatchRequestedBeatmap()
+    {
+        await writeSignedInSessionAsync("crunchy", access_token);
+        await using LazerSessionMonitor monitor = await LazerSessionMonitor.CreateAsync(gameIniPath);
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("osu file format v14\n[Metadata]\nBeatmapID:999\n", Encoding.UTF8, "text/plain"),
+        });
+        using var client = new OfficialBeatmapDiscoveryClient(monitor, handler);
+
+        OfficialBeatmapDifficultyDownloadResult result = await client.DownloadDifficultyAsync(456, temporaryDirectory);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(OfficialBeatmapRequestStatus.InvalidResponse));
+            Assert.That(result.BeatmapPath, Is.Null);
+            Assert.That(Directory.EnumerateFiles(temporaryDirectory, "*.osu"), Is.Empty);
+        });
+    }
+
+    [Test]
     public async Task DownloadFollowsOnlyTrustedHttpsRedirectAndDropsCredential()
     {
         await writeSignedInSessionAsync("crunchy", access_token);

@@ -37,9 +37,9 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
     [Cached]
     private readonly Bindable<Guid?> selectedRowId = new();
     private readonly OsuTextBox searchBox;
-    private readonly SpriteText searchHint;
     private readonly SpriteText resultStatus;
     private readonly LoadMoreButton loadMoreButton;
+    private readonly AimModLoadingOverlay loadingOverlay;
     private readonly Bindable<LocalLibrarySort> sortMode;
     private readonly BindableDouble minimumStars = new(0) { MinValue = 0, MaxValue = 10, Default = 0 };
     private readonly BindableDouble maximumStars = new(10) { MinValue = 0, MaxValue = 10, Default = 10 };
@@ -66,6 +66,25 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
 
         InternalChildren = new Drawable[]
         {
+            new Container
+            {
+                RelativeSizeAxes = Axes.Both,
+                Padding = new MarginPadding { Top = 190, Bottom = 52 },
+                Masking = true,
+                Depth = 10,
+                Child = new LocalLibraryVirtualisedList
+                {
+                    RelativeSizeAxes = Axes.Both,
+                    RowData = { BindTarget = rows },
+                },
+            },
+            new Box
+            {
+                RelativeSizeAxes = Axes.X,
+                Height = 190,
+                Colour = AimModPalette.Canvas,
+                Depth = 5,
+            },
             new AimModSectionHeader(
                 mode == NativeLocalLibraryMode.Beatmaps ? "Beatmaps" : "Replays",
                 mode == NativeLocalLibraryMode.Beatmaps
@@ -86,41 +105,15 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
                 Font = new FontUsage(size: 10, weight: "Bold"),
                 Colour = AimModPalette.Cyan,
             },
-            new CircularContainer
+            searchBox = new OsuTextBox
             {
                 RelativeSizeAxes = Axes.X,
                 Width = 0.43f,
                 Height = 46,
                 Y = 91,
-                Masking = true,
-                BorderThickness = 1,
-                BorderColour = AimModPalette.Border,
-                Children = new Drawable[]
-                {
-                    new Box
-                    {
-                        RelativeSizeAxes = Axes.Both,
-                        Colour = AimModPalette.Panel,
-                    },
-                    searchBox = new OsuTextBox
-                    {
-                        RelativeSizeAxes = Axes.Both,
-                        PlaceholderText = mode == NativeLocalLibraryMode.Beatmaps
-                            ? "Search beatmaps, artists, mappers, or difficulties"
-                            : "Search replays, players, maps, or mods",
-                    },
-                    searchHint = new SpriteText
-                    {
-                        Anchor = Anchor.CentreLeft,
-                        Origin = Anchor.CentreLeft,
-                        X = 18,
-                        Text = mode == NativeLocalLibraryMode.Beatmaps
-                            ? "Search title, artist, mapper, or difficulty"
-                            : "Search title, player, map, or mod",
-                        Font = new FontUsage(size: 13),
-                        Colour = AimModPalette.Muted,
-                    },
-                },
+                PlaceholderText = mode == NativeLocalLibraryMode.Beatmaps
+                    ? "Search beatmaps, artists, mappers, or difficulties"
+                    : "Search replays, players, maps, or mods",
             },
             new RangeSlider
             {
@@ -145,43 +138,33 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
                 Font = new FontUsage(size: 10, weight: "Bold"),
                 Colour = AimModPalette.Cyan,
             },
-            new FillFlowContainer
+            new OsuDropdown<LocalLibrarySort>
             {
                 Anchor = Anchor.TopRight,
                 Origin = Anchor.TopRight,
                 Position = new(0, 91),
-                AutoSizeAxes = Axes.Both,
-                Direction = FillDirection.Horizontal,
-                Spacing = new(6),
-                Children = mode == NativeLocalLibraryMode.Beatmaps
-                    ? new Drawable[]
+                Width = 180,
+                Items = mode == NativeLocalLibraryMode.Beatmaps
+                    ? new[]
                     {
-                        new SortFilterButton("Recent", LocalLibrarySort.RecentlyAdded, sortMode),
-                        new SortFilterButton("A-Z", LocalLibrarySort.Title, sortMode),
-                        new SortFilterButton("Stars", LocalLibrarySort.StarRating, sortMode),
+                        LocalLibrarySort.RecentlyAdded,
+                        LocalLibrarySort.Title,
+                        LocalLibrarySort.StarRating,
                     }
-                    : new Drawable[]
+                    : new[]
                     {
-                        new SortFilterButton("Recent", LocalLibrarySort.RecentlyPlayed, sortMode),
-                        new SortFilterButton("Accuracy", LocalLibrarySort.Accuracy, sortMode),
-                        new SortFilterButton("Score", LocalLibrarySort.Score, sortMode),
+                        LocalLibrarySort.RecentlyPlayed,
+                        LocalLibrarySort.Accuracy,
+                        LocalLibrarySort.Score,
                     },
-            },
-            new Container
-            {
-                RelativeSizeAxes = Axes.Both,
-                Padding = new MarginPadding { Top = 190, Bottom = 52 },
-                Child = new LocalLibraryVirtualisedList
-                {
-                    RelativeSizeAxes = Axes.Both,
-                    RowData = { BindTarget = rows },
-                },
+                Current = sortMode,
             },
             loadMoreButton = new LoadMoreButton(loadNextPage)
             {
                 Anchor = Anchor.BottomCentre,
                 Origin = Anchor.BottomCentre,
             },
+            loadingOverlay = new AimModLoadingOverlay(),
         };
     }
 
@@ -189,7 +172,6 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
     {
         base.LoadComplete();
         searchBox.OnCommit += (_, _) => resetQuery();
-        searchBox.Current.BindValueChanged(value => searchHint.Alpha = string.IsNullOrWhiteSpace(value.NewValue) ? 0.72f : 0, true);
         minimumStars.BindValueChanged(_ => scheduleQuery());
         maximumStars.BindValueChanged(_ => scheduleQuery());
         sortMode.BindValueChanged(_ => resetQuery());
@@ -259,21 +241,28 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
             case LocalLibraryLoadStatus.Loading:
                 resultStatus.Text = state.ItemCount == 0 ? "Searching library..." : $"Loading more after {state.ItemCount:N0} results...";
                 loadMoreButton.SetState(false, "Loading...");
+                if (state.ItemCount == 0)
+                    loadingOverlay.ShowLoading(
+                        mode == NativeLocalLibraryMode.Beatmaps ? "Loading beatmaps" : "Loading replays",
+                        "Reading your local osu!lazer library");
                 break;
 
             case LocalLibraryLoadStatus.Empty:
                 resultStatus.Text = mode == NativeLocalLibraryMode.Beatmaps ? "No beatmaps found" : "No replays found";
                 loadMoreButton.SetState(false, "No results");
+                loadingOverlay.HideLoading();
                 break;
 
             case LocalLibraryLoadStatus.Ready:
                 resultStatus.Text = $"Showing {state.ItemCount:N0} of {state.Total:N0}  //  {sortDescription(sortMode.Value)}";
                 loadMoreButton.SetState(state.HasMore, state.HasMore ? "Load more" : "All loaded");
+                loadingOverlay.HideLoading();
                 break;
 
             case LocalLibraryLoadStatus.Error:
                 resultStatus.Text = $"Could not load the library: {state.ErrorMessage}";
                 loadMoreButton.SetState(true, "Try again");
+                loadingOverlay.HideLoading();
                 break;
         }
     }
@@ -329,6 +318,7 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
         private Box metricPanel = null!;
         private CircularContainer playButton = null!;
         private FillFlowContainer<Drawable> difficultyChips = null!;
+        private bool currentIsReplay;
 
         [Resolved]
         private OsuColour colours { get; set; } = null!;
@@ -483,6 +473,7 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
 
         private void updateRow(LocalLibraryRow row)
         {
+            currentIsReplay = row.IsReplay;
             title.Text = row.Title;
             subtitle.Text = row.Subtitle;
             detail.Text = row.Detail;
@@ -511,6 +502,13 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
             metricPanel.X = row.IsReplay ? 72 : 44;
             metricPanel.Shear = new(row.IsReplay ? -0.1f : -0.055f, 0);
             updateSelection();
+            updateTextBounds();
+        }
+
+        protected override void Update()
+        {
+            base.Update();
+            updateTextBounds();
         }
 
         protected override bool OnClick(ClickEvent e)
@@ -541,11 +539,21 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
             selectionLayer.FadeTo(selected ? 0.085f : 0, 100);
         }
 
+        private void updateTextBounds()
+        {
+            float reservedRight = currentIsReplay ? 340 : 315;
+            float textLeft = currentIsReplay ? 80 : 24;
+            float available = Math.Max(120, DrawWidth - textLeft - reservedRight);
+            title.MaxWidth = available;
+            subtitle.MaxWidth = available;
+            detail.MaxWidth = available;
+        }
+
         private static TruncatingSpriteText rowText(float size, Colour4 colour, string weight = "Regular") => new()
         {
             Font = new FontUsage(size: size, weight: weight),
             Colour = colour,
-            MaxWidth = 760,
+            MaxWidth = 120,
         };
 
         private partial class DifficultyPill : CircularContainer
@@ -634,51 +642,6 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
                 action();
 
             return true;
-        }
-    }
-
-    private partial class SortFilterButton : ClickableContainer
-    {
-        private readonly LocalLibrarySort value;
-        private readonly Bindable<LocalLibrarySort> current;
-        private readonly Box background;
-        private readonly SpriteText label;
-
-        public SortFilterButton(string text, LocalLibrarySort value, Bindable<LocalLibrarySort> current)
-        {
-            this.value = value;
-            this.current = current;
-            Size = new(text.Length > 6 ? 78 : 62, 34);
-            Masking = true;
-            CornerRadius = 7;
-            BorderThickness = 1;
-            Children = new Drawable[]
-            {
-                background = new Box { RelativeSizeAxes = Axes.Both },
-                label = new SpriteText
-                {
-                    Anchor = Anchor.Centre,
-                    Origin = Anchor.Centre,
-                    Text = text,
-                    Font = new FontUsage(size: 11, weight: "SemiBold"),
-                },
-            };
-
-            current.BindValueChanged(_ => updateState(), true);
-        }
-
-        protected override bool OnClick(ClickEvent e)
-        {
-            current.Value = value;
-            return true;
-        }
-
-        private void updateState()
-        {
-            bool selected = current.Value == value;
-            background.Colour = selected ? AimModPalette.PinkDark : AimModPalette.Panel;
-            label.Colour = selected ? AimModPalette.Text : AimModPalette.Muted;
-            BorderColour = selected ? AimModPalette.Pink : AimModPalette.Border;
         }
     }
 

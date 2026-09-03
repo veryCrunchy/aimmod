@@ -91,6 +91,8 @@ public sealed class ExternalLazerCatalogReaderTests
             Assert.That(first.Replays[0].Accuracy, Is.EqualTo(0.98));
             Assert.That(first.Replays[0].MissCount, Is.EqualTo(2));
             Assert.That(first.Replays[0].Mods, Is.EqualTo(new[] { "HD" }));
+            Assert.That(first.Replays[0].HitStatistics, Is.EqualTo(new PpScoreStatistics(900, 70, 28, 2, 400, 3)));
+            Assert.That(first.Replays[0].ModsJson, Is.EqualTo("[{\"acronym\":\"HD\"}]"));
             Assert.That(first.Replays[0].HasReplayFile, Is.True);
             Assert.That(second.Replays, Has.Count.EqualTo(1));
             Assert.That(second.Replays[0].ScoreId, Is.Not.EqualTo(first.Replays[0].ScoreId));
@@ -196,7 +198,7 @@ public sealed class ExternalLazerCatalogReaderTests
             Date = new DateTimeOffset(2026, 3, replayFile ? 2 : 1, 0, 0, 0, TimeSpan.Zero),
             PP = replayFile ? 220.5 : 100,
             ModsJson = "[{\"acronym\":\"HD\"}]",
-            StatisticsJson = "{\"Miss\":2}",
+            StatisticsJson = "{\"Great\":900,\"Ok\":70,\"Meh\":28,\"Miss\":2,\"SliderTailHit\":400,\"LargeTickMiss\":3}",
         };
         if (replayFile)
         {

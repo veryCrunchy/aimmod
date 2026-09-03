@@ -1,5 +1,6 @@
 using AimMod.Osu.Runtime.Contracts;
 using osu.Framework.Graphics;
+using osu.Framework.Audio.Track;
 using osu.Framework.Platform;
 using osu.Game;
 using osu.Game.Beatmaps;
@@ -22,7 +23,37 @@ namespace AimMod.Osu.Worker;
 
 internal sealed class OfficialReplayAnalysisEngine : IReplayAnalysisEngine
 {
-    public ValueTask<ReplayAnalysisResult> AnalyseAsync(ValidatedReplayInput input, CancellationToken cancellationToken)
+    public async ValueTask<ReplayAnalysisResult> AnalyseAsync(ValidatedReplayInput input, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var completion = new TaskCompletionSource<ReplayAnalysisResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var analysisThread = new Thread(() => runAnalysis(input, cancellationToken, completion))
+        {
+            IsBackground = true,
+            Name = "AimMod osu! replay analysis",
+        };
+
+        analysisThread.Start();
+        return await completion.Task.ConfigureAwait(false);
+    }
+
+    private static void runAnalysis(
+        ValidatedReplayInput input,
+        CancellationToken cancellationToken,
+        TaskCompletionSource<ReplayAnalysisResult> completion)
+    {
+        try
+        {
+            completion.SetResult(analyse(input, cancellationToken));
+        }
+        catch (Exception exception)
+        {
+            completion.SetException(exception);
+        }
+    }
+
+    private static ReplayAnalysisResult analyse(ValidatedReplayInput input, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -47,9 +78,9 @@ internal sealed class OfficialReplayAnalysisEngine : IReplayAnalysisEngine
             if (game.Failure is not null)
                 throw game.Failure;
 
-            return ValueTask.FromResult(game.Result ?? throw new ReplayAnalysisException(
+            return game.Result ?? throw new ReplayAnalysisException(
                 "analysis_failed",
-                "Official replay playback exited without a result."));
+                "Official replay playback exited without a result.");
         }
         catch (OperationCanceledException)
         {
@@ -135,7 +166,7 @@ internal sealed partial class ReplayAnalysisGame : OsuGameBase
             Audio.VolumeTrack.Value = 0;
             Audio.VolumeSample.Value = 0;
 
-            var workingBeatmap = new TestWorkingBeatmap(sourceBeatmap, audioManager: Audio);
+            var workingBeatmap = new AnalysisWorkingBeatmap(sourceBeatmap, Audio);
             workingBeatmap.LoadTrack();
             using (var replayStream = new FileStream(replayPath, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, FileOptions.SequentialScan))
                 score = new SuppliedBeatmapScoreDecoder(workingBeatmap).Parse(replayStream);
@@ -219,6 +250,19 @@ internal sealed partial class ReplayAnalysisGame : OsuGameBase
 
         return new ReplayJudgementSummary(great, ok, meh, miss, sliderBreaks, other);
     }
+}
+
+internal sealed class AnalysisWorkingBeatmap : TestWorkingBeatmap
+{
+    private readonly double trackLength;
+
+    public AnalysisWorkingBeatmap(IBeatmap beatmap, osu.Framework.Audio.AudioManager? audioManager)
+        : base(beatmap, audioManager: audioManager)
+    {
+        trackLength = Math.Max(1_000, beatmap.HitObjects.Select(hitObject => hitObject.GetEndTime()).DefaultIfEmpty(0).Max() + 10_000);
+    }
+
+    protected override Track GetBeatmapTrack() => new TrackVirtual(trackLength);
 }
 
 internal sealed partial class AnalysisReplayPlayer : ReplayPlayer

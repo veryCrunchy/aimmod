@@ -22,6 +22,7 @@ public sealed class CoachingPredictionEngineTests
             Assert.That(result.DifficultyFit.BestFit, Is.Null);
             Assert.That(result.DifficultyFit.Confidence, Is.EqualTo(CoachingConfidence.Insufficient));
             Assert.That(result.Trend.MatchedAccuracyChange, Is.Null);
+            Assert.That(result.PpPlan.Opportunities, Is.Empty);
             Assert.That(result.Recommendations, Is.Empty);
         });
     }
@@ -127,6 +128,116 @@ public sealed class CoachingPredictionEngineTests
             Assert.That(result.Trend.Direction, Is.EqualTo("Improving on repeated setups"));
             Assert.That(result.Trend.Confidence, Is.EqualTo(CoachingConfidence.Low));
             Assert.That(result.Recommendations.First().Intent, Is.EqualTo("Confirm improvement"));
+        });
+    }
+
+    [Test]
+    public void PpPlanRanksWeightedProfileGains()
+    {
+        Guid targetBeatmap = id(70);
+        LocalReplay[] runs =
+        {
+            run(1, 70, 5.3, 0.94, 2) with { PerformancePoints = 220 },
+            run(2, 70, 5.3, 0.97, 0) with { PerformancePoints = 260 },
+            run(3, 71, 5.1, 0.96, 0) with { PerformancePoints = 245 },
+            run(4, 72, 5.4, 0.95, 1) with { PerformancePoints = 252 },
+            run(5, 73, 5.6, 0.94, 2) with { PerformancePoints = 270 },
+            run(6, 70, 5.3, 0.93, 3) with { PerformancePoints = 230 },
+        };
+
+        CoachingPpPlan plan = CoachingPredictionEngine.Build(
+            runs,
+            new Dictionary<Guid, ReplayAnalysisResult>()).PpPlan;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(plan.PpRunCount, Is.EqualTo(runs.Length));
+            Assert.That(plan.CurrentBestScorePp, Is.EqualTo(270).Within(0.0001));
+            Assert.That(plan.Opportunities, Is.Not.Empty);
+            Assert.That(plan.Opportunities[0].BeatmapId, Is.Not.EqualTo(targetBeatmap), "A lower retry must not outrank an existing personal best on the same map.");
+            Assert.That(plan.Opportunities[0].ProfilePpGain, Is.GreaterThan(0));
+            Assert.That(plan.Opportunities, Has.None.Matches<CoachingPpOpportunity>(opportunity => opportunity.BeatmapId == targetBeatmap));
+            Assert.That(plan.BestProfilePpGain, Is.EqualTo(plan.Opportunities[0].ProfilePpGain).Within(0.0001));
+            Assert.That(plan.TopThreeProfilePpGain, Is.GreaterThanOrEqualTo(plan.BestProfilePpGain!.Value));
+            Assert.That(plan.Summary, Does.Contain("profile pp"));
+        });
+    }
+
+    [Test]
+    public void PpPlanDoesNotInventOpportunitiesWithoutPpValues()
+    {
+        LocalReplay[] runs =
+        {
+            run(1, 70, 5.3, 0.94, 2) with { PerformancePoints = null },
+            run(2, 70, 5.3, 0.97, 0) with { PerformancePoints = null },
+            run(3, 71, 5.1, 0.96, 0) with { PerformancePoints = null },
+        };
+
+        CoachingPpPlan plan = CoachingPredictionEngine.Build(
+            runs,
+            new Dictionary<Guid, ReplayAnalysisResult>()).PpPlan;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(plan.PpRunCount, Is.Zero);
+            Assert.That(plan.CurrentBestScorePp, Is.Null);
+            Assert.That(plan.BestOpportunityGain, Is.Null);
+            Assert.That(plan.Opportunities, Is.Empty);
+            Assert.That(plan.Confidence, Is.EqualTo(CoachingConfidence.Insufficient));
+        });
+    }
+
+    [Test]
+    public void PpPlanDoesNotTreatRetriesAsIndependentSimilarSetupEvidence()
+    {
+        var runs = new List<LocalReplay>
+        {
+            run(1, 70, 5.3, 0.92, 3) with { PerformancePoints = 100 },
+            run(2, 70, 5.3, 0.92, 3) with { PerformancePoints = 100 },
+            run(3, 70, 5.3, 0.92, 3) with { PerformancePoints = 100 },
+            run(4, 70, 5.3, 0.92, 3) with { PerformancePoints = 100 },
+        };
+        runs.AddRange(Enumerable.Range(5, 12)
+                                .Select(day => run(day, 71, 5.3, 0.98, 0) with { PerformancePoints = 220 }));
+
+        CoachingPpOpportunity opportunity = CoachingPredictionEngine.Build(
+            runs,
+            new Dictionary<Guid, ReplayAnalysisResult>()).PpPlan.Opportunities
+                                                       .Single(item => item.BeatmapId == id(70));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(opportunity.SameSetupSampleCount, Is.EqualTo(3));
+            Assert.That(opportunity.SimilarStarSampleCount, Is.EqualTo(2),
+                "The cross-setup sample size should count distinct beatmap/mod setups, not retries.");
+            Assert.That(opportunity.Confidence, Is.EqualTo(CoachingConfidence.Insufficient));
+        });
+    }
+
+    [Test]
+    public void FullHistoryWithManyDistinctSetupsStaysInteractive()
+    {
+        DateTimeOffset start = new(2025, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        LocalReplay[] runs = Enumerable.Range(0, CoachingLimits.MaximumRuns)
+                                       .Select(index => run(1, index + 1, 4.5 + index % 30 / 10.0, 0.9 + index % 90 / 1000.0, index % 5) with
+                                       {
+                                           PlayedAt = start.AddMinutes(index),
+                                           PerformancePoints = 100 + index % 350,
+                                       })
+                                       .ToArray();
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        CoachingIntelligence intelligence = CoachingPredictionEngine.Build(
+            runs,
+            new Dictionary<Guid, ReplayAnalysisResult>());
+
+        stopwatch.Stop();
+        Assert.Multiple(() =>
+        {
+            Assert.That(intelligence.History.RunCount, Is.EqualTo(CoachingLimits.MaximumRuns));
+            Assert.That(intelligence.Recommendations, Has.Count.LessThanOrEqualTo(CoachingLimits.RecommendationLimit));
+            Assert.That(intelligence.PpPlan.PpRunCount, Is.EqualTo(CoachingLimits.MaximumRuns));
+            Assert.That(stopwatch.Elapsed, Is.LessThan(TimeSpan.FromSeconds(10)));
         });
     }
 

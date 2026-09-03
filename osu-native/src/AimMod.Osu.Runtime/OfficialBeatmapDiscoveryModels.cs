@@ -115,6 +115,20 @@ public sealed record OfficialBeatmapDownloadResult(
     string? ArchivePath = null,
     long ArchiveBytes = 0);
 
+public sealed record OfficialBeatmapDifficultyDownloadResult(
+    OfficialBeatmapRequestStatus Status,
+    int BeatmapId,
+    string? BeatmapPath = null,
+    long BeatmapBytes = 0);
+
+public interface IOfficialBeatmapDifficultyClient
+{
+    Task<OfficialBeatmapDifficultyDownloadResult> DownloadDifficultyAsync(
+        int beatmapId,
+        string destinationDirectory,
+        CancellationToken cancellationToken = default);
+}
+
 public interface IOfficialBeatmapDiscoveryClient
 {
     Task<OfficialBeatmapSearchResult> SearchAsync(

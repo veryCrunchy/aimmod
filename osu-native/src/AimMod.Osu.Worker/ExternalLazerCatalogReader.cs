@@ -139,7 +139,8 @@ public sealed class DynamicRealmLazerLibraryCatalogReader : ILazerLibraryCatalog
                 backgroundHashes.Add(setId, backgroundHash);
             }
             IRealmObjectBase? user = getObject(score, "User");
-            IReadOnlyList<string> mods = readMods(get<string>(score, "Mods") ?? string.Empty);
+            string modsJson = get<string>(score, "Mods") ?? string.Empty;
+            IReadOnlyList<string> mods = readMods(modsJson);
             var searchable = new List<string>
             {
                 text(metadata, "Title"), text(metadata, "TitleUnicode"), text(metadata, "Artist"), text(metadata, "ArtistUnicode"),
@@ -149,6 +150,8 @@ public sealed class DynamicRealmLazerLibraryCatalogReader : ILazerLibraryCatalog
             if (!matchesSearch(query.SearchText, searchable))
                 continue;
 
+            string statisticsJson = get<string>(score, "Statistics") ?? string.Empty;
+            PpScoreStatistics? hitStatistics = readHitStatistics(statisticsJson);
             replays.Add(new ExternalLazerReplaySummary(
                 get<Guid>(score, "ID"),
                 get<Guid>(set, "ID"),
@@ -164,11 +167,14 @@ public sealed class DynamicRealmLazerLibraryCatalogReader : ILazerLibraryCatalog
                 finite(get<double>(score, "Accuracy")),
                 get<long>(score, "TotalScore"),
                 Math.Max(0, get<int>(score, "MaxCombo")),
-                readMissCount(get<string>(score, "Statistics") ?? string.Empty),
+                hitStatistics?.Miss ?? readMissCount(statisticsJson),
                 finiteNullable(get<double?>(score, "PP")),
                 mods,
                 hasReplayFile(score),
-                backgroundHash));
+                backgroundHash,
+                hitStatistics,
+                modsJson,
+                Math.Max(0, get<long>(score, "OnlineID"))));
         }
 
         IEnumerable<ExternalLazerReplaySummary> ordered = query.Sort switch
@@ -339,6 +345,42 @@ public sealed class DynamicRealmLazerLibraryCatalogReader : ILazerLibraryCatalog
         {
         }
 
+        return 0;
+    }
+
+    private static PpScoreStatistics? readHitStatistics(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json) || json.Length > ExternalLazerCatalogProtocol.MaximumTextFieldLength)
+            return null;
+
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(json);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                return null;
+            int great = readStatistic(document.RootElement, "Great", "great", "5");
+            int ok = readStatistic(document.RootElement, "Ok", "ok", "3");
+            int meh = readStatistic(document.RootElement, "Meh", "meh", "2");
+            int miss = readStatistic(document.RootElement, "Miss", "miss", "1");
+            int sliderTailHit = readStatistic(document.RootElement, "SliderTailHit", "slider_tail_hit", "16");
+            int largeTickMiss = readStatistic(document.RootElement, "LargeTickMiss", "large_tick_miss", "9");
+            return great + ok + meh + miss == 0
+                ? null
+                : new PpScoreStatistics(great, ok, meh, miss, sliderTailHit, largeTickMiss);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static int readStatistic(JsonElement root, params string[] names)
+    {
+        foreach (string name in names)
+        {
+            if (root.TryGetProperty(name, out JsonElement value) && value.TryGetInt32(out int count))
+                return Math.Max(0, count);
+        }
         return 0;
     }
 

@@ -10,6 +10,7 @@ using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
 using osu.Framework.Input.Events;
 using osu.Game.Graphics.Sprites;
+using osu.Game.Graphics.Containers;
 using osu.Game.Graphics.UserInterface;
 using osu.Game.Screens;
 
@@ -36,13 +37,6 @@ public partial class NativeReplayRouteView : Container
     private readonly Container statusLayer;
     private readonly SpriteText statusTitle;
     private readonly SpriteText statusDetail;
-    private readonly TruncatingSpriteText selectedTitle;
-    private readonly SpriteText selectedArtist;
-    private readonly SpriteText selectedDifficulty;
-    private readonly AimModDifficultyPill selectedStars;
-    private readonly SpriteText scoreAccuracy;
-    private readonly SpriteText scoreGrade;
-    private readonly SpriteText scoreDetail;
     private readonly SpriteText summaryAccuracy;
     private readonly SpriteText summaryPerformance;
     private readonly SpriteText summaryMisses;
@@ -58,6 +52,7 @@ public partial class NativeReplayRouteView : Container
     private readonly SpriteText pauseLabel;
     private readonly SpriteText speedLabel;
     private readonly Container analysisCard;
+    private readonly AimModLoadingOverlay loadingOverlay;
     private IBindable<double>? currentTime;
     private IBindable<double>? duration;
     private IBindable<bool>? paused;
@@ -66,6 +61,7 @@ public partial class NativeReplayRouteView : Container
     private CancellationTokenSource? loading;
     private long analysisRevision;
     private double playbackSpeed = 1;
+    private bool analysisInProgress;
 
     public NativeReplayRouteView(
         ILocalLibrarySource? source = null,
@@ -93,7 +89,7 @@ public partial class NativeReplayRouteView : Container
                         PlaceholderText = "Search replays",
                     },
                     replayCount = place(makeText("Loading local runs...", 12, AimModPalette.Muted, "SemiBold"), y: 53),
-                    new BasicScrollContainer
+                    new OsuScrollContainer
                     {
                         RelativeSizeAxes = Axes.Both,
                         Padding = new MarginPadding { Top = 79 },
@@ -115,35 +111,8 @@ public partial class NativeReplayRouteView : Container
                 {
                     new Container
                     {
-                        RelativeSizeAxes = Axes.X,
-                        Height = 96,
-                        Masking = true,
-                        Padding = new MarginPadding { Horizontal = 18, Vertical = 12 },
-                        Children = new Drawable[]
-                        {
-                            selectedTitle = new TruncatingSpriteText
-                            {
-                                Text = "Select a local replay",
-                                Font = new FontUsage(size: 18, weight: "Bold"),
-                                Colour = AimModPalette.Text,
-                                MaxWidth = 300,
-                            },
-                            selectedArtist = place(makeText("Browse your lazer scores on the left", 13, AimModPalette.Muted), y: 31),
-                            selectedDifficulty = place(makeText(string.Empty, 12, AimModPalette.Cyan, "SemiBold"), y: 54),
-                            selectedStars = new AimModDifficultyPill(0)
-                            {
-                                Anchor = Anchor.TopRight,
-                                Origin = Anchor.TopRight,
-                            },
-                            scoreAccuracy = place(makeText("--", 28, AimModPalette.Text, "Bold"), -92, 0, Anchor.TopRight, Anchor.TopRight),
-                            scoreGrade = place(makeText(string.Empty, 48, AimModPalette.Success, "Bold"), -8, 25, Anchor.TopRight, Anchor.TopRight),
-                            scoreDetail = place(makeText(string.Empty, 11, AimModPalette.Muted), -92, 39, Anchor.TopRight, Anchor.TopRight),
-                        },
-                    },
-                    new Container
-                    {
                         RelativeSizeAxes = Axes.Both,
-                        Padding = new MarginPadding { Top = 98, Bottom = 184 },
+                        Padding = new MarginPadding { Bottom = 212 },
                         Masking = true,
                         Children = new Drawable[]
                         {
@@ -194,21 +163,30 @@ public partial class NativeReplayRouteView : Container
                             },
                             currentTimeText = place(makeText("0:00.000", 12, AimModPalette.Text, "SemiBold"), y: 44),
                             durationText = place(makeText("0:00.000", 12, AimModPalette.Muted, "SemiBold"), y: 44, anchor: Anchor.TopRight, origin: Anchor.TopRight),
-                            place(makeText("Exact judgement timeline", 12, AimModPalette.Muted, "Bold"), y: 70),
-                            judgementTimeline = new ReplayJudgementTimeline { Y = 89 },
+                            new ReplayScrubber(
+                                () => currentTime?.Value ?? 0,
+                                () => duration?.Value ?? 0,
+                                time => player?.SeekTo(time))
+                            {
+                                RelativeSizeAxes = Axes.X,
+                                Height = 24,
+                                Y = 58,
+                            },
+                            place(makeText("Exact judgement timeline", 12, AimModPalette.Muted, "Bold"), y: 91),
+                            judgementTimeline = new ReplayJudgementTimeline { Y = 110 },
                             momentButtons = new FillFlowContainer<Drawable>
                             {
                                 RelativeSizeAxes = Axes.X,
                                 AutoSizeAxes = Axes.Y,
-                                Y = 137,
+                                Y = 158,
                                 Direction = FillDirection.Horizontal,
                                 Spacing = new(7),
                             },
                         },
-                    }, Anchor.BottomLeft, Anchor.BottomLeft, 174),
+                    }, Anchor.BottomLeft, Anchor.BottomLeft, 202),
                 },
             },
-            makePanel(new BasicScrollContainer
+            makePanel(new OsuScrollContainer
             {
                 RelativeSizeAxes = Axes.Both,
                 Child = new FillFlowContainer
@@ -287,7 +265,7 @@ public partial class NativeReplayRouteView : Container
                                     Children = new Drawable[]
                                     {
                                         analysisTitle = makeText("Analysing exact judgements...", 14, AimModPalette.Text, "Bold"),
-                                        analysisSummary = new WrappedLabel("Matching score input to beatmap objects", 12, AimModPalette.Muted),
+                                        analysisSummary = new WrappedLabel("Preparing replay details", 12, AimModPalette.Muted),
                                     },
                                 },
                             },
@@ -298,6 +276,7 @@ public partial class NativeReplayRouteView : Container
                     },
                 },
             }, Anchor.TopRight, Anchor.TopRight, null, inspector_width),
+            loadingOverlay = new AimModLoadingOverlay(),
         };
     }
 
@@ -320,13 +299,6 @@ public partial class NativeReplayRouteView : Container
     public void SetReplaySummary(LocalReplay replay)
     {
         selectedReplay = replay;
-        selectedTitle.Text = replay.Title;
-        selectedArtist.Text = replay.Artist;
-        selectedDifficulty.Text = $"{replay.Difficulty}  //  {replay.Player}  //  {replay.PlayedAt.LocalDateTime:g}";
-        selectedStars.StarRating = replay.StarRating;
-        scoreAccuracy.Text = formatAccuracy(replay.Accuracy);
-        scoreGrade.Text = grade(replay.Accuracy, replay.MissCount);
-        scoreDetail.Text = $"{replay.MissCount:N0} misses  //  {replay.MaxCombo:N0}x";
         summaryAccuracy.Text = formatAccuracy(replay.Accuracy);
         summaryPerformance.Text = replay.PerformancePoints is { } pp ? $"{pp:0.#}pp" : $"{replay.TotalScore:N0}";
         summaryMisses.Text = replay.MissCount.ToString("N0");
@@ -336,16 +308,21 @@ public partial class NativeReplayRouteView : Container
 
     public void AttachPlayer(NativeReplayPlayer replayPlayer)
     {
+        player?.SuspendPlayback();
         player = replayPlayer;
         currentTime = replayPlayer.CurrentTime;
         duration = replayPlayer.Duration;
         paused = replayPlayer.IsPaused;
     }
 
+    public void SuspendPlayback() => player?.SuspendPlayback();
+
     public void ShowReady() => statusLayer.FadeOut(180);
 
     public void ShowError(string message)
     {
+        analysisInProgress = false;
+        loadingOverlay.HideLoading();
         statusTitle.Text = "Replay could not be opened";
         statusTitle.Colour = AimModPalette.Pink;
         statusDetail.Text = message;
@@ -361,16 +338,22 @@ public partial class NativeReplayRouteView : Container
         switch (state.Status)
         {
             case ReplayAnalysisStatus.Running:
+                analysisInProgress = true;
+                loadingOverlay.ShowLoading(
+                    "Analysing replay",
+                    selectedReplay is null ? "Running official osu! judgement processing" : selectedReplay.Title);
                 analysisTitle.Text = "Analysing exact judgements...";
-                analysisSummary.Text = "Matching score input to beatmap objects";
+                analysisSummary.Text = "Preparing replay details";
                 notableRows.Clear();
                 momentButtons.Clear();
                 judgementTimeline.ClearResult();
-                analysisNextPlay.Text = "Analysis is using the official ruleset judgement path.";
+                analysisNextPlay.Text = "Review the run while details load.";
                 analysisCard.FadeIn(150);
                 break;
 
             case ReplayAnalysisStatus.Completed when state.Result is not null:
+                analysisInProgress = false;
+                loadingOverlay.HideLoading();
                 ReplayAnalysisPresentation presentation = ReplayAnalysisPresenter.Present(state.Result);
                 analysisTitle.Text = "Exact replay analysis";
                 analysisSummary.Text = wrap(presentation.Summary, 37);
@@ -382,17 +365,21 @@ public partial class NativeReplayRouteView : Container
                 break;
 
             case ReplayAnalysisStatus.Failed:
+                analysisInProgress = false;
+                loadingOverlay.HideLoading();
                 analysisTitle.Text = "Replay analysis unavailable";
                 analysisSummary.Text = state.Error?.Message ?? "AimMod could not analyse this replay.";
                 notableRows.Clear();
                 momentButtons.Clear();
                 judgementTimeline.ClearResult();
-                analysisNextPlay.Text = "The replay can still be reviewed in the official player.";
+                analysisNextPlay.Text = "Replay playback is still available.";
                 analysisCard.FadeIn(150);
                 break;
 
             case ReplayAnalysisStatus.Cancelled:
             case ReplayAnalysisStatus.Idle:
+                analysisInProgress = false;
+                loadingOverlay.HideLoading();
                 analysisCard.FadeOut(120);
                 break;
         }
@@ -400,12 +387,14 @@ public partial class NativeReplayRouteView : Container
 
     public void ShowAnalysisError(string message)
     {
+        analysisInProgress = false;
+        loadingOverlay.HideLoading();
         analysisTitle.Text = "Replay analysis unavailable";
         analysisSummary.Text = message;
         notableRows.Clear();
         momentButtons.Clear();
         judgementTimeline.ClearResult();
-        analysisNextPlay.Text = "The replay can still be reviewed in the official player.";
+        analysisNextPlay.Text = "Replay playback is still available.";
         analysisCard.FadeIn(150);
     }
 
@@ -418,6 +407,8 @@ public partial class NativeReplayRouteView : Container
         loading?.Dispose();
         loading = new CancellationTokenSource();
         CancellationToken cancellationToken = loading.Token;
+        if (selectedReplay is null && !analysisInProgress)
+            loadingOverlay.ShowLoading("Loading replays", "Reading your local osu!lazer play history");
         _ = loadReplayBrowserAsync(searchBox.Current.Value, cancellationToken);
     }
 
@@ -440,7 +431,12 @@ public partial class NativeReplayRouteView : Container
         catch (Exception error)
         {
             if (!IsDisposed)
-                Schedule(() => replayCount.Text = $"Local replays unavailable: {error.Message}");
+                Schedule(() =>
+                {
+                    if (!analysisInProgress)
+                        loadingOverlay.HideLoading();
+                    replayCount.Text = $"Local replays unavailable: {error.Message}";
+                });
         }
     }
 
@@ -460,6 +456,8 @@ public partial class NativeReplayRouteView : Container
 
         if (page.Items.Count == 0)
             replayList.Add(makeText("No local replays match this search.", 13, AimModPalette.Muted));
+        if (!analysisInProgress)
+            loadingOverlay.HideLoading();
     }
 
     private void showMomentButtons(ReplayAnalysisResult result)
@@ -530,6 +528,7 @@ public partial class NativeReplayRouteView : Container
 
     protected override void Dispose(bool isDisposing)
     {
+        SuspendPlayback();
         loading?.Cancel();
         loading?.Dispose();
         base.Dispose(isDisposing);
@@ -572,16 +571,6 @@ public partial class NativeReplayRouteView : Container
             },
         };
     }
-
-    private static string grade(double accuracy, int misses) => (accuracy, misses) switch
-    {
-        (>= 0.9999, 0) => "SS",
-        (>= 0.95, 0) => "S",
-        (>= 0.90, _) => "A",
-        (>= 0.80, _) => "B",
-        (>= 0.70, _) => "C",
-        _ => "D",
-    };
 
     private static string formatAccuracy(double value) => double.IsFinite(value) ? $"{value * 100:0.00}%" : "--";
 
@@ -743,6 +732,84 @@ public partial class NativeReplayRouteView : Container
                 suppliedLabel.Anchor = Anchor.Centre;
                 suppliedLabel.Origin = Anchor.Centre;
             }
+        }
+    }
+
+    private partial class ReplayScrubber : ClickableContainer
+    {
+        private readonly Func<double> currentTime;
+        private readonly Func<double> duration;
+        private readonly Action<double> seek;
+        private readonly Box progress;
+        private readonly CircularContainer handle;
+
+        public ReplayScrubber(Func<double> currentTime, Func<double> duration, Action<double> seek)
+        {
+            this.currentTime = currentTime;
+            this.duration = duration;
+            this.seek = seek;
+
+            Children = new Drawable[]
+            {
+                new Box
+                {
+                    RelativeSizeAxes = Axes.X,
+                    Height = 4,
+                    Anchor = Anchor.CentreLeft,
+                    Origin = Anchor.CentreLeft,
+                    Colour = AimModPalette.Border,
+                },
+                progress = new Box
+                {
+                    RelativeSizeAxes = Axes.X,
+                    Height = 4,
+                    Anchor = Anchor.CentreLeft,
+                    Origin = Anchor.CentreLeft,
+                    Colour = AimModPalette.Pink,
+                },
+                handle = new CircularContainer
+                {
+                    RelativePositionAxes = Axes.X,
+                    Anchor = Anchor.CentreLeft,
+                    Origin = Anchor.Centre,
+                    Size = new(14),
+                    Masking = true,
+                    Child = new Box
+                    {
+                        RelativeSizeAxes = Axes.Both,
+                        Colour = AimModPalette.Text,
+                    },
+                },
+            };
+        }
+
+        protected override void Update()
+        {
+            base.Update();
+            double total = duration();
+            float position = total > 0 ? (float)Math.Clamp(currentTime() / total, 0, 1) : 0;
+            progress.Width = position;
+            handle.X = position;
+        }
+
+        protected override bool OnClick(ClickEvent e)
+        {
+            seekTo(e.ScreenSpaceMousePosition);
+            return true;
+        }
+
+        protected override bool OnDragStart(DragStartEvent e) => duration() > 0;
+
+        protected override void OnDrag(DragEvent e) => seekTo(e.ScreenSpaceMousePosition);
+
+        private void seekTo(osuTK.Vector2 screenPosition)
+        {
+            double total = duration();
+            if (total <= 0 || DrawWidth <= 0)
+                return;
+
+            float localX = ToLocalSpace(screenPosition).X;
+            seek(Math.Clamp(localX / DrawWidth, 0, 1) * total);
         }
     }
 

@@ -31,6 +31,7 @@ public static class RuntimeCommands
     public const string SearchBeatmapSets = "beatmaps.search";
     public const string ReadReplay = "replays.read";
     public const string AnalyseReplay = "replays.analyse";
+    public const string CalculatePp = "pp.whatif.calculate";
     public const string SearchExternalLazerCatalog = "library.catalog.search";
     public const string SearchExternalLazerSkins = "skins.installed.search";
     public const string ResolveExternalLazerAssets = "library.resolve-assets";
@@ -45,6 +46,7 @@ public static class RuntimeCapabilities
     public const string BeatmapSearch = "beatmaps.search";
     public const string ReplayDecode = "replays.decode";
     public const string ReplayAnalysis = "replays.analyse";
+    public const string PerformanceCalculation = "pp.whatif.calculate";
     public const string ExternalLibraryCatalog = "library.catalog.read";
     public const string ExternalLibraryAssets = "library.resolve-assets";
     public const string SkinRead = "skins.read";
@@ -77,7 +79,10 @@ public sealed record ReplayAnalysisResult(
     int WallClockTimeoutMs,
     IReadOnlyList<int> Pauses,
     IReadOnlyList<ReplayObjectJudgement> Judgements,
-    ReplayJudgementSummary Summary);
+    ReplayJudgementSummary Summary,
+    ReplayAnalysisContentIdentity? ContentIdentity = null);
+
+public sealed record ReplayAnalysisContentIdentity(string BeatmapSha256, string ReplaySha256);
 
 public sealed record ReplayObjectJudgement(
     int? ObjectIndex,
@@ -110,6 +115,51 @@ public static class ReplayAnalysisProtocol
     public const long MaximumReplayBytes = 64 * 1024 * 1024;
     public const int MaximumJudgements = 50_000;
     public const int MaximumPauses = 10_000;
+}
+
+public sealed record PpWhatIfRequest(
+    string StagingDirectory,
+    string BeatmapPath,
+    IReadOnlyList<string> Mods,
+    double Accuracy,
+    int MissCount = 0,
+    int? MaxCombo = null,
+    PpScoreStatistics? Statistics = null,
+    string? ModsJson = null);
+
+public sealed record PpScoreStatistics(
+    int Great,
+    int Ok,
+    int Meh,
+    int Miss,
+    int SliderTailHit,
+    int LargeTickMiss);
+
+public sealed record PpWhatIfResult(
+    string EngineVersion,
+    int DifficultyVersion,
+    double StarRating,
+    int MaxCombo,
+    int ObjectCount,
+    int Great,
+    int Ok,
+    int Meh,
+    int Miss,
+    double Accuracy,
+    double PerformancePoints,
+    double? Aim,
+    double? Speed,
+    double? AccuracyValue,
+    double? Flashlight,
+    double? Reading,
+    double? EffectiveMissCount);
+
+public static class PpCalculationProtocol
+{
+    public const string EngineVersion = ReplayAnalysisProtocol.EngineVersion;
+    public const long MaximumBeatmapBytes = ReplayAnalysisProtocol.MaximumBeatmapBytes;
+    public const int MaximumMods = ExternalLazerCatalogProtocol.MaximumMods;
+    public const int MaximumModAcronymLength = ExternalLazerCatalogProtocol.MaximumModAcronymLength;
 }
 
 public sealed record ExternalLazerAssetResolveRequest(
@@ -273,7 +323,10 @@ public sealed record ExternalLazerReplaySummary(
     double? PerformancePoints,
     IReadOnlyList<string> Mods,
     bool HasReplayFile,
-    string BackgroundHash = "");
+    string BackgroundHash = "",
+    PpScoreStatistics? HitStatistics = null,
+    string ModsJson = "",
+    long OnlineScoreId = 0);
 
 public static class ExternalLazerCatalogProtocol
 {

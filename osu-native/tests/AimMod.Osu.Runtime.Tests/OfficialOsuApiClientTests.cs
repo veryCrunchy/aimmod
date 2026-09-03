@@ -193,6 +193,197 @@ public sealed class OfficialOsuApiClientTests
         });
     }
 
+    [Test]
+    public async Task FetchesAndParsesAllStandardBestScorePages()
+    {
+        await writeSignedInSessionAsync("crunchy", access_token);
+        await using LazerSessionMonitor monitor = await LazerSessionMonitor.CreateAsync(gameIniPath);
+        var handler = new RecordingHandler(request =>
+            request.RequestUri!.Query.Contains("offset=0", StringComparison.Ordinal)
+                ? jsonResponse(HttpStatusCode.OK, scorePageJson(42, 100))
+                : jsonResponse(HttpStatusCode.OK, scorePageJson(42, 1, firstId: 101)));
+        using var client = new OfficialOsuApiClient(monitor, handler, Path.Combine(temporaryDirectory, "cache"), TimeProvider.System);
+
+        OsuBestScoresFetchResult result = await client.FetchBestScoresAsync(profile());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(OsuBestScoresFetchStatus.Success));
+            Assert.That(result.IsFromCache, Is.False);
+            Assert.That(result.Scores, Has.Count.EqualTo(101));
+            Assert.That(handler.Requests.Select(request => request.Uri?.Query), Is.EqualTo(new[]
+            {
+                "?mode=osu&limit=100&offset=0",
+                "?mode=osu&limit=100&offset=100",
+            }));
+            Assert.That(handler.Requests.All(request => request.ApiVersion == "20220705"), Is.True);
+            Assert.That(handler.Requests.All(request => request.AuthorizationParameter == access_token), Is.True);
+        });
+
+        OsuBestScore score = result.Scores![0];
+        Assert.Multiple(() =>
+        {
+            Assert.That(score.ScoreId, Is.EqualTo(1));
+            Assert.That(score.UserId, Is.EqualTo(42));
+            Assert.That(score.Username, Is.EqualTo("crunchy"));
+            Assert.That(score.PerformancePoints, Is.EqualTo(321.45));
+            Assert.That(score.Accuracy, Is.EqualTo(0.9876));
+            Assert.That(score.TotalScore, Is.EqualTo(987654));
+            Assert.That(score.MaximumCombo, Is.EqualTo(777));
+            Assert.That(score.Statistics, Is.EqualTo(new OsuScoreStatistics(2, 600, 20, 3)));
+            Assert.That(score.Mods, Is.EqualTo(new[] { "HD", "DT" }));
+            Assert.That(score.EndedAt, Is.EqualTo(DateTimeOffset.Parse("2026-08-01T12:34:56Z")));
+            Assert.That(score.CreatedAt, Is.EqualTo(DateTimeOffset.Parse("2026-08-01T12:34:55Z")));
+            Assert.That(score.Beatmap.BeatmapId, Is.EqualTo(1234));
+            Assert.That(score.Beatmap.Checksum, Is.EqualTo("abc123"));
+            Assert.That(score.Beatmap.StarRating, Is.EqualTo(6.42));
+            Assert.That(score.BeatmapSet.BeatmapSetId, Is.EqualTo(567));
+            Assert.That(score.BeatmapSet.Title, Is.EqualTo("Test Song"));
+            Assert.That(score.BeatmapSet.CoverUrl, Is.EqualTo(new Uri("https://assets.ppy.sh/cover.jpg")));
+        });
+    }
+
+    [Test]
+    public async Task ReusesFreshPersistentCacheWithoutPersistingCredentials()
+    {
+        await writeSignedInSessionAsync("crunchy", access_token);
+        await using LazerSessionMonitor monitor = await LazerSessionMonitor.CreateAsync(gameIniPath);
+        string cacheDirectory = Path.Combine(temporaryDirectory, "cache");
+        var firstHandler = new RecordingHandler(_ => jsonResponse(HttpStatusCode.OK, scorePageJson(42, 1)));
+        using (var firstClient = new OfficialOsuApiClient(monitor, firstHandler, cacheDirectory, TimeProvider.System))
+        {
+            Assert.That((await firstClient.FetchBestScoresAsync(profile())).Status, Is.EqualTo(OsuBestScoresFetchStatus.Success));
+        }
+
+        string cachePath = Directory.GetFiles(cacheDirectory, "*.json").Single();
+        string cacheContents = await File.ReadAllTextAsync(cachePath);
+        var secondHandler = new RecordingHandler(_ => throw new InvalidOperationException("Fresh cache should avoid HTTP."));
+        using var secondClient = new OfficialOsuApiClient(monitor, secondHandler, cacheDirectory, TimeProvider.System);
+
+        OsuBestScoresFetchResult cached = await secondClient.FetchBestScoresAsync(profile());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cached.Status, Is.EqualTo(OsuBestScoresFetchStatus.Success));
+            Assert.That(cached.IsFromCache, Is.True);
+            Assert.That(cached.Scores, Has.Count.EqualTo(1));
+            Assert.That(secondHandler.CallCount, Is.Zero);
+            Assert.That(cachePath, Does.Contain("20220705").And.Contain("user-42"));
+            Assert.That(cacheContents, Does.Not.Contain(access_token));
+            Assert.That(cacheContents, Does.Not.Contain("refresh-private"));
+            Assert.That(Directory.GetFiles(cacheDirectory, "*.tmp"), Is.Empty);
+        });
+    }
+
+    [Test]
+    public async Task ExpiredCacheIsRefetchedInsteadOfUsedAsFallback()
+    {
+        await writeSignedInSessionAsync("crunchy", access_token);
+        await using LazerSessionMonitor monitor = await LazerSessionMonitor.CreateAsync(gameIniPath);
+        string cacheDirectory = Path.Combine(temporaryDirectory, "cache");
+        var time = new ManualTimeProvider(new DateTimeOffset(2026, 8, 1, 0, 0, 0, TimeSpan.Zero));
+        var firstHandler = new RecordingHandler(_ => jsonResponse(HttpStatusCode.OK, scorePageJson(42, 1)));
+        using (var firstClient = new OfficialOsuApiClient(monitor, firstHandler, cacheDirectory, time))
+            await firstClient.FetchBestScoresAsync(profile());
+
+        time.Advance(TimeSpan.FromMinutes(16));
+        var secondHandler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+        using var secondClient = new OfficialOsuApiClient(monitor, secondHandler, cacheDirectory, time);
+
+        OsuBestScoresFetchResult result = await secondClient.FetchBestScoresAsync(profile());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(OsuBestScoresFetchStatus.ServerError));
+            Assert.That(result.Scores, Is.Null);
+            Assert.That(result.IsFromCache, Is.False);
+            Assert.That(secondHandler.CallCount, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public async Task DiscardsSecondPageWhenSignedInAccountChanges()
+    {
+        await writeSignedInSessionAsync("crunchy", access_token);
+        await using LazerSessionMonitor monitor = await LazerSessionMonitor.CreateAsync(gameIniPath);
+        int calls = 0;
+        var handler = new RecordingHandler(_ =>
+        {
+            calls++;
+            if (calls == 2)
+                File.WriteAllText(gameIniPath, sessionContents("other-user", "other-private-token"));
+            return jsonResponse(HttpStatusCode.OK, scorePageJson(42, calls == 1 ? 100 : 1));
+        });
+        using var client = new OfficialOsuApiClient(monitor, handler, Path.Combine(temporaryDirectory, "cache"), TimeProvider.System);
+
+        OsuBestScoresFetchResult result = await client.FetchBestScoresAsync(profile());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(OsuBestScoresFetchStatus.SessionChanged));
+            Assert.That(result.Scores, Is.Null);
+            Assert.That(handler.CallCount, Is.EqualTo(2));
+            Assert.That(JsonSerializer.Serialize(result), Does.Not.Contain(access_token));
+            Assert.That(JsonSerializer.Serialize(result), Does.Not.Contain("other-private-token"));
+        });
+    }
+
+    [Test]
+    public async Task RejectsBestScorePayloadForAnotherUser()
+    {
+        await writeSignedInSessionAsync("crunchy", access_token);
+        await using LazerSessionMonitor monitor = await LazerSessionMonitor.CreateAsync(gameIniPath);
+        var handler = new RecordingHandler(_ => jsonResponse(HttpStatusCode.OK, scorePageJson(99, 1)));
+        using var client = new OfficialOsuApiClient(monitor, handler, Path.Combine(temporaryDirectory, "cache"), TimeProvider.System);
+
+        OsuBestScoresFetchResult result = await client.FetchBestScoresAsync(profile());
+
+        Assert.That(result.Status, Is.EqualTo(OsuBestScoresFetchStatus.InvalidResponse));
+    }
+
+    [Test]
+    public async Task PreservesMissingOfficialPpWithoutInventingAValue()
+    {
+        await writeSignedInSessionAsync("crunchy", access_token);
+        await using LazerSessionMonitor monitor = await LazerSessionMonitor.CreateAsync(gameIniPath);
+        string payload = scorePageJson(42, 1).Replace("\"pp\": 321.45", "\"pp\": null", StringComparison.Ordinal);
+        var handler = new RecordingHandler(_ => jsonResponse(HttpStatusCode.OK, payload));
+        using var client = new OfficialOsuApiClient(monitor, handler, Path.Combine(temporaryDirectory, "cache"), TimeProvider.System);
+
+        OsuBestScoresFetchResult result = await client.FetchBestScoresAsync(profile());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(OsuBestScoresFetchStatus.Success));
+            Assert.That(result.Scores, Has.Count.EqualTo(1));
+            Assert.That(result.Scores![0].PerformancePoints, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task FreshCacheIsNotReturnedAfterAccountChanges()
+    {
+        await writeSignedInSessionAsync("crunchy", access_token);
+        await using LazerSessionMonitor monitor = await LazerSessionMonitor.CreateAsync(gameIniPath);
+        string cacheDirectory = Path.Combine(temporaryDirectory, "cache");
+        var firstHandler = new RecordingHandler(_ => jsonResponse(HttpStatusCode.OK, scorePageJson(42, 1)));
+        using (var firstClient = new OfficialOsuApiClient(monitor, firstHandler, cacheDirectory, TimeProvider.System))
+            await firstClient.FetchBestScoresAsync(profile());
+
+        await File.WriteAllTextAsync(gameIniPath, sessionContents("other-user", "other-private-token"));
+        var secondHandler = new RecordingHandler(_ => throw new InvalidOperationException("Wrong-account cache must not issue HTTP."));
+        using var secondClient = new OfficialOsuApiClient(monitor, secondHandler, cacheDirectory, TimeProvider.System);
+
+        OsuBestScoresFetchResult result = await secondClient.FetchBestScoresAsync(profile());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(OsuBestScoresFetchStatus.SessionChanged));
+            Assert.That(result.Scores, Is.Null);
+            Assert.That(secondHandler.CallCount, Is.Zero);
+        });
+    }
+
     private Task writeSignedInSessionAsync(string username, string token) => File.WriteAllTextAsync(gameIniPath, sessionContents(username, token));
 
     private static string sessionContents(string username, string token) =>
@@ -224,8 +415,38 @@ public sealed class OfficialOsuApiClientTests
         }
         """;
 
+    private static OsuProfile profile() => new(42, "crunchy", "NL", null, null);
+
+    private static string scorePageJson(int userId, int count, int firstId = 1) =>
+        "[" + string.Join(",", Enumerable.Range(firstId, count).Select(id => bestScoreJson(id, userId))) + "]";
+
+    private static string bestScoreJson(int id, int userId) => $$"""
+        {
+          "id": {{id}},
+          "user_id": {{userId}},
+          "pp": 321.45,
+          "accuracy": 0.9876,
+          "score": 987654,
+          "max_combo": 777,
+          "statistics": { "count_miss": 2, "count_300": 600, "count_100": 20, "count_50": 3 },
+          "mods": ["HD", { "acronym": "DT", "settings": { "speed_change": 1.5 } }],
+          "ended_at": "2026-08-01T12:34:56Z",
+          "created_at": "2026-08-01T12:34:55Z",
+          "beatmap": {
+            "id": 1234, "checksum": "abc123", "version": "Insane", "difficulty_rating": 6.42,
+            "max_combo": 900, "bpm": 180.0, "total_length": 125
+          },
+          "beatmapset": {
+            "id": 567, "title": "Test Song", "title_unicode": "Test Song Unicode",
+            "artist": "Test Artist", "artist_unicode": "Test Artist Unicode", "creator": "Mapper",
+            "source": "Game", "status": "ranked", "covers": { "cover": "https://assets.ppy.sh/cover.jpg" }
+          }
+        }
+        """;
+
     private sealed class RecordingHandler(Func<HttpRequestMessage, HttpResponseMessage> responseFactory) : HttpMessageHandler
     {
+        public List<RecordedRequest> Requests { get; } = [];
         public int CallCount { get; private set; }
         public Uri? RequestUri { get; private set; }
         public HttpMethod? Method { get; private set; }
@@ -239,7 +460,27 @@ public sealed class OfficialOsuApiClientTests
             Method = request.Method;
             AuthorizationScheme = request.Headers.Authorization?.Scheme;
             AuthorizationParameter = request.Headers.Authorization?.Parameter;
+            Requests.Add(new RecordedRequest(
+                request.RequestUri,
+                request.Method,
+                request.Headers.Authorization?.Scheme,
+                request.Headers.Authorization?.Parameter,
+                request.Headers.TryGetValues("x-api-version", out IEnumerable<string>? values) ? values.SingleOrDefault() : null));
             return Task.FromResult(responseFactory(request));
         }
+    }
+
+    private sealed record RecordedRequest(
+        Uri? Uri,
+        HttpMethod Method,
+        string? AuthorizationScheme,
+        string? AuthorizationParameter,
+        string? ApiVersion);
+
+    private sealed class ManualTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => utcNow;
+
+        public void Advance(TimeSpan duration) => utcNow += duration;
     }
 }

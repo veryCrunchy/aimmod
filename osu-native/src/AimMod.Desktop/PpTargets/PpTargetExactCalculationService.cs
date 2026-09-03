@@ -1,0 +1,341 @@
+using System.Text.Json;
+using AimMod.Osu.Runtime;
+using AimMod.Osu.Runtime.Contracts;
+
+namespace AimMod.Desktop.PpTargets;
+
+public sealed record PpTargetExactRequest(
+    int BeatmapId,
+    string? BeatmapHash,
+    IReadOnlyList<string> Mods,
+    double ExpectedAccuracy,
+    double Attainability);
+
+public sealed record PpTargetExactCalculationProgress(int Completed, int Total);
+
+public interface IPpTargetExactCalculationService
+{
+    Task<IReadOnlyDictionary<int, PpTargetEstimate>> CalculateAsync(
+        IReadOnlyList<PpTargetExactRequest> requests,
+        CancellationToken cancellationToken = default,
+        IProgress<PpTargetExactCalculationProgress>? progress = null);
+}
+
+public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationService
+{
+    private const int cache_version = 1;
+    private const int maximum_batch_size = 50;
+    private const int maximum_cache_entries = 2_048;
+    private static readonly JsonSerializerOptions json_options = new(JsonSerializerDefaults.Web);
+
+    private readonly string libraryRoot;
+    private readonly string cachePath;
+    private readonly IOfficialBeatmapDifficultyClient? difficultyClient;
+    private readonly string difficultyDownloadDirectory;
+    private readonly Func<SidecarRuntimeClient> runtimeFactory;
+    private readonly SemaphoreSlim calculationGate = new(1, 1);
+    private readonly Dictionary<string, CacheEntry> cache;
+
+    public PpTargetExactCalculationService(string libraryRoot, string cachePath)
+        : this(libraryRoot, cachePath, null, Path.Combine(Path.GetTempPath(), "aimmod-pp-target-difficulties"))
+    {
+    }
+
+    public PpTargetExactCalculationService(
+        string libraryRoot,
+        string cachePath,
+        IOfficialBeatmapDifficultyClient? difficultyClient,
+        string difficultyDownloadDirectory)
+        : this(libraryRoot, cachePath, difficultyClient, difficultyDownloadDirectory, SidecarRuntimeClient.Start)
+    {
+    }
+
+    internal PpTargetExactCalculationService(
+        string libraryRoot,
+        string cachePath,
+        IOfficialBeatmapDifficultyClient? difficultyClient,
+        string difficultyDownloadDirectory,
+        Func<SidecarRuntimeClient> runtimeFactory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(libraryRoot);
+        ArgumentException.ThrowIfNullOrWhiteSpace(cachePath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(difficultyDownloadDirectory);
+        if (!Path.IsPathFullyQualified(libraryRoot) || !Path.IsPathFullyQualified(cachePath) || !Path.IsPathFullyQualified(difficultyDownloadDirectory))
+            throw new ArgumentException("PP target calculation paths must be absolute.");
+
+        this.libraryRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(libraryRoot));
+        this.cachePath = Path.GetFullPath(cachePath);
+        this.difficultyClient = difficultyClient;
+        this.difficultyDownloadDirectory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(difficultyDownloadDirectory));
+        this.runtimeFactory = runtimeFactory ?? throw new ArgumentNullException(nameof(runtimeFactory));
+        cache = loadCache(this.cachePath);
+    }
+
+    public async Task<IReadOnlyDictionary<int, PpTargetEstimate>> CalculateAsync(
+        IReadOnlyList<PpTargetExactRequest> requests,
+        CancellationToken cancellationToken = default,
+        IProgress<PpTargetExactCalculationProgress>? progress = null)
+    {
+        ArgumentNullException.ThrowIfNull(requests);
+        PpTargetExactRequest[] valid = requests.Where(isValid)
+                                               .DistinctBy(cacheKey)
+                                               .Take(maximum_batch_size)
+                                               .ToArray();
+        if (valid.Length == 0)
+            return new Dictionary<int, PpTargetEstimate>();
+
+        await calculationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var completed = new Dictionary<int, PpTargetEstimate>();
+            PpTargetExactRequest[] missing = valid.Where(request => !tryReadCached(request, completed)).ToArray();
+            progress?.Report(new PpTargetExactCalculationProgress(completed.Count, valid.Length));
+            if (missing.Length == 0)
+                return completed;
+
+            await using SidecarRuntimeClient runtime = runtimeFactory();
+            var runtimeClient = new SidecarRuntimeRequestClient(runtime);
+            var assetClient = new ExternalLazerAssetClient(runtimeClient);
+            var ppClient = new PpWhatIfClient(runtimeClient);
+            string[] hashes = missing.Select(request => request.BeatmapHash)
+                                     .Where(hash => !string.IsNullOrWhiteSpace(hash))
+                                     .Cast<string>()
+                                     .Distinct(StringComparer.OrdinalIgnoreCase)
+                                     .ToArray();
+
+            await using ExternalLazerAssetStagingLease? lease = hashes.Length == 0
+                ? null
+                : await assetClient.ResolveToPrivateStagingAsync(
+                    libraryRoot,
+                    hashes,
+                    Array.Empty<Guid>(),
+                    cancellationToken).ConfigureAwait(false);
+            Dictionary<string, ExternalLazerResolvedAsset> beatmaps = (lease?.Result.Files ?? [])
+                .Where(file => string.Equals(file.Kind, "Beatmap", StringComparison.Ordinal))
+                .GroupBy(file => file.OwnerId, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+
+            bool changed = false;
+            Exception? firstCalculationFailure = null;
+            for (int index = 0; index < missing.Length; index++)
+            {
+                PpTargetExactRequest request = missing[index];
+                cancellationToken.ThrowIfCancellationRequested();
+                string? downloadedPath = null;
+                string? beatmapPath = request.BeatmapHash is { Length: > 0 } hash && beatmaps.TryGetValue(hash, out ExternalLazerResolvedAsset? localBeatmap)
+                    ? localBeatmap.StagedPath
+                    : null;
+
+                if (beatmapPath is null && difficultyClient is not null)
+                {
+                    OfficialBeatmapDifficultyDownloadResult download = await difficultyClient.DownloadDifficultyAsync(
+                        request.BeatmapId,
+                        difficultyDownloadDirectory,
+                        cancellationToken).ConfigureAwait(false);
+                    if (download.Status == OfficialBeatmapRequestStatus.Success)
+                        beatmapPath = downloadedPath = download.BeatmapPath;
+                    else
+                        firstCalculationFailure ??= new InvalidOperationException(
+                            $"Beatmap difficulty {request.BeatmapId} download failed with status {download.Status}.");
+                }
+                if (beatmapPath is null)
+                {
+                    progress?.Report(new PpTargetExactCalculationProgress(valid.Length - missing.Length + index + 1, valid.Length));
+                    continue;
+                }
+
+                try
+                {
+                    string stagingDirectory = Path.GetDirectoryName(beatmapPath)!;
+                    IReadOnlyList<string> mods = normaliseMods(request.Mods);
+                    PpWhatIfResult ceiling = await ppClient.CalculateAsync(new PpWhatIfRequest(
+                        stagingDirectory, beatmapPath, mods, 1, 0, null), cancellationToken).ConfigureAwait(false);
+                    (int misses, int combo) = ExpectedScoreShape(request.Attainability, ceiling.MaxCombo);
+                    PpWhatIfResult expected = await ppClient.CalculateAsync(new PpWhatIfRequest(
+                        stagingDirectory, beatmapPath, mods, request.ExpectedAccuracy, misses, combo), cancellationToken).ConfigureAwait(false);
+                    PpTargetEstimate estimate = createEstimate(request, expected, ceiling);
+                    cache[cacheKey(request)] = new CacheEntry(cacheKey(request), DateTimeOffset.UtcNow, estimate);
+                    completed[request.BeatmapId] = estimate;
+                    changed = true;
+                }
+                catch (Exception error) when (error is not OperationCanceledException)
+                {
+                    firstCalculationFailure ??= error;
+                }
+                finally
+                {
+                    if (downloadedPath is not null)
+                        deleteIfPresent(downloadedPath);
+                    progress?.Report(new PpTargetExactCalculationProgress(
+                        valid.Length - missing.Length + index + 1,
+                        valid.Length));
+                }
+            }
+
+            if (completed.Count == 0 && firstCalculationFailure is not null)
+                throw new InvalidOperationException("Official PP calculation failed for every requested beatmap difficulty.", firstCalculationFailure);
+
+            if (changed)
+            {
+                try
+                {
+                    await saveCacheAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or NotSupportedException)
+                {
+                }
+            }
+            return completed;
+        }
+        finally
+        {
+            calculationGate.Release();
+        }
+    }
+
+    internal static (int Misses, int Combo) ExpectedScoreShape(double attainability, int maximumCombo)
+    {
+        double fit = Math.Clamp(attainability, 0, 1);
+        int misses = fit switch
+        {
+            >= 0.85 => 0,
+            >= 0.60 => 1,
+            >= 0.35 => 2,
+            _ => 3,
+        };
+        double comboRatio = misses == 0 ? 1 : Math.Clamp(1 - 0.16 * misses, 0.5, 0.84);
+        return (misses, Math.Clamp((int)Math.Round(maximumCombo * comboRatio), 0, maximumCombo));
+    }
+
+    private static PpTargetEstimate createEstimate(PpTargetExactRequest request, PpWhatIfResult expected, PpWhatIfResult ceiling)
+    {
+        double expectedPp = expected.PerformancePoints;
+        double maximumPp = Math.Max(expectedPp, ceiling.PerformancePoints);
+        double spread = 0.18 + 0.16 * (1 - Math.Clamp(request.Attainability, 0, 1));
+        return new PpTargetEstimate(
+            expectedPp,
+            maximumPp,
+            new PpTargetRange(Math.Max(0, expectedPp * (1 - spread)), expectedPp * (1 + spread)),
+            1,
+            PpTargetConfidence.High,
+            $"Official osu! ruleset {PpCalculationProtocol.EngineVersion}: projected score and exact 100% full-combo ceiling for the selected mods.");
+    }
+
+    private bool tryReadCached(PpTargetExactRequest request, IDictionary<int, PpTargetEstimate> completed)
+    {
+        if (!cache.TryGetValue(cacheKey(request), out CacheEntry? entry) || !validEstimate(entry.Estimate))
+            return false;
+        completed[request.BeatmapId] = entry.Estimate;
+        return true;
+    }
+
+    private async Task saveCacheAsync(CancellationToken cancellationToken)
+    {
+        string? directory = Path.GetDirectoryName(cachePath);
+        if (!string.IsNullOrWhiteSpace(directory))
+            Directory.CreateDirectory(directory);
+        CacheEntry[] entries = cache.Values.OrderBy(entry => entry.CalculatedAt).TakeLast(maximum_cache_entries).ToArray();
+        string temporaryPath = $"{cachePath}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            await using FileStream stream = new(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, true);
+            await JsonSerializer.SerializeAsync(stream, new CacheDocument(cache_version, entries), json_options, cancellationToken).ConfigureAwait(false);
+            await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            File.Move(temporaryPath, cachePath, true);
+        }
+        finally
+        {
+            try
+            {
+                File.Delete(temporaryPath);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    private static Dictionary<string, CacheEntry> loadCache(string path)
+    {
+        try
+        {
+            if (!File.Exists(path))
+                return new Dictionary<string, CacheEntry>(StringComparer.Ordinal);
+            using FileStream stream = File.OpenRead(path);
+            CacheDocument? document = JsonSerializer.Deserialize<CacheDocument>(stream, json_options);
+            if (document?.Version != cache_version || document.Entries is null)
+                return new Dictionary<string, CacheEntry>(StringComparer.Ordinal);
+            return document.Entries.Where(entry => !string.IsNullOrWhiteSpace(entry.Key) && validEstimate(entry.Estimate))
+                           .TakeLast(maximum_cache_entries)
+                           .ToDictionary(entry => entry.Key, StringComparer.Ordinal);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or NotSupportedException)
+        {
+            return new Dictionary<string, CacheEntry>(StringComparer.Ordinal);
+        }
+    }
+
+    private static string cacheKey(PpTargetExactRequest request) => string.Join('|',
+        PpCalculationProtocol.EngineVersion,
+        request.BeatmapHash?.ToLowerInvariant() ?? $"beatmap-{request.BeatmapId}",
+        string.Join(',', normaliseMods(request.Mods)),
+        request.ExpectedAccuracy.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+        request.Attainability.ToString("R", System.Globalization.CultureInfo.InvariantCulture));
+
+    private static IReadOnlyList<string> normaliseMods(IReadOnlyList<string> mods)
+    {
+        HashSet<string> values = (mods ?? []).Select(mod => modAcronym((mod ?? string.Empty).Trim().ToUpperInvariant()))
+                                              .Where(mod => mod.Length > 0 && mod is not "NM")
+                                              .ToHashSet(StringComparer.Ordinal);
+        if (values.Contains("NC"))
+            values.Remove("DT");
+        if (values.Contains("DT") || values.Contains("NC"))
+            values.Remove("HT");
+        if (values.Contains("HR"))
+            values.Remove("EZ");
+        return values.Order(StringComparer.Ordinal).ToArray();
+    }
+
+    private static string modAcronym(string mod) => mod switch
+    {
+        "NOMOD" => "NM",
+        "HIDDEN" => "HD",
+        "HARDROCK" => "HR",
+        "DOUBLETIME" => "DT",
+        "NIGHTCORE" => "NC",
+        "FLASHLIGHT" => "FL",
+        "HALFTIME" => "HT",
+        "EASY" => "EZ",
+        "NOFAIL" => "NF",
+        "SPUNOUT" => "SO",
+        "CLASSIC" => "CL",
+        _ => mod,
+    };
+
+    private static bool isValid(PpTargetExactRequest request) => request is not null
+        && request.BeatmapId > 0
+        && (string.IsNullOrWhiteSpace(request.BeatmapHash)
+            || request.BeatmapHash is { Length: 32 or 64 }
+            && request.BeatmapHash.All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f' or >= 'A' and <= 'F'))
+        && double.IsFinite(request.ExpectedAccuracy) && request.ExpectedAccuracy is >= 0 and <= 1
+        && double.IsFinite(request.Attainability);
+
+    private static bool validEstimate(PpTargetEstimate estimate) => estimate is not null
+        && double.IsFinite(estimate.ExpectedPp) && estimate.ExpectedPp >= 0
+        && double.IsFinite(estimate.RealisticMaximumPp) && estimate.RealisticMaximumPp >= estimate.ExpectedPp
+        && estimate.Method.Contains(PpCalculationProtocol.EngineVersion, StringComparison.Ordinal);
+
+    private static void deleteIfPresent(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private sealed record CacheDocument(int Version, IReadOnlyList<CacheEntry> Entries);
+    private sealed record CacheEntry(string Key, DateTimeOffset CalculatedAt, PpTargetEstimate Estimate);
+}

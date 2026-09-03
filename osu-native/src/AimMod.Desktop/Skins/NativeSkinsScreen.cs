@@ -14,8 +14,8 @@ namespace AimMod.Desktop.Skins;
 
 public partial class NativeSkinsScreen : CompositeDrawable
 {
-    private readonly ExternalLazerInstalledSkinSource? source;
-    private readonly Func<InstalledLazerSkin, CancellationToken, Task>? applySkin;
+    private ExternalLazerInstalledSkinSource? source;
+    private Func<InstalledLazerSkin, CancellationToken, Task>? applySkin;
     private readonly CancellationTokenSource lifetime = new();
     private readonly OsuTextBox searchBox;
     private readonly SpriteText status;
@@ -191,6 +191,27 @@ public partial class NativeSkinsScreen : CompositeDrawable
         appliedExternalSkinId = externalSkinId;
         refreshRows();
         updateDetails();
+    }
+
+    public void Configure(
+        ExternalLazerInstalledSkinSource? source,
+        Guid? lazerSkinId,
+        Guid? appliedExternalSkinId,
+        Func<InstalledLazerSkin, CancellationToken, Task>? applySkin)
+    {
+        bool sourceChanged = !ReferenceEquals(this.source, source);
+        this.source = source;
+        this.lazerSkinId = lazerSkinId;
+        this.appliedExternalSkinId = appliedExternalSkinId;
+        this.applySkin = applySkin;
+
+        if (sourceChanged)
+            loadSkins();
+        else
+        {
+            refreshRows();
+            updateDetails();
+        }
     }
 
     private void loadSkins()

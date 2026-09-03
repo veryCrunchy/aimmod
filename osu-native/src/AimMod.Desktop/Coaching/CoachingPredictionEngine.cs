@@ -44,6 +44,7 @@ public static class CoachingPredictionEngine
             selected is null ? null : BuildSetupBenchmark(history, selected),
             buildSessionDrift(history),
             buildMechanics(history, analyses),
+            buildPpPlan(history),
             buildRecommendations(history));
     }
 
@@ -342,9 +343,13 @@ public static class CoachingPredictionEngine
             return Array.Empty<CoachingRecommendation>();
 
         var candidates = new List<RecommendationCandidate>();
-        foreach (LocalReplay[] setup in history.Where(run => validAccuracy(run.Accuracy))
-                                                .GroupBy(setupKey)
-                                                .Select(group => group.OrderBy(run => run.PlayedAt).ToArray()))
+        LocalReplay[][] recentSetups = history.Where(run => validAccuracy(run.Accuracy))
+                                               .GroupBy(setupKey)
+                                               .Select(group => group.OrderBy(run => run.PlayedAt).ToArray())
+                                               .OrderByDescending(setup => setup[^1].PlayedAt)
+                                               .Take(CoachingLimits.MaximumRecommendationCandidates)
+                                               .ToArray();
+        foreach (LocalReplay[] setup in recentSetups)
         {
             LocalReplay latest = setup[^1];
             LocalReplay forecastTarget = latest with
@@ -421,6 +426,138 @@ public static class CoachingPredictionEngine
                              candidate.Prediction?.Confidence ?? CoachingConfidence.Insufficient,
                              candidate.Prediction?.SampleCount ?? 0))
                          .ToArray();
+    }
+
+    private static CoachingPpPlan buildPpPlan(IReadOnlyList<LocalReplay> history)
+    {
+        LocalReplay[] ppRuns = history.Where(run => validAccuracy(run.Accuracy)
+                                                    && validStars(run.StarRating)
+                                                    && validPp(run.PerformancePoints))
+                                      .OrderBy(run => run.PlayedAt)
+                                      .ToArray();
+        if (ppRuns.Length == 0)
+        {
+            return new CoachingPpPlan(
+                0,
+                null,
+                null,
+                null,
+                CoachingConfidence.Insufficient,
+                "No local osu!standard plays with PP values are available yet.",
+                Array.Empty<CoachingPpOpportunity>());
+        }
+
+        LocalReplay[][] allSetups = ppRuns.GroupBy(setupKey)
+                                                .Select(group => group.OrderBy(run => run.PlayedAt).ToArray())
+                                                .ToArray();
+        int poolSlice = Math.Max(1, CoachingLimits.MaximumPpCandidateSetups / 3);
+        LocalReplay[] distinctSetupBestRuns = allSetups.Select(setup => setup.MaxBy(run => run.PerformancePoints)!)
+                                                       .ToArray();
+        LocalReplay[][] candidateSetups = allSetups.OrderByDescending(setup => setup[^1].PlayedAt)
+                                                    .Take(poolSlice)
+                                                    .Concat(allSetups.OrderByDescending(setup => setup.Max(run => run.PerformancePoints!.Value)
+                                                                                                      - setup[^1].PerformancePoints!.Value)
+                                                                     .Take(poolSlice))
+                                                    .Concat(allSetups.OrderByDescending(setup => setup.Max(run => run.PerformancePoints!.Value))
+                                                                     .Take(poolSlice))
+                                                    .DistinctBy(setup => setupKey(setup[^1]))
+                                                    .Take(CoachingLimits.MaximumPpCandidateSetups)
+                                                    .ToArray();
+
+        var candidates = new List<PpCandidate>();
+        foreach (LocalReplay[] setup in candidateSetups)
+        {
+            LocalReplay latest = setup[^1];
+            double currentPp = latest.PerformancePoints!.Value;
+            LocalReplay[] priorSameSetup = setup.Take(setup.Length - 1).ToArray();
+            LocalReplay[] similarStarRuns = distinctSetupBestRuns.Where(run => Math.Abs(run.StarRating - latest.StarRating) <= 0.75
+                                                                              && modSimilarity(run.Mods, latest.Mods) >= 0.5)
+                                                                .ToArray();
+            double setupBestPp = setup.Max(run => run.PerformancePoints!.Value);
+            double similarCeiling = similarStarRuns.Length == 0
+                ? currentPp
+                : percentile(similarStarRuns.Select(run => run.PerformancePoints!.Value), similarStarRuns.Length >= 12 ? 0.8 : 0.7);
+            double observedCeiling = Math.Max(setupBestPp, similarCeiling);
+            double recoverableGain = Math.Max(0, setupBestPp - currentPp);
+            double stretchGain = Math.Max(0, observedCeiling - currentPp) * 0.45;
+            double projectedPp = Math.Min(observedCeiling, currentPp + Math.Max(recoverableGain * 0.85, stretchGain));
+            double realisticGain = Math.Max(0, projectedPp - currentPp);
+            if (realisticGain < 1)
+                continue;
+            double profilePpGain = CoachingPpWeighting.CalculateProfileGain(ppRuns, latest.BeatmapId, projectedPp);
+            if (profilePpGain < 0.05)
+                continue;
+
+            CoachingAccuracyPrediction? prediction = Predict(history, latest with
+            {
+                ScoreId = Guid.Empty,
+                PlayedAt = history[^1].PlayedAt.AddTicks(1),
+            });
+            double? targetAccuracy = bestNullable(
+                latest.Accuracy,
+                priorSameSetup.Length == 0 ? null : priorSameSetup.Max(run => run.Accuracy),
+                prediction?.UpperAccuracy);
+            int? targetMissCount = priorSameSetup.Length == 0
+                ? latest.MissCount
+                : Math.Min(latest.MissCount, priorSameSetup.Min(run => Math.Max(0, run.MissCount)));
+            CoachingConfidence opportunityConfidence = ppOpportunityConfidence(priorSameSetup.Length, similarStarRuns.Length, prediction?.Confidence);
+            string reason = recoverableGain >= stretchGain
+                ? $"A previous matching setup reached {setupBestPp:0.0}pp. The current local play is {currentPp:0.0}pp, so the model treats most of that gap as recoverable."
+                : $"Nearby-star local plays with similar mods put this setup in a {observedCeiling:0.0}pp observed window. The projection uses only part of that gap.";
+            candidates.Add(new PpCandidate(latest, currentPp, projectedPp, realisticGain, profilePpGain, targetAccuracy, targetMissCount, opportunityConfidence, priorSameSetup.Length, similarStarRuns.Length, reason));
+        }
+
+        CoachingPpOpportunity[] opportunities = candidates.GroupBy(candidate => candidate.Run.BeatmapId)
+                                                          .Select(group => group.OrderByDescending(candidate => candidate.ProfilePpGain)
+                                                                                .ThenByDescending(candidate => candidate.RealisticGain)
+                                                                                .First())
+                                                          .OrderByDescending(candidate => candidate.ProfilePpGain)
+                                                          .ThenByDescending(candidate => candidate.RealisticGain)
+                                                          .ThenByDescending(candidate => candidate.Run.StarRating)
+                                                          .ThenByDescending(candidate => candidate.Run.PlayedAt)
+                                                          .Take(CoachingLimits.RecommendationLimit)
+                                                          .Select((candidate, index) => new CoachingPpOpportunity(
+                                                              index + 1,
+                                                              candidate.Run.BeatmapId,
+                                                              candidate.Run.ScoreId,
+                                                              candidate.Run.Title,
+                                                              candidate.Run.Difficulty,
+                                                              candidate.Run.StarRating,
+                                                              candidate.CurrentPp,
+                                                              candidate.ProjectedPp,
+                                                              candidate.RealisticGain,
+                                                              candidate.TargetAccuracy,
+                                                              candidate.TargetMissCount,
+                                                              candidate.Confidence,
+                                                              candidate.SameSetupSampleCount,
+                                                              candidate.SimilarStarSampleCount,
+                                                              candidate.Reason,
+                                                              candidate.ProfilePpGain))
+                                                          .ToArray();
+        double? bestGain = opportunities.FirstOrDefault()?.RealisticGain;
+        double? topThree = opportunities.Length == 0 ? null : opportunities.Take(3).Sum(opportunity => opportunity.RealisticGain);
+        double? bestProfileGain = opportunities.FirstOrDefault()?.ProfilePpGain;
+        double? topThreeProfileGain = opportunities.Length == 0
+            ? null
+            : CoachingPpWeighting.CalculateCombinedProfileGain(
+                ppRuns,
+                opportunities.Take(3).Select(opportunity => (opportunity.BeatmapId, opportunity.ProjectedPp)));
+        CoachingConfidence confidence = opportunities.Length == 0
+            ? CoachingConfidence.Insufficient
+            : opportunities.Max(opportunity => opportunity.Confidence);
+        string summary = opportunities.Length == 0
+            ? $"{ppRuns.Length:N0} PP-valued plays are available, but none show a clear recoverable PP gap yet."
+            : $"Best target adds about +{bestProfileGain:0.0} profile pp; completing the top three targets adds about +{topThreeProfileGain:0.0} profile pp from weighted scores.";
+        return new CoachingPpPlan(
+            ppRuns.Length,
+            ppRuns.Max(run => run.PerformancePoints!.Value),
+            bestGain,
+            topThree,
+            confidence,
+            summary,
+            opportunities,
+            bestProfileGain,
+            topThreeProfileGain);
     }
 
     private static CoachingMapSegment[] buildMapSegments(IReadOnlyList<ReplayAnalysisResult> analyses)
@@ -542,6 +679,8 @@ public static class CoachingPredictionEngine
 
     private static bool validStars(double value) => double.IsFinite(value) && value > 0;
 
+    private static bool validPp(double? value) => value is { } pp && double.IsFinite(pp) && pp > 0;
+
     private static bool validAnalysis(ReplayAnalysisResult? analysis) =>
         analysis is { Judgements: not null, Summary: not null };
 
@@ -568,6 +707,25 @@ public static class CoachingPredictionEngine
 
     private static double finiteOrZero(double value) => double.IsFinite(value) ? value : 0;
 
+    private static double? bestNullable(params double?[] values)
+    {
+        double[] finite = values.Where(value => value is { } number && double.IsFinite(number))
+                                .Select(value => value!.Value)
+                                .ToArray();
+        return finite.Length == 0 ? null : finite.Max();
+    }
+
+    private static CoachingConfidence ppOpportunityConfidence(int sameSetupSampleCount, int similarStarSampleCount, CoachingConfidence? predictionConfidence)
+    {
+        if (sameSetupSampleCount >= 3 && similarStarSampleCount >= 12 && predictionConfidence is CoachingConfidence.Medium or CoachingConfidence.High)
+            return CoachingConfidence.High;
+        if (sameSetupSampleCount >= 1 && similarStarSampleCount >= 6)
+            return CoachingConfidence.Medium;
+        if (similarStarSampleCount >= 3)
+            return CoachingConfidence.Low;
+        return CoachingConfidence.Insufficient;
+    }
+
     private static string formatAccuracy(double accuracy, int decimals = 1) =>
         (accuracy * 100).ToString(decimals == 2 ? "0.00" : "0.0", System.Globalization.CultureInfo.InvariantCulture) + "%";
 
@@ -583,4 +741,17 @@ public static class CoachingPredictionEngine
         string Intent,
         string Reason,
         double Priority);
+
+    private sealed record PpCandidate(
+        LocalReplay Run,
+        double CurrentPp,
+        double ProjectedPp,
+        double RealisticGain,
+        double ProfilePpGain,
+        double? TargetAccuracy,
+        int? TargetMissCount,
+        CoachingConfidence Confidence,
+        int SameSetupSampleCount,
+        int SimilarStarSampleCount,
+        string Reason);
 }

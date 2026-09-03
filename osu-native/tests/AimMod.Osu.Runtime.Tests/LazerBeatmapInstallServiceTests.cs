@@ -12,6 +12,7 @@ public sealed class LazerBeatmapInstallServiceTests
     private string homeDirectory = null!;
     private string dataHome = null!;
     private string launcher = null!;
+    private string desktopLauncher = null!;
 
     [SetUp]
     public void SetUp()
@@ -20,6 +21,7 @@ public sealed class LazerBeatmapInstallServiceTests
         homeDirectory = Path.Combine(temporaryDirectory, "home");
         dataHome = Path.Combine(temporaryDirectory, "data");
         launcher = Path.Combine(temporaryDirectory, "osu launcher");
+        desktopLauncher = launcher.Replace('\\', '/');
         Directory.CreateDirectory(homeDirectory);
         Directory.CreateDirectory(Path.Combine(dataHome, "applications"));
         File.WriteAllText(launcher, "#!/bin/sh\nexit 0\n");
@@ -37,7 +39,7 @@ public sealed class LazerBeatmapInstallServiceTests
     [Test]
     public void FindsOsuDesktopEntryAndPreservesFlatpakFileForwardingSlot()
     {
-        writeDesktopEntry($"\"{launcher}\" --flag @@u %U @@");
+        writeDesktopEntry($"\"{desktopLauncher}\" --flag @@u %U @@");
         var locator = createLocator();
 
         LazerLaunchCommand? command = locator.Find();
@@ -55,7 +57,7 @@ public sealed class LazerBeatmapInstallServiceTests
     [Test]
     public void IgnoresAnUnknownDesktopIdEvenWhenItClaimsToBeOsu()
     {
-        writeDesktopEntry($"\"{launcher}\" %u", "not-really-osu.desktop");
+        writeDesktopEntry($"\"{desktopLauncher}\" %u", "not-really-osu.desktop");
 
         Assert.That(createLocator().Find(), Is.Null);
     }
@@ -66,7 +68,7 @@ public sealed class LazerBeatmapInstallServiceTests
     {
         File.WriteAllText(
             Path.Combine(dataHome, "applications", "osu.desktop"),
-            $"[Desktop Entry]\nName=osu!\n{identity}\nExec=\"{launcher}\" %u\n");
+            $"[Desktop Entry]\nName=osu!\n{identity}\nExec=\"{desktopLauncher}\" %u\n");
 
         Assert.That(createLocator().Find(), Is.Null);
     }
@@ -74,7 +76,7 @@ public sealed class LazerBeatmapInstallServiceTests
     [Test]
     public async Task PreservesOneVerifiedArchiveAndLaunchesItAsAnArgument()
     {
-        writeDesktopEntry($"\"{launcher}\" %u");
+        writeDesktopEntry($"\"{desktopLauncher}\" %u");
         string archivePath = createOsz("source.osz");
         ProcessStartInfo? observed = null;
         var service = new LazerBeatmapInstallService(

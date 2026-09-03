@@ -10,6 +10,7 @@ internal sealed class ReplayAnalysisBackend : IRuntimeBackend
     private readonly IReplayAnalysisEngine engine;
     private readonly ReplayInputValidator inputValidator;
     private readonly TimeSpan timeout;
+    private readonly IPpWhatIfCalculator ppCalculator;
     private readonly IExternalLazerAssetBackend externalLibrary;
     private readonly IExternalLazerCatalogBackend externalCatalog;
     private readonly IExternalLazerSkinCatalogBackend externalSkins;
@@ -17,6 +18,7 @@ internal sealed class ReplayAnalysisBackend : IRuntimeBackend
     public ReplayAnalysisBackend()
         : this(
             new OfficialReplayAnalysisEngine(),
+            new OfficialPpWhatIfCalculator(),
             new ReplayInputValidator(),
             TimeSpan.FromMilliseconds(ReplayAnalysisProtocol.WallClockTimeoutMs),
             new ExternalLazerAssetBackend(),
@@ -26,7 +28,7 @@ internal sealed class ReplayAnalysisBackend : IRuntimeBackend
     }
 
     internal ReplayAnalysisBackend(IReplayAnalysisEngine engine, ReplayInputValidator inputValidator, TimeSpan timeout)
-        : this(engine, inputValidator, timeout, new ExternalLazerAssetBackend(), new ExternalLazerCatalogBackend(), new ExternalLazerSkinCatalogBackend())
+        : this(engine, new OfficialPpWhatIfCalculator(), inputValidator, timeout, new ExternalLazerAssetBackend(), new ExternalLazerCatalogBackend(), new ExternalLazerSkinCatalogBackend())
     {
     }
 
@@ -35,7 +37,7 @@ internal sealed class ReplayAnalysisBackend : IRuntimeBackend
         ReplayInputValidator inputValidator,
         TimeSpan timeout,
         IExternalLazerAssetBackend externalLibrary)
-        : this(engine, inputValidator, timeout, externalLibrary, new ExternalLazerCatalogBackend(), new ExternalLazerSkinCatalogBackend())
+        : this(engine, new OfficialPpWhatIfCalculator(), inputValidator, timeout, externalLibrary, new ExternalLazerCatalogBackend(), new ExternalLazerSkinCatalogBackend())
     {
     }
 
@@ -46,9 +48,31 @@ internal sealed class ReplayAnalysisBackend : IRuntimeBackend
         IExternalLazerAssetBackend externalLibrary,
         IExternalLazerCatalogBackend externalCatalog,
         IExternalLazerSkinCatalogBackend? externalSkins = null)
+        : this(engine, new OfficialPpWhatIfCalculator(), inputValidator, timeout, externalLibrary, externalCatalog, externalSkins)
+    {
+    }
+
+    internal ReplayAnalysisBackend(
+        IReplayAnalysisEngine engine,
+        IPpWhatIfCalculator ppCalculator,
+        ReplayInputValidator inputValidator,
+        TimeSpan timeout)
+        : this(engine, ppCalculator, inputValidator, timeout, new ExternalLazerAssetBackend(), new ExternalLazerCatalogBackend(), new ExternalLazerSkinCatalogBackend())
+    {
+    }
+
+    internal ReplayAnalysisBackend(
+        IReplayAnalysisEngine engine,
+        IPpWhatIfCalculator ppCalculator,
+        ReplayInputValidator inputValidator,
+        TimeSpan timeout,
+        IExternalLazerAssetBackend externalLibrary,
+        IExternalLazerCatalogBackend externalCatalog,
+        IExternalLazerSkinCatalogBackend? externalSkins = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(timeout, TimeSpan.Zero);
         this.engine = engine;
+        this.ppCalculator = ppCalculator;
         this.inputValidator = inputValidator;
         this.timeout = timeout;
         this.externalLibrary = externalLibrary;
@@ -62,6 +86,7 @@ internal sealed class ReplayAnalysisBackend : IRuntimeBackend
         new[]
         {
             RuntimeCapabilities.ReplayAnalysis,
+            RuntimeCapabilities.PerformanceCalculation,
             RuntimeCapabilities.ExternalLibraryCatalog,
             RuntimeCapabilities.ExternalLibraryAssets,
             RuntimeCapabilities.SkinRead,
@@ -90,6 +115,14 @@ internal sealed class ReplayAnalysisBackend : IRuntimeBackend
             return JsonSerializer.SerializeToElement(result, RuntimeProtocol.JsonOptions);
         }
 
+        if (command == RuntimeCommands.CalculatePp)
+        {
+            PpWhatIfRequest ppRequest = deserializePpRequest(payload);
+            ValidatedPpInput ppInput = PpInputValidator.Validate(ppRequest);
+            PpWhatIfResult result = await ppCalculator.CalculateAsync(ppInput, cancellationToken);
+            return JsonSerializer.SerializeToElement(result, RuntimeProtocol.JsonOptions);
+        }
+
         if (command != RuntimeCommands.AnalyseReplay)
             throw new RuntimeCommandException("unsupported_command", $"The worker does not implement '{command}'.");
 
@@ -101,8 +134,13 @@ internal sealed class ReplayAnalysisBackend : IRuntimeBackend
 
         try
         {
+            ReplayAnalysisContentIdentity contentIdentity = await calculateContentIdentityAsync(input, timeoutCancellation.Token);
             ReplayAnalysisResult result = await engine.AnalyseAsync(input, timeoutCancellation.Token);
-            return JsonSerializer.SerializeToElement(result, RuntimeProtocol.JsonOptions);
+            ReplayAnalysisContentIdentity finalContentIdentity = await calculateContentIdentityAsync(input, timeoutCancellation.Token);
+            if (contentIdentity != finalContentIdentity)
+                throw new ReplayAnalysisException("input_changed", "The staged beatmap or replay changed during analysis.");
+
+            return JsonSerializer.SerializeToElement(result with { ContentIdentity = contentIdentity }, RuntimeProtocol.JsonOptions);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeoutCancellation.IsCancellationRequested)
         {
@@ -112,6 +150,26 @@ internal sealed class ReplayAnalysisBackend : IRuntimeBackend
         {
             throw new RuntimeCommandException(exception.Code, exception.Message);
         }
+    }
+
+    private static async ValueTask<ReplayAnalysisContentIdentity> calculateContentIdentityAsync(
+        ValidatedReplayInput input,
+        CancellationToken cancellationToken) =>
+        new(
+            await calculateSha256Async(input.BeatmapPath, cancellationToken),
+            await calculateSha256Async(input.ReplayPath, cancellationToken));
+
+    private static async ValueTask<string> calculateSha256Async(string path, CancellationToken cancellationToken)
+    {
+        await using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 64 * 1024,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        byte[] hash = await SHA256.HashDataAsync(stream, cancellationToken);
+        return Convert.ToHexString(hash).ToLowerInvariant();
     }
 
     private static ExternalLazerAssetResolveRequest deserializeAssetRequest(JsonElement? payload)
@@ -192,11 +250,32 @@ internal sealed class ReplayAnalysisBackend : IRuntimeBackend
             throw new RuntimeCommandException("invalid_payload", "Replay analysis requires staged beatmap and replay paths.");
         }
     }
+
+    private static PpWhatIfRequest deserializePpRequest(JsonElement? payload)
+    {
+        if (payload is null)
+            throw new RuntimeCommandException("invalid_payload", "PP calculation requires a payload.");
+
+        try
+        {
+            return payload.Value.Deserialize<PpWhatIfRequest>(RuntimeProtocol.JsonOptions)
+                   ?? throw new RuntimeCommandException("invalid_payload", "PP calculation requires a staged beatmap path.");
+        }
+        catch (JsonException)
+        {
+            throw new RuntimeCommandException("invalid_payload", "PP calculation requires a staged beatmap path.");
+        }
+    }
 }
 
 internal interface IReplayAnalysisEngine
 {
     ValueTask<ReplayAnalysisResult> AnalyseAsync(ValidatedReplayInput input, CancellationToken cancellationToken);
+}
+
+internal interface IPpWhatIfCalculator
+{
+    ValueTask<PpWhatIfResult> CalculateAsync(ValidatedPpInput input, CancellationToken cancellationToken);
 }
 
 internal sealed class ReplayAnalysisException(string code, string message) : Exception(message)
