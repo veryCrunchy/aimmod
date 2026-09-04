@@ -6,6 +6,7 @@ namespace AimMod.Desktop.Tests;
 [TestFixture]
 public sealed class OsuStableDiscoveryServiceTests
 {
+    private static OsuHostPlatform HostPlatform => OperatingSystem.IsWindows() ? OsuHostPlatform.Windows : OsuHostPlatform.Linux;
     [Test]
     public void DiscoversValidatedExplicitStableInstallation()
     {
@@ -17,7 +18,7 @@ public sealed class OsuStableDiscoveryServiceTests
             string skins = Directory.CreateDirectory(Path.Combine(root, "Skins")).FullName;
 
             OsuStableDiscoveryResult result = new OsuStableDiscoveryService(new PhysicalOsuDiscoveryFileSystem()).Discover(
-                OsuHostPlatform.Windows,
+                HostPlatform,
                 new OsuDiscoveryEnvironment(ExplicitStableRoot: root));
 
             Assert.Multiple(() =>
@@ -40,7 +41,7 @@ public sealed class OsuStableDiscoveryServiceTests
         try
         {
             OsuStableDiscoveryResult result = new OsuStableDiscoveryService(new PhysicalOsuDiscoveryFileSystem()).Discover(
-                OsuHostPlatform.Windows,
+                HostPlatform,
                 new OsuDiscoveryEnvironment(ExplicitStableRoot: root));
 
             Assert.Multiple(() =>
@@ -66,7 +67,7 @@ public sealed class OsuStableDiscoveryServiceTests
             File.WriteAllText(Path.Combine(root, "osu!.player.cfg"), $"Username = player\nBeatmapDirectory = \"{songs}\"\n");
 
             OsuStableDiscoveryResult result = new OsuStableDiscoveryService(new PhysicalOsuDiscoveryFileSystem()).Discover(
-                OsuHostPlatform.Windows,
+                HostPlatform,
                 new OsuDiscoveryEnvironment(ExplicitStableRoot: root, CurrentUserName: "player"));
 
             Assert.That(result.CompleteInstallations.Single().SongsPath, Is.EqualTo(songs));
