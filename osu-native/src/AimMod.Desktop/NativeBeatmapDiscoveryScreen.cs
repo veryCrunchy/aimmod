@@ -26,6 +26,7 @@ public partial class NativeBeatmapDiscoveryScreen : CompositeDrawable
     private readonly Func<IPpTargetExactCalculationService?> exactCalculator;
     private readonly Func<IAccountScoreHistoryService?> onlineScoreHistory;
     private readonly Func<int, CancellationToken, Task>? openBeatmap;
+    private readonly Action<string>? openPractice;
     private readonly Container page = null!;
     private readonly Container tabBar = null!;
     private readonly AimModSectionHeader workspaceHeader = null!;
@@ -41,7 +42,8 @@ public partial class NativeBeatmapDiscoveryScreen : CompositeDrawable
         Func<OnlineBeatmapImportService?> importer,
         Func<IPpTargetExactCalculationService?>? exactCalculator = null,
         Func<IAccountScoreHistoryService?>? onlineScoreHistory = null,
-        Func<int, CancellationToken, Task>? openBeatmap = null)
+        Func<int, CancellationToken, Task>? openBeatmap = null,
+        Action<string>? openPractice = null)
     {
         this.localLibrary = localLibrary ?? throw new ArgumentNullException(nameof(localLibrary));
         this.client = client ?? throw new ArgumentNullException(nameof(client));
@@ -49,6 +51,7 @@ public partial class NativeBeatmapDiscoveryScreen : CompositeDrawable
         this.exactCalculator = exactCalculator ?? (() => null);
         this.onlineScoreHistory = onlineScoreHistory ?? (() => null);
         this.openBeatmap = openBeatmap;
+        this.openPractice = openPractice;
         RelativeSizeAxes = Axes.Both;
 
         InternalChildren = new Drawable[]
@@ -129,7 +132,7 @@ public partial class NativeBeatmapDiscoveryScreen : CompositeDrawable
         {
             if (installedScreen is null)
             {
-                installedScreen = new NativeInstalledBeatmapBrowser(localLibrary, exactCalculator, onlineScoreHistory, openBeatmap) { RelativeSizeAxes = Axes.Both };
+                installedScreen = new NativeInstalledBeatmapBrowser(localLibrary, exactCalculator, onlineScoreHistory, openBeatmap, openPractice) { RelativeSizeAxes = Axes.Both };
                 page.Add(installedScreen);
             }
             setActiveScreen(installedScreen, onlineScreen);
@@ -171,7 +174,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
 
     private readonly Func<IOfficialBeatmapDiscoveryClient?> client;
     private readonly Func<OnlineBeatmapImportService?> importer;
-    private readonly OsuTextBox searchBox;
+    private readonly AimModSearchBox searchBox;
     private readonly TruncatingSpriteText resultStatus;
     private readonly FillFlowContainer results;
     private readonly AimModLoadingOverlay loadingOverlay;
@@ -180,9 +183,9 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
     private readonly Container categoryGroup;
     private readonly Container sortGroup;
     private readonly Container resultViewport;
-    private readonly RangeSlider starSlider;
-    private readonly OsuDropdown<OfficialBeatmapCategory> categoryDropdown;
-    private readonly OsuDropdown<OfficialBeatmapSort> sortDropdown;
+    private readonly AimModStarRatingFilter starSlider;
+    private readonly osu.Game.Graphics.UserInterfaceV2.ShearedDropdown<OfficialBeatmapCategory> categoryDropdown;
+    private readonly osu.Game.Graphics.UserInterfaceV2.ShearedDropdown<OfficialBeatmapSort> sortDropdown;
     private readonly BindableDouble minimumStars = new(0) { MinValue = 0, MaxValue = 10, Default = 0 };
     private readonly BindableDouble maximumStars = new(10) { MinValue = 0, MaxValue = 10, Default = 10 };
     private readonly Bindable<OfficialBeatmapCategory> category = new(OfficialBeatmapCategory.Any);
@@ -220,8 +223,6 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                 Position = new(0, 76),
                 RelativeSizeAxes = Axes.X,
                 Height = 72,
-                Masking = true,
-                CornerRadius = AimModVisualStyle.ControlRadius,
                 Depth = -20,
                 Children = new Drawable[]
                 {
@@ -231,7 +232,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                         Children = new Drawable[]
                         {
                             filterLabel("SEARCH"),
-                            searchBox = new OsuTextBox
+                            searchBox = new AimModSearchBox
                             {
                                 Position = new(0, 17),
                                 RelativeSizeAxes = Axes.X,
@@ -240,22 +241,19 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                             },
                         },
                     },
-                    starSlider = new RangeSlider
+                    starSlider = new AimModStarRatingFilter
                     {
-                        Label = "Star rating",
                         LowerBound = minimumStars,
                         UpperBound = maximumStars,
                         DefaultStringLowerBound = "0",
                         DefaultStringUpperBound = "10+",
-                        TooltipSuffix = "stars",
-                        NubWidth = 28,
                     },
-                    categoryGroup = dropdownGroup("STATUS", categoryDropdown = new OsuDropdown<OfficialBeatmapCategory>
+                    categoryGroup = dropdownGroup("STATUS", categoryDropdown = new osu.Game.Graphics.UserInterfaceV2.ShearedDropdown<OfficialBeatmapCategory>(string.Empty)
                     {
                         Items = new[] { OfficialBeatmapCategory.Any, OfficialBeatmapCategory.Ranked, OfficialBeatmapCategory.Loved, OfficialBeatmapCategory.Pending },
                         Current = category,
                     }),
-                    sortGroup = dropdownGroup("SORT", sortDropdown = new OsuDropdown<OfficialBeatmapSort>
+                    sortGroup = dropdownGroup("SORT", sortDropdown = new osu.Game.Graphics.UserInterfaceV2.ShearedDropdown<OfficialBeatmapSort>(string.Empty)
                     {
                         Items = new[] { OfficialBeatmapSort.Relevance, OfficialBeatmapSort.Updated, OfficialBeatmapSort.Plays },
                         Current = sort,
@@ -330,12 +328,12 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
         resultStatus.MaxWidth = Math.Max(0, width - content_inset * 2);
     }
 
-    private static void placeSlider(RangeSlider slider, float x, float y, float width)
+    private static void placeSlider(Drawable slider, float x, float y, float width)
     {
         slider.Anchor = Anchor.TopLeft;
         slider.Origin = Anchor.TopLeft;
-        slider.Position = new(x, y);
-        slider.Size = new(width, 62);
+        slider.Position = new(x, y + 18);
+        slider.Size = new(width, 30);
     }
 
     private static void placeGroup(Container group, float x, float y, float width, float height)
@@ -369,7 +367,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
     protected override void LoadComplete()
     {
         base.LoadComplete();
-        searchBox.OnCommit += (_, _) => { selectedSetId = null; startSearch(); };
+        searchBox.Committed += () => { selectedSetId = null; startSearch(); };
         minimumStars.BindValueChanged(_ => scheduleSearch());
         maximumStars.BindValueChanged(_ => scheduleSearch());
         category.BindValueChanged(_ => startSearch());

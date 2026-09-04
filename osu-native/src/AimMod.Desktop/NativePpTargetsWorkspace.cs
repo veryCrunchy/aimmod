@@ -35,7 +35,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
     private readonly Func<IAccountScoreHistoryService?> accountHistory;
     private readonly Func<int, CancellationToken, Task>? openBeatmap;
     private readonly PpTargetWorkspaceCache? workspaceCache;
-    private readonly OsuTextBox search;
+    private readonly AimModSearchBox search;
     private readonly TruncatingSpriteText status;
     private readonly TruncatingSpriteText profileSummary;
     private readonly TruncatingSpriteText resultCount;
@@ -53,9 +53,9 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
     private readonly Container resultViewport;
     private readonly OsuScrollContainer resultScroll;
     private readonly PpTargetWorkspaceState workspaceState;
-    private readonly RangeSlider starSlider;
-    private readonly RangeSlider expectedPpSlider;
-    private readonly RangeSlider maximumPpSlider;
+    private readonly AimModStarRatingFilter starSlider;
+    private readonly ShearedRangeSlider expectedPpSlider;
+    private readonly ShearedRangeSlider maximumPpSlider;
     private readonly PpTargetDropdown<OfficialBeatmapCategory> categoryDropdown;
     private readonly PpTargetDropdown<TargetLength> lengthDropdown;
     private readonly PpTargetDropdown<TargetSort> sortDropdown;
@@ -188,7 +188,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                                 Children = new Drawable[]
                                 {
                                     filterLabel("FIND A MAP"),
-                                    search = new OsuTextBox
+                                    search = new AimModSearchBox
                                     {
                                         Position = new(0, 18),
                                         RelativeSizeAxes = Axes.X,
@@ -197,34 +197,27 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                                     },
                                 },
                             },
-                            starSlider = new RangeSlider
+                            starSlider = new AimModStarRatingFilter
                             {
-                                Label = "Star rating",
                                 LowerBound = minimumStars,
                                 UpperBound = maximumStars,
                                 DefaultStringLowerBound = "0",
                                 DefaultStringUpperBound = "10+",
-                                TooltipSuffix = "stars",
-                                NubWidth = 28,
                             },
-                            expectedPpSlider = new RangeSlider
+                            expectedPpSlider = new ShearedRangeSlider("Expected PP")
                             {
-                                Label = "Expected PP",
                                 LowerBound = minimumExpectedPp,
                                 UpperBound = maximumExpectedPp,
                                 DefaultStringLowerBound = "0",
                                 DefaultStringUpperBound = "1000+",
-                                TooltipSuffix = "pp",
                                 NubWidth = 28,
                             },
-                            maximumPpSlider = new RangeSlider
+                            maximumPpSlider = new ShearedRangeSlider("Max PP")
                             {
-                                Label = "Max PP",
                                 LowerBound = minimumMaximumPp,
                                 UpperBound = maximumMaximumPp,
                                 DefaultStringLowerBound = "0",
                                 DefaultStringUpperBound = "1000+",
-                                TooltipSuffix = "pp",
                                 NubWidth = 28,
                             },
                             categoryGroup = dropdownGroup("MAP STATUS", categoryDropdown = new PpTargetDropdown<OfficialBeatmapCategory>(CategoryLabel)
@@ -335,12 +328,12 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         profileSummary.MaxWidth = Math.Max(180, width - 140);
     }
 
-    private static void placeSlider(RangeSlider slider, float x, float y, float width)
+    private static void placeSlider(Drawable slider, float x, float y, float width)
     {
         slider.Anchor = Anchor.TopLeft;
         slider.Origin = Anchor.TopLeft;
-        slider.Position = new(x, y);
-        slider.Size = new(width, 58);
+        slider.Position = new(x, y + 16);
+        slider.Size = new(width, 30);
     }
 
     private static void placeGroup(Container group, float x, float y, float width, float height)
@@ -373,7 +366,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         if (snapshot is not null)
             applySnapshot(snapshot);
 
-        search.OnCommit += (_, _) => startCatalogSearch();
+        search.Committed += () => startCatalogSearch();
         minimumStars.BindValueChanged(_ => filterChanged(scheduleCatalogSearch));
         maximumStars.BindValueChanged(_ => filterChanged(scheduleCatalogSearch));
         minimumExpectedPp.BindValueChanged(_ => filterChanged(renderResults));
@@ -407,7 +400,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         exactEstimates = snapshot.ExactEstimates ?? new Dictionary<int, PpTargetEstimate>();
         onlineBestCount = snapshot.OnlineBestCount;
         scoreDataStatus = snapshot.ScoreDataStatus ?? string.Empty;
-        search.Text = snapshot.SearchText ?? string.Empty;
+        search.Current.Value = snapshot.SearchText ?? string.Empty;
         minimumStars.Value = Math.Clamp(snapshot.MinimumStars, 0, 10);
         maximumStars.Value = Math.Clamp(snapshot.MaximumStars, 0, 10);
         category.Value = snapshot.Category;
@@ -949,12 +942,12 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         Stars,
     }
 
-    private sealed partial class PpTargetDropdown<T> : OsuDropdown<T>
+    private sealed partial class PpTargetDropdown<T> : osu.Game.Graphics.UserInterfaceV2.ShearedDropdown<T>
         where T : struct, Enum
     {
         private readonly Func<T, string> formatter;
 
-        public PpTargetDropdown(Func<T, string> formatter)
+        public PpTargetDropdown(Func<T, string> formatter) : base(string.Empty)
         {
             this.formatter = formatter;
         }

@@ -44,7 +44,7 @@ public partial class AimModGame : OsuGameBase
     private static readonly Assembly standardRulesetAssembly = typeof(OsuRuleset).Assembly;
 
     [Cached]
-    private readonly OverlayColourProvider overlayColours = new(OverlayColourScheme.Pink);
+    private readonly OverlayColourProvider overlayColours = new(OverlayColourScheme.Blue);
 
     private Bindable<string>? configuredSkin;
 
@@ -521,7 +521,8 @@ public partial class AimModGame : OsuGameBase
             () => onlineBeatmapImportService,
             () => ppTargetExactCalculationService,
             () => accountScoreHistoryService,
-            openBeatmapInOsu)
+            openBeatmapInOsu,
+            openBeatmapPractice)
         {
             RelativeSizeAxes = Axes.Both,
         };
@@ -539,7 +540,8 @@ public partial class AimModGame : OsuGameBase
             hubUploadQueue,
             hubSharingPreferenceStore,
             openHubUrl,
-            copyHubText)
+            copyHubText,
+            openBeatmapPractice)
         {
             RelativeSizeAxes = Axes.Both,
         };
@@ -671,6 +673,12 @@ public partial class AimModGame : OsuGameBase
         };
         switchWorkspaceRoute(NativeRoute.Coaching, new MarginPadding { Top = 88, Horizontal = 52, Bottom = 0 }, coachingWorkspace);
         startReplayLibraryAnalysis();
+    }
+
+    private void openBeatmapPractice(string title)
+    {
+        showCoaching();
+        coachingWorkspace!.FocusPracticeMap(title);
     }
 
     private async Task<PracticeMapGenerationResult> createPracticeMap(

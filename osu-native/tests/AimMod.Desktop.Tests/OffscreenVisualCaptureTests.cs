@@ -14,6 +14,7 @@ using osu.Framework.Allocation;
 using osu.Framework.Configuration;
 using osu.Framework.Platform;
 using osu.Game;
+using osu.Game.Overlays;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 
@@ -27,6 +28,7 @@ public sealed partial class OffscreenVisualCaptureTests
     [TestCase("home", 1100, 760)]
     [TestCase("beatmaps", 1100, 760)]
     [TestCase("beatmaps-populated", 1100, 760)]
+    [TestCase("beatmaps-populated", 800, 760)]
     [TestCase("beatmaps-populated", 1600, 900)]
     [TestCase("skins", 1100, 760)]
     [TestCase("settings", 1100, 760)]
@@ -303,6 +305,8 @@ public sealed partial class OffscreenVisualCaptureTests
 
     private sealed partial class CaptureBeatmapGame : OsuGameBase
     {
+        [Cached]
+        private readonly OverlayColourProvider overlayColours = new(OverlayColourScheme.Blue);
         private readonly GameHost host;
         private readonly ILocalLibrarySource source;
         private readonly string outputPath;
@@ -379,6 +383,8 @@ public sealed partial class OffscreenVisualCaptureTests
 
     private sealed partial class CaptureStatisticsGame : OsuGameBase
     {
+        [Cached]
+        private readonly OverlayColourProvider overlayColours = new(OverlayColourScheme.Blue);
         private readonly GameHost host;
         private readonly ILocalLibrarySource source;
         private readonly string outputPath;
@@ -455,6 +461,8 @@ public sealed partial class OffscreenVisualCaptureTests
 
     private sealed partial class CaptureCoachingGame : OsuGameBase
     {
+        [Cached]
+        private readonly OverlayColourProvider overlayColours = new(OverlayColourScheme.Blue);
         private readonly GameHost host;
         private readonly ILocalLibrarySource source;
         private readonly string outputPath;

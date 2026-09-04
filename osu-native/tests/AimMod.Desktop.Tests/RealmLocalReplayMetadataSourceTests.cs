@@ -1,11 +1,28 @@
 using AimMod.Desktop.LocalLibrary;
 using NUnit.Framework;
+using Realms;
 
 namespace AimMod.Desktop.Tests;
 
 [TestFixture]
 public sealed class RealmLocalReplayMetadataSourceTests
 {
+    [Test]
+    public void SnapshotQueryRunsAgainstRealRealmWithoutUnsupportedTake()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"aimmod-replay-query-{Guid.NewGuid():N}.realm");
+        var configuration = new RealmConfiguration(path);
+        try
+        {
+            using Realm realm = Realm.GetInstance(configuration);
+            Assert.That(RealmLocalReplayMetadataSource.ReadDetachedScores(realm, null), Is.Empty);
+        }
+        finally
+        {
+            Realm.DeleteRealm(configuration);
+        }
+    }
+
     [Test]
     public async Task SearchesFiltersSortsAndPagesOneDetachedSnapshot()
     {

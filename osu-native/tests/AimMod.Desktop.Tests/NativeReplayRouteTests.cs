@@ -17,6 +17,20 @@ namespace AimMod.Desktop.Tests;
 public sealed class NativeReplayRouteTests
 {
     [Test]
+    public void PracticeActionOpensTheSelectedReplayMap()
+    {
+        string? opened = null;
+        using var route = new NativeReplayRouteView(openPractice: title => opened = title);
+        var button = (osu.Game.Graphics.UserInterface.OsuButton)field(route, "practiceButton");
+        Assert.That(button.Enabled.Value, Is.False);
+        LocalReplay selected = replay(Guid.NewGuid());
+        route.SetReplaySummary(selected);
+        Assert.That(button.Enabled.Value, Is.True);
+        button.Action.Invoke();
+        Assert.That(opened, Is.EqualTo(selected.Title));
+    }
+
+    [Test]
     public void LazerHandoffUsesTheOperatingSystemTemporaryDirectory()
     {
         Assert.That(

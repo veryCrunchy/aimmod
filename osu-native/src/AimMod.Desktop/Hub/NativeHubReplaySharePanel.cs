@@ -54,18 +54,6 @@ public partial class NativeHubReplaySharePanel : CompositeDrawable
         Height = 270;
         InternalChildren = new Drawable[]
         {
-            new CircularContainer
-            {
-                RelativeSizeAxes = Axes.Both,
-                Masking = true,
-                CornerRadius = AimModVisualStyle.CardRadius,
-                Depth = 10,
-                Children = new Drawable[]
-                {
-                    new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
-                    new Box { RelativeSizeAxes = Axes.Y, Width = 3, Colour = AimModPalette.Pink },
-                },
-            },
             new Container
             {
                 RelativeSizeAxes = Axes.Both,
@@ -77,6 +65,7 @@ public partial class NativeHubReplaySharePanel : CompositeDrawable
                     new OsuDropdown<OsuHubVisibility>
                     {
                         RelativeSizeAxes = Axes.X,
+                        Depth = -10,
                         Y = 28,
                         Items = Enum.GetValues<OsuHubVisibility>(),
                         Current = visibility,
@@ -102,6 +91,7 @@ public partial class NativeHubReplaySharePanel : CompositeDrawable
         };
         cancelRetryButton.Alpha = copyButton.Alpha = openButton.Alpha = 0;
         cancelRetryButton.Enabled.Value = copyButton.Enabled.Value = openButton.Enabled.Value = false;
+        refreshAvailability();
     }
 
     protected override void Update()

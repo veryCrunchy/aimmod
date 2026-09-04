@@ -19,7 +19,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
     private readonly ILocalLibrarySourceChanged? sourceChanges;
     private readonly Action<LocalReplay> openReplay;
     private readonly Func<IAccountScoreHistoryService?> accountHistory;
-    private readonly OsuTextBox search;
+    private readonly ShearedFilterTextBox search;
     private readonly Bindable<StatisticsTimeRange> timeRange = new(StatisticsTimeRange.All);
     private readonly Bindable<StatisticsModFilter> modFilter = new(StatisticsModFilter.Any);
     private readonly Bindable<StatisticsRunSort> sort = new(StatisticsRunSort.Recent);
@@ -70,7 +70,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
             new Container
             {
                 RelativeSizeAxes = Axes.X,
-                Height = 158,
+                Height = 242,
                 Depth = -10,
                 Children = new Drawable[]
                 {
@@ -79,29 +79,42 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
                         "Explore the unified osu!standard score dataset, combining online best/recent records with replay-rich local attempts.",
                         "performance history"),
                     scopeText = text("Loading score scope...", 10, AimModPalette.Muted).With(drawable => drawable.Y = 62),
-                    filterBar = new Container
+                    filterBar = new StatisticsFilterBar
                     {
                         RelativeSizeAxes = Axes.X,
                         Position = new(0, 82),
-                        Height = 60,
+                        Height = 144,
+                        Padding = new MarginPadding { Horizontal = 10 },
                         Children = new Drawable[]
                         {
-                            filterGroup("FIND", 0, 0.22f,
-                                filterField("SEARCH", search = new OsuTextBox
+                            search = new ShearedFilterTextBox
+                            {
+                                RelativeSizeAxes = Axes.X,
+                                PlaceholderText = "Title, artist, difficulty",
+                            },
+                            new GridContainer
+                            {
+                                RelativeSizeAxes = Axes.X,
+                                Y = 66,
+                                Height = 78,
+                                ColumnDimensions = Enumerable.Repeat(new Dimension(GridSizeMode.Relative, 1f / 3), 3).ToArray(),
+                                RowDimensions = twoEqualRows(),
+                                Content = new[]
                                 {
-                                    RelativeSizeAxes = Axes.X,
-                                    Height = AimModVisualStyle.CompactControlHeight,
-                                    PlaceholderText = "Title, artist, difficulty",
-                                })),
-                            filterGroup("SCOPE", 0.22f, 0.24f,
-                                filterField("PERIOD", dropdown(timeRange)),
-                                filterField("SOURCE", dropdown(scoreSource))),
-                            filterGroup("PERFORMANCE", 0.46f, 0.38f,
-                                filterField("MODS", dropdown(modFilter)),
-                                filterField("DIFFICULTY", dropdown(starBand)),
-                                filterField("RESULT", dropdown(resultFilter))),
-                            filterGroup("ORDER", 0.84f, 0.16f,
-                                filterField("SORT", dropdown(sort))),
+                                    new Drawable[]
+                                    {
+                                        filterField("Period", timeRange, -3),
+                                        filterField("Source", scoreSource, -3),
+                                        filterField("Sort", sort, -3),
+                                    },
+                                    new Drawable[]
+                                    {
+                                        filterField("Mods", modFilter, -2),
+                                        filterField("Stars", starBand, -2),
+                                        filterField("Result", resultFilter, -2),
+                                    },
+                                },
+                            },
                         },
                     },
                 },
@@ -109,7 +122,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
             contentViewport = new Container
             {
                 RelativeSizeAxes = Axes.Both,
-                Padding = new MarginPadding { Top = 158 },
+                Padding = new MarginPadding { Top = 242 },
                 Children = new Drawable[]
                 {
                     mainColumn = new Container
@@ -236,6 +249,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
     protected override void LoadComplete()
     {
         base.LoadComplete();
+        search.PlaceholderText = "Title, artist, difficulty";
         load();
     }
 
@@ -346,6 +360,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
                 ? $"Unified scope currently contains {localCount:N0} local records; online score service is unavailable."
                 : $"Unified scope currently contains {localCount:N0} local records; online best/recent returned no scores.";
         resultText.Text = model.Runs.Count == 1 ? "1 matching play" : $"{model.Runs.Count:N0} matching plays";
+        search.StatusText = resultText.Text;
         if (model.Runs.Count == 0)
         {
             averageAccuracy.Set("-", "No plays in this view");
@@ -560,45 +575,14 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
         base.Dispose(isDisposing);
     }
 
-    private static OsuEnumDropdown<T> dropdown<T>(Bindable<T> bindable)
-        where T : struct, Enum => new()
-        {
-            RelativeSizeAxes = Axes.X,
-            Current = bindable,
-        };
-
-    private static Drawable filterGroup(string heading, float x, float width, params Drawable[] fields) => new Container
-    {
-        RelativePositionAxes = Axes.X,
-        RelativeSizeAxes = Axes.X,
-        X = x,
-        Width = width,
-        Height = 60,
-        Padding = new MarginPadding { Right = AimModVisualStyle.RowSpacing },
-        Children = new Drawable[]
-        {
-            text(heading, 8, AimModPalette.Cyan, "Bold"),
-            new GridContainer
-            {
-                RelativeSizeAxes = Axes.X,
-                Y = 17,
-                Width = 1,
-                Height = AimModVisualStyle.CompactControlHeight,
-                ColumnDimensions = Enumerable.Repeat(new Dimension(GridSizeMode.Relative, 1f / fields.Length), fields.Length).ToArray(),
-                Content = new[] { fields },
-            },
-        },
-    };
-
-    private static Drawable filterField(string heading, Drawable control) => new Container
+    private static Drawable filterField<T>(string heading, Bindable<T> current, float depth)
+        where T : struct, Enum => new Container
     {
         RelativeSizeAxes = Axes.Both,
-        Padding = new MarginPadding { Right = AimModVisualStyle.RelatedSpacing },
-        Children = new Drawable[]
-        {
-            text(heading, 8, AimModPalette.Muted, "Bold"),
-            control.With(drawable => drawable.Y = 10),
-        },
+        // Menus in the upper row must draw and receive input above the lower row.
+        Depth = depth,
+        Padding = new MarginPadding { Right = 16 },
+        Child = new StatisticsFilterDropdown<T>(heading, current),
     };
 
     private static SpriteText sectionLabel(string value, Colour4 colour) => text(value, 10, colour, "Bold");

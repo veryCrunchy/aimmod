@@ -40,7 +40,7 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
     private readonly TruncatingSpriteText resultStatus;
     private readonly LoadMoreButton loadMoreButton;
     private readonly AimModLoadingOverlay loadingOverlay;
-    private readonly RangeSlider starSlider;
+    private readonly AimModStarRatingFilter starSlider;
     private readonly OsuDropdown<LocalLibrarySort> sortDropdown;
     private readonly Bindable<LocalLibrarySort> sortMode;
     private readonly BindableDouble minimumStars = new(0) { MinValue = 0, MaxValue = 10, Default = 0 };
@@ -117,19 +117,16 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
                     ? "Search beatmaps, artists, mappers, or difficulties"
                     : "Search replays, players, maps, or mods",
             },
-            starSlider = new RangeSlider
+            starSlider = new AimModStarRatingFilter
             {
                 Anchor = Anchor.TopRight,
                 Origin = Anchor.TopRight,
                 Position = new(-292, 72),
                 Size = new(350, 65),
-                Label = "Star rating",
                 LowerBound = minimumStars,
                 UpperBound = maximumStars,
                 DefaultStringLowerBound = "0",
                 DefaultStringUpperBound = "10+",
-                TooltipSuffix = "stars",
-                NubWidth = 30,
             },
             new SpriteText
             {
@@ -185,7 +182,7 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
         starSlider.Anchor = Anchor.TopLeft;
         starSlider.Origin = Anchor.TopLeft;
         starSlider.Position = new(searchWidth + gap, 72);
-        starSlider.Size = new(sliderWidth, 65);
+        starSlider.Size = new(sliderWidth, 30);
         sortDropdown.Anchor = Anchor.TopLeft;
         sortDropdown.Origin = Anchor.TopLeft;
         sortDropdown.Position = new(width - sortWidth, 91);

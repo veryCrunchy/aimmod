@@ -146,6 +146,15 @@ public sealed partial class RealmLocalReplayMetadataSource : Component, ILocalRe
         IReadOnlyList<LocalReplay> ReadSnapshot(int? userId, CancellationToken cancellationToken);
     }
 
+    internal static List<ScoreInfo> ReadDetachedScores(Realm realm, int? userId) =>
+        realm.GetAllLocalScoresForUser(userId)
+             .Filter($"{nameof(ScoreInfo.Ruleset)}.{nameof(RulesetInfo.ShortName)} == $0", "osu")
+             .OrderByDescending(score => score.Date)
+             // Realm cannot translate Take. Enumerate lazily before applying the limit.
+             .AsEnumerable()
+             .Take(maximum_snapshot_rows)
+             .Detach();
+
     private sealed class RealmReplaySnapshotProvider(RealmAccess realm) : ILocalReplaySnapshotProvider
     {
         public IReadOnlyList<LocalReplay> ReadSnapshot(int? userId, CancellationToken cancellationToken)
@@ -155,12 +164,7 @@ public sealed partial class RealmLocalReplayMetadataSource : Component, ILocalRe
             // One bounded Realm query supplies the complete metadata batch. The
             // query is detached before Realm.Run returns, so no managed Realm
             // object reaches the background index or native route.
-            List<ScoreInfo> scores = realm.Run(r => r.GetAllLocalScoresForUser(userId)
-                                                    .Filter($"{nameof(ScoreInfo.Ruleset)}.{nameof(RulesetInfo.ShortName)} == $0", "osu")
-                                                    .OrderByDescending(score => score.Date)
-                                                    .Take(maximum_snapshot_rows)
-                                                    .AsEnumerable()
-                                                    .Detach());
+            List<ScoreInfo> scores = realm.Run(r => ReadDetachedScores(r, userId));
 
             var result = new List<LocalReplay>(scores.Count);
             foreach (ScoreInfo score in scores)

@@ -14,6 +14,7 @@ using osu.Framework.Threading;
 using osu.Game.Graphics.Containers;
 using osu.Game.Graphics.Sprites;
 using osu.Game.Graphics.UserInterface;
+using osu.Game.Graphics.UserInterfaceV2;
 
 namespace AimMod.Desktop.LocalLibrary;
 
@@ -31,7 +32,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
     private readonly Func<IAccountScoreHistoryService?> onlineScoreHistory;
     private readonly Func<int, CancellationToken, Task>? openBeatmap;
     private readonly LocalLibraryController controller;
-    private readonly OsuTextBox searchBox;
+    private readonly ShearedFilterTextBox searchBox;
     private readonly Container searchSurface;
     private readonly Container starsSurface;
     private readonly Container sortSurface;
@@ -51,7 +52,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
     private readonly Bindable<PlayedFilter> playedFilter = new(PlayedFilter.Everything);
     private readonly BindableDouble minimumStars = new(0) { MinValue = 0, MaxValue = 10, Default = 0 };
     private readonly BindableDouble maximumStars = new(10) { MinValue = 0, MaxValue = 10, Default = 10 };
-    private readonly RangeSlider stars;
+    private readonly AimModStarRatingFilter stars;
     private readonly TruncatingSpriteText status;
     private readonly FillFlowContainer<Drawable> setRows;
     private readonly OsuScrollContainer listScroll;
@@ -71,7 +72,8 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         ILocalLibrarySource source,
         Func<IPpTargetExactCalculationService?>? exactCalculator = null,
         Func<IAccountScoreHistoryService?>? onlineScoreHistory = null,
-        Func<int, CancellationToken, Task>? openBeatmap = null)
+        Func<int, CancellationToken, Task>? openBeatmap = null,
+        Action<string>? openPractice = null)
     {
         this.source = source ?? throw new ArgumentNullException(nameof(source));
         this.exactCalculator = exactCalculator ?? (() => null);
@@ -94,27 +96,24 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                 Children = new Drawable[]
                 {
                     searchSurface = filterSurface(0, 0, 480, AimModVisualStyle.ControlHeight),
-                    searchBox = new OsuTextBox
+                    searchBox = new ShearedFilterTextBox
                     {
                         Width = 0.52f,
                         Height = AimModVisualStyle.ControlHeight,
                         PlaceholderText = "Search beatmaps, artists, mappers, or difficulties",
                     },
                     starsSurface = filterSurface(490, 51, 260, 46),
-                    stars = new RangeSlider
+                    stars = new AimModStarRatingFilter
                     {
                         Position = new(490, 52),
                         Size = new(260, 48),
-                        Label = "Stars",
                         LowerBound = minimumStars,
                         UpperBound = maximumStars,
                         DefaultStringLowerBound = "0",
                         DefaultStringUpperBound = "10+",
-                        TooltipSuffix = "stars",
-                        NubWidth = 28,
                     },
                     sortSurface = filterSurface(0, 51, 178, AimModVisualStyle.ControlHeight, Anchor.TopRight),
-                    sortDropdown = new PrettyDropdown<LocalLibrarySort>(formatSort)
+                    sortDropdown = new PrettyDropdown<LocalLibrarySort>("Sort", formatSort)
                     {
                         Anchor = Anchor.TopRight,
                         Origin = Anchor.TopRight,
@@ -123,21 +122,21 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                         Items = new[] { LocalLibrarySort.RecentlyAdded, LocalLibrarySort.Title, LocalLibrarySort.StarRating },
                         Current = sort,
                     },
-                    bpmDropdown = new PrettyDropdown<BpmFilter>(formatBpm)
+                    bpmDropdown = new PrettyDropdown<BpmFilter>("BPM", formatBpm)
                     {
                         Position = new(0, 51),
                         Width = 150,
                         Items = Enum.GetValues<BpmFilter>(),
                         Current = bpmFilter,
                     },
-                    lengthDropdown = new PrettyDropdown<LengthFilter>(formatLength)
+                    lengthDropdown = new PrettyDropdown<LengthFilter>("Length", formatLength)
                     {
                         Position = new(160, 51),
                         Width = 150,
                         Items = Enum.GetValues<LengthFilter>(),
                         Current = lengthFilter,
                     },
-                    playedDropdown = new PrettyDropdown<PlayedFilter>(formatPlayed)
+                    playedDropdown = new PrettyDropdown<PlayedFilter>("Played", formatPlayed)
                     {
                         Position = new(320, 51),
                         Width = 160,
@@ -188,7 +187,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                 Children = new Drawable[]
                 {
                     new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas, Alpha = 0.78f, Depth = 100 },
-                    inspector = new BeatmapInspector(openBeatmap),
+                    inspector = new BeatmapInspector(openBeatmap, openPractice),
                 },
             },
             loading = new AimModLoadingOverlay(),
@@ -198,7 +197,8 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
     protected override void LoadComplete()
     {
         base.LoadComplete();
-        searchBox.OnCommit += (_, _) => resetQuery();
+        searchBox.PlaceholderText = "Search beatmaps, artists, mappers, or difficulties";
+        searchBox.Current.BindValueChanged(_ => scheduleQuery());
         minimumStars.BindValueChanged(_ => scheduleQuery());
         maximumStars.BindValueChanged(_ => scheduleQuery());
         sort.BindValueChanged(_ => resetQuery());
@@ -211,26 +211,34 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
     protected override void Update()
     {
         base.Update();
-        bool compact = DrawWidth < 1_280;
-        float railWidth = compact ? 0 : Math.Clamp(DrawWidth * 0.27f, 350, 390);
-        float contentWidth = DrawWidth - railWidth;
+        bool stacked = DrawWidth < 900;
+        float railWidth = stacked ? DrawWidth : Math.Clamp(DrawWidth * 0.30f, 310, 390);
+        float availableHeight = Math.Max(0, DrawHeight - toolbar_height);
+        float inspectorHeight = stacked ? availableHeight * 0.48f : availableHeight;
+        rightRail.RelativeSizeAxes = Axes.None;
         rightRail.Width = railWidth;
-        rightRail.Alpha = compact ? 0 : 1;
-        rightRail.AlwaysPresent = !compact;
-        listPanel.Padding = new MarginPadding { Top = toolbar_height, Right = railWidth };
-        float usableWidth = Math.Max(760, contentWidth - 10);
-        searchBox.Position = new(0, 0);
-        searchBox.Width = Math.Max(320, usableWidth - 224);
+        rightRail.Height = inspectorHeight;
+        rightRail.Y = stacked ? DrawHeight - inspectorHeight : toolbar_height;
+        rightRail.Padding = new MarginPadding { Left = stacked ? 0 : 14, Top = stacked ? 8 : 0 };
+        listPanel.Padding = new MarginPadding { Top = toolbar_height, Right = stacked ? 0 : railWidth, Bottom = stacked ? inspectorHeight : 0 };
+        float usableWidth = Math.Max(0, DrawWidth - 10);
+        searchBox.Position = new(6, 0);
+        searchBox.Width = Math.Max(0, usableWidth - 6);
+        searchBox.Height = 54;
+        searchBox.StatusText = status.Text;
+        status.Alpha = 0;
+        searchSurface.Alpha = starsSurface.Alpha = sortSurface.Alpha = bpmSurface.Alpha = lengthSurface.Alpha = playedSurface.Alpha = 0;
+        bpmLabel.Alpha = lengthLabel.Alpha = playedLabel.Alpha = 0;
         searchSurface.Width = searchBox.Width;
         searchSurface.Height = AimModVisualStyle.ControlHeight;
 
         const float gap = 8;
-        const float bpmWidth = 140;
-        const float lengthWidth = 140;
-        const float playedWidth = 150;
-        const float sortWidth = 176;
-        const float filterY = 62;
-        float starsX = bpmWidth + lengthWidth + playedWidth + gap * 3;
+        float bpmWidth = (usableWidth - gap * 3) * 0.22f;
+        float lengthWidth = (usableWidth - gap * 3) * 0.24f;
+        float playedWidth = (usableWidth - gap * 3) * 0.24f;
+        float sortWidth = (usableWidth - gap * 3) * 0.30f;
+        const float filterY = 100;
+        const float starsX = 6;
         float sortX = usableWidth - sortWidth;
 
         bpmDropdown.Position = new(0, filterY);
@@ -251,8 +259,9 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         playedSurface.Width = playedWidth;
         playedLabel.Position = new(bpmWidth + lengthWidth + gap * 2 + 4, 50);
 
-        stars.Position = new(starsX, filterY - 1);
-        stars.Width = Math.Clamp(sortX - starsX - gap, 170, 320);
+        stars.Position = new(starsX, 62);
+        stars.Width = Math.Max(0, usableWidth - 6);
+        stars.Height = 30;
         starsSurface.Position = new(starsX, filterY);
         starsSurface.Width = stars.Width;
 
@@ -741,15 +750,17 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
     private sealed partial class BeatmapInspector : CompositeDrawable
     {
         private readonly Func<int, CancellationToken, Task>? openBeatmap;
+        private readonly Action<string>? openPractice;
         private readonly OsuScrollContainer scroll;
         private readonly FillFlowContainer<Drawable> content;
         private LocalBeatmapSet? set;
         private LocalBeatmapDifficulty? difficulty;
         private IReadOnlyList<LocalBeatmapSet> candidates = Array.Empty<LocalBeatmapSet>();
 
-        public BeatmapInspector(Func<int, CancellationToken, Task>? openBeatmap)
+        public BeatmapInspector(Func<int, CancellationToken, Task>? openBeatmap, Action<string>? openPractice)
         {
             this.openBeatmap = openBeatmap;
+            this.openPractice = openPractice;
             RelativeSizeAxes = Axes.Both;
             Masking = true;
             InternalChild = scroll = new AimModScrollContainer
@@ -782,7 +793,9 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             this.candidates = candidates;
             content.Clear();
             content.Add(new InspectorHeading(set, difficulty));
+            content.Add(new ActionBar(difficulty, openBeatmap, openPractice is null ? null : () => openPractice(set.Title)));
             content.Add(new SkillDemandCard(difficulty));
+            scroll.ScrollToStart();
             content.Add(new LoadingCard("Calculating exact PP", "Resolving this beatmap difficulty and applying osu!standard performance rules."));
             content.Add(new LoadingCard("Reading recent performance", "Matching local scores to this exact difficulty."));
         }
@@ -796,13 +809,12 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         {
             if (set is null || difficulty is null)
                 return;
-            while (content.Count > 2)
+            while (content.Count > 3)
                 content.Remove(content.Last(), true);
             content.Add(new PersonalFitCard(plays, online));
             content.Add(new PpAccuracyCard(pp, ppError));
             content.Add(new NextMapsCard(set, difficulty, candidates));
             content.Add(new RecentPerformanceCard(plays, online, replayError));
-            content.Add(new ActionBar(difficulty, openBeatmap));
         }
     }
 
@@ -881,6 +893,8 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                 new("Precision", demand.Precision),
             })
             {
+                RelativeSizeAxes = Axes.X,
+                Width = 1,
                 Anchor = Anchor.TopCentre,
                 Origin = Anchor.TopCentre,
                 Y = 43,
@@ -1084,7 +1098,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
 
     private sealed partial class ActionBar : FillFlowContainer
     {
-        public ActionBar(LocalBeatmapDifficulty difficulty, Func<int, CancellationToken, Task>? openBeatmap)
+        public ActionBar(LocalBeatmapDifficulty difficulty, Func<int, CancellationToken, Task>? openBeatmap, Action? openPractice)
         {
             RelativeSizeAxes = Axes.X;
             Height = 48;
@@ -1093,8 +1107,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             Children = new Drawable[]
             {
                 new InspectorAction(FontAwesome.Solid.Play, "Open", true, difficulty.OnlineId > 0 && openBeatmap is not null ? () => _ = openBeatmap(difficulty.OnlineId, CancellationToken.None) : null),
-                new InspectorAction(FontAwesome.Solid.Bullseye, "Practice", false, null),
-                new InspectorAction(FontAwesome.Regular.Heart, "Save", false, null),
+                new InspectorAction(FontAwesome.Solid.Bullseye, "Practice", false, openPractice),
             };
         }
     }
@@ -1183,12 +1196,12 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         Unplayed,
     }
 
-    private sealed partial class PrettyDropdown<T> : OsuDropdown<T>
+    private sealed partial class PrettyDropdown<T> : ShearedDropdown<T>
         where T : struct, Enum
     {
         private readonly Func<T, string> formatter;
 
-        public PrettyDropdown(Func<T, string> formatter)
+        public PrettyDropdown(string label, Func<T, string> formatter) : base(label)
         {
             this.formatter = formatter;
         }

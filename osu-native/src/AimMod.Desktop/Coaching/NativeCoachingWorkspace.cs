@@ -81,6 +81,15 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     private string practiceMessage = string.Empty;
     private LazerBeatmapArchive? practiceLazerArchive;
 
+    public void FocusPracticeMap(string title)
+    {
+        practiceMinimumStars.SetDefault();
+        practiceMaximumStars.SetDefault();
+        practiceEvidence.Value = PracticeEvidenceFilter.AnyEvidence;
+        practiceSearch.Current.Value = title;
+        updatePracticeMapsImmediately();
+    }
+
     public NativeCoachingWorkspace(
         ILocalLibrarySource source,
         IReadOnlyDictionary<Guid, ReplayAnalysisResult> analyses,
@@ -1071,17 +1080,14 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                 },
             },
         });
-        body.Add(new RangeSlider
+        body.Add(new AimModStarRatingFilter
         {
             RelativeSizeAxes = Axes.X,
-            Height = 58,
-            Label = "Stars",
+            Height = 30,
             LowerBound = minimumStars,
             UpperBound = maximumStars,
             DefaultStringLowerBound = "0",
             DefaultStringUpperBound = "10+",
-            TooltipSuffix = "stars",
-            NubWidth = 24,
             Depth = -10,
         });
         body.Add(new AimModScrollContainer

@@ -57,6 +57,8 @@ public partial class NativeReplayRouteView : Container
     private readonly Container analysisCard;
     private readonly AimModLoadingOverlay loadingOverlay;
     private readonly NativeHubReplaySharePanel hubSharePanel;
+    private readonly OsuButton practiceButton;
+    private readonly Action<string>? openPractice;
     private IBindable<double>? currentTime;
     private IBindable<double>? duration;
     private IBindable<bool>? paused;
@@ -80,11 +82,13 @@ public partial class NativeReplayRouteView : Container
         IOsuHubUploadQueue? hubUploadQueue = null,
         IHubSharingPreferenceStore? hubPreferenceStore = null,
         Action<Uri>? openUrl = null,
-        Action<string>? copyText = null)
+        Action<string>? copyText = null,
+        Action<string>? openPractice = null)
     {
         this.source = source;
         this.analyses = analyses ?? new Dictionary<Guid, ReplayAnalysisResult>();
         this.openReplay = openReplay;
+        this.openPractice = openPractice;
         RelativeSizeAxes = Axes.Both;
 
         Children = new Drawable[]
@@ -303,6 +307,14 @@ public partial class NativeReplayRouteView : Container
                             Direction = FillDirection.Vertical,
                             Spacing = new(5),
                         },
+                        practiceButton = new PracticeActionButton
+                        {
+                            RelativeSizeAxes = Axes.X,
+                            Height = 38,
+                            Text = "Practice this map",
+                            Action = () => { if (selectedReplay is not null) openPractice?.Invoke(selectedReplay.Title); },
+                            Enabled = { Value = false },
+                        },
                         new AimModSubsectionHeader("AimMod Hub", "manual sharing"),
                         hubSharePanel = new NativeHubReplaySharePanel(
                             hubShareService,
@@ -364,6 +376,7 @@ public partial class NativeReplayRouteView : Container
     public void SetReplaySummary(LocalReplay replay)
     {
         selectedReplay = replay;
+        practiceButton.Enabled.Value = openPractice is not null;
         expandedReplayMaps.Add(ReplayBrowserModel.MapKeyFor(replay));
         analysisRevision = -1;
         analysisInProgress = false;
@@ -386,6 +399,11 @@ public partial class NativeReplayRouteView : Container
             showPendingAnalysis();
 
         loadReplayBrowser();
+    }
+
+    private partial class PracticeActionButton : OsuButton
+    {
+        public PracticeActionButton() => AutoSizeAxes = Axes.None;
     }
 
     public void AttachPlayer(NativeReplayPlayer replayPlayer)
