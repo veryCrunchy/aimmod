@@ -15,10 +15,13 @@ public sealed class ExternalLazerSkinCatalogReaderTests
     private string temporaryDirectory = null!;
     private string realmPath = null!;
     private Guid skinId;
+    private SynchronizationContext? originalSynchronizationContext;
 
     [SetUp]
     public void SetUp()
     {
+        originalSynchronizationContext = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(null);
         temporaryDirectory = Path.Combine(Path.GetTempPath(), $"aimmod-skin-catalog-{Guid.NewGuid():N}");
         Directory.CreateDirectory(Path.Combine(temporaryDirectory, "files"));
         realmPath = Path.Combine(temporaryDirectory, "skins.realm");
@@ -79,8 +82,15 @@ public sealed class ExternalLazerSkinCatalogReaderTests
     [TearDown]
     public void TearDown()
     {
-        if (Directory.Exists(temporaryDirectory))
-            Directory.Delete(temporaryDirectory, recursive: true);
+        try
+        {
+            if (Directory.Exists(temporaryDirectory))
+                Directory.Delete(temporaryDirectory, recursive: true);
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(originalSynchronizationContext);
+        }
     }
 
     [Test]

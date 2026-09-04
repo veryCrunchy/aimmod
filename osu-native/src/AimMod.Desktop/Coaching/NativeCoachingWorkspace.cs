@@ -1227,12 +1227,12 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             ? ReplayMissInsightPresenter.Label(dominant)
             : mechanics.WeakestMapSegment ?? $"{mechanics.ExactAnalysisRunCount:N0} exact runs";
 
-    internal static string ProfileCoverageValue(GlobalCoachingProfile profile) => $"{profile.Coverage.ReplayCoverage:P0}";
+    internal static string ProfileCoverageValue(GlobalCoachingProfile profile) => $"{profile.Coverage.ReplayCoverage * 100:0}%";
 
     internal static string ProfileEvidenceSummary(GlobalCoachingProfile profile) => profile.MissReasons.Count == 0
         ? "No classified misses in analysed replays yet"
         : string.Join("  /  ", profile.MissReasons.Take(4)
-            .Select(reason => $"{ReplayMissInsightPresenter.Label(reason.Reason)} {reason.Share:P0}"));
+            .Select(reason => $"{ReplayMissInsightPresenter.Label(reason.Reason)} {reason.Share * 100:0}%"));
 
     internal static string ProfileTendencySummary(GlobalCoachingProfile profile) =>
         $"Timing: {profile.TimingTendency}  /  Aim: {profile.AimTendency}";

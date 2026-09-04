@@ -33,7 +33,7 @@ public sealed class PpTargetExactCalculationServiceTests
             Path.Combine(temporaryDirectory, "cache.json"),
             difficultyClient,
             Path.Combine(temporaryDirectory, "downloads"),
-            () => SidecarRuntimeClient.Start(Path.Combine(AppContext.BaseDirectory, "AimMod.exe")));
+            () => SidecarRuntimeClient.Start(desktopExecutablePath()));
 
         IReadOnlyDictionary<int, PpTargetEstimate> result = await service.CalculateAsync([
             new PpTargetExactRequest(beatmapId, null, [], 0.94, 0.5),
@@ -66,7 +66,7 @@ public sealed class PpTargetExactCalculationServiceTests
             cachePath,
             difficultyClient,
             Path.Combine(temporaryDirectory, "downloads"),
-            () => SidecarRuntimeClient.Start(Path.Combine(AppContext.BaseDirectory, "AimMod.exe")));
+            () => SidecarRuntimeClient.Start(desktopExecutablePath()));
 
         IReadOnlyDictionary<int, double> calculated = await service.CalculateAccuracyCurveAsync(
             beatmapId,
@@ -109,7 +109,7 @@ public sealed class PpTargetExactCalculationServiceTests
                 temporaryDirectory,
                 new StubDifficultyClient(beatmapId, createBeatmap(beatmapId)),
                 Path.Combine(temporaryDirectory, "downloads"),
-                () => SidecarRuntimeClient.Start(Path.Combine(AppContext.BaseDirectory, "AimMod.exe")));
+                () => SidecarRuntimeClient.Start(desktopExecutablePath()));
 
             await service.CalculateAsync([
                 new PpTargetExactRequest(beatmapId, null, [], 0.95, 0.8),
@@ -122,6 +122,10 @@ public sealed class PpTargetExactCalculationServiceTests
 
         Assert.That(error.ToString(), Does.Contain("exact PP cache persistence failed"));
     }
+
+    private static string desktopExecutablePath() => Path.Combine(
+        AppContext.BaseDirectory,
+        OperatingSystem.IsWindows() ? "AimMod.exe" : "AimMod");
 
     private static string createBeatmap(int beatmapId)
     {

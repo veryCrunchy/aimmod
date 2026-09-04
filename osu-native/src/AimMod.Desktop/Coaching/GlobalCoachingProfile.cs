@@ -284,7 +284,7 @@ public static class GlobalCoachingProfileBuilder
                                        share,
                                        mapCoverage,
                                        confidence,
-                                       $"{count:N0} classified misses across {runCount:N0} plays and {mapCount:N0} maps ({share:P0} of classified misses).");
+                                       $"{count:N0} classified misses across {runCount:N0} plays and {mapCount:N0} maps ({share * 100:0}% of classified misses).");
                                })
                                .OrderByDescending(item => item.MapCount)
                                .ThenByDescending(item => item.ShareOfClassifiedMisses)
@@ -305,7 +305,7 @@ public static class GlobalCoachingProfileBuilder
             priorities.Add(new GlobalCoachingPriority(
                 practiceTitle(dominant.Reason),
                 practiceDetail(dominant),
-                $"{dominant.Share:P0} of misses",
+                $"{dominant.Share * 100:0}% of misses",
                 dominant.Confidence));
         }
 
@@ -342,7 +342,7 @@ public static class GlobalCoachingProfileBuilder
                 coverage.ReplayAvailableRunCount == 0
                     ? "No saved local replays are available for object-level coaching. Submitted scores still contribute to performance trends."
                     : $"{coverage.AnalysedRunCount:N0} of {coverage.ReplayAvailableRunCount:N0} replay-backed plays are analysed. More maps will make mechanics priorities more reliable.",
-                $"{coverage.ReplayCoverage:P0} covered",
+                $"{coverage.ReplayCoverage * 100:0}% covered",
                 coverage.Confidence));
         }
 

@@ -1,14 +1,55 @@
 # AimMod
 
-AimMod is a live overlay, replay, and coaching suite for KovaaK's Aim Trainer.
+AimMod is a performance-analysis and coaching suite for osu! and KovaaK's Aim Trainer. Each game has a dedicated desktop client and release channel built around the data and practice workflow that game exposes.
 
-It is built around two parts:
+| Product | Platforms | Download |
+| --- | --- | --- |
+| AimMod for osu! | Windows x64, Linux x64 | [Stable channel](https://github.com/veryCrunchy/aimmod/releases/tag/aimmod-osu-stable) |
+| AimMod for KovaaK's | Windows | [Latest release](https://github.com/veryCrunchy/kovaaks/releases/latest) |
+
+## AimMod for osu!
+
+AimMod for osu! is a native osu.Framework desktop application. It combines local osu!lazer history, replay-backed object analysis, and online scores into one workspace for map discovery, performance review, coaching, and focused practice.
+
+### Beatmap intelligence and PP targets
+
+![AimMod for osu! beatmap browser](public/aimmod-osu-beatmaps.png)
+
+- Browse installed beatmaps and inspect each difficulty separately
+- Compare aim, speed, stamina, reading, and accuracy demand
+- Calculate PP at multiple accuracy targets with the official osu! ruleset stack
+- Rank recommendations by personal fit, expected PP, realistic maximum PP, stars, length, status, and mods
+- Open maps directly in osu! or save recommendations for later
+
+### Replay analysis
+
+![AimMod for osu! replay analysis](public/aimmod-osu-replay-analysis.png)
+
+- Play local replays with the selected skin, audio controls, seeking, and exact judgement timeline
+- Classify misses from cursor and click evidence, including overshoots, undershoots, early clicks, late clicks, and unstable aim
+- Compare repeat attempts on the same difficulty to identify recurring failure points
+- Keep replay state isolated per workspace and pause playback when switching tabs
+
+### Global coaching and practice
+
+![AimMod for osu! global coaching](public/aimmod-osu-coaching.png)
+
+- Build a recent skill profile across maps with a configurable time window
+- Analyse replay evidence in the background and cache completed calculations
+- Turn recurring jump, stream, timing, and reading weaknesses into longer practice maps with lead-in and repetition
+- Combine detailed local records with online best and recent scores
+
+The native app is self-contained. Stable and preview channels update in place through Velopack on Windows and Linux; portable archives remain available for manual installs. See [the native app guide](osu-native/README.md) and [release-channel documentation](osu-native/docs/release-channels.md).
+
+## AimMod for KovaaK's
+
+AimMod for KovaaK's is built around two parts:
 - a live in-session HUD while you play
 - a full post-session stats window for replay review, coaching, and scenario analysis
 
-AimMod runs as a Windows desktop app and syncs its runtime into KovaaK's while the app is open, so your overlay, replay data, and session analysis stay tied to the same run.
+It runs as a Windows desktop app and syncs its runtime into KovaaK's while the app is open, so your overlay, replay data, and session analysis stay tied to the same run.
 
-## Screenshots
+### Screenshots
 
 **Live challenge HUD**
 
@@ -67,7 +108,7 @@ AimMod runs as a Windows desktop app and syncs its runtime into KovaaK's while t
 - UE4SS-based runtime bridge into KovaaK's
 - Automatic stats import from KovaaK's run results
 
-## Quick Start
+## KovaaK's Quick Start
 
 1. Download the latest build from [Releases](https://github.com/veryCrunchy/kovaaks/releases/latest).
 2. Launch AimMod.
@@ -83,13 +124,29 @@ AimMod runs as a Windows desktop app and syncs its runtime into KovaaK's while t
 | `F8` | Open settings |
 | `F10` | Toggle HUD layout mode |
 
-## Requirements
+## KovaaK's Requirements
 
 - Windows 10 or Windows 11
 - KovaaK's Aim Trainer (Steam)
 - AimMod running while you play if you want live overlay, replay capture, runtime bridge data, and automatic session analysis
 
 ## Build From Source
+
+### Native osu! app
+
+Windows:
+
+```powershell
+cd osu-native
+./scripts/build-windows-release.ps1
+```
+
+Linux:
+
+```bash
+cd osu-native
+./scripts/build-linux-release.sh
+```
 
 ### Frontend
 
