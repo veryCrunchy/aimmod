@@ -25,6 +25,7 @@ public partial class NativeBeatmapDiscoveryScreen : CompositeDrawable
     private readonly Func<OnlineBeatmapImportService?> importer;
     private readonly Func<IPpTargetExactCalculationService?> exactCalculator;
     private readonly Func<IAccountScoreHistoryService?> onlineScoreHistory;
+    private readonly Func<int, CancellationToken, Task>? openBeatmap;
     private readonly Container page = null!;
     private readonly Container tabBar = null!;
     private readonly AimModSectionHeader workspaceHeader = null!;
@@ -39,13 +40,15 @@ public partial class NativeBeatmapDiscoveryScreen : CompositeDrawable
         Func<IOfficialBeatmapDiscoveryClient?> client,
         Func<OnlineBeatmapImportService?> importer,
         Func<IPpTargetExactCalculationService?>? exactCalculator = null,
-        Func<IAccountScoreHistoryService?>? onlineScoreHistory = null)
+        Func<IAccountScoreHistoryService?>? onlineScoreHistory = null,
+        Func<int, CancellationToken, Task>? openBeatmap = null)
     {
         this.localLibrary = localLibrary ?? throw new ArgumentNullException(nameof(localLibrary));
         this.client = client ?? throw new ArgumentNullException(nameof(client));
         this.importer = importer ?? throw new ArgumentNullException(nameof(importer));
         this.exactCalculator = exactCalculator ?? (() => null);
         this.onlineScoreHistory = onlineScoreHistory ?? (() => null);
+        this.openBeatmap = openBeatmap;
         RelativeSizeAxes = Axes.Both;
 
         InternalChildren = new Drawable[]
@@ -120,7 +123,7 @@ public partial class NativeBeatmapDiscoveryScreen : CompositeDrawable
         {
             if (installedScreen is null)
             {
-                installedScreen = new NativeInstalledBeatmapBrowser(localLibrary, exactCalculator, onlineScoreHistory) { RelativeSizeAxes = Axes.Both };
+                installedScreen = new NativeInstalledBeatmapBrowser(localLibrary, exactCalculator, onlineScoreHistory, openBeatmap) { RelativeSizeAxes = Axes.Both };
                 page.Add(installedScreen);
             }
             setActiveScreen(installedScreen, onlineScreen);
@@ -194,7 +197,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
         {
             new AimModSectionHeader(
                 "Discover beatmaps",
-                "Save a set in AimMod, then choose whether to send the same download to osu!lazer.",
+                "Save a set in AimMod, then open the same download in your selected osu! client.",
                 "osu! API") { Depth = -20 },
             filterBand = new Container
             {
@@ -665,7 +668,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
             lazerArchive = result.LazerArchive;
             actionText.Text = result.Status switch
             {
-                OnlineBeatmapImportStatus.Success when result.LazerArchive is not null => "Install in osu!lazer",
+                OnlineBeatmapImportStatus.Success when result.LazerArchive is not null => "Open in osu!",
                 OnlineBeatmapImportStatus.Success => "Saved in AimMod",
                 OnlineBeatmapImportStatus.SignedOut => "Sign in to lazer",
                 OnlineBeatmapImportStatus.TokenExpired => "Session refreshing",
@@ -690,7 +693,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
         private void beginLazerInstall(LazerBeatmapArchive archive)
         {
             installingInLazer = true;
-            actionText.Text = "Opening osu!lazer...";
+            actionText.Text = "Opening osu!...";
             actionBackground.Colour = AimModPalette.Cyan;
             _ = installInLazerAsync(archive);
         }
@@ -719,12 +722,12 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
 
             actionText.Text = result.Status switch
             {
-                LazerBeatmapInstallStatus.Sent => "Sent to osu!lazer",
-                LazerBeatmapInstallStatus.LazerStarted => "Opened in osu!lazer",
+                LazerBeatmapInstallStatus.Sent => "Sent to osu!",
+                LazerBeatmapInstallStatus.LazerStarted => "Opened in osu!",
                 LazerBeatmapInstallStatus.ArchiveUnavailable => "Saved in AimMod",
-                LazerBeatmapInstallStatus.LazerNotFound => "osu!lazer not found",
-                LazerBeatmapInstallStatus.LazerRejected => "osu!lazer refused it",
-                _ => "Could not open osu!lazer",
+                LazerBeatmapInstallStatus.LazerNotFound => "osu! client not found",
+                LazerBeatmapInstallStatus.LazerRejected => "osu! refused it",
+                _ => "Could not open osu!",
             };
             actionBackground.Colour = sentToLazer ? AimModPalette.Success : AimModPalette.PinkDark;
             actionText.Colour = sentToLazer ? AimModPalette.Canvas : AimModPalette.Text;

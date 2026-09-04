@@ -25,7 +25,10 @@ public sealed record OsuDiscoveryEnvironment(
     string? HomeDirectory = null,
     string? XdgDataHome = null,
     string? AppData = null,
-    string? ExplicitDataRoot = null);
+    string? ExplicitDataRoot = null,
+    string? LocalAppData = null,
+    string? ExplicitStableRoot = null,
+    string? CurrentUserName = null);
 
 public sealed record DiscoveryEntry(
     DiscoveryEntryKind Kind,
@@ -64,4 +67,8 @@ public interface IOsuDiscoveryFileSystem
     string? CanonicalizeExisting(string path);
 
     string ReadAllText(string path, int maximumBytes);
+
+    IEnumerable<string> EnumerateFiles(string directory, string searchPattern) => [];
+
+    DateTime GetLastWriteTimeUtc(string path) => DateTime.MinValue;
 }

@@ -88,7 +88,17 @@ public sealed record LocalReplay(
     PpScoreStatistics? HitStatistics = null,
     string ModsJson = "",
     long OnlineScoreId = 0,
-    bool IsLocallyStored = true);
+    bool IsLocallyStored = true,
+    string BeatmapPath = "",
+    string ReplayPath = "",
+    LocalLibraryOrigin Origin = LocalLibraryOrigin.Lazer);
+
+public enum LocalLibraryOrigin
+{
+    Lazer,
+    Stable,
+    Online,
+}
 
 public interface ILocalLibrarySource
 {

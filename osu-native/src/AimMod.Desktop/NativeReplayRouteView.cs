@@ -1,4 +1,5 @@
 using AimMod.Desktop.Coaching;
+using AimMod.Desktop.Hub;
 using AimMod.Desktop.LocalLibrary;
 using AimMod.Desktop.Visuals;
 using AimMod.Osu.Runtime;
@@ -55,6 +56,7 @@ public partial class NativeReplayRouteView : Container
     private readonly SpriteText speedLabel;
     private readonly Container analysisCard;
     private readonly AimModLoadingOverlay loadingOverlay;
+    private readonly NativeHubReplaySharePanel hubSharePanel;
     private IBindable<double>? currentTime;
     private IBindable<double>? duration;
     private IBindable<bool>? paused;
@@ -72,7 +74,13 @@ public partial class NativeReplayRouteView : Container
     public NativeReplayRouteView(
         ILocalLibrarySource? source = null,
         IReadOnlyDictionary<Guid, ReplayAnalysisResult>? analyses = null,
-        Action<LocalReplay>? openReplay = null)
+        Action<LocalReplay>? openReplay = null,
+        OsuHubReplayShareService? hubShareService = null,
+        IHubCredentialStore? hubCredentialStore = null,
+        IOsuHubUploadQueue? hubUploadQueue = null,
+        IHubSharingPreferenceStore? hubPreferenceStore = null,
+        Action<Uri>? openUrl = null,
+        Action<string>? copyText = null)
     {
         this.source = source;
         this.analyses = analyses ?? new Dictionary<Guid, ReplayAnalysisResult>();
@@ -295,6 +303,14 @@ public partial class NativeReplayRouteView : Container
                             Direction = FillDirection.Vertical,
                             Spacing = new(5),
                         },
+                        new AimModSubsectionHeader("AimMod Hub", "manual sharing"),
+                        hubSharePanel = new NativeHubReplaySharePanel(
+                            hubShareService,
+                            hubCredentialStore,
+                            hubUploadQueue,
+                            hubPreferenceStore,
+                            openUrl,
+                            copyText),
                         new AimModSubsectionHeader("Focus for your next play"),
                         new Container
                         {
@@ -362,6 +378,7 @@ public partial class NativeReplayRouteView : Container
         statusTitle.Colour = AimModPalette.Text;
         statusDetail.Text = $"{replay.Difficulty}  //  {formatAccuracy(replay.Accuracy)}  //  {replay.PlayedAt.LocalDateTime:g}";
         statusLayer.FadeIn(80);
+        hubSharePanel.SetReplay(replay, analyses.ContainsKey(replay.ScoreId));
 
         if (analyses.TryGetValue(replay.ScoreId, out ReplayAnalysisResult? cachedAnalysis))
             showCompletedAnalysis(cachedAnalysis);
@@ -497,6 +514,7 @@ public partial class NativeReplayRouteView : Container
         judgementTimeline.SetResult(result);
         showMomentButtons(result);
         showNotableRows(result);
+        hubSharePanel.SetAnalysisAvailable(true);
         loadMapPattern();
         analysisCard.FadeIn(150);
     }

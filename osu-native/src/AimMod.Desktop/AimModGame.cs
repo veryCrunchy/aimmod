@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Net;
 using System.Text.Json;
 using osu.Framework;
 using osu.Framework.Allocation;
@@ -10,6 +11,7 @@ using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
 using osu.Framework.Input.Events;
+using osu.Framework.Platform;
 using osu.Game;
 using osu.Game.Beatmaps;
 using osu.Game.Configuration;
@@ -21,9 +23,11 @@ using AimMod.Osu.Runtime;
 using AimMod.Osu.Runtime.Contracts;
 using AimMod.Desktop.LocalLibrary;
 using AimMod.Desktop.Discovery;
+using AimMod.Desktop.Hub;
 using AimMod.Desktop.Coaching;
 using AimMod.Desktop.Visuals;
 using AimMod.Desktop.Skins;
+using AimMod.Desktop.Skins.Online;
 using AimMod.Desktop.PpTargets;
 using AimMod.Desktop.Practice;
 using AimMod.Desktop.ScoreHistory;
@@ -47,6 +51,9 @@ public partial class AimModGame : OsuGameBase
     [Resolved]
     private FrameworkConfigManager frameworkConfig { get; set; } = null!;
 
+    [Resolved]
+    private Clipboard clipboard { get; set; } = null!;
+
     private readonly AimModLaunchOptions launchOptions;
     private readonly ILocalLibrarySource? configuredLocalLibrary;
     private Container content = null!;
@@ -58,6 +65,7 @@ public partial class AimModGame : OsuGameBase
     private CancellationTokenSource? replayLibraryAnalysisLifetime;
     private NativeCoachingWorkspace? coachingWorkspace;
     private NativePpTargetsWorkspace? ppTargetsWorkspace;
+    private OsuClientSettingsScreen? settingsScreen;
     private readonly CancellationTokenSource appLifetime = new();
     private readonly Bindable<NativeRoute> currentRoute = new(NativeRoute.Home);
     private ILocalLibrarySource localLibrary = null!;
@@ -72,15 +80,19 @@ public partial class AimModGame : OsuGameBase
     private IOfficialBeatmapDiscoveryClient? officialBeatmapDiscoveryClient;
     private OnlineBeatmapImportService? onlineBeatmapImportService;
     private ILazerBeatmapInstallService? lazerBeatmapInstallService;
+    private IOsuBeatmapDestinationService? beatmapDestinationService;
     private IPpTargetExactCalculationService? ppTargetExactCalculationService;
     private ILocalScorePpHydrationService? localScorePpHydrationService;
-    private ExternalLazerInstalledSkinSource? externalSkinSource;
+    private IInstalledSkinSource? externalSkinSource;
     private ExternalLazerSkinApplyService? externalSkinApplyService;
+    private OsuStableSkinApplyService? stableSkinApplyService;
+    private OnlineSkinCatalogBackend? onlineSkinCatalog;
+    private OsuSkinArchiveDestinationService? onlineSkinDestination;
     private NativeSkinsScreen? skinsScreen;
     private CancellationTokenSource? skinApplyLifetime;
     private Guid? observedLazerSkinId;
     private Guid? appliedExternalSkinId;
-    private ExternalLazerReplayOpenService? externalReplayOpenService;
+    private ILocalReplayOpenService? replayOpenService;
     private ReplayAnalysisBatchService? replayAnalysisBatchService;
     private readonly Dictionary<Guid, ReplayAnalysisResult> replayAnalyses = new();
     private readonly HashSet<Guid> replayAnalysisFailures = new();
@@ -90,6 +102,13 @@ public partial class AimModGame : OsuGameBase
     private CancellationTokenSource? profileRefreshCancellation;
     private readonly INativeUpdateService? configuredUpdateService;
     private INativeUpdateService? updateService;
+    private HttpClient? hubHttpClient;
+    private IHubCredentialStore? hubCredentialStore;
+    private HubDeviceLinkClient? hubDeviceLinkClient;
+    private IHubSharingPreferenceStore? hubSharingPreferenceStore;
+    private OsuHubUploadQueue? hubUploadQueue;
+    private OsuHubReplayShareService? hubReplayShareService;
+    private OsuProfile? currentOsuProfile;
 
     public AimModGame()
         : this(AimModLaunchOptions.Home)
@@ -122,6 +141,9 @@ public partial class AimModGame : OsuGameBase
         base.LoadComplete();
 
         replayAnalysisCache = new ReplayAnalysisCache(Storage.GetFullPath("cache/replay-analysis-v1.json", true));
+        onlineSkinCatalog = new OnlineSkinCatalogBackend(
+            Storage.GetFullPath("cache/online-skins-v1", true),
+            Path.Combine(Path.GetTempPath(), "AimMod", "skin-previews"));
         foreach ((Guid scoreId, ReplayAnalysisResult analysis) in replayAnalysisCache.Load())
             replayAnalyses[scoreId] = analysis;
 
@@ -144,6 +166,8 @@ public partial class AimModGame : OsuGameBase
             LoadComponentAsync(localReplayMetadata, Add);
         }
 
+        initialiseHubServices();
+
         Add(new Box
         {
             RelativeSizeAxes = Axes.Both,
@@ -160,7 +184,7 @@ public partial class AimModGame : OsuGameBase
                     RelativeSizeAxes = Axes.Both,
                     Depth = 0,
                 },
-                header = new HeaderBar(currentRoute, showHome, showBeatmaps, showSkins, showReplays, showStatistics, showCoaching, showPpTargets)
+                header = new HeaderBar(currentRoute, showHome, showBeatmaps, showSkins, showReplays, showStatistics, showCoaching, showPpTargets, showSettings)
                 {
                     Depth = -100,
                 },
@@ -205,7 +229,46 @@ public partial class AimModGame : OsuGameBase
                 HomeDirectory: Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                 XdgDataHome: Environment.GetEnvironmentVariable("XDG_DATA_HOME"),
                 AppData: Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                ExplicitDataRoot: Environment.GetEnvironmentVariable(OsuLazerDiscoveryService.DataRootEnvironmentVariable));
+                ExplicitDataRoot: Environment.GetEnvironmentVariable(OsuLazerDiscoveryService.DataRootEnvironmentVariable),
+                LocalAppData: Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                ExplicitStableRoot: Environment.GetEnvironmentVariable(OsuStableDiscoveryService.InstallRootEnvironmentVariable),
+                CurrentUserName: Environment.UserName);
+
+            OsuStableDiscoveryResult stableDiscovery = await Task.Run(
+                () => new OsuStableDiscoveryService(new PhysicalOsuDiscoveryFileSystem()).Discover(platform, environment),
+                cancellationToken).ConfigureAwait(false);
+            OsuStableInstallation? stable = stableDiscovery.CompleteInstallations.FirstOrDefault();
+            ILocalLibrarySource? stableLibrary = stable is null
+                ? null
+                : new OsuStableLocalLibrarySource(stable.CanonicalPath, stable.SongsPath);
+
+            var lazerInstall = new LazerBeatmapInstallService(LazerHandoffDirectory);
+            beatmapDestinationService = new OsuBeatmapDestinationService(
+                lazerInstall,
+                new FileOsuClientDestinationPreferenceStore(Storage.GetFullPath("osu-client-destination.txt", true)),
+                LazerHandoffDirectory,
+                stable is null ? null : Path.Combine(stable.CanonicalPath, "osu!.exe"));
+            lazerBeatmapInstallService = beatmapDestinationService;
+            onlineSkinDestination = new OsuSkinArchiveDestinationService(
+                () => beatmapDestinationService?.Destination ?? OsuClientDestination.Auto,
+                Path.Combine(Path.GetTempPath(), "AimMod", "skin-handoff"),
+                stable is null ? null : Path.Combine(stable.CanonicalPath, "osu!.exe"));
+            Schedule(() => skinsScreen?.ConfigureOnlineDestination(onlineSkinDestination));
+
+            if (switchableLocalLibrary is not null && stableLibrary is not null)
+            {
+                ILocalLibrarySource fallback = switchableLocalLibrary.Current;
+                Schedule(() => switchableLocalLibrary.SwitchTo(new CompositeLocalLibrarySource(new[] { fallback, stableLibrary })));
+            }
+
+            if (stable is not null && stable.SkinsPath.Length > 0)
+            {
+                externalSkinSource = new OsuStableInstalledSkinSource(stable.SkinsPath);
+                stableSkinApplyService = new OsuStableSkinApplyService(SkinManager);
+            }
+
+            replayOpenService = new CompositeLocalReplayOpenService();
+            replayAnalysisBatchService = new ReplayAnalysisBatchService(replayOpenService);
 
             OsuLazerDiscoveryResult discovery = await Task.Run(
                 () => new OsuLazerDiscoveryService(new PhysicalOsuDiscoveryFileSystem()).Discover(platform, environment),
@@ -217,10 +280,6 @@ public partial class AimModGame : OsuGameBase
                 return;
             }
 
-            var lazerInstall = new LazerBeatmapInstallService(
-                LazerHandoffDirectory);
-            lazerBeatmapInstallService = lazerInstall;
-
             if (switchableLocalLibrary is not null)
             {
                 var externalLibrary = new ExternalLazerLocalLibrarySource(root.CanonicalPath);
@@ -229,16 +288,20 @@ public partial class AimModGame : OsuGameBase
                     Storage.GetFullPath("cache/local-score-pp-v1.json", true));
                 Schedule(() =>
                 {
-                    switchableLocalLibrary.SwitchTo(externalLibrary);
-                    externalReplayOpenService = new ExternalLazerReplayOpenService(root.CanonicalPath);
-                    replayAnalysisBatchService = new ReplayAnalysisBatchService(externalReplayOpenService);
+                    ILocalLibrarySource fallback = switchableLocalLibrary.Current;
+                    switchableLocalLibrary.SwitchTo(new CompositeLocalLibrarySource(new[] { externalLibrary, fallback }));
+                    replayOpenService = new CompositeLocalReplayOpenService(new ExternalLazerReplayOpenService(root.CanonicalPath));
+                    replayAnalysisBatchService = new ReplayAnalysisBatchService(replayOpenService);
                     startReplayLibraryAnalysis();
                 });
             }
 
             Schedule(() =>
             {
-                externalSkinSource = new ExternalLazerInstalledSkinSource(root.CanonicalPath);
+                IInstalledSkinSource lazerSkins = new ExternalLazerInstalledSkinSource(root.CanonicalPath);
+                externalSkinSource = externalSkinSource is null
+                    ? lazerSkins
+                    : new CompositeInstalledSkinSource(lazerSkins, externalSkinSource);
                 externalSkinApplyService = new ExternalLazerSkinApplyService(
                     root.CanonicalPath,
                     SkinManager,
@@ -276,7 +339,7 @@ public partial class AimModGame : OsuGameBase
                 BeatmapManager,
                 Storage.GetFullPath("downloads/beatmaps", true),
                 localLibrary,
-                lazerInstall);
+                beatmapDestinationService);
             monitor.StateChanged += lazerSessionChanged;
             Schedule(() => applyLazerSessionState(monitor.Current));
         }
@@ -338,7 +401,10 @@ public partial class AimModGame : OsuGameBase
         profileRefreshCancellation = null;
 
         if (state.Status != LazerSessionStatus.SignedIn || officialApiClient is null)
+        {
+            currentOsuProfile = null;
             return;
+        }
 
         profileRefreshCancellation = CancellationTokenSource.CreateLinkedTokenSource(appLifetime.Token);
         _ = refreshOfficialProfile(state.Revision, profileRefreshCancellation.Token);
@@ -357,13 +423,58 @@ public partial class AimModGame : OsuGameBase
                 Schedule(() =>
                 {
                     if (lazerSessionMonitor?.Current.Revision == sessionRevision)
+                    {
+                        currentOsuProfile = result.Profile;
                         header.SetProfile(result.Profile);
+                    }
                 });
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
         }
+    }
+
+    private void initialiseHubServices()
+    {
+        Uri hubBaseUri = OsuHubSyncClient.DefaultBaseUri;
+        string? configuredHubUrl = Environment.GetEnvironmentVariable("AIMMOD_HUB_URL");
+        if (Uri.TryCreate(configuredHubUrl, UriKind.Absolute, out Uri? configured)
+            && (string.Equals(configured.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(configured.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)))
+        {
+            hubBaseUri = configured;
+        }
+
+        hubHttpClient = new HttpClient(new HttpClientHandler
+        {
+            AutomaticDecompression = DecompressionMethods.Brotli | DecompressionMethods.Deflate | DecompressionMethods.GZip,
+            AllowAutoRedirect = false,
+        })
+        {
+            Timeout = TimeSpan.FromSeconds(30),
+        };
+        hubCredentialStore = new FileHubCredentialStore(Storage.GetFullPath("hub/credentials.bin", true));
+        hubSharingPreferenceStore = new FileHubSharingPreferenceStore(Storage.GetFullPath("hub/sharing-preferences.json", true));
+        var syncCache = new FileOsuHubSyncCache(Storage.GetFullPath("cache/hub-sync-v1.json", true));
+        hubDeviceLinkClient = new HubDeviceLinkClient(hubHttpClient, hubBaseUri, hubCredentialStore);
+        var syncClient = new OsuHubSyncClient(hubHttpClient, hubCredentialStore, syncCache, hubBaseUri);
+        hubUploadQueue = new OsuHubUploadQueue(Storage.GetFullPath("hub/upload-queue-v1.json", true), syncClient);
+        hubReplayShareService = new OsuHubReplayShareService(localLibrary, () => currentOsuProfile, replayAnalyses, hubUploadQueue);
+    }
+
+    private void openHubUrl(Uri uri)
+    {
+        if (uri.IsAbsoluteUri
+            && (string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)))
+            Host.OpenUrlExternally(uri.AbsoluteUri);
+    }
+
+    private void copyHubText(string value)
+    {
+        if (!string.IsNullOrWhiteSpace(value))
+            clipboard.SetText(value);
     }
 
     private void showHome()
@@ -379,7 +490,8 @@ public partial class AimModGame : OsuGameBase
             () => officialBeatmapDiscoveryClient,
             () => onlineBeatmapImportService,
             () => ppTargetExactCalculationService,
-            () => accountScoreHistoryService)
+            () => accountScoreHistoryService,
+            openBeatmapInOsu)
         {
             RelativeSizeAxes = Axes.Both,
         };
@@ -391,7 +503,13 @@ public partial class AimModGame : OsuGameBase
         replayRoute ??= new NativeReplayRouteView(
             localLibrary,
             replayAnalyses,
-            prepareCatalogReplay)
+            prepareCatalogReplay,
+            hubReplayShareService,
+            hubCredentialStore,
+            hubUploadQueue,
+            hubSharingPreferenceStore,
+            openHubUrl,
+            copyHubText)
         {
             RelativeSizeAxes = Axes.Both,
         };
@@ -405,7 +523,10 @@ public partial class AimModGame : OsuGameBase
             externalSkinSource,
             lazerPreferencesMonitor?.Current.SkinId,
             appliedExternalSkinId,
-            applySelectedSkin)
+            applySelectedSkin,
+            onlineSkinCatalog,
+            onlineSkinDestination,
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", "AimMod Skins"))
         {
             RelativeSizeAxes = Axes.Both,
         };
@@ -414,6 +535,7 @@ public partial class AimModGame : OsuGameBase
             lazerPreferencesMonitor?.Current.SkinId,
             appliedExternalSkinId,
             applySelectedSkin);
+        skinsScreen.ConfigureOnlineDestination(onlineSkinDestination);
         switchWorkspaceRoute(NativeRoute.Skins, new MarginPadding { Top = 88, Horizontal = 52, Bottom = 36 }, skinsScreen);
     }
 
@@ -455,9 +577,13 @@ public partial class AimModGame : OsuGameBase
 
     private async Task applySkinAsync(InstalledLazerSkin skin, CancellationToken cancellationToken)
     {
-        ExternalLazerSkinApplyService service = externalSkinApplyService
-            ?? throw new ExternalLazerSkinApplyException("lazer_library_unavailable", "AimMod is still connecting to the local lazer skin library.");
-        Guid localSkinId = await service.PrepareAsync(skin, cancellationToken).ConfigureAwait(false);
+        Guid localSkinId = skin.Origin == InstalledSkinOrigin.Stable
+            ? await (stableSkinApplyService
+                     ?? throw new ExternalLazerSkinApplyException("stable_library_unavailable", "AimMod is still connecting to the local osu!stable skin library."))
+                .PrepareAsync(skin, cancellationToken).ConfigureAwait(false)
+            : await (externalSkinApplyService
+                     ?? throw new ExternalLazerSkinApplyException("lazer_library_unavailable", "AimMod is still connecting to the local lazer skin library."))
+                .PrepareAsync(skin, cancellationToken).ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
         if (!IsDisposed)
         {
@@ -482,6 +608,25 @@ public partial class AimModGame : OsuGameBase
         switchWorkspaceRoute(NativeRoute.Statistics, new MarginPadding { Top = 88, Horizontal = 52, Bottom = 0 }, statisticsScreen);
     }
 
+    private void showSettings()
+    {
+        if (beatmapDestinationService is null)
+            return;
+
+        settingsScreen ??= new OsuClientSettingsScreen(
+            beatmapDestinationService,
+            hubDeviceLinkClient,
+            hubCredentialStore,
+            hubUploadQueue,
+            hubSharingPreferenceStore,
+            openHubUrl,
+            copyHubText)
+        {
+            RelativeSizeAxes = Axes.Both,
+        };
+        switchWorkspaceRoute(NativeRoute.Settings, new MarginPadding { Top = 88, Horizontal = 52, Bottom = 36 }, settingsScreen);
+    }
+
     private void showCoaching()
     {
         coachingWorkspace ??= new NativeCoachingWorkspace(
@@ -502,19 +647,19 @@ public partial class AimModGame : OsuGameBase
         PracticeMapGenerationRequest request,
         CancellationToken cancellationToken)
     {
-        ExternalLazerReplayOpenService? replayService = externalReplayOpenService;
+        ILocalReplayOpenService? replayService = replayOpenService;
         if (replayService is null)
-            return new PracticeMapGenerationResult(false, "Connect osu!lazer before creating a practice map.");
+            return new PracticeMapGenerationResult(false, "Connect an osu! installation before creating a practice map.");
         ILazerBeatmapInstallService? installService = lazerBeatmapInstallService;
         if (installService is null)
-            return new PracticeMapGenerationResult(false, "Connect osu!lazer before creating a practice map.");
+            return new PracticeMapGenerationResult(false, "Connect an osu! installation before creating a practice map.");
 
         string? root = null;
         LazerBeatmapArchive? lazerArchive = null;
         bool retainLazerArchive = false;
         try
         {
-            await using ExternalLazerPlayableReplayBundle bundle = await replayService.OpenAsync(
+            await using IPlayableReplayBundle bundle = await replayService.OpenAsync(
                 request.Candidate.SourceReplay,
                 cancellationToken).ConfigureAwait(false);
             PracticeSourceBeatmap source = OsuPracticeBeatmapReader.Read(bundle.BeatmapPath);
@@ -553,7 +698,7 @@ public partial class AimModGame : OsuGameBase
             retainLazerArchive = true;
             return new PracticeMapGenerationResult(
                 true,
-                $"{plans[0].OutputVersion} is ready to open in osu!lazer.",
+                $"{plans[0].OutputVersion} is ready to open in osu!.",
                 root,
                 artifact.ArchivePath,
                 lazerArchive);
@@ -589,11 +734,18 @@ public partial class AimModGame : OsuGameBase
     private Task<LazerBeatmapInstallResult> installPracticeMap(
         LazerBeatmapArchive archive,
         CancellationToken cancellationToken) =>
-        lazerBeatmapInstallService?.InstallAsync(archive, cancellationToken)
+        beatmapDestinationService?.InstallAsync(archive, cancellationToken)
         ?? Task.FromResult(new LazerBeatmapInstallResult(LazerBeatmapInstallStatus.LazerNotFound));
 
     internal static string LazerHandoffDirectory =>
         Path.GetFullPath(Path.Combine(Path.GetTempPath(), "AimMod", "lazer-handoff"));
+
+    private async Task openBeatmapInOsu(int beatmapId, CancellationToken cancellationToken)
+    {
+        IOsuBeatmapDestinationService? service = beatmapDestinationService;
+        if (service is not null)
+            await service.OpenBeatmapAsync(beatmapId, cancellationToken).ConfigureAwait(false);
+    }
 
     private void showPpTargets()
     {
@@ -605,7 +757,8 @@ public partial class AimModGame : OsuGameBase
             () => localScorePpHydrationService,
             () => officialApiClient,
             new PpTargetWorkspaceCache(Storage.GetFullPath("cache/pp-target-workspace-v1.json", true)),
-            () => accountScoreHistoryService)
+            () => accountScoreHistoryService,
+            openBeatmapInOsu)
         {
             RelativeSizeAxes = Axes.Both,
         };
@@ -693,13 +846,13 @@ public partial class AimModGame : OsuGameBase
 
     private async Task prepareCatalogReplayAsync(LocalReplay replay, CancellationToken cancellationToken)
     {
-        ExternalLazerPlayableReplayBundle? bundle = null;
+        IPlayableReplayBundle? bundle = null;
         try
         {
-            ExternalLazerReplayOpenService service = externalReplayOpenService
+            ILocalReplayOpenService service = replayOpenService
                 ?? throw new ExternalLazerReplayOpenException(
-                    "lazer_library_unavailable",
-                    "AimMod is still connecting to the local osu!lazer library. Try this replay again in a moment.");
+                    "local_library_unavailable",
+                    "AimMod is still connecting to the local osu! library. Try this replay again in a moment.");
             bundle = await service.OpenAsync(replay, cancellationToken).ConfigureAwait(false);
             await loadReplay(bundle.OpenRequest, cancellationToken, bundle, replay.ScoreId).ConfigureAwait(false);
             bundle = null;
@@ -1179,6 +1332,9 @@ public partial class AimModGame : OsuGameBase
 
         cancelReplayWork();
         updateService?.Dispose();
+        hubUploadQueue?.Dispose();
+        hubHttpClient?.Dispose();
+        onlineSkinCatalog?.Dispose();
         appLifetime.Dispose();
         base.Dispose(isDisposing);
     }
@@ -1197,7 +1353,8 @@ public partial class AimModGame : OsuGameBase
             Action showReplays,
             Action showStatistics,
             Action showCoaching,
-            Action showPpTargets)
+            Action showPpTargets,
+            Action showSettings)
         {
             RelativeSizeAxes = Axes.X;
             Height = 70;
@@ -1229,7 +1386,7 @@ public partial class AimModGame : OsuGameBase
                     Children = new Drawable[]
                     {
                         text("AimMod", 26, AimModPalette.Text, "Bold"),
-                        productPill = new AimModPill("osu!lazer", AimModPillTone.Accent),
+                        productPill = new AimModPill("osu!", AimModPillTone.Accent),
                     },
                 },
                 navigation = new FillFlowContainer<Drawable>
@@ -1248,6 +1405,7 @@ public partial class AimModGame : OsuGameBase
                         new NavItem("Statistics", NativeRoute.Statistics, currentRoute, showStatistics),
                         new NavItem("Coaching", NativeRoute.Coaching, currentRoute, showCoaching),
                         new NavItem("PP Targets", NativeRoute.PpTargets, currentRoute, showPpTargets),
+                        new NavItem("Settings", NativeRoute.Settings, currentRoute, showSettings),
                     },
                 },
                 sessionState = new TruncatingSpriteText
@@ -1342,7 +1500,7 @@ public partial class AimModGame : OsuGameBase
                         new Drawable[]
                         {
                             new WorkspaceLink(FontAwesome.Solid.Crosshairs, "PP targets", "Personal opportunities by difficulty", AimModPalette.Pink, showPpTargets),
-                            new WorkspaceLink(FontAwesome.Solid.PaintBrush, "Skins", "Installed osu!lazer skins", AimModPalette.Cyan, showSkins),
+                            new WorkspaceLink(FontAwesome.Solid.PaintBrush, "Skins", "Installed osu!stable and lazer skins", AimModPalette.Cyan, showSkins),
                         },
                     },
                 },
@@ -1504,6 +1662,7 @@ public partial class AimModGame : OsuGameBase
         Statistics,
         Coaching,
         PpTargets,
+        Settings,
     }
 
     private partial class Pill : CircularContainer

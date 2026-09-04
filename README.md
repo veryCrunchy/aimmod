@@ -9,7 +9,7 @@ AimMod is a performance-analysis and coaching suite for osu! and KovaaK's Aim Tr
 
 ## AimMod for osu!
 
-AimMod for osu! is a native osu.Framework desktop application. It combines local osu!lazer history, replay-backed object analysis, and online scores into one workspace for map discovery, performance review, coaching, and focused practice.
+AimMod for osu! is a native osu.Framework desktop application. It combines local osu!stable and osu!lazer history, replay-backed object analysis, and online scores into one workspace for map discovery, performance review, coaching, and focused practice.
 
 ### Beatmap intelligence and PP targets
 
@@ -38,6 +38,15 @@ AimMod for osu! is a native osu.Framework desktop application. It combines local
 - Analyse replay evidence in the background and cache completed calculations
 - Turn recurring jump, stream, timing, and reading weaknesses into longer practice maps with lead-in and repetition
 - Combine detailed local records with online best and recent scores
+
+### osu! clients, skins, and sharing
+
+- Discover beatmaps, scores, replays, and installed skins from both osu!stable and osu!lazer
+- Choose Auto, osu!stable, or osu!lazer as the destination for beatmaps, skins, and generated practice maps
+- Browse attributed catalogs from osuskins.net and skins.osuck.net, inspect screenshots, and keep downloads temporary until saving or importing
+- Validate archive type, size, paths, and redirect hosts before importing; public Google Drive files are supported while MEGA and authenticated or challenged links open in the browser
+- Link an AimMod Hub account with a device code and manually share a score, replay file, or judgement analysis as private, unlisted, or public
+- Retain a bounded upload queue across restarts with cancel and retry controls; sharing is private by default and never automatic
 
 The native app is self-contained. Stable and preview channels update in place through Velopack on Windows and Linux; portable archives remain available for manual installs. See [the native app guide](osu-native/README.md) and [release-channel documentation](osu-native/docs/release-channels.md).
 

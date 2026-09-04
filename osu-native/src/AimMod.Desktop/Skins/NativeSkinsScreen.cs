@@ -1,4 +1,6 @@
 using AimMod.Desktop.Visuals;
+using AimMod.Desktop.Skins.Online;
+using osu.Framework.Bindables;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
@@ -13,7 +15,7 @@ namespace AimMod.Desktop.Skins;
 
 public partial class NativeSkinsScreen : CompositeDrawable
 {
-    private ExternalLazerInstalledSkinSource? source;
+    private IInstalledSkinSource? source;
     private Func<InstalledLazerSkin, CancellationToken, Task>? applySkin;
     private readonly CancellationTokenSource lifetime = new();
     private readonly OsuTextBox searchBox;
@@ -28,16 +30,24 @@ public partial class NativeSkinsScreen : CompositeDrawable
     private readonly TruncatingSpriteText selectedCreator;
     private readonly TruncatingSpriteText selectedDetails;
     private readonly ApplyButton applyButton;
+    private readonly Container installedContent;
+    private readonly Container onlineContent;
+    private readonly NativeOnlineSkinsView onlineView;
+    private readonly Bindable<SkinsWorkspaceTab> currentTab = new(SkinsWorkspaceTab.Installed);
     private InstalledLazerSkin? selected;
     private Guid? lazerSkinId;
     private Guid? appliedExternalSkinId;
     private int revision;
 
     public NativeSkinsScreen(
-        ExternalLazerInstalledSkinSource? source = null,
+        IInstalledSkinSource? source = null,
         Guid? lazerSkinId = null,
         Guid? appliedExternalSkinId = null,
-        Func<InstalledLazerSkin, CancellationToken, Task>? applySkin = null)
+        Func<InstalledLazerSkin, CancellationToken, Task>? applySkin = null,
+        OnlineSkinCatalogBackend? onlineBackend = null,
+        IOnlineSkinArchiveDestination? onlineDestination = null,
+        string? onlineSaveDirectory = null,
+        Action<Uri>? openExternal = null)
     {
         this.source = source;
         this.lazerSkinId = lazerSkinId;
@@ -49,108 +59,140 @@ public partial class NativeSkinsScreen : CompositeDrawable
         {
             new AimModSectionHeader(
                 "Skins",
-                "Use skins already installed in osu!lazer. AimMod copies one selected skin into its own native player store.",
-                "installed in lazer"),
-            new SpriteText
+                "Use local osu! skins or browse public catalogs with verified temporary previews and direct import.",
+                "SKIN LIBRARY") { Depth = -110 },
+            new OsuTabControl<SkinsWorkspaceTab>
             {
-                Y = 78,
-                Text = "SEARCH INSTALLED SKINS",
-                Font = new FontUsage(size: 10, weight: "Bold"),
-                Colour = AimModPalette.Cyan,
+                Anchor = Anchor.TopRight,
+                Origin = Anchor.TopRight,
+                Position = new(0, 18),
+                Size = new(210, 38),
+                AccentColour = AimModPalette.Pink,
+                Current = currentTab,
+                Depth = -100,
             },
-            searchPanel = new Container
-            {
-                Y = 96,
-                Width = 560,
-                Height = AimModVisualStyle.ControlHeight,
-                Child = searchBox = new OsuTextBox
-                {
-                    RelativeSizeAxes = Axes.Both,
-                    PlaceholderText = "Search skin name or creator",
-                },
-            },
-            status = new TruncatingSpriteText
-            {
-                Y = 148,
-                Text = source is null ? "osu!lazer library not connected" : "Reading installed skins",
-                Font = new FontUsage(size: 11, weight: "SemiBold"),
-                Colour = AimModPalette.Muted,
-            },
-            new Container
+            installedContent = new Container
             {
                 RelativeSizeAxes = Axes.Both,
-                Padding = new MarginPadding { Top = 174 },
                 Children = new Drawable[]
                 {
-                    listPanel = new Container
+                    new SpriteText
+                    {
+                        Y = 78,
+                        Text = "SEARCH INSTALLED SKINS",
+                        Font = new FontUsage(size: 10, weight: "Bold"),
+                        Colour = AimModPalette.Cyan,
+                    },
+                    searchPanel = new Container
+                    {
+                        Y = 96,
+                        Width = 560,
+                        Height = AimModVisualStyle.ControlHeight,
+                        Child = searchBox = new OsuTextBox
+                        {
+                            RelativeSizeAxes = Axes.Both,
+                            PlaceholderText = "Search skin name or creator",
+                        },
+                    },
+                    status = new TruncatingSpriteText
+                    {
+                        Y = 148,
+                        Text = source is null ? "No osu! skin library connected" : "Reading installed skins",
+                        Font = new FontUsage(size: 11, weight: "SemiBold"),
+                        Colour = AimModPalette.Muted,
+                    },
+                    new Container
                     {
                         RelativeSizeAxes = Axes.Both,
-                        Width = 0.6f,
-                        Masking = true,
-                        CornerRadius = AimModVisualStyle.CardRadius,
+                        Padding = new MarginPadding { Top = 174 },
                         Children = new Drawable[]
                         {
-                            new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
-                            new AimModScrollContainer
+                            listPanel = new Container
                             {
                                 RelativeSizeAxes = Axes.Both,
-                                Child = list = new FillFlowContainer
-                                {
-                                    RelativeSizeAxes = Axes.X,
-                                    AutoSizeAxes = Axes.Y,
-                                    Padding = new MarginPadding
-                                    {
-                                        Left = AimModVisualStyle.RowSpacing,
-                                        Right = AimModVisualStyle.RelatedSpacing,
-                                        Vertical = AimModVisualStyle.RowSpacing,
-                                    },
-                                    Direction = FillDirection.Vertical,
-                                    Spacing = new(AimModVisualStyle.RelatedSpacing),
-                                },
-                            },
-                            listState = new SkinListState(
-                                source is null ? FontAwesome.Solid.Link : FontAwesome.Solid.PaintBrush,
-                                source is null ? "Connect osu!lazer" : "Reading installed skins",
-                                source is null
-                                    ? "AimMod will show the skins from your local osu!lazer library here."
-                                    : "Your installed skins will appear here."),
-                        },
-                    },
-                    detailPanel = new Container
-                    {
-                        Anchor = Anchor.TopRight,
-                        Origin = Anchor.TopRight,
-                        RelativeSizeAxes = Axes.Both,
-                        Width = 0.385f,
-                        Masking = true,
-                        CornerRadius = AimModVisualStyle.CardRadius,
-                        Children = new Drawable[]
-                        {
-                            new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
-                            new Container
-                            {
-                                RelativeSizeAxes = Axes.X,
-                                Height = 220,
-                                Child = preview = new SkinPreview(),
-                            },
-                            new FillFlowContainer
-                            {
-                                RelativeSizeAxes = Axes.X,
-                                AutoSizeAxes = Axes.Y,
-                                Y = 236,
-                                Padding = new MarginPadding { Horizontal = 16 },
-                                Direction = FillDirection.Vertical,
-                                Spacing = new(AimModVisualStyle.RelatedSpacing),
+                                Width = 0.6f,
+                                Masking = true,
+                                CornerRadius = AimModVisualStyle.CardRadius,
                                 Children = new Drawable[]
                                 {
-                                    selectedName = truncatingDetailText(20, AimModPalette.Text, "Bold", "Select a skin"),
-                                    selectedCreator = truncatingDetailText(12, AimModPalette.Cyan, "SemiBold", "Installed skin details appear here."),
-                                    selectedDetails = truncatingDetailText(11, AimModPalette.Muted, "Regular", string.Empty),
-                                    applyButton = new ApplyButton(applySelected),
+                                    new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
+                                    new AimModScrollContainer
+                                    {
+                                        RelativeSizeAxes = Axes.Both,
+                                        Child = list = new FillFlowContainer
+                                        {
+                                            RelativeSizeAxes = Axes.X,
+                                            AutoSizeAxes = Axes.Y,
+                                            Padding = new MarginPadding
+                                            {
+                                                Left = AimModVisualStyle.RowSpacing,
+                                                Right = AimModVisualStyle.RelatedSpacing,
+                                                Vertical = AimModVisualStyle.RowSpacing,
+                                            },
+                                            Direction = FillDirection.Vertical,
+                                            Spacing = new(AimModVisualStyle.RelatedSpacing),
+                                        },
+                                    },
+                                    listState = new SkinListState(
+                                        source is null ? FontAwesome.Solid.Link : FontAwesome.Solid.PaintBrush,
+                                        source is null ? "Connect osu!" : "Reading installed skins",
+                                        source is null
+                                            ? "AimMod will show skins from your local osu! installations here."
+                                            : "Your installed skins will appear here."),
+                                },
+                            },
+                            detailPanel = new Container
+                            {
+                                Anchor = Anchor.TopRight,
+                                Origin = Anchor.TopRight,
+                                RelativeSizeAxes = Axes.Both,
+                                Width = 0.385f,
+                                Masking = true,
+                                CornerRadius = AimModVisualStyle.CardRadius,
+                                Children = new Drawable[]
+                                {
+                                    new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
+                                    new Container
+                                    {
+                                        RelativeSizeAxes = Axes.X,
+                                        Height = 220,
+                                        Child = preview = new SkinPreview(),
+                                    },
+                                    new FillFlowContainer
+                                    {
+                                        RelativeSizeAxes = Axes.X,
+                                        AutoSizeAxes = Axes.Y,
+                                        Y = 236,
+                                        Padding = new MarginPadding { Horizontal = 16 },
+                                        Direction = FillDirection.Vertical,
+                                        Spacing = new(AimModVisualStyle.RelatedSpacing),
+                                        Children = new Drawable[]
+                                        {
+                                            selectedName = truncatingDetailText(20, AimModPalette.Text, "Bold", "Select a skin"),
+                                            selectedCreator = truncatingDetailText(12, AimModPalette.Cyan, "SemiBold", "Installed skin details appear here."),
+                                            selectedDetails = truncatingDetailText(11, AimModPalette.Muted, "Regular", string.Empty),
+                                            applyButton = new ApplyButton(applySelected),
+                                        },
+                                    },
                                 },
                             },
                         },
                     },
+                },
+            },
+            onlineContent = new Container
+            {
+                RelativeSizeAxes = Axes.Both,
+                Padding = new MarginPadding { Top = 76 },
+                Alpha = 0,
+                AlwaysPresent = false,
+                Child = onlineView = new NativeOnlineSkinsView(
+                    onlineBackend,
+                    onlineDestination,
+                    onlineSaveDirectory ?? Path.Combine(Path.GetTempPath(), "AimMod", "saved-skins"),
+                    openExternal)
+                {
+                    RelativeSizeAxes = Axes.Both,
                 },
             },
         };
@@ -182,6 +224,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
     protected override void LoadComplete()
     {
         base.LoadComplete();
+        currentTab.BindValueChanged(value => showTab(value.NewValue), true);
         searchBox.Current.BindValueChanged(_ => loadSkins());
         loadSkins();
     }
@@ -200,7 +243,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
     }
 
     public void Configure(
-        ExternalLazerInstalledSkinSource? source,
+        IInstalledSkinSource? source,
         Guid? lazerSkinId,
         Guid? appliedExternalSkinId,
         Func<InstalledLazerSkin, CancellationToken, Task>? applySkin)
@@ -220,6 +263,21 @@ public partial class NativeSkinsScreen : CompositeDrawable
         }
     }
 
+    public void ConfigureOnlineDestination(IOnlineSkinArchiveDestination? destination) => onlineView.ConfigureDestination(destination);
+
+    internal SkinsWorkspaceTab GetCurrentTabForTesting() => currentTab.Value;
+
+    internal void SelectTabForTesting(SkinsWorkspaceTab tab) => currentTab.Value = tab;
+
+    private void showTab(SkinsWorkspaceTab tab)
+    {
+        bool installed = tab == SkinsWorkspaceTab.Installed;
+        installedContent.Alpha = installed ? 1 : 0;
+        installedContent.AlwaysPresent = installed;
+        onlineContent.Alpha = installed ? 0 : 1;
+        onlineContent.AlwaysPresent = !installed;
+    }
+
     private void loadSkins()
     {
         if (source is null)
@@ -227,7 +285,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
 
         int requestRevision = ++revision;
         status.Text = "Reading installed skins";
-        listState.SetState(FontAwesome.Solid.PaintBrush, "Reading installed skins", "Your local osu!lazer library is being refreshed.", true);
+        listState.SetState(FontAwesome.Solid.PaintBrush, "Reading installed skins", "Your local osu! skin libraries are being refreshed.", true);
         _ = loadSkinsAsync(requestRevision, searchBox.Current.Value, lifetime.Token);
     }
 
@@ -266,7 +324,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
             FontAwesome.Solid.Search,
             searchBox.Current.Value.Length == 0 ? "No installed skins found" : "No matching skins",
             searchBox.Current.Value.Length == 0
-                ? "Install a skin in osu!lazer, then return here to use it for replay playback."
+                ? "Install a skin in osu!stable or osu!lazer, then return here to use it for replay playback."
                 : "Try a different skin name or creator.",
             page.Items.Count == 0);
         if (selected is null || page.Items.All(item => item.SkinId != selected.SkinId))
@@ -282,7 +340,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
         loadedSkins = Array.Empty<InstalledLazerSkin>();
         list.Clear();
         status.Text = $"Could not read installed skins: {message}";
-        listState.SetState(FontAwesome.Solid.ExclamationTriangle, "Installed skins unavailable", "Reconnect osu!lazer and try again.", true);
+        listState.SetState(FontAwesome.Solid.ExclamationTriangle, "Installed skins unavailable", "Reconnect osu! and try again.", true);
     }
 
     private void refreshRows()
@@ -574,7 +632,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
             if (skin.IsBuiltIn)
                 result.Add(new AimModPill("built-in"));
             if (activeInLazer)
-                result.Add(new AimModPill("lazer", AimModPillTone.Info));
+                result.Add(new AimModPill(skin.Origin == InstalledSkinOrigin.Stable ? "stable" : "lazer", AimModPillTone.Info));
             if (activeInAimMod)
                 result.Add(new AimModPill("active", AimModPillTone.Success));
             return result.ToArray();
@@ -618,5 +676,11 @@ public partial class NativeSkinsScreen : CompositeDrawable
             base.OnClick(e);
             return true;
         }
+    }
+
+    internal enum SkinsWorkspaceTab
+    {
+        Installed,
+        Online,
     }
 }

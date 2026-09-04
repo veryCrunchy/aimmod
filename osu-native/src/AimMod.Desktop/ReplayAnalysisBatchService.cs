@@ -71,11 +71,11 @@ public sealed class ReplayAnalysisBatchService
 {
     public const int MaximumBatchSize = 5;
 
-    private readonly ExternalLazerReplayOpenService replayOpenService;
+    private readonly ILocalReplayOpenService replayOpenService;
     private readonly Action<string> log;
 
     public ReplayAnalysisBatchService(
-        ExternalLazerReplayOpenService replayOpenService,
+        ILocalReplayOpenService replayOpenService,
         Action<string>? log = null)
     {
         this.replayOpenService = replayOpenService ?? throw new ArgumentNullException(nameof(replayOpenService));
@@ -125,7 +125,7 @@ public sealed class ReplayAnalysisBatchService
 
             try
             {
-                await using ExternalLazerPlayableReplayBundle bundle = await replayOpenService.OpenAsync(replay, cancellationToken).ConfigureAwait(false);
+                await using IPlayableReplayBundle bundle = await replayOpenService.OpenAsync(replay, cancellationToken).ConfigureAwait(false);
                 await using ReplayAnalysisStaging staging = await ReplayAnalysisStaging.CreateAsync(
                     bundle.BeatmapPath,
                     bundle.ReplayPath,

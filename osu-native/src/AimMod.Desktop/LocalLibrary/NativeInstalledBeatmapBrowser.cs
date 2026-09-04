@@ -2,7 +2,6 @@ using AimMod.Desktop.PpTargets;
 using AimMod.Desktop.ScoreHistory;
 using AimMod.Desktop.Visuals;
 using AimMod.Osu.Runtime;
-using System.Diagnostics;
 using osu.Framework.Bindables;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
@@ -30,6 +29,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
     private readonly ILocalLibrarySource source;
     private readonly Func<IPpTargetExactCalculationService?> exactCalculator;
     private readonly Func<IAccountScoreHistoryService?> onlineScoreHistory;
+    private readonly Func<int, CancellationToken, Task>? openBeatmap;
     private readonly LocalLibraryController controller;
     private readonly OsuTextBox searchBox;
     private readonly Container searchSurface;
@@ -70,11 +70,13 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
     public NativeInstalledBeatmapBrowser(
         ILocalLibrarySource source,
         Func<IPpTargetExactCalculationService?>? exactCalculator = null,
-        Func<IAccountScoreHistoryService?>? onlineScoreHistory = null)
+        Func<IAccountScoreHistoryService?>? onlineScoreHistory = null,
+        Func<int, CancellationToken, Task>? openBeatmap = null)
     {
         this.source = source ?? throw new ArgumentNullException(nameof(source));
         this.exactCalculator = exactCalculator ?? (() => null);
         this.onlineScoreHistory = onlineScoreHistory ?? (() => null);
+        this.openBeatmap = openBeatmap;
         controller = new LocalLibraryController(source, NativeLocalLibraryMode.Beatmaps);
         controller.StateChanged += stateChanged;
         sourceChanges = source as ILocalLibrarySourceChanged;
@@ -186,7 +188,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                 Children = new Drawable[]
                 {
                     new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas, Alpha = 0.78f, Depth = 100 },
-                    inspector = new BeatmapInspector(),
+                    inspector = new BeatmapInspector(openBeatmap),
                 },
             },
             loading = new AimModLoadingOverlay(),
@@ -738,14 +740,16 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
 
     private sealed partial class BeatmapInspector : CompositeDrawable
     {
+        private readonly Func<int, CancellationToken, Task>? openBeatmap;
         private readonly OsuScrollContainer scroll;
         private readonly FillFlowContainer<Drawable> content;
         private LocalBeatmapSet? set;
         private LocalBeatmapDifficulty? difficulty;
         private IReadOnlyList<LocalBeatmapSet> candidates = Array.Empty<LocalBeatmapSet>();
 
-        public BeatmapInspector()
+        public BeatmapInspector(Func<int, CancellationToken, Task>? openBeatmap)
         {
+            this.openBeatmap = openBeatmap;
             RelativeSizeAxes = Axes.Both;
             Masking = true;
             InternalChild = scroll = new AimModScrollContainer
@@ -798,7 +802,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             content.Add(new PpAccuracyCard(pp, ppError));
             content.Add(new NextMapsCard(set, difficulty, candidates));
             content.Add(new RecentPerformanceCard(plays, online, replayError));
-            content.Add(new ActionBar(difficulty));
+            content.Add(new ActionBar(difficulty, openBeatmap));
         }
     }
 
@@ -1080,7 +1084,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
 
     private sealed partial class ActionBar : FillFlowContainer
     {
-        public ActionBar(LocalBeatmapDifficulty difficulty)
+        public ActionBar(LocalBeatmapDifficulty difficulty, Func<int, CancellationToken, Task>? openBeatmap)
         {
             RelativeSizeAxes = Axes.X;
             Height = 48;
@@ -1088,7 +1092,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             Spacing = new(AimModVisualStyle.RelatedSpacing);
             Children = new Drawable[]
             {
-                new InspectorAction(FontAwesome.Solid.Play, "Open", true, difficulty.OnlineId > 0 ? () => openInOsu(difficulty.OnlineId) : null),
+                new InspectorAction(FontAwesome.Solid.Play, "Open", true, difficulty.OnlineId > 0 && openBeatmap is not null ? () => _ = openBeatmap(difficulty.OnlineId, CancellationToken.None) : null),
                 new InspectorAction(FontAwesome.Solid.Bullseye, "Practice", false, null),
                 new InspectorAction(FontAwesome.Regular.Heart, "Save", false, null),
             };
@@ -1251,18 +1255,6 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         PlayedFilter.Unplayed => "Unplayed",
         _ => "All maps",
     };
-
-    private static void openInOsu(int beatmapId)
-    {
-        try
-        {
-            Process.Start(new ProcessStartInfo($"osu://b/{beatmapId}") { UseShellExecute = true });
-        }
-        catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception)
-        {
-            Console.Error.WriteLine($"[AimMod] Could not open beatmap {beatmapId} in osu!: {error.Message}");
-        }
-    }
 
     private static string relativeDate(DateTimeOffset date)
     {

@@ -5,7 +5,7 @@ using AimMod.Desktop.LocalLibrary;
 
 namespace AimMod.Desktop;
 
-public sealed class ExternalLazerReplayOpenService
+public sealed class ExternalLazerReplayOpenService : ILocalReplayOpenService
 {
     private const string bundle_prefix = "aimmod-replay-open-";
 
@@ -130,6 +130,11 @@ public sealed class ExternalLazerReplayOpenService
             replay.Mods,
             replay.HasReplayFile), cancellationToken);
     }
+
+    async Task<IPlayableReplayBundle> ILocalReplayOpenService.OpenAsync(
+        LocalReplay replay,
+        CancellationToken cancellationToken) =>
+        await OpenAsync(replay, cancellationToken).ConfigureAwait(false);
 
     private static void validateReplay(ExternalLazerReplaySummary replay)
     {
@@ -410,7 +415,7 @@ public sealed class ExternalLazerReplayOpenService
         IReadOnlyList<ExternalLazerResolvedAsset> Backgrounds);
 }
 
-public sealed class ExternalLazerPlayableReplayBundle : IAsyncDisposable
+public sealed class ExternalLazerPlayableReplayBundle : IPlayableReplayBundle
 {
     private const string bundle_prefix = "aimmod-replay-open-";
     private string? directoryPath;

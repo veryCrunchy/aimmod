@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using AimMod.Desktop.Coaching;
 using AimMod.Desktop.LocalLibrary;
 using AimMod.Desktop.PpTargets;
@@ -34,6 +33,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
     private readonly Func<ILocalScorePpHydrationService?> localPpHydrator;
     private readonly Func<OfficialOsuApiClient?> officialApi;
     private readonly Func<IAccountScoreHistoryService?> accountHistory;
+    private readonly Func<int, CancellationToken, Task>? openBeatmap;
     private readonly PpTargetWorkspaceCache? workspaceCache;
     private readonly OsuTextBox search;
     private readonly TruncatingSpriteText status;
@@ -92,7 +92,8 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         Func<ILocalScorePpHydrationService?>? localPpHydrator = null,
         Func<OfficialOsuApiClient?>? officialApi = null,
         PpTargetWorkspaceCache? workspaceCache = null,
-        Func<IAccountScoreHistoryService?>? accountHistory = null)
+        Func<IAccountScoreHistoryService?>? accountHistory = null,
+        Func<int, CancellationToken, Task>? openBeatmap = null)
     {
         this.source = source ?? throw new ArgumentNullException(nameof(source));
         this.client = client ?? throw new ArgumentNullException(nameof(client));
@@ -102,6 +103,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         this.officialApi = officialApi ?? (() => null);
         this.workspaceCache = workspaceCache;
         this.accountHistory = accountHistory ?? (() => null);
+        this.openBeatmap = openBeatmap;
         sourceChanges = source as ILocalLibrarySourceChanged;
         if (sourceChanges is not null)
             sourceChanges.SourceChanged += sourceChanged;
@@ -752,7 +754,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         foreach (PpTargetCandidate candidate in visibleCandidates)
         {
             if (setsById.TryGetValue(candidate.BeatmapSetId, out OfficialBeatmapSet? set))
-                results.Add(new PpTargetRow(candidate, set, importSet));
+                results.Add(new PpTargetRow(candidate, set, importSet, openBeatmap));
         }
         if (results.Count == 0)
             workspaceState.ShowState(FontAwesome.Solid.Filter, "No matching beatmaps", "Try widening the star, PP, status, or length filters.");
@@ -1036,7 +1038,11 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         private readonly Container maximumMetric;
         private bool importing;
 
-        public PpTargetRow(PpTargetCandidate candidate, OfficialBeatmapSet set, Func<OfficialBeatmapSet, Task<OnlineBeatmapImportResult>> import)
+        public PpTargetRow(
+            PpTargetCandidate candidate,
+            OfficialBeatmapSet set,
+            Func<OfficialBeatmapSet, Task<OnlineBeatmapImportResult>> import,
+            Func<int, CancellationToken, Task>? openBeatmap)
         {
             this.set = set;
             this.import = import;
@@ -1109,7 +1115,12 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                     Size = new(104, 76),
                     Children = new Drawable[]
                     {
-                        actionButton(FontAwesome.Solid.Play, "Open osu!", AimModPalette.Cyan, () => openInOsu(candidate.BeatmapId)),
+                        actionButton(
+                            FontAwesome.Solid.Play,
+                            "Open osu!",
+                            AimModPalette.Cyan,
+                            openBeatmap is null ? () => { } : () => _ = openBeatmap(candidate.BeatmapId, CancellationToken.None),
+                            disabled: openBeatmap is null),
                         actionButton(FontAwesome.Solid.Download, set.DownloadDisabled ? "Unavailable" : "Save", AimModPalette.Pink, beginImport, 41, set.DownloadDisabled,
                             out saveBackground, out saveText),
                     },
@@ -1226,21 +1237,6 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                     labelText,
                 },
             };
-        }
-
-        private static void openInOsu(int beatmapId)
-        {
-            if (beatmapId <= 0)
-                return;
-
-            try
-            {
-                Process.Start(new ProcessStartInfo(BeatmapLaunchUri(beatmapId)) { UseShellExecute = true });
-            }
-            catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception)
-            {
-                Console.Error.WriteLine($"[AimMod] Could not open beatmap {beatmapId} in osu!: {error.Message}");
-            }
         }
 
         private static string formatLength(int seconds) => $"{Math.Max(0, seconds) / 60}:{Math.Max(0, seconds) % 60:00}";

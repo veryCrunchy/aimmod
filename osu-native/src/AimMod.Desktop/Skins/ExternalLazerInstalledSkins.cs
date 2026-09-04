@@ -7,7 +7,17 @@ using osu.Game.Skinning;
 
 namespace AimMod.Desktop.Skins;
 
-public sealed record InstalledLazerSkin(ExternalLazerSkinSummary Summary, string PreviewPath)
+public enum InstalledSkinOrigin
+{
+    Lazer,
+    Stable,
+}
+
+public sealed record InstalledLazerSkin(
+    ExternalLazerSkinSummary Summary,
+    string PreviewPath,
+    InstalledSkinOrigin Origin = InstalledSkinOrigin.Lazer,
+    string SourcePath = "")
 {
     public Guid SkinId => Summary.SkinId;
     public string Name => Summary.Name;
@@ -23,7 +33,13 @@ public sealed record InstalledLazerSkinPage(IReadOnlyList<InstalledLazerSkin> It
     public bool HasMore => Offset + Items.Count < Total;
 }
 
-public sealed class ExternalLazerInstalledSkinSource
+public interface IInstalledSkinSource
+{
+    Task<InstalledLazerSkinPage> SearchAsync(string searchText = "", int offset = 0, int limit = 60, CancellationToken cancellationToken = default);
+    Task<InstalledLazerSkin?> GetAsync(Guid skinId, CancellationToken cancellationToken = default);
+}
+
+public sealed class ExternalLazerInstalledSkinSource : IInstalledSkinSource
 {
     private readonly string libraryRoot;
     private readonly Func<ExternalLazerSkinCatalogSearchRequest, CancellationToken, Task<ExternalLazerSkinCatalogSearchResult>> search;

@@ -1,6 +1,8 @@
 using AimMod.Desktop.Coaching;
+using AimMod.Desktop.Hub;
 using AimMod.Desktop.LocalLibrary;
 using AimMod.Desktop.Skins;
+using AimMod.Desktop.Skins.Online;
 using AimMod.Osu.Runtime.Contracts;
 using NUnit.Framework;
 
@@ -38,9 +40,38 @@ public sealed class NativeScreenConstructionTests
     }
 
     [Test]
+    public void HubSettingsPanelConstructsWithoutConfiguredServices()
+    {
+        Assert.DoesNotThrow(() => _ = new NativeHubSettingsPanel(null, null, null, null, null, null));
+    }
+
+    [Test]
     public void SkinsRouteConstructsWithoutAConnectedLazerLibrary()
     {
         Assert.DoesNotThrow(() => _ = new NativeSkinsScreen());
+    }
+
+    [Test]
+    public void SkinsRouteSwitchesBetweenInstalledAndOnlineCatalogs()
+    {
+        using var screen = new NativeSkinsScreen();
+
+        Assert.That(screen.GetCurrentTabForTesting(), Is.EqualTo(NativeSkinsScreen.SkinsWorkspaceTab.Installed));
+        screen.SelectTabForTesting(NativeSkinsScreen.SkinsWorkspaceTab.Online);
+        Assert.That(screen.GetCurrentTabForTesting(), Is.EqualTo(NativeSkinsScreen.SkinsWorkspaceTab.Online));
+    }
+
+    [Test]
+    public void OnlineSkinCatalogUsesSafeDefaultFilters()
+    {
+        using var view = new NativeOnlineSkinsView(null, null, Path.Combine(Path.GetTempPath(), "aimmod-skin-ui-tests"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(view.SelectedProviderForTesting, Is.EqualTo("All providers"));
+            Assert.That(view.SelectedRulesetForTesting, Is.EqualTo(OnlineSkinRuleset.Standard));
+            Assert.That(view.SelectedSortForTesting, Is.EqualTo(OnlineSkinSort.Newest));
+        });
     }
 
     [Test]

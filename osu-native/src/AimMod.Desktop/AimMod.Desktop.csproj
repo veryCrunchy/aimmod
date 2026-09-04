@@ -6,6 +6,7 @@
     <Description>Native AimMod desktop shell.</Description>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="OsuParsers" Version="1.7.2" />
     <PackageReference Include="ppy.osu.Game" Version="2026.730.0" />
     <PackageReference Include="ppy.osu.Game.Rulesets.Osu" Version="2026.730.0" />
     <PackageReference Include="Velopack" Version="1.2.0" />

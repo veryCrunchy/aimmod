@@ -79,4 +79,28 @@ public sealed class PhysicalOsuDiscoveryFileSystem : IOsuDiscoveryFileSystem
 
         return Encoding.UTF8.GetString(bytes, 0, totalRead);
     }
+
+    public IEnumerable<string> EnumerateFiles(string directory, string searchPattern)
+    {
+        try
+        {
+            return Directory.EnumerateFiles(directory, searchPattern, SearchOption.TopDirectoryOnly).ToArray();
+        }
+        catch (Exception error) when (error is DirectoryNotFoundException or UnauthorizedAccessException or IOException)
+        {
+            return [];
+        }
+    }
+
+    public DateTime GetLastWriteTimeUtc(string path)
+    {
+        try
+        {
+            return File.GetLastWriteTimeUtc(path);
+        }
+        catch (Exception error) when (error is UnauthorizedAccessException or IOException)
+        {
+            return DateTime.MinValue;
+        }
+    }
 }

@@ -374,13 +374,13 @@ public sealed class LazerBeatmapInstallService : ILazerBeatmapInstallService
 
 internal sealed record LazerLaunchOutcome(bool Started, bool Exited, int ExitCode);
 
-internal sealed record LazerLaunchCommand(
+public sealed record LazerLaunchCommand(
     string ExecutablePath,
     IReadOnlyList<string> ArgumentsBeforeArchive,
     IReadOnlyList<string> ArgumentsAfterArchive,
     string Source);
 
-internal sealed class LazerExecutableLocator
+public sealed class LazerExecutableLocator
 {
     private const int maximum_desktop_entry_bytes = 64 * 1024;
     private const int maximum_desktop_entries = 512;

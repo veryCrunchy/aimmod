@@ -2,6 +2,15 @@
   "version": 1,
   "dependencies": {
     "net8.0": {
+      "OsuParsers": {
+        "type": "Direct",
+        "requested": "[1.7.2, )",
+        "resolved": "1.7.2",
+        "contentHash": "hc32VhDa7QQZIKKIxYW99fbe71+3DIueJvMirtQ0hDN8YRLJDHRtaN/9xre1G0FRe1DLSNxyx5p969TS1i0tWQ==",
+        "dependencies": {
+          "System.Numerics.Vectors": "4.5.0"
+        }
+      },
       "ppy.osu.Game": {
         "type": "Direct",
         "requested": "[2026.730.0, )",
@@ -1716,6 +1725,11 @@
         "type": "Transitive",
         "resolved": "8.0.0",
         "contentHash": "fhODzTe9ON9IzmRfyVeA6L8yXOciMtpq1YufkRVBliggcVKZE+XDxqIn46+yF4PWR6wNPuDpXtPpuY86VcKxUA=="
+      },
+      "System.Numerics.Vectors": {
+        "type": "Transitive",
+        "resolved": "4.5.0",
+        "contentHash": "QQTlPTl06J/iiDbJCiepZ4H//BVraReU4O4EoRw1U02H5TLUIT7xn3GnDp9AXPSlJUDyFs4uWjWafNX6WrAojQ=="
       },
       "System.ObjectModel": {
         "type": "Transitive",

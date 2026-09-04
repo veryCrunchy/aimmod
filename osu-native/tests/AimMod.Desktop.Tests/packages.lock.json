@@ -28,6 +28,15 @@
           "Microsoft.Testing.Platform.MSBuild": "1.7.3"
         }
       },
+      "OsuParsers": {
+        "type": "Direct",
+        "requested": "[1.7.2, )",
+        "resolved": "1.7.2",
+        "contentHash": "hc32VhDa7QQZIKKIxYW99fbe71+3DIueJvMirtQ0hDN8YRLJDHRtaN/9xre1G0FRe1DLSNxyx5p969TS1i0tWQ==",
+        "dependencies": {
+          "System.Numerics.Vectors": "4.5.0"
+        }
+      },
       "AutoMapper": {
         "type": "Transitive",
         "resolved": "13.0.1",
@@ -1807,6 +1816,11 @@
         "resolved": "8.0.0",
         "contentHash": "fhODzTe9ON9IzmRfyVeA6L8yXOciMtpq1YufkRVBliggcVKZE+XDxqIn46+yF4PWR6wNPuDpXtPpuY86VcKxUA=="
       },
+      "System.Numerics.Vectors": {
+        "type": "Transitive",
+        "resolved": "4.5.0",
+        "contentHash": "QQTlPTl06J/iiDbJCiepZ4H//BVraReU4O4EoRw1U02H5TLUIT7xn3GnDp9AXPSlJUDyFs4uWjWafNX6WrAojQ=="
+      },
       "System.ObjectModel": {
         "type": "Transitive",
         "resolved": "4.3.0",
@@ -2372,6 +2386,7 @@
         "type": "Project",
         "dependencies": {
           "AimMod.Osu.Runtime": "[1.0.0, )",
+          "OsuParsers": "[1.7.2, )",
           "Velopack": "[1.2.0, )",
           "aimmod-osu-worker": "[1.0.0, )",
           "ppy.osu.Game": "[2026.730.0, )",
