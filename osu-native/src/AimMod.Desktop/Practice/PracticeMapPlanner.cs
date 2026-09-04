@@ -99,19 +99,33 @@ public static class PracticeMapPlanner
         double audioEnd = section.SourceEndTimeMs + options.AudioPaddingMs;
         double audioLeadIn = Math.Max(0, options.LeadInMs - (section.SourceStartTimeMs - audioStart));
         double shift = -audioStart + audioLeadIn;
-        PracticeHitObject[] objects = section.HitObjects.Select(item => shiftObject(item, shift)).ToArray();
-        PracticeTimingPoint[] timing = selectTimingPoints(beatmap.TimingPoints, audioStart, audioEnd)
-            .Select(point => shiftTimingPoint(point, shift))
-            .ToArray();
+        double cycleDuration = audioEnd - audioStart;
+        if (!double.IsFinite(cycleDuration) || cycleDuration <= 0)
+            throw new InvalidDataException("The selected practice phrase has no usable duration.");
+        int repetitions = Math.Clamp(
+            (int)Math.Ceiling(options.TargetDurationMs / cycleDuration),
+            options.MinimumRepetitions,
+            options.MaximumRepetitions);
+        PracticeHitObject[] objects = Enumerable.Range(0, repetitions)
+                                                .SelectMany(repetition => section.HitObjects.Select((item, index) =>
+                                                    shiftObject(item, shift + repetition * cycleDuration, index == 0)))
+                                                .ToArray();
+        PracticeTimingPoint[] sourceTiming = selectTimingPoints(beatmap.TimingPoints, audioStart, audioEnd).ToArray();
+        PracticeTimingPoint[] timing = Enumerable.Range(0, repetitions)
+                                                 .SelectMany(repetition => sourceTiming.Select(point => shiftTimingPoint(
+                                                     point,
+                                                     shift + repetition * cycleDuration,
+                                                     audioStart,
+                                                     audioLeadIn + repetition * cycleDuration)))
+                                                 .ToArray();
         string type = section.DrillType switch
         {
             PracticeDrillType.LongJumps => "Long jumps",
             PracticeDrillType.Streams => "Streams",
             _ => "Mixed pattern",
         };
-        string version = $"AimMod {type} drill {number} - {beatmap.Metadata.Version}";
-        string audioExtension = Path.GetExtension(beatmap.Metadata.AudioFilename);
-        string outputAudio = $"practice-audio{(string.IsNullOrWhiteSpace(audioExtension) ? ".ogg" : audioExtension)}";
+        string version = $"AimMod {type} x{repetitions} drill {number} - {beatmap.Metadata.Version}";
+        const string outputAudio = "practice-audio.ogg";
         string sourceDirectory = Path.GetDirectoryName(beatmap.SourcePath)!;
         string sourceAudio = Path.GetFullPath(Path.Combine(sourceDirectory, beatmap.Metadata.AudioFilename));
         string sourcePrefix = Path.TrimEndingDirectorySeparator(Path.GetFullPath(sourceDirectory)) + Path.DirectorySeparatorChar;
@@ -119,8 +133,9 @@ public static class PracticeMapPlanner
             throw new InvalidDataException("The source beatmap audio path escapes its beatmap directory.");
         return new PracticeMapPlan(section.DrillType, section, beatmap.SourcePath, beatmap.Metadata.Title, beatmap.Metadata.Artist,
             beatmap.Metadata.Creator, beatmap.Metadata.Version, version, shift, audioLeadIn, timing, objects,
-            new PracticeAudioSliceRequest(sourceAudio, audioStart, audioEnd, outputAudio),
-            $"Practice drill derived from {beatmap.Metadata.Artist} - {beatmap.Metadata.Title} [{beatmap.Metadata.Version}], mapped by {beatmap.Metadata.Creator}. Source geometry is unchanged.");
+            new PracticeAudioSliceRequest(sourceAudio, audioStart, audioEnd, outputAudio, repetitions),
+            $"Practice drill derived from {beatmap.Metadata.Artist} - {beatmap.Metadata.Title} [{beatmap.Metadata.Version}], mapped by {beatmap.Metadata.Creator}. The looped source excerpt and geometry repeat {repetitions} times with a lead-up and recovery between rounds.",
+            repetitions);
     }
 
     private static IEnumerable<PracticeTimingPoint> selectTimingPoints(IReadOnlyList<PracticeTimingPoint> points, double start, double end)
@@ -133,20 +148,27 @@ public static class PracticeMapPlanner
             .OrderBy(point => point.TimeMs);
     }
 
-    private static PracticeHitObject shiftObject(PracticeHitObject item, double shift)
+    private static PracticeHitObject shiftObject(PracticeHitObject item, double shift, bool forceNewCombo)
     {
         string[] fields = item.Fields.ToArray();
         fields[2] = format(item.StartTimeMs + shift);
+        int type = forceNewCombo ? item.Type | 4 : item.Type;
+        fields[3] = type.ToString(System.Globalization.CultureInfo.InvariantCulture);
         if (item.IsSpinner && fields.Length > 5)
             fields[5] = format(item.EndTimeMs + shift);
-        return item with { StartTimeMs = item.StartTimeMs + shift, EndTimeMs = item.EndTimeMs + shift, Fields = fields };
+        return item with { StartTimeMs = item.StartTimeMs + shift, EndTimeMs = item.EndTimeMs + shift, Type = type, Fields = fields };
     }
 
-    private static PracticeTimingPoint shiftTimingPoint(PracticeTimingPoint point, double shift)
+    private static PracticeTimingPoint shiftTimingPoint(
+        PracticeTimingPoint point,
+        double shift,
+        double sourceCycleStart,
+        double outputCycleStart)
     {
         string[] fields = point.Fields.ToArray();
-        fields[0] = format(point.TimeMs + shift);
-        return point with { TimeMs = point.TimeMs + shift, Fields = fields };
+        double time = point.TimeMs <= sourceCycleStart ? outputCycleStart : point.TimeMs + shift;
+        fields[0] = format(time);
+        return point with { TimeMs = time, Fields = fields };
     }
 
     internal static string format(double value) => value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);

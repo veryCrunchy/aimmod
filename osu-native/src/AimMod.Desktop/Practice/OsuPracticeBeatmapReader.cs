@@ -1,4 +1,7 @@
 using System.Globalization;
+using osu.Game.Beatmaps;
+using osu.Game.Rulesets.Objects;
+using osu.Game.Rulesets.Osu;
 
 namespace AimMod.Desktop.Practice;
 
@@ -37,9 +40,12 @@ public static class OsuPracticeBeatmapReader
             .Select(parseTimingPoint)
             .OrderBy(point => point.TimeMs)
             .ToArray();
-        PracticeHitObject[] objects = section(sections, "HitObjects")
-            .Where(contentLine)
-            .Select((line, index) => parseHitObject(line, index))
+        double[] decodedEndTimes = decodeEndTimes(fullPath);
+        string[] objectLines = section(sections, "HitObjects").Where(contentLine).ToArray();
+        if (decodedEndTimes.Length != objectLines.Length)
+            throw new InvalidDataException("osu! decoded a different hitobject count than the source file contains.");
+        PracticeHitObject[] objects = objectLines
+            .Select((line, index) => parseHitObject(line, index, decodedEndTimes[index]))
             .OrderBy(hitObject => hitObject.StartTimeMs)
             .ToArray();
         if (objects.Length == 0)
@@ -90,16 +96,23 @@ public static class OsuPracticeBeatmapReader
         return new PracticeTimingPoint(time, uninherited, fields);
     }
 
-    private static PracticeHitObject parseHitObject(string line, int index)
+    private static double[] decodeEndTimes(string path)
+    {
+        // Use osu!'s own decoder for slider/spinner end times. Slider duration depends on
+        // inherited timing points and difficulty settings and cannot be inferred from one line.
+        _ = typeof(OsuRuleset).Assembly;
+        IBeatmap decoded = new FlatWorkingBeatmap(path).Beatmap;
+        return decoded.HitObjects.Select(hitObject => hitObject.GetEndTime()).ToArray();
+    }
+
+    private static PracticeHitObject parseHitObject(string line, int index, double decodedEndTime)
     {
         string[] fields = line.Split(',');
         if (fields.Length < 5)
             throw new InvalidDataException("A hitobject in the source beatmap is malformed.");
         int type = parseInt(fields[3], "hitobject type");
         double start = parseDouble(fields[2], "hitobject time");
-        double end = start;
-        if ((type & 8) != 0 && fields.Length > 5)
-            end = parseDouble(fields[5], "spinner end time");
+        double end = Math.Max(start, decodedEndTime);
         return new PracticeHitObject(index, parseInt(fields[0], "hitobject x"), parseInt(fields[1], "hitobject y"), start, end, type, fields);
     }
 

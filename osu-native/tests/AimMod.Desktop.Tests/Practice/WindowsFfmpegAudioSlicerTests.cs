@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO.Compression;
+using System.Globalization;
 using AimMod.Desktop.Practice;
 using NUnit.Framework;
 
@@ -67,16 +68,66 @@ public sealed class WindowsFfmpegAudioSlicerTests
         });
         var slicer = new WindowsFfmpegAudioSlicer("C:\\tools\\ffmpeg.exe", runner, TimeSpan.FromSeconds(1));
 
-        await slicer.SliceAsync(new PracticeAudioSliceRequest(source, 1_250, 4_750, Path.GetFileName(destination)), destination);
+        var request = new PracticeAudioSliceRequest(source, 1_250, 4_750, Path.GetFileName(destination), 3);
+        await slicer.SliceAsync(request, destination);
 
         Assert.That(observed, Is.Not.Null);
         Assert.Multiple(() =>
         {
             Assert.That(observed!.UseShellExecute, Is.False);
             Assert.That(observed.ArgumentList, Does.Contain(source));
-            Assert.That(observed.ArgumentList, Does.Contain("1.25"));
-            Assert.That(observed.ArgumentList, Does.Contain("3.5"));
+            Assert.That(observed.ArgumentList, Does.Contain("-filter_complex"));
+            Assert.That(observed.ArgumentList, Does.Contain(WindowsFfmpegAudioSlicer.CreateRepeatFilter(request)));
+            Assert.That(WindowsFfmpegAudioSlicer.CreateRepeatFilter(request), Does.Contain("atrim=start=1.25:end=4.75"));
+            Assert.That(WindowsFfmpegAudioSlicer.CreateRepeatFilter(request), Does.Contain("aresample=48000:first_pts=0"));
+            Assert.That(WindowsFfmpegAudioSlicer.CreateRepeatFilter(request), Does.Contain("atrim=duration=3.5"));
+            Assert.That(WindowsFfmpegAudioSlicer.CreateRepeatFilter(request), Does.Contain("concat=n=3"));
+            Assert.That(observed.ArgumentList, Does.Contain("libvorbis"));
             Assert.That(observed.ArgumentList[^1], Is.EqualTo(destination));
+        });
+    }
+
+    [Test]
+    public void SingleRoundFilterDoesNotCreateAConcatGraph()
+    {
+        string filter = WindowsFfmpegAudioSlicer.CreateRepeatFilter(
+            new PracticeAudioSliceRequest("source.ogg", 500, 2_000, "out.ogg"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(filter, Is.EqualTo("[0:a]atrim=start=0.5:end=2,asetpts=PTS-STARTPTS,aresample=48000:first_pts=0,apad,atrim=duration=1.5[practice]"));
+            Assert.That(filter, Does.Not.Contain("concat"));
+        });
+    }
+
+    [Test]
+    public async Task ProducesTimestampZeroOggAtThePlannedRepeatedDuration()
+    {
+        string? ffmpeg = FfmpegExecutableLocator.Find();
+        if (ffmpeg is null)
+            Assert.Ignore("FFmpeg is required for the synchronized audio integration test.");
+        string ffprobe = Path.Combine(Path.GetDirectoryName(ffmpeg)!, OperatingSystem.IsWindows() ? "ffprobe.exe" : "ffprobe");
+        if (!File.Exists(ffprobe))
+            Assert.Ignore("FFprobe is required for the synchronized audio integration test.");
+
+        string source = Path.Combine(directory, "source.wav");
+        string output = Path.Combine(directory, "practice-audio.ogg");
+        await runTool(ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=8",
+            "-ar", "48000", "-ac", "2", source);
+        var request = new PracticeAudioSliceRequest(source, 1_250, 3_750, Path.GetFileName(output), 4);
+
+        await new WindowsFfmpegAudioSlicer().SliceAsync(request, output);
+
+        string probe = await runTool(ffprobe, "-v", "error", "-show_entries", "format=start_time,duration",
+            "-of", "default=noprint_wrappers=1:nokey=1", output);
+        double[] values = probe.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+                               .Select(value => double.Parse(value, CultureInfo.InvariantCulture))
+                               .ToArray();
+        Assert.Multiple(() =>
+        {
+            Assert.That(values[0], Is.EqualTo(0).Within(0.001), "The generated OGG should start at timestamp zero.");
+            Assert.That(values[1] * 1000, Is.EqualTo(request.OutputDurationMs).Within(25),
+                "Repeated audio should match the beatmap timeline without accumulated encoder delay.");
         });
     }
 
@@ -151,5 +202,25 @@ public sealed class WindowsFfmpegAudioSlicerTests
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(run(startInfo));
         }
+    }
+
+    private static async Task<string> runTool(string executable, params string[] arguments)
+    {
+        var startInfo = new ProcessStartInfo(executable)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        foreach (string argument in arguments)
+            startInfo.ArgumentList.Add(argument);
+        using var process = Process.Start(startInfo) ?? throw new IOException($"Could not start {Path.GetFileName(executable)}.");
+        string output = await process.StandardOutput.ReadToEndAsync();
+        string error = await process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+        if (process.ExitCode != 0)
+            throw new InvalidDataException($"{Path.GetFileName(executable)} failed: {error}");
+        return output;
     }
 }

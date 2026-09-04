@@ -68,7 +68,13 @@ public sealed record PracticeAudioSliceRequest(
     string SourceAudioPath,
     double SourceStartTimeMs,
     double SourceEndTimeMs,
-    string OutputFilename);
+    string OutputFilename,
+    int RepeatCount = 1)
+{
+    public double CycleDurationMs => SourceEndTimeMs - SourceStartTimeMs;
+
+    public double OutputDurationMs => CycleDurationMs * RepeatCount;
+}
 
 public sealed record PracticeMapPlan(
     PracticeDrillType DrillType,
@@ -84,15 +90,19 @@ public sealed record PracticeMapPlan(
     IReadOnlyList<PracticeTimingPoint> TimingPoints,
     IReadOnlyList<PracticeHitObject> HitObjects,
     PracticeAudioSliceRequest AudioSlice,
-    string Attribution);
+    string Attribution,
+    int RepeatCount);
 
 public sealed record PracticeMapOptions(
     PracticeDrillType DrillType,
     int MaximumSections = 3,
     int ContextObjectsBefore = 6,
     int ContextObjectsAfter = 10,
-    double LeadInMs = 2_000,
-    double AudioPaddingMs = 1_000)
+    double LeadInMs = 4_000,
+    double AudioPaddingMs = 2_500,
+    double TargetDurationMs = 60_000,
+    int MinimumRepetitions = 6,
+    int MaximumRepetitions = 12)
 {
     public PracticeMapOptions Normalised() => this with
     {
@@ -101,5 +111,8 @@ public sealed record PracticeMapOptions(
         ContextObjectsAfter = Math.Clamp(ContextObjectsAfter, 0, 64),
         LeadInMs = Math.Clamp(LeadInMs, 1_000, 10_000),
         AudioPaddingMs = Math.Clamp(AudioPaddingMs, 0, 5_000),
+        TargetDurationMs = Math.Clamp(TargetDurationMs, 20_000, 120_000),
+        MinimumRepetitions = Math.Clamp(MinimumRepetitions, 2, 20),
+        MaximumRepetitions = Math.Clamp(MaximumRepetitions, Math.Clamp(MinimumRepetitions, 2, 20), 24),
     };
 }

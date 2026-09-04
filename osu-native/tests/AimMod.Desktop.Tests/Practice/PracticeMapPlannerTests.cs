@@ -43,11 +43,37 @@ public sealed class PracticeMapPlannerTests
         {
             Assert.That(plan.DrillType, Is.EqualTo(PracticeDrillType.Streams));
             Assert.That(plan.SourceSection.WeakObjects.Single(item => item.ObjectIndex == 6).MissRate, Is.EqualTo(2d / 3).Within(0.001));
-            Assert.That(plan.HitObjects[0].StartTimeMs, Is.EqualTo(2000).Within(0.001));
-            Assert.That(plan.AudioLeadInMs, Is.EqualTo(1000).Within(0.001));
-            Assert.That(plan.HitObjects.Select(item => (item.X, item.Y)),
+            Assert.That(plan.HitObjects[0].StartTimeMs, Is.EqualTo(4000).Within(0.001));
+            Assert.That(plan.AudioLeadInMs, Is.EqualTo(1500).Within(0.001));
+            Assert.That(plan.HitObjects.Take(plan.SourceSection.HitObjects.Count).Select(item => (item.X, item.Y)),
                 Is.EqualTo(plan.SourceSection.HitObjects.Select(item => (item.X, item.Y))));
+            Assert.That(plan.RepeatCount, Is.GreaterThanOrEqualTo(6));
+            Assert.That(plan.AudioSlice.OutputDurationMs, Is.GreaterThanOrEqualTo(60_000));
             Assert.That(plan.Attribution, Does.Contain("mapped by Mapper"));
+        });
+    }
+
+    [Test]
+    public void RepeatsObjectsTimingAndPaddedAudioOnOneCycleClock()
+    {
+        PracticeSourceBeatmap source = read(map(objects: circleObjects(10, 100, 20)));
+        PracticeMapPlan plan = PracticeMapPlanner.CreatePlans(
+            source,
+            new[] { analysis(miss(5, 0.9)) },
+            new PracticeMapOptions(PracticeDrillType.Streams, MaximumSections: 1))[0];
+        int objectsPerRound = plan.SourceSection.HitObjects.Count;
+        double cycle = plan.AudioSlice.CycleDurationMs;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(plan.RepeatCount, Is.InRange(6, 12));
+            Assert.That(plan.HitObjects, Has.Count.EqualTo(objectsPerRound * plan.RepeatCount));
+            Assert.That(plan.AudioSlice.RepeatCount, Is.EqualTo(plan.RepeatCount));
+            Assert.That(plan.HitObjects[objectsPerRound].StartTimeMs - plan.HitObjects[0].StartTimeMs,
+                Is.EqualTo(cycle).Within(0.001));
+            Assert.That((plan.HitObjects[objectsPerRound].Type & 4) != 0, Is.True, "Each round should begin a new combo.");
+            Assert.That(plan.AudioLeadInMs + plan.AudioSlice.OutputDurationMs - plan.HitObjects[^1].EndTimeMs,
+                Is.EqualTo(2_500).Within(0.001), "The final round should retain recovery audio after its last object.");
         });
     }
 
@@ -99,6 +125,24 @@ public sealed class PracticeMapPlannerTests
     }
 
     [Test]
+    public void UsesOfficialSliderEndTimeForRecoveryAndRepetition()
+    {
+        string objects = string.Join('\n', new[]
+        {
+            "256,192,10000,1,0,0:0:0:0:",
+            "256,192,10500,2,0,B|356:192,2,280",
+            "300,192,13500,1,0,0:0:0:0:",
+        });
+        PracticeSourceBeatmap source = read(map(objects: objects));
+
+        Assert.That(source.HitObjects[1].EndTimeMs, Is.GreaterThan(source.HitObjects[1].StartTimeMs));
+        PracticeMapPlan plan = PracticeMapPlanner.CreatePlans(source,
+            new[] { analysis(miss(1, 0.9)) }, new PracticeMapOptions(PracticeDrillType.Mixed, 1, 1, 1))[0];
+        Assert.That(plan.AudioLeadInMs + plan.AudioSlice.OutputDurationMs - plan.HitObjects[^1].EndTimeMs,
+            Is.GreaterThanOrEqualTo(2_500).Within(1));
+    }
+
+    [Test]
     public async Task ExportRequiresSlicedAudioAndNeverMutatesSource()
     {
         PracticeSourceBeatmap source = read(map(objects: circleObjects(10, 100, 20)));
@@ -112,16 +156,20 @@ public sealed class PracticeMapPlannerTests
         {
             PracticeMapExportResult result = await new PracticeMapExporter().ExportAsync(source, plan, output, new CopyingAudioSlicer());
             string exported = await File.ReadAllTextAsync(result.BeatmapPath);
+            PracticeSourceBeatmap decodedExport = OsuPracticeBeatmapReader.Read(result.BeatmapPath);
             byte[] sourceAfterExport = await File.ReadAllBytesAsync(source.SourcePath);
 
             Assert.Multiple(() =>
             {
                 Assert.That(sourceAfterExport, Is.EqualTo(original));
                 Assert.That(exported, Does.Contain("AudioFilename:practice-audio.ogg"));
-                Assert.That(exported, Does.Contain("AudioLeadIn:1000"));
+                Assert.That(exported, Does.Contain("AudioLeadIn:1500"));
                 Assert.That(exported, Does.Contain("Source:Practice drill derived from Artist - Source Song [Original], mapped by Mapper."));
                 Assert.That(exported, Does.Contain("BeatmapID:-1"));
+                Assert.That(exported, Does.Contain("\n2,"), "Recovery gaps should be represented as osu! breaks.");
                 Assert.That(exported, Does.Not.Contain("0,0,\"background.jpg\""));
+                Assert.That(decodedExport.HitObjects, Has.Count.EqualTo(plan.HitObjects.Count),
+                    "osu!'s decoder should accept every generated repetition.");
             });
         }
         finally

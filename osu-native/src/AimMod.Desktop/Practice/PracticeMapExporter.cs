@@ -74,7 +74,7 @@ public sealed class PracticeMapExporter
             ["BeatmapSetID"] = "-1",
         }));
         appendSection(builder, "Difficulty", source.Sections.GetValueOrDefault("Difficulty", Array.Empty<string>()));
-        appendSection(builder, "Events", new[] { "// Practice audio is trimmed from the attributed source; background/video events are intentionally omitted." });
+        appendSection(builder, "Events", practiceEvents(plan));
         appendSection(builder, "TimingPoints", plan.TimingPoints.Select(point => string.Join(',', point.Fields)));
         appendSection(builder, "Colours", source.Sections.GetValueOrDefault("Colours", Array.Empty<string>()));
         appendSection(builder, "HitObjects", plan.HitObjects.Select(hitObject => string.Join(',', hitObject.Fields)));
@@ -102,6 +102,21 @@ public sealed class PracticeMapExporter
         foreach (string line in lines)
             builder.Append(line).Append('\n');
         builder.Append('\n');
+    }
+
+    private static IEnumerable<string> practiceEvents(PracticeMapPlan plan)
+    {
+        yield return "// Looped source audio; background/video events are intentionally omitted.";
+        int objectsPerRound = plan.SourceSection.HitObjects.Count;
+        for (int repetition = 0; repetition < plan.RepeatCount - 1; repetition++)
+        {
+            PracticeHitObject finalObject = plan.HitObjects[(repetition + 1) * objectsPerRound - 1];
+            PracticeHitObject nextObject = plan.HitObjects[(repetition + 1) * objectsPerRound];
+            double breakStart = finalObject.EndTimeMs + 250;
+            double breakEnd = nextObject.StartTimeMs - 750;
+            if (breakEnd - breakStart >= 1_000)
+                yield return $"2,{PracticeMapPlanner.format(breakStart)},{PracticeMapPlanner.format(breakEnd)}";
+        }
     }
 
     private static string sanitiseFilename(string value)

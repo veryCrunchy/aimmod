@@ -81,6 +81,8 @@ public sealed class WindowsFfmpegAudioSlicer : IPracticeAudioSlicer
             throw new FileNotFoundException("The source beatmap audio is unavailable.", source);
         if (request.SourceStartTimeMs < 0 || request.SourceEndTimeMs <= request.SourceStartTimeMs)
             throw new ArgumentOutOfRangeException(nameof(request), "The requested audio range is invalid.");
+        if (request.RepeatCount is < 1 or > 24)
+            throw new ArgumentOutOfRangeException(nameof(request), "The requested repetition count is invalid.");
 
         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
         ProcessStartInfo startInfo = CreateStartInfo(executablePath, request, destination);
@@ -102,17 +104,32 @@ public sealed class WindowsFfmpegAudioSlicer : IPracticeAudioSlicer
             CreateNoWindow = true,
             RedirectStandardError = true,
         };
-        string start = (request.SourceStartTimeMs / 1000d).ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
-        string duration = ((request.SourceEndTimeMs - request.SourceStartTimeMs) / 1000d)
-            .ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
         foreach (string argument in new[]
                  {
                      "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
-                     "-ss", start, "-i", Path.GetFullPath(request.SourceAudioPath),
-                     "-t", duration, "-vn", "-map_metadata", "-1", destinationPath,
+                     "-i", Path.GetFullPath(request.SourceAudioPath),
+                     "-filter_complex", CreateRepeatFilter(request),
+                     "-map", "[practice]", "-vn", "-map_metadata", "-1",
+                     "-c:a", "libvorbis", "-ar", "48000", "-ac", "2", destinationPath,
                  })
             startInfo.ArgumentList.Add(argument);
         return startInfo;
+    }
+
+    internal static string CreateRepeatFilter(PracticeAudioSliceRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.RepeatCount is < 1 or > 24)
+            throw new ArgumentOutOfRangeException(nameof(request));
+        string start = (request.SourceStartTimeMs / 1000d).ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+        string end = (request.SourceEndTimeMs / 1000d).ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+        string duration = (request.CycleDurationMs / 1000d).ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+        string trim = $"[0:a]atrim=start={start}:end={end},asetpts=PTS-STARTPTS,aresample=48000:first_pts=0,apad,atrim=duration={duration}";
+        if (request.RepeatCount == 1)
+            return trim + "[practice]";
+
+        string outputs = string.Concat(Enumerable.Range(0, request.RepeatCount).Select(index => $"[round{index}]"));
+        return $"{trim},asplit={request.RepeatCount}{outputs};{outputs}concat=n={request.RepeatCount}:v=0:a=1[practice]";
     }
 }
 
