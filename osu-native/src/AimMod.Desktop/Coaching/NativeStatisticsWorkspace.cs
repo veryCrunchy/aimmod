@@ -404,7 +404,9 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
             detail("ACCURACY", replay.Accuracy.ToString("P2")),
             detail("PP", replay.PerformancePoints is { } pp ? $"{pp:0.##}pp" : "Not stored"),
             detail("COMBO / MISSES", $"{replay.MaxCombo:N0}x  /  {replay.MissCount:N0}"),
-            detail("SOURCE", replay.OnlineScoreId > 0 ? "Cached online best/recent" : "Local score history"),
+            detail("SOURCE", replay.IsLocallyStored
+                ? replay.OnlineScoreId > 0 ? "Local + cached online" : "Local score history"
+                : "Cached online best/recent"),
             divider(),
             text("THIS DIFFICULTY", 11, AimModPalette.Pink, "Bold"),
             detail("PLAYS", map.PlayCount.ToString("N0")),
@@ -574,6 +576,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
     private sealed partial class StatisticsGraphCard : CompositeDrawable
     {
         private readonly Func<double, string> formatter;
+        private readonly Container plotViewport;
         private readonly LineGraph graph;
         private readonly SpriteText range;
         private readonly Container hoverLine;
@@ -600,12 +603,21 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
                     text.Origin = Anchor.TopRight;
                     text.Position = new(-15, 16);
                 }),
-                graph = new LineGraph
+                plotViewport = new Container
                 {
                     RelativeSizeAxes = Axes.Both,
                     Padding = new MarginPadding { Top = 52, Bottom = 22, Left = 15, Right = 15 },
-                    LineColour = colour,
-                    DefaultValueCount = 80,
+                    Child = new Container
+                    {
+                        RelativeSizeAxes = Axes.Both,
+                        Masking = true,
+                        Child = graph = new LineGraph
+                        {
+                            RelativeSizeAxes = Axes.Both,
+                            LineColour = colour,
+                            DefaultValueCount = 80,
+                        },
+                    },
                 },
                 hoverLine = new Container
                 {
@@ -678,8 +690,8 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
         {
             if (points.Length == 0)
                 return;
-            float graphWidth = Math.Max(1, DrawWidth - 30);
-            float x = Math.Clamp(localX - 15, 0, graphWidth);
+            float graphWidth = Math.Max(1, plotViewport.Child.DrawWidth);
+            float x = Math.Clamp(localX - plotViewport.Padding.Left, 0, graphWidth);
             int index = points.Length == 1 ? 0 : (int)Math.Round(x / graphWidth * (points.Length - 1));
             CoachingChartPoint point = points[Math.Clamp(index, 0, points.Length - 1)];
             hoverLine.X = 15 + x;

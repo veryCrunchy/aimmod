@@ -44,7 +44,7 @@ public sealed class StatisticsWorkspaceModelTests
     [Test]
     public void SourceFilterSeparatesOnlineAndLocalWithoutChangingDefaultUnifiedView()
     {
-        LocalReplay online = run(1, DateTimeOffset.Now, 5, 0.96, 0, 170, [], 1234);
+        LocalReplay online = run(1, DateTimeOffset.Now, 5, 0.96, 0, 170, [], 1234) with { IsLocallyStored = false };
         LocalReplay local = run(2, DateTimeOffset.Now.AddMinutes(-1), 5, 0.95, 1, 150, []);
 
         StatisticsWorkspaceModel unified = StatisticsWorkspaceModel.Build([online, local], new StatisticsRunQuery());
@@ -60,6 +60,29 @@ public sealed class StatisticsWorkspaceModelTests
             Assert.That(unified.Runs, Has.Count.EqualTo(2));
             Assert.That(onlineOnly.Runs.Single().ScoreId, Is.EqualTo(online.ScoreId));
             Assert.That(localOnly.Runs.Single().ScoreId, Is.EqualTo(local.ScoreId));
+        });
+    }
+
+    [Test]
+    public void SubmittedLocalScoreParticipatesInBothSourceFilters()
+    {
+        LocalReplay submittedLocal = run(1, DateTimeOffset.Now, 5, 0.96, 0, 170, [], 1234);
+
+        StatisticsWorkspaceModel unified = StatisticsWorkspaceModel.Build([submittedLocal], new StatisticsRunQuery());
+        StatisticsWorkspaceModel online = StatisticsWorkspaceModel.Build(
+            [submittedLocal],
+            new StatisticsRunQuery(Source: StatisticsScoreSource.Online));
+        StatisticsWorkspaceModel local = StatisticsWorkspaceModel.Build(
+            [submittedLocal],
+            new StatisticsRunQuery(Source: StatisticsScoreSource.Local));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(submittedLocal.IsLocallyStored, Is.True);
+            Assert.That(online.Runs, Is.EqualTo(new[] { submittedLocal }));
+            Assert.That(local.Runs, Is.EqualTo(new[] { submittedLocal }));
+            Assert.That(unified.UnfilteredRunCount, Is.EqualTo(2), "source membership counts retain overlapping provenance");
+            Assert.That(unified.CachedOnlineRunCount, Is.EqualTo(1));
         });
     }
 
@@ -113,6 +136,7 @@ public sealed class StatisticsWorkspaceModelTests
         {
             Assert.That(merged.ScoreId, Is.EqualTo(local.ScoreId));
             Assert.That(merged.HasReplayFile, Is.True);
+            Assert.That(merged.IsLocallyStored, Is.True);
             Assert.That(merged.StarRating, Is.EqualTo(5.4));
             Assert.That(merged.Accuracy, Is.EqualTo(0.955));
             Assert.That(merged.PerformancePoints, Is.EqualTo(177));
@@ -133,6 +157,7 @@ public sealed class StatisticsWorkspaceModelTests
         Assert.Multiple(() =>
         {
             Assert.That(double.IsNaN(converted.StarRating), Is.True);
+            Assert.That(converted.IsLocallyStored, Is.False);
             Assert.That(model.Runs, Has.Count.EqualTo(1));
             Assert.That(model.AverageStarRating, Is.Null);
             Assert.That(model.Series.Single(series => series.Key == "statisticsStars").Points, Is.Empty);

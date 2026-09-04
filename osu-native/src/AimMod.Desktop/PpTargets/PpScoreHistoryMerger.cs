@@ -74,7 +74,8 @@ public static class PpScoreHistoryMerger
                 string.Empty,
                 statistics,
                 score.ModsJson,
-                score.ScoreId));
+                score.ScoreId,
+                IsLocallyStored: false));
         }
 
         return merged.OrderByDescending(run => run.PlayedAt).ThenBy(run => run.ScoreId).ToArray();

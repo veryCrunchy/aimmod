@@ -87,7 +87,8 @@ public sealed record LocalReplay(
     string BackgroundPath = "",
     PpScoreStatistics? HitStatistics = null,
     string ModsJson = "",
-    long OnlineScoreId = 0);
+    long OnlineScoreId = 0,
+    bool IsLocallyStored = true);
 
 public interface ILocalLibrarySource
 {

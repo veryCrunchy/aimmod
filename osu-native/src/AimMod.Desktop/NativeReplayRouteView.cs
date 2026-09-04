@@ -355,7 +355,7 @@ public partial class NativeReplayRouteView : Container
                 analysisHasResult = false;
                 loadingOverlay.HideLoading();
                 analysisTitle.Text = "Analysing exact judgements...";
-                analysisSummary.Text = "Preparing replay details";
+                analysisSummary.Text = "Running accelerated official ruleset playback";
                 showNotableState("Exact judgement analysis is in progress.", AimModPalette.Muted);
                 momentButtons.Clear();
                 judgementTimeline.ClearResult();
@@ -444,7 +444,7 @@ public partial class NativeReplayRouteView : Container
     private void showNotableState(string message, Colour4 colour)
     {
         notableRows.Clear();
-        notableRows.Add(makeText(message, 12, colour, "SemiBold"));
+        notableRows.Add(new WrappedLabel(message, 12, colour, "SemiBold"));
     }
 
     private void loadReplayBrowser()
@@ -540,7 +540,7 @@ public partial class NativeReplayRouteView : Container
         }
 
         if (judgements.Count == 0)
-            notableRows.Add(makeText("No misses or slider breaks were found.", 12, AimModPalette.Success, "SemiBold"));
+            notableRows.Add(new WrappedLabel("No misses or slider breaks were found.", 12, AimModPalette.Success, "SemiBold"));
     }
 
     private string measuredNextPlay(ReplayAnalysisResult result, string fallback)

@@ -1,11 +1,32 @@
 using NUnit.Framework;
 using AimMod.Osu.Runtime.Contracts;
+using osu.Framework.Timing;
+using System.Diagnostics;
 
 namespace AimMod.Osu.Worker.Tests;
 
 [TestFixture]
 public sealed class OfficialReplayAnalysisEngineTests
 {
+    [Test]
+    public void HeadlessTrackUsesTheProvidedClockAndPreservesGameplayRate()
+    {
+        var clock = new ManualClock();
+        var track = new HeadlessAnalysisTrack(10_000, clock);
+        track.Frequency.Value = 1.5;
+
+        clock.CurrentTime = 100;
+        track.Start();
+        clock.CurrentTime = 2_100;
+
+        Assert.That(track.CurrentTime, Is.EqualTo(3_000).Within(0.001));
+
+        track.Stop();
+        clock.CurrentTime = 4_100;
+        Assert.That(track.CurrentTime, Is.EqualTo(3_000).Within(0.001));
+        Assert.That(track.Rate, Is.EqualTo(1.5));
+    }
+
     [Test]
     public void CompletesImmediatelyWhenOfficialScoreProcessorCompletes()
     {
@@ -120,5 +141,53 @@ public sealed class OfficialReplayAnalysisEngineTests
             Directory.Delete(assetDirectory, recursive: true);
             Directory.Delete(analysisDirectory, recursive: true);
         }
+    }
+
+    [Test]
+    public async Task AcceleratesAndNormalizesAStagedReplayWhenAvailable()
+    {
+        string? stagingDirectory = Environment.GetEnvironmentVariable("AIMMOD_STAGED_REPLAY_DIR");
+        if (string.IsNullOrWhiteSpace(stagingDirectory) || !Directory.Exists(stagingDirectory))
+            Assert.Ignore("Set AIMMOD_STAGED_REPLAY_DIR to a directory containing beatmap.osu and replay.osr.");
+
+        string beatmapPath = Path.Combine(stagingDirectory!, "beatmap.osu");
+        string replayPath = Path.Combine(stagingDirectory, "replay.osr");
+        Assert.That(File.Exists(beatmapPath), Is.True, $"Missing {beatmapPath}");
+        Assert.That(File.Exists(replayPath), Is.True, $"Missing {replayPath}");
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        var stopwatch = Stopwatch.StartNew();
+        ReplayAnalysisResult result = await new OfficialReplayAnalysisEngine().AnalyseAsync(
+            new ValidatedReplayInput(stagingDirectory, beatmapPath, replayPath),
+            timeout.Token);
+        stopwatch.Stop();
+
+        int summarizedJudgements = result.Summary.Great
+                                   + result.Summary.Ok
+                                   + result.Summary.Meh
+                                   + result.Summary.Miss
+                                   + result.Summary.SliderBreaks
+                                   + result.Summary.Other;
+        double[] reportedRates = result.Judgements
+                                       .Where(judgement => judgement.GameplayRate.HasValue)
+                                       .Select(judgement => judgement.GameplayRate!.Value)
+                                       .ToArray();
+
+        TestContext.Out.WriteLine(
+            $"elapsed={stopwatch.Elapsed.TotalSeconds:F3}s judgements={result.Judgements.Count} "
+            + $"summary={result.Summary} rates={string.Join(',', reportedRates.Distinct().Order())}");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stopwatch.Elapsed, Is.LessThan(TimeSpan.FromSeconds(30)),
+                "A staged replay should complete well below the old 120-second wall-clock limit.");
+            Assert.That(result.TimeBasis, Is.EqualTo("officialRulesetPlayback"));
+            Assert.That(result.Judgements, Is.Not.Empty);
+            Assert.That(summarizedJudgements, Is.EqualTo(result.Judgements.Count));
+            Assert.That(result.Judgements.All(judgement => double.IsFinite(judgement.JudgementTimeMs)), Is.True);
+            Assert.That(reportedRates, Is.Not.Empty);
+            Assert.That(reportedRates.All(rate => double.IsFinite(rate) && rate >= 0.5 && rate <= 2), Is.True,
+                "Reported gameplay rates should describe the replay mods, not the internal 16x analysis clock.");
+        });
     }
 }

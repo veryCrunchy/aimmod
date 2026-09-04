@@ -97,6 +97,8 @@ public sealed record StatisticsWorkspaceModel(
                                   .Select(group => group.OrderByDescending(run => run.PlayedAt).First())
                                   .ToArray();
         bool unrestrictedStars = minimumStars <= 0 && maximumStars >= 100;
+        int onlineRunCount = all.Count(run => run.OnlineScoreId > 0);
+        int localRunCount = all.Count(run => run.IsLocallyStored);
         IEnumerable<LocalReplay> filtered = all.Where(run => unrestrictedStars && !double.IsFinite(run.StarRating)
                                                               || run.StarRating >= minimumStars && run.StarRating <= maximumStars)
                                                .Where(run => earliest is null || run.PlayedAt >= earliest)
@@ -104,7 +106,7 @@ public sealed record StatisticsWorkspaceModel(
                                                .Where(run => query.Source switch
                                                {
                                                    StatisticsScoreSource.Online => run.OnlineScoreId > 0,
-                                                   StatisticsScoreSource.Local => run.OnlineScoreId <= 0,
+                                                   StatisticsScoreSource.Local => run.IsLocallyStored,
                                                    _ => true,
                                                })
                                                .Where(run => matchesMod(run.Mods, query.ModFilter));
@@ -127,8 +129,10 @@ public sealed record StatisticsWorkspaceModel(
 
         return new StatisticsWorkspaceModel(
             runs,
-            all.Length,
-            all.Count(run => run.OnlineScoreId > 0),
+            // Source memberships intentionally overlap: a submitted lazer score can
+            // be both locally stored and present in the online score window.
+            localRunCount + onlineRunCount,
+            onlineRunCount,
             accuracies.Length == 0 ? null : accuracies.Average(),
             accuracies.Length == 0 ? null : accuracies.Max(),
             chronological.Where(run => double.IsFinite(run.StarRating) && run.StarRating >= 0).Select(run => run.StarRating).DefaultIfEmpty(double.NaN).Average() is var averageStars && double.IsFinite(averageStars) ? averageStars : null,

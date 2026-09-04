@@ -140,6 +140,28 @@ public sealed class StatisticsHistoryModelTests
         });
     }
 
+    [Test]
+    public async Task LoaderKeepsLocallyStoredSubmittedScores()
+    {
+        LocalReplay[] sourceRuns = Enumerable.Range(1, 350)
+                                             .Select(index => runAt(index, 0.95, 0, 100) with
+                                             {
+                                                 OnlineScoreId = 7_000_000_000L + index,
+                                             })
+                                             .OrderByDescending(item => item.PlayedAt)
+                                             .ToArray();
+
+        StatisticsHistoryLoadResult result = await StatisticsHistoryLoader.LoadAsync(new PagingSource(sourceRuns));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Runs, Has.Count.EqualTo(350));
+            Assert.That(result.Runs.All(run => run.IsLocallyStored), Is.True);
+            Assert.That(result.Runs.All(run => run.OnlineScoreId > 0), Is.True);
+            Assert.That(result.IsComplete, Is.True);
+        });
+    }
+
     private static IEnumerable<double> series(StatisticsHistoryModel model, string key) =>
         model.Series.Single(item => item.Key == key).Points.Select(point => point.Value);
 

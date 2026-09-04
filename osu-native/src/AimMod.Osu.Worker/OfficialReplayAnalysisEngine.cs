@@ -1,11 +1,15 @@
+using System.Collections.Concurrent;
 using AimMod.Osu.Runtime.Contracts;
+using osu.Framework.Allocation;
 using osu.Framework.Graphics;
 using osu.Framework.Audio.Track;
 using osu.Framework.Platform;
+using osu.Framework.Timing;
 using osu.Game;
 using osu.Game.Beatmaps;
 using osu.Game.Online.API;
 using osu.Game.Rulesets;
+using osu.Game.Rulesets.Configuration;
 using osu.Game.Rulesets.Judgements;
 using osu.Game.Rulesets.Objects;
 using osu.Game.Rulesets.Objects.Types;
@@ -135,6 +139,7 @@ internal sealed partial class ReplayAnalysisGame : OsuGameBase
     private readonly IBeatmap sourceBeatmap;
     private readonly string replayPath;
     private readonly CancellationToken cancellationToken;
+    private BackgroundScreenStack? backgroundStack;
     private Score? score;
     private AnalysisReplayPlayer? player;
     private bool finished;
@@ -156,10 +161,18 @@ internal sealed partial class ReplayAnalysisGame : OsuGameBase
         API = offlineApi;
     }
 
+    protected override IReadOnlyDependencyContainer CreateChildDependencies(IReadOnlyDependencyContainer parent)
+    {
+        var dependencies = new DependencyContainer(base.CreateChildDependencies(parent));
+        dependencies.CacheAs<IRulesetConfigCache>(new HeadlessRulesetConfigCache());
+        backgroundStack = new BackgroundScreenStack { RelativeSizeAxes = Axes.Both };
+        dependencies.CacheAs(backgroundStack);
+        return dependencies;
+    }
+
     protected override void LoadComplete()
     {
         base.LoadComplete();
-
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -171,10 +184,16 @@ internal sealed partial class ReplayAnalysisGame : OsuGameBase
             Audio.VolumeTrack.Value = 0;
             Audio.VolumeSample.Value = 0;
 
-            var workingBeatmap = new AnalysisWorkingBeatmap(sourceBeatmap, Audio);
+            var workingBeatmap = new AnalysisWorkingBeatmap(sourceBeatmap, Audio, Clock);
             workingBeatmap.LoadTrack();
             using (var replayStream = new FileStream(replayPath, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, FileOptions.SequentialScan))
                 score = new SuppliedBeatmapScoreDecoder(workingBeatmap).Parse(replayStream);
+
+            RulesetInfo availableRuleset = RulesetStore.GetRuleset(0)
+                                               ?? throw new ReplayAnalysisException(
+                                                   "ruleset_unavailable",
+                                                   "The isolated osu! ruleset store did not register osu!standard.");
+            score.ScoreInfo.Ruleset = availableRuleset;
 
             if (score.ScoreInfo.Pauses.Count > ReplayAnalysisProtocol.MaximumPauses)
                 throw new ReplayAnalysisException("result_too_large", "The replay contains too many pause records to return safely.");
@@ -184,9 +203,24 @@ internal sealed partial class ReplayAnalysisGame : OsuGameBase
             SelectedMods.Value = score.ScoreInfo.Mods;
 
             var stack = new OsuScreenStack { RelativeSizeAxes = Axes.Both };
-            Add(stack);
+            AddRange(new Drawable[]
+            {
+                backgroundStack ?? throw new ReplayAnalysisException("analysis_failed", "The headless background stack was not initialised."),
+                stack,
+            });
             player = new AnalysisReplayPlayer(score, complete, fail, cancellationToken);
-            stack.Push(player);
+            Task playerLoad = LoadComponentAsync(player, loadedPlayer =>
+            {
+                if (finished)
+                    return;
+
+                stack.Push(loadedPlayer);
+            }, cancellationToken);
+            _ = playerLoad.ContinueWith(task =>
+            {
+                Exception error = task.Exception?.GetBaseException() ?? new InvalidOperationException("Replay player loading failed.");
+                fail(new ReplayAnalysisException("player_load_failed", error.Message));
+            }, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
         }
         catch (OperationCanceledException)
         {
@@ -257,17 +291,109 @@ internal sealed partial class ReplayAnalysisGame : OsuGameBase
     }
 }
 
+internal sealed class HeadlessRulesetConfigCache : IRulesetConfigCache
+{
+    private readonly ConcurrentDictionary<string, IRulesetConfigManager?> configs = new();
+
+    public IRulesetConfigManager? GetConfigFor(Ruleset ruleset) =>
+        configs.GetOrAdd(ruleset.ShortName, _ => ruleset.CreateConfig(null));
+}
+
 internal sealed class AnalysisWorkingBeatmap : TestWorkingBeatmap
 {
     private readonly double trackLength;
+    private readonly IClock analysisClock;
 
-    public AnalysisWorkingBeatmap(IBeatmap beatmap, osu.Framework.Audio.AudioManager? audioManager)
+    public AnalysisWorkingBeatmap(IBeatmap beatmap, osu.Framework.Audio.AudioManager? audioManager, IClock? analysisClock = null)
         : base(beatmap, audioManager: audioManager)
     {
+        this.analysisClock = analysisClock ?? new StopwatchClock();
         trackLength = Math.Max(1_000, beatmap.HitObjects.Select(hitObject => hitObject.GetEndTime()).DefaultIfEmpty(0).Max() + 10_000);
     }
 
-    protected override Track GetBeatmapTrack() => new TrackVirtual(trackLength);
+    protected override Track GetBeatmapTrack() => new HeadlessAnalysisTrack(trackLength, analysisClock);
+}
+
+internal sealed class HeadlessAnalysisTrack : Track
+{
+    private readonly object stateLock = new();
+    private readonly IClock clock;
+    private double clockStart;
+    private double seekOffset;
+    private bool running;
+
+    public HeadlessAnalysisTrack(double length, IClock clock)
+        : base("aimmod-analysis")
+    {
+        Length = length;
+        this.clock = clock;
+    }
+
+    public override double CurrentTime
+    {
+        get
+        {
+            lock (stateLock)
+                return Math.Min(Length, seekOffset + (running ? (clock.CurrentTime - clockStart) * Rate : 0));
+        }
+    }
+
+    public override bool IsRunning
+    {
+        get
+        {
+            lock (stateLock)
+                return running;
+        }
+    }
+
+    public override bool Seek(double seek)
+    {
+        lock (stateLock)
+        {
+            seekOffset = Math.Clamp(seek, 0, Length);
+            clockStart = clock.CurrentTime;
+            return seekOffset == seek;
+        }
+    }
+
+    public override Task<bool> SeekAsync(double seek) => Task.FromResult(Seek(seek));
+
+    public override void Start()
+    {
+        lock (stateLock)
+        {
+            if (running || seekOffset >= Length)
+                return;
+
+            clockStart = clock.CurrentTime;
+            running = true;
+        }
+    }
+
+    public override Task StartAsync()
+    {
+        Start();
+        return Task.CompletedTask;
+    }
+
+    public override void Stop()
+    {
+        lock (stateLock)
+        {
+            if (!running)
+                return;
+
+            seekOffset = Math.Min(Length, seekOffset + (clock.CurrentTime - clockStart) * Rate);
+            running = false;
+        }
+    }
+
+    public override Task StopAsync()
+    {
+        Stop();
+        return Task.CompletedTask;
+    }
 }
 
 internal sealed partial class AnalysisReplayPlayer : ReplayPlayer
@@ -282,7 +408,6 @@ internal sealed partial class AnalysisReplayPlayer : ReplayPlayer
     private Dictionary<HitObject, ObjectAddress> addresses = new(ReferenceEqualityComparer.Instance);
     private ReplayAnalysisCompletionWatchdog? completionWatchdog;
     private bool finished;
-
     protected override bool PauseOnFocusLost => false;
 
     public AnalysisReplayPlayer(

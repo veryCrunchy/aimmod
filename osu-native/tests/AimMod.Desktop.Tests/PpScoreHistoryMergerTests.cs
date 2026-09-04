@@ -51,6 +51,7 @@ public sealed class PpScoreHistoryMergerTests
             Assert.That(merged.BeatmapId, Is.EqualTo(beatmapId));
             Assert.That(merged.PerformancePoints, Is.EqualTo(321));
             Assert.That(merged.OnlineScoreId, Is.EqualTo(99));
+            Assert.That(merged.IsLocallyStored, Is.False);
             Assert.That(merged.HitStatistics?.Great, Is.EqualTo(600));
             Assert.That(merged.ModsJson, Does.Contain("HD"));
         });

@@ -246,6 +246,7 @@ public static class ScoreHistoryMerger
                     MissCount = entry.MissCount,
                     Mods = entry.Mods,
                     OnlineScoreId = entry.OnlineScoreId,
+                    IsLocallyStored = true,
                 };
             }
 
@@ -267,7 +268,8 @@ public static class ScoreHistoryMerger
                 entry.PerformancePoints,
                 entry.Mods,
                 false,
-                OnlineScoreId: entry.OnlineScoreId);
+                OnlineScoreId: entry.OnlineScoreId,
+                IsLocallyStored: false);
         }).ToArray();
     }
 

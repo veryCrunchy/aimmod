@@ -62,6 +62,26 @@ public sealed class BeatmapPerformanceHistoryMergerTests
         });
     }
 
+    [Test]
+    public void LocalStorageProvenanceSurvivesSubmissionMerge()
+    {
+        LocalReplay local = localScore(44);
+        LocalReplay mergedLocal = ScoreHistoryMerger.MergeAsLocalReplays(
+            [local],
+            [onlineEntry(onlineScore(44, 0.99, 222))]).Single();
+        LocalReplay onlineOnly = ScoreHistoryMerger.MergeAsLocalReplays(
+            [],
+            [onlineEntry(onlineScore(45, 0.98, 180))]).Single();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(mergedLocal.OnlineScoreId, Is.EqualTo(44));
+            Assert.That(mergedLocal.IsLocallyStored, Is.True);
+            Assert.That(onlineOnly.OnlineScoreId, Is.EqualTo(45));
+            Assert.That(onlineOnly.IsLocallyStored, Is.False);
+        });
+    }
+
     private static LocalReplay localScore(long onlineScoreId) => new(
         Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "Title", "Artist", "Insane", "osu", "player",
         new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero), 5, 0.9, 1_000_000, 500, 2, 100,
