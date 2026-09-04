@@ -102,7 +102,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             AutoSizeAxes = Axes.Y,
             Direction = FillDirection.Vertical,
             Spacing = new(AimModVisualStyle.SectionSpacing),
-            Padding = new MarginPadding { Bottom = 40 },
+            Padding = new MarginPadding { Right = 8, Bottom = 40 },
         };
 
         content.Add(createSessionHeader(
@@ -161,7 +161,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
 
         InternalChildren = new Drawable[]
         {
-            new OsuScrollContainer
+            new AimModScrollContainer
             {
                 RelativeSizeAxes = Axes.Both,
                 Depth = 10,
@@ -869,7 +869,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         out FillFlowContainer<Drawable> selectedHost,
         out FillFlowContainer<Drawable> analysisHost)
     {
-        var panel = new WorkspacePanel(new MarginPadding { Left = 16, Right = 14, Vertical = 14 });
+        var panel = new WorkspacePanel(new MarginPadding { Left = 16, Right = 12, Vertical = 14 });
         var body = new FillFlowContainer
         {
             RelativeSizeAxes = Axes.X,
@@ -983,7 +983,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             NubWidth = 24,
             Depth = -10,
         });
-        body.Add(new OsuScrollContainer
+        body.Add(new AimModScrollContainer
         {
             RelativeSizeAxes = Axes.X,
             Height = 282,
@@ -994,7 +994,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                 AutoSizeAxes = Axes.Y,
                 Direction = FillDirection.Vertical,
                 Spacing = new(AimModVisualStyle.RelatedSpacing),
-                Padding = new MarginPadding { Right = 10, Bottom = 12 },
+                Padding = new MarginPadding { Bottom = 12 },
             },
         });
         return outer;
@@ -2220,8 +2220,8 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             {
                 RelativeSizeAxes = Axes.Both,
                 Masking = true,
-                BorderThickness = selected ? 3 : 1,
-                BorderColour = selected ? AimModPalette.Text : colour,
+                BorderThickness = selected ? 2 : 0,
+                BorderColour = AimModPalette.Text,
                 Child = new Box
                 {
                     RelativeSizeAxes = Axes.Both,

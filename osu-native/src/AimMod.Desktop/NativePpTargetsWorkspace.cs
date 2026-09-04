@@ -24,6 +24,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
 {
     private const int catalog_limit = 50;
     private const int local_set_limit = 1_000;
+    private const float content_inset = 12;
 
     private readonly ILocalLibrarySource source;
     private readonly ILocalLibrarySourceChanged? sourceChanges;
@@ -178,7 +179,6 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                                 Children = new Drawable[]
                                 {
                                     new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
-                                    new Box { RelativeSizeAxes = Axes.X, Height = 2, Colour = AimModPalette.Pink },
                                 },
                             },
                             searchGroup = new Container
@@ -259,7 +259,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                 Depth = 10,
                 Children = new Drawable[]
                 {
-                    resultScroll = new OsuScrollContainer
+                    resultScroll = new AimModScrollContainer
                     {
                         RelativeSizeAxes = Axes.Both,
                         Child = results = new FillFlowContainer<Drawable>
@@ -268,7 +268,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                             AutoSizeAxes = Axes.Y,
                             Direction = FillDirection.Vertical,
                             Spacing = new(AimModVisualStyle.RelatedSpacing),
-                            Padding = new MarginPadding { Bottom = 32 },
+                            Padding = new MarginPadding { Right = content_inset, Bottom = 32 },
                         },
                     },
                     workspaceState = new PpTargetWorkspaceState(),
@@ -284,26 +284,28 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
 
         float width = Math.Max(640, DrawWidth);
         bool compact = width < 1_120;
-        float headerHeight = compact ? 310 : 250;
+        float headerHeight = compact ? 322 : 250;
         filterHeader.Height = headerHeight;
         resultViewport.Padding = new MarginPadding { Top = headerHeight + 7 };
         workspaceState.Y = compact ? -28 : 0;
 
         if (compact)
         {
-            float halfWidth = (width - 18) / 2;
-            filterBand.Height = 174;
-            placeGroup(searchGroup, 12, 8, halfWidth - 12, 54);
-            placeSlider(starSlider, width - halfWidth + 6, 3, halfWidth - 18);
-            placeSlider(expectedPpSlider, 12, 61, halfWidth - 24);
-            placeSlider(maximumPpSlider, width - halfWidth + 6, 61, halfWidth - 18);
+            const float columnGap = 12;
+            float columnWidth = (width - content_inset * 2 - columnGap) / 2;
+            float secondColumnX = content_inset + columnWidth + columnGap;
+            filterBand.Height = 187;
+            placeGroup(searchGroup, content_inset, 8, columnWidth, 56);
+            placeSlider(starSlider, secondColumnX, 3, columnWidth);
+            placeSlider(expectedPpSlider, content_inset, 65, columnWidth);
+            placeSlider(maximumPpSlider, secondColumnX, 65, columnWidth);
 
             float dropdownWidth = (width - 48) / 3;
-            placeGroup(categoryGroup, 12, 119, dropdownWidth, 48);
-            placeGroup(lengthGroup, 24 + dropdownWidth, 119, dropdownWidth, 48);
-            placeGroup(sortGroup, 36 + dropdownWidth * 2, 119, dropdownWidth, 48);
-            status.Position = new(0, 284);
-            resultCount.Position = new(0, 284);
+            placeGroup(categoryGroup, content_inset, 126, dropdownWidth, 55);
+            placeGroup(lengthGroup, 24 + dropdownWidth, 126, dropdownWidth, 55);
+            placeGroup(sortGroup, 36 + dropdownWidth * 2, 126, dropdownWidth, 55);
+            status.Position = new(0, 296);
+            resultCount.Position = new(0, 296);
         }
         else
         {
@@ -312,16 +314,16 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             float starX = 30 + searchWidth;
             float expectedX = starX + sliderWidth + 18;
             float maximumX = expectedX + sliderWidth + 18;
-            filterBand.Height = 112;
-            placeGroup(searchGroup, 12, 8, searchWidth, 54);
+            filterBand.Height = 120;
+            placeGroup(searchGroup, content_inset, 8, searchWidth, 58);
             placeSlider(starSlider, starX, 3, sliderWidth);
             placeSlider(expectedPpSlider, expectedX, 3, sliderWidth);
             placeSlider(maximumPpSlider, maximumX, 3, sliderWidth);
 
             float dropdownWidth = Math.Clamp((width - 48) / 3, 210, 320);
-            placeGroup(categoryGroup, 12, 62, dropdownWidth, 44);
-            placeGroup(lengthGroup, (width - dropdownWidth) / 2, 62, dropdownWidth, 44);
-            placeGroup(sortGroup, width - dropdownWidth - 12, 62, dropdownWidth, 44);
+            placeGroup(categoryGroup, content_inset, 64, dropdownWidth, 55);
+            placeGroup(lengthGroup, (width - dropdownWidth) / 2, 64, dropdownWidth, 55);
+            placeGroup(sortGroup, width - dropdownWidth - content_inset, 64, dropdownWidth, 55);
             status.Position = new(0, 224);
             resultCount.Position = new(0, 224);
         }

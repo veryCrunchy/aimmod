@@ -97,7 +97,7 @@ public partial class NativeReplayRouteView : Container
                         Y = 44,
                         PlaceholderText = "Search replays",
                     },
-                    new OsuScrollContainer
+                    new AimModScrollContainer
                     {
                         RelativeSizeAxes = Axes.Both,
                         Padding = new MarginPadding { Top = 94 },
@@ -105,7 +105,7 @@ public partial class NativeReplayRouteView : Container
                         {
                             RelativeSizeAxes = Axes.X,
                             AutoSizeAxes = Axes.Y,
-                            Padding = new MarginPadding { Right = 8, Bottom = 10 },
+                            Padding = new MarginPadding { Bottom = 12 },
                             Direction = FillDirection.Vertical,
                             Spacing = new(AimModVisualStyle.RelatedSpacing),
                         },
@@ -168,7 +168,7 @@ public partial class NativeReplayRouteView : Container
                     makePanel(new Container
                     {
                         RelativeSizeAxes = Axes.Both,
-                        Padding = new MarginPadding(14),
+                        Padding = new MarginPadding { Left = 14, Top = 12, Right = 14, Bottom = 10 },
                         Children = new Drawable[]
                         {
                             new FillFlowContainer
@@ -211,14 +211,14 @@ public partial class NativeReplayRouteView : Container
                     }, Anchor.BottomLeft, Anchor.BottomLeft, transport_height),
                 },
             },
-            makePanel(new OsuScrollContainer
+            makePanel(new AimModScrollContainer
             {
                 RelativeSizeAxes = Axes.Both,
                 Child = new FillFlowContainer
                 {
                     RelativeSizeAxes = Axes.X,
                     AutoSizeAxes = Axes.Y,
-                    Padding = new MarginPadding { Left = 16, Top = 14, Right = 24, Bottom = 28 },
+                    Padding = new MarginPadding { Left = 14, Top = 14, Right = 8, Bottom = 24 },
                     Direction = FillDirection.Vertical,
                     Spacing = new(AimModVisualStyle.RowSpacing),
                     Children = new Drawable[]

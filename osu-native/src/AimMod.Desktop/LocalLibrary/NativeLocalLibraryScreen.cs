@@ -111,7 +111,7 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
             {
                 RelativeSizeAxes = Axes.X,
                 Width = 0.43f,
-                Height = 46,
+                Height = AimModVisualStyle.ControlHeight,
                 Y = 91,
                 PlaceholderText = mode == NativeLocalLibraryMode.Beatmaps
                     ? "Search beatmaps, artists, mappers, or difficulties"
@@ -175,7 +175,7 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
         base.Update();
 
         float width = Math.Max(640, DrawWidth);
-        const float gap = 24;
+        const float gap = AimModVisualStyle.SectionSpacing;
         const float sortWidth = 180;
         float contentWidth = width - sortWidth - gap * 2;
         float searchWidth = Math.Clamp(contentWidth * 0.48f, 198, 620);
@@ -319,7 +319,7 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
         {
         }
 
-        protected override ScrollContainer<Drawable> CreateScrollContainer() => new OsuScrollContainer();
+        protected override ScrollContainer<Drawable> CreateScrollContainer() => new AimModScrollContainer();
     }
 
     private partial class DrawableLocalLibraryRow : PoolableDrawable, IHasCurrentValue<LocalLibraryRow>
@@ -367,14 +367,12 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
                 new Container
                 {
                     RelativeSizeAxes = Axes.Both,
-                    Padding = new MarginPadding { Bottom = 8 },
+                    Padding = new MarginPadding { Bottom = AimModVisualStyle.RowSpacing },
                     Child = card = new Container
                     {
                         RelativeSizeAxes = Axes.Both,
                         Masking = true,
-                        CornerRadius = 56,
-                        BorderThickness = 1,
-                        BorderColour = AimModPalette.Border,
+                        CornerRadius = AimModVisualStyle.CardRadius,
                         Children = new Drawable[]
                         {
                             fallbackBackground = new Box
@@ -422,11 +420,9 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
                             {
                                 Anchor = Anchor.CentreLeft,
                                 Origin = Anchor.CentreLeft,
-                                Margin = new MarginPadding { Left = 22 },
-                                Size = new(42),
+                                Margin = new MarginPadding { Left = 20 },
+                                Size = new(AimModVisualStyle.ControlHeight),
                                 Masking = true,
-                                BorderThickness = 2,
-                                BorderColour = AimModPalette.Text,
                                 Children = new Drawable[]
                                 {
                                     new Box
@@ -449,7 +445,7 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
                             content = new FillFlowContainer
                             {
                                 AutoSizeAxes = Axes.Both,
-                                Margin = new MarginPadding { Left = 24, Top = 12 },
+                                Margin = new MarginPadding { Left = 20, Top = 12 },
                                 Direction = FillDirection.Vertical,
                                 Spacing = new(2),
                                 Children = new Drawable[]
@@ -464,28 +460,28 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
                                 Anchor = Anchor.BottomLeft,
                                 Origin = Anchor.BottomLeft,
                                 AutoSizeAxes = Axes.Both,
-                                Margin = new MarginPadding { Left = 24, Bottom = 12 },
+                                Margin = new MarginPadding { Left = 20, Bottom = 12 },
                                 Direction = FillDirection.Horizontal,
-                                Spacing = new(6),
+                                Spacing = new(AimModVisualStyle.RelatedSpacing),
                             },
                             starRating = new Container
                             {
                                 Anchor = Anchor.TopRight,
                                 Origin = Anchor.TopRight,
                                 AutoSizeAxes = Axes.Both,
-                                Margin = new MarginPadding { Top = 14, Right = 22 },
+                                Margin = new MarginPadding { Top = 14, Right = 20 },
                             },
                             metric = rowText(13, AimModPalette.Text, "SemiBold").With(drawable =>
                             {
                                 drawable.Anchor = Anchor.BottomRight;
                                 drawable.Origin = Anchor.BottomRight;
-                                drawable.Margin = new MarginPadding { Bottom = 30, Right = 22 };
+                                drawable.Margin = new MarginPadding { Bottom = 30, Right = 20 };
                             }),
                             actionHint = rowText(11, AimModPalette.Muted, "SemiBold").With(drawable =>
                             {
                                 drawable.Anchor = Anchor.BottomRight;
                                 drawable.Origin = Anchor.BottomRight;
-                                drawable.Margin = new MarginPadding { Bottom = 12, Right = 22 };
+                                drawable.Margin = new MarginPadding { Bottom = 12, Right = 20 };
                             }),
                         },
                     },
@@ -511,8 +507,8 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
             fallbackBackground.Alpha = 0.28f;
             artwork.Child = string.IsNullOrWhiteSpace(row.ArtworkPath) ? null : new AimModLocalArtwork(row.ArtworkPath);
             playButton.Alpha = row.IsReplay ? 1 : 0;
-            content.Margin = new MarginPadding { Left = row.IsReplay ? 80 : 24, Top = 12 };
-            difficultyChips.Margin = new MarginPadding { Left = row.IsReplay ? 80 : 24, Bottom = 12 };
+            content.Margin = new MarginPadding { Left = row.IsReplay ? 72 : 20, Top = 12 };
+            difficultyChips.Margin = new MarginPadding { Left = row.IsReplay ? 72 : 20, Bottom = 12 };
             starRating.Child = new StarRatingDisplay(new StarDifficulty(row.StarRating, 0), StarRatingDisplaySize.Regular);
             difficultyChips.Clear();
             foreach (DifficultyChip chip in row.Difficulties.Take(6))
@@ -520,9 +516,7 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
             if (row.Difficulties.Count > 6)
                 difficultyChips.Add(new AimModPill($"+{row.Difficulties.Count - 6}", AimModPillTone.Neutral));
 
-            // Beatmap sets are full-width artwork banners, not oversized filter chips.
-            // Replay rows retain their existing circular silhouette until that route gets its own polish pass.
-            card.CornerRadius = row.IsReplay ? 56 : 8;
+            card.CornerRadius = AimModVisualStyle.CardRadius;
             metricPanel.Width = row.IsReplay ? 260 : 250;
             metricPanel.X = row.IsReplay ? 72 : 44;
             metricPanel.Shear = new(row.IsReplay ? -0.1f : -0.055f, 0);
@@ -559,15 +553,13 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
         private void updateSelection()
         {
             bool selected = selection.Value == current.Value.Id;
-            card.BorderColour = selected ? AimModPalette.Pink : AimModPalette.Border;
-            card.BorderThickness = selected ? 2 : 1;
             selectionLayer.FadeTo(selected ? 0.085f : 0, 100);
         }
 
         private void updateTextBounds()
         {
             float reservedRight = currentIsReplay ? 340 : 315;
-            float textLeft = currentIsReplay ? 80 : 24;
+            float textLeft = currentIsReplay ? 72 : 20;
             float available = Math.Max(120, DrawWidth - textLeft - reservedRight);
             title.MaxWidth = available;
             subtitle.MaxWidth = available;
@@ -600,8 +592,8 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
                     {
                         AutoSizeAxes = Axes.Both,
                         Direction = FillDirection.Horizontal,
-                        Spacing = new(6),
-                        Padding = new MarginPadding { Horizontal = 10, Vertical = 4 },
+                        Spacing = new(AimModVisualStyle.RelatedSpacing),
+                        Padding = new MarginPadding { Horizontal = 9, Vertical = 4 },
                         Children = new Drawable[]
                         {
                             new TruncatingSpriteText
@@ -633,9 +625,9 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
         public LoadMoreButton(Action action)
         {
             this.action = action;
-            Size = new(180, 42);
+            Size = new(180, AimModVisualStyle.ControlHeight);
             Masking = true;
-            CornerRadius = 8;
+            CornerRadius = AimModVisualStyle.ControlRadius;
 
             Children = new Drawable[]
             {

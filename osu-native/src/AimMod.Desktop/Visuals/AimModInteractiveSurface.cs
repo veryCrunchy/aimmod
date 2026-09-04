@@ -105,17 +105,17 @@ public partial class AimModSubsectionHeader : CompositeDrawable
             new Box
             {
                 Anchor = Anchor.CentreLeft,
-                Origin = Anchor.CentreRight,
+                Origin = Anchor.CentreLeft,
                 RelativeSizeAxes = Axes.Y,
-                Height = 0.65f,
+                Height = 0.55f,
                 Width = 3,
-                Margin = new MarginPadding { Right = 10 },
                 Colour = AimModPalette.Pink,
             },
             titleText = new OsuSpriteText
             {
                 Anchor = Anchor.CentreLeft,
                 Origin = Anchor.CentreLeft,
+                X = 13,
                 Font = new FontUsage(size: 14, weight: "Bold"),
                 Colour = AimModPalette.Text,
             },
@@ -123,6 +123,7 @@ public partial class AimModSubsectionHeader : CompositeDrawable
             {
                 Anchor = Anchor.CentreRight,
                 Origin = Anchor.CentreRight,
+                Margin = new MarginPadding { Right = 4 },
                 Font = new FontUsage(size: 11, weight: "SemiBold"),
                 Colour = AimModPalette.Muted,
             },

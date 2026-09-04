@@ -29,6 +29,7 @@ using AimMod.Desktop.PpTargets;
 using AimMod.Desktop.Practice;
 using AimMod.Desktop.ScoreHistory;
 using osu.Game.Graphics.Sprites;
+using osu.Game.Overlays;
 
 namespace AimMod.Desktop;
 
@@ -37,6 +38,9 @@ public partial class AimModGame : OsuGameBase
     // RulesetStore snapshots loaded assemblies during OsuGameBase's dependency load.
     // Keeping this reference on the concrete game type loads osu-standard first.
     private static readonly Assembly standardRulesetAssembly = typeof(OsuRuleset).Assembly;
+
+    [Cached]
+    private readonly OverlayColourProvider overlayColours = new(OverlayColourScheme.Pink);
 
     private Bindable<string>? configuredSkin;
 
@@ -1225,14 +1229,6 @@ public partial class AimModGame : OsuGameBase
                     Colour = AimModPalette.Pink,
                     Alpha = 0.08f,
                 },
-                new Box
-                {
-                    Anchor = Anchor.BottomLeft,
-                    Origin = Anchor.BottomLeft,
-                    RelativeSizeAxes = Axes.X,
-                    Height = 1,
-                    Colour = AimModPalette.Border,
-                },
                 new FillFlowContainer
                 {
                     AutoSizeAxes = Axes.Both,
@@ -1324,12 +1320,12 @@ public partial class AimModGame : OsuGameBase
                     "Your osu! workspace",
                     "Maps, scores, replay evidence, and your next training decision.",
                     "aimmod!lazer"),
-                text("WORKSPACES", 10, AimModPalette.Cyan, "Bold").With(drawable => drawable.Y = 112),
+                text("WORKSPACES", 10, AimModPalette.Cyan, "Bold").With(drawable => drawable.Y = 98),
                 new GridContainer
                 {
                     RelativeSizeAxes = Axes.X,
-                    Height = 354,
-                    Y = 136,
+                    Height = 324,
+                    Y = 122,
                     ColumnDimensions = new[]
                     {
                         new Dimension(GridSizeMode.Relative, 0.5f),
@@ -1337,9 +1333,9 @@ public partial class AimModGame : OsuGameBase
                     },
                     RowDimensions = new[]
                     {
-                        new Dimension(GridSizeMode.Absolute, 118),
-                        new Dimension(GridSizeMode.Absolute, 118),
-                        new Dimension(GridSizeMode.Absolute, 118),
+                        new Dimension(GridSizeMode.Absolute, 108),
+                        new Dimension(GridSizeMode.Absolute, 108),
+                        new Dimension(GridSizeMode.Absolute, 108),
                     },
                     Content = new[]
                     {

@@ -80,7 +80,7 @@ public partial class ReplayHistoryScreen : CompositeDrawable
 
         InternalChildren = new Drawable[]
         {
-            new OsuScrollContainer
+            new AimModScrollContainer
             {
                 RelativeSizeAxes = Axes.Both,
                 Child = new FillFlowContainer
@@ -89,7 +89,7 @@ public partial class ReplayHistoryScreen : CompositeDrawable
                     AutoSizeAxes = Axes.Y,
                     Direction = FillDirection.Vertical,
                     Spacing = new(AimModVisualStyle.SectionSpacing),
-                    Padding = new MarginPadding { Bottom = 36 },
+                    Padding = new MarginPadding { Right = 8, Bottom = 36 },
                     Children = new Drawable[]
                     {
                     new AimModSectionHeader(
@@ -457,7 +457,7 @@ public partial class ReplayHistoryScreen : CompositeDrawable
         var card = new Container
         {
             RelativeSizeAxes = Axes.Both,
-            Padding = new MarginPadding { Right = AimModVisualStyle.RowSpacing },
+            Padding = new MarginPadding { Right = AimModVisualStyle.RelatedSpacing },
         };
         card.Child = new Container
         {
@@ -491,7 +491,7 @@ public partial class ReplayHistoryScreen : CompositeDrawable
         var card = new Container
         {
             RelativeSizeAxes = Axes.Both,
-            Padding = new MarginPadding { Right = AimModVisualStyle.RowSpacing },
+            Padding = new MarginPadding { Right = AimModVisualStyle.RelatedSpacing },
         };
         card.Child = new Container
         {

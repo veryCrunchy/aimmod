@@ -91,11 +91,11 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                 Depth = -20,
                 Children = new Drawable[]
                 {
-                    searchSurface = filterSurface(0, 0, 480, 38),
+                    searchSurface = filterSurface(0, 0, 480, AimModVisualStyle.ControlHeight),
                     searchBox = new OsuTextBox
                     {
                         Width = 0.52f,
-                        Height = 42,
+                        Height = AimModVisualStyle.ControlHeight,
                         PlaceholderText = "Search beatmaps, artists, mappers, or difficulties",
                     },
                     starsSurface = filterSurface(490, 51, 260, 46),
@@ -111,7 +111,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                         TooltipSuffix = "stars",
                         NubWidth = 28,
                     },
-                    sortSurface = filterSurface(0, 51, 178, 38, Anchor.TopRight),
+                    sortSurface = filterSurface(0, 51, 178, AimModVisualStyle.ControlHeight, Anchor.TopRight),
                     sortDropdown = new PrettyDropdown<LocalLibrarySort>(formatSort)
                     {
                         Anchor = Anchor.TopRight,
@@ -142,9 +142,9 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                         Items = Enum.GetValues<PlayedFilter>(),
                         Current = playedFilter,
                     },
-                    bpmSurface = filterSurface(0, 51, 150, 38),
-                    lengthSurface = filterSurface(160, 51, 150, 38),
-                    playedSurface = filterSurface(320, 51, 160, 38),
+                    bpmSurface = filterSurface(0, 51, 150, AimModVisualStyle.ControlHeight),
+                    lengthSurface = filterSurface(160, 51, 150, AimModVisualStyle.ControlHeight),
+                    playedSurface = filterSurface(320, 51, 160, AimModVisualStyle.ControlHeight),
                     bpmLabel = filterLabel("BPM", 4),
                     lengthLabel = filterLabel("LENGTH", 164),
                     playedLabel = filterLabel("PLAYED", 324),
@@ -162,7 +162,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                 RelativeSizeAxes = Axes.Both,
                 Padding = new MarginPadding { Top = toolbar_height },
                 Masking = true,
-                Child = listScroll = new OsuScrollContainer
+                Child = listScroll = new AimModScrollContainer
                 {
                     RelativeSizeAxes = Axes.Both,
                     Child = setRows = new FillFlowContainer<Drawable>
@@ -170,8 +170,8 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                         RelativeSizeAxes = Axes.X,
                         AutoSizeAxes = Axes.Y,
                         Direction = FillDirection.Vertical,
-                        Spacing = new(7),
-                        Padding = new MarginPadding { Right = 10, Bottom = 24 },
+                        Spacing = new(AimModVisualStyle.RelatedSpacing),
+                        Padding = new MarginPadding { Right = AimModVisualStyle.RelatedSpacing, Bottom = AimModVisualStyle.SectionSpacing },
                     },
                 },
             },
@@ -181,12 +181,11 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                 Origin = Anchor.TopRight,
                 RelativeSizeAxes = Axes.Y,
                 Width = 350,
-                Padding = new MarginPadding { Left = 18, Top = 4 },
+                Padding = new MarginPadding { Left = 14, Top = 4 },
                 Masking = true,
                 Children = new Drawable[]
                 {
                     new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas, Alpha = 0.78f, Depth = 100 },
-                    new Box { RelativeSizeAxes = Axes.Y, Width = 1, Colour = AimModPalette.Border, Depth = -10 },
                     inspector = new BeatmapInspector(),
                 },
             },
@@ -218,10 +217,10 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         rightRail.AlwaysPresent = !compact;
         listPanel.Padding = new MarginPadding { Top = toolbar_height, Right = railWidth };
         float usableWidth = Math.Max(760, contentWidth - 10);
-        searchBox.Position = new(0, 2);
+        searchBox.Position = new(0, 0);
         searchBox.Width = Math.Max(320, usableWidth - 224);
         searchSurface.Width = searchBox.Width;
-        searchSurface.Height = 42;
+        searchSurface.Height = AimModVisualStyle.ControlHeight;
 
         const float gap = 8;
         const float bpmWidth = 140;
@@ -525,9 +524,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             RelativeSizeAxes = Axes.X;
             Height = 120;
             Masking = true;
-            CornerRadius = 5;
-            BorderThickness = 1;
-            BorderColour = AimModPalette.Border;
+            CornerRadius = AimModVisualStyle.ControlRadius;
 
             double minStars = set.Difficulties.Min(d => d.StarRating);
             double maxStars = set.Difficulties.Max(d => d.StarRating);
@@ -544,7 +541,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                     Position = new(42, 8),
                     Size = new(136, 104),
                     Masking = true,
-                    CornerRadius = 5,
+                    CornerRadius = AimModVisualStyle.ControlRadius,
                     Child = new AimModLocalArtwork(set.BackgroundPath) { RelativeSizeAxes = Axes.Both },
                 },
                 new TruncatingSpriteText { Text = set.Title, Position = new(196, 14), Font = new FontUsage(size: 17, weight: "Bold"), Colour = AimModPalette.Text, MaxWidth = 360 },
@@ -562,10 +559,10 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                     Position = new(196, 84),
                     Masking = true,
                     Direction = FillDirection.Horizontal,
-                    Spacing = new(6),
+                    Spacing = new(AimModVisualStyle.RelatedSpacing),
                 },
                 new DifficultyTableHeader { Y = 120 },
-                difficultyScroll = new OsuScrollContainer
+                difficultyScroll = new AimModScrollContainer
                 {
                     RelativeSizeAxes = Axes.X,
                     Y = 152,
@@ -591,8 +588,6 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             bool selected = set.SetId == setId;
             selectedLayer.Alpha = selected ? 0.1f : 0;
             selectionBar.Alpha = selected ? 1 : 0;
-            BorderColour = selected ? AimModPalette.Pink : AimModPalette.Border;
-            BorderThickness = selected ? 2 : 1;
             indexText.Colour = selected ? AimModPalette.Pink : AimModPalette.Muted;
             if (!selected && expanded)
             {
@@ -667,7 +662,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             BeatmapId = difficulty.BeatmapId;
             AutoSizeAxes = Axes.Both;
             Masking = true;
-            CornerRadius = 4;
+            CornerRadius = AimModVisualStyle.ControlRadius;
             Children = new Drawable[]
             {
                 background = new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
@@ -675,7 +670,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                 {
                     AutoSizeAxes = Axes.Both,
                     Direction = FillDirection.Horizontal,
-                    Spacing = new(7),
+                    Spacing = new(AimModVisualStyle.RelatedSpacing),
                     Padding = new MarginPadding { Horizontal = 9, Vertical = 5 },
                     Children = new Drawable[]
                     {
@@ -686,7 +681,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             };
         }
 
-        public bool Selected { set { background.Colour = value ? AimModPalette.PinkDark : AimModPalette.PanelRaised; BorderThickness = value ? 1 : 0; BorderColour = AimModPalette.Pink; } }
+        public bool Selected { set => background.Colour = value ? AimModPalette.PinkDark : AimModPalette.PanelRaised; }
         protected override bool OnClick(ClickEvent e) { action(); return true; }
     }
 
@@ -753,7 +748,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         {
             RelativeSizeAxes = Axes.Both;
             Masking = true;
-            InternalChild = scroll = new OsuScrollContainer
+            InternalChild = scroll = new AimModScrollContainer
             {
                 RelativeSizeAxes = Axes.Both,
                 Child = content = new FillFlowContainer<Drawable>
@@ -761,8 +756,8 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                     RelativeSizeAxes = Axes.X,
                     AutoSizeAxes = Axes.Y,
                     Direction = FillDirection.Vertical,
-                    Spacing = new(8),
-                    Padding = new MarginPadding { Right = 10, Bottom = 20 },
+                    Spacing = new(AimModVisualStyle.RowSpacing),
+                    Padding = new MarginPadding { Right = AimModVisualStyle.RelatedSpacing, Bottom = AimModVisualStyle.SectionSpacing },
                 },
             };
             ClearSelection();
@@ -822,9 +817,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         public InspectorPanel(InspectorPanelStyle style)
         {
             Masking = true;
-            CornerRadius = 6;
-            BorderThickness = 1;
-            BorderColour = AimModPalette.Border;
+            CornerRadius = AimModVisualStyle.CardRadius;
             InternalChildren = new Drawable[]
             {
                 new Box
@@ -835,7 +828,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                 content = new Container
                 {
                     RelativeSizeAxes = Axes.Both,
-                    Padding = new MarginPadding(14),
+                    Padding = new MarginPadding(12),
                 },
             };
         }
@@ -1108,7 +1101,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             RelativeSizeAxes = Axes.X;
             Height = 48;
             Direction = FillDirection.Horizontal;
-            Spacing = new(8);
+            Spacing = new(AimModVisualStyle.RelatedSpacing);
             Children = new Drawable[]
             {
                 new InspectorAction(FontAwesome.Solid.Play, "Open", true, difficulty.OnlineId > 0 ? () => openInOsu(difficulty.OnlineId) : null),
@@ -1129,11 +1122,9 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             this.action = action;
             normalColour = primary ? AimModPalette.Pink : AimModPalette.Panel;
             Width = 88;
-            Height = 42;
+            Height = AimModVisualStyle.ControlHeight;
             Masking = true;
-            CornerRadius = 5;
-            BorderThickness = primary ? 0 : 1;
-            BorderColour = AimModPalette.Border;
+            CornerRadius = AimModVisualStyle.ControlRadius;
             Children = new Drawable[]
             {
                 background = new Box { RelativeSizeAxes = Axes.Both, Colour = normalColour },
@@ -1238,9 +1229,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         Position = new(x, y),
         Size = new(width, height),
         Masking = true,
-        CornerRadius = 4,
-        BorderThickness = 1,
-        BorderColour = AimModPalette.Border,
+        CornerRadius = AimModVisualStyle.ControlRadius,
         Depth = 5,
         Child = new Box
         {

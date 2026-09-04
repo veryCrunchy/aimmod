@@ -70,7 +70,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
             new Container
             {
                 RelativeSizeAxes = Axes.X,
-                Height = 168,
+                Height = 158,
                 Depth = -10,
                 Children = new Drawable[]
                 {
@@ -83,7 +83,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
                     {
                         RelativeSizeAxes = Axes.X,
                         Position = new(0, 82),
-                        Height = 70,
+                        Height = 60,
                         Children = new Drawable[]
                         {
                             filterGroup("FIND", 0, 0.22f,
@@ -109,22 +109,23 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
             contentViewport = new Container
             {
                 RelativeSizeAxes = Axes.Both,
-                Padding = new MarginPadding { Top = 168 },
+                Padding = new MarginPadding { Top = 158 },
                 Children = new Drawable[]
                 {
                     mainColumn = new Container
                     {
                         RelativeSizeAxes = Axes.Y,
-                        Child = new OsuScrollContainer
+                        Child = new AimModScrollContainer
                         {
                             RelativeSizeAxes = Axes.Both,
+                            Padding = new MarginPadding { Right = 4 },
                             Child = new FillFlowContainer
                             {
                                 RelativeSizeAxes = Axes.X,
                                 AutoSizeAxes = Axes.Y,
                                 Direction = FillDirection.Vertical,
                                 Spacing = new(AimModVisualStyle.RowSpacing),
-                                Padding = new MarginPadding { Bottom = 28, Right = 4 },
+                                Padding = new MarginPadding { Bottom = 28, Right = 12 },
                                 Children = new Drawable[]
                                 {
                                     new AimModSubsectionHeader("Overview", "Filtered performance at a glance"),
@@ -202,16 +203,17 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
                         Children = new Drawable[]
                         {
                             new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
-                            new OsuScrollContainer
+                            new AimModScrollContainer
                             {
                                 RelativeSizeAxes = Axes.Both,
+                                Padding = new MarginPadding { Right = 4, Vertical = 4 },
                                 Child = inspectorContent = new FillFlowContainer<Drawable>
                                 {
                                     RelativeSizeAxes = Axes.X,
                                     AutoSizeAxes = Axes.Y,
                                     Direction = FillDirection.Vertical,
                                     Spacing = new(AimModVisualStyle.RowSpacing),
-                                    Padding = new MarginPadding(16),
+                                    Padding = new MarginPadding { Left = 16, Top = 12, Bottom = 16, Right = 16 },
                                 },
                             },
                         },
@@ -243,7 +245,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
         float available = Math.Max(720, contentViewport.DrawWidth);
         float inspectorWidth = Math.Clamp(available * 0.285f, 306, 400);
         inspectorColumn.Width = inspectorWidth;
-        mainColumn.Width = Math.Max(420, available - inspectorWidth - 16);
+        mainColumn.Width = Math.Max(420, available - inspectorWidth - AimModVisualStyle.SectionSpacing);
     }
 
     private void load()
@@ -571,27 +573,17 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
         RelativeSizeAxes = Axes.X,
         X = x,
         Width = width,
-        Height = 70,
-        Padding = new MarginPadding { Right = AimModVisualStyle.RelatedSpacing },
+        Height = 60,
+        Padding = new MarginPadding { Right = AimModVisualStyle.RowSpacing },
         Children = new Drawable[]
         {
-            new Container
-            {
-                RelativeSizeAxes = Axes.Both,
-                Masking = true,
-                CornerRadius = AimModVisualStyle.ControlRadius,
-                Children = new Drawable[]
-                {
-                    new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
-                },
-            },
-            text(heading, 8, AimModPalette.Cyan, "Bold").With(label => label.Position = new(10, 6)),
+            text(heading, 8, AimModPalette.Cyan, "Bold"),
             new GridContainer
             {
                 RelativeSizeAxes = Axes.X,
-                Position = new(8, 20),
+                Y = 17,
                 Width = 1,
-                Height = 46,
+                Height = AimModVisualStyle.CompactControlHeight,
                 ColumnDimensions = Enumerable.Repeat(new Dimension(GridSizeMode.Relative, 1f / fields.Length), fields.Length).ToArray(),
                 Content = new[] { fields },
             },
@@ -605,7 +597,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
         Children = new Drawable[]
         {
             text(heading, 8, AimModPalette.Muted, "Bold"),
-            control.With(drawable => drawable.Y = 11),
+            control.With(drawable => drawable.Y = 10),
         },
     };
 

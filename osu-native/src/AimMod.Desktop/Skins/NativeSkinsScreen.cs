@@ -64,16 +64,10 @@ public partial class NativeSkinsScreen : CompositeDrawable
                 Y = 96,
                 Width = 560,
                 Height = AimModVisualStyle.ControlHeight,
-                Masking = true,
-                CornerRadius = AimModVisualStyle.ControlRadius,
-                Children = new Drawable[]
+                Child = searchBox = new OsuTextBox
                 {
-                    new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
-                    searchBox = new OsuTextBox
-                    {
-                        RelativeSizeAxes = Axes.Both,
-                        PlaceholderText = "Search skin name or creator",
-                    },
+                    RelativeSizeAxes = Axes.Both,
+                    PlaceholderText = "Search skin name or creator",
                 },
             },
             status = new TruncatingSpriteText
@@ -98,14 +92,19 @@ public partial class NativeSkinsScreen : CompositeDrawable
                         Children = new Drawable[]
                         {
                             new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
-                            new OsuScrollContainer
+                            new AimModScrollContainer
                             {
                                 RelativeSizeAxes = Axes.Both,
-                                Padding = new MarginPadding(AimModVisualStyle.RowSpacing),
                                 Child = list = new FillFlowContainer
                                 {
                                     RelativeSizeAxes = Axes.X,
                                     AutoSizeAxes = Axes.Y,
+                                    Padding = new MarginPadding
+                                    {
+                                        Left = AimModVisualStyle.RowSpacing,
+                                        Right = AimModVisualStyle.RelatedSpacing,
+                                        Vertical = AimModVisualStyle.RowSpacing,
+                                    },
                                     Direction = FillDirection.Vertical,
                                     Spacing = new(AimModVisualStyle.RelatedSpacing),
                                 },
@@ -132,7 +131,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
                             new Container
                             {
                                 RelativeSizeAxes = Axes.X,
-                                Height = 220,
+                                Height = 200,
                                 Child = preview = new Container
                                 {
                                     RelativeSizeAxes = Axes.Both,
@@ -159,8 +158,8 @@ public partial class NativeSkinsScreen : CompositeDrawable
                             {
                                 RelativeSizeAxes = Axes.X,
                                 AutoSizeAxes = Axes.Y,
-                                Y = 240,
-                                Padding = new MarginPadding { Horizontal = AimModVisualStyle.SectionSpacing },
+                                Y = 216,
+                                Padding = new MarginPadding { Horizontal = 16 },
                                 Direction = FillDirection.Vertical,
                                 Spacing = new(AimModVisualStyle.RelatedSpacing),
                                 Children = new Drawable[]
@@ -183,19 +182,19 @@ public partial class NativeSkinsScreen : CompositeDrawable
         base.Update();
 
         float availableWidth = Math.Max(0, DrawWidth);
-        searchPanel.Width = Math.Clamp(availableWidth, 280, 560);
-        status.MaxWidth = availableWidth;
-
         const float panelGap = AimModVisualStyle.SectionSpacing;
         float listWidth = Math.Max(300, (availableWidth - panelGap) * 0.6f);
         listWidth = Math.Min(listWidth, Math.Max(0, availableWidth - 280 - panelGap));
         listPanel.Width = listWidth;
         listPanel.RelativeSizeAxes = Axes.Y;
 
+        searchPanel.Width = listWidth;
+        status.MaxWidth = listWidth;
+
         detailPanel.Width = Math.Max(0, availableWidth - listWidth - panelGap);
         detailPanel.RelativeSizeAxes = Axes.Y;
 
-        float detailTextWidth = Math.Max(80, detailPanel.DrawWidth - 2 * AimModVisualStyle.SectionSpacing);
+        float detailTextWidth = Math.Max(80, detailPanel.DrawWidth - 32);
         selectedName.MaxWidth = detailTextWidth;
         selectedCreator.MaxWidth = detailTextWidth;
         selectedDetails.MaxWidth = detailTextWidth;

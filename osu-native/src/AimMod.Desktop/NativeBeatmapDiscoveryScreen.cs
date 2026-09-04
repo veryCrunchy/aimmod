@@ -158,6 +158,7 @@ public partial class NativeBeatmapDiscoveryScreen : CompositeDrawable
 public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
 {
     private const int result_limit = 24;
+    private const float content_inset = 12;
 
     private readonly Func<IOfficialBeatmapDiscoveryClient?> client;
     private readonly Func<OnlineBeatmapImportService?> importer;
@@ -206,7 +207,6 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                 Children = new Drawable[]
                 {
                     new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
-                    new Box { RelativeSizeAxes = Axes.X, Height = 2, Colour = AimModPalette.Pink },
                     searchGroup = new Container
                     {
                         Children = new Drawable[]
@@ -257,7 +257,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                 Padding = new MarginPadding { Top = 184 },
                 Masking = true,
                 Depth = 10,
-                Child = new OsuScrollContainer
+                Child = new AimModScrollContainer
                 {
                     RelativeSizeAxes = Axes.Both,
                     Child = results = new FillFlowContainer
@@ -266,7 +266,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                         AutoSizeAxes = Axes.Y,
                         Direction = FillDirection.Vertical,
                         Spacing = new(AimModVisualStyle.RelatedSpacing),
-                        Padding = new MarginPadding { Right = 10, Bottom = 32 },
+                        Padding = new MarginPadding { Right = content_inset, Bottom = 32 },
                     },
                 },
             },
@@ -279,37 +279,36 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
         base.Update();
 
         float width = Math.Max(640, DrawWidth);
-        const float inset = 12;
         const float gap = AimModVisualStyle.RelatedSpacing;
         bool compact = width < 940;
 
         if (compact)
         {
-            float columnWidth = (width - inset * 2 - gap) / 2;
+            float columnWidth = (width - content_inset * 2 - gap) / 2;
             filterBand.Height = 128;
-            placeGroup(searchGroup, inset, 8, columnWidth, 54);
-            placeSlider(starSlider, inset + columnWidth + gap, 3, columnWidth);
-            placeGroup(categoryGroup, inset, 68, columnWidth, 52);
-            placeGroup(sortGroup, inset + columnWidth + gap, 68, columnWidth, 52);
+            placeGroup(searchGroup, content_inset, 8, columnWidth, 54);
+            placeSlider(starSlider, content_inset + columnWidth + gap, 3, columnWidth);
+            placeGroup(categoryGroup, content_inset, 68, columnWidth, 52);
+            placeGroup(sortGroup, content_inset + columnWidth + gap, 68, columnWidth, 52);
             resultStatus.Y = 216;
             resultViewport.Padding = new MarginPadding { Top = 240 };
         }
         else
         {
-            float available = width - inset * 2 - gap * 3;
+            float available = width - content_inset * 2 - gap * 3;
             float searchWidth = Math.Clamp(available * 0.34f, 280, 430);
             float sliderWidth = Math.Clamp(available * 0.29f, 240, 360);
             float dropdownWidth = (available - searchWidth - sliderWidth) / 2;
             filterBand.Height = 72;
-            placeGroup(searchGroup, inset, 8, searchWidth, 54);
-            placeSlider(starSlider, inset + searchWidth + gap, 3, sliderWidth);
-            placeGroup(categoryGroup, inset + searchWidth + gap + sliderWidth + gap, 8, dropdownWidth, 54);
-            placeGroup(sortGroup, width - inset - dropdownWidth, 8, dropdownWidth, 54);
+            placeGroup(searchGroup, content_inset, 8, searchWidth, 54);
+            placeSlider(starSlider, content_inset + searchWidth + gap, 3, sliderWidth);
+            placeGroup(categoryGroup, content_inset + searchWidth + gap + sliderWidth + gap, 8, dropdownWidth, 54);
+            placeGroup(sortGroup, width - content_inset - dropdownWidth, 8, dropdownWidth, 54);
             resultStatus.Y = 160;
             resultViewport.Padding = new MarginPadding { Top = 184 };
         }
 
-        resultStatus.MaxWidth = width;
+        resultStatus.MaxWidth = Math.Max(0, width - content_inset * 2);
     }
 
     private static void placeSlider(RangeSlider slider, float x, float y, float width)
