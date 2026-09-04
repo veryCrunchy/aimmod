@@ -101,7 +101,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             RelativeSizeAxes = Axes.X,
             AutoSizeAxes = Axes.Y,
             Direction = FillDirection.Vertical,
-            Spacing = new(16),
+            Spacing = new(AimModVisualStyle.SectionSpacing),
             Padding = new MarginPadding { Bottom = 40 },
         };
 
@@ -138,19 +138,17 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                 },
             },
         });
-        content.Add(new AimModSectionHeader(
+        content.Add(new AimModSubsectionHeader(
             "Coaching plan",
-            "Priorities and next plays ranked from your account-wide profile.",
-            "global plan"));
-        content.Add(createCoachPanel(out changesHost, out recommendationHost).With(panel => panel.Height = 430));
-        content.Add(new AimModSectionHeader(
+            "Priorities and next plays from your account-wide profile"));
+        content.Add(createCoachPanel(out changesHost, out recommendationHost).With(panel => panel.Height = 410));
+        content.Add(new AimModSubsectionHeader(
             "Beatmap drill-down",
-            "Inspect a play, then open its replay for object-level review.",
-            "play history"));
+            "Inspect a play or open its replay"));
         content.Add(search = new OsuTextBox
         {
             RelativeSizeAxes = Axes.X,
-            Height = 46,
+            Height = AimModVisualStyle.ControlHeight,
             PlaceholderText = "Search beatmaps, difficulties, artists, players, or mods",
         });
         content.Add(runList = new FillFlowContainer<Drawable>
@@ -158,7 +156,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             RelativeSizeAxes = Axes.X,
             AutoSizeAxes = Axes.Y,
             Direction = FillDirection.Vertical,
-            Spacing = new(7),
+            Spacing = new(AimModVisualStyle.RelatedSpacing),
         });
 
         InternalChildren = new Drawable[]
@@ -411,7 +409,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             practiceHost.Add(new PracticeStatusRow(
                 practiceSucceeded ? "Practice map ready" : practiceDirectory is null ? "Practice map not created" : "Practice map exported",
                 practiceMessage,
-                practiceSucceeded ? AimModPalette.Success : practiceDirectory is null ? AimModPalette.Pink : Colour4.FromHex("FFD45A"),
+                practiceSucceeded ? AimModPalette.Success : practiceDirectory is null ? AimModPalette.Pink : AimModPalette.Yellow,
                 practiceSucceeded ? FontAwesome.Solid.CheckCircle : FontAwesome.Solid.ExclamationCircle,
                 actionLabel,
                 action));
@@ -593,7 +591,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                     {
                         miniMetric("Local", global.LocalRunCount.ToString("N0"), AimModPalette.Cyan),
                         miniMetric("Submitted", global.SubmittedRunCount.ToString("N0"), AimModPalette.Pink),
-                        miniMetric("Beatmaps", global.DistinctBeatmapCount.ToString("N0"), Colour4.FromHex("FFD45A")),
+                        miniMetric("Beatmaps", global.DistinctBeatmapCount.ToString("N0"), AimModPalette.Yellow),
                         miniMetric("Exact replays", global.ExactAnalysisRunCount.ToString("N0"), AimModPalette.Success),
                     },
                 },
@@ -656,7 +654,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                 new Drawable[]
                 {
                     miniMetric("Great", result.Summary.Great.ToString("N0"), AimModPalette.Success),
-                    miniMetric("Lower hits", (result.Summary.Ok + result.Summary.Meh).ToString("N0"), Colour4.FromHex("FFD45A")),
+                    miniMetric("Lower hits", (result.Summary.Ok + result.Summary.Meh).ToString("N0"), AimModPalette.Yellow),
                     miniMetric("Misses", result.Summary.Miss.ToString("N0"), AimModPalette.Pink),
                     miniMetric("Hit spread", spread is { } value ? $"{value:0.0} ms" : "-", AimModPalette.Cyan),
                 },
@@ -676,7 +674,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
 
         if (isGlobal)
         {
-            Colour4[] accents = { AimModPalette.Pink, AimModPalette.Cyan, AimModPalette.Success, Colour4.FromHex("FFD45A") };
+            Colour4[] accents = { AimModPalette.Pink, AimModPalette.Cyan, AimModPalette.Success, AimModPalette.Yellow };
             foreach ((GlobalCoachingPriority priority, int index) in profile.Priorities.Select((priority, index) => (priority, index)))
             {
                 changesHost.Add(new InsightRow(
@@ -775,19 +773,17 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         var header = new Container
         {
             RelativeSizeAxes = Axes.X,
-            Height = 100,
+            Height = 96,
             Masking = true,
-            CornerRadius = 8,
-            BorderThickness = 1,
-            BorderColour = AimModPalette.Border,
+            CornerRadius = AimModVisualStyle.CardRadius,
         };
 
         artwork = new Container { RelativeSizeAxes = Axes.Both };
-        title = label("Global coaching overview", 24, AimModPalette.Text, "Bold");
-        plays = label("No plays", 14, AimModPalette.Text, "SemiBold");
-        duration = label("No session yet", 14, AimModPalette.Text, "SemiBold");
-        accuracy = label("-", 25, AimModPalette.Text, "Bold");
-        trend = label("More plays needed", 16, AimModPalette.Muted, "Bold");
+        title = label("Global coaching overview", 22, AimModPalette.Text, "Bold");
+        plays = label("No plays", 13, AimModPalette.Text, "SemiBold");
+        duration = label("No session yet", 13, AimModPalette.Text, "SemiBold");
+        accuracy = label("-", 22, AimModPalette.Text, "Bold");
+        trend = label("More plays needed", 14, AimModPalette.Muted, "Bold");
 
         header.Children = new Drawable[]
         {
@@ -818,9 +814,9 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                 AutoSizeAxes = Axes.Both,
                 Anchor = Anchor.CentreLeft,
                 Origin = Anchor.CentreLeft,
-                Margin = new MarginPadding { Left = 22 },
+                Margin = new MarginPadding { Left = 20 },
                 Direction = FillDirection.Vertical,
-                Spacing = new(9),
+                Spacing = new(AimModVisualStyle.RelatedSpacing),
                 Children = new Drawable[]
                 {
                     title,
@@ -828,7 +824,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                     {
                         AutoSizeAxes = Axes.Both,
                         Direction = FillDirection.Horizontal,
-                        Spacing = new(22),
+                        Spacing = new(20),
                         Children = new Drawable[]
                         {
                             headerMetric(FontAwesome.Regular.PlayCircle, plays),
@@ -879,7 +875,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             RelativeSizeAxes = Axes.X,
             AutoSizeAxes = Axes.Y,
             Direction = FillDirection.Vertical,
-            Spacing = new(7),
+            Spacing = new(AimModVisualStyle.RelatedSpacing),
         };
         panel.Child = body;
         body.Add(sectionLine("Global skill profile", "All analysed maps"));
@@ -926,7 +922,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             RelativeSizeAxes = Axes.X,
             AutoSizeAxes = Axes.Y,
             Direction = FillDirection.Vertical,
-            Spacing = new(9),
+            Spacing = new(7),
         };
         panel.Child = body;
         body.Add(section = new SectionLine("Practice map builder", "Finding maps"));
@@ -937,14 +933,14 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         body.Add(search = new OsuTextBox
         {
             RelativeSizeAxes = Axes.X,
-            Height = 38,
+            Height = AimModVisualStyle.CompactControlHeight,
             PlaceholderText = "Search maps, difficulties, players, or mods",
             Depth = -20,
         });
         body.Add(new GridContainer
         {
             RelativeSizeAxes = Axes.X,
-            Height = 38,
+            Height = AimModVisualStyle.CompactControlHeight,
             Depth = -20,
             ColumnDimensions = new[]
             {
@@ -990,14 +986,14 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         body.Add(new OsuScrollContainer
         {
             RelativeSizeAxes = Axes.X,
-            Height = 276,
+            Height = 282,
             Depth = 10,
             Child = practice = new FillFlowContainer<Drawable>
             {
                 RelativeSizeAxes = Axes.X,
                 AutoSizeAxes = Axes.Y,
                 Direction = FillDirection.Vertical,
-                Spacing = new(8),
+                Spacing = new(AimModVisualStyle.RelatedSpacing),
                 Padding = new MarginPadding { Right = 10, Bottom = 12 },
             },
         });
@@ -1009,20 +1005,20 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         out FillFlowContainer<Drawable> recommendation)
     {
         Container outer = new Container { RelativeSizeAxes = Axes.X };
-        var panel = new WorkspacePanel(new MarginPadding(18));
+        var panel = new WorkspacePanel(new MarginPadding(16));
         outer.Child = panel;
         var body = new FillFlowContainer
         {
             RelativeSizeAxes = Axes.X,
             AutoSizeAxes = Axes.Y,
             Direction = FillDirection.Vertical,
-            Spacing = new(10),
+            Spacing = new(AimModVisualStyle.RowSpacing),
         };
         panel.Child = body;
         body.Add(new GridContainer
         {
             RelativeSizeAxes = Axes.X,
-            Height = 376,
+            Height = 372,
             ColumnDimensions = new[]
             {
                 new Dimension(GridSizeMode.Relative, 0.62f),
@@ -1035,9 +1031,9 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                     new FillFlowContainer<Drawable>
                     {
                         RelativeSizeAxes = Axes.Both,
-                        Padding = new MarginPadding { Right = 14 },
+                        Padding = new MarginPadding { Right = 12 },
                         Direction = FillDirection.Vertical,
-                        Spacing = new(6),
+                        Spacing = new(AimModVisualStyle.RelatedSpacing),
                         Children = new Drawable[]
                         {
                             sectionLine("Priorities", "Strongest evidence first"),
@@ -1046,16 +1042,16 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                                 RelativeSizeAxes = Axes.X,
                                 AutoSizeAxes = Axes.Y,
                                 Direction = FillDirection.Vertical,
-                                Spacing = new(3),
+                                Spacing = new(2),
                             },
                         },
                     },
                     new FillFlowContainer<Drawable>
                     {
                         RelativeSizeAxes = Axes.Both,
-                        Padding = new MarginPadding { Left = 14 },
+                        Padding = new MarginPadding { Left = 12 },
                         Direction = FillDirection.Vertical,
-                        Spacing = new(8),
+                        Spacing = new(AimModVisualStyle.RelatedSpacing),
                         Children = new Drawable[]
                         {
                             sectionLine("Play next", "Best comparable map"),
@@ -1282,21 +1278,19 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         public AnalysisProgressBanner()
         {
             RelativeSizeAxes = Axes.X;
-            Height = 68;
+            Height = 64;
             Masking = true;
-            CornerRadius = 8;
-            BorderThickness = 1;
-            BorderColour = AimModPalette.Border;
+            CornerRadius = AimModVisualStyle.ControlRadius;
             InternalChildren = new Drawable[]
             {
                 new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
-                accent = new Box { RelativeSizeAxes = Axes.Y, Width = 4, Colour = AimModPalette.Cyan },
+                accent = new Box { RelativeSizeAxes = Axes.Y, Width = 3, Colour = AimModPalette.Cyan },
                 icon = new SpriteIcon
                 {
                     Anchor = Anchor.CentreLeft,
                     Origin = Anchor.CentreLeft,
-                    Position = new(18, -1),
-                    Size = new(18),
+                    Position = new(16, -1),
+                    Size = new(16),
                     Icon = FontAwesome.Solid.ChartLine,
                     Colour = AimModPalette.Cyan,
                 },
@@ -1307,13 +1301,13 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                     AutoSizeAxes = Axes.Y,
                     RelativeSizeAxes = Axes.X,
                     Width = 0.56f,
-                    Margin = new MarginPadding { Left = 48 },
+                    Margin = new MarginPadding { Left = 42 },
                     Direction = FillDirection.Vertical,
                     Spacing = new(2),
                     Children = new Drawable[]
                     {
                         phase = label("LOADING HISTORY", 9, AimModPalette.Cyan, "Bold"),
-                        title = truncatingLabel("Building your global profile", 15, AimModPalette.Text, 520, "SemiBold"),
+                        title = truncatingLabel("Building your global profile", 14, AimModPalette.Text, 520, "SemiBold"),
                     },
                 },
                 detail = truncatingLabel("Reading local and submitted plays", 11, AimModPalette.Muted, 460).With(text =>
@@ -1327,7 +1321,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                     Anchor = Anchor.BottomLeft,
                     Origin = Anchor.BottomLeft,
                     RelativeSizeAxes = Axes.X,
-                    Height = 4,
+                    Height = 3,
                     Children = new Drawable[]
                     {
                         new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Border },
@@ -1394,7 +1388,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                     ? $"{ConfidenceLabel(profile.Coverage.Confidence)} confidence  //  {ProfileCoverageValue(profile)} replay coverage"
                     : $"{profile.Coverage.ReplayAvailableRunCount:N0} saved replays  //  {submitted:N0} submitted scores  //  {total:N0} records",
                 cached > 0 ? 1 : 0,
-                cached > 0 ? AimModPalette.Success : Colour4.FromHex("FFD45A"),
+                cached > 0 ? AimModPalette.Success : AimModPalette.Yellow,
                 cached > 0 ? FontAwesome.Solid.CheckCircle : FontAwesome.Solid.Clock);
         }
 
@@ -1405,7 +1399,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                 : "Replay analysis is up to date",
             AnalysisCompletionDetail(profile.Coverage.AnalysedRunCount, failed),
             1,
-            failed > 0 && completed == 0 ? Colour4.FromHex("FFD45A") : AimModPalette.Success,
+            failed > 0 && completed == 0 ? AimModPalette.Yellow : AimModPalette.Success,
             failed > 0 && completed == 0 ? FontAwesome.Solid.ExclamationCircle : FontAwesome.Solid.CheckCircle);
 
         public void ShowWarning(string titleText, string detailText) => set(
@@ -1413,7 +1407,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             titleText,
             detailText,
             1,
-            Colour4.FromHex("FFD45A"),
+            AimModPalette.Yellow,
             FontAwesome.Solid.ExclamationCircle);
 
         public void ShowError(string titleText, string detailText) => set(
@@ -1478,7 +1472,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                             miss is null
                                 ? "No classified misses yet"
                                 : $"{miss.Count:N0} classified  //  {miss.Share:P0}  //  {miss.MapCount:N0} maps",
-                            Colour4.FromHex("FFD45A")),
+                            AimModPalette.Yellow),
                     },
                     new Drawable[]
                     {
@@ -1491,7 +1485,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                             "CONFIDENCE",
                             ConfidenceLabel(profile.Coverage.Confidence),
                             $"{profile.Coverage.AnalysedMapCount:N0} analysed maps",
-                            Colour4.FromHex("FFD45A")),
+                            AimModPalette.Yellow),
                         new ProfileMetric(
                             "EVIDENCE",
                             profile.Coverage.JudgementCount.ToString("N0"),
@@ -1516,16 +1510,14 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             {
                 RelativeSizeAxes = Axes.Both,
                 Masking = true,
-                CornerRadius = 6,
-                BorderThickness = 1,
-                BorderColour = AimModPalette.Border,
+                CornerRadius = AimModVisualStyle.ControlRadius,
                 Children = new Drawable[]
                 {
                     new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
                     new Box { RelativeSizeAxes = Axes.Y, Width = 3, Colour = accentColour },
-                    label(titleText, 9, AimModPalette.Muted, "Bold").With(text => text.Position = new(11, 6)),
-                    value = truncatingLabel(valueText, 14, accentColour, 160, "Bold").With(text => text.Position = new(11, 21)),
-                    detail = truncatingLabel(detailText, 11, AimModPalette.Muted, 160).With(text => text.Position = new(11, 41)),
+                    label(titleText, 8, AimModPalette.Muted, "Bold").With(text => text.Position = new(11, 6)),
+                    value = truncatingLabel(valueText, 13, accentColour, 160, "Bold").With(text => text.Position = new(11, 20)),
+                    detail = truncatingLabel(detailText, 10, AimModPalette.Muted, 160).With(text => text.Position = new(11, 39)),
                 },
             };
         }
@@ -1591,9 +1583,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             RelativeSizeAxes = Axes.X;
             Height = 48;
             Masking = true;
-            CornerRadius = 7;
-            BorderThickness = 1;
-            BorderColour = AimModPalette.Border;
+            CornerRadius = AimModVisualStyle.ControlRadius;
             InternalChildren = new Drawable[]
             {
                 new AimModLocalArtwork(run.BackgroundPath),
@@ -1665,7 +1655,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             }
             else
             {
-                Colour4[] colours = { AimModPalette.Pink, AimModPalette.Cyan, Colour4.FromHex("FFD45A"), AimModPalette.Success };
+                Colour4[] colours = { AimModPalette.Pink, AimModPalette.Cyan, AimModPalette.Yellow, AimModPalette.Success };
                 double visibleTotal = reasons.Sum(item => item.Share);
                 for (int i = 0; i < reasons.Length; i++)
                 {
@@ -1689,37 +1679,14 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         }
     }
 
-    private partial class SectionLine : CompositeDrawable
+    private partial class SectionLine : AimModSubsectionHeader
     {
-        private readonly TruncatingSpriteText title;
-        private readonly TruncatingSpriteText detail;
-
         public SectionLine(string titleText, string detailText)
+            : base(titleText, detailText)
         {
-            RelativeSizeAxes = Axes.X;
-            Height = 34;
-            InternalChildren = new Drawable[]
-            {
-                title = truncatingLabel(titleText, 17, AimModPalette.Text, 200, "SemiBold"),
-                detail = truncatingLabel(detailText, 10, AimModPalette.Muted, 160).With(text =>
-                {
-                    text.Anchor = Anchor.CentreRight;
-                    text.Origin = Anchor.CentreRight;
-                }),
-            };
         }
 
-        public void SetDetail(string value) => detail.Text = value;
-
-        protected override void Update()
-        {
-            base.Update();
-            const float gap = 16;
-            float titleWidth = Math.Max(80, DrawWidth * 0.58f - gap);
-            float detailWidth = Math.Max(60, DrawWidth - titleWidth - gap);
-            title.MaxWidth = titleWidth;
-            detail.MaxWidth = detailWidth;
-        }
+        public void SetDetail(string value) => Detail = value;
     }
 
     private sealed partial class PracticeDropdown<T> : OsuDropdown<T>
@@ -1743,11 +1710,9 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         public RecommendationCard(CoachingRecommendation recommendation, Action? open)
         {
             RelativeSizeAxes = Axes.X;
-            Height = 152;
+            Height = 146;
             Masking = true;
-            CornerRadius = 10;
-            BorderThickness = 1;
-            BorderColour = AimModPalette.PinkDark;
+            CornerRadius = AimModVisualStyle.CardRadius;
             InternalChildren = new Drawable[]
             {
                 new Box
@@ -1799,23 +1764,23 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     {
         private readonly Action select;
         private readonly Box background;
+        private readonly Colour4 restingColour;
 
         public RunPickerRow(CoachingRecentRun run, bool selected, Action select)
         {
             this.select = select;
+            restingColour = selected ? AimModPalette.PanelRaised : AimModPalette.Panel;
             RelativeSizeAxes = Axes.X;
-            Height = 68;
+            Height = 64;
             Masking = true;
-            CornerRadius = 9;
-            BorderThickness = selected ? 1 : 0;
-            BorderColour = AimModPalette.Pink;
+            CornerRadius = AimModVisualStyle.ControlRadius;
             Children = new Drawable[]
             {
-                background = new Box { RelativeSizeAxes = Axes.Both, Colour = selected ? AimModPalette.PanelRaised : AimModPalette.Panel },
+                background = new Box { RelativeSizeAxes = Axes.Both, Colour = restingColour },
                 new Box
                 {
                     RelativeSizeAxes = Axes.Y,
-                    Width = selected ? 5 : 3,
+                    Width = selected ? 4 : 3,
                     Colour = AimModVisualStyle.DifficultyColour(run.StarRating),
                 },
                 new FillFlowContainer
@@ -1868,7 +1833,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
 
         protected override void OnHoverLost(HoverLostEvent e)
         {
-            background.FadeColour(AimModPalette.Panel, 100);
+            background.FadeColour(restingColour, AimModVisualStyle.HoverTransition);
             base.OnHoverLost(e);
         }
 
@@ -1885,7 +1850,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             this.action = action;
             AutoSizeAxes = Axes.Both;
             Masking = true;
-            CornerRadius = 7;
+            CornerRadius = AimModVisualStyle.ControlRadius;
             Alpha = action is null ? 0.5f : 1;
             Children = new Drawable[]
             {
@@ -1897,7 +1862,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                 new FillFlowContainer
                 {
                     AutoSizeAxes = Axes.Both,
-                    Padding = new MarginPadding { Horizontal = 11, Vertical = 5 },
+                    Padding = new MarginPadding { Horizontal = 11, Vertical = 6 },
                     Child = label(text, 10, AimModPalette.Text, "SemiBold"),
                 },
             };
@@ -1932,25 +1897,23 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         public PracticeCandidateRow(PracticeMapCandidate candidate, Action<PracticeMapCandidate, PracticeDrillType> create)
         {
             RelativeSizeAxes = Axes.X;
-            Height = 132;
+            Height = 124;
             Masking = true;
-            CornerRadius = 7;
-            BorderThickness = 1;
-            BorderColour = AimModPalette.Border;
+            CornerRadius = AimModVisualStyle.ControlRadius;
             InternalChildren = new Drawable[]
             {
                 new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
                 new Box
                 {
                     RelativeSizeAxes = Axes.Y,
-                    Width = 4,
+                    Width = 3,
                     Colour = AimModPalette.Pink,
                 },
                 new FillFlowContainer
                 {
                     RelativeSizeAxes = Axes.X,
                     AutoSizeAxes = Axes.Y,
-                    Padding = new MarginPadding { Left = 14, Right = 74, Top = 10 },
+                    Padding = new MarginPadding { Left = 13, Right = 72, Top = 9 },
                     Direction = FillDirection.Vertical,
                     Spacing = new(3),
                     Children = new Drawable[]
@@ -1973,14 +1936,14 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                 {
                     Anchor = Anchor.TopRight,
                     Origin = Anchor.TopRight,
-                    Margin = new MarginPadding { Top = 10, Right = 10 },
+                    Margin = new MarginPadding { Top = 9, Right = 9 },
                 },
                 new FillFlowContainer
                 {
                     Anchor = Anchor.BottomLeft,
                     Origin = Anchor.BottomLeft,
                     AutoSizeAxes = Axes.Both,
-                    Margin = new MarginPadding { Left = 14, Bottom = 11 },
+                    Margin = new MarginPadding { Left = 13, Bottom = 9 },
                     Direction = FillDirection.Horizontal,
                     Spacing = new(6),
                     Children = new Drawable[]
@@ -2012,20 +1975,18 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             Action? action = null)
         {
             RelativeSizeAxes = Axes.X;
-            Height = 70;
+            Height = 64;
             Masking = true;
-            CornerRadius = 7;
-            BorderThickness = 1;
-            BorderColour = accentColour.Opacity(0.5f);
+            CornerRadius = AimModVisualStyle.ControlRadius;
             var children = new List<Drawable>
             {
                 new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
-                new Box { RelativeSizeAxes = Axes.Y, Width = 4, Colour = accentColour },
+                new Box { RelativeSizeAxes = Axes.Y, Width = 3, Colour = accentColour },
                 new SpriteIcon
                 {
                     Anchor = Anchor.CentreLeft,
                     Origin = Anchor.CentreLeft,
-                    Position = new(16, 0),
+                    Position = new(15, 0),
                     Size = new(15),
                     Icon = iconUsage,
                     Colour = accentColour,
@@ -2034,7 +1995,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                 {
                     RelativeSizeAxes = Axes.X,
                     AutoSizeAxes = Axes.Y,
-                    Padding = new MarginPadding { Left = 42, Right = action is null ? 14 : 118, Top = 11 },
+                    Padding = new MarginPadding { Left = 40, Right = action is null ? 14 : 118, Top = 8 },
                     Direction = FillDirection.Vertical,
                     Spacing = new(3),
                     Children = new Drawable[]
@@ -2063,36 +2024,23 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         public PracticeEmptyState(string titleText, string detailText)
         {
             RelativeSizeAxes = Axes.X;
-            Height = 190;
-            Masking = true;
-            CornerRadius = 7;
-            BorderThickness = 1;
-            BorderColour = AimModPalette.Border;
+            Height = 132;
             InternalChildren = new Drawable[]
             {
-                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas, Alpha = 0.45f },
-                new SpriteIcon
-                {
-                    Anchor = Anchor.TopCentre,
-                    Origin = Anchor.TopCentre,
-                    Y = 34,
-                    Size = new(28),
-                    Icon = FontAwesome.Solid.Bullseye,
-                    Colour = AimModPalette.Cyan,
-                },
+                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas, Alpha = 0.25f },
                 new FillFlowContainer
                 {
                     Anchor = Anchor.TopCentre,
                     Origin = Anchor.TopCentre,
                     RelativeSizeAxes = Axes.X,
                     AutoSizeAxes = Axes.Y,
-                    Y = 78,
+                    Y = 42,
                     Padding = new MarginPadding { Horizontal = 24 },
                     Direction = FillDirection.Vertical,
-                    Spacing = new(7),
+                    Spacing = new(4),
                     Children = new Drawable[]
                     {
-                        label(titleText, 15, AimModPalette.Text, "SemiBold").With(text =>
+                        label(titleText, 13, AimModPalette.Text, "SemiBold").With(text =>
                         {
                             text.Anchor = Anchor.TopCentre;
                             text.Origin = Anchor.TopCentre;
@@ -2118,7 +2066,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             RelativeSizeAxes = Axes.X;
             Height = 88;
             Masking = true;
-            CornerRadius = 6;
+            CornerRadius = AimModVisualStyle.ControlRadius;
             InternalChildren = new Drawable[]
             {
                 new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas, Alpha = 0.38f },
@@ -2168,7 +2116,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                     Position = new(34, 70),
                     Width = -46,
                 },
-                timeRange = label("No plays to graph", 9, AimModPalette.Muted).With(text =>
+                timeRange = label("No recent plays", 9, AimModPalette.Muted).With(text =>
                 {
                     text.Anchor = Anchor.BottomRight;
                     text.Origin = Anchor.BottomRight;
@@ -2188,7 +2136,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             if (chronological.Length == 0)
             {
                 graph.Alpha = 0;
-                timeRange.Text = "No plays to graph";
+                timeRange.Text = "No recent plays";
                 return;
             }
 
@@ -2250,9 +2198,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         {
             RelativeSizeAxes = Axes.Both;
             Masking = true;
-            CornerRadius = 13;
-            BorderThickness = 1;
-            BorderColour = AimModPalette.Border;
+            CornerRadius = AimModVisualStyle.CardRadius;
             InternalChildren = new Drawable[]
             {
                 new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },

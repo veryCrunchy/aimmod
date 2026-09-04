@@ -19,9 +19,7 @@ public partial class AimModSlantedAccentPanel : Container
     public AimModSlantedAccentPanel()
     {
         Masking = true;
-        CornerRadius = 12;
-        BorderThickness = 1;
-        BorderColour = AimModPalette.Border;
+        CornerRadius = AimModVisualStyle.CardRadius;
 
         InternalChildren = new Drawable[]
         {
@@ -33,22 +31,22 @@ public partial class AimModSlantedAccentPanel : Container
             accent = new Box
             {
                 RelativeSizeAxes = Axes.Y,
-                Width = 22,
-                X = -8,
+                Width = 18,
+                X = -9,
                 Shear = new(-0.18f, 0),
             },
             accentEdge = new Box
             {
                 RelativeSizeAxes = Axes.Y,
                 Width = 3,
-                X = 11,
+                X = 7,
                 Shear = new(-0.18f, 0),
                 Alpha = 0.55f,
             },
             content = new Container
             {
                 RelativeSizeAxes = Axes.Both,
-                Padding = new MarginPadding { Left = 28, Right = 20, Vertical = 16 },
+                Padding = new MarginPadding { Left = 24, Right = 18, Vertical = 14 },
             },
         };
 
@@ -84,7 +82,7 @@ public partial class AimModSectionHeader : CompositeDrawable
             RelativeSizeAxes = Axes.X,
             AutoSizeAxes = Axes.Y,
             Direction = FillDirection.Vertical,
-            Spacing = new(4),
+            Spacing = new(AimModVisualStyle.RelatedSpacing),
             Children = new Drawable[]
             {
                 new FillFlowContainer
@@ -96,14 +94,14 @@ public partial class AimModSectionHeader : CompositeDrawable
                     {
                         accent = new Box
                         {
-                            Size = new(24, 4),
+                            Size = new(28, 2),
                             Shear = new(-0.35f, 0),
                             Anchor = Anchor.CentreLeft,
                             Origin = Anchor.CentreLeft,
                         },
                         eyebrowText = new OsuSpriteText
                         {
-                            Font = new FontUsage(size: 11, weight: "Bold"),
+                            Font = new FontUsage(size: 10, weight: "Bold"),
                             Colour = AimModPalette.Cyan,
                             Anchor = Anchor.CentreLeft,
                             Origin = Anchor.CentreLeft,
@@ -112,12 +110,12 @@ public partial class AimModSectionHeader : CompositeDrawable
                 },
                 titleText = new OsuSpriteText
                 {
-                    Font = new FontUsage(size: 26, weight: "Bold"),
+                    Font = new FontUsage(size: 24, weight: "Bold"),
                     Colour = AimModPalette.Text,
                 },
                 subtitleText = new OsuSpriteText
                 {
-                    Font = new FontUsage(size: 13),
+                    Font = new FontUsage(size: 12),
                     Colour = AimModPalette.Muted,
                 },
             },
@@ -176,9 +174,7 @@ public partial class AimModBeatmapBanner : CompositeDrawable
         RelativeSizeAxes = Axes.X;
         Height = 172;
         Masking = true;
-        CornerRadius = 14;
-        BorderThickness = 1;
-        BorderColour = AimModPalette.Border;
+        CornerRadius = AimModVisualStyle.CardRadius;
 
         if (artwork is not null)
             artwork.RelativeSizeAxes = Axes.Both;
@@ -225,13 +221,13 @@ public partial class AimModBeatmapBanner : CompositeDrawable
                 {
                     titleText = new TruncatingSpriteText
                     {
-                        Font = new FontUsage(size: 25, weight: "Bold"),
+                        Font = new FontUsage(size: 22, weight: "Bold"),
                         Colour = AimModPalette.Text,
                         MaxWidth = 720,
                     },
                     artistText = new TruncatingSpriteText
                     {
-                        Font = new FontUsage(size: 14, weight: "SemiBold"),
+                        Font = new FontUsage(size: 13, weight: "SemiBold"),
                         Colour = AimModPalette.Muted,
                         MaxWidth = 720,
                     },
@@ -247,7 +243,7 @@ public partial class AimModBeatmapBanner : CompositeDrawable
             {
                 Anchor = Anchor.TopRight,
                 Origin = Anchor.TopRight,
-                Margin = new MarginPadding { Top = 16, Right = 18 },
+                Margin = new MarginPadding { Top = 14, Right = 16 },
             },
         };
 

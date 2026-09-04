@@ -70,7 +70,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
             new Container
             {
                 RelativeSizeAxes = Axes.X,
-                Height = 180,
+                Height = 168,
                 Depth = -10,
                 Children = new Drawable[]
                 {
@@ -78,19 +78,19 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
                         "Statistics",
                         "Explore the unified osu!standard score dataset, combining online best/recent records with replay-rich local attempts.",
                         "performance history"),
-                    scopeText = text("Loading score scope...", 11, AimModPalette.Muted).With(drawable => drawable.Y = 65),
+                    scopeText = text("Loading score scope...", 10, AimModPalette.Muted).With(drawable => drawable.Y = 62),
                     filterBar = new Container
                     {
                         RelativeSizeAxes = Axes.X,
-                        Position = new(0, 88),
-                        Height = 76,
+                        Position = new(0, 82),
+                        Height = 70,
                         Children = new Drawable[]
                         {
                             filterGroup("FIND", 0, 0.22f,
                                 filterField("SEARCH", search = new OsuTextBox
                                 {
                                     RelativeSizeAxes = Axes.X,
-                                    Height = 38,
+                                    Height = AimModVisualStyle.CompactControlHeight,
                                     PlaceholderText = "Title, artist, difficulty",
                                 })),
                             filterGroup("SCOPE", 0.22f, 0.24f,
@@ -109,7 +109,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
             contentViewport = new Container
             {
                 RelativeSizeAxes = Axes.Both,
-                Padding = new MarginPadding { Top = 180 },
+                Padding = new MarginPadding { Top = 168 },
                 Children = new Drawable[]
                 {
                     mainColumn = new Container
@@ -123,15 +123,15 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
                                 RelativeSizeAxes = Axes.X,
                                 AutoSizeAxes = Axes.Y,
                                 Direction = FillDirection.Vertical,
-                                Spacing = new(12),
+                                Spacing = new(AimModVisualStyle.RowSpacing),
                                 Padding = new MarginPadding { Bottom = 28, Right = 4 },
                                 Children = new Drawable[]
                                 {
-                                    sectionHeading("OVERVIEW", "Filtered performance at a glance"),
+                                    new AimModSubsectionHeader("Overview", "Filtered performance at a glance"),
                                     metricGrid = new GridContainer
                                     {
                                         RelativeSizeAxes = Axes.X,
-                                        Height = 108,
+                                        Height = 96,
                                         ColumnDimensions = fourEqualColumns(),
                                         Content = new[]
                                         {
@@ -140,15 +140,15 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
                                                 (averageAccuracy = new MetricCard("Average accuracy", AimModPalette.Cyan, FontAwesome.Solid.Crosshairs)).WithPadding(),
                                                 (medianPp = new MetricCard("Median PP", AimModPalette.Pink, FontAwesome.Solid.ChartLine)).WithPadding(),
                                                 (missFree = new MetricCard("Miss-free rate", AimModPalette.Success, FontAwesome.Solid.CheckCircle)).WithPadding(),
-                                                (averageStars = new MetricCard("Average difficulty", Colour4.FromHex("FFD45A"), FontAwesome.Solid.Star)).WithPadding(),
+                                                (averageStars = new MetricCard("Average difficulty", AimModPalette.Yellow, FontAwesome.Solid.Star)).WithPadding(),
                                             },
                                         },
                                     },
-                                    sectionHeading("PERFORMANCE TRENDS", "Hover a chart to inspect an exact play"),
+                                    new AimModSubsectionHeader("Performance trends", "Hover to inspect an exact play"),
                                     new GridContainer
                                     {
                                         RelativeSizeAxes = Axes.X,
-                                        Height = 220,
+                                        Height = 210,
                                         ColumnDimensions = twoEqualColumns(),
                                         Content = new[] { new Drawable[]
                                         {
@@ -159,24 +159,26 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
                                     new GridContainer
                                     {
                                         RelativeSizeAxes = Axes.X,
-                                        Height = 220,
+                                        Height = 210,
                                         ColumnDimensions = twoEqualColumns(),
                                         Content = new[] { new Drawable[]
                                         {
-                                            (starsGraph = new StatisticsGraphCard("Difficulty played", Colour4.FromHex("FFD45A"), value => $"{value:0.00} stars")).WithPadding(),
+                                            (starsGraph = new StatisticsGraphCard("Difficulty played", AimModPalette.Yellow, value => $"{value:0.00} stars")).WithPadding(),
                                             (missesGraph = new StatisticsGraphCard("Misses per play", AimModPalette.Success, value => $"{value:0} misses")).WithPadding(),
                                         } },
                                     },
-                                    new FillFlowContainer
+                                    new Container
                                     {
                                         RelativeSizeAxes = Axes.X,
-                                        AutoSizeAxes = Axes.Y,
-                                        Direction = FillDirection.Horizontal,
-                                        Margin = new MarginPadding { Top = 2 },
+                                        Height = 40,
                                         Children = new Drawable[]
                                         {
-                                            text("PLAYS IN VIEW", 11, AimModPalette.Cyan, "Bold"),
-                                            resultText = text(string.Empty, 11, AimModPalette.Muted, "SemiBold").With(drawable => drawable.Margin = new MarginPadding { Left = 12 }),
+                                            new AimModSubsectionHeader("Plays in view"),
+                                            resultText = text(string.Empty, 11, AimModPalette.Muted, "SemiBold").With(label =>
+                                            {
+                                                label.Anchor = Anchor.CentreRight;
+                                                label.Origin = Anchor.CentreRight;
+                                            }),
                                         },
                                     },
                                     runList = new FillFlowContainer<Drawable>
@@ -184,7 +186,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
                                         RelativeSizeAxes = Axes.X,
                                         AutoSizeAxes = Axes.Y,
                                         Direction = FillDirection.Vertical,
-                                        Spacing = new(7),
+                                        Spacing = new(AimModVisualStyle.RelatedSpacing),
                                     },
                                 },
                             },
@@ -196,12 +198,10 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
                         Origin = Anchor.TopRight,
                         RelativeSizeAxes = Axes.Y,
                         Masking = true,
-                        CornerRadius = 8,
-                        BorderThickness = 1,
-                        BorderColour = AimModPalette.Border,
+                        CornerRadius = AimModVisualStyle.CardRadius,
                         Children = new Drawable[]
                         {
-                            new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
+                            new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
                             new OsuScrollContainer
                             {
                                 RelativeSizeAxes = Axes.Both,
@@ -210,8 +210,8 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
                                     RelativeSizeAxes = Axes.X,
                                     AutoSizeAxes = Axes.Y,
                                     Direction = FillDirection.Vertical,
-                                    Spacing = new(12),
-                                    Padding = new MarginPadding(18),
+                                    Spacing = new(AimModVisualStyle.RowSpacing),
+                                    Padding = new MarginPadding(16),
                                 },
                             },
                         },
@@ -526,10 +526,10 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
     private static Drawable actionButton(string label, Action action) => new ClickableContainer
     {
         RelativeSizeAxes = Axes.X,
-        Height = 42,
+        Height = AimModVisualStyle.ControlHeight,
         Action = action,
         Masking = true,
-        CornerRadius = 6,
+        CornerRadius = AimModVisualStyle.ControlRadius,
         Children = new Drawable[]
         {
             new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Pink },
@@ -571,30 +571,27 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
         RelativeSizeAxes = Axes.X,
         X = x,
         Width = width,
-        Height = 76,
-        Padding = new MarginPadding { Right = 8 },
+        Height = 70,
+        Padding = new MarginPadding { Right = AimModVisualStyle.RelatedSpacing },
         Children = new Drawable[]
         {
             new Container
             {
                 RelativeSizeAxes = Axes.Both,
                 Masking = true,
-                CornerRadius = 7,
-                BorderThickness = 1,
-                BorderColour = AimModPalette.Border,
+                CornerRadius = AimModVisualStyle.ControlRadius,
                 Children = new Drawable[]
                 {
-                    new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
-                    new Box { RelativeSizeAxes = Axes.X, Height = 2, Colour = AimModPalette.Cyan, Alpha = 0.72f },
+                    new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
                 },
             },
-            text(heading, 8, AimModPalette.Cyan, "Bold").With(label => label.Position = new(10, 7)),
+            text(heading, 8, AimModPalette.Cyan, "Bold").With(label => label.Position = new(10, 6)),
             new GridContainer
             {
                 RelativeSizeAxes = Axes.X,
-                Position = new(8, 22),
+                Position = new(8, 20),
                 Width = 1,
-                Height = 48,
+                Height = 46,
                 ColumnDimensions = Enumerable.Repeat(new Dimension(GridSizeMode.Relative, 1f / fields.Length), fields.Length).ToArray(),
                 Content = new[] { fields },
             },
@@ -604,40 +601,11 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
     private static Drawable filterField(string heading, Drawable control) => new Container
     {
         RelativeSizeAxes = Axes.Both,
-        Padding = new MarginPadding { Right = 8 },
+        Padding = new MarginPadding { Right = AimModVisualStyle.RelatedSpacing },
         Children = new Drawable[]
         {
             text(heading, 8, AimModPalette.Muted, "Bold"),
             control.With(drawable => drawable.Y = 11),
-        },
-    };
-
-    private static Drawable sectionHeading(string heading, string detail) => new Container
-    {
-        RelativeSizeAxes = Axes.X,
-        Height = 22,
-        Children = new Drawable[]
-        {
-            new Box
-            {
-                Anchor = Anchor.CentreLeft,
-                Origin = Anchor.CentreLeft,
-                Size = new(20, 3),
-                Shear = new(-0.35f, 0),
-                Colour = AimModPalette.Pink,
-            },
-            text(heading, 10, AimModPalette.Cyan, "Bold").With(label =>
-            {
-                label.Anchor = Anchor.CentreLeft;
-                label.Origin = Anchor.CentreLeft;
-                label.X = 29;
-            }),
-            text(detail, 10, AimModPalette.Muted).With(label =>
-            {
-                label.Anchor = Anchor.CentreRight;
-                label.Origin = Anchor.CentreRight;
-                label.X = -10;
-            }),
         },
     };
 
@@ -702,45 +670,38 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
         {
             RelativeSizeAxes = Axes.Both;
             Masking = true;
-            CornerRadius = 7;
-            BorderThickness = 1;
-            BorderColour = AimModPalette.Border;
+            CornerRadius = AimModVisualStyle.ControlRadius;
             InternalChildren = new Drawable[]
             {
-                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
-                new Box { RelativeSizeAxes = Axes.Y, Width = 4, Colour = accent },
-                new CircularContainer
+                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
+                new Box { RelativeSizeAxes = Axes.Y, Width = 3, Colour = accent },
+                new Container
                 {
                     Anchor = Anchor.TopRight,
                     Origin = Anchor.TopRight,
                     Position = new(-14, 14),
-                    Size = new(30),
-                    Masking = true,
-                    Children = new Drawable[]
+                    Size = new(24),
+                    Child = new SpriteIcon
                     {
-                        new Box { RelativeSizeAxes = Axes.Both, Colour = accent, Alpha = 0.14f },
-                        new SpriteIcon
-                        {
-                            Anchor = Anchor.Centre,
-                            Origin = Anchor.Centre,
-                            Size = new(13),
-                            Icon = icon,
-                            Colour = accent,
-                        },
+                        Anchor = Anchor.Centre,
+                        Origin = Anchor.Centre,
+                        Size = new(13),
+                        Icon = icon,
+                        Colour = accent,
                     },
                 },
                 new FillFlowContainer
                 {
                     RelativeSizeAxes = Axes.X,
                     AutoSizeAxes = Axes.Y,
-                    Padding = new MarginPadding { Top = 13, Bottom = 12, Left = 17, Right = 46 },
+                    Padding = new MarginPadding { Top = 11, Bottom = 10, Left = 14, Right = 42 },
                     Direction = FillDirection.Vertical,
                     Spacing = new(5),
                     Children = new Drawable[]
                     {
                         text(heading.ToUpperInvariant(), 9, AimModPalette.Muted, "Bold"),
-                        value = text("-", 22, AimModPalette.Text, "Bold"),
-                        detailText = text(string.Empty, 10, AimModPalette.Muted),
+                        value = text("-", 20, AimModPalette.Text, "Bold"),
+                        detailText = text(string.Empty, 9, AimModPalette.Muted),
                     },
                 },
             };
@@ -779,30 +740,28 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
             this.colour = colour;
             RelativeSizeAxes = Axes.Both;
             Masking = true;
-            CornerRadius = 7;
-            BorderThickness = 1;
-            BorderColour = AimModPalette.Border;
+            CornerRadius = AimModVisualStyle.ControlRadius;
             InternalChildren = new Drawable[]
             {
                 new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
-                new Box { RelativeSizeAxes = Axes.X, Height = 3, Colour = colour },
-                text(heading, 14, AimModPalette.Text, "SemiBold").With(text => text.Position = new(15, 13)),
+                new Box { RelativeSizeAxes = Axes.X, Height = 2, Colour = colour, Alpha = 0.8f },
+                text(heading, 14, AimModPalette.Text, "SemiBold").With(text => text.Position = new(14, 12)),
                 range = text("No data", 10, AimModPalette.Muted).With(text =>
                 {
                     text.Anchor = Anchor.TopRight;
                     text.Origin = Anchor.TopRight;
-                    text.Position = new(-15, 13);
+                    text.Position = new(-14, 12);
                 }),
                 chartMeta = text("No plays in current view", 9, AimModPalette.Muted).With(text =>
                 {
                     text.Anchor = Anchor.TopRight;
                     text.Origin = Anchor.TopRight;
-                    text.Position = new(-15, 31);
+                    text.Position = new(-14, 29);
                 }),
                 plotViewport = new Container
                 {
                     RelativeSizeAxes = Axes.Both,
-                    Padding = new MarginPadding { Top = 56, Bottom = 18, Left = 15, Right = 15 },
+                    Padding = new MarginPadding { Top = 52, Bottom = 16, Left = 14, Right = 14 },
                     Child = plotArea = new Container
                     {
                         RelativeSizeAxes = Axes.Both,
@@ -843,28 +802,13 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
                 emptyState = new Container
                 {
                     RelativeSizeAxes = Axes.Both,
-                    Padding = new MarginPadding { Top = 54 },
-                    Child = new FillFlowContainer
+                    Padding = new MarginPadding { Top = 48 },
+                    Child = text("No plays in this view", 11, AimModPalette.Muted).With(label =>
                     {
-                        Anchor = Anchor.Centre,
-                        Origin = Anchor.Centre,
-                        AutoSizeAxes = Axes.Both,
-                        Direction = FillDirection.Vertical,
-                        Spacing = new(7),
-                        Children = new Drawable[]
-                        {
-                            new SpriteIcon
-                            {
-                                Anchor = Anchor.TopCentre,
-                                Origin = Anchor.TopCentre,
-                                Size = new(18),
-                                Icon = FontAwesome.Solid.ChartLine,
-                                Colour = colour,
-                                Alpha = 0.8f,
-                            },
-                            text("No plays in this view", 12, AimModPalette.Muted, "SemiBold"),
-                        },
-                    },
+                        label.Anchor = Anchor.Centre;
+                        label.Origin = Anchor.Centre;
+                        label.Alpha = 0.72f;
+                    }),
                 },
                 tooltip = new Container
                 {
@@ -873,8 +817,6 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
                     Alpha = 0,
                     Masking = true,
                     CornerRadius = 5,
-                    BorderThickness = 1,
-                    BorderColour = AimModPalette.Border,
                     Children = new Drawable[]
                     {
                         new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas.Opacity(0.96f) },
@@ -895,6 +837,10 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
                 range.Text = "No data";
                 range.Colour = AimModPalette.Muted;
                 chartMeta.Text = "No plays in current view";
+                plotViewport.FadeOut(80);
+                hoverLine.FadeOut(80);
+                hoverPoint.FadeOut(80);
+                tooltip.FadeOut(80);
                 emptyState.FadeIn(100);
                 return;
             }
@@ -910,6 +856,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
             graph.Values = points.Select(point => (float)point.Value).ToArray();
             rebuildPoints();
             graph.FadeIn(120);
+            plotViewport.FadeIn(120);
             emptyState.FadeOut(80);
             range.Text = formatter(points[^1].Value);
             range.Colour = colour;
@@ -1025,9 +972,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
             RelativeSizeAxes = Axes.X;
             Height = 72;
             Masking = true;
-            CornerRadius = 6;
-            BorderThickness = selected ? 2 : 1;
-            BorderColour = selected ? AimModPalette.Pink : AimModPalette.Border;
+            CornerRadius = AimModVisualStyle.ControlRadius;
             string mods = replay.Mods.Count == 0 ? "NM" : string.Join(" ", replay.Mods);
             Children = new Drawable[]
             {
@@ -1038,7 +983,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
                     Colour = AimModPalette.Pink,
                     Alpha = selected ? 0.08f : 0,
                 },
-                new Box { RelativeSizeAxes = Axes.Y, Width = 4, Colour = AimModVisualStyle.DifficultyColour(replay.StarRating) },
+                new Box { RelativeSizeAxes = Axes.Y, Width = selected ? 4 : 3, Colour = AimModVisualStyle.DifficultyColour(replay.StarRating) },
                 new FillFlowContainer
                 {
                     Anchor = Anchor.CentreLeft,
@@ -1078,7 +1023,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
         protected override void Update()
         {
             base.Update();
-            float available = Math.Max(140, DrawWidth - 330);
+            float available = Math.Max(140, DrawWidth - 314);
             title.MaxWidth = available;
             subtitle.MaxWidth = available;
         }
@@ -1103,33 +1048,21 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
         public StatisticsEmptyState(string heading, string detail)
         {
             RelativeSizeAxes = Axes.X;
-            Height = 150;
-            Masking = true;
-            CornerRadius = 7;
-            BorderThickness = 1;
-            BorderColour = AimModPalette.Border;
+            Height = 92;
             InternalChildren = new Drawable[]
             {
-                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
+                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel, Alpha = 0.45f },
                 new FillFlowContainer
                 {
                     Anchor = Anchor.Centre,
                     Origin = Anchor.Centre,
                     AutoSizeAxes = Axes.Both,
                     Direction = FillDirection.Vertical,
-                    Spacing = new(8),
+                    Spacing = new(4),
                     Children = new Drawable[]
                     {
-                        new SpriteIcon
-                        {
-                            Anchor = Anchor.TopCentre,
-                            Origin = Anchor.TopCentre,
-                            Size = new(22),
-                            Icon = FontAwesome.Solid.Filter,
-                            Colour = AimModPalette.Cyan,
-                        },
-                        text(heading, 15, AimModPalette.Text, "SemiBold"),
-                        text(detail, 11, AimModPalette.Muted),
+                        text(heading, 13, AimModPalette.Text, "SemiBold"),
+                        text(detail, 10, AimModPalette.Muted),
                     },
                 },
             };

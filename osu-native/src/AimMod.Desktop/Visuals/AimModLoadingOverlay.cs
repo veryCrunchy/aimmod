@@ -12,7 +12,7 @@ namespace AimMod.Desktop.Visuals;
 public partial class AimModLoadingOverlay : Container
 {
     private readonly Container statusPanel;
-    private readonly SpriteIcon spinner;
+    private readonly LoadingSpinner spinner;
     private readonly TruncatingSpriteText title;
     private readonly TruncatingSpriteText detail;
     private readonly ProgressBar progressBar;
@@ -30,7 +30,7 @@ public partial class AimModLoadingOverlay : Container
             {
                 RelativeSizeAxes = Axes.Both,
                 Colour = AimModPalette.Canvas,
-                Alpha = 1,
+                Alpha = 0.88f,
             },
             new InputBlocker { RelativeSizeAxes = Axes.Both },
             statusPanel = new Container
@@ -38,32 +38,30 @@ public partial class AimModLoadingOverlay : Container
                 Anchor = Anchor.Centre,
                 Origin = Anchor.Centre,
                 Width = 560,
-                Height = 168,
+                Height = 156,
                 Children = new Drawable[]
                 {
-                    spinner = new SpriteIcon
+                    spinner = new LoadingSpinner
                     {
                         Anchor = Anchor.TopCentre,
                         Origin = Anchor.Centre,
-                        Y = 19,
-                        Icon = FontAwesome.Solid.CircleNotch,
-                        Size = new(38),
-                        Colour = AimModPalette.Pink,
+                        Y = 25,
+                        Size = new(52),
                     },
                     title = new TruncatingSpriteText
                     {
                         Anchor = Anchor.TopCentre,
                         Origin = Anchor.TopCentre,
-                        Y = 54,
-                        Font = new FontUsage(size: 24, weight: "Bold"),
+                        Y = 61,
+                        Font = new FontUsage(size: 20, weight: "Bold"),
                         Colour = AimModPalette.Text,
                     },
                     detail = new TruncatingSpriteText
                     {
                         Anchor = Anchor.TopCentre,
                         Origin = Anchor.TopCentre,
-                        Y = 92,
-                        Font = new FontUsage(size: 13, weight: "SemiBold"),
+                        Y = 91,
+                        Font = new FontUsage(size: 12, weight: "SemiBold"),
                         Colour = AimModPalette.Muted,
                     },
                     progressBar = new ProgressBar(allowSeek: false)
@@ -71,7 +69,7 @@ public partial class AimModLoadingOverlay : Container
                         RelativeSizeAxes = Axes.None,
                         Anchor = Anchor.TopCentre,
                         Origin = Anchor.TopCentre,
-                        Y = 128,
+                        Y = 124,
                         Width = 420,
                         Height = 7,
                         FillColour = AimModPalette.Pink,
@@ -90,7 +88,11 @@ public partial class AimModLoadingOverlay : Container
         indeterminate = completed is null || total is null || total <= 0;
         if (!indeterminate)
             progressBar.CurrentTime = Math.Clamp((double)completed!.Value / total!.Value, 0, 1);
-        this.FadeIn(180, Easing.OutQuint);
+        this.FinishTransforms();
+        spinner.Show();
+        this.FadeTo(0.01f, 50)
+            .Then()
+            .FadeIn(LoadingSpinner.TRANSITION_DURATION, Easing.OutQuint);
     }
 
     public void SetProgress(string state, int completed, int total)
@@ -103,7 +105,9 @@ public partial class AimModLoadingOverlay : Container
     public void HideLoading()
     {
         indeterminate = false;
-        this.FadeOut(180, Easing.OutQuint);
+        this.FinishTransforms();
+        this.FadeOut(LoadingSpinner.TRANSITION_DURATION / 2, Easing.OutQuint);
+        spinner.Hide();
     }
 
     protected override void Update()
@@ -114,7 +118,6 @@ public partial class AimModLoadingOverlay : Container
         title.MaxWidth = panelWidth;
         detail.MaxWidth = panelWidth;
         progressBar.Width = Math.Max(220, panelWidth - 140);
-        spinner.Rotation = (float)(Time.Current / 3.2);
         if (indeterminate)
             progressBar.CurrentTime = 0.08 + 0.84 * (0.5 + 0.5 * Math.Sin(Time.Current / 520));
     }

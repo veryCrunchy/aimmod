@@ -5,7 +5,6 @@ using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
-using osu.Framework.Input.Events;
 using osu.Game.Graphics.Containers;
 using osu.Game.Graphics.Sprites;
 using osu.Game.Graphics.UserInterface;
@@ -89,7 +88,7 @@ public partial class ReplayHistoryScreen : CompositeDrawable
                     RelativeSizeAxes = Axes.X,
                     AutoSizeAxes = Axes.Y,
                     Direction = FillDirection.Vertical,
-                    Spacing = new(16),
+                    Spacing = new(AimModVisualStyle.SectionSpacing),
                     Padding = new MarginPadding { Bottom = 36 },
                     Children = new Drawable[]
                     {
@@ -104,7 +103,7 @@ public partial class ReplayHistoryScreen : CompositeDrawable
                     new GridContainer
                     {
                         RelativeSizeAxes = Axes.X,
-                        Height = 116,
+                        Height = 104,
                         ColumnDimensions = new[]
                         {
                             new Dimension(GridSizeMode.Relative, 0.25f),
@@ -159,14 +158,13 @@ public partial class ReplayHistoryScreen : CompositeDrawable
                             },
                         },
                     },
-                    new AimModSectionHeader(
+                    new AimModSubsectionHeader(
                         "Replay history",
-                        "Runs are grouped by difficulty so repeated attempts stay together.",
-                        "inspect a play"),
+                        "Grouped by difficulty"),
                     search = new OsuTextBox
                     {
                         RelativeSizeAxes = Axes.X,
-                        Height = 44,
+                        Height = AimModVisualStyle.ControlHeight,
                         PlaceholderText = "Search title, artist, difficulty, player, or mod",
                     },
                     runList = new FillFlowContainer<Drawable>
@@ -174,7 +172,7 @@ public partial class ReplayHistoryScreen : CompositeDrawable
                         RelativeSizeAxes = Axes.X,
                         AutoSizeAxes = Axes.Y,
                         Direction = FillDirection.Vertical,
-                        Spacing = new(8),
+                        Spacing = new(AimModVisualStyle.RelatedSpacing),
                     },
                     },
                 },
@@ -183,7 +181,7 @@ public partial class ReplayHistoryScreen : CompositeDrawable
         };
 
         adviceCard.Alpha = mode == ReplayHistoryScreenMode.Coaching ? 1 : 0;
-        adviceCard.Height = mode == ReplayHistoryScreenMode.Coaching ? 124 : 0;
+        adviceCard.Height = mode == ReplayHistoryScreenMode.Coaching ? 112 : 0;
         statisticsTrendGraphs.Alpha = mode == ReplayHistoryScreenMode.Statistics ? 1 : 0;
         statisticsTrendGraphs.Height = mode == ReplayHistoryScreenMode.Statistics ? 252 : 0;
 
@@ -425,23 +423,30 @@ public partial class ReplayHistoryScreen : CompositeDrawable
 
     private static Container createAdviceCard(out SpriteText title, out SpriteText detail)
     {
-        var card = new AimModSlantedAccentPanel
+        var card = new Container
         {
             RelativeSizeAxes = Axes.X,
-            Height = 124,
-            AccentColour = AimModPalette.Success,
+            Height = 112,
+            Masking = true,
+            CornerRadius = AimModVisualStyle.CardRadius,
         };
-        card.Child = new FillFlowContainer
+        card.Children = new Drawable[]
         {
-            RelativeSizeAxes = Axes.X,
-            AutoSizeAxes = Axes.Y,
-            Direction = FillDirection.Vertical,
-            Spacing = new(7),
-            Children = new Drawable[]
+            new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
+            new Box { RelativeSizeAxes = Axes.Y, Width = 3, Colour = AimModPalette.Success },
+            new FillFlowContainer
             {
-                label("BEST NEXT PLAY", 11, AimModPalette.Pink, "Bold"),
-                title = label("Loading your recent runs...", 21, AimModPalette.Text, "Bold"),
-                detail = label(string.Empty, 14, AimModPalette.Muted),
+                RelativeSizeAxes = Axes.X,
+                AutoSizeAxes = Axes.Y,
+                Padding = new MarginPadding { Left = 16, Top = 14, Right = 16 },
+                Direction = FillDirection.Vertical,
+                Spacing = new(AimModVisualStyle.RelatedSpacing),
+                Children = new Drawable[]
+                {
+                    label("FOCUS FOR YOUR NEXT PLAY", 10, AimModPalette.Success, "Bold"),
+                    title = label("Loading your recent runs...", 18, AimModPalette.Text, "Bold"),
+                    detail = label(string.Empty, 12, AimModPalette.Muted),
+                },
             },
         };
         return card;
@@ -452,15 +457,13 @@ public partial class ReplayHistoryScreen : CompositeDrawable
         var card = new Container
         {
             RelativeSizeAxes = Axes.Both,
-            Padding = new MarginPadding { Right = 10 },
+            Padding = new MarginPadding { Right = AimModVisualStyle.RowSpacing },
         };
         card.Child = new Container
         {
             RelativeSizeAxes = Axes.Both,
             Masking = true,
-            CornerRadius = 11,
-            BorderThickness = 1,
-            BorderColour = AimModPalette.Border,
+            CornerRadius = AimModVisualStyle.CardRadius,
             Children = new Drawable[]
             {
                 new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
@@ -468,14 +471,14 @@ public partial class ReplayHistoryScreen : CompositeDrawable
                 {
                     RelativeSizeAxes = Axes.X,
                     AutoSizeAxes = Axes.Y,
-                    Padding = new MarginPadding(16),
+                    Padding = new MarginPadding(14),
                     Direction = FillDirection.Vertical,
-                    Spacing = new(7),
+                    Spacing = new(AimModVisualStyle.RelatedSpacing),
                     Children = new Drawable[]
                     {
-                        label(heading, 12, AimModPalette.Muted, "SemiBold"),
-                        value = label("-", 24, AimModPalette.Text, "Bold"),
-                        detail = label(string.Empty, 11, AimModPalette.Muted),
+                        label(heading, 10, AimModPalette.Muted, "Bold"),
+                        value = label("-", 22, AimModPalette.Text, "Bold"),
+                        detail = label(string.Empty, 10, AimModPalette.Muted),
                     },
                 },
             },
@@ -488,26 +491,24 @@ public partial class ReplayHistoryScreen : CompositeDrawable
         var card = new Container
         {
             RelativeSizeAxes = Axes.Both,
-            Padding = new MarginPadding { Right = 10 },
+            Padding = new MarginPadding { Right = AimModVisualStyle.RowSpacing },
         };
         card.Child = new Container
         {
             RelativeSizeAxes = Axes.Both,
             Masking = true,
-            CornerRadius = 12,
-            BorderThickness = 1,
-            BorderColour = AimModPalette.Border,
+            CornerRadius = AimModVisualStyle.CardRadius,
         };
         OsuSpriteText heading = label(headingText, 15, AimModPalette.Text, "SemiBold");
-        heading.Position = new(18, 15);
+        heading.Position = new(16, 14);
         OsuSpriteText range = label("Waiting for plays", 11, AimModPalette.Muted);
         range.Anchor = Anchor.TopRight;
         range.Origin = Anchor.TopRight;
-        range.Margin = new MarginPadding { Top = 18, Right = 18 };
+        range.Margin = new MarginPadding { Top = 17, Right = 16 };
         var graph = new LineGraph
         {
             RelativeSizeAxes = Axes.Both,
-            Padding = new MarginPadding { Top = 58, Bottom = 42, Left = 18, Right = 18 },
+            Padding = new MarginPadding { Top = 54, Bottom = 38, Left = 16, Right = 16 },
             LineColour = colour,
             DefaultValueCount = 60,
         };
@@ -671,11 +672,9 @@ public partial class ReplayHistoryScreen : CompositeDrawable
         public ReplayHistoryEmptyState(string title, string detail)
         {
             RelativeSizeAxes = Axes.X;
-            Height = 210;
+            Height = 154;
             Masking = true;
-            CornerRadius = 8;
-            BorderThickness = 1;
-            BorderColour = AimModPalette.Border;
+            CornerRadius = AimModVisualStyle.CardRadius;
             InternalChildren = new Drawable[]
             {
                 new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
@@ -683,8 +682,8 @@ public partial class ReplayHistoryScreen : CompositeDrawable
                 {
                     Anchor = Anchor.TopCentre,
                     Origin = Anchor.TopCentre,
-                    Y = 42,
-                    Size = new(30),
+                    Y = 28,
+                    Size = new(24),
                     Icon = FontAwesome.Solid.PlayCircle,
                     Colour = AimModPalette.Cyan,
                 },
@@ -694,20 +693,20 @@ public partial class ReplayHistoryScreen : CompositeDrawable
                     Origin = Anchor.TopCentre,
                     AutoSizeAxes = Axes.Y,
                     RelativeSizeAxes = Axes.X,
-                    Y = 88,
+                    Y = 66,
                     Padding = new MarginPadding { Horizontal = 40 },
                     Direction = FillDirection.Vertical,
-                    Spacing = new(8),
+                    Spacing = new(AimModVisualStyle.RelatedSpacing),
                     Children = new Drawable[]
                     {
-                        label(title, 18, AimModPalette.Text, "SemiBold").With(text =>
+                        label(title, 15, AimModPalette.Text, "SemiBold").With(text =>
                         {
                             text.Anchor = Anchor.TopCentre;
                             text.Origin = Anchor.TopCentre;
                         }),
                         new TextFlowContainer(sprite =>
                         {
-                            sprite.Font = new FontUsage(size: 12);
+                            sprite.Font = new FontUsage(size: 11);
                             sprite.Colour = AimModPalette.Muted;
                         })
                         {
@@ -721,9 +720,8 @@ public partial class ReplayHistoryScreen : CompositeDrawable
         }
     }
 
-    private partial class RecentMapGroupRow : ClickableContainer
+    private partial class RecentMapGroupRow : AimModInteractiveSurface
     {
-        private readonly Box background;
         private readonly TruncatingSpriteText title;
         private readonly TruncatingSpriteText artist;
 
@@ -731,53 +729,50 @@ public partial class ReplayHistoryScreen : CompositeDrawable
         {
             CoachingRecentRun latest = runs[0];
             RelativeSizeAxes = Axes.X;
-            Height = 76;
+            Height = 62;
             Action = action;
-            Masking = true;
-            CornerRadius = 8;
-            BorderThickness = 1;
-            BorderColour = expanded ? AimModPalette.Cyan.Opacity(0.65f) : AimModPalette.Border;
+            CornerRadius = AimModVisualStyle.CardRadius;
+            BackgroundColour = expanded ? AimModPalette.PanelRaised : AimModPalette.Panel;
             Children = new Drawable[]
             {
-                background = new Box { RelativeSizeAxes = Axes.Both, Colour = expanded ? AimModPalette.PanelRaised : AimModPalette.Panel },
                 new Box
                 {
                     RelativeSizeAxes = Axes.Y,
-                    Width = 5,
+                    Width = 3,
                     Colour = AimModVisualStyle.DifficultyColour(latest.StarRating),
                 },
                 title = new TruncatingSpriteText
                 {
                     Text = $"{latest.Title} [{latest.Difficulty}]",
-                    Position = new(18, 11),
-                    Font = new FontUsage(size: 15, weight: "SemiBold"),
+                    Position = new(14, 8),
+                    Font = new FontUsage(size: 13, weight: "SemiBold"),
                     Colour = AimModPalette.Text,
                     MaxWidth = 600,
                 },
                 artist = new TruncatingSpriteText
                 {
                     Text = latest.Artist,
-                    Position = new(18, 35),
-                    Font = new FontUsage(size: 11),
+                    Position = new(14, 30),
+                    Font = new FontUsage(size: 10),
                     Colour = AimModPalette.Muted,
                     MaxWidth = 600,
                 },
                 label(
                     $"{runs.Count:N0} {(runs.Count == 1 ? "attempt" : "attempts")}  //  best {runs.Max(run => run.Accuracy):P2}",
-                    11,
+                    10,
                     AimModPalette.Cyan,
                     "SemiBold").With(text =>
                 {
                     text.Anchor = Anchor.CentreRight;
                     text.Origin = Anchor.CentreRight;
-                    text.Margin = new MarginPadding { Right = 48 };
+                    text.Margin = new MarginPadding { Right = 42 };
                 }),
                 new SpriteIcon
                 {
                     Anchor = Anchor.CentreRight,
                     Origin = Anchor.CentreRight,
-                    Position = new(-18, 0),
-                    Size = new(13),
+                    Position = new(-14, 0),
+                    Size = new(11),
                     Icon = expanded ? FontAwesome.Solid.ChevronUp : FontAwesome.Solid.ChevronDown,
                     Colour = AimModPalette.Muted,
                 },
@@ -787,44 +782,28 @@ public partial class ReplayHistoryScreen : CompositeDrawable
         protected override void Update()
         {
             base.Update();
-            title.MaxWidth = artist.MaxWidth = Math.Max(160, DrawWidth - 390);
-        }
-
-        protected override bool OnHover(HoverEvent e)
-        {
-            background.FadeColour(AimModPalette.PanelHover, 100);
-            return true;
-        }
-
-        protected override void OnHoverLost(HoverLostEvent e)
-        {
-            background.FadeColour(AimModPalette.Panel, 100);
-            base.OnHoverLost(e);
+            title.MaxWidth = artist.MaxWidth = Math.Max(160, DrawWidth - 350);
         }
     }
 
-    private partial class RecentRunRow : ClickableContainer
+    private partial class RecentRunRow : AimModInteractiveSurface
     {
-        private readonly Action? action;
-        private readonly Box background;
-
         public RecentRunRow(CoachingRecentRun run, Action? action)
         {
-            this.action = action;
             RelativeSizeAxes = Axes.X;
-            Height = 64;
-            Masking = true;
-            CornerRadius = 8;
+            Height = 52;
+            CornerRadius = AimModVisualStyle.ControlRadius;
+            BackgroundColour = AimModPalette.PanelRaised;
+            Action = action;
 
             string mods = run.Mods.Count == 0 ? "No Mod" : string.Join(" ", run.Mods);
             Children = new Drawable[]
             {
-                background = new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
                 new Box
                 {
                     RelativeSizeAxes = Axes.Y,
-                    Width = 5,
-                    Colour = AimModVisualStyle.DifficultyColour(run.StarRating),
+                    Width = 3,
+                    Colour = action is null ? AimModPalette.Muted : AimModPalette.Cyan,
                 },
                 new FillFlowContainer
                 {
@@ -833,14 +812,14 @@ public partial class ReplayHistoryScreen : CompositeDrawable
                     RelativeSizeAxes = Axes.X,
                     AutoSizeAxes = Axes.Y,
                     Width = 1,
-                    Margin = new MarginPadding { Left = 18 },
-                    Padding = new MarginPadding { Right = 350 },
+                    Margin = new MarginPadding { Left = 14 },
+                    Padding = new MarginPadding { Right = 330 },
                     Direction = FillDirection.Vertical,
                     Spacing = new(3),
                     Children = new Drawable[]
                     {
-                        label($"{run.PlayedAt:yyyy-MM-dd HH:mm}  //  {mods}", 12, AimModPalette.Text, "SemiBold"),
-                        label(run.PerformancePoints is { } pp ? $"{pp:0.#}pp recorded" : "Performance points unavailable", 10, AimModPalette.Muted),
+                        label($"{run.PlayedAt:yyyy-MM-dd HH:mm}  //  {mods}", 11, AimModPalette.Text, "SemiBold"),
+                        label(run.PerformancePoints is { } pp ? $"{pp:0.#}pp recorded" : "Performance points unavailable", 9, AimModPalette.Muted),
                     },
                 },
                 new FillFlowContainer
@@ -848,39 +827,21 @@ public partial class ReplayHistoryScreen : CompositeDrawable
                     Anchor = Anchor.CentreRight,
                     Origin = Anchor.CentreRight,
                     AutoSizeAxes = Axes.Both,
-                    Margin = new MarginPadding { Right = 18 },
+                    Margin = new MarginPadding { Right = 14 },
                     Direction = FillDirection.Horizontal,
-                    Spacing = new(10),
+                    Spacing = new(8),
                     Children = new Drawable[]
                     {
-                        label($"{run.Accuracy:P2}", 13, AimModPalette.Cyan, "Bold"),
-                        label($"{run.MissCount:N0} {(run.MissCount == 1 ? "miss" : "misses")}", 11,
+                        label($"{run.Accuracy:P2}", 12, AimModPalette.Cyan, "Bold"),
+                        label($"{run.MissCount:N0} {(run.MissCount == 1 ? "miss" : "misses")}", 10,
                             run.MissCount == 0 ? AimModPalette.Success : AimModPalette.Muted),
                         new AimModDifficultyPill(run.StarRating),
-                        label(run.CanAnalyse ? "Inspect" : "Unavailable", 11,
+                        label(run.CanAnalyse ? "Inspect" : "Unavailable", 10,
                             run.CanAnalyse ? AimModPalette.Pink : AimModPalette.Muted, "SemiBold"),
                     },
                 },
             };
             Alpha = run.CanAnalyse ? 1 : 0.62f;
-        }
-
-        protected override bool OnClick(ClickEvent e)
-        {
-            action?.Invoke();
-            return action is not null;
-        }
-
-        protected override bool OnHover(HoverEvent e)
-        {
-            background.FadeColour(AimModPalette.PanelHover, 100);
-            return true;
-        }
-
-        protected override void OnHoverLost(HoverLostEvent e)
-        {
-            background.FadeColour(AimModPalette.Panel, 100);
-            base.OnHoverLost(e);
         }
     }
 }

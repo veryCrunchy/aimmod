@@ -59,17 +59,16 @@ public partial class NativeSkinsScreen : CompositeDrawable
                 Font = new FontUsage(size: 10, weight: "Bold"),
                 Colour = AimModPalette.Cyan,
             },
-            searchPanel = new CircularContainer
+            searchPanel = new Container
             {
-                Y = 97,
+                Y = 96,
                 Width = 560,
-                Height = 46,
+                Height = AimModVisualStyle.ControlHeight,
                 Masking = true,
-                BorderThickness = 1,
-                BorderColour = AimModPalette.Border,
+                CornerRadius = AimModVisualStyle.ControlRadius,
                 Children = new Drawable[]
                 {
-                    new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
+                    new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
                     searchBox = new OsuTextBox
                     {
                         RelativeSizeAxes = Axes.Both,
@@ -79,15 +78,15 @@ public partial class NativeSkinsScreen : CompositeDrawable
             },
             status = new TruncatingSpriteText
             {
-                Y = 158,
+                Y = 148,
                 Text = source is null ? "osu!lazer library not connected" : "Reading installed skins",
-                Font = new FontUsage(size: 12, weight: "SemiBold"),
+                Font = new FontUsage(size: 11, weight: "SemiBold"),
                 Colour = AimModPalette.Muted,
             },
             new Container
             {
                 RelativeSizeAxes = Axes.Both,
-                Padding = new MarginPadding { Top = 188 },
+                Padding = new MarginPadding { Top = 174 },
                 Children = new Drawable[]
                 {
                     listPanel = new Container
@@ -95,22 +94,20 @@ public partial class NativeSkinsScreen : CompositeDrawable
                         RelativeSizeAxes = Axes.Both,
                         Width = 0.6f,
                         Masking = true,
-                        CornerRadius = 12,
-                        BorderThickness = 1,
-                        BorderColour = AimModPalette.Border,
+                        CornerRadius = AimModVisualStyle.CardRadius,
                         Children = new Drawable[]
                         {
                             new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
                             new OsuScrollContainer
                             {
                                 RelativeSizeAxes = Axes.Both,
-                                Padding = new MarginPadding(14),
+                                Padding = new MarginPadding(AimModVisualStyle.RowSpacing),
                                 Child = list = new FillFlowContainer
                                 {
                                     RelativeSizeAxes = Axes.X,
                                     AutoSizeAxes = Axes.Y,
                                     Direction = FillDirection.Vertical,
-                                    Spacing = new(8),
+                                    Spacing = new(AimModVisualStyle.RelatedSpacing),
                                 },
                             },
                             listState = new SkinListState(
@@ -128,16 +125,14 @@ public partial class NativeSkinsScreen : CompositeDrawable
                         RelativeSizeAxes = Axes.Both,
                         Width = 0.385f,
                         Masking = true,
-                        CornerRadius = 12,
-                        BorderThickness = 1,
-                        BorderColour = AimModPalette.Border,
+                        CornerRadius = AimModVisualStyle.CardRadius,
                         Children = new Drawable[]
                         {
                             new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
                             new Container
                             {
                                 RelativeSizeAxes = Axes.X,
-                                Height = 235,
+                                Height = 220,
                                 Child = preview = new Container
                                 {
                                     RelativeSizeAxes = Axes.Both,
@@ -164,15 +159,15 @@ public partial class NativeSkinsScreen : CompositeDrawable
                             {
                                 RelativeSizeAxes = Axes.X,
                                 AutoSizeAxes = Axes.Y,
-                                Y = 255,
-                                Padding = new MarginPadding { Horizontal = 22 },
+                                Y = 240,
+                                Padding = new MarginPadding { Horizontal = AimModVisualStyle.SectionSpacing },
                                 Direction = FillDirection.Vertical,
-                                Spacing = new(8),
+                                Spacing = new(AimModVisualStyle.RelatedSpacing),
                                 Children = new Drawable[]
                                 {
-                                    selectedName = truncatingDetailText(24, AimModPalette.Text, "Bold", "Select a skin"),
-                                    selectedCreator = truncatingDetailText(13, AimModPalette.Cyan, "SemiBold", "Installed skin details appear here."),
-                                    selectedDetails = truncatingDetailText(12, AimModPalette.Muted, "Regular", string.Empty),
+                                    selectedName = truncatingDetailText(20, AimModPalette.Text, "Bold", "Select a skin"),
+                                    selectedCreator = truncatingDetailText(12, AimModPalette.Cyan, "SemiBold", "Installed skin details appear here."),
+                                    selectedDetails = truncatingDetailText(11, AimModPalette.Muted, "Regular", string.Empty),
                                     applyButton = new ApplyButton(applySelected),
                                 },
                             },
@@ -191,7 +186,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
         searchPanel.Width = Math.Clamp(availableWidth, 280, 560);
         status.MaxWidth = availableWidth;
 
-        const float panelGap = 16;
+        const float panelGap = AimModVisualStyle.SectionSpacing;
         float listWidth = Math.Max(300, (availableWidth - panelGap) * 0.6f);
         listWidth = Math.Min(listWidth, Math.Max(0, availableWidth - 280 - panelGap));
         listPanel.Width = listWidth;
@@ -200,7 +195,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
         detailPanel.Width = Math.Max(0, availableWidth - listWidth - panelGap);
         detailPanel.RelativeSizeAxes = Axes.Y;
 
-        float detailTextWidth = Math.Max(80, detailPanel.DrawWidth - 44);
+        float detailTextWidth = Math.Max(80, detailPanel.DrawWidth - 2 * AimModVisualStyle.SectionSpacing);
         selectedName.MaxWidth = detailTextWidth;
         selectedCreator.MaxWidth = detailTextWidth;
         selectedDetails.MaxWidth = detailTextWidth;
@@ -456,7 +451,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
                 Width = 420,
                 AutoSizeAxes = Axes.Y,
                 Direction = FillDirection.Vertical,
-                Spacing = new(10),
+                Spacing = new(AimModVisualStyle.RowSpacing),
                 Children = new Drawable[]
                 {
                     icon = new SpriteIcon
@@ -464,7 +459,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
                         Anchor = Anchor.TopCentre,
                         Origin = Anchor.TopCentre,
                         Icon = initialIcon,
-                        Size = new(30),
+                        Size = new(26),
                         Colour = AimModPalette.Cyan,
                     },
                     title = new OsuSpriteText
@@ -472,7 +467,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
                         Anchor = Anchor.TopCentre,
                         Origin = Anchor.TopCentre,
                         Text = initialTitle,
-                        Font = new FontUsage(size: 20, weight: "Bold"),
+                        Font = new FontUsage(size: 18, weight: "Bold"),
                         Colour = AimModPalette.Text,
                     },
                     detail = new OsuSpriteText
@@ -496,49 +491,39 @@ public partial class NativeSkinsScreen : CompositeDrawable
         }
     }
 
-    private partial class SkinRow : ClickableContainer
+    private partial class SkinRow : AimModInteractiveSurface
     {
-        private readonly Action action;
-        private readonly Box background;
-        private readonly Colour4 restingColour;
         private readonly TruncatingSpriteText name;
         private readonly TruncatingSpriteText creator;
         private readonly FillFlowContainer<Drawable> badgeFlow;
 
         public SkinRow(InstalledLazerSkin skin, bool selected, bool activeInLazer, bool activeInAimMod, Action action)
         {
-            this.action = action;
-            restingColour = selected ? AimModPalette.PanelHover : AimModPalette.PanelRaised;
             RelativeSizeAxes = Axes.X;
-            Height = 76;
-            Masking = true;
-            CornerRadius = 9;
-            BorderThickness = 1;
-            BorderColour = selected ? AimModPalette.Pink : AimModPalette.Border;
+            Height = 68;
+            CornerRadius = AimModVisualStyle.ControlRadius;
+            BackgroundColour = selected ? AimModPalette.PanelHover : AimModPalette.PanelRaised;
+            Action = action;
             Children = new Drawable[]
             {
-                background = new Box
-                {
-                    RelativeSizeAxes = Axes.Both,
-                    Colour = restingColour,
-                },
                 new Box
                 {
                     RelativeSizeAxes = Axes.Y,
-                    Width = 4,
+                    Width = 3,
                     Colour = activeInAimMod ? AimModPalette.Success : activeInLazer ? AimModPalette.Cyan : AimModPalette.Pink,
+                    Alpha = selected || activeInLazer || activeInAimMod ? 1 : 0,
                 },
-                name = truncatingDetailText(16, AimModPalette.Text, "SemiBold", skin.Name).With(text => text.Position = new(18, 17)),
+                name = truncatingDetailText(14, AimModPalette.Text, "SemiBold", skin.Name).With(text => text.Position = new(16, 14)),
                 creator = truncatingDetailText(11, AimModPalette.Muted, "Regular", skin.Creator.Length > 0 ? skin.Creator : "Creator not specified")
-                    .With(text => text.Position = new(18, 43)),
+                    .With(text => text.Position = new(16, 38)),
                 badgeFlow = new FillFlowContainer<Drawable>
                 {
                     Anchor = Anchor.CentreRight,
                     Origin = Anchor.CentreRight,
                     AutoSizeAxes = Axes.Both,
-                    Margin = new MarginPadding { Right = 14 },
+                    Margin = new MarginPadding { Right = 12 },
                     Direction = FillDirection.Horizontal,
-                    Spacing = new(6),
+                    Spacing = new(AimModVisualStyle.RelatedSpacing),
                     Children = badges(skin, activeInLazer, activeInAimMod),
                 },
             };
@@ -547,7 +532,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
         protected override void Update()
         {
             base.Update();
-            float textWidth = Math.Max(60, DrawWidth - badgeFlow.DrawWidth - 54);
+            float textWidth = Math.Max(60, DrawWidth - badgeFlow.DrawWidth - 46);
             name.MaxWidth = textWidth;
             creator.MaxWidth = textWidth;
         }
@@ -564,29 +549,11 @@ public partial class NativeSkinsScreen : CompositeDrawable
             return result.ToArray();
         }
 
-        protected override bool OnClick(ClickEvent e)
-        {
-            action();
-            return true;
-        }
-
-        protected override bool OnHover(HoverEvent e)
-        {
-            background.FadeColour(AimModPalette.PanelHover, 100);
-            return true;
-        }
-
-        protected override void OnHoverLost(HoverLostEvent e)
-        {
-            background.FadeColour(restingColour, 100);
-            base.OnHoverLost(e);
-        }
     }
 
-    private partial class ApplyButton : ClickableContainer
+    private partial class ApplyButton : AimModInteractiveSurface
     {
         private readonly Action action;
-        private readonly Box background;
         private readonly SpriteText label;
         private bool enabled;
 
@@ -594,33 +561,30 @@ public partial class NativeSkinsScreen : CompositeDrawable
         {
             this.action = action;
             RelativeSizeAxes = Axes.X;
-            Height = 48;
-            Margin = new MarginPadding { Top = 14 };
-            Masking = true;
-            CornerRadius = 9;
-            Children = new Drawable[]
+            Height = AimModVisualStyle.ControlHeight;
+            Margin = new MarginPadding { Top = AimModVisualStyle.RowSpacing };
+            CornerRadius = AimModVisualStyle.ControlRadius;
+            BackgroundColour = AimModPalette.PanelHover;
+            Child = label = detailText(13, AimModPalette.Text, "Bold", "Select a skin").With(text =>
             {
-                background = new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Pink },
-                label = detailText(14, AimModPalette.Text, "Bold", "Select a skin").With(text =>
-                {
-                    text.Anchor = Anchor.Centre;
-                    text.Origin = Anchor.Centre;
-                }),
-            };
+                text.Anchor = Anchor.Centre;
+                text.Origin = Anchor.Centre;
+            });
         }
 
         public void SetState(bool enabled, string text)
         {
             this.enabled = enabled;
             label.Text = text;
-            background.Colour = enabled ? AimModPalette.Pink : AimModPalette.PanelHover;
-            this.FadeTo(enabled ? 1 : 0.7f, 100);
+            BackgroundColour = enabled ? AimModPalette.Pink : AimModPalette.PanelHover;
+            this.FadeTo(enabled ? 1 : 0.65f, AimModVisualStyle.FastTransition);
         }
 
         protected override bool OnClick(ClickEvent e)
         {
             if (enabled)
                 action();
+            base.OnClick(e);
             return true;
         }
     }

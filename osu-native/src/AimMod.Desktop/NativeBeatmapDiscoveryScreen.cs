@@ -165,6 +165,11 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
     private readonly TruncatingSpriteText resultStatus;
     private readonly FillFlowContainer results;
     private readonly AimModLoadingOverlay loadingOverlay;
+    private readonly Container filterBand;
+    private readonly Container searchGroup;
+    private readonly Container categoryGroup;
+    private readonly Container sortGroup;
+    private readonly Container resultViewport;
     private readonly RangeSlider starSlider;
     private readonly OsuDropdown<OfficialBeatmapCategory> categoryDropdown;
     private readonly OsuDropdown<OfficialBeatmapSort> sortDropdown;
@@ -190,68 +195,66 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                 "Discover beatmaps",
                 "Save a set in AimMod, then choose whether to send the same download to osu!lazer.",
                 "osu! API") { Depth = -20 },
-            new SpriteText
+            filterBand = new Container
             {
-                Y = 72,
-                Text = "SEARCH ONLINE",
-                Font = new FontUsage(size: 10, weight: "Bold"),
-                Colour = AimModPalette.Cyan,
-                Depth = -20,
-            },
-            searchBox = new OsuTextBox
-            {
+                Position = new(0, 76),
                 RelativeSizeAxes = Axes.X,
-                Width = 0.43f,
-                Height = 46,
-                Y = 91,
-                PlaceholderText = "Search title, artist, mapper, or tag",
+                Height = 72,
+                Masking = true,
+                CornerRadius = AimModVisualStyle.ControlRadius,
                 Depth = -20,
-            },
-            starSlider = new RangeSlider
-            {
-                Anchor = Anchor.TopRight,
-                Origin = Anchor.TopRight,
-                Position = new(-292, 72),
-                Size = new(350, 65),
-                Label = "Star rating",
-                LowerBound = minimumStars,
-                UpperBound = maximumStars,
-                DefaultStringLowerBound = "0",
-                DefaultStringUpperBound = "10+",
-                TooltipSuffix = "stars",
-                NubWidth = 30,
-                Depth = -20,
-            },
-            categoryDropdown = new OsuDropdown<OfficialBeatmapCategory>
-            {
-                Y = 151,
-                Width = 190,
-                Items = new[] { OfficialBeatmapCategory.Any, OfficialBeatmapCategory.Ranked, OfficialBeatmapCategory.Loved, OfficialBeatmapCategory.Pending },
-                Current = category,
-                Depth = -20,
-            },
-            sortDropdown = new OsuDropdown<OfficialBeatmapSort>
-            {
-                Anchor = Anchor.TopRight,
-                Origin = Anchor.TopRight,
-                Y = 151,
-                Width = 190,
-                Items = new[] { OfficialBeatmapSort.Relevance, OfficialBeatmapSort.Updated, OfficialBeatmapSort.Plays },
-                Current = sort,
-                Depth = -20,
+                Children = new Drawable[]
+                {
+                    new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
+                    new Box { RelativeSizeAxes = Axes.X, Height = 2, Colour = AimModPalette.Pink },
+                    searchGroup = new Container
+                    {
+                        Children = new Drawable[]
+                        {
+                            filterLabel("SEARCH"),
+                            searchBox = new OsuTextBox
+                            {
+                                Position = new(0, 17),
+                                RelativeSizeAxes = Axes.X,
+                                Height = AimModVisualStyle.CompactControlHeight,
+                                PlaceholderText = "Title, artist, mapper, or tag",
+                            },
+                        },
+                    },
+                    starSlider = new RangeSlider
+                    {
+                        Label = "Star rating",
+                        LowerBound = minimumStars,
+                        UpperBound = maximumStars,
+                        DefaultStringLowerBound = "0",
+                        DefaultStringUpperBound = "10+",
+                        TooltipSuffix = "stars",
+                        NubWidth = 28,
+                    },
+                    categoryGroup = dropdownGroup("STATUS", categoryDropdown = new OsuDropdown<OfficialBeatmapCategory>
+                    {
+                        Items = new[] { OfficialBeatmapCategory.Any, OfficialBeatmapCategory.Ranked, OfficialBeatmapCategory.Loved, OfficialBeatmapCategory.Pending },
+                        Current = category,
+                    }),
+                    sortGroup = dropdownGroup("SORT", sortDropdown = new OsuDropdown<OfficialBeatmapSort>
+                    {
+                        Items = new[] { OfficialBeatmapSort.Relevance, OfficialBeatmapSort.Updated, OfficialBeatmapSort.Plays },
+                        Current = sort,
+                    }),
+                },
             },
             resultStatus = new TruncatingSpriteText
             {
-                Y = 202,
+                Y = 160,
                 Text = "Connecting to osu!...",
-                Font = new FontUsage(size: 12, weight: "SemiBold"),
+                Font = new FontUsage(size: 11, weight: "SemiBold"),
                 Colour = AimModPalette.Muted,
                 Depth = -20,
             },
-            new Container
+            resultViewport = new Container
             {
                 RelativeSizeAxes = Axes.Both,
-                Padding = new MarginPadding { Top = 230 },
+                Padding = new MarginPadding { Top = 184 },
                 Masking = true,
                 Depth = 10,
                 Child = new OsuScrollContainer
@@ -262,7 +265,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                         RelativeSizeAxes = Axes.X,
                         AutoSizeAxes = Axes.Y,
                         Direction = FillDirection.Vertical,
-                        Spacing = new(8),
+                        Spacing = new(AimModVisualStyle.RelatedSpacing),
                         Padding = new MarginPadding { Right = 10, Bottom = 32 },
                     },
                 },
@@ -276,27 +279,73 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
         base.Update();
 
         float width = Math.Max(640, DrawWidth);
-        const float gap = 24;
-        bool compact = width < 1_050;
-        float searchWidth = compact ? (width - gap) * 0.52f : Math.Clamp(width * 0.43f, 360, 620);
-        float sliderWidth = compact ? width - gap - searchWidth : Math.Clamp(width * 0.34f, 300, 420);
+        const float inset = 12;
+        const float gap = AimModVisualStyle.RelatedSpacing;
+        bool compact = width < 940;
 
-        searchBox.Width = searchWidth;
-        starSlider.Anchor = Anchor.TopLeft;
-        starSlider.Origin = Anchor.TopLeft;
-        starSlider.Position = new(searchWidth + gap, 72);
-        starSlider.Size = new(sliderWidth, 65);
+        if (compact)
+        {
+            float columnWidth = (width - inset * 2 - gap) / 2;
+            filterBand.Height = 128;
+            placeGroup(searchGroup, inset, 8, columnWidth, 54);
+            placeSlider(starSlider, inset + columnWidth + gap, 3, columnWidth);
+            placeGroup(categoryGroup, inset, 68, columnWidth, 52);
+            placeGroup(sortGroup, inset + columnWidth + gap, 68, columnWidth, 52);
+            resultStatus.Y = 216;
+            resultViewport.Padding = new MarginPadding { Top = 240 };
+        }
+        else
+        {
+            float available = width - inset * 2 - gap * 3;
+            float searchWidth = Math.Clamp(available * 0.34f, 280, 430);
+            float sliderWidth = Math.Clamp(available * 0.29f, 240, 360);
+            float dropdownWidth = (available - searchWidth - sliderWidth) / 2;
+            filterBand.Height = 72;
+            placeGroup(searchGroup, inset, 8, searchWidth, 54);
+            placeSlider(starSlider, inset + searchWidth + gap, 3, sliderWidth);
+            placeGroup(categoryGroup, inset + searchWidth + gap + sliderWidth + gap, 8, dropdownWidth, 54);
+            placeGroup(sortGroup, width - inset - dropdownWidth, 8, dropdownWidth, 54);
+            resultStatus.Y = 160;
+            resultViewport.Padding = new MarginPadding { Top = 184 };
+        }
 
-        float dropdownWidth = Math.Clamp((width - gap) / 2, 180, 230);
-        categoryDropdown.Anchor = Anchor.TopLeft;
-        categoryDropdown.Origin = Anchor.TopLeft;
-        categoryDropdown.Position = new(0, 151);
-        categoryDropdown.Width = dropdownWidth;
-        sortDropdown.Anchor = Anchor.TopLeft;
-        sortDropdown.Origin = Anchor.TopLeft;
-        sortDropdown.Position = new(width - dropdownWidth, 151);
-        sortDropdown.Width = dropdownWidth;
         resultStatus.MaxWidth = width;
+    }
+
+    private static void placeSlider(RangeSlider slider, float x, float y, float width)
+    {
+        slider.Anchor = Anchor.TopLeft;
+        slider.Origin = Anchor.TopLeft;
+        slider.Position = new(x, y);
+        slider.Size = new(width, 62);
+    }
+
+    private static void placeGroup(Container group, float x, float y, float width, float height)
+    {
+        group.Position = new(x, y);
+        group.Size = new(width, height);
+    }
+
+    private static SpriteText filterLabel(string value) => new()
+    {
+        Text = value,
+        Font = new FontUsage(size: 8, weight: "Bold"),
+        Colour = AimModPalette.Cyan,
+    };
+
+    private static Container dropdownGroup(string label, Drawable dropdown)
+    {
+        dropdown.Position = new(0, 17);
+        dropdown.RelativeSizeAxes = Axes.X;
+        dropdown.Width = 1;
+        return new Container
+        {
+            Children = new Drawable[]
+            {
+                filterLabel(label),
+                dropdown,
+            },
+        };
     }
 
     protected override void LoadComplete()
@@ -442,7 +491,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
         base.Dispose(isDisposing);
     }
 
-    private partial class OnlineBeatmapCard : Container
+    private partial class OnlineBeatmapCard : AimModInteractiveSurface
     {
         private readonly OfficialBeatmapSet set;
         private readonly Func<OfficialBeatmapSet, Task<OnlineBeatmapImportResult>> import;
@@ -467,11 +516,9 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
             this.import = import;
             this.installInLazer = installInLazer;
             RelativeSizeAxes = Axes.X;
-            Height = 122;
-            Masking = true;
-            CornerRadius = 8;
-            BorderThickness = 1;
-            BorderColour = AimModPalette.Border;
+            Height = 104;
+            CornerRadius = AimModVisualStyle.ControlRadius;
+            BackgroundColour = AimModPalette.Panel;
             double maximumStars = set.Difficulties.Count == 0 ? 0 : set.Difficulties.Max(difficulty => difficulty.StarRating);
             Colour4 difficultyColour = AimModVisualStyle.DifficultyColour(maximumStars);
 
@@ -481,20 +528,20 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                 {
                     RelativeSizeAxes = Axes.Both,
                     Colour = ColourInfo.GradientHorizontal(difficultyColour, AimModPalette.Panel),
-                    Alpha = 0.28f,
+                    Alpha = 0.18f,
                 },
                 new AimModOnlineArtworkHost(set.CoverUrl),
                 new Box
                 {
                     RelativeSizeAxes = Axes.Both,
                     Colour = ColourInfo.GradientHorizontal(AimModPalette.Canvas, AimModPalette.Panel),
-                    Alpha = 0.80f,
+                    Alpha = 0.86f,
                 },
                 new Box { RelativeSizeAxes = Axes.Y, Width = 4, Colour = difficultyColour },
                 new FillFlowContainer
                 {
                     AutoSizeAxes = Axes.Both,
-                    Position = new(24, 13),
+                    Position = new(18, 9),
                     Direction = FillDirection.Vertical,
                     Spacing = new(3),
                     Children = new Drawable[]
@@ -502,21 +549,21 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                         titleText = new TruncatingSpriteText
                         {
                             Text = set.Title,
-                            Font = new FontUsage(size: 18, weight: "Bold"),
+                            Font = new FontUsage(size: 15, weight: "Bold"),
                             Colour = AimModPalette.Text,
                             MaxWidth = 120,
                         },
                         artistText = new TruncatingSpriteText
                         {
                             Text = set.Artist,
-                            Font = new FontUsage(size: 13, weight: "SemiBold"),
-                            Colour = AimModPalette.Text,
+                            Font = new FontUsage(size: 11, weight: "SemiBold"),
+                            Colour = AimModPalette.Muted,
                             MaxWidth = 120,
                         },
                         detailText = new TruncatingSpriteText
                         {
-                            Text = $"mapped by {set.Creator}  ·  {set.Status}  ·  {set.PlayCount:N0} plays  ·  {set.FavouriteCount:N0} favourites",
-                            Font = new FontUsage(size: 10),
+                            Text = $"mapped by {set.Creator}  /  {set.Status}  /  {set.PlayCount:N0} plays  /  {set.FavouriteCount:N0} favourites",
+                            Font = new FontUsage(size: 9),
                             Colour = AimModPalette.Muted,
                             MaxWidth = 120,
                         },
@@ -527,19 +574,19 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                     Anchor = Anchor.BottomLeft,
                     Origin = Anchor.BottomLeft,
                     AutoSizeAxes = Axes.Both,
-                    Margin = new MarginPadding { Left = 24, Bottom = 12 },
+                    Margin = new MarginPadding { Left = 18, Bottom = 9 },
                     Direction = FillDirection.Horizontal,
-                    Spacing = new(6),
+                    Spacing = new(AimModVisualStyle.RelatedSpacing),
                     Children = visibleDifficulties(set).ToArray(),
                 },
                 new ClickableContainer
                 {
                     Anchor = Anchor.CentreRight,
                     Origin = Anchor.CentreRight,
-                    Margin = new MarginPadding { Right = 22 },
-                    Size = new(170, 42),
+                    Margin = new MarginPadding { Right = 12 },
+                    Size = new(148, AimModVisualStyle.CompactControlHeight),
                     Masking = true,
-                    CornerRadius = 8,
+                    CornerRadius = AimModVisualStyle.ControlRadius,
                     Action = beginImport,
                     Children = new Drawable[]
                     {
@@ -553,7 +600,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                             Anchor = Anchor.Centre,
                             Origin = Anchor.Centre,
                             Text = set.DownloadDisabled ? "Unavailable" : "Save in AimMod",
-                            Font = new FontUsage(size: 12, weight: "Bold"),
+                            Font = new FontUsage(size: 10, weight: "Bold"),
                             Colour = set.DownloadDisabled ? AimModPalette.Muted : AimModPalette.Canvas,
                         },
                     },
@@ -564,7 +611,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
         protected override void Update()
         {
             base.Update();
-            float available = Math.Max(80, DrawWidth - 230);
+            float available = Math.Max(80, DrawWidth - 190);
             titleText.MaxWidth = available;
             artistText.MaxWidth = available;
             detailText.MaxWidth = available;

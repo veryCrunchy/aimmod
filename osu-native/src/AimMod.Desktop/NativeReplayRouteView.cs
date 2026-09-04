@@ -85,29 +85,29 @@ public partial class NativeReplayRouteView : Container
             {
                 RelativeSizeAxes = Axes.Y,
                 Width = browser_width,
-                Padding = new MarginPadding(14),
+                Padding = new MarginPadding(12),
                 Children = new Drawable[]
                 {
-                    place(section("REPLAY LIBRARY"), y: 1),
-                    replayCount = place(makeText("Loading local runs...", 11, AimModPalette.Muted, "SemiBold"), y: 22),
+                    place(section("REPLAY LIBRARY"), y: 2),
+                    replayCount = place(makeText("Loading local runs...", 10, AimModPalette.Muted, "SemiBold"), y: 22),
                     searchBox = new OsuTextBox
                     {
                         RelativeSizeAxes = Axes.X,
-                        Height = 42,
-                        Y = 46,
+                        Height = AimModVisualStyle.ControlHeight,
+                        Y = 44,
                         PlaceholderText = "Search replays",
                     },
                     new OsuScrollContainer
                     {
                         RelativeSizeAxes = Axes.Both,
-                        Padding = new MarginPadding { Top = 100 },
+                        Padding = new MarginPadding { Top = 94 },
                         Child = replayList = new FillFlowContainer<Drawable>
                         {
                             RelativeSizeAxes = Axes.X,
                             AutoSizeAxes = Axes.Y,
-                            Padding = new MarginPadding { Right = 8, Bottom = 12 },
+                            Padding = new MarginPadding { Right = 8, Bottom = 10 },
                             Direction = FillDirection.Vertical,
-                            Spacing = new(6),
+                            Spacing = new(AimModVisualStyle.RelatedSpacing),
                         },
                     },
                 },
@@ -115,13 +115,13 @@ public partial class NativeReplayRouteView : Container
             new Container
             {
                 RelativeSizeAxes = Axes.Both,
-                Padding = new MarginPadding { Left = browser_width + 10, Right = inspector_width + 10 },
+                Padding = new MarginPadding { Left = browser_width + AimModVisualStyle.RowSpacing, Right = inspector_width + AimModVisualStyle.RowSpacing },
                 Children = new Drawable[]
                 {
                     new Container
                     {
                         RelativeSizeAxes = Axes.Both,
-                        Padding = new MarginPadding { Bottom = transport_height + 10 },
+                        Padding = new MarginPadding { Bottom = transport_height + AimModVisualStyle.RowSpacing },
                         Masking = true,
                         Children = new Drawable[]
                         {
@@ -168,7 +168,7 @@ public partial class NativeReplayRouteView : Container
                     makePanel(new Container
                     {
                         RelativeSizeAxes = Axes.Both,
-                        Padding = new MarginPadding(15),
+                        Padding = new MarginPadding(14),
                         Children = new Drawable[]
                         {
                             new FillFlowContainer
@@ -176,7 +176,7 @@ public partial class NativeReplayRouteView : Container
                                 RelativeSizeAxes = Axes.X,
                                 Height = 36,
                                 Direction = FillDirection.Horizontal,
-                                Spacing = new(8),
+                                Spacing = new(AimModVisualStyle.RelatedSpacing),
                                 Children = new Drawable[]
                                 {
                                     new TransportButton("-5s", () => player?.SeekTo((currentTime?.Value ?? 0) - 5000)),
@@ -205,7 +205,7 @@ public partial class NativeReplayRouteView : Container
                                 AutoSizeAxes = Axes.Y,
                                 Y = 166,
                                 Direction = FillDirection.Horizontal,
-                                Spacing = new(7),
+                                Spacing = new(AimModVisualStyle.RelatedSpacing),
                             },
                         },
                     }, Anchor.BottomLeft, Anchor.BottomLeft, transport_height),
@@ -218,16 +218,16 @@ public partial class NativeReplayRouteView : Container
                 {
                     RelativeSizeAxes = Axes.X,
                     AutoSizeAxes = Axes.Y,
-                    Padding = new MarginPadding { Left = 18, Top = 18, Right = 26, Bottom = 28 },
+                    Padding = new MarginPadding { Left = 16, Top = 14, Right = 24, Bottom = 28 },
                     Direction = FillDirection.Vertical,
-                    Spacing = new(12),
+                    Spacing = new(AimModVisualStyle.RowSpacing),
                     Children = new Drawable[]
                     {
-                        section("RUN SUMMARY"),
+                        new AimModSubsectionHeader("Run summary", "selected attempt"),
                         new GridContainer
                         {
                             RelativeSizeAxes = Axes.X,
-                            Height = 116,
+                            Height = 104,
                             ColumnDimensions = new[]
                             {
                                 new Dimension(GridSizeMode.Relative, 0.5f),
@@ -252,43 +252,42 @@ public partial class NativeReplayRouteView : Container
                                 },
                             },
                         },
-                        divider(),
-                        section("ANALYSIS SUMMARY"),
+                        new AimModSubsectionHeader("Analysis summary", "exact judgements"),
                         analysisCard = new Container
                         {
                             RelativeSizeAxes = Axes.X,
                             AutoSizeAxes = Axes.Y,
                             Masking = true,
-                            CornerRadius = 9,
+                            CornerRadius = AimModVisualStyle.CardRadius,
                             Alpha = 0,
                             Children = new Drawable[]
                             {
                                 new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
+                                new Box { RelativeSizeAxes = Axes.Y, Width = 3, Colour = AimModPalette.Cyan },
                                 new FillFlowContainer
                                 {
                                     RelativeSizeAxes = Axes.X,
                                     AutoSizeAxes = Axes.Y,
-                                    Padding = new MarginPadding(13),
+                                    Padding = new MarginPadding { Left = 14, Top = 12, Right = 12, Bottom = 12 },
                                     Direction = FillDirection.Vertical,
-                                    Spacing = new(6),
+                                    Spacing = new(AimModVisualStyle.RelatedSpacing),
                                     Children = new Drawable[]
                                     {
-                                        analysisTitle = makeText("Analysing exact judgements...", 14, AimModPalette.Text, "Bold"),
-                                        analysisSummary = new WrappedLabel("Preparing replay details", 12, AimModPalette.Muted),
+                                        analysisTitle = makeText("Analysing exact judgements...", 13, AimModPalette.Text, "Bold"),
+                                        analysisSummary = new WrappedLabel("Preparing replay details", 11, AimModPalette.Muted),
                                     },
                                 },
                             },
                         },
-                        section("NOTABLE MOMENTS"),
+                        new AimModSubsectionHeader("Notable moments", "click to review"),
                         notableRows = new FillFlowContainer<Drawable>
                         {
                             RelativeSizeAxes = Axes.X,
                             AutoSizeAxes = Axes.Y,
                             Direction = FillDirection.Vertical,
-                            Spacing = new(7),
+                            Spacing = new(AimModVisualStyle.RelatedSpacing),
                         },
-                        divider(),
-                        section("ACROSS ATTEMPTS"),
+                        new AimModSubsectionHeader("Across attempts", "same difficulty"),
                         mapPatternRows = new FillFlowContainer<Drawable>
                         {
                             RelativeSizeAxes = Axes.X,
@@ -296,9 +295,26 @@ public partial class NativeReplayRouteView : Container
                             Direction = FillDirection.Vertical,
                             Spacing = new(5),
                         },
-                        divider(),
-                        section("FOCUS FOR YOUR NEXT PLAY"),
-                        analysisNextPlay = new WrappedLabel("Select a run to get a measured next step.", 13, AimModPalette.Text, "SemiBold"),
+                        new AimModSubsectionHeader("Focus for your next play"),
+                        new Container
+                        {
+                            RelativeSizeAxes = Axes.X,
+                            AutoSizeAxes = Axes.Y,
+                            Masking = true,
+                            CornerRadius = AimModVisualStyle.ControlRadius,
+                            Children = new Drawable[]
+                            {
+                                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
+                                new Box { RelativeSizeAxes = Axes.Y, Width = 3, Colour = AimModPalette.Success },
+                                new Container
+                                {
+                                    Padding = new MarginPadding { Left = 14, Top = 12, Right = 12, Bottom = 12 },
+                                    RelativeSizeAxes = Axes.X,
+                                    AutoSizeAxes = Axes.Y,
+                                    Child = analysisNextPlay = new WrappedLabel("Select a run to get a measured next step.", 12, AimModPalette.Text, "SemiBold"),
+                                },
+                            },
+                        },
                     },
                 },
             }, Anchor.TopRight, Anchor.TopRight, null, inspector_width),
@@ -766,9 +782,7 @@ public partial class NativeReplayRouteView : Container
         Width = width ?? 1,
         Height = height ?? 1,
         Masking = true,
-        CornerRadius = 10,
-        BorderThickness = 1,
-        BorderColour = AimModPalette.Border,
+        CornerRadius = AimModVisualStyle.CardRadius,
         Children = new Drawable[]
         {
             new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
@@ -776,7 +790,6 @@ public partial class NativeReplayRouteView : Container
         },
     };
 
-    private static Drawable divider() => new Box { RelativeSizeAxes = Axes.X, Height = 1, Colour = AimModPalette.Border };
     private static SpriteText section(string value) => makeText(value, 11, AimModPalette.Muted, "Bold");
 
     private static FillFlowContainer<Drawable> createJudgementLegend()
@@ -907,11 +920,9 @@ public partial class NativeReplayRouteView : Container
         public ReplayBrowserEmptyState(string title, string detail)
         {
             RelativeSizeAxes = Axes.X;
-            Height = 190;
+            Height = 150;
             Masking = true;
-            CornerRadius = 7;
-            BorderThickness = 1;
-            BorderColour = AimModPalette.Border;
+            CornerRadius = AimModVisualStyle.CardRadius;
             InternalChildren = new Drawable[]
             {
                 new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas, Alpha = 0.5f },
@@ -919,8 +930,8 @@ public partial class NativeReplayRouteView : Container
                 {
                     Anchor = Anchor.TopCentre,
                     Origin = Anchor.TopCentre,
-                    Y = 34,
-                    Size = new(28),
+                    Y = 25,
+                    Size = new(24),
                     Icon = FontAwesome.Solid.PlayCircle,
                     Colour = AimModPalette.Cyan,
                 },
@@ -930,10 +941,10 @@ public partial class NativeReplayRouteView : Container
                     Origin = Anchor.TopCentre,
                     RelativeSizeAxes = Axes.X,
                     AutoSizeAxes = Axes.Y,
-                    Y = 78,
+                    Y = 62,
                     Padding = new MarginPadding { Horizontal = 24 },
                     Direction = FillDirection.Vertical,
-                    Spacing = new(7),
+                    Spacing = new(AimModVisualStyle.RelatedSpacing),
                     Children = new Drawable[]
                     {
                         truncatingText(title, 15, AimModPalette.Text, 240, "SemiBold", Anchor.TopCentre),
@@ -949,11 +960,9 @@ public partial class NativeReplayRouteView : Container
         public InspectorStateRow(string message, Colour4 colour)
         {
             RelativeSizeAxes = Axes.X;
-            Height = 62;
+            Height = 52;
             Masking = true;
-            CornerRadius = 7;
-            BorderThickness = 1;
-            BorderColour = AimModPalette.Border;
+            CornerRadius = AimModVisualStyle.ControlRadius;
             InternalChildren = new Drawable[]
             {
                 new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
@@ -962,22 +971,22 @@ public partial class NativeReplayRouteView : Container
                 {
                     Anchor = Anchor.CentreLeft,
                     Origin = Anchor.CentreLeft,
-                    Position = new(16, 0),
-                    Size = new(13),
+                    Position = new(14, 0),
+                    Size = new(12),
                     Icon = FontAwesome.Solid.InfoCircle,
                     Colour = colour,
                 },
                 new Container
                 {
                     RelativeSizeAxes = Axes.Both,
-                    Padding = new MarginPadding { Left = 40, Right = 12, Top = 13, Bottom = 10 },
-                    Child = new WrappedLabel(message, 11, colour, "SemiBold"),
+                    Padding = new MarginPadding { Left = 36, Right = 12, Top = 11, Bottom = 9 },
+                    Child = new WrappedLabel(message, 10, colour, "SemiBold"),
                 },
             };
         }
     }
 
-    private partial class ReplayGroupHeader : ClickableContainer
+    private partial class ReplayGroupHeader : AimModInteractiveSurface
     {
         private readonly TruncatingSpriteText title;
         private readonly TruncatingSpriteText detail;
@@ -985,26 +994,23 @@ public partial class NativeReplayRouteView : Container
         public ReplayGroupHeader(ReplayBrowserMapGroup group, bool expanded, Action action)
         {
             RelativeSizeAxes = Axes.X;
-            Height = 70;
+            Height = 62;
             Action = action;
-            Masking = true;
-            CornerRadius = 7;
-            BorderThickness = 1;
-            BorderColour = expanded ? AimModPalette.Cyan.Opacity(0.65f) : AimModPalette.Border;
+            CornerRadius = AimModVisualStyle.CardRadius;
+            BackgroundColour = expanded ? AimModPalette.PanelRaised : AimModPalette.Panel;
             LocalReplay latest = group.Attempts[0];
             Children = new Drawable[]
             {
-                new Box { RelativeSizeAxes = Axes.Both, Colour = expanded ? AimModPalette.PanelRaised : AimModPalette.Panel },
                 new Box
                 {
                     RelativeSizeAxes = Axes.Y,
-                    Width = 4,
+                    Width = 3,
                     Colour = AimModVisualStyle.DifficultyColour(latest.StarRating),
                 },
                 title = new TruncatingSpriteText
                 {
                     Text = group.Title,
-                    Position = new(13, 9),
+                    Position = new(12, 7),
                     Font = new FontUsage(size: 13, weight: "Bold"),
                     Colour = AimModPalette.Text,
                     MaxWidth = 240,
@@ -1012,7 +1018,7 @@ public partial class NativeReplayRouteView : Container
                 detail = new TruncatingSpriteText
                 {
                     Text = $"{group.Artist}  //  {group.Difficulty}",
-                    Position = new(13, 31),
+                    Position = new(12, 28),
                     Font = new FontUsage(size: 10, weight: "Regular"),
                     Colour = AimModPalette.Cyan,
                     MaxWidth = 240,
@@ -1021,12 +1027,12 @@ public partial class NativeReplayRouteView : Container
                     $"{group.Attempts.Count:N0} {(group.Attempts.Count == 1 ? "attempt" : "attempts")}  //  best {group.Attempts.Max(replay => replay.Accuracy) * 100:0.00}%",
                     9,
                     AimModPalette.Muted,
-                    "SemiBold"), 13, 50),
+                    "SemiBold"), 12, 46),
                 new SpriteIcon
                 {
                     Anchor = Anchor.CentreRight,
                     Origin = Anchor.CentreRight,
-                    Position = new(-10, 0),
+                    Position = new(-12, 0),
                     Size = new(11),
                     Icon = expanded ? FontAwesome.Solid.ChevronUp : FontAwesome.Solid.ChevronDown,
                     Colour = AimModPalette.Muted,
@@ -1041,48 +1047,43 @@ public partial class NativeReplayRouteView : Container
         }
     }
 
-    private partial class ReplayBrowserRow : ClickableContainer
+    private partial class ReplayBrowserRow : AimModInteractiveSurface
     {
-        private readonly Box hover;
-
         public ReplayBrowserRow(LocalReplay replay, bool selected, Action action)
         {
             RelativeSizeAxes = Axes.X;
-            Height = 76;
-            Masking = true;
-            CornerRadius = 7;
-            BorderThickness = selected ? 2 : 1;
-            BorderColour = selected ? AimModPalette.Pink : AimModPalette.Border;
+            Height = 60;
+            CornerRadius = AimModVisualStyle.ControlRadius;
+            BackgroundColour = selected ? AimModPalette.PanelHover : AimModPalette.PanelRaised;
             Action = action;
             Children = new Drawable[]
             {
-                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas, Alpha = 0.72f },
                 new Box
                 {
                     RelativeSizeAxes = Axes.Y,
-                    Width = 4,
+                    Width = 3,
                     Colour = selected ? AimModPalette.Pink : AimModVisualStyle.DifficultyColour(replay.StarRating),
                 },
-                hover = new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Pink, Alpha = selected ? 0.12f : 0 },
+                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Pink, Alpha = selected ? 0.08f : 0 },
                 new FillFlowContainer
                 {
                     RelativeSizeAxes = Axes.X,
                     AutoSizeAxes = Axes.Y,
-                    Padding = new MarginPadding { Left = 13, Top = 10, Right = 10 },
+                    Padding = new MarginPadding { Left = 12, Top = 8, Right = 10 },
                     Direction = FillDirection.Vertical,
-                    Spacing = new(6),
+                    Spacing = new(4),
                     Children = new Drawable[]
                     {
                         new FillFlowContainer
                         {
                             AutoSizeAxes = Axes.Both,
                             Direction = FillDirection.Horizontal,
-                            Spacing = new(9),
+                            Spacing = new(7),
                             Children = new Drawable[]
                             {
                                 new AimModDifficultyPill(replay.StarRating),
-                                makeText(formatAccuracy(replay.Accuracy), 17, AimModPalette.Text, "Bold"),
-                                makeText($"{replay.MissCount:N0} {(replay.MissCount == 1 ? "miss" : "misses")}", 10, replay.MissCount > 0 ? AimModPalette.Pink : AimModPalette.Success, "SemiBold"),
+                                makeText(formatAccuracy(replay.Accuracy), 15, AimModPalette.Text, "Bold"),
+                                makeText($"{replay.MissCount:N0} {(replay.MissCount == 1 ? "miss" : "misses")}", 9, replay.MissCount > 0 ? AimModPalette.Pink : AimModPalette.Success, "SemiBold"),
                             },
                         },
                         makeText(
@@ -1094,63 +1095,46 @@ public partial class NativeReplayRouteView : Container
             };
         }
 
-        protected override bool OnHover(HoverEvent e)
-        {
-            hover.FadeTo(0.16f, 100);
-            return base.OnHover(e);
-        }
-
-        protected override void OnHoverLost(HoverLostEvent e)
-        {
-            hover.FadeTo(BorderThickness > 1 ? 0.12f : 0, 100);
-            base.OnHoverLost(e);
-        }
     }
 
-    private partial class NotableMomentRow : ClickableContainer
+    private partial class NotableMomentRow : AimModInteractiveSurface
     {
         public NotableMomentRow(string time, string objectLabel, string result, string detail, Action action)
         {
             RelativeSizeAxes = Axes.X;
-            Height = 84;
+            Height = 72;
             Action = action;
-            BorderThickness = 1;
-            BorderColour = AimModPalette.Border;
-            Masking = true;
-            CornerRadius = 6;
+            CornerRadius = AimModVisualStyle.ControlRadius;
+            BackgroundColour = AimModPalette.PanelRaised;
             Children = new Drawable[]
             {
-                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
-                new Box { RelativeSizeAxes = Axes.Y, Width = 4, Colour = result == "Miss" ? ReplayJudgementTimeline.ColourFor(ReplayTimelineTone.Miss) : AimModPalette.Cyan },
-                place(makeText(time, 12, AimModPalette.Pink, "Bold"), 13, 10),
-                place(makeText(objectLabel, 11, AimModPalette.Text, "SemiBold"), 88, 11),
-                place(makeText(result.ToUpperInvariant(), 9, result == "Miss" ? ReplayJudgementTimeline.ColourFor(ReplayTimelineTone.Miss) : AimModPalette.Muted, "Bold"), -12, 12, Anchor.TopRight, Anchor.TopRight),
+                new Box { RelativeSizeAxes = Axes.Y, Width = 3, Colour = result == "Miss" ? ReplayJudgementTimeline.ColourFor(ReplayTimelineTone.Miss) : AimModPalette.Cyan },
+                place(makeText(time, 11, AimModPalette.Pink, "Bold"), 12, 9),
+                place(makeText(objectLabel, 10, AimModPalette.Text, "SemiBold"), 82, 10),
+                place(makeText(result.ToUpperInvariant(), 9, result == "Miss" ? ReplayJudgementTimeline.ColourFor(ReplayTimelineTone.Miss) : AimModPalette.Muted, "Bold"), -10, 10, Anchor.TopRight, Anchor.TopRight),
                 new Container
                 {
                     RelativeSizeAxes = Axes.X,
-                    Height = 42,
-                    Y = 36,
-                    Padding = new MarginPadding { Left = 13, Right = 13 },
+                    Height = 34,
+                    Y = 32,
+                    Padding = new MarginPadding { Left = 12, Right = 10 },
                     Child = new WrappedLabel(detail, 10, AimModPalette.Muted),
                 },
             };
         }
     }
 
-    private partial class TransportButton : ClickableContainer
+    private partial class TransportButton : AimModInteractiveSurface
     {
         public TransportButton(string label, Action action, SpriteText? suppliedLabel = null)
         {
             Width = label.Length > 4 ? 70 : 54;
-            Height = 34;
+            Height = AimModVisualStyle.CompactControlHeight;
             Action = action;
-            Masking = true;
-            CornerRadius = 7;
-            BorderThickness = 1;
-            BorderColour = AimModPalette.Border;
+            CornerRadius = AimModVisualStyle.ControlRadius;
+            BackgroundColour = AimModPalette.PanelRaised;
             Children = new Drawable[]
             {
-                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
                 suppliedLabel ?? place(makeText(label, 12, AimModPalette.Text, "Bold"), anchor: Anchor.Centre, origin: Anchor.Centre),
             };
             if (suppliedLabel is not null)
@@ -1239,14 +1223,14 @@ public partial class NativeReplayRouteView : Container
         }
     }
 
-    private partial class MomentButton : ClickableContainer
+    private partial class MomentButton : AimModInteractiveSurface
     {
         public MomentButton(string time, Action action)
         {
-            AutoSizeAxes = Axes.Both;
+            Size = new(92, 30);
             Action = action;
-            Masking = true;
-            CornerRadius = 7;
+            CornerRadius = AimModVisualStyle.ControlRadius;
+            BackgroundColour = AimModPalette.PanelRaised;
             Children = new Drawable[]
             {
                 new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Cyan, Alpha = 0.18f },

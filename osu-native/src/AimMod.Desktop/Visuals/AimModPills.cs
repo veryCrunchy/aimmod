@@ -29,10 +29,10 @@ public partial class AimModPill : CompositeDrawable
                 new FillFlowContainer
                 {
                     AutoSizeAxes = Axes.Both,
-                    Padding = new MarginPadding { Horizontal = 11, Vertical = 5 },
+                    Padding = new MarginPadding { Horizontal = 9, Vertical = 4 },
                     Child = label = new OsuSpriteText
                     {
-                        Font = new FontUsage(size: 12, weight: "SemiBold"),
+                        Font = new FontUsage(size: 11, weight: "SemiBold"),
                     },
                 },
             },
@@ -91,20 +91,20 @@ public partial class AimModDifficultyPill : CompositeDrawable
                 {
                     AutoSizeAxes = Axes.Both,
                     Direction = FillDirection.Horizontal,
-                    Spacing = new(6),
-                    Padding = new MarginPadding { Horizontal = 11, Vertical = 5 },
+                    Spacing = new(5),
+                    Padding = new MarginPadding { Horizontal = 9, Vertical = 4 },
                     Children = new Drawable[]
                     {
                         star = new SpriteIcon
                         {
                             Icon = FontAwesome.Solid.Star,
-                            Size = new(11),
+                            Size = new(10),
                             Anchor = Anchor.CentreLeft,
                             Origin = Anchor.CentreLeft,
                         },
                         label = new OsuSpriteText
                         {
-                            Font = new FontUsage(size: 12, weight: "Bold"),
+                            Font = new FontUsage(size: 11, weight: "Bold"),
                             Anchor = Anchor.CentreLeft,
                             Origin = Anchor.CentreLeft,
                         },

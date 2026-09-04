@@ -1386,13 +1386,10 @@ public partial class AimModGame : OsuGameBase
         }
     }
 
-    private partial class WorkspaceLink : ClickableContainer
+    private partial class WorkspaceLink : AimModInteractiveSurface
     {
-        private readonly Box background;
-        private readonly Box accent;
         private readonly TruncatingSpriteText titleText;
         private readonly TruncatingSpriteText descriptionText;
-        private readonly Action? action;
 
         public WorkspaceLink(
             IconUsage icon,
@@ -1401,66 +1398,58 @@ public partial class AimModGame : OsuGameBase
             Colour4 accentColour,
             Action? action = null)
         {
-            this.action = action;
             RelativeSizeAxes = Axes.Both;
-            Padding = new MarginPadding(6);
+            Padding = new MarginPadding(AimModVisualStyle.RelatedSpacing);
+            CornerRadius = AimModVisualStyle.ControlRadius;
+            BackgroundColour = AimModPalette.Panel;
+            Action = action;
 
-            Child = new Container
+            Children = new Drawable[]
             {
-                RelativeSizeAxes = Axes.Both,
-                Masking = true,
-                CornerRadius = 7,
-                BorderThickness = 1,
-                BorderColour = AimModPalette.Border,
-                Children = new Drawable[]
+                new SpriteIcon
                 {
-                    background = new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
-                    accent = new Box { RelativeSizeAxes = Axes.Y, Width = 4, Colour = accentColour, Alpha = 0.8f },
-                    new SpriteIcon
+                    Anchor = Anchor.CentreLeft,
+                    Origin = Anchor.CentreLeft,
+                    Margin = new MarginPadding { Left = 18 },
+                    Icon = icon,
+                    Size = new(20),
+                    Colour = accentColour,
+                },
+                new FillFlowContainer
+                {
+                    Anchor = Anchor.CentreLeft,
+                    Origin = Anchor.CentreLeft,
+                    AutoSizeAxes = Axes.Y,
+                    RelativeSizeAxes = Axes.X,
+                    Width = 1,
+                    Margin = new MarginPadding { Left = 54 },
+                    Padding = new MarginPadding { Right = 48 },
+                    Direction = FillDirection.Vertical,
+                    Spacing = new(2),
+                    Children = new Drawable[]
                     {
-                        Anchor = Anchor.CentreLeft,
-                        Origin = Anchor.CentreLeft,
-                        Margin = new MarginPadding { Left = 24 },
-                        Icon = icon,
-                        Size = new(22),
-                        Colour = accentColour,
-                    },
-                    new FillFlowContainer
-                    {
-                        Anchor = Anchor.CentreLeft,
-                        Origin = Anchor.CentreLeft,
-                        AutoSizeAxes = Axes.Y,
-                        RelativeSizeAxes = Axes.X,
-                        Width = 1,
-                        Margin = new MarginPadding { Left = 66 },
-                        Padding = new MarginPadding { Right = 58 },
-                        Direction = FillDirection.Vertical,
-                        Spacing = new(2),
-                        Children = new Drawable[]
+                        titleText = new TruncatingSpriteText
                         {
-                            titleText = new TruncatingSpriteText
-                            {
-                                Text = title,
-                                Font = new FontUsage(size: 18, weight: "Bold"),
-                                Colour = AimModPalette.Text,
-                            },
-                            descriptionText = new TruncatingSpriteText
-                            {
-                                Text = description,
-                                Font = new FontUsage(size: 12),
-                                Colour = AimModPalette.Muted,
-                            },
+                            Text = title,
+                            Font = new FontUsage(size: 17, weight: "SemiBold"),
+                            Colour = AimModPalette.Text,
+                        },
+                        descriptionText = new TruncatingSpriteText
+                        {
+                            Text = description,
+                            Font = new FontUsage(size: 11),
+                            Colour = AimModPalette.Muted,
                         },
                     },
-                    new SpriteIcon
-                    {
-                        Anchor = Anchor.CentreRight,
-                        Origin = Anchor.CentreRight,
-                        Margin = new MarginPadding { Right = 18 },
-                        Icon = FontAwesome.Solid.ChevronRight,
-                        Size = new(11),
-                        Colour = accentColour,
-                    },
+                },
+                new SpriteIcon
+                {
+                    Anchor = Anchor.CentreRight,
+                    Origin = Anchor.CentreRight,
+                    Margin = new MarginPadding { Right = 16 },
+                    Icon = FontAwesome.Solid.ChevronRight,
+                    Size = new(10),
+                    Colour = AimModPalette.Muted,
                 },
             };
         }
@@ -1468,29 +1457,9 @@ public partial class AimModGame : OsuGameBase
         protected override void Update()
         {
             base.Update();
-            float textWidth = Math.Max(80, DrawWidth - 130);
+            float textWidth = Math.Max(80, DrawWidth - 112);
             titleText.MaxWidth = textWidth;
             descriptionText.MaxWidth = textWidth;
-        }
-
-        protected override bool OnClick(ClickEvent e)
-        {
-            action?.Invoke();
-            return action is not null || base.OnClick(e);
-        }
-
-        protected override bool OnHover(HoverEvent e)
-        {
-            background.FadeColour(AimModPalette.PanelHover, 120);
-            accent.FadeTo(1, 120);
-            return base.OnHover(e);
-        }
-
-        protected override void OnHoverLost(HoverLostEvent e)
-        {
-            background.FadeColour(AimModPalette.Panel, 120);
-            accent.FadeTo(0.75f, 120);
-            base.OnHoverLost(e);
         }
     }
 

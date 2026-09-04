@@ -128,7 +128,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                         Size = new(112, 30),
                         Action = reloadProfile,
                         Masking = true,
-                        CornerRadius = 6,
+                        CornerRadius = AimModVisualStyle.ControlRadius,
                         Children = new Drawable[]
                         {
                             new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
@@ -167,20 +167,18 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                     {
                         Position = new(0, 96),
                         RelativeSizeAxes = Axes.X,
-                        Height = 132,
+                        Height = 112,
                         Children = new Drawable[]
                         {
                             new Container
                             {
                                 RelativeSizeAxes = Axes.Both,
                                 Masking = true,
-                                CornerRadius = 6,
-                                BorderThickness = 1,
-                                BorderColour = AimModPalette.Border,
+                                CornerRadius = AimModVisualStyle.ControlRadius,
                                 Children = new Drawable[]
                                 {
-                                    new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel, Alpha = 0.72f },
-                                    new Box { RelativeSizeAxes = Axes.X, Height = 3, Colour = AimModPalette.Pink, Alpha = 0.8f },
+                                    new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
+                                    new Box { RelativeSizeAxes = Axes.X, Height = 2, Colour = AimModPalette.Pink },
                                 },
                             },
                             searchGroup = new Container
@@ -192,7 +190,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                                     {
                                         Position = new(0, 18),
                                         RelativeSizeAxes = Axes.X,
-                                        Height = 40,
+                                        Height = AimModVisualStyle.CompactControlHeight,
                                         PlaceholderText = "Title, artist, mapper, or source",
                                     },
                                 },
@@ -269,7 +267,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                             RelativeSizeAxes = Axes.X,
                             AutoSizeAxes = Axes.Y,
                             Direction = FillDirection.Vertical,
-                            Spacing = new(8),
+                            Spacing = new(AimModVisualStyle.RelatedSpacing),
                             Padding = new MarginPadding { Bottom = 32 },
                         },
                     },
@@ -286,26 +284,26 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
 
         float width = Math.Max(640, DrawWidth);
         bool compact = width < 1_120;
-        float headerHeight = compact ? 368 : 270;
+        float headerHeight = compact ? 310 : 250;
         filterHeader.Height = headerHeight;
         resultViewport.Padding = new MarginPadding { Top = headerHeight + 7 };
-        workspaceState.Y = compact ? -48 : 0;
+        workspaceState.Y = compact ? -28 : 0;
 
         if (compact)
         {
             float halfWidth = (width - 18) / 2;
-            filterBand.Height = 222;
-            placeGroup(searchGroup, 12, 12, halfWidth - 12, 60);
-            placeSlider(starSlider, width - halfWidth + 6, 5, halfWidth - 18);
-            placeSlider(expectedPpSlider, 12, 75, halfWidth - 24);
-            placeSlider(maximumPpSlider, width - halfWidth + 6, 75, halfWidth - 18);
+            filterBand.Height = 174;
+            placeGroup(searchGroup, 12, 8, halfWidth - 12, 54);
+            placeSlider(starSlider, width - halfWidth + 6, 3, halfWidth - 18);
+            placeSlider(expectedPpSlider, 12, 61, halfWidth - 24);
+            placeSlider(maximumPpSlider, width - halfWidth + 6, 61, halfWidth - 18);
 
             float dropdownWidth = (width - 48) / 3;
-            placeGroup(categoryGroup, 12, 148, dropdownWidth, 62);
-            placeGroup(lengthGroup, 24 + dropdownWidth, 148, dropdownWidth, 62);
-            placeGroup(sortGroup, 36 + dropdownWidth * 2, 148, dropdownWidth, 62);
-            status.Position = new(0, 337);
-            resultCount.Position = new(0, 337);
+            placeGroup(categoryGroup, 12, 119, dropdownWidth, 48);
+            placeGroup(lengthGroup, 24 + dropdownWidth, 119, dropdownWidth, 48);
+            placeGroup(sortGroup, 36 + dropdownWidth * 2, 119, dropdownWidth, 48);
+            status.Position = new(0, 284);
+            resultCount.Position = new(0, 284);
         }
         else
         {
@@ -314,18 +312,18 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             float starX = 30 + searchWidth;
             float expectedX = starX + sliderWidth + 18;
             float maximumX = expectedX + sliderWidth + 18;
-            filterBand.Height = 132;
-            placeGroup(searchGroup, 12, 12, searchWidth, 60);
-            placeSlider(starSlider, starX, 5, sliderWidth);
-            placeSlider(expectedPpSlider, expectedX, 5, sliderWidth);
-            placeSlider(maximumPpSlider, maximumX, 5, sliderWidth);
+            filterBand.Height = 112;
+            placeGroup(searchGroup, 12, 8, searchWidth, 54);
+            placeSlider(starSlider, starX, 3, sliderWidth);
+            placeSlider(expectedPpSlider, expectedX, 3, sliderWidth);
+            placeSlider(maximumPpSlider, maximumX, 3, sliderWidth);
 
             float dropdownWidth = Math.Clamp((width - 48) / 3, 210, 320);
-            placeGroup(categoryGroup, 12, 72, dropdownWidth, 52);
-            placeGroup(lengthGroup, (width - dropdownWidth) / 2, 72, dropdownWidth, 52);
-            placeGroup(sortGroup, width - dropdownWidth - 12, 72, dropdownWidth, 52);
-            status.Position = new(0, 245);
-            resultCount.Position = new(0, 245);
+            placeGroup(categoryGroup, 12, 62, dropdownWidth, 44);
+            placeGroup(lengthGroup, (width - dropdownWidth) / 2, 62, dropdownWidth, 44);
+            placeGroup(sortGroup, width - dropdownWidth - 12, 62, dropdownWidth, 44);
+            status.Position = new(0, 224);
+            resultCount.Position = new(0, 224);
         }
 
         status.MaxWidth = width * 0.62f;
@@ -338,7 +336,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         slider.Anchor = Anchor.TopLeft;
         slider.Origin = Anchor.TopLeft;
         slider.Position = new(x, y);
-        slider.Size = new(width, 62);
+        slider.Size = new(width, 58);
     }
 
     private static void placeGroup(Container group, float x, float y, float width, float height)
@@ -351,7 +349,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
 
     private static Container dropdownGroup(string label, Drawable dropdown)
     {
-        dropdown.Position = new(0, 17);
+        dropdown.Position = new(0, 15);
         dropdown.RelativeSizeAxes = Axes.X;
         dropdown.Width = 1;
         return new Container
@@ -1019,7 +1017,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         }
     }
 
-    private partial class PpTargetRow : Container
+    private partial class PpTargetRow : AimModInteractiveSurface
     {
         private readonly OfficialBeatmapSet set;
         private readonly Func<OfficialBeatmapSet, Task<OnlineBeatmapImportResult>> import;
@@ -1041,11 +1039,9 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             this.set = set;
             this.import = import;
             RelativeSizeAxes = Axes.X;
-            Height = 132;
-            Masking = true;
-            CornerRadius = 6;
-            BorderThickness = 1;
-            BorderColour = AimModPalette.Border;
+            Height = 112;
+            CornerRadius = AimModVisualStyle.ControlRadius;
+            BackgroundColour = AimModPalette.Panel;
 
             Colour4 difficultyColour = AimModVisualStyle.DifficultyColour(candidate.StarRating);
             string expected = candidate.Estimate is null ? "-" : $"{candidate.Estimate.ExpectedPp:0}";
@@ -1059,7 +1055,6 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
 
             Children = new Drawable[]
             {
-                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
                 new Box { RelativeSizeAxes = Axes.Y, Width = 4, Colour = difficultyColour },
                 artwork = new Container
                 {
@@ -1073,11 +1068,11 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                 },
                 details = new FillFlowContainer
                 {
-                    Position = new(158, 12),
+                    Position = new(158, 8),
                     Width = 450,
                     AutoSizeAxes = Axes.Y,
                     Direction = FillDirection.Vertical,
-                    Spacing = new(2),
+                    Spacing = new(1),
                     Children = new Drawable[]
                     {
                         title = new TruncatingSpriteText { Text = candidate.Title, Font = new FontUsage(size: 15, weight: "Bold"), Colour = AimModPalette.Text, MaxWidth = 450 },
@@ -1097,11 +1092,11 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                     Anchor = Anchor.CentreRight,
                     Origin = Anchor.CentreRight,
                     Margin = new MarginPadding { Right = 12 },
-                    Size = new(104, 88),
+                    Size = new(104, 76),
                     Children = new Drawable[]
                     {
                         actionButton(FontAwesome.Solid.Play, "Open osu!", AimModPalette.Cyan, () => openInOsu(candidate.BeatmapId)),
-                        actionButton(FontAwesome.Solid.Download, set.DownloadDisabled ? "Unavailable" : "Save", AimModPalette.Pink, beginImport, 48, set.DownloadDisabled,
+                        actionButton(FontAwesome.Solid.Download, set.DownloadDisabled ? "Unavailable" : "Save", AimModPalette.Pink, beginImport, 41, set.DownloadDisabled,
                             out saveBackground, out saveText),
                     },
                 },
@@ -1156,15 +1151,15 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
 
         private static Container metric(string caption, string value, Colour4 colour, string detail) => new()
         {
-            Size = new(106, 132),
+            Size = new(106, 112),
             Children = new Drawable[]
             {
-                text(caption, 8, AimModPalette.Muted, "Bold").With(drawable => drawable.Position = new(0, 31)),
-                text(value, 25, colour, "Bold").With(drawable => drawable.Position = new(0, 49)),
-                text("pp", 9, AimModPalette.Muted, "SemiBold").With(drawable => drawable.Position = new(49, 60)),
+                text(caption, 8, AimModPalette.Muted, "Bold").With(drawable => drawable.Position = new(0, 22)),
+                text(value, 23, colour, "Bold").With(drawable => drawable.Position = new(0, 38)),
+                text("pp", 9, AimModPalette.Muted, "SemiBold").With(drawable => drawable.Position = new(47, 48)),
                 truncatingText(detail, 8, AimModPalette.Muted).With(drawable =>
                 {
-                    drawable.Position = new(0, 84);
+                    drawable.Position = new(0, 70);
                     drawable.MaxWidth = 96;
                 }),
             },
@@ -1198,10 +1193,10 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             return new ClickableContainer
             {
                 Position = new(0, y),
-                Size = new(104, 40),
+                Size = new(104, AimModVisualStyle.CompactControlHeight),
                 Action = disabled ? null : action,
                 Masking = true,
-                CornerRadius = 6,
+                CornerRadius = AimModVisualStyle.ControlRadius,
                 Children = new Drawable[]
                 {
                     background,
