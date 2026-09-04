@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using AimMod.Desktop;
 using AimMod.Desktop.LocalLibrary;
 using AimMod.Desktop.Visuals;
@@ -16,6 +17,22 @@ namespace AimMod.Desktop.Tests;
 [TestFixture]
 public sealed class NativeReplayRouteTests
 {
+    [Test]
+    public void PracticeFolderUsesTheWindowsShellWithoutAnExplorerCommandLine()
+    {
+        string path = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "AimMod practice map"));
+
+        ProcessStartInfo startInfo = AimModGame.CreatePracticeFolderStartInfo(path);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(startInfo.FileName, Is.EqualTo(path));
+            Assert.That(startInfo.UseShellExecute, Is.True);
+            Assert.That(startInfo.Verb, Is.EqualTo("open"));
+            Assert.That(startInfo.ArgumentList, Is.Empty);
+        });
+    }
+
     private string temporaryDirectory = null!;
 
     [SetUp]

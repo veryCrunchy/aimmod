@@ -1,4 +1,5 @@
 using AimMod.Desktop.LocalLibrary;
+using AimMod.Osu.Runtime;
 using AimMod.Osu.Runtime.Contracts;
 
 namespace AimMod.Desktop.Practice;
@@ -15,7 +16,12 @@ public sealed record PracticeMapCandidate(
 
 public sealed record PracticeMapGenerationRequest(PracticeMapCandidate Candidate, PracticeDrillType DrillType);
 
-public sealed record PracticeMapGenerationResult(bool Success, string Message, string? DirectoryPath = null);
+public sealed record PracticeMapGenerationResult(
+    bool Success,
+    string Message,
+    string? DirectoryPath = null,
+    string? ArchivePath = null,
+    LazerBeatmapArchive? LazerArchive = null);
 
 public static class PracticeMapCandidateBuilder
 {

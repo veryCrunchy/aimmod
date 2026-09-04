@@ -104,6 +104,47 @@ public sealed class LazerBeatmapInstallServiceTests
     }
 
     [Test]
+    public async Task PreservesAndLaunchesALocallyGeneratedPracticeArchive()
+    {
+        writeDesktopEntry($"\"{desktopLauncher}\" %u");
+        string archivePath = createOsz("practice.osz");
+        ProcessStartInfo? observed = null;
+        var service = new LazerBeatmapInstallService(
+            Path.Combine(temporaryDirectory, "handoff"),
+            createLocator(),
+            (startInfo, _, _) =>
+            {
+                observed = startInfo;
+                return Task.FromResult(new LazerLaunchOutcome(true, true, 0));
+            });
+
+        LazerBeatmapArchive archive = await service.PreserveAsync(archivePath, 0);
+        LazerBeatmapInstallResult result = await service.InstallAsync(archive);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(LazerBeatmapInstallStatus.Sent));
+            Assert.That(observed, Is.Not.Null);
+            Assert.That(observed!.ArgumentList[0], Does.EndWith($"practice-{archive.Id:N}.osz"));
+            Assert.That(File.Exists(observed.ArgumentList[0]), Is.True);
+        });
+    }
+
+    [Test]
+    public void RejectsANegativeArchiveIdentity()
+    {
+        string archivePath = createOsz("source.osz");
+        var service = new LazerBeatmapInstallService(
+            Path.Combine(temporaryDirectory, "handoff"),
+            createLocator(),
+            (_, _, _) => Task.FromResult(new LazerLaunchOutcome(true, true, 0)));
+
+        Assert.That(
+            async () => await service.PreserveAsync(archivePath, -1),
+            Throws.TypeOf<ArgumentOutOfRangeException>());
+    }
+
+    [Test]
     public async Task ReportsMissingLazerWithoutExecutingTheArchive()
     {
         string archivePath = createOsz("source.osz");

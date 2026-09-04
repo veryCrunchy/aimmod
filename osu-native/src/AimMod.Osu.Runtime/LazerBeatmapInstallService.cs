@@ -14,6 +14,7 @@ public enum LazerBeatmapInstallStatus
     LazerRejected,
 }
 
+/// <param name="BeatmapSetId">The online set ID, or zero for a locally generated archive.</param>
 public sealed record LazerBeatmapArchive(int BeatmapSetId, Guid Id);
 
 public sealed record LazerBeatmapInstallResult(LazerBeatmapInstallStatus Status, string? LauncherSource = null);
@@ -74,7 +75,7 @@ public sealed class LazerBeatmapInstallService : ILazerBeatmapInstallService
         int beatmapSetId,
         CancellationToken cancellationToken = default)
     {
-        validateBeatmapSetId(beatmapSetId);
+        validateArchiveIdentity(beatmapSetId);
         string source = validateSourceArchive(sourceArchive);
         validateArchive(source);
 
@@ -134,7 +135,7 @@ public sealed class LazerBeatmapInstallService : ILazerBeatmapInstallService
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(archive);
-        validateBeatmapSetId(archive.BeatmapSetId);
+        validateArchiveIdentity(archive.BeatmapSetId);
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -187,7 +188,7 @@ public sealed class LazerBeatmapInstallService : ILazerBeatmapInstallService
     public void Discard(LazerBeatmapArchive archive)
     {
         ArgumentNullException.ThrowIfNull(archive);
-        validateBeatmapSetId(archive.BeatmapSetId);
+        validateArchiveIdentity(archive.BeatmapSetId);
         deleteFile(getArchivePath(archive));
     }
 
@@ -234,7 +235,9 @@ public sealed class LazerBeatmapInstallService : ILazerBeatmapInstallService
 
     private string getArchivePath(LazerBeatmapArchive archive)
     {
-        string filename = $"beatmapset-{archive.BeatmapSetId}-{archive.Id:N}.osz";
+        string filename = archive.BeatmapSetId == 0
+            ? $"practice-{archive.Id:N}.osz"
+            : $"beatmapset-{archive.BeatmapSetId}-{archive.Id:N}.osz";
         string path = Path.GetFullPath(Path.Combine(archiveDirectory, filename));
         if (!string.Equals(Path.GetDirectoryName(path), archiveDirectory, StringComparison.Ordinal))
             throw new IOException("The lazer handoff archive path is invalid.");
@@ -304,7 +307,7 @@ public sealed class LazerBeatmapInstallService : ILazerBeatmapInstallService
 
     private void trimCache(string protectedPath)
     {
-        FileInfo[] archives = Directory.EnumerateFiles(archiveDirectory, "beatmapset-*.osz", SearchOption.TopDirectoryOnly)
+        FileInfo[] archives = Directory.EnumerateFiles(archiveDirectory, "*.osz", SearchOption.TopDirectoryOnly)
                                        .Select(path => new FileInfo(path))
                                        .Where(file => (file.Attributes & FileAttributes.ReparsePoint) == 0)
                                        .OrderByDescending(file => file.LastWriteTimeUtc)
@@ -329,9 +332,9 @@ public sealed class LazerBeatmapInstallService : ILazerBeatmapInstallService
             throw new IOException("AimMod could not keep the lazer handoff cache within its storage limit.");
     }
 
-    private static void validateBeatmapSetId(int beatmapSetId)
+    private static void validateArchiveIdentity(int beatmapSetId)
     {
-        if (beatmapSetId <= 0)
+        if (beatmapSetId < 0)
             throw new ArgumentOutOfRangeException(nameof(beatmapSetId));
     }
 

@@ -1,6 +1,7 @@
 using AimMod.Desktop.Coaching;
 using AimMod.Desktop.LocalLibrary;
 using AimMod.Desktop.Practice;
+using AimMod.Osu.Runtime;
 using AimMod.Osu.Runtime.Contracts;
 using NUnit.Framework;
 
@@ -209,6 +210,19 @@ public sealed class NativeCoachingWorkspaceTests
             Assert.That(NativeCoachingWorkspace.PracticeEvidenceSummary(candidate), Is.EqualTo("6.27*  //  7 exact misses  //  4 analysed attempts"));
             Assert.That(NativeCoachingWorkspace.PracticeSourceSummary(candidate), Does.Contain("Source difficulty: Expert"));
             Assert.That(NativeCoachingWorkspace.PracticeSourceSummary(candidate), Does.Contain("last played Sep 3, 2026"));
+        });
+    }
+
+    [Test]
+    public void PracticeLaunchCopyDistinguishesSuccessfulHandoffFromManualFallback()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(NativeCoachingWorkspace.PracticeLaunchSucceeded(LazerBeatmapInstallStatus.Sent), Is.True);
+            Assert.That(NativeCoachingWorkspace.PracticeLaunchSucceeded(LazerBeatmapInstallStatus.LazerStarted), Is.True);
+            Assert.That(NativeCoachingWorkspace.PracticeLaunchSucceeded(LazerBeatmapInstallStatus.LaunchFailed), Is.False);
+            Assert.That(NativeCoachingWorkspace.PracticeLaunchMessage(LazerBeatmapInstallStatus.LazerStarted), Does.Contain("importing"));
+            Assert.That(NativeCoachingWorkspace.PracticeLaunchMessage(LazerBeatmapInstallStatus.LazerNotFound), Does.Contain("export folder"));
         });
     }
 

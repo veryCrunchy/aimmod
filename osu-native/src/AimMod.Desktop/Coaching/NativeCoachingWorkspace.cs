@@ -2,6 +2,7 @@ using AimMod.Desktop.LocalLibrary;
 using AimMod.Desktop.Visuals;
 using AimMod.Desktop.ScoreHistory;
 using AimMod.Desktop.Practice;
+using AimMod.Osu.Runtime;
 using AimMod.Osu.Runtime.Contracts;
 using osu.Framework.Extensions.Color4Extensions;
 using osu.Framework.Graphics;
@@ -30,6 +31,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     private readonly Func<IAccountScoreHistoryService?> accountHistory;
     private readonly Func<PracticeMapGenerationRequest, CancellationToken, Task<PracticeMapGenerationResult>>? generatePracticeMap;
     private readonly Action<string>? openPracticeFolder;
+    private readonly Func<LazerBeatmapArchive, CancellationToken, Task<LazerBeatmapInstallResult>>? installPracticeMap;
 
     private readonly Container headerArtwork;
     private readonly OsuSpriteText sessionTitle;
@@ -50,14 +52,17 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
 
     private CancellationTokenSource? loading;
     private CancellationTokenSource? practiceGeneration;
+    private CancellationTokenSource? practiceLaunch;
     private IReadOnlyList<LocalReplay> replays = Array.Empty<LocalReplay>();
     private NativeCoachingWorkspaceModel? workspace;
     private bool acceptingAnalysisProgress;
     private bool creatingPracticeMap;
+    private bool openingPracticeMap;
     private bool practiceSucceeded;
     private int renderedAnalysisCount = -1;
     private string practiceMessage = string.Empty;
     private string? practiceDirectory;
+    private LazerBeatmapArchive? practiceLazerArchive;
 
     public NativeCoachingWorkspace(
         ILocalLibrarySource source,
@@ -65,7 +70,8 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         Action<LocalReplay> openReplay,
         Func<IAccountScoreHistoryService?>? accountHistory = null,
         Func<PracticeMapGenerationRequest, CancellationToken, Task<PracticeMapGenerationResult>>? generatePracticeMap = null,
-        Action<string>? openPracticeFolder = null)
+        Action<string>? openPracticeFolder = null,
+        Func<LazerBeatmapArchive, CancellationToken, Task<LazerBeatmapInstallResult>>? installPracticeMap = null)
     {
         this.source = source ?? throw new ArgumentNullException(nameof(source));
         this.analyses = analyses ?? throw new ArgumentNullException(nameof(analyses));
@@ -73,6 +79,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         this.accountHistory = accountHistory ?? (() => null);
         this.generatePracticeMap = generatePracticeMap;
         this.openPracticeFolder = openPracticeFolder;
+        this.installPracticeMap = installPracticeMap;
         sourceChanges = source as ILocalLibrarySourceChanged;
         if (sourceChanges is not null)
             sourceChanges.SourceChanged += sourceChanged;
@@ -340,14 +347,38 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             return;
         }
 
+        if (openingPracticeMap)
+        {
+            practiceHost.Add(new PracticeStatusRow(
+                "Opening in osu!lazer",
+                practiceMessage,
+                AimModPalette.Cyan,
+                FontAwesome.Solid.CircleNotch));
+            return;
+        }
+
         if (!string.IsNullOrWhiteSpace(practiceMessage))
         {
+            string? actionLabel = null;
+            Action? action = null;
+            if (practiceLazerArchive is not null && installPracticeMap is not null)
+            {
+                actionLabel = "Open in osu!";
+                action = beginPracticeLaunch;
+            }
+            else if (practiceDirectory is not null && openPracticeFolder is not null)
+            {
+                actionLabel = "Open folder";
+                action = () => openPracticeFolder(practiceDirectory);
+            }
+
             practiceHost.Add(new PracticeStatusRow(
                 practiceSucceeded ? "Practice map ready" : practiceDirectory is null ? "Practice map not created" : "Practice map exported",
                 practiceMessage,
                 practiceSucceeded ? AimModPalette.Success : practiceDirectory is null ? AimModPalette.Pink : Colour4.FromHex("FFD45A"),
                 practiceSucceeded ? FontAwesome.Solid.CheckCircle : FontAwesome.Solid.ExclamationCircle,
-                practiceDirectory is null || openPracticeFolder is null ? null : () => openPracticeFolder(practiceDirectory)));
+                actionLabel,
+                action));
         }
 
         if (candidates.Count == 0)
@@ -371,10 +402,15 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             return;
         practiceGeneration?.Cancel();
         practiceGeneration?.Dispose();
+        practiceLaunch?.Cancel();
+        practiceLaunch?.Dispose();
+        practiceLaunch = null;
         practiceGeneration = new CancellationTokenSource();
         creatingPracticeMap = true;
+        openingPracticeMap = false;
         practiceSucceeded = false;
         practiceDirectory = null;
+        practiceLazerArchive = null;
         practiceMessage = $"Preparing {candidate.SourceReplay.Title} [{candidate.SourceReplay.Difficulty}]";
         updatePracticeMaps();
         _ = generatePracticeMapAsync(new PracticeMapGenerationRequest(candidate, drillType), practiceGeneration.Token);
@@ -404,6 +440,51 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                 practiceSucceeded = result.Success;
                 practiceMessage = result.Message;
                 practiceDirectory = result.DirectoryPath;
+                practiceLazerArchive = result.LazerArchive;
+                updatePracticeMaps();
+            });
+        }
+    }
+
+    private void beginPracticeLaunch()
+    {
+        if (practiceLazerArchive is null || installPracticeMap is null || openingPracticeMap)
+            return;
+
+        practiceLaunch?.Cancel();
+        practiceLaunch?.Dispose();
+        practiceLaunch = new CancellationTokenSource();
+        openingPracticeMap = true;
+        practiceMessage = "Sending the generated .osz to your osu!lazer installation";
+        updatePracticeMaps();
+        _ = launchPracticeMapAsync(practiceLazerArchive, practiceLaunch.Token);
+    }
+
+    private async Task launchPracticeMapAsync(LazerBeatmapArchive archive, CancellationToken cancellationToken)
+    {
+        LazerBeatmapInstallResult result;
+        try
+        {
+            result = await installPracticeMap!(archive, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+        catch
+        {
+            result = new LazerBeatmapInstallResult(LazerBeatmapInstallStatus.LaunchFailed);
+        }
+
+        if (!IsDisposed && !cancellationToken.IsCancellationRequested)
+        {
+            Schedule(() =>
+            {
+                openingPracticeMap = false;
+                practiceMessage = PracticeLaunchMessage(result.Status);
+                if (!PracticeLaunchSucceeded(result.Status))
+                    practiceSucceeded = false;
+                practiceLazerArchive = null;
                 updatePracticeMaps();
             });
         }
@@ -984,6 +1065,8 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         loading?.Dispose();
         practiceGeneration?.Cancel();
         practiceGeneration?.Dispose();
+        practiceLaunch?.Cancel();
+        practiceLaunch?.Dispose();
         if (sourceChanges is not null)
             sourceChanges.SourceChanged -= sourceChanged;
         base.Dispose(isDisposing);
@@ -1027,6 +1110,19 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
 
     internal static string PracticeSourceSummary(PracticeMapCandidate candidate) =>
         $"Source difficulty: {candidate.SourceReplay.Difficulty}  //  last played {candidate.SourceReplay.PlayedAt.ToString("MMM d, yyyy", System.Globalization.CultureInfo.InvariantCulture)}";
+
+    internal static bool PracticeLaunchSucceeded(LazerBeatmapInstallStatus status) =>
+        status is LazerBeatmapInstallStatus.Sent or LazerBeatmapInstallStatus.LazerStarted;
+
+    internal static string PracticeLaunchMessage(LazerBeatmapInstallStatus status) => status switch
+    {
+        LazerBeatmapInstallStatus.Sent => "The drill was sent to osu!lazer. It will appear after import completes.",
+        LazerBeatmapInstallStatus.LazerStarted => "osu!lazer opened and is importing the drill.",
+        LazerBeatmapInstallStatus.ArchiveUnavailable => "The preserved .osz is unavailable. Open the export folder to import it manually.",
+        LazerBeatmapInstallStatus.LazerNotFound => "osu!lazer was not found. Open the export folder to import the .osz manually.",
+        LazerBeatmapInstallStatus.LazerRejected => "osu!lazer did not accept the drill. Open the export folder to import it manually.",
+        _ => "AimMod could not open osu!lazer. Open the export folder to import the .osz manually.",
+    };
 
     private partial class AnalysisProgressBanner : CompositeDrawable
     {
@@ -1746,7 +1842,13 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
 
     private partial class PracticeStatusRow : CompositeDrawable
     {
-        public PracticeStatusRow(string titleText, string detailText, Colour4 accentColour, IconUsage iconUsage, Action? open = null)
+        public PracticeStatusRow(
+            string titleText,
+            string detailText,
+            Colour4 accentColour,
+            IconUsage iconUsage,
+            string? actionLabel = null,
+            Action? action = null)
         {
             RelativeSizeAxes = Axes.X;
             Height = 70;
@@ -1771,7 +1873,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                 {
                     RelativeSizeAxes = Axes.X,
                     AutoSizeAxes = Axes.Y,
-                    Padding = new MarginPadding { Left = 42, Right = open is null ? 14 : 110, Top = 11 },
+                    Padding = new MarginPadding { Left = 42, Right = action is null ? 14 : 118, Top = 11 },
                     Direction = FillDirection.Vertical,
                     Spacing = new(3),
                     Children = new Drawable[]
@@ -1781,9 +1883,9 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                     },
                 },
             };
-            if (open is not null)
+            if (action is not null && actionLabel is not null)
             {
-                children.Add(new ActionButton("Open folder", open)
+                children.Add(new ActionButton(actionLabel, action)
                 {
                     Anchor = Anchor.CentreRight,
                     Origin = Anchor.CentreRight,

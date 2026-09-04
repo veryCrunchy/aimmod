@@ -67,6 +67,7 @@ public partial class AimModGame : OsuGameBase
     private IAccountScoreHistoryService? accountScoreHistoryService;
     private IOfficialBeatmapDiscoveryClient? officialBeatmapDiscoveryClient;
     private OnlineBeatmapImportService? onlineBeatmapImportService;
+    private ILazerBeatmapInstallService? lazerBeatmapInstallService;
     private IPpTargetExactCalculationService? ppTargetExactCalculationService;
     private ILocalScorePpHydrationService? localScorePpHydrationService;
     private ExternalLazerInstalledSkinSource? externalSkinSource;
@@ -196,6 +197,10 @@ public partial class AimModGame : OsuGameBase
                 return;
             }
 
+            var lazerInstall = new LazerBeatmapInstallService(
+                Storage.GetFullPath("downloads/lazer-handoff", true));
+            lazerBeatmapInstallService = lazerInstall;
+
             if (switchableLocalLibrary is not null)
             {
                 var externalLibrary = new ExternalLazerLocalLibrarySource(root.CanonicalPath);
@@ -246,14 +251,12 @@ public partial class AimModGame : OsuGameBase
                 Storage.GetFullPath("cache/pp-target-exact-v2.json", true),
                 (IOfficialBeatmapDifficultyClient)officialBeatmapDiscoveryClient,
                 Storage.GetFullPath("downloads/pp-target-difficulties", true));
-            var lazerBeatmapInstallService = new LazerBeatmapInstallService(
-                Storage.GetFullPath("downloads/lazer-handoff", true));
             onlineBeatmapImportService = new OnlineBeatmapImportService(
                 officialBeatmapDiscoveryClient,
                 BeatmapManager,
                 Storage.GetFullPath("downloads/beatmaps", true),
                 localLibrary,
-                lazerBeatmapInstallService);
+                lazerInstall);
             monitor.StateChanged += lazerSessionChanged;
             Schedule(() => applyLazerSessionState(monitor.Current));
         }
@@ -467,7 +470,8 @@ public partial class AimModGame : OsuGameBase
             prepareCatalogReplay,
             () => accountScoreHistoryService,
             createPracticeMap,
-            openPracticeFolder)
+            openPracticeFolder,
+            installPracticeMap)
         {
             RelativeSizeAxes = Axes.Both,
         };
@@ -522,14 +526,37 @@ public partial class AimModGame : OsuGameBase
                 new WindowsFfmpegAudioSlicer(),
                 cancellationToken).ConfigureAwait(false);
             string archive = PracticeMapPackageService.Create(export, Path.Combine(root, "AimMod practice.osz"));
+            LazerBeatmapArchive? lazerArchive = null;
+            if (lazerBeatmapInstallService is not null)
+            {
+                try
+                {
+                    lazerArchive = await lazerBeatmapInstallService.PreserveAsync(archive, 0, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or InvalidOperationException)
+                {
+                    logFailure("prepare practice map for osu!lazer", error);
+                }
+            }
             cancellationToken.ThrowIfCancellationRequested();
             Live<BeatmapSetInfo>? imported = await BeatmapManager.Import(new PreservedBeatmapImportTask(archive), cancellationToken: cancellationToken)
                                                                  .ConfigureAwait(false);
             if (imported is null)
-                return new PracticeMapGenerationResult(false, "The drill was exported, but AimMod could not add it to the beatmap library.", root);
+            {
+                if (lazerArchive is not null)
+                    return new PracticeMapGenerationResult(true, $"{plans[0].OutputVersion} is ready to open in osu!lazer.", root, archive, lazerArchive);
+                return new PracticeMapGenerationResult(false, "The drill was exported, but AimMod could not add it to the beatmap library.", root, archive);
+            }
 
             localLibrary.Invalidate();
-            return new PracticeMapGenerationResult(true, $"{plans[0].OutputVersion} was added to your AimMod beatmaps.", root);
+            string message = lazerArchive is null
+                ? $"{plans[0].OutputVersion} was created. Open its folder to import the .osz."
+                : $"{plans[0].OutputVersion} is ready to open in osu!lazer.";
+            return new PracticeMapGenerationResult(true, message, root, archive, lazerArchive);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -554,10 +581,27 @@ public partial class AimModGame : OsuGameBase
     {
         if (!OperatingSystem.IsWindows() || !Directory.Exists(path))
             return;
-        var startInfo = new ProcessStartInfo("explorer.exe") { UseShellExecute = false };
-        startInfo.ArgumentList.Add(Path.GetFullPath(path));
-        Process.Start(startInfo);
+        Process.Start(CreatePracticeFolderStartInfo(path));
     }
+
+    internal static ProcessStartInfo CreatePracticeFolderStartInfo(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        if (!Path.IsPathFullyQualified(path))
+            throw new ArgumentException("The practice-map directory must be absolute.", nameof(path));
+        return new ProcessStartInfo
+        {
+            FileName = Path.GetFullPath(path),
+            UseShellExecute = true,
+            Verb = "open",
+        };
+    }
+
+    private Task<LazerBeatmapInstallResult> installPracticeMap(
+        LazerBeatmapArchive archive,
+        CancellationToken cancellationToken) =>
+        lazerBeatmapInstallService?.InstallAsync(archive, cancellationToken)
+        ?? Task.FromResult(new LazerBeatmapInstallResult(LazerBeatmapInstallStatus.LazerNotFound));
 
     private void showPpTargets()
     {
