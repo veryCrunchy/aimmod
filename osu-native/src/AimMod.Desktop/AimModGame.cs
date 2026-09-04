@@ -201,7 +201,7 @@ public partial class AimModGame : OsuGameBase
             }
 
             var lazerInstall = new LazerBeatmapInstallService(
-                Storage.GetFullPath("downloads/lazer-handoff", true));
+                LazerHandoffDirectory);
             lazerBeatmapInstallService = lazerInstall;
 
             if (switchableLocalLibrary is not null)
@@ -574,6 +574,9 @@ public partial class AimModGame : OsuGameBase
         CancellationToken cancellationToken) =>
         lazerBeatmapInstallService?.InstallAsync(archive, cancellationToken)
         ?? Task.FromResult(new LazerBeatmapInstallResult(LazerBeatmapInstallStatus.LazerNotFound));
+
+    internal static string LazerHandoffDirectory =>
+        Path.GetFullPath(Path.Combine(Path.GetTempPath(), "AimMod", "lazer-handoff"));
 
     private void showPpTargets()
     {

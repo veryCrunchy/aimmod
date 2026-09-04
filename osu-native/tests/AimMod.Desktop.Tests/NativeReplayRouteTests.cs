@@ -16,6 +16,14 @@ namespace AimMod.Desktop.Tests;
 [TestFixture]
 public sealed class NativeReplayRouteTests
 {
+    [Test]
+    public void LazerHandoffUsesTheOperatingSystemTemporaryDirectory()
+    {
+        Assert.That(
+            AimModGame.LazerHandoffDirectory,
+            Is.EqualTo(Path.GetFullPath(Path.Combine(Path.GetTempPath(), "AimMod", "lazer-handoff"))));
+    }
+
     private string temporaryDirectory = null!;
 
     [SetUp]
