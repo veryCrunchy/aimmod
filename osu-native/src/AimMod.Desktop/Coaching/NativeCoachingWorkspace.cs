@@ -23,6 +23,7 @@ namespace AimMod.Desktop.Coaching;
 public partial class NativeCoachingWorkspace : CompositeDrawable
 {
     private const int visible_run_limit = 24;
+    private const int practice_candidate_limit = 100;
 
     private readonly ILocalLibrarySource source;
     private readonly ILocalLibrarySourceChanged? sourceChanges;
@@ -46,6 +47,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     private readonly FillFlowContainer<Drawable> changesHost;
     private readonly FillFlowContainer<Drawable> recommendationHost;
     private readonly FillFlowContainer<Drawable> practiceHost;
+    private readonly SectionLine practiceSectionLine;
     private readonly OsuTextBox search;
     private readonly FillFlowContainer<Drawable> runList;
     private readonly AimModLoadingOverlay loadingOverlay;
@@ -117,7 +119,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                 new Drawable[]
                 {
                     createPerformancePanel(out trendChart, out selectedRunHost, out exactAnalysisHost),
-                    createPracticePanel(out practiceHost),
+                    createPracticePanel(out practiceHost, out practiceSectionLine),
                 },
             },
         });
@@ -335,7 +337,11 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     private void updatePracticeMaps()
     {
         practiceHost.Clear();
-        IReadOnlyList<PracticeMapCandidate> candidates = PracticeMapCandidateBuilder.Build(replays, analyses, 2);
+        IReadOnlyList<PracticeMapCandidate> candidates = PracticeMapCandidateBuilder.Build(
+            replays,
+            analyses,
+            practice_candidate_limit);
+        practiceSectionLine.SetDetail(PracticeCandidateDetail(candidates.Count, practice_candidate_limit));
 
         if (creatingPracticeMap)
         {
@@ -391,8 +397,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             return;
         }
 
-        int visibleCandidates = string.IsNullOrWhiteSpace(practiceMessage) ? candidates.Count : 1;
-        foreach (PracticeMapCandidate candidate in candidates.Take(visibleCandidates))
+        foreach (PracticeMapCandidate candidate in candidates)
             practiceHost.Add(new PracticeCandidateRow(candidate, beginPracticeMap));
     }
 
@@ -862,7 +867,9 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         return panel;
     }
 
-    private static Container createPracticePanel(out FillFlowContainer<Drawable> practice)
+    private static Container createPracticePanel(
+        out FillFlowContainer<Drawable> practice,
+        out SectionLine section)
     {
         Container outer = new Container
         {
@@ -879,17 +886,23 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             Spacing = new(9),
         };
         panel.Child = body;
-        body.Add(sectionLine("Practice map builder", "Ranked weak sections"));
+        body.Add(section = new SectionLine("Practice map builder", "Finding maps"));
         body.Add(flow(
             "Generate a focused drill from the map sections where your misses repeat.",
             11,
             AimModPalette.Muted));
-        body.Add(practice = new FillFlowContainer<Drawable>
+        body.Add(new OsuScrollContainer
         {
             RelativeSizeAxes = Axes.X,
-            AutoSizeAxes = Axes.Y,
-            Direction = FillDirection.Vertical,
-            Spacing = new(8),
+            Height = 288,
+            Child = practice = new FillFlowContainer<Drawable>
+            {
+                RelativeSizeAxes = Axes.X,
+                AutoSizeAxes = Axes.Y,
+                Direction = FillDirection.Vertical,
+                Spacing = new(8),
+                Padding = new MarginPadding { Right = 10, Bottom = 12 },
+            },
         });
         return outer;
     }
@@ -1110,6 +1123,14 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
 
     internal static string PracticeSourceSummary(PracticeMapCandidate candidate) =>
         $"Source difficulty: {candidate.SourceReplay.Difficulty}  //  last played {candidate.SourceReplay.PlayedAt.ToString("MMM d, yyyy", System.Globalization.CultureInfo.InvariantCulture)}";
+
+    internal static string PracticeCandidateDetail(int count, int limit) => count switch
+    {
+        <= 0 => "No maps ready",
+        1 => "1 practice map ready",
+        _ when count >= limit => $"Top {count:N0} practice maps",
+        _ => $"{count:N0} practice maps ready",
+    };
 
     internal static bool PracticeLaunchSucceeded(LazerBeatmapInstallStatus status) =>
         status is LazerBeatmapInstallStatus.Sent or LazerBeatmapInstallStatus.LazerStarted;
@@ -1562,6 +1583,8 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                 }),
             };
         }
+
+        public void SetDetail(string value) => detail.Text = value;
 
         protected override void Update()
         {

@@ -214,6 +214,18 @@ public sealed class NativeCoachingWorkspaceTests
     }
 
     [Test]
+    public void PracticeCandidateHeaderReportsTheAvailablePool()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(NativeCoachingWorkspace.PracticeCandidateDetail(0, 100), Is.EqualTo("No maps ready"));
+            Assert.That(NativeCoachingWorkspace.PracticeCandidateDetail(1, 100), Is.EqualTo("1 practice map ready"));
+            Assert.That(NativeCoachingWorkspace.PracticeCandidateDetail(37, 100), Is.EqualTo("37 practice maps ready"));
+            Assert.That(NativeCoachingWorkspace.PracticeCandidateDetail(100, 100), Is.EqualTo("Top 100 practice maps"));
+        });
+    }
+
+    [Test]
     public void PracticeLaunchCopyDistinguishesSuccessfulHandoffFromManualFallback()
     {
         Assert.Multiple(() =>

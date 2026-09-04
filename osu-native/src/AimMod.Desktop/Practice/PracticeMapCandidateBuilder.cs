@@ -28,7 +28,7 @@ public static class PracticeMapCandidateBuilder
     public static IReadOnlyList<PracticeMapCandidate> Build(
         IEnumerable<LocalReplay> replays,
         IReadOnlyDictionary<Guid, ReplayAnalysisResult> analyses,
-        int limit = 5)
+        int limit = 100)
     {
         ArgumentNullException.ThrowIfNull(replays);
         ArgumentNullException.ThrowIfNull(analyses);

@@ -37,6 +37,8 @@ public sealed partial class OffscreenVisualCaptureTests
     [TestCase("coaching-populated", 1600, 900)]
     [TestCase("coaching-complete", 1100, 760)]
     [TestCase("coaching-complete", 1600, 900)]
+    [TestCase("coaching-practice-many", 1100, 760)]
+    [TestCase("coaching-practice-many", 1600, 900)]
     [TestCase("coaching-error", 1100, 760)]
     [TestCase("coaching-empty", 1100, 760)]
     [TestCase("ppTargets", 1100, 760)]
@@ -67,6 +69,7 @@ public sealed partial class OffscreenVisualCaptureTests
                 "statistics-populated" => new CaptureStatisticsGame(host, source, outputPath, width, height, succeeded, failed),
                 "coaching-populated" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.Analysing, succeeded, failed),
                 "coaching-complete" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.Complete, succeeded, failed),
+                "coaching-practice-many" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.PracticeMany, succeeded, failed),
                 "coaching-error" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.Error, succeeded, failed),
                 "coaching-empty" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.Empty, succeeded, failed),
                 "replays-analysis" => new CaptureReplayAnalysisGame(host, source, outputPath, width, height, succeeded, failed),
@@ -121,26 +124,30 @@ public sealed partial class OffscreenVisualCaptureTests
                 string.Empty);
         }).ToArray();
 
-        LocalBeatmapDifficulty selected = sets[0].Difficulties[0];
-        LocalReplay[] replays = Enumerable.Range(0, 7).Select(index => new LocalReplay(
-            Guid.NewGuid(),
-            sets[0].SetId,
-            selected.BeatmapId,
-            sets[0].Title,
-            sets[0].Artist,
-            selected.Name,
-            "osu",
-            "verycrunchy",
-            DateTimeOffset.Now.AddDays(-7 + index),
-            selected.StarRating,
-            0.91 + index * 0.011,
-            850_000 + index * 43_000,
-            420 + index * 31,
-            Math.Max(0, 6 - index),
-            110 + index * 12,
-            Array.Empty<string>(),
-            true,
-            selected.BeatmapHash)).ToArray();
+        LocalReplay[] replays = Enumerable.Range(0, 7).Select(index =>
+        {
+            LocalBeatmapSet set = sets[index];
+            LocalBeatmapDifficulty selected = set.Difficulties[0];
+            return new LocalReplay(
+                Guid.NewGuid(),
+                set.SetId,
+                selected.BeatmapId,
+                set.Title,
+                set.Artist,
+                selected.Name,
+                "osu",
+                "verycrunchy",
+                DateTimeOffset.Now.AddDays(-7 + index),
+                selected.StarRating,
+                0.91 + index * 0.011,
+                850_000 + index * 43_000,
+                420 + index * 31,
+                Math.Max(0, 6 - index),
+                110 + index * 12,
+                Array.Empty<string>(),
+                true,
+                selected.BeatmapHash);
+        }).ToArray();
 
         return new InMemoryLocalLibrarySource(sets, replays);
     }
@@ -468,7 +475,8 @@ public sealed partial class OffscreenVisualCaptureTests
         private void load()
         {
             LocalReplay[] replays = source.SearchReplaysAsync(new LocalLibraryQuery(Limit: 200)).AsTask().GetAwaiter().GetResult().Items.ToArray();
-            var analyses = replays.Take(3)
+            int analysisCount = state == CoachingCaptureState.PracticeMany ? replays.Length : 3;
+            var analyses = replays.Take(analysisCount)
                                   .Select((replay, index) => (replay, index))
                                   .ToDictionary(item => item.replay.ScoreId, item => createCoachingAnalysis(item.index));
 
@@ -499,8 +507,9 @@ public sealed partial class OffscreenVisualCaptureTests
                     return;
 
                 workspace.BeginAnalysisProgress();
-                workspace.SetAnalysisProgress(state == CoachingCaptureState.Complete ? 7 : 3, 7, "Blue Zenith [Another]");
-                if (state == CoachingCaptureState.Complete)
+                bool complete = state is CoachingCaptureState.Complete or CoachingCaptureState.PracticeMany;
+                workspace.SetAnalysisProgress(complete ? 7 : 3, 7, "Blue Zenith [Another]");
+                if (complete)
                     workspace.ApplyNewAnalyses(3, 0);
                 else if (state == CoachingCaptureState.Error)
                     workspace.SetAnalysisError();
@@ -542,6 +551,7 @@ public sealed partial class OffscreenVisualCaptureTests
     {
         Analysing,
         Complete,
+        PracticeMany,
         Error,
         Empty,
     }

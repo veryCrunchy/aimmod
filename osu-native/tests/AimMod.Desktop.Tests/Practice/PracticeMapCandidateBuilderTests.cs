@@ -44,6 +44,23 @@ public sealed class PracticeMapCandidateBuilderTests
         }), Is.Empty);
     }
 
+    [Test]
+    public void ReturnsManyDistinctPracticeMapsAndHonoursAnExplicitLimit()
+    {
+        LocalReplay[] runs = Enumerable.Range(0, 30)
+                                       .Select(index => replay(Guid.NewGuid(), Guid.NewGuid(), $"Map {index}", true))
+                                       .ToArray();
+        Dictionary<Guid, ReplayAnalysisResult> analyses = runs.ToDictionary(
+            run => run.ScoreId,
+            _ => analysis(miss(2)));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(PracticeMapCandidateBuilder.Build(runs, analyses), Has.Count.EqualTo(30));
+            Assert.That(PracticeMapCandidateBuilder.Build(runs, analyses, 12), Has.Count.EqualTo(12));
+        });
+    }
+
     private static LocalReplay replay(Guid scoreId, Guid beatmapId, string title, bool local) => new(
         scoreId, Guid.NewGuid(), beatmapId, title, "Artist", "Difficulty", "osu", "Player",
         DateTimeOffset.UtcNow, 5, 0.95, 1_000_000, 500, 1, 100, Array.Empty<string>(), true,
