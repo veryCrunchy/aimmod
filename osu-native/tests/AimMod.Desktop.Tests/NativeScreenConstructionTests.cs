@@ -92,6 +92,21 @@ public sealed class NativeScreenConstructionTests
     }
 
     [Test]
+    public void DeepLinksSelectOnlineTabsBeforeScreensLoad()
+    {
+        using var beatmaps = new NativeBeatmapDiscoveryScreen(source, () => throw new AssertionException("No request before load"), () => null);
+        beatmaps.OpenSet(123);
+        Assert.That(beatmaps.GetCurrentTabForTesting(), Is.EqualTo(NativeBeatmapDiscoveryScreen.BeatmapDiscoveryTab.Online));
+        var online = (NativeOfficialBeatmapSearchScreen)beatmaps.GetActiveScreenForTesting()!;
+        Assert.That(online.SelectedSetIdForTesting, Is.EqualTo(123));
+        beatmaps.OpenSet(456);
+        Assert.That(online.SelectedSetIdForTesting, Is.EqualTo(456));
+        using var skins = new NativeSkinsScreen();
+        skins.OpenOnlineSkin("osuskins-net", "3sXe0RR");
+        Assert.That(skins.GetCurrentTabForTesting(), Is.EqualTo(NativeSkinsScreen.SkinsWorkspaceTab.Online));
+    }
+
+    [Test]
     public void BeatmapDiscoveryCanReturnToInstalledTab()
     {
         var screen = new NativeBeatmapDiscoveryScreen(source, () => null, () => null);

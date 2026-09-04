@@ -4,12 +4,18 @@ public sealed record ReplayOpenRequest(string BeatmapPath, string ReplayPath);
 
 public sealed record AimModLaunchOptions(ReplayOpenRequest? Replay, string? Error)
 {
+    public AimModDeepLink? DeepLink { get; init; }
     public static AimModLaunchOptions Home { get; } = new(null, null);
 
     public static AimModLaunchOptions Parse(IReadOnlyList<string> args)
     {
         if (args.Count == 0)
             return Home;
+
+        if (args.Count == 1 && AimModDeepLink.TryParse(args[0], out var link))
+            return Home with { DeepLink = link };
+        if (args.Any(arg => arg.StartsWith("aimmod-osu:", StringComparison.OrdinalIgnoreCase)))
+            return invalid("This AimMod link is invalid. Open a beatmap set or skin link from the website.");
 
         var values = new Dictionary<string, string>(StringComparer.Ordinal);
 

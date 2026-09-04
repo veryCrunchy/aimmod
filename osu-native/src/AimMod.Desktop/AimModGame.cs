@@ -136,6 +136,30 @@ public partial class AimModGame : OsuGameBase
         GC.KeepAlive(standardRulesetAssembly);
     }
 
+    internal AimModLinkInbox? LinkInbox { get; init; }
+
+    protected override void Update()
+    {
+        base.Update();
+        while (LinkInbox?.TryTake(out var link) == true)
+            openDeepLink(link!);
+    }
+
+    private void openDeepLink(AimModDeepLink link)
+    {
+        if (link.BeatmapSetId is int setId)
+        {
+            showBeatmaps();
+            beatmapsScreen!.OpenSet(setId);
+        }
+        else
+        {
+            showSkins();
+            skinsScreen!.OpenOnlineSkin(link.ProviderId!, link.SourceId!);
+        }
+        Host.Window?.Raise();
+    }
+
     protected override void LoadComplete()
     {
         base.LoadComplete();
@@ -200,6 +224,12 @@ public partial class AimModGame : OsuGameBase
         // discover or mutate the user's live lazer session.
         if (configuredLocalLibrary is null)
             _ = connectLazerSession(appLifetime.Token);
+
+        if (launchOptions.DeepLink is not null)
+        {
+            openDeepLink(launchOptions.DeepLink);
+            return;
+        }
 
         if (launchOptions.Error is not null)
         {

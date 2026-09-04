@@ -21,7 +21,13 @@ public static class Program
             return runProbe();
 
         if (ShouldRunVelopackBootstrap(args))
-            VelopackApp.Build().Run();
+        {
+            var app = VelopackApp.Build();
+            if (OperatingSystem.IsWindows())
+                app.OnAfterInstallFastCallback(_ => AimModProtocolRegistration.Refresh())
+                   .OnAfterUpdateFastCallback(_ => AimModProtocolRegistration.Refresh());
+            app.Run();
+        }
         return runDesktop(args);
     }
 
@@ -38,8 +44,33 @@ public static class Program
         };
 
         using DesktopGameHost host = Host.GetSuitableDesktopHost("aimmod", options);
-        host.Run(new AimModGame(launchOptions));
+        var inbox = new AimModLinkInbox();
+        using var channel = new IpcChannel<string[], string[]>(host);
+        channel.MessageReceived += arguments => inbox.Accept(arguments) ? ["accepted"] : ["rejected"];
+        // Install the receiver before binding: another process may connect during startup.
+        if (!host.IsPrimaryInstance && launchOptions.DeepLink is not null)
+        {
+            if (TryForwardLinkAsync(channel, args, TimeSpan.FromSeconds(15)).GetAwaiter().GetResult())
+                return 0;
+            // Older instances have no receiver. Keep the link available in a review window.
+        }
+        AimModProtocolRegistration.Refresh();
+        host.Run(new AimModGame(launchOptions) { LinkInbox = inbox });
         return 0;
+    }
+
+    internal static async Task<bool> TryForwardLinkAsync(IpcChannel<string[], string[]> channel, string[] args, TimeSpan timeout)
+    {
+        try
+        {
+            var reply = await channel.SendMessageWithResponseAsync(args).WaitAsync(timeout).ConfigureAwait(false);
+            return reply is ["accepted"];
+        }
+        catch (Exception error) when (error is IOException or TimeoutException)
+        {
+            Console.Error.WriteLine($"AimMod link handoff failed: {error.Message}");
+            return false;
+        }
     }
 
     private static int runProbe()

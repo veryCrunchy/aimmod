@@ -196,6 +196,60 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
         updateDetails();
     }
 
+    private (string Provider, string Id)? pendingLink;
+    private bool linkRoutingReady;
+
+    public void OpenSkin(string providerId, string sourceId)
+    {
+        pendingLink = (providerId, sourceId);
+        if (linkRoutingReady)
+            openPendingLink();
+    }
+
+    private void openPendingLink()
+    {
+        if (pendingLink is not { } target || backend is null)
+            return;
+        pendingLink = null;
+        scheduledSearch?.Cancel();
+        requestCancellation?.Cancel();
+        requestCancellation?.Dispose();
+        requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+        int requestRevision = ++revision;
+        select(null);
+        loaded = [];
+        refreshRows();
+        loading.ShowLoading("Loading skin details", "Reading the selected skin");
+        _ = openLinkAsync(target.Provider, target.Id, requestRevision, requestCancellation.Token);
+    }
+
+    private async Task openLinkAsync(string providerId, string sourceId, int requestRevision, CancellationToken token)
+    {
+        try
+        {
+            var details = await backend!.Catalog.GetDetailsAsync(providerId, sourceId, token).ConfigureAwait(false);
+            if (!IsDisposed)
+                Schedule(() =>
+                {
+                    if (requestRevision != revision || token.IsCancellationRequested)
+                        return;
+                    loading.HideLoading();
+                    loaded = details is null ? [] : [details];
+                    selected = details;
+                    status.Text = details is null ? "This skin is unavailable. Try again or visit its source." : details.Name;
+                    listState.SetState(FontAwesome.Solid.Search, "Skin unavailable", "The selected skin could not be loaded.", details is null);
+                    refreshRows();
+                    updateDetails();
+                });
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch (Exception error)
+        {
+            if (!IsDisposed)
+                Schedule(() => showError(requestRevision, error.Message));
+        }
+    }
+
     protected override void LoadComplete()
     {
         base.LoadComplete();
@@ -203,7 +257,11 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
         provider.BindValueChanged(_ => scheduleSearch());
         ruleset.BindValueChanged(_ => scheduleSearch());
         sort.BindValueChanged(_ => scheduleSearch());
-        searchCatalog();
+        linkRoutingReady = true;
+        if (pendingLink is not null)
+            openPendingLink();
+        else
+            searchCatalog();
     }
 
     protected override void Update()

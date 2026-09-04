@@ -267,6 +267,13 @@ public partial class NativeSkinsScreen : CompositeDrawable
 
     internal SkinsWorkspaceTab GetCurrentTabForTesting() => currentTab.Value;
 
+    public void OpenOnlineSkin(string providerId, string sourceId)
+    {
+        currentTab.Value = SkinsWorkspaceTab.Online;
+        showTab(SkinsWorkspaceTab.Online);
+        onlineView.OpenSkin(providerId, sourceId);
+    }
+
     internal void SelectTabForTesting(SkinsWorkspaceTab tab) => currentTab.Value = tab;
 
     private void showTab(SkinsWorkspaceTab tab)

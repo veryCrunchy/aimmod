@@ -131,6 +131,9 @@ public interface IOfficialBeatmapDifficultyClient
 
 public interface IOfficialBeatmapDiscoveryClient
 {
+    Task<OfficialBeatmapSearchResult> GetSetAsync(int beatmapSetId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(OfficialBeatmapSearchResult.Empty(OfficialBeatmapRequestStatus.InvalidResponse));
+
     Task<OfficialBeatmapSearchResult> SearchAsync(
         OfficialBeatmapSearchQuery query,
         CancellationToken cancellationToken = default);

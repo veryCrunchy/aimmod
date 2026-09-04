@@ -97,6 +97,36 @@ public sealed class OfficialBeatmapDiscoveryClient : IOfficialBeatmapDiscoveryCl
         }
     }
 
+    public async Task<OfficialBeatmapSearchResult> GetSetAsync(int beatmapSetId, CancellationToken cancellationToken = default)
+    {
+        if (beatmapSetId <= 0)
+            throw new ArgumentOutOfRangeException(nameof(beatmapSetId));
+        LazerSessionState startingState = session.Current;
+        using LazerAccessTokenLease? lease = session.TryLeaseAccessToken();
+        if (lease is null || !lease.TryGetAccessToken(out string accessToken))
+            return OfficialBeatmapSearchResult.Empty(withoutToken(startingState.Status));
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"https://osu.ppy.sh/api/v2/beatmapsets/{beatmapSetId}");
+        addJsonHeaders(request, accessToken);
+        try
+        {
+            using HttpResponseMessage response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+            var failure = await validateSessionAsync(startingState, lease, cancellationToken).ConfigureAwait(false) ?? classifyFailure(response);
+            if (failure is not null)
+                return OfficialBeatmapSearchResult.Empty(failure.Value);
+            var payload = await readJsonPayloadAsync<SearchBeatmapSet>(response, maximum_search_response_bytes, cancellationToken).ConfigureAwait(false);
+            var set = payload is null ? null : parseSet(payload);
+            return set?.BeatmapSetId == beatmapSetId
+                ? new OfficialBeatmapSearchResult(OfficialBeatmapRequestStatus.Success, [set], 1, false)
+                : OfficialBeatmapSearchResult.Empty(OfficialBeatmapRequestStatus.InvalidResponse);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception error) when (error is HttpRequestException or IOException or JsonException or TaskCanceledException)
+        {
+            return OfficialBeatmapSearchResult.Empty(error is HttpRequestException or TaskCanceledException
+                ? OfficialBeatmapRequestStatus.NetworkError : OfficialBeatmapRequestStatus.InvalidResponse);
+        }
+    }
+
     public async Task<OfficialBeatmapDownloadResult> DownloadAsync(
         int beatmapSetId,
         string destinationDirectory,

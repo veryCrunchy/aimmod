@@ -39,6 +39,9 @@ public sealed class CachedOfficialBeatmapDiscoveryClient : IOfficialBeatmapDisco
         return result;
     }
 
+    public Task<OfficialBeatmapSearchResult> GetSetAsync(int beatmapSetId, CancellationToken cancellationToken = default) =>
+        inner.GetSetAsync(beatmapSetId, cancellationToken);
+
     public Task<OfficialBeatmapDownloadResult> DownloadAsync(
         int beatmapSetId,
         string destinationDirectory,

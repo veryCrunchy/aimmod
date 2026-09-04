@@ -105,6 +105,12 @@ public partial class NativeBeatmapDiscoveryScreen : CompositeDrawable
         workspaceHeader.Width = Math.Max(0, DrawWidth - inspectorWidth - 230);
     }
 
+    public void OpenSet(int setId)
+    {
+        SelectTab(BeatmapDiscoveryTab.Online);
+        onlineScreen!.OpenSet(setId);
+    }
+
     internal void SelectTab(BeatmapDiscoveryTab tab)
     {
         currentTab.Value = tab;
@@ -184,6 +190,16 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
     private CancellationTokenSource? requestCancellation;
     private ScheduledDelegate? scheduledSearch;
     private int connectionAttempts;
+    private int? selectedSetId;
+    internal int? SelectedSetIdForTesting => selectedSetId;
+
+    public void OpenSet(int setId)
+    {
+        selectedSetId = setId;
+        connectionAttempts = 0;
+        if (IsLoaded)
+            startSearch();
+    }
 
     public NativeOfficialBeatmapSearchScreen(
         Func<IOfficialBeatmapDiscoveryClient?> client,
@@ -353,7 +369,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
     protected override void LoadComplete()
     {
         base.LoadComplete();
-        searchBox.OnCommit += (_, _) => startSearch();
+        searchBox.OnCommit += (_, _) => { selectedSetId = null; startSearch(); };
         minimumStars.BindValueChanged(_ => scheduleSearch());
         maximumStars.BindValueChanged(_ => scheduleSearch());
         category.BindValueChanged(_ => startSearch());
@@ -363,6 +379,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
 
     private void scheduleSearch()
     {
+        selectedSetId = null;
         requestCancellation?.Cancel();
         scheduledSearch?.Cancel();
         scheduledSearch = Scheduler.AddDelayed(startSearch, 250);
@@ -388,8 +405,8 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
             else
                 loadingOverlay.HideLoading();
             results.Clear();
-            if (connectionAttempts < 10)
-                scheduledSearch = Scheduler.AddDelayed(startSearch, 1000);
+            if (connectionAttempts < 10 || selectedSetId is not null)
+                scheduledSearch = Scheduler.AddDelayed(startSearch, connectionAttempts < 10 ? 1000 : 5000);
             return;
         }
 
@@ -404,7 +421,9 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
     {
         try
         {
-            OfficialBeatmapSearchResult response = await currentClient.SearchAsync(new OfficialBeatmapSearchQuery(
+            OfficialBeatmapSearchResult response = selectedSetId is int setId
+                ? await currentClient.GetSetAsync(setId, cancellationToken).ConfigureAwait(false)
+                : await currentClient.SearchAsync(new OfficialBeatmapSearchQuery(
                 searchBox.Current.Value,
                 minimumStars.IsDefault ? null : minimumStars.Value,
                 maximumStars.IsDefault ? null : maximumStars.Value,
@@ -413,7 +432,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                 Limit: result_limit), cancellationToken).ConfigureAwait(false);
 
             if (!IsDisposed)
-                Schedule(() => applySearchResult(response));
+                Schedule(() => { if (!cancellationToken.IsCancellationRequested) applySearchResult(response); });
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -424,6 +443,8 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
             {
                 Schedule(() =>
                 {
+                    if (cancellationToken.IsCancellationRequested)
+                        return;
                     resultStatus.Text = $"Could not search osu!: {error.Message}";
                     loadingOverlay.HideLoading();
                 });
@@ -447,10 +468,42 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
         }
 
         foreach (OfficialBeatmapSet set in response.BeatmapSets)
+        {
             results.Add(new OnlineBeatmapCard(set, importBeatmap, installInLazer));
+            if (selectedSetId is not null)
+            {
+                foreach (OfficialBeatmapDifficulty difficulty in set.Difficulties)
+                    results.Add(new FillFlowContainer
+                    {
+                        RelativeSizeAxes = Axes.X,
+                        AutoSizeAxes = Axes.Y,
+                        Direction = FillDirection.Vertical,
+                        Padding = new MarginPadding { Horizontal = 18, Vertical = 8 },
+                        Spacing = new(0, 6),
+                        Children = new Drawable[]
+                        {
+                            new TruncatingSpriteText
+                            {
+                                RelativeSizeAxes = Axes.X,
+                                Text = $"{difficulty.Name} ({difficulty.RulesetShortName})",
+                                Font = new FontUsage(size: 14, weight: "SemiBold"),
+                                Colour = AimModPalette.Text,
+                            },
+                            new TruncatingSpriteText
+                            {
+                                RelativeSizeAxes = Axes.X,
+                                Text = $"{difficulty.StarRating:0.00} stars   {difficulty.Bpm:0.#} BPM   {difficulty.TotalLengthSeconds / 60}:{difficulty.TotalLengthSeconds % 60:00}   CS {difficulty.CircleSize:0.#}   AR {difficulty.ApproachRate:0.#}   OD {difficulty.OverallDifficulty:0.#}   HP {difficulty.DrainRate:0.#}",
+                                Font = new FontUsage(size: 11),
+                                Colour = AimModPalette.Muted,
+                            },
+                        },
+                    });
+            }
+        }
 
         resultStatus.Text = response.BeatmapSets.Count switch
         {
+            1 when selectedSetId is int id => $"Beatmap set {id}",
             0 => "No matching osu!standard beatmap sets",
             1 => "1 matching beatmap set",
             _ => $"{response.BeatmapSets.Count:N0} sets shown from {response.ServerTotal:N0} server matches",

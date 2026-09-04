@@ -125,9 +125,9 @@ public sealed class OsuckNetSkinCatalogProvider : PublicPageSkinCatalogProvider
 
     public override async Task<OnlineSkinCatalogEntry?> GetDetailsAsync(string id, CancellationToken cancellationToken = default)
     {
-        if (!int.TryParse(id, NumberStyles.None, CultureInfo.InvariantCulture, out int numericId) || numericId <= 0)
+        if (!CatalogId.IsSafe(id))
             return null;
-        Uri source = new(HomePage, $"skins/{numericId}");
+        Uri source = new(HomePage, $"skins/{id}");
         try
         {
             string html = await getHtml(source, page_hosts, cancellationToken).ConfigureAwait(false);

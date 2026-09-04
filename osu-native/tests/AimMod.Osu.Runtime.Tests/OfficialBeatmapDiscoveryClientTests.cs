@@ -65,6 +65,23 @@ public sealed class OfficialBeatmapDiscoveryClientTests
         });
     }
 
+    [TestCase(123, OfficialBeatmapRequestStatus.Success)]
+    [TestCase(456, OfficialBeatmapRequestStatus.InvalidResponse)]
+    public async Task ExactSetLookupChecksIdentityAndDoesNotDownload(int setId, OfficialBeatmapRequestStatus expected)
+    {
+        await writeSignedInSessionAsync("crunchy", access_token);
+        await using LazerSessionMonitor monitor = await LazerSessionMonitor.CreateAsync(gameIniPath);
+        using var document = JsonDocument.Parse(searchJson);
+        string payload = document.RootElement.GetProperty("beatmapsets")[0].GetRawText();
+        var handler = new RecordingHandler(_ => jsonResponse(HttpStatusCode.OK, payload));
+        using var client = new OfficialBeatmapDiscoveryClient(monitor, handler);
+        var result = await client.GetSetAsync(setId);
+        Assert.That(result.Status, Is.EqualTo(expected));
+        Assert.That(handler.Requests, Has.Count.EqualTo(1));
+        Assert.That(handler.Requests[0].Uri?.AbsolutePath, Is.EqualTo($"/api/v2/beatmapsets/{setId}"));
+        Assert.That(handler.Requests[0].Authorization, Is.EqualTo(access_token));
+    }
+
     [Test]
     public async Task EmptyDiscoveryUsesOsuRankedOrdering()
     {
