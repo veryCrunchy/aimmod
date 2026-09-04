@@ -37,7 +37,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     private readonly OsuSpriteText sessionDuration;
     private readonly OsuSpriteText sessionAccuracy;
     private readonly OsuSpriteText sessionTrend;
-    private readonly OsuSpriteText status;
+    private readonly AnalysisProgressBanner analysisBanner;
     private readonly CoachingTrendChart trendChart;
     private readonly FillFlowContainer<Drawable> selectedRunHost;
     private readonly FillFlowContainer<Drawable> exactAnalysisHost;
@@ -55,6 +55,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     private bool acceptingAnalysisProgress;
     private bool creatingPracticeMap;
     private bool practiceSucceeded;
+    private int renderedAnalysisCount = -1;
     private string practiceMessage = string.Empty;
     private string? practiceDirectory;
 
@@ -94,45 +95,34 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             out sessionDuration,
             out sessionAccuracy,
             out sessionTrend));
-        content.Add(status = label("Loading your score history...", 12, AimModPalette.Muted));
+        content.Add(analysisBanner = new AnalysisProgressBanner());
         content.Add(new GridContainer
         {
             RelativeSizeAxes = Axes.X,
-            Height = 700,
+            Height = 400,
             ColumnDimensions = new[]
             {
-                new Dimension(GridSizeMode.Relative, 0.63f),
-                new Dimension(GridSizeMode.Relative, 0.37f),
+                new Dimension(GridSizeMode.Relative, 0.59f),
+                new Dimension(GridSizeMode.Relative, 0.41f),
             },
             Content = new[]
             {
                 new Drawable[]
                 {
                     createPerformancePanel(out trendChart, out selectedRunHost, out exactAnalysisHost),
-                    createCoachPanel(out changesHost, out recommendationHost),
+                    createPracticePanel(out practiceHost),
                 },
             },
         });
         content.Add(new AimModSectionHeader(
-            "Practice maps",
-            "Train the exact patterns that repeat across your analysed local plays.",
-            "personal drills"));
-        content.Add(new WorkspacePanel(new MarginPadding(18))
-        {
-            RelativeSizeAxes = Axes.X,
-            AutoSizeAxes = Axes.Y,
-            Child = practiceHost = new FillFlowContainer<Drawable>
-            {
-                RelativeSizeAxes = Axes.X,
-                AutoSizeAxes = Axes.Y,
-                Direction = FillDirection.Vertical,
-                Spacing = new(8),
-            },
-        });
+            "Coaching plan",
+            "Priorities and next plays ranked from your account-wide profile.",
+            "global plan"));
+        content.Add(createCoachPanel(out changesHost, out recommendationHost).With(panel => panel.Height = 430));
         content.Add(new AimModSectionHeader(
             "Beatmap drill-down",
-            "Search merged account history, inspect one play, then open its saved replay for object-level review.",
-            "global history"));
+            "Inspect a play, then open its replay for object-level review.",
+            "play history"));
         content.Add(search = new OsuTextBox
         {
             RelativeSizeAxes = Axes.X,
@@ -171,7 +161,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         loading?.Cancel();
         loading?.Dispose();
         loading = new CancellationTokenSource();
-        status.Text = "Loading your score history...";
+        analysisBanner.ShowHistoryLoading();
         loadingOverlay.ShowLoading("Preparing coaching", "Merging submitted and local osu!standard scores");
         _ = loadAsync(loading.Token);
     }
@@ -199,10 +189,12 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             {
                 throw;
             }
-            catch (Exception error)
+            catch (Exception)
             {
                 if (!IsDisposed)
-                    Schedule(() => status.Text = $"Using local coaching history; submitted scores could not be refreshed. {error.Message}");
+                    Schedule(() => analysisBanner.ShowWarning(
+                        "Submitted scores could not be refreshed",
+                        "Your local plays and replay evidence remain available."));
                 return;
             }
 
@@ -214,13 +206,15 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
         }
-        catch (Exception error)
+        catch (Exception)
         {
             if (!IsDisposed)
                 Schedule(() =>
                 {
                     loadingOverlay.HideLoading();
-                    status.Text = $"Your score history could not be loaded. {error.Message}";
+                    analysisBanner.ShowError(
+                        "Score history could not be loaded",
+                        "Check the local osu! data source and reopen Coaching.");
                 });
         }
     }
@@ -233,12 +227,12 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     {
         replays = nextReplays;
         workspace = next;
+        renderedAnalysisCount = analyses.Count;
         int submitted = online?.Scores.Count ?? 0;
-        status.Text = total > nextReplays.Count
-            ? $"Coaching uses {nextReplays.Count:N0} merged scores ({submitted:N0} submitted) from {total:N0} available records"
-            : $"Coaching uses {nextReplays.Count:N0} merged scores ({submitted:N0} submitted)";
         loadingOverlay.HideLoading();
         updateWorkspace();
+        if (!acceptingAnalysisProgress)
+            analysisBanner.ShowReady(next.GlobalProfile, nextReplays.Count, submitted, total);
     }
 
     private void selectRun(Guid scoreId)
@@ -258,23 +252,36 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         if (!acceptingAnalysisProgress || total <= 0)
             return;
 
-        Guid? selectedScoreId = workspace?.SelectedRun?.ScoreId;
-        workspace = NativeCoachingWorkspaceModel.Build(replays, analyses, selectedScoreId);
-        updateWorkspace();
+        if (workspace is not null && renderedAnalysisCount != analyses.Count)
+        {
+            Guid? selectedScoreId = workspace.SelectedRun?.ScoreId;
+            workspace = NativeCoachingWorkspaceModel.Build(replays, analyses, selectedScoreId);
+            renderedAnalysisCount = analyses.Count;
+            updateWorkspace();
+        }
 
-        status.Text = completed >= total
-            ? $"Analysed {total:N0} recent saved {(total == 1 ? "replay" : "replays")}. Updating coaching..."
-            : $"Analysing recent saved replays {completed + 1:N0}/{total:N0}: {currentTitle}";
-        loadingOverlay.SetProgress(
-            completed >= total ? "Updating your coaching report" : currentTitle,
+        analysisBanner.ShowAnalysing(
             completed,
-            total);
+            total,
+            currentTitle,
+            workspace?.GlobalProfile.Coverage.AnalysedRunCount ?? analyses.Count);
+        if (workspace is null)
+        {
+            loadingOverlay.SetProgress(
+                completed >= total ? "Updating your coaching report" : currentTitle,
+                completed,
+                total);
+        }
+        else
+        {
+            loadingOverlay.HideLoading();
+        }
     }
 
     public void BeginAnalysisProgress()
     {
         acceptingAnalysisProgress = true;
-        status.Text = "Analysing saved replays in the background; the profile updates as evidence is cached.";
+        analysisBanner.ShowStarting(workspace?.GlobalProfile.Coverage.AnalysedRunCount ?? analyses.Count);
         if (workspace is null)
             loadingOverlay.ShowLoading("Preparing coaching", "Loading score history before replay analysis");
         else
@@ -286,15 +293,10 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         acceptingAnalysisProgress = false;
         Guid? selectedScoreId = workspace?.SelectedRun?.ScoreId;
         workspace = NativeCoachingWorkspaceModel.Build(replays, analyses, selectedScoreId);
+        renderedAnalysisCount = analyses.Count;
         updateWorkspace();
 
-        status.Text = completed switch
-        {
-            > 0 when failed > 0 => $"Added exact analysis for {completed:N0} recent saved {(completed == 1 ? "replay" : "replays")}; {failed:N0} could not be read.",
-            > 0 => $"Added exact timing and miss locations from {completed:N0} recent saved {(completed == 1 ? "replay" : "replays")}.",
-            _ when failed > 0 => "Recent saved replays could not be analysed. You can still open any available replay below.",
-            _ => status.Text,
-        };
+        analysisBanner.ShowComplete(workspace.GlobalProfile, completed, failed);
         loadingOverlay.HideLoading();
     }
 
@@ -302,7 +304,9 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     {
         acceptingAnalysisProgress = false;
         loadingOverlay.HideLoading();
-        status.Text = "Recent replay analysis stopped. You can still open any available replay below.";
+        analysisBanner.ShowError(
+            "Replay analysis paused",
+            "Your existing coaching profile and generated drills are still available.");
     }
 
     private void updateWorkspace()
@@ -324,14 +328,15 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     private void updatePracticeMaps()
     {
         practiceHost.Clear();
-        IReadOnlyList<PracticeMapCandidate> candidates = PracticeMapCandidateBuilder.Build(replays, analyses, 3);
-        practiceHost.Add(sectionLine("Targeted drills", candidates.Count == 0
-            ? "Analysed local misses will appear here"
-            : "Built from unchanged sections of maps you have played"));
+        IReadOnlyList<PracticeMapCandidate> candidates = PracticeMapCandidateBuilder.Build(replays, analyses, 2);
 
         if (creatingPracticeMap)
         {
-            practiceHost.Add(new PracticeStatusRow("Creating practice map", practiceMessage, AimModPalette.Cyan));
+            practiceHost.Add(new PracticeStatusRow(
+                "Creating your drill",
+                practiceMessage,
+                AimModPalette.Cyan,
+                FontAwesome.Solid.CircleNotch));
             return;
         }
 
@@ -341,16 +346,22 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                 practiceSucceeded ? "Practice map ready" : practiceDirectory is null ? "Practice map not created" : "Practice map exported",
                 practiceMessage,
                 practiceSucceeded ? AimModPalette.Success : practiceDirectory is null ? AimModPalette.Pink : Colour4.FromHex("FFD45A"),
+                practiceSucceeded ? FontAwesome.Solid.CheckCircle : FontAwesome.Solid.ExclamationCircle,
                 practiceDirectory is null || openPracticeFolder is null ? null : () => openPracticeFolder(practiceDirectory)));
         }
 
         if (candidates.Count == 0)
         {
-            practiceHost.Add(flow("Background replay analysis is still building enough exact local evidence for a drill.", 12, AimModPalette.Muted));
+            practiceHost.Add(new PracticeEmptyState(
+                acceptingAnalysisProgress ? "Finding your weakest patterns" : "More replay evidence needed",
+                acceptingAnalysisProgress
+                    ? "Practice candidates will appear as repeated misses are confirmed."
+                    : "Play or import saved replays to identify repeatable jump and stream sections."));
             return;
         }
 
-        foreach (PracticeMapCandidate candidate in candidates)
+        int visibleCandidates = string.IsNullOrWhiteSpace(practiceMessage) ? candidates.Count : 1;
+        foreach (PracticeMapCandidate candidate in candidates.Take(visibleCandidates))
             practiceHost.Add(new PracticeCandidateRow(candidate, beginPracticeMap));
     }
 
@@ -408,8 +419,8 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             headerArtwork.Add(new AimModLocalArtwork(selected.BackgroundPath));
 
         sessionTitle.Text = selected is null
-            ? "Global coaching overview"
-            : $"{selected.Title} [{selected.Difficulty}]";
+            ? "Global coaching profile"
+            : $"Selected map: {selected.Title} [{selected.Difficulty}]";
         sessionPlays.Text = selected is null
             ? $"{global.RunCount:N0} merged {(global.RunCount == 1 ? "play" : "plays")}"
             : session is null ? "Selected play" : $"{session.PlayCount:N0} session {(session.PlayCount == 1 ? "play" : "plays")}";
@@ -444,7 +455,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             selectedRunHost.Add(new GridContainer
             {
                 RelativeSizeAxes = Axes.X,
-                Height = 78,
+                Height = 48,
                 ColumnDimensions = new[]
                 {
                     new Dimension(GridSizeMode.Relative, 0.25f),
@@ -479,29 +490,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         if (run is null)
         {
             GlobalCoachingProfile profile = workspace?.GlobalProfile ?? GlobalCoachingProfile.Empty;
-            exactAnalysisHost.Add(new GridContainer
-            {
-                RelativeSizeAxes = Axes.X,
-                Height = 58,
-                ColumnDimensions = new[]
-                {
-                    new Dimension(GridSizeMode.Relative, 0.25f),
-                    new Dimension(GridSizeMode.Relative, 0.25f),
-                    new Dimension(GridSizeMode.Relative, 0.25f),
-                    new Dimension(GridSizeMode.Relative, 0.25f),
-                },
-                Content = new[]
-                {
-                    new Drawable[]
-                    {
-                        miniMetric("Replay coverage", ProfileCoverageValue(profile), AimModPalette.Success),
-                        miniMetric("Analysed maps", $"{profile.Coverage.AnalysedMapCount:N0}/{profile.Coverage.DistinctMapCount:N0}", AimModPalette.Cyan),
-                        miniMetric("Judgements", profile.Coverage.JudgementCount.ToString("N0"), AimModPalette.Pink),
-                        miniMetric("Confidence", confidenceLabel(profile.Coverage.Confidence), Colour4.FromHex("FFD45A")),
-                    },
-                },
-            });
-            exactAnalysisHost.Add(new GlobalEvidenceStrip(profile));
+            exactAnalysisHost.Add(new GlobalSkillProfileGrid(profile));
             return;
         }
 
@@ -577,7 +566,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             {
                 changesHost.Add(new InsightRow(
                     "Build replay evidence",
-                    "Background replay analysis will populate timing, aim, recurring weaknesses, and practice priorities here.",
+                    "Replay review will populate timing, aim, recurring weaknesses, and practice priorities here.",
                     "Waiting",
                     AimModPalette.Cyan));
             }
@@ -662,15 +651,15 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         var header = new Container
         {
             RelativeSizeAxes = Axes.X,
-            Height = 156,
+            Height = 100,
             Masking = true,
-            CornerRadius = 14,
+            CornerRadius = 8,
             BorderThickness = 1,
             BorderColour = AimModPalette.Border,
         };
 
         artwork = new Container { RelativeSizeAxes = Axes.Both };
-        title = label("Your coaching workspace", 27, AimModPalette.Text, "Bold");
+        title = label("Global coaching overview", 24, AimModPalette.Text, "Bold");
         plays = label("No plays", 14, AimModPalette.Text, "SemiBold");
         duration = label("No session yet", 14, AimModPalette.Text, "SemiBold");
         accuracy = label("-", 25, AimModPalette.Text, "Bold");
@@ -705,9 +694,9 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                 AutoSizeAxes = Axes.Both,
                 Anchor = Anchor.CentreLeft,
                 Origin = Anchor.CentreLeft,
-                Margin = new MarginPadding { Left = 28 },
+                Margin = new MarginPadding { Left = 22 },
                 Direction = FillDirection.Vertical,
-                Spacing = new(13),
+                Spacing = new(9),
                 Children = new Drawable[]
                 {
                     title,
@@ -715,7 +704,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                     {
                         AutoSizeAxes = Axes.Both,
                         Direction = FillDirection.Horizontal,
-                        Spacing = new(28),
+                        Spacing = new(22),
                         Children = new Drawable[]
                         {
                             headerMetric(FontAwesome.Regular.PlayCircle, plays),
@@ -760,48 +749,75 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         out FillFlowContainer<Drawable> selectedHost,
         out FillFlowContainer<Drawable> analysisHost)
     {
-        var panel = new WorkspacePanel(new MarginPadding { Left = 18, Right = 16, Vertical = 18 });
+        var panel = new WorkspacePanel(new MarginPadding { Left = 16, Right = 14, Vertical = 14 });
         var body = new FillFlowContainer
         {
             RelativeSizeAxes = Axes.X,
             AutoSizeAxes = Axes.Y,
             Direction = FillDirection.Vertical,
-            Spacing = new(10),
+            Spacing = new(7),
         };
         panel.Child = body;
-        body.Add(sectionLine("Global performance history", "Select a point for beatmap detail"));
-        body.Add(chart = new CoachingTrendChart
-        {
-            RelativeSizeAxes = Axes.X,
-            Height = 250,
-        });
-        body.Add(label("COACHING SCOPE", 10, AimModPalette.Pink, "Bold"));
+        body.Add(sectionLine("Global skill profile", "All analysed maps"));
         body.Add(selectedHost = new FillFlowContainer<Drawable>
         {
             RelativeSizeAxes = Axes.X,
-            Height = 104,
+            Height = 48,
             Direction = FillDirection.Vertical,
         });
-        body.Add(label("REPLAY EVIDENCE", 10, AimModPalette.Cyan, "Bold"));
         body.Add(analysisHost = new FillFlowContainer<Drawable>
         {
             RelativeSizeAxes = Axes.X,
-            Height = 135,
+            Height = 126,
             Direction = FillDirection.Vertical,
             Spacing = new(8),
         });
+        body.Add(sectionLine("Recent performance", "Select a point to inspect"));
+        body.Add(chart = new CoachingTrendChart
+        {
+            RelativeSizeAxes = Axes.X,
+            Height = 88,
+        });
         return panel;
+    }
+
+    private static Container createPracticePanel(out FillFlowContainer<Drawable> practice)
+    {
+        Container outer = new Container
+        {
+            RelativeSizeAxes = Axes.Both,
+            Padding = new MarginPadding { Left = 8 },
+        };
+        var panel = new WorkspacePanel(new MarginPadding { Left = 16, Right = 14, Vertical = 14 });
+        outer.Child = panel;
+        var body = new FillFlowContainer
+        {
+            RelativeSizeAxes = Axes.X,
+            AutoSizeAxes = Axes.Y,
+            Direction = FillDirection.Vertical,
+            Spacing = new(9),
+        };
+        panel.Child = body;
+        body.Add(sectionLine("Practice map builder", "Ranked weak sections"));
+        body.Add(flow(
+            "Generate a focused drill from the map sections where your misses repeat.",
+            11,
+            AimModPalette.Muted));
+        body.Add(practice = new FillFlowContainer<Drawable>
+        {
+            RelativeSizeAxes = Axes.X,
+            AutoSizeAxes = Axes.Y,
+            Direction = FillDirection.Vertical,
+            Spacing = new(8),
+        });
+        return outer;
     }
 
     private static Container createCoachPanel(
         out FillFlowContainer<Drawable> changes,
         out FillFlowContainer<Drawable> recommendation)
     {
-        Container outer = new Container
-        {
-            RelativeSizeAxes = Axes.Both,
-            Padding = new MarginPadding { Left = 4 },
-        };
+        Container outer = new Container { RelativeSizeAxes = Axes.X };
         var panel = new WorkspacePanel(new MarginPadding(18));
         outer.Child = panel;
         var body = new FillFlowContainer
@@ -812,27 +828,56 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             Spacing = new(10),
         };
         panel.Child = body;
-        body.Add(sectionLine("Coaching priorities", "Ranked from personal history and exact replay evidence"));
-        body.Add(changes = new FillFlowContainer<Drawable>
+        body.Add(new GridContainer
         {
             RelativeSizeAxes = Axes.X,
-            AutoSizeAxes = Axes.Y,
-            Direction = FillDirection.Vertical,
-            Spacing = new(3),
-        });
-        body.Add(new Box
-        {
-            RelativeSizeAxes = Axes.X,
-            Height = 1,
-            Colour = AimModPalette.Border,
-            Margin = new MarginPadding { Vertical = 4 },
-        });
-        body.Add(sectionLine("Practice next", "Chosen from comparable personal plays"));
-        body.Add(recommendation = new FillFlowContainer<Drawable>
-        {
-            RelativeSizeAxes = Axes.X,
-            Height = 154,
-            Direction = FillDirection.Vertical,
+            Height = 376,
+            ColumnDimensions = new[]
+            {
+                new Dimension(GridSizeMode.Relative, 0.62f),
+                new Dimension(GridSizeMode.Relative, 0.38f),
+            },
+            Content = new[]
+            {
+                new Drawable[]
+                {
+                    new FillFlowContainer<Drawable>
+                    {
+                        RelativeSizeAxes = Axes.Both,
+                        Padding = new MarginPadding { Right = 14 },
+                        Direction = FillDirection.Vertical,
+                        Spacing = new(6),
+                        Children = new Drawable[]
+                        {
+                            sectionLine("Priorities", "Strongest evidence first"),
+                            changes = new FillFlowContainer<Drawable>
+                            {
+                                RelativeSizeAxes = Axes.X,
+                                AutoSizeAxes = Axes.Y,
+                                Direction = FillDirection.Vertical,
+                                Spacing = new(3),
+                            },
+                        },
+                    },
+                    new FillFlowContainer<Drawable>
+                    {
+                        RelativeSizeAxes = Axes.Both,
+                        Padding = new MarginPadding { Left = 14 },
+                        Direction = FillDirection.Vertical,
+                        Spacing = new(8),
+                        Children = new Drawable[]
+                        {
+                            sectionLine("Play next", "Best comparable map"),
+                            recommendation = new FillFlowContainer<Drawable>
+                            {
+                                RelativeSizeAxes = Axes.X,
+                                Height = 240,
+                                Direction = FillDirection.Vertical,
+                            },
+                        },
+                    },
+                },
+            },
         });
         return outer;
     }
@@ -897,18 +942,18 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     internal static string ProfileCoverageValue(GlobalCoachingProfile profile) => $"{profile.Coverage.ReplayCoverage:P0}";
 
     internal static string ProfileEvidenceSummary(GlobalCoachingProfile profile) => profile.MissReasons.Count == 0
-        ? "No classified misses in cached analyses yet"
+        ? "No classified misses in analysed replays yet"
         : string.Join("  /  ", profile.MissReasons.Take(4)
             .Select(reason => $"{ReplayMissInsightPresenter.Label(reason.Reason)} {reason.Share:P0}"));
 
     internal static string ProfileTendencySummary(GlobalCoachingProfile profile) =>
         $"Timing: {profile.TimingTendency}  /  Aim: {profile.AimTendency}";
 
-    private static string confidenceLabel(CoachingConfidence confidence) => confidence switch
+    internal static string ConfidenceLabel(CoachingConfidence confidence) => confidence switch
     {
         CoachingConfidence.High => "High",
         CoachingConfidence.Medium => "Medium",
-        CoachingConfidence.Low => "Early",
+        CoachingConfidence.Low => "Low",
         _ => "Building",
     };
 
@@ -970,6 +1015,286 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         Text = text,
     };
 
+    internal static string AnalysisProgressDetail(int completed, int total, int cached) =>
+        $"{Math.Clamp(completed, 0, Math.Max(0, total)):N0} of {Math.Max(0, total):N0} in this pass  //  {Math.Max(0, cached):N0} already analysed";
+
+    internal static string AnalysisCompletionDetail(int cached, int failed) => failed > 0
+        ? $"{Math.Max(0, cached):N0} analysed  //  {failed:N0} could not be read"
+        : $"{Math.Max(0, cached):N0} analysed  //  coaching profile updated";
+
+    internal static string PracticeEvidenceSummary(PracticeMapCandidate candidate) =>
+        $"{candidate.SourceReplay.StarRating:0.00}*  //  {candidate.MissCount:N0} exact {(candidate.MissCount == 1 ? "miss" : "misses")}  //  {candidate.AnalysedAttempts:N0} analysed {(candidate.AnalysedAttempts == 1 ? "attempt" : "attempts")}";
+
+    internal static string PracticeSourceSummary(PracticeMapCandidate candidate) =>
+        $"Source difficulty: {candidate.SourceReplay.Difficulty}  //  last played {candidate.SourceReplay.PlayedAt.ToString("MMM d, yyyy", System.Globalization.CultureInfo.InvariantCulture)}";
+
+    private partial class AnalysisProgressBanner : CompositeDrawable
+    {
+        private readonly Box accent;
+        private readonly Box progressFill;
+        private readonly SpriteIcon icon;
+        private readonly OsuSpriteText phase;
+        private readonly TruncatingSpriteText title;
+        private readonly TruncatingSpriteText detail;
+
+        public AnalysisProgressBanner()
+        {
+            RelativeSizeAxes = Axes.X;
+            Height = 68;
+            Masking = true;
+            CornerRadius = 8;
+            BorderThickness = 1;
+            BorderColour = AimModPalette.Border;
+            InternalChildren = new Drawable[]
+            {
+                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
+                accent = new Box { RelativeSizeAxes = Axes.Y, Width = 4, Colour = AimModPalette.Cyan },
+                icon = new SpriteIcon
+                {
+                    Anchor = Anchor.CentreLeft,
+                    Origin = Anchor.CentreLeft,
+                    Position = new(18, -1),
+                    Size = new(18),
+                    Icon = FontAwesome.Solid.ChartLine,
+                    Colour = AimModPalette.Cyan,
+                },
+                new FillFlowContainer
+                {
+                    Anchor = Anchor.CentreLeft,
+                    Origin = Anchor.CentreLeft,
+                    AutoSizeAxes = Axes.Y,
+                    RelativeSizeAxes = Axes.X,
+                    Width = 0.56f,
+                    Margin = new MarginPadding { Left = 48 },
+                    Direction = FillDirection.Vertical,
+                    Spacing = new(2),
+                    Children = new Drawable[]
+                    {
+                        phase = label("LOADING HISTORY", 9, AimModPalette.Cyan, "Bold"),
+                        title = truncatingLabel("Building your global profile", 15, AimModPalette.Text, 520, "SemiBold"),
+                    },
+                },
+                detail = truncatingLabel("Reading local and submitted plays", 11, AimModPalette.Muted, 460).With(text =>
+                {
+                    text.Anchor = Anchor.CentreRight;
+                    text.Origin = Anchor.CentreRight;
+                    text.Margin = new MarginPadding { Right = 18 };
+                }),
+                new Container
+                {
+                    Anchor = Anchor.BottomLeft,
+                    Origin = Anchor.BottomLeft,
+                    RelativeSizeAxes = Axes.X,
+                    Height = 4,
+                    Children = new Drawable[]
+                    {
+                        new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Border },
+                        progressFill = new Box
+                        {
+                            RelativeSizeAxes = Axes.Both,
+                            Width = 0.12f,
+                            Colour = AimModPalette.Cyan,
+                        },
+                    },
+                },
+            };
+        }
+
+        public void ShowHistoryLoading() => set(
+            "LOADING HISTORY",
+            "Building your global profile",
+            "Reading local and submitted plays",
+            0.12f,
+            AimModPalette.Cyan,
+            FontAwesome.Solid.ChartLine);
+
+        public void ShowStarting(int cached) => set(
+            "ANALYSING REPLAYS",
+            "Preparing the next replay",
+            $"{Math.Max(0, cached):N0} replay analyses already available",
+            0.04f,
+            AimModPalette.Cyan,
+            FontAwesome.Solid.CircleNotch);
+
+        public void ShowAnalysing(int completed, int total, string currentTitle, int cached)
+        {
+            float progress = total <= 0 ? 0 : Math.Clamp(completed / (float)total, 0, 1);
+            set(
+                "ANALYSING REPLAYS",
+                string.IsNullOrWhiteSpace(currentTitle) ? "Reading replay judgements" : currentTitle,
+                AnalysisProgressDetail(completed, total, cached),
+                progress,
+                AimModPalette.Cyan,
+                FontAwesome.Solid.CircleNotch);
+        }
+
+        public void ShowReady(GlobalCoachingProfile profile, int merged, int submitted, int total)
+        {
+            if (merged == 0)
+            {
+                set(
+                    "NO PLAY HISTORY",
+                    "No osu!standard plays found",
+                    "Play a map or connect an osu! account to begin coaching.",
+                    0,
+                    AimModPalette.Pink,
+                    FontAwesome.Solid.ExclamationCircle);
+                return;
+            }
+
+            int cached = profile.Coverage.AnalysedRunCount;
+            set(
+                cached > 0 ? "GLOBAL PROFILE READY" : "REPLAY ANALYSIS READY",
+                cached > 0
+                    ? $"{cached:N0} replays analysed across {profile.Coverage.AnalysedMapCount:N0} maps"
+                    : $"{merged:N0} plays loaded for coaching",
+                cached > 0
+                    ? $"{ConfidenceLabel(profile.Coverage.Confidence)} confidence  //  {ProfileCoverageValue(profile)} replay coverage"
+                    : $"{profile.Coverage.ReplayAvailableRunCount:N0} saved replays  //  {submitted:N0} submitted scores  //  {total:N0} records",
+                cached > 0 ? 1 : 0,
+                cached > 0 ? AimModPalette.Success : Colour4.FromHex("FFD45A"),
+                cached > 0 ? FontAwesome.Solid.CheckCircle : FontAwesome.Solid.Clock);
+        }
+
+        public void ShowComplete(GlobalCoachingProfile profile, int completed, int failed) => set(
+            "GLOBAL PROFILE UPDATED",
+            completed > 0
+                ? $"Added {completed:N0} new replay {(completed == 1 ? "analysis" : "analyses")}"
+                : "Replay analysis is up to date",
+            AnalysisCompletionDetail(profile.Coverage.AnalysedRunCount, failed),
+            1,
+            failed > 0 && completed == 0 ? Colour4.FromHex("FFD45A") : AimModPalette.Success,
+            failed > 0 && completed == 0 ? FontAwesome.Solid.ExclamationCircle : FontAwesome.Solid.CheckCircle);
+
+        public void ShowWarning(string titleText, string detailText) => set(
+            "LIMITED DATA",
+            titleText,
+            detailText,
+            1,
+            Colour4.FromHex("FFD45A"),
+            FontAwesome.Solid.ExclamationCircle);
+
+        public void ShowError(string titleText, string detailText) => set(
+            "ANALYSIS PAUSED",
+            titleText,
+            detailText,
+            1,
+            AimModPalette.Pink,
+            FontAwesome.Solid.ExclamationCircle);
+
+        private void set(string phaseText, string titleText, string detailText, float progress, Colour4 colour, IconUsage iconUsage)
+        {
+            phase.Text = phaseText;
+            phase.Colour = colour;
+            title.Text = titleText;
+            detail.Text = detailText;
+            accent.Colour = colour;
+            progressFill.Colour = colour;
+            progressFill.ResizeWidthTo(Math.Clamp(progress, 0, 1), 180, Easing.OutQuint);
+            icon.Icon = iconUsage;
+            icon.Colour = colour;
+        }
+
+        protected override void Update()
+        {
+            base.Update();
+            title.MaxWidth = Math.Max(180, DrawWidth * 0.5f - 64);
+            detail.MaxWidth = Math.Max(160, DrawWidth * 0.4f - 28);
+        }
+    }
+
+    private partial class GlobalSkillProfileGrid : CompositeDrawable
+    {
+        public GlobalSkillProfileGrid(GlobalCoachingProfile profile)
+        {
+            RelativeSizeAxes = Axes.X;
+            Height = 126;
+            GlobalMissReasonShare? miss = profile.MissReasons.FirstOrDefault();
+            InternalChild = new GridContainer
+            {
+                RelativeSizeAxes = Axes.Both,
+                RowDimensions = new[]
+                {
+                    new Dimension(GridSizeMode.Relative, 0.5f),
+                    new Dimension(GridSizeMode.Relative, 0.5f),
+                },
+                ColumnDimensions = new[]
+                {
+                    new Dimension(GridSizeMode.Relative, 0.333f),
+                    new Dimension(GridSizeMode.Relative, 0.334f),
+                    new Dimension(GridSizeMode.Relative, 0.333f),
+                },
+                Content = new[]
+                {
+                    new Drawable[]
+                    {
+                        new ProfileMetric("TIMING", profile.TimingTendency, profile.TimingDetail, AimModPalette.Cyan),
+                        new ProfileMetric("AIM", profile.AimTendency, profile.AimDetail, AimModPalette.Pink),
+                        new ProfileMetric(
+                            "MISS CAUSE",
+                            miss is null ? "Collecting" : ReplayMissInsightPresenter.Label(miss.Reason),
+                            miss is null
+                                ? "No classified misses yet"
+                                : $"{miss.Count:N0} classified  //  {miss.Share:P0}  //  {miss.MapCount:N0} maps",
+                            Colour4.FromHex("FFD45A")),
+                    },
+                    new Drawable[]
+                    {
+                        new ProfileMetric(
+                            "COVERAGE",
+                            ProfileCoverageValue(profile),
+                            $"{profile.Coverage.AnalysedRunCount:N0} of {profile.Coverage.ReplayAvailableRunCount:N0} saved replays",
+                            AimModPalette.Success),
+                        new ProfileMetric(
+                            "CONFIDENCE",
+                            ConfidenceLabel(profile.Coverage.Confidence),
+                            $"{profile.Coverage.AnalysedMapCount:N0} analysed maps",
+                            Colour4.FromHex("FFD45A")),
+                        new ProfileMetric(
+                            "EVIDENCE",
+                            profile.Coverage.JudgementCount.ToString("N0"),
+                            "exact judgements",
+                            AimModPalette.Cyan),
+                    },
+                },
+            };
+        }
+    }
+
+    private partial class ProfileMetric : CompositeDrawable
+    {
+        private readonly TruncatingSpriteText value;
+        private readonly TruncatingSpriteText detail;
+
+        public ProfileMetric(string titleText, string valueText, string detailText, Colour4 accentColour)
+        {
+            RelativeSizeAxes = Axes.Both;
+            Padding = new MarginPadding(3);
+            InternalChild = new Container
+            {
+                RelativeSizeAxes = Axes.Both,
+                Masking = true,
+                CornerRadius = 6,
+                BorderThickness = 1,
+                BorderColour = AimModPalette.Border,
+                Children = new Drawable[]
+                {
+                    new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
+                    new Box { RelativeSizeAxes = Axes.Y, Width = 3, Colour = accentColour },
+                    label(titleText, 9, AimModPalette.Muted, "Bold").With(text => text.Position = new(11, 6)),
+                    value = truncatingLabel(valueText, 14, accentColour, 160, "Bold").With(text => text.Position = new(11, 21)),
+                    detail = truncatingLabel(detailText, 11, AimModPalette.Muted, 160).With(text => text.Position = new(11, 41)),
+                },
+            };
+        }
+
+        protected override void Update()
+        {
+            base.Update();
+            value.MaxWidth = detail.MaxWidth = Math.Max(60, DrawWidth - 28);
+        }
+    }
+
     private partial class InsightRow : CompositeDrawable
     {
         public InsightRow(string title, string detail, string value, Colour4 accent)
@@ -1022,9 +1347,9 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         public SelectedRunCard(LocalReplay run, CoachingAccuracyPrediction? prediction, Action showGlobal, Action? open)
         {
             RelativeSizeAxes = Axes.X;
-            Height = 100;
+            Height = 48;
             Masking = true;
-            CornerRadius = 10;
+            CornerRadius = 7;
             BorderThickness = 1;
             BorderColour = AimModPalette.Border;
             InternalChildren = new Drawable[]
@@ -1048,15 +1373,14 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                     RelativeSizeAxes = Axes.X,
                     AutoSizeAxes = Axes.Y,
                     Width = 1,
-                    Margin = new MarginPadding { Left = 18 },
-                    Padding = new MarginPadding { Right = 190 },
+                    Margin = new MarginPadding { Left = 14 },
+                    Padding = new MarginPadding { Right = 260 },
                     Direction = FillDirection.Vertical,
-                    Spacing = new(3),
+                    Spacing = new(2),
                     Children = new Drawable[]
                     {
-                        truncatingLabel($"{run.Title} [{run.Difficulty}]", 16, AimModPalette.Text, 520, "Bold"),
-                        truncatingLabel($"{run.Artist}  //  {run.PlayedAt:yyyy-MM-dd HH:mm}", 11, AimModPalette.Muted, 520),
-                        truncatingLabel($"{run.Accuracy:P2}  //  {run.MissCount:N0} misses  //  {run.MaxCombo:N0}x{formatPpSuffix(run.PerformancePoints)}", 12, AimModPalette.Cyan, 520, "SemiBold"),
+                        truncatingLabel($"{run.Title} [{run.Difficulty}]", 13, AimModPalette.Text, 520, "Bold"),
+                        truncatingLabel($"{run.Accuracy:P2}  //  {run.MissCount:N0} misses  //  {run.PlayedAt:MMM d, yyyy}{formatPpSuffix(run.PerformancePoints)}", 10, AimModPalette.Cyan, 520, "SemiBold"),
                     },
                 },
                 new FillFlowContainer
@@ -1064,26 +1388,14 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                     Anchor = Anchor.CentreRight,
                     Origin = Anchor.CentreRight,
                     AutoSizeAxes = Axes.Both,
-                    Margin = new MarginPadding { Right = 14 },
-                    Direction = FillDirection.Vertical,
-                    Spacing = new(8),
+                    Margin = new MarginPadding { Right = 9 },
+                    Direction = FillDirection.Horizontal,
+                    Spacing = new(6),
                     Children = new Drawable[]
                     {
                         new AimModDifficultyPill(run.StarRating),
-                        prediction is null
-                            ? label("No prediction", 10, AimModPalette.Muted)
-                            : label($"Expected {prediction.ExpectedAccuracy:P1}", 10, AimModPalette.Success, "SemiBold"),
-                        new FillFlowContainer
-                        {
-                            AutoSizeAxes = Axes.Both,
-                            Direction = FillDirection.Horizontal,
-                            Spacing = new(6),
-                            Children = new Drawable[]
-                            {
-                                new ActionButton("Overview", showGlobal),
-                                new ActionButton(open is null ? "No replay" : "Open replay", open),
-                            },
-                        },
+                        new ActionButton("Global", showGlobal),
+                        new ActionButton(open is null ? "No replay" : "Replay", open),
                     },
                 },
             };
@@ -1356,10 +1668,14 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
 
     private partial class PracticeCandidateRow : CompositeDrawable
     {
+        private readonly TruncatingSpriteText title;
+        private readonly TruncatingSpriteText evidence;
+        private readonly TruncatingSpriteText source;
+
         public PracticeCandidateRow(PracticeMapCandidate candidate, Action<PracticeMapCandidate, PracticeDrillType> create)
         {
             RelativeSizeAxes = Axes.X;
-            Height = 82;
+            Height = 132;
             Masking = true;
             CornerRadius = 7;
             BorderThickness = 1;
@@ -1367,34 +1683,47 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             InternalChildren = new Drawable[]
             {
                 new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
-                new SpriteIcon
+                new Box
                 {
-                    Anchor = Anchor.CentreLeft,
-                    Origin = Anchor.CentreLeft,
-                    X = 13,
-                    Size = new(14),
-                    Icon = FontAwesome.Solid.Bullseye,
+                    RelativeSizeAxes = Axes.Y,
+                    Width = 4,
                     Colour = AimModPalette.Pink,
                 },
                 new FillFlowContainer
                 {
                     RelativeSizeAxes = Axes.X,
                     AutoSizeAxes = Axes.Y,
-                    Padding = new MarginPadding { Left = 38, Right = 12, Vertical = 12 },
+                    Padding = new MarginPadding { Left = 14, Right = 74, Top = 10 },
                     Direction = FillDirection.Vertical,
-                    Spacing = new(4),
+                    Spacing = new(3),
                     Children = new Drawable[]
                     {
-                        truncatingLabel($"{candidate.SourceReplay.Title} [{candidate.SourceReplay.Difficulty}]", 13, AimModPalette.Text, 520, "SemiBold"),
-                        label(candidate.Evidence, 10, AimModPalette.Muted),
+                        title = truncatingLabel($"{candidate.SourceReplay.Title} [{candidate.SourceReplay.Difficulty}]", 13, AimModPalette.Text, 520, "SemiBold"),
+                        evidence = truncatingLabel(
+                            PracticeEvidenceSummary(candidate),
+                            11,
+                            AimModPalette.Cyan,
+                            520,
+                            "SemiBold"),
+                        source = truncatingLabel(
+                            PracticeSourceSummary(candidate),
+                            11,
+                            AimModPalette.Muted,
+                            520),
                     },
+                },
+                new AimModDifficultyPill(candidate.SourceReplay.StarRating)
+                {
+                    Anchor = Anchor.TopRight,
+                    Origin = Anchor.TopRight,
+                    Margin = new MarginPadding { Top = 10, Right = 10 },
                 },
                 new FillFlowContainer
                 {
-                    Anchor = Anchor.CentreRight,
-                    Origin = Anchor.CentreRight,
+                    Anchor = Anchor.BottomLeft,
+                    Origin = Anchor.BottomLeft,
                     AutoSizeAxes = Axes.Both,
-                    Margin = new MarginPadding { Right = 12 },
+                    Margin = new MarginPadding { Left = 14, Bottom = 11 },
                     Direction = FillDirection.Horizontal,
                     Spacing = new(6),
                     Children = new Drawable[]
@@ -1406,36 +1735,107 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                 },
             };
         }
+
+        protected override void Update()
+        {
+            base.Update();
+            title.MaxWidth = Math.Max(120, DrawWidth - 98);
+            evidence.MaxWidth = source.MaxWidth = Math.Max(120, DrawWidth - 30);
+        }
     }
 
     private partial class PracticeStatusRow : CompositeDrawable
     {
-        public PracticeStatusRow(string title, string detail, Colour4 accent, Action? open = null)
+        public PracticeStatusRow(string titleText, string detailText, Colour4 accentColour, IconUsage iconUsage, Action? open = null)
         {
             RelativeSizeAxes = Axes.X;
-            Height = 64;
-            InternalChildren = new Drawable[]
+            Height = 70;
+            Masking = true;
+            CornerRadius = 7;
+            BorderThickness = 1;
+            BorderColour = accentColour.Opacity(0.5f);
+            var children = new List<Drawable>
             {
                 new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
-                new Box { RelativeSizeAxes = Axes.Y, Width = 4, Colour = accent },
+                new Box { RelativeSizeAxes = Axes.Y, Width = 4, Colour = accentColour },
+                new SpriteIcon
+                {
+                    Anchor = Anchor.CentreLeft,
+                    Origin = Anchor.CentreLeft,
+                    Position = new(16, 0),
+                    Size = new(15),
+                    Icon = iconUsage,
+                    Colour = accentColour,
+                },
                 new FillFlowContainer
                 {
                     RelativeSizeAxes = Axes.X,
                     AutoSizeAxes = Axes.Y,
-                    Padding = new MarginPadding { Left = 14, Top = 10 },
+                    Padding = new MarginPadding { Left = 42, Right = open is null ? 14 : 110, Top = 11 },
                     Direction = FillDirection.Vertical,
                     Spacing = new(3),
                     Children = new Drawable[]
                     {
-                        label(title, 12, AimModPalette.Text, "SemiBold"),
-                        truncatingLabel(detail, 10, AimModPalette.Muted, 680),
+                        label(titleText, 12, AimModPalette.Text, "SemiBold"),
+                        truncatingLabel(detailText, 11, AimModPalette.Muted, 680),
                     },
                 },
-                new ActionButton("Open folder", open)
+            };
+            if (open is not null)
+            {
+                children.Add(new ActionButton("Open folder", open)
                 {
                     Anchor = Anchor.CentreRight,
                     Origin = Anchor.CentreRight,
                     Margin = new MarginPadding { Right = 12 },
+                });
+            }
+
+            InternalChildren = children.ToArray();
+        }
+    }
+
+    private partial class PracticeEmptyState : CompositeDrawable
+    {
+        public PracticeEmptyState(string titleText, string detailText)
+        {
+            RelativeSizeAxes = Axes.X;
+            Height = 190;
+            Masking = true;
+            CornerRadius = 7;
+            BorderThickness = 1;
+            BorderColour = AimModPalette.Border;
+            InternalChildren = new Drawable[]
+            {
+                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas, Alpha = 0.45f },
+                new SpriteIcon
+                {
+                    Anchor = Anchor.TopCentre,
+                    Origin = Anchor.TopCentre,
+                    Y = 34,
+                    Size = new(28),
+                    Icon = FontAwesome.Solid.Bullseye,
+                    Colour = AimModPalette.Cyan,
+                },
+                new FillFlowContainer
+                {
+                    Anchor = Anchor.TopCentre,
+                    Origin = Anchor.TopCentre,
+                    RelativeSizeAxes = Axes.X,
+                    AutoSizeAxes = Axes.Y,
+                    Y = 78,
+                    Padding = new MarginPadding { Horizontal = 24 },
+                    Direction = FillDirection.Vertical,
+                    Spacing = new(7),
+                    Children = new Drawable[]
+                    {
+                        label(titleText, 15, AimModPalette.Text, "SemiBold").With(text =>
+                        {
+                            text.Anchor = Anchor.TopCentre;
+                            text.Origin = Anchor.TopCentre;
+                        }),
+                        flow(detailText, 11, AimModPalette.Muted).With(text => text.TextAnchor = Anchor.TopCentre),
+                    },
                 },
             };
         }
@@ -1453,7 +1853,9 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         public CoachingTrendChart()
         {
             RelativeSizeAxes = Axes.X;
-            Height = 250;
+            Height = 88;
+            Masking = true;
+            CornerRadius = 6;
             InternalChildren = new Drawable[]
             {
                 new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas, Alpha = 0.38f },
@@ -1461,53 +1863,53 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                 {
                     RelativeSizeAxes = Axes.X,
                     Height = 1,
-                    Y = 30,
+                    Y = 18,
                     Colour = AimModPalette.Border,
                 },
                 new Box
                 {
                     RelativeSizeAxes = Axes.X,
                     Height = 1,
-                    Y = 105,
+                    Y = 48,
                     Colour = AimModPalette.Border,
                 },
                 new Box
                 {
                     RelativeSizeAxes = Axes.X,
                     Height = 1,
-                    Y = 180,
+                    Y = 72,
                     Colour = AimModPalette.Border,
                 },
                 graph = new LineGraph
                 {
                     RelativeSizeAxes = Axes.X,
-                    Height = 184,
-                    Padding = new MarginPadding { Top = 22, Bottom = 12, Left = 38, Right = 14 },
+                    Height = 70,
+                    Padding = new MarginPadding { Top = 9, Bottom = 8, Left = 34, Right = 12 },
                     LineColour = AimModPalette.Pink,
                     DefaultValueCount = NativeCoachingWorkspaceModel.MaximumTrendRuns,
                 },
                 markers = new Container
                 {
                     RelativeSizeAxes = Axes.X,
-                    Height = 150,
-                    Position = new(38, 27),
-                    Width = -52,
+                    Height = 52,
+                    Position = new(34, 11),
+                    Width = -46,
                 },
-                upperLabel = label("100%", 9, AimModPalette.Muted).With(text => text.Position = new(4, 22)),
-                lowerLabel = label("80%", 9, AimModPalette.Muted).With(text => text.Position = new(4, 168)),
-                label("MISSES", 8, AimModPalette.Muted, "Bold").With(text => text.Position = new(4, 198)),
+                upperLabel = label("100%", 9, AimModPalette.Muted).With(text => text.Position = new(4, 8)),
+                lowerLabel = label("80%", 9, AimModPalette.Muted).With(text => text.Position = new(4, 55)),
+                label("MISS", 8, AimModPalette.Muted, "Bold").With(text => text.Position = new(4, 70)),
                 missBars = new Container
                 {
                     RelativeSizeAxes = Axes.X,
-                    Height = 34,
-                    Position = new(42, 194),
-                    Width = -58,
+                    Height = 12,
+                    Position = new(34, 70),
+                    Width = -46,
                 },
                 timeRange = label("No plays to graph", 9, AimModPalette.Muted).With(text =>
                 {
                     text.Anchor = Anchor.BottomRight;
                     text.Origin = Anchor.BottomRight;
-                    text.Margin = new MarginPadding { Right = 8, Bottom = 4 };
+                    text.Margin = new MarginPadding { Right = 7, Bottom = 3 };
                 }),
             };
         }
@@ -1567,7 +1969,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                     Anchor = Anchor.BottomLeft,
                     Origin = Anchor.BottomCentre,
                     Width = Math.Clamp(150f / chronological.Length, 3, 8),
-                    Height = run.MissCount == 0 ? 2 : 4 + 28f * run.MissCount / maximumMisses,
+                    Height = run.MissCount == 0 ? 1 : 2 + 9f * run.MissCount / maximumMisses,
                     Colour = run.MissCount == 0 ? AimModPalette.Success : AimModPalette.Pink,
                     Alpha = run.ScoreId == selectedScoreId ? 1 : 0.62f,
                 });

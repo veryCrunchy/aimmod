@@ -151,7 +151,10 @@ public partial class AimModGame : OsuGameBase
             },
         });
 
-        _ = connectLazerSession(appLifetime.Token);
+        // An injected library is an isolated host (tests and visual capture) and must not
+        // discover or mutate the user's live lazer session.
+        if (configuredLocalLibrary is null)
+            _ = connectLazerSession(appLifetime.Token);
 
         if (launchOptions.Error is not null)
         {
@@ -585,7 +588,7 @@ public partial class AimModGame : OsuGameBase
         {
             replayRoute?.SuspendPlayback();
         }
-        if (isReplayAnalysisRoute(previousRoute) && !isReplayAnalysisRoute(route))
+        if (previousRoute != route && isReplayAnalysisRoute(previousRoute))
             stopReplayLibraryAnalysis();
 
         foreach (Container host in workspaceHosts.Values)
@@ -870,6 +873,11 @@ public partial class AimModGame : OsuGameBase
     private static void logFailure(string operation, Exception error) =>
         Console.Error.WriteLine($"[AimMod] Failed to {operation}: {error}");
 
+    private sealed class CallbackProgress<T>(Action<T> callback) : IProgress<T>
+    {
+        public void Report(T value) => callback(value);
+    }
+
     private void cancelReplayWork()
     {
         stopReplayLibraryAnalysis();
@@ -893,8 +901,11 @@ public partial class AimModGame : OsuGameBase
             return;
 
         replayLibraryAnalysisLifetime = CancellationTokenSource.CreateLinkedTokenSource(appLifetime.Token);
-        Guid[] processedScoreIds = replayAnalyses.Keys.Concat(replayAnalysisFailures).ToArray();
-        _ = analyseReplayLibrary(replayAnalysisBatchService, processedScoreIds, replayLibraryAnalysisLifetime.Token);
+        Guid[] cachedScoreIds = replayAnalyses.Keys.ToArray();
+        Guid[] failedScoreIds = replayAnalysisFailures.ToArray();
+        if (currentRoute.Value == NativeRoute.Coaching)
+            coachingWorkspace?.BeginAnalysisProgress();
+        _ = analyseReplayLibrary(replayAnalysisBatchService, cachedScoreIds, failedScoreIds, replayLibraryAnalysisLifetime.Token);
     }
 
     private void stopReplayLibraryAnalysis()
@@ -925,20 +936,35 @@ public partial class AimModGame : OsuGameBase
 
     private async Task analyseReplayLibrary(
         ReplayAnalysisBatchService service,
-        IEnumerable<Guid> processedScoreIds,
+        IEnumerable<Guid> cachedScoreIds,
+        IEnumerable<Guid> failedScoreIds,
         CancellationToken cancellationToken)
     {
         try
         {
             LocalReplay[] library = await loadReplayAnalysisWorkingSet(cancellationToken).ConfigureAwait(false);
-            var processed = processedScoreIds.ToHashSet();
+            var processed = cachedScoreIds.Concat(failedScoreIds).ToHashSet();
+            ReplayAnalysisCumulativeAccounting accounting = ReplayAnalysisCumulativeAccounting.Create(
+                library,
+                cachedScoreIds,
+                failedScoreIds);
+            int newlyCompleted = 0;
+            int newlyFailed = 0;
+
+            reportCoachingAnalysisProgress(
+                accounting.MapBatchProgress(new ReplayAnalysisBatchProgress(0, 0, string.Empty)),
+                cancellationToken);
 
             while (!cancellationToken.IsCancellationRequested)
             {
+                ReplayAnalysisCumulativeAccounting batchStart = accounting;
+                var progress = new CallbackProgress<ReplayAnalysisBatchProgress>(batchProgress =>
+                    reportCoachingAnalysisProgress(batchStart.MapBatchProgress(batchProgress), cancellationToken));
                 ReplayAnalysisBatchResult result = await service.AnalyseBreadthFirstAsync(
                     library,
                     processed,
                     ReplayAnalysisBatchService.MaximumBatchSize,
+                    progress,
                     cancellationToken: cancellationToken).ConfigureAwait(false);
                 if (result.Completed.Count == 0 && result.Failed.Count == 0)
                     break;
@@ -949,7 +975,20 @@ public partial class AimModGame : OsuGameBase
                     processed.Add(scoreId);
 
                 await applyReplayAnalysisBatch(result, cancellationToken).ConfigureAwait(false);
+                accounting = accounting.Add(result);
+                newlyCompleted += result.Completed.Count;
+                newlyFailed += result.Failed.Count;
             }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            reportCoachingAnalysisProgress(
+                accounting.MapBatchProgress(new ReplayAnalysisBatchProgress(0, 0, string.Empty)),
+                cancellationToken);
+            Schedule(() =>
+            {
+                if (!cancellationToken.IsCancellationRequested && currentRoute.Value == NativeRoute.Coaching)
+                    coachingWorkspace?.ApplyNewAnalyses(newlyCompleted, newlyFailed);
+            });
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -958,8 +997,28 @@ public partial class AimModGame : OsuGameBase
         {
             logFailure("analyse replay library", error);
             if (!IsDisposed)
-                Schedule(() => coachingWorkspace?.SetAnalysisError());
+            {
+                Schedule(() =>
+                {
+                    if (!cancellationToken.IsCancellationRequested && currentRoute.Value == NativeRoute.Coaching)
+                        coachingWorkspace?.SetAnalysisError();
+                });
+            }
         }
+    }
+
+    private void reportCoachingAnalysisProgress(
+        ReplayAnalysisBatchProgress progress,
+        CancellationToken cancellationToken)
+    {
+        if (progress.Total <= 0 || cancellationToken.IsCancellationRequested || IsDisposed)
+            return;
+
+        Schedule(() =>
+        {
+            if (!cancellationToken.IsCancellationRequested && currentRoute.Value == NativeRoute.Coaching)
+                coachingWorkspace?.SetAnalysisProgress(progress.Completed, progress.Total, progress.CurrentTitle);
+        });
     }
 
     private async Task<LocalReplay[]> loadReplayAnalysisWorkingSet(CancellationToken cancellationToken)
@@ -1006,7 +1065,6 @@ public partial class AimModGame : OsuGameBase
                 replayAnalysisFailures.Add(scoreId);
 
             replayRoute?.RefreshMapPattern();
-            coachingWorkspace?.ApplyNewAnalyses(result.Completed.Count, result.Failed.Count);
             applied.TrySetResult();
         });
         await applied.Task.ConfigureAwait(false);

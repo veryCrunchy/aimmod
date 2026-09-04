@@ -1,5 +1,6 @@
 using AimMod.Desktop.Coaching;
 using AimMod.Desktop.LocalLibrary;
+using AimMod.Desktop.Practice;
 using AimMod.Osu.Runtime.Contracts;
 using NUnit.Framework;
 
@@ -179,6 +180,35 @@ public sealed class NativeCoachingWorkspaceTests
             Assert.That(NativeCoachingWorkspace.ProfileCoverageValue(profile), Is.EqualTo("50%"));
             Assert.That(NativeCoachingWorkspace.ProfileEvidenceSummary(profile), Is.EqualTo("overshoots 60%  /  early clicks 40%"));
             Assert.That(NativeCoachingWorkspace.ProfileTendencySummary(profile), Is.EqualTo("Timing: Late bias  /  Aim: overshoots"));
+        });
+    }
+
+    [Test]
+    public void ProgressCopyKeepsCachedAndFailureCountsVisible()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(NativeCoachingWorkspace.AnalysisProgressDetail(3, 7, 12), Is.EqualTo("3 of 7 in this pass  //  12 already analysed"));
+            Assert.That(NativeCoachingWorkspace.AnalysisCompletionDetail(15, 2), Is.EqualTo("15 analysed  //  2 could not be read"));
+            Assert.That(NativeCoachingWorkspace.ConfidenceLabel(CoachingConfidence.Low), Is.EqualTo("Low"));
+        });
+    }
+
+    [Test]
+    public void PracticeCandidateCopyIncludesDecisionEvidence()
+    {
+        LocalReplay source = run(new DateTimeOffset(2026, 9, 3, 10, 0, 0, TimeSpan.Zero), 0.94, 3) with
+        {
+            StarRating = 6.27,
+            Difficulty = "Expert",
+        };
+        var candidate = new PracticeMapCandidate(source, new[] { source.ScoreId }, 4, 7, 12.5);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(NativeCoachingWorkspace.PracticeEvidenceSummary(candidate), Is.EqualTo("6.27*  //  7 exact misses  //  4 analysed attempts"));
+            Assert.That(NativeCoachingWorkspace.PracticeSourceSummary(candidate), Does.Contain("Source difficulty: Expert"));
+            Assert.That(NativeCoachingWorkspace.PracticeSourceSummary(candidate), Does.Contain("last played Sep 3, 2026"));
         });
     }
 

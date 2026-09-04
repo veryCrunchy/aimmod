@@ -10,6 +10,59 @@ public sealed record ReplayAnalysisBatchResult(
     IReadOnlyDictionary<Guid, ReplayAnalysisResult> Completed,
     IReadOnlyList<Guid> Failed);
 
+internal sealed record ReplayAnalysisCumulativeAccounting(
+    int Total,
+    int Cached,
+    int PreviouslyFailed,
+    int Completed,
+    int Failed)
+{
+    public int Processed => Math.Min(Total, Cached + PreviouslyFailed + Completed + Failed);
+
+    public int Remaining => Math.Max(0, Total - Processed);
+
+    public static ReplayAnalysisCumulativeAccounting Create(
+        IEnumerable<LocalReplay> replays,
+        IEnumerable<Guid> cachedScoreIds,
+        IEnumerable<Guid> failedScoreIds)
+    {
+        ArgumentNullException.ThrowIfNull(replays);
+        ArgumentNullException.ThrowIfNull(cachedScoreIds);
+        ArgumentNullException.ThrowIfNull(failedScoreIds);
+
+        HashSet<Guid> available = replays.Where(replay => replay.HasReplayFile)
+                                         .Select(replay => replay.ScoreId)
+                                         .ToHashSet();
+        HashSet<Guid> cached = cachedScoreIds.Where(available.Contains).ToHashSet();
+        int previouslyFailed = failedScoreIds.Where(scoreId => available.Contains(scoreId) && !cached.Contains(scoreId))
+                                             .Distinct()
+                                             .Count();
+        return new ReplayAnalysisCumulativeAccounting(available.Count, cached.Count, previouslyFailed, 0, 0);
+    }
+
+    public ReplayAnalysisCumulativeAccounting Add(ReplayAnalysisBatchResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        return this with
+        {
+            Completed = Completed + result.Completed.Count,
+            Failed = Failed + result.Failed.Count,
+        };
+    }
+
+    public ReplayAnalysisBatchProgress MapBatchProgress(ReplayAnalysisBatchProgress batchProgress)
+    {
+        ArgumentNullException.ThrowIfNull(batchProgress);
+        int cumulativeCompleted = Math.Clamp(Processed + batchProgress.Completed, 0, Total);
+        int remaining = Math.Max(0, Total - cumulativeCompleted);
+        string counts = $"{Cached:N0} cached | {remaining:N0} remaining";
+        string title = string.IsNullOrWhiteSpace(batchProgress.CurrentTitle)
+            ? counts
+            : $"{batchProgress.CurrentTitle} | {counts}";
+        return new ReplayAnalysisBatchProgress(cumulativeCompleted, Total, title);
+    }
+}
+
 /// <summary>
 /// Analyses a small replay batch sequentially in one muted worker. This is used to
 /// enrich coaching without constructing replay players or starting audio tracks.

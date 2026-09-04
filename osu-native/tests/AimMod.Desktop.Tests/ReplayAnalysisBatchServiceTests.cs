@@ -119,6 +119,85 @@ public sealed class ReplayAnalysisBatchServiceTests
         });
     }
 
+    [Test]
+    public void CumulativeAccountingCountsOnlyAvailableWorkingSetEntries()
+    {
+        LocalReplay cached = replay(DateTimeOffset.UtcNow, true);
+        LocalReplay failed = replay(DateTimeOffset.UtcNow.AddMinutes(-1), true);
+        LocalReplay pending = replay(DateTimeOffset.UtcNow.AddMinutes(-2), true);
+        LocalReplay unavailable = replay(DateTimeOffset.UtcNow.AddMinutes(-3), false);
+
+        ReplayAnalysisCumulativeAccounting accounting = ReplayAnalysisCumulativeAccounting.Create(
+            new[] { cached, failed, pending, unavailable },
+            new[] { cached.ScoreId, unavailable.ScoreId, Guid.NewGuid() },
+            new[] { cached.ScoreId, failed.ScoreId, Guid.NewGuid() });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(accounting.Total, Is.EqualTo(3));
+            Assert.That(accounting.Cached, Is.EqualTo(1));
+            Assert.That(accounting.PreviouslyFailed, Is.EqualTo(1));
+            Assert.That(accounting.Processed, Is.EqualTo(2));
+            Assert.That(accounting.Remaining, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void BatchProgressMapsToCumulativeCompletedAndExposesCachedAndRemainingCounts()
+    {
+        LocalReplay[] runs = Enumerable.Range(0, 12)
+                                       .Select(index => replay(DateTimeOffset.UtcNow.AddMinutes(-index), true))
+                                       .ToArray();
+        ReplayAnalysisCumulativeAccounting accounting = ReplayAnalysisCumulativeAccounting.Create(
+            runs,
+            runs.Take(3).Select(run => run.ScoreId),
+            Array.Empty<Guid>());
+
+        ReplayAnalysisBatchProgress firstBatch = accounting.MapBatchProgress(new ReplayAnalysisBatchProgress(4, 5, "First map"));
+        var firstResult = new ReplayAnalysisBatchResult(
+            runs.Skip(3).Take(4).ToDictionary(run => run.ScoreId, _ => (AimMod.Osu.Runtime.Contracts.ReplayAnalysisResult)null!),
+            new[] { runs[7].ScoreId });
+        accounting = accounting.Add(firstResult);
+        ReplayAnalysisBatchProgress secondBatch = accounting.MapBatchProgress(new ReplayAnalysisBatchProgress(2, 4, "Second map"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(firstBatch.Completed, Is.EqualTo(7));
+            Assert.That(firstBatch.Total, Is.EqualTo(12));
+            Assert.That(firstBatch.CurrentTitle, Does.Contain("3 cached"));
+            Assert.That(firstBatch.CurrentTitle, Does.Contain("5 remaining"));
+            Assert.That(secondBatch.Completed, Is.EqualTo(10));
+            Assert.That(secondBatch.Total, Is.EqualTo(12));
+            Assert.That(secondBatch.CurrentTitle, Does.Contain("2 remaining"));
+        });
+    }
+
+    [Test]
+    public void FinishedAccountingRemainsAtFullCumulativeProgress()
+    {
+        LocalReplay[] runs = Enumerable.Range(0, 7)
+                                       .Select(index => replay(DateTimeOffset.UtcNow.AddMinutes(-index), true))
+                                       .ToArray();
+        ReplayAnalysisCumulativeAccounting accounting = ReplayAnalysisCumulativeAccounting.Create(
+            runs,
+            runs.Take(2).Select(run => run.ScoreId),
+            Array.Empty<Guid>());
+        var result = new ReplayAnalysisBatchResult(
+            runs.Skip(2).Take(4).ToDictionary(run => run.ScoreId, _ => (AimMod.Osu.Runtime.Contracts.ReplayAnalysisResult)null!),
+            new[] { runs[^1].ScoreId });
+
+        ReplayAnalysisBatchProgress finished = accounting.Add(result)
+                                                         .MapBatchProgress(new ReplayAnalysisBatchProgress(0, 0, string.Empty));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(finished.Completed, Is.EqualTo(7));
+            Assert.That(finished.Total, Is.EqualTo(7));
+            Assert.That(finished.CurrentTitle, Does.Contain("2 cached"));
+            Assert.That(finished.CurrentTitle, Does.Contain("0 remaining"));
+        });
+    }
+
     private static LocalReplay replay(DateTimeOffset playedAt, bool hasReplay) => new(
         Guid.NewGuid(),
         Guid.NewGuid(),

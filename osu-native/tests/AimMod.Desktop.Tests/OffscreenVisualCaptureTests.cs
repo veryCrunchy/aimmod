@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using AimMod.Desktop.Coaching;
 using AimMod.Desktop.LocalLibrary;
+using AimMod.Desktop.Practice;
 using AimMod.Desktop.Visuals;
 using AimMod.Osu.Runtime.Contracts;
 using NUnit.Framework;
@@ -32,9 +33,12 @@ public sealed partial class OffscreenVisualCaptureTests
     [TestCase("statistics", 1100, 760)]
     [TestCase("statistics-populated", 1100, 760)]
     [TestCase("statistics-populated", 1600, 900)]
-    [TestCase("coaching", 1100, 760)]
     [TestCase("coaching-populated", 1100, 760)]
     [TestCase("coaching-populated", 1600, 900)]
+    [TestCase("coaching-complete", 1100, 760)]
+    [TestCase("coaching-complete", 1600, 900)]
+    [TestCase("coaching-error", 1100, 760)]
+    [TestCase("coaching-empty", 1100, 760)]
     [TestCase("ppTargets", 1100, 760)]
     [TestCase("loading", 1100, 760)]
     [Explicit("Creates a real graphics device and writes a visual-review artifact.")]
@@ -50,6 +54,8 @@ public sealed partial class OffscreenVisualCaptureTests
             $"aimmod-{route}-{width}x{height}.png");
 
         InMemoryLocalLibrarySource source = route.EndsWith("-populated", StringComparison.Ordinal)
+                                            || route.StartsWith("coaching-", StringComparison.Ordinal)
+                                            && !string.Equals(route, "coaching-empty", StringComparison.Ordinal)
                                             || string.Equals(route, "replays-analysis", StringComparison.Ordinal)
             ? createPopulatedLibrary()
             : new InMemoryLocalLibrarySource([], []);
@@ -59,7 +65,10 @@ public sealed partial class OffscreenVisualCaptureTests
             {
                 "beatmaps-populated" => new CaptureBeatmapGame(host, source, outputPath, width, height, succeeded, failed),
                 "statistics-populated" => new CaptureStatisticsGame(host, source, outputPath, width, height, succeeded, failed),
-                "coaching-populated" => new CaptureCoachingGame(host, source, outputPath, width, height, succeeded, failed),
+                "coaching-populated" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.Analysing, succeeded, failed),
+                "coaching-complete" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.Complete, succeeded, failed),
+                "coaching-error" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.Error, succeeded, failed),
+                "coaching-empty" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.Empty, succeeded, failed),
                 "replays-analysis" => new CaptureReplayAnalysisGame(host, source, outputPath, width, height, succeeded, failed),
                 _ => new CaptureAimModGame(host, source, outputPath, route, width, height, succeeded, failed),
             },
@@ -136,6 +145,41 @@ public sealed partial class OffscreenVisualCaptureTests
         return new InMemoryLocalLibrarySource(sets, replays);
     }
 
+    private static ReplayAnalysisResult createCoachingAnalysis(int replayIndex)
+    {
+        ReplayObjectJudgement[] hits = Enumerable.Range(0, 12).Select(index => new ReplayObjectJudgement(
+            index,
+            null,
+            "HitCircle",
+            10_000 + index * 500,
+            10_000 + index * 500,
+            "Great",
+            "Great",
+            10_018 + index * 500 + index % 4,
+            18 + index % 4,
+            1,
+            new ReplayPoint(256, 192),
+            new ReplayPoint(262 + index % 3, 195 + index % 2),
+            12,
+            0)).ToArray();
+        ReplayObjectJudgement miss = new(
+            24, null, "HitCircle", 24_000, 24_000, "Miss", "Great", 24_150, 150, 1,
+            new ReplayPoint(256, 192), null, 120, 0,
+            new ReplayMissAnalysis(
+                replayIndex == 2 ? ReplayMissReason.EarlyClick : ReplayMissReason.Overshoot,
+                32, 40, -10, new ReplayPoint(280, 192), 50, 55,
+                new ReplayPoint(311, 192), 45, true, false, true, 0.4, Confidence: 0.85));
+
+        return new ReplayAnalysisResult(
+            ReplayAnalysisProtocol.EngineVersion,
+            "officialRulesetPlayback",
+            true,
+            ReplayAnalysisProtocol.WallClockTimeoutMs,
+            Array.Empty<int>(),
+            hits.Append(miss).ToArray(),
+            new ReplayJudgementSummary(hits.Length, 0, 0, 1, 0, 0));
+    }
+
     private static int countSampledColours(Image<Rgba32> image)
     {
         var colours = new HashSet<Rgba32>();
@@ -188,6 +232,9 @@ public sealed partial class OffscreenVisualCaptureTests
         {
             base.LoadComplete();
 
+            frameworkConfig.SetValue(FrameworkSetting.WindowMode, WindowMode.Windowed);
+            frameworkConfig.SetValue(FrameworkSetting.WindowedSize, new System.Drawing.Size(width, height));
+
             if (string.Equals(route, "loading", StringComparison.Ordinal))
             {
                 var overlay = new AimModLoadingOverlay();
@@ -202,12 +249,10 @@ public sealed partial class OffscreenVisualCaptureTests
                 string routeName = route.Split('-', 2)[0];
                 MethodInfo routeMethod = typeof(AimModGame).GetMethod($"show{char.ToUpperInvariant(routeName[0])}{routeName[1..]}", BindingFlags.Instance | BindingFlags.NonPublic)
                                          ?? throw new InvalidOperationException($"Unknown capture route '{route}'.");
-                routeMethod.Invoke(this, null);
+                Scheduler.AddDelayed(() => routeMethod.Invoke(this, null), 300);
             }
 
-            frameworkConfig.SetValue(FrameworkSetting.WindowMode, WindowMode.Windowed);
-            frameworkConfig.SetValue(FrameworkSetting.WindowedSize, new System.Drawing.Size(width, height));
-            Scheduler.AddDelayed(capture, 1500);
+            Scheduler.AddDelayed(capture, 1800);
         }
 
         private void capture()
@@ -392,6 +437,7 @@ public sealed partial class OffscreenVisualCaptureTests
         private readonly string outputPath;
         private readonly int width;
         private readonly int height;
+        private readonly CoachingCaptureState state;
         private readonly Action succeeded;
         private readonly Action<Exception> failed;
 
@@ -404,6 +450,7 @@ public sealed partial class OffscreenVisualCaptureTests
             string outputPath,
             int width,
             int height,
+            CoachingCaptureState state,
             Action succeeded,
             Action<Exception> failed)
         {
@@ -412,6 +459,7 @@ public sealed partial class OffscreenVisualCaptureTests
             this.outputPath = outputPath;
             this.width = width;
             this.height = height;
+            this.state = state;
             this.succeeded = succeeded;
             this.failed = failed;
         }
@@ -420,34 +468,43 @@ public sealed partial class OffscreenVisualCaptureTests
         private void load()
         {
             LocalReplay[] replays = source.SearchReplaysAsync(new LocalLibraryQuery(Limit: 200)).AsTask().GetAwaiter().GetResult().Items.ToArray();
-            var analyses = replays.Take(3).ToDictionary(
-                replay => replay.ScoreId,
-                replay => new ReplayAnalysisResult(
-                    ReplayAnalysisProtocol.EngineVersion,
-                    "officialRulesetPlayback",
-                    true,
-                    ReplayAnalysisProtocol.WallClockTimeoutMs,
-                    Array.Empty<int>(),
-                    new[]
-                    {
-                        new ReplayObjectJudgement(
-                            24, null, "HitCircle", 24_000, 24_000, "Miss", "Great", 24_150, 150, 1,
-                            new ReplayPoint(256, 192), null, 120, 0,
-                            new ReplayMissAnalysis(
-                                ReplayMissReason.Overshoot, 32, 40, -10, new ReplayPoint(280, 192), 50, 55,
-                                new ReplayPoint(311, 192), 45, true, false, true, 0.4, Confidence: 0.85)),
-                    },
-                    new ReplayJudgementSummary(400, 12, 3, 1, 0, 0)));
+            var analyses = replays.Take(3)
+                                  .Select((replay, index) => (replay, index))
+                                  .ToDictionary(item => item.replay.ScoreId, item => createCoachingAnalysis(item.index));
+
+            var workspace = new NativeCoachingWorkspace(
+                source,
+                analyses,
+                _ => { },
+                () => null,
+                (_, _) => Task.FromResult(new PracticeMapGenerationResult(true, "Practice map imported", "C:\\AimMod\\Practice")));
+            workspace.RelativeSizeAxes = osu.Framework.Graphics.Axes.Both;
 
             Add(new osu.Framework.Graphics.Containers.Container
             {
                 RelativeSizeAxes = osu.Framework.Graphics.Axes.Both,
-                Padding = new osu.Framework.Graphics.MarginPadding(18),
-                Child = new NativeCoachingWorkspace(source, analyses, _ => { }, () => null)
+                Padding = new osu.Framework.Graphics.MarginPadding
                 {
-                    RelativeSizeAxes = osu.Framework.Graphics.Axes.Both,
+                    Left = 52,
+                    Right = 52,
+                    Top = 92,
+                    Bottom = 18,
                 },
+                Child = workspace,
             });
+
+            Scheduler.AddDelayed(() =>
+            {
+                if (state == CoachingCaptureState.Empty)
+                    return;
+
+                workspace.BeginAnalysisProgress();
+                workspace.SetAnalysisProgress(state == CoachingCaptureState.Complete ? 7 : 3, 7, "Blue Zenith [Another]");
+                if (state == CoachingCaptureState.Complete)
+                    workspace.ApplyNewAnalyses(3, 0);
+                else if (state == CoachingCaptureState.Error)
+                    workspace.SetAnalysisError();
+            }, 1200);
         }
 
         protected override void LoadComplete()
@@ -455,7 +512,7 @@ public sealed partial class OffscreenVisualCaptureTests
             base.LoadComplete();
             frameworkConfig.SetValue(FrameworkSetting.WindowMode, WindowMode.Windowed);
             frameworkConfig.SetValue(FrameworkSetting.WindowedSize, new System.Drawing.Size(width, height));
-            Scheduler.AddDelayed(capture, 1800);
+            Scheduler.AddDelayed(capture, 2500);
         }
 
         private void capture()
@@ -479,6 +536,14 @@ public sealed partial class OffscreenVisualCaptureTests
                 }
             }, TaskScheduler.Default);
         }
+    }
+
+    private enum CoachingCaptureState
+    {
+        Analysing,
+        Complete,
+        Error,
+        Empty,
     }
 
     private sealed partial class CaptureReplayAnalysisGame : OsuGameBase
