@@ -12,6 +12,7 @@ using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
 using osu.Framework.Input.Events;
+using osu.Framework.Localisation;
 using osu.Framework.Threading;
 using osu.Game.Graphics.Containers;
 using osu.Game.Graphics.Sprites;
@@ -43,13 +44,20 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
     private readonly Box refreshProgressFill;
     private readonly SpriteText refreshText;
     private readonly Container filterHeader;
+    private readonly Container filterBand;
+    private readonly Container searchGroup;
+    private readonly Container categoryGroup;
+    private readonly Container lengthGroup;
+    private readonly Container sortGroup;
     private readonly Container resultViewport;
+    private readonly OsuScrollContainer resultScroll;
+    private readonly PpTargetWorkspaceState workspaceState;
     private readonly RangeSlider starSlider;
     private readonly RangeSlider expectedPpSlider;
     private readonly RangeSlider maximumPpSlider;
-    private readonly OsuDropdown<OfficialBeatmapCategory> categoryDropdown;
-    private readonly OsuEnumDropdown<TargetLength> lengthDropdown;
-    private readonly OsuEnumDropdown<TargetSort> sortDropdown;
+    private readonly PpTargetDropdown<OfficialBeatmapCategory> categoryDropdown;
+    private readonly PpTargetDropdown<TargetLength> lengthDropdown;
+    private readonly PpTargetDropdown<TargetSort> sortDropdown;
     private readonly BindableDouble minimumStars = new(0) { MinValue = 0, MaxValue = 10, Default = 0 };
     private readonly BindableDouble maximumStars = new(10) { MinValue = 0, MaxValue = 10, Default = 10 };
     private readonly BindableDouble minimumExpectedPp = new(0) { MinValue = 0, MaxValue = 1_000, Default = 0 };
@@ -103,7 +111,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             filterHeader = new Container
             {
                 RelativeSizeAxes = Axes.X,
-                Height = 238,
+                Height = 270,
                 Depth = -20,
                 Children = new Drawable[]
                 {
@@ -143,7 +151,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                     },
                     refreshProgress = new Container
                     {
-                        Position = new(0, 86),
+                        Position = new(0, 84),
                         RelativeSizeAxes = Axes.X,
                         Height = 3,
                         Alpha = 0,
@@ -155,79 +163,93 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                             refreshProgressFill = new Box { RelativeSizeAxes = Axes.Both, Width = 0, Colour = AimModPalette.Pink },
                         },
                     },
-                    search = new OsuTextBox
+                    filterBand = new Container
                     {
-                        Position = new(0, 91),
-                        Size = new(270, 44),
-                        PlaceholderText = "Search title, artist, mapper, or source",
+                        Position = new(0, 96),
+                        RelativeSizeAxes = Axes.X,
+                        Height = 132,
+                        Children = new Drawable[]
+                        {
+                            new Container
+                            {
+                                RelativeSizeAxes = Axes.Both,
+                                Masking = true,
+                                CornerRadius = 6,
+                                BorderThickness = 1,
+                                BorderColour = AimModPalette.Border,
+                                Children = new Drawable[]
+                                {
+                                    new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel, Alpha = 0.72f },
+                                    new Box { RelativeSizeAxes = Axes.X, Height = 3, Colour = AimModPalette.Pink, Alpha = 0.8f },
+                                },
+                            },
+                            searchGroup = new Container
+                            {
+                                Children = new Drawable[]
+                                {
+                                    filterLabel("FIND A MAP"),
+                                    search = new OsuTextBox
+                                    {
+                                        Position = new(0, 18),
+                                        RelativeSizeAxes = Axes.X,
+                                        Height = 40,
+                                        PlaceholderText = "Title, artist, mapper, or source",
+                                    },
+                                },
+                            },
+                            starSlider = new RangeSlider
+                            {
+                                Label = "Star rating",
+                                LowerBound = minimumStars,
+                                UpperBound = maximumStars,
+                                DefaultStringLowerBound = "0",
+                                DefaultStringUpperBound = "10+",
+                                TooltipSuffix = "stars",
+                                NubWidth = 28,
+                            },
+                            expectedPpSlider = new RangeSlider
+                            {
+                                Label = "Expected PP",
+                                LowerBound = minimumExpectedPp,
+                                UpperBound = maximumExpectedPp,
+                                DefaultStringLowerBound = "0",
+                                DefaultStringUpperBound = "1000+",
+                                TooltipSuffix = "pp",
+                                NubWidth = 28,
+                            },
+                            maximumPpSlider = new RangeSlider
+                            {
+                                Label = "Realistic max PP",
+                                LowerBound = minimumMaximumPp,
+                                UpperBound = maximumMaximumPp,
+                                DefaultStringLowerBound = "0",
+                                DefaultStringUpperBound = "1000+",
+                                TooltipSuffix = "pp",
+                                NubWidth = 28,
+                            },
+                            categoryGroup = dropdownGroup("MAP STATUS", categoryDropdown = new PpTargetDropdown<OfficialBeatmapCategory>(CategoryLabel)
+                            {
+                                Items = new[] { OfficialBeatmapCategory.Ranked, OfficialBeatmapCategory.Loved, OfficialBeatmapCategory.Pending, OfficialBeatmapCategory.Any },
+                                Current = category,
+                            }),
+                            lengthGroup = dropdownGroup("MAP LENGTH", lengthDropdown = new PpTargetDropdown<TargetLength>(LengthLabel)
+                            {
+                                Items = Enum.GetValues<TargetLength>(),
+                                Current = length,
+                            }),
+                            sortGroup = dropdownGroup("SORT RESULTS", sortDropdown = new PpTargetDropdown<TargetSort>(SortLabel)
+                            {
+                                Items = Enum.GetValues<TargetSort>(),
+                                Current = sort,
+                            }),
+                        },
                     },
-                    starSlider = new RangeSlider
-                    {
-                        Position = new(294, 76),
-                        Size = new(220, 62),
-                        Label = "Stars",
-                        LowerBound = minimumStars,
-                        UpperBound = maximumStars,
-                        DefaultStringLowerBound = "0",
-                        DefaultStringUpperBound = "10+",
-                        TooltipSuffix = "stars",
-                        NubWidth = 28,
-                    },
-                    expectedPpSlider = new RangeSlider
-                    {
-                        Position = new(536, 76),
-                        Size = new(220, 62),
-                        Label = "Expected PP",
-                        LowerBound = minimumExpectedPp,
-                        UpperBound = maximumExpectedPp,
-                        DefaultStringLowerBound = "0",
-                        DefaultStringUpperBound = "1000+",
-                        TooltipSuffix = "pp",
-                        NubWidth = 28,
-                    },
-                    maximumPpSlider = new RangeSlider
-                    {
-                        Anchor = Anchor.TopRight,
-                        Origin = Anchor.TopRight,
-                        Position = new(0, 76),
-                        Size = new(220, 62),
-                        Label = "Realistic max PP",
-                        LowerBound = minimumMaximumPp,
-                        UpperBound = maximumMaximumPp,
-                        DefaultStringLowerBound = "0",
-                        DefaultStringUpperBound = "1000+",
-                        TooltipSuffix = "pp",
-                        NubWidth = 28,
-                    },
-                    categoryDropdown = new OsuDropdown<OfficialBeatmapCategory>
-                    {
-                        Position = new(0, 151),
-                        Width = 210,
-                        Items = new[] { OfficialBeatmapCategory.Ranked, OfficialBeatmapCategory.Loved, OfficialBeatmapCategory.Pending, OfficialBeatmapCategory.Any },
-                        Current = category,
-                    },
-                    lengthDropdown = new OsuEnumDropdown<TargetLength>
-                    {
-                        Anchor = Anchor.TopCentre,
-                        Origin = Anchor.TopCentre,
-                        Position = new(0, 151),
-                        Width = 210,
-                        Current = length,
-                    },
-                    sortDropdown = new OsuEnumDropdown<TargetSort>
-                    {
-                        Anchor = Anchor.TopRight,
-                        Origin = Anchor.TopRight,
-                        Position = new(0, 151),
-                        Width = 210,
-                        Current = sort,
-                    },
-                    status = truncatingText("Loading local history...", 11, AimModPalette.Muted).With(drawable => drawable.Position = new(0, 211)),
+                    status = truncatingText("Loading local history...", 10, AimModPalette.Muted, "SemiBold").With(drawable => drawable.Position = new(0, 245)),
                     resultCount = truncatingText(string.Empty, 11, AimModPalette.Muted, "SemiBold").With(drawable =>
                     {
                         drawable.Anchor = Anchor.TopRight;
                         drawable.Origin = Anchor.TopRight;
-                        drawable.Position = new(0, 211);
+                        drawable.Position = new(0, 245);
                     }),
                 },
             },
@@ -237,17 +259,21 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                 Padding = new MarginPadding { Top = 245 },
                 Masking = true,
                 Depth = 10,
-                Child = new OsuScrollContainer
+                Children = new Drawable[]
                 {
-                    RelativeSizeAxes = Axes.Both,
-                    Child = results = new FillFlowContainer<Drawable>
+                    resultScroll = new OsuScrollContainer
                     {
-                        RelativeSizeAxes = Axes.X,
-                        AutoSizeAxes = Axes.Y,
-                        Direction = FillDirection.Vertical,
-                        Spacing = new(8),
-                        Padding = new MarginPadding { Bottom = 32 },
+                        RelativeSizeAxes = Axes.Both,
+                        Child = results = new FillFlowContainer<Drawable>
+                        {
+                            RelativeSizeAxes = Axes.X,
+                            AutoSizeAxes = Axes.Y,
+                            Direction = FillDirection.Vertical,
+                            Spacing = new(8),
+                            Padding = new MarginPadding { Bottom = 32 },
+                        },
                     },
+                    workspaceState = new PpTargetWorkspaceState(),
                 },
             },
             loadingOverlay = new AimModLoadingOverlay(),
@@ -260,40 +286,46 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
 
         float width = Math.Max(640, DrawWidth);
         bool compact = width < 1_120;
-        float headerHeight = compact ? 318 : 238;
+        float headerHeight = compact ? 368 : 270;
         filterHeader.Height = headerHeight;
         resultViewport.Padding = new MarginPadding { Top = headerHeight + 7 };
+        workspaceState.Y = compact ? -48 : 0;
 
         if (compact)
         {
             float halfWidth = (width - 18) / 2;
-            search.Position = new(0, 91);
-            search.Size = new(halfWidth, 44);
-            placeSlider(starSlider, width - halfWidth, 76, halfWidth);
-            placeSlider(expectedPpSlider, 0, 143, halfWidth);
-            placeSlider(maximumPpSlider, width - halfWidth, 143, halfWidth);
+            filterBand.Height = 222;
+            placeGroup(searchGroup, 12, 12, halfWidth - 12, 60);
+            placeSlider(starSlider, width - halfWidth + 6, 5, halfWidth - 18);
+            placeSlider(expectedPpSlider, 12, 75, halfWidth - 24);
+            placeSlider(maximumPpSlider, width - halfWidth + 6, 75, halfWidth - 18);
 
-            float dropdownWidth = (width - 24) / 3;
-            placeDropdown(categoryDropdown, 0, 220, dropdownWidth, Anchor.TopLeft);
-            placeDropdown(lengthDropdown, (width - dropdownWidth) / 2, 220, dropdownWidth, Anchor.TopLeft);
-            placeDropdown(sortDropdown, width - dropdownWidth, 220, dropdownWidth, Anchor.TopLeft);
-            status.Position = new(0, 286);
-            resultCount.Position = new(0, 286);
+            float dropdownWidth = (width - 48) / 3;
+            placeGroup(categoryGroup, 12, 148, dropdownWidth, 62);
+            placeGroup(lengthGroup, 24 + dropdownWidth, 148, dropdownWidth, 62);
+            placeGroup(sortGroup, 36 + dropdownWidth * 2, 148, dropdownWidth, 62);
+            status.Position = new(0, 337);
+            resultCount.Position = new(0, 337);
         }
         else
         {
             float searchWidth = Math.Clamp(width * 0.22f, 250, 310);
-            float sliderWidth = Math.Clamp((width - searchWidth - 72) / 3, 190, 260);
-            search.Position = new(0, 91);
-            search.Size = new(searchWidth, 44);
-            placeSlider(starSlider, searchWidth + 24, 76, sliderWidth);
-            placeSlider(expectedPpSlider, searchWidth + 48 + sliderWidth, 76, sliderWidth);
-            placeSlider(maximumPpSlider, width - sliderWidth, 76, sliderWidth);
-            placeDropdown(categoryDropdown, 0, 151, 210, Anchor.TopLeft);
-            placeDropdown(lengthDropdown, (width - 210) / 2, 151, 210, Anchor.TopLeft);
-            placeDropdown(sortDropdown, width - 210, 151, 210, Anchor.TopLeft);
-            status.Position = new(0, 211);
-            resultCount.Position = new(0, 211);
+            float sliderWidth = Math.Max(190, (width - searchWidth - 78) / 3);
+            float starX = 30 + searchWidth;
+            float expectedX = starX + sliderWidth + 18;
+            float maximumX = expectedX + sliderWidth + 18;
+            filterBand.Height = 132;
+            placeGroup(searchGroup, 12, 12, searchWidth, 60);
+            placeSlider(starSlider, starX, 5, sliderWidth);
+            placeSlider(expectedPpSlider, expectedX, 5, sliderWidth);
+            placeSlider(maximumPpSlider, maximumX, 5, sliderWidth);
+
+            float dropdownWidth = Math.Clamp((width - 48) / 3, 210, 320);
+            placeGroup(categoryGroup, 12, 72, dropdownWidth, 52);
+            placeGroup(lengthGroup, (width - dropdownWidth) / 2, 72, dropdownWidth, 52);
+            placeGroup(sortGroup, width - dropdownWidth - 12, 72, dropdownWidth, 52);
+            status.Position = new(0, 245);
+            resultCount.Position = new(0, 245);
         }
 
         status.MaxWidth = width * 0.62f;
@@ -309,12 +341,27 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         slider.Size = new(width, 62);
     }
 
-    private static void placeDropdown(Drawable dropdown, float x, float y, float width, Anchor anchor)
+    private static void placeGroup(Container group, float x, float y, float width, float height)
     {
-        dropdown.Anchor = anchor;
-        dropdown.Origin = anchor;
-        dropdown.Position = new(x, y);
-        dropdown.Width = width;
+        group.Position = new(x, y);
+        group.Size = new(width, height);
+    }
+
+    private static SpriteText filterLabel(string value) => text(value, 8, AimModPalette.Cyan, "Bold");
+
+    private static Container dropdownGroup(string label, Drawable dropdown)
+    {
+        dropdown.Position = new(0, 17);
+        dropdown.RelativeSizeAxes = Axes.X;
+        dropdown.Width = 1;
+        return new Container
+        {
+            Children = new[]
+            {
+                filterLabel(label),
+                dropdown,
+            },
+        };
     }
 
     protected override void LoadComplete()
@@ -421,6 +468,8 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                     loadingOverlay.HideLoading();
                     hideRefresh();
                     status.Text = $"Could not build the PP profile: {error.Message}";
+                    if (!hasVisibleSnapshot)
+                        workspaceState.ShowState(FontAwesome.Solid.ExclamationTriangle, "PP profile unavailable", "Refresh to try loading your local and submitted score history again.");
                 });
         }
     }
@@ -500,6 +549,15 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             connectionAttempts++;
             status.Text = connectionAttempts < 10 ? "Connecting to osu!lazer..." : "A signed-in osu!lazer session is required for map suggestions.";
             showRefresh("Waiting for the signed-in osu! session", 0, 0);
+            if (!hasVisibleSnapshot)
+            {
+                workspaceState.ShowState(
+                    connectionAttempts < 10 ? FontAwesome.Solid.Link : FontAwesome.Solid.SignInAlt,
+                    connectionAttempts < 10 ? "Connecting to osu!" : "Sign in to osu!lazer",
+                    connectionAttempts < 10
+                        ? "Waiting for your osu!lazer session before searching for beatmaps."
+                        : "Open osu!lazer and sign in, then refresh to build your recommendations.");
+            }
             if (connectionAttempts < 10)
                 scheduledSearch = Scheduler.AddDelayed(startCatalogSearch, 1000);
             else
@@ -510,6 +568,8 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         connectionAttempts = 0;
         status.Text = "Searching the osu! catalog...";
         showRefresh("Searching ranked osu!standard beatmaps", 0, 0);
+        if (!hasVisibleSnapshot)
+            workspaceState.ShowState(FontAwesome.Solid.Search, "Finding PP targets", "Searching osu!standard beatmaps that fit your performance profile.");
         _ = searchCatalogAsync(currentClient, catalogSearch!.Token);
     }
 
@@ -538,6 +598,8 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                 {
                     status.Text = $"Could not search the osu! catalog: {error.Message}";
                     hideRefresh();
+                    if (!hasVisibleSnapshot)
+                        workspaceState.ShowState(FontAwesome.Solid.ExclamationTriangle, "Beatmap search unavailable", "Check your connection and refresh to search again.");
                 });
             }
         }
@@ -556,6 +618,8 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             }
             status.Text = failureMessage(response.Status);
             hideRefresh();
+            if (!hasVisibleSnapshot)
+                workspaceState.ShowState(FontAwesome.Solid.ExclamationTriangle, "Suggestions unavailable", failureMessage(response.Status));
             return;
         }
 
@@ -628,8 +692,8 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                 {
                     exactEstimates = calculated;
                     status.Text = calculated.Count == 0
-                        ? "Official PP could not be calculated for these difficulties."
-                        : $"Official PP calculated for {calculated.Count:N0} beatmap difficult{(calculated.Count == 1 ? "y" : "ies")}.";
+                        ? "PP values are unavailable for these difficulties."
+                        : $"PP ready for {calculated.Count:N0} beatmap difficult{(calculated.Count == 1 ? "y" : "ies")}.";
                     renderResults();
                     hideRefresh();
                     saveSnapshot();
@@ -644,7 +708,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             if (!IsDisposed)
                 Schedule(() =>
                 {
-                    status.Text = $"Official PP calculation failed: {error.Message}";
+                    status.Text = $"PP calculation failed: {error.Message}";
                     hideRefresh();
                 });
         }
@@ -691,7 +755,9 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                 results.Add(new PpTargetRow(candidate, set, importSet));
         }
         if (results.Count == 0)
-            results.Add(text("No maps match the current PP and difficulty filters.", 14, AimModPalette.Muted).With(drawable => drawable.Padding = new MarginPadding(18)));
+            workspaceState.ShowState(FontAwesome.Solid.Filter, "No matching beatmaps", "Try widening the star, PP, status, or length filters.");
+        else
+            workspaceState.HideState();
         int calculatedCount = visibleCandidates.Count(candidate => candidate.Estimate is not null);
         resultCount.Text = exactCalculation is not null && !exactCalculation.IsCancellationRequested
             ? $"{visibleCandidates.Length:N0} matches  /  {calculatedCount:N0} PP values ready"
@@ -827,6 +893,30 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         _ => "Submitted scores could not be loaded for this session.",
     };
 
+    internal static string CategoryLabel(OfficialBeatmapCategory value) => value switch
+    {
+        OfficialBeatmapCategory.Ranked => "Ranked maps",
+        OfficialBeatmapCategory.Loved => "Loved maps",
+        OfficialBeatmapCategory.Pending => "Pending maps",
+        _ => "Any status",
+    };
+
+    internal static string LengthLabel(TargetLength value) => value switch
+    {
+        TargetLength.Short => "Under 2 minutes",
+        TargetLength.Medium => "2 to 4 minutes",
+        TargetLength.Long => "Over 4 minutes",
+        _ => "Any length",
+    };
+
+    internal static string SortLabel(TargetSort value) => value switch
+    {
+        TargetSort.ExpectedPp => "Highest expected PP",
+        TargetSort.MaximumPp => "Highest realistic max",
+        TargetSort.Stars => "Lowest star rating",
+        _ => "Best personal fit",
+    };
+
     private static SpriteText text(string value, float size, Colour4 colour, string weight = "Regular") => new()
     {
         Text = value,
@@ -841,7 +931,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         Colour = colour,
     };
 
-    private enum TargetLength
+    internal enum TargetLength
     {
         Any,
         Short,
@@ -849,12 +939,84 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         Long,
     }
 
-    private enum TargetSort
+    internal enum TargetSort
     {
         BestFit,
         ExpectedPp,
         MaximumPp,
         Stars,
+    }
+
+    private sealed partial class PpTargetDropdown<T> : OsuDropdown<T>
+        where T : struct, Enum
+    {
+        private readonly Func<T, string> formatter;
+
+        public PpTargetDropdown(Func<T, string> formatter)
+        {
+            this.formatter = formatter;
+        }
+
+        protected override LocalisableString GenerateItemText(T item) => formatter(item);
+    }
+
+    private sealed partial class PpTargetWorkspaceState : Container
+    {
+        private readonly SpriteIcon icon;
+        private readonly TruncatingSpriteText title;
+        private readonly TruncatingSpriteText detail;
+
+        public PpTargetWorkspaceState()
+        {
+            RelativeSizeAxes = Axes.Both;
+            Depth = -10;
+            Alpha = 0;
+            Children = new Drawable[]
+            {
+                icon = new SpriteIcon
+                {
+                    Anchor = Anchor.Centre,
+                    Origin = Anchor.BottomCentre,
+                    Position = new(0, -24),
+                    Size = new(34),
+                    Colour = AimModPalette.Pink,
+                },
+                title = new TruncatingSpriteText
+                {
+                    Anchor = Anchor.Centre,
+                    Origin = Anchor.Centre,
+                    Position = new(0, 12),
+                    Font = new FontUsage(size: 21, weight: "Bold"),
+                    Colour = AimModPalette.Text,
+                },
+                detail = new TruncatingSpriteText
+                {
+                    Anchor = Anchor.Centre,
+                    Origin = Anchor.Centre,
+                    Position = new(0, 43),
+                    Font = new FontUsage(size: 12, weight: "SemiBold"),
+                    Colour = AimModPalette.Muted,
+                },
+            };
+        }
+
+        public void ShowState(IconUsage stateIcon, string heading, string description)
+        {
+            icon.Icon = stateIcon;
+            title.Text = heading;
+            detail.Text = description;
+            this.FadeIn(150, Easing.OutQuint);
+        }
+
+        public void HideState() => this.FadeOut(120, Easing.OutQuint);
+
+        protected override void Update()
+        {
+            base.Update();
+            float maxWidth = Math.Clamp(DrawWidth - 80, 260, 560);
+            title.MaxWidth = maxWidth;
+            detail.MaxWidth = maxWidth;
+        }
     }
 
     private partial class PpTargetRow : Container
@@ -889,7 +1051,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             string expected = candidate.Estimate is null ? "-" : $"{candidate.Estimate.ExpectedPp:0}";
             string maximum = candidate.Estimate is null ? "-" : $"{candidate.Estimate.RealisticMaximumPp:0}";
             bool calculated = candidate.Estimate?.Method.StartsWith("Official osu! ruleset", StringComparison.Ordinal) == true;
-            string confidence = calculated ? "official osu! PP ready" : "PP calculation queued in background";
+            string confidence = calculated ? "PP ready" : "PP pending";
             string mods = candidate.SuggestedMods.Count == 0 ? "NM" : string.Join(" + ", candidate.SuggestedMods);
             OfficialBeatmapDifficulty? difficulty = set.Difficulties.FirstOrDefault(item => item.BeatmapId == candidate.BeatmapId);
             double passRate = difficulty is { PlayCount: > 0 } ? (double)difficulty.PassCount / difficulty.PlayCount : 0;
@@ -928,8 +1090,8 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                         confidenceDetails = truncatingText($"{candidate.PreferenceFit:P0} personal fit   /   {confidence}", 9, calculated ? AimModPalette.Success : AimModPalette.Cyan, "SemiBold"),
                     },
                 },
-                expectedMetric = metric("EXPECTED PP", expected, AimModPalette.Cyan, candidate.Estimate is null ? "calculating" : $"at {candidate.Attainability:P0} attainability"),
-                maximumMetric = metric("REALISTIC MAX", maximum, Colour4.FromHex("FFD45A"), candidate.Estimate is null ? "calculating" : $"+{Math.Max(0, candidate.EstimatedAttainableGainPp ?? 0):0} gain"),
+                expectedMetric = metric("EXPECTED PP", expected, AimModPalette.Cyan, candidate.Estimate is null ? "pending" : $"at {candidate.Attainability:P0} attainability"),
+                maximumMetric = metric("REALISTIC MAX", maximum, Colour4.FromHex("FFD45A"), candidate.Estimate is null ? "pending" : $"+{Math.Max(0, candidate.EstimatedAttainableGainPp ?? 0):0} gain"),
                 new Container
                 {
                     Anchor = Anchor.CentreRight,

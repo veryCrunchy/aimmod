@@ -25,7 +25,7 @@ namespace AimMod.Desktop.LocalLibrary;
 public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
 {
     private const int page_size = 80;
-    private const float toolbar_height = 126;
+    private const float toolbar_height = 142;
 
     private readonly ILocalLibrarySource source;
     private readonly Func<IPpTargetExactCalculationService?> exactCalculator;
@@ -35,6 +35,12 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
     private readonly Container searchSurface;
     private readonly Container starsSurface;
     private readonly Container sortSurface;
+    private readonly Container bpmSurface;
+    private readonly Container lengthSurface;
+    private readonly Container playedSurface;
+    private readonly SpriteText bpmLabel;
+    private readonly SpriteText lengthLabel;
+    private readonly SpriteText playedLabel;
     private readonly PrettyDropdown<LocalLibrarySort> sortDropdown;
     private readonly PrettyDropdown<BpmFilter> bpmDropdown;
     private readonly PrettyDropdown<LengthFilter> lengthDropdown;
@@ -89,7 +95,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                     searchBox = new OsuTextBox
                     {
                         Width = 0.52f,
-                        Height = 38,
+                        Height = 42,
                         PlaceholderText = "Search beatmaps, artists, mappers, or difficulties",
                     },
                     starsSurface = filterSurface(490, 51, 260, 46),
@@ -136,12 +142,12 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                         Items = Enum.GetValues<PlayedFilter>(),
                         Current = playedFilter,
                     },
-                    filterSurface(0, 51, 150, 38),
-                    filterSurface(160, 51, 150, 38),
-                    filterSurface(320, 51, 160, 38),
-                    filterLabel("BPM", 4),
-                    filterLabel("LENGTH", 164),
-                    filterLabel("PLAYED", 324),
+                    bpmSurface = filterSurface(0, 51, 150, 38),
+                    lengthSurface = filterSurface(160, 51, 150, 38),
+                    playedSurface = filterSurface(320, 51, 160, 38),
+                    bpmLabel = filterLabel("BPM", 4),
+                    lengthLabel = filterLabel("LENGTH", 164),
+                    playedLabel = filterLabel("PLAYED", 324),
                     status = new TruncatingSpriteText
                     {
                         Y = 107,
@@ -175,9 +181,14 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                 Origin = Anchor.TopRight,
                 RelativeSizeAxes = Axes.Y,
                 Width = 350,
-                Padding = new MarginPadding { Left = 14, Top = 8 },
+                Padding = new MarginPadding { Left = 18, Top = 4 },
                 Masking = true,
-                Child = inspector = new BeatmapInspector(),
+                Children = new Drawable[]
+                {
+                    new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas, Alpha = 0.78f, Depth = 100 },
+                    new Box { RelativeSizeAxes = Axes.Y, Width = 1, Colour = AimModPalette.Border, Depth = -10 },
+                    inspector = new BeatmapInspector(),
+                },
             },
             loading = new AimModLoadingOverlay(),
         };
@@ -206,13 +217,55 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         rightRail.Alpha = compact ? 0 : 1;
         rightRail.AlwaysPresent = !compact;
         listPanel.Padding = new MarginPadding { Top = toolbar_height, Right = railWidth };
-        searchBox.Width = Math.Max(260, contentWidth - 230);
+        float usableWidth = Math.Max(760, contentWidth - 10);
+        searchBox.Position = new(0, 2);
+        searchBox.Width = Math.Max(320, usableWidth - 224);
         searchSurface.Width = searchBox.Width;
-        stars.Width = Math.Clamp(contentWidth - 680, 170, 300);
+        searchSurface.Height = 42;
+
+        const float gap = 8;
+        const float bpmWidth = 140;
+        const float lengthWidth = 140;
+        const float playedWidth = 150;
+        const float sortWidth = 176;
+        const float filterY = 62;
+        float starsX = bpmWidth + lengthWidth + playedWidth + gap * 3;
+        float sortX = usableWidth - sortWidth;
+
+        bpmDropdown.Position = new(0, filterY);
+        bpmDropdown.Width = bpmWidth;
+        bpmSurface.Position = bpmDropdown.Position;
+        bpmSurface.Width = bpmWidth;
+        bpmLabel.Position = new(4, 50);
+
+        lengthDropdown.Position = new(bpmWidth + gap, filterY);
+        lengthDropdown.Width = lengthWidth;
+        lengthSurface.Position = lengthDropdown.Position;
+        lengthSurface.Width = lengthWidth;
+        lengthLabel.Position = new(bpmWidth + gap + 4, 50);
+
+        playedDropdown.Position = new(bpmWidth + lengthWidth + gap * 2, filterY);
+        playedDropdown.Width = playedWidth;
+        playedSurface.Position = playedDropdown.Position;
+        playedSurface.Width = playedWidth;
+        playedLabel.Position = new(bpmWidth + lengthWidth + gap * 2 + 4, 50);
+
+        stars.Position = new(starsX, filterY - 1);
+        stars.Width = Math.Clamp(sortX - starsX - gap, 170, 320);
+        starsSurface.Position = new(starsX, filterY);
         starsSurface.Width = stars.Width;
-        sortDropdown.Position = new(-railWidth, 51);
-        sortSurface.Position = new(-railWidth, 51);
-        status.MaxWidth = Math.Max(200, DrawWidth - railWidth - 340);
+
+        sortDropdown.Anchor = Anchor.TopLeft;
+        sortDropdown.Origin = Anchor.TopLeft;
+        sortDropdown.Position = new(sortX, filterY);
+        sortDropdown.Width = sortWidth;
+        sortSurface.Anchor = Anchor.TopLeft;
+        sortSurface.Origin = Anchor.TopLeft;
+        sortSurface.Position = new(sortX, filterY);
+        sortSurface.Width = sortWidth;
+
+        status.Y = 118;
+        status.MaxWidth = Math.Max(220, usableWidth - 14);
     }
 
     private void scheduleQuery()
@@ -461,6 +514,8 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         private readonly FillFlowContainer<Drawable> difficultyRows;
         private readonly OsuScrollContainer difficultyScroll;
         private readonly Box selectedLayer;
+        private readonly Box selectionBar;
+        private readonly SpriteText indexText;
         private bool expanded;
 
         public BeatmapSetRow(int index, LocalBeatmapSet set, Action<LocalBeatmapSet> selectSet, Action<LocalBeatmapSet, LocalBeatmapDifficulty> selectDifficulty)
@@ -468,9 +523,9 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             this.set = set;
             this.selectSet = selectSet;
             RelativeSizeAxes = Axes.X;
-            Height = 112;
+            Height = 120;
             Masking = true;
-            CornerRadius = 6;
+            CornerRadius = 5;
             BorderThickness = 1;
             BorderColour = AimModPalette.Border;
 
@@ -481,39 +536,40 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             Children = new Drawable[]
             {
                 new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
-                selectedLayer = new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Pink, Alpha = 0 },
-                new SpriteText { Text = index.ToString(), Position = new(12, 14), Font = new FontUsage(size: 14, weight: "Bold"), Colour = AimModPalette.Text },
+                selectedLayer = new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PinkDark, Alpha = 0 },
+                selectionBar = new Box { RelativeSizeAxes = Axes.Y, Width = 4, Colour = AimModPalette.Pink, Alpha = 0 },
+                indexText = new SpriteText { Text = index.ToString(), Position = new(13, 14), Font = new FontUsage(size: 13, weight: "Bold"), Colour = AimModPalette.Muted },
                 new Container
                 {
-                    Position = new(36, 7),
-                    Size = new(126, 98),
+                    Position = new(42, 8),
+                    Size = new(136, 104),
                     Masking = true,
                     CornerRadius = 5,
                     Child = new AimModLocalArtwork(set.BackgroundPath) { RelativeSizeAxes = Axes.Both },
                 },
-                new TruncatingSpriteText { Text = set.Title, Position = new(178, 12), Font = new FontUsage(size: 17, weight: "Bold"), Colour = AimModPalette.Text, MaxWidth = 390 },
-                new TruncatingSpriteText { Text = set.Artist, Position = new(178, 37), Font = new FontUsage(size: 12), Colour = AimModPalette.Text, MaxWidth = 390 },
-                new TruncatingSpriteText { Text = $"mapped by {set.Creator}", Position = new(178, 56), Font = new FontUsage(size: 11), Colour = AimModPalette.Cyan, MaxWidth = 390 },
-                new SpriteText { Text = $"{representative.Bpm:0} BPM   {formatDuration(representative.LengthMilliseconds)}", Position = new(585, 17), Font = new FontUsage(size: 11), Colour = AimModPalette.Muted },
-                new SpriteText { Text = $"Added {relativeDate(set.DateAdded)}", Position = new(585, 39), Font = new FontUsage(size: 11), Colour = AimModPalette.Muted },
-                new SpriteText { Text = set.LocalReplayCount is > 0 ? $"{set.LocalReplayCount:N0} local plays" : "No local plays", Position = new(585, 61), Font = new FontUsage(size: 11, weight: "SemiBold"), Colour = set.LocalReplayCount is > 0 ? AimModPalette.Text : AimModPalette.Muted },
-                new AimModDifficultyPill(maxStars) { Anchor = Anchor.TopRight, Origin = Anchor.TopRight, Margin = new MarginPadding { Top = 12, Right = 12 } },
+                new TruncatingSpriteText { Text = set.Title, Position = new(196, 14), Font = new FontUsage(size: 17, weight: "Bold"), Colour = AimModPalette.Text, MaxWidth = 360 },
+                new TruncatingSpriteText { Text = set.Artist, Position = new(196, 39), Font = new FontUsage(size: 12), Colour = AimModPalette.Text, MaxWidth = 360 },
+                new TruncatingSpriteText { Text = $"mapped by {set.Creator}", Position = new(196, 59), Font = new FontUsage(size: 11), Colour = AimModPalette.Cyan, MaxWidth = 360 },
+                new SpriteText { Text = $"{representative.Bpm:0} BPM   {formatDuration(representative.LengthMilliseconds)}", Position = new(585, 18), Font = new FontUsage(size: 11), Colour = AimModPalette.Muted },
+                new SpriteText { Text = $"Added {relativeDate(set.DateAdded)}", Position = new(585, 41), Font = new FontUsage(size: 11), Colour = AimModPalette.Muted },
+                new SpriteText { Text = set.LocalReplayCount is > 0 ? $"{set.LocalReplayCount:N0} local plays" : "No local plays", Position = new(585, 64), Font = new FontUsage(size: 11, weight: "SemiBold"), Colour = set.LocalReplayCount is > 0 ? AimModPalette.Text : AimModPalette.Muted },
+                new AimModDifficultyPill(maxStars) { Anchor = Anchor.TopRight, Origin = Anchor.TopRight, Margin = new MarginPadding { Top = 13, Right = 13 } },
                 difficultyPills = new FillFlowContainer<Drawable>
                 {
                     RelativeSizeAxes = Axes.X,
                     Width = 0.75f,
                     AutoSizeAxes = Axes.Y,
-                    Position = new(178, 76),
+                    Position = new(196, 84),
                     Masking = true,
                     Direction = FillDirection.Horizontal,
                     Spacing = new(6),
                 },
-                new DifficultyTableHeader { Y = 112 },
+                new DifficultyTableHeader { Y = 120 },
                 difficultyScroll = new OsuScrollContainer
                 {
                     RelativeSizeAxes = Axes.X,
-                    Y = 144,
-                    Height = 216,
+                    Y = 152,
+                    Height = 214,
                     Masking = true,
                     Child = difficultyRows = new FillFlowContainer<Drawable>
                     {
@@ -533,7 +589,11 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         public void SetSelection(Guid setId, Guid difficultyId)
         {
             bool selected = set.SetId == setId;
-            selectedLayer.Alpha = selected ? 0.055f : 0;
+            selectedLayer.Alpha = selected ? 0.1f : 0;
+            selectionBar.Alpha = selected ? 1 : 0;
+            BorderColour = selected ? AimModPalette.Pink : AimModPalette.Border;
+            BorderThickness = selected ? 2 : 1;
+            indexText.Colour = selected ? AimModPalette.Pink : AimModPalette.Muted;
             if (!selected && expanded)
             {
                 expanded = false;
@@ -552,7 +612,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
 
         private void updateExpanded()
         {
-            Height = expanded ? 360 : 112;
+            Height = expanded ? 366 : 120;
             difficultyRows.Alpha = expanded ? 1 : 0;
             difficultyScroll.Alpha = expanded ? 1 : 0;
         }
@@ -633,6 +693,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
     private sealed partial class DifficultyTableRow : ClickableContainer
     {
         private readonly Box background;
+        private readonly Box selectionAccent;
         private readonly Action action;
         public Guid BeatmapId { get; }
 
@@ -645,6 +706,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             Children = new Drawable[]
             {
                 background = new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas, Alpha = 0.72f },
+                selectionAccent = new Box { RelativeSizeAxes = Axes.Y, Width = 3, Colour = AimModPalette.Pink, Alpha = 0 },
                 new SpriteIcon { Position = new(16, 12), Size = new(11), Icon = FontAwesome.Solid.Play, Colour = AimModPalette.Muted },
                 cell(difficulty.Name, 40, 185, true),
                 cell($"{difficulty.StarRating:0.00}", 230, 55),
@@ -658,7 +720,15 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             };
         }
 
-        public bool Selected { set => background.Colour = value ? AimModPalette.PinkDark : AimModPalette.Canvas; }
+        public bool Selected
+        {
+            set
+            {
+                background.Colour = value ? AimModPalette.PanelHover : AimModPalette.Canvas;
+                background.Alpha = value ? 1 : 0.72f;
+                selectionAccent.Alpha = value ? 1 : 0;
+            }
+        }
         protected override bool OnClick(ClickEvent e) { action(); return true; }
 
         private static Drawable cell(string value, float x, float width, bool bold = false) => new TruncatingSpriteText
@@ -712,6 +782,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             this.difficulty = difficulty;
             this.candidates = candidates;
             content.Clear();
+            content.Add(new InspectorHeading(set, difficulty));
             content.Add(new SkillDemandCard(difficulty));
             content.Add(new LoadingCard("Calculating exact PP", "Resolving this beatmap difficulty and applying osu!standard performance rules."));
             content.Add(new LoadingCard("Reading recent performance", "Matching local scores to this exact difficulty."));
@@ -726,7 +797,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         {
             if (set is null || difficulty is null)
                 return;
-            while (content.Count > 1)
+            while (content.Count > 2)
                 content.Remove(content.Last(), true);
             content.Add(new PersonalFitCard(plays, online));
             content.Add(new PpAccuracyCard(pp, ppError));
@@ -1152,7 +1223,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         return $"{(int)duration.TotalMinutes}:{duration.Seconds:00}";
     }
 
-    private static Drawable filterLabel(string value, float x) => new SpriteText
+    private static SpriteText filterLabel(string value, float x) => new SpriteText
     {
         Text = value,
         Position = new(x, 40),

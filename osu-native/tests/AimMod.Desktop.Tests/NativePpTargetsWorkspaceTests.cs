@@ -71,6 +71,20 @@ public sealed class NativePpTargetsWorkspaceTests
         Assert.That(NativePpTargetsWorkspace.BeatmapLaunchUri(456), Is.EqualTo("osu://b/456"));
     }
 
+    [Test]
+    public void DropdownsUseReadableProductLabels()
+    {
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(NativePpTargetsWorkspace.CategoryLabel(OfficialBeatmapCategory.Ranked), Is.EqualTo("Ranked maps"));
+            Assert.That(NativePpTargetsWorkspace.CategoryLabel(OfficialBeatmapCategory.Any), Is.EqualTo("Any status"));
+            Assert.That(NativePpTargetsWorkspace.LengthLabel(NativePpTargetsWorkspace.TargetLength.Short), Is.EqualTo("Under 2 minutes"));
+            Assert.That(NativePpTargetsWorkspace.LengthLabel(NativePpTargetsWorkspace.TargetLength.Any), Is.EqualTo("Any length"));
+            Assert.That(NativePpTargetsWorkspace.SortLabel(NativePpTargetsWorkspace.TargetSort.BestFit), Is.EqualTo("Best personal fit"));
+            Assert.That(NativePpTargetsWorkspace.SortLabel(NativePpTargetsWorkspace.TargetSort.MaximumPp), Is.EqualTo("Highest realistic max"));
+        }
+    }
+
     private static PpTargetWorkspaceSnapshot snapshot()
     {
         var difficulty = new OfficialBeatmapDifficulty(456, "Insane", "osu", 5.2, 180, 125, 4, 9.3f, 8.7f, 6, 10_000, 3_000, 850);

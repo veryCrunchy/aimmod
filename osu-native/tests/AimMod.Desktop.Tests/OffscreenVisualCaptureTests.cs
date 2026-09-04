@@ -42,6 +42,7 @@ public sealed partial class OffscreenVisualCaptureTests
     [TestCase("coaching-error", 1100, 760)]
     [TestCase("coaching-empty", 1100, 760)]
     [TestCase("ppTargets", 1100, 760)]
+    [TestCase("ppTargets", 1600, 900)]
     [TestCase("loading", 1100, 760)]
     [Explicit("Creates a real graphics device and writes a visual-review artifact.")]
     [SupportedOSPlatform("windows")]
@@ -335,7 +336,7 @@ public sealed partial class OffscreenVisualCaptureTests
             base.LoadComplete();
             frameworkConfig.SetValue(FrameworkSetting.WindowMode, WindowMode.Windowed);
             frameworkConfig.SetValue(FrameworkSetting.WindowedSize, new System.Drawing.Size(width, height));
-            Scheduler.AddDelayed(capture, 1500);
+            Scheduler.AddDelayed(capture, 5000);
         }
 
         private void capture()

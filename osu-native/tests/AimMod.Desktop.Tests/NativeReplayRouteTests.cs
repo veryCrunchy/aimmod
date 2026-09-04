@@ -110,6 +110,19 @@ public sealed class NativeReplayRouteTests
     }
 
     [Test]
+    public void NewReplayWorkspacePresentsUsefulEmptyAnalysisState()
+    {
+        var route = new NativeReplayRouteView();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(text(route, "analysisTitle"), Is.EqualTo("No replay selected"));
+            Assert.That(container(route, "notableRows").Count, Is.EqualTo(1));
+            Assert.That(container(route, "mapPatternRows").Count, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
     public void SelectingReplayImmediatelyPresentsCompletedCachedAnalysis()
     {
         Guid scoreId = Guid.NewGuid();
@@ -120,6 +133,10 @@ public sealed class NativeReplayRouteTests
 
         Assert.Multiple(() =>
         {
+            Assert.That(text(route, "statusTitle"), Is.EqualTo("Title"));
+            Assert.That(text(route, "statusDetail"), Does.Contain("Difficulty"));
+            Assert.That(text(route, "summaryAccuracy"), Is.EqualTo("98.00%"));
+            Assert.That(text(route, "summaryPerformance"), Is.EqualTo("100pp"));
             Assert.That(text(route, "analysisTitle"), Is.EqualTo("Exact replay analysis"));
             Assert.That(text(route, "analysisNextPlay"), Does.Not.Contain("will appear"));
             Assert.That(container(route, "notableRows").Count, Is.EqualTo(1));

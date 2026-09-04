@@ -22,6 +22,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
     private readonly FillFlowContainer list;
     private readonly Container searchPanel;
     private readonly Container listPanel;
+    private readonly SkinListState listState;
     private readonly Container detailPanel;
     private readonly Container preview;
     private readonly TruncatingSpriteText selectedName;
@@ -79,7 +80,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
             status = new TruncatingSpriteText
             {
                 Y = 158,
-                Text = source is null ? "Waiting for the local lazer library..." : "Loading installed skins...",
+                Text = source is null ? "osu!lazer library not connected" : "Reading installed skins",
                 Font = new FontUsage(size: 12, weight: "SemiBold"),
                 Colour = AimModPalette.Muted,
             },
@@ -112,6 +113,12 @@ public partial class NativeSkinsScreen : CompositeDrawable
                                     Spacing = new(8),
                                 },
                             },
+                            listState = new SkinListState(
+                                source is null ? FontAwesome.Solid.Link : FontAwesome.Solid.PaintBrush,
+                                source is null ? "Connect osu!lazer" : "Reading installed skins",
+                                source is null
+                                    ? "AimMod will show the skins from your local osu!lazer library here."
+                                    : "Your installed skins will appear here."),
                         },
                     },
                     detailPanel = new Container
@@ -202,7 +209,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
     protected override void LoadComplete()
     {
         base.LoadComplete();
-        searchBox.OnCommit += (_, _) => loadSkins();
+        searchBox.Current.BindValueChanged(_ => loadSkins());
         loadSkins();
     }
 
@@ -246,7 +253,8 @@ public partial class NativeSkinsScreen : CompositeDrawable
             return;
 
         int requestRevision = ++revision;
-        status.Text = "Reading lazer's installed skins...";
+        status.Text = "Reading installed skins";
+        listState.SetState(FontAwesome.Solid.PaintBrush, "Reading installed skins", "Your local osu!lazer library is being refreshed.", true);
         _ = loadSkinsAsync(requestRevision, searchBox.Current.Value, lifetime.Token);
     }
 
@@ -281,6 +289,13 @@ public partial class NativeSkinsScreen : CompositeDrawable
             : page.HasMore
                 ? $"Showing the first {page.Items.Count:N0} of {page.Total:N0} installed skins"
                 : $"{page.Total:N0} installed skins";
+        listState.SetState(
+            FontAwesome.Solid.Search,
+            searchBox.Current.Value.Length == 0 ? "No installed skins found" : "No matching skins",
+            searchBox.Current.Value.Length == 0
+                ? "Install a skin in osu!lazer, then return here to use it for replay playback."
+                : "Try a different skin name or creator.",
+            page.Items.Count == 0);
         if (selected is null || page.Items.All(item => item.SkinId != selected.SkinId))
             selected = page.Items.FirstOrDefault(item => item.SkinId == lazerSkinId) ?? page.Items.FirstOrDefault();
         refreshRows();
@@ -294,6 +309,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
         loadedSkins = Array.Empty<InstalledLazerSkin>();
         list.Clear();
         status.Text = $"Could not read installed skins: {message}";
+        listState.SetState(FontAwesome.Solid.ExclamationTriangle, "Installed skins unavailable", "Reconnect osu!lazer and try again.", true);
     }
 
     private void refreshRows()
@@ -423,6 +439,62 @@ public partial class NativeSkinsScreen : CompositeDrawable
         Font = new FontUsage(size: size, weight: weight),
         Colour = colour,
     };
+
+    private partial class SkinListState : CompositeDrawable
+    {
+        private readonly SpriteIcon icon;
+        private readonly OsuSpriteText title;
+        private readonly OsuSpriteText detail;
+
+        public SkinListState(IconUsage initialIcon, string initialTitle, string initialDetail)
+        {
+            RelativeSizeAxes = Axes.Both;
+            InternalChild = new FillFlowContainer
+            {
+                Anchor = Anchor.Centre,
+                Origin = Anchor.Centre,
+                Width = 420,
+                AutoSizeAxes = Axes.Y,
+                Direction = FillDirection.Vertical,
+                Spacing = new(10),
+                Children = new Drawable[]
+                {
+                    icon = new SpriteIcon
+                    {
+                        Anchor = Anchor.TopCentre,
+                        Origin = Anchor.TopCentre,
+                        Icon = initialIcon,
+                        Size = new(30),
+                        Colour = AimModPalette.Cyan,
+                    },
+                    title = new OsuSpriteText
+                    {
+                        Anchor = Anchor.TopCentre,
+                        Origin = Anchor.TopCentre,
+                        Text = initialTitle,
+                        Font = new FontUsage(size: 20, weight: "Bold"),
+                        Colour = AimModPalette.Text,
+                    },
+                    detail = new OsuSpriteText
+                    {
+                        Anchor = Anchor.TopCentre,
+                        Origin = Anchor.TopCentre,
+                        Text = initialDetail,
+                        Font = new FontUsage(size: 12),
+                        Colour = AimModPalette.Muted,
+                    },
+                },
+            };
+        }
+
+        public void SetState(IconUsage stateIcon, string stateTitle, string stateDetail, bool visible)
+        {
+            icon.Icon = stateIcon;
+            title.Text = stateTitle;
+            detail.Text = stateDetail;
+            this.FadeTo(visible ? 1 : 0, 120);
+        }
+    }
 
     private partial class SkinRow : ClickableContainer
     {

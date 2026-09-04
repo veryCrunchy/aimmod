@@ -1322,13 +1322,13 @@ public partial class AimModGame : OsuGameBase
             {
                 new AimModSectionHeader(
                     "Your osu! workspace",
-                    "Open a focused view for your local library, replay review, performance history, or next PP target.",
+                    "Maps, scores, replay evidence, and your next training decision.",
                     "aimmod!lazer"),
-                text("PLAY", 10, AimModPalette.Pink, "Bold").With(drawable => drawable.Y = 112),
+                text("WORKSPACES", 10, AimModPalette.Cyan, "Bold").With(drawable => drawable.Y = 112),
                 new GridContainer
                 {
                     RelativeSizeAxes = Axes.X,
-                    Height = 166,
+                    Height = 354,
                     Y = 136,
                     ColumnDimensions = new[]
                     {
@@ -1337,40 +1337,26 @@ public partial class AimModGame : OsuGameBase
                     },
                     RowDimensions = new[]
                     {
-                        new Dimension(GridSizeMode.Absolute, 78),
-                        new Dimension(GridSizeMode.Absolute, 78),
+                        new Dimension(GridSizeMode.Absolute, 118),
+                        new Dimension(GridSizeMode.Absolute, 118),
+                        new Dimension(GridSizeMode.Absolute, 118),
                     },
                     Content = new[]
                     {
                         new Drawable[]
                         {
-                            new WorkspaceLink(FontAwesome.Solid.Music, "Beatmaps", "Search installed and online sets", AimModPalette.Pink, showBeatmaps, rightPadding: true),
-                            new WorkspaceLink(FontAwesome.Solid.Crosshairs, "PP targets", "Find exact per-difficulty opportunities", AimModPalette.Cyan, showPpTargets),
+                            new WorkspaceLink(FontAwesome.Solid.Music, "Beatmaps", "Installed and online map library", AimModPalette.Pink, showBeatmaps),
+                            new WorkspaceLink(FontAwesome.Solid.Play, "Replays", "Playback, judgements, and miss evidence", AimModPalette.Cyan, showReplays),
                         },
                         new Drawable[]
                         {
-                            new WorkspaceLink(FontAwesome.Solid.PaintBrush, "Skins", "Inspect and apply installed lazer skins", AimModPalette.Pink, showSkins, rightPadding: true),
-                            new WorkspaceLink(FontAwesome.Solid.Play, "Replays", "Review playback and exact judgements", AimModPalette.Cyan, showReplays),
+                            new WorkspaceLink(FontAwesome.Solid.ChartLine, "Statistics", "Performance history and map detail", AimModPalette.Pink, showStatistics),
+                            new WorkspaceLink(FontAwesome.Solid.Bullseye, "Coaching", "Global skill profile and practice maps", AimModPalette.Cyan, showCoaching),
                         },
-                    },
-                },
-                text("IMPROVE", 10, AimModPalette.Cyan, "Bold").With(drawable => drawable.Y = 330),
-                new GridContainer
-                {
-                    RelativeSizeAxes = Axes.X,
-                    Height = 78,
-                    Y = 354,
-                    ColumnDimensions = new[]
-                    {
-                        new Dimension(GridSizeMode.Relative, 0.5f),
-                        new Dimension(GridSizeMode.Relative, 0.5f),
-                    },
-                    Content = new[]
-                    {
                         new Drawable[]
                         {
-                            new WorkspaceLink(FontAwesome.Solid.ChartLine, "Statistics", "Compare accuracy, score, and consistency", AimModPalette.Pink, showStatistics, rightPadding: true),
-                            new WorkspaceLink(FontAwesome.Solid.Bullseye, "Coaching", "Turn replay analysis into a next step", AimModPalette.Cyan, showCoaching),
+                            new WorkspaceLink(FontAwesome.Solid.Crosshairs, "PP targets", "Personal opportunities by difficulty", AimModPalette.Pink, showPpTargets),
+                            new WorkspaceLink(FontAwesome.Solid.PaintBrush, "Skins", "Installed osu!lazer skins", AimModPalette.Cyan, showSkins),
                         },
                     },
                 },
@@ -1413,12 +1399,11 @@ public partial class AimModGame : OsuGameBase
             string title,
             string description,
             Colour4 accentColour,
-            Action? action = null,
-            bool rightPadding = false)
+            Action? action = null)
         {
             this.action = action;
             RelativeSizeAxes = Axes.Both;
-            Padding = rightPadding ? new MarginPadding { Right = 8, Bottom = 8 } : new MarginPadding { Left = 8, Bottom = 8 };
+            Padding = new MarginPadding(6);
 
             Child = new Container
             {
@@ -1435,9 +1420,9 @@ public partial class AimModGame : OsuGameBase
                     {
                         Anchor = Anchor.CentreLeft,
                         Origin = Anchor.CentreLeft,
-                        Margin = new MarginPadding { Left = 20 },
+                        Margin = new MarginPadding { Left = 24 },
                         Icon = icon,
-                        Size = new(18),
+                        Size = new(22),
                         Colour = accentColour,
                     },
                     new FillFlowContainer
@@ -1447,8 +1432,8 @@ public partial class AimModGame : OsuGameBase
                         AutoSizeAxes = Axes.Y,
                         RelativeSizeAxes = Axes.X,
                         Width = 1,
-                        Margin = new MarginPadding { Left = 54 },
-                        Padding = new MarginPadding { Right = 54 },
+                        Margin = new MarginPadding { Left = 66 },
+                        Padding = new MarginPadding { Right = 58 },
                         Direction = FillDirection.Vertical,
                         Spacing = new(2),
                         Children = new Drawable[]
@@ -1456,13 +1441,13 @@ public partial class AimModGame : OsuGameBase
                             titleText = new TruncatingSpriteText
                             {
                                 Text = title,
-                                Font = new FontUsage(size: 16, weight: "Bold"),
+                                Font = new FontUsage(size: 18, weight: "Bold"),
                                 Colour = AimModPalette.Text,
                             },
                             descriptionText = new TruncatingSpriteText
                             {
                                 Text = description,
-                                Font = new FontUsage(size: 11),
+                                Font = new FontUsage(size: 12),
                                 Colour = AimModPalette.Muted,
                             },
                         },
@@ -1483,7 +1468,7 @@ public partial class AimModGame : OsuGameBase
         protected override void Update()
         {
             base.Update();
-            float textWidth = Math.Max(80, DrawWidth - 108);
+            float textWidth = Math.Max(80, DrawWidth - 130);
             titleText.MaxWidth = textWidth;
             descriptionText.MaxWidth = textWidth;
         }

@@ -27,6 +27,7 @@ public partial class NativeBeatmapDiscoveryScreen : CompositeDrawable
     private readonly Func<IAccountScoreHistoryService?> onlineScoreHistory;
     private readonly Container page = null!;
     private readonly Container tabBar = null!;
+    private readonly AimModSectionHeader workspaceHeader = null!;
     private readonly OsuTabControl<BeatmapDiscoveryTab> tabs = null!;
     private readonly Bindable<BeatmapDiscoveryTab> currentTab = new(BeatmapDiscoveryTab.Installed);
     private NativeInstalledBeatmapBrowser? installedScreen;
@@ -49,16 +50,24 @@ public partial class NativeBeatmapDiscoveryScreen : CompositeDrawable
 
         InternalChildren = new Drawable[]
         {
+            workspaceHeader = new AimModSectionHeader(
+                "Beatmaps",
+                "Browse your installed library or discover maps from the official osu! catalog.",
+                "MAP LIBRARY")
+            {
+                Depth = -110,
+            },
             page = new Container
             {
                 RelativeSizeAxes = Axes.Both,
+                Padding = new MarginPadding { Top = 76 },
                 Masking = true,
                 Depth = 0,
             },
             tabBar = new Container
             {
                 RelativeSizeAxes = Axes.X,
-                Height = 42,
+                Height = 72,
                 Depth = -100,
                 Children = new Drawable[]
                 {
@@ -66,7 +75,7 @@ public partial class NativeBeatmapDiscoveryScreen : CompositeDrawable
                     {
                         Anchor = Anchor.TopRight,
                         Origin = Anchor.TopRight,
-                        Position = new(0, 2),
+                        Position = new(0, 18),
                         Size = new(210, 38),
                         AccentColour = AimModPalette.Pink,
                         Current = currentTab,
@@ -89,7 +98,8 @@ public partial class NativeBeatmapDiscoveryScreen : CompositeDrawable
         float inspectorWidth = currentTab.Value == BeatmapDiscoveryTab.Installed && DrawWidth >= 1_280
             ? Math.Clamp(DrawWidth * 0.27f, 350, 390)
             : 0;
-        tabs.Position = new(-inspectorWidth, 2);
+        tabs.Position = new(-inspectorWidth, 18);
+        workspaceHeader.Width = Math.Max(0, DrawWidth - inspectorWidth - 230);
     }
 
     internal void SelectTab(BeatmapDiscoveryTab tab)
