@@ -491,6 +491,9 @@ public partial class AimModGame : OsuGameBase
         if (replayService is null)
             return new PracticeMapGenerationResult(false, "Connect osu!lazer before creating a practice map.");
 
+        string? root = null;
+        LazerBeatmapArchive? lazerArchive = null;
+        bool retainLazerArchive = false;
         try
         {
             await using ExternalLazerPlayableReplayBundle bundle = await replayService.OpenAsync(
@@ -519,23 +522,17 @@ public partial class AimModGame : OsuGameBase
 
             cancellationToken.ThrowIfCancellationRequested();
             string folderName = $"{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}";
-            string root = Storage.GetFullPath($"practice-maps/{folderName}", true);
-            string files = Path.Combine(root, "map");
-            Directory.CreateDirectory(files);
-            var exporter = new PracticeMapExporter();
-            PracticeMapExportResult export = await exporter.ExportAsync(
+            root = Storage.GetFullPath($"practice-maps/{folderName}", true);
+            PracticeMapArtifact artifact = await new PracticeMapArtifactBuilder().BuildAsync(
                 source,
                 plans[0],
-                files,
-                new WindowsFfmpegAudioSlicer(),
+                root,
                 cancellationToken).ConfigureAwait(false);
-            string archive = PracticeMapPackageService.Create(export, Path.Combine(root, "AimMod practice.osz"));
-            LazerBeatmapArchive? lazerArchive = null;
             if (lazerBeatmapInstallService is not null)
             {
                 try
                 {
-                    lazerArchive = await lazerBeatmapInstallService.PreserveAsync(archive, 0, cancellationToken).ConfigureAwait(false);
+                    lazerArchive = await lazerBeatmapInstallService.PreserveAsync(artifact.ArchivePath, 0, cancellationToken).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -546,38 +543,40 @@ public partial class AimModGame : OsuGameBase
                     logFailure("prepare practice map for osu!lazer", error);
                 }
             }
-            cancellationToken.ThrowIfCancellationRequested();
-            Live<BeatmapSetInfo>? imported = await BeatmapManager.Import(new PreservedBeatmapImportTask(archive), cancellationToken: cancellationToken)
-                                                                 .ConfigureAwait(false);
-            if (imported is null)
-            {
-                if (lazerArchive is not null)
-                    return new PracticeMapGenerationResult(true, $"{plans[0].OutputVersion} is ready to open in osu!lazer.", root, archive, lazerArchive);
-                return new PracticeMapGenerationResult(false, "The drill was exported, but AimMod could not add it to the beatmap library.", root, archive);
-            }
 
-            localLibrary.Invalidate();
+            cancellationToken.ThrowIfCancellationRequested();
+
             string message = lazerArchive is null
                 ? $"{plans[0].OutputVersion} was created. Open its folder to import the .osz."
                 : $"{plans[0].OutputVersion} is ready to open in osu!lazer.";
-            return new PracticeMapGenerationResult(true, message, root, archive, lazerArchive);
+            retainLazerArchive = true;
+            return new PracticeMapGenerationResult(true, message, root, artifact.ArchivePath, lazerArchive);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            PracticeMapArtifactBuilder.TryDelete(root);
             throw;
         }
         catch (FileNotFoundException error) when (error.Message.Contains("FFmpeg", StringComparison.OrdinalIgnoreCase))
         {
+            PracticeMapArtifactBuilder.TryDelete(root);
             return new PracticeMapGenerationResult(false, "FFmpeg could not be found. Restart AimMod after confirming the installation.");
         }
         catch (TimeoutException)
         {
+            PracticeMapArtifactBuilder.TryDelete(root);
             return new PracticeMapGenerationResult(false, "Audio preparation took too long. Try another section.");
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or InvalidOperationException)
+        catch (Exception error)
         {
+            PracticeMapArtifactBuilder.TryDelete(root);
             logFailure("create practice map", error);
             return new PracticeMapGenerationResult(false, "The practice map could not be created from this source section.");
+        }
+        finally
+        {
+            if (!retainLazerArchive && lazerArchive is not null)
+                lazerBeatmapInstallService?.Discard(lazerArchive);
         }
     }
 

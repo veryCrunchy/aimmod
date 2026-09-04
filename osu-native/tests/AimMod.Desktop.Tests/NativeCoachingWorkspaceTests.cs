@@ -239,6 +239,67 @@ public sealed class NativeCoachingWorkspaceTests
     }
 
     [Test]
+    public void PracticeCandidatePoolBuildsOnceUntilInvalidated()
+    {
+        int builds = 0;
+        IReadOnlyList<PracticeMapCandidate> expected = Array.Empty<PracticeMapCandidate>();
+        var cache = new PracticeCandidatePoolCache(500, (_, _, limit) =>
+        {
+            builds++;
+            Assert.That(limit, Is.EqualTo(500));
+            return expected;
+        });
+        var replays = Array.Empty<LocalReplay>();
+        var analyses = new Dictionary<Guid, ReplayAnalysisResult>();
+
+        IReadOnlyList<PracticeMapCandidate> first = cache.Get(replays, analyses);
+        IReadOnlyList<PracticeMapCandidate> second = cache.Get(replays, analyses);
+        cache.Invalidate();
+        IReadOnlyList<PracticeMapCandidate> third = cache.Get(replays, analyses);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first, Is.SameAs(expected));
+            Assert.That(second, Is.SameAs(expected));
+            Assert.That(third, Is.SameAs(expected));
+            Assert.That(builds, Is.EqualTo(2));
+        });
+    }
+
+    [Test]
+    public void PracticePageComparisonSkipsOnlyEquivalentRows()
+    {
+        LocalReplay source = run(new DateTimeOffset(2026, 9, 3, 10, 0, 0, TimeSpan.Zero), 0.94, 3);
+        var candidate = new PracticeMapCandidate(source, new[] { source.ScoreId }, 2, 4, 5.5, 2, 0.75);
+        var equivalent = candidate with { AnalysisScoreIds = candidate.AnalysisScoreIds.ToArray() };
+        var changedAnalysisIds = candidate with { AnalysisScoreIds = new[] { Guid.NewGuid() } };
+        var changedEvidence = candidate with { MissCount = 5 };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(NativeCoachingWorkspace.SamePracticeCandidatePage(null, new PracticeCandidatePage([candidate], 1, 1)), Is.False);
+            Assert.That(NativeCoachingWorkspace.SamePracticeCandidatePage(
+                new PracticeCandidatePage([candidate], 1, 1),
+                new PracticeCandidatePage([equivalent], 1, 1)), Is.True);
+            Assert.That(NativeCoachingWorkspace.SamePracticeCandidatePage(
+                new PracticeCandidatePage([candidate], 1, 1),
+                new PracticeCandidatePage([changedAnalysisIds], 1, 1)), Is.False);
+            Assert.That(NativeCoachingWorkspace.SamePracticeCandidatePage(
+                new PracticeCandidatePage([candidate], 1, 1),
+                new PracticeCandidatePage([changedEvidence], 1, 1)), Is.False);
+            Assert.That(NativeCoachingWorkspace.SamePracticeCandidatePage(
+                new PracticeCandidatePage([candidate], 1, 1),
+                new PracticeCandidatePage([candidate], 2, 2)), Is.False);
+        });
+    }
+
+    [Test]
+    public void PracticeStarFilterUsesAShortDebounce()
+    {
+        Assert.That(NativeCoachingWorkspace.PracticeFilterDebounceMilliseconds, Is.InRange(100, 250));
+    }
+
+    [Test]
     public void PracticeLaunchCopyDistinguishesSuccessfulHandoffFromManualFallback()
     {
         Assert.Multiple(() =>

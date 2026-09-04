@@ -16,11 +16,12 @@ public sealed class PracticeProcessRunner : IPracticeProcessRunner
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         using var process = new Process { StartInfo = startInfo };
         if (!process.Start())
             throw new IOException("FFmpeg could not be started.");
 
-        Task<string> error = process.StandardError.ReadToEndAsync(cancellationToken);
+        Task<string> error = process.StandardError.ReadToEndAsync();
         using var timeoutSource = new CancellationTokenSource(timeout);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutSource.Token);
         try
@@ -29,18 +30,28 @@ public sealed class PracticeProcessRunner : IPracticeProcessRunner
         }
         catch (OperationCanceledException) when (timeoutSource.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
-            try { process.Kill(entireProcessTree: true); }
-            catch (InvalidOperationException) { }
+            await terminateAsync(process, error).ConfigureAwait(false);
             throw new TimeoutException("Audio preparation took too long.");
         }
         catch
         {
-            try { process.Kill(entireProcessTree: true); }
-            catch (InvalidOperationException) { }
+            await terminateAsync(process, error).ConfigureAwait(false);
             throw;
         }
 
         return new PracticeProcessResult(process.ExitCode, await error.ConfigureAwait(false));
+    }
+
+    private static async Task terminateAsync(Process process, Task<string> error)
+    {
+        try { process.Kill(entireProcessTree: true); }
+        catch (Exception exception) when (exception is InvalidOperationException or NotSupportedException) { }
+
+        try { await process.WaitForExitAsync().ConfigureAwait(false); }
+        catch (InvalidOperationException) { }
+
+        try { await error.ConfigureAwait(false); }
+        catch (Exception exception) when (exception is IOException or ObjectDisposedException) { }
     }
 }
 

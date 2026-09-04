@@ -201,6 +201,19 @@ public sealed class PracticeMapPlannerTests
         }
     }
 
+    [Test]
+    public void ArtifactBuilderRemovesPartialOutputWhenAudioPreparationIsCancelled()
+    {
+        PracticeSourceBeatmap source = read(map(objects: circleObjects(10, 100, 20)));
+        PracticeMapPlan plan = PracticeMapPlanner.CreatePlans(source,
+            new[] { analysis(miss(5, 0.9)) }, new PracticeMapOptions(PracticeDrillType.Streams))[0];
+        string output = Path.Combine(Path.GetTempPath(), $"aimmod-practice-cancelled-{Guid.NewGuid():N}");
+
+        Assert.That(async () => await new PracticeMapArtifactBuilder(new CancellingAudioSlicer()).BuildAsync(
+            source, plan, output), Throws.TypeOf<OperationCanceledException>());
+        Assert.That(Directory.Exists(output), Is.False);
+    }
+
     private PracticeSourceBeatmap read(string content) => OsuPracticeBeatmapReader.Read(write("source.osu", content));
     private string write(string name, string content)
     {
@@ -278,6 +291,15 @@ public sealed class PracticeMapPlannerTests
         {
             File.WriteAllBytes(destinationPath, []);
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class CancellingAudioSlicer : IPracticeAudioSlicer
+    {
+        public Task SliceAsync(PracticeAudioSliceRequest request, string destinationPath, CancellationToken cancellationToken = default)
+        {
+            File.WriteAllBytes(destinationPath, new byte[128]);
+            throw new OperationCanceledException(cancellationToken);
         }
     }
 }

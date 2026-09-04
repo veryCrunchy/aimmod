@@ -4,7 +4,10 @@ namespace AimMod.Desktop.Practice;
 
 public static class PracticeMapPackageService
 {
-    public static string Create(PracticeMapExportResult export, string archivePath)
+    public static async Task<string> CreateAsync(
+        PracticeMapExportResult export,
+        string archivePath,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(export);
         ArgumentException.ThrowIfNullOrWhiteSpace(archivePath);
@@ -18,27 +21,46 @@ public static class PracticeMapPackageService
             throw new IOException("Practice-map packaging refuses to overwrite an existing archive.");
 
         Directory.CreateDirectory(Path.GetDirectoryName(archive)!);
+        string partial = Path.Combine(Path.GetDirectoryName(archive)!, $".{Path.GetFileName(archive)}.{Guid.NewGuid():N}.partial");
         try
         {
-            using var stream = new FileStream(archive, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
-            using var zip = new ZipArchive(stream, ZipArchiveMode.Create);
-            add(zip, export.BeatmapPath);
-            add(zip, export.AudioPath);
+            cancellationToken.ThrowIfCancellationRequested();
+            await using (var stream = new FileStream(
+                             partial,
+                             FileMode.CreateNew,
+                             FileAccess.ReadWrite,
+                             FileShare.None,
+                             bufferSize: 81920,
+                             FileOptions.Asynchronous | FileOptions.SequentialScan))
+            using (var zip = new ZipArchive(stream, ZipArchiveMode.Create))
+            {
+                await addAsync(zip, export.BeatmapPath, cancellationToken).ConfigureAwait(false);
+                await addAsync(zip, export.AudioPath, cancellationToken).ConfigureAwait(false);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            File.Move(partial, archive, overwrite: false);
             return archive;
         }
         catch
         {
-            try { File.Delete(archive); }
+            try { File.Delete(partial); }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
             throw;
         }
     }
 
-    private static void add(ZipArchive archive, string path)
+    private static async Task addAsync(ZipArchive archive, string path, CancellationToken cancellationToken)
     {
         ZipArchiveEntry entry = archive.CreateEntry(Path.GetFileName(path), CompressionLevel.Optimal);
-        using Stream source = File.OpenRead(path);
-        using Stream destination = entry.Open();
-        source.CopyTo(destination);
+        await using Stream source = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 81920,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        await using Stream destination = entry.Open();
+        await source.CopyToAsync(destination, cancellationToken).ConfigureAwait(false);
     }
 }

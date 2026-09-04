@@ -13,6 +13,7 @@ using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
 using osu.Framework.Input.Events;
 using osu.Framework.Localisation;
+using osu.Framework.Threading;
 using osu.Game.Graphics.Containers;
 using osu.Game.Graphics.Sprites;
 using osu.Game.Graphics.UserInterface;
@@ -27,6 +28,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     private const int visible_run_limit = 24;
     private const int practice_candidate_pool_limit = 500;
     private const int practice_candidate_display_limit = 100;
+    internal const double PracticeFilterDebounceMilliseconds = 180;
 
     private readonly ILocalLibrarySource source;
     private readonly ILocalLibrarySourceChanged? sourceChanges;
@@ -56,6 +58,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     private readonly Bindable<PracticeEvidenceFilter> practiceEvidence = new(PracticeEvidenceFilter.AnyEvidence);
     private readonly BindableDouble practiceMinimumStars = new(0) { MinValue = 0, MaxValue = 10, Default = 0 };
     private readonly BindableDouble practiceMaximumStars = new(10) { MinValue = 0, MaxValue = 10, Default = 10 };
+    private readonly PracticeCandidatePoolCache practiceCandidatePool = new(practice_candidate_pool_limit);
     private readonly OsuTextBox search;
     private readonly FillFlowContainer<Drawable> runList;
     private readonly AimModLoadingOverlay loadingOverlay;
@@ -63,7 +66,10 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     private CancellationTokenSource? loading;
     private CancellationTokenSource? practiceGeneration;
     private CancellationTokenSource? practiceLaunch;
+    private ScheduledDelegate? scheduledPracticeRefresh;
     private IReadOnlyList<LocalReplay> replays = Array.Empty<LocalReplay>();
+    private PracticeCandidatePage? renderedPracticePage;
+    private PracticeDisplayState renderedPracticeState;
     private NativeCoachingWorkspaceModel? workspace;
     private bool acceptingAnalysisProgress;
     private bool creatingPracticeMap;
@@ -170,11 +176,11 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             loadingOverlay = new AimModLoadingOverlay(),
         };
 
-        practiceSearch.Current.BindValueChanged(_ => updatePracticeMaps());
-        practiceSort.BindValueChanged(_ => updatePracticeMaps());
-        practiceEvidence.BindValueChanged(_ => updatePracticeMaps());
-        practiceMinimumStars.BindValueChanged(_ => updatePracticeMaps());
-        practiceMaximumStars.BindValueChanged(_ => updatePracticeMaps());
+        practiceSearch.Current.BindValueChanged(_ => updatePracticeMapsImmediately());
+        practiceSort.BindValueChanged(_ => updatePracticeMapsImmediately());
+        practiceEvidence.BindValueChanged(_ => updatePracticeMapsImmediately());
+        practiceMinimumStars.BindValueChanged(_ => schedulePracticeMapRefresh());
+        practiceMaximumStars.BindValueChanged(_ => schedulePracticeMapRefresh());
     }
 
     protected override void LoadComplete()
@@ -256,6 +262,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         replays = nextReplays;
         workspace = next;
         renderedAnalysisCount = analyses.Count;
+        invalidatePracticeCandidates();
         int submitted = online?.Scores.Count ?? 0;
         loadingOverlay.HideLoading();
         updateWorkspace();
@@ -285,6 +292,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             Guid? selectedScoreId = workspace.SelectedRun?.ScoreId;
             workspace = NativeCoachingWorkspaceModel.Build(replays, analyses, selectedScoreId);
             renderedAnalysisCount = analyses.Count;
+            invalidatePracticeCandidates();
             updateWorkspace();
         }
 
@@ -322,6 +330,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         Guid? selectedScoreId = workspace?.SelectedRun?.ScoreId;
         workspace = NativeCoachingWorkspaceModel.Build(replays, analyses, selectedScoreId);
         renderedAnalysisCount = analyses.Count;
+        invalidatePracticeCandidates();
         updateWorkspace();
 
         analysisBanner.ShowComplete(workspace.GlobalProfile, completed, failed);
@@ -349,17 +358,30 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         updateExactAnalysis(selected, report.Intelligence.Mechanics);
         updateChanges(report.Intelligence, model.GlobalProfile, selected is null);
         updateRecommendation(report.Intelligence.Recommendations);
-        updatePracticeMaps();
+        updatePracticeMapsImmediately();
         refreshRunList();
+    }
+
+    private void schedulePracticeMapRefresh()
+    {
+        scheduledPracticeRefresh?.Cancel();
+        scheduledPracticeRefresh = Scheduler.AddDelayed(() =>
+        {
+            scheduledPracticeRefresh = null;
+            updatePracticeMaps();
+        }, PracticeFilterDebounceMilliseconds);
+    }
+
+    private void updatePracticeMapsImmediately()
+    {
+        scheduledPracticeRefresh?.Cancel();
+        scheduledPracticeRefresh = null;
+        updatePracticeMaps();
     }
 
     private void updatePracticeMaps()
     {
-        practiceHost.Clear();
-        IReadOnlyList<PracticeMapCandidate> available = PracticeMapCandidateBuilder.Build(
-            replays,
-            analyses,
-            practice_candidate_pool_limit);
+        IReadOnlyList<PracticeMapCandidate> available = practiceCandidatePool.Get(replays, analyses);
         PracticeCandidatePage candidates = PracticeMapCandidateSearch.Search(
             available,
             new PracticeCandidateQuery(
@@ -369,6 +391,20 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                 practiceMinimumStars.Value,
                 practiceMaximumStars.Value),
             practice_candidate_display_limit);
+        var displayState = new PracticeDisplayState(
+            acceptingAnalysisProgress,
+            creatingPracticeMap,
+            openingPracticeMap,
+            practiceSucceeded,
+            practiceMessage,
+            practiceDirectory,
+            practiceLazerArchive is not null);
+        if (SamePracticeCandidatePage(renderedPracticePage, candidates) && renderedPracticeState == displayState)
+            return;
+
+        renderedPracticePage = candidates;
+        renderedPracticeState = displayState;
+        practiceHost.Clear();
         practiceSectionLine.SetDetail(PracticeCandidateDetail(candidates));
 
         if (creatingPracticeMap)
@@ -453,7 +489,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         practiceDirectory = null;
         practiceLazerArchive = null;
         practiceMessage = $"Preparing {candidate.SourceReplay.Title} [{candidate.SourceReplay.Difficulty}]";
-        updatePracticeMaps();
+        updatePracticeMapsImmediately();
         _ = generatePracticeMapAsync(new PracticeMapGenerationRequest(candidate, drillType), practiceGeneration.Token);
     }
 
@@ -482,7 +518,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                 practiceMessage = result.Message;
                 practiceDirectory = result.DirectoryPath;
                 practiceLazerArchive = result.LazerArchive;
-                updatePracticeMaps();
+                updatePracticeMapsImmediately();
             });
         }
     }
@@ -497,7 +533,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         practiceLaunch = new CancellationTokenSource();
         openingPracticeMap = true;
         practiceMessage = "Sending the generated .osz to your osu!lazer installation";
-        updatePracticeMaps();
+        updatePracticeMapsImmediately();
         _ = launchPracticeMapAsync(practiceLazerArchive, practiceLaunch.Token);
     }
 
@@ -526,9 +562,37 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                 if (!PracticeLaunchSucceeded(result.Status))
                     practiceSucceeded = false;
                 practiceLazerArchive = null;
-                updatePracticeMaps();
+                updatePracticeMapsImmediately();
             });
         }
+    }
+
+    private void invalidatePracticeCandidates()
+    {
+        practiceCandidatePool.Invalidate();
+        renderedPracticePage = null;
+    }
+
+    internal static bool SamePracticeCandidatePage(PracticeCandidatePage? previous, PracticeCandidatePage current)
+    {
+        if (previous is null || previous.Total != current.Total || previous.Available != current.Available || previous.Items.Count != current.Items.Count)
+            return false;
+
+        for (int i = 0; i < previous.Items.Count; i++)
+        {
+            PracticeMapCandidate left = previous.Items[i];
+            PracticeMapCandidate right = current.Items[i];
+            if (left.SourceReplay.ScoreId != right.SourceReplay.ScoreId
+                || !left.AnalysisScoreIds.SequenceEqual(right.AnalysisScoreIds)
+                || left.AnalysedAttempts != right.AnalysedAttempts
+                || left.MissCount != right.MissCount
+                || left.WeaknessScore != right.WeaknessScore
+                || left.AttemptsWithMisses != right.AttemptsWithMisses
+                || left.AverageMissConfidence != right.AverageMissConfidence)
+                return false;
+        }
+
+        return true;
     }
 
     private void updateSessionHeader(NativeCoachingWorkspaceModel model)
@@ -1173,10 +1237,21 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         practiceGeneration?.Dispose();
         practiceLaunch?.Cancel();
         practiceLaunch?.Dispose();
+        scheduledPracticeRefresh?.Cancel();
+        scheduledPracticeRefresh = null;
         if (sourceChanges is not null)
             sourceChanges.SourceChanged -= sourceChanged;
         base.Dispose(isDisposing);
     }
+
+    private readonly record struct PracticeDisplayState(
+        bool AcceptingAnalysisProgress,
+        bool CreatingPracticeMap,
+        bool OpeningPracticeMap,
+        bool PracticeSucceeded,
+        string Message,
+        string? Directory,
+        bool HasLazerArchive);
 
     private static OsuSpriteText label(string text, float size, Colour4 colour, string weight = "Regular") => new()
     {
@@ -2252,4 +2327,28 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             base.OnHoverLost(e);
         }
     }
+}
+
+internal sealed class PracticeCandidatePoolCache
+{
+    private readonly int limit;
+    private readonly Func<IEnumerable<LocalReplay>, IReadOnlyDictionary<Guid, ReplayAnalysisResult>, int, IReadOnlyList<PracticeMapCandidate>> build;
+    private IReadOnlyList<PracticeMapCandidate>? cached;
+
+    public PracticeCandidatePoolCache(
+        int limit,
+        Func<IEnumerable<LocalReplay>, IReadOnlyDictionary<Guid, ReplayAnalysisResult>, int, IReadOnlyList<PracticeMapCandidate>>? build = null)
+    {
+        if (limit <= 0)
+            throw new ArgumentOutOfRangeException(nameof(limit));
+
+        this.limit = limit;
+        this.build = build ?? PracticeMapCandidateBuilder.Build;
+    }
+
+    public IReadOnlyList<PracticeMapCandidate> Get(
+        IReadOnlyList<LocalReplay> replays,
+        IReadOnlyDictionary<Guid, ReplayAnalysisResult> analyses) => cached ??= build(replays, analyses, limit);
+
+    public void Invalidate() => cached = null;
 }

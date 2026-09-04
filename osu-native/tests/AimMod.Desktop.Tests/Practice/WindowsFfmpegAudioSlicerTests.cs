@@ -179,7 +179,7 @@ public sealed class WindowsFfmpegAudioSlicerTests
     }
 
     [Test]
-    public void PackagesOnlyGeneratedMapAndAudioOutsideExportFolder()
+    public async Task PackagesOnlyGeneratedMapAndAudioOutsideExportFolder()
     {
         string exportDirectory = Path.Combine(directory, "map");
         Directory.CreateDirectory(exportDirectory);
@@ -189,10 +189,54 @@ public sealed class WindowsFfmpegAudioSlicerTests
         File.WriteAllBytes(audio, new byte[128]);
         string archive = Path.Combine(directory, "practice.osz");
 
-        PracticeMapPackageService.Create(new PracticeMapExportResult(exportDirectory, beatmap, audio), archive);
+        await PracticeMapPackageService.CreateAsync(new PracticeMapExportResult(exportDirectory, beatmap, audio), archive);
 
         using ZipArchive zip = ZipFile.OpenRead(archive);
         Assert.That(zip.Entries.Select(entry => entry.FullName), Is.EquivalentTo(new[] { "practice.osu", "practice.ogg" }));
+    }
+
+    [Test]
+    public void CancelledPackagingLeavesNoArchiveOrPartialFile()
+    {
+        string exportDirectory = Path.Combine(directory, "cancelled-map");
+        Directory.CreateDirectory(exportDirectory);
+        string beatmap = Path.Combine(exportDirectory, "practice.osu");
+        string audio = Path.Combine(exportDirectory, "practice.ogg");
+        File.WriteAllText(beatmap, "osu file format v14");
+        File.WriteAllBytes(audio, new byte[128]);
+        string archive = Path.Combine(directory, "cancelled.osz");
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        Assert.That(async () => await PracticeMapPackageService.CreateAsync(
+            new PracticeMapExportResult(exportDirectory, beatmap, audio), archive, cancellation.Token),
+            Throws.TypeOf<OperationCanceledException>());
+        Assert.Multiple(() =>
+        {
+            Assert.That(File.Exists(archive), Is.False);
+            Assert.That(Directory.GetFiles(directory, "*.partial"), Is.Empty);
+        });
+    }
+
+    [Test]
+    public void ConcreteRunnerStopsAProcessOnCancellation()
+    {
+        if (!OperatingSystem.IsWindows())
+            Assert.Ignore("This verifies the Windows practice-map process boundary.");
+        var startInfo = new ProcessStartInfo("powershell.exe")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardError = true,
+        };
+        foreach (string argument in new[] { "-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 5" })
+            startInfo.ArgumentList.Add(argument);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        var stopwatch = Stopwatch.StartNew();
+
+        Assert.That(async () => await new PracticeProcessRunner().RunAsync(startInfo, TimeSpan.FromSeconds(10), cancellation.Token),
+            Throws.InstanceOf<OperationCanceledException>());
+        Assert.That(stopwatch.Elapsed, Is.LessThan(TimeSpan.FromSeconds(3)));
     }
 
     private sealed class FakeRunner(Func<ProcessStartInfo, PracticeProcessResult> run) : IPracticeProcessRunner
