@@ -1,6 +1,5 @@
 using AimMod.Desktop.Visuals;
 using osu.Framework.Graphics;
-using osu.Framework.Graphics.Colour;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
@@ -24,7 +23,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
     private readonly Container listPanel;
     private readonly SkinListState listState;
     private readonly Container detailPanel;
-    private readonly Container preview;
+    private readonly SkinPreview preview;
     private readonly TruncatingSpriteText selectedName;
     private readonly TruncatingSpriteText selectedCreator;
     private readonly TruncatingSpriteText selectedDetails;
@@ -131,34 +130,14 @@ public partial class NativeSkinsScreen : CompositeDrawable
                             new Container
                             {
                                 RelativeSizeAxes = Axes.X,
-                                Height = 200,
-                                Child = preview = new Container
-                                {
-                                    RelativeSizeAxes = Axes.Both,
-                                    Children = new Drawable[]
-                                    {
-                                        new Box
-                                        {
-                                            RelativeSizeAxes = Axes.Both,
-                                            Colour = ColourInfo.GradientHorizontal(AimModPalette.PinkDark, AimModPalette.CyanDark),
-                                        },
-                                        new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas, Alpha = 0.44f },
-                                        new SpriteIcon
-                                        {
-                                            Anchor = Anchor.Centre,
-                                            Origin = Anchor.Centre,
-                                            Icon = FontAwesome.Solid.PaintBrush,
-                                            Size = new(42),
-                                            Colour = AimModPalette.Muted,
-                                        },
-                                    },
-                                },
+                                Height = 220,
+                                Child = preview = new SkinPreview(),
                             },
                             new FillFlowContainer
                             {
                                 RelativeSizeAxes = Axes.X,
                                 AutoSizeAxes = Axes.Y,
-                                Y = 216,
+                                Y = 236,
                                 Padding = new MarginPadding { Horizontal = 16 },
                                 Direction = FillDirection.Vertical,
                                 Spacing = new(AimModVisualStyle.RelatedSpacing),
@@ -326,10 +305,9 @@ public partial class NativeSkinsScreen : CompositeDrawable
 
     private void updateDetails()
     {
-        preview.Clear();
         if (selected is null)
         {
-            addPreviewPlaceholder();
+            preview.SetSkin(null);
             selectedName.Text = "Select a skin";
             selectedCreator.Text = "Installed skin details appear here.";
             selectedDetails.Text = string.Empty;
@@ -337,14 +315,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
             return;
         }
 
-        preview.Add(selected.PreviewPath.Length > 0
-            ? new AimModLocalArtwork(selected.PreviewPath) { RelativeSizeAxes = Axes.Both }
-            : new Box
-            {
-                RelativeSizeAxes = Axes.Both,
-                Colour = ColourInfo.GradientHorizontal(AimModPalette.PinkDark, AimModPalette.CyanDark),
-                Alpha = 0.68f,
-            });
+        preview.SetSkin(selected);
         selectedName.Text = selected.Name;
         selectedCreator.Text = selected.Creator.Length > 0 ? $"by {selected.Creator}" : "Creator not specified";
         selectedDetails.Text = selected.IsBuiltIn
@@ -353,27 +324,6 @@ public partial class NativeSkinsScreen : CompositeDrawable
         applyButton.SetState(
             applySkin is not null && selected.SkinId != appliedExternalSkinId,
             selected.SkinId == appliedExternalSkinId ? "Active in AimMod" : "Use for replay playback");
-    }
-
-    private void addPreviewPlaceholder()
-    {
-        preview.AddRange(new Drawable[]
-        {
-            new Box
-            {
-                RelativeSizeAxes = Axes.Both,
-                Colour = ColourInfo.GradientHorizontal(AimModPalette.PinkDark, AimModPalette.CyanDark),
-            },
-            new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas, Alpha = 0.44f },
-            new SpriteIcon
-            {
-                Anchor = Anchor.Centre,
-                Origin = Anchor.Centre,
-                Icon = FontAwesome.Solid.PaintBrush,
-                Size = new(42),
-                Colour = AimModPalette.Muted,
-            },
-        });
     }
 
     private void applySelected()
@@ -433,6 +383,88 @@ public partial class NativeSkinsScreen : CompositeDrawable
         Font = new FontUsage(size: size, weight: weight),
         Colour = colour,
     };
+
+    private partial class SkinPreview : CompositeDrawable
+    {
+        private readonly Container artwork;
+        private readonly SpriteIcon stateIcon;
+        private readonly OsuSpriteText stateTitle;
+        private readonly OsuSpriteText stateDetail;
+
+        public SkinPreview()
+        {
+            RelativeSizeAxes = Axes.Both;
+            Masking = true;
+            InternalChildren = new Drawable[]
+            {
+                new Box
+                {
+                    RelativeSizeAxes = Axes.Both,
+                    Colour = AimModPalette.PanelRaised,
+                },
+                new FillFlowContainer
+                {
+                    Anchor = Anchor.Centre,
+                    Origin = Anchor.Centre,
+                    AutoSizeAxes = Axes.Y,
+                    RelativeSizeAxes = Axes.X,
+                    Padding = new MarginPadding { Horizontal = 24 },
+                    Direction = FillDirection.Vertical,
+                    Spacing = new(AimModVisualStyle.RelatedSpacing),
+                    Children = new Drawable[]
+                    {
+                        stateIcon = new SpriteIcon
+                        {
+                            Anchor = Anchor.TopCentre,
+                            Origin = Anchor.TopCentre,
+                            Icon = FontAwesome.Solid.PaintBrush,
+                            Size = new(30),
+                            Colour = AimModPalette.Muted,
+                        },
+                        stateTitle = new OsuSpriteText
+                        {
+                            Anchor = Anchor.TopCentre,
+                            Origin = Anchor.TopCentre,
+                            Font = new FontUsage(size: 15, weight: "Bold"),
+                            Colour = AimModPalette.Text,
+                        },
+                        stateDetail = new OsuSpriteText
+                        {
+                            Anchor = Anchor.TopCentre,
+                            Origin = Anchor.TopCentre,
+                            Font = new FontUsage(size: 11),
+                            Colour = AimModPalette.Muted,
+                        },
+                    },
+                },
+                artwork = new Container { RelativeSizeAxes = Axes.Both },
+            };
+
+            SetSkin(null);
+        }
+
+        public void SetSkin(InstalledLazerSkin? skin)
+        {
+            artwork.Clear();
+            if (skin?.HasPreview == true)
+            {
+                artwork.Add(new AimModLocalArtwork(skin.PreviewPath)
+                {
+                    RelativeSizeAxes = Axes.Both,
+                });
+                stateIcon.Icon = FontAwesome.Solid.Image;
+                stateTitle.Text = "Artwork unavailable";
+                stateDetail.Text = "The preview image could not be opened.";
+                return;
+            }
+
+            stateIcon.Icon = skin is null ? FontAwesome.Solid.PaintBrush : FontAwesome.Solid.Image;
+            stateTitle.Text = skin is null ? "Select a skin" : "Artwork unavailable";
+            stateDetail.Text = skin is null
+                ? "Preview its menu artwork and details."
+                : "This skin does not include a menu background.";
+        }
+    }
 
     private partial class SkinListState : CompositeDrawable
     {

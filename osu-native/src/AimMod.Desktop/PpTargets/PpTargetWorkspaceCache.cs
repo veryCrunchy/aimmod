@@ -21,7 +21,7 @@ public sealed class PpTargetWorkspaceCache
 {
     public static readonly TimeSpan Freshness = TimeSpan.FromHours(6);
 
-    private const int current_version = 1;
+    private const int current_version = 2;
     private static readonly JsonSerializerOptions json_options = new(JsonSerializerDefaults.Web);
 
     private readonly string path;
@@ -47,7 +47,7 @@ public sealed class PpTargetWorkspaceCache
 
             using FileStream stream = File.OpenRead(path);
             CacheDocument? document = JsonSerializer.Deserialize<CacheDocument>(stream, json_options);
-            return document?.Version == current_version ? document.Snapshot : null;
+            return document?.Version == current_version && validSnapshot(document.Snapshot) ? document.Snapshot : null;
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
         {
@@ -100,6 +100,19 @@ public sealed class PpTargetWorkspaceCache
             writeGate.Release();
         }
     }
+
+    private static bool validSnapshot(PpTargetWorkspaceSnapshot? snapshot) => snapshot is not null
+        && snapshot.Profile is not null
+        && snapshot.LocalSets is not null
+        && snapshot.Catalog is not null
+        && snapshot.ExactEstimates is not null
+        && snapshot.ExactEstimates.All(entry => entry.Key > 0
+            && entry.Value is not null
+            && double.IsFinite(entry.Value.ExpectedPp)
+            && entry.Value.ExpectedPp >= 0
+            && double.IsFinite(entry.Value.RealisticMaximumPp)
+            && entry.Value.RealisticMaximumPp >= entry.Value.ExpectedPp
+            && (entry.Value.BeatmapId is null || entry.Value.BeatmapId == entry.Key));
 
     private sealed record CacheDocument(int Version, PpTargetWorkspaceSnapshot Snapshot);
 }

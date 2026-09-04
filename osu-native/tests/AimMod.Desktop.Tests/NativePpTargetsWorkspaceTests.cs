@@ -66,6 +66,25 @@ public sealed class NativePpTargetsWorkspaceTests
     }
 
     [Test]
+    public async Task WorkspaceSnapshotWithEstimateForAnotherDifficultyIsIgnored()
+    {
+        string path = Path.Combine(temporaryDirectory, "workspace.json");
+        var cache = new PpTargetWorkspaceCache(path);
+        PpTargetWorkspaceSnapshot invalid = snapshot() with
+        {
+            ExactEstimates = new Dictionary<int, PpTargetEstimate>
+            {
+                [456] = new(280, 340, new PpTargetRange(260, 300), 1, PpTargetConfidence.High,
+                    "Official osu! ruleset", BeatmapId: 999),
+            },
+        };
+
+        await cache.SaveAsync(invalid);
+
+        Assert.That(cache.Load(), Is.Null);
+    }
+
+    [Test]
     public void ExactDifficultyUsesOsuBeatmapProtocol()
     {
         Assert.That(NativePpTargetsWorkspace.BeatmapLaunchUri(456), Is.EqualTo("osu://b/456"));
@@ -81,7 +100,7 @@ public sealed class NativePpTargetsWorkspaceTests
             Assert.That(NativePpTargetsWorkspace.LengthLabel(NativePpTargetsWorkspace.TargetLength.Short), Is.EqualTo("Under 2 minutes"));
             Assert.That(NativePpTargetsWorkspace.LengthLabel(NativePpTargetsWorkspace.TargetLength.Any), Is.EqualTo("Any length"));
             Assert.That(NativePpTargetsWorkspace.SortLabel(NativePpTargetsWorkspace.TargetSort.BestFit), Is.EqualTo("Best personal fit"));
-            Assert.That(NativePpTargetsWorkspace.SortLabel(NativePpTargetsWorkspace.TargetSort.MaximumPp), Is.EqualTo("Highest realistic max"));
+            Assert.That(NativePpTargetsWorkspace.SortLabel(NativePpTargetsWorkspace.TargetSort.MaximumPp), Is.EqualTo("Highest max PP"));
         }
     }
 

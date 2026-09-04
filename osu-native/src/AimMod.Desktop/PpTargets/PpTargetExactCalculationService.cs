@@ -23,7 +23,7 @@ public interface IPpTargetExactCalculationService
 
 public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationService
 {
-    private const int cache_version = 1;
+    private const int cache_version = 2;
     private const int maximum_batch_size = 50;
     private const int maximum_cache_entries = 2_048;
     private static readonly JsonSerializerOptions json_options = new(JsonSerializerDefaults.Web);
@@ -146,7 +146,7 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
                 try
                 {
                     string stagingDirectory = Path.GetDirectoryName(beatmapPath)!;
-                    IReadOnlyList<string> mods = normaliseMods(request.Mods);
+                    IReadOnlyList<string> mods = PpTargetMods.Normalise(request.Mods);
                     PpWhatIfResult ceiling = await ppClient.CalculateAsync(new PpWhatIfRequest(
                         stagingDirectory, beatmapPath, mods, 1, 0, null), cancellationToken).ConfigureAwait(false);
                     (int misses, int combo) = ExpectedScoreShape(request.Attainability, ceiling.MaxCombo);
@@ -155,7 +155,6 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
                     PpTargetEstimate estimate = createEstimate(request, expected, ceiling);
                     cache[cacheKey(request)] = new CacheEntry(cacheKey(request), DateTimeOffset.UtcNow, estimate);
                     completed[request.BeatmapId] = estimate;
-                    await trySaveCacheAsync().ConfigureAwait(false);
                 }
                 catch (Exception error) when (error is not OperationCanceledException)
                 {
@@ -170,6 +169,9 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
                         valid.Length));
                 }
             }
+
+            if (completed.Count > valid.Length - missing.Length)
+                await trySaveCacheAsync().ConfigureAwait(false);
 
             if (completed.Count == 0 && firstCalculationFailure is not null)
                 throw new InvalidOperationException("Official PP calculation failed for every requested beatmap difficulty.", firstCalculationFailure);
@@ -251,7 +253,7 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
             try
             {
                 string stagingDirectory = Path.GetDirectoryName(beatmapPath)!;
-                IReadOnlyList<string> normalisedMods = normaliseMods(mods);
+                IReadOnlyList<string> normalisedMods = PpTargetMods.Normalise(mods);
                 PpWhatIfResult ceiling = await ppClient.CalculateAsync(new PpWhatIfRequest(
                     stagingDirectory, beatmapPath, normalisedMods, 1, 0, null), cancellationToken).ConfigureAwait(false);
 
@@ -264,8 +266,10 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
                     PpTargetEstimate estimate = createEstimate(request, expected, ceiling);
                     cache[cacheKey(request)] = new CacheEntry(cacheKey(request), DateTimeOffset.UtcNow, estimate);
                     completed[accuracy] = accuracy == 100 ? estimate.RealisticMaximumPp : estimate.ExpectedPp;
-                    await trySaveCacheAsync().ConfigureAwait(false);
                 }
+
+                if (missing.Count > 0)
+                    await trySaveCacheAsync().ConfigureAwait(false);
             }
             finally
             {
@@ -297,16 +301,24 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
 
     private static PpTargetEstimate createEstimate(PpTargetExactRequest request, PpWhatIfResult expected, PpWhatIfResult ceiling)
     {
+        if (!double.IsFinite(expected.PerformancePoints) || expected.PerformancePoints < 0
+            || !double.IsFinite(ceiling.PerformancePoints) || ceiling.PerformancePoints < 0)
+            throw new InvalidOperationException($"Official PP calculation returned an invalid value for beatmap difficulty {request.BeatmapId}.");
+
         double expectedPp = expected.PerformancePoints;
         double maximumPp = Math.Max(expectedPp, ceiling.PerformancePoints);
         double spread = 0.18 + 0.16 * (1 - Math.Clamp(request.Attainability, 0, 1));
         return new PpTargetEstimate(
             expectedPp,
             maximumPp,
-            new PpTargetRange(Math.Max(0, expectedPp * (1 - spread)), expectedPp * (1 + spread)),
+            new PpTargetRange(Math.Max(0, expectedPp * (1 - spread)), Math.Min(maximumPp, expectedPp * (1 + spread))),
             1,
             PpTargetConfidence.High,
-            $"Official osu! ruleset {PpCalculationProtocol.EngineVersion}: projected score and exact 100% full-combo ceiling for the selected mods.");
+            $"Official osu! ruleset {PpCalculationProtocol.EngineVersion}: projected score and exact 100% full-combo ceiling for the selected mods.",
+            request.BeatmapId,
+            PpTargetMods.Normalise(request.Mods),
+            request.ExpectedAccuracy,
+            Math.Clamp(request.Attainability, 0, 1));
     }
 
     private bool tryReadCached(PpTargetExactRequest request, IDictionary<int, PpTargetEstimate> completed)
@@ -377,39 +389,9 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
     private static string cacheKey(PpTargetExactRequest request) => string.Join('|',
         PpCalculationProtocol.EngineVersion,
         request.BeatmapHash?.ToLowerInvariant() ?? $"beatmap-{request.BeatmapId}",
-        string.Join(',', normaliseMods(request.Mods)),
+        string.Join(',', PpTargetMods.Normalise(request.Mods)),
         request.ExpectedAccuracy.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
         request.Attainability.ToString("R", System.Globalization.CultureInfo.InvariantCulture));
-
-    private static IReadOnlyList<string> normaliseMods(IReadOnlyList<string> mods)
-    {
-        HashSet<string> values = (mods ?? []).Select(mod => modAcronym((mod ?? string.Empty).Trim().ToUpperInvariant()))
-                                              .Where(mod => mod.Length > 0 && mod is not "NM")
-                                              .ToHashSet(StringComparer.Ordinal);
-        if (values.Contains("NC"))
-            values.Remove("DT");
-        if (values.Contains("DT") || values.Contains("NC"))
-            values.Remove("HT");
-        if (values.Contains("HR"))
-            values.Remove("EZ");
-        return values.Order(StringComparer.Ordinal).ToArray();
-    }
-
-    private static string modAcronym(string mod) => mod switch
-    {
-        "NOMOD" => "NM",
-        "HIDDEN" => "HD",
-        "HARDROCK" => "HR",
-        "DOUBLETIME" => "DT",
-        "NIGHTCORE" => "NC",
-        "FLASHLIGHT" => "FL",
-        "HALFTIME" => "HT",
-        "EASY" => "EZ",
-        "NOFAIL" => "NF",
-        "SPUNOUT" => "SO",
-        "CLASSIC" => "CL",
-        _ => mod,
-    };
 
     private static bool isValid(PpTargetExactRequest request) => request is not null
         && request.BeatmapId > 0
@@ -422,6 +404,13 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
     private static bool validEstimate(PpTargetEstimate estimate) => estimate is not null
         && double.IsFinite(estimate.ExpectedPp) && estimate.ExpectedPp >= 0
         && double.IsFinite(estimate.RealisticMaximumPp) && estimate.RealisticMaximumPp >= estimate.ExpectedPp
+        && estimate.ExpectedPpRange is not null
+        && double.IsFinite(estimate.ExpectedPpRange.Minimum) && estimate.ExpectedPpRange.Minimum >= 0
+        && double.IsFinite(estimate.ExpectedPpRange.Maximum) && estimate.ExpectedPpRange.Maximum >= estimate.ExpectedPpRange.Minimum
+        && estimate.ExpectedPpRange.Maximum <= estimate.RealisticMaximumPp
+        && (estimate.BeatmapId is null or > 0)
+        && (estimate.ExpectedAccuracy is null || double.IsFinite(estimate.ExpectedAccuracy.Value) && estimate.ExpectedAccuracy is >= 0 and <= 1)
+        && (estimate.Attainability is null || double.IsFinite(estimate.Attainability.Value) && estimate.Attainability is >= 0 and <= 1)
         && estimate.Method.Contains(PpCalculationProtocol.EngineVersion, StringComparison.Ordinal);
 
     private static void deleteIfPresent(string path)

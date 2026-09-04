@@ -217,7 +217,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                             },
                             maximumPpSlider = new RangeSlider
                             {
-                                Label = "Realistic max PP",
+                                Label = "Max PP",
                                 LowerBound = minimumMaximumPp,
                                 UpperBound = maximumMaximumPp,
                                 DefaultStringLowerBound = "0",
@@ -912,7 +912,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
     internal static string SortLabel(TargetSort value) => value switch
     {
         TargetSort.ExpectedPp => "Highest expected PP",
-        TargetSort.MaximumPp => "Highest realistic max",
+        TargetSort.MaximumPp => "Highest max PP",
         TargetSort.Stars => "Lowest star rating",
         _ => "Best personal fit",
     };
@@ -1050,6 +1050,16 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             string maximum = candidate.Estimate is null ? "-" : $"{candidate.Estimate.RealisticMaximumPp:0}";
             bool calculated = candidate.Estimate?.Method.StartsWith("Official osu! ruleset", StringComparison.Ordinal) == true;
             string confidence = calculated ? "PP ready" : "PP pending";
+            string recommendationConfidence = candidate.RecommendationConfidence switch
+            {
+                PpTargetConfidence.High => "high evidence",
+                PpTargetConfidence.Medium => "medium evidence",
+                PpTargetConfidence.Low => "low evidence",
+                _ => "limited evidence",
+            };
+            string gain = candidate.EstimatedAttainableGainPp is { } expectedGain
+                ? $"   /   +{expectedGain:0}pp expected gain"
+                : string.Empty;
             string mods = candidate.SuggestedMods.Count == 0 ? "NM" : string.Join(" + ", candidate.SuggestedMods);
             OfficialBeatmapDifficulty? difficulty = set.Difficulties.FirstOrDefault(item => item.BeatmapId == candidate.BeatmapId);
             double passRate = difficulty is { PlayCount: > 0 } ? (double)difficulty.PassCount / difficulty.PlayCount : 0;
@@ -1084,11 +1094,13 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                             $"AR {difficulty?.ApproachRate:0.#}   OD {difficulty?.OverallDifficulty:0.#}   CS {difficulty?.CircleSize:0.#}   HP {difficulty?.DrainRate:0.#}   " +
                             $"{set.Status.ToUpperInvariant()}   {set.PlayCount:N0} plays   {(passRate > 0 ? $"{passRate:P0} pass" : "pass rate -")}",
                             9, AimModPalette.Muted, "SemiBold"),
-                        confidenceDetails = truncatingText($"{candidate.PreferenceFit:P0} personal fit   /   {confidence}", 9, calculated ? AimModPalette.Success : AimModPalette.Cyan, "SemiBold"),
+                        confidenceDetails = truncatingText(
+                            $"{candidate.PreferenceFit:P0} personal fit   /   {candidate.Attainability:P0} skill fit   /   {recommendationConfidence}   /   {confidence}{gain}",
+                            9, calculated ? AimModPalette.Success : AimModPalette.Cyan, "SemiBold"),
                     },
                 },
                 expectedMetric = metric("EXPECTED PP", expected, AimModPalette.Cyan, candidate.Estimate is null ? "pending" : $"at {candidate.Attainability:P0} attainability"),
-                maximumMetric = metric("REALISTIC MAX", maximum, Colour4.FromHex("FFD45A"), candidate.Estimate is null ? "pending" : $"+{Math.Max(0, candidate.EstimatedAttainableGainPp ?? 0):0} gain"),
+                maximumMetric = metric("MAX PP", maximum, Colour4.FromHex("FFD45A"), candidate.Estimate is null ? "pending" : "100% FC ceiling"),
                 new Container
                 {
                     Anchor = Anchor.CentreRight,

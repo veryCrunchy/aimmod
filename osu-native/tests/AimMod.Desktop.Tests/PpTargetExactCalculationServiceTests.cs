@@ -46,6 +46,11 @@ public sealed class PpTargetExactCalculationServiceTests
             Assert.That(File.Exists(Path.Combine(temporaryDirectory, "cache.json")), Is.True);
             Assert.That(estimate.ExpectedPp, Is.GreaterThan(0));
             Assert.That(estimate.RealisticMaximumPp, Is.GreaterThan(estimate.ExpectedPp));
+            Assert.That(estimate.ExpectedPpRange.Maximum, Is.LessThanOrEqualTo(estimate.RealisticMaximumPp));
+            Assert.That(estimate.BeatmapId, Is.EqualTo(beatmapId));
+            Assert.That(estimate.Mods, Is.Empty);
+            Assert.That(estimate.ExpectedAccuracy, Is.EqualTo(0.94));
+            Assert.That(estimate.Attainability, Is.EqualTo(0.5));
             Assert.That(estimate.Method, Does.Contain("exact 100% full-combo ceiling"));
         });
     }

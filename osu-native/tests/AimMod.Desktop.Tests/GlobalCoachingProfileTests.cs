@@ -104,6 +104,84 @@ public sealed class GlobalCoachingProfileTests
         });
     }
 
+    [Test]
+    public void ReportsClassifiedCoverageAndGroupsRelatedMissesBySkillArea()
+    {
+        LocalReplay first = run(1, 101);
+        LocalReplay second = run(2, 202);
+        var analyses = new Dictionary<Guid, ReplayAnalysisResult>
+        {
+            [first.ScoreId] = analysis(new[]
+            {
+                miss(ReplayMissReason.Overshoot),
+                miss(ReplayMissReason.Unknown),
+            }),
+            [second.ScoreId] = analysis(new[] { miss(ReplayMissReason.Undershoot) }),
+        };
+
+        GlobalCoachingProfile profile = GlobalCoachingProfileBuilder.Build(new[] { first, second }, analyses);
+        GlobalSkillAreaEvidence aimControl = profile.MeasuredSkillAreas.Single(area => area.Area == CoachingSkillArea.AimControl);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(profile.Coverage.MissCount, Is.EqualTo(3));
+            Assert.That(profile.Coverage.ClassifiedMissCount, Is.EqualTo(2));
+            Assert.That(profile.Coverage.MissClassificationCoverage, Is.EqualTo(2d / 3).Within(0.001));
+            Assert.That(aimControl.EvidenceCount, Is.EqualTo(2));
+            Assert.That(aimControl.RunCount, Is.EqualTo(2));
+            Assert.That(aimControl.MapCount, Is.EqualTo(2));
+            Assert.That(aimControl.ShareOfClassifiedMisses, Is.EqualTo(1));
+            Assert.That(aimControl.AnalysedMapCoverage, Is.EqualTo(1));
+            Assert.That(aimControl.Confidence, Is.EqualTo(CoachingConfidence.Low));
+        });
+    }
+
+    [Test]
+    public void SameMapWeaknessRequiresEvidenceFromMultipleAttempts()
+    {
+        LocalReplay first = run(1, 101);
+        LocalReplay second = run(2, 101);
+        var analyses = new Dictionary<Guid, ReplayAnalysisResult>
+        {
+            [first.ScoreId] = analysis(new[]
+            {
+                miss(ReplayMissReason.Overshoot),
+                miss(ReplayMissReason.Overshoot),
+            }),
+            [second.ScoreId] = analysis(new[] { hit(0, 0, 0) }),
+        };
+
+        GlobalCoachingProfile profile = GlobalCoachingProfileBuilder.Build(new[] { first, second }, analyses);
+
+        Assert.That(profile.RecurringWeaknesses, Has.None.Matches<GlobalRecurringWeakness>(weakness =>
+            weakness.Key.StartsWith("map:", StringComparison.Ordinal)));
+    }
+
+    [Test]
+    public void CrossMapRecurrenceOutranksAHighCountFromOnePlay()
+    {
+        LocalReplay isolated = run(1, 101);
+        LocalReplay recurringA = run(2, 202);
+        LocalReplay recurringB = run(3, 303);
+        var analyses = new Dictionary<Guid, ReplayAnalysisResult>
+        {
+            [isolated.ScoreId] = analysis(Enumerable.Repeat(miss(ReplayMissReason.EarlyClick), 8)),
+            [recurringA.ScoreId] = analysis(new[] { miss(ReplayMissReason.Overshoot) }),
+            [recurringB.ScoreId] = analysis(new[] { miss(ReplayMissReason.Overshoot) }),
+        };
+
+        GlobalCoachingProfile profile = GlobalCoachingProfileBuilder.Build(
+            new[] { isolated, recurringA, recurringB },
+            analyses);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(profile.MissReasons[0].Reason, Is.EqualTo(ReplayMissReason.Overshoot));
+            Assert.That(profile.Priorities[0].Title, Is.EqualTo("Control jump braking"));
+            Assert.That(profile.Priorities[0].Confidence, Is.EqualTo(CoachingConfidence.Low));
+        });
+    }
+
     private static ReplayAnalysisResult analysis(IEnumerable<ReplayObjectJudgement> judgements)
     {
         ReplayObjectJudgement[] values = judgements.ToArray();

@@ -45,6 +45,42 @@ public sealed class ExternalLazerInstalledSkinsTests
         InstalledLazerSkinPage result = await source.SearchAsync(limit: 20);
 
         Assert.That(result.Items.Single().PreviewPath, Is.EqualTo(storedPath));
+        Assert.That(result.Items.Single().HasPreview, Is.True);
+    }
+
+    [Test]
+    public void PreviewAvailabilityRequiresExistingAbsoluteFile()
+    {
+        var summary = new ExternalLazerSkinSummary(Guid.NewGuid(), "Skin", "Creator", "", false, 2);
+        string missingPath = Path.Combine(temporaryDirectory, "missing-preview.png");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(new InstalledLazerSkin(summary, "preview.png").HasPreview, Is.False);
+            Assert.That(new InstalledLazerSkin(summary, missingPath).HasPreview, Is.False);
+        });
+    }
+
+    [Test]
+    public async Task MissingHashedPreviewProducesUnavailableState()
+    {
+        Guid skinId = Guid.NewGuid();
+        string hash = new('a', 64);
+        var source = new ExternalLazerInstalledSkinSource(
+            temporaryDirectory,
+            (request, _) => Task.FromResult(new ExternalLazerSkinCatalogSearchResult(
+                new[] { new ExternalLazerSkinSummary(skinId, "Skin", "Creator", "", false, 2, hash, "menu-background.jpg") },
+                1,
+                request.Offset,
+                request.Limit)));
+
+        InstalledLazerSkinPage result = await source.SearchAsync(limit: 20);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Items.Single().PreviewPath, Is.Empty);
+            Assert.That(result.Items.Single().HasPreview, Is.False);
+        });
     }
 
     [Test]

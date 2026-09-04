@@ -153,6 +153,32 @@ public sealed class CoachingPredictionEngineTests
     }
 
     [Test]
+    public void RecommendationsPrioritiseReplayBackedWeaknessesThatRecurAcrossMaps()
+    {
+        LocalReplay first = run(1, 1, 5.0, 0.93, 1);
+        LocalReplay second = run(2, 2, 5.1, 0.94, 1);
+        var analyses = new Dictionary<Guid, ReplayAnalysisResult>
+        {
+            [first.ScoreId] = exactAnalysis(
+                judgement("Miss", 0, 10_000, missAnalysis: missAnalysis(ReplayMissReason.Overshoot))),
+            [second.ScoreId] = exactAnalysis(
+                judgement("Miss", 0, 20_000, missAnalysis: missAnalysis(ReplayMissReason.Overshoot))),
+        };
+
+        CoachingIntelligence result = CoachingPredictionEngine.Build(new[] { first, second }, analyses);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Recommendations, Is.Not.Empty);
+            Assert.That(result.Recommendations[0].Intent, Is.EqualTo("Train aim control"));
+            Assert.That(result.Recommendations[0].Reason, Does.Contain("recur across 2 maps"));
+            Assert.That(result.Recommendations[0].Reason, Does.Contain("classified on this setup"));
+            Assert.That(result.Recommendations[0].Confidence, Is.EqualTo(CoachingConfidence.Low));
+            Assert.That(result.Recommendations[0].SampleCount, Is.EqualTo(2));
+        });
+    }
+
+    [Test]
     public void PpPlanRanksWeightedProfileGains()
     {
         Guid targetBeatmap = id(70);

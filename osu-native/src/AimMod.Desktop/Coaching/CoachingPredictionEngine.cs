@@ -45,7 +45,7 @@ public static class CoachingPredictionEngine
             buildSessionDrift(history),
             buildMechanics(history, analyses),
             buildPpPlan(history),
-            buildRecommendations(history));
+            buildRecommendations(history, analyses));
     }
 
     /// <summary>
@@ -348,11 +348,14 @@ public static class CoachingPredictionEngine
             dominantMissReason);
     }
 
-    private static IReadOnlyList<CoachingRecommendation> buildRecommendations(IReadOnlyList<LocalReplay> history)
+    private static IReadOnlyList<CoachingRecommendation> buildRecommendations(
+        IReadOnlyList<LocalReplay> history,
+        IReadOnlyDictionary<Guid, ReplayAnalysisResult> analyses)
     {
         if (history.Count == 0)
             return Array.Empty<CoachingRecommendation>();
 
+        GlobalCoachingProfile globalProfile = GlobalCoachingProfileBuilder.Build(history, analyses);
         var candidates = new List<RecommendationCandidate>();
         LocalReplay[][] recentSetups = history.Where(run => validAccuracy(run.Accuracy))
                                                .GroupBy(setupKey)
@@ -373,8 +376,38 @@ public static class CoachingPredictionEngine
             string intent;
             string reason;
             double priority;
+            CoachingConfidence recommendationConfidence = prediction?.Confidence ?? CoachingConfidence.Insufficient;
+            int recommendationSampleCount = prediction?.SampleCount ?? 0;
 
-            if (benchmark.AccuracyChangeFromBest is > 0.0025)
+            var setupMissReason = setup.SelectMany(run => analyses.GetValueOrDefault(run.ScoreId)?.Judgements
+                                                                  .Where(isMiss)
+                                                                  .Where(judgement => judgement.MissAnalysis is { Reason: not ReplayMissReason.Unknown })
+                                                                  .Select(judgement => judgement.MissAnalysis!.Reason)
+                                                      ?? Enumerable.Empty<ReplayMissReason>())
+                                       .GroupBy(value => value)
+                                       .Select(group => new { Reason = group.Key, Count = group.Count() })
+                                       .OrderByDescending(group => group.Count)
+                                       .FirstOrDefault();
+            GlobalMissReasonShare? recurringReason = setupMissReason is null
+                ? null
+                : globalProfile.MissReasons.FirstOrDefault(item => item.Reason == setupMissReason.Reason
+                                                                    && item.MapCount >= 2
+                                                                    && item.RunCount >= 2
+                                                                    && item.Confidence >= CoachingConfidence.Low);
+
+            if (recurringReason is not null)
+            {
+                intent = mechanicsIntent(recurringReason.Reason);
+                reason = mechanicsRecommendationDetail(recurringReason, setupMissReason!.Count);
+                priority = 125
+                           + recurringReason.MapCount * 4
+                           + recurringReason.RunCount
+                           + recurringReason.Share * 10
+                           + Math.Min(5, setupMissReason.Count);
+                recommendationConfidence = recurringReason.Confidence;
+                recommendationSampleCount = recurringReason.Count;
+            }
+            else if (benchmark.AccuracyChangeFromBest is > 0.0025)
             {
                 intent = "Confirm improvement";
                 reason = $"The latest play beat the earlier matching-setup best by {benchmark.AccuracyChangeFromBest.Value * 100:0.00} accuracy points. Repeat it once to test whether that result holds.";
@@ -419,7 +452,14 @@ public static class CoachingPredictionEngine
                 priority = 20 + latest.StarRating;
             }
 
-            candidates.Add(new RecommendationCandidate(latest, prediction, intent, reason, priority));
+            candidates.Add(new RecommendationCandidate(
+                latest,
+                prediction,
+                intent,
+                reason,
+                priority,
+                recommendationConfidence,
+                recommendationSampleCount));
         }
 
         return candidates.OrderByDescending(candidate => candidate.Priority)
@@ -434,8 +474,8 @@ public static class CoachingPredictionEngine
                              candidate.Intent,
                              candidate.Reason,
                              candidate.Prediction?.ExpectedAccuracy,
-                             candidate.Prediction?.Confidence ?? CoachingConfidence.Insufficient,
-                             candidate.Prediction?.SampleCount ?? 0))
+                             candidate.Confidence,
+                             candidate.SampleCount))
                          .ToArray();
     }
 
@@ -740,6 +780,33 @@ public static class CoachingPredictionEngine
     private static string formatAccuracy(double accuracy, int decimals = 1) =>
         (accuracy * 100).ToString(decimals == 2 ? "0.00" : "0.0", System.Globalization.CultureInfo.InvariantCulture) + "%";
 
+    private static string mechanicsIntent(ReplayMissReason reason) => reason switch
+    {
+        ReplayMissReason.EarlyClick => "Train tap timing",
+        ReplayMissReason.LateClick => "Train tap timing",
+        ReplayMissReason.Undershoot => "Train aim control",
+        ReplayMissReason.Overshoot => "Train aim control",
+        ReplayMissReason.OnTargetNoClick => "Train aim-tap coordination",
+        ReplayMissReason.AimDeviation => "Train aim precision",
+        _ => "Review replay evidence",
+    };
+
+    private static string mechanicsRecommendationDetail(GlobalMissReasonShare recurring, int setupEvidenceCount)
+    {
+        string weakness = ReplayMissInsightPresenter.Label(recurring.Reason);
+        string action = recurring.Reason switch
+        {
+            ReplayMissReason.EarlyClick => "Repeat at a readable rate and delay the press until cursor arrival.",
+            ReplayMissReason.LateClick => "Repeat the pattern and commit as the cursor enters the target.",
+            ReplayMissReason.Undershoot => "Repeat the longer movements and finish the full travel before tapping.",
+            ReplayMissReason.Overshoot => "Repeat at a controlled rate and brake the cursor at the target centre.",
+            ReplayMissReason.OnTargetNoClick => "Repeat while keeping aim and tapping rhythm coupled through each target.",
+            ReplayMissReason.AimDeviation => "Repeat the affected spacing below your limit and prioritise a stable approach line.",
+            _ => "Review the matching replay moments before repeating this setup.",
+        };
+        return $"{weakness} recur across {recurring.MapCount:N0} maps and {recurring.RunCount:N0} analysed plays; {setupEvidenceCount:N0} were classified on this setup. {action}";
+    }
+
     private static double square(double value) => value * value;
 
     private sealed record WeightedRun(LocalReplay Run, double Weight);
@@ -751,7 +818,9 @@ public static class CoachingPredictionEngine
         CoachingAccuracyPrediction? Prediction,
         string Intent,
         string Reason,
-        double Priority);
+        double Priority,
+        CoachingConfidence Confidence,
+        int SampleCount);
 
     private sealed record PpCandidate(
         LocalReplay Run,

@@ -48,7 +48,11 @@ public sealed record PpTargetEstimate(
     PpTargetRange ExpectedPpRange,
     int SampleCount,
     PpTargetConfidence Confidence,
-    string Method);
+    string Method,
+    int? BeatmapId = null,
+    IReadOnlyList<string>? Mods = null,
+    double? ExpectedAccuracy = null,
+    double? Attainability = null);
 
 public sealed record PpTargetFilters(
     string SearchText = "",
@@ -85,7 +89,10 @@ public sealed record PpTargetCandidate(
     double? GainBaselinePp,
     double? EstimatedAttainableGainPp,
     PpTargetEstimate? Estimate,
-    IReadOnlyList<string> SuggestedMods);
+    IReadOnlyList<string> SuggestedMods,
+    double ScoreEvidence,
+    double ModCompatibility,
+    PpTargetConfidence RecommendationConfidence);
 
 public sealed record PpTargetRankingResult(
     PpTargetPreferenceProfile Profile,
@@ -106,4 +113,59 @@ public static class PpTargetStatus
         OfficialBeatmapCategory.Graveyard => "graveyard",
         _ => string.Empty,
     };
+}
+
+internal static class PpTargetMods
+{
+    public static IReadOnlyList<string> SelectCompatible(IReadOnlyList<PpTargetPreference> preferences, int limit = 3)
+    {
+        var selected = new List<string>();
+        foreach (PpTargetPreference preference in preferences.Where(item => item.Weight >= 0.15))
+        {
+            string mod = NormaliseOne(preference.Value);
+            if (mod.Length == 0 || selected.Contains(mod, StringComparer.Ordinal) || conflicts(selected, mod))
+                continue;
+
+            selected.Add(mod);
+            if (selected.Count >= limit)
+                break;
+        }
+
+        return selected;
+    }
+
+    public static IReadOnlyList<string> Normalise(IEnumerable<string>? mods)
+    {
+        HashSet<string> values = (mods ?? []).Select(NormaliseOne)
+                                              .Where(mod => mod.Length > 0)
+                                              .ToHashSet(StringComparer.Ordinal);
+        if (values.Contains("NC"))
+            values.Remove("DT");
+        if (values.Contains("DT") || values.Contains("NC"))
+            values.Remove("HT");
+        if (values.Contains("HR"))
+            values.Remove("EZ");
+        return values.Order(StringComparer.Ordinal).ToArray();
+    }
+
+    public static string NormaliseOne(string? mod) => (mod ?? string.Empty).Trim().ToUpperInvariant() switch
+    {
+        "NM" or "NOMOD" => string.Empty,
+        "HIDDEN" => "HD",
+        "HARDROCK" => "HR",
+        "DOUBLETIME" => "DT",
+        "NIGHTCORE" => "NC",
+        "FLASHLIGHT" => "FL",
+        "HALFTIME" => "HT",
+        "EASY" => "EZ",
+        "NOFAIL" => "NF",
+        "SPUNOUT" => "SO",
+        "CLASSIC" => "CL",
+        var value => value,
+    };
+
+    private static bool conflicts(IEnumerable<string> selected, string candidate) => selected.Any(existing =>
+        (candidate is "DT" or "NC") && (existing is "DT" or "NC" or "HT")
+        || candidate == "HT" && (existing is "DT" or "NC")
+        || (candidate is "HR" or "EZ") && (existing is "HR" or "EZ"));
 }

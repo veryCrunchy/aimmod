@@ -13,6 +13,9 @@ public sealed record InstalledLazerSkin(ExternalLazerSkinSummary Summary, string
     public string Name => Summary.Name;
     public string Creator => Summary.Creator;
     public bool IsBuiltIn => Summary.IsBuiltIn;
+    public bool HasPreview => !string.IsNullOrWhiteSpace(PreviewPath)
+                              && Path.IsPathFullyQualified(PreviewPath)
+                              && File.Exists(PreviewPath);
 }
 
 public sealed record InstalledLazerSkinPage(IReadOnlyList<InstalledLazerSkin> Items, int Total, int Offset, int Limit)

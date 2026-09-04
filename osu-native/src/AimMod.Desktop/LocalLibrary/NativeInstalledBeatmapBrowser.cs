@@ -857,46 +857,30 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             : base(InspectorPanelStyle.Default)
         {
             RelativeSizeAxes = Axes.X;
-            Height = 170;
+            Height = 248;
             Add(new SpriteText { Text = "SKILL DEMAND", Font = new FontUsage(size: 11, weight: "Bold"), Colour = AimModPalette.Text });
-            (string name, double value)[] skills =
+            Add(new SpriteText
             {
-                ("Aim", normalise(difficulty.StarRating, 1.5, 9)),
-                ("Speed", normalise(difficulty.Bpm, 90, 260)),
-                ("Stamina", normalise(difficulty.LengthMilliseconds, 45_000, 360_000)),
-                ("Reading", normalise(difficulty.ApproachRate, 5, 10.5)),
-                ("Precision", normalise((difficulty.OverallDifficulty + difficulty.CircleSize) / 2, 3, 9)),
-            };
-            for (int i = 0; i < skills.Length; i++)
-                Add(new SkillBar(skills[i].name, skills[i].value) { Y = 28 + i * 25 });
-        }
+                Text = "Estimated from this difficulty's star rating and map settings",
+                Y = 18,
+                Font = new FontUsage(size: 9),
+                Colour = AimModPalette.Muted,
+            });
 
-        private static double normalise(double value, double minimum, double maximum) => Math.Clamp((value - minimum) / (maximum - minimum), 0, 1);
-    }
-
-    private sealed partial class SkillBar : CompositeDrawable
-    {
-        public SkillBar(string label, double value)
-        {
-            RelativeSizeAxes = Axes.X;
-            Height = 18;
-            InternalChildren = new Drawable[]
+            BeatmapSkillDemand demand = BeatmapSkillDemand.From(difficulty);
+            Add(new AimModSkillRadar(new AimModSkillMetric[]
             {
-                new SpriteText { Text = label, Font = new FontUsage(size: 10), Colour = AimModPalette.Muted },
-                new Container
-                {
-                    RelativeSizeAxes = Axes.X,
-                    Width = 0.62f,
-                    Height = 5,
-                    Position = new(78, 6),
-                    Children = new Drawable[]
-                    {
-                        new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Border },
-                        new Box { RelativeSizeAxes = Axes.Both, Width = (float)value, Colour = AimModPalette.Pink },
-                    },
-                },
-                new SpriteText { Anchor = Anchor.TopRight, Origin = Anchor.TopRight, Text = $"{value * 10:0.0}", Font = new FontUsage(size: 10, weight: "Bold"), Colour = AimModPalette.Text },
-            };
+                new("Aim", demand.Aim),
+                new("Speed", demand.Speed),
+                new("Stamina", demand.Stamina),
+                new("Reading", demand.Reading),
+                new("Precision", demand.Precision),
+            })
+            {
+                Anchor = Anchor.TopCentre,
+                Origin = Anchor.TopCentre,
+                Y = 43,
+            });
         }
     }
 

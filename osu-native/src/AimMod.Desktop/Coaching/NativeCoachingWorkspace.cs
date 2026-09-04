@@ -1446,6 +1446,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             RelativeSizeAxes = Axes.X;
             Height = 126;
             GlobalMissReasonShare? miss = profile.MissReasons.FirstOrDefault();
+            GlobalSkillAreaEvidence? focusArea = profile.MeasuredSkillAreas.FirstOrDefault();
             InternalChild = new GridContainer
             {
                 RelativeSizeAxes = Axes.Both,
@@ -1471,7 +1472,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                             miss is null ? "Collecting" : ReplayMissInsightPresenter.Label(miss.Reason),
                             miss is null
                                 ? "No classified misses yet"
-                                : $"{miss.Count:N0} classified  //  {miss.Share:P0}  //  {miss.MapCount:N0} maps",
+                                : $"{miss.Count:N0} classified  //  {miss.Share:P0}  //  {ConfidenceLabel(miss.Confidence)} confidence",
                             AimModPalette.Yellow),
                     },
                     new Drawable[]
@@ -1487,9 +1488,11 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                             $"{profile.Coverage.AnalysedMapCount:N0} analysed maps",
                             AimModPalette.Yellow),
                         new ProfileMetric(
-                            "EVIDENCE",
-                            profile.Coverage.JudgementCount.ToString("N0"),
-                            "exact judgements",
+                            "FOCUS AREA",
+                            focusArea?.Label ?? "Collecting",
+                            focusArea is null
+                                ? $"{profile.Coverage.JudgementCount:N0} exact judgements"
+                                : $"{focusArea.EvidenceCount:N0} misses  //  {focusArea.MapCount:N0} maps  //  {ConfidenceLabel(focusArea.Confidence)}",
                             AimModPalette.Cyan),
                     },
                 },

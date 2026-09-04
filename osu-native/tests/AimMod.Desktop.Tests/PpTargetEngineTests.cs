@@ -306,7 +306,120 @@ public sealed class PpTargetEngineTests
             Assert.That(result.Candidates[0].Attainability, Is.GreaterThan(result.Candidates[^1].Attainability));
             Assert.That(result.Candidates.IndexOf(result.Candidates.Single(item => item.BeatmapId == 30)),
                 Is.LessThan(result.Candidates.IndexOf(result.Candidates.Single(item => item.BeatmapId == 31))));
-            Assert.That(result.Candidates[0].SuggestedMods, Does.Contain("Hidden"));
+            Assert.That(result.Candidates[0].SuggestedMods, Does.Contain("HD"));
+        });
+    }
+
+    [Test]
+    public void HighPpAndExtremeDifficultyEvidenceIsRetainedWithoutArbitraryCeilings()
+    {
+        PpTargetPreferenceProfile profile = PpTargetPreferenceProfiler.Build([
+            replay(1, 1, 23.5, 0.99, 2_450, "Hidden"),
+        ]);
+
+        PpTargetRankingResult result = PpTargetRanker.Rank(
+            profile,
+            [set(1, "ranked", difficulty(10, 24.1))],
+            new PpTargetFilters(MinimumStars: 20, MinimumExpectedPp: 2_000),
+            new Dictionary<int, PpTargetEstimate>
+            {
+                [10] = new(2_200, 2_900, new PpTargetRange(2_000, 2_500), 1, PpTargetConfidence.High,
+                    "Official osu! ruleset", 10, ["HD"], 0.99),
+            });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(profile.PpSampleCount, Is.EqualTo(1));
+            Assert.That(profile.HistoricalBestPp, Is.EqualTo(2_450));
+            Assert.That(result.Candidates.Single().BeatmapId, Is.EqualTo(10));
+            Assert.That(result.Candidates.Single().Estimate!.ExpectedPp, Is.EqualTo(2_200));
+        });
+    }
+
+    [Test]
+    public void GainBaselineUsesScoresNearTheCandidateDifficulty()
+    {
+        LocalReplay[] history = Enumerable.Range(1, 12)
+            .Select(index => replay(index, index, 5 + index % 3 * 0.05, 0.96, 190 + index))
+            .Concat(Enumerable.Range(20, 12)
+                .Select(index => replay(index, index, 8 + index % 3 * 0.05, 0.96, 580 + index)))
+            .ToArray();
+        PpTargetPreferenceProfile profile = PpTargetPreferenceProfiler.Build(history);
+        PpTargetRankingResult result = PpTargetRanker.Rank(
+            profile,
+            [set(1, "ranked", difficulty(10, 5.05), difficulty(11, 8.05))],
+            exactEstimates: new Dictionary<int, PpTargetEstimate>
+            {
+                [10] = new(300, 350, new PpTargetRange(270, 330), 1, PpTargetConfidence.High, "Official osu! ruleset"),
+                [11] = new(650, 720, new PpTargetRange(620, 680), 1, PpTargetConfidence.High, "Official osu! ruleset"),
+            });
+
+        PpTargetCandidate fiveStar = result.Candidates.Single(candidate => candidate.BeatmapId == 10);
+        PpTargetCandidate eightStar = result.Candidates.Single(candidate => candidate.BeatmapId == 11);
+        Assert.Multiple(() =>
+        {
+            Assert.That(fiveStar.GainBaselinePp, Is.InRange(190, 205));
+            Assert.That(eightStar.GainBaselinePp, Is.InRange(580, 610));
+            Assert.That(fiveStar.EstimatedAttainableGainPp, Is.Not.Null);
+            Assert.That(eightStar.EstimatedAttainableGainPp, Is.Not.Null);
+            Assert.That(fiveStar.EstimatedAttainableGainPp!.Value, Is.GreaterThan(eightStar.EstimatedAttainableGainPp!.Value));
+            Assert.That(fiveStar.ScoreEvidence, Is.GreaterThan(0));
+            Assert.That(eightStar.ScoreEvidence, Is.GreaterThan(0));
+        });
+    }
+
+    [Test]
+    public void EstimateWithDifferentDifficultyModsOrAccuracyIsNotApplied()
+    {
+        PpTargetPreferenceProfile profile = PpTargetPreferenceProfiler.Build(
+            Enumerable.Range(1, 8).Select(index => replay(index, index, 5, 0.97, 200 + index, "Hidden")));
+        var wrongDifficulty = new PpTargetEstimate(300, 400, new PpTargetRange(270, 330), 1, PpTargetConfidence.High,
+            "Official osu! ruleset", 999, ["HD"], 0.97, 0.8);
+        var wrongMods = wrongDifficulty with { BeatmapId = 10, Mods = ["HR"] };
+        var wrongAccuracy = wrongDifficulty with { BeatmapId = 10, ExpectedAccuracy = 0.95 };
+        var wrongAttainability = wrongDifficulty with { BeatmapId = 10, Attainability = 0 };
+
+        PpTargetCandidate difficultyCandidate = PpTargetRanker.Rank(profile, [set(1, "ranked", difficulty(10, 5))],
+            exactEstimates: new Dictionary<int, PpTargetEstimate> { [10] = wrongDifficulty }).Candidates.Single();
+        PpTargetCandidate modsCandidate = PpTargetRanker.Rank(profile, [set(1, "ranked", difficulty(10, 5))],
+            exactEstimates: new Dictionary<int, PpTargetEstimate> { [10] = wrongMods }).Candidates.Single();
+        PpTargetCandidate accuracyCandidate = PpTargetRanker.Rank(profile, [set(1, "ranked", difficulty(10, 5))],
+            exactEstimates: new Dictionary<int, PpTargetEstimate> { [10] = wrongAccuracy }).Candidates.Single();
+        PpTargetCandidate attainabilityCandidate = PpTargetRanker.Rank(profile, [set(1, "ranked", difficulty(10, 5))],
+            exactEstimates: new Dictionary<int, PpTargetEstimate> { [10] = wrongAttainability }).Candidates.Single();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(difficultyCandidate.Estimate, Is.Null);
+            Assert.That(modsCandidate.Estimate, Is.Null);
+            Assert.That(accuracyCandidate.Estimate, Is.Null);
+            Assert.That(attainabilityCandidate.Estimate, Is.Null);
+        });
+    }
+
+    [Test]
+    public void SuggestedModsAreCanonicalAndMutuallyCompatible()
+    {
+        PpTargetPreferenceProfile profile = PpTargetPreferenceProfile.Empty with
+        {
+            CommonMods =
+            [
+                new PpTargetPreference("DoubleTime", 9, 0.9),
+                new PpTargetPreference("HalfTime", 8, 0.8),
+                new PpTargetPreference("Hidden", 7, 0.7),
+                new PpTargetPreference("HardRock", 6, 0.6),
+            ],
+        };
+
+        PpTargetCandidate candidate = PpTargetRanker.Rank(
+            profile,
+            [set(1, "ranked", difficulty(10, 5))]).Candidates.Single();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(candidate.SuggestedMods, Is.EqualTo(new[] { "DT", "HD", "HR" }));
+            Assert.That(candidate.SuggestedMods, Does.Not.Contain("HT"));
+            Assert.That(candidate.ModCompatibility, Is.GreaterThan(0));
         });
     }
 
