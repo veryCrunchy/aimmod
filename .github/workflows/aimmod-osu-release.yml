@@ -219,8 +219,23 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           pattern: aimmod-osu-${{ needs.metadata.outputs.version }}-*
-          path: release-assets
+          path: downloaded-assets
           merge-multiple: true
+
+      - name: Stage flat release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir release-assets
+          while IFS= read -r -d '' source; do
+            destination="release-assets/$(basename "$source")"
+            if [[ -e "$destination" ]]; then
+              echo "Duplicate release asset name: $(basename "$source")" >&2
+              exit 2
+            fi
+            cp "$source" "$destination"
+          done < <(find downloaded-assets -type f -print0)
+          test -n "$(find release-assets -type f -print -quit)"
 
       - name: Create channel manifest
         shell: bash
