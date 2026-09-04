@@ -3,6 +3,15 @@ using AimMod.Osu.Runtime.Contracts;
 
 namespace AimMod.Desktop.Coaching;
 
+public enum CoachingTimeRange
+{
+    Days7,
+    Days30,
+    Days90,
+    Year,
+    All,
+}
+
 public sealed record CoachingSessionSummary(
     DateTimeOffset StartedAt,
     DateTimeOffset EndedAt,
@@ -36,12 +45,26 @@ public sealed record NativeCoachingWorkspaceModel(
     public static NativeCoachingWorkspaceModel Build(
         IReadOnlyList<LocalReplay> runs,
         IReadOnlyDictionary<Guid, ReplayAnalysisResult> analyses,
-        Guid? selectedScoreId = null)
+        Guid? selectedScoreId = null,
+        CoachingTimeRange timeRange = CoachingTimeRange.Days30,
+        DateTimeOffset? now = null)
     {
         ArgumentNullException.ThrowIfNull(runs);
         ArgumentNullException.ThrowIfNull(analyses);
 
+        DateTimeOffset reference = now ?? DateTimeOffset.Now;
+        DateTimeOffset? earliest = timeRange switch
+        {
+            CoachingTimeRange.Days7 => reference.AddDays(-7),
+            CoachingTimeRange.Days30 => reference.AddDays(-30),
+            CoachingTimeRange.Days90 => reference.AddDays(-90),
+            CoachingTimeRange.Year => reference.AddYears(-1),
+            _ => null,
+        };
         LocalReplay[] history = runs.Where(run => string.Equals(run.RulesetShortName, "osu", StringComparison.OrdinalIgnoreCase))
+                                    .GroupBy(run => run.ScoreId)
+                                    .Select(group => group.OrderByDescending(run => run.PlayedAt).First())
+                                    .Where(run => earliest is null || run.PlayedAt >= earliest)
                                     .OrderByDescending(run => run.PlayedAt)
                                     .Take(CoachingLimits.MaximumRuns)
                                     .ToArray();

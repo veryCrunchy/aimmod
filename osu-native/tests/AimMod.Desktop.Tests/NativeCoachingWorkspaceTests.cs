@@ -33,7 +33,8 @@ public sealed class NativeCoachingWorkspaceTests
         NativeCoachingWorkspaceModel model = NativeCoachingWorkspaceModel.Build(
             new[] { laterSession, sameSession, selected, previousSession },
             new Dictionary<Guid, ReplayAnalysisResult>(),
-            selected.ScoreId);
+            selected.ScoreId,
+            CoachingTimeRange.All);
 
         Assert.Multiple(() =>
         {
@@ -55,7 +56,8 @@ public sealed class NativeCoachingWorkspaceTests
 
         NativeCoachingWorkspaceModel model = NativeCoachingWorkspaceModel.Build(
             runs,
-            new Dictionary<Guid, ReplayAnalysisResult>());
+            new Dictionary<Guid, ReplayAnalysisResult>(),
+            timeRange: CoachingTimeRange.All);
 
         Assert.Multiple(() =>
         {
@@ -88,7 +90,8 @@ public sealed class NativeCoachingWorkspaceTests
 
         NativeCoachingWorkspaceModel model = NativeCoachingWorkspaceModel.Build(
             new[] { onlineOnly, localOnly, submittedLocal },
-            analyses);
+            analyses,
+            timeRange: CoachingTimeRange.All);
 
         Assert.Multiple(() =>
         {
@@ -126,6 +129,45 @@ public sealed class NativeCoachingWorkspaceTests
             Assert.That(model.Global.MedianAccuracy, Is.Null);
             Assert.That(model.Report.Intelligence.Recommendations, Is.Empty);
             Assert.That(model.GlobalProfile, Is.EqualTo(GlobalCoachingProfile.Empty));
+        });
+    }
+
+    [Test]
+    public void DefaultsGlobalCoachingToTheLastThirtyDays()
+    {
+        DateTimeOffset now = new(2026, 9, 4, 12, 0, 0, TimeSpan.Zero);
+        LocalReplay recent = run(now.AddDays(-12), 0.96, 1);
+        LocalReplay boundary = run(now.AddDays(-30), 0.94, 2);
+        LocalReplay old = run(now.AddDays(-31), 0.82, 8);
+        var analyses = new Dictionary<Guid, ReplayAnalysisResult>
+        {
+            [recent.ScoreId] = exactAnalysis(),
+            [old.ScoreId] = exactAnalysis(),
+        };
+
+        NativeCoachingWorkspaceModel monthly = NativeCoachingWorkspaceModel.Build(
+            new[] { old, recent, boundary },
+            analyses,
+            now: now);
+        NativeCoachingWorkspaceModel allTime = NativeCoachingWorkspaceModel.Build(
+            new[] { old, recent, boundary },
+            analyses,
+            timeRange: CoachingTimeRange.All,
+            now: now);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(monthly.History.Select(item => item.ScoreId), Is.EquivalentTo(new[] { recent.ScoreId, boundary.ScoreId }));
+            Assert.That(monthly.Global.RunCount, Is.EqualTo(2));
+            Assert.That(monthly.Global.MedianAccuracy, Is.EqualTo(0.95).Within(0.0001));
+            Assert.That(monthly.GlobalProfile.Coverage.AnalysedRunCount, Is.EqualTo(1));
+            Assert.That(allTime.Global.RunCount, Is.EqualTo(3));
+            Assert.That(allTime.GlobalProfile.Coverage.AnalysedRunCount, Is.EqualTo(2));
+            Assert.That(NativeCoachingWorkspace.TimeRangeLabel(CoachingTimeRange.Days30), Is.EqualTo("Last 30 days"));
+            Assert.That(NativeCoachingWorkspace.TimeRangeLabel(CoachingTimeRange.Days7), Is.EqualTo("Last 7 days"));
+            Assert.That(NativeCoachingWorkspace.TimeRangeLabel(CoachingTimeRange.Days90), Is.EqualTo("Last 90 days"));
+            Assert.That(NativeCoachingWorkspace.TimeRangeLabel(CoachingTimeRange.Year), Is.EqualTo("Last year"));
+            Assert.That(NativeCoachingWorkspace.TimeRangeLabel(CoachingTimeRange.All), Is.EqualTo("All time"));
         });
     }
 

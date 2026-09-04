@@ -47,6 +47,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     private readonly OsuSpriteText sessionTrend;
     private readonly AnalysisProgressBanner analysisBanner;
     private readonly CoachingTrendChart trendChart;
+    private readonly SectionLine globalProfileSectionLine;
     private readonly FillFlowContainer<Drawable> selectedRunHost;
     private readonly FillFlowContainer<Drawable> exactAnalysisHost;
     private readonly FillFlowContainer<Drawable> changesHost;
@@ -54,6 +55,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     private readonly FillFlowContainer<Drawable> practiceHost;
     private readonly SectionLine practiceSectionLine;
     private readonly OsuTextBox practiceSearch;
+    private readonly Bindable<CoachingTimeRange> coachingTimeRange = new(CoachingTimeRange.Days30);
     private readonly Bindable<PracticeCandidateSort> practiceSort = new(PracticeCandidateSort.WeakestFirst);
     private readonly Bindable<PracticeEvidenceFilter> practiceEvidence = new(PracticeEvidenceFilter.AnyEvidence);
     private readonly BindableDouble practiceMinimumStars = new(0) { MinValue = 0, MaxValue = 10, Default = 0 };
@@ -67,6 +69,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     private CancellationTokenSource? practiceGeneration;
     private CancellationTokenSource? practiceLaunch;
     private ScheduledDelegate? scheduledPracticeRefresh;
+    private IReadOnlyList<LocalReplay> allReplays = Array.Empty<LocalReplay>();
     private IReadOnlyList<LocalReplay> replays = Array.Empty<LocalReplay>();
     private PracticeCandidatePage? renderedPracticePage;
     private PracticeDisplayState renderedPracticeState;
@@ -117,7 +120,8 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             out sessionPlays,
             out sessionDuration,
             out sessionAccuracy,
-            out sessionTrend));
+            out sessionTrend,
+            coachingTimeRange));
         content.Add(analysisBanner = new AnalysisProgressBanner());
         content.Add(new GridContainer
         {
@@ -132,7 +136,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             {
                 new Drawable[]
                 {
-                    createPerformancePanel(out trendChart, out selectedRunHost, out exactAnalysisHost),
+                    createPerformancePanel(out trendChart, out globalProfileSectionLine, out selectedRunHost, out exactAnalysisHost),
                     createPracticePanel(
                         out practiceHost,
                         out practiceSectionLine,
@@ -181,6 +185,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         practiceEvidence.BindValueChanged(_ => updatePracticeMapsImmediately());
         practiceMinimumStars.BindValueChanged(_ => schedulePracticeMapRefresh());
         practiceMaximumStars.BindValueChanged(_ => schedulePracticeMapRefresh());
+        coachingTimeRange.BindValueChanged(_ => changeTimeRange());
     }
 
     protected override void LoadComplete()
@@ -206,9 +211,8 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         {
             StatisticsHistoryLoadResult history = await StatisticsHistoryLoader.LoadAsync(source, cancellationToken).ConfigureAwait(false);
             IReadOnlyList<LocalReplay> local = ScoreHistoryMerger.MergeAsLocalReplays(history.Runs, []);
-            NativeCoachingWorkspaceModel localModel = NativeCoachingWorkspaceModel.Build(local, analyses);
             if (!IsDisposed)
-                Schedule(() => apply(local, Math.Max(history.TotalAvailableRunCount, local.Count), localModel, null));
+                Schedule(() => apply(local));
 
             IAccountScoreHistoryService? service = accountHistory();
             if (service is null)
@@ -233,9 +237,8 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             }
 
             IReadOnlyList<LocalReplay> merged = ScoreHistoryMerger.MergeAsLocalReplays(history.Runs, online.Scores);
-            NativeCoachingWorkspaceModel mergedModel = NativeCoachingWorkspaceModel.Build(merged, analyses);
             if (!IsDisposed)
-                Schedule(() => apply(merged, Math.Max(history.TotalAvailableRunCount, merged.Count), mergedModel, online));
+                Schedule(() => apply(merged));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -253,34 +256,48 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         }
     }
 
-    private void apply(
-        IReadOnlyList<LocalReplay> nextReplays,
-        int total,
-        NativeCoachingWorkspaceModel next,
-        OnlineAccountScoreHistoryResult? online)
+    private void apply(IReadOnlyList<LocalReplay> nextReplays)
     {
-        replays = nextReplays;
-        workspace = next;
+        allReplays = nextReplays;
+        workspace = buildWorkspace();
+        replays = workspace.History;
         renderedAnalysisCount = analyses.Count;
         invalidatePracticeCandidates();
-        int submitted = online?.Scores.Count ?? 0;
         loadingOverlay.HideLoading();
         updateWorkspace();
         if (!acceptingAnalysisProgress)
-            analysisBanner.ShowReady(next.GlobalProfile, nextReplays.Count, submitted, total);
+            analysisBanner.ShowReady(workspace.GlobalProfile, replays.Count, scopedSubmittedRunCount(), TimeRangeLabel(coachingTimeRange.Value));
     }
 
     private void selectRun(Guid scoreId)
     {
-        workspace = NativeCoachingWorkspaceModel.Build(replays, analyses, scoreId);
+        workspace = buildWorkspace(scoreId);
         updateWorkspace();
     }
 
     private void showGlobalOverview()
     {
-        workspace = NativeCoachingWorkspaceModel.Build(replays, analyses);
+        workspace = buildWorkspace();
         updateWorkspace();
     }
+
+    private void changeTimeRange()
+    {
+        if (workspace is null && allReplays.Count == 0)
+            return;
+
+        workspace = buildWorkspace(workspace?.SelectedRun?.ScoreId);
+        replays = workspace.History;
+        invalidatePracticeCandidates();
+        updateWorkspace();
+        if (!acceptingAnalysisProgress)
+            analysisBanner.ShowReady(workspace.GlobalProfile, replays.Count, scopedSubmittedRunCount(), TimeRangeLabel(coachingTimeRange.Value));
+    }
+
+    private NativeCoachingWorkspaceModel buildWorkspace(Guid? selectedScoreId = null) =>
+        NativeCoachingWorkspaceModel.Build(allReplays, analyses, selectedScoreId, coachingTimeRange.Value);
+
+    private int scopedSubmittedRunCount() => replays.Count(run => run.OnlineScoreId > 0);
 
     public void SetAnalysisProgress(int completed, int total, string currentTitle)
     {
@@ -290,7 +307,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         if (workspace is not null && renderedAnalysisCount != analyses.Count)
         {
             Guid? selectedScoreId = workspace.SelectedRun?.ScoreId;
-            workspace = NativeCoachingWorkspaceModel.Build(replays, analyses, selectedScoreId);
+            workspace = buildWorkspace(selectedScoreId);
             renderedAnalysisCount = analyses.Count;
             invalidatePracticeCandidates();
             updateWorkspace();
@@ -328,7 +345,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     {
         acceptingAnalysisProgress = false;
         Guid? selectedScoreId = workspace?.SelectedRun?.ScoreId;
-        workspace = NativeCoachingWorkspaceModel.Build(replays, analyses, selectedScoreId);
+        workspace = buildWorkspace(selectedScoreId);
         renderedAnalysisCount = analyses.Count;
         invalidatePracticeCandidates();
         updateWorkspace();
@@ -348,11 +365,12 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
 
     private void updateWorkspace()
     {
-        NativeCoachingWorkspaceModel model = workspace ?? NativeCoachingWorkspaceModel.Build(Array.Empty<LocalReplay>(), analyses);
+        NativeCoachingWorkspaceModel model = workspace ?? buildWorkspace();
         CoachingReport report = model.Report;
         LocalReplay? selected = model.SelectedRun;
 
         updateSessionHeader(model);
+        globalProfileSectionLine.SetDetail(TimeRangeLabel(coachingTimeRange.Value));
         trendChart.SetRuns(model.TrendRuns, selected?.ScoreId, selectRun);
         updateSelectedRun(model, report.Intelligence.SelectedRunPrediction);
         updateExactAnalysis(selected, report.Intelligence.Mechanics);
@@ -832,14 +850,14 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         out OsuSpriteText plays,
         out OsuSpriteText duration,
         out OsuSpriteText accuracy,
-        out OsuSpriteText trend)
+        out OsuSpriteText trend,
+        Bindable<CoachingTimeRange> timeRange)
     {
         var header = new Container
         {
             RelativeSizeAxes = Axes.X,
             Height = 96,
-            Masking = true,
-            CornerRadius = AimModVisualStyle.CardRadius,
+            Depth = -30,
         };
 
         artwork = new Container { RelativeSizeAxes = Axes.Both };
@@ -851,51 +869,81 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
 
         header.Children = new Drawable[]
         {
-            new Box
+            new Container
             {
                 RelativeSizeAxes = Axes.Both,
-                Colour = ColourInfo.GradientHorizontal(AimModPalette.Panel, AimModPalette.CyanDark),
-            },
-            artwork,
-            new Box
-            {
-                RelativeSizeAxes = Axes.Both,
-                Colour = ColourInfo.GradientHorizontal(AimModPalette.Canvas, AimModPalette.Canvas.Opacity(0.48f)),
-            },
-            new Box
-            {
-                Anchor = Anchor.TopRight,
-                Origin = Anchor.TopRight,
-                RelativeSizeAxes = Axes.Y,
-                Width = 210,
-                X = 55,
-                Shear = new(-0.18f, 0),
-                Colour = AimModPalette.Pink,
-                Alpha = 0.13f,
-            },
-            new FillFlowContainer
-            {
-                AutoSizeAxes = Axes.Both,
-                Anchor = Anchor.CentreLeft,
-                Origin = Anchor.CentreLeft,
-                Margin = new MarginPadding { Left = 20 },
-                Direction = FillDirection.Vertical,
-                Spacing = new(AimModVisualStyle.RelatedSpacing),
+                Masking = true,
+                CornerRadius = AimModVisualStyle.CardRadius,
                 Children = new Drawable[]
                 {
-                    title,
+                    new Box
+                    {
+                        RelativeSizeAxes = Axes.Both,
+                        Colour = ColourInfo.GradientHorizontal(AimModPalette.Panel, AimModPalette.CyanDark),
+                    },
+                    artwork,
+                    new Box
+                    {
+                        RelativeSizeAxes = Axes.Both,
+                        Colour = ColourInfo.GradientHorizontal(AimModPalette.Canvas, AimModPalette.Canvas.Opacity(0.48f)),
+                    },
+                    new Box
+                    {
+                        Anchor = Anchor.TopRight,
+                        Origin = Anchor.TopRight,
+                        RelativeSizeAxes = Axes.Y,
+                        Width = 210,
+                        X = 55,
+                        Shear = new(-0.18f, 0),
+                        Colour = AimModPalette.Pink,
+                        Alpha = 0.13f,
+                    },
                     new FillFlowContainer
                     {
                         AutoSizeAxes = Axes.Both,
-                        Direction = FillDirection.Horizontal,
-                        Spacing = new(20),
+                        Anchor = Anchor.CentreLeft,
+                        Origin = Anchor.CentreLeft,
+                        Margin = new MarginPadding { Left = 20 },
+                        Direction = FillDirection.Vertical,
+                        Spacing = new(AimModVisualStyle.RelatedSpacing),
                         Children = new Drawable[]
                         {
-                            headerMetric(FontAwesome.Regular.PlayCircle, plays),
-                            headerMetric(FontAwesome.Regular.Clock, duration),
-                            headerMetric(FontAwesome.Solid.Bullseye, label("Median accuracy", 11, AimModPalette.Muted), accuracy),
-                            headerMetric(FontAwesome.Solid.ChartLine, label("Trend", 11, AimModPalette.Muted), trend),
+                            title,
+                            new FillFlowContainer
+                            {
+                                AutoSizeAxes = Axes.Both,
+                                Direction = FillDirection.Horizontal,
+                                Spacing = new(20),
+                                Children = new Drawable[]
+                                {
+                                    headerMetric(FontAwesome.Regular.PlayCircle, plays),
+                                    headerMetric(FontAwesome.Regular.Clock, duration),
+                                    headerMetric(FontAwesome.Solid.Bullseye, label("Median accuracy", 11, AimModPalette.Muted), accuracy),
+                                    headerMetric(FontAwesome.Solid.ChartLine, label("Trend", 11, AimModPalette.Muted), trend),
+                                },
+                            },
                         },
+                    },
+                },
+            },
+            new FillFlowContainer
+            {
+                Anchor = Anchor.CentreRight,
+                Origin = Anchor.CentreRight,
+                AutoSizeAxes = Axes.Y,
+                Width = 156,
+                Margin = new MarginPadding { Right = 18 },
+                Direction = FillDirection.Vertical,
+                Spacing = new(3),
+                Depth = -20,
+                Children = new Drawable[]
+                {
+                    label("PROFILE PERIOD", 8, AimModPalette.Cyan, "Bold"),
+                    new TimeRangeDropdown
+                    {
+                        RelativeSizeAxes = Axes.X,
+                        Items = Enum.GetValues<CoachingTimeRange>(),
+                        Current = timeRange,
                     },
                 },
             },
@@ -930,6 +978,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
 
     private static Container createPerformancePanel(
         out CoachingTrendChart chart,
+        out SectionLine profileSection,
         out FillFlowContainer<Drawable> selectedHost,
         out FillFlowContainer<Drawable> analysisHost)
     {
@@ -942,7 +991,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             Spacing = new(AimModVisualStyle.RelatedSpacing),
         };
         panel.Child = body;
-        body.Add(sectionLine("Global skill profile", "All analysed maps"));
+        body.Add(profileSection = new SectionLine("Global skill profile", "Last 30 days"));
         body.Add(selectedHost = new FillFlowContainer<Drawable>
         {
             RelativeSizeAxes = Axes.X,
@@ -1439,14 +1488,17 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                 FontAwesome.Solid.CircleNotch);
         }
 
-        public void ShowReady(GlobalCoachingProfile profile, int merged, int submitted, int total)
+        public void ShowReady(GlobalCoachingProfile profile, int merged, int submitted, string period)
         {
             if (merged == 0)
             {
+                bool allTime = string.Equals(period, "All time", StringComparison.Ordinal);
                 set(
                     "NO PLAY HISTORY",
-                    "No osu!standard plays found",
-                    "Play a map or connect an osu! account to begin coaching.",
+                    allTime ? "No osu!standard plays found" : $"No osu!standard plays in the {period.ToLowerInvariant()}",
+                    allTime
+                        ? "Play a map or connect an osu! account to begin coaching."
+                        : "Choose a longer profile period or complete a new play.",
                     0,
                     AimModPalette.Pink,
                     FontAwesome.Solid.ExclamationCircle);
@@ -1460,8 +1512,8 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                     ? $"{cached:N0} replays analysed across {profile.Coverage.AnalysedMapCount:N0} maps"
                     : $"{merged:N0} plays loaded for coaching",
                 cached > 0
-                    ? $"{ConfidenceLabel(profile.Coverage.Confidence)} confidence  //  {ProfileCoverageValue(profile)} replay coverage"
-                    : $"{profile.Coverage.ReplayAvailableRunCount:N0} saved replays  //  {submitted:N0} submitted scores  //  {total:N0} records",
+                    ? $"{ConfidenceLabel(profile.Coverage.Confidence)} confidence  //  {ProfileCoverageValue(profile)} replay coverage  //  {period}"
+                    : $"{profile.Coverage.ReplayAvailableRunCount:N0} saved replays  //  {submitted:N0} submitted scores  //  {period}",
                 cached > 0 ? 1 : 0,
                 cached > 0 ? AimModPalette.Success : AimModPalette.Yellow,
                 cached > 0 ? FontAwesome.Solid.CheckCircle : FontAwesome.Solid.Clock);
@@ -1779,6 +1831,20 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
 
         protected override LocalisableString GenerateItemText(T item) => formatter(item);
     }
+
+    private sealed partial class TimeRangeDropdown : OsuDropdown<CoachingTimeRange>
+    {
+        protected override LocalisableString GenerateItemText(CoachingTimeRange item) => TimeRangeLabel(item);
+    }
+
+    internal static string TimeRangeLabel(CoachingTimeRange item) => item switch
+    {
+        CoachingTimeRange.Days7 => "Last 7 days",
+        CoachingTimeRange.Days30 => "Last 30 days",
+        CoachingTimeRange.Days90 => "Last 90 days",
+        CoachingTimeRange.Year => "Last year",
+        _ => "All time",
+    };
 
     private static string formatPpSuffix(double? pp) =>
         pp is { } value && double.IsFinite(value) && value > 0 ? $"  //  {value:0.0}pp" : string.Empty;

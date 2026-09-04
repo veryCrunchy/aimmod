@@ -92,9 +92,11 @@ public sealed class GlobalCoachingProfileTests
             [first.ScoreId] = analysis(new[] { hit(0, 0, 0) }),
         };
 
-        NativeCoachingWorkspaceModel partial = NativeCoachingWorkspaceModel.Build(new[] { first, second }, analyses);
+        NativeCoachingWorkspaceModel partial = NativeCoachingWorkspaceModel.Build(
+            new[] { first, second }, analyses, timeRange: CoachingTimeRange.All);
         analyses[second.ScoreId] = analysis(new[] { hit(2, 0, 0) });
-        NativeCoachingWorkspaceModel updated = NativeCoachingWorkspaceModel.Build(new[] { first, second }, analyses);
+        NativeCoachingWorkspaceModel updated = NativeCoachingWorkspaceModel.Build(
+            new[] { first, second }, analyses, timeRange: CoachingTimeRange.All);
 
         Assert.Multiple(() =>
         {
