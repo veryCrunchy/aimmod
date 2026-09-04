@@ -29,6 +29,8 @@ public sealed record NativeCoachingWorkspaceModel(
     GlobalCoachingSummary Global,
     CoachingReport Report)
 {
+    public GlobalCoachingProfile GlobalProfile { get; init; } = GlobalCoachingProfile.Empty;
+
     public const int MaximumTrendRuns = 30;
 
     public static NativeCoachingWorkspaceModel Build(
@@ -59,7 +61,10 @@ public sealed record NativeCoachingWorkspaceModel(
             ? CoachingReportBuilder.BuildGlobal(history, analyses)
             : CoachingReportBuilder.Build(history, analyses, selected.ScoreId);
 
-        return new NativeCoachingWorkspaceModel(history, trendRuns, sessionRuns, selected, session, global, report);
+        return new NativeCoachingWorkspaceModel(history, trendRuns, sessionRuns, selected, session, global, report)
+        {
+            GlobalProfile = GlobalCoachingProfileBuilder.Build(history, analyses),
+        };
     }
 
     private static GlobalCoachingSummary summariseGlobal(

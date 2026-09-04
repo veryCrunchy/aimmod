@@ -24,7 +24,6 @@ public partial class NativeReplayRouteView : Container
 {
     private const float browser_width = 280;
     private const float inspector_width = 270;
-    private const int replay_limit = 80;
 
     public OsuScreenStack ScreenStack { get; } = new() { RelativeSizeAxes = Axes.Both };
 
@@ -61,6 +60,8 @@ public partial class NativeReplayRouteView : Container
     private LocalReplay? selectedReplay;
     private CancellationTokenSource? loading;
     private CancellationTokenSource? mapPatternLoading;
+    private ReplayBrowserSnapshot replayBrowser = ReplayBrowserSnapshot.Empty;
+    private readonly HashSet<string> expandedReplayMaps = new(StringComparer.Ordinal);
     private long analysisRevision;
     private double playbackSpeed = 1;
     private bool analysisInProgress;
@@ -312,6 +313,7 @@ public partial class NativeReplayRouteView : Container
     public void SetReplaySummary(LocalReplay replay)
     {
         selectedReplay = replay;
+        expandedReplayMaps.Add(ReplayBrowserModel.MapKeyFor(replay));
         analysisRevision = -1;
         analysisInProgress = false;
         analysisHasResult = false;
@@ -492,12 +494,11 @@ public partial class NativeReplayRouteView : Container
         try
         {
             ILocalLibrarySource availableSource = source ?? throw new InvalidOperationException("The local replay library is not available.");
-            LocalLibraryPage<LocalReplay> page = await availableSource.SearchReplaysAsync(new LocalLibraryQuery(
-                SearchText: search,
-                RulesetShortName: "osu",
-                Sort: LocalLibrarySort.RecentlyPlayed,
-                Limit: replay_limit), cancellationToken).ConfigureAwait(false);
-            if (!IsDisposed)
+            ReplayBrowserSnapshot page = await ReplayBrowserModel.LoadAsync(
+                availableSource,
+                search,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+            if (!IsDisposed && !cancellationToken.IsCancellationRequested)
                 Schedule(() => applyReplayBrowser(page));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -515,24 +516,47 @@ public partial class NativeReplayRouteView : Container
         }
     }
 
-    private void applyReplayBrowser(LocalLibraryPage<LocalReplay> page)
+    private void applyReplayBrowser(ReplayBrowserSnapshot snapshot)
     {
-        replayCount.Text = page.Total > page.Items.Count
-            ? $"Newest {page.Items.Count:N0} of {page.Total:N0} runs"
-            : $"{page.Total:N0} local runs";
+        replayBrowser = snapshot;
+        if (selectedReplay is not null)
+            expandedReplayMaps.Add(ReplayBrowserModel.MapKeyFor(selectedReplay));
+
+        renderReplayBrowser();
+        if (!analysisInProgress)
+            loadingOverlay.HideLoading();
+    }
+
+    private void renderReplayBrowser()
+    {
+        int shownMaps = replayBrowser.Maps.Count;
+        string shownMapLabel = shownMaps == 1 ? "map" : "maps";
+        replayCount.Text = replayBrowser.TotalMapCount > shownMaps
+            ? $"Newest {shownMaps:N0} {shownMapLabel} of {replayBrowser.TotalMapCount:N0}  //  {replayBrowser.TotalReplayCount:N0} runs"
+            : $"{shownMaps:N0} {shownMapLabel}  //  {replayBrowser.TotalReplayCount:N0} runs";
         replayList.Clear();
 
-        foreach (IGrouping<(string Title, string Artist), LocalReplay> group in page.Items.GroupBy(run => (run.Title, run.Artist)))
+        foreach (ReplayBrowserMapGroup group in replayBrowser.Maps)
         {
-            replayList.Add(new ReplayGroupHeader(group.Key.Title, group.Key.Artist, group.Count()));
-            foreach (LocalReplay replay in group.Take(12))
+            bool expanded = expandedReplayMaps.Contains(group.Key);
+            replayList.Add(new ReplayGroupHeader(group, expanded, () => toggleReplayMap(group.Key)));
+            if (!expanded)
+                continue;
+
+            foreach (LocalReplay replay in group.Attempts)
                 replayList.Add(new ReplayBrowserRow(replay, replay.ScoreId == selectedReplay?.ScoreId, () => openReplay?.Invoke(replay)));
         }
 
-        if (page.Items.Count == 0)
+        if (replayBrowser.Maps.Count == 0)
             replayList.Add(makeText("No local replays match this search.", 13, AimModPalette.Muted));
-        if (!analysisInProgress)
-            loadingOverlay.HideLoading();
+    }
+
+    private void toggleReplayMap(string key)
+    {
+        if (!expandedReplayMaps.Add(key))
+            expandedReplayMaps.Remove(key);
+
+        renderReplayBrowser();
     }
 
     private void showMomentButtons(ReplayAnalysisResult result)
@@ -827,16 +851,46 @@ public partial class NativeReplayRouteView : Container
         return drawable;
     }
 
-    private partial class ReplayGroupHeader : CompositeDrawable
+    private partial class ReplayGroupHeader : ClickableContainer
     {
-        public ReplayGroupHeader(string title, string artist, int count)
+        public ReplayGroupHeader(ReplayBrowserMapGroup group, bool expanded, Action action)
         {
             RelativeSizeAxes = Axes.X;
-            Height = 48;
-            InternalChildren = new Drawable[]
+            Height = 62;
+            Action = action;
+            Masking = true;
+            CornerRadius = 6;
+            BorderThickness = 1;
+            BorderColour = AimModPalette.Border;
+            Children = new Drawable[]
             {
-                place(makeText(title, 13, AimModPalette.Text, "Bold"), y: 7),
-                place(makeText($"{artist}  //  {count:N0} {(count == 1 ? "run" : "runs")}", 10, AimModPalette.Muted), y: 27),
+                new Box { RelativeSizeAxes = Axes.Both, Colour = expanded ? AimModPalette.PanelRaised : AimModPalette.Panel },
+                new TruncatingSpriteText
+                {
+                    Text = group.Title,
+                    Position = new(10, 8),
+                    Font = new FontUsage(size: 13, weight: "Bold"),
+                    Colour = AimModPalette.Text,
+                    MaxWidth = 218,
+                },
+                new TruncatingSpriteText
+                {
+                    Text = group.Difficulty,
+                    Position = new(10, 29),
+                    Font = new FontUsage(size: 10, weight: "SemiBold"),
+                    Colour = AimModPalette.Cyan,
+                    MaxWidth = 218,
+                },
+                place(makeText($"{group.Artist}  //  {group.Attempts.Count:N0} {(group.Attempts.Count == 1 ? "run" : "runs")}", 9, AimModPalette.Muted), 10, 45),
+                new SpriteIcon
+                {
+                    Anchor = Anchor.CentreRight,
+                    Origin = Anchor.CentreRight,
+                    Position = new(-10, 0),
+                    Size = new(11),
+                    Icon = expanded ? FontAwesome.Solid.ChevronUp : FontAwesome.Solid.ChevronDown,
+                    Colour = AimModPalette.Muted,
+                },
             };
         }
     }

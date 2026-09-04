@@ -102,6 +102,8 @@ public sealed class NativeCoachingWorkspaceTests
             Assert.That(model.Global.MedianAccuracy, Is.EqualTo(0.95).Within(0.0001));
             Assert.That(model.Report.Intelligence.History.RunCount, Is.EqualTo(3));
             Assert.That(model.Report.Intelligence.Mechanics.ExactAnalysisRunCount, Is.EqualTo(1));
+            Assert.That(model.GlobalProfile.Coverage.AnalysedRunCount, Is.EqualTo(1));
+            Assert.That(model.GlobalProfile.Coverage.HistoryRunCount, Is.EqualTo(3));
         });
     }
 
@@ -121,6 +123,7 @@ public sealed class NativeCoachingWorkspaceTests
             Assert.That(model.Global.RunCount, Is.Zero);
             Assert.That(model.Global.MedianAccuracy, Is.Null);
             Assert.That(model.Report.Intelligence.Recommendations, Is.Empty);
+            Assert.That(model.GlobalProfile, Is.EqualTo(GlobalCoachingProfile.Empty));
         });
     }
 
@@ -153,6 +156,29 @@ public sealed class NativeCoachingWorkspaceTests
         {
             Assert.That(mechanics.MissReasonCounts, Is.Null);
             Assert.That(mechanics.DominantMissReason, Is.Null);
+        });
+    }
+
+    [Test]
+    public void GlobalProfilePresentationShowsCoverageAndLeadingEvidence()
+    {
+        var profile = GlobalCoachingProfile.Empty with
+        {
+            Coverage = new GlobalCoachingCoverage(10, 8, 4, 7, 3, 500, CoachingConfidence.Low),
+            MissReasons = new[]
+            {
+                new GlobalMissReasonShare(ReplayMissReason.Overshoot, 6, 0.6, 3, 2),
+                new GlobalMissReasonShare(ReplayMissReason.EarlyClick, 4, 0.4, 2, 2),
+            },
+            TimingTendency = "Late bias",
+            AimTendency = "overshoots",
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(NativeCoachingWorkspace.ProfileCoverageValue(profile), Is.EqualTo("50%"));
+            Assert.That(NativeCoachingWorkspace.ProfileEvidenceSummary(profile), Is.EqualTo("overshoots 60%  /  early clicks 40%"));
+            Assert.That(NativeCoachingWorkspace.ProfileTendencySummary(profile), Is.EqualTo("Timing: Late bias  /  Aim: overshoots"));
         });
     }
 

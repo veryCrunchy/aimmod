@@ -21,10 +21,12 @@ using AimMod.Osu.Runtime;
 using AimMod.Osu.Runtime.Contracts;
 using AimMod.Desktop.LocalLibrary;
 using AimMod.Desktop.Discovery;
+using System.Diagnostics;
 using AimMod.Desktop.Coaching;
 using AimMod.Desktop.Visuals;
 using AimMod.Desktop.Skins;
 using AimMod.Desktop.PpTargets;
+using AimMod.Desktop.Practice;
 using AimMod.Desktop.ScoreHistory;
 using osu.Game.Graphics.Sprites;
 
@@ -49,7 +51,7 @@ public partial class AimModGame : OsuGameBase
     private NativeReplayRouteView? replayRoute;
     private NativeStatisticsWorkspace? statisticsScreen;
     private CancellationTokenSource? replayAnalysisLifetime;
-    private CancellationTokenSource? coachingAnalysisLifetime;
+    private CancellationTokenSource? replayLibraryAnalysisLifetime;
     private NativeCoachingWorkspace? coachingWorkspace;
     private NativePpTargetsWorkspace? ppTargetsWorkspace;
     private readonly CancellationTokenSource appLifetime = new();
@@ -202,7 +204,7 @@ public partial class AimModGame : OsuGameBase
                     switchableLocalLibrary.SwitchTo(externalLibrary);
                     externalReplayOpenService = new ExternalLazerReplayOpenService(root.CanonicalPath);
                     replayAnalysisBatchService = new ReplayAnalysisBatchService(externalReplayOpenService);
-                    startCoachingAnalysis();
+                    startReplayLibraryAnalysis();
                 });
             }
 
@@ -368,6 +370,7 @@ public partial class AimModGame : OsuGameBase
             RelativeSizeAxes = Axes.Both,
         };
         switchWorkspaceRoute(NativeRoute.Replays, new MarginPadding { Top = 70, Horizontal = 12, Bottom = 12 }, replayRoute);
+        startReplayLibraryAnalysis();
     }
 
     private void showSkins()
@@ -459,12 +462,98 @@ public partial class AimModGame : OsuGameBase
             localLibrary,
             replayAnalyses,
             prepareCatalogReplay,
-            () => accountScoreHistoryService)
+            () => accountScoreHistoryService,
+            createPracticeMap,
+            openPracticeFolder)
         {
             RelativeSizeAxes = Axes.Both,
         };
         switchWorkspaceRoute(NativeRoute.Coaching, new MarginPadding { Top = 88, Horizontal = 52, Bottom = 0 }, coachingWorkspace);
-        startCoachingAnalysis();
+        startReplayLibraryAnalysis();
+    }
+
+    private async Task<PracticeMapGenerationResult> createPracticeMap(
+        PracticeMapGenerationRequest request,
+        CancellationToken cancellationToken)
+    {
+        ExternalLazerReplayOpenService? replayService = externalReplayOpenService;
+        if (replayService is null)
+            return new PracticeMapGenerationResult(false, "Connect osu!lazer before creating a practice map.");
+
+        try
+        {
+            await using ExternalLazerPlayableReplayBundle bundle = await replayService.OpenAsync(
+                request.Candidate.SourceReplay,
+                cancellationToken).ConfigureAwait(false);
+            PracticeSourceBeatmap source = OsuPracticeBeatmapReader.Read(bundle.BeatmapPath);
+            ReplayAnalysisResult[] evidence = request.Candidate.AnalysisScoreIds
+                .Select(scoreId => replayAnalyses.GetValueOrDefault(scoreId))
+                .Where(analysis => analysis?.Judgements is not null)
+                .Cast<ReplayAnalysisResult>()
+                .ToArray();
+            IReadOnlyList<PracticeMapPlan> plans = PracticeMapPlanner.CreatePlans(
+                source,
+                evidence,
+                new PracticeMapOptions(request.DrillType, MaximumSections: 1));
+            if (plans.Count == 0)
+            {
+                string pattern = request.DrillType switch
+                {
+                    PracticeDrillType.LongJumps => "long-jump",
+                    PracticeDrillType.Streams => "stream",
+                    _ => "mixed-pattern",
+                };
+                return new PracticeMapGenerationResult(false, $"No evidence-backed {pattern} section was found on this difficulty.");
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            string folderName = $"{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}";
+            string root = Storage.GetFullPath($"practice-maps/{folderName}", true);
+            string files = Path.Combine(root, "map");
+            Directory.CreateDirectory(files);
+            var exporter = new PracticeMapExporter();
+            PracticeMapExportResult export = await exporter.ExportAsync(
+                source,
+                plans[0],
+                files,
+                new WindowsFfmpegAudioSlicer(),
+                cancellationToken).ConfigureAwait(false);
+            string archive = PracticeMapPackageService.Create(export, Path.Combine(root, "AimMod practice.osz"));
+            cancellationToken.ThrowIfCancellationRequested();
+            Live<BeatmapSetInfo>? imported = await BeatmapManager.Import(new PreservedBeatmapImportTask(archive), cancellationToken: cancellationToken)
+                                                                 .ConfigureAwait(false);
+            if (imported is null)
+                return new PracticeMapGenerationResult(false, "The drill was exported, but AimMod could not add it to the beatmap library.", root);
+
+            localLibrary.Invalidate();
+            return new PracticeMapGenerationResult(true, $"{plans[0].OutputVersion} was added to your AimMod beatmaps.", root);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (FileNotFoundException error) when (error.Message.Contains("FFmpeg", StringComparison.OrdinalIgnoreCase))
+        {
+            return new PracticeMapGenerationResult(false, "FFmpeg could not be found. Restart AimMod after confirming the installation.");
+        }
+        catch (TimeoutException)
+        {
+            return new PracticeMapGenerationResult(false, "Audio preparation took too long. Try another section.");
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or InvalidOperationException)
+        {
+            logFailure("create practice map", error);
+            return new PracticeMapGenerationResult(false, "The practice map could not be created from this source section.");
+        }
+    }
+
+    private static void openPracticeFolder(string path)
+    {
+        if (!OperatingSystem.IsWindows() || !Directory.Exists(path))
+            return;
+        var startInfo = new ProcessStartInfo("explorer.exe") { UseShellExecute = false };
+        startInfo.ArgumentList.Add(Path.GetFullPath(path));
+        Process.Start(startInfo);
     }
 
     private void showPpTargets()
@@ -491,8 +580,13 @@ public partial class AimModGame : OsuGameBase
             && existingHost.IsPresent)
             return;
 
-        if (currentRoute.Value == NativeRoute.Replays && route != NativeRoute.Replays)
+        NativeRoute previousRoute = currentRoute.Value;
+        if (previousRoute == NativeRoute.Replays && route != NativeRoute.Replays)
+        {
             replayRoute?.SuspendPlayback();
+        }
+        if (isReplayAnalysisRoute(previousRoute) && !isReplayAnalysisRoute(route))
+            stopReplayLibraryAnalysis();
 
         foreach (Container host in workspaceHosts.Values)
             host.Hide();
@@ -512,72 +606,8 @@ public partial class AimModGame : OsuGameBase
 
         currentRoute.Value = route;
         existingHost.Show();
-    }
-
-    private void startCoachingAnalysis()
-    {
-        if (currentRoute.Value != NativeRoute.Coaching || coachingWorkspace is null || replayAnalysisBatchService is null)
-            return;
-
-        coachingAnalysisLifetime?.Cancel();
-        coachingAnalysisLifetime?.Dispose();
-        coachingAnalysisLifetime = CancellationTokenSource.CreateLinkedTokenSource(appLifetime.Token);
-        coachingWorkspace.BeginAnalysisProgress();
-        _ = analyseRecentCoachingReplays(coachingWorkspace, replayAnalysisBatchService, coachingAnalysisLifetime.Token);
-    }
-
-    private async Task analyseRecentCoachingReplays(
-        NativeCoachingWorkspace target,
-        ReplayAnalysisBatchService service,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            LocalLibraryPage<LocalReplay> page = await localLibrary.SearchReplaysAsync(new LocalLibraryQuery(
-                RulesetShortName: "osu",
-                Sort: LocalLibrarySort.RecentlyPlayed,
-                Limit: 20), cancellationToken).ConfigureAwait(false);
-            var progress = new Progress<ReplayAnalysisBatchProgress>(value =>
-            {
-                if (!IsDisposed)
-                    Schedule(() => target.SetAnalysisProgress(value.Completed, value.Total, value.CurrentTitle));
-            });
-            ReplayAnalysisBatchResult result = await service.AnalyseRecentAsync(
-                page.Items,
-                replayAnalyses.Keys.Concat(replayAnalysisFailures).ToArray(),
-                limit: ReplayAnalysisBatchService.MaximumBatchSize,
-                progress,
-                cancellationToken).ConfigureAwait(false);
-
-            if (!IsDisposed)
-            {
-                Schedule(() =>
-                {
-                    foreach ((Guid scoreId, ReplayAnalysisResult analysis) in result.Completed)
-                    {
-                        replayAnalyses[scoreId] = analysis;
-                        replayAnalysisFailures.Remove(scoreId);
-                    }
-
-                    foreach (Guid scoreId in result.Failed)
-                        replayAnalysisFailures.Add(scoreId);
-
-                    if (result.Completed.Count > 0)
-                        _ = persistReplayAnalyses();
-
-                    target.ApplyNewAnalyses(result.Completed.Count, result.Failed.Count);
-                });
-            }
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-        }
-        catch (Exception error)
-        {
-            logFailure("analyse recent coaching replays", error);
-            if (!IsDisposed)
-                Schedule(() => target.SetAnalysisError());
-        }
+        if (isReplayAnalysisRoute(route))
+            startReplayLibraryAnalysis();
     }
 
     private void showLaunchError(string message)
@@ -590,7 +620,19 @@ public partial class AimModGame : OsuGameBase
     private void openReplay(ReplayOpenRequest request)
     {
         CancellationToken cancellationToken = beginReplayRoute(null);
-        _ = loadReplay(request, cancellationToken, null, null);
+        _ = openReplayAsync(request, cancellationToken);
+    }
+
+    private async Task openReplayAsync(ReplayOpenRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await loadReplay(request, cancellationToken, null, null).ConfigureAwait(false);
+        }
+        finally
+        {
+            finishReplaySelection(cancellationToken);
+        }
     }
 
     private void prepareCatalogReplay(LocalReplay replay)
@@ -650,6 +692,7 @@ public partial class AimModGame : OsuGameBase
         {
             if (bundle is not null)
                 await bundle.DisposeAsync().ConfigureAwait(false);
+            finishReplaySelection(cancellationToken);
         }
     }
 
@@ -829,6 +872,8 @@ public partial class AimModGame : OsuGameBase
 
     private void cancelReplayWork()
     {
+        stopReplayLibraryAnalysis();
+
         CancellationTokenSource? work = replayAnalysisLifetime;
         replayAnalysisLifetime = null;
         work?.Cancel();
@@ -836,11 +881,142 @@ public partial class AimModGame : OsuGameBase
         replayRoute?.SuspendPlayback();
         activeReplayScoreId = null;
 
-        CancellationTokenSource? coachingWork = coachingAnalysisLifetime;
-        coachingAnalysisLifetime = null;
-        coachingWork?.Cancel();
-        coachingWork?.Dispose();
     }
+
+    private void startReplayLibraryAnalysis()
+    {
+        if (!isReplayAnalysisRoute(currentRoute.Value)
+            || activeReplayScoreId is not null
+            || replayAnalysisLifetime is not null
+            || replayAnalysisBatchService is null
+            || replayLibraryAnalysisLifetime is not null)
+            return;
+
+        replayLibraryAnalysisLifetime = CancellationTokenSource.CreateLinkedTokenSource(appLifetime.Token);
+        Guid[] processedScoreIds = replayAnalyses.Keys.Concat(replayAnalysisFailures).ToArray();
+        _ = analyseReplayLibrary(replayAnalysisBatchService, processedScoreIds, replayLibraryAnalysisLifetime.Token);
+    }
+
+    private void stopReplayLibraryAnalysis()
+    {
+        CancellationTokenSource? work = replayLibraryAnalysisLifetime;
+        replayLibraryAnalysisLifetime = null;
+        work?.Cancel();
+        work?.Dispose();
+    }
+
+    private void finishReplaySelection(CancellationToken cancellationToken)
+    {
+        if (IsDisposed)
+            return;
+
+        Schedule(() =>
+        {
+            CancellationTokenSource? work = replayAnalysisLifetime;
+            if (work is null || work.Token != cancellationToken)
+                return;
+
+            replayAnalysisLifetime = null;
+            activeReplayScoreId = null;
+            work.Dispose();
+            startReplayLibraryAnalysis();
+        });
+    }
+
+    private async Task analyseReplayLibrary(
+        ReplayAnalysisBatchService service,
+        IEnumerable<Guid> processedScoreIds,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            LocalReplay[] library = await loadReplayAnalysisWorkingSet(cancellationToken).ConfigureAwait(false);
+            var processed = processedScoreIds.ToHashSet();
+
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                ReplayAnalysisBatchResult result = await service.AnalyseBreadthFirstAsync(
+                    library,
+                    processed,
+                    ReplayAnalysisBatchService.MaximumBatchSize,
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+                if (result.Completed.Count == 0 && result.Failed.Count == 0)
+                    break;
+
+                foreach (Guid scoreId in result.Completed.Keys)
+                    processed.Add(scoreId);
+                foreach (Guid scoreId in result.Failed)
+                    processed.Add(scoreId);
+
+                await applyReplayAnalysisBatch(result, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception error)
+        {
+            logFailure("analyse replay library", error);
+            if (!IsDisposed)
+                Schedule(() => coachingWorkspace?.SetAnalysisError());
+        }
+    }
+
+    private async Task<LocalReplay[]> loadReplayAnalysisWorkingSet(CancellationToken cancellationToken)
+    {
+        const int page_size = 200;
+        var replays = new List<LocalReplay>();
+        int offset = 0;
+
+        while (true)
+        {
+            LocalLibraryPage<LocalReplay> page = await localLibrary.SearchReplaysAsync(new LocalLibraryQuery(
+                RulesetShortName: "osu",
+                Sort: LocalLibrarySort.RecentlyPlayed,
+                Offset: offset,
+                Limit: page_size), cancellationToken).ConfigureAwait(false);
+            replays.AddRange(page.Items);
+            if (!page.HasMore || page.Items.Count == 0)
+                break;
+            offset += page.Items.Count;
+        }
+
+        return ReplayAnalysisBatchService.OrderBreadthFirst(replays)
+                                         .Take(ReplayAnalysisCache.MaximumEntries)
+                                         .ToArray();
+    }
+
+    private async Task applyReplayAnalysisBatch(ReplayAnalysisBatchResult result, CancellationToken cancellationToken)
+    {
+        var applied = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Schedule(() =>
+        {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                applied.TrySetCanceled(cancellationToken);
+                return;
+            }
+
+            foreach ((Guid scoreId, ReplayAnalysisResult analysis) in result.Completed)
+            {
+                replayAnalyses[scoreId] = analysis;
+                replayAnalysisFailures.Remove(scoreId);
+            }
+            foreach (Guid scoreId in result.Failed)
+                replayAnalysisFailures.Add(scoreId);
+
+            replayRoute?.RefreshMapPattern();
+            coachingWorkspace?.ApplyNewAnalyses(result.Completed.Count, result.Failed.Count);
+            applied.TrySetResult();
+        });
+        await applied.Task.ConfigureAwait(false);
+
+        if (result.Completed.Count > 0)
+            await persistReplayAnalyses().ConfigureAwait(false);
+    }
+
+    private static bool isReplayAnalysisRoute(NativeRoute route) =>
+        route is NativeRoute.Replays or NativeRoute.Coaching;
 
     private async Task analyseMatchingMapReplays(LocalReplay selected, CancellationToken cancellationToken)
     {

@@ -35,8 +35,27 @@ public sealed class ReplayAnalysisBatchService
         int limit,
         IProgress<ReplayAnalysisBatchProgress>? progress = null,
         CancellationToken cancellationToken = default)
+        => await analyseAsync(
+            SelectPending(replays, completedScoreIds, limit),
+            progress,
+            cancellationToken).ConfigureAwait(false);
+
+    public async Task<ReplayAnalysisBatchResult> AnalyseBreadthFirstAsync(
+        IEnumerable<LocalReplay> replays,
+        IEnumerable<Guid> completedScoreIds,
+        int limit,
+        IProgress<ReplayAnalysisBatchProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+        => await analyseAsync(
+            SelectPendingBreadthFirst(replays, completedScoreIds, limit),
+            progress,
+            cancellationToken).ConfigureAwait(false);
+
+    private async Task<ReplayAnalysisBatchResult> analyseAsync(
+        LocalReplay[] pending,
+        IProgress<ReplayAnalysisBatchProgress>? progress,
+        CancellationToken cancellationToken)
     {
-        LocalReplay[] pending = SelectPending(replays, completedScoreIds, limit);
         if (pending.Length == 0)
             return new ReplayAnalysisBatchResult(new Dictionary<Guid, ReplayAnalysisResult>(), Array.Empty<Guid>());
 
@@ -78,6 +97,50 @@ public sealed class ReplayAnalysisBatchService
         return new ReplayAnalysisBatchResult(completed, failed);
     }
 
+    internal static LocalReplay[] OrderBreadthFirst(IEnumerable<LocalReplay> replays)
+    {
+        ArgumentNullException.ThrowIfNull(replays);
+
+        LocalReplay[][] groups = replays.Where(replay => replay.HasReplayFile)
+                                        .GroupBy(exactMapKey)
+                                        .Select(group => group.OrderByDescending(replay => replay.PlayedAt).ToArray())
+                                        .OrderByDescending(group => group[0].PlayedAt)
+                                        .ToArray();
+        if (groups.Length == 0)
+            return Array.Empty<LocalReplay>();
+
+        int maximumAttempts = groups.Max(group => group.Length);
+        var ordered = new List<LocalReplay>(groups.Sum(group => group.Length));
+        for (int attempt = 0; attempt < maximumAttempts; attempt++)
+        {
+            foreach (LocalReplay[] group in groups)
+            {
+                if (attempt < group.Length)
+                    ordered.Add(group[attempt]);
+            }
+        }
+
+        return ordered.ToArray();
+    }
+
+    internal static LocalReplay[] SelectPendingBreadthFirst(
+        IEnumerable<LocalReplay> replays,
+        IEnumerable<Guid> completedScoreIds,
+        int limit)
+    {
+        ArgumentNullException.ThrowIfNull(replays);
+        ArgumentNullException.ThrowIfNull(completedScoreIds);
+
+        int boundedLimit = Math.Clamp(limit, 0, MaximumBatchSize);
+        if (boundedLimit == 0)
+            return Array.Empty<LocalReplay>();
+
+        var completed = completedScoreIds.ToHashSet();
+        return OrderBreadthFirst(replays).Where(replay => !completed.Contains(replay.ScoreId))
+                                         .Take(boundedLimit)
+                                         .ToArray();
+    }
+
     internal static LocalReplay[] SelectPending(
         IEnumerable<LocalReplay> replays,
         IEnumerable<Guid> completedScoreIds,
@@ -115,5 +178,15 @@ public sealed class ReplayAnalysisBatchService
             _ => "unexpected_error",
         };
         return $"[AimMod] Background replay analysis skipped {replay.ScoreId:D} [{code}] {title}: {error.GetType().Name}";
+    }
+
+    private static string exactMapKey(LocalReplay replay)
+    {
+        if (replay.BeatmapId != Guid.Empty)
+            return $"id:{replay.BeatmapId:D}";
+        if (!string.IsNullOrWhiteSpace(replay.BeatmapHash))
+            return $"hash:{replay.BeatmapHash.Trim().ToUpperInvariant()}";
+
+        return $"fallback:{replay.SetId:D}:{replay.RulesetShortName.Trim().ToUpperInvariant()}:{replay.Difficulty.Trim().ToUpperInvariant()}";
     }
 }
