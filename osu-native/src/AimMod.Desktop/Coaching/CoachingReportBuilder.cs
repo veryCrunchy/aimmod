@@ -8,7 +8,17 @@ public static class CoachingReportBuilder
     public static CoachingReport Build(
         IReadOnlyList<LocalReplay> runs,
         IReadOnlyDictionary<Guid, ReplayAnalysisResult> analyses,
-        Guid? selectedScoreId = null)
+        Guid? selectedScoreId = null) => build(runs, analyses, selectedScoreId, selectLatestByDefault: true);
+
+    public static CoachingReport BuildGlobal(
+        IReadOnlyList<LocalReplay> runs,
+        IReadOnlyDictionary<Guid, ReplayAnalysisResult> analyses) => build(runs, analyses, null, selectLatestByDefault: false);
+
+    private static CoachingReport build(
+        IReadOnlyList<LocalReplay> runs,
+        IReadOnlyDictionary<Guid, ReplayAnalysisResult> analyses,
+        Guid? selectedScoreId,
+        bool selectLatestByDefault)
     {
         ArgumentNullException.ThrowIfNull(runs);
         ArgumentNullException.ThrowIfNull(analyses);
@@ -21,7 +31,7 @@ public static class CoachingReportBuilder
                                   .ToArray();
         LocalReplay? selected = selectedScoreId is { } scoreId
             ? recent.FirstOrDefault(run => run.ScoreId == scoreId)
-            : recent.FirstOrDefault();
+            : selectLatestByDefault ? recent.FirstOrDefault() : null;
 
         CoachingAccuracySummary accuracy = buildAccuracy(recent);
         CoachingMissSummary misses = buildMisses(recent, analyses);

@@ -1,4 +1,5 @@
 using AimMod.Desktop.LocalLibrary;
+using AimMod.Osu.Runtime.Contracts;
 
 namespace AimMod.Desktop.Coaching;
 
@@ -192,7 +193,9 @@ public sealed record CoachingMechanicsProfile(
     double? NinetiethPercentileAbsoluteTimingOffsetMilliseconds,
     double? MedianCursorDistancePlayfieldUnits,
     double? NinetiethPercentileCursorDistancePlayfieldUnits,
-    IReadOnlyList<CoachingMapSegment> MapSegments);
+    IReadOnlyList<CoachingMapSegment> MapSegments,
+    IReadOnlyDictionary<ReplayMissReason, int>? MissReasonCounts = null,
+    ReplayMissReason? DominantMissReason = null);
 
 public sealed record CoachingMapSegment(
     string Key,

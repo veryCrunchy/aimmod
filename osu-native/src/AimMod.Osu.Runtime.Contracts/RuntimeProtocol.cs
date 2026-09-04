@@ -98,7 +98,40 @@ public sealed record ReplayObjectJudgement(
     ReplayPoint? ObjectPosition,
     ReplayPoint? CursorPosition,
     int ComboBefore,
-    int ComboAfter);
+    int ComboAfter,
+    ReplayMissAnalysis? MissAnalysis = null);
+
+public enum ReplayMissReason
+{
+    Unknown,
+    EarlyClick,
+    LateClick,
+    Undershoot,
+    Overshoot,
+    OnTargetNoClick,
+    AimDeviation,
+}
+
+public sealed record ReplayMissAnalysis(
+    ReplayMissReason Reason,
+    double HitRadius,
+    double ClosestDistance,
+    double ClosestTimeOffsetMs,
+    ReplayPoint CursorAtClosest,
+    double? PressTimeOffsetMs,
+    double? DistanceAtPress,
+    ReplayPoint? CursorAtPress,
+    double DistanceAtObjectTime,
+    bool EnteredTargetBeforeObject,
+    bool EnteredTargetAfterObject,
+    bool LeftTargetBeforePress,
+    double RadialVelocityAtObject,
+    int ClassifierVersion = 1,
+    double Confidence = 0,
+    double? FirstTargetEntryOffsetMs = null,
+    double? LastTargetExitOffsetMs = null,
+    double MaximumFrameGapMs = 0,
+    bool KeyHeldAtObject = false);
 
 public sealed record ReplayPoint(float X, float Y);
 

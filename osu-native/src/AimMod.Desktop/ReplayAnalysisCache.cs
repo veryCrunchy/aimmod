@@ -10,9 +10,9 @@ namespace AimMod.Desktop;
 /// </summary>
 public sealed class ReplayAnalysisCache
 {
-    internal const int CurrentVersion = 2;
-    internal const int MaximumEntries = 100;
-    internal const long MaximumFileBytes = 64 * 1024 * 1024;
+    internal const int CurrentVersion = 3;
+    internal const int MaximumEntries = 500;
+    internal const long MaximumFileBytes = 256 * 1024 * 1024;
 
     private static readonly JsonSerializerOptions jsonOptions = new(JsonSerializerDefaults.Web);
 

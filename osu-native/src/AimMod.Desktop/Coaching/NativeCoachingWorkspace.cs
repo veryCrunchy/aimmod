@@ -16,7 +16,7 @@ using osu.Game.Graphics.UserInterface;
 namespace AimMod.Desktop.Coaching;
 
 /// <summary>
-/// A session-first coaching workspace backed by local lazer scores and completed replay analyses.
+/// An account-wide coaching workspace backed by merged score history and completed replay analyses.
 /// </summary>
 public partial class NativeCoachingWorkspace : CompositeDrawable
 {
@@ -101,9 +101,9 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             },
         });
         content.Add(new AimModSectionHeader(
-            "Choose a run",
-            "Search submitted and local osu!standard history. Selecting a run updates every panel above.",
-            "account history"));
+            "Beatmap drill-down",
+            "Search merged account history, inspect one play, then open its saved replay for object-level review.",
+            "global history"));
         content.Add(search = new OsuTextBox
         {
             RelativeSizeAxes = Axes.X,
@@ -152,13 +152,35 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         try
         {
             StatisticsHistoryLoadResult history = await StatisticsHistoryLoader.LoadAsync(source, cancellationToken).ConfigureAwait(false);
-            OnlineAccountScoreHistoryResult? online = accountHistory() is { } service
-                ? await service.FetchAccountAsync(cancellationToken).ConfigureAwait(false)
-                : null;
-            IReadOnlyList<LocalReplay> merged = ScoreHistoryMerger.MergeAsLocalReplays(history.Runs, online?.Scores ?? []);
-            NativeCoachingWorkspaceModel next = NativeCoachingWorkspaceModel.Build(merged, analyses);
+            IReadOnlyList<LocalReplay> local = ScoreHistoryMerger.MergeAsLocalReplays(history.Runs, []);
+            NativeCoachingWorkspaceModel localModel = NativeCoachingWorkspaceModel.Build(local, analyses);
             if (!IsDisposed)
-                Schedule(() => apply(merged, Math.Max(history.TotalAvailableRunCount, merged.Count), next, online));
+                Schedule(() => apply(local, Math.Max(history.TotalAvailableRunCount, local.Count), localModel, null));
+
+            IAccountScoreHistoryService? service = accountHistory();
+            if (service is null)
+                return;
+
+            OnlineAccountScoreHistoryResult online;
+            try
+            {
+                online = await service.FetchAccountAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception error)
+            {
+                if (!IsDisposed)
+                    Schedule(() => status.Text = $"Using local coaching history; submitted scores could not be refreshed. {error.Message}");
+                return;
+            }
+
+            IReadOnlyList<LocalReplay> merged = ScoreHistoryMerger.MergeAsLocalReplays(history.Runs, online.Scores);
+            NativeCoachingWorkspaceModel mergedModel = NativeCoachingWorkspaceModel.Build(merged, analyses);
+            if (!IsDisposed)
+                Schedule(() => apply(merged, Math.Max(history.TotalAvailableRunCount, merged.Count), mergedModel, online));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -193,6 +215,12 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     private void selectRun(Guid scoreId)
     {
         workspace = NativeCoachingWorkspaceModel.Build(replays, analyses, scoreId);
+        updateWorkspace();
+    }
+
+    private void showGlobalOverview()
+    {
+        workspace = NativeCoachingWorkspaceModel.Build(replays, analyses);
         updateWorkspace();
     }
 
@@ -248,8 +276,8 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
 
         updateSessionHeader(model);
         trendChart.SetRuns(model.TrendRuns, selected?.ScoreId, selectRun);
-        updateSelectedRun(selected, report.Intelligence.SelectedRunPrediction);
-        updateExactAnalysis(selected);
+        updateSelectedRun(model, report.Intelligence.SelectedRunPrediction);
+        updateExactAnalysis(selected, report.Intelligence.Mechanics);
         updateChanges(report.Intelligence);
         updateRecommendation(report.Intelligence.Recommendations);
         refreshRunList();
@@ -259,14 +287,23 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     {
         LocalReplay? selected = model.SelectedRun;
         CoachingSessionSummary? session = model.Session;
+        GlobalCoachingSummary global = model.Global;
         headerArtwork.Clear();
         if (!string.IsNullOrWhiteSpace(selected?.BackgroundPath))
             headerArtwork.Add(new AimModLocalArtwork(selected.BackgroundPath));
 
-        sessionTitle.Text = session is null ? "Your coaching workspace" : $"{session.StartedAt:MMMM d} session";
-        sessionPlays.Text = session is null ? "No plays" : $"{session.PlayCount:N0} {(session.PlayCount == 1 ? "play" : "plays")}";
-        sessionDuration.Text = session is null ? "No session yet" : formatDuration(session.Duration);
-        sessionAccuracy.Text = session?.MedianAccuracy is { } median ? $"{median:P1}" : "-";
+        sessionTitle.Text = selected is null
+            ? "Global coaching overview"
+            : $"{selected.Title} [{selected.Difficulty}]";
+        sessionPlays.Text = selected is null
+            ? $"{global.RunCount:N0} merged {(global.RunCount == 1 ? "play" : "plays")}"
+            : session is null ? "Selected play" : $"{session.PlayCount:N0} session {(session.PlayCount == 1 ? "play" : "plays")}";
+        sessionDuration.Text = selected is null
+            ? global.FirstPlayAt is { } first && global.LastPlayAt is { } last
+                ? $"{first:MMM yyyy} - {last:MMM yyyy}"
+                : "No history yet"
+            : session is null ? $"{selected.PlayedAt:MMM d, yyyy}" : formatDuration(session.Duration);
+        sessionAccuracy.Text = (selected is null ? global.MedianAccuracy : session?.MedianAccuracy) is { } median ? $"{median:P1}" : "-";
 
         CoachingPerformanceTrend trend = model.Report.Intelligence.Trend;
         sessionTrend.Text = trend.MatchedAccuracyChange is { } matched
@@ -282,24 +319,73 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         };
     }
 
-    private void updateSelectedRun(LocalReplay? run, CoachingAccuracyPrediction? prediction)
+    private void updateSelectedRun(NativeCoachingWorkspaceModel model, CoachingAccuracyPrediction? prediction)
     {
         selectedRunHost.Clear();
+        LocalReplay? run = model.SelectedRun;
         if (run is null)
         {
-            selectedRunHost.Add(flow("Play a local osu!standard map to begin a coaching session.", 14, AimModPalette.Muted));
+            GlobalCoachingSummary global = model.Global;
+            selectedRunHost.Add(new GridContainer
+            {
+                RelativeSizeAxes = Axes.X,
+                Height = 78,
+                ColumnDimensions = new[]
+                {
+                    new Dimension(GridSizeMode.Relative, 0.25f),
+                    new Dimension(GridSizeMode.Relative, 0.25f),
+                    new Dimension(GridSizeMode.Relative, 0.25f),
+                    new Dimension(GridSizeMode.Relative, 0.25f),
+                },
+                Content = new[]
+                {
+                    new Drawable[]
+                    {
+                        miniMetric("Local", global.LocalRunCount.ToString("N0"), AimModPalette.Cyan),
+                        miniMetric("Submitted", global.SubmittedRunCount.ToString("N0"), AimModPalette.Pink),
+                        miniMetric("Beatmaps", global.DistinctBeatmapCount.ToString("N0"), Colour4.FromHex("FFD45A")),
+                        miniMetric("Exact replays", global.ExactAnalysisRunCount.ToString("N0"), AimModPalette.Success),
+                    },
+                },
+            });
             return;
         }
 
-        selectedRunHost.Add(new SelectedRunCard(run, prediction, run.HasReplayFile ? () => openReplay(run) : null));
+        selectedRunHost.Add(new SelectedRunCard(
+            run,
+            prediction,
+            showGlobalOverview,
+            run.HasReplayFile ? () => openReplay(run) : null));
     }
 
-    private void updateExactAnalysis(LocalReplay? run)
+    private void updateExactAnalysis(LocalReplay? run, CoachingMechanicsProfile mechanics)
     {
         exactAnalysisHost.Clear();
         if (run is null)
         {
-            exactAnalysisHost.Add(flow("No run selected.", 13, AimModPalette.Muted));
+            exactAnalysisHost.Add(new GridContainer
+            {
+                RelativeSizeAxes = Axes.X,
+                Height = 58,
+                ColumnDimensions = new[]
+                {
+                    new Dimension(GridSizeMode.Relative, 0.25f),
+                    new Dimension(GridSizeMode.Relative, 0.25f),
+                    new Dimension(GridSizeMode.Relative, 0.25f),
+                    new Dimension(GridSizeMode.Relative, 0.25f),
+                },
+                Content = new[]
+                {
+                    new Drawable[]
+                    {
+                        miniMetric("Analysed", mechanics.ExactAnalysisRunCount.ToString("N0"), AimModPalette.Success),
+                        miniMetric("Judgements", mechanics.JudgementCount.ToString("N0"), AimModPalette.Cyan),
+                        miniMetric("Exact misses", mechanics.ExactMissCount.ToString("N0"), AimModPalette.Pink),
+                        miniMetric("Timing spread", mechanics.TimingStandardDeviationMilliseconds is { } aggregateSpread ? $"{aggregateSpread:0.0} ms" : "-", Colour4.FromHex("FFD45A")),
+                    },
+                },
+            });
+            exactAnalysisHost.Add(flow(MechanicsDetail(mechanics), 12, AimModPalette.Muted));
             return;
         }
 
@@ -376,8 +462,8 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             Colour4.FromHex("FF9C55")));
         changesHost.Add(new InsightRow(
             "Mechanics",
-            mechanicsDetail(intelligence.Mechanics),
-            intelligence.Mechanics.WeakestMapSegment ?? $"{intelligence.Mechanics.ExactAnalysisRunCount:N0} exact runs",
+            MechanicsDetail(intelligence.Mechanics),
+            MechanicsValue(intelligence.Mechanics),
             AimModPalette.Success));
     }
 
@@ -544,20 +630,20 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             Spacing = new(10),
         };
         panel.Child = body;
-        body.Add(sectionLine("Accuracy and misses over recent plays", "Select any point to inspect that run"));
+        body.Add(sectionLine("Global performance history", "Select a point for beatmap detail"));
         body.Add(chart = new CoachingTrendChart
         {
             RelativeSizeAxes = Axes.X,
             Height = 250,
         });
-        body.Add(label("SELECTED RUN", 10, AimModPalette.Pink, "Bold"));
+        body.Add(label("COACHING SCOPE", 10, AimModPalette.Pink, "Bold"));
         body.Add(selectedHost = new FillFlowContainer<Drawable>
         {
             RelativeSizeAxes = Axes.X,
             Height = 104,
             Direction = FillDirection.Vertical,
         });
-        body.Add(label("EXACT REPLAY ANALYSIS", 10, AimModPalette.Cyan, "Bold"));
+        body.Add(label("REPLAY EVIDENCE", 10, AimModPalette.Cyan, "Bold"));
         body.Add(analysisHost = new FillFlowContainer<Drawable>
         {
             RelativeSizeAxes = Axes.X,
@@ -587,7 +673,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             Spacing = new(10),
         };
         panel.Child = body;
-        body.Add(sectionLine("What changed", "Compared across your measured local history"));
+        body.Add(sectionLine("What changed", "Measured across local and submitted history"));
         body.Add(changes = new FillFlowContainer<Drawable>
         {
             RelativeSizeAxes = Axes.X,
@@ -642,7 +728,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                 ? $"{recent * 100:+0.0;-0.0;0.0} pts"
                 : trend.Direction;
 
-    private static string mechanicsDetail(CoachingMechanicsProfile mechanics)
+    internal static string MechanicsDetail(CoachingMechanicsProfile mechanics)
     {
         if (mechanics.ExactAnalysisRunCount == 0)
             return "Open saved replays to add exact hit timing and cursor measurements.";
@@ -656,8 +742,18 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             details.Add($"cursor error {distance:0.0} px");
         if (mechanics.ExactMissCount > 0)
             details.Add($"{mechanics.ExactMissCount:N0} exact misses");
+        if (mechanics.DominantMissReason is { } dominant)
+        {
+            int count = mechanics.MissReasonCounts?.GetValueOrDefault(dominant) ?? 0;
+            details.Add($"most common cause {ReplayMissInsightPresenter.Label(dominant)} ({count:N0})");
+        }
         return details.Count == 0 ? $"{mechanics.JudgementCount:N0} exact judgements measured." : string.Join(", ", details) + ".";
     }
+
+    internal static string MechanicsValue(CoachingMechanicsProfile mechanics) =>
+        mechanics.DominantMissReason is { } dominant
+            ? ReplayMissInsightPresenter.Label(dominant)
+            : mechanics.WeakestMapSegment ?? $"{mechanics.ExactAnalysisRunCount:N0} exact runs";
 
     private static string formatDuration(TimeSpan duration) => duration.TotalHours >= 1
         ? $"{(int)duration.TotalHours}h {duration.Minutes:N0}m"
@@ -764,7 +860,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
 
     private partial class SelectedRunCard : CompositeDrawable
     {
-        public SelectedRunCard(LocalReplay run, CoachingAccuracyPrediction? prediction, Action? open)
+        public SelectedRunCard(LocalReplay run, CoachingAccuracyPrediction? prediction, Action showGlobal, Action? open)
         {
             RelativeSizeAxes = Axes.X;
             Height = 100;
@@ -818,7 +914,17 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                         prediction is null
                             ? label("No prediction", 10, AimModPalette.Muted)
                             : label($"Expected {prediction.ExpectedAccuracy:P1}", 10, AimModPalette.Success, "SemiBold"),
-                        new ActionButton(open is null ? "Replay unavailable" : "Open replay", open),
+                        new FillFlowContainer
+                        {
+                            AutoSizeAxes = Axes.Both,
+                            Direction = FillDirection.Horizontal,
+                            Spacing = new(6),
+                            Children = new Drawable[]
+                            {
+                                new ActionButton("Overview", showGlobal),
+                                new ActionButton(open is null ? "No replay" : "Open replay", open),
+                            },
+                        },
                     },
                 },
             };

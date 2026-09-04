@@ -46,13 +46,14 @@ public sealed class ReplayAnalysisCacheTests
         });
     }
 
-    [Test]
-    public void LegacyCacheDocumentIsDiscarded()
+    [TestCase(1)]
+    [TestCase(2)]
+    public void LegacyCacheDocumentIsDiscarded(int version)
     {
         Directory.CreateDirectory(temporaryDirectory);
         File.WriteAllText(cachePath, JsonSerializer.Serialize(new
         {
-            version = 1,
+            version,
             entries = new[] { new { scoreId = Guid.NewGuid(), result = createResult("Great") } },
         }, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
 

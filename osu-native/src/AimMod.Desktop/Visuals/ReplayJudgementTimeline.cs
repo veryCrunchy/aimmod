@@ -2,6 +2,8 @@ using AimMod.Osu.Runtime.Contracts;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
+using osu.Game.Graphics;
+using osu.Game.Rulesets.Scoring;
 
 namespace AimMod.Desktop.Visuals;
 
@@ -63,6 +65,8 @@ public static class ReplayTimelineSampler
 
 public partial class ReplayJudgementTimeline : CompositeDrawable
 {
+    private static readonly OsuColour osuColours = new();
+
     private readonly Container marks;
 
     public ReplayJudgementTimeline()
@@ -96,19 +100,19 @@ public partial class ReplayJudgementTimeline : CompositeDrawable
                 Anchor = Anchor.CentreLeft,
                 Origin = Anchor.Centre,
                 Size = new(critical ? 3 : 1, critical ? 34 : mark.Tone == ReplayTimelineTone.Great ? 13 : 21),
-                Colour = colour(mark.Tone),
+                Colour = ColourFor(mark.Tone),
             });
         }
     }
 
     public void ClearResult() => marks.Clear();
 
-    private static Colour4 colour(ReplayTimelineTone tone) => tone switch
+    public static Colour4 ColourFor(ReplayTimelineTone tone) => osuColours.ForHitResult(tone switch
     {
-        ReplayTimelineTone.Miss => AimModPalette.Pink,
-        ReplayTimelineTone.SliderBreak => Colour4.FromHex("FF9C55"),
-        ReplayTimelineTone.Meh => Colour4.FromHex("FFD45A"),
-        ReplayTimelineTone.Ok => AimModPalette.Cyan,
-        _ => AimModPalette.Success,
-    };
+        ReplayTimelineTone.Great => HitResult.Great,
+        ReplayTimelineTone.Ok => HitResult.Ok,
+        ReplayTimelineTone.Meh => HitResult.Meh,
+        ReplayTimelineTone.Miss or ReplayTimelineTone.SliderBreak => HitResult.Miss,
+        _ => throw new ArgumentOutOfRangeException(nameof(tone), tone, null),
+    });
 }

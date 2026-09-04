@@ -128,12 +128,17 @@ public sealed class OfficialReplayAnalysisEngineTests
             ReplayAnalysisResult result = await new OfficialReplayAnalysisEngine().AnalyseAsync(
                 new ValidatedReplayInput(analysisDirectory, beatmapPath, replayPath),
                 timeout.Token);
+            ReplayObjectJudgement[] objectMisses = result.Judgements
+                                                           .Where(judgement => judgement.Result == "Miss" && judgement.ObjectPosition is not null)
+                                                           .ToArray();
+            TestContext.Out.WriteLine($"miss reasons: {string.Join(", ", objectMisses.Select(miss => miss.MissAnalysis?.Reason.ToString() ?? "missing"))}");
 
             Assert.Multiple(() =>
             {
                 Assert.That(result.TimeBasis, Is.EqualTo("officialRulesetPlayback"));
                 Assert.That(result.Judgements, Is.Not.Empty);
                 Assert.That(result.Judgements.All(judgement => double.IsFinite(judgement.JudgementTimeMs)), Is.True);
+                Assert.That(objectMisses.All(judgement => judgement.MissAnalysis is not null), Is.True);
             });
         }
         finally

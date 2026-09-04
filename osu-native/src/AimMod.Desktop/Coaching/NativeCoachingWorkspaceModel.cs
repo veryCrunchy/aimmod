@@ -10,12 +10,23 @@ public sealed record CoachingSessionSummary(
     TimeSpan Duration,
     double? MedianAccuracy);
 
+public sealed record GlobalCoachingSummary(
+    int RunCount,
+    int LocalRunCount,
+    int SubmittedRunCount,
+    int DistinctBeatmapCount,
+    int ExactAnalysisRunCount,
+    DateTimeOffset? FirstPlayAt,
+    DateTimeOffset? LastPlayAt,
+    double? MedianAccuracy);
+
 public sealed record NativeCoachingWorkspaceModel(
     IReadOnlyList<LocalReplay> History,
     IReadOnlyList<LocalReplay> TrendRuns,
     IReadOnlyList<LocalReplay> SessionRuns,
     LocalReplay? SelectedRun,
     CoachingSessionSummary? Session,
+    GlobalCoachingSummary Global,
     CoachingReport Report)
 {
     public const int MaximumTrendRuns = 30;
@@ -34,8 +45,7 @@ public sealed record NativeCoachingWorkspaceModel(
                                     .ToArray();
         LocalReplay? selected = selectedScoreId is { } scoreId
             ? history.FirstOrDefault(run => run.ScoreId == scoreId)
-            : history.FirstOrDefault();
-        selected ??= history.FirstOrDefault();
+            : null;
 
         LocalReplay[] trendRuns = history.OrderBy(run => run.PlayedAt)
                                          .TakeLast(MaximumTrendRuns)
@@ -44,9 +54,40 @@ public sealed record NativeCoachingWorkspaceModel(
             ? Array.Empty<LocalReplay>()
             : findSession(history, selected.ScoreId);
         CoachingSessionSummary? session = sessionRuns.Length == 0 ? null : summariseSession(sessionRuns);
-        CoachingReport report = CoachingReportBuilder.Build(history, analyses, selected?.ScoreId);
+        GlobalCoachingSummary global = summariseGlobal(history, analyses);
+        CoachingReport report = selected is null
+            ? CoachingReportBuilder.BuildGlobal(history, analyses)
+            : CoachingReportBuilder.Build(history, analyses, selected.ScoreId);
 
-        return new NativeCoachingWorkspaceModel(history, trendRuns, sessionRuns, selected, session, report);
+        return new NativeCoachingWorkspaceModel(history, trendRuns, sessionRuns, selected, session, global, report);
+    }
+
+    private static GlobalCoachingSummary summariseGlobal(
+        IReadOnlyList<LocalReplay> history,
+        IReadOnlyDictionary<Guid, ReplayAnalysisResult> analyses)
+    {
+        double[] accuracies = history.Select(run => run.Accuracy)
+                                     .Where(value => double.IsFinite(value) && value is >= 0 and <= 1)
+                                     .OrderBy(value => value)
+                                     .ToArray();
+        double? median = accuracies.Length switch
+        {
+            0 => null,
+            var count when count % 2 == 1 => accuracies[count / 2],
+            var count => (accuracies[count / 2 - 1] + accuracies[count / 2]) / 2,
+        };
+
+        return new GlobalCoachingSummary(
+            history.Count,
+            history.Count(run => run.IsLocallyStored),
+            history.Count(run => run.OnlineScoreId > 0),
+            history.Select(run => run.BeatmapId).Where(id => id != Guid.Empty).Distinct().Count(),
+            history.Count(run => analyses.TryGetValue(run.ScoreId, out ReplayAnalysisResult? analysis)
+                                 && analysis.Summary is not null
+                                 && analysis.Judgements is not null),
+            history.Count == 0 ? null : history.Min(run => run.PlayedAt),
+            history.Count == 0 ? null : history.Max(run => run.PlayedAt),
+            median);
     }
 
     private static LocalReplay[] findSession(IReadOnlyList<LocalReplay> history, Guid selectedScoreId)

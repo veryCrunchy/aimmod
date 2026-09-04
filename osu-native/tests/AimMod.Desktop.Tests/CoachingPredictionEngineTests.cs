@@ -9,6 +9,27 @@ namespace AimMod.Desktop.Tests;
 public sealed class CoachingPredictionEngineTests
 {
     [Test]
+    public void GlobalBuildDoesNotImplicitlySelectTheLatestRun()
+    {
+        LocalReplay[] runs =
+        {
+            run(1, 1, 4.2, 0.94, 1),
+            run(2, 1, 4.2, 0.96, 0),
+        };
+
+        CoachingIntelligence result = CoachingPredictionEngine.Build(
+            runs,
+            new Dictionary<Guid, ReplayAnalysisResult>());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.History.RunCount, Is.EqualTo(2));
+            Assert.That(result.SelectedRunPrediction, Is.Null);
+            Assert.That(result.SelectedRunBenchmark, Is.Null);
+        });
+    }
+
+    [Test]
     public void EmptyHistoryDoesNotInventPredictionsOrRecommendations()
     {
         CoachingIntelligence result = CoachingPredictionEngine.Build(
@@ -399,6 +420,40 @@ public sealed class CoachingPredictionEngineTests
         });
     }
 
+    [Test]
+    public void GlobalMechanicsAggregatesMissEvidenceAcrossMatchingExactAnalyses()
+    {
+        LocalReplay first = run(1, 1, 5.0, 0.91, 3);
+        LocalReplay second = run(2, 2, 5.2, 0.93, 2);
+        var analyses = new Dictionary<Guid, ReplayAnalysisResult>
+        {
+            [first.ScoreId] = exactAnalysis(
+                judgement("Miss", 0, 10_000, missAnalysis: missAnalysis(ReplayMissReason.Overshoot)),
+                judgement("Miss", 0, 20_000, missAnalysis: missAnalysis(ReplayMissReason.EarlyClick))),
+            [second.ScoreId] = exactAnalysis(
+                judgement("Miss", 0, 30_000, missAnalysis: missAnalysis(ReplayMissReason.Overshoot)),
+                judgement("Miss", 0, 35_000, missAnalysis: missAnalysis(ReplayMissReason.Unknown)),
+                judgement("Miss", 0, 40_000)),
+            [Guid.NewGuid()] = exactAnalysis(
+                judgement("Miss", 0, 50_000, missAnalysis: missAnalysis(ReplayMissReason.LateClick))),
+        };
+
+        CoachingMechanicsProfile mechanics = CoachingPredictionEngine.Build(
+            new[] { first, second },
+            analyses).Mechanics;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(mechanics.ExactMissCount, Is.EqualTo(5));
+            Assert.That(mechanics.MissReasonCounts, Is.Not.Null);
+            Assert.That(mechanics.MissReasonCounts![ReplayMissReason.Overshoot], Is.EqualTo(2));
+            Assert.That(mechanics.MissReasonCounts[ReplayMissReason.EarlyClick], Is.EqualTo(1));
+            Assert.That(mechanics.MissReasonCounts[ReplayMissReason.Unknown], Is.EqualTo(1));
+            Assert.That(mechanics.MissReasonCounts.ContainsKey(ReplayMissReason.LateClick), Is.False);
+            Assert.That(mechanics.DominantMissReason, Is.EqualTo(ReplayMissReason.Overshoot));
+        });
+    }
+
     private static LocalReplay run(
         int day,
         int beatmap,
@@ -457,7 +512,8 @@ public sealed class CoachingPredictionEngineTests
         ReplayPoint? objectPosition = null,
         ReplayPoint? cursorPosition = null,
         string objectType = "HitCircle",
-        string maximumResult = "Great") => new(
+        string maximumResult = "Great",
+        ReplayMissAnalysis? missAnalysis = null) => new(
             0,
             null,
             objectType,
@@ -471,5 +527,21 @@ public sealed class CoachingPredictionEngineTests
             objectPosition,
             cursorPosition,
             0,
-            result == "Miss" ? 0 : 1);
+            result == "Miss" ? 0 : 1,
+            missAnalysis);
+
+    private static ReplayMissAnalysis missAnalysis(ReplayMissReason reason) => new(
+        reason,
+        32,
+        18,
+        5,
+        new ReplayPoint(100, 100),
+        10,
+        24,
+        new ReplayPoint(110, 100),
+        20,
+        true,
+        false,
+        false,
+        0.1);
 }

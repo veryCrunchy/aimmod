@@ -26,7 +26,7 @@ public static class CoachingPredictionEngine
                                     .ToArray();
         LocalReplay? selected = selectedScoreId is { } scoreId
             ? history.FirstOrDefault(run => run.ScoreId == scoreId)
-            : history.LastOrDefault();
+            : null;
 
         int validAccuracyCount = history.Count(run => validAccuracy(run.Accuracy));
         int exactAnalysisCount = history.Count(run => validAnalysis(analyses.GetValueOrDefault(run.ScoreId)));
@@ -312,6 +312,15 @@ public static class CoachingPredictionEngine
                                                .Where(double.IsFinite)
                                                .ToArray();
         ReplayObjectJudgement[] misses = judgements.Where(isMiss).ToArray();
+        IReadOnlyDictionary<ReplayMissReason, int> missReasonCounts = misses.Where(miss => miss.MissAnalysis is not null)
+                                                                               .Select(miss => miss.MissAnalysis!.Reason)
+                                                                               .GroupBy(reason => reason)
+                                                                               .ToDictionary(group => group.Key, group => group.Count());
+        ReplayMissReason? dominantMissReason = missReasonCounts.Where(pair => pair.Key != ReplayMissReason.Unknown)
+                                                               .OrderByDescending(pair => pair.Value)
+                                                               .ThenBy(pair => pair.Key)
+                                                               .Select(pair => (ReplayMissReason?)pair.Key)
+                                                               .FirstOrDefault();
         CoachingMapSegment[] segments = buildMapSegments(exact);
         string? weakestSegment = segments.Where(segment => segment.PrimaryJudgementCount > 0)
                                          .OrderByDescending(segment => segment.MissRate)
@@ -334,7 +343,9 @@ public static class CoachingPredictionEngine
             offsets.Length == 0 ? null : percentile(offsets.Select(Math.Abs), 0.9),
             cursorDistances.Length == 0 ? null : median(cursorDistances),
             cursorDistances.Length == 0 ? null : percentile(cursorDistances, 0.9),
-            segments);
+            segments,
+            missReasonCounts,
+            dominantMissReason);
     }
 
     private static IReadOnlyList<CoachingRecommendation> buildRecommendations(IReadOnlyList<LocalReplay> history)

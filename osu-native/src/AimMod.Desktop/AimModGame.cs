@@ -622,6 +622,20 @@ public partial class AimModGame : OsuGameBase
             bundle = await service.OpenAsync(replay, cancellationToken).ConfigureAwait(false);
             await loadReplay(bundle.OpenRequest, cancellationToken, bundle, replay.ScoreId).ConfigureAwait(false);
             bundle = null;
+            try
+            {
+                await analyseMatchingMapReplays(replay, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception error)
+            {
+                logFailure("analyse matching map replays", error);
+                if (!IsDisposed)
+                    Schedule(() => replayRoute?.RefreshMapPattern());
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -826,6 +840,51 @@ public partial class AimModGame : OsuGameBase
         coachingAnalysisLifetime = null;
         coachingWork?.Cancel();
         coachingWork?.Dispose();
+    }
+
+    private async Task analyseMatchingMapReplays(LocalReplay selected, CancellationToken cancellationToken)
+    {
+        ReplayAnalysisBatchService? service = replayAnalysisBatchService;
+        if (service is null)
+            return;
+
+        LocalLibraryPage<LocalReplay> page = await localLibrary.SearchReplaysAsync(new LocalLibraryQuery(
+            SearchText: selected.Title,
+            RulesetShortName: "osu",
+            Sort: LocalLibrarySort.RecentlyPlayed,
+            Limit: 200), cancellationToken).ConfigureAwait(false);
+        LocalReplay[] matching = page.Items.Where(run => ReplayMapPatternAnalyzer.IsSameDifficultyAndSetup(selected, run))
+                                           .ToArray();
+        var progress = new Progress<ReplayAnalysisBatchProgress>(value =>
+        {
+            if (!IsDisposed)
+                Schedule(() => replayRoute?.ShowMapAnalysisProgress(value.Completed, value.Total, value.CurrentTitle));
+        });
+        ReplayAnalysisBatchResult result = await service.AnalyseRecentAsync(
+            matching,
+            replayAnalyses.Keys.Concat(replayAnalysisFailures).ToArray(),
+            ReplayAnalysisBatchService.MaximumBatchSize,
+            progress,
+            cancellationToken).ConfigureAwait(false);
+
+        if (IsDisposed || cancellationToken.IsCancellationRequested)
+            return;
+
+        Schedule(() =>
+        {
+            foreach ((Guid scoreId, ReplayAnalysisResult analysis) in result.Completed)
+            {
+                replayAnalyses[scoreId] = analysis;
+                replayAnalysisFailures.Remove(scoreId);
+            }
+
+            foreach (Guid scoreId in result.Failed)
+                replayAnalysisFailures.Add(scoreId);
+
+            if (result.Completed.Count > 0)
+                _ = persistReplayAnalyses();
+            replayRoute?.RefreshMapPattern();
+        });
     }
 
     protected override void Dispose(bool isDisposing)

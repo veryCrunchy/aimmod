@@ -45,6 +45,7 @@ public partial class NativeReplayRouteView : Container
     private readonly WrappedLabel analysisSummary;
     private readonly WrappedLabel analysisNextPlay;
     private readonly FillFlowContainer<Drawable> notableRows;
+    private readonly FillFlowContainer<Drawable> mapPatternRows;
     private readonly FillFlowContainer<Drawable> momentButtons;
     private readonly ReplayJudgementTimeline judgementTimeline;
     private readonly SpriteText currentTimeText;
@@ -59,6 +60,7 @@ public partial class NativeReplayRouteView : Container
     private NativeReplayPlayer? player;
     private LocalReplay? selectedReplay;
     private CancellationTokenSource? loading;
+    private CancellationTokenSource? mapPatternLoading;
     private long analysisRevision;
     private double playbackSpeed = 1;
     private bool analysisInProgress;
@@ -174,6 +176,7 @@ public partial class NativeReplayRouteView : Container
                                 Y = 58,
                             },
                             place(makeText("Exact judgement timeline", 12, AimModPalette.Muted, "Bold"), y: 91),
+                            createJudgementLegend(),
                             judgementTimeline = new ReplayJudgementTimeline { Y = 110 },
                             momentButtons = new FillFlowContainer<Drawable>
                             {
@@ -270,6 +273,15 @@ public partial class NativeReplayRouteView : Container
                                     },
                                 },
                             },
+                        },
+                        divider(),
+                        section("ACROSS ATTEMPTS"),
+                        mapPatternRows = new FillFlowContainer<Drawable>
+                        {
+                            RelativeSizeAxes = Axes.X,
+                            AutoSizeAxes = Axes.Y,
+                            Direction = FillDirection.Vertical,
+                            Spacing = new(5),
                         },
                         divider(),
                         section("FOCUS FOR YOUR NEXT PLAY"),
@@ -404,6 +416,18 @@ public partial class NativeReplayRouteView : Container
         showAnalysisFailure(message, "Exact coaching focus is unavailable for this run. Replay playback is still available.");
     }
 
+    public void ShowMapAnalysisProgress(int completed, int total, string currentTitle)
+    {
+        if (total <= 0)
+            return;
+
+        showMapPatternState(completed >= total
+            ? "Updating repeated-pattern analysis..."
+            : $"Analysing matching attempt {completed + 1:N0}/{total:N0}: {currentTitle}");
+    }
+
+    public void RefreshMapPattern() => loadMapPattern();
+
     private void showPendingAnalysis()
     {
         analysisTitle.Text = "Waiting for exact replay analysis";
@@ -412,6 +436,7 @@ public partial class NativeReplayRouteView : Container
         momentButtons.Clear();
         judgementTimeline.ClearResult();
         analysisNextPlay.Text = "A measured focus will appear when exact judgement analysis completes.";
+        showMapPatternState("Analyse this replay to compare it with other attempts.");
         analysisCard.FadeIn(150);
     }
 
@@ -427,6 +452,7 @@ public partial class NativeReplayRouteView : Container
         judgementTimeline.SetResult(result);
         showMomentButtons(result);
         showNotableRows(result);
+        loadMapPattern();
         analysisCard.FadeIn(150);
     }
 
@@ -531,7 +557,12 @@ public partial class NativeReplayRouteView : Container
         foreach (ReplayObjectJudgement judgement in judgements)
         {
             string objectLabel = judgement.ObjectIndex is { } index ? $"Object {index + 1:N0}" : judgement.ObjectType;
-            notableRows.Add(new NotableMomentRow(formatTime(judgement.StartTimeMs), objectLabel, judgement.Result, () =>
+            notableRows.Add(new NotableMomentRow(
+                formatTime(judgement.StartTimeMs),
+                objectLabel,
+                judgement.Result,
+                ReplayMissInsightPresenter.Describe(judgement),
+                () =>
             {
                 string label = formatTime(judgement.StartTimeMs);
                 Console.Error.WriteLine($"[AimMod] Jumping to notable replay moment {label}.");
@@ -541,6 +572,93 @@ public partial class NativeReplayRouteView : Container
 
         if (judgements.Count == 0)
             notableRows.Add(new WrappedLabel("No misses or slider breaks were found.", 12, AimModPalette.Success, "SemiBold"));
+    }
+
+    private void loadMapPattern()
+    {
+        mapPatternLoading?.Cancel();
+        mapPatternLoading?.Dispose();
+        mapPatternLoading = new CancellationTokenSource();
+        CancellationToken cancellationToken = mapPatternLoading.Token;
+        LocalReplay? replay = selectedReplay;
+        if (replay is null)
+            return;
+
+        showMapPatternState("Checking this difficulty across saved attempts...");
+        if (source is null)
+        {
+            applyMapPattern(replay, new[] { replay });
+            return;
+        }
+
+        _ = loadMapPatternAsync(replay, cancellationToken);
+    }
+
+    private async Task loadMapPatternAsync(LocalReplay replay, CancellationToken cancellationToken)
+    {
+        try
+        {
+            LocalLibraryPage<LocalReplay> page = await source!.SearchReplaysAsync(new LocalLibraryQuery(
+                SearchText: replay.Title,
+                RulesetShortName: "osu",
+                Sort: LocalLibrarySort.RecentlyPlayed,
+                Limit: 200), cancellationToken).ConfigureAwait(false);
+            if (!IsDisposed && !cancellationToken.IsCancellationRequested)
+                Schedule(() => applyMapPattern(replay, page.Items));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch
+        {
+            if (!IsDisposed)
+                Schedule(() => applyMapPattern(replay, new[] { replay }));
+        }
+    }
+
+    private void applyMapPattern(LocalReplay replay, IReadOnlyList<LocalReplay> history)
+    {
+        if (selectedReplay?.ScoreId != replay.ScoreId)
+            return;
+
+        ReplayMapPatternReport report = ReplayMapPatternAnalyzer.Build(replay, history, analyses);
+        mapPatternRows.Clear();
+        mapPatternRows.Add(new WrappedLabel(
+            $"{report.AnalysedAttempts:N0} of {report.TotalAttempts:N0} saved attempts have exact analysis.",
+            11,
+            AimModPalette.Muted));
+
+        foreach (ReplayRecurringMiss pattern in report.RecurringMisses.Take(4))
+        {
+            string reason = pattern.DominantReason is { } value ? ReplayMissInsightPresenter.Label(value) : "misses";
+            mapPatternRows.Add(new WrappedLabel(
+                $"{formatTime(pattern.StartTimeMs)} · object {pattern.ObjectIndex + 1:N0} missed in {pattern.MissedAttempts:N0}/{pattern.AnalysedAttempts:N0} attempts · {reason}",
+                11,
+                AimModPalette.Pink,
+                "SemiBold"));
+        }
+
+        if (report.RecurringMisses.Count == 0)
+        {
+            string message = report.AnalysedAttempts < 2
+                ? "At least two analysed attempts are needed to identify repeated mistakes."
+                : "No object was missed in more than one analysed attempt.";
+            mapPatternRows.Add(new WrappedLabel(message, 11, AimModPalette.Text));
+        }
+
+        if (report.MissReasons.Count > 0)
+        {
+            string dominant = report.MissReasons.OrderByDescending(pair => pair.Value).ThenBy(pair => pair.Key).First() is var pair
+                ? $"Most common: {ReplayMissInsightPresenter.Label(pair.Key)} ({pair.Value:N0})."
+                : string.Empty;
+            mapPatternRows.Add(new WrappedLabel(dominant, 11, AimModPalette.Cyan, "SemiBold"));
+        }
+    }
+
+    private void showMapPatternState(string message)
+    {
+        mapPatternRows.Clear();
+        mapPatternRows.Add(new WrappedLabel(message, 11, AimModPalette.Muted));
     }
 
     private string measuredNextPlay(ReplayAnalysisResult result, string fallback)
@@ -580,6 +698,8 @@ public partial class NativeReplayRouteView : Container
         SuspendPlayback();
         loading?.Cancel();
         loading?.Dispose();
+        mapPatternLoading?.Cancel();
+        mapPatternLoading?.Dispose();
         base.Dispose(isDisposing);
     }
 
@@ -603,6 +723,46 @@ public partial class NativeReplayRouteView : Container
 
     private static Drawable divider() => new Box { RelativeSizeAxes = Axes.X, Height = 1, Colour = AimModPalette.Border };
     private static SpriteText section(string value) => makeText(value, 11, AimModPalette.Muted, "Bold");
+
+    private static FillFlowContainer<Drawable> createJudgementLegend()
+    {
+        var legend = new FillFlowContainer<Drawable>
+        {
+            Anchor = Anchor.TopRight,
+            Origin = Anchor.TopRight,
+            AutoSizeAxes = Axes.Both,
+            Y = 89,
+            Direction = FillDirection.Horizontal,
+            Spacing = new(8, 0),
+        };
+        legend.AddRange(new[]
+        {
+            legendItem("300", ReplayTimelineTone.Great),
+            legendItem("100", ReplayTimelineTone.Ok),
+            legendItem("50", ReplayTimelineTone.Meh),
+            legendItem("miss", ReplayTimelineTone.Miss),
+        });
+        return legend;
+    }
+
+    private static FillFlowContainer<Drawable> legendItem(string label, ReplayTimelineTone tone) => new()
+    {
+        AutoSizeAxes = Axes.Both,
+        Direction = FillDirection.Horizontal,
+        Spacing = new(4, 0),
+        Children = new Drawable[]
+        {
+            new CircularContainer
+            {
+                Anchor = Anchor.CentreLeft,
+                Origin = Anchor.CentreLeft,
+                Size = new(6),
+                Masking = true,
+                Child = new Box { RelativeSizeAxes = Axes.Both, Colour = ReplayJudgementTimeline.ColourFor(tone) },
+            },
+            makeText(label, 9, AimModPalette.Muted, "SemiBold"),
+        },
+    };
 
     private static FillFlowContainer metric(string value, string labelValue, out SpriteText valueText)
     {
@@ -741,10 +901,10 @@ public partial class NativeReplayRouteView : Container
 
     private partial class NotableMomentRow : ClickableContainer
     {
-        public NotableMomentRow(string time, string objectLabel, string result, Action action)
+        public NotableMomentRow(string time, string objectLabel, string result, string detail, Action action)
         {
             RelativeSizeAxes = Axes.X;
-            Height = 42;
+            Height = 70;
             Action = action;
             BorderThickness = 1;
             BorderColour = AimModPalette.Border;
@@ -753,9 +913,17 @@ public partial class NativeReplayRouteView : Container
             Children = new Drawable[]
             {
                 new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
-                place(makeText(time, 11, AimModPalette.Pink, "Bold"), 10, anchor: Anchor.CentreLeft, origin: Anchor.CentreLeft),
-                place(makeText(objectLabel, 11, AimModPalette.Text, "SemiBold"), 88, anchor: Anchor.CentreLeft, origin: Anchor.CentreLeft),
-                place(makeText(result, 10, AimModPalette.Muted), -10, anchor: Anchor.CentreRight, origin: Anchor.CentreRight),
+                place(makeText(time, 11, AimModPalette.Pink, "Bold"), 10, 9),
+                place(makeText(objectLabel, 11, AimModPalette.Text, "SemiBold"), 78, 9),
+                place(makeText(result, 10, AimModPalette.Muted), -10, 10, Anchor.TopRight, Anchor.TopRight),
+                new Container
+                {
+                    RelativeSizeAxes = Axes.X,
+                    Height = 34,
+                    Y = 32,
+                    Padding = new MarginPadding { Left = 10, Right = 10 },
+                    Child = new WrappedLabel(detail, 10, AimModPalette.Muted),
+                },
             };
         }
     }

@@ -15,6 +15,10 @@ using osu.Game.Rulesets.Objects;
 using osu.Game.Rulesets.Objects.Types;
 using osu.Game.Rulesets.Osu;
 using osu.Game.Rulesets.Osu.Judgements;
+using osu.Game.Rulesets.Osu.Objects;
+using osu.Game.Rulesets.Osu.Replays;
+using osu.Game.Rulesets.Osu.Scoring;
+using osu.Game.Rulesets.Scoring;
 using osu.Game.Scoring;
 using osu.Game.Scoring.Legacy;
 using osu.Game.Screens;
@@ -403,6 +407,7 @@ internal sealed partial class AnalysisReplayPlayer : ReplayPlayer
     private readonly Action<IReadOnlyList<ReplayObjectJudgement>> complete;
     private readonly Action<ReplayAnalysisException> fail;
     private readonly double replayEndTime;
+    private readonly OsuReplayFrame[] replayFrames;
     private readonly CancellationToken cancellationToken;
     private readonly List<ReplayObjectJudgement> judgements = new();
     private Dictionary<HitObject, ObjectAddress> addresses = new(ReferenceEqualityComparer.Instance);
@@ -424,6 +429,10 @@ internal sealed partial class AnalysisReplayPlayer : ReplayPlayer
     {
         this.complete = complete;
         this.fail = fail;
+        replayFrames = score.Replay.Frames.OfType<OsuReplayFrame>()
+                            .Where(frame => double.IsFinite(frame.Time))
+                            .OrderBy(frame => frame.Time)
+                            .ToArray();
         replayEndTime = score.Replay.Frames.Select(frame => frame.Time)
                              .Where(time => double.IsFinite(time) && time >= 0)
                              .DefaultIfEmpty(double.PositiveInfinity)
@@ -496,8 +505,23 @@ internal sealed partial class AnalysisReplayPlayer : ReplayPlayer
         }
 
         addresses.TryGetValue(result.HitObject, out ObjectAddress? address);
-        Vector2? objectPosition = (result.HitObject as IHasPosition)?.Position;
+        Vector2? objectPosition = result.HitObject is OsuHitObject osuObject
+            ? osuObject.StackedPosition
+            : (result.HitObject as IHasPosition)?.Position;
         Vector2? cursorPosition = (result as OsuHitCircleJudgementResult)?.CursorPositionAtHit;
+        ReplayMissAnalysis? missAnalysis = null;
+        if (result.Type == HitResult.Miss && objectPosition is { } missTarget)
+        {
+            var hitWindows = new OsuHitWindows();
+            hitWindows.SetDifficulty(GameplayState.Beatmap.Difficulty.OverallDifficulty);
+            double hitRadius = result.HitObject is OsuHitObject hitObject ? hitObject.Radius : OsuHitObject.OBJECT_RADIUS;
+            missAnalysis = ReplayMissAnalyzer.Analyse(
+                replayFrames,
+                missTarget,
+                result.HitObject.StartTime,
+                hitRadius,
+                hitWindows.WindowFor(HitResult.Meh));
+        }
 
         judgements.Add(new ReplayObjectJudgement(
             address?.ObjectIndex,
@@ -513,7 +537,8 @@ internal sealed partial class AnalysisReplayPlayer : ReplayPlayer
             objectPosition is null ? null : new ReplayPoint(objectPosition.Value.X, objectPosition.Value.Y),
             cursorPosition is null ? null : new ReplayPoint(cursorPosition.Value.X, cursorPosition.Value.Y),
             result.ComboAtJudgement,
-            result.ComboAfterJudgement));
+            result.ComboAfterJudgement,
+            missAnalysis));
     }
 
     private static Dictionary<HitObject, ObjectAddress> indexObjects(IBeatmap beatmap)
