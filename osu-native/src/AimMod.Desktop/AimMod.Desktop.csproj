@@ -4,6 +4,7 @@
     <AssemblyName>AimMod</AssemblyName>
     <StartupObject>AimMod.Desktop.Program</StartupObject>
     <Description>Native AimMod desktop shell.</Description>
+    <ApplicationIcon>Resources/Brand/aimmod.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="OsuParsers" Version="1.7.2" />
@@ -14,5 +15,12 @@
   <ItemGroup>
     <ProjectReference Include="../AimMod.Osu.Runtime/AimMod.Osu.Runtime.csproj" />
     <ProjectReference Include="../AimMod.Osu.Worker/AimMod.Osu.Worker.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Resources/Brand/*.png" LogicalName="AimMod.Resources.Brand.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="Resources/Brand/aimmod.ico" LogicalName="AimMod.Resources.Brand.aimmod.ico" />
+  </ItemGroup>
+  <ItemGroup Condition="$([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('linux-')) Or ('$(RuntimeIdentifier)' == '' And $([MSBuild]::IsOSPlatform('Linux')))">
+    <Content Include="Resources/Brand/linux/hicolor/**/*.png" TargetPath="share/icons/hicolor/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

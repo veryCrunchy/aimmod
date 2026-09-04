@@ -12,7 +12,8 @@
     "^app/(.+/)?[^/]+\\.dll$",
     "^app/(.+/)?[^/]+\\.json$",
     "^app/(.+/)?[^/]+\\.so(\\.[0-9]+)*$",
-    "^app/(AimMod|createdump)$"
+    "^app/(AimMod|createdump)$",
+    "^app/share/icons/hicolor/(16|24|32|48|64|128|256|512|1024)x\\1/apps/aimmod-osu\\.png$"
   ],
   "requiredFiles": [
     "app/AimMod",
@@ -22,7 +23,16 @@
     "app/aimmod-osu-worker.dll",
     "app/osu.Game.dll",
     "app/osu.Game.Rulesets.Osu.dll",
-    "ppy-packages.json"
+    "ppy-packages.json",
+    "app/share/icons/hicolor/16x16/apps/aimmod-osu.png",
+    "app/share/icons/hicolor/24x24/apps/aimmod-osu.png",
+    "app/share/icons/hicolor/32x32/apps/aimmod-osu.png",
+    "app/share/icons/hicolor/48x48/apps/aimmod-osu.png",
+    "app/share/icons/hicolor/64x64/apps/aimmod-osu.png",
+    "app/share/icons/hicolor/128x128/apps/aimmod-osu.png",
+    "app/share/icons/hicolor/256x256/apps/aimmod-osu.png",
+    "app/share/icons/hicolor/512x512/apps/aimmod-osu.png",
+    "app/share/icons/hicolor/1024x1024/apps/aimmod-osu.png"
   ],
   "deniedPathFragments": [
     "kovaak",

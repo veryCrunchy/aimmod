@@ -1423,7 +1423,7 @@ public partial class AimModGame : OsuGameBase
                     Spacing = new(12),
                     Children = new Drawable[]
                     {
-                        text("AimMod", 26, AimModPalette.Text, "Bold"),
+                        new AimModBrandMark { Size = new(52, 38), FillMode = FillMode.Fit },
                         productPill = new AimModPill("osu!", AimModPillTone.Accent),
                     },
                 },

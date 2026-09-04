@@ -135,7 +135,7 @@ jobs:
             --packTitle "AimMod for osu!" `
             --runtime win-x64 `
             --channel "win-$env:CHANNEL" `
-            --icon "../src-tauri/icons/icon.ico" `
+            --icon "src/AimMod.Desktop/Resources/Brand/aimmod.ico" `
             --delta None `
             --outputDir artifacts/velopack-win
 
@@ -189,7 +189,7 @@ jobs:
             --packTitle "AimMod for osu!" \
             --runtime linux-x64 \
             --channel "linux-${CHANNEL}" \
-            --icon "../src-tauri/icons/128x128@2x.png" \
+            --icon "src/AimMod.Desktop/Resources/Brand/linux/hicolor/256x256/apps/aimmod-osu.png" \
             --delta None \
             --outputDir artifacts/velopack-linux
 

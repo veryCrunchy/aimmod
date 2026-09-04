@@ -18,6 +18,8 @@ make_valid_fixture() {
         "$root/app/osu.Game.dll" \
         "$root/app/osu.Game.Rulesets.Osu.dll"
     cp -- "$repo_root/packaging/ppy-packages.json" "$root/ppy-packages.json"
+    mkdir -p -- "$root/app/share/icons"
+    cp -R -- "$repo_root/src/AimMod.Desktop/Resources/Brand/linux/hicolor" "$root/app/share/icons/hicolor"
     chmod +x -- "$root/app/AimMod"
 }
 
@@ -30,6 +32,22 @@ run_audit() {
 valid="$fixture/valid"
 make_valid_fixture "$valid"
 run_audit "$valid" >/dev/null
+
+missing_icon="$fixture/missing-icon"
+cp -a -- "$valid" "$missing_icon"
+rm -- "$missing_icon/app/share/icons/hicolor/256x256/apps/aimmod-osu.png"
+if run_audit "$missing_icon" >/dev/null 2>&1; then
+    echo "policy accepted missing branded icon" >&2
+    exit 1
+fi
+
+extra_image="$fixture/extra-image"
+cp -a -- "$valid" "$extra_image"
+touch -- "$extra_image/app/unrelated.png"
+if run_audit "$extra_image" >/dev/null 2>&1; then
+    echo "policy accepted an image outside the branded icon paths" >&2
+    exit 1
+fi
 
 web_fixture="$fixture/web"
 cp -a -- "$valid" "$web_fixture"
