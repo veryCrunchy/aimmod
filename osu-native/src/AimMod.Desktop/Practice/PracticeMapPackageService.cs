@@ -68,7 +68,8 @@ public static class PracticeMapPackageService
 
     private static async Task addAsync(ZipArchive archive, string path, CancellationToken cancellationToken)
     {
-        ZipArchiveEntry entry = archive.CreateEntry(Path.GetFileName(path), CompressionLevel.Optimal);
+        // OGG is already compressed, and stored entries avoid a Deflate compatibility failure in lazer's importer.
+        ZipArchiveEntry entry = archive.CreateEntry(Path.GetFileName(path), CompressionLevel.NoCompression);
         entry.ExternalAttributes = (int)FileAttributes.Normal;
         await using Stream source = new FileStream(
             path,

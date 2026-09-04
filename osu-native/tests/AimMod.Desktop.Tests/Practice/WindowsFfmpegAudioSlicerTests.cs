@@ -211,6 +211,8 @@ public sealed class WindowsFfmpegAudioSlicerTests
         using var lazerReader = SharpCompress.Archives.Zip.ZipArchive.OpenArchive(archive);
         foreach (SharpCompress.Archives.IArchiveEntry entry in lazerReader.Entries)
         {
+            Assert.That(entry.CompressionType, Is.EqualTo(SharpCompress.Common.CompressionType.None),
+                $"{entry.Key} must use the stored ZIP format accepted by osu!lazer.");
             using Stream source = entry.OpenEntryStream();
             using var destination = new MemoryStream();
             source.CopyTo(destination);

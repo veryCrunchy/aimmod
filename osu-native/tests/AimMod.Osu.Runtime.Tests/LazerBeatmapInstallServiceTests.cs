@@ -131,6 +131,39 @@ public sealed class LazerBeatmapInstallServiceTests
     }
 
     [Test]
+    public async Task DoesNotMutateArchiveAfterHandingItToLazer()
+    {
+        writeDesktopEntry($"\"{desktopLauncher}\" %u");
+        string archivePath = createOsz("practice.osz");
+        string? launchedPath = null;
+        DateTime launchedWriteTime = default;
+        var service = new LazerBeatmapInstallService(
+            Path.Combine(temporaryDirectory, "handoff"),
+            createLocator(),
+            (startInfo, _, _) =>
+            {
+                launchedPath = startInfo.ArgumentList.Single();
+                launchedWriteTime = File.GetLastWriteTimeUtc(launchedPath);
+                return Task.FromResult(new LazerLaunchOutcome(true, true, 0));
+            });
+
+        LazerBeatmapArchive archive = await service.PreserveAsync(archivePath, 0);
+        string preservedPath = Directory.GetFiles(Path.Combine(temporaryDirectory, "handoff"), "practice-*.osz").Single();
+        File.SetLastWriteTimeUtc(preservedPath, DateTime.UtcNow.AddDays(-1));
+
+        LazerBeatmapInstallResult result = await service.InstallAsync(archive);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(LazerBeatmapInstallStatus.Sent));
+            Assert.That(launchedPath, Is.EqualTo(preservedPath));
+            Assert.That(launchedWriteTime, Is.GreaterThan(DateTime.UtcNow.AddMinutes(-1)));
+            Assert.That(File.GetLastWriteTimeUtc(preservedPath), Is.EqualTo(launchedWriteTime),
+                "The primary lazer process opens the archive asynchronously after IPC acknowledges it.");
+        });
+    }
+
+    [Test]
     public void RejectsANegativeArchiveIdentity()
     {
         string archivePath = createOsz("source.osz");

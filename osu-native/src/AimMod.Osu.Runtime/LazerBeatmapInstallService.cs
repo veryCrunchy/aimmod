@@ -156,6 +156,9 @@ public sealed class LazerBeatmapInstallService : ILazerBeatmapInstallService
             if (command is null)
                 return new LazerBeatmapInstallResult(LazerBeatmapInstallStatus.LazerNotFound);
 
+            // The secondary osu! process acknowledges IPC before the primary process opens the archive.
+            // Do not mutate the handoff file after launch or its ZIP probe can race the metadata write.
+            touch(path);
             ProcessStartInfo startInfo = CreateStartInfo(command, path);
             try
             {
@@ -165,7 +168,6 @@ public sealed class LazerBeatmapInstallService : ILazerBeatmapInstallService
                 if (outcome.Exited && outcome.ExitCode != 0)
                     return new LazerBeatmapInstallResult(LazerBeatmapInstallStatus.LazerRejected, command.Source);
 
-                touch(path);
                 return new LazerBeatmapInstallResult(
                     outcome.Exited ? LazerBeatmapInstallStatus.Sent : LazerBeatmapInstallStatus.LazerStarted,
                     command.Source);
