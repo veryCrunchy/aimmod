@@ -29,6 +29,8 @@ public sealed partial class OffscreenVisualCaptureTests
     [TestCase("beatmaps-populated", 1100, 760)]
     [TestCase("beatmaps-populated", 1600, 900)]
     [TestCase("skins", 1100, 760)]
+    [TestCase("settings", 1100, 760)]
+    [TestCase("settings", 1600, 900)]
     [TestCase("replays", 1100, 760)]
     [TestCase("replays-analysis", 1600, 900)]
     [TestCase("statistics", 1100, 760)]
@@ -255,13 +257,25 @@ public sealed partial class OffscreenVisualCaptureTests
             }
             else if (!string.Equals(route, "home", StringComparison.Ordinal))
             {
+                if (route == "settings")
+                {
+                    Scheduler.AddDelayed(() =>
+                    {
+                        string fixtureRoot = Path.Combine(TestContext.CurrentContext.WorkDirectory, "visual-captures", "settings-fixture");
+                        typeof(AimModGame).GetField("beatmapDestinationService", BindingFlags.Instance | BindingFlags.NonPublic)!
+                            .SetValue(this, new OsuBeatmapDestinationService(
+                                new LazerBeatmapInstallService(Path.Combine(fixtureRoot, "archives")),
+                                new FileOsuClientDestinationPreferenceStore(Path.Combine(fixtureRoot, "destination")),
+                                Path.Combine(fixtureRoot, "handoff")));
+                    }, 1100);
+                }
                 string routeName = route.Split('-', 2)[0];
                 MethodInfo routeMethod = typeof(AimModGame).GetMethod($"show{char.ToUpperInvariant(routeName[0])}{routeName[1..]}", BindingFlags.Instance | BindingFlags.NonPublic)
                                          ?? throw new InvalidOperationException($"Unknown capture route '{route}'.");
-                Scheduler.AddDelayed(() => routeMethod.Invoke(this, null), 300);
+                Scheduler.AddDelayed(() => routeMethod.Invoke(this, null), route == "settings" ? 1200 : 300);
             }
 
-            Scheduler.AddDelayed(capture, 1800);
+            Scheduler.AddDelayed(capture, route == "settings" ? 3500 : 1800);
         }
 
         private void capture()

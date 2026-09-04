@@ -59,7 +59,7 @@ public partial class NativeHubSettingsPanel : CompositeDrawable
             Spacing = new(AimModVisualStyle.SectionSpacing),
             Children = new Drawable[]
             {
-                panel("AIMMOD HUB ACCOUNT", "Link this device before sharing any score or replay.", new Drawable[]
+                panel("AimMod Hub", "Connect your account to share scores and replays.", new Drawable[]
                 {
                     accountStatus = text("AimMod Hub is not linked.", 15, AimModPalette.Text, "SemiBold"),
                     new FillFlowContainer
@@ -76,7 +76,7 @@ public partial class NativeHubSettingsPanel : CompositeDrawable
                     deviceCode = text("", 20, AimModPalette.Cyan, "Bold"),
                     copyCodeButton = button("Copy code", copyCode, 116, AimModPalette.PanelHover),
                 }),
-                panel("SHARING DEFAULTS", "These choices populate the replay share panel; nothing uploads automatically.", new Drawable[]
+                panel("Sharing", "Default options for new replay shares.", new Drawable[]
                 {
                     text("VISIBILITY", 10, AimModPalette.Cyan, "Bold"),
                     new OsuDropdown<OsuHubVisibility>
@@ -85,11 +85,11 @@ public partial class NativeHubSettingsPanel : CompositeDrawable
                         Items = Enum.GetValues<OsuHubVisibility>(),
                         Current = visibility,
                     },
-                    new OsuCheckbox { LabelText = "Include replay file", Current = uploadReplayFile },
-                    new OsuCheckbox { LabelText = "Include detailed judgement analysis", Current = uploadAnalysis },
-                    text("Private is the initial default. Public or unlisted visibility is used only after you press Share on a replay.", 11, AimModPalette.Muted),
+                    new OsuCheckbox { LabelText = "Include replay file", Current = uploadReplayFile, RelativeSizeAxes = Axes.X },
+                    new OsuCheckbox { LabelText = "Include judgement analysis", Current = uploadAnalysis, RelativeSizeAxes = Axes.X },
+                    text("Uploads start only when you share a replay.", 12, AimModPalette.Muted),
                 }),
-                panel("UPLOAD QUEUE", "Pending work and recent results are retained across restarts.", new Drawable[]
+                panel("Uploads", "Recent shares and pending uploads.", new Drawable[]
                 {
                     queueSummary = text("No queued uploads.", 12, AimModPalette.Muted, "SemiBold"),
                     queueRows = new FillFlowContainer<Drawable>
@@ -326,25 +326,23 @@ public partial class NativeHubSettingsPanel : CompositeDrawable
         AutoSizeAxes = Axes.Y,
         Children = new Drawable[]
         {
-            new CircularContainer
+            new Box
             {
-                RelativeSizeAxes = Axes.Both,
-                Masking = true,
-                CornerRadius = AimModVisualStyle.CardRadius,
-                Depth = 10,
-                Child = new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
+                RelativeSizeAxes = Axes.X,
+                Height = 1,
+                Colour = AimModPalette.PanelHover,
             },
             new FillFlowContainer
             {
                 RelativeSizeAxes = Axes.X,
                 AutoSizeAxes = Axes.Y,
                 Depth = 0,
-                Padding = new MarginPadding { Horizontal = 20, Vertical = 18 },
+                Padding = new MarginPadding { Top = 24, Bottom = 8 },
                 Direction = FillDirection.Vertical,
-                Spacing = new(AimModVisualStyle.RelatedSpacing),
+                Spacing = new(12),
                 Children = new Drawable[]
                 {
-                    text(title, 11, AimModPalette.Cyan, "Bold"),
+                    text(title, 20, AimModPalette.Text, "Bold"),
                     text(subtitle, 12, AimModPalette.Muted),
                 }.Concat(children).ToArray(),
             },

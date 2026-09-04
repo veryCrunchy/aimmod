@@ -13,6 +13,7 @@ public partial class OsuClientSettingsScreen : CompositeDrawable
     private readonly IOsuBeatmapDestinationService destinationService;
     private readonly Bindable<string> destination;
     private readonly SpriteText detail;
+    private readonly FillFlowContainer content;
 
     public OsuClientSettingsScreen(IOsuBeatmapDestinationService destinationService)
         : this(destinationService, null, null, null, null, null, null)
@@ -31,37 +32,40 @@ public partial class OsuClientSettingsScreen : CompositeDrawable
         this.destinationService = destinationService ?? throw new ArgumentNullException(nameof(destinationService));
         destination = new Bindable<string>(label(destinationService.Destination));
         RelativeSizeAxes = Axes.Both;
-        InternalChildren = new Drawable[]
+        InternalChild = new AimModScrollContainer
+        {
+            RelativeSizeAxes = Axes.Both,
+            Child = content = new FillFlowContainer
+            {
+                Width = 680,
+                AutoSizeAxes = Axes.Y,
+                Direction = FillDirection.Vertical,
+                Spacing = new(20),
+                Padding = new MarginPadding { Right = 24, Bottom = 32 },
+                Children = new Drawable[]
         {
             new AimModSectionHeader(
                 "Settings",
-                "Choose which installed osu! client receives beatmaps and generated practice maps.",
-                "osu! client"),
+                "Your osu! client, account and sharing preferences.",
+                "Preferences"),
             new SpriteText
             {
-                Y = 104,
                 Text = "OPEN AND INSTALL DESTINATION",
                 Font = new FontUsage(size: 10, weight: "Bold"),
                 Colour = AimModPalette.Cyan,
             },
             new OsuDropdown<string>
             {
-                Y = 124,
                 Width = 360,
                 Items = new[] { "Auto", "osu!stable", "osu!lazer" },
                 Current = destination,
             },
             detail = new SpriteText
             {
-                Y = 178,
                 Font = new FontUsage(size: 13),
                 Colour = AimModPalette.Muted,
             },
-            new AimModScrollContainer
-            {
-                RelativeSizeAxes = Axes.Both,
-                Padding = new MarginPadding { Top = 220 },
-                Child = new NativeHubSettingsPanel(
+            new NativeHubSettingsPanel(
                     deviceLinkClient,
                     credentialStore,
                     uploadQueue,
@@ -71,8 +75,15 @@ public partial class OsuClientSettingsScreen : CompositeDrawable
                 {
                     RelativeSizeAxes = Axes.X,
                 },
+        },
             },
         };
+    }
+
+    protected override void Update()
+    {
+        base.Update();
+        content.Width = Math.Min(680, Math.Max(0, DrawWidth - 16));
     }
 
     protected override void LoadComplete()
@@ -114,9 +125,9 @@ public partial class OsuClientSettingsScreen : CompositeDrawable
     {
         detail.Text = value switch
         {
-            OsuClientDestination.Stable => "Beatmaps are opened with osu!stable. AimMod will not fall back to another client.",
-            OsuClientDestination.Lazer => "Beatmaps are opened with osu!lazer. AimMod will not fall back to another client.",
-            _ => "AimMod tries osu!lazer first, then osu!stable when lazer is unavailable.",
+            OsuClientDestination.Stable => "Open and install beatmaps in osu!stable.",
+            OsuClientDestination.Lazer => "Open and install beatmaps in osu!lazer.",
+            _ => "Use osu!lazer when available, otherwise osu!stable.",
         };
     }
 }
