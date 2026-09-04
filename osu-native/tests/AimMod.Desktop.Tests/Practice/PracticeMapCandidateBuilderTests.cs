@@ -31,6 +31,8 @@ public sealed class PracticeMapCandidateBuilderTests
             Assert.That(candidates[0].AnalysedAttempts, Is.EqualTo(2));
             Assert.That(candidates[0].MissCount, Is.EqualTo(3));
             Assert.That(candidates[0].AnalysisScoreIds, Is.EquivalentTo(new[] { first.ScoreId, second.ScoreId }));
+            Assert.That(candidates[0].AttemptsWithMisses, Is.EqualTo(2));
+            Assert.That(candidates[0].AverageMissConfidence, Is.EqualTo(0.8).Within(0.001));
         });
     }
 
@@ -61,10 +63,61 @@ public sealed class PracticeMapCandidateBuilderTests
         });
     }
 
+    [Test]
+    public void SearchesFiltersAndSortsThePracticePool()
+    {
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        PracticeMapCandidate[] candidates =
+        [
+            candidate("Blue Zenith", "Another", 7.2, 2, 5, 9, now.AddDays(-2), ["HD"]),
+            candidate("Freedom Dive", "FOUR DIMENSIONS", 6.4, 4, 3, 7, now, ["HR"]),
+            candidate("The Big Black", "WHO'S AFRAID", 6.8, 1, 8, 12, now.AddDays(-1), []),
+        ];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(PracticeMapCandidateSearch.Search(candidates,
+                new PracticeCandidateQuery("hr", PracticeCandidateSort.WeakestFirst)).Items.Select(item => item.SourceReplay.Title),
+                Is.EqualTo(new[] { "Freedom Dive" }));
+            Assert.That(PracticeMapCandidateSearch.Search(candidates,
+                new PracticeCandidateQuery(Evidence: PracticeEvidenceFilter.RepeatedAcrossAttempts)).Items.Select(item => item.SourceReplay.Title),
+                Is.EqualTo(new[] { "Blue Zenith", "Freedom Dive" }));
+            Assert.That(PracticeMapCandidateSearch.Search(candidates,
+                new PracticeCandidateQuery(Sort: PracticeCandidateSort.MostRepeated)).Items.Select(item => item.SourceReplay.Title),
+                Is.EqualTo(new[] { "Freedom Dive", "Blue Zenith", "The Big Black" }));
+            Assert.That(PracticeMapCandidateSearch.Search(candidates,
+                new PracticeCandidateQuery(Evidence: PracticeEvidenceFilter.HighConfidence)).Total,
+                Is.EqualTo(3));
+            Assert.That(PracticeMapCandidateSearch.Search(candidates,
+                new PracticeCandidateQuery(Sort: PracticeCandidateSort.RecentlyPlayed, MinimumStars: 6.5, MaximumStars: 8)).Items.Select(item => item.SourceReplay.Title),
+                Is.EqualTo(new[] { "The Big Black", "Blue Zenith" }));
+        });
+    }
+
     private static LocalReplay replay(Guid scoreId, Guid beatmapId, string title, bool local) => new(
         scoreId, Guid.NewGuid(), beatmapId, title, "Artist", "Difficulty", "osu", "Player",
         DateTimeOffset.UtcNow, 5, 0.95, 1_000_000, 500, 1, 100, Array.Empty<string>(), true,
         new string('a', 64), IsLocallyStored: local);
+
+    private static PracticeMapCandidate candidate(
+        string title,
+        string difficulty,
+        double stars,
+        int attempts,
+        int misses,
+        double weakness,
+        DateTimeOffset playedAt,
+        IReadOnlyList<string> mods)
+    {
+        LocalReplay source = replay(Guid.NewGuid(), Guid.NewGuid(), title, true) with
+        {
+            Difficulty = difficulty,
+            StarRating = stars,
+            PlayedAt = playedAt,
+            Mods = mods,
+        };
+        return new PracticeMapCandidate(source, new[] { source.ScoreId }, attempts, misses, weakness, attempts, 0.85);
+    }
 
     private static ReplayObjectJudgement miss(int index) => new(index, null, "HitCircle", index * 100, index * 100,
         "Miss", "Great", index * 100, 0, 1, new ReplayPoint(256, 192), new ReplayPoint(300, 192), 0, 0,

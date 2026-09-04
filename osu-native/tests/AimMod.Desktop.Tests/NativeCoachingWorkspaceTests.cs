@@ -218,10 +218,23 @@ public sealed class NativeCoachingWorkspaceTests
     {
         Assert.Multiple(() =>
         {
-            Assert.That(NativeCoachingWorkspace.PracticeCandidateDetail(0, 100), Is.EqualTo("No maps ready"));
-            Assert.That(NativeCoachingWorkspace.PracticeCandidateDetail(1, 100), Is.EqualTo("1 practice map ready"));
-            Assert.That(NativeCoachingWorkspace.PracticeCandidateDetail(37, 100), Is.EqualTo("37 practice maps ready"));
-            Assert.That(NativeCoachingWorkspace.PracticeCandidateDetail(100, 100), Is.EqualTo("Top 100 practice maps"));
+            Assert.That(NativeCoachingWorkspace.PracticeCandidateDetail(new PracticeCandidatePage([], 0, 0)), Is.EqualTo("No maps ready"));
+            Assert.That(NativeCoachingWorkspace.PracticeCandidateDetail(new PracticeCandidatePage([], 0, 37)), Is.EqualTo("0 of 37 maps"));
+            Assert.That(NativeCoachingWorkspace.PracticeCandidateDetail(new PracticeCandidatePage([null!], 1, 1)), Is.EqualTo("1 practice map ready"));
+            Assert.That(NativeCoachingWorkspace.PracticeCandidateDetail(new PracticeCandidatePage(new PracticeMapCandidate[37], 37, 37)), Is.EqualTo("37 practice maps ready"));
+            Assert.That(NativeCoachingWorkspace.PracticeCandidateDetail(new PracticeCandidatePage(new PracticeMapCandidate[100], 140, 140)), Is.EqualTo("Top 100 of 140 maps"));
+        });
+    }
+
+    [Test]
+    public void PracticeFiltersUseReadableLabels()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(NativeCoachingWorkspace.PracticeSortLabel(PracticeCandidateSort.WeakestFirst), Is.EqualTo("Weakest first"));
+            Assert.That(NativeCoachingWorkspace.PracticeSortLabel(PracticeCandidateSort.MostRepeated), Is.EqualTo("Most repeated"));
+            Assert.That(NativeCoachingWorkspace.PracticeEvidenceLabel(PracticeEvidenceFilter.AnyEvidence), Is.EqualTo("Any evidence"));
+            Assert.That(NativeCoachingWorkspace.PracticeEvidenceLabel(PracticeEvidenceFilter.RepeatedAcrossAttempts), Is.EqualTo("Repeated misses"));
         });
     }
 

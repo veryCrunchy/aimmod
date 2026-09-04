@@ -4,6 +4,7 @@ using AimMod.Desktop.ScoreHistory;
 using AimMod.Desktop.Practice;
 using AimMod.Osu.Runtime;
 using AimMod.Osu.Runtime.Contracts;
+using osu.Framework.Bindables;
 using osu.Framework.Extensions.Color4Extensions;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Colour;
@@ -11,6 +12,7 @@ using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
 using osu.Framework.Input.Events;
+using osu.Framework.Localisation;
 using osu.Game.Graphics.Containers;
 using osu.Game.Graphics.Sprites;
 using osu.Game.Graphics.UserInterface;
@@ -23,7 +25,8 @@ namespace AimMod.Desktop.Coaching;
 public partial class NativeCoachingWorkspace : CompositeDrawable
 {
     private const int visible_run_limit = 24;
-    private const int practice_candidate_limit = 100;
+    private const int practice_candidate_pool_limit = 500;
+    private const int practice_candidate_display_limit = 100;
 
     private readonly ILocalLibrarySource source;
     private readonly ILocalLibrarySourceChanged? sourceChanges;
@@ -48,6 +51,11 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     private readonly FillFlowContainer<Drawable> recommendationHost;
     private readonly FillFlowContainer<Drawable> practiceHost;
     private readonly SectionLine practiceSectionLine;
+    private readonly OsuTextBox practiceSearch;
+    private readonly Bindable<PracticeCandidateSort> practiceSort = new(PracticeCandidateSort.WeakestFirst);
+    private readonly Bindable<PracticeEvidenceFilter> practiceEvidence = new(PracticeEvidenceFilter.AnyEvidence);
+    private readonly BindableDouble practiceMinimumStars = new(0) { MinValue = 0, MaxValue = 10, Default = 0 };
+    private readonly BindableDouble practiceMaximumStars = new(10) { MinValue = 0, MaxValue = 10, Default = 10 };
     private readonly OsuTextBox search;
     private readonly FillFlowContainer<Drawable> runList;
     private readonly AimModLoadingOverlay loadingOverlay;
@@ -108,7 +116,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         content.Add(new GridContainer
         {
             RelativeSizeAxes = Axes.X,
-            Height = 400,
+            Height = 540,
             ColumnDimensions = new[]
             {
                 new Dimension(GridSizeMode.Relative, 0.59f),
@@ -119,7 +127,14 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                 new Drawable[]
                 {
                     createPerformancePanel(out trendChart, out selectedRunHost, out exactAnalysisHost),
-                    createPracticePanel(out practiceHost, out practiceSectionLine),
+                    createPracticePanel(
+                        out practiceHost,
+                        out practiceSectionLine,
+                        out practiceSearch,
+                        practiceSort,
+                        practiceEvidence,
+                        practiceMinimumStars,
+                        practiceMaximumStars),
                 },
             },
         });
@@ -156,6 +171,12 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             },
             loadingOverlay = new AimModLoadingOverlay(),
         };
+
+        practiceSearch.Current.BindValueChanged(_ => updatePracticeMaps());
+        practiceSort.BindValueChanged(_ => updatePracticeMaps());
+        practiceEvidence.BindValueChanged(_ => updatePracticeMaps());
+        practiceMinimumStars.BindValueChanged(_ => updatePracticeMaps());
+        practiceMaximumStars.BindValueChanged(_ => updatePracticeMaps());
     }
 
     protected override void LoadComplete()
@@ -337,11 +358,20 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     private void updatePracticeMaps()
     {
         practiceHost.Clear();
-        IReadOnlyList<PracticeMapCandidate> candidates = PracticeMapCandidateBuilder.Build(
+        IReadOnlyList<PracticeMapCandidate> available = PracticeMapCandidateBuilder.Build(
             replays,
             analyses,
-            practice_candidate_limit);
-        practiceSectionLine.SetDetail(PracticeCandidateDetail(candidates.Count, practice_candidate_limit));
+            practice_candidate_pool_limit);
+        PracticeCandidatePage candidates = PracticeMapCandidateSearch.Search(
+            available,
+            new PracticeCandidateQuery(
+                practiceSearch.Current.Value,
+                practiceSort.Value,
+                practiceEvidence.Value,
+                practiceMinimumStars.Value,
+                practiceMaximumStars.Value),
+            practice_candidate_display_limit);
+        practiceSectionLine.SetDetail(PracticeCandidateDetail(candidates));
 
         if (creatingPracticeMap)
         {
@@ -387,7 +417,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                 action));
         }
 
-        if (candidates.Count == 0)
+        if (available.Count == 0)
         {
             practiceHost.Add(new PracticeEmptyState(
                 acceptingAnalysisProgress ? "Finding your weakest patterns" : "More replay evidence needed",
@@ -397,7 +427,15 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             return;
         }
 
-        foreach (PracticeMapCandidate candidate in candidates)
+        if (candidates.Total == 0)
+        {
+            practiceHost.Add(new PracticeEmptyState(
+                "No practice maps match",
+                "Adjust the search, evidence, or star filters to widen the ranked pool."));
+            return;
+        }
+
+        foreach (PracticeMapCandidate candidate in candidates.Items)
             practiceHost.Add(new PracticeCandidateRow(candidate, beginPracticeMap));
     }
 
@@ -862,14 +900,19 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         body.Add(chart = new CoachingTrendChart
         {
             RelativeSizeAxes = Axes.X,
-            Height = 88,
+            Height = 220,
         });
         return panel;
     }
 
     private static Container createPracticePanel(
         out FillFlowContainer<Drawable> practice,
-        out SectionLine section)
+        out SectionLine section,
+        out OsuTextBox search,
+        Bindable<PracticeCandidateSort> sort,
+        Bindable<PracticeEvidenceFilter> evidence,
+        BindableDouble minimumStars,
+        BindableDouble maximumStars)
     {
         Container outer = new Container
         {
@@ -891,10 +934,64 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             "Generate a focused drill from the map sections where your misses repeat.",
             11,
             AimModPalette.Muted));
+        body.Add(search = new OsuTextBox
+        {
+            RelativeSizeAxes = Axes.X,
+            Height = 38,
+            PlaceholderText = "Search maps, difficulties, players, or mods",
+            Depth = -20,
+        });
+        body.Add(new GridContainer
+        {
+            RelativeSizeAxes = Axes.X,
+            Height = 38,
+            Depth = -20,
+            ColumnDimensions = new[]
+            {
+                new Dimension(GridSizeMode.Relative, 0.5f),
+                new Dimension(GridSizeMode.Relative, 0.5f),
+            },
+            Content = new[]
+            {
+                new Drawable[]
+                {
+                    new PracticeDropdown<PracticeCandidateSort>(PracticeSortLabel)
+                    {
+                        RelativeSizeAxes = Axes.X,
+                        Width = 0.97f,
+                        Items = Enum.GetValues<PracticeCandidateSort>(),
+                        Current = sort,
+                    },
+                    new PracticeDropdown<PracticeEvidenceFilter>(PracticeEvidenceLabel)
+                    {
+                        Anchor = Anchor.TopRight,
+                        Origin = Anchor.TopRight,
+                        RelativeSizeAxes = Axes.X,
+                        Width = 0.97f,
+                        Items = Enum.GetValues<PracticeEvidenceFilter>(),
+                        Current = evidence,
+                    },
+                },
+            },
+        });
+        body.Add(new RangeSlider
+        {
+            RelativeSizeAxes = Axes.X,
+            Height = 58,
+            Label = "Stars",
+            LowerBound = minimumStars,
+            UpperBound = maximumStars,
+            DefaultStringLowerBound = "0",
+            DefaultStringUpperBound = "10+",
+            TooltipSuffix = "stars",
+            NubWidth = 24,
+            Depth = -10,
+        });
         body.Add(new OsuScrollContainer
         {
             RelativeSizeAxes = Axes.X,
-            Height = 288,
+            Height = 276,
+            Depth = 10,
             Child = practice = new FillFlowContainer<Drawable>
             {
                 RelativeSizeAxes = Axes.X,
@@ -1118,18 +1215,46 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         ? $"{Math.Max(0, cached):N0} analysed  //  {failed:N0} could not be read"
         : $"{Math.Max(0, cached):N0} analysed  //  coaching profile updated";
 
-    internal static string PracticeEvidenceSummary(PracticeMapCandidate candidate) =>
-        $"{candidate.SourceReplay.StarRating:0.00}*  //  {candidate.MissCount:N0} exact {(candidate.MissCount == 1 ? "miss" : "misses")}  //  {candidate.AnalysedAttempts:N0} analysed {(candidate.AnalysedAttempts == 1 ? "attempt" : "attempts")}";
+    internal static string PracticeEvidenceSummary(PracticeMapCandidate candidate)
+    {
+        string attempts = candidate.AttemptsWithMisses > 0
+            ? $"{candidate.AttemptsWithMisses:N0}/{candidate.AnalysedAttempts:N0} miss attempts"
+            : $"{candidate.AnalysedAttempts:N0} analysed {(candidate.AnalysedAttempts == 1 ? "attempt" : "attempts")}";
+        string confidence = candidate.AverageMissConfidence > 0 ? $"  //  {candidate.AverageMissConfidence:P0} confidence" : string.Empty;
+        return $"{candidate.SourceReplay.StarRating:0.00}*  //  {candidate.MissCount:N0} exact {(candidate.MissCount == 1 ? "miss" : "misses")}  //  {attempts}{confidence}";
+    }
 
     internal static string PracticeSourceSummary(PracticeMapCandidate candidate) =>
         $"Source difficulty: {candidate.SourceReplay.Difficulty}  //  last played {candidate.SourceReplay.PlayedAt.ToString("MMM d, yyyy", System.Globalization.CultureInfo.InvariantCulture)}";
 
-    internal static string PracticeCandidateDetail(int count, int limit) => count switch
+    internal static string PracticeSortLabel(PracticeCandidateSort value) => value switch
     {
-        <= 0 => "No maps ready",
-        1 => "1 practice map ready",
-        _ when count >= limit => $"Top {count:N0} practice maps",
-        _ => $"{count:N0} practice maps ready",
+        PracticeCandidateSort.MostRepeated => "Most repeated",
+        PracticeCandidateSort.MostExactMisses => "Most exact misses",
+        PracticeCandidateSort.RecentlyPlayed => "Recently played",
+        PracticeCandidateSort.HardestFirst => "Hardest first",
+        PracticeCandidateSort.EasiestFirst => "Easiest first",
+        PracticeCandidateSort.Title => "Title",
+        _ => "Weakest first",
+    };
+
+    internal static string PracticeEvidenceLabel(PracticeEvidenceFilter value) => value switch
+    {
+        PracticeEvidenceFilter.RepeatedAcrossAttempts => "Repeated misses",
+        PracticeEvidenceFilter.HighConfidence => "High confidence",
+        PracticeEvidenceFilter.ThreePlusMisses => "3+ exact misses",
+        PracticeEvidenceFilter.FivePlusMisses => "5+ exact misses",
+        _ => "Any evidence",
+    };
+
+    internal static string PracticeCandidateDetail(PracticeCandidatePage page) => page switch
+    {
+        { Available: <= 0 } => "No maps ready",
+        { Total: 0 } => $"0 of {page.Available:N0} maps",
+        { Total: 1, Available: 1 } => "1 practice map ready",
+        _ when page.Total < page.Available => $"{page.Items.Count:N0} of {page.Total:N0} matching",
+        _ when page.Items.Count < page.Total => $"Top {page.Items.Count:N0} of {page.Total:N0} maps",
+        _ => $"{page.Total:N0} practice maps ready",
     };
 
     internal static bool PracticeLaunchSucceeded(LazerBeatmapInstallStatus status) =>
@@ -1595,6 +1720,19 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             title.MaxWidth = titleWidth;
             detail.MaxWidth = detailWidth;
         }
+    }
+
+    private sealed partial class PracticeDropdown<T> : OsuDropdown<T>
+        where T : struct, Enum
+    {
+        private readonly Func<T, string> formatter;
+
+        public PracticeDropdown(Func<T, string> formatter)
+        {
+            this.formatter = formatter;
+        }
+
+        protected override LocalisableString GenerateItemText(T item) => formatter(item);
     }
 
     private static string formatPpSuffix(double? pp) =>
