@@ -21,7 +21,6 @@ using AimMod.Osu.Runtime;
 using AimMod.Osu.Runtime.Contracts;
 using AimMod.Desktop.LocalLibrary;
 using AimMod.Desktop.Discovery;
-using System.Diagnostics;
 using AimMod.Desktop.Coaching;
 using AimMod.Desktop.Visuals;
 using AimMod.Desktop.Skins;
@@ -474,7 +473,6 @@ public partial class AimModGame : OsuGameBase
             prepareCatalogReplay,
             () => accountScoreHistoryService,
             createPracticeMap,
-            openPracticeFolder,
             installPracticeMap)
         {
             RelativeSizeAxes = Axes.Both,
@@ -489,6 +487,9 @@ public partial class AimModGame : OsuGameBase
     {
         ExternalLazerReplayOpenService? replayService = externalReplayOpenService;
         if (replayService is null)
+            return new PracticeMapGenerationResult(false, "Connect osu!lazer before creating a practice map.");
+        ILazerBeatmapInstallService? installService = lazerBeatmapInstallService;
+        if (installService is null)
             return new PracticeMapGenerationResult(false, "Connect osu!lazer before creating a practice map.");
 
         string? root = null;
@@ -528,29 +529,17 @@ public partial class AimModGame : OsuGameBase
                 plans[0],
                 root,
                 cancellationToken).ConfigureAwait(false);
-            if (lazerBeatmapInstallService is not null)
-            {
-                try
-                {
-                    lazerArchive = await lazerBeatmapInstallService.PreserveAsync(artifact.ArchivePath, 0, cancellationToken).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    throw;
-                }
-                catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or InvalidOperationException)
-                {
-                    logFailure("prepare practice map for osu!lazer", error);
-                }
-            }
+            lazerArchive = await installService.PreserveAsync(artifact.ArchivePath, 0, cancellationToken).ConfigureAwait(false);
 
             cancellationToken.ThrowIfCancellationRequested();
 
-            string message = lazerArchive is null
-                ? $"{plans[0].OutputVersion} was created. Open its folder to import the .osz."
-                : $"{plans[0].OutputVersion} is ready to open in osu!lazer.";
             retainLazerArchive = true;
-            return new PracticeMapGenerationResult(true, message, root, artifact.ArchivePath, lazerArchive);
+            return new PracticeMapGenerationResult(
+                true,
+                $"{plans[0].OutputVersion} is ready to open in osu!lazer.",
+                root,
+                artifact.ArchivePath,
+                lazerArchive);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -576,28 +565,8 @@ public partial class AimModGame : OsuGameBase
         finally
         {
             if (!retainLazerArchive && lazerArchive is not null)
-                lazerBeatmapInstallService?.Discard(lazerArchive);
+                installService.Discard(lazerArchive);
         }
-    }
-
-    private static void openPracticeFolder(string path)
-    {
-        if (!OperatingSystem.IsWindows() || !Directory.Exists(path))
-            return;
-        Process.Start(CreatePracticeFolderStartInfo(path));
-    }
-
-    internal static ProcessStartInfo CreatePracticeFolderStartInfo(string path)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        if (!Path.IsPathFullyQualified(path))
-            throw new ArgumentException("The practice-map directory must be absolute.", nameof(path));
-        return new ProcessStartInfo
-        {
-            FileName = Path.GetFullPath(path),
-            UseShellExecute = true,
-            Verb = "open",
-        };
     }
 
     private Task<LazerBeatmapInstallResult> installPracticeMap(

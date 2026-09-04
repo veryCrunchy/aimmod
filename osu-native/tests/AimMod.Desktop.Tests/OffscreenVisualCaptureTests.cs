@@ -6,6 +6,7 @@ using AimMod.Desktop.Coaching;
 using AimMod.Desktop.LocalLibrary;
 using AimMod.Desktop.Practice;
 using AimMod.Desktop.Visuals;
+using AimMod.Osu.Runtime;
 using AimMod.Osu.Runtime.Contracts;
 using NUnit.Framework;
 using osu.Framework;
@@ -486,7 +487,11 @@ public sealed partial class OffscreenVisualCaptureTests
                 analyses,
                 _ => { },
                 () => null,
-                (_, _) => Task.FromResult(new PracticeMapGenerationResult(true, "Practice map imported", "C:\\AimMod\\Practice")));
+                (_, _) => Task.FromResult(new PracticeMapGenerationResult(
+                    true,
+                    "Practice map ready",
+                    LazerArchive: new LazerBeatmapArchive(0, Guid.NewGuid()))),
+                (_, _) => Task.FromResult(new LazerBeatmapInstallResult(LazerBeatmapInstallStatus.Sent)));
             workspace.RelativeSizeAxes = osu.Framework.Graphics.Axes.Both;
 
             Add(new osu.Framework.Graphics.Containers.Container

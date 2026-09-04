@@ -165,7 +165,7 @@ public sealed class PracticeMapPlannerTests
                 Assert.That(exported, Does.Contain("AudioFilename:practice-audio.ogg"));
                 Assert.That(exported, Does.Contain("AudioLeadIn:1500"));
                 Assert.That(exported, Does.Contain("Source:Practice drill derived from Artist - Source Song [Original], mapped by Mapper."));
-                Assert.That(exported, Does.Contain("BeatmapID:-1"));
+                Assert.That(exported, Does.Contain("BeatmapID:0"));
                 Assert.That(exported, Does.Contain("\n2,"), "Recovery gaps should be represented as osu! breaks.");
                 Assert.That(exported, Does.Not.Contain("0,0,\"background.jpg\""));
                 Assert.That(decodedExport.HitObjects, Has.Count.EqualTo(plan.HitObjects.Count),

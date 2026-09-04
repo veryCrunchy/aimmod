@@ -342,7 +342,7 @@ public sealed class NativeCoachingWorkspaceTests
     }
 
     [Test]
-    public void PracticeLaunchCopyDistinguishesSuccessfulHandoffFromManualFallback()
+    public void PracticeLaunchCopyProvidesActionableLazerRecovery()
     {
         Assert.Multiple(() =>
         {
@@ -350,7 +350,8 @@ public sealed class NativeCoachingWorkspaceTests
             Assert.That(NativeCoachingWorkspace.PracticeLaunchSucceeded(LazerBeatmapInstallStatus.LazerStarted), Is.True);
             Assert.That(NativeCoachingWorkspace.PracticeLaunchSucceeded(LazerBeatmapInstallStatus.LaunchFailed), Is.False);
             Assert.That(NativeCoachingWorkspace.PracticeLaunchMessage(LazerBeatmapInstallStatus.LazerStarted), Does.Contain("importing"));
-            Assert.That(NativeCoachingWorkspace.PracticeLaunchMessage(LazerBeatmapInstallStatus.LazerNotFound), Does.Contain("export folder"));
+            Assert.That(NativeCoachingWorkspace.PracticeLaunchMessage(LazerBeatmapInstallStatus.LazerNotFound), Does.Contain("installation"));
+            Assert.That(NativeCoachingWorkspace.PracticeLaunchMessage(LazerBeatmapInstallStatus.LazerNotFound), Does.Not.Contain("folder"));
         });
     }
 

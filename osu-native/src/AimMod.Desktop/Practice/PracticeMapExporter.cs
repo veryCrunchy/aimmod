@@ -70,7 +70,7 @@ public sealed class PracticeMapExporter
         {
             ["Version"] = plan.OutputVersion,
             ["Source"] = plan.Attribution,
-            ["BeatmapID"] = "-1",
+            ["BeatmapID"] = "0",
             ["BeatmapSetID"] = "-1",
         }));
         appendSection(builder, "Difficulty", source.Sections.GetValueOrDefault("Difficulty", Array.Empty<string>()));

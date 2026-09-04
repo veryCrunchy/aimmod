@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Globalization;
 using AimMod.Desktop.Practice;
 using NUnit.Framework;
+using osu.Game.Utils;
 
 namespace AimMod.Desktop.Tests.Practice;
 
@@ -185,14 +186,72 @@ public sealed class WindowsFfmpegAudioSlicerTests
         Directory.CreateDirectory(exportDirectory);
         string beatmap = Path.Combine(exportDirectory, "practice.osu");
         string audio = Path.Combine(exportDirectory, "practice.ogg");
-        File.WriteAllText(beatmap, "osu file format v14");
+        File.WriteAllText(beatmap, lazerBeatmap("practice.ogg"));
         File.WriteAllBytes(audio, new byte[128]);
         string archive = Path.Combine(directory, "practice.osz");
 
         await PracticeMapPackageService.CreateAsync(new PracticeMapExportResult(exportDirectory, beatmap, audio), archive);
 
         using ZipArchive zip = ZipFile.OpenRead(archive);
-        Assert.That(zip.Entries.Select(entry => entry.FullName), Is.EquivalentTo(new[] { "practice.osu", "practice.ogg" }));
+        using var beatmapReader = new StreamReader(zip.GetEntry("practice.osu")!.Open());
+        string packagedBeatmap = beatmapReader.ReadToEnd();
+        Assert.Multiple(() =>
+        {
+            Assert.That(ZipUtils.IsZipArchive(archive), Is.True,
+                "The exact ZIP probe used by osu!lazer must accept the published archive.");
+            Assert.That(zip.Entries.Select(entry => entry.FullName), Is.EquivalentTo(new[] { "practice.osu", "practice.ogg" }));
+            Assert.That(zip.Entries, Has.All.Matches<ZipArchiveEntry>(entry => entry.FullName == entry.Name),
+                "Every file must be stored at the archive root.");
+            Assert.That(zip.Entries, Has.All.Matches<ZipArchiveEntry>(entry => entry.ExternalAttributes == (int)FileAttributes.Normal));
+            Assert.That(packagedBeatmap, Does.Contain("AudioFilename:practice.ogg"));
+            Assert.That(packagedBeatmap, Does.Contain("BeatmapID:0"));
+            Assert.That(packagedBeatmap, Does.Contain("BeatmapSetID:-1"));
+        });
+
+        using var lazerReader = SharpCompress.Archives.Zip.ZipArchive.OpenArchive(archive);
+        foreach (SharpCompress.Archives.IArchiveEntry entry in lazerReader.Entries)
+        {
+            using Stream source = entry.OpenEntryStream();
+            using var destination = new MemoryStream();
+            source.CopyTo(destination);
+            Assert.That(destination.Length, Is.EqualTo(entry.Size), $"lazer must be able to fully read {entry.Key}.");
+        }
+    }
+
+    [Test]
+    public void RejectsInvalidBeatmapContentBeforePublishingArchive()
+    {
+        string exportDirectory = Path.Combine(directory, "invalid-map");
+        Directory.CreateDirectory(exportDirectory);
+        string beatmap = Path.Combine(exportDirectory, "practice.osu");
+        string audio = Path.Combine(exportDirectory, "practice.ogg");
+        File.WriteAllText(beatmap, "osu file format v14");
+        File.WriteAllBytes(audio, new byte[128]);
+        string archive = Path.Combine(directory, "invalid.osz");
+
+        Assert.That(async () => await PracticeMapPackageService.CreateAsync(
+            new PracticeMapExportResult(exportDirectory, beatmap, audio), archive),
+            Throws.TypeOf<InvalidDataException>());
+        Assert.Multiple(() =>
+        {
+            Assert.That(File.Exists(archive), Is.False);
+            Assert.That(Directory.GetFiles(directory, "*.partial"), Is.Empty);
+        });
+    }
+
+    [Test]
+    public void RejectsBeatmapWhoseAudioReferenceDoesNotMatchPackage()
+    {
+        string exportDirectory = Path.Combine(directory, "mismatched-audio");
+        Directory.CreateDirectory(exportDirectory);
+        string beatmap = Path.Combine(exportDirectory, "practice.osu");
+        string audio = Path.Combine(exportDirectory, "practice.ogg");
+        File.WriteAllText(beatmap, lazerBeatmap("another.ogg"));
+        File.WriteAllBytes(audio, new byte[128]);
+
+        Assert.That(async () => await PracticeMapPackageService.CreateAsync(
+            new PracticeMapExportResult(exportDirectory, beatmap, audio), Path.Combine(directory, "mismatched.osz")),
+            Throws.TypeOf<InvalidDataException>());
     }
 
     [Test]
@@ -202,7 +261,7 @@ public sealed class WindowsFfmpegAudioSlicerTests
         Directory.CreateDirectory(exportDirectory);
         string beatmap = Path.Combine(exportDirectory, "practice.osu");
         string audio = Path.Combine(exportDirectory, "practice.ogg");
-        File.WriteAllText(beatmap, "osu file format v14");
+        File.WriteAllText(beatmap, lazerBeatmap("practice.ogg"));
         File.WriteAllBytes(audio, new byte[128]);
         string archive = Path.Combine(directory, "cancelled.osz");
         using var cancellation = new CancellationTokenSource();
@@ -247,6 +306,36 @@ public sealed class WindowsFfmpegAudioSlicerTests
             return Task.FromResult(run(startInfo));
         }
     }
+
+    private static string lazerBeatmap(string audioFilename) => $$"""
+        osu file format v14
+
+        [General]
+        AudioFilename:{{audioFilename}}
+        Mode:0
+
+        [Metadata]
+        Title:AimMod Practice
+        Artist:AimMod
+        Creator:AimMod
+        Version:Practice
+        BeatmapID:0
+        BeatmapSetID:-1
+
+        [Difficulty]
+        HPDrainRate:5
+        CircleSize:4
+        OverallDifficulty:8
+        ApproachRate:9
+        SliderMultiplier:1.4
+        SliderTickRate:1
+
+        [TimingPoints]
+        0,500,4,2,1,50,1,0
+
+        [HitObjects]
+        256,192,1000,1,0,0:0:0:0:
+        """;
 
     private static async Task<string> runTool(string executable, params string[] arguments)
     {

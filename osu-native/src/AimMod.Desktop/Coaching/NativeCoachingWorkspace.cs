@@ -36,7 +36,6 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     private readonly Action<LocalReplay> openReplay;
     private readonly Func<IAccountScoreHistoryService?> accountHistory;
     private readonly Func<PracticeMapGenerationRequest, CancellationToken, Task<PracticeMapGenerationResult>>? generatePracticeMap;
-    private readonly Action<string>? openPracticeFolder;
     private readonly Func<LazerBeatmapArchive, CancellationToken, Task<LazerBeatmapInstallResult>>? installPracticeMap;
 
     private readonly Container headerArtwork;
@@ -80,7 +79,6 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     private bool practiceSucceeded;
     private int renderedAnalysisCount = -1;
     private string practiceMessage = string.Empty;
-    private string? practiceDirectory;
     private LazerBeatmapArchive? practiceLazerArchive;
 
     public NativeCoachingWorkspace(
@@ -89,7 +87,6 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         Action<LocalReplay> openReplay,
         Func<IAccountScoreHistoryService?>? accountHistory = null,
         Func<PracticeMapGenerationRequest, CancellationToken, Task<PracticeMapGenerationResult>>? generatePracticeMap = null,
-        Action<string>? openPracticeFolder = null,
         Func<LazerBeatmapArchive, CancellationToken, Task<LazerBeatmapInstallResult>>? installPracticeMap = null)
     {
         this.source = source ?? throw new ArgumentNullException(nameof(source));
@@ -97,7 +94,6 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         this.openReplay = openReplay ?? throw new ArgumentNullException(nameof(openReplay));
         this.accountHistory = accountHistory ?? (() => null);
         this.generatePracticeMap = generatePracticeMap;
-        this.openPracticeFolder = openPracticeFolder;
         this.installPracticeMap = installPracticeMap;
         sourceChanges = source as ILocalLibrarySourceChanged;
         if (sourceChanges is not null)
@@ -415,7 +411,6 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             openingPracticeMap,
             practiceSucceeded,
             practiceMessage,
-            practiceDirectory,
             practiceLazerArchive is not null);
         if (SamePracticeCandidatePage(renderedPracticePage, candidates) && renderedPracticeState == displayState)
             return;
@@ -449,21 +444,17 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         {
             string? actionLabel = null;
             Action? action = null;
-            if (practiceLazerArchive is not null && installPracticeMap is not null)
+            bool canRetryLazer = practiceLazerArchive is not null && installPracticeMap is not null;
+            if (canRetryLazer)
             {
                 actionLabel = "Open in osu!";
                 action = beginPracticeLaunch;
             }
-            else if (practiceDirectory is not null && openPracticeFolder is not null)
-            {
-                actionLabel = "Open folder";
-                action = () => openPracticeFolder(practiceDirectory);
-            }
 
             practiceHost.Add(new PracticeStatusRow(
-                practiceSucceeded ? "Practice map ready" : practiceDirectory is null ? "Practice map not created" : "Practice map exported",
+                practiceSucceeded ? "Practice map ready" : canRetryLazer ? "Could not open osu!lazer" : "Practice map not created",
                 practiceMessage,
-                practiceSucceeded ? AimModPalette.Success : practiceDirectory is null ? AimModPalette.Pink : AimModPalette.Yellow,
+                practiceSucceeded ? AimModPalette.Success : canRetryLazer ? AimModPalette.Yellow : AimModPalette.Pink,
                 practiceSucceeded ? FontAwesome.Solid.CheckCircle : FontAwesome.Solid.ExclamationCircle,
                 actionLabel,
                 action));
@@ -504,7 +495,6 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         creatingPracticeMap = true;
         openingPracticeMap = false;
         practiceSucceeded = false;
-        practiceDirectory = null;
         practiceLazerArchive = null;
         practiceMessage = $"Preparing {candidate.SourceReplay.Title} [{candidate.SourceReplay.Difficulty}]";
         updatePracticeMapsImmediately();
@@ -534,7 +524,6 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                 creatingPracticeMap = false;
                 practiceSucceeded = result.Success;
                 practiceMessage = result.Message;
-                practiceDirectory = result.DirectoryPath;
                 practiceLazerArchive = result.LazerArchive;
                 updatePracticeMapsImmediately();
             });
@@ -579,7 +568,6 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                 practiceMessage = PracticeLaunchMessage(result.Status);
                 if (!PracticeLaunchSucceeded(result.Status))
                     practiceSucceeded = false;
-                practiceLazerArchive = null;
                 updatePracticeMapsImmediately();
             });
         }
@@ -1299,7 +1287,6 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         bool OpeningPracticeMap,
         bool PracticeSucceeded,
         string Message,
-        string? Directory,
         bool HasLazerArchive);
 
     private static OsuSpriteText label(string text, float size, Colour4 colour, string weight = "Regular") => new()
@@ -1384,10 +1371,10 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     {
         LazerBeatmapInstallStatus.Sent => "The drill was sent to osu!lazer. It will appear after import completes.",
         LazerBeatmapInstallStatus.LazerStarted => "osu!lazer opened and is importing the drill.",
-        LazerBeatmapInstallStatus.ArchiveUnavailable => "The preserved .osz is unavailable. Open the export folder to import it manually.",
-        LazerBeatmapInstallStatus.LazerNotFound => "osu!lazer was not found. Open the export folder to import the .osz manually.",
-        LazerBeatmapInstallStatus.LazerRejected => "osu!lazer did not accept the drill. Open the export folder to import it manually.",
-        _ => "AimMod could not open osu!lazer. Open the export folder to import the .osz manually.",
+        LazerBeatmapInstallStatus.ArchiveUnavailable => "The generated drill is no longer available. Create it again.",
+        LazerBeatmapInstallStatus.LazerNotFound => "osu!lazer was not found. Check the installation and try again.",
+        LazerBeatmapInstallStatus.LazerRejected => "osu!lazer did not accept the drill. Try creating it again.",
+        _ => "AimMod could not open osu!lazer. Check the installation and try again.",
     };
 
     private partial class AnalysisProgressBanner : CompositeDrawable
