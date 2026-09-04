@@ -11,10 +11,13 @@ namespace AimMod.Osu.Worker.Tests;
 public sealed class ExternalLazerRealmBridgeTests
 {
     private string temporaryDirectory = null!;
+    private SynchronizationContext? originalSynchronizationContext;
 
     [SetUp]
     public void SetUp()
     {
+        originalSynchronizationContext = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(null);
         temporaryDirectory = Path.Combine(Path.GetTempPath(), $"aimmod-lazer-snapshot-test-{Guid.NewGuid():N}");
         Directory.CreateDirectory(temporaryDirectory);
     }
@@ -22,8 +25,15 @@ public sealed class ExternalLazerRealmBridgeTests
     [TearDown]
     public void TearDown()
     {
-        if (Directory.Exists(temporaryDirectory))
-            Directory.Delete(temporaryDirectory, recursive: true);
+        try
+        {
+            if (Directory.Exists(temporaryDirectory))
+                Directory.Delete(temporaryDirectory, recursive: true);
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(originalSynchronizationContext);
+        }
     }
 
     [Test]

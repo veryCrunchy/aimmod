@@ -25,10 +25,13 @@ public sealed class ExternalLazerCatalogReaderTests
 {
     private string temporaryDirectory = null!;
     private string realmPath = null!;
+    private SynchronizationContext? originalSynchronizationContext;
 
     [SetUp]
     public void SetUp()
     {
+        originalSynchronizationContext = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(null);
         temporaryDirectory = Path.Combine(Path.GetTempPath(), $"aimmod-catalog-test-{Guid.NewGuid():N}");
         Directory.CreateDirectory(temporaryDirectory);
         realmPath = Path.Combine(temporaryDirectory, "catalog.realm");
@@ -38,8 +41,15 @@ public sealed class ExternalLazerCatalogReaderTests
     [TearDown]
     public void TearDown()
     {
-        if (Directory.Exists(temporaryDirectory))
-            Directory.Delete(temporaryDirectory, recursive: true);
+        try
+        {
+            if (Directory.Exists(temporaryDirectory))
+                Directory.Delete(temporaryDirectory, recursive: true);
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(originalSynchronizationContext);
+        }
     }
 
     [Test]
