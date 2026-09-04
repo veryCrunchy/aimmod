@@ -8,6 +8,7 @@
   <ItemGroup>
     <PackageReference Include="ppy.osu.Game" Version="2026.730.0" />
     <PackageReference Include="ppy.osu.Game.Rulesets.Osu" Version="2026.730.0" />
+    <PackageReference Include="Velopack" Version="1.2.0" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../AimMod.Osu.Runtime/AimMod.Osu.Runtime.csproj" />

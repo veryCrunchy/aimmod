@@ -2315,6 +2315,11 @@
         "resolved": "2.3.0",
         "contentHash": "Qo4z6ZjnIfbR3Us1Za5M2vQ97OWZPmODvVmepxZ8XW0UIVLGdO2T63/N3b23kCcyiwuIe0TQvMEQG8wUCCD1mA=="
       },
+      "Velopack": {
+        "type": "Transitive",
+        "resolved": "1.2.0",
+        "contentHash": "Rz67gJL619fSBS6omaSINUxyDuwhIxkm5mmubf7uLd5Qgi6LLKaKCha+QFP6n+Bw/UjA0vutnH4JQfYzn6ANtw=="
+      },
       "Vortice.D3DCompiler": {
         "type": "Transitive",
         "resolved": "2.4.2",
@@ -2367,6 +2372,7 @@
         "type": "Project",
         "dependencies": {
           "AimMod.Osu.Runtime": "[1.0.0, )",
+          "Velopack": "[1.2.0, )",
           "aimmod-osu-worker": "[1.0.0, )",
           "ppy.osu.Game": "[2026.730.0, )",
           "ppy.osu.Game.Rulesets.Osu": "[2026.730.0, )"

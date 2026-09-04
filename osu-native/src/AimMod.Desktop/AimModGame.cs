@@ -27,6 +27,7 @@ using AimMod.Desktop.Skins;
 using AimMod.Desktop.PpTargets;
 using AimMod.Desktop.Practice;
 using AimMod.Desktop.ScoreHistory;
+using AimMod.Desktop.Updates;
 using osu.Game.Graphics.Sprites;
 using osu.Game.Overlays;
 
@@ -87,6 +88,8 @@ public partial class AimModGame : OsuGameBase
     private ReplayAnalysisCache? replayAnalysisCache;
     private Guid? activeReplayScoreId;
     private CancellationTokenSource? profileRefreshCancellation;
+    private readonly INativeUpdateService? configuredUpdateService;
+    private INativeUpdateService? updateService;
 
     public AimModGame()
         : this(AimModLaunchOptions.Home)
@@ -99,9 +102,18 @@ public partial class AimModGame : OsuGameBase
     }
 
     public AimModGame(AimModLaunchOptions launchOptions, ILocalLibrarySource? localLibrarySource)
+        : this(launchOptions, localLibrarySource, null)
+    {
+    }
+
+    internal AimModGame(
+        AimModLaunchOptions launchOptions,
+        ILocalLibrarySource? localLibrarySource,
+        INativeUpdateService? updateService)
     {
         this.launchOptions = launchOptions;
         configuredLocalLibrary = localLibrarySource;
+        configuredUpdateService = updateService;
         GC.KeepAlive(standardRulesetAssembly);
     }
 
@@ -154,6 +166,11 @@ public partial class AimModGame : OsuGameBase
                 },
             },
         });
+
+        updateService = configuredUpdateService ?? new NativeUpdateService(
+            new FileNativeUpdatePreferenceStore(Storage.GetFullPath("update-channel.txt", true)),
+            new VelopackUpdateBackendFactory());
+        _ = Task.Run(updateService.CheckAsync);
 
         // An injected library is an isolated host (tests and visual capture) and must not
         // discover or mutate the user's live lazer session.
@@ -351,7 +368,7 @@ public partial class AimModGame : OsuGameBase
 
     private void showHome()
     {
-        homeScreen ??= new HomeScreen(showBeatmaps, showSkins, showReplays, showStatistics, showCoaching, showPpTargets) { RelativeSizeAxes = Axes.Both };
+        homeScreen ??= new HomeScreen(updateService!, showBeatmaps, showSkins, showReplays, showStatistics, showCoaching, showPpTargets) { RelativeSizeAxes = Axes.Both };
         switchWorkspaceRoute(NativeRoute.Home, new MarginPadding { Top = 88, Horizontal = 52, Bottom = 36 }, homeScreen);
     }
 
@@ -1161,6 +1178,7 @@ public partial class AimModGame : OsuGameBase
         }
 
         cancelReplayWork();
+        updateService?.Dispose();
         appLifetime.Dispose();
         base.Dispose(isDisposing);
     }
@@ -1278,6 +1296,7 @@ public partial class AimModGame : OsuGameBase
     private partial class HomeScreen : Container
     {
         public HomeScreen(
+            INativeUpdateService updateService,
             Action showBeatmaps,
             Action showSkins,
             Action showReplays,
@@ -1326,6 +1345,10 @@ public partial class AimModGame : OsuGameBase
                             new WorkspaceLink(FontAwesome.Solid.PaintBrush, "Skins", "Installed osu!lazer skins", AimModPalette.Cyan, showSkins),
                         },
                     },
+                },
+                new NativeUpdateSurface(updateService)
+                {
+                    Y = 470,
                 },
             };
         }

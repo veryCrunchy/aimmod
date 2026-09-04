@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net8.0": {
+      "aimmod.osu.runtime.contracts": {
+        "type": "Project"
+      }
+    },
+    "net8.0/win-x64": {}
+  }
+}

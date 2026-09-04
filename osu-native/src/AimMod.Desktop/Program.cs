@@ -5,6 +5,7 @@ using osu.Game.Rulesets.Osu;
 using osu.Game.Scoring.Legacy;
 using osu.Game.Screens.Play;
 using AimMod.Osu.Worker;
+using Velopack;
 
 namespace AimMod.Desktop;
 
@@ -19,8 +20,12 @@ public static class Program
         if (args is ["--probe"])
             return runProbe();
 
+        if (ShouldRunVelopackBootstrap(args))
+            VelopackApp.Build().Run();
         return runDesktop(args);
     }
+
+    internal static bool ShouldRunVelopackBootstrap(string[] args) => args is not ["--worker"] and not ["--probe"];
 
     private static int runDesktop(string[] args)
     {

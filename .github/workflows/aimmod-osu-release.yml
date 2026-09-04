@@ -1,0 +1,306 @@
+name: AimMod osu Release
+
+on:
+  push:
+    tags:
+      - "aimmod-osu-v[0-9]+.[0-9]+.[0-9]+"
+      - "aimmod-osu-v[0-9]+.[0-9]+.[0-9]+-*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: SemVer version without the aimmod-osu-v prefix
+        required: true
+        type: string
+      channel:
+        description: Release channel
+        required: true
+        default: preview
+        type: choice
+        options:
+          - stable
+          - preview
+      publish:
+        description: Publish GitHub releases and update the selected channel
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aimmod-osu-release-${{ github.ref_name || inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  metadata:
+    runs-on: ubuntu-latest
+    outputs:
+      channel: ${{ steps.release.outputs.channel }}
+      publish: ${{ steps.release.outputs.publish }}
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve and validate release metadata
+        id: release
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_CHANNEL: ${{ inputs.channel }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            tag="$REF_NAME"
+            version=${tag#aimmod-osu-v}
+            publish=true
+            if [[ "$version" == *-* ]]; then
+              channel=preview
+            else
+              channel=stable
+            fi
+          else
+            version="$INPUT_VERSION"
+            channel="$INPUT_CHANNEL"
+            publish="$INPUT_PUBLISH"
+            tag="aimmod-osu-v${version}"
+          fi
+
+          semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+          if [[ ! "$version" =~ $semver ]]; then
+            echo "Invalid AimMod osu version: $version" >&2
+            exit 2
+          fi
+          if [[ "$tag" != "aimmod-osu-v${version}" ]]; then
+            echo "Invalid AimMod osu tag: $tag" >&2
+            exit 2
+          fi
+          if [[ "$channel" == "stable" && "$version" == *-* ]]; then
+            echo "Stable releases cannot use a prerelease version." >&2
+            exit 2
+          fi
+          if [[ "$channel" == "preview" && "$version" != *-* ]]; then
+            echo "Preview releases require a prerelease version." >&2
+            exit 2
+          fi
+
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Test channel manifest generation
+        run: python3 osu-native/tests/test-release-channel.py
+
+  windows:
+    needs: metadata
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pinned .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: osu-native/global.json
+
+      - name: Build Windows release
+        shell: pwsh
+        working-directory: osu-native
+        env:
+          AIMMOD_VERSION: ${{ needs.metadata.outputs.version }}
+        run: ./scripts/build-windows-release.ps1
+
+      - name: Install pinned Velopack CLI
+        shell: pwsh
+        run: dotnet tool install --tool-path "$env:RUNNER_TEMP/vpk" vpk --version 1.2.0
+
+      - name: Build Windows installer and update feed
+        shell: pwsh
+        working-directory: osu-native
+        env:
+          CHANNEL: ${{ needs.metadata.outputs.channel }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          & "$env:RUNNER_TEMP/vpk/vpk.exe" pack `
+            --packId AimMod.Osu `
+            --packVersion $env:VERSION `
+            --packDir "artifacts/aimmod-osu-$env:VERSION-win-x64/app" `
+            --mainExe AimMod.exe `
+            --packAuthors veryCrunchy `
+            --packTitle "AimMod for osu!" `
+            --runtime win-x64 `
+            --channel "win-$env:CHANNEL" `
+            --icon "../src-tauri/icons/icon.ico" `
+            --delta None `
+            --outputDir artifacts/velopack-win
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: aimmod-osu-${{ needs.metadata.outputs.version }}-win-x64
+          path: |
+            osu-native/artifacts/aimmod-osu-${{ needs.metadata.outputs.version }}-win-x64.zip
+            osu-native/artifacts/aimmod-osu-${{ needs.metadata.outputs.version }}-win-x64.zip.sha256
+            osu-native/artifacts/velopack-win/*
+          if-no-files-found: error
+
+  linux:
+    needs: metadata
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pinned .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: osu-native/global.json
+
+      - name: Build Linux release
+        shell: bash
+        working-directory: osu-native
+        env:
+          AIMMOD_VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          AIMMOD_DOTNET=$(command -v dotnet) \
+          AIMMOD_NUGET_PACKAGES="$HOME/.nuget/packages" \
+          ./scripts/build-linux-release.sh
+
+      - name: Install pinned Velopack CLI
+        run: dotnet tool install --tool-path "$RUNNER_TEMP/vpk" vpk --version 1.2.0
+
+      - name: Build Linux AppImage and update feed
+        shell: bash
+        working-directory: osu-native
+        env:
+          CHANNEL: ${{ needs.metadata.outputs.channel }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          "$RUNNER_TEMP/vpk/vpk" pack \
+            --packId AimMod.Osu \
+            --packVersion "$VERSION" \
+            --packDir "artifacts/aimmod-osu-${VERSION}-linux-x64/app" \
+            --mainExe AimMod \
+            --packAuthors veryCrunchy \
+            --packTitle "AimMod for osu!" \
+            --runtime linux-x64 \
+            --channel "linux-${CHANNEL}" \
+            --icon "../src-tauri/icons/128x128@2x.png" \
+            --delta None \
+            --outputDir artifacts/velopack-linux
+
+      - name: Upload Linux package
+        uses: actions/upload-artifact@v4
+        with:
+          name: aimmod-osu-${{ needs.metadata.outputs.version }}-linux-x64
+          path: |
+            osu-native/artifacts/aimmod-osu-${{ needs.metadata.outputs.version }}-linux-x64.tar.gz
+            osu-native/artifacts/aimmod-osu-${{ needs.metadata.outputs.version }}-linux-x64.tar.gz.sha256
+            osu-native/artifacts/velopack-linux/*
+          if-no-files-found: error
+
+  publish:
+    needs: [metadata, windows, linux]
+    if: needs.metadata.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      artifact-metadata: write
+      attestations: write
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download release packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: aimmod-osu-${{ needs.metadata.outputs.version }}-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create channel manifest
+        shell: bash
+        env:
+          CHANNEL: ${{ needs.metadata.outputs.channel }}
+          COMMIT_SHA: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ needs.metadata.outputs.tag }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          published_at=$(date --utc +%Y-%m-%dT%H:%M:%SZ)
+          windows_installer=$(find release-assets -maxdepth 1 -type f -name '*-Setup.exe' -print -quit)
+          linux_installer=$(find release-assets -maxdepth 1 -type f -name '*.AppImage' -print -quit)
+          test -n "$windows_installer"
+          test -n "$linux_installer"
+          python3 osu-native/scripts/create-release-channel.py \
+            --repository "$REPOSITORY" \
+            --tag "$TAG" \
+            --version "$VERSION" \
+            --channel "$CHANNEL" \
+            --commit "$COMMIT_SHA" \
+            --published-at "$published_at" \
+            --pins osu-native/packaging/ppy-packages.json \
+            --asset "windows,win-x64,zip,release-assets/aimmod-osu-${VERSION}-win-x64.zip" \
+            --asset "linux,linux-x64,tar.gz,release-assets/aimmod-osu-${VERSION}-linux-x64.tar.gz" \
+            --installer "windows,win-x64,exe,${windows_installer}" \
+            --installer "linux,linux-x64,AppImage,${linux_installer}" \
+            --output "release-assets/aimmod-osu-${CHANNEL}.json"
+          (
+            cd release-assets
+            sha256sum \
+              "aimmod-osu-${VERSION}-win-x64.zip" \
+              "aimmod-osu-${VERSION}-linux-x64.tar.gz" \
+              > "aimmod-osu-${VERSION}-checksums.sha256"
+          )
+
+      - name: Attest release artifacts
+        uses: actions/attest@v4
+        with:
+          subject-path: release-assets/*
+
+      - name: Publish version and channel releases
+        shell: bash
+        env:
+          CHANNEL: ${{ needs.metadata.outputs.channel }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.metadata.outputs.tag }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          prerelease_args=()
+          if [[ "$CHANNEL" == "preview" ]]; then
+            prerelease_args=(--prerelease)
+          fi
+
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --target "$GITHUB_SHA" \
+              --title "AimMod osu ${VERSION}" \
+              --generate-notes \
+              --latest=false \
+              "${prerelease_args[@]}"
+          fi
+          gh release upload "$TAG" release-assets/* --clobber
+
+          channel_tag="aimmod-osu-${CHANNEL}"
+          if ! gh release view "$channel_tag" >/dev/null 2>&1; then
+            gh release create "$channel_tag" \
+              --target "$GITHUB_SHA" \
+              --title "AimMod osu ${CHANNEL} channel" \
+              --notes "Machine-readable pointer for the AimMod osu ${CHANNEL} channel." \
+              --latest=false \
+              "${prerelease_args[@]}"
+          fi
+          gh release upload "$channel_tag" \
+            "release-assets/aimmod-osu-${CHANNEL}.json" \
+            --clobber
+          while IFS= read -r -d '' asset; do
+            gh release upload "$channel_tag" "$asset" --clobber
+          done < <(find release-assets -maxdepth 1 -type f \
+            \( -name 'releases.*.json' -o -name '*.nupkg' -o -name '*-Setup.exe' -o -name '*.AppImage' \) \
+            -print0)

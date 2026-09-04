@@ -4,8 +4,19 @@ set -euo pipefail
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/.." && pwd)
 rid=${AIMMOD_RUNTIME_ID:-linux-x64}
+version=${AIMMOD_VERSION:-}
 configuration=Release
-artifact_name="aimmod-osu-${rid}"
+version_segment=
+version_args=()
+if [[ -n "$version" ]]; then
+    if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z]+)*([+][0-9A-Za-z.-]+)?$ ]]; then
+        echo "AIMMOD_VERSION must be a SemVer-compatible version without a leading v: $version" >&2
+        exit 2
+    fi
+    version_segment="${version}-"
+    version_args=(--property:Version="$version")
+fi
+artifact_name="aimmod-osu-${version_segment}${rid}"
 artifact_root="$repo_root/artifacts"
 stage="$artifact_root/$artifact_name"
 archive="$artifact_root/$artifact_name.tar.gz"
@@ -71,7 +82,7 @@ fi
 
 mkdir -p -- "$artifact_root"
 case "$stage" in
-    "$repo_root"/artifacts/aimmod-osu-linux-*) ;;
+    "$repo_root"/artifacts/aimmod-osu-linux-*|"$repo_root"/artifacts/aimmod-osu-*-linux-*) ;;
     *)
         echo "Refusing to clear unexpected staging path: $stage" >&2
         exit 2
@@ -86,6 +97,7 @@ run_dotnet restore AimMod.Native.sln --locked-mode --verbosity minimal
 run_dotnet build AimMod.Native.sln \
     --configuration "$configuration" \
     --no-restore \
+    "${version_args[@]}" \
     --property:ContinuousIntegrationBuild=true \
     --verbosity minimal
 
@@ -153,6 +165,7 @@ run_dotnet publish src/AimMod.Desktop/AimMod.Desktop.csproj \
     --self-contained true \
     --no-restore \
     --output "artifacts/$artifact_name/app" \
+    "${version_args[@]}" \
     --property:NuGetLockFilePath="packages.$rid.lock.json" \
     --property:ContinuousIntegrationBuild=true \
     --property:DebugSymbols=false \

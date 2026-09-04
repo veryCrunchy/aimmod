@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "distribution": "aimmod-osu",
+  "allowedRoots": [
+    "app"
+  ],
+  "allowedMetadataFiles": [
+    "artifact-inventory.json",
+    "ppy-packages.json"
+  ],
+  "allowedFilePatterns": [
+    "^app/(.+/)?[^/]+\\.dll$",
+    "^app/(.+/)?[^/]+\\.json$",
+    "^app/(AimMod|createdump)\\.exe$",
+    "^app/stbi\\.lib$"
+  ],
+  "requiredFiles": [
+    "app/AimMod.exe",
+    "app/AimMod.dll",
+    "app/AimMod.deps.json",
+    "app/AimMod.runtimeconfig.json",
+    "app/aimmod-osu-worker.dll",
+    "app/createdump.exe",
+    "app/osu.Game.dll",
+    "app/osu.Game.Rulesets.Osu.dll",
+    "app/stbi.lib",
+    "ppy-packages.json"
+  ],
+  "deniedPathFragments": [
+    "kovaak",
+    "node_modules",
+    "package.json",
+    "package-lock.json",
+    "pnpm-lock",
+    "yarn.lock",
+    "tauri",
+    "webview"
+  ],
+  "deniedExtensions": [
+    ".css",
+    ".html",
+    ".js",
+    ".jsx",
+    ".map",
+    ".mjs",
+    ".pdb",
+    ".ts",
+    ".tsx"
+  ],
+  "deniedAssemblyNames": [
+    "osu.Desktop.dll",
+    "osu.Game.Tournament.dll",
+    "osu.Game.Rulesets.Catch.dll",
+    "osu.Game.Rulesets.Mania.dll",
+    "osu.Game.Rulesets.Taiko.dll"
+  ],
+  "deniedFileNames": [
+    "aimmod-osu-worker.exe",
+    "aimmod-osu-worker.deps.json",
+    "aimmod-osu-worker.runtimeconfig.json"
+  ],
+  "forbiddenContentMarkers": [
+    "__TAURI__",
+    "KovaaK",
+    "node_modules/",
+    "react-dom"
+  ]
+}
