@@ -7,6 +7,31 @@ namespace AimMod.Desktop.Tests;
 public sealed class LocalLibraryControllerTests
 {
     [Test]
+    public async Task UnresponsiveSourceTimesOutAndCanBeRetried()
+    {
+        CancellationToken firstToken = default;
+        int calls = 0;
+        var source = new FakeLocalLibrarySource
+        {
+            BeatmapSearch = async (query, token) =>
+            {
+                if (++calls == 1)
+                {
+                    firstToken = token;
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                }
+                return new LocalLibraryPage<LocalBeatmapSet>([], 0, query.Offset, query.Limit);
+            },
+        };
+        using var controller = new LocalLibraryController(source, NativeLocalLibraryMode.Beatmaps, TimeSpan.FromMilliseconds(30));
+        var result = await controller.LoadAsync(new LocalLibraryQuery());
+        Assert.That(result.Status, Is.EqualTo(LocalLibraryLoadStatus.Error));
+        Assert.That(result.ErrorMessage, Does.Contain("retry"));
+        Assert.That(firstToken.IsCancellationRequested, Is.True);
+        Assert.That((await controller.LoadAsync(new LocalLibraryQuery())).Status, Is.EqualTo(LocalLibraryLoadStatus.Empty));
+    }
+
+    [Test]
     public async Task PublishesLoadingThenEmptyForAnExternalSource()
     {
         var source = new FakeLocalLibrarySource

@@ -36,6 +36,8 @@ internal sealed class LocalLibraryController : IDisposable
 {
     private readonly ILocalLibrarySource source;
     private readonly NativeLocalLibraryMode mode;
+    private readonly TimeSpan requestTimeout;
+    public LocalLibraryProgress? Progress => (source as ILocalLibraryProgressSource)?.Progress;
     private readonly object stateLock = new();
     private CancellationTokenSource? activeRequest;
     private long requestGeneration;
@@ -48,10 +50,11 @@ internal sealed class LocalLibraryController : IDisposable
         false);
     private bool disposed;
 
-    public LocalLibraryController(ILocalLibrarySource source, NativeLocalLibraryMode mode)
+    public LocalLibraryController(ILocalLibrarySource source, NativeLocalLibraryMode mode, TimeSpan? requestTimeout = null)
     {
         this.source = source ?? throw new ArgumentNullException(nameof(source));
         this.mode = mode;
+        this.requestTimeout = requestTimeout ?? TimeSpan.FromMinutes(2);
     }
 
     public event EventHandler<LocalLibraryLoadStateChangedEventArgs>? StateChanged;
@@ -99,18 +102,20 @@ internal sealed class LocalLibraryController : IDisposable
         {
             if (mode == NativeLocalLibraryMode.Beatmaps)
             {
-                LocalLibraryPage<LocalBeatmapSet> page = await source.SearchBeatmapSetsAsync(query, requestCancellation.Token).ConfigureAwait(false);
+                LocalLibraryPage<LocalBeatmapSet> page = await source.SearchBeatmapSetsAsync(query, requestCancellation.Token)
+                    .AsTask().WaitAsync(requestTimeout, requestCancellation.Token).ConfigureAwait(false);
                 IReadOnlyList<LocalBeatmapSet> items = append
                     ? previous.BeatmapSets.Concat(page.Items).ToArray()
                     : page.Items;
-                return publishResult(generation, items, Array.Empty<LocalReplay>(), page.Total, page.HasMore);
+                return publishResult(generation, items, Array.Empty<LocalReplay>(), page.Total, page.HasMore, page.Warning);
             }
 
-            LocalLibraryPage<LocalReplay> replayPage = await source.SearchReplaysAsync(query, requestCancellation.Token).ConfigureAwait(false);
+            LocalLibraryPage<LocalReplay> replayPage = await source.SearchReplaysAsync(query, requestCancellation.Token)
+                .AsTask().WaitAsync(requestTimeout, requestCancellation.Token).ConfigureAwait(false);
             IReadOnlyList<LocalReplay> replays = append
                 ? previous.Replays.Concat(replayPage.Items).ToArray()
                 : replayPage.Items;
-            return publishResult(generation, Array.Empty<LocalBeatmapSet>(), replays, replayPage.Total, replayPage.HasMore);
+            return publishResult(generation, Array.Empty<LocalBeatmapSet>(), replays, replayPage.Total, replayPage.HasMore, replayPage.Warning);
         }
         catch (OperationCanceledException) when (requestCancellation.IsCancellationRequested)
         {
@@ -118,6 +123,7 @@ internal sealed class LocalLibraryController : IDisposable
         }
         catch (Exception error)
         {
+            requestCancellation.Cancel();
             return publish(generation, new LocalLibraryLoadState(
                 State.Revision + 1,
                 LocalLibraryLoadStatus.Error,
@@ -125,7 +131,9 @@ internal sealed class LocalLibraryController : IDisposable
                 append ? previous.Replays : Array.Empty<LocalReplay>(),
                 append ? previous.Total : 0,
                 append && previous.HasMore,
-                error.Message));
+                error is TimeoutException
+                    ? "The library took too long to respond. Check that your osu! drive is connected, then retry."
+                    : error.Message));
         }
         finally
         {
@@ -168,14 +176,14 @@ internal sealed class LocalLibraryController : IDisposable
         IReadOnlyList<LocalBeatmapSet> beatmapSets,
         IReadOnlyList<LocalReplay> replays,
         int total,
-        bool hasMore) =>
+        bool hasMore, string? warning = null) =>
         publish(generation, new LocalLibraryLoadState(
             State.Revision + 1,
             total == 0 ? LocalLibraryLoadStatus.Empty : LocalLibraryLoadStatus.Ready,
             beatmapSets,
             replays,
             total,
-            hasMore));
+            hasMore, warning));
 
     private LocalLibraryLoadState publish(long generation, LocalLibraryLoadState nextState)
     {

@@ -308,7 +308,12 @@ public partial class AimModGame : OsuGameBase
             OsuLazerDataRoot? root = discovery.CompleteDataRoots.FirstOrDefault();
             if (root is null)
             {
-                Schedule(() => header.SetSessionState(new LazerSessionState(LazerSessionStatus.Unavailable, null, 0)));
+                Schedule(() =>
+                {
+                    header.SetSessionState(new LazerSessionState(LazerSessionStatus.Unavailable, null, 0));
+                    skinsScreen?.Configure(externalSkinSource, null, appliedExternalSkinId, applySelectedSkin);
+                    startReplayLibraryAnalysis();
+                });
                 return;
             }
 
@@ -448,7 +453,15 @@ public partial class AimModGame : OsuGameBase
         {
             OsuProfileFetchResult result = await officialApiClient!.FetchCurrentProfileAsync(cancellationToken).ConfigureAwait(false);
             if (result.Status != OsuProfileFetchStatus.Success || result.Profile is null)
+            {
+                if (!IsDisposed)
+                    Schedule(() =>
+                    {
+                        if (lazerSessionMonitor?.Current.Revision == sessionRevision)
+                            header.SetAccountUnavailable();
+                    });
                 return;
+            }
 
             if (!IsDisposed)
             {
@@ -1527,7 +1540,7 @@ public partial class AimModGame : OsuGameBase
                     Anchor = Anchor.CentreRight,
                     Origin = Anchor.CentreRight,
                     Margin = new MarginPadding { Right = 28 },
-                    Text = "Finding osu!lazer...",
+                    Text = "Finding osu! installations...",
                     Font = new FontUsage(size: 13),
                     Colour = AimModPalette.Muted,
                     MaxWidth = 220,
@@ -1548,8 +1561,8 @@ public partial class AimModGame : OsuGameBase
         {
             sessionState.Text = state.Status switch
             {
-                LazerSessionStatus.SignedIn => state.Username ?? "osu! signed in",
-                LazerSessionStatus.Remembered => state.Username is null ? "osu! session waiting" : $"{state.Username} · session waiting",
+                LazerSessionStatus.SignedIn => "Checking osu! account...",
+                LazerSessionStatus.Remembered => "osu! online session expired",
                 LazerSessionStatus.SignedOut => "osu! signed out",
                 _ => "osu!lazer not connected",
             };
@@ -1562,6 +1575,12 @@ public partial class AimModGame : OsuGameBase
                 ? $"{profile.Username}  ·  #{rank:N0}"
                 : profile.Username;
             sessionState.Colour = AimModPalette.Cyan;
+        }
+
+        public void SetAccountUnavailable()
+        {
+            sessionState.Text = "Online account unavailable";
+            sessionState.Colour = AimModPalette.Muted;
         }
     }
 

@@ -66,6 +66,33 @@ public sealed class OsuStableLocalLibrarySourceTests
         Assert.That(maps.Items, Is.Empty);
     }
 
+    [Test]
+    public async Task LibraryThumbnailsDoNotDecodeHitObjects()
+    {
+        string folder = Directory.CreateDirectory(Path.Combine(songs, "42 Artist - Title")).FullName;
+        File.WriteAllText(Path.Combine(folder, "map.osu"), minimalBeatmap().Replace(
+            "256,192,1000,1,0,0:0:0:0:", "invalid hit object which must not be decoded"));
+        File.WriteAllText(Path.Combine(folder, "background.jpg"), "image");
+        createOsuDatabase("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "map.osu").Save(Path.Combine(root, "osu!.db"));
+        var source = new OsuStableLocalLibrarySource(root, songs);
+        var maps = await source.SearchBeatmapSetsAsync(new LocalLibraryQuery());
+        Assert.That(maps.Items.Single().BackgroundPath, Does.EndWith("background.jpg"));
+        Assert.That(source.Progress, Is.Null);
+    }
+
+    [Test]
+    public async Task FailedSnapshotCanBeRetriedWithoutChangingDatabaseStamp()
+    {
+        string folder = Directory.CreateDirectory(Path.Combine(songs, "42 Artist - Title")).FullName;
+        File.WriteAllText(Path.Combine(folder, "map.osu"), minimalBeatmap());
+        string database = Path.Combine(root, "osu!.db");
+        createOsuDatabase("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "map.osu").Save(database);
+        var source = new OsuStableLocalLibrarySource(root, songs);
+        using (var locked = new FileStream(database, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            Assert.ThrowsAsync<IOException>(async () => await source.SearchBeatmapSetsAsync(new LocalLibraryQuery()));
+        Assert.That((await source.SearchBeatmapSetsAsync(new LocalLibraryQuery())).Total, Is.EqualTo(1));
+    }
+
     private static OsuDatabase createOsuDatabase(string hash, string fileName)
     {
         var beatmap = new DbBeatmap

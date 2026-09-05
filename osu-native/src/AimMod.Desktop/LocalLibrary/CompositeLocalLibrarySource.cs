@@ -1,14 +1,20 @@
 namespace AimMod.Desktop.LocalLibrary;
 
-public sealed class CompositeLocalLibrarySource : ILocalLibrarySource
+public sealed class CompositeLocalLibrarySource : ILocalLibrarySource, ILocalLibraryProgressSource
 {
     private const int source_page_size = 200;
     private readonly IReadOnlyList<ILocalLibrarySource> sources;
+    private readonly TimeSpan sourceTimeout;
+    public LocalLibraryProgress? Progress => sources.OfType<ILocalLibraryProgressSource>()
+        .Select(source => source.Progress).FirstOrDefault(progress => progress is not null);
 
-    public CompositeLocalLibrarySource(IEnumerable<ILocalLibrarySource> sources)
+    public CompositeLocalLibrarySource(IEnumerable<ILocalLibrarySource> sources, TimeSpan? sourceTimeout = null)
     {
-        this.sources = sources?.Where(source => source is not null).Distinct().ToArray()
+        this.sources = sources?.Where(source => source is not null)
+                           .SelectMany(source => source is CompositeLocalLibrarySource composite ? composite.sources : new[] { source })
+                           .Distinct().ToArray()
                        ?? throw new ArgumentNullException(nameof(sources));
+        this.sourceTimeout = sourceTimeout ?? TimeSpan.FromSeconds(45);
         if (this.sources.Count == 0)
             throw new ArgumentException("At least one local library source is required.", nameof(sources));
     }
@@ -19,7 +25,8 @@ public sealed class CompositeLocalLibrarySource : ILocalLibrarySource
     {
         LocalLibraryQuery normalised = query.Normalised();
         SourceRows<LocalBeatmapSet>[] rows = await Task.WhenAll(sources.Select(source =>
-            readPrefix(source.SearchBeatmapSetsAsync, normalised, cancellationToken))).ConfigureAwait(false);
+            readSafely(source.SearchBeatmapSetsAsync, normalised, cancellationToken))).ConfigureAwait(false);
+        ensureAvailable(rows);
         LocalBeatmapSet[] raw = rows.SelectMany(row => row.Items).ToArray();
         LocalBeatmapSet[] merged = raw
             .GroupBy(mapKey, StringComparer.OrdinalIgnoreCase)
@@ -28,7 +35,7 @@ public sealed class CompositeLocalLibrarySource : ILocalLibrarySource
         LocalLibraryPage<LocalBeatmapSet> page = await new InMemoryLocalLibrarySource(merged, [])
             .SearchBeatmapSetsAsync(normalised, cancellationToken).ConfigureAwait(false);
         int total = Math.Max(page.Offset + page.Items.Count, rows.Sum(row => row.Total) - (raw.Length - merged.Length));
-        return page with { Total = total };
+        return page with { Total = total, Warning = warning(rows) };
     }
 
     public async ValueTask<LocalLibraryPage<LocalReplay>> SearchReplaysAsync(
@@ -37,7 +44,8 @@ public sealed class CompositeLocalLibrarySource : ILocalLibrarySource
     {
         LocalLibraryQuery normalised = query.Normalised();
         SourceRows<LocalReplay>[] rows = await Task.WhenAll(sources.Select(source =>
-            readPrefix(source.SearchReplaysAsync, normalised, cancellationToken))).ConfigureAwait(false);
+            readSafely(source.SearchReplaysAsync, normalised, cancellationToken))).ConfigureAwait(false);
+        ensureAvailable(rows);
         LocalReplay[] raw = rows.SelectMany(row => row.Items).ToArray();
         LocalReplay[] merged = raw
             .GroupBy(replayKey, StringComparer.OrdinalIgnoreCase)
@@ -46,7 +54,7 @@ public sealed class CompositeLocalLibrarySource : ILocalLibrarySource
         LocalLibraryPage<LocalReplay> page = await new InMemoryLocalLibrarySource([], merged)
             .SearchReplaysAsync(normalised, cancellationToken).ConfigureAwait(false);
         int total = Math.Max(page.Offset + page.Items.Count, rows.Sum(row => row.Total) - (raw.Length - merged.Length));
-        return page with { Total = total };
+        return page with { Total = total, Warning = warning(rows) };
     }
 
     public void Invalidate()
@@ -54,6 +62,34 @@ public sealed class CompositeLocalLibrarySource : ILocalLibrarySource
         foreach (ILocalLibrarySource source in sources)
             source.Invalidate();
     }
+
+    private async Task<SourceRows<T>> readSafely<T>(
+        Func<LocalLibraryQuery, CancellationToken, ValueTask<LocalLibraryPage<T>>> search,
+        LocalLibraryQuery query, CancellationToken cancellationToken)
+    {
+        using var request = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        try
+        {
+            return await readPrefix(search, query, request.Token)
+                .WaitAsync(sourceTimeout, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception error)
+        {
+            request.Cancel();
+            return new([], 0, error);
+        }
+    }
+
+    private static void ensureAvailable<T>(SourceRows<T>[] rows)
+    {
+        if (rows.All(row => row.Error is not null))
+            throw new InvalidOperationException("No local osu! library responded. Check the installation locations and retry.", rows[0].Error);
+    }
+
+    private static string? warning<T>(SourceRows<T>[] rows) => rows.Any(row => row.Error is not null)
+        ? "Partial library: an osu! installation is unavailable. Retry to include it."
+        : null;
 
     private static async Task<SourceRows<T>> readPrefix<T>(
         Func<LocalLibraryQuery, CancellationToken, ValueTask<LocalLibraryPage<T>>> search,
@@ -115,5 +151,5 @@ public sealed class CompositeLocalLibrarySource : ILocalLibrarySource
         + (replay.PerformancePoints is not null ? 2 : 0)
         + (replay.IsLocallyStored ? 1 : 0);
 
-    private sealed record SourceRows<T>(T[] Items, int Total);
+    private sealed record SourceRows<T>(T[] Items, int Total, Exception? Error = null);
 }

@@ -266,17 +266,19 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
                 if (state.ItemCount == 0)
                     loadingOverlay.ShowLoading(
                         mode == NativeLocalLibraryMode.Beatmaps ? "Loading beatmaps" : "Loading replays",
-                        "Reading your local osu!lazer library");
+                        "Reading your local osu! library", progress: () => controller.Progress);
                 break;
 
             case LocalLibraryLoadStatus.Empty:
-                resultStatus.Text = mode == NativeLocalLibraryMode.Beatmaps ? "No beatmaps found" : "No replays found";
+                resultStatus.Text = state.ErrorMessage ?? (mode == NativeLocalLibraryMode.Beatmaps ? "No beatmaps found" : "No replays found");
                 loadMoreButton.SetState(false, "No results", visible: false);
                 loadingOverlay.HideLoading();
                 break;
 
             case LocalLibraryLoadStatus.Ready:
                 resultStatus.Text = $"Showing {state.ItemCount:N0} of {state.Total:N0}  //  {sortDescription(sortMode.Value)}";
+                if (state.ErrorMessage is not null)
+                    resultStatus.Text = state.ErrorMessage;
                 loadMoreButton.SetState(state.HasMore, state.HasMore ? "Load more" : "All loaded");
                 loadingOverlay.HideLoading();
                 break;

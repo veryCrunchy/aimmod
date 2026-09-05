@@ -7,6 +7,41 @@ namespace AimMod.Desktop.Tests;
 public sealed class CompositeLocalLibrarySourceTests
 {
     [Test]
+    public async Task UnresponsiveInstallationDoesNotHideAvailableMaps()
+    {
+        var source = new CompositeLocalLibrarySource(new ILocalLibrarySource[]
+        {
+            new UnresponsiveSource(),
+            new InMemoryLocalLibrarySource([map(Guid.NewGuid(), Guid.NewGuid(), 42, "")], []),
+        }, TimeSpan.FromMilliseconds(30));
+        var result = await source.SearchBeatmapSetsAsync(new LocalLibraryQuery());
+        Assert.That(result.Items, Has.Count.EqualTo(1));
+        Assert.That(result.Warning, Does.Contain("Partial library"));
+    }
+
+    [Test]
+    public void AllUnavailableInstallationsProduceAnErrorInsteadOfAnEmptyLibrary()
+    {
+        var source = new CompositeLocalLibrarySource([new UnresponsiveSource()], TimeSpan.FromMilliseconds(30));
+        Assert.ThrowsAsync<InvalidOperationException>(async () => await source.SearchReplaysAsync(new LocalLibraryQuery()));
+    }
+
+    private sealed class UnresponsiveSource : ILocalLibrarySource
+    {
+        public async ValueTask<LocalLibraryPage<LocalBeatmapSet>> SearchBeatmapSetsAsync(LocalLibraryQuery query, CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return new([], 0, 0, 1);
+        }
+        public async ValueTask<LocalLibraryPage<LocalReplay>> SearchReplaysAsync(LocalLibraryQuery query, CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return new([], 0, 0, 1);
+        }
+        public void Invalidate() { }
+    }
+
+    [Test]
     public async Task MergesSameOnlineSetAndPrefersPlayableReplay()
     {
         LocalBeatmapSet first = map(Guid.NewGuid(), Guid.NewGuid(), 42, "");

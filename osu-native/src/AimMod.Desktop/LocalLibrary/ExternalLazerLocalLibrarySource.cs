@@ -194,7 +194,7 @@ public interface ILocalLibrarySourceChanged
     event Action? SourceChanged;
 }
 
-public sealed class SwitchableLocalLibrarySource : ILocalLibrarySource, ILocalLibrarySourceChanged
+public sealed class SwitchableLocalLibrarySource : ILocalLibrarySource, ILocalLibrarySourceChanged, ILocalLibraryProgressSource
 {
     private ILocalLibrarySource current;
 
@@ -206,6 +206,7 @@ public sealed class SwitchableLocalLibrarySource : ILocalLibrarySource, ILocalLi
     public event Action? SourceChanged;
 
     public ILocalLibrarySource Current => Volatile.Read(ref current);
+    public LocalLibraryProgress? Progress => (Current as ILocalLibraryProgressSource)?.Progress;
 
     public void SwitchTo(ILocalLibrarySource source)
     {

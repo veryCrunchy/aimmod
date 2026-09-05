@@ -319,7 +319,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
 
         if (state.Status == LocalLibraryLoadStatus.Loading)
         {
-            loading.ShowLoading("Loading installed beatmaps", "Reading sets and difficulties from osu!lazer");
+            loading.ShowLoading("Loading installed beatmaps", "Reading your local osu! library", progress: () => controller.Progress);
             return;
         }
 
@@ -328,13 +328,20 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         if (state.Status == LocalLibraryLoadStatus.Error)
         {
             status.Text = $"Library unavailable: {state.ErrorMessage}";
-            setRows.Add(new EmptyState(FontAwesome.Solid.ExclamationTriangle, "Could not read the local library", "Check the osu!lazer data location and retry the search."));
+            setRows.Add(new EmptyState(FontAwesome.Solid.ExclamationTriangle, "Could not read the local library", "Check the osu! data location and retry the search."));
+            setRows.Add(new BasicButton
+            {
+                Text = "Retry library",
+                Width = 160,
+                Height = 40,
+                Action = resetQuery,
+            });
             return;
         }
 
         if (state.Status == LocalLibraryLoadStatus.Empty)
         {
-            status.Text = "No installed beatmaps match these filters";
+            status.Text = state.ErrorMessage ?? "No installed beatmaps match these filters";
             setRows.Add(new EmptyState(FontAwesome.Solid.Search, "No beatmaps found", "Change the search or star range to see more of your library."));
             inspector.ClearSelection();
             return;
@@ -350,6 +357,8 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         }
 
         status.Text = $"Showing {visibleSets.Length:N0} matching sets from {state.Total:N0} installed";
+        if (state.ErrorMessage is not null)
+            status.Text = state.ErrorMessage;
         foreach ((LocalBeatmapSet set, int index) in visibleSets.Select((value, index) => (value, index)))
             setRows.Add(new BeatmapSetRow(index + 1, set, selectSet, selectDifficulty));
 

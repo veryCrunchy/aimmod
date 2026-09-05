@@ -34,6 +34,7 @@ public sealed record LocalLibraryQuery(
 
 public sealed record LocalLibraryPage<T>(IReadOnlyList<T> Items, int Total, int Offset, int Limit)
 {
+    public string? Warning { get; init; }
     public bool HasMore => Offset + Items.Count < Total;
 }
 

@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using AimMod.Desktop.LocalLibrary;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
@@ -17,6 +19,11 @@ public partial class AimModLoadingOverlay : Container
     private readonly TruncatingSpriteText detail;
     private readonly ProgressBar progressBar;
     private bool indeterminate;
+    private bool loading;
+    private readonly Stopwatch elapsed = new();
+    private readonly TruncatingSpriteText timing;
+    private Func<LocalLibraryProgress?>? readProgress;
+    private string currentState = string.Empty;
 
     public AimModLoadingOverlay()
     {
@@ -38,7 +45,7 @@ public partial class AimModLoadingOverlay : Container
                 Anchor = Anchor.Centre,
                 Origin = Anchor.Centre,
                 Width = 560,
-                Height = 156,
+                Height = 192,
                 Children = new Drawable[]
                 {
                     spinner = new LoadingSpinner
@@ -76,18 +83,32 @@ public partial class AimModLoadingOverlay : Container
                         BackgroundColour = AimModPalette.PanelRaised,
                         EndTime = 1,
                     },
+                    timing = new TruncatingSpriteText
+                    {
+                        Anchor = Anchor.TopCentre,
+                        Origin = Anchor.TopCentre,
+                        Y = 148,
+                        Font = new FontUsage(size: 12),
+                        Colour = AimModPalette.Muted,
+                    },
                 },
             },
         };
     }
 
-    public void ShowLoading(string heading, string state, int? completed = null, int? total = null)
+    public void ShowLoading(string heading, string state, int? completed = null, int? total = null,
+        Func<LocalLibraryProgress?>? progress = null)
     {
         title.Text = heading;
+        currentState = state;
+        readProgress = progress;
         detail.Text = state;
         indeterminate = completed is null || total is null || total <= 0;
         if (!indeterminate)
             progressBar.CurrentTime = Math.Clamp((double)completed!.Value / total!.Value, 0, 1);
+        if (loading) return;
+        loading = true;
+        elapsed.Restart();
         this.FinishTransforms();
         spinner.Show();
         this.FadeTo(0.01f, 50)
@@ -97,13 +118,17 @@ public partial class AimModLoadingOverlay : Container
 
     public void SetProgress(string state, int completed, int total)
     {
-        detail.Text = state;
+        currentState = total > 0 ? $"{state}  {completed:N0} / {total:N0}" : state;
+        detail.Text = currentState;
         indeterminate = total <= 0;
         progressBar.CurrentTime = total <= 0 ? 0 : Math.Clamp((double)completed / total, 0, 1);
     }
 
     public void HideLoading()
     {
+        loading = false;
+        elapsed.Stop();
+        readProgress = null;
         indeterminate = false;
         this.FinishTransforms();
         this.FadeOut(LoadingSpinner.TRANSITION_DURATION / 2, Easing.OutQuint);
@@ -113,11 +138,22 @@ public partial class AimModLoadingOverlay : Container
     protected override void Update()
     {
         base.Update();
-        float panelWidth = Math.Clamp(DrawWidth - 64, 280, 560);
+        float panelWidth = Math.Clamp(DrawWidth - 32, 1, 560);
         statusPanel.Width = panelWidth;
         title.MaxWidth = panelWidth;
         detail.MaxWidth = panelWidth;
-        progressBar.Width = Math.Max(220, panelWidth - 140);
+        timing.MaxWidth = panelWidth;
+        progressBar.Width = Math.Max(1, panelWidth - 48);
+        if (loading)
+        {
+            if (readProgress?.Invoke() is { } progress)
+                SetProgress(progress.State, progress.Completed, progress.Total);
+            else
+                detail.Text = currentState;
+            timing.Text = elapsed.Elapsed.TotalSeconds < 15
+                ? $"Elapsed {elapsed.Elapsed:mm\\:ss}"
+                : $"Elapsed {elapsed.Elapsed:mm\\:ss}  -  Taking longer than usual";
+        }
         if (indeterminate)
             progressBar.CurrentTime = 0.08 + 0.84 * (0.5 + 0.5 * Math.Sin(Time.Current / 520));
     }

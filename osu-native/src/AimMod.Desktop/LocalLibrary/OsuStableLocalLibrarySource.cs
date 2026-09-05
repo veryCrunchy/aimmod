@@ -8,13 +8,15 @@ using OsuParsers.Enums;
 
 namespace AimMod.Desktop.LocalLibrary;
 
-public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource
+public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLibraryProgressSource
 {
     private readonly string installRoot;
     private readonly string songsRoot;
     private readonly object snapshotLock = new();
     private Task<InMemoryLocalLibrarySource>? snapshotTask;
     private DatabaseStamp snapshotStamp;
+    private LocalLibraryProgress? progress;
+    public LocalLibraryProgress? Progress => Volatile.Read(ref progress);
 
     public OsuStableLocalLibrarySource(string installRoot, string songsRoot)
     {
@@ -55,10 +57,14 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource
         lock (snapshotLock)
         {
             DatabaseStamp current = getStamp();
-            if (snapshotTask is null || current != snapshotStamp)
+            if (snapshotTask is null || snapshotTask.IsFaulted || snapshotTask.IsCanceled || current != snapshotStamp)
             {
                 snapshotStamp = current;
-                snapshotTask = Task.Run(buildSnapshot, CancellationToken.None);
+                snapshotTask = Task.Run(() =>
+                {
+                    try { return buildSnapshot(); }
+                    finally { Volatile.Write(ref progress, null); }
+                }, CancellationToken.None);
             }
             task = snapshotTask ??= Task.Run(buildSnapshot, CancellationToken.None);
         }
@@ -67,9 +73,11 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource
 
     private InMemoryLocalLibrarySource buildSnapshot()
     {
+        Volatile.Write(ref progress, new("Reading osu!stable beatmap database"));
         OsuDatabase beatmapDatabase = decodeSharedDatabase(
             Path.Combine(installRoot, "osu!.db"),
             DatabaseDecoder.DecodeOsu);
+        Volatile.Write(ref progress, new("Reading osu!stable score history"));
         ScoresDatabase? scoreDatabase = tryDecodeScores(Path.Combine(installRoot, "scores.db"));
 
         Dictionary<string, List<Score>> scoresByBeatmap = (scoreDatabase?.Scores ?? [])
@@ -81,8 +89,11 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource
                 StringComparer.OrdinalIgnoreCase);
 
         var beatmapsByHash = new Dictionary<string, StableBeatmap>(StringComparer.OrdinalIgnoreCase);
-        foreach (DbBeatmap beatmap in beatmapDatabase.Beatmaps.Where(beatmap => beatmap.Ruleset == Ruleset.Standard))
+        DbBeatmap[] standardMaps = beatmapDatabase.Beatmaps.Where(beatmap => beatmap.Ruleset == Ruleset.Standard).ToArray();
+        int checkedMaps = 0;
+        foreach (DbBeatmap beatmap in standardMaps)
         {
+            Volatile.Write(ref progress, new("Checking osu!stable beatmaps", ++checkedMaps, standardMaps.Length));
             string? beatmapPath = resolveLibraryFile(beatmap.FolderName, beatmap.FileName);
             if (beatmapPath is null || !File.Exists(beatmapPath) || string.IsNullOrWhiteSpace(beatmap.MD5Hash))
                 continue;
@@ -96,6 +107,7 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource
             beatmapsByHash[beatmap.MD5Hash] = new StableBeatmap(beatmap, beatmapPath, backgroundPath, stars, localScoreCount);
         }
 
+        Volatile.Write(ref progress, new("Matching osu!stable scores and replay files"));
         LocalReplay[] replays = scoresByBeatmap
             .SelectMany(group => group.Value.Select(score => createReplay(score, beatmapsByHash.GetValueOrDefault(group.Key))))
             .Where(replay => replay is not null)
@@ -106,6 +118,7 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource
             .GroupBy(replay => replay.BeatmapHash, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.Max(replay => replay.PlayedAt), StringComparer.OrdinalIgnoreCase);
 
+        Volatile.Write(ref progress, new("Preparing beatmap groups"));
         LocalBeatmapSet[] sets = beatmapsByHash.Values
             .GroupBy(beatmap => setKey(beatmap.Entry))
             .Select(group => createSet(group, lastPlayedByHash))
@@ -217,7 +230,10 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource
     {
         try
         {
-            string name = BeatmapDecoder.Decode(beatmapPath).EventsSection.BackgroundImage;
+            // Library thumbnails do not need hit objects or slider geometry.
+            string name = BeatmapDecoder.Decode(File.ReadLines(beatmapPath)
+                .TakeWhile(line => !line.Trim().Equals("[HitObjects]", StringComparison.OrdinalIgnoreCase)))
+                .EventsSection.BackgroundImage;
             if (string.IsNullOrWhiteSpace(name))
                 return string.Empty;
             string path = Path.GetFullPath(Path.Combine(folderPath, name));
