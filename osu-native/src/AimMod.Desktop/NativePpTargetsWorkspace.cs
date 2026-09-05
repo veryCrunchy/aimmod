@@ -1248,6 +1248,12 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         public PpTargetDropdown(Func<T, string> formatter) : base(string.Empty)
         {
             this.formatter = formatter;
+            if (Header is ShearedDropdownHeader header)
+            {
+                // Empty external labels otherwise collapse the native 30-unit header.
+                header.LabelContainer.AutoSizeAxes = Axes.X;
+                header.LabelContainer.Height = 30;
+            }
         }
 
         protected override LocalisableString GenerateItemText(T item) => formatter(item);

@@ -25,6 +25,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
     private readonly Container listPanel;
     private readonly SkinListState listState;
     private readonly Container detailPanel;
+    private readonly Container detailContent;
     private readonly SkinPreview preview;
     private readonly TruncatingSpriteText selectedName;
     private readonly TruncatingSpriteText selectedCreator;
@@ -91,6 +92,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
                         Child = searchBox = new OsuTextBox
                         {
                             RelativeSizeAxes = Axes.Both,
+                            Size = new(1),
                             PlaceholderText = "Search skin name or creator",
                         },
                     },
@@ -152,26 +154,38 @@ public partial class NativeSkinsScreen : CompositeDrawable
                                 Children = new Drawable[]
                                 {
                                     new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
-                                    new Container
+                                    new AimModScrollContainer
                                     {
-                                        RelativeSizeAxes = Axes.X,
-                                        Height = 220,
-                                        Child = preview = new SkinPreview(),
-                                    },
-                                    new FillFlowContainer
-                                    {
-                                        RelativeSizeAxes = Axes.X,
-                                        AutoSizeAxes = Axes.Y,
-                                        Y = 236,
-                                        Padding = new MarginPadding { Horizontal = 16 },
-                                        Direction = FillDirection.Vertical,
-                                        Spacing = new(AimModVisualStyle.RelatedSpacing),
-                                        Children = new Drawable[]
+                                        RelativeSizeAxes = Axes.Both,
+                                        Child = detailContent = new Container
                                         {
-                                            selectedName = truncatingDetailText(20, AimModPalette.Text, "Bold", "Select a skin"),
-                                            selectedCreator = truncatingDetailText(12, AimModPalette.Cyan, "SemiBold", "Installed skin details appear here."),
-                                            selectedDetails = truncatingDetailText(11, AimModPalette.Muted, "Regular", string.Empty),
-                                            applyButton = new ApplyButton(applySelected),
+                                            RelativeSizeAxes = Axes.X,
+                                            AutoSizeAxes = Axes.Y,
+                                            Children = new Drawable[]
+                                            {
+                                                new Container
+                                                {
+                                                    RelativeSizeAxes = Axes.X,
+                                                    Height = 220,
+                                                    Child = preview = new SkinPreview(),
+                                                },
+                                                new FillFlowContainer
+                                                {
+                                                    RelativeSizeAxes = Axes.X,
+                                                    AutoSizeAxes = Axes.Y,
+                                                    Y = 236,
+                                                    Padding = new MarginPadding { Horizontal = 16, Bottom = 16 },
+                                                    Direction = FillDirection.Vertical,
+                                                    Spacing = new(AimModVisualStyle.RelatedSpacing),
+                                                    Children = new Drawable[]
+                                                    {
+                                                        selectedName = truncatingDetailText(20, AimModPalette.Text, "Bold", "Select a skin"),
+                                                        selectedCreator = truncatingDetailText(12, AimModPalette.Cyan, "SemiBold", "Installed skin details appear here."),
+                                                        selectedDetails = truncatingDetailText(11, AimModPalette.Muted, "Regular", string.Empty),
+                                                        applyButton = new ApplyButton(applySelected),
+                                                    },
+                                                },
+                                            },
                                         },
                                     },
                                 },
@@ -215,7 +229,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
         detailPanel.Width = Math.Max(0, availableWidth - listWidth - panelGap);
         detailPanel.RelativeSizeAxes = Axes.Y;
 
-        float detailTextWidth = Math.Max(80, detailPanel.DrawWidth - 32);
+        float detailTextWidth = Math.Max(0, detailContent.DrawWidth - 32);
         selectedName.MaxWidth = detailTextWidth;
         selectedCreator.MaxWidth = detailTextWidth;
         selectedDetails.MaxWidth = detailTextWidth;

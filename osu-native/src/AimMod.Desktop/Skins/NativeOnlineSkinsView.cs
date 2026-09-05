@@ -37,6 +37,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
     private readonly FillFlowContainer results;
     private readonly OnlineListState listState;
     private readonly Container detailPanel;
+    private readonly Container detailContent;
     private readonly OnlinePreviewGallery gallery;
     private readonly TruncatingSpriteText selectedName;
     private readonly TruncatingSpriteText selectedCreator;
@@ -163,30 +164,42 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
                         Children = new Drawable[]
                         {
                             new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
-                            new Container
+                            new AimModScrollContainer
                             {
-                                RelativeSizeAxes = Axes.X,
-                                Height = 258,
-                                Child = gallery = new OnlinePreviewGallery(),
-                            },
-                            new FillFlowContainer
-                            {
-                                RelativeSizeAxes = Axes.X,
-                                AutoSizeAxes = Axes.Y,
-                                Y = 272,
-                                Padding = new MarginPadding { Horizontal = 16, Bottom = 16 },
-                                Direction = FillDirection.Vertical,
-                                Spacing = new(gap),
-                                Children = new Drawable[]
+                                RelativeSizeAxes = Axes.Both,
+                                Child = detailContent = new Container
                                 {
-                                    selectedName = text(19, AimModPalette.Text, "Bold", "Select an online skin"),
-                                    selectedCreator = text(12, AimModPalette.Cyan, "SemiBold", "Screenshots and source details appear here."),
-                                    selectedMetadata = text(11, AimModPalette.Muted, "Regular", string.Empty),
-                                    attribution = text(10, AimModPalette.Muted, "Regular", string.Empty),
-                                    previewButton = new OnlineActionButton(FontAwesome.Solid.Download, "Prepare preview", prepareSelected),
-                                    saveButton = new OnlineActionButton(FontAwesome.Solid.Save, "Save .osk", saveSelected),
-                                    importButton = new OnlineActionButton(FontAwesome.Solid.ExternalLinkAlt, "Import into osu!", importSelected, AimModPalette.Pink),
-                                    sourceButton = new OnlineActionButton(FontAwesome.Solid.Globe, "Open source page", openSource),
+                                    RelativeSizeAxes = Axes.X,
+                                    AutoSizeAxes = Axes.Y,
+                                    Children = new Drawable[]
+                                    {
+                                        new Container
+                                        {
+                                            RelativeSizeAxes = Axes.X,
+                                            Height = 258,
+                                            Child = gallery = new OnlinePreviewGallery(),
+                                        },
+                                        new FillFlowContainer
+                                        {
+                                            RelativeSizeAxes = Axes.X,
+                                            AutoSizeAxes = Axes.Y,
+                                            Y = 272,
+                                            Padding = new MarginPadding { Horizontal = 16, Bottom = 16 },
+                                            Direction = FillDirection.Vertical,
+                                            Spacing = new(gap),
+                                            Children = new Drawable[]
+                                            {
+                                                selectedName = text(19, AimModPalette.Text, "Bold", "Select an online skin"),
+                                                selectedCreator = text(12, AimModPalette.Cyan, "SemiBold", "Screenshots and source details appear here."),
+                                                selectedMetadata = text(11, AimModPalette.Muted, "Regular", string.Empty),
+                                                attribution = text(10, AimModPalette.Muted, "Regular", string.Empty),
+                                                previewButton = new OnlineActionButton(FontAwesome.Solid.Download, "Prepare preview", prepareSelected),
+                                                saveButton = new OnlineActionButton(FontAwesome.Solid.Save, "Save .osk", saveSelected),
+                                                importButton = new OnlineActionButton(FontAwesome.Solid.ExternalLinkAlt, "Import into osu!", importSelected, AimModPalette.Pink),
+                                                sourceButton = new OnlineActionButton(FontAwesome.Solid.Globe, "Open source page", openSource),
+                                            },
+                                        },
+                                    },
                                 },
                             },
                         },
@@ -304,7 +317,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
         detailPanel.Width = Math.Max(0, DrawWidth - panelWidth - AimModVisualStyle.SectionSpacing);
         detailPanel.RelativeSizeAxes = Axes.Y;
         status.MaxWidth = panelWidth;
-        float detailTextWidth = Math.Max(80, detailPanel.DrawWidth - 32);
+        float detailTextWidth = Math.Max(0, detailContent.DrawWidth - 32);
         selectedName.MaxWidth = detailTextWidth;
         selectedCreator.MaxWidth = detailTextWidth;
         selectedMetadata.MaxWidth = detailTextWidth;

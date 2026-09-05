@@ -248,12 +248,12 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                         DefaultStringLowerBound = "0",
                         DefaultStringUpperBound = "10+",
                     },
-                    categoryGroup = dropdownGroup("STATUS", categoryDropdown = new osu.Game.Graphics.UserInterfaceV2.ShearedDropdown<OfficialBeatmapCategory>(string.Empty)
+                    categoryGroup = dropdownGroup("STATUS", categoryDropdown = new BeatmapFilterDropdown<OfficialBeatmapCategory>()
                     {
                         Items = new[] { OfficialBeatmapCategory.Any, OfficialBeatmapCategory.Ranked, OfficialBeatmapCategory.Loved, OfficialBeatmapCategory.Pending },
                         Current = category,
                     }),
-                    sortGroup = dropdownGroup("SORT", sortDropdown = new osu.Game.Graphics.UserInterfaceV2.ShearedDropdown<OfficialBeatmapSort>(string.Empty)
+                    sortGroup = dropdownGroup("SORT", sortDropdown = new BeatmapFilterDropdown<OfficialBeatmapSort>()
                     {
                         Items = new[] { OfficialBeatmapSort.Relevance, OfficialBeatmapSort.Updated, OfficialBeatmapSort.Plays },
                         Current = sort,
@@ -362,6 +362,19 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                 dropdown,
             },
         };
+    }
+
+    private sealed partial class BeatmapFilterDropdown<T> : osu.Game.Graphics.UserInterfaceV2.ShearedDropdown<T>
+    {
+        public BeatmapFilterDropdown() : base(string.Empty)
+        {
+            if (Header is ShearedDropdownHeader header)
+            {
+                // Match the native labelled header without constraining its popup menu.
+                header.LabelContainer.AutoSizeAxes = Axes.X;
+                header.LabelContainer.Height = 30;
+            }
+        }
     }
 
     protected override void LoadComplete()

@@ -25,7 +25,7 @@ public partial class NativeReplayRouteView : Container
 {
     private const float browser_width = 320;
     private const float inspector_width = 340;
-    private const float transport_height = 228;
+    private const float transport_height = 240;
 
     public OsuScreenStack ScreenStack { get; } = new() { RelativeSizeAxes = Axes.Both };
 
@@ -49,6 +49,7 @@ public partial class NativeReplayRouteView : Container
     private readonly FillFlowContainer<Drawable> notableRows;
     private readonly FillFlowContainer<Drawable> mapPatternRows;
     private readonly FillFlowContainer<Drawable> momentButtons;
+    private readonly AimModScrollContainer momentScroll;
     private readonly ReplayJudgementTimeline judgementTimeline;
     private readonly SpriteText currentTimeText;
     private readonly SpriteText durationText;
@@ -211,13 +212,17 @@ public partial class NativeReplayRouteView : Container
                             place(makeText("JUDGEMENT TIMELINE", 11, AimModPalette.Muted, "Bold"), y: 91),
                             createJudgementLegend(),
                             judgementTimeline = new ReplayJudgementTimeline { Y = 116 },
-                            momentButtons = new FillFlowContainer<Drawable>
+                            momentScroll = new AimModScrollContainer(Direction.Horizontal)
                             {
                                 RelativeSizeAxes = Axes.X,
-                                AutoSizeAxes = Axes.Y,
+                                Height = 42,
                                 Y = 166,
-                                Direction = FillDirection.Horizontal,
-                                Spacing = new(AimModVisualStyle.RelatedSpacing),
+                                Child = momentButtons = new FillFlowContainer<Drawable>
+                                {
+                                    AutoSizeAxes = Axes.Both,
+                                    Direction = FillDirection.Horizontal,
+                                    Spacing = new(AimModVisualStyle.RelatedSpacing),
+                                },
                             },
                         },
                     }, Anchor.BottomLeft, Anchor.BottomLeft, transport_height),

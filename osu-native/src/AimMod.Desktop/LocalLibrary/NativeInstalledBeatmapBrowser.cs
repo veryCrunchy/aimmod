@@ -222,8 +222,8 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         rightRail.Padding = new MarginPadding { Left = stacked ? 0 : 14, Top = stacked ? 8 : 0 };
         listPanel.Padding = new MarginPadding { Top = toolbar_height, Right = stacked ? 0 : railWidth, Bottom = stacked ? inspectorHeight : 0 };
         float usableWidth = Math.Max(0, DrawWidth - 10);
-        searchBox.Position = new(6, 0);
-        searchBox.Width = Math.Max(0, usableWidth - 6);
+        searchBox.Position = new(10, 0);
+        searchBox.Width = Math.Max(0, usableWidth - 10);
         searchBox.Height = 54;
         searchBox.StatusText = status.Text;
         status.Alpha = 0;
@@ -233,12 +233,13 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         searchSurface.Height = AimModVisualStyle.ControlHeight;
 
         const float gap = 8;
-        float bpmWidth = (usableWidth - gap * 3) * 0.22f;
-        float lengthWidth = (usableWidth - gap * 3) * 0.24f;
-        float playedWidth = (usableWidth - gap * 3) * 0.24f;
-        float sortWidth = (usableWidth - gap * 3) * 0.30f;
+        float filterWidth = Math.Max(0, usableWidth - gap * 3);
+        float bpmWidth = filterWidth * 0.22f;
+        float lengthWidth = filterWidth * 0.24f;
+        float playedWidth = filterWidth * 0.24f;
+        float sortWidth = filterWidth * 0.30f;
         const float filterY = 100;
-        const float starsX = 6;
+        const float starsX = 10;
         float sortX = usableWidth - sortWidth;
 
         bpmDropdown.Position = new(0, filterY);
@@ -260,7 +261,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         playedLabel.Position = new(bpmWidth + lengthWidth + gap * 2 + 4, 50);
 
         stars.Position = new(starsX, 62);
-        stars.Width = Math.Max(0, usableWidth - 6);
+        stars.Width = Math.Max(0, usableWidth - 10);
         stars.Height = 30;
         starsSurface.Position = new(starsX, filterY);
         starsSurface.Width = stars.Width;
@@ -523,6 +524,13 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         private readonly FillFlowContainer<Drawable> difficultyPills;
         private readonly FillFlowContainer<Drawable> difficultyRows;
         private readonly OsuScrollContainer difficultyScroll;
+        private readonly OsuScrollContainer pillScroll;
+        private readonly OsuScrollContainer tableScroll;
+        private readonly Container tableContent;
+        private readonly TruncatingSpriteText title;
+        private readonly TruncatingSpriteText artist;
+        private readonly TruncatingSpriteText creator;
+        private readonly TruncatingSpriteText metadata;
         private readonly Box selectedLayer;
         private readonly Box selectionBar;
         private readonly SpriteText indexText;
@@ -533,7 +541,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             this.set = set;
             this.selectSet = selectSet;
             RelativeSizeAxes = Axes.X;
-            Height = 120;
+            Height = 136;
             Masking = true;
             CornerRadius = AimModVisualStyle.ControlRadius;
 
@@ -555,35 +563,47 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                     CornerRadius = AimModVisualStyle.ControlRadius,
                     Child = new AimModLocalArtwork(set.BackgroundPath) { RelativeSizeAxes = Axes.Both },
                 },
-                new TruncatingSpriteText { Text = set.Title, Position = new(196, 14), Font = new FontUsage(size: 17, weight: "Bold"), Colour = AimModPalette.Text, MaxWidth = 360 },
-                new TruncatingSpriteText { Text = set.Artist, Position = new(196, 39), Font = new FontUsage(size: 12), Colour = AimModPalette.Text, MaxWidth = 360 },
-                new TruncatingSpriteText { Text = $"mapped by {set.Creator}", Position = new(196, 59), Font = new FontUsage(size: 11), Colour = AimModPalette.Cyan, MaxWidth = 360 },
-                new SpriteText { Text = $"{representative.Bpm:0} BPM   {formatDuration(representative.LengthMilliseconds)}", Position = new(585, 18), Font = new FontUsage(size: 11), Colour = AimModPalette.Muted },
-                new SpriteText { Text = $"Added {relativeDate(set.DateAdded)}", Position = new(585, 41), Font = new FontUsage(size: 11), Colour = AimModPalette.Muted },
-                new SpriteText { Text = set.LocalReplayCount is > 0 ? $"{set.LocalReplayCount:N0} local plays" : "No local plays", Position = new(585, 64), Font = new FontUsage(size: 11, weight: "SemiBold"), Colour = set.LocalReplayCount is > 0 ? AimModPalette.Text : AimModPalette.Muted },
+                title = new TruncatingSpriteText { Text = set.Title, Position = new(196, 14), Font = new FontUsage(size: 17, weight: "Bold"), Colour = AimModPalette.Text },
+                artist = new TruncatingSpriteText { Text = set.Artist, Position = new(196, 39), Font = new FontUsage(size: 12), Colour = AimModPalette.Text },
+                creator = new TruncatingSpriteText { Text = $"mapped by {set.Creator}", Position = new(196, 59), Font = new FontUsage(size: 11), Colour = AimModPalette.Cyan },
+                metadata = new TruncatingSpriteText { Text = $"{representative.Bpm:0} BPM   {formatDuration(representative.LengthMilliseconds)}   /   Added {relativeDate(set.DateAdded)}   /   {(set.LocalReplayCount is { } count ? $"{count:N0} local plays" : "Local plays unavailable")}", Position = new(196, 78), Font = new FontUsage(size: 10), Colour = AimModPalette.Muted },
                 new AimModDifficultyPill(maxStars) { Anchor = Anchor.TopRight, Origin = Anchor.TopRight, Margin = new MarginPadding { Top = 13, Right = 13 } },
-                difficultyPills = new FillFlowContainer<Drawable>
+                pillScroll = new AimModScrollContainer(Direction.Horizontal)
                 {
-                    RelativeSizeAxes = Axes.X,
-                    Width = 0.75f,
-                    AutoSizeAxes = Axes.Y,
-                    Position = new(196, 84),
-                    Masking = true,
-                    Direction = FillDirection.Horizontal,
-                    Spacing = new(AimModVisualStyle.RelatedSpacing),
-                },
-                new DifficultyTableHeader { Y = 120 },
-                difficultyScroll = new AimModScrollContainer
-                {
-                    RelativeSizeAxes = Axes.X,
-                    Y = 152,
-                    Height = 214,
-                    Masking = true,
-                    Child = difficultyRows = new FillFlowContainer<Drawable>
+                    Position = new(196, 98),
+                    Height = 32,
+                    Child = difficultyPills = new FillFlowContainer<Drawable>
                     {
-                        RelativeSizeAxes = Axes.X,
-                        AutoSizeAxes = Axes.Y,
-                        Direction = FillDirection.Vertical,
+                        AutoSizeAxes = Axes.Both,
+                        Direction = FillDirection.Horizontal,
+                        Spacing = new(AimModVisualStyle.RelatedSpacing),
+                    },
+                },
+                tableScroll = new AimModScrollContainer(Direction.Horizontal)
+                {
+                    RelativeSizeAxes = Axes.X,
+                    Y = 136,
+                    Height = 258,
+                    Child = tableContent = new Container
+                    {
+                        Width = 710,
+                        Height = 246,
+                        Children = new Drawable[]
+                        {
+                            new DifficultyTableHeader(),
+                            difficultyScroll = new AimModScrollContainer
+                            {
+                                RelativeSizeAxes = Axes.X,
+                                Y = 32,
+                                Height = 214,
+                                Child = difficultyRows = new FillFlowContainer<Drawable>
+                                {
+                                    RelativeSizeAxes = Axes.X,
+                                    AutoSizeAxes = Axes.Y,
+                                    Direction = FillDirection.Vertical,
+                                },
+                            },
+                        },
                     },
                 },
             };
@@ -618,9 +638,20 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
 
         private void updateExpanded()
         {
-            Height = expanded ? 366 : 120;
+            Height = expanded ? 394 : 136;
+            tableScroll.Alpha = expanded ? 1 : 0;
             difficultyRows.Alpha = expanded ? 1 : 0;
             difficultyScroll.Alpha = expanded ? 1 : 0;
+        }
+
+        protected override void Update()
+        {
+            base.Update();
+            float textWidth = Math.Max(0, DrawWidth - 210);
+            title.MaxWidth = Math.Max(0, textWidth - 80);
+            artist.MaxWidth = creator.MaxWidth = metadata.MaxWidth = textWidth;
+            pillScroll.Width = textWidth;
+            tableContent.Width = Math.Max(710, tableScroll.DrawWidth);
         }
 
         protected override bool OnClick(ClickEvent e)
@@ -848,6 +879,24 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                 },
             };
         }
+
+        protected override void Update()
+        {
+            base.Update();
+            constrainText(content);
+        }
+
+        private static void constrainText(Container container)
+        {
+            float width = Math.Max(0, container.DrawWidth - container.Padding.TotalHorizontal);
+            foreach (Drawable child in container.Children)
+            {
+                if (child is TruncatingSpriteText text)
+                    text.MaxWidth = Math.Max(0, width - text.X);
+                else if (child is Container nested)
+                    constrainText(nested);
+            }
+        }
     }
 
     private sealed partial class InspectorHeading : InspectorPanel
@@ -856,13 +905,13 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             : base(InspectorPanelStyle.Raised)
         {
             RelativeSizeAxes = Axes.X;
-            Height = 105;
+            Height = 126;
             Children = new Drawable[]
             {
                 new TruncatingSpriteText { Text = set.Title, Font = new FontUsage(size: 16, weight: "Bold"), Colour = AimModPalette.Text, MaxWidth = 285 },
                 new TruncatingSpriteText { Text = difficulty.Name, Y = 25, Font = new FontUsage(size: 12), Colour = AimModPalette.Cyan, MaxWidth = 285 },
                 new AimModDifficultyPill(difficulty.StarRating) { Y = 51 },
-                new SpriteText { Text = $"AR {difficulty.ApproachRate:0.#}   OD {difficulty.OverallDifficulty:0.#}   CS {difficulty.CircleSize:0.#}   HP {difficulty.DrainRate:0.#}", Position = new(84, 57), Font = new FontUsage(size: 10), Colour = AimModPalette.Muted },
+                new TruncatingSpriteText { Text = $"AR {difficulty.ApproachRate:0.#}   OD {difficulty.OverallDifficulty:0.#}   CS {difficulty.CircleSize:0.#}   HP {difficulty.DrainRate:0.#}", Y = 82, Font = new FontUsage(size: 10), Colour = AimModPalette.Muted },
             };
         }
     }
@@ -908,7 +957,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             : base(InspectorPanelStyle.Default)
         {
             RelativeSizeAxes = Axes.X;
-            Height = 120;
+            Height = 142;
             Add(new SpriteText { Text = "PP AT ACCURACY", Font = new FontUsage(size: 11, weight: "Bold"), Colour = AimModPalette.Text });
             if (values.Count == 0)
             {
@@ -919,12 +968,27 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             for (int i = 0; i < accuracies.Length; i++)
             {
                 int accuracy = accuracies[i];
-                float x = i * 74;
-                Add(new SpriteText { Text = accuracy == 100 ? "SS" : $"{accuracy}%", Position = new(x, 32), Font = new FontUsage(size: 10), Colour = AimModPalette.Muted });
-                Add(new SpriteText { Text = values.TryGetValue(accuracy, out double pp) ? $"{pp:0}pp" : "--", Position = new(x, 55), Font = new FontUsage(size: 18, weight: "Bold"), Colour = AimModPalette.Pink });
+                Add(new Container
+                {
+                    RelativePositionAxes = Axes.X,
+                    RelativeSizeAxes = Axes.X,
+                    X = i / 4f,
+                    Width = 0.25f,
+                    Y = 32,
+                    Height = 50,
+                    Padding = new MarginPadding { Right = 4 },
+                    Children = new Drawable[]
+                    {
+                        new TruncatingSpriteText { Text = accuracy == 100 ? "SS" : $"{accuracy}%", RelativeSizeAxes = Axes.X, Font = new FontUsage(size: 10), Colour = AimModPalette.Muted },
+                        new TruncatingSpriteText { Text = values.TryGetValue(accuracy, out double pp) ? $"{pp:0}" : "--", RelativeSizeAxes = Axes.X, Y = 23, Font = new FontUsage(size: 16, weight: "Bold"), Colour = AimModPalette.Pink },
+                    },
+                });
             }
             if (values.TryGetValue(98, out double expected) && values.TryGetValue(100, out double maximum))
-                Add(new SpriteText { Text = $"EXPECTED  {expected:0}pp     REALISTIC MAX  {maximum:0}pp", Y = 87, Font = new FontUsage(size: 10, weight: "SemiBold"), Colour = AimModPalette.Cyan });
+            {
+                Add(new TruncatingSpriteText { Text = $"EXPECTED  {expected:0}pp", Y = 87, Font = new FontUsage(size: 10, weight: "SemiBold"), Colour = AimModPalette.Cyan });
+                Add(new TruncatingSpriteText { Text = $"REALISTIC MAX  {maximum:0}pp", Y = 103, Font = new FontUsage(size: 10, weight: "SemiBold"), Colour = AimModPalette.Cyan });
+            }
         }
     }
 
@@ -999,8 +1063,16 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                     Children = new Drawable[]
                     {
                         new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas, Alpha = 0.55f },
-                        new TruncatingSpriteText { Text = set.Title, Position = new(9, 5), MaxWidth = 205, Font = new FontUsage(size: 10, weight: "SemiBold"), Colour = AimModPalette.Text },
-                        new TruncatingSpriteText { Text = nearest.Name, Position = new(9, 20), MaxWidth = 205, Font = new FontUsage(size: 8), Colour = AimModPalette.Cyan },
+                        new Container
+                        {
+                            RelativeSizeAxes = Axes.Both,
+                            Padding = new MarginPadding { Right = 48 },
+                            Children = new Drawable[]
+                            {
+                                new TruncatingSpriteText { Text = set.Title, Position = new(9, 5), MaxWidth = 205, Font = new FontUsage(size: 10, weight: "SemiBold"), Colour = AimModPalette.Text },
+                                new TruncatingSpriteText { Text = nearest.Name, Position = new(9, 20), MaxWidth = 205, Font = new FontUsage(size: 8), Colour = AimModPalette.Cyan },
+                            },
+                        },
                         new SpriteText { Anchor = Anchor.CentreRight, Origin = Anchor.CentreRight, Margin = new MarginPadding { Right = 9 }, Text = $"{nearest.StarRating:0.00}*", Font = new FontUsage(size: 10, weight: "Bold"), Colour = AimModVisualStyle.DifficultyColour(nearest.StarRating) },
                     },
                 });
