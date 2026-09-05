@@ -15,6 +15,10 @@ public sealed record OsuHubUploadResult(
 
 public interface IOsuHubUploader
 {
+    Task<OsuHubUploadResult> UploadAutomaticAsync(OsuHubSyncRequest request, string accountScope,
+        string? replayPath = null, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This uploader does not verify automatic sharing account ownership.");
+
     Task<OsuHubUploadResult> UploadAsync(
         OsuHubSyncRequest request,
         string? replayPath = null,
@@ -43,16 +47,27 @@ public sealed class OsuHubSyncClient : IOsuHubUploader
         this.baseUri = new Uri(configured.ToString().TrimEnd('/') + "/", UriKind.Absolute);
     }
 
-    public async Task<OsuHubUploadResult> UploadAsync(
+    public Task<OsuHubUploadResult> UploadAsync(
         OsuHubSyncRequest request,
         string? replayPath = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) => uploadCoreAsync(request, replayPath, null, cancellationToken);
+
+    public Task<OsuHubUploadResult> UploadAutomaticAsync(OsuHubSyncRequest request, string accountScope,
+        string? replayPath = null, CancellationToken cancellationToken = default) =>
+        uploadCoreAsync(request, replayPath, accountScope, cancellationToken);
+
+    private async Task<OsuHubUploadResult> uploadCoreAsync(OsuHubSyncRequest request, string? replayPath,
+        string? accountScope, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
         HubCredential credential = credentials.Load()
                                    ?? throw new InvalidOperationException("AimMod is not linked to an AimMod Hub account.");
 
-        OsuHubSyncCacheEntry? cached = cache.Find(request.ContentHash);
+        if (accountScope is not null && accountScope != new HubAutomaticShareAccount(
+                $"{baseUri.AbsoluteUri}|{credential.AccountLabel}", request.Profile.OsuUserId, request.Profile.Username).StorageScope)
+            throw new InvalidOperationException("This automatic share belongs to a different linked account.");
+        string cacheKey = accountScope is null ? request.ContentHash : accountScope + ":" + request.ContentHash;
+        OsuHubSyncCacheEntry? cached = cache.Find(cacheKey);
         bool replayAlreadyUploaded = request.Replay is null
                                      || !request.Replay.UploadFile
                                      || cached is { ReplayUploaded: true }
@@ -89,7 +104,7 @@ public sealed class OsuHubSyncClient : IOsuHubUploader
         }
 
         var entry = new OsuHubSyncCacheEntry(
-            request.ContentHash,
+            cacheKey,
             payload.Visibility,
             payload.ShareId,
             request.Replay?.Sha256 ?? "",

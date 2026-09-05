@@ -5,6 +5,7 @@ using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
 using osu.Game.Graphics.UserInterface;
+using osu.Game.Graphics.UserInterfaceV2;
 
 namespace AimMod.Desktop.Hub;
 
@@ -24,6 +25,10 @@ public partial class NativeHubSettingsPanel : CompositeDrawable
     private readonly Bindable<OsuHubVisibility> visibility;
     private readonly BindableBool uploadReplayFile;
     private readonly BindableBool uploadAnalysis;
+    private readonly BindableBool automaticSharing;
+    private readonly BindableDouble minimumPp;
+    private readonly BindableDouble minimumAccuracy;
+    private readonly SpriteText preferenceStatus;
     private readonly SpriteText queueSummary;
     private readonly FillFlowContainer<Drawable> queueRows;
     private CancellationTokenSource? linking;
@@ -48,6 +53,9 @@ public partial class NativeHubSettingsPanel : CompositeDrawable
         visibility = new Bindable<OsuHubVisibility>(preferences.Visibility);
         uploadReplayFile = new BindableBool(preferences.UploadReplayFile);
         uploadAnalysis = new BindableBool(preferences.UploadAnalysis);
+        automaticSharing = new BindableBool(preferences.AutomaticSharingEnabled);
+        minimumPp = new BindableDouble(preferences.MinimumPp) { MinValue = 0, MaxValue = 5000, Precision = 1 };
+        minimumAccuracy = new BindableDouble(preferences.MinimumAccuracy) { MinValue = 0, MaxValue = 100, Precision = 0.1 };
 
         RelativeSizeAxes = Axes.X;
         AutoSizeAxes = Axes.Y;
@@ -87,7 +95,20 @@ public partial class NativeHubSettingsPanel : CompositeDrawable
                     },
                     new OsuCheckbox { LabelText = "Include replay file", Current = uploadReplayFile, RelativeSizeAxes = Axes.X },
                     new OsuCheckbox { LabelText = "Include judgement analysis", Current = uploadAnalysis, RelativeSizeAxes = Axes.X },
-                    text("Uploads start only when you share a replay.", 12, AimModPalette.Muted),
+                    new OsuCheckbox { LabelText = "Automatically share new qualifying plays", Current = automaticSharing, RelativeSizeAxes = Axes.X },
+                    new FormSliderBar<double>
+                    {
+                        Caption = "Minimum PP", Current = minimumPp, RelativeSizeAxes = Axes.X,
+                        KeyboardStep = 1, LabelFormat = value => $"{value:0} pp",
+                    },
+                    new FormSliderBar<double>
+                    {
+                        Caption = "Minimum accuracy", Current = minimumAccuracy, RelativeSizeAxes = Axes.X,
+                        KeyboardStep = 0.1f, LabelFormat = value => $"{value:0.0}%",
+                    },
+                    text("New plays only. Existing history is never shared automatically.", 12, AimModPalette.Muted),
+                    text("Replay files and analysis are included when selected and available.", 12, AimModPalette.Muted),
+                    preferenceStatus = text("", 12, AimModPalette.Muted),
                 }),
                 panel("Uploads", "Recent shares and pending uploads.", new Drawable[]
                 {
@@ -110,6 +131,9 @@ public partial class NativeHubSettingsPanel : CompositeDrawable
         visibility.BindValueChanged(_ => savePreferences());
         uploadReplayFile.BindValueChanged(_ => savePreferences());
         uploadAnalysis.BindValueChanged(_ => savePreferences());
+        automaticSharing.BindValueChanged(_ => savePreferences());
+        minimumPp.BindValueChanged(_ => savePreferences());
+        minimumAccuracy.BindValueChanged(_ => savePreferences());
         if (uploadQueue is not null)
             uploadQueue.Changed += queueChanged;
         refreshAccount();
@@ -231,7 +255,26 @@ public partial class NativeHubSettingsPanel : CompositeDrawable
     private void savePreferences()
     {
         if (preferenceStore is not null)
-            _ = preferenceStore.SaveAsync(new HubSharingPreferences(visibility.Value, uploadReplayFile.Value, uploadAnalysis.Value));
+            _ = persistPreferencesAsync(PreferencesForTesting);
+    }
+
+    private async Task persistPreferencesAsync(HubSharingPreferences preferences)
+    {
+        try
+        {
+            await preferenceStore!.SaveAsync(preferences).ConfigureAwait(false);
+            if (!IsDisposed)
+                Schedule(() => preferenceStatus.Text = "");
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            if (!IsDisposed)
+                Schedule(() =>
+                {
+                    preferenceStatus.Text = "Sharing settings could not be saved. Try again.";
+                    preferenceStatus.Colour = AimModPalette.Pink;
+                });
+        }
     }
 
     private void queueChanged()
@@ -318,7 +361,8 @@ public partial class NativeHubSettingsPanel : CompositeDrawable
         _ => AimModPalette.Muted,
     };
 
-    internal HubSharingPreferences PreferencesForTesting => new(visibility.Value, uploadReplayFile.Value, uploadAnalysis.Value);
+    internal HubSharingPreferences PreferencesForTesting => new(visibility.Value, uploadReplayFile.Value, uploadAnalysis.Value,
+        automaticSharing.Value, minimumPp.Value, minimumAccuracy.Value);
 
     private static Container panel(string title, string subtitle, IReadOnlyList<Drawable> children) => new()
     {

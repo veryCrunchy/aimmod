@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Collections.Concurrent;
 using System.Net;
 using System.Text.Json;
 using osu.Framework;
@@ -94,7 +95,7 @@ public partial class AimModGame : OsuGameBase
     private Guid? appliedExternalSkinId;
     private ILocalReplayOpenService? replayOpenService;
     private ReplayAnalysisBatchService? replayAnalysisBatchService;
-    private readonly Dictionary<Guid, ReplayAnalysisResult> replayAnalyses = new();
+    private readonly ConcurrentDictionary<Guid, ReplayAnalysisResult> replayAnalyses = new();
     private readonly HashSet<Guid> replayAnalysisFailures = new();
     private readonly Dictionary<NativeRoute, Container> workspaceHosts = new();
     private ReplayAnalysisCache? replayAnalysisCache;
@@ -108,6 +109,7 @@ public partial class AimModGame : OsuGameBase
     private IHubSharingPreferenceStore? hubSharingPreferenceStore;
     private OsuHubUploadQueue? hubUploadQueue;
     private OsuHubReplayShareService? hubReplayShareService;
+    private HubAutomaticShareService? hubAutomaticShareService;
     private OsuProfile? currentOsuProfile;
 
     public AimModGame()
@@ -491,6 +493,63 @@ public partial class AimModGame : OsuGameBase
         var syncClient = new OsuHubSyncClient(hubHttpClient, hubCredentialStore, syncCache, hubBaseUri);
         hubUploadQueue = new OsuHubUploadQueue(Storage.GetFullPath("hub/upload-queue-v1.json", true), syncClient);
         hubReplayShareService = new OsuHubReplayShareService(localLibrary, () => currentOsuProfile, replayAnalyses, hubUploadQueue);
+        hubAutomaticShareService = new HubAutomaticShareService(
+            Storage.GetFullPath("hub/automatic-sharing-state.json", true), hubSharingPreferenceStore, hubReplayShareService, () =>
+            {
+                HubCredential? credential = hubCredentialStore.Load();
+                OsuProfile? profile = currentOsuProfile;
+                return credential is null || profile is null || string.IsNullOrWhiteSpace(credential.AccountLabel)
+                    ? null
+                    : new HubAutomaticShareAccount($"{hubBaseUri.AbsoluteUri.TrimEnd('/')}/|{credential.AccountLabel}", profile.UserId, profile.Username);
+            });
+        if (configuredLocalLibrary is null)
+            _ = Task.Run(() => observeHubAutomaticShares(appLifetime.Token));
+    }
+
+    private async Task observeHubAutomaticShares(CancellationToken cancellationToken)
+    {
+        DateTimeOffset startedAt = DateTimeOffset.UtcNow;
+        DateTimeOffset nextRefresh = DateTimeOffset.MinValue;
+        Guid generation = Guid.Empty;
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+        try
+        {
+            do
+            {
+                try
+                {
+                    HubSharingPreferences preferences = hubSharingPreferenceStore!.Load();
+                    if (!preferences.AutomaticSharingEnabled || currentOsuProfile is null || hubCredentialStore?.Load() is null)
+                        continue;
+                    // Establish the cutoff before a potentially slow history query starts.
+                    await hubAutomaticShareService!.ObserveAsync([], cancellationToken).ConfigureAwait(false);
+                    if (generation == preferences.AutomaticSharingGeneration && DateTimeOffset.UtcNow < nextRefresh)
+                        continue;
+                    generation = preferences.AutomaticSharingGeneration;
+                    nextRefresh = DateTimeOffset.UtcNow.AddSeconds(30);
+                    LocalLibraryPage<LocalReplay> local = await localLibrary.SearchReplaysAsync(new LocalLibraryQuery(
+                        RulesetShortName: "osu", Sort: LocalLibrarySort.RecentlyPlayed, Limit: 200), cancellationToken).ConfigureAwait(false);
+                    IReadOnlyList<LocalReplay> recent = local.Items.Where(play => play.PlayedAt > startedAt).ToArray();
+                    if (localScorePpHydrationService is { } hydrator && recent.Any(play => play.PerformancePoints is null))
+                        recent = (await hydrator.HydrateAsync(recent, cancellationToken).ConfigureAwait(false)).Runs;
+                    // Local scores remain available even when the online history request fails.
+                    await hubAutomaticShareService.ObserveAsync(recent, cancellationToken).ConfigureAwait(false);
+                    if (accountScoreHistoryService is { } history)
+                    {
+                        OnlineAccountScoreHistoryResult online = await history.FetchAccountAsync(cancellationToken).ConfigureAwait(false);
+                        if (online.Profile is { } profile && profile.UserId == currentOsuProfile?.UserId)
+                        {
+                            LocalReplay[] merged = ScoreHistoryMerger.MergeAsLocalReplays(recent, online.Scores)
+                                .Select(play => !play.IsLocallyStored ? play with { Player = profile.Username } : play).ToArray();
+                            await hubAutomaticShareService.ObserveAsync(merged, cancellationToken).ConfigureAwait(false);
+                        }
+                    }
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+                catch (Exception error) { logFailure("observe automatic Hub shares", error); }
+            } while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
     }
 
     private void openHubUrl(Uri uri)

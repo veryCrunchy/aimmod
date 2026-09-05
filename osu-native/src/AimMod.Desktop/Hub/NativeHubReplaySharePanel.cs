@@ -18,7 +18,7 @@ public partial class NativeHubReplaySharePanel : CompositeDrawable
     private readonly IHubSharingPreferenceStore? preferenceStore;
     private readonly Action<Uri>? openUrl;
     private readonly Action<string>? copyText;
-    private readonly Bindable<OsuHubVisibility> visibility = new(OsuHubVisibility.Private);
+    private readonly Bindable<OsuHubVisibility> visibility = new(HubSharingPreferences.Default.Visibility);
     private readonly BindableBool uploadReplayFile = new(false);
     private readonly BindableBool uploadAnalysis = new(false);
     private readonly OsuCheckbox replayFileCheckbox;
@@ -203,7 +203,12 @@ public partial class NativeHubReplaySharePanel : CompositeDrawable
         try
         {
             if (preferenceStore is not null)
-                await preferenceStore.SaveAsync(new HubSharingPreferences(selection.Visibility, selection.UploadReplayFile, selection.UploadAnalysis), cancellationToken).ConfigureAwait(false);
+                await preferenceStore.UpdateAsync(previous => previous with
+                {
+                    Visibility = selection.Visibility,
+                    UploadReplayFile = selection.UploadReplayFile,
+                    UploadAnalysis = selection.UploadAnalysis,
+                }, cancellationToken).ConfigureAwait(false);
             HubUploadQueueItem item = await shareService!.QueueAsync(selection, cancellationToken).ConfigureAwait(false);
             if (!IsDisposed)
                 Schedule(() =>

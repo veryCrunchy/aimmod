@@ -172,18 +172,62 @@ public sealed class OsuHubSyncTests
         });
     }
 
-    [Test]
-    public async Task SharingPreferencesDefaultPrivateAndPersistExplicitChoices()
+    [TestCase(OsuHubVisibility.Private)]
+    [TestCase(OsuHubVisibility.Unlisted)]
+    [TestCase(OsuHubVisibility.Public)]
+    public async Task SharingPreferencesDefaultPublicAndPersistExplicitChoices(OsuHubVisibility visibility)
     {
         string path = Path.Combine(temporaryDirectory, "sharing-preferences.json");
         var store = new FileHubSharingPreferenceStore(path);
 
         Assert.That(store.Load(), Is.EqualTo(HubSharingPreferences.Default));
+        Assert.That(store.Load().Visibility, Is.EqualTo(OsuHubVisibility.Public));
+        Assert.That(store.Load().UploadReplayFile, Is.False);
+        Assert.That(store.Load().UploadAnalysis, Is.False);
 
-        var selected = new HubSharingPreferences(OsuHubVisibility.Unlisted, true, true);
+        var selected = new HubSharingPreferences(visibility, true, true);
         await store.SaveAsync(selected);
 
         Assert.That(new FileHubSharingPreferenceStore(path).Load(), Is.EqualTo(selected));
+    }
+
+    [Test]
+    public void NewSharingPanelsDefaultPublicWithoutOptingIntoPayloadUploads()
+    {
+        using var settings = new NativeHubSettingsPanel(null, null, null, null, null, null);
+        using var share = new NativeHubReplaySharePanel(null, null, null, null, null, null);
+        var selected = (osu.Framework.Bindables.Bindable<OsuHubVisibility>)typeof(NativeHubReplaySharePanel)
+            .GetField("visibility", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(share)!;
+        Assert.That(settings.PreferencesForTesting, Is.EqualTo(new HubSharingPreferences(OsuHubVisibility.Public, false, false)));
+        Assert.That(selected.Value, Is.EqualTo(OsuHubVisibility.Public));
+        (LocalReplay replay, _, _) = createLocalData();
+        share.SetReplay(replay, hasAnalysis: true);
+        Assert.That(selected.Value, Is.EqualTo(OsuHubVisibility.Public));
+    }
+
+    [Test]
+    public async Task PublicPreferenceDoesNotChangeAnExistingPrivateQueuedShare()
+    {
+        string queuePath = Path.Combine(temporaryDirectory, "private-queue.json");
+        var preferences = new FileHubSharingPreferenceStore(Path.Combine(temporaryDirectory, "sharing-preferences.json"));
+        (LocalReplay replay, LocalBeatmapSet set, LocalBeatmapDifficulty difficulty) = createLocalData();
+        OsuHubSyncRequest request = await OsuHubContractFactory.CreateAsync(new OsuHubSyncInput(
+            replay, set, difficulty, new OsuHubProfile(42, "player"), null, OsuHubVisibility.Private));
+        using var queue = new OsuHubUploadQueue(queuePath, new FakeUploader(), startWorker: false);
+        HubUploadQueueItem original = await queue.EnqueueAsync(request, null, "Private replay");
+        byte[] before = await File.ReadAllBytesAsync(queuePath);
+        await preferences.SaveAsync(new HubSharingPreferences(OsuHubVisibility.Public, false, true));
+        using var share = new NativeHubReplaySharePanel(null, null, queue, preferences, null, null);
+        share.SetReplay(replay, hasAnalysis: true);
+        Assert.Multiple(() =>
+        {
+            Assert.That(queue.Snapshot(), Has.Count.EqualTo(1));
+            Assert.That(queue.Snapshot().Single(), Is.EqualTo(original));
+            Assert.That(queue.Snapshot().Single().Request.Visibility, Is.EqualTo("private"));
+            Assert.That(queue.Snapshot().Single().AttemptCount, Is.Zero);
+            Assert.That(File.ReadAllBytes(queuePath), Is.EqualTo(before));
+            Assert.That(preferences.Load(), Is.EqualTo(new HubSharingPreferences(OsuHubVisibility.Public, false, true)));
+        });
     }
 
     [Test]
@@ -255,6 +299,220 @@ public sealed class OsuHubSyncTests
             Assert.That(item.Request.Replay, Is.Null);
             Assert.That(item.Status, Is.EqualTo(HubUploadQueueStatus.Queued));
         });
+    }
+
+    [Test]
+    public async Task AutomaticSharingPreferencesRequireOptInAndRotateGenerationOnlyOnEnable()
+    {
+        var store = new FileHubSharingPreferenceStore(Path.Combine(temporaryDirectory, "prefs.json"));
+        Assert.That(store.Load().AutomaticSharingEnabled, Is.False);
+        await store.SaveAsync(store.Load() with { AutomaticSharingEnabled = true, MinimumPp = 150, MinimumAccuracy = 97.5 });
+        HubSharingPreferences enabled = store.Load();
+        Assert.That(enabled.AutomaticSharingGeneration, Is.Not.EqualTo(Guid.Empty));
+        await store.UpdateAsync(previous => previous with { Visibility = OsuHubVisibility.Unlisted });
+        Assert.That(store.Load().AutomaticSharingGeneration, Is.EqualTo(enabled.AutomaticSharingGeneration));
+        Assert.That(store.Load().MinimumAccuracy, Is.EqualTo(97.5));
+        await store.SaveAsync(store.Load() with { AutomaticSharingEnabled = false });
+        await store.UpdateAsync(previous => previous with { UploadAnalysis = true });
+        Assert.That(store.Load().AutomaticSharingEnabled, Is.False);
+        await store.SaveAsync(store.Load() with { AutomaticSharingEnabled = true });
+        Assert.That(store.Load().AutomaticSharingGeneration, Is.Not.EqualTo(enabled.AutomaticSharingGeneration));
+    }
+
+    [Test]
+    public async Task AutomaticSharingNeverBackfillsLaterHistoryPagesAndUsesInclusiveThresholds()
+    {
+        var preferences = new FileHubSharingPreferenceStore(Path.Combine(temporaryDirectory, "prefs.json"));
+        (LocalReplay replay, LocalBeatmapSet set, _) = createLocalData();
+        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        using var queue = new OsuHubUploadQueue(Path.Combine(temporaryDirectory, "queue.json"), new FakeUploader(), false);
+        var share = new OsuHubReplayShareService(new SingleMapLibrary(set), () => new OsuProfile(42, "player", "", null, null),
+            new Dictionary<Guid, ReplayAnalysisResult>(), queue);
+        var automatic = new HubAutomaticShareService(Path.Combine(temporaryDirectory, "auto.json"), preferences, share,
+            () => new HubAutomaticShareAccount("hub:player", 42, "player"), clock);
+        await automatic.ObserveAsync([replay]);
+        Assert.That(File.Exists(Path.Combine(temporaryDirectory, "auto.json")), Is.False, "OFF must not establish an upload baseline.");
+        await preferences.SaveAsync(new HubSharingPreferences(AutomaticSharingEnabled: true, MinimumPp: 180, MinimumAccuracy: 98,
+            UploadReplayFile: true, UploadAnalysis: true));
+        await automatic.ObserveAsync([]); // A limited or empty initial page must still exclude ALL old history.
+        clock.Now = clock.Now.AddMinutes(1);
+        LocalReplay eligible = replay with { ScoreId = Guid.NewGuid(), PlayedAt = clock.Now, HasReplayFile = true, ReplayPath = "missing.osr" };
+        LocalReplay lowerPp = eligible with { ScoreId = Guid.NewGuid(), PlayedAt = clock.Now.AddSeconds(-1), PerformancePoints = 179.9 };
+        LocalReplay lowerAccuracy = eligible with { ScoreId = Guid.NewGuid(), PlayedAt = clock.Now.AddSeconds(-2), Accuracy = .979 };
+        LocalReplay missingPp = eligible with { ScoreId = Guid.NewGuid(), PlayedAt = clock.Now.AddSeconds(-3), PerformancePoints = null };
+        LocalReplay foreign = eligible with { ScoreId = Guid.NewGuid(), PlayedAt = clock.Now.AddSeconds(-4), Player = "someone else" };
+        await automatic.ObserveAsync([replay, eligible, lowerPp, lowerAccuracy, missingPp, foreign]);
+        HubUploadQueueItem item = queue.Snapshot().Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(item.Request.Visibility, Is.EqualTo("public"));
+            Assert.That(item.Request.Replay, Is.Null, "Missing optional bytes must not prevent sharing score metadata.");
+            Assert.That(item.Request.Analysis, Is.Null, "Optional analysis can be attached only when available.");
+            Assert.That(item.AutomaticAccountScope, Is.Not.Empty);
+            Assert.That(item.AutomaticGeneration, Is.EqualTo(preferences.Load().AutomaticSharingGeneration));
+        });
+        await preferences.UpdateAsync(previous => previous with { MinimumPp = 0, MinimumAccuracy = 0 });
+        await automatic.ObserveAsync([lowerPp, lowerAccuracy]);
+        Assert.That(queue.Snapshot(), Has.Count.EqualTo(1), "Lowering thresholds must not retrospectively share observed plays.");
+        await automatic.ObserveAsync([missingPp with { PerformancePoints = 180 }]);
+        Assert.That(queue.Snapshot(), Has.Count.EqualTo(2), "A new play awaiting PP calculation can qualify once measured.");
+    }
+
+    [Test]
+    public async Task AutomaticSharingRestartsAndReEnablesEstablishFreshBaselines()
+    {
+        var preferences = new FileHubSharingPreferenceStore(Path.Combine(temporaryDirectory, "prefs.json"));
+        await preferences.SaveAsync(new HubSharingPreferences(AutomaticSharingEnabled: true));
+        (LocalReplay replay, LocalBeatmapSet set, _) = createLocalData();
+        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        using var queue = new OsuHubUploadQueue(Path.Combine(temporaryDirectory, "queue.json"), new FakeUploader(), false);
+        var share = new OsuHubReplayShareService(new SingleMapLibrary(set), () => new OsuProfile(42, "player", "", null, null),
+            new Dictionary<Guid, ReplayAnalysisResult>(), queue);
+        HubAutomaticShareService create() => new(Path.Combine(temporaryDirectory, "auto.json"), preferences, share,
+            () => new HubAutomaticShareAccount("hub:player", 42, "player"), clock);
+        var automatic = create();
+        await automatic.ObserveAsync([]);
+        clock.Now = clock.Now.AddMinutes(1);
+        LocalReplay first = replay with { PlayedAt = clock.Now };
+        await automatic.ObserveAsync([first]);
+        Assert.That(queue.Snapshot(), Has.Count.EqualTo(1));
+        clock.Now = clock.Now.AddMinutes(1);
+        LocalReplay whileClosed = replay with { ScoreId = Guid.NewGuid(), PlayedAt = clock.Now };
+        automatic = create();
+        await automatic.ObserveAsync([first, whileClosed]);
+        clock.Now = clock.Now.AddMinutes(1);
+        await automatic.ObserveAsync([first, whileClosed]);
+        Assert.That(queue.Snapshot(), Has.Count.EqualTo(1));
+        await preferences.UpdateAsync(previous => previous with { AutomaticSharingEnabled = false });
+        LocalReplay whileDisabled = replay with { ScoreId = Guid.NewGuid(), PlayedAt = clock.Now };
+        await automatic.ObserveAsync([whileDisabled]);
+        await preferences.UpdateAsync(previous => previous with { AutomaticSharingEnabled = true });
+        await automatic.ObserveAsync([]);
+        await automatic.ObserveAsync([whileDisabled]);
+        Assert.That(queue.Snapshot(), Has.Count.EqualTo(1));
+        clock.Now = clock.Now.AddMinutes(1);
+        await automatic.ObserveAsync([replay with { ScoreId = Guid.NewGuid(), PlayedAt = clock.Now }]);
+        Assert.That(queue.Snapshot(), Has.Count.EqualTo(2));
+    }
+
+    [Test]
+    public async Task AutomaticQueueDeduplicationSurvivesTrimmingAndRestartAndIsAccountScoped()
+    {
+        string path = Path.Combine(temporaryDirectory, "queue.json");
+        (LocalReplay replay, LocalBeatmapSet set, LocalBeatmapDifficulty difficulty) = createLocalData();
+        OsuHubSyncRequest request = await OsuHubContractFactory.CreateAsync(new OsuHubSyncInput(
+            replay, set, difficulty, new OsuHubProfile(42, "player"), null, OsuHubVisibility.Public));
+        Guid generation = Guid.NewGuid();
+        using (var queue = new OsuHubUploadQueue(path, new FakeUploader(), false))
+        {
+            HubUploadQueueItem original = (await queue.TryEnqueueAutomaticAsync(request, null, "Auto", "account-a:score", "account-a", generation))!;
+            await queue.CancelAsync(original.Id);
+            for (int index = 0; index < OsuHubUploadQueue.MaximumEntries; index++)
+            {
+                HubUploadQueueItem next = await queue.EnqueueAsync(request with
+                {
+                    Score = request.Score with { ClientScoreId = "manual:" + index },
+                }, null, "Manual");
+                await queue.CancelAsync(next.Id);
+            }
+            Assert.That(queue.Snapshot().Any(item => item.Id == original.Id), Is.False);
+        }
+        using var restored = new OsuHubUploadQueue(path, new FakeUploader(), false);
+        Assert.That(await restored.TryEnqueueAutomaticAsync(request, null, "Auto", "account-a:score", "account-a", generation), Is.Null);
+        Assert.That(await restored.TryEnqueueAutomaticAsync(request, null, "Auto", "account-b:score", "account-b", generation), Is.Not.Null);
+    }
+
+    [Test]
+    public async Task AutomaticQueueWorkerWaitsForCurrentConsentAndMatchingAccount()
+    {
+        var preferences = new FileHubSharingPreferenceStore(Path.Combine(temporaryDirectory, "prefs.json"));
+        await preferences.SaveAsync(new HubSharingPreferences(AutomaticSharingEnabled: true));
+        (LocalReplay replay, LocalBeatmapSet set, _) = createLocalData();
+        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        string path = Path.Combine(temporaryDirectory, "queue.json");
+        HubAutomaticShareAccount? account = new("hub:player", 42, "player");
+        using (var queue = new OsuHubUploadQueue(path, new FakeUploader(), false))
+        {
+            var share = new OsuHubReplayShareService(new SingleMapLibrary(set), () => new OsuProfile(42, "player", "", null, null),
+                new Dictionary<Guid, ReplayAnalysisResult>(), queue);
+            var automatic = new HubAutomaticShareService(Path.Combine(temporaryDirectory, "auto.json"), preferences, share, () => account, clock);
+            await automatic.ObserveAsync([]);
+            clock.Now = clock.Now.AddMinutes(1);
+            await automatic.ObserveAsync([replay with { PlayedAt = clock.Now }]);
+        }
+        using var restored = new OsuHubUploadQueue(path, new FakeUploader());
+        await Task.Delay(50);
+        Assert.That(restored.Snapshot().Single().AttemptCount, Is.Zero, "No automatic queue entry may upload before consent/account guards are attached.");
+        var restoredShare = new OsuHubReplayShareService(new SingleMapLibrary(set), () => new OsuProfile(42, "player", "", null, null),
+            new Dictionary<Guid, ReplayAnalysisResult>(), restored);
+        account = new("other-hub-account", 42, "player");
+        var restoredAutomatic = new HubAutomaticShareService(Path.Combine(temporaryDirectory, "auto.json"), preferences, restoredShare, () => account, clock);
+        await restoredAutomatic.ObserveAsync([]);
+        await Task.Delay(50);
+        Assert.That(restored.Snapshot().Single().AttemptCount, Is.Zero);
+        account = new("hub:player", 42, "player");
+        await restoredAutomatic.ObserveAsync([]);
+        Assert.That(SpinWait.SpinUntil(() => restored.Snapshot().Single().Status == HubUploadQueueStatus.Completed, TimeSpan.FromSeconds(3)), Is.True);
+    }
+
+    [Test]
+    public async Task LocalThenOnlineEnrichmentQueuesOneShareOnly()
+    {
+        var preferences = new FileHubSharingPreferenceStore(Path.Combine(temporaryDirectory, "prefs.json"));
+        await preferences.SaveAsync(new HubSharingPreferences(AutomaticSharingEnabled: true));
+        (LocalReplay replay, LocalBeatmapSet set, _) = createLocalData();
+        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        using var queue = new OsuHubUploadQueue(Path.Combine(temporaryDirectory, "queue.json"), new FakeUploader(), false);
+        var share = new OsuHubReplayShareService(new SingleMapLibrary(set), () => new OsuProfile(42, "player", "", null, null),
+            new Dictionary<Guid, ReplayAnalysisResult>(), queue);
+        var automatic = new HubAutomaticShareService(Path.Combine(temporaryDirectory, "auto.json"), preferences, share,
+            () => new HubAutomaticShareAccount("hub:player", 42, "player"), clock);
+        await automatic.ObserveAsync([]);
+        clock.Now = clock.Now.AddMinutes(1);
+        LocalReplay local = replay with { PlayedAt = clock.Now };
+        await automatic.ObserveAsync([local]);
+        LocalReplay enriched = local with { OnlineScoreId = 3456 };
+        await automatic.ObserveAsync([enriched]);
+        LocalReplay onlineOnly = enriched with { ScoreId = Guid.NewGuid(), IsLocallyStored = false, TotalScore = 999999 };
+        await automatic.ObserveAsync([onlineOnly]);
+        // Even an online refresh arriving before the local row receives its online ID is the same play.
+        clock.Now = clock.Now.AddMinutes(1);
+        LocalReplay second = local with { ScoreId = Guid.NewGuid(), PlayedAt = clock.Now };
+        await automatic.ObserveAsync([second]);
+        await automatic.ObserveAsync([second with { ScoreId = Guid.NewGuid(), OnlineScoreId = 7890, IsLocallyStored = false }]);
+        Assert.That(queue.Snapshot(), Has.Count.EqualTo(2));
+    }
+
+    [Test]
+    public async Task AutomaticUploadVerifiesAccountBeforeNetworkAndUsesAccountScopedCache()
+    {
+        (LocalReplay replay, LocalBeatmapSet set, LocalBeatmapDifficulty difficulty) = createLocalData();
+        OsuHubSyncRequest request = await OsuHubContractFactory.CreateAsync(new OsuHubSyncInput(
+            replay, set, difficulty, new OsuHubProfile(42, "player"), null, OsuHubVisibility.Public));
+        var cache = new MemorySyncCache
+        {
+            Entry = new OsuHubSyncCacheEntry(request.ContentHash, "public", "wrong-account-result", "", false, DateTimeOffset.UtcNow),
+        };
+        var handler = new RecordingHandler([
+            jsonResponse(HttpStatusCode.Created, new OsuHubSyncResponse("osu_" + new string('a', 32), "public", true, false)),
+        ]);
+        var credentials = new MemoryCredentialStore(new HubCredential("test-secret", "linked-player", DateTimeOffset.UtcNow));
+        var client = new OsuHubSyncClient(new HttpClient(handler), credentials, cache, new Uri("https://hub.example/"));
+        string scope = new HubAutomaticShareAccount("https://hub.example/|linked-player", 42, "player").StorageScope;
+        Assert.ThrowsAsync<InvalidOperationException>(() => client.UploadAutomaticAsync(request, "other-account"));
+        Assert.That(handler.Requests, Is.Empty);
+        OsuHubUploadResult first = await client.UploadAutomaticAsync(request, scope);
+        OsuHubUploadResult second = await client.UploadAutomaticAsync(request, scope);
+        Assert.That(first.FromLocalCache, Is.False);
+        Assert.That(second.FromLocalCache, Is.True);
+        Assert.That(handler.Requests, Has.Count.EqualTo(1));
+        Assert.That(cache.Entry!.ContentHash, Does.StartWith(scope + ":"));
+    }
+
+    private sealed class ManualTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        public DateTimeOffset Now { get; set; } = now;
+        public override DateTimeOffset GetUtcNow() => Now;
     }
 
     private static (LocalReplay Replay, LocalBeatmapSet Set, LocalBeatmapDifficulty Difficulty) createLocalData(string replayPath = "")
@@ -336,6 +594,9 @@ public sealed class OsuHubSyncTests
 
     private sealed class FakeUploader : IOsuHubUploader
     {
+        public Task<OsuHubUploadResult> UploadAutomaticAsync(OsuHubSyncRequest request, string accountScope,
+            string? replayPath = null, CancellationToken cancellationToken = default) => UploadAsync(request, replayPath, cancellationToken);
+
         public Task<OsuHubUploadResult> UploadAsync(OsuHubSyncRequest request, string? replayPath = null, CancellationToken cancellationToken = default) =>
             Task.FromResult(new OsuHubUploadResult(
                 "share-id",

@@ -21,7 +21,9 @@ public sealed record HubUploadQueueItem(
     OsuHubSyncRequest Request,
     string ReplayPath,
     string ShareUrl = "",
-    string Error = "");
+    string Error = "",
+    string AutomaticAccountScope = "",
+    Guid AutomaticGeneration = default);
 
 public interface IOsuHubUploadQueue
 {
@@ -29,6 +31,10 @@ public interface IOsuHubUploadQueue
 
     IReadOnlyList<HubUploadQueueItem> Snapshot();
     Task<HubUploadQueueItem> EnqueueAsync(OsuHubSyncRequest request, string? replayPath, string title, CancellationToken cancellationToken = default);
+    Task<HubUploadQueueItem?> TryEnqueueAutomaticAsync(OsuHubSyncRequest request, string? replayPath, string title,
+        string deduplicationKey, string accountScope, Guid generation, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This queue does not support durable automatic sharing.");
+    void SetAutomaticUploadPermission(Func<HubUploadQueueItem, bool> permission) { }
     Task<bool> CancelAsync(Guid id, CancellationToken cancellationToken = default);
     Task<bool> RetryAsync(Guid id, CancellationToken cancellationToken = default);
 }
@@ -43,9 +49,13 @@ public sealed class OsuHubUploadQueue : IOsuHubUploadQueue, IDisposable
     private readonly IOsuHubUploader uploader;
     private readonly object stateGate = new();
     private readonly SemaphoreSlim persistenceGate = new(1, 1);
+    private readonly SemaphoreSlim automaticGate = new(1, 1);
     private readonly SemaphoreSlim signal = new(0);
     private readonly CancellationTokenSource lifetime = new();
     private readonly List<HubUploadQueueItem> items;
+    private readonly HashSet<string> automaticKeys;
+    private readonly HashSet<Guid> unpersistedAutomaticItems = [];
+    private Func<HubUploadQueueItem, bool>? automaticPermission;
     private CancellationTokenSource? activeUpload;
     private Guid? activeId;
     private readonly Task? worker;
@@ -59,7 +69,9 @@ public sealed class OsuHubUploadQueue : IOsuHubUploadQueue, IDisposable
             throw new ArgumentException("The Hub upload queue path must be absolute.", nameof(path));
         this.path = path;
         this.uploader = uploader ?? throw new ArgumentNullException(nameof(uploader));
-        items = load(path).Select(item => item.Status == HubUploadQueueStatus.Uploading
+        QueueDocument? document = load(path);
+        automaticKeys = new HashSet<string>(document?.AutomaticKeys ?? [], StringComparer.Ordinal);
+        items = (document?.Items ?? []).Select(item => item.Status == HubUploadQueueStatus.Uploading
                 ? item with { Status = HubUploadQueueStatus.Queued, Error = "", UpdatedAt = DateTimeOffset.UtcNow }
                 : item)
             .OrderBy(item => item.CreatedAt)
@@ -78,6 +90,62 @@ public sealed class OsuHubUploadQueue : IOsuHubUploadQueue, IDisposable
     {
         lock (stateGate)
             return items.OrderByDescending(item => item.UpdatedAt).ToArray();
+    }
+
+    public void SetAutomaticUploadPermission(Func<HubUploadQueueItem, bool> permission)
+    {
+        lock (stateGate)
+            automaticPermission = permission;
+        signal.Release();
+    }
+
+    public async Task<HubUploadQueueItem?> TryEnqueueAutomaticAsync(OsuHubSyncRequest request, string? replayPath, string title,
+        string deduplicationKey, string accountScope, Guid generation, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(deduplicationKey);
+        ArgumentException.ThrowIfNullOrWhiteSpace(accountScope);
+        if (generation == Guid.Empty)
+            throw new ArgumentException("Automatic sharing requires an opt-in generation.", nameof(generation));
+        await automaticGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        HubUploadQueueItem? item = null;
+        try
+        {
+            lock (stateGate)
+            {
+                if (automaticKeys.Contains(deduplicationKey)
+                    || items.Any(existing => existing.Request.Profile.OsuUserId == request.Profile.OsuUserId
+                        && existing.Request.Score.ClientScoreId == request.Score.ClientScoreId
+                        && (string.IsNullOrEmpty(existing.AutomaticAccountScope) || existing.AutomaticAccountScope == accountScope)))
+                    return null;
+                trimTerminalEntries();
+                if (items.Count >= MaximumEntries)
+                    throw new InvalidOperationException("The Hub upload queue is full.");
+                DateTimeOffset now = DateTimeOffset.UtcNow;
+                item = new HubUploadQueueItem(Guid.NewGuid(), now, now, HubUploadQueueStatus.Queued, 0,
+                    title, request, replayPath ?? "", AutomaticAccountScope: accountScope, AutomaticGeneration: generation);
+                items.Add(item);
+                unpersistedAutomaticItems.Add(item.Id);
+                automaticKeys.Add(deduplicationKey);
+            }
+            await persistAsync(cancellationToken).ConfigureAwait(false);
+            lock (stateGate)
+                unpersistedAutomaticItems.Remove(item.Id);
+            Changed?.Invoke();
+            signal.Release();
+            return item;
+        }
+        catch
+        {
+            if (item is not null)
+                lock (stateGate)
+                {
+                    items.RemoveAll(candidate => candidate.Id == item.Id);
+                    unpersistedAutomaticItems.Remove(item.Id);
+                    automaticKeys.Remove(deduplicationKey);
+                }
+            throw;
+        }
+        finally { automaticGate.Release(); }
     }
 
     public async Task<HubUploadQueueItem> EnqueueAsync(
@@ -178,7 +246,9 @@ public sealed class OsuHubUploadQueue : IOsuHubUploadQueue, IDisposable
                 HubUploadQueueItem? next;
                 lock (stateGate)
                 {
-                    next = items.FirstOrDefault(item => item.Status == HubUploadQueueStatus.Queued);
+                    next = items.FirstOrDefault(item => item.Status == HubUploadQueueStatus.Queued
+                        && !unpersistedAutomaticItems.Contains(item.Id)
+                        && (string.IsNullOrEmpty(item.AutomaticAccountScope) || automaticPermission?.Invoke(item) == true));
                     if (next is null)
                         break;
                     int index = items.FindIndex(item => item.Id == next.Id);
@@ -199,10 +269,10 @@ public sealed class OsuHubUploadQueue : IOsuHubUploadQueue, IDisposable
 
                 try
                 {
-                    OsuHubUploadResult result = await uploader.UploadAsync(
-                        next.Request,
-                        string.IsNullOrWhiteSpace(next.ReplayPath) ? null : next.ReplayPath,
-                        activeUpload.Token).ConfigureAwait(false);
+                    string? replayPath = string.IsNullOrWhiteSpace(next.ReplayPath) ? null : next.ReplayPath;
+                    OsuHubUploadResult result = string.IsNullOrEmpty(next.AutomaticAccountScope)
+                        ? await uploader.UploadAsync(next.Request, replayPath, activeUpload.Token).ConfigureAwait(false)
+                        : await uploader.UploadAutomaticAsync(next.Request, next.AutomaticAccountScope, replayPath, activeUpload.Token).ConfigureAwait(false);
                     update(next.Id, item => item with
                     {
                         Status = HubUploadQueueStatus.Completed,
@@ -271,15 +341,19 @@ public sealed class OsuHubUploadQueue : IOsuHubUploadQueue, IDisposable
         try
         {
             HubUploadQueueItem[] snapshot;
+            string[] keys;
             lock (stateGate)
+            {
                 snapshot = items.OrderBy(item => item.CreatedAt).TakeLast(MaximumEntries).ToArray();
+                keys = automaticKeys.Order(StringComparer.Ordinal).ToArray();
+            }
             string? directory = Path.GetDirectoryName(path);
             if (!string.IsNullOrWhiteSpace(directory))
                 Directory.CreateDirectory(directory);
             temporary = $"{path}.{Guid.NewGuid():N}.tmp";
             await using (FileStream stream = new(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, FileOptions.Asynchronous))
             {
-                await JsonSerializer.SerializeAsync(stream, new QueueDocument(current_version, snapshot), json_options, cancellationToken).ConfigureAwait(false);
+                await JsonSerializer.SerializeAsync(stream, new QueueDocument(current_version, snapshot, keys), json_options, cancellationToken).ConfigureAwait(false);
                 await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
             }
             File.Move(temporary, path, true);
@@ -295,19 +369,19 @@ public sealed class OsuHubUploadQueue : IOsuHubUploadQueue, IDisposable
         }
     }
 
-    private static IReadOnlyList<HubUploadQueueItem> load(string path)
+    private static QueueDocument? load(string path)
     {
         try
         {
             if (!File.Exists(path))
-                return [];
+                return null;
             using FileStream stream = File.OpenRead(path);
             QueueDocument? document = JsonSerializer.Deserialize<QueueDocument>(stream, json_options);
-            return document?.Version == current_version && document.Items is not null ? document.Items : [];
+            return document?.Version == current_version && document.Items is not null ? document : null;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException)
         {
-            return [];
+            return null;
         }
     }
 
@@ -337,5 +411,5 @@ public sealed class OsuHubUploadQueue : IOsuHubUploadQueue, IDisposable
         lifetime.Dispose();
     }
 
-    private sealed record QueueDocument(int Version, IReadOnlyList<HubUploadQueueItem> Items);
+    private sealed record QueueDocument(int Version, IReadOnlyList<HubUploadQueueItem> Items, IReadOnlyList<string>? AutomaticKeys = null);
 }
