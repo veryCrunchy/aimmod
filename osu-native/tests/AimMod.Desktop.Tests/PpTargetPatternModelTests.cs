@@ -28,7 +28,9 @@ public sealed class PpTargetPatternModelTests
             Assert.That(f.StreamFraction, Is.Zero);
             Assert.That(f.DurationSeconds, Is.EqualTo(.2));
             Assert.That(PpTargetPatternModel.ExtractFeatures(points, 25, 1).MeanSpacing, Is.EqualTo(200));
-            Assert.That(JsonSerializer.Deserialize<PpPatternFeatures>(JsonSerializer.Serialize(f)), Is.EqualTo(f));
+            var roundTrip = JsonSerializer.Deserialize<PpPatternFeatures>(JsonSerializer.Serialize(f))!;
+            Assert.That(roundTrip with { PatternObjectCounts = null }, Is.EqualTo(f with { PatternObjectCounts = null }));
+            Assert.That(roundTrip.PatternObjectCounts, Is.EquivalentTo(f.PatternObjectCounts!));
         });
     }
 
@@ -99,7 +101,7 @@ public sealed class PpTargetPatternModelTests
         {
             Assert.That(p.Evidence.All(e => e.Outcomes["Overall"].MissRate > .3), Is.True);
             Assert.That(prediction.ExpectedAccuracy, Is.LessThan(.8));
-            Assert.That(prediction.ExpectedMissRate, Is.EqualTo(prediction.PatternFits.Max(f => f.ExpectedMissRate!.Value)));
+            Assert.That(prediction.ExpectedMissRate, Is.LessThanOrEqualTo(prediction.PatternFits.Max(f => f.ExpectedMissRate!.Value)));
             Assert.That(prediction.ExpectedMissRate, Is.GreaterThan(.3));
             Assert.That(prediction.Risks.Any(r => r.Contains("overshoots")), Is.True);
             Assert.That(prediction.CoverageNotes, Is.Not.Empty);
@@ -118,9 +120,19 @@ public sealed class PpTargetPatternModelTests
             Assert.That(p.Evidence[0].Outcomes["Overall"].Accuracy, Is.GreaterThan(.8));
             Assert.That(prediction.PatternFits.Single(f => f.Pattern == "Jumps").Fit, Is.Zero);
             Assert.That(prediction.Fit, Is.Zero);
-            Assert.That(prediction.ExpectedAccuracy, Is.LessThan(.1));
-            Assert.That(prediction.ExpectedMissRate, Is.EqualTo(1));
+            Assert.That(prediction.ExpectedAccuracy, Is.InRange(.75, .9), "A weak jump section must not turn the successful stream section into misses.");
+            Assert.That(prediction.ExpectedMissRate, Is.InRange(.1, .25));
         });
+    }
+
+    [Test]
+    public void PatternExposureCountsEachObjectOnceEvenWhenStreamsAlsoHaveSpeedAndTurns()
+    {
+        var points = streamPoints(80).Concat(jumpPoints(16).Select(p => p with { TimeMs = p.TimeMs + 12000 })).ToArray();
+        var features = PpTargetPatternModel.ExtractFeatures(points, 32, 1);
+        Assert.That(features.PatternObjectCounts!.Values.Sum(), Is.EqualTo(points.Length));
+        Assert.That(features.PatternObjectCounts["Streams"], Is.EqualTo(80));
+        Assert.That(features.PatternObjectCounts.GetValueOrDefault("Speed"), Is.Zero);
     }
 
     [Test]

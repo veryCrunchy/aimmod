@@ -18,6 +18,8 @@ For context, osu!'s [difficulty preprocessing](https://github.com/ppy/osu/blob/m
 
 Measured demanded-pattern bottlenecks take precedence over easy sections. Default ranking weights skill fit at 75%, preferences at 10%, skill-adjusted attainable gain at 8%, mod preference at 4% and confidence at 3%. Unknown coverage gets a neutral ordering value, not a claim of proficiency; known weaknesses still count in partially measured maps. Explicit PP sorting remains available.
 
+Whole-map accuracy and miss projections use disjoint object exposure counts. A stream object is not also counted as a speed and direction-change object. A short weak jump section can make a map a poor skill match without projecting its miss rate onto the successful sections. Ranking still uses the weakest demanded pattern; score projection uses the amount of each pattern present.
+
 Suggested mods come from the most common actually played setup, counted across distinct map setups. Separate HD and HR preferences do not become a synthetic HDHR recommendation. Pattern evidence must match the candidate setup and measured clock rate.
 
 Submitted scores remain in the broader preference/performance history. A score without replay judgements does not establish which pattern caused its misses. The pattern model currently measures object-head performance, not slider tracking, reading visibility, hand fatigue, full-map completion probability or an independently validated player skill rating. Combo projection remains an approximation.

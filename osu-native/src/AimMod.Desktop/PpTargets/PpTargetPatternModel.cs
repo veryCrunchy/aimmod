@@ -32,6 +32,7 @@ public sealed record PpPatternFeatures
     public double? MeanDirectionChangeDegrees { get; init; }
     public double? SharpTurnFraction { get; init; }
     public double? DurationSeconds { get; init; }
+    public IReadOnlyDictionary<string, int>? PatternObjectCounts { get; init; }
 }
 
 public sealed record PpPatternOutcome(int ObjectCount, double Accuracy, double MissRate,
@@ -52,7 +53,7 @@ public sealed record PpPatternPrediction(double? Fit, double? ExpectedAccuracy, 
 
 public static class PpTargetPatternModel
 {
-    public const string Version = "geometry-v2";
+    public const string Version = "geometry-v3";
     private const double normalized_radius = 50;
     private const double jump_spacing = 150;
     private const double tapping_spacing = 100;
@@ -191,8 +192,23 @@ public static class PpTargetPatternModel
         if (fits.Any(f => f.Fit is null)) return new(null, null, evidenceConfidence, strengths, risks, fits, coverageNotes);
         // Use the weakest demanded pattern rather than allowing easy sections to hide a bottleneck.
         double bottleneck = fits.Min(f => f.Fit!.Value);
-        double expectedAccuracy = Math.Min(fits[0].ExpectedAccuracy!.Value, fits.Min(f => f.ExpectedAccuracy!.Value) + 0.015);
-        double expectedMissRate = fits.Max(f => f.ExpectedMissRate!.Value);
+        // A bottleneck controls suitability, not every object's projected judgement.
+        // Disjoint exposure counts avoid counting stream objects again as speed/turns.
+        var overall = fits[0];
+        double expectedAccuracy = overall.ExpectedAccuracy!.Value;
+        double expectedMissRate = overall.ExpectedMissRate!.Value;
+        if (candidate.PatternObjectCounts is { } counts && counts.Values.Sum() == candidate.PointCount)
+        {
+            expectedAccuracy = 0;
+            expectedMissRate = 0;
+            foreach (var (pattern, count) in counts)
+            {
+                var outcome = fits.FirstOrDefault(f => f.Pattern == pattern) ?? overall;
+                double exposure = count / (double)candidate.PointCount;
+                expectedAccuracy += exposure * outcome.ExpectedAccuracy!.Value;
+                expectedMissRate += exposure * outcome.ExpectedMissRate!.Value;
+            }
+        }
         return new(bottleneck, expectedAccuracy, evidenceConfidence, strengths, risks, fits, coverageNotes, expectedMissRate);
     }
 
@@ -249,6 +265,10 @@ public static class PpTargetPatternModel
                 for (int index = start; index <= end; index++) patterns[length >= 8 ? "Streams" : "Bursts"].Add(index);
             start = end;
         }
+        string[] exposurePriority = ["Streams", "Bursts", "Jumps", "Direction changes", "Speed", "Overall"];
+        var exposureCounts = Enumerable.Range(0, points.Length)
+            .GroupBy(index => exposurePriority.First(pattern => patterns[pattern].Contains(index)))
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
         var features = new PpPatternFeatures
         {
             PointCount = points.Length, TransitionCount = transitions, HitRadius = radius, ClockRate = rate,
@@ -262,6 +282,7 @@ public static class PpTargetPatternModel
             StreamFraction = radius is null || rate is null || transitions == 0 ? null : patterns["Streams"].Count / (double)points.Length,
             MeanDirectionChangeDegrees = mean(angles), SharpTurnFraction = angles.Count == 0 ? null : patterns["Direction changes"].Count / (double)angles.Count,
             DurationSeconds = points.Length < 2 || rate is null ? null : (points[^1].TimeMs - points[0].TimeMs) / rate / 1000,
+            PatternObjectCounts = exposureCounts,
         };
         return (features, patterns);
     }
