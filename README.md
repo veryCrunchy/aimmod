@@ -13,7 +13,7 @@ AimMod for osu! is a native osu.Framework desktop application. It combines local
 
 ### Beatmap intelligence and PP targets
 
-![AimMod for osu! beatmap browser](public/aimmod-osu-beatmaps.png)
+![AimMod desktop beatmap library with installed maps, difficulty filters and skill demand](public/aimmod-osu-beatmaps.png)
 
 - Browse installed beatmaps and inspect each difficulty separately
 - Compare aim, speed, stamina, reading, and accuracy demand
@@ -23,16 +23,12 @@ AimMod for osu! is a native osu.Framework desktop application. It combines local
 
 ### Replay analysis
 
-![AimMod for osu! replay analysis](public/aimmod-osu-replay-analysis.png)
-
 - Play local replays with the selected skin, audio controls, seeking, and exact judgement timeline
 - Classify misses from cursor and click evidence, including overshoots, undershoots, early clicks, late clicks, and unstable aim
 - Compare repeat attempts on the same difficulty to identify recurring failure points
 - Keep replay state isolated per workspace and pause playback when switching tabs
 
 ### Global coaching and practice
-
-![AimMod for osu! global coaching](public/aimmod-osu-coaching.png)
 
 - Build a recent skill profile across maps with a configurable time window
 - Analyse replay evidence in the background and cache completed calculations
@@ -46,9 +42,31 @@ AimMod for osu! is a native osu.Framework desktop application. It combines local
 - Browse attributed catalogs from osuskins.net and skins.osuck.net, inspect screenshots, and keep downloads temporary until saving or importing
 - Validate archive type, size, paths, and redirect hosts before importing; public Google Drive files are supported while MEGA and authenticated or challenged links open in the browser
 - Link an AimMod Hub account with a device code and manually share a score, replay file, or judgement analysis as private, unlisted, or public
-- Retain a bounded upload queue across restarts with cancel and retry controls; sharing is private by default and never automatic
+- Retain an upload queue across restarts with cancel and retry controls. New sharing preferences default to public; private and unlisted are available. Automatic sharing is off until explicitly enabled, with PP and accuracy thresholds.
 
 The native app is self-contained. Stable and preview channels update in place through Velopack on Windows and Linux; portable archives remain available for manual installs. See [the native app guide](osu-native/README.md) and [release-channel documentation](osu-native/docs/release-channels.md).
+
+### AimMod Hub in your browser
+
+[AimMod Hub](https://aimmod.app/osu) complements the desktop app with beatmap and skin discovery, public scores, replay sharing and browser replay playback.
+
+**Beatmap search and difficulty details**
+
+![AimMod Hub beatmap search with a selected beatmap and direct open links](public/aimmod-hub-beatmaps.png)
+
+Search the official catalog, filter by difficulty and map settings, inspect a set, and open it in osu! or AimMod. Search preferences are retained across reloads.
+
+**PP at your chosen accuracy**
+
+![AimMod Hub PP targets with calculated full-combo performance values](public/aimmod-hub-pp-targets.png)
+
+Compare full-combo PP at a chosen accuracy, mod combination and scoring mode. Results are cached by difficulty revision and calculation settings. These are map calculations, not personal predictions; skill compatibility remains in the desktop app.
+
+**Guides for your next practice session**
+
+![AimMod Hub osu knowledge base with learning paths and sourced practice guides](public/aimmod-hub-knowledge-base.png)
+
+The [osu! knowledge base](https://aimmod.app/osu/learn) covers reading, timing, aim control, slider breaks and practice planning, with sources and relevant video resources.
 
 ## AimMod for KovaaK's
 
