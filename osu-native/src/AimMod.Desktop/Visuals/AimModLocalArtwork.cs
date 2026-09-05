@@ -16,10 +16,12 @@ public partial class AimModLocalArtwork : Sprite
 {
     private readonly string path;
     private TextureStore? textures;
+    private readonly bool cropForPanel;
 
-    public AimModLocalArtwork(string path)
+    public AimModLocalArtwork(string path, bool cropForPanel = true)
     {
         this.path = path;
+        this.cropForPanel = cropForPanel;
         RelativeSizeAxes = Axes.Both;
         FillMode = FillMode.Fill;
         Anchor = Anchor.Centre;
@@ -34,10 +36,10 @@ public partial class AimModLocalArtwork : Sprite
             return;
 
         var fileStore = new SingleFileResourceStore(path);
-        textures = new TextureStore(
+        textures = cropForPanel ? new TextureStore(
             host.Renderer,
             new BeatmapPanelBackgroundTextureLoaderStore(host.CreateTextureLoaderStore(fileStore)),
-            useAtlas: false);
+            useAtlas: false) : new TextureStore(host.Renderer, host.CreateTextureLoaderStore(fileStore), useAtlas: false);
         Texture = textures.Get(path);
         Alpha = Texture is null ? 0 : 1;
     }

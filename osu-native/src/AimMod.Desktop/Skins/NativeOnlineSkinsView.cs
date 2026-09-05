@@ -82,7 +82,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
                 Depth = -20,
                 Children = new Drawable[]
                 {
-                    new CircularContainer
+                    new Container
                     {
                         RelativeSizeAxes = Axes.Both,
                         Masking = true,
@@ -177,7 +177,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
                                         {
                                             RelativeSizeAxes = Axes.X,
                                             Height = 258,
-                                            Child = gallery = new OnlinePreviewGallery(),
+                                            Child = gallery = new OnlinePreviewGallery(backend?.Screenshots),
                                         },
                                         new FillFlowContainer
                                         {
@@ -419,7 +419,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
     private void refreshRows()
     {
         results.Clear();
-        results.AddRange(loaded.Select(item => new OnlineSkinRow(item, ReferenceEquals(item, selected), () => select(item))));
+        results.AddRange(loaded.Select(item => new OnlineSkinRow(item, ReferenceEquals(item, selected), () => select(item), backend?.Screenshots)));
     }
 
     private void select(OnlineSkinCatalogEntry? item)
@@ -725,7 +725,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
         private readonly TruncatingSpriteText name;
         private readonly TruncatingSpriteText creator;
 
-        public OnlineSkinRow(OnlineSkinCatalogEntry skin, bool selected, Action action)
+        public OnlineSkinRow(OnlineSkinCatalogEntry skin, bool selected, Action action, SkinScreenshotCache? screenshots)
         {
             RelativeSizeAxes = Axes.X;
             Height = 92;
@@ -740,7 +740,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
                     Width = 142,
                     Masking = true,
                     Child = skin.PreviewUris.FirstOrDefault() is Uri preview
-                        ? new AimModOnlineArtworkHost(preview) { RelativeSizeAxes = Axes.Both }
+                        ? new SkinScreenshot(screenshots, preview) { RelativeSizeAxes = Axes.Both }
                         : new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelHover },
                 },
                 new Box
@@ -772,9 +772,11 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
     {
         private readonly Container artwork;
         private readonly FillFlowContainer thumbnails;
+        private readonly SkinScreenshotCache? screenshots;
 
-        public OnlinePreviewGallery()
+        public OnlinePreviewGallery(SkinScreenshotCache? screenshots)
         {
+            this.screenshots = screenshots;
             RelativeSizeAxes = Axes.Both;
             InternalChildren = new Drawable[]
             {
@@ -809,24 +811,33 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
                 return;
             }
             show(images[0]);
-            thumbnails.AddRange(images.Take(5).Select(uri => new PreviewThumbnail(uri, () => show(uri))));
+            thumbnails.AddRange(images.Take(5).Select(uri => new PreviewThumbnail(uri, () => show(uri), screenshots)));
+        }
+
+        protected override void Update()
+        {
+            base.Update();
+            int count = thumbnails.Children.Count;
+            if (count == 0) return;
+            float width = Math.Clamp((DrawWidth - 16 - (count - 1) * 6) / count, 1, 76);
+            foreach (Drawable thumbnail in thumbnails.Children) thumbnail.Width = width;
         }
 
         private void show(Uri uri)
         {
             artwork.Clear();
-            artwork.Add(new AimModOnlineArtworkHost(uri) { RelativeSizeAxes = Axes.Both });
+            artwork.Add(new SkinScreenshot(screenshots, uri, fit: true) { RelativeSizeAxes = Axes.Both });
         }
 
         private partial class PreviewThumbnail : AimModInteractiveSurface
         {
-            public PreviewThumbnail(Uri uri, Action action)
+            public PreviewThumbnail(Uri uri, Action action, SkinScreenshotCache? screenshots)
             {
                 Width = 76;
                 RelativeSizeAxes = Axes.Y;
                 CornerRadius = AimModVisualStyle.ControlRadius;
                 Action = action;
-                Child = new AimModOnlineArtworkHost(uri) { RelativeSizeAxes = Axes.Both };
+                Child = new SkinScreenshot(screenshots, uri) { RelativeSizeAxes = Axes.Both };
             }
         }
     }

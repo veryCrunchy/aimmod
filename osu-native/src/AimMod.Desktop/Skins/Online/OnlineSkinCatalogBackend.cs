@@ -8,6 +8,7 @@ public sealed class OnlineSkinCatalogBackend : IDisposable
     {
         http = new SecureSkinHttpClient();
         Cache = new OnlineSkinCatalogCache(cacheRoot);
+        Screenshots = new SkinScreenshotCache(http, Path.Combine(cacheRoot, "screenshots"));
         var validator = new OnlineSkinArchiveValidator();
         IOnlineSkinCatalogProvider[] providers =
         [
@@ -25,6 +26,7 @@ public sealed class OnlineSkinCatalogBackend : IDisposable
     public OnlineSkinCatalogCache Cache { get; }
     public OnlineSkinCatalogService Catalog { get; }
     public OnlineSkinPreviewService Previews { get; }
+    public SkinScreenshotCache Screenshots { get; }
 
     public void Dispose() => http.Dispose();
 }

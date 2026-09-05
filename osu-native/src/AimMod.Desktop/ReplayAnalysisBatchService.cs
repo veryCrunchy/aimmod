@@ -73,13 +73,16 @@ public sealed class ReplayAnalysisBatchService
 
     private readonly ILocalReplayOpenService replayOpenService;
     private readonly Action<string> log;
+    private readonly Func<Guid, ReplayAnalysisResult, Task>? onCompleted;
 
     public ReplayAnalysisBatchService(
         ILocalReplayOpenService replayOpenService,
-        Action<string>? log = null)
+        Action<string>? log = null,
+        Func<Guid, ReplayAnalysisResult, Task>? onCompleted = null)
     {
         this.replayOpenService = replayOpenService ?? throw new ArgumentNullException(nameof(replayOpenService));
         this.log = log ?? Console.Error.WriteLine;
+        this.onCompleted = onCompleted;
     }
 
     public async Task<ReplayAnalysisBatchResult> AnalyseRecentAsync(
@@ -134,6 +137,8 @@ public sealed class ReplayAnalysisBatchService
                     new ReplayAnalysisRequest(staging.DirectoryPath, staging.BeatmapPath, staging.ReplayPath),
                     cancellationToken).ConfigureAwait(false);
                 completed[replay.ScoreId] = result;
+                if (onCompleted is not null)
+                    await onCompleted(replay.ScoreId, result).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {

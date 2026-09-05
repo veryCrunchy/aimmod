@@ -24,7 +24,7 @@ public interface IPpTargetExactCalculationService
 
 public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationService
 {
-    private const int cache_version = 4;
+    private const int cache_version = 5;
     private const int maximum_batch_size = 50;
     private const int maximum_cache_entries = 2_048;
     private static readonly JsonSerializerOptions json_options = new(JsonSerializerDefaults.Web);
@@ -187,9 +187,20 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
                     };
                     if (prediction?.ExpectedAccuracy is not null || prediction?.ExpectedMissRate is not null)
                         estimate = estimate with { Method = estimate.Method + " Projected accuracy/misses use measured head evidence; combo remains heuristic and slider tracking is unmeasured." };
+                    double evidence = Math.Clamp(prediction?.EvidenceConfidence ?? 0, 0, 1);
+                    double uncertainty = 0.12 + 0.30 * (1 - evidence);
+                    estimate = estimate with
+                    {
+                        Confidence = evidence >= .65 ? PpTargetConfidence.High : evidence >= .3 ? PpTargetConfidence.Medium : PpTargetConfidence.Low,
+                        SampleCount = prediction?.PatternFits.Select(fit => fit.DistinctMaps).DefaultIfEmpty(0).Min() ?? 0,
+                        ExpectedPpRange = new(Math.Max(0, estimate.ExpectedPp * (1 - uncertainty)),
+                            Math.Min(estimate.RealisticMaximumPp, estimate.ExpectedPp * (1 + uncertainty))),
+                    };
                     string key = cacheKey(request, file.ContentHash);
                     cache[key] = new CacheEntry(key, DateTimeOffset.UtcNow, estimate);
                     completed[request.BeatmapId] = estimate;
+                    // Preserve completed work even if the next difficulty is cancelled.
+                    await trySaveCacheAsync().ConfigureAwait(false);
                 }
                 catch (Exception error) when (error is not OperationCanceledException)
                 {
@@ -204,9 +215,6 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
                         valid.Length));
                 }
             }
-
-            if (completed.Count > valid.Length - missing.Length)
-                await trySaveCacheAsync().ConfigureAwait(false);
 
             if (completed.Count == 0 && firstCalculationFailure is not null)
                 throw new InvalidOperationException("Official PP calculation failed for every requested beatmap difficulty.", firstCalculationFailure);
@@ -301,10 +309,9 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
                     PpTargetEstimate estimate = createEstimate(request, expected, ceiling);
                     cache[cacheKey(request)] = new CacheEntry(cacheKey(request), DateTimeOffset.UtcNow, estimate);
                     completed[accuracy] = accuracy == 100 ? estimate.RealisticMaximumPp : estimate.ExpectedPp;
+                    await trySaveCacheAsync().ConfigureAwait(false);
                 }
 
-                if (missing.Count > 0)
-                    await trySaveCacheAsync().ConfigureAwait(false);
             }
             finally
             {
@@ -341,8 +348,15 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
         int count = Math.Max(0, objectCount);
         int misses = Math.Clamp((int)Math.Round(rate * count, MidpointRounding.AwayFromZero), 0, count);
         if (misses == 0) return (0, Math.Max(0, maximumCombo));
-        // Miss counts are measured; the distribution of combo breaks is not.
-        double comboRatio = misses == count ? 0 : Math.Clamp(1 - 0.16 * misses, 0.5, 0.84);
+        // Approximate the longest successful segment for uniformly dispersed breaks.
+        // Unlike the old 50% floor this falls as misses accumulate. Clustering and
+        // slider breaks remain unmeasured, so this is not a guaranteed combo.
+        int segments = misses + 1;
+        double harmonic = 0;
+        for (int i = 1; i <= segments; i++) harmonic += 1d / i;
+        double successfulObjects = count - misses;
+        double longestSegment = Math.Min(successfulObjects, successfulObjects * harmonic / segments);
+        double comboRatio = count == 0 ? 0 : longestSegment / count;
         return (misses, Math.Clamp((int)Math.Round(maximumCombo * comboRatio), 0, maximumCombo));
     }
 

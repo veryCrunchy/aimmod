@@ -25,6 +25,45 @@ public sealed class PpTargetExactCalculationServiceTests
     }
 
     [Test]
+    public void FrequentMissesDoNotRetainHalfTheMaximumCombo()
+    {
+        var one = PpTargetExactCalculationService.ExpectedScoreShape(.5, 1000, 1000, .001);
+        var ten = PpTargetExactCalculationService.ExpectedScoreShape(.5, 1000, 1000, .01);
+        var many = PpTargetExactCalculationService.ExpectedScoreShape(.5, 1000, 1000, .1);
+        Assert.That(one.Combo, Is.GreaterThan(ten.Combo));
+        Assert.That(ten.Combo, Is.LessThan(500));
+        Assert.That(many.Combo, Is.LessThan(ten.Combo));
+        Assert.That(PpTargetExactCalculationService.ExpectedScoreShape(.5, 1000, 1000, 1).Combo, Is.Zero);
+    }
+
+    [Test]
+    public async Task InterruptedBatchPreservesCompletedDifficultyAcrossRestart()
+    {
+        const int id = 456;
+        string path = Path.Combine(temporaryDirectory, "interrupted.json");
+        var first = new PpTargetExactCalculationService(temporaryDirectory, path,
+            new StubDifficultyClient(id, createBeatmap(id)), Path.Combine(temporaryDirectory, "downloads"),
+            () => SidecarRuntimeClient.Start(desktopExecutablePath()));
+        using var cancellation = new CancellationTokenSource();
+        var request = new PpTargetExactRequest(id, null, [], .94, .5);
+        Assert.ThrowsAsync<OperationCanceledException>(async () => await first.CalculateAsync(
+            [request, request with { BeatmapId = id + 1 }], cancellation.Token,
+            new CancelAfterFirst(cancellation)));
+        var reopened = new PpTargetExactCalculationService(temporaryDirectory, path,
+            new FailingDifficultyClient(), Path.Combine(temporaryDirectory, "downloads"),
+            () => throw new AssertionException("Completed PP must survive an interrupted batch."));
+        Assert.That((await reopened.CalculateAsync([request])).ContainsKey(id), Is.True);
+    }
+
+    private sealed class CancelAfterFirst(CancellationTokenSource cancellation) : IProgress<PpTargetExactCalculationProgress>
+    {
+        public void Report(PpTargetExactCalculationProgress value)
+        {
+            if (value.Completed >= 1) cancellation.Cancel();
+        }
+    }
+
+    [Test]
     public async Task RemoteDifficultyUsesOfficialCalculatorForExpectedAndFullComboPp()
     {
         const int beatmapId = 456;
@@ -185,7 +224,8 @@ public sealed class PpTargetExactCalculationServiceTests
     {
         Assert.Multiple(() =>
         {
-            Assert.That(PpTargetExactCalculationService.ExpectedScoreShape(0.99, 1500, 1000, 0.02), Is.EqualTo((20, 750)));
+            int dispersedCombo = (int)Math.Round(1500 * .98 * Enumerable.Range(1, 21).Sum(i => 1d / i) / 21);
+            Assert.That(PpTargetExactCalculationService.ExpectedScoreShape(0.99, 1500, 1000, 0.02), Is.EqualTo((20, dispersedCombo)));
             Assert.That(PpTargetExactCalculationService.ExpectedScoreShape(0.1, 1500, 1000, 0), Is.EqualTo((0, 1500)));
             Assert.That(PpTargetExactCalculationService.ExpectedScoreShape(0.99, 1500, 1000, 1), Is.EqualTo((1000, 0)));
             Assert.That(PpTargetExactCalculationService.ExpectedScoreShape(0.7, 100, 100, null), Is.EqualTo(PpTargetExactCalculationService.ExpectedScoreShape(0.7, 100)));

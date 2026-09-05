@@ -272,7 +272,9 @@ public partial class AimModGame : OsuGameBase
             OsuStableInstallation? stable = stableDiscovery.CompleteInstallations.FirstOrDefault();
             ILocalLibrarySource? stableLibrary = stable is null
                 ? null
-                : new OsuStableLocalLibrarySource(stable.CanonicalPath, stable.SongsPath);
+                : new CachedLocalLibrarySource(new OsuStableLocalLibrarySource(stable.CanonicalPath, stable.SongsPath),
+                    Storage.GetFullPath("cache/library-stable-v1", true),
+                    Path.Combine(stable.CanonicalPath, "osu!.db"), Path.Combine(stable.CanonicalPath, "scores.db"));
 
             var lazerInstall = new LazerBeatmapInstallService(LazerHandoffDirectory);
             beatmapDestinationService = new OsuBeatmapDestinationService(
@@ -300,7 +302,7 @@ public partial class AimModGame : OsuGameBase
             }
 
             replayOpenService = new CompositeLocalReplayOpenService();
-            replayAnalysisBatchService = new ReplayAnalysisBatchService(replayOpenService);
+            replayAnalysisBatchService = new ReplayAnalysisBatchService(replayOpenService, onCompleted: cacheCompletedReplay);
 
             OsuLazerDiscoveryResult discovery = await Task.Run(
                 () => new OsuLazerDiscoveryService(new PhysicalOsuDiscoveryFileSystem()).Discover(platform, environment),
@@ -319,7 +321,8 @@ public partial class AimModGame : OsuGameBase
 
             if (switchableLocalLibrary is not null)
             {
-                var externalLibrary = new ExternalLazerLocalLibrarySource(root.CanonicalPath);
+                var externalLibrary = new CachedLocalLibrarySource(new ExternalLazerLocalLibrarySource(root.CanonicalPath),
+                    Storage.GetFullPath("cache/library-lazer-v1", true), Path.Combine(root.CanonicalPath, "client.realm"));
                 localScorePpHydrationService = new LocalScorePpHydrationService(
                     root.CanonicalPath,
                     Storage.GetFullPath("cache/local-score-pp-v1.json", true));
@@ -328,7 +331,7 @@ public partial class AimModGame : OsuGameBase
                     ILocalLibrarySource fallback = switchableLocalLibrary.Current;
                     switchableLocalLibrary.SwitchTo(new CompositeLocalLibrarySource(new[] { externalLibrary, fallback }));
                     replayOpenService = new CompositeLocalReplayOpenService(new ExternalLazerReplayOpenService(root.CanonicalPath));
-                    replayAnalysisBatchService = new ReplayAnalysisBatchService(replayOpenService);
+                    replayAnalysisBatchService = new ReplayAnalysisBatchService(replayOpenService, onCompleted: cacheCompletedReplay);
                     startReplayLibraryAnalysis();
                 });
             }
@@ -1124,6 +1127,12 @@ public partial class AimModGame : OsuGameBase
                     targetRoute?.ShowAnalysisState(e.State);
             });
         }
+    }
+
+    private async Task cacheCompletedReplay(Guid scoreId, ReplayAnalysisResult result)
+    {
+        replayAnalyses[scoreId] = result;
+        await persistReplayAnalyses().ConfigureAwait(false);
     }
 
     private async Task persistReplayAnalyses()

@@ -215,7 +215,6 @@ public sealed class SwitchableLocalLibrarySource : ILocalLibrarySource, ILocalLi
         if (ReferenceEquals(previous, source))
             return;
 
-        source.Invalidate();
         SourceChanged?.Invoke();
     }
 
