@@ -217,14 +217,20 @@ public static class PpTargetRanker
         double? gain = estimate is null || baseline is null || !awardsPp
             ? null
             : Math.Max(0, estimate.ExpectedPp - baseline.Value);
-        double gainScore = gain is null || baseline is null
+        double? accountGain = awardsPp && estimate is not null
+            ? PpTargetOpportunityModel.AccountGain(profile.Opportunities, difficulty.BeatmapId, estimate.ExpectedPp) : null;
+        PpTargetPassEstimate? passEstimate = PpTargetOpportunityModel.EstimatePass(profile.Opportunities,
+            difficulty.StarRating, difficulty.Bpm, difficulty.TotalLengthSeconds, mods);
+        double? gainPerMinute = accountGain is { } account && difficulty.TotalLengthSeconds > 0
+            ? account / (difficulty.TotalLengthSeconds / 60d) : null;
+        double gainScore = accountGain is null
             ? 0
-            : Math.Clamp(gain.Value / Math.Max(25, baseline.Value * 0.3), 0, 1);
+            : Math.Clamp(accountGain.Value / 20, 0, 1);
         double modCompatibility = modFit(profile.CommonMods, mods);
         double confidenceScore = (int)recommendation / 3d;
         // Preferences and reward break ties between playable targets; neither should
         // outweigh a demonstrated mechanical weakness on a lucrative map.
-        double rank = 100 * (0.75 * attainability + 0.10 * preference
+        double rank = 100 * (0.60 * attainability + 0.15 * (passEstimate?.Lower ?? attainability) + 0.10 * preference
                             + 0.08 * gainScore * attainability
                             + 0.04 * modCompatibility + 0.03 * confidenceScore);
 
@@ -232,7 +238,7 @@ public static class PpTargetRanker
             set.BeatmapSetId, difficulty.BeatmapId, set.Title, set.Artist, set.Creator, set.Source, set.Status,
             difficulty.Name, difficulty.StarRating, difficulty.Bpm, difficulty.TotalLengthSeconds, difficulty.MaximumCombo,
             set.CoverUrl, preference, attainability, rank, baseline, gain, estimate, mods,
-            scoreEvidence, modCompatibility, recommendation);
+            scoreEvidence, modCompatibility, recommendation, passEstimate, accountGain, gainPerMinute);
     }
 
     private static PpTargetEstimate? matchingEstimate(

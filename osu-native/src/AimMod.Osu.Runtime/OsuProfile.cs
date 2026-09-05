@@ -48,7 +48,8 @@ public sealed record OsuBestScore(
     DateTimeOffset? EndedAt,
     DateTimeOffset? CreatedAt,
     OsuScoreBeatmap Beatmap,
-    OsuScoreBeatmapSet BeatmapSet);
+    OsuScoreBeatmapSet BeatmapSet,
+    bool? Passed = null);
 
 public sealed record OsuScoreStatistics(
     int Misses,

@@ -106,7 +106,7 @@ public sealed class NativePpTargetsWorkspaceTests
         await cache.SaveAsync(snapshot() with { CatalogScanStatus = "Partial catalog: page limit reached." });
         Assert.That(cache.Load()!.CatalogScanStatus, Is.EqualTo("Partial catalog: page limit reached."));
         var document = System.Text.Json.Nodes.JsonNode.Parse(await File.ReadAllTextAsync(path))!;
-        Assert.That(document["version"]!.GetValue<int>(), Is.EqualTo(5));
+        Assert.That(document["version"]!.GetValue<int>(), Is.EqualTo(6));
         document["version"] = 4;
         await File.WriteAllTextAsync(path, document.ToJsonString());
         Assert.That(cache.Load(), Is.Null);

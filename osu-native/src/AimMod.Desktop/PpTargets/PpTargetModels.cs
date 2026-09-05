@@ -37,7 +37,8 @@ public sealed record PpTargetPreferenceProfile(
     IReadOnlyList<PpTargetPreference> PreferredTitleSignals,
     IReadOnlyList<PpTargetPerformanceSample> PerformanceSamples,
     PpPatternProfile? PatternProfile = null,
-    IReadOnlyList<string>? PreferredModSetup = null)
+    IReadOnlyList<string>? PreferredModSetup = null,
+    PpTargetOpportunityProfile? Opportunities = null)
 {
     public static PpTargetPreferenceProfile Empty { get; } = new(
         0, 0, 0, null, null, null, null, null, null, PpTargetConfidence.Insufficient,
@@ -96,7 +97,10 @@ public sealed record PpTargetCandidate(
     IReadOnlyList<string> SuggestedMods,
     double ScoreEvidence,
     double ModCompatibility,
-    PpTargetConfidence RecommendationConfidence);
+    PpTargetConfidence RecommendationConfidence,
+    PpTargetPassEstimate? PassEstimate = null,
+    double? EstimatedAccountGainPp = null,
+    double? AccountGainPerMinute = null);
 
 public sealed record PpTargetRankingResult(
     PpTargetPreferenceProfile Profile,

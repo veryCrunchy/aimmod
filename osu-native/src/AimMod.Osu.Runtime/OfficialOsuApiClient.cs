@@ -12,7 +12,7 @@ public sealed class OfficialOsuApiClient : IDisposable
     private const int maximum_scores_response_bytes = 8 * 1024 * 1024;
     private const int scores_page_size = 100;
     private const int maximum_score_pages = 20;
-    private const int score_cache_schema_version = 2;
+    private const int score_cache_schema_version = 3;
     private const string osu_api_version = "20220705";
     private static readonly TimeSpan score_cache_lifetime = TimeSpan.FromMinutes(15);
     private static readonly Uri profile_endpoint = new("https://osu.ppy.sh/api/v2/me/osu", UriKind.Absolute);
@@ -737,7 +737,8 @@ public sealed class OfficialOsuApiClient : IDisposable
                 item.Beatmapset.Creator,
                 item.Beatmapset.Source,
                 item.Beatmapset.Status,
-                parseHttpsUri(item.Beatmapset.Covers?.Cover)));
+                parseHttpsUri(item.Beatmapset.Covers?.Cover)),
+            item.Passed);
     }
 
     private static OsuUserBeatmapScore? parseUserBeatmapScore(BestScoreResponse item, int userId)
@@ -796,6 +797,7 @@ public sealed class OfficialOsuApiClient : IDisposable
 
     private sealed class BestScoreResponse
     {
+        public bool? Passed { get; init; }
         public long Id { get; init; }
 
         [JsonPropertyName("user_id")]

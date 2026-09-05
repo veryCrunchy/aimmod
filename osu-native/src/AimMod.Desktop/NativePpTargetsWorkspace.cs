@@ -399,7 +399,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         maximumMaximumPp.BindValueChanged(_ => filterChanged(renderResults));
         category.BindValueChanged(_ => filterChanged(startCatalogSearch));
         length.BindValueChanged(_ => renderResults());
-        sort.BindValueChanged(_ => renderResults());
+        sort.BindValueChanged(_ => { if (!suppressFilterEvents) { renderResults(); saveSnapshot(); } });
 
         if (snapshot is null)
             reloadProfile();
@@ -433,6 +433,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         minimumStars.Value = Math.Clamp(snapshot.MinimumStars, 0, 10);
         maximumStars.Value = Math.Clamp(snapshot.MaximumStars, 0, 10);
         category.Value = snapshot.Category;
+        sort.Value = Enum.TryParse(snapshot.Sort, out TargetSort savedSort) && Enum.IsDefined(savedSort) ? savedSort : TargetSort.BestFit;
         suppressFilterEvents = false;
         setsById = catalog.GroupBy(set => set.BeatmapSetId).ToDictionary(group => group.Key, group => group.First());
         hasVisibleSnapshot = catalog.Count > 0;
@@ -488,7 +489,10 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             IReadOnlyList<LocalReplay> runs = ScoreHistoryMerger.MergeAsLocalReplays(
                 hydration?.Runs ?? history.Runs,
                 online?.Scores ?? []);
-            PpTargetPreferenceProfile next = PpTargetPreferenceProfiler.Build(runs, loadedSets);
+            PpTargetPreferenceProfile next = PpTargetPreferenceProfiler.Build(runs, loadedSets) with
+            {
+                Opportunities = PpTargetOpportunityModel.Build(online?.Scores ?? []),
+            };
             if (!IsDisposed && !cancellationToken.IsCancellationRequested)
                 Schedule(() =>
                 {
@@ -985,10 +989,13 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                 IEnumerable<PpTargetCandidate> candidates = ranked.Candidates.Where(candidate => estimates.Count == 0 || candidate.Estimate is not null);
                 candidates = ordering switch
                 {
+                    TargetSort.AccountGain => candidates.OrderByDescending(candidate => candidate.EstimatedAccountGainPp).ThenByDescending(candidate => candidate.RankScore),
+                    TargetSort.PassProbability => candidates.OrderByDescending(candidate => candidate.PassEstimate?.Lower).ThenByDescending(candidate => candidate.RankScore),
+                    TargetSort.GainPerMinute => candidates.OrderByDescending(candidate => candidate.AccountGainPerMinute).ThenByDescending(candidate => candidate.RankScore),
                     TargetSort.ExpectedPp => candidates.OrderByDescending(candidate => candidate.Estimate?.ExpectedPp).ThenByDescending(candidate => candidate.RankScore),
                     TargetSort.MaximumPp => candidates.OrderByDescending(candidate => candidate.Estimate?.RealisticMaximumPp).ThenByDescending(candidate => candidate.RankScore),
                     TargetSort.Stars => candidates.OrderBy(candidate => candidate.StarRating).ThenByDescending(candidate => candidate.RankScore),
-                    _ => candidates,
+                    _ => candidates.OrderByDescending(candidate => candidate.Estimate?.PatternPrediction?.Fit is not null).ThenByDescending(candidate => candidate.RankScore),
                 };
                 return candidates.Take(200).ToArray();
             }).ConfigureAwait(false);
@@ -1012,7 +1019,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         foreach (PpTargetCandidate candidate in visibleCandidates)
         {
             if (setsById.TryGetValue(candidate.BeatmapSetId, out OfficialBeatmapSet? set))
-                results.Add(new PpTargetRow(candidate, set, importSet, openBeatmap));
+                results.Add(new PpTargetRow(candidate, set, importSet, openBeatmap, sort.Value));
         }
         if (results.Count == 0)
             workspaceState.ShowState(FontAwesome.Solid.Filter, "No matching beatmaps", "Try widening the star, PP, status, or length filters.");
@@ -1070,7 +1077,8 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             minimumStars.Value,
             maximumStars.Value,
             category.Value,
-            catalogScanStatus);
+            catalogScanStatus,
+            sort.Value.ToString());
         _ = workspaceCache.SaveAsync(snapshot);
     }
 
@@ -1204,6 +1212,9 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
 
     internal static string SortLabel(TargetSort value) => value switch
     {
+        TargetSort.AccountGain => "Best account PP gain",
+        TargetSort.PassProbability => "Safest estimated pass",
+        TargetSort.GainPerMinute => "Account PP per minute",
         TargetSort.ExpectedPp => "Highest expected PP",
         TargetSort.MaximumPp => "Highest max PP",
         TargetSort.Stars => "Lowest star rating",
@@ -1238,6 +1249,9 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         ExpectedPp,
         MaximumPp,
         Stars,
+        AccountGain,
+        PassProbability,
+        GainPerMinute,
     }
 
     private sealed partial class PpTargetDropdown<T> : osu.Game.Graphics.UserInterfaceV2.ShearedDropdown<T>
@@ -1341,7 +1355,8 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             PpTargetCandidate candidate,
             OfficialBeatmapSet set,
             Func<OfficialBeatmapSet, Task<OnlineBeatmapImportResult>> import,
-            Func<int, CancellationToken, Task>? openBeatmap)
+            Func<int, CancellationToken, Task>? openBeatmap,
+            TargetSort ordering)
         {
             this.set = set;
             this.import = import;
@@ -1349,7 +1364,13 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             string skillLabel = pattern?.Fit is { } fit ? $"{fit:P0} skill fit" : "Pattern fit unmeasured";
             string patternSummary = pattern?.Risks.FirstOrDefault()
                 ?? pattern?.Strengths.FirstOrDefault() ?? "More recent replay evidence needed";
-            TooltipText = pattern is null ? patternSummary : string.Join("\n", pattern.Strengths.Concat(pattern.Risks).Concat(pattern.CoverageNotes ?? []));
+            string passDetails = candidate.PassEstimate is { } pass
+                ? $"Estimated pass: {pass.Probability:P0} ({pass.Lower:P0}-{pass.Upper:P0}). {pass.Attempts} recent attempts across {pass.Maps} comparable maps. Similar stars, BPM, length and mods; individual patterns and HP can differ."
+                : "Pass chance unknown: more comparable recent pass/fail results needed.";
+            string gainDetails = candidate.EstimatedAccountGainPp is { } gainPp
+                ? $"Estimated account gain: +{gainPp:0.0}pp at the expected score. Replaces your best on this difficulty and reweights known best plays; excludes bonus PP and scores outside the fetched history."
+                : "Account gain unknown: ranked map PP and submitted best scores are needed.";
+            TooltipText = string.Join("\n", new[] { passDetails, gainDetails }.Concat(pattern is null ? new[] { patternSummary } : pattern.Strengths.Concat(pattern.Risks).Concat(pattern.CoverageNotes ?? [])));
             RelativeSizeAxes = Axes.X;
             Height = 112;
             CornerRadius = AimModVisualStyle.ControlRadius;
@@ -1367,9 +1388,18 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                 PpTargetConfidence.Low => "low evidence",
                 _ => "limited evidence",
             };
-            string gain = candidate.EstimatedAttainableGainPp is { } expectedGain
-                ? $"   /   +{expectedGain:0}pp expected gain"
+            string gain = candidate.EstimatedAccountGainPp is { } expectedGain
+                ? $"   /   +{expectedGain:0.0} account pp"
                 : string.Empty;
+            string personalPass = candidate.PassEstimate is { } predictedPass ? $"{predictedPass.Probability:P0} est. pass" : "Pass chance unknown";
+            (string priorityCaption, string priorityValue, string priorityDetail) = ordering switch
+            {
+                TargetSort.AccountGain => ("ACCOUNT PP GAIN", candidate.EstimatedAccountGainPp is { } account ? $"+{account:0.0}" : "-", personalPass),
+                TargetSort.GainPerMinute => ("ACCOUNT PP / MIN", candidate.AccountGainPerMinute is { } efficient ? $"+{efficient:0.0}" : "-", personalPass),
+                TargetSort.PassProbability => ("EST. PASS", candidate.PassEstimate is { } chance ? $"{chance.Probability:P0}" : "-",
+                    candidate.PassEstimate is { } range ? $"{range.Lower:P0}-{range.Upper:P0} range" : "More history needed"),
+                _ => ("MAX PP", maximum, candidate.Estimate is null ? "pending" : "100% FC ceiling"),
+            };
             string mods = candidate.SuggestedMods.Count == 0 ? "NM" : string.Join(" + ", candidate.SuggestedMods);
             OfficialBeatmapDifficulty? difficulty = set.Difficulties.FirstOrDefault(item => item.BeatmapId == candidate.BeatmapId);
             double passRate = difficulty is { PlayCount: > 0 } ? (double)difficulty.PassCount / difficulty.PlayCount : 0;
@@ -1402,16 +1432,16 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                         mapDetails = truncatingText($"[{candidate.Difficulty}]   {candidate.StarRating:0.00}*   {candidate.Bpm:0} BPM   {formatLength(candidate.TotalLengthSeconds)}   {combo}   {mods}", 10, difficultyColour, "Bold"),
                         mechanicsDetails = truncatingText(
                             $"AR {difficulty?.ApproachRate:0.#}   OD {difficulty?.OverallDifficulty:0.#}   CS {difficulty?.CircleSize:0.#}   HP {difficulty?.DrainRate:0.#}   " +
-                            $"{set.Status.ToUpperInvariant()}   {set.PlayCount:N0} plays   {(passRate > 0 ? $"{passRate:P0} pass" : "pass rate -")}",
+                            $"{set.Status.ToUpperInvariant()}   {set.PlayCount:N0} plays   {(passRate > 0 ? $"{passRate:P0} global pass" : "global pass rate -")}",
                             9, AimModPalette.Muted, "SemiBold"),
                         confidenceDetails = truncatingText(
-                            $"{skillLabel}   /   {candidate.PreferenceFit:P0} preference fit   /   {recommendationConfidence}{gain}",
+                            $"{skillLabel}   /   {personalPass}{gain}",
                             9, calculated ? AimModPalette.Success : AimModPalette.Cyan, "SemiBold"),
                         patternDetails = truncatingText(patternSummary, 10, AimModPalette.Muted),
                     },
                 },
                 expectedMetric = metric("EXPECTED PP", expected, AimModPalette.Cyan, candidate.Estimate is null ? "pending" : pattern?.ExpectedAccuracy is { } accuracy ? $"{accuracy:P1} accuracy" : "score-history estimate"),
-                maximumMetric = metric("MAX PP", maximum, Colour4.FromHex("FFD45A"), candidate.Estimate is null ? "pending" : "100% FC ceiling"),
+                maximumMetric = metric(priorityCaption, priorityValue, Colour4.FromHex("FFD45A"), priorityDetail),
                 new Container
                 {
                     Anchor = Anchor.CentreRight,
@@ -1485,13 +1515,12 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             Size = new(106, 112),
             Children = new Drawable[]
             {
-                text(caption, 8, AimModPalette.Muted, "Bold").With(drawable => drawable.Position = new(0, 22)),
-                text(value, 23, colour, "Bold").With(drawable => drawable.Position = new(0, 38)),
-                text("pp", 9, AimModPalette.Muted, "SemiBold").With(drawable => drawable.Position = new(47, 48)),
+                truncatingText(caption, 8, AimModPalette.Muted, "Bold").With(drawable => { drawable.Position = new(0, 22); drawable.MaxWidth = 82; }),
+                truncatingText(value, 23, colour, "Bold").With(drawable => { drawable.Position = new(0, 38); drawable.MaxWidth = 82; }),
                 truncatingText(detail, 8, AimModPalette.Muted).With(drawable =>
                 {
                     drawable.Position = new(0, 70);
-                    drawable.MaxWidth = 96;
+                    drawable.MaxWidth = 82;
                 }),
             },
         };

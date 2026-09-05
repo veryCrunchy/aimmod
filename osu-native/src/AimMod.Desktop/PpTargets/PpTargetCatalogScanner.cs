@@ -30,7 +30,7 @@ public sealed class PpTargetCatalogScanner
     private readonly int maximumPages;
     private readonly int maximumSets;
 
-    public PpTargetCatalogScanner(IOfficialBeatmapDiscoveryClient client, int maximumPages = 12, int maximumSets = 600)
+    public PpTargetCatalogScanner(IOfficialBeatmapDiscoveryClient client, int maximumPages = 24, int maximumSets = 1200)
     {
         this.client = client ?? throw new ArgumentNullException(nameof(client));
         if (maximumPages is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(maximumPages));

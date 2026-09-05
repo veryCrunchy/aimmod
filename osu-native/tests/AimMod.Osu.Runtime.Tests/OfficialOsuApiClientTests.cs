@@ -441,7 +441,10 @@ public sealed class OfficialOsuApiClientTests
         await writeSignedInSessionAsync("crunchy", access_token);
         await using LazerSessionMonitor monitor = await LazerSessionMonitor.CreateAsync(gameIniPath);
         string cacheDirectory = Path.Combine(temporaryDirectory, "cache");
-        var firstHandler = new RecordingHandler(_ => jsonResponse(HttpStatusCode.OK, scorePageJson(42, 2)));
+        var payload = System.Text.Json.Nodes.JsonNode.Parse(scorePageJson(42, 2))!.AsArray();
+        payload[0]!["passed"] = false;
+        payload[1]!["passed"] = true;
+        var firstHandler = new RecordingHandler(_ => jsonResponse(HttpStatusCode.OK, payload.ToJsonString()));
         using (var first = new OfficialOsuApiClient(monitor, firstHandler, cacheDirectory, TimeProvider.System))
         {
             OsuBestScoresFetchResult result = await first.FetchRecentScoresAsync(profile());
@@ -449,6 +452,7 @@ public sealed class OfficialOsuApiClientTests
             {
                 Assert.That(result.Status, Is.EqualTo(OsuBestScoresFetchStatus.Success));
                 Assert.That(result.Scores, Has.Count.EqualTo(2));
+                Assert.That(result.Scores!.Select(s => s.Passed), Is.EquivalentTo(new bool?[] { false, true }));
                 Assert.That(firstHandler.RequestUri?.AbsolutePath, Is.EqualTo("/api/v2/users/42/scores/recent"));
                 Assert.That(firstHandler.RequestUri?.Query, Does.Contain("include_fails=1").And.Contain("limit=100"));
             });
@@ -457,6 +461,7 @@ public sealed class OfficialOsuApiClientTests
         var secondHandler = new RecordingHandler(_ => throw new InvalidOperationException("Fresh recent-score cache should avoid HTTP."));
         using var second = new OfficialOsuApiClient(monitor, secondHandler, cacheDirectory, TimeProvider.System);
         OsuBestScoresFetchResult cached = await second.FetchRecentScoresAsync(profile());
+        Assert.That(cached.Scores!.Select(s => s.Passed), Is.EquivalentTo(new bool?[] { false, true }));
 
         Assert.Multiple(() =>
         {
