@@ -82,7 +82,8 @@ public sealed class OfficialBeatmapDiscoveryClient : IOfficialBeatmapDiscoveryCl
                 OfficialBeatmapRequestStatus.Success,
                 sets,
                 payload.Total,
-                payload.BeatmapSets.Count > sets.Length || payload.Total > sets.Length);
+                payload.BeatmapSets.Count > sets.Length || payload.Total > sets.Length,
+                string.IsNullOrEmpty(payload.CursorString) ? null : payload.CursorString);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -308,6 +309,8 @@ public sealed class OfficialBeatmapDiscoveryClient : IOfficialBeatmapDiscoveryCl
 
     private static OfficialBeatmapRequestStatus? classifyFailure(HttpResponseMessage response)
     {
+        if (response.StatusCode == HttpStatusCode.TooManyRequests)
+            return OfficialBeatmapRequestStatus.RateLimited;
         if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
             return OfficialBeatmapRequestStatus.Unauthorized;
         if ((int)response.StatusCode is >= 300 and < 400)
@@ -319,14 +322,18 @@ public sealed class OfficialBeatmapDiscoveryClient : IOfficialBeatmapDiscoveryCl
 
     private static Uri buildSearchUri(OfficialBeatmapSearchQuery query)
     {
+        var terms = new List<string> { query.SearchText };
+        if (query.MinimumStars is { } minimum) terms.Add($"stars>={minimum.ToString("R", CultureInfo.InvariantCulture)}");
+        if (query.MaximumStars is { } maximum) terms.Add($"stars<={maximum.ToString("R", CultureInfo.InvariantCulture)}");
         var parameters = new Dictionary<string, string>
         {
-            ["q"] = query.SearchText,
+            ["q"] = string.Join(' ', terms.Where(term => term.Length > 0)),
             ["m"] = "0",
             ["s"] = query.Category.ToString().ToLowerInvariant(),
             ["sort"] = $"{(query.Sort == OfficialBeatmapSort.Relevance && query.SearchText.Length == 0 ? OfficialBeatmapSort.Ranked : query.Sort).ToString().ToLowerInvariant()}_desc",
             ["nsfw"] = query.IncludeExplicitContent ? "true" : "false",
         };
+        if (!string.IsNullOrEmpty(query.Cursor)) parameters["cursor_string"] = query.Cursor;
         string encoded = string.Join("&", parameters.Select(pair =>
             $"{Uri.EscapeDataString(pair.Key)}={Uri.EscapeDataString(pair.Value)}"));
         return new UriBuilder(search_endpoint) { Query = encoded }.Uri;
@@ -537,6 +544,8 @@ public sealed class OfficialBeatmapDiscoveryClient : IOfficialBeatmapDiscoveryCl
 
     private sealed class SearchResponse
     {
+        [JsonPropertyName("cursor_string")]
+        public string? CursorString { get; init; }
         [JsonPropertyName("beatmapsets")]
         public List<SearchBeatmapSet>? BeatmapSets { get; init; }
 

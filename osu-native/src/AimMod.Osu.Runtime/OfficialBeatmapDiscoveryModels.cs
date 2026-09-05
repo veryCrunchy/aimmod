@@ -11,6 +11,7 @@ public enum OfficialBeatmapRequestStatus
     NetworkError,
     InvalidResponse,
     ServerError,
+    RateLimited,
 }
 
 public enum OfficialBeatmapCategory
@@ -45,7 +46,8 @@ public sealed record OfficialBeatmapSearchQuery(
     OfficialBeatmapCategory Category = OfficialBeatmapCategory.Any,
     OfficialBeatmapSort Sort = OfficialBeatmapSort.Relevance,
     bool IncludeExplicitContent = false,
-    int Limit = 24)
+    int Limit = 24,
+    string? Cursor = null)
 {
     public OfficialBeatmapSearchQuery Normalised()
     {
@@ -105,7 +107,8 @@ public sealed record OfficialBeatmapSearchResult(
     OfficialBeatmapRequestStatus Status,
     IReadOnlyList<OfficialBeatmapSet> BeatmapSets,
     int ServerTotal = 0,
-    bool IsTruncated = false)
+    bool IsTruncated = false,
+    string? NextCursor = null)
 {
     public static OfficialBeatmapSearchResult Empty(OfficialBeatmapRequestStatus status) => new(status, []);
 }

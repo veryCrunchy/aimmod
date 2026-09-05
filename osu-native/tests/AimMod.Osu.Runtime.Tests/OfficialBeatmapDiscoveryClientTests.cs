@@ -143,6 +143,40 @@ public sealed class OfficialBeatmapDiscoveryClientTests
     }
 
     [Test]
+    public async Task SearchCursorRoundTripsWithoutChangingOpaqueCharactersAndForwardsStarBounds()
+    {
+        await writeSignedInSessionAsync("crunchy", access_token);
+        await using LazerSessionMonitor monitor = await LazerSessionMonitor.CreateAsync(gameIniPath);
+        const string cursor = "opaque+/= token&next";
+        string payload = searchJson.Insert(searchJson.IndexOf('{') + 1, "\"cursor_string\":\"" + cursor + "\",");
+        var handler = new RecordingHandler(_ => jsonResponse(HttpStatusCode.OK, payload));
+        using var client = new OfficialBeatmapDiscoveryClient(monitor, handler);
+        var query = new OfficialBeatmapSearchQuery("farm", 0, 6.5, Sort: OfficialBeatmapSort.Plays, Limit: 50);
+        OfficialBeatmapSearchResult first = await client.SearchAsync(query);
+        await client.SearchAsync(query with { Cursor = first.NextCursor });
+        Assert.Multiple(() =>
+        {
+            Assert.That(first.NextCursor, Is.EqualTo(cursor));
+            Assert.That(handler.Requests[0].Uri!.Query, Does.Not.Contain("cursor_string"));
+            Assert.That(handler.Requests[1].Uri!.Query, Does.Contain("cursor_string=" + Uri.EscapeDataString(cursor)));
+            Assert.That(Uri.UnescapeDataString(handler.Requests[1].Uri!.Query), Does.Contain("stars>=0 stars<=6.5"));
+            Assert.That(handler.Requests[1].Uri!.Query, Does.Contain("sort=plays_desc"));
+        });
+    }
+
+    [Test]
+    public async Task SearchReportsRateLimitWithoutRetrying()
+    {
+        await writeSignedInSessionAsync("crunchy", access_token);
+        await using LazerSessionMonitor monitor = await LazerSessionMonitor.CreateAsync(gameIniPath);
+        var handler = new RecordingHandler(_ => jsonResponse(HttpStatusCode.TooManyRequests, "{}"));
+        using var client = new OfficialBeatmapDiscoveryClient(monitor, handler);
+        OfficialBeatmapSearchResult response = await client.SearchAsync(new OfficialBeatmapSearchQuery());
+        Assert.That(response.Status, Is.EqualTo(OfficialBeatmapRequestStatus.RateLimited));
+        Assert.That(handler.Requests, Has.Count.EqualTo(1));
+    }
+
+    [Test]
     public async Task DownloadsAndValidatesOneExactDifficultyByBeatmapId()
     {
         await writeSignedInSessionAsync("crunchy", access_token);

@@ -53,7 +53,7 @@ public sealed record PpPatternPrediction(double? Fit, double? ExpectedAccuracy, 
 
 public static class PpTargetPatternModel
 {
-    public const string Version = "geometry-v3";
+    public const string Version = "geometry-v4";
     private const double normalized_radius = 50;
     private const double jump_spacing = 150;
     private const double tapping_spacing = 100;
@@ -158,9 +158,19 @@ public static class PpTargetPatternModel
 
         foreach (string pattern in demanded)
         {
-            var relevant = compatible.Where(e => e.Outcomes.TryGetValue(pattern, out var o) && o.ObjectCount >= minimum_pattern_objects)
+            var measured = compatible.Where(e => !e.MapKey.StartsWith("unknown:", StringComparison.Ordinal)
+                    && e.Weight > 0 && double.IsFinite(e.Weight)
+                    && e.Outcomes.TryGetValue(pattern, out var o) && o.ObjectCount >= minimum_pattern_objects)
                 .Select(e => (Evidence: e, Similarity: similarity(candidate, e.Features, pattern)))
-                .Where(e => e.Similarity >= 0.55).ToArray();
+                .ToArray();
+            // Select geometry neighbours, never favourable outcomes. All measured retries of a selected
+            // map remain eligible with their existing balanced weights, including failed attempts.
+            var neighbours = measured.GroupBy(e => e.Evidence.MapKey)
+                .Select(g => (MapKey: g.Key, Similarity: g.Max(e => e.Similarity)))
+                .Where(e => e.Similarity >= 0.05)
+                .OrderByDescending(e => e.Similarity).ThenBy(e => e.MapKey, StringComparer.Ordinal)
+                .Take(8).Select(e => e.MapKey).ToHashSet(StringComparer.Ordinal);
+            var relevant = measured.Where(e => neighbours.Contains(e.Evidence.MapKey)).ToArray();
             // Repeated attempts are not independent geometry coverage; unknown-map records cannot prove it either.
             int maps = relevant.Select(e => e.Evidence.MapKey).Where(k => !k.StartsWith("unknown:", StringComparison.Ordinal)).Distinct().Count();
             if (maps < 2)
@@ -323,20 +333,30 @@ public static class PpTargetPatternModel
     private static double similarity(PpPatternFeatures a, PpPatternFeatures b, string pattern)
     {
         var differences = new List<double>();
-        void compare(double? x, double? y, double scale) { if (x is { } xx && y is { } yy) differences.Add(Math.Min(3, Math.Abs(xx - yy) / scale)); }
-        compare(a.NotesPerSecond, b.NotesPerSecond, 3);
-        compare(a.MeanSpacing, b.MeanSpacing, 130);
-        compare(a.PeakSpacing, b.PeakSpacing, 180);
-        compare(a.PeakNotesPerSecond, b.PeakNotesPerSecond, 3);
-        compare(a.NormalizedSpeed, b.NormalizedSpeed, 800);
+        int dimensions = 0;
+        void compare(double? x, double? y, double scale)
+        {
+            dimensions++;
+            if (x is { } xx && y is { } yy && double.IsFinite(xx) && double.IsFinite(yy))
+                differences.Add(Math.Abs(xx - yy) / scale);
+        }
+        compare(a.NotesPerSecond, b.NotesPerSecond, 1.5);
+        compare(a.MeanSpacing, b.MeanSpacing, 80);
+        compare(a.PeakSpacing, b.PeakSpacing, 120);
+        compare(a.PeakNotesPerSecond, b.PeakNotesPerSecond, 2);
+        compare(a.NormalizedSpeed, b.NormalizedSpeed, 600);
         if (pattern is "Overall" or "Jumps") compare(a.JumpDistance, b.JumpDistance, 180);
         if (pattern is "Overall" or "Jumps") compare(a.JumpFraction, b.JumpFraction, 0.4);
         if (pattern is "Overall" or "Streams" or "Bursts")
         { compare(a.StreamFraction, b.StreamFraction, 0.4); compare(a.BurstFraction, b.BurstFraction, 0.4); }
         if (pattern is "Overall" or "Direction changes") compare(a.SharpTurnFraction, b.SharpTurnFraction, 0.5);
-        if (pattern == "Overall" && a.DurationSeconds is { } ad && b.DurationSeconds is { } bd)
-            differences.Add(Math.Min(3, Math.Abs(Math.Log((ad + 1) / (bd + 1))) / 2));
-        return differences.Count < 2 ? 0 : Math.Exp(-differences.Average());
+        if (pattern == "Overall")
+            compare(a.DurationSeconds is >= 0 ? Math.Log(a.DurationSeconds.Value + 1) : null,
+                b.DurationSeconds is >= 0 ? Math.Log(b.DurationSeconds.Value + 1) : null, 2);
+        // Matching dimensions must not dilute a mismatch in spacing or rate. Missing measurements
+        // reduce support instead of looking like a perfect match; the kernel is outcome-independent.
+        return differences.Count < 2 ? 0 : differences.Count / (double)dimensions
+            * Math.Exp(-0.5 * differences.Sum(d => d * d));
     }
 
     private static double? positive(double? value) => value is > 0 && double.IsFinite(value.Value) ? value : null;

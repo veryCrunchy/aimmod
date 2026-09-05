@@ -15,13 +15,14 @@ public sealed record PpTargetWorkspaceSnapshot(
     string SearchText,
     double MinimumStars,
     double MaximumStars,
-    OfficialBeatmapCategory Category);
+    OfficialBeatmapCategory Category,
+    string CatalogScanStatus = "");
 
 public sealed class PpTargetWorkspaceCache
 {
     public static readonly TimeSpan Freshness = TimeSpan.FromHours(6);
 
-    private const int current_version = 4;
+    private const int current_version = 5;
     private static readonly JsonSerializerOptions json_options = new(JsonSerializerDefaults.Web);
 
     private readonly string path;

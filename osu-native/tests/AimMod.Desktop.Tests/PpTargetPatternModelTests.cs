@@ -236,6 +236,69 @@ public sealed class PpTargetPatternModelTests
     }
 
     [Test]
+    public void DenseUnrelatedPoorMapsDoNotDrownNearbySuccess()
+    {
+        var f = PpTargetPatternModel.ExtractFeatures(jumpPoints(), 32, 1);
+        var near = Enumerable.Range(1, 2).Select(i => neighbourhoodEvidence(i, f, .95, .01)).ToArray();
+        var far = Enumerable.Range(3, 97).Select(i => neighbourhoodEvidence(i,
+            f with { MeanSpacing = f.MeanSpacing + 160, NotesPerSecond = f.NotesPerSecond + 2 }, .7, .2));
+        var p = new PpPatternProfile("test", now, 30, near.Concat(far).ToArray());
+        var prediction = PpTargetPatternModel.Predict(f, p);
+        Assert.Multiple(() =>
+        {
+            Assert.That(p.Evidence, Has.Count.EqualTo(99));
+            Assert.That(prediction.ExpectedAccuracy, Is.GreaterThan(.90).And.LessThanOrEqualTo(.95));
+            Assert.That(prediction.Fit, Is.GreaterThan(.65));
+            Assert.That(prediction.PatternFits.All(fit => fit.DistinctMaps <= 8), Is.True);
+            Assert.That(prediction.EvidenceConfidence, Is.InRange(.01, .5));
+        });
+    }
+
+    [Test]
+    public void NearbyFailedRetriesRemainLowDespiteUnrelatedSuccess()
+    {
+        var f = PpTargetPatternModel.ExtractFeatures(jumpPoints(), 32, 1);
+        var retries = Enumerable.Range(1, 20).Select(i => neighbourhoodEvidence(i, f, i <= 2 ? .95 : .6, i <= 2 ? 0 : .3)
+            with { MapKey = $"near-{i % 2}", Weight = .1 }).ToArray();
+        var far = Enumerable.Range(21, 99).Select(i => neighbourhoodEvidence(i,
+            f with { MeanSpacing = f.MeanSpacing + 160, NotesPerSecond = f.NotesPerSecond + 2 }, 1, 0));
+        var p = new PpPatternProfile("test", now, 30, retries.Concat(far).ToArray());
+        var prediction = PpTargetPatternModel.Predict(f, p);
+        Assert.Multiple(() =>
+        {
+            Assert.That(p.Evidence, Has.Count.EqualTo(119));
+            Assert.That(prediction.ExpectedAccuracy, Is.LessThan(.72));
+            Assert.That(prediction.ExpectedMissRate, Is.GreaterThan(.2));
+            Assert.That(prediction.Fit, Is.LessThan(.1));
+        });
+    }
+
+    [Test]
+    public void IncreasingDistanceReducesSupportWithoutInventingBetterOutcomes()
+    {
+        var f = PpTargetPatternModel.ExtractFeatures(jumpPoints(), 32, 1);
+        var p = new PpPatternProfile("test", now, 30,
+            Enumerable.Range(1, 2).Select(i => neighbourhoodEvidence(i, f, .95, .02)).ToArray());
+        double previous = 1;
+        foreach (double distance in new[] { 0d, 20, 40, 80, 120 })
+        {
+            var prediction = PpTargetPatternModel.Predict(f with { MeanSpacing = f.MeanSpacing + distance }, p);
+            Assert.That(prediction.EvidenceConfidence, Is.LessThan(previous));
+            Assert.That(prediction.ExpectedAccuracy, Is.EqualTo(.95).Within(1e-10));
+            previous = prediction.EvidenceConfidence;
+        }
+        Assert.That(PpTargetPatternModel.Predict(f with { MeanSpacing = f.MeanSpacing + 1000 }, p).Fit, Is.Null);
+        var missing = PpTargetPatternModel.Predict(f with { PeakSpacing = null, NormalizedSpeed = null }, p);
+        Assert.That(missing.EvidenceConfidence, Is.LessThan(PpTargetPatternModel.Predict(f, p).EvidenceConfidence));
+        Assert.That(missing.ExpectedAccuracy, Is.EqualTo(.95).Within(1e-10));
+    }
+
+    private static PpPatternEvidence neighbourhoodEvidence(int number, PpPatternFeatures features, double accuracy, double misses)
+        => new(id(number), $"map-{number}", "", now, features, 1,
+            new[] { "Overall", "Jumps", "Direction changes", "Speed", "Streams", "Bursts" }.ToDictionary(
+                pattern => pattern, _ => new PpPatternOutcome(32, accuracy, misses, new Dictionary<ReplayMissReason, int>())));
+
+    [Test]
     public void DefaultSettingsAndClassicAllowKnownCsButCustomCsStaysUnknown()
     {
         var r = replay(1) with { Mods = ["Classic"], ModsJson = "[{\"acronym\":\"CL\",\"settings\":{}}]" };

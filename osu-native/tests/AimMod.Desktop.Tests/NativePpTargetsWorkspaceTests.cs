@@ -33,6 +33,86 @@ public sealed class NativePpTargetsWorkspaceTests
     }
 
     [Test]
+    public async Task BroadCalculationVisitsAllBatchesNotOnlyFirstFifty()
+    {
+        var source = new InMemoryLocalLibrarySource([], []);
+        using var workspace = new NativePpTargetsWorkspace(source, () => null, () => null);
+        var calculator = new RecordingCalculator();
+        var requests = Enumerable.Range(1, 123).Select(id => new PpTargetExactRequest(id, null, [], .95, .8)).ToArray();
+        var method = typeof(NativePpTargetsWorkspace).GetMethod("calculateExactAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        await (Task)method.Invoke(workspace, [calculator, requests, CancellationToken.None])!;
+        Assert.That(calculator.BatchSizes, Is.EqualTo(new[] { 50, 50, 23 }));
+        Assert.That(calculator.Ids.Distinct().Count(), Is.EqualTo(123));
+    }
+
+    private sealed class RecordingCalculator : IPpTargetExactCalculationService
+    {
+        public Action? OnBatch { get; init; }
+        public List<int> BatchSizes { get; } = [];
+        public List<int> Ids { get; } = [];
+        public Task<IReadOnlyDictionary<int, PpTargetEstimate>> CalculateAsync(IReadOnlyList<PpTargetExactRequest> requests,
+            CancellationToken cancellationToken = default, IProgress<PpTargetExactCalculationProgress>? progress = null)
+        {
+            BatchSizes.Add(requests.Count);
+            Ids.AddRange(requests.Select(request => request.BeatmapId));
+            OnBatch?.Invoke();
+            return Task.FromResult<IReadOnlyDictionary<int, PpTargetEstimate>>(new Dictionary<int, PpTargetEstimate>());
+        }
+    }
+
+    [Test]
+    public async Task CancellationAfterUncooperativeBatchPreventsFurtherRequests()
+    {
+        using var cancellation = new CancellationTokenSource();
+        using var workspace = new NativePpTargetsWorkspace(new InMemoryLocalLibrarySource([], []), () => null, () => null);
+        var calculator = new RecordingCalculator { OnBatch = cancellation.Cancel };
+        var requests = Enumerable.Range(1, 123).Select(id => new PpTargetExactRequest(id, null, [], .95, .8)).ToArray();
+        var method = typeof(NativePpTargetsWorkspace).GetMethod("calculateExactAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        await (Task)method.Invoke(workspace, [calculator, requests, cancellation.Token])!;
+        Assert.That(calculator.BatchSizes, Is.EqualTo(new[] { 50 }));
+    }
+
+    [Test]
+    public void CompletedProgressDropsQueuedAndLateCallbacks()
+    {
+        var queued = new Queue<Action>();
+        var reported = new List<string>();
+        Type type = typeof(NativePpTargetsWorkspace).GetNestedType("ScanProgress`1", System.Reflection.BindingFlags.NonPublic)!.MakeGenericType(typeof(string));
+        var progress = (IProgress<string>)Activator.CreateInstance(type, (Action<Action>)queued.Enqueue, (Func<bool>)(() => true), (Action<string>)reported.Add)!;
+        progress.Report("active");
+        queued.Dequeue()();
+        progress.Report("queued before completion");
+        ((IDisposable)progress).Dispose();
+        progress.Report("late");
+        while (queued.TryDequeue(out var callback)) callback();
+        Assert.That(reported, Is.EqualTo(new[] { "active" }));
+    }
+
+    [TestCase(PpTargetCatalogScanStopReason.PageLimit, OfficialBeatmapRequestStatus.Success, "page limit reached")]
+    [TestCase(PpTargetCatalogScanStopReason.SetLimit, OfficialBeatmapRequestStatus.Success, "set limit reached")]
+    [TestCase(PpTargetCatalogScanStopReason.RepeatedCursor, OfficialBeatmapRequestStatus.Success, "repeated page cursor")]
+    [TestCase(PpTargetCatalogScanStopReason.RequestFailed, OfficialBeatmapRequestStatus.RateLimited, "osu! rate limit reached")]
+    [TestCase(PpTargetCatalogScanStopReason.RequestFailed, OfficialBeatmapRequestStatus.NetworkError, "catalog request failed")]
+    public void PartialScanStatusRetainsStopReason(PpTargetCatalogScanStopReason reason, OfficialBeatmapRequestStatus status, string expected)
+    {
+        Assert.That(NativePpTargetsWorkspace.CatalogScanSummary(new(status, [], 3, reason)), Does.Contain(expected).And.Contain("Partial catalog: 3 pages"));
+    }
+
+    [Test]
+    public async Task OldSmallPoolCacheIsInvalidatedAndPartialStatusRoundTrips()
+    {
+        string path = Path.Combine(temporaryDirectory, "workspace.json");
+        var cache = new PpTargetWorkspaceCache(path);
+        await cache.SaveAsync(snapshot() with { CatalogScanStatus = "Partial catalog: page limit reached." });
+        Assert.That(cache.Load()!.CatalogScanStatus, Is.EqualTo("Partial catalog: page limit reached."));
+        var document = System.Text.Json.Nodes.JsonNode.Parse(await File.ReadAllTextAsync(path))!;
+        Assert.That(document["version"]!.GetValue<int>(), Is.EqualTo(5));
+        document["version"] = 4;
+        await File.WriteAllTextAsync(path, document.ToJsonString());
+        Assert.That(cache.Load(), Is.Null);
+    }
+
+    [Test]
     public async Task WorkspaceSnapshotRoundTripsAndRemainsFreshForSixHours()
     {
         var time = new TestTimeProvider(new DateTimeOffset(2026, 9, 4, 10, 0, 0, TimeSpan.Zero));

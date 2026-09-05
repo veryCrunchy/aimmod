@@ -5,7 +5,7 @@ namespace AimMod.Desktop;
 
 public sealed class CachedOfficialBeatmapDiscoveryClient : IOfficialBeatmapDiscoveryClient, IOfficialBeatmapDifficultyClient, IDisposable
 {
-    private const int current_version = 1;
+    private const int current_version = 2;
     private const int maximum_entries = 64;
     private static readonly TimeSpan search_ttl = TimeSpan.FromHours(24);
     private static readonly JsonSerializerOptions json_options = new(JsonSerializerDefaults.Web);
@@ -28,12 +28,14 @@ public sealed class CachedOfficialBeatmapDiscoveryClient : IOfficialBeatmapDisco
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(query);
+        cancellationToken.ThrowIfCancellationRequested();
         OfficialBeatmapSearchQuery normalised = query.Normalised();
         string key = cacheKey(normalised);
         if (tryLoad(key) is { } cached)
             return cached;
 
         OfficialBeatmapSearchResult result = await inner.SearchAsync(normalised, cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
         if (result.Status == OfficialBeatmapRequestStatus.Success)
             await saveAsync(key, result, cancellationToken).ConfigureAwait(false);
         return result;

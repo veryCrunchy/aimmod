@@ -511,6 +511,19 @@ public sealed class PpTargetEngineTests
     }
 
     [Test]
+    public void BroadScanCoversSelectedStarBandsBeforeFillingEasyBand()
+    {
+        var catalog = Enumerable.Range(1, 300).Select(i => set(i, "ranked", difficulty(i, 3)))
+            .Concat([set(900, "ranked", difficulty(900, 5.2)), set(901, "ranked", difficulty(901, 6.2))]);
+        var selected = PpTargetScanPlanner.Select(profileWithHistory(), catalog, new PpTargetFilters(MinimumStars: 3, MaximumStars: 6.5), 10);
+        Assert.That(selected, Has.Count.EqualTo(10));
+        Assert.That(selected.Select(candidate => candidate.BeatmapId), Does.Contain(900).And.Contain(901));
+        var highOnly = PpTargetScanPlanner.Select(profileWithHistory(), catalog, new PpTargetFilters(MinimumStars: 5, MaximumStars: 7), 500);
+        Assert.That(highOnly, Has.Count.EqualTo(2));
+        Assert.That(highOnly.All(candidate => candidate.StarRating >= 5), Is.True);
+    }
+
+    [Test]
     public void StatusCategoryContractUsesOfficialCategoryNames()
     {
         Assert.Multiple(() =>

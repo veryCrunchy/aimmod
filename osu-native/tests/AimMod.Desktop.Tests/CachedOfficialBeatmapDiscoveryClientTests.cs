@@ -79,11 +79,12 @@ public sealed class CachedOfficialBeatmapDiscoveryClientTests
         });
     }
 
-    [Test]
-    public async Task FailedSearchesAreNotCachedAndDownloadsPassThrough()
+    [TestCase(OfficialBeatmapRequestStatus.ServerError)]
+    [TestCase(OfficialBeatmapRequestStatus.RateLimited)]
+    public async Task FailedSearchesAreNotCachedAndDownloadsPassThrough(OfficialBeatmapRequestStatus status)
     {
         string path = Path.Combine(temporaryDirectory, "search-cache.json");
-        var inner = new StubBeatmapClient(OfficialBeatmapSearchResult.Empty(OfficialBeatmapRequestStatus.ServerError));
+        var inner = new StubBeatmapClient(OfficialBeatmapSearchResult.Empty(status));
         using var client = new CachedOfficialBeatmapDiscoveryClient(inner, path);
 
         OfficialBeatmapSearchResult first = await client.SearchAsync(new OfficialBeatmapSearchQuery("farm"));
@@ -92,8 +93,8 @@ public sealed class CachedOfficialBeatmapDiscoveryClientTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(first.Status, Is.EqualTo(OfficialBeatmapRequestStatus.ServerError));
-            Assert.That(second.Status, Is.EqualTo(OfficialBeatmapRequestStatus.ServerError));
+            Assert.That(first.Status, Is.EqualTo(status));
+            Assert.That(second.Status, Is.EqualTo(status));
             Assert.That(inner.SearchCount, Is.EqualTo(2));
             Assert.That(inner.DownloadCount, Is.EqualTo(1));
             Assert.That(download.Status, Is.EqualTo(OfficialBeatmapRequestStatus.Success));

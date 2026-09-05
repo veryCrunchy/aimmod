@@ -397,7 +397,7 @@ public static class PpTargetRanker
             .Where(value => value.Length > 0).ToHashSet(StringComparer.OrdinalIgnoreCase);
         string[] search = PpTargetPreferenceProfiler.tokenise((filters.SearchText ?? string.Empty)[..Math.Min(filters.SearchText?.Length ?? 0, 256)]).ToArray();
         return new NormalisedFilters(search, minStars, maxStars, minExpected, maxExpected, minMaximum, maxMaximum,
-            minLength, maxLength, minBpm, maxBpm, statuses, Math.Clamp(filters.Limit, 1, 500));
+            minLength, maxLength, minBpm, maxBpm, statuses, Math.Clamp(filters.Limit, 1, 10_000));
     }
 
     private static (double? Minimum, double? Maximum) range(double? minimum, double? maximum, double floor)
