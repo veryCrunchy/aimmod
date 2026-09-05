@@ -150,7 +150,7 @@ public sealed partial class OffscreenVisualCaptureTests
                 set.Artist,
                 selected.Name,
                 "osu",
-                "verycrunchy",
+                "Example Player",
                 DateTimeOffset.Now.AddDays(-7 + index),
                 selected.StarRating,
                 0.91 + index * 0.011,

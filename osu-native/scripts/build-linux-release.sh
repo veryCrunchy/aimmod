@@ -21,9 +21,9 @@ artifact_root="$repo_root/artifacts"
 stage="$artifact_root/$artifact_name"
 archive="$artifact_root/$artifact_name.tar.gz"
 archive_checksum="$archive.sha256"
-local_sdk=${AIMMOD_DOTNET:-/home/crunchy/.cache/aimmod-dotnet-sdk/dotnet}
+local_sdk=${AIMMOD_DOTNET:-${XDG_CACHE_HOME:-$HOME/.cache}/aimmod-dotnet-sdk/dotnet}
 container_image=${AIMMOD_DOTNET_SDK_IMAGE:-mcr.microsoft.com/dotnet/sdk:8.0}
-nuget_cache=${AIMMOD_NUGET_PACKAGES:-/home/crunchy/.cache/aimmod-dotnet-nuget}
+nuget_cache=${AIMMOD_NUGET_PACKAGES:-${XDG_CACHE_HOME:-$HOME/.cache}/aimmod-dotnet-nuget}
 
 case "$rid" in
     linux-x64|linux-arm64) ;;

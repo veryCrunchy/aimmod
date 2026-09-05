@@ -52,3 +52,13 @@ external/UE4SSCPPTemplate/
 external/ue4ss-runtime/*.zip
 sessions.json
 HANDOFF.md
+
+# Private QA and local diagnostics must never be published
+design-qa*
+.qa/
+visual-captures/
+.tmp/
+.tmp-media/
+diag-*/
+codex-clipboard-*
+.tools/

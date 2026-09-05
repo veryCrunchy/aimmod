@@ -8,7 +8,7 @@ Run the complete release check without opening a window:
 ./scripts/build-linux-release.sh
 ```
 
-The script uses `/home/crunchy/.cache/aimmod-dotnet-sdk/dotnet` and `/home/crunchy/.cache/aimmod-dotnet-nuget`. Set `AIMMOD_DOTNET` or `AIMMOD_NUGET_PACKAGES` to use another cache. If the executable is missing, the script may use the already-cached `mcr.microsoft.com/dotnet/sdk:8.0` Podman image with the same NuGet cache. It checks that either route reports the exact SDK version recorded in `global.json` and `packaging/ppy-packages.json`. It never pulls a container image.
+The script uses `aimmod-dotnet-sdk/dotnet` and `aimmod-dotnet-nuget` under `$XDG_CACHE_HOME` (or `$HOME/.cache` when unset). Set `AIMMOD_DOTNET` or `AIMMOD_NUGET_PACKAGES` to use another cache. If the executable is missing, the script may use the already-cached `mcr.microsoft.com/dotnet/sdk:8.0` Podman image with the same NuGet cache. It checks that either route reports the exact SDK version recorded in `global.json` and `packaging/ppy-packages.json`. It never pulls a container image.
 
 The build does the following work:
 
