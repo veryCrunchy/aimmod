@@ -83,6 +83,25 @@ public sealed class OnlineSkinDownloadResolverTests
     }
 
     [Test]
+    public async Task GoogleDriveConfirmationKeepsOriginalBrowserLink()
+    {
+        var transport = new FixtureTransport((request, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            RequestMessage = request,
+            Content = new StringContent("<html>Confirm download</html>", System.Text.Encoding.UTF8, "text/html"),
+        });
+        Uri source = new("https://drive.google.com/file/d/0123456789abcdef/view?usp=sharing");
+        OnlineSkinResolvedDownload result = await createPipeline(transport).ResolveAsync(
+            SkinDownloadTargetClassifier.Classify(source), path("confirmation.download"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(OnlineSkinDownloadStatus.ExternalBrowserRequired));
+            Assert.That(result.ExternalUri, Is.EqualTo(source));
+            Assert.That(File.Exists(path("confirmation.download")), Is.False);
+        });
+    }
+
+    [Test]
     public async Task MegaAndUnsupportedTargetsProduceBrowserHandoffWithoutNetwork()
     {
         var transport = new FixtureTransport((_, _) => throw new AssertionException("Network was not expected."));

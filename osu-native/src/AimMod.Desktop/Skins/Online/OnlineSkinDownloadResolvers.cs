@@ -65,6 +65,7 @@ public sealed class DirectHttpsSkinDownloadResolver : IOnlineSkinDownloadResolve
         string destinationPath,
         CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (!CanResolve(target))
             return new OnlineSkinResolvedDownload(OnlineSkinDownloadStatus.Unsupported, ExternalUri: target.Uri);
         string[] allowedHosts = target.AllowedHosts.Where(approvedHosts.Contains).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
@@ -94,6 +95,11 @@ public sealed class DirectHttpsSkinDownloadResolver : IOnlineSkinDownloadResolve
                 "url_rejected" or "response_host_rejected" => new OnlineSkinResolvedDownload(OnlineSkinDownloadStatus.Rejected, ExternalUri: target.Uri, Message: error.Message),
                 _ => new OnlineSkinResolvedDownload(OnlineSkinDownloadStatus.NetworkError, ExternalUri: target.Uri, Message: error.Message),
             };
+        }
+        catch (OperationCanceledException)
+        {
+            deleteQuietly(destinationPath);
+            throw;
         }
     }
 
@@ -133,23 +139,24 @@ public sealed class GoogleDriveSkinDownloadResolver : IOnlineSkinDownloadResolve
 
     public bool CanResolve(OnlineSkinDownloadTarget target) => target.Kind == OnlineSkinDownloadKind.GoogleDrive;
 
-    public Task<OnlineSkinResolvedDownload> ResolveAsync(
+    public async Task<OnlineSkinResolvedDownload> ResolveAsync(
         OnlineSkinDownloadTarget target,
         string destinationPath,
         CancellationToken cancellationToken = default)
     {
         if (!CanResolve(target))
-            return Task.FromResult(new OnlineSkinResolvedDownload(OnlineSkinDownloadStatus.Unsupported, ExternalUri: target.Uri));
+            return new OnlineSkinResolvedDownload(OnlineSkinDownloadStatus.Unsupported, ExternalUri: target.Uri);
         string? fileId = extractFileId(target.Uri);
         if (fileId is null)
-            return Task.FromResult(new OnlineSkinResolvedDownload(
+            return new OnlineSkinResolvedDownload(
                 OnlineSkinDownloadStatus.ExternalBrowserRequired,
                 ExternalUri: target.Uri,
-                Message: "This Google Drive link does not expose a safe public file id."));
+                Message: "This Google Drive link does not expose a safe public file id.");
 
         var download = new Uri($"https://drive.usercontent.google.com/download?id={Uri.EscapeDataString(fileId)}&export=download&confirm=t");
         var directTarget = new OnlineSkinDownloadTarget(download, OnlineSkinDownloadKind.DirectHttps, AllowedHosts, target.FileName);
-        return direct.ResolveAsync(directTarget, destinationPath, cancellationToken);
+        OnlineSkinResolvedDownload result = await direct.ResolveAsync(directTarget, destinationPath, cancellationToken).ConfigureAwait(false);
+        return result.Status == OnlineSkinDownloadStatus.Success ? result : result with { ExternalUri = target.BrowserHandoffUri ?? target.Uri };
     }
 
     private static string? extractFileId(Uri uri)
@@ -216,6 +223,7 @@ public sealed class OnlineSkinDownloadResolverPipeline
         ArgumentNullException.ThrowIfNull(target);
         for (int redirect = 0; redirect < 6; redirect++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             IOnlineSkinDownloadResolver? resolver = resolvers.FirstOrDefault(candidate => candidate.CanResolve(target));
             if (resolver is null)
                 return new OnlineSkinResolvedDownload(OnlineSkinDownloadStatus.Unsupported, ExternalUri: target.Uri, Message: "No resolver supports this skin link.");

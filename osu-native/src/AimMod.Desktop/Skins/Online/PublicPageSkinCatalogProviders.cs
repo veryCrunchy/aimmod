@@ -241,6 +241,13 @@ internal static class OsuSkinsNetHtmlParser
                 OnlineSkinDownloadKind.FormPost,
                 ["osuskins.net", "www.osuskins.net"],
                 BrowserHandoffUri: source);
+        string? archiveLink = SkinHtml.FindDownloadLink(html);
+        if (archiveLink is not null && Uri.TryCreate(source, WebUtility.HtmlDecode(archiveLink), out Uri? archiveUri))
+        {
+            OnlineSkinDownloadTarget target = SkinDownloadTargetClassifier.Classify(archiveUri);
+            if (target.Kind is OnlineSkinDownloadKind.DirectHttps or OnlineSkinDownloadKind.GoogleDrive)
+                download = target;
+        }
         return new OnlineSkinCatalogEntry(
             "osuskins-net", id, name, creator, source, previewUris, attribution(source), download,
             rulesets, sensitive, downloads, views, fileSize, published);
@@ -497,6 +504,7 @@ internal static class SkinHtml
             string? href = ReadAttribute(match.Groups["attrs"].Value, "href");
             string text = Clean(match.Groups["text"].Value);
             if (href is not null && (href.Contains("download", StringComparison.OrdinalIgnoreCase)
+                                     || href.Split('?', '#')[0].EndsWith(".osk", StringComparison.OrdinalIgnoreCase)
                                      || text.Contains("download", StringComparison.OrdinalIgnoreCase)
                                      || href.Contains("mega.nz", StringComparison.OrdinalIgnoreCase)
                                      || href.Contains("drive.google.com", StringComparison.OrdinalIgnoreCase)))

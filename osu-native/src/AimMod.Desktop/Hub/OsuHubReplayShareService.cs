@@ -2,6 +2,7 @@ using AimMod.Desktop.LocalLibrary;
 using AimMod.Osu.Runtime;
 using AimMod.Osu.Runtime.Contracts;
 using System.Security.Cryptography;
+using AimMod.Desktop.PpTargets;
 
 namespace AimMod.Desktop.Hub;
 
@@ -19,6 +20,7 @@ public sealed class OsuHubReplayShareService
     private readonly IOsuHubUploadQueue queue;
     private readonly Func<ILocalReplayOpenService?> replayOpenServiceProvider;
     private readonly string? uploadSpoolPath;
+    private readonly Func<ILocalScorePpHydrationService?> ppHydrator;
 
     public OsuHubReplayShareService(
         ILocalLibrarySource localLibrary,
@@ -26,7 +28,8 @@ public sealed class OsuHubReplayShareService
         IReadOnlyDictionary<Guid, ReplayAnalysisResult> analyses,
         IOsuHubUploadQueue queue,
         Func<ILocalReplayOpenService?>? replayOpenServiceProvider = null,
-        string? uploadSpoolPath = null)
+        string? uploadSpoolPath = null,
+        Func<ILocalScorePpHydrationService?>? ppHydrator = null)
     {
         this.localLibrary = localLibrary ?? throw new ArgumentNullException(nameof(localLibrary));
         this.profileProvider = profileProvider ?? throw new ArgumentNullException(nameof(profileProvider));
@@ -36,6 +39,7 @@ public sealed class OsuHubReplayShareService
         if (uploadSpoolPath is not null && !Path.IsPathFullyQualified(uploadSpoolPath))
             throw new ArgumentException("The Hub upload spool path must be absolute.", nameof(uploadSpoolPath));
         this.uploadSpoolPath = uploadSpoolPath;
+        this.ppHydrator = ppHydrator ?? (() => null);
     }
 
     public async Task<HubUploadQueueItem> QueueAsync(HubReplayShareSelection selection, CancellationToken cancellationToken = default)
@@ -76,6 +80,13 @@ public sealed class OsuHubReplayShareService
             throw new InvalidOperationException("Exact replay analysis must finish before its coaching data can be shared.");
 
         LocalReplay resolved = selection.Replay;
+        if (resolved.PerformancePoints is null && ppHydrator() is { } hydrator)
+        {
+            LocalScorePpHydrationResult result = await hydrator.HydrateAsync([resolved], cancellationToken).ConfigureAwait(false);
+            LocalReplay? calculated = result.Runs.FirstOrDefault(item => item.ScoreId == resolved.ScoreId && item.Origin == resolved.Origin);
+            if (calculated?.PerformancePoints is { } pp && double.IsFinite(pp) && pp >= 0)
+                resolved = resolved with { PerformancePoints = pp };
+        }
         if (selection.UploadReplayFile)
             resolved = resolved with { ReplayPath = await stageReplayAsync(resolved, cancellationToken).ConfigureAwait(false) };
 

@@ -11,6 +11,9 @@ public sealed record OnlineSkinCatalogSearchResult(IReadOnlyList<OnlineSkinProvi
     public IReadOnlyList<OnlineSkinCatalogEntry> Items => Providers
         .Where(provider => provider.Page.Status == OnlineSkinCatalogStatus.Success)
         .SelectMany(provider => provider.Page.Items)
+        .DistinctBy(item => item.Download is { Kind: OnlineSkinDownloadKind.DirectHttps } download
+            ? $"archive:{download.Uri.AbsoluteUri}#variant:{item.Variant}"
+            : $"catalog:{item.ProviderId}:{item.Id}#variant:{item.Variant}", StringComparer.Ordinal)
         .ToArray();
 }
 

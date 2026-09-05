@@ -51,6 +51,7 @@ public sealed class OnlineSkinPreviewService
     private readonly OnlineSkinDownloadResolverPipeline downloads;
     private readonly OnlineSkinArchiveValidator validator;
     private readonly SemaphoreSlim cleanupGate = new(1, 1);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> activeDirectories = new(StringComparer.OrdinalIgnoreCase);
 
     public OnlineSkinPreviewService(
         string previewRoot,
@@ -73,6 +74,7 @@ public sealed class OnlineSkinPreviewService
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(skin);
+        cancellationToken.ThrowIfCancellationRequested();
         if (skin.Download is null)
             return new OnlineSkinPreviewResult(OnlineSkinDownloadStatus.ExternalBrowserRequired, ExternalUri: skin.DetailsUri, Message: "The provider did not expose a safe public download link.");
         if (skin.IsSensitive && !allowSensitive)
@@ -83,6 +85,7 @@ public sealed class OnlineSkinPreviewService
         string directory = Path.Combine(previewRoot, $"preview-{Guid.NewGuid():N}");
         string previewPath = Path.Combine(directory, "skin.osk");
         Directory.CreateDirectory(directory);
+        activeDirectories.TryAdd(directory, 0);
         try
         {
             if (!await cache.TryCopyToAsync(cacheKey, previewPath, TimeSpan.FromDays(1), cancellationToken).ConfigureAwait(false))
@@ -92,6 +95,7 @@ public sealed class OnlineSkinPreviewService
                 if (resolved.Status != OnlineSkinDownloadStatus.Success || resolved.ArchivePath is null)
                 {
                     deleteDirectory(directory);
+                    activeDirectories.TryRemove(directory, out _);
                     return new OnlineSkinPreviewResult(resolved.Status, ExternalUri: resolved.ExternalUri ?? skin.DetailsUri, Message: resolved.Message);
                 }
                 File.Move(resolved.ArchivePath, previewPath, overwrite: false);
@@ -103,12 +107,14 @@ public sealed class OnlineSkinPreviewService
             {
                 await cache.RemoveAsync(cacheKey, cancellationToken).ConfigureAwait(false);
                 deleteDirectory(directory);
+                activeDirectories.TryRemove(directory, out _);
                 return new OnlineSkinPreviewResult(OnlineSkinDownloadStatus.InvalidArchive, ExternalUri: skin.DetailsUri, Message: validation.Message);
             }
 
             var preview = new OnlineSkinPreview(skin, previewPath, cacheKey, () =>
             {
                 deleteDirectory(directory);
+                activeDirectories.TryRemove(directory, out _);
                 return ValueTask.CompletedTask;
             });
             return new OnlineSkinPreviewResult(OnlineSkinDownloadStatus.Success, preview);
@@ -116,6 +122,7 @@ public sealed class OnlineSkinPreviewService
         catch
         {
             deleteDirectory(directory);
+            activeDirectories.TryRemove(directory, out _);
             throw;
         }
     }
@@ -126,16 +133,30 @@ public sealed class OnlineSkinPreviewService
         CancellationToken cancellationToken = default)
     {
         ensureAvailable(preview);
+        cancellationToken.ThrowIfCancellationRequested();
         ArgumentException.ThrowIfNullOrWhiteSpace(destinationDirectory);
         if (!Path.IsPathFullyQualified(destinationDirectory))
             throw new ArgumentException("The skin save directory must be absolute.", nameof(destinationDirectory));
+        OnlineSkinArchiveValidation validation = await validator.ValidateAsync(preview.ArchivePath, cancellationToken).ConfigureAwait(false);
+        if (!validation.IsValid)
+            throw new InvalidOperationException(validation.Message ?? "The skin archive is no longer valid.");
         Directory.CreateDirectory(destinationDirectory);
-        string fileName = sanitizeFileName(preview.Skin.Name) + ".osk";
+        string fileName = sanitizeFileName(preview.Skin.Name + (string.IsNullOrWhiteSpace(preview.Skin.Variant) ? string.Empty : " - " + preview.Skin.Variant)) + ".osk";
         string destination = uniquePath(Path.Combine(Path.GetFullPath(destinationDirectory), fileName));
-        await using FileStream source = File.OpenRead(preview.ArchivePath);
-        await using FileStream target = new(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81_920, FileOptions.Asynchronous);
-        await source.CopyToAsync(target, cancellationToken).ConfigureAwait(false);
-        return destination;
+        string temporary = Path.Combine(Path.GetDirectoryName(destination)!, $".skin-{Guid.NewGuid():N}.partial");
+        try
+        {
+            await using (FileStream source = File.OpenRead(preview.ArchivePath))
+            await using (FileStream target = new(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81_920, FileOptions.Asynchronous))
+                await source.CopyToAsync(target, cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            File.Move(temporary, destination, overwrite: false);
+            return destination;
+        }
+        finally
+        {
+            File.Delete(temporary);
+        }
     }
 
     public async Task<OnlineSkinImportResult> ImportAsync(
@@ -162,7 +183,7 @@ public sealed class OnlineSkinPreviewService
             foreach (string directory in Directory.EnumerateDirectories(previewRoot, "preview-*", SearchOption.TopDirectoryOnly))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (Directory.GetLastWriteTimeUtc(directory) < cutoff)
+                if (!activeDirectories.ContainsKey(directory) && Directory.GetLastWriteTimeUtc(directory) < cutoff)
                     deleteDirectory(directory);
             }
         }

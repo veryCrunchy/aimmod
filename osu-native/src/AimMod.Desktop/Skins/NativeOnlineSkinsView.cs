@@ -54,6 +54,8 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
     private OnlineSkinPreview? preparedPreview;
     private Uri? handoffUri;
     private int revision;
+    private CancellationTokenSource? selectionCancellation;
+    private bool preparing;
 
     public NativeOnlineSkinsView(
         OnlineSkinCatalogBackend? backend,
@@ -409,13 +411,18 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
 
     private void select(OnlineSkinCatalogEntry? item)
     {
+        selectionCancellation?.Cancel();
+        selectionCancellation?.Dispose();
+        selectionCancellation = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+        preparing = false;
+        loading.HideLoading();
         _ = releasePreparedPreview();
         selected = item;
         handoffUri = null;
         refreshRows();
         updateDetails();
         if (item is not null)
-            _ = loadDetails(item, lifetime.Token);
+            _ = loadDetails(item, selectionCancellation.Token);
     }
 
     private async Task loadDetails(OnlineSkinCatalogEntry item, CancellationToken cancellationToken)
@@ -426,7 +433,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
             if (details is not null && !IsDisposed)
                 Schedule(() =>
                 {
-                    if (selected?.ProviderId != item.ProviderId || selected.Id != item.Id)
+                    if (IsDisposed || cancellationToken.IsCancellationRequested || selected?.ProviderId != item.ProviderId || selected.Id != item.Id)
                         return;
                     selected = details;
                     updateDetails();
@@ -438,7 +445,11 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
         catch (Exception error)
         {
             if (!IsDisposed)
-                Schedule(() => status.Text = $"Could not load skin details: {error.Message}");
+                Schedule(() =>
+                {
+                    if (!IsDisposed && !cancellationToken.IsCancellationRequested)
+                        status.Text = $"Could not load skin details: {error.Message}";
+                });
         }
     }
 
@@ -452,9 +463,13 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
             ? string.Empty
             : string.Join("  ·  ", metadata(item));
         attribution.Text = item?.Attribution.Notice ?? string.Empty;
-        previewButton.SetState(item?.Download is not null && preparedPreview is null, item?.IsSensitive == true ? "Confirm & prepare preview" : "Prepare preview");
-        saveButton.SetState(preparedPreview?.IsAvailable == true, "Save .osk");
-        importButton.SetState(preparedPreview?.IsAvailable == true && destination is not null, "Import into osu!");
+        bool direct = item?.Download?.Kind is OnlineSkinDownloadKind.DirectHttps or OnlineSkinDownloadKind.GoogleDrive;
+        bool available = preparedPreview?.IsAvailable == true;
+        previewButton.SetState(!preparing && item?.Download is not null && !available,
+            !direct ? "Open download page" : item?.IsSensitive == true ? "Confirm & download" : "Download skin");
+        bool canPrepare = direct && item?.IsSensitive != true;
+        saveButton.SetState(!preparing && (available || canPrepare), available ? "Save .osk" : "Download & save");
+        importButton.SetState(!preparing && (available || canPrepare) && destination is not null, available ? "Import into osu!" : "Download & import");
         sourceButton.SetState(item is not null, handoffUri is null ? "Open source page" : "Open download page");
     }
 
@@ -462,6 +477,8 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
     {
         if (item.IsSensitive)
             yield return "Sensitive content";
+        if (!string.IsNullOrWhiteSpace(item.Variant))
+            yield return item.Variant;
         if (item.FileSizeBytes is long bytes)
             yield return $"{bytes / (1024d * 1024):0.#} MB";
         if (item.DownloadCount is long downloads)
@@ -473,28 +490,41 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
 
     private void prepareSelected()
     {
-        if (selected?.Download is null || backend is null)
-            return;
-        loading.ShowLoading("Preparing skin preview", "Downloading and validating the .osk archive");
-        previewButton.SetState(false, "Validating package...");
-        _ = prepareAsync(selected, lifetime.Token);
+        prepareSelected(null);
     }
 
-    private async Task prepareAsync(OnlineSkinCatalogEntry item, CancellationToken cancellationToken)
+    private void prepareSelected(Action? afterPrepared)
+    {
+        if (selected?.Download is null || backend is null || preparing)
+            return;
+        if (selected.Download.Kind is not (OnlineSkinDownloadKind.DirectHttps or OnlineSkinDownloadKind.GoogleDrive))
+        {
+            handoffUri = selected.Download.BrowserHandoffUri ?? selected.Download.Uri;
+            openSource();
+            return;
+        }
+        preparing = true;
+        loading.ShowLoading("Preparing skin preview", "Downloading and validating the .osk archive");
+        updateDetails();
+        _ = prepareAsync(selected, selectionCancellation?.Token ?? lifetime.Token, afterPrepared);
+    }
+
+    private async Task prepareAsync(OnlineSkinCatalogEntry item, CancellationToken cancellationToken, Action? afterPrepared)
     {
         try
         {
             OnlineSkinPreviewResult result = await backend!.Previews.PrepareAsync(item, allowSensitive: item.IsSensitive, cancellationToken).ConfigureAwait(false);
-            if (!IsDisposed)
+            if (!IsDisposed && !cancellationToken.IsCancellationRequested)
                 Schedule(() =>
                 {
-                    loading.HideLoading();
-                    if (selected?.ProviderId != item.ProviderId || selected.Id != item.Id)
+                    if (IsDisposed || cancellationToken.IsCancellationRequested || selected?.ProviderId != item.ProviderId || selected.Id != item.Id)
                     {
                         if (result.Preview is not null)
                             _ = result.Preview.DisposeAsync();
                         return;
                     }
+                    loading.HideLoading();
+                    preparing = false;
                     preparedPreview = result.Preview;
                     handoffUri = result.Status == OnlineSkinDownloadStatus.ExternalBrowserRequired ? result.ExternalUri : null;
                     status.Text = result.Status switch
@@ -504,7 +534,11 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
                         _ => result.Message ?? "The skin package could not be prepared.",
                     };
                     updateDetails();
+                    if (preparedPreview?.IsAvailable == true)
+                        afterPrepared?.Invoke();
                 });
+            else if (result.Preview is not null)
+                await result.Preview.DisposeAsync().ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -514,6 +548,8 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
             if (!IsDisposed)
                 Schedule(() =>
                 {
+                    if (IsDisposed || cancellationToken.IsCancellationRequested) return;
+                    preparing = false;
                     loading.HideLoading();
                     status.Text = $"Could not prepare skin: {error.Message}";
                     updateDetails();
@@ -523,10 +559,15 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
 
     private void saveSelected()
     {
+        if (preparing) return;
         if (preparedPreview is null)
+        {
+            prepareSelected(saveSelected);
             return;
-        saveButton.SetState(false, "Saving...");
-        _ = saveAsync(preparedPreview, lifetime.Token);
+        }
+        preparing = true;
+        updateDetails();
+        _ = saveAsync(preparedPreview, selectionCancellation?.Token ?? lifetime.Token);
     }
 
     private async Task saveAsync(OnlineSkinPreview preview, CancellationToken cancellationToken)
@@ -537,6 +578,8 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
             if (!IsDisposed)
                 Schedule(() =>
                 {
+                    if (IsDisposed || cancellationToken.IsCancellationRequested) return;
+                    preparing = false;
                     status.Text = $"Saved {Path.GetFileName(path)} to {Path.GetDirectoryName(path)}";
                     updateDetails();
                 });
@@ -546,6 +589,8 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
             if (!IsDisposed)
                 Schedule(() =>
                 {
+                    if (IsDisposed || cancellationToken.IsCancellationRequested) return;
+                    preparing = false;
                     status.Text = $"Could not save skin: {error.Message}";
                     updateDetails();
                 });
@@ -557,10 +602,18 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
 
     private void importSelected()
     {
-        if (preparedPreview is null || destination is null)
+        if (preparing) return;
+        if (destination is null)
             return;
+        if (preparedPreview is null)
+        {
+            prepareSelected(importSelected);
+            return;
+        }
         loading.ShowLoading("Importing skin", "Opening the validated .osk in your selected osu! client");
-        _ = importAsync(preparedPreview, lifetime.Token);
+        preparing = true;
+        updateDetails();
+        _ = importAsync(preparedPreview, selectionCancellation?.Token ?? lifetime.Token);
     }
 
     private async Task importAsync(OnlineSkinPreview preview, CancellationToken cancellationToken)
@@ -571,7 +624,9 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
             if (!IsDisposed)
                 Schedule(() =>
                 {
+                    if (IsDisposed || cancellationToken.IsCancellationRequested) return;
                     loading.HideLoading();
+                    preparing = false;
                     status.Text = result.Message ?? (result.Success ? "Skin sent to osu!." : "osu! did not accept the skin.");
                     updateDetails();
                 });
@@ -584,7 +639,9 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
             if (!IsDisposed)
                 Schedule(() =>
                 {
+                    if (IsDisposed || cancellationToken.IsCancellationRequested) return;
                     loading.HideLoading();
+                    preparing = false;
                     status.Text = $"Could not import skin: {error.Message}";
                     updateDetails();
                 });
@@ -619,6 +676,8 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
         scheduledSearch?.Cancel();
         requestCancellation?.Cancel();
         requestCancellation?.Dispose();
+        selectionCancellation?.Cancel();
+        selectionCancellation?.Dispose();
         lifetime.Cancel();
         _ = releasePreparedPreview();
         lifetime.Dispose();

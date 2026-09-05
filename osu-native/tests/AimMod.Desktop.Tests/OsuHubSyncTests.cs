@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Reflection;
 using AimMod.Desktop.Hub;
 using AimMod.Desktop.LocalLibrary;
+using AimMod.Desktop.PpTargets;
 using AimMod.Osu.Runtime;
 using AimMod.Osu.Runtime.Contracts;
 using NUnit.Framework;
@@ -273,6 +274,86 @@ public sealed class OsuHubSyncTests
         Assert.That(queue.Snapshot().Single().Status, Is.EqualTo(HubUploadQueueStatus.Cancelled));
         Assert.That(await queue.RetryAsync(queued.Id), Is.True);
         Assert.That(queue.Snapshot().Single().Status, Is.EqualTo(HubUploadQueueStatus.Queued));
+    }
+
+    [Test]
+    public async Task ShareHydratesMissingPPUsingDeferredProviderWithoutChangingPlayIdentity()
+    {
+        (LocalReplay replay, LocalBeatmapSet set, LocalBeatmapDifficulty difficulty) = createLocalData();
+        replay = replay with { PerformancePoints = null };
+        using var queue = new OsuHubUploadQueue(Path.Combine(temporaryDirectory, "hydrated.json"), new FakeUploader(), startWorker: false);
+        ILocalScorePpHydrationService? current = null;
+        var service = new OsuHubReplayShareService(new SingleMapLibrary(set), () => new OsuProfile(42, "player", "", null, null),
+            new Dictionary<Guid, ReplayAnalysisResult>(), queue, ppHydrator: () => current);
+        var hydrator = new SharePpHydrator(run => run with { PerformancePoints = 234.5, TotalScore = 1 });
+        current = hydrator;
+        using var cancellation = new CancellationTokenSource();
+
+        HubUploadQueueItem item = await service.QueueAsync(new HubReplayShareSelection(replay, OsuHubVisibility.Public, false, false), cancellation.Token);
+        OsuHubSyncRequest original = await OsuHubContractFactory.CreateAsync(new OsuHubSyncInput(replay, set, difficulty, new OsuHubProfile(42, "player"), null, OsuHubVisibility.Public));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(hydrator.Calls, Is.EqualTo(1));
+            Assert.That(hydrator.Token, Is.EqualTo(cancellation.Token));
+            Assert.That(item.Request.Score.PerformancePoints, Is.EqualTo(234.5));
+            Assert.That(item.Request.Score.TotalScore, Is.EqualTo(replay.TotalScore));
+            Assert.That(item.Request.ContentHash, Is.EqualTo(original.ContentHash));
+            Assert.That(replay.PerformancePoints, Is.Null);
+        });
+    }
+
+    [TestCase(0)]
+    [TestCase(321.5)]
+    public async Task SharePreservesKnownPPWithoutConsultingHydrator(double pp)
+    {
+        (LocalReplay replay, LocalBeatmapSet set, _) = createLocalData();
+        using var queue = new OsuHubUploadQueue(Path.Combine(temporaryDirectory, "known.json"), new FakeUploader(), startWorker: false);
+        var service = new OsuHubReplayShareService(new SingleMapLibrary(set), () => new OsuProfile(42, "player", "", null, null),
+            new Dictionary<Guid, ReplayAnalysisResult>(), queue, ppHydrator: () => throw new AssertionException("Known PP must not be recalculated."));
+        HubUploadQueueItem item = await service.QueueAsync(new HubReplayShareSelection(replay with { PerformancePoints = pp }, OsuHubVisibility.Public, false, false));
+        Assert.That(item.Request.Score.PerformancePoints, Is.EqualTo(pp));
+    }
+
+    [TestCase("null")]
+    [TestCase("negative")]
+    [TestCase("nan")]
+    [TestCase("infinity")]
+    [TestCase("other-score")]
+    [TestCase("other-origin")]
+    [TestCase("no-service")]
+    public async Task ShareNeverFabricatesPPFromUnavailableOrUnrelatedHydration(string scenario)
+    {
+        (LocalReplay replay, LocalBeatmapSet set, _) = createLocalData();
+        var hydrator = new SharePpHydrator(run => scenario switch
+        {
+            "negative" => run with { PerformancePoints = -1 },
+            "nan" => run with { PerformancePoints = double.NaN },
+            "infinity" => run with { PerformancePoints = double.PositiveInfinity },
+            "other-score" => run with { ScoreId = Guid.NewGuid(), PerformancePoints = 500 },
+            "other-origin" => run with { Origin = (LocalLibraryOrigin)((int)run.Origin + 1), PerformancePoints = 500 },
+            _ => run with { PerformancePoints = null },
+        });
+        using var queue = new OsuHubUploadQueue(Path.Combine(temporaryDirectory, "unknown.json"), new FakeUploader(), startWorker: false);
+        var service = new OsuHubReplayShareService(new SingleMapLibrary(set), () => new OsuProfile(42, "player", "", null, null),
+            new Dictionary<Guid, ReplayAnalysisResult>(), queue, ppHydrator: () => scenario == "no-service" ? null : hydrator);
+        HubUploadQueueItem item = await service.QueueAsync(new HubReplayShareSelection(replay with { PerformancePoints = null }, OsuHubVisibility.Public, false, false));
+        Assert.That(item.Request.Score.PerformancePoints, Is.Null);
+    }
+
+    private sealed class SharePpHydrator(Func<LocalReplay, LocalReplay> calculate) : ILocalScorePpHydrationService
+    {
+        public int Calls { get; private set; }
+        public CancellationToken Token { get; private set; }
+
+        public Task<LocalScorePpHydrationResult> HydrateAsync(IReadOnlyList<LocalReplay> runs,
+            CancellationToken cancellationToken = default, IProgress<LocalScorePpHydrationProgress>? progress = null)
+        {
+            Calls++;
+            Token = cancellationToken;
+            Assert.That(runs, Has.Count.EqualTo(1));
+            return Task.FromResult(new LocalScorePpHydrationResult([calculate(runs[0])], 0, 0, 1, 0));
+        }
     }
 
     [Test]

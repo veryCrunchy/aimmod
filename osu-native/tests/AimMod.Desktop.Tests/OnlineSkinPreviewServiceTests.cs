@@ -88,6 +88,43 @@ public sealed class OnlineSkinPreviewServiceTests
     }
 
     [Test]
+    public async Task SaveRejectsTamperedPreviewAndCancelledSaveLeavesNoFile()
+    {
+        OnlineSkinPreviewService service = createService(new ArchiveTransport(createOsk()));
+        OnlineSkinPreviewResult result = await service.PrepareAsync(createEntry());
+        await using OnlineSkinPreview preview = result.Preview!;
+        string saved = Path.Combine(temporaryDirectory, "saved");
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        Assert.ThrowsAsync<OperationCanceledException>(async () => await service.SaveAsync(preview, saved, cancellation.Token));
+        Assert.That(Directory.Exists(saved), Is.False);
+        await File.WriteAllTextAsync(preview.ArchivePath, "not an archive");
+        Assert.ThrowsAsync<InvalidOperationException>(async () => await service.SaveAsync(preview, saved));
+        Assert.That(Directory.Exists(saved), Is.False);
+    }
+
+    [Test]
+    public async Task ActivePreviewIsNotExpiredDuringAnotherPreparation()
+    {
+        OnlineSkinPreviewService service = createService(new ArchiveTransport(createOsk()));
+        OnlineSkinPreviewResult result = await service.PrepareAsync(createEntry());
+        await using OnlineSkinPreview preview = result.Preview!;
+        Directory.SetLastWriteTimeUtc(Path.GetDirectoryName(preview.ArchivePath)!, DateTime.UtcNow.AddDays(-1));
+        await service.CleanupExpiredAsync();
+        Assert.That(preview.IsAvailable, Is.True);
+    }
+
+    [Test]
+    public async Task SavedVariantNamePreservesVariantIdentity()
+    {
+        OnlineSkinPreviewService service = createService(new ArchiveTransport(createOsk()));
+        OnlineSkinPreviewResult result = await service.PrepareAsync(createEntry() with { Variant = "HD" });
+        await using OnlineSkinPreview preview = result.Preview!;
+        string saved = await service.SaveAsync(preview, Path.Combine(temporaryDirectory, "saved"));
+        Assert.That(Path.GetFileName(saved), Does.EndWith(" - HD.osk"));
+    }
+
+    [Test]
     public async Task ExpiredPreviewDirectoriesAreRemoved()
     {
         string stale = Path.Combine(temporaryDirectory, "previews", "preview-stale");

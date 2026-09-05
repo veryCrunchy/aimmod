@@ -7,6 +7,28 @@ namespace AimMod.Desktop.Tests;
 public sealed class OnlineSkinCatalogParserTests
 {
     [Test]
+    public void ExplicitArchiveLinkCanBeDownloadedWithoutFormSubmission()
+    {
+        OnlineSkinCatalogEntry? entry = OsuSkinsNetHtmlParser.ParseDetails(
+            CatalogFixtures.OsuSkinsDetails + "<a href=\"https://cdn.osuskins.net/files/skin.osk\">HD package</a>",
+            new Uri("https://osuskins.net/skin/abc123"), "abc123");
+        Assert.That(entry?.Download?.Kind, Is.EqualTo(OnlineSkinDownloadKind.DirectHttps));
+    }
+
+    [Test]
+    public void CatalogMergesOnlySameArchiveAndVariantNotSimilarNames()
+    {
+        Uri uri = new("https://cdn.osuskins.net/files/skin.osk");
+        var item = new OnlineSkinCatalogEntry("one", "1", "Same name", "Creator", uri, [],
+            new OnlineSkinSourceAttribution("one", "One", uri, ""), SkinDownloadTargetClassifier.Classify(uri));
+        var page = new OnlineSkinCatalogPage(OnlineSkinCatalogStatus.Success,
+            [item, item with { ProviderId = "two", Id = "2" }, item with { Variant = "HD" },
+                item with { Id = "3", Download = SkinDownloadTargetClassifier.Classify(new Uri("https://cdn.osuskins.net/files/other.osk")) }], 1, 30, false);
+        var result = new OnlineSkinCatalogSearchResult([new OnlineSkinProviderResult("one", "One", uri, page)]);
+        Assert.That(result.Items, Has.Count.EqualTo(3));
+    }
+
+    [Test]
     public void ParsesOsuSkinsListingJsonLdWithoutDependingOnLiveMarkup()
     {
         IReadOnlyList<OnlineSkinCatalogEntry> entries = OsuSkinsNetHtmlParser.ParseListing(
