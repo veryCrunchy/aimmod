@@ -35,7 +35,9 @@ public sealed record PpTargetPreferenceProfile(
     IReadOnlyList<PpTargetPreference> PreferredSources,
     IReadOnlyList<PpTargetPreference> PreferredArtists,
     IReadOnlyList<PpTargetPreference> PreferredTitleSignals,
-    IReadOnlyList<PpTargetPerformanceSample> PerformanceSamples)
+    IReadOnlyList<PpTargetPerformanceSample> PerformanceSamples,
+    PpPatternProfile? PatternProfile = null,
+    IReadOnlyList<string>? PreferredModSetup = null)
 {
     public static PpTargetPreferenceProfile Empty { get; } = new(
         0, 0, 0, null, null, null, null, null, null, PpTargetConfidence.Insufficient,
@@ -52,7 +54,9 @@ public sealed record PpTargetEstimate(
     int? BeatmapId = null,
     IReadOnlyList<string>? Mods = null,
     double? ExpectedAccuracy = null,
-    double? Attainability = null);
+    double? Attainability = null,
+    PpPatternPrediction? PatternPrediction = null,
+    string? PatternProfileIdentity = null);
 
 public sealed record PpTargetFilters(
     string SearchText = "",
@@ -157,6 +161,7 @@ internal static class PpTargetMods
         "NIGHTCORE" => "NC",
         "FLASHLIGHT" => "FL",
         "HALFTIME" => "HT",
+        "DAYCORE" or "DC" => "HT",
         "EASY" => "EZ",
         "NOFAIL" => "NF",
         "SPUNOUT" => "SO",

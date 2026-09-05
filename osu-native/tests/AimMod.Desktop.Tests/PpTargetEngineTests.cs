@@ -51,10 +51,10 @@ public sealed class PpTargetEngineTests
         {
             Assert.That(first with
             {
-                CommonMods = [], PreferredCreators = [], PreferredSources = [], PreferredArtists = [], PreferredTitleSignals = [], PerformanceSamples = [],
+                CommonMods = [], PreferredCreators = [], PreferredSources = [], PreferredArtists = [], PreferredTitleSignals = [], PerformanceSamples = [], PreferredModSetup = [],
             }, Is.EqualTo(second with
             {
-                CommonMods = [], PreferredCreators = [], PreferredSources = [], PreferredArtists = [], PreferredTitleSignals = [], PerformanceSamples = [],
+                CommonMods = [], PreferredCreators = [], PreferredSources = [], PreferredArtists = [], PreferredTitleSignals = [], PerformanceSamples = [], PreferredModSetup = [],
             }));
             Assert.That(first.CommonMods, Is.EqualTo(second.CommonMods));
             Assert.That(first.PreferredCreators, Is.EqualTo(second.PreferredCreators));
@@ -62,6 +62,7 @@ public sealed class PpTargetEngineTests
             Assert.That(first.PreferredArtists, Is.EqualTo(second.PreferredArtists));
             Assert.That(first.PreferredTitleSignals, Is.EqualTo(second.PreferredTitleSignals));
             Assert.That(first.PerformanceSamples, Is.EqualTo(second.PerformanceSamples));
+            Assert.That(first.PreferredModSetup, Is.EqualTo(second.PreferredModSetup));
             Assert.That(first.ValidRunCount, Is.EqualTo(3));
             Assert.That(first.DistinctSetupCount, Is.EqualTo(2), "Retries of one map/mod setup are not independent preference evidence.");
             Assert.That(first.PpSampleCount, Is.EqualTo(2));
@@ -424,6 +425,17 @@ public sealed class PpTargetEngineTests
     }
 
     [Test]
+    public void SuggestedSetupWasActuallyPlayedRatherThanCombiningSeparatePreferences()
+    {
+        var history = Enumerable.Range(1, 6).Select(i => replay(i, i, 5, 0.97, 200, "Hidden"))
+            .Concat(Enumerable.Range(7, 5).Select(i => replay(i, i, 5, 0.97, 200, "HardRock")));
+        var profile = PpTargetPreferenceProfiler.Build(history);
+        var candidate = PpTargetRanker.Rank(profile, [set(1, "ranked", difficulty(10, 5))]).Candidates.Single();
+        Assert.That(candidate.SuggestedMods, Is.EqualTo(new[] { "HD" }));
+        Assert.That(candidate.SuggestedMods, Does.Not.Contain("HR"));
+    }
+
+    [Test]
     public void RepeatedRetriesDoNotIncreaseProfileConfidenceOrCreateMapPp()
     {
         LocalReplay[] repeated = Enumerable.Range(1, 40).Select(index => replay(index, 1, 5, 0.95, 200, "Hidden")).ToArray();
@@ -437,6 +449,65 @@ public sealed class PpTargetEngineTests
             Assert.That(profile.Confidence, Is.EqualTo(PpTargetConfidence.Insufficient));
             Assert.That(candidate.Estimate, Is.Null);
         });
+    }
+
+    [Test]
+    public void SkillFitOutweighsHigherRewardAndPreferredMetadata()
+    {
+        PpTargetPreferenceProfile profile = profileWithHistory() with
+        {
+            PreferredCreators = [new PpTargetPreference("Favourite", 20, 1)],
+        };
+        OfficialBeatmapSet comfortable = set(1, "ranked", difficulty(10, 5));
+        OfficialBeatmapSet stretch = set(2, "ranked", difficulty(11, 6.2)) with { Creator = "Favourite" };
+        var estimates = new Dictionary<int, PpTargetEstimate>
+        {
+            [10] = new(180, 250, new(160, 200), 1, PpTargetConfidence.High, "test"),
+            [11] = new(900, 1000, new(800, 950), 1, PpTargetConfidence.High, "test"),
+        };
+
+        var result = PpTargetRanker.Rank(profile, [stretch, comfortable], exactEstimates: estimates);
+
+        Assert.That(result.Candidates[0].BeatmapId, Is.EqualTo(10));
+        Assert.That(result.Candidates[0].Attainability, Is.GreaterThan(result.Candidates[1].Attainability));
+    }
+
+    [Test]
+    public void SameStarTargetsPrioritizeMeasuredPatternsOverPp()
+    {
+        var good = new PpPatternPrediction(0.92, 0.985, 0.7, ["Jumps"], [], [new("Jumps", 0.92, 0.985, 0.7, 8)]);
+        var weak = new PpPatternPrediction(0.35, 0.85, 0.7, [], ["Streams"], [new("Streams", 0.35, 0.85, 0.7, 8)]);
+        var estimates = new Dictionary<int, PpTargetEstimate>
+        {
+            [10] = new(180, 250, new(160, 200), 1, PpTargetConfidence.High, "test", PatternPrediction: good),
+            [11] = new(900, 1000, new(800, 950), 1, PpTargetConfidence.High, "test", PatternPrediction: weak),
+        };
+        var result = PpTargetRanker.Rank(profileWithHistory(), [set(1, "ranked", difficulty(10, 5), difficulty(11, 5))], exactEstimates: estimates);
+        Assert.That(result.Candidates[0].BeatmapId, Is.EqualTo(10));
+        Assert.That(result.Candidates[0].Attainability, Is.EqualTo(0.92));
+        Assert.That(result.Candidates[1].Attainability, Is.EqualTo(0.35));
+    }
+
+    [Test]
+    public void PartialCoverageDoesNotHideAKnownWeakness()
+    {
+        var prediction = new PpPatternPrediction(null, null, 0.2, [], [],
+            [new("Jumps", 0.2, 0.8, 0.6, 5), new("Streams", null, null, 0, 0)]);
+        var estimate = new PpTargetEstimate(180, 250, new(160, 200), 1, PpTargetConfidence.High, "test", PatternPrediction: prediction);
+        var candidate = PpTargetRanker.Rank(profileWithHistory(), [set(1, "ranked", difficulty(10, 5))],
+            exactEstimates: new Dictionary<int, PpTargetEstimate> { [10] = estimate }).Candidates.Single();
+        Assert.That(candidate.Attainability, Is.EqualTo(0.2));
+        Assert.That(candidate.RecommendationConfidence, Is.EqualTo(PpTargetConfidence.Insufficient));
+    }
+
+    [Test]
+    public void EstimateFromAnotherPatternProfileIsNotReused()
+    {
+        var estimate = new PpTargetEstimate(180, 250, new(160, 200), 1, PpTargetConfidence.High, "test",
+            PatternProfileIdentity: "old-profile");
+        var result = PpTargetRanker.Rank(profileWithHistory(), [set(1, "ranked", difficulty(10, 5))],
+            exactEstimates: new Dictionary<int, PpTargetEstimate> { [10] = estimate });
+        Assert.That(result.Candidates[0].Estimate, Is.Null);
     }
 
     [Test]

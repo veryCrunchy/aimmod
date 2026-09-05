@@ -5,6 +5,7 @@ using System.Runtime.Versioning;
 using AimMod.Desktop.Coaching;
 using AimMod.Desktop.LocalLibrary;
 using AimMod.Desktop.Practice;
+using AimMod.Desktop.PpTargets;
 using AimMod.Desktop.Visuals;
 using AimMod.Osu.Runtime;
 using AimMod.Osu.Runtime.Contracts;
@@ -48,6 +49,8 @@ public sealed partial class OffscreenVisualCaptureTests
     [TestCase("coaching-empty", 1100, 760)]
     [TestCase("ppTargets", 1100, 760)]
     [TestCase("ppTargets", 1600, 900)]
+    [TestCase("ppTargets-populated", 1100, 760)]
+    [TestCase("ppTargets-populated", 1600, 900)]
     [TestCase("loading", 1100, 760)]
     [Explicit("Creates a real graphics device and writes a visual-review artifact.")]
     [SupportedOSPlatform("windows")]
@@ -68,9 +71,14 @@ public sealed partial class OffscreenVisualCaptureTests
             ? createPopulatedLibrary()
             : new InMemoryLocalLibrarySource([], []);
 
+        PpTargetWorkspaceCache? ppCache = route.StartsWith("ppTargets", StringComparison.Ordinal)
+            ? await createPpTargetCaptureCache(outputPath)
+            : null;
+
         await WindowsPrivateDesktopCapture.CaptureAsync(
             (host, succeeded, failed) => route switch
             {
+                "ppTargets" or "ppTargets-populated" => new CapturePpTargetsGame(host, ppCache!, outputPath, width, height, succeeded, failed),
                 "beatmaps-populated" => new CaptureBeatmapGame(host, source, outputPath, width, height, succeeded, failed),
                 "statistics-populated" => new CaptureStatisticsGame(host, source, outputPath, width, height, succeeded, failed),
                 "coaching-populated" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.Analysing, succeeded, failed),
@@ -193,6 +201,57 @@ public sealed partial class OffscreenVisualCaptureTests
             new ReplayJudgementSummary(hits.Length, 0, 0, 1, 0, 0));
     }
 
+    private static async Task<PpTargetWorkspaceCache> createPpTargetCaptureCache(string outputPath)
+    {
+        var now = DateTimeOffset.UtcNow;
+        const string identity = "private-desktop-pp-pattern-fixture";
+        var features = new PpPatternFeatures { PointCount = 600, TransitionCount = 599, JumpDistance = 210, StreamFraction = 0.3, HitRadius = 32, ClockRate = 1 };
+        PpPatternEvidence[] evidence = Enumerable.Range(0, 12).Select(i => new PpPatternEvidence(
+            Guid.NewGuid(), $"fixture-map-{i}", "NM", now.AddDays(-i), features, 1,
+            new Dictionary<string, PpPatternOutcome>
+            {
+                ["Jumps"] = new(240, 0.986, 0.01, new Dictionary<ReplayMissReason, int> { [ReplayMissReason.Overshoot] = 2 }),
+                ["Streams"] = new(180, 0.924, 0.04, new Dictionary<ReplayMissReason, int> { [ReplayMissReason.LateClick] = 7 }),
+            })).ToArray();
+        var profile = PpTargetPreferenceProfile.Empty with
+        {
+            ValidRunCount = 148,
+            DistinctSetupCount = 24,
+            PpSampleCount = 112,
+            PreferredStarRange = new(4.5, 6.5),
+            PreferredBpmRange = new(170, 220),
+            TypicalAccuracy = 0.972,
+            HistoricalBestPp = 325,
+            Confidence = PpTargetConfidence.High,
+            PerformanceSamples = Enumerable.Range(0, 24).Select(i => new PpTargetPerformanceSample(4.5 + i * 0.07, 120 + i * 5, 0.975)).ToArray(),
+            PatternProfile = new(identity, now, 30, evidence),
+        };
+        var estimates = new Dictionary<int, PpTargetEstimate>();
+        OfficialBeatmapSet[] catalog = Enumerable.Range(0, 8).Select(i =>
+        {
+            int beatmapId = 910_000 + i;
+            var difficulty = new OfficialBeatmapDifficulty(beatmapId,
+                i == 0 ? "Extra: Beyond the Horizon of the Endless Night" : $"Insane {i + 1}",
+                "osu", 4.9 + i * 0.15, 180 + i * 5, 160 + i * 17, 4.2f, 9.3f, 8.8f, 6, 120_000, 43_000, 1250 + i * 110);
+            var prediction = new PpPatternPrediction(0.94 - i * 0.06, 0.976 - i * 0.006, 0.82,
+                ["Jumps: 98.6% accuracy across 12 maps; controlled spacing and consistent cursor placement"],
+                ["Streams: 92.4% accuracy across 8 maps; late clicks after sustained high-speed tapping sequences", "Sharp turns: 94.1% accuracy across 6 maps; repeated overshoot on direction changes"],
+                [new("Jumps", 0.94, 0.986, 0.86, 12), new("Streams", 0.62, 0.924, 0.72, 8), new("Sharp turns", 0.71, 0.941, 0.65, 6)],
+                ["Slider tracking is not measured by head geometry"]);
+            estimates[beatmapId] = new(185 + i * 21, 276 + i * 29, new(170 + i * 21, 202 + i * 21), 24,
+                PpTargetConfidence.High, "Official osu! ruleset / fixture", BeatmapId: beatmapId,
+                PatternPrediction: prediction, PatternProfileIdentity: identity);
+            return new OfficialBeatmapSet(920_000 + i,
+                new[] { "A Long Journey Beyond the Horizon (Extended Version)", "Blue Zenith", "Hana ni Natte", "Sidetracked Day", "RE:RE:RE:START", "Parousia", "Light", "Redemption" }[i],
+                "", "Camellia featuring a deliberately long guest artist credit", "", "Mapper with a long display name", "Original", "ranked",
+                now.AddDays(-i), now, 850_000, 42_000, false, false, null, null, null, null, [difficulty]);
+        }).ToArray();
+        var cache = new PpTargetWorkspaceCache(Path.ChangeExtension(outputPath, ".fixture.json"));
+        await cache.SaveAsync(new(now, profile, [], catalog, estimates, 100, "", "", 4, 7, OfficialBeatmapCategory.Ranked));
+        Assert.That(cache.Load()?.ExactEstimates.Count, Is.EqualTo(8), "The populated snapshot must survive persistence.");
+        return cache;
+    }
+
     private static int countSampledColours(Image<Rgba32> image)
     {
         var colours = new HashSet<Rgba32>();
@@ -299,6 +358,106 @@ public sealed partial class OffscreenVisualCaptureTests
                 {
                     host.Exit();
                 }
+            }, TaskScheduler.Default);
+        }
+    }
+
+    private sealed partial class CapturePpTargetsGame : OsuGameBase
+    {
+        [Cached]
+        private readonly OverlayColourProvider overlayColours = new(OverlayColourScheme.Blue);
+        private readonly GameHost host;
+        private readonly PpTargetWorkspaceCache cache;
+        private readonly string outputPath;
+        private readonly int width;
+        private readonly int height;
+        private readonly Action succeeded;
+        private readonly Action<Exception> failed;
+        private NativePpTargetsWorkspace workspace = null!;
+
+        [Resolved]
+        private FrameworkConfigManager frameworkConfig { get; set; } = null!;
+
+        public CapturePpTargetsGame(GameHost host, PpTargetWorkspaceCache cache, string outputPath, int width, int height, Action succeeded, Action<Exception> failed)
+        {
+            this.host = host;
+            this.cache = cache;
+            this.outputPath = outputPath;
+            this.width = width;
+            this.height = height;
+            this.succeeded = succeeded;
+            this.failed = failed;
+        }
+
+        [BackgroundDependencyLoader]
+        private void load()
+        {
+            // Fresh persisted estimates plus empty live history keep this capture offline
+            // and prevent a background profile rebuild from replacing the measured fixture.
+            workspace = new NativePpTargetsWorkspace(new InMemoryLocalLibrarySource([], []), () => null, () => null,
+                workspaceCache: cache, openBeatmap: (_, _) => Task.CompletedTask);
+            Add(new osu.Framework.Graphics.Containers.Container
+            {
+                RelativeSizeAxes = osu.Framework.Graphics.Axes.Both,
+                Padding = new osu.Framework.Graphics.MarginPadding { Top = 88, Horizontal = 52, Bottom = 24 },
+                Child = workspace,
+            });
+        }
+
+        protected override void LoadComplete()
+        {
+            base.LoadComplete();
+            frameworkConfig.SetValue(FrameworkSetting.WindowMode, WindowMode.Windowed);
+            frameworkConfig.SetValue(FrameworkSetting.WindowedSize, new System.Drawing.Size(width, height));
+            Scheduler.AddDelayed(capture, 2200);
+        }
+
+        private void capture()
+        {
+            try
+            {
+                const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+                var rows = (osu.Framework.Graphics.Containers.FillFlowContainer<osu.Framework.Graphics.Drawable>)
+                    typeof(NativePpTargetsWorkspace).GetField("results", flags)!.GetValue(workspace)!;
+                Assert.That(rows.Count, Is.EqualTo(8), "Capture must show PP target rows, never Home or a loading placeholder.");
+                foreach (var row in rows.Children)
+                {
+                    var tooltip = (osu.Framework.Graphics.Cursor.IHasTooltip)row;
+                    Assert.That(tooltip.TooltipText.ToString(), Does.Contain("Jumps: 98.6%").And.Contain("Streams: 92.4%").And.Contain("Sharp turns:"));
+                    float previousBottom = 0;
+                    foreach (string field in new[] { "title", "artist", "mapDetails", "mechanicsDetails", "confidenceDetails", "patternDetails" })
+                    {
+                        var line = (osu.Framework.Graphics.Sprites.SpriteText)row.GetType().GetField(field, flags)!.GetValue(row)!;
+                        var top = row.ToLocalSpace(line.ToScreenSpace(osuTK.Vector2.Zero));
+                        var bottom = row.ToLocalSpace(line.ToScreenSpace(line.DrawSize));
+                        Assert.That(line.Text.ToString(), Is.Not.Empty, field);
+                        Assert.That(top.Y, Is.GreaterThanOrEqualTo(previousBottom - 0.5f), $"{field} overlaps the previous line");
+                        Assert.That(bottom.Y, Is.LessThanOrEqualTo(row.DrawHeight), $"{field} escapes its PP row");
+                        Assert.That(bottom.X, Is.LessThanOrEqualTo(row.DrawWidth), $"{field} escapes horizontally");
+                        previousBottom = bottom.Y;
+                    }
+                    var skill = (osu.Framework.Graphics.Sprites.SpriteText)row.GetType().GetField("confidenceDetails", flags)!.GetValue(row)!;
+                    Assert.That(skill.Text.ToString(), Does.Contain("skill fit").And.Not.Contain("unmeasured"));
+                }
+            }
+            catch (Exception error)
+            {
+                failed(error);
+                host.Exit();
+                return;
+            }
+
+            host.TakeScreenshotAsync().ContinueWith(task =>
+            {
+                try
+                {
+                    using Image<Rgba32> image = task.GetAwaiter().GetResult();
+                    Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+                    image.SaveAsPng(outputPath);
+                    succeeded();
+                }
+                catch (Exception error) { failed(error); }
+                finally { host.Exit(); }
             }, TaskScheduler.Default);
         }
     }

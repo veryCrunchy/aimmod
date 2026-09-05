@@ -54,7 +54,10 @@ public static class PpTargetPreferenceProfiler
             preferences(setups.Select(setup => setup.Source), setups.Length, 8),
             preferences(setups.Select(setup => setup.Artist), setups.Length, 8),
             preferences(setups.SelectMany(setup => titleSignals(setup.Title)), setups.Length, 12),
-            ppSetups.Select(setup => new PpTargetPerformanceSample(setup.Stars, setup.Pp!.Value, setup.Accuracy)).ToArray());
+            ppSetups.Select(setup => new PpTargetPerformanceSample(setup.Stars, setup.Pp!.Value, setup.Accuracy)).ToArray(),
+            PreferredModSetup: setups.GroupBy(setup => string.Join(',', PpTargetMods.Normalise(setup.Mods)), StringComparer.Ordinal)
+                .OrderByDescending(group => group.Count()).ThenBy(group => group.Key, StringComparer.Ordinal)
+                .Select(group => PpTargetMods.Normalise(group.First().Mods)).First());
     }
 
     private static Setup buildSetup(IEnumerable<LocalReplay> values, IReadOnlyDictionary<Guid, LocalBeatmapSet> sets)
@@ -179,7 +182,7 @@ public static class PpTargetRanker
     {
         OfficialBeatmapSet set = candidate.Set;
         OfficialBeatmapDifficulty difficulty = candidate.Difficulty;
-        IReadOnlyList<string> mods = PpTargetMods.SelectCompatible(profile.CommonMods);
+        IReadOnlyList<string> mods = profile.PreferredModSetup ?? PpTargetMods.SelectCompatible(profile.CommonMods);
         double preference = preferenceFit(profile, set, difficulty);
         (double attainability, double scoreEvidence, int nearbySampleCount) = performanceFit(profile, difficulty.StarRating);
         PpTargetEstimate? estimate = matchingEstimate(
@@ -188,6 +191,26 @@ public static class PpTargetRanker
             mods,
             profile.TypicalAccuracy,
             attainability);
+        if (estimate?.PatternProfileIdentity is { } identity && identity != profile.PatternProfile?.Identity)
+            estimate = null;
+        if (estimate?.PatternPrediction is { Fit: { } patternFit })
+            attainability = Math.Clamp(patternFit, 0, 1);
+        PpTargetConfidence recommendation = recommendationConfidence(nearbySampleCount, profile.Confidence);
+        if (estimate?.PatternPrediction is { } pattern)
+        {
+            // Unknown coverage is neutral for ordering, not evidence of proficiency.
+            // A known bottleneck still counts when a different pattern is unmeasured.
+            attainability = pattern.Fit ?? Math.Min(0.5, pattern.PatternFits
+                .Where(item => item.Fit is not null).Select(item => item.Fit!.Value).DefaultIfEmpty(0.5).Min());
+            scoreEvidence = pattern.EvidenceConfidence;
+            recommendation = pattern.Fit is null ? PpTargetConfidence.Insufficient : pattern.EvidenceConfidence switch
+            {
+                >= 0.65 => PpTargetConfidence.High,
+                >= 0.35 => PpTargetConfidence.Medium,
+                > 0 => PpTargetConfidence.Low,
+                _ => PpTargetConfidence.Insufficient,
+            };
+        }
         double? baseline = difficultyBaseline(profile.PerformanceSamples, difficulty.StarRating);
         bool awardsPp = string.Equals(set.Status, "ranked", StringComparison.OrdinalIgnoreCase)
                         || string.Equals(set.Status, "approved", StringComparison.OrdinalIgnoreCase);
@@ -198,16 +221,18 @@ public static class PpTargetRanker
             ? 0
             : Math.Clamp(gain.Value / Math.Max(25, baseline.Value * 0.3), 0, 1);
         double modCompatibility = modFit(profile.CommonMods, mods);
-        double confidenceScore = confidenceScoreFor(nearbySampleCount, profile.Confidence);
-        double rank = estimate is null
-            ? 100 * (0.43 * attainability + 0.39 * preference + 0.10 * modCompatibility + 0.08 * confidenceScore)
-            : 100 * (0.32 * attainability + 0.28 * preference + 0.28 * gainScore + 0.07 * modCompatibility + 0.05 * confidenceScore);
+        double confidenceScore = (int)recommendation / 3d;
+        // Preferences and reward break ties between playable targets; neither should
+        // outweigh a demonstrated mechanical weakness on a lucrative map.
+        double rank = 100 * (0.75 * attainability + 0.10 * preference
+                            + 0.08 * gainScore * attainability
+                            + 0.04 * modCompatibility + 0.03 * confidenceScore);
 
         return new PpTargetCandidate(
             set.BeatmapSetId, difficulty.BeatmapId, set.Title, set.Artist, set.Creator, set.Source, set.Status,
             difficulty.Name, difficulty.StarRating, difficulty.Bpm, difficulty.TotalLengthSeconds, difficulty.MaximumCombo,
             set.CoverUrl, preference, attainability, rank, baseline, gain, estimate, mods,
-            scoreEvidence, modCompatibility, recommendationConfidence(nearbySampleCount, profile.Confidence));
+            scoreEvidence, modCompatibility, recommendation);
     }
 
     private static PpTargetEstimate? matchingEstimate(

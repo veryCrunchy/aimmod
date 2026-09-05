@@ -4,10 +4,12 @@ using AimMod.Desktop.PpTargets;
 using AimMod.Desktop.ScoreHistory;
 using AimMod.Desktop.Visuals;
 using AimMod.Osu.Runtime;
+using AimMod.Osu.Runtime.Contracts;
 using osu.Framework.Bindables;
 using osu.Framework.Extensions;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
+using osu.Framework.Graphics.Cursor;
 using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
 using osu.Framework.Input.Events;
@@ -34,6 +36,12 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
     private readonly Func<OfficialOsuApiClient?> officialApi;
     private readonly Func<IAccountScoreHistoryService?> accountHistory;
     private readonly Func<int, CancellationToken, Task>? openBeatmap;
+    private readonly IReadOnlyDictionary<Guid, ReplayAnalysisResult> replayAnalyses;
+    private IReadOnlyList<LocalReplay> patternHistory = [];
+    private int observedAnalysisCount = -1;
+    private ScheduledDelegate? scheduledPatternRefresh;
+    private CancellationTokenSource? patternRefresh;
+    private string skillProgress = string.Empty;
     private readonly PpTargetWorkspaceCache? workspaceCache;
     private readonly AimModSearchBox search;
     private readonly TruncatingSpriteText status;
@@ -93,7 +101,8 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         Func<OfficialOsuApiClient?>? officialApi = null,
         PpTargetWorkspaceCache? workspaceCache = null,
         Func<IAccountScoreHistoryService?>? accountHistory = null,
-        Func<int, CancellationToken, Task>? openBeatmap = null)
+        Func<int, CancellationToken, Task>? openBeatmap = null,
+        IReadOnlyDictionary<Guid, ReplayAnalysisResult>? replayAnalyses = null)
     {
         this.source = source ?? throw new ArgumentNullException(nameof(source));
         this.client = client ?? throw new ArgumentNullException(nameof(client));
@@ -104,6 +113,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         this.workspaceCache = workspaceCache;
         this.accountHistory = accountHistory ?? (() => null);
         this.openBeatmap = openBeatmap;
+        this.replayAnalyses = replayAnalyses ?? new Dictionary<Guid, ReplayAnalysisResult>();
         sourceChanges = source as ILocalLibrarySourceChanged;
         if (sourceChanges is not null)
             sourceChanges.SourceChanged += sourceChanged;
@@ -120,7 +130,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                 {
                     new AimModSectionHeader(
                         "PP targets",
-                        "Maps ranked against your local osu!standard history, preferred difficulty, and demonstrated PP range.",
+                        "Targets matched to your recent performance, strengths, and preferred difficulty.",
                         "personal map finder"),
                     profileSummary = truncatingText("Building your preference profile...", 12, AimModPalette.Muted).With(drawable => drawable.Y = 65),
                     new ClickableContainer
@@ -277,6 +287,13 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
     {
         base.Update();
 
+        if (patternHistory.Count > 0 && observedAnalysisCount != replayAnalyses.Count)
+        {
+            observedAnalysisCount = replayAnalyses.Count;
+            scheduledPatternRefresh?.Cancel();
+            scheduledPatternRefresh = Scheduler.AddDelayed(refreshPatternEvidence, 2_000);
+        }
+
         float width = Math.Max(640, DrawWidth);
         bool compact = width < 1_120;
         float headerHeight = compact ? 322 : 250;
@@ -382,7 +399,11 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         else if (!workspaceCache!.IsFresh(snapshot))
             reloadProfile();
         else
+        {
             status.Text = $"Ready from cache  /  updated {relativeAge(snapshot.CachedAt)}";
+            replaceToken(ref profileRefresh);
+            _ = loadPatternHistoryAsync(profileRefresh!.Token);
+        }
     }
 
     private void filterChanged(Action action)
@@ -413,6 +434,8 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
 
     private void reloadProfile()
     {
+        cancelToken(ref patternRefresh);
+        scheduledPatternRefresh?.Cancel();
         replaceToken(ref profileRefresh);
         if (hasVisibleSnapshot)
             showRefresh("Refreshing score history", 0, 0);
@@ -449,8 +472,15 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                 hydration?.Runs ?? history.Runs,
                 online?.Scores ?? []);
             PpTargetPreferenceProfile next = PpTargetPreferenceProfiler.Build(runs, loadedSets);
-            if (!IsDisposed)
-                Schedule(() => applyProfile(next, loadedSets, hydration, online));
+            if (!IsDisposed && !cancellationToken.IsCancellationRequested)
+                Schedule(() =>
+                {
+                    if (cancellationToken.IsCancellationRequested)
+                        return;
+                    patternHistory = runs;
+                    applyProfile(next, loadedSets, hydration, online);
+                    refreshPatternEvidence();
+                });
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -466,6 +496,88 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                     if (!hasVisibleSnapshot)
                         workspaceState.ShowState(FontAwesome.Solid.ExclamationTriangle, "PP profile unavailable", "Refresh to try loading your local and submitted score history again.");
                 });
+        }
+    }
+
+    private async Task loadPatternHistoryAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            StatisticsHistoryLoadResult history = await StatisticsHistoryLoader.LoadAsync(source, cancellationToken).ConfigureAwait(false);
+            if (!IsDisposed && !cancellationToken.IsCancellationRequested)
+                Schedule(() =>
+                {
+                    if (cancellationToken.IsCancellationRequested)
+                        return;
+                    patternHistory = history.Runs;
+                    refreshPatternEvidence();
+                });
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception error)
+        {
+            Console.Error.WriteLine($"PP target skill history refresh failed: {error}");
+            if (!IsDisposed && !cancellationToken.IsCancellationRequested)
+                Schedule(() => status.Text = "Skill history could not refresh. Showing saved targets.");
+        }
+    }
+
+    private void refreshPatternEvidence()
+    {
+        scheduledPatternRefresh?.Cancel();
+        if (patternHistory.Count == 0 || IsDisposed)
+            return;
+        observedAnalysisCount = replayAnalyses.Count;
+        replaceToken(ref patternRefresh);
+        var snapshot = new Dictionary<Guid, ReplayAnalysisResult>(replayAnalyses);
+        _ = rebuildPatternEvidenceAsync(patternHistory, localSets, snapshot, patternRefresh!.Token);
+    }
+
+    public void RefreshSkillEvidence()
+    {
+        if (IsDisposed)
+            return;
+        scheduledPatternRefresh?.Cancel();
+        scheduledPatternRefresh = Scheduler.AddDelayed(refreshPatternEvidence, 2_000);
+    }
+
+    public void SetSkillAnalysisProgress(int completed, int total)
+    {
+        skillProgress = total > completed ? $"  /  Skill replays {completed:N0}/{total:N0}" : string.Empty;
+        updateProfileSummary();
+    }
+
+    private async Task rebuildPatternEvidenceAsync(
+        IReadOnlyList<LocalReplay> runs,
+        IReadOnlyList<LocalBeatmapSet> maps,
+        IReadOnlyDictionary<Guid, ReplayAnalysisResult> analyses,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            PpPatternProfile patterns = await Task.Run(
+                () => PpTargetPatternModel.BuildProfile(runs, analyses, localSets: maps), cancellationToken).ConfigureAwait(false);
+            if (!IsDisposed && !cancellationToken.IsCancellationRequested)
+                Schedule(() =>
+                {
+                    if (cancellationToken.IsCancellationRequested || profile.PatternProfile?.Identity == patterns.Identity)
+                        return;
+                    profile = profile with { PatternProfile = patterns };
+                    exactEstimates = new Dictionary<int, PpTargetEstimate>();
+                    updateProfileSummary();
+                    startExactCalculations();
+                });
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception error)
+        {
+            Console.Error.WriteLine($"PP target pattern profile refresh failed: {error}");
+            if (!IsDisposed && !cancellationToken.IsCancellationRequested)
+                Schedule(() => status.Text = "Could not refresh skill evidence. Refresh to retry.");
         }
     }
 
@@ -652,7 +764,8 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                 installed.GetValueOrDefault(candidate.BeatmapId)?.BeatmapHash,
                 candidate.SuggestedMods,
                 profile.TypicalAccuracy.Value,
-                candidate.Attainability))
+                candidate.Attainability,
+                profile.PatternProfile))
             .Take(50)
             .ToArray();
         if (requests.Length == 0)
@@ -678,13 +791,19 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             var progress = new Progress<PpTargetExactCalculationProgress>(value =>
             {
                 if (!IsDisposed && !cancellationToken.IsCancellationRequested)
-                    Schedule(() => showRefresh($"Calculating difficulty {value.Completed:N0} of {value.Total:N0}", value.Completed, value.Total));
+                    Schedule(() =>
+                    {
+                        if (!cancellationToken.IsCancellationRequested)
+                            showRefresh($"Calculating difficulty {value.Completed:N0} of {value.Total:N0}", value.Completed, value.Total);
+                    });
             });
             IReadOnlyDictionary<int, PpTargetEstimate> calculated = await calculator.CalculateAsync(requests, cancellationToken, progress).ConfigureAwait(false);
             if (!IsDisposed && !cancellationToken.IsCancellationRequested)
             {
                 Schedule(() =>
                 {
+                    if (cancellationToken.IsCancellationRequested)
+                        return;
                     exactEstimates = calculated;
                     status.Text = calculated.Count == 0
                         ? "PP values are unavailable for these difficulties."
@@ -700,9 +819,11 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         }
         catch (Exception error)
         {
-            if (!IsDisposed)
+            if (!IsDisposed && !cancellationToken.IsCancellationRequested)
                 Schedule(() =>
                 {
+                    if (cancellationToken.IsCancellationRequested)
+                        return;
                     status.Text = $"PP calculation failed: {error.Message}";
                     hideRefresh();
                 });
@@ -769,11 +890,11 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
 
     private void updateProfileSummary()
     {
-        string confidence = profile.Confidence.ToString().ToLowerInvariant();
         string mods = profile.CommonMods.Count == 0 ? "No dominant mods" : string.Join(", ", profile.CommonMods.Take(3).Select(item => item.Value));
         profileSummary.Text = profile.ValidRunCount == 0
             ? "No score history is available for PP recommendations."
-            : $"{profile.ValidRunCount:N0} plays  /  {profile.PpSampleCount:N0} PP results  /  {onlineBestCount:N0} submitted  /  {confidence} confidence  /  {mods}";
+            : $"{profile.ValidRunCount:N0} plays  /  {onlineBestCount:N0} submitted  /  " +
+              $"{profile.PatternProfile?.Evidence.Select(item => item.MapKey).Distinct().Count() ?? 0:N0} maps with skill evidence (30 days)  /  {mods}{skillProgress}";
     }
 
     private void showRefresh(string message, int completed, int total)
@@ -835,6 +956,8 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         cancelToken(ref profileRefresh);
         cancelToken(ref catalogSearch);
         cancelToken(ref exactCalculation);
+        cancelToken(ref patternRefresh);
+        scheduledPatternRefresh?.Cancel();
         scheduledSearch?.Cancel();
         if (sourceChanges is not null)
             sourceChanges.SourceChanged -= sourceChanged;
@@ -909,7 +1032,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         TargetSort.ExpectedPp => "Highest expected PP",
         TargetSort.MaximumPp => "Highest max PP",
         TargetSort.Stars => "Lowest star rating",
-        _ => "Best personal fit",
+        _ => "Best skill fit",
     };
 
     private static SpriteText text(string value, float size, Colour4 colour, string weight = "Regular") => new()
@@ -1014,8 +1137,9 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         }
     }
 
-    private partial class PpTargetRow : AimModInteractiveSurface
+    private partial class PpTargetRow : AimModInteractiveSurface, IHasTooltip
     {
+        public LocalisableString TooltipText { get; }
         private readonly OfficialBeatmapSet set;
         private readonly Func<OfficialBeatmapSet, Task<OnlineBeatmapImportResult>> import;
         private readonly SpriteText saveText;
@@ -1026,6 +1150,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         private readonly TruncatingSpriteText mapDetails;
         private readonly TruncatingSpriteText mechanicsDetails;
         private readonly TruncatingSpriteText confidenceDetails;
+        private readonly TruncatingSpriteText patternDetails;
         private readonly Container artwork;
         private readonly Container expectedMetric;
         private readonly Container maximumMetric;
@@ -1039,6 +1164,11 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         {
             this.set = set;
             this.import = import;
+            PpPatternPrediction? pattern = candidate.Estimate?.PatternPrediction;
+            string skillLabel = pattern?.Fit is { } fit ? $"{fit:P0} skill fit" : "Pattern fit unmeasured";
+            string patternSummary = pattern?.Risks.FirstOrDefault()
+                ?? pattern?.Strengths.FirstOrDefault() ?? "More recent replay evidence needed";
+            TooltipText = pattern is null ? patternSummary : string.Join("\n", pattern.Strengths.Concat(pattern.Risks).Concat(pattern.CoverageNotes ?? []));
             RelativeSizeAxes = Axes.X;
             Height = 112;
             CornerRadius = AimModVisualStyle.ControlRadius;
@@ -1094,11 +1224,12 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                             $"{set.Status.ToUpperInvariant()}   {set.PlayCount:N0} plays   {(passRate > 0 ? $"{passRate:P0} pass" : "pass rate -")}",
                             9, AimModPalette.Muted, "SemiBold"),
                         confidenceDetails = truncatingText(
-                            $"{candidate.PreferenceFit:P0} personal fit   /   {candidate.Attainability:P0} skill fit   /   {recommendationConfidence}   /   {confidence}{gain}",
+                            $"{skillLabel}   /   {candidate.PreferenceFit:P0} preference fit   /   {recommendationConfidence}{gain}",
                             9, calculated ? AimModPalette.Success : AimModPalette.Cyan, "SemiBold"),
+                        patternDetails = truncatingText(patternSummary, 10, AimModPalette.Muted),
                     },
                 },
-                expectedMetric = metric("EXPECTED PP", expected, AimModPalette.Cyan, candidate.Estimate is null ? "pending" : $"at {candidate.Attainability:P0} attainability"),
+                expectedMetric = metric("EXPECTED PP", expected, AimModPalette.Cyan, candidate.Estimate is null ? "pending" : pattern?.ExpectedAccuracy is { } accuracy ? $"{accuracy:P1} accuracy" : "score-history estimate"),
                 maximumMetric = metric("MAX PP", maximum, Colour4.FromHex("FFD45A"), candidate.Estimate is null ? "pending" : "100% FC ceiling"),
                 new Container
                 {
@@ -1141,6 +1272,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             mapDetails.MaxWidth = detailWidth;
             mechanicsDetails.MaxWidth = detailWidth;
             confidenceDetails.MaxWidth = detailWidth;
+            patternDetails.MaxWidth = detailWidth;
         }
 
         private void beginImport()

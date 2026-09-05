@@ -796,7 +796,8 @@ public partial class AimModGame : OsuGameBase
             () => officialApiClient,
             new PpTargetWorkspaceCache(Storage.GetFullPath("cache/pp-target-workspace-v1.json", true)),
             () => accountScoreHistoryService,
-            openBeatmapInOsu)
+            openBeatmapInOsu,
+            replayAnalyses)
         {
             RelativeSizeAxes = Axes.Both,
         };
@@ -1054,6 +1055,8 @@ public partial class AimModGame : OsuGameBase
 
     private async Task persistReplayAnalyses()
     {
+        if (!IsDisposed)
+            Schedule(() => ppTargetsWorkspace?.RefreshSkillEvidence());
         ReplayAnalysisCache? cache = replayAnalysisCache;
         if (cache is null)
             return;
@@ -1132,7 +1135,8 @@ public partial class AimModGame : OsuGameBase
         Guid[] failedScoreIds = replayAnalysisFailures.ToArray();
         if (currentRoute.Value == NativeRoute.Coaching)
             coachingWorkspace?.BeginAnalysisProgress();
-        _ = analyseReplayLibrary(replayAnalysisBatchService, cachedScoreIds, failedScoreIds, replayLibraryAnalysisLifetime.Token);
+        _ = analyseReplayLibrary(replayAnalysisBatchService, cachedScoreIds, failedScoreIds, replayLibraryAnalysisLifetime.Token,
+            currentRoute.Value == NativeRoute.PpTargets);
     }
 
     private void stopReplayLibraryAnalysis()
@@ -1165,11 +1169,17 @@ public partial class AimModGame : OsuGameBase
         ReplayAnalysisBatchService service,
         IEnumerable<Guid> cachedScoreIds,
         IEnumerable<Guid> failedScoreIds,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool recentSkillEvidenceOnly = false)
     {
         try
         {
             LocalReplay[] library = await loadReplayAnalysisWorkingSet(cancellationToken).ConfigureAwait(false);
+            if (recentSkillEvidenceOnly)
+            {
+                DateTimeOffset start = new(DateTime.UtcNow.Date.AddDays(-30), TimeSpan.Zero);
+                library = library.Where(run => run.PlayedAt >= start && run.PlayedAt <= DateTimeOffset.UtcNow).ToArray();
+            }
             var processed = cachedScoreIds.Concat(failedScoreIds).ToHashSet();
             ReplayAnalysisCumulativeAccounting accounting = ReplayAnalysisCumulativeAccounting.Create(
                 library,
@@ -1215,6 +1225,8 @@ public partial class AimModGame : OsuGameBase
             {
                 if (!cancellationToken.IsCancellationRequested && currentRoute.Value == NativeRoute.Coaching)
                     coachingWorkspace?.ApplyNewAnalyses(newlyCompleted, newlyFailed);
+                if (!cancellationToken.IsCancellationRequested && currentRoute.Value == NativeRoute.PpTargets)
+                    ppTargetsWorkspace?.SetSkillAnalysisProgress(0, 0);
             });
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -1229,6 +1241,8 @@ public partial class AimModGame : OsuGameBase
                 {
                     if (!cancellationToken.IsCancellationRequested && currentRoute.Value == NativeRoute.Coaching)
                         coachingWorkspace?.SetAnalysisError();
+                    if (!cancellationToken.IsCancellationRequested && currentRoute.Value == NativeRoute.PpTargets)
+                        ppTargetsWorkspace?.SetSkillAnalysisProgress(0, 0);
                 });
             }
         }
@@ -1245,6 +1259,8 @@ public partial class AimModGame : OsuGameBase
         {
             if (!cancellationToken.IsCancellationRequested && currentRoute.Value == NativeRoute.Coaching)
                 coachingWorkspace?.SetAnalysisProgress(progress.Completed, progress.Total, progress.CurrentTitle);
+            if (!cancellationToken.IsCancellationRequested && currentRoute.Value == NativeRoute.PpTargets)
+                ppTargetsWorkspace?.SetSkillAnalysisProgress(progress.Completed, progress.Total);
         });
     }
 
@@ -1301,7 +1317,7 @@ public partial class AimModGame : OsuGameBase
     }
 
     private static bool isReplayAnalysisRoute(NativeRoute route) =>
-        route is NativeRoute.Replays or NativeRoute.Coaching;
+        route is NativeRoute.Replays or NativeRoute.Coaching or NativeRoute.PpTargets;
 
     private async Task analyseMatchingMapReplays(LocalReplay selected, CancellationToken cancellationToken)
     {

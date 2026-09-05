@@ -9,7 +9,8 @@ public sealed record PpTargetExactRequest(
     string? BeatmapHash,
     IReadOnlyList<string> Mods,
     double ExpectedAccuracy,
-    double Attainability);
+    double Attainability,
+    PpPatternProfile? PatternProfile = null);
 
 public sealed record PpTargetExactCalculationProgress(int Completed, int Total);
 
@@ -23,7 +24,7 @@ public interface IPpTargetExactCalculationService
 
 public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationService
 {
-    private const int cache_version = 2;
+    private const int cache_version = 4;
     private const int maximum_batch_size = 50;
     private const int maximum_cache_entries = 2_048;
     private static readonly JsonSerializerOptions json_options = new(JsonSerializerDefaults.Web);
@@ -35,6 +36,7 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
     private readonly Func<SidecarRuntimeClient> runtimeFactory;
     private readonly SemaphoreSlim calculationGate = new(1, 1);
     private readonly Dictionary<string, CacheEntry> cache;
+    private readonly PpTargetBeatmapPatternReader patternReader;
 
     public PpTargetExactCalculationService(string libraryRoot, string cachePath)
         : this(libraryRoot, cachePath, null, Path.Combine(Path.GetTempPath(), "aimmod-pp-target-difficulties"))
@@ -69,6 +71,8 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
         this.difficultyDownloadDirectory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(difficultyDownloadDirectory));
         this.runtimeFactory = runtimeFactory ?? throw new ArgumentNullException(nameof(runtimeFactory));
         cache = loadCache(this.cachePath);
+        patternReader = new PpTargetBeatmapPatternReader(Directory.Exists(this.cachePath)
+            ? Path.Combine(this.cachePath, "beatmap-patterns") : this.cachePath + ".beatmaps");
     }
 
     public async Task<IReadOnlyDictionary<int, PpTargetEstimate>> CalculateAsync(
@@ -78,7 +82,7 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
     {
         ArgumentNullException.ThrowIfNull(requests);
         PpTargetExactRequest[] valid = requests.Where(isValid)
-                                               .DistinctBy(cacheKey)
+                                               .DistinctBy(request => cacheKey(request))
                                                .Take(maximum_batch_size)
                                                .ToArray();
         if (valid.Length == 0)
@@ -88,7 +92,17 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
         try
         {
             var completed = new Dictionary<int, PpTargetEstimate>();
-            PpTargetExactRequest[] missing = valid.Where(request => !tryReadCached(request, completed)).ToArray();
+            var retainedFiles = new Dictionary<string, PpTargetBeatmapFile>();
+            var missingRequests = new List<PpTargetExactRequest>();
+            foreach (PpTargetExactRequest request in valid)
+            {
+                PpTargetBeatmapFile? retained = await patternReader.TryGetCachedFileAsync(request.BeatmapId, request.BeatmapHash, cancellationToken).ConfigureAwait(false);
+                if (retained is not null)
+                    retainedFiles[cacheKey(request)] = retained;
+                if (retained is null || !tryReadCached(request, retained.ContentHash, completed))
+                    missingRequests.Add(request);
+            }
+            PpTargetExactRequest[] missing = missingRequests.ToArray();
             progress?.Report(new PpTargetExactCalculationProgress(completed.Count, valid.Length));
             if (missing.Length == 0)
                 return completed;
@@ -97,7 +111,7 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
             var runtimeClient = new SidecarRuntimeRequestClient(runtime);
             var assetClient = new ExternalLazerAssetClient(runtimeClient);
             var ppClient = new PpWhatIfClient(runtimeClient);
-            string[] hashes = missing.Select(request => request.BeatmapHash)
+            string[] hashes = missing.Where(request => !retainedFiles.ContainsKey(cacheKey(request))).Select(request => request.BeatmapHash)
                                      .Where(hash => !string.IsNullOrWhiteSpace(hash))
                                      .Cast<string>()
                                      .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -121,9 +135,11 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
                 PpTargetExactRequest request = missing[index];
                 cancellationToken.ThrowIfCancellationRequested();
                 string? downloadedPath = null;
-                string? beatmapPath = request.BeatmapHash is { Length: > 0 } hash && beatmaps.TryGetValue(hash, out ExternalLazerResolvedAsset? localBeatmap)
+                retainedFiles.TryGetValue(cacheKey(request), out PpTargetBeatmapFile? retained);
+                retained ??= await patternReader.TryGetCachedFileAsync(request.BeatmapId, request.BeatmapHash, cancellationToken).ConfigureAwait(false);
+                string? beatmapPath = retained?.Path ?? (request.BeatmapHash is { Length: > 0 } hash && beatmaps.TryGetValue(hash, out ExternalLazerResolvedAsset? localBeatmap)
                     ? localBeatmap.StagedPath
-                    : null;
+                    : null);
 
                 if (beatmapPath is null && difficultyClient is not null)
                 {
@@ -147,13 +163,32 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
                 {
                     string stagingDirectory = Path.GetDirectoryName(beatmapPath)!;
                     IReadOnlyList<string> mods = PpTargetMods.Normalise(request.Mods);
+                    PpTargetBeatmapFile file = retained ?? await PpTargetBeatmapPatternReader.IdentifyAsync(beatmapPath, request.BeatmapHash, cancellationToken).ConfigureAwait(false);
+                    PpTargetBeatmapPatternGeometry geometry = await patternReader.ReadAsync(file, mods, cancellationToken).ConfigureAwait(false);
+                    await patternReader.RetainAsync(file, request.BeatmapId, request.BeatmapHash, cancellationToken).ConfigureAwait(false);
+                    PpPatternPrediction? prediction = request.PatternProfile is { } profile
+                        ? PpTargetPatternModel.Predict(PpTargetPatternModel.ExtractFeatures(geometry.Points, geometry.HitRadius, geometry.ClockRate), profile, mods)
+                        : null;
+                    double accuracy = measuredFraction(prediction?.ExpectedAccuracy) ?? request.ExpectedAccuracy;
+                    double attainability = measuredFraction(prediction?.Fit) ?? request.Attainability;
                     PpWhatIfResult ceiling = await ppClient.CalculateAsync(new PpWhatIfRequest(
                         stagingDirectory, beatmapPath, mods, 1, 0, null), cancellationToken).ConfigureAwait(false);
-                    (int misses, int combo) = ExpectedScoreShape(request.Attainability, ceiling.MaxCombo);
+                    (int misses, int combo) = ExpectedScoreShape(attainability, ceiling.MaxCombo, ceiling.ObjectCount, prediction?.ExpectedMissRate);
+                    accuracy = FeasibleAccuracy(accuracy, misses, ceiling.ObjectCount);
                     PpWhatIfResult expected = await ppClient.CalculateAsync(new PpWhatIfRequest(
-                        stagingDirectory, beatmapPath, mods, request.ExpectedAccuracy, misses, combo), cancellationToken).ConfigureAwait(false);
-                    PpTargetEstimate estimate = createEstimate(request, expected, ceiling);
-                    cache[cacheKey(request)] = new CacheEntry(cacheKey(request), DateTimeOffset.UtcNow, estimate);
+                        stagingDirectory, beatmapPath, mods, accuracy, misses, combo), cancellationToken).ConfigureAwait(false);
+                    if (prediction?.ExpectedAccuracy is not null)
+                        prediction = prediction with { ExpectedAccuracy = expected.Accuracy };
+                    // Keep the original request fields as the ranker's estimate identity.
+                    PpTargetEstimate estimate = createEstimate(request, expected, ceiling) with
+                    {
+                        PatternPrediction = prediction,
+                        PatternProfileIdentity = request.PatternProfile?.Identity,
+                    };
+                    if (prediction?.ExpectedAccuracy is not null || prediction?.ExpectedMissRate is not null)
+                        estimate = estimate with { Method = estimate.Method + " Projected accuracy/misses use measured head evidence; combo remains heuristic and slider tracking is unmeasured." };
+                    string key = cacheKey(request, file.ContentHash);
+                    cache[key] = new CacheEntry(key, DateTimeOffset.UtcNow, estimate);
                     completed[request.BeatmapId] = estimate;
                 }
                 catch (Exception error) when (error is not OperationCanceledException)
@@ -299,6 +334,22 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
         return (misses, Math.Clamp((int)Math.Round(maximumCombo * comboRatio), 0, maximumCombo));
     }
 
+    internal static (int Misses, int Combo) ExpectedScoreShape(double attainability, int maximumCombo, int objectCount, double? expectedMissRate)
+    {
+        if (measuredFraction(expectedMissRate) is not { } rate)
+            return ExpectedScoreShape(attainability, maximumCombo);
+        int count = Math.Max(0, objectCount);
+        int misses = Math.Clamp((int)Math.Round(rate * count, MidpointRounding.AwayFromZero), 0, count);
+        if (misses == 0) return (0, Math.Max(0, maximumCombo));
+        // Miss counts are measured; the distribution of combo breaks is not.
+        double comboRatio = misses == count ? 0 : Math.Clamp(1 - 0.16 * misses, 0.5, 0.84);
+        return (misses, Math.Clamp((int)Math.Round(maximumCombo * comboRatio), 0, maximumCombo));
+    }
+
+    internal static double FeasibleAccuracy(double accuracy, int misses, int objectCount) => objectCount <= 0
+        ? 0
+        : Math.Clamp(accuracy, 0, 1 - Math.Clamp(misses, 0, objectCount) / (double)objectCount);
+
     private static PpTargetEstimate createEstimate(PpTargetExactRequest request, PpWhatIfResult expected, PpWhatIfResult ceiling)
     {
         if (!double.IsFinite(expected.PerformancePoints) || expected.PerformancePoints < 0
@@ -306,7 +357,7 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
             throw new InvalidOperationException($"Official PP calculation returned an invalid value for beatmap difficulty {request.BeatmapId}.");
 
         double expectedPp = expected.PerformancePoints;
-        double maximumPp = Math.Max(expectedPp, ceiling.PerformancePoints);
+        double maximumPp = ceiling.PerformancePoints;
         double spread = 0.18 + 0.16 * (1 - Math.Clamp(request.Attainability, 0, 1));
         return new PpTargetEstimate(
             expectedPp,
@@ -321,9 +372,11 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
             Math.Clamp(request.Attainability, 0, 1));
     }
 
-    private bool tryReadCached(PpTargetExactRequest request, IDictionary<int, PpTargetEstimate> completed)
+    private static double? measuredFraction(double? value) => value is >= 0 and <= 1 && double.IsFinite(value.Value) ? value : null;
+
+    private bool tryReadCached(PpTargetExactRequest request, string contentHash, IDictionary<int, PpTargetEstimate> completed)
     {
-        if (!cache.TryGetValue(cacheKey(request), out CacheEntry? entry) || !validEstimate(entry.Estimate))
+        if (!cache.TryGetValue(cacheKey(request, contentHash), out CacheEntry? entry) || !validEstimate(entry.Estimate))
             return false;
         completed[request.BeatmapId] = entry.Estimate;
         return true;
@@ -386,10 +439,18 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
         }
     }
 
-    private static string cacheKey(PpTargetExactRequest request) => string.Join('|',
+    internal static string CacheIdentity(PpTargetExactRequest request, string contentHash) => cacheKey(request, contentHash);
+
+    private static string cacheKey(PpTargetExactRequest request, string? contentHash = null) => string.Join('|',
+        cache_version,
         PpCalculationProtocol.EngineVersion,
+        PpTargetBeatmapPatternReader.Version,
+        PpTargetPatternModel.Version,
+        contentHash ?? "accuracy-curve",
+        request.BeatmapId,
         request.BeatmapHash?.ToLowerInvariant() ?? $"beatmap-{request.BeatmapId}",
         string.Join(',', PpTargetMods.Normalise(request.Mods)),
+        request.PatternProfile?.Identity ?? "no-profile",
         request.ExpectedAccuracy.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
         request.Attainability.ToString("R", System.Globalization.CultureInfo.InvariantCulture));
 
