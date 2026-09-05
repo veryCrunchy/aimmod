@@ -2201,57 +2201,52 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         public CoachingTrendChart()
         {
             RelativeSizeAxes = Axes.X;
-            Height = 88;
+            Height = 220;
             Masking = true;
             CornerRadius = AimModVisualStyle.ControlRadius;
             InternalChildren = new Drawable[]
             {
                 new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas, Alpha = 0.38f },
-                new Box
+                new Container
                 {
-                    RelativeSizeAxes = Axes.X,
-                    Height = 1,
-                    Y = 18,
-                    Colour = AimModPalette.Border,
-                },
-                new Box
-                {
-                    RelativeSizeAxes = Axes.X,
-                    Height = 1,
-                    Y = 48,
-                    Colour = AimModPalette.Border,
-                },
-                new Box
-                {
-                    RelativeSizeAxes = Axes.X,
-                    Height = 1,
-                    Y = 72,
-                    Colour = AimModPalette.Border,
-                },
-                graph = new LineGraph
-                {
-                    RelativeSizeAxes = Axes.X,
-                    Height = 70,
-                    Padding = new MarginPadding { Top = 9, Bottom = 8, Left = 34, Right = 12 },
-                    LineColour = AimModPalette.Pink,
-                    DefaultValueCount = NativeCoachingWorkspaceModel.MaximumTrendRuns,
-                },
-                markers = new Container
-                {
-                    RelativeSizeAxes = Axes.X,
-                    Height = 52,
-                    Position = new(34, 11),
-                    Width = -46,
+                    RelativeSizeAxes = Axes.Both,
+                    Padding = new MarginPadding { Top = 16, Bottom = 58, Left = 38, Right = 16 },
+                    Children = new Drawable[]
+                    {
+                        new Box { RelativeSizeAxes = Axes.X, Height = 1, Colour = AimModPalette.Border },
+                        new Box { RelativeSizeAxes = Axes.X, RelativePositionAxes = Axes.Y, Y = 0.5f, Height = 1, Colour = AimModPalette.Border },
+                        new Box { RelativeSizeAxes = Axes.X, Anchor = Anchor.BottomLeft, Height = 1, Colour = AimModPalette.Border },
+                        graph = new LineGraph
+                        {
+                            RelativeSizeAxes = Axes.Both,
+                            LineColour = AimModPalette.Pink,
+                            DefaultValueCount = NativeCoachingWorkspaceModel.MaximumTrendRuns,
+                        },
+                        markers = new Container { RelativeSizeAxes = Axes.Both },
+                    },
                 },
                 upperLabel = label("100%", 9, AimModPalette.Muted).With(text => text.Position = new(4, 8)),
-                lowerLabel = label("80%", 9, AimModPalette.Muted).With(text => text.Position = new(4, 55)),
-                label("MISS", 8, AimModPalette.Muted, "Bold").With(text => text.Position = new(4, 70)),
-                missBars = new Container
+                lowerLabel = label("80%", 9, AimModPalette.Muted).With(text =>
+                {
+                    text.Anchor = Anchor.BottomLeft;
+                    text.Origin = Anchor.BottomLeft;
+                    text.Position = new(4, -58);
+                }),
+                label("MISS", 8, AimModPalette.Muted, "Bold").With(text =>
+                {
+                    text.Anchor = Anchor.BottomLeft;
+                    text.Origin = Anchor.BottomLeft;
+                    text.Position = new(4, -28);
+                }),
+                new Container
                 {
                     RelativeSizeAxes = Axes.X,
-                    Height = 12,
-                    Position = new(34, 70),
-                    Width = -46,
+                    Anchor = Anchor.BottomLeft,
+                    Origin = Anchor.BottomLeft,
+                    Y = -24,
+                    Height = 20,
+                    Padding = new MarginPadding { Left = 38, Right = 16 },
+                    Child = missBars = new Container { RelativeSizeAxes = Axes.Both },
                 },
                 timeRange = label("No recent plays", 9, AimModPalette.Muted).With(text =>
                 {
@@ -2284,6 +2279,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
 
             graph.MinValue = (float)minimum;
             graph.MaxValue = (float)maximum;
+            graph.DefaultValueCount = Math.Max(2, chronological.Length);
             graph.Values = chronological.Select(run => (float)(run.Accuracy * 100)).ToArray();
             graph.FadeIn(120);
             upperLabel.Text = $"{maximum:0}%";
@@ -2296,7 +2292,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             for (int i = 0; i < chronological.Length; i++)
             {
                 LocalReplay run = chronological[i];
-                float x = chronological.Length == 1 ? 0.5f : 0.02f + 0.96f * i / (chronological.Length - 1);
+                float x = chronological.Length == 1 ? 0.5f : (float)i / (chronological.Length - 1);
                 float y = (float)(1 - (run.Accuracy * 100 - minimum) / (maximum - minimum));
                 markers.Add(new TrendPoint(
                     run.ScoreId == selectedScoreId,
@@ -2304,7 +2300,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                     () => select(run.ScoreId))
                 {
                     RelativePositionAxes = Axes.Both,
-                    Position = new(x, Math.Clamp(y, 0.02f, 0.98f)),
+                    Position = new(x, Math.Clamp(y, 0, 1)),
                     Anchor = Anchor.TopLeft,
                     Origin = Anchor.Centre,
                 });
