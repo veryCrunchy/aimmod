@@ -1,5 +1,7 @@
 # AimMod
 
+[Join the AimMod Discord](https://aimmod.app/join) for updates, feedback and support.
+
 AimMod is a performance-analysis and coaching suite for osu! and KovaaK's Aim Trainer. Each game has a dedicated desktop client and release channel built around the data and practice workflow that game exposes.
 
 | Product | Platforms | Download |
