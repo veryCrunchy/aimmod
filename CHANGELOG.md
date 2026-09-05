@@ -1,5 +1,30 @@
 # Changelog
 
+## [1.9.0](https://github.com/veryCrunchy/aimmod/compare/v1.8.0...v1.9.0) (2026-09-05)
+
+
+### Features
+
+* add native osu companion client ([d6b11e1](https://github.com/veryCrunchy/aimmod/commit/d6b11e132e3fc2139301da616ed942340909ccaa))
+* **analytics:** add coaching, target-response, and benchmark insights ([f830fd3](https://github.com/veryCrunchy/aimmod/commit/f830fd3aff95b4d25fca0ae2eb2f29250ab57118))
+* improve replay capture fidelity and timing ([6ebb1ed](https://github.com/veryCrunchy/aimmod/commit/6ebb1edfcece91a437add85e0865dd1c2466c51b))
+* **local-coach:** add coach UI, charts, and settings ([40466bd](https://github.com/veryCrunchy/aimmod/commit/40466bddc888886f54ffc86d8a75601dffabcf66))
+* **local-coach:** add local runtime and tool-backed backend ([ad87262](https://github.com/veryCrunchy/aimmod/commit/ad872629ebc3cb3bb6a9545be2d7e501881147e9))
+* **osu:** add coaching and exact pp targets ([4d6f36f](https://github.com/veryCrunchy/aimmod/commit/4d6f36f1c2bcbd2be9002386a45b46abf5c93577))
+* **overlay:** add unified overlay studio and browser sources ([3083918](https://github.com/veryCrunchy/aimmod/commit/308391853bc72871f58e70c21ebef994d18dc168))
+* publish live activity to aimmod hub ([5ca36fc](https://github.com/veryCrunchy/aimmod/commit/5ca36fc35023698d573ac339f1d53fe6772957f3))
+* refresh in-game overlay state and pb pacing ([9542f0d](https://github.com/veryCrunchy/aimmod/commit/9542f0d14a87f4dffea0029ba7467635dcf4b5f3))
+
+
+### Bug Fixes
+
+* **dependencies:** simplify Windows crate versioning ([aa53686](https://github.com/veryCrunchy/aimmod/commit/aa53686e8c08d9058379438cfc56db69acda0867))
+* **overlay:** prefer hub pb and suppress duplicate updates ([85831c2](https://github.com/veryCrunchy/aimmod/commit/85831c2d995a4ff6cda5b5355c41a84a21ca2ad0))
+* **overlay:** remove desktop private surface and restore palette sync ([c677fef](https://github.com/veryCrunchy/aimmod/commit/c677fef1b6e662bb0b4fbe2f892f0ae98fa7e95f))
+* **replay:** wait for replay flush and normalize accuracy handling ([d878baf](https://github.com/veryCrunchy/aimmod/commit/d878baf86ff4258f8b973e2734437a85ec5200d1))
+* simplify LoadLibraryW address retrieval in bridge ([7592acc](https://github.com/veryCrunchy/aimmod/commit/7592acccf27359fd13526e140e73ede7a5d2fd78))
+* update Windows API usage for improved stability and clarity ([01de554](https://github.com/veryCrunchy/aimmod/commit/01de554b838a0a64e74724743f79d368be1c2d7e))
+
 ## [1.8.0](https://github.com/veryCrunchy/aimmod/compare/v1.7.2...v1.8.0) (2026-03-15)
 
 
