@@ -2,16 +2,22 @@ using AimMod.Desktop.LocalLibrary;
 
 namespace AimMod.Desktop;
 
-public interface IPlayableReplayBundle : IAsyncDisposable
+public interface IReplayFileLease : IAsyncDisposable
+{
+    string ReplayPath { get; }
+}
+
+public interface IPlayableReplayBundle : IReplayFileLease
 {
     string BeatmapPath { get; }
-    string ReplayPath { get; }
     ReplayOpenRequest OpenRequest { get; }
 }
 
 public interface ILocalReplayOpenService
 {
     Task<IPlayableReplayBundle> OpenAsync(LocalReplay replay, CancellationToken cancellationToken = default);
+    async Task<IReplayFileLease> OpenReplayFileAsync(LocalReplay replay, CancellationToken cancellationToken = default) =>
+        await OpenAsync(replay, cancellationToken).ConfigureAwait(false);
 }
 
 public sealed class CompositeLocalReplayOpenService : ILocalReplayOpenService
@@ -39,6 +45,25 @@ public sealed class CompositeLocalReplayOpenService : ILocalReplayOpenService
         if (lazer is null)
             throw new ExternalLazerReplayOpenException("lazer_library_unavailable", "The osu!lazer replay library is not connected.");
         return await lazer.OpenAsync(replay, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<IReplayFileLease> OpenReplayFileAsync(LocalReplay replay, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (replay.Origin == LocalLibraryOrigin.Stable)
+        {
+            if (!Path.IsPathFullyQualified(replay.ReplayPath) || !File.Exists(replay.ReplayPath))
+                throw new ExternalLazerReplayOpenException("replay_missing", "The osu!stable replay file is no longer available.");
+            return new DirectReplayFileLease(replay.ReplayPath);
+        }
+        if (lazer is null)
+            throw new ExternalLazerReplayOpenException("lazer_library_unavailable", "The osu!lazer replay library is not connected.");
+        return await lazer.OpenReplayFileAsync(replay, cancellationToken).ConfigureAwait(false);
+    }
+
+    private sealed record DirectReplayFileLease(string ReplayPath) : IReplayFileLease
+    {
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class StablePlayableReplayBundle : IPlayableReplayBundle

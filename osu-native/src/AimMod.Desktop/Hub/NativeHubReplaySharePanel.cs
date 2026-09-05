@@ -121,6 +121,9 @@ public partial class NativeHubReplaySharePanel : CompositeDrawable
 
     public void SetReplay(LocalReplay selected, bool hasAnalysis)
     {
+        preparing?.Cancel();
+        preparing?.Dispose();
+        preparing = null;
         replay = selected;
         analysisAvailable = hasAnalysis;
         queueItemId = null;
@@ -192,7 +195,13 @@ public partial class NativeHubReplaySharePanel : CompositeDrawable
         preparing?.Cancel();
         preparing?.Dispose();
         preparing = new CancellationTokenSource();
+        queueItemId = null;
+        shareUrl = string.Empty;
+        resetActions();
         shareButton.Enabled.Value = false;
+        cancelRetryButton.Text = "Cancel";
+        cancelRetryButton.Alpha = 1;
+        cancelRetryButton.Enabled.Value = true;
         status.Text = "Preparing a verified Hub upload...";
         status.Colour = AimModPalette.Cyan;
         _ = prepareAsync(new HubReplayShareSelection(replay, visibility.Value, uploadReplayFile.Value, uploadAnalysis.Value), preparing.Token);
@@ -210,9 +219,11 @@ public partial class NativeHubReplaySharePanel : CompositeDrawable
                     UploadAnalysis = selection.UploadAnalysis,
                 }, cancellationToken).ConfigureAwait(false);
             HubUploadQueueItem item = await shareService!.QueueAsync(selection, cancellationToken).ConfigureAwait(false);
-            if (!IsDisposed)
+            if (!IsDisposed && !cancellationToken.IsCancellationRequested)
                 Schedule(() =>
                 {
+                    if (cancellationToken.IsCancellationRequested)
+                        return;
                     queueItemId = item.Id;
                     applyQueueItem(item);
                 });
@@ -222,9 +233,12 @@ public partial class NativeHubReplaySharePanel : CompositeDrawable
         }
         catch (Exception error)
         {
-            if (!IsDisposed)
+            if (!IsDisposed && !cancellationToken.IsCancellationRequested)
                 Schedule(() =>
                 {
+                    if (cancellationToken.IsCancellationRequested)
+                        return;
+                    resetActions();
                     status.Text = error.Message;
                     status.Colour = AimModPalette.Pink;
                     shareButton.Enabled.Value = true;
@@ -278,6 +292,13 @@ public partial class NativeHubReplaySharePanel : CompositeDrawable
 
     private void cancelOrRetry()
     {
+        if (queueItemId is null && preparing is not null)
+        {
+            preparing.Cancel();
+            resetActions();
+            refreshAvailability();
+            return;
+        }
         if (queueItemId is not { } id || uploadQueue is null)
             return;
         HubUploadQueueItem? item = uploadQueue.Snapshot().FirstOrDefault(candidate => candidate.Id == id);

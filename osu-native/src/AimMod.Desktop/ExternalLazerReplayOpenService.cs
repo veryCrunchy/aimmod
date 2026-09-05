@@ -136,6 +136,44 @@ public sealed class ExternalLazerReplayOpenService : ILocalReplayOpenService
         CancellationToken cancellationToken) =>
         await OpenAsync(replay, cancellationToken).ConfigureAwait(false);
 
+    public async Task<IReplayFileLease> OpenReplayFileAsync(LocalReplay replay, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(replay);
+        if (!replay.HasReplayFile)
+            throw new ExternalLazerReplayOpenException("replay_unavailable", "The selected score does not contain a replay file.");
+        ExternalLazerAssetStagingLease? lease = null;
+        try
+        {
+            // Uploading a replay does not need the beatmap, audio or background assets.
+            lease = await stageAssets(libraryRoot, [], [replay.ScoreId], cancellationToken).ConfigureAwait(false);
+            if (lease.Result.MissingScores.Contains(replay.ScoreId))
+                throw missingAssetError("Replay");
+            ExternalLazerResolvedAsset asset = singleRequiredAsset(lease.Result.Files, "Replay", replay.ScoreId.ToString(), StringComparison.OrdinalIgnoreCase);
+            if (lease.Result.MissingFiles.Any(file => file.Kind == "Replay" && string.Equals(file.OwnerId, replay.ScoreId.ToString(), StringComparison.OrdinalIgnoreCase)))
+                throw missingAssetError("Replay");
+            if (!File.Exists(asset.StagedPath) || (File.GetAttributes(asset.StagedPath) & FileAttributes.ReparsePoint) != 0)
+                throw missingAssetError("Replay");
+            await using (var stream = new FileStream(asset.StagedPath, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, FileOptions.Asynchronous))
+            {
+                string hash = Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken).ConfigureAwait(false));
+                if (stream.Length != asset.Length || !string.Equals(hash, asset.Sha256Hash, StringComparison.OrdinalIgnoreCase))
+                    throw new ExternalLazerReplayOpenException("staged_asset_changed", "The staged replay changed before it could be shared.");
+            }
+            return new StagedReplayFileLease(asset.StagedPath, lease);
+        }
+        catch
+        {
+            if (lease is not null)
+                await lease.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private sealed record StagedReplayFileLease(string ReplayPath, ExternalLazerAssetStagingLease Lease) : IReplayFileLease
+    {
+        public ValueTask DisposeAsync() => Lease.DisposeAsync();
+    }
+
     private static void validateReplay(ExternalLazerReplaySummary replay)
     {
         if (!string.Equals(replay.RulesetShortName, "osu", StringComparison.Ordinal))

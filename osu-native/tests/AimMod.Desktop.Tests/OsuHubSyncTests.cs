@@ -1,6 +1,8 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Security.Cryptography;
+using System.Reflection;
 using AimMod.Desktop.Hub;
 using AimMod.Desktop.LocalLibrary;
 using AimMod.Osu.Runtime;
@@ -336,7 +338,7 @@ public sealed class OsuHubSyncTests
             UploadReplayFile: true, UploadAnalysis: true));
         await automatic.ObserveAsync([]); // A limited or empty initial page must still exclude ALL old history.
         clock.Now = clock.Now.AddMinutes(1);
-        LocalReplay eligible = replay with { ScoreId = Guid.NewGuid(), PlayedAt = clock.Now, HasReplayFile = true, ReplayPath = "missing.osr" };
+        LocalReplay eligible = replay with { ScoreId = Guid.NewGuid(), PlayedAt = clock.Now, HasReplayFile = false, ReplayPath = "" };
         LocalReplay lowerPp = eligible with { ScoreId = Guid.NewGuid(), PlayedAt = clock.Now.AddSeconds(-1), PerformancePoints = 179.9 };
         LocalReplay lowerAccuracy = eligible with { ScoreId = Guid.NewGuid(), PlayedAt = clock.Now.AddSeconds(-2), Accuracy = .979 };
         LocalReplay missingPp = eligible with { ScoreId = Guid.NewGuid(), PlayedAt = clock.Now.AddSeconds(-3), PerformancePoints = null };
@@ -346,7 +348,7 @@ public sealed class OsuHubSyncTests
         Assert.Multiple(() =>
         {
             Assert.That(item.Request.Visibility, Is.EqualTo("public"));
-            Assert.That(item.Request.Replay, Is.Null, "Missing optional bytes must not prevent sharing score metadata.");
+            Assert.That(item.Request.Replay, Is.Null, "Scores with no replay can share metadata when automatic replay attachment is optional.");
             Assert.That(item.Request.Analysis, Is.Null, "Optional analysis can be attached only when available.");
             Assert.That(item.AutomaticAccountScope, Is.Not.Empty);
             Assert.That(item.AutomaticGeneration, Is.EqualTo(preferences.Load().AutomaticSharingGeneration));
@@ -507,6 +509,171 @@ public sealed class OsuHubSyncTests
         Assert.That(second.FromLocalCache, Is.True);
         Assert.That(handler.Requests, Has.Count.EqualTo(1));
         Assert.That(cache.Entry!.ContentHash, Does.StartWith(scope + ":"));
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task BlankLazerReplayPathIsResolvedAndSpooledBeforeLeaseDisposal(bool automatic)
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes("exported lazer replay bytes");
+        string temporaryReplay = Path.Combine(temporaryDirectory, "temporary-export.osr");
+        await File.WriteAllBytesAsync(temporaryReplay, bytes);
+        string spool = Path.Combine(temporaryDirectory, "hub-spool");
+        var resolver = new LeasedReplayResolver(temporaryReplay, () =>
+        {
+            Assert.That(Directory.GetFiles(spool, "*.osr"), Has.Length.EqualTo(1));
+            Assert.That(File.ReadAllBytes(Directory.GetFiles(spool, "*.osr").Single()), Is.EqualTo(bytes));
+        });
+        (LocalReplay replay, LocalBeatmapSet set, _) = createLocalData();
+        replay = replay with { HasReplayFile = true, ReplayPath = "" };
+        string queuePath = Path.Combine(temporaryDirectory, "queue.json");
+        ILocalReplayOpenService? currentResolver = null;
+        HubUploadQueueItem queued;
+        using (var queue = new OsuHubUploadQueue(queuePath, new FakeUploader(), false))
+        {
+            var service = new OsuHubReplayShareService(new SingleMapLibrary(set), () => new OsuProfile(42, "player", "", null, null),
+                new Dictionary<Guid, ReplayAnalysisResult>(), queue, () => currentResolver, spool);
+            currentResolver = resolver; // The source can connect after Hub services are constructed.
+            queued = automatic
+                ? (await service.QueueAutomaticAsync(replay, new HubSharingPreferences(UploadReplayFile: true,
+                    AutomaticSharingEnabled: true, AutomaticSharingGeneration: Guid.NewGuid()), 42, "scope", "dedup", () => true))!
+                : await service.QueueAsync(new HubReplayShareSelection(replay, OsuHubVisibility.Public, true, false));
+            Assert.That(resolver.Disposed, Is.True);
+            Assert.That(File.Exists(temporaryReplay), Is.False);
+            Assert.That(queued.ReplayPath, Does.StartWith(spool));
+            Assert.That(File.ReadAllBytes(queued.ReplayPath), Is.EqualTo(bytes));
+            Assert.That(queued.Request.Replay!.Sha256, Is.EqualTo(Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant()));
+        }
+        using var restored = new OsuHubUploadQueue(queuePath, new FakeUploader(), false);
+        Assert.That(restored.Snapshot().Single().ReplayPath, Is.EqualTo(queued.ReplayPath));
+        Assert.That(File.ReadAllBytes(restored.Snapshot().Single().ReplayPath), Is.EqualTo(bytes));
+        Assert.That(await restored.CancelAsync(queued.Id), Is.True);
+        Assert.That(await restored.RetryAsync(queued.Id), Is.True);
+        Assert.That(File.Exists(queued.ReplayPath), Is.True);
+    }
+
+    [Test]
+    public async Task StableReplayIsSpooledWithoutPlaybackOrBeatmapResolution()
+    {
+        string replayPath = Path.Combine(temporaryDirectory, "stable.osr");
+        await File.WriteAllTextAsync(replayPath, "stable replay bytes");
+        (LocalReplay replay, LocalBeatmapSet set, _) = createLocalData(replayPath);
+        replay = replay with { Origin = LocalLibraryOrigin.Stable, BeatmapPath = "missing-map.osu" };
+        using var queue = new OsuHubUploadQueue(Path.Combine(temporaryDirectory, "queue.json"), new FakeUploader(), false);
+        var service = new OsuHubReplayShareService(new SingleMapLibrary(set), () => new OsuProfile(42, "player", "", null, null),
+            new Dictionary<Guid, ReplayAnalysisResult>(), queue, () => throw new AssertionException("A stable file must not invoke playback."),
+            Path.Combine(temporaryDirectory, "spool"));
+        HubUploadQueueItem item = await service.QueueAsync(new HubReplayShareSelection(replay, OsuHubVisibility.Public, true, false));
+        File.Delete(replayPath);
+        Assert.That(File.ReadAllText(item.ReplayPath), Is.EqualTo("stable replay bytes"));
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void TrulyUnavailableRequestedReplayFailsWithoutDowngradingOrQueueing(bool automatic)
+    {
+        (LocalReplay replay, LocalBeatmapSet set, _) = createLocalData();
+        replay = replay with { HasReplayFile = true, ReplayPath = "" };
+        var resolver = new LeasedReplayResolver(Path.Combine(temporaryDirectory, "missing.osr"));
+        using var queue = new OsuHubUploadQueue(Path.Combine(temporaryDirectory, "queue.json"), new FakeUploader(), false);
+        var service = new OsuHubReplayShareService(new SingleMapLibrary(set), () => new OsuProfile(42, "player", "", null, null),
+            new Dictionary<Guid, ReplayAnalysisResult>(), queue, () => resolver, Path.Combine(temporaryDirectory, "spool"));
+        Assert.ThrowsAsync<FileNotFoundException>(async () =>
+        {
+            if (automatic)
+                await service.QueueAutomaticAsync(replay, new HubSharingPreferences(UploadReplayFile: true, AutomaticSharingEnabled: true,
+                    AutomaticSharingGeneration: Guid.NewGuid()), 42, "scope", "key", () => true);
+            else
+                await service.QueueAsync(new HubReplayShareSelection(replay, OsuHubVisibility.Public, true, false));
+        });
+        Assert.That(queue.Snapshot(), Is.Empty);
+        Assert.That(resolver.Disposed, Is.True);
+    }
+
+    [Test]
+    public async Task LazerReplayOnlyResolverDoesNotRequestBeatmapAudioOrBackground()
+    {
+        (LocalReplay replay, _, _) = createLocalData();
+        replay = replay with { HasReplayFile = true, ReplayPath = "", BeatmapHash = "" };
+        var runtime = new ReplayOnlyAssetRuntime();
+        ILocalReplayOpenService resolver = new CompositeLocalReplayOpenService(new ExternalLazerReplayOpenService(
+            temporaryDirectory, new ExternalLazerAssetClient(runtime)));
+        string staged;
+        await using (IReplayFileLease lease = await resolver.OpenReplayFileAsync(replay))
+        {
+            staged = lease.ReplayPath;
+            Assert.That(File.ReadAllText(staged), Is.EqualTo("replay only"));
+            Assert.That(runtime.RequestedScoreIds, Is.EqualTo(new[] { replay.ScoreId }));
+        }
+        Assert.That(File.Exists(staged), Is.False);
+    }
+
+    [Test]
+    public void ChangingReplayCancelsPreparationAndClearsOldShareActions()
+    {
+        using var panel = new NativeHubReplaySharePanel(null, null, null, null, null, null);
+        (LocalReplay replay, _, _) = createLocalData();
+        using var preparing = new CancellationTokenSource();
+        CancellationToken token = preparing.Token;
+        const BindingFlags fields = BindingFlags.NonPublic | BindingFlags.Instance;
+        typeof(NativeHubReplaySharePanel).GetField("preparing", fields)!.SetValue(panel, preparing);
+        typeof(NativeHubReplaySharePanel).GetField("shareUrl", fields)!.SetValue(panel, "https://hub.example/old");
+        typeof(NativeHubReplaySharePanel).GetField("queueItemId", fields)!.SetValue(panel, Guid.NewGuid());
+        foreach (string name in new[] { "copyButton", "openButton", "cancelRetryButton" })
+        {
+            var button = (osu.Game.Graphics.UserInterface.OsuButton)typeof(NativeHubReplaySharePanel).GetField(name, fields)!.GetValue(panel)!;
+            button.Alpha = 1;
+            button.Enabled.Value = true;
+        }
+        panel.SetReplay(replay, false);
+        Assert.That(token.IsCancellationRequested, Is.True);
+        Assert.That(typeof(NativeHubReplaySharePanel).GetField("preparing", fields)!.GetValue(panel), Is.Null);
+        Assert.That(typeof(NativeHubReplaySharePanel).GetField("shareUrl", fields)!.GetValue(panel), Is.EqualTo(""));
+        Assert.That(typeof(NativeHubReplaySharePanel).GetField("queueItemId", fields)!.GetValue(panel), Is.Null);
+        foreach (string name in new[] { "copyButton", "openButton", "cancelRetryButton" })
+        {
+            var button = (osu.Game.Graphics.UserInterface.OsuButton)typeof(NativeHubReplaySharePanel).GetField(name, fields)!.GetValue(panel)!;
+            Assert.That(button.Alpha, Is.Zero);
+            Assert.That(button.Enabled.Value, Is.False);
+        }
+    }
+
+    private sealed class LeasedReplayResolver(string replayPath, Action? onDispose = null) : ILocalReplayOpenService
+    {
+        public bool Disposed { get; private set; }
+        public Task<IPlayableReplayBundle> OpenAsync(LocalReplay replay, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IPlayableReplayBundle>(new Lease(replayPath, () =>
+            {
+                onDispose?.Invoke();
+                Disposed = true;
+                File.Delete(replayPath);
+            }));
+
+        private sealed record Lease(string ReplayPath, Action Dispose) : IPlayableReplayBundle
+        {
+            public string BeatmapPath => "";
+            public ReplayOpenRequest OpenRequest => throw new AssertionException("Sharing must not start playback.");
+            public ValueTask DisposeAsync() { Dispose(); return ValueTask.CompletedTask; }
+        }
+    }
+
+    private sealed class ReplayOnlyAssetRuntime : IRuntimeRequestClient
+    {
+        public IReadOnlyList<Guid> RequestedScoreIds { get; private set; } = [];
+        public Task<RuntimeResponse> SendAsync(RuntimeRequest request, CancellationToken cancellationToken = default)
+        {
+            ExternalLazerAssetResolveRequest input = request.Payload!.Value.Deserialize<ExternalLazerAssetResolveRequest>(RuntimeProtocol.JsonOptions)!;
+            Assert.That(input.BeatmapHashes, Is.Empty);
+            RequestedScoreIds = input.ScoreIds;
+            byte[] bytes = Encoding.UTF8.GetBytes("replay only");
+            string path = Path.Combine(input.StagingDirectory, "replay.osr");
+            File.WriteAllBytes(path, bytes);
+            var asset = new ExternalLazerResolvedAsset("Replay", input.ScoreIds.Single().ToString(), "replay.osr",
+                Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), path, bytes.Length);
+            var result = new ExternalLazerAssetResolveResult([asset], [], [], []);
+            return Task.FromResult(new RuntimeResponse(request.Id, RuntimeProtocol.CurrentVersion, true,
+                JsonSerializer.SerializeToElement(result, RuntimeProtocol.JsonOptions)));
+        }
     }
 
     private sealed class ManualTimeProvider(DateTimeOffset now) : TimeProvider

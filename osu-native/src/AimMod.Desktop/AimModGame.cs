@@ -492,7 +492,8 @@ public partial class AimModGame : OsuGameBase
         hubDeviceLinkClient = new HubDeviceLinkClient(hubHttpClient, hubBaseUri, hubCredentialStore);
         var syncClient = new OsuHubSyncClient(hubHttpClient, hubCredentialStore, syncCache, hubBaseUri);
         hubUploadQueue = new OsuHubUploadQueue(Storage.GetFullPath("hub/upload-queue-v1.json", true), syncClient);
-        hubReplayShareService = new OsuHubReplayShareService(localLibrary, () => currentOsuProfile, replayAnalyses, hubUploadQueue);
+        hubReplayShareService = new OsuHubReplayShareService(localLibrary, () => currentOsuProfile, replayAnalyses, hubUploadQueue,
+            () => replayOpenService, Storage.GetFullPath("hub/upload-spool", true));
         hubAutomaticShareService = new HubAutomaticShareService(
             Storage.GetFullPath("hub/automatic-sharing-state.json", true), hubSharingPreferenceStore, hubReplayShareService, () =>
             {
