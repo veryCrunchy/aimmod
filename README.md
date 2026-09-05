@@ -23,12 +23,16 @@ AimMod for osu! is a native osu.Framework desktop application. It combines local
 
 ### Replay analysis
 
+![AimMod replay playing with exact judgements, a seekable timeline and notable moments](public/aimmod-osu-replay-analysis.png)
+
 - Play local replays with the selected skin, audio controls, seeking, and exact judgement timeline
 - Classify misses from cursor and click evidence, including overshoots, undershoots, early clicks, late clicks, and unstable aim
 - Compare repeat attempts on the same difficulty to identify recurring failure points
 - Keep replay state isolated per workspace and pause playback when switching tabs
 
 ### Global coaching and practice
+
+![AimMod global coaching profile with replay-backed insights, recent performance and practice map suggestions](public/aimmod-osu-coaching.png)
 
 - Build a recent skill profile across maps with a configurable time window
 - Analyse replay evidence in the background and cache completed calculations
