@@ -25,6 +25,30 @@ public sealed class LocalScorePpHydrationServiceTests
     }
 
     [Test]
+    public void StableCalculationUsesLegacyScoringAndLocalStaging()
+    {
+        string map = Path.Combine(temporaryDirectory, "map.osu");
+        var stable = validRun(1) with { Origin = LocalLibraryOrigin.Stable, Mods = ["HD"] };
+        var request = LocalScorePpHydrationService.CreateCalculationRequest(stable, map);
+        Assert.That(request.LegacyScore, Is.True);
+        Assert.That(request.BeatmapPath, Is.EqualTo(map));
+        Assert.That(request.Mods, Is.EqualTo(new[] { "HD" }));
+        Assert.That(LocalScorePpHydrationService.CreateCalculationRequest(stable with { Origin = LocalLibraryOrigin.Lazer }, map).LegacyScore, Is.False);
+    }
+
+    [Test]
+    public async Task StableAndLazerScoresDoNotReuseEachOthersPpCache()
+    {
+        string cachePath = Path.Combine(temporaryDirectory, "cache.json");
+        var stable = validRun(1) with { Origin = LocalLibraryOrigin.Stable };
+        await new LocalScorePpHydrationService(temporaryDirectory, cachePath, (_, _) => Task.FromResult<double?>(123)).HydrateAsync([stable]);
+        var result = await new LocalScorePpHydrationService(temporaryDirectory, cachePath, (_, _) => Task.FromResult<double?>(456))
+            .HydrateAsync([stable with { Origin = LocalLibraryOrigin.Lazer }]);
+        Assert.That(result.CalculatedCount, Is.EqualTo(1));
+        Assert.That(result.Runs.Single().PerformancePoints, Is.EqualTo(456));
+    }
+
+    [Test]
     public async Task PreservesStoredPpAndReportsIncompleteScoresWithoutEstimating()
     {
         var service = new LocalScorePpHydrationService(temporaryDirectory, Path.Combine(temporaryDirectory, "cache.json"));

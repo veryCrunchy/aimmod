@@ -88,6 +88,26 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
                 group => group.SelectMany(entry => entry.Item2).ToList(),
                 StringComparer.OrdinalIgnoreCase);
 
+        Volatile.Write(ref progress, new("Finding osu!stable replay files"));
+        var replayPaths = new Dictionary<string, string>(StringComparer.Ordinal);
+        var knownScores = scoresByBeatmap.Values.SelectMany(scores => scores).Select(StableReplayHeaders.Key).ToHashSet(StringComparer.Ordinal);
+        foreach (string folder in new[] { Path.Combine(installRoot, "Data", "r"), Path.Combine(installRoot, "Replays") })
+        {
+            if (!Directory.Exists(folder)) continue;
+            foreach (string path in Directory.EnumerateFiles(folder, "*", new EnumerationOptions { IgnoreInaccessible = true, AttributesToSkip = FileAttributes.ReparsePoint }))
+            {
+                if (!Path.GetExtension(path).Equals(".osr", StringComparison.OrdinalIgnoreCase)) continue;
+                Score? replay = StableReplayHeaders.Read(path);
+                if (replay is null) continue;
+                string key = StableReplayHeaders.Key(replay);
+                replayPaths.TryAdd(key, path);
+                if (!knownScores.Add(key)) continue;
+                if (!scoresByBeatmap.TryGetValue(replay.BeatmapMD5Hash, out var scores))
+                    scoresByBeatmap[replay.BeatmapMD5Hash] = scores = [];
+                scores.Add(replay);
+            }
+        }
+
         var beatmapsByHash = new Dictionary<string, StableBeatmap>(StringComparer.OrdinalIgnoreCase);
         DbBeatmap[] standardMaps = beatmapDatabase.Beatmaps.Where(beatmap => beatmap.Ruleset == Ruleset.Standard).ToArray();
         int checkedMaps = 0;
@@ -95,21 +115,22 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
         {
             Volatile.Write(ref progress, new("Checking osu!stable beatmaps", ++checkedMaps, standardMaps.Length));
             string? beatmapPath = resolveLibraryFile(beatmap.FolderName, beatmap.FileName);
-            if (beatmapPath is null || !File.Exists(beatmapPath) || string.IsNullOrWhiteSpace(beatmap.MD5Hash))
+            if (beatmapPath is null || string.IsNullOrWhiteSpace(beatmap.MD5Hash))
                 continue;
 
             string folderPath = Path.GetDirectoryName(beatmapPath)!;
-            string backgroundPath = resolveBackground(beatmapPath, folderPath);
+            bool installed = File.Exists(beatmapPath);
+            string backgroundPath = installed ? resolveBackground(beatmapPath, folderPath) : string.Empty;
             double stars = beatmap.StandardStarRating.TryGetValue(Mods.None, out double noModStars)
                 ? noModStars
                 : beatmap.StandardStarRating.Values.DefaultIfEmpty().Min();
             int localScoreCount = scoresByBeatmap.GetValueOrDefault(beatmap.MD5Hash)?.Count ?? 0;
-            beatmapsByHash[beatmap.MD5Hash] = new StableBeatmap(beatmap, beatmapPath, backgroundPath, stars, localScoreCount);
+            beatmapsByHash[beatmap.MD5Hash] = new StableBeatmap(beatmap, installed ? beatmapPath : string.Empty, backgroundPath, stars, localScoreCount);
         }
 
         Volatile.Write(ref progress, new("Matching osu!stable scores and replay files"));
         LocalReplay[] replays = scoresByBeatmap
-            .SelectMany(group => group.Value.Select(score => createReplay(score, beatmapsByHash.GetValueOrDefault(group.Key))))
+            .SelectMany(group => group.Value.Select(score => createReplay(score, beatmapsByHash.GetValueOrDefault(group.Key), replayPaths.GetValueOrDefault(StableReplayHeaders.Key(score)))))
             .Where(replay => replay is not null)
             .Select(replay => replay!)
             .ToArray();
@@ -120,6 +141,7 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
 
         Volatile.Write(ref progress, new("Preparing beatmap groups"));
         LocalBeatmapSet[] sets = beatmapsByHash.Values
+            .Where(beatmap => beatmap.BeatmapPath.Length > 0)
             .GroupBy(beatmap => setKey(beatmap.Entry))
             .Select(group => createSet(group, lastPlayedByHash))
             .ToArray();
@@ -167,16 +189,16 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
             representative.BackgroundPath);
     }
 
-    private LocalReplay? createReplay(Score score, StableBeatmap? beatmap)
+    private LocalReplay? createReplay(Score score, StableBeatmap? beatmap, string? indexedReplayPath)
     {
-        if (beatmap is null || score.Ruleset != Ruleset.Standard)
+        if (score.Ruleset != Ruleset.Standard)
             return null;
 
         int totalHits = score.Count300 + score.Count100 + score.Count50 + score.CountMiss;
         double accuracy = totalHits == 0
             ? 0
             : (score.Count300 * 300d + score.Count100 * 100d + score.Count50 * 50d) / (totalHits * 300d);
-        string replayPath = resolveReplayPath(score.ReplayMD5Hash);
+        string replayPath = indexedReplayPath ?? resolveReplayPath(score.ReplayMD5Hash);
         string[] mods = enumerateMods(score.Mods);
         DateTimeOffset playedAt = new(DateTime.SpecifyKind(score.ScoreTimestamp, DateTimeKind.Utc));
         var statistics = new PpScoreStatistics(score.Count300, score.Count100, score.Count50, score.CountMiss, 0, 0);
@@ -185,15 +207,15 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
             stableGuid("score", score.ReplayMD5Hash.Length > 0
                 ? score.ReplayMD5Hash
                 : $"{score.BeatmapMD5Hash}:{score.PlayerName}:{playedAt.UtcTicks}:{score.ReplayScore}"),
-            stableGuid("set", setKey(beatmap.Entry)),
-            stableGuid("beatmap", beatmap.Entry.MD5Hash),
-            beatmap.Entry.Title,
-            beatmap.Entry.Artist,
-            beatmap.Entry.Difficulty,
+            beatmap is null ? Guid.Empty : stableGuid("set", setKey(beatmap.Entry)),
+            stableGuid("beatmap", score.BeatmapMD5Hash),
+            beatmap?.Entry.Title ?? "Beatmap not installed",
+            beatmap?.Entry.Artist ?? string.Empty,
+            beatmap?.Entry.Difficulty ?? string.Empty,
             "osu",
             score.PlayerName,
             playedAt,
-            beatmap.StarRating,
+            beatmap?.Entry.StandardStarRating.GetValueOrDefault(score.Mods, beatmap.StarRating) ?? 0,
             accuracy,
             score.ReplayScore,
             score.Combo,
@@ -201,13 +223,14 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
             null,
             mods,
             replayPath.Length > 0,
-            beatmap.Entry.MD5Hash,
-            beatmap.BackgroundPath,
+            score.BeatmapMD5Hash,
+            beatmap?.BackgroundPath ?? string.Empty,
             statistics,
             OnlineScoreId: Math.Max(0, score.ScoreId),
-            BeatmapPath: beatmap.BeatmapPath,
+            BeatmapPath: beatmap?.BeatmapPath ?? string.Empty,
             ReplayPath: replayPath,
-            Origin: LocalLibraryOrigin.Stable);
+            Origin: LocalLibraryOrigin.Stable,
+            OnlineBeatmapId: Math.Max(0, beatmap?.Entry.BeatmapId ?? 0));
     }
 
     private string resolveReplayPath(string replayHash)
@@ -268,16 +291,10 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
         }
     }
 
-    private static string[] enumerateMods(Mods value) => Enum.GetValues<Mods>()
-        .Where(mod => mod != Mods.None && value.HasFlag(mod) && isAtomicFlag(mod))
-        .Select(mod => mod.ToString())
+    private static string[] enumerateMods(Mods value) => new osu.Game.Rulesets.Osu.OsuRuleset()
+        .ConvertFromLegacyMods((osu.Game.Beatmaps.Legacy.LegacyMods)(int)value)
+        .Select(mod => mod.Acronym)
         .ToArray();
-
-    private static bool isAtomicFlag(Mods mod)
-    {
-        int value = (int)mod;
-        return value > 0 && (value & (value - 1)) == 0;
-    }
 
     private static string setKey(DbBeatmap beatmap) => beatmap.BeatmapSetId > 0
         ? beatmap.BeatmapSetId.ToString()
@@ -299,7 +316,10 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
                && !Path.IsPathFullyQualified(relative);
     }
 
-    private DatabaseStamp getStamp() => new(fileStamp(Path.Combine(installRoot, "osu!.db")), fileStamp(Path.Combine(installRoot, "scores.db")));
+    private DatabaseStamp getStamp() => new(fileStamp(Path.Combine(installRoot, "osu!.db")), fileStamp(Path.Combine(installRoot, "scores.db")),
+        directoryStamp(Path.Combine(installRoot, "Data", "r")), directoryStamp(Path.Combine(installRoot, "Replays")));
+
+    private static long directoryStamp(string path) => Directory.Exists(path) ? Directory.GetLastWriteTimeUtc(path).Ticks : 0;
 
     private static long fileStamp(string path)
     {
@@ -321,5 +341,5 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
         double StarRating,
         int LocalScoreCount);
 
-    private readonly record struct DatabaseStamp(long Beatmaps, long Scores);
+    private readonly record struct DatabaseStamp(long Beatmaps, long Scores, long ReplayCache, long Exports);
 }

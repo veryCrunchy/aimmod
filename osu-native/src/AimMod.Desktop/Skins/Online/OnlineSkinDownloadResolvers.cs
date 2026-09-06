@@ -11,6 +11,7 @@ public enum OnlineSkinDownloadStatus
     TooLarge,
     InvalidArchive,
     NetworkError,
+    Cancelled,
 }
 
 public sealed record OnlineSkinResolvedDownload(

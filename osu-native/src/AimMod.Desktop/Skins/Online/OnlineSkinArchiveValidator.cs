@@ -20,6 +20,22 @@ public sealed record OnlineSkinArchiveValidation(
 
 public sealed class OnlineSkinArchiveValidator
 {
+    private static readonly HashSet<string> blockedExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".exe", ".dll", ".bat", ".cmd", ".ps1", ".psm1", ".psd1", ".ps1xml",
+        ".vbs", ".vbe", ".vb", ".js", ".jse", ".mjs", ".cjs", ".wsf", ".wsh",
+        ".msi", ".msp", ".mst", ".scr", ".com", ".lnk", ".pif", ".hta", ".cpl",
+        ".ocx", ".sys", ".drv", ".reg", ".inf", ".ins", ".isp", ".sct", ".scf",
+        ".url", ".application", ".appref-ms", ".msix", ".msixbundle", ".appx", ".appxbundle",
+        ".sh", ".bash", ".zsh", ".fish", ".command", ".desktop", ".py", ".pyw",
+        ".pyc", ".pl", ".pm", ".rb", ".jar", ".class", ".ps2", ".psc1", ".psc2",
+    };
+
+    private static readonly HashSet<string> skinSections = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "General", "Colours", "Fonts", "Mania", "CatchTheBeat",
+    };
+
     private readonly OnlineSkinArchiveLimits limits;
 
     public OnlineSkinArchiveValidator(OnlineSkinArchiveLimits? limits = null)
@@ -60,8 +76,8 @@ public sealed class OnlineSkinArchiveValidator
     {
         using ZipArchive archive = ZipFile.OpenRead(path);
         long expanded = 0;
-        bool skinIni = false;
-        ZipArchiveEntry? skinIniEntry = null;
+        List<ZipArchiveEntry> skinIniEntries = [];
+        HashSet<string> entryPaths = new(StringComparer.OrdinalIgnoreCase);
         int count = 0;
         foreach (ZipArchiveEntry entry in archive.Entries)
         {
@@ -71,6 +87,11 @@ public sealed class OnlineSkinArchiveValidator
                 return invalid("too_many_entries", "The skin archive contains too many files.");
             if (!safeEntryName(entry.FullName))
                 return invalid("unsafe_entry", "The skin archive contains an unsafe file path.");
+            string normalized = entry.FullName.Replace('\\', '/');
+            if (!entryPaths.Add(normalized.TrimEnd('/')))
+                return invalid("duplicate_entry", "The skin archive contains duplicate file paths.");
+            if (blockedExtensions.Contains(Path.GetExtension(normalized.TrimEnd('/'))))
+                return invalid("unsafe_payload", "The skin archive contains an executable or script file.");
             int unixType = (entry.ExternalAttributes >> 16) & 0xF000;
             if (unixType == 0xA000)
                 return invalid("unsafe_entry", "The skin archive contains a symbolic link.");
@@ -79,20 +100,21 @@ public sealed class OnlineSkinArchiveValidator
                 return invalid("expanded_size", "The expanded skin archive exceeds the configured size limit.");
             if (entry.CompressedLength > 0 && entry.Length / (double)entry.CompressedLength > limits.MaximumCompressionRatio)
                 return invalid("compression_ratio", "The skin archive contains a suspiciously compressed file.");
-            if (string.Equals(Path.GetFileName(entry.FullName), "skin.ini", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(Path.GetFileName(normalized), "skin.ini", StringComparison.OrdinalIgnoreCase))
             {
-                skinIni = true;
-                skinIniEntry ??= entry;
+                skinIniEntries.Add(entry);
             }
         }
-        if (!skinIni)
+        if (skinIniEntries.Count == 0)
             return invalid("skin_ini_missing", "The archive does not contain a skin.ini file.");
-        if (skinIniEntry!.Length > 1024 * 1024)
-            return invalid("skin_ini_size", "The skin.ini file is unexpectedly large.");
-        using (Stream ini = skinIniEntry.Open())
+        foreach (ZipArchiveEntry entry in skinIniEntries)
         {
-            Span<byte> probe = stackalloc byte[1];
-            _ = ini.Read(probe);
+            if (entry.Length > 1024 * 1024)
+                return invalid("skin_ini_size", "The skin.ini file is unexpectedly large.");
+            using Stream ini = entry.Open();
+            using StreamReader reader = new(ini);
+            if (!plausibleSkinIni(reader, cancellationToken))
+                return invalid("skin_ini_invalid", "The skin.ini file does not contain a recognizable skin configuration.");
         }
 
         using FileStream stream = File.OpenRead(path);
@@ -102,12 +124,56 @@ public sealed class OnlineSkinArchiveValidator
 
     private static bool safeEntryName(string name)
     {
-        if (string.IsNullOrWhiteSpace(name) || name.Contains('\0') || name.Contains(':'))
+        if (string.IsNullOrWhiteSpace(name) || name.Any(c => c < 32 || "<>:\"|?*".Contains(c)))
             return false;
         string normalized = name.Replace('\\', '/');
-        if (normalized.StartsWith('/') || normalized.Split('/').Any(part => part == ".."))
+        if (normalized.StartsWith('/'))
             return false;
+        foreach (string part in (normalized.EndsWith('/') ? normalized[..^1] : normalized).Split('/'))
+        {
+            if (part.Length == 0 || part.EndsWith('.') || part.EndsWith(' '))
+                return false;
+            // Windows reserves device names even when an extension is present.
+            string stem = part.Split('.')[0].TrimEnd(' ');
+            if (stem.Equals("CON", StringComparison.OrdinalIgnoreCase)
+                || stem.Equals("PRN", StringComparison.OrdinalIgnoreCase)
+                || stem.Equals("AUX", StringComparison.OrdinalIgnoreCase)
+                || stem.Equals("NUL", StringComparison.OrdinalIgnoreCase)
+                || stem.Equals("CONIN$", StringComparison.OrdinalIgnoreCase)
+                || stem.Equals("CONOUT$", StringComparison.OrdinalIgnoreCase)
+                || (stem.Length == 4
+                    && (stem.StartsWith("COM", StringComparison.OrdinalIgnoreCase) || stem.StartsWith("LPT", StringComparison.OrdinalIgnoreCase))
+                    && "123456789\u00b9\u00b2\u00b3".Contains(stem[3])))
+                return false;
+        }
         return !Path.IsPathRooted(name);
+    }
+
+    private static bool plausibleSkinIni(StreamReader reader, CancellationToken cancellationToken)
+    {
+        bool knownSection = false;
+        bool hasSetting = false;
+        while (reader.ReadLine() is { } line)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (line.Any(c => char.IsControl(c) && c != '\t'))
+                return false;
+            int comment = line.IndexOf("//", StringComparison.Ordinal);
+            if (comment >= 0)
+                line = line[..comment];
+            line = line.Trim();
+            if (line.Length == 0 || line.StartsWith(';'))
+                continue;
+            if (line.StartsWith('['))
+                knownSection = line.EndsWith(']') && skinSections.Contains(line[1..^1].Trim());
+            else if (knownSection)
+            {
+                int separator = line.IndexOf(':');
+                if (separator > 0 && line[..separator].Trim().Length > 0 && line[(separator + 1)..].Trim().Length > 0)
+                    hasSetting = true;
+            }
+        }
+        return hasSetting;
     }
 
     private static OnlineSkinArchiveValidation invalid(string code, string message) => new(false, code, message);

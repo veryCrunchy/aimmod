@@ -131,7 +131,44 @@ public sealed class LocalScorePpHydrationService : ILocalScorePpHydrationService
                         var assetClient = new ExternalLazerAssetClient(runtimeClient);
                         var ppClient = new PpWhatIfClient(runtimeClient);
 
-                        IGrouping<string, LocalReplay>[] hashGroups = missing.GroupBy(run => run.BeatmapHash, StringComparer.OrdinalIgnoreCase).ToArray();
+                        foreach (var group in missing.Where(run => run.Origin == LocalLibraryOrigin.Stable).GroupBy(run => run.BeatmapPath))
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            string staging = Path.Combine(Path.GetDirectoryName(cachePath)!, "stable-pp-" + Guid.NewGuid().ToString("N"));
+                            try
+                            {
+                                if (!Path.IsPathFullyQualified(group.Key) || !File.Exists(group.Key)) continue;
+                                if (new FileInfo(group.Key).Length is <= 0 or > PpCalculationProtocol.MaximumBeatmapBytes) continue;
+                                Directory.CreateDirectory(staging);
+                                string path = Path.Combine(staging, "beatmap.osu");
+                                File.Copy(group.Key, path);
+                                foreach (var run in group)
+                                {
+                                    cancellationToken.ThrowIfCancellationRequested();
+                                    try
+                                    {
+                                        var result = await ppClient.CalculateAsync(CreateCalculationRequest(run, path), cancellationToken).ConfigureAwait(false);
+                                        if (!validPp(result.PerformancePoints)) continue;
+                                        recordCalculated(run, result.PerformancePoints, ppByScore);
+                                        calculated++;
+                                        pendingCacheEntries++;
+                                    }
+                                    catch (Exception error) when (error is not OperationCanceledException) { }
+                                }
+                            }
+                            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+                            finally
+                            {
+                                processed += group.Count();
+                                progress?.Report(new(processed, missing.Length));
+                                try { if (Directory.Exists(staging)) Directory.Delete(staging, true); }
+                                catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+                                if (pendingCacheEntries >= 10 && await trySaveCacheAsync().ConfigureAwait(false)) pendingCacheEntries = 0;
+                            }
+                        }
+
+                        IGrouping<string, LocalReplay>[] hashGroups = missing.Where(run => run.Origin != LocalLibraryOrigin.Stable)
+                            .GroupBy(run => run.BeatmapHash, StringComparer.OrdinalIgnoreCase).ToArray();
                         foreach (IGrouping<string, LocalReplay>[] batch in hashGroups.Chunk(hashes_per_batch))
                         {
                             cancellationToken.ThrowIfCancellationRequested();
@@ -290,8 +327,13 @@ public sealed class LocalScorePpHydrationService : ILocalScorePpHydrationService
             run.MaxCombo,
             statistics.Great, statistics.Ok, statistics.Meh, statistics.Miss,
             statistics.SliderTailHit, statistics.LargeTickMiss);
+        if (run.Origin == LocalLibraryOrigin.Stable) raw += "|stable";
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(raw))).ToLowerInvariant();
     }
+
+    internal static PpWhatIfRequest CreateCalculationRequest(LocalReplay run, string stagedPath) => new(
+        Path.GetDirectoryName(stagedPath)!, stagedPath, run.Mods, run.Accuracy, run.MissCount,
+        run.MaxCombo, run.HitStatistics, run.ModsJson, LegacyScore: run.Origin == LocalLibraryOrigin.Stable);
 
     private sealed record CacheDocument(int Version, IReadOnlyList<CacheEntry> Entries);
     private sealed record CacheEntry(string Key, double PerformancePoints, DateTimeOffset CalculatedAt);

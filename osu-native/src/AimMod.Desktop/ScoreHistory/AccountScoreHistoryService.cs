@@ -11,6 +11,7 @@ public enum ScoreHistoryProvenance
     OnlineBest = 2,
     OnlineRecent = 4,
     OnlineBeatmap = 8,
+    OnlinePublic = 16,
 }
 
 public sealed record ScoreHistoryEntry(
@@ -213,7 +214,7 @@ public static class ScoreHistoryMerger
             if (online is not null)
                 onlineById.Remove(online.OnlineScoreId);
             merged.Add(new ScoreHistoryEntry(
-                $"local:{local.ScoreId:N}", local.OnlineScoreId, online?.OnlineBeatmapId ?? 0, online?.OnlineBeatmapSetId ?? 0,
+                $"local:{local.ScoreId:N}", local.OnlineScoreId, online?.OnlineBeatmapId ?? local.OnlineBeatmapId, online?.OnlineBeatmapSetId ?? 0,
                 local.ScoreId, local.BeatmapId, local.Title, local.Artist, local.Difficulty,
                 online?.PlayedAt ?? local.PlayedAt,
                 online is { StarRating: var onlineStars } && double.IsFinite(onlineStars) ? onlineStars : local.StarRating,

@@ -158,7 +158,8 @@ public sealed record PpWhatIfRequest(
     int MissCount = 0,
     int? MaxCombo = null,
     PpScoreStatistics? Statistics = null,
-    string? ModsJson = null);
+    string? ModsJson = null,
+    bool LegacyScore = false);
 
 public sealed record PpScoreStatistics(
     int Great,

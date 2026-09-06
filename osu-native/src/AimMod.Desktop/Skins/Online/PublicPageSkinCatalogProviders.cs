@@ -234,19 +234,23 @@ internal static class OsuSkinsNetHtmlParser
         long? fileSize = SkinHtml.ReadHumanSize(description);
         bool sensitive = SkinHtml.HasSensitiveMarker(html);
         string? formAction = SkinHtml.FindFormAction(html, "downloadForm");
-        OnlineSkinDownloadTarget? download = formAction is null
+        OnlineSkinDownloadTarget? download = !SkinHtml.TryDownloadUri(source, formAction, out Uri? formUri)
+            || formUri.Host is not ("osuskins.net" or "www.osuskins.net")
+            || formUri.AbsolutePath != source.AbsolutePath.TrimEnd('/') + "/download"
             ? null
             : new OnlineSkinDownloadTarget(
-                new Uri(source, WebUtility.HtmlDecode(formAction)),
+                formUri,
                 OnlineSkinDownloadKind.FormPost,
                 ["osuskins.net", "www.osuskins.net"],
                 BrowserHandoffUri: source);
-        string? archiveLink = SkinHtml.FindDownloadLink(html);
-        if (archiveLink is not null && Uri.TryCreate(source, WebUtility.HtmlDecode(archiveLink), out Uri? archiveUri))
+        string? archiveLink = SkinHtml.FindDownloadLink(html, source);
+        if (SkinHtml.TryDownloadUri(source, archiveLink, out Uri? archiveUri))
         {
             OnlineSkinDownloadTarget target = SkinDownloadTargetClassifier.Classify(archiveUri);
-            if (target.Kind is OnlineSkinDownloadKind.DirectHttps or OnlineSkinDownloadKind.GoogleDrive || MediaFireSkinDownloadResolver.IsPublicPage(target.Uri))
-                download = target;
+            // A provider endpoint may require the selected page's verified POST form.
+            if (download is null || target.Uri.AbsolutePath.EndsWith(".osk", StringComparison.OrdinalIgnoreCase)
+                || target.Uri.Host != source.Host)
+                download = target with { BrowserHandoffUri = source };
         }
         return new OnlineSkinCatalogEntry(
             "osuskins-net", id, name, creator, source, previewUris, attribution(source), download,
@@ -320,8 +324,10 @@ internal static class OsuckNetHtmlParser
         IReadOnlyList<Uri> previews = SkinHtml.SafePreviewUris(
             SkinHtml.ImageSources(html).Concat(SkinHtml.MetaImageSources(html)),
             "skins.osuck.net");
-        string? link = SkinHtml.FindDownloadLink(html);
-        OnlineSkinDownloadTarget? target = link is null ? null : SkinDownloadTargetClassifier.Classify(new Uri(source, WebUtility.HtmlDecode(link)));
+        string? link = SkinHtml.FindDownloadLink(html, source);
+        OnlineSkinDownloadTarget? target = SkinHtml.TryDownloadUri(source, link, out Uri? uri)
+            ? SkinDownloadTargetClassifier.Classify(uri) with { BrowserHandoffUri = source }
+            : null;
         string plain = SkinHtml.Clean(html);
         return new OnlineSkinCatalogEntry(
             "skins-osuck-net", id, SkinHtml.Clean(name), SkinHtml.Clean(creator), source, previews, attribution(source), target,
@@ -500,26 +506,44 @@ internal static class SkinHtml
         return null;
     }
 
-    public static string? FindDownloadLink(string html)
+    public static bool TryDownloadUri(Uri source, string? value, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out Uri? uri)
     {
+        uri = null;
+        return !string.IsNullOrWhiteSpace(value)
+               && Uri.TryCreate(source, value, out uri)
+               && uri.Scheme == Uri.UriSchemeHttps
+               && uri.Port == 443
+               && string.IsNullOrEmpty(uri.UserInfo);
+    }
+
+    public static string? FindDownloadLink(string html, Uri? source = null)
+    {
+        Uri baseUri = source ?? new Uri("https://osuskins.net/");
         string? fallback = null;
+        int bestRank = 0;
         foreach (Match match in anchor.Matches(html ?? string.Empty))
         {
             string? href = ReadAttribute(match.Groups["attrs"].Value, "href");
             if (string.IsNullOrWhiteSpace(href) || href.StartsWith('#') || href.StartsWith('?')
-                || !Uri.TryCreate(new Uri("https://osuskins.net/"), WebUtility.HtmlDecode(href), out Uri? uri)
-                || uri.Scheme != Uri.UriSchemeHttps || uri.AbsolutePath == "/")
+                || !TryDownloadUri(baseUri, href, out Uri? uri)
+                || uri.AbsolutePath == "/")
                 continue;
 
-            // Catalogue sort links and fragment controls are not archive downloads.
-            if (uri.AbsolutePath.EndsWith(".osk", StringComparison.OrdinalIgnoreCase)
-                || uri.Host is "mega.nz" or "www.mega.nz" or "drive.google.com" or "drive.usercontent.google.com"
-                || MediaFireSkinDownloadResolver.IsPublicPage(uri))
-                return href;
-            if (uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries)
-                    .Any(segment => segment.Equals("download", StringComparison.OrdinalIgnoreCase)
-                                    || segment.Equals("downloads", StringComparison.OrdinalIgnoreCase)))
-                fallback ??= href;
+            OnlineSkinDownloadTarget target = SkinDownloadTargetClassifier.Classify(uri);
+            bool archive = uri.AbsolutePath.EndsWith(".osk", StringComparison.OrdinalIgnoreCase);
+            bool selectedEndpoint = source is not null
+                && uri.Host == source.Host
+                && uri.AbsolutePath == source.AbsolutePath.TrimEnd('/') + "/download"
+                && target.Kind == OnlineSkinDownloadKind.DirectHttps;
+            int rank = archive && target.Kind == OnlineSkinDownloadKind.DirectHttps ? 3
+                : archive || target.Kind is OnlineSkinDownloadKind.GoogleDrive or OnlineSkinDownloadKind.Mega
+                          || MediaFireSkinDownloadResolver.IsPublicPage(uri) ? 2
+                : selectedEndpoint ? 1 : 0;
+            if (rank > bestRank)
+            {
+                fallback = href;
+                bestRank = rank;
+            }
         }
         return fallback;
     }

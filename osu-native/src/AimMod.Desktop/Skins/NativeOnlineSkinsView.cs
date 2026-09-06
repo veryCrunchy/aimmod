@@ -16,6 +16,7 @@ namespace AimMod.Desktop.Skins;
 public partial class NativeOnlineSkinsView : CompositeDrawable
 {
     private const float gap = AimModVisualStyle.RelatedSpacing;
+    private const string browseProviderId = "browse-provider";
 
     private readonly OnlineSkinCatalogBackend? backend;
     private IOnlineSkinArchiveDestination? destination;
@@ -39,6 +40,8 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
     private readonly Container detailPanel;
     private readonly Container detailContent;
     private readonly OnlinePreviewGallery gallery;
+    private readonly Container artwork;
+    private readonly FillFlowContainer detailActions;
     private readonly TruncatingSpriteText selectedName;
     private readonly TruncatingSpriteText selectedCreator;
     private readonly TruncatingSpriteText selectedMetadata;
@@ -58,6 +61,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
     private int revision;
     private CancellationTokenSource? selectionCancellation;
     private bool preparing;
+    private bool browseOnly;
 
     public NativeOnlineSkinsView(
         OnlineSkinCatalogBackend? backend,
@@ -174,13 +178,13 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
                                     AutoSizeAxes = Axes.Y,
                                     Children = new Drawable[]
                                     {
-                                        new Container
+                                        artwork = new Container
                                         {
                                             RelativeSizeAxes = Axes.X,
                                             Height = 258,
                                             Child = gallery = new OnlinePreviewGallery(backend?.Screenshots),
                                         },
-                                        new FillFlowContainer
+                                        detailActions = new FillFlowContainer
                                         {
                                             RelativeSizeAxes = Axes.X,
                                             AutoSizeAxes = Axes.Y,
@@ -392,14 +396,15 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
         if (requestRevision != revision)
             return;
         loading.HideLoading();
-        loaded = response.Items
+        var skins = response.Items
             .GroupBy(item => $"{item.Name}\n{item.Creator}", StringComparer.OrdinalIgnoreCase)
             .Select(group => group.First())
             .ToArray();
+        loaded = BrowserFallbackEntries(response).Concat(skins).ToArray();
         string[] unavailable = response.Providers.Where(item => item.Page.Status != OnlineSkinCatalogStatus.Success).Select(item => item.ProviderName).ToArray();
         status.Text = unavailable.Length == 0
-            ? $"{loaded.Count:N0} skins from {response.Providers.Count:N0} public catalogs"
-            : $"{loaded.Count:N0} skins; {string.Join(", ", unavailable)} unavailable";
+            ? $"{skins.Length:N0} skins from {response.Providers.Count:N0} public catalogs"
+            : $"{skins.Length:N0} skins; browse {string.Join(", ", unavailable)} to download";
         listState.SetState(
             FontAwesome.Solid.Search,
             "No online skins found",
@@ -428,12 +433,13 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
         results.AddRange(loaded.Select(item => new OnlineSkinRow(item, ReferenceEquals(item, selected), () => select(item), backend?.Screenshots)));
     }
 
-    private void select(OnlineSkinCatalogEntry? item)
+    private void select(OnlineSkinCatalogEntry? item, bool readDetails = true)
     {
         selectionCancellation?.Cancel();
         selectionCancellation?.Dispose();
         selectionCancellation = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
         preparing = false;
+        browseOnly = item?.Id == browseProviderId;
         loading.HideLoading();
         _ = releasePreparedPreview();
         selected = item;
@@ -441,7 +447,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
         downloadStatus.Clear();
         refreshRows();
         updateDetails();
-        if (item is not null)
+        if (item is not null && readDetails && !browseOnly)
             _ = loadDetails(item, selectionCancellation.Token);
     }
 
@@ -476,20 +482,25 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
     private void updateDetails()
     {
         OnlineSkinCatalogEntry? item = selected;
+        bool canBrowse = browseOnly || item is null && browserProvider() is not null;
+        bool hasArtwork = !canBrowse && item?.PreviewUris.Count > 0;
+        artwork.Alpha = hasArtwork ? 1 : 0;
+        artwork.Height = hasArtwork ? 258 : 0;
+        detailActions.Y = hasArtwork ? 272 : 16;
         gallery.SetImages(item?.PreviewUris ?? []);
-        selectedName.Text = item?.Name ?? "Select an online skin";
-        selectedCreator.Text = item is null ? "Screenshots and source details appear here." : $"by {item.Creator}";
+        selectedName.Text = canBrowse ? $"Browse {item?.Attribution.ProviderName ?? provider.Value}" : item?.Name ?? "Select an online skin";
+        selectedCreator.Text = canBrowse ? "Choose a skin in the download window." : item is null ? "Screenshots and source details appear here." : $"by {item.Creator}";
         selectedMetadata.Text = item is null
             ? string.Empty
             : string.Join("  ·  ", metadata(item));
-        attribution.Text = item?.Attribution.Notice ?? string.Empty;
-        bool direct = backend?.CanDownload(item?.Download) == true;
+        attribution.Text = canBrowse ? "" : item?.Attribution.Notice ?? string.Empty;
+        bool downloadable = canBrowse || backend?.CanPrepare(item) == true;
         bool available = preparedPreview?.IsAvailable == true;
-        previewButton.SetState(!preparing && item?.Download is not null && !available,
-            !direct ? "Download unavailable" : item?.IsSensitive == true ? "Confirm & download" : "Download skin");
-        bool canPrepare = direct && item?.IsSensitive != true;
-        saveButton.SetState(!preparing && (available || canPrepare), available ? "Save .osk" : "Download & save");
-        importButton.SetState(!preparing && (available || canPrepare) && destination is not null, available ? "Import into osu!" : "Download & import");
+        previewButton.SetState(!preparing && downloadable && !available,
+            !downloadable ? "Download unavailable" : canBrowse ? "Browse & download" : item?.IsSensitive == true ? "Confirm & download" : "Download skin");
+        bool canPrepare = downloadable && item?.IsSensitive != true;
+        saveButton.SetState(!preparing && (available || canPrepare), available ? "Save .osk" : canBrowse ? "Browse & save" : "Download & save");
+        importButton.SetState(!preparing && (available || canPrepare) && destination is not null, available ? "Import into osu!" : canBrowse ? "Browse & import" : "Download & import");
         sourceButton.SetState(item is not null, handoffUri is null ? "Open source page" : "Open download page");
     }
 
@@ -515,9 +526,15 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
 
     private void prepareSelected(Action? afterPrepared)
     {
-        if (selected?.Download is null || backend is null || preparing)
+        if (selected is null && !preparing && browserProvider() is { } source)
+        {
+            select(new(source.Id, "browser-" + Guid.NewGuid().ToString("N"), "Downloaded skin", source.DisplayName,
+                source.HomePage, [], new(source.Id, source.DisplayName, source.HomePage, source.DisplayName)), readDetails: false);
+            browseOnly = true;
+        }
+        if (selected is null || backend is null || preparing)
             return;
-        if (!backend.CanDownload(selected.Download))
+        if (!backend.CanPrepare(selected))
         {
             setDownloadStatus("No automatic download is available for this source. Try Creator releases.");
             updateDetails();
@@ -526,14 +543,37 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
         preparing = true;
         loading.ShowLoading("Downloading skin", "Downloading and checking the skin archive");
         updateDetails();
-        _ = prepareAsync(selected, selectionCancellation?.Token ?? lifetime.Token, afterPrepared);
+        _ = prepareAsync(selected, selectionCancellation?.Token ?? lifetime.Token, afterPrepared, browseOnly);
     }
 
-    private async Task prepareAsync(OnlineSkinCatalogEntry item, CancellationToken cancellationToken, Action? afterPrepared)
+    private IOnlineSkinCatalogProvider? browserProvider() => backend?.Catalog.Providers.FirstOrDefault(source =>
+        source.DisplayName == provider.Value && source.Id is "osuskins-net" or "skins-osuck-net");
+
+    internal static IReadOnlyList<OnlineSkinCatalogEntry> BrowserFallbackEntries(OnlineSkinCatalogSearchResult response) =>
+        response.Providers.Where(source => source.ProviderId is "osuskins-net" or "skins-osuck-net"
+            && (source.Page.Status != OnlineSkinCatalogStatus.Success || source.Page.Items.Count == 0))
+        .Select(source => new OnlineSkinCatalogEntry(source.ProviderId, browseProviderId,
+            $"Browse {source.ProviderName}", "Download, save or import a skin", source.HomePage, [],
+            new(source.ProviderId, source.ProviderName, source.HomePage, string.Empty)))
+        .ToArray();
+
+    private async Task prepareAsync(OnlineSkinCatalogEntry item, CancellationToken cancellationToken, Action? afterPrepared, bool browserOnly)
     {
         try
         {
-            OnlineSkinPreviewResult result = await backend!.Previews.PrepareAsync(item, allowSensitive: item.IsSensitive, cancellationToken).ConfigureAwait(false);
+            var progress = new Progress<string>(message =>
+            {
+                if (!IsDisposed)
+                    Schedule(() =>
+                    {
+                        if (IsDisposed || cancellationToken.IsCancellationRequested || !preparing || selected?.Id != item.Id || selected.ProviderId != item.ProviderId) return;
+                        loading.SetProgress(message, 0, 0);
+                        setDownloadStatus(message);
+                    });
+            });
+            OnlineSkinPreviewResult result = browserOnly
+                ? await backend!.Previews.PrepareFromBrowserAsync(item, cancellationToken, progress).ConfigureAwait(false)
+                : await backend!.Previews.PrepareAsync(item, allowSensitive: item.IsSensitive, cancellationToken, progress).ConfigureAwait(false);
             if (!IsDisposed && !cancellationToken.IsCancellationRequested)
                 Schedule(() =>
                 {
@@ -546,10 +586,15 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
                     loading.HideLoading();
                     preparing = false;
                     preparedPreview = result.Preview;
+                    if (result.Preview is not null)
+                    {
+                        selected = result.Preview.Skin;
+                        browseOnly = false;
+                    }
                     handoffUri = result.Status == OnlineSkinDownloadStatus.ExternalBrowserRequired ? result.ExternalUri : null;
                     status.Text = result.Status switch
                     {
-                        OnlineSkinDownloadStatus.Success => $"{item.Name} is downloaded, validated, and ready.",
+                        OnlineSkinDownloadStatus.Success => $"{result.Preview!.Skin.Name} is ready.",
                         OnlineSkinDownloadStatus.ExternalBrowserRequired => result.Message ?? "This download must be completed in your browser.",
                         _ => result.Message ?? "The skin package could not be prepared.",
                     };
@@ -761,7 +806,9 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
                     Masking = true,
                     Child = skin.PreviewUris.FirstOrDefault() is Uri preview
                         ? new SkinScreenshot(screenshots, preview) { RelativeSizeAxes = Axes.Both }
-                        : new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelHover },
+                        : skin.Id == browseProviderId
+                            ? new SpriteIcon { Icon = FontAwesome.Solid.Globe, Anchor = Anchor.Centre, Origin = Anchor.Centre, Size = new(30), Colour = AimModPalette.Cyan }
+                            : new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelHover },
                 },
                 new Box
                 {
@@ -771,7 +818,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
                 },
                 name = text(14, AimModPalette.Text, "SemiBold", skin.Name).With(drawable => drawable.Position = new(158, 18)),
                 creator = text(11, AimModPalette.Muted, "Regular", $"{skin.Creator}  ·  {skin.Attribution.ProviderName}").With(drawable => drawable.Position = new(158, 45)),
-                new AimModPill(skin.IsSensitive ? "sensitive" : "online", skin.IsSensitive ? AimModPillTone.Accent : AimModPillTone.Info)
+                new AimModPill(skin.Id == browseProviderId ? "browse" : skin.IsSensitive ? "sensitive" : "online", skin.IsSensitive ? AimModPillTone.Accent : AimModPillTone.Info)
                 {
                     Anchor = Anchor.BottomRight,
                     Origin = Anchor.BottomRight,

@@ -1,5 +1,6 @@
 using System.Reflection;
 using AimMod.Desktop.Skins;
+using AimMod.Desktop.Skins.Online;
 using NUnit.Framework;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
@@ -10,6 +11,38 @@ namespace AimMod.Desktop.Tests;
 [TestFixture]
 public sealed class SkinInspectorLayoutTests
 {
+    [TestCase(OnlineSkinCatalogStatus.Unavailable)]
+    [TestCase(OnlineSkinCatalogStatus.Success)]
+    [TestCase(OnlineSkinCatalogStatus.InvalidResponse)]
+    public void EmptyOsuckResultsOfferAnExplicitBrowserRoute(OnlineSkinCatalogStatus status)
+    {
+        var response = new OnlineSkinCatalogSearchResult([
+            new("skins-osuck-net", "skins.osuck.net", new("https://skins.osuck.net/"), new(status, [], 1, 30, false))]);
+        var entry = NativeOnlineSkinsView.BrowserFallbackEntries(response).Single();
+        Assert.That(entry.Name, Is.EqualTo("Browse skins.osuck.net"));
+        Assert.That(entry.DetailsUri.AbsoluteUri, Is.EqualTo("https://skins.osuck.net/"));
+        using var view = new NativeOnlineSkinsView(null, null, Path.GetTempPath());
+        typeof(NativeOnlineSkinsView).GetMethod("select", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(view, [entry, true]);
+        Assert.Multiple(() =>
+        {
+            Assert.That(field<bool>(view, "browseOnly"), Is.True);
+            Assert.That(field<Container>(view, "artwork").Height, Is.Zero);
+            Assert.That(field<FillFlowContainer>(view, "detailActions").Y, Is.EqualTo(16));
+        });
+    }
+
+    [Test]
+    public void BrowserFallbackDoesNotReplaceAvailableSkinsOrInventOtherProviders()
+    {
+        var entry = new OnlineSkinCatalogEntry("skins-osuck-net", "123", "Test", "Creator", new("https://skins.osuck.net/skins/123"), [],
+            new("skins-osuck-net", "skins.osuck.net", new("https://skins.osuck.net/"), ""));
+        var response = new OnlineSkinCatalogSearchResult([
+            new("skins-osuck-net", "skins.osuck.net", new("https://skins.osuck.net/"), new(OnlineSkinCatalogStatus.Success, [entry], 1, 30, false)),
+            new("creator-releases", "Creator releases", new("https://github.com/"), new(OnlineSkinCatalogStatus.Unavailable, [], 1, 30, false))]);
+        Assert.That(NativeOnlineSkinsView.BrowserFallbackEntries(response), Is.Empty);
+    }
+
     [Test]
     public void InstalledSearchBoxFillsOnlyItsFixedHeightPanel()
     {

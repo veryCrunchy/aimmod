@@ -36,6 +36,20 @@ public sealed class CachedLocalLibrarySourceTests
     }
 
     [Test]
+    public async Task ReplayDirectoryChangesInvalidateCachedPagesAcrossRestarts()
+    {
+        string exports = Directory.CreateDirectory(Path.Combine(root, "Replays")).FullName;
+        var first = new CountingSource();
+        var cache = new CachedLocalLibrarySource(first, Path.Combine(root, "cache"), database, exports);
+        await cache.SearchReplaysAsync(new());
+        File.WriteAllText(Path.Combine(exports, "new.osr"), "synthetic");
+        Directory.SetLastWriteTimeUtc(exports, DateTime.UtcNow.AddSeconds(5));
+        var next = new CountingSource();
+        await new CachedLocalLibrarySource(next, Path.Combine(root, "cache"), database, exports).SearchReplaysAsync(new());
+        Assert.That(next.Calls, Is.EqualTo(1));
+    }
+
+    [Test]
     public async Task DatabaseChangesAndDifferentQueriesRequireFreshResults()
     {
         var source = new CountingSource();

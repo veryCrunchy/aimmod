@@ -6,6 +6,77 @@ namespace AimMod.Desktop.Tests;
 [TestFixture]
 public sealed class OnlineSkinCatalogParserTests
 {
+    [TestCase("https://mega.nz/file/abc#key")]
+    [TestCase("https://drive.google.com/file/d/0123456789abcdef/view")]
+    [TestCase("https://unknown.example/skin.osk")]
+    public void OriginalDirectArchivesWinOverEarlierExternalLinks(string external)
+    {
+        const string original = "https://github.com/creator/skin/releases/download/v1/original.osk";
+        string html = $"<a href='{external}'>Mirror</a><a href='{original}'>Original</a>" +
+            "<a href='https://cdn.osuskins.net/files/other.osk'>Other</a>";
+        var source = new Uri("https://osuskins.net/skin/abc123");
+        var entry = OsuSkinsNetHtmlParser.ParseDetails(CatalogFixtures.OsuSkinsDetails + html, source, "abc123");
+        Assert.That(entry?.Download?.Uri.AbsoluteUri, Is.EqualTo(original));
+        Assert.That(entry?.Download?.Kind, Is.EqualTo(OnlineSkinDownloadKind.DirectHttps));
+        Assert.That(entry?.Download?.BrowserHandoffUri, Is.EqualTo(source));
+    }
+
+    [TestCase("https://mega.nz/file/abc#key", OnlineSkinDownloadKind.Mega)]
+    [TestCase("https://drive.google.com/file/d/0123456789abcdef/view", OnlineSkinDownloadKind.GoogleDrive)]
+    [TestCase("https://unknown.example/skin.osk", OnlineSkinDownloadKind.External)]
+    public void ExternalDownloadsKeepSelectedDetailPageForBrowser(string link, OnlineSkinDownloadKind kind)
+    {
+        var source = new Uri("https://osuskins.net/skin/abc123");
+        var entry = OsuSkinsNetHtmlParser.ParseDetails(CatalogFixtures.OsuSkinsDetails + $"<a href='{link}'>Download</a>", source, "abc123");
+        Assert.That(entry?.Download?.Kind, Is.EqualTo(kind));
+        Assert.That(entry?.Download?.BrowserHandoffUri, Is.EqualTo(source));
+    }
+
+    [TestCase("https://osuskins.net:444/skin/abc123/download")]
+    [TestCase("https://user@osuskins.net/skin/abc123/download")]
+    [TestCase("https://osuskins.net.evil.example/skin/abc123/download")]
+    [TestCase("http://osuskins.net/skin/abc123/download")]
+    [TestCase("/skin/another/download")]
+    [TestCase("https://[")]
+    public void InvalidOrUnrelatedFormsAreNotDownloadTargets(string action)
+    {
+        string html = CatalogFixtures.OsuSkinsDetails.Replace("/skin/abc123/download", action, StringComparison.Ordinal);
+        Assert.That(OsuSkinsNetHtmlParser.ParseDetails(html, new Uri("https://osuskins.net/skin/abc123"), "abc123")?.Download, Is.Null);
+    }
+
+    [TestCase("https://user@cdn.osuskins.net/files/skin.osk")]
+    [TestCase("https://cdn.osuskins.net:444/files/skin.osk")]
+    [TestCase("http://cdn.osuskins.net/files/skin.osk")]
+    [TestCase("https://[")]
+    [TestCase("/downloads/help")]
+    [TestCase("/skins/184/download")]
+    [TestCase("/skins/184?tab=downloads")]
+    public void InvalidAndUnrelatedLinksCannotHideSelectedDownload(string link)
+    {
+        var source = new Uri("https://skins.osuck.net/skins/183");
+        string html = $"<a href='{link}'>100 downloads</a><a href='/skins/183/download'>Download</a>";
+        Assert.That(SkinHtml.FindDownloadLink(html, source), Is.EqualTo("/skins/183/download"));
+    }
+
+    [Test]
+    public void ProviderAnchorDoesNotReplaceVerifiedPostForm()
+    {
+        string html = CatalogFixtures.OsuSkinsDetails + "<a href='/skin/abc123/download'>Download</a>";
+        var entry = OsuSkinsNetHtmlParser.ParseDetails(html, new Uri("https://osuskins.net/skin/abc123"), "abc123");
+        Assert.That(entry?.Download?.Kind, Is.EqualTo(OnlineSkinDownloadKind.FormPost));
+    }
+
+    [Test]
+    public void OsuckClientRenderedShellDoesNotInventArchiveOrSkinMetadata()
+    {
+        const string html = """
+            <html><head><script type="application/ld+json">{"@type":"WebSite","name":"osu! skins","url":"https://skins.osuck.net/"}</script></head>
+            <body><div id="__nuxt"></div><script type="application/json" data-nuxt-data="nuxt-app" data-ssr="false" id="__NUXT_DATA__">[{"serverRendered":1},false]</script></body></html>
+            """;
+        Assert.That(OsuckNetHtmlParser.ParseDetails(html, new Uri("https://skins.osuck.net/skins/183"), "183"), Is.Null);
+        Assert.That(SkinHtml.FindDownloadLink(html), Is.Null);
+    }
+
     [Test]
     public void RelatedSkinDownloadCountsCannotReplaceSelectedSkinDownload()
     {
@@ -129,6 +200,7 @@ public sealed class OnlineSkinCatalogParserTests
         OnlineSkinCatalogEntry? entry = OsuckNetHtmlParser.ParseDetails(fixture, new Uri("https://skins.osuck.net/skins/183"), "183");
 
         Assert.That(entry?.Download?.Kind, Is.EqualTo(expected));
+        Assert.That(entry?.Download?.BrowserHandoffUri, Is.EqualTo(new Uri("https://skins.osuck.net/skins/183")));
     }
 }
 

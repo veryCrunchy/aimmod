@@ -7,6 +7,27 @@ namespace AimMod.Desktop.Tests;
 public sealed class CompositeLocalLibrarySourceTests
 {
     [Test]
+    public async Task AddingLazerPreservesStableAndExistingLibraries()
+    {
+        var existing = new InMemoryLocalLibrarySource([map(Guid.NewGuid(), Guid.NewGuid(), 10, "")], []);
+        var stable = new InMemoryLocalLibrarySource([map(Guid.NewGuid(), Guid.NewGuid(), 20, "")],
+            [replay(Guid.NewGuid(), true, LocalLibraryOrigin.Stable)]);
+        var lazer = new InMemoryLocalLibrarySource([map(Guid.NewGuid(), Guid.NewGuid(), 30, "")], []);
+        var source = new SwitchableLocalLibrarySource(existing);
+        source.SwitchTo(new CompositeLocalLibrarySource([source.Current, stable]));
+        source.SwitchTo(new CompositeLocalLibrarySource([lazer, source.Current]));
+
+        var maps = await source.SearchBeatmapSetsAsync(new LocalLibraryQuery());
+        var replays = await source.SearchReplaysAsync(new LocalLibraryQuery());
+        Assert.Multiple(() =>
+        {
+            Assert.That(maps.Items.Select(item => item.OnlineId), Is.EquivalentTo(new[] { 10, 20, 30 }));
+            Assert.That(replays.Items.Single().Origin, Is.EqualTo(LocalLibraryOrigin.Stable));
+            Assert.That(replays.Items.Single().HasReplayFile, Is.True);
+        });
+    }
+
+    [Test]
     public async Task UnresponsiveInstallationDoesNotHideAvailableMaps()
     {
         var source = new CompositeLocalLibrarySource(new ILocalLibrarySource[]

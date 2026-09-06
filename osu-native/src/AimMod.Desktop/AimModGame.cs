@@ -80,6 +80,8 @@ public partial class AimModGame : OsuGameBase
     private LazerPreferencesMonitor? lazerPreferencesMonitor;
     private OfficialOsuApiClient? officialApiClient;
     private IAccountScoreHistoryService? accountScoreHistoryService;
+    private IAccountScoreHistoryService? stablePublicScoreHistoryService;
+    private Uri hubBaseUri = OsuHubSyncClient.DefaultBaseUri;
     private IOfficialBeatmapDiscoveryClient? officialBeatmapDiscoveryClient;
     private OnlineBeatmapImportService? onlineBeatmapImportService;
     private ILazerBeatmapInstallService? lazerBeatmapInstallService;
@@ -289,11 +291,22 @@ public partial class AimModGame : OsuGameBase
                 () => new OsuStableDiscoveryService(new PhysicalOsuDiscoveryFileSystem()).Discover(platform, environment),
                 cancellationToken).ConfigureAwait(false);
             OsuStableInstallation? stable = stableDiscovery.CompleteInstallations.FirstOrDefault();
+            Schedule(() => header.SetStableAccount(stable?.RememberedUsername));
+            if (stable is not null)
+            {
+                localScorePpHydrationService = new LocalScorePpHydrationService(
+                    stable.CanonicalPath, Storage.GetFullPath("cache/local-score-pp-v1.json", true));
+                stablePublicScoreHistoryService = new HubPublicAccountScoreHistoryService(hubHttpClient!, hubBaseUri,
+                    stable.RememberedUsername, userId: stable.RememberedUserId);
+                accountScoreHistoryService = stablePublicScoreHistoryService;
+                _ = refreshStablePublicProfile(stablePublicScoreHistoryService, cancellationToken);
+            }
             ILocalLibrarySource? stableLibrary = stable is null
                 ? null
                 : new CachedLocalLibrarySource(new OsuStableLocalLibrarySource(stable.CanonicalPath, stable.SongsPath),
-                    Storage.GetFullPath("cache/library-stable-v1", true),
-                    Path.Combine(stable.CanonicalPath, "osu!.db"), Path.Combine(stable.CanonicalPath, "scores.db"));
+                    Storage.GetFullPath("cache/library-stable-v2", true),
+                    Path.Combine(stable.CanonicalPath, "osu!.db"), Path.Combine(stable.CanonicalPath, "scores.db"),
+                    Path.Combine(stable.CanonicalPath, "Data", "r"), Path.Combine(stable.CanonicalPath, "Replays"));
 
             var lazerInstall = new LazerBeatmapInstallService(LazerHandoffDirectory);
             beatmapDestinationService = new OsuBeatmapDestinationService(
@@ -384,7 +397,6 @@ public partial class AimModGame : OsuGameBase
                 cancellationToken).ConfigureAwait(false);
             lazerSessionMonitor = monitor;
             officialApiClient = new OfficialOsuApiClient(monitor);
-            accountScoreHistoryService = new OfficialAccountScoreHistoryService(() => officialApiClient);
             officialBeatmapDiscoveryClient = new CachedOfficialBeatmapDiscoveryClient(
                 new OfficialBeatmapDiscoveryClient(monitor),
                 Storage.GetFullPath("cache/official-beatmap-search-v1.json", true));
@@ -453,17 +465,18 @@ public partial class AimModGame : OsuGameBase
 
     private void applyLazerSessionState(LazerSessionState state)
     {
+        accountScoreHistoryService = state.Status == LazerSessionStatus.SignedIn && officialApiClient is not null
+            ? new OfficialAccountScoreHistoryService(() => officialApiClient)
+            : stablePublicScoreHistoryService;
         header.SetSessionState(state);
 
         profileRefreshCancellation?.Cancel();
         profileRefreshCancellation?.Dispose();
         profileRefreshCancellation = null;
+        currentOsuProfile = null;
 
         if (state.Status != LazerSessionStatus.SignedIn || officialApiClient is null)
-        {
-            currentOsuProfile = null;
             return;
-        }
 
         profileRefreshCancellation = CancellationTokenSource.CreateLinkedTokenSource(appLifetime.Token);
         _ = refreshOfficialProfile(state.Revision, profileRefreshCancellation.Token);
@@ -502,9 +515,21 @@ public partial class AimModGame : OsuGameBase
         }
     }
 
+    private async Task refreshStablePublicProfile(IAccountScoreHistoryService service, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await service.FetchAccountAsync(cancellationToken).ConfigureAwait(false);
+            if (!IsDisposed && result.Profile is { } profile)
+                Schedule(() => header.SetPublicProfile(profile));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+    }
+
     private void initialiseHubServices()
     {
-        Uri hubBaseUri = OsuHubSyncClient.DefaultBaseUri;
         string? configuredHubUrl = Environment.GetEnvironmentVariable("AIMMOD_HUB_URL");
         if (Uri.TryCreate(configuredHubUrl, UriKind.Absolute, out Uri? configured)
             && (string.Equals(configured.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
@@ -1542,6 +1567,9 @@ public partial class AimModGame : OsuGameBase
     private partial class HeaderBar : Container
     {
         private readonly TruncatingSpriteText sessionState;
+        private string? stableUsername;
+        private OsuProfile? publicProfile;
+        private LazerSessionStatus sessionStatus = LazerSessionStatus.Unavailable;
         private readonly Drawable productPill;
         private readonly FillFlowContainer<Drawable> navigation;
 
@@ -1632,12 +1660,16 @@ public partial class AimModGame : OsuGameBase
 
         public void SetSessionState(LazerSessionState state)
         {
+            sessionStatus = state.Status;
             sessionState.Text = state.Status switch
             {
                 LazerSessionStatus.SignedIn => "Checking osu! account...",
+                _ when publicProfile is not null => publicProfile.Statistics?.GlobalRank is int rank and > 0
+                    ? $"{publicProfile.Username}  ·  #{rank:N0} (public)"
+                    : $"{publicProfile.Username} (public profile)",
                 LazerSessionStatus.Remembered => "osu! online session expired",
                 LazerSessionStatus.SignedOut => "osu! signed out",
-                _ => "osu!lazer not connected",
+                _ => stableUsername is null ? "osu!lazer not connected" : $"{stableUsername} (osu!stable, local)",
             };
             sessionState.Colour = state.Status == LazerSessionStatus.SignedIn ? AimModPalette.Cyan : AimModPalette.Muted;
         }
@@ -1648,6 +1680,15 @@ public partial class AimModGame : OsuGameBase
                 ? $"{profile.Username}  ·  #{rank:N0}"
                 : profile.Username;
             sessionState.Colour = AimModPalette.Cyan;
+        }
+
+        public void SetStableAccount(string? username) => stableUsername = username;
+
+        public void SetPublicProfile(OsuProfile profile)
+        {
+            publicProfile = profile;
+            if (sessionStatus != LazerSessionStatus.SignedIn)
+                SetSessionState(new LazerSessionState(sessionStatus, null, 0));
         }
 
         public void SetAccountUnavailable()

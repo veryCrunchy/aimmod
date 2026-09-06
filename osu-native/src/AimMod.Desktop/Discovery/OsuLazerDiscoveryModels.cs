@@ -68,6 +68,8 @@ public interface IOsuDiscoveryFileSystem
 
     string ReadAllText(string path, int maximumBytes);
 
+    byte[] ReadAllBytes(string path, int maximumBytes) => [];
+
     IEnumerable<string> EnumerateFiles(string directory, string searchPattern) => [];
 
     DateTime GetLastWriteTimeUtc(string path) => DateTime.MinValue;

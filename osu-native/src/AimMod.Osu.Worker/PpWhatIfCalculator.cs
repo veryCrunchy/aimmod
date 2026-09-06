@@ -22,7 +22,8 @@ internal sealed record ValidatedPpInput(
     int MissCount,
     int? MaxCombo,
     PpScoreStatistics? Statistics,
-    string? ModsJson);
+    string? ModsJson,
+    bool LegacyScore = false);
 
 internal static class PpInputValidator
 {
@@ -61,7 +62,7 @@ internal static class PpInputValidator
         if (request.ModsJson is { Length: > 16_384 })
             throw new RuntimeCommandException("input_invalid", "PP calculation mod settings are too large.");
 
-        return new ValidatedPpInput(stagingDirectory, beatmapPath, mods, request.Accuracy, request.MissCount, request.MaxCombo, request.Statistics, request.ModsJson);
+        return new ValidatedPpInput(stagingDirectory, beatmapPath, mods, request.Accuracy, request.MissCount, request.MaxCombo, request.Statistics, request.ModsJson, request.LegacyScore);
     }
 
     private static string validateDirectory(string path)
@@ -119,6 +120,8 @@ internal sealed class OfficialPpWhatIfCalculator : IPpWhatIfCalculator
 
             var ruleset = new OsuRuleset();
             Mod[] mods = createMods(ruleset, input);
+            if (input.LegacyScore && !mods.Any(mod => mod is ModClassic))
+                mods = [.. mods, ruleset.CreateMod<ModClassic>() ?? throw new RuntimeCommandException("unsupported_mod", "Classic scoring is unavailable.")];
             var workingBeatmap = new FlatWorkingBeatmap(input.BeatmapPath);
             DifficultyAttributes attributes = ruleset.CreateDifficultyCalculator(workingBeatmap).Calculate(mods, cancellationToken);
             if (attributes is not OsuDifficultyAttributes osuAttributes)
@@ -134,6 +137,7 @@ internal sealed class OfficialPpWhatIfCalculator : IPpWhatIfCalculator
                 Accuracy = statistics.Accuracy,
                 MaxCombo = maxCombo,
                 Mods = mods,
+                IsLegacyScore = input.LegacyScore,
                 Statistics = new Dictionary<HitResult, int>
                 {
                     [HitResult.Great] = statistics.Great,

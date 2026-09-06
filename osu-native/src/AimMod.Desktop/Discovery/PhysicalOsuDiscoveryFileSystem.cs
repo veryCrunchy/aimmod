@@ -57,7 +57,9 @@ public sealed class PhysicalOsuDiscoveryFileSystem : IOsuDiscoveryFileSystem
         }
     }
 
-    public string ReadAllText(string path, int maximumBytes)
+    public string ReadAllText(string path, int maximumBytes) => Encoding.UTF8.GetString(ReadAllBytes(path, maximumBytes));
+
+    public byte[] ReadAllBytes(string path, int maximumBytes)
     {
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         if (stream.Length > maximumBytes)
@@ -77,7 +79,7 @@ public sealed class PhysicalOsuDiscoveryFileSystem : IOsuDiscoveryFileSystem
         if (totalRead > maximumBytes)
             throw new InvalidDataException($"File grew beyond {maximumBytes} bytes while it was read.");
 
-        return Encoding.UTF8.GetString(bytes, 0, totalRead);
+        return bytes[..totalRead];
     }
 
     public IEnumerable<string> EnumerateFiles(string directory, string searchPattern)

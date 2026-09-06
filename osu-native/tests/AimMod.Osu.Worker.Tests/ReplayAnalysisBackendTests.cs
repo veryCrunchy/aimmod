@@ -60,8 +60,9 @@ public sealed class ReplayAnalysisBackendTests
             "Replay playback must not stall on the one-second fallback track.");
     }
 
-    [Test]
-    public async Task CalculatesPpThroughTheAdvertisedCommand()
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task CalculatesPpThroughTheAdvertisedCommand(bool legacy)
     {
         var calculator = new RecordingPpCalculator();
         var backend = new ReplayAnalysisBackend(
@@ -73,7 +74,7 @@ public sealed class ReplayAnalysisBackendTests
         File.WriteAllText(beatmapPath, "osu file format v14");
         var statistics = new PpScoreStatistics(950, 40, 9, 1, 300, 2);
         const string modsJson = "[{\"acronym\":\"DT\",\"settings\":{\"speed_change\":1.25}}]";
-        var request = new PpWhatIfRequest(temporaryDirectory, beatmapPath, new[] { "DT" }, 0.975, 1, 900, statistics, modsJson);
+        var request = new PpWhatIfRequest(temporaryDirectory, beatmapPath, new[] { "DT" }, 0.975, 1, 900, statistics, modsJson, LegacyScore: legacy);
 
         JsonElement? payload = await backend.ExecuteAsync(
             RuntimeCommands.CalculatePp,
@@ -89,9 +90,44 @@ public sealed class ReplayAnalysisBackendTests
             Assert.That(calculator.LastInput?.MissCount, Is.EqualTo(1));
             Assert.That(calculator.LastInput?.Statistics, Is.EqualTo(statistics));
             Assert.That(calculator.LastInput?.ModsJson, Is.EqualTo(modsJson));
+            Assert.That(calculator.LastInput?.LegacyScore, Is.EqualTo(legacy));
             Assert.That(result?.PerformancePoints, Is.EqualTo(321.5));
             Assert.That(result?.StarRating, Is.EqualTo(6.2));
         });
+    }
+
+    [Test]
+    public async Task CalculatesStablePpWithTheOfficialEngine()
+    {
+        string path = Path.Combine(temporaryDirectory, "stable.osu");
+        File.WriteAllText(path, """
+            osu file format v14
+            [General]
+            Mode:0
+            [Metadata]
+            Title:Synthetic
+            Artist:Test
+            Creator:Test
+            Version:Test
+            [Difficulty]
+            HPDrainRate:5
+            CircleSize:4
+            OverallDifficulty:7
+            ApproachRate:8
+            SliderMultiplier:1.4
+            SliderTickRate:1
+            [TimingPoints]
+            0,500,4,1,0,100,1,0
+            [HitObjects]
+            64,192,1000,1,0,0:0:0:0:
+            448,192,1250,1,0,0:0:0:0:
+            64,192,1500,2,0,L|448:192,1,280
+            """);
+        var input = PpInputValidator.Validate(new(temporaryDirectory, path, ["HD"], 1, LegacyScore: true));
+        var result = await new OfficialPpWhatIfCalculator().CalculateAsync(input, CancellationToken.None);
+        Assert.That(result.ObjectCount, Is.EqualTo(3));
+        Assert.That(double.IsFinite(result.PerformancePoints), Is.True);
+        Assert.That(result.PerformancePoints, Is.GreaterThan(0));
     }
 
     [Test]

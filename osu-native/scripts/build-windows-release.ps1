@@ -187,7 +187,7 @@ try {
         $false,
         [System.Text.Encoding]::UTF8)
     try {
-        Get-ChildItem -LiteralPath $stage -Recurse -File |
+        Get-ChildItem -LiteralPath $stage -Recurse -File -Force |
             Sort-Object { [System.IO.Path]::GetRelativePath($artifactRoot, $_.FullName).Replace('\', '/') } |
             ForEach-Object {
                 $entryName = [System.IO.Path]::GetRelativePath($artifactRoot, $_.FullName).Replace('\', '/')

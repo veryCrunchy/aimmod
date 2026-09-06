@@ -50,6 +50,7 @@ public sealed class OnlineSkinPreviewService
     private readonly OnlineSkinCatalogCache cache;
     private readonly OnlineSkinDownloadResolverPipeline downloads;
     private readonly OnlineSkinArchiveValidator validator;
+    private readonly ISkinDownloadBrowser? browser;
     private readonly SemaphoreSlim cleanupGate = new(1, 1);
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> activeDirectories = new(StringComparer.OrdinalIgnoreCase);
 
@@ -57,7 +58,8 @@ public sealed class OnlineSkinPreviewService
         string previewRoot,
         OnlineSkinCatalogCache cache,
         OnlineSkinDownloadResolverPipeline downloads,
-        OnlineSkinArchiveValidator validator)
+        OnlineSkinArchiveValidator validator,
+        ISkinDownloadBrowser? browser = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(previewRoot);
         if (!Path.IsPathFullyQualified(previewRoot))
@@ -66,32 +68,51 @@ public sealed class OnlineSkinPreviewService
         this.cache = cache ?? throw new ArgumentNullException(nameof(cache));
         this.downloads = downloads ?? throw new ArgumentNullException(nameof(downloads));
         this.validator = validator ?? throw new ArgumentNullException(nameof(validator));
+        this.browser = browser;
     }
 
-    public async Task<OnlineSkinPreviewResult> PrepareAsync(
+    public Task<OnlineSkinPreviewResult> PrepareAsync(
         OnlineSkinCatalogEntry skin,
         bool allowSensitive = false,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IProgress<string>? progress = null)
+        => prepareAsync(skin, allowSensitive, false, cancellationToken, progress);
+
+    public Task<OnlineSkinPreviewResult> PrepareFromBrowserAsync(OnlineSkinCatalogEntry skin,
+        CancellationToken cancellationToken = default, IProgress<string>? progress = null)
+        => prepareAsync(skin, false, true, cancellationToken, progress);
+
+    private async Task<OnlineSkinPreviewResult> prepareAsync(OnlineSkinCatalogEntry skin, bool allowSensitive,
+        bool browserOnly, CancellationToken cancellationToken, IProgress<string>? progress)
     {
         ArgumentNullException.ThrowIfNull(skin);
         cancellationToken.ThrowIfCancellationRequested();
-        if (skin.Download is null)
+        if (skin.Download is null && browser?.CanOpen(skin.DetailsUri) != true)
             return new OnlineSkinPreviewResult(OnlineSkinDownloadStatus.ExternalBrowserRequired, ExternalUri: skin.DetailsUri, Message: "The provider did not expose a safe public download link.");
         if (skin.IsSensitive && !allowSensitive)
             return new OnlineSkinPreviewResult(OnlineSkinDownloadStatus.Rejected, ExternalUri: skin.DetailsUri, Message: "Sensitive skin previews require explicit UI confirmation.");
 
         await CleanupExpiredAsync(cancellationToken).ConfigureAwait(false);
-        string cacheKey = downloadCacheKey(skin.Download.Uri);
+        string cacheKey = downloadCacheKey(skin.Download?.Uri ?? skin.DetailsUri);
         string directory = Path.Combine(previewRoot, $"preview-{Guid.NewGuid():N}");
         string previewPath = Path.Combine(directory, "skin.osk");
         Directory.CreateDirectory(directory);
         activeDirectories.TryAdd(directory, 0);
         try
         {
-            if (!await cache.TryCopyToAsync(cacheKey, previewPath, TimeSpan.FromDays(1), cancellationToken).ConfigureAwait(false))
+            if (browserOnly || !await cache.TryCopyToAsync(cacheKey, previewPath, TimeSpan.FromDays(1), cancellationToken).ConfigureAwait(false))
             {
                 string downloadPath = Path.Combine(directory, "skin.download");
-                OnlineSkinResolvedDownload resolved = await downloads.ResolveAsync(skin.Download, downloadPath, cancellationToken).ConfigureAwait(false);
+                OnlineSkinResolvedDownload resolved = browserOnly || skin.Download is null
+                    ? new(OnlineSkinDownloadStatus.ExternalBrowserRequired, ExternalUri: skin.DetailsUri)
+                    : await downloads.ResolveAsync(skin.Download, downloadPath, cancellationToken).ConfigureAwait(false);
+                Uri browserPage = skin.Download?.BrowserHandoffUri ?? resolved.ExternalUri ?? skin.DetailsUri;
+                bool capturedInBrowser = false;
+                if (browser?.CanOpen(browserPage) == true && SkinDownloadBrowserPolicy.ShouldTryBrowser(resolved.Status))
+                {
+                    capturedInBrowser = true;
+                    resolved = await browser.DownloadAsync(browserPage, downloadPath, progress, cancellationToken).ConfigureAwait(false);
+                }
                 if (resolved.Status != OnlineSkinDownloadStatus.Success || resolved.ArchivePath is null)
                 {
                     deleteDirectory(directory);
@@ -106,7 +127,13 @@ public sealed class OnlineSkinPreviewService
                     return new OnlineSkinPreviewResult(OnlineSkinDownloadStatus.InvalidArchive, Message: downloaded.Message);
                 }
                 File.Move(resolved.ArchivePath, previewPath, overwrite: false);
-                await cache.PutFileAsync(cacheKey, previewPath, "osk", cancellationToken).ConfigureAwait(false);
+                if (capturedInBrowser)
+                {
+                    // A catalog page can produce different skins; never cache it as one archive.
+                    if (!string.IsNullOrWhiteSpace(resolved.FileName))
+                        skin = skin with { Name = Path.GetFileNameWithoutExtension(resolved.FileName) };
+                }
+                else await cache.PutFileAsync(cacheKey, previewPath, "osk", cancellationToken).ConfigureAwait(false);
             }
 
             OnlineSkinArchiveValidation validation = await validator.ValidateAsync(previewPath, cancellationToken).ConfigureAwait(false);

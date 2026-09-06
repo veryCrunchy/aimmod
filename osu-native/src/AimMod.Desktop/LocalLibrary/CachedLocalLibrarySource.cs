@@ -156,6 +156,7 @@ public sealed class CachedLocalLibrarySource : ILocalLibrarySource, ILocalLibrar
             if (!File.Exists(databases[0])) return null;
             return string.Join('|', databases.Select(path =>
             {
+                if (Directory.Exists(path)) return $"directory:{Directory.GetLastWriteTimeUtc(path).Ticks}";
                 var file = new FileInfo(path);
                 return file.Exists ? $"{file.Length}:{file.LastWriteTimeUtc.Ticks}" : "missing";
             }));

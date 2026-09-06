@@ -58,6 +58,111 @@ public sealed class OsuStableLocalLibrarySourceTests
     }
 
     [Test]
+    public async Task FindsRenamedAndExportedReplaysWithoutDuplicateScores()
+    {
+        var database = createOsuDatabase("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "map.osu");
+        Directory.CreateDirectory(Path.Combine(songs, "42 Artist - Title"));
+        File.WriteAllText(Path.Combine(songs, "42 Artist - Title", "map.osu"), minimalBeatmap());
+        database.Save(Path.Combine(root, "osu!.db"));
+        var scores = createScoresDatabase("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        scores.Save(Path.Combine(root, "scores.db"));
+        var score = scores.Scores.Single().Item2.Single();
+        string replay = writeReplay(score, "Replays", "Player - Artist [Insane].osr");
+        writeReplay(score, Path.Combine("Data", "r"), "different-filename.osr");
+        var result = await new OsuStableLocalLibrarySource(root, songs).SearchReplaysAsync(new());
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Total, Is.EqualTo(1));
+            Assert.That(result.Items.Single().HasReplayFile, Is.True);
+            Assert.That(result.Items.Single().Mods, Is.EqualTo(new[] { "HD" }));
+            Assert.That(result.Items.Single().OnlineBeatmapId, Is.EqualTo(84));
+            Assert.That(result.Items.Single().ReplayPath, Does.EndWith("different-filename.osr"));
+        });
+    }
+
+    [Test]
+    public async Task ExportedReplayWithoutScoreDatabaseOrInstalledMapRemainsAvailable()
+    {
+        createOsuDatabase("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "missing.osu").Save(Path.Combine(root, "osu!.db"));
+        var score = createScoresDatabase("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").Scores.Single().Item2.Single();
+        var source = new OsuStableLocalLibrarySource(root, songs);
+        Assert.That((await source.SearchReplaysAsync(new())).Items, Is.Empty);
+        string path = writeReplay(score, "Replays", "export.OSR");
+        File.WriteAllText(Path.Combine(root, "Replays", "broken.osr"), "broken");
+        var result = await source.SearchReplaysAsync(new());
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Total, Is.EqualTo(1));
+            Assert.That(result.Items.Single().ReplayPath, Is.EqualTo(path));
+            Assert.That(result.Items.Single().BeatmapPath, Is.Empty);
+            Assert.That(result.Items.Single().Title, Is.EqualTo("Title"));
+            Assert.That(result.Items.Single().TotalScore, Is.EqualTo(score.ReplayScore));
+        });
+    }
+
+    [Test]
+    public async Task DamagedScoreDatabaseDoesNotHideExportedReplays()
+    {
+        createOsuDatabase("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "missing.osu").Save(Path.Combine(root, "osu!.db"));
+        File.WriteAllBytes(Path.Combine(root, "scores.db"), [1, 2]);
+        var score = createScoresDatabase("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").Scores.Single().Item2.Single();
+        writeReplay(score, "Replays", "retained.osr");
+        var result = await new OsuStableLocalLibrarySource(root, songs).SearchReplaysAsync(new());
+        Assert.That(result.Total, Is.EqualTo(1));
+        Assert.That(result.Items.Single().HasReplayFile, Is.True);
+    }
+
+    [Test]
+    public void OversizedReplayMetadataIsRejectedBeforeAllocation()
+    {
+        string path = Path.Combine(root, "invalid.osr");
+        using (var writer = new BinaryWriter(File.Create(path)))
+        {
+            writer.Write((byte)Ruleset.Standard);
+            writer.Write(20260711);
+            writer.Write((byte)0x0b);
+            writer.Write7BitEncodedInt(int.MaxValue);
+        }
+        Assert.That(StableReplayHeaders.Read(path), Is.Null);
+    }
+
+    [Test]
+    public void TruncatedReplayPayloadIsNotIndexed()
+    {
+        var score = createScoresDatabase("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").Scores.Single().Item2.Single();
+        string path = writeReplay(score, "Replays", "truncated.osr");
+        using (var file = File.OpenWrite(path)) file.SetLength(file.Length - 10);
+        Assert.That(StableReplayHeaders.Read(path), Is.Null);
+    }
+
+    [Test]
+    public async Task MissingMapDoesNotDiscardScoreOnlyHistory()
+    {
+        createOsuDatabase("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "missing.osu").Save(Path.Combine(root, "osu!.db"));
+        createScoresDatabase("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").Save(Path.Combine(root, "scores.db"));
+        var result = await new OsuStableLocalLibrarySource(root, songs).SearchReplaysAsync(new());
+        Assert.That(result.Total, Is.EqualTo(1));
+        Assert.That(result.Items.Single().HasReplayFile, Is.False);
+    }
+
+    private string writeReplay(Score score, string folder, string name)
+    {
+        string path = Path.Combine(Directory.CreateDirectory(Path.Combine(root, folder)).FullName, name);
+        using var writer = new BinaryWriter(File.Create(path));
+        void text(string value) { writer.Write((byte)0x0b); writer.Write(value); }
+        writer.Write((byte)score.Ruleset);
+        writer.Write(score.OsuVersion);
+        text(score.BeatmapMD5Hash); text(score.PlayerName); text(score.ReplayMD5Hash);
+        writer.Write(score.Count300); writer.Write(score.Count100); writer.Write(score.Count50);
+        writer.Write(score.CountGeki); writer.Write(score.CountKatu); writer.Write(score.CountMiss);
+        writer.Write(score.ReplayScore); writer.Write(score.Combo); writer.Write(score.PerfectCombo);
+        writer.Write((int)score.Mods); text(""); writer.Write(score.ScoreTimestamp.Ticks);
+        // Header indexing must not try to decompress cursor frames.
+        writer.Write(3); writer.Write(new byte[] { 1, 2, 3 }); writer.Write(score.ScoreId);
+        return path;
+    }
+
+    [Test]
     public async Task IgnoresEntriesThatEscapeTheSongsDirectory()
     {
         createOsuDatabase("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "..\\outside.osu").Save(Path.Combine(root, "osu!.db"));

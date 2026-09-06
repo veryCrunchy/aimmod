@@ -11,6 +11,8 @@ import re
 import sys
 from pathlib import Path
 
+from browser_runtime_policy import is_browser_runtime
+
 
 def fail(message: str) -> None:
     print(f"package audit failed: {message}", file=sys.stderr)
@@ -86,14 +88,18 @@ def main() -> None:
             fail(f"denied file in {relative}")
         if path.name.casefold() in denied_assemblies:
             fail(f"denied osu assembly in {relative}")
-        if any(fragment in lowered for fragment in denied_fragments):
+        try:
+            browser_runtime = is_browser_runtime(path, relative)
+        except ValueError as error:
+            fail(str(error))
+        if not browser_runtime and any(fragment in lowered for fragment in denied_fragments):
             fail(f"denied path fragment in {relative}")
-        if path.suffix.casefold() in denied_extensions:
+        if not browser_runtime and path.suffix.casefold() in denied_extensions:
             fail(f"denied frontend or debug extension in {relative}")
-        if relative not in allowed_metadata and not any(pattern.fullmatch(relative) for pattern in allowed_patterns):
+        if not browser_runtime and relative not in allowed_metadata and not any(pattern.fullmatch(relative) for pattern in allowed_patterns):
             fail(f"path is outside the release allowlist: {relative}")
 
-        marker = contains_marker(path, markers)
+        marker = None if browser_runtime else contains_marker(path, markers)
         if marker is not None:
             fail(f"forbidden content marker {marker.decode('utf-8')!r} in {relative}")
 
@@ -138,7 +144,7 @@ def main() -> None:
 
     print(
         f"Package audit passed: {inventory['fileCount']} files, "
-        f"{inventory['physicalBytes']} bytes, no web, Tauri, KovaaK, or debug payloads."
+        f"{inventory['physicalBytes']} bytes; browser helper verified against the pinned package."
     )
 
 

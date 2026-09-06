@@ -7,6 +7,7 @@
     <ApplicationIcon>Resources/Brand/aimmod.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Microsoft.Playwright" Version="1.62.0" />
     <PackageReference Include="OsuParsers" Version="1.7.2" />
     <PackageReference Include="ppy.osu.Game" Version="2026.730.0" />
     <PackageReference Include="ppy.osu.Game.Rulesets.Osu" Version="2026.730.0" />
@@ -17,6 +18,7 @@
     <ProjectReference Include="../AimMod.Osu.Worker/AimMod.Osu.Worker.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <EmbeddedResource Include="Resources/Skins/creator-releases.json" LogicalName="AimMod.Resources.Skins.creator-releases.json" />
     <EmbeddedResource Include="Resources/Brand/*.png" LogicalName="AimMod.Resources.Brand.%(Filename)%(Extension)" />
     <EmbeddedResource Include="Resources/Brand/aimmod.ico" LogicalName="AimMod.Resources.Brand.aimmod.ico" />
   </ItemGroup>

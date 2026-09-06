@@ -1,0 +1,273 @@
+[
+  {
+    "repository": "kisaragi-hiu/osuskin-retome",
+    "releases": [
+      {
+        "assets": [
+          {
+            "browser_download_url": "https://github.com/kisaragi-hiu/osuskin-retome/releases/download/v1.0/Retome.1.0en.osk",
+            "download_count": 323,
+            "id": 11583798,
+            "name": "Retome.1.0en.osk",
+            "size": 18080122
+          },
+          {
+            "browser_download_url": "https://github.com/kisaragi-hiu/osuskin-retome/releases/download/v1.0/Retome.1.0ja.osk",
+            "download_count": 88,
+            "id": 11583799,
+            "name": "Retome.1.0ja.osk",
+            "size": 18054425
+          },
+          {
+            "browser_download_url": "https://github.com/kisaragi-hiu/osuskin-retome/releases/download/v1.0/Retome.1.0tc.osk",
+            "download_count": 95,
+            "id": 11583800,
+            "name": "Retome.1.0tc.osk",
+            "size": 18050391
+          }
+        ],
+        "draft": false,
+        "prerelease": false,
+        "published_at": "2019-03-17T19:05:09Z",
+        "tag_name": "v1.0"
+      }
+    ]
+  },
+  {
+    "repository": "storycraft/osu-story-skin-edited",
+    "releases": [
+      {
+        "assets": [
+          {
+            "browser_download_url": "https://github.com/storycraft/osu-story-skin-edited/releases/download/2024-12-08/osu-story-skin-edited.osk",
+            "download_count": 18,
+            "id": 212041183,
+            "name": "osu-story-skin-edited.osk",
+            "size": 57103692
+          }
+        ],
+        "draft": false,
+        "prerelease": false,
+        "published_at": "2024-12-08T14:10:44Z",
+        "tag_name": "2024-12-08"
+      }
+    ]
+  },
+  {
+    "repository": "Mathyzin/Mathyzin-Skins",
+    "releases": [
+      {
+        "assets": [
+          {
+            "browser_download_url": "https://github.com/Mathyzin/Mathyzin-Skins/releases/download/3/-.Mathyzin.Skin.v3.-.osk",
+            "download_count": 152,
+            "id": 30192326,
+            "name": "-.Mathyzin.Skin.v3.-.osk",
+            "size": 100396026
+          }
+        ],
+        "draft": false,
+        "prerelease": false,
+        "published_at": "2021-01-02T13:53:06Z",
+        "tag_name": "3"
+      }
+    ]
+  },
+  {
+    "repository": "UlyssesZh/monomal",
+    "releases": [
+      {
+        "assets": [
+          {
+            "browser_download_url": "https://github.com/UlyssesZh/monomal/releases/download/v1.0/monomal.osk",
+            "download_count": 9,
+            "id": 280883098,
+            "name": "monomal.osk",
+            "size": 827554
+          }
+        ],
+        "draft": false,
+        "prerelease": false,
+        "published_at": "2025-08-09T09:32:09Z",
+        "tag_name": "v1.0"
+      }
+    ]
+  },
+  {
+    "repository": "yanorei32/yr32-skinbuilder",
+    "releases": [
+      {
+        "assets": [
+          {
+            "browser_download_url": "https://github.com/yanorei32/yr32-skinbuilder/releases/download/v0.6.0/yr32-skinbuilder-dot%400.6.0.osk",
+            "download_count": 106,
+            "id": 74892047,
+            "name": "yr32-skinbuilder-dot@0.6.0.osk",
+            "size": 4110004
+          },
+          {
+            "browser_download_url": "https://github.com/yanorei32/yr32-skinbuilder/releases/download/v0.6.0/yr32-skinbuilder-number%400.6.0.osk",
+            "download_count": 103,
+            "id": 74892049,
+            "name": "yr32-skinbuilder-number@0.6.0.osk",
+            "size": 4191522
+          }
+        ],
+        "draft": false,
+        "prerelease": false,
+        "published_at": "2022-08-16T16:08:24Z",
+        "tag_name": "v0.6.0"
+      }
+    ]
+  },
+  {
+    "repository": "PopCat19/Project-Minimalist",
+    "releases": [
+      {
+        "assets": [
+          {
+            "browser_download_url": "https://github.com/PopCat19/Project-Minimalist/releases/download/v1.2.1/DT.Project.Minimalist.osk",
+            "download_count": 75,
+            "id": 246205124,
+            "name": "DT.Project.Minimalist.osk",
+            "size": 6397838
+          },
+          {
+            "browser_download_url": "https://github.com/PopCat19/Project-Minimalist/releases/download/v1.2.1/HD.Project.Minimalist.osk",
+            "download_count": 69,
+            "id": 246205119,
+            "name": "HD.Project.Minimalist.osk",
+            "size": 6501352
+          },
+          {
+            "browser_download_url": "https://github.com/PopCat19/Project-Minimalist/releases/download/v1.2.1/InstaDT.Project.Minimalist.osk",
+            "download_count": 21,
+            "id": 246205117,
+            "name": "InstaDT.Project.Minimalist.osk",
+            "size": 6521455
+          },
+          {
+            "browser_download_url": "https://github.com/PopCat19/Project-Minimalist/releases/download/v1.2.1/InstaNM.Project.Minimalist.osk",
+            "download_count": 39,
+            "id": 246205115,
+            "name": "InstaNM.Project.Minimalist.osk",
+            "size": 6988004
+          },
+          {
+            "browser_download_url": "https://github.com/PopCat19/Project-Minimalist/releases/download/v1.2.1/NM.Project.Minimalist.osk",
+            "download_count": 52,
+            "id": 246205113,
+            "name": "NM.Project.Minimalist.osk",
+            "size": 6494857
+          }
+        ],
+        "draft": false,
+        "prerelease": false,
+        "published_at": "2025-04-14T07:21:34Z",
+        "tag_name": "v1.2.1"
+      }
+    ]
+  },
+  {
+    "repository": "sineplusx/lite",
+    "releases": [
+      {
+        "assets": [
+          {
+            "browser_download_url": "https://github.com/sineplusx/lite/releases/download/v1.2.0/blank.osk",
+            "download_count": 232,
+            "id": 209465195,
+            "name": "blank.osk",
+            "size": 1083786
+          },
+          {
+            "browser_download_url": "https://github.com/sineplusx/lite/releases/download/v1.2.0/dots.osk",
+            "download_count": 139,
+            "id": 209465204,
+            "name": "dots.osk",
+            "size": 1121502
+          },
+          {
+            "browser_download_url": "https://github.com/sineplusx/lite/releases/download/v1.2.0/hs-dots-if.osk",
+            "download_count": 100,
+            "id": 209465253,
+            "name": "hs-dots-if.osk",
+            "size": 1322508
+          },
+          {
+            "browser_download_url": "https://github.com/sineplusx/lite/releases/download/v1.2.0/hs-dots.osk",
+            "download_count": 79,
+            "id": 209465250,
+            "name": "hs-dots.osk",
+            "size": 1144095
+          },
+          {
+            "browser_download_url": "https://github.com/sineplusx/lite/releases/download/v1.2.0/hs-numerals-if.osk",
+            "download_count": 135,
+            "id": 209465291,
+            "name": "hs-numerals-if.osk",
+            "size": 1318987
+          },
+          {
+            "browser_download_url": "https://github.com/sineplusx/lite/releases/download/v1.2.0/hs-numerals.osk",
+            "download_count": 134,
+            "id": 209465283,
+            "name": "hs-numerals.osk",
+            "size": 1137579
+          },
+          {
+            "browser_download_url": "https://github.com/sineplusx/lite/releases/download/v1.2.0/numerals.osk",
+            "download_count": 196,
+            "id": 209465230,
+            "name": "numerals.osk",
+            "size": 1114994
+          }
+        ],
+        "draft": false,
+        "prerelease": false,
+        "published_at": "2024-11-27T17:54:48Z",
+        "tag_name": "v1.2.0"
+      }
+    ]
+  },
+  {
+    "repository": "eclipsedteam/Ruby",
+    "releases": [
+      {
+        "assets": [
+          {
+            "browser_download_url": "https://github.com/eclipsedteam/Ruby/releases/download/v1.2.1/Ruby.osk",
+            "download_count": 3584,
+            "id": 16657536,
+            "name": "Ruby.osk",
+            "size": 9720277
+          }
+        ],
+        "draft": false,
+        "prerelease": false,
+        "published_at": "2019-12-07T18:27:26Z",
+        "tag_name": "v1.2.1"
+      }
+    ]
+  },
+  {
+    "repository": "eclipsedteam/Simplify",
+    "releases": [
+      {
+        "assets": [
+          {
+            "browser_download_url": "https://github.com/eclipsedteam/Simplify/releases/download/v1.1/Simplify.osk",
+            "download_count": 650,
+            "id": 15282318,
+            "name": "Simplify.osk",
+            "size": 30431304
+          }
+        ],
+        "draft": false,
+        "prerelease": false,
+        "published_at": "2019-10-03T19:28:54Z",
+        "tag_name": "v1.1"
+      }
+    ]
+  }
+]

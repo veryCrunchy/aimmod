@@ -7,6 +7,25 @@ namespace AimMod.Desktop.Tests;
 public sealed class LocalReplayOpenServiceTests
 {
     [Test]
+    public async Task StableReplayCanBeSharedWithoutItsBeatmapAndIsNeverDeletedByTheLease()
+    {
+        string root = Directory.CreateTempSubdirectory("aimmod-stable-share-").FullName;
+        try
+        {
+            string path = Path.Combine(root, "export.osr");
+            File.WriteAllBytes(path, [1, 2, 3]);
+            var row = new LocalReplay(Guid.NewGuid(), Guid.Empty, Guid.NewGuid(), "Missing map", "", "", "osu", "Synthetic player",
+                DateTimeOffset.UtcNow, 0, 0.95, 1000, 10, 1, null, [], true, ReplayPath: path, Origin: LocalLibraryOrigin.Stable);
+            var service = new CompositeLocalReplayOpenService();
+            await using (var lease = await service.OpenReplayFileAsync(row))
+                Assert.That(lease.ReplayPath, Is.EqualTo(path));
+            Assert.That(File.Exists(path), Is.True);
+            Assert.ThrowsAsync<ExternalLazerReplayOpenException>(async () => await service.OpenAsync(row));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Test]
     public async Task OpensStableReplayFilesWithoutLazerStaging()
     {
         string root = Directory.CreateTempSubdirectory("aimmod-stable-replay-").FullName;
