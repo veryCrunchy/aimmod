@@ -511,6 +511,25 @@ public sealed class PpTargetEngineTests
     }
 
     [Test]
+    public void RecentScoreEvidenceSurvivesUnknownPatternsWithoutClaimingMeasuredSkill()
+    {
+        LocalReplay[] runs = Enumerable.Range(1, 8).Select(i => replay(i, i, 5, .98, null, "HD")).ToArray();
+        var profile = PpTargetPreferenceProfiler.Build(runs) with
+        {
+            PatternProfile = PpTargetPatternModel.BuildProfile(runs, new Dictionary<Guid, AimMod.Osu.Runtime.Contracts.ReplayAnalysisResult>(),
+                now: runs.Max(r => r.PlayedAt)),
+        };
+        var prediction = new PpPatternPrediction(null, null, 0, [], [], [new("Jumps", null, null, 0, 0)]);
+        var estimate = new PpTargetEstimate(180, 250, new(160, 200), 0, PpTargetConfidence.Low, "test", PatternPrediction: prediction);
+        var candidate = PpTargetRanker.Rank(profile, [set(1, "ranked", difficulty(10, 5))],
+            exactEstimates: new Dictionary<int, PpTargetEstimate> { [10] = estimate }).Candidates.Single();
+        Assert.That(candidate.ScoreEvidence, Is.GreaterThan(0).And.LessThanOrEqualTo(.3));
+        Assert.That(candidate.RecommendationConfidence, Is.EqualTo(PpTargetConfidence.Low));
+        Assert.That(candidate.Estimate!.PatternPrediction!.Fit, Is.Null);
+        Assert.That(candidate.Attainability, Is.GreaterThan(.5));
+    }
+
+    [Test]
     public void BroadScanCoversSelectedStarBandsBeforeFillingEasyBand()
     {
         var catalog = Enumerable.Range(1, 300).Select(i => set(i, "ranked", difficulty(i, 3)))

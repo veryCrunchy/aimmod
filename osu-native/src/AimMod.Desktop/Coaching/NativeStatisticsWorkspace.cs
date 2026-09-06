@@ -7,6 +7,7 @@ using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
 using osu.Framework.Input.Events;
+using osu.Framework.Threading;
 using osu.Game.Graphics.Containers;
 using osu.Game.Graphics.Sprites;
 using osu.Game.Graphics.UserInterface;
@@ -18,8 +19,10 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
     private readonly ILocalLibrarySource source;
     private readonly ILocalLibrarySourceChanged? sourceChanges;
     private readonly Action<LocalReplay> openReplay;
+    private readonly Func<LocalReplay, CancellationToken, Task>? openBeatmap;
     private readonly Func<IAccountScoreHistoryService?> accountHistory;
     private readonly ShearedFilterTextBox search;
+    private ScheduledDelegate? searchRefresh;
     private readonly Bindable<StatisticsTimeRange> timeRange = new(StatisticsTimeRange.All);
     private readonly Bindable<StatisticsModFilter> modFilter = new(StatisticsModFilter.Any);
     private readonly Bindable<StatisticsRunSort> sort = new(StatisticsRunSort.Recent);
@@ -54,10 +57,12 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
     public NativeStatisticsWorkspace(
         ILocalLibrarySource source,
         Action<LocalReplay> openReplay,
-        Func<IAccountScoreHistoryService?>? accountHistory = null)
+        Func<IAccountScoreHistoryService?>? accountHistory = null,
+        Func<LocalReplay, CancellationToken, Task>? openBeatmap = null)
     {
         this.source = source ?? throw new ArgumentNullException(nameof(source));
         this.openReplay = openReplay ?? throw new ArgumentNullException(nameof(openReplay));
+        this.openBeatmap = openBeatmap;
         this.accountHistory = accountHistory ?? (() => null);
         sourceChanges = source as ILocalLibrarySourceChanged;
         if (sourceChanges is not null)
@@ -236,7 +241,11 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
             loadingOverlay = new AimModLoadingOverlay(),
         };
 
-        search.Current.BindValueChanged(_ => render());
+        search.Current.BindValueChanged(_ =>
+        {
+            searchRefresh?.Cancel();
+            searchRefresh = Scheduler.AddDelayed(render, 150);
+        });
         timeRange.BindValueChanged(_ => render());
         modFilter.BindValueChanged(_ => render());
         sort.BindValueChanged(_ => render());
@@ -329,6 +338,8 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
 
     private void render()
     {
+        searchRefresh?.Cancel();
+        searchRefresh = null;
         if (allRuns.Count == 0)
         {
             scopeText.Text = "No local osu!standard history or cached online scores are available.";
@@ -484,6 +495,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
             detail("MISS-FREE", map.MissFreeRate.ToString("P0")),
             detail("BEST COMBO", $"{map.BestCombo:N0}x"),
             replay.HasReplayFile ? actionButton("Open replay", () => openReplay(replay)) : text("Replay file is unavailable for this score.", 11, AimModPalette.Muted),
+            new OpenBeatmapButton(() => replay, openBeatmap) { RelativeSizeAxes = Axes.X, Width = 1 },
         });
     }
 
@@ -568,6 +580,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
 
     protected override void Dispose(bool isDisposing)
     {
+        searchRefresh?.Cancel();
         loading?.Cancel();
         loading?.Dispose();
         if (sourceChanges is not null)

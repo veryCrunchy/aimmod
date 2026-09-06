@@ -1,5 +1,6 @@
 using AimMod.Desktop.LocalLibrary;
 using AimMod.Desktop.PpTargets;
+using AimMod.Desktop.ScoreHistory;
 using AimMod.Osu.Runtime;
 using NUnit.Framework;
 
@@ -8,6 +9,36 @@ namespace AimMod.Desktop.Tests;
 [TestFixture]
 public sealed class NativePpTargetsWorkspaceTests
 {
+    [Test]
+    public void InstalledStateRequiresTheExactLocalDifficulty()
+    {
+        var difficulty = new AimMod.Desktop.LocalLibrary.LocalBeatmapDifficulty(Guid.NewGuid(), 123, "Hard", "osu", 4, 180, 120000, 4, 9, 8, 5, 0);
+        var set = new AimMod.Desktop.LocalLibrary.LocalBeatmapSet(Guid.NewGuid(), 456, "Synthetic map", "Artist", "Mapper", "", DateTimeOffset.UtcNow, null, [difficulty], 0);
+        Assert.That(NativePpTargetsWorkspace.HasInstalledDifficulty([set], 123), Is.True);
+        Assert.That(NativePpTargetsWorkspace.HasInstalledDifficulty([set], 124), Is.False);
+        Assert.That(NativePpTargetsWorkspace.HasInstalledDifficulty([set], 0), Is.False);
+        Assert.That(NativePpTargetsWorkspace.HasInstalledDifficulty([], 123), Is.False);
+    }
+
+    [Test]
+    public void InstalledOnlineCardDoesNotStartAnotherDownload()
+    {
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+        var type = typeof(NativeOfficialBeatmapSearchScreen).GetNestedType("OnlineBeatmapCard", System.Reflection.BindingFlags.NonPublic)!;
+        int downloads = 0;
+        Func<OfficialBeatmapSet, Task<OnlineBeatmapImportResult>> import = set =>
+        {
+            downloads++;
+            return Task.FromResult(new OnlineBeatmapImportResult(OnlineBeatmapImportStatus.Success, set.BeatmapSetId));
+        };
+        Func<LazerBeatmapArchive, Task<LazerBeatmapInstallResult>> install = _ => Task.FromResult(new LazerBeatmapInstallResult(LazerBeatmapInstallStatus.Sent));
+        using var card = (osu.Framework.Graphics.Drawable)Activator.CreateInstance(type, snapshot().Catalog.Single(), import, install)!;
+        type.GetMethod("SetInstalled")!.Invoke(card, null);
+        type.GetMethod("beginImport", flags)!.Invoke(card, null);
+        Assert.That(downloads, Is.Zero);
+        var label = (osu.Framework.Graphics.Sprites.SpriteText)type.GetField("actionText", flags)!.GetValue(card)!;
+        Assert.That(label.Text.ToString(), Is.EqualTo("Installed"));
+    }
     private string temporaryDirectory = null!;
 
     [SetUp]
@@ -30,6 +61,66 @@ public sealed class NativePpTargetsWorkspaceTests
         var source = new InMemoryLocalLibrarySource(Array.Empty<LocalBeatmapSet>(), Array.Empty<LocalReplay>());
 
         Assert.DoesNotThrow(() => _ = new NativePpTargetsWorkspace(source, () => null, () => null));
+    }
+
+    [Test]
+    public void OnlineDifficultyLinksToLocalIdentityWithoutInventingReplayOrChecksum()
+    {
+        var saved = snapshot();
+        var map = saved.LocalSets[0].Difficulties[0];
+        var online = new ScoreHistoryEntry("synthetic:1", 1, 456, 123, null, null, "Target", "Artist", "Insane",
+            DateTimeOffset.UtcNow, 5.2, .98, null, 1000, 100, 1, [], ScoreHistoryProvenance.OnlineRecent, false, true);
+        var runs = PpTargetSkillHistory.Merge([], [online], saved.LocalSets);
+        Assert.That(runs.Single().BeatmapId, Is.EqualTo(map.BeatmapId));
+        Assert.That(runs.Single().BeatmapHash, Is.Empty);
+        Assert.That(runs.Single().HasReplayFile, Is.False);
+        var local = runs.Single() with { IsLocallyStored = true };
+        var pass = PpTargetSkillHistory.PassHistory([local], [online], saved.LocalSets).Single();
+        Assert.That(pass.Passed, Is.True);
+        Assert.That(pass.Bpm, Is.EqualTo(map.Bpm));
+        Assert.That(pass.LengthSeconds, Is.EqualTo(125));
+        Assert.That(PpTargetSkillHistory.PassHistory([local], [], saved.LocalSets).Single().Passed, Is.Null);
+    }
+
+    [Test]
+    public void DetailPaneSelectionSurvivesResultRefreshAndClearsWhenFilteredOut()
+    {
+        var saved = snapshot();
+        using var workspace = new NativePpTargetsWorkspace(new InMemoryLocalLibrarySource([], []), () => null, () => null);
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        typeof(NativePpTargetsWorkspace).GetField("setsById", flags)!.SetValue(workspace, saved.Catalog.ToDictionary(s => s.BeatmapSetId));
+        var candidates = PpTargetRanker.Rank(saved.Profile, saved.Catalog).Candidates.ToArray();
+        var render = typeof(NativePpTargetsWorkspace).GetMethod("renderCandidates", flags)!;
+        render.Invoke(workspace, [candidates]);
+        render.Invoke(workspace, [candidates]);
+        Assert.That(typeof(NativePpTargetsWorkspace).GetField("selectedBeatmapId", flags)!.GetValue(workspace), Is.EqualTo(456));
+        Assert.That(typeof(NativePpTargetsWorkspace).GetField("selectedDetails", flags)!.GetValue(workspace), Is.Not.Null);
+        render.Invoke(workspace, [Array.Empty<PpTargetCandidate>()]);
+        Assert.That(typeof(NativePpTargetsWorkspace).GetField("selectedBeatmapId", flags)!.GetValue(workspace), Is.Null);
+    }
+
+    [Test]
+    public void TargetDetailCopyIncludesPredictionMechanicsAndHonestUnknownStates()
+    {
+        var saved = snapshot();
+        var target = PpTargetRanker.Rank(saved.Profile, saved.Catalog).Candidates.Single();
+        string copy = string.Join("\n", NativePpTargetsWorkspace.TargetDetails(target, saved.Catalog.Single(), null));
+        Assert.That(copy, Does.Contain("AR 9").And.Contain("PP calculation pending").And.Contain("Skill evidence loading")
+            .And.Contain("Pattern fit unmeasured").And.Contain("Pass chance unknown"));
+    }
+
+    [Test]
+    public async Task PendingEvidencePersistsWithoutChangingTheActiveEstimateProfile()
+    {
+        var original = snapshot();
+        var cache = new PpTargetWorkspaceCache(Path.Combine(temporaryDirectory, "pending.json"));
+        var active = new PpPatternProfile("active", DateTimeOffset.UtcNow, 30, []);
+        var pending = new PpPatternProfile("pending", DateTimeOffset.UtcNow, 30, []);
+        await cache.SaveAsync(original with { Profile = original.Profile with { PatternProfile = active }, PendingPatternProfile = pending });
+        var loaded = cache.Load()!;
+        Assert.That(loaded.Profile.PatternProfile!.Identity, Is.EqualTo("active"));
+        Assert.That(loaded.PendingPatternProfile!.Identity, Is.EqualTo("pending"));
+        Assert.That(loaded.ExactEstimates.Count, Is.EqualTo(original.ExactEstimates.Count));
     }
 
     [Test]
@@ -98,16 +189,17 @@ public sealed class NativePpTargetsWorkspaceTests
         Assert.That(NativePpTargetsWorkspace.CatalogScanSummary(new(status, [], 3, reason)), Does.Contain(expected).And.Contain("Partial catalog: 3 pages"));
     }
 
-    [Test]
-    public async Task OldSmallPoolCacheIsInvalidatedAndPartialStatusRoundTrips()
+    [TestCase(4)]
+    [TestCase(7)]
+    public async Task OldSmallPoolCacheIsInvalidatedAndPartialStatusRoundTrips(int oldVersion)
     {
         string path = Path.Combine(temporaryDirectory, "workspace.json");
         var cache = new PpTargetWorkspaceCache(path);
         await cache.SaveAsync(snapshot() with { CatalogScanStatus = "Partial catalog: page limit reached." });
         Assert.That(cache.Load()!.CatalogScanStatus, Is.EqualTo("Partial catalog: page limit reached."));
         var document = System.Text.Json.Nodes.JsonNode.Parse(await File.ReadAllTextAsync(path))!;
-        Assert.That(document["version"]!.GetValue<int>(), Is.EqualTo(7));
-        document["version"] = 4;
+        Assert.That(document["version"]!.GetValue<int>(), Is.EqualTo(8));
+        document["version"] = oldVersion;
         await File.WriteAllTextAsync(path, document.ToJsonString());
         Assert.That(cache.Load(), Is.Null);
     }
@@ -117,7 +209,7 @@ public sealed class NativePpTargetsWorkspaceTests
     {
         var time = new TestTimeProvider(new DateTimeOffset(2026, 9, 4, 10, 0, 0, TimeSpan.Zero));
         var cache = new PpTargetWorkspaceCache(Path.Combine(temporaryDirectory, "workspace.json"), time);
-        PpTargetWorkspaceSnapshot source = snapshot();
+        PpTargetWorkspaceSnapshot source = snapshot() with { ModSelection = "HD+DT" };
 
         await cache.SaveAsync(source);
         PpTargetWorkspaceSnapshot? loaded = cache.Load();
@@ -126,6 +218,7 @@ public sealed class NativePpTargetsWorkspaceTests
         {
             Assert.That(loaded, Is.Not.Null);
             Assert.That(loaded!.Profile.ValidRunCount, Is.EqualTo(24));
+            Assert.That(loaded.ModSelection, Is.EqualTo("HD+DT"));
             Assert.That(loaded.LocalSets, Has.Count.EqualTo(1));
             Assert.That(loaded.Catalog.Single().Difficulties.Single().BeatmapId, Is.EqualTo(456));
             Assert.That(loaded.ExactEstimates[456].ExpectedPp, Is.EqualTo(280));
@@ -202,6 +295,19 @@ public sealed class NativePpTargetsWorkspaceTests
         return new PpTargetWorkspaceSnapshot(DateTimeOffset.MinValue, profile, [localSet], [set], new Dictionary<int, PpTargetEstimate> { [456] = estimate },
             10, string.Empty, string.Empty, 4, 6, OfficialBeatmapCategory.Ranked);
     }
+
+    [TestCase("HD", new[] { "HD" })]
+    [TestCase("NM", new string[0])]
+    [TestCase("DT", new[] { "DT" })]
+    [TestCase("HD+DT", new[] { "DT", "HD" })]
+    public void SelectedModsOverrideAutomaticPreference(string selection, string[] expected)
+    {
+        var profile = PpTargetPreferenceProfile.Empty with { PreferredModSetup = ["HR"] };
+        Assert.That(NativePpTargetsWorkspace.WithSelectedMods(profile, selection).PreferredModSetup,
+            Is.EquivalentTo(expected));
+        Assert.That(NativePpTargetsWorkspace.WithSelectedMods(profile, "Automatic"), Is.SameAs(profile));
+    }
+
 
     private sealed class TestTimeProvider(DateTimeOffset now) : TimeProvider
     {

@@ -12,6 +12,8 @@ using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
 using osu.Framework.Input.Events;
+using osu.Framework.Input.Handlers;
+using osu.Framework.Input.Handlers.Mouse;
 using osu.Framework.Platform;
 using osu.Game;
 using osu.Game.Beatmaps;
@@ -140,6 +142,22 @@ public partial class AimModGame : OsuGameBase
 
     internal AimModLinkInbox? LinkInbox { get; init; }
 
+    public override void SetHost(GameHost host)
+    {
+        base.SetHost(host);
+        // OsuGame applies this above OsuGameBase, which AimMod derives from directly.
+        if (host.Window is not null)
+            host.Window.CursorState |= CursorState.Hidden;
+    }
+
+    internal static void UseDesktopMouseCoordinates(IEnumerable<InputHandler> handlers)
+    {
+        // Absolute desktop coordinates already include the user's OS pointer settings.
+        // Keep osu! sensitivity and tablet mapping untouched; only bypass raw mouse scaling.
+        foreach (MouseHandler mouse in handlers.OfType<MouseHandler>())
+            mouse.UseRelativeMode.Value = false;
+    }
+
     protected override void Update()
     {
         base.Update();
@@ -165,6 +183,7 @@ public partial class AimModGame : OsuGameBase
     protected override void LoadComplete()
     {
         base.LoadComplete();
+        UseDesktopMouseCoordinates(Host.AvailableInputHandlers);
 
         replayAnalysisCache = new ReplayAnalysisCache(Storage.GetFullPath("cache/replay-analysis-v1.json", true));
         onlineSkinCatalog = new OnlineSkinCatalogBackend(
@@ -617,7 +636,8 @@ public partial class AimModGame : OsuGameBase
             hubSharingPreferenceStore,
             openHubUrl,
             copyHubText,
-            openBeatmapPractice)
+            openBeatmapPractice,
+            openReplayBeatmap)
         {
             RelativeSizeAxes = Axes.Both,
         };
@@ -709,7 +729,7 @@ public partial class AimModGame : OsuGameBase
         statisticsScreen ??= new NativeStatisticsWorkspace(
             localLibrary,
             prepareCatalogReplay,
-            () => accountScoreHistoryService)
+            () => accountScoreHistoryService, openReplayBeatmap)
         {
             RelativeSizeAxes = Axes.Both,
         };
@@ -743,7 +763,9 @@ public partial class AimModGame : OsuGameBase
             prepareCatalogReplay,
             () => accountScoreHistoryService,
             createPracticeMap,
-            installPracticeMap)
+            installPracticeMap,
+            new NativePracticeWorkspace(inspectPracticeMap, createPracticeMap, openSavedPracticeMap,
+                new PracticeMapLibrary(Storage.GetFullPath("practice-maps", true)), () => coachingWorkspace?.ClosePractice(), openReplayBeatmap), openReplayBeatmap)
         {
             RelativeSizeAxes = Axes.Both,
         };
@@ -773,6 +795,7 @@ public partial class AimModGame : OsuGameBase
         bool retainLazerArchive = false;
         try
         {
+            request.Progress?.Report("Loading source beatmap and audio");
             await using IPlayableReplayBundle bundle = await replayService.OpenAsync(
                 request.Candidate.SourceReplay,
                 cancellationToken).ConfigureAwait(false);
@@ -785,7 +808,7 @@ public partial class AimModGame : OsuGameBase
             IReadOnlyList<PracticeMapPlan> plans = PracticeMapPlanner.CreatePlans(
                 source,
                 evidence,
-                new PracticeMapOptions(request.DrillType, MaximumSections: 1));
+                (request.Options ?? new PracticeMapOptions(request.DrillType, MaximumSections: 1)) with { DrillType = request.DrillType });
             if (plans.Count == 0)
             {
                 string pattern = request.DrillType switch
@@ -798,8 +821,9 @@ public partial class AimModGame : OsuGameBase
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            string folderName = $"{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}";
+            string folderName = Guid.NewGuid().ToString("N");
             root = Storage.GetFullPath($"practice-maps/{folderName}", true);
+            request.Progress?.Report($"Looping source audio / {plans[0].RepeatCount} rounds");
             PracticeMapArtifact artifact = await new PracticeMapArtifactBuilder().BuildAsync(
                 source,
                 plans[0],
@@ -808,6 +832,13 @@ public partial class AimModGame : OsuGameBase
             lazerArchive = await installService.PreserveAsync(artifact.ArchivePath, 0, cancellationToken).ConfigureAwait(false);
 
             cancellationToken.ThrowIfCancellationRequested();
+
+            request.Progress?.Report("Saving your practice map");
+            PracticeMapPlan plan = plans[0];
+            new PracticeMapLibrary(Storage.GetFullPath("practice-maps", true)).Save(new SavedPracticeMap(
+                folderName, plan.SourceTitle, plan.SourceVersion, plan.DrillType, DateTimeOffset.UtcNow,
+                plan.SourceSection.SourceStartTimeMs, plan.SourceSection.SourceEndTimeMs,
+                plan.AudioLeadInMs + plan.AudioSlice.OutputDurationMs, plan.RepeatCount, plan.HitObjects.Count, PlaybackRate: plan.AudioSlice.PlaybackRate));
 
             retainLazerArchive = true;
             return new PracticeMapGenerationResult(
@@ -851,6 +882,30 @@ public partial class AimModGame : OsuGameBase
         beatmapDestinationService?.InstallAsync(archive, cancellationToken)
         ?? Task.FromResult(new LazerBeatmapInstallResult(LazerBeatmapInstallStatus.LazerNotFound));
 
+    private async Task<IReadOnlyList<PracticeSectionChoice>> inspectPracticeMap(PracticeMapCandidate candidate, CancellationToken cancellationToken)
+    {
+        ILocalReplayOpenService service = replayOpenService ?? throw new InvalidOperationException("No local osu! source is connected.");
+        await using IPlayableReplayBundle bundle = await service.OpenAsync(candidate.SourceReplay, cancellationToken).ConfigureAwait(false);
+        return await Task.Run(() =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            PracticeSourceBeatmap source = OsuPracticeBeatmapReader.Read(bundle.BeatmapPath);
+            ReplayAnalysisResult[] evidence = candidate.AnalysisScoreIds.Select(id => replayAnalyses.GetValueOrDefault(id))
+                .Where(result => result is not null).Cast<ReplayAnalysisResult>().ToArray();
+            return (IReadOnlyList<PracticeSectionChoice>)Enum.GetValues<PracticeDrillType>()
+                .SelectMany(type => PracticeMapPlanner.FindSections(source, evidence, new PracticeMapOptions(type))
+                    .Select(section => new PracticeSectionChoice(type, section))).ToArray();
+        }, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<LazerBeatmapInstallResult> openSavedPracticeMap(SavedPracticeMap map, CancellationToken cancellationToken)
+    {
+        ILazerBeatmapInstallService service = lazerBeatmapInstallService ?? throw new InvalidOperationException("No osu! installation is connected.");
+        string path = new PracticeMapLibrary(Storage.GetFullPath("practice-maps", true)).ArchivePath(map.Id);
+        LazerBeatmapArchive archive = await service.PreserveAsync(path, 0, cancellationToken).ConfigureAwait(false);
+        return await installPracticeMap(archive, cancellationToken).ConfigureAwait(false);
+    }
+
     internal static string LazerHandoffDirectory =>
         Path.GetFullPath(Path.Combine(Path.GetTempPath(), "AimMod", "lazer-handoff"));
 
@@ -859,6 +914,15 @@ public partial class AimModGame : OsuGameBase
         IOsuBeatmapDestinationService? service = beatmapDestinationService;
         if (service is not null)
             await service.OpenBeatmapAsync(beatmapId, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task openReplayBeatmap(LocalReplay replay, CancellationToken cancellationToken)
+    {
+        int id = await ReplayBeatmapResolver.ResolveAsync(localLibrary, replay, cancellationToken).ConfigureAwait(false);
+        if (beatmapDestinationService is null) throw new InvalidOperationException("Choose an osu! client in Settings first.");
+        var result = await beatmapDestinationService.OpenBeatmapAsync(id, cancellationToken).ConfigureAwait(false);
+        if (result.Status is not (LazerBeatmapInstallStatus.Sent or LazerBeatmapInstallStatus.LazerStarted))
+            throw new InvalidOperationException("Could not open your selected osu! client. Check the client preference in Settings.");
     }
 
     private void showPpTargets()

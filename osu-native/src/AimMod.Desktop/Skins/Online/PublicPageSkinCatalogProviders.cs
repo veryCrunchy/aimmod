@@ -245,7 +245,7 @@ internal static class OsuSkinsNetHtmlParser
         if (archiveLink is not null && Uri.TryCreate(source, WebUtility.HtmlDecode(archiveLink), out Uri? archiveUri))
         {
             OnlineSkinDownloadTarget target = SkinDownloadTargetClassifier.Classify(archiveUri);
-            if (target.Kind is OnlineSkinDownloadKind.DirectHttps or OnlineSkinDownloadKind.GoogleDrive)
+            if (target.Kind is OnlineSkinDownloadKind.DirectHttps or OnlineSkinDownloadKind.GoogleDrive || MediaFireSkinDownloadResolver.IsPublicPage(target.Uri))
                 download = target;
         }
         return new OnlineSkinCatalogEntry(
@@ -345,6 +345,9 @@ internal static class SkinDownloadTargetClassifier
             || !string.IsNullOrEmpty(uri.UserInfo))
             return new OnlineSkinDownloadTarget(uri, OnlineSkinDownloadKind.External, []);
         string host = uri.Host.TrimEnd('.').ToLowerInvariant();
+        if (DirectHttpsSkinDownloadResolver.GitHubHosts.Contains(host)
+            && (host != "github.com" || uri.AbsolutePath.Contains("/releases/download/", StringComparison.Ordinal)))
+            return new OnlineSkinDownloadTarget(uri, OnlineSkinDownloadKind.DirectHttps, DirectHttpsSkinDownloadResolver.GitHubHosts);
         if (host is "mega.nz" or "www.mega.nz")
             return new OnlineSkinDownloadTarget(uri, OnlineSkinDownloadKind.Mega, [host]);
         if (host is "drive.google.com" or "drive.usercontent.google.com" or "docs.google.com")
@@ -499,18 +502,26 @@ internal static class SkinHtml
 
     public static string? FindDownloadLink(string html)
     {
+        string? fallback = null;
         foreach (Match match in anchor.Matches(html ?? string.Empty))
         {
             string? href = ReadAttribute(match.Groups["attrs"].Value, "href");
-            string text = Clean(match.Groups["text"].Value);
-            if (href is not null && (href.Contains("download", StringComparison.OrdinalIgnoreCase)
-                                     || href.Split('?', '#')[0].EndsWith(".osk", StringComparison.OrdinalIgnoreCase)
-                                     || text.Contains("download", StringComparison.OrdinalIgnoreCase)
-                                     || href.Contains("mega.nz", StringComparison.OrdinalIgnoreCase)
-                                     || href.Contains("drive.google.com", StringComparison.OrdinalIgnoreCase)))
+            if (string.IsNullOrWhiteSpace(href) || href.StartsWith('#') || href.StartsWith('?')
+                || !Uri.TryCreate(new Uri("https://osuskins.net/"), WebUtility.HtmlDecode(href), out Uri? uri)
+                || uri.Scheme != Uri.UriSchemeHttps || uri.AbsolutePath == "/")
+                continue;
+
+            // Catalogue sort links and fragment controls are not archive downloads.
+            if (uri.AbsolutePath.EndsWith(".osk", StringComparison.OrdinalIgnoreCase)
+                || uri.Host is "mega.nz" or "www.mega.nz" or "drive.google.com" or "drive.usercontent.google.com"
+                || MediaFireSkinDownloadResolver.IsPublicPage(uri))
                 return href;
+            if (uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries)
+                    .Any(segment => segment.Equals("download", StringComparison.OrdinalIgnoreCase)
+                                    || segment.Equals("downloads", StringComparison.OrdinalIgnoreCase)))
+                fallback ??= href;
         }
-        return null;
+        return fallback;
     }
 
     public static bool HasSensitiveMarker(string html) =>
@@ -550,7 +561,7 @@ internal static class SkinHtml
 
     public static string Clean(string value) => whitespace.Replace(WebUtility.HtmlDecode(tags.Replace(value ?? string.Empty, " ")), " ").Trim();
 
-    private static string? ReadAttribute(string html, string name)
+    internal static string? ReadAttribute(string html, string name)
     {
         foreach (Match match in attributes.Matches(html ?? string.Empty))
         {

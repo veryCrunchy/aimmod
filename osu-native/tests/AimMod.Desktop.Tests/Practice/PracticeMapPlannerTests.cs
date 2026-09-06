@@ -163,7 +163,7 @@ public sealed class PracticeMapPlannerTests
             {
                 Assert.That(sourceAfterExport, Is.EqualTo(original));
                 Assert.That(exported, Does.Contain("AudioFilename:practice-audio.ogg"));
-                Assert.That(exported, Does.Contain("AudioLeadIn:1500"));
+                Assert.That(exported, Does.Contain("AudioLeadIn:0"));
                 Assert.That(exported, Does.Contain("Source:Practice drill derived from Artist - Source Song [Original], mapped by Mapper."));
                 Assert.That(exported, Does.Contain("BeatmapID:0"));
                 Assert.That(exported, Does.Contain("\n2,"), "Recovery gaps should be represented as osu! breaks.");
@@ -212,6 +212,62 @@ public sealed class PracticeMapPlannerTests
         Assert.That(async () => await new PracticeMapArtifactBuilder(new CancellingAudioSlicer()).BuildAsync(
             source, plan, output), Throws.TypeOf<OperationCanceledException>());
         Assert.That(Directory.Exists(output), Is.False);
+    }
+
+    [Test]
+    public void SeparateTriplesAreBurstsNotAStream()
+    {
+        string objects = string.Join('\n', Enumerable.Range(0, 15).Select(i =>
+            $"{150 + i % 3 * 20},192,{10000 + i / 3 * 1000 + i % 3 * 100},1,0,0:0:0:0:"));
+        PracticeSourceBeatmap source = read(map(objects: objects));
+        var attempts = new[] { analysis(miss(7, .9)) };
+        Assert.That(PracticeMapPlanner.FindSections(source, attempts, new(PracticeDrillType.Streams)), Is.Empty);
+        Assert.That(PracticeMapPlanner.FindSections(source, attempts, new(PracticeDrillType.Bursts)), Is.Not.Empty);
+    }
+
+    [Test]
+    public void FastSliderHeadsDoNotBecomeAStream()
+    {
+        string objects = string.Join('\n', Enumerable.Range(0, 12).Select(i =>
+            $"{150 + i % 3 * 20},192,{10000 + i * 100},2,0,L|180:192,1,10"));
+        PracticeSourceBeatmap source = read(map(objects: objects));
+        var attempts = new[] { analysis(miss(5, .9)) };
+        Assert.That(PracticeMapPlanner.FindSections(source, attempts, new(PracticeDrillType.Streams)), Is.Empty);
+        Assert.That(PracticeMapPlanner.FindSections(source, attempts, new(PracticeDrillType.SliderControl)), Is.Not.Empty);
+    }
+
+    [TestCase(.75)]
+    [TestCase(1.2)]
+    public void SpeedScalesNotesTimingAndAudioTogether(double rate)
+    {
+        PracticeSourceBeatmap source = read(map(objects: circleObjects(14, 100, 20)));
+        PracticeMapPlan plan = PracticeMapPlanner.CreatePlans(source, [analysis(miss(6, .9))],
+            new(PracticeDrillType.Streams, PlaybackRate: rate))[0];
+        Assert.Multiple(() =>
+        {
+            Assert.That(plan.HitObjects[0].StartTimeMs, Is.EqualTo(4000).Within(.001));
+            Assert.That(plan.HitObjects[1].StartTimeMs - plan.HitObjects[0].StartTimeMs, Is.EqualTo(100 / rate).Within(.001));
+            Assert.That(plan.HitObjects[plan.SourceSection.HitObjects.Count].StartTimeMs - plan.HitObjects[0].StartTimeMs,
+                Is.EqualTo(plan.AudioSlice.CycleDurationMs).Within(.001));
+            Assert.That(plan.AudioSlice.InitialSilenceMs, Is.EqualTo(plan.AudioLeadInMs));
+            Assert.That(plan.AudioLeadInMs + plan.AudioSlice.OutputDurationMs - plan.HitObjects[^1].EndTimeMs, Is.EqualTo(2500).Within(.001));
+            Assert.That(plan.AudioSlice.PlaybackRate, Is.EqualTo(rate));
+        });
+        PracticeSourceBeatmap decoded = read(PracticeMapExporter.Serialize(source, plan));
+        Assert.That(decoded.HitObjects.Count, Is.EqualTo(plan.HitObjects.Count));
+    }
+
+    [Test]
+    public void SelectedSectionIsNotReplacedByHighestPrioritySection()
+    {
+        PracticeSourceBeatmap source = read(map(objects: circleObjects(90, 100, 20)));
+        var attempts = new[] { analysis(miss(6, .9), miss(65, .8)) };
+        var sections = PracticeMapPlanner.FindSections(source, attempts, new(PracticeDrillType.Mixed));
+        Assert.That(sections.Count, Is.GreaterThan(1));
+        PracticeMapPlan plan = PracticeMapPlanner.CreatePlans(source, attempts,
+            new(PracticeDrillType.Mixed, FirstObjectIndex: sections[1].FirstObjectIndex))[0];
+        Assert.That(plan.SourceSection.FirstObjectIndex, Is.EqualTo(sections[1].FirstObjectIndex));
+        Assert.That(PracticeMapPlanner.CreatePlans(source, attempts, new(PracticeDrillType.Mixed, FirstObjectIndex: 9999)), Is.Empty);
     }
 
     private PracticeSourceBeatmap read(string content) => OsuPracticeBeatmapReader.Read(write("source.osu", content));

@@ -51,6 +51,8 @@ public sealed partial class OffscreenVisualCaptureTests
     [TestCase("ppTargets", 1600, 900)]
     [TestCase("ppTargets-populated", 1100, 760)]
     [TestCase("ppTargets-populated", 1600, 900)]
+    [TestCase("ppTargets-details", 1100, 760)]
+    [TestCase("ppTargets-details", 800, 760)]
     [TestCase("loading", 1100, 760)]
     [Explicit("Creates a real graphics device and writes a visual-review artifact.")]
     [SupportedOSPlatform("windows")]
@@ -78,7 +80,7 @@ public sealed partial class OffscreenVisualCaptureTests
         await WindowsPrivateDesktopCapture.CaptureAsync(
             (host, succeeded, failed) => route switch
             {
-                "ppTargets" or "ppTargets-populated" => new CapturePpTargetsGame(host, ppCache!, outputPath, width, height, succeeded, failed),
+                "ppTargets" or "ppTargets-populated" or "ppTargets-details" => new CapturePpTargetsGame(host, ppCache!, outputPath, width, height, succeeded, failed, route == "ppTargets-details"),
                 "beatmaps-populated" => new CaptureBeatmapGame(host, source, outputPath, width, height, succeeded, failed),
                 "statistics-populated" => new CaptureStatisticsGame(host, source, outputPath, width, height, succeeded, failed),
                 "coaching-populated" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.Analysing, succeeded, failed),
@@ -378,7 +380,9 @@ public sealed partial class OffscreenVisualCaptureTests
         [Resolved]
         private FrameworkConfigManager frameworkConfig { get; set; } = null!;
 
-        public CapturePpTargetsGame(GameHost host, PpTargetWorkspaceCache cache, string outputPath, int width, int height, Action succeeded, Action<Exception> failed)
+        private readonly bool showDetails;
+
+        public CapturePpTargetsGame(GameHost host, PpTargetWorkspaceCache cache, string outputPath, int width, int height, Action succeeded, Action<Exception> failed, bool showDetails = false)
         {
             this.host = host;
             this.cache = cache;
@@ -387,6 +391,7 @@ public sealed partial class OffscreenVisualCaptureTests
             this.height = height;
             this.succeeded = succeeded;
             this.failed = failed;
+            this.showDetails = showDetails;
         }
 
         [BackgroundDependencyLoader]
@@ -409,6 +414,19 @@ public sealed partial class OffscreenVisualCaptureTests
             base.LoadComplete();
             frameworkConfig.SetValue(FrameworkSetting.WindowMode, WindowMode.Windowed);
             frameworkConfig.SetValue(FrameworkSetting.WindowedSize, new System.Drawing.Size(width, height));
+            if (showDetails)
+                Scheduler.AddDelayed(() =>
+                {
+                    const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+                    var rows = (osu.Framework.Graphics.Containers.FillFlowContainer<osu.Framework.Graphics.Drawable>)
+                        typeof(NativePpTargetsWorkspace).GetField("results", flags)!.GetValue(workspace)!;
+                    ((osu.Framework.Graphics.Containers.ClickableContainer)rows.Children.First()).Action!();
+                    Scheduler.AddDelayed(() =>
+                    {
+                        var details = typeof(NativePpTargetsWorkspace).GetField("selectedDetails", flags)!.GetValue(workspace)!;
+                        ((AimModScrollContainer)details.GetType().GetField("scroll", flags)!.GetValue(details)!).ScrollTo(450, false);
+                    }, 200);
+                }, 1500);
             Scheduler.AddDelayed(capture, 2200);
         }
 
@@ -417,6 +435,24 @@ public sealed partial class OffscreenVisualCaptureTests
             try
             {
                 const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+                if (showDetails)
+                {
+                    var pane = (osu.Framework.Graphics.Containers.Container)typeof(NativePpTargetsWorkspace).GetField("detailViewport", flags)!.GetValue(workspace)!;
+                    var details = typeof(NativePpTargetsWorkspace).GetField("selectedDetails", flags)!.GetValue(workspace)!;
+                    var detailScroll = (AimModScrollContainer)details.GetType().GetField("scroll", flags)!.GetValue(details)!;
+                    var listScroll = (AimModScrollContainer)typeof(NativePpTargetsWorkspace).GetField("resultScroll", flags)!.GetValue(workspace)!;
+                    Assert.That(pane.Alpha, Is.EqualTo(1));
+                    Assert.That(detailScroll.Current, Is.GreaterThan(0));
+                    Assert.That(listScroll.Current, Is.Zero, "Detail scrolling must not move the target list.");
+                    var actionStatus = (osu.Framework.Graphics.Sprites.SpriteText)details.GetType().GetField("actionStatus", flags)!.GetValue(details)!;
+                    var footer = actionStatus.Parent!;
+                    foreach (var action in ((osu.Framework.Graphics.Containers.Container)footer).Children.OfType<osu.Framework.Graphics.Containers.ClickableContainer>())
+                    {
+                        var bottom = pane.ToLocalSpace(action.ToScreenSpace(action.DrawSize));
+                        Assert.That(bottom.X, Is.LessThanOrEqualTo(pane.DrawWidth));
+                        Assert.That(bottom.Y, Is.LessThanOrEqualTo(pane.DrawHeight));
+                    }
+                }
                 var rows = (osu.Framework.Graphics.Containers.FillFlowContainer<osu.Framework.Graphics.Drawable>)
                     typeof(NativePpTargetsWorkspace).GetField("results", flags)!.GetValue(workspace)!;
                 Assert.That(rows.Count, Is.EqualTo(8), "Capture must show PP target rows, never Home or a loading placeholder.");

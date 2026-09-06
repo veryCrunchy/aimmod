@@ -39,13 +39,35 @@ public sealed class SkinScreenshotCacheTests
         Assert.That(http.Calls, Is.Zero);
     }
 
+    [Test]
+    public async Task ConcurrentPreviewsDownloadAndDecodeOneImage()
+    {
+        string root = Directory.CreateTempSubdirectory("skin-preview-concurrency-").FullName;
+        try
+        {
+            using var original = new Image<Rgba32>(64, 32, Color.HotPink);
+            using var bytes = new MemoryStream();
+            original.SaveAsWebp(bytes);
+            var http = new ImageHttp(bytes.ToArray());
+            var cache = new SkinScreenshotCache(http, root);
+            var results = await Task.WhenAll(Enumerable.Range(0, 12)
+                .Select(_ => cache.GetAsync(new Uri("https://cdn.osuskins.net/screenshots/test.webp"))));
+            Assert.That(results.Distinct().Count(), Is.EqualTo(1));
+            Assert.That(http.Calls, Is.EqualTo(1));
+            using var restored = Image.Load(results[0]);
+            Assert.That(restored.Width, Is.EqualTo(64));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
     private sealed class ImageHttp(byte[] bytes) : ISecureSkinHttpClient
     {
         public int Calls { get; private set; }
-        public Task<SkinHttpPayload> GetBytesAsync(Uri uri, SkinHttpFetchOptions options, CancellationToken cancellationToken = default)
+        public async Task<SkinHttpPayload> GetBytesAsync(Uri uri, SkinHttpFetchOptions options, CancellationToken cancellationToken = default)
         {
             Calls++;
-            return Task.FromResult(new SkinHttpPayload(bytes, uri, "image/webp"));
+            await Task.Delay(25, cancellationToken);
+            return new SkinHttpPayload(bytes, uri, "image/webp");
         }
         public Task<SkinHttpFile> DownloadAsync(Uri uri, string destinationPath, SkinHttpFetchOptions options, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }

@@ -61,7 +61,7 @@ public sealed class PracticeMapExporter
         appendSection(builder, "General", replace(source.Sections.GetValueOrDefault("General", Array.Empty<string>()), new Dictionary<string, string>
         {
             ["AudioFilename"] = plan.AudioSlice.OutputFilename,
-            ["AudioLeadIn"] = PracticeMapPlanner.format(plan.AudioLeadInMs),
+            ["AudioLeadIn"] = "0",
             ["PreviewTime"] = PracticeMapPlanner.format(plan.HitObjects[0].StartTimeMs),
             ["Mode"] = "0",
         }));

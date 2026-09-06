@@ -9,9 +9,10 @@ namespace AimMod.Desktop.Skins.Online;
 public sealed class SkinScreenshotCache(ISecureSkinHttpClient http, string directory)
 {
     private static readonly SkinHttpFetchOptions options = new(
-        ["cdn.osuskins.net", "skins.osuck.net", "i.imgur.com"],
+        ["cdn.osuskins.net", "skins.osuck.net", "i.imgur.com", "raw.githubusercontent.com"],
         ["image/webp", "image/png", "image/jpeg"], 12 * 1024 * 1024, TimeSpan.FromSeconds(20));
     private readonly SemaphoreSlim downloads = new(4, 4);
+    private readonly SemaphoreSlim[] imageGates = Enumerable.Range(0, 64).Select(_ => new SemaphoreSlim(1, 1)).ToArray();
 
     public async Task<string> GetAsync(Uri uri, CancellationToken cancellationToken = default)
     {
@@ -20,10 +21,24 @@ public sealed class SkinScreenshotCache(ISecureSkinHttpClient http, string direc
             throw new InvalidDataException("Unsupported screenshot location.");
         string key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(uri.AbsoluteUri)));
         string path = Path.Combine(directory, key + ".png");
+        cancellationToken.ThrowIfCancellationRequested();
+        if (isFresh(path)) return path;
+        SemaphoreSlim imageGate = imageGates[Convert.ToByte(key[..2], 16) % imageGates.Length];
+        await imageGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (isFresh(path)) return path;
+            return await downloadAsync(uri, path, cancellationToken).ConfigureAwait(false);
+        }
+        finally { imageGate.Release(); }
+    }
+
+    private async Task<string> downloadAsync(Uri uri, string path, CancellationToken cancellationToken)
+    {
         await downloads.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (File.Exists(path) && DateTime.UtcNow - File.GetLastWriteTimeUtc(path) < TimeSpan.FromDays(30)) return path;
+            if (isFresh(path)) return path;
             SkinHttpPayload payload = await http.GetBytesAsync(uri, options, cancellationToken).ConfigureAwait(false);
             ImageInfo info = Image.Identify(payload.Bytes);
             if (info.Width <= 0 || info.Height <= 0 || (long)info.Width * info.Height > 32_000_000)
@@ -45,4 +60,7 @@ public sealed class SkinScreenshotCache(ISecureSkinHttpClient http, string direc
         }
         finally { downloads.Release(); }
     }
+
+    private static bool isFresh(string path) => File.Exists(path)
+        && DateTime.UtcNow - File.GetLastWriteTimeUtc(path) < TimeSpan.FromDays(30);
 }

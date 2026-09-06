@@ -7,6 +7,9 @@ public enum PracticeDrillType
     LongJumps,
     Streams,
     Mixed,
+    Bursts,
+    SliderControl,
+    RhythmChanges,
 }
 
 public sealed record PracticeMapMetadata(
@@ -69,9 +72,11 @@ public sealed record PracticeAudioSliceRequest(
     double SourceStartTimeMs,
     double SourceEndTimeMs,
     string OutputFilename,
-    int RepeatCount = 1)
+    int RepeatCount = 1,
+    double PlaybackRate = 1,
+    double InitialSilenceMs = 0)
 {
-    public double CycleDurationMs => SourceEndTimeMs - SourceStartTimeMs;
+    public double CycleDurationMs => (SourceEndTimeMs - SourceStartTimeMs) / PlaybackRate;
 
     public double OutputDurationMs => CycleDurationMs * RepeatCount;
 }
@@ -102,7 +107,9 @@ public sealed record PracticeMapOptions(
     double AudioPaddingMs = 2_500,
     double TargetDurationMs = 60_000,
     int MinimumRepetitions = 6,
-    int MaximumRepetitions = 12)
+    int MaximumRepetitions = 12,
+    int? FirstObjectIndex = null,
+    double PlaybackRate = 1)
 {
     public PracticeMapOptions Normalised() => this with
     {
@@ -114,5 +121,6 @@ public sealed record PracticeMapOptions(
         TargetDurationMs = Math.Clamp(TargetDurationMs, 20_000, 120_000),
         MinimumRepetitions = Math.Clamp(MinimumRepetitions, 2, 20),
         MaximumRepetitions = Math.Clamp(MaximumRepetitions, Math.Clamp(MinimumRepetitions, 2, 20), 24),
+        PlaybackRate = double.IsFinite(PlaybackRate) ? Math.Clamp(PlaybackRate, 0.75, 1.25) : 1,
     };
 }

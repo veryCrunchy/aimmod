@@ -275,6 +275,21 @@ public sealed class OfficialOsuApiClientTests
         });
     }
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task ConcurrentTabsFetchEachScoreFeedOnlyOnce(bool recent)
+    {
+        await writeSignedInSessionAsync("crunchy", access_token);
+        await using var monitor = await LazerSessionMonitor.CreateAsync(gameIniPath);
+        var handler = new RecordingHandler(_ => jsonResponse(HttpStatusCode.OK, scorePageJson(42, 1)));
+        using var client = new OfficialOsuApiClient(monitor, handler, Path.Combine(temporaryDirectory, "cache"), TimeProvider.System);
+        var results = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => recent
+            ? client.FetchRecentScoresAsync(profile()) : client.FetchBestScoresAsync(profile())));
+        Assert.That(results.All(result => result.Status == OsuBestScoresFetchStatus.Success), Is.True);
+        Assert.That(results.All(result => result.Scores!.Count == 1), Is.True);
+        Assert.That(handler.CallCount, Is.EqualTo(1));
+    }
+
     [Test]
     public async Task ExpiredCacheIsRefetchedInsteadOfUsedAsFallback()
     {

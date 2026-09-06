@@ -10,6 +10,76 @@ public class PpTargetOpportunityModelTests
     private static readonly DateTimeOffset reference = new(2026, 1, 30, 12, 0, 0, TimeSpan.Zero);
 
     [Test]
+    public void LongerMapsUseConservativeDurationAdjustmentWhenSimilarOutcomesExist()
+    {
+        var profile = PpTargetOpportunityModel.Build(Enumerable.Range(1, 12).Select(i => entry(i, i <= 9)), reference);
+        var shortMap = PpTargetOpportunityModel.EstimatePass(profile, 5, 180, 120, [])!;
+        var longMap = PpTargetOpportunityModel.EstimatePass(profile, 5, 180, 363, []);
+        Assert.That(longMap, Is.Not.Null);
+        Assert.Multiple(() =>
+        {
+            Assert.That(longMap!.DurationAdjusted, Is.True);
+            Assert.That(longMap.Confidence, Is.EqualTo(PpTargetConfidence.Low));
+            Assert.That(longMap.Probability, Is.LessThan(shortMap.Probability));
+            Assert.That(longMap.Lower, Is.LessThan(longMap.Probability));
+            Assert.That(longMap.Upper, Is.GreaterThan(longMap.Probability));
+            Assert.That(longMap.Upper - longMap.Lower, Is.GreaterThan(shortMap.Upper - shortMap.Lower));
+        });
+        Assert.That(PpTargetOpportunityModel.EstimatePass(profile, 5, 180, 600, []), Is.Null);
+        Assert.That(PpTargetOpportunityModel.EstimatePass(profile, 5, 280, 363, []), Is.Null);
+        Assert.That(PpTargetOpportunityModel.EstimatePass(profile, 5, 180, 363, ["HR"]), Is.Null);
+    }
+
+    [Test]
+    public void DurationFallbackDoesNotTreatRetriesOfOneMapAsBroadEvidence()
+    {
+        var profile = PpTargetOpportunityModel.Build(Enumerable.Range(1, 20)
+            .Select(i => entry(i, true) with { OnlineBeatmapId = i % 3 + 1 }), reference);
+        Assert.That(PpTargetOpportunityModel.EstimatePass(profile, 5, 180, 363, []), Is.Null);
+    }
+
+    [Test]
+    public void BroaderComparisonUsesObservedOutcomesAndReportsLowConfidence()
+    {
+        var scores = Enumerable.Range(1, 10).Select(i => entry(i, i <= 6) with { StarRating = 5.8, Bpm = 200, LengthSeconds = 160 });
+        var profile = PpTargetOpportunityModel.Build(scores, reference);
+        var estimate = PpTargetOpportunityModel.EstimatePass(profile, 5, 180, 120, []);
+        Assert.That(estimate, Is.Not.Null);
+        Assert.Multiple(() =>
+        {
+            Assert.That(estimate!.BroaderComparison, Is.True);
+            Assert.That(estimate.Confidence, Is.EqualTo(PpTargetConfidence.Low));
+            Assert.That(estimate.Lower, Is.LessThan(estimate.Probability));
+            Assert.That(estimate.Upper, Is.GreaterThan(estimate.Probability));
+            Assert.That(estimate.Probability, Is.InRange(.4, .7));
+        });
+    }
+
+    [Test]
+    public void MissingMetadataDiscountsSupportInsteadOfDiscardingEveryOutcome()
+    {
+        var scores = Enumerable.Range(1, 10).Select(i => entry(i, i <= 6));
+        var full = PpTargetOpportunityModel.EstimatePass(PpTargetOpportunityModel.Build(scores, reference), 5, 180, 120, [])!;
+        var sparse = PpTargetOpportunityModel.EstimatePass(PpTargetOpportunityModel.Build(scores.Select(s => s with { Bpm = null, LengthSeconds = null }), reference), 5, 180, 120, [])!;
+        Assert.That(sparse, Is.Not.Null);
+        Assert.That(sparse.BroaderComparison, Is.True);
+        Assert.That(sparse.Upper - sparse.Lower, Is.GreaterThan(full.Upper - full.Lower));
+    }
+
+    [Test]
+    public void ExplicitLocalOutcomesAreIncludedWithoutInventingUnknownPasses()
+    {
+        var local = Enumerable.Range(1, 8).Select(i => entry(i, i <= 4, ScoreHistoryProvenance.Local) with
+        {
+            OnlineScoreId = 0, OnlineBeatmapId = 0, LocalBeatmapId = new Guid(i, 0, 0, new byte[8]),
+        }).ToArray();
+        var profile = PpTargetOpportunityModel.Build(local, reference);
+        Assert.That(profile.RecentAttempts, Has.Count.EqualTo(8));
+        Assert.That(PpTargetOpportunityModel.EstimatePass(profile, 5, 180, 120, [])!.Maps, Is.EqualTo(8));
+        Assert.That(PpTargetOpportunityModel.Build(local.Select(s => s with { Passed = null }), reference).RecentAttempts, Is.Empty);
+    }
+
+    [Test]
     public void AccountGainReweightsDisplacedPlaysAndReplacesSameDifficulty()
     {
         var profile = new PpTargetOpportunityProfile(reference, [new(1, 100), new(2, 80)], []);

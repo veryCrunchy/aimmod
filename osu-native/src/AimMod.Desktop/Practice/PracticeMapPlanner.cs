@@ -4,7 +4,6 @@ namespace AimMod.Desktop.Practice;
 
 public static class PracticeMapPlanner
 {
-    private const double stream_interval_ms = 160;
     private const double jump_distance = 170;
 
     public static IReadOnlyList<PracticeMapPlan> CreatePlans(
@@ -16,9 +15,18 @@ public static class PracticeMapPlanner
         ArgumentNullException.ThrowIfNull(analyses);
         ArgumentNullException.ThrowIfNull(options);
         PracticeMapOptions safe = options.Normalised();
+        IReadOnlyList<PracticeSourceSection> sections = FindSections(beatmap, analyses, safe);
+        return sections.Where(section => safe.FirstObjectIndex is null || section.FirstObjectIndex == safe.FirstObjectIndex)
+            .Take(safe.MaximumSections).Select((section, index) => compose(beatmap, section, safe, index + 1)).ToArray();
+    }
+
+    public static IReadOnlyList<PracticeSourceSection> FindSections(
+        PracticeSourceBeatmap beatmap, IEnumerable<ReplayAnalysisResult> analyses, PracticeMapOptions options)
+    {
+        PracticeMapOptions safe = options.Normalised();
         ReplayAnalysisResult[] attempts = analyses.Where(result => result.Judgements is not null).ToArray();
         if (attempts.Length == 0)
-            return Array.Empty<PracticeMapPlan>();
+            return Array.Empty<PracticeSourceSection>();
 
         PracticeWeakObject[] weaknesses = aggregateWeaknesses(beatmap, attempts);
         var candidates = new List<PracticeSourceSection>();
@@ -27,20 +35,20 @@ public static class PracticeMapPlanner
             int first = Math.Max(0, weakness.ObjectIndex - safe.ContextObjectsBefore);
             int last = Math.Min(beatmap.HitObjects.Count - 1, weakness.ObjectIndex + safe.ContextObjectsAfter);
             IReadOnlyList<PracticeHitObject> objects = beatmap.HitObjects.Skip(first).Take(last - first + 1).ToArray();
-            PracticeDrillType type = classify(objects, weakness.ObjectIndex - first);
-            if (safe.DrillType != PracticeDrillType.Mixed && type != safe.DrillType)
+            IReadOnlyList<PracticeDrillType> types = DetectPatterns(beatmap, objects, weakness.ObjectIndex - first);
+            if (safe.DrillType != PracticeDrillType.Mixed && !types.Contains(safe.DrillType))
                 continue;
+            PracticeDrillType type = safe.DrillType == PracticeDrillType.Mixed ? types[0] : safe.DrillType;
             PracticeWeakObject[] included = weaknesses.Where(item => item.ObjectIndex >= first && item.ObjectIndex <= last).ToArray();
             candidates.Add(new PracticeSourceSection(type, first, last, objects[0].StartTimeMs,
-                objects[^1].EndTimeMs, included.Sum(item => item.WeightedSeverity), included, objects));
+                objects.Max(item => item.EndTimeMs), included.Sum(item => item.WeightedSeverity), included, objects));
         }
 
         PracticeSourceSection[] selected = candidates.OrderByDescending(section => section.WeaknessScore)
                                                       .ThenBy(section => section.SourceStartTimeMs)
                                                       .Aggregate(new List<PracticeSourceSection>(), addNonOverlapping)
-                                                      .Take(safe.MaximumSections)
                                                       .ToArray();
-        return selected.Select((section, index) => compose(beatmap, section, safe, index + 1)).ToArray();
+        return selected;
     }
 
     private static PracticeWeakObject[] aggregateWeaknesses(PracticeSourceBeatmap beatmap, IReadOnlyCollection<ReplayAnalysisResult> analyses) =>
@@ -69,32 +77,66 @@ public static class PracticeMapPlanner
         return selected;
     }
 
-    private static PracticeDrillType classify(IReadOnlyList<PracticeHitObject> objects, int weakOffset)
+    public static IReadOnlyList<PracticeDrillType> DetectPatterns(PracticeSourceBeatmap beatmap, IReadOnlyList<PracticeHitObject> objects, int weakOffset)
     {
-        int streamLinks = 0;
+        int run = 1;
+        int longestRun = 1;
         int jumpLinks = 0;
-        int from = Math.Max(1, weakOffset - 5);
-        int to = Math.Min(objects.Count - 1, weakOffset + 5);
+        int rhythmChanges = 0;
+        double previousInterval = 0;
+        int from = Math.Max(1, weakOffset - 7);
+        int to = Math.Min(objects.Count - 1, weakOffset + 7);
         for (int index = from; index <= to; index++)
         {
             PracticeHitObject previous = objects[index - 1];
             PracticeHitObject current = objects[index];
             double interval = current.StartTimeMs - previous.StartTimeMs;
             double distance = Math.Sqrt(Math.Pow(current.X - previous.X, 2) + Math.Pow(current.Y - previous.Y, 2));
-            if (interval is > 0 and <= stream_interval_ms && distance <= 130)
-                streamLinks++;
+            PracticeTimingPoint? timing = beatmap.TimingPoints.LastOrDefault(point => point.Uninherited && point.TimeMs <= current.StartTimeMs);
+            double beatLength = timing is not null && double.TryParse(timing.Fields[1], System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out double value) && value > 0 ? value : 500;
+            // Require a contiguous circle run, not several unrelated fast links or slider heads.
+            bool fastLink = previous.IsCircle && current.IsCircle && interval >= 40
+                && interval <= Math.Min(200, beatLength * 0.4) && distance <= 130;
+            run = fastLink && (run == 1 || Math.Abs(interval - previousInterval) <= interval * 0.25) ? run + 1 : fastLink ? 2 : 1;
+            longestRun = Math.Max(longestRun, run);
+            if (previousInterval > 0 && interval >= 60 && interval <= beatLength
+                && Math.Max(interval, previousInterval) / Math.Min(interval, previousInterval) >= 1.7)
+                rhythmChanges++;
+            previousInterval = interval;
             if (interval is >= 90 and <= 650 && distance >= jump_distance)
                 jumpLinks++;
         }
-        if (streamLinks >= 4 && streamLinks >= jumpLinks)
-            return PracticeDrillType.Streams;
+        var result = new List<PracticeDrillType>();
+        if (longestRun >= 8)
+            result.Add(PracticeDrillType.Streams);
+        else if (longestRun >= 3)
+            result.Add(PracticeDrillType.Bursts);
         if (jumpLinks >= 2)
-            return PracticeDrillType.LongJumps;
-        return PracticeDrillType.Mixed;
+            result.Add(PracticeDrillType.LongJumps);
+        if (objects.Skip(Math.Max(0, weakOffset - 2)).Take(5).Any(item => item.IsSlider))
+            result.Add(PracticeDrillType.SliderControl);
+        if (rhythmChanges >= 2)
+            result.Add(PracticeDrillType.RhythmChanges);
+        result.Add(PracticeDrillType.Mixed);
+        return result;
     }
+
+    public static string Label(PracticeDrillType type) => type switch
+    {
+        PracticeDrillType.LongJumps => "Long jumps",
+        PracticeDrillType.Streams => "Streams",
+        PracticeDrillType.Bursts => "Bursts",
+        PracticeDrillType.SliderControl => "Slider control",
+        PracticeDrillType.RhythmChanges => "Rhythm changes",
+        _ => "Original phrase",
+    };
 
     private static PracticeMapPlan compose(PracticeSourceBeatmap beatmap, PracticeSourceSection section, PracticeMapOptions options, int number)
     {
+        double rate = options.PlaybackRate;
+        // Work on the original song clock, then scale every timestamp and red-line beat length together.
+        options = options with { AudioPaddingMs = options.AudioPaddingMs * rate, LeadInMs = options.LeadInMs * rate, TargetDurationMs = options.TargetDurationMs * rate };
         double audioStart = Math.Max(0, section.SourceStartTimeMs - options.AudioPaddingMs);
         double audioEnd = section.SourceEndTimeMs + options.AudioPaddingMs;
         double audioLeadIn = Math.Max(0, options.LeadInMs - (section.SourceStartTimeMs - audioStart));
@@ -118,13 +160,8 @@ public static class PracticeMapPlanner
                                                      audioStart,
                                                      audioLeadIn + repetition * cycleDuration)))
                                                  .ToArray();
-        string type = section.DrillType switch
-        {
-            PracticeDrillType.LongJumps => "Long jumps",
-            PracticeDrillType.Streams => "Streams",
-            _ => "Mixed pattern",
-        };
-        string version = $"AimMod {type} x{repetitions} drill {number} - {beatmap.Metadata.Version}";
+        string type = Label(section.DrillType);
+        string version = $"AimMod {type} x{repetitions} {rate * 100:0}% drill {number} - {beatmap.Metadata.Version}";
         const string outputAudio = "practice-audio.ogg";
         string sourceDirectory = Path.GetDirectoryName(beatmap.SourcePath)!;
         string sourceAudio = Path.GetFullPath(Path.Combine(sourceDirectory, beatmap.Metadata.AudioFilename));
@@ -132,10 +169,27 @@ public static class PracticeMapPlanner
         if (!sourceAudio.StartsWith(sourcePrefix, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("The source beatmap audio path escapes its beatmap directory.");
         return new PracticeMapPlan(section.DrillType, section, beatmap.SourcePath, beatmap.Metadata.Title, beatmap.Metadata.Artist,
-            beatmap.Metadata.Creator, beatmap.Metadata.Version, version, shift, audioLeadIn, timing, objects,
-            new PracticeAudioSliceRequest(sourceAudio, audioStart, audioEnd, outputAudio, repetitions),
+            beatmap.Metadata.Creator, beatmap.Metadata.Version, version, shift / rate, audioLeadIn / rate,
+            timing.Select(point => scaleTiming(point, rate)).ToArray(), objects.Select(item => scaleObject(item, rate)).ToArray(),
+            new PracticeAudioSliceRequest(sourceAudio, audioStart, audioEnd, outputAudio, repetitions, rate, audioLeadIn / rate),
             $"Practice drill derived from {beatmap.Metadata.Artist} - {beatmap.Metadata.Title} [{beatmap.Metadata.Version}], mapped by {beatmap.Metadata.Creator}. The looped source excerpt and geometry repeat {repetitions} times with a lead-up and recovery between rounds.",
             repetitions);
+    }
+
+    private static PracticeHitObject scaleObject(PracticeHitObject item, double rate)
+    {
+        string[] fields = item.Fields.ToArray();
+        fields[2] = format(item.StartTimeMs / rate);
+        if (item.IsSpinner && fields.Length > 5) fields[5] = format(item.EndTimeMs / rate);
+        return item with { StartTimeMs = item.StartTimeMs / rate, EndTimeMs = item.EndTimeMs / rate, Fields = fields };
+    }
+
+    private static PracticeTimingPoint scaleTiming(PracticeTimingPoint point, double rate)
+    {
+        string[] fields = point.Fields.ToArray();
+        fields[0] = format(point.TimeMs / rate);
+        if (point.Uninherited) fields[1] = format(double.Parse(fields[1], System.Globalization.CultureInfo.InvariantCulture) / rate);
+        return point with { TimeMs = point.TimeMs / rate, Fields = fields };
     }
 
     private static IEnumerable<PracticeTimingPoint> selectTimingPoints(IReadOnlyList<PracticeTimingPoint> points, double start, double end)

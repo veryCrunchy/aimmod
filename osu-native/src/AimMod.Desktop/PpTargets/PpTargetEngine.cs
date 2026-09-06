@@ -196,14 +196,17 @@ public static class PpTargetRanker
         if (estimate?.PatternPrediction is { Fit: { } patternFit })
             attainability = Math.Clamp(patternFit, 0, 1);
         PpTargetConfidence recommendation = recommendationConfidence(nearbySampleCount, profile.Confidence);
+        if (profile.PatternProfile?.ScoreEvidence is not null)
+            recommendation = nearbySampleCount >= 2 ? PpTargetConfidence.Low : PpTargetConfidence.Insufficient;
         if (estimate?.PatternPrediction is { } pattern)
         {
             // Unknown coverage is neutral for ordering, not evidence of proficiency.
             // A known bottleneck still counts when a different pattern is unmeasured.
-            attainability = pattern.Fit ?? Math.Min(0.5, pattern.PatternFits
-                .Where(item => item.Fit is not null).Select(item => item.Fit!.Value).DefaultIfEmpty(0.5).Min());
-            scoreEvidence = pattern.EvidenceConfidence;
-            recommendation = pattern.Fit is null ? PpTargetConfidence.Insufficient : pattern.EvidenceConfidence switch
+            bool scoreSupported = profile.PatternProfile?.ScoreEvidence is not null && nearbySampleCount >= 2;
+            attainability = pattern.Fit ?? Math.Min(scoreSupported ? attainability : 0.5, pattern.PatternFits
+                .Where(item => item.Fit is not null).Select(item => item.Fit!.Value).DefaultIfEmpty(1).Min());
+            scoreEvidence = pattern.Fit is null && scoreSupported ? scoreEvidence : pattern.EvidenceConfidence;
+            recommendation = pattern.Fit is null ? (scoreSupported ? PpTargetConfidence.Low : PpTargetConfidence.Insufficient) : pattern.EvidenceConfidence switch
             {
                 >= 0.65 => PpTargetConfidence.High,
                 >= 0.35 => PpTargetConfidence.Medium,
@@ -265,6 +268,12 @@ public static class PpTargetRanker
         PpTargetPreferenceProfile profile,
         double starRating)
     {
+        if (profile.PatternProfile is { ScoreEvidence: not null } recent)
+        {
+            var support = PpTargetPatternModel.ScoreFit(recent, starRating,
+                profile.PreferredModSetup ?? PpTargetMods.SelectCompatible(profile.CommonMods));
+            return (support.Fit, support.Confidence, support.Maps);
+        }
         PpTargetPerformanceSample[] nearby = profile.PerformanceSamples
             .Where(sample => double.IsFinite(sample.StarRating) && sample.StarRating > 0
                              && double.IsFinite(sample.Accuracy) && sample.Accuracy is >= 0 and <= 1)

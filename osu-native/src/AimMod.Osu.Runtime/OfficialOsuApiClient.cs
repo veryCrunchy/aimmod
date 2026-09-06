@@ -53,7 +53,17 @@ public sealed class OfficialOsuApiClient : IDisposable
         };
     }
 
-    public async Task<OsuBestScoresFetchResult> FetchBestScoresAsync(
+    private readonly SemaphoreSlim bestScoresGate = new(1, 1);
+    private readonly SemaphoreSlim recentScoresGate = new(1, 1);
+
+    public async Task<OsuBestScoresFetchResult> FetchBestScoresAsync(OsuProfile profile, CancellationToken cancellationToken = default)
+    {
+        await bestScoresGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try { return await fetchBestScoresAsync(profile, cancellationToken).ConfigureAwait(false); }
+        finally { bestScoresGate.Release(); }
+    }
+
+    private async Task<OsuBestScoresFetchResult> fetchBestScoresAsync(
         OsuProfile profile,
         CancellationToken cancellationToken = default)
     {
@@ -292,7 +302,14 @@ public sealed class OfficialOsuApiClient : IDisposable
         }
     }
 
-    public async Task<OsuBestScoresFetchResult> FetchRecentScoresAsync(
+    public async Task<OsuBestScoresFetchResult> FetchRecentScoresAsync(OsuProfile profile, CancellationToken cancellationToken = default)
+    {
+        await recentScoresGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try { return await fetchRecentScoresAsync(profile, cancellationToken).ConfigureAwait(false); }
+        finally { recentScoresGate.Release(); }
+    }
+
+    private async Task<OsuBestScoresFetchResult> fetchRecentScoresAsync(
         OsuProfile profile,
         CancellationToken cancellationToken = default)
     {

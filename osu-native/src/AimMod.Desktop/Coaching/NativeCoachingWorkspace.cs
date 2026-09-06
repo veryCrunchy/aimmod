@@ -68,6 +68,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     private CancellationTokenSource? practiceGeneration;
     private CancellationTokenSource? practiceLaunch;
     private ScheduledDelegate? scheduledPracticeRefresh;
+    private ScheduledDelegate? scheduledAnalysisRefresh;
     private IReadOnlyList<LocalReplay> allReplays = Array.Empty<LocalReplay>();
     private IReadOnlyList<LocalReplay> replays = Array.Empty<LocalReplay>();
     private PracticeCandidatePage? renderedPracticePage;
@@ -80,6 +81,10 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     private int renderedAnalysisCount = -1;
     private string practiceMessage = string.Empty;
     private LazerBeatmapArchive? practiceLazerArchive;
+    private readonly NativePracticeWorkspace? practiceWorkspace;
+    private readonly Func<LocalReplay, CancellationToken, Task>? openBeatmap;
+
+    public void ClosePractice() { if (practiceWorkspace is not null) practiceWorkspace.Alpha = 0; }
 
     public void FocusPracticeMap(string title)
     {
@@ -88,6 +93,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         practiceEvidence.Value = PracticeEvidenceFilter.AnyEvidence;
         practiceSearch.Current.Value = title;
         updatePracticeMapsImmediately();
+        practiceWorkspace?.Open(title);
     }
 
     public NativeCoachingWorkspace(
@@ -96,7 +102,9 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         Action<LocalReplay> openReplay,
         Func<IAccountScoreHistoryService?>? accountHistory = null,
         Func<PracticeMapGenerationRequest, CancellationToken, Task<PracticeMapGenerationResult>>? generatePracticeMap = null,
-        Func<LazerBeatmapArchive, CancellationToken, Task<LazerBeatmapInstallResult>>? installPracticeMap = null)
+        Func<LazerBeatmapArchive, CancellationToken, Task<LazerBeatmapInstallResult>>? installPracticeMap = null,
+        NativePracticeWorkspace? practiceWorkspace = null,
+        Func<LocalReplay, CancellationToken, Task>? openBeatmap = null)
     {
         this.source = source ?? throw new ArgumentNullException(nameof(source));
         this.analyses = analyses ?? throw new ArgumentNullException(nameof(analyses));
@@ -104,6 +112,8 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         this.accountHistory = accountHistory ?? (() => null);
         this.generatePracticeMap = generatePracticeMap;
         this.installPracticeMap = installPracticeMap;
+        this.practiceWorkspace = practiceWorkspace;
+        this.openBeatmap = openBeatmap;
         sourceChanges = source as ILocalLibrarySourceChanged;
         if (sourceChanges is not null)
             sourceChanges.SourceChanged += sourceChanged;
@@ -128,6 +138,8 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             out sessionTrend,
             coachingTimeRange));
         content.Add(analysisBanner = new AnalysisProgressBanner());
+        if (practiceWorkspace is not null)
+            content.Add(new ActionButton("Practice workspace", () => practiceWorkspace.Open()));
         content.Add(new GridContainer
         {
             RelativeSizeAxes = Axes.X,
@@ -184,6 +196,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             },
             loadingOverlay = new AimModLoadingOverlay(),
         };
+        if (practiceWorkspace is not null) AddInternal(practiceWorkspace);
 
         practiceSearch.Current.BindValueChanged(_ => updatePracticeMapsImmediately());
         practiceSort.BindValueChanged(_ => updatePracticeMapsImmediately());
@@ -311,11 +324,15 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
 
         if (workspace is not null && renderedAnalysisCount != analyses.Count)
         {
-            Guid? selectedScoreId = workspace.SelectedRun?.ScoreId;
-            workspace = buildWorkspace(selectedScoreId);
-            renderedAnalysisCount = analyses.Count;
-            invalidatePracticeCandidates();
-            updateWorkspace();
+            scheduledAnalysisRefresh ??= Scheduler.AddDelayed(() =>
+            {
+                scheduledAnalysisRefresh = null;
+                if (IsDisposed || !acceptingAnalysisProgress) return;
+                workspace = buildWorkspace(workspace?.SelectedRun?.ScoreId);
+                renderedAnalysisCount = analyses.Count;
+                invalidatePracticeCandidates();
+                updateWorkspace();
+            }, 750);
         }
 
         analysisBanner.ShowAnalysing(
@@ -348,6 +365,8 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
 
     public void ApplyNewAnalyses(int completed, int failed)
     {
+        scheduledAnalysisRefresh?.Cancel();
+        scheduledAnalysisRefresh = null;
         acceptingAnalysisProgress = false;
         Guid? selectedScoreId = workspace?.SelectedRun?.ScoreId;
         workspace = buildWorkspace(selectedScoreId);
@@ -425,6 +444,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             return;
 
         renderedPracticePage = candidates;
+        practiceWorkspace?.SetCandidates(available);
         renderedPracticeState = displayState;
         practiceHost.Clear();
         practiceSectionLine.SetDetail(PracticeCandidateDetail(candidates));
@@ -493,6 +513,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
 
     private void beginPracticeMap(PracticeMapCandidate candidate, PracticeDrillType drillType)
     {
+        if (practiceWorkspace is not null) { practiceWorkspace.OpenCandidate(candidate); return; }
         if (generatePracticeMap is null || creatingPracticeMap)
             return;
         practiceGeneration?.Cancel();
@@ -683,6 +704,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             prediction,
             showGlobalOverview,
             run.HasReplayFile ? () => openReplay(run) : null));
+        selectedRunHost.Add(new OpenBeatmapButton(() => run, openBeatmap));
     }
 
     private void updateExactAnalysis(LocalReplay? run, CoachingMechanicsProfile mechanics)
@@ -830,7 +852,11 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
 
         Guid? selectedId = workspace?.SelectedRun?.ScoreId;
         foreach (CoachingRecentRun run in page.Items)
+        {
             runList.Add(new RunPickerRow(run, run.ScoreId == selectedId, () => selectRun(run.ScoreId)));
+            var replay = replays.FirstOrDefault(item => item.ScoreId == run.ScoreId);
+            if (replay is not null) runList.Add(new OpenBeatmapButton(() => replay, openBeatmap));
+        }
 
         if (page.HasMore)
         {
@@ -1274,6 +1300,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
 
     protected override void Dispose(bool isDisposing)
     {
+        scheduledAnalysisRefresh?.Cancel();
         loading?.Cancel();
         loading?.Dispose();
         practiceGeneration?.Cancel();
@@ -2085,9 +2112,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                     Spacing = new(6),
                     Children = new Drawable[]
                     {
-                        new ActionButton("Jumps", () => create(candidate, PracticeDrillType.LongJumps)),
-                        new ActionButton("Streams", () => create(candidate, PracticeDrillType.Streams)),
-                        new ActionButton("Mixed", () => create(candidate, PracticeDrillType.Mixed)),
+                        new ActionButton("Configure drill", () => create(candidate, PracticeDrillType.Mixed)),
                     },
                 },
             };

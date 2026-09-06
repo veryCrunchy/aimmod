@@ -11,6 +11,26 @@ namespace AimMod.Desktop.Tests;
 public sealed class NativeCoachingWorkspaceTests
 {
     [Test]
+    public void AnalysisBurstQueuesOneRefreshAndCompletionAppliesImmediately()
+    {
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var analyses = new Dictionary<Guid, ReplayAnalysisResult>();
+        using var view = new NativeCoachingWorkspace(new InMemoryLocalLibrarySource([], []), analyses, _ => { });
+        var type = typeof(NativeCoachingWorkspace);
+        type.GetField("workspace", flags)!.SetValue(view, NativeCoachingWorkspaceModel.Build([], analyses));
+        view.BeginAnalysisProgress();
+        analyses[Guid.NewGuid()] = exactAnalysis();
+        view.SetAnalysisProgress(1, 10, "Synthetic map");
+        object? refresh = type.GetField("scheduledAnalysisRefresh", flags)!.GetValue(view);
+        for (int i = 2; i < 10; i++) view.SetAnalysisProgress(i, 10, "Synthetic map");
+        Assert.That(refresh, Is.Not.Null);
+        Assert.That(type.GetField("scheduledAnalysisRefresh", flags)!.GetValue(view), Is.SameAs(refresh));
+        view.ApplyNewAnalyses(10, 0);
+        Assert.That(type.GetField("scheduledAnalysisRefresh", flags)!.GetValue(view), Is.Null);
+        Assert.That(type.GetField("renderedAnalysisCount", flags)!.GetValue(view), Is.EqualTo(analyses.Count));
+    }
+
+    [Test]
     public void ConstructsWithoutConflictingLayoutAxes()
     {
         var source = new InMemoryLocalLibrarySource(Array.Empty<LocalBeatmapSet>(), Array.Empty<LocalReplay>());

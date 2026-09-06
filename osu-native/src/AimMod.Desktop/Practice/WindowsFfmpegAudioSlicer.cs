@@ -132,15 +132,22 @@ public sealed class WindowsFfmpegAudioSlicer : IPracticeAudioSlicer
         ArgumentNullException.ThrowIfNull(request);
         if (request.RepeatCount is < 1 or > 24)
             throw new ArgumentOutOfRangeException(nameof(request));
+        if (!double.IsFinite(request.PlaybackRate) || request.PlaybackRate is < 0.75 or > 1.25
+            || !double.IsFinite(request.InitialSilenceMs) || request.InitialSilenceMs is < 0 or > 10_000)
+            throw new ArgumentOutOfRangeException(nameof(request));
         string start = (request.SourceStartTimeMs / 1000d).ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
         string end = (request.SourceEndTimeMs / 1000d).ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
-        string duration = (request.CycleDurationMs / 1000d).ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+        string duration = ((request.SourceEndTimeMs - request.SourceStartTimeMs) / 1000d).ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
         string trim = $"[0:a]atrim=start={start}:end={end},asetpts=PTS-STARTPTS,aresample=48000:first_pts=0,apad,atrim=duration={duration}";
+        string rate = request.PlaybackRate.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+        string silence = request.InitialSilenceMs.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+        // AudioLeadIn is pre-play waiting, not an offset within the song. Encode the offset as silence.
+        string final = $"atempo={rate},adelay={silence}:all=1[practice]";
         if (request.RepeatCount == 1)
-            return trim + "[practice]";
+            return trim + "," + final;
 
         string outputs = string.Concat(Enumerable.Range(0, request.RepeatCount).Select(index => $"[round{index}]"));
-        return $"{trim},asplit={request.RepeatCount}{outputs};{outputs}concat=n={request.RepeatCount}:v=0:a=1[practice]";
+        return $"{trim},asplit={request.RepeatCount}{outputs};{outputs}concat=n={request.RepeatCount}:v=0:a=1,{final}";
     }
 }
 

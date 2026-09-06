@@ -7,6 +7,36 @@ namespace AimMod.Desktop.Tests;
 public sealed class OnlineSkinCatalogParserTests
 {
     [Test]
+    public void RelatedSkinDownloadCountsCannotReplaceSelectedSkinDownload()
+    {
+        string html = CatalogFixtures.OsuSkinsDetails +
+            "<a href=\"/skin/anotherSkin\"><h3>Another skin</h3><span>1,047,678 downloads</span></a>";
+        var entry = OsuSkinsNetHtmlParser.ParseDetails(html,
+            new Uri("https://osuskins.net/skin/abc123"), "abc123");
+        Assert.That(entry?.Download?.Kind, Is.EqualTo(OnlineSkinDownloadKind.FormPost));
+        Assert.That(entry?.Download?.BrowserHandoffUri?.AbsolutePath, Is.EqualTo("/skin/abc123"));
+        Assert.That(SkinHtml.FindDownloadLink("<a href=\"/skin/anotherSkin\">100 downloads</a>"), Is.Null);
+    }
+
+    [Test]
+    public void FooterSortLinksCannotReplaceTheActualDownloadForm()
+    {
+        var entry = OsuSkinsNetHtmlParser.ParseDetails(CatalogFixtures.OsuSkinsDetails +
+            "<a href=\"/?sortby=downloads&amp;p=1\">Best Osu Skins</a>",
+            new Uri("https://osuskins.net/skin/abc123"), "abc123");
+        Assert.That(entry?.Download?.Kind, Is.EqualTo(OnlineSkinDownloadKind.FormPost));
+        Assert.That(entry?.Download?.BrowserHandoffUri?.AbsolutePath, Is.EqualTo("/skin/abc123"));
+    }
+
+    [Test]
+    public void ActualArchiveWinsOverNavigationAndPageAnchors()
+    {
+        string html = "<a href=\"#download\">Download</a><a href=\"/?sortby=downloads\">Downloads</a>" +
+            "<a href=\"/downloads/help\">Download help</a><a href=\"https://cdn.osuskins.net/files/test.osk\">Package</a>";
+        Assert.That(SkinHtml.FindDownloadLink(html), Is.EqualTo("https://cdn.osuskins.net/files/test.osk"));
+    }
+
+    [Test]
     public void ExplicitArchiveLinkCanBeDownloadedWithoutFormSubmission()
     {
         OnlineSkinCatalogEntry? entry = OsuSkinsNetHtmlParser.ParseDetails(

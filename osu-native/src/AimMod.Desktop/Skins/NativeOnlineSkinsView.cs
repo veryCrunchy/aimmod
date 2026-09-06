@@ -43,6 +43,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
     private readonly TruncatingSpriteText selectedCreator;
     private readonly TruncatingSpriteText selectedMetadata;
     private readonly TruncatingSpriteText attribution;
+    private readonly TextFlowContainer downloadStatus;
     private readonly OnlineActionButton previewButton;
     private readonly OnlineActionButton saveButton;
     private readonly OnlineActionButton importButton;
@@ -193,6 +194,11 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
                                                 selectedCreator = text(12, AimModPalette.Cyan, "SemiBold", "Screenshots and source details appear here."),
                                                 selectedMetadata = text(11, AimModPalette.Muted, "Regular", string.Empty),
                                                 attribution = text(10, AimModPalette.Muted, "Regular", string.Empty),
+                                                downloadStatus = new TextFlowContainer(sprite =>
+                                                {
+                                                    sprite.Font = osu.Game.Graphics.OsuFont.GetFont(size: 13);
+                                                    sprite.Colour = AimModPalette.Cyan;
+                                                }) { RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y },
                                                 previewButton = new OnlineActionButton(FontAwesome.Solid.Download, "Prepare preview", prepareSelected),
                                                 saveButton = new OnlineActionButton(FontAwesome.Solid.Save, "Save .osk", saveSelected),
                                                 importButton = new OnlineActionButton(FontAwesome.Solid.ExternalLinkAlt, "Import into osu!", importSelected, AimModPalette.Pink),
@@ -432,6 +438,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
         _ = releasePreparedPreview();
         selected = item;
         handoffUri = null;
+        downloadStatus.Clear();
         refreshRows();
         updateDetails();
         if (item is not null)
@@ -476,10 +483,10 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
             ? string.Empty
             : string.Join("  ·  ", metadata(item));
         attribution.Text = item?.Attribution.Notice ?? string.Empty;
-        bool direct = item?.Download?.Kind is OnlineSkinDownloadKind.DirectHttps or OnlineSkinDownloadKind.GoogleDrive;
+        bool direct = backend?.CanDownload(item?.Download) == true;
         bool available = preparedPreview?.IsAvailable == true;
         previewButton.SetState(!preparing && item?.Download is not null && !available,
-            !direct ? "Open download page" : item?.IsSensitive == true ? "Confirm & download" : "Download skin");
+            !direct ? "Download unavailable" : item?.IsSensitive == true ? "Confirm & download" : "Download skin");
         bool canPrepare = direct && item?.IsSensitive != true;
         saveButton.SetState(!preparing && (available || canPrepare), available ? "Save .osk" : "Download & save");
         importButton.SetState(!preparing && (available || canPrepare) && destination is not null, available ? "Import into osu!" : "Download & import");
@@ -510,14 +517,14 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
     {
         if (selected?.Download is null || backend is null || preparing)
             return;
-        if (selected.Download.Kind is not (OnlineSkinDownloadKind.DirectHttps or OnlineSkinDownloadKind.GoogleDrive))
+        if (!backend.CanDownload(selected.Download))
         {
-            handoffUri = selected.Download.BrowserHandoffUri ?? selected.Download.Uri;
-            openSource();
+            setDownloadStatus("No automatic download is available for this source. Try Creator releases.");
+            updateDetails();
             return;
         }
         preparing = true;
-        loading.ShowLoading("Preparing skin preview", "Downloading and validating the .osk archive");
+        loading.ShowLoading("Downloading skin", "Downloading and checking the skin archive");
         updateDetails();
         _ = prepareAsync(selected, selectionCancellation?.Token ?? lifetime.Token, afterPrepared);
     }
@@ -546,6 +553,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
                         OnlineSkinDownloadStatus.ExternalBrowserRequired => result.Message ?? "This download must be completed in your browser.",
                         _ => result.Message ?? "The skin package could not be prepared.",
                     };
+                    setDownloadStatus(status.Text.ToString());
                     updateDetails();
                     if (preparedPreview?.IsAvailable == true)
                         afterPrepared?.Invoke();
@@ -565,6 +573,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
                     preparing = false;
                     loading.HideLoading();
                     status.Text = $"Could not prepare skin: {error.Message}";
+                    setDownloadStatus(status.Text.ToString());
                     updateDetails();
                 });
         }
@@ -583,6 +592,12 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
         _ = saveAsync(preparedPreview, selectionCancellation?.Token ?? lifetime.Token);
     }
 
+    private void setDownloadStatus(string message)
+    {
+        downloadStatus.Clear();
+        downloadStatus.AddText(message);
+    }
+
     private async Task saveAsync(OnlineSkinPreview preview, CancellationToken cancellationToken)
     {
         try
@@ -594,6 +609,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
                     if (IsDisposed || cancellationToken.IsCancellationRequested) return;
                     preparing = false;
                     status.Text = $"Saved {Path.GetFileName(path)} to {Path.GetDirectoryName(path)}";
+                    setDownloadStatus($"Saved {Path.GetFileName(path)}.");
                     updateDetails();
                 });
         }
@@ -605,6 +621,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
                     if (IsDisposed || cancellationToken.IsCancellationRequested) return;
                     preparing = false;
                     status.Text = $"Could not save skin: {error.Message}";
+                    setDownloadStatus(status.Text.ToString());
                     updateDetails();
                 });
         }
@@ -641,6 +658,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
                     loading.HideLoading();
                     preparing = false;
                     status.Text = result.Message ?? (result.Success ? "Skin sent to osu!." : "osu! did not accept the skin.");
+                    setDownloadStatus(status.Text.ToString());
                     updateDetails();
                 });
         }
@@ -656,6 +674,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
                     loading.HideLoading();
                     preparing = false;
                     status.Text = $"Could not import skin: {error.Message}";
+                    setDownloadStatus(status.Text.ToString());
                     updateDetails();
                 });
         }
@@ -673,6 +692,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
             catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException)
             {
                 status.Text = $"Could not open browser: {error.Message}";
+                setDownloadStatus(status.Text.ToString());
             }
         }
     }

@@ -323,7 +323,7 @@ public sealed class CachedOnlineSkinCatalogProvider : IOnlineSkinCatalogProvider
     public async Task<OnlineSkinCatalogEntry?> GetDetailsAsync(string id, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
-        string key = $"catalog:{Id}:details:{id}";
+        string key = $"catalog:{Id}:details:v3:{id}";
         byte[]? cached = await cache.ReadBytesAsync(key, details_lifetime, cancellationToken).ConfigureAwait(false);
         if (cached is not null)
             return JsonSerializer.Deserialize<OnlineSkinCatalogEntry>(cached, json_options);

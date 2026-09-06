@@ -137,7 +137,7 @@ public sealed class OnlineBeatmapImportServiceTests
             Assert.That(result.Status, Is.EqualTo(OnlineBeatmapImportStatus.Success));
             Assert.That(result.LazerArchive, Is.EqualTo(handoff.Archive));
             Assert.That(handoff.PreservedSource, Is.EqualTo(archive));
-            Assert.That(handoff.Installed, Is.Null, "Saving in AimMod must not launch lazer without a second click.");
+            Assert.That(handoff.Installed, Is.EqualTo(handoff.Archive), "Saving must also install in the preferred osu! client.");
         });
     }
 
@@ -167,6 +167,32 @@ public sealed class OnlineBeatmapImportServiceTests
         {
             Assert.That(result.Status, Is.EqualTo(OnlineBeatmapImportStatus.ImportFailed));
             Assert.That(handoff.Discarded, Is.EqualTo(handoff.Archive));
+        });
+    }
+
+    [Test]
+    public async Task FailedOsuInstallRetainsArchiveAndRetriesWithoutDownloadingAgain()
+    {
+        string archive = Path.Combine(temporaryDirectory, "retry.osz");
+        await File.WriteAllBytesAsync(archive, [0x50, 0x4b, 0x03, 0x04]);
+        int downloads = 0, imports = 0;
+        var client = new StubClient { Download = (_, _, _, _) =>
+        {
+            downloads++;
+            return Task.FromResult(new OfficialBeatmapDownloadResult(OfficialBeatmapRequestStatus.Success, archive, 4));
+        } };
+        var handoff = new StubLazerInstallService { InstallResult = new(LazerBeatmapInstallStatus.LaunchFailed) };
+        var service = new OnlineBeatmapImportService(client, temporaryDirectory, (_, _) => { imports++; return Task.FromResult(true); }, () => { }, handoff);
+        var failed = await service.ImportAsync(createSet());
+        Assert.That(failed.Status, Is.EqualTo(OnlineBeatmapImportStatus.OsuInstallFailed));
+        Assert.That(handoff.Discarded, Is.Null);
+        handoff.InstallResult = new(LazerBeatmapInstallStatus.Sent);
+        var retried = await service.ImportAsync(createSet());
+        Assert.Multiple(() =>
+        {
+            Assert.That(retried.Status, Is.EqualTo(OnlineBeatmapImportStatus.Success));
+            Assert.That(downloads, Is.EqualTo(1));
+            Assert.That(imports, Is.EqualTo(1));
         });
     }
 
@@ -261,7 +287,7 @@ public sealed class OnlineBeatmapImportServiceTests
 
         public LazerBeatmapArchive? Installed { get; private set; }
 
-        public LazerBeatmapInstallResult InstallResult { get; init; } = new(LazerBeatmapInstallStatus.Sent);
+        public LazerBeatmapInstallResult InstallResult { get; set; } = new(LazerBeatmapInstallStatus.Sent);
 
         public Task<LazerBeatmapArchive> PreserveAsync(
             string sourceArchive,

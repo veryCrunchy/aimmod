@@ -16,7 +16,11 @@ public sealed record PracticeMapCandidate(
     public string Evidence => $"{MissCount:N0} exact {(MissCount == 1 ? "miss" : "misses")} across {AnalysedAttempts:N0} analysed {(AnalysedAttempts == 1 ? "attempt" : "attempts")}";
 }
 
-public sealed record PracticeMapGenerationRequest(PracticeMapCandidate Candidate, PracticeDrillType DrillType);
+public sealed record PracticeMapGenerationRequest(
+    PracticeMapCandidate Candidate,
+    PracticeDrillType DrillType,
+    PracticeMapOptions? Options = null,
+    IProgress<string>? Progress = null);
 
 public sealed record PracticeMapGenerationResult(
     bool Success,

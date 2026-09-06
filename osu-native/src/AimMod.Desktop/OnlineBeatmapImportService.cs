@@ -18,6 +18,7 @@ public enum OnlineBeatmapImportStatus
     InvalidDownload,
     ServerError,
     ImportFailed,
+    OsuInstallFailed,
 }
 
 public sealed record OnlineBeatmapImportResult(
@@ -33,6 +34,7 @@ public sealed class OnlineBeatmapImportService
     private readonly Action imported;
     private readonly ILazerBeatmapInstallService? lazerInstall;
     private readonly SemaphoreSlim importGate = new(1, 1);
+    private readonly Dictionary<int, LazerBeatmapArchive> pendingInstalls = new();
 
     public OnlineBeatmapImportService(
         IOfficialBeatmapDiscoveryClient client,
@@ -83,6 +85,8 @@ public sealed class OnlineBeatmapImportService
         LazerBeatmapArchive? lazerArchive = null;
         try
         {
+            if (pendingInstalls.TryGetValue(beatmapSet.BeatmapSetId, out var pending))
+                return await installSavedArchive(beatmapSet.BeatmapSetId, pending, cancellationToken).ConfigureAwait(false);
             OfficialBeatmapDownloadResult download = await client.DownloadAsync(
                 beatmapSet.BeatmapSetId,
                 stagingDirectory,
@@ -97,8 +101,7 @@ public sealed class OnlineBeatmapImportService
                 try
                 {
                     // AimMod's ppy importer deletes a successful ImportTask source.
-                    // Keep the handoff copy first so a later explicit action can pass
-                    // the same verified download to the user's separate lazer client.
+                    // Preserve the handoff before importing locally, then install in the preferred client.
                     lazerArchive = await lazerInstall.PreserveAsync(
                         downloadedPath,
                         beatmapSet.BeatmapSetId,
@@ -123,11 +126,18 @@ public sealed class OnlineBeatmapImportService
             }
 
             imported();
+            if (lazerInstall is not null)
+            {
+                if (lazerArchive is null)
+                    return new OnlineBeatmapImportResult(OnlineBeatmapImportStatus.OsuInstallFailed, beatmapSet.BeatmapSetId);
+                pendingInstalls[beatmapSet.BeatmapSetId] = lazerArchive;
+                return await installSavedArchive(beatmapSet.BeatmapSetId, lazerArchive, cancellationToken).ConfigureAwait(false);
+            }
             return new OnlineBeatmapImportResult(OnlineBeatmapImportStatus.Success, beatmapSet.BeatmapSetId, lazerArchive);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            if (lazerArchive is not null)
+            if (lazerArchive is not null && !pendingInstalls.ContainsKey(beatmapSet.BeatmapSetId))
                 lazerInstall?.Discard(lazerArchive);
             throw;
         }
@@ -143,6 +153,22 @@ public sealed class OnlineBeatmapImportService
                 deleteIfPresent(downloadedPath);
             importGate.Release();
         }
+    }
+
+    private async Task<OnlineBeatmapImportResult> installSavedArchive(int setId, LazerBeatmapArchive archive, CancellationToken token)
+    {
+        try
+        {
+            LazerBeatmapInstallResult result = await InstallInLazerAsync(archive, token).ConfigureAwait(false);
+            if (result.Status is LazerBeatmapInstallStatus.Sent or LazerBeatmapInstallStatus.LazerStarted)
+            {
+                pendingInstalls.Remove(setId);
+                return new OnlineBeatmapImportResult(OnlineBeatmapImportStatus.Success, setId, archive);
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException or NotSupportedException) { }
+        return new OnlineBeatmapImportResult(OnlineBeatmapImportStatus.OsuInstallFailed, setId, archive);
     }
 
     public Task<LazerBeatmapInstallResult> InstallInLazerAsync(

@@ -250,6 +250,7 @@ public static class ScoreHistoryMerger
                     MissCount = entry.MissCount,
                     Mods = entry.Mods,
                     OnlineScoreId = entry.OnlineScoreId,
+                    OnlineBeatmapId = entry.OnlineBeatmapId > 0 ? entry.OnlineBeatmapId : local.OnlineBeatmapId,
                     IsLocallyStored = true,
                 };
             }
@@ -273,7 +274,8 @@ public static class ScoreHistoryMerger
                 entry.Mods,
                 false,
                 OnlineScoreId: entry.OnlineScoreId,
-                IsLocallyStored: false);
+                IsLocallyStored: false,
+                OnlineBeatmapId: entry.OnlineBeatmapId);
         }).ToArray();
     }
 

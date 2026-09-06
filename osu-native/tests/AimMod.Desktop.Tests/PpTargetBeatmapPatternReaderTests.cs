@@ -54,6 +54,22 @@ public sealed class PpTargetBeatmapPatternReaderTests
     }
 
     [Test]
+    public async Task WarmGeometryReusesExactPointsButSeparatesChangedContentAndMods()
+    {
+        var reader = new PpTargetBeatmapPatternReader(Path.Combine(directory, "cache"));
+        var file = await PpTargetBeatmapPatternReader.IdentifyAsync(beatmapPath, null, default);
+        var first = await reader.ReadAsync(file, [], default);
+        Assert.That(await reader.ReadAsync(file, [], default), Is.SameAs(first));
+        Assert.That(await reader.ReadAsync(file, ["HR"], default), Is.Not.SameAs(first));
+        await File.AppendAllTextAsync(beatmapPath, "\n// content revision\n");
+        var changed = await PpTargetBeatmapPatternReader.IdentifyAsync(beatmapPath, null, default);
+        Assert.That(await reader.ReadAsync(changed, [], default), Is.Not.SameAs(first));
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        Assert.CatchAsync<OperationCanceledException>(async () => await reader.ReadAsync(file, [], cancelled.Token));
+    }
+
+    [Test]
     public async Task ContentHashAndRequestedChecksumAreVerified()
     {
         string hash = Convert.ToHexString(MD5.HashData(await File.ReadAllBytesAsync(beatmapPath)));
@@ -98,9 +114,11 @@ public sealed class PpTargetBeatmapPatternReaderTests
         await reader.ReadAsync(file, [], default);
         string geometryPath = Directory.GetFiles(cache, "*.json").Single();
         await File.WriteAllTextAsync(geometryPath, "{invalid json");
+        reader = new PpTargetBeatmapPatternReader(cache);
         Assert.That((await reader.ReadAsync(file, [], default)).Points.Count, Is.EqualTo(4));
         string json = await File.ReadAllTextAsync(geometryPath);
         await File.WriteAllTextAsync(geometryPath, json.Replace(PpTargetBeatmapPatternReader.Version, "outdated-version"));
+        reader = new PpTargetBeatmapPatternReader(cache);
         Assert.That((await reader.ReadAsync(file, [], default)).Points.Count, Is.EqualTo(4));
         Assert.That(await File.ReadAllTextAsync(geometryPath), Does.Contain(PpTargetBeatmapPatternReader.Version));
     }

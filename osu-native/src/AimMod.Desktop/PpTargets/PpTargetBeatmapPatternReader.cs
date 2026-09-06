@@ -21,6 +21,9 @@ internal sealed class PpTargetBeatmapPatternReader(string cacheDirectory, int ma
 {
     internal const string Version = "playable-geometry-v2";
     private static readonly JsonSerializerOptions json_options = new(JsonSerializerDefaults.Web);
+    private readonly object geometryLock = new();
+    private readonly Dictionary<string, PpTargetBeatmapPatternGeometry> geometries = new();
+    private int retainedPoints;
 
     internal async Task<PpTargetBeatmapFile?> TryGetCachedFileAsync(int beatmapId, string? expectedHash, CancellationToken cancellationToken)
     {
@@ -87,6 +90,9 @@ internal sealed class PpTargetBeatmapPatternReader(string cacheDirectory, int ma
         string modKey = string.Join(',', PpTargetMods.Normalise(mods));
         string geometryKey = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{Version}|{PpCalculationProtocol.EngineVersion}|{modKey}")));
         string path = Path.Combine(cacheDirectory, $"{file.ContentHash}-{geometryKey}.json");
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (geometryLock)
+            if (geometries.TryGetValue(path, out var retained)) return retained;
         try
         {
             if (File.Exists(path))
@@ -95,7 +101,7 @@ internal sealed class PpTargetBeatmapPatternReader(string cacheDirectory, int ma
                 GeometryDocument? cached = await JsonSerializer.DeserializeAsync<GeometryDocument>(stream, json_options, cancellationToken).ConfigureAwait(false);
                 if (cached is not null && cached.Version == Version && cached.ContentHash == file.ContentHash && cached.Mods == modKey
                     && cached.Geometry is { Points: not null } geometry)
-                    return geometry;
+                    return retainGeometry(path, geometry);
             }
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or NotSupportedException)
@@ -121,7 +127,26 @@ internal sealed class PpTargetBeatmapPatternReader(string cacheDirectory, int ma
         {
             deleteTemporary(temporaryPath);
         }
-        return result;
+        return retainGeometry(path, result);
+    }
+
+    private PpTargetBeatmapPatternGeometry retainGeometry(string key, PpTargetBeatmapPatternGeometry geometry)
+    {
+        const int pointBudget = 200_000;
+        if (geometry.Points.Count > pointBudget) return geometry;
+        lock (geometryLock)
+        {
+            if (geometries.TryGetValue(key, out var existing)) return existing;
+            while (geometries.Count > 0 && (geometries.Count >= 64 || retainedPoints + geometry.Points.Count > pointBudget))
+            {
+                string oldest = geometries.Keys.First();
+                retainedPoints -= geometries[oldest].Points.Count;
+                geometries.Remove(oldest);
+            }
+            geometries.Add(key, geometry);
+            retainedPoints += geometry.Points.Count;
+        }
+        return geometry;
     }
 
     internal static PpTargetBeatmapPatternGeometry Read(string path, IReadOnlyList<string> acronyms, CancellationToken cancellationToken = default)

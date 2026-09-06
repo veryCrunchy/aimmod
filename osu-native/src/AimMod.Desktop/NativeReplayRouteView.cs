@@ -60,6 +60,7 @@ public partial class NativeReplayRouteView : Container
     private readonly NativeHubReplaySharePanel hubSharePanel;
     private readonly OsuButton practiceButton;
     private readonly Action<string>? openPractice;
+    private readonly Func<LocalReplay, CancellationToken, Task>? openBeatmap;
     private IBindable<double>? currentTime;
     private IBindable<double>? duration;
     private IBindable<bool>? paused;
@@ -84,12 +85,14 @@ public partial class NativeReplayRouteView : Container
         IHubSharingPreferenceStore? hubPreferenceStore = null,
         Action<Uri>? openUrl = null,
         Action<string>? copyText = null,
-        Action<string>? openPractice = null)
+        Action<string>? openPractice = null,
+        Func<LocalReplay, CancellationToken, Task>? openBeatmap = null)
     {
         this.source = source;
         this.analyses = analyses ?? new Dictionary<Guid, ReplayAnalysisResult>();
         this.openReplay = openReplay;
         this.openPractice = openPractice;
+        this.openBeatmap = openBeatmap;
         RelativeSizeAxes = Axes.Both;
 
         Children = new Drawable[]
@@ -312,6 +315,7 @@ public partial class NativeReplayRouteView : Container
                             Direction = FillDirection.Vertical,
                             Spacing = new(5),
                         },
+                        new OpenBeatmapButton(() => selectedReplay, openBeatmap) { RelativeSizeAxes = Axes.X, Width = 1 },
                         practiceButton = new PracticeActionButton
                         {
                             RelativeSizeAxes = Axes.X,
@@ -623,12 +627,12 @@ public partial class NativeReplayRouteView : Container
         foreach (ReplayBrowserMapGroup group in replayBrowser.Maps)
         {
             bool expanded = expandedReplayMaps.Contains(group.Key);
-            replayList.Add(new ReplayGroupHeader(group, expanded, () => toggleReplayMap(group.Key)));
+            replayList.Add(new ReplayGroupHeader(group, expanded, () => toggleReplayMap(group.Key), openBeatmap));
             if (!expanded)
                 continue;
 
             foreach (LocalReplay replay in group.Attempts)
-                replayList.Add(new ReplayBrowserRow(replay, replay.ScoreId == selectedReplay?.ScoreId, () => openReplay?.Invoke(replay)));
+                replayList.Add(new ReplayBrowserRow(replay, replay.ScoreId == selectedReplay?.ScoreId, () => openReplay?.Invoke(replay), openBeatmap));
         }
 
         if (replayBrowser.Maps.Count == 0)
@@ -1032,16 +1036,17 @@ public partial class NativeReplayRouteView : Container
         private readonly TruncatingSpriteText title;
         private readonly TruncatingSpriteText detail;
 
-        public ReplayGroupHeader(ReplayBrowserMapGroup group, bool expanded, Action action)
+        public ReplayGroupHeader(ReplayBrowserMapGroup group, bool expanded, Action action, Func<LocalReplay, CancellationToken, Task>? openBeatmap = null)
         {
             RelativeSizeAxes = Axes.X;
-            Height = 62;
+            Height = 100;
             Action = action;
             CornerRadius = AimModVisualStyle.CardRadius;
             BackgroundColour = expanded ? AimModPalette.PanelRaised : AimModPalette.Panel;
             LocalReplay latest = group.Attempts[0];
             Children = new Drawable[]
             {
+                new OpenBeatmapButton(() => latest, openBeatmap) { Position = new(12, 64), Height = 28 },
                 new Box
                 {
                     RelativeSizeAxes = Axes.Y,
@@ -1090,15 +1095,16 @@ public partial class NativeReplayRouteView : Container
 
     private partial class ReplayBrowserRow : AimModInteractiveSurface
     {
-        public ReplayBrowserRow(LocalReplay replay, bool selected, Action action)
+        public ReplayBrowserRow(LocalReplay replay, bool selected, Action action, Func<LocalReplay, CancellationToken, Task>? openBeatmap = null)
         {
             RelativeSizeAxes = Axes.X;
-            Height = 60;
+            Height = 94;
             CornerRadius = AimModVisualStyle.ControlRadius;
             BackgroundColour = selected ? AimModPalette.PanelHover : AimModPalette.PanelRaised;
             Action = action;
             Children = new Drawable[]
             {
+                new OpenBeatmapButton(() => replay, openBeatmap) { Position = new(12, 60), Height = 28, Depth = -1 },
                 new Box
                 {
                     RelativeSizeAxes = Axes.Y,

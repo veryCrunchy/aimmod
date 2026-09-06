@@ -12,6 +12,78 @@ public sealed class PpTargetPatternModelTests
     private static readonly DateTimeOffset now = new(2026, 9, 5, 12, 0, 0, TimeSpan.Zero);
 
     [Test]
+    public void RecentScoresWithoutPpOrReplaySupportScoreFitButNeverPatternOutcomes()
+    {
+        var runs = new[] { replay(1), replay(2) }.Select(r => r with { HasReplayFile = false, PerformancePoints = null }).ToArray();
+        var p = PpTargetPatternModel.BuildProfile(runs, new Dictionary<Guid, ReplayAnalysisResult>(), now: now);
+        var support = PpTargetPatternModel.ScoreFit(p, 5, []);
+        Assert.Multiple(() =>
+        {
+            Assert.That(p.ScoreEvidence, Has.Count.EqualTo(2));
+            Assert.That(support.Maps, Is.EqualTo(2));
+            Assert.That(support.Confidence, Is.GreaterThan(0).And.LessThanOrEqualTo(.3));
+            Assert.That(p.Evidence, Is.Empty);
+            Assert.That(PpTargetPatternModel.Predict(ExtractFeaturesForTest(), p).ExpectedAccuracy, Is.Null);
+            Assert.That(PpTargetPatternModel.ScoreFit(p, 5, ["HR"]).Maps, Is.Zero);
+        });
+    }
+
+    [Test]
+    public void ScoreEvidencePreservesWindowAndRejectsInvalidOrUnidentifiedScores()
+    {
+        LocalReplay[] runs = [replay(1), replay(2) with { PlayedAt = now.AddDays(-31) },
+            replay(3) with { PlayedAt = now.AddSeconds(1) }, replay(4) with { Accuracy = double.NaN },
+            replay(5) with { BeatmapId = Guid.Empty, BeatmapHash = "" }, replay(6) with { RulesetShortName = "mania" }];
+        var p = PpTargetPatternModel.BuildProfile(runs, new Dictionary<Guid, ReplayAnalysisResult>(), now: now);
+        Assert.That(p.ScoreEvidence!.Select(e => e.ScoreId), Is.EqualTo(new[] { id(1) }));
+    }
+
+    [Test]
+    public void ScoreRetriesAreBalancedAndOnlineAliasesPreferAnalysedLocalScore()
+    {
+        LocalReplay[] runs = [replay(1) with { OnlineScoreId = 123 },
+            replay(2) with { OnlineScoreId = 123, IsLocallyStored = false },
+            .. Enumerable.Range(3, 30).Select(i => replay(i) with { BeatmapHash = "map-1", Accuracy = .6 })];
+        var p = PpTargetPatternModel.BuildProfile(runs,
+            new Dictionary<Guid, ReplayAnalysisResult> { [id(1)] = analysis(streamPoints()) }, now: now);
+        Assert.Multiple(() =>
+        {
+            Assert.That(p.ScoreEvidence, Has.Count.EqualTo(31));
+            Assert.That(p.ScoreEvidence!.Sum(e => e.Weight), Is.EqualTo(1).Within(1e-10));
+            Assert.That(p.Evidence.Select(e => e.ScoreId), Is.EqualTo(new[] { id(1) }));
+            Assert.That(PpTargetPatternModel.ScoreFit(p, 5, []).Maps, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void HashLinksReplayRadiusAcrossDifferentLocalMapIds()
+    {
+        var run = replay(1);
+        var map = new LocalBeatmapDifficulty(id(999), 1, "Test", "osu", 5, 180, 10000, 5, 9, 8, 5, 1, "MAP-1");
+        LocalBeatmapSet[] sets = [new(run.SetId, 1, "Map", "Artist", "Mapper", "", now, null, [map], 1)];
+        var p = PpTargetPatternModel.BuildProfile([run],
+            new Dictionary<Guid, ReplayAnalysisResult> { [run.ScoreId] = analysis(streamPoints()) }, now: now, localSets: sets);
+        Assert.That(p.Evidence.Single().Features.HitRadius, Is.GreaterThan(0));
+    }
+
+    private static PpPatternFeatures ExtractFeaturesForTest() => PpTargetPatternModel.ExtractFeatures(streamPoints(), 32, 1);
+
+    [Test]
+    public void CachedReplayEvidenceSurvivesWorkerWarmupButExpiresAndRejectsChangedScore()
+    {
+        var run = replay(1);
+        var cached = profile([(run, analysis(streamPoints()))]);
+        var empty = new Dictionary<Guid, ReplayAnalysisResult>();
+        var warmed = PpTargetPatternModel.BuildProfile([run], empty, now: now.AddDays(1), cachedProfile: cached);
+        Assert.That(warmed.Evidence, Has.Count.EqualTo(1));
+        Assert.That(warmed.Evidence[0].Weight, Is.LessThan(cached.Evidence[0].Weight));
+        Assert.That(PpTargetPatternModel.BuildProfile([run], empty, now: now.AddDays(31), cachedProfile: cached).Evidence, Is.Empty);
+        Assert.That(PpTargetPatternModel.BuildProfile([run with { BeatmapHash = "other" }], empty, now: now, cachedProfile: cached).Evidence, Is.Empty);
+        Assert.That(PpTargetPatternModel.BuildProfile([], empty, now: now, cachedProfile: cached).Evidence, Has.Count.EqualTo(1));
+        Assert.That(PpTargetPatternModel.BuildProfile([], empty, now: now.AddDays(31), cachedProfile: cached).Evidence, Is.Empty);
+    }
+
+    [Test]
     public void ExtractsActualNormalizedGeometryAndRateWithoutStars()
     {
         PpPatternPoint[] points = [new(0, 0, 0), new(200, 100, 0), new(400, 100, 100)];

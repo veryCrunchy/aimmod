@@ -20,7 +20,8 @@ public sealed record OnlineSkinResolvedDownload(
     string? Message = null,
     string? CacheKey = null,
     OnlineSkinArchiveValidation? Validation = null,
-    Uri? RedirectUri = null);
+    Uri? RedirectUri = null,
+    string? FileName = null);
 
 public interface IOnlineSkinDownloadResolver
 {
@@ -30,7 +31,8 @@ public interface IOnlineSkinDownloadResolver
 
 public sealed class DirectHttpsSkinDownloadResolver : IOnlineSkinDownloadResolver
 {
-    private static readonly string[] default_approved_hosts = ["osuskins.net", "www.osuskins.net", "cdn.osuskins.net", "skins.osuck.net"];
+    internal static readonly string[] GitHubHosts = ["github.com", "raw.githubusercontent.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com"];
+    private static readonly string[] default_approved_hosts = ["osuskins.net", "www.osuskins.net", "cdn.osuskins.net", "skins.osuck.net", .. GitHubHosts];
     private static readonly string[] archive_types =
     [
         "application/octet-stream",
@@ -231,7 +233,7 @@ public sealed class OnlineSkinDownloadResolverPipeline
             if (result.RedirectUri is null)
                 return result;
             OnlineSkinDownloadTarget redirected = SkinDownloadTargetClassifier.Classify(result.RedirectUri);
-            if (redirected.Kind == OnlineSkinDownloadKind.External)
+            if (redirected.Kind == OnlineSkinDownloadKind.External && !MediaFireSkinDownloadResolver.IsPublicPage(redirected.Uri))
                 return new OnlineSkinResolvedDownload(
                     OnlineSkinDownloadStatus.Rejected,
                     ExternalUri: target.Uri,

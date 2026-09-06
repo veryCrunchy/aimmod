@@ -96,13 +96,15 @@ public sealed class WindowsFfmpegAudioSlicerTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(filter, Is.EqualTo("[0:a]atrim=start=0.5:end=2,asetpts=PTS-STARTPTS,aresample=48000:first_pts=0,apad,atrim=duration=1.5[practice]"));
+            Assert.That(filter, Is.EqualTo("[0:a]atrim=start=0.5:end=2,asetpts=PTS-STARTPTS,aresample=48000:first_pts=0,apad,atrim=duration=1.5,atempo=1,adelay=0:all=1[practice]"));
             Assert.That(filter, Does.Not.Contain("concat"));
         });
     }
 
-    [Test]
-    public async Task ProducesTimestampZeroOggAtThePlannedRepeatedDuration()
+    [TestCase(1, 0)]
+    [TestCase(.75, 1500)]
+    [TestCase(1.2, 2000)]
+    public async Task ProducesTimestampZeroOggAtThePlannedRepeatedDuration(double rate, double silence)
     {
         string? ffmpeg = FfmpegExecutableLocator.Find();
         if (ffmpeg is null)
@@ -115,7 +117,7 @@ public sealed class WindowsFfmpegAudioSlicerTests
         string output = Path.Combine(directory, "practice-audio.ogg");
         await runTool(ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=8",
             "-ar", "48000", "-ac", "2", source);
-        var request = new PracticeAudioSliceRequest(source, 1_250, 3_750, Path.GetFileName(output), 4);
+        var request = new PracticeAudioSliceRequest(source, 1_250, 3_750, Path.GetFileName(output), 4, rate, silence);
 
         await new WindowsFfmpegAudioSlicer().SliceAsync(request, output);
 
@@ -127,7 +129,7 @@ public sealed class WindowsFfmpegAudioSlicerTests
         Assert.Multiple(() =>
         {
             Assert.That(values[0], Is.EqualTo(0).Within(0.001), "The generated OGG should start at timestamp zero.");
-            Assert.That(values[1] * 1000, Is.EqualTo(request.OutputDurationMs).Within(25),
+            Assert.That(values[1] * 1000, Is.EqualTo(request.OutputDurationMs + silence).Within(40),
                 "Repeated audio should match the beatmap timeline without accumulated encoder delay.");
         });
     }

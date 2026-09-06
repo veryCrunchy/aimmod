@@ -98,6 +98,13 @@ public sealed class OnlineSkinPreviewService
                     activeDirectories.TryRemove(directory, out _);
                     return new OnlineSkinPreviewResult(resolved.Status, ExternalUri: resolved.ExternalUri ?? skin.DetailsUri, Message: resolved.Message);
                 }
+                OnlineSkinArchiveValidation downloaded = await validator.ValidateAsync(resolved.ArchivePath, cancellationToken).ConfigureAwait(false);
+                if (!downloaded.IsValid)
+                {
+                    deleteDirectory(directory);
+                    activeDirectories.TryRemove(directory, out _);
+                    return new OnlineSkinPreviewResult(OnlineSkinDownloadStatus.InvalidArchive, Message: downloaded.Message);
+                }
                 File.Move(resolved.ArchivePath, previewPath, overwrite: false);
                 await cache.PutFileAsync(cacheKey, previewPath, "osk", cancellationToken).ConfigureAwait(false);
             }

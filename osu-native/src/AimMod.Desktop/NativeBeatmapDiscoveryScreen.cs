@@ -141,7 +141,7 @@ public partial class NativeBeatmapDiscoveryScreen : CompositeDrawable
 
         if (onlineScreen is null)
         {
-            onlineScreen = new NativeOfficialBeatmapSearchScreen(client, importer) { RelativeSizeAxes = Axes.Both };
+            onlineScreen = new NativeOfficialBeatmapSearchScreen(client, importer, localLibrary, openBeatmap) { RelativeSizeAxes = Axes.Both };
             page.Add(onlineScreen);
         }
         setActiveScreen(onlineScreen, installedScreen);
@@ -169,6 +169,9 @@ public partial class NativeBeatmapDiscoveryScreen : CompositeDrawable
 
 public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
 {
+    private readonly ILocalLibrarySource? localLibrary;
+    private readonly Func<int, CancellationToken, Task>? openBeatmap;
+    private readonly Dictionary<int, OnlineBeatmapCard> visibleCards = new();
     private const int result_limit = 24;
     private const float content_inset = 12;
 
@@ -206,8 +209,11 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
 
     public NativeOfficialBeatmapSearchScreen(
         Func<IOfficialBeatmapDiscoveryClient?> client,
-        Func<OnlineBeatmapImportService?> importer)
+        Func<OnlineBeatmapImportService?> importer, ILocalLibrarySource? localLibrary = null,
+        Func<int, CancellationToken, Task>? openBeatmap = null)
     {
+        this.localLibrary = localLibrary;
+        this.openBeatmap = openBeatmap;
         this.client = client ?? throw new ArgumentNullException(nameof(client));
         this.importer = importer ?? throw new ArgumentNullException(nameof(importer));
         RelativeSizeAxes = Axes.Both;
@@ -444,6 +450,8 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
 
             if (!IsDisposed)
                 Schedule(() => { if (!cancellationToken.IsCancellationRequested) applySearchResult(response); });
+            if (response.Status == OfficialBeatmapRequestStatus.Success && localLibrary is not null)
+                await markInstalledAsync(response.BeatmapSets, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -465,6 +473,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
 
     private void applySearchResult(OfficialBeatmapSearchResult response)
     {
+        visibleCards.Clear();
         results.Clear();
         loadingOverlay.HideLoading();
         if (response.Status != OfficialBeatmapRequestStatus.Success)
@@ -480,8 +489,10 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
 
         foreach (OfficialBeatmapSet set in response.BeatmapSets)
         {
-            results.Add(new OnlineBeatmapCard(set, importBeatmap, installInLazer));
-            if (selectedSetId is not null)
+            var card = new OnlineBeatmapCard(set, importBeatmap, installInLazer);
+            visibleCards[set.BeatmapSetId] = card;
+            results.Add(card);
+            if (set.Difficulties.Count > 0)
             {
                 foreach (OfficialBeatmapDifficulty difficulty in set.Difficulties)
                     results.Add(new FillFlowContainer
@@ -493,6 +504,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                         Spacing = new(0, 6),
                         Children = new Drawable[]
                         {
+                            new OpenBeatmapButton(openBeatmap is null ? null : token => openBeatmap(difficulty.BeatmapId, token)),
                             new TruncatingSpriteText
                             {
                                 RelativeSizeAxes = Axes.X,
@@ -557,6 +569,34 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
         base.Dispose(isDisposing);
     }
 
+    private async Task markInstalledAsync(IReadOnlyList<OfficialBeatmapSet> sets, CancellationToken token)
+    {
+        var difficulties = new HashSet<int>();
+        try
+        {
+            int offset = 0;
+            while (true)
+            {
+                var page = await localLibrary!.SearchBeatmapSetsAsync(new LocalLibraryQuery(RulesetShortName: "", Offset: offset, Limit: 200), token).ConfigureAwait(false);
+                foreach (var map in page.Items)
+                    foreach (var difficulty in map.Difficulties)
+                        if (difficulty.OnlineId > 0) difficulties.Add(difficulty.OnlineId);
+                if (!page.HasMore || page.Items.Count == 0) break;
+                offset += page.Items.Count;
+            }
+            var installed = sets.Where(set => set.Difficulties.Count > 0 && set.Difficulties.All(d => difficulties.Contains(d.BeatmapId)))
+                .Select(set => set.BeatmapSetId).ToArray();
+            if (!IsDisposed) Schedule(() =>
+            {
+                if (token.IsCancellationRequested) return;
+                foreach (int id in installed)
+                    if (visibleCards.TryGetValue(id, out var card)) card.SetInstalled();
+            });
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch (Exception) { /* Unknown availability must not disable downloads. */ }
+    }
+
     private partial class OnlineBeatmapCard : AimModInteractiveSurface
     {
         private readonly OfficialBeatmapSet set;
@@ -569,6 +609,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
         private readonly Box actionBackground;
         private bool importing;
         private bool imported;
+        private bool installed;
         private bool installingInLazer;
         private bool sentToLazer;
         private LazerBeatmapArchive? lazerArchive;
@@ -694,7 +735,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
 
         private void beginImport()
         {
-            if (importing || installingInLazer || sentToLazer || set.DownloadDisabled)
+            if (installed || importing || installingInLazer || sentToLazer || set.DownloadDisabled)
                 return;
 
             if (imported)
@@ -708,6 +749,13 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
             actionText.Text = "Downloading...";
             actionBackground.Colour = AimModPalette.Cyan;
             _ = importAsync();
+        }
+
+        public void SetInstalled()
+        {
+            installed = true;
+            actionText.Text = "Installed";
+            actionBackground.Colour = AimModPalette.PanelHover;
         }
 
         private async Task importAsync()
@@ -728,12 +776,15 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
         private void applyImportResult(OnlineBeatmapImportResult result)
         {
             importing = false;
-            imported = result.Status == OnlineBeatmapImportStatus.Success;
+            imported = result.Status == OnlineBeatmapImportStatus.Success
+                || (result.Status == OnlineBeatmapImportStatus.OsuInstallFailed && result.LazerArchive is not null);
             lazerArchive = result.LazerArchive;
+            sentToLazer = result.Status == OnlineBeatmapImportStatus.Success && result.LazerArchive is not null;
             actionText.Text = result.Status switch
             {
-                OnlineBeatmapImportStatus.Success when result.LazerArchive is not null => "Open in osu!",
+                OnlineBeatmapImportStatus.Success when result.LazerArchive is not null => "Added to osu!",
                 OnlineBeatmapImportStatus.Success => "Saved in AimMod",
+                OnlineBeatmapImportStatus.OsuInstallFailed => "Retry osu! import",
                 OnlineBeatmapImportStatus.SignedOut => "Sign in to lazer",
                 OnlineBeatmapImportStatus.TokenExpired => "Session refreshing",
                 OnlineBeatmapImportStatus.Unauthorized => "Session refused",
