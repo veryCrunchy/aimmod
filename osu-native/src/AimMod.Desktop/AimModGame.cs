@@ -465,9 +465,8 @@ public partial class AimModGame : OsuGameBase
 
     private void applyLazerSessionState(LazerSessionState state)
     {
-        accountScoreHistoryService = state.Status == LazerSessionStatus.SignedIn && officialApiClient is not null
-            ? new OfficialAccountScoreHistoryService(() => officialApiClient)
-            : stablePublicScoreHistoryService;
+        // A locally remembered lazer session is not yet a verified online account.
+        accountScoreHistoryService = stablePublicScoreHistoryService;
         header.SetSessionState(state);
 
         profileRefreshCancellation?.Cancel();
@@ -505,6 +504,7 @@ public partial class AimModGame : OsuGameBase
                     if (lazerSessionMonitor?.Current.Revision == sessionRevision)
                     {
                         currentOsuProfile = result.Profile;
+                        accountScoreHistoryService = new OfficialAccountScoreHistoryService(() => officialApiClient);
                         header.SetProfile(result.Profile);
                     }
                 });
@@ -1682,7 +1682,12 @@ public partial class AimModGame : OsuGameBase
             sessionState.Colour = AimModPalette.Cyan;
         }
 
-        public void SetStableAccount(string? username) => stableUsername = username;
+        public void SetStableAccount(string? username)
+        {
+            stableUsername = username;
+            if (sessionStatus != LazerSessionStatus.SignedIn)
+                SetSessionState(new LazerSessionState(sessionStatus, null, 0));
+        }
 
         public void SetPublicProfile(OsuProfile profile)
         {
@@ -1693,6 +1698,12 @@ public partial class AimModGame : OsuGameBase
 
         public void SetAccountUnavailable()
         {
+            sessionStatus = LazerSessionStatus.Unavailable;
+            if (publicProfile is not null || stableUsername is not null)
+            {
+                SetSessionState(new LazerSessionState(sessionStatus, null, 0));
+                return;
+            }
             sessionState.Text = "Online account unavailable";
             sessionState.Colour = AimModPalette.Muted;
         }
