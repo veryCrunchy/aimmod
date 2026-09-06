@@ -24,7 +24,10 @@
     "app/osu.Game.dll",
     "app/osu.Game.Rulesets.Osu.dll",
     "app/stbi.lib",
-    "ppy-packages.json"
+    "ppy-packages.json",
+    "app/osu.Game.Rulesets.Catch.dll",
+    "app/osu.Game.Rulesets.Mania.dll",
+    "app/osu.Game.Rulesets.Taiko.dll"
   ],
   "deniedPathFragments": [
     "kovaak",
@@ -49,10 +52,7 @@
   ],
   "deniedAssemblyNames": [
     "osu.Desktop.dll",
-    "osu.Game.Tournament.dll",
-    "osu.Game.Rulesets.Catch.dll",
-    "osu.Game.Rulesets.Mania.dll",
-    "osu.Game.Rulesets.Taiko.dll"
+    "osu.Game.Tournament.dll"
   ],
   "deniedFileNames": [
     "aimmod-osu-worker.exe",
