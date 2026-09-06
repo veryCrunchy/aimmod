@@ -44,7 +44,8 @@ public sealed record StatisticsRunQuery(
     StatisticsScoreSource Source = StatisticsScoreSource.All,
     double MinimumStars = 0,
     double MaximumStars = 100,
-    bool MissFreeOnly = false);
+    bool MissFreeOnly = false,
+    string ModSelection = ScoreMods.Any);
 
 public sealed record StatisticsMapSummary(
     Guid BeatmapId,
@@ -109,7 +110,8 @@ public sealed record StatisticsWorkspaceModel(
                                                    StatisticsScoreSource.Local => run.IsLocallyStored,
                                                    _ => true,
                                                })
-                                               .Where(run => matchesMod(run.Mods, query.ModFilter));
+                                               .Where(run => matchesMod(run.Mods, query.ModFilter))
+                                               .Where(run => ScoreMods.Matches(run, query.ModSelection));
         if (!string.IsNullOrWhiteSpace(search))
         {
             filtered = filtered.Where(run => contains(run.Title, search)

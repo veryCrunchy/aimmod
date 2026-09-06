@@ -38,6 +38,12 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     private readonly Func<PracticeMapGenerationRequest, CancellationToken, Task<PracticeMapGenerationResult>>? generatePracticeMap;
     private readonly Func<LazerBeatmapArchive, CancellationToken, Task<LazerBeatmapInstallResult>>? installPracticeMap;
 
+    private readonly FillFlowContainer<Drawable> trainingHost;
+    private readonly Bindable<string> modSelection = new(ScoreMods.Any);
+    private readonly ScoreModFilterDropdown modDropdown;
+    private readonly CoachingTrainingStore? trainingStore;
+    private CoachingTrainingPlan? activeTraining;
+    private bool trainingSaveFailed;
     private readonly Container headerArtwork;
     private readonly OsuSpriteText sessionTitle;
     private readonly OsuSpriteText sessionPlays;
@@ -104,8 +110,10 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         Func<PracticeMapGenerationRequest, CancellationToken, Task<PracticeMapGenerationResult>>? generatePracticeMap = null,
         Func<LazerBeatmapArchive, CancellationToken, Task<LazerBeatmapInstallResult>>? installPracticeMap = null,
         NativePracticeWorkspace? practiceWorkspace = null,
-        Func<LocalReplay, CancellationToken, Task>? openBeatmap = null)
+        Func<LocalReplay, CancellationToken, Task>? openBeatmap = null, CoachingTrainingStore? trainingStore = null)
     {
+        this.trainingStore = trainingStore;
+        activeTraining = trainingStore?.Load();
         this.source = source ?? throw new ArgumentNullException(nameof(source));
         this.analyses = analyses ?? throw new ArgumentNullException(nameof(analyses));
         this.openReplay = openReplay ?? throw new ArgumentNullException(nameof(openReplay));
@@ -129,6 +137,12 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             Padding = new MarginPadding { Right = 8, Bottom = 40 },
         };
 
+        content.Add(new AimModSubsectionHeader("Your next session", "One focus. A short practice block. A result you can check."));
+        content.Add(new StatisticsFilterBar { RelativeSizeAxes=Axes.X, Height=42,
+            Child=modDropdown=new ScoreModFilterDropdown(modSelection) { Width=.5f } });
+        content.Add(trainingHost = new FillFlowContainer<Drawable> { RelativeSizeAxes=Axes.X, AutoSizeAxes=Axes.Y,
+            Direction=FillDirection.Vertical, Spacing=new(12), Padding=new MarginPadding { Bottom=12 } });
+        content.Add(new AimModSubsectionHeader("Why this focus", "Your recent results and replay observations"));
         content.Add(createSessionHeader(
             out headerArtwork,
             out sessionTitle,
@@ -166,8 +180,8 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             },
         });
         content.Add(new AimModSubsectionHeader(
-            "Coaching plan",
-            "Priorities and next plays from your account-wide profile"));
+            "Supporting observations",
+            "Explore the patterns behind your session focus"));
         content.Add(createCoachPanel(out changesHost, out recommendationHost).With(panel => panel.Height = 410));
         content.Add(new AimModSubsectionHeader(
             "Beatmap drill-down",
@@ -204,6 +218,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         practiceMinimumStars.BindValueChanged(_ => schedulePracticeMapRefresh());
         practiceMaximumStars.BindValueChanged(_ => schedulePracticeMapRefresh());
         coachingTimeRange.BindValueChanged(_ => changeTimeRange());
+        modSelection.BindValueChanged(_ => changeTimeRange());
     }
 
     protected override void LoadComplete()
@@ -277,6 +292,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     private void apply(IReadOnlyList<LocalReplay> nextReplays)
     {
         allReplays = nextReplays;
+        modDropdown.SetScores(nextReplays);
         workspace = buildWorkspace();
         replays = workspace.History;
         renderedAnalysisCount = analyses.Count;
@@ -313,7 +329,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     }
 
     private NativeCoachingWorkspaceModel buildWorkspace(Guid? selectedScoreId = null) =>
-        NativeCoachingWorkspaceModel.Build(allReplays, analyses, selectedScoreId, coachingTimeRange.Value);
+        NativeCoachingWorkspaceModel.Build(allReplays.Where(r => ScoreMods.Matches(r,modSelection.Value)).ToArray(), analyses, selectedScoreId, coachingTimeRange.Value);
 
     private int scopedSubmittedRunCount() => replays.Count(run => run.OnlineScoreId > 0);
 
@@ -393,6 +409,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         CoachingReport report = model.Report;
         LocalReplay? selected = model.SelectedRun;
 
+        updateTraining(model);
         updateSessionHeader(model);
         globalProfileSectionLine.SetDetail(TimeRangeLabel(coachingTimeRange.Value));
         trendChart.SetRuns(model.TrendRuns, selected?.ScoreId, selectRun);
@@ -641,7 +658,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             headerArtwork.Add(new AimModLocalArtwork(selected.BackgroundPath));
 
         sessionTitle.Text = selected is null
-            ? "Global coaching profile"
+            ? "Recent results"
             : $"Selected map: {selected.Title} [{selected.Difficulty}]";
         sessionPlays.Text = selected is null
             ? $"{global.RunCount:N0} merged {(global.RunCount == 1 ? "play" : "plays")}"
@@ -767,6 +784,52 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                 : presentation.NotableMoments,
             12,
             AimModPalette.Muted));
+    }
+
+    private void updateTraining(NativeCoachingWorkspaceModel model)
+    {
+        trainingHost.Clear();
+        if(trainingSaveFailed) trainingHost.Add(flow("Session could not be saved. Keep AimMod open to continue tracking it.",12,AimModPalette.Pink));
+        var plan=activeTraining ?? CoachingTrainingPlanner.Build(model);
+        if(plan is null) {
+            trainingHost.Add(flow("Start with three complete plays on a comfortable map, using the same mods and rate. Return here to choose a focus from those results.",16,AimModPalette.Text));
+            trainingHost.Add(new ActionButton("Refresh scores", () => { load(); }));
+            return;
+        }
+        trainingHost.Add(label(plan.Focus,24,AimModPalette.Text,"Bold"));
+        trainingHost.Add(flow(plan.Why,13,AimModPalette.Muted));
+        trainingHost.Add(flow(plan.Cue,15,AimModPalette.Text));
+        trainingHost.Add(flow($"{plan.TargetTitle} [{plan.Difficulty}]  ·  {plan.ModLabel}",13,AimModPalette.Cyan));
+        trainingHost.Add(flow(plan.BaselineCount<3 ? "Goal: finish three plays to establish your baseline."
+            : $"Goal: two completed plays at {plan.TargetAccuracy:P2} or better, with at most {plan.TargetMisses} {(plan.TargetMisses == 1 ? "miss" : "misses")}.",15,AimModPalette.Success));
+        trainingHost.Add(flow(plan.BaselineCount<3
+            ? "1 · Warm up on an easier map.\n2 · Complete three plays on this map with the same mods and rate.\n3 · Refresh your scores, then build the next session from your results."
+            : "1 · Warm up for 5 minutes on an easier map.\n2 · Practise the troublesome section for 10 minutes; change one thing at a time.\n3 · Return to the original mods and rate for two full plays. Stop after four attempts if the target is still out of reach.",13,AimModPalette.Muted));
+        var run=allReplays.FirstOrDefault(r=>r.ScoreId==plan.TargetScoreId);
+        var actions=new FillFlowContainer<Drawable> { RelativeSizeAxes=Axes.X, AutoSizeAxes=Axes.Y, Direction=FillDirection.Full, Spacing=new(8) };
+        if(activeTraining is null) actions.Add(new ActionButton("Start session",()=> {
+            activeTraining=plan with { StartedAt=DateTimeOffset.UtcNow };
+            saveTraining(); updateTraining(model);
+        }));
+        else {
+            var review=CoachingTrainingPlanner.Review(plan,allReplays);
+            trainingHost.Add(flow(review.Message,14,review.Complete ? AimModPalette.Success : AimModPalette.Cyan));
+            actions.Add(new ActionButton("Review new plays",()=> { load(); }));
+            actions.Add(new ActionButton(review.Complete ? "Next session" : "Reset session",()=> { activeTraining=null;saveTraining();updateTraining(model); }));
+        }
+        if(run is not null) {
+            actions.Add(new OpenBeatmapButton(()=>run,openBeatmap));
+            if(practiceWorkspace is not null) actions.Add(new ActionButton("Configure drill",()=>FocusPracticeMap(run.Title)));
+            if(run.HasReplayFile) actions.Add(new ActionButton("Review baseline replay",()=>openReplay(run)));
+        }
+        trainingHost.Add(actions);
+    }
+
+    private void saveTraining() {
+        try { trainingStore?.Save(activeTraining); trainingSaveFailed=false; }
+        catch(Exception error) when(error is IOException or UnauthorizedAccessException) {
+            trainingSaveFailed=true;
+        }
     }
 
     private void updateChanges(CoachingIntelligence intelligence, GlobalCoachingProfile profile, bool isGlobal)

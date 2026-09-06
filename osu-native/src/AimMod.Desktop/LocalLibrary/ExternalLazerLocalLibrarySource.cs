@@ -99,7 +99,7 @@ public sealed class ExternalLazerLocalLibrarySource : ILocalLibrarySource
             artworkPaths.GetValueOrDefault(replay.ScoreId.ToString("D"), string.Empty),
             replay.HitStatistics,
             replay.ModsJson,
-            replay.OnlineScoreId)).ToArray();
+            replay.OnlineScoreId, Passed: replay.Passed, LegacyScore: replay.LegacyScore)).ToArray();
 
         return new LocalLibraryPage<LocalReplay>(replays, result.Total, result.Offset, result.Limit);
     }

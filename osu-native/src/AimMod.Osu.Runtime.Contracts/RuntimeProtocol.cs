@@ -159,7 +159,9 @@ public sealed record PpWhatIfRequest(
     int? MaxCombo = null,
     PpScoreStatistics? Statistics = null,
     string? ModsJson = null,
-    bool LegacyScore = false);
+    bool LegacyScore = false,
+    int RulesetId = 0,
+    bool Passed = true);
 
 public sealed record PpScoreStatistics(
     int Great,
@@ -167,7 +169,12 @@ public sealed record PpScoreStatistics(
     int Meh,
     int Miss,
     int SliderTailHit,
-    int LargeTickMiss);
+    int LargeTickMiss,
+    int Perfect = 0,
+    int Good = 0,
+    int LargeTickHit = 0,
+    int SmallTickHit = 0,
+    int SmallTickMiss = 0);
 
 public sealed record PpWhatIfResult(
     string EngineVersion,
@@ -360,7 +367,9 @@ public sealed record ExternalLazerReplaySummary(
     string BackgroundHash = "",
     PpScoreStatistics? HitStatistics = null,
     string ModsJson = "",
-    long OnlineScoreId = 0);
+    long OnlineScoreId = 0,
+    bool Passed = true,
+    bool LegacyScore = false);
 
 public static class ExternalLazerCatalogProtocol
 {

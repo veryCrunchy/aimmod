@@ -10,7 +10,8 @@ public sealed record PpTargetExactRequest(
     IReadOnlyList<string> Mods,
     double ExpectedAccuracy,
     double Attainability,
-    PpPatternProfile? PatternProfile = null);
+    PpPatternProfile? PatternProfile = null,
+    string? ModsJson = null);
 
 public sealed record PpTargetExactCalculationProgress(int Completed, int Total);
 
@@ -219,11 +220,11 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
                     double accuracy = measuredFraction(prediction?.ExpectedAccuracy) ?? request.ExpectedAccuracy;
                     double attainability = measuredFraction(prediction?.Fit) ?? request.Attainability;
                     PpWhatIfResult ceiling = await ppClient.CalculateAsync(new PpWhatIfRequest(
-                        stagingDirectory, beatmapPath, mods, 1, 0, null), cancellationToken).ConfigureAwait(false);
+                        stagingDirectory, beatmapPath, mods, 1, 0, null, ModsJson: request.ModsJson), cancellationToken).ConfigureAwait(false);
                     (int misses, int combo) = ExpectedScoreShape(attainability, ceiling.MaxCombo, ceiling.ObjectCount, prediction?.ExpectedMissRate);
                     accuracy = FeasibleAccuracy(accuracy, misses, ceiling.ObjectCount);
                     PpWhatIfResult expected = await ppClient.CalculateAsync(new PpWhatIfRequest(
-                        stagingDirectory, beatmapPath, mods, accuracy, misses, combo), cancellationToken).ConfigureAwait(false);
+                        stagingDirectory, beatmapPath, mods, accuracy, misses, combo, ModsJson: request.ModsJson), cancellationToken).ConfigureAwait(false);
                     if (prediction?.ExpectedAccuracy is not null)
                         prediction = prediction with { ExpectedAccuracy = expected.Accuracy };
                     // Keep the original request fields as the ranker's estimate identity.
@@ -231,6 +232,7 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
                     {
                         PatternPrediction = prediction,
                         PatternProfileIdentity = request.PatternProfile?.Identity,
+                        ModsJson = request.ModsJson,
                     };
                     if (prediction?.ExpectedAccuracy is not null || prediction?.ExpectedMissRate is not null)
                         estimate = estimate with { Method = estimate.Method + " Projected accuracy/misses use measured head evidence; combo remains heuristic and slider tracking is unmeasured." };
@@ -516,6 +518,7 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
         request.BeatmapId,
         request.BeatmapHash?.ToLowerInvariant() ?? $"beatmap-{request.BeatmapId}",
         string.Join(',', PpTargetMods.Normalise(request.Mods)),
+        request.ModsJson ?? "",
         request.PatternProfile?.Identity ?? "no-profile",
         request.ExpectedAccuracy.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
         request.Attainability.ToString("R", System.Globalization.CultureInfo.InvariantCulture));

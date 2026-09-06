@@ -15,6 +15,7 @@ internal sealed record ReplayBrowserSnapshot(
     int TotalMapCount,
     int TotalReplayCount)
 {
+    public IReadOnlyList<ScoreModChoice> AvailableMods { get; init; } = ScoreMods.Choices([]);
     public static ReplayBrowserSnapshot Empty { get; } = new([], 0, 0);
 }
 
@@ -27,7 +28,7 @@ internal static class ReplayBrowserModel
         ILocalLibrarySource source,
         string search,
         int mapLimit = DefaultMapLimit,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, string ruleset = "", string modSelection = ScoreMods.Any)
     {
         ArgumentNullException.ThrowIfNull(source);
 
@@ -41,7 +42,7 @@ internal static class ReplayBrowserModel
             cancellationToken.ThrowIfCancellationRequested();
             LocalLibraryPage<LocalReplay> page = await source.SearchReplaysAsync(new LocalLibraryQuery(
                 SearchText: search,
-                RulesetShortName: "osu",
+                RulesetShortName: ruleset,
                 Sort: LocalLibrarySort.RecentlyPlayed,
                 Offset: offset,
                 Limit: PageSize), cancellationToken).ConfigureAwait(false);
@@ -63,7 +64,9 @@ internal static class ReplayBrowserModel
             offset = nextOffset;
         }
 
-        ReplayBrowserMapGroup[] allMaps = replays
+        var availableMods = ScoreMods.Choices(replays);
+        var matching = replays.Where(r=>ScoreMods.Matches(r,modSelection)).ToArray();
+        ReplayBrowserMapGroup[] allMaps = matching
             .GroupBy(MapKeyFor)
             .Select(group =>
             {
@@ -85,16 +88,16 @@ internal static class ReplayBrowserModel
         return new ReplayBrowserSnapshot(
             allMaps.Take(Math.Max(0, mapLimit)).ToArray(),
             allMaps.Length,
-            Math.Max(totalReplays, replays.Count));
+            modSelection == ScoreMods.Any ? Math.Max(totalReplays, replays.Count) : matching.Length) { AvailableMods = availableMods };
     }
 
     public static string MapKeyFor(LocalReplay replay)
     {
         if (replay.BeatmapId != Guid.Empty)
-            return $"id:{replay.BeatmapId:N}";
+            return $"id:{replay.RulesetShortName}:{replay.BeatmapId:N}";
 
         if (!string.IsNullOrWhiteSpace(replay.BeatmapHash))
-            return $"hash:{replay.BeatmapHash.Trim().ToLowerInvariant()}";
+            return $"hash:{replay.RulesetShortName}:{replay.BeatmapHash.Trim().ToLowerInvariant()}";
 
         return string.Join(':',
             "fallback",

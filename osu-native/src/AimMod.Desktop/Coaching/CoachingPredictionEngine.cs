@@ -683,7 +683,7 @@ public static class CoachingPredictionEngine
         double starWeight = validStars(run.StarRating) && validStars(target.StarRating)
             ? Math.Exp(-Math.Abs(run.StarRating - target.StarRating) / 0.75)
             : 0.5;
-        double modWeight = 0.75 + 1.25 * modSimilarity(run.Mods, target.Mods);
+        double modWeight = 0.75 + 1.25 * (ScoreMods.Configuration(run) == ScoreMods.Configuration(target) ? 1 : 0);
         double beatmapWeight = run.BeatmapId != Guid.Empty && run.BeatmapId == target.BeatmapId ? 2.5 : 1;
         double recencyWeight = Math.Pow(0.985, age);
         return starWeight * modWeight * beatmapWeight * recencyWeight;
@@ -708,23 +708,10 @@ public static class CoachingPredictionEngine
             _ => CoachingConfidence.Insufficient,
         };
 
-    private static string setupKey(LocalReplay run)
-    {
-        string beatmap = run.BeatmapId != Guid.Empty
-            ? run.BeatmapId.ToString("N")
-            : !string.IsNullOrWhiteSpace(run.BeatmapHash)
-                ? $"hash:{run.BeatmapHash.Trim().ToUpperInvariant()}"
-                : $"score:{run.ScoreId:N}";
-        string mods = string.Join(',', (run.Mods ?? Array.Empty<string>())
-            .Where(mod => !string.IsNullOrWhiteSpace(mod))
-            .Select(mod => mod.Trim().ToUpperInvariant())
-            .Distinct(StringComparer.Ordinal)
-            .OrderBy(mod => mod, StringComparer.Ordinal));
-        return $"{beatmap}|{mods}";
-    }
+    private static string setupKey(LocalReplay run) => ScoreMods.SetupKey(run);
 
     private static bool isStandardRun(LocalReplay run) =>
-        string.Equals(run.RulesetShortName, "osu", StringComparison.OrdinalIgnoreCase);
+        string.Equals(run.RulesetShortName, "osu", StringComparison.OrdinalIgnoreCase) && ScoreMods.IsManualPlay(run);
 
     private static bool validAccuracy(double value) => double.IsFinite(value) && value is >= 0 and <= 1;
 

@@ -28,7 +28,7 @@ public interface ICoachingPpProjectionService
 
 public sealed class CoachingPpProjectionService : ICoachingPpProjectionService
 {
-    private const int cache_version = 1;
+    private const int cache_version = 2;
     private const int maximum_cache_entries = 2_048;
     private const int maximum_batch_size = 8;
 
@@ -111,7 +111,7 @@ public sealed class CoachingPpProjectionService : ICoachingPpProjectionService
                         normaliseMods(request.Run.Mods),
                         request.Opportunity.TargetAccuracy!.Value,
                         request.Opportunity.TargetMissCount!.Value,
-                        null);
+                        null, ModsJson: request.Run.ModsJson, LegacyScore: request.Run.LegacyScore || request.Run.Origin == LocalLibraryOrigin.Stable);
                     PpWhatIfResult ceiling = await ppClient.CalculateAsync(ceilingRequest, cancellationToken).ConfigureAwait(false);
                     int targetCombo = estimateTargetCombo(request, ceiling.MaxCombo);
                     result = targetCombo == ceiling.MaxCombo
@@ -187,7 +187,7 @@ public sealed class CoachingPpProjectionService : ICoachingPpProjectionService
             normaliseMods(request.Run.Mods),
             request.Run.Accuracy,
             request.Run.MissCount,
-            request.Run.MaxCombo), cancellationToken).ConfigureAwait(false);
+            request.Run.MaxCombo, Statistics: request.Run.HitStatistics, ModsJson: request.Run.ModsJson, LegacyScore: request.Run.LegacyScore || request.Run.Origin == LocalLibraryOrigin.Stable), cancellationToken).ConfigureAwait(false);
         cache[key] = new CacheEntry(key, DateTimeOffset.UtcNow, result);
         return result.PerformancePoints;
     }
@@ -323,7 +323,7 @@ public sealed class CoachingPpProjectionService : ICoachingPpProjectionService
     private static string scenarioCacheKey(LocalReplay run, double accuracy, int misses, int combo) => string.Join('|',
         PpCalculationProtocol.EngineVersion,
         run.BeatmapHash.ToLowerInvariant(),
-        string.Join(',', normaliseMods(run.Mods)),
+        ScoreMods.SetupKey(run),
         accuracy.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
         misses,
         combo);

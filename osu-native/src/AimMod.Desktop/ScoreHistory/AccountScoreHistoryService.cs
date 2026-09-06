@@ -36,7 +36,8 @@ public sealed record ScoreHistoryEntry(
     bool HasReplay,
     bool? Passed = null,
     double? Bpm = null,
-    int? LengthSeconds = null)
+    int? LengthSeconds = null,
+    string ModsJson = "")
 {
     public bool IsLocal => Provenance.HasFlag(ScoreHistoryProvenance.Local);
     public bool IsSubmitted => (Provenance & ~ScoreHistoryProvenance.Local) != 0 || OnlineScoreId > 0;
@@ -159,7 +160,7 @@ public sealed class OfficialAccountScoreHistoryService : IAccountScoreHistorySer
     private static ScoreHistoryEntry fromExact(OsuUserBeatmapScore score, int beatmapId) => new(
         $"osu:{score.ScoreId}", score.ScoreId, beatmapId, 0, null, null, string.Empty, string.Empty, string.Empty,
         score.EndedAt ?? score.CreatedAt ?? DateTimeOffset.UnixEpoch, double.NaN, score.Accuracy, score.PerformancePoints,
-        score.TotalScore, score.MaximumCombo, score.Statistics.Misses, score.Mods, ScoreHistoryProvenance.OnlineBeatmap, false);
+        score.TotalScore, score.MaximumCombo, score.Statistics.Misses, score.Mods, ScoreHistoryProvenance.OnlineBeatmap, false, ModsJson: score.ModsJson);
 
     private static OnlineScoreCoverage coverage(OsuBestScoresFetchStatus status, bool cached, DateTimeOffset? fetchedAt, string scope, int? limit, bool exhaustive) =>
         new(status, cached, fetchedAt, scope, limit, exhaustive);
@@ -222,7 +223,7 @@ public static class ScoreHistoryMerger
                 online?.PerformancePoints ?? local.PerformancePoints, online?.TotalScore ?? local.TotalScore,
                 online?.MaximumCombo ?? local.MaxCombo, online?.MissCount ?? local.MissCount, online?.Mods ?? local.Mods,
                 ScoreHistoryProvenance.Local | (online?.Provenance ?? ScoreHistoryProvenance.None), local.HasReplayFile,
-                online?.Passed, online?.Bpm, online?.LengthSeconds));
+                online?.Passed, online?.Bpm, online?.LengthSeconds, online?.ModsJson is { Length: > 0 } json ? json : local.ModsJson));
         }
         merged.AddRange(onlineById.Values);
         return merged.OrderBy(score => score.PlayedAt).ThenBy(score => score.Identity, StringComparer.Ordinal).ToArray();
@@ -250,6 +251,8 @@ public static class ScoreHistoryMerger
                     MaxCombo = entry.MaximumCombo,
                     MissCount = entry.MissCount,
                     Mods = entry.Mods,
+                    ModsJson = entry.ModsJson,
+                    Passed = entry.Passed ?? local.Passed,
                     OnlineScoreId = entry.OnlineScoreId,
                     OnlineBeatmapId = entry.OnlineBeatmapId > 0 ? entry.OnlineBeatmapId : local.OnlineBeatmapId,
                     IsLocallyStored = true,
@@ -276,7 +279,7 @@ public static class ScoreHistoryMerger
                 false,
                 OnlineScoreId: entry.OnlineScoreId,
                 IsLocallyStored: false,
-                OnlineBeatmapId: entry.OnlineBeatmapId);
+                OnlineBeatmapId: entry.OnlineBeatmapId, ModsJson: entry.ModsJson, Passed: entry.Passed ?? true);
         }).ToArray();
     }
 
@@ -297,5 +300,5 @@ public static class ScoreHistoryMerger
         score.BeatmapSet.Title, score.BeatmapSet.Artist, score.Beatmap.DifficultyName,
         score.EndedAt ?? score.CreatedAt ?? DateTimeOffset.UnixEpoch, score.Beatmap.StarRating, score.Accuracy, score.PerformancePoints,
         score.TotalScore, score.MaximumCombo, score.Statistics.Misses, score.Mods, provenance, false,
-        score.Passed, score.Beatmap.Bpm, score.Beatmap.TotalLengthSeconds);
+        score.Passed, score.Beatmap.Bpm, score.Beatmap.TotalLengthSeconds, score.ModsJson);
 }

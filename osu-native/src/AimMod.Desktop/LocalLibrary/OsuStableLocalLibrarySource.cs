@@ -109,7 +109,7 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
         }
 
         var beatmapsByHash = new Dictionary<string, StableBeatmap>(StringComparer.OrdinalIgnoreCase);
-        DbBeatmap[] standardMaps = beatmapDatabase.Beatmaps.Where(beatmap => beatmap.Ruleset == Ruleset.Standard).ToArray();
+        DbBeatmap[] standardMaps = beatmapDatabase.Beatmaps.Where(beatmap => (int)beatmap.Ruleset is >= 0 and <= 3).ToArray();
         int checkedMaps = 0;
         foreach (DbBeatmap beatmap in standardMaps)
         {
@@ -121,9 +121,9 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
             string folderPath = Path.GetDirectoryName(beatmapPath)!;
             bool installed = File.Exists(beatmapPath);
             string backgroundPath = installed ? resolveBackground(beatmapPath, folderPath) : string.Empty;
-            double stars = beatmap.StandardStarRating.TryGetValue(Mods.None, out double noModStars)
+            double stars = starRatings(beatmap).TryGetValue(Mods.None, out double noModStars)
                 ? noModStars
-                : beatmap.StandardStarRating.Values.DefaultIfEmpty().Min();
+                : starRatings(beatmap).Values.DefaultIfEmpty().Min();
             int localScoreCount = scoresByBeatmap.GetValueOrDefault(beatmap.MD5Hash)?.Count ?? 0;
             beatmapsByHash[beatmap.MD5Hash] = new StableBeatmap(beatmap, installed ? beatmapPath : string.Empty, backgroundPath, stars, localScoreCount);
         }
@@ -158,7 +158,7 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
             stableGuid("beatmap", beatmap.Entry.MD5Hash),
             beatmap.Entry.BeatmapId,
             beatmap.Entry.Difficulty,
-            "osu",
+            rulesetName(beatmap.Entry.Ruleset),
             beatmap.StarRating,
             beatmap.Entry.TimingPoints.Where(point => !point.Inherited).Select(point => point.BPM).DefaultIfEmpty().Max(),
             beatmap.Entry.TotalTime,
@@ -191,17 +191,24 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
 
     private LocalReplay? createReplay(Score score, StableBeatmap? beatmap, string? indexedReplayPath)
     {
-        if (score.Ruleset != Ruleset.Standard)
+        if ((int)score.Ruleset is < 0 or > 3)
             return null;
 
-        int totalHits = score.Count300 + score.Count100 + score.Count50 + score.CountMiss;
-        double accuracy = totalHits == 0
-            ? 0
-            : (score.Count300 * 300d + score.Count100 * 100d + score.Count50 * 50d) / (totalHits * 300d);
+        int mode = (int)score.Ruleset;
+        int totalHits = score.Count300 + score.Count100 + score.Count50 + score.CountMiss
+            + (mode == 3 ? score.CountGeki + score.CountKatu : mode == 2 ? score.CountKatu : 0);
+        double accuracy = totalHits == 0 ? 0 : mode switch {
+            1 => (score.Count300 + score.Count100 * .5) / (score.Count300 + score.Count100 + (double)score.CountMiss),
+            2 => (score.Count300 + score.Count100 + score.Count50) / (double)totalHits,
+            3 => ((score.CountGeki + score.Count300) * 300d + score.CountKatu * 200d + score.Count100 * 100d + score.Count50 * 50d) / (totalHits * 300d),
+            _ => (score.Count300 * 300d + score.Count100 * 100d + score.Count50 * 50d) / (totalHits * 300d)
+        };
         string replayPath = indexedReplayPath ?? resolveReplayPath(score.ReplayMD5Hash);
-        string[] mods = enumerateMods(score.Mods);
+        string[] mods = enumerateMods(score.Mods, score.Ruleset);
         DateTimeOffset playedAt = new(DateTime.SpecifyKind(score.ScoreTimestamp, DateTimeKind.Utc));
-        var statistics = new PpScoreStatistics(score.Count300, score.Count100, score.Count50, score.CountMiss, 0, 0);
+        var statistics = new PpScoreStatistics(score.Count300, mode == 2 ? 0 : score.Count100, mode == 2 ? 0 : score.Count50, score.CountMiss, 0, 0,
+            Perfect: mode == 3 ? score.CountGeki : 0, Good: mode == 3 ? score.CountKatu : 0,
+            LargeTickHit: mode == 2 ? score.Count100 : 0, SmallTickHit: mode == 2 ? score.Count50 : 0, SmallTickMiss: mode == 2 ? score.CountKatu : 0);
 
         return new LocalReplay(
             stableGuid("score", score.ReplayMD5Hash.Length > 0
@@ -212,10 +219,10 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
             beatmap?.Entry.Title ?? "Beatmap not installed",
             beatmap?.Entry.Artist ?? string.Empty,
             beatmap?.Entry.Difficulty ?? string.Empty,
-            "osu",
+            rulesetName(score.Ruleset),
             score.PlayerName,
             playedAt,
-            beatmap?.Entry.StandardStarRating.GetValueOrDefault(score.Mods, beatmap.StarRating) ?? 0,
+            beatmap is null ? 0 : starRatings(beatmap.Entry).GetValueOrDefault(score.Mods, beatmap.StarRating),
             accuracy,
             score.ReplayScore,
             score.Combo,
@@ -232,6 +239,11 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
             Origin: LocalLibraryOrigin.Stable,
             OnlineBeatmapId: Math.Max(0, beatmap?.Entry.BeatmapId ?? 0));
     }
+
+    private static string rulesetName(Ruleset mode) => (int)mode switch { 1 => "taiko", 2 => "fruits", 3 => "mania", _ => "osu" };
+    private static Dictionary<Mods,double> starRatings(DbBeatmap map) => (int)map.Ruleset switch {
+        1 => map.TaikoStarRating, 2 => map.CatchStarRating, 3 => map.ManiaStarRating, _ => map.StandardStarRating
+    };
 
     private string resolveReplayPath(string replayHash)
     {
@@ -291,7 +303,12 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
         }
     }
 
-    private static string[] enumerateMods(Mods value) => new osu.Game.Rulesets.Osu.OsuRuleset()
+    private static osu.Game.Rulesets.Ruleset createRuleset(Ruleset mode) => (int)mode switch {
+        1 => new osu.Game.Rulesets.Taiko.TaikoRuleset(), 2 => new osu.Game.Rulesets.Catch.CatchRuleset(),
+        3 => new osu.Game.Rulesets.Mania.ManiaRuleset(), _ => new osu.Game.Rulesets.Osu.OsuRuleset()
+    };
+
+    private static string[] enumerateMods(Mods value, Ruleset mode) => createRuleset(mode)
         .ConvertFromLegacyMods((osu.Game.Beatmaps.Legacy.LegacyMods)(int)value)
         .Select(mod => mod.Acronym)
         .ToArray();

@@ -23,7 +23,7 @@ internal sealed record ValidatedPpInput(
     int? MaxCombo,
     PpScoreStatistics? Statistics,
     string? ModsJson,
-    bool LegacyScore = false);
+    bool LegacyScore = false, int RulesetId = 0, bool Passed = true);
 
 internal static class PpInputValidator
 {
@@ -52,17 +52,19 @@ internal static class PpInputValidator
             throw new RuntimeCommandException("input_invalid", "PP calculation received too many mods.");
         if (!double.IsFinite(request.Accuracy) || request.Accuracy is < 0 or > 1)
             throw new RuntimeCommandException("input_invalid", "PP calculation accuracy must be between 0 and 1.");
+        if (request.RulesetId is < 0 or > 3)
+            throw new RuntimeCommandException("unsupported_ruleset", "This score mode is not supported.");
         if (request.MissCount < 0)
             throw new RuntimeCommandException("input_invalid", "PP calculation miss count cannot be negative.");
         if (request.MaxCombo is < 0)
             throw new RuntimeCommandException("input_invalid", "PP calculation max combo cannot be negative.");
         if (request.Statistics is { } statistics
-            && new[] { statistics.Great, statistics.Ok, statistics.Meh, statistics.Miss, statistics.SliderTailHit, statistics.LargeTickMiss }.Any(value => value < 0))
+            && new[] { statistics.Great, statistics.Ok, statistics.Meh, statistics.Miss, statistics.SliderTailHit, statistics.LargeTickMiss, statistics.Perfect, statistics.Good, statistics.LargeTickHit, statistics.SmallTickHit, statistics.SmallTickMiss }.Any(value => value < 0))
             throw new RuntimeCommandException("input_invalid", "PP calculation statistics cannot be negative.");
         if (request.ModsJson is { Length: > 16_384 })
             throw new RuntimeCommandException("input_invalid", "PP calculation mod settings are too large.");
 
-        return new ValidatedPpInput(stagingDirectory, beatmapPath, mods, request.Accuracy, request.MissCount, request.MaxCombo, request.Statistics, request.ModsJson, request.LegacyScore);
+        return new ValidatedPpInput(stagingDirectory, beatmapPath, mods, request.Accuracy, request.MissCount, request.MaxCombo, request.Statistics, request.ModsJson, request.LegacyScore, request.RulesetId, request.Passed);
     }
 
     private static string validateDirectory(string path)
@@ -118,11 +120,30 @@ internal sealed class OfficialPpWhatIfCalculator : IPpWhatIfCalculator
         {
             _ = typeof(OsuRuleset).Assembly;
 
-            var ruleset = new OsuRuleset();
+            var ruleset = ModePerformance.CreateRuleset(input.RulesetId);
             Mod[] mods = createMods(ruleset, input);
-            if (input.LegacyScore && !mods.Any(mod => mod is ModClassic))
-                mods = [.. mods, ruleset.CreateMod<ModClassic>() ?? throw new RuntimeCommandException("unsupported_mod", "Classic scoring is unavailable.")];
+            if (input.LegacyScore && !mods.Any(mod => mod is ModClassic) && ruleset.CreateMod<ModClassic>() is {} classic)
+                mods = [.. mods, classic];
+            if (mods.Select(m=>m.Acronym).Distinct().Count()!=mods.Length ||
+                mods.Any(m=>m.IncompatibleMods.Any(type=>mods.Any(other=>other!=m && type.IsInstanceOfType(other)))))
+                throw new RuntimeCommandException("incompatible_mods", "These mods cannot be used together.");
             var workingBeatmap = new FlatWorkingBeatmap(input.BeatmapPath);
+            if (input.RulesetId != 0) {
+                var modeStatistics = input.Statistics ?? throw new RuntimeCommandException("statistics_required", "This mode requires the score's exact judgements.");
+                var stats = new Dictionary<HitResult,int> {
+                    [HitResult.Perfect] = modeStatistics.Perfect, [HitResult.Great] = modeStatistics.Great,
+                    [HitResult.Good] = modeStatistics.Good, [HitResult.Ok] = modeStatistics.Ok,
+                    [HitResult.Meh] = modeStatistics.Meh, [HitResult.Miss] = modeStatistics.Miss,
+                    [HitResult.LargeTickHit] = modeStatistics.LargeTickHit, [HitResult.LargeTickMiss] = modeStatistics.LargeTickMiss,
+                    [HitResult.SmallTickHit] = modeStatistics.SmallTickHit, [HitResult.SmallTickMiss] = modeStatistics.SmallTickMiss
+                };
+                var mode = ModePerformance.Calculate(workingBeatmap, ruleset, mods, stats, input.Accuracy,
+                    input.MaxCombo ?? 0, !input.LegacyScore, input.Passed, 0, null, cancellationToken);
+                return ValueTask.FromResult(new PpWhatIfResult(PpCalculationProtocol.EngineVersion,
+                    mode.RulesetVersion, mode.Stars, mode.MaxCombo, mode.ObjectCount,
+                    modeStatistics.Great, modeStatistics.Ok, modeStatistics.Meh, modeStatistics.Miss, input.Accuracy, mode.Pp,
+                    null, null, null, null, null, null));
+            }
             DifficultyAttributes attributes = ruleset.CreateDifficultyCalculator(workingBeatmap).Calculate(mods, cancellationToken);
             if (attributes is not OsuDifficultyAttributes osuAttributes)
                 throw new RuntimeCommandException("unsupported_ruleset", "PP calculation currently supports osu!standard only.");
@@ -149,7 +170,7 @@ internal sealed class OfficialPpWhatIfCalculator : IPpWhatIfCalculator
                 },
             };
 
-            PerformanceAttributes performance = ruleset.CreatePerformanceCalculator().Calculate(score, attributes);
+            PerformanceAttributes performance = (ruleset.CreatePerformanceCalculator() ?? throw new ArgumentException("This mode has no PP calculator.")).Calculate(score, attributes);
             var osuPerformance = performance as OsuPerformanceAttributes;
             return ValueTask.FromResult(new PpWhatIfResult(
                 PpCalculationProtocol.EngineVersion,

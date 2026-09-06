@@ -662,7 +662,8 @@ public partial class AimModGame : OsuGameBase
             openHubUrl,
             copyHubText,
             openBeatmapPractice,
-            openReplayBeatmap)
+            openReplayBeatmap,
+            () => localScorePpHydrationService)
         {
             RelativeSizeAxes = Axes.Both,
         };
@@ -790,7 +791,8 @@ public partial class AimModGame : OsuGameBase
             createPracticeMap,
             installPracticeMap,
             new NativePracticeWorkspace(inspectPracticeMap, createPracticeMap, openSavedPracticeMap,
-                new PracticeMapLibrary(Storage.GetFullPath("practice-maps", true)), () => coachingWorkspace?.ClosePractice(), openReplayBeatmap), openReplayBeatmap)
+                new PracticeMapLibrary(Storage.GetFullPath("practice-maps", true)), () => coachingWorkspace?.ClosePractice(), openReplayBeatmap), openReplayBeatmap,
+            new CoachingTrainingStore(Storage.GetFullPath($"coaching/session-{currentOsuProfile?.UserId ?? 0}.json", true)))
         {
             RelativeSizeAxes = Axes.Both,
         };

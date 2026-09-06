@@ -14,7 +14,7 @@ internal static class StableReplayHeaders
             // Index metadata only. Never decompress cursor frames during library discovery.
             using var reader = new MetadataReader(file);
             var score = new Score { Ruleset = (Ruleset)reader.ReadByte(), OsuVersion = reader.ReadInt32() };
-            if (score.Ruleset != Ruleset.Standard || score.OsuVersion is <= 0 or >= 30000000) return null;
+            if ((int)score.Ruleset is < 0 or > 3 || score.OsuVersion is <= 0 or >= 30000000) return null;
             score.BeatmapMD5Hash = reader.ReadString();
             score.PlayerName = reader.ReadString();
             score.ReplayMD5Hash = reader.ReadString();
@@ -48,7 +48,7 @@ internal static class StableReplayHeaders
 
     public static string Key(Score score) => string.Join(':', score.BeatmapMD5Hash.ToLowerInvariant(),
         score.PlayerName.ToUpperInvariant(), score.ScoreTimestamp.Ticks, score.ReplayScore, (int)score.Mods,
-        score.Combo, score.Count300, score.Count100, score.Count50, score.CountMiss);
+        score.Combo, (int)score.Ruleset, score.Count300, score.Count100, score.Count50, score.CountGeki, score.CountKatu, score.CountMiss);
 
     private sealed class MetadataReader(Stream stream) : SerializationReader(stream)
     {

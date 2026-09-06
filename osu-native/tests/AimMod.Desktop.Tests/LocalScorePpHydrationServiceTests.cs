@@ -24,6 +24,19 @@ public sealed class LocalScorePpHydrationServiceTests
             Directory.Delete(temporaryDirectory, true);
     }
 
+    [TestCase("taiko", 1)]
+    [TestCase("fruits", 2)]
+    [TestCase("mania", 3)]
+    public void ModeAndFullJudgementsReachCalculator(string mode, int id) {
+        var run = validRun(1) with { RulesetShortName = mode, Passed = false, LegacyScore = true,
+            HitStatistics = new(1,2,3,4,0,1,Perfect:5,Good:6,LargeTickHit:7,SmallTickHit:8,SmallTickMiss:9) };
+        var request = LocalScorePpHydrationService.CreateCalculationRequest(run, Path.Combine(temporaryDirectory,"map.osu"));
+        Assert.That(request.RulesetId, Is.EqualTo(id));
+        Assert.That(request.Passed, Is.False);
+        Assert.That(request.LegacyScore, Is.True);
+        Assert.That(request.Statistics, Is.EqualTo(run.HitStatistics));
+    }
+
     [Test]
     public void StableCalculationUsesLegacyScoringAndLocalStaging()
     {

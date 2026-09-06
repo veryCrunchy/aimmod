@@ -38,7 +38,8 @@ public sealed record PpTargetPreferenceProfile(
     IReadOnlyList<PpTargetPerformanceSample> PerformanceSamples,
     PpPatternProfile? PatternProfile = null,
     IReadOnlyList<string>? PreferredModSetup = null,
-    PpTargetOpportunityProfile? Opportunities = null)
+    PpTargetOpportunityProfile? Opportunities = null,
+    string? PreferredModsJson = null)
 {
     public static PpTargetPreferenceProfile Empty { get; } = new(
         0, 0, 0, null, null, null, null, null, null, PpTargetConfidence.Insufficient,
@@ -57,7 +58,8 @@ public sealed record PpTargetEstimate(
     double? ExpectedAccuracy = null,
     double? Attainability = null,
     PpPatternPrediction? PatternPrediction = null,
-    string? PatternProfileIdentity = null);
+    string? PatternProfileIdentity = null,
+    string? ModsJson = null);
 
 public sealed record PpTargetFilters(
     string SearchText = "",

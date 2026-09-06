@@ -114,7 +114,7 @@ public static class PpTargetPreferenceProfiler
     }
 
     private static string setupKey(LocalReplay run) =>
-        $"{run.BeatmapId:N}|{string.Join(',', normaliseMods(run.Mods).Select(mod => mod.ToUpperInvariant()))}";
+        ScoreMods.SetupKey(run);
 
     private static string[] normaliseMods(IReadOnlyList<string>? mods) =>
         (mods ?? []).Select(clean).Where(mod => mod.Length > 0 && !string.Equals(mod, "NoMod", StringComparison.OrdinalIgnoreCase))
@@ -186,7 +186,7 @@ public static class PpTargetRanker
         double preference = preferenceFit(profile, set, difficulty);
         (double attainability, double scoreEvidence, int nearbySampleCount) = performanceFit(profile, difficulty.StarRating);
         PpTargetEstimate? estimate = matchingEstimate(
-            exactEstimates?.GetValueOrDefault(difficulty.BeatmapId),
+            exactEstimates?.GetValueOrDefault(difficulty.BeatmapId) is {} exact && (exact.ModsJson ?? "") == (profile.PreferredModsJson ?? "") ? exact : null,
             difficulty.BeatmapId,
             mods,
             profile.TypicalAccuracy,

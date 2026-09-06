@@ -128,9 +128,10 @@ public sealed class DynamicRealmLazerLibraryCatalogReader : ILazerLibraryCatalog
 
             IRealmObjectBase? beatmap = getObject(score, "BeatmapInfo");
             IRealmObjectBase? set = beatmap is null ? null : getObject(beatmap, "BeatmapSet");
-            if (beatmap is null || set is null || get<bool>(set, "DeletePending") || !matchesDifficultyFilters(beatmap, query))
+            if (beatmap is null || set is null || get<bool>(set, "DeletePending") || !matchesDifficultyFilters(beatmap, query with { RulesetShortName = "" }))
                 continue;
 
+            if (query.RulesetShortName.Length > 0 && !string.Equals(text(getObject(score, "Ruleset"), "ShortName"), query.RulesetShortName, StringComparison.OrdinalIgnoreCase)) continue;
             IRealmObjectBase? metadata = getObject(beatmap, "Metadata");
             Guid setId = get<Guid>(set, "ID");
             if (!backgroundHashes.TryGetValue(setId, out string? backgroundHash))
@@ -174,7 +175,8 @@ public sealed class DynamicRealmLazerLibraryCatalogReader : ILazerLibraryCatalog
                 backgroundHash,
                 hitStatistics,
                 modsJson,
-                Math.Max(0, get<long>(score, "OnlineID"))));
+                Math.Max(0, get<long>(score, "OnlineID")),
+                getOptional(score, "Passed", true), getOptional(score, "IsLegacyScore", false)));
         }
 
         IEnumerable<ExternalLazerReplaySummary> ordered = query.Sort switch
@@ -364,9 +366,14 @@ public sealed class DynamicRealmLazerLibraryCatalogReader : ILazerLibraryCatalog
             int miss = readStatistic(document.RootElement, "Miss", "miss", "1");
             int sliderTailHit = readStatistic(document.RootElement, "SliderTailHit", "slider_tail_hit", "16");
             int largeTickMiss = readStatistic(document.RootElement, "LargeTickMiss", "large_tick_miss", "9");
-            return great + ok + meh + miss == 0
+            int perfect = readStatistic(document.RootElement, "Perfect", "perfect", "6");
+            int good = readStatistic(document.RootElement, "Good", "good", "4");
+            int largeTickHit = readStatistic(document.RootElement, "LargeTickHit", "large_tick_hit", "10");
+            int smallTickHit = readStatistic(document.RootElement, "SmallTickHit", "small_tick_hit", "8");
+            int smallTickMiss = readStatistic(document.RootElement, "SmallTickMiss", "small_tick_miss", "7");
+            return great + ok + meh + miss + perfect + good + largeTickHit + smallTickHit + smallTickMiss + largeTickMiss == 0
                 ? null
-                : new PpScoreStatistics(great, ok, meh, miss, sliderTailHit, largeTickMiss);
+                : new PpScoreStatistics(great, ok, meh, miss, sliderTailHit, largeTickMiss, perfect, good, largeTickHit, smallTickHit, smallTickMiss);
         }
         catch (JsonException)
         {
@@ -432,6 +439,11 @@ public sealed class DynamicRealmLazerLibraryCatalogReader : ILazerLibraryCatalog
         value is null ? string.Empty : clamp(get<string>(value, property) ?? string.Empty, ExternalLazerCatalogProtocol.MaximumTextFieldLength);
 
     private static string clamp(string value, int maximumLength) => value.Length <= maximumLength ? value : value[..maximumLength];
+
+    private static T getOptional<T>(IRealmObjectBase value, string property, T fallback) {
+        try { return value.DynamicApi.Get<T>(property); }
+        catch (MissingMemberException) { return fallback; }
+    }
 
     private static T get<T>(IRealmObjectBase? value, string property) =>
         value is null ? default! : value.DynamicApi.Get<T>(property);

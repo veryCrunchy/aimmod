@@ -694,13 +694,23 @@ public sealed partial class OffscreenVisualCaptureTests
         private void load()
         {
             LocalReplay[] replays = source.SearchReplaysAsync(new LocalLibraryQuery(Limit: 200)).AsTask().GetAwaiter().GetResult().Items.ToArray();
+            ILocalLibrarySource coachingSource = source;
+            if (state == CoachingCaptureState.Complete && replays.Length > 0) {
+                var baseline = replays[0];
+                replays = replays.Concat(Enumerable.Range(1,3).Select(i=>baseline with {
+                    ScoreId=Guid.NewGuid(), PlayedAt=DateTimeOffset.UtcNow.AddDays(-1).AddMinutes(i),
+                    Accuracy=.97+i*.001, MissCount=4-i,
+                    Mods=["DT"], ModsJson="[{\"acronym\":\"DT\",\"settings\":{\"speed_change\":1.2}}]"
+                })).ToArray();
+                coachingSource = new InMemoryLocalLibrarySource([],replays);
+            }
             int analysisCount = state == CoachingCaptureState.PracticeMany ? replays.Length : 3;
             var analyses = replays.Take(analysisCount)
                                   .Select((replay, index) => (replay, index))
                                   .ToDictionary(item => item.replay.ScoreId, item => createCoachingAnalysis(item.index));
 
             var workspace = new NativeCoachingWorkspace(
-                source,
+                coachingSource,
                 analyses,
                 _ => { },
                 () => null,

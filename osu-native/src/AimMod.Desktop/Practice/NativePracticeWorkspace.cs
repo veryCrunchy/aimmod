@@ -1,4 +1,5 @@
 using AimMod.Desktop.LocalLibrary;
+using AimMod.Desktop.Coaching;
 using AimMod.Desktop.Visuals;
 using AimMod.Osu.Runtime;
 using osu.Framework.Bindables;
@@ -26,6 +27,8 @@ public partial class NativePracticeWorkspace : CompositeDrawable
     private readonly PracticeMapList list = new() { RelativeSizeAxes = Axes.None };
     private readonly FillFlowContainer detail = flow();
     private readonly OsuTextBox search = new() { RelativeSizeAxes = Axes.X, Height = 40, PlaceholderText = "Search maps or difficulties" };
+    private readonly Bindable<string> modSelection = new(ScoreMods.Any);
+    private readonly ScoreModFilterDropdown modDropdown;
     private readonly Bindable<PracticeCandidateSort> sort = new(PracticeCandidateSort.WeakestFirst);
     private readonly Bindable<PracticeEvidenceFilter> evidence = new(PracticeEvidenceFilter.AnyEvidence);
     private readonly Bindable<PracticeLibrarySort> librarySort = new(PracticeLibrarySort.Newest);
@@ -62,7 +65,7 @@ public partial class NativePracticeWorkspace : CompositeDrawable
     private IReadOnlyList<SavedPracticeMap> savedMaps = [];
     private bool libraryLoading;
     private int dataRevision;
-    private (bool Saved, string Search, PracticeCandidateSort Sort, PracticeEvidenceFilter Evidence, double Min, double Max, PracticeLibrarySort LibrarySort, int Scenario, bool Favourites, int Revision)? rendered;
+    private (bool Saved, string Search, PracticeCandidateSort Sort, PracticeEvidenceFilter Evidence, double Min, double Max, PracticeLibrarySort LibrarySort, int Scenario, bool Favourites, int Revision, string Mods)? rendered;
     private bool savedView;
     private bool busy;
     private bool generating;
@@ -109,9 +112,10 @@ public partial class NativePracticeWorkspace : CompositeDrawable
         sourceFilters = new Container { RelativeSizeAxes = Axes.X, Height = 42, Child = new GridContainer
         {
             RelativeSizeAxes = Axes.Both,
-            ColumnDimensions = [new Dimension(GridSizeMode.Relative, .35f), new Dimension(GridSizeMode.Relative, .35f), new Dimension(GridSizeMode.Relative, .3f)],
+            ColumnDimensions = [new Dimension(GridSizeMode.Relative, .25f), new Dimension(GridSizeMode.Relative, .25f), new Dimension(GridSizeMode.Relative, .25f), new Dimension(GridSizeMode.Relative, .25f)],
             Content = new[] { new Drawable[]
             {
+                new StatisticsFilterBar { RelativeSizeAxes=Axes.Both, Child=modDropdown=new ScoreModFilterDropdown(modSelection) },
                 dropdown(sort, Enum.GetValues<PracticeCandidateSort>(), value => value switch
                 {
                     PracticeCandidateSort.WeakestFirst => "Highest priority", PracticeCandidateSort.MostRepeated => "Repeated misses",
@@ -154,6 +158,7 @@ public partial class NativePracticeWorkspace : CompositeDrawable
         statusHost = new Container { RelativeSizeAxes = Axes.X, Height = 60, Anchor = Anchor.BottomLeft, Origin = Anchor.BottomLeft, Children = [statusText, cancel, createButton] };
         InternalChildren = [new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas }, header, filtersScroll, columns, statusHost];
         search.Current.BindValueChanged(_ => scheduleRefresh());
+        modSelection.BindValueChanged(_ => scheduleRefresh());
         sort.BindValueChanged(_ => refreshList());
         evidence.BindValueChanged(_ => refreshList());
         librarySort.BindValueChanged(_ => refreshList());
@@ -173,6 +178,7 @@ public partial class NativePracticeWorkspace : CompositeDrawable
     {
         if (ReferenceEquals(candidates, values)) return;
         candidates = values;
+        modDropdown.SetScores(values.Select(v=>v.SourceReplay));
         dataRevision++;
         if (Alpha > 0) refreshList();
     }
@@ -207,7 +213,7 @@ public partial class NativePracticeWorkspace : CompositeDrawable
         if (IsDisposed) return;
         saveSettings();
         var state = (savedView, search.Current.Value, sort.Value, evidence.Value, minimumStars.Value, maximumStars.Value,
-            librarySort.Value, savedScenario.Value, favouriteFilter.Value, dataRevision);
+            librarySort.Value, savedScenario.Value, favouriteFilter.Value, dataRevision, modSelection.Value);
         if (rendered == state) return;
         rendered = state;
         var rows = new List<PracticeMapListRow>();
@@ -225,7 +231,7 @@ public partial class NativePracticeWorkspace : CompositeDrawable
         }
         else
         {
-            PracticeCandidatePage page = PracticeMapCandidateSearch.Search(candidates,
+            PracticeCandidatePage page = PracticeMapCandidateSearch.Search(candidates.Where(c=>ScoreMods.Matches(c.SourceReplay,modSelection.Value)).ToArray(),
                 new PracticeCandidateQuery(search.Current.Value, sort.Value, evidence.Value, minimumStars.Value, maximumStars.Value));
             count.Text = $"Find drills / {page.Total} matching maps / {candidates.Count} in coaching timeframe";
             foreach (PracticeMapCandidate candidate in page.Items)
@@ -334,6 +340,7 @@ public partial class NativePracticeWorkspace : CompositeDrawable
         if (selected is null || sections.Count == 0) { detail.Add(text("No supported practice sections found", 16)); return; }
         detail.Add(text(selected.SourceReplay.Title, 20));
         detail.Add(text(selected.SourceReplay.Difficulty, 13, AimModPalette.Cyan));
+        detail.Add(text("Source setup: " + ScoreMods.Display(selected.SourceReplay),12,AimModPalette.Muted));
         LocalReplay sourceReplay = selected.SourceReplay;
         detail.Add(new OpenBeatmapButton(() => sourceReplay, openBeatmap));
         var scenarioControl = dropdown(new Bindable<PracticeDrillType>(scenario.Value), sections.Select(item => item.Scenario).Distinct(), PracticeMapPlanner.Label);

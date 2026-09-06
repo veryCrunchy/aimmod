@@ -62,6 +62,7 @@ public sealed record NativeCoachingWorkspaceModel(
             _ => null,
         };
         LocalReplay[] history = runs.Where(run => string.Equals(run.RulesetShortName, "osu", StringComparison.OrdinalIgnoreCase))
+                                    .Where(ScoreMods.IsManualPlay)
                                     .GroupBy(run => run.ScoreId)
                                     .Select(group => group.OrderByDescending(run => run.PlayedAt).First())
                                     .Where(run => earliest is null || run.PlayedAt >= earliest)

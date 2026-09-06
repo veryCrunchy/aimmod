@@ -27,7 +27,7 @@ public interface ILocalScorePpHydrationService
 
 public sealed class LocalScorePpHydrationService : ILocalScorePpHydrationService
 {
-    private const int cache_version = 1;
+    private const int cache_version = 2;
     private const int hashes_per_batch = 128;
     private const int maximum_cache_entries = 20_000;
     private static readonly JsonSerializerOptions json_options = new(JsonSerializerDefaults.Web);
@@ -191,15 +191,7 @@ public sealed class LocalScorePpHydrationService : ILocalScorePpHydrationService
                                 }
                                 try
                                 {
-                                    PpWhatIfResult result = await ppClient.CalculateAsync(new PpWhatIfRequest(
-                                        Path.GetDirectoryName(beatmap.StagedPath)!,
-                                        beatmap.StagedPath,
-                                        run.Mods,
-                                        run.Accuracy,
-                                        run.MissCount,
-                                        run.MaxCombo,
-                                        run.HitStatistics,
-                                        run.ModsJson), cancellationToken).ConfigureAwait(false);
+                                    PpWhatIfResult result = await ppClient.CalculateAsync(CreateCalculationRequest(run, beatmap.StagedPath), cancellationToken).ConfigureAwait(false);
                                     recordCalculated(run, result.PerformancePoints, ppByScore);
                                     calculated++;
                                     pendingCacheEntries++;
@@ -326,14 +318,16 @@ public sealed class LocalScorePpHydrationService : ILocalScorePpHydrationService
             run.Accuracy.ToString("R", CultureInfo.InvariantCulture),
             run.MaxCombo,
             statistics.Great, statistics.Ok, statistics.Meh, statistics.Miss,
-            statistics.SliderTailHit, statistics.LargeTickMiss);
+            statistics.SliderTailHit, statistics.LargeTickMiss,
+            run.RulesetShortName, run.Passed, run.LegacyScore, statistics.Perfect, statistics.Good, statistics.LargeTickHit, statistics.SmallTickHit, statistics.SmallTickMiss);
         if (run.Origin == LocalLibraryOrigin.Stable) raw += "|stable";
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(raw))).ToLowerInvariant();
     }
 
     internal static PpWhatIfRequest CreateCalculationRequest(LocalReplay run, string stagedPath) => new(
         Path.GetDirectoryName(stagedPath)!, stagedPath, run.Mods, run.Accuracy, run.MissCount,
-        run.MaxCombo, run.HitStatistics, run.ModsJson, LegacyScore: run.Origin == LocalLibraryOrigin.Stable);
+        run.MaxCombo, run.HitStatistics, run.ModsJson, LegacyScore: run.Origin == LocalLibraryOrigin.Stable || run.LegacyScore, Passed: run.Passed,
+        RulesetId: run.RulesetShortName switch { "osu" => 0, "taiko" => 1, "fruits" => 2, "mania" => 3, _ => -1 });
 
     private sealed record CacheDocument(int Version, IReadOnlyList<CacheEntry> Entries);
     private sealed record CacheEntry(string Key, double PerformancePoints, DateTimeOffset CalculatedAt);

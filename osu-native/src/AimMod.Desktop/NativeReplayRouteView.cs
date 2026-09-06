@@ -1,4 +1,5 @@
 using AimMod.Desktop.Coaching;
+using AimMod.Desktop.PpTargets;
 using AimMod.Desktop.Hub;
 using AimMod.Desktop.LocalLibrary;
 using AimMod.Desktop.Visuals;
@@ -33,6 +34,10 @@ public partial class NativeReplayRouteView : Container
     private readonly IReadOnlyDictionary<Guid, ReplayAnalysisResult> analyses;
     private readonly Action<LocalReplay>? openReplay;
     private readonly OsuTextBox searchBox;
+    private readonly Bindable<string> modSelection = new(ScoreMods.Any);
+    private readonly ScoreModFilterDropdown modDropdown;
+    private readonly Bindable<string> gameMode = new("All modes");
+    private readonly Func<ILocalScorePpHydrationService?>? ppHydrator;
     private readonly SpriteText replayCount;
     private readonly FillFlowContainer<Drawable> replayList;
     private readonly Container statusLayer;
@@ -86,9 +91,11 @@ public partial class NativeReplayRouteView : Container
         Action<Uri>? openUrl = null,
         Action<string>? copyText = null,
         Action<string>? openPractice = null,
-        Func<LocalReplay, CancellationToken, Task>? openBeatmap = null)
+        Func<LocalReplay, CancellationToken, Task>? openBeatmap = null,
+        Func<ILocalScorePpHydrationService?>? ppHydrator = null)
     {
         this.source = source;
+        this.ppHydrator = ppHydrator;
         this.analyses = analyses ?? new Dictionary<Guid, ReplayAnalysisResult>();
         this.openReplay = openReplay;
         this.openPractice = openPractice;
@@ -113,10 +120,12 @@ public partial class NativeReplayRouteView : Container
                         Y = 44,
                         PlaceholderText = "Search replays",
                     },
+                    new OsuDropdown<string> { Y = 88, RelativeSizeAxes = Axes.X, Width = 1, Items = new[] { "All modes", "osu!", "osu!taiko", "osu!catch", "osu!mania" }, Current = gameMode },
+                    new StatisticsFilterBar { Y=130, RelativeSizeAxes=Axes.X, Height=40, Depth=-2, Child=modDropdown=new ScoreModFilterDropdown(modSelection) },
                     new AimModScrollContainer
                     {
                         RelativeSizeAxes = Axes.Both,
-                        Padding = new MarginPadding { Top = 94 },
+                        Padding = new MarginPadding { Top = 178 },
                         Child = replayList = new FillFlowContainer<Drawable>
                         {
                             RelativeSizeAxes = Axes.X,
@@ -369,6 +378,8 @@ public partial class NativeReplayRouteView : Container
     {
         base.LoadComplete();
         searchBox.OnCommit += (_, _) => loadReplayBrowser();
+        gameMode.BindValueChanged(_ => loadReplayBrowser());
+        modSelection.BindValueChanged(_ => loadReplayBrowser());
         if (source is not null)
             loadReplayBrowser();
     }
@@ -402,7 +413,16 @@ public partial class NativeReplayRouteView : Container
         statusLayer.FadeIn(80);
         hubSharePanel.SetReplay(replay, analyses.ContainsKey(replay.ScoreId));
 
-        if (analyses.TryGetValue(replay.ScoreId, out ReplayAnalysisResult? cachedAnalysis))
+        if (replay.RulesetShortName != "osu") {
+            practiceButton.Enabled.Value = false;
+            analysisTitle.Text = "Score details";
+            analysisSummary.Text = "PP and score statistics are available for this mode.";
+            analysisNextPlay.Text = "Replay playback and coaching currently support osu!standard.";
+            notableRows.Clear(); mapPatternRows.Clear(); momentButtons.Clear();
+            judgementTimeline.ClearResult();
+            player = null; currentTime = null; duration = null; paused = null;
+        }
+        else if (analyses.TryGetValue(replay.ScoreId, out ReplayAnalysisResult? cachedAnalysis))
             showCompletedAnalysis(cachedAnalysis);
         else
             showPendingAnalysis();
@@ -574,10 +594,10 @@ public partial class NativeReplayRouteView : Container
         CancellationToken cancellationToken = loading.Token;
         if (selectedReplay is null && !analysisInProgress)
             loadingOverlay.ShowLoading("Loading replays", "Reading your local osu!lazer play history");
-        _ = loadReplayBrowserAsync(searchBox.Current.Value, cancellationToken);
+        _ = loadReplayBrowserAsync(searchBox.Current.Value, modSelection.Value, gameMode.Value switch { "osu!" => "osu", "osu!taiko" => "taiko", "osu!catch" => "fruits", "osu!mania" => "mania", _ => "" }, cancellationToken);
     }
 
-    private async Task loadReplayBrowserAsync(string search, CancellationToken cancellationToken)
+    private async Task loadReplayBrowserAsync(string search, string mods, string ruleset, CancellationToken cancellationToken)
     {
         try
         {
@@ -585,9 +605,15 @@ public partial class NativeReplayRouteView : Container
             ReplayBrowserSnapshot page = await ReplayBrowserModel.LoadAsync(
                 availableSource,
                 search,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
+                cancellationToken: cancellationToken, ruleset: ruleset, modSelection: mods).ConfigureAwait(false);
+            if (!IsDisposed && !cancellationToken.IsCancellationRequested) { var initial = page; Schedule(() => { if (!cancellationToken.IsCancellationRequested) applyReplayBrowser(initial); }); }
+            if (ppHydrator?.Invoke() is {} hydrator) {
+                var hydrated = await hydrator.HydrateAsync(page.Maps.SelectMany(map => map.Attempts).Take(200).ToArray(), cancellationToken).ConfigureAwait(false);
+                var byId = hydrated.Runs.ToDictionary(run => run.ScoreId);
+                page = page with { Maps = page.Maps.Select(map => map with { Attempts = map.Attempts.Select(run => byId.GetValueOrDefault(run.ScoreId, run)).ToArray() }).ToArray() };
+            }
             if (!IsDisposed && !cancellationToken.IsCancellationRequested)
-                Schedule(() => applyReplayBrowser(page));
+                Schedule(() => { if (!cancellationToken.IsCancellationRequested) applyReplayBrowser(page); });
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -606,10 +632,15 @@ public partial class NativeReplayRouteView : Container
 
     private void applyReplayBrowser(ReplayBrowserSnapshot snapshot)
     {
+        modDropdown.SetChoices(snapshot.AvailableMods);
         replayBrowser = snapshot;
         if (selectedReplay is not null)
             expandedReplayMaps.Add(ReplayBrowserModel.MapKeyFor(selectedReplay));
 
+        if (selectedReplay is {} selected) {
+            var updated = snapshot.Maps.SelectMany(map => map.Attempts).FirstOrDefault(run => run.ScoreId == selected.ScoreId);
+            if (updated?.PerformancePoints is {} pp) summaryPerformance.Text = $"{pp:0.#}pp";
+        }
         renderReplayBrowser();
         if (!analysisInProgress)
             loadingOverlay.HideLoading();
@@ -632,14 +663,14 @@ public partial class NativeReplayRouteView : Container
                 continue;
 
             foreach (LocalReplay replay in group.Attempts)
-                replayList.Add(new ReplayBrowserRow(replay, replay.ScoreId == selectedReplay?.ScoreId, () => openReplay?.Invoke(replay), openBeatmap));
+                replayList.Add(new ReplayBrowserRow(replay, replay.ScoreId == selectedReplay?.ScoreId, () => { if (replay.RulesetShortName == "osu") openReplay?.Invoke(replay); else { SuspendPlayback(); SetReplaySummary(replay); } }, openBeatmap));
         }
 
         if (replayBrowser.Maps.Count == 0)
             replayList.Add(new ReplayBrowserEmptyState(
                 string.IsNullOrWhiteSpace(searchBox.Current.Value) ? "No saved replays" : "No matching replays",
                 string.IsNullOrWhiteSpace(searchBox.Current.Value)
-                    ? "Play an osu!standard map with replay recording enabled, then return here."
+                    ? "Play a map with replay recording enabled, then return here."
                     : "Try a title, artist, difficulty, player, or mod."));
     }
 
@@ -1105,6 +1136,11 @@ public partial class NativeReplayRouteView : Container
             Children = new Drawable[]
             {
                 new OpenBeatmapButton(() => replay, openBeatmap) { Position = new(12, 60), Height = 28, Depth = -1 },
+                new SpriteText {
+                    Anchor = Anchor.TopRight, Origin = Anchor.TopRight, Position = new(-12,66),
+                    Text = replay.PerformancePoints is {} pp ? $"{pp:0.#}pp" : "PP unavailable",
+                    Font = new osu.Framework.Graphics.Sprites.FontUsage(size:12, weight:"Bold"), Colour = AimModPalette.Cyan
+                },
                 new Box
                 {
                     RelativeSizeAxes = Axes.Y,
@@ -1134,7 +1170,7 @@ public partial class NativeReplayRouteView : Container
                             },
                         },
                         makeText(
-                            $"{replay.PlayedAt.LocalDateTime:g}  //  {(replay.Mods.Count == 0 ? "No Mod" : string.Join(' ', replay.Mods))}",
+                            $"{replay.PlayedAt.LocalDateTime:g}  //  {ScoreMods.Display(replay)}",
                             9,
                             AimModPalette.Muted),
                     },

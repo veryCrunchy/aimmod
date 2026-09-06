@@ -24,7 +24,8 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
     private readonly ShearedFilterTextBox search;
     private ScheduledDelegate? searchRefresh;
     private readonly Bindable<StatisticsTimeRange> timeRange = new(StatisticsTimeRange.All);
-    private readonly Bindable<StatisticsModFilter> modFilter = new(StatisticsModFilter.Any);
+    private readonly Bindable<string> modFilter = new(ScoreMods.Any);
+    private readonly ScoreModFilterDropdown modDropdown;
     private readonly Bindable<StatisticsRunSort> sort = new(StatisticsRunSort.Recent);
     private readonly Bindable<StatisticsScoreSource> scoreSource = new(StatisticsScoreSource.All);
     private readonly Bindable<StatisticsStarBand> starBand = new(StatisticsStarBand.Any);
@@ -81,7 +82,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
                 {
                     new AimModSectionHeader(
                         "Statistics",
-                        "Explore the unified osu!standard score dataset, combining online best/recent records with replay-rich local attempts.",
+                        "Explore your local and online scores. Compare results by map, mods, and date.",
                         "performance history"),
                     scopeText = text("Loading score scope...", 10, AimModPalette.Muted).With(drawable => drawable.Y = 62),
                     filterBar = new StatisticsFilterBar
@@ -114,7 +115,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
                                     },
                                     new Drawable[]
                                     {
-                                        filterField("Mods", modFilter, -2),
+                                        modDropdown = new ScoreModFilterDropdown(modFilter) { Depth = -2 },
                                         filterField("Stars", starBand, -2),
                                         filterField("Result", resultFilter, -2),
                                     },
@@ -332,6 +333,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
     {
         onlineHistory = online;
         allRuns = StatisticsUnifiedScoreAdapter.Merge(result.Runs, online?.Scores ?? []);
+        modDropdown.SetScores(allRuns);
         loadingOverlay.HideLoading();
         render();
     }
@@ -357,12 +359,12 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
         StatisticsWorkspaceModel model = StatisticsWorkspaceModel.Build(allRuns, new StatisticsRunQuery(
             search.Current.Value,
             timeRange.Value,
-            modFilter.Value,
+            StatisticsModFilter.Any,
             sort.Value,
             scoreSource.Value,
             minStars,
             maxStars,
-            resultFilter.Value == StatisticsResultFilter.MissFree));
+            resultFilter.Value == StatisticsResultFilter.MissFree, modFilter.Value));
 
         int localCount = model.UnfilteredRunCount - model.CachedOnlineRunCount;
         scopeText.Text = model.CachedOnlineRunCount > 0
@@ -962,7 +964,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
             Height = 72;
             Masking = true;
             CornerRadius = AimModVisualStyle.ControlRadius;
-            string mods = replay.Mods.Count == 0 ? "NM" : string.Join(" ", replay.Mods);
+            string mods = ScoreMods.Display(replay);
             Children = new Drawable[]
             {
                 background = new Box { RelativeSizeAxes = Axes.Both, Colour = selected ? AimModPalette.PanelRaised : AimModPalette.Panel },

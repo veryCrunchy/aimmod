@@ -45,3 +45,17 @@ public partial class StatisticsFilterDropdown<T> : ShearedDropdown<T>
         _ => item.ToString(),
     };
 }
+
+public partial class ScoreModFilterDropdown : ShearedDropdown<string> {
+    private IReadOnlyDictionary<string,string> labels = new Dictionary<string,string>();
+    public ScoreModFilterDropdown(Bindable<string> current) : base("Mods") { RelativeSizeAxes=Axes.X; Current=current; SetScores([]); }
+    public void SetScores(IEnumerable<AimMod.Desktop.LocalLibrary.LocalReplay> scores) {
+        SetChoices(AimMod.Desktop.LocalLibrary.ScoreMods.Choices(scores));
+    }
+    public void SetChoices(IReadOnlyList<AimMod.Desktop.LocalLibrary.ScoreModChoice> choices) {
+        labels=choices.ToDictionary(c=>c.Key,c=>c.Label);
+        Items=choices.Select(c=>c.Key).ToArray();
+        if (!labels.ContainsKey(Current.Value)) Current.Value=AimMod.Desktop.LocalLibrary.ScoreMods.Any;
+    }
+    protected override LocalisableString GenerateItemText(string item) => labels.GetValueOrDefault(item,item);
+}

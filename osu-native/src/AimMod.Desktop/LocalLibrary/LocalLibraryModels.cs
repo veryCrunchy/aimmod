@@ -93,7 +93,9 @@ public sealed record LocalReplay(
     string BeatmapPath = "",
     string ReplayPath = "",
     LocalLibraryOrigin Origin = LocalLibraryOrigin.Lazer,
-    int OnlineBeatmapId = 0);
+    int OnlineBeatmapId = 0,
+    bool Passed = true,
+    bool LegacyScore = false);
 
 public enum LocalLibraryOrigin
 {

@@ -25,6 +25,14 @@ public sealed class PpTargetExactCalculationServiceTests
     }
 
     [Test]
+    public void ConfiguredModsHaveSeparateCalculationCaches() {
+        var request=new PpTargetExactRequest(42,null,["DT"],.98,.5);
+        var configured=request with { ModsJson="[{\"acronym\":\"DT\",\"settings\":{\"speed_change\":1.2}}]" };
+        Assert.That(PpTargetExactCalculationService.CacheIdentity(configured,"synthetic"),
+            Is.Not.EqualTo(PpTargetExactCalculationService.CacheIdentity(request,"synthetic")));
+    }
+
+    [Test]
     public void FrequentMissesDoNotRetainHalfTheMaximumCombo()
     {
         var one = PpTargetExactCalculationService.ExpectedScoreShape(.5, 1000, 1000, .001);

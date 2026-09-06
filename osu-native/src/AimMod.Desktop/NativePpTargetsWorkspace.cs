@@ -66,6 +66,21 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
     private readonly Container lengthGroup;
     private readonly Container sortGroup;
     private readonly Container modsGroup;
+    private readonly PpTargetDropdown<string> modsDropdown;
+    private readonly Dictionary<string,LocalReplay> observedModSetups = new();
+    private PpTargetPreferenceProfile selectedModProfile(PpTargetPreferenceProfile value)
+    {
+        LocalReplay? run = observedModSetups.GetValueOrDefault(selectedMods.Value);
+        if (selectedMods.Value == "Automatic")
+            run = patternHistory.Where(ScoreMods.IsManualPlay)
+                .Where(r=>PpTargetMods.Normalise(r.Mods).SequenceEqual(value.PreferredModSetup ?? []))
+                .GroupBy(ScoreMods.Configuration).OrderByDescending(g=>g.Count()).Select(g=>g.First()).FirstOrDefault();
+        return run is not null
+            ? value with { PreferredModSetup=ScoreMods.Acronyms(run), PreferredModsJson=run.ModsJson,
+                PatternProfile=run.ModsJson.Contains("settings",StringComparison.Ordinal) ? null : value.PatternProfile,
+                Opportunities=run.ModsJson.Contains("settings",StringComparison.Ordinal) ? null : value.Opportunities }
+            : WithSelectedMods(value,selectedMods.Value) with { PreferredModsJson=null };
+    }
     private readonly Bindable<string> selectedMods = new("Automatic");
     internal static readonly string[] ModChoices = ["Automatic", "NM", "HD", "HR", "DT", "NC", "HD+DT", "HD+NC", "HD+HR", "HR+DT", "HD+HR+DT", "HT", "EZ", "HD+EZ", "FL", "HD+FL"];
     internal static PpTargetPreferenceProfile WithSelectedMods(PpTargetPreferenceProfile value, string mods) =>
@@ -269,7 +284,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                                 Items = Enum.GetValues<TargetSort>(),
                                 Current = sort,
                             }),
-                            modsGroup = dropdownGroup("MODS", new PpTargetDropdown<string>(value => value)
+                            modsGroup = dropdownGroup("MODS", modsDropdown = new PpTargetDropdown<string>(value => value)
                             {
                                 Items = ModChoices,
                                 Current = selectedMods,
@@ -706,6 +721,12 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         OnlineAccountScoreHistoryResult? online)
     {
         profile = next with { PatternProfile = pendingPatternProfile ?? profile.PatternProfile };
+        observedModSetups.Clear();
+        foreach(var run in patternHistory.Where(ScoreMods.IsManualPlay)) {
+            string label = "Saved: " + ScoreMods.Display(run);
+            observedModSetups.TryAdd(label,run);
+        }
+        modsDropdown.Items = ModChoices.Concat(observedModSetups.Keys.Order()).ToArray();
         localSets = loadedSets;
         exactEstimates = new Dictionary<int, PpTargetEstimate>();
         if (next.PreferredStarRange is { } stars)
@@ -883,7 +904,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             MinimumStars: minimumStars.Value <= 0 ? null : minimumStars.Value,
             MaximumStars: maximumStars.Value >= 10 ? null : maximumStars.Value,
             Statuses: category.Value == OfficialBeatmapCategory.Any ? null : [PpTargetStatus.FromCategory(category.Value)]);
-        _ = planExactScanAsync(calculator, WithSelectedMods(profile, selectedMods.Value), catalog, localSets, filters, exactCalculation!.Token);
+        _ = planExactScanAsync(calculator, selectedModProfile(profile), catalog, localSets, filters, exactCalculation!.Token);
     }
 
     private async Task planExactScanAsync(IPpTargetExactCalculationService calculator,
@@ -905,7 +926,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                     candidate.SuggestedMods,
                     scanProfile.TypicalAccuracy!.Value,
                     candidate.Attainability,
-                    scanProfile.PatternProfile))
+                    scanProfile.PatternProfile, scanProfile.PreferredModsJson))
                 .ToArray();
             if (requests.Length == 0)
             {
@@ -1031,7 +1052,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             MaximumLengthSeconds: maximumLength,
             Statuses: string.IsNullOrEmpty(statusFilter) ? null : new[] { statusFilter },
             Limit: 10_000);
-        _ = rankAndRenderAsync(WithSelectedMods(profile, selectedMods.Value), catalog, filters, exactEstimates, sort.Value, generation);
+        _ = rankAndRenderAsync(selectedModProfile(profile), catalog, filters, exactEstimates, sort.Value, generation);
     }
 
     private async Task rankAndRenderAsync(PpTargetPreferenceProfile currentProfile, IReadOnlyList<OfficialBeatmapSet> currentCatalog,
@@ -1504,7 +1525,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                     candidate.PassEstimate is { } range ? $"{range.Lower:P0}-{range.Upper:P0} range" : "More history needed"),
                 _ => ("MAX PP", maximum, candidate.Estimate is null ? "pending" : "100% FC ceiling"),
             };
-            string mods = candidate.SuggestedMods.Count == 0 ? "NM" : string.Join(" + ", candidate.SuggestedMods);
+            string mods = ScoreMods.Display(candidate.SuggestedMods, candidate.Estimate?.ModsJson);
             OfficialBeatmapDifficulty? difficulty = set.Difficulties.FirstOrDefault(item => item.BeatmapId == candidate.BeatmapId);
             double passRate = difficulty is { PlayCount: > 0 } ? (double)difficulty.PassCount / difficulty.PlayCount : 0;
             string combo = candidate.MaximumCombo is > 0 ? $"{candidate.MaximumCombo:N0}x" : "-";

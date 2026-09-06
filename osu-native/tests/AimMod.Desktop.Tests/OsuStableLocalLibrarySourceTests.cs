@@ -198,6 +198,27 @@ public sealed class OsuStableLocalLibrarySourceTests
         Assert.That((await source.SearchBeatmapSetsAsync(new LocalLibraryQuery())).Total, Is.EqualTo(1));
     }
 
+    [TestCase(1, "taiko")]
+    [TestCase(2, "fruits")]
+    [TestCase(3, "mania")]
+    public async Task ReadsOtherModesWithoutDroppingJudgements(int mode, string name) {
+        const string hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        var db = createOsuDatabase(hash, "map.osu");
+        db.Beatmaps[0].Ruleset = (Ruleset)mode;
+        db.Save(Path.Combine(root,"osu!.db"));
+        var scores = createScoresDatabase(hash,"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        var score = scores.Scores[0].Item2[0];
+        score.Ruleset = (Ruleset)mode; score.CountGeki = 20; score.CountKatu = 5;
+        scores.Save(Path.Combine(root,"scores.db"));
+        var page = await new OsuStableLocalLibrarySource(root,songs).SearchReplaysAsync(new LocalLibraryQuery(RulesetShortName:name));
+        var replay = page.Items.Single();
+        Assert.That(replay.RulesetShortName, Is.EqualTo(name));
+        Assert.That(replay.HitStatistics!.Perfect, Is.EqualTo(mode==3 ? 20 : 0));
+        Assert.That(replay.HitStatistics.Good, Is.EqualTo(mode==3 ? 5 : 0));
+        Assert.That(replay.HitStatistics.SmallTickMiss, Is.EqualTo(mode==2 ? 5 : 0));
+        Assert.That(replay.Accuracy, Is.InRange(0d,1d));
+    }
+
     private static OsuDatabase createOsuDatabase(string hash, string fileName)
     {
         var beatmap = new DbBeatmap
