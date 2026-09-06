@@ -43,7 +43,7 @@ public sealed class PpTargetExactCalculationServiceTests
         string path = Path.Combine(temporaryDirectory, "interrupted.json");
         var first = new PpTargetExactCalculationService(temporaryDirectory, path,
             new StubDifficultyClient(id, createBeatmap(id)), Path.Combine(temporaryDirectory, "downloads"),
-            () => SidecarRuntimeClient.Start(desktopExecutablePath()));
+            () => SidecarRuntimeClient.Start(desktopExecutablePath()), maximumConcurrency: 1);
         using var cancellation = new CancellationTokenSource();
         var request = new PpTargetExactRequest(id, null, [], .94, .5);
         Assert.ThrowsAsync<OperationCanceledException>(async () => await first.CalculateAsync(
@@ -60,6 +60,107 @@ public sealed class PpTargetExactCalculationServiceTests
         public void Report(PpTargetExactCalculationProgress value)
         {
             if (value.Completed >= 1) cancellation.Cancel();
+        }
+    }
+
+    [Test]
+    public async Task ParallelScanMatchesSequentialResultsAndReusesCache()
+    {
+        var requests = Enumerable.Range(800, 6).Select(id => new PpTargetExactRequest(id, null, ["HD"], .94, .5)).ToArray();
+        var sequentialDownloads = new ConcurrentDifficultyClient();
+        var parallelDownloads = new ConcurrentDifficultyClient();
+        string cachePath = Path.Combine(temporaryDirectory, "parallel.json");
+        var sequential = new PpTargetExactCalculationService(temporaryDirectory, Path.Combine(temporaryDirectory, "sequential.json"),
+            sequentialDownloads, Path.Combine(temporaryDirectory, "serial-downloads"),
+            () => SidecarRuntimeClient.Start(desktopExecutablePath()), 1);
+        var parallel = new PpTargetExactCalculationService(temporaryDirectory, cachePath,
+            parallelDownloads, Path.Combine(temporaryDirectory, "parallel-downloads"),
+            () => SidecarRuntimeClient.Start(desktopExecutablePath()), 3);
+        var timer = System.Diagnostics.Stopwatch.StartNew();
+        var expected = await sequential.CalculateAsync(requests);
+        var serialTime = timer.Elapsed;
+        timer.Restart();
+        var progress = new CollectedProgress();
+        var actual = await parallel.CalculateAsync(requests, progress: progress);
+        TestContext.WriteLine($"Six exact maps: sequential {serialTime.TotalMilliseconds:F0}ms; parallel {timer.Elapsed.TotalMilliseconds:F0}ms");
+        Assert.That(parallelDownloads.MaximumActive, Is.InRange(2, 3));
+        Assert.That(sequentialDownloads.MaximumActive, Is.EqualTo(1));
+        Assert.That(progress.Values, Is.EqualTo(Enumerable.Range(0, 7)));
+        foreach (var request in requests)
+        {
+            Assert.That(actual[request.BeatmapId].ExpectedPp, Is.EqualTo(expected[request.BeatmapId].ExpectedPp));
+            Assert.That(actual[request.BeatmapId].RealisticMaximumPp, Is.EqualTo(expected[request.BeatmapId].RealisticMaximumPp));
+        }
+        var reopened = new PpTargetExactCalculationService(temporaryDirectory, cachePath, new FailingDifficultyClient(),
+            Path.Combine(temporaryDirectory, "reopened"), () => throw new AssertionException("Cached scan started a worker."));
+        Assert.That((await reopened.CalculateAsync(requests)).Count, Is.EqualTo(6));
+        Assert.That(Directory.GetDirectories(Path.Combine(temporaryDirectory, "parallel-downloads")), Is.Empty);
+    }
+
+    [Test]
+    public async Task ParallelScanRetainsSuccessfulMapsWhenOneDownloadFails()
+    {
+        var downloads = new ConcurrentDifficultyClient(800);
+        var service = new PpTargetExactCalculationService(temporaryDirectory, Path.Combine(temporaryDirectory, "partial.json"),
+            downloads, Path.Combine(temporaryDirectory, "partial"), () => SidecarRuntimeClient.Start(desktopExecutablePath()), 3);
+        var requests = Enumerable.Range(800, 6).Select(id => new PpTargetExactRequest(id, null, [], .94, .5)).ToArray();
+        var progress = new CollectedProgress();
+        var result = await service.CalculateAsync(requests, progress: progress);
+        Assert.That(result.Keys, Is.EquivalentTo(Enumerable.Range(801, 5)));
+        Assert.That(progress.Values, Is.EqualTo(Enumerable.Range(0, 7)));
+        Assert.That(downloads.Active, Is.Zero);
+    }
+
+    [Test]
+    public async Task CancellingParallelScanJoinsWorkersAndPreservesCompletedResults()
+    {
+        string cachePath = Path.Combine(temporaryDirectory, "cancelled.json");
+        string downloadsPath = Path.Combine(temporaryDirectory, "cancelled");
+        var downloads = new ConcurrentDifficultyClient();
+        var service = new PpTargetExactCalculationService(temporaryDirectory, cachePath,
+            downloads, downloadsPath, () => SidecarRuntimeClient.Start(desktopExecutablePath()), 3);
+        var requests = Enumerable.Range(800, 12).Select(id => new PpTargetExactRequest(id, null, [], .94, .5)).ToArray();
+        using var cancellation = new CancellationTokenSource();
+        Assert.CatchAsync<OperationCanceledException>(async () => await service.CalculateAsync(requests,
+            cancellation.Token, new CancelAfterFirst(cancellation)));
+        Assert.That(downloads.Active, Is.Zero);
+        Assert.That(Directory.GetDirectories(downloadsPath), Is.Empty);
+        using var document = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(cachePath));
+        var ids = document.RootElement.GetProperty("entries").EnumerateArray()
+            .Select(entry => entry.GetProperty("estimate").GetProperty("beatmapId").GetInt32()).ToHashSet();
+        Assert.That(ids, Is.Not.Empty);
+        var reopened = new PpTargetExactCalculationService(temporaryDirectory, cachePath, new FailingDifficultyClient(),
+            downloadsPath, () => throw new AssertionException("Cancelled scan lost completed results."));
+        Assert.That((await reopened.CalculateAsync(requests.Where(request => ids.Contains(request.BeatmapId)).ToArray())).Count,
+            Is.EqualTo(ids.Count));
+    }
+
+    private sealed class CollectedProgress : IProgress<PpTargetExactCalculationProgress>
+    {
+        public List<int> Values { get; } = [];
+        public void Report(PpTargetExactCalculationProgress value) => Values.Add(value.Completed);
+    }
+
+    private sealed class ConcurrentDifficultyClient(int? failedBeatmapId = null) : IOfficialBeatmapDifficultyClient
+    {
+        private int active;
+        private readonly object gate = new();
+        public int Active => active;
+        public int MaximumActive { get; private set; }
+        public async Task<OfficialBeatmapDifficultyDownloadResult> DownloadDifficultyAsync(int beatmapId,
+            string destinationDirectory, CancellationToken cancellationToken = default)
+        {
+            lock (gate) MaximumActive = Math.Max(MaximumActive, ++active);
+            try
+            {
+                await Task.Delay(150, cancellationToken);
+                if (beatmapId == failedBeatmapId) throw new HttpRequestException("Synthetic download failure");
+                Directory.CreateDirectory(destinationDirectory);
+                string path = Path.Combine(destinationDirectory, $"{beatmapId}.osu");
+                await File.WriteAllTextAsync(path, createBeatmap(beatmapId), cancellationToken);
+                return new(OfficialBeatmapRequestStatus.Success, beatmapId, path, new FileInfo(path).Length);
+            }
+            finally { lock (gate) active--; }
         }
     }
 

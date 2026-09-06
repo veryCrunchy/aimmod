@@ -37,6 +37,7 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
     private readonly SemaphoreSlim calculationGate = new(1, 1);
     private readonly Dictionary<string, CacheEntry> cache;
     private readonly PpTargetBeatmapPatternReader patternReader;
+    private readonly int maximumConcurrency;
 
     public PpTargetExactCalculationService(string libraryRoot, string cachePath)
         : this(libraryRoot, cachePath, null, Path.Combine(Path.GetTempPath(), "aimmod-pp-target-difficulties"))
@@ -57,7 +58,8 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
         string cachePath,
         IOfficialBeatmapDifficultyClient? difficultyClient,
         string difficultyDownloadDirectory,
-        Func<SidecarRuntimeClient> runtimeFactory)
+        Func<SidecarRuntimeClient> runtimeFactory,
+        int? maximumConcurrency = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(libraryRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(cachePath);
@@ -70,6 +72,9 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
         this.difficultyClient = difficultyClient;
         this.difficultyDownloadDirectory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(difficultyDownloadDirectory));
         this.runtimeFactory = runtimeFactory ?? throw new ArgumentNullException(nameof(runtimeFactory));
+        this.maximumConcurrency = maximumConcurrency ?? Math.Clamp(Environment.ProcessorCount / 2, 1, 3);
+        if (this.maximumConcurrency is < 1 or > 3)
+            throw new ArgumentOutOfRangeException(nameof(maximumConcurrency));
         cache = loadCache(this.cachePath);
         patternReader = new PpTargetBeatmapPatternReader(Directory.Exists(this.cachePath)
             ? Path.Combine(this.cachePath, "beatmap-patterns") : this.cachePath + ".beatmaps");
@@ -110,7 +115,6 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
             await using SidecarRuntimeClient runtime = runtimeFactory();
             var runtimeClient = new SidecarRuntimeRequestClient(runtime);
             var assetClient = new ExternalLazerAssetClient(runtimeClient);
-            var ppClient = new PpWhatIfClient(runtimeClient);
             string[] hashes = missing.Where(request => !retainedFiles.ContainsKey(cacheKey(request))).Select(request => request.BeatmapHash)
                                      .Where(hash => !string.IsNullOrWhiteSpace(hash))
                                      .Cast<string>()
@@ -130,42 +134,85 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
                 .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
 
             Exception? firstCalculationFailure = null;
-            for (int index = 0; index < missing.Length; index++)
+            int finished = valid.Length - missing.Length;
+            using var resultGate = new SemaphoreSlim(1, 1);
+            using var preparationGate = new SemaphoreSlim(1, 1);
+            // Variants of the same map share a lane so downloads cannot overwrite each other.
+            var groups = missing.GroupBy(request => request.BeatmapId).ToArray();
+            int workerCount = Math.Min(maximumConcurrency, groups.Length);
+            await Task.WhenAll(Enumerable.Range(0, workerCount).Select(runWorker)).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            async Task runWorker(int workerIndex)
             {
-                PpTargetExactRequest request = missing[index];
-                cancellationToken.ThrowIfCancellationRequested();
-                string? downloadedPath = null;
-                retainedFiles.TryGetValue(cacheKey(request), out PpTargetBeatmapFile? retained);
-                retained ??= await patternReader.TryGetCachedFileAsync(request.BeatmapId, request.BeatmapHash, cancellationToken).ConfigureAwait(false);
-                string? beatmapPath = retained?.Path ?? (request.BeatmapHash is { Length: > 0 } hash && beatmaps.TryGetValue(hash, out ExternalLazerResolvedAsset? localBeatmap)
-                    ? localBeatmap.StagedPath
-                    : null);
-
-                if (beatmapPath is null && difficultyClient is not null)
-                {
-                    OfficialBeatmapDifficultyDownloadResult download = await difficultyClient.DownloadDifficultyAsync(
-                        request.BeatmapId,
-                        difficultyDownloadDirectory,
-                        cancellationToken).ConfigureAwait(false);
-                    if (download.Status == OfficialBeatmapRequestStatus.Success)
-                        beatmapPath = downloadedPath = download.BeatmapPath;
-                    else
-                        firstCalculationFailure ??= new InvalidOperationException(
-                            $"Beatmap difficulty {request.BeatmapId} download failed with status {download.Status}.");
-                }
-                if (beatmapPath is null)
-                {
-                    progress?.Report(new PpTargetExactCalculationProgress(valid.Length - missing.Length + index + 1, valid.Length));
-                    continue;
-                }
-
+                await using SidecarRuntimeClient? workerRuntime = workerIndex == 0 ? null : runtimeFactory();
+                var ppClient = new PpWhatIfClient(workerIndex == 0 ? runtimeClient : new SidecarRuntimeRequestClient(workerRuntime!));
+                string workingDirectory = Path.Combine(difficultyDownloadDirectory, $"scan-{Guid.NewGuid():N}");
                 try
                 {
-                    string stagingDirectory = Path.GetDirectoryName(beatmapPath)!;
+                    for (int groupIndex = workerIndex; groupIndex < groups.Length; groupIndex += workerCount)
+                        foreach (var request in groups[groupIndex])
+                            await calculateOne(request, ppClient, workingDirectory).ConfigureAwait(false);
+                }
+                finally
+                {
+                    try
+                    {
+                        if (Directory.Exists(workingDirectory))
+                            Directory.Delete(workingDirectory, true);
+                    }
+                    catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+                }
+            }
+
+            async Task calculateOne(PpTargetExactRequest request, PpWhatIfClient ppClient, string workingDirectory)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                string? downloadedPath = null;
+                try
+                {
+                    string? beatmapPath;
+                    await preparationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    try
+                    {
+                        var retained = await patternReader.TryGetCachedFileAsync(request.BeatmapId, request.BeatmapHash, cancellationToken).ConfigureAwait(false);
+                        beatmapPath = retained?.Path ?? (request.BeatmapHash is { Length: > 0 } hash && beatmaps.TryGetValue(hash, out ExternalLazerResolvedAsset? localBeatmap)
+                            ? localBeatmap.StagedPath : null);
+                        if (beatmapPath is not null)
+                        {
+                            // Pin inputs before another lane can trim the pattern cache.
+                            Directory.CreateDirectory(workingDirectory);
+                            string privatePath = Path.Combine(workingDirectory, "calculation.osu");
+                            File.Copy(beatmapPath, privatePath, true);
+                            beatmapPath = privatePath;
+                        }
+                    }
+                    finally { preparationGate.Release(); }
+
+                    if (beatmapPath is null && difficultyClient is not null)
+                    {
+                        OfficialBeatmapDifficultyDownloadResult download = await difficultyClient.DownloadDifficultyAsync(
+                            request.BeatmapId, workingDirectory, cancellationToken).ConfigureAwait(false);
+                        if (download.Status == OfficialBeatmapRequestStatus.Success)
+                            beatmapPath = downloadedPath = download.BeatmapPath;
+                        else
+                            throw new InvalidOperationException($"Beatmap difficulty {request.BeatmapId} download failed with status {download.Status}.");
+                    }
+                    if (beatmapPath is null)
+                        return;
+
                     IReadOnlyList<string> mods = PpTargetMods.Normalise(request.Mods);
-                    PpTargetBeatmapFile file = retained ?? await PpTargetBeatmapPatternReader.IdentifyAsync(beatmapPath, request.BeatmapHash, cancellationToken).ConfigureAwait(false);
-                    PpTargetBeatmapPatternGeometry geometry = await patternReader.ReadAsync(file, mods, cancellationToken).ConfigureAwait(false);
-                    await patternReader.RetainAsync(file, request.BeatmapId, request.BeatmapHash, cancellationToken).ConfigureAwait(false);
+                    PpTargetBeatmapFile file;
+                    PpTargetBeatmapPatternGeometry geometry;
+                    await preparationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    try
+                    {
+                        file = await PpTargetBeatmapPatternReader.IdentifyAsync(beatmapPath, request.BeatmapHash, cancellationToken).ConfigureAwait(false);
+                        geometry = await patternReader.ReadAsync(file, mods, cancellationToken).ConfigureAwait(false);
+                        await patternReader.RetainAsync(file, request.BeatmapId, request.BeatmapHash, cancellationToken).ConfigureAwait(false);
+                    }
+                    finally { preparationGate.Release(); }
+                    string stagingDirectory = workingDirectory;
                     PpPatternPrediction? prediction = request.PatternProfile is { } profile
                         ? PpTargetPatternModel.Predict(PpTargetPatternModel.ExtractFeatures(geometry.Points, geometry.HitRadius, geometry.ClockRate), profile, mods)
                         : null;
@@ -197,22 +244,27 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
                             Math.Min(estimate.RealisticMaximumPp, estimate.ExpectedPp * (1 + uncertainty))),
                     };
                     string key = cacheKey(request, file.ContentHash);
-                    cache[key] = new CacheEntry(key, DateTimeOffset.UtcNow, estimate);
-                    completed[request.BeatmapId] = estimate;
-                    // Preserve completed work even if the next difficulty is cancelled.
-                    await trySaveCacheAsync().ConfigureAwait(false);
+                    await resultGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+                    try
+                    {
+                        cache[key] = new CacheEntry(key, DateTimeOffset.UtcNow, estimate);
+                        completed[request.BeatmapId] = estimate;
+                        // Preserve completed work even if another difficulty is cancelled.
+                        await trySaveCacheAsync().ConfigureAwait(false);
+                    }
+                    finally { resultGate.Release(); }
                 }
                 catch (Exception error) when (error is not OperationCanceledException)
                 {
-                    firstCalculationFailure ??= error;
+                    Interlocked.CompareExchange(ref firstCalculationFailure, error, null);
                 }
                 finally
                 {
                     if (downloadedPath is not null)
                         deleteIfPresent(downloadedPath);
-                    progress?.Report(new PpTargetExactCalculationProgress(
-                        valid.Length - missing.Length + index + 1,
-                        valid.Length));
+                    await resultGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+                    try { progress?.Report(new PpTargetExactCalculationProgress(++finished, valid.Length)); }
+                    finally { resultGate.Release(); }
                 }
             }
 
