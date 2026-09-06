@@ -1377,7 +1377,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         GainPerMinute,
     }
 
-    private sealed partial class PpTargetDropdown<T> : osu.Game.Graphics.UserInterfaceV2.ShearedDropdown<T>
+    private sealed partial class PpTargetDropdown<T> : AimMod.Desktop.Coaching.BoundedShearedDropdown<T>
         where T : notnull
     {
         private readonly Func<T, string> formatter;

@@ -39,6 +39,8 @@ public sealed partial class OffscreenVisualCaptureTests
     [TestCase("statistics", 1100, 760)]
     [TestCase("statistics-populated", 1100, 760)]
     [TestCase("statistics-populated", 1600, 900)]
+    [TestCase("statistics-mods", 1100, 760)]
+    [TestCase("statistics-mods", 800, 600)]
     [TestCase("coaching-populated", 1100, 760)]
     [TestCase("coaching-populated", 1600, 900)]
     [TestCase("coaching-complete", 1100, 760)]
@@ -82,6 +84,7 @@ public sealed partial class OffscreenVisualCaptureTests
             {
                 "ppTargets" or "ppTargets-populated" or "ppTargets-details" => new CapturePpTargetsGame(host, ppCache!, outputPath, width, height, succeeded, failed, route == "ppTargets-details"),
                 "beatmaps-populated" => new CaptureBeatmapGame(host, source, outputPath, width, height, succeeded, failed),
+                "statistics-mods" => new CaptureStatisticsGame(host, source, outputPath, width, height, succeeded, failed),
                 "statistics-populated" => new CaptureStatisticsGame(host, source, outputPath, width, height, succeeded, failed),
                 "coaching-populated" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.Analysing, succeeded, failed),
                 "coaching-complete" => new CaptureCoachingGame(host, source, outputPath, width, height, CoachingCaptureState.Complete, succeeded, failed),
@@ -580,6 +583,7 @@ public sealed partial class OffscreenVisualCaptureTests
     {
         [Cached]
         private readonly OverlayColourProvider overlayColours = new(OverlayColourScheme.Blue);
+        private NativeStatisticsWorkspace workspace = null!;
         private readonly GameHost host;
         private readonly ILocalLibrarySource source;
         private readonly string outputPath;
@@ -616,7 +620,7 @@ public sealed partial class OffscreenVisualCaptureTests
             {
                 RelativeSizeAxes = osu.Framework.Graphics.Axes.Both,
                 Padding = new osu.Framework.Graphics.MarginPadding(18),
-                Child = new NativeStatisticsWorkspace(source, _ => { })
+                Child = workspace = new NativeStatisticsWorkspace(source, _ => { })
                 {
                     RelativeSizeAxes = osu.Framework.Graphics.Axes.Both,
                 },
@@ -628,6 +632,16 @@ public sealed partial class OffscreenVisualCaptureTests
             base.LoadComplete();
             frameworkConfig.SetValue(FrameworkSetting.WindowMode, WindowMode.Windowed);
             frameworkConfig.SetValue(FrameworkSetting.WindowedSize, new System.Drawing.Size(width, height));
+            if (outputPath.Contains("statistics-mods", StringComparison.Ordinal))
+                Scheduler.AddDelayed(() =>
+                {
+                    var field = typeof(NativeStatisticsWorkspace).GetField("modDropdown", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                    var dropdown = (ScoreModFilterDropdown)field.GetValue(workspace)!;
+                    dropdown.SetChoices(new[] { new ScoreModChoice(ScoreMods.Any, "All mods") }.Concat(
+                        Enumerable.Range(1, 60).Select(i => new ScoreModChoice("setup:" + i, "Exact: DT + HD (rate " + i + ")"))).ToArray());
+                    var menu = (osu.Framework.Graphics.UserInterface.Menu)typeof(osu.Framework.Graphics.UserInterface.Dropdown<string>).GetField("Menu", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(dropdown)!;
+                    menu.Open();
+                }, 1000);
             Scheduler.AddDelayed(capture, 1500);
         }
 
