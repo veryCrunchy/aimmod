@@ -23,9 +23,12 @@ public class SettingsCategoryTests
             var pages=(List<Drawable>)typeof(OsuClientSettingsScreen).GetField("settingsPages",BindingFlags.NonPublic|BindingFlags.Instance)!.GetValue(view)!;
             OsuDropdown<string>[] controls(int index)=>((Container)pages[index]).Children.OfType<FillFlowContainer>().Single().Children.OfType<OsuDropdown<string>>().ToArray();
             Assert.That(controls(0).Select(c=>c.Current.Value),Is.EquivalentTo(new[]{"Auto"}));
-            Assert.That(controls(2).Select(c=>c.Current.Value),Is.EquivalentTo(new[]{"Off","Automatic"}));
+            Assert.That(controls(2).Select(c=>c.Current.Value),Is.EquivalentTo(new[]{"Off","25 sets","Automatic"}));
             Assert.That(controls(3).Select(c=>c.Current.Value),Is.EquivalentTo(new[]{"Startup sound on"}));
             controls(2).Single(c=>c.Current.Value=="Off").Current.Value="On";
+            Assert.That(automatic.Load().Enabled,Is.True);
+            controls(2).Single(c=>c.Current.Value=="25 sets").Current.Value="100 sets";
+            Assert.That(automatic.Load().MaximumActiveMaps,Is.EqualTo(100));
             Assert.That(automatic.Load().Enabled,Is.True);
             controls(3).Single().Current.Value="Startup sound off";
             Assert.That(startup.Load().StartupSound,Is.False);

@@ -20,9 +20,8 @@ public partial class AimModGame
         if(automaticPracticeBusy || DateTimeOffset.UtcNow<nextAutomaticPractice || activeReplayScoreId is not null || trainerPlayer is not null || preparingTrainer)return;
         var store=new AutomaticPracticeStore(Storage.GetFullPath("practice-maps",true));
         var settings=store.Load();
-        if(!settings.Enabled || currentOsuProfile is null)return;
-        startReplayLibraryAnalysis(automatic: true);
-        int account=currentOsuProfile.UserId; string player=currentOsuProfile.Username;
+        if(settings.Enabled && currentOsuProfile is not null)startReplayLibraryAnalysis(automatic: true);
+        int account=currentOsuProfile?.UserId ?? 0; string player=currentOsuProfile?.Username ?? "";
         var analyses=replayAnalyses.ToDictionary(pair=>pair.Key,pair=>pair.Value);
         automaticPracticeBusy=true;
         nextAutomaticPractice=DateTimeOffset.UtcNow.AddSeconds(30);
@@ -37,6 +36,11 @@ public partial class AimModGame
         var token=appLifetime.Token;
         string root=Storage.GetFullPath("practice-maps",true);
         var library=new PracticeMapLibrary(root);
+        if(!settings.Enabled || account==0)
+        {
+            await deliverPracticeMaps(await library.ListAsync(token).ConfigureAwait(false), account, token).ConfigureAwait(false);
+            return;
+        }
         localLibrary.Invalidate();
         var history=(await StatisticsHistoryLoader.LoadAsync(localLibrary,token).ConfigureAwait(false)).Runs;
         var sets=await library.RunAsync(()=>library.RefreshProgress(history,account),token).ConfigureAwait(false);
@@ -53,7 +57,7 @@ public partial class AimModGame
                 await library.RunAsync(()=> {library.PruneRetiredPayload(set.Map);return true;},token).ConfigureAwait(false);
         }
         var maps=await library.ListAsync(token).ConfigureAwait(false);
-        await deliverAutomaticPractice(maps, account, token).ConfigureAwait(false);
+        await deliverPracticeMaps(maps, account, token).ConfigureAwait(false);
         var candidates=history.Where(r=>PracticeProgressTracker.SamePlayer(r,player) && r.Passed && r.Accuracy>=.7 && r.Accuracy<=1
             && r.PlayedAt>now.AddDays(-7) && ScoreMods.IsManualPlay(r) && evidence.TryGetValue(r.ScoreId,out var analysed) && analysed.Judgements.Count>0
             && !maps.Any(m=>m.Tracking?.Difficulties.Any(d=>string.Equals(d.Sha256,r.BeatmapHash,StringComparison.OrdinalIgnoreCase)
@@ -81,16 +85,17 @@ public partial class AimModGame
             if(!result.Success)automaticPracticeRetries[run.ScoreId]=now.AddHours(1);
             if(result.Success && existing is not null && stillEnabled())
                 await library.RunAsync(()=> {library.RetireAutomatic(existing,now);return true;},token).ConfigureAwait(false);
-            if (result.Success && stillEnabled()) await deliverAutomaticPractice(await library.ListAsync(token).ConfigureAwait(false), account, token).ConfigureAwait(false);
+            if (result.Success && stillEnabled()) await deliverPracticeMaps(await library.ListAsync(token).ConfigureAwait(false), account, token).ConfigureAwait(false);
             // At most one expensive audio render per cycle; failed sources retry on the next cycle.
             return;
         }
     }
     private string automaticPracticeStatus = "Automatic practice is waiting for recent replay results.";
-    private async Task deliverAutomaticPractice(IReadOnlyList<SavedPracticeMap> maps, int account, CancellationToken token)
+    private async Task deliverPracticeMaps(IReadOnlyList<SavedPracticeMap> maps, int account, CancellationToken token)
     {
-        var owned = maps.Where(m => m.Automatic && m.Tracking?.AccountId == account).ToArray();
-        var active = owned.Where(m => m.RetiredAt is null && !m.PayloadRemoved).ToArray();
+        var owned = maps.Where(m => m.Tracking?.AccountId == account).ToArray();
+        var settings = new AutomaticPracticeStore(Storage.GetFullPath("practice-maps", true)).Load();
+        var active = owned.Where(m => AutomaticPracticeDelivery.ShouldDeliver(m, account, settings.Enabled)).ToArray();
         if (owned.Length == 0) return;
         bool stable = beatmapDestinationService?.Destination == OsuClientDestination.Stable
             || (beatmapDestinationService?.Destination != OsuClientDestination.Lazer && trainerLazerRoot is null);
@@ -134,7 +139,8 @@ public partial class AimModGame
         { collectionStatus = stable ? " Close osu!stable once to sync the coaching collection." : " Collection sync will retry; your sets remain available in AimMod."; logFailure("coaching collection", error); }
         var delivery = await new AutomaticPracticeDelivery(Path.Combine(stateRoot, $"delivery-{account}.json")).DeliverAsync(active, collectionVerified ? installed : null, async (map, ct) =>
         {
-            if (currentOsuProfile?.UserId != account || !new AutomaticPracticeStore(Storage.GetFullPath("practice-maps", true)).Load().Enabled)
+            if ((currentOsuProfile?.UserId ?? 0) != account || !AutomaticPracticeDelivery.ShouldDeliver(map, account,
+                    new AutomaticPracticeStore(Storage.GetFullPath("practice-maps", true)).Load().Enabled))
                 throw new OperationCanceledException();
             var archive = await lazerBeatmapInstallService.PreserveAsync(new PracticeMapLibrary(Storage.GetFullPath("practice-maps", true)).ArchivePath(map.Id), 0, ct).ConfigureAwait(false);
             return await installPracticeMap(archive, ct).ConfigureAwait(false);

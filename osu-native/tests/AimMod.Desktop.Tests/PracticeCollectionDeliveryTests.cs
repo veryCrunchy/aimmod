@@ -82,11 +82,17 @@ public class PracticeCollectionDeliveryTests
         Assert.That(reader.ReadInt32(), Is.EqualTo(1)); reader.ReadByte(); Assert.That(reader.ReadString(), Is.EqualTo(second));
     }
 
-    [Test]
-    public async Task DeliveryBackfillsExistingSetsAndDoesNotResendWhilePendingOrConfirmed()
+    [TestCase(true)]
+    [TestCase(false)]
+    public async Task DeliveryBackfillsExistingSetsAndDoesNotResendWhilePendingOrConfirmed(bool automatic)
     {
         var map = new SavedPracticeMap(Guid.NewGuid().ToString("N"), "Synthetic song", "Practice", PracticeDrillType.Mixed, DateTimeOffset.UtcNow,
-            0, 1000, 15000, 6, 12, Automatic: true, Tracking: new("Synthetic player", 1, 0, "", Guid.Empty, "", false, [], [new("Drill", PracticeDrillType.Mixed, "", first, 0, 1000, true)]));
+            0, 1000, 15000, 6, 12, Automatic: automatic, Tracking: new("Synthetic player", 1, 0, "", Guid.Empty, "", false, [], [new("Drill", PracticeDrillType.Mixed, "", first, 0, 1000, true)]));
+        Assert.That(AutomaticPracticeDelivery.ShouldDeliver(map, 1, false), Is.EqualTo(!automatic));
+        Assert.That(AutomaticPracticeDelivery.ShouldDeliver(map, 1, true), Is.True);
+        Assert.That(AutomaticPracticeDelivery.ShouldDeliver(map, 2, true), Is.False);
+        Assert.That(AutomaticPracticeDelivery.ShouldDeliver(map with { RetiredAt = DateTimeOffset.UtcNow }, 1, true), Is.False);
+        Assert.That(AutomaticPracticeDelivery.ShouldDeliver(map with { PayloadRemoved = true }, 1, true), Is.False);
         var service = new AutomaticPracticeDelivery(Path.Combine(root, "delivery.json"));
         int sends = 0; var now = DateTimeOffset.UtcNow;
         Task<LazerBeatmapInstallResult> send(SavedPracticeMap _, CancellationToken ct) { sends++; return Task.FromResult(new LazerBeatmapInstallResult(LazerBeatmapInstallStatus.Sent)); }

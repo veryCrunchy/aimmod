@@ -14,8 +14,27 @@ public class AutomaticPracticeTests
         try {
             var store=new AutomaticPracticeStore(root);
             Assert.That(store.Load().Enabled,Is.False);
+            Assert.That(store.Load().MaximumActiveMaps,Is.EqualTo(25));
             store.Save(new(Enabled:true,Cleanup:false));
             Assert.That(new AutomaticPracticeStore(root).Load(),Is.EqualTo(new AutomaticPracticeSettings(true,false)));
+        } finally { if(Directory.Exists(root))Directory.Delete(root,true); }
+    }
+
+    [TestCase(5,5)]
+    [TestCase(50,50)]
+    [TestCase(100,100)]
+    [TestCase(0,1)]
+    [TestCase(10000,100)]
+    public void PersistedCapacityIsBoundedAndPreservesExistingPreferences(int requested,int expected)
+    {
+        string root=Path.Combine(Path.GetTempPath(),"aimmod-auto-test-"+Guid.NewGuid().ToString("N"));
+        try {
+            Directory.CreateDirectory(root);
+            File.WriteAllText(Path.Combine(root,"automatic-practice.json"),System.Text.Json.JsonSerializer.Serialize(new AutomaticPracticeSettings(MaximumActiveMaps:requested)));
+            var store=new AutomaticPracticeStore(root);
+            Assert.That(store.Load().MaximumActiveMaps,Is.EqualTo(expected));
+            store.Save(new(MaximumActiveMaps:requested));
+            Assert.That(store.Load().MaximumActiveMaps,Is.EqualTo(expected));
         } finally { if(Directory.Exists(root))Directory.Delete(root,true); }
     }
 

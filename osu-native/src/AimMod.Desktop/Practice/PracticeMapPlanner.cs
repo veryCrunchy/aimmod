@@ -40,8 +40,8 @@ public static class PracticeMapPlanner
                 continue;
             PracticeDrillType type = safe.DrillType == PracticeDrillType.Mixed ? types[0] : safe.DrillType;
             PracticeWeakObject[] included = weaknesses.Where(item => item.ObjectIndex >= first && item.ObjectIndex <= last).ToArray();
-            candidates.Add(new PracticeSourceSection(type, first, last, objects[0].StartTimeMs,
-                objects.Max(item => item.EndTimeMs), included.Sum(item => item.WeightedSeverity), included, objects));
+            candidates.Add(withPlayableLeadUp(beatmap, new PracticeSourceSection(type, first, last, objects[0].StartTimeMs,
+                objects.Max(item => item.EndTimeMs), included.Sum(item => item.WeightedSeverity), included, objects), safe.PlaybackRate));
         }
 
         // Timing loss can occur in a full combo. Keep its evidence separate from actual missed objects.
@@ -54,8 +54,8 @@ public static class PracticeMapPlanner
             var types = DetectPatterns(beatmap, objects, lesson.FirstObjectIndex - first);
             if (safe.DrillType != PracticeDrillType.Mixed && !types.Contains(safe.DrillType)) continue;
             var type = safe.DrillType == PracticeDrillType.Mixed ? types[0] : safe.DrillType;
-            candidates.Add(new PracticeSourceSection(type, first, last, objects[0].StartTimeMs,
-                objects.Max(item => item.EndTimeMs), 1, [], objects));
+            candidates.Add(withPlayableLeadUp(beatmap, new PracticeSourceSection(type, first, last, objects[0].StartTimeMs,
+                objects.Max(item => item.EndTimeMs), 1, [], objects), safe.PlaybackRate));
         }
 
         if (safe.IncludeOverlappingSections && candidates.Count > 0)
@@ -77,10 +77,34 @@ public static class PracticeMapPlanner
             if (objects.Length < 2 || objects.All(item => item.IsSpinner)) continue;
             var types = DetectPatterns(beatmap, objects, objects.Length / 2);
             if (options.DrillType != PracticeDrillType.Mixed && !types.Contains(options.DrillType)) continue;
-            sections.Add(new PracticeSourceSection(options.DrillType, first, first + objects.Length - 1,
-                objects[0].StartTimeMs, objects.Max(item => item.EndTimeMs), 0, [], objects));
+            sections.Add(withPlayableLeadUp(beatmap, new PracticeSourceSection(options.DrillType, first, first + objects.Length - 1,
+                objects[0].StartTimeMs, objects.Max(item => item.EndTimeMs), 0, [], objects), options.PlaybackRate));
         }
         return sections;
+    }
+
+    private static PracticeSourceSection withPlayableLeadUp(PracticeSourceBeatmap beatmap, PracticeSourceSection section, double rate)
+    {
+        // Keep original notes and rhythm. Audio padding alone cannot prepare the player's tapping and aim.
+        int first = section.FirstObjectIndex;
+        for (int added = 0; added < 3 && first > 0; added++)
+        {
+            var previous = beatmap.HitObjects[first - 1];
+            var next = beatmap.HitObjects[first];
+            if (previous.IsSpinner || next.IsSpinner
+                || section.SourceStartTimeMs - previous.StartTimeMs > 1500 * rate
+                || next.StartTimeMs - previous.EndTimeMs > 750 * rate
+                || previous.EndTimeMs > next.StartTimeMs)
+                break;
+            first--;
+        }
+        if (first == section.FirstObjectIndex) return section;
+        return section with
+        {
+            FirstObjectIndex = first,
+            SourceStartTimeMs = beatmap.HitObjects[first].StartTimeMs,
+            HitObjects = beatmap.HitObjects.Skip(first).Take(section.LastObjectIndex - first + 1).ToArray(),
+        };
     }
 
     private static PracticeWeakObject[] aggregateWeaknesses(PracticeSourceBeatmap beatmap, IReadOnlyCollection<ReplayAnalysisResult> analyses) =>

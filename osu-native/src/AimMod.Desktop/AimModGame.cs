@@ -896,6 +896,7 @@ public partial class AimModGame : OsuGameBase
                 plans.Sum(p => p.AudioLeadInMs + p.AudioSlice.OutputDurationMs), plan.RepeatCount, plans.Sum(p => p.HitObjects.Count), PlaybackRate: plan.AudioSlice.PlaybackRate, Tracking: tracking, Automatic: request.Automatic, RevisionScoreId: request.Candidate.SourceReplay.ScoreId));
 
             retainLazerArchive = true;
+            if (!request.Automatic) Schedule(() => nextAutomaticPractice = DateTimeOffset.MinValue);
             return new PracticeMapGenerationResult(
                 true,
                 $"{plans[0].OutputVersion} is ready to open in osu!.",

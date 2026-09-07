@@ -9,6 +9,10 @@ public sealed record PracticeDeliverySummary(int Confirmed, int Pending, int Fai
 /// <summary>Durable import handoff. A successful launch is pending until the map hashes appear in osu!.</summary>
 public sealed class AutomaticPracticeDelivery(string ledgerPath)
 {
+    public static bool ShouldDeliver(SavedPracticeMap map, int account, bool automaticEnabled) =>
+        map.Tracking?.AccountId == account && map.RetiredAt is null && !map.PayloadRemoved
+        && (!map.Automatic || automaticEnabled);
+
     public async Task<PracticeDeliverySummary> DeliverAsync(IReadOnlyList<SavedPracticeMap> maps, ISet<string>? installed,
         Func<SavedPracticeMap, CancellationToken, Task<LazerBeatmapInstallResult>> send, DateTimeOffset now, CancellationToken token)
     {

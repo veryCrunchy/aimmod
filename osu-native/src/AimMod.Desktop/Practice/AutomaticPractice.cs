@@ -3,20 +3,23 @@ using AimMod.Desktop.LocalLibrary;
 
 namespace AimMod.Desktop.Practice;
 
-public sealed record AutomaticPracticeSettings(bool Enabled = false, bool Cleanup = true, int MaximumActiveMaps = 5, int InactiveDays = 30, int RetentionDays = 7);
+public sealed record AutomaticPracticeSettings(bool Enabled = false, bool Cleanup = true, int MaximumActiveMaps = 25, int InactiveDays = 30, int RetentionDays = 7)
+{
+    public AutomaticPracticeSettings Normalize() => this with { MaximumActiveMaps = Math.Clamp(MaximumActiveMaps, 1, 100) };
+}
 
 public sealed class AutomaticPracticeStore(string root)
 {
     private string PathName => Path.Combine(root,"automatic-practice.json");
     public AutomaticPracticeSettings Load()
     {
-        try { return File.Exists(PathName) ? JsonSerializer.Deserialize<AutomaticPracticeSettings>(File.ReadAllText(PathName)) ?? new() : new(); }
+        try { return (File.Exists(PathName) ? JsonSerializer.Deserialize<AutomaticPracticeSettings>(File.ReadAllText(PathName)) ?? new() : new()).Normalize(); }
         catch(Exception e) when(e is IOException or UnauthorizedAccessException or JsonException) { return new(); }
     }
     public void Save(AutomaticPracticeSettings settings)
     {
         Directory.CreateDirectory(root);
-        File.WriteAllText(PathName+".tmp",JsonSerializer.Serialize(settings)); File.Move(PathName+".tmp",PathName,true);
+        File.WriteAllText(PathName+".tmp",JsonSerializer.Serialize(settings.Normalize())); File.Move(PathName+".tmp",PathName,true);
     }
 }
 

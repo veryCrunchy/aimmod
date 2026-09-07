@@ -37,6 +37,8 @@ public sealed partial class OffscreenVisualCaptureTests
     [TestCase("settings", 1600, 900)]
     [TestCase("settings-training", 1100, 760)]
     [TestCase("settings-training", 1600, 900)]
+    [TestCase("settings-practice-menu", 1100, 760)]
+    [TestCase("settings-practice-menu", 1600, 900)]
     [TestCase("replays", 1100, 760)]
     [TestCase("replays-analysis", 1600, 900)]
     [TestCase("statistics", 1100, 760)]
@@ -389,6 +391,23 @@ public sealed partial class OffscreenVisualCaptureTests
                         var scroll = (AimModScrollContainer)typeof(osu.Framework.Graphics.Containers.CompositeDrawable).GetProperty("InternalChild", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(screen)!;
                         scroll.ScrollTo(620, false);
                     }, 200);
+                }, 1600);
+                if (route == "settings-practice-menu") Scheduler.AddDelayed(() =>
+                {
+                    var screen = (OsuClientSettingsScreen)typeof(AimModGame).GetField("settingsScreen", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(this)!;
+                    typeof(OsuClientSettingsScreen).GetMethod("showSettingsPage", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(screen, [2]);
+                    var pages = (List<osu.Framework.Graphics.Drawable>)typeof(OsuClientSettingsScreen).GetField("settingsPages", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(screen)!;
+                    var flow = ((osu.Framework.Graphics.Containers.Container)pages[2]).Children.OfType<osu.Framework.Graphics.Containers.FillFlowContainer>().Single();
+                    var dropdowns = flow.Children.OfType<AimModDropdown<string>>().ToArray();
+                    var capacity = dropdowns.Single(d => d.Current.Value.EndsWith(" sets", StringComparison.Ordinal));
+                    capacity.Current.Value = "100 sets";
+                    var cleanup = dropdowns.Single(d => d.Current.Value == "Automatic");
+                    float depth = capacity.Depth;
+                    setTrainerMenu(capacity, true);
+                    Assert.That(capacity.Depth, Is.LessThan(cleanup.Depth));
+                    setTrainerMenu(capacity, false);
+                    Assert.That(capacity.Depth, Is.EqualTo(depth));
+                    setTrainerMenu(capacity, true);
                 }, 1600);
             }
 

@@ -158,11 +158,24 @@ public partial class OsuClientSettingsScreen : CompositeDrawable
         content.Add(new AimModDropdown<string>{Width=360,Items=new[]{"Off","On"},Current=enabled});
         var status=new SpriteText {Font=new FontUsage(size:12),Colour=AimModPalette.Muted};
         content.Add(status);
+        void updateStatus() => status.Text=settings.Enabled
+            ? $"AimMod practice · up to {settings.MaximumActiveMaps} active sets · updates while AimMod is open"
+            : "Automatic practice is off";
         enabled.BindValueChanged(v=> {
-            try { settings=settings with {Enabled=v.NewValue=="On"};store.Save(settings);status.Text=settings.Enabled?"AimMod practice · up to 5 active maps · updates while AimMod is open":"Automatic practice is off"; }
+            try { settings=settings with {Enabled=v.NewValue=="On"};store.Save(settings);updateStatus(); }
             catch(IOException){status.Text="Could not save automatic practice. Try again.";}
         });
-        status.Text="AimMod practice · up to 5 active maps · updates while AimMod is open";
+        updateStatus();
+        content.Add(new SpriteText {Text="ACTIVE PRACTICE SETS",Font=new FontUsage(size:12,weight:"Bold"),Colour=AimModPalette.Cyan});
+        var capacity=new Bindable<string>($"{settings.MaximumActiveMaps} sets");
+        content.Add(new AimModDropdown<string>{Width=360,
+            Items=new[]{5,10,25,50,100,settings.MaximumActiveMaps}.Distinct().Order().Select(count=>$"{count} sets").ToArray(),Current=capacity});
+        content.Add(new SpriteText {Text="One set per source map, with several practice difficulties. More sets use more disk space.",Font=new FontUsage(size:12),Colour=AimModPalette.Muted});
+        content.Add(new SpriteText {Text="Lowering the limit pauses new sets until space opens up. Existing sets are kept.",Font=new FontUsage(size:12),Colour=AimModPalette.Muted});
+        capacity.BindValueChanged(v=> {
+            try { settings=settings with {MaximumActiveMaps=int.Parse(v.NewValue.Split(' ')[0])};store.Save(settings);updateStatus(); }
+            catch(IOException){status.Text="Could not save the practice limit. Try again.";}
+        });
         content.Add(new SpriteText {Text="CLEANUP",Font=new FontUsage(size:12,weight:"Bold"),Colour=AimModPalette.Cyan});
         var cleanup=new Bindable<string>(settings.Cleanup?"Automatic":"Keep all sets");
         content.Add(new AimModDropdown<string>{Width=360,Items=new[]{"Automatic","Keep all sets"},Current=cleanup});
