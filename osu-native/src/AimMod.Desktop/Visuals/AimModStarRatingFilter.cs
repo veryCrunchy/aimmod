@@ -2,7 +2,7 @@ using osu.Game.Screens.Select;
 
 namespace AimMod.Desktop.Visuals;
 
-// Reuse song select's spectrum, sheared handles and bound interactions unchanged.
+// Preserve osu!'s difficulty spectrum, sheared handles and native range interactions.
 public partial class AimModStarRatingFilter : FilterControl.DifficultyRangeSlider
 {
 }

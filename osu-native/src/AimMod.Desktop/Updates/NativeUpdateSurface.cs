@@ -39,7 +39,7 @@ internal partial class NativeUpdateSurface : CompositeDrawable
             {
                 RelativeSizeAxes = Axes.Y,
                 Width = 4,
-                Colour = AimModPalette.Pink,
+                Colour = AimModPalette.Accent,
             },
             statusFlow = new FillFlowContainer
             {
@@ -107,7 +107,7 @@ internal partial class NativeUpdateSurface : CompositeDrawable
                     {
                         RelativeSizeAxes = Axes.Both,
                         Width = 0,
-                        Colour = AimModPalette.Pink,
+                        Colour = AimModPalette.Accent,
                     },
                 },
             },
@@ -243,7 +243,7 @@ internal partial class NativeUpdateSurface : CompositeDrawable
             set
             {
                 active = value;
-                background.Colour = value ? AimModPalette.PinkDark : AimModPalette.PanelRaised;
+                background.Colour = value ? AimModPalette.AccentMuted : AimModPalette.PanelRaised;
                 label.Colour = value ? AimModPalette.Text : AimModPalette.Muted;
             }
         }
@@ -266,7 +266,7 @@ internal partial class NativeUpdateSurface : CompositeDrawable
         {
             this.action = action;
             Size = new(138, AimModVisualStyle.ControlHeight);
-            BackgroundColour = AimModPalette.PinkDark;
+            BackgroundColour = AimModPalette.AccentMuted;
             Children = new Drawable[]
             {
                 new FillFlowContainer

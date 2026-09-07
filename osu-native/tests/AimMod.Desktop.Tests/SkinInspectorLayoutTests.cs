@@ -51,9 +51,9 @@ public sealed class SkinInspectorLayoutTests
         var panel = field<Container>(workspace, "searchPanel");
         Assert.Multiple(() =>
         {
-            Assert.That(search.RelativeSizeAxes, Is.EqualTo(Axes.Both));
+            Assert.That(search.RelativeSizeAxes, Is.EqualTo(Axes.X));
             Assert.That(search.Width, Is.EqualTo(1));
-            Assert.That(search.Height, Is.EqualTo(1));
+            Assert.That(search.Height, Is.EqualTo(panel.Height));
             Assert.That(panel.AutoSizeAxes, Is.EqualTo(Axes.None));
             Assert.That(panel.Height, Is.GreaterThan(0).And.LessThan(100));
         });

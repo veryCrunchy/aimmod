@@ -5,7 +5,7 @@ namespace AimMod.Desktop.Practice;
 public sealed record SavedPracticeMap(
     string Id, string Title, string Difficulty, PracticeDrillType Scenario,
     DateTimeOffset CreatedAt, double SourceStartMs, double SourceEndMs,
-    double DurationMs, int Repetitions, int ObjectCount, bool Favourite = false, double PlaybackRate = 1);
+    double DurationMs, int Repetitions, int ObjectCount, bool Favourite = false, double PlaybackRate = 1, PracticeTracking? Tracking = null, bool Automatic = false, Guid RevisionScoreId = default, DateTimeOffset? RetiredAt = null, bool PayloadRemoved = false);
 
 public sealed record PracticeWorkspaceSettings(
     string Search = "", PracticeCandidateSort Sort = PracticeCandidateSort.WeakestFirst,
@@ -20,9 +20,10 @@ public enum PracticeLibrarySort { Newest, Title, Duration, Favourites }
 public sealed class PracticeMapLibrary
 {
     private readonly string root;
-    private readonly SemaphoreSlim ioGate = new(1, 1);
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string,SemaphoreSlim> gates = new(StringComparer.OrdinalIgnoreCase);
+    private readonly SemaphoreSlim ioGate;
 
-    public PracticeMapLibrary(string root) => this.root = Path.GetFullPath(root);
+    public PracticeMapLibrary(string root) { this.root = Path.GetFullPath(root); ioGate = gates.GetOrAdd(this.root, _ => new(1,1)); }
 
     public async Task<T> RunAsync<T>(Func<T> action, CancellationToken token = default)
     {
@@ -65,9 +66,9 @@ public sealed class PracticeMapLibrary
                 if (!validId(id) || (File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0) continue;
                 string metadata = Path.Combine(directory, "practice.json");
                 if (!File.Exists(metadata)) migrateLegacy(directory, id);
-                if (!File.Exists(metadata) || new FileInfo(metadata).Length > 64_000) continue;
+                if (!File.Exists(metadata) || new FileInfo(metadata).Length > 512_000) continue;
                 SavedPracticeMap? entry = JsonSerializer.Deserialize<SavedPracticeMap>(File.ReadAllText(metadata));
-                if (entry?.Id == id && File.Exists(ArchivePath(id))) maps.Add(entry);
+                if (entry?.Id == id && (entry.PayloadRemoved || File.Exists(ArchivePath(id)))) maps.Add(entry);
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or InvalidDataException) { }
         }
@@ -95,9 +96,10 @@ public sealed class PracticeMapLibrary
     public static IReadOnlyList<SavedPracticeMap> Search(IEnumerable<SavedPracticeMap> maps, string search,
         PracticeDrillType? scenario, bool favourites, PracticeLibrarySort sort)
     {
-        var matches = maps.Where(map => (!favourites || map.Favourite) && (scenario is null || map.Scenario == scenario)
+        var matches = maps.Where(map => !map.PayloadRemoved && (!favourites || map.Favourite) && (scenario is null || map.Scenario == scenario || map.Tracking?.Difficulties.Any(d=>d.Skill == scenario) == true)
             && (map.Title.Contains(search.Trim(), StringComparison.OrdinalIgnoreCase)
-                || map.Difficulty.Contains(search.Trim(), StringComparison.OrdinalIgnoreCase)));
+                || map.Difficulty.Contains(search.Trim(), StringComparison.OrdinalIgnoreCase)
+                || map.Tracking?.Difficulties.Any(d=>d.Name.Contains(search.Trim(), StringComparison.OrdinalIgnoreCase)) == true));
         return (sort switch
         {
             PracticeLibrarySort.Title => matches.OrderBy(map => map.Title, StringComparer.OrdinalIgnoreCase),
@@ -110,11 +112,53 @@ public sealed class PracticeMapLibrary
     public void Save(SavedPracticeMap map)
     {
         string directory = ownedDirectory(map.Id);
-        if (!File.Exists(ArchivePath(map.Id))) throw new FileNotFoundException("The practice package is missing.");
+        if (!map.PayloadRemoved && !File.Exists(ArchivePath(map.Id))) throw new FileNotFoundException("The practice package is missing.");
         string target = Path.Combine(directory, "practice.json");
         string temporary = target + ".tmp";
         File.WriteAllText(temporary, JsonSerializer.Serialize(map));
         File.Move(temporary, target, true);
+    }
+
+    public PracticeProgress LoadProgress(string id)
+    {
+        string path = Path.Combine(ownedDirectory(id), "progress.json");
+        if (!File.Exists(path)) return PracticeProgress.Empty;
+        if (new FileInfo(path).Length > 64_000_000) throw new InvalidDataException("Practice history is too large.");
+        return JsonSerializer.Deserialize<PracticeProgress>(File.ReadAllText(path)) ?? PracticeProgress.Empty;
+    }
+    public IReadOnlyList<PracticeSetProgress> RefreshProgress(IEnumerable<AimMod.Desktop.LocalLibrary.LocalReplay> history, int accountId)
+    {
+        var runs=history.ToArray(); var result=new List<PracticeSetProgress>();
+        foreach (var map in List().Where(m=>m.Tracking is not null && (m.Tracking.AccountId == 0 || m.Tracking.AccountId == accountId)))
+        {
+            var previous=LoadProgress(map.Id); var next=PracticeProgressTracker.Reconcile(map,previous,runs,accountId);
+            if (!previous.Attempts.SequenceEqual(next.Attempts))
+            {
+                string path=Path.Combine(ownedDirectory(map.Id),"progress.json");
+                File.WriteAllText(path+".tmp",JsonSerializer.Serialize(next)); File.Move(path+".tmp",path,true);
+            }
+            result.Add(new(map,next));
+        }
+        return result;
+    }
+
+    public void RetireAutomatic(SavedPracticeMap map, DateTimeOffset now)
+    {
+        if (!map.Automatic || map.Favourite || map.RetiredAt is not null) return;
+        Save(map with { RetiredAt = now });
+    }
+
+    public void PruneRetiredPayload(SavedPracticeMap map)
+    {
+        if (!map.Automatic || map.Favourite || map.RetiredAt is null) return;
+        string directory = ownedDirectory(map.Id);
+        checkTree(directory);
+        // Keep identities and recorded progress even after generated audio is removed.
+        Save(map with { PayloadRemoved = true });
+        string generated = Path.GetFullPath(Path.Combine(directory, "map"));
+        if (!generated.StartsWith(directory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) throw new IOException("Invalid generated directory.");
+        if (Directory.Exists(generated)) Directory.Delete(generated, true);
+        if (File.Exists(ArchivePath(map.Id))) File.Delete(ArchivePath(map.Id));
     }
 
     public string ArchivePath(string id) => Path.Combine(ownedDirectory(id), "AimMod practice.osz");

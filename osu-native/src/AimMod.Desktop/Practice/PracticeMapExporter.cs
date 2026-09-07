@@ -69,6 +69,8 @@ public sealed class PracticeMapExporter
         appendSection(builder, "Metadata", replace(source.Sections.GetValueOrDefault("Metadata", Array.Empty<string>()), new Dictionary<string, string>
         {
             ["Version"] = plan.OutputVersion,
+            ["Title"] = plan.OutputSetTitle ?? source.Metadata.Title,
+            ["TitleUnicode"] = plan.OutputSetTitle ?? source.Metadata.Title,
             ["Source"] = plan.Attribution,
             ["BeatmapID"] = "0",
             ["BeatmapSetID"] = "-1",

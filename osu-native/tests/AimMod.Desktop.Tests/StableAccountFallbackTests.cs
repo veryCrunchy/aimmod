@@ -53,7 +53,7 @@ public sealed class StableAccountFallbackTests
         object route = Enum.ToObject(bindableType.GetGenericArguments()[0], 0);
         object bindable = Activator.CreateInstance(bindableType, [route])!;
         Action noOp = () => { };
-        return (Drawable)constructor.Invoke([bindable, noOp, noOp, noOp, noOp, noOp, noOp, noOp, noOp]);
+        return (Drawable)constructor.Invoke([bindable, noOp, noOp, noOp, noOp, noOp, noOp, noOp, noOp, noOp]);
     }
 
     private static void call(Drawable header, string method, params object[] args) =>

@@ -21,7 +21,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
     private readonly Action<LocalReplay> openReplay;
     private readonly Func<LocalReplay, CancellationToken, Task>? openBeatmap;
     private readonly Func<IAccountScoreHistoryService?> accountHistory;
-    private readonly ShearedFilterTextBox search;
+    private readonly AimModSearchBox search;
     private ScheduledDelegate? searchRefresh;
     private readonly Bindable<StatisticsTimeRange> timeRange = new(StatisticsTimeRange.All);
     private readonly Bindable<string> modFilter = new(ScoreMods.Any);
@@ -84,7 +84,13 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
                         "Statistics",
                         "Explore your local and online scores. Compare results by map, mods, and date.",
                         "performance history"),
-                    scopeText = text("Loading score scope...", 10, AimModPalette.Muted).With(drawable => drawable.Y = 62),
+                    scopeText = text("Loading scores...", 10, AimModPalette.Muted).With(drawable => drawable.Y = 62),
+                    new AimModResetButton(() => {
+                        search!.Current.Value = string.Empty; timeRange.Value = StatisticsTimeRange.All;
+                        modFilter.Value = ScoreMods.Any; sort.Value = StatisticsRunSort.Recent;
+                        scoreSource.Value = StatisticsScoreSource.All; starBand.Value = StatisticsStarBand.Any;
+                        resultFilter.Value = StatisticsResultFilter.All;
+                    }) { Anchor = Anchor.TopRight, Origin = Anchor.TopRight, Y = 40 },
                     filterBar = new StatisticsFilterBar
                     {
                         RelativeSizeAxes = Axes.X,
@@ -93,7 +99,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
                         Padding = new MarginPadding { Horizontal = 10 },
                         Children = new Drawable[]
                         {
-                            search = new ShearedFilterTextBox
+                            search = new AimModSearchBox
                             {
                                 RelativeSizeAxes = Axes.X,
                                 PlaceholderText = "Title, artist, difficulty",

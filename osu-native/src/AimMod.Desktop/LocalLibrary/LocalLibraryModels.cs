@@ -51,7 +51,9 @@ public sealed record LocalBeatmapDifficulty(
     float OverallDifficulty,
     float DrainRate,
     int? LocalScoreCount,
-    string BeatmapHash = "");
+    string BeatmapHash = "",
+    string BeatmapPath = "",
+    LocalLibraryOrigin Origin = LocalLibraryOrigin.Lazer);
 
 public sealed record LocalBeatmapSet(
     Guid SetId,

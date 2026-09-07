@@ -32,6 +32,7 @@ public static class RuntimeCommands
     public const string ReadReplay = "replays.read";
     public const string AnalyseReplay = "replays.analyse";
     public const string CalculatePp = "pp.whatif.calculate";
+    public const string ReadExternalTrainerSettings = "library.trainer-settings";
     public const string SearchExternalLazerCatalog = "library.catalog.search";
     public const string SearchExternalLazerSkins = "skins.installed.search";
     public const string ResolveExternalLazerAssets = "library.resolve-assets";

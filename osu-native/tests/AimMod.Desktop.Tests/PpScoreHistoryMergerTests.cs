@@ -57,6 +57,23 @@ public sealed class PpScoreHistoryMergerTests
         });
     }
 
+    [Test]
+    public void IncompleteOnlineSummaryDoesNotEraseRecordedMissesComboOrScore()
+    {
+        LocalReplay local = localRun() with { OnlineScoreId = 99, MissCount = 9 };
+        OsuBestScore online = onlineScore(99, 321) with {
+            TotalScore = 0, MaximumCombo = 0, Statistics = new OsuScoreStatistics(0, 0, 0, 0),
+        };
+        var submitted = AimMod.Desktop.ScoreHistory.ScoreHistoryMerger.MergeOnline([online], []);
+        var merged = AimMod.Desktop.ScoreHistory.ScoreHistoryMerger.MergeAsLocalReplays([local], submitted).Single();
+        Assert.Multiple(() => {
+            Assert.That(merged.MissCount, Is.EqualTo(9));
+            Assert.That(merged.MaxCombo, Is.EqualTo(local.MaxCombo));
+            Assert.That(merged.TotalScore, Is.EqualTo(local.TotalScore));
+            Assert.That(merged.PerformancePoints, Is.EqualTo(321));
+        });
+    }
+
     private static LocalReplay localRun() => new(
         Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "Song", "Artist", "Insane", "osu", "Player",
         DateTimeOffset.UtcNow, 6.4, 0.98, 1_000_000, 700, 2, null, ["HD"], true);

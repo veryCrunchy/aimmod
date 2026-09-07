@@ -56,7 +56,7 @@ public partial class AimModPill : CompositeDrawable
             tone = value;
             (background.Colour, label.Colour) = value switch
             {
-                AimModPillTone.Accent => (AimModPalette.PinkDark, AimModPalette.Text),
+                AimModPillTone.Accent => (AimModPalette.AccentMuted, AimModPalette.Accent),
                 AimModPillTone.Info => (AimModPalette.CyanDark, AimModPalette.Text),
                 AimModPillTone.Success => (AimModPalette.Success, AimModPalette.Canvas),
                 _ => (AimModPalette.PanelHover, AimModPalette.Muted),

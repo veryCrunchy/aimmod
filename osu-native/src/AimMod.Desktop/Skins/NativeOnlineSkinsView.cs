@@ -33,6 +33,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
     private readonly Container rulesetGroup;
     private readonly Container sortGroup;
     private readonly TruncatingSpriteText status;
+    private readonly AimModResetButton resetFilters;
     private readonly Container resultViewport;
     private readonly Container listPanel;
     private readonly FillFlowContainer results;
@@ -95,25 +96,25 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
                         Depth = 10,
                         Child = new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
                     },
-                    searchGroup = filterField("SEARCH", search = new OsuTextBox
+                    searchGroup = filterField("SEARCH", search = new AimModTextBox
                     {
                         RelativeSizeAxes = Axes.X,
                         Height = AimModVisualStyle.CompactControlHeight,
                         PlaceholderText = "Skin name or creator",
                     }),
-                    providerGroup = filterField("PROVIDER", new OsuDropdown<string>
+                    providerGroup = filterField("PROVIDER", new AimModDropdown<string>
                     {
                         RelativeSizeAxes = Axes.X,
                         Items = providerItems,
                         Current = provider,
                     }),
-                    rulesetGroup = filterField("MODE", new OsuDropdown<OnlineSkinRuleset>
+                    rulesetGroup = filterField("MODE", new AimModDropdown<OnlineSkinRuleset>
                     {
                         RelativeSizeAxes = Axes.X,
                         Items = Enum.GetValues<OnlineSkinRuleset>(),
                         Current = ruleset,
                     }),
-                    sortGroup = filterField("SORT", new OsuDropdown<OnlineSkinSort>
+                    sortGroup = filterField("SORT", new AimModDropdown<OnlineSkinSort>
                     {
                         RelativeSizeAxes = Axes.X,
                         Items = Enum.GetValues<OnlineSkinSort>(),
@@ -121,6 +122,10 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
                     }),
                 },
             },
+            resetFilters = new AimModResetButton(() => {
+                search.Current.Value = string.Empty; provider.Value = "All providers";
+                ruleset.Value = OnlineSkinRuleset.Standard; sort.Value = OnlineSkinSort.Newest;
+            }) { Anchor = Anchor.TopRight, Origin = Anchor.TopRight, Y = 78, Height = 24 },
             status = new TruncatingSpriteText
             {
                 Y = 84,
@@ -205,7 +210,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
                                                 }) { RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y },
                                                 previewButton = new OnlineActionButton(FontAwesome.Solid.Download, "Prepare preview", prepareSelected),
                                                 saveButton = new OnlineActionButton(FontAwesome.Solid.Save, "Save .osk", saveSelected),
-                                                importButton = new OnlineActionButton(FontAwesome.Solid.ExternalLinkAlt, "Import into osu!", importSelected, AimModPalette.Pink),
+                                                importButton = new OnlineActionButton(FontAwesome.Solid.ExternalLinkAlt, "Import into osu!", importSelected, AimModPalette.Accent),
                                                 sourceButton = new OnlineActionButton(FontAwesome.Solid.Globe, "Open source page", openSource),
                                             },
                                         },
@@ -292,6 +297,8 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
     protected override void Update()
     {
         base.Update();
+        resetFilters.Y = status.Y - 4;
+
         float width = Math.Max(640, DrawWidth);
         const float inset = 12;
         bool compactFilters = width < 980;
@@ -814,7 +821,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
                 {
                     RelativeSizeAxes = Axes.Y,
                     Width = 3,
-                    Colour = selected ? AimModPalette.Pink : AimModPalette.Cyan,
+                    Colour = selected ? AimModPalette.Accent : AimModPalette.Cyan,
                 },
                 name = text(14, AimModPalette.Text, "SemiBold", skin.Name).With(drawable => drawable.Position = new(158, 18)),
                 creator = text(11, AimModPalette.Muted, "Regular", $"{skin.Creator}  ·  {skin.Attribution.ProviderName}").With(drawable => drawable.Position = new(158, 45)),
@@ -830,6 +837,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
         protected override void Update()
         {
             base.Update();
+
             name.MaxWidth = Math.Max(80, DrawWidth - 270);
             creator.MaxWidth = Math.Max(80, DrawWidth - 270);
         }
@@ -884,6 +892,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
         protected override void Update()
         {
             base.Update();
+
             int count = thumbnails.Children.Count;
             if (count == 0) return;
             float width = Math.Clamp((DrawWidth - 16 - (count - 1) * 6) / count, 1, 76);
@@ -982,6 +991,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
         protected override void Update()
         {
             base.Update();
+
             label.MaxWidth = Math.Max(40, DrawWidth - 50);
         }
 

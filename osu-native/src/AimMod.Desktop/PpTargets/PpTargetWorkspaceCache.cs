@@ -25,7 +25,7 @@ public sealed class PpTargetWorkspaceCache
 {
     public static readonly TimeSpan Freshness = TimeSpan.FromHours(6);
 
-    private const int current_version = 8;
+    private const int current_version = 10;
     private static readonly JsonSerializerOptions json_options = new(JsonSerializerDefaults.Web);
 
     private readonly string path;

@@ -220,8 +220,8 @@ public static class ScoreHistoryMerger
                 online?.PlayedAt ?? local.PlayedAt,
                 online is { StarRating: var onlineStars } && double.IsFinite(onlineStars) ? onlineStars : local.StarRating,
                 online?.Accuracy ?? local.Accuracy,
-                online?.PerformancePoints ?? local.PerformancePoints, online?.TotalScore ?? local.TotalScore,
-                online?.MaximumCombo ?? local.MaxCombo, online?.MissCount ?? local.MissCount, online?.Mods ?? local.Mods,
+                online?.PerformancePoints ?? local.PerformancePoints, local.TotalScore > 0 ? local.TotalScore : online?.TotalScore ?? 0,
+                local.MaxCombo > 0 ? local.MaxCombo : online?.MaximumCombo ?? 0, local.MissCount, online?.Mods ?? local.Mods,
                 ScoreHistoryProvenance.Local | (online?.Provenance ?? ScoreHistoryProvenance.None), local.HasReplayFile,
                 online?.Passed, online?.Bpm, online?.LengthSeconds, online?.ModsJson is { Length: > 0 } json ? json : local.ModsJson));
         }

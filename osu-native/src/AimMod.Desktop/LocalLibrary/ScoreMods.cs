@@ -27,9 +27,10 @@ public static class ScoreMods {
         JsonValueKind.Array => "["+string.Join(",",element.EnumerateArray().Select(canonical))+"]",
         _ => element.GetRawText()
     };
-    public static string Configuration(LocalReplay run) {
-        var configured = read(run).ToLookup(m=>m.Acronym);
-        return string.Join("+",Acronyms(run).Select(a=>a+string.Join("",configured[a].Select(m=>m.Settings).Distinct().Order())));
+    public static string Configuration(LocalReplay run) => Configuration(Acronyms(run), run.ModsJson);
+    public static string Configuration(IEnumerable<string> acronyms, string? json, Func<string, string>? normalise = null) {
+        var configured = read(json).ToLookup(m=>normalise?.Invoke(m.Acronym) ?? m.Acronym);
+        return string.Join("+",acronyms.Order().Select(a=>a+string.Join("",configured[a].Select(m=>m.Settings).Distinct().Order())));
     }
     public static string SetupKey(LocalReplay run) =>
         $"{run.RulesetShortName}|{(run.LegacyScore || run.Origin == LocalLibraryOrigin.Stable ? "stable" : "lazer")}|{(run.BeatmapHash.Length>0 ? run.BeatmapHash.ToLowerInvariant() : run.BeatmapId != Guid.Empty ? run.BeatmapId.ToString("N") : run.ScoreId.ToString("N"))}|{Configuration(run)}";

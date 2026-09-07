@@ -1,0 +1,123 @@
+using System.Net;
+using System.Text.Json;
+using AimMod.Desktop.Hub;
+using AimMod.Desktop.Trainers;
+using NUnit.Framework;
+
+namespace AimMod.Desktop.Tests;
+
+[TestFixture]
+public sealed class HubTrainingSyncTests
+{
+    private string directory = null!;
+    private string queue => Path.Combine(directory, "queue.json");
+    private FileHubSharingPreferenceStore preferences = null!;
+    private readonly Credentials credentials = new();
+    private long? account;
+    private Handler handler = null!;
+    private HttpClient client = null!;
+    private static readonly JsonSerializerOptions json = new(JsonSerializerDefaults.Web);
+    private HubTrainingSyncService service() => new(queue, client, new Uri("https://training.example/"), credentials, preferences, () => account);
+    [SetUp] public async Task SetUp()
+    {
+        directory = Path.Combine(Path.GetTempPath(), "aimmod-training-tests-" + Guid.NewGuid().ToString("N"));
+        preferences = new(Path.Combine(directory, "preferences.json"));
+        await preferences.SaveAsync(new(TrainingSyncEnabled: true));
+        credentials.Value = new("synthetic-token", "practice-player", DateTimeOffset.UtcNow);
+        account = 123; handler = new(); client = new(handler);
+    }
+    [TearDown] public void TearDown() { client.Dispose(); if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    private static TrainerResult result() => new(Guid.NewGuid(), DateTimeOffset.UtcNow,
+        new TrainerSettings(), 100, 98, 90, 0, 1, 0, 18, 2, Engine: "osu-moving-v2", Accuracy: 97, PlayedSeconds: 30, Demand: new(4, 90, 200, 8));
+    private async Task waitQueued()
+    {
+        for (int i = 0; i < 100 && !File.Exists(queue); i++) await Task.Delay(10);
+        Assert.That(File.Exists(queue), Is.True);
+    }
+    [Test] public void ContractExcludesPrivateInputAndSourceData()
+    {
+        TrainerResult r = result() with { Settings = new(Music: "song", SongIdentity: "private-source-file", SongTitle: "private-title", Keys: "A / S", OffsetMs: 37) };
+        string payload = JsonSerializer.Serialize(HubTrainingSession.FromResult(r, false), json);
+        Assert.Multiple(() => { Assert.That(payload, Does.Not.Contain("private-source-file")); Assert.That(payload, Does.Not.Contain("private-title")); Assert.That(payload, Does.Not.Contain("A / S")); Assert.That(payload, Does.Not.Contain("offsetMs")); Assert.That(payload, Does.Contain("\"visibility\":\"private\"")); });
+        var before = HubTrainingSession.FromResult(r, false);
+        var after = HubTrainingSession.FromResult(r with { Settings = r.Settings with { OffsetMs = 42 } }, false);
+        Assert.That(after.Setup.ConfigurationHash, Is.Not.EqualTo(before.Setup.ConfigurationHash));
+    }
+    [Test] public async Task CompletedSessionSurvivesRestartAndSendsAuthenticatedPrivatePayload()
+    {
+        service().BeginSession()!(result()); await waitQueued();
+        await service().FlushAsync();
+        Assert.That(handler.Requests, Has.Count.EqualTo(1));
+        Assert.That(handler.Requests[0], Does.Contain("\"visibility\":\"private\""));
+        Assert.That(handler.Authorization, Is.EqualTo("Bearer synthetic-token"));
+        Assert.That(File.ReadAllText(queue), Is.EqualTo("[]"));
+    }
+    [Test] public async Task FailedUploadRemainsDurableAndDoesNotHammerServer()
+    {
+        handler.Status = HttpStatusCode.ServiceUnavailable;
+        var sync = service(); sync.BeginSession()!(result()); await waitQueued(); await sync.FlushAsync(); await sync.FlushAsync();
+        Assert.That(handler.Requests, Has.Count.EqualTo(1));
+        Assert.That(JsonSerializer.Deserialize<HubTrainingSyncService.Pending[]>(File.ReadAllText(queue), json), Has.Length.EqualTo(1));
+        handler.Status = HttpStatusCode.OK;
+        var item = JsonSerializer.Deserialize<HubTrainingSyncService.Pending[]>(File.ReadAllText(queue), json)![0];
+        File.WriteAllText(queue, JsonSerializer.Serialize(new[] { item with { NextAttempt = DateTimeOffset.MinValue } }, json));
+        await service().FlushAsync(); Assert.That(handler.Requests, Has.Count.EqualTo(2)); Assert.That(File.ReadAllText(queue), Is.EqualTo("[]"));
+    }
+    [Test] public async Task SwitchingOsuOrHubAccountDoesNotUploadPendingPractice()
+    {
+        var sync = service(); sync.BeginSession()!(result()); await waitQueued();
+        account = 456; await sync.FlushAsync(); Assert.That(handler.Requests, Is.Empty);
+        account = 123; credentials.Value = credentials.Value! with { AccountLabel = "another-player" };
+        await sync.FlushAsync(); Assert.That(handler.Requests, Is.Empty);
+    }
+    [Test] public async Task SessionStartAccountIsPreservedAcrossSwitch()
+    {
+        var record = service().BeginSession()!; account = 456; record(result());
+        await service().FlushAsync(); Assert.That(handler.Requests, Is.Empty); Assert.That(File.Exists(queue), Is.False);
+    }
+    [Test] public async Task DisablingAndReenablingCannotPublishOldPendingSessions()
+    {
+        service().BeginSession()!(result()); await waitQueued();
+        await preferences.UpdateAsync(p => p with { TrainingSyncEnabled = false });
+        Assert.That(service().BeginSession(), Is.Null);
+        await preferences.UpdateAsync(p => p with { TrainingSyncEnabled = true });
+        await service().FlushAsync(); Assert.That(handler.Requests, Is.Empty); Assert.That(File.ReadAllText(queue), Is.EqualTo("[]"));
+    }
+    [Test] public async Task InvalidSuccessAcknowledgementDoesNotDropResult()
+    {
+        handler.Body = "{}"; service().BeginSession()!(result()); await waitQueued(); await service().FlushAsync();
+        Assert.That(File.ReadAllText(queue), Is.Not.EqualTo("[]"));
+    }
+    [Test] public async Task SlowNetworkCannotDelayPersistingTheNextCompletedSession()
+    {
+        handler.Release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sync = service(); sync.BeginSession()!(result()); await waitQueued();
+        Task upload = sync.FlushAsync(); await handler.Started.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        sync.BeginSession()!(result());
+        Assert.That(JsonSerializer.Deserialize<HubTrainingSyncService.Pending[]>(File.ReadAllText(queue), json), Has.Length.EqualTo(2));
+        handler.Release.SetResult(); await upload;
+        Assert.That(JsonSerializer.Deserialize<HubTrainingSyncService.Pending[]>(File.ReadAllText(queue), json), Has.Length.EqualTo(1));
+    }
+    private sealed class Handler : HttpMessageHandler
+    {
+        public HttpStatusCode Status = HttpStatusCode.OK;
+        public string Body = "{\"accepted\":1}";
+        public string? Authorization;
+        public List<string> Requests { get; } = [];
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource? Release;
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Authorization = request.Headers.Authorization?.ToString(); Requests.Add(await request.Content!.ReadAsStringAsync(cancellationToken));
+            Started.TrySetResult(); if (Release is not null) await Release.Task.WaitAsync(cancellationToken);
+            return new(Status) { Content = new StringContent(Body) };
+        }
+    }
+    private sealed class Credentials : IHubCredentialStore
+    {
+        public HubCredential? Value;
+        public HubCredential? Load() => Value;
+        public Task SaveAsync(HubCredential credential, CancellationToken cancellationToken = default) { Value = credential; return Task.CompletedTask; }
+        public void Clear() => Value = null;
+    }
+}

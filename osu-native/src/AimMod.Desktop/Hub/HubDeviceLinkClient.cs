@@ -27,6 +27,7 @@ public sealed class HubDeviceLinkClient
     private static readonly JsonSerializerOptions json_options = new(JsonSerializerDefaults.Web);
     private readonly HttpClient client;
     private readonly Uri baseUri;
+    public Uri BaseUri => baseUri;
     private readonly IHubCredentialStore credentialStore;
 
     public HubDeviceLinkClient(HttpClient client, Uri baseUri, IHubCredentialStore credentialStore)

@@ -24,13 +24,18 @@ public partial class NativePpTargetsWorkspace
             $"AR {difficulty?.ApproachRate:0.#} / OD {difficulty?.OverallDifficulty:0.#} / CS {difficulty?.CircleSize:0.#} / HP {difficulty?.DrainRate:0.#}",
             target.MaximumCombo is { } combo ? $"Maximum combo: {combo:N0}x" : "Maximum combo unavailable",
             "PP prediction",
+            target.ReadinessLabel,
         };
         if (target.Estimate is { } pp)
         {
-            lines.Add($"Expected: {pp.ExpectedPp:0.0} PP ({pp.ExpectedPpRange.Minimum:0.0}-{pp.ExpectedPpRange.Maximum:0.0})");
+            lines.Add(target.ExpectedEarnedPp is { } earned
+                ? $"Expected per attempt: {earned:0.0} PP. Projected score weighted by estimated pass chance; failed attempts earn no PP."
+                : "Expected PP unavailable: not enough comparable completion and score evidence.");
+            lines.Add($"PP if the projected score is completed: {pp.ExpectedPp:0.0} ({pp.ExpectedPpRange.Minimum:0.0}-{pp.ExpectedPpRange.Maximum:0.0}). This is conditional, not a pass prediction.");
             lines.Add($"100% FC ceiling: {pp.RealisticMaximumPp:0.0} PP");
             lines.Add(pp.PatternPrediction?.ExpectedAccuracy is { } accuracy
-                ? $"Projected head accuracy: {accuracy:P1}" : "Score-history projection");
+                ? $"Projected head accuracy: {accuracy:P1}" : target.PassEstimate?.ConditionalAccuracy is { } observed
+                    ? $"Accuracy from comparable completed plays: {observed:P1}" : "General accuracy fallback; comparable score evidence is missing");
         }
         else lines.Add("PP calculation pending");
         lines.Add("Skill evidence (30 days)");
@@ -55,9 +60,9 @@ public partial class NativePpTargetsWorkspace
         else lines.Add("Pattern fit unmeasured");
         lines.Add("Pass and account gain");
         lines.Add(target.PassEstimate is { } pass
-            ? $"Estimated pass: {pass.Probability:P0} ({pass.Lower:P0}-{pass.Upper:P0}); {pass.Attempts} attempts across {pass.Maps} maps. {pass.Confidence} confidence; {(pass.DurationAdjusted ? "adjusted from shorter maps; stamina is unverified" : pass.BroaderComparison ? "broader comparisons" : "close comparisons")}."
+            ? $"Estimated pass: {pass.Probability:P0} ({pass.Lower:P0}-{pass.Upper:P0}); {pass.Attempts} attempts {(pass.SameMap ? "on this difficulty" : $"across {pass.Maps} maps")}. {pass.Confidence} confidence; {(pass.DurationAdjusted ? "adjusted from shorter maps; stamina is unverified" : pass.BroaderComparison ? "broader comparisons" : "matching mod setup")}."
             : "Pass chance unknown");
-        lines.Add(target.EstimatedAccountGainPp is { } gain ? $"Estimated account gain: +{gain:0.0} PP" : "Account gain unknown");
+        lines.Add(target.EstimatedAccountGainPp is { } gain ? $"Expected account gain per attempt: +{gain:0.0} PP" : "Account gain unverified");
         if (target.AccountGainPerMinute is { } perMinute) lines.Add($"Account gain per minute: +{perMinute:0.0} PP");
         return lines;
     }
@@ -116,7 +121,7 @@ public partial class NativePpTargetsWorkspace
                     [
                         button("Open osu!", FontAwesome.Solid.Play,
                             open is null ? null : () => _ = perform(async () => { await open(target.BeatmapId, CancellationToken.None); return "Opened"; }), 12, 6, 132),
-                        saveButton = button(installed ? "Installed" : set.DownloadDisabled ? "Unavailable" : "Save", installed ? FontAwesome.Solid.Check : FontAwesome.Solid.Download,
+                        saveButton = button(installed ? "Installed" : set.DownloadDisabled ? "Unavailable" : "Install", installed ? FontAwesome.Solid.Check : FontAwesome.Solid.Download,
                             installed || set.DownloadDisabled ? null : () => _ = perform(async () =>
                             {
                                 var result = await save(set);

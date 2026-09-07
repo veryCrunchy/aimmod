@@ -9,7 +9,10 @@ public sealed record HubSharingPreferences(
     bool AutomaticSharingEnabled = false,
     double MinimumPp = 0,
     double MinimumAccuracy = 95,
-    Guid AutomaticSharingGeneration = default)
+    Guid AutomaticSharingGeneration = default,
+    bool TrainingSyncEnabled = false,
+    bool TrainingPublicSharing = false,
+    Guid TrainingSyncGeneration = default)
 {
     public static HubSharingPreferences Default { get; } = new();
 
@@ -82,6 +85,10 @@ public sealed class FileHubSharingPreferenceStore : IHubSharingPreferenceStore
                 AutomaticSharingGeneration = preferences.AutomaticSharingEnabled
                     ? previous.AutomaticSharingEnabled && previous.AutomaticSharingGeneration != Guid.Empty
                         ? previous.AutomaticSharingGeneration : Guid.NewGuid()
+                    : Guid.Empty,
+                TrainingSyncGeneration = preferences.TrainingSyncEnabled
+                    ? previous.TrainingSyncEnabled && previous.TrainingSyncGeneration != Guid.Empty
+                        ? previous.TrainingSyncGeneration : Guid.NewGuid()
                     : Guid.Empty,
             };
             await saveCoreAsync(preferences, cancellationToken).ConfigureAwait(false);

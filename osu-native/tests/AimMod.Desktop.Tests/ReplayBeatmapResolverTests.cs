@@ -35,6 +35,36 @@ public sealed class ReplayBeatmapResolverTests
         Assert.ThrowsAsync<OperationCanceledException>(async () => await ReplayBeatmapResolver.ResolveAsync(new Library(), replay() with { OnlineBeatmapId = 123 }, new CancellationToken(true)));
     }
 
+    [TestCase(LocalLibraryOrigin.Lazer)]
+    [TestCase(LocalLibraryOrigin.Stable)]
+    public async Task OnlineScoreResolvesInstalledDifficultyWithoutChangingScoreIdentity(LocalLibraryOrigin origin)
+    {
+        var play = replay() with { OnlineBeatmapId = 200, IsLocallyStored = false, HasReplayFile = false, BeatmapHash = "" };
+        var wrong = new LocalBeatmapDifficulty(Guid.NewGuid(), 100, "Hard", "osu", 4, 180, 100000, 4, 9, 8, 5, 0, "wrong");
+        var right = wrong with { BeatmapId = Guid.NewGuid(), OnlineId = 200, BeatmapHash = "installed-hash",
+            BeatmapPath = origin == LocalLibraryOrigin.Stable ? Path.GetFullPath("installed.osu") : "", Origin = origin };
+        var set = new LocalBeatmapSet(Guid.NewGuid(), 1, play.Title, play.Artist, "Mapper", "", DateTimeOffset.UtcNow, null, [wrong, right], 0);
+        var resolved = await ReplayBeatmapResolver.ResolveSourceAsync(new Library(set), play, default);
+        Assert.Multiple(() => {
+            Assert.That(resolved.ScoreId, Is.EqualTo(play.ScoreId));
+            Assert.That(resolved.IsLocallyStored, Is.False);
+            Assert.That(resolved.HasReplayFile, Is.False);
+            Assert.That(resolved.BeatmapId, Is.EqualTo(right.BeatmapId));
+            Assert.That(resolved.BeatmapHash, Is.EqualTo(right.BeatmapHash));
+            Assert.That(resolved.BeatmapPath, Is.EqualTo(right.BeatmapPath));
+            Assert.That(resolved.Origin, Is.EqualTo(origin));
+        });
+    }
+
+    [Test]
+    public void MissingPracticeSourceDoesNotGuessFromTitle()
+    {
+        var play = replay() with { IsLocallyStored = false, OnlineBeatmapId = 200 };
+        var wrong = new LocalBeatmapDifficulty(Guid.NewGuid(), 100, play.Difficulty, "osu", 4, 180, 100000, 4, 9, 8, 5, 0, "wrong");
+        var set = new LocalBeatmapSet(Guid.NewGuid(), 1, play.Title, play.Artist, "Mapper", "", DateTimeOffset.UtcNow, null, [wrong], 0);
+        Assert.ThrowsAsync<ExternalLazerReplayOpenException>(async () => await ReplayBeatmapResolver.ResolveSourceAsync(new Library(set), play, default));
+    }
+
     private sealed class Library(params LocalBeatmapSet[] sets) : ILocalLibrarySource
     {
         public int Calls;

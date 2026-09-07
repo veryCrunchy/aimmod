@@ -21,6 +21,7 @@ public partial class AimModInteractiveSurface : ClickableContainer
     {
         Masking = true;
         CornerRadius = AimModVisualStyle.ControlRadius;
+        BorderThickness = 1; BorderColour = AimModPalette.Border;
 
         InternalChildren = new Drawable[]
         {
@@ -79,13 +80,13 @@ public partial class AimModInteractiveSurface : ClickableContainer
 
     protected override bool OnMouseDown(MouseDownEvent e)
     {
-        content.ScaleTo(0.985f, 160, Easing.OutQuint);
+        content.ScaleTo(0.995f, 80, Easing.OutQuint);
         return base.OnMouseDown(e);
     }
 
     protected override void OnMouseUp(MouseUpEvent e)
     {
-        content.ScaleTo(1, 500, Easing.OutElastic);
+        content.ScaleTo(1, 100, Easing.OutQuint);
         base.OnMouseUp(e);
     }
 }
@@ -109,7 +110,7 @@ public partial class AimModSubsectionHeader : CompositeDrawable
                 RelativeSizeAxes = Axes.Y,
                 Height = 0.55f,
                 Width = 3,
-                Colour = AimModPalette.Pink,
+                Colour = AimModPalette.Accent,
             },
             titleText = new OsuSpriteText
             {

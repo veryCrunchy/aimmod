@@ -24,9 +24,15 @@ namespace AimMod.Desktop;
 /// </summary>
 public partial class NativeReplayRouteView : Container
 {
-    private const float browser_width = 320;
-    private const float inspector_width = 340;
+    private const float browser_width = 280;
+    private const float inspector_width = 300;
     private const float transport_height = 240;
+
+    private readonly Drawable browserPanel;
+    private readonly Container playbackPanel;
+    private readonly Drawable inspectorPanel;
+    private readonly AimModButton detailsToggle;
+    private bool compactDetailsOpen;
 
     public OsuScreenStack ScreenStack { get; } = new() { RelativeSizeAxes = Axes.Both };
 
@@ -104,23 +110,26 @@ public partial class NativeReplayRouteView : Container
 
         Children = new Drawable[]
         {
-            makePanel(new Container
+            browserPanel = makePanel(new Container
             {
-                RelativeSizeAxes = Axes.Y,
-                Width = browser_width,
+                RelativeSizeAxes = Axes.Both,
+                Width = 1,
                 Padding = new MarginPadding(12),
                 Children = new Drawable[]
                 {
                     place(section("REPLAY LIBRARY"), y: 2),
+                    new AimModResetButton(() => { searchBox!.Current.Value = string.Empty; gameMode.Value = "All modes"; modSelection.Value = ScoreMods.Any; loadReplayBrowser(); }) {
+                        Anchor = Anchor.TopRight, Origin = Anchor.TopRight, Width = 90, Height = 25, Y = -4,
+                    },
                     replayCount = place(makeText("Loading local runs...", 10, AimModPalette.Muted, "SemiBold"), y: 22),
-                    searchBox = new OsuTextBox
+                    searchBox = new AimModTextBox
                     {
                         RelativeSizeAxes = Axes.X,
                         Height = AimModVisualStyle.ControlHeight,
                         Y = 44,
-                        PlaceholderText = "Search replays",
+                        PlaceholderText = "Search maps, players or mods",
                     },
-                    new OsuDropdown<string> { Y = 88, RelativeSizeAxes = Axes.X, Width = 1, Items = new[] { "All modes", "osu!", "osu!taiko", "osu!catch", "osu!mania" }, Current = gameMode },
+                    new AimModDropdown<string> { Y = 88, RelativeSizeAxes = Axes.X, Width = 1, Items = new[] { "All modes", "osu!", "osu!taiko", "osu!catch", "osu!mania" }, Current = gameMode },
                     new StatisticsFilterBar { Y=130, RelativeSizeAxes=Axes.X, Height=40, Depth=-2, Child=modDropdown=new ScoreModFilterDropdown(modSelection) },
                     new AimModScrollContainer
                     {
@@ -137,7 +146,7 @@ public partial class NativeReplayRouteView : Container
                     },
                 },
             }, Anchor.TopLeft, Anchor.TopLeft, null, browser_width),
-            new Container
+            playbackPanel = new Container
             {
                 RelativeSizeAxes = Axes.Both,
                 Padding = new MarginPadding { Left = browser_width + AimModVisualStyle.RowSpacing, Right = inspector_width + AimModVisualStyle.RowSpacing },
@@ -240,7 +249,7 @@ public partial class NativeReplayRouteView : Container
                     }, Anchor.BottomLeft, Anchor.BottomLeft, transport_height),
                 },
             },
-            makePanel(new AimModScrollContainer
+            inspectorPanel = makePanel(new AimModScrollContainer
             {
                 RelativeSizeAxes = Axes.Both,
                 Child = new FillFlowContainer
@@ -367,6 +376,14 @@ public partial class NativeReplayRouteView : Container
             loadingOverlay = new AimModLoadingOverlay(),
         };
 
+        Drawable[] body = Children.ToArray();
+        Clear(false);
+        Add(new AimModSectionHeader("Replays", "Watch your plays, compare attempts, and review mistakes.") { Width = .75f });
+        Add(detailsToggle = new AimModButton("Run details", () => compactDetailsOpen = !compactDetailsOpen) {
+            Anchor = Anchor.TopRight, Origin = Anchor.TopRight,
+        });
+        Add(new Container { RelativeSizeAxes = Axes.Both, Padding = new MarginPadding { Top = 80 },
+            Child = new Container { RelativeSizeAxes = Axes.Both, Children = body } });
         analysisTitle.Text = "No replay selected";
         analysisSummary.Text = "Choose an attempt to calculate exact judgements and coaching evidence.";
         analysisCard.Alpha = 1;
@@ -374,10 +391,16 @@ public partial class NativeReplayRouteView : Container
         showMapPatternState("Choose a map with multiple attempts to compare repeated mistakes.");
     }
 
+    private osu.Framework.Threading.ScheduledDelegate? searchRefresh;
+    private bool browserLoaded;
+
     protected override void LoadComplete()
     {
         base.LoadComplete();
-        searchBox.OnCommit += (_, _) => loadReplayBrowser();
+        searchBox.OnCommit += (_, _) => { searchRefresh?.Cancel(); loadReplayBrowser(); };
+        searchBox.Current.BindValueChanged(_ => {
+            searchRefresh?.Cancel(); searchRefresh = Scheduler.AddDelayed(loadReplayBrowser, 250);
+        });
         gameMode.BindValueChanged(_ => loadReplayBrowser());
         modSelection.BindValueChanged(_ => loadReplayBrowser());
         if (source is not null)
@@ -387,6 +410,16 @@ public partial class NativeReplayRouteView : Container
     protected override void Update()
     {
         base.Update();
+        bool wide = DrawWidth >= 1120;
+        bool showInspector = wide || compactDetailsOpen;
+        float leftWidth = wide ? browser_width : 240;
+        browserPanel.Width = leftWidth;
+        inspectorPanel.Alpha = showInspector ? 1 : 0;
+        inspectorPanel.Width = wide ? inspector_width : Math.Max(0, DrawWidth-leftWidth-12);
+        playbackPanel.Alpha = !wide && showInspector ? 0 : 1;
+        playbackPanel.Padding = new MarginPadding { Left = leftWidth+12, Right = wide ? inspector_width+12 : 0 };
+        detailsToggle.Alpha = wide ? 0 : 1;
+        detailsToggle.SetCaption(compactDetailsOpen ? "Back to playback" : "Run details");
         currentTimeText.Text = formatTime(currentTime?.Value ?? 0);
         durationText.Text = formatTime(duration?.Value ?? 0);
         pauseLabel.Text = paused?.Value != false ? "Play" : "Pause";
@@ -433,6 +466,14 @@ public partial class NativeReplayRouteView : Container
     private partial class PracticeActionButton : OsuButton
     {
         public PracticeActionButton() => AutoSizeAxes = Axes.None;
+        protected override void LoadComplete()
+        {
+            base.LoadComplete();
+            BackgroundColour = AimModPalette.Accent;
+            SpriteText.Colour = AimModPalette.Canvas;
+            SpriteText.Font = new FontUsage(size: 14, weight: "SemiBold");
+            Content.CornerRadius = AimModVisualStyle.ControlRadius;
+        }
     }
 
     public void AttachPlayer(NativeReplayPlayer replayPlayer)
@@ -592,7 +633,7 @@ public partial class NativeReplayRouteView : Container
         loading?.Dispose();
         loading = new CancellationTokenSource();
         CancellationToken cancellationToken = loading.Token;
-        if (selectedReplay is null && !analysisInProgress)
+        if (!browserLoaded && selectedReplay is null && !analysisInProgress)
             loadingOverlay.ShowLoading("Loading replays", "Reading your local osu!lazer play history");
         _ = loadReplayBrowserAsync(searchBox.Current.Value, modSelection.Value, gameMode.Value switch { "osu!" => "osu", "osu!taiko" => "taiko", "osu!catch" => "fruits", "osu!mania" => "mania", _ => "" }, cancellationToken);
     }
@@ -632,6 +673,7 @@ public partial class NativeReplayRouteView : Container
 
     private void applyReplayBrowser(ReplayBrowserSnapshot snapshot)
     {
+        browserLoaded = true;
         modDropdown.SetChoices(snapshot.AvailableMods);
         replayBrowser = snapshot;
         if (selectedReplay is not null)
@@ -1070,14 +1112,13 @@ public partial class NativeReplayRouteView : Container
         public ReplayGroupHeader(ReplayBrowserMapGroup group, bool expanded, Action action, Func<LocalReplay, CancellationToken, Task>? openBeatmap = null)
         {
             RelativeSizeAxes = Axes.X;
-            Height = 100;
+            Height = 68;
             Action = action;
             CornerRadius = AimModVisualStyle.CardRadius;
             BackgroundColour = expanded ? AimModPalette.PanelRaised : AimModPalette.Panel;
             LocalReplay latest = group.Attempts[0];
             Children = new Drawable[]
             {
-                new OpenBeatmapButton(() => latest, openBeatmap) { Position = new(12, 64), Height = 28 },
                 new Box
                 {
                     RelativeSizeAxes = Axes.Y,
@@ -1129,15 +1170,15 @@ public partial class NativeReplayRouteView : Container
         public ReplayBrowserRow(LocalReplay replay, bool selected, Action action, Func<LocalReplay, CancellationToken, Task>? openBeatmap = null)
         {
             RelativeSizeAxes = Axes.X;
-            Height = 94;
+            Height = 80;
             CornerRadius = AimModVisualStyle.ControlRadius;
             BackgroundColour = selected ? AimModPalette.PanelHover : AimModPalette.PanelRaised;
             Action = action;
             Children = new Drawable[]
             {
-                new OpenBeatmapButton(() => replay, openBeatmap) { Position = new(12, 60), Height = 28, Depth = -1 },
+                new AimModResetButton(action, "Watch replay") { Position = new(12, 49), Height = 25, Width = 100, Depth = -1 },
                 new SpriteText {
-                    Anchor = Anchor.TopRight, Origin = Anchor.TopRight, Position = new(-12,66),
+                    Anchor = Anchor.TopRight, Origin = Anchor.TopRight, Position = new(-12,55),
                     Text = replay.PerformancePoints is {} pp ? $"{pp:0.#}pp" : "PP unavailable",
                     Font = new osu.Framework.Graphics.Sprites.FontUsage(size:12, weight:"Bold"), Colour = AimModPalette.Cyan
                 },
@@ -1145,9 +1186,9 @@ public partial class NativeReplayRouteView : Container
                 {
                     RelativeSizeAxes = Axes.Y,
                     Width = 3,
-                    Colour = selected ? AimModPalette.Pink : AimModVisualStyle.DifficultyColour(replay.StarRating),
+                    Colour = selected ? AimModPalette.Accent : AimModVisualStyle.DifficultyColour(replay.StarRating),
                 },
-                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Pink, Alpha = selected ? 0.08f : 0 },
+                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Accent, Alpha = selected ? 0.08f : 0 },
                 new FillFlowContainer
                 {
                     RelativeSizeAxes = Axes.X,
@@ -1258,7 +1299,7 @@ public partial class NativeReplayRouteView : Container
                     Height = 4,
                     Anchor = Anchor.CentreLeft,
                     Origin = Anchor.CentreLeft,
-                    Colour = AimModPalette.Pink,
+                    Colour = AimModPalette.Accent,
                 },
                 handle = new CircularContainer
                 {
@@ -1316,8 +1357,8 @@ public partial class NativeReplayRouteView : Container
             BackgroundColour = AimModPalette.PanelRaised;
             Children = new Drawable[]
             {
-                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Cyan, Alpha = 0.18f },
-                padded(makeText($"Jump {time}", 11, AimModPalette.Cyan, "SemiBold"), new MarginPadding { Horizontal = 10, Vertical = 6 }),
+                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.AccentMuted },
+                padded(makeText($"Jump {time}", 11, AimModPalette.Accent, "SemiBold"), new MarginPadding { Horizontal = 10, Vertical = 6 }),
             };
         }
     }

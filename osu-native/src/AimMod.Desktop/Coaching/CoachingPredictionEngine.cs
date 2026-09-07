@@ -62,6 +62,9 @@ public static class CoachingPredictionEngine
                                                      && validAccuracy(run.Accuracy)
                                                      && run.PlayedAt < target.PlayedAt)
                                            .OrderByDescending(run => run.PlayedAt)
+                                           // The maximum weight is 5. From age 320, even that falls below 0.04.
+                                           // Avoid parsing mod configurations for neighbours we must discard.
+                                           .Take(320)
                                            .Select((run, age) => new WeightedRun(run, similarityWeight(run, target, age)))
                                            .Where(item => item.Weight >= 0.04)
                                            .OrderByDescending(item => item.Weight)

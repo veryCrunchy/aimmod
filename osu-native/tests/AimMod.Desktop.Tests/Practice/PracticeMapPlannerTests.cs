@@ -16,6 +16,64 @@ public sealed class PracticeMapPlannerTests
     public void TearDown() => Directory.Delete(directory, true);
 
     [Test]
+    public async Task PracticeSetPackagesEveryWeakSectionWithDistinctAudioAndHashes()
+    {
+        var source=read(map(objects:circleObjects(60,100,4))); write("audio.ogg","audio");
+        var misses=new[]{analysis(miss(7,.9),miss(23,.9),miss(45,.8))};
+        var plans=PracticeSetArtifactBuilder.Plan(source,misses,new(PracticeDrillType.Mixed),true);
+        foreach(int index in new[]{7,23,45})
+            Assert.That(plans.Any(plan=>plan.SourceSection.FirstObjectIndex<=index && plan.SourceSection.LastObjectIndex>=index),Is.True);
+        string output=Directory.CreateTempSubdirectory("aimmod-set-test-").FullName;
+        try
+        {
+            var artifact=await new PracticeSetArtifactBuilder(new CopyingAudioSlicer()).BuildAsync(source,plans,output);
+            using var zip=System.IO.Compression.ZipFile.OpenRead(artifact.ArchivePath);
+            Assert.That(zip.Entries.Count,Is.EqualTo(plans.Count*2));
+            Assert.That(zip.Entries.Select(entry=>entry.FullName).Distinct().Count(),Is.EqualTo(zip.Entries.Count));
+            Assert.That(artifact.Difficulties.Select(d=>d.Sha256).Distinct().Count(),Is.EqualTo(plans.Count));
+            Assert.That(artifact.Plans.Select(plan=>plan.OutputSetTitle).Distinct().Count(),Is.EqualTo(1));
+            foreach(var file in zip.Entries.Where(entry=>entry.Name.EndsWith(".osu")))
+            {
+                using var reader=new StreamReader(file.Open()); string content=reader.ReadToEnd();
+                Assert.That(content,Does.Contain("BeatmapSetID:-1"));
+                string audio=content.Split('\n').Single(line=>line.StartsWith("AudioFilename:")).Split(':',2)[1].Trim();
+                Assert.That(zip.GetEntry(audio),Is.Not.Null);
+            }
+        }
+        finally { Directory.Delete(output,true); }
+    }
+
+    [Test]
+    public void PatternPracticeWithoutAnalysisDoesNotInventMissEvidence()
+    {
+        var source = read(map(objects: circleObjects(60, 100, 20)));
+        Assert.That(PracticeMapPlanner.FindSections(source, [], new(PracticeDrillType.Mixed)), Is.Empty);
+        var sections = PracticeMapPlanner.FindSections(source, [], new(PracticeDrillType.Mixed, AllowPatternPractice: true));
+        Assert.That(sections, Has.Count.EqualTo(3));
+        Assert.That(sections.All(section => section.WeakObjects.Count == 0 && section.WeaknessScore == 0), Is.True);
+        var plan = PracticeMapPlanner.CreatePlans(source, [], new(PracticeDrillType.Mixed,
+            FirstObjectIndex: sections[1].FirstObjectIndex, AllowPatternPractice: true)).Single();
+        Assert.That(plan.SourceSection.FirstObjectIndex, Is.EqualTo(24));
+        Assert.That(plan.SourceSection.LastObjectIndex, Is.EqualTo(47));
+    }
+
+    [Test]
+    public void TimingDrillKeepsLeadInWithoutInventingMisses()
+    {
+        var source = read(map(objects: circleObjects(14, 100, 20)));
+        var notes = source.HitObjects.Select((o, i) => new ReplayObjectJudgement(i, null, "HitCircle",
+            o.StartTimeMs, o.EndTimeMs, "Great", "Great", o.StartTimeMs - i * 8, -i * 8, 1, null, null, i, i + 1)).ToArray();
+        var result = analysis(notes);
+        var plan = PracticeMapPlanner.CreatePlans(source, [result], new(PracticeDrillType.Mixed, PlaybackRate: .75)).First();
+        Assert.Multiple(() => {
+            Assert.That(plan.SourceSection.WeakObjects, Is.Empty);
+            Assert.That(plan.SourceSection.FirstObjectIndex, Is.Zero);
+            Assert.That(plan.HitObjects[0].StartTimeMs, Is.GreaterThan(0));
+            Assert.That(plan.AudioSlice.PlaybackRate, Is.EqualTo(.75));
+        });
+    }
+
+    [Test]
     public void ReaderAcceptsStandardAndRejectsOtherRulesets()
     {
         PracticeSourceBeatmap source = read(map(mode: 0, objects: circleObjects(8, 100, 20)));

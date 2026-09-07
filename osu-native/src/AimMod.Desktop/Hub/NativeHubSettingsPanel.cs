@@ -26,6 +26,11 @@ public partial class NativeHubSettingsPanel : CompositeDrawable
     private readonly BindableBool uploadReplayFile;
     private readonly BindableBool uploadAnalysis;
     private readonly BindableBool automaticSharing;
+    private readonly BindableBool trainingSync;
+    private readonly BindableBool trainingPublic;
+    private readonly SpriteText trainingStatus;
+    public Func<string>? TrainingStatus { get; set; }
+    private double nextTrainingStatusUpdate;
     private readonly BindableDouble minimumPp;
     private readonly BindableDouble minimumAccuracy;
     private readonly SpriteText preferenceStatus;
@@ -54,6 +59,8 @@ public partial class NativeHubSettingsPanel : CompositeDrawable
         uploadReplayFile = new BindableBool(preferences.UploadReplayFile);
         uploadAnalysis = new BindableBool(preferences.UploadAnalysis);
         automaticSharing = new BindableBool(preferences.AutomaticSharingEnabled);
+        trainingSync = new BindableBool(preferences.TrainingSyncEnabled);
+        trainingPublic = new BindableBool(preferences.TrainingPublicSharing);
         minimumPp = new BindableDouble(preferences.MinimumPp) { MinValue = 0, MaxValue = 5000, Precision = 1 };
         minimumAccuracy = new BindableDouble(preferences.MinimumAccuracy) { MinValue = 0, MaxValue = 100, Precision = 0.1 };
 
@@ -87,7 +94,7 @@ public partial class NativeHubSettingsPanel : CompositeDrawable
                 panel("Sharing", "Default options for new replay shares.", new Drawable[]
                 {
                     text("VISIBILITY", 10, AimModPalette.Cyan, "Bold"),
-                    new OsuDropdown<OsuHubVisibility>
+                    new AimModDropdown<OsuHubVisibility>
                     {
                         Width = 360,
                         Items = Enum.GetValues<OsuHubVisibility>(),
@@ -109,6 +116,15 @@ public partial class NativeHubSettingsPanel : CompositeDrawable
                     text("New plays only. Existing history is never shared automatically.", 12, AimModPalette.Muted),
                     text("Replay files and analysis are included when selected and available.", 12, AimModPalette.Muted),
                     preferenceStatus = text("", 12, AimModPalette.Muted),
+                }),
+                panel("Training", "Keep your practice history and progress on AimMod Hub.", new Drawable[]
+                {
+                    new OsuCheckbox { LabelText = "Sync new completed training sessions", Current = trainingSync, RelativeSizeAxes = Axes.X },
+                    new OsuCheckbox { LabelText = "Show new training sessions on my public profile", Current = trainingPublic, RelativeSizeAxes = Axes.X },
+                    text("Sessions are private unless public sharing is enabled.", 12, AimModPalette.Muted),
+                    text("Existing practice history stays local. Unsent sessions retry automatically.", 12, AimModPalette.Muted),
+                    trainingStatus = text("Training sync is off.", 12, AimModPalette.Muted),
+                    button("View training & sharing", () => openUrl?.Invoke(new Uri(deviceLinkClient?.BaseUri ?? OsuHubSyncClient.DefaultBaseUri, "osu/training")), 230, AimModPalette.PanelHover),
                 }),
                 panel("Uploads", "Recent shares and pending uploads.", new Drawable[]
                 {
@@ -132,6 +148,8 @@ public partial class NativeHubSettingsPanel : CompositeDrawable
         uploadReplayFile.BindValueChanged(_ => savePreferences());
         uploadAnalysis.BindValueChanged(_ => savePreferences());
         automaticSharing.BindValueChanged(_ => savePreferences());
+        trainingSync.BindValueChanged(_ => savePreferences());
+        trainingPublic.BindValueChanged(_ => savePreferences());
         minimumPp.BindValueChanged(_ => savePreferences());
         minimumAccuracy.BindValueChanged(_ => savePreferences());
         if (uploadQueue is not null)
@@ -362,7 +380,16 @@ public partial class NativeHubSettingsPanel : CompositeDrawable
     };
 
     internal HubSharingPreferences PreferencesForTesting => new(visibility.Value, uploadReplayFile.Value, uploadAnalysis.Value,
-        automaticSharing.Value, minimumPp.Value, minimumAccuracy.Value);
+        automaticSharing.Value, minimumPp.Value, minimumAccuracy.Value,
+        TrainingSyncEnabled: trainingSync.Value, TrainingPublicSharing: trainingPublic.Value);
+
+    protected override void Update()
+    {
+        base.Update();
+        if (Time.Current < nextTrainingStatusUpdate) return;
+        nextTrainingStatusUpdate = Time.Current + 1000;
+        trainingStatus.Text = TrainingStatus?.Invoke() ?? (trainingSync.Value ? "Training will sync after your next completed session." : "Training sync is off.");
+    }
 
     private static Container panel(string title, string subtitle, IReadOnlyList<Drawable> children) => new()
     {

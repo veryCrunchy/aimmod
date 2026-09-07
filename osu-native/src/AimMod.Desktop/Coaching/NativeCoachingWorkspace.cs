@@ -75,6 +75,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     private CancellationTokenSource? practiceLaunch;
     private ScheduledDelegate? scheduledPracticeRefresh;
     private ScheduledDelegate? scheduledAnalysisRefresh;
+    public IReadOnlyList<LocalReplay> PracticeSourceHistory => allReplays;
     private IReadOnlyList<LocalReplay> allReplays = Array.Empty<LocalReplay>();
     private IReadOnlyList<LocalReplay> replays = Array.Empty<LocalReplay>();
     private PracticeCandidatePage? renderedPracticePage;
@@ -90,7 +91,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     private readonly NativePracticeWorkspace? practiceWorkspace;
     private readonly Func<LocalReplay, CancellationToken, Task>? openBeatmap;
 
-    public void ClosePractice() { if (practiceWorkspace is not null) practiceWorkspace.Alpha = 0; }
+    public void ClosePractice() { if (practiceWorkspace is not null) { practiceWorkspace.Alpha = 0; if (practiceWorkspace.IsShowingSavedPractice) showCoachingPage(coachingMapId is null ? 3 : 4); } refreshPracticeProgress(); }
 
     public void FocusPracticeMap(string title)
     {
@@ -110,8 +111,10 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         Func<PracticeMapGenerationRequest, CancellationToken, Task<PracticeMapGenerationResult>>? generatePracticeMap = null,
         Func<LazerBeatmapArchive, CancellationToken, Task<LazerBeatmapInstallResult>>? installPracticeMap = null,
         NativePracticeWorkspace? practiceWorkspace = null,
-        Func<LocalReplay, CancellationToken, Task>? openBeatmap = null, CoachingTrainingStore? trainingStore = null)
+        Func<LocalReplay, CancellationToken, Task>? openBeatmap = null, CoachingTrainingStore? trainingStore = null, PracticeMapLibrary? practiceLibrary = null, Func<int>? accountId = null)
     {
+        this.practiceLibrary = practiceLibrary;
+        this.practiceAccountId = accountId ?? (() => 0);
         this.trainingStore = trainingStore;
         activeTraining = trainingStore?.Load();
         this.source = source ?? throw new ArgumentNullException(nameof(source));
@@ -128,89 +131,88 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
 
         RelativeSizeAxes = Axes.Both;
 
-        var content = new FillFlowContainer
-        {
-            RelativeSizeAxes = Axes.X,
-            AutoSizeAxes = Axes.Y,
-            Direction = FillDirection.Vertical,
-            Spacing = new(AimModVisualStyle.SectionSpacing),
-            Padding = new MarginPadding { Right = 8, Bottom = 40 },
+        var sessionContent = pageFlow();
+        sessionContent.Add(trainingHost = pageFlow());
+        var progressContent = pageFlow();
+        progressContent.Add(reviewHost = pageFlow());
+        coachingDetails = pageFlow();
+        CoachingButton? detailToggle = null;
+        detailToggle = new CoachingButton("Show detailed statistics", () => {
+            detailsOpen = !detailsOpen; coachingDetails.Alpha = detailsOpen ? 1 : 0;
+            detailToggle!.SetCaption(detailsOpen ? "Hide detailed statistics" : "Show detailed statistics");
+        });
+        progressContent.Add(detailToggle);
+        coachingDetails.Alpha = 0;
+        progressContent.Add(coachingDetails);
+        coachingDetails.Add(createSessionHeader(out headerArtwork, out sessionTitle, out sessionPlays,
+            out sessionDuration, out sessionAccuracy, out sessionTrend, coachingTimeRange));
+        coachingDetails.Add(analysisBanner = new AnalysisProgressBanner());
+        coachingDetails.Add(new CoachingColumns(
+            createPerformancePanel(out trendChart, out globalProfileSectionLine, out selectedRunHost, out exactAnalysisHost)
+                .With(panel => { panel.RelativeSizeAxes = Axes.X; panel.Height = 540; }),
+            createPracticePanel(out practiceHost, out practiceSectionLine, out practiceSearch,
+                practiceSort, practiceEvidence, practiceMinimumStars, practiceMaximumStars)
+                .With(panel => { panel.RelativeSizeAxes = Axes.X; panel.Height = 540; })));
+        coachingDetails.Add(createCoachPanel(out changesHost, out recommendationHost).With(panel => panel.Height = 410));
+        var playsContent = pageFlow();
+
+        playsContent.Add(search = new AimModTextBox {
+            RelativeSizeAxes = Axes.X, Height = AimModVisualStyle.ControlHeight, PlaceholderText = "Search maps, difficulties, artists or mods",
+        });
+        runList = pageFlow();
+        var savedContent = pageFlow();
+
+        savedContent.Add(savedPracticeSearch = new AimModTextBox {
+            RelativeSizeAxes = Axes.X, Height = AimModVisualStyle.ControlHeight, PlaceholderText = "Search saved maps and practice difficulties",
+        });
+        var savedActions = new FillFlowContainer<Drawable> {
+            RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Direction = FillDirection.Full, Spacing = new(8),
+            Children = [
+                new CoachingButton("Create a practice set", () => showCoachingPage(2), true, true),
+                new CoachingButton("Refresh results", () => { source.Invalidate(); load(); }, compact:true),
+                new AimModResetButton(() => savedPracticeSearch.Current.Value = string.Empty, "Clear search"),
+            ],
         };
-
-        content.Add(new AimModSubsectionHeader("Your next session", "One focus. A short practice block. A result you can check."));
-        content.Add(new StatisticsFilterBar { RelativeSizeAxes=Axes.X, Height=42,
-            Child=modDropdown=new ScoreModFilterDropdown(modSelection) { Width=.5f } });
-        content.Add(trainingHost = new FillFlowContainer<Drawable> { RelativeSizeAxes=Axes.X, AutoSizeAxes=Axes.Y,
-            Direction=FillDirection.Vertical, Spacing=new(12), Padding=new MarginPadding { Bottom=12 } });
-        content.Add(new AimModSubsectionHeader("Why this focus", "Your recent results and replay observations"));
-        content.Add(createSessionHeader(
-            out headerArtwork,
-            out sessionTitle,
-            out sessionPlays,
-            out sessionDuration,
-            out sessionAccuracy,
-            out sessionTrend,
-            coachingTimeRange));
-        content.Add(analysisBanner = new AnalysisProgressBanner());
-        if (practiceWorkspace is not null)
-            content.Add(new ActionButton("Practice workspace", () => practiceWorkspace.Open()));
-        content.Add(new GridContainer
-        {
-            RelativeSizeAxes = Axes.X,
-            Height = 540,
-            ColumnDimensions = new[]
-            {
-                new Dimension(GridSizeMode.Relative, 0.59f),
-                new Dimension(GridSizeMode.Relative, 0.41f),
-            },
-            Content = new[]
-            {
-                new Drawable[]
-                {
-                    createPerformancePanel(out trendChart, out globalProfileSectionLine, out selectedRunHost, out exactAnalysisHost),
-                    createPracticePanel(
-                        out practiceHost,
-                        out practiceSectionLine,
-                        out practiceSearch,
-                        practiceSort,
-                        practiceEvidence,
-                        practiceMinimumStars,
-                        practiceMaximumStars),
-                },
-            },
-        });
-        content.Add(new AimModSubsectionHeader(
-            "Supporting observations",
-            "Explore the patterns behind your session focus"));
-        content.Add(createCoachPanel(out changesHost, out recommendationHost).With(panel => panel.Height = 410));
-        content.Add(new AimModSubsectionHeader(
-            "Beatmap drill-down",
-            "Inspect a play or open its replay"));
-        content.Add(search = new OsuTextBox
-        {
-            RelativeSizeAxes = Axes.X,
-            Height = AimModVisualStyle.ControlHeight,
-            PlaceholderText = "Search beatmaps, difficulties, artists, players, or mods",
-        });
-        content.Add(runList = new FillFlowContainer<Drawable>
-        {
-            RelativeSizeAxes = Axes.X,
-            AutoSizeAxes = Axes.Y,
-            Direction = FillDirection.Vertical,
-            Spacing = new(AimModVisualStyle.RelatedSpacing),
-        });
-
-        InternalChildren = new Drawable[]
-        {
-            new AimModScrollContainer
-            {
-                RelativeSizeAxes = Axes.Both,
-                Depth = 10,
-                Child = content,
-            },
+        savedContent.Add(savedActions);
+        CoachingButton? archiveToggle = null;
+        archiveToggle = new CoachingButton("Show archived sets", () => {
+            showArchivedPractice = !showArchivedPractice;
+            archiveToggle!.SetCaption(showArchivedPractice ? "Show active sets" : "Show archived sets");
+            renderPracticeHistory();
+        }, compact: true);
+        savedActions.Add(archiveToggle);
+        savedContent.Add(practiceHistoryHost = pageFlow());
+        savedPracticeSearch.Current.BindValueChanged(_ => renderPracticeHistory());
+        coachingPages = new[] { sessionContent, progressContent, playsContent, savedContent, mapDetailHost = pageFlow() }
+            .Select(body => new AimModScrollContainer { RelativeSizeAxes = Axes.Both, Child = body, Alpha = 0 }).ToArray();
+        pageNavigation = new FillFlowContainer<Drawable> {
+            AutoSizeAxes = Axes.Both, Direction = FillDirection.Horizontal, Spacing = new(8), Y = 72, Anchor = Anchor.TopLeft, Origin = Anchor.TopLeft,
+        };
+        navigationButtons = new[] { "Practice plan", "Review results", "Find a map", "My coaching", "Beatmap" }
+            .Select((name, index) => new CoachingButton(name, () => showCoachingPage(index), compact: true)).ToArray();
+        foreach (int index in new[] { 2, 3 }) pageNavigation.Add(navigationButtons[index]);
+        coachingFilters = new GridContainer {
+            Width = 350, Height = 40, Depth = -20,
+            ColumnDimensions = [new Dimension(GridSizeMode.Relative, .52f), new Dimension(GridSizeMode.Relative, .48f)],
+            Content = new[] { new Drawable[] {
+                new StatisticsFilterBar { RelativeSizeAxes = Axes.Both,
+                    Child = modDropdown = new ScoreModFilterDropdown(modSelection) },
+                new TimeRangeDropdown { RelativeSizeAxes = Axes.X, Width = .95f,
+                    Items = Enum.GetValues<CoachingTimeRange>(), Current = coachingTimeRange }
+            } },
+        };
+        playsContent.Add(coachingFilters);
+        playsContent.Add(runList);
+        renderPracticeHistory();
+        InternalChildren = [
+            new AimModSectionHeader("Coaching", "Build a practice plan and track your progress.") { Width = 1 },
+            new Container { RelativeSizeAxes = Axes.Both, Padding = new MarginPadding { Top = 120 },
+                Children = coachingPages },
+            pageNavigation,
             loadingOverlay = new AimModLoadingOverlay(),
-        };
+        ];
         if (practiceWorkspace is not null) AddInternal(practiceWorkspace);
+        showCoachingPage(2);
 
         practiceSearch.Current.BindValueChanged(_ => updatePracticeMapsImmediately());
         practiceSort.BindValueChanged(_ => updatePracticeMapsImmediately());
@@ -226,6 +228,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         base.LoadComplete();
         search.OnCommit += (_, _) => refreshRunList();
         load();
+        if (practiceLibrary is not null) _ = watchPracticeScores(practiceTrackingLifetime.Token);
     }
 
     private void load()
@@ -292,6 +295,8 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     private void apply(IReadOnlyList<LocalReplay> nextReplays)
     {
         allReplays = nextReplays;
+        practiceWorkspace?.SetSourceHistory(nextReplays);
+        refreshPracticeProgress();
         modDropdown.SetScores(nextReplays);
         workspace = buildWorkspace();
         replays = workspace.History;
@@ -307,6 +312,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     {
         workspace = buildWorkspace(scoreId);
         updateWorkspace();
+        showCoachingPage(1);
     }
 
     private void showGlobalOverview()
@@ -511,7 +517,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             practiceHost.Add(new PracticeEmptyState(
                 acceptingAnalysisProgress ? "Finding your weakest patterns" : "More replay evidence needed",
                 acceptingAnalysisProgress
-                    ? "Practice candidates will appear as repeated misses are confirmed."
+                    ? "Practice maps will appear as timing patterns and missed sections are found."
                     : "Play or import saved replays to identify repeatable jump and stream sections."));
             return;
         }
@@ -786,44 +792,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             AimModPalette.Muted));
     }
 
-    private void updateTraining(NativeCoachingWorkspaceModel model)
-    {
-        trainingHost.Clear();
-        if(trainingSaveFailed) trainingHost.Add(flow("Session could not be saved. Keep AimMod open to continue tracking it.",12,AimModPalette.Pink));
-        var plan=activeTraining ?? CoachingTrainingPlanner.Build(model);
-        if(plan is null) {
-            trainingHost.Add(flow("Start with three complete plays on a comfortable map, using the same mods and rate. Return here to choose a focus from those results.",16,AimModPalette.Text));
-            trainingHost.Add(new ActionButton("Refresh scores", () => { load(); }));
-            return;
-        }
-        trainingHost.Add(label(plan.Focus,24,AimModPalette.Text,"Bold"));
-        trainingHost.Add(flow(plan.Why,13,AimModPalette.Muted));
-        trainingHost.Add(flow(plan.Cue,15,AimModPalette.Text));
-        trainingHost.Add(flow($"{plan.TargetTitle} [{plan.Difficulty}]  ·  {plan.ModLabel}",13,AimModPalette.Cyan));
-        trainingHost.Add(flow(plan.BaselineCount<3 ? "Goal: finish three plays to establish your baseline."
-            : $"Goal: two completed plays at {plan.TargetAccuracy:P2} or better, with at most {plan.TargetMisses} {(plan.TargetMisses == 1 ? "miss" : "misses")}.",15,AimModPalette.Success));
-        trainingHost.Add(flow(plan.BaselineCount<3
-            ? "1 · Warm up on an easier map.\n2 · Complete three plays on this map with the same mods and rate.\n3 · Refresh your scores, then build the next session from your results."
-            : "1 · Warm up for 5 minutes on an easier map.\n2 · Practise the troublesome section for 10 minutes; change one thing at a time.\n3 · Return to the original mods and rate for two full plays. Stop after four attempts if the target is still out of reach.",13,AimModPalette.Muted));
-        var run=allReplays.FirstOrDefault(r=>r.ScoreId==plan.TargetScoreId);
-        var actions=new FillFlowContainer<Drawable> { RelativeSizeAxes=Axes.X, AutoSizeAxes=Axes.Y, Direction=FillDirection.Full, Spacing=new(8) };
-        if(activeTraining is null) actions.Add(new ActionButton("Start session",()=> {
-            activeTraining=plan with { StartedAt=DateTimeOffset.UtcNow };
-            saveTraining(); updateTraining(model);
-        }));
-        else {
-            var review=CoachingTrainingPlanner.Review(plan,allReplays);
-            trainingHost.Add(flow(review.Message,14,review.Complete ? AimModPalette.Success : AimModPalette.Cyan));
-            actions.Add(new ActionButton("Review new plays",()=> { load(); }));
-            actions.Add(new ActionButton(review.Complete ? "Next session" : "Reset session",()=> { activeTraining=null;saveTraining();updateTraining(model); }));
-        }
-        if(run is not null) {
-            actions.Add(new OpenBeatmapButton(()=>run,openBeatmap));
-            if(practiceWorkspace is not null) actions.Add(new ActionButton("Configure drill",()=>FocusPracticeMap(run.Title)));
-            if(run.HasReplayFile) actions.Add(new ActionButton("Review baseline replay",()=>openReplay(run)));
-        }
-        trainingHost.Add(actions);
-    }
+    private void updateTraining(NativeCoachingWorkspaceModel model) => renderSession(model);
 
     private void saveTraining() {
         try { trainingStore?.Save(activeTraining); trainingSaveFailed=false; }
@@ -903,30 +872,27 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     private void refreshRunList()
     {
         runList.Clear();
-        CoachingRunPage page = CoachingRunSearch.Search(replays, new CoachingRunQuery(
+        CoachingRunPage page = CoachingRunSearch.Search(replays.Where(eligibleForCoaching).ToArray(), new CoachingRunQuery(
             SearchText: search.Current.Value,
             Sort: CoachingRunSort.Recent,
             Limit: visible_run_limit));
+        runList.Add(new Container { RelativeSizeAxes = Axes.X, Height = 32, Children = [
+            flow($"{page.Items.Count} recent plays shown",12,AimModPalette.Muted),
+            new AimModResetButton(() => { search.Current.Value = string.Empty; modSelection.Value = ScoreMods.Any; coachingTimeRange.Value = CoachingTimeRange.All; }) { Anchor = Anchor.TopRight, Origin = Anchor.TopRight },
+        ] });
         if (page.Items.Count == 0)
         {
-            runList.Add(flow("No account scores match this search.", 14, AimModPalette.Muted).With(text => text.Padding = new MarginPadding(18)));
+            runList.Add(flow("No completed plays match these filters. Try a wider date range or play a map with at least 70% accuracy.", 14, AimModPalette.Muted).With(text => text.Padding = new MarginPadding(18)));
             return;
         }
 
-        Guid? selectedId = workspace?.SelectedRun?.ScoreId;
-        foreach (CoachingRecentRun run in page.Items)
+        foreach (CoachingRecentRun item in page.Items)
         {
-            runList.Add(new RunPickerRow(run, run.ScoreId == selectedId, () => selectRun(run.ScoreId)));
-            var replay = replays.FirstOrDefault(item => item.ScoreId == run.ScoreId);
-            if (replay is not null) runList.Add(new OpenBeatmapButton(() => replay, openBeatmap));
-        }
-
-        if (page.HasMore)
-        {
-            runList.Add(label(
-                $"Showing the newest {page.Items.Count:N0} of {page.Total:N0} matching runs. Refine the search to find older plays.",
-                11,
-                AimModPalette.Muted).With(text => text.Padding = new MarginPadding(12)));
+            var replay = replays.FirstOrDefault(r => r.ScoreId == item.ScoreId);
+            if (replay is null) continue;
+            runList.Add(new CoachingMapRow(replay.Title, replay.Difficulty,
+                $"{replay.Accuracy:P2} accuracy  ·  {replay.MissCount} misses  ·  {ScoreMods.Display(replay)}  ·  {replay.PlayedAt.ToLocalTime():dd MMM, HH:mm}",
+                "Open coaching", () => chooseCoachingRun(replay.ScoreId)));
         }
     }
 
@@ -1034,6 +1000,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                 },
             },
         };
+        header.Remove(header.Children.Last(), true); // The shared toolbar owns the time-range filter.
         return header;
     }
 
@@ -1126,10 +1093,10 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         panel.Child = body;
         body.Add(section = new SectionLine("Practice map builder", "Finding maps"));
         body.Add(flow(
-            "Generate a focused drill from the map sections where your misses repeat.",
+            "Practise a section with timing trouble or repeated misses.",
             11,
             AimModPalette.Muted));
-        body.Add(search = new OsuTextBox
+        body.Add(search = new AimModTextBox
         {
             RelativeSizeAxes = Axes.X,
             Height = AimModVisualStyle.CompactControlHeight,
@@ -1363,6 +1330,8 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
 
     protected override void Dispose(bool isDisposing)
     {
+        practiceTrackingLifetime.Cancel();
+        practiceTrackingLifetime.Dispose();
         scheduledAnalysisRefresh?.Cancel();
         loading?.Cancel();
         loading?.Dispose();
@@ -1902,7 +1871,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         public void SetDetail(string value) => Detail = value;
     }
 
-    private sealed partial class PracticeDropdown<T> : OsuDropdown<T>
+    private sealed partial class PracticeDropdown<T> : AimModDropdown<T>
         where T : struct, Enum
     {
         private readonly Func<T, string> formatter;
@@ -1915,7 +1884,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         protected override LocalisableString GenerateItemText(T item) => formatter(item);
     }
 
-    private sealed partial class TimeRangeDropdown : OsuDropdown<CoachingTimeRange>
+    private sealed partial class TimeRangeDropdown : AimModDropdown<CoachingTimeRange>
     {
         protected override LocalisableString GenerateItemText(CoachingTimeRange item) => TimeRangeLabel(item);
     }

@@ -79,7 +79,13 @@ public sealed class NativePpTargetsWorkspaceTests
         Assert.That(pass.Passed, Is.True);
         Assert.That(pass.Bpm, Is.EqualTo(map.Bpm));
         Assert.That(pass.LengthSeconds, Is.EqualTo(125));
-        Assert.That(PpTargetSkillHistory.PassHistory([local], [], saved.LocalSets).Single().Passed, Is.Null);
+        Assert.That(PpTargetSkillHistory.PassHistory([local], [], saved.LocalSets).Single().Passed, Is.True);
+        Assert.That(PpTargetSkillHistory.PassHistory([local with { Passed = false }], [], saved.LocalSets).Single().Passed, Is.False);
+        Assert.That(PpTargetSkillHistory.PassHistory([local with { Origin = LocalLibraryOrigin.Stable, LegacyScore = true }], [], saved.LocalSets).Single().Passed, Is.Null);
+        var bestOnly = online with { Provenance = ScoreHistoryProvenance.OnlineBest };
+        var displayAdapters = PpTargetSkillHistory.Merge([], [bestOnly], saved.LocalSets);
+        var opportunity = PpTargetOpportunityModel.Build(PpTargetSkillHistory.PassHistory(displayAdapters, [bestOnly], saved.LocalSets));
+        Assert.That(opportunity.RecentAttempts, Is.Empty, "Online best-score display adapters must not become local attempt evidence.");
     }
 
     [Test]
@@ -124,16 +130,16 @@ public sealed class NativePpTargetsWorkspaceTests
     }
 
     [Test]
-    public async Task BroadCalculationVisitsAllBatchesNotOnlyFirstFifty()
+    public async Task BroadCalculationVisitsAllBatchesWithFewerWorkerStarts()
     {
         var source = new InMemoryLocalLibrarySource([], []);
         using var workspace = new NativePpTargetsWorkspace(source, () => null, () => null);
         var calculator = new RecordingCalculator();
-        var requests = Enumerable.Range(1, 123).Select(id => new PpTargetExactRequest(id, null, [], .95, .8)).ToArray();
+        var requests = Enumerable.Range(1, 423).Select(id => new PpTargetExactRequest(id, null, [], .95, .8)).ToArray();
         var method = typeof(NativePpTargetsWorkspace).GetMethod("calculateExactAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
         await (Task)method.Invoke(workspace, [calculator, requests, CancellationToken.None])!;
-        Assert.That(calculator.BatchSizes, Is.EqualTo(new[] { 50, 50, 23 }));
-        Assert.That(calculator.Ids.Distinct().Count(), Is.EqualTo(123));
+        Assert.That(calculator.BatchSizes, Is.EqualTo(new[] { 200, 200, 23 }));
+        Assert.That(calculator.Ids.Distinct().Count(), Is.EqualTo(423));
     }
 
     private sealed class RecordingCalculator : IPpTargetExactCalculationService
@@ -157,10 +163,10 @@ public sealed class NativePpTargetsWorkspaceTests
         using var cancellation = new CancellationTokenSource();
         using var workspace = new NativePpTargetsWorkspace(new InMemoryLocalLibrarySource([], []), () => null, () => null);
         var calculator = new RecordingCalculator { OnBatch = cancellation.Cancel };
-        var requests = Enumerable.Range(1, 123).Select(id => new PpTargetExactRequest(id, null, [], .95, .8)).ToArray();
+        var requests = Enumerable.Range(1, 423).Select(id => new PpTargetExactRequest(id, null, [], .95, .8)).ToArray();
         var method = typeof(NativePpTargetsWorkspace).GetMethod("calculateExactAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
         await (Task)method.Invoke(workspace, [calculator, requests, cancellation.Token])!;
-        Assert.That(calculator.BatchSizes, Is.EqualTo(new[] { 50 }));
+        Assert.That(calculator.BatchSizes, Is.EqualTo(new[] { 200 }));
     }
 
     [Test]
@@ -191,6 +197,8 @@ public sealed class NativePpTargetsWorkspaceTests
 
     [TestCase(4)]
     [TestCase(7)]
+    [TestCase(8)]
+    [TestCase(9)]
     public async Task OldSmallPoolCacheIsInvalidatedAndPartialStatusRoundTrips(int oldVersion)
     {
         string path = Path.Combine(temporaryDirectory, "workspace.json");
@@ -198,7 +206,7 @@ public sealed class NativePpTargetsWorkspaceTests
         await cache.SaveAsync(snapshot() with { CatalogScanStatus = "Partial catalog: page limit reached." });
         Assert.That(cache.Load()!.CatalogScanStatus, Is.EqualTo("Partial catalog: page limit reached."));
         var document = System.Text.Json.Nodes.JsonNode.Parse(await File.ReadAllTextAsync(path))!;
-        Assert.That(document["version"]!.GetValue<int>(), Is.EqualTo(8));
+        Assert.That(document["version"]!.GetValue<int>(), Is.EqualTo(10));
         document["version"] = oldVersion;
         await File.WriteAllTextAsync(path, document.ToJsonString());
         Assert.That(cache.Load(), Is.Null);

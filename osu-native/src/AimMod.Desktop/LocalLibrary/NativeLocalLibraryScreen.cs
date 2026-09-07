@@ -107,7 +107,7 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
                 Font = new FontUsage(size: 10, weight: "Bold"),
                 Colour = AimModPalette.Cyan,
             },
-            searchBox = new OsuTextBox
+            searchBox = new AimModTextBox
             {
                 RelativeSizeAxes = Axes.X,
                 Width = 0.43f,
@@ -137,7 +137,7 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
                 Font = new FontUsage(size: 10, weight: "Bold"),
                 Colour = AimModPalette.Cyan,
             },
-            sortDropdown = new OsuDropdown<LocalLibrarySort>
+            sortDropdown = new AimModDropdown<LocalLibrarySort>
             {
                 Anchor = Anchor.TopRight,
                 Origin = Anchor.TopRight,

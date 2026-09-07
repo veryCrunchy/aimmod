@@ -26,8 +26,8 @@ public interface IPpTargetExactCalculationService
 public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationService
 {
     private const int cache_version = 5;
-    private const int maximum_batch_size = 50;
-    private const int maximum_cache_entries = 2_048;
+    private const int maximum_batch_size = 200;
+    private const int maximum_cache_entries = 16_384;
     private static readonly JsonSerializerOptions json_options = new(JsonSerializerDefaults.Web);
 
     private readonly string libraryRoot;
@@ -95,6 +95,7 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
             return new Dictionary<int, PpTargetEstimate>();
 
         await calculationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        int pendingCacheWrites = 0;
         try
         {
             var completed = new Dictionary<int, PpTargetEstimate>();
@@ -251,8 +252,12 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
                     {
                         cache[key] = new CacheEntry(key, DateTimeOffset.UtcNow, estimate);
                         completed[request.BeatmapId] = estimate;
-                        // Preserve completed work even if another difficulty is cancelled.
-                        await trySaveCacheAsync().ConfigureAwait(false);
+                        // Checkpoint periodically; the outer finally also flushes on cancellation.
+                        if (++pendingCacheWrites >= 25)
+                        {
+                            await trySaveCacheAsync().ConfigureAwait(false);
+                            pendingCacheWrites = 0;
+                        }
                     }
                     finally { resultGate.Release(); }
                 }
@@ -277,7 +282,8 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
         }
         finally
         {
-            calculationGate.Release();
+            try { if (pendingCacheWrites > 0) await trySaveCacheAsync().ConfigureAwait(false); }
+            finally { calculationGate.Release(); }
         }
     }
 

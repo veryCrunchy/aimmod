@@ -1,18 +1,35 @@
 using AimMod.Desktop.ScoreHistory;
+using AimMod.Desktop.LocalLibrary;
+using System.Runtime.CompilerServices;
 
 namespace AimMod.Desktop.PpTargets;
 
 public sealed record PpTargetBestPlay(int BeatmapId, double Pp);
 public sealed record PpTargetPassSample(int BeatmapId, DateTimeOffset PlayedAt, double Stars,
-    double? Bpm, int? LengthSeconds, string Mods, bool Passed, Guid? LocalBeatmapId = null);
+    double? Bpm, int? LengthSeconds, string Mods, bool Passed, Guid? LocalBeatmapId = null,
+    double? Accuracy = null, string ModsJson = "");
 public sealed record PpTargetOpportunityProfile(DateTimeOffset AsOf, IReadOnlyList<PpTargetBestPlay> BestPlays,
     IReadOnlyList<PpTargetPassSample> RecentAttempts);
 public sealed record PpTargetPassEstimate(double Probability, double Lower, double Upper, int Attempts, int Maps,
     bool BroaderComparison = false, PpTargetConfidence Confidence = PpTargetConfidence.Low,
-    bool DurationAdjusted = false);
+    bool DurationAdjusted = false, bool SameMap = false, double? ConditionalAccuracy = null);
 
 public static class PpTargetOpportunityModel
 {
+    private static readonly ConditionalWeakTable<PpTargetOpportunityProfile, AttemptIndex> indexes = new();
+    private sealed class AttemptIndex
+    {
+        private readonly Dictionary<string, PpTargetPassSample[]> bySetup;
+        public AttemptIndex(PpTargetOpportunityProfile profile)
+        {
+            bySetup = profile.RecentAttempts.Where(s => s.PlayedAt <= profile.AsOf
+                    && s.PlayedAt >= profile.AsOf.AddDays(-30) && double.IsFinite(s.Stars) && s.Stars > 0)
+                .GroupBy(s => ScoreMods.Configuration(s.Mods.Split(',', StringSplitOptions.RemoveEmptyEntries), s.ModsJson, PpTargetMods.NormaliseOne))
+                .ToDictionary(g => g.Key, g => g.ToArray(), StringComparer.Ordinal);
+        }
+        public PpTargetPassSample[] For(IReadOnlyList<string> mods, string? json) =>
+            bySetup.GetValueOrDefault(ScoreMods.Configuration(mods, json, PpTargetMods.NormaliseOne)) ?? [];
+    }
     public static PpTargetOpportunityProfile Build(IEnumerable<ScoreHistoryEntry> scores, DateTimeOffset? now = null)
     {
         DateTimeOffset reference = now ?? DateTimeOffset.UtcNow;
@@ -30,7 +47,8 @@ public static class PpTargetOpportunityModel
                 && s.Passed is not null && s.PlayedAt <= reference && s.PlayedAt >= reference.AddDays(-30)
                 && double.IsFinite(s.StarRating) && s.StarRating > 0)
             .Select(s => new PpTargetPassSample(s.OnlineBeatmapId, s.PlayedAt, s.StarRating, s.Bpm,
-                s.LengthSeconds, modKey(s.Mods), s.Passed!.Value, s.OnlineBeatmapId > 0 ? null : s.LocalBeatmapId)).ToArray();
+                s.LengthSeconds, modKey(s.Mods), s.Passed!.Value, s.OnlineBeatmapId > 0 ? null : s.LocalBeatmapId,
+                double.IsFinite(s.Accuracy) && s.Accuracy is >= 0 and <= 1 ? s.Accuracy : null, s.ModsJson)).ToArray();
         return new(reference, best, attempts);
     }
 
@@ -49,13 +67,25 @@ public static class PpTargetOpportunityModel
     }
 
     public static PpTargetPassEstimate? EstimatePass(PpTargetOpportunityProfile? profile,
-        double stars, double bpm, int seconds, IReadOnlyList<string> mods)
+        double stars, double bpm, int seconds, IReadOnlyList<string> mods, int beatmapId = 0, string? modsJson = null)
     {
         if (profile is null || !double.IsFinite(stars) || stars <= 0 || seconds <= 0) return null;
         string key = modKey(mods);
-        if (key.Split(',').Any(m => m is "NF" or "SD" or "PF" or "RX" or "AP" or "AT")) return null;
-        var eligible = profile.RecentAttempts.Where(s => s.Mods == key && s.PlayedAt <= profile.AsOf
-            && s.PlayedAt >= profile.AsOf.AddDays(-30) && double.IsFinite(s.Stars) && s.Stars > 0).ToArray();
+        if (key.Split(',').Any(m => m is "NF" or "SD" or "PF" or "RX" or "AP" or "AT" or "CN")) return null;
+        var eligible = indexes.GetValue(profile, p => new AttemptIndex(p)).For(mods, modsJson);
+        // Multiple attempts of this difficulty are more relevant than pooled neighbouring maps.
+        // Best-score feeds remain excluded: they cannot establish attempt frequency.
+        var direct = eligible.Where(s => beatmapId > 0 && s.BeatmapId == beatmapId).ToArray();
+        if (direct.Length >= 3)
+        {
+            double directSuccesses = direct.Count(s => s.Passed);
+            double directProbability = (directSuccesses + 1) / (direct.Length + 2);
+            var interval = wilson(directProbability, direct.Length + 2);
+            double[] accuracy = direct.Where(s => s.Passed && s.Accuracy is not null).Select(s => s.Accuracy!.Value).Order().ToArray();
+            return new(directProbability, interval.Lower, interval.Upper, direct.Length, 1,
+                Confidence: PpTargetConfidence.Low, SameMap: true,
+                ConditionalAccuracy: accuracy.Length >= 2 ? PpTargetPreferenceProfiler.percentile(accuracy, .5) : null);
+        }
         var nearby = eligible.Where(s => Math.Abs(s.Stars - stars) <= 0.75
                 && s.LengthSeconds is > 0 && s.Bpm is > 0 && double.IsFinite(s.Bpm.Value)
                 && Math.Abs(Math.Log((double)seconds / s.LengthSeconds.Value)) <= Math.Log(1.6)
@@ -127,8 +157,21 @@ public static class PpTargetOpportunityModel
             // Widen uncertainty for the unobserved stamina requirement.
             lower = Math.Pow(lower, durationRatio * 1.5);
         }
+        var passedMaps = balanced.Where(s => s.Sample.Passed && s.Sample.Accuracy is not null)
+            .GroupBy(s => mapKey(s.Sample)).Select(g => g.OrderByDescending(s => s.Sample.PlayedAt).First().Sample.Accuracy!.Value)
+            .Order().ToArray();
         return new(probability, lower, upper, nearby.Length, maps,
-            broader, !broader && weight >= 6 ? PpTargetConfidence.Medium : PpTargetConfidence.Low, durationAdjusted);
+            broader, !broader && weight >= 6 ? PpTargetConfidence.Medium : PpTargetConfidence.Low, durationAdjusted,
+            ConditionalAccuracy: passedMaps.Length >= 3 ? PpTargetPreferenceProfiler.percentile(passedMaps, .5) : null);
+    }
+
+    private static (double Lower, double Upper) wilson(double probability, double n)
+    {
+        const double z = 1.96;
+        double denominator = 1 + z * z / n;
+        double centre = (probability + z * z / (2 * n)) / denominator;
+        double margin = z * Math.Sqrt(probability * (1 - probability) / n + z * z / (4 * n * n)) / denominator;
+        return (Math.Max(0, centre - margin), Math.Min(1, centre + margin));
     }
 
     private static double weighted(IEnumerable<double> pp, int count) => pp.OrderDescending().Take(count)

@@ -5,6 +5,7 @@ using System.Runtime.Versioning;
 using AimMod.Desktop.Coaching;
 using AimMod.Desktop.LocalLibrary;
 using AimMod.Desktop.Practice;
+using AimMod.Desktop.Trainers;
 using AimMod.Desktop.PpTargets;
 using AimMod.Desktop.Visuals;
 using AimMod.Osu.Runtime;
@@ -34,6 +35,8 @@ public sealed partial class OffscreenVisualCaptureTests
     [TestCase("skins", 1100, 760)]
     [TestCase("settings", 1100, 760)]
     [TestCase("settings", 1600, 900)]
+    [TestCase("settings-training", 1100, 760)]
+    [TestCase("settings-training", 1600, 900)]
     [TestCase("replays", 1100, 760)]
     [TestCase("replays-analysis", 1600, 900)]
     [TestCase("statistics", 1100, 760)]
@@ -53,8 +56,36 @@ public sealed partial class OffscreenVisualCaptureTests
     [TestCase("ppTargets", 1600, 900)]
     [TestCase("ppTargets-populated", 1100, 760)]
     [TestCase("ppTargets-populated", 1600, 900)]
+    [TestCase("ppTargets-menu", 1600, 900)]
+    [TestCase("ppTargets-menu", 800, 760)]
+    [TestCase("ppTargets-evidence", 1600, 900)]
+    [TestCase("ppTargets-evidence", 800, 760)]
     [TestCase("ppTargets-details", 1100, 760)]
     [TestCase("ppTargets-details", 800, 760)]
+    [TestCase("trainers", 1600, 900)]
+    [TestCase("trainers", 800, 760)]
+    [TestCase("trainers-aim", 1600, 900)]
+    [TestCase("trainers-aim", 800, 760)]
+    [TestCase("trainers-skill", 800, 760)]
+    [TestCase("trainers-skill", 1600, 900)]
+    [TestCase("trainers-skill-playing", 1600, 900)]
+    [TestCase("trainers-pattern-menu", 800, 760)]
+    [TestCase("trainers-pattern-menu", 1600, 900)]
+    [TestCase("trainers-slider-menu", 800, 760)]
+    [TestCase("trainers-sliders", 1600, 900)]
+    [TestCase("trainers-length-menu", 800, 760)]
+    [TestCase("trainers-length-menu", 1600, 900)]
+    [TestCase("trainers-song-menu", 800, 760)]
+    [TestCase("trainers-music", 1600, 900)]
+    [TestCase("trainers-song", 1600, 900)]
+    [TestCase("trainers-song-picker", 800, 760)]
+    [TestCase("trainers-playing", 1600, 900)]
+    [TestCase("trainers-reading", 800, 760)]
+    [TestCase("trainers-results", 1600, 900)]
+    [TestCase("trainers-stop", 1600, 900)]
+    [TestCase("trainers-history", 1600, 900)]
+    [TestCase("trainers-history", 800, 760)]
+    [TestCase("trainers-controls", 800, 760)]
     [TestCase("loading", 1100, 760)]
     [Explicit("Creates a real graphics device and writes a visual-review artifact.")]
     [SupportedOSPlatform("windows")]
@@ -68,7 +99,7 @@ public sealed partial class OffscreenVisualCaptureTests
             "visual-captures",
             $"aimmod-{route}-{width}x{height}.png");
 
-        InMemoryLocalLibrarySource source = route.EndsWith("-populated", StringComparison.Ordinal)
+        InMemoryLocalLibrarySource source = route is "trainers-song-picker" or "trainers-song-menu" || route.EndsWith("-populated", StringComparison.Ordinal)
                                             || route.StartsWith("coaching-", StringComparison.Ordinal)
                                             && !string.Equals(route, "coaching-empty", StringComparison.Ordinal)
                                             || string.Equals(route, "replays-analysis", StringComparison.Ordinal)
@@ -82,7 +113,7 @@ public sealed partial class OffscreenVisualCaptureTests
         await WindowsPrivateDesktopCapture.CaptureAsync(
             (host, succeeded, failed) => route switch
             {
-                "ppTargets" or "ppTargets-populated" or "ppTargets-details" => new CapturePpTargetsGame(host, ppCache!, outputPath, width, height, succeeded, failed, route == "ppTargets-details"),
+                "ppTargets" or "ppTargets-populated" or "ppTargets-details" or "ppTargets-menu" or "ppTargets-evidence" => new CapturePpTargetsGame(host, ppCache!, outputPath, width, height, succeeded, failed, route == "ppTargets-details"),
                 "beatmaps-populated" => new CaptureBeatmapGame(host, source, outputPath, width, height, succeeded, failed),
                 "statistics-mods" => new CaptureStatisticsGame(host, source, outputPath, width, height, succeeded, failed),
                 "statistics-populated" => new CaptureStatisticsGame(host, source, outputPath, width, height, succeeded, failed),
@@ -209,6 +240,7 @@ public sealed partial class OffscreenVisualCaptureTests
     private static async Task<PpTargetWorkspaceCache> createPpTargetCaptureCache(string outputPath)
     {
         var now = DateTimeOffset.UtcNow;
+        bool evidenceComparison = outputPath.Contains("ppTargets-evidence", StringComparison.Ordinal);
         const string identity = "private-desktop-pp-pattern-fixture";
         var features = new PpPatternFeatures { PointCount = 600, TransitionCount = 599, JumpDistance = 210, StreamFraction = 0.3, HitRadius = 32, ClockRate = 1 };
         PpPatternEvidence[] evidence = Enumerable.Range(0, 12).Select(i => new PpPatternEvidence(
@@ -230,6 +262,8 @@ public sealed partial class OffscreenVisualCaptureTests
             Confidence = PpTargetConfidence.High,
             PerformanceSamples = Enumerable.Range(0, 24).Select(i => new PpTargetPerformanceSample(4.5 + i * 0.07, 120 + i * 5, 0.975)).ToArray(),
             PatternProfile = new(identity, now, 30, evidence),
+            Opportunities = new(now, [new(999999, 150)], Enumerable.Range(1, 16)
+                .Select(i => new PpTargetPassSample(800000 + i, now.AddDays(-1), 5.2, 190, 200, "", i <= 12, Accuracy: .972)).ToArray()),
         };
         var estimates = new Dictionary<int, PpTargetEstimate>();
         OfficialBeatmapSet[] catalog = Enumerable.Range(0, 8).Select(i =>
@@ -246,13 +280,20 @@ public sealed partial class OffscreenVisualCaptureTests
             estimates[beatmapId] = new(185 + i * 21, 276 + i * 29, new(170 + i * 21, 202 + i * 21), 24,
                 PpTargetConfidence.High, "Official osu! ruleset / fixture", BeatmapId: beatmapId,
                 PatternPrediction: prediction, PatternProfileIdentity: identity);
+            if (evidenceComparison && i >= 2)
+            {
+                difficulty = difficulty with { StarRating = 10.36, Bpm = 230, TotalLengthSeconds = 359 };
+                estimates[beatmapId] = new(969, 1596, new(562, 1376), 0, PpTargetConfidence.Low,
+                    "Official osu! ruleset / fixture", BeatmapId: beatmapId, PatternProfileIdentity: identity);
+            }
             return new OfficialBeatmapSet(920_000 + i,
                 new[] { "A Long Journey Beyond the Horizon (Extended Version)", "Blue Zenith", "Hana ni Natte", "Sidetracked Day", "RE:RE:RE:START", "Parousia", "Light", "Redemption" }[i],
                 "", "Camellia featuring a deliberately long guest artist credit", "", "Mapper with a long display name", "Original", "ranked",
                 now.AddDays(-i), now, 850_000, 42_000, false, false, null, null, null, null, [difficulty]);
         }).ToArray();
         var cache = new PpTargetWorkspaceCache(Path.ChangeExtension(outputPath, ".fixture.json"));
-        await cache.SaveAsync(new(now, profile, [], catalog, estimates, 100, "", "", 4, 7, OfficialBeatmapCategory.Ranked));
+        await cache.SaveAsync(new(now, profile, [], catalog, estimates, 100, "", "", 4, evidenceComparison ? 11 : 7,
+            OfficialBeatmapCategory.Ranked, Sort: evidenceComparison ? "ExpectedPp" : "BestFit"));
         Assert.That(cache.Load()?.ExactEstimates.Count, Is.EqualTo(8), "The populated snapshot must survive persistence.");
         return cache;
     }
@@ -323,7 +364,7 @@ public sealed partial class OffscreenVisualCaptureTests
             }
             else if (!string.Equals(route, "home", StringComparison.Ordinal))
             {
-                if (route == "settings")
+                if (route.StartsWith("settings", StringComparison.Ordinal))
                 {
                     Scheduler.AddDelayed(() =>
                     {
@@ -338,10 +379,245 @@ public sealed partial class OffscreenVisualCaptureTests
                 string routeName = route.Split('-', 2)[0];
                 MethodInfo routeMethod = typeof(AimModGame).GetMethod($"show{char.ToUpperInvariant(routeName[0])}{routeName[1..]}", BindingFlags.Instance | BindingFlags.NonPublic)
                                          ?? throw new InvalidOperationException($"Unknown capture route '{route}'.");
-                Scheduler.AddDelayed(() => routeMethod.Invoke(this, null), route == "settings" ? 1200 : 300);
+                Scheduler.AddDelayed(() => routeMethod.Invoke(this, null), route.StartsWith("settings", StringComparison.Ordinal) ? 1200 : 300);
+                if (route == "settings-training") Scheduler.AddDelayed(() =>
+                {
+                    var screen = (OsuClientSettingsScreen)typeof(AimModGame).GetField("settingsScreen", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(this)!;
+                    typeof(OsuClientSettingsScreen).GetMethod("showSettingsPage", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(screen, [1]);
+                    Scheduler.AddDelayed(() =>
+                    {
+                        var scroll = (AimModScrollContainer)typeof(osu.Framework.Graphics.Containers.CompositeDrawable).GetProperty("InternalChild", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(screen)!;
+                        scroll.ScrollTo(620, false);
+                    }, 200);
+                }, 1600);
             }
 
-            Scheduler.AddDelayed(capture, route == "settings" ? 3500 : 1800);
+            if (route is "trainers-song-picker" or "trainers-song-menu") Scheduler.AddDelayed(() =>
+            {
+                var workspace = (NativeTrainersWorkspace)typeof(AimModGame).GetField("trainersWorkspace", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(this)!;
+                ((AimModDropdown<string>)typeof(NativeTrainersWorkspace).GetField("musicSelector", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(workspace)!).Current.Value = "song";
+            }, 1000);
+
+            if (route is "trainers-aim" or "trainers-length-menu") Scheduler.AddDelayed(() =>
+            {
+                var workspace = (NativeTrainersWorkspace)typeof(AimModGame).GetField("trainersWorkspace", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(this)!;
+                workspace.SelectTrainer(TrainerKind.Aim);
+                ((AimModDropdown<TrainerAimStyle>)typeof(NativeTrainersWorkspace).GetField("aimStyleSelector", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(workspace)!).Current.Value = TrainerAimStyle.DirectionChanges;
+                if (route == "trainers-length-menu")
+                {
+                    var controls = (osu.Framework.Graphics.Drawable)typeof(NativeTrainersWorkspace).GetField("controls", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(workspace)!;
+                    var music = (osu.Framework.Graphics.Drawable)typeof(NativeTrainersWorkspace).GetField("musicControls", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(workspace)!;
+                    var menu = (osu.Framework.Graphics.Drawable)typeof(NativeTrainersWorkspace).GetField("durationSelector", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(workspace)!;
+                    float depth = controls.Depth;
+                    setTrainerMenu(menu, true); Assert.That(controls.Depth, Is.LessThan(music.Depth));
+                    setTrainerMenu(menu, false); Assert.That(controls.Depth, Is.EqualTo(depth));
+                    setTrainerMenu(menu, true);
+                }
+            }, 1200);
+            if (route == "trainers-skill") Scheduler.AddDelayed(() =>
+            {
+                var workspace=(NativeTrainersWorkspace)typeof(AimModGame).GetField("trainersWorkspace",BindingFlags.NonPublic|BindingFlags.Instance)!.GetValue(this)!;
+                workspace.SelectTrainer(TrainerKind.Alternating);
+                workspace.SkillEvidenceAccountId=7; workspace.CurrentSkillAccountId=()=>7;
+                workspace.SkillEvidence=Enumerable.Range(0,3).Select(i=>new TrainerSkillEvidence(Guid.NewGuid(),new(4,150,450,32))).ToArray();
+                var field=typeof(NativeTrainersWorkspace).GetField("settings",BindingFlags.NonPublic|BindingFlags.Instance)!;
+                field.SetValue(workspace,((TrainerSettings)field.GetValue(workspace)!) with {RandomizePatterns=true});
+                typeof(NativeTrainersWorkspace).GetMethod("refreshPatternToggle",BindingFlags.NonPublic|BindingFlags.Instance)!.Invoke(workspace,null);
+                workspace.RefreshHistory();
+                var summary=(osu.Game.Graphics.Containers.OsuTextFlowContainer)typeof(NativeTrainersWorkspace).GetField("skillSummary",BindingFlags.NonPublic|BindingFlags.Instance)!.GetValue(workspace)!;
+                Assert.That(summary.Alpha,Is.EqualTo(1));
+                var menu=(osu.Framework.Graphics.Drawable)typeof(NativeTrainersWorkspace).GetField("patternSelector",BindingFlags.NonPublic|BindingFlags.Instance)!.GetValue(workspace)!;
+                setTrainerMenu(menu,true);
+            },1200);
+            if (route is "trainers-pattern-menu" or "trainers-slider-menu") Scheduler.AddDelayed(() =>
+            {
+                var workspace = (NativeTrainersWorkspace)typeof(AimModGame).GetField("trainersWorkspace", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(this)!;
+                workspace.SelectTrainer(TrainerKind.Bursts);
+                string field = route == "trainers-pattern-menu" ? "patternSelector" : "sliderSelector";
+                var menu = (osu.Framework.Graphics.Drawable)typeof(NativeTrainersWorkspace).GetField(field, BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(workspace)!;
+                var row = (osu.Framework.Graphics.Drawable)typeof(NativeTrainersWorkspace).GetField("patternControls", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(workspace)!;
+                var below = (osu.Framework.Graphics.Drawable)typeof(NativeTrainersWorkspace).GetField("musicControls", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(workspace)!;
+                float depth = row.Depth;
+                setTrainerMenu(menu, true); Assert.That(row.Depth, Is.LessThan(below.Depth));
+                setTrainerMenu(menu, false); Assert.That(row.Depth, Is.EqualTo(depth));
+                setTrainerMenu(menu, true);
+            }, 1200);
+            if (route == "trainers-song-menu") Scheduler.AddDelayed(() =>
+            {
+                var workspace = (NativeTrainersWorkspace)typeof(AimModGame).GetField("trainersWorkspace", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(this)!;
+                var menu = (AimModDropdown<LocalReplay>)typeof(NativeTrainersWorkspace).GetField("songSelector", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(workspace)!;
+                Assert.That(menu.Items.Select(s => s.SetId).Distinct().Count(), Is.EqualTo(menu.Items.Count()));
+                setTrainerMenu(menu, true);
+            }, 1500);
+
+            if (route is "trainers-history" or "trainers-controls")
+            {
+                Scheduler.AddDelayed(() =>
+                {
+                    var trainer = (NativeTrainersWorkspace)typeof(AimModGame).GetField("trainersWorkspace", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(this)!;
+                    var store = ((Func<TrainerHistoryStore>)typeof(NativeTrainersWorkspace).GetField("history", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(trainer)!)();
+                    for (int i = 0; i < 6; i++)
+                        store.Add(new TrainerResult(Guid.NewGuid(), DateTimeOffset.UtcNow.AddMinutes(-10 + i), (TrainerSettings)typeof(NativeTrainersWorkspace).GetField("settings", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(trainer)!, 120, 118, 90 + i * 3,
+                            0, 0, -8 + i, 35 - i * 3, -2, Engine: "osu-moving-v2", Accuracy: 94 + i * .6));
+                    trainer.RefreshHistory();
+                    if (route == "trainers-controls")
+                    {
+                        trainer.ApplyOsuSettings(new TrainerOsuSettings("Z / X", 0, true, "osu!lazer"));
+                        var advancedButton = (AimModButton)typeof(NativeTrainersWorkspace).GetField("advancedToggle", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(trainer)!;
+                        advancedButton.Action.Invoke();
+                        var offset = (AimModDropdown<int>)typeof(NativeTrainersWorkspace).GetField("offsetSelector", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(trainer)!;
+                        var recent = (osu.Framework.Graphics.Containers.FillFlowContainer<osu.Framework.Graphics.Drawable>)typeof(NativeTrainersWorkspace).GetField("recent", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(trainer)!;
+                        offset.Current.Value = 10;
+                        Assert.That(recent.Children.OfType<TrainerProgressChart>(), Is.Empty, "Changed controls must not retain a comparison from different offsets.");
+                        ((AimModButton)typeof(NativeTrainersWorkspace).GetField("restoreControls", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(trainer)!).Action.Invoke();
+                        Assert.That(offset.Current.Value, Is.Zero);
+                        Assert.That(recent.Children.OfType<TrainerProgressChart>().Count(), Is.EqualTo(1));
+                    }
+                }, 1000);
+            }
+
+            if (route is "trainers-skill-playing" or "trainers-sliders" or "trainers-playing" or "trainers-reading" or "trainers-results" or "trainers-stop" or "trainers-music" or "trainers-song")
+            {
+                Scheduler.AddDelayed(() =>
+                {
+                    var trainer = (NativeTrainersWorkspace)typeof(AimModGame).GetField("trainersWorkspace", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(this)!;
+                    if (route == "trainers-reading") trainer.SelectTrainer(TrainerKind.Reading);
+                    if (route == "trainers-skill-playing")
+                    {
+                        trainer.SelectTrainer(TrainerKind.Aim);
+                        var field=typeof(NativeTrainersWorkspace).GetField("settings",BindingFlags.NonPublic|BindingFlags.Instance)!;
+                        field.SetValue(trainer,((TrainerSettings)field.GetValue(trainer)!) with {RandomizePatterns=true,Bpm=210,ApproachRate=10,CircleSize=6,AimSpacing=140,NoteSpeed=TrainerNoteSpeed.FourPerBeat});
+                    }
+                    if (route == "trainers-sliders")
+                    {
+                        trainer.SelectTrainer(TrainerKind.Alternating);
+                        ((AimModDropdown<TrainerSliderStyle>)typeof(NativeTrainersWorkspace).GetField("sliderSelector", BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(trainer)!).Current.Value = TrainerSliderStyle.BackAndForth;
+                        ((AimModDropdown<int>)typeof(NativeTrainersWorkspace).GetField("sliderLengthSelector", BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(trainer)!).Current.Value = 2;
+                    }
+                    if (route == "trainers-results")
+                    {
+                        ((AimModDropdown<int>)typeof(NativeTrainersWorkspace).GetField("durationSelector", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(trainer)!).Current.Value = 15;
+                    }
+                    if (route == "trainers-music")
+                        ((AimModDropdown<string>)typeof(NativeTrainersWorkspace).GetField("musicSelector", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(trainer)!).Current.Value = "mint-current";
+                    if (route == "trainers-song")
+                    {
+                        string directory = Path.Combine(Path.GetDirectoryName(outputPath)!, "trainer-song-fixture");
+                        Directory.CreateDirectory(directory);
+                        File.WriteAllBytes(Path.Combine(directory, "music.ogg"), TrainerAudio.Asset("training-midnight-pulse.ogg"));
+                        string path = Path.Combine(directory, "practice.osu");
+                        File.WriteAllText(path, "osu file format v14\n[General]\nAudioFilename: music.ogg\nMode: 0\n[Metadata]\nTitle: Synthetic training song\nArtist: AimMod\nCreator: Test\nVersion: Timing changes\n[Difficulty]\nHPDrainRate:0\nCircleSize:4\nOverallDifficulty:5\nApproachRate:7\nSliderMultiplier:1.4\nSliderTickRate:1\n[TimingPoints]\n0,500,4,1,0,100,1,0\n40000,400,4,1,0,100,1,0\n[HitObjects]\n256,192,6000,1,0,0:0:0:0:\n256,192,120000,1,0,0:0:0:0:\n");
+                        var selection = new LocalReplay(Guid.Empty, Guid.NewGuid(), Guid.NewGuid(), "Synthetic training song", "AimMod", "Timing changes", "osu", "", DateTimeOffset.UnixEpoch, 0, 0, 0, 0, 0, null, [], false, BeatmapHash: "synthetic-training-song", BeatmapPath: path, Origin: LocalLibraryOrigin.Stable);
+                        typeof(NativeTrainersWorkspace).GetProperty("SelectedSong")!.SetValue(trainer, selection);
+                        ((AimModDropdown<string>)typeof(NativeTrainersWorkspace).GetField("musicSelector", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(trainer)!).Current.Value = "song";
+                        ((AimModDropdown<int>)typeof(NativeTrainersWorkspace).GetField("songStartSelector", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(trainer)!).Current.Value = 30;
+                        typeof(AimModGame).GetField("replayOpenService", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(this, new CompositeLocalReplayOpenService());
+                    }
+                    trainer.ApplyOsuSettings(new TrainerOsuSettings("A / S", -37, false, "osu!stable"));
+                    trainer.Start();
+                    if (route == "trainers-stop") Scheduler.AddDelayed(() =>
+                    {
+                        var player = (NativeTrainerPlayer?)typeof(AimModGame).GetField("trainerPlayer", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(this);
+                        player?.StopSession();
+                    }, 4000);
+                }, 2200);
+                Scheduler.AddDelayed(() =>
+                {
+                    try
+                    {
+                        var trainer = (NativeTrainersWorkspace)typeof(AimModGame).GetField("trainersWorkspace", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(this)!;
+                        var player = (NativeTrainerPlayer?)typeof(AimModGame).GetField("trainerPlayer", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(this);
+                        Assert.That(player is not null, Is.EqualTo(route is not ("trainers-results" or "trainers-stop")));
+                        if (route == "trainers-results")
+                        {
+                            var store = (TrainerHistoryStore)typeof(NativeTrainersWorkspace).GetField("activeHistory", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(trainer)!;
+                            Assert.That(store.Load(), Has.Count.EqualTo(1));
+                            Assert.That(trainerOutroDuration, Is.InRange(1700,2600), "Keep the player alive through the final-tap grace and music fade.");
+                            Assert.That((bool)typeof(NativeTrainersWorkspace).GetField("showingResults",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(trainer)!,Is.True);
+                            Assert.That(store.Load()[0].Engine, Is.EqualTo("osu-moving-v2"));
+                            Assert.That(store.Load()[0].Misses, Is.EqualTo(store.Load()[0].Notes));
+                        }
+                        else if (route == "trainers-stop")
+                        {
+                            var store = (TrainerHistoryStore)typeof(NativeTrainersWorkspace).GetField("activeHistory", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(trainer)!;
+                            Assert.That(store.Load(), Is.Empty, "Stopping must not save an incomplete run.");
+                            Assert.That(LocalConfig.Get<double>(osu.Game.Configuration.OsuSetting.AudioOffset), Is.EqualTo(0));
+                            Assert.That(host.AvailableInputHandlers.OfType<osu.Framework.Input.Handlers.Mouse.MouseHandler>().All(m => !m.UseRelativeMode.Value), Is.True);
+                        }
+                        else
+                        {
+                            Assert.That(player!.Ready, Is.True, "The official osu! player must load the generated beatmap.");
+                            Assert.That(player.CurrentTime, Is.GreaterThan(route == "trainers-song" ? 34000 : 2500));
+                            if (route == "trainers-song")
+                            {
+                                Assert.That(Beatmap.Value.Beatmap.HitObjects[0].StartTime, Is.EqualTo(36000));
+                                Assert.That(Beatmap.Value.Track.Length, Is.GreaterThan(180000));
+                            }
+                            if (route == "trainers-skill-playing")
+                            {
+                                var demand=TrainerSkillProfile.Measure(Beatmap.Value.Beatmap);
+                                Assert.That(demand.PeakNps,Is.LessThanOrEqualTo(2.501)); Assert.That(demand.AimVelocity,Is.LessThanOrEqualTo(300.001));
+                                Assert.That(Beatmap.Value.Beatmap.Difficulty.ApproachRate,Is.LessThanOrEqualTo(6));
+                            }
+                            if (route == "trainers-sliders") Assert.That(Beatmap.Value.Beatmap.HitObjects.OfType<osu.Game.Rulesets.Osu.Objects.Slider>().Any(s=>s.RepeatCount==3), Is.True);
+                            if (route == "trainers-music") Assert.That(Beatmap.Value.Track.Length, Is.GreaterThan(180000));
+                            Assert.That(player, Is.InstanceOf<osu.Game.Screens.Play.Player>());
+                            if (route == "trainers-playing")
+                            {
+                                var judgements = (List<osu.Game.Rulesets.Judgements.JudgementResult>)typeof(NativeTrainerPlayer).GetField("judgements", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(player)!;
+                                Assert.That(judgements.Count(j => j.IsHit), Is.GreaterThan(2), "Inherited A key and cursor must hit native osu! circles.");
+                            }
+                            Assert.That(LocalConfig.Get<double>(osu.Game.Configuration.OsuSetting.AudioOffset), Is.EqualTo(-37));
+                        }
+                        capture();
+                    }
+                    catch (Exception error) { failed(error); host.Exit(); }
+                }, route == "trainers-results" ? 26000 : 8500);
+            }
+            else Scheduler.AddDelayed(capture, route.StartsWith("settings", StringComparison.Ordinal) ? 3500 : 1800);
+        }
+
+        private double? trainerOutroSeenAt;
+        private double? trainerOutroDuration;
+        private static void setTrainerMenu(osu.Framework.Graphics.Drawable dropdown, bool open)
+        {
+            for (Type? type = dropdown.GetType(); type is not null; type = type.BaseType)
+            {
+                var property = type.GetProperty("Menu", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.DeclaredOnly);
+                var field = type.GetField("Menu", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.DeclaredOnly);
+                if ((property?.GetValue(dropdown) ?? field?.GetValue(dropdown)) is osu.Framework.Graphics.UserInterface.Menu menu)
+                { menu.State = open ? osu.Framework.Graphics.UserInterface.MenuState.Open : osu.Framework.Graphics.UserInterface.MenuState.Closed; return; }
+            }
+            throw new AssertionException("Dropdown menu was not found.");
+        }
+
+        private int lastTrainerNote = -1;
+        protected override void Update()
+        {
+            // A private Windows desktop has no foreground window. Supply the test's
+            // active-window state while exercising real audio and input handlers.
+            if (route is "trainers-skill-playing" or "trainers-sliders" or "trainers-playing" or "trainers-reading" or "trainers-results" or "trainers-stop" or "trainers-music" or "trainers-song") ((osu.Framework.Bindables.Bindable<bool>)host.IsActive).Value = true;
+            if (route == "trainers-results")
+            {
+                var finishingPlayer = (NativeTrainerPlayer?)typeof(AimModGame).GetField("trainerPlayer", BindingFlags.NonPublic|BindingFlags.Instance)!.GetValue(this);
+                if (finishingPlayer is not null && typeof(NativeTrainerPlayer).GetField("completedAt", BindingFlags.NonPublic|BindingFlags.Instance)!.GetValue(finishingPlayer) is double)
+                    trainerOutroSeenAt ??= Time.Current;
+                if (finishingPlayer is null && trainerOutroSeenAt.HasValue) trainerOutroDuration ??= Time.Current-trainerOutroSeenAt.Value;
+            }
+            if (route == "trainers-playing" && typeof(AimModGame).GetField("trainerPlayer", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(this) is NativeTrainerPlayer { Ready: true } player)
+            {
+                int note = (int)((player.CurrentTime - 2500) / 250);
+                if (player.CurrentTime > 3000 && note > lastTrainerNote)
+                {
+                    lastTrainerNote = note;
+                    var ruleset = (osu.Game.Rulesets.UI.DrawableRuleset)typeof(osu.Game.Screens.Play.Player).GetProperty("DrawableRuleset", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(player)!;
+                    var input = GetContainingInputManager()!;
+                    new osu.Framework.Input.StateChanges.MousePositionAbsoluteInput { Position = ruleset.Playfield.GamefieldToScreenSpace(((osu.Game.Rulesets.Osu.Objects.OsuHitObject)Beatmap.Value.Beatmap.HitObjects[Math.Clamp(note, 0, Beatmap.Value.Beatmap.HitObjects.Count - 1)]).Position) }.Apply(input.CurrentState, input);
+                    new osu.Framework.Input.StateChanges.KeyboardKeyInput(osuTK.Input.Key.A, true).Apply(input.CurrentState, input);
+                    Scheduler.AddDelayed(() => new osu.Framework.Input.StateChanges.KeyboardKeyInput(osuTK.Input.Key.A, false).Apply(input.CurrentState, input), 30);
+                }
+            }
+            base.Update();
         }
 
         private void capture()
@@ -430,6 +706,16 @@ public sealed partial class OffscreenVisualCaptureTests
                         ((AimModScrollContainer)details.GetType().GetField("scroll", flags)!.GetValue(details)!).ScrollTo(450, false);
                     }, 200);
                 }, 1500);
+            if (outputPath.Contains("ppTargets-menu", StringComparison.Ordinal))
+                Scheduler.AddDelayed(() =>
+                {
+                    const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+                    var dropdown = (osu.Framework.Graphics.UserInterface.Dropdown<OfficialBeatmapCategory>)
+                        typeof(NativePpTargetsWorkspace).GetField("categoryDropdown", flags)!.GetValue(workspace)!;
+                    var menu = (osu.Framework.Graphics.UserInterface.Menu)
+                        typeof(osu.Framework.Graphics.UserInterface.Dropdown<OfficialBeatmapCategory>).GetField("Menu", flags)!.GetValue(dropdown)!;
+                    menu.Open();
+                }, 1500);
             Scheduler.AddDelayed(capture, 2200);
         }
 
@@ -462,7 +748,7 @@ public sealed partial class OffscreenVisualCaptureTests
                 foreach (var row in rows.Children)
                 {
                     var tooltip = (osu.Framework.Graphics.Cursor.IHasTooltip)row;
-                    Assert.That(tooltip.TooltipText.ToString(), Does.Contain("Jumps: 98.6%").And.Contain("Streams: 92.4%").And.Contain("Sharp turns:"));
+                    Assert.That(tooltip.TooltipText.ToString(), Does.Match("[Pp]ass").And.Match("[Aa]ccount gain"));
                     float previousBottom = 0;
                     foreach (string field in new[] { "title", "artist", "mapDetails", "mechanicsDetails", "confidenceDetails", "patternDetails" })
                     {
@@ -476,7 +762,7 @@ public sealed partial class OffscreenVisualCaptureTests
                         previousBottom = bottom.Y;
                     }
                     var skill = (osu.Framework.Graphics.Sprites.SpriteText)row.GetType().GetField("confidenceDetails", flags)!.GetValue(row)!;
-                    Assert.That(skill.Text.ToString(), Does.Contain("skill fit").And.Not.Contain("unmeasured"));
+                    Assert.That(skill.Text.ToString(), Does.Match("Supported by recent plays|Stretch target|Pass unverified|Score unverified|Low pass chance"));
                 }
             }
             catch (Exception error)

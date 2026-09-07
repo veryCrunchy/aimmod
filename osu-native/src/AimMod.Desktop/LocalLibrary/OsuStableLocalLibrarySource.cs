@@ -167,7 +167,7 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
             beatmap.Entry.OverallDifficulty,
             beatmap.Entry.HPDrain,
             beatmap.LocalScoreCount,
-            beatmap.Entry.MD5Hash)).OrderBy(difficulty => difficulty.StarRating).ToArray();
+            beatmap.Entry.MD5Hash, beatmap.BeatmapPath, LocalLibraryOrigin.Stable)).OrderBy(difficulty => difficulty.StarRating).ToArray();
         string folder = Path.GetDirectoryName(representative.BeatmapPath)!;
         DateTimeOffset dateAdded = new DirectoryInfo(folder).CreationTimeUtc;
         DateTimeOffset? lastPlayed = group.Select(beatmap => lastPlayedByHash.GetValueOrDefault(beatmap.Entry.MD5Hash))

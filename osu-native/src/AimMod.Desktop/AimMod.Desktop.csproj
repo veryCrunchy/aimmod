@@ -22,6 +22,8 @@
     <ProjectReference Include="../AimMod.Osu.Worker/AimMod.Osu.Worker.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <EmbeddedResource Include="Resources/Audio/*.ogg" LogicalName="AimMod.Resources.Audio.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="Resources/Audio/*.wav" LogicalName="AimMod.Resources.Audio.%(Filename)%(Extension)" />
     <EmbeddedResource Include="Resources/Skins/creator-releases.json" LogicalName="AimMod.Resources.Skins.creator-releases.json" />
     <EmbeddedResource Include="Resources/Brand/*.png" LogicalName="AimMod.Resources.Brand.%(Filename)%(Extension)" />
     <EmbeddedResource Include="Resources/Brand/aimmod.ico" LogicalName="AimMod.Resources.Brand.aimmod.ico" />

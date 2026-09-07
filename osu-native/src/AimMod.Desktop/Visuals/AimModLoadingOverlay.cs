@@ -79,7 +79,7 @@ public partial class AimModLoadingOverlay : Container
                         Y = 124,
                         Width = 420,
                         Height = 7,
-                        FillColour = AimModPalette.Pink,
+                        FillColour = AimModPalette.Accent,
                         BackgroundColour = AimModPalette.PanelRaised,
                         EndTime = 1,
                     },

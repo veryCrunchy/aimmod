@@ -71,7 +71,8 @@ internal sealed class LocalLibraryController : IDisposable
     public async Task<LocalLibraryLoadState> LoadAsync(
         LocalLibraryQuery query,
         bool append = false,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Func<LocalBeatmapSet, bool>? beatmapFilter = null)
     {
         ArgumentNullException.ThrowIfNull(query);
 
@@ -102,8 +103,10 @@ internal sealed class LocalLibraryController : IDisposable
         {
             if (mode == NativeLocalLibraryMode.Beatmaps)
             {
-                LocalLibraryPage<LocalBeatmapSet> page = await source.SearchBeatmapSetsAsync(query, requestCancellation.Token)
-                    .AsTask().WaitAsync(requestTimeout, requestCancellation.Token).ConfigureAwait(false);
+                Task<LocalLibraryPage<LocalBeatmapSet>> search = beatmapFilter is null
+                    ? source.SearchBeatmapSetsAsync(query, requestCancellation.Token).AsTask()
+                    : ReadFilteredBeatmapPageAsync(source, query, beatmapFilter, requestCancellation.Token);
+                LocalLibraryPage<LocalBeatmapSet> page = await search.WaitAsync(requestTimeout, requestCancellation.Token).ConfigureAwait(false);
                 IReadOnlyList<LocalBeatmapSet> items = append
                     ? previous.BeatmapSets.Concat(page.Items).ToArray()
                     : page.Items;
@@ -145,6 +148,25 @@ internal sealed class LocalLibraryController : IDisposable
 
             requestCancellation.Dispose();
         }
+    }
+
+    internal static async Task<LocalLibraryPage<LocalBeatmapSet>> ReadFilteredBeatmapPageAsync(
+        ILocalLibrarySource source, LocalLibraryQuery query, Func<LocalBeatmapSet, bool> matches, CancellationToken token)
+    {
+        // Apply the extra filters before paging, including matches beyond the first source page.
+        var filtered = new List<LocalBeatmapSet>();
+        var scan = query with { Offset = 0, Limit = 200 };
+        string? warning = null;
+        while (true)
+        {
+            token.ThrowIfCancellationRequested();
+            var page = await source.SearchBeatmapSetsAsync(scan, token).ConfigureAwait(false);
+            warning ??= page.Warning;
+            filtered.AddRange(page.Items.Where(matches));
+            if (!page.HasMore || page.Items.Count == 0) break;
+            scan = scan with { Offset = scan.Offset + page.Items.Count };
+        }
+        return new(filtered.Skip(query.Offset).Take(query.Limit).ToArray(), filtered.Count, query.Offset, query.Limit) { Warning = warning };
     }
 
     public void Cancel()

@@ -25,14 +25,14 @@ namespace AimMod.Desktop.LocalLibrary;
 public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
 {
     private const int page_size = 80;
-    private const float toolbar_height = 142;
+    private const float toolbar_height = 114;
 
     private readonly ILocalLibrarySource source;
     private readonly Func<IPpTargetExactCalculationService?> exactCalculator;
     private readonly Func<IAccountScoreHistoryService?> onlineScoreHistory;
     private readonly Func<int, CancellationToken, Task>? openBeatmap;
     private readonly LocalLibraryController controller;
-    private readonly ShearedFilterTextBox searchBox;
+    private readonly AimModSearchBox searchBox;
     private readonly Container searchSurface;
     private readonly Container starsSurface;
     private readonly Container sortSurface;
@@ -67,6 +67,9 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
     private LocalBeatmapSet? selectedSet;
     private LocalBeatmapDifficulty? selectedDifficulty;
     private long displayedRevision;
+    private bool libraryLoaded;
+    private LocalLibraryQuery? activeQuery;
+    private Func<LocalBeatmapSet, bool>? activeFilter;
 
     public NativeInstalledBeatmapBrowser(
         ILocalLibrarySource source,
@@ -96,12 +99,13 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                 Children = new Drawable[]
                 {
                     searchSurface = filterSurface(0, 0, 480, AimModVisualStyle.ControlHeight),
-                    searchBox = new ShearedFilterTextBox
+                    searchBox = new AimModSearchBox
                     {
                         Width = 0.52f,
                         Height = AimModVisualStyle.ControlHeight,
                         PlaceholderText = "Search beatmaps, artists, mappers, or difficulties",
                     },
+                    new AimModResetButton(clearFilters) { Anchor = Anchor.TopRight, Origin = Anchor.TopRight, Y = 0, Depth = -1 },
                     starsSurface = filterSurface(490, 51, 260, 46),
                     stars = new AimModStarRatingFilter
                     {
@@ -151,6 +155,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                     playedLabel = filterLabel("PLAYED", 324),
                     status = new TruncatingSpriteText
                     {
+                        Depth = 1,
                         Y = 107,
                         Font = new FontUsage(size: 11, weight: "SemiBold"),
                         Colour = AimModPalette.Muted,
@@ -194,6 +199,15 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         };
     }
 
+    private void clearFilters()
+    {
+        searchBox.Current.Value = string.Empty;
+        minimumStars.Value = 0; maximumStars.Value = 10;
+        bpmFilter.Value = BpmFilter.Any; lengthFilter.Value = LengthFilter.Any;
+        playedFilter.Value = PlayedFilter.Everything; sort.Value = LocalLibrarySort.RecentlyAdded;
+        scheduleQuery();
+    }
+
     protected override void LoadComplete()
     {
         base.LoadComplete();
@@ -222,11 +236,11 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         rightRail.Padding = new MarginPadding { Left = stacked ? 0 : 14, Top = stacked ? 8 : 0 };
         listPanel.Padding = new MarginPadding { Top = toolbar_height, Right = stacked ? 0 : railWidth, Bottom = stacked ? inspectorHeight : 0 };
         float usableWidth = Math.Max(0, DrawWidth - 10);
-        searchBox.Position = new(10, 0);
-        searchBox.Width = Math.Max(0, usableWidth - 10);
-        searchBox.Height = 54;
-        searchBox.StatusText = status.Text;
-        status.Alpha = 0;
+        searchBox.Position = new(0, 0);
+        searchBox.Width = Math.Max(0, usableWidth - 404);
+        searchBox.Height = AimModVisualStyle.ControlHeight;
+        searchBox.StatusText = string.Empty;
+        status.Alpha = 1;
         searchSurface.Alpha = starsSurface.Alpha = sortSurface.Alpha = bpmSurface.Alpha = lengthSurface.Alpha = playedSurface.Alpha = 0;
         bpmLabel.Alpha = lengthLabel.Alpha = playedLabel.Alpha = 0;
         searchSurface.Width = searchBox.Width;
@@ -238,7 +252,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         float lengthWidth = filterWidth * 0.24f;
         float playedWidth = filterWidth * 0.24f;
         float sortWidth = filterWidth * 0.30f;
-        const float filterY = 100;
+        const float filterY = 44;
         const float starsX = 10;
         float sortX = usableWidth - sortWidth;
 
@@ -260,9 +274,9 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         playedSurface.Width = playedWidth;
         playedLabel.Position = new(bpmWidth + lengthWidth + gap * 2 + 4, 50);
 
-        stars.Position = new(starsX, 62);
-        stars.Width = Math.Max(0, usableWidth - 10);
-        stars.Height = 30;
+        stars.Position = new(Math.Max(0, usableWidth - 388), 0);
+        stars.Width = 264;
+        stars.Height = AimModVisualStyle.ControlHeight;
         starsSurface.Position = new(starsX, filterY);
         starsSurface.Width = stars.Width;
 
@@ -275,7 +289,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         sortSurface.Position = new(sortX, filterY);
         sortSurface.Width = sortWidth;
 
-        status.Y = 118;
+        status.Y = 88;
         status.MaxWidth = Math.Max(220, usableWidth - 14);
     }
 
@@ -296,7 +310,20 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             sort.Value,
             0,
             page_size);
-        _ = controller.LoadAsync(query);
+        activeQuery = query;
+        BpmFilter bpm = bpmFilter.Value;
+        LengthFilter length = lengthFilter.Value;
+        PlayedFilter played = playedFilter.Value;
+        activeFilter = bpm == BpmFilter.Any && length == LengthFilter.Any && played == PlayedFilter.Everything
+            ? null : set => matchesFilters(set, bpm, length, played);
+        _ = controller.LoadAsync(query, beatmapFilter: activeFilter);
+    }
+
+    private void loadMore()
+    {
+        var state = controller.State;
+        if (activeQuery is null || state.IsLoading || !state.HasMore) return;
+        _ = controller.LoadAsync(activeQuery with { Offset = state.BeatmapSets.Count }, append: true, beatmapFilter: activeFilter);
     }
 
     private void stateChanged(object? sender, LocalLibraryLoadStateChangedEventArgs e)
@@ -319,11 +346,14 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
 
         if (state.Status == LocalLibraryLoadStatus.Loading)
         {
-            loading.ShowLoading("Loading installed beatmaps", "Reading your local osu! library", progress: () => controller.Progress);
+            status.Text = libraryLoaded ? "Updating results..." : "Reading installed beatmaps...";
+            if (!libraryLoaded)
+                loading.ShowLoading("Loading installed beatmaps", "Reading your local osu! library", progress: () => controller.Progress);
             return;
         }
 
         loading.HideLoading();
+        libraryLoaded = state.Status != LocalLibraryLoadStatus.Error;
         setRows.Clear();
         if (state.Status == LocalLibraryLoadStatus.Error)
         {
@@ -347,7 +377,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             return;
         }
 
-        LocalBeatmapSet[] visibleSets = state.BeatmapSets.Where(matchesFilters).ToArray();
+        LocalBeatmapSet[] visibleSets = state.BeatmapSets.ToArray();
         if (visibleSets.Length == 0)
         {
             status.Text = "No installed beatmaps match these filters";
@@ -356,11 +386,14 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             return;
         }
 
-        status.Text = $"Showing {visibleSets.Length:N0} matching sets from {state.Total:N0} installed";
+        status.Text = $"Showing {visibleSets.Length:N0} of {state.Total:N0} matching sets";
         if (state.ErrorMessage is not null)
             status.Text = state.ErrorMessage;
         foreach ((LocalBeatmapSet set, int index) in visibleSets.Select((value, index) => (value, index)))
             setRows.Add(new BeatmapSetRow(index + 1, set, selectSet, selectDifficulty));
+
+        if (state.HasMore)
+            setRows.Add(new AimModResetButton(loadMore, "Load more maps") { Width = 160, Height = 38 });
 
         LocalBeatmapSet next = selectedSet is not null
             ? visibleSets.FirstOrDefault(set => set.SetId == selectedSet.SetId) ?? visibleSets[0]
@@ -368,29 +401,25 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         selectSet(next);
     }
 
-    private bool matchesFilters(LocalBeatmapSet set)
+    private static bool matchesFilters(LocalBeatmapSet set, BpmFilter bpm, LengthFilter length, PlayedFilter played)
     {
-        bool bpmMatches = bpmFilter.Value switch
-        {
-            BpmFilter.Below160 => set.Difficulties.Any(d => d.Bpm < 160),
-            BpmFilter.From160To200 => set.Difficulties.Any(d => d.Bpm is >= 160 and <= 200),
-            BpmFilter.Above200 => set.Difficulties.Any(d => d.Bpm > 200),
-            _ => true,
-        };
-        bool lengthMatches = lengthFilter.Value switch
-        {
-            LengthFilter.Short => set.Difficulties.Any(d => d.LengthMilliseconds < 120_000),
-            LengthFilter.Medium => set.Difficulties.Any(d => d.LengthMilliseconds is >= 120_000 and <= 240_000),
-            LengthFilter.Long => set.Difficulties.Any(d => d.LengthMilliseconds > 240_000),
-            _ => true,
-        };
-        bool playedMatches = playedFilter.Value switch
-        {
+        bool playedMatches = played switch {
             PlayedFilter.Played => set.LastPlayed is not null || set.LocalReplayCount is > 0,
             PlayedFilter.Unplayed => set.LastPlayed is null && set.LocalReplayCount is not > 0,
             _ => true,
         };
-        return bpmMatches && lengthMatches && playedMatches;
+        return playedMatches && set.Difficulties.Any(d =>
+            (bpm switch {
+                BpmFilter.Below160 => d.Bpm < 160,
+                BpmFilter.From160To200 => d.Bpm is >= 160 and <= 200,
+                BpmFilter.Above200 => d.Bpm > 200,
+                _ => true,
+            }) && (length switch {
+                LengthFilter.Short => d.LengthMilliseconds < 120_000,
+                LengthFilter.Medium => d.LengthMilliseconds is >= 120_000 and <= 240_000,
+                LengthFilter.Long => d.LengthMilliseconds > 240_000,
+                _ => true,
+            }));
     }
 
     private void selectSet(LocalBeatmapSet set)
@@ -561,8 +590,8 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             Children = new Drawable[]
             {
                 new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
-                selectedLayer = new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PinkDark, Alpha = 0 },
-                selectionBar = new Box { RelativeSizeAxes = Axes.Y, Width = 4, Colour = AimModPalette.Pink, Alpha = 0 },
+                selectedLayer = new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.AccentMuted, Alpha = 0 },
+                selectionBar = new Box { RelativeSizeAxes = Axes.Y, Width = 4, Colour = AimModPalette.Accent, Alpha = 0 },
                 indexText = new SpriteText { Text = index.ToString(), Position = new(13, 14), Font = new FontUsage(size: 13, weight: "Bold"), Colour = AimModPalette.Muted },
                 new Container
                 {
@@ -628,7 +657,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             bool selected = set.SetId == setId;
             selectedLayer.Alpha = selected ? 0.1f : 0;
             selectionBar.Alpha = selected ? 1 : 0;
-            indexText.Colour = selected ? AimModPalette.Pink : AimModPalette.Muted;
+            indexText.Colour = selected ? AimModPalette.Accent : AimModPalette.Muted;
             if (!selected && expanded)
             {
                 expanded = false;
@@ -647,7 +676,11 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
 
         private void updateExpanded()
         {
-            Height = expanded ? 394 : 136;
+            float rowsHeight = Math.Min(214, set.Difficulties.Count * 36);
+            difficultyScroll.Height = rowsHeight;
+            tableContent.Height = 32 + rowsHeight;
+            tableScroll.Height = tableContent.Height + 12;
+            Height = expanded ? 136 + tableScroll.Height : 136;
             tableScroll.Alpha = expanded ? 1 : 0;
             difficultyRows.Alpha = expanded ? 1 : 0;
             difficultyScroll.Alpha = expanded ? 1 : 0;
@@ -732,7 +765,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             };
         }
 
-        public bool Selected { set => background.Colour = value ? AimModPalette.PinkDark : AimModPalette.PanelRaised; }
+        public bool Selected { set => background.Colour = value ? AimModPalette.AccentMuted : AimModPalette.PanelRaised; }
         protected override bool OnClick(ClickEvent e) { action(); return true; }
     }
 
@@ -752,7 +785,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             Children = new Drawable[]
             {
                 background = new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas, Alpha = 0.72f },
-                selectionAccent = new Box { RelativeSizeAxes = Axes.Y, Width = 3, Colour = AimModPalette.Pink, Alpha = 0 },
+                selectionAccent = new Box { RelativeSizeAxes = Axes.Y, Width = 3, Colour = AimModPalette.Accent, Alpha = 0 },
                 new SpriteIcon { Position = new(16, 12), Size = new(11), Icon = FontAwesome.Solid.Play, Colour = AimModPalette.Muted },
                 cell(difficulty.Name, 40, 185, true),
                 cell($"{difficulty.StarRating:0.00}", 230, 55),
@@ -989,7 +1022,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                     Children = new Drawable[]
                     {
                         new TruncatingSpriteText { Text = accuracy == 100 ? "SS" : $"{accuracy}%", RelativeSizeAxes = Axes.X, Font = new FontUsage(size: 10), Colour = AimModPalette.Muted },
-                        new TruncatingSpriteText { Text = values.TryGetValue(accuracy, out double pp) ? $"{pp:0}" : "--", RelativeSizeAxes = Axes.X, Y = 23, Font = new FontUsage(size: 16, weight: "Bold"), Colour = AimModPalette.Pink },
+                        new TruncatingSpriteText { Text = values.TryGetValue(accuracy, out double pp) ? $"{pp:0}" : "--", RelativeSizeAxes = Axes.X, Y = 23, Font = new FontUsage(size: 16, weight: "Bold"), Colour = AimModPalette.Accent },
                     },
                 });
             }
@@ -1019,7 +1052,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                 Children = new Drawable[]
                 {
                     new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Border },
-                    new Box { RelativeSizeAxes = Axes.Both, Width = (float)fit, Colour = AimModPalette.Pink },
+                    new Box { RelativeSizeAxes = Axes.Both, Width = (float)fit, Colour = AimModPalette.Accent },
                 },
             });
             Add(new SpriteText
@@ -1108,7 +1141,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             }
             ScoreHistoryEntry best = plays.OrderByDescending(play => play.PerformancePoints ?? play.Accuracy).First();
             Add(new SpriteText { Text = $"{best.Accuracy:P2}", Position = new(0, 43), Font = new FontUsage(size: 24, weight: "Bold"), Colour = AimModPalette.Cyan });
-            Add(new SpriteText { Text = best.PerformancePoints is { } pp ? $"{pp:0}pp best" : $"{best.TotalScore:N0} best score", Position = new(136, 51), Font = new FontUsage(size: 12, weight: "SemiBold"), Colour = AimModPalette.Pink });
+            Add(new SpriteText { Text = best.PerformancePoints is { } pp ? $"{pp:0}pp best" : $"{best.TotalScore:N0} best score", Position = new(136, 51), Font = new FontUsage(size: 12, weight: "SemiBold"), Colour = AimModPalette.Accent });
             Add(new PerformanceSparkline(plays) { Position = new(0, 84), RelativeSizeAxes = Axes.X, Height = 48 });
             ScoreHistoryEntry latest = plays[^1];
             string mods = latest.Mods.Count == 0 ? "NM" : string.Join(string.Empty, latest.Mods);
@@ -1170,7 +1203,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             Height = 92;
             Children = new Drawable[]
             {
-                new SpriteIcon { Icon = FontAwesome.Solid.CircleNotch, Size = new(18), Colour = AimModPalette.Pink },
+                new SpriteIcon { Icon = FontAwesome.Solid.CircleNotch, Size = new(18), Colour = AimModPalette.Accent },
                 new SpriteText { Text = title, Position = new(30, 0), Font = new FontUsage(size: 12, weight: "Bold"), Colour = AimModPalette.Text },
                 new TruncatingSpriteText { Text = detail, Position = new(30, 25), MaxWidth = 250, Font = new FontUsage(size: 10), Colour = AimModPalette.Muted },
             };
@@ -1202,7 +1235,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         public InspectorAction(IconUsage icon, string label, bool primary, Action? action)
         {
             this.action = action;
-            normalColour = primary ? AimModPalette.Pink : AimModPalette.Panel;
+            normalColour = primary ? AimModPalette.Accent : AimModPalette.Panel;
             Width = 88;
             Height = AimModVisualStyle.ControlHeight;
             Masking = true;
@@ -1277,7 +1310,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         Unplayed,
     }
 
-    private sealed partial class PrettyDropdown<T> : ShearedDropdown<T>
+    private sealed partial class PrettyDropdown<T> : AimMod.Desktop.Coaching.BoundedShearedDropdown<T>
         where T : struct, Enum
     {
         private readonly Func<T, string> formatter;

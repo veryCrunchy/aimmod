@@ -10,6 +10,29 @@ namespace AimMod.Desktop.Tests;
 [TestFixture]
 public sealed class ExternalLazerReplayOpenServiceTests
 {
+    [TestCase("Replay")]
+    [TestCase("Background")]
+    public async Task PracticeSourceDoesNotRequireReplayOrBackground(string missingKind)
+    {
+        var source = replaySummary();
+        var runtime = new AssetRuntimeClient(source, missingKind);
+        ILocalReplayOpenService service = new ExternalLazerReplayOpenService(Path.GetFullPath("lazer-library"), new ExternalLazerAssetClient(runtime));
+        var row = new LocalReplay(source.ScoreId, source.SetId, source.BeatmapId, source.Title, source.Artist,
+            source.Difficulty, source.RulesetShortName, source.Player, source.PlayedAt, source.StarRating,
+            source.Accuracy, source.TotalScore, source.MaxCombo, source.MissCount, source.PerformancePoints,
+            source.Mods, false, source.BeatmapHash);
+        string folder;
+        await using (var bundle = await service.OpenBeatmapSourceAsync(row))
+        {
+            folder = Path.GetDirectoryName(bundle.BeatmapPath)!;
+            Assert.That(File.Exists(bundle.BeatmapPath), Is.True);
+            Assert.That(File.ReadAllText(Path.Combine(folder, "audio", "test.mp3")), Is.EqualTo("real audio"));
+            Assert.That(Directory.Exists(runtime.StagingDirectory), Is.False);
+            Assert.That(runtime.RequestedScores, Is.Empty);
+        }
+        Assert.That(Directory.Exists(folder), Is.False);
+    }
+
     [Test]
     public async Task ReturnsAPlayablePrivateBundleAndReleasesWorkerStaging()
     {
@@ -189,13 +212,18 @@ public sealed class ExternalLazerReplayOpenServiceTests
         string? missingKind,
         string? corruptLengthKind = null) : IRuntimeRequestClient
     {
+        public IReadOnlyList<Guid> RequestedScores { get; private set; } = [];
         public string? StagingDirectory { get; private set; }
 
         public Task<RuntimeResponse> SendAsync(RuntimeRequest request, CancellationToken cancellationToken = default)
         {
             ExternalLazerAssetResolveRequest input = request.Payload!.Value.Deserialize<ExternalLazerAssetResolveRequest>(RuntimeProtocol.JsonOptions)!;
+            RequestedScores = input.ScoreIds;
             StagingDirectory = input.StagingDirectory;
-            ExternalLazerAssetResolveResult result = createResult(input.StagingDirectory, replay, missingKind, corruptLengthKind);
+            ExternalLazerAssetResolveResult result = createResult(input.StagingDirectory, replay, missingKind, corruptLengthKind, input.ScoreIds.Count > 0);
+            if (input.ScoreIds.Count == 0)
+                result = result with { Files = result.Files.Where(f => f.Kind != "Replay").ToArray(),
+                    MissingFiles = result.MissingFiles.Where(f => f.Kind != "Replay").ToArray() };
             return Task.FromResult(success(request, result));
         }
     }
@@ -223,7 +251,7 @@ public sealed class ExternalLazerReplayOpenServiceTests
         string stagingDirectory,
         ExternalLazerReplaySummary replay,
         string? missingKind,
-        string? corruptLengthKind = null)
+        string? corruptLengthKind = null, bool includeReplay = true)
     {
         (string Kind, string Owner, string LogicalName, string Contents)[] assets =
         {
@@ -238,6 +266,7 @@ public sealed class ExternalLazerReplayOpenServiceTests
         for (int i = 0; i < assets.Length; i++)
         {
             (string kind, string owner, string logicalName, string contents) = assets[i];
+            if (kind == "Replay" && !includeReplay) continue;
             byte[] bytes = System.Text.Encoding.UTF8.GetBytes(contents);
             string hash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
 

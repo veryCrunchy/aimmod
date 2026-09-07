@@ -10,7 +10,7 @@ public sealed record CoachingTrainingReview(int Attempts, int SuccessfulAttempts
 
 public static class CoachingTrainingPlanner {
     public static CoachingTrainingPlan? Build(NativeCoachingWorkspaceModel model) {
-        var candidates = model.History.Where(r => r.Passed && ScoreMods.IsManualPlay(r) && r.Accuracy is >= .9 and <= 1
+        var candidates = model.History.Where(r => r.Passed && ScoreMods.IsManualPlay(r) && r.Accuracy is >= .7 and <= 1
             && double.IsFinite(r.Accuracy) && r.MissCount >= 0 && r.PlayedAt <= DateTimeOffset.UtcNow)
             .GroupBy(r => (r.Player, Setup:ScoreMods.SetupKey(r)))
             .Select(g => g.OrderByDescending(r=>r.PlayedAt).Take(5).ToArray()).ToArray();

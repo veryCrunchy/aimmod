@@ -1,3 +1,5 @@
+using osu.Framework.Graphics.UserInterface;
+using AimMod.Desktop.Visuals;
 using osu.Framework.Allocation;
 using osu.Framework.Bindables;
 using osu.Framework.Graphics;
@@ -15,7 +17,7 @@ public partial class StatisticsFilterBar : Container
     private readonly OverlayColourProvider colours = new(OverlayColourScheme.Blue);
 }
 
-public partial class StatisticsFilterDropdown<T> : ShearedDropdown<T>
+public partial class StatisticsFilterDropdown<T> : BoundedShearedDropdown<T>
     where T : struct, Enum
 {
     public StatisticsFilterDropdown(string label, Bindable<T> current)
@@ -63,43 +65,27 @@ public partial class ScoreModFilterDropdown : BoundedShearedDropdown<string> {
 // Long score-derived lists must scroll within the window, including when resized.
 public partial class BoundedShearedDropdown<T> : ShearedDropdown<T>
 {
+    [osu.Framework.Allocation.Resolved] private osu.Framework.Platform.GameHost popupHost { get; set; } = null!;
+    private AimModPopupLayer? popupLayer;
     public BoundedShearedDropdown(LocalisableString label) : base(label)
     {
         Menu.MaxHeight = 240;
-    }
-
-    protected override DropdownMenu CreateMenu() => new BoundedMenu();
-
-    private partial class BoundedMenu : ShearedDropdownMenu
-    {
-        public BoundedMenu()
+        if (Header is AimModDropdownHeader<T> header) header.Prefix = label.ToString();
+        Menu.StateChanged += state =>
         {
-            // Tall sheared menus drift sideways and clip labels at the window edge.
-            Shear = osuTK.Vector2.Zero;
-            Padding = new MarginPadding();
-        }
-
-        protected override DrawableDropdownMenuItem CreateDrawableDropdownMenuItem(osu.Framework.Graphics.UserInterface.MenuItem item)
-            => new StraightMenuItem(item)
-            {
-                BackgroundColourHover = HoverColour,
-                BackgroundColourSelected = SelectionColour,
-            };
-
-        private partial class StraightMenuItem : ShearedMenuItem
-        {
-            public StraightMenuItem(osu.Framework.Graphics.UserInterface.MenuItem item) : base(item)
-            {
-                Foreground.Shear = osuTK.Vector2.Zero;
-            }
-        }
+            popupLayer?.Dispose(); popupLayer = null;
+            if (state == MenuState.Open) popupLayer = new AimModPopupLayer(this, action => popupHost.UpdateThread.Scheduler.Add(action));
+        };
     }
-
+    protected override DropdownHeader CreateHeader() => new AimModDropdownHeader<T>();
+    protected override DropdownMenu CreateMenu() => new AimModDropdownMenu<T>();
+    protected override void Dispose(bool isDisposing)
+    { popupLayer?.Dispose(); popupLayer = null; base.Dispose(isDisposing); }
     protected override void Update()
     {
         base.Update();
         Drawable viewport = this;
-        while (viewport.Parent is { } parent) viewport = parent;
+        while (viewport.Parent is {} parent) viewport = parent;
         float bottom = ToLocalSpace(viewport.ToScreenSpace(new osuTK.Vector2(0, viewport.DrawHeight))).Y;
         Menu.MaxHeight = Math.Clamp(bottom - DrawHeight - 24, 1, 240);
     }

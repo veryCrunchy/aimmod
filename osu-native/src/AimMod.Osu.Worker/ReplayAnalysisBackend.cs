@@ -101,6 +101,17 @@ internal sealed class ReplayAnalysisBackend : IRuntimeBackend
             return JsonSerializer.SerializeToElement(assets, RuntimeProtocol.JsonOptions);
         }
 
+        if (command == RuntimeCommands.ReadExternalTrainerSettings)
+        {
+            ExternalTrainerSettingsRequest? settingsRequest;
+            try { settingsRequest = payload?.Deserialize<ExternalTrainerSettingsRequest>(RuntimeProtocol.JsonOptions); }
+            catch (JsonException) { throw new RuntimeCommandException("invalid_payload", "A library root is required."); }
+            if (settingsRequest is null || string.IsNullOrWhiteSpace(settingsRequest.LibraryRoot))
+                throw new RuntimeCommandException("invalid_payload", "A library root is required.");
+            var settings = await ExternalTrainerSettingsReader.ReadAsync(settingsRequest.LibraryRoot, cancellationToken);
+            return JsonSerializer.SerializeToElement(settings, RuntimeProtocol.JsonOptions);
+        }
+
         if (command == RuntimeCommands.SearchExternalLazerCatalog)
         {
             ExternalLazerCatalogSearchRequest catalogRequest = deserializeCatalogRequest(payload);

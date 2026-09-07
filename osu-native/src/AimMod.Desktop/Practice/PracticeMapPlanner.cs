@@ -26,7 +26,7 @@ public static class PracticeMapPlanner
         PracticeMapOptions safe = options.Normalised();
         ReplayAnalysisResult[] attempts = analyses.Where(result => result.Judgements is not null).ToArray();
         if (attempts.Length == 0)
-            return Array.Empty<PracticeSourceSection>();
+            return safe.AllowPatternPractice ? patternSections(beatmap, safe) : Array.Empty<PracticeSourceSection>();
 
         PracticeWeakObject[] weaknesses = aggregateWeaknesses(beatmap, attempts);
         var candidates = new List<PracticeSourceSection>();
@@ -44,11 +44,43 @@ public static class PracticeMapPlanner
                 objects.Max(item => item.EndTimeMs), included.Sum(item => item.WeightedSeverity), included, objects));
         }
 
+        // Timing loss can occur in a full combo. Keep its evidence separate from actual missed objects.
+        foreach (var lesson in attempts.Select(AimMod.Desktop.Coaching.TappingCoaching.Build).Where(lesson => lesson is not null))
+        {
+            int first = Math.Max(0, lesson!.FirstObjectIndex - safe.ContextObjectsBefore);
+            int last = Math.Min(beatmap.HitObjects.Count - 1, lesson.FirstObjectIndex + 7 + safe.ContextObjectsAfter);
+            if (first > last || lesson.FirstObjectIndex >= beatmap.HitObjects.Count) continue;
+            var objects = beatmap.HitObjects.Skip(first).Take(last - first + 1).ToArray();
+            var types = DetectPatterns(beatmap, objects, lesson.FirstObjectIndex - first);
+            if (safe.DrillType != PracticeDrillType.Mixed && !types.Contains(safe.DrillType)) continue;
+            var type = safe.DrillType == PracticeDrillType.Mixed ? types[0] : safe.DrillType;
+            candidates.Add(new PracticeSourceSection(type, first, last, objects[0].StartTimeMs,
+                objects.Max(item => item.EndTimeMs), 1, [], objects));
+        }
+
+        if (safe.IncludeOverlappingSections && candidates.Count > 0)
+            return candidates.DistinctBy(section => (section.FirstObjectIndex, section.LastObjectIndex)).OrderBy(section => section.SourceStartTimeMs).ToArray();
         PracticeSourceSection[] selected = candidates.OrderByDescending(section => section.WeaknessScore)
                                                       .ThenBy(section => section.SourceStartTimeMs)
                                                       .Aggregate(new List<PracticeSourceSection>(), addNonOverlapping)
                                                       .ToArray();
-        return selected;
+        return selected.Length == 0 && safe.AllowPatternPractice ? patternSections(beatmap, safe) : selected;
+    }
+
+    private static IReadOnlyList<PracticeSourceSection> patternSections(PracticeSourceBeatmap beatmap, PracticeMapOptions options)
+    {
+        var sections = new List<PracticeSourceSection>();
+        const int phraseObjects = 24;
+        for (int first = 0; first < beatmap.HitObjects.Count; first += phraseObjects)
+        {
+            var objects = beatmap.HitObjects.Skip(first).Take(phraseObjects).ToArray();
+            if (objects.Length < 2 || objects.All(item => item.IsSpinner)) continue;
+            var types = DetectPatterns(beatmap, objects, objects.Length / 2);
+            if (options.DrillType != PracticeDrillType.Mixed && !types.Contains(options.DrillType)) continue;
+            sections.Add(new PracticeSourceSection(options.DrillType, first, first + objects.Length - 1,
+                objects[0].StartTimeMs, objects.Max(item => item.EndTimeMs), 0, [], objects));
+        }
+        return sections;
     }
 
     private static PracticeWeakObject[] aggregateWeaknesses(PracticeSourceBeatmap beatmap, IReadOnlyCollection<ReplayAnalysisResult> analyses) =>
@@ -131,6 +163,9 @@ public static class PracticeMapPlanner
         PracticeDrillType.RhythmChanges => "Rhythm changes",
         _ => "Original phrase",
     };
+
+    internal static PracticeMapPlan CreateSectionPlan(PracticeSourceBeatmap source, PracticeSourceSection section, PracticeMapOptions options) =>
+        compose(source, section, options.Normalised(), 1);
 
     private static PracticeMapPlan compose(PracticeSourceBeatmap beatmap, PracticeSourceSection section, PracticeMapOptions options, int number)
     {

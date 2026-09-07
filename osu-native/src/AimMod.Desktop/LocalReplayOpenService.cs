@@ -7,15 +7,21 @@ public interface IReplayFileLease : IAsyncDisposable
     string ReplayPath { get; }
 }
 
-public interface IPlayableReplayBundle : IReplayFileLease
+public interface IBeatmapSourceLease : IAsyncDisposable
 {
     string BeatmapPath { get; }
+}
+
+public interface IPlayableReplayBundle : IReplayFileLease, IBeatmapSourceLease
+{
     ReplayOpenRequest OpenRequest { get; }
 }
 
 public interface ILocalReplayOpenService
 {
     Task<IPlayableReplayBundle> OpenAsync(LocalReplay replay, CancellationToken cancellationToken = default);
+    async Task<IBeatmapSourceLease> OpenBeatmapSourceAsync(LocalReplay replay, CancellationToken cancellationToken = default) =>
+        await OpenAsync(replay, cancellationToken).ConfigureAwait(false);
     async Task<IReplayFileLease> OpenReplayFileAsync(LocalReplay replay, CancellationToken cancellationToken = default) =>
         await OpenAsync(replay, cancellationToken).ConfigureAwait(false);
 }
@@ -45,6 +51,25 @@ public sealed class CompositeLocalReplayOpenService : ILocalReplayOpenService
         if (lazer is null)
             throw new ExternalLazerReplayOpenException("lazer_library_unavailable", "The osu!lazer replay library is not connected.");
         return await lazer.OpenAsync(replay, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<IBeatmapSourceLease> OpenBeatmapSourceAsync(LocalReplay replay, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (replay.Origin == LocalLibraryOrigin.Stable)
+        {
+            if (!Path.IsPathFullyQualified(replay.BeatmapPath) || !File.Exists(replay.BeatmapPath))
+                throw new ExternalLazerReplayOpenException("beatmap_missing", "The osu!stable beatmap file is no longer available.");
+            return new DirectBeatmapSourceLease(replay.BeatmapPath);
+        }
+        if (lazer is null)
+            throw new ExternalLazerReplayOpenException("lazer_library_unavailable", "The osu!lazer library is not connected.");
+        return await lazer.OpenBeatmapSourceAsync(replay, cancellationToken).ConfigureAwait(false);
+    }
+
+    private sealed record DirectBeatmapSourceLease(string BeatmapPath) : IBeatmapSourceLease
+    {
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     public async Task<IReplayFileLease> OpenReplayFileAsync(LocalReplay replay, CancellationToken cancellationToken = default)

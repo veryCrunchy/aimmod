@@ -136,6 +136,34 @@ public sealed class ExternalLazerReplayOpenService : ILocalReplayOpenService
         CancellationToken cancellationToken) =>
         await OpenAsync(replay, cancellationToken).ConfigureAwait(false);
 
+    public async Task<IBeatmapSourceLease> OpenBeatmapSourceAsync(LocalReplay replay, CancellationToken cancellationToken = default)
+    {
+        if (replay.RulesetShortName != "osu")
+            throw new ExternalLazerReplayOpenException("ruleset_unsupported", "Choose an osu!standard play for practice.");
+        if (!validBeatmapHash(replay.BeatmapHash))
+            throw new ExternalLazerReplayOpenException("beatmap_hash_invalid", "This play does not identify an installed beatmap.");
+        await using var lease = await stageAssets(libraryRoot, [replay.BeatmapHash], [], cancellationToken).ConfigureAwait(false);
+        if (lease.Result.MissingBeatmaps.Contains(replay.BeatmapHash, StringComparer.OrdinalIgnoreCase))
+            throw missingAssetError("Beatmap");
+        var beatmap = singleRequiredAsset(lease.Result.Files, "Beatmap", replay.BeatmapHash, StringComparison.OrdinalIgnoreCase);
+        var audio = singleRequiredAsset(lease.Result.Files, "Audio", replay.BeatmapHash, StringComparison.OrdinalIgnoreCase);
+        string directory = Directory.CreateTempSubdirectory(bundle_prefix).FullName;
+        var bundle = new ExternalLazerPlayableReplayBundle(directory);
+        try
+        {
+            setPrivateDirectoryPermissions(directory);
+            await copyAsset(beatmap, bundle.BeatmapPath, cancellationToken).ConfigureAwait(false);
+            bundle.AudioPath = await copyLogicalAsset(audio, directory, cancellationToken).ConfigureAwait(false);
+            await lease.DisposeAsync().ConfigureAwait(false);
+            return bundle;
+        }
+        catch
+        {
+            await bundle.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
     public async Task<IReplayFileLease> OpenReplayFileAsync(LocalReplay replay, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(replay);

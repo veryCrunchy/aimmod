@@ -62,7 +62,7 @@ public partial class NativeHubReplaySharePanel : CompositeDrawable
                 Children = new Drawable[]
                 {
                     status = text("Choose a replay to share.", 11, AimModPalette.Muted, "SemiBold", 0),
-                    new OsuDropdown<OsuHubVisibility>
+                    new AimModDropdown<OsuHubVisibility>
                     {
                         RelativeSizeAxes = Axes.X,
                         Depth = -10,

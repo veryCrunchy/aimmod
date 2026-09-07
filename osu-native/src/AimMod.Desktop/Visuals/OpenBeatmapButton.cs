@@ -10,12 +10,21 @@ public partial class OpenBeatmapButton : OsuButton, IHasTooltip
 {
     private readonly CancellationTokenSource lifetime = new();
     private bool opening;
+    private readonly Func<bool>? canOpen;
     public LocalisableString TooltipText { get; private set; } = "Open this difficulty in your preferred osu! client";
 
     public OpenBeatmapButton(Func<LocalReplay?> selected, Func<LocalReplay, CancellationToken, Task>? open)
         : this(open is null ? null : token => selected() is { } replay ? open(replay, token)
             : Task.FromException(new InvalidOperationException("Select a map first.")))
     {
+        canOpen = () => open is not null && selected() is not null;
+        Enabled.Value = canOpen();
+    }
+
+    protected override void Update()
+    {
+        base.Update();
+        if (canOpen is not null) Enabled.Value = !opening && canOpen();
     }
 
     public OpenBeatmapButton(Func<CancellationToken, Task>? open)
@@ -23,6 +32,10 @@ public partial class OpenBeatmapButton : OsuButton, IHasTooltip
         AutoSizeAxes = Axes.None;
         Size = new(132, 32);
         Text = "Open in osu!";
+        BackgroundColour = AimModPalette.PanelRaised;
+        Content.BorderThickness = 1; Content.BorderColour = AimModPalette.Border;
+        Content.CornerRadius = AimModVisualStyle.ControlRadius;
+        SpriteText.Font = new osu.Framework.Graphics.Sprites.FontUsage(size:13,weight:"SemiBold");
         Enabled.Value = open is not null;
         Action = () =>
         {

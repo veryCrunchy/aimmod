@@ -13,14 +13,16 @@ public sealed record PracticeMapCandidate(
     int AttemptsWithMisses = 0,
     double AverageMissConfidence = 0)
 {
-    public string Evidence => $"{MissCount:N0} exact {(MissCount == 1 ? "miss" : "misses")} across {AnalysedAttempts:N0} analysed {(AnalysedAttempts == 1 ? "attempt" : "attempts")}";
+    public string Evidence => MissCount == 0
+        ? $"Timing practice / {AnalysedAttempts:N0} analysed {(AnalysedAttempts == 1 ? "attempt" : "attempts")}"
+        : $"{MissCount:N0} exact {(MissCount == 1 ? "miss" : "misses")} across {AnalysedAttempts:N0} analysed {(AnalysedAttempts == 1 ? "attempt" : "attempts")}";
 }
 
 public sealed record PracticeMapGenerationRequest(
     PracticeMapCandidate Candidate,
     PracticeDrillType DrillType,
     PracticeMapOptions? Options = null,
-    IProgress<string>? Progress = null);
+    IProgress<string>? Progress = null, bool CreateSet = false, IReadOnlyList<LocalReplay>? SourceHistory = null, bool Automatic = false);
 
 public sealed record PracticeMapGenerationResult(
     bool Success,
@@ -163,13 +165,14 @@ public static class PracticeMapCandidateBuilder
                                                   .Where(item => string.Equals(item.Result, "Miss", StringComparison.OrdinalIgnoreCase)
                                                                  && item.ObjectIndex is >= 0)
                                                   .ToArray();
-        if (misses.Length == 0)
+        int timingPhrases = evidence.Count(item => AimMod.Desktop.Coaching.TappingCoaching.Build(item.Analysis) is not null);
+        if (misses.Length == 0 && timingPhrases == 0)
             return null;
 
-        double score = misses.Sum(item => 1 + Math.Clamp(item.MissAnalysis?.Confidence ?? 0.25, 0, 1));
+        double score = misses.Sum(item => 1 + Math.Clamp(item.MissAnalysis?.Confidence ?? 0.25, 0, 1)) + timingPhrases;
         int attemptsWithMisses = evidence.Count(item => item.Analysis!.Judgements.Any(judgement =>
             string.Equals(judgement.Result, "Miss", StringComparison.OrdinalIgnoreCase) && judgement.ObjectIndex is >= 0));
-        double averageMissConfidence = misses.Average(item => Math.Clamp(item.MissAnalysis?.Confidence ?? 0.25, 0, 1));
+        double averageMissConfidence = misses.Length == 0 ? 0 : misses.Average(item => Math.Clamp(item.MissAnalysis?.Confidence ?? 0.25, 0, 1));
         LocalReplay source = evidence.OrderByDescending(item => item.Run.PlayedAt).First().Run;
         return new PracticeMapCandidate(source, evidence.Select(item => item.Run.ScoreId).ToArray(),
             evidence.Length, misses.Length, score, attemptsWithMisses, averageMissConfidence);

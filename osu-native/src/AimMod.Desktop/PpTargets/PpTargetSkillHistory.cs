@@ -9,10 +9,17 @@ internal static class PpTargetSkillHistory
         IReadOnlyList<ScoreHistoryEntry> online, IReadOnlyList<LocalBeatmapSet> sets)
     {
         var maps = sets.SelectMany(s => s.Difficulties).GroupBy(d => d.BeatmapId).ToDictionary(g => g.Key, g => g.First());
-        return ScoreHistoryMerger.Merge(local, online).Select(score =>
+        var runs = local.GroupBy(r => r.ScoreId).ToDictionary(g => g.Key, g => g.First());
+        // The skill history also contains display adapters for online best scores.
+        // Only actual local records may acquire Local provenance for pass-frequency training.
+        return ScoreHistoryMerger.Merge(local.Where(r => r.IsLocallyStored).ToArray(), online).Select(score =>
         {
+            // Native lazer stores an explicit completion flag. Legacy replay imports do not
+            // establish a successful clear merely by having a score or high accuracy.
+            if (score.Passed is null && score.LocalScoreId is { } scoreId && runs.TryGetValue(scoreId, out var run)
+                && (run.Origin == LocalLibraryOrigin.Lazer && !run.LegacyScore || !run.Passed))
+                score = score with { Passed = run.Passed };
             if (score.LocalBeatmapId is not { } id || !maps.TryGetValue(id, out var map)) return score;
-            // LocalReplay has no pass/completion flag. Only retain explicit outcomes supplied by history.
             return score with { OnlineBeatmapId = score.OnlineBeatmapId > 0 ? score.OnlineBeatmapId : map.OnlineId,
                 Bpm = score.Bpm is > 0 ? score.Bpm : map.Bpm,
                 LengthSeconds = score.LengthSeconds is > 0 ? score.LengthSeconds : (int)(map.LengthMilliseconds / 1000) };

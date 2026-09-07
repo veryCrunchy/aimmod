@@ -164,9 +164,10 @@ public static class PpTargetRanker
             .Select(group => group.OrderBy(candidate => candidate.Set.BeatmapSetId).ThenBy(candidate => candidate.Difficulty.Name, StringComparer.Ordinal).First())
             .ToArray();
 
-        PpTargetCandidate[] matching = flattened.Select(candidate => score(profile, candidate, exactEstimates))
+        PpTargetCandidate[] matching = flattened.Where(candidate => matchesMetadata(candidate, query)).Select(candidate => score(profile, candidate, exactEstimates))
             .Where(candidate => matches(candidate, query))
-            .OrderByDescending(candidate => candidate.RankScore)
+            .OrderByDescending(candidate => candidate.EvidenceTier)
+            .ThenByDescending(candidate => candidate.RankScore)
             .ThenByDescending(candidate => candidate.EstimatedAttainableGainPp)
             .ThenByDescending(candidate => candidate.Estimate == null ? (double?)null : candidate.Estimate.ExpectedPp)
             .ThenBy(candidate => candidate.BeatmapId)
@@ -185,11 +186,14 @@ public static class PpTargetRanker
         IReadOnlyList<string> mods = profile.PreferredModSetup ?? PpTargetMods.SelectCompatible(profile.CommonMods);
         double preference = preferenceFit(profile, set, difficulty);
         (double attainability, double scoreEvidence, int nearbySampleCount) = performanceFit(profile, difficulty.StarRating);
+        PpTargetPassEstimate? passEstimate = PpTargetOpportunityModel.EstimatePass(profile.Opportunities,
+            difficulty.StarRating, difficulty.Bpm, difficulty.TotalLengthSeconds, mods, difficulty.BeatmapId, profile.PreferredModsJson);
+        double? expectedAccuracy = passEstimate?.ConditionalAccuracy ?? profile.TypicalAccuracy;
         PpTargetEstimate? estimate = matchingEstimate(
             exactEstimates?.GetValueOrDefault(difficulty.BeatmapId) is {} exact && (exact.ModsJson ?? "") == (profile.PreferredModsJson ?? "") ? exact : null,
             difficulty.BeatmapId,
             mods,
-            profile.TypicalAccuracy,
+            expectedAccuracy,
             attainability);
         if (estimate?.PatternProfileIdentity is { } identity && identity != profile.PatternProfile?.Identity)
             estimate = null;
@@ -215,15 +219,15 @@ public static class PpTargetRanker
             };
         }
         double? baseline = difficultyBaseline(profile.PerformanceSamples, difficulty.StarRating);
+        bool supportedScore = passEstimate is not null && (passEstimate.ConditionalAccuracy is not null
+            || estimate?.PatternPrediction is { Fit: not null, ExpectedAccuracy: not null });
         bool awardsPp = string.Equals(set.Status, "ranked", StringComparison.OrdinalIgnoreCase)
                         || string.Equals(set.Status, "approved", StringComparison.OrdinalIgnoreCase);
-        double? gain = estimate is null || baseline is null || !awardsPp
+        double? gain = estimate is null || baseline is null || !awardsPp || !supportedScore
             ? null
-            : Math.Max(0, estimate.ExpectedPp - baseline.Value);
-        double? accountGain = awardsPp && estimate is not null
-            ? PpTargetOpportunityModel.AccountGain(profile.Opportunities, difficulty.BeatmapId, estimate.ExpectedPp) : null;
-        PpTargetPassEstimate? passEstimate = PpTargetOpportunityModel.EstimatePass(profile.Opportunities,
-            difficulty.StarRating, difficulty.Bpm, difficulty.TotalLengthSeconds, mods);
+            : Math.Max(0, estimate.ExpectedPp - baseline.Value) * passEstimate!.Probability;
+        double? accountGain = awardsPp && estimate is not null && supportedScore
+            ? PpTargetOpportunityModel.AccountGain(profile.Opportunities, difficulty.BeatmapId, estimate.ExpectedPp) * passEstimate!.Probability : null;
         double? gainPerMinute = accountGain is { } account && difficulty.TotalLengthSeconds > 0
             ? account / (difficulty.TotalLengthSeconds / 60d) : null;
         double gainScore = accountGain is null
@@ -236,12 +240,19 @@ public static class PpTargetRanker
         double rank = 100 * (0.60 * attainability + 0.15 * (passEstimate?.Lower ?? attainability) + 0.10 * preference
                             + 0.08 * gainScore * attainability
                             + 0.04 * modCompatibility + 0.03 * confidenceScore);
+        // A reliable play that cannot improve any known best score is a warm-up,
+        // not a leading PP target. Keep mechanical fit dominant within useful gains.
+        if (accountGain is { } attainableAccountGain)
+        {
+            double gainScale = Math.Max(5, (profile.CompetitivePpFloor ?? 100) * .1);
+            rank *= .45 + .55 * attainableAccountGain / (attainableAccountGain + gainScale);
+        }
 
         return new PpTargetCandidate(
             set.BeatmapSetId, difficulty.BeatmapId, set.Title, set.Artist, set.Creator, set.Source, set.Status,
             difficulty.Name, difficulty.StarRating, difficulty.Bpm, difficulty.TotalLengthSeconds, difficulty.MaximumCombo,
             set.CoverUrl, preference, attainability, rank, baseline, gain, estimate, mods,
-            scoreEvidence, modCompatibility, recommendation, passEstimate, accountGain, gainPerMinute);
+            scoreEvidence, modCompatibility, recommendation, passEstimate, accountGain, gainPerMinute, expectedAccuracy);
     }
 
     private static PpTargetEstimate? matchingEstimate(
@@ -377,6 +388,18 @@ public static class PpTargetRanker
         return Math.Clamp(1 - distance / Math.Max(0.001, falloff), 0, 1);
     }
 
+    private static bool matchesMetadata(FlatCandidate candidate, NormalisedFilters filters)
+    {
+        var d = candidate.Difficulty; var set = candidate.Set;
+        if (!between(d.StarRating, filters.MinimumStars, filters.MaximumStars)
+            || !between(d.Bpm, filters.MinimumBpm, filters.MaximumBpm)
+            || !between(d.TotalLengthSeconds, filters.MinimumLengthSeconds, filters.MaximumLengthSeconds)
+            || filters.Statuses.Count > 0 && !filters.Statuses.Contains(set.Status)) return false;
+        if (filters.SearchTokens.Length == 0) return true;
+        string searchable = $"{set.Title} {set.Artist} {set.Creator} {set.Source} {d.Name} {set.Status}";
+        return filters.SearchTokens.All(token => searchable.Contains(token, StringComparison.OrdinalIgnoreCase));
+    }
+
     private static bool matches(PpTargetCandidate candidate, NormalisedFilters filters)
     {
         if (!between(candidate.StarRating, filters.MinimumStars, filters.MaximumStars)
@@ -392,7 +415,7 @@ public static class PpTargetRanker
                 return false;
         }
 
-        if (filters.HasExpectedFilter && (candidate.Estimate is null || !between(candidate.Estimate.ExpectedPp, filters.MinimumExpectedPp, filters.MaximumExpectedPp)))
+        if (filters.HasExpectedFilter && (candidate.ExpectedEarnedPp is not { } earned || !between(earned, filters.MinimumExpectedPp, filters.MaximumExpectedPp)))
             return false;
         return !filters.HasMaximumFilter
                || candidate.Estimate is not null && between(candidate.Estimate.RealisticMaximumPp, filters.MinimumRealisticMaximumPp, filters.MaximumRealisticMaximumPp);
@@ -412,7 +435,7 @@ public static class PpTargetRanker
             .Where(value => value.Length > 0).ToHashSet(StringComparer.OrdinalIgnoreCase);
         string[] search = PpTargetPreferenceProfiler.tokenise((filters.SearchText ?? string.Empty)[..Math.Min(filters.SearchText?.Length ?? 0, 256)]).ToArray();
         return new NormalisedFilters(search, minStars, maxStars, minExpected, maxExpected, minMaximum, maxMaximum,
-            minLength, maxLength, minBpm, maxBpm, statuses, Math.Clamp(filters.Limit, 1, 10_000));
+            minLength, maxLength, minBpm, maxBpm, statuses, Math.Clamp(filters.Limit, 1, 50_000));
     }
 
     private static (double? Minimum, double? Maximum) range(double? minimum, double? maximum, double floor)

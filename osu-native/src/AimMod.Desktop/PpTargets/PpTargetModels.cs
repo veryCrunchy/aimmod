@@ -102,7 +102,21 @@ public sealed record PpTargetCandidate(
     PpTargetConfidence RecommendationConfidence,
     PpTargetPassEstimate? PassEstimate = null,
     double? EstimatedAccountGainPp = null,
-    double? AccountGainPerMinute = null);
+    double? AccountGainPerMinute = null,
+    double? ExpectedScoreAccuracy = null)
+{
+    // An exact PP calculation is conditional on a completed score, not proof of a pass.
+    public double? ExpectedEarnedPp => Estimate is { } pp && PassEstimate is { } pass
+        && (string.Equals(Status, "ranked", StringComparison.OrdinalIgnoreCase) || string.Equals(Status, "approved", StringComparison.OrdinalIgnoreCase))
+        && (pass.ConditionalAccuracy is not null || pp.PatternPrediction is { Fit: not null, ExpectedAccuracy: not null })
+        ? pp.ExpectedPp * pass.Probability : null;
+    public int EvidenceTier => ExpectedEarnedPp is null ? 0
+        : PassEstimate!.Probability >= .5 && Attainability >= .5 ? 2 : 1;
+    public string ReadinessLabel => PassEstimate is null ? "Pass unverified"
+        : PassEstimate.Probability < .5 ? "Low pass chance"
+        : ExpectedEarnedPp is null ? "Score unverified"
+        : EvidenceTier == 1 ? "Stretch target" : "Supported by recent plays";
+}
 
 public sealed record PpTargetRankingResult(
     PpTargetPreferenceProfile Profile,

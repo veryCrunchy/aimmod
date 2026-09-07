@@ -161,7 +161,7 @@ public partial class ReplayHistoryScreen : CompositeDrawable
                     new AimModSubsectionHeader(
                         "Replay history",
                         "Grouped by difficulty"),
-                    search = new OsuTextBox
+                    search = new AimModTextBox
                     {
                         RelativeSizeAxes = Axes.X,
                         Height = AimModVisualStyle.ControlHeight,

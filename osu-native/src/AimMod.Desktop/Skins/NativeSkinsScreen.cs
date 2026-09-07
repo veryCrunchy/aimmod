@@ -60,15 +60,15 @@ public partial class NativeSkinsScreen : CompositeDrawable
         {
             new AimModSectionHeader(
                 "Skins",
-                "Use local osu! skins or browse public catalogs with verified temporary previews and direct import.",
+                "Preview your installed skins or find a new look online.",
                 "SKIN LIBRARY") { Depth = -110 },
-            new OsuTabControl<SkinsWorkspaceTab>
+            new AimModTabControl<SkinsWorkspaceTab>
             {
-                Anchor = Anchor.TopRight,
-                Origin = Anchor.TopRight,
-                Position = new(0, 18),
-                Size = new(210, 38),
-                AccentColour = AimModPalette.Pink,
+                Anchor = Anchor.TopLeft,
+                Origin = Anchor.TopLeft,
+                Position = new(0, 72),
+                Height = AimModVisualStyle.ControlHeight,
+
                 Current = currentTab,
                 Depth = -100,
             },
@@ -79,26 +79,25 @@ public partial class NativeSkinsScreen : CompositeDrawable
                 {
                     new SpriteText
                     {
-                        Y = 78,
+                        Y = 122,
                         Text = "SEARCH INSTALLED SKINS",
                         Font = new FontUsage(size: 10, weight: "Bold"),
                         Colour = AimModPalette.Cyan,
                     },
                     searchPanel = new Container
                     {
-                        Y = 96,
+                        Y = 140,
                         Width = 560,
                         Height = AimModVisualStyle.ControlHeight,
-                        Child = searchBox = new OsuTextBox
-                        {
-                            RelativeSizeAxes = Axes.Both,
-                            Size = new(1),
-                            PlaceholderText = "Search skin name or creator",
-                        },
+                        Children = [
+                            new Container { RelativeSizeAxes = Axes.Both, Padding = new MarginPadding { Right = 114 },
+                                Child = searchBox = new AimModTextBox { RelativeSizeAxes = Axes.X, Height = AimModVisualStyle.ControlHeight, PlaceholderText = "Search skin name or creator" } },
+                            new AimModResetButton(() => searchBox.Current.Value = string.Empty, "Clear search") { Anchor = Anchor.CentreRight, Origin = Anchor.CentreRight },
+                        ],
                     },
                     status = new TruncatingSpriteText
                     {
-                        Y = 148,
+                        Y = 192,
                         Text = source is null ? "No osu! skin library connected" : "Reading installed skins",
                         Font = new FontUsage(size: 11, weight: "SemiBold"),
                         Colour = AimModPalette.Muted,
@@ -106,7 +105,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
                     new Container
                     {
                         RelativeSizeAxes = Axes.Both,
-                        Padding = new MarginPadding { Top = 174 },
+                        Padding = new MarginPadding { Top = 218 },
                         Children = new Drawable[]
                         {
                             listPanel = new Container
@@ -197,7 +196,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
             onlineContent = new Container
             {
                 RelativeSizeAxes = Axes.Both,
-                Padding = new MarginPadding { Top = 76 },
+                Padding = new MarginPadding { Top = 120 },
                 Alpha = 0,
                 AlwaysPresent = false,
                 Child = onlineView = new NativeOnlineSkinsView(
@@ -399,7 +398,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
         selectedCreator.Text = selected.Creator.Length > 0 ? $"by {selected.Creator}" : "Creator not specified";
         selectedDetails.Text = selected.IsBuiltIn
             ? "Built into the pinned osu runtime. No copy is needed."
-            : $"{selected.Summary.FileCount:N0} local files  ·  copied once into AimMod when applied";
+            : $"{selected.Summary.FileCount:N0} local files  ·  available for use in AimMod";
         applyButton.SetState(
             applySkin is not null && selected.SkinId != appliedExternalSkinId,
             selected.SkinId == appliedExternalSkinId ? "Active in AimMod" : "Use for replay playback");
@@ -620,7 +619,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
                 {
                     RelativeSizeAxes = Axes.Y,
                     Width = 3,
-                    Colour = activeInAimMod ? AimModPalette.Success : activeInLazer ? AimModPalette.Cyan : AimModPalette.Pink,
+                    Colour = activeInAimMod ? AimModPalette.Success : activeInLazer ? AimModPalette.Cyan : AimModPalette.Accent,
                     Alpha = selected || activeInLazer || activeInAimMod ? 1 : 0,
                 },
                 name = truncatingDetailText(14, AimModPalette.Text, "SemiBold", skin.Name).With(text => text.Position = new(16, 14)),
@@ -686,7 +685,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
         {
             this.enabled = enabled;
             label.Text = text;
-            BackgroundColour = enabled ? AimModPalette.Pink : AimModPalette.PanelHover;
+            BackgroundColour = enabled ? AimModPalette.Accent : AimModPalette.PanelHover;
             this.FadeTo(enabled ? 1 : 0.65f, AimModVisualStyle.FastTransition);
         }
 

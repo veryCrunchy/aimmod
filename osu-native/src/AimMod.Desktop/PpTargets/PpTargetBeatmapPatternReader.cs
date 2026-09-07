@@ -17,7 +17,7 @@ internal sealed record PpTargetBeatmapPatternGeometry(
     double? HitRadius,
     double? ClockRate);
 
-internal sealed class PpTargetBeatmapPatternReader(string cacheDirectory, int maximumFiles = 512, long maximumBytes = 256 * 1024 * 1024)
+internal sealed class PpTargetBeatmapPatternReader(string cacheDirectory, int maximumFiles = 8_192, long maximumBytes = 256 * 1024 * 1024)
 {
     internal const string Version = "playable-geometry-v2";
     private static readonly JsonSerializerOptions json_options = new(JsonSerializerDefaults.Web);
