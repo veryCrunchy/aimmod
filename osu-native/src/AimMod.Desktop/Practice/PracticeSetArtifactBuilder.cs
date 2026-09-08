@@ -27,6 +27,11 @@ public sealed class PracticeSetArtifactBuilder
         string title=source.Metadata.Title+" - AimMod practice "+DateTimeOffset.UtcNow.ToString("yyyy-MM-dd HH-mm-ss-fff");
         try
         {
+            if (slicer is WindowsFfmpegAudioSlicer windowsSlicer)
+            {
+                progress?.Report("Preparing audio tools. First-time setup may take a few minutes.");
+                await windowsSlicer.PrepareAsync(token).ConfigureAwait(false);
+            }
             for (int i=0;i<plans.Count;i++)
             {
                 token.ThrowIfCancellationRequested(); var original=plans[i];

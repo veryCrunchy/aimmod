@@ -909,10 +909,11 @@ public partial class AimModGame : OsuGameBase
             PracticeMapArtifactBuilder.TryDelete(root);
             throw;
         }
-        catch (FileNotFoundException error) when (error.Message.Contains("FFmpeg", StringComparison.OrdinalIgnoreCase))
+        catch (FfmpegSetupException error)
         {
             PracticeMapArtifactBuilder.TryDelete(root);
-            return new PracticeMapGenerationResult(false, "FFmpeg could not be found. Restart AimMod after confirming the installation.");
+            logFailure("prepare practice audio tool", error);
+            return new PracticeMapGenerationResult(false, error.Message);
         }
         catch (TimeoutException)
         {
