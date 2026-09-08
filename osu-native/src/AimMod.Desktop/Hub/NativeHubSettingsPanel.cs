@@ -121,9 +121,9 @@ public partial class NativeHubSettingsPanel : CompositeDrawable
                 {
                     new OsuCheckbox { LabelText = "Sync new completed training sessions", Current = trainingSync, RelativeSizeAxes = Axes.X },
                     new OsuCheckbox { LabelText = "Show new training sessions on my public profile", Current = trainingPublic, RelativeSizeAxes = Axes.X },
-                    text("Sessions are private unless public sharing is enabled.", 12, AimModPalette.Muted),
+                    text("New sessions are shared by default. Turn off public sharing to keep future sessions private.", 12, AimModPalette.Muted),
                     text("Existing practice history stays local. Unsent sessions retry automatically.", 12, AimModPalette.Muted),
-                    trainingStatus = text("Training sync is off.", 12, AimModPalette.Muted),
+                    trainingStatus = text(trainingSync.Value ? "Training will sync after your next completed session." : "Training sync is off.", 12, AimModPalette.Muted),
                     button("View training & sharing", () => openUrl?.Invoke(new Uri(deviceLinkClient?.BaseUri ?? OsuHubSyncClient.DefaultBaseUri, "osu/training")), 230, AimModPalette.PanelHover),
                 }),
                 panel("Uploads", "Recent shares and pending uploads.", new Drawable[]

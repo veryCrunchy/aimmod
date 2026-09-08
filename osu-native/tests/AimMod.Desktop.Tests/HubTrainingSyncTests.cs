@@ -22,7 +22,7 @@ public sealed class HubTrainingSyncTests
     {
         directory = Path.Combine(Path.GetTempPath(), "aimmod-training-tests-" + Guid.NewGuid().ToString("N"));
         preferences = new(Path.Combine(directory, "preferences.json"));
-        await preferences.SaveAsync(new(TrainingSyncEnabled: true));
+        await preferences.SaveAsync(new(TrainingSyncEnabled: true, TrainingPublicSharing: false));
         credentials.Value = new("synthetic-token", "practice-player", DateTimeOffset.UtcNow);
         account = 123; handler = new(); client = new(handler);
     }
@@ -33,6 +33,42 @@ public sealed class HubTrainingSyncTests
     {
         for (int i = 0; i < 100 && !File.Exists(queue); i++) await Task.Delay(10);
         Assert.That(File.Exists(queue), Is.True);
+    }
+
+    [Test] public async Task FreshPreferencesShareNewSessionsWithoutOpeningSettingsAndSurviveRestart()
+    {
+        string path = Path.Combine(directory, "fresh.json");
+        preferences = new(path);
+        var initial = preferences.Load();
+        Assert.That(initial.TrainingSyncEnabled && initial.TrainingPublicSharing, Is.True);
+        Assert.That(initial.TrainingSyncGeneration, Is.Not.EqualTo(Guid.Empty));
+        service().BeginSession()!(result()); await waitQueued();
+        preferences = new(path);
+        Assert.That(preferences.Load().TrainingSyncGeneration, Is.EqualTo(initial.TrainingSyncGeneration));
+        await service().FlushAsync();
+        Assert.That(handler.Requests.Single(), Does.Contain("\"visibility\":\"public\""));
+    }
+
+    [TestCase(false, false)]
+    [TestCase(true, false)]
+    [TestCase(false, true)]
+    public void ExistingExplicitPrivacyChoicesArePreserved(bool sync, bool publicly)
+    {
+        string path = Path.Combine(directory, "existing.json");
+        File.WriteAllText(path, JsonSerializer.Serialize(new { version = 1, preferences = new { trainingSyncEnabled = sync, trainingPublicSharing = publicly } }, json));
+        var saved = new FileHubSharingPreferenceStore(path).Load();
+        Assert.That(saved.TrainingSyncEnabled, Is.EqualTo(sync));
+        Assert.That(saved.TrainingPublicSharing, Is.EqualTo(publicly));
+    }
+
+    [TestCase("not json")]
+    [TestCase("{\"version\":999,\"preferences\":{}}")]
+    public void UnreadablePreferencesDoNotEnablePublicSync(string contents)
+    {
+        string path = Path.Combine(directory, "invalid.json"); File.WriteAllText(path, contents);
+        var saved = new FileHubSharingPreferenceStore(path).Load();
+        Assert.That(saved.TrainingSyncEnabled || saved.TrainingPublicSharing, Is.False);
+        Assert.That(File.ReadAllText(path), Is.EqualTo(contents));
     }
     [Test] public void ContractExcludesPrivateInputAndSourceData()
     {

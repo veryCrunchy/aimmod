@@ -183,7 +183,7 @@ public sealed class OsuHubSyncTests
         string path = Path.Combine(temporaryDirectory, "sharing-preferences.json");
         var store = new FileHubSharingPreferenceStore(path);
 
-        Assert.That(store.Load(), Is.EqualTo(HubSharingPreferences.Default));
+        Assert.That(store.Load() with { TrainingSyncGeneration = Guid.Empty }, Is.EqualTo(HubSharingPreferences.Default));
         Assert.That(store.Load().Visibility, Is.EqualTo(OsuHubVisibility.Public));
         Assert.That(store.Load().UploadReplayFile, Is.False);
         Assert.That(store.Load().UploadAnalysis, Is.False);
@@ -191,7 +191,7 @@ public sealed class OsuHubSyncTests
         var selected = new HubSharingPreferences(visibility, true, true);
         await store.SaveAsync(selected);
 
-        Assert.That(new FileHubSharingPreferenceStore(path).Load(), Is.EqualTo(selected));
+        Assert.That(new FileHubSharingPreferenceStore(path).Load() with { TrainingSyncGeneration = Guid.Empty }, Is.EqualTo(selected));
     }
 
     [Test]
@@ -229,7 +229,7 @@ public sealed class OsuHubSyncTests
             Assert.That(queue.Snapshot().Single().Request.Visibility, Is.EqualTo("private"));
             Assert.That(queue.Snapshot().Single().AttemptCount, Is.Zero);
             Assert.That(File.ReadAllBytes(queuePath), Is.EqualTo(before));
-            Assert.That(preferences.Load(), Is.EqualTo(new HubSharingPreferences(OsuHubVisibility.Public, false, true)));
+            Assert.That(preferences.Load() with { TrainingSyncGeneration = Guid.Empty }, Is.EqualTo(new HubSharingPreferences(OsuHubVisibility.Public, false, true)));
         });
     }
 
