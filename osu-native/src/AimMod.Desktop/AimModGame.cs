@@ -118,6 +118,8 @@ public partial class AimModGame : OsuGameBase
     private HubAutomaticShareService? hubAutomaticShareService;
     private HubTrainingSyncService? hubTrainingSyncService;
     private OsuProfile? currentOsuProfile;
+    private OsuProfile? stableOsuProfile;
+    private OsuProfile? verifiedLazerProfile;
 
     public AimModGame()
         : this(AimModLaunchOptions.Home)
@@ -299,7 +301,7 @@ public partial class AimModGame : OsuGameBase
             OsuStableInstallation? stable = stableDiscovery.CompleteInstallations.FirstOrDefault();
             trainerStableRoot = stable?.CanonicalPath;
             trainerStableConfiguration = stable?.ConfigurationPath;
-            Schedule(() => header.SetStableAccount(stable?.RememberedUsername));
+            Schedule(() => header.SetStableAccount(stable?.RememberedUsername, stable is not null));
             if (stable is not null)
             {
                 localScorePpHydrationService = new LocalScorePpHydrationService(
@@ -307,6 +309,11 @@ public partial class AimModGame : OsuGameBase
                 stablePublicScoreHistoryService = new HubPublicAccountScoreHistoryService(hubHttpClient!, hubBaseUri,
                     stable.RememberedUsername, userId: stable.RememberedUserId);
                 accountScoreHistoryService = stablePublicScoreHistoryService;
+                if (stable.RememberedUserId is > 0 && !string.IsNullOrWhiteSpace(stable.RememberedUsername))
+                {
+                    var localProfile = new OsuProfile(stable.RememberedUserId.Value, stable.RememberedUsername, null, null, null);
+                    Schedule(() => applyStableProfile(localProfile, false));
+                }
                 _ = refreshStablePublicProfile(stablePublicScoreHistoryService, cancellationToken);
             }
             ILocalLibrarySource? stableLibrary = stable is null
@@ -323,6 +330,7 @@ public partial class AimModGame : OsuGameBase
                 LazerHandoffDirectory,
                 stable is null ? null : Path.Combine(stable.CanonicalPath, "osu!.exe"));
             lazerBeatmapInstallService = beatmapDestinationService;
+            beatmapDestinationService.DestinationChanged += accountDestinationChanged;
             Schedule(showFirstRunSetup);
             onlineSkinDestination = new OsuSkinArchiveDestinationService(
                 () => beatmapDestinationService?.Destination ?? OsuClientDestination.Auto,
@@ -476,13 +484,13 @@ public partial class AimModGame : OsuGameBase
     private void applyLazerSessionState(LazerSessionState state)
     {
         // A locally remembered lazer session is not yet a verified online account.
-        accountScoreHistoryService = stablePublicScoreHistoryService;
+        verifiedLazerProfile = null;
         header.SetSessionState(state);
+        refreshActiveAccount();
 
         profileRefreshCancellation?.Cancel();
         profileRefreshCancellation?.Dispose();
         profileRefreshCancellation = null;
-        currentOsuProfile = null;
 
         if (state.Status != LazerSessionStatus.SignedIn || officialApiClient is null)
             return;
@@ -513,9 +521,8 @@ public partial class AimModGame : OsuGameBase
                 {
                     if (lazerSessionMonitor?.Current.Revision == sessionRevision)
                     {
-                        currentOsuProfile = result.Profile;
-                        accountScoreHistoryService = new OfficialAccountScoreHistoryService(() => officialApiClient);
-                        header.SetProfile(result.Profile);
+                        verifiedLazerProfile = result.Profile;
+                        refreshActiveAccount();
                     }
                 });
             }
@@ -531,7 +538,7 @@ public partial class AimModGame : OsuGameBase
         {
             var result = await service.FetchAccountAsync(cancellationToken).ConfigureAwait(false);
             if (!IsDisposed && result.Profile is { } profile)
-                Schedule(() => header.SetPublicProfile(profile));
+                Schedule(() => applyStableProfile(profile, true));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -1087,6 +1094,33 @@ public partial class AimModGame : OsuGameBase
         _ = prepareCatalogReplayAsync(replay, cancellationToken);
     }
 
+    private void accountDestinationChanged(OsuClientDestination destination)
+    {
+        if (!IsDisposed)
+            Schedule(refreshActiveAccount);
+    }
+
+    private void applyStableProfile(OsuProfile profile, bool publicProfile)
+    {
+        stableOsuProfile = profile;
+        if (publicProfile) header.SetPublicProfile(profile);
+        refreshActiveAccount();
+    }
+
+    private void refreshActiveAccount()
+    {
+        bool useLazer = UseLazerAccount(beatmapDestinationService?.Destination ?? OsuClientDestination.Auto,
+            trainerStableRoot is not null, verifiedLazerProfile);
+        currentOsuProfile = useLazer ? verifiedLazerProfile : stableOsuProfile;
+        accountScoreHistoryService = useLazer
+            ? new OfficialAccountScoreHistoryService(() => officialApiClient)
+            : stablePublicScoreHistoryService;
+        header.SetProfilePreference(useLazer ? verifiedLazerProfile : null);
+    }
+
+    internal static bool UseLazerAccount(OsuClientDestination destination, bool stableInstalled, OsuProfile? verifiedLazer)
+        => verifiedLazer is not null && !(destination == OsuClientDestination.Stable && stableInstalled);
+
     private void prepareCatalogReplayMoment(LocalReplay replay, double timeMs)
     {
         if (!double.IsFinite(timeMs) || timeMs < 0) return;
@@ -1603,6 +1637,8 @@ public partial class AimModGame : OsuGameBase
         appLifetime.Cancel();
         profileRefreshCancellation?.Cancel();
         profileRefreshCancellation?.Dispose();
+        if (beatmapDestinationService is not null)
+            beatmapDestinationService.DestinationChanged -= accountDestinationChanged;
         skinApplyLifetime?.Cancel();
         skinApplyLifetime?.Dispose();
         officialApiClient?.Dispose();
@@ -1631,7 +1667,9 @@ public partial class AimModGame : OsuGameBase
     {
         private readonly TruncatingSpriteText sessionState;
         private string? stableUsername;
+        private bool stableAvailable;
         private OsuProfile? publicProfile;
+        private OsuProfile? verifiedProfile;
         private LazerSessionStatus sessionStatus = LazerSessionStatus.Unavailable;
         private readonly Drawable productPill;
         private readonly FillFlowContainer<Drawable> navigation;
@@ -1689,47 +1727,63 @@ public partial class AimModGame : OsuGameBase
         public void SetSessionState(LazerSessionState state)
         {
             sessionStatus = state.Status;
-            sessionState.Text = state.Status switch
+            verifiedProfile = null;
+            updateAccountLabel();
+        }
+
+        private void updateAccountLabel()
+        {
+            // A remembered lazer token says nothing about the connected stable library.
+            // Keep the usable account visible until a lazer profile is actually verified.
+            sessionState.Text = sessionStatus switch
             {
-                LazerSessionStatus.SignedIn => "Checking osu! account...",
+                _ when verifiedProfile is not null => verifiedProfile.Statistics?.GlobalRank is int verifiedRank and > 0
+                    ? $"{verifiedProfile.Username}  ·  #{verifiedRank:N0}"
+                    : verifiedProfile.Username,
                 _ when publicProfile is not null => publicProfile.Statistics?.GlobalRank is int rank and > 0
                     ? $"{publicProfile.Username}  ·  #{rank:N0} (public)"
                     : $"{publicProfile.Username} (public profile)",
-                LazerSessionStatus.Remembered => "osu! online session expired",
-                LazerSessionStatus.SignedOut => "osu! signed out",
-                _ => stableUsername is null ? "osu!lazer not connected" : $"{stableUsername} (osu!stable, local)",
+                _ when stableAvailable => stableUsername is null ? "osu!stable connected (local)" : $"{stableUsername} (osu!stable, local)",
+                LazerSessionStatus.SignedIn => "Checking osu!lazer account...",
+                LazerSessionStatus.Remembered => "osu!lazer session expired",
+                LazerSessionStatus.SignedOut => "osu!lazer signed out",
+                _ => "osu!lazer not connected",
             };
-            sessionState.Colour = state.Status == LazerSessionStatus.SignedIn ? AimModPalette.Cyan : AimModPalette.Muted;
+            sessionState.Colour = verifiedProfile is not null || publicProfile is not null ? AimModPalette.Cyan : AimModPalette.Muted;
         }
 
         public void SetProfile(OsuProfile profile)
         {
-            sessionState.Text = profile.Statistics?.GlobalRank is int rank and > 0
-                ? $"{profile.Username}  ·  #{rank:N0}"
-                : profile.Username;
-            sessionState.Colour = AimModPalette.Cyan;
+            verifiedProfile = profile;
+            updateAccountLabel();
         }
 
-        public void SetStableAccount(string? username)
+        public void SetProfilePreference(OsuProfile? profile)
         {
-            stableUsername = username;
-            if (sessionStatus != LazerSessionStatus.SignedIn)
-                SetSessionState(new LazerSessionState(sessionStatus, null, 0));
+            verifiedProfile = profile;
+            updateAccountLabel();
+        }
+
+        public void SetStableAccount(string? username, bool installed)
+        {
+            stableAvailable = installed;
+            stableUsername = installed && !string.IsNullOrWhiteSpace(username) ? username.Trim() : null;
+            updateAccountLabel();
         }
 
         public void SetPublicProfile(OsuProfile profile)
         {
             publicProfile = profile;
-            if (sessionStatus != LazerSessionStatus.SignedIn)
-                SetSessionState(new LazerSessionState(sessionStatus, null, 0));
+            updateAccountLabel();
         }
 
         public void SetAccountUnavailable()
         {
             sessionStatus = LazerSessionStatus.Unavailable;
-            if (publicProfile is not null || stableUsername is not null)
+            verifiedProfile = null;
+            if (publicProfile is not null || stableAvailable)
             {
-                SetSessionState(new LazerSessionState(sessionStatus, null, 0));
+                updateAccountLabel();
                 return;
             }
             sessionState.Text = "Online account unavailable";

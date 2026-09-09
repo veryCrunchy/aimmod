@@ -28,6 +28,8 @@ public sealed partial class OffscreenVisualCaptureTests
 {
     [TestCase("home", 1600, 900)]
     [TestCase("home", 1100, 760)]
+    [TestCase("home-stable-expired", 1100, 760)]
+    [TestCase("home-stable-expired", 800, 760)]
     [TestCase("trainers-start", 800, 760)]
     [TestCase("trainers-start", 1600, 900)]
     [TestCase("coaching-first-visit", 800, 760)]
@@ -367,6 +369,13 @@ public sealed partial class OffscreenVisualCaptureTests
             frameworkConfig.SetValue(FrameworkSetting.WindowMode, WindowMode.Windowed);
             frameworkConfig.SetValue(FrameworkSetting.WindowedSize, new System.Drawing.Size(width, height));
 
+            if (route == "home-stable-expired")
+            {
+                object sidebar = typeof(AimModGame).GetField("header", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(this)!;
+                sidebar.GetType().GetMethod("SetStableAccount")!.Invoke(sidebar, ["Stable Player", true]);
+                sidebar.GetType().GetMethod("SetSessionState")!.Invoke(sidebar, [new LazerSessionState(LazerSessionStatus.Remembered, null, 1)]);
+            }
+
             if (string.Equals(route, "loading", StringComparison.Ordinal))
             {
                 var overlay = new AimModLoadingOverlay();
@@ -376,7 +385,7 @@ public sealed partial class OffscreenVisualCaptureTests
                     loaded.ShowLoading("Calculating beatmap PP", "Difficulty 12 of 24", 12, 24);
                 });
             }
-            else if (!string.Equals(route, "home", StringComparison.Ordinal))
+            else if (!route.StartsWith("home", StringComparison.Ordinal))
             {
                 if (route.StartsWith("settings", StringComparison.Ordinal))
                 {
