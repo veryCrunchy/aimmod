@@ -16,6 +16,7 @@ namespace AimMod.Desktop.Practice;
 
 public partial class NativePracticeWorkspace : CompositeDrawable
 {
+    public void SetRunStatus(string message) => status.Text = message;
     private readonly Func<PracticeMapCandidate, CancellationToken, Task<IReadOnlyList<PracticeSectionChoice>>> inspect;
     private readonly Func<PracticeMapGenerationRequest, CancellationToken, Task<PracticeMapGenerationResult>> generate;
     private readonly Func<SavedPracticeMap, CancellationToken, Task<LazerBeatmapInstallResult>> open;
@@ -76,6 +77,9 @@ public partial class NativePracticeWorkspace : CompositeDrawable
     private readonly Action close;
     private bool guidedEditor;
     private bool createAllSections;
+    private bool createBreakdown;
+    private IReadOnlyList<PracticeSectionRange>? preparedSections;
+    public Action<SavedPracticeMap, PracticeDifficultyIdentity>? StartDifficulty { get; set; }
     private bool showIncludedSections;
     public bool IsShowingSavedPractice => savedView;
     private IReadOnlyList<LocalReplay> sourceHistory = [];
@@ -207,9 +211,23 @@ public partial class NativePracticeWorkspace : CompositeDrawable
         switchView(savedView);
     }
 
-    public void OpenCandidate(PracticeMapCandidate candidate) { Open(candidate.SourceReplay.Title); select(candidate); guidedEditor = true; showIncludedSections = false; createAllSections = true; advancedSettings = false; detailScroll.ScrollTo(0, false); }
+    public void OpenCandidate(PracticeMapCandidate candidate) { createBreakdown = false; Open(candidate.SourceReplay.Title); select(candidate); guidedEditor = true; showIncludedSections = false; createAllSections = true; advancedSettings = false; detailScroll.ScrollTo(0, false); }
+    public void OpenBreakdown(PracticeMapCandidate candidate, int? firstObjectIndex = null)
+    {
+        OpenCandidate(candidate);
+        tappingFirstObject = firstObjectIndex;
+        createAllSections = false;
+        createBreakdown = true;
+    }
+
+    public void OpenNextBreakdown(PracticeMapCandidate candidate, IReadOnlyList<PracticeSectionRange> prepared)
+    {
+        OpenBreakdown(candidate);
+        preparedSections = prepared;
+    }
     public void OpenTappingPhrase(PracticeMapCandidate candidate, int firstObjectIndex, int playbackSpeed)
     {
+        createBreakdown = false;
         Open(candidate.SourceReplay.Title);
         select(candidate);
         tappingFirstObject = firstObjectIndex;
@@ -335,6 +353,7 @@ public partial class NativePracticeWorkspace : CompositeDrawable
     {
         if (generating) return;
         tappingFirstObject = null;
+        preparedSections = null;
         selected = candidate;
         choice = null;
         int ticket = startOperation("Reading source patterns");
@@ -351,6 +370,8 @@ public partial class NativePracticeWorkspace : CompositeDrawable
             IReadOnlyList<PracticeSectionChoice> result = await inspect(candidate, token).ConfigureAwait(false);
             deliver(ticket, () =>
             {
+                if (preparedSections is { } prepared)
+                    result = PracticeSectionQueue.Remaining(result, prepared);
                 finishOperation($"{result.Count} practice sections available");
                 sections = result;
                 var target = tappingFirstObject is { } first
@@ -393,15 +414,55 @@ public partial class NativePracticeWorkspace : CompositeDrawable
     private void showEditor()
     {
         detail.Clear();
-        if (selected is null || sections.Count == 0) { detail.Add(text("No supported practice sections found", 16)); return; }
+        if (selected is null || sections.Count == 0)
+        {
+            detail.Add(text(preparedSections is null ? "No supported practice sections found" : "No more new sections to prepare", 18));
+            if (preparedSections is not null)
+            {
+                detail.Add(paragraph("The suggested sections are already in your saved exercises. Return to coaching to repeat one or try the full map again."));
+                detail.Add(new AimModButton("Back to your map", close, true));
+            }
+            return;
+        }
         detail.Add(text(selected.SourceReplay.Title, 20));
         detail.Add(text(selected.SourceReplay.Difficulty, 13, AimModPalette.Cyan));
         detail.Add(text("Original setup: " + ScoreMods.Display(selected.SourceReplay),14,AimModPalette.Muted));
+        if (preparedSections is not null)
+        {
+            detail.Add(text($"{sections.Count} remaining sections to choose from", 16, AimModPalette.Accent));
+            var remaining = new FillFlowContainer<Drawable> { RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Direction = FillDirection.Full, Spacing = new(8) };
+            foreach (var candidate in sections)
+            {
+                var button = new AimModButton($"{timestamp(candidate.Section.SourceStartTimeMs)} - {timestamp(candidate.Section.SourceEndTimeMs)} · {PracticeMapPlanner.Label(candidate.Scenario)}", () =>
+                {
+                    scenario.Value = candidate.Scenario;
+                    sectionIndex.Value = sections.Where(s => s.Scenario == candidate.Scenario).ToList().IndexOf(candidate);
+                    showEditor();
+                });
+                button.SetSelected(candidate.Scenario == scenario.Value && sections.Where(s => s.Scenario == scenario.Value).ToList().IndexOf(candidate) == sectionIndex.Value);
+                remaining.Add(button);
+            }
+            detail.Add(remaining);
+        }
         if (guidedEditor) detail.Add(text("Choose a comfortable speed and a short practice length.", 15, AimModPalette.Muted));
         LocalReplay sourceReplay = selected.SourceReplay;
 
-        detail.Add(new Button(createAllSections ? "Practice set: all sections (click for one section)" : "Single section (click for a full practice set)",
-            FontAwesome.Solid.LayerGroup, () => { createAllSections = !createAllSections; showEditor(); }));
+        var modes = new FillFlowContainer { RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Direction = FillDirection.Full, Spacing = new(8) };
+        addMode("All sections", createAllSections && !createBreakdown, () => { createAllSections = true; createBreakdown = false; });
+        addMode("One section", !createAllSections && !createBreakdown, () => { createAllSections = false; createBreakdown = false; });
+        addMode("Break down this section", createBreakdown, () => { createAllSections = false; createBreakdown = true; });
+        if (preparedSections is null) detail.Add(modes);
+        else modes.Dispose();
+        void addMode(string label, bool active, Action selectMode)
+        {
+            var button = new AimModButton(label, () => { selectMode(); showEditor(); });
+            button.SetSelected(active); modes.Add(button);
+        }
+        if (createBreakdown)
+        {
+            detail.Add(paragraph("Four connected difficulties: rhythm with less movement, aim with Relax, both together, then the original section."));
+            detail.Add(paragraph("Compare reduced movement with the original at the same speed. Aim-focus results are kept separate."));
+        }
         if (createAllSections)
             detail.Add(text("One mapset, with a separate difficulty for each practice section. Speed and length apply to each difficulty.", 13, AimModPalette.Muted));
         var scenarioControl = dropdown(new Bindable<PracticeDrillType>(scenario.Value), sections.Select(item => item.Scenario).Distinct(), PracticeMapPlanner.Label);
@@ -475,7 +536,7 @@ public partial class NativePracticeWorkspace : CompositeDrawable
             AudioPaddingMs: recovery.Value * 1000, TargetDurationMs: duration.Value * 1000,
             MinimumRepetitions: rounds.Value, MaximumRepetitions: 24, FirstObjectIndex: choice.Section.FirstObjectIndex, PlaybackRate: speed.Value / 100d);
         var progress = new Progress<string>(message => deliver(ticket, () => { status.Text = message; loadingOverlay.ShowLoading("Creating practice map", message); }));
-        _ = createAsync(new PracticeMapGenerationRequest(selected, scenario.Value, options, progress, createAllSections, sourceHistory), ticket, operation!.Token);
+        _ = createAsync(new PracticeMapGenerationRequest(selected, scenario.Value, options, progress, createAllSections, sourceHistory, CreateBreakdown: createBreakdown), ticket, operation!.Token);
     }
 
     private async Task createAsync(PracticeMapGenerationRequest request, int ticket, CancellationToken token)
@@ -514,6 +575,16 @@ public partial class NativePracticeWorkspace : CompositeDrawable
                 () => { showIncludedSections = !showIncludedSections; showSaved(map); }));
             if (showIncludedSections || tracking.Difficulties.Count <= 3)
                 foreach (var difficulty in tracking.Difficulties) detail.Add(text(difficulty.Name, 14, AimModPalette.Cyan));
+            if (tracking.Difficulties.Any(d => d.BreakdownGroupId.Length > 0))
+            {
+                detail.Add(paragraph("Start with an original-section attempt, then compare it with reduced movement. Try the combined, easier version before your next original attempt."));
+                foreach (var difficulty in tracking.Difficulties.Where(d => d.BreakdownGroupId.Length > 0))
+                {
+                    if (StartDifficulty is not null)
+                        detail.Add(new AimModButton("Play " + PracticeBreakdownPlanner.Label(difficulty.BreakdownVariant), () => StartDifficulty?.Invoke(map, difficulty)));
+                }
+                detail.Add(paragraph("Aim focus uses Relax to handle tapping. Its results are tracked separately from manual plays."));
+            }
         }
         else detail.Add(text(PracticeMapPlanner.Label(map.Scenario), 18));
         if (map.SourceEndMs > 0 && (map.Tracking?.Difficulties.Count ?? 1) == 1) detail.Add(text($"Source: {timestamp(map.SourceStartMs)} - {timestamp(map.SourceEndMs)}", 14));
@@ -616,7 +687,7 @@ public partial class NativePracticeWorkspace : CompositeDrawable
         base.Update();
         browserHeader.Alpha = guidedEditor ? 0 : 1;
         guidedHeader.Alpha = guidedEditor ? 1 : 0;
-        guidedTitle.Text = savedView ? "Your practice is ready" : createAllSections ? "Prepare your practice set" : "Prepare your practice map";
+        guidedTitle.Text = savedView ? "Your practice is ready" : preparedSections is not null ? "Choose your next section" : createBreakdown ? "Break down this section" : createAllSections ? "Prepare your practice set" : "Prepare your practice map";
         filtersScroll.Alpha = guidedEditor ? 0 : 1;
         list.Alpha = guidedEditor ? 0 : 1;
         columns.Y = guidedEditor ? 76 : 192;
@@ -638,7 +709,7 @@ public partial class NativePracticeWorkspace : CompositeDrawable
         statusText.Width = Math.Max(100, DrawWidth - 244);
         statusText.RelativeSizeAxes = Axes.None;
         cancel.Alpha = busy ? 1 : 0;
-        createButton.SetTitle(createAllSections ? "Create practice set" : "Create practice map");
+        createButton.SetTitle(createBreakdown ? "Create section breakdown" : createAllSections ? "Create practice set" : "Create practice map");
         createButton.Alpha = !busy && !savedView && choice is not null ? 1 : 0;
         elapsed.Text = busy ? $"{(DateTimeOffset.UtcNow - started).TotalSeconds:0}s elapsed" : "";
     }
@@ -662,6 +733,12 @@ public partial class NativePracticeWorkspace : CompositeDrawable
         _ => "Aim deviation",
     };
     private static FillFlowContainer flow() => new() { RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Direction = FillDirection.Vertical, Spacing = new(10), Padding = new MarginPadding { Right = 10, Bottom = 12 } };
+    private static Drawable paragraph(string value) => new TextFlowContainer(sprite =>
+    {
+        sprite.Font = new FontUsage("Torus", 13);
+        sprite.Colour = AimModPalette.Muted;
+    }) { RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y }.With(flow => flow.AddText(value));
+
     private static OsuSpriteText text(string value, float size, Colour4? colour = null) => new TruncatingSpriteText
     { Text = value, Font = new osu.Framework.Graphics.Sprites.FontUsage("Torus", size), Colour = colour ?? AimModPalette.Text, RelativeSizeAxes = Axes.X };
     private Drawable optionPair(Drawable left, Drawable right) => new GridContainer

@@ -25,7 +25,7 @@ public static class TrainerSkillProfile
 {
     public static TrainerSkillLimits Build(TrainerKind kind, IEnumerable<TrainerResult> history, IEnumerable<TrainerSkillEvidence> replays, DateTimeOffset now)
     {
-        var recent = history.Where(r => r.Settings.Kind == kind && r.UsesOsuJudgements && r.CompletedAt >= now.AddDays(-30) && r.CompletedAt <= now
+        var recent = history.Where(r => !r.Assisted && r.Settings.Kind == kind && r.UsesOsuJudgements && r.CompletedAt >= now.AddDays(-30) && r.CompletedAt <= now
             && r.Notes >= 12 && r.Hits >= 0 && r.Hits <= r.Notes && r.PlayedSeconds >= 12)
             .DistinctBy(r => r.Id).OrderByDescending(r => r.CompletedAt).Take(12).ToArray();
         var clean = recent.Where(r => r.Accuracy is >= 95 and <= 100 && r.Hits >= r.Notes*.95 && r.SpreadMs is >= 0 and <= 25)

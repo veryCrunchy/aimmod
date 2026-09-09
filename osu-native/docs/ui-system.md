@@ -39,6 +39,16 @@ AimMod is one workspace for finding maps, reviewing plays and improving. A route
 
 ## Change review
 
+### Feature discovery and next actions
+
+- Give new workflows an entry point that describes what the player wants to do. Keep the destination workspace name visible alongside it.
+- Put the next useful action before optional configuration. Advanced controls may collapse, but their values must survive closing and reopening.
+- Show the current practice step, its purpose and progress together. Keep the full session and comparisons reachable without making every step compete for attention.
+- Empty states must offer an action the player can take now. Results must offer a repeat, continuation or return to a real map.
+- Reflect the selected mode honestly: fixed-song comparisons must not promise shuffle, and unavailable evidence must not become a completed step.
+
+### Verification
+
 1. Reuse a shared control or improve it centrally before creating a page-specific variant.
 2. Inspect the changed screen alongside two other routes, at the same window size and theme. Check title origin, tab row, control height, colour roles and content density.
 3. Exercise search, reset, empty state, dropdown overflow and the primary action. Confirm model options and bindings were preserved.

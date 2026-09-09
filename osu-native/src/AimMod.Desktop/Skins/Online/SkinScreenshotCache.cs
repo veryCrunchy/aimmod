@@ -52,8 +52,7 @@ public sealed class SkinScreenshotCache(ISecureSkinHttpClient http, string direc
             {
                 await image.SaveAsPngAsync(temporary, cancellationToken).ConfigureAwait(false);
                 File.Move(temporary, path, true);
-                foreach (FileInfo old in new DirectoryInfo(directory).EnumerateFiles("*.png").OrderByDescending(file => file.LastWriteTimeUtc).Skip(192))
-                    old.Delete();
+                DiskCacheBudget.Trim(directory, ".png", 192, 128L * 1024 * 1024, TimeSpan.FromDays(30), path);
             }
             finally { if (File.Exists(temporary)) File.Delete(temporary); }
             return path;

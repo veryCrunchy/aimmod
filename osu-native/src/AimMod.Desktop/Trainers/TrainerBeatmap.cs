@@ -112,6 +112,8 @@ public sealed class TrainerBeatmap : WorkingBeatmap
                 if (distance>maximum && distance>0) position=Vector2.Lerp(previous.EndPosition,position,(float)(maximum/distance));
             }
             bool slider = settings.Sliders != TrainerSliderStyle.None && (settings.Sliders == TrainerSliderStyle.SlidersOnly || (settings.RandomizePatterns ? random.Next(5)==0 : i%8==0));
+            // Compact comparisons preserve every target time and the original path geometry.
+            position = new Vector2(256, 192) + (position - new Vector2(256, 192)) * (float)settings.MovementScale;
             double beatLength = map.ControlPointInfo.TimingPointAt(notes[i].TimeMs).BeatLength;
             double available = notes[^1].TimeMs - notes[i].TimeMs;
             if (slider && available >= beatLength * settings.SliderBeats + beatLength*.25)
@@ -125,6 +127,7 @@ public sealed class TrainerBeatmap : WorkingBeatmap
                 double spanLength = Math.Min(length, 220);
                 if(settings.RandomizePatterns && settings.SkillLimits is {} sliderSkill)
                     spanLength=Math.Min(spanLength,Math.Min(sliderSkill.MaxJumpDistance,sliderSkill.MaxAimVelocity*duration/1000/(repeats+1)));
+                spanLength *= settings.MovementScale;
                 var path = new SliderPath([new PathControlPoint(Vector2.Zero, PathType.LINEAR), new PathControlPoint(direction*(float)spanLength)], spanLength);
                 var obj = new Slider { StartTime = notes[i].TimeMs, Position = position, NewCombo = newCombo, Path = path, RepeatCount = repeats,
                     SliderVelocityMultiplier = spanLength / length, Samples = [new HitSampleInfo(HitSampleInfo.HIT_NORMAL)] };

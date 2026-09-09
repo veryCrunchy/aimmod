@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using AimMod.Desktop.Trainers;
 
 namespace AimMod.Desktop.Hub;
@@ -15,11 +16,28 @@ public sealed record HubTrainingSession(string Id, DateTimeOffset CompletedAt, s
     double? Accuracy, double? MeanMs, double? SpreadMs, double? DriftMs, double? ResponseMs,
     double PlayedSeconds, double? PeakNps, double? JumpDistance, double? AimVelocity, int? LongestChain)
 {
+    private static readonly JsonSerializerOptions comparisonJson = createComparisonJson();
+
+    private static JsonSerializerOptions createComparisonJson()
+    {
+        var resolver = new DefaultJsonTypeInfoResolver();
+        resolver.Modifiers.Add(info =>
+        {
+            if (info.Type != typeof(TrainerSettings)) return;
+            // Keep the exact pre-guided JSON property order and shape for ordinary runs.
+            // A compact exercise adds only its non-default scale to the cohort identity.
+            var movement = info.Properties.Single(p => p.Name == nameof(TrainerSettings.MovementScale));
+            movement.ShouldSerialize = (_, value) => value is double scale && scale != 1;
+        });
+        return new JsonSerializerOptions { TypeInfoResolver = resolver };
+    }
+
     public static HubTrainingSession FromResult(TrainerResult result, bool publicly)
     {
+        if (result.Assisted) throw new ArgumentException("Assisted results require a separate training contract.", nameof(result));
         TrainerSettings s = result.Settings;
         // Hash the comparison settings locally: keys, offset, source paths and device configuration never leave the app.
-        string hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(s.ComparisonKey())))).ToLowerInvariant();
+        string hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(s.ComparisonKey(), comparisonJson)))).ToLowerInvariant();
         var setup = new HubTrainingSetup(s.Kind.ToString().ToLowerInvariant(), result.Engine, s.Bpm, s.Seconds,
             (int)s.Pattern, (int)s.NoteSpeed, (int)s.AimStyle, s.AimSpacing, s.CircleSize, s.ApproachRate,
             (int)s.Sliders, s.SliderBeats, (int)s.PathStyle, s.RandomizePatterns,
@@ -51,7 +69,11 @@ public sealed class HubTrainingSyncService(string path, HttpClient client, Uri b
         HubSharingPreferences settings = preferences.Load();
         string? owner = scope(credentials.Load(), osuAccount());
         if (!settings.TrainingSyncEnabled || owner is null || settings.TrainingSyncGeneration == Guid.Empty) return null;
-        return result => _ = enqueueAsync(owner, settings.TrainingSyncGeneration, HubTrainingSession.FromResult(result, settings.TrainingPublicSharing));
+        return result =>
+        {
+            if (!result.Assisted)
+                _ = enqueueAsync(owner, settings.TrainingSyncGeneration, HubTrainingSession.FromResult(result, settings.TrainingPublicSharing));
+        };
     }
 
     private async Task enqueueAsync(string owner, Guid generation, HubTrainingSession session)

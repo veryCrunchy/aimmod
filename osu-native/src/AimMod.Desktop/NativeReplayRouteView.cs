@@ -487,6 +487,8 @@ public partial class NativeReplayRouteView : Container
 
     public void SuspendPlayback() => player?.SuspendPlayback();
 
+    public bool SeekToMoment(double timeMs) => double.IsFinite(timeMs) && timeMs >= 0 && player?.SeekTo(timeMs) == true;
+
     public void ShowReady() => statusLayer.FadeOut(180);
 
     public void ShowError(string message)

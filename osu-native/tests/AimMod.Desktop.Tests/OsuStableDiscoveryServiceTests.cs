@@ -6,6 +6,25 @@ namespace AimMod.Desktop.Tests;
 [TestFixture]
 public sealed class OsuStableDiscoveryServiceTests
 {
+    [TestCase("\"D:\\Games\\osu!\\osu!.exe\" \"%1\"", "D:\\Games\\osu!")]
+    [TestCase("D:\\Rhythm Games\\osu!\\osu!.exe %1", "D:\\Rhythm Games\\osu!")]
+    [TestCase("\"D:\\Games\\osu!lazer\\osu!.exe\" \"%1\"", "D:\\Games\\osu!lazer")]
+    [TestCase("cmd.exe /c \"D:\\Games\\osu!\\osu!.exe\"", null)]
+    [TestCase("\"D:\\Games\\osu!\\osu!.exe", null)]
+    [TestCase("osu!.exe %1", null)]
+    public void RegistryCommandIsParsedAsAPathAndNeverExecuted(string command, string? expected)
+        => Assert.That(WindowsStableInstallationPaths.RootFromCommand(command), Is.EqualTo(expected));
+
+    [Test]
+    public void FindsRegisteredNonDefaultStableRootAndRejectsLazerOnlyHint()
+    {
+        var fs = new SyntheticFileSystem(OsuHostPlatform.Windows, @"D:\Rhythm Games\osu!");
+        fs.AddDirectory(@"D:\lazer");
+        var result = new OsuStableDiscoveryService(fs).Discover(OsuHostPlatform.Windows,
+            new OsuDiscoveryEnvironment(RegisteredStableRoots: [@"D:\lazer", @"D:\Rhythm Games\osu!"]));
+        Assert.That(result.CompleteInstallations.Single().CanonicalPath, Is.EqualTo(@"D:\Rhythm Games\osu!"));
+    }
+
     [TestCase(false)]
     [TestCase(true)]
     public void PresenceIdentityRequiresAnUnambiguousUsernameMatch(bool ambiguous)

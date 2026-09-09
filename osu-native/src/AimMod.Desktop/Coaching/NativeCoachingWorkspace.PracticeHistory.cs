@@ -26,7 +26,7 @@ public partial class NativeCoachingWorkspace
                 var result=await practiceLibrary!.RunAsync(()=>loadSavedPracticeSets(history.Runs,account),token).ConfigureAwait(false);
                 if (!IsDisposed) Schedule(()=> {
                     if (IsDisposed || account!=practiceAccountId()) return;
-                    practiceSets=result; practiceHistoryFailed=false; renderPracticeHistory();
+                    allReplays=history.Runs; practiceSets=result; practiceHistoryFailed=false; renderPracticeHistory();
                 });
             }
             catch(OperationCanceledException) when(token.IsCancellationRequested) { return; }
@@ -73,16 +73,20 @@ public partial class NativeCoachingWorkspace
             (set.Map.Title + " " + set.Map.Difficulty + " " + string.Join(" ", set.Map.Tracking?.Difficulties.Select(d => d.Name) ?? []))
                 .Contains(query, StringComparison.OrdinalIgnoreCase))).ToArray();
         practiceHistoryHost.Add(flow($"{visible.Length} of {groups.Length} beatmaps · {visible.Sum(g => g.Count())} sets",12,AimModPalette.Muted));
-        if (visible.Length == 0) practiceHistoryHost.Add(flow(groups.Length == 0
-            ? "Your beatmaps will appear here after you create a practice set. Start with Find a map."
-            : "No beatmaps match your search.",18,AimModPalette.Muted));
+        if (visible.Length == 0)
+        {
+            practiceHistoryHost.Add(flow(groups.Length == 0
+                ? showArchivedPractice ? "No archived practice sets." : "Choose a map to start your first practice session. Your exercises and progress will stay together here."
+                : "No beatmaps match your search.", 15, AimModPalette.Muted));
+            if (query.Length > 0) practiceHistoryHost.Add(new CoachingButton("Clear search", () => savedPracticeSearch.Current.Value = "", compact: true));
+        }
         foreach (var group in visible)
         {
             var latest = group.First();
             int attempts = group.SelectMany(s => s.Progress.Attempts).Where(a => !a.Original).DistinctBy(a => a.ScoreId).Count();
             practiceHistoryHost.Add(new CoachingMapRow(latest.Map.Title, latest.Map.Difficulty,
                 $"{group.Count()} {(group.Count() == 1 ? "set" : "sets")}  ·  {attempts} attempts  ·  Updated {latest.Map.CreatedAt.ToLocalTime():dd MMM}",
-                "View progress", () => openCoachingMap(group.Key)));
+                "Open session", () => openCoachingMap(group.Key)));
         }
         if (coachingMapId is not null || coachingMapRun is not null) renderCoachingMap();
     }

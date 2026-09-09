@@ -89,7 +89,7 @@ public sealed class CompositeLocalLibrarySource : ILocalLibrarySource, ILocalLib
 
     private static string? warning<T>(SourceRows<T>[] rows) => rows.Any(row => row.Error is not null)
         ? "Partial library: an osu! installation is unavailable. Retry to include it."
-        : null;
+        : rows.Select(row => row.Warning).FirstOrDefault(message => message is not null);
 
     private static async Task<SourceRows<T>> readPrefix<T>(
         Func<LocalLibraryQuery, CancellationToken, ValueTask<LocalLibraryPage<T>>> search,
@@ -99,6 +99,7 @@ public sealed class CompositeLocalLibrarySource : ILocalLibrarySource, ILocalLib
         int wanted = query.Offset + query.Limit;
         var rows = new List<T>(wanted);
         int total = 0;
+        string? warning = null;
         while (rows.Count < wanted)
         {
             LocalLibraryPage<T> page = await search(
@@ -106,10 +107,11 @@ public sealed class CompositeLocalLibrarySource : ILocalLibrarySource, ILocalLib
                 cancellationToken).ConfigureAwait(false);
             rows.AddRange(page.Items);
             total = page.Total;
+            warning ??= page.Warning;
             if (!page.HasMore || page.Items.Count == 0)
                 break;
         }
-        return new SourceRows<T>(rows.ToArray(), total);
+        return new SourceRows<T>(rows.ToArray(), total, Warning: warning);
     }
 
     private static string mapKey(LocalBeatmapSet set)
@@ -151,5 +153,5 @@ public sealed class CompositeLocalLibrarySource : ILocalLibrarySource, ILocalLib
         + (replay.PerformancePoints is not null ? 2 : 0)
         + (replay.IsLocallyStored ? 1 : 0);
 
-    private sealed record SourceRows<T>(T[] Items, int Total, Exception? Error = null);
+    private sealed record SourceRows<T>(T[] Items, int Total, Exception? Error = null, string? Warning = null);
 }

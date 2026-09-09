@@ -126,6 +126,32 @@ public sealed class PracticeMapLibrary
         if (new FileInfo(path).Length > 64_000_000) throw new InvalidDataException("Practice history is too large.");
         return JsonSerializer.Deserialize<PracticeProgress>(File.ReadAllText(path)) ?? PracticeProgress.Empty;
     }
+
+    /// <summary>Records a completed embedded practice attempt. Original-map scores still come from score history.</summary>
+    public Task<PracticeProgress> RecordAttemptAsync(string id, PracticeAttempt attempt, CancellationToken token = default) => RunAsync(() =>
+    {
+        string directory = ownedDirectory(id);
+        string metadata = Path.Combine(directory, "practice.json");
+        var map = JsonSerializer.Deserialize<SavedPracticeMap>(File.ReadAllText(metadata))
+            ?? throw new InvalidDataException("The practice set could not be read.");
+        var difficulty = map.Tracking?.Difficulties.FirstOrDefault(d => d.Name == attempt.Difficulty
+            && d.BreakdownVariant == attempt.BreakdownVariant && d.BreakdownGroupId == attempt.BreakdownGroupId
+            && d.SourceStartMs == attempt.SourceStartMs && d.SourceEndMs == attempt.SourceEndMs);
+        if (map.Id != id || difficulty is null || attempt.Original || attempt.ScoreId == Guid.Empty
+            || !double.IsFinite(attempt.Accuracy) || attempt.Accuracy is < 0 or > 1 || attempt.Misses < 0
+            || string.IsNullOrWhiteSpace(attempt.Setup) || attempt.PlayedAt < map.CreatedAt || attempt.PlayedAt > DateTimeOffset.UtcNow
+            || attempt.Assisted != (difficulty.BreakdownVariant == PracticeBreakdownVariant.AimFocus))
+            throw new ArgumentException("The practice result does not match this difficulty.");
+        var previous = LoadProgress(id);
+        var next = new PracticeProgress(previous.Attempts.Where(a => a.ScoreId != attempt.ScoreId).Append(attempt)
+            .GroupBy(a => a.OnlineScoreId > 0 ? "online:" + a.OnlineScoreId : "local:" + a.ScoreId)
+            .Select(g => g.First()).OrderBy(a => a.PlayedAt).ToArray());
+        string path = Path.Combine(directory, "progress.json");
+        File.WriteAllText(path + ".tmp", JsonSerializer.Serialize(next));
+        File.Move(path + ".tmp", path, true);
+        return next;
+    }, token);
+
     public IReadOnlyList<PracticeSetProgress> RefreshProgress(IEnumerable<AimMod.Desktop.LocalLibrary.LocalReplay> history, int accountId)
     {
         var runs=history.ToArray(); var result=new List<PracticeSetProgress>();

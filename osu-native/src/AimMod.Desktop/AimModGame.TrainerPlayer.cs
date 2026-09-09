@@ -13,6 +13,7 @@ using osu.Game.Configuration;
 using osu.Game.Database;
 using osu.Game.Input.Bindings;
 using osu.Game.Rulesets.Osu;
+using osu.Game.Rulesets.Mods;
 using osu.Game.Screens;
 
 namespace AimMod.Desktop;
@@ -72,6 +73,11 @@ public partial class AimModGame
     }
 
     private void launchPreparedTrainer(TrainerSettings settings, bool mouseButtons, TrainerBeatmap map)
+        => launchPreparedGameplay(settings, mouseButtons, map, result => trainersWorkspace?.CompleteOsuSession(result),
+            map.ReleaseAudio, map.SeekTime, map.FadeOutro, []);
+
+    private void launchPreparedGameplay(TrainerSettings settings, bool mouseButtons, WorkingBeatmap map,
+        Action<TrainerResult?> complete, Action release, double seekTime, Action<double>? fadeOutro, Mod[] mods)
     {
         WorkingBeatmap previousMap = Beatmap.Value;
         var previousRuleset = Ruleset.Value;
@@ -106,7 +112,7 @@ public partial class AimModGame
         LocalConfig.SetValue(OsuSetting.MouseDisableButtons, !mouseButtons);
         Beatmap.Value = map;
         Ruleset.Value = new OsuRuleset().RulesetInfo;
-        SelectedMods.Value = [];
+        SelectedMods.Value = mods;
         // Use the entire client viewport: a small card would change physical aiming distance.
         var previousCursor = Host.Window?.CursorState;
         if (Host.Window is {} window) window.CursorState |= CursorState.Confined;
@@ -124,10 +130,10 @@ public partial class AimModGame
             restoreTrainerSettings?.Invoke();
             if (previousCursor is {} cursor && Host.Window is {} window) window.CursorState = cursor;
             content.Show(); header.Show();
-            trainersWorkspace?.CompleteOsuSession(result);
+            complete(result);
             // Player disposal is deferred by the framework. Release its private audio afterwards.
-            Scheduler.AddDelayed(map.ReleaseAudio, 1000);
-        })) { SeekTime = map.SeekTime, OutroProgress = map.FadeOutro, OnReady = () =>
+            Scheduler.AddDelayed(release, 1000);
+        })) { SeekTime = seekTime, OutroProgress = fadeOutro, OnReady = () =>
         {
             if (trainerOsuSettings?.Input?.Tablet is {} mapping)
                 foreach (var device in Host.AvailableInputHandlers.OfType<ITabletHandler>())

@@ -1,6 +1,7 @@
 using System.Reflection;
 using AimMod.Desktop.Practice;
 using AimMod.Desktop.Visuals;
+using AimMod.Desktop.LocalLibrary;
 using AimMod.Osu.Runtime;
 using NUnit.Framework;
 
@@ -9,6 +10,31 @@ namespace AimMod.Desktop.Tests.Practice;
 [TestFixture]
 public sealed partial class PracticeOperationTests
 {
+    [TestCase(false)]
+    [TestCase(true)]
+    public void BreakdownEntryKeepsSelectedSectionInGenerationRequest(bool nextSection)
+    {
+        string root = Directory.CreateTempSubdirectory("practice-breakdown-operation-").FullName;
+        try
+        {
+            var replay = new LocalReplay(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "Fixture", "Artist", "Difficulty", "osu", "Player",
+                DateTimeOffset.UtcNow, 5, .95, 1_000_000, 500, 1, 100, [], true, new string('a', 64));
+            var candidate = new PracticeMapCandidate(replay, [replay.ScoreId], 1, 1, 1);
+            var earlier = new PracticeSourceSection(PracticeDrillType.Mixed, 0, 9, 0, 5000, 0, [], []);
+            var selected = new PracticeSourceSection(PracticeDrillType.Mixed, 20, 29, 10000, 15000, 0, [], []);
+            using var workspace = new BreakdownWorkspace(new(root), [new(PracticeDrillType.Mixed, earlier), new(PracticeDrillType.Mixed, selected)]);
+            if (nextSection) workspace.OpenNextBreakdown(candidate, [new(0, 5000)]);
+            else workspace.OpenBreakdown(candidate, 24);
+            workspace.Drain();
+            invoke(workspace, "create");
+            Assert.That(workspace.Request, Is.Not.Null);
+            Assert.That(workspace.Request!.CreateBreakdown, Is.True);
+            Assert.That(workspace.Request.CreateSet, Is.False);
+            Assert.That(workspace.Request.Options!.FirstObjectIndex, Is.EqualTo(20));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
     [TestCase(false)]
     [TestCase(true)]
     public void TerminalStateRejectsQueuedAndLateProgress(bool cancelled)
@@ -45,6 +71,19 @@ public sealed partial class PracticeOperationTests
         (_, _) => Task.FromResult(new PracticeMapGenerationResult(true, "Saved")),
         (_, _) => Task.FromResult(new LazerBeatmapInstallResult(LazerBeatmapInstallStatus.Sent)), library, () => { })
     {
+        public void Drain() => Scheduler.Update();
+    }
+
+    private sealed partial class BreakdownWorkspace : NativePracticeWorkspace
+    {
+        private readonly List<PracticeMapGenerationRequest> requests;
+        public PracticeMapGenerationRequest? Request => requests.LastOrDefault();
+        public BreakdownWorkspace(PracticeMapLibrary library, IReadOnlyList<PracticeSectionChoice> sections)
+            : this(library, sections, []) { }
+        private BreakdownWorkspace(PracticeMapLibrary library, IReadOnlyList<PracticeSectionChoice> sections, List<PracticeMapGenerationRequest> requests)
+            : base((_, _) => Task.FromResult(sections), (request, _) =>
+                { requests.Add(request); return Task.FromResult(new PracticeMapGenerationResult(false, "Finished")); },
+                (_, _) => Task.FromResult(new LazerBeatmapInstallResult(LazerBeatmapInstallStatus.Sent)), library, () => { }) => this.requests = requests;
         public void Drain() => Scheduler.Update();
     }
 }

@@ -22,6 +22,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
     [Resolved] private AudioManager audio { get; set; } = null!;
     [Resolved] private GameHost host { get; set; } = null!;
     private readonly Func<TrainerHistoryStore> history;
+    private readonly Action openCoaching;
     public Action<TrainerSettings, bool, double>? LaunchOsuSession { get; set; }
     public Func<Action<TrainerResult>?>? BeginTrainingSync { get; set; }
     private Action<TrainerResult>? recordTraining;
@@ -66,6 +67,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
     private readonly FillFlowContainer<Drawable> timingControls;
     private readonly FillFlowContainer<Drawable> controls;
     private readonly FillFlowContainer<Drawable> setup;
+    private readonly AimModScrollContainer contentScroll;
     private bool showingResults;
     private bool isTiming => settings.Kind <= TrainerKind.Rhythm;
     private double elapsed => isTiming ? audioClock?.CurrentTime ?? 0 : Time.Current - began;
@@ -73,6 +75,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
     public NativeTrainersWorkspace(Func<TrainerHistoryStore> history, Action openCoaching)
     {
         this.history = history;
+        this.openCoaching = openCoaching;
         preferences = history().LoadPreferences();
         settings = settings with { RandomizePatterns = preferences.RandomizePatterns };
         freshAimLayout = preferences.FreshLayout;
@@ -82,10 +85,11 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
             Direction = FillDirection.Vertical, Spacing = new(12), Padding = new MarginPadding { Right = 14, Bottom = 24 } };
         InternalChildren = [new AimModSectionHeader("Trainers", "Focused drills for timing, control and reading."),
             new Container { RelativeSizeAxes = Axes.Both, Padding = new MarginPadding { Top = 76 },
-                Child = new AimModScrollContainer { RelativeSizeAxes = Axes.Both, Child = body } }];
+                Child = contentScroll = new AimModScrollContainer { RelativeSizeAxes = Axes.Both, Child = body } }];
         body.Add(results = column());
         setup = column(); body.Add(setup);
         body = setup;
+        buildGuidedControls(body);
         body.Add(text("Choose your focus", 16, AimModPalette.Text));
         body.Add(exerciseChoices = flow());
         foreach (var kind in Enum.GetValues<TrainerKind>())
@@ -103,12 +107,17 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
             settings.Bpm, b => { Suspend(); settings = settings with { Bpm = b }; refreshMusicDescription(); refreshHistory(); }, 150, d => tempoSelector = d));
         controls.Add(timingControls);
         body.Add(controls);
-        buildPatternControls(body);
-        buildAimControls(body);
         buildMusicControls(body);
+        body.Add(practiceOptionsToggle = new AimModButton("Adjust patterns & difficulty", TogglePracticeOptions));
+        practiceOptions = column();
+        practiceOptions.Depth = -9;
+        body.Add(practiceOptions);
+        buildPatternControls(practiceOptions);
+        buildAimControls(practiceOptions);
+        practiceOptions.Hide();
         advanced = column(); advanced.Depth = -8; advanced.Alpha = 0;
         var actions = flow();
-        actions.Add(start = new AimModButton("Start practice", Start, true));
+        actions.Add(start = new AimModButton("Start practice", startSelectedPractice, true));
         actions.Add(stop = new AimModButton("Stop session", () => Suspend()) { Alpha = 0 });
         actions.Add(advancedToggle = new AimModButton("Controls & audio", () =>
         { advancedOpen = !advancedOpen; advanced.Alpha = advancedOpen ? 1 : 0; advancedToggle!.SetSelected(advancedOpen); }));
@@ -167,6 +176,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         if (pathControl is not null) pathControl.Alpha = settings.Kind is TrainerKind.Aim or TrainerKind.Reading ? 0 : 1;
         if (reactionControls is not null) reactionControls.Alpha = settings.Kind == TrainerKind.Reaction ? 1 : 0;
         if (musicControls is not null) musicControls.Alpha = settings.Kind == TrainerKind.Reaction ? 0 : 1;
+        refreshPracticeIntent();
         field?.Reset();
         if (field is not null) field.Alpha = settings.Kind == TrainerKind.Reaction ? 1 : 0;
     }
@@ -202,11 +212,21 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
     public void CompleteOsuSession(TrainerResult? result)
     {
         results.Clear();
-        if (result is null) { status.Text = "Session stopped. Start again when you are ready."; return; }
+        if (result is null)
+        {
+            bool guided = pendingGuidedRun is not null;
+            pendingGuidedRun = null; recordTraining = null;
+            if (guided) showGuidedOverview();
+            else { showingResults = false; setup.Show(); }
+            status.Text = "Session stopped. Start again when you are ready.";
+            return;
+        }
+        result = annotateGuidedResult(result);
         status.Text = "Session complete.";
         showResult(result);
         showingResults = true; setup.Hide(); results.FadeInFromZero(220);
-        recordTraining?.Invoke(result); recordTraining = null;
+        if (!result.Assisted) recordTraining?.Invoke(result);
+        recordTraining = null;
         try { (activeHistory ?? history()).Add(result); refreshHistory(); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         { status.Text = "Your result is shown below, but history could not be saved."; }
@@ -215,6 +235,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
     public void Start()
     {
         if (running || preparing) return;
+        pendingGuidedRun = null;
         if (showingResults) { showingResults = false; setup.Show(); }
         if (settings.Kind != TrainerKind.Reaction && settings.Music == "song" && SelectedSong is null)
         { status.Text = "Choose an installed song below the music selector."; return; }
@@ -260,7 +281,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
     public void Suspend(string message = "Session stopped. Completed sessions are saved in your history.")
     {
         if (!running) return;
-        running = false; track?.Stop(); start.SetCaption("Start practice");
+        running = false; track?.Stop(); refreshPracticeIntent();
         controls.Show(); exerciseChoices.Show(); advancedToggle.Show(); advanced.Alpha = advancedOpen ? 1 : 0; stop.Hide(); timingControls.Alpha = settings.Kind != TrainerKind.Reaction && settings.Music != "song" ? 1 : 0; status.Text = message;
     }
 
@@ -330,7 +351,8 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
 
     private void showResult(TrainerResult r)
     {
-        results.Add(text("Session result", 18, AimModPalette.Text));
+        contentScroll.ScrollTo(0, false);
+        results.Add(text(r.Assisted ? "Assisted session result" : "Session result", 18, AimModPalette.Text));
         results.Add(paragraph($"{DisplayName(r.Settings.Kind)}  ·  {r.Settings.TempoDescription}  ·  {r.PlayedSeconds ?? r.Settings.Seconds:0.#} seconds"));
         if (r.Settings.Music == "song") results.Add(paragraph($"{r.Settings.SongTitle} · +{r.Settings.SongStartSeconds}s"));
         var metrics = flow(); results.Add(metrics);
@@ -352,19 +374,31 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
             metrics.Add(metric($"{r.Hits}", "targets hit"));
             metrics.Add(metric($"{r.Extras}", r.Settings.Kind == TrainerKind.Reaction ? "false starts" : "off-target taps"));
         }
-        var previous = history().Load().Where(p => p.Id != r.Id && p.CompletedAt < r.CompletedAt && p.Settings.ComparisonKey() == r.Settings.ComparisonKey() && p.Engine == r.Engine).OrderByDescending(p => p.CompletedAt).FirstOrDefault();
+        var previous = history().Load().Where(p => p.Id != r.Id && p.CompletedAt < r.CompletedAt && p.Assisted == r.Assisted && p.Settings.ComparisonKey() == r.Settings.ComparisonKey() && p.Engine == r.Engine).OrderByDescending(p => p.CompletedAt).FirstOrDefault();
         if (previous is not null)
             results.Add(paragraph(r.UsesOsuJudgements || r.Settings.Kind <= TrainerKind.Rhythm
                 ? $"Previous matching run: {previous.OnTimePercent:0.0}% within 25 ms, {ms(previous.SpreadMs)} spread."
                 : $"Previous matching run: {ms(previous.ResponseMs)} median, {previous.Extras} {(r.Settings.Kind == TrainerKind.Reaction ? "false starts" : "off-target taps")}."));
+        if (addGuidedActions(r)) return;
         results.Add(text("Next run", 15, AimModPalette.Text));
         results.Add(paragraph(TrainerSession.NextStep(r)));
         var nextActions = flow();
         nextActions.Add(new AimModButton("Repeat exercise", () => repeat(r.Settings, 0)));
-        nextActions.Add(new AimModButton("Practice settings", () => { showingResults = false; results.Clear(); setup.Show(); }));
+        nextActions.Add(new AimModButton("Practice settings", returnToPracticeSettings));
+        if (r.Settings.Kind != TrainerKind.Reaction) nextActions.Add(new AimModButton("Try on a beatmap", openCoaching));
         if (r.Settings.Kind != TrainerKind.Reaction && r.Settings.Music == "cues" && r.Settings.Bpm > 60)
             nextActions.Add(new AimModButton("Try 10 BPM slower", () => repeat(r.Settings, -10)));
         results.Add(nextActions);
+    }
+
+    private void returnToPracticeSettings()
+    {
+        showingResults = false;
+        results.Clear();
+        results.Hide();
+        setup.Show();
+        refreshPracticeIntent();
+        contentScroll.ScrollTo(0, false);
     }
 
     private void repeat(TrainerSettings selected, int tempoChange)
@@ -386,10 +420,11 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
     private void refreshHistory()
     {
         refreshSkillSummary();
+        refreshPracticeIntent();
         if (recent is null) return;
         recent.Clear();
         historyTitle.Text = $"Your progress · {DisplayName(settings.Kind)}";
-        var runs = history().Load().Where(r => r.Settings.Kind == settings.Kind).ToArray();
+        var runs = history().Load().Where(r => !r.Assisted && r.Settings.Kind == settings.Kind).ToArray();
         if (runs.Length == 0) { recent.Add(paragraph("Complete this exercise to track your accuracy and consistency here.")); return; }
         recent.Add(paragraph($"{runs.Length} completed {(runs.Length == 1 ? "session" : "sessions")}  ·  {runs.Sum(r => r.PlayedSeconds ?? r.Settings.Seconds) / 60.0:0.#} minutes practised"));
         string engine = TrainerResult.EngineFor(settings);
@@ -407,7 +442,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
                 : run.Settings.Kind <= TrainerKind.Rhythm ? $"{run.Settings.TempoDescription}  ·  {run.OnTimePercent:0.0}% on time"
                 : $"{ms(run.ResponseMs)} median  ·  {run.Extras} early taps";
             recent.Add(new AimModButton($"{run.CompletedAt.LocalDateTime:dd MMM HH:mm}  ·  {run.Settings.Seconds}s  ·  {value}",
-                () => { if (!running) { results.Clear(); showResult(run); } }));
+                () => { if (!running) { results.Clear(); showResult(run); showingResults = true; setup.Hide(); results.Show(); } }));
         }
     }
 
@@ -421,10 +456,12 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
     private static OsuTextFlowContainer paragraph(string value) => new(t => { t.Font = new FontUsage(size: 14); t.Colour = AimModPalette.Muted; }) { RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Text = value };
     private static Drawable metric(string value, string label) => new FillFlowContainer<Drawable> { Width = 148, Height = 60, Direction = FillDirection.Vertical, Spacing = new(4),
         Children = [text(value, 23, AimModPalette.Accent), text(label, 12, AimModPalette.Muted)] };
+    private const float selectorLabelSpacing = 20;
+
     private static Drawable selector<T>(string label, IEnumerable<KeyValuePair<string, T>> options, T selected, Action<T> changed, float width, Action<AimModDropdown<T>>? capture = null)
     {
         var labels = options.ToArray();
-        var dropdown = new TrainerDropdown<T>(v => labels.FirstOrDefault(p => EqualityComparer<T>.Default.Equals(p.Value, v)).Key ?? v?.ToString() ?? "") { RelativeSizeAxes = Axes.X, Y = 20, Items = labels.Select(p => p.Value) };
+        var dropdown = new TrainerDropdown<T>(v => labels.FirstOrDefault(p => EqualityComparer<T>.Default.Equals(p.Value, v)).Key ?? v?.ToString() ?? "") { RelativeSizeAxes = Axes.X, Y = selectorLabelSpacing, Items = labels.Select(p => p.Value) };
         capture?.Invoke(dropdown);
         dropdown.Current.Value = selected; dropdown.Current.BindValueChanged(e => changed(e.NewValue));
         return new Container { Width = width, Height = 56, Children = [text(label, 10, AimModPalette.Muted), dropdown] };

@@ -11,7 +11,8 @@ public sealed record TrainerSettings(TrainerKind Kind = TrainerKind.Steady, int 
     TrainerAimStyle AimStyle = TrainerAimStyle.Balanced, int AimSpacing = 100, int CircleSize = 4, int PatternSeed = 0,
     TrainerPattern Pattern = TrainerPattern.Standard, TrainerNoteSpeed NoteSpeed = TrainerNoteSpeed.Default,
     TrainerSliderStyle Sliders = TrainerSliderStyle.None, int SliderBeats = 1, TrainerPathStyle PathStyle = TrainerPathStyle.FigureEight,
-    bool RandomizePatterns = false, int ApproachRate = 7, TrainerReactionDelay ReactionDelay = TrainerReactionDelay.Standard, TrainerSkillLimits? SkillLimits = null)
+    bool RandomizePatterns = false, int ApproachRate = 7, TrainerReactionDelay ReactionDelay = TrainerReactionDelay.Standard, TrainerSkillLimits? SkillLimits = null,
+    double MovementScale = 1)
 {
     public string TempoDescription => Music == "song" ? "Song tempo" : $"{Bpm} BPM";
     public TrainerSettings ComparisonKey() => this with
@@ -32,7 +33,8 @@ public sealed record TrainerSettings(TrainerKind Kind = TrainerKind.Steady, int 
     public void Validate()
     {
         SkillLimits?.Validate();
-        if (!Enum.IsDefined(Kind) || Bpm is < 60 or > 240 || Seconds is not (15 or 30 or 60 or 120 or 180)
+        if (!double.IsFinite(MovementScale) || MovementScale is < .4 or > 1
+            || !Enum.IsDefined(Kind) || Bpm is < 60 or > 240 || Seconds is not (15 or 30 or 60 or 120 or 180)
             || !Enum.IsDefined(AimStyle) || AimSpacing is not (70 or 85 or 100 or 120 or 140) || CircleSize is < 3 or > 6
             || !TrainerPatterns.Choices(Kind).Values.Contains(Pattern) || !Enum.IsDefined(NoteSpeed) || !Enum.IsDefined(Sliders)
             || !Enum.IsDefined(PathStyle) || !Enum.IsDefined(ReactionDelay) || SliderBeats is < 1 or > 4 || ApproachRate is < 3 or > 10
@@ -48,7 +50,8 @@ public sealed record TrainerNote(double TimeMs, int Phrase, TrainerPattern Patte
 public sealed record TrainerHit(int NoteIndex, double OffsetMs, int Key);
 public sealed record TrainerResult(Guid Id, DateTimeOffset CompletedAt, TrainerSettings Settings,
     int Notes, int Hits, int Within25, int Extras, int RepeatedKeys, double? MeanMs,
-    double? SpreadMs, double? DriftMs, double? ResponseMs = null, string Engine = "cue", double? Accuracy = null, double? PlayedSeconds = null, TrainerDemand? Demand = null)
+    double? SpreadMs, double? DriftMs, double? ResponseMs = null, string Engine = "cue", double? Accuracy = null, double? PlayedSeconds = null, TrainerDemand? Demand = null,
+    TrainerGuidedRun? GuidedRun = null, int? JudgementMisses = null, bool Assisted = false)
 {
     public bool UsesOsuJudgements => Engine is "osu" or "osu-moving-v2" or "osu-patterns-v3" or "osu-adaptive-v4";
     public static string EngineFor(TrainerSettings s) => s.Kind == TrainerKind.Reaction ? "cue"
@@ -56,7 +59,7 @@ public sealed record TrainerResult(Guid Id, DateTimeOffset CompletedAt, TrainerS
         : s.Pattern != TrainerPattern.Standard || s.NoteSpeed != TrainerNoteSpeed.Default || s.Sliders != TrainerSliderStyle.None || s.RandomizePatterns ? "osu-patterns-v3"
         : s.Kind <= TrainerKind.Rhythm ? "osu-moving-v2" : "osu";
     public double OnTimePercent => 100.0 * Within25 / Math.Max(1, Notes + Extras);
-    public int Misses => Notes - Hits;
+    public int Misses => JudgementMisses ?? Notes - Hits;
 }
 
 /// <summary>All times are in the reference audio's timeline, in milliseconds.</summary>
@@ -157,6 +160,25 @@ public sealed record TrainerWorkspacePreferences(bool ShuffleMusic = true, bool 
 
 public sealed class TrainerHistoryStore(string path)
 {
+    public TrainerGuidedPlan? LoadGuidedPlan()
+    {
+        try
+        {
+            var plan = JsonSerializer.Deserialize<TrainerGuidedPlan>(File.ReadAllText(Path.ChangeExtension(path, "guided.json")));
+            if (plan is null || plan.Baseline is null || plan.Current is null || !Enum.IsDefined(plan.Focus)
+                || plan.Step < 0 || plan.Focus == TrainerGuidedFocus.MovementComparison && plan.Step > 6) return null;
+            plan.Baseline.Validate(); plan.Current.Validate();
+            return plan;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or ArgumentException) { return null; }
+    }
+    public void SaveGuidedPlan(TrainerGuidedPlan? plan)
+    {
+        string target = Path.ChangeExtension(path, "guided.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(target))!);
+        File.WriteAllText(target + ".tmp", JsonSerializer.Serialize(plan));
+        File.Move(target + ".tmp", target, true);
+    }
     public TrainerWorkspacePreferences LoadPreferences()
     {
         try { return JsonSerializer.Deserialize<TrainerWorkspacePreferences>(File.ReadAllText(Path.ChangeExtension(path,"preferences.json"))) ?? new(); }

@@ -6,6 +6,24 @@ namespace AimMod.Desktop.Trainers;
 
 public sealed class TrainerGameplayPreferences(string contents)
 {
+    public static TrainerGameplayPreferences Stable(string contents)
+    {
+        var source = TrainerOsuSettingsReader.StableValues(contents);
+        var mapped = new List<string>();
+        if (source.TryGetValue("CursorSize", out string? size)) mapped.Add($"GameplayCursorSize = {size}");
+        mapBoolean("AutomaticCursorSizing", "AutoCursorSize");
+        mapBoolean("IgnoreBeatmapSkins", "BeatmapSkins", invert: true);
+        mapBoolean("IgnoreBeatmapSamples", "BeatmapHitsounds", invert: true);
+        return new TrainerGameplayPreferences(string.Join('\n', mapped));
+
+        void mapBoolean(string from, string to, bool invert = false)
+        {
+            if (!source.TryGetValue(from, out string? raw) || !(raw is "0" or "1" || bool.TryParse(raw, out _))) return;
+            bool enabled = TrainerOsuSettingsReader.IsEnabled(raw);
+            mapped.Add($"{to} = {(invert ? !enabled : enabled)}");
+        }
+    }
+
     private readonly Dictionary<string, string> values = contents.Split('\n').Select(l => l.Split('=', 2)).Where(p => p.Length == 2)
         .GroupBy(p => p[0].Trim()).ToDictionary(g => g.Key, g => g.Last()[1].Trim());
 

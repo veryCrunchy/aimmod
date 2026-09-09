@@ -12,6 +12,8 @@ public enum PracticeDrillType
     RhythmChanges,
 }
 
+public enum PracticeBreakdownVariant { Original, ReducedMovement, AimFocus, CombinedEasier }
+
 public sealed record PracticeMapMetadata(
     string Title,
     string Artist,
@@ -96,7 +98,10 @@ public sealed record PracticeMapPlan(
     IReadOnlyList<PracticeHitObject> HitObjects,
     PracticeAudioSliceRequest AudioSlice,
     string Attribution,
-    int RepeatCount, string? OutputSetTitle = null);
+    int RepeatCount, string? OutputSetTitle = null,
+    PracticeBreakdownVariant BreakdownVariant = PracticeBreakdownVariant.Original,
+    string BreakdownGroupId = "", string RequiredMods = "",
+    IReadOnlyDictionary<string, string>? DifficultyOverrides = null);
 
 public sealed record PracticeMapOptions(
     PracticeDrillType DrillType,

@@ -34,6 +34,9 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     private readonly ILocalLibrarySourceChanged? sourceChanges;
     private readonly IReadOnlyDictionary<Guid, ReplayAnalysisResult> analyses;
     private readonly Action<LocalReplay> openReplay;
+    private readonly Action<LocalReplay, double>? openReplayMoment;
+    private readonly Action? compareMovement;
+    private readonly Action? openTrainers;
     private readonly Func<IAccountScoreHistoryService?> accountHistory;
     private readonly Func<PracticeMapGenerationRequest, CancellationToken, Task<PracticeMapGenerationResult>>? generatePracticeMap;
     private readonly Func<LazerBeatmapArchive, CancellationToken, Task<LazerBeatmapInstallResult>>? installPracticeMap;
@@ -111,7 +114,8 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         Func<PracticeMapGenerationRequest, CancellationToken, Task<PracticeMapGenerationResult>>? generatePracticeMap = null,
         Func<LazerBeatmapArchive, CancellationToken, Task<LazerBeatmapInstallResult>>? installPracticeMap = null,
         NativePracticeWorkspace? practiceWorkspace = null,
-        Func<LocalReplay, CancellationToken, Task>? openBeatmap = null, CoachingTrainingStore? trainingStore = null, PracticeMapLibrary? practiceLibrary = null, Func<int>? accountId = null)
+        Func<LocalReplay, CancellationToken, Task>? openBeatmap = null, CoachingTrainingStore? trainingStore = null, PracticeMapLibrary? practiceLibrary = null, Func<int>? accountId = null,
+        Action<LocalReplay, double>? openReplayMoment = null, Action? compareMovement = null, Action? openTrainers = null)
     {
         this.practiceLibrary = practiceLibrary;
         this.practiceAccountId = accountId ?? (() => 0);
@@ -120,6 +124,9 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         this.source = source ?? throw new ArgumentNullException(nameof(source));
         this.analyses = analyses ?? throw new ArgumentNullException(nameof(analyses));
         this.openReplay = openReplay ?? throw new ArgumentNullException(nameof(openReplay));
+        this.openReplayMoment = openReplayMoment;
+        this.compareMovement = compareMovement;
+        this.openTrainers = openTrainers;
         this.accountHistory = accountHistory ?? (() => null);
         this.generatePracticeMap = generatePracticeMap;
         this.installPracticeMap = installPracticeMap;
@@ -155,6 +162,8 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                 .With(panel => { panel.RelativeSizeAxes = Axes.X; panel.Height = 540; })));
         coachingDetails.Add(createCoachPanel(out changesHost, out recommendationHost).With(panel => panel.Height = 410));
         var playsContent = pageFlow();
+        playsContent.Add(flow("Which map do you want to improve?", 19, AimModPalette.Text));
+        playsContent.Add(flow("Pick a recent play to find difficult sections, practise aim and tapping separately, and check if it helps on the full map.", 14, AimModPalette.Muted));
 
         playsContent.Add(search = new AimModTextBox {
             RelativeSizeAxes = Axes.X, Height = AimModVisualStyle.ControlHeight, PlaceholderText = "Search maps, difficulties, artists or mods",
@@ -883,6 +892,11 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         if (page.Items.Count == 0)
         {
             runList.Add(flow("No completed plays match these filters. Try a wider date range or play a map with at least 70% accuracy.", 14, AimModPalette.Muted).With(text => text.Padding = new MarginPadding(18)));
+            if (openTrainers is not null)
+            {
+                runList.Add(flow("You can train individual skills while you build up your replay history.", 14, AimModPalette.Muted));
+                runList.Add(new CoachingButton("Train a skill", openTrainers, true, true));
+            }
             return;
         }
 

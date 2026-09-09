@@ -1,4 +1,6 @@
 using System.Net;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using AimMod.Desktop.Hub;
 using AimMod.Desktop.Trainers;
@@ -78,6 +80,43 @@ public sealed class HubTrainingSyncTests
         var before = HubTrainingSession.FromResult(r, false);
         var after = HubTrainingSession.FromResult(r with { Settings = r.Settings with { OffsetMs = 42 } }, false);
         Assert.That(after.Setup.ConfigurationHash, Is.Not.EqualTo(before.Setup.ConfigurationHash));
+    }
+    [Test] public void DefaultMovementKeepsExistingConfigurationHashAndCompactMovementSeparatesCohorts()
+    {
+        // Frozen wire shape from TrainerSettings before guided practice was introduced.
+        const string previousJson = """
+            {"Kind":0,"Bpm":120,"Seconds":30,"OffsetMs":0,"Keys":"Z / X","Music":"cues","Cue":"pulse","SongIdentity":"","SongStartSeconds":0,"SongTitle":"","AimStyle":0,"AimSpacing":100,"CircleSize":4,"PatternSeed":0,"Pattern":0,"NoteSpeed":0,"Sliders":0,"SliderBeats":1,"PathStyle":0,"RandomizePatterns":false,"ApproachRate":7,"ReactionDelay":0,"SkillLimits":null,"TempoDescription":"120 BPM"}
+            """;
+        string previousHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(previousJson))).ToLowerInvariant();
+        var original = result();
+        string currentHash = HubTrainingSession.FromResult(original, false).Setup.ConfigurationHash;
+        Assert.That(currentHash, Is.EqualTo(previousHash));
+        Assert.That(HubTrainingSession.FromResult(original with { Settings = original.Settings with { MovementScale = 1, PatternSeed = 42 } }, false).Setup.ConfigurationHash,
+            Is.EqualTo(previousHash));
+        string compactHash = HubTrainingSession.FromResult(original with { Settings = original.Settings with { MovementScale = .55 } }, false).Setup.ConfigurationHash;
+        Assert.That(compactHash, Is.Not.EqualTo(previousHash));
+        Assert.That(HubTrainingSession.FromResult(original with { Settings = original.Settings with { MovementScale = .7 } }, false).Setup.ConfigurationHash,
+            Is.Not.EqualTo(compactHash));
+    }
+    [Test] public void GuidedBaselineAndLocalResultMetadataNeverEnterPublicPayload()
+    {
+        var planId = Guid.NewGuid();
+        var baseline = new TrainerSettings(Music: "song", SongIdentity: "private-guided-source", SongTitle: "private-guided-title", Keys: "A / S", OffsetMs: 37);
+        var guided = result() with { Settings = baseline with { MovementScale = .55 }, JudgementMisses = 2,
+            GuidedRun = new(planId, TrainerGuidedFocus.MovementComparison, 1, "Compact movement", baseline) };
+        string payload = JsonSerializer.Serialize(HubTrainingSession.FromResult(guided, true), json);
+        foreach (string privateValue in new[] { "private-guided-source", "private-guided-title", "A / S", "offsetMs", "guidedRun", "baseline", "judgementMisses", "assisted", planId.ToString() })
+            Assert.That(payload, Does.Not.Contain(privateValue));
+        Assert.That(payload, Does.Contain("\"visibility\":\"public\""));
+    }
+    [Test] public async Task AssistedPracticeCannotBePublishedAsOrdinaryTraining()
+    {
+        var assisted = result() with { Assisted = true };
+        Assert.Throws<ArgumentException>(() => HubTrainingSession.FromResult(assisted, true));
+        service().BeginSession()!(assisted);
+        await service().FlushAsync();
+        Assert.That(handler.Requests, Is.Empty);
+        Assert.That(File.Exists(queue), Is.False);
     }
     [Test] public async Task CompletedSessionSurvivesRestartAndSendsAuthenticatedPrivatePayload()
     {

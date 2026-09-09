@@ -9,9 +9,14 @@ public sealed class PracticeSetArtifactBuilder
     private readonly IPracticeAudioSlicer slicer;
     public PracticeSetArtifactBuilder() : this(new WindowsFfmpegAudioSlicer()) { }
     internal PracticeSetArtifactBuilder(IPracticeAudioSlicer slicer) => this.slicer=slicer;
-    public static IReadOnlyList<PracticeMapPlan> Plan(PracticeSourceBeatmap source, IEnumerable<ReplayAnalysisResult> analyses, PracticeMapOptions options, bool all)
+    public static IReadOnlyList<PracticeMapPlan> Plan(PracticeSourceBeatmap source, IEnumerable<ReplayAnalysisResult> analyses, PracticeMapOptions options, bool all, bool breakdown = false)
     {
         var evidence=analyses.ToArray();
+        if (breakdown)
+        {
+            var plan = PracticeMapPlanner.CreatePlans(source, evidence, options with { MaximumSections = 1 }).FirstOrDefault();
+            return plan is null ? [] : PracticeBreakdownPlanner.CreatePlans(source, plan.SourceSection, options);
+        }
         if (!all) return PracticeMapPlanner.CreatePlans(source,evidence,options);
         var selection=options with { DrillType=PracticeDrillType.Mixed, FirstObjectIndex=null, AllowPatternPractice=true, IncludeOverlappingSections=true };
         return PracticeMapPlanner.FindSections(source,evidence,selection)
@@ -35,13 +40,15 @@ public sealed class PracticeSetArtifactBuilder
             for (int i=0;i<plans.Count;i++)
             {
                 token.ThrowIfCancellationRequested(); var original=plans[i];
-                string name=$"{i+1:00} {PracticeMapPlanner.Label(original.DrillType)} - {TimeSpan.FromMilliseconds(original.SourceSection.SourceStartTimeMs):mm\\:ss} - {original.AudioSlice.PlaybackRate:P0}";
+                string label = original.BreakdownGroupId.Length > 0 ? PracticeBreakdownPlanner.Label(original.BreakdownVariant) : PracticeMapPlanner.Label(original.DrillType);
+                string name=$"{i+1:00} {label} - {TimeSpan.FromMilliseconds(original.SourceSection.SourceStartTimeMs):mm\\:ss} - {original.AudioSlice.PlaybackRate:P0}";
                 var plan=original with { OutputVersion=name, OutputSetTitle=title, AudioSlice=original.AudioSlice with { OutputFilename=$"practice-{i+1:00}.ogg" } };
                 progress?.Report($"Creating difficulty {i+1} of {plans.Count}: {PracticeMapPlanner.Label(plan.DrillType)}");
                 var export=await new PracticeMapExporter().ExportAsync(source,plan,Path.Combine(root,"map"),slicer,token).ConfigureAwait(false);
                 byte[] bytes=await File.ReadAllBytesAsync(export.BeatmapPath,token).ConfigureAwait(false);
                 identities.Add(new(name,plan.DrillType,Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(),Convert.ToHexString(MD5.HashData(bytes)).ToLowerInvariant(),
-                    plan.SourceSection.SourceStartTimeMs,plan.SourceSection.SourceEndTimeMs,plan.SourceSection.WeaknessScore>0));
+                    plan.SourceSection.SourceStartTimeMs,plan.SourceSection.SourceEndTimeMs,plan.SourceSection.WeaknessScore>0,
+                    plan.BreakdownVariant,plan.BreakdownGroupId,plan.RequiredMods));
                 exports.Add(export); outputPlans.Add(plan);
             }
             using (var stream=new FileStream(archive,FileMode.CreateNew,FileAccess.Write))

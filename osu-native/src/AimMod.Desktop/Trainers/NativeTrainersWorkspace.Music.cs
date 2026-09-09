@@ -103,11 +103,14 @@ public partial class NativeTrainersWorkspace
     private void refreshMusicDescription()
     {
         if (musicDescription is null) return;
+        bool fixedMusic = practiceIntent != PracticeIntent.Quick;
+        shuffleToggle.Alpha = !fixedMusic && TrainerMusicCatalog.IsSong(settings.Music) ? 1 : 0;
         musicDescription.Text = settings.Music switch
         {
             "song" => "Your selected drill follows the song's timing, including tempo changes. Sections start from the map's first notes and stop at its end.",
             "cues" => "A clear cue on every target, with four beats to count you in.",
-            _ => $"{TrainerMusicCatalog.Songs[settings.Music]} · {settings.Bpm} BPM. " + (preferences.ShuffleMusic ? "Shuffle picks a different song each run." : "This song stays selected for your next run."),
+            _ => $"{TrainerMusicCatalog.Songs[settings.Music]} · {settings.Bpm} BPM. " + (fixedMusic ? "This song stays the same throughout your comparison or progression."
+                : preferences.ShuffleMusic ? "Shuffle picks a different song each run." : "This song stays selected for your next run."),
         };
     }
 

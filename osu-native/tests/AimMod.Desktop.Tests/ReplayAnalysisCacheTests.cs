@@ -160,6 +160,32 @@ public sealed class ReplayAnalysisCacheTests
         });
     }
 
+    [Test]
+    public async Task ByteBudgetKeepsNewestCompleteResultsAndNoTemporaryFiles()
+    {
+        var results = Enumerable.Range(0, 20).ToDictionary(_ => Guid.NewGuid(), _ => createResult("Great"));
+        var cache = new ReplayAnalysisCache(cachePath, 4096);
+        await cache.SaveAsync(results);
+        var loaded = cache.Load();
+        Assert.Multiple(() =>
+        {
+            Assert.That(new FileInfo(cachePath).Length, Is.LessThanOrEqualTo(4096));
+            Assert.That(loaded, Is.Not.Empty);
+            Assert.That(loaded.Count, Is.LessThan(results.Count));
+            Assert.That(loaded.Keys.Last(), Is.EqualTo(results.Keys.Last()));
+            Assert.That(Directory.GetFiles(temporaryDirectory, "*.tmp"), Is.Empty);
+        });
+    }
+
+    [Test]
+    public async Task OversizedSingleResultDoesNotCreateAnOversizedCache()
+    {
+        var cache = new ReplayAnalysisCache(cachePath, 128);
+        await cache.SaveAsync(new Dictionary<Guid, ReplayAnalysisResult> { [Guid.NewGuid()] = createResult("Great") });
+        Assert.That(cache.Load(), Is.Empty);
+        Assert.That(new FileInfo(cachePath).Length, Is.LessThanOrEqualTo(128));
+    }
+
     private static ReplayAnalysisResult createResult(string judgement) => new(
         ReplayAnalysisProtocol.EngineVersion,
         "gameplay-clock",

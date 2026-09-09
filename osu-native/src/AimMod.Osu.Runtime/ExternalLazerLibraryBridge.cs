@@ -135,21 +135,28 @@ public sealed class ExternalLazerLibraryValidator
 
         string libraryRoot = validateDirectory(location.LibraryRoot, "The lazer library root must be an existing absolute directory.");
         string snapshotDirectory = validateDirectory(location.SnapshotDirectory, "The snapshot directory must be an existing absolute directory.");
+        string databasePath = ValidateReadOnlyDatabase(libraryRoot);
+        string filesRoot = Path.Combine(libraryRoot, "files");
+        if (isInside(snapshotDirectory, libraryRoot))
+            throw new ExternalLazerLibraryException("snapshot_location_invalid", "AimMod snapshots must be stored outside the lazer library.");
+
+        rejectReparsePoint(snapshotDirectory, "The snapshot directory cannot be a symbolic link.");
+
+        return new ValidatedExternalLazerLibraryLocation(libraryRoot, databasePath, filesRoot, snapshotDirectory);
+    }
+
+    public string ValidateReadOnlyDatabase(string root)
+    {
+        string libraryRoot = validateDirectory(root, "The lazer library root must be an existing absolute directory.");
         string databasePath = Path.Combine(libraryRoot, "client.realm");
         string filesRoot = Path.Combine(libraryRoot, "files");
-
         if (!File.Exists(databasePath))
             throw new ExternalLazerLibraryException("database_not_found", "The detected lazer library does not contain client.realm.");
         if (!Directory.Exists(filesRoot))
             throw new ExternalLazerLibraryException("file_store_not_found", "The detected lazer library does not contain its files directory.");
-        if (isInside(snapshotDirectory, libraryRoot))
-            throw new ExternalLazerLibraryException("snapshot_location_invalid", "AimMod snapshots must be stored outside the lazer library.");
-
         rejectReparsePoint(databasePath, "The lazer database cannot be a symbolic link.");
         rejectReparsePoint(filesRoot, "The lazer file store cannot be a symbolic link.");
-        rejectReparsePoint(snapshotDirectory, "The snapshot directory cannot be a symbolic link.");
-
-        return new ValidatedExternalLazerLibraryLocation(libraryRoot, databasePath, filesRoot, snapshotDirectory);
+        return databasePath;
     }
 
     private static string validateDirectory(string path, string message)

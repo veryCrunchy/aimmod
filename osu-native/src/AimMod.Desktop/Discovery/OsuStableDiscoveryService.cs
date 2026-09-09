@@ -9,6 +9,7 @@ public sealed record OsuStableInstallation(
     public bool IsComplete => Problems.Count == 0;
     public string? RememberedUsername { get; init; }
     public int? RememberedUserId { get; init; }
+    public string? ConfigurationPath { get; init; }
 }
 
 public sealed record OsuStableDiscoveryResult(
@@ -37,6 +38,7 @@ public sealed class OsuStableDiscoveryService
 
         if (platform == OsuHostPlatform.Windows)
         {
+            foreach (string registered in environment.RegisteredStableRoots ?? []) add(registered);
             if (!string.IsNullOrWhiteSpace(environment.LocalAppData))
                 add(OsuDiscoveryPath.Combine(platform, environment.LocalAppData, "osu!"));
         }
@@ -74,6 +76,7 @@ public sealed class OsuStableDiscoveryService
             {
                 RememberedUsername = configuration.Username,
                 RememberedUserId = readUserId(root, configuration.Username),
+                ConfigurationPath = configuration.Path,
             });
         }
 
@@ -138,12 +141,12 @@ public sealed class OsuStableDiscoveryService
                 }
                 if (username is not null && (username.Length > 255 || username.Any(char.IsControl)))
                     username = null;
-                return new StableConfiguration(username, beatmapDirectory);
+                return new StableConfiguration(username, beatmapDirectory, path);
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException)
             {
             }
-            return new StableConfiguration(null, null);
+            return new StableConfiguration(null, null, path);
         }
 
         int? readUserId(string root, string? username)
@@ -185,5 +188,5 @@ public sealed class OsuStableDiscoveryService
         }
     }
 
-    private sealed record StableConfiguration(string? Username, string? BeatmapDirectory);
+    private sealed record StableConfiguration(string? Username, string? BeatmapDirectory, string? Path = null);
 }

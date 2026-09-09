@@ -28,4 +28,26 @@ public class TrainerOsuSettingsTests
         Assert.That(imported.Bindings, Has.Count.EqualTo(4));
         Assert.That(TrainerOsuSettingsReader.LazerMouseButtons("MouseDisableButtons = True"), Is.False);
     }
+
+    [TestCase("OemComma", "Comma")]
+    [TestCase("oem5", "BackSlash")]
+    [TestCase("LControlKey", "ControlLeft")]
+    [TestCase("RShiftKey", "ShiftRight")]
+    [TestCase("D4", "Number4")]
+    [TestCase("NumPad2", "Keypad2")]
+    public void ImportsStableWindowsKeyNames(string stable, string expected)
+    {
+        var imported = TrainerOsuSettingsReader.Stable($"\uFEFFkeyOsuLeft = {stable}\nkeyOsuRight = X\nMouseDisableButtons = TRUE");
+        Assert.That(imported.Keys, Is.EqualTo(expected + " / X"));
+        Assert.That(imported.MouseButtons, Is.False);
+        Assert.DoesNotThrow(() => new TrainerSettings(Keys: imported.Keys).Validate());
+    }
+
+    [Test]
+    public void StableUsesActualMouseSpeedSettingBeforeLegacyAlias()
+    {
+        var imported = TrainerOsuSettingsReader.Stable("\uFEFFMouseSpeed = 1.73\nMouseSensitivity = 2\nRAWINPUT = TRUE");
+        Assert.That(imported.Input!.Sensitivity, Is.EqualTo(1.73));
+        Assert.That(imported.Input.RelativeMouse, Is.True);
+    }
 }

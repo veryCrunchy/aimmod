@@ -107,28 +107,28 @@ public partial class NativeCoachingWorkspace
         {
             var run = allReplays.FirstOrDefault(r => r.ScoreId == plan.TargetScoreId);
             var tapping = run is null ? null : TappingCoaching.Build(analyses.GetValueOrDefault(run.ScoreId));
-            var body = pageFlow(); body.Spacing = new(14);
+            var body = pageFlow(); body.Spacing = new(8);
             body.Add(label("YOUR SELECTED PLAY", 13, coachingAccent, "Bold"));
-            body.Add(flow($"{plan.TargetTitle}  /  {plan.Difficulty}", 25, AimModPalette.Text));
+            body.Add(flow($"{plan.TargetTitle}  /  {plan.Difficulty}", 20, AimModPalette.Text));
             body.Add(flow($"{run?.Accuracy:P2} accuracy  ·  {run?.MissCount} misses  ·  {plan.ModLabel}", 15, AimModPalette.Muted));
-            body.Add(flow(tapping?.Pattern ?? plan.Focus, 28, AimModPalette.Text));
-            body.Add(flow(tapping?.Cue ?? plan.Cue, 19, AimModPalette.Text));
+            body.Add(flow(tapping?.Pattern ?? plan.Focus, 18, AimModPalette.Text));
+            body.Add(flow(tapping?.Cue ?? plan.Cue, 14, AimModPalette.Text));
             if (tapping is not null)
                 body.Add(flow($"Section at {TimeSpan.FromMilliseconds(tapping.StartTimeMs):m\\:ss}. {tapping.Observation}", 15, AimModPalette.Muted));
-            body.Add(flow("Next: choose your practice speed and create a practice set.", 16, AimModPalette.Muted));
+            body.Add(flow("Check your starting point, practise the parts, then return to your map.", 14, AimModPalette.Muted));
             if (run is not null && practiceWorkspace is not null)
-                body.Add(new CoachingButton("Prepare practice set", () => {
+                body.Add(new CoachingButton("Break down this section", () => {
                     startTraining(plan, model);
-                    if (tapping is null) practiceWorkspace.OpenCandidate(new PracticeMapCandidate(run, [run.ScoreId], 1, run.MissCount, 0));
-                    else practiceWorkspace.OpenTappingPhrase(new PracticeMapCandidate(run, [run.ScoreId], 1, run.MissCount, 0),
-                        tapping.FirstObjectIndex, tapping.Pattern.Contains("start", StringComparison.Ordinal) ? 100 : 90);
+                    practiceWorkspace.OpenBreakdown(new PracticeMapCandidate(run, [run.ScoreId], 1, run.MissCount, 0), tapping?.FirstObjectIndex);
                 }, true));
             var secondary = new FillFlowContainer<Drawable> { RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y,
                 Direction = FillDirection.Full, Spacing = new(10) };
             secondary.Add(new CoachingButton("Choose another play", () => showCoachingPage(2)));
+            if (compareMovement is not null) secondary.Add(new CoachingButton("Compare movement", compareMovement));
             if (run?.HasReplayFile == true) secondary.Add(new CoachingButton("Watch replay", () => openReplay(run)));
             body.Add(secondary);
             trainingHost.Add(new CoachingCard(body));
+            if (run is not null) renderReplayObservations(trainingHost, run);
         }
 
         var review = pageFlow();

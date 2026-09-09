@@ -13,6 +13,7 @@ public partial class NativeCoachingWorkspace
     private string? coachingMapId;
     private LocalReplay? coachingMapRun;
     private int coachingMapSection;
+    private readonly Dictionary<string, string> viewedPracticeSets = [];
     private readonly HashSet<string> expandedCoachingSections = [];
 
     internal static string CoachingMapKey(SavedPracticeMap map)
@@ -47,7 +48,7 @@ public partial class NativeCoachingWorkspace
             coachingMapId = practiceSets.FirstOrDefault(s => s.Map.Tracking is { } t && PracticeProgressTracker.SameSource(selected,t) && PracticeProgressTracker.SamePlayer(selected,t.Player)) is { } matched
                 ? CoachingMapKey(matched.Map) : null;
         var sets = practiceSets.Where(s => CoachingMapKey(s.Map) == coachingMapId).ToArray();
-        var latest = sets.FirstOrDefault();
+        var latest = sets.FirstOrDefault(s => s.Map.Id == viewedPracticeSets.GetValueOrDefault(coachingMapId ?? "")) ?? sets.FirstOrDefault();
         var run = coachingMapRun ?? (latest?.Map.Tracking is { } tracking
             ? allReplays.FirstOrDefault(r => eligibleForCoaching(r) && PracticeProgressTracker.SameSource(r,tracking) && PracticeProgressTracker.SamePlayer(r,tracking.Player)) : null);
         var heading=new Container {RelativeSizeAxes=Axes.X,Height=66,Children=[
@@ -66,21 +67,35 @@ public partial class NativeCoachingWorkspace
             button.SetSelected(index == coachingMapSection); tabs.Add(button);
         }
         mapDetailHost.Add(tabs);
+        if (coachingMapSection == 0 && latest is not null) renderPracticeSession(mapDetailHost, latest, run);
+        else if (practiceRunStatus.Length > 0) mapDetailHost.Add(flow(practiceRunStatus, 14, coachingAccent));
         if (practiceHistoryFailed) mapDetailHost.Add(flow("Results could not be refreshed. Use Refresh results in My coaching to retry.",16,AimModPalette.Danger));
         if (coachingMapSection is 0 or 1)
         {
             var attempts=sets.SelectMany(s=>s.Progress.Attempts).Where(a=>!a.Original).DistinctBy(a=>a.ScoreId).ToArray();
             int sections=sets.Sum(s=>s.Map.Tracking?.Difficulties.Count ?? 0);
             int practised=sets.Sum(s=>s.Map.Tracking?.Difficulties.Count(d=>s.Progress.Attempts.Any(a=>!a.Original && a.Difficulty==d.Name)) ?? 0);
-            mapDetailHost.Add(metricStrip(("PRACTICE SETS",sets.Length.ToString()),("SECTIONS PRACTISED",$"{practised} / {sections}"),
+            mapDetailHost.Add(metricStrip(("PRACTICE SETS",sets.Length.ToString()),("EXERCISES PRACTISED",$"{practised} / {sections}"),
                 ("ATTEMPTS",attempts.Length.ToString()),("COMPLETED",$"{attempts.Count(a=>a.Passed)} / {attempts.Length}")));
             var actions=new FillFlowContainer<Drawable>{RelativeSizeAxes=Axes.X,AutoSizeAxes=Axes.Y,Direction=FillDirection.Full,Spacing=new(8)};
-            if(latest is { Map.PayloadRemoved: false } && practiceWorkspace is not null)actions.Add(new CoachingButton("Continue practice",()=>practiceWorkspace.OpenSaved(latest.Map),true,true));
+            if(coachingMapSection == 1 && latest is { Map.PayloadRemoved: false } && practiceWorkspace is not null)actions.Add(new CoachingButton("Open practice set",()=>practiceWorkspace.OpenSaved(latest.Map),true,true));
+            if (sets.Length == 0)
+            {
+                mapDetailHost.Add(flow("Turn a difficult section into exercises", 19, AimModPalette.Text));
+                mapDetailHost.Add(flow("Choose a section from this play. Practise its tapping and aim separately, put them back together, then check your progress on the original map.", 14, AimModPalette.Muted));
+            }
             if(run is not null)actions.Add(new CoachingButton(sets.Length==0?"Prepare practice set":"New practice set",()=>{
+                if (practiceWorkspace is not null)
+                {
+                    var tapping = TappingCoaching.Build(analyses.GetValueOrDefault(run.ScoreId));
+                    practiceWorkspace.OpenBreakdown(new PracticeMapCandidate(run, [run.ScoreId], 1, run.MissCount, 0), tapping?.FirstObjectIndex);
+                    return;
+                }
                 coachingTargetScoreId=run.ScoreId;renderSession(workspace ?? buildWorkspace());showCoachingPage(0);
             },sets.Length==0,true));
             mapDetailHost.Add(actions);
-            renderSectionTable(sets);
+            if (coachingMapSection == 0 && run is not null) renderReplayObservations(mapDetailHost, run);
+            if (coachingMapSection == 1) renderSectionTable(sets);
             if(coachingMapSection==0 && latest?.Map.Tracking is not null)
             {
                 mapDetailHost.Add(flow("ORIGINAL MAP",12,AimModPalette.Muted));

@@ -22,7 +22,8 @@ public sealed record PracticeMapGenerationRequest(
     PracticeMapCandidate Candidate,
     PracticeDrillType DrillType,
     PracticeMapOptions? Options = null,
-    IProgress<string>? Progress = null, bool CreateSet = false, IReadOnlyList<LocalReplay>? SourceHistory = null, bool Automatic = false);
+    IProgress<string>? Progress = null, bool CreateSet = false, IReadOnlyList<LocalReplay>? SourceHistory = null, bool Automatic = false,
+    bool CreateBreakdown = false);
 
 public sealed record PracticeMapGenerationResult(
     bool Success,

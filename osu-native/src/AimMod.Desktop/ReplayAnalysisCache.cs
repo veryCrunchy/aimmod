@@ -17,12 +17,20 @@ public sealed class ReplayAnalysisCache
     private static readonly JsonSerializerOptions jsonOptions = new(JsonSerializerDefaults.Web);
 
     private readonly string path;
+    private readonly long maximumFileBytes;
     private readonly SemaphoreSlim writeGate = new(1, 1);
 
-    public ReplayAnalysisCache(string path)
+    public ReplayAnalysisCache(string path) : this(path, MaximumFileBytes)
+    {
+    }
+
+    internal ReplayAnalysisCache(string path, long maximumFileBytes)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        if (maximumFileBytes < 128 || maximumFileBytes > MaximumFileBytes)
+            throw new ArgumentOutOfRangeException(nameof(maximumFileBytes));
         this.path = Path.GetFullPath(path);
+        this.maximumFileBytes = maximumFileBytes;
     }
 
     public IReadOnlyDictionary<Guid, ReplayAnalysisResult> Load()
@@ -30,7 +38,7 @@ public sealed class ReplayAnalysisCache
         try
         {
             var file = new FileInfo(path);
-            if (!file.Exists || file.Length is <= 0 or > MaximumFileBytes)
+            if (!file.Exists || file.Length <= 0 || file.Length > maximumFileBytes)
                 return new Dictionary<Guid, ReplayAnalysisResult>();
 
             using FileStream stream = File.Open(path, new FileStreamOptions
@@ -100,7 +108,6 @@ public sealed class ReplayAnalysisCache
                                    .TakeLast(MaximumEntries)
                                    .Select(pair => new CacheEntry(pair.Key, pair.Value))
                                    .ToArray();
-            var document = new CacheDocument(CurrentVersion, entries);
             string temporaryPath = $"{path}.{Guid.NewGuid():N}.tmp";
 
             try
@@ -113,7 +120,29 @@ public sealed class ReplayAnalysisCache
                                  Options = FileOptions.Asynchronous | FileOptions.SequentialScan,
                              }))
                 {
-                    await JsonSerializer.SerializeAsync(stream, document, jsonOptions, cancellationToken).ConfigureAwait(false);
+                    // Budget by encoded bytes, not only entry count: long replays
+                    // contain far more judgements than short ones. Keep the newest
+                    // complete results, then write them in their original order.
+                    byte[] prefix = System.Text.Encoding.UTF8.GetBytes($"{{\"version\":{CurrentVersion},\"entries\":[");
+                    long remaining = maximumFileBytes - prefix.Length - 2;
+                    var encoded = new List<byte[]>();
+                    foreach (CacheEntry entry in entries.Reverse())
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(entry, jsonOptions);
+                        long required = bytes.LongLength + (encoded.Count > 0 ? 1 : 0);
+                        if (required > remaining) continue;
+                        encoded.Add(bytes);
+                        remaining -= required;
+                    }
+                    await stream.WriteAsync(prefix, cancellationToken).ConfigureAwait(false);
+                    encoded.Reverse();
+                    for (int index = 0; index < encoded.Count; index++)
+                    {
+                        if (index > 0) await stream.WriteAsync(new byte[] { (byte)',' }, cancellationToken).ConfigureAwait(false);
+                        await stream.WriteAsync(encoded[index], cancellationToken).ConfigureAwait(false);
+                    }
+                    await stream.WriteAsync(new byte[] { (byte)']', (byte)'}' }, cancellationToken).ConfigureAwait(false);
                     await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
                 }
 

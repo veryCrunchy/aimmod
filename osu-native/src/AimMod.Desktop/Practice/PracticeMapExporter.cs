@@ -75,7 +75,9 @@ public sealed class PracticeMapExporter
             ["BeatmapID"] = "0",
             ["BeatmapSetID"] = "-1",
         }));
-        appendSection(builder, "Difficulty", source.Sections.GetValueOrDefault("Difficulty", Array.Empty<string>()));
+        appendSection(builder, "Difficulty", plan.DifficultyOverrides is { } overrides
+            ? replace(source.Sections.GetValueOrDefault("Difficulty", Array.Empty<string>()), overrides)
+            : source.Sections.GetValueOrDefault("Difficulty", Array.Empty<string>()));
         appendSection(builder, "Events", practiceEvents(plan));
         appendSection(builder, "TimingPoints", plan.TimingPoints.Select(point => string.Join(',', point.Fields)));
         appendSection(builder, "Colours", source.Sections.GetValueOrDefault("Colours", Array.Empty<string>()));

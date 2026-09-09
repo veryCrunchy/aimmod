@@ -121,12 +121,6 @@ public partial class AimModGame
                     }
                     return false;
                 }), token).ConfigureAwait(false);
-                for (int offset = 0; ; offset += 200)
-                {
-                    var page = await localLibrary.SearchBeatmapSetsAsync(new LocalLibraryQuery("AimMod", Offset: offset, Limit: 200), token).ConfigureAwait(false);
-                    foreach (var difficulty in page.Items.SelectMany(s => s.Difficulties).Where(d => d.Origin == LocalLibraryOrigin.Stable)) installed.Add(difficulty.BeatmapHash);
-                    if (!page.HasMore) break;
-                }
             }
             else
             {
@@ -137,6 +131,26 @@ public partial class AimModGame
         }
         catch (Exception error) when (error is not OperationCanceledException)
         { collectionStatus = stable ? " Close osu!stable once to sync the coaching collection." : " Collection sync will retry; your sets remain available in AimMod."; logFailure("coaching collection", error); }
+        if (stable)
+        {
+            // stable keeps collections in memory while running. A deferred collection
+            // update does not mean the maps failed to import; verify them independently
+            // so successfully installed sets do not remain pending until osu! closes.
+            collectionVerified = false;
+            try
+            {
+                for (int offset = 0; ; offset += 200)
+                {
+                    var page = await localLibrary.SearchBeatmapSetsAsync(new LocalLibraryQuery("AimMod", Offset: offset, Limit: 200), token).ConfigureAwait(false);
+                    if (page.Warning is not null) throw new IOException("The stable map index is still updating.");
+                    foreach (var difficulty in page.Items.SelectMany(s => s.Difficulties).Where(d => d.Origin == LocalLibraryOrigin.Stable)) installed.Add(difficulty.BeatmapHash);
+                    if (!page.HasMore) break;
+                }
+                collectionVerified = true;
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            { logFailure("stable practice import verification", error); }
+        }
         var delivery = await new AutomaticPracticeDelivery(Path.Combine(stateRoot, $"delivery-{account}.json")).DeliverAsync(active, collectionVerified ? installed : null, async (map, ct) =>
         {
             if ((currentOsuProfile?.UserId ?? 0) != account || !AutomaticPracticeDelivery.ShouldDeliver(map, account,

@@ -15,10 +15,11 @@ public sealed record TrainerInputSettings(double Sensitivity = 1, bool RelativeM
 {
     public static TrainerInputSettings Stable(string contents)
     {
-        var values = contents.Split('\n').Select(l => l.Split('=', 2)).Where(p => p.Length == 2)
-            .GroupBy(p => p[0].Trim()).ToDictionary(g => g.Key, g => g.Last()[1].Trim());
-        double sensitivity = double.TryParse(values.GetValueOrDefault("MouseSensitivity"), NumberStyles.Float, CultureInfo.InvariantCulture, out double n) && double.IsFinite(n) ? Math.Clamp(n, .1, 10) : 1;
-        return new(sensitivity, values.GetValueOrDefault("RawInput") is "1" or "true" or "True");
+        var values = TrainerOsuSettingsReader.StableValues(contents);
+        // stable writes MouseSpeed. Keep the older alias for imported configurations.
+        string? speed = values.GetValueOrDefault("MouseSpeed") ?? values.GetValueOrDefault("MouseSensitivity");
+        double sensitivity = double.TryParse(speed, NumberStyles.Float, CultureInfo.InvariantCulture, out double n) && double.IsFinite(n) ? Math.Clamp(n, .1, 10) : 1;
+        return new(sensitivity, TrainerOsuSettingsReader.IsEnabled(values.GetValueOrDefault("RawInput")));
     }
 
     public static TrainerInputSettings Lazer(string contents)

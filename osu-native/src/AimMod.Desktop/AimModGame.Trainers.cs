@@ -10,8 +10,10 @@ namespace AimMod.Desktop;
 public partial class AimModGame
 {
     private string? trainerStableRoot;
+    private string? trainerStableConfiguration;
     private string? trainerLazerRoot;
-    private bool trainerSettingsLoading;
+    private Task? trainerSettingsRefresh;
+    private string? trainerSettingsFailure;
     private TrainerOsuSettings? trainerOsuSettings;
     private TrainerGameplayPreferences? trainerGameplayPreferences;
     private bool trainerEvidenceLoading;
@@ -42,23 +44,34 @@ public partial class AimModGame
         finally { trainerEvidenceLoading=false; }
     }
 
-    private async Task refreshTrainerSettingsAsync()
+    private Task refreshTrainerSettingsAsync()
+        => trainerSettingsRefresh is { IsCompleted: false } pending ? pending
+            : trainerSettingsRefresh = refreshTrainerSettingsCoreAsync();
+
+    private async Task refreshTrainerSettingsCoreAsync()
     {
-        if (trainerSettingsLoading) return;
-        trainerSettingsLoading = true;
         try
         {
+            trainerSettingsFailure = null;
             bool stable = beatmapDestinationService?.Destination == OsuClientDestination.Stable
                 || (beatmapDestinationService?.Destination != OsuClientDestination.Lazer && trainerLazerRoot is null);
             TrainerOsuSettings? inherited = null;
+            TrainerGameplayPreferences? gameplayPreferences = null;
             if (stable && trainerStableRoot is { } stableRoot)
             {
-                trainerGameplayPreferences = null;
                 string exact = Path.Combine(stableRoot, $"osu!.{Environment.UserName}.cfg");
-                // Do not guess between another Windows user's configurations.
-                string[] configs = File.Exists(exact) ? [exact] : Directory.GetFiles(stableRoot, "osu!.*.cfg");
+                // Use the same selected user config as library discovery, including
+                // portable installs moved from an older Windows account.
+                string[] configs = File.Exists(exact) ? [exact]
+                    : trainerStableConfiguration is { } selected && File.Exists(selected) ? [selected]
+                    : Directory.GetFiles(stableRoot, "osu!.*.cfg");
                 if (configs.Length == 1 && new FileInfo(configs[0]).Length <= 1024 * 1024)
-                    inherited = TrainerOsuSettingsReader.Stable(await File.ReadAllTextAsync(configs[0], appLifetime.Token));
+                {
+                    string contents = await File.ReadAllTextAsync(configs[0], appLifetime.Token);
+                    inherited = TrainerOsuSettingsReader.Stable(contents);
+                    gameplayPreferences = TrainerGameplayPreferences.Stable(contents);
+                }
+                else throw new IOException("The current osu!stable user configuration could not be identified.");
             }
             else if (trainerLazerRoot is { } lazerRoot)
             {
@@ -71,21 +84,37 @@ public partial class AimModGame
                     && payload.Deserialize<ExternalTrainerSettingsResult>(RuntimeProtocol.JsonOptions) is { } result)
                 {
                     string gameIni = Path.Combine(lazerRoot, "game.ini");
-                    bool mouseButtons = File.Exists(gameIni) && new FileInfo(gameIni).Length <= 1024 * 1024
-                        ? TrainerOsuSettingsReader.LazerMouseButtons(await File.ReadAllTextAsync(gameIni, appLifetime.Token))
-                        : !LocalConfig.Get<bool>(OsuSetting.MouseDisableButtons);
-                    if (File.Exists(gameIni)) trainerGameplayPreferences = new TrainerGameplayPreferences(await File.ReadAllTextAsync(gameIni, appLifetime.Token));
+                    if (!File.Exists(gameIni) || new FileInfo(gameIni).Length > 1024 * 1024)
+                        throw new IOException("The lazer gameplay configuration is unavailable.");
+                    string gameContents = await File.ReadAllTextAsync(gameIni, appLifetime.Token);
+                    bool mouseButtons = TrainerOsuSettingsReader.LazerMouseButtons(gameContents);
+                    gameplayPreferences = new TrainerGameplayPreferences(gameContents);
                     inherited = TrainerOsuSettingsReader.Lazer(result, lazerPreferencesMonitor?.Current.AudioOffset ?? 0, mouseButtons);
                     string inputFile = Path.Combine(lazerRoot, "input.json");
                     if (File.Exists(inputFile) && new FileInfo(inputFile).Length <= 1024 * 1024)
                         inherited = inherited with { Input = TrainerInputSettings.Lazer(await File.ReadAllTextAsync(inputFile, appLifetime.Token)) };
                 }
+                else throw new IOException("The osu! settings worker did not return valid controls.");
             }
+            trainerOsuSettings = inherited;
+            trainerGameplayPreferences = gameplayPreferences;
             if (inherited is { } settings && !IsDisposed)
-                Schedule(() => { trainerOsuSettings = settings; trainersWorkspace?.ApplyOsuSettings(settings); });
+                Schedule(() => { if (ReferenceEquals(trainerOsuSettings, settings)) trainersWorkspace?.ApplyOsuSettings(settings); });
         }
         catch (OperationCanceledException) when (appLifetime.IsCancellationRequested) { }
-        catch (Exception error) { logFailure("trainer preferences", error); }
-        finally { trainerSettingsLoading = false; }
+        catch (Exception error)
+        {
+            trainerOsuSettings = null;
+            trainerGameplayPreferences = null;
+            trainerSettingsFailure = "Your osu! controls could not be read. Try again or check the osu! installation in Settings.";
+            try
+            {
+                if (new DriveInfo(Path.GetPathRoot(Path.GetTempPath())!).AvailableFreeSpace < 16 * 1024 * 1024)
+                    trainerSettingsFailure = "There is not enough free disk space to read your osu! controls. Free some space and try again.";
+            }
+            catch (Exception spaceError) when (spaceError is IOException or UnauthorizedAccessException or ArgumentException) { }
+            logFailure("trainer preferences", error);
+            osu.Framework.Logging.Logger.Error(error, "AimMod could not read osu! trainer settings.");
+        }
     }
 }

@@ -2,6 +2,7 @@ using osu.Framework.Screens;
 using osu.Framework.Allocation;
 using osu.Game.Screens.Play.Leaderboards;
 using osu.Game.Rulesets.Judgements;
+using osu.Game.Rulesets.Scoring;
 using osu.Game.Scoring;
 using osu.Game.Screens.Play;
 using osu.Game.Screens.Ranking;
@@ -67,7 +68,8 @@ public partial class NativeTrainerPlayer : Player
                 hits.Length, offsets.Count(o => Math.Abs(o) <= 25), 0, 0, mean, spread, drift,
                 Engine: TrainerResult.EngineFor(settings), Accuracy: ScoreProcessor.Accuracy.Value * 100,
                 PlayedSeconds: Math.Min(settings.Seconds, (duration + GameplayState.Beatmap.ControlPointInfo.TimingPointAt(start).BeatLength / 4) / 1000),
-                Demand: TrainerSkillProfile.Measure(GameplayState.Beatmap)));
+                Demand: TrainerSkillProfile.Measure(GameplayState.Beatmap),
+                JudgementMisses: judgements.Count(j => j.Type == HitResult.Miss)));
         }
     }
 

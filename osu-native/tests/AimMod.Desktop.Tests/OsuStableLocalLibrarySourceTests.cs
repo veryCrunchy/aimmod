@@ -198,6 +198,32 @@ public sealed class OsuStableLocalLibrarySourceTests
         Assert.That((await source.SearchBeatmapSetsAsync(new LocalLibraryQuery())).Total, Is.EqualTo(1));
     }
 
+    [Test]
+    public async Task LockedScoresDoNotPoisonTheLibraryCacheAfterStableReleasesThem()
+    {
+        const string hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        createOsuDatabase(hash, "map.osu").Save(Path.Combine(root, "osu!.db"));
+        string database = Path.Combine(root, "scores.db");
+        createScoresDatabase(hash, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").Save(database);
+        var clock = new RetryClock();
+        var source = new OsuStableLocalLibrarySource(root, songs, clock);
+        using (var locked = new FileStream(database, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            var page = await new CompositeLocalLibrarySource([source]).SearchReplaysAsync(new());
+            Assert.That(page.Warning, Is.Not.Null);
+        }
+        clock.Now = clock.Now.AddSeconds(3);
+        var recovered = await source.SearchReplaysAsync(new());
+        Assert.That(recovered.Warning, Is.Null);
+        Assert.That(recovered.Total, Is.EqualTo(1));
+    }
+
+    private sealed class RetryClock : TimeProvider
+    {
+        public DateTimeOffset Now = DateTimeOffset.UtcNow;
+        public override DateTimeOffset GetUtcNow() => Now;
+    }
+
     [TestCase(1, "taiko")]
     [TestCase(2, "fruits")]
     [TestCase(3, "mania")]

@@ -13,12 +13,13 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
     private readonly string installRoot;
     private readonly string songsRoot;
     private readonly object snapshotLock = new();
-    private Task<InMemoryLocalLibrarySource>? snapshotTask;
+    private Task<Snapshot>? snapshotTask;
+    private readonly TimeProvider timeProvider;
     private DatabaseStamp snapshotStamp;
     private LocalLibraryProgress? progress;
     public LocalLibraryProgress? Progress => Volatile.Read(ref progress);
 
-    public OsuStableLocalLibrarySource(string installRoot, string songsRoot)
+    public OsuStableLocalLibrarySource(string installRoot, string songsRoot, TimeProvider? timeProvider = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(installRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(songsRoot);
@@ -27,22 +28,23 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
 
         this.installRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(installRoot));
         this.songsRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(songsRoot));
+        this.timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async ValueTask<LocalLibraryPage<LocalBeatmapSet>> SearchBeatmapSetsAsync(
         LocalLibraryQuery query,
         CancellationToken cancellationToken = default)
     {
-        InMemoryLocalLibrarySource snapshot = await getSnapshot(cancellationToken).ConfigureAwait(false);
-        return await snapshot.SearchBeatmapSetsAsync(query, cancellationToken).ConfigureAwait(false);
+        Snapshot snapshot = await getSnapshot(cancellationToken).ConfigureAwait(false);
+        return (await snapshot.Source.SearchBeatmapSetsAsync(query, cancellationToken).ConfigureAwait(false)) with { Warning = snapshot.Warning };
     }
 
     public async ValueTask<LocalLibraryPage<LocalReplay>> SearchReplaysAsync(
         LocalLibraryQuery query,
         CancellationToken cancellationToken = default)
     {
-        InMemoryLocalLibrarySource snapshot = await getSnapshot(cancellationToken).ConfigureAwait(false);
-        return await snapshot.SearchReplaysAsync(query, cancellationToken).ConfigureAwait(false);
+        Snapshot snapshot = await getSnapshot(cancellationToken).ConfigureAwait(false);
+        return (await snapshot.Source.SearchReplaysAsync(query, cancellationToken).ConfigureAwait(false)) with { Warning = snapshot.Warning };
     }
 
     public void Invalidate()
@@ -51,13 +53,14 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
             snapshotTask = null;
     }
 
-    private Task<InMemoryLocalLibrarySource> getSnapshot(CancellationToken cancellationToken)
+    private Task<Snapshot> getSnapshot(CancellationToken cancellationToken)
     {
-        Task<InMemoryLocalLibrarySource> task;
+        Task<Snapshot> task;
         lock (snapshotLock)
         {
             DatabaseStamp current = getStamp();
-            if (snapshotTask is null || snapshotTask.IsFaulted || snapshotTask.IsCanceled || current != snapshotStamp)
+            if (snapshotTask is null || snapshotTask.IsFaulted || snapshotTask.IsCanceled || current != snapshotStamp
+                || snapshotTask.IsCompletedSuccessfully && snapshotTask.Result.RetryAfter <= timeProvider.GetUtcNow())
             {
                 snapshotStamp = current;
                 snapshotTask = Task.Run(() =>
@@ -71,14 +74,14 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
         return task.WaitAsync(cancellationToken);
     }
 
-    private InMemoryLocalLibrarySource buildSnapshot()
+    private Snapshot buildSnapshot()
     {
         Volatile.Write(ref progress, new("Reading osu!stable beatmap database"));
         OsuDatabase beatmapDatabase = decodeSharedDatabase(
             Path.Combine(installRoot, "osu!.db"),
             DatabaseDecoder.DecodeOsu);
         Volatile.Write(ref progress, new("Reading osu!stable score history"));
-        ScoresDatabase? scoreDatabase = tryDecodeScores(Path.Combine(installRoot, "scores.db"));
+        ScoresDatabase? scoreDatabase = tryDecodeScores(Path.Combine(installRoot, "scores.db"), out bool scoresUnavailable);
 
         Dictionary<string, List<Score>> scoresByBeatmap = (scoreDatabase?.Scores ?? [])
             .Where(group => !string.IsNullOrWhiteSpace(group.Item1))
@@ -145,7 +148,9 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
             .GroupBy(beatmap => setKey(beatmap.Entry))
             .Select(group => createSet(group, lastPlayedByHash))
             .ToArray();
-        return new InMemoryLocalLibrarySource(sets, replays);
+        return new Snapshot(new InMemoryLocalLibrarySource(sets, replays),
+            scoresUnavailable ? "osu!stable score history is temporarily unavailable. AimMod will retry shortly." : null,
+            scoresUnavailable ? timeProvider.GetUtcNow().AddSeconds(2) : DateTimeOffset.MaxValue);
     }
 
     private LocalBeatmapSet createSet(
@@ -289,8 +294,9 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
         return decode(snapshot);
     }
 
-    private static ScoresDatabase? tryDecodeScores(string path)
+    private static ScoresDatabase? tryDecodeScores(string path, out bool unavailable)
     {
+        unavailable = false;
         if (!File.Exists(path))
             return null;
         try
@@ -299,6 +305,7 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or EndOfStreamException)
         {
+            unavailable = true;
             return null;
         }
     }
@@ -359,4 +366,5 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
         int LocalScoreCount);
 
     private readonly record struct DatabaseStamp(long Beatmaps, long Scores, long ReplayCache, long Exports);
+    private sealed record Snapshot(InMemoryLocalLibrarySource Source, string? Warning, DateTimeOffset RetryAfter);
 }

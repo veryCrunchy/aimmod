@@ -70,13 +70,12 @@ public sealed class CachedLocalLibrarySource : ILocalLibrarySource, ILocalLibrar
                     var document = new Document<T>(stamp, DateTimeOffset.UtcNow, result);
                     await using (var output = File.Create(temporary))
                         await JsonSerializer.SerializeAsync(output, document, json, token).ConfigureAwait(false);
+                    if (new FileInfo(temporary).Length > 8 * 1024 * 1024) return result;
                     if (startedRevision != Volatile.Read(ref revision) || stamp != databaseStamp()) return result;
                     File.Move(temporary, path, true);
                     if (startedRevision == Volatile.Read(ref revision) && stamp == databaseStamp())
                         remember(key, document, new FileInfo(path).Length, startedRevision);
-                    foreach (var old in new DirectoryInfo(directory).EnumerateFiles("*.json")
-                        .OrderByDescending(file => file.LastWriteTimeUtc).Skip(128))
-                        old.Delete();
+                    DiskCacheBudget.Trim(directory, ".json", 128, 256L * 1024 * 1024, TimeSpan.FromDays(7), path);
                 }
                 catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException)
                 {

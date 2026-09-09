@@ -54,7 +54,7 @@ public partial class NativeTrainersWorkspace
         randomizeToggle = new AimModButton("", () => {
             settings = settings with { RandomizePatterns = !settings.RandomizePatterns };
             preferences = preferences with { RandomizePatterns = settings.RandomizePatterns }; saveTrainerPreferences(); refreshPatternToggle(); refreshHistory();
-        });
+        }) { Margin = new MarginPadding { Top = selectorLabelSpacing } };
         patternControls.Add(randomizeToggle); refreshPatternToggle();
         body.Add(patternControls);
         body.Add(skillSummary=paragraph(""));
