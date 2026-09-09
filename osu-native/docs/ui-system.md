@@ -29,6 +29,14 @@ AimMod is one workspace for finding maps, reviewing plays and improving. A route
 - Search should update after a short debounce and remain editable during refresh. Put counts and loading status below filters; do not repeatedly cover an already loaded page with a blocking overlay.
 - Show a clear reset action and a useful no-results state. Reset all relevant filters together. Search/filter the complete collection, not just the current display page.
 
+## Interaction performance
+
+- Keep disk reads, history aggregation and ranking off the update thread, including the synchronous portion of async source calls.
+- Debounce continuous filter input. Keep at most one running ranking query and one latest replacement; discard stale results before changing the UI.
+- Preserve cached workspaces and selection state on tab changes. Do not rebuild unchanged lists just because a tab becomes visible.
+- Add large result lists in small batches so layout and drawable loading leave time for input. Preserve active PP scans when previews or unrelated UI filters change.
+- Test rapid filter changes and the final visible results, not only the calculation in isolation.
+
 ## Lists, statistics and details
 
 - Prefer compact rows for collections. Show title, difficulty, useful metadata and a clear next action. Keep row actions consistently aligned on the right.
@@ -46,6 +54,17 @@ AimMod is one workspace for finding maps, reviewing plays and improving. A route
 - Show the current practice step, its purpose and progress together. Keep the full session and comparisons reachable without making every step compete for attention.
 - Empty states must offer an action the player can take now. Results must offer a repeat, continuation or return to a real map.
 - Reflect the selected mode honestly: fixed-song comparisons must not promise shuffle, and unavailable evidence must not become a completed step.
+
+### Visual exercise choices
+
+- Use small, labelled pattern diagrams for skills and drill presets. Show the difference the player will practise: note grouping, rests, movement or reading order.
+- Timing diagrams should use the drill generator's beat pattern. Keep movement schematics clearly separate from actual gameplay previews.
+- Use the shared button surface, hover and selection behaviour for the whole card. Keep text labels visible alongside icons and diagrams.
+- Fit related choices together where their labels remain readable. Avoid turning a short setup into several screens of cards.
+- Keep training modes visually distinct from skill choices, with an icon and a short description of the session structure.
+
+- Extend the same visual choice language to workspace entry points and coaching actions using `AimModVisualChoiceContent`. Keep the whole choice clickable, and describe the difference below its diagram. Schematics must not be presented as player statistics or previews of a selected beatmap.
+- Session progress graphics must reflect recorded runs. Keep skipped, incomplete and completed steps distinct.
 
 ### Verification
 

@@ -31,6 +31,7 @@ public partial class AimModButton : ClickableContainer
 {
     private readonly Box background;
     private readonly OsuSpriteText caption;
+    private readonly Container captionContainer;
     private readonly bool primary;
     private bool selected;
     public AimModButton(string text, Action action, bool primary = false)
@@ -39,12 +40,19 @@ public partial class AimModButton : ClickableContainer
         Height = AimModVisualStyle.ControlHeight; Masking = true;
         CornerRadius = AimModVisualStyle.ControlRadius; BorderThickness = 1;
         Children = [background = new Box { RelativeSizeAxes = Axes.Both },
-            new Container { AutoSizeAxes = Axes.Both, Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft,
+            captionContainer = new Container { AutoSizeAxes = Axes.Both, Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft,
                 Padding = new MarginPadding { Horizontal = 14 },
                 Child = caption = new OsuSpriteText { Text = text, Font = new FontUsage(size:14, weight:"SemiBold") } }];
         SetSelected(false);
     }
     public void SetCaption(string value) => caption.Text = value;
+    public void SetVisualContent(Drawable content, float height)
+    {
+        captionContainer.Hide();
+        AutoSizeAxes = Axes.None;
+        Height = height;
+        Add(content);
+    }
     public void SetSelected(bool value)
     {
         selected = value;

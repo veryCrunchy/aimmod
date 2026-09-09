@@ -79,6 +79,14 @@ public partial class NativeCoachingWorkspace
                 ? showArchivedPractice ? "No archived practice sets." : "Choose a map to start your first practice session. Your exercises and progress will stay together here."
                 : "No beatmaps match your search.", 15, AimModPalette.Muted));
             if (query.Length > 0) practiceHistoryHost.Add(new CoachingButton("Clear search", () => savedPracticeSearch.Current.Value = "", compact: true));
+            if (groups.Length == 0 && query.Length == 0 && !showArchivedPractice)
+            {
+                var choices = actionFlow();
+                choices.Add(visualEntry("Choose a play", "Turn a difficult section into exercises.", PracticeSketchKind.Section, () => showCoachingPage(2)));
+                if (openTrainers is not null)
+                    choices.Add(visualEntry("Train a skill", "Practise timing, aim or reading first.", PracticeSketchKind.Timing, openTrainers));
+                practiceHistoryHost.Add(choices);
+            }
         }
         foreach (var group in visible)
         {

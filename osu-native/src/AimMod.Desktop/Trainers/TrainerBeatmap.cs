@@ -45,7 +45,7 @@ public sealed class TrainerBeatmap : WorkingBeatmap
         settings.Validate();
         if (settings.Kind == TrainerKind.Reaction) throw new ArgumentException("Reaction uses a separate cue exercise.");
         var timeline = new TrainerSession(settings);
-        notes = TrainerSkillProfile.ConstrainNotes(settings, notes ?? timeline.Notes);
+        notes = TrainerReadingPatterns.ConstrainTiming(settings, TrainerSkillProfile.ConstrainNotes(settings, notes ?? timeline.Notes));
         var map = new Beatmap<OsuHitObject> { StackLeniency = 0 };
         map.BeatmapInfo.Ruleset = new OsuRuleset().RulesetInfo;
         map.BeatmapInfo.DifficultyName = NativeTrainersWorkspace.DisplayName(settings.Kind);
@@ -57,6 +57,7 @@ public sealed class TrainerBeatmap : WorkingBeatmap
         if (timing is not null) map.ControlPointInfo = timing;
         else map.ControlPointInfo.Add(0, new TimingControlPoint { BeatLength = timeline.BeatMs });
         var random = new Random(settings.PatternSeed);
+        Vector2[] reading = settings.Kind == TrainerKind.Reading ? TrainerReadingPatterns.Create(settings, notes) : [];
         Vector2[] jumps = settings.Kind is TrainerKind.Aim or TrainerKind.Reading || settings.PathStyle == TrainerPathStyle.Random ? TrainerAimPatterns.Create(settings, notes.Count) : [];
         double travel = 0;
         double previousObjectEnd = 0;
@@ -77,9 +78,7 @@ public sealed class TrainerBeatmap : WorkingBeatmap
             Vector2 position = settings.Kind switch
             {
                 TrainerKind.Aim => jumps[i],
-                TrainerKind.Reading when notes[i].Pattern == TrainerPattern.Scattered => jumps[i],
-                TrainerKind.Reading when notes[i].Pattern == TrainerPattern.Overlaps => new Vector2(160 + i%4*35, 155 + (i%3)*35),
-                TrainerKind.Reading => new Vector2(110 + i % 4 * 95, 110 + ((i / 4 + i % 4) % 2) * 150),
+                TrainerKind.Reading => reading[i],
                 _ => settings.PathStyle switch
                 {
                     TrainerPathStyle.Arc => new Vector2(256 + 155*(float)Math.Cos(travel*settings.AimSpacing/16000),192+105*(float)Math.Sin(travel*settings.AimSpacing/16000)),
@@ -88,8 +87,6 @@ public sealed class TrainerBeatmap : WorkingBeatmap
                     _ => streamPosition(travel * settings.AimSpacing / 100.0 + (settings.PatternSeed == 0 ? 0 : Math.Abs((long)settings.PatternSeed)%700)),
                 },
             };
-            if (settings.Kind == TrainerKind.Reading && notes[i].Pattern != TrainerPattern.Scattered)
-                position = Vector2.Clamp(new Vector2(256,192)+(position-new Vector2(256,192))*settings.AimSpacing/100f, new Vector2(64,64),new Vector2(448,320));
             // Connecting taps sit between jump anchors instead of adding equally wide jumps.
             if (settings.Kind == TrainerKind.Aim && notes[i].Pattern is TrainerPattern.JumpFill or TrainerPattern.JumpTriples)
             {
@@ -102,6 +99,7 @@ public sealed class TrainerBeatmap : WorkingBeatmap
                 TrainerKind.Bursts => phraseStart,
                 TrainerKind.Alternating => i % 16 == 0,
                 TrainerKind.Rhythm => i == 0 || notes[i].Phrase / 2 != notes[i - 1].Phrase / 2,
+                TrainerKind.Reading => i % settings.ReadingGroupSize == 0,
                 _ => i % 4 == 0,
             };
             if (settings.RandomizePatterns && settings.SkillLimits is {} skill && map.HitObjects.LastOrDefault() is {} previous)
@@ -111,7 +109,7 @@ public sealed class TrainerBeatmap : WorkingBeatmap
                 double maximum = Math.Min(skill.MaxJumpDistance,skill.MaxAimVelocity*availableTime);
                 if (distance>maximum && distance>0) position=Vector2.Lerp(previous.EndPosition,position,(float)(maximum/distance));
             }
-            bool slider = settings.Sliders != TrainerSliderStyle.None && (settings.Sliders == TrainerSliderStyle.SlidersOnly || (settings.RandomizePatterns ? random.Next(5)==0 : i%8==0));
+            bool slider = settings.Sliders != TrainerSliderStyle.None && (settings.Sliders == TrainerSliderStyle.SlidersOnly || (settings.RandomizePatterns || settings.Kind == TrainerKind.Reading ? random.Next(5)==0 : i%8==0));
             // Compact comparisons preserve every target time and the original path geometry.
             position = new Vector2(256, 192) + (position - new Vector2(256, 192)) * (float)settings.MovementScale;
             double beatLength = map.ControlPointInfo.TimingPointAt(notes[i].TimeMs).BeatLength;
@@ -143,6 +141,7 @@ public sealed class TrainerBeatmap : WorkingBeatmap
                 previousObjectEnd = notes[i].TimeMs;
             }
         }
+        TrainerSpinners.Apply(settings, map);
         return map;
     }
 
@@ -188,7 +187,7 @@ public sealed class TrainerBeatmap : WorkingBeatmap
                 }
             phraseBase += lastBar*16+2;
         }
-        return TrainerSkillProfile.ConstrainNotes(settings,notes);
+        return TrainerReadingPatterns.ConstrainTiming(settings, TrainerSkillProfile.ConstrainNotes(settings,notes));
     }
 
     // Sample by distance, not angle, so bends do not produce sudden spacing changes.

@@ -80,9 +80,9 @@ public static class TrainerSkillProfile
 
     public static TrainerSettings Apply(TrainerSettings s, TrainerSkillLimits limits)
     {
-        if (!s.RandomizePatterns || s.Kind == TrainerKind.Reaction) return s with { SkillLimits = null };
+        if (!s.RandomizePatterns || s.Kind is TrainerKind.Reaction or TrainerKind.Spinner) return s with { SkillLimits = null };
         limits.Validate();
-        return s with { SkillLimits = limits, ApproachRate = Math.Min(s.ApproachRate,limits.MaxApproachRate), CircleSize = Math.Min(s.CircleSize,4),
+        return s with { SkillLimits = limits, ReadingComplexity = Math.Min(s.ReadingComplexity, limits.Complexity), ApproachRate = Math.Min(s.ApproachRate,limits.MaxApproachRate), CircleSize = Math.Min(s.CircleSize,4),
             Sliders = limits.Complexity == 0 && s.Sliders == TrainerSliderStyle.BackAndForth ? TrainerSliderStyle.Mixed : s.Sliders,
             SliderBeats = limits.Complexity == 0 ? 1 : Math.Min(s.SliderBeats,2) };
     }
@@ -93,7 +93,9 @@ public static class TrainerSkillProfile
         TrainerPattern.NineNotes => limits.MaxBurst>=9, TrainerPattern.MixedBursts => limits.MaxBurst>=5,
         TrainerPattern.LongStreams => limits.MaxChain>=24, TrainerPattern.BuildUp => limits.Complexity>=1,
         TrainerPattern.JumpFill or TrainerPattern.Scattered or TrainerPattern.Offbeat => limits.Complexity>=1,
-        TrainerPattern.JumpTriples or TrainerPattern.SpeedSwitch or TrainerPattern.Syncopated or TrainerPattern.Triplets or TrainerPattern.Overlaps => limits.Complexity>=2,
+        TrainerPattern.JumpTriples or TrainerPattern.SpeedSwitch or TrainerPattern.Syncopated or TrainerPattern.Triplets or TrainerPattern.Overlaps or TrainerPattern.Crossings => limits.Complexity>=2,
+        TrainerPattern.Reversals or TrainerPattern.ReadingPolygons => limits.Complexity>=1,
+        TrainerPattern.ReadingWeave or TrainerPattern.ReadingStacks or TrainerPattern.ReadingSpacedStreams => limits.Complexity>=2,
         _ => true,
     };
 

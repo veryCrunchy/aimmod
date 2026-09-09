@@ -894,8 +894,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             runList.Add(flow("No completed plays match these filters. Try a wider date range or play a map with at least 70% accuracy.", 14, AimModPalette.Muted).With(text => text.Padding = new MarginPadding(18)));
             if (openTrainers is not null)
             {
-                runList.Add(flow("You can train individual skills while you build up your replay history.", 14, AimModPalette.Muted));
-                runList.Add(new CoachingButton("Train a skill", openTrainers, true, true));
+                runList.Add(visualEntry("Train a skill", "Practise now, even without saved plays.", PracticeSketchKind.Timing, openTrainers));
             }
             return;
         }

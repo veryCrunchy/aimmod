@@ -1,7 +1,7 @@
 namespace AimMod.Desktop.Trainers;
 
 public enum TrainerPattern { Standard, Offbeat, Doubles, Gaps, FiveNotes, SevenNotes, NineNotes, MixedBursts,
-    PartialStreams, LongStreams, BuildUp, Syncopated, Triplets, JumpFill, JumpTriples, SpeedSwitch, Scattered, Overlaps }
+    PartialStreams, LongStreams, BuildUp, Syncopated, Triplets, JumpFill, JumpTriples, SpeedSwitch, Scattered, Overlaps, Reversals, Crossings, ReadingPolygons, ReadingWeave, ReadingStacks, ReadingSpacedStreams, ReadingMix }
 public enum TrainerNoteSpeed { Default, OnePerBeat, TwoPerBeat, FourPerBeat }
 public enum TrainerSliderStyle { None, Mixed, SlidersOnly, BackAndForth }
 public enum TrainerPathStyle { FigureEight, Arc, Zigzag, Random }
@@ -16,7 +16,7 @@ public static class TrainerPatterns
         TrainerKind.Bursts => new Dictionary<string, TrainerPattern> { ["3-note bursts"] = TrainerPattern.Standard, ["5-note bursts"] = TrainerPattern.FiveNotes, ["7-note bursts"] = TrainerPattern.SevenNotes, ["9-note bursts"] = TrainerPattern.NineNotes, ["Mixed · 3 / 5 / 7 / 9"] = TrainerPattern.MixedBursts },
         TrainerKind.Rhythm => new Dictionary<string, TrainerPattern> { ["Half / quarter switches"] = TrainerPattern.Standard, ["Syncopation"] = TrainerPattern.Syncopated, ["Triplet transitions"] = TrainerPattern.Triplets, ["Stop and restart"] = TrainerPattern.Gaps },
         TrainerKind.Aim => new Dictionary<string, TrainerPattern> { ["Even jumps"] = TrainerPattern.Standard, ["Jumps + connecting notes"] = TrainerPattern.JumpFill, ["Jumps + triples"] = TrainerPattern.JumpTriples, ["Slow / fast jumps"] = TrainerPattern.SpeedSwitch },
-        TrainerKind.Reading => new Dictionary<string, TrainerPattern> { ["Ordered rows"] = TrainerPattern.Standard, ["Scattered patterns"] = TrainerPattern.Scattered, ["Overlapping patterns"] = TrainerPattern.Overlaps, ["Rhythm switches"] = TrainerPattern.SpeedSwitch },
+        TrainerKind.Reading => new Dictionary<string, TrainerPattern> { ["Flowing sequences"] = TrainerPattern.Standard, ["Scattered patterns"] = TrainerPattern.Scattered, ["Overlapping patterns"] = TrainerPattern.Overlaps, ["Rhythm switches"] = TrainerPattern.SpeedSwitch, ["Direction reversals"] = TrainerPattern.Reversals, ["Crossing paths"] = TrainerPattern.Crossings, ["Polygons & angle changes"] = TrainerPattern.ReadingPolygons, ["Interwoven paths"] = TrainerPattern.ReadingWeave, ["Stacks & jump exits"] = TrainerPattern.ReadingStacks, ["Spaced stream shapes"] = TrainerPattern.ReadingSpacedStreams, ["Mixed reading"] = TrainerPattern.ReadingMix },
         _ => new Dictionary<string, TrainerPattern> { ["Standard"] = TrainerPattern.Standard },
     };
 
@@ -24,7 +24,7 @@ public static class TrainerPatterns
     {
         double step = s.NoteSpeed switch {
         TrainerNoteSpeed.OnePerBeat => 1, TrainerNoteSpeed.TwoPerBeat => .5, TrainerNoteSpeed.FourPerBeat => .25,
-        _ => s.Kind is TrainerKind.Aim or TrainerKind.Reading ? 1 : s.Kind == TrainerKind.Steady ? .5 : .25,
+        _ => s.Kind is TrainerKind.Reading or TrainerKind.Aim ? 1 : s.Kind == TrainerKind.Steady ? .5 : .25,
         };
         if (s.RandomizePatterns)
         {
@@ -41,7 +41,19 @@ public static class TrainerPatterns
         double step = Step(s);
         var result = new List<(double Beat, int Phrase)>();
         void add(double beat, int phrase = 0) { if (beat >= 0 && beat < 4 - .00001) result.Add((beat, phrase)); }
-        if (s.Kind == TrainerKind.Bursts)
+        if (s.Kind == TrainerKind.Reading && (s.ReadingComplexity > 0 || pattern == TrainerPattern.SpeedSwitch))
+        {
+            var random = new Random(unchecked(s.PatternSeed * 397 ^ bar * 7919));
+            double[][] rhythms = [[1, 1, 1, 1], [1, .5, .5, 1, 2], [.5, .5, .5, .5, 2], [1.5, .5, 1, 1]];
+            var rhythm = rhythms[random.Next(rhythms.Length)];
+            double cursor = 0;
+            for (int i = 0; cursor < 4 - .00001; i++)
+            {
+                add(cursor, bar);
+                cursor += step * rhythm[i % rhythm.Length];
+            }
+        }
+        else if (s.Kind == TrainerKind.Bursts)
         {
             bool mixed = pattern == TrainerPattern.MixedBursts || s.RandomizePatterns;
             var burstRandom = new Random(s.PatternSeed);
@@ -94,7 +106,20 @@ public static class TrainerPatterns
     }
     public static TrainerPattern PatternAt(TrainerSettings s, int bar)
     {
-        var choices=Choices(s.Kind).Values.Where(p=>!s.RandomizePatterns || TrainerSkillProfile.Allows(p,s.SkillLimits??new())).ToArray();
+        if (s.Kind == TrainerKind.Reading && s.Pattern == TrainerPattern.ReadingMix && !s.RandomizePatterns)
+        {
+            TrainerPattern[] pool = s.ReadingComplexity switch
+            {
+                0 => [TrainerPattern.Standard, TrainerPattern.Reversals, TrainerPattern.ReadingPolygons, TrainerPattern.Scattered],
+                1 => [TrainerPattern.Crossings, TrainerPattern.ReadingWeave, TrainerPattern.ReadingPolygons, TrainerPattern.ReadingSpacedStreams, TrainerPattern.Reversals],
+                _ => [TrainerPattern.ReadingStacks, TrainerPattern.Overlaps, TrainerPattern.ReadingWeave, TrainerPattern.Crossings, TrainerPattern.Scattered, TrainerPattern.ReadingSpacedStreams],
+            };
+            // Shuffle each block deterministically so every selected motif gets used.
+            var random = new Random(unchecked(s.PatternSeed * 397 ^ (bar / pool.Length) * 7919));
+            for (int i = pool.Length - 1; i > 0; i--) { int j = random.Next(i + 1); (pool[i], pool[j]) = (pool[j], pool[i]); }
+            return pool[bar % pool.Length];
+        }
+        var choices=Choices(s.Kind).Values.Where(p => p != TrainerPattern.ReadingMix).Where(p=>!s.RandomizePatterns || TrainerSkillProfile.Allows(p,s.SkillLimits??new())).ToArray();
         return s.RandomizePatterns ? choices[new Random(unchecked(s.PatternSeed*397 ^ bar*7919)).Next(choices.Length)] : s.Pattern;
     }
 }

@@ -66,9 +66,29 @@ public partial class NativeCoachingWorkspace
         var selected = viewedStages.GetValueOrDefault(set.Map.Id, nextStage ?? CoachingPracticeStage.Original);
         var body = pageFlow(); body.Spacing = new(8);
         var current = review.Stages.First(s => s.Stage == selected);
+        var activeSection = groups.FirstOrDefault(d => d.BreakdownGroupId == groupId);
+        if (activeSection is not null)
+            body.Add(flow($"Practising {TimeSpan.FromMilliseconds(activeSection.SourceStartMs):m\\:ss} - {TimeSpan.FromMilliseconds(activeSection.SourceEndMs):m\\:ss}", 13, coachingAccent));
         body.Add(flow(current.Label, 20, AimModPalette.Text));
-        body.Add(flow((selected >= CoachingPracticeStage.Transfer ? "Optional check" : $"Step {(int)selected + 1} of 4") + $" · {Math.Min(current.Completed, current.Required)} / {current.Required} plays completed"
+        if (selected >= CoachingPracticeStage.Transfer) body.Add(flow("Optional check" + $" · {Math.Min(current.Completed, current.Required)} / {current.Required} plays completed"
             + (current.Skipped ? " · Skipped" : ""), 13, coachingAccent));
+        var progress = new GridContainer
+        {
+            RelativeSizeAxes = Axes.X, Height = 26,
+            Content = new[] { review.Stages.Where(s => s.Stage < CoachingPracticeStage.Transfer).Select(stage => (Drawable)new Container
+            {
+                RelativeSizeAxes = Axes.Both, Padding = new MarginPadding { Right = 4 },
+                Children = [label((stage.Stage switch { CoachingPracticeStage.Baseline => "1. Start", CoachingPracticeStage.Isolate => "2. Separate",
+                        CoachingPracticeStage.Combine => "3. Combine", _ => "4. Your map" })
+                        + (stage.Skipped ? " · Skipped" : $" · {Math.Min(stage.Completed, stage.Required)}/{stage.Required}"), 11,
+                        stage.Stage == selected ? AimModPalette.Accent : AimModPalette.Muted),
+                    new osu.Framework.Graphics.Shapes.Box { RelativeSizeAxes = Axes.X, Y = 20, Height = 5, Colour = AimModPalette.Border },
+                    new osu.Framework.Graphics.Shapes.Box { RelativeSizeAxes = Axes.X, Y = 20, Height = 5,
+                        Width = !stage.Skipped && stage.Required > 0 ? Math.Clamp((float)stage.Completed / stage.Required, 0, 1) : 0,
+                        Colour = stage.Stage == selected ? AimModPalette.Accent : AimModPalette.Muted }],
+            }).ToArray() },
+        };
+        body.Add(progress);
         if (practiceRunStatus.Length > 0) body.Add(flow(practiceRunStatus, 14, coachingAccent));
         renderSectionNavigation(body, set, groupId, run);
         var steps = actionFlow();
@@ -82,11 +102,9 @@ public partial class NativeCoachingWorkspace
             button.SetSelected(stage.Stage == selected); steps.Add(button);
         }
         bool baselineClosed = selected == CoachingPracticeStage.Baseline && mapPracticeStarted;
-        body.Add(flow(baselineClosed ? "You have already started practising this map. Continue with the section exercises; new full-map plays will count as retests."
+        if (selected != CoachingPracticeStage.Isolate) body.Add(flow(baselineClosed ? "You have already started practising this map. Continue with the section exercises; new full-map plays will count as retests."
             : selected == CoachingPracticeStage.Transfer
             ? "Optional: after practising this map, try a familiar map with a similar pattern to see if the skill carries over. You can keep working on this map instead."
-            : selected == CoachingPracticeStage.Isolate
-            ? "Keep the rhythm and bring the notes closer together. Play three runs to work on tapping. For aim only, try the same section with automatic tapping (Relax)."
             : current.Detail, 14, AimModPalette.Muted));
         var actions = actionFlow();
         if (selected is CoachingPracticeStage.Baseline or CoachingPracticeStage.Original && !baselineClosed)
@@ -104,7 +122,24 @@ public partial class NativeCoachingWorkspace
                 {
                     string title = variant switch { PracticeBreakdownVariant.ReducedMovement => "Practise tapping", PracticeBreakdownVariant.AimFocus => "Practise aim only",
                         PracticeBreakdownVariant.CombinedEasier => "Play combined", _ => "Play original section" };
-                    actions.Add(new CoachingButton(title, () => play(set.Map, difficulty), variant == wanted[0], true));
+                    var exercise = new CoachingButton(title, () => play(set.Map, difficulty))
+                        { AutoSizeAxes = Axes.None, Width = 245 };
+                    var sketch = variant switch
+                    {
+                        PracticeBreakdownVariant.ReducedMovement => PracticeSketchKind.Timing,
+                        PracticeBreakdownVariant.AimFocus => PracticeSketchKind.Aim,
+                        PracticeBreakdownVariant.CombinedEasier => PracticeSketchKind.Combined,
+                        _ => PracticeSketchKind.Original,
+                    };
+                    exercise.SetVisualContent(new AimModVisualChoiceContent(title, variant switch
+                    {
+                        PracticeBreakdownVariant.ReducedMovement => "Same rhythm. Less movement.",
+                        PracticeBreakdownVariant.AimFocus => "Full movement. Relax tapping.",
+                        PracticeBreakdownVariant.CombinedEasier => "Both skills. Easier setup.",
+                        _ => "Both skills. Original setup.",
+                    }, sketch), 112);
+                    exercise.SetSelected(variant == wanted[0] && !current.IsComplete);
+                    actions.Add(exercise);
                 }
             if (actions.Count == 0 && practiceWorkspace is not null && run is not null)
                 actions.Add(new CoachingButton("Create section breakdown", () => practiceWorkspace.OpenBreakdown(new PracticeMapCandidate(run, [run.ScoreId], 1, run.MissCount, 0)), true, true));
@@ -123,10 +158,20 @@ public partial class NativeCoachingWorkspace
                 actions.Add(new OpenBeatmapButton(() => run, openBeatmap));
         }
         body.Add(actions);
+        var currentVariant = selected == CoachingPracticeStage.Isolate ? PracticeBreakdownVariant.ReducedMovement
+            : selected == CoachingPracticeStage.Combine ? PracticeBreakdownVariant.CombinedEasier : PracticeBreakdownVariant.Original;
+        var currentResults = review.Cohorts.FirstOrDefault(c => c.GroupId == groupId && c.Variant == currentVariant && !c.Assisted && c.Completed > 0);
+        if (currentResults is not null)
+        {
+            body.Add(flow($"{currentResults.Label} · completed section runs", 12, AimModPalette.Muted));
+            body.Add(metricStrip(("RUNS", $"{currentResults.Completed}"),
+                ("MEDIAN ACCURACY", currentResults.MedianAccuracy is {} accuracy ? $"{accuracy:P2}" : "--"),
+                ("MEDIAN MISSES", currentResults.MedianMisses is {} misses ? $"{misses:0.#}" : "--")));
+        }
         var navigation = actionFlow();
         if ((current.IsComplete || current.Skipped || baselineClosed) && nextStage is { } next && next != selected)
             navigation.Add(new CoachingButton($"Continue: {review.Stages.First(s => s.Stage == next).Label}", () =>
-            { viewedStages[set.Map.Id] = next; renderCoachingMap(); }, compact: true));
+            { viewedStages[set.Map.Id] = next; renderCoachingMap(); }, primary: true, compact: true));
         navigation.Add(new CoachingButton(showPracticeSteps ? "Hide session steps" : "View all session steps", () =>
         { showPracticeSteps = !showPracticeSteps; renderCoachingMap(); }, compact: true));
         navigation.Add(new CoachingButton("Refresh results", load, compact: true));

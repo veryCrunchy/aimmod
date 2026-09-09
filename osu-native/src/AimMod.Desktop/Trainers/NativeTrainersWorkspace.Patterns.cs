@@ -42,15 +42,15 @@ public partial class NativeTrainersWorkspace
         patternControls.Add(selector("PATTERN", TrainerPatterns.Choices(settings.Kind), settings.Pattern,
             v => { settings = settings with { Pattern = v }; updateInstruction(); refreshHistory(); }, 230, d => patternSelector = d));
         ((TrainerDropdown<TrainerPattern>)patternSelector).Label = v => TrainerPatterns.Choices(settings.Kind).FirstOrDefault(p => p.Value == v).Key ?? "Choose a pattern";
-        patternControls.Add(selector("NOTE SPEED", new Dictionary<string, TrainerNoteSpeed> {
+        patternControls.Add(selector("NOTES PER BEAT", new Dictionary<string, TrainerNoteSpeed> {
             ["Default for this drill"] = TrainerNoteSpeed.Default, ["1 per beat"] = TrainerNoteSpeed.OnePerBeat,
             ["2 per beat"] = TrainerNoteSpeed.TwoPerBeat, ["4 per beat"] = TrainerNoteSpeed.FourPerBeat },
             settings.NoteSpeed, v => { settings = settings with { NoteSpeed = v }; refreshHistory(); }, 180, d => noteSpeedSelector = d));
-        patternControls.Add(selector("SLIDERS", new Dictionary<string, TrainerSliderStyle> { ["No sliders"] = TrainerSliderStyle.None,
+        sliderControl = selector("SLIDERS", new Dictionary<string, TrainerSliderStyle> { ["No sliders"] = TrainerSliderStyle.None,
             ["Circles + sliders"] = TrainerSliderStyle.Mixed, ["Slider focus"] = TrainerSliderStyle.SlidersOnly, ["Back and forth"] = TrainerSliderStyle.BackAndForth },
-            settings.Sliders, v => { settings = settings with { Sliders = v }; refreshHistory(); }, 185, d => sliderSelector = d));
-        patternControls.Add(selector("SLIDER LENGTH", new[] {1,2,4}.Select(v => new KeyValuePair<string,int>($"{v} beat{(v==1?"":"s")}",v)),
-            1, v => { settings = settings with { SliderBeats = v }; refreshHistory(); }, 140, d => sliderLengthSelector = d));
+            settings.Sliders, v => { settings = settings with { Sliders = v }; refreshObjectAndGuideControls(); refreshHistory(); }, 185, d => sliderSelector = d);
+        sliderLengthControl = selector("SLIDER LENGTH", new[] {1,2,4}.Select(v => new KeyValuePair<string,int>($"{v} beat{(v==1?"":"s")}",v)),
+            1, v => { settings = settings with { SliderBeats = v }; refreshHistory(); }, 140, d => sliderLengthSelector = d);
         randomizeToggle = new AimModButton("", () => {
             settings = settings with { RandomizePatterns = !settings.RandomizePatterns };
             preferences = preferences with { RandomizePatterns = settings.RandomizePatterns }; saveTrainerPreferences(); refreshPatternToggle(); refreshHistory();
@@ -71,6 +71,7 @@ public partial class NativeTrainersWorkspace
             ["Long · 2.5–5 s"] = TrainerReactionDelay.Long, ["Unpredictable · 0.7–5 s"] = TrainerReactionDelay.Wide },
             settings.ReactionDelay, v => { settings = settings with { ReactionDelay = v }; refreshHistory(); }, 250, d => reactionDelaySelector = d));
         body.Add(reactionControls);
+        buildSpecializedControls(body);
     }
     private void refreshPatternToggle()
     {
@@ -84,6 +85,10 @@ public partial class NativeTrainersWorkspace
         sliderSelector.Current.Value = s.Sliders; sliderLengthSelector.Current.Value = s.SliderBeats;
         pathSelector.Current.Value = s.PathStyle; approachSelector.Current.Value = s.ApproachRate;
         reactionDelaySelector.Current.Value = s.ReactionDelay;
+        readingComplexitySelector.Current.Value = s.ReadingComplexity; readingLengthSelector.Current.Value = s.ReadingGroupSize; readingHiddenSelector.Current.Value = s.ReadingHidden;
+        reactionModeSelector.Current.Value = s.ReactionMode; reactionWindowSelector.Current.Value = s.ReactionWindowMs;
+        settings = settings with { Spinners = s.Spinners, SpinnerSeconds = s.SpinnerSeconds, GuidedCues = s.GuidedCues };
+        refreshObjectAndGuideControls();
         settings = settings with { RandomizePatterns = s.RandomizePatterns }; refreshPatternToggle();
     }
 }

@@ -23,6 +23,9 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
     private readonly Func<IAccountScoreHistoryService?> accountHistory;
     private readonly AimModSearchBox search;
     private ScheduledDelegate? searchRefresh;
+    private readonly LatestBackgroundQuery<StatisticsWorkspaceModel> statisticsQuery = new();
+    private int renderRevision;
+    private readonly Dictionary<Guid, StatisticsRunRow> runRows = new();
     private readonly Bindable<StatisticsTimeRange> timeRange = new(StatisticsTimeRange.All);
     private readonly Bindable<string> modFilter = new(ScoreMods.Any);
     private readonly ScoreModFilterDropdown modDropdown;
@@ -285,23 +288,24 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
         loading = new CancellationTokenSource();
         CancellationToken token = loading.Token;
         loadingOverlay.ShowLoading("Loading statistics", "Reading local history and cached online score records");
-        _ = loadAsync(token);
+        var service = accountHistory();
+        _ = Task.Run(() => loadAsync(service, token));
     }
 
-    private async Task loadAsync(CancellationToken token)
+    private async Task loadAsync(IAccountScoreHistoryService? service, CancellationToken token)
     {
         try
         {
             Task<StatisticsHistoryLoadResult> localTask = StatisticsHistoryLoader.LoadAsync(source, token).AsTask();
-            IAccountScoreHistoryService? service = accountHistory();
             Task<OnlineAccountScoreHistoryResult?> onlineTask = service is null
                 ? Task.FromResult<OnlineAccountScoreHistoryResult?>(null)
                 : loadOnlineAsync(service, token);
             await Task.WhenAll(localTask, onlineTask).ConfigureAwait(false);
             StatisticsHistoryLoadResult result = await localTask.ConfigureAwait(false);
             OnlineAccountScoreHistoryResult? online = await onlineTask.ConfigureAwait(false);
+            var merged = StatisticsUnifiedScoreAdapter.Merge(result.Runs, online?.Scores ?? []);
             if (!IsDisposed)
-                Schedule(() => applyLoaded(result, online));
+                Schedule(() => { if (!IsDisposed && !token.IsCancellationRequested) applyLoaded(merged, online); });
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
@@ -311,6 +315,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
             if (!IsDisposed)
                 Schedule(() =>
                 {
+                    if (IsDisposed || token.IsCancellationRequested) return;
                     loadingOverlay.HideLoading();
                     scopeText.Text = "Statistics could not be loaded. Reopen this workspace to try again.";
                 });
@@ -335,10 +340,10 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
         }
     }
 
-    private void applyLoaded(StatisticsHistoryLoadResult result, OnlineAccountScoreHistoryResult? online)
+    private void applyLoaded(IReadOnlyList<LocalReplay> runs, OnlineAccountScoreHistoryResult? online)
     {
         onlineHistory = online;
-        allRuns = StatisticsUnifiedScoreAdapter.Merge(result.Runs, online?.Scores ?? []);
+        allRuns = runs;
         modDropdown.SetScores(allRuns);
         loadingOverlay.HideLoading();
         render();
@@ -362,7 +367,9 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
             StatisticsStarBand.SevenPlus => (7, 100),
             _ => (0, 100),
         };
-        StatisticsWorkspaceModel model = StatisticsWorkspaceModel.Build(allRuns, new StatisticsRunQuery(
+        var runs = allRuns;
+        int revision = ++renderRevision;
+        var query = new StatisticsRunQuery(
             search.Current.Value,
             timeRange.Value,
             StatisticsModFilter.Any,
@@ -370,8 +377,22 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
             scoreSource.Value,
             minStars,
             maxStars,
-            resultFilter.Value == StatisticsResultFilter.MissFree, modFilter.Value));
+            resultFilter.Value == StatisticsResultFilter.MissFree, modFilter.Value);
+        statisticsQuery.Submit(token =>
+        {
+            token.ThrowIfCancellationRequested();
+            return StatisticsWorkspaceModel.Build(runs, query);
+        }, model =>
+        {
+            if (!IsDisposed) Schedule(() =>
+            {
+                if (!IsDisposed && revision == renderRevision) applyModel(model);
+            });
+        }, error => Console.Error.WriteLine($"Statistics filtering failed: {error}"));
+    }
 
+    private void applyModel(StatisticsWorkspaceModel model)
+    {
         int localCount = model.UnfilteredRunCount - model.CachedOnlineRunCount;
         scopeText.Text = model.CachedOnlineRunCount > 0
             ? $"Unified scope: {model.CachedOnlineRunCount:N0} online best/recent and {localCount:N0} local records. Online windows are limited, not complete history."
@@ -411,6 +432,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
 
     private void renderRuns(IReadOnlyList<LocalReplay> runs)
     {
+        runRows.Clear();
         runList.Clear();
         if (runs.Count == 0)
         {
@@ -423,13 +445,18 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
         }
 
         foreach (LocalReplay replay in runs.Take(100))
-            runList.Add(new StatisticsRunRow(replay, selected?.ScoreId == replay.ScoreId, () => select(replay)));
+        {
+            var row = new StatisticsRunRow(replay, selected?.ScoreId == replay.ScoreId, () => select(replay));
+            runRows[replay.ScoreId] = row;
+            runList.Add(row);
+        }
     }
 
     private void select(LocalReplay? replay)
     {
+        if (selected == replay) return;
         selected = replay;
-        renderRuns(visibleRuns);
+        foreach (var (id, row) in runRows) row.SetSelected(id == replay?.ScoreId);
         if (replay is null)
             showEmptyInspector();
         else
@@ -588,6 +615,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
 
     protected override void Dispose(bool isDisposing)
     {
+        statisticsQuery.Dispose();
         searchRefresh?.Cancel();
         loading?.Cancel();
         loading?.Dispose();
@@ -960,7 +988,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
         private readonly Box selectionLayer;
         private readonly TruncatingSpriteText title;
         private readonly TruncatingSpriteText subtitle;
-        private readonly bool selected;
+        private bool selected;
 
         public StatisticsRunRow(LocalReplay replay, bool selected, Action action)
         {
@@ -1023,6 +1051,13 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
             float available = Math.Max(140, DrawWidth - 314);
             title.MaxWidth = available;
             subtitle.MaxWidth = available;
+        }
+
+        public void SetSelected(bool value)
+        {
+            selected = value;
+            background.FadeColour(IsHovered ? AimModPalette.PanelHover : selected ? AimModPalette.PanelRaised : AimModPalette.Panel, 90);
+            selectionLayer.FadeTo(selected ? 0.08f : 0, 90);
         }
 
         protected override bool OnHover(HoverEvent e)

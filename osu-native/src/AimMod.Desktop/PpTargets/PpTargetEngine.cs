@@ -152,13 +152,15 @@ public static class PpTargetRanker
         PpTargetPreferenceProfile profile,
         IEnumerable<OfficialBeatmapSet> beatmapSets,
         PpTargetFilters? filters = null,
-        IReadOnlyDictionary<int, PpTargetEstimate>? exactEstimates = null)
+        IReadOnlyDictionary<int, PpTargetEstimate>? exactEstimates = null,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(profile);
         ArgumentNullException.ThrowIfNull(beatmapSets);
         NormalisedFilters query = normalise(filters ?? new PpTargetFilters());
 
-        FlatCandidate[] flattened = beatmapSets.Where(set => set is not null)
+        cancellationToken.ThrowIfCancellationRequested();
+        FlatCandidate[] flattened = beatmapSets.Where(set => { cancellationToken.ThrowIfCancellationRequested(); return set is not null; })
             .OrderBy(set => set.BeatmapSetId)
             .SelectMany(set => (set.Difficulties ?? []).Select(difficulty => new FlatCandidate(set, difficulty)))
             .Where(candidate => validDifficulty(candidate.Difficulty))
@@ -166,7 +168,7 @@ public static class PpTargetRanker
             .Select(group => group.OrderBy(candidate => candidate.Set.BeatmapSetId).ThenBy(candidate => candidate.Difficulty.Name, StringComparer.Ordinal).First())
             .ToArray();
 
-        PpTargetCandidate[] matching = flattened.Where(candidate => matchesMetadata(candidate, query)).Select(candidate => score(profile, candidate, exactEstimates))
+        PpTargetCandidate[] matching = flattened.Where(candidate => matchesMetadata(candidate, query)).Select(candidate => { cancellationToken.ThrowIfCancellationRequested(); return score(profile, candidate, exactEstimates); })
             .Where(candidate => matches(candidate, query))
             .OrderByDescending(candidate => candidate.EvidenceTier)
             .ThenByDescending(candidate => candidate.RankScore)

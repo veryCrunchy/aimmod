@@ -77,7 +77,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         this.history = history;
         this.openCoaching = openCoaching;
         preferences = history().LoadPreferences();
-        settings = settings with { RandomizePatterns = preferences.RandomizePatterns };
+        settings = settings with { RandomizePatterns = preferences.RandomizePatterns, GuidedCues = preferences.GuidedCues };
         freshAimLayout = preferences.FreshLayout;
         settingsStatus = paragraph("Using default keys and offset until an osu! client is connected.");
         RelativeSizeAxes = Axes.Both;
@@ -89,16 +89,20 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         body.Add(results = column());
         setup = column(); body.Add(setup);
         body = setup;
-        buildGuidedControls(body);
-        body.Add(text("Choose your focus", 16, AimModPalette.Text));
+        body.Add(text("1. Choose a skill", 16, AimModPalette.Text));
         body.Add(exerciseChoices = flow());
         foreach (var kind in Enum.GetValues<TrainerKind>())
         {
-            var button = new AimModButton(DisplayName(kind), () => SelectTrainer(kind));
+            var button = skillChoice(kind);
             exerciseButtons[kind] = button; exerciseChoices.Add(button);
         }
         body.Add(exerciseTitle = text(DisplayName(settings.Kind), 20, AimModPalette.Text));
+        exerciseTitle.Hide();
         body.Add(instruction = paragraph(""));
+        instruction.Hide();
+        buildPresetControls(body);
+        buildGuidedControls(body);
+        body.Add(text("3. Set your session", 16, AimModPalette.Text));
         controls = flow(); controls.Depth = -10;
         controls.Add(selector("SESSION LENGTH", new[] { 15, 30, 60, 120, 180 }.Select(s => new KeyValuePair<string, int>($"{s} seconds", s)),
             settings.Seconds, s => { Suspend(); settings = settings with { Seconds = s }; refreshHistory(); }, 150, d => durationSelector = d));
@@ -108,12 +112,13 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         controls.Add(timingControls);
         body.Add(controls);
         buildMusicControls(body);
-        body.Add(practiceOptionsToggle = new AimModButton("Adjust patterns & difficulty", TogglePracticeOptions));
+        practiceOptionsToggle = new AimModButton("Adjust patterns & difficulty", TogglePracticeOptions);
         practiceOptions = column();
         practiceOptions.Depth = -9;
-        body.Add(practiceOptions);
         buildPatternControls(practiceOptions);
         buildAimControls(practiceOptions);
+        body.Add(readingControls);
+        buildObjectAndGuideControls(body);
         practiceOptions.Hide();
         advanced = column(); advanced.Depth = -8; advanced.Alpha = 0;
         var actions = flow();
@@ -123,6 +128,8 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         { advancedOpen = !advancedOpen; advanced.Alpha = advancedOpen ? 1 : 0; advancedToggle!.SetSelected(advancedOpen); }));
         actions.Add(new AimModButton("Practise a beatmap", openCoaching));
         body.Add(actions);
+        body.Add(practiceOptionsToggle);
+        body.Add(practiceOptions);
         body.Add(settingsStatus);
         var audioControls = flow();
         audioControls.Add(selector("TAPPING KEYS", new[] { "Z / X", "D / F", "J / K" }.Select(s => new KeyValuePair<string, string>(s, s)),
@@ -141,13 +148,14 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         body.Add(recent = column());
         chooseMusic(settings.Music);
         updateInstruction(); refreshHistory();
+        buildReactionStage();
     }
 
     public static string DisplayName(TrainerKind kind) => kind switch
     {
         TrainerKind.Steady => "Tapping accuracy", TrainerKind.Alternating => "Streams & alternating",
         TrainerKind.Bursts => "Burst control", TrainerKind.Rhythm => "Rhythm changes",
-        TrainerKind.Aim => "Aim control", TrainerKind.Reading => "Reading order", _ => "Reaction",
+        TrainerKind.Aim => "Aim control", TrainerKind.Reading => "Reading order", TrainerKind.Spinner => "Spinner control", _ => "Reaction",
     };
 
     private void updateInstruction()
@@ -155,6 +163,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         timingControls.Alpha = settings.Kind != TrainerKind.Reaction && settings.Music != "song" ? 1 : 0;
         instruction.Text = settings.Kind switch
         {
+            TrainerKind.Spinner => $"Hold either {settings.Keys} and draw smooth circles around the spinner centre. Keep one direction until it ends.",
             TrainerKind.Steady => $"Follow the moving circles and tap {settings.Keys} in time. Keep your motion relaxed through rests and changes in spacing.",
             TrainerKind.Alternating => $"Alternate {settings.Keys} evenly through each stream. Finish the last tap before relaxing during a rest.",
             TrainerKind.Bursts => $"Finish every burst with {settings.Keys}, including its last tap. Use the rest to relax and move to the next group.",
@@ -169,16 +178,20 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         if (exerciseTitle is not null) exerciseTitle.Text = DisplayName(settings.Kind);
         foreach (var (kind, button) in exerciseButtons) button.SetSelected(kind == settings.Kind);
         if (status is not null) status.Text = settings.Kind == TrainerKind.Reaction ? "Wait for mint. Escape ends the session." : settings.Music == "song" ? "Listen to the song lead-in. Escape ends the session." : "Four-beat count-in. Escape ends the session.";
-        if (aimControls is not null) aimControls.Alpha = settings.Kind != TrainerKind.Reaction ? 1 : 0;
+        if (aimControls is not null) aimControls.Alpha = settings.Kind is not (TrainerKind.Reaction or TrainerKind.Spinner) ? 1 : 0;
         if (aimStyleControl is not null) aimStyleControl.Alpha = settings.Kind == TrainerKind.Aim ? 1 : 0;
-        if (patternControls is not null) patternControls.Alpha = settings.Kind != TrainerKind.Reaction ? 1 : 0;
-        if (geometryControls is not null) geometryControls.Alpha = settings.Kind != TrainerKind.Reaction ? 1 : 0;
+        if (patternControls is not null) patternControls.Alpha = settings.Kind is not (TrainerKind.Reaction or TrainerKind.Spinner) ? 1 : 0;
+        if (geometryControls is not null) geometryControls.Alpha = settings.Kind is not (TrainerKind.Reaction or TrainerKind.Spinner) ? 1 : 0;
         if (pathControl is not null) pathControl.Alpha = settings.Kind is TrainerKind.Aim or TrainerKind.Reading ? 0 : 1;
         if (reactionControls is not null) reactionControls.Alpha = settings.Kind == TrainerKind.Reaction ? 1 : 0;
+        if (readingControls is not null) readingControls.Alpha = settings.Kind == TrainerKind.Reading ? 1 : 0;
         if (musicControls is not null) musicControls.Alpha = settings.Kind == TrainerKind.Reaction ? 0 : 1;
+        if (timingControls is not null) timingControls.Alpha = settings.Kind != TrainerKind.Reaction && settings.Music != "song" ? 1 : 0;
+        advancedToggle?.SetCaption(settings.Kind == TrainerKind.Reaction ? "Controls" : "Controls & audio");
+        refreshObjectAndGuideControls();
         refreshPracticeIntent();
         field?.Reset();
-        if (field is not null) field.Alpha = settings.Kind == TrainerKind.Reaction ? 1 : 0;
+        if (field is not null) field.Alpha = 0;
     }
 
     public void ApplyOsuSettings(TrainerOsuSettings inherited)
@@ -242,12 +255,12 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         results.Clear(); feedback.Text = "";
         if (!customSettings && inheritedSettings is {} inherited) ApplyOsuSettings(inherited);
         if (freshAimLayout || settings.PatternSeed == 0) settings = settings with { PatternSeed = Random.Shared.Next(1, int.MaxValue) };
-        if (preferences.ShuffleMusic && TrainerMusicCatalog.IsSong(settings.Music)) musicSelector.Current.Value = TrainerMusicCatalog.RandomSong(settings.Music);
+        if (settings.Kind != TrainerKind.Reaction && preferences.ShuffleMusic && TrainerMusicCatalog.IsSong(settings.Music)) musicSelector.Current.Value = TrainerMusicCatalog.RandomSong(settings.Music);
         activeHistory = history();
         recordTraining = BeginTrainingSync?.Invoke();
         if (settings.Kind != TrainerKind.Reaction && LaunchOsuSession is {} launch)
         { launch(TrainerSkillProfile.Apply(settings,currentSkillLimits()), mouseButtons, volume); return; }
-        tapping = null; pointer = null;
+        tapping = null; pointer = null; reaction = null;
         if (isTiming)
         {
             tapping = new(settings);
@@ -262,19 +275,32 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
             catch (Exception error) when (error is InvalidOperationException or IOException)
             { status.Text = "Audio could not start. Check your output device and try again."; return; }
         }
+        else if (settings.Kind == TrainerKind.Reaction) reaction = new(settings);
+        else if (settings.Kind == TrainerKind.Spinner) { status.Text = "Open the osu! gameplay connection to practise spinners."; return; }
         else pointer = new(settings);
         began = Time.Current; running = true;
         lastAudioPosition = 0; lastAudioAdvance = Time.Current;
         controls.Hide(); timingControls.Hide(); exerciseChoices.Hide(); advanced.Hide(); advancedToggle.Hide(); stop.Show();
         start.SetCaption("Session running"); field.Reset();
+        if (reaction is not null)
+        {
+            setup.Hide(); reactionStage.Show(); reactionInstructions.Text = reactionHelp()
+                + (mouseButtons ? " Left / right mouse buttons also map to the first / second key." : "");
+        }
     }
 
     internal void SelectTrainer(TrainerKind kind)
     {
         if (settings.Kind == kind) return;
-        Suspend(); settings = settings with { Kind = kind, Pattern = TrainerPattern.Standard }; results.Clear(); feedback.Text = "";
+        Suspend();
+        var initialPattern = kind == TrainerKind.Reading ? TrainerPattern.ReadingMix : TrainerPattern.Standard;
+        settings = settings with { Kind = kind, Pattern = initialPattern,
+            Sliders = kind == TrainerKind.Reading ? TrainerSliderStyle.Mixed : TrainerSliderStyle.None,
+            GuidedCues = kind == TrainerKind.Spinner || preferences.GuidedCues };
+        sliderSelector.Current.Value = settings.Sliders; results.Clear(); feedback.Text = "";
         patternSelector.Items = TrainerPatterns.Choices(kind).Values;
-        patternSelector.Current.Value = TrainerPattern.Standard;
+        patternSelector.Current.Value = initialPattern;
+        rebuildPresets();
         updateInstruction(); refreshHistory();
     }
 
@@ -282,12 +308,20 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
     {
         if (!running) return;
         running = false; track?.Stop(); refreshPracticeIntent();
+        if (reactionStage is not null) reactionStage.Hide();
+        setup.Show();
         controls.Show(); exerciseChoices.Show(); advancedToggle.Show(); advanced.Alpha = advancedOpen ? 1 : 0; stop.Hide(); timingControls.Alpha = settings.Kind != TrainerKind.Reaction && settings.Music != "song" ? 1 : 0; status.Text = message;
     }
 
     protected override void Update()
     {
         base.Update();
+        if (exerciseChoices.DrawWidth > 0)
+        {
+            float tileWidth = Math.Clamp((exerciseChoices.DrawWidth - 6 * 8 - 1) / 7, 94, 130);
+            foreach (var button in exerciseButtons.Values)
+                if (Math.Abs(button.Width - tileWidth) > .5f) button.Width = tileWidth;
+        }
         if (!running) return;
         audioClock?.ProcessFrame();
         if (!host.IsActive.Value) { Suspend("Session stopped when AimMod lost focus. Start again when you are ready."); return; }
@@ -298,10 +332,13 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
             else if (Time.Current - lastAudioAdvance > 2500)
             { Suspend("Audio stopped. Check your output device and start a new session."); return; }
         }
-        double end = tapping is {} active ? active.EndMs + Math.Max(200, -settings.OffsetMs + active.WindowMs) : pointer!.EndMs;
+        reaction?.Advance(time);
+        if (reaction is not null && settings.GuidedCues) updateReactionGuide(time);
+        if (reaction is not null) reactionStatus.Text = $"Reaction practice · {Math.Max(0, Math.Ceiling((reaction.EndMs - time) / 1000)):0}s left · {reaction.Trials.Count(t => t.Outcome == ReactionOutcome.Hit)} correct";
+        double end = tapping is {} active ? active.EndMs + Math.Max(200, -settings.OffsetMs + active.WindowMs) : reaction?.EndMs ?? pointer!.EndMs;
         if (time >= end)
         {
-            var result = tapping?.Result(DateTimeOffset.Now) ?? pointer!.Result(DateTimeOffset.Now);
+            var result = tapping?.Result(DateTimeOffset.Now) ?? reaction?.Result(DateTimeOffset.Now) ?? pointer!.Result(DateTimeOffset.Now);
             Suspend("Session complete.");
             showResult(result);
             showingResults = true; setup.Hide(); results.FadeInFromZero(220);
@@ -313,7 +350,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         }
         if (tapping is { } tap && time + settings.OffsetMs < tap.StartMs)
             status.Text = $"Count-in  {Math.Clamp((int)((time + settings.OffsetMs - 500) / tap.BeatMs) + 1, 1, 4)} / 4";
-        else status.Text = $"{Math.Max(0, (end - time) / 1000):0}s remaining  |  {(tapping?.Hits.Count ?? pointer!.Responses.Count)} hits  |  Escape to stop";
+        else status.Text = $"{Math.Max(0, (end - time) / 1000):0}s remaining  |  {(tapping?.Hits.Count ?? reaction?.Trials.Count(t => t.Outcome == ReactionOutcome.Hit) ?? pointer!.Responses.Count)} hits  |  Escape to stop";
     }
 
     protected override bool OnKeyDown(KeyDownEvent e)
@@ -331,7 +368,12 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
     {
         if (!running) return;
         double time = elapsed;
-        if (tapping is { } session)
+        if (reaction is {} reactionSession)
+        {
+            reactionSession.Tap(time, key);
+            feedback.Text = reactionSession.LastFeedback;
+        }
+        else if (tapping is { } session)
         {
             if (time + settings.OffsetMs < session.StartMs - session.WindowMs) return;
             var hit = session.Tap(time, key);
@@ -352,11 +394,36 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
     private void showResult(TrainerResult r)
     {
         contentScroll.ScrollTo(0, false);
-        results.Add(text(r.Assisted ? "Assisted session result" : "Session result", 18, AimModPalette.Text));
-        results.Add(paragraph($"{DisplayName(r.Settings.Kind)}  ·  {r.Settings.TempoDescription}  ·  {r.PlayedSeconds ?? r.Settings.Seconds:0.#} seconds"));
+        results.Add(text(r.Assisted ? "Assisted session result" : r.Settings.GuidedCues ? "Guided practice result" : "Session result", 18, AimModPalette.Text));
+        results.Add(paragraph(r.Settings.Kind == TrainerKind.Reaction
+            ? $"{ReactionSession.Name(r.Settings.ReactionMode)} · {r.Settings.ReactionWindowMs} ms response window · {r.Settings.Seconds} seconds"
+            : $"{DisplayName(r.Settings.Kind)}  ·  {r.Settings.TempoDescription}  ·  {r.PlayedSeconds ?? r.Settings.Seconds:0.#} seconds"));
+        if (r.Settings.Kind == TrainerKind.Reading)
+            results.Add(paragraph($"{TrainerPatterns.Choices(TrainerKind.Reading).First(p => p.Value == r.Settings.Pattern).Key} · {r.Settings.ReadingGroupSize}-note phrases · AR {r.Settings.ApproachRate} · {(r.Settings.ReadingHidden ? "Hidden" : "Normal visibility")}"));
         if (r.Settings.Music == "song") results.Add(paragraph($"{r.Settings.SongTitle} · +{r.Settings.SongStartSeconds}s"));
         var metrics = flow(); results.Add(metrics);
-        if (r.UsesOsuJudgements || r.Settings.Kind <= TrainerKind.Rhythm)
+        if (r.Reaction is {} reactionResult)
+        {
+            metrics.Add(metric(ms(reactionResult.MedianMs), "median response"));
+            metrics.Add(metric(ms(reactionResult.Slow90Ms), "90th percentile"));
+            metrics.Add(metric($"{reactionResult.Correct}", "correct taps"));
+            metrics.Add(metric($"{reactionResult.Missed}", "missed cues"));
+            metrics.Add(metric($"{reactionResult.Early}", "early taps"));
+            metrics.Add(metric($"{reactionResult.WrongKey}", "wrong keys"));
+            metrics.Add(metric($"{reactionResult.Withheld}", "correct holds"));
+            metrics.Add(metric($"{reactionResult.FalseAlarms}", "STOP errors"));
+        }
+        else if (r.Settings.Kind == TrainerKind.Spinner && r.SpinnerPractice is {} spin)
+        {
+            metrics.Add(metric($"{spin.MeanRpm:0}", "average RPM while held"));
+            metrics.Add(metric(spin.SpeedVariationPercent is {} variation ? $"{variation:0}%" : "--", "speed variation"));
+            metrics.Add(metric($"{spin.HeldPercent:0}%", "time holding a key"));
+            metrics.Add(metric($"{spin.DirectionChanges}", "direction changes"));
+            metrics.Add(metric($"{spin.Attempts}", "spinners practised"));
+            metrics.Add(metric(spin.MeanRadius is {} radius ? $"{radius:0} px" : "--", "average circle radius"));
+            results.Add(paragraph("Radius is measured in osu! playfield units. Compare speed and control together. A smaller circle helps only if you can keep rotating smoothly. Guided and unguided runs are compared separately."));
+        }
+        else if (r.UsesOsuJudgements || r.Settings.Kind <= TrainerKind.Rhythm)
         {
             if (r.UsesOsuJudgements) metrics.Add(metric($"{r.Accuracy:0.00}%", "accuracy"));
             metrics.Add(metric($"{r.OnTimePercent:0.0}%", "within 25 ms"));
@@ -374,16 +441,31 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
             metrics.Add(metric($"{r.Hits}", "targets hit"));
             metrics.Add(metric($"{r.Extras}", r.Settings.Kind == TrainerKind.Reaction ? "false starts" : "off-target taps"));
         }
-        var previous = history().Load().Where(p => p.Id != r.Id && p.CompletedAt < r.CompletedAt && p.Assisted == r.Assisted && p.Settings.ComparisonKey() == r.Settings.ComparisonKey() && p.Engine == r.Engine).OrderByDescending(p => p.CompletedAt).FirstOrDefault();
-        if (previous is not null)
+        var savedRuns = history().Load();
+        addSpecializedResults(r);
+        var previous = savedRuns.Where(p => p.Id != r.Id && p.CompletedAt < r.CompletedAt && p.Assisted == r.Assisted && p.Settings.ComparisonKey() == r.Settings.ComparisonKey() && p.Engine == r.Engine).OrderByDescending(p => p.CompletedAt).FirstOrDefault();
+        if (r.Settings.Kind != TrainerKind.Spinner && TrainerProgressComparison.Build(r, savedRuns) is { } comparison && r.UsesOsuJudgements)
+        {
+            results.Add(text("Same drill · first 3 runs / latest 3 runs", 15, AimModPalette.Text));
+            var changes = flow();
+            changes.Add(comparisonMetric("Average accuracy", comparison.FirstAccuracy, comparison.LatestAccuracy, "%"));
+            changes.Add(comparisonMetric("Average misses", comparison.FirstMisses, comparison.LatestMisses, ""));
+            changes.Add(comparisonMetric("Timing spread", comparison.FirstSpread, comparison.LatestSpread, " ms"));
+            results.Add(changes);
+            results.Add(paragraph("Compare accuracy and misses together with timing spread. These runs use matching practice settings."));
+        }
+        else if (previous?.SpinnerPractice is {} previousSpin && r.Settings.Kind == TrainerKind.Spinner)
+            results.Add(paragraph($"Previous matching run: {previousSpin.MeanRpm:0} RPM, {previousSpin.HeldPercent:0}% key hold time."));
+        else if (previous is not null)
             results.Add(paragraph(r.UsesOsuJudgements || r.Settings.Kind <= TrainerKind.Rhythm
                 ? $"Previous matching run: {previous.OnTimePercent:0.0}% within 25 ms, {ms(previous.SpreadMs)} spread."
                 : $"Previous matching run: {ms(previous.ResponseMs)} median, {previous.Extras} {(r.Settings.Kind == TrainerKind.Reaction ? "false starts" : "off-target taps")}."));
+        else results.Add(paragraph("Complete another run with these settings to start comparing results."));
         if (addGuidedActions(r)) return;
         results.Add(text("Next run", 15, AimModPalette.Text));
         results.Add(paragraph(TrainerSession.NextStep(r)));
         var nextActions = flow();
-        nextActions.Add(new AimModButton("Repeat exercise", () => repeat(r.Settings, 0)));
+        nextActions.Add(new AimModButton("Repeat exercise", () => repeat(r.Settings, 0), true));
         nextActions.Add(new AimModButton("Practice settings", returnToPracticeSettings));
         if (r.Settings.Kind != TrainerKind.Reaction) nextActions.Add(new AimModButton("Try on a beatmap", openCoaching));
         if (r.Settings.Kind != TrainerKind.Reaction && r.Settings.Music == "cues" && r.Settings.Bpm > 60)
@@ -399,6 +481,13 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         setup.Show();
         refreshPracticeIntent();
         contentScroll.ScrollTo(0, false);
+        Scheduler.AddDelayed(() =>
+        {
+            if (showingResults || !setup.IsPresent) return;
+            float bottom = contentScroll.ToLocalSpace(start.ToScreenSpace(new Vector2(0, start.DrawHeight))).Y;
+            float overflow = bottom - contentScroll.DrawHeight + 12;
+            if (overflow > 0) contentScroll.ScrollTo(contentScroll.Current + overflow, false);
+        }, 100);
     }
 
     private void repeat(TrainerSettings selected, int tempoChange)
@@ -419,6 +508,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
 
     private void refreshHistory()
     {
+        refreshPresetSummary();
         refreshSkillSummary();
         refreshPracticeIntent();
         if (recent is null) return;
@@ -437,7 +527,9 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         }
         foreach (var run in runs.Take(8))
         {
-            string value = run.UsesOsuJudgements
+            string value = run.SpinnerPractice is {} spinnerResult && run.Settings.Kind == TrainerKind.Spinner
+                ? $"{spinnerResult.MeanRpm:0} RPM · {spinnerResult.HeldPercent:0}% key hold time"
+                : run.UsesOsuJudgements
                 ? $"{run.Settings.TempoDescription}  ·  {run.Accuracy:0.00}% acc  ·  {ms(run.SpreadMs)} spread"
                 : run.Settings.Kind <= TrainerKind.Rhythm ? $"{run.Settings.TempoDescription}  ·  {run.OnTimePercent:0.0}% on time"
                 : $"{ms(run.ResponseMs)} median  ·  {run.Extras} early taps";
@@ -450,6 +542,12 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
     { songSearchCancellation?.Cancel(); songSearchCancellation?.Dispose(); track?.Stop(); track?.Dispose(); tracks?.Dispose(); base.Dispose(isDisposing); }
 
     private static string ms(double? value) => value is { } n ? $"{n:0.0} ms" : "--";
+    private static Drawable comparisonMetric(string title, double? first, double? latest, string unit)
+    {
+        string format(double? value) => value is { } n ? $"{n:0.0}{unit}" : "--";
+        return new FillFlowContainer<Drawable> { Width = 230, Height = 60, Direction = FillDirection.Vertical, Spacing = new(6),
+            Children = [text(title, 12, AimModPalette.Muted), text($"{format(first)} to {format(latest)}", 19, AimModPalette.Text)] };
+    }
     private static FillFlowContainer<Drawable> flow() => new() { RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Spacing = new(8), Direction = FillDirection.Full };
     private static FillFlowContainer<Drawable> column() => new() { RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Spacing = new(8), Direction = FillDirection.Vertical };
     private static OsuSpriteText text(string value, float size, Colour4 colour) => new() { Text = value, Font = new FontUsage(size: size), Colour = colour };
@@ -464,7 +562,32 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         var dropdown = new TrainerDropdown<T>(v => labels.FirstOrDefault(p => EqualityComparer<T>.Default.Equals(p.Value, v)).Key ?? v?.ToString() ?? "") { RelativeSizeAxes = Axes.X, Y = selectorLabelSpacing, Items = labels.Select(p => p.Value) };
         capture?.Invoke(dropdown);
         dropdown.Current.Value = selected; dropdown.Current.BindValueChanged(e => changed(e.NewValue));
-        return new Container { Width = width, Height = 56, Children = [text(label, 10, AimModPalette.Muted), dropdown] };
+        string? hint = label switch
+        {
+            "PATTERN" => "How notes and rests are arranged.",
+            "NOTES PER BEAT" => "More notes at the same music tempo.",
+            "SLIDERS" => "Mix holds with taps, or focus on holds.",
+            "SLIDER LENGTH" => "How long each slider lasts, in beats.",
+            "MOVEMENT" => "The path followed by tapping patterns.",
+            "APPROACH RATE" => "Higher AR gives less time to read each note.",
+            "AIM TYPE" => "The kind of cursor movement to practise.",
+            "JUMP DISTANCE" => "100% is normal spacing for this drill.",
+            "CIRCLE SIZE" => "Higher CS means smaller targets.",
+            "LAYOUT" => "Keep a layout to compare repeat runs.",
+            "AUDIO OFFSET" => "Keep your osu! offset for fair comparisons.",
+            "CUE DELAY" => "How long to wait before the visual cue.",
+            "REACTION DRILL" => "React, choose a key, or hold back on STOP.",
+            "RESPONSE WINDOW" => "How long each cue accepts a response.",
+            "SEQUENCE LENGTH" => "Notes per phrase, followed by a short reading break.",
+            "READING CHALLENGE" => "Harder patterns, with a limit on visible notes.",
+            "NOTE VISIBILITY" => "Hidden makes notes fade before their hit time.",
+            _ => null,
+        };
+        var field = new Container { Width = width, Height = hint is null ? 56 : 104,
+            Children = [text(label, 10, AimModPalette.Muted), dropdown] };
+        if (hint is not null) field.Add(new OsuTextFlowContainer(t => { t.Font = new(size:12); t.Colour = AimModPalette.Muted; })
+            { RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Y = 62, Text = hint });
+        return field;
     }
 
     private partial class TrainerDropdown<T>(Func<T, string> label) : AimModDropdown<T>
@@ -484,6 +607,8 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         private readonly List<(int Index, CircularContainer Dot)> notes = [];
         private double nextRebuild;
         private Vector2 targetSize;
+        private double drawnReactionCue = -1;
+        private bool drawnReactionReady;
         public double? LastOffset { get; set; }
         public TrainerField(NativeTrainersWorkspace owner)
         {
@@ -527,6 +652,32 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
                     dot.Position = new(DrawWidth * .25f + (float)((tapping.Notes[index].TimeMs - time) / 1700) * DrawWidth * .75f, 105);
                     dot.Alpha = tapping.WasHit(index) ? .15f : tapping.Notes[index].TimeMs < time - tapping.WindowMs ? .3f : 1;
                 }
+            }
+            else if (owner.reaction is {} reaction)
+            {
+                bool ready = time >= reaction.CueTime;
+                bool stopCue = ready && reaction.NoGo;
+                background.Colour = ready && !stopCue ? AimModPalette.Accent : AimModPalette.Panel;
+                cue.Colour = ready && !stopCue ? AimModPalette.Canvas : AimModPalette.Text;
+                cue.Y = 0;
+                bool choice = owner.settings.ReactionMode is ReactionMode.Choice or ReactionMode.ChoiceGoNoGo;
+                string key = owner.settings.Keys.Split(" / ")[reaction.RequiredKey];
+                cue.Font = new FontUsage(size: 30, weight: "SemiBold");
+                cue.Y = choice ? -95 : 0;
+                if (reaction.CueTime != drawnReactionCue || ready != drawnReactionReady || targetSize != DrawSize)
+                {
+                    marks.Clear(); drawnReactionCue = reaction.CueTime; drawnReactionReady = ready; targetSize = DrawSize;
+                    if (choice)
+                        for (int i = 0; i < 2; i++)
+                        {
+                            var cap = circle(owner.settings.Keys.Split(" / ")[i], AimModPalette.Text, 88);
+                            cap.Position = new(DrawWidth * (i == 0 ? .35f : .65f), 175);
+                            cap.Alpha = ready && !stopCue && i == reaction.RequiredKey ? 1 : .3f;
+                            marks.Add(cap);
+                        }
+                }
+                cue.Text = ready ? stopCue ? "STOP · do not tap" : choice ? $"GO · {key}" : "GO · tap now"
+                    : time < reaction.FeedbackUntil ? reaction.LastFeedback : "Wait for the cue";
             }
             else if (owner.pointer is { } pointer)
             {

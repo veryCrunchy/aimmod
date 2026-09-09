@@ -7,6 +7,7 @@ using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
 using osu.Framework.Graphics.UserInterface;
 using osu.Framework.Input.Events;
+using osu.Framework.Threading;
 using osu.Game.Graphics.Containers;
 using osu.Game.Graphics.Sprites;
 using osu.Game.Graphics.UserInterface;
@@ -18,6 +19,8 @@ public partial class NativeSkinsScreen : CompositeDrawable
     private IInstalledSkinSource? source;
     private Func<InstalledLazerSkin, CancellationToken, Task>? applySkin;
     private readonly CancellationTokenSource lifetime = new();
+    private ScheduledDelegate? scheduledSearch;
+    private CancellationTokenSource? skinSearch;
     private readonly OsuTextBox searchBox;
     private readonly TruncatingSpriteText status;
     private readonly FillFlowContainer list;
@@ -238,18 +241,26 @@ public partial class NativeSkinsScreen : CompositeDrawable
     {
         base.LoadComplete();
         currentTab.BindValueChanged(value => showTab(value.NewValue), true);
-        searchBox.Current.BindValueChanged(_ => loadSkins());
+        searchBox.Current.BindValueChanged(_ =>
+        {
+            ++revision;
+            skinSearch?.Cancel();
+            scheduledSearch?.Cancel();
+            scheduledSearch = Scheduler.AddDelayed(loadSkins, 200);
+        });
         loadSkins();
     }
 
     public void SetExternalSelection(Guid? skinId)
     {
+        if (lazerSkinId == skinId) return;
         lazerSkinId = skinId;
         refreshRows();
     }
 
     public void SetAppliedSelection(Guid? externalSkinId)
     {
+        if (appliedExternalSkinId == externalSkinId) return;
         appliedExternalSkinId = externalSkinId;
         refreshRows();
         updateDetails();
@@ -261,6 +272,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
         Guid? appliedExternalSkinId,
         Func<InstalledLazerSkin, CancellationToken, Task>? applySkin)
     {
+        bool selectionChanged = this.lazerSkinId != lazerSkinId || this.appliedExternalSkinId != appliedExternalSkinId;
         bool sourceChanged = !ReferenceEquals(this.source, source);
         this.source = source;
         this.lazerSkinId = lazerSkinId;
@@ -269,7 +281,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
 
         if (sourceChanged)
             loadSkins();
-        else
+        else if (selectionChanged)
         {
             refreshRows();
             updateDetails();
@@ -300,20 +312,25 @@ public partial class NativeSkinsScreen : CompositeDrawable
 
     private void loadSkins()
     {
-        if (source is null)
-            return;
-
+        scheduledSearch?.Cancel();
+        skinSearch?.Cancel();
+        skinSearch?.Dispose();
+        if (source is null) return;
+        skinSearch = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
         int requestRevision = ++revision;
         status.Text = "Reading installed skins";
         listState.SetState(FontAwesome.Solid.PaintBrush, "Reading installed skins", "Your local osu! skin libraries are being refreshed.", true);
-        _ = loadSkinsAsync(requestRevision, searchBox.Current.Value, lifetime.Token);
+        var currentSource = source;
+        string query = searchBox.Current.Value;
+        var token = skinSearch.Token;
+        _ = Task.Run(() => loadSkinsAsync(currentSource, requestRevision, query, token));
     }
 
-    private async Task loadSkinsAsync(int requestRevision, string searchText, CancellationToken cancellationToken)
+    private async Task loadSkinsAsync(IInstalledSkinSource currentSource, int requestRevision, string searchText, CancellationToken cancellationToken)
     {
         try
         {
-            InstalledLazerSkinPage page = await source!.SearchAsync(searchText, limit: 100, cancellationToken: cancellationToken).ConfigureAwait(false);
+            InstalledLazerSkinPage page = await currentSource.SearchAsync(searchText, limit: 100, cancellationToken: cancellationToken).ConfigureAwait(false);
             if (!IsDisposed)
                 Schedule(() => showSkins(requestRevision, page));
         }
@@ -443,6 +460,9 @@ public partial class NativeSkinsScreen : CompositeDrawable
 
     protected override void Dispose(bool isDisposing)
     {
+        scheduledSearch?.Cancel();
+        skinSearch?.Cancel();
+        skinSearch?.Dispose();
         lifetime.Cancel();
         lifetime.Dispose();
         base.Dispose(isDisposing);

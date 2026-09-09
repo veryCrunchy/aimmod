@@ -86,14 +86,18 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
     private readonly Dictionary<string,LocalReplay> observedModSetups = new();
     private PpTargetPreferenceProfile selectedModProfile(PpTargetPreferenceProfile value)
     {
-        LocalReplay? run = observedModSetups.GetValueOrDefault(selectedMods.Value);
-        if (selectedMods.Value == "Automatic")
-            run = patternHistory.Where(ScoreMods.IsManualPlay)
+        return resolveModProfile(value, selectedMods.Value, patternHistory, observedModSetups.GetValueOrDefault(selectedMods.Value));
+    }
+    private static PpTargetPreferenceProfile resolveModProfile(PpTargetPreferenceProfile value, string selection,
+        IReadOnlyList<LocalReplay> history, LocalReplay? run)
+    {
+        if (selection == "Automatic")
+            run = history.Where(ScoreMods.IsManualPlay)
                 .Where(r=>PpTargetMods.Normalise(r.Mods).SequenceEqual(value.PreferredModSetup ?? []))
                 .GroupBy(ScoreMods.Configuration).OrderByDescending(g=>g.Count()).Select(g=>g.First()).FirstOrDefault();
         return run is not null
             ? value with { PreferredModSetup=ScoreMods.Acronyms(run), PreferredModsJson=run.ModsJson, LegacyScore=run.LegacyScore || run.Origin == LocalLibraryOrigin.Stable }
-            : WithSelectedMods(value,selectedMods.Value) with { PreferredModsJson=null };
+            : WithSelectedMods(value,selection) with { PreferredModsJson=null };
     }
     private readonly Bindable<string> selectedMods = new("Automatic");
     internal static readonly string[] ModChoices = ["Automatic", "NM", "HD", "HR", "DT", "NC", "HD+DT", "HD+NC", "HD+HR", "HR+DT", "HD+HR+DT", "HT", "EZ", "HD+EZ", "FL", "HD+FL"];
@@ -127,6 +131,12 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
     private CancellationTokenSource? catalogSearch;
     private CancellationTokenSource? exactCalculation;
     private ScheduledDelegate? scheduledSearch;
+    private ScheduledDelegate? scheduledResults;
+    private ScheduledDelegate? scheduledRows;
+    private readonly LatestBackgroundQuery<PpTargetCandidate[]> ranking = new();
+    private readonly LatestBackgroundQuery<bool> snapshotWriter = new();
+    private IReadOnlyList<LocalBeatmapSet>? installedIndexSource;
+    private HashSet<int> installedBeatmapIds = new();
     private PpTargetPreferenceProfile profile = PpTargetPreferenceProfile.Empty;
     private IReadOnlyList<OfficialBeatmapSet> catalog = Array.Empty<OfficialBeatmapSet>();
     private IReadOnlyList<LocalBeatmapSet> localSets = Array.Empty<LocalBeatmapSet>();
@@ -135,8 +145,16 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
     internal static bool HasInstalledDifficulty(IEnumerable<LocalBeatmapSet> sets, int beatmapId) =>
         beatmapId > 0 && sets.Any(set => set.Difficulties.Any(difficulty => difficulty.OnlineId == beatmapId));
 
-    private bool isInstalled(PpTargetCandidate candidate) => savedSetIds.Contains(candidate.BeatmapSetId)
-        || HasInstalledDifficulty(localSets, candidate.BeatmapId);
+    private bool isInstalled(PpTargetCandidate candidate)
+    {
+        if (!ReferenceEquals(installedIndexSource, localSets))
+        {
+            installedBeatmapIds = localSets.SelectMany(set => set.Difficulties)
+                .Select(difficulty => difficulty.OnlineId).Where(id => id > 0).ToHashSet();
+            installedIndexSource = localSets;
+        }
+        return savedSetIds.Contains(candidate.BeatmapSetId) || installedBeatmapIds.Contains(candidate.BeatmapId);
+    }
     private IReadOnlyDictionary<int, PpTargetEstimate> exactEstimates = new Dictionary<int, PpTargetEstimate>();
     private Dictionary<int, OfficialBeatmapSet> setsById = new();
     private int connectionAttempts;
@@ -488,19 +506,14 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
     protected override void LoadComplete()
     {
         base.LoadComplete();
-        PpTargetWorkspaceSnapshot? snapshot = workspaceCache?.Load();
-        if (snapshot is not null && !CacheMatchesPlayer(snapshot.Profile, activePlayer())) snapshot = null;
-        if (snapshot is not null)
-            applySnapshot(snapshot);
-
         search.Committed += () => startCatalogSearch();
-        search.Current.BindValueChanged(_ => scheduleCatalogSearch());
+        search.Current.BindValueChanged(_ => filterChanged(scheduleCatalogSearch));
         minimumStars.BindValueChanged(_ => filterChanged(scheduleCatalogSearch));
         maximumStars.BindValueChanged(_ => filterChanged(scheduleCatalogSearch));
-        minimumExpectedPp.BindValueChanged(_ => filterChanged(renderResults));
-        maximumExpectedPp.BindValueChanged(_ => filterChanged(renderResults));
-        minimumMaximumPp.BindValueChanged(_ => filterChanged(renderResults));
-        maximumMaximumPp.BindValueChanged(_ => filterChanged(renderResults));
+        minimumExpectedPp.BindValueChanged(_ => filterChanged(scheduleResults));
+        maximumExpectedPp.BindValueChanged(_ => filterChanged(scheduleResults));
+        minimumMaximumPp.BindValueChanged(_ => filterChanged(scheduleResults));
+        maximumMaximumPp.BindValueChanged(_ => filterChanged(scheduleResults));
         category.BindValueChanged(_ => filterChanged(startCatalogSearch));
         selectedMods.BindValueChanged(_ => filterChanged(() =>
         {
@@ -510,19 +523,34 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             startExactCalculations();
             saveSnapshot();
         }));
-        length.BindValueChanged(_ => renderResults());
+        length.BindValueChanged(_ => filterChanged(renderResults));
         sort.BindValueChanged(_ => { if (!suppressFilterEvents) { renderResults(); saveSnapshot(); } });
 
-        if (snapshot is null)
-            reloadProfile();
-        else if (!workspaceCache!.IsFresh(snapshot))
-            reloadProfile();
-        else
+        _ = restoreSnapshotAsync(renderGeneration);
+    }
+
+    private async Task restoreSnapshotAsync(int generation)
+    {
+        var snapshot = await Task.Run(() => workspaceCache?.Load()).ConfigureAwait(false);
+        if (IsDisposed) return;
+        Schedule(() =>
         {
-            status.Text = withCatalogStatus($"Ready from cache  /  updated {relativeAge(snapshot.CachedAt)}");
-            replaceToken(ref profileRefresh);
-            _ = loadPatternHistoryAsync(profileRefresh!.Token);
-        }
+            if (IsDisposed || profileRefresh is not null) return;
+            // A late disk read must not overwrite filters the player has already changed.
+            if (generation != renderGeneration || snapshot is null || !CacheMatchesPlayer(snapshot.Profile, activePlayer()))
+            {
+                reloadProfile();
+                return;
+            }
+            applySnapshot(snapshot);
+            if (!workspaceCache!.IsFresh(snapshot)) reloadProfile();
+            else
+            {
+                status.Text = withCatalogStatus($"Ready from cache  /  updated {relativeAge(snapshot.CachedAt)}");
+                replaceToken(ref profileRefresh);
+                _ = loadPatternHistoryAsync(profileRefresh!.Token);
+            }
+        });
     }
 
     internal static bool CacheMatchesPlayer(PpTargetPreferenceProfile cached, string? player) =>
@@ -1218,8 +1246,17 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         }
     }
 
+    private void scheduleResults()
+    {
+        ++renderGeneration;
+        scheduledResults?.Cancel();
+        scheduledResults = Scheduler.AddDelayed(renderResults, 150);
+    }
+
     private void renderResults()
     {
+        scheduledResults?.Cancel();
+        scheduledResults = null;
         int generation = ++renderGeneration;
         if (results is null || catalog.Count == 0)
             return;
@@ -1243,49 +1280,58 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             MaximumLengthSeconds: maximumLength,
             Statuses: string.IsNullOrEmpty(statusFilter) ? null : new[] { statusFilter },
             Limit: 50_000);
-        _ = rankAndRenderAsync(selectedModProfile(profile), catalog, filters, exactEstimates, sort.Value, generation);
-    }
-
-    private async Task rankAndRenderAsync(PpTargetPreferenceProfile currentProfile, IReadOnlyList<OfficialBeatmapSet> currentCatalog,
-        PpTargetFilters filters, IReadOnlyDictionary<int, PpTargetEstimate> estimates, TargetSort ordering, int generation)
-    {
-        try
+        // Capture bindables on the update thread. Rank only the latest request on one worker.
+        var currentProfile = profile;
+        var currentCatalog = catalog;
+        var estimates = exactEstimates;
+        var ordering = sort.Value;
+        var modSelection = selectedMods.Value;
+        var history = patternHistory;
+        var observed = observedModSetups.GetValueOrDefault(modSelection);
+        ranking.Submit(token =>
         {
-            var visibleCandidates = await Task.Run(() =>
+            var ranked = PpTargetRanker.Rank(resolveModProfile(currentProfile, modSelection, history, observed), currentCatalog, filters, estimates, token);
+            token.ThrowIfCancellationRequested();
+            return OrderTargets(ranked.Candidates.Where(candidate => estimates.Count == 0 || candidate.Estimate is not null), ordering).Take(200).ToArray();
+        }, visibleCandidates =>
+        {
+            if (!IsDisposed) Schedule(() =>
             {
-                var ranked = PpTargetRanker.Rank(currentProfile, currentCatalog, filters, estimates);
-                IEnumerable<PpTargetCandidate> candidates = ranked.Candidates.Where(candidate => estimates.Count == 0 || candidate.Estimate is not null);
-                return OrderTargets(candidates, ordering).Take(200).ToArray();
-            }).ConfigureAwait(false);
-            if (!IsDisposed)
-                Schedule(() =>
-                {
-                    if (!IsDisposed && generation == renderGeneration)
-                        renderCandidates(visibleCandidates);
-                });
-        }
-        catch (Exception error)
-        {
-            Console.Error.WriteLine($"PP target ranking failed: {error}");
-        }
+                if (!IsDisposed && generation == renderGeneration) renderCandidates(visibleCandidates);
+            });
+        }, error => Console.Error.WriteLine($"PP target ranking failed: {error}"));
     }
 
     private void renderCandidates(PpTargetCandidate[] visibleCandidates)
     {
+        scheduledRows?.Cancel();
         targetRows.Clear();
         results.Clear();
-        foreach (PpTargetCandidate candidate in visibleCandidates)
+        int generation = renderGeneration;
+        int cursor = 0;
+        void addRows()
         {
-            if (setsById.TryGetValue(candidate.BeatmapSetId, out OfficialBeatmapSet? set))
+            if (IsDisposed || generation != renderGeneration) return;
+            var budget = System.Diagnostics.Stopwatch.StartNew();
+            int added = 0;
+            while (cursor < visibleCandidates.Length)
             {
-                var row = new PpTargetRow(candidate, set, importSet, openBeatmap, sort.Value, isInstalled(candidate))
+                PpTargetCandidate candidate = visibleCandidates[cursor++];
+                if (setsById.TryGetValue(candidate.BeatmapSetId, out OfficialBeatmapSet? set))
                 {
-                    Action = () => selectTarget(candidate, set, true),
-                };
-                targetRows[candidate.BeatmapId] = row;
-                results.Add(row);
+                    var row = new PpTargetRow(candidate, set, importSet, openBeatmap, sort.Value, isInstalled(candidate))
+                    {
+                        Action = () => selectTarget(candidate, set, true),
+                        BackgroundColour = candidate.BeatmapId == selectedBeatmapId ? AimModPalette.PanelRaised : AimModPalette.Panel,
+                    };
+                    targetRows[candidate.BeatmapId] = row;
+                    results.Add(row);
+                }
+                if (++added >= 12 || budget.Elapsed.TotalMilliseconds >= 4) break;
             }
+            if (cursor < visibleCandidates.Length) scheduledRows = Scheduler.AddDelayed(addRows, 16);
         }
+        addRows();
         PpTargetCandidate? selected = visibleCandidates.FirstOrDefault(c => c.BeatmapId == selectedBeatmapId)
             ?? visibleCandidates.FirstOrDefault();
         if (selected is not null && setsById.TryGetValue(selected.BeatmapSetId, out var selectedSet))
@@ -1297,7 +1343,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             detailViewport.Clear();
             detailOpen = false;
         }
-        if (results.Count == 0)
+        if (visibleCandidates.Length == 0)
             workspaceState.ShowState(FontAwesome.Solid.Filter, "No matching beatmaps",
                 minimumExpectedPp.Value > 0 || maximumExpectedPp.Value < 1000
                     ? "Expected PP needs comparable completed plays and pass evidence. Clear the PP range to include unverified maps."
@@ -1404,7 +1450,11 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             catalogScanStatus,
             sort.Value.ToString(),
             pendingPatternProfile, selectedMods.Value, catalogQueryIdentity, catalogUpdatedAt);
-        _ = workspaceCache.SaveAsync(snapshot);
+        snapshotWriter.Submit(token =>
+        {
+            workspaceCache.SaveAsync(snapshot, token).GetAwaiter().GetResult();
+            return true;
+        }, _ => { }, error => Console.Error.WriteLine($"PP target cache failed: {error}"));
     }
 
     private string withCatalogStatus(string message) => string.IsNullOrEmpty(catalogScanStatus) ? message : $"{message} {catalogScanStatus}";
@@ -1467,6 +1517,10 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         cancelToken(ref patternRefresh);
         scheduledPatternRefresh?.Cancel();
         scheduledSearch?.Cancel();
+        scheduledResults?.Cancel();
+        scheduledRows?.Cancel();
+        ranking.Dispose();
+        snapshotWriter.Dispose();
         if (sourceChanges is not null)
             sourceChanges.SourceChanged -= sourceChanged;
         base.Dispose(isDisposing);

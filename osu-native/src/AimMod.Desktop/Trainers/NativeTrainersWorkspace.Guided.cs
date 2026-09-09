@@ -1,6 +1,7 @@
 using AimMod.Desktop.Visuals;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
+using osu.Framework.Graphics.Sprites;
 
 namespace AimMod.Desktop.Trainers;
 
@@ -26,17 +27,31 @@ public partial class NativeTrainersWorkspace
         bool open = practiceOptions.Alpha == 0;
         practiceOptions.Alpha = open ? 1 : 0;
         practiceOptionsToggle.SetSelected(open);
-        practiceOptionsToggle.SetCaption(open ? "Hide patterns & difficulty" : "Adjust patterns & difficulty");
+        practiceOptionsToggle.SetCaption(settings.Kind == TrainerKind.Reaction ? open ? "Hide cue settings" : "Adjust cue settings"
+            : open ? "Hide patterns & difficulty" : "Adjust patterns & difficulty");
     }
 
     private void buildGuidedControls(FillFlowContainer<Drawable> body)
     {
-        body.Add(text("What do you want to work on?", 18, AimModPalette.Text));
+        body.Add(text("How do you want to practise?", 13, AimModPalette.Muted));
         var choices = flow();
         foreach (var (intent, caption) in new[] { (PracticeIntent.Quick, "Practise a skill"),
             (PracticeIntent.Compare, "Compare aim & tapping"), (PracticeIntent.Build, "Build consistency") })
         {
             var button = new AimModButton(caption, () => { practiceIntent = intent; refreshPracticeIntent(); });
+            button.AutoSizeAxes = Axes.None;
+            button.Width = 220;
+            button.SetVisualContent(modeContent(caption, intent switch
+            {
+                PracticeIntent.Compare => "Less movement vs full movement",
+                PracticeIntent.Build => "Repeat, then raise the challenge",
+                _ => "One focused run at your pace",
+            }, intent switch
+            {
+                PracticeIntent.Compare => FontAwesome.Solid.BalanceScale,
+                PracticeIntent.Build => FontAwesome.Solid.ChartLine,
+                _ => FontAwesome.Solid.Bullseye,
+            }), 56);
             intentButtons[intent] = button; choices.Add(button);
         }
         body.Add(choices);
@@ -55,12 +70,17 @@ public partial class NativeTrainersWorkspace
     {
         if (intentDescription is null) return;
         bool reaction = settings.Kind == TrainerKind.Reaction;
-        if (reaction) practiceIntent = PracticeIntent.Quick;
+        bool singleRun = reaction || settings.Kind == TrainerKind.Spinner;
+        if (practiceOptionsToggle is not null) practiceOptionsToggle.Alpha = settings.Kind == TrainerKind.Spinner ? 0 : 1;
+        if (settings.Kind == TrainerKind.Spinner) practiceOptions.Hide();
+        if (practiceOptionsToggle is not null) practiceOptionsToggle.SetCaption(reaction ? practiceOptions.Alpha > 0 ? "Hide cue settings" : "Adjust cue settings"
+            : practiceOptions.Alpha > 0 ? "Hide patterns & difficulty" : "Adjust patterns & difficulty");
+        if (singleRun) practiceIntent = PracticeIntent.Quick;
         bool groups = settings.Kind is TrainerKind.Bursts or TrainerKind.Alternating;
         if (!groups && buildFocus == TrainerGuidedFocus.GroupLength) buildFocus = TrainerGuidedFocus.Endurance;
         foreach (var (intent, button) in intentButtons)
         {
-            button.Alpha = !reaction || intent == PracticeIntent.Quick ? 1 : 0;
+            button.Alpha = !singleRun || intent == PracticeIntent.Quick ? 1 : 0;
             button.SetSelected(intent == practiceIntent);
         }
         buildChoices.Alpha = practiceIntent == PracticeIntent.Build ? 1 : 0;
@@ -74,9 +94,10 @@ public partial class NativeTrainersWorkspace
         intentDescription.Text = practiceIntent switch
         {
             PracticeIntent.Compare => "Does moving the cursor affect your timing? Play six short runs with less and more movement, then compare your results.",
-            PracticeIntent.Build => "Repeat the same song and pattern three times. Your results help you decide when to add distance, length or more notes. Random patterns stay off when extending groups.",
+            PracticeIntent.Build => "Repeat three runs on the same song and pattern. Use your results to decide when to add distance, length or notes.",
             _ => "Pick a skill and play a short exercise. Your results show what to work on next. You can start with the settings below.",
         };
+        intentDescription.Alpha = practiceIntent == PracticeIntent.Quick ? 0 : 1;
         if (!running) start?.SetCaption(practiceIntent switch
         {
             PracticeIntent.Compare => "Set up movement comparison",

@@ -74,7 +74,7 @@ public partial class AimModGame
 
     private void launchPreparedTrainer(TrainerSettings settings, bool mouseButtons, TrainerBeatmap map)
         => launchPreparedGameplay(settings, mouseButtons, map, result => trainersWorkspace?.CompleteOsuSession(result),
-            map.ReleaseAudio, map.SeekTime, map.FadeOutro, []);
+            map.ReleaseAudio, map.SeekTime, map.FadeOutro, TrainerReadingPatterns.Mods(settings));
 
     private void launchPreparedGameplay(TrainerSettings settings, bool mouseButtons, WorkingBeatmap map,
         Action<TrainerResult?> complete, Action release, double seekTime, Action<double>? fadeOutro, Mod[] mods)

@@ -26,8 +26,16 @@ public sealed record HubTrainingSession(string Id, DateTimeOffset CompletedAt, s
             if (info.Type != typeof(TrainerSettings)) return;
             // Keep the exact pre-guided JSON property order and shape for ordinary runs.
             // A compact exercise adds only its non-default scale to the cohort identity.
+            info.Properties.Single(p => p.Name == nameof(TrainerSettings.GuidedCues)).ShouldSerialize = (_, value) => value is true;
+            info.Properties.Single(p => p.Name == nameof(TrainerSettings.Spinners)).ShouldSerialize = (_, value) => value is TrainerSpinnerFrequency frequency && frequency != TrainerSpinnerFrequency.None;
+            info.Properties.Single(p => p.Name == nameof(TrainerSettings.SpinnerSeconds)).ShouldSerialize = (_, value) => value is int seconds && seconds != 4;
             var movement = info.Properties.Single(p => p.Name == nameof(TrainerSettings.MovementScale));
             movement.ShouldSerialize = (_, value) => value is double scale && scale != 1;
+            info.Properties.Single(p => p.Name == nameof(TrainerSettings.ReadingGroupSize)).ShouldSerialize = (_, value) => value is int size && size != 4;
+            info.Properties.Single(p => p.Name == nameof(TrainerSettings.ReadingComplexity)).ShouldSerialize = (_, value) => value is int complexity && complexity != 0;
+            info.Properties.Single(p => p.Name == nameof(TrainerSettings.ReadingHidden)).ShouldSerialize = (_, value) => value is true;
+            info.Properties.Single(p => p.Name == nameof(TrainerSettings.ReactionMode)).ShouldSerialize = (_, value) => value is ReactionMode mode && mode != ReactionMode.Simple;
+            info.Properties.Single(p => p.Name == nameof(TrainerSettings.ReactionWindowMs)).ShouldSerialize = (_, value) => value is int window && window != 1200;
         });
         return new JsonSerializerOptions { TypeInfoResolver = resolver };
     }
@@ -71,6 +79,9 @@ public sealed class HubTrainingSyncService(string path, HttpClient client, Uri b
         if (!settings.TrainingSyncEnabled || owner is null || settings.TrainingSyncGeneration == Guid.Empty) return null;
         return result =>
         {
+            // The current public contract has no spinner mode or spinner metrics yet.
+            if (result.Settings.Kind == TrainerKind.Spinner)
+            { status = "Spinner practice is saved locally. Profile sync for this drill is not available yet."; return; }
             if (!result.Assisted)
                 _ = enqueueAsync(owner, settings.TrainingSyncGeneration, HubTrainingSession.FromResult(result, settings.TrainingPublicSharing));
         };

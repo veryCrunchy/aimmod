@@ -28,6 +28,13 @@ public partial class NativeCoachingWorkspace
         Spacing = new(10), Padding = new MarginPadding { Right = 12, Bottom = 18 },
     };
 
+    private static CoachingButton visualEntry(string title, string description, PracticeSketchKind sketch, Action action)
+    {
+        var button = new CoachingButton(title, action) { AutoSizeAxes = Axes.None, Width = 245 };
+        button.SetVisualContent(new AimModVisualChoiceContent(title, description, sketch), 125);
+        return button;
+    }
+
     private sealed partial class CoachingMapRow : AimModInteractiveSurface
     {
         public CoachingMapRow(string title, string difficulty, string statistics, string actionLabel, Action action)

@@ -99,13 +99,14 @@ internal sealed class LocalLibraryController : IDisposable
             append ? previous.Total : 0,
             false));
 
+        CancellationToken requestToken = requestCancellation.Token;
         try
         {
             if (mode == NativeLocalLibraryMode.Beatmaps)
             {
-                Task<LocalLibraryPage<LocalBeatmapSet>> search = beatmapFilter is null
-                    ? source.SearchBeatmapSetsAsync(query, requestCancellation.Token).AsTask()
-                    : ReadFilteredBeatmapPageAsync(source, query, beatmapFilter, requestCancellation.Token);
+                Task<LocalLibraryPage<LocalBeatmapSet>> search = Task.Run(async () => beatmapFilter is null
+                    ? await source.SearchBeatmapSetsAsync(query, requestToken).ConfigureAwait(false)
+                    : await ReadFilteredBeatmapPageAsync(source, query, beatmapFilter, requestToken).ConfigureAwait(false), requestCancellation.Token);
                 LocalLibraryPage<LocalBeatmapSet> page = await search.WaitAsync(requestTimeout, requestCancellation.Token).ConfigureAwait(false);
                 IReadOnlyList<LocalBeatmapSet> items = append
                     ? previous.BeatmapSets.Concat(page.Items).ToArray()
@@ -113,8 +114,8 @@ internal sealed class LocalLibraryController : IDisposable
                 return publishResult(generation, items, Array.Empty<LocalReplay>(), page.Total, page.HasMore, page.Warning);
             }
 
-            LocalLibraryPage<LocalReplay> replayPage = await source.SearchReplaysAsync(query, requestCancellation.Token)
-                .AsTask().WaitAsync(requestTimeout, requestCancellation.Token).ConfigureAwait(false);
+            LocalLibraryPage<LocalReplay> replayPage = await Task.Run(async () => await source.SearchReplaysAsync(query, requestToken).ConfigureAwait(false), requestCancellation.Token)
+                .WaitAsync(requestTimeout, requestCancellation.Token).ConfigureAwait(false);
             IReadOnlyList<LocalReplay> replays = append
                 ? previous.Replays.Concat(replayPage.Items).ToArray()
                 : replayPage.Items;

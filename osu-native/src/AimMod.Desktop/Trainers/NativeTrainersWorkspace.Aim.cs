@@ -19,7 +19,7 @@ public partial class NativeTrainersWorkspace
             ["Flowing aim"] = TrainerAimStyle.Flow, ["Small corrections"] = TrainerAimStyle.SmallCorrections,
             ["Direction changes"] = TrainerAimStyle.DirectionChanges,
         }, settings.AimStyle, style => { settings = settings with { AimStyle = style }; updateInstruction(); refreshHistory(); }, 205, d => aimStyleSelector = d));
-        aimControls.Add(selector("SPACING", new[] { 70, 85, 100, 120, 140 }.Select(v => new KeyValuePair<string, int>($"{v}%", v)),
+        aimControls.Add(selector("JUMP DISTANCE", new[] { 70, 85, 100, 120, 140 }.Select(v => new KeyValuePair<string, int>($"{v}%", v)),
             100, v => { settings = settings with { AimSpacing = v }; refreshHistory(); }, 130, d => aimSpacingSelector = d));
         aimControls.Add(selector("CIRCLE SIZE", new[] { 3, 4, 5, 6 }.Select(v => new KeyValuePair<string, int>($"CS {v}", v)),
             4, v => { settings = settings with { CircleSize = v }; refreshHistory(); }, 130, d => circleSizeSelector = d));

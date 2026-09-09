@@ -1804,59 +1804,39 @@ public partial class AimModGame : OsuGameBase
             Action showTrainers,
             Action showSettings)
         {
-            Children = new Drawable[]
+            var choices = new GridContainer
             {
-                new AimModSectionHeader(
-                    "Your osu! workspace",
-                    "Find a map, review your plays, and choose what to practise next.",
-                    "AimMod"),
-                text("WHAT WOULD YOU LIKE TO WORK ON?", 10, AimModPalette.Accent, "Bold").With(drawable => drawable.Y = 82),
-                new GridContainer
+                RelativeSizeAxes = Axes.X, Height = 512, Y = 24,
+                ColumnDimensions = [new Dimension(GridSizeMode.Relative, .5f), new Dimension(GridSizeMode.Relative, .5f)],
+                Content = new Drawable[][]
                 {
-                    RelativeSizeAxes = Axes.X,
-                    Height = 352,
-                    Y = 106,
-                    ColumnDimensions = new[]
-                    {
-                        new Dimension(GridSizeMode.Relative, 0.5f),
-                        new Dimension(GridSizeMode.Relative, 0.5f),
-                    },
-                    RowDimensions = new[]
-                    {
-                        new Dimension(GridSizeMode.Absolute, 88),
-                        new Dimension(GridSizeMode.Absolute, 88),
-                        new Dimension(GridSizeMode.Absolute, 88),
-                        new Dimension(GridSizeMode.Absolute, 88),
-                    },
-                    Content = new[]
-                    {
-                        new Drawable[]
-                        {
-                            new WorkspaceLink(FontAwesome.Solid.Bullseye, "Improve a map", "Coaching · Break difficult sections into exercises", AimModPalette.Accent, showCoaching),
-                            new WorkspaceLink(FontAwesome.Solid.Keyboard, "Train a skill", "Trainers · Timing, aim, bursts and consistency", AimModPalette.Accent, showTrainers),
-                        },
-                        new Drawable[]
-                        {
-                            new WorkspaceLink(FontAwesome.Solid.Play, "Review a play", "Replays · See where a run went wrong", AimModPalette.Accent, showReplays),
-                            new WorkspaceLink(FontAwesome.Solid.Crosshairs, "Find your next PP play", "PP targets · Maps matched to your skills", AimModPalette.Accent, showPpTargets),
-                        },
-                        new Drawable[]
-                        {
-                            new WorkspaceLink(FontAwesome.Solid.ChartLine, "See your progress", "Statistics · Trends across your plays", AimModPalette.Accent, showStatistics),
-                            new WorkspaceLink(FontAwesome.Solid.Music, "Browse beatmaps", "Beatmaps · Search and install songs", AimModPalette.Accent, showBeatmaps),
-                        },
-                        new Drawable[]
-                        {
-                            new WorkspaceLink(FontAwesome.Solid.PaintBrush, "Choose your skin", "Skins · Use your familiar osu! look", AimModPalette.Accent, showSkins),
-                            new WorkspaceLink(FontAwesome.Solid.Cog, "Connect & customise", "Settings · osu!, controls and automatic practice", AimModPalette.Accent, showSettings),
-                        },
-                    },
-                },
-                new NativeUpdateSurface(updateService)
-                {
-                    Y = 482,
+                    [new WorkspaceLink("Improve a map", "Coaching · Turn difficult sections into exercises", showCoaching, WorkspaceIllustrationKind.Coaching),
+                     new WorkspaceLink("Train a skill", "Trainers · Timing, aim, bursts and reading", showTrainers, WorkspaceIllustrationKind.Trainers)],
+                    [new WorkspaceLink("Review a play", "Replays · Watch your movement and timing", showReplays, WorkspaceIllustrationKind.Replays),
+                     new WorkspaceLink("Find your next PP play", "PP targets · Find maps that fit your skills", showPpTargets, WorkspaceIllustrationKind.Targets)],
+                    [new WorkspaceLink("See your progress", "Statistics · Follow your results over time", showStatistics, WorkspaceIllustrationKind.Statistics),
+                     new WorkspaceLink("Browse beatmaps", "Beatmaps · Find songs and install maps", showBeatmaps, WorkspaceIllustrationKind.Beatmaps)],
+                    [new WorkspaceLink("Choose your skin", "Skins · Make osu! feel like home", showSkins, WorkspaceIllustrationKind.Skins),
+                     new WorkspaceLink("Connect & customise", "Settings · Your osu! setup, keys and audio", showSettings, WorkspaceIllustrationKind.Settings)],
                 },
             };
+            Children = [
+                new AimModSectionHeader("Your osu! workspace", "Find a map, review your plays, and choose what to practise next.", "AimMod"),
+                new Container
+                {
+                    RelativeSizeAxes = Axes.Both, Padding = new MarginPadding { Top = 80 },
+                    Child = new AimModScrollContainer
+                    {
+                        RelativeSizeAxes = Axes.Both,
+                        Child = new Container
+                        {
+                            RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Padding = new MarginPadding { Right = 8, Bottom = 16 },
+                            Children = [text("WHAT WOULD YOU LIKE TO WORK ON?", 10, AimModPalette.Accent, "Bold"), choices,
+                                new NativeUpdateSurface(updateService) { Y = 556 }],
+                        },
+                    },
+                },
+            ];
         }
     }
 
@@ -1884,78 +1864,40 @@ public partial class AimModGame : OsuGameBase
 
     private partial class WorkspaceLink : AimModInteractiveSurface
     {
-        private readonly TruncatingSpriteText titleText;
-        private readonly TruncatingSpriteText descriptionText;
+        private readonly AimModWorkspaceIllustration illustration;
+        private readonly FillFlowContainer<Drawable> labels;
 
-        public WorkspaceLink(
-            IconUsage icon,
-            string title,
-            string description,
-            Colour4 accentColour,
-            Action? action = null)
+        public WorkspaceLink(string title, string description, Action action, WorkspaceIllustrationKind kind)
         {
             RelativeSizeAxes = Axes.Both;
             Padding = new MarginPadding(AimModVisualStyle.RelatedSpacing);
             CornerRadius = AimModVisualStyle.ControlRadius;
             BackgroundColour = AimModPalette.Panel;
             Action = action;
-
-            Children = new Drawable[]
+            illustration = new AimModWorkspaceIllustration(kind, () => IsHovered)
             {
-                new SpriteIcon
-                {
-                    Anchor = Anchor.CentreLeft,
-                    Origin = Anchor.CentreLeft,
-                    Margin = new MarginPadding { Left = 18 },
-                    Icon = icon,
-                    Size = new(20),
-                    Colour = accentColour,
-                },
-                new FillFlowContainer
-                {
-                    Anchor = Anchor.CentreLeft,
-                    Origin = Anchor.CentreLeft,
-                    AutoSizeAxes = Axes.Y,
-                    RelativeSizeAxes = Axes.X,
-                    Width = 1,
-                    Margin = new MarginPadding { Left = 54 },
-                    Padding = new MarginPadding { Right = 48 },
-                    Direction = FillDirection.Vertical,
-                    Spacing = new(2),
-                    Children = new Drawable[]
-                    {
-                        titleText = new TruncatingSpriteText
-                        {
-                            Text = title,
-                            Font = new FontUsage(size: 17, weight: "SemiBold"),
-                            Colour = AimModPalette.Text,
-                        },
-                        descriptionText = new TruncatingSpriteText
-                        {
-                            Text = description,
-                            Font = new FontUsage(size: 11),
-                            Colour = AimModPalette.Muted,
-                        },
-                    },
-                },
-                new SpriteIcon
-                {
-                    Anchor = Anchor.CentreRight,
-                    Origin = Anchor.CentreRight,
-                    Margin = new MarginPadding { Right = 16 },
-                    Icon = FontAwesome.Solid.ChevronRight,
-                    Size = new(10),
-                    Colour = AimModPalette.Muted,
-                },
+                Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft, X = 12, Width = 144, Height = 96,
             };
+            labels = new FillFlowContainer<Drawable>
+            {
+                Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft, RelativeSizeAxes = Axes.X,
+                AutoSizeAxes = Axes.Y, Direction = FillDirection.Vertical, Spacing = new(6),
+                Children = [copy(title, 17, AimModPalette.Text, "SemiBold"), copy(description, 12, AimModPalette.Muted)],
+            };
+            Children = [illustration, labels,
+                new SpriteIcon { Anchor = Anchor.CentreRight, Origin = Anchor.CentreRight, X = -10,
+                    Icon = FontAwesome.Solid.ChevronRight, Size = new(9), Colour = AimModPalette.Muted }];
         }
+
+        private static osu.Game.Graphics.Containers.OsuTextFlowContainer copy(string value, float size, Colour4 colour, string weight = "Regular") => new(t =>
+            { t.Font = new FontUsage(size: size, weight: weight); t.Colour = colour; })
+            { RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Text = value };
 
         protected override void Update()
         {
             base.Update();
-            float textWidth = Math.Max(80, DrawWidth - 112);
-            titleText.MaxWidth = textWidth;
-            descriptionText.MaxWidth = textWidth;
+            illustration.Width = DrawWidth < 420 ? 104 : 144;
+            labels.Padding = new MarginPadding { Left = illustration.Width + 28, Right = 28 };
         }
     }
 

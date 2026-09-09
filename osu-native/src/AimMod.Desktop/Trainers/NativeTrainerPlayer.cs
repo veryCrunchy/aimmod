@@ -40,6 +40,7 @@ public partial class NativeTrainerPlayer : Player
         base.LoadComplete();
         if (!LoadedBeatmapSuccessfully) { report(null); return; }
         DrawableRuleset.NewResult += r => judgements.Add(r);
+        loadPracticeGuide();
         if (SeekTime > 0) SetGameplayStartTime(SeekTime);
         OnReady?.Invoke();
     }
@@ -47,6 +48,7 @@ public partial class NativeTrainerPlayer : Player
     protected override void Update()
     {
         base.Update();
+        if (!reported && Ready) updatePracticeGuide();
         if (!reported && LoadedBeatmapSuccessfully && ScoreProcessor.HasCompleted.Value)
         {
             // Wall-clock grace also works when a short source track has stopped its clock.
@@ -65,11 +67,16 @@ public partial class NativeTrainerPlayer : Player
             var late = hits.Where(j => j.HitObject.StartTime >= start + duration * 2 / 3).ToArray();
             double? drift = early.Length >= 3 && late.Length >= 3 ? late.Average(j => j.TimeOffset) - early.Average(j => j.TimeOffset) : null;
             report(new TrainerResult(Guid.NewGuid(), DateTimeOffset.Now, settings, GameplayState.Beatmap.HitObjects.Count,
-                hits.Length, offsets.Count(o => Math.Abs(o) <= 25), 0, 0, mean, spread, drift,
+                hits.Length + judgements.Count(j => j.IsHit && j.HitObject is Spinner), offsets.Count(o => Math.Abs(o) <= 25), 0, 0, mean, spread, drift,
                 Engine: TrainerResult.EngineFor(settings), Accuracy: ScoreProcessor.Accuracy.Value * 100,
                 PlayedSeconds: Math.Min(settings.Seconds, (duration + GameplayState.Beatmap.ControlPointInfo.TimingPointAt(start).BeatLength / 4) / 1000),
                 Demand: TrainerSkillProfile.Measure(GameplayState.Beatmap),
-                JudgementMisses: judgements.Count(j => j.Type == HitResult.Miss)));
+                JudgementMisses: judgements.Count(j => j.Type == HitResult.Miss),
+                TapTargets: GameplayState.Beatmap.HitObjects.Count(h => h is HitCircle or Slider),
+                SpinnerPractice: spinMetrics.Result().Attempts > 0 ? spinMetrics.Result() : null,
+                ReadingWindows: settings.Kind != TrainerKind.Reading ? null : judgements.Where(j => j.HitObject is HitCircle)
+                    .GroupBy(j => (int)((j.HitObject.StartTime - start) / 10000))
+                    .Select(g => new ReadingWindowResult(g.Key * 10, g.Count(), g.Count(j => !j.IsHit))).OrderBy(w => w.StartSeconds).ToArray()));
         }
     }
 

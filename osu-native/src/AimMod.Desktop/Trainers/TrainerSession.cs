@@ -3,7 +3,8 @@ using osuTK.Input;
 
 namespace AimMod.Desktop.Trainers;
 
-public enum TrainerKind { Steady, Alternating, Bursts, Rhythm, Aim, Reading, Reaction }
+public enum TrainerKind { Steady, Alternating, Bursts, Rhythm, Aim, Reading, Reaction, Spinner }
+public enum TrainerSpinnerFrequency { None, Occasional }
 
 public sealed record TrainerSettings(TrainerKind Kind = TrainerKind.Steady, int Bpm = 120,
     int Seconds = 30, int OffsetMs = 0, string Keys = "Z / X", string Music = "cues",
@@ -12,28 +13,51 @@ public sealed record TrainerSettings(TrainerKind Kind = TrainerKind.Steady, int 
     TrainerPattern Pattern = TrainerPattern.Standard, TrainerNoteSpeed NoteSpeed = TrainerNoteSpeed.Default,
     TrainerSliderStyle Sliders = TrainerSliderStyle.None, int SliderBeats = 1, TrainerPathStyle PathStyle = TrainerPathStyle.FigureEight,
     bool RandomizePatterns = false, int ApproachRate = 7, TrainerReactionDelay ReactionDelay = TrainerReactionDelay.Standard, TrainerSkillLimits? SkillLimits = null,
-    double MovementScale = 1)
+    double MovementScale = 1, int ReadingGroupSize = 4, bool ReadingHidden = false,
+    ReactionMode ReactionMode = ReactionMode.Simple, int ReactionWindowMs = 1200, int ReadingComplexity = 0,
+    TrainerSpinnerFrequency Spinners = TrainerSpinnerFrequency.None, int SpinnerSeconds = 4, bool GuidedCues = false)
 {
     public string TempoDescription => Music == "song" ? "Song tempo" : $"{Bpm} BPM";
-    public TrainerSettings ComparisonKey() => this with
+    public TrainerSettings ComparisonKey()
+    {
+        if (Kind == TrainerKind.Reaction) return this with
+        {
+            Bpm = 120, OffsetMs = 0, Music = "cues", Cue = "pulse", SongIdentity = "", SongTitle = "", SongStartSeconds = 0,
+            PatternSeed = 0, Pattern = TrainerPattern.Standard, NoteSpeed = TrainerNoteSpeed.Default, Sliders = TrainerSliderStyle.None,
+            SliderBeats = 1, PathStyle = TrainerPathStyle.FigureEight, AimStyle = TrainerAimStyle.Balanced, AimSpacing = 100,
+            CircleSize = 4, ApproachRate = 7, RandomizePatterns = false, SkillLimits = null, MovementScale = 1,
+            ReadingGroupSize = 4, ReadingHidden = false, ReadingComplexity = 0, Spinners = TrainerSpinnerFrequency.None, SpinnerSeconds = 4,
+        };
+        return this with
     {
         SongTitle = "",
         PatternSeed = 0,
         SkillLimits = RandomizePatterns && SkillLimits is {} limits ? limits with { EvidenceCount = 0 } : null,
         AimStyle = Kind == TrainerKind.Aim ? AimStyle : TrainerAimStyle.Balanced,
         ReactionDelay = Kind == TrainerKind.Reaction ? ReactionDelay : TrainerReactionDelay.Standard,
+        ReactionMode = Kind == TrainerKind.Reaction ? ReactionMode : ReactionMode.Simple,
+        ReactionWindowMs = Kind == TrainerKind.Reaction ? ReactionWindowMs : 1200,
+        ReadingGroupSize = Kind == TrainerKind.Reading ? ReadingGroupSize : 4,
+        ReadingHidden = Kind == TrainerKind.Reading && ReadingHidden,
+        ReadingComplexity = Kind == TrainerKind.Reading ? ReadingComplexity : 0,
         SliderBeats = Sliders == TrainerSliderStyle.None ? 1 : SliderBeats,
+        SpinnerSeconds = Kind == TrainerKind.Spinner || Spinners != TrainerSpinnerFrequency.None ? SpinnerSeconds : 4,
         Bpm = Music == "song" ? 120 : Bpm,
         Cue = Music == "cues" ? Cue : "pulse",
         SongIdentity = Music == "song" ? SongIdentity : "",
         SongStartSeconds = Music == "song" ? SongStartSeconds : 0,
     };
+    }
     public static Key[] ParseKeys(string keys) => keys.Split(" / ").Select(s => Enum.TryParse<Key>(s, out var k) && Enum.IsDefined(k) && k is not (Key.Unknown or Key.Escape) ? (Key?)k : null)
         .Where(k => k is not null).Select(k => k!.Value).ToArray();
     public void Validate()
     {
         SkillLimits?.Validate();
-        if (!double.IsFinite(MovementScale) || MovementScale is < .4 or > 1
+        if (!Enum.IsDefined(Spinners) || SpinnerSeconds is not (2 or 4 or 6)
+            || !double.IsFinite(MovementScale) || MovementScale is < .4 or > 1
+            || !Enum.IsDefined(ReactionMode) || ReactionWindowMs is not (600 or 1000 or 1200 or 1500 or 2000)
+            || ReadingComplexity is < 0 or > 2
+            || ReadingGroupSize is not (4 or 6 or 8 or 12)
             || !Enum.IsDefined(Kind) || Bpm is < 60 or > 240 || Seconds is not (15 or 30 or 60 or 120 or 180)
             || !Enum.IsDefined(AimStyle) || AimSpacing is not (70 or 85 or 100 or 120 or 140) || CircleSize is < 3 or > 6
             || !TrainerPatterns.Choices(Kind).Values.Contains(Pattern) || !Enum.IsDefined(NoteSpeed) || !Enum.IsDefined(Sliders)
@@ -51,14 +75,18 @@ public sealed record TrainerHit(int NoteIndex, double OffsetMs, int Key);
 public sealed record TrainerResult(Guid Id, DateTimeOffset CompletedAt, TrainerSettings Settings,
     int Notes, int Hits, int Within25, int Extras, int RepeatedKeys, double? MeanMs,
     double? SpreadMs, double? DriftMs, double? ResponseMs = null, string Engine = "cue", double? Accuracy = null, double? PlayedSeconds = null, TrainerDemand? Demand = null,
-    TrainerGuidedRun? GuidedRun = null, int? JudgementMisses = null, bool Assisted = false)
+    TrainerGuidedRun? GuidedRun = null, int? JudgementMisses = null, bool Assisted = false,
+    ReactionSummary? Reaction = null, ReadingWindowResult[]? ReadingWindows = null,
+    SpinnerPracticeSummary? SpinnerPractice = null, int? TapTargets = null)
 {
-    public bool UsesOsuJudgements => Engine is "osu" or "osu-moving-v2" or "osu-patterns-v3" or "osu-adaptive-v4";
-    public static string EngineFor(TrainerSettings s) => s.Kind == TrainerKind.Reaction ? "cue"
+    public bool UsesOsuJudgements => Engine is "osu" or "osu-moving-v2" or "osu-patterns-v3" or "osu-adaptive-v4" or "osu-reading-v2" or "osu-reading-v3" or "osu-reading-v4" or "osu-spinner-v1";
+    public static string EngineFor(TrainerSettings s) => s.Kind == TrainerKind.Reaction ? "reaction-v2"
+        : s.Kind == TrainerKind.Spinner ? "osu-spinner-v1"
+        : s.Kind == TrainerKind.Reading ? "osu-reading-v4"
         : s.RandomizePatterns ? "osu-adaptive-v4"
         : s.Pattern != TrainerPattern.Standard || s.NoteSpeed != TrainerNoteSpeed.Default || s.Sliders != TrainerSliderStyle.None || s.RandomizePatterns ? "osu-patterns-v3"
         : s.Kind <= TrainerKind.Rhythm ? "osu-moving-v2" : "osu";
-    public double OnTimePercent => 100.0 * Within25 / Math.Max(1, Notes + Extras);
+    public double OnTimePercent => 100.0 * Within25 / Math.Max(1, (TapTargets ?? Notes) + Extras);
     public int Misses => JudgementMisses ?? Notes - Hits;
 }
 
@@ -89,7 +117,7 @@ public sealed class TrainerSession
                 if (time < EndMs) notes.Add(new(time, phrase, TrainerPatterns.PatternAt(settings,bar)));
             }
         }
-        Notes = TrainerSkillProfile.ConstrainNotes(settings,notes); judged = new bool[Notes.Count];
+        Notes = TrainerReadingPatterns.ConstrainTiming(settings, TrainerSkillProfile.ConstrainNotes(settings,notes)); judged = new bool[Notes.Count];
     }
 
     public TrainerHit? Tap(double audioTimeMs, int key)
@@ -130,9 +158,21 @@ public sealed class TrainerSession
 
     public static string NextStep(TrainerResult r)
     {
+        if (r.SpinnerPractice is {} spins && r.Settings.Kind == TrainerKind.Spinner)
+            return spins.HeldPercent < 90 ? "Hold a gameplay key until the spinner ends. Try short spins first and keep the movement comfortable."
+                : spins.DirectionChanges > spins.Attempts ? "Keep one direction through each spinner. Try a slightly wider circle if you keep crossing the centre."
+                : spins.SpeedVariationPercent is > 25 ? "Repeat at a comfortable speed. Keep the circle steady before trying to spin faster."
+                : "Try a slightly smaller circle at the same speed, then compare your RPM and consistency. Keep the size that feels controlled.";
         if (r.Settings.Kind == TrainerKind.Reaction)
-            return r.Extras > 0 ? "Wait for the mint cue. Aim for a clean response without guessing when it will appear."
+            return r.Reaction is { FalseAlarms: > 0 } ? "Keep the response window. Read GO or STOP before pressing; practise clean holds before adding key choices."
+                : r.Reaction is { WrongKey: > 0 } ? "Keep this setup and focus on the displayed key. Choose a longer response window if the choice feels rushed."
+                : r.Reaction is { Missed: > 0 } ? "Try a longer response window. Aim to respond to every GO cue before shortening it again."
+                : r.Extras > 0 ? "Wait until GO appears. Keep your fingers relaxed and avoid guessing when the cue will arrive."
                 : "Repeat with the same setup. Compare several runs rather than chasing one fast response.";
+        if (r.Settings.Kind == TrainerKind.Reading)
+            return r.Misses > r.Notes * .1 ? "Slow the tempo or shorten the sequence, then compare where the misses happen. Lower AR if the notes arrive before you can read them."
+                : r.Settings.ReadingHidden ? "Repeat with Hidden, then try the same sequence with normal visibility. Compare misses and accuracy at the same tempo."
+                : "Repeat this sequence, then change one thing: longer phrases, a different path, or Hidden. Keep the tempo steady for the comparison.";
         if (r.Settings.Kind is TrainerKind.Aim or TrainerKind.Reading)
             return r.Extras > r.Hits * .1 ? "Slow down enough to land on the target before clicking. Accuracy comes first."
                 : r.Settings.Kind == TrainerKind.Reading ? "Read the next number while finishing the current target. Keep the cursor moving smoothly."
@@ -156,7 +196,7 @@ public sealed class TrainerSession
     }
 }
 
-public sealed record TrainerWorkspacePreferences(bool ShuffleMusic = true, bool RandomizePatterns = false, bool FreshLayout = true);
+public sealed record TrainerWorkspacePreferences(bool ShuffleMusic = true, bool RandomizePatterns = false, bool FreshLayout = true, bool GuidedCues = false);
 
 public sealed class TrainerHistoryStore(string path)
 {
