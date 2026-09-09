@@ -12,9 +12,10 @@ public sealed partial class PracticeOperationTests
 {
     [TestCase(false)]
     [TestCase(true)]
-    public void BreakdownEntryKeepsSelectedSectionInGenerationRequest(bool nextSection)
+    public async Task BreakdownEntryKeepsSelectedSectionInGenerationRequest(bool nextSection)
     {
         string root = Directory.CreateTempSubdirectory("practice-breakdown-operation-").FullName;
+        var library = new PracticeMapLibrary(root);
         try
         {
             var replay = new LocalReplay(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "Fixture", "Artist", "Difficulty", "osu", "Player",
@@ -22,7 +23,7 @@ public sealed partial class PracticeOperationTests
             var candidate = new PracticeMapCandidate(replay, [replay.ScoreId], 1, 1, 1);
             var earlier = new PracticeSourceSection(PracticeDrillType.Mixed, 0, 9, 0, 5000, 0, [], []);
             var selected = new PracticeSourceSection(PracticeDrillType.Mixed, 20, 29, 10000, 15000, 0, [], []);
-            using var workspace = new BreakdownWorkspace(new(root), [new(PracticeDrillType.Mixed, earlier), new(PracticeDrillType.Mixed, selected)]);
+            using var workspace = new BreakdownWorkspace(library, [new(PracticeDrillType.Mixed, earlier), new(PracticeDrillType.Mixed, selected)]);
             if (nextSection) workspace.OpenNextBreakdown(candidate, [new(0, 5000)]);
             else workspace.OpenBreakdown(candidate, 24);
             workspace.Drain();
@@ -32,7 +33,12 @@ public sealed partial class PracticeOperationTests
             Assert.That(workspace.Request.CreateSet, Is.False);
             Assert.That(workspace.Request.Options!.FirstObjectIndex, Is.EqualTo(20));
         }
-        finally { Directory.Delete(root, true); }
+        finally
+        {
+            // Disposal flushes settings asynchronously through the library's IO queue.
+            // Remove the fixture only after those writes have released their file handles.
+            await library.RunAsync(() => { Directory.Delete(root, true); return true; });
+        }
     }
 
     [TestCase(false)]
