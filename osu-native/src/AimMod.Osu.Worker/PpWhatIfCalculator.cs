@@ -10,7 +10,7 @@ using osu.Game.Scoring;
 using osu.Game.Tests.Beatmaps;
 using osu.Game.Online.API;
 using osu.Game.Rulesets;
-using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace AimMod.Osu.Worker;
 
@@ -23,7 +23,7 @@ internal sealed record ValidatedPpInput(
     int? MaxCombo,
     PpScoreStatistics? Statistics,
     string? ModsJson,
-    bool LegacyScore = false, int RulesetId = 0, bool Passed = true);
+    bool LegacyScore = false, int RulesetId = 0, bool Passed = true, long? LegacyTotalScore = null);
 
 internal static class PpInputValidator
 {
@@ -64,7 +64,9 @@ internal static class PpInputValidator
         if (request.ModsJson is { Length: > 16_384 })
             throw new RuntimeCommandException("input_invalid", "PP calculation mod settings are too large.");
 
-        return new ValidatedPpInput(stagingDirectory, beatmapPath, mods, request.Accuracy, request.MissCount, request.MaxCombo, request.Statistics, request.ModsJson, request.LegacyScore, request.RulesetId, request.Passed);
+        if (request.LegacyTotalScore < 0)
+            throw new RuntimeCommandException("input_invalid", "Legacy total score cannot be negative.");
+        return new ValidatedPpInput(stagingDirectory, beatmapPath, mods, request.Accuracy, request.MissCount, request.MaxCombo, request.Statistics, request.ModsJson, request.LegacyScore, request.RulesetId, request.Passed, request.LegacyTotalScore);
     }
 
     private static string validateDirectory(string path)
@@ -159,6 +161,8 @@ internal sealed class OfficialPpWhatIfCalculator : IPpWhatIfCalculator
                 MaxCombo = maxCombo,
                 Mods = mods,
                 IsLegacyScore = input.LegacyScore,
+                LegacyTotalScore = input.LegacyScore ? input.LegacyTotalScore : null,
+                Passed = input.Passed,
                 Statistics = new Dictionary<HitResult, int>
                 {
                     [HitResult.Great] = statistics.Great,
@@ -243,7 +247,7 @@ internal sealed class OfficialPpWhatIfCalculator : IPpWhatIfCalculator
 
     private static PpGeneratedStatistics validateStatistics(PpScoreStatistics statistics, int objectCount, double storedAccuracy)
     {
-        if (statistics.Great + statistics.Ok + statistics.Meh + statistics.Miss != objectCount)
+        if ((long)statistics.Great + statistics.Ok + statistics.Meh + statistics.Miss != objectCount)
             throw new RuntimeCommandException("statistics_incomplete", "The stored score judgement counts do not match the beatmap object count.");
         double accuracy = accuracyFor(statistics.Great, statistics.Ok, statistics.Meh, statistics.Miss, objectCount);
         if (Math.Abs(accuracy - storedAccuracy) > 0.0001)
@@ -276,11 +280,14 @@ internal sealed class OfficialPpWhatIfCalculator : IPpWhatIfCalculator
     {
         if (!string.IsNullOrWhiteSpace(input.ModsJson))
         {
-            APIMod[] apiMods = JsonConvert.DeserializeObject<APIMod[]>(input.ModsJson)
-                               ?? throw new RuntimeCommandException("input_invalid", "PP calculation mod settings are invalid.");
+            APIMod[] apiMods = JArray.Parse(input.ModsJson).Select(token => token.Type == JTokenType.String
+                ? new APIMod { Acronym = token.ToObject<string>()! }
+                : token.ToObject<APIMod>() ?? throw new RuntimeCommandException("input_invalid", "PP calculation mod settings are invalid.")).ToArray();
             if (apiMods.Length > PpCalculationProtocol.MaximumMods)
                 throw new RuntimeCommandException("input_invalid", "PP calculation received too many mods.");
             Mod[] configured = apiMods.Select(mod => mod.ToMod(ruleset)).ToArray();
+            if (!configured.Select(m => m.Acronym).Order(StringComparer.Ordinal).SequenceEqual(input.Mods.Order(StringComparer.Ordinal)))
+                throw new RuntimeCommandException("input_invalid", "Mod acronyms and configured mod settings disagree.");
             if (configured.Any(mod => mod is UnknownMod))
                 throw new RuntimeCommandException("unsupported_mod", "PP calculation contains a mod unsupported by this ruleset version.");
             return configured;

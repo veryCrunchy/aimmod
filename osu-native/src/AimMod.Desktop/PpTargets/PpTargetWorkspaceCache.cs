@@ -19,13 +19,15 @@ public sealed record PpTargetWorkspaceSnapshot(
     string CatalogScanStatus = "",
     string Sort = "BestFit",
     PpPatternProfile? PendingPatternProfile = null,
-    string ModSelection = "Automatic");
+    string ModSelection = "Automatic",
+    string? CatalogQueryIdentity = null,
+    DateTimeOffset? CatalogUpdatedAt = null);
 
 public sealed class PpTargetWorkspaceCache
 {
     public static readonly TimeSpan Freshness = TimeSpan.FromHours(6);
 
-    private const int current_version = 10;
+    private const int current_version = 12;
     private static readonly JsonSerializerOptions json_options = new(JsonSerializerDefaults.Web);
 
     private readonly string path;

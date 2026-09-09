@@ -29,8 +29,13 @@ public static class ScoreMods {
     };
     public static string Configuration(LocalReplay run) => Configuration(Acronyms(run), run.ModsJson);
     public static string Configuration(IEnumerable<string> acronyms, string? json, Func<string, string>? normalise = null) {
-        var configured = read(json).ToLookup(m=>normalise?.Invoke(m.Acronym) ?? m.Acronym);
-        return string.Join("+",acronyms.Order().Select(a=>a+string.Join("",configured[a].Select(m=>m.Settings).Distinct().Order())));
+        string normalize(string value) => normalise?.Invoke(value.Trim().ToUpperInvariant()) ?? value.Trim().ToUpperInvariant();
+        var parsed = read(json);
+        var configured = parsed.ToLookup(m => normalize(m.Acronym));
+        return string.Join("+", acronyms.Concat(parsed.Select(m => m.Acronym)).Select(normalize)
+            .Where(a => a.Length > 0 && a is not ("NM" or "NOMOD"))
+            .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)
+            .Select(a => a + string.Join("", configured[a].Select(m => m.Settings).Distinct().Order(StringComparer.Ordinal))));
     }
     public static string SetupKey(LocalReplay run) =>
         $"{run.RulesetShortName}|{(run.LegacyScore || run.Origin == LocalLibraryOrigin.Stable ? "stable" : "lazer")}|{(run.BeatmapHash.Length>0 ? run.BeatmapHash.ToLowerInvariant() : run.BeatmapId != Guid.Empty ? run.BeatmapId.ToString("N") : run.ScoreId.ToString("N"))}|{Configuration(run)}";
@@ -59,5 +64,6 @@ public static class ScoreMods {
         _ when selection.StartsWith("mod:") => Acronyms(run).Contains(selection[4..]),
         _ when selection.StartsWith("setup:") => Configuration(run)==selection[6..], _ => false
     };
-    public static bool IsManualPlay(LocalReplay run) => !Acronyms(run).Intersect(new[]{"AT","CN","RX","AP"}).Any();
+    public static bool HasCustomSettings(string? json) => read(json).Any(m => m.Settings.Length > 0);
+    public static bool IsManualPlay(LocalReplay run) => !Acronyms(run).Intersect(new[]{"AT","CN","RX","AP","AUTOPLAY","CINEMA","RELAX","AUTOPILOT"}).Any();
 }

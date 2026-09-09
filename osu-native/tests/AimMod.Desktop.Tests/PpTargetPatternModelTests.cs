@@ -12,6 +12,44 @@ public sealed class PpTargetPatternModelTests
     private static readonly DateTimeOffset now = new(2026, 9, 5, 12, 0, 0, TimeSpan.Zero);
 
     [Test]
+    public void AssistedPlaysCannotTrainPatternOrFallbackSkill()
+    {
+        var p = profile([(replay(1) with { Mods = ["RX"] }, analysis(streamPoints())),
+            (replay(2) with { ModsJson = "[{\"acronym\":\"AP\"}]" }, analysis(streamPoints()))]);
+        Assert.That(p.Evidence, Is.Empty);
+        Assert.That(p.ScoreEvidence, Is.Empty);
+    }
+
+    [Test]
+    public void PatternsSeparateCustomAccuracySettingsAndScoringSystems()
+    {
+        var p = profile([(replay(1), analysis(streamPoints())), (replay(2), analysis(streamPoints()))]);
+        var candidate = PpTargetPatternModel.ExtractFeatures(streamPoints(), 32, 1);
+        Assert.That(PpTargetPatternModel.Predict(candidate, p, legacyScore: true).Fit, Is.Null);
+        var changed = p with { Evidence = p.Evidence.Select(e => e with { SetupKey = "DA{\"overall_difficulty\":5}" }).ToArray() };
+        Assert.That(PpTargetPatternModel.Predict(candidate, changed).Fit, Is.Null);
+    }
+
+    [Test]
+    public void WarmProfileReusesMeasurementsButReplacesChangedAnalysisAndContext()
+    {
+        var run = replay(1);
+        var analyses = new Dictionary<Guid, ReplayAnalysisResult> { [run.ScoreId] = analysis(streamPoints()) };
+        var contexts = new Dictionary<Guid, PpPatternContext> { [run.ScoreId] = new(32, 1) };
+        var first = PpTargetPatternModel.BuildProfile([run], analyses, contexts, now);
+        var warm = PpTargetPatternModel.BuildProfile([run], analyses, contexts, now.AddDays(1));
+        Assert.That(warm.Evidence[0].Features, Is.SameAs(first.Evidence[0].Features));
+        Assert.That(warm.Evidence[0].Weight, Is.LessThan(first.Evidence[0].Weight));
+        contexts[run.ScoreId] = new(24, 1);
+        var resized = PpTargetPatternModel.BuildProfile([run], analyses, contexts, now);
+        Assert.That(resized.Evidence[0].Features.HitRadius, Is.EqualTo(24));
+        Assert.That(resized.Evidence[0].Features, Is.Not.SameAs(first.Evidence[0].Features));
+        analyses[run.ScoreId] = analysis(jumpPoints());
+        var replaced = PpTargetPatternModel.BuildProfile([run], analyses, contexts, now);
+        Assert.That(replaced.Evidence[0].Features.JumpFraction, Is.GreaterThan(resized.Evidence[0].Features.JumpFraction!.Value));
+    }
+
+    [Test]
     public void RecentScoresWithoutPpOrReplaySupportScoreFitButNeverPatternOutcomes()
     {
         var runs = new[] { replay(1), replay(2) }.Select(r => r with { HasReplayFile = false, PerformancePoints = null }).ToArray();

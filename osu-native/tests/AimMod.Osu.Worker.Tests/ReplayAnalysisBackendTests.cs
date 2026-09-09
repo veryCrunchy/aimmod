@@ -74,7 +74,7 @@ public sealed class ReplayAnalysisBackendTests
         File.WriteAllText(beatmapPath, "osu file format v14");
         var statistics = new PpScoreStatistics(950, 40, 9, 1, 300, 2);
         const string modsJson = "[{\"acronym\":\"DT\",\"settings\":{\"speed_change\":1.25}}]";
-        var request = new PpWhatIfRequest(temporaryDirectory, beatmapPath, new[] { "DT" }, 0.975, 1, 900, statistics, modsJson, LegacyScore: legacy);
+        var request = new PpWhatIfRequest(temporaryDirectory, beatmapPath, new[] { "DT" }, 0.975, 1, 900, statistics, modsJson, LegacyScore: legacy, LegacyTotalScore: legacy ? 1234567 : null);
 
         JsonElement? payload = await backend.ExecuteAsync(
             RuntimeCommands.CalculatePp,
@@ -91,6 +91,7 @@ public sealed class ReplayAnalysisBackendTests
             Assert.That(calculator.LastInput?.Statistics, Is.EqualTo(statistics));
             Assert.That(calculator.LastInput?.ModsJson, Is.EqualTo(modsJson));
             Assert.That(calculator.LastInput?.LegacyScore, Is.EqualTo(legacy));
+            Assert.That(calculator.LastInput?.LegacyTotalScore, Is.EqualTo(legacy ? (long?)1234567 : null));
             Assert.That(result?.PerformancePoints, Is.EqualTo(321.5));
             Assert.That(result?.StarRating, Is.EqualTo(6.2));
         });
@@ -125,9 +126,17 @@ public sealed class ReplayAnalysisBackendTests
             """);
         var input = PpInputValidator.Validate(new(temporaryDirectory, path, ["HD"], 1, LegacyScore: true));
         var result = await new OfficialPpWhatIfCalculator().CalculateAsync(input, CancellationToken.None);
+        var stringMods = await new OfficialPpWhatIfCalculator().CalculateAsync(input with { ModsJson = "[\"HD\"]" }, CancellationToken.None);
+        Assert.That(stringMods.PerformancePoints, Is.EqualTo(result.PerformancePoints));
+        Assert.ThrowsAsync<RuntimeCommandException>(async () => await new OfficialPpWhatIfCalculator().CalculateAsync(
+            input with { ModsJson = "[]" }, CancellationToken.None));
         Assert.That(result.ObjectCount, Is.EqualTo(3));
         Assert.That(double.IsFinite(result.PerformancePoints), Is.True);
         Assert.That(result.PerformancePoints, Is.GreaterThan(0));
+        Assert.ThrowsAsync<RuntimeCommandException>(async () => await new OfficialPpWhatIfCalculator().CalculateAsync(
+            input with { Statistics = new PpScoreStatistics(int.MaxValue, int.MaxValue, 5, 0, 0, 0) }, CancellationToken.None),
+            "Overflowed judgement totals must not masquerade as three complete objects.");
+        Assert.Throws<RuntimeCommandException>(() => PpInputValidator.Validate(new(temporaryDirectory, path, [], 1, LegacyTotalScore: -1)));
     }
 
     [Test]

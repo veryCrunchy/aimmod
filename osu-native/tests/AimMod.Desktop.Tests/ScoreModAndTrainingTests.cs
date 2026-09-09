@@ -10,6 +10,15 @@ public class ScoreModAndTrainingTests {
         new Guid(n,0,0,new byte[8]),Guid.Empty,new Guid(42,0,0,new byte[8]),"Example","Example","Test","osu","Example",
         DateTimeOffset.UtcNow.AddDays(-1).AddMinutes(n),5,.97,100000,200,3,null,mods??[],true,ModsJson:json);
     [Test]
+    public void ConfigurationIncludesJsonOnlyModsAndNormalisesBothSides()
+    {
+        const string json = "[{\"acronym\":\"NC\",\"settings\":{\"speed_change\":1.2}}]";
+        var key = ScoreMods.Configuration([" nc ", "NC", "NM"], json, AimMod.Desktop.PpTargets.PpTargetMods.NormaliseForSkill);
+        Assert.That(key, Is.EqualTo(ScoreMods.Configuration([], json, AimMod.Desktop.PpTargets.PpTargetMods.NormaliseForSkill)));
+        Assert.That(key, Is.EqualTo("DT{\"speed_change\":1.2}"));
+        Assert.That(key, Is.Not.EqualTo(ScoreMods.Configuration(["DT"], null)));
+    }
+    [Test]
     public void FiltersIncludeEveryObservedModAndExactSettings() {
         var a=run(1,["DT","HD"],"[{\"acronym\":\"DT\",\"settings\":{\"speed_change\":1.2}},{\"acronym\":\"HD\"}]");
         var b=run(2,["WU","MR","DC"]);

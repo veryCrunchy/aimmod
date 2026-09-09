@@ -9,6 +9,23 @@ namespace AimMod.Desktop.Tests;
 public sealed class PpTargetEngineTests
 {
     [Test]
+    public void FailedAndAssistedRunsCannotInflateCompletedPerformance()
+    {
+        var profile = PpTargetPreferenceProfiler.Build([
+            replay(1, 1, 5, .95, 200),
+            replay(2, 1, 5, 1, 5) with { Passed = false },
+            replay(3, 1, 5, .99, 100),
+            replay(4, 2, 10, 1, 1000, "RX"),
+            replay(5, 3, 10, 1, 1000) with { ModsJson = "[{\"acronym\":\"AP\"}]" },
+        ]);
+        Assert.That(profile.ValidRunCount, Is.EqualTo(2));
+        Assert.That(profile.HistoricalBestPp, Is.EqualTo(200));
+        Assert.That(profile.TypicalAccuracy, Is.EqualTo(.95));
+        Assert.That(profile.PerformanceSamples.Single().Accuracy, Is.EqualTo(.95),
+            "Accuracy and PP must come from the same actual play.");
+    }
+
+    [Test]
     public void EmptyAndInvalidHistoryDoesNotInventPreferencesOrPp()
     {
         LocalReplay[] history =

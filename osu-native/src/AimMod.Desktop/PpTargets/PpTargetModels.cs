@@ -39,7 +39,8 @@ public sealed record PpTargetPreferenceProfile(
     PpPatternProfile? PatternProfile = null,
     IReadOnlyList<string>? PreferredModSetup = null,
     PpTargetOpportunityProfile? Opportunities = null,
-    string? PreferredModsJson = null)
+    string? PreferredModsJson = null,
+    bool LegacyScore = false, string? PlayerName = null)
 {
     public static PpTargetPreferenceProfile Empty { get; } = new(
         0, 0, 0, null, null, null, null, null, null, PpTargetConfidence.Insufficient,
@@ -59,7 +60,8 @@ public sealed record PpTargetEstimate(
     double? Attainability = null,
     PpPatternPrediction? PatternPrediction = null,
     string? PatternProfileIdentity = null,
-    string? ModsJson = null);
+    string? ModsJson = null,
+    PpPatternFeatures? Features = null, bool LegacyScore = false);
 
 public sealed record PpTargetFilters(
     string SearchText = "",
@@ -103,8 +105,10 @@ public sealed record PpTargetCandidate(
     PpTargetPassEstimate? PassEstimate = null,
     double? EstimatedAccountGainPp = null,
     double? AccountGainPerMinute = null,
-    double? ExpectedScoreAccuracy = null)
+    double? ExpectedScoreAccuracy = null,
+    PpTargetLearningForecast? Learning = null)
 {
+    public double? FirstAttemptPp => Learning?.FirstTryPp ?? ExpectedEarnedPp;
     // An exact PP calculation is conditional on a completed score, not proof of a pass.
     public double? ExpectedEarnedPp => Estimate is { } pp && PassEstimate is { } pass
         && (string.Equals(Status, "ranked", StringComparison.OrdinalIgnoreCase) || string.Equals(Status, "approved", StringComparison.OrdinalIgnoreCase))
@@ -171,6 +175,12 @@ internal static class PpTargetMods
             values.Remove("EZ");
         return values.Order(StringComparer.Ordinal).ToArray();
     }
+
+    public static string NormaliseForSkill(string mod) => NormaliseOne(mod) switch
+    {
+        "NC" => "DT",
+        var value => value,
+    };
 
     public static string NormaliseOne(string? mod) => (mod ?? string.Empty).Trim().ToUpperInvariant() switch
     {

@@ -24,6 +24,8 @@ public partial class AimModLoadingOverlay : Container
     private readonly TruncatingSpriteText timing;
     private Func<LocalLibraryProgress?>? readProgress;
     private string currentState = string.Empty;
+    public string? LoadingHint { get; set; }
+    private readonly TruncatingSpriteText hint;
 
     public AimModLoadingOverlay()
     {
@@ -91,6 +93,14 @@ public partial class AimModLoadingOverlay : Container
                         Font = new FontUsage(size: 12),
                         Colour = AimModPalette.Muted,
                     },
+                    hint = new TruncatingSpriteText
+                    {
+                        Anchor = Anchor.TopCentre,
+                        Origin = Anchor.TopCentre,
+                        Y = 175,
+                        Font = new FontUsage(size: 12),
+                        Colour = AimModPalette.Muted,
+                    },
                 },
             },
         };
@@ -143,6 +153,8 @@ public partial class AimModLoadingOverlay : Container
         title.MaxWidth = panelWidth;
         detail.MaxWidth = panelWidth;
         timing.MaxWidth = panelWidth;
+        hint.MaxWidth = panelWidth;
+        hint.Text = LoadingHint ?? string.Empty;
         progressBar.Width = Math.Max(1, panelWidth - 48);
         if (loading)
         {
@@ -150,7 +162,7 @@ public partial class AimModLoadingOverlay : Container
                 SetProgress(progress.State, progress.Completed, progress.Total);
             else
                 detail.Text = currentState;
-            timing.Text = elapsed.Elapsed.TotalSeconds < 15
+            timing.Text = elapsed.Elapsed.TotalSeconds < 15 || !string.IsNullOrEmpty(LoadingHint)
                 ? $"Elapsed {elapsed.Elapsed:mm\\:ss}"
                 : $"Elapsed {elapsed.Elapsed:mm\\:ss}  -  Taking longer than usual";
         }

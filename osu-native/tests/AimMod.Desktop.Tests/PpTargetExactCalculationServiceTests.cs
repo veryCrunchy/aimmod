@@ -25,6 +25,43 @@ public sealed class PpTargetExactCalculationServiceTests
     }
 
     [Test]
+    public void PerformanceCacheTracksScoreInputsButNotStagingPaths()
+    {
+        var request = new PpWhatIfRequest("stage", "map.osu", ["HD"], .98);
+        string key = PpTargetExactCalculationService.PerformanceIdentity("content", request);
+        Assert.That(PpTargetExactCalculationService.PerformanceIdentity("content", request with { StagingDirectory = "other", BeatmapPath = "other.osu" }), Is.EqualTo(key));
+        foreach (var changed in new[] { request with { Accuracy = .97 }, request with { MissCount = 1 },
+                     request with { MaxCombo = 10 }, request with { Mods = ["DT"] }, request with { Passed = false },
+                     request with { LegacyScore = true }, request with { RulesetId = 1 },
+                     request with { Statistics = new(100, 1, 0, 0, 0, 0) }, request with { ModsJson = "custom" } })
+            Assert.That(PpTargetExactCalculationService.PerformanceIdentity("content", changed), Is.Not.EqualTo(key));
+        Assert.That(PpTargetExactCalculationService.PerformanceIdentity("changed-content", request), Is.Not.EqualTo(key));
+    }
+
+    [Test]
+    public async Task ChangedProfileReusesPersistedPerformanceWithoutStartingWorkers()
+    {
+        const int id = 456;
+        string path = Path.Combine(temporaryDirectory, "profile-change.json");
+        var service = new PpTargetExactCalculationService(temporaryDirectory, path,
+            new StubDifficultyClient(id, createBeatmap(id)), Path.Combine(temporaryDirectory, "downloads"),
+            () => SidecarRuntimeClient.Start(desktopExecutablePath()));
+        var request = new PpTargetExactRequest(id, null, [], .94, .5);
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var cold = await service.CalculateAsync([request]);
+        long coldMs = watch.ElapsedMilliseconds;
+        var reopened = new PpTargetExactCalculationService(temporaryDirectory, path,
+            new FailingDifficultyClient(), Path.Combine(temporaryDirectory, "downloads"),
+            () => throw new AssertionException("An unchanged score shape must reuse raw performance after a profile update."));
+        watch.Restart();
+        var warm = await reopened.CalculateAsync([request with { PatternProfile = new("updated-player", DateTimeOffset.UtcNow, 30, []) }]);
+        TestContext.WriteLine($"Exact map cold: {coldMs}ms; changed-profile cached refresh: {watch.ElapsedMilliseconds}ms (no worker or download).");
+        Assert.That(warm[id].ExpectedPp, Is.EqualTo(cold[id].ExpectedPp));
+        Assert.That(warm[id].PatternProfileIdentity, Is.EqualTo("updated-player"));
+        Assert.That(warm[id].Features, Is.Not.Null);
+    }
+
+    [Test]
     public void ConfiguredModsHaveSeparateCalculationCaches() {
         var request=new PpTargetExactRequest(42,null,["DT"],.98,.5);
         var configured=request with { ModsJson="[{\"acronym\":\"DT\",\"settings\":{\"speed_change\":1.2}}]" };
@@ -170,6 +207,26 @@ public sealed class PpTargetExactCalculationServiceTests
             }
             finally { lock (gate) active--; }
         }
+    }
+
+    [Test]
+    public async Task ConfiguredGeometryAndScoringModeReachTheWorkerAndCache()
+    {
+        const int id = 456;
+        var download = new StubDifficultyClient(id, createBeatmap(id) + "\n256,192,24000,2,0,L|384:192,1,128\n");
+        var service = new PpTargetExactCalculationService(temporaryDirectory, Path.Combine(temporaryDirectory, "configured.json"),
+            download, Path.Combine(temporaryDirectory, "downloads"), () => SidecarRuntimeClient.Start(desktopExecutablePath()));
+        var request = new PpTargetExactRequest(id, null, ["DT"], .96, .7,
+            ModsJson: "[{\"acronym\":\"DT\",\"settings\":{\"speed_change\":1.2}}]");
+        var lazer = (await service.CalculateAsync([request]))[id];
+        var stable = (await service.CalculateAsync([request with { LegacyScore = true }]))[id];
+        Assert.That(lazer.Features!.ClockRate, Is.EqualTo(1.2).Within(.0001));
+        Assert.That(stable.LegacyScore, Is.True);
+        Assert.That(lazer.LegacyScore, Is.False);
+        Assert.That(stable.ExpectedPp, Is.Not.EqualTo(lazer.ExpectedPp));
+        Assert.That(PpTargetExactCalculationService.CacheIdentity(request, "content"),
+            Is.Not.EqualTo(PpTargetExactCalculationService.CacheIdentity(request with { LegacyScore = true }, "content")));
+        Assert.That((await service.CalculateAsync([request]))[id], Is.EqualTo(lazer));
     }
 
     [Test]

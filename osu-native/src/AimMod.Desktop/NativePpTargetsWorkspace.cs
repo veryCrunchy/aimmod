@@ -35,6 +35,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
     private readonly Func<ILocalScorePpHydrationService?> localPpHydrator;
     private readonly Func<OfficialOsuApiClient?> officialApi;
     private readonly Func<IAccountScoreHistoryService?> accountHistory;
+    private readonly Func<string?> activePlayer;
     private readonly Func<int, CancellationToken, Task>? openBeatmap;
     private readonly IReadOnlyDictionary<Guid, ReplayAnalysisResult> replayAnalyses;
     private IReadOnlyList<LocalReplay> patternHistory = [];
@@ -48,11 +49,26 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
     private bool catalogScanRunning;
     private string catalogScanStatus = string.Empty;
     private PpPatternProfile? pendingPatternProfile;
+    private string? catalogQueryIdentity;
+    private DateTimeOffset? catalogUpdatedAt;
     private int renderGeneration;
     private readonly PpTargetWorkspaceCache? workspaceCache;
     private readonly AimModSearchBox search;
     private readonly TruncatingSpriteText status;
     private readonly TruncatingSpriteText profileSummary;
+    private readonly TruncatingSpriteText scanHint;
+    private readonly System.Diagnostics.Stopwatch refreshElapsed = new();
+    private bool firstScan = true;
+    private bool refreshIndeterminate;
+    private bool automaticRefreshPending;
+    private bool patternBuildRunning;
+    private bool exactScanWaitingForPatterns;
+    private bool skillAnalysisRunning;
+    private string? lastCompletedScanIdentity;
+    internal static string ScanHint(bool first) => first
+        ? "First scan takes longer. Saved map analysis makes later refreshes faster."
+        : "Reusing saved analysis. New maps and recent plays may still need calculation.";
+    private DateTimeOffset nextFormCheck;
     private readonly TruncatingSpriteText resultCount;
     private readonly FillFlowContainer<Drawable> results;
     private readonly AimModLoadingOverlay loadingOverlay;
@@ -76,9 +92,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                 .Where(r=>PpTargetMods.Normalise(r.Mods).SequenceEqual(value.PreferredModSetup ?? []))
                 .GroupBy(ScoreMods.Configuration).OrderByDescending(g=>g.Count()).Select(g=>g.First()).FirstOrDefault();
         return run is not null
-            ? value with { PreferredModSetup=ScoreMods.Acronyms(run), PreferredModsJson=run.ModsJson,
-                PatternProfile=run.ModsJson.Contains("settings",StringComparison.Ordinal) ? null : value.PatternProfile,
-                Opportunities=run.ModsJson.Contains("settings",StringComparison.Ordinal) ? null : value.Opportunities }
+            ? value with { PreferredModSetup=ScoreMods.Acronyms(run), PreferredModsJson=run.ModsJson, LegacyScore=run.LegacyScore || run.Origin == LocalLibraryOrigin.Stable }
             : WithSelectedMods(value,selectedMods.Value) with { PreferredModsJson=null };
     }
     private readonly Bindable<string> selectedMods = new("Automatic");
@@ -141,7 +155,8 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         PpTargetWorkspaceCache? workspaceCache = null,
         Func<IAccountScoreHistoryService?>? accountHistory = null,
         Func<int, CancellationToken, Task>? openBeatmap = null,
-        IReadOnlyDictionary<Guid, ReplayAnalysisResult>? replayAnalyses = null)
+        IReadOnlyDictionary<Guid, ReplayAnalysisResult>? replayAnalyses = null,
+        Func<string?>? activePlayer = null)
     {
         this.source = source ?? throw new ArgumentNullException(nameof(source));
         this.client = client ?? throw new ArgumentNullException(nameof(client));
@@ -151,6 +166,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         this.officialApi = officialApi ?? (() => null);
         this.workspaceCache = workspaceCache;
         this.accountHistory = accountHistory ?? (() => null);
+        this.activePlayer = activePlayer ?? (() => null);
         this.openBeatmap = openBeatmap;
         this.replayAnalyses = replayAnalyses ?? new Dictionary<Guid, ReplayAnalysisResult>();
         sourceChanges = source as ILocalLibrarySourceChanged;
@@ -302,6 +318,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                         scheduleCatalogSearch();
                     }) { Anchor = Anchor.TopRight, Origin = Anchor.TopRight, X = -128, Y = 56 },
                     status = truncatingText("Loading local history...", 10, AimModPalette.Muted, "SemiBold").With(drawable => drawable.Position = new(0, 245)),
+                    scanHint = truncatingText(string.Empty, 10, AimModPalette.Muted),
                     resultCount = truncatingText(string.Empty, 11, AimModPalette.Muted, "SemiBold").With(drawable =>
                     {
                         drawable.Anchor = Anchor.TopRight;
@@ -341,11 +358,36 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
     protected override void Update()
     {
         base.Update();
+        if (profile.PlayerName is not null && activePlayer() is { Length: > 0 } player && !CacheMatchesPlayer(profile, player))
+        {
+            profile = PpTargetPreferenceProfile.Empty with { PlayerName = player.Trim() };
+            patternHistory = [];
+            pendingPatternProfile = null;
+            exactEstimates = new Dictionary<int, PpTargetEstimate>();
+            hasVisibleSnapshot = false;
+            lastCompletedScanIdentity = null;
+            renderResults();
+            reloadProfile();
+        }
+        if (refreshElapsed.IsRunning)
+        {
+            scanHint.Text = $"{ScanHint(firstScan)}  /  {refreshElapsed.Elapsed:mm\\:ss} elapsed";
+            if (refreshIndeterminate)
+                refreshProgressFill.X = (float)(.5 + .5 * Math.Sin(Time.Current / 650)) * Math.Max(0, refreshProgress.DrawWidth * .82f);
+        }
+
+        if (DateTimeOffset.UtcNow >= nextFormCheck)
+        {
+            nextFormCheck = DateTimeOffset.UtcNow.AddMinutes(1);
+            if (profile.PatternProfile?.SessionForm is { Patterns.Count: > 0 } form && form.ExpiresAt <= DateTimeOffset.UtcNow)
+                scheduledPatternRefresh ??= Scheduler.AddDelayed(refreshPatternEvidence, 0);
+        }
 
         if (patternHistory.Count > 0 && observedAnalysisCount != replayAnalyses.Count)
         {
             observedAnalysisCount = replayAnalyses.Count;
-            scheduledPatternRefresh ??= Scheduler.AddDelayed(refreshPatternEvidence, 2_000);
+            if (skillAnalysisRunning) automaticRefreshPending = true;
+            else scheduledPatternRefresh ??= Scheduler.AddDelayed(refreshPatternEvidence, 2_000);
         }
 
         float width = Math.Max(640, DrawWidth);
@@ -397,6 +439,8 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         }
 
         status.MaxWidth = width * 0.62f;
+        scanHint.Position = new(0, status.Y + 14);
+        scanHint.MaxWidth = width;
         resultCount.MaxWidth = width * 0.34f;
         profileSummary.MaxWidth = Math.Max(180, width - 260);
         bool sidebar = DrawWidth >= 1120;
@@ -445,6 +489,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
     {
         base.LoadComplete();
         PpTargetWorkspaceSnapshot? snapshot = workspaceCache?.Load();
+        if (snapshot is not null && !CacheMatchesPlayer(snapshot.Profile, activePlayer())) snapshot = null;
         if (snapshot is not null)
             applySnapshot(snapshot);
 
@@ -480,6 +525,9 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         }
     }
 
+    internal static bool CacheMatchesPlayer(PpTargetPreferenceProfile cached, string? player) =>
+        !string.IsNullOrWhiteSpace(player) && string.Equals(cached.PlayerName, player.Trim(), StringComparison.OrdinalIgnoreCase);
+
     private void filterChanged(Action action)
     {
         if (!suppressFilterEvents)
@@ -488,11 +536,14 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
 
     private void applySnapshot(PpTargetWorkspaceSnapshot snapshot)
     {
+        firstScan = false;
         suppressFilterEvents = true;
         profile = snapshot.Profile ?? PpTargetPreferenceProfile.Empty;
         pendingPatternProfile = snapshot.PendingPatternProfile;
         localSets = snapshot.LocalSets ?? [];
         catalog = snapshot.Catalog ?? [];
+        catalogQueryIdentity = snapshot.CatalogQueryIdentity;
+        catalogUpdatedAt = snapshot.CatalogUpdatedAt;
         exactEstimates = snapshot.ExactEstimates ?? new Dictionary<int, PpTargetEstimate>();
         onlineBestCount = snapshot.OnlineBestCount;
         scoreDataStatus = snapshot.ScoreDataStatus ?? string.Empty;
@@ -512,6 +563,9 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
 
     private void reloadProfile()
     {
+        automaticRefreshPending = false;
+        patternBuildRunning = false;
+        exactScanWaitingForPatterns = false;
         scheduledSearch?.Cancel();
         cancelToken(ref catalogSearch);
         cancelToken(ref exactCalculation);
@@ -525,13 +579,13 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         scheduledPatternRefresh?.Cancel();
         scheduledPatternRefresh = null;
         replaceToken(ref profileRefresh);
-        if (hasVisibleSnapshot)
-            showRefresh("Refreshing score history", 0, 0);
-        else
+        firstScan = !hasVisibleSnapshot;
+        if (!hasVisibleSnapshot)
         {
-            status.Text = "Loading local history...";
-            loadingOverlay.ShowLoading("Building your PP profile", "Reading local osu!standard scores");
+            loadingOverlay.LoadingHint = ScanHint(firstScan);
+            loadingOverlay.ShowLoading("Preparing your first PP targets", "Reading your score history");
         }
+        showRefresh("Reading your score history", 0, 0);
         _ = loadProfileAsync(profileRefresh!.Token);
     }
 
@@ -541,8 +595,13 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         {
             using var loadingProgress = new ScanProgress<LocalScorePpHydrationProgress>(action => Schedule(action),
                 () => !IsDisposed && !cancellationToken.IsCancellationRequested,
-                value => showRefresh($"Calculating local performance {value.Completed:N0}/{value.Total:N0}", value.Completed, value.Total));
+                value => showRefresh("Updating PP for your recorded plays", value.Completed, value.Total));
             StatisticsHistoryLoadResult history = await StatisticsHistoryLoader.LoadAsync(source, cancellationToken).ConfigureAwait(false);
+            OnlineAccountScoreHistoryResult? online = await loadOnlineScores(cancellationToken).ConfigureAwait(false);
+            string? player = activePlayer() ?? online?.Profile?.Username;
+            if (!string.IsNullOrWhiteSpace(player) && online?.Profile is { } owner
+                && !string.Equals(player, owner.Username, StringComparison.OrdinalIgnoreCase)) online = null;
+            history = history with { Runs = PpTargetSkillHistory.ForPlayer(history.Runs, player) };
             LocalScorePpHydrationResult? hydration = null;
             if (localPpHydrator() is { } hydrator)
             {
@@ -555,15 +614,15 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                 Schedule(() =>
                 {
                     if (!IsDisposed && !cancellationToken.IsCancellationRequested)
-                        showRefresh("Refreshing submitted best scores", 0, 0);
+                        showRefresh("Checking your submitted scores", 0, 0);
                 });
-            OnlineAccountScoreHistoryResult? online = await loadOnlineScores(cancellationToken).ConfigureAwait(false);
             IReadOnlyList<LocalReplay> runs = PpTargetSkillHistory.Merge(
                 hydration?.Runs ?? history.Runs,
                 online?.Scores ?? [], loadedSets);
             PpTargetPreferenceProfile next = PpTargetPreferenceProfiler.Build(runs, loadedSets) with
             {
-                Opportunities = PpTargetOpportunityModel.Build(PpTargetSkillHistory.PassHistory(history.Runs, online?.Scores ?? [], loadedSets)),
+                Opportunities = PpTargetOpportunityModel.Build(PpTargetSkillHistory.PassHistory(hydration?.Runs ?? history.Runs, online?.Scores ?? [], loadedSets)),
+                PlayerName = player?.Trim() ?? history.Runs.FirstOrDefault()?.Player.Trim(),
             };
             if (!IsDisposed && !cancellationToken.IsCancellationRequested)
                 Schedule(() =>
@@ -571,8 +630,9 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                     if (IsDisposed || cancellationToken.IsCancellationRequested)
                         return;
                     patternHistory = runs;
-                    applyProfile(next, loadedSets, hydration, online);
+                    localSets = loadedSets;
                     refreshPatternEvidence();
+                    applyProfile(next, loadedSets, hydration, online);
                 });
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -600,9 +660,15 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         try
         {
             StatisticsHistoryLoadResult history = await StatisticsHistoryLoader.LoadAsync(source, cancellationToken).ConfigureAwait(false);
-            IReadOnlyList<LocalBeatmapSet> maps = await loadLocalSets(cancellationToken).ConfigureAwait(false);
             OnlineAccountScoreHistoryResult? online = await loadOnlineScores(cancellationToken).ConfigureAwait(false);
-            IReadOnlyList<LocalReplay> runs = PpTargetSkillHistory.Merge(history.Runs, online?.Scores ?? [], maps);
+            string? player = activePlayer() ?? online?.Profile?.Username;
+            if (!string.IsNullOrWhiteSpace(player) && online?.Profile is { } owner
+                && !string.Equals(player, owner.Username, StringComparison.OrdinalIgnoreCase)) online = null;
+            history = history with { Runs = PpTargetSkillHistory.ForPlayer(history.Runs, player) };
+            LocalScorePpHydrationResult? hydration = localPpHydrator() is { } hydrator
+                ? await hydrator.HydrateAsync(history.Runs, cancellationToken).ConfigureAwait(false) : null;
+            IReadOnlyList<LocalBeatmapSet> maps = await loadLocalSets(cancellationToken).ConfigureAwait(false);
+            IReadOnlyList<LocalReplay> runs = PpTargetSkillHistory.Merge(hydration?.Runs ?? history.Runs, online?.Scores ?? [], maps);
             if (!IsDisposed && !cancellationToken.IsCancellationRequested)
                 Schedule(() =>
                 {
@@ -611,7 +677,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                     patternHistory = runs;
                     localSets = maps;
                     if (online is not null && online.RecentCoverage.IsSuccess)
-                        profile = profile with { Opportunities = PpTargetOpportunityModel.Build(PpTargetSkillHistory.PassHistory(history.Runs, online.Scores, maps)) };
+                        profile = profile with { Opportunities = PpTargetOpportunityModel.Build(PpTargetSkillHistory.PassHistory(hydration?.Runs ?? history.Runs, online.Scores, maps)) };
                     refreshPatternEvidence();
                 });
         }
@@ -637,6 +703,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         if (IsDisposed)
             return;
         observedAnalysisCount = replayAnalyses.Count;
+        patternBuildRunning = true;
         replaceToken(ref patternRefresh);
         var snapshot = new Dictionary<Guid, ReplayAnalysisResult>(replayAnalyses);
         _ = rebuildPatternEvidenceAsync(patternHistory, localSets, snapshot, patternRefresh!.Token);
@@ -646,13 +713,36 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
     {
         if (IsDisposed)
             return;
-        scheduledPatternRefresh ??= Scheduler.AddDelayed(refreshPatternEvidence, 2_000);
+        scheduledPatternRefresh?.Cancel();
+        if (skillAnalysisRunning)
+        {
+            scheduledPatternRefresh = null;
+            automaticRefreshPending = true;
+            return;
+        }
+        scheduledPatternRefresh = Scheduler.AddDelayed(requestAutomaticRefresh, 5_000);
+    }
+
+    private void requestAutomaticRefresh()
+    {
+        scheduledPatternRefresh = null;
+        if (IsDisposed) return;
+        if (catalogScanRunning || exactScanRunning || patternBuildRunning || skillAnalysisRunning)
+        {
+            automaticRefreshPending = true;
+            return;
+        }
+        reloadProfile();
+        showRefresh("Updating targets with your latest plays", 0, 0);
     }
 
     public void SetSkillAnalysisProgress(int completed, int total)
     {
+        bool wasRunning = skillAnalysisRunning;
+        skillAnalysisRunning = total > completed;
         skillProgress = total > completed ? $"  /  Skill replays {completed:N0}/{total:N0}" : string.Empty;
         updateProfileSummary();
+        if (wasRunning && !skillAnalysisRunning && automaticRefreshPending) RefreshSkillEvidence();
     }
 
     private async Task rebuildPatternEvidenceAsync(
@@ -669,10 +759,21 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             if (!IsDisposed && !cancellationToken.IsCancellationRequested)
                 Schedule(() =>
                 {
-                    if (cancellationToken.IsCancellationRequested || profile.PatternProfile?.Identity == patterns.Identity)
+                    if (cancellationToken.IsCancellationRequested)
                         return;
-                    if (exactScanRunning || catalogScanRunning)
+                    patternBuildRunning = false;
+                    if (profile.PatternProfile?.Identity == patterns.Identity)
                     {
+                        if (!exactScanRunning && !catalogScanRunning)
+                        {
+                            if (exactScanWaitingForPatterns) startExactCalculations();
+                            else if (automaticRefreshPending) requestAutomaticRefresh();
+                        }
+                        return;
+                    }
+                    if (exactScanRunning || catalogScanRunning || (skillAnalysisRunning && !exactScanWaitingForPatterns))
+                    {
+                        if (skillAnalysisRunning) automaticRefreshPending = true;
                         pendingPatternProfile = patterns;
                         updateProfileSummary();
                         saveSnapshot();
@@ -692,7 +793,13 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         {
             Console.Error.WriteLine($"PP target pattern profile refresh failed: {error}");
             if (!IsDisposed && !cancellationToken.IsCancellationRequested)
-                Schedule(() => status.Text = "Could not refresh skill evidence. Refresh to retry.");
+                Schedule(() =>
+                {
+                    if (cancellationToken.IsCancellationRequested) return;
+                    patternBuildRunning = false;
+                    if (!exactScanRunning && !catalogScanRunning && exactScanWaitingForPatterns) startExactCalculations();
+                    status.Text = "Could not refresh skill evidence. Refresh to retry.";
+                });
         }
     }
 
@@ -739,8 +846,9 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         }
         modsDropdown.Items = ModChoices.Concat(observedModSetups.Keys.Order()).ToArray();
         localSets = loadedSets;
-        exactEstimates = new Dictionary<int, PpTargetEstimate>();
-        if (next.PreferredStarRange is { } stars)
+        // Keep the visible estimates; the ranker checks profile/mod/score inputs and
+        // rejects stale values. Refresh must not reset the user's filters or catalog.
+        if (!hasVisibleSnapshot && next.PreferredStarRange is { } stars)
         {
             suppressFilterEvents = true;
             minimumStars.Value = Math.Clamp(Math.Floor((stars.Minimum - 0.5) * 10) / 10, 0, 10);
@@ -779,6 +887,20 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         cancelToken(ref exactCalculation);
         exactScanRunning = false;
         renderGeneration++;
+        var query = new OfficialBeatmapSearchQuery(search.Current.Value,
+            minimumStars.Value <= 0 ? null : minimumStars.Value,
+            maximumStars.Value >= 10 ? null : maximumStars.Value,
+            category.Value, OfficialBeatmapSort.Rating, Limit: 50);
+        if (catalog.Count > 0 && CanReuseCatalog(query, catalogQueryIdentity, catalogUpdatedAt, DateTimeOffset.UtcNow))
+        {
+            catalogScanRunning = false;
+            status.Text = withCatalogStatus("Updating your targets from saved beatmap analysis");
+            renderResults();
+            startExactCalculations();
+            return;
+        }
+        catalogQueryIdentity = null;
+        catalogUpdatedAt = null;
         IOfficialBeatmapDiscoveryClient? currentClient = client();
         if (currentClient is null)
         {
@@ -811,12 +933,12 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             scannerClient = currentClient;
             catalogScanner = new PpTargetCatalogScanner(currentClient);
         }
-        var query = new OfficialBeatmapSearchQuery(search.Current.Value,
-            minimumStars.Value <= 0 ? null : minimumStars.Value,
-            maximumStars.Value >= 10 ? null : maximumStars.Value,
-            category.Value, OfficialBeatmapSort.Rating, Limit: 50);
         _ = searchCatalogAsync(catalogScanner!, query, catalogSearch!.Token);
     }
+
+    internal static bool CanReuseCatalog(OfficialBeatmapSearchQuery query, string? identity, DateTimeOffset? updated, DateTimeOffset now) =>
+        updated is { } time && time <= now && now - time < PpTargetWorkspaceCache.Freshness
+        && identity == System.Text.Json.JsonSerializer.Serialize(query);
 
     private async Task searchCatalogAsync(PpTargetCatalogScanner scanner, OfficialBeatmapSearchQuery query, CancellationToken cancellationToken)
     {
@@ -829,11 +951,12 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             using var preview = new ScanProgress<PpTargetCatalogScanResult>(action => Schedule(action), () => !IsDisposed && !cancellationToken.IsCancellationRequested, value =>
             {
                 if (cancellationToken.IsCancellationRequested) return;
-                applyCatalog(new OfficialBeatmapSearchResult(OfficialBeatmapRequestStatus.Success, value.BeatmapSets, value.SetCount, true));
+                applyCatalog(new OfficialBeatmapSearchResult(OfficialBeatmapRequestStatus.Success, value.BeatmapSets, value.SetCount, true), preview: true);
             });
             PpTargetCatalogScanResult scan = await scanner.ScanAsync(query, cancellationToken, progress,
                 profile.PreferredStarRange, preview).ConfigureAwait(false);
             progress.Dispose();
+            preview.Dispose();
             if (!IsDisposed && !cancellationToken.IsCancellationRequested)
                 Schedule(() =>
                 {
@@ -841,6 +964,11 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                         return;
                     catalogScanRunning = false;
                     catalogScanStatus = CatalogScanSummary(scan);
+                    if (scan.SetCount > 0 && scan.Status == OfficialBeatmapRequestStatus.Success)
+                    {
+                        catalogQueryIdentity = System.Text.Json.JsonSerializer.Serialize(query);
+                        catalogUpdatedAt = DateTimeOffset.UtcNow;
+                    }
                     applyCatalog(new OfficialBeatmapSearchResult(scan.SetCount > 0 ? OfficialBeatmapRequestStatus.Success : scan.Status,
                         scan.BeatmapSets, scan.SetCount, scan.IsPartial));
                 });
@@ -866,7 +994,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         }
     }
 
-    private void applyCatalog(OfficialBeatmapSearchResult response)
+    private void applyCatalog(OfficialBeatmapSearchResult response, bool preview = false)
     {
         if (response.Status != OfficialBeatmapRequestStatus.Success)
         {
@@ -887,6 +1015,12 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         catalog = response.BeatmapSets;
         setsById = catalog.GroupBy(set => set.BeatmapSetId).ToDictionary(group => group.Key, group => group.First());
         hasVisibleSnapshot = catalog.Count > 0;
+        if (preview)
+        {
+            renderResults();
+            saveSnapshot();
+            return;
+        }
         status.Text = profile.PpSampleCount == 0
             ? "No complete PP results are available for recommendations."
             : scoreDataStatus.Length > 0
@@ -900,6 +1034,14 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
 
     private void startExactCalculations()
     {
+        if (catalogScanRunning) return;
+        if (patternBuildRunning)
+        {
+            exactScanWaitingForPatterns = true;
+            showRefresh("Updating your skill profile", 0, 0);
+            return;
+        }
+        exactScanWaitingForPatterns = false;
         cancelToken(ref exactCalculation);
         exactScanRunning = false;
         if (pendingPatternProfile is { } pending)
@@ -910,12 +1052,13 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         IPpTargetExactCalculationService? calculator = exactCalculator();
         if (calculator is null || profile.TypicalAccuracy is null || catalog.Count == 0)
         {
-            hideRefresh();
+            if (!catalogScanRunning) hideRefresh();
             return;
         }
 
         replaceToken(ref exactCalculation);
         exactScanRunning = true;
+        showRefresh("Choosing maps that fit your skills", 0, 0);
         var filters = new PpTargetFilters(
             MinimumStars: minimumStars.Value <= 0 ? null : minimumStars.Value,
             MaximumStars: maximumStars.Value >= 10 ? null : maximumStars.Value,
@@ -942,7 +1085,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                     candidate.SuggestedMods,
                     candidate.ExpectedScoreAccuracy ?? scanProfile.TypicalAccuracy!.Value,
                     candidate.Attainability,
-                    scanProfile.PatternProfile, scanProfile.PreferredModsJson))
+                    scanProfile.PatternProfile, scanProfile.PreferredModsJson, scanProfile.LegacyScore))
                 .ToArray();
             if (requests.Length == 0)
             {
@@ -956,7 +1099,27 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                 return;
             }
 
-            await calculateExactAsync(calculator, requests, cancellationToken).ConfigureAwait(false);
+            string identity = ScanIdentity(requests, catalogUpdatedAt);
+            if (identity == lastCompletedScanIdentity && requests.All(r => exactEstimates.ContainsKey(r.BeatmapId)))
+            {
+                if (!IsDisposed && !cancellationToken.IsCancellationRequested)
+                    Schedule(() =>
+                    {
+                        if (IsDisposed || cancellationToken.IsCancellationRequested) return;
+                        exactScanRunning = false;
+                        status.Text = withCatalogStatus("Targets are up to date.");
+                        renderResults();
+                        hideRefresh();
+                        if (!skillAnalysisRunning && pendingPatternProfile is { } pending)
+                        {
+                            pendingPatternProfile = null;
+                            profile = profile with { PatternProfile = pending };
+                            startExactCalculations();
+                        }
+                    });
+                return;
+            }
+            await calculateExactAsync(calculator, requests, identity, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
         catch (Exception error)
@@ -972,9 +1135,20 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         }
     }
 
+    internal static string ScanIdentity(IEnumerable<PpTargetExactRequest> requests, DateTimeOffset? catalogRevision) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(
+            System.Text.Json.JsonSerializer.Serialize(new { catalogRevision,
+                // Match the ranker's tolerance; normalized weights can introduce
+                // sub-micro precision noise without any new player evidence.
+                Inputs = requests.Select(r => PpTargetExactCalculationService.CacheIdentity(r with {
+                    ExpectedAccuracy = Math.Round(r.ExpectedAccuracy, 6), Attainability = Math.Round(r.Attainability, 6)
+                }, r.BeatmapHash ?? "catalog"))
+                    .Order(StringComparer.Ordinal).ToArray() }))));
+
     private async Task calculateExactAsync(
         IPpTargetExactCalculationService calculator,
         IReadOnlyList<PpTargetExactRequest> requests,
+        string scanIdentity,
         CancellationToken cancellationToken)
     {
         try
@@ -986,7 +1160,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                 int completedBeforeBatch = offset;
                 using var progress = new ScanProgress<PpTargetExactCalculationProgress>(action => Schedule(action), () => !IsDisposed && !cancellationToken.IsCancellationRequested, value =>
                 {
-                    showRefresh($"Skill and PP scan: {completedBeforeBatch + value.Completed:N0}/{requests.Count:N0} difficulties", completedBeforeBatch + value.Completed, requests.Count);
+                    showRefresh("Checking map patterns and PP", completedBeforeBatch + value.Completed, requests.Count);
                 });
                 var batch = await calculator.CalculateAsync(requests.Skip(offset).Take(200).ToArray(), cancellationToken, progress).ConfigureAwait(false);
                 progress.Dispose();
@@ -1011,13 +1185,14 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                         return;
                     exactScanRunning = false;
                     exactEstimates = calculated;
+                    lastCompletedScanIdentity = calculated.Count == requests.Count ? scanIdentity : null;
                     status.Text = withCatalogStatus(calculated.Count == 0
                         ? "PP values are unavailable for these difficulties."
                         : $"PP ready for {calculated.Count:N0} beatmap difficult{(calculated.Count == 1 ? "y" : "ies")}.");
                     renderResults();
                     hideRefresh();
                     saveSnapshot();
-                    if (pendingPatternProfile is { } pending)
+                    if (!skillAnalysisRunning && pendingPatternProfile is { } pending)
                     {
                         pendingPatternProfile = null;
                         profile = profile with { PatternProfile = pending };
@@ -1172,23 +1347,41 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
               $"{evidence.Evidence.Select(item => item.MapKey).Distinct().Count():N0} exact-replay maps (30 days)";
         profileSummary.Text = profile.ValidRunCount == 0
             ? "No score history is available for PP recommendations."
-            : $"{profile.ValidRunCount:N0} plays  /  {onlineBestCount:N0} submitted  /  " +
-              $"{evidenceSummary}  /  {mods}{skillProgress}";
+            : evidence?.SessionForm is { Patterns.Count: > 0 } form
+                ? $"{form.Summary}  /  {profile.ValidRunCount:N0} plays{skillProgress}"
+                : $"{profile.ValidRunCount:N0} plays  /  {onlineBestCount:N0} submitted  /  " +
+                  $"{evidenceSummary}  /  {mods}{skillProgress}";
     }
 
     private void showRefresh(string message, int completed, int total)
     {
-        refreshText.Text = "Refreshing";
+        if (!refreshElapsed.IsRunning) refreshElapsed.Restart();
+        refreshIndeterminate = total <= 0;
+        refreshText.Text = total > 0 ? $"{Math.Clamp(completed * 100d / total, 0, 100):0}% checked" : "Refreshing";
         refreshProgress.Alpha = 1;
+        refreshProgressFill.X = 0;
         refreshProgressFill.Width = total > 0 ? Math.Clamp((float)completed / total, 0.02f, 1) : 0.18f;
-        status.Text = message;
+        status.Text = total > 0 ? $"{message}  /  {completed:N0} of {total:N0}" : message;
+        scanHint.Alpha = 1;
+        if (!hasVisibleSnapshot) loadingOverlay.SetProgress(message, completed, total);
     }
 
     private void hideRefresh()
     {
+        refreshElapsed.Stop();
+        refreshIndeterminate = false;
+        scanHint.Text = skillAnalysisRunning && exactEstimates.Count > 0
+            ? "Targets ready. Your skill profile is still updating; recommendations will refresh when it finishes." : string.Empty;
+        refreshProgressFill.X = 0;
         refreshText.Text = "Refresh";
         refreshProgress.Alpha = 0;
         refreshProgressFill.Width = 0;
+        if (automaticRefreshPending)
+            Schedule(() =>
+            {
+                if (!IsDisposed && automaticRefreshPending && !catalogScanRunning && !exactScanRunning && !patternBuildRunning && !skillAnalysisRunning)
+                    requestAutomaticRefresh();
+            });
     }
 
     private void saveSnapshot()
@@ -1210,7 +1403,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             category.Value,
             catalogScanStatus,
             sort.Value.ToString(),
-            pendingPatternProfile, selectedMods.Value);
+            pendingPatternProfile, selectedMods.Value, catalogQueryIdentity, catalogUpdatedAt);
         _ = workspaceCache.SaveAsync(snapshot);
     }
 
@@ -1263,7 +1456,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
     private void sourceChanged()
     {
         if (!IsDisposed)
-            Schedule(reloadProfile);
+            Schedule(requestAutomaticRefresh);
     }
 
     protected override void Dispose(bool isDisposing)
@@ -1360,7 +1553,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             TargetSort.AccountGain => candidates.OrderByDescending(c => c.EstimatedAccountGainPp).ThenByDescending(c => c.RankScore),
             TargetSort.PassProbability => candidates.OrderByDescending(c => c.PassEstimate?.Lower).ThenByDescending(c => c.RankScore),
             TargetSort.GainPerMinute => candidates.OrderByDescending(c => c.AccountGainPerMinute).ThenByDescending(c => c.RankScore),
-            TargetSort.ExpectedPp => candidates.OrderByDescending(c => c.ExpectedEarnedPp).ThenByDescending(c => c.RankScore),
+            TargetSort.ExpectedPp => candidates.OrderByDescending(c => c.FirstAttemptPp).ThenByDescending(c => c.RankScore),
             TargetSort.MaximumPp => candidates.OrderByDescending(c => c.Estimate?.RealisticMaximumPp).ThenByDescending(c => c.RankScore),
             TargetSort.Stars => candidates.OrderBy(c => c.StarRating).ThenByDescending(c => c.RankScore),
             _ => candidates.OrderByDescending(c => c.RankScore),
@@ -1522,13 +1715,16 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                 : "Account gain unverified: comparable completed plays and pass evidence are needed.";
             TooltipText = string.Join("\n", new[] { candidate.ReadinessLabel, passDetails, gainDetails }
                 .Concat(pattern?.Risks.Take(2) ?? []));
+            if (candidate.Learning is { } retry)
+                TooltipText += $"\nEstimated first/next try: {retry.FirstTryPp:0} PP. Target: {retry.TargetPp:0} PP in about {retry.LikelyTries} tries ({retry.ReachProbability:P0} chance). Low confidence; {retry.Sessions} recorded sessions on {retry.Maps} similar-pattern maps.";
             RelativeSizeAxes = Axes.X;
             Height = 112;
             CornerRadius = AimModVisualStyle.ControlRadius;
             BackgroundColour = AimModPalette.Panel;
 
             Colour4 difficultyColour = AimModVisualStyle.DifficultyColour(candidate.StarRating);
-            string expected = candidate.ExpectedEarnedPp is { } earned ? $"{earned:0}" : "-";
+            string expected = candidate.Learning is { } learning ? $"{learning.FirstTryPp:0}"
+                : candidate.ExpectedEarnedPp is { } earned ? $"{earned:0}" : "-";
             string maximum = candidate.Estimate is null ? "-" : $"{candidate.Estimate.RealisticMaximumPp:0}";
             bool calculated = candidate.Estimate?.Method.StartsWith("Official osu! ruleset", StringComparison.Ordinal) == true;
             string confidence = calculated ? "PP ready" : "PP pending";
@@ -1549,6 +1745,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                 TargetSort.GainPerMinute => ("ACCOUNT PP / MIN", candidate.AccountGainPerMinute is { } efficient ? $"+{efficient:0.0}" : "-", personalPass),
                 TargetSort.PassProbability => ("EST. PASS", candidate.PassEstimate is { } chance ? $"{chance.Probability:P0}" : "-",
                     candidate.PassEstimate is { } range ? $"{range.Lower:P0}-{range.Upper:P0} range" : "More history needed"),
+                _ when candidate.Learning is { } forecast => ("TARGET PP", $"{forecast.TargetPp:0}", $"~{forecast.LikelyTries} {(forecast.PreviousTries > 0 ? "more " : "")}tries"),
                 _ => ("MAX PP", maximum, candidate.Estimate is null ? "pending" : "100% FC ceiling"),
             };
             string mods = ScoreMods.Display(candidate.SuggestedMods, candidate.Estimate?.ModsJson);
@@ -1593,8 +1790,8 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                             : $"{skillLabel} / {patternSummary}", 10, AimModPalette.Muted),
                     },
                 },
-                expectedMetric = metric("EXPECTED PP", expected, AimModPalette.Cyan,
-                    candidate.Estimate is null ? "pending" : candidate.ExpectedEarnedPp is not null ? "per attempt" : candidate.ReadinessLabel),
+                expectedMetric = metric(candidate.Learning is { } prediction ? prediction.PreviousTries > 0 ? "NEXT TRY PP" : "FIRST TRY PP" : "EXPECTED PP", expected, AimModPalette.Cyan,
+                    candidate.Learning is not null ? "low confidence" : candidate.Estimate is null ? "pending" : candidate.ExpectedEarnedPp is not null ? "per attempt" : candidate.ReadinessLabel),
                 maximumMetric = metric(priorityCaption, priorityValue, Colour4.FromHex("FFD45A"), priorityDetail),
                 new Container
                 {

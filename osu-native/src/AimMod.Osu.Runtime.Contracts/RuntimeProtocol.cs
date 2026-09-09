@@ -162,7 +162,8 @@ public sealed record PpWhatIfRequest(
     string? ModsJson = null,
     bool LegacyScore = false,
     int RulesetId = 0,
-    bool Passed = true);
+    bool Passed = true,
+    long? LegacyTotalScore = null);
 
 public sealed record PpScoreStatistics(
     int Great,

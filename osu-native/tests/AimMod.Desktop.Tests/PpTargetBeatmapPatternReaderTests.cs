@@ -43,6 +43,39 @@ public sealed class PpTargetBeatmapPatternReaderTests
     }
 
     [Test]
+    public async Task ConfiguredRatesAndCircleSizesMatchPlayableGeometryAndRemainSeparateInCache()
+    {
+        var reader = new PpTargetBeatmapPatternReader(Path.Combine(directory, "cache"));
+        var file = await PpTargetBeatmapPatternReader.IdentifyAsync(beatmapPath, null, default);
+        const string slower = "[{\"acronym\":\"DT\",\"settings\":{\"speed_change\":1.2}}]";
+        var custom = await reader.ReadAsync(file, ["DT"], default, slower);
+        var standard = await reader.ReadAsync(file, ["DT"], default);
+        Assert.That(custom.ClockRate, Is.EqualTo(1.2).Within(.0001));
+        Assert.That(standard.ClockRate, Is.EqualTo(1.5));
+        Assert.That(custom, Is.Not.SameAs(standard));
+        Assert.That(await reader.ReadAsync(file, ["DT"], default, slower), Is.SameAs(custom));
+        var small = PpTargetBeatmapPatternReader.Read(beatmapPath, ["DA"], modsJson:
+            "[{\"acronym\":\"DA\",\"settings\":{\"circle_size\":6}}]");
+        Assert.That(small.HitRadius, Is.LessThan(custom.HitRadius!.Value));
+    }
+
+    [Test]
+    public async Task ConflictingModSettingsCannotReuseDefaultGeometry()
+    {
+        var reader = new PpTargetBeatmapPatternReader(Path.Combine(directory, "cache"));
+        var file = await PpTargetBeatmapPatternReader.IdentifyAsync(beatmapPath, null, default);
+        await reader.ReadAsync(file, ["DT"], default);
+        Assert.ThrowsAsync<InvalidDataException>(async () => await reader.ReadAsync(file, ["DT"], default, "[]"));
+    }
+
+    [Test]
+    public void SupportsLegacyApiStringModArrays()
+    {
+        var geometry = PpTargetBeatmapPatternReader.Read(beatmapPath, ["DT"], modsJson: "[\"DT\"]");
+        Assert.That(geometry.ClockRate, Is.EqualTo(1.5));
+    }
+
+    [Test]
     public void ExcludesSpinnerAndNestedSliderTicksButIncludesSliderHeadOnce()
     {
         PpTargetBeatmapPatternGeometry geometry = PpTargetBeatmapPatternReader.Read(beatmapPath, []);

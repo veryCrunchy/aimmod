@@ -57,7 +57,8 @@ public static class PpTargetPreferenceProfiler
             ppSetups.Select(setup => new PpTargetPerformanceSample(setup.Stars, setup.Pp!.Value, setup.Accuracy)).ToArray(),
             PreferredModSetup: setups.GroupBy(setup => string.Join(',', PpTargetMods.Normalise(setup.Mods)), StringComparer.Ordinal)
                 .OrderByDescending(group => group.Count()).ThenBy(group => group.Key, StringComparer.Ordinal)
-                .Select(group => PpTargetMods.Normalise(group.First().Mods)).First());
+                .Select(group => PpTargetMods.Normalise(group.First().Mods)).First(),
+            LegacyScore: runs.Count(r => r.LegacyScore || r.Origin == LocalLibraryOrigin.Stable) > runs.Length / 2);
     }
 
     private static Setup buildSetup(IEnumerable<LocalReplay> values, IReadOnlyDictionary<Guid, LocalBeatmapSet> sets)
@@ -68,7 +69,7 @@ public static class PpTargetPreferenceProfiler
         LocalBeatmapDifficulty? difficulty = set?.Difficulties.FirstOrDefault(item => item.BeatmapId == representative.BeatmapId);
         return new Setup(
             setupKey(representative), representative.PlayedAt, representative.StarRating,
-            runs.Where(run => validAccuracy(run.Accuracy)).Select(run => run.Accuracy).DefaultIfEmpty(representative.Accuracy).Max(),
+            representative.Accuracy,
             runs.Where(run => validPp(run.PerformancePoints)).Select(run => run.PerformancePoints!.Value).DefaultIfEmpty(double.NaN).Max() is var best && double.IsFinite(best) ? best : null,
             normaliseMods(representative.Mods), clean(set?.Creator), clean(set?.Source), clean(representative.Artist), clean(representative.Title),
             validPositive(difficulty?.Bpm) ? difficulty!.Bpm : null,
@@ -122,6 +123,7 @@ public static class PpTargetPreferenceProfiler
 
     private static bool validRun(LocalReplay run) =>
         string.Equals(run.RulesetShortName, "osu", StringComparison.OrdinalIgnoreCase)
+        && run.Passed && ScoreMods.IsManualPlay(run)
         && run.StarRating > 0 && double.IsFinite(run.StarRating)
         && validAccuracy(run.Accuracy);
 
@@ -187,10 +189,10 @@ public static class PpTargetRanker
         double preference = preferenceFit(profile, set, difficulty);
         (double attainability, double scoreEvidence, int nearbySampleCount) = performanceFit(profile, difficulty.StarRating);
         PpTargetPassEstimate? passEstimate = PpTargetOpportunityModel.EstimatePass(profile.Opportunities,
-            difficulty.StarRating, difficulty.Bpm, difficulty.TotalLengthSeconds, mods, difficulty.BeatmapId, profile.PreferredModsJson);
+            difficulty.StarRating, difficulty.Bpm, difficulty.TotalLengthSeconds, mods, difficulty.BeatmapId, profile.PreferredModsJson, profile.LegacyScore);
         double? expectedAccuracy = passEstimate?.ConditionalAccuracy ?? profile.TypicalAccuracy;
         PpTargetEstimate? estimate = matchingEstimate(
-            exactEstimates?.GetValueOrDefault(difficulty.BeatmapId) is {} exact && (exact.ModsJson ?? "") == (profile.PreferredModsJson ?? "") ? exact : null,
+            exactEstimates?.GetValueOrDefault(difficulty.BeatmapId) is {} exact && exact.LegacyScore == profile.LegacyScore && (exact.ModsJson ?? "") == (profile.PreferredModsJson ?? "") ? exact : null,
             difficulty.BeatmapId,
             mods,
             expectedAccuracy,
@@ -252,7 +254,9 @@ public static class PpTargetRanker
             set.BeatmapSetId, difficulty.BeatmapId, set.Title, set.Artist, set.Creator, set.Source, set.Status,
             difficulty.Name, difficulty.StarRating, difficulty.Bpm, difficulty.TotalLengthSeconds, difficulty.MaximumCombo,
             set.CoverUrl, preference, attainability, rank, baseline, gain, estimate, mods,
-            scoreEvidence, modCompatibility, recommendation, passEstimate, accountGain, gainPerMinute, expectedAccuracy);
+            scoreEvidence, modCompatibility, recommendation, passEstimate, accountGain, gainPerMinute, expectedAccuracy,
+            awardsPp ? PpTargetLearningModel.Predict(profile.Opportunities, profile.PatternProfile, estimate,
+                difficulty.BeatmapId, difficulty.StarRating, difficulty.Bpm, difficulty.TotalLengthSeconds, mods, profile.PreferredModsJson, profile.LegacyScore) : null);
     }
 
     private static PpTargetEstimate? matchingEstimate(
@@ -279,10 +283,11 @@ public static class PpTargetRanker
         PpTargetPreferenceProfile profile,
         double starRating)
     {
+        if (ScoreMods.HasCustomSettings(profile.PreferredModsJson)) return (.5, 0, 0);
         if (profile.PatternProfile is { ScoreEvidence: not null } recent)
         {
             var support = PpTargetPatternModel.ScoreFit(recent, starRating,
-                profile.PreferredModSetup ?? PpTargetMods.SelectCompatible(profile.CommonMods));
+                profile.PreferredModSetup ?? PpTargetMods.SelectCompatible(profile.CommonMods), profile.LegacyScore);
             return (support.Fit, support.Confidence, support.Maps);
         }
         PpTargetPerformanceSample[] nearby = profile.PerformanceSamples
@@ -415,7 +420,7 @@ public static class PpTargetRanker
                 return false;
         }
 
-        if (filters.HasExpectedFilter && (candidate.ExpectedEarnedPp is not { } earned || !between(earned, filters.MinimumExpectedPp, filters.MaximumExpectedPp)))
+        if (filters.HasExpectedFilter && (candidate.FirstAttemptPp is not { } earned || !between(earned, filters.MinimumExpectedPp, filters.MaximumExpectedPp)))
             return false;
         return !filters.HasMaximumFilter
                || candidate.Estimate is not null && between(candidate.Estimate.RealisticMaximumPp, filters.MinimumRealisticMaximumPp, filters.MaximumRealisticMaximumPp);

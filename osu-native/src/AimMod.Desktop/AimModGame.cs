@@ -1002,7 +1002,8 @@ public partial class AimModGame : OsuGameBase
             new PpTargetWorkspaceCache(Storage.GetFullPath("cache/pp-target-workspace-v1.json", true)),
             () => accountScoreHistoryService,
             openBeatmapInOsu,
-            replayAnalyses)
+            replayAnalyses,
+            () => currentOsuProfile?.Username)
         {
             RelativeSizeAxes = Axes.Both,
         };
@@ -1359,6 +1360,7 @@ public partial class AimModGame : OsuGameBase
         replayLibraryAnalysisLifetime = null;
         work?.Cancel();
         work?.Dispose();
+        if (!IsDisposed) ppTargetsWorkspace?.SetSkillAnalysisProgress(0, 0);
     }
 
     private void finishReplaySelection(CancellationToken cancellationToken)
@@ -1439,7 +1441,7 @@ public partial class AimModGame : OsuGameBase
             {
                 if (!cancellationToken.IsCancellationRequested && currentRoute.Value == NativeRoute.Coaching)
                     coachingWorkspace?.ApplyNewAnalyses(newlyCompleted, newlyFailed);
-                if (!cancellationToken.IsCancellationRequested && currentRoute.Value == NativeRoute.PpTargets)
+                if (!cancellationToken.IsCancellationRequested)
                     ppTargetsWorkspace?.SetSkillAnalysisProgress(0, 0);
             });
         }
@@ -1455,7 +1457,7 @@ public partial class AimModGame : OsuGameBase
                 {
                     if (!cancellationToken.IsCancellationRequested && currentRoute.Value == NativeRoute.Coaching)
                         coachingWorkspace?.SetAnalysisError();
-                    if (!cancellationToken.IsCancellationRequested && currentRoute.Value == NativeRoute.PpTargets)
+                    if (!cancellationToken.IsCancellationRequested)
                         ppTargetsWorkspace?.SetSkillAnalysisProgress(0, 0);
                 });
             }
@@ -1473,7 +1475,7 @@ public partial class AimModGame : OsuGameBase
         {
             if (!cancellationToken.IsCancellationRequested && currentRoute.Value == NativeRoute.Coaching)
                 coachingWorkspace?.SetAnalysisProgress(progress.Completed, progress.Total, progress.CurrentTitle);
-            if (!cancellationToken.IsCancellationRequested && currentRoute.Value == NativeRoute.PpTargets)
+            if (!cancellationToken.IsCancellationRequested)
                 ppTargetsWorkspace?.SetSkillAnalysisProgress(progress.Completed, progress.Total);
         });
     }

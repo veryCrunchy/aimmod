@@ -1,4 +1,5 @@
 using AimMod.Desktop.PpTargets;
+using AimMod.Desktop.LocalLibrary;
 using AimMod.Desktop.Visuals;
 using AimMod.Osu.Runtime;
 using osu.Framework.Extensions;
@@ -28,6 +29,27 @@ public partial class NativePpTargetsWorkspace
         };
         if (target.Estimate is { } pp)
         {
+            string setup = ScoreMods.Configuration(target.SuggestedMods, pp.ModsJson ?? "", PpTargetMods.NormaliseForSkill);
+            var sessionPatterns = profile?.SessionForm is { } form && form.ExpiresAt > DateTimeOffset.UtcNow
+                ? form.Patterns.Where(p => p.Setup == setup && p.LegacyScore == pp.LegacyScore).ToArray() : [];
+            if (sessionPatterns.Length > 0)
+            {
+                lines.Add("Current session");
+                foreach (var pattern in sessionPatterns.Where(p => p.Pattern != "Overall" || sessionPatterns.Length == 1))
+                    lines.Add($"{pattern.Pattern}: {pattern.Observation}. Compared {pattern.Plays} recent plays across {pattern.Maps} maps with "
+                        + (pattern.UsesSimilarMaps ? "similar patterns in your earlier plays." : "your earlier results on those maps."));
+                lines.Add("Low-confidence session estimate. Relevant patterns make a small adjustment to projected accuracy and misses. Improving results may reflect warming up; the cause is uncertain. Adjustments expire after an hour without a comparable play.");
+            }
+            else lines.Add(profile?.SessionForm?.StatusFor(setup, pp.LegacyScore, DateTimeOffset.UtcNow)
+                ?? "Session form: recent replay results are not available yet. Your longer-term skill profile is used.");
+            if (target.Learning is { } learning)
+            {
+                lines.Add($"{(learning.PreviousTries == 0 ? "First try this session" : "Next try")}: {learning.FirstTryPp:0.0} expected PP; typical range {learning.FirstTryRange.Minimum:0}-{learning.FirstTryRange.Maximum:0}. Failed attempts count as zero.");
+                lines.Add($"Best realistic target: {learning.TargetPp:0} PP in about {learning.LikelyTries} {(learning.PreviousTries > 0 ? "more " : "")}tries. Estimated chance by then: {learning.ReachProbability:P0}.");
+                lines.Add($"Based on {learning.Sessions} recorded practice sessions across {learning.Maps} similar-pattern maps with matching mods. Low confidence; retry habits and unrecorded attempts can change this estimate.");
+                lines.Add($"Target is the median best score within {learning.SupportedTries} observed tries, not a guaranteed score or lifetime limit. PP is scaled from your comparable score progression; the count is not extrapolated beyond recorded sessions.");
+            }
+            else lines.Add("Learning target unavailable: more recorded retry sessions with comparable patterns and PP results are needed.");
             lines.Add(target.ExpectedEarnedPp is { } earned
                 ? $"Expected per attempt: {earned:0.0} PP. Projected score weighted by estimated pass chance; failed attempts earn no PP."
                 : "Expected PP unavailable: not enough comparable completion and score evidence.");

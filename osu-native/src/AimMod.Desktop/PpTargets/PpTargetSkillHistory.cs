@@ -5,6 +5,18 @@ namespace AimMod.Desktop.PpTargets;
 
 internal static class PpTargetSkillHistory
 {
+    internal static IReadOnlyList<LocalReplay> ForPlayer(IReadOnlyList<LocalReplay> runs, string? player)
+    {
+        if (string.IsNullOrWhiteSpace(player))
+        {
+            var names = runs.Select(r => r.Player.Trim()).Where(n => n.Length > 0)
+                .Distinct(StringComparer.OrdinalIgnoreCase).Take(2).ToArray();
+            if (names.Length != 1) return [];
+            player = names[0];
+        }
+        return runs.Where(r => string.Equals(r.Player.Trim(), player.Trim(), StringComparison.OrdinalIgnoreCase)).ToArray();
+    }
+
     internal static IReadOnlyList<ScoreHistoryEntry> PassHistory(IReadOnlyList<LocalReplay> local,
         IReadOnlyList<ScoreHistoryEntry> online, IReadOnlyList<LocalBeatmapSet> sets)
     {
@@ -21,6 +33,7 @@ internal static class PpTargetSkillHistory
                 score = score with { Passed = run.Passed };
             if (score.LocalBeatmapId is not { } id || !maps.TryGetValue(id, out var map)) return score;
             return score with { OnlineBeatmapId = score.OnlineBeatmapId > 0 ? score.OnlineBeatmapId : map.OnlineId,
+                StarRating = map.StarRating > 0 && double.IsFinite(map.StarRating) ? map.StarRating : score.StarRating,
                 Bpm = score.Bpm is > 0 ? score.Bpm : map.Bpm,
                 LengthSeconds = score.LengthSeconds is > 0 ? score.LengthSeconds : (int)(map.LengthMilliseconds / 1000) };
         }).ToArray();
@@ -34,8 +47,14 @@ internal static class PpTargetSkillHistory
         var maps = sets.SelectMany(s => s.Difficulties.Select(d => (Set: s, Map: d)))
             .Where(item => item.Map.OnlineId > 0).GroupBy(item => item.Map.OnlineId)
             .ToDictionary(g => g.Key, g => g.First());
+        var localMaps = sets.SelectMany(s => s.Difficulties).GroupBy(d => d.BeatmapId).ToDictionary(g => g.Key, g => g.First());
         return ScoreHistoryMerger.MergeAsLocalReplays(local, online).Select(run =>
         {
+            // Stable's score list can expose modded stars; catalog candidates use base
+            // stars. Keep the target model's comparison scale consistent in every setup.
+            if (localMaps.TryGetValue(run.BeatmapId, out var difficulty)
+                && difficulty.StarRating > 0 && double.IsFinite(difficulty.StarRating))
+                run = run with { StarRating = difficulty.StarRating };
             if (run.IsLocallyStored || !onlineByScore.TryGetValue(run.OnlineScoreId, out var score)
                 || !maps.TryGetValue(score.OnlineBeatmapId, out var map)) return run;
             // An online ID links the difficulty, but cannot establish the played revision's checksum.

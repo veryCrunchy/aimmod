@@ -7,7 +7,7 @@ namespace AimMod.Desktop.PpTargets;
 public sealed record PpTargetBestPlay(int BeatmapId, double Pp);
 public sealed record PpTargetPassSample(int BeatmapId, DateTimeOffset PlayedAt, double Stars,
     double? Bpm, int? LengthSeconds, string Mods, bool Passed, Guid? LocalBeatmapId = null,
-    double? Accuracy = null, string ModsJson = "");
+    double? Accuracy = null, string ModsJson = "", Guid? LocalScoreId = null, double? Pp = null, bool LocalAttempt = false, bool LegacyScore = false);
 public sealed record PpTargetOpportunityProfile(DateTimeOffset AsOf, IReadOnlyList<PpTargetBestPlay> BestPlays,
     IReadOnlyList<PpTargetPassSample> RecentAttempts);
 public sealed record PpTargetPassEstimate(double Probability, double Lower, double Upper, int Attempts, int Maps,
@@ -24,11 +24,11 @@ public static class PpTargetOpportunityModel
         {
             bySetup = profile.RecentAttempts.Where(s => s.PlayedAt <= profile.AsOf
                     && s.PlayedAt >= profile.AsOf.AddDays(-30) && double.IsFinite(s.Stars) && s.Stars > 0)
-                .GroupBy(s => ScoreMods.Configuration(s.Mods.Split(',', StringSplitOptions.RemoveEmptyEntries), s.ModsJson, PpTargetMods.NormaliseOne))
+                .GroupBy(s => ScoreMods.Configuration(s.Mods.Split(',', StringSplitOptions.RemoveEmptyEntries), s.ModsJson, PpTargetMods.NormaliseForSkill))
                 .ToDictionary(g => g.Key, g => g.ToArray(), StringComparer.Ordinal);
         }
         public PpTargetPassSample[] For(IReadOnlyList<string> mods, string? json) =>
-            bySetup.GetValueOrDefault(ScoreMods.Configuration(mods, json, PpTargetMods.NormaliseOne)) ?? [];
+            bySetup.GetValueOrDefault(ScoreMods.Configuration(mods, json, PpTargetMods.NormaliseForSkill)) ?? [];
     }
     public static PpTargetOpportunityProfile Build(IEnumerable<ScoreHistoryEntry> scores, DateTimeOffset? now = null)
     {
@@ -48,7 +48,8 @@ public static class PpTargetOpportunityModel
                 && double.IsFinite(s.StarRating) && s.StarRating > 0)
             .Select(s => new PpTargetPassSample(s.OnlineBeatmapId, s.PlayedAt, s.StarRating, s.Bpm,
                 s.LengthSeconds, modKey(s.Mods), s.Passed!.Value, s.OnlineBeatmapId > 0 ? null : s.LocalBeatmapId,
-                double.IsFinite(s.Accuracy) && s.Accuracy is >= 0 and <= 1 ? s.Accuracy : null, s.ModsJson)).ToArray();
+                double.IsFinite(s.Accuracy) && s.Accuracy is >= 0 and <= 1 ? s.Accuracy : null, s.ModsJson,
+                s.LocalScoreId, s.PerformancePoints, s.IsLocal, s.LegacyScore)).ToArray();
         return new(reference, best, attempts);
     }
 
@@ -67,12 +68,12 @@ public static class PpTargetOpportunityModel
     }
 
     public static PpTargetPassEstimate? EstimatePass(PpTargetOpportunityProfile? profile,
-        double stars, double bpm, int seconds, IReadOnlyList<string> mods, int beatmapId = 0, string? modsJson = null)
+        double stars, double bpm, int seconds, IReadOnlyList<string> mods, int beatmapId = 0, string? modsJson = null, bool legacyScore = false)
     {
         if (profile is null || !double.IsFinite(stars) || stars <= 0 || seconds <= 0) return null;
         string key = modKey(mods);
         if (key.Split(',').Any(m => m is "NF" or "SD" or "PF" or "RX" or "AP" or "AT" or "CN")) return null;
-        var eligible = indexes.GetValue(profile, p => new AttemptIndex(p)).For(mods, modsJson);
+        var eligible = indexes.GetValue(profile, p => new AttemptIndex(p)).For(mods, modsJson).Where(s => s.LegacyScore == legacyScore).ToArray();
         // Multiple attempts of this difficulty are more relevant than pooled neighbouring maps.
         // Best-score feeds remain excluded: they cannot establish attempt frequency.
         var direct = eligible.Where(s => beatmapId > 0 && s.BeatmapId == beatmapId).ToArray();

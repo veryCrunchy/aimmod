@@ -3,6 +3,8 @@ using System.Text;
 using System.Text.Json;
 using AimMod.Osu.Runtime.Contracts;
 using osu.Game.Beatmaps;
+using osu.Game.Online.API;
+using AimMod.Desktop.LocalLibrary;
 using osu.Game.Rulesets.Mods;
 using osu.Game.Rulesets.Osu;
 using osu.Game.Rulesets.Osu.Objects;
@@ -19,7 +21,7 @@ internal sealed record PpTargetBeatmapPatternGeometry(
 
 internal sealed class PpTargetBeatmapPatternReader(string cacheDirectory, int maximumFiles = 8_192, long maximumBytes = 256 * 1024 * 1024)
 {
-    internal const string Version = "playable-geometry-v2";
+    internal const string Version = "playable-geometry-v3";
     private static readonly JsonSerializerOptions json_options = new(JsonSerializerDefaults.Web);
     private readonly object geometryLock = new();
     private readonly Dictionary<string, PpTargetBeatmapPatternGeometry> geometries = new();
@@ -85,9 +87,11 @@ internal sealed class PpTargetBeatmapPatternReader(string cacheDirectory, int ma
         }
     }
 
-    internal async Task<PpTargetBeatmapPatternGeometry> ReadAsync(PpTargetBeatmapFile file, IReadOnlyList<string> mods, CancellationToken cancellationToken)
+    internal async Task<PpTargetBeatmapPatternGeometry> ReadAsync(PpTargetBeatmapFile file, IReadOnlyList<string> mods, CancellationToken cancellationToken, string? modsJson = null, bool legacyScore = false)
     {
-        string modKey = string.Join(',', PpTargetMods.Normalise(mods));
+        string modKey = ScoreMods.Configuration(PpTargetMods.Normalise(mods), modsJson, PpTargetMods.NormaliseOne);
+        modKey += legacyScore ? "|stable" : "|lazer";
+        modKey += "|" + (modsJson ?? "");
         string geometryKey = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{Version}|{PpCalculationProtocol.EngineVersion}|{modKey}")));
         string path = Path.Combine(cacheDirectory, $"{file.ContentHash}-{geometryKey}.json");
         cancellationToken.ThrowIfCancellationRequested();
@@ -109,7 +113,7 @@ internal sealed class PpTargetBeatmapPatternReader(string cacheDirectory, int ma
             // A geometry cache failure must not prevent decoding the exact beatmap.
         }
 
-        PpTargetBeatmapPatternGeometry result = Read(file.Path, mods, cancellationToken);
+        PpTargetBeatmapPatternGeometry result = Read(file.Path, mods, cancellationToken, modsJson, legacyScore);
         string temporaryPath = path + $".{Guid.NewGuid():N}.tmp";
         try
         {
@@ -149,14 +153,33 @@ internal sealed class PpTargetBeatmapPatternReader(string cacheDirectory, int ma
         return geometry;
     }
 
-    internal static PpTargetBeatmapPatternGeometry Read(string path, IReadOnlyList<string> acronyms, CancellationToken cancellationToken = default)
+    internal static PpTargetBeatmapPatternGeometry Read(string path, IReadOnlyList<string> acronyms, CancellationToken cancellationToken = default, string? modsJson = null, bool legacyScore = false)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ensureStandardMode(path);
         _ = typeof(OsuRuleset).Assembly;
         var ruleset = new OsuRuleset();
-        Mod[] mods = PpTargetMods.Normalise(acronyms).Select(acronym => ruleset.CreateModFromAcronym(acronym)
-            ?? throw new InvalidDataException($"Pattern extraction does not support the {acronym} mod.")).ToArray();
+        Mod[] mods;
+        if (!string.IsNullOrWhiteSpace(modsJson))
+        {
+            APIMod[] configured = Newtonsoft.Json.Linq.JArray.Parse(modsJson).Select(token =>
+                token.Type == Newtonsoft.Json.Linq.JTokenType.String
+                    ? new APIMod { Acronym = token.ToObject<string>()! }
+                    : token.ToObject<APIMod>() ?? throw new InvalidDataException("Pattern extraction mod settings are invalid.")).ToArray();
+            if (configured.Length > PpCalculationProtocol.MaximumMods)
+                throw new InvalidDataException("Too many pattern extraction mods.");
+            mods = configured.Select(mod => mod.ToMod(ruleset)).ToArray();
+            if (!PpTargetMods.Normalise(mods.Select(m => m.Acronym).ToArray()).SequenceEqual(PpTargetMods.Normalise(acronyms)))
+                throw new InvalidDataException("Mod acronyms and configured mod settings disagree.");
+        }
+        else
+            mods = PpTargetMods.Normalise(acronyms).Select(acronym => ruleset.CreateModFromAcronym(acronym)
+                ?? throw new InvalidDataException($"Pattern extraction does not support the {acronym} mod.")).ToArray();
+        if (legacyScore && !mods.Any(mod => mod is ModClassic) && ruleset.CreateMod<ModClassic>() is { } classic)
+            mods = [.. mods, classic];
+        if (mods.Any(mod => mod is UnknownMod) || mods.Any(mod => mods.Any(other =>
+                !ReferenceEquals(mod, other) && mod.IncompatibleMods.Any(type => type.IsInstanceOfType(other)))))
+            throw new InvalidDataException("Pattern extraction mods are unsupported or incompatible.");
         var working = new FlatWorkingBeatmap(path);
         if (working.BeatmapInfo.Ruleset.OnlineID != 0)
             throw new InvalidDataException("Pattern extraction supports osu!standard beatmaps only.");

@@ -37,7 +37,7 @@ public sealed record ScoreHistoryEntry(
     bool? Passed = null,
     double? Bpm = null,
     int? LengthSeconds = null,
-    string ModsJson = "")
+    string ModsJson = "", bool LegacyScore = false)
 {
     public bool IsLocal => Provenance.HasFlag(ScoreHistoryProvenance.Local);
     public bool IsSubmitted => (Provenance & ~ScoreHistoryProvenance.Local) != 0 || OnlineScoreId > 0;
@@ -223,7 +223,7 @@ public static class ScoreHistoryMerger
                 online?.PerformancePoints ?? local.PerformancePoints, local.TotalScore > 0 ? local.TotalScore : online?.TotalScore ?? 0,
                 local.MaxCombo > 0 ? local.MaxCombo : online?.MaximumCombo ?? 0, local.MissCount, online?.Mods ?? local.Mods,
                 ScoreHistoryProvenance.Local | (online?.Provenance ?? ScoreHistoryProvenance.None), local.HasReplayFile,
-                online?.Passed, online?.Bpm, online?.LengthSeconds, online?.ModsJson is { Length: > 0 } json ? json : local.ModsJson));
+                online?.Passed, online?.Bpm, online?.LengthSeconds, online?.ModsJson is { Length: > 0 } json ? json : local.ModsJson, local.LegacyScore || local.Origin == LocalLibraryOrigin.Stable));
         }
         merged.AddRange(onlineById.Values);
         return merged.OrderBy(score => score.PlayedAt).ThenBy(score => score.Identity, StringComparer.Ordinal).ToArray();

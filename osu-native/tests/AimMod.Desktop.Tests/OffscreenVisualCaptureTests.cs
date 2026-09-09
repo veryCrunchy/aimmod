@@ -254,6 +254,7 @@ public sealed partial class OffscreenVisualCaptureTests
             })).ToArray();
         var profile = PpTargetPreferenceProfile.Empty with
         {
+            PlayerName = "SyntheticPlayer",
             ValidRunCount = 148,
             DistinctSetupCount = 24,
             PpSampleCount = 112,
@@ -698,7 +699,7 @@ public sealed partial class OffscreenVisualCaptureTests
             // Fresh persisted estimates plus empty live history keep this capture offline
             // and prevent a background profile rebuild from replacing the measured fixture.
             workspace = new NativePpTargetsWorkspace(new InMemoryLocalLibrarySource([], []), () => null, () => null,
-                workspaceCache: cache, openBeatmap: (_, _) => Task.CompletedTask);
+                workspaceCache: cache, openBeatmap: (_, _) => Task.CompletedTask, activePlayer: () => "SyntheticPlayer");
             Add(new osu.Framework.Graphics.Containers.Container
             {
                 RelativeSizeAxes = osu.Framework.Graphics.Axes.Both,
@@ -722,7 +723,7 @@ public sealed partial class OffscreenVisualCaptureTests
                     Scheduler.AddDelayed(() =>
                     {
                         var details = typeof(NativePpTargetsWorkspace).GetField("selectedDetails", flags)!.GetValue(workspace)!;
-                        ((AimModScrollContainer)details.GetType().GetField("scroll", flags)!.GetValue(details)!).ScrollTo(450, false);
+                        ((AimModScrollContainer)details.GetType().GetField("scroll", flags)!.GetValue(details)!).ScrollTo(outputPath.Contains("pp-learning", StringComparison.Ordinal) ? 180 : 450, false);
                     }, 200);
                 }, 1500);
             if (outputPath.Contains("ppTargets-menu", StringComparison.Ordinal))
