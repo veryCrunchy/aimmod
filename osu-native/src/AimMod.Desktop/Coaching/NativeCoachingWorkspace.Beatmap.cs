@@ -93,6 +93,8 @@ public partial class NativeCoachingWorkspace
                 }
                 coachingTargetScoreId=run.ScoreId;renderSession(workspace ?? buildWorkspace());showCoachingPage(0);
             },sets.Length==0,true));
+            if (run is null)
+                actions.Add(new CoachingButton("Choose a play to create a practice set", () => showCoachingPage(2), true, true));
             mapDetailHost.Add(actions);
             if (coachingMapSection == 0 && run is not null) renderReplayObservations(mapDetailHost, run);
             if (coachingMapSection == 1) renderSectionTable(sets);

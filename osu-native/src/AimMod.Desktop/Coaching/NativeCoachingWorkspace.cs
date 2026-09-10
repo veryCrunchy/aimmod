@@ -74,6 +74,9 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     private readonly AimModLoadingOverlay loadingOverlay;
 
     private CancellationTokenSource? loading;
+    private Task historyLoadTask = Task.CompletedTask;
+    private IReadOnlyList<ScoreHistoryEntry> submittedScores = [];
+    private IAccountScoreHistoryService? submittedScoresService;
     private CancellationTokenSource? practiceGeneration;
     private CancellationTokenSource? practiceLaunch;
     private ScheduledDelegate? scheduledPracticeRefresh;
@@ -237,7 +240,13 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         base.LoadComplete();
         search.OnCommit += (_, _) => refreshRunList();
         load();
-        if (practiceLibrary is not null) _ = watchPracticeScores(practiceTrackingLifetime.Token);
+        _ = watchPracticeScores(practiceTrackingLifetime.Token);
+    }
+
+    public void RefreshHistory()
+    {
+        if (IsLoaded && !IsDisposed && historyLoadTask.IsCompleted)
+            load();
     }
 
     private void load()
@@ -245,21 +254,32 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         loading?.Cancel();
         loading?.Dispose();
         loading = new CancellationTokenSource();
-        analysisBanner.ShowHistoryLoading();
-        loadingOverlay.ShowLoading("Preparing coaching", "Merging submitted and local osu!standard scores");
-        _ = loadAsync(loading.Token);
+        if (workspace is null)
+        {
+            analysisBanner.ShowHistoryLoading();
+            loadingOverlay.ShowLoading("Preparing coaching", "Loading your recent plays");
+        }
+        var service = accountHistory();
+        if (!ReferenceEquals(service, submittedScoresService))
+        {
+            submittedScores = [];
+            submittedScoresService = service;
+        }
+        var retainedSubmittedScores = submittedScores;
+        var token = loading.Token;
+        int account = practiceAccountId();
+        historyLoadTask = Task.Run(() => loadAsync(service, retainedSubmittedScores, account, token));
     }
 
-    private async Task loadAsync(CancellationToken cancellationToken)
+    private async Task loadAsync(IAccountScoreHistoryService? service, IReadOnlyList<ScoreHistoryEntry> retainedSubmittedScores,
+        int account, CancellationToken cancellationToken)
     {
         try
         {
             StatisticsHistoryLoadResult history = await StatisticsHistoryLoader.LoadAsync(source, cancellationToken).ConfigureAwait(false);
-            IReadOnlyList<LocalReplay> local = ScoreHistoryMerger.MergeAsLocalReplays(history.Runs, []);
-            if (!IsDisposed)
-                Schedule(() => apply(local));
+            IReadOnlyList<LocalReplay> local = ScoreHistoryMerger.MergeAsLocalReplays(history.Runs, retainedSubmittedScores);
+            scheduleHistoryUpdate(() => apply(local), account, cancellationToken);
 
-            IAccountScoreHistoryService? service = accountHistory();
             if (service is null)
                 return;
 
@@ -274,40 +294,62 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             }
             catch (Exception)
             {
-                if (!IsDisposed)
-                    Schedule(() => analysisBanner.ShowWarning(
+                scheduleHistoryUpdate(() => analysisBanner.ShowWarning(
                         "Submitted scores could not be refreshed",
-                        "Your local plays and replay evidence remain available."));
+                        "Your saved plays remain available. Try refreshing shortly."), account, cancellationToken);
                 return;
             }
 
-            IReadOnlyList<LocalReplay> merged = ScoreHistoryMerger.MergeAsLocalReplays(history.Runs, online.Scores);
-            if (!IsDisposed)
-                Schedule(() => apply(merged));
+            var refreshedSubmittedScores = online.BestCoverage.IsSuccess && online.RecentCoverage.IsSuccess
+                ? online.Scores
+                : online.Scores.Concat(retainedSubmittedScores).DistinctBy(score => score.Identity).ToArray();
+            IReadOnlyList<LocalReplay> merged = ScoreHistoryMerger.MergeAsLocalReplays(history.Runs, refreshedSubmittedScores);
+            scheduleHistoryUpdate(() =>
+            {
+                submittedScores = refreshedSubmittedScores;
+                apply(merged);
+            }, account, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
         }
         catch (Exception)
         {
-            if (!IsDisposed)
-                Schedule(() =>
+            scheduleHistoryUpdate(() =>
                 {
                     loadingOverlay.HideLoading();
                     analysisBanner.ShowError(
                         "Score history could not be loaded",
                         "Check the local osu! data source and reopen Coaching.");
-                });
+                }, account, cancellationToken);
         }
+    }
+
+    private void scheduleHistoryUpdate(Action update, int account, CancellationToken token)
+    {
+        if (IsDisposed || token.IsCancellationRequested) return;
+        Schedule(() =>
+        {
+            if (!IsDisposed && !token.IsCancellationRequested && account == practiceAccountId()) update();
+        });
     }
 
     private void apply(IReadOnlyList<LocalReplay> nextReplays)
     {
+        if (workspace is not null && renderedAnalysisCount == analyses.Count && allReplays.SequenceEqual(nextReplays))
+        {
+            refreshPracticeProgress();
+            loadingOverlay.HideLoading();
+            return;
+        }
+        Guid? selectedScoreId = workspace?.SelectedRun?.ScoreId;
         allReplays = nextReplays;
+        if (coachingMapRun is { } selectedMapRun)
+            coachingMapRun = nextReplays.FirstOrDefault(r => r.ScoreId == selectedMapRun.ScoreId) ?? selectedMapRun;
         practiceWorkspace?.SetSourceHistory(nextReplays);
         refreshPracticeProgress();
         modDropdown.SetScores(nextReplays);
-        workspace = buildWorkspace();
+        workspace = buildWorkspace(selectedScoreId);
         replays = workspace.History;
         renderedAnalysisCount = analyses.Count;
         invalidatePracticeCandidates();
@@ -905,7 +947,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             if (replay is null) continue;
             runList.Add(new CoachingMapRow(replay.Title, replay.Difficulty,
                 $"{replay.Accuracy:P2} accuracy  ·  {replay.MissCount} misses  ·  {ScoreMods.Display(replay)}  ·  {replay.PlayedAt.ToLocalTime():dd MMM, HH:mm}",
-                "Open coaching", () => chooseCoachingRun(replay.ScoreId)));
+                "Open coaching", () => openCoachingRun(replay)));
         }
     }
 

@@ -25,6 +25,19 @@ public sealed class HubPublicAccountScoreHistoryServiceTests
         """;
 
     [Test]
+    public async Task StableScoringIdentitySurvivesPublicHistoryAndCoachingConversion()
+    {
+        var json = JsonNode.Parse(payload)!;
+        json["items"]![0]!["ppCalculation"] = new JsonObject { ["lazer"] = false };
+        using var client = new HttpClient(new Handler((_, _) => Task.FromResult(response(json.ToJsonString()))));
+        var result = await create(client).FetchAccountAsync();
+        var run = ScoreHistoryMerger.MergeAsLocalReplays([], result.Scores).Single();
+        Assert.That(run.LegacyScore, Is.True);
+        Assert.That(run.IsLocallyStored, Is.False);
+        Assert.That(AimMod.Desktop.Practice.PracticeProgressTracker.Stable(run), Is.True);
+    }
+
+    [Test]
     public async Task MapsPublicProfileAndScoresWithoutClaimingLocalReplayOrCompleteHistory()
     {
         using var client = new HttpClient(new Handler((request, _) =>

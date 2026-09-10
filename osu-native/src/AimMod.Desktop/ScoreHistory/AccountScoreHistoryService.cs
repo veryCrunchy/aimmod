@@ -256,6 +256,7 @@ public static class ScoreHistoryMerger
                     OnlineScoreId = entry.OnlineScoreId,
                     OnlineBeatmapId = entry.OnlineBeatmapId > 0 ? entry.OnlineBeatmapId : local.OnlineBeatmapId,
                     IsLocallyStored = true,
+                    LegacyScore = entry.LegacyScore,
                 };
             }
 
@@ -279,7 +280,7 @@ public static class ScoreHistoryMerger
                 false,
                 OnlineScoreId: entry.OnlineScoreId,
                 IsLocallyStored: false,
-                OnlineBeatmapId: entry.OnlineBeatmapId, ModsJson: entry.ModsJson, Passed: entry.Passed ?? true);
+                OnlineBeatmapId: entry.OnlineBeatmapId, ModsJson: entry.ModsJson, Passed: entry.Passed ?? true, LegacyScore: entry.LegacyScore);
         }).ToArray();
     }
 

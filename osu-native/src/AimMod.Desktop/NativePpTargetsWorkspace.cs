@@ -1779,8 +1779,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             BackgroundColour = AimModPalette.Panel;
 
             Colour4 difficultyColour = AimModVisualStyle.DifficultyColour(candidate.StarRating);
-            string expected = candidate.Learning is { } learning ? $"{learning.FirstTryPp:0}"
-                : candidate.ExpectedEarnedPp is { } earned ? $"{earned:0}" : "-";
+            string expected = candidate.DisplayedExpectedPp is { } expectedPp ? $"{expectedPp:0}" : "-";
             string maximum = candidate.Estimate is null ? "-" : $"{candidate.Estimate.RealisticMaximumPp:0}";
             bool calculated = candidate.Estimate?.Method.StartsWith("Official osu! ruleset", StringComparison.Ordinal) == true;
             string confidence = calculated ? "PP ready" : "PP pending";
@@ -1841,13 +1840,13 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                         confidenceDetails = truncatingText(
                             $"{candidate.ReadinessLabel}{(candidate.PassEstimate is null ? string.Empty : $"   /   {personalPass}")}{gain}",
                             9, candidate.EvidenceTier == 2 ? AimModPalette.Success : AimModPalette.Muted, "SemiBold"),
-                        patternDetails = truncatingText(candidate.ExpectedEarnedPp is null
-                            ? "Max PP is a full-combo ceiling, not a prediction you can complete this map."
+                        patternDetails = truncatingText(candidate.IsConditionalPp
+                            ? "PP for your projected score if passed. Pass chance needs more history."
                             : $"{skillLabel} / {patternSummary}", 10, AimModPalette.Muted),
                     },
                 },
-                expectedMetric = metric(candidate.Learning is { } prediction ? prediction.PreviousTries > 0 ? "NEXT TRY PP" : "FIRST TRY PP" : "EXPECTED PP", expected, AimModPalette.Cyan,
-                    candidate.Learning is not null ? "low confidence" : candidate.Estimate is null ? "pending" : candidate.ExpectedEarnedPp is not null ? "per attempt" : candidate.ReadinessLabel),
+                expectedMetric = metric(candidate.ExpectedPpCaption, expected, AimModPalette.Cyan,
+                    candidate.Learning is not null ? "low confidence" : candidate.Estimate is null ? "pending" : candidate.IsConditionalPp ? "projected score" : "per attempt"),
                 maximumMetric = metric(priorityCaption, priorityValue, Colour4.FromHex("FFD45A"), priorityDetail),
                 new Container
                 {

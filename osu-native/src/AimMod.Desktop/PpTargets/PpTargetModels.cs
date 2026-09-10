@@ -109,6 +109,12 @@ public sealed record PpTargetCandidate(
     PpTargetLearningForecast? Learning = null)
 {
     public double? FirstAttemptPp => Learning?.FirstTryPp ?? ExpectedEarnedPp;
+    // Display a calculated score even when stable history cannot establish pass frequency.
+    // Ranking, reward and per-attempt filters still require FirstAttemptPp evidence.
+    public double? DisplayedExpectedPp => FirstAttemptPp ?? Estimate?.ExpectedPp;
+    public bool IsConditionalPp => FirstAttemptPp is null && Estimate is not null;
+    public string ExpectedPpCaption => Learning is { } learning ? learning.PreviousTries > 0 ? "NEXT TRY PP" : "FIRST TRY PP"
+        : IsConditionalPp ? "PP IF PASSED" : "EXPECTED PP";
     // An exact PP calculation is conditional on a completed score, not proof of a pass.
     public double? ExpectedEarnedPp => Estimate is { } pp && PassEstimate is { } pass
         && (string.Equals(Status, "ranked", StringComparison.OrdinalIgnoreCase) || string.Equals(Status, "approved", StringComparison.OrdinalIgnoreCase))

@@ -9,6 +9,25 @@ namespace AimMod.Desktop.Tests;
 public sealed class PpTargetEngineTests
 {
     [Test]
+    public void StableTargetsDisplayCalculatedPpWithoutInventingPassChanceOrAccountGain()
+    {
+        var profile = profileWithHistory() with { LegacyScore = true };
+        var estimate = new PpTargetEstimate(180, 250, new(140, 210), 1, PpTargetConfidence.Low, "Official osu! ruleset") { LegacyScore = true };
+        var result = PpTargetRanker.Rank(profile, [set(1, "ranked", difficulty(10, 5.2))],
+            exactEstimates: new Dictionary<int, PpTargetEstimate> { [10] = estimate });
+        var target = result.Candidates.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(target.DisplayedExpectedPp, Is.EqualTo(180));
+            Assert.That(target.ExpectedPpCaption, Is.EqualTo("PP IF PASSED"));
+            Assert.That(target.FirstAttemptPp, Is.Null);
+            Assert.That(target.EstimatedAccountGainPp, Is.Null);
+            Assert.That(target.PassEstimate, Is.Null);
+            Assert.That((target with { Estimate = null }).DisplayedExpectedPp, Is.Null);
+        });
+    }
+
+    [Test]
     public void FailedAndAssistedRunsCannotInflateCompletedPerformance()
     {
         var profile = PpTargetPreferenceProfiler.Build([

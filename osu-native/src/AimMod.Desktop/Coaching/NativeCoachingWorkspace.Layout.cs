@@ -78,9 +78,15 @@ public partial class NativeCoachingWorkspace
 
     private void chooseCoachingRun(Guid scoreId)
     {
-        coachingTargetScoreId = scoreId;
+        if (allReplays.FirstOrDefault(r => r.ScoreId == scoreId) is { } run) openCoachingRun(run);
+    }
+
+    private void openCoachingRun(LocalReplay run)
+    {
+        // Keep the row's play even when a refresh completes between display and click.
+        coachingTargetScoreId = run.ScoreId;
         renderSession(workspace ?? buildWorkspace());
-        openCoachingMap(null, allReplays.FirstOrDefault(r => r.ScoreId == scoreId));
+        openCoachingMap(null, run);
     }
 
     private static bool eligibleForCoaching(LocalReplay run) => run.Passed && ScoreMods.IsManualPlay(run)

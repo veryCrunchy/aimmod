@@ -20,14 +20,9 @@ public partial class NativeCoachingWorkspace
         {
             try
             {
-                await Task.Delay(TimeSpan.FromSeconds(30),token).ConfigureAwait(false);
-                int account=practiceAccountId();
-                var history=await StatisticsHistoryLoader.LoadAsync(source,token).ConfigureAwait(false);
-                var result=await practiceLibrary!.RunAsync(()=>loadSavedPracticeSets(history.Runs,account),token).ConfigureAwait(false);
-                if (!IsDisposed) Schedule(()=> {
-                    if (IsDisposed || account!=practiceAccountId()) return;
-                    allReplays=history.Runs; practiceSets=result; practiceHistoryFailed=false; renderPracticeHistory();
-                });
+                await Task.Delay(TimeSpan.FromSeconds(15),token).ConfigureAwait(false);
+                // The visible play list, selected map and saved sets must share the same merged history.
+                if (!IsDisposed) Schedule(RefreshHistory);
             }
             catch(OperationCanceledException) when(token.IsCancellationRequested) { return; }
             catch(Exception)

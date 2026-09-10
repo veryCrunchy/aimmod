@@ -52,7 +52,7 @@ public partial class NativePpTargetsWorkspace
             else lines.Add("Learning target unavailable: more recorded retry sessions with comparable patterns and PP results are needed.");
             lines.Add(target.ExpectedEarnedPp is { } earned
                 ? $"Expected per attempt: {earned:0.0} PP. Projected score weighted by estimated pass chance; failed attempts earn no PP."
-                : "Expected PP unavailable: not enough comparable completion and score evidence.");
+                : "A per-attempt PP estimate needs more comparable completed and failed plays.");
             lines.Add($"PP if the projected score is completed: {pp.ExpectedPp:0.0} ({pp.ExpectedPpRange.Minimum:0.0}-{pp.ExpectedPpRange.Maximum:0.0}). This is conditional, not a pass prediction.");
             lines.Add($"100% FC ceiling: {pp.RealisticMaximumPp:0.0} PP");
             lines.Add(pp.PatternPrediction?.ExpectedAccuracy is { } accuracy
