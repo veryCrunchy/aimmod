@@ -5,8 +5,11 @@
     <StartupObject>AimMod.Desktop.Program</StartupObject>
     <Description>Native AimMod desktop shell.</Description>
     <ApplicationIcon>Resources/Brand/aimmod.ico</ApplicationIcon>
+    <AimModTwitchClientId Condition="'$(AimModTwitchClientId)' == ''">$(AIMMOD_TWITCH_CLIENT_ID)</AimModTwitchClientId>
+    <AimModTwitchClientId Condition="'$(AimModTwitchClientId)' == ''">oux2ceretxv9ojshojyw8byrf5mswq</AimModTwitchClientId>
   </PropertyGroup>
   <ItemGroup>
+    <AssemblyMetadata Include="TwitchClientId" Value="$(AimModTwitchClientId)" Condition="'$(AimModTwitchClientId)' != ''" />
     <PackageReference Include="Microsoft.Playwright" Version="1.62.0" />
     <PackageReference Include="OsuParsers" Version="1.7.2" />
     <PackageReference Include="ppy.osu.Game" Version="2026.730.0" />

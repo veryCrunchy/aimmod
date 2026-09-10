@@ -14,6 +14,15 @@ public static class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        if (args is ["--creator-test", var configuration])
+        {
+            try { return runCreatorTest(Creator.CreatorTestInstance.LoadAsync(configuration).GetAwaiter().GetResult()); }
+            catch (Exception error) when (error is IOException or ArgumentException or System.Text.Json.JsonException or HttpRequestException)
+            {
+                Console.Error.WriteLine($"Creator instance could not start: {error.Message}");
+                return 1;
+            }
+        }
         if (args is ["--worker"])
             return WorkerProtocolHost.RunConsoleAsync().GetAwaiter().GetResult();
 
@@ -31,7 +40,21 @@ public static class Program
         return runDesktop(args);
     }
 
-    internal static bool ShouldRunVelopackBootstrap(string[] args) => args is not ["--worker"] and not ["--probe"];
+    internal static bool ShouldRunVelopackBootstrap(string[] args) => args is not ["--worker"] and not ["--probe"] and not ["--creator-test", _];
+
+    private static int runCreatorTest(Creator.CreatorTestInstance instance)
+    {
+        using DesktopGameHost host = Host.GetSuitableDesktopHost(instance.StorageName, new HostOptions
+        {
+            FriendlyGameName = $"AimMod - {instance.Player} creator test",
+            IPCPipeName = instance.StorageName,
+        });
+        host.Run(new AimModGame(AimModLaunchOptions.Home, new LocalLibrary.InMemoryLocalLibrarySource([], instance.Scores))
+        {
+            CreatorTest = instance,
+        });
+        return 0;
+    }
 
     private static int runDesktop(string[] args)
     {

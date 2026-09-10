@@ -6,7 +6,7 @@ using NUnit.Framework;
 namespace AimMod.Osu.Runtime.Tests;
 
 [TestFixture]
-public sealed class OfficialOsuApiClientTests
+public sealed partial class OfficialOsuApiClientTests
 {
     private const string access_token = "private-access-token";
     private string temporaryDirectory = null!;

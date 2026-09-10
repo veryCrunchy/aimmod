@@ -20,7 +20,8 @@ public partial class AimModGame
     private OsuClientSettingsScreen createUserSettings(bool inSetup=false) => new(
         beatmapDestinationService!,hubDeviceLinkClient,hubCredentialStore,hubUploadQueue,hubSharingPreferenceStore,
         openHubUrl,copyHubText,new AutomaticPracticeStore(Storage.GetFullPath("practice-maps",true)),userSetupStore,
-        inSetup?null:showUserSetup,()=>playTheme(true), inline:inSetup, trainingStatus:()=>hubTrainingSyncService?.Status ?? "Training sync is unavailable.");
+        inSetup?null:showUserSetup,()=>playTheme(true), inline:inSetup, trainingStatus:()=>hubTrainingSyncService?.Status ?? "Training sync is unavailable.",
+        creatorSettings: inSetup ? null : new Creator.CreatorSettingsPanel(creatorSettingsStore, creatorToolsEnabled, setCreatorToolsEnabled, showCreatorTools));
 
     private void showFirstRunSetup()
     {

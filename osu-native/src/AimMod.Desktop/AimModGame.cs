@@ -64,6 +64,8 @@ public partial class AimModGame : OsuGameBase
     private HomeScreen? homeScreen;
     private NativeBeatmapDiscoveryScreen? beatmapsScreen;
     private NativeReplayRouteView? replayRoute;
+    private Creator.FootageLibraryStore? footageLibraryStore;
+    private Creator.TwitchVodDiscovery? twitchVodDiscovery;
     private NativeStatisticsWorkspace? statisticsScreen;
     private CancellationTokenSource? replayAnalysisLifetime;
     private CancellationTokenSource? replayLibraryAnalysisLifetime;
@@ -149,6 +151,26 @@ public partial class AimModGame : OsuGameBase
     }
 
     internal AimModLinkInbox? LinkInbox { get; init; }
+    internal Creator.CreatorTestInstance? CreatorTest { get; init; }
+    private Creator.TimestampThumbnailService? timestampThumbnails;
+    private bool creatorToolsEnabled;
+    private Creator.CreatorSettingsStore creatorSettingsStore => new(Storage.GetFullPath("creator/settings.json", true));
+
+    private void setCreatorToolsEnabled(bool enabled)
+    {
+        creatorToolsEnabled = enabled;
+        replayRoute?.SuspendPlayback();
+        if (workspaceHosts.Remove(NativeRoute.Replays, out var previous)) content.Remove(previous, true);
+        replayRoute = null;
+        if (!enabled) { twitchVodDiscovery?.Dispose(); twitchVodDiscovery = null; }
+    }
+
+    private void showCreatorTools()
+    {
+        if (!creatorToolsEnabled) return;
+        showReplays();
+        replayRoute?.OpenFootage();
+    }
 
     public override void SetHost(GameHost host)
     {
@@ -191,6 +213,7 @@ public partial class AimModGame : OsuGameBase
     protected override void LoadComplete()
     {
         base.LoadComplete();
+        creatorToolsEnabled = CreatorTest is not null || creatorSettingsStore.Load();
         UseDesktopMouseCoordinates(Host.AvailableInputHandlers);
 
         replayAnalysisCache = new ReplayAnalysisCache(Storage.GetFullPath("cache/replay-analysis-v1.json", true));
@@ -247,7 +270,7 @@ public partial class AimModGame : OsuGameBase
         updateService = configuredUpdateService ?? new NativeUpdateService(
             new FileNativeUpdatePreferenceStore(Storage.GetFullPath("update-channel.txt", true)),
             new VelopackUpdateBackendFactory());
-        _ = Task.Run(updateService.CheckAsync);
+        if (CreatorTest is null) _ = Task.Run(updateService.CheckAsync);
 
         // An injected library is an isolated host (tests and visual capture) and must not
         // discover or mutate the user's live lazer session.
@@ -272,6 +295,20 @@ public partial class AimModGame : OsuGameBase
             return;
         }
 
+        if (CreatorTest is { } creator)
+        {
+            Host.Window!.Title = $"AimMod - {creator.Player} creator test";
+            header.SetCreatorTestPlayer(creator.Player);
+            footageLibraryStore = new Creator.FootageLibraryStore(Storage.GetFullPath("creator/footage-v1.json", true));
+            var workspace = new Creator.NativeFootageWorkspace(localLibrary, footageLibraryStore, showReplays,
+                openHubUrl, copyHubText, (address, _) => Task.FromResult(creator.Scores.FirstOrDefault(s => s.OnlineScoreId == address.Id && address.LegacyRuleset is null)
+                    ?? throw new InvalidOperationException("This score is outside the loaded public score window.")),
+                creator.Scores.FirstOrDefault(), twitchVodDiscovery ??= createTwitchVodDiscovery(),
+                new Creator.FootageChannel(creator.Player, creator.Channel),
+                timestampThumbnails ??= new(Storage.GetFullPath("creator/thumbnails", true)));
+            switchWorkspaceRoute(NativeRoute.Replays, workspace);
+            return;
+        }
         showHome();
         if(configuredLocalLibrary is null)Scheduler.AddDelayed(playStartupTheme, 600);
         Scheduler.AddDelayed(tickAutomaticPractice, 15_000, true);
@@ -687,12 +724,44 @@ public partial class AimModGame : OsuGameBase
             copyHubText,
             openBeatmapPractice,
             openReplayBeatmap,
-            () => localScorePpHydrationService)
+            () => localScorePpHydrationService,
+            creatorToolsEnabled ? (score, back) => new Creator.NativeFootageWorkspace(localLibrary,
+                footageLibraryStore ??= new Creator.FootageLibraryStore(Storage.GetFullPath("creator/footage-v1.json", true)),
+                back, openHubUrl, copyHubText, async (address, token) =>
+                {
+                    if (CreatorTest is { } creator)
+                        return creator.Scores.FirstOrDefault(s => s.OnlineScoreId == address.Id && address.LegacyRuleset is null)
+                            ?? throw new InvalidOperationException("This score is outside the loaded public score window.");
+                    OfficialOsuApiClient? client = officialApiClient;
+                    if (client is null)
+                        throw new InvalidOperationException("Connect your osu! online session to look up a score link. You can also choose a saved local play.");
+                    var payload = await client.FetchScoreAsync(address, token).ConfigureAwait(false);
+                    return Creator.FootageScoreLookup.Parse(payload, address);
+                }, score, twitchVodDiscovery ??= createTwitchVodDiscovery(),
+                CreatorTest is { } test ? new Creator.FootageChannel(test.Player, test.Channel) : null,
+                timestampThumbnails ??= new(Storage.GetFullPath("creator/thumbnails", true)),
+                CreatorTest is null ? new Creator.CreatorAccountAccess(() => currentOsuProfile, async token =>
+                {
+                    var account = currentOsuProfile ?? throw new InvalidOperationException("Connect your osu! account in Settings first.");
+                    var service = accountScoreHistoryService ?? throw new InvalidOperationException("Your osu! score history is not connected yet.");
+                    var result = await service.FetchAccountAsync(token).ConfigureAwait(false);
+                    if (currentOsuProfile?.UserId != account.UserId) throw new InvalidOperationException("Your osu! account changed. Refresh your scores.");
+                    return result;
+                }, showSettings) : null) : null)
         {
             RelativeSizeAxes = Axes.Both,
         };
         switchWorkspaceRoute(NativeRoute.Replays, replayRoute);
         startReplayLibraryAnalysis();
+    }
+
+    private Creator.TwitchVodDiscovery createTwitchVodDiscovery()
+    {
+        string clientId = Environment.GetEnvironmentVariable("AIMMOD_TWITCH_CLIENT_ID")
+            ?? typeof(AimModGame).Assembly.GetCustomAttributes<System.Reflection.AssemblyMetadataAttribute>()
+                .FirstOrDefault(a => a.Key == "TwitchClientId")?.Value ?? "";
+        return new(new Creator.TwitchConnection(clientId,
+            new Creator.TwitchCredentialStore(Storage.GetFullPath("creator/twitch-connection.bin", true))));
     }
 
     private void showSkins()
@@ -1663,6 +1732,7 @@ public partial class AimModGame : OsuGameBase
         updateService?.Dispose();
         hubUploadQueue?.Dispose();
         hubHttpClient?.Dispose();
+        twitchVodDiscovery?.Dispose();
         onlineSkinCatalog?.Dispose();
         appLifetime.Dispose();
         base.Dispose(isDisposing);
@@ -1761,6 +1831,12 @@ public partial class AimModGame : OsuGameBase
         {
             verifiedProfile = profile;
             updateAccountLabel();
+        }
+
+        public void SetCreatorTestPlayer(string player)
+        {
+            sessionState.Text = $"{player} · public scores";
+            sessionState.Colour = AimModPalette.Cyan;
         }
 
         public void SetProfilePreference(OsuProfile? profile)

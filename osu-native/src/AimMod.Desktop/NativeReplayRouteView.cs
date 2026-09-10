@@ -33,6 +33,9 @@ public partial class NativeReplayRouteView : Container
     private readonly Drawable inspectorPanel;
     private readonly AimModButton detailsToggle;
     private bool compactDetailsOpen;
+    private bool footageOpen;
+    private AimModButton? footageButton;
+    public void OpenFootage() => footageButton?.Action?.Invoke();
 
     public OsuScreenStack ScreenStack { get; } = new() { RelativeSizeAxes = Axes.Both };
 
@@ -98,7 +101,8 @@ public partial class NativeReplayRouteView : Container
         Action<string>? copyText = null,
         Action<string>? openPractice = null,
         Func<LocalReplay, CancellationToken, Task>? openBeatmap = null,
-        Func<ILocalScorePpHydrationService?>? ppHydrator = null)
+        Func<ILocalScorePpHydrationService?>? ppHydrator = null,
+        Func<LocalReplay?, Action, Drawable>? footageFactory = null)
     {
         this.source = source;
         this.ppHydrator = ppHydrator;
@@ -382,6 +386,28 @@ public partial class NativeReplayRouteView : Container
         Add(detailsToggle = new AimModButton("Run details", () => compactDetailsOpen = !compactDetailsOpen) {
             Anchor = Anchor.TopRight, Origin = Anchor.TopRight,
         });
+        if (footageFactory is not null)
+        {
+            Drawable? footage = null;
+            Add(footageButton = new AimModButton("Find footage", () =>
+            {
+                if (footage is not null) return;
+                SuspendPlayback();
+                var previousVisibility = Children.ToDictionary(child => child, child => child.Alpha);
+                foreach (Drawable child in previousVisibility.Keys) child.Hide();
+                footageOpen = true;
+                footage = footageFactory(selectedReplay, () =>
+                {
+                    if (footage is null) return;
+                    Remove(footage, true);
+                    footage = null;
+                    footageOpen = false;
+                    foreach (var child in previousVisibility) child.Key.Alpha = child.Value;
+                });
+                footage.Depth = -100;
+                Add(footage);
+            }) { Anchor = Anchor.TopRight, Origin = Anchor.TopRight, Y = 40 });
+        }
         Add(new Container { RelativeSizeAxes = Axes.Both, Padding = new MarginPadding { Top = 80 },
             Child = new Container { RelativeSizeAxes = Axes.Both, Children = body } });
         analysisTitle.Text = "No replay selected";
@@ -410,6 +436,7 @@ public partial class NativeReplayRouteView : Container
     protected override void Update()
     {
         base.Update();
+        if (footageOpen) { SuspendPlayback(); return; }
         bool wide = DrawWidth >= 1120;
         bool showInspector = wide || compactDetailsOpen;
         float leftWidth = wide ? browser_width : 240;

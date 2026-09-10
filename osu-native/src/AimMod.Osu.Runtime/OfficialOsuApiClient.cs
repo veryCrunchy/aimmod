@@ -6,7 +6,7 @@ using System.Text.Json.Serialization;
 
 namespace AimMod.Osu.Runtime;
 
-public sealed class OfficialOsuApiClient : IDisposable
+public sealed partial class OfficialOsuApiClient : IDisposable
 {
     private const int maximum_response_bytes = 1024 * 1024;
     private const int maximum_scores_response_bytes = 8 * 1024 * 1024;
