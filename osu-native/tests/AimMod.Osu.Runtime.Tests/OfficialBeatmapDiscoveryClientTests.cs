@@ -29,6 +29,23 @@ public sealed class OfficialBeatmapDiscoveryClientTests
     }
 
     [Test]
+    public async Task PublicDifficultyDownloadNeedsNoSessionMonitor()
+    {
+        const string beatmap = "osu file format v14\n[Metadata]\nBeatmapID:456\n";
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(beatmap, Encoding.UTF8, "text/plain"),
+        });
+        using var client = new OfficialBeatmapDiscoveryClient(handler);
+        Assert.That((await client.SearchAsync(new())).Status, Is.EqualTo(OfficialBeatmapRequestStatus.SessionUnavailable));
+        var result = await client.DownloadDifficultyAsync(456, temporaryDirectory);
+        Assert.That(result.Status, Is.EqualTo(OfficialBeatmapRequestStatus.Success));
+        Assert.That(await File.ReadAllTextAsync(result.BeatmapPath!), Is.EqualTo(beatmap));
+        Assert.That(handler.Requests, Has.Count.EqualTo(1));
+        Assert.That(handler.Requests[0].Authorization, Is.Null);
+    }
+
+    [Test]
     public async Task SearchesOfficialStandardCatalogAndReturnsGroupedFilteredSets()
     {
         await writeSignedInSessionAsync("crunchy", access_token);

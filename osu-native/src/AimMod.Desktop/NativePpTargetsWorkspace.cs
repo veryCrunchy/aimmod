@@ -933,21 +933,24 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         if (currentClient is null)
         {
             connectionAttempts++;
-            status.Text = connectionAttempts < 10 ? "Connecting to osu!lazer..." : "A signed-in osu!lazer session is required for map suggestions.";
-            showRefresh("Waiting for the signed-in osu! session", 0, 0);
+            status.Text = connectionAttempts < 10 ? "Preparing the beatmap catalog..." : "The beatmap catalog could not be prepared. Try refreshing.";
+            showRefresh("Preparing beatmap search", 0, 0);
             if (!hasVisibleSnapshot)
             {
                 workspaceState.ShowState(
-                    connectionAttempts < 10 ? FontAwesome.Solid.Link : FontAwesome.Solid.SignInAlt,
-                    connectionAttempts < 10 ? "Connecting to osu!" : "Sign in to osu!lazer",
+                    connectionAttempts < 10 ? FontAwesome.Solid.Link : FontAwesome.Solid.ExclamationTriangle,
+                    connectionAttempts < 10 ? "Preparing recommendations" : "Suggestions unavailable",
                     connectionAttempts < 10
-                        ? "Waiting for your osu!lazer session before searching for beatmaps."
-                        : "Open osu!lazer and sign in, then refresh to build your recommendations.");
+                        ? "Getting ready to search for beatmaps."
+                        : "Try refreshing to load your recommendations.");
             }
             if (connectionAttempts < 10)
                 scheduledSearch = Scheduler.AddDelayed(startCatalogSearch, 1000);
             else
+            {
+                catalogScanRunning = false;
                 hideRefresh();
+            }
             return;
         }
 
@@ -1545,11 +1548,10 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
 
     private static string failureMessage(OfficialBeatmapRequestStatus requestStatus) => requestStatus switch
     {
-        OfficialBeatmapRequestStatus.SignedOut => "Sign in to osu!lazer to load PP target suggestions.",
-        OfficialBeatmapRequestStatus.TokenExpired => "The osu! session is refreshing. Try again shortly.",
-        OfficialBeatmapRequestStatus.NetworkError => "AimMod could not reach the osu! catalog.",
-        OfficialBeatmapRequestStatus.ServerError => "osu! could not complete the target search.",
-        _ => "A usable osu!lazer session is required for PP target suggestions.",
+        OfficialBeatmapRequestStatus.NetworkError => "The beatmap catalog could not be reached. Check your connection and refresh.",
+        OfficialBeatmapRequestStatus.RateLimited => "The beatmap catalog is busy. Wait a moment, then refresh.",
+        OfficialBeatmapRequestStatus.ServerError => "The beatmap catalog is temporarily unavailable. Try refreshing shortly.",
+        _ => "Beatmap suggestions could not be loaded. Try refreshing.",
     };
 
     private static OsuBestScoresFetchStatus mapProfileStatus(OsuProfileFetchStatus status) => status switch

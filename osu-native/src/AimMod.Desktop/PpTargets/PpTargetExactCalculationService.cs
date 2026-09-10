@@ -122,9 +122,10 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
                                      .Cast<string>()
                                      .Distinct(StringComparer.OrdinalIgnoreCase)
                                      .ToArray();
-            await using SidecarRuntimeClient? runtime = hashes.Length == 0 ? null : runtimeFactory();
+            bool resolveLazerFiles = hashes.Length > 0 && File.Exists(Path.Combine(libraryRoot, "client.realm"));
+            await using SidecarRuntimeClient? runtime = resolveLazerFiles ? runtimeFactory() : null;
 
-            await using ExternalLazerAssetStagingLease? lease = hashes.Length == 0
+            await using ExternalLazerAssetStagingLease? lease = !resolveLazerFiles
                 ? null
                 : await new ExternalLazerAssetClient(new SidecarRuntimeRequestClient(runtime!)).ResolveToPrivateStagingAsync(
                     libraryRoot,

@@ -17,8 +17,14 @@ public sealed class OfficialBeatmapDiscoveryClient : IOfficialBeatmapDiscoveryCl
     private static readonly Uri search_endpoint = new("https://osu.ppy.sh/api/v2/beatmapsets/search", UriKind.Absolute);
     private static readonly JsonSerializerOptions json_options = new(JsonSerializerDefaults.Web);
 
-    private readonly LazerSessionMonitor session;
+    private readonly LazerSessionMonitor? session;
     private readonly HttpClient httpClient;
+
+    // Individual .osu files are public and do not require a lazer installation.
+    public OfficialBeatmapDiscoveryClient()
+        : this(OfficialOsuApiClient.CreateProductionHandler())
+    {
+    }
 
     public OfficialBeatmapDiscoveryClient(LazerSessionMonitor session)
         : this(session, OfficialOsuApiClient.CreateProductionHandler())
@@ -26,8 +32,13 @@ public sealed class OfficialBeatmapDiscoveryClient : IOfficialBeatmapDiscoveryCl
     }
 
     internal OfficialBeatmapDiscoveryClient(LazerSessionMonitor session, HttpMessageHandler handler)
+        : this(handler)
     {
         this.session = session ?? throw new ArgumentNullException(nameof(session));
+    }
+
+    internal OfficialBeatmapDiscoveryClient(HttpMessageHandler handler)
+    {
         ArgumentNullException.ThrowIfNull(handler);
         httpClient = new HttpClient(handler, disposeHandler: true)
         {
@@ -41,6 +52,8 @@ public sealed class OfficialBeatmapDiscoveryClient : IOfficialBeatmapDiscoveryCl
     {
         ArgumentNullException.ThrowIfNull(query);
         OfficialBeatmapSearchQuery normalised = query.Normalised();
+        if (session is null)
+            return OfficialBeatmapSearchResult.Empty(OfficialBeatmapRequestStatus.SessionUnavailable);
         LazerSessionState startingState = session.Current;
         using LazerAccessTokenLease? lease = session.TryLeaseAccessToken();
 
@@ -102,6 +115,8 @@ public sealed class OfficialBeatmapDiscoveryClient : IOfficialBeatmapDiscoveryCl
     {
         if (beatmapSetId <= 0)
             throw new ArgumentOutOfRangeException(nameof(beatmapSetId));
+        if (session is null)
+            return OfficialBeatmapSearchResult.Empty(OfficialBeatmapRequestStatus.SessionUnavailable);
         LazerSessionState startingState = session.Current;
         using LazerAccessTokenLease? lease = session.TryLeaseAccessToken();
         if (lease is null || !lease.TryGetAccessToken(out string accessToken))
@@ -139,6 +154,9 @@ public sealed class OfficialBeatmapDiscoveryClient : IOfficialBeatmapDiscoveryCl
         ArgumentException.ThrowIfNullOrWhiteSpace(destinationDirectory);
         if (!Path.IsPathFullyQualified(destinationDirectory))
             throw new ArgumentException("The beatmap download directory must be absolute.", nameof(destinationDirectory));
+
+        if (session is null)
+            return new OfficialBeatmapDownloadResult(OfficialBeatmapRequestStatus.SessionUnavailable);
 
         LazerSessionState startingState = session.Current;
         using LazerAccessTokenLease? lease = session.TryLeaseAccessToken();
@@ -295,7 +313,7 @@ public sealed class OfficialBeatmapDiscoveryClient : IOfficialBeatmapDiscoveryCl
     {
         try
         {
-            await session.RefreshAsync(cancellationToken).ConfigureAwait(false);
+            await session!.RefreshAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (ObjectDisposedException)
         {

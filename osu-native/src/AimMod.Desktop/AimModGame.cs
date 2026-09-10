@@ -85,6 +85,7 @@ public partial class AimModGame : OsuGameBase
     private IAccountScoreHistoryService? stablePublicScoreHistoryService;
     private Uri hubBaseUri = OsuHubSyncClient.DefaultBaseUri;
     private IOfficialBeatmapDiscoveryClient? officialBeatmapDiscoveryClient;
+    private OfficialBeatmapDiscoveryClient? authenticatedBeatmapDiscoveryClient;
     private OnlineBeatmapImportService? onlineBeatmapImportService;
     private ILazerBeatmapInstallService? lazerBeatmapInstallService;
     private IOsuBeatmapDestinationService? beatmapDestinationService;
@@ -357,6 +358,21 @@ public partial class AimModGame : OsuGameBase
                 () => new OsuLazerDiscoveryService(new PhysicalOsuDiscoveryFileSystem()).Discover(platform, environment),
                 cancellationToken).ConfigureAwait(false);
             OsuLazerDataRoot? root = discovery.CompleteDataRoots.FirstOrDefault();
+            // Catalog discovery and public .osu downloads also work for stable-only installations.
+            officialBeatmapDiscoveryClient = new CachedOfficialBeatmapDiscoveryClient(
+                new PublicBeatmapDiscoveryClient(hubHttpClient!, hubBaseUri, () => authenticatedBeatmapDiscoveryClient),
+                Storage.GetFullPath("cache/official-beatmap-search-v1.json", true));
+            ppTargetExactCalculationService = new PpTargetExactCalculationService(
+                root?.CanonicalPath ?? stable?.CanonicalPath ?? Storage.GetFullPath(string.Empty, true),
+                Storage.GetFullPath("cache/pp-target-exact-v2.json", true),
+                (IOfficialBeatmapDifficultyClient)officialBeatmapDiscoveryClient,
+                Storage.GetFullPath("downloads/pp-target-difficulties", true));
+            onlineBeatmapImportService = new OnlineBeatmapImportService(
+                officialBeatmapDiscoveryClient,
+                BeatmapManager,
+                Storage.GetFullPath("downloads/beatmaps", true),
+                localLibrary,
+                beatmapDestinationService);
             if (root is null)
             {
                 Schedule(() =>
@@ -415,20 +431,7 @@ public partial class AimModGame : OsuGameBase
                 cancellationToken).ConfigureAwait(false);
             lazerSessionMonitor = monitor;
             officialApiClient = new OfficialOsuApiClient(monitor);
-            officialBeatmapDiscoveryClient = new CachedOfficialBeatmapDiscoveryClient(
-                new OfficialBeatmapDiscoveryClient(monitor),
-                Storage.GetFullPath("cache/official-beatmap-search-v1.json", true));
-            ppTargetExactCalculationService = new PpTargetExactCalculationService(
-                root.CanonicalPath,
-                Storage.GetFullPath("cache/pp-target-exact-v2.json", true),
-                (IOfficialBeatmapDifficultyClient)officialBeatmapDiscoveryClient,
-                Storage.GetFullPath("downloads/pp-target-difficulties", true));
-            onlineBeatmapImportService = new OnlineBeatmapImportService(
-                officialBeatmapDiscoveryClient,
-                BeatmapManager,
-                Storage.GetFullPath("downloads/beatmaps", true),
-                localLibrary,
-                beatmapDestinationService);
+            authenticatedBeatmapDiscoveryClient = new OfficialBeatmapDiscoveryClient(monitor);
             monitor.StateChanged += lazerSessionChanged;
             Schedule(() => applyLazerSessionState(monitor.Current));
         }
@@ -1643,6 +1646,7 @@ public partial class AimModGame : OsuGameBase
         skinApplyLifetime?.Dispose();
         officialApiClient?.Dispose();
         (officialBeatmapDiscoveryClient as IDisposable)?.Dispose();
+        authenticatedBeatmapDiscoveryClient?.Dispose();
         if (lazerSessionMonitor is not null)
         {
             lazerSessionMonitor.StateChanged -= lazerSessionChanged;

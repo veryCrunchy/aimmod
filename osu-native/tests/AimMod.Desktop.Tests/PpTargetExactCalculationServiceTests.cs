@@ -25,6 +25,22 @@ public sealed class PpTargetExactCalculationServiceTests
     }
 
     [Test]
+    public async Task StableOnlyCalculationWithKnownHashDownloadsWithoutResolvingLazerDatabase()
+    {
+        const int id = 459;
+        string beatmap = createBeatmap(id);
+        string hash = Convert.ToHexString(System.Security.Cryptography.MD5.HashData(System.Text.Encoding.UTF8.GetBytes(beatmap))).ToLowerInvariant();
+        var download = new StubDifficultyClient(id, beatmap);
+        var service = new PpTargetExactCalculationService(temporaryDirectory, Path.Combine(temporaryDirectory, "stable.json"),
+            download, Path.Combine(temporaryDirectory, "downloads"), () => SidecarRuntimeClient.Start(desktopExecutablePath()));
+        Assert.That(File.Exists(Path.Combine(temporaryDirectory, "client.realm")), Is.False);
+        var results = await service.CalculateAsync([new(id, hash, [], .96, .7, LegacyScore: true)]);
+        Assert.That(results[id].RealisticMaximumPp, Is.GreaterThan(0));
+        Assert.That(results[id].Features, Is.Not.Null);
+        Assert.That(download.RequestedBeatmapIds, Is.EqualTo(new[] { id }));
+    }
+
+    [Test]
     public void PerformanceCacheTracksScoreInputsButNotStagingPaths()
     {
         var request = new PpWhatIfRequest("stage", "map.osu", ["HD"], .98);
