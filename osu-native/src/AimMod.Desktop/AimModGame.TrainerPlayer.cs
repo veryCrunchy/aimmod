@@ -33,6 +33,7 @@ public partial class AimModGame
         TrainerBeatmap? prepared = null;
         try
         {
+            await refreshTrainerSettingsAsync().ConfigureAwait(false);
             if (settings.Music == "song")
             {
                 var selected = trainersWorkspace?.SelectedSong ?? throw new InvalidOperationException("Choose a song first.");
@@ -46,9 +47,11 @@ public partial class AimModGame
                     if (!path.StartsWith(root, StringComparison.OrdinalIgnoreCase) || !File.Exists(path))
                         throw new IOException("This song's audio could not be found. Reinstall the map in osu! and try again.");
                     if (new FileInfo(path).Length > 100 * 1024 * 1024) throw new IOException("This audio file is too large. Choose another song.");
-                    return (source, bytes: File.ReadAllBytes(path), extension: Path.GetExtension(path));
+                    return (source, bytes: File.ReadAllBytes(path), extension: Path.GetExtension(path),
+                        background: TrainerBackground.Read(root, source.Metadata.BackgroundFile));
                 }).ConfigureAwait(false);
                 prepared = TrainerBeatmap.FromSong(settings, data.source, data.bytes, data.extension, Audio, volume);
+                prepared.SetBackground(data.background, Host.Renderer);
             }
             else prepared = await Task.Run(() => new TrainerBeatmap(settings, Audio, volume)).ConfigureAwait(false);
             var map = prepared;
@@ -79,19 +82,54 @@ public partial class AimModGame
     private void launchPreparedGameplay(TrainerSettings settings, bool mouseButtons, WorkingBeatmap map,
         Action<TrainerResult?> complete, Action release, double seekTime, Action<double>? fadeOutro, Mod[] mods)
     {
+        var previousMap = Beatmap.Value;
+        var previousRuleset = Ruleset.Value;
+        var previousMods = SelectedMods.Value;
+        var cursor = Host.Window?.CursorState;
+        try { launchPreparedGameplayCore(settings, mouseButtons, map, complete, release, seekTime, fadeOutro, mods); }
+        catch (Exception error)
+        {
+            trainerPlayer = null;
+            trainerOverlay?.Expire(); trainerOverlay = null;
+            Beatmap.Value = previousMap; Ruleset.Value = previousRuleset; SelectedMods.Value = previousMods;
+            restoreTrainerSettings?.Invoke();
+            if (cursor is { } state && Host.Window is { } window) window.CursorState = state;
+            content.Show(); header.Show();
+            Scheduler.AddDelayed(release, 1000);
+            logFailure("launch practice player", error);
+            complete(null);
+        }
+    }
+
+    private void launchPreparedGameplayCore(TrainerSettings settings, bool mouseButtons, WorkingBeatmap map,
+        Action<TrainerResult?> complete, Action release, double seekTime, Action<double>? fadeOutro, Mod[] mods)
+    {
         WorkingBeatmap previousMap = Beatmap.Value;
         var previousRuleset = Ruleset.Value;
         var previousMods = SelectedMods.Value;
         double previousOffset = LocalConfig.Get<double>(OsuSetting.AudioOffset);
         bool previousMouse = LocalConfig.Get<bool>(OsuSetting.MouseDisableButtons);
-        var appearance = trainerGameplayPreferences?.Apply(LocalConfig);
-        var input = (trainerOsuSettings?.Input ?? new TrainerInputSettings()).Apply(Host.AvailableInputHandlers);
+        var preferences = new List<IDisposable>();
         restoreTrainerSettings = () =>
         {
             LocalConfig.SetValue(OsuSetting.AudioOffset, previousOffset);
             LocalConfig.SetValue(OsuSetting.MouseDisableButtons, previousMouse);
-            appearance?.Dispose(); input.Dispose(); restoreTrainerSettings = null;
+            foreach (var scope in preferences.AsEnumerable().Reverse()) scope.Dispose();
+            preferences.Clear(); restoreTrainerSettings = null;
         };
+        // Practice must not trigger the embedded client's menu greeting or theme.
+        // Keep these separate from the player's inherited gameplay preferences.
+        var sessionAudio = new TrainerPreferenceScope();
+        preferences.Add(sessionAudio);
+        sessionAudio.Set(LocalConfig.GetBindable<bool>(OsuSetting.MenuVoice), false);
+        sessionAudio.Set(LocalConfig.GetBindable<bool>(OsuSetting.MenuMusic), false);
+        startupChannel?.Stop();
+        MusicController.Stop();
+        var rulesetConfig = Dependencies.Get<osu.Game.Rulesets.IRulesetConfigCache>().GetConfigFor(new OsuRuleset()) as osu.Game.Rulesets.Osu.Configuration.OsuRulesetConfigManager;
+        if (rulesetConfig is not null && trainerRulesetPreferences is not null) preferences.Add(trainerRulesetPreferences.Apply(rulesetConfig));
+        if (trainerGameplayPreferences is not null) preferences.Add(trainerGameplayPreferences.Apply(LocalConfig));
+        if (trainerDisplayPreferences is not null) preferences.Add(trainerDisplayPreferences.Apply(frameworkConfig, LocalConfig, Host.Window));
+        preferences.Add((trainerOsuSettings?.Input ?? new TrainerInputSettings()).Apply(Host.AvailableInputHandlers));
         var stack = new OsuScreenStack { RelativeSizeAxes = Axes.Both };
         var bindings = TrainerSettings.ParseKeys(settings.Keys).Select(k => Enum.Parse<InputKey>(k.ToString())).ToArray();
         var inheritedBindings = settings.Keys == trainerOsuSettings?.Keys && trainerOsuSettings.Bindings is { Count: > 0 } ? trainerOsuSettings.Bindings : null;
@@ -118,7 +156,9 @@ public partial class AimModGame
         if (Host.Window is {} window) window.CursorState |= CursorState.Confined;
         content.Hide(); header.Hide();
         Add(trainerOverlay = new Container { RelativeSizeAxes = Axes.Both, Depth = -100,
-            Children = [new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas }, stack] });
+            Children = [new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas },
+                new osu.Game.Graphics.Containers.ScalingContainer(LocalConfig.Get<ScalingMode>(OsuSetting.Scaling) == ScalingMode.Everything
+                    ? ScalingMode.Everything : ScalingMode.ExcludeOverlays) { Child = stack }] });
         bool finished = false;
         trainerPlayer = new NativeTrainerPlayer(settings, result => Schedule(() =>
         {

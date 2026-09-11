@@ -35,7 +35,7 @@ public partial class AimModGame
                     throw new InvalidOperationException("This map's audio is missing or too large. Reinstall the map or choose another difficulty.");
                 return (map, bytes: File.ReadAllBytes(music), extension: Path.GetExtension(music), directory);
             }, appLifetime.Token).ConfigureAwait(false);
-            prepared = new DtWorkingBeatmap(data.map, data.bytes, data.extension, Audio, data.directory);
+            prepared = new DtWorkingBeatmap(data.map, data.bytes, data.extension, Audio, data.directory, Host.Renderer);
             var working = prepared; var sourceLease = lease;
             Schedule(() =>
             {

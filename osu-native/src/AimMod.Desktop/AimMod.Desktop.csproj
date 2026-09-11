@@ -25,6 +25,7 @@
     <ProjectReference Include="../AimMod.Osu.Worker/AimMod.Osu.Worker.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <EmbeddedResource Include="../../changelogs/*.md" Exclude="../../changelogs/unreleased.md" LogicalName="AimMod.Changelogs.%(Filename).md" />
     <EmbeddedResource Include="Resources/Audio/*.ogg" LogicalName="AimMod.Resources.Audio.%(Filename)%(Extension)" />
     <EmbeddedResource Include="Resources/Audio/*.wav" LogicalName="AimMod.Resources.Audio.%(Filename)%(Extension)" />
     <EmbeddedResource Include="Resources/Skins/creator-releases.json" LogicalName="AimMod.Resources.Skins.creator-releases.json" />

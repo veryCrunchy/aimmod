@@ -33,13 +33,14 @@ public sealed record NativeUpdateState(
     string Title,
     string Detail,
     string? Version = null,
-    int Progress = 0)
+    int Progress = 0,
+    string? ReleaseNotes = null)
 {
     public static NativeUpdateState Initial(NativeUpdateChannel channel) =>
         new(NativeUpdateStage.Idle, channel, "App updates", "Ready to check for updates.");
 }
 
-public sealed record NativeUpdateRelease(string Version, object Handle);
+public sealed record NativeUpdateRelease(string Version, object Handle, string? ReleaseNotes = null);
 
 public static class NativeUpdateFeeds
 {
@@ -181,7 +182,8 @@ public sealed class VelopackUpdateBackendFactory : INativeUpdateBackendFactory
             UpdateInfo? update = await manager.CheckForUpdatesAsync().ConfigureAwait(false);
             return update is null
                 ? null
-                : new NativeUpdateRelease(update.TargetFullRelease.Version.ToString(), update);
+                : new NativeUpdateRelease(update.TargetFullRelease.Version.ToString(), update,
+                    NativeReleaseNotes.Normalise(update.TargetFullRelease.NotesMarkdown));
         }
 
         public Task DownloadAsync(NativeUpdateRelease release, Action<int> progress, CancellationToken cancellationToken) =>
@@ -281,13 +283,13 @@ public sealed class NativeUpdateService : INativeUpdateService
                     NativeUpdateStage.Current,
                     operation.Channel,
                     "AimMod is up to date",
-                    currentVersionDetail(nextBackend.CurrentVersion))
+                    currentVersionDetail(nextBackend.CurrentVersion), nextBackend.CurrentVersion)
                 : new NativeUpdateState(
                     NativeUpdateStage.Available,
                     operation.Channel,
                     $"AimMod {release.Version} is ready",
                     "Download the update while you keep using AimMod.",
-                    release.Version));
+                    release.Version, ReleaseNotes: release.ReleaseNotes));
         }
         catch (Exception)
         {
@@ -329,7 +331,7 @@ public sealed class NativeUpdateService : INativeUpdateService
             operation.Channel,
             $"Downloading AimMod {release.Version}",
             "You can continue using AimMod.",
-            release.Version));
+            release.Version, ReleaseNotes: release.ReleaseNotes));
 
         try
         {
@@ -341,7 +343,7 @@ public sealed class NativeUpdateService : INativeUpdateService
                     $"Downloading AimMod {release.Version}",
                     $"{Math.Clamp(progress, 0, 100)}% complete",
                     release.Version,
-                    Math.Clamp(progress, 0, 100))),
+                    Math.Clamp(progress, 0, 100), release.ReleaseNotes)),
                 operation.CancellationToken).ConfigureAwait(false);
 
             setState(operation.Revision, new NativeUpdateState(
@@ -350,7 +352,7 @@ public sealed class NativeUpdateService : INativeUpdateService
                 $"AimMod {release.Version} is ready",
                 "Restart to finish updating.",
                 release.Version,
-                100));
+                100, release.ReleaseNotes));
         }
         catch (OperationCanceledException) when (operation.CancellationToken.IsCancellationRequested)
         {
@@ -358,7 +360,8 @@ public sealed class NativeUpdateService : INativeUpdateService
         catch (Exception)
         {
             if (isCurrent(operation.Revision))
-                setState(operation.Revision, failedState(operation.Channel, "Could not download the update."));
+                setState(operation.Revision, failedState(operation.Channel, "Could not download the update.")
+                    with { Version = release.Version, ReleaseNotes = release.ReleaseNotes });
         }
     }
 
@@ -387,7 +390,8 @@ public sealed class NativeUpdateService : INativeUpdateService
             int currentRevision;
             lock (sync)
                 currentRevision = revision;
-            setState(currentRevision, failedState(State.Channel, "Could not restart to apply the update."));
+            setState(currentRevision, failedState(State.Channel, "Could not restart to apply the update.")
+                with { Version = release.Version, ReleaseNotes = release.ReleaseNotes });
         }
     }
 

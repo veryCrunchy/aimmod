@@ -89,13 +89,17 @@ jobs:
             exit 2
           fi
 
+          python3 osu-native/scripts/validate-release-notes.py "$version"
+
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Test channel manifest generation
-        run: python3 osu-native/tests/test-release-channel.py
+        run: |
+          python3 osu-native/tests/test-release-channel.py
+          python3 osu-native/tests/test-release-notes.py
 
   windows:
     needs: metadata
@@ -133,6 +137,7 @@ jobs:
             --mainExe AimMod.exe `
             --packAuthors veryCrunchy `
             --packTitle "AimMod for osu!" `
+            --releaseNotes "changelogs/$env:VERSION.md" `
             --runtime win-x64 `
             --channel "win-$env:CHANNEL" `
             --icon "src/AimMod.Desktop/Resources/Brand/aimmod.ico" `
@@ -187,6 +192,7 @@ jobs:
             --mainExe AimMod \
             --packAuthors veryCrunchy \
             --packTitle "AimMod for osu!" \
+            --releaseNotes "changelogs/${VERSION}.md" \
             --runtime linux-x64 \
             --channel "linux-${CHANNEL}" \
             --icon "src/AimMod.Desktop/Resources/Brand/linux/hicolor/256x256/apps/aimmod-osu.png" \
@@ -236,6 +242,11 @@ jobs:
             cp "$source" "$destination"
           done < <(find downloaded-assets -type f -print0)
           test -n "$(find release-assets -type f -print -quit)"
+
+      - name: Include version changelog
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: cp "osu-native/changelogs/${VERSION}.md" "release-assets/aimmod-osu-${VERSION}-changelog.md"
 
       - name: Create channel manifest
         shell: bash
@@ -296,7 +307,7 @@ jobs:
             gh release create "$TAG" \
               --target "$GITHUB_SHA" \
               --title "AimMod osu ${VERSION}" \
-              --generate-notes \
+              --notes-file "osu-native/changelogs/${VERSION}.md" \
               --latest=false \
               "${prerelease_args[@]}"
           fi

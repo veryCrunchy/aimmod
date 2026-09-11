@@ -39,6 +39,12 @@ The selected channel release also holds the Velopack package referenced by its f
 
 ## Publishing
 
+Before tagging a new version, write `changelogs/VERSION.md` with a `# AimMod VERSION` heading and short, player-facing bullets describing the changes. Move the relevant entries from `changelogs/unreleased.md`, then clear those entries. The release workflow refuses to package a version without its own notes.
+
+The same file supplies GitHub release notes, a downloadable changelog, and the Markdown notes in both Velopack feeds. AimMod displays the target version's feed notes before downloading the update, and keeps them visible during download and before restart. Released changelog files are also embedded in the app for offline history. Keep each version within 24,000 characters and 300 lines, and use headings, paragraphs and bullets. Do not add HTML or remote images.
+
+Versions published before this workflow may have no feed notes. AimMod shows a clear unavailable state for those versions instead of showing notes from a different release.
+
 Push a dedicated version tag to build, test, and publish both platforms:
 
 ```sh

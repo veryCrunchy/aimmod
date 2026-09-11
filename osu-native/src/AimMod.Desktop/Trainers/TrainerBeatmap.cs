@@ -20,6 +20,11 @@ public sealed class TrainerBeatmap : WorkingBeatmap
     private readonly ITrackStore tracks;
     private readonly string audioName;
     private readonly double musicVolume;
+    private TrainerBackground? background;
+    internal void SetBackground(byte[]? bytes, osu.Framework.Graphics.Rendering.IRenderer renderer)
+    {
+        if (bytes is not null) background = new TrainerBackground(bytes, renderer);
+    }
     public double SeekTime { get; private set; }
     public TrainerSession Timeline { get; }
 
@@ -32,7 +37,9 @@ public sealed class TrainerBeatmap : WorkingBeatmap
         this.map = map;
         Timeline = timeline;
         audioName = $"trainer-{Guid.NewGuid():N}{extension}";
-        tracks = audio.GetTrackStore(new TrainerAudio { Wave = sourceAudio ?? TrainerAudio.Render(timeline, map.HitObjects.Select(o => o.StartTime)) });
+        byte[] bytes = sourceAudio ?? TrainerAudio.Render(timeline, map.HitObjects.Select(o => o.StartTime));
+        TrainerAudioIdentity.Attach(map.BeatmapInfo, bytes);
+        tracks = audio.GetTrackStore(new TrainerAudio { Wave = bytes });
         tracks.Volume.Value = volume;
         musicVolume = volume;
     }
@@ -152,6 +159,7 @@ public sealed class TrainerBeatmap : WorkingBeatmap
         var map = Create(settings, notes, source.ControlPointInfo);
         map.Metadata.Title = source.Metadata.Title;
         map.Metadata.Artist = source.Metadata.Artist;
+        map.Metadata.BackgroundFile = source.Metadata.BackgroundFile;
         double leadIn = 4 * source.ControlPointInfo.TimingPointAt(notes[0].TimeMs).BeatLength;
         return new TrainerBeatmap(map, new TrainerSession(settings), audio, volume, audioBytes, extension)
         { SeekTime = Math.Max(0, notes[0].TimeMs - leadIn) };
@@ -221,10 +229,11 @@ public sealed class TrainerBeatmap : WorkingBeatmap
     private static Vector2 zigzagPosition(double travel) => new(100 + (float)(travel%600 < 300 ? travel%300 : 300-travel%300), 192+95*(float)Math.Sin(travel/70));
 
     protected override IBeatmap GetBeatmap() => map;
-    public override Texture GetBackground() => null!;
+    public override Texture GetBackground() => background?.Texture!;
     protected override Track GetBeatmapTrack() => tracks.Get(audioName);
+    public override bool TryTransferTrack(WorkingBeatmap target) => false;
     protected override ISkin GetSkin() => null!; // The player's current SkinManager supplies the complete skin.
     public override Stream GetStream(string storagePath) => Stream.Null;
-    public void ReleaseAudio() => tracks.Dispose();
+    public void ReleaseAudio() { tracks.Dispose(); background?.Dispose(); }
     public void FadeOutro(double progress) => tracks.Volume.Value = musicVolume * (1-Math.Clamp(progress,0,1));
 }

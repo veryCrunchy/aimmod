@@ -168,7 +168,7 @@ public partial class NativeDtTrainerWorkspace : Container
             detail.Add(text("Start with a map you know", 18));
             detail.Add(text("Choose an installed difficulty. Your first attempt plays the full map at normal speed."));
             detail.Add(new AimModChoiceGroup("01  Play at your current speed", "Use your usual osu! controls and skin. Finish the map to record an attempt."));
-            detail.Add(new AimModChoiceGroup("02  Build consistency", "Two runs with 98% accuracy and no misses raise the speed by 2%. Very clean runs earn 3%."));
+            detail.Add(new AimModChoiceGroup("02  Find your pace", "Your accuracy sets a personal target. Stronger runs earn bigger speed increases; a few misses allow a smaller step."));
             detail.Add(new AimModChoiceGroup("03  Work towards 150%", "Struggling lowers the speed a little. Your progress is saved for each map."));
             if (message.Length > 0) detail.Add(text(message));
             return;
@@ -179,8 +179,9 @@ public partial class NativeDtTrainerWorkspace : Container
         if (progress is { } p)
         {
             var metrics = row();
+            double? accuracyTarget = DtProgression.AccuracyTarget(p);
             metrics.Add(new AimModStatTile("PLAY SPEED", $"{p.Speed}%", "of normal speed"));
-            metrics.Add(new AimModStatTile("CLEAN RUNS", $"{p.CleanRuns}/2", "at this speed"));
+            metrics.Add(new AimModStatTile("ACCURACY TARGET", accuracyTarget is { } target ? $"{target:0.0}%" : "--", accuracyTarget is null ? "set by your first run" : "based on your runs"));
             metrics.Add(new AimModStatTile("TARGET", "150%", p.Completed ? "DT reached" : "Double Time"));
             detail.Add(metrics);
             detail.Add(speedTrack(p.Speed));
@@ -188,12 +189,13 @@ public partial class NativeDtTrainerWorkspace : Container
                 { AutoSizeAxes = Axes.None, RelativeSizeAxes = Axes.X, Height = 44 };
             detail.Add(play);
             detail.Add(text(p.Completed ? "DT reached. Keep practising here or choose another map."
-                : p.CleanRuns == 1 ? "One more clean run to increase your speed. Aim for 98% accuracy and no misses."
-                : "Finish two runs at 98% accuracy with no misses to increase the speed."));
+                : p.Speed == 150 && p.CleanRuns == 1 ? "One more run within your accuracy target with few misses to confirm full DT."
+                : accuracyTarget is { } goal ? $"Aim for {goal:0.00}% accuracy or better with few misses. Your next speed depends on how the run goes."
+                : "Play a complete run to set your accuracy target. Speed will adapt to your result."));
             if (p.History.LastOrDefault() is { } last)
             {
                 detail.Add(text("LAST ATTEMPT", 12));
-                detail.Add(text(last.Reason, 16));
+                detail.Add(text(p.AccuracyReference is null ? $"{last.Accuracy:0.00}% accuracy, {last.Misses} misses at {last.Speed}% speed." : last.Reason, 16));
             }
             if (message.Length > 0) detail.Add(text(message, 13));
             detail.Add(text("Recent attempts", 18));
@@ -204,7 +206,7 @@ public partial class NativeDtTrainerWorkspace : Container
                 foreach (var attempt in p.History.TakeLast(6).Reverse())
                     detail.Add(attemptRow($"{attempt.Speed}%", $"{attempt.Accuracy:0.00}%", $"{attempt.Misses}", $"{attempt.NextSpeed}%"));
             }
-            detail.Add(text("Speed adjusts after each run: +2-3% for consistent clean plays, -3-5% if accuracy or misses slip. Other runs keep the same speed.", 12));
+            detail.Add(text("Speed adapts after each run: +1-3% when you're on target, smaller steps with misses, and -1-5% when accuracy or control drops.", 12));
             detail.Add(text("No Fail is on. Quitting keeps your speed. Practice scores stay off osu! leaderboards.", 12));
             if (p.Speed > 100 || p.History.Length > 0)
                 detail.Add(new AimModButton("Restart at 100%", reset));

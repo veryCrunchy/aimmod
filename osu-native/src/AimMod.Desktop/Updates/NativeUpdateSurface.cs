@@ -19,16 +19,20 @@ internal partial class NativeUpdateSurface : CompositeDrawable
     private readonly UpdateChannelButton previewButton;
     private readonly UpdateActionButton actionButton;
     private readonly Box progressFill;
+    private readonly AimModButton notesButton;
+    private readonly Container notesHost;
+    private readonly NativeReleaseNotesPanel notesPanel;
+    private bool notesOpen;
 
     public NativeUpdateSurface(INativeUpdateService updateService)
     {
         this.updateService = updateService;
         RelativeSizeAxes = Axes.X;
-        Height = 108;
+        Height = 152;
         Masking = true;
         CornerRadius = AimModVisualStyle.CardRadius;
 
-        InternalChildren = new Drawable[]
+        var header = new Container { RelativeSizeAxes = Axes.X, Height = 108, Children = new Drawable[]
         {
             new Box
             {
@@ -111,7 +115,15 @@ internal partial class NativeUpdateSurface : CompositeDrawable
                     },
                 },
             },
-        };
+        } };
+
+        InternalChildren = [header,
+            notesButton = new AimModButton("What's new", toggleNotes) { X = 22, Y = 114, Height = 32 },
+            notesHost = new Container { RelativeSizeAxes = Axes.X, Y = 158, Height = 370, Alpha = 0, Children = [
+                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
+                new Container { RelativeSizeAxes = Axes.Both, Padding = new MarginPadding(18), Child = notesPanel = new NativeReleaseNotesPanel() }
+            ] }
+        ];
 
         updateService.StateChanged += updateStateChanged;
         applyState(updateService.State);
@@ -153,6 +165,7 @@ internal partial class NativeUpdateSurface : CompositeDrawable
         channelControls.Alpha = layout.ShowChannels ? 1 : 0;
         actionButton.Width = layout.ActionWidth;
         actionButton.Margin = new MarginPadding { Right = layout.ActionRight };
+        notesButton.X = layout.TextX;
     }
 
     private void updateStateChanged(NativeUpdateState state)
@@ -163,6 +176,7 @@ internal partial class NativeUpdateSurface : CompositeDrawable
 
     private void applyState(NativeUpdateState state)
     {
+        notesPanel.SetState(state);
         title.Text = state.Title;
         detail.Text = state.Detail;
         stableButton.Active = state.Channel == NativeUpdateChannel.Stable;
@@ -183,6 +197,15 @@ internal partial class NativeUpdateSurface : CompositeDrawable
             _ => ("Unavailable", FontAwesome.Solid.Download, false),
         };
         actionButton.SetState(label, icon, enabled);
+    }
+
+    private void toggleNotes()
+    {
+        notesOpen = !notesOpen;
+        notesHost.Alpha = notesOpen ? 1 : 0;
+        Height = notesOpen ? 540 : 152;
+        notesButton.SetCaption(notesOpen ? "Hide changelog" : "What's new");
+        notesButton.SetSelected(notesOpen);
     }
 
     private void runPrimaryAction()

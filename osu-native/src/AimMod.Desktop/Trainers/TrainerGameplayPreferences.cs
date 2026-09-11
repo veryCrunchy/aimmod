@@ -14,6 +14,15 @@ public sealed class TrainerGameplayPreferences(string contents)
         mapBoolean("AutomaticCursorSizing", "AutoCursorSize");
         mapBoolean("IgnoreBeatmapSkins", "BeatmapSkins", invert: true);
         mapBoolean("IgnoreBeatmapSamples", "BeatmapHitsounds", invert: true);
+        mapBoolean("ShowStoryboard", "ShowStoryboard");
+        mapBoolean("Video", "PreferNoVideo", invert: true);
+        mapBoolean("IHateHavingFun", "LightenDuringBreaks", invert: true);
+        mapBoolean("HitLighting", "HitLighting");
+        mapBoolean("KeyOverlay", "KeyOverlay");
+        mapBoolean("FpsCounter", "ShowFpsDisplay");
+        if (double.TryParse(source.GetValueOrDefault("DimLevel"), NumberStyles.Float, CultureInfo.InvariantCulture, out double dim)
+            && double.IsFinite(dim) && dim is >= 0 and <= 100)
+            mapped.Add($"DimLevel = {(dim / 100).ToString(CultureInfo.InvariantCulture)}");
         return new TrainerGameplayPreferences(string.Join('\n', mapped));
 
         void mapBoolean(string from, string to, bool invert = false)
@@ -24,31 +33,30 @@ public sealed class TrainerGameplayPreferences(string contents)
         }
     }
 
-    private readonly Dictionary<string, string> values = contents.Split('\n').Select(l => l.Split('=', 2)).Where(p => p.Length == 2)
-        .GroupBy(p => p[0].Trim()).ToDictionary(g => g.Key, g => g.Last()[1].Trim());
+    private readonly Dictionary<string, string> values = TrainerOsuSettingsReader.StableValues(contents);
 
     public IDisposable Apply(OsuConfigManager config)
     {
-        var scope = new Scope();
+        var scope = new TrainerPreferenceScope();
         foreach (var setting in new[] { OsuSetting.GameplayCursorSize, OsuSetting.ScalingSizeX, OsuSetting.ScalingSizeY,
-            OsuSetting.ScalingPositionX, OsuSetting.ScalingPositionY })
+            OsuSetting.ScalingPositionX, OsuSetting.ScalingPositionY, OsuSetting.ScalingBackgroundDim,
+            OsuSetting.UIScale, OsuSetting.ComboColourNormalisationAmount, OsuSetting.PositionalHitsoundsLevel })
             if (float.TryParse(values.GetValueOrDefault(setting.ToString()), NumberStyles.Float, CultureInfo.InvariantCulture, out float value) && float.IsFinite(value))
                 scope.Set(config.GetBindable<float>(setting), value);
+        foreach (var setting in new[] { OsuSetting.DimLevel, OsuSetting.BlurLevel })
+            if (double.TryParse(values.GetValueOrDefault(setting.ToString()), NumberStyles.Float, CultureInfo.InvariantCulture, out double value) && double.IsFinite(value))
+                scope.Set(config.GetBindable<double>(setting), value);
         foreach (var setting in new[] { OsuSetting.AutoCursorSize, OsuSetting.BeatmapColours, OsuSetting.BeatmapSkins,
-            OsuSetting.BeatmapHitsounds, OsuSetting.FadePlayfieldWhenHealthLow })
+            OsuSetting.BeatmapHitsounds, OsuSetting.FadePlayfieldWhenHealthLow, OsuSetting.ShowStoryboard,
+            OsuSetting.PreferNoVideo, OsuSetting.LightenDuringBreaks, OsuSetting.HitLighting, OsuSetting.KeyOverlay,
+            OsuSetting.CursorRotation, OsuSetting.ShowFpsDisplay, OsuSetting.ShowHealthDisplayWhenCantFail,
+            OsuSetting.IncreaseFirstObjectVisibility, OsuSetting.MouseDisableWheel, OsuSetting.SafeAreaConsiderations })
             if (values.GetValueOrDefault(setting.ToString()) is {} value && (bool.TryParse(value, out _) || value is "0" or "1"))
                 scope.Set(config.GetBindable<bool>(setting), value is "1" || bool.TryParse(value, out bool enabled) && enabled);
         if (Enum.TryParse<ScalingMode>(values.GetValueOrDefault("Scaling"), out var scaling) && Enum.IsDefined(scaling))
-            // The trainer owns one gameplay viewport; modes which shrink the whole client
-            // therefore apply at that viewport instead of the surrounding AimMod shell.
-            scope.Set(config.GetBindable<ScalingMode>(OsuSetting.Scaling), scaling == ScalingMode.Off ? ScalingMode.Off : ScalingMode.Gameplay);
+            scope.Set(config.GetBindable<ScalingMode>(OsuSetting.Scaling), scaling);
+        if (Enum.TryParse<HUDVisibilityMode>(values.GetValueOrDefault("HUDVisibilityMode"), true, out var hud) && Enum.IsDefined(hud))
+            scope.Set(config.GetBindable<HUDVisibilityMode>(OsuSetting.HUDVisibilityMode), hud);
         return scope;
-    }
-
-    private sealed class Scope : IDisposable
-    {
-        private readonly List<Action> restore = [];
-        public void Set<T>(Bindable<T> b, T value) { T previous = b.Value; restore.Add(() => b.Value = previous); b.Value = value; }
-        public void Dispose() { foreach (var undo in restore.AsEnumerable().Reverse()) undo(); restore.Clear(); }
     }
 }
