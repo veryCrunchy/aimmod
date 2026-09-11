@@ -121,6 +121,7 @@ public partial class NativeTrainersWorkspace
     public void StartGuidedPractice(TrainerGuidedFocus focus)
     {
         if (running || preparing) return;
+        showSkillTrainers();
         if (settings.Kind == TrainerKind.Reaction)
         { status.Text = "Choose a tapping, aim or reading exercise for guided practice."; return; }
         if (focus == TrainerGuidedFocus.GroupLength && settings.Kind is not (TrainerKind.Bursts or TrainerKind.Alternating))
@@ -139,6 +140,7 @@ public partial class NativeTrainersWorkspace
     public void ResumeGuidedPractice()
     {
         if (running || preparing) return;
+        showSkillTrainers();
         guidedStore = history();
         guidedAccountId = CurrentSkillAccountId?.Invoke();
         guidedPlan = guidedStore.LoadGuidedPlan();

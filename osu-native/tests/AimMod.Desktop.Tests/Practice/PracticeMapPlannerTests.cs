@@ -36,6 +36,8 @@ public sealed class PracticeMapPlannerTests
             {
                 using var reader=new StreamReader(file.Open()); string content=reader.ReadToEnd();
                 Assert.That(content,Does.Contain("BeatmapSetID:-1"));
+                Assert.That(content, Does.Contain("Title:Source Song [Original] - AimMod practice "));
+                Assert.That(content, Does.Contain("TitleUnicode:Source Song [Original] - AimMod practice "));
                 string audio=content.Split('\n').Single(line=>line.StartsWith("AudioFilename:")).Split(':',2)[1].Trim();
                 Assert.That(zip.GetEntry(audio),Is.Not.Null);
             }
@@ -366,6 +368,7 @@ public sealed class PracticeMapPlannerTests
             Assert.That(plan.AudioSlice.PlaybackRate, Is.EqualTo(rate));
         });
         PracticeSourceBeatmap decoded = read(PracticeMapExporter.Serialize(source, plan));
+        Assert.That(decoded.Metadata.Title, Is.EqualTo("Source Song [Original] - AimMod practice"));
         Assert.That(decoded.HitObjects.Count, Is.EqualTo(plan.HitObjects.Count));
     }
 

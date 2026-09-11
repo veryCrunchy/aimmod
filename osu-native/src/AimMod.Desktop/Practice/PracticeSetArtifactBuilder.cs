@@ -29,7 +29,7 @@ public sealed class PracticeSetArtifactBuilder
         string root=Path.GetFullPath(destination), archive=Path.Combine(root,"AimMod practice.osz");
         if (Directory.Exists(root) && Directory.EnumerateFileSystemEntries(root).Any()) throw new IOException("Practice destination is not empty.");
         var identities=new List<PracticeDifficultyIdentity>(); var exports=new List<PracticeMapExportResult>(); var outputPlans=new List<PracticeMapPlan>();
-        string title=source.Metadata.Title+" - AimMod practice "+DateTimeOffset.UtcNow.ToString("yyyy-MM-dd HH-mm-ss-fff");
+        string title=PracticeMapExporter.SourcePracticeTitle(source)+" "+DateTimeOffset.UtcNow.ToString("yyyy-MM-dd HH-mm-ss-fff");
         try
         {
             if (slicer is WindowsFfmpegAudioSlicer windowsSlicer)

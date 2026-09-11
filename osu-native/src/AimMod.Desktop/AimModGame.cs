@@ -874,6 +874,9 @@ public partial class AimModGame : OsuGameBase
         trainersWorkspace ??= new NativeTrainersWorkspace(
             () => new TrainerHistoryStore(Storage.GetFullPath($"trainers/history-{currentOsuProfile?.UserId ?? 0}.json", true)), showCoaching);
         trainersWorkspace.LaunchOsuSession = startOsuTrainer;
+        trainersWorkspace.DtTrainerFactory = back => dtTrainerWorkspace = new Trainers.NativeDtTrainerWorkspace(localLibrary,
+            () => new Trainers.DtProgressStore(Storage.GetFullPath($"trainers/dt-{currentOsuProfile?.UserId ?? 0}.json", true)),
+            () => currentOsuProfile?.UserId ?? 0, startDtTrainer, back);
         trainersWorkspace.BeginTrainingSync = () => hubTrainingSyncService?.BeginSession();
         trainersWorkspace.SongLibrary = localLibrary;
         trainersWorkspace.CurrentSkillAccountId=()=>currentOsuProfile?.UserId;

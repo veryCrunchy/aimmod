@@ -20,6 +20,7 @@ public partial class NativeTrainerPlayer : Player
     private readonly List<JudgementResult> judgements = [];
     private bool reported;
     public bool Ready => IsLoaded && LoadedBeatmapSuccessfully && GameplayClockContainer is not null;
+    internal osu.Game.Beatmaps.IBeatmap PracticeBeatmap => GameplayState.Beatmap;
     public Action? OnReady { get; init; }
     public Action<double>? OutroProgress { get; init; }
     private double? completedAt;

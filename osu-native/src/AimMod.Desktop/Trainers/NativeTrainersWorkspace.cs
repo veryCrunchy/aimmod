@@ -24,6 +24,11 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
     private readonly Func<TrainerHistoryStore> history;
     private readonly Action openCoaching;
     public Action<TrainerSettings, bool, double>? LaunchOsuSession { get; set; }
+    public Func<Action, Drawable>? DtTrainerFactory { get; set; }
+    private readonly AimModButton dtEntry;
+    private readonly AimModButton skillEntry;
+    private readonly Container skillPage;
+    private readonly Container modPage;
     public Func<Action<TrainerResult>?>? BeginTrainingSync { get; set; }
     private Action<TrainerResult>? recordTraining;
     private TrainerSettings settings = new(Music: TrainerMusicCatalog.RandomSong());
@@ -84,8 +89,14 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         var body = new FillFlowContainer<Drawable> { RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y,
             Direction = FillDirection.Vertical, Spacing = new(12), Padding = new MarginPadding { Right = 14, Bottom = 24 } };
         InternalChildren = [new AimModSectionHeader("Trainers", "Focused drills for timing, control and reading."),
-            new Container { RelativeSizeAxes = Axes.Both, Padding = new MarginPadding { Top = 76 },
+            skillPage = new Container { RelativeSizeAxes = Axes.Both, Padding = new MarginPadding { Top = 120 },
                 Child = contentScroll = new AimModScrollContainer { RelativeSizeAxes = Axes.Both, Child = body } }];
+        var tabs = new FillFlowContainer<Drawable> { Y = 72, AutoSizeAxes = Axes.Both, Direction = FillDirection.Horizontal, Spacing = new(8) };
+        tabs.Add(skillEntry = new AimModButton("Skill trainers", showSkillTrainers));
+        tabs.Add(dtEntry = new AimModButton("Mod trainers", openDtTrainer));
+        skillEntry.SetSelected(true);
+        AddInternal(tabs);
+        AddInternal(modPage = new Container { RelativeSizeAxes = Axes.Both, Padding = new MarginPadding { Top = 120 }, Alpha = 0 });
         body.Add(results = column());
         setup = column(); body.Add(setup);
         body = setup;

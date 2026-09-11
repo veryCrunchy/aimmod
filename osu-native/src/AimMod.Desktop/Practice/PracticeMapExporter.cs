@@ -11,6 +11,9 @@ public sealed record PracticeMapExportResult(string DirectoryPath, string Beatma
 
 public sealed class PracticeMapExporter
 {
+    internal static string SourcePracticeTitle(PracticeSourceBeatmap source) =>
+        $"{source.Metadata.Title} [{source.Metadata.Version}] - AimMod practice";
+
     public async Task<PracticeMapExportResult> ExportAsync(
         PracticeSourceBeatmap source,
         PracticeMapPlan plan,
@@ -69,8 +72,8 @@ public sealed class PracticeMapExporter
         appendSection(builder, "Metadata", replace(source.Sections.GetValueOrDefault("Metadata", Array.Empty<string>()), new Dictionary<string, string>
         {
             ["Version"] = plan.OutputVersion,
-            ["Title"] = plan.OutputSetTitle ?? source.Metadata.Title,
-            ["TitleUnicode"] = plan.OutputSetTitle ?? source.Metadata.Title,
+            ["Title"] = plan.OutputSetTitle ?? SourcePracticeTitle(source),
+            ["TitleUnicode"] = plan.OutputSetTitle ?? SourcePracticeTitle(source),
             ["Source"] = plan.Attribution,
             ["BeatmapID"] = "0",
             ["BeatmapSetID"] = "-1",
