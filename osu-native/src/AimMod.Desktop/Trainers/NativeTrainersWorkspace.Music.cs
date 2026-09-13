@@ -31,6 +31,7 @@ public partial class NativeTrainersWorkspace
         preparing = busy;
         start.SetCaption(busy ? "Preparing..." : "Start practice");
         status.Text = message;
+        if (warmupStatus is not null) warmupStatus.Text = message;
     }
 
     private void buildMusicControls(FillFlowContainer<Drawable> body)

@@ -77,7 +77,7 @@ public sealed record TrainerResult(Guid Id, DateTimeOffset CompletedAt, TrainerS
     double? SpreadMs, double? DriftMs, double? ResponseMs = null, string Engine = "cue", double? Accuracy = null, double? PlayedSeconds = null, TrainerDemand? Demand = null,
     TrainerGuidedRun? GuidedRun = null, int? JudgementMisses = null, bool Assisted = false,
     ReactionSummary? Reaction = null, ReadingWindowResult[]? ReadingWindows = null,
-    SpinnerPracticeSummary? SpinnerPractice = null, int? TapTargets = null)
+    SpinnerPracticeSummary? SpinnerPractice = null, int? TapTargets = null, TrainerWarmupRun? WarmupRun = null)
 {
     public bool UsesOsuJudgements => Engine is "osu" or "osu-moving-v2" or "osu-patterns-v3" or "osu-adaptive-v4" or "osu-reading-v2" or "osu-reading-v3" or "osu-reading-v4" or "osu-spinner-v1";
     public static string EngineFor(TrainerSettings s) => s.Kind == TrainerKind.Reaction ? "reaction-v2"

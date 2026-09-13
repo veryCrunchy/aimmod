@@ -59,7 +59,7 @@ public partial class AimModGame
             {
                 preparingTrainer = false;
                 trainersWorkspace?.SetPreparationStatus(false, "Escape ends the session.");
-                if (currentRoute.Value != NativeRoute.Trainers || trainerPlayer is not null) { map.ReleaseAudio(); return; }
+                if (currentRoute.Value != NativeRoute.Trainers || trainerPlayer is not null) { map.ReleaseAudio(); trainersWorkspace?.CompleteOsuSession(null); return; }
                 launchPreparedTrainer(settings, mouseButtons, map);
             });
         }
@@ -69,6 +69,8 @@ public partial class AimModGame
             Schedule(() =>
             {
                 preparingTrainer = false;
+                trainersWorkspace?.SetPreparationStatus(false, "Practice stopped.");
+                trainersWorkspace?.CompleteOsuSession(null);
                 trainersWorkspace?.SetPreparationStatus(false, error is IOException or InvalidOperationException
                     ? error.Message : "Practice could not start. Choose another song or try again.");
             });

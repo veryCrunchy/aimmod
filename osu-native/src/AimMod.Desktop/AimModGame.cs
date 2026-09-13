@@ -874,6 +874,7 @@ public partial class AimModGame : OsuGameBase
         trainersWorkspace ??= new NativeTrainersWorkspace(
             () => new TrainerHistoryStore(Storage.GetFullPath($"trainers/history-{currentOsuProfile?.UserId ?? 0}.json", true)), showCoaching);
         trainersWorkspace.LaunchOsuSession = startOsuTrainer;
+        trainersWorkspace.OpenBeatmaps = showBeatmaps;
         trainersWorkspace.DtTrainerFactory = back => dtTrainerWorkspace = new Trainers.NativeDtTrainerWorkspace(localLibrary,
             () => new Trainers.DtProgressStore(Storage.GetFullPath($"trainers/dt-{currentOsuProfile?.UserId ?? 0}.json", true)),
             () => currentOsuProfile?.UserId ?? 0, startDtTrainer, back);
@@ -1895,7 +1896,7 @@ public partial class AimModGame : OsuGameBase
                 Content = new Drawable[][]
                 {
                     [new WorkspaceLink("Improve a map", "Coaching · Turn difficult sections into exercises", showCoaching, WorkspaceIllustrationKind.Coaching),
-                     new WorkspaceLink("Train a skill", "Trainers · Timing, aim, bursts and reading", showTrainers, WorkspaceIllustrationKind.Trainers)],
+                     new WorkspaceLink("Train a skill", "Trainers · Warmup, timing, aim and reading", showTrainers, WorkspaceIllustrationKind.Trainers)],
                     [new WorkspaceLink("Review a play", "Replays · Watch your movement and timing", showReplays, WorkspaceIllustrationKind.Replays),
                      new WorkspaceLink("Find your next PP play", "PP targets · Find maps that fit your skills", showPpTargets, WorkspaceIllustrationKind.Targets)],
                     [new WorkspaceLink("See your progress", "Statistics · Follow your results over time", showStatistics, WorkspaceIllustrationKind.Statistics),

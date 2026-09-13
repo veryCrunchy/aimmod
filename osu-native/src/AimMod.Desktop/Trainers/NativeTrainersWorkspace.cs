@@ -97,6 +97,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         skillEntry.SetSelected(true);
         AddInternal(tabs);
         AddInternal(modPage = new Container { RelativeSizeAxes = Axes.Both, Padding = new MarginPadding { Top = 120 }, Alpha = 0 });
+        buildWarmupTab(tabs);
         body.Add(results = column());
         setup = column(); body.Add(setup);
         body = setup;
@@ -235,6 +236,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
 
     public void CompleteOsuSession(TrainerResult? result)
     {
+        if (completeWarmup(result)) return;
         results.Clear();
         if (result is null)
         {
@@ -405,7 +407,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
     private void showResult(TrainerResult r)
     {
         contentScroll.ScrollTo(0, false);
-        results.Add(text(r.Assisted ? "Assisted session result" : r.Settings.GuidedCues ? "Guided practice result" : "Session result", 18, AimModPalette.Text));
+        results.Add(text(r.WarmupRun is not null ? "Warmup drill result" : r.Assisted ? "Assisted session result" : r.Settings.GuidedCues ? "Guided practice result" : "Session result", 18, AimModPalette.Text));
         results.Add(paragraph(r.Settings.Kind == TrainerKind.Reaction
             ? $"{ReactionSession.Name(r.Settings.ReactionMode)} · {r.Settings.ReactionWindowMs} ms response window · {r.Settings.Seconds} seconds"
             : $"{DisplayName(r.Settings.Kind)}  ·  {r.Settings.TempoDescription}  ·  {r.PlayedSeconds ?? r.Settings.Seconds:0.#} seconds"));
@@ -544,7 +546,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
                 ? $"{run.Settings.TempoDescription}  ·  {run.Accuracy:0.00}% acc  ·  {ms(run.SpreadMs)} spread"
                 : run.Settings.Kind <= TrainerKind.Rhythm ? $"{run.Settings.TempoDescription}  ·  {run.OnTimePercent:0.0}% on time"
                 : $"{ms(run.ResponseMs)} median  ·  {run.Extras} early taps";
-            recent.Add(new AimModButton($"{run.CompletedAt.LocalDateTime:dd MMM HH:mm}  ·  {run.Settings.Seconds}s  ·  {value}",
+            recent.Add(new AimModButton($"{(run.WarmupRun is null ? "" : "Warmup · ")}{run.CompletedAt.LocalDateTime:dd MMM HH:mm}  ·  {run.Settings.Seconds}s  ·  {value}",
                 () => { if (!running) { results.Clear(); showResult(run); showingResults = true; setup.Hide(); results.Show(); } }));
         }
     }
