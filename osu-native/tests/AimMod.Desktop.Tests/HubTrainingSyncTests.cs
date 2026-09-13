@@ -98,6 +98,14 @@ public sealed class HubTrainingSyncTests
         Assert.That(HubTrainingSession.FromResult(original with { Settings = original.Settings with { MovementScale = .7 } }, false).Setup.ConfigurationHash,
             Is.Not.EqualTo(compactHash));
     }
+    [Test] public void DifferentTimingWindowsCannotShareTheSameProgressCohort()
+    {
+        var normal = result();
+        var harder = normal with { Settings = normal.Settings with { OverallDifficulty = 5.25 } };
+        Assert.That(HubTrainingSession.FromResult(harder, false).Setup.ConfigurationHash,
+            Is.Not.EqualTo(HubTrainingSession.FromResult(normal, false).Setup.ConfigurationHash));
+    }
+
     [Test] public void GuidedBaselineAndLocalResultMetadataNeverEnterPublicPayload()
     {
         var planId = Guid.NewGuid();

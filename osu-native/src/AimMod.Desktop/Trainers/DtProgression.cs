@@ -50,7 +50,8 @@ public static class DtProgression
         if (result is null || result.Assisted || playedSpeed != state.Speed || state.History.Any(a => a.Id == result.Id)) return state;
         if (state.Speed is < 100 or > 150 || result.Id == Guid.Empty || result.Notes < 20
             || result.Accuracy is not { } acc || !double.IsFinite(acc) || acc is < 0 or > 100
-            || result.Misses < 0 || result.Misses > result.Notes) return state;
+            || result.Misses < 0 || result.Misses > result.Notes || result.Hits < 0 || result.Hits > result.Notes
+            || result.CompletedAt > DateTimeOffset.UtcNow) return state;
 
         double missRatio = (double)result.Misses / result.Notes;
         double? personalReference = reference(state);

@@ -9,6 +9,14 @@ public class DtProgressionTests
     private static TrainerResult run(double acc = 98.5, int misses = 0) => new(Guid.NewGuid(), DateTimeOffset.UtcNow, new(), 300, 300 - misses,
         200, 0, 0, 0, 12, 0, Accuracy: acc, JudgementMisses: misses);
 
+    [Test]
+    public void ImpossibleHitCountsAndFutureResultsCannotChangeSpeed()
+    {
+        var state = new DtProgress("map", 120);
+        Assert.That(DtProgression.Apply(state, 120, run() with { Hits = 301 }), Is.EqualTo(state));
+        Assert.That(DtProgression.Apply(state, 120, run() with { CompletedAt = DateTimeOffset.UtcNow.AddHours(1) }), Is.EqualTo(state));
+    }
+
     [TestCase(82, 101)]
     [TestCase(88, 101)]
     [TestCase(92, 102)]

@@ -45,8 +45,9 @@ public sealed class TrainerWarmupTests
         Assert.That(plan.Record(Result(plan.CurrentSettings(), 70, 15)), Is.True);
         Assert.That(plan.Pace, Is.EqualTo(.85));
         Assert.That(plan.CurrentSettings().SkillLimits!.MaxNps, Is.LessThan(plan.Steps[1].Settings.SkillLimits!.MaxNps));
+        Assert.That(plan.CurrentSettings().OverallDifficulty, Is.LessThan(plan.Steps[1].Settings.OverallDifficulty));
         plan.Record(Result(plan.CurrentSettings(), 100));
-        Assert.That(plan.Pace, Is.EqualTo(.85));
+        Assert.That(plan.Pace, Is.EqualTo(.9).Within(.001));
         for (int i = 0; i < 20; i++) plan.Ease();
         Assert.That(plan.Pace, Is.EqualTo(.6));
         plan.CurrentSettings().Validate();

@@ -60,7 +60,7 @@ public sealed class TrainerBeatmap : WorkingBeatmap
         map.Metadata.Artist = "AimMod";
         map.Metadata.Author.Username = "AimMod";
         map.Metadata.AudioFile = "trainer.wav";
-        map.Difficulty = new BeatmapDifficulty { CircleSize = settings.CircleSize, ApproachRate = settings.ApproachRate, OverallDifficulty = 5, DrainRate = 0, SliderMultiplier = 1.4f };
+        map.Difficulty = new BeatmapDifficulty { CircleSize = settings.CircleSize, ApproachRate = settings.ApproachRate, OverallDifficulty = (float)settings.OverallDifficulty, DrainRate = 0, SliderMultiplier = 1.4f };
         if (timing is not null) map.ControlPointInfo = timing;
         else map.ControlPointInfo.Add(0, new TimingControlPoint { BeatLength = timeline.BeatMs });
         var random = new Random(settings.PatternSeed);
@@ -109,7 +109,7 @@ public sealed class TrainerBeatmap : WorkingBeatmap
                 TrainerKind.Reading => i % settings.ReadingGroupSize == 0,
                 _ => i % 4 == 0,
             };
-            if (settings.RandomizePatterns && settings.SkillLimits is {} skill && map.HitObjects.LastOrDefault() is {} previous)
+            if ((settings.RandomizePatterns || settings.AdaptiveDifficulty) && settings.SkillLimits is {} skill && map.HitObjects.LastOrDefault() is {} previous)
             {
                 double availableTime = Math.Max(0,notes[i].TimeMs-previousObjectEnd)/1000;
                 double distance = Vector2.Distance(previous.EndPosition,position);
@@ -130,7 +130,7 @@ public sealed class TrainerBeatmap : WorkingBeatmap
                 Vector2 direction = new(position.X < 256 ? 1 : -1, position.Y < 192 ? .35f : -.35f);
                 direction.Normalize();
                 double spanLength = Math.Min(length, 220);
-                if(settings.RandomizePatterns && settings.SkillLimits is {} sliderSkill)
+                if((settings.RandomizePatterns || settings.AdaptiveDifficulty) && settings.SkillLimits is {} sliderSkill)
                     spanLength=Math.Min(spanLength,Math.Min(sliderSkill.MaxJumpDistance,sliderSkill.MaxAimVelocity*duration/1000/(repeats+1)));
                 spanLength *= settings.MovementScale;
                 var path = new SliderPath([new PathControlPoint(Vector2.Zero, PathType.LINEAR), new PathControlPoint(direction*(float)spanLength)], spanLength);

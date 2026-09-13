@@ -23,7 +23,7 @@ public sealed class TrainerWarmup
         var runs = history.Where(r => r.WarmupRun is null && !r.Assisted && r.UsesOsuJudgements
             && r.CompletedAt >= now.AddDays(-30) && r.CompletedAt <= now && r.Notes >= 12
             && r.Hits >= 0 && r.Hits <= r.Notes && r.Misses >= 0 && r.Misses <= r.Notes * .05
-            && r.Accuracy is >= 80 and <= 100 && r.PlayedSeconds >= r.Settings.Seconds * .9)
+            && r.Accuracy is >= 80 and <= 100 && TrainerPerformance.IsCompleted(r, now))
             .DistinctBy(r => r.Id).OrderByDescending(r => r.CompletedAt).Take(200).ToArray();
         var replayEvidence = evidence.ToArray();
         TrainerKind[] kinds = [TrainerKind.Steady, TrainerKind.Aim, TrainerKind.Bursts, TrainerKind.Rhythm];
@@ -56,7 +56,8 @@ public sealed class TrainerWarmup
             var selected = new TrainerSettings(kind, bpm, minutes * 15, controls.OffsetMs, controls.Keys, song,
                 RandomizePatterns: true, SkillLimits: limits, AimSpacing: 85, PatternSeed: Random.Shared.Next(1, int.MaxValue),
                 ApproachRate: Math.Min(7, limits.MaxApproachRate), Sliders: kind == TrainerKind.Aim ? TrainerSliderStyle.Mixed : TrainerSliderStyle.None,
-                GuidedCues: true);
+                GuidedCues: true, OverallDifficulty: Math.Clamp((matching.Length >= 3
+                    ? TrainerPerformance.Median(matching.Select(r => r.Settings.OverallDifficulty)) : 5) * fraction, 2, 8));
             selected = TrainerSkillProfile.Apply(selected, limits);
             selected.Validate();
             steps.Add(new(titles[i], hints[i], selected, accuracy));
@@ -71,21 +72,23 @@ public sealed class TrainerWarmup
         if (Finished) throw new InvalidOperationException("Warmup is complete.");
         var settings = Steps[Step].Settings;
         var limits = settings.SkillLimits!;
-        return settings with { SkillLimits = limits with { MaxNps = Math.Max(1, limits.MaxNps * Pace),
+        return settings with { OverallDifficulty = Math.Clamp(settings.OverallDifficulty - (1 - Pace) * 3, 2, 8),
+            SkillLimits = limits with { MaxNps = Math.Max(1, limits.MaxNps * Pace),
             MaxJumpDistance = Math.Max(40, limits.MaxJumpDistance * Pace), MaxAimVelocity = Math.Max(100, limits.MaxAimVelocity * Pace) } };
     }
 
     public bool Record(TrainerResult result)
     {
         if (Finished || Results.Any(r => r.Id == result.Id) || result.Settings != CurrentSettings()
-            || result.Assisted || !result.UsesOsuJudgements || result.Notes < 12 || result.Hits < 0 || result.Hits > result.Notes
-            || result.Accuracy is not (>= 0 and <= 100) || result.Misses < 0 || result.CompletedAt > DateTimeOffset.UtcNow
-            // The result clock excludes trailing musical rests. Stopped drills return null from the player.
-            || result.PlayedSeconds is not {} seconds || !double.IsFinite(seconds) || seconds < result.Settings.Seconds * .8) return false;
+            || !TrainerPerformance.IsCompleted(result, DateTimeOffset.UtcNow)) return false;
         bool ease = result.Accuracy < Math.Max(75, Steps[Step].AccuracyReference - 4) || result.Misses > result.Notes * .05;
         if (ease) Pace = Math.Max(.6, Pace * .85);
-        // A good warmup never raises demand beyond the original comfortable ceiling.
+        bool recover = !ease && Pace < 1 && result.Accuracy >= Steps[Step].AccuracyReference - 2
+            && result.Misses <= result.Notes * .02;
+        if (recover) Pace = Math.Min(1, Pace + .05);
+        // Recovery returns toward the prepared ceiling; warmups never push past it.
         Advice = ease ? "That was a rougher run. The next drill will ease off. Take a breather first if you need one."
+            : recover ? "That felt steadier. The next drill moves a little closer to your usual pace."
             : "Keep the same relaxed feel in the next drill. Continue when you are ready.";
         Results.Add(result with { WarmupRun = new(Id, Step) });
         if (Finished) Advice = ease ? "Warmup complete. Start with a comfortable map and see how it feels."

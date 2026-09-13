@@ -29,6 +29,8 @@ public sealed record HubTrainingSession(string Id, DateTimeOffset CompletedAt, s
             info.Properties.Single(p => p.Name == nameof(TrainerSettings.GuidedCues)).ShouldSerialize = (_, value) => value is true;
             info.Properties.Single(p => p.Name == nameof(TrainerSettings.Spinners)).ShouldSerialize = (_, value) => value is TrainerSpinnerFrequency frequency && frequency != TrainerSpinnerFrequency.None;
             info.Properties.Single(p => p.Name == nameof(TrainerSettings.SpinnerSeconds)).ShouldSerialize = (_, value) => value is int seconds && seconds != 4;
+            info.Properties.Single(p => p.Name == nameof(TrainerSettings.AdaptiveDifficulty)).ShouldSerialize = (_, value) => value is true;
+            info.Properties.Single(p => p.Name == nameof(TrainerSettings.OverallDifficulty)).ShouldSerialize = (_, value) => value is double od && od != 5;
             var movement = info.Properties.Single(p => p.Name == nameof(TrainerSettings.MovementScale));
             movement.ShouldSerialize = (_, value) => value is double scale && scale != 1;
             info.Properties.Single(p => p.Name == nameof(TrainerSettings.ReadingGroupSize)).ShouldSerialize = (_, value) => value is int size && size != 4;

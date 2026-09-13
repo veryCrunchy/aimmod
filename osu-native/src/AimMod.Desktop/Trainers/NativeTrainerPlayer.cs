@@ -57,28 +57,39 @@ public partial class NativeTrainerPlayer : Player
             double outro = Time.Current - completedAt.Value;
             OutroProgress?.Invoke(Math.Clamp((outro-1200)/600,0,1));
             if (outro < 1800) return;
-            // Slider ticks, repeats and tails contribute to osu! accuracy, not tap offsets.
-            var hits = judgements.Where(j => j.IsHit && j.HitObject is HitCircle).ToArray();
-            var offsets = hits.Select(j => j.TimeOffset).ToArray();
-            double? mean = offsets.Length > 0 ? offsets.Average() : null;
-            double? spread = offsets.Length > 1 ? Math.Sqrt(offsets.Average(x => Math.Pow(x - mean!.Value, 2))) : null;
-            double start = GameplayState.Beatmap.HitObjects[0].StartTime;
-            double duration = GameplayState.Beatmap.HitObjects.Max(h => h is IHasDuration d ? d.EndTime : h.StartTime) - start;
-            var early = hits.Where(j => j.HitObject.StartTime < start + duration / 3).ToArray();
-            var late = hits.Where(j => j.HitObject.StartTime >= start + duration * 2 / 3).ToArray();
-            double? drift = early.Length >= 3 && late.Length >= 3 ? late.Average(j => j.TimeOffset) - early.Average(j => j.TimeOffset) : null;
-            report(new TrainerResult(Guid.NewGuid(), DateTimeOffset.Now, settings, GameplayState.Beatmap.HitObjects.Count,
-                hits.Length + judgements.Count(j => j.IsHit && j.HitObject is Spinner), offsets.Count(o => Math.Abs(o) <= 25), 0, 0, mean, spread, drift,
-                Engine: TrainerResult.EngineFor(settings), Accuracy: ScoreProcessor.Accuracy.Value * 100,
-                PlayedSeconds: Math.Min(settings.Seconds, (duration + GameplayState.Beatmap.ControlPointInfo.TimingPointAt(start).BeatLength / 4) / 1000),
-                Demand: TrainerSkillProfile.Measure(GameplayState.Beatmap),
-                JudgementMisses: judgements.Count(j => j.Type == HitResult.Miss),
-                TapTargets: GameplayState.Beatmap.HitObjects.Count(h => h is HitCircle or Slider),
-                SpinnerPractice: spinMetrics.Result().Attempts > 0 ? spinMetrics.Result() : null,
-                ReadingWindows: settings.Kind != TrainerKind.Reading ? null : judgements.Where(j => j.HitObject is HitCircle)
-                    .GroupBy(j => (int)((j.HitObject.StartTime - start) / 10000))
-                    .Select(g => new ReadingWindowResult(g.Key * 10, g.Count(), g.Count(j => !j.IsHit))).OrderBy(w => w.StartSeconds).ToArray()));
+            report(CreateResult(settings, GameplayState.Beatmap, judgements,
+                ScoreProcessor.Accuracy.Value * 100,
+                spinMetrics.Result().Attempts > 0 ? spinMetrics.Result() : null));
         }
+    }
+
+    internal static bool IsTapObject(osu.Game.Rulesets.Objects.HitObject obj) => obj is HitCircle and not SliderEndCircle;
+
+    internal static TrainerResult CreateResult(TrainerSettings settings, osu.Game.Beatmaps.IBeatmap beatmap,
+        IReadOnlyList<JudgementResult> judgements, double accuracy, SpinnerPracticeSummary? spinnerPractice = null)
+    {
+        // Slider ends inherit HitCircle too. Count heads as taps, but keep tails and
+        // repeats only in osu! scoring so successful sliders cannot inflate Hits above Notes.
+        var hits = judgements.Where(j => j.IsHit && IsTapObject(j.HitObject)).ToArray();
+        var offsets = hits.Select(j => j.TimeOffset).ToArray();
+        double? mean = offsets.Length > 0 ? offsets.Average() : null;
+        double? spread = offsets.Length > 1 ? Math.Sqrt(offsets.Average(x => Math.Pow(x - mean!.Value, 2))) : null;
+        double start = beatmap.HitObjects[0].StartTime;
+        double duration = beatmap.HitObjects.Max(h => h is IHasDuration d ? d.EndTime : h.StartTime) - start;
+        var early = hits.Where(j => j.HitObject.StartTime < start + duration / 3).ToArray();
+        var late = hits.Where(j => j.HitObject.StartTime >= start + duration * 2 / 3).ToArray();
+        double? drift = early.Length >= 3 && late.Length >= 3 ? late.Average(j => j.TimeOffset) - early.Average(j => j.TimeOffset) : null;
+        return new TrainerResult(Guid.NewGuid(), DateTimeOffset.Now, settings, beatmap.HitObjects.Count,
+            hits.Length + judgements.Count(j => j.IsHit && j.HitObject is Spinner), offsets.Count(o => Math.Abs(o) <= 25), 0, 0, mean, spread, drift,
+            Engine: TrainerResult.EngineFor(settings), Accuracy: accuracy,
+            PlayedSeconds: Math.Min(settings.Seconds, (duration + beatmap.ControlPointInfo.TimingPointAt(start).BeatLength / 4) / 1000),
+            Demand: TrainerSkillProfile.Measure(beatmap),
+            JudgementMisses: judgements.Count(j => j.Type == HitResult.Miss),
+            TapTargets: beatmap.HitObjects.Count(h => h is HitCircle or Slider),
+            SpinnerPractice: spinnerPractice,
+            ReadingWindows: settings.Kind != TrainerKind.Reading ? null : judgements.Where(j => IsTapObject(j.HitObject))
+                .GroupBy(j => (int)((j.HitObject.StartTime - start) / 10000))
+                .Select(g => new ReadingWindowResult(g.Key * 10, g.Count(), g.Count(j => !j.IsHit))).OrderBy(w => w.StartSeconds).ToArray());
     }
 
     public void StopSession()

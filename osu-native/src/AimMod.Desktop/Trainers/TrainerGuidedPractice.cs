@@ -57,11 +57,7 @@ public static class TrainerGuidedPractice
     public static TrainerGuidedRun Stamp(TrainerGuidedPlan plan) =>
         new(plan.Id, plan.Focus, plan.Step, Condition(plan), plan.Baseline);
 
-    public static bool IsUsable(TrainerResult r) => !r.Assisted && r.UsesOsuJudgements && r.Notes >= 12
-        && r.CompletedAt <= DateTimeOffset.UtcNow
-        && r.Hits >= 0 && r.Hits <= r.Notes && r.Accuracy is >= 0 and <= 100
-        && r.SpreadMs is >= 0 && double.IsFinite(r.SpreadMs.Value)
-        && r.PlayedSeconds >= r.Settings.Seconds * .9;
+    public static bool IsUsable(TrainerResult r) => TrainerPerformance.IsCompleted(r, DateTimeOffset.UtcNow);
 
     public static TrainerMovementComparison CompareMovement(Guid planId, IEnumerable<TrainerResult> results)
     {
@@ -73,7 +69,7 @@ public static class TrainerGuidedPractice
             && r.Settings with { MovementScale = 1 } == baseline).ToArray();
         var original = matching.Where(r => r.Settings.MovementScale == 1).ToArray();
         var compact = matching.Where(r => r.Settings.MovementScale == .55).ToArray();
-        double? spread(TrainerResult[] a) => a.Length == 0 ? null : median(a.Select(r => r.SpreadMs!.Value));
+        double? spread(TrainerResult[] a) => a.Any(r => r.SpreadMs.HasValue) ? median(a.Where(r => r.SpreadMs.HasValue).Select(r => r.SpreadMs!.Value)) : null;
         double? accuracy(TrainerResult[] a) => a.Length == 0 ? null : median(a.Select(r => r.Accuracy!.Value));
         string observation = original.Length < MinimumRuns || compact.Length < MinimumRuns
             ? $"Complete {MinimumRuns} original and {MinimumRuns} compact runs before comparing. Skipped and stopped runs do not count."
@@ -86,8 +82,9 @@ public static class TrainerGuidedPractice
 
     public static TrainerProgressionAdvice Advise(TrainerGuidedPlan plan, IEnumerable<TrainerResult> results)
     {
+        var all = results.ToArray();
         var current = SettingsFor(plan);
-        var matching = results.DistinctBy(r => r.Id).Where(r => IsUsable(r)
+        var matching = all.DistinctBy(r => r.Id).Where(r => IsUsable(r)
             && r.CompletedAt >= DateTimeOffset.UtcNow.AddDays(-30)
             && r.GuidedRun?.PlanId == plan.Id && r.GuidedRun.Step == plan.Step
             && r.Settings == current).OrderByDescending(r => r.CompletedAt).Take(MinimumRuns).ToArray();
@@ -96,8 +93,12 @@ public static class TrainerGuidedPractice
         if (matching.Length < MinimumRuns)
             return new(matching.Length, null, $"Repeat this setup: {matching.Length}/{MinimumRuns} completed runs. Keep the song, tempo and controls the same.");
         // Conservative training heuristic, not a universal skill threshold. Never advance after one lucky score.
-        bool clean = matching.All(r => r.Accuracy >= 95 && r.Hits >= r.Notes * .95 && r.SpreadMs <= 25);
-        bool struggling = matching.Count(r => r.Accuracy < 90 || r.Hits < r.Notes * .9) >= 2;
+        var previous = all.Where(r => IsUsable(r) && r.GuidedRun?.PlanId == plan.Id && r.GuidedRun.Step < plan.Step)
+            .OrderByDescending(r => r.CompletedAt).Take(12).ToArray();
+        double reference = TrainerPerformance.Reference(previous.Length >= 3 ? previous : matching);
+        bool clean = matching.Sum(r => r.Notes) >= 24 && matching.All(r => TrainerPerformance.Steady(r, reference))
+            && matching.Max(r => r.Accuracy) - matching.Min(r => r.Accuracy) <= 3;
+        bool struggling = matching.Count(r => TrainerPerformance.Struggling(r, reference)) >= 2;
         if (!clean && !struggling)
             return new(matching.Length, null, "Results still vary at this setup. Repeat it or take a break before adding more demand.");
         int direction = clean ? 1 : -1;
@@ -113,7 +114,7 @@ public static class TrainerGuidedPractice
     public static TrainerSettings ChangeDemand(TrainerSettings current, TrainerGuidedFocus focus, int direction)
     {
         int next(int[] choices, int value) { int at = Array.IndexOf(choices, value); return at < 0 ? value : choices[Math.Clamp(at + Math.Sign(direction), 0, choices.Length - 1)]; }
-        return focus switch
+        var changed = focus switch
         {
             TrainerGuidedFocus.Spacing => current with { AimSpacing = next([70, 85, 100, 120, 140], current.AimSpacing) },
             TrainerGuidedFocus.Endurance => current with { Seconds = next([15, 30, 60, 120, 180], current.Seconds) },
@@ -123,6 +124,22 @@ public static class TrainerGuidedPractice
             { Pattern = (TrainerPattern)next([(int)TrainerPattern.PartialStreams, (int)TrainerPattern.LongStreams, (int)TrainerPattern.Standard], (int)current.Pattern) },
             _ => current,
         };
+        if (changed != current && current.SkillLimits is {} limits)
+        {
+            if (focus == TrainerGuidedFocus.Spacing)
+            {
+                double factor = (double)changed.AimSpacing / current.AimSpacing;
+                changed = changed with { SkillLimits = limits with {
+                    MaxJumpDistance = Math.Clamp(limits.MaxJumpDistance * factor, 40, 350),
+                    MaxAimVelocity = Math.Clamp(limits.MaxAimVelocity * factor, 100, 1800) } };
+            }
+            if (focus == TrainerGuidedFocus.GroupLength)
+                changed = changed with { SkillLimits = limits with {
+                    MaxChain = Math.Clamp(limits.MaxChain + Math.Sign(direction) * 4, 3, 256),
+                    MaxBurst = changed.Pattern switch { TrainerPattern.FiveNotes => 5, TrainerPattern.SevenNotes => 7,
+                        TrainerPattern.NineNotes => 9, _ => 3 } } };
+        }
+        return changed;
     }
 
     private static double median(IEnumerable<double> values)

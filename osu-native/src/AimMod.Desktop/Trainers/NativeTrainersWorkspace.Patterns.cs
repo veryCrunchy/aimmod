@@ -24,6 +24,7 @@ public partial class NativeTrainersWorkspace
         SkillEvidenceAccountId is > 0 && SkillEvidenceAccountId==CurrentSkillAccountId?.Invoke() ? SkillEvidence : [],DateTimeOffset.UtcNow);
     private void refreshSkillSummary()
     {
+        refreshAdaptiveSummary();
         if(skillSummary is null) return;
         skillSummary.Alpha=settings.RandomizePatterns && settings.Kind!=TrainerKind.Reaction ? 1:0;
         if(skillSummary.Alpha==0) return;

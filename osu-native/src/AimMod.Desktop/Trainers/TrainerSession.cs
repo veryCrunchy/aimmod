@@ -15,7 +15,7 @@ public sealed record TrainerSettings(TrainerKind Kind = TrainerKind.Steady, int 
     bool RandomizePatterns = false, int ApproachRate = 7, TrainerReactionDelay ReactionDelay = TrainerReactionDelay.Standard, TrainerSkillLimits? SkillLimits = null,
     double MovementScale = 1, int ReadingGroupSize = 4, bool ReadingHidden = false,
     ReactionMode ReactionMode = ReactionMode.Simple, int ReactionWindowMs = 1200, int ReadingComplexity = 0,
-    TrainerSpinnerFrequency Spinners = TrainerSpinnerFrequency.None, int SpinnerSeconds = 4, bool GuidedCues = false)
+    TrainerSpinnerFrequency Spinners = TrainerSpinnerFrequency.None, int SpinnerSeconds = 4, bool GuidedCues = false, bool AdaptiveDifficulty = false, double OverallDifficulty = 5)
 {
     public string TempoDescription => Music == "song" ? "Song tempo" : $"{Bpm} BPM";
     public TrainerSettings ComparisonKey()
@@ -25,14 +25,14 @@ public sealed record TrainerSettings(TrainerKind Kind = TrainerKind.Steady, int 
             Bpm = 120, OffsetMs = 0, Music = "cues", Cue = "pulse", SongIdentity = "", SongTitle = "", SongStartSeconds = 0,
             PatternSeed = 0, Pattern = TrainerPattern.Standard, NoteSpeed = TrainerNoteSpeed.Default, Sliders = TrainerSliderStyle.None,
             SliderBeats = 1, PathStyle = TrainerPathStyle.FigureEight, AimStyle = TrainerAimStyle.Balanced, AimSpacing = 100,
-            CircleSize = 4, ApproachRate = 7, RandomizePatterns = false, SkillLimits = null, MovementScale = 1,
+            CircleSize = 4, ApproachRate = 7, OverallDifficulty = 5, RandomizePatterns = false, SkillLimits = null, MovementScale = 1,
             ReadingGroupSize = 4, ReadingHidden = false, ReadingComplexity = 0, Spinners = TrainerSpinnerFrequency.None, SpinnerSeconds = 4,
         };
         return this with
     {
         SongTitle = "",
         PatternSeed = 0,
-        SkillLimits = RandomizePatterns && SkillLimits is {} limits ? limits with { EvidenceCount = 0 } : null,
+        SkillLimits = (RandomizePatterns || AdaptiveDifficulty) && SkillLimits is {} limits ? limits with { EvidenceCount = 0 } : null,
         AimStyle = Kind == TrainerKind.Aim ? AimStyle : TrainerAimStyle.Balanced,
         ReactionDelay = Kind == TrainerKind.Reaction ? ReactionDelay : TrainerReactionDelay.Standard,
         ReactionMode = Kind == TrainerKind.Reaction ? ReactionMode : ReactionMode.Simple,
@@ -53,6 +53,7 @@ public sealed record TrainerSettings(TrainerKind Kind = TrainerKind.Steady, int 
     public void Validate()
     {
         SkillLimits?.Validate();
+        if (!double.IsFinite(OverallDifficulty) || OverallDifficulty is < 2 or > 9) throw new ArgumentOutOfRangeException(nameof(OverallDifficulty));
         if (!Enum.IsDefined(Spinners) || SpinnerSeconds is not (2 or 4 or 6)
             || !double.IsFinite(MovementScale) || MovementScale is < .4 or > 1
             || !Enum.IsDefined(ReactionMode) || ReactionWindowMs is not (600 or 1000 or 1200 or 1500 or 2000)
@@ -196,7 +197,7 @@ public sealed class TrainerSession
     }
 }
 
-public sealed record TrainerWorkspacePreferences(bool ShuffleMusic = true, bool RandomizePatterns = false, bool FreshLayout = true, bool GuidedCues = false);
+public sealed record TrainerWorkspacePreferences(bool ShuffleMusic = true, bool RandomizePatterns = false, bool FreshLayout = true, bool GuidedCues = false, bool AdaptiveDifficulty = true);
 
 public sealed class TrainerHistoryStore(string path)
 {

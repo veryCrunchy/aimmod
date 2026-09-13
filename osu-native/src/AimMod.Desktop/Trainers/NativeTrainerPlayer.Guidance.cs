@@ -52,7 +52,7 @@ public partial class NativeTrainerPlayer
         }
         if (cue.Stage == "RECOVER")
         {
-            var recent = judgements.Where(j => j.HitObject is HitCircle && j.HitObject.StartTime > time - 5000).ToArray();
+            var recent = judgements.Where(j => IsTapObject(j.HitObject) && j.HitObject.StartTime > time - 5000).ToArray();
             if (recent.Length >= 3)
             {
                 if (recent.Count(j => !j.IsHit) > 1) cue = cue with { Text = "Reset for the next group. Read its entry before moving." };

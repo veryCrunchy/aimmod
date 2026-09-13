@@ -82,7 +82,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         this.history = history;
         this.openCoaching = openCoaching;
         preferences = history().LoadPreferences();
-        settings = settings with { RandomizePatterns = preferences.RandomizePatterns, GuidedCues = preferences.GuidedCues };
+        settings = settings with { RandomizePatterns = preferences.RandomizePatterns, GuidedCues = preferences.GuidedCues, AdaptiveDifficulty = preferences.AdaptiveDifficulty };
         freshAimLayout = preferences.FreshLayout;
         settingsStatus = paragraph("Using default keys and offset until an osu! client is connected.");
         RelativeSizeAxes = Axes.Both;
@@ -123,6 +123,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
             settings.Bpm, b => { Suspend(); settings = settings with { Bpm = b }; refreshMusicDescription(); refreshHistory(); }, 150, d => tempoSelector = d));
         controls.Add(timingControls);
         body.Add(controls);
+        buildAdaptiveControls(body);
         buildMusicControls(body);
         practiceOptionsToggle = new AimModButton("Adjust patterns & difficulty", TogglePracticeOptions);
         practiceOptions = column();
@@ -269,10 +270,13 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         if (!customSettings && inheritedSettings is {} inherited) ApplyOsuSettings(inherited);
         if (freshAimLayout || settings.PatternSeed == 0) settings = settings with { PatternSeed = Random.Shared.Next(1, int.MaxValue) };
         if (settings.Kind != TrainerKind.Reaction && preferences.ShuffleMusic && TrainerMusicCatalog.IsSong(settings.Music)) musicSelector.Current.Value = TrainerMusicCatalog.RandomSong(settings.Music);
+        settings = adaptiveSettings(settings);
+        if (settings.Kind == TrainerKind.Reaction) reactionWindowSelector.Current.Value = settings.ReactionWindowMs;
+        if (settings.Kind == TrainerKind.Spinner) spinnerLengthSelector.Current.Value = settings.SpinnerSeconds;
         activeHistory = history();
         recordTraining = BeginTrainingSync?.Invoke();
         if (settings.Kind != TrainerKind.Reaction && LaunchOsuSession is {} launch)
-        { launch(TrainerSkillProfile.Apply(settings,currentSkillLimits()), mouseButtons, volume); return; }
+        { launch(settings, mouseButtons, volume); return; }
         tapping = null; pointer = null; reaction = null;
         if (isTiming)
         {
@@ -307,7 +311,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         if (settings.Kind == kind) return;
         Suspend();
         var initialPattern = kind == TrainerKind.Reading ? TrainerPattern.ReadingMix : TrainerPattern.Standard;
-        settings = settings with { Kind = kind, Pattern = initialPattern,
+        settings = settings with { Kind = kind, Pattern = initialPattern, OverallDifficulty = 5,
             Sliders = kind == TrainerKind.Reading ? TrainerSliderStyle.Mixed : TrainerSliderStyle.None,
             GuidedCues = kind == TrainerKind.Spinner || preferences.GuidedCues };
         sliderSelector.Current.Value = settings.Sliders; results.Clear(); feedback.Text = "";
@@ -477,8 +481,10 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         if (addGuidedActions(r)) return;
         results.Add(text("Next run", 15, AimModPalette.Text));
         results.Add(paragraph(TrainerSession.NextStep(r)));
+        if (preferences.AdaptiveDifficulty && !r.Assisted)
+            results.Add(paragraph(TrainerAdaptiveDifficulty.Describe(adaptiveSettings(r.Settings, savedRuns.Append(r)))));
         var nextActions = flow();
-        nextActions.Add(new AimModButton("Repeat exercise", () => repeat(r.Settings, 0), true));
+        nextActions.Add(new AimModButton(preferences.AdaptiveDifficulty ? "Start next run" : "Repeat exercise", () => repeat(r.Settings, 0), true));
         nextActions.Add(new AimModButton("Practice settings", returnToPracticeSettings));
         if (r.Settings.Kind != TrainerKind.Reaction) nextActions.Add(new AimModButton("Try on a beatmap", openCoaching));
         if (r.Settings.Kind != TrainerKind.Reaction && r.Settings.Music == "cues" && r.Settings.Bpm > 60)

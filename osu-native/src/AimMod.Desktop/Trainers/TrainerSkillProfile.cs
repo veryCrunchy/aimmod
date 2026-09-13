@@ -25,10 +25,11 @@ public static class TrainerSkillProfile
 {
     public static TrainerSkillLimits Build(TrainerKind kind, IEnumerable<TrainerResult> history, IEnumerable<TrainerSkillEvidence> replays, DateTimeOffset now)
     {
-        var recent = history.Where(r => r.WarmupRun is null && !r.Assisted && r.Settings.Kind == kind && r.UsesOsuJudgements && r.CompletedAt >= now.AddDays(-30) && r.CompletedAt <= now
-            && r.Notes >= 12 && r.Hits >= 0 && r.Hits <= r.Notes && r.PlayedSeconds >= 12)
+        var recent = history.Where(r => r.WarmupRun is null && r.Settings.Kind == kind && r.Notes >= 12
+            && TrainerPerformance.IsCompleted(r, now) && r.CompletedAt >= now.AddDays(-30))
             .DistinctBy(r => r.Id).OrderByDescending(r => r.CompletedAt).Take(12).ToArray();
-        var clean = recent.Where(r => r.Accuracy is >= 95 and <= 100 && r.Hits >= r.Notes*.95 && r.SpreadMs is >= 0 and <= 25)
+        double reference = TrainerPerformance.Reference(recent.Skip(3).Count() >= 3 ? recent.Skip(3) : recent);
+        var clean = recent.Where(r => TrainerPerformance.Steady(r, reference))
             .Select(demandForResult).OfType<TrainerDemand>().Where(valid).ToArray();
         // One replay contributes at most one sample; a long map cannot outweigh several plays.
         var replay = replays.DistinctBy(r => r.ScoreId).Select(r => r.Demand).Where(valid)
@@ -49,19 +50,27 @@ public static class TrainerSkillProfile
                 MaxJumpDistance = quantile(clean.Select(d=>d.JumpDistance))*1.05, MaxAimVelocity = quantile(clean.Select(d=>d.AimVelocity))*1.05,
                 MaxChain = (int)quantile(clean.Select(d=>(double)d.LongestChain))+4,
                 MaxBurst = clean.Length >= 9 ? 9 : clean.Length >= 6 ? 7 : 5,
-                Complexity = clean.Length >= 6 ? 2 : 1, MaxApproachRate = Math.Min(9,recent.Where(r=>r.Accuracy>=95).Min(r=>r.Settings.ApproachRate)+1) };
+                Complexity = clean.Length >= 6 ? 2 : 1, MaxApproachRate = Math.Min(9,recent.Where(r=>TrainerPerformance.Steady(r, reference)).Min(r=>r.Settings.ApproachRate)+1) };
             count += clean.Length;
         }
-        if (recent.Take(3).Count(r => r.Accuracy < 90 || r.Hits < r.Notes*.9) >= 2)
+        if (recent.Take(3).Count(r => TrainerPerformance.Struggling(r, reference)) >= 2)
+        {
+            // Ease from the demand actually attempted, not the cold-start defaults.
+            var attempted = recent.Take(3).Select(demandForResult).OfType<TrainerDemand>().Where(valid).ToArray();
+            if (attempted.Length >= 2)
+                limits = limits with { MaxNps = Math.Min(limits.MaxNps, quantile(attempted.Select(d => d.PeakNps))),
+                    MaxJumpDistance = Math.Min(limits.MaxJumpDistance, quantile(attempted.Select(d => d.JumpDistance))),
+                    MaxAimVelocity = Math.Min(limits.MaxAimVelocity, quantile(attempted.Select(d => d.AimVelocity))) };
             limits = limits with { MaxNps = limits.MaxNps*.8, MaxJumpDistance = limits.MaxJumpDistance*.8,
                 MaxAimVelocity = limits.MaxAimVelocity*.8, MaxChain = Math.Max(3,limits.MaxChain/2), MaxBurst = 3, Complexity = 0 };
+        }
         return limits with { MaxNps = Math.Clamp(limits.MaxNps,1,16), MaxJumpDistance = Math.Clamp(limits.MaxJumpDistance,40,350),
             MaxAimVelocity = Math.Clamp(limits.MaxAimVelocity,100,1800), MaxChain = Math.Clamp(limits.MaxChain,3,256), EvidenceCount = count };
     }
 
     private static bool valid(TrainerDemand d) => double.IsFinite(d.PeakNps) && d.PeakNps is >= .5 and <= 30
         && double.IsFinite(d.JumpDistance) && d.JumpDistance is >= 0 and <= 600
-        && double.IsFinite(d.AimVelocity) && d.AimVelocity is >= 0 and <= 10000 && d.LongestChain >= 3;
+        && double.IsFinite(d.AimVelocity) && d.AimVelocity is >= 0 and <= 10000 && d.LongestChain >= 1;
     private static double quantile(IEnumerable<double> values) { var a=values.Order().ToArray(); return a[(a.Length-1)/4]; }
     private static TrainerDemand? demandForResult(TrainerResult result)
     {
@@ -80,7 +89,7 @@ public static class TrainerSkillProfile
 
     public static TrainerSettings Apply(TrainerSettings s, TrainerSkillLimits limits)
     {
-        if (!s.RandomizePatterns || s.Kind is TrainerKind.Reaction or TrainerKind.Spinner) return s with { SkillLimits = null };
+        if (!(s.RandomizePatterns || s.AdaptiveDifficulty) || s.Kind is TrainerKind.Reaction or TrainerKind.Spinner) return s with { SkillLimits = null };
         limits.Validate();
         return s with { SkillLimits = limits, ReadingComplexity = Math.Min(s.ReadingComplexity, limits.Complexity), ApproachRate = Math.Min(s.ApproachRate,limits.MaxApproachRate), CircleSize = Math.Min(s.CircleSize,4),
             Sliders = limits.Complexity == 0 && s.Sliders == TrainerSliderStyle.BackAndForth ? TrainerSliderStyle.Mixed : s.Sliders,
@@ -101,7 +110,7 @@ public static class TrainerSkillProfile
 
     public static IReadOnlyList<TrainerNote> ConstrainNotes(TrainerSettings s, IReadOnlyList<TrainerNote> source)
     {
-        if (!s.RandomizePatterns || s.SkillLimits is not {} limits) return source;
+        if (!(s.RandomizePatterns || s.AdaptiveDifficulty) || s.SkillLimits is not {} limits) return source;
         var result = new List<TrainerNote>();
         double minGap = 1000/limits.MaxNps;
         int chain = 0;
