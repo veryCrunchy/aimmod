@@ -50,7 +50,10 @@ public static class TrainerMusicalPhrases
                         if (hit is null || music.SectionAt(hit.Beat) != music.SectionAt(onset.Beat)) break;
                         group.Add(hit);
                     }
-                    if (group.Count > best.Length) best = group.ToArray();
+                    // Prefer the requested subdivision when it has a playable phrase.
+                    // Choosing the longest group instead made a slow run replace every
+                    // faster stream, so changing note speed could not raise difficulty.
+                    if (group.Count >= 3) { best = group.ToArray(); break; }
                 }
                 if (best.Length < 3) continue;
                 chosen.AddRange(best.Select(e => note(e, phrase)));

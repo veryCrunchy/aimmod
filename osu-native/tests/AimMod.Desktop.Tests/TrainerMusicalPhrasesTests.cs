@@ -8,6 +8,19 @@ namespace AimMod.Desktop.Tests;
 
 public class TrainerMusicalPhrasesTests
 {
+    [TestCase(TrainerKind.Alternating)] [TestCase(TrainerKind.Bursts)]
+    public void FasterPlayablePhraseIsNotReplacedByALongerSlowOne(TrainerKind kind)
+    {
+        var music = new TrainerSongArrangement(2, "fixture", 120, "", 0, 16, [new(0,16,1,false)],
+            new[] {0d,.25,.5,1,2,3,4,5,6,7}.Select(b=>new TrainerMusicEvent(b,1,60)).ToArray(), []);
+        var settings = new TrainerSettings(kind, AdaptiveDifficulty:true, NoteSpeed:TrainerNoteSpeed.FourPerBeat,
+            SkillLimits:new(MaxNps:8,MaxChain:8,MaxBurst:7));
+        var notes = TrainerMusicalPhrases.Select(music, settings, 0, 8000);
+        Assert.That(notes.Take(3).Select(n=>n.TimeMs), Is.EqualTo(new[] {0d,125,250}));
+        var slower = TrainerMusicalPhrases.Select(music, settings with {NoteSpeed=TrainerNoteSpeed.OnePerBeat},0,8000);
+        Assert.That(slower.Take(3).Select(n=>n.TimeMs), Is.EqualTo(new[] {0d,500,1000}));
+    }
+
     [Test]
     public void ShortAutomaticSessionsContainPlayableExercises()
     {

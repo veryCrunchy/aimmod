@@ -5,6 +5,30 @@ namespace AimMod.Desktop.Tests;
 
 public class TrainerStarTargetTests
 {
+    [TestCase("aurora-circuit", 2.8, 4.9)]
+    [TestCase("sidechain-city", 4.5, 4.6)]
+    public void AdaptiveStreamTargetsCanStart(string song, double minimum, double maximum)
+    {
+        foreach (int seconds in new[] {30, 60, 120})
+        foreach (int seed in new[] {1, 45, 123})
+        {
+            var settings = TrainerAdaptiveDifficulty.Apply(new(TrainerKind.Alternating, Music: song,
+                Seconds: seconds, PatternSeed: seed, MinimumStars: minimum, MaximumStars: maximum, AdaptiveDifficulty: true), [], [], DateTimeOffset.UtcNow);
+            var plan = TrainerStarTarget.Fit(settings);
+            Assert.That(plan.InRange, Is.True, $"{song}/{seconds}s/seed {seed}: {plan.Stars:0.000}");
+            Assert.That(TrainerStarTarget.RequireTarget(plan), Is.SameAs(plan));
+            Assert.That(plan.Stars, Is.EqualTo(TrainerStarTarget.Measure(plan.Map, plan.Settings)).Within(.00001));
+            Assert.That(plan.Settings.Kind, Is.EqualTo(TrainerKind.Alternating));
+            Assert.That(plan.Settings.SkillLimits, Is.EqualTo(settings.SkillLimits));
+            Assert.That(plan.Settings.PathStyle, Is.Not.EqualTo(TrainerPathStyle.Random));
+            var arrangement = TrainerSongArrangement.For(plan.Settings)!;
+            Assert.That(plan.Map.HitObjects.All(o => arrangement.Events.Any(e => Math.Abs(arrangement.TimeAt(e.Beat)-o.StartTime)<.001)), Is.True);
+            var demand = TrainerSkillProfile.Measure(plan.Map);
+            Assert.That(demand.PeakNps, Is.LessThanOrEqualTo(settings.SkillLimits!.MaxNps+.001));
+            Assert.That(demand.AimVelocity, Is.LessThanOrEqualTo(settings.SkillLimits.MaxAimVelocity+.01));
+        }
+    }
+
     [Test]
     public void FitsAReachableTargetUsingActualOsuDifficultyWithoutChangingManualRhythm()
     {

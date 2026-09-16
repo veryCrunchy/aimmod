@@ -70,7 +70,7 @@ public static class TrainerStarTarget
             : [settings.Bpm];
         var sliders = settings.AdaptiveDifficulty && settings.Sliders != TrainerSliderStyle.SlidersOnly
             ? new[] { settings.Sliders, TrainerSliderStyle.None }.Distinct() : [settings.Sliders];
-        var paths = settings.AdaptiveDifficulty && settings.Kind == TrainerKind.Steady
+        var paths = settings.AdaptiveDifficulty && settings.Kind is TrainerKind.Steady or TrainerKind.Alternating
             ? new[] { settings.PathStyle, TrainerPathStyle.FigureEight, TrainerPathStyle.Zigzag, TrainerPathStyle.Arc }.Distinct()
             : [settings.PathStyle];
         int attempts = 0;

@@ -87,6 +87,11 @@ public sealed class TrainerBeatmap : WorkingBeatmap
                 travel += settings.Kind switch
                 {
                     TrainerKind.Steady => 48,
+                    // Targeted streams need room to grow into spaced streams. The fixed
+                    // 30 px path step otherwise capped every spacing candidate well below
+                    // the player's available movement, even when a harder range was chosen.
+                    TrainerKind.Alternating when settings.AdaptiveDifficulty && settings.MinimumStars is not null && settings.SkillLimits is {} flow
+                        => Math.Clamp(flow.MaxJumpDistance * .35, 30, 100),
                     TrainerKind.Bursts when phraseStart => 115,
                     TrainerKind.Rhythm when gap > timeline.BeatMs * .3 => 44,
                     _ => 30,
