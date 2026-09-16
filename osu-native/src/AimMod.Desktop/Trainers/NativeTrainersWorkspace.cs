@@ -63,7 +63,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
     private double lastAudioAdvance;
     private double volume = .85;
     private readonly OsuTextFlowContainer instruction;
-    private readonly OsuSpriteText status;
+    private readonly OsuTextFlowContainer status;
     private readonly OsuSpriteText feedback;
     private readonly FillFlowContainer<Drawable> results;
     private readonly FillFlowContainer<Drawable> recent;
@@ -124,6 +124,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         controls.Add(timingControls);
         body.Add(controls);
         buildAdaptiveControls(body);
+        buildStarControls(body);
         buildMusicControls(body);
         practiceOptionsToggle = new AimModButton("Adjust patterns & difficulty", TogglePracticeOptions);
         practiceOptions = column();
@@ -156,7 +157,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         body.Add(advanced);
         body.Add(field = new TrainerField(this) { RelativeSizeAxes = Axes.X, Height = 210 });
         body.Add(feedback = text("", 18, AimModPalette.Accent));
-        body.Add(status = new TruncatingSpriteText { RelativeSizeAxes = Axes.X, Text = "Four-beat count-in. Escape ends the session.", Font = new FontUsage(size:13), Colour = AimModPalette.Muted });
+        body.Add(status = paragraph("Four-beat count-in. Escape ends the session."));
         body.Add(historyTitle = text("Your progress", 18, AimModPalette.Text));
         body.Add(recent = column());
         chooseMusic(settings.Music);
@@ -270,17 +271,15 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         if (!customSettings && inheritedSettings is {} inherited) ApplyOsuSettings(inherited);
         if (freshAimLayout || settings.PatternSeed == 0) settings = settings with { PatternSeed = Random.Shared.Next(1, int.MaxValue) };
         if (settings.Kind != TrainerKind.Reaction && preferences.ShuffleMusic && TrainerMusicCatalog.IsSong(settings.Music)) musicSelector.Current.Value = TrainerMusicCatalog.RandomSong(settings.Music);
-        settings = adaptiveSettings(settings);
-        if (settings.Kind == TrainerKind.Reaction) reactionWindowSelector.Current.Value = settings.ReactionWindowMs;
-        if (settings.Kind == TrainerKind.Spinner) spinnerLengthSelector.Current.Value = settings.SpinnerSeconds;
+        var sessionSettings = adaptiveSettings(settings);
         activeHistory = history();
         recordTraining = BeginTrainingSync?.Invoke();
         if (settings.Kind != TrainerKind.Reaction && LaunchOsuSession is {} launch)
-        { launch(settings, mouseButtons, volume); return; }
+        { launch(sessionSettings, mouseButtons, volume); return; }
         tapping = null; pointer = null; reaction = null;
         if (isTiming)
         {
-            tapping = new(settings);
+            tapping = new(sessionSettings);
             try
             {
                 resource.Wave = TrainerAudio.Render(tapping);
@@ -292,9 +291,9 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
             catch (Exception error) when (error is InvalidOperationException or IOException)
             { status.Text = "Audio could not start. Check your output device and try again."; return; }
         }
-        else if (settings.Kind == TrainerKind.Reaction) reaction = new(settings);
+        else if (settings.Kind == TrainerKind.Reaction) reaction = new(sessionSettings);
         else if (settings.Kind == TrainerKind.Spinner) { status.Text = "Open the osu! gameplay connection to practise spinners."; return; }
-        else pointer = new(settings);
+        else pointer = new(sessionSettings);
         began = Time.Current; running = true;
         lastAudioPosition = 0; lastAudioAdvance = Time.Current;
         controls.Hide(); timingControls.Hide(); exerciseChoices.Hide(); advanced.Hide(); advancedToggle.Hide(); stop.Show();
@@ -442,6 +441,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         }
         else if (r.UsesOsuJudgements || r.Settings.Kind <= TrainerKind.Rhythm)
         {
+            if (r.Settings.MeasuredStars is not null) results.Add(paragraph(TrainerStarTarget.Describe(r.Settings)));
             if (r.UsesOsuJudgements) metrics.Add(metric($"{r.Accuracy:0.00}%", "accuracy"));
             metrics.Add(metric($"{r.OnTimePercent:0.0}%", "within 25 ms"));
             metrics.Add(metric(ms(r.MeanMs), "average offset"));
@@ -511,6 +511,9 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
 
     private void repeat(TrainerSettings selected, int tempoChange)
     {
+        // A generated run must not overwrite the user's manual controls on the results path.
+        if ((preferences.AdaptiveDifficulty || selected.MinimumStars is not null) && selected.Kind == settings.Kind && tempoChange == 0)
+        { Start(); return; }
         SelectTrainer(selected.Kind);
         restorePatternControls(selected);
         aimStyleSelector.Current.Value = selected.AimStyle; aimSpacingSelector.Current.Value = selected.AimSpacing; circleSizeSelector.Current.Value = selected.CircleSize;

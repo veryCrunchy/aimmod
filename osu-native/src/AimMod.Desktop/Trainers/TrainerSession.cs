@@ -15,7 +15,9 @@ public sealed record TrainerSettings(TrainerKind Kind = TrainerKind.Steady, int 
     bool RandomizePatterns = false, int ApproachRate = 7, TrainerReactionDelay ReactionDelay = TrainerReactionDelay.Standard, TrainerSkillLimits? SkillLimits = null,
     double MovementScale = 1, int ReadingGroupSize = 4, bool ReadingHidden = false,
     ReactionMode ReactionMode = ReactionMode.Simple, int ReactionWindowMs = 1200, int ReadingComplexity = 0,
-    TrainerSpinnerFrequency Spinners = TrainerSpinnerFrequency.None, int SpinnerSeconds = 4, bool GuidedCues = false, bool AdaptiveDifficulty = false, double OverallDifficulty = 5)
+    TrainerSpinnerFrequency Spinners = TrainerSpinnerFrequency.None, int SpinnerSeconds = 4, bool GuidedCues = false, bool AdaptiveDifficulty = false, double OverallDifficulty = 5,
+    TrainerSliderShape SliderShape = TrainerSliderShape.Straight, TrainerSpinnerPattern SpinnerPattern = TrainerSpinnerPattern.Steady,
+    double? MinimumStars = null, double? MaximumStars = null, double? MeasuredStars = null)
 {
     public string TempoDescription => Music == "song" ? "Song tempo" : $"{Bpm} BPM";
     public TrainerSettings ComparisonKey()
@@ -23,6 +25,7 @@ public sealed record TrainerSettings(TrainerKind Kind = TrainerKind.Steady, int 
         if (Kind == TrainerKind.Reaction) return this with
         {
             Bpm = 120, OffsetMs = 0, Music = "cues", Cue = "pulse", SongIdentity = "", SongTitle = "", SongStartSeconds = 0,
+            MinimumStars = null, MaximumStars = null, MeasuredStars = null, SliderShape = TrainerSliderShape.Straight, SpinnerPattern = TrainerSpinnerPattern.Steady,
             PatternSeed = 0, Pattern = TrainerPattern.Standard, NoteSpeed = TrainerNoteSpeed.Default, Sliders = TrainerSliderStyle.None,
             SliderBeats = 1, PathStyle = TrainerPathStyle.FigureEight, AimStyle = TrainerAimStyle.Balanced, AimSpacing = 100,
             CircleSize = 4, ApproachRate = 7, OverallDifficulty = 5, RandomizePatterns = false, SkillLimits = null, MovementScale = 1,
@@ -31,6 +34,10 @@ public sealed record TrainerSettings(TrainerKind Kind = TrainerKind.Steady, int 
         return this with
     {
         SongTitle = "",
+        MeasuredStars = null,
+        MinimumStars = null, MaximumStars = null,
+        SliderShape = Sliders == TrainerSliderStyle.None ? TrainerSliderShape.Straight : SliderShape,
+        SpinnerPattern = Spinners == TrainerSpinnerFrequency.None && Kind != TrainerKind.Spinner ? TrainerSpinnerPattern.Steady : SpinnerPattern,
         PatternSeed = 0,
         SkillLimits = (RandomizePatterns || AdaptiveDifficulty) && SkillLimits is {} limits ? limits with { EvidenceCount = 0 } : null,
         AimStyle = Kind == TrainerKind.Aim ? AimStyle : TrainerAimStyle.Balanced,
@@ -53,6 +60,11 @@ public sealed record TrainerSettings(TrainerKind Kind = TrainerKind.Steady, int 
     public void Validate()
     {
         SkillLimits?.Validate();
+        if (!Enum.IsDefined(SliderShape) || !Enum.IsDefined(SpinnerPattern)
+            || MinimumStars.HasValue != MaximumStars.HasValue
+            || MinimumStars is {} lo && (!double.IsFinite(lo) || lo < 0 || MaximumStars is not {} hi || !double.IsFinite(hi) || hi < lo || hi > 10)
+            || MeasuredStars is {} measured && (!double.IsFinite(measured) || measured < 0))
+            throw new ArgumentOutOfRangeException(nameof(MinimumStars));
         if (!double.IsFinite(OverallDifficulty) || OverallDifficulty is < 2 or > 9) throw new ArgumentOutOfRangeException(nameof(OverallDifficulty));
         if (!Enum.IsDefined(Spinners) || SpinnerSeconds is not (2 or 4 or 6)
             || !double.IsFinite(MovementScale) || MovementScale is < .4 or > 1
@@ -71,7 +83,7 @@ public sealed record TrainerSettings(TrainerKind Kind = TrainerKind.Steady, int 
     }
 }
 
-public sealed record TrainerNote(double TimeMs, int Phrase, TrainerPattern Pattern = TrainerPattern.Standard);
+public sealed record TrainerNote(double TimeMs, int Phrase, TrainerPattern Pattern = TrainerPattern.Standard, double MusicAccent = 1, double MusicEnergy = 1, double MusicHoldBeats = 0);
 public sealed record TrainerHit(int NoteIndex, double OffsetMs, int Key);
 public sealed record TrainerResult(Guid Id, DateTimeOffset CompletedAt, TrainerSettings Settings,
     int Notes, int Hits, int Within25, int Extras, int RepeatedKeys, double? MeanMs,
@@ -80,8 +92,9 @@ public sealed record TrainerResult(Guid Id, DateTimeOffset CompletedAt, TrainerS
     ReactionSummary? Reaction = null, ReadingWindowResult[]? ReadingWindows = null,
     SpinnerPracticeSummary? SpinnerPractice = null, int? TapTargets = null, TrainerWarmupRun? WarmupRun = null)
 {
-    public bool UsesOsuJudgements => Engine is "osu" or "osu-moving-v2" or "osu-patterns-v3" or "osu-adaptive-v4" or "osu-reading-v2" or "osu-reading-v3" or "osu-reading-v4" or "osu-spinner-v1";
+    public bool UsesOsuJudgements => Engine is "osu-song-v2" or "osu-song-v1" or "osu" or "osu-moving-v2" or "osu-patterns-v3" or "osu-adaptive-v4" or "osu-reading-v2" or "osu-reading-v3" or "osu-reading-v4" or "osu-spinner-v1";
     public static string EngineFor(TrainerSettings s) => s.Kind == TrainerKind.Reaction ? "reaction-v2"
+        : TrainerMusicCatalog.IsSong(s.Music) ? "osu-song-v2"
         : s.Kind == TrainerKind.Spinner ? "osu-spinner-v1"
         : s.Kind == TrainerKind.Reading ? "osu-reading-v4"
         : s.RandomizePatterns ? "osu-adaptive-v4"
@@ -118,7 +131,8 @@ public sealed class TrainerSession
                 if (time < EndMs) notes.Add(new(time, phrase, TrainerPatterns.PatternAt(settings,bar)));
             }
         }
-        Notes = TrainerReadingPatterns.ConstrainTiming(settings, TrainerSkillProfile.ConstrainNotes(settings,notes)); judged = new bool[Notes.Count];
+        var arranged = TrainerSongArrangement.For(settings)?.Arrange(settings, notes, StartMs, EndMs) ?? notes;
+        Notes = TrainerReadingPatterns.ConstrainTiming(settings, TrainerSkillProfile.ConstrainNotes(settings,arranged)); judged = new bool[Notes.Count];
     }
 
     public TrainerHit? Tap(double audioTimeMs, int key)
@@ -197,7 +211,8 @@ public sealed class TrainerSession
     }
 }
 
-public sealed record TrainerWorkspacePreferences(bool ShuffleMusic = true, bool RandomizePatterns = false, bool FreshLayout = true, bool GuidedCues = false, bool AdaptiveDifficulty = true);
+public sealed record TrainerWorkspacePreferences(bool ShuffleMusic = true, bool RandomizePatterns = false, bool FreshLayout = true, bool GuidedCues = false, bool AdaptiveDifficulty = true,
+    bool TargetStarsEnabled = false, double MinimumStars = 3, double MaximumStars = 4);
 
 public sealed class TrainerHistoryStore(string path)
 {

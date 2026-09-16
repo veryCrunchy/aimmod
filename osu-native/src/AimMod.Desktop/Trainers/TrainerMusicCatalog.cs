@@ -4,10 +4,20 @@ public static class TrainerMusicCatalog
 {
     public static readonly IReadOnlyDictionary<string, string> Songs = new Dictionary<string, string>
     {
-        ["midnight-pulse"] = "Midnight Pulse", ["mint-current"] = "Mint Current", ["afterglow"] = "Afterglow",
-        ["moonlit-orbit"] = "Moonlit Orbit", ["neon-cascade"] = "Neon Cascade", ["velvet-horizon"] = "Velvet Horizon",
-        ["mint-breaker"] = "Mint Breaker · breakbeat", ["night-drive"] = "Night Drive · synthwave",
-        ["sidechain-city"] = "Sidechain City · garage", ["tidal-signal"] = "Tidal Signal · percussion",
+        ["night-drive"] = "Last Bus",
+        ["midnight-pulse"] = "One More",
+        ["mint-current"] = "Out of Breath",
+        ["afterglow"] = "Second Wind",
+        ["moonlit-orbit"] = "Empty Streets",
+        ["neon-cascade"] = "Wrong Turn",
+        ["velvet-horizon"] = "Stay a While",
+        ["mint-breaker"] = "Loose Change",
+        ["sidechain-city"] = "Upstairs",
+        ["tidal-signal"] = "Skipping Stones",
+        ["glass-harbor"] = "Breakwater",
+        ["copper-sky"] = "Backseat",
+        ["aurora-circuit"] = "All the Way",
+        ["signal-bloom"] = "Good Company",
     };
     public static readonly int[] Tempos = [90, 120, 150, 180, 210];
     public static bool IsSong(string name) => Songs.ContainsKey(name);

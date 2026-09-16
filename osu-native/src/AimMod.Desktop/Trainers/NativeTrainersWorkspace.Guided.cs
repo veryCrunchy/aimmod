@@ -24,6 +24,7 @@ public partial class NativeTrainersWorkspace
 
     internal void TogglePracticeOptions()
     {
+        if (preferences.AdaptiveDifficulty) return;
         bool open = practiceOptions.Alpha == 0;
         practiceOptions.Alpha = open ? 1 : 0;
         practiceOptionsToggle.SetSelected(open);
@@ -104,6 +105,7 @@ public partial class NativeTrainersWorkspace
             PracticeIntent.Build => "Set up progression",
             _ => "Start practice",
         });
+        refreshAdaptiveVisibility();
     }
 
     private void startSelectedPractice()
@@ -129,7 +131,7 @@ public partial class NativeTrainersWorkspace
         if (focus == TrainerGuidedFocus.GroupLength && settings.RandomizePatterns)
         { status.Text = "Turn the skill randomizer off and choose one burst or stream pattern before building group length."; return; }
         if (!customSettings && inheritedSettings is {} inherited) ApplyOsuSettings(inherited);
-        var baseline = TrainerSkillProfile.Apply(settings, currentSkillLimits());
+        var baseline = adaptiveSettings(settings) with { MinimumStars = null, MaximumStars = null, MeasuredStars = null };
         guidedPlan = TrainerGuidedPractice.Create(baseline, focus);
         guidedStore = history();
         guidedAccountId = CurrentSkillAccountId?.Invoke();

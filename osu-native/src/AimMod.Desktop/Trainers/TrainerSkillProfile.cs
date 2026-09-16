@@ -23,7 +23,7 @@ public sealed record TrainerSkillLimits(double MaxNps = 2.5, double MaxJumpDista
 
 public static class TrainerSkillProfile
 {
-    public static TrainerSkillLimits Build(TrainerKind kind, IEnumerable<TrainerResult> history, IEnumerable<TrainerSkillEvidence> replays, DateTimeOffset now)
+    public static TrainerSkillLimits Build(TrainerKind kind, IEnumerable<TrainerResult> history, IEnumerable<TrainerSkillEvidence> replays, DateTimeOffset now, TrainerSkillLimits? startingLimits = null)
     {
         var recent = history.Where(r => r.WarmupRun is null && r.Settings.Kind == kind && r.Notes >= 12
             && TrainerPerformance.IsCompleted(r, now) && r.CompletedAt >= now.AddDays(-30))
@@ -34,23 +34,24 @@ public static class TrainerSkillProfile
         // One replay contributes at most one sample; a long map cannot outweigh several plays.
         var replay = replays.DistinctBy(r => r.ScoreId).Select(r => r.Demand).Where(valid)
             .Where(d => kind is not (TrainerKind.Alternating or TrainerKind.Rhythm) || d.LongestChain >= 16).Take(40).ToArray();
-        var limits = new TrainerSkillLimits();
+        var limits = startingLimits ?? new TrainerSkillLimits();
         int count = 0;
         if (replay.Length >= 3)
         {
-            limits = limits with { MaxNps = quantile(replay.Select(d=>d.PeakNps))*.85,
-                MaxJumpDistance = quantile(replay.Select(d=>d.JumpDistance))*.85, MaxAimVelocity = quantile(replay.Select(d=>d.AimVelocity))*.85,
-                MaxChain = (int)quantile(replay.Select(d=>(double)d.LongestChain)), MaxBurst = 5 };
+            limits = limits with { MaxNps = Math.Max(startingLimits?.MaxNps ?? 0, quantile(replay.Select(d=>d.PeakNps))*.85),
+                MaxJumpDistance = Math.Max(startingLimits?.MaxJumpDistance ?? 0, quantile(replay.Select(d=>d.JumpDistance))*.85), MaxAimVelocity = Math.Max(startingLimits?.MaxAimVelocity ?? 0, quantile(replay.Select(d=>d.AimVelocity))*.85),
+                MaxChain = Math.Max(startingLimits?.MaxChain ?? 0, (int)quantile(replay.Select(d=>(double)d.LongestChain))), MaxBurst = Math.Max(startingLimits?.MaxBurst ?? 0, 5) };
             count = replay.Length;
         }
         if (clean.Length >= 3)
         {
-            // Modest progression only after repeated clean runs in this exact practice mode.
-            limits = limits with { MaxNps = quantile(clean.Select(d=>d.PeakNps))*1.05,
-                MaxJumpDistance = quantile(clean.Select(d=>d.JumpDistance))*1.05, MaxAimVelocity = quantile(clean.Select(d=>d.AimVelocity))*1.05,
-                MaxChain = (int)quantile(clean.Select(d=>(double)d.LongestChain))+4,
-                MaxBurst = clean.Length >= 9 ? 9 : clean.Length >= 6 ? 7 : 5,
-                Complexity = clean.Length >= 6 ? 2 : 1, MaxApproachRate = Math.Min(9,recent.Where(r=>TrainerPerformance.Steady(r, reference)).Min(r=>r.Settings.ApproachRate)+1) };
+            // A clean drill demonstrates a lower bound, not the player's ceiling. Completing
+            // simplified exercises must not erase replay evidence or a chosen challenge.
+            limits = limits with { MaxNps = Math.Max(limits.MaxNps, quantile(clean.Select(d=>d.PeakNps))*1.05),
+                MaxJumpDistance = Math.Max(limits.MaxJumpDistance, quantile(clean.Select(d=>d.JumpDistance))*1.05), MaxAimVelocity = Math.Max(limits.MaxAimVelocity, quantile(clean.Select(d=>d.AimVelocity))*1.05),
+                MaxChain = Math.Max(limits.MaxChain, (int)quantile(clean.Select(d=>(double)d.LongestChain))+4),
+                MaxBurst = Math.Max(limits.MaxBurst, clean.Length >= 9 ? 9 : clean.Length >= 6 ? 7 : 5),
+                Complexity = Math.Max(limits.Complexity, clean.Length >= 6 ? 2 : 1), MaxApproachRate = Math.Max(limits.MaxApproachRate, Math.Min(9,recent.Where(r=>TrainerPerformance.Steady(r, reference)).Min(r=>r.Settings.ApproachRate)+1)) };
             count += clean.Length;
         }
         if (recent.Take(3).Count(r => TrainerPerformance.Struggling(r, reference)) >= 2)
@@ -91,7 +92,7 @@ public static class TrainerSkillProfile
     {
         if (!(s.RandomizePatterns || s.AdaptiveDifficulty) || s.Kind is TrainerKind.Reaction or TrainerKind.Spinner) return s with { SkillLimits = null };
         limits.Validate();
-        return s with { SkillLimits = limits, ReadingComplexity = Math.Min(s.ReadingComplexity, limits.Complexity), ApproachRate = Math.Min(s.ApproachRate,limits.MaxApproachRate), CircleSize = Math.Min(s.CircleSize,4),
+        return s with { SkillLimits = limits, ReadingComplexity = Math.Min(s.ReadingComplexity, limits.Complexity), ApproachRate = Math.Min(s.ApproachRate,limits.MaxApproachRate), CircleSize = Math.Min(s.CircleSize,s.AdaptiveDifficulty && s.Kind == TrainerKind.Aim ? 5 : 4),
             Sliders = limits.Complexity == 0 && s.Sliders == TrainerSliderStyle.BackAndForth ? TrainerSliderStyle.Mixed : s.Sliders,
             SliderBeats = limits.Complexity == 0 ? 1 : Math.Min(s.SliderBeats,2) };
     }
@@ -99,7 +100,7 @@ public static class TrainerSkillProfile
     public static bool Allows(TrainerPattern pattern, TrainerSkillLimits limits) => pattern switch
     {
         TrainerPattern.FiveNotes => limits.MaxBurst>=5, TrainerPattern.SevenNotes => limits.MaxBurst>=7,
-        TrainerPattern.NineNotes => limits.MaxBurst>=9, TrainerPattern.MixedBursts => limits.MaxBurst>=5,
+        TrainerPattern.NineNotes => limits.MaxBurst>=9, TrainerPattern.BurstLadder => limits.MaxBurst>=7, TrainerPattern.MixedBursts => limits.MaxBurst>=5,
         TrainerPattern.LongStreams => limits.MaxChain>=24, TrainerPattern.BuildUp => limits.Complexity>=1,
         TrainerPattern.JumpFill or TrainerPattern.Scattered or TrainerPattern.Offbeat => limits.Complexity>=1,
         TrainerPattern.JumpTriples or TrainerPattern.SpeedSwitch or TrainerPattern.Syncopated or TrainerPattern.Triplets or TrainerPattern.Overlaps or TrainerPattern.Crossings => limits.Complexity>=2,

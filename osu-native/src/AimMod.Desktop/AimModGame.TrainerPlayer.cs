@@ -50,10 +50,11 @@ public partial class AimModGame
                     return (source, bytes: File.ReadAllBytes(path), extension: Path.GetExtension(path),
                         background: TrainerBackground.Read(root, source.Metadata.BackgroundFile));
                 }).ConfigureAwait(false);
-                prepared = TrainerBeatmap.FromSong(settings, data.source, data.bytes, data.extension, Audio, volume);
+                prepared = await Task.Run(() => TrainerBeatmap.FromSong(settings, data.source, data.bytes, data.extension, Audio, volume)).ConfigureAwait(false);
                 prepared.SetBackground(data.background, Host.Renderer);
             }
-            else prepared = await Task.Run(() => new TrainerBeatmap(settings, Audio, volume)).ConfigureAwait(false);
+            else prepared = await Task.Run(() => TrainerBeatmap.Prepare(settings, Audio, volume)).ConfigureAwait(false);
+            settings = prepared.Timeline.Settings;
             var map = prepared;
             Schedule(() =>
             {
@@ -72,7 +73,7 @@ public partial class AimModGame
                 trainersWorkspace?.SetPreparationStatus(false, "Practice stopped.");
                 trainersWorkspace?.CompleteOsuSession(null);
                 trainersWorkspace?.SetPreparationStatus(false, error is IOException or InvalidOperationException
-                    ? error.Message : "Practice could not start. Choose another song or try again.");
+                    ? error.Message : "Practice could not start. Choose another song or try again.", reveal: true);
             });
         }
     }

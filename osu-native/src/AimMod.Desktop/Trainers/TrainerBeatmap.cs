@@ -31,6 +31,14 @@ public sealed class TrainerBeatmap : WorkingBeatmap
     public TrainerBeatmap(TrainerSettings settings, AudioManager audio, double volume)
         : this(Create(settings), new TrainerSession(settings), audio, volume, settings.Music == "cues" ? null : TrainerAudio.Asset(TrainerMusicCatalog.Asset(settings.Music, settings.Bpm)), settings.Music == "cues" ? ".wav" : ".ogg") { }
 
+    public static TrainerBeatmap Prepare(TrainerSettings settings, AudioManager audio, double volume)
+    {
+        var plan = TrainerStarTarget.RequireTarget(TrainerStarTarget.Fit(settings));
+        settings = plan.Settings;
+        return new(plan.Map, new TrainerSession(plan.Settings), audio, volume,
+            settings.Music == "cues" ? null : TrainerAudio.Asset(TrainerMusicCatalog.Asset(settings.Music, settings.Bpm)), settings.Music == "cues" ? ".wav" : ".ogg");
+    }
+
     private TrainerBeatmap(Beatmap<OsuHitObject> map, TrainerSession timeline, AudioManager audio, double volume, byte[]? sourceAudio = null, string extension = ".wav")
         : base(map.BeatmapInfo, audio)
     {
@@ -52,11 +60,13 @@ public sealed class TrainerBeatmap : WorkingBeatmap
         settings.Validate();
         if (settings.Kind == TrainerKind.Reaction) throw new ArgumentException("Reaction uses a separate cue exercise.");
         var timeline = new TrainerSession(settings);
+        var arrangement = TrainerSongArrangement.For(settings);
+        bool authoredNotes = arrangement is not null || settings.AdaptiveDifficulty && settings.Music == "song";
         notes = TrainerReadingPatterns.ConstrainTiming(settings, TrainerSkillProfile.ConstrainNotes(settings, notes ?? timeline.Notes));
         var map = new Beatmap<OsuHitObject> { StackLeniency = 0 };
         map.BeatmapInfo.Ruleset = new OsuRuleset().RulesetInfo;
         map.BeatmapInfo.DifficultyName = NativeTrainersWorkspace.DisplayName(settings.Kind);
-        map.Metadata.Title = map.BeatmapInfo.DifficultyName;
+        map.Metadata.Title = TrainerMusicCatalog.IsSong(settings.Music) ? TrainerMusicCatalog.Songs[settings.Music] : map.BeatmapInfo.DifficultyName;
         map.Metadata.Artist = "AimMod";
         map.Metadata.Author.Username = "AimMod";
         map.Metadata.AudioFile = "trainer.wav";
@@ -109,6 +119,9 @@ public sealed class TrainerBeatmap : WorkingBeatmap
                 TrainerKind.Reading => i % settings.ReadingGroupSize == 0,
                 _ => i % 4 == 0,
             };
+            if (arrangement is not null && settings.Kind == TrainerKind.Aim)
+                position = new Vector2(256, 192) + (position - new Vector2(256, 192))
+                    * (float)(.65 + .20 * notes[i].MusicAccent + .15 * notes[i].MusicEnergy);
             if ((settings.RandomizePatterns || settings.AdaptiveDifficulty) && settings.SkillLimits is {} skill && map.HitObjects.LastOrDefault() is {} previous)
             {
                 double availableTime = Math.Max(0,notes[i].TimeMs-previousObjectEnd)/1000;
@@ -117,15 +130,17 @@ public sealed class TrainerBeatmap : WorkingBeatmap
                 if (distance>maximum && distance>0) position=Vector2.Lerp(previous.EndPosition,position,(float)(maximum/distance));
             }
             bool slider = settings.Sliders != TrainerSliderStyle.None && (settings.Sliders == TrainerSliderStyle.SlidersOnly || (settings.RandomizePatterns || settings.Kind == TrainerKind.Reading ? random.Next(5)==0 : i%8==0));
+            if (authoredNotes) slider = settings.Sliders != TrainerSliderStyle.None && notes[i].MusicHoldBeats >= .55;
+            double holdBeats = authoredNotes ? notes[i].MusicHoldBeats : settings.SliderBeats;
             // Compact comparisons preserve every target time and the original path geometry.
             position = new Vector2(256, 192) + (position - new Vector2(256, 192)) * (float)settings.MovementScale;
             double beatLength = map.ControlPointInfo.TimingPointAt(notes[i].TimeMs).BeatLength;
             double available = notes[^1].TimeMs - notes[i].TimeMs;
-            if (slider && available >= beatLength * settings.SliderBeats + beatLength*.25)
+            if (slider && available >= beatLength * holdBeats + beatLength*.25)
             {
                 int repeats = settings.Sliders == TrainerSliderStyle.BackAndForth ? 3 : 0;
-                double duration = beatLength * settings.SliderBeats;
-                double length = 100 * map.Difficulty.SliderMultiplier * settings.SliderBeats / (repeats+1);
+                double duration = beatLength * holdBeats;
+                double length = 100 * map.Difficulty.SliderMultiplier * holdBeats / (repeats+1);
                 // Keep even four-beat paths inside the playfield through a curved path.
                 Vector2 direction = new(position.X < 256 ? 1 : -1, position.Y < 192 ? .35f : -.35f);
                 direction.Normalize();
@@ -133,7 +148,8 @@ public sealed class TrainerBeatmap : WorkingBeatmap
                 if((settings.RandomizePatterns || settings.AdaptiveDifficulty) && settings.SkillLimits is {} sliderSkill)
                     spanLength=Math.Min(spanLength,Math.Min(sliderSkill.MaxJumpDistance,sliderSkill.MaxAimVelocity*duration/1000/(repeats+1)));
                 spanLength *= settings.MovementScale;
-                var path = new SliderPath([new PathControlPoint(Vector2.Zero, PathType.LINEAR), new PathControlPoint(direction*(float)spanLength)], spanLength);
+                var path = TrainerAdvancedObjects.Slider(settings, position, i, spanLength);
+                spanLength = path.Distance;
                 var obj = new Slider { StartTime = notes[i].TimeMs, Position = position, NewCombo = newCombo, Path = path, RepeatCount = repeats,
                     SliderVelocityMultiplier = spanLength / length, Samples = [new HitSampleInfo(HitSampleInfo.HIT_NORMAL)] };
                 map.HitObjects.Add(obj);
@@ -144,6 +160,7 @@ public sealed class TrainerBeatmap : WorkingBeatmap
             }
             else
             {
+                if (arrangement is not null && settings.Sliders == TrainerSliderStyle.SlidersOnly) continue;
                 map.HitObjects.Add(new HitCircle { StartTime = notes[i].TimeMs, Position = position, NewCombo = newCombo, Samples = [new HitSampleInfo(HitSampleInfo.HIT_NORMAL)] });
                 previousObjectEnd = notes[i].TimeMs;
             }
@@ -156,7 +173,9 @@ public sealed class TrainerBeatmap : WorkingBeatmap
     {
         var notes = SongNotes(settings, source);
         if (notes.Count < 4) throw new InvalidDataException("Choose an earlier section or a longer song.");
-        var map = Create(settings, notes, source.ControlPointInfo);
+        var plan = TrainerStarTarget.RequireTarget(TrainerStarTarget.Fit(settings, candidate => Create(candidate, SongNotes(candidate, source), source.ControlPointInfo)));
+        settings = plan.Settings;
+        var map = plan.Map;
         map.Metadata.Title = source.Metadata.Title;
         map.Metadata.Artist = source.Metadata.Artist;
         map.Metadata.BackgroundFile = source.Metadata.BackgroundFile;
@@ -187,6 +206,21 @@ public sealed class TrainerBeatmap : WorkingBeatmap
             int firstBar = Math.Max(0, (int)Math.Floor((lower-point.Time)/(beat*4)));
             int lastBar = (int)Math.Ceiling((upper-point.Time)/(beat*4));
             var segmentSettings=settings with { Bpm=(int)Math.Round(60000/beat) };
+            if (settings.AdaptiveDifficulty && settings.Kind != TrainerKind.Spinner)
+            {
+                // Installed songs already have authored rhythm in the source difficulty.
+                // Keep those attacks, including tempo changes, instead of laying a new grid over them.
+                double toBeat(double time) => (time - point.Time) * segmentSettings.Bpm / 60000;
+                var objects = source.HitObjects.Where(o => o.StartTime >= lower && o.StartTime < upper).ToArray();
+                var events = objects.Where(o => o is not Spinner).Select(o => new TrainerMusicEvent(toBeat(o.StartTime), .9, 0)).OrderBy(e => e.Beat).ToArray();
+                var holds = objects.OfType<Slider>().Where(o => o.Duration > 0).Select(o =>
+                    new TrainerMusicHold(toBeat(o.StartTime), o.Duration / beat, false, true)).ToArray();
+                var profile = new TrainerSongArrangement(2, "song", segmentSettings.Bpm, "", point.Time,
+                    toBeat(upper), [new(toBeat(lower), toBeat(upper), .7, false)], events, holds);
+                notes.AddRange(profile.Arrange(segmentSettings, [], lower, upper).Select(n => n with { Phrase = phraseBase + n.Phrase }));
+                phraseBase += lastBar * 16 + 2;
+                continue;
+            }
             for (int bar = firstBar; bar < lastBar; bar++)
                 foreach (var (offset, phrase) in TrainerPatterns.Bar(segmentSettings, bar))
                 {

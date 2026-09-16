@@ -21,13 +21,21 @@ public static class TrainerSpinners
         double duration = settings.SpinnerSeconds * 1000;
         var replacements = new List<OsuHitObject>();
         if (settings.Kind == TrainerKind.Spinner) map.HitObjects.Clear();
+        var arrangement = TrainerSongArrangement.For(settings);
         while (next + duration <= end)
         {
+            duration = TrainerAdvancedObjects.SpinSeconds(settings, replacements.Count) * 1000;
             // Snap to an existing musical onset, including imported tempo changes.
             double start = original.FirstOrDefault(o => o.StartTime >= next)?.StartTime ?? end;
             if (start + duration > end) break;
             if (settings.Kind != TrainerKind.Spinner)
             {
+                if (arrangement is not null)
+                {
+                    var section = arrangement.SectionAt(arrangement.BeatAt(start));
+                    if (section is null || !section.Quiet || arrangement.TimeAt(section.EndBeat) < start + duration + gap)
+                    { next = section is null ? start + 1000 : arrangement.TimeAt(section.EndBeat); continue; }
+                }
                 // Never cut a slider already being held. Move the insertion after its tail.
                 var held = map.HitObjects.LastOrDefault(o => o.StartTime < start && End(o) > start - gap);
                 if (held is Slider) { next = End(held) + gap; continue; }

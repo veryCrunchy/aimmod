@@ -38,6 +38,10 @@ public sealed record HubTrainingSession(string Id, DateTimeOffset CompletedAt, s
             info.Properties.Single(p => p.Name == nameof(TrainerSettings.ReadingHidden)).ShouldSerialize = (_, value) => value is true;
             info.Properties.Single(p => p.Name == nameof(TrainerSettings.ReactionMode)).ShouldSerialize = (_, value) => value is ReactionMode mode && mode != ReactionMode.Simple;
             info.Properties.Single(p => p.Name == nameof(TrainerSettings.ReactionWindowMs)).ShouldSerialize = (_, value) => value is int window && window != 1200;
+            info.Properties.Single(p => p.Name == nameof(TrainerSettings.SliderShape)).ShouldSerialize = (_, value) => value is TrainerSliderShape shape && shape != TrainerSliderShape.Straight;
+            info.Properties.Single(p => p.Name == nameof(TrainerSettings.SpinnerPattern)).ShouldSerialize = (_, value) => value is TrainerSpinnerPattern pattern && pattern != TrainerSpinnerPattern.Steady;
+            foreach (string name in new[] { nameof(TrainerSettings.MinimumStars), nameof(TrainerSettings.MaximumStars), nameof(TrainerSettings.MeasuredStars) })
+                info.Properties.Single(p => p.Name == name).ShouldSerialize = (_, _) => false;
         });
         return new JsonSerializerOptions { TypeInfoResolver = resolver };
     }

@@ -54,6 +54,7 @@ AimMod is one workspace for finding maps, reviewing plays and improving. A route
 - Show the current practice step, its purpose and progress together. Keep the full session and comparisons reachable without making every step compete for attention.
 - Empty states must offer an action the player can take now. Results must offer a repeat, continuation or return to a real map.
 - Reflect the selected mode honestly: fixed-song comparisons must not promise shuffle, and unavailable evidence must not become a completed step.
+- Trainers default to adaptive sessions. Show the planned tempo, load and object mix; keep exact pattern and difficulty controls in manual mode. Resolve automatic settings into a separate session value so starting or repeating a run never overwrites the player's manual choices. Musical attacks and held notes must remain tied to the selected audio, with skill limits applied by selecting or simplifying phrases rather than shifting taps away from the music.
 
 ### Visual exercise choices
 

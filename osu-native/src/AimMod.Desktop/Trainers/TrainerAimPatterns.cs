@@ -2,7 +2,7 @@ using osuTK;
 
 namespace AimMod.Desktop.Trainers;
 
-public enum TrainerAimStyle { Balanced, WideJumps, Flow, SmallCorrections, DirectionChanges }
+public enum TrainerAimStyle { Balanced, WideJumps, Flow, SmallCorrections, DirectionChanges, Triangles, Boxes, CrossScreen }
 
 public static class TrainerAimPatterns
 {
@@ -10,6 +10,20 @@ public static class TrainerAimPatterns
     {
         var random = new Random(settings.PatternSeed);
         var result = new Vector2[count];
+        if (settings.AimStyle is TrainerAimStyle.Triangles or TrainerAimStyle.Boxes or TrainerAimStyle.CrossScreen)
+        {
+            int corners = settings.AimStyle == TrainerAimStyle.Triangles ? 3 : 4;
+            double phase = random.NextDouble() * Math.PI * 2;
+            float radius = Math.Min(120, 88 * settings.AimSpacing / 100f);
+            for (int i = 0; i < count; i++)
+            {
+                double angle = phase + (i % corners) * Math.PI * 2 / corners + i / (corners * 2) * .7;
+                result[i] = settings.AimStyle == TrainerAimStyle.CrossScreen
+                    ? new Vector2(256 + (i % 2 == 0 ? -1 : 1) * Math.Min(190, radius * 1.6f), 192 + (float)Math.Sin(angle) * radius * .8f)
+                    : new Vector2(256 + (float)Math.Cos(angle) * radius, 192 + (float)Math.Sin(angle) * radius);
+            }
+            return result;
+        }
         Vector2 previous = new(210 + random.Next(90), 150 + random.Next(80));
         double heading = random.NextDouble() * Math.PI * 2;
         for (int i = 0; i < count; i++)

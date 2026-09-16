@@ -56,7 +56,7 @@ public sealed class TrainerWarmup
             var selected = new TrainerSettings(kind, bpm, minutes * 15, controls.OffsetMs, controls.Keys, song,
                 RandomizePatterns: true, SkillLimits: limits, AimSpacing: 85, PatternSeed: Random.Shared.Next(1, int.MaxValue),
                 ApproachRate: Math.Min(7, limits.MaxApproachRate), Sliders: kind == TrainerKind.Aim ? TrainerSliderStyle.Mixed : TrainerSliderStyle.None,
-                GuidedCues: true, OverallDifficulty: Math.Clamp((matching.Length >= 3
+                GuidedCues: true, AdaptiveDifficulty: true, OverallDifficulty: Math.Clamp((matching.Length >= 3
                     ? TrainerPerformance.Median(matching.Select(r => r.Settings.OverallDifficulty)) : 5) * fraction, 2, 8));
             selected = TrainerSkillProfile.Apply(selected, limits);
             selected.Validate();

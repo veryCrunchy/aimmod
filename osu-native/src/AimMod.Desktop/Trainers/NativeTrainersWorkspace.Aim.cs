@@ -18,6 +18,7 @@ public partial class NativeTrainersWorkspace
             ["Balanced jumps"] = TrainerAimStyle.Balanced, ["Wide jumps"] = TrainerAimStyle.WideJumps,
             ["Flowing aim"] = TrainerAimStyle.Flow, ["Small corrections"] = TrainerAimStyle.SmallCorrections,
             ["Direction changes"] = TrainerAimStyle.DirectionChanges,
+            ["Triangle jumps"] = TrainerAimStyle.Triangles, ["Box jumps"] = TrainerAimStyle.Boxes, ["Cross-screen jumps"] = TrainerAimStyle.CrossScreen,
         }, settings.AimStyle, style => { settings = settings with { AimStyle = style }; updateInstruction(); refreshHistory(); }, 205, d => aimStyleSelector = d));
         aimControls.Add(selector("JUMP DISTANCE", new[] { 70, 85, 100, 120, 140 }.Select(v => new KeyValuePair<string, int>($"{v}%", v)),
             100, v => { settings = settings with { AimSpacing = v }; refreshHistory(); }, 130, d => aimSpacingSelector = d));

@@ -98,6 +98,17 @@ public sealed class HubTrainingSyncTests
         Assert.That(HubTrainingSession.FromResult(original with { Settings = original.Settings with { MovementScale = .7 } }, false).Setup.ConfigurationHash,
             Is.Not.EqualTo(compactHash));
     }
+    [Test] public void AdvancedSliderShapesSeparateCohortsButStarLabelsDoNot()
+    {
+        var original = result() with { Settings = new(Sliders: TrainerSliderStyle.Mixed) };
+        var curved = original with { Settings = original.Settings with { SliderShape = TrainerSliderShape.SCurve } };
+        Assert.That(HubTrainingSession.FromResult(curved, false).Setup.ConfigurationHash,
+            Is.Not.EqualTo(HubTrainingSession.FromResult(original, false).Setup.ConfigurationHash));
+        var labelled = curved with { Settings = curved.Settings with { MinimumStars = 3, MaximumStars = 4, MeasuredStars = 3.5 } };
+        Assert.That(HubTrainingSession.FromResult(labelled, false).Setup.ConfigurationHash,
+            Is.EqualTo(HubTrainingSession.FromResult(curved, false).Setup.ConfigurationHash));
+    }
+
     [Test] public void DifferentTimingWindowsCannotShareTheSameProgressCohort()
     {
         var normal = result();

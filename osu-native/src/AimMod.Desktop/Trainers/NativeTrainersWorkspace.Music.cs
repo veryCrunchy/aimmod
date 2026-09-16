@@ -26,12 +26,14 @@ public partial class NativeTrainersWorkspace
     private AimModButton shuffleToggle = null!;
     private AimModDropdown<string> cueSelector = null!;
 
-    public void SetPreparationStatus(bool busy, string message)
+    public void SetPreparationStatus(bool busy, string message, bool reveal = false)
     {
         preparing = busy;
         start.SetCaption(busy ? "Preparing..." : "Start practice");
         status.Text = message;
         if (warmupStatus is not null) warmupStatus.Text = message;
+        if (reveal) Scheduler.AddDelayed(() => contentScroll.ScrollTo(contentScroll.Current
+            + contentScroll.ToLocalSpace(status.ToScreenSpace(osuTK.Vector2.Zero)).Y - 100, false), 200);
     }
 
     private void buildMusicControls(FillFlowContainer<Drawable> body)
@@ -108,9 +110,10 @@ public partial class NativeTrainersWorkspace
         shuffleToggle.Alpha = !fixedMusic && TrainerMusicCatalog.IsSong(settings.Music) ? 1 : 0;
         musicDescription.Text = settings.Music switch
         {
-            "song" => "Your selected drill follows the song's timing, including tempo changes. Sections start from the map's first notes and stop at its end.",
+            "song" => preferences.AdaptiveDifficulty ? "Practice follows the map's authored notes and slider holds, including tempo changes."
+                : "Your chosen drill follows the map's tempo changes. Fixed patterns can differ from the song's melody.",
             "cues" => "A clear cue on every target, with four beats to count you in.",
-            _ => $"{TrainerMusicCatalog.Songs[settings.Music]} · {settings.Bpm} BPM. " + (fixedMusic ? "This song stays the same throughout your comparison or progression."
+            _ => $"{TrainerMusicCatalog.Songs[settings.Music]}. " + (preferences.AdaptiveDifficulty ? "Tempo and patterns are matched to your level and the music. " : $"{settings.Bpm} BPM. Explicit note rates keep their rhythm over the song. ") + (fixedMusic ? "This song stays the same throughout your comparison or progression."
                 : preferences.ShuffleMusic ? "Shuffle picks a different song each run." : "This song stays selected for your next run."),
         };
     }

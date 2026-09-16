@@ -50,7 +50,7 @@ public partial class NativeTrainersWorkspace
         sliderControl = selector("SLIDERS", new Dictionary<string, TrainerSliderStyle> { ["No sliders"] = TrainerSliderStyle.None,
             ["Circles + sliders"] = TrainerSliderStyle.Mixed, ["Slider focus"] = TrainerSliderStyle.SlidersOnly, ["Back and forth"] = TrainerSliderStyle.BackAndForth },
             settings.Sliders, v => { settings = settings with { Sliders = v }; refreshObjectAndGuideControls(); refreshHistory(); }, 185, d => sliderSelector = d);
-        sliderLengthControl = selector("SLIDER LENGTH", new[] {1,2,4}.Select(v => new KeyValuePair<string,int>($"{v} beat{(v==1?"":"s")}",v)),
+        sliderLengthControl = selector("SLIDER LENGTH LIMIT", new[] {1,2,4}.Select(v => new KeyValuePair<string,int>($"{v} beat{(v==1?"":"s")}",v)),
             1, v => { settings = settings with { SliderBeats = v }; refreshHistory(); }, 140, d => sliderLengthSelector = d);
         randomizeToggle = new AimModButton("", () => {
             settings = settings with { RandomizePatterns = !settings.RandomizePatterns };
@@ -84,6 +84,7 @@ public partial class NativeTrainersWorkspace
     {
         patternSelector.Current.Value = s.Pattern; noteSpeedSelector.Current.Value = s.NoteSpeed;
         sliderSelector.Current.Value = s.Sliders; sliderLengthSelector.Current.Value = s.SliderBeats;
+        sliderShapeSelector.Current.Value = s.SliderShape; spinnerPatternSelector.Current.Value = s.SpinnerPattern;
         pathSelector.Current.Value = s.PathStyle; approachSelector.Current.Value = s.ApproachRate;
         reactionDelaySelector.Current.Value = s.ReactionDelay;
         readingComplexitySelector.Current.Value = s.ReadingComplexity; readingLengthSelector.Current.Value = s.ReadingGroupSize; readingHiddenSelector.Current.Value = s.ReadingHidden;

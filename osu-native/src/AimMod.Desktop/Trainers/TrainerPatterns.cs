@@ -1,7 +1,7 @@
 namespace AimMod.Desktop.Trainers;
 
 public enum TrainerPattern { Standard, Offbeat, Doubles, Gaps, FiveNotes, SevenNotes, NineNotes, MixedBursts,
-    PartialStreams, LongStreams, BuildUp, Syncopated, Triplets, JumpFill, JumpTriples, SpeedSwitch, Scattered, Overlaps, Reversals, Crossings, ReadingPolygons, ReadingWeave, ReadingStacks, ReadingSpacedStreams, ReadingMix }
+    PartialStreams, LongStreams, BuildUp, Syncopated, Triplets, JumpFill, JumpTriples, SpeedSwitch, Scattered, Overlaps, Reversals, Crossings, ReadingPolygons, ReadingWeave, ReadingStacks, ReadingSpacedStreams, ReadingMix, BurstLadder }
 public enum TrainerNoteSpeed { Default, OnePerBeat, TwoPerBeat, FourPerBeat }
 public enum TrainerSliderStyle { None, Mixed, SlidersOnly, BackAndForth }
 public enum TrainerPathStyle { FigureEight, Arc, Zigzag, Random }
@@ -13,7 +13,7 @@ public static class TrainerPatterns
     {
         TrainerKind.Steady => new Dictionary<string, TrainerPattern> { ["Even taps"] = TrainerPattern.Standard, ["Offbeat taps"] = TrainerPattern.Offbeat, ["Doubles"] = TrainerPattern.Doubles, ["Rest and re-enter"] = TrainerPattern.Gaps },
         TrainerKind.Alternating => new Dictionary<string, TrainerPattern> { ["Full streams"] = TrainerPattern.Standard, ["Short streams · 8 notes"] = TrainerPattern.PartialStreams, ["Long streams · 24 notes"] = TrainerPattern.LongStreams, ["Build into streams"] = TrainerPattern.BuildUp },
-        TrainerKind.Bursts => new Dictionary<string, TrainerPattern> { ["3-note bursts"] = TrainerPattern.Standard, ["5-note bursts"] = TrainerPattern.FiveNotes, ["7-note bursts"] = TrainerPattern.SevenNotes, ["9-note bursts"] = TrainerPattern.NineNotes, ["Mixed · 3 / 5 / 7 / 9"] = TrainerPattern.MixedBursts },
+        TrainerKind.Bursts => new Dictionary<string, TrainerPattern> { ["3-note bursts"] = TrainerPattern.Standard, ["5-note bursts"] = TrainerPattern.FiveNotes, ["7-note bursts"] = TrainerPattern.SevenNotes, ["9-note bursts"] = TrainerPattern.NineNotes, ["Mixed · 3 / 5 / 7 / 9"] = TrainerPattern.MixedBursts, ["Build and release · 3 / 5 / 7"] = TrainerPattern.BurstLadder },
         TrainerKind.Rhythm => new Dictionary<string, TrainerPattern> { ["Half / quarter switches"] = TrainerPattern.Standard, ["Syncopation"] = TrainerPattern.Syncopated, ["Triplet transitions"] = TrainerPattern.Triplets, ["Stop and restart"] = TrainerPattern.Gaps },
         TrainerKind.Aim => new Dictionary<string, TrainerPattern> { ["Even jumps"] = TrainerPattern.Standard, ["Jumps + connecting notes"] = TrainerPattern.JumpFill, ["Jumps + triples"] = TrainerPattern.JumpTriples, ["Slow / fast jumps"] = TrainerPattern.SpeedSwitch },
         TrainerKind.Reading => new Dictionary<string, TrainerPattern> { ["Flowing sequences"] = TrainerPattern.Standard, ["Scattered patterns"] = TrainerPattern.Scattered, ["Overlapping patterns"] = TrainerPattern.Overlaps, ["Rhythm switches"] = TrainerPattern.SpeedSwitch, ["Direction reversals"] = TrainerPattern.Reversals, ["Crossing paths"] = TrainerPattern.Crossings, ["Polygons & angle changes"] = TrainerPattern.ReadingPolygons, ["Interwoven paths"] = TrainerPattern.ReadingWeave, ["Stacks & jump exits"] = TrainerPattern.ReadingStacks, ["Spaced stream shapes"] = TrainerPattern.ReadingSpacedStreams, ["Mixed reading"] = TrainerPattern.ReadingMix },
@@ -26,7 +26,7 @@ public static class TrainerPatterns
         TrainerNoteSpeed.OnePerBeat => 1, TrainerNoteSpeed.TwoPerBeat => .5, TrainerNoteSpeed.FourPerBeat => .25,
         _ => s.Kind is TrainerKind.Reading or TrainerKind.Aim ? 1 : s.Kind == TrainerKind.Steady ? .5 : .25,
         };
-        if (s.RandomizePatterns)
+        if (s.RandomizePatterns || s.AdaptiveDifficulty)
         {
             var limits=s.SkillLimits ?? new();
             double factor=s.Kind is TrainerKind.Aim or TrainerKind.Reading && limits.Complexity>=2 ? 4 : 1;
@@ -55,13 +55,13 @@ public static class TrainerPatterns
         }
         else if (s.Kind == TrainerKind.Bursts)
         {
-            bool mixed = pattern == TrainerPattern.MixedBursts || s.RandomizePatterns;
+            bool mixed = pattern is TrainerPattern.MixedBursts or TrainerPattern.BurstLadder || s.RandomizePatterns;
             var burstRandom = new Random(s.PatternSeed);
             double cursor = 0;
             for (int phrase = 0; cursor < (bar+1)*4; phrase++)
             {
                 int[] lengths = new[] {3,5,7,9}.Where(n=>!s.RandomizePatterns || n<=(s.SkillLimits??new()).MaxBurst).ToArray();
-                int length = mixed ? lengths[s.RandomizePatterns ? burstRandom.Next(lengths.Length) : phrase%lengths.Length]
+                int length = pattern == TrainerPattern.BurstLadder ? new[] {3,5,7,7,5,3}[phrase%6] : mixed ? lengths[s.RandomizePatterns ? burstRandom.Next(lengths.Length) : phrase%lengths.Length]
                     : pattern switch { TrainerPattern.FiveNotes => 5, TrainerPattern.SevenNotes => 7, TrainerPattern.NineNotes => 9, _ => 3 };
                 for (int i = 0; i < length; i++)
                 {

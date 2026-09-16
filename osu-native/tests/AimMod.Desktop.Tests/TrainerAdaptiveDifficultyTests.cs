@@ -36,7 +36,7 @@ public class TrainerAdaptiveDifficultyTests
         var demand = TrainerSkillProfile.Measure(map);
         Assert.That(demand.PeakNps, Is.LessThanOrEqualTo(next.SkillLimits!.MaxNps + .001));
         Assert.That(demand.AimVelocity, Is.LessThanOrEqualTo(next.SkillLimits.MaxAimVelocity + .001));
-        Assert.That(next.Pattern, Is.EqualTo(settings.Pattern));
+        Assert.That(next.Pattern, Is.EqualTo(kind == TrainerKind.Reading ? TrainerPattern.ReadingMix : settings.Pattern));
         Assert.That(next.RandomizePatterns, Is.False);
     }
 

@@ -19,7 +19,7 @@ public partial class NativeTrainersWorkspace
         body.Add(adaptiveToggle = new AimModButton("", () => {
             preferences = preferences with { AdaptiveDifficulty = !preferences.AdaptiveDifficulty };
             settings = settings with { AdaptiveDifficulty = preferences.AdaptiveDifficulty };
-            saveTrainerPreferences(); refreshHistory();
+            saveTrainerPreferences(); updateInstruction(); refreshHistory();
         }));
         body.Add(adaptiveSummary = paragraph(""));
         refreshAdaptiveSummary();
@@ -28,10 +28,22 @@ public partial class NativeTrainersWorkspace
     private void refreshAdaptiveSummary()
     {
         if (adaptiveSummary is null) return;
-        adaptiveToggle.SetCaption(preferences.AdaptiveDifficulty ? "Difficulty: Adaptive" : "Difficulty: Manual");
+        adaptiveToggle.SetCaption(preferences.AdaptiveDifficulty ? "Adaptive session: On" : "Manual session: On");
         adaptiveToggle.SetSelected(preferences.AdaptiveDifficulty);
         adaptiveSummary.Text = preferences.AdaptiveDifficulty ? TrainerAdaptiveDifficulty.Describe(adaptiveSettings(settings))
-            : settings.RandomizePatterns ? "Your skill randomizer still limits the generated patterns. Turn it off for fully manual difficulty."
-            : "Your selected difficulty stays fixed. Turn on Adaptive to follow your recent practice.";
+            : settings.RandomizePatterns ? "Choose your exact settings below. The skill randomizer is on; turn it off to keep the exact pattern."
+            : "Choose your tempo, patterns, sliders and difficulty below. Fixed drills keep your chosen rhythm over the song.";
+        refreshAdaptiveVisibility();
+    }
+
+    private void refreshAdaptiveVisibility()
+    {
+        refreshStarVisibility();
+        bool automatic = preferences.AdaptiveDifficulty;
+        if (timingControls is not null) timingControls.Alpha = !automatic && settings.Kind != TrainerKind.Reaction && settings.Music != "song" ? 1 : 0;
+        if (objectControls is not null) objectControls.Alpha = !automatic && settings.Kind != TrainerKind.Reaction ? 1 : 0;
+        if (readingControls is not null) readingControls.Alpha = !automatic && settings.Kind == TrainerKind.Reading ? 1 : 0;
+        if (practiceOptionsToggle is not null) practiceOptionsToggle.Alpha = !automatic && settings.Kind != TrainerKind.Spinner ? 1 : 0;
+        if (automatic && practiceOptions is not null) practiceOptions.Hide();
     }
 }
