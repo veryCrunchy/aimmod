@@ -9,6 +9,7 @@
     "ppy-packages.json"
   ],
   "allowedFilePatterns": [
+    "^app/Resources/Audio/INSTRUMENT-NOTICES\\.txt$",
     "^app/(.+/)?[^/]+\\.dll$",
     "^app/(.+/)?[^/]+\\.json$",
     "^app/(.+/)?[^/]+\\.so(\\.[0-9]+)*$",
@@ -16,6 +17,7 @@
     "^app/share/icons/hicolor/(16|24|32|48|64|128|256|512|1024)x\\1/apps/aimmod-osu\\.png$"
   ],
   "requiredFiles": [
+    "app/Resources/Audio/INSTRUMENT-NOTICES.txt",
     "app/AimMod",
     "app/AimMod.dll",
     "app/AimMod.deps.json",

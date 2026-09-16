@@ -9,12 +9,14 @@
     "ppy-packages.json"
   ],
   "allowedFilePatterns": [
+    "^app/Resources/Audio/INSTRUMENT-NOTICES\\.txt$",
     "^app/(.+/)?[^/]+\\.dll$",
     "^app/(.+/)?[^/]+\\.json$",
     "^app/(AimMod|createdump)\\.exe$",
     "^app/stbi\\.lib$"
   ],
   "requiredFiles": [
+    "app/Resources/Audio/INSTRUMENT-NOTICES.txt",
     "app/AimMod.exe",
     "app/AimMod.dll",
     "app/AimMod.deps.json",
