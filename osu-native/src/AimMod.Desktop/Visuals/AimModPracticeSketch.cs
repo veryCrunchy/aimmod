@@ -18,7 +18,8 @@ public partial class AimModPracticeSketch(PracticeSketchKind kind) : Container
     protected override void Update()
     {
         base.Update();
-        if (DrawWidth < 20 || renderedSize == DrawSize) return;
+        // Rebuilding allocates every stroke, so ignore sub-pixel layout jitter while resizing.
+        if (DrawWidth < 20 || (Math.Abs(renderedSize.X - DrawWidth) < 2 && Math.Abs(renderedSize.Y - DrawHeight) < 2)) return;
         renderedSize = DrawSize;
         Clear();
         Vector2 point(float x, float y) => new(10 + x * (DrawWidth - 20), 7 + y * (DrawHeight - 14));

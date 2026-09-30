@@ -30,7 +30,9 @@ public partial class AimModDropdown<T> : OsuDropdown<T>
         Drawable viewport = this;
         while (viewport.Parent is { } parent) viewport = parent;
         float bottom = ToLocalSpace(viewport.ToScreenSpace(new osuTK.Vector2(0, viewport.DrawHeight))).Y;
-        Menu.MaxHeight = Math.Clamp(bottom - DrawHeight - 24, 1, 240);
+        float maxHeight = Math.Clamp(bottom - DrawHeight - 24, 1, 240);
+        if (Math.Abs(Menu.MaxHeight - maxHeight) > 0.5f)
+            Menu.MaxHeight = maxHeight;
     }
 }
 

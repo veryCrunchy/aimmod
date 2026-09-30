@@ -12,7 +12,80 @@ namespace AimMod.Desktop.Visuals;
 /// <summary>Shared text field for search, settings and practice forms.</summary>
 public partial class AimModTextBox : OsuTextBox
 {
+    private QueryDebouncer? debouncer;
+    private Action<string>? queryChanged;
+
     public AimModTextBox() { Height = AimModVisualStyle.ControlHeight; CornerRadius = AimModVisualStyle.ControlRadius; }
+
+    /// <summary>Raised once per edit burst after a short pause, or immediately (once) on Enter.</summary>
+    public event Action<string>? QueryChanged
+    {
+        add
+        {
+            queryChanged += value;
+            if (debouncer is not null) return;
+            debouncer = new QueryDebouncer(text => queryChanged?.Invoke(text));
+            OnCommit += (_, _) => debouncer.Commit(Current.Value);
+            Current.BindValueChanged(text => debouncer.Submit(text.NewValue, IsLoaded ? Time.Current : 0));
+        }
+        remove => queryChanged -= value;
+    }
+
+    /// <summary>Raised when Down is pressed while typing so a page can move focus into its results.</summary>
+    public event Action? MoveToResults;
+
+    /// <summary>Opt in to Ctrl+F focusing this box while it is visible.</summary>
+    public bool FocusOnSearchShortcut { get; set; }
+
+    public override bool HandleNonPositionalInput => base.HandleNonPositionalInput || FocusOnSearchShortcut;
+
+    /// <summary>Gives the text box keyboard focus once it is part of a loaded, visible hierarchy.</summary>
+    public void FocusSearch() => Schedule(() =>
+    {
+        if (IsLoaded && IsPresent)
+            GetContainingFocusManager()?.ChangeFocus(this);
+    });
+
+    protected override void Update()
+    {
+        base.Update();
+        if (debouncer?.IsPending == true)
+            debouncer.Update(Time.Current);
+    }
+
+    protected override bool OnKeyDown(osu.Framework.Input.Events.KeyDownEvent e)
+    {
+        if (FocusOnSearchShortcut && !HasFocus && e.ControlPressed && e.Key == osuTK.Input.Key.F && isVisibleOnScreen())
+        {
+            FocusSearch();
+            return true;
+        }
+
+        if (HasFocus && e.Key == osuTK.Input.Key.Down && MoveToResults is not null && !e.ControlPressed && !e.AltPressed)
+        {
+            MoveToResults.Invoke();
+            return true;
+        }
+
+        return base.OnKeyDown(e);
+    }
+
+    private bool isVisibleOnScreen()
+    {
+        for (Drawable? drawable = this; drawable is not null; drawable = drawable.Parent)
+        {
+            if (!drawable.IsPresent || drawable.Alpha <= 0)
+                return false;
+        }
+        return true;
+    }
+
+    protected override void Dispose(bool isDisposing)
+    {
+        debouncer?.Cancel();
+        base.Dispose(isDisposing);
+    }
+
     protected override void LoadComplete()
     {
         base.LoadComplete();
