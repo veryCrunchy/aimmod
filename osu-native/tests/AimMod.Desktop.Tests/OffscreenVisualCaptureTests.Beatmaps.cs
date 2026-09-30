@@ -35,6 +35,8 @@ public sealed partial class OffscreenVisualCaptureTests
     [TestCase("beatmaps-inspector", 1920, 1080)]
     [TestCase("beatmaps-inspector", 1280, 800)]
     [TestCase("beatmaps-online-expanded", 900, 700)]
+    [TestCase("beatmaps-empty", 1280, 800)]
+    [TestCase("beatmaps-pp-loading", 1920, 1080)]
     [Explicit("Creates a real graphics device and writes a visual-review artifact.")]
     [SupportedOSPlatform("windows")]
     public async Task CaptureBeatmapsWorkspace(string route, int width, int height)
@@ -72,7 +74,7 @@ public sealed partial class OffscreenVisualCaptureTests
             // Mirror the application shell: the sidebar width follows the window width.
             float sidebar = AimModLayout.SidebarWidth(AimModLayout.SelectSidebarMode(width));
             screen = new NativeBeatmapDiscoveryScreen(source, () => new BeatmapCaptureFixture.Catalog(), () => null,
-                () => new BeatmapCaptureFixture.Calculator(), () => null, (_, _) => Task.CompletedTask, _ => { })
+                () => new BeatmapCaptureFixture.Calculator(route == "beatmaps-pp-loading" ? 60_000 : 250), () => null, (_, _) => Task.CompletedTask, _ => { })
             {
                 RelativeSizeAxes = Axes.Both,
             };
@@ -92,7 +94,9 @@ public sealed partial class OffscreenVisualCaptureTests
             frameworkConfig.SetValue(FrameworkSetting.WindowMode, WindowMode.Windowed);
             frameworkConfig.SetValue(FrameworkSetting.WindowedSize, new System.Drawing.Size(width, height));
             const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
-            if (route == "beatmaps-inspector")
+            if (route == "beatmaps-empty")
+                Scheduler.AddDelayed(() => ((NativeInstalledBeatmapBrowser)screen.GetActiveScreenForTesting()!).ApplyFiltersForTesting("no such map", 0, 10), 1200);
+            if (route is "beatmaps-inspector" or "beatmaps-pp-loading")
                 Scheduler.AddDelayed(() =>
                 {
                     try
@@ -122,17 +126,7 @@ public sealed partial class OffscreenVisualCaptureTests
                     browser.SetFilterPopoverForTesting(true);
                 }, 1600);
             if (route == "beatmaps-details")
-                Scheduler.AddDelayed(() =>
-                {
-                    try
-                    {
-                        var browser = (NativeInstalledBeatmapBrowser)screen.GetActiveScreenForTesting()!;
-                        var rows = (FillFlowContainer<Drawable>)typeof(NativeInstalledBeatmapBrowser).GetField("setRows", flags)!.GetValue(browser)!;
-                        ((ClickableContainer)rows.Children[2]).TriggerClick();
-                        Assert.That(browser.DetailsOpenForTesting, Is.True, "Clicking a row in a narrow window opens its details.");
-                    }
-                    catch (Exception error) { failed(error); host.Exit(); }
-                }, 1800);
+                Scheduler.AddDelayed(() => openRowWhenListed(0), 800);
             if (route == "beatmaps-menu")
                 Scheduler.AddDelayed(() =>
                 {
@@ -148,6 +142,26 @@ public sealed partial class OffscreenVisualCaptureTests
                     catch (Exception error) { failed(error); host.Exit(); }
                 }, 2600);
             Scheduler.AddDelayed(capture, 4200);
+        }
+
+        /// <summary>Opens the third row once the list has loaded, as a narrow-window click would.</summary>
+        private void openRowWhenListed(int attempt)
+        {
+            try
+            {
+                const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+                var browser = (NativeInstalledBeatmapBrowser)screen.GetActiveScreenForTesting()!;
+                var rows = (FillFlowContainer<Drawable>)typeof(NativeInstalledBeatmapBrowser).GetField("setRows", flags)!.GetValue(browser)!;
+                if (rows.Children.Count < 3)
+                {
+                    Assert.That(attempt, Is.LessThan(40), "The synthetic library must be listed before a row is opened.");
+                    Scheduler.AddDelayed(() => openRowWhenListed(attempt + 1), 100);
+                    return;
+                }
+                ((ClickableContainer)rows.Children[2]).TriggerClick();
+                Assert.That(browser.DetailsOpenForTesting, Is.True, "Clicking a row in a narrow window opens its details.");
+            }
+            catch (Exception error) { failed(error); host.Exit(); }
         }
 
         private int captureAttempts;
@@ -269,12 +283,12 @@ internal static class BeatmapCaptureFixture
         return new Rgba32(r, g, b);
     }
 
-    internal sealed class Calculator : IPpTargetExactCalculationService
+    internal sealed class Calculator(int delay = 250) : IPpTargetExactCalculationService
     {
         public async Task<IReadOnlyDictionary<int, PpTargetEstimate>> CalculateAsync(IReadOnlyList<PpTargetExactRequest> requests,
             CancellationToken cancellationToken = default, IProgress<PpTargetExactCalculationProgress>? progress = null)
         {
-            await Task.Delay(250, cancellationToken).ConfigureAwait(false);
+            await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
             return requests.ToDictionary(request => request.BeatmapId, request =>
             {
                 double stars = 3 + request.BeatmapId % 20 * 0.7;
