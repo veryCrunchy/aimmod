@@ -84,6 +84,9 @@ public partial class BoundedShearedDropdown<T> : ShearedDropdown<T>
     protected override void Update()
     {
         base.Update();
+        // Only an open menu needs its height bounded by the window.
+        if (Menu.State != MenuState.Open)
+            return;
         Drawable viewport = this;
         while (viewport.Parent is {} parent) viewport = parent;
         float bottom = ToLocalSpace(viewport.ToScreenSpace(new osuTK.Vector2(0, viewport.DrawHeight))).Y;

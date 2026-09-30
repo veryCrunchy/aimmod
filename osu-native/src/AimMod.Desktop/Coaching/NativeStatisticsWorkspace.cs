@@ -11,6 +11,7 @@ using osu.Framework.Threading;
 using osu.Game.Graphics.Containers;
 using osu.Game.Graphics.Sprites;
 using osu.Game.Graphics.UserInterface;
+using osuTK.Input;
 
 namespace AimMod.Desktop.Coaching;
 
@@ -53,6 +54,16 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
     private readonly FillFlowContainer<Drawable> inspectorContent;
     private readonly AimModLoadingOverlay loadingOverlay;
 
+    private const int visible_row_limit = 100;
+    private const double filter_debounce = 60;
+    private readonly ScoreHistorySession history;
+    private readonly WorkspaceStateCard stateCard;
+    private readonly List<StatisticsRunRow> visibleRows = new();
+    private readonly AimModScrollContainer runScroll;
+    private StatisticsEmptyState? emptyState;
+    private StatisticsMapIndex mapIndex = StatisticsMapIndex.Empty;
+    private StatisticsWorkspaceModel? lastModel;
+    private bool loadedOnce;
     private CancellationTokenSource? loading;
     private IReadOnlyList<LocalReplay> allRuns = Array.Empty<LocalReplay>();
     private IReadOnlyList<LocalReplay> visibleRuns = Array.Empty<LocalReplay>();
@@ -66,6 +77,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
         Func<LocalReplay, CancellationToken, Task>? openBeatmap = null)
     {
         this.source = source ?? throw new ArgumentNullException(nameof(source));
+        history = ScoreHistorySession.For(source);
         this.openReplay = openReplay ?? throw new ArgumentNullException(nameof(openReplay));
         this.openBeatmap = openBeatmap;
         this.accountHistory = accountHistory ?? (() => null);
@@ -89,12 +101,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
                         "Explore your local and online scores. Compare results by map, mods, and date.",
                         "performance history"),
                     scopeText = text("Loading scores...", 10, AimModPalette.Muted).With(drawable => drawable.Y = 62),
-                    new AimModResetButton(() => {
-                        search!.Current.Value = string.Empty; timeRange.Value = StatisticsTimeRange.All;
-                        modFilter.Value = ScoreMods.Any; sort.Value = StatisticsRunSort.Recent;
-                        scoreSource.Value = StatisticsScoreSource.All; starBand.Value = StatisticsStarBand.Any;
-                        resultFilter.Value = StatisticsResultFilter.All;
-                    }) { Anchor = Anchor.TopRight, Origin = Anchor.TopRight, Y = 40 },
+                    new AimModResetButton(resetFilters) { Anchor = Anchor.TopRight, Origin = Anchor.TopRight, Y = 40 },
                     filterBar = new StatisticsFilterBar
                     {
                         RelativeSizeAxes = Axes.X,
@@ -144,7 +151,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
                     mainColumn = new Container
                     {
                         RelativeSizeAxes = Axes.Y,
-                        Child = new AimModScrollContainer
+                        Child = runScroll = new AimModScrollContainer
                         {
                             RelativeSizeAxes = Axes.Both,
                             Padding = new MarginPadding { Right = 4 },
@@ -157,6 +164,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
                                 Padding = new MarginPadding { Bottom = 28, Right = 12 },
                                 Children = new Drawable[]
                                 {
+                                    stateCard = new WorkspaceStateCard(),
                                     new AimModSubsectionHeader("Overview", "Filtered performance at a glance"),
                                     metricGrid = new GridContainer
                                     {
@@ -252,17 +260,13 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
             loadingOverlay = new AimModLoadingOverlay(),
         };
 
-        search.Current.BindValueChanged(_ =>
-        {
-            searchRefresh?.Cancel();
-            searchRefresh = Scheduler.AddDelayed(render, 150);
-        });
-        timeRange.BindValueChanged(_ => render());
-        modFilter.BindValueChanged(_ => render());
-        sort.BindValueChanged(_ => render());
-        scoreSource.BindValueChanged(_ => render());
-        starBand.BindValueChanged(_ => render());
-        resultFilter.BindValueChanged(_ => render());
+        search.Current.BindValueChanged(_ => scheduleRender(150));
+        timeRange.BindValueChanged(_ => scheduleRender(filter_debounce));
+        modFilter.BindValueChanged(_ => scheduleRender(filter_debounce));
+        sort.BindValueChanged(_ => scheduleRender(filter_debounce));
+        scoreSource.BindValueChanged(_ => scheduleRender(filter_debounce));
+        starBand.BindValueChanged(_ => scheduleRender(filter_debounce));
+        resultFilter.BindValueChanged(_ => scheduleRender(filter_debounce));
         showEmptyInspector();
     }
 
@@ -273,63 +277,90 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
         load();
     }
 
+    private float layoutWidth = -1;
+
     protected override void Update()
     {
         base.Update();
-        float available = Math.Max(720, contentViewport.DrawWidth);
-        float inspectorWidth = Math.Clamp(available * 0.285f, 306, 400);
+        if (contentViewport.DrawWidth == layoutWidth)
+            return;
+        layoutWidth = contentViewport.DrawWidth;
+        float available = Math.Max(1, layoutWidth);
+        float inspectorWidth = Math.Clamp(available * 0.3f, 240, 400);
         inspectorColumn.Width = inspectorWidth;
-        mainColumn.Width = Math.Max(420, available - inspectorWidth - AimModVisualStyle.SectionSpacing);
+        mainColumn.Width = Math.Max(0, available - inspectorWidth - AimModVisualStyle.SectionSpacing);
     }
 
-    private void load()
+    /// <summary>Re-reads the local history, reusing cached results when nothing changed.</summary>
+    public void RefreshHistory()
+    {
+        if (IsLoaded && !IsDisposed)
+            load(refresh: true);
+    }
+
+    private void reload()
+    {
+        source.Invalidate();
+        history.Invalidate();
+        load();
+    }
+
+    private void load(bool refresh = false)
     {
         loading?.Cancel();
         loading?.Dispose();
         loading = new CancellationTokenSource();
         CancellationToken token = loading.Token;
-        loadingOverlay.ShowLoading("Loading statistics", "Reading local history and cached online score records");
+        stateCard.Dismiss();
+        if (!loadedOnce)
+            loadingOverlay.ShowLoading("Loading statistics", "Reading local history and cached online score records");
+        else
+            scopeText.Text = "Refreshing your score history...";
         var service = accountHistory();
-        _ = Task.Run(() => loadAsync(service, token));
+        _ = Task.Run(() => loadAsync(service, refresh, token));
     }
 
-    private async Task loadAsync(IAccountScoreHistoryService? service, CancellationToken token)
+    private async Task loadAsync(IAccountScoreHistoryService? service, bool refresh, CancellationToken token)
     {
         try
         {
-            Task<StatisticsHistoryLoadResult> localTask = StatisticsHistoryLoader.LoadAsync(source, token).AsTask();
-            Task<OnlineAccountScoreHistoryResult?> onlineTask = service is null
-                ? Task.FromResult<OnlineAccountScoreHistoryResult?>(null)
-                : loadOnlineAsync(service, token);
+            Task<StatisticsHistoryLoadResult> localTask = history.GetLocalAsync(refresh, token);
+            Task<OnlineAccountScoreHistoryResult?> onlineTask = loadOnlineAsync(service, token);
             await Task.WhenAll(localTask, onlineTask).ConfigureAwait(false);
             StatisticsHistoryLoadResult result = await localTask.ConfigureAwait(false);
             OnlineAccountScoreHistoryResult? online = await onlineTask.ConfigureAwait(false);
-            var merged = StatisticsUnifiedScoreAdapter.Merge(result.Runs, online?.Scores ?? []);
+            IReadOnlyList<LocalReplay> merged = history.Merge(result.Runs, online?.Scores ?? []);
+            IReadOnlyList<ScoreModChoice> choices = ReferenceEquals(merged, allRuns) ? [] : ScoreMods.Choices(merged);
+            StatisticsMapIndex index = ReferenceEquals(merged, allRuns) ? mapIndex : new StatisticsMapIndex(merged);
             if (!IsDisposed)
-                Schedule(() => { if (!IsDisposed && !token.IsCancellationRequested) applyLoaded(merged, online); });
+                Schedule(() => { if (!IsDisposed && !token.IsCancellationRequested) applyLoaded(merged, online, choices, index); });
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
         }
-        catch (Exception)
+        catch (Exception error)
         {
+            Console.Error.WriteLine($"Statistics could not be loaded: {error}");
             if (!IsDisposed)
                 Schedule(() =>
                 {
                     if (IsDisposed || token.IsCancellationRequested) return;
                     loadingOverlay.HideLoading();
-                    scopeText.Text = "Statistics could not be loaded. Reopen this workspace to try again.";
+                    scopeText.Text = "Statistics could not be loaded.";
+                    stateCard.Show(FontAwesome.Solid.ExclamationTriangle, "Statistics could not be loaded",
+                        "AimMod could not read your osu! plays. Check the osu! installation in Settings, then retry.",
+                        AimModPalette.Pink, "Retry", reload);
                 });
         }
     }
 
-    private static async Task<OnlineAccountScoreHistoryResult?> loadOnlineAsync(
-        IAccountScoreHistoryService service,
+    private async Task<OnlineAccountScoreHistoryResult?> loadOnlineAsync(
+        IAccountScoreHistoryService? service,
         CancellationToken cancellationToken)
     {
         try
         {
-            return await service.FetchAccountAsync(cancellationToken).ConfigureAwait(false);
+            return await history.GetOnlineAsync(service, cancellationToken: cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -341,13 +372,28 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
         }
     }
 
-    private void applyLoaded(IReadOnlyList<LocalReplay> runs, OnlineAccountScoreHistoryResult? online)
+    private void applyLoaded(IReadOnlyList<LocalReplay> runs, OnlineAccountScoreHistoryResult? online, IReadOnlyList<ScoreModChoice> choices, StatisticsMapIndex index)
     {
+        loadedOnce = true;
         onlineHistory = online;
-        allRuns = runs;
-        modDropdown.SetScores(allRuns);
         loadingOverlay.HideLoading();
+        if (ReferenceEquals(allRuns, runs))
+        {
+            if (lastModel is not null)
+                applyModel(lastModel);
+            return;
+        }
+
+        allRuns = runs;
+        mapIndex = index;
+        modDropdown.SetChoices(choices);
         render();
+    }
+
+    private void scheduleRender(double delay)
+    {
+        searchRefresh?.Cancel();
+        searchRefresh = Scheduler.AddDelayed(render, delay);
     }
 
     private void render()
@@ -389,11 +435,34 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
             {
                 if (!IsDisposed && revision == renderRevision) applyModel(model);
             });
-        }, error => Console.Error.WriteLine($"Statistics filtering failed: {error}"));
+        }, error =>
+        {
+            Console.Error.WriteLine($"Statistics filtering failed: {error}");
+            if (!IsDisposed) Schedule(() =>
+            {
+                if (IsDisposed || revision != renderRevision) return;
+                stateCard.Show(FontAwesome.Solid.ExclamationTriangle, "These filters could not be applied",
+                    "Try again, or reset the filters.", AimModPalette.Pink, "Retry", render);
+            });
+        });
+    }
+
+    private bool filtersActive => search.Current.Value.Length > 0 || timeRange.Value != StatisticsTimeRange.All
+                                  || modFilter.Value != ScoreMods.Any || scoreSource.Value != StatisticsScoreSource.All
+                                  || starBand.Value != StatisticsStarBand.Any || resultFilter.Value != StatisticsResultFilter.All;
+
+    private void resetFilters()
+    {
+        search.Current.Value = string.Empty; timeRange.Value = StatisticsTimeRange.All;
+        modFilter.Value = ScoreMods.Any; sort.Value = StatisticsRunSort.Recent;
+        scoreSource.Value = StatisticsScoreSource.All; starBand.Value = StatisticsStarBand.Any;
+        resultFilter.Value = StatisticsResultFilter.All;
     }
 
     private void applyModel(StatisticsWorkspaceModel model)
     {
+        lastModel = model;
+        stateCard.Dismiss();
         int localCount = model.UnfilteredRunCount - model.CachedOnlineRunCount;
         scopeText.Text = model.CachedOnlineRunCount > 0
             ? $"Unified scope: {model.CachedOnlineRunCount:N0} online best/recent and {localCount:N0} local records. Online windows are limited, not complete history."
@@ -431,37 +500,94 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
             showInspector(selected);
     }
 
+    /// <summary>Updates the visible rows in place: unchanged plays keep their row and only its order changes.</summary>
     private void renderRuns(IReadOnlyList<LocalReplay> runs)
     {
+        var previous = new Dictionary<Guid, StatisticsRunRow>(runRows);
         runRows.Clear();
-        runList.Clear();
-        if (runs.Count == 0)
+        visibleRows.Clear();
+        if (emptyState is not null)
         {
-            runList.Add(new StatisticsEmptyState(
-                allRuns.Count == 0 ? "No score history yet" : "No plays match these filters",
-                allRuns.Count == 0
-                    ? "Local and online osu!standard plays will appear here when available."
-                    : "Try widening the period, difficulty, result, or source filters."));
-            return;
+            runList.Remove(emptyState, true);
+            emptyState = null;
         }
 
-        foreach (LocalReplay replay in runs.Take(100))
+        int position = 0;
+        foreach (LocalReplay replay in runs.Take(visible_row_limit))
         {
-            var row = new StatisticsRunRow(replay, selected?.ScoreId == replay.ScoreId, () => select(replay));
+            if (!previous.Remove(replay.ScoreId, out StatisticsRunRow? row) || !ReferenceEquals(row.Replay, replay))
+            {
+                if (row is not null)
+                    runList.Remove(row, true);
+                LocalReplay current = replay;
+                row = new StatisticsRunRow(replay, false, () => select(current));
+                runList.Add(row);
+            }
+            row.SetSelected(selected?.ScoreId == replay.ScoreId);
+            runList.SetLayoutPosition(row, position++);
             runRows[replay.ScoreId] = row;
-            runList.Add(row);
+            visibleRows.Add(row);
+        }
+
+        foreach (StatisticsRunRow unused in previous.Values)
+            runList.Remove(unused, true);
+
+        if (runs.Count == 0)
+        {
+            bool noHistory = allRuns.Count == 0;
+            runList.Add(emptyState = new StatisticsEmptyState(
+                noHistory ? "No score history yet" : "No plays match these filters",
+                noHistory
+                    ? "Play a map in osu!, or connect your osu! installation and account in Settings. Your plays will appear here."
+                    : "Try widening the period, difficulty, result or source filters.",
+                !noHistory && filtersActive ? resetFilters : null));
         }
     }
 
     private void select(LocalReplay? replay)
     {
         if (selected == replay) return;
+        if (selected is not null && runRows.TryGetValue(selected.ScoreId, out StatisticsRunRow? previousRow))
+            previousRow.SetSelected(false);
         selected = replay;
-        foreach (var (id, row) in runRows) row.SetSelected(id == replay?.ScoreId);
+        if (replay is not null && runRows.TryGetValue(replay.ScoreId, out StatisticsRunRow? row))
+            row.SetSelected(true);
         if (replay is null)
             showEmptyInspector();
         else
             showInspector(replay);
+    }
+
+    protected override bool OnKeyDown(KeyDownEvent e)
+    {
+        if (e.ControlPressed && e.Key == Key.F)
+        {
+            GetContainingFocusManager()?.ChangeFocus(search);
+            return true;
+        }
+
+        if (e.Key is Key.Up or Key.Down && visibleRows.Count > 0 && !e.ControlPressed && !e.AltPressed)
+        {
+            int index = selected is null ? -1 : visibleRows.FindIndex(row => row.Replay.ScoreId == selected.ScoreId);
+            index = Math.Clamp(index + (e.Key == Key.Down ? 1 : -1), 0, visibleRows.Count - 1);
+            select(visibleRows[index].Replay);
+            runScroll.ScrollIntoView(visibleRows[index]);
+            return true;
+        }
+
+        if (e.Key is Key.Enter or Key.KeypadEnter && selected is { HasReplayFile: true } replay)
+        {
+            openReplay(replay);
+            return true;
+        }
+
+        if (e.Key == Key.Escape && search.Current.Value.Length > 0)
+        {
+            search.Current.Value = string.Empty;
+            return true;
+        }
+
+        return base.OnKeyDown(e);
     }
 
     private void showEmptyInspector()
@@ -472,7 +598,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
 
     private void showInspector(LocalReplay replay)
     {
-        StatisticsMapSummary map = StatisticsWorkspaceModel.BuildMapSummary(allRuns, replay.BeatmapId);
+        StatisticsMapSummary map = mapIndex.Summarise(replay);
         inspectorContent.Clear();
         inspectorContent.AddRange(new Drawable[]
         {
@@ -611,7 +737,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
     private void sourceChanged()
     {
         if (!IsDisposed)
-            Schedule(load);
+            Schedule(() => load());
     }
 
     protected override void Dispose(bool isDisposing)
@@ -991,8 +1117,11 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
         private readonly TruncatingSpriteText subtitle;
         private bool selected;
 
+        public LocalReplay Replay { get; }
+
         public StatisticsRunRow(LocalReplay replay, bool selected, Action action)
         {
+            Replay = replay;
             this.selected = selected;
             Action = action;
             RelativeSizeAxes = Axes.X;
@@ -1046,9 +1175,13 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
             };
         }
 
+        private float layoutWidth = -1;
+
         protected override void Update()
         {
             base.Update();
+            if (DrawWidth == layoutWidth) return;
+            layoutWidth = DrawWidth;
             float available = Math.Max(140, DrawWidth - 314);
             title.MaxWidth = available;
             subtitle.MaxWidth = available;
@@ -1056,6 +1189,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
 
         public void SetSelected(bool value)
         {
+            if (selected == value) return;
             selected = value;
             background.FadeColour(IsHovered ? AimModPalette.PanelHover : selected ? AimModPalette.PanelRaised : AimModPalette.Panel, 90);
             selectionLayer.FadeTo(selected ? 0.08f : 0, 90);
@@ -1078,27 +1212,14 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
 
     private sealed partial class StatisticsEmptyState : CompositeDrawable
     {
-        public StatisticsEmptyState(string heading, string detail)
+        public StatisticsEmptyState(string heading, string detail, Action? reset = null)
         {
             RelativeSizeAxes = Axes.X;
-            Height = 92;
-            InternalChildren = new Drawable[]
-            {
-                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel, Alpha = 0.45f },
-                new FillFlowContainer
-                {
-                    Anchor = Anchor.Centre,
-                    Origin = Anchor.Centre,
-                    AutoSizeAxes = Axes.Both,
-                    Direction = FillDirection.Vertical,
-                    Spacing = new(4),
-                    Children = new Drawable[]
-                    {
-                        text(heading, 13, AimModPalette.Text, "SemiBold"),
-                        text(detail, 10, AimModPalette.Muted),
-                    },
-                },
-            };
+            AutoSizeAxes = Axes.Y;
+            var card = new WorkspaceStateCard();
+            InternalChild = card;
+            card.Show(reset is null ? FontAwesome.Solid.Music : FontAwesome.Solid.Filter, heading, detail,
+                actionLabel: reset is null ? null : "Reset filters", action: reset);
         }
     }
 
