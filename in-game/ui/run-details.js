@@ -2,7 +2,7 @@
   'use strict';
   var host,transport,runId,data,preview,tab='summary',page=0,generation=0,metric='ScorePerMinute';
   var METRICS=[['ScorePerMinute','Pace','Score per minute'],['Accuracy','Accuracy','Accuracy (%)'],['KillsPerSecond','Kills/sec','Kills per second'],['DamageEfficiency','Damage efficiency','Damage efficiency']];
-  var COLORS={line:'#27e4a1',avg:'#f0b45a',good:'rgba(39,228,161,0.16)',weak:'rgba(240,180,90,0.18)',grid:'#22302a',text:'#a7bab0',amber:'#f0b45a',cyan:'#66ccff'};
+  var COLORS={line:'#27e4a1',avg:'#f0b45a',good:'#173b2f',weak:'#3a2f1c',grid:'#22302a',text:'#a7bab0',amber:'#f0b45a',cyan:'#66ccff'};
   function F(){return global.AimModFormat}
   function node(tag,text,cls){var e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;return e}
   function add(parent,child){parent.appendChild(child);return child}
@@ -31,36 +31,36 @@
     });
   }
   function surface(canvas,height){var w=canvas.offsetWidth;if(!w)return null;var ratio=global.devicePixelRatio||1;canvas.width=w*ratio;canvas.height=height*ratio;canvas.style.height=height+'px';var c=canvas.getContext('2d');c.scale(ratio,ratio);c.clearRect(0,0,w,height);return {c:c,w:w,h:height}}
-  function grid(c,axis,y,left,right,format){c.font='12px Arial';c.textAlign='right';axis.values.forEach(function(v){var yy=Math.round(y(v))+.5;c.strokeStyle=COLORS.grid;c.lineWidth=1;c.beginPath();c.moveTo(left,yy);c.lineTo(right,yy);c.stroke();c.fillStyle=COLORS.text;c.fillText(format?format(v):F().tick(v,axis),left-8,yy+4)})}
+  function grid(c,axis,y,left,right,format){c.font='12px Roboto';c.textAlign='right';axis.values.forEach(function(v){var yy=Math.round(y(v))+.5;c.strokeStyle=COLORS.grid;c.lineWidth=1;c.beginPath();c.moveTo(left,yy);c.lineTo(right,yy);c.stroke();c.fillStyle=COLORS.text;c.fillText(format?format(v):F().tick(v,axis),left-8,yy+4)})}
   // Whether a key moment went better or worse than the run as a whole.
   function strong(w,run){var name=(w.Kind||'')+' '+(w.Label||'')+' '+(w.Phase||'');if(/strong|best|peak|fast/i.test(name))return true;if(/weak|slow|worst|drop|fade/i.test(name))return false;if(F().known(w.ScorePerMinute)&&F().known(run.Score)&&F().known(run.Duration)&&run.Duration>0)return w.ScorePerMinute>=run.Score/run.Duration*60;if(F().known(w.Accuracy)&&F().known(run.Accuracy))return w.Accuracy>=run.Accuracy;return true}
   // Run timeline with key moments shaded behind the line and the run average dashed.
   function graph(canvas,points,windows,run){var s=surface(canvas,240);if(!s)return;var c=s.c,w=s.w,h=s.h;
     points=(points||[]).filter(function(p){return p&&F().known(p.Time)});
-    var values=points.map(function(p){return p[metric]}).filter(function(v){return typeof v==='number'&&isFinite(v)});if(!values.length){c.fillStyle=COLORS.text;c.font='14px Arial';c.textAlign='center';c.fillText('No measured timeline for this metric',w/2,h/2);return}
+    var values=points.map(function(p){return p[metric]}).filter(function(v){return typeof v==='number'&&isFinite(v)});if(!values.length){c.fillStyle=COLORS.text;c.font='14px Roboto';c.textAlign='center';c.fillText('No measured timeline for this metric',w/2,h/2);return}
     var axis=metric==='Accuracy'?F().ticks(0,100,4):F().ticks(Math.max(Math.min(0,Math.min.apply(null,values)),Math.min.apply(null,values)-(Math.max.apply(null,values)-Math.min.apply(null,values))*0.6),Math.max(1e-6,Math.max.apply(null,values)+(Math.max.apply(null,values)-Math.min.apply(null,values))*0.15),4),lo=axis.min,hi=axis.max,end=Math.max(1,points[points.length-1].Time),left=60,right=w-16,top=22,bottom=h-26;
     function y(v){return bottom-(v-lo)/(hi-lo)*(bottom-top)}function x(t){return left+Math.max(0,Math.min(1,t/end))*(right-left)}
-    (windows||[]).forEach(function(win){if(!F().known(win.StartMs)||!F().known(win.EndMs))return;var x0=x(win.StartMs/1000),x1=Math.max(x0+2,x(win.EndMs/1000));c.fillStyle=strong(win,run)?COLORS.good:COLORS.weak;c.fillRect(x0,top,x1-x0,bottom-top);c.fillStyle=strong(win,run)?'#27e4a1':COLORS.amber;c.font='11px Arial';c.textAlign='left';c.fillText((win.Label||label(win.Kind)).slice(0,28),x0+4,top-7)});
+    (windows||[]).forEach(function(win){if(!F().known(win.StartMs)||!F().known(win.EndMs))return;var x0=x(win.StartMs/1000),x1=Math.max(x0+2,x(win.EndMs/1000));c.fillStyle=strong(win,run)?COLORS.good:COLORS.weak;c.fillRect(x0,top,x1-x0,bottom-top);c.fillStyle=strong(win,run)?'#27e4a1':COLORS.amber;c.font='12px Roboto';c.textAlign='left';c.fillText((win.Label||label(win.Kind)).slice(0,28),x0+4,top-7)});
     grid(c,axis,y,left,right);
     c.beginPath();var connected=false;points.forEach(function(p){var v=p[metric];if(typeof v!=='number'||!isFinite(v)){connected=false;return}if(connected)c.lineTo(x(p.Time),y(v));else c.moveTo(x(p.Time),y(v));connected=true});c.strokeStyle=COLORS.line;c.lineWidth=2;c.stroke();
     var average=values.reduce(function(a,b){return a+b},0)/values.length;c.strokeStyle=COLORS.avg;c.lineWidth=1;if(c.setLineDash)c.setLineDash([4,4]);c.beginPath();c.moveTo(left,y(average));c.lineTo(right,y(average));c.stroke();if(c.setLineDash)c.setLineDash([]);
-    c.fillStyle=COLORS.text;c.font='12px Arial';c.textAlign='left';c.fillText('0s',left,h-7);c.textAlign='center';c.fillText(F().duration(end/2),(left+right)/2,h-7);c.textAlign='right';c.fillText(F().duration(end),right,h-7);
+    c.fillStyle=COLORS.text;c.font='12px Roboto';c.textAlign='left';c.fillText('0s',left,h-7);c.textAlign='center';c.fillText(F().duration(end/2),(left+right)/2,h-7);c.textAlign='right';c.fillText(F().duration(end),right,h-7);
     return average;
   }
   // Reaction time per target response; unstable responses in amber.
-  function responseChart(canvas,episodes){var s=surface(canvas,170);if(!s)return;var c=s.c,w=s.w,h=s.h;var values=episodes.map(function(e){return e.ReactionMs}).filter(F().known);if(!values.length){c.fillStyle=COLORS.text;c.font='14px Arial';c.textAlign='center';c.fillText('No reaction times recorded',w/2,h/2);return}
+  function responseChart(canvas,episodes){var s=surface(canvas,170);if(!s)return;var c=s.c,w=s.w,h=s.h;var values=episodes.map(function(e){return e.ReactionMs}).filter(F().known);if(!values.length){c.fillStyle=COLORS.text;c.font='14px Roboto';c.textAlign='center';c.fillText('No reaction times recorded',w/2,h/2);return}
     var axis=F().ticks(0,Math.max.apply(null,values)*1.1,3),left=56,right=w-12,top=10,bottom=h-24;function y(v){return bottom-v/axis.max*(bottom-top)}
     grid(c,axis,y,left,right,function(v){return n(v,0)+' ms'});var width=(right-left)/episodes.length;
     episodes.forEach(function(e,i){if(!F().known(e.ReactionMs))return;c.fillStyle=e.Stable?'#27e4a1':COLORS.amber;c.fillRect(left+i*width+1,y(e.ReactionMs),Math.max(1,width-2),bottom-y(e.ReactionMs))});
-    c.fillStyle=COLORS.text;c.font='12px Arial';c.textAlign='left';c.fillText('First response',left,h-6);c.textAlign='right';c.fillText('Latest',right,h-6)}
+    c.fillStyle=COLORS.text;c.font='12px Roboto';c.textAlign='left';c.fillText('First response',left,h-6);c.textAlign='right';c.fillText('Latest',right,h-6)}
   // Aim error at each shot on this page: distance from zero is how far off the nearest target was.
   function shotChart(canvas,shots){var s=surface(canvas,170);if(!s)return;var c=s.c,w=s.w,h=s.h;var pts=[];shots.forEach(function(shot){var t=(shot.Targets||[]).filter(function(x){return x.Nearest})[0];if(t&&F().known(t.YawErrorDegrees)&&F().known(shot.TimestampMs))pts.push({t:shot.TimestampMs,v:t.YawErrorDegrees,hit:/hit/i.test(shot.Kind||'')})});
-    if(!pts.length){c.fillStyle=COLORS.text;c.font='14px Arial';c.textAlign='center';c.fillText('No aim error recorded on this page',w/2,h/2);return}
+    if(!pts.length){c.fillStyle=COLORS.text;c.font='14px Roboto';c.textAlign='center';c.fillText('No aim error recorded on this page',w/2,h/2);return}
     var span=Math.max(0.5,Math.max.apply(null,pts.map(function(p){return Math.abs(p.v)}))*1.15),axis=F().ticks(-span,span,4),left=56,right=w-12,top=10,bottom=h-24,t0=pts[0].t,t1=Math.max(t0+1,pts[pts.length-1].t);
     function y(v){return bottom-(v-axis.min)/(axis.max-axis.min)*(bottom-top)}function x(t){return left+(t-t0)/(t1-t0)*(right-left)}
     grid(c,axis,y,left,right,function(v){return F().tick(v,axis)+'°'});c.strokeStyle='#3f5a4d';c.beginPath();c.moveTo(left,y(0));c.lineTo(right,y(0));c.stroke();
     pts.forEach(function(p){c.beginPath();c.arc(x(p.t),y(p.v),2.6,0,Math.PI*2);c.fillStyle=p.hit?'#27e4a1':COLORS.cyan;c.fill()});
-    c.fillStyle=COLORS.text;c.font='12px Arial';c.textAlign='left';c.fillText(seconds(t0-(F().known(data.FirstShotTimestampMs)?data.FirstShotTimestampMs:t0)),left,h-6);c.textAlign='right';c.fillText(seconds(t1-(F().known(data.FirstShotTimestampMs)?data.FirstShotTimestampMs:t0)),right,h-6)}
+    c.fillStyle=COLORS.text;c.font='12px Roboto';c.textAlign='left';c.fillText(seconds(t0-(F().known(data.FirstShotTimestampMs)?data.FirstShotTimestampMs:t0)),left,h-6);c.textAlign='right';c.fillText(seconds(t1-(F().known(data.FirstShotTimestampMs)?data.FirstShotTimestampMs:t0)),right,h-6)}
   function moments(parent,windows,run){if(!windows.length)return;var row=add(parent,node('div',undefined,'run-moments'));windows.forEach(function(w){var good=strong(w,run),item=add(row,node('div',undefined,'run-moment'+(good?' good':' weak')));add(item,node('span',good?'Went well':'Room to improve','run-moment-tag'));add(item,node('h3',w.Label||label(w.Kind)));add(item,node('p',seconds(w.StartMs)+' – '+seconds(w.EndMs)+(w.Target?' · '+w.Target:''),'run-muted'));
       var bar=add(item,node('div',undefined,'run-bar'));var fill=add(bar,node('div',undefined,'run-bar-fill'));fill.style.width=(F().known(w.Accuracy)?Math.max(0,Math.min(100,w.Accuracy)):0)+'%';
       add(item,node('p',F().percent(w.Accuracy)+' accuracy · '+n(w.Hits,0)+' of '+n(w.Fired,0)+' shots · '+n(w.ScorePerMinute,0)+' pace','run-moment-stats'))})}
