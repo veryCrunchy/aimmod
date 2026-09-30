@@ -116,8 +116,46 @@ local function hook(path, callback)
     end
     return true
 end
-local function start(source, scenario)
-    local name=scenario:get():ToString()
+-- Lifecycle sources, in preference order. KovaaK's 3.9.11 removed
+-- AnalyticsManager; its challenge lifecycle is broadcast by the framework's
+-- ScenarioBroadcastReceiver. Every available candidate is observed (post
+-- hooks, read only) and handlers are idempotent, so overlapping notifications
+-- from both generations collapse into one attempt.
+local ANALYTICS='/Script/GameSkillsTrainer.AnalyticsManager:'
+local BROADCAST='/Script/KovaaKFramework.ScenarioBroadcastReceiver:'
+local lifecycle={start={},complete={},cancel={}}
+local listeners={}
+-- Completion listeners (replay capture) receive {scenario,id,score,source}.
+function M.onCompleted(fn) listeners[#listeners+1]=fn end
+local function text(value) if type(value)=='string' then return value end;return value:ToString() end
+-- Read-only native context, cached and revalidated before every use.
+local native={}
+local function nativeManager()
+    if native.manager and native.manager:IsValid() and native.player and native.player:IsValid() then return native.manager end
+    native={}
+    local helpers=StaticFindObject('/Script/Engine.Default__GameplayStatics')
+    if not helpers or not helpers:IsValid() then return end
+    for _,player in ipairs(FindAllOf('MetaPlayerController') or {}) do
+        if player:IsValid() and not player:GetFullName():find('Default__',1,true) then
+            local instance=helpers:GetGameInstance(player)
+            for _,manager in ipairs(FindAllOf('ScenarioManager') or {}) do
+                if manager:IsValid() and manager:GetOuter():GetAddress()==instance:GetAddress() then
+                    native={player=player,helpers=helpers,manager=manager};return manager
+                end
+            end
+        end
+    end
+end
+-- Current scenario name as the capture gate reads it (Scenario:GetName).
+local function nativeScenario()
+    local manager=nativeManager();if not manager then return end
+    local scenario=manager:GetCurrentScenario()
+    if not scenario or not scenario:IsValid() then return end
+    local name=text(scenario:GetName())
+    if type(name)=='string' and #name>0 and #name<=512 then return name,manager,scenario end
+end
+local function beginIntent(source, name)
+    assert(type(name)=='string' and #name>0,'scenario name unavailable')
     if state.active and state.scenario==name then
         state.lastStartEvent=source
         state.startNotifications=(state.startNotifications or 1)+1
@@ -136,6 +174,106 @@ local function start(source, scenario)
         end
     end
     pcall(resolveLiveManager)
+end
+local function quit()
+    -- A completion in progress owns the attempt until it is finalized.
+    if state.completing then return end
+    state.active=false
+end
+local function complete(name, finalScore, source)
+    if not state.active or name~=state.scenario then return end
+    state.active=false;state.completing=nil
+    local score=finite(finalScore) and finalScore or nil
+    local event={scenario=name,id=state.id,score=score,source=source}
+    for _,listener in ipairs(listeners) do
+        local ok,err=pcall(listener,event)
+        if not ok then print('[AimModTelemetry] completion listener failed: '..tostring(err)..'\n') end
+    end
+    if not score then print('[AimModTelemetry] completed run not saved: final score unavailable ('..tostring(source)..')\n');return end
+    state.score=score
+    local accuracy = state.shots and state.shots>0 and state.hits and state.hits>=0 and state.hits<=state.shots and state.hits/state.shots*100 or ''
+    local duration=state.seconds
+    if not duration and state.startedAt and state.clock and state.clockContext and state.clockContext:IsValid() then
+        local ok,stamp=pcall(function() return state.clock:GetTimeSeconds(state.clockContext) end)
+        if ok and type(stamp)=='number' and stamp>state.startedAt then duration=stamp-state.startedAt end
+    end
+    local values={'run',state.id,name,score,accuracy,duration or '',state.kills or '',state.damage or '',os.date('!%Y-%m-%dT%H:%M:%SZ')}
+    for i,v in ipairs(values) do values[i]=escape(v) end
+    local line=table.concat(values,'\t') .. '\n'
+    -- One small append after completion, outside the scoring callback. The
+    -- native worker owns directory creation, parsing, queries, and analysis.
+    ExecuteInGameThreadWithDelay(250, function()
+        local path=(os.getenv('LOCALAPPDATA') or '') .. '/AimMod/KovaaksNative/completed.tsv'
+        local file, reason=io.open(path,'ab')
+        if not file then print('[AimModTelemetry] Could not save run: '..tostring(reason)..'\n'); return end
+        file:write(line); file:close()
+        print('[AimModTelemetry] completed run saved; score source='..tostring(source)..'\n')
+    end)
+end
+-- Broadcast completion carries no parameters. Hold the attempt briefly and
+-- take the game's own final value: a complete score broadcast observed during
+-- completion, else the indicator value read when completion was broadcast,
+-- else the last indicator value observed during the run. Never computed here.
+local COMPLETION_POLLS=5
+local function finalize(source)
+    local c=state.completing
+    if not c or not state.active then return end
+    if finite(c.broadcast) then return complete(state.scenario,c.broadcast,source..':score-broadcast') end
+    if finite(c.pulled) then return complete(state.scenario,c.pulled,source..':indicator') end
+    return complete(state.scenario,state.score,source..':last-indicator')
+end
+local function broadcastComplete()
+    if not state.active or state.completing then return end
+    local ok,name=pcall(nativeScenario)
+    if ok and name and name~=state.scenario then return end
+    local pulled
+    pcall(function()
+        local value=LiveScore.read(state.clock:GetGameInstance(state.clockContext))
+        if finite(value.score) then pulled=value.score end
+    end)
+    state.completing={polls=0,pulled=pulled}
+end
+local function inChallenge()
+    local name,manager,scenario=nativeScenario()
+    if not name then return nil end
+    return manager:IsInChallenge()==true or scenario:IsInChallenge()==true,name
+end
+local function broadcastStart(source)
+    return function()
+        local challenge,name=inChallenge()
+        -- Freeplay also starts scenarios; only challenges are attempts.
+        if challenge then beginIntent(source,name) end
+    end
+end
+local function broadcastTransition()
+    if not state.active or state.completing then return end
+    local challenge=inChallenge()
+    if challenge==false then quit() end
+end
+-- Fallback when this build exposes no start notification: an advancing
+-- native challenge timer opens an intent. It re-arms only after the challenge
+-- is observed not running, so a finished run never reopens itself.
+local fallback={armed=true,idle=0}
+local function nativeFallback()
+    local name,manager,scenario=nativeScenario();if not name then return end
+    local running=manager:IsInChallenge() and scenario:IsActive() and scenario:IsInChallenge()
+        and not manager:IsScenarioLoading() and manager:GetChallengeQueueTimeRemaining()<=0
+    local elapsed=manager:GetChallengeTimeElapsed()
+    if state.active then
+        fallback.elapsed=nil
+        -- Without a cancel notification, a natively opened intent ends after
+        -- two seconds of an unpaused, non-running challenge.
+        local paused=native.helpers and native.helpers:IsGamePaused(native.player)
+        if state.startEvent=='native' and not running and not paused and not state.completing then
+            fallback.idle=fallback.idle+1;if fallback.idle>=20 then fallback.idle=0;quit() end
+        else fallback.idle=0 end
+        return
+    end
+    if not running then fallback.armed=true;fallback.elapsed=nil;return end
+    if fallback.armed and finite(elapsed) and fallback.elapsed and elapsed>fallback.elapsed then
+        fallback.armed=false;fallback.elapsed=nil;beginIntent('native',name);return
+    end
+    fallback.elapsed=elapsed
 end
 resolveLiveManager=function()
     if not state.clock or not state.clockContext then return end
@@ -162,20 +300,44 @@ function M.confirmAttempt(restarted, elapsed)
     return state
 end
 function M.state() return state end
+local function short(path) return path:match('([^.]+:[^:]+)$') or path end
+local function observe(kind, path, callback)
+    if hook(path, callback) then lifecycle[kind][#lifecycle[kind]+1]=short(path) end
+end
 function M.start()
     if started then return end
     started=true
     pcall(function()require('LiveOpponents').start()end)
-    if type(LoopInGameThreadWithDelay)=='function'then LoopInGameThreadWithDelay(100,function()local ok=pcall(pollLive);if not ok then live={version=1,active=false,paused=false}end end)end
-    local analytics = '/Script/GameSkillsTrainer.AnalyticsManager:'
-    -- All three are independent UI routes in the current game. Restart and
-    -- result-screen replay do not necessarily emit OnChallengeStarted too.
-    -- Preserve the source privately so overlapping notifications can be
-    -- investigated without guessing from attempt duration or scenario names.
-    hook(analytics .. 'OnChallengeStarted', function(_,scenario)start('started',scenario)end)
-    hook(analytics .. 'OnChallengeRestarted', function(_,scenario)start('restarted',scenario)end)
-    hook(analytics .. 'OnChallengeReplayed', function(_,scenario)start('replayed',scenario)end)
-    hook(analytics .. 'OnChallengeQuit', function() state.active=false end)
+    -- Legacy (<= 3.9.8) analytics routes. Restart and result-screen replay do
+    -- not necessarily emit OnChallengeStarted too. The source is kept privately.
+    observe('start', ANALYTICS .. 'OnChallengeStarted', function(_,scenario)beginIntent('started',text(scenario:get()))end)
+    observe('start', ANALYTICS .. 'OnChallengeRestarted', function(_,scenario)beginIntent('restarted',text(scenario:get()))end)
+    observe('start', ANALYTICS .. 'OnChallengeReplayed', function(_,scenario)beginIntent('replayed',text(scenario:get()))end)
+    observe('cancel', ANALYTICS .. 'OnChallengeQuit', function() quit() end)
+    observe('complete', ANALYTICS .. 'OnChallengeCompleted', function(_, scenario, score)
+        local name=text(scenario:get())
+        if not state.active or name~=state.scenario then return end
+        complete(name, score:get(), 'analytics')
+    end)
+    -- Framework broadcasts (3.9.11+). Parameters are not read.
+    observe('start', BROADCAST .. 'Send_ChallengeQueued', broadcastStart('queued'))
+    observe('start', BROADCAST .. 'Send_Start', broadcastStart('broadcast-start'))
+    observe('start', BROADCAST .. 'Send_PostStart', broadcastStart('broadcast-start'))
+    observe('complete', BROADCAST .. 'Send_ChallengeComplete', broadcastComplete)
+    observe('complete', BROADCAST .. 'Send_PostChallengeComplete', function()
+        if not state.completing then broadcastComplete() end
+        finalize('broadcast')
+    end)
+    observe('cancel', BROADCAST .. 'Send_ChallengeCanceled', function() quit() end)
+    observe('cancel', BROADCAST .. 'Send_ScenarioChanged', broadcastTransition)
+    observe('cancel', BROADCAST .. 'Send_PlayTypeChanged', broadcastTransition)
+    local useFallback=#lifecycle.start==0
+    if type(LoopInGameThreadWithDelay)=='function'then LoopInGameThreadWithDelay(100,function()
+        local c=state.completing
+        if c then c.polls=c.polls+1;if c.polls>=COMPLETION_POLLS then pcall(finalize,'broadcast-timeout') end end
+        if useFallback then pcall(nativeFallback) end
+        local ok=pcall(pollLive);if not ok then live={version=1,active=false,paused=false}end
+    end)end
     local metrics = {Send_Score='score',Send_ShotsFired='shots',Send_ShotsHit='hits',Send_Seconds='seconds',Send_Kills='kills',Send_DamageDone='damage'}
     for event, key in pairs(metrics) do
         local target=key
@@ -197,8 +359,7 @@ function M.start()
     -- ChallengeName fences unrelated and stale scenario broadcasts.
     local function observeScore(score)
         if not state.active then return end
-        local name=score.ChallengeName
-        if type(name)~='string' then name=name:ToString() end
+        local name=text(score.ChallengeName)
         if name~=state.scenario then return end
         for native,key in pairs({Score='score',ShotsHit='hits',ShotsFired='shots',KillCount='kills',DamageDone='damage'}) do
             local n=score[native]
@@ -207,55 +368,24 @@ function M.start()
                 state[key]=n;state.revision=state.revision+1
             end
         end
+        if state.completing and finite(score.Score) then state.completing.broadcast=score.Score end
     end
-    local scorePath='/Script/KovaaKFramework.ScenarioStateReceiver:Send_ChallengeScore'
-    local scoreFunction=StaticFindObject(scorePath)
-    if scoreFunction and scoreFunction:IsValid() then
-        hook(scorePath,function(_,value)
-            observeScore(value:get())
-        end)
-    end
+    hook('/Script/KovaaKFramework.ScenarioStateReceiver:Send_ChallengeScore',function(_,value)
+        observeScore(value:get())
+    end)
     -- UE4SS native post callbacks receive the original return value second,
     -- before regular parameters. Observe computations the game already makes;
     -- do not call this function or override any input/return value.
-    local calculationPath='/Script/GameSkillsTrainer.StatsManager:CalculateScore'
-    local calculationFunction=StaticFindObject(calculationPath)
-    if calculationFunction and calculationFunction:IsValid() then
-        hook(calculationPath,function(_,result,worldContext)
-            if not state.active or not state.clock or not state.clockContext then return end
-            local expected=state.clock:GetGameState(state.clockContext)
-            local actual=state.clock:GetGameState(worldContext:get())
-            if not expected or not actual or not expected:IsValid() or not actual:IsValid() or expected:GetAddress()~=actual:GetAddress() then return end
-            observeScore(result:get())
-        end)
-    end
-    hook(analytics .. 'OnChallengeCompleted', function(_, scenario, score)
-        if not state.active then return end
-        local name=scenario:get():ToString()
-        if name~=state.scenario then return end
-        state.active=false
-        local finalScore=score:get()
-        if type(finalScore)~='number' or finalScore~=finalScore or math.abs(finalScore)>=1e12 then return end
-        state.score=finalScore
-        local accuracy = state.shots and state.shots>0 and state.hits and state.hits>=0 and state.hits<=state.shots and state.hits/state.shots*100 or ''
-        local duration=state.seconds
-        if not duration and state.startedAt and state.clock and state.clockContext and state.clockContext:IsValid() then
-            local ok,stamp=pcall(function() return state.clock:GetTimeSeconds(state.clockContext) end)
-            if ok and type(stamp)=='number' and stamp>state.startedAt then duration=stamp-state.startedAt end
-        end
-        local values={'run',state.id,name,finalScore,accuracy,duration or '',state.kills or '',state.damage or '',os.date('!%Y-%m-%dT%H:%M:%SZ')}
-        for i,v in ipairs(values) do values[i]=escape(v) end
-        local line=table.concat(values,'\t') .. '\n'
-        -- One small append after completion, outside the scoring callback. The
-        -- native worker owns directory creation, parsing, queries, and analysis.
-        ExecuteInGameThreadWithDelay(250, function()
-            local path=(os.getenv('LOCALAPPDATA') or '') .. '/AimMod/KovaaksNative/completed.tsv'
-            local file, reason=io.open(path,'ab')
-            if not file then print('[AimModTelemetry] Could not save run: '..tostring(reason)..'\n'); return end
-            file:write(line); file:close()
-            print('[AimModTelemetry] completed run saved\n')
-        end)
+    hook('/Script/GameSkillsTrainer.StatsManager:CalculateScore',function(_,result,worldContext)
+        if not state.active or not state.clock or not state.clockContext then return end
+        local expected=state.clock:GetGameState(state.clockContext)
+        local actual=state.clock:GetGameState(worldContext:get())
+        if not expected or not actual or not expected:IsValid() or not actual:IsValid() or expected:GetAddress()~=actual:GetAddress() then return end
+        observeScore(result:get())
     end)
+    local function list(kind) return #lifecycle[kind]>0 and table.concat(lifecycle[kind],',') or 'none' end
+    print('[AimModTelemetry] lifecycle source: start='..(useFallback and 'native-timer' or list('start'))..'; complete='..list('complete')..'; cancel='..list('cancel')..'\n')
+    if #lifecycle.complete==0 then print('[AimModTelemetry] no completion notification in this build: completed runs and replays are not saved\n') end
     if #unavailable>0 then print('[AimModTelemetry] native events unavailable in this build: ' .. table.concat(unavailable, ', ') .. '\n') end
     -- Start alongside telemetry so UE4SS reloads that retain the original main
     -- chunk still pick up recording. ReplayCapture.start is idempotent.
@@ -263,4 +393,3 @@ function M.start()
     if not replayOk then print('[AimModReplay] start failed: '..tostring(replayError)..'\n') end
 end
 return M
-

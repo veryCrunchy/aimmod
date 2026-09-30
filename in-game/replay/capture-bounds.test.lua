@@ -1,4 +1,5 @@
 -- Lua 5.3+. Capture bounds and failure recovery with synthetic objects only.
+local completion
 local index=0
 local function obj(t)index=index+1;local address=index;t=t or {};t.IsValid=function()return true end;t.GetAddress=function()return address end;return t end
 local gameTime,elapsed=0,0
@@ -29,13 +30,13 @@ end
 os.getenv=function()return 'test-private-root'end
 os.remove=function(path)files[path]=nil;return true end
 os.rename=function(a,b)files[b]=files[a];files[a]=nil;return true end
-local M=dofile('../ue4ss/AimModNativeUI/Scripts/ReplayCapture.lua');M.start({state=function()return intent end})
+local M=dofile('../ue4ss/AimModNativeUI/Scripts/ReplayCapture.lua');M.start({state=function()return intent end,onCompleted=function(fn)completion=fn end})
 local checks=0;local function check(v,msg)assert(v,msg);checks=checks+1 end
 local root='test-private-root/AimMod/KovaaksNative/replays/'
 local function step(value)elapsed=value;gameTime=gameTime+.016;tick()end
 local function attempt(id)intent={active=true,id=id,scenario='Synthetic scenario'};elapsed=0;tick();step(.016)end
 local function complete()
-    hooks['/Script/GameSkillsTrainer.AnalyticsManager:OnChallengeCompleted']({}, {get=function()return {ToString=function()return intent.scenario end}end},{get=function()return 10 end})
+    completion({scenario=intent.scenario,id=intent.id,score=10})
     intent.active=false;tick()
 end
 
@@ -88,7 +89,7 @@ check(opens==disabledOpens and M.status().state=='error','three consecutive fail
 
 -- Size budget ends the attempt cleanly as 'size-limit' (tested in a fresh module).
 index=0;opens=0;files={};hooks={}
-M=dofile('../ue4ss/AimModNativeUI/Scripts/ReplayCapture.lua');M.start({state=function()return intent end})
+M=dofile('../ue4ss/AimModNativeUI/Scripts/ReplayCapture.lua');M.start({state=function()return intent end,onCompleted=function(fn)completion=fn end})
 M.lowerLimits(4096+700)
 intent.active=false;tick()
 attempt('large');for n=2,40 do step(n*.016) end

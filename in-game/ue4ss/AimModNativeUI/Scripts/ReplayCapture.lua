@@ -226,7 +226,7 @@ local function begin(state,context)
     end
     lastReason=''; publishStatus()
     local source=''
-    if state.startEvent=='started' or state.startEvent=='restarted' or state.startEvent=='replayed' then source=',"startEvent":'..quote(state.startEvent) end
+    if type(state.startEvent)=='string' and #state.startEvent<=32 and state.startEvent:match('^[a-z][a-z%-]*$') then source=',"startEvent":'..quote(state.startEvent) end
     emit('{"kind":"header","version":1,"id":'..quote(id)..',"scenario":'..quote(state.scenario or '')..
         ',"recordedAt":'..quote(os.date('!%Y-%m-%dT%H:%M:%SZ'))..',"coordinates":"unreal-centimeters","nominalHz":60'..map..source..'}')
 end
@@ -456,24 +456,18 @@ function M.start(telemetry)
     end)
     ExecuteInGameThreadWithDelay(0,function() M.probe() end)
     completed=false
-    RegisterHook('/Script/GameSkillsTrainer.AnalyticsManager:OnChallengeCompleted',function() end,function(_,scenario,score)
-        -- Associate completion with the recorder itself. Telemetry hooks may
-        -- already have changed active/id before this post hook is invoked.
-        pcall(function()
-            if not scenario then return end
-            local ok,name=pcall(function()
-                local value=scenario:get()
-                return type(value)=='string' and value or value:ToString()
-            end)
-            if ok and settingsWait and name==telemetry.state().scenario then settingsWait=false;resumeGate=nil end
-            if not active then return end
-            if ok and name==active.scenario then
-                local scoreOk,finalScore=pcall(function()return score:get()end)
-                completed={intentId=telemetry.state().id,score=scoreOk and finite(finalScore) and finalScore or nil}
-            end
-        end)
-        -- Nil: no parameter or return override.
-    end)
+    -- Completion comes from telemetry, which resolves the lifecycle source of
+    -- this game build (legacy analytics or framework broadcasts). The event
+    -- carries the completed intent ID, so a newer Play event cannot steal it.
+    local function onCompleted(event)
+        if type(event)~='table' or type(event.scenario)~='string' then return end
+        if settingsWait and event.scenario==telemetry.state().scenario then settingsWait=false;resumeGate=nil end
+        if active and event.scenario==active.scenario then
+            completed={intentId=event.id,score=finite(event.score) and event.score or nil}
+        end
+    end
+    if type(telemetry.onCompleted)=='function' then telemetry.onCompleted(onCompleted)
+    else print('[AimModReplay] telemetry completion unavailable; replays are not published\n') end
     local function awaitAttempt(state,context,reusedId,nativeRestart)
         pending={id=state.id,scenario=state.scenario,startEvent=state.startEvent,nativeRestart=nativeRestart}
         local resolved,value=pcall(function()return context or gateContext(resolveContext())end)
