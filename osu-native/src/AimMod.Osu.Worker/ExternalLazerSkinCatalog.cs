@@ -144,7 +144,7 @@ public sealed class DynamicRealmLazerSkinCatalogReader : ILazerSkinCatalogReader
             if (!matchesSearch(query.SearchText, name, creator))
                 continue;
 
-            (int fileCount, string previewHash, string previewLogicalName) = readFiles(skin);
+            (int fileCount, string previewHash, string previewLogicalName, ExternalLazerSkinFile[] previewFiles) = readFiles(skin);
             skins.Add(new ExternalLazerSkinSummary(
                 skinId,
                 name.Length == 0 ? "Unnamed skin" : name,
@@ -153,7 +153,10 @@ public sealed class DynamicRealmLazerSkinCatalogReader : ILazerSkinCatalogReader
                 get<bool>(skin, "Protected"),
                 fileCount,
                 previewHash,
-                previewLogicalName));
+                previewLogicalName)
+            {
+                PreviewFiles = previewFiles,
+            });
         }
 
         ExternalLazerSkinSummary[] ordered = skins
@@ -166,10 +169,11 @@ public sealed class DynamicRealmLazerSkinCatalogReader : ILazerSkinCatalogReader
         return new ExternalLazerSkinCatalogSearchResult(ordered, skins.Count, query.Offset, query.Limit);
     }
 
-    private static (int FileCount, string PreviewHash, string PreviewLogicalName) readFiles(IRealmObject skin)
+    private static (int FileCount, string PreviewHash, string PreviewLogicalName, ExternalLazerSkinFile[] PreviewFiles) readFiles(IRealmObject skin)
     {
         int count = 0;
         var previews = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var elements = new List<(int Priority, ExternalLazerSkinFile File)>();
         foreach (IEmbeddedObject usage in skin.DynamicApi.GetList<IEmbeddedObject>("Files"))
         {
             if (++count > ExternalLazerSkinProtocol.MaximumFilesPerSkin)
@@ -178,8 +182,22 @@ public sealed class DynamicRealmLazerSkinCatalogReader : ILazerSkinCatalogReader
             string logicalName = text(usage, "Filename");
             string hash = getObject(usage, "File") is { } file ? normaliseOptionalHash(text(file, "Hash")) : string.Empty;
             if (hash.Length == 64)
-                previews.TryAdd(logicalName.Replace('\\', '/'), hash);
+            {
+                string normalised = logicalName.Replace('\\', '/');
+                previews.TryAdd(normalised, hash);
+                int priority = ExternalLazerSkinProtocol.PreviewElementPriority(normalised);
+                if (priority >= 0)
+                    elements.Add((priority, new ExternalLazerSkinFile(normalised, hash)));
+            }
         }
+
+        // Thumbnails need only a bounded set of gameplay elements; core sprites win over numbered frames.
+        ExternalLazerSkinFile[] previewFiles = elements
+            .OrderBy(element => element.Priority)
+            .ThenBy(element => element.File.LogicalName, StringComparer.OrdinalIgnoreCase)
+            .Take(ExternalLazerSkinProtocol.MaximumPreviewFilesPerSkin)
+            .Select(element => element.File)
+            .ToArray();
 
         foreach (string candidate in preview_names)
         {
@@ -187,10 +205,10 @@ public sealed class DynamicRealmLazerSkinCatalogReader : ILazerSkinCatalogReader
                 string.Equals(entry.Key, candidate, StringComparison.OrdinalIgnoreCase)
                 || entry.Key.EndsWith('/' + candidate, StringComparison.OrdinalIgnoreCase));
             if (match is { Value.Length: 64 } found)
-                return (count, found.Value, found.Key);
+                return (count, found.Value, found.Key, previewFiles);
         }
 
-        return (count, string.Empty, string.Empty);
+        return (count, string.Empty, string.Empty, previewFiles);
     }
 
     private static bool matchesSearch(string query, string name, string creator)
