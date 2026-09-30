@@ -289,6 +289,24 @@ function M.create(owner)
         if not ok then s.close();error(err)end
         return true
     end
+    -- Render-rate pose between published frames: camera and target locations
+    -- only, on proxies this scene already owns. Never spawns or destroys.
+    function s.pose(camera,moves)
+        local ok,err=pcall(function()
+            assert(type(camera)=='table' and #camera==7,'invalid replay pose')
+            for _,n in ipairs(camera)do assert(finite(n),'invalid replay pose')end
+            assert(camera[7]>1 and camera[7]<179,'invalid replay FOV')
+            assert(valid(s.camera),'replay camera unavailable')
+            s.camera:K2_SetActorLocationAndRotation(vector(camera[1],camera[2],camera[3]),{Pitch=camera[4],Yaw=camera[5],Roll=camera[6]},false,{},true)
+            s.camera.CameraComponent:SetFieldOfView(camera[7])
+            for _,m in ipairs(moves or {})do
+                local proxy=s.actors[m[1]]
+                if valid(proxy) and finite(m[2]) and finite(m[3]) and finite(m[4]) then proxy:K2_SetActorLocation(vector(m[2],m[3],m[4]),false,{},true)end
+            end
+        end)
+        if not ok then s.close();error(err)end
+        return true
+    end
     function s.isReady()local ok=pcall(s.verify);if not ok and s.ready then s.close()end;return ok end
     function s.presentation(id)return presentations[id]end
     return s

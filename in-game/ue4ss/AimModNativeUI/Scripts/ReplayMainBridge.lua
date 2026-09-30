@@ -40,7 +40,7 @@ end
 local function ack(state,detail,revision)
     local keyboardActive=active and hud~=nil and not proofActive and type(currentId)=='string' and currentId:match('^[%w_-]+$')~=nil
     local id=keyboardActive and currentId or ''
-    publish('native-replay-renderer.json','{"state":"'..state..'","mode":"main","protocol":5,"detail":"'..detail..'","active":'..tostring(keyboardActive or false)..',"replayId":"'..id..'","revision":'..tostring(revision or lastRevision or 0)..'}\n')
+    publish('native-replay-renderer.json','{"state":"'..state..'","mode":"main","protocol":6,"detail":"'..detail..'","active":'..tostring(keyboardActive or false)..',"replayId":"'..id..'","revision":'..tostring(revision or lastRevision or 0)..'}\n')
 end
 local function cells(line)local a={};for value in (line..'\t'):gmatch('(.-)\t')do a[#a+1]=value end;return a end
 local function decode(value)
@@ -50,7 +50,8 @@ end
 function M.parse(data)
     assert(type(data)=='string' and #data<=524288 and data:sub(-1)=='\n','incomplete replay frame')
     local lines={};for line in data:gmatch('([^\n]+)\n')do lines[#lines+1]=cells(line:gsub('\r$',''))end
-    local h=lines[1] or {};assert(#h==3 and (h[1]=='AIMMOD_REPLAY_2' or h[1]=='AIMMOD_REPLAY_3' or h[1]=='AIMMOD_REPLAY_4' or h[1]=='AIMMOD_REPLAY_5'),'unsupported main replay frame')
+    local h=lines[1] or {};assert(#h==3 and (h[1]=='AIMMOD_REPLAY_2' or h[1]=='AIMMOD_REPLAY_3' or h[1]=='AIMMOD_REPLAY_4' or h[1]=='AIMMOD_REPLAY_5' or h[1]=='AIMMOD_REPLAY_6'),'unsupported main replay frame')
+    local v6=h[1]=='AIMMOD_REPLAY_6'
     local revision=tonumber(h[2]);assert(finite(revision) and revision>=0 and revision%1==0,'invalid revision')
     assert(h[3]=='0' or h[3]=='1','invalid visibility')
     local frame={revision=revision,visible=h[3]=='1',actors={}}
@@ -89,21 +90,34 @@ function M.parse(data)
                 local id=tonumber(row[5]);assert(finite(id) and id>0 and id%1==0,'invalid hit target');frame.hit.target=id
             end
         elseif row[1]=='health' then
-            assert((h[1]=='AIMMOD_REPLAY_4' or h[1]=='AIMMOD_REPLAY_5') and #row==3,'invalid replay health')
+            assert((h[1]=='AIMMOD_REPLAY_4' or h[1]=='AIMMOD_REPLAY_5' or v6) and #row==3,'invalid replay health')
             local id,percent=tonumber(row[2]),tonumber(row[3])
             frame.health=frame.health or {};frame.healthIds=frame.healthIds or {}
             assert(finite(id) and id>0 and id%1==0 and not frame.healthIds[id] and finite(percent) and percent>=0 and percent<=1 and #frame.health<128,'invalid replay health')
             frame.healthIds[id]=true;frame.health[#frame.health+1]={id=id,percent=percent}
         elseif row[1]=='result' then
-            assert(h[1]=='AIMMOD_REPLAY_5' and #row==2 and frame.result==nil,'invalid replay result')
+            assert((h[1]=='AIMMOD_REPLAY_5' or v6) and #row==2 and frame.result==nil,'invalid replay result')
             frame.result=tonumber(row[2]);assert(finite(frame.result),'invalid replay result')
         elseif row[1]=='appearance' then
-            assert(h[1]=='AIMMOD_REPLAY_5' and #row==6,'invalid replay appearance')
+            assert((h[1]=='AIMMOD_REPLAY_5' or v6) and #row==6,'invalid replay appearance')
             frame.appearance=frame.appearance or {};frame.appearanceIds=frame.appearanceIds or {}
             local id=tonumber(row[2]);local profile=decode(row[3]);local rotation={tonumber(row[4]),tonumber(row[5]),tonumber(row[6])}
             assert(finite(id) and id>0 and id%1==0 and not frame.appearanceIds[id] and #frame.appearance<128 and #profile>0 and #profile<=256 and not profile:find('%c'),'invalid replay appearance')
             for i=1,3 do assert(finite(rotation[i]),'invalid replay rotation')end
             frame.appearanceIds[id]=true;frame.appearance[#frame.appearance+1]={id=id,profile=profile,rotation=rotation}
+        elseif row[1]=='motion' then
+            -- Protocol 6: camera samples ahead of this frame for render-rate playback.
+            assert(v6 and #row==9,'invalid replay motion')
+            frame.motion=frame.motion or {}
+            local m={};for j=2,9 do local n=tonumber(row[j]);assert(finite(n),'invalid replay motion');m[#m+1]=n end
+            local previous=frame.motion[#frame.motion]
+            assert(#frame.motion<64 and m[1]>=frame.time.time-0.0001 and (not previous or m[1]>=previous[1]) and m[8]>1 and m[8]<179,'invalid replay motion')
+            frame.motion[#frame.motion+1]=m
+        elseif row[1]=='velocity' then
+            assert(v6 and #row==5,'invalid replay velocity')
+            local id,x,y,z=tonumber(row[2]),tonumber(row[3]),tonumber(row[4]),tonumber(row[5])
+            assert(finite(id) and id>0 and id%1==0 and finite(x) and finite(y) and finite(z),'invalid replay velocity')
+            frame.velocity=frame.velocity or {};assert(frame.velocity[id]==nil,'invalid replay velocity');frame.velocity[id]={x,y,z}
         else
             assert(#row==7 and row[1]=='actor' and #frame.actors<128,'invalid actor row')
             local a={};for j=2,7 do local n=tonumber(row[j]);assert(finite(n),'invalid actor');a[#a+1]=n end
@@ -113,6 +127,7 @@ function M.parse(data)
     end
     for _,health in ipairs(frame.health or {})do assert(seen[health.id],'unknown health target')end
     for _,appearance in ipairs(frame.appearance or {})do assert(seen[appearance.id],'unknown appearance target')end
+    for id in pairs(frame.velocity or {})do assert(seen[id],'unknown velocity target')end
     frame.healthIds=nil
     frame.appearanceIds=nil
     return frame
@@ -124,6 +139,7 @@ local function close()
     if scene then pcall(scene.close);scene=nil end
     if active and onExit then pcall(onExit)end
     active=false;lastData=nil;lastRevision=nil;currentId=nil;proofActive=false;proofFrame=nil;currentMeta=nil;lastWorkerHeartbeat=nil
+    motion=nil;motionClock=nil;motionAt=nil
     ack(approved and 'ready' or 'unverified','validated')
     if safety then safety.snapshot()end
 end
@@ -145,6 +161,59 @@ local function errorDetail(reason)
     if text:find('context unavailable',1,true) or text:find('context changed',1,true) or text:find('map state unavailable',1,true)then return 'world-unavailable'end
     if text:find('worker unavailable',1,true)then return 'worker-unavailable'end
     return 'main-render-failed'
+end
+-- Render-rate playback (protocol 6). The file carries 0.4 s of camera samples
+-- ahead of its playback time; a local clock advances every engine frame and
+-- is pulled gently toward the published time, so the view moves at render
+-- rate instead of the 30 Hz publication rate. Targets are extrapolated with
+-- their published velocity until the next frame.
+local motion,motionClock,motionAt,realClock
+local function realTime()
+    local ok,value=pcall(function()
+        if not realClock or not realClock:IsValid() then realClock=StaticFindObject('/Script/Engine.Default__GameplayStatics')end
+        return realClock:GetRealTimeSeconds(owner)
+    end)
+    if ok and finite(value) then return value end
+end
+local function lerpAngle(a,b,u)return a+(((b-a+540)%360)-180)*u end
+local function applyMotion(now)
+    local m=motion
+    if not m or not scene or not active or proofActive then return end
+    local dt=motionAt and now-motionAt or 0;motionAt=now
+    if dt<0 or dt>0.25 then dt=0 end
+    motionClock=(motionClock or m.time)+dt*m.speed
+    local samples=m.samples
+    local t=math.max(samples[1][1],math.min(motionClock,samples[#samples][1]))
+    local i=1;while i<#samples and samples[i+1][1]<t do i=i+1 end
+    local a,b=samples[i],samples[math.min(i+1,#samples)]
+    local u=b[1]>a[1] and (t-a[1])/(b[1]-a[1]) or 0
+    local camera={a[2]+(b[2]-a[2])*u,a[3]+(b[3]-a[3])*u,a[4]+(b[4]-a[4])*u,a[5]+(b[5]-a[5])*u,
+        lerpAngle(a[6],b[6],u),lerpAngle(a[7],b[7],u),a[8]+(b[8]-a[8])*u}
+    local moves={}
+    local ahead=math.min(t-m.time,0.1)
+    for _,actor in ipairs(m.actors)do
+        local v=m.velocity[actor[1]]
+        if v then moves[#moves+1]={actor[1],actor[2]+v[1]*ahead,actor[3]+v[2]*ahead,actor[4]+v[3]*ahead}end
+    end
+    scene.pose(camera,moves)
+end
+local function takeMotion(frame,now)
+    if not frame.motion or #frame.motion<2 or not frame.time.playing or not scene or not scene.pose then motion=nil;motionClock=nil;return end
+    local published=frame.time.time
+    -- Seeks, pauses and large drift snap; small drift is corrected slowly.
+    if not motion or not motionClock or math.abs(motionClock-published)>0.25 then motionClock=published
+    else motionClock=motionClock+(published-motionClock)*0.1 end
+    motion={samples=frame.motion,time=published,speed=frame.time.speed,actors=frame.actors,velocity=frame.velocity or {}}
+    if now then motionAt=now;applyMotion(now)end
+end
+local motionStarted=false
+local function startMotionLoop()
+    if motionStarted then return end;motionStarted=true
+    LoopInGameThreadWithDelay(1,function()
+        if not motion then return end
+        local ok,reason=pcall(function()local now=realTime();if now then applyMotion(now)end end)
+        if not ok then motion=nil;print('[AimModReplay] motion playback stopped: '..tostring(reason)..'\n')end
+    end)
 end
 function M.active()return active end
 function M.close()send('close')end
@@ -225,6 +294,8 @@ function M.attach(menu,enter,leave)
                 assert(frame.meta.mapName==currentMeta.mapName and frame.meta.mapScale==currentMeta.mapScale,'map-mismatch')
                 scene.frame(frame)
             end
+            takeMotion(frame,frame.motion and realTime() or nil)
+            if motion then startMotionLoop()end
             local feedback=effects and effects.update(frame) or false
             if healthBars then healthBars.update(frame)end
             hud.update(frame.time,frame.stats,feedback,frame.transport,frame.result);lastData=data;lastRevision=frame.revision

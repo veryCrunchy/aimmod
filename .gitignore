@@ -70,3 +70,9 @@ in-game/native-service/bin/
 in-game/native-service/obj/
 in-game/**/account.bin*
 in-game/**/hub-cache.json*
+
+# Third-party UE4SS source (private UEPseudo); never commit
+external/RE-UE4SS/
+in-game/native-mod/build/
+in-game/native-mod/build-*/
+in-game/native-mod/out/
