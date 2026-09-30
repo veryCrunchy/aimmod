@@ -1,6 +1,6 @@
 [package]
 name = "aimmod"
-version = "1.8.0"
+version = "1.9.0"
 description = "AimMod with smoothness analytics and VS mode"
 authors = []
 edition = "2024"
