@@ -166,6 +166,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
     private const float content_inset = 12;
     private const int connection_attempt_limit = 10;
     private const int session_retry_limit = 3;
+    private const double max_rate_limit_auto_retry_ms = 30_000;
     private static readonly TimeSpan installed_cache_lifetime = TimeSpan.FromMinutes(2);
     private readonly KeyedFlow<int, OfficialBeatmapSet, OnlineBeatmapSetBlock> resultBlocks;
     private readonly AimModInlineStatus searchStatus;
@@ -571,15 +572,22 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
         {
             // Results from another account or an expired session are stale; do not leave them under the error.
             resultBlocks.Clear();
-            string message = searchFailureMessage(response.Status);
+            string message = searchFailureMessage(response.Status, response.RetryAfter);
             resultStatus.Text = "Online search unavailable";
             bool sessionProblem = response.Status is OfficialBeatmapRequestStatus.SignedOut or
                 OfficialBeatmapRequestStatus.TokenExpired or
                 OfficialBeatmapRequestStatus.SessionUnavailable or
                 OfficialBeatmapRequestStatus.SessionChanged;
+            double retryDelay = 5000;
+            if (response.Status == OfficialBeatmapRequestStatus.RateLimited && response.RetryAfter is DateTimeOffset retryAt)
+            {
+                retryDelay = Math.Max(1000, (retryAt - DateTimeOffset.UtcNow).TotalMilliseconds);
+                sessionProblem = retryDelay <= max_rate_limit_auto_retry_ms;
+            }
+
             searchStatus.ShowError(message, null, retrySearch);
             if (sessionProblem && sessionRetries++ < session_retry_limit)
-                scheduleAutomaticRetry(5000);
+                scheduleAutomaticRetry(retryDelay);
             return;
         }
 
@@ -612,8 +620,9 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
         return await currentImporter.InstallInLazerAsync(archive).ConfigureAwait(false);
     }
 
-    private static string searchFailureMessage(OfficialBeatmapRequestStatus status) => status switch
+    private static string searchFailureMessage(OfficialBeatmapRequestStatus status, DateTimeOffset? retryAfter = null) => status switch
     {
+        OfficialBeatmapRequestStatus.RateLimited => $"osu! is rate limiting searches. {OsuRateLimitText.RetryHint(retryAfter)}",
         OfficialBeatmapRequestStatus.SignedOut => "Sign in to osu!lazer to search the official beatmap catalog.",
         OfficialBeatmapRequestStatus.TokenExpired => "osu!lazer's session is refreshing. Try the search again in a moment.",
         OfficialBeatmapRequestStatus.Unauthorized => "osu! refused this inherited session. Reopen osu!lazer, then try again.",
@@ -912,6 +921,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                 OnlineBeatmapImportStatus.Unauthorized => "Session refused",
                 OnlineBeatmapImportStatus.SessionChanged => "Account changed",
                 OnlineBeatmapImportStatus.NetworkError => "Network error",
+                OnlineBeatmapImportStatus.RateLimited => "Rate limited, wait",
                 OnlineBeatmapImportStatus.DownloadDisabled => "Unavailable",
                 OnlineBeatmapImportStatus.InvalidDownload => "Invalid download",
                 OnlineBeatmapImportStatus.ServerError => "osu! server error",

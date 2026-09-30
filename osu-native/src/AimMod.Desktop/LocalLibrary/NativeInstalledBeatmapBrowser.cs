@@ -1328,6 +1328,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         OsuBestScoresFetchStatus.SessionChanged => "osu! account changed",
         OsuBestScoresFetchStatus.NetworkError => "osu! network unavailable",
         OsuBestScoresFetchStatus.ServerError => "osu! service unavailable",
+        OsuBestScoresFetchStatus.RateLimited => "osu! rate limited, try later",
         OsuBestScoresFetchStatus.InvalidResponse => "online difficulty unavailable",
         _ => "osu! session unavailable",
     };

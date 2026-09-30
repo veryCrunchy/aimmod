@@ -189,6 +189,7 @@ public sealed class OfficialAccountScoreHistoryService : IAccountScoreHistorySer
         OsuProfileFetchStatus.NetworkError => OsuBestScoresFetchStatus.NetworkError,
         OsuProfileFetchStatus.InvalidResponse => OsuBestScoresFetchStatus.InvalidResponse,
         OsuProfileFetchStatus.ServerError => OsuBestScoresFetchStatus.ServerError,
+        OsuProfileFetchStatus.RateLimited => OsuBestScoresFetchStatus.RateLimited,
         _ => OsuBestScoresFetchStatus.SessionUnavailable,
     };
 }
