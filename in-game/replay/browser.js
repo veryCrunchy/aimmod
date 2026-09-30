@@ -1,7 +1,7 @@
 /* Replay library for the owned Gameface workspace. No gameplay commands. */
 (function (root) {
   'use strict';
-  var container = null, request = null, generation = 0, rows = [], active = false, nativeOpen=false, favoritesOnly=false, query='', message='', busy=false, total=0;
+  var container = null, request = null, generation = 0, rows = [], active = false, nativeOpen=false, favoritesOnly=false, query='', message='', busy=false, total=0, pendingStart=null;
   function node(tag, css, text) {
     var el = root.document.createElement(tag);
     if (css) el.className = css;
@@ -66,6 +66,8 @@
     toolbar.appendChild(node('h2', '', (total > rows.length ? rows.length + ' of ' + total : rows.length) + (rows.length === 1 ? ' in-game replay' : ' in-game replays')));
     container.appendChild(toolbar);
     if(message)container.appendChild(node('p','notice replay-message',message));
+    var waitingRow=pendingStart&&rows.filter(function(r){return r.id===pendingStart.pending;})[0];
+    if(waitingRow){var banner=node('div','replay-waiting');var text=node('div','replay-waiting-text');text.appendChild(node('strong','','Waiting to start: '+(waitingRow.scenario||'replay')));text.appendChild(node('span','',pendingStart.message||'Load the scenario, then open the pause menu (Esc).'));banner.appendChild(text);banner.appendChild(button('Show',function(){pendingStart=null;open(waitingRow);},true));container.appendChild(banner);}
     if (!rows.length) {
       toolbar.appendChild(button('Refresh', refresh));
       var empty = node('div', 'empty'); empty.appendChild(node('h3', '', 'No replays saved yet'));
@@ -136,6 +138,9 @@
       var valid = data.filter(function (row) { return row && typeof row.id === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(row.id); });
       total = valid.length; rows = valid.slice(0, LIMIT);
       list();
+      // A start may still be waiting from before the workspace was hidden.
+      var native = root.AimModNativeReplayBrowser, ticket = generation;
+      if (native && native.pendingStart) native.pendingStart(function (start) { if (!active || busy || ticket !== generation) return; var had = !!pendingStart; pendingStart = start; if (start || had) list(); });
     });
   }
   root.AimModReplayBrowser = {
