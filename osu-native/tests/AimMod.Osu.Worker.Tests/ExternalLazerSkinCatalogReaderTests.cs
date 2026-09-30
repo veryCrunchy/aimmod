@@ -109,7 +109,34 @@ public sealed class ExternalLazerSkinCatalogReaderTests
             Assert.That(result.Skins[0].FileCount, Is.EqualTo(2));
             Assert.That(result.Skins[0].PreviewHash, Is.EqualTo(new string('b', 64)));
             Assert.That(result.Skins[0].PreviewLogicalName, Is.EqualTo("menu-background@2x.jpg"));
+            // Thumbnails need skin.ini and gameplay elements; menu art and sounds are not listed.
+            Assert.That(result.Skins[0].PreviewFiles.Select(file => file.LogicalName), Is.EqualTo(new[] { "skin.ini" }));
         });
+    }
+
+    [Test]
+    public async Task ListsGameplayElementsForThumbnailsWithCoreSpritesFirst()
+    {
+        {
+            using Realm realm = Realm.GetInstance(new RealmConfiguration(realmPath)
+            {
+                SchemaVersion = RealmLazerLibrarySnapshotFactory.SupportedSchemaVersion,
+            });
+            realm.Write(() =>
+            {
+                SkinInfo skin = realm.Find<SkinInfo>(skinId)!;
+                foreach ((string name, char hash) in new[] { ("hitcircle@2x.png", 'd'), ("default-1.png", 'e'), ("normal-hitclap.wav", 'f'), ("cursor.png", '1') })
+                    skin.Files.Add(new RealmNamedFileUsage(new RealmFile { Hash = new string(hash, 64) }, name));
+            });
+        }
+
+        var reader = new DynamicRealmLazerSkinCatalogReader();
+        ExternalLazerSkinCatalogSearchResult result = await reader.ReadCatalogAsync(
+            new LazerLibrarySnapshot(Guid.NewGuid(), realmPath, Path.Combine(temporaryDirectory, "files"), DateTimeOffset.UtcNow),
+            new ExternalLazerSkinCatalogSearchRequest(temporaryDirectory, Limit: 20));
+
+        Assert.That(result.Skins.Single().PreviewFiles.Select(file => file.LogicalName),
+            Is.EqualTo(new[] { "cursor.png", "hitcircle@2x.png", "skin.ini", "default-1.png" }));
     }
 
     [Test]

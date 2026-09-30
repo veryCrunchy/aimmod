@@ -26,6 +26,22 @@ public sealed record InstalledLazerSkin(
     public bool HasPreview => !string.IsNullOrWhiteSpace(PreviewPath)
                               && Path.IsPathFullyQualified(PreviewPath)
                               && File.Exists(PreviewPath);
+
+    /// <summary>Readable label for the UI only; <see cref="Name"/> stays the stored identifier.</summary>
+    public string DisplayName => SkinDisplayName.Split(Name).Title;
+
+    /// <summary>A leading team or creator tag split from the stored name ("《CK》 …" → "CK"), if any.</summary>
+    public string? DisplayTag => SkinDisplayName.Split(Name).Tag;
+
+    /// <summary>Logical skin file name (for example "hitcircle@2x.png") to a verified local file, for thumbnails.</summary>
+    public IReadOnlyDictionary<string, string> ElementFiles { get; init; } = new Dictionary<string, string>();
+
+    /// <summary>When the skin arrived on this computer, if known.</summary>
+    public DateTimeOffset? AddedAt { get; init; }
+
+    public bool HasFolder => Origin == InstalledSkinOrigin.Stable
+                             && Path.IsPathFullyQualified(SourcePath)
+                             && Directory.Exists(SourcePath);
 }
 
 public sealed record InstalledLazerSkinPage(IReadOnlyList<InstalledLazerSkin> Items, int Total, int Offset, int Limit)
@@ -71,10 +87,40 @@ public sealed class ExternalLazerInstalledSkinSource : IInstalledSkinSource
         ExternalLazerSkinCatalogSearchResult result = await search(request, cancellationToken).ConfigureAwait(false);
         IReadOnlyDictionary<Guid, string> previews = resolvePreviewPaths(result.Skins);
         return new InstalledLazerSkinPage(
-            result.Skins.Select(skin => new InstalledLazerSkin(skin, previews.GetValueOrDefault(skin.SkinId) ?? string.Empty)).ToArray(),
+            result.Skins.Select(skin => withElements(new InstalledLazerSkin(skin, previews.GetValueOrDefault(skin.SkinId) ?? string.Empty))).ToArray(),
             result.Total,
             result.Offset,
             result.Limit);
+    }
+
+    // Element files are resolved by hash in lazer's store; a missing or linked file only drops that element.
+    private InstalledLazerSkin withElements(InstalledLazerSkin skin)
+    {
+        if (skin.Summary.PreviewFiles.Count == 0)
+            return skin;
+        try
+        {
+            LazerStoredFileReference[] references = skin.Summary.PreviewFiles
+                .Select(file => new LazerStoredFileReference(LazerLibraryAssetKind.Skin, skin.SkinId.ToString("D"), file.LogicalName, file.Hash))
+                .ToArray();
+            var files = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            DateTimeOffset? added = null;
+            foreach (ResolvedLazerStoredFile file in new LazerHashedFileResolver().Resolve(Path.Combine(libraryRoot, "files"), references))
+            {
+                if (file.SourcePath is null)
+                    continue;
+                files.TryAdd(file.Reference.LogicalName, file.SourcePath);
+                if (string.Equals(file.Reference.LogicalName, "skin.ini", StringComparison.OrdinalIgnoreCase))
+                    added = File.GetCreationTimeUtc(file.SourcePath);
+            }
+            if (added is null && files.Count > 0)
+                added = File.GetCreationTimeUtc(files.Values.First());
+            return skin with { ElementFiles = files, AddedAt = added };
+        }
+        catch (Exception error) when (error is ExternalLazerLibraryException or IOException or UnauthorizedAccessException)
+        {
+            return skin;
+        }
     }
 
     public async Task<InstalledLazerSkin?> GetAsync(Guid skinId, CancellationToken cancellationToken = default)
@@ -87,7 +133,7 @@ public sealed class ExternalLazerInstalledSkinSource : IInstalledSkinSource
         if (skin is null)
             return null;
         string preview = resolvePreviewPaths(new[] { skin }).GetValueOrDefault(skin.SkinId) ?? string.Empty;
-        return new InstalledLazerSkin(skin, preview);
+        return withElements(new InstalledLazerSkin(skin, preview));
     }
 
     private IReadOnlyDictionary<Guid, string> resolvePreviewPaths(IEnumerable<ExternalLazerSkinSummary> skins)

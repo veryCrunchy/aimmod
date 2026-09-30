@@ -292,10 +292,52 @@ public sealed record ExternalLazerSkinSummary(
     bool IsBuiltIn,
     int FileCount,
     string PreviewHash = "",
-    string PreviewLogicalName = "");
+    string PreviewLogicalName = "")
+{
+    /// <summary>Hashed gameplay elements (hit circles, numbers, cursor, judgements and skin.ini) used to draw thumbnails.</summary>
+    public IReadOnlyList<ExternalLazerSkinFile> PreviewFiles { get; init; } = [];
+}
+
+public sealed record ExternalLazerSkinFile(string LogicalName, string Hash);
 
 public static class ExternalLazerSkinProtocol
 {
+    public const int MaximumPreviewFilesPerSkin = 160;
+
+    private static readonly HashSet<string> preview_elements = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "hitcircle", "hitcircleoverlay", "approachcircle", "sliderstartcircle", "sliderstartcircleoverlay",
+        "cursor", "cursortrail", "cursormiddle", "sliderb", "sliderb0", "sliderfollowcircle", "reversearrow",
+        "hit300", "hit100", "hit50", "hit0", "hit300-0", "hit100-0", "hit50-0", "hit0-0",
+        "scorebar-bg", "scorebar-colour", "scorebar-colour-0",
+    };
+
+    /// <summary>
+    /// Ranks a skin file for thumbnail rendering: 0 for skin.ini and core gameplay elements,
+    /// 1 for number-font sprites (digits, x, comma, dot, percent; skins configure their prefixes), -1 otherwise.
+    /// </summary>
+    public static int PreviewElementPriority(string logicalName)
+    {
+        if (string.IsNullOrWhiteSpace(logicalName) || logicalName.Length > 260)
+            return -1;
+        string normalised = logicalName.Replace('\\', '/');
+        if (normalised.Count(character => character == '/') > 1 || normalised.Contains("..", StringComparison.Ordinal))
+            return -1;
+        string name = normalised[(normalised.LastIndexOf('/') + 1)..];
+        if (normalised.Length == name.Length && string.Equals(name, "skin.ini", StringComparison.OrdinalIgnoreCase))
+            return 0;
+        if (!name.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
+            return -1;
+        name = name[..^4];
+        if (name.EndsWith("@2x", StringComparison.OrdinalIgnoreCase))
+            name = name[..^3];
+        if (!normalised.Contains('/') && preview_elements.Contains(name))
+            return 0;
+        bool numbered = name.Length >= 3 && name[^2] == '-' && char.IsAsciiDigit(name[^1]);
+        bool fontSymbol = name.EndsWith("-x", StringComparison.OrdinalIgnoreCase) || name.EndsWith("-comma", StringComparison.OrdinalIgnoreCase)
+                          || name.EndsWith("-dot", StringComparison.OrdinalIgnoreCase) || name.EndsWith("-percent", StringComparison.OrdinalIgnoreCase);
+        return numbered || fontSymbol && name.Length > 2 ? 1 : -1;
+    }
     public const int MaximumSearchTextLength = 256;
     public const int MaximumPageSize = 100;
     public const int MaximumOffset = 10_000;

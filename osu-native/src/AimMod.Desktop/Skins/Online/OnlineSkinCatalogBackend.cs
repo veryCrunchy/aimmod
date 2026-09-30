@@ -2,12 +2,13 @@ namespace AimMod.Desktop.Skins.Online;
 
 public sealed class OnlineSkinCatalogBackend : IDisposable
 {
-    private readonly SecureSkinHttpClient http;
+    private readonly IDisposable? ownedHttp;
     private readonly ISkinDownloadBrowser browser;
 
     public OnlineSkinCatalogBackend(string cacheRoot, string previewRoot)
     {
-        http = new SecureSkinHttpClient();
+        var http = new SecureSkinHttpClient();
+        ownedHttp = http;
         Cache = new OnlineSkinCatalogCache(cacheRoot);
         Screenshots = new SkinScreenshotCache(http, Path.Combine(cacheRoot, "screenshots"));
         var validator = new OnlineSkinArchiveValidator();
@@ -27,6 +28,25 @@ public sealed class OnlineSkinCatalogBackend : IDisposable
         Previews = new OnlineSkinPreviewService(previewRoot, Cache, resolvers, validator, browser);
     }
 
+    /// <summary>Offline composition for tests and visual captures; no network client is created.</summary>
+    internal OnlineSkinCatalogBackend(
+        string cacheRoot,
+        string previewRoot,
+        ISecureSkinHttpClient http,
+        IEnumerable<IOnlineSkinCatalogProvider> providers,
+        ISkinDownloadBrowser browser)
+    {
+        this.browser = browser;
+        Cache = new OnlineSkinCatalogCache(cacheRoot);
+        Screenshots = new SkinScreenshotCache(http, Path.Combine(cacheRoot, "screenshots"));
+        var validator = new OnlineSkinArchiveValidator();
+        Catalog = new OnlineSkinCatalogService(providers);
+        var resolvers = new OnlineSkinDownloadResolverPipeline(
+            new DirectHttpsSkinDownloadResolver(http, validator),
+            new ExternalSkinDownloadResolver());
+        Previews = new OnlineSkinPreviewService(previewRoot, Cache, resolvers, validator, browser);
+    }
+
     public OnlineSkinCatalogCache Cache { get; }
     public OnlineSkinCatalogService Catalog { get; }
     public OnlineSkinPreviewService Previews { get; }
@@ -39,5 +59,5 @@ public sealed class OnlineSkinCatalogBackend : IDisposable
     public bool CanPrepare(OnlineSkinCatalogEntry? skin) => skin is not null &&
         (CanDownload(skin.Download) || browser.CanOpen(skin.Download?.BrowserHandoffUri ?? skin.Download?.Uri ?? skin.DetailsUri));
 
-    public void Dispose() => http.Dispose();
+    public void Dispose() => ownedHttp?.Dispose();
 }

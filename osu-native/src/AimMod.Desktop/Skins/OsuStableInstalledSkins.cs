@@ -72,10 +72,29 @@ public sealed class OsuStableInstalledSkinSource : IInstalledSkinSource
             string preview = findPreview(directory);
             string contentIdentity = $"{folderName}:{File.GetLastWriteTimeUtc(iniPath).Ticks}:{new FileInfo(iniPath).Length}";
             Guid id = stableGuid(contentIdentity);
-            int fileCount = Directory.EnumerateFiles(directory, "*", new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true })
-                .Take(8_193).Count();
+            int fileCount = 0;
+            var elements = new List<(int Priority, string Name, string Path)>();
+            var options = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true, AttributesToSkip = FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReparsePoint };
+            foreach (string file in Directory.EnumerateFiles(directory, "*", options).Take(8_193))
+            {
+                fileCount++;
+                string logicalName = Path.GetRelativePath(directory, file).Replace('\\', '/');
+                int priority = ExternalLazerSkinProtocol.PreviewElementPriority(logicalName);
+                if (priority >= 0)
+                    elements.Add((priority, logicalName, file));
+            }
+            var files = elements
+                .OrderBy(element => element.Priority)
+                .ThenBy(element => element.Name, StringComparer.OrdinalIgnoreCase)
+                .Take(ExternalLazerSkinProtocol.MaximumPreviewFilesPerSkin)
+                .GroupBy(element => element.Name, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.First().Path, StringComparer.OrdinalIgnoreCase);
             var summary = new ExternalLazerSkinSummary(id, name, creator, contentIdentity, false, fileCount);
-            return new InstalledLazerSkin(summary, preview, InstalledSkinOrigin.Stable, directory);
+            return new InstalledLazerSkin(summary, preview, InstalledSkinOrigin.Stable, directory)
+            {
+                ElementFiles = files,
+                AddedAt = Directory.GetCreationTimeUtc(directory),
+            };
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
