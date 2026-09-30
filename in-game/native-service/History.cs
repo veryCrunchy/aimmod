@@ -23,6 +23,8 @@ static class History
     [DllImport("winsqlite3", CallingConvention = CallingConvention.Cdecl)] static extern nint sqlite3_column_text(nint stmt, int column);
     [DllImport("winsqlite3", CallingConvention = CallingConvention.Cdecl)] static extern double sqlite3_column_double(nint stmt, int column);
     [DllImport("winsqlite3", CallingConvention = CallingConvention.Cdecl)] static extern nint sqlite3_errmsg(nint db);
+    [DllImport("winsqlite3", CallingConvention = CallingConvention.Cdecl)] static extern int sqlite3_column_type(nint stmt, int column);
+    static bool IsNumber(nint stmt, int col) => sqlite3_column_type(stmt, col) is 1 or 2; // SQLITE_INTEGER / SQLITE_FLOAT
     static string Text(nint stmt, int col) => Marshal.PtrToStringUTF8(sqlite3_column_text(stmt, col)) ?? "";
     static void Check(int code, nint db) { if (code != 0) throw new IOException(Marshal.PtrToStringUTF8(sqlite3_errmsg(db))); }
 
@@ -54,10 +56,14 @@ static class History
                 }
                 var score = sqlite3_column_double(stmt, 2);
                 var duration = sqlite3_column_double(stmt, 4);
-                if (!double.IsFinite(score) || !double.IsFinite(duration) || duration <= 0) continue;
-                var accuracy = sqlite3_column_double(stmt, 3);
+                var id = Text(stmt, 0); var scenario = Text(stmt, 1);
+                // NULL/text columns read as 0.0; never turn a missing score into a real zero.
+                if (!IsNumber(stmt, 2) || !IsNumber(stmt, 4) || !double.IsFinite(score) || !double.IsFinite(duration) || duration <= 0
+                    || id.Length is 0 or > 512 || string.IsNullOrWhiteSpace(scenario)) continue;
+                // Unknown accuracy must stay unknown rather than become 0%.
+                var accuracy = IsNumber(stmt, 3) ? sqlite3_column_double(stmt, 3) : double.NaN;
                 // SessionRecord.accuracy is stored as a percentage, unlike bridge ratios.
-                runs.Add(new(Text(stmt, 0), Text(stmt, 1), score,
+                runs.Add(new(id, scenario, score,
                     double.IsFinite(accuracy) && accuracy is >= 0 and <= 100 ? accuracy : null,
                     duration, sqlite3_column_double(stmt, 5), sqlite3_column_double(stmt, 6),
                     Text(stmt, 7), smooth, jitter, efficiency, correction, sqlite3_column_double(stmt, 9) != 0));

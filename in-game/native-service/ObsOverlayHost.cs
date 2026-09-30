@@ -1,10 +1,7 @@
-using System.Net;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Logging;
 
 namespace AimMod.InGame;
 
@@ -27,22 +24,15 @@ sealed class ObsOverlayHost : IAsyncDisposable
             binding = JsonSerializer.Deserialize<Binding>(File.ReadAllText(config)) ?? throw new InvalidDataException("Invalid OBS binding.");
             if (binding.Port is < 1024 or > 65535 || string.IsNullOrEmpty(binding.Token) || binding.Token.Length != 64 || binding.Token.Any(c => !char.IsAsciiHexDigit(c))) throw new InvalidDataException("Invalid OBS binding.");
         } else binding = new(0, Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant());
-        var builder = WebApplication.CreateSlimBuilder(); builder.Logging.ClearProviders();
-        builder.WebHost.ConfigureKestrel(k => k.Listen(IPAddress.Loopback, binding.Port));
-        app = builder.Build(); var prefix = "/" + binding.Token;
-        app.Use(async (context, next) => {
-            if (context.Request.Host.Host != "127.0.0.1" || context.Request.Method != "GET") { context.Response.StatusCode = 403; return; }
-            context.Response.Headers.CacheControl = "no-store";
-            context.Response.Headers.XContentTypeOptions = "nosniff";
-            await next(context);
-        });
+        app = LoopbackServer.Build(binding.Port); var prefix = "/" + binding.Token;
+        LoopbackServer.UseGuards(app, binding.Token, context => HttpMethods.IsGet(context.Request.Method));
         MapAssets(app, prefix);
         app.MapGet(prefix + "/overlay-state", () => Results.Json(snapshot()));
         await app.StartAsync(token);
-        var address = app.Urls.Single();
+        var address = LoopbackServer.VerifiedAddress(app);
         if (binding.Port == 0) {
             binding = binding with { Port = new Uri(address).Port };
-            var temp = config + ".next"; File.WriteAllText(temp, JsonSerializer.Serialize(binding)); File.Move(temp, config, true);
+            AtomicFile.WriteText(config, JsonSerializer.Serialize(binding));
         }
         Url = address + prefix + "/overlay?surface=obs";
     }

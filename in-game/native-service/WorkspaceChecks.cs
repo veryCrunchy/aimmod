@@ -50,6 +50,15 @@ static class WorkspaceChecks
                 request.Headers.Add("X-AimMod-UI", "1"); request.Content = new StringContent("{\"directory\":\"relative\"}", Encoding.UTF8, "application/json");
                 using var response = await client.SendAsync(request); Check(response.StatusCode == HttpStatusCode.BadRequest,"Import requires explicit absolute directory");
             }
+            using (var request = new HttpRequestMessage(HttpMethod.Post, root + "/history-import")) {
+                request.Headers.Add("X-AimMod-UI", "1"); request.Content = new StringContent(JsonSerializer.Serialize(new { directory = @"\\synthetic-host\share" }), Encoding.UTF8, "application/json");
+                using var response = await client.SendAsync(request); Check(response.StatusCode == HttpStatusCode.BadRequest,"Import refuses network share paths");
+            }
+            using (var request = new HttpRequestMessage(HttpMethod.Post, root + "/command")) {
+                request.Headers.Add("X-AimMod-UI", "1"); request.Headers.Add("Origin", "https://attacker.example"); request.Content = new StringContent("history-next", Encoding.UTF8, "text/plain");
+                using var response = await client.SendAsync(request); Check(response.StatusCode == HttpStatusCode.Forbidden,"Cross-origin command rejected even with capability and UI header");
+            }
+            Check(host.Url.StartsWith("http://127.0.0.1:", StringComparison.Ordinal) && File.ReadAllText(Path.Combine(folder, "live-overlay-url.txt")).StartsWith(root, StringComparison.Ordinal), "workspace publishes loopback URLs");
             var csvFolder=Path.Combine(folder,"csv");Directory.CreateDirectory(csvFolder);
             File.WriteAllText(Path.Combine(csvFolder,"Synthetic - Challenge - 2026.01.01-12.01.00 Stats.csv"),"Score:,100\nChallenge Start:,12:00:00\nHit Count:,8\nMiss Count:,2\n");
             for(var attempt=0;attempt<2;attempt++)using (var request = new HttpRequestMessage(HttpMethod.Post, root + "/history-import")) {
@@ -223,6 +232,11 @@ static class WorkspaceChecks
             PublishAck(ready3); Check(ack.Read().Ready, "fresh publication recovers after expiry");
             using (var exclusive = new FileStream(ackPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
                 Check(ack.Read().Ready && ack.Read().Protocol == 3, "sharing violation retains fresh acknowledgement");
+            using (var pending = new FileStream(ackPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete)) {
+                File.Delete(ackPath);
+                Check(ack.Read().Ready && ack.Read().Protocol == 3, "delete-pending acknowledgement (Lua remove+rename) is a transient gap");
+            }
+            PublishAck(ready3);
             PublishAck("{\"state\":\"error\",\"mode\":\"main\",\"detail\":\"map-mismatch\"}");
             Check(!ack.Read().Ready && ack.Read().Reason == "map-mismatch", "explicit scene error invalidates immediately");
             File.Delete(ackPath);

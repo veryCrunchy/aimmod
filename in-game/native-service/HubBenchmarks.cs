@@ -71,6 +71,7 @@ sealed partial class Hub
             if (!string.Equals(account?.Handle, handle, StringComparison.Ordinal)) return null;
             var key = (handle, id);
             if (benchmarkPages.TryGetValue(key, out var cached) && clock.GetUtcNow() - cached.At < TimeSpan.FromMinutes(5)) return cached.Page;
+            if (clock.GetUtcNow() < retryAfter) return cached.Page ?? throw new HttpRequestException("Hub requested a retry delay.");
             using var doc = await Rpc("GetBenchmarkPage", new { handle, benchmarkId = id }, token);
             // An unlink/account switch while fetching must not return the former account's page.
             if (!string.Equals(account?.Handle, handle, StringComparison.Ordinal)) return null;

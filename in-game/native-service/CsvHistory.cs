@@ -8,16 +8,28 @@ namespace AimMod.InGame;
 record CsvImportResult(int Imported,int Skipped,int Invalid,int Scanned);
 sealed class CsvHistory
 {
- readonly string file; readonly object gate=new(); Run[] runs=[];
+ readonly string file; readonly object gate=new(); volatile Run[] runs=[];
  const int MaxRuns=100000;
- public CsvHistory(string folder){file=Path.Combine(folder,"imported-history.json");try{if(File.Exists(file)&&new FileInfo(file).Length<=64*1024*1024)runs=(JsonSerializer.Deserialize<Run[]>(File.ReadAllText(file))??[]).Where(Valid).Take(MaxRuns).ToArray();}catch(Exception e)when(e is IOException or UnauthorizedAccessException or JsonException){}}
- public IReadOnlyList<Run> Runs{get{lock(gate)return runs.ToArray();}}
+ public CsvHistory(string folder){file=Path.Combine(folder,"imported-history.json");try{if(File.Exists(file)&&new FileInfo(file).Length<=64*1024*1024)runs=(JsonSerializer.Deserialize<Run[]>(File.ReadAllText(file))??[]).Where(Stored).Take(MaxRuns).ToArray();}catch(Exception e)when(e is IOException or UnauthorizedAccessException or JsonException or NotSupportedException){}}
+ // The array is replaced, never mutated, so readers (the history refresh loop)
+ // never wait for a long-running import that holds the write gate.
+ public IReadOnlyList<Run> Runs=>runs;
  static bool Valid(Run r)=>r is not null&&!string.IsNullOrWhiteSpace(r.Scenario)&&r.Scenario.Length<=512&&double.IsFinite(r.Score)&&Math.Abs(r.Score)<1e12&&double.IsFinite(r.Duration)&&r.Duration>0&&r.Duration<=86400&&HubHistory.Date(r.Timestamp)!=DateTimeOffset.MinValue;
+ // Persisted imports always carry a csv_ identity; anything else in the owned
+ // file is damaged and would otherwise break identity-based history merging.
+ static bool Stored(Run r)=>Valid(r)&&r.Id is {Length:>4 and <=128}&&r.Id.StartsWith("csv_",StringComparison.Ordinal);
  static string Key(Run r)=>r.Scenario+"\n"+r.Score.ToString("R",CultureInfo.InvariantCulture)+"\n"+HubHistory.Date(r.Timestamp).UtcTicks;
+ // Local, absolute drive paths only. UNC and device paths (\\server\share,
+ // \\?\, \\.\) are refused: enumerating a remote share would make Windows
+ // authenticate to that host with the user's credentials.
+ internal static bool AcceptableDirectory([System.Diagnostics.CodeAnalysis.NotNullWhen(true)] string? directory)=>!string.IsNullOrWhiteSpace(directory)&&directory.Length<=1024&&Path.IsPathFullyQualified(directory)
+  &&!directory.StartsWith(@"\\",StringComparison.Ordinal)&&!directory.StartsWith("//",StringComparison.Ordinal)&&!directory.Contains('\0')
+  &&(!OperatingSystem.IsWindows()||directory.Length>=3&&char.IsAsciiLetter(directory[0])&&directory[1]==':'&&directory[2] is '\\' or '/');
  public CsvImportResult Import(string directory,IEnumerable<Run> existing)
  {
   lock(gate){
-   if(string.IsNullOrWhiteSpace(directory)||!Path.IsPathFullyQualified(directory)||!Directory.Exists(directory))throw new ArgumentException("Choose an existing absolute stats directory.");
+   var runs=this.runs;
+   if(!AcceptableDirectory(directory)||!Directory.Exists(directory))throw new ArgumentException("Choose an existing absolute stats directory.");
    var root=new DirectoryInfo(directory);if((root.Attributes&FileAttributes.ReparsePoint)!=0)throw new ArgumentException("Choose the original stats directory.");
    var known=new HashSet<string>(existing.Where(Valid).Concat(runs).Select(Key),StringComparer.Ordinal);
    var additions=new List<Run>();int skipped=0,invalid=0,scanned=0;
@@ -31,7 +43,7 @@ sealed class CsvHistory
      additions.Add(run);
     }catch(Exception e)when(e is IOException or UnauthorizedAccessException or FormatException or MalformedLineException){invalid++;}
    }
-   if(additions.Count>0){var merged=runs.Concat(additions).OrderByDescending(r=>HubHistory.Date(r.Timestamp)).ToArray();Directory.CreateDirectory(Path.GetDirectoryName(file)!);File.WriteAllText(file+".next",JsonSerializer.Serialize(merged));File.Move(file+".next",file,true);runs=merged;}
+   if(additions.Count>0){var merged=runs.Concat(additions).OrderByDescending(r=>HubHistory.Date(r.Timestamp)).ToArray();Directory.CreateDirectory(Path.GetDirectoryName(file)!);AtomicFile.WriteBytes(file,JsonSerializer.SerializeToUtf8Bytes(merged),durable:true);this.runs=merged;}
    return new(additions.Count,skipped,invalid,scanned);
   }
  }

@@ -4,12 +4,30 @@ record LiveOverlaySnapshot(bool Available,bool Active,bool Paused,string? Scenar
 static class LiveOverlayState
 {
     static readonly LiveOverlaySnapshot Empty=new(false,false,false,null,null,null,null,null,null,null,null,null,null,null,null,null);
+    static bool Eligible(Run r)=>!string.IsNullOrEmpty(r.Scenario)&&double.IsFinite(r.Score)&&r.Duration>0&&double.IsFinite(r.Duration);
+    // Highest score per exact scenario (case-insensitive); ties keep the first run, as before.
+    internal static IReadOnlyDictionary<string,Run> PersonalBests(IEnumerable<Run> history)
+    {
+        var best=new Dictionary<string,Run>(StringComparer.OrdinalIgnoreCase);
+        foreach(var r in history)if(Eligible(r)&&(!best.TryGetValue(r.Scenario,out var saved)||r.Score>saved.Score))best[r.Scenario]=r;
+        return best;
+    }
     public static LiveOverlaySnapshot Read(string output,IEnumerable<Run> history,DateTime? utcNow=null)
+    {
+        var best=PersonalBests(history);
+        return Read(output,s=>best.GetValueOrDefault(s),null,utcNow);
+    }
+    // replayActive is the worker's in-memory playback state. The workspace passes
+    // it so overlay polls never open the frame file, which would make the
+    // playback pump's replace fail (Windows refuses to rename over an open file).
+    // When null (standalone use) the published frame header is inspected.
+    public static LiveOverlaySnapshot Read(string output,Func<string,Run?> personalBest,bool? replayActive,DateTime? utcNow=null)
     {
         var now=utcNow??DateTime.UtcNow;
         try {
+            if(replayActive==true)return Empty with{Replay=true};
             var replay=Path.Combine(output,"replay-frame.tsv");
-            if(File.Exists(replay)){using var reader=new StreamReader(replay);var header=(reader.ReadLine()??"").Split('\t');if(header.Length==3&&header[2]=="1")return Empty with{Replay=true};}
+            if(replayActive is null&&File.Exists(replay)){using var stream=new FileStream(replay,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete);using var reader=new StreamReader(stream);var header=(reader.ReadLine()??"").Split('\t');if(header.Length==3&&header[2]=="1")return Empty with{Replay=true};}
             var path=Path.Combine(output,"live-overlay.json");var file=new FileInfo(path);
             if(!file.Exists||file.Length>8192||now-file.LastWriteTimeUtc>TimeSpan.FromSeconds(2)||file.LastWriteTimeUtc-now>TimeSpan.FromSeconds(1))return Empty;
             using var doc=JsonDocument.Parse(File.ReadAllText(path));var root=doc.RootElement;
@@ -28,7 +46,7 @@ static class LiveOverlayState
             if(spm.HasValue&&!double.IsFinite(spm.Value))spm=null;
             if(kps.HasValue&&!double.IsFinite(kps.Value))kps=null;
             var ttk=Number("lastTimeToKillSeconds");if(!(kills>0&&ttk>0&&ttk<=elapsed))ttk=null;
-            var best=history.Where(r=>r.Scenario.Equals(scenario,StringComparison.OrdinalIgnoreCase)&&double.IsFinite(r.Score)&&r.Duration>0&&double.IsFinite(r.Duration)).OrderByDescending(r=>r.Score).FirstOrDefault();
+            var best=personalBest(scenario);
             var projectionDuration=duration??best?.Duration;
             double? projection=score.HasValue&&elapsed>=1&&projectionDuration>0&&elapsed<=projectionDuration?score/elapsed*projectionDuration:null;
             if(projection.HasValue&&!double.IsFinite(projection.Value))projection=null;

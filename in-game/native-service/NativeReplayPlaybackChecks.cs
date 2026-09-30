@@ -97,7 +97,10 @@ static class NativeReplayPlaybackChecks
             }
             static async Task Until(Func<bool> predicate) {
                 var deadline = DateTime.UtcNow.AddSeconds(5);
-                while (!predicate()) {
+                // The pump replaces these files concurrently; a read that loses that
+                // race (sharing violation or access denied) is simply retried.
+                bool Observed() { try { return predicate(); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; } }
+                while (!Observed()) {
                     if (DateTime.UtcNow > deadline) throw new Exception("Playback pump did not recover within five seconds");
                     await Task.Delay(25);
                 }
