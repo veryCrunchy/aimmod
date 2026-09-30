@@ -29,6 +29,23 @@ public sealed class OfficialBeatmapDiscoveryClientTests
     }
 
     [Test]
+    public async Task PublicDifficultyDownloadNeedsNoSessionMonitor()
+    {
+        const string beatmap = "osu file format v14\n[Metadata]\nBeatmapID:456\n";
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(beatmap, Encoding.UTF8, "text/plain"),
+        });
+        using var client = new OfficialBeatmapDiscoveryClient(handler);
+        Assert.That((await client.SearchAsync(new())).Status, Is.EqualTo(OfficialBeatmapRequestStatus.SessionUnavailable));
+        var result = await client.DownloadDifficultyAsync(456, temporaryDirectory);
+        Assert.That(result.Status, Is.EqualTo(OfficialBeatmapRequestStatus.Success));
+        Assert.That(await File.ReadAllTextAsync(result.BeatmapPath!), Is.EqualTo(beatmap));
+        Assert.That(handler.Requests, Has.Count.EqualTo(1));
+        Assert.That(handler.Requests[0].Authorization, Is.Null);
+    }
+
+    [Test]
     public async Task SearchesOfficialStandardCatalogAndReturnsGroupedFilteredSets()
     {
         await writeSignedInSessionAsync("crunchy", access_token);
@@ -296,6 +313,120 @@ public sealed class OfficialBeatmapDiscoveryClientTests
         });
     }
 
+    [Test]
+    public async Task RateLimitCarriesRetryAfterAndHoldsTheEndpointUntilItExpires()
+    {
+        await writeSignedInSessionAsync("crunchy", access_token);
+        await using LazerSessionMonitor monitor = await LazerSessionMonitor.CreateAsync(gameIniPath);
+        var time = new ManualClock(new DateTimeOffset(2026, 8, 1, 0, 0, 0, TimeSpan.Zero));
+        var handler = new RecordingHandler(_ =>
+        {
+            var response = jsonResponse(HttpStatusCode.TooManyRequests, "{}");
+            response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(time.GetUtcNow().AddSeconds(45));
+            return response;
+        });
+        using var client = new OfficialBeatmapDiscoveryClient(monitor, handler, time);
+
+        OfficialBeatmapSearchResult limited = await client.SearchAsync(new OfficialBeatmapSearchQuery());
+        OfficialBeatmapSearchResult held = await client.SearchAsync(new OfficialBeatmapSearchQuery());
+        time.Advance(TimeSpan.FromSeconds(46));
+        await client.SearchAsync(new OfficialBeatmapSearchQuery());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(limited.Status, Is.EqualTo(OfficialBeatmapRequestStatus.RateLimited));
+            Assert.That(limited.RetryAfter, Is.EqualTo(new DateTimeOffset(2026, 8, 1, 0, 0, 45, TimeSpan.Zero)));
+            Assert.That(held.Status, Is.EqualTo(OfficialBeatmapRequestStatus.RateLimited));
+            Assert.That(handler.Requests, Has.Count.EqualTo(2));
+        });
+    }
+
+    [Test]
+    public async Task RepeatedDifficultyDownloadsReuseTheVerifiedContentButWriteFreshFiles()
+    {
+        await writeSignedInSessionAsync("crunchy", access_token);
+        await using LazerSessionMonitor monitor = await LazerSessionMonitor.CreateAsync(gameIniPath);
+        const string beatmap = "osu file format v14\n\n[Metadata]\nBeatmapID:456\nBeatmapSetID:123\n";
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(beatmap, Encoding.UTF8, "text/plain"),
+        });
+        using var client = new OfficialBeatmapDiscoveryClient(monitor, handler);
+
+        OfficialBeatmapDifficultyDownloadResult first = await client.DownloadDifficultyAsync(456, temporaryDirectory);
+        File.Delete(first.BeatmapPath!);
+        OfficialBeatmapDifficultyDownloadResult second = await client.DownloadDifficultyAsync(456, temporaryDirectory);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(handler.Requests, Has.Count.EqualTo(1));
+            Assert.That(second.Status, Is.EqualTo(OfficialBeatmapRequestStatus.Success));
+            Assert.That(second.BeatmapPath, Is.Not.EqualTo(first.BeatmapPath));
+            Assert.That(File.ReadAllText(second.BeatmapPath!), Is.EqualTo(beatmap));
+            Assert.That(second.BeatmapBytes, Is.EqualTo(first.BeatmapBytes));
+        });
+    }
+
+    [Test]
+    public async Task StalledDownloadIsAbandonedAndLeavesNoPartialFile()
+    {
+        await writeSignedInSessionAsync("crunchy", access_token);
+        await using LazerSessionMonitor monitor = await LazerSessionMonitor.CreateAsync(gameIniPath);
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StreamContent(new StallingStream()),
+        });
+        using var client = new OfficialBeatmapDiscoveryClient(monitor, handler, downloadStallTimeout: TimeSpan.FromMilliseconds(150));
+        string destination = Path.Combine(temporaryDirectory, "downloads");
+
+        OfficialBeatmapDownloadResult result = await client.DownloadAsync(123, destination);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(OfficialBeatmapRequestStatus.NetworkError));
+            Assert.That(Directory.GetFiles(destination), Is.Empty);
+        });
+    }
+
+    [Test]
+    public async Task CallerCancellationDuringADownloadIsNotTreatedAsAStall()
+    {
+        await writeSignedInSessionAsync("crunchy", access_token);
+        await using LazerSessionMonitor monitor = await LazerSessionMonitor.CreateAsync(gameIniPath);
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StreamContent(new StallingStream()),
+        });
+        using var client = new OfficialBeatmapDiscoveryClient(monitor, handler);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+
+        Assert.CatchAsync<OperationCanceledException>(async () =>
+            await client.DownloadAsync(123, temporaryDirectory, cancellationToken: cancellation.Token));
+        Assert.That(Directory.GetFiles(temporaryDirectory, "*.partial"), Is.Empty);
+    }
+
+    [Test]
+    public async Task StalePartialFilesAreRemovedBeforeADownloadStarts()
+    {
+        await writeSignedInSessionAsync("crunchy", access_token);
+        await using LazerSessionMonitor monitor = await LazerSessionMonitor.CreateAsync(gameIniPath);
+        string stale = Path.Combine(temporaryDirectory, ".aimmod-1-old.osz.partial");
+        string fresh = Path.Combine(temporaryDirectory, ".aimmod-2-new.osz.partial");
+        await File.WriteAllTextAsync(stale, "partial");
+        await File.WriteAllTextAsync(fresh, "partial");
+        File.SetLastWriteTimeUtc(stale, DateTime.UtcNow.AddHours(-3));
+        var handler = new RecordingHandler(_ => binaryResponse(HttpStatusCode.OK, createOsz()));
+        using var client = new OfficialBeatmapDiscoveryClient(monitor, handler);
+
+        await client.DownloadAsync(123, temporaryDirectory);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(File.Exists(stale), Is.False);
+            Assert.That(File.Exists(fresh), Is.True);
+        });
+    }
+
     private Task writeSignedInSessionAsync(string username, string token) => File.WriteAllTextAsync(gameIniPath, sessionContents(username, token));
 
     private static string sessionContents(string username, string token) =>
@@ -386,4 +517,35 @@ public sealed class OfficialBeatmapDiscoveryClientTests
     }
 
     private sealed record RecordedRequest(Uri? Uri, string? Authorization);
+
+    private sealed class ManualClock(DateTimeOffset utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => utcNow;
+
+        public void Advance(TimeSpan duration) => utcNow += duration;
+    }
+
+    private sealed class StallingStream : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return 0;
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
 }

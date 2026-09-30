@@ -36,7 +36,8 @@ public sealed record ScoreHistoryEntry(
     bool HasReplay,
     bool? Passed = null,
     double? Bpm = null,
-    int? LengthSeconds = null)
+    int? LengthSeconds = null,
+    string ModsJson = "", bool LegacyScore = false)
 {
     public bool IsLocal => Provenance.HasFlag(ScoreHistoryProvenance.Local);
     public bool IsSubmitted => (Provenance & ~ScoreHistoryProvenance.Local) != 0 || OnlineScoreId > 0;
@@ -79,8 +80,8 @@ public sealed class OfficialAccountScoreHistoryService : IAccountScoreHistorySer
     private static readonly TimeSpan profile_lifetime = TimeSpan.FromMinutes(5);
     private readonly Func<OfficialOsuApiClient?> api;
     private readonly SemaphoreSlim profileLock = new(1, 1);
-    private OsuProfile? cachedProfile;
-    private DateTimeOffset profileFetchedAt;
+    private readonly object profileState = new();
+    private CachedProfile? cachedProfile;
 
     public OfficialAccountScoreHistoryService(Func<OfficialOsuApiClient?> api)
     {
@@ -135,20 +136,22 @@ public sealed class OfficialAccountScoreHistoryService : IAccountScoreHistorySer
         OfficialOsuApiClient? client = api();
         if (client is null)
             return (null, null, OsuBestScoresFetchStatus.SessionUnavailable);
-        if (cachedProfile is not null && DateTimeOffset.UtcNow - profileFetchedAt < profile_lifetime)
-            return (client, cachedProfile, OsuBestScoresFetchStatus.Success);
+        if (freshProfile(client) is { } hit)
+            return (client, hit, OsuBestScoresFetchStatus.Success);
 
         await profileLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (cachedProfile is not null && DateTimeOffset.UtcNow - profileFetchedAt < profile_lifetime)
-                return (client, cachedProfile, OsuBestScoresFetchStatus.Success);
+            if (freshProfile(client) is { } racedHit)
+                return (client, racedHit, OsuBestScoresFetchStatus.Success);
             OsuProfileFetchResult result = await client.FetchCurrentProfileAsync(cancellationToken).ConfigureAwait(false);
+            lock (profileState)
+                cachedProfile = result.Status == OsuProfileFetchStatus.Success && result.Profile is not null
+                    ? new CachedProfile(client, result.Profile, DateTimeOffset.UtcNow)
+                    : null;
             if (result.Status != OsuProfileFetchStatus.Success || result.Profile is null)
                 return (client, null, mapProfileStatus(result.Status));
-            cachedProfile = result.Profile;
-            profileFetchedAt = DateTimeOffset.UtcNow;
-            return (client, cachedProfile, OsuBestScoresFetchStatus.Success);
+            return (client, result.Profile, OsuBestScoresFetchStatus.Success);
         }
         finally
         {
@@ -156,10 +159,23 @@ public sealed class OfficialAccountScoreHistoryService : IAccountScoreHistorySer
         }
     }
 
+    // A profile belongs to the session that fetched it; another client means another account.
+    private OsuProfile? freshProfile(OfficialOsuApiClient client)
+    {
+        lock (profileState)
+        {
+            if (cachedProfile is { } cached && ReferenceEquals(cached.Client, client) && DateTimeOffset.UtcNow - cached.FetchedAt < profile_lifetime)
+                return cached.Profile;
+            return null;
+        }
+    }
+
+    private sealed record CachedProfile(OfficialOsuApiClient Client, OsuProfile Profile, DateTimeOffset FetchedAt);
+
     private static ScoreHistoryEntry fromExact(OsuUserBeatmapScore score, int beatmapId) => new(
         $"osu:{score.ScoreId}", score.ScoreId, beatmapId, 0, null, null, string.Empty, string.Empty, string.Empty,
         score.EndedAt ?? score.CreatedAt ?? DateTimeOffset.UnixEpoch, double.NaN, score.Accuracy, score.PerformancePoints,
-        score.TotalScore, score.MaximumCombo, score.Statistics.Misses, score.Mods, ScoreHistoryProvenance.OnlineBeatmap, false);
+        score.TotalScore, score.MaximumCombo, score.Statistics.Misses, score.Mods, ScoreHistoryProvenance.OnlineBeatmap, false, ModsJson: score.ModsJson);
 
     private static OnlineScoreCoverage coverage(OsuBestScoresFetchStatus status, bool cached, DateTimeOffset? fetchedAt, string scope, int? limit, bool exhaustive) =>
         new(status, cached, fetchedAt, scope, limit, exhaustive);
@@ -173,6 +189,7 @@ public sealed class OfficialAccountScoreHistoryService : IAccountScoreHistorySer
         OsuProfileFetchStatus.NetworkError => OsuBestScoresFetchStatus.NetworkError,
         OsuProfileFetchStatus.InvalidResponse => OsuBestScoresFetchStatus.InvalidResponse,
         OsuProfileFetchStatus.ServerError => OsuBestScoresFetchStatus.ServerError,
+        OsuProfileFetchStatus.RateLimited => OsuBestScoresFetchStatus.RateLimited,
         _ => OsuBestScoresFetchStatus.SessionUnavailable,
     };
 }
@@ -219,10 +236,10 @@ public static class ScoreHistoryMerger
                 online?.PlayedAt ?? local.PlayedAt,
                 online is { StarRating: var onlineStars } && double.IsFinite(onlineStars) ? onlineStars : local.StarRating,
                 online?.Accuracy ?? local.Accuracy,
-                online?.PerformancePoints ?? local.PerformancePoints, online?.TotalScore ?? local.TotalScore,
-                online?.MaximumCombo ?? local.MaxCombo, online?.MissCount ?? local.MissCount, online?.Mods ?? local.Mods,
+                online?.PerformancePoints ?? local.PerformancePoints, local.TotalScore > 0 ? local.TotalScore : online?.TotalScore ?? 0,
+                local.MaxCombo > 0 ? local.MaxCombo : online?.MaximumCombo ?? 0, local.MissCount, online?.Mods ?? local.Mods,
                 ScoreHistoryProvenance.Local | (online?.Provenance ?? ScoreHistoryProvenance.None), local.HasReplayFile,
-                online?.Passed, online?.Bpm, online?.LengthSeconds));
+                online?.Passed, online?.Bpm, online?.LengthSeconds, online?.ModsJson is { Length: > 0 } json ? json : local.ModsJson, local.LegacyScore || local.Origin == LocalLibraryOrigin.Stable));
         }
         merged.AddRange(onlineById.Values);
         return merged.OrderBy(score => score.PlayedAt).ThenBy(score => score.Identity, StringComparer.Ordinal).ToArray();
@@ -250,9 +267,12 @@ public static class ScoreHistoryMerger
                     MaxCombo = entry.MaximumCombo,
                     MissCount = entry.MissCount,
                     Mods = entry.Mods,
+                    ModsJson = entry.ModsJson,
+                    Passed = entry.Passed ?? local.Passed,
                     OnlineScoreId = entry.OnlineScoreId,
                     OnlineBeatmapId = entry.OnlineBeatmapId > 0 ? entry.OnlineBeatmapId : local.OnlineBeatmapId,
                     IsLocallyStored = true,
+                    LegacyScore = entry.LegacyScore,
                 };
             }
 
@@ -276,7 +296,7 @@ public static class ScoreHistoryMerger
                 false,
                 OnlineScoreId: entry.OnlineScoreId,
                 IsLocallyStored: false,
-                OnlineBeatmapId: entry.OnlineBeatmapId);
+                OnlineBeatmapId: entry.OnlineBeatmapId, ModsJson: entry.ModsJson, Passed: entry.Passed ?? true, LegacyScore: entry.LegacyScore);
         }).ToArray();
     }
 
@@ -297,5 +317,5 @@ public static class ScoreHistoryMerger
         score.BeatmapSet.Title, score.BeatmapSet.Artist, score.Beatmap.DifficultyName,
         score.EndedAt ?? score.CreatedAt ?? DateTimeOffset.UnixEpoch, score.Beatmap.StarRating, score.Accuracy, score.PerformancePoints,
         score.TotalScore, score.MaximumCombo, score.Statistics.Misses, score.Mods, provenance, false,
-        score.Passed, score.Beatmap.Bpm, score.Beatmap.TotalLengthSeconds);
+        score.Passed, score.Beatmap.Bpm, score.Beatmap.TotalLengthSeconds, score.ModsJson);
 }

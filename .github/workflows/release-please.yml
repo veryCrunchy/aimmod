@@ -14,6 +14,8 @@ jobs:
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
+      osu_release_created: ${{ steps.release.outputs['osu-native--release_created'] }}
+      osu_version: ${{ steps.release.outputs['osu-native--version'] }}
     steps:
       - uses: googleapis/release-please-action@v4
         id: release
@@ -24,17 +26,68 @@ jobs:
       # When release-please merges a release PR it creates a tag.
       # Print the outputs so the run log is easy to read.
       - name: Release info
-        if: ${{ steps.release.outputs.release_created }}
+        if: ${{ steps.release.outputs.releases_created == 'true' }}
         run: |
-          echo "Released: ${{ steps.release.outputs.tag_name }}"
-          echo "Release URL: ${{ steps.release.outputs.html_url }}"
+          echo "KovaaK's: ${{ steps.release.outputs.tag_name }}"
+          echo "osu!: ${{ steps.release.outputs['osu-native--tag_name'] }}"
+
+  # The osu! app bundles changelogs/<version>.md for its in-app changelog, so the release PR
+  # must carry that file. Build it from changelogs/unreleased.md, or from the generated
+  # CHANGELOG.md when no curated notes exist. Edit it in the release PR before merging.
+  osu-release-notes:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.osu_release_created != 'true' }}
+    runs-on: ubuntu-latest
+    env:
+      BRANCH: release-please--branches--main--components--aimmod-osu
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Add in-app release notes to the osu! release PR
+        run: |
+          set -euo pipefail
+          if ! git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null; then
+            echo "No open osu! release PR."
+            exit 0
+          fi
+          git checkout -B "$BRANCH" "origin/$BRANCH"
+          version=$(tr -d '[:space:]' < osu-native/version.txt)
+          python3 osu-native/scripts/prepare-release-notes.py "$version"
+          if git diff --quiet && [ -z "$(git ls-files --others --exclude-standard osu-native/changelogs)" ]; then
+            echo "Release notes for $version are already present."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add osu-native/changelogs
+          git commit -m "chore(osu): add in-app release notes for $version"
+          git push origin "$BRANCH"
 
   build:
     needs: release-please
-    if: ${{ needs.release-please.outputs.release_created }}
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
     uses: ./.github/workflows/release.yml
     with:
       tag_name: ${{ needs.release-please.outputs.tag_name }}
     secrets: inherit
     permissions:
       contents: write
+
+  # Tags created with the workflow token do not trigger other workflows, so start the osu!
+  # build and publish directly once release-please has released it.
+  osu-build:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.osu_release_created == 'true' }}
+    uses: ./.github/workflows/aimmod-osu-release.yml
+    with:
+      version: ${{ needs.release-please.outputs.osu_version }}
+      channel: ${{ contains(needs.release-please.outputs.osu_version, '-') && 'preview' || 'stable' }}
+      publish: true
+    secrets: inherit
+    permissions:
+      artifact-metadata: write
+      attestations: write
+      contents: write
+      id-token: write

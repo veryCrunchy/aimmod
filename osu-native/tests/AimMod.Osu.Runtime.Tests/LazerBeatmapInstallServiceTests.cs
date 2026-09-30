@@ -232,6 +232,67 @@ public sealed class LazerBeatmapInstallServiceTests
             Throws.TypeOf<InvalidDataException>());
     }
 
+    [Test]
+    public async Task DiscardWaitsForAnInstallInProgress()
+    {
+        writeDesktopEntry($"\"{desktopLauncher}\" %u");
+        string archivePath = createOsz("inflight.osz");
+        var launchStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseLaunch = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        string handoff = Path.Combine(temporaryDirectory, "handoff");
+        var service = new LazerBeatmapInstallService(
+            handoff,
+            createLocator(),
+            async (_, _, _) =>
+            {
+                launchStarted.SetResult();
+                await releaseLaunch.Task;
+                return new LazerLaunchOutcome(true, true, 0);
+            });
+        LazerBeatmapArchive archive = await service.PreserveAsync(archivePath, 123);
+        string preserved = Directory.GetFiles(handoff, "*.osz").Single();
+
+        Task<LazerBeatmapInstallResult> install = service.InstallAsync(archive);
+        await launchStarted.Task;
+        Task discard = service.DiscardAsync(archive);
+        await Task.Delay(100);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(discard.IsCompleted, Is.False);
+            Assert.That(File.Exists(preserved), Is.True);
+        });
+
+        releaseLaunch.SetResult();
+        await install;
+        await discard.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.That(File.Exists(preserved), Is.False);
+    }
+
+    [Test]
+    public async Task PreservingAnArchiveTrimsStalePartialHandoffFiles()
+    {
+        string handoff = Path.Combine(temporaryDirectory, "handoff");
+        Directory.CreateDirectory(handoff);
+        string stale = Path.Combine(handoff, ".aimmod-handoff-stale.partial");
+        string fresh = Path.Combine(handoff, ".aimmod-handoff-fresh.partial");
+        await File.WriteAllTextAsync(stale, "partial");
+        await File.WriteAllTextAsync(fresh, "partial");
+        File.SetLastWriteTimeUtc(stale, DateTime.UtcNow.AddHours(-1));
+        var service = new LazerBeatmapInstallService(
+            handoff,
+            createLocator(),
+            (_, _, _) => Task.FromResult(new LazerLaunchOutcome(true, true, 0)));
+
+        await service.PreserveAsync(createOsz("trim.osz"), 1);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(File.Exists(stale), Is.False);
+            Assert.That(File.Exists(fresh), Is.True);
+        });
+    }
+
     private LazerExecutableLocator createLocator() =>
         new(homeDirectory, dataHome, string.Empty, string.Empty, OSPlatform.Linux);
 

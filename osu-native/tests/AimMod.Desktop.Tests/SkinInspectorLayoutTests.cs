@@ -51,9 +51,9 @@ public sealed class SkinInspectorLayoutTests
         var panel = field<Container>(workspace, "searchPanel");
         Assert.Multiple(() =>
         {
-            Assert.That(search.RelativeSizeAxes, Is.EqualTo(Axes.Both));
+            Assert.That(search.RelativeSizeAxes, Is.EqualTo(Axes.X));
             Assert.That(search.Width, Is.EqualTo(1));
-            Assert.That(search.Height, Is.EqualTo(1));
+            Assert.That(search.Height, Is.EqualTo(panel.Height));
             Assert.That(panel.AutoSizeAxes, Is.EqualTo(Axes.None));
             Assert.That(panel.Height, Is.GreaterThan(0).And.LessThan(100));
         });
@@ -79,10 +79,13 @@ public sealed class SkinInspectorLayoutTests
             Assert.That(content.AutoSizeAxes, Is.EqualTo(Axes.Y));
             Assert.That(actions.AutoSizeAxes, Is.EqualTo(Axes.Y));
             Assert.That(actions.Padding.Bottom, Is.GreaterThanOrEqualTo(16));
-            foreach (string name in online ? new[] { "previewButton", "saveButton", "importButton", "sourceButton" } : new[] { "applyButton" })
-                Assert.That(actions.Children, Does.Contain(field<Drawable>(workspace, name)), $"{name} must remain reachable by scrolling a short inspector.");
+            foreach (string name in online ? new[] { "previewButton", "saveButton", "importButton", "sourceButton" } : new[] { "applyButton", "openFolderButton" })
+                Assert.That(isDescendant(field<Drawable>(workspace, name), actions), Is.True, $"{name} must remain reachable by scrolling a short inspector.");
         });
     }
+
+    private static bool isDescendant(Drawable drawable, CompositeDrawable ancestor) =>
+        osu.Framework.Testing.TestingExtensions.ChildrenOfType<Drawable>(ancestor).Contains(drawable);
 
     private static T field<T>(object instance, string name) =>
         (T)instance.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(instance)!;

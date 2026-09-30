@@ -7,45 +7,43 @@ using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
-using osu.Framework.Graphics.UserInterface;
 using osu.Framework.Input.Events;
 using osu.Framework.Localisation;
 using osu.Framework.Threading;
 using osu.Game.Graphics.Containers;
 using osu.Game.Graphics.Sprites;
-using osu.Game.Graphics.UserInterface;
-using osu.Game.Graphics.UserInterfaceV2;
 
 namespace AimMod.Desktop.LocalLibrary;
 
 /// <summary>
-/// Dense, set-first view of the installed osu! library. All displayed values come from
-/// the local lazer index, matching local scores, or the exact PP calculator.
+/// Compact, set-first view of the installed osu! library. All displayed values come from
+/// the local index, matching local scores, or the exact PP calculator.
 /// </summary>
 public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
 {
     private const int page_size = 80;
-    private const float toolbar_height = 142;
+    private const double detail_debounce_ms = 150;
+    private const int history_pages = 5;
+    internal const float SingleRowToolbarWidth = 980;
+    internal const float SideInspectorWidth = 900;
+    internal static readonly int[] AccuracyPoints = [95, 97, 98, 99, 100];
 
     private readonly ILocalLibrarySource source;
     private readonly Func<IPpTargetExactCalculationService?> exactCalculator;
     private readonly Func<IAccountScoreHistoryService?> onlineScoreHistory;
-    private readonly Func<int, CancellationToken, Task>? openBeatmap;
     private readonly LocalLibraryController controller;
-    private readonly ShearedFilterTextBox searchBox;
-    private readonly Container searchSurface;
-    private readonly Container starsSurface;
-    private readonly Container sortSurface;
-    private readonly Container bpmSurface;
-    private readonly Container lengthSurface;
-    private readonly Container playedSurface;
-    private readonly SpriteText bpmLabel;
-    private readonly SpriteText lengthLabel;
-    private readonly SpriteText playedLabel;
+    private readonly Container toolbar;
+    private readonly AimModSearchBox searchBox;
+    private readonly AimModButton filtersButton;
+    private readonly SpriteText filtersCaption;
+    private readonly SpriteIcon filtersIcon;
+    private readonly Container filtersBadge;
+    private readonly SpriteText filtersBadgeText;
     private readonly PrettyDropdown<LocalLibrarySort> sortDropdown;
-    private readonly PrettyDropdown<BpmFilter> bpmDropdown;
-    private readonly PrettyDropdown<LengthFilter> lengthDropdown;
-    private readonly PrettyDropdown<PlayedFilter> playedDropdown;
+    private readonly Container filterPopover;
+    private readonly ClickableContainer popoverDismiss;
+    private readonly FillFlowContainer<Drawable> activeChips;
+    private readonly AimModResetButton resetButton;
     private readonly Bindable<LocalLibrarySort> sort = new(LocalLibrarySort.RecentlyAdded);
     private readonly Bindable<BpmFilter> bpmFilter = new(BpmFilter.Any);
     private readonly Bindable<LengthFilter> lengthFilter = new(LengthFilter.Any);
@@ -57,16 +55,31 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
     private readonly FillFlowContainer<Drawable> setRows;
     private readonly OsuScrollContainer listScroll;
     private readonly BeatmapInspector inspector;
-    private readonly AimModLoadingOverlay loading;
+    private readonly AimModInlineStatus loadStatus;
     private readonly Container rightRail;
     private readonly Container listPanel;
+    private readonly AimModButton backToResults;
     private readonly ILocalLibrarySourceChanged? sourceChanges;
 
     private ScheduledDelegate? scheduledQuery;
+    private ScheduledDelegate? scheduledDetails;
     private CancellationTokenSource? detailCancellation;
+    private CancellationTokenSource? historyCancellation;
+    private (Guid Set, Guid Difficulty)? detailsFor;
+    private readonly List<Guid> displayedSetIds = [];
+    private AimModResetButton? loadMoreButton;
+    private AimModLayout.ChangeTracker<(float, float)> layoutTracker;
+    private AimModLayout.ChangeTracker<(string, int, int)> progressTracker;
+    private AimModLayout.ChangeTracker<float> statusWidthTracker;
     private LocalBeatmapSet? selectedSet;
     private LocalBeatmapDifficulty? selectedDifficulty;
     private long displayedRevision;
+    private bool libraryLoaded;
+    private bool sideInspector = true;
+    private bool detailsOpen;
+    private LocalLibraryQuery? activeQuery;
+    private Func<LocalBeatmapSet, bool>? activeFilter;
+    private InstalledBeatmapHistory history = InstalledBeatmapHistory.Empty;
 
     public NativeInstalledBeatmapBrowser(
         ILocalLibrarySource source,
@@ -78,7 +91,6 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         this.source = source ?? throw new ArgumentNullException(nameof(source));
         this.exactCalculator = exactCalculator ?? (() => null);
         this.onlineScoreHistory = onlineScoreHistory ?? (() => null);
-        this.openBeatmap = openBeatmap;
         controller = new LocalLibraryController(source, NativeLocalLibraryMode.Beatmaps);
         controller.StateChanged += stateChanged;
         sourceChanges = source as ILocalLibrarySourceChanged;
@@ -86,119 +98,192 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             sourceChanges.SourceChanged += sourceChanged;
 
         RelativeSizeAxes = Axes.Both;
-        InternalChildren = new Drawable[]
+        // The filter button carries a count badge, so it uses custom content inside the shared button.
+        filtersButton = new AimModButton("Filters", () => setPopover(filterPopover!.Alpha == 0));
+        filtersButton.SetVisualContent(new FillFlowContainer
         {
-            new Container
+            Anchor = Anchor.Centre,
+            Origin = Anchor.Centre,
+            AutoSizeAxes = Axes.Both,
+            Direction = FillDirection.Horizontal,
+            Spacing = new(7, 0),
+            Children = new Drawable[]
             {
-                RelativeSizeAxes = Axes.X,
-                Height = toolbar_height,
-                Depth = -20,
-                Children = new Drawable[]
+                filtersIcon = new SpriteIcon { Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft, Icon = FontAwesome.Solid.Filter, Size = new(11), Colour = AimModPalette.Muted },
+                filtersCaption = new SpriteText { Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft, Text = "Filters", Font = new FontUsage(size: 14, weight: "SemiBold"), Colour = AimModPalette.Text },
+                filtersBadge = new CircularContainer
                 {
-                    searchSurface = filterSurface(0, 0, 480, AimModVisualStyle.ControlHeight),
-                    searchBox = new ShearedFilterTextBox
+                    Anchor = Anchor.CentreLeft,
+                    Origin = Anchor.CentreLeft,
+                    Size = new(18),
+                    Masking = true,
+                    Alpha = 0,
+                    Children = new Drawable[]
                     {
-                        Width = 0.52f,
-                        Height = AimModVisualStyle.ControlHeight,
-                        PlaceholderText = "Search beatmaps, artists, mappers, or difficulties",
-                    },
-                    starsSurface = filterSurface(490, 51, 260, 46),
-                    stars = new AimModStarRatingFilter
-                    {
-                        Position = new(490, 52),
-                        Size = new(260, 48),
-                        LowerBound = minimumStars,
-                        UpperBound = maximumStars,
-                        DefaultStringLowerBound = "0",
-                        DefaultStringUpperBound = "10+",
-                    },
-                    sortSurface = filterSurface(0, 51, 178, AimModVisualStyle.ControlHeight, Anchor.TopRight),
-                    sortDropdown = new PrettyDropdown<LocalLibrarySort>("Sort", formatSort)
-                    {
-                        Anchor = Anchor.TopRight,
-                        Origin = Anchor.TopRight,
-                        Y = 51,
-                        Width = 178,
-                        Items = new[] { LocalLibrarySort.RecentlyAdded, LocalLibrarySort.Title, LocalLibrarySort.StarRating },
-                        Current = sort,
-                    },
-                    bpmDropdown = new PrettyDropdown<BpmFilter>("BPM", formatBpm)
-                    {
-                        Position = new(0, 51),
-                        Width = 150,
-                        Items = Enum.GetValues<BpmFilter>(),
-                        Current = bpmFilter,
-                    },
-                    lengthDropdown = new PrettyDropdown<LengthFilter>("Length", formatLength)
-                    {
-                        Position = new(160, 51),
-                        Width = 150,
-                        Items = Enum.GetValues<LengthFilter>(),
-                        Current = lengthFilter,
-                    },
-                    playedDropdown = new PrettyDropdown<PlayedFilter>("Played", formatPlayed)
-                    {
-                        Position = new(320, 51),
-                        Width = 160,
-                        Items = Enum.GetValues<PlayedFilter>(),
-                        Current = playedFilter,
-                    },
-                    bpmSurface = filterSurface(0, 51, 150, AimModVisualStyle.ControlHeight),
-                    lengthSurface = filterSurface(160, 51, 150, AimModVisualStyle.ControlHeight),
-                    playedSurface = filterSurface(320, 51, 160, AimModVisualStyle.ControlHeight),
-                    bpmLabel = filterLabel("BPM", 4),
-                    lengthLabel = filterLabel("LENGTH", 164),
-                    playedLabel = filterLabel("PLAYED", 324),
-                    status = new TruncatingSpriteText
-                    {
-                        Y = 107,
-                        Font = new FontUsage(size: 11, weight: "SemiBold"),
-                        Colour = AimModPalette.Muted,
-                        Text = "Reading installed beatmaps...",
+                        new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Accent },
+                        filtersBadgeText = new SpriteText { Anchor = Anchor.Centre, Origin = Anchor.Centre, Font = new FontUsage(size: 11, weight: "Bold"), Colour = AimModPalette.Canvas },
                     },
                 },
             },
+        }, AimModVisualStyle.ControlHeight);
+        filtersButton.Width = 112;
+        InternalChildren = new Drawable[]
+        {
             listPanel = new Container
             {
                 RelativeSizeAxes = Axes.Both,
-                Padding = new MarginPadding { Top = toolbar_height },
                 Masking = true,
                 Child = listScroll = new AimModScrollContainer
                 {
                     RelativeSizeAxes = Axes.Both,
-                    Child = setRows = new FillFlowContainer<Drawable>
+                    Child = new FillFlowContainer
                     {
                         RelativeSizeAxes = Axes.X,
                         AutoSizeAxes = Axes.Y,
                         Direction = FillDirection.Vertical,
                         Spacing = new(AimModVisualStyle.RelatedSpacing),
                         Padding = new MarginPadding { Right = AimModVisualStyle.RelatedSpacing, Bottom = AimModVisualStyle.SectionSpacing },
+                        Children = new Drawable[]
+                        {
+                            loadStatus = new AimModInlineStatus(),
+                            setRows = new FillFlowContainer<Drawable>
+                            {
+                                RelativeSizeAxes = Axes.X,
+                                AutoSizeAxes = Axes.Y,
+                                Direction = FillDirection.Vertical,
+                                Spacing = new(0, 6),
+                            },
+                        },
                     },
                 },
             },
             rightRail = new Container
             {
-                Anchor = Anchor.TopRight,
-                Origin = Anchor.TopRight,
-                RelativeSizeAxes = Axes.Y,
-                Width = 350,
-                Padding = new MarginPadding { Left = 14, Top = 4 },
                 Masking = true,
                 Children = new Drawable[]
                 {
-                    new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas, Alpha = 0.78f, Depth = 100 },
-                    inspector = new BeatmapInspector(openBeatmap, openPractice),
+                    new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas, Depth = 100 },
+                    backToResults = new AimModButton("Back to results", closeDetails) { Height = AimModVisualStyle.CompactControlHeight, Alpha = 0 },
+                    inspector = new BeatmapInspector(openBeatmap, openPractice, set => selectSet(set, true), retryDetails),
                 },
             },
-            loading = new AimModLoadingOverlay(),
+            // The toolbar is drawn ahead of the list and inspector so its popups are never covered.
+            toolbar = new Container
+            {
+                RelativeSizeAxes = Axes.Both,
+                Depth = -20,
+                Children = new Drawable[]
+                {
+                    popoverDismiss = new ClickableContainer { RelativeSizeAxes = Axes.Both, Alpha = 0, Action = () => setPopover(false) },
+                    searchBox = new AimModSearchBox
+                    {
+                        Height = AimModVisualStyle.ControlHeight,
+                        PlaceholderText = "Search title, artist, mapper or difficulty",
+                    },
+                    stars = new AimModStarRatingFilter
+                    {
+                        Size = new(264, AimModVisualStyle.ControlHeight),
+                        LowerBound = minimumStars,
+                        UpperBound = maximumStars,
+                        DefaultStringLowerBound = "0",
+                        DefaultStringUpperBound = "10+",
+                    },
+                    filtersButton,
+                    sortDropdown = new PrettyDropdown<LocalLibrarySort>("Sort", formatSort)
+                    {
+                        Width = 206,
+                        Items = new[] { LocalLibrarySort.RecentlyAdded, LocalLibrarySort.RecentlyPlayed, LocalLibrarySort.Title, LocalLibrarySort.StarRating },
+                        Current = sort,
+                    },
+                    status = new TruncatingSpriteText
+                    {
+                        Font = AimModVisualStyle.BodyStrongFont,
+                        Colour = AimModPalette.Text,
+                        Text = "Reading installed beatmaps...",
+                    },
+                    new Container
+                    {
+                        Name = "active filters",
+                        AutoSizeAxes = Axes.Both,
+                        Child = activeChips = new FillFlowContainer<Drawable>
+                        {
+                            AutoSizeAxes = Axes.Both,
+                            Direction = FillDirection.Horizontal,
+                            Spacing = new(6),
+                        },
+                    },
+                    resetButton = new AimModResetButton(clearFilters, "Reset all") { Height = 26, Width = 84, Alpha = 0 },
+                    filterPopover = new Container
+                    {
+                        Width = 520,
+                        AutoSizeAxes = Axes.Y,
+                        Alpha = 0,
+                        Masking = true,
+                        CornerRadius = AimModVisualStyle.CardRadius,
+                        BorderThickness = 1,
+                        BorderColour = AimModPalette.Border,
+                        EdgeEffect = new osu.Framework.Graphics.Effects.EdgeEffectParameters
+                        {
+                            Type = osu.Framework.Graphics.Effects.EdgeEffectType.Shadow,
+                            Colour = Colour4.Black.Opacity(0.45f),
+                            Radius = 18,
+                        },
+                        Children = new Drawable[]
+                        {
+                            new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
+                            new FillFlowContainer
+                            {
+                                RelativeSizeAxes = Axes.X,
+                                AutoSizeAxes = Axes.Y,
+                                Direction = FillDirection.Vertical,
+                                Spacing = new(AimModVisualStyle.RelatedSpacing),
+                                Padding = new MarginPadding(16),
+                                Children = new Drawable[]
+                                {
+                                    new MapBrowserChoiceGroup<BpmFilter>("BPM", bpmFilter, formatBpmChoice),
+                                    new MapBrowserChoiceGroup<LengthFilter>("Length", lengthFilter, formatLengthChoice),
+                                    new MapBrowserChoiceGroup<PlayedFilter>("Played", playedFilter, formatPlayedChoice),
+                                },
+                            },
+                        },
+                    },
+                },
+            },
         };
     }
+
+    private void setPopover(bool open)
+    {
+        filterPopover.Alpha = open ? 1 : 0;
+        popoverDismiss.Alpha = open ? 1 : 0;
+        updateFilterSummary();
+    }
+
+    private void clearFilters()
+    {
+        searchBox.Current.Value = string.Empty;
+        minimumStars.Value = 0; maximumStars.Value = 10;
+        bpmFilter.Value = BpmFilter.Any; lengthFilter.Value = LengthFilter.Any;
+        playedFilter.Value = PlayedFilter.Everything;
+        scheduleQuery();
+    }
+
+    internal void ApplyFiltersForTesting(string search, double minimum, double maximum, BpmFilter bpm = BpmFilter.Any)
+    {
+        searchBox.Current.Value = search;
+        minimumStars.Value = minimum;
+        maximumStars.Value = maximum;
+        bpmFilter.Value = bpm;
+        resetQuery();
+    }
+
+    internal void SetFilterPopoverForTesting(bool open) => setPopover(open);
 
     protected override void LoadComplete()
     {
         base.LoadComplete();
-        searchBox.PlaceholderText = "Search beatmaps, artists, mappers, or difficulties";
-        searchBox.Current.BindValueChanged(_ => scheduleQuery());
+        searchBox.QueryChanged += _ => resetQuery();
+        searchBox.MoveToResults += () => moveSelection(1);
         minimumStars.BindValueChanged(_ => scheduleQuery());
         maximumStars.BindValueChanged(_ => scheduleQuery());
         sort.BindValueChanged(_ => resetQuery());
@@ -206,77 +291,170 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         lengthFilter.BindValueChanged(_ => resetQuery());
         playedFilter.BindValueChanged(_ => resetQuery());
         resetQuery();
+        loadHistory();
     }
+
+    /// <summary>Two toolbar rows below this width; one row above it.</summary>
+    internal static bool UsesCompactToolbar(float width) => width < SingleRowToolbarWidth;
+
+    /// <summary>Side-by-side inspector at or above this width; details open over the list below it.</summary>
+    internal static bool UsesSideInspector(float width) => width >= SideInspectorWidth;
 
     protected override void Update()
     {
         base.Update();
-        bool stacked = DrawWidth < 900;
-        float railWidth = stacked ? DrawWidth : Math.Clamp(DrawWidth * 0.30f, 310, 390);
-        float availableHeight = Math.Max(0, DrawHeight - toolbar_height);
-        float inspectorHeight = stacked ? availableHeight * 0.48f : availableHeight;
-        rightRail.RelativeSizeAxes = Axes.None;
-        rightRail.Width = railWidth;
-        rightRail.Height = inspectorHeight;
-        rightRail.Y = stacked ? DrawHeight - inspectorHeight : toolbar_height;
-        rightRail.Padding = new MarginPadding { Left = stacked ? 0 : 14, Top = stacked ? 8 : 0 };
-        listPanel.Padding = new MarginPadding { Top = toolbar_height, Right = stacked ? 0 : railWidth, Bottom = stacked ? inspectorHeight : 0 };
-        float usableWidth = Math.Max(0, DrawWidth - 10);
-        searchBox.Position = new(10, 0);
-        searchBox.Width = Math.Max(0, usableWidth - 10);
-        searchBox.Height = 54;
-        searchBox.StatusText = status.Text;
-        status.Alpha = 0;
-        searchSurface.Alpha = starsSurface.Alpha = sortSurface.Alpha = bpmSurface.Alpha = lengthSurface.Alpha = playedSurface.Alpha = 0;
-        bpmLabel.Alpha = lengthLabel.Alpha = playedLabel.Alpha = 0;
-        searchSurface.Width = searchBox.Width;
-        searchSurface.Height = AimModVisualStyle.ControlHeight;
 
-        const float gap = 8;
-        float filterWidth = Math.Max(0, usableWidth - gap * 3);
-        float bpmWidth = filterWidth * 0.22f;
-        float lengthWidth = filterWidth * 0.24f;
-        float playedWidth = filterWidth * 0.24f;
-        float sortWidth = filterWidth * 0.30f;
-        const float filterY = 100;
-        const float starsX = 10;
-        float sortX = usableWidth - sortWidth;
+        if (loadStatus.IsShowing && !loadStatus.IsError && controller.Progress is { } progress
+            && progressTracker.Update((progress.State, progress.Completed, progress.Total)))
+        {
+            loadStatus.SetLoadingText(progress.Total > 0
+                ? $"{progress.State}  {progress.Completed:N0} / {progress.Total:N0}"
+                : progress.State);
+        }
 
-        bpmDropdown.Position = new(0, filterY);
-        bpmDropdown.Width = bpmWidth;
-        bpmSurface.Position = bpmDropdown.Position;
-        bpmSurface.Width = bpmWidth;
-        bpmLabel.Position = new(4, 50);
+        if (layoutTracker.Update((DrawWidth, DrawHeight)))
+            applyLayout();
+        if (statusWidthTracker.Update(status.DrawWidth))
+            positionChips();
+    }
 
-        lengthDropdown.Position = new(bpmWidth + gap, filterY);
-        lengthDropdown.Width = lengthWidth;
-        lengthSurface.Position = lengthDropdown.Position;
-        lengthSurface.Width = lengthWidth;
-        lengthLabel.Position = new(bpmWidth + gap + 4, 50);
+    private void applyLayout()
+    {
+        const float gap = AimModVisualStyle.RelatedSpacing;
+        float width = Math.Max(0, DrawWidth);
+        bool compact = UsesCompactToolbar(width);
+        float summaryY;
 
-        playedDropdown.Position = new(bpmWidth + lengthWidth + gap * 2, filterY);
-        playedDropdown.Width = playedWidth;
-        playedSurface.Position = playedDropdown.Position;
-        playedSurface.Width = playedWidth;
-        playedLabel.Position = new(bpmWidth + lengthWidth + gap * 2 + 4, 50);
+        if (compact)
+        {
+            searchBox.Position = new(0, 0);
+            searchBox.Width = Math.Max(0, width - filtersButton.Width - gap);
+            filtersButton.Position = new(width - filtersButton.Width, 0);
+            float sortWidth = Math.Min(206, Math.Max(150, width * 0.34f));
+            stars.Position = new(0, AimModVisualStyle.ControlHeight + gap);
+            stars.Width = Math.Max(0, width - sortWidth - gap);
+            sortDropdown.Position = new(width - sortWidth, AimModVisualStyle.ControlHeight + gap);
+            sortDropdown.Width = sortWidth;
+            summaryY = (AimModVisualStyle.ControlHeight + gap) * 2;
+        }
+        else
+        {
+            const float starsWidth = 264;
+            float sortWidth = sortDropdown.Width = 206;
+            float right = width;
+            sortDropdown.Position = new(right - sortWidth, 0);
+            right -= sortWidth + gap;
+            filtersButton.Position = new(right - filtersButton.Width, 0);
+            right -= filtersButton.Width + gap;
+            stars.Position = new(right - starsWidth, 0);
+            stars.Width = starsWidth;
+            right -= starsWidth + gap;
+            searchBox.Position = new(0, 0);
+            searchBox.Width = Math.Max(0, right);
+            summaryY = AimModVisualStyle.ControlHeight + gap;
+        }
 
-        stars.Position = new(starsX, 62);
-        stars.Width = Math.Max(0, usableWidth - 10);
-        stars.Height = 30;
-        starsSurface.Position = new(starsX, filterY);
-        starsSurface.Width = stars.Width;
+        status.Position = new(0, summaryY + 4);
+        status.MaxWidth = Math.Max(120, width * 0.4f);
+        activeChips.Parent!.Position = new(0, summaryY);
+        resetButton.Position = new(width - resetButton.Width, summaryY);
+        positionChips();
+        filterPopover.Width = Math.Min(520, width);
+        filterPopover.Position = new(Math.Max(0, filtersButton.X + filtersButton.Width - filterPopover.Width), filtersButton.Y + filtersButton.Height + 6);
 
-        sortDropdown.Anchor = Anchor.TopLeft;
-        sortDropdown.Origin = Anchor.TopLeft;
-        sortDropdown.Position = new(sortX, filterY);
-        sortDropdown.Width = sortWidth;
-        sortSurface.Anchor = Anchor.TopLeft;
-        sortSurface.Origin = Anchor.TopLeft;
-        sortSurface.Position = new(sortX, filterY);
-        sortSurface.Width = sortWidth;
+        float top = summaryY + 26 + 14;
+        sideInspector = UsesSideInspector(width);
+        if (sideInspector)
+        {
+            float railWidth = Math.Clamp(width * 0.32f, 330, 470);
+            rightRail.Position = new(width - railWidth, top);
+            rightRail.Size = new(railWidth, Math.Max(0, DrawHeight - top));
+            rightRail.Padding = new MarginPadding { Left = AimModVisualStyle.SectionSpacing };
+            rightRail.Alpha = 1;
+            backToResults.Alpha = 0;
+            inspector.Padding = new MarginPadding();
+            listPanel.Padding = new MarginPadding { Top = top, Right = railWidth };
+            listPanel.Alpha = 1;
+        }
+        else
+        {
+            rightRail.Position = new(0, top);
+            rightRail.Size = new(width, Math.Max(0, DrawHeight - top));
+            rightRail.Padding = new MarginPadding();
+            backToResults.Alpha = 1;
+            inspector.Padding = new MarginPadding { Top = AimModVisualStyle.CompactControlHeight + AimModVisualStyle.RelatedSpacing };
+            listPanel.Padding = new MarginPadding { Top = top };
+            applyDetailsVisibility();
+        }
+    }
 
-        status.Y = 118;
-        status.MaxWidth = Math.Max(220, usableWidth - 14);
+    private void applyDetailsVisibility()
+    {
+        if (sideInspector)
+            return;
+        rightRail.Alpha = detailsOpen ? 1 : 0;
+        listPanel.Alpha = detailsOpen ? 0 : 1;
+    }
+
+    private void closeDetails()
+    {
+        detailsOpen = false;
+        applyDetailsVisibility();
+        if (selectedSet is not null && setRows.OfType<BeatmapSetRow>().FirstOrDefault(row => row.SetId == selectedSet.SetId) is { } row)
+            listScroll.ScrollIntoView(row);
+    }
+
+    internal bool DetailsOpenForTesting => detailsOpen;
+
+    public override bool HandleNonPositionalInput => true;
+
+    protected override bool OnKeyDown(KeyDownEvent e)
+    {
+        if (e.ControlPressed || e.AltPressed || !isVisible()
+            || GetContainingInputManager()?.FocusedDrawable is osu.Framework.Graphics.UserInterface.TextBox)
+            return base.OnKeyDown(e);
+
+        switch (e.Key)
+        {
+            case osuTK.Input.Key.Down:
+                return moveSelection(1);
+
+            case osuTK.Input.Key.Up:
+                return moveSelection(-1);
+
+            case osuTK.Input.Key.Escape when filterPopover.Alpha > 0:
+                setPopover(false);
+                return true;
+
+            case osuTK.Input.Key.Escape when detailsOpen && !sideInspector:
+                closeDetails();
+                return true;
+        }
+
+        return base.OnKeyDown(e);
+    }
+
+    private bool isVisible()
+    {
+        for (Drawable? drawable = this; drawable is not null; drawable = drawable.Parent)
+        {
+            if (drawable.Alpha <= 0 || !drawable.IsPresent)
+                return false;
+        }
+        return true;
+    }
+
+    private bool moveSelection(int direction)
+    {
+        BeatmapSetRow[] rows = setRows.OfType<BeatmapSetRow>().ToArray();
+        if (rows.Length == 0)
+            return false;
+        int current = Array.FindIndex(rows, row => row.SetId == selectedSet?.SetId);
+        int next = Math.Clamp(current < 0 ? 0 : current + direction, 0, rows.Length - 1);
+        GetContainingFocusManager()?.ChangeFocus(null);
+        selectSet(rows[next].Set);
+        listScroll.ScrollIntoView(rows[next]);
+        return true;
     }
 
     private void scheduleQuery()
@@ -296,7 +474,63 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             sort.Value,
             0,
             page_size);
-        _ = controller.LoadAsync(query);
+        activeQuery = query;
+        BpmFilter bpm = bpmFilter.Value;
+        LengthFilter length = lengthFilter.Value;
+        PlayedFilter played = playedFilter.Value;
+        activeFilter = bpm == BpmFilter.Any && length == LengthFilter.Any && played == PlayedFilter.Everything
+            ? null : set => matchesFilters(set, bpm, length, played);
+        updateFilterSummary();
+        _ = controller.LoadAsync(query, beatmapFilter: activeFilter);
+    }
+
+    private void updateFilterSummary()
+    {
+        var chips = new List<(string Text, Action Remove)>();
+        if (!string.IsNullOrWhiteSpace(searchBox.Current.Value))
+            chips.Add(($"“{searchBox.Current.Value.Trim()}”", () => searchBox.Current.Value = string.Empty));
+        if (!minimumStars.IsDefault || !maximumStars.IsDefault)
+            chips.Add(($"{minimumStars.Value:0.#} – {(maximumStars.IsDefault ? "10+" : maximumStars.Value.ToString("0.#"))} stars", () => { minimumStars.Value = 0; maximumStars.Value = 10; }));
+        if (bpmFilter.Value != BpmFilter.Any)
+            chips.Add((formatBpm(bpmFilter.Value), () => bpmFilter.Value = BpmFilter.Any));
+        if (lengthFilter.Value != LengthFilter.Any)
+            chips.Add((formatLength(lengthFilter.Value), () => lengthFilter.Value = LengthFilter.Any));
+        if (playedFilter.Value != PlayedFilter.Everything)
+            chips.Add((formatPlayed(playedFilter.Value), () => playedFilter.Value = PlayedFilter.Everything));
+
+        string[] current = activeChips.OfType<MapBrowserFilterChip>().Select(chip => chip.Text).ToArray();
+        if (!current.SequenceEqual(chips.Select(chip => chip.Text)))
+        {
+            activeChips.Clear();
+            foreach ((string text, Action remove) in chips)
+                activeChips.Add(new MapBrowserFilterChip(text, remove));
+        }
+
+        int popoverFilters = (bpmFilter.Value != BpmFilter.Any ? 1 : 0) + (lengthFilter.Value != LengthFilter.Any ? 1 : 0)
+                             + (playedFilter.Value != PlayedFilter.Everything ? 1 : 0);
+        filtersBadge.Alpha = popoverFilters > 0 ? 1 : 0;
+        filtersBadgeText.Text = popoverFilters.ToString();
+        bool highlighted = popoverFilters > 0 || filterPopover.Alpha > 0;
+        filtersButton.SetSelected(highlighted);
+        filtersCaption.Colour = highlighted ? AimModPalette.Accent : AimModPalette.Text;
+        filtersIcon.Colour = highlighted ? AimModPalette.Accent : AimModPalette.Muted;
+        resetButton.Alpha = chips.Count > 0 ? 1 : 0;
+        positionChips();
+    }
+
+    private void positionChips()
+    {
+        if (activeChips.Parent is not Container chipHost)
+            return;
+        float statusWidth = Math.Min(status.MaxWidth, status.DrawWidth);
+        chipHost.X = activeChips.Count == 0 ? 0 : statusWidth + 16;
+    }
+
+    private void loadMore()
+    {
+        var state = controller.State;
+        if (activeQuery is null || state.IsLoading || !state.HasMore) return;
+        _ = controller.LoadAsync(activeQuery with { Offset = state.BeatmapSets.Count }, append: true, beatmapFilter: activeFilter);
     }
 
     private void stateChanged(object? sender, LocalLibraryLoadStateChangedEventArgs e)
@@ -307,8 +541,47 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
 
     private void sourceChanged()
     {
-        if (!IsDisposed)
-            Schedule(resetQuery);
+        if (IsDisposed)
+            return;
+        Schedule(() =>
+        {
+            resetQuery();
+            loadHistory();
+        });
+    }
+
+    private void loadHistory()
+    {
+        historyCancellation?.Cancel();
+        historyCancellation?.Dispose();
+        historyCancellation = new CancellationTokenSource();
+        CancellationToken token = historyCancellation.Token;
+        _ = Task.Run(async () =>
+        {
+            // A bounded window of recent plays is enough for row status and "your usual".
+            var replays = new List<LocalReplay>();
+            for (int page = 0; page < history_pages; page++)
+            {
+                LocalLibraryPage<LocalReplay> result = await source.SearchReplaysAsync(
+                    new LocalLibraryQuery(RulesetShortName: "osu", Sort: LocalLibrarySort.RecentlyPlayed, Offset: replays.Count, Limit: 200), token).ConfigureAwait(false);
+                replays.AddRange(result.Items);
+                if (!result.HasMore || result.Items.Count == 0)
+                    break;
+            }
+            return new InstalledBeatmapHistory(replays);
+        }, token).ContinueWith(task =>
+        {
+            if (task.IsCompletedSuccessfully && !token.IsCancellationRequested && !IsDisposed)
+                Schedule(() => { if (!token.IsCancellationRequested) applyHistory(task.Result); });
+        }, TaskScheduler.Default);
+    }
+
+    private void applyHistory(InstalledBeatmapHistory value)
+    {
+        history = value;
+        foreach (BeatmapSetRow row in setRows.OfType<BeatmapSetRow>())
+            row.SetHistory(history.BySet.GetValueOrDefault(row.SetId));
+        inspector.SetHistory(history, controller.State.BeatmapSets);
     }
 
     private void applyState(LocalLibraryLoadState state)
@@ -319,87 +592,164 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
 
         if (state.Status == LocalLibraryLoadStatus.Loading)
         {
-            loading.ShowLoading("Loading installed beatmaps", "Reading your local osu! library", progress: () => controller.Progress);
+            bool appending = state.BeatmapSets.Count > 0;
+            status.Text = appending ? $"Loading more after {state.BeatmapSets.Count:N0} sets..." : libraryLoaded ? "Updating results..." : "Reading installed beatmaps...";
+            loadMoreButton?.SetLoading(true);
+            if (!appending)
+            {
+                progressTracker.Reset();
+                if (!libraryLoaded)
+                    loadStatus.ShowLoading("Reading your installed beatmaps...", cancelQuery);
+            }
             return;
         }
 
-        loading.HideLoading();
-        setRows.Clear();
         if (state.Status == LocalLibraryLoadStatus.Error)
         {
-            status.Text = $"Library unavailable: {state.ErrorMessage}";
-            setRows.Add(new EmptyState(FontAwesome.Solid.ExclamationTriangle, "Could not read the local library", "Check the osu! data location and retry the search."));
-            setRows.Add(new BasicButton
+            libraryLoaded = state.BeatmapSets.Count > 0;
+            status.Text = "Library unavailable";
+            loadStatus.ShowError("AimMod could not read your installed beatmaps. Check that the osu! drive is connected, then retry.",
+                state.ErrorMessage, state.BeatmapSets.Count > 0 ? loadMore : resetQuery);
+            if (state.BeatmapSets.Count == 0)
             {
-                Text = "Retry library",
-                Width = 160,
-                Height = 40,
-                Action = resetQuery,
-            });
+                clearRows();
+                setRows.Add(new EmptyState(FontAwesome.Solid.ExclamationTriangle, "Could not read the local library", "Check the osu! data location, then retry."));
+            }
+            loadMoreButton?.SetLoading(false);
             return;
         }
 
-        if (state.Status == LocalLibraryLoadStatus.Empty)
+        loadStatus.Dismiss();
+        libraryLoaded = true;
+
+        LocalBeatmapSet[] visibleSets = state.BeatmapSets.ToArray();
+        if (state.Status == LocalLibraryLoadStatus.Empty || visibleSets.Length == 0)
         {
-            status.Text = state.ErrorMessage ?? "No installed beatmaps match these filters";
-            setRows.Add(new EmptyState(FontAwesome.Solid.Search, "No beatmaps found", "Change the search or star range to see more of your library."));
-            inspector.ClearSelection();
+            bool filtered = resetButton.Alpha > 0;
+            status.Text = filtered ? "No matching sets" : state.ErrorMessage ?? "No installed beatmaps";
+            clearRows();
+            setRows.Add(filtered
+                ? new EmptyState(FontAwesome.Solid.Filter, "No beatmaps match these filters", "Remove a filter above, or reset them all.", "Reset filters", clearFilters)
+                : new EmptyState(FontAwesome.Solid.Music, "No installed beatmaps yet", "Find maps on the Online tab, then they appear here."));
+            // With nothing to select, a "select a beatmap" hint beside the empty list would mislead.
+            inspector.ClearSelection(showHint: false);
+            selectedSet = null;
+            selectedDifficulty = null;
+            detailsFor = null;
+            scheduledDetails?.Cancel();
+            detailCancellation?.Cancel();
+            positionChips();
             return;
         }
 
-        LocalBeatmapSet[] visibleSets = state.BeatmapSets.Where(matchesFilters).ToArray();
-        if (visibleSets.Length == 0)
+        status.Text = state.ErrorMessage ?? (visibleSets.Length < state.Total
+            ? $"{visibleSets.Length:N0} of {state.Total:N0} sets"
+            : state.Total == 1 ? "1 set" : $"{state.Total:N0} sets");
+
+        Guid[] incoming = visibleSets.Select(set => set.SetId).ToArray();
+        if (ListDiff.IsAppend(displayedSetIds, incoming))
         {
-            status.Text = "No installed beatmaps match these filters";
-            setRows.Add(new EmptyState(FontAwesome.Solid.Filter, "No beatmaps match", "Broaden the BPM, length, or played filters to see more sets."));
-            inspector.ClearSelection();
-            return;
+            // Load more only adds rows, so the reader keeps their place in the list.
+            for (int index = displayedSetIds.Count; index < visibleSets.Length; index++)
+                setRows.Add(createRow(visibleSets[index]));
         }
+        else
+        {
+            clearRows();
+            foreach (LocalBeatmapSet set in visibleSets)
+                setRows.Add(createRow(set));
+            listScroll.ScrollToStart(false);
+        }
+        displayedSetIds.Clear();
+        displayedSetIds.AddRange(incoming);
 
-        status.Text = $"Showing {visibleSets.Length:N0} matching sets from {state.Total:N0} installed";
-        if (state.ErrorMessage is not null)
-            status.Text = state.ErrorMessage;
-        foreach ((LocalBeatmapSet set, int index) in visibleSets.Select((value, index) => (value, index)))
-            setRows.Add(new BeatmapSetRow(index + 1, set, selectSet, selectDifficulty));
+        if (loadMoreButton is not null)
+        {
+            setRows.Remove(loadMoreButton, true);
+            loadMoreButton = null;
+        }
+        if (state.HasMore)
+            setRows.Add(loadMoreButton = new AimModResetButton(loadMore, $"Show {Math.Min(page_size, state.Total - visibleSets.Length):N0} more") { Width = 160, Height = 36, Margin = new MarginPadding { Top = 6 } });
 
-        LocalBeatmapSet next = selectedSet is not null
-            ? visibleSets.FirstOrDefault(set => set.SetId == selectedSet.SetId) ?? visibleSets[0]
-            : visibleSets[0];
-        selectSet(next);
+        inspector.SetHistory(history, visibleSets);
+        LocalBeatmapSet? current = selectedSet is null ? null : visibleSets.FirstOrDefault(set => set.SetId == selectedSet.SetId);
+        if (current is null)
+            selectSet(visibleSets[0]);
+        else
+        {
+            foreach (BeatmapSetRow row in setRows.OfType<BeatmapSetRow>())
+                row.SetSelection(current.SetId);
+        }
     }
 
-    private bool matchesFilters(LocalBeatmapSet set)
+    private BeatmapSetRow createRow(LocalBeatmapSet set)
     {
-        bool bpmMatches = bpmFilter.Value switch
-        {
-            BpmFilter.Below160 => set.Difficulties.Any(d => d.Bpm < 160),
-            BpmFilter.From160To200 => set.Difficulties.Any(d => d.Bpm is >= 160 and <= 200),
-            BpmFilter.Above200 => set.Difficulties.Any(d => d.Bpm > 200),
-            _ => true,
-        };
-        bool lengthMatches = lengthFilter.Value switch
-        {
-            LengthFilter.Short => set.Difficulties.Any(d => d.LengthMilliseconds < 120_000),
-            LengthFilter.Medium => set.Difficulties.Any(d => d.LengthMilliseconds is >= 120_000 and <= 240_000),
-            LengthFilter.Long => set.Difficulties.Any(d => d.LengthMilliseconds > 240_000),
-            _ => true,
-        };
-        bool playedMatches = playedFilter.Value switch
-        {
+        var row = new BeatmapSetRow(set, value => selectSet(value, true));
+        row.SetHistory(history.BySet.GetValueOrDefault(set.SetId));
+        return row;
+    }
+
+    private void clearRows()
+    {
+        setRows.Clear();
+        displayedSetIds.Clear();
+        loadMoreButton = null;
+    }
+
+    private void cancelQuery()
+    {
+        scheduledQuery?.Cancel();
+        controller.Cancel();
+        status.Text = "Loading cancelled";
+        loadStatus.ShowMessage("Loading was cancelled.", resetQuery);
+        loadMoreButton?.SetLoading(false);
+    }
+
+    private static bool matchesFilters(LocalBeatmapSet set, BpmFilter bpm, LengthFilter length, PlayedFilter played)
+    {
+        bool playedMatches = played switch {
             PlayedFilter.Played => set.LastPlayed is not null || set.LocalReplayCount is > 0,
             PlayedFilter.Unplayed => set.LastPlayed is null && set.LocalReplayCount is not > 0,
             _ => true,
         };
-        return bpmMatches && lengthMatches && playedMatches;
+        return playedMatches && set.Difficulties.Any(d =>
+            (bpm switch {
+                BpmFilter.Below160 => d.Bpm < 160,
+                BpmFilter.From160To200 => d.Bpm is >= 160 and <= 200,
+                BpmFilter.Above200 => d.Bpm > 200,
+                _ => true,
+            }) && (length switch {
+                LengthFilter.Short => d.LengthMilliseconds < 120_000,
+                LengthFilter.Medium => d.LengthMilliseconds is >= 120_000 and <= 240_000,
+                LengthFilter.Long => d.LengthMilliseconds > 240_000,
+                _ => true,
+            }));
     }
 
-    private void selectSet(LocalBeatmapSet set)
+    private void selectSet(LocalBeatmapSet set) => selectSet(set, false);
+
+    private void selectSet(LocalBeatmapSet set, bool reveal)
     {
-        selectedSet = set;
-        LocalBeatmapDifficulty difficulty = selectedDifficulty is not null
-            ? set.Difficulties.FirstOrDefault(item => item.BeatmapId == selectedDifficulty.BeatmapId) ?? set.Difficulties.OrderBy(item => item.StarRating).First()
-            : set.Difficulties.OrderBy(item => item.StarRating).First();
+        LocalBeatmapDifficulty difficulty = selectedSet?.SetId == set.SetId && selectedDifficulty is not null
+            ? set.Difficulties.FirstOrDefault(item => item.BeatmapId == selectedDifficulty.BeatmapId) ?? defaultDifficulty(set)
+            : defaultDifficulty(set);
         selectDifficulty(set, difficulty);
+        if (reveal && !sideInspector)
+        {
+            detailsOpen = true;
+            applyDetailsVisibility();
+        }
+    }
+
+    /// <summary>Start from the hardest difficulty the player has played, else the one nearest their usual stars.</summary>
+    private LocalBeatmapDifficulty defaultDifficulty(LocalBeatmapSet set)
+    {
+        LocalBeatmapDifficulty? played = set.Difficulties.Where(item => history.ByDifficulty.ContainsKey(item.BeatmapId)).MaxBy(item => item.StarRating);
+        if (played is not null)
+            return played;
+        if (history.UsualStars is { } usual)
+            return set.Difficulties.MinBy(item => Math.Abs(item.StarRating - usual))!;
+        return set.Difficulties.OrderBy(item => item.StarRating).ElementAt((set.Difficulties.Count - 1) / 2);
     }
 
     private void selectDifficulty(LocalBeatmapSet set, LocalBeatmapDifficulty difficulty)
@@ -407,9 +757,26 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         selectedSet = set;
         selectedDifficulty = difficulty;
         foreach (BeatmapSetRow row in setRows.Children.OfType<BeatmapSetRow>())
-            row.SetSelection(set.SetId, difficulty.BeatmapId);
-        inspector.ShowSelection(set, difficulty, controller.State.BeatmapSets);
-        loadDetails(set, difficulty);
+            row.SetSelection(set.SetId);
+        if (detailsFor == (set.SetId, difficulty.BeatmapId))
+            return;
+        detailsFor = (set.SetId, difficulty.BeatmapId);
+        inspector.ShowSelection(set, difficulty, controller.State.BeatmapSets, selectDifficulty, canCalculatePp(difficulty));
+        // Moving through rows quickly should not start an exact PP calculation per row.
+        scheduledDetails?.Cancel();
+        detailCancellation?.Cancel();
+        scheduledDetails = Scheduler.AddDelayed(() => loadDetails(set, difficulty), detail_debounce_ms);
+    }
+
+    private bool canCalculatePp(LocalBeatmapDifficulty difficulty) =>
+        exactCalculator() is not null && difficulty.OnlineId > 0;
+
+    private void retryDetails()
+    {
+        if (selectedSet is null || selectedDifficulty is null)
+            return;
+        detailsFor = null;
+        selectDifficulty(selectedSet, selectedDifficulty);
     }
 
     private void loadDetails(LocalBeatmapSet set, LocalBeatmapDifficulty difficulty)
@@ -419,71 +786,95 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         detailCancellation = new CancellationTokenSource();
         CancellationToken token = detailCancellation.Token;
 
-        _ = Task.Run(async () =>
+        _ = Task.Run(() => loadDetailsAsync(set, difficulty, token), token).ContinueWith(task =>
         {
-            Task<OnlineBeatmapScoreHistoryResult> onlineTask = loadOnlineHistory(difficulty.OnlineId, token);
-            IReadOnlyList<LocalReplay> matching = Array.Empty<LocalReplay>();
-            Exception? replayError = null;
-            try
+            if (task.IsFaulted && !token.IsCancellationRequested && !IsDisposed)
             {
-                LocalLibraryPage<LocalReplay> page = await source.SearchReplaysAsync(new LocalLibraryQuery(
-                    SearchText: set.Title,
-                    RulesetShortName: "osu",
-                    Sort: LocalLibrarySort.RecentlyPlayed,
-                    Limit: 200), token).AsTask().WaitAsync(TimeSpan.FromSeconds(15), token);
-                matching = page.Items.Where(replay => replay.BeatmapId == difficulty.BeatmapId).OrderBy(replay => replay.PlayedAt).ToArray();
-            }
-            catch (Exception error) when (error is not OperationCanceledException)
-            {
-                replayError = error;
-            }
-
-            IReadOnlyDictionary<int, double> ppAtAccuracy = new Dictionary<int, double>();
-            Exception? ppError = null;
-            IPpTargetExactCalculationService? calculator = exactCalculator();
-            if (calculator is not null && (difficulty.OnlineId > 0 || !string.IsNullOrWhiteSpace(difficulty.BeatmapHash)))
-            {
-                try
+                Exception error = task.Exception!.GetBaseException();
+                Schedule(() =>
                 {
-                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
-                    timeout.CancelAfter(TimeSpan.FromSeconds(45));
-                    if (calculator is PpTargetExactCalculationService exact)
+                    if (!token.IsCancellationRequested)
                     {
-                        ppAtAccuracy = await exact.CalculateAccuracyCurveAsync(
-                            difficulty.OnlineId,
-                            difficulty.BeatmapHash,
-                            Array.Empty<string>(),
-                            new[] { 95, 98, 99, 100 },
-                            timeout.Token);
+                        inspector.ShowScores([], unavailableOnlineHistory(difficulty.OnlineId, OsuBestScoresFetchStatus.InvalidResponse), error);
+                        inspector.ShowPp(new Dictionary<int, double>(), error);
                     }
-                    else
-                    {
-                        var values = new Dictionary<int, double>();
-                        foreach (int accuracy in new[] { 95, 98, 99, 100 })
-                        {
-                            IReadOnlyDictionary<int, PpTargetEstimate> result = await calculator.CalculateAsync(
-                                new[] { new PpTargetExactRequest(difficulty.OnlineId, difficulty.BeatmapHash, Array.Empty<string>(), accuracy / 100d, 1) }, timeout.Token);
-                            if (result.TryGetValue(difficulty.OnlineId, out PpTargetEstimate? estimate))
-                                values[accuracy] = accuracy == 100 ? estimate.RealisticMaximumPp : estimate.ExpectedPp;
-                        }
-                        ppAtAccuracy = values;
-                    }
-                }
-                catch (OperationCanceledException) when (!token.IsCancellationRequested)
-                {
-                    ppError = new TimeoutException("Exact PP calculation exceeded 45 seconds.");
-                }
-                catch (Exception error) when (error is not OperationCanceledException)
-                {
-                    ppError = error;
-                }
+                });
             }
+        }, TaskScheduler.Default);
+    }
 
-            OnlineBeatmapScoreHistoryResult online = await onlineTask.ConfigureAwait(false);
-            IReadOnlyList<ScoreHistoryEntry> plays = ScoreHistoryMerger.Merge(matching, online.Scores);
-            if (!token.IsCancellationRequested && !IsDisposed)
-                Schedule(() => inspector.ShowDetails(plays, online, ppAtAccuracy, replayError, ppError));
-        }, token);
+    private async Task loadDetailsAsync(LocalBeatmapSet set, LocalBeatmapDifficulty difficulty, CancellationToken token)
+    {
+        Task<OnlineBeatmapScoreHistoryResult> onlineTask = loadOnlineHistory(difficulty.OnlineId, token);
+        Task<IReadOnlyDictionary<int, double>> ppTask = calculatePp(difficulty, token);
+        IReadOnlyList<LocalReplay> matching = Array.Empty<LocalReplay>();
+        Exception? replayError = null;
+        try
+        {
+            LocalLibraryPage<LocalReplay> page = await source.SearchReplaysAsync(new LocalLibraryQuery(
+                SearchText: set.Title,
+                RulesetShortName: "osu",
+                Sort: LocalLibrarySort.RecentlyPlayed,
+                Limit: 200), token).AsTask().WaitAsync(TimeSpan.FromSeconds(15), token);
+            matching = page.Items.Where(replay => replay.BeatmapId == difficulty.BeatmapId).OrderBy(replay => replay.PlayedAt).ToArray();
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            replayError = error;
+        }
+
+        // Scores usually arrive long before exact PP, so they are shown as soon as they are ready.
+        OnlineBeatmapScoreHistoryResult online = await onlineTask.ConfigureAwait(false);
+        IReadOnlyList<ScoreHistoryEntry> plays = ScoreHistoryMerger.Merge(matching, online.Scores);
+        if (!token.IsCancellationRequested && !IsDisposed)
+            Schedule(() => { if (!token.IsCancellationRequested) inspector.ShowScores(plays, online, replayError); });
+
+        IReadOnlyDictionary<int, double> ppAtAccuracy = new Dictionary<int, double>();
+        Exception? ppError = null;
+        try
+        {
+            ppAtAccuracy = await ppTask.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!token.IsCancellationRequested)
+        {
+            ppError = new TimeoutException("Exact PP calculation exceeded 45 seconds.");
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            ppError = error;
+        }
+        if (!token.IsCancellationRequested && !IsDisposed)
+            Schedule(() => { if (!token.IsCancellationRequested) inspector.ShowPp(ppAtAccuracy, ppError); });
+    }
+
+    private async Task<IReadOnlyDictionary<int, double>> calculatePp(LocalBeatmapDifficulty difficulty, CancellationToken token)
+    {
+        IPpTargetExactCalculationService? calculator = exactCalculator();
+        if (calculator is null || difficulty.OnlineId <= 0)
+            return new Dictionary<int, double>();
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+        timeout.CancelAfter(TimeSpan.FromSeconds(45));
+        if (calculator is PpTargetExactCalculationService exact)
+        {
+            return await exact.CalculateAccuracyCurveAsync(
+                difficulty.OnlineId,
+                difficulty.BeatmapHash,
+                Array.Empty<string>(),
+                AccuracyPoints,
+                timeout.Token).ConfigureAwait(false);
+        }
+
+        // The generic service returns one estimate per beatmap, so each accuracy point is its own request.
+        var values = new Dictionary<int, double>();
+        foreach (int accuracy in AccuracyPoints)
+        {
+            IReadOnlyDictionary<int, PpTargetEstimate> result = await calculator.CalculateAsync(
+                new[] { new PpTargetExactRequest(difficulty.OnlineId, difficulty.BeatmapHash, Array.Empty<string>(), accuracy / 100d, 1) }, timeout.Token).ConfigureAwait(false);
+            if (result.TryGetValue(difficulty.OnlineId, out PpTargetEstimate? estimate))
+                values[accuracy] = accuracy == 100 ? estimate.RealisticMaximumPp : estimate.ExpectedPp;
+        }
+        return values;
     }
 
     private async Task<OnlineBeatmapScoreHistoryResult> loadOnlineHistory(int beatmapId, CancellationToken cancellationToken)
@@ -517,8 +908,11 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
     protected override void Dispose(bool isDisposing)
     {
         scheduledQuery?.Cancel();
+        scheduledDetails?.Cancel();
         detailCancellation?.Cancel();
         detailCancellation?.Dispose();
+        historyCancellation?.Cancel();
+        historyCancellation?.Dispose();
         controller.StateChanged -= stateChanged;
         if (sourceChanges is not null)
             sourceChanges.SourceChanged -= sourceChanged;
@@ -526,718 +920,13 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         base.Dispose(isDisposing);
     }
 
-    private sealed partial class BeatmapSetRow : ClickableContainer
-    {
-        private readonly LocalBeatmapSet set;
-        private readonly Action<LocalBeatmapSet> selectSet;
-        private readonly FillFlowContainer<Drawable> difficultyPills;
-        private readonly FillFlowContainer<Drawable> difficultyRows;
-        private readonly OsuScrollContainer difficultyScroll;
-        private readonly OsuScrollContainer pillScroll;
-        private readonly OsuScrollContainer tableScroll;
-        private readonly Container tableContent;
-        private readonly TruncatingSpriteText title;
-        private readonly TruncatingSpriteText artist;
-        private readonly TruncatingSpriteText creator;
-        private readonly TruncatingSpriteText metadata;
-        private readonly Box selectedLayer;
-        private readonly Box selectionBar;
-        private readonly SpriteText indexText;
-        private bool expanded;
-
-        public BeatmapSetRow(int index, LocalBeatmapSet set, Action<LocalBeatmapSet> selectSet, Action<LocalBeatmapSet, LocalBeatmapDifficulty> selectDifficulty)
-        {
-            this.set = set;
-            this.selectSet = selectSet;
-            RelativeSizeAxes = Axes.X;
-            Height = 136;
-            Masking = true;
-            CornerRadius = AimModVisualStyle.ControlRadius;
-
-            double minStars = set.Difficulties.Min(d => d.StarRating);
-            double maxStars = set.Difficulties.Max(d => d.StarRating);
-            LocalBeatmapDifficulty representative = set.Difficulties.OrderBy(d => d.StarRating).ElementAt(set.Difficulties.Count / 2);
-
-            Children = new Drawable[]
-            {
-                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
-                selectedLayer = new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PinkDark, Alpha = 0 },
-                selectionBar = new Box { RelativeSizeAxes = Axes.Y, Width = 4, Colour = AimModPalette.Pink, Alpha = 0 },
-                indexText = new SpriteText { Text = index.ToString(), Position = new(13, 14), Font = new FontUsage(size: 13, weight: "Bold"), Colour = AimModPalette.Muted },
-                new Container
-                {
-                    Position = new(42, 8),
-                    Size = new(136, 104),
-                    Masking = true,
-                    CornerRadius = AimModVisualStyle.ControlRadius,
-                    Child = new AimModLocalArtwork(set.BackgroundPath) { RelativeSizeAxes = Axes.Both },
-                },
-                title = new TruncatingSpriteText { Text = set.Title, Position = new(196, 14), Font = new FontUsage(size: 17, weight: "Bold"), Colour = AimModPalette.Text },
-                artist = new TruncatingSpriteText { Text = set.Artist, Position = new(196, 39), Font = new FontUsage(size: 12), Colour = AimModPalette.Text },
-                creator = new TruncatingSpriteText { Text = $"mapped by {set.Creator}", Position = new(196, 59), Font = new FontUsage(size: 11), Colour = AimModPalette.Cyan },
-                metadata = new TruncatingSpriteText { Text = $"{representative.Bpm:0} BPM   {formatDuration(representative.LengthMilliseconds)}   /   Added {relativeDate(set.DateAdded)}   /   {(set.LocalReplayCount is { } count ? $"{count:N0} local plays" : "Local plays unavailable")}", Position = new(196, 78), Font = new FontUsage(size: 10), Colour = AimModPalette.Muted },
-                new AimModDifficultyPill(maxStars) { Anchor = Anchor.TopRight, Origin = Anchor.TopRight, Margin = new MarginPadding { Top = 13, Right = 13 } },
-                pillScroll = new AimModScrollContainer(Direction.Horizontal)
-                {
-                    Position = new(196, 98),
-                    Height = 32,
-                    Child = difficultyPills = new FillFlowContainer<Drawable>
-                    {
-                        AutoSizeAxes = Axes.Both,
-                        Direction = FillDirection.Horizontal,
-                        Spacing = new(AimModVisualStyle.RelatedSpacing),
-                    },
-                },
-                tableScroll = new AimModScrollContainer(Direction.Horizontal)
-                {
-                    RelativeSizeAxes = Axes.X,
-                    Y = 136,
-                    Height = 258,
-                    Child = tableContent = new Container
-                    {
-                        Width = 710,
-                        Height = 246,
-                        Children = new Drawable[]
-                        {
-                            new DifficultyTableHeader(),
-                            difficultyScroll = new AimModScrollContainer
-                            {
-                                RelativeSizeAxes = Axes.X,
-                                Y = 32,
-                                Height = 214,
-                                Child = difficultyRows = new FillFlowContainer<Drawable>
-                                {
-                                    RelativeSizeAxes = Axes.X,
-                                    AutoSizeAxes = Axes.Y,
-                                    Direction = FillDirection.Vertical,
-                                },
-                            },
-                        },
-                    },
-                },
-            };
-
-            foreach (LocalBeatmapDifficulty difficulty in set.Difficulties.OrderBy(d => d.StarRating).Take(6))
-                difficultyPills.Add(new DifficultyChoice(difficulty, () => { expanded = true; updateExpanded(); selectDifficulty(set, difficulty); }));
-            foreach (LocalBeatmapDifficulty difficulty in set.Difficulties.OrderBy(d => d.StarRating))
-                difficultyRows.Add(new DifficultyTableRow(difficulty, () => selectDifficulty(set, difficulty)));
-        }
-
-        public void SetSelection(Guid setId, Guid difficultyId)
-        {
-            bool selected = set.SetId == setId;
-            selectedLayer.Alpha = selected ? 0.1f : 0;
-            selectionBar.Alpha = selected ? 1 : 0;
-            indexText.Colour = selected ? AimModPalette.Pink : AimModPalette.Muted;
-            if (!selected && expanded)
-            {
-                expanded = false;
-                updateExpanded();
-            }
-            if (selected && !expanded)
-            {
-                expanded = true;
-                updateExpanded();
-            }
-            foreach (DifficultyChoice choice in difficultyPills.Children.OfType<DifficultyChoice>())
-                choice.Selected = selected && choice.BeatmapId == difficultyId;
-            foreach (DifficultyTableRow row in difficultyRows.Children.OfType<DifficultyTableRow>())
-                row.Selected = selected && row.BeatmapId == difficultyId;
-        }
-
-        private void updateExpanded()
-        {
-            Height = expanded ? 394 : 136;
-            tableScroll.Alpha = expanded ? 1 : 0;
-            difficultyRows.Alpha = expanded ? 1 : 0;
-            difficultyScroll.Alpha = expanded ? 1 : 0;
-        }
-
-        protected override void Update()
-        {
-            base.Update();
-            float textWidth = Math.Max(0, DrawWidth - 210);
-            title.MaxWidth = Math.Max(0, textWidth - 80);
-            artist.MaxWidth = creator.MaxWidth = metadata.MaxWidth = textWidth;
-            pillScroll.Width = textWidth;
-            tableContent.Width = Math.Max(710, tableScroll.DrawWidth);
-        }
-
-        protected override bool OnClick(ClickEvent e)
-        {
-            selectSet(set);
-            return true;
-        }
-    }
-
-    private sealed partial class DifficultyTableHeader : CompositeDrawable
-    {
-        public DifficultyTableHeader()
-        {
-            RelativeSizeAxes = Axes.X;
-            Height = 32;
-            Alpha = 0.75f;
-            InternalChildren = new Drawable[]
-            {
-                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
-                label("DIFFICULTY", 40),
-                label("STARS", 230),
-                label("AR", 290),
-                label("OD", 337),
-                label("CS", 384),
-                label("HP", 431),
-                label("BPM", 478),
-                label("LENGTH", 538),
-                label("YOUR SCORES", 605),
-            };
-        }
-
-        private static Drawable label(string value, float x) => new SpriteText
-        {
-            Text = value,
-            Position = new(x, 10),
-            Font = new FontUsage(size: 8, weight: "Bold"),
-            Colour = AimModPalette.Muted,
-        };
-    }
-
-    private sealed partial class DifficultyChoice : ClickableContainer
-    {
-        private readonly Box background;
-        private readonly Action action;
-        public Guid BeatmapId { get; }
-
-        public DifficultyChoice(LocalBeatmapDifficulty difficulty, Action action)
-        {
-            this.action = action;
-            BeatmapId = difficulty.BeatmapId;
-            AutoSizeAxes = Axes.Both;
-            Masking = true;
-            CornerRadius = AimModVisualStyle.ControlRadius;
-            Children = new Drawable[]
-            {
-                background = new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
-                new FillFlowContainer
-                {
-                    AutoSizeAxes = Axes.Both,
-                    Direction = FillDirection.Horizontal,
-                    Spacing = new(AimModVisualStyle.RelatedSpacing),
-                    Padding = new MarginPadding { Horizontal = 9, Vertical = 5 },
-                    Children = new Drawable[]
-                    {
-                        new SpriteText { Text = $"{difficulty.StarRating:0.00}", Font = new FontUsage(size: 10, weight: "Bold"), Colour = AimModVisualStyle.DifficultyColour(difficulty.StarRating) },
-                        new TruncatingSpriteText { Text = difficulty.Name, Font = new FontUsage(size: 10), Colour = AimModPalette.Text, MaxWidth = 82 },
-                    },
-                },
-            };
-        }
-
-        public bool Selected { set => background.Colour = value ? AimModPalette.PinkDark : AimModPalette.PanelRaised; }
-        protected override bool OnClick(ClickEvent e) { action(); return true; }
-    }
-
-    private sealed partial class DifficultyTableRow : ClickableContainer
-    {
-        private readonly Box background;
-        private readonly Box selectionAccent;
-        private readonly Action action;
-        public Guid BeatmapId { get; }
-
-        public DifficultyTableRow(LocalBeatmapDifficulty difficulty, Action action)
-        {
-            this.action = action;
-            BeatmapId = difficulty.BeatmapId;
-            RelativeSizeAxes = Axes.X;
-            Height = 36;
-            Children = new Drawable[]
-            {
-                background = new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas, Alpha = 0.72f },
-                selectionAccent = new Box { RelativeSizeAxes = Axes.Y, Width = 3, Colour = AimModPalette.Pink, Alpha = 0 },
-                new SpriteIcon { Position = new(16, 12), Size = new(11), Icon = FontAwesome.Solid.Play, Colour = AimModPalette.Muted },
-                cell(difficulty.Name, 40, 185, true),
-                cell($"{difficulty.StarRating:0.00}", 230, 55),
-                cell($"{difficulty.ApproachRate:0.#}", 290, 42),
-                cell($"{difficulty.OverallDifficulty:0.#}", 337, 42),
-                cell($"{difficulty.CircleSize:0.#}", 384, 42),
-                cell($"{difficulty.DrainRate:0.#}", 431, 42),
-                cell($"{difficulty.Bpm:0}", 478, 55),
-                cell(formatDuration(difficulty.LengthMilliseconds), 538, 62),
-                cell(difficulty.LocalScoreCount is { } count ? $"{count:N0} scores" : "No scores", 605, 90),
-            };
-        }
-
-        public bool Selected
-        {
-            set
-            {
-                background.Colour = value ? AimModPalette.PanelHover : AimModPalette.Canvas;
-                background.Alpha = value ? 1 : 0.72f;
-                selectionAccent.Alpha = value ? 1 : 0;
-            }
-        }
-        protected override bool OnClick(ClickEvent e) { action(); return true; }
-
-        private static Drawable cell(string value, float x, float width, bool bold = false) => new TruncatingSpriteText
-        {
-            Text = value,
-            Position = new(x, 10),
-            MaxWidth = width,
-            Font = new FontUsage(size: 10, weight: bold ? "SemiBold" : "Regular"),
-            Colour = AimModPalette.Text,
-        };
-    }
-
-    private sealed partial class BeatmapInspector : CompositeDrawable
-    {
-        private readonly Func<int, CancellationToken, Task>? openBeatmap;
-        private readonly Action<string>? openPractice;
-        private readonly OsuScrollContainer scroll;
-        private readonly FillFlowContainer<Drawable> content;
-        private LocalBeatmapSet? set;
-        private LocalBeatmapDifficulty? difficulty;
-        private IReadOnlyList<LocalBeatmapSet> candidates = Array.Empty<LocalBeatmapSet>();
-
-        public BeatmapInspector(Func<int, CancellationToken, Task>? openBeatmap, Action<string>? openPractice)
-        {
-            this.openBeatmap = openBeatmap;
-            this.openPractice = openPractice;
-            RelativeSizeAxes = Axes.Both;
-            Masking = true;
-            InternalChild = scroll = new AimModScrollContainer
-            {
-                RelativeSizeAxes = Axes.Both,
-                Child = content = new FillFlowContainer<Drawable>
-                {
-                    RelativeSizeAxes = Axes.X,
-                    AutoSizeAxes = Axes.Y,
-                    Direction = FillDirection.Vertical,
-                    Spacing = new(AimModVisualStyle.RowSpacing),
-                    Padding = new MarginPadding { Right = AimModVisualStyle.RelatedSpacing, Bottom = AimModVisualStyle.SectionSpacing },
-                },
-            };
-            ClearSelection();
-        }
-
-        public void ClearSelection()
-        {
-            set = null;
-            difficulty = null;
-            content.Clear();
-            content.Add(new EmptyState(FontAwesome.Solid.MousePointer, "Select a difficulty", "Skill demand, exact PP, and local performance will appear here."));
-        }
-
-        public void ShowSelection(LocalBeatmapSet set, LocalBeatmapDifficulty difficulty, IReadOnlyList<LocalBeatmapSet> candidates)
-        {
-            this.set = set;
-            this.difficulty = difficulty;
-            this.candidates = candidates;
-            content.Clear();
-            content.Add(new InspectorHeading(set, difficulty));
-            content.Add(new ActionBar(difficulty, openBeatmap, openPractice is null ? null : () => openPractice(set.Title)));
-            content.Add(new SkillDemandCard(difficulty));
-            scroll.ScrollToStart();
-            content.Add(new LoadingCard("Calculating exact PP", "Resolving this beatmap difficulty and applying osu!standard performance rules."));
-            content.Add(new LoadingCard("Reading recent performance", "Matching local scores to this exact difficulty."));
-        }
-
-        public void ShowDetails(
-            IReadOnlyList<ScoreHistoryEntry> plays,
-            OnlineBeatmapScoreHistoryResult online,
-            IReadOnlyDictionary<int, double> pp,
-            Exception? replayError,
-            Exception? ppError)
-        {
-            if (set is null || difficulty is null)
-                return;
-            while (content.Count > 3)
-                content.Remove(content.Last(), true);
-            content.Add(new PersonalFitCard(plays, online));
-            content.Add(new PpAccuracyCard(pp, ppError));
-            content.Add(new NextMapsCard(set, difficulty, candidates));
-            content.Add(new RecentPerformanceCard(plays, online, replayError));
-        }
-    }
-
-    private enum InspectorPanelStyle
-    {
-        Default,
-        Raised,
-    }
-
-    private partial class InspectorPanel : Container
-    {
-        private readonly Container content;
-
-        protected override Container<Drawable> Content => content;
-
-        public InspectorPanel(InspectorPanelStyle style)
-        {
-            Masking = true;
-            CornerRadius = AimModVisualStyle.CardRadius;
-            InternalChildren = new Drawable[]
-            {
-                new Box
-                {
-                    RelativeSizeAxes = Axes.Both,
-                    Colour = style == InspectorPanelStyle.Raised ? AimModPalette.PanelRaised : AimModPalette.Panel,
-                },
-                content = new Container
-                {
-                    RelativeSizeAxes = Axes.Both,
-                    Padding = new MarginPadding(12),
-                },
-            };
-        }
-
-        protected override void Update()
-        {
-            base.Update();
-            constrainText(content);
-        }
-
-        private static void constrainText(Container container)
-        {
-            float width = Math.Max(0, container.DrawWidth - container.Padding.TotalHorizontal);
-            foreach (Drawable child in container.Children)
-            {
-                if (child is TruncatingSpriteText text)
-                    text.MaxWidth = Math.Max(0, width - text.X);
-                else if (child is Container nested)
-                    constrainText(nested);
-            }
-        }
-    }
-
-    private sealed partial class InspectorHeading : InspectorPanel
-    {
-        public InspectorHeading(LocalBeatmapSet set, LocalBeatmapDifficulty difficulty)
-            : base(InspectorPanelStyle.Raised)
-        {
-            RelativeSizeAxes = Axes.X;
-            Height = 126;
-            Children = new Drawable[]
-            {
-                new TruncatingSpriteText { Text = set.Title, Font = new FontUsage(size: 16, weight: "Bold"), Colour = AimModPalette.Text, MaxWidth = 285 },
-                new TruncatingSpriteText { Text = difficulty.Name, Y = 25, Font = new FontUsage(size: 12), Colour = AimModPalette.Cyan, MaxWidth = 285 },
-                new AimModDifficultyPill(difficulty.StarRating) { Y = 51 },
-                new TruncatingSpriteText { Text = $"AR {difficulty.ApproachRate:0.#}   OD {difficulty.OverallDifficulty:0.#}   CS {difficulty.CircleSize:0.#}   HP {difficulty.DrainRate:0.#}", Y = 82, Font = new FontUsage(size: 10), Colour = AimModPalette.Muted },
-            };
-        }
-    }
-
-    private sealed partial class SkillDemandCard : InspectorPanel
-    {
-        public SkillDemandCard(LocalBeatmapDifficulty difficulty)
-            : base(InspectorPanelStyle.Default)
-        {
-            RelativeSizeAxes = Axes.X;
-            Height = 248;
-            Add(new SpriteText { Text = "SKILL DEMAND", Font = new FontUsage(size: 11, weight: "Bold"), Colour = AimModPalette.Text });
-            Add(new SpriteText
-            {
-                Text = "Estimated from this difficulty's star rating and map settings",
-                Y = 18,
-                Font = new FontUsage(size: 9),
-                Colour = AimModPalette.Muted,
-            });
-
-            BeatmapSkillDemand demand = BeatmapSkillDemand.From(difficulty);
-            Add(new AimModSkillRadar(new AimModSkillMetric[]
-            {
-                new("Aim", demand.Aim),
-                new("Speed", demand.Speed),
-                new("Stamina", demand.Stamina),
-                new("Reading", demand.Reading),
-                new("Precision", demand.Precision),
-            })
-            {
-                RelativeSizeAxes = Axes.X,
-                Width = 1,
-                Anchor = Anchor.TopCentre,
-                Origin = Anchor.TopCentre,
-                Y = 43,
-            });
-        }
-    }
-
-    private sealed partial class PpAccuracyCard : InspectorPanel
-    {
-        public PpAccuracyCard(IReadOnlyDictionary<int, double> values, Exception? error)
-            : base(InspectorPanelStyle.Default)
-        {
-            RelativeSizeAxes = Axes.X;
-            Height = 142;
-            Add(new SpriteText { Text = "PP AT ACCURACY", Font = new FontUsage(size: 11, weight: "Bold"), Colour = AimModPalette.Text });
-            if (values.Count == 0)
-            {
-                Add(new TruncatingSpriteText { Text = error is null ? "Exact PP is unavailable for this local difficulty." : "Exact PP calculation failed for this difficulty.", Y = 34, MaxWidth = 285, Font = new FontUsage(size: 11), Colour = AimModPalette.Muted });
-                return;
-            }
-            int[] accuracies = { 95, 98, 99, 100 };
-            for (int i = 0; i < accuracies.Length; i++)
-            {
-                int accuracy = accuracies[i];
-                Add(new Container
-                {
-                    RelativePositionAxes = Axes.X,
-                    RelativeSizeAxes = Axes.X,
-                    X = i / 4f,
-                    Width = 0.25f,
-                    Y = 32,
-                    Height = 50,
-                    Padding = new MarginPadding { Right = 4 },
-                    Children = new Drawable[]
-                    {
-                        new TruncatingSpriteText { Text = accuracy == 100 ? "SS" : $"{accuracy}%", RelativeSizeAxes = Axes.X, Font = new FontUsage(size: 10), Colour = AimModPalette.Muted },
-                        new TruncatingSpriteText { Text = values.TryGetValue(accuracy, out double pp) ? $"{pp:0}" : "--", RelativeSizeAxes = Axes.X, Y = 23, Font = new FontUsage(size: 16, weight: "Bold"), Colour = AimModPalette.Pink },
-                    },
-                });
-            }
-            if (values.TryGetValue(98, out double expected) && values.TryGetValue(100, out double maximum))
-            {
-                Add(new TruncatingSpriteText { Text = $"EXPECTED  {expected:0}pp", Y = 87, Font = new FontUsage(size: 10, weight: "SemiBold"), Colour = AimModPalette.Cyan });
-                Add(new TruncatingSpriteText { Text = $"REALISTIC MAX  {maximum:0}pp", Y = 103, Font = new FontUsage(size: 10, weight: "SemiBold"), Colour = AimModPalette.Cyan });
-            }
-        }
-    }
-
-    private sealed partial class PersonalFitCard : InspectorPanel
-    {
-        public PersonalFitCard(IReadOnlyList<ScoreHistoryEntry> plays, OnlineBeatmapScoreHistoryResult online)
-            : base(InspectorPanelStyle.Default)
-        {
-            RelativeSizeAxes = Axes.X;
-            Height = 88;
-            Add(new SpriteText { Text = "PERSONAL FIT", Font = new FontUsage(size: 11, weight: "Bold"), Colour = AimModPalette.Text });
-            double fit = plays.Count == 0 ? 0 : Math.Clamp((plays.Average(play => play.Accuracy) - 0.80) / 0.20, 0, 1);
-            Add(new Container
-            {
-                RelativeSizeAxes = Axes.X,
-                Width = 0.78f,
-                Height = 6,
-                Y = 31,
-                Children = new Drawable[]
-                {
-                    new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Border },
-                    new Box { RelativeSizeAxes = Axes.Both, Width = (float)fit, Colour = AimModPalette.Pink },
-                },
-            });
-            Add(new SpriteText
-            {
-                Anchor = Anchor.TopRight,
-                Origin = Anchor.TopRight,
-                Y = 24,
-                Text = plays.Count == 0 ? "NO PLAYS" : $"{fit:P0}",
-                Font = new FontUsage(size: 12, weight: "Bold"),
-                Colour = plays.Count == 0 ? AimModPalette.Muted : AimModPalette.Text,
-            });
-            Add(new TruncatingSpriteText
-            {
-                Text = coverageText(plays, online),
-                Y = 45,
-                MaxWidth = 285,
-                Font = new FontUsage(size: 8),
-                Colour = online.IsSuccess ? AimModPalette.Cyan : AimModPalette.Muted,
-            });
-        }
-    }
-
-    private sealed partial class NextMapsCard : InspectorPanel
-    {
-        public NextMapsCard(LocalBeatmapSet selectedSet, LocalBeatmapDifficulty selectedDifficulty, IReadOnlyList<LocalBeatmapSet> candidates)
-            : base(InspectorPanelStyle.Default)
-        {
-            RelativeSizeAxes = Axes.X;
-            LocalBeatmapSet[] next = candidates.Where(set => set.SetId != selectedSet.SetId)
-                                               .OrderBy(set => set.Difficulties.Min(difficulty => Math.Abs(difficulty.StarRating - selectedDifficulty.StarRating)))
-                                               .Take(3)
-                                               .ToArray();
-            Height = 38 + Math.Max(1, next.Length) * 40;
-            Add(new SpriteText { Text = $"NEXT MAPS  {next.Length} / 3", Font = new FontUsage(size: 11, weight: "Bold"), Colour = AimModPalette.Text });
-            if (next.Length == 0)
-            {
-                Add(new SpriteText { Text = "No nearby installed difficulties.", Y = 31, Font = new FontUsage(size: 10), Colour = AimModPalette.Muted });
-                return;
-            }
-
-            for (int i = 0; i < next.Length; i++)
-            {
-                LocalBeatmapSet set = next[i];
-                LocalBeatmapDifficulty nearest = set.Difficulties.MinBy(difficulty => Math.Abs(difficulty.StarRating - selectedDifficulty.StarRating))!;
-                Add(new Container
-                {
-                    RelativeSizeAxes = Axes.X,
-                    Height = 34,
-                    Y = 27 + i * 40,
-                    Children = new Drawable[]
-                    {
-                        new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas, Alpha = 0.55f },
-                        new Container
-                        {
-                            RelativeSizeAxes = Axes.Both,
-                            Padding = new MarginPadding { Right = 48 },
-                            Children = new Drawable[]
-                            {
-                                new TruncatingSpriteText { Text = set.Title, Position = new(9, 5), MaxWidth = 205, Font = new FontUsage(size: 10, weight: "SemiBold"), Colour = AimModPalette.Text },
-                                new TruncatingSpriteText { Text = nearest.Name, Position = new(9, 20), MaxWidth = 205, Font = new FontUsage(size: 8), Colour = AimModPalette.Cyan },
-                            },
-                        },
-                        new SpriteText { Anchor = Anchor.CentreRight, Origin = Anchor.CentreRight, Margin = new MarginPadding { Right = 9 }, Text = $"{nearest.StarRating:0.00}*", Font = new FontUsage(size: 10, weight: "Bold"), Colour = AimModVisualStyle.DifficultyColour(nearest.StarRating) },
-                    },
-                });
-            }
-        }
-    }
-
-    private sealed partial class RecentPerformanceCard : InspectorPanel
-    {
-        public RecentPerformanceCard(
-            IReadOnlyList<ScoreHistoryEntry> plays,
-            OnlineBeatmapScoreHistoryResult online,
-            Exception? error)
-            : base(InspectorPanelStyle.Default)
-        {
-            RelativeSizeAxes = Axes.X;
-            Height = 158;
-            Add(new SpriteText { Text = "RECENT PERFORMANCE", Font = new FontUsage(size: 11, weight: "Bold"), Colour = AimModPalette.Text });
-            Add(new TruncatingSpriteText { Text = coverageText(plays, online), Y = 20, MaxWidth = 285, Font = new FontUsage(size: 8), Colour = online.IsSuccess ? AimModPalette.Cyan : AimModPalette.Muted });
-            if (plays.Count == 0)
-            {
-                Add(new TruncatingSpriteText { Text = emptyHistoryText(online, error), Y = 45, MaxWidth = 285, Font = new FontUsage(size: 11), Colour = AimModPalette.Muted });
-                return;
-            }
-            ScoreHistoryEntry best = plays.OrderByDescending(play => play.PerformancePoints ?? play.Accuracy).First();
-            Add(new SpriteText { Text = $"{best.Accuracy:P2}", Position = new(0, 43), Font = new FontUsage(size: 24, weight: "Bold"), Colour = AimModPalette.Cyan });
-            Add(new SpriteText { Text = best.PerformancePoints is { } pp ? $"{pp:0}pp best" : $"{best.TotalScore:N0} best score", Position = new(136, 51), Font = new FontUsage(size: 12, weight: "SemiBold"), Colour = AimModPalette.Pink });
-            Add(new PerformanceSparkline(plays) { Position = new(0, 84), RelativeSizeAxes = Axes.X, Height = 48 });
-            ScoreHistoryEntry latest = plays[^1];
-            string mods = latest.Mods.Count == 0 ? "NM" : string.Join(string.Empty, latest.Mods);
-            Add(new TruncatingSpriteText { Text = $"Latest  {latest.PlayedAt.LocalDateTime:g}  {mods}  {latest.MissCount} miss", Y = 137, MaxWidth = 285, Font = new FontUsage(size: 9), Colour = AimModPalette.Muted });
-        }
-    }
-
-    private sealed partial class PerformanceSparkline : CompositeDrawable
-    {
-        public PerformanceSparkline(IReadOnlyList<ScoreHistoryEntry> plays)
-        {
-            float[] values = plays.TakeLast(20).Select(play => (float)(play.Accuracy * 100)).ToArray();
-            RelativeSizeAxes = Axes.Both;
-            InternalChildren = new Drawable[]
-            {
-                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas, Alpha = 0.55f },
-                new LineGraph { RelativeSizeAxes = Axes.Both, Values = values, MinValue = Math.Max(0, values.Min() - 2), MaxValue = Math.Min(100, values.Max() + 2), LineColour = AimModPalette.Cyan },
-            };
-        }
-    }
-
-    private static string coverageText(IReadOnlyList<ScoreHistoryEntry> plays, OnlineBeatmapScoreHistoryResult online)
-    {
-        int local = plays.Count(play => play.IsLocal);
-        int submitted = plays.Count(play => play.IsSubmitted);
-        if (online.IsSuccess)
-        {
-            string source = online.Coverage.IsFromCache ? "osu! cached" : "osu! live";
-            return $"{local:N0} local / {submitted:N0} submitted variants  |  {source}";
-        }
-        return $"{local:N0} local  |  {onlineStatusText(online.Coverage.Status)}";
-    }
-
-    private static string emptyHistoryText(OnlineBeatmapScoreHistoryResult online, Exception? localError)
-    {
-        if (localError is not null)
-            return online.IsSuccess ? "No submitted scores; local history could not be read." : "Local history could not be read and osu! history is unavailable.";
-        return online.IsSuccess ? "No submitted or local scores for this exact difficulty." : "No local scores. Connect osu! to check submitted score variants.";
-    }
-
-    private static string onlineStatusText(OsuBestScoresFetchStatus status) => status switch
-    {
-        OsuBestScoresFetchStatus.SignedOut => "osu! signed out",
-        OsuBestScoresFetchStatus.TokenExpired => "osu! session expired",
-        OsuBestScoresFetchStatus.Unauthorized => "osu! access denied",
-        OsuBestScoresFetchStatus.SessionChanged => "osu! account changed",
-        OsuBestScoresFetchStatus.NetworkError => "osu! network unavailable",
-        OsuBestScoresFetchStatus.ServerError => "osu! service unavailable",
-        OsuBestScoresFetchStatus.InvalidResponse => "online difficulty unavailable",
-        _ => "osu! session unavailable",
-    };
-
-    private sealed partial class LoadingCard : InspectorPanel
-    {
-        public LoadingCard(string title, string detail)
-            : base(InspectorPanelStyle.Default)
-        {
-            RelativeSizeAxes = Axes.X;
-            Height = 92;
-            Children = new Drawable[]
-            {
-                new SpriteIcon { Icon = FontAwesome.Solid.CircleNotch, Size = new(18), Colour = AimModPalette.Pink },
-                new SpriteText { Text = title, Position = new(30, 0), Font = new FontUsage(size: 12, weight: "Bold"), Colour = AimModPalette.Text },
-                new TruncatingSpriteText { Text = detail, Position = new(30, 25), MaxWidth = 250, Font = new FontUsage(size: 10), Colour = AimModPalette.Muted },
-            };
-        }
-    }
-
-    private sealed partial class ActionBar : FillFlowContainer
-    {
-        public ActionBar(LocalBeatmapDifficulty difficulty, Func<int, CancellationToken, Task>? openBeatmap, Action? openPractice)
-        {
-            RelativeSizeAxes = Axes.X;
-            Height = 48;
-            Direction = FillDirection.Horizontal;
-            Spacing = new(AimModVisualStyle.RelatedSpacing);
-            Children = new Drawable[]
-            {
-                new InspectorAction(FontAwesome.Solid.Play, "Open", true, difficulty.OnlineId > 0 && openBeatmap is not null ? () => _ = openBeatmap(difficulty.OnlineId, CancellationToken.None) : null),
-                new InspectorAction(FontAwesome.Solid.Bullseye, "Practice", false, openPractice),
-            };
-        }
-    }
-
-    private sealed partial class InspectorAction : ClickableContainer
-    {
-        private readonly Box background;
-        private readonly Action? action;
-        private readonly Colour4 normalColour;
-
-        public InspectorAction(IconUsage icon, string label, bool primary, Action? action)
-        {
-            this.action = action;
-            normalColour = primary ? AimModPalette.Pink : AimModPalette.Panel;
-            Width = 88;
-            Height = AimModVisualStyle.ControlHeight;
-            Masking = true;
-            CornerRadius = AimModVisualStyle.ControlRadius;
-            Children = new Drawable[]
-            {
-                background = new Box { RelativeSizeAxes = Axes.Both, Colour = normalColour },
-                new FillFlowContainer
-                {
-                    Anchor = Anchor.Centre,
-                    Origin = Anchor.Centre,
-                    AutoSizeAxes = Axes.Both,
-                    Direction = FillDirection.Horizontal,
-                    Spacing = new(7),
-                    Children = new Drawable[]
-                    {
-                        new SpriteIcon { Icon = icon, Size = new(12), Colour = AimModPalette.Text },
-                        new SpriteText { Text = label, Font = new FontUsage(size: 11, weight: "SemiBold"), Colour = AimModPalette.Text },
-                    },
-                },
-            };
-            Alpha = action is null ? 0.48f : 1;
-        }
-        protected override bool OnClick(ClickEvent e) { action?.Invoke(); return true; }
-        protected override bool OnHover(HoverEvent e) { if (action is not null) background.FadeColour(AimModPalette.PanelHover, 100); return true; }
-        protected override void OnHoverLost(HoverLostEvent e) { background.FadeColour(normalColour, 100); base.OnHoverLost(e); }
-    }
-
     private sealed partial class EmptyState : CompositeDrawable
     {
-        public EmptyState(IconUsage icon, string title, string detail)
+        public EmptyState(IconUsage icon, string title, string detail, string? actionText = null, Action? action = null)
         {
             RelativeSizeAxes = Axes.X;
-            Height = 180;
-            InternalChild = new FillFlowContainer
+            Height = actionText is null ? 160 : 200;
+            var content = new FillFlowContainer
             {
                 Anchor = Anchor.Centre,
                 Origin = Anchor.Centre,
@@ -1248,13 +937,16 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                 {
                     new SpriteIcon { Anchor = Anchor.TopCentre, Origin = Anchor.TopCentre, Icon = icon, Size = new(24), Colour = AimModPalette.Cyan },
                     new SpriteText { Anchor = Anchor.TopCentre, Origin = Anchor.TopCentre, Text = title, Font = new FontUsage(size: 16, weight: "Bold"), Colour = AimModPalette.Text },
-                    new SpriteText { Anchor = Anchor.TopCentre, Origin = Anchor.TopCentre, Text = detail, Font = new FontUsage(size: 11), Colour = AimModPalette.Muted },
+                    new SpriteText { Anchor = Anchor.TopCentre, Origin = Anchor.TopCentre, Text = detail, Font = AimModVisualStyle.BodyFont, Colour = AimModPalette.Muted },
                 },
             };
+            if (actionText is not null && action is not null)
+                content.Add(new AimModButton(actionText, action) { Anchor = Anchor.TopCentre, Origin = Anchor.TopCentre, Margin = new MarginPadding { Top = 8 } });
+            InternalChild = content;
         }
     }
 
-    private enum BpmFilter
+    internal enum BpmFilter
     {
         Any,
         Below160,
@@ -1262,7 +954,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         Above200,
     }
 
-    private enum LengthFilter
+    internal enum LengthFilter
     {
         Any,
         Short,
@@ -1270,14 +962,14 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         Long,
     }
 
-    private enum PlayedFilter
+    internal enum PlayedFilter
     {
         Everything,
         Played,
         Unplayed,
     }
 
-    private sealed partial class PrettyDropdown<T> : ShearedDropdown<T>
+    private sealed partial class PrettyDropdown<T> : AimMod.Desktop.Coaching.BoundedShearedDropdown<T>
         where T : struct, Enum
     {
         private readonly Func<T, string> formatter;
@@ -1290,57 +982,44 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         protected override LocalisableString GenerateItemText(T item) => formatter(item);
     }
 
-    private static string formatDuration(double milliseconds)
-    {
-        TimeSpan duration = TimeSpan.FromMilliseconds(Math.Max(0, milliseconds));
-        return $"{(int)duration.TotalMinutes}:{duration.Seconds:00}";
-    }
-
-    private static SpriteText filterLabel(string value, float x) => new SpriteText
-    {
-        Text = value,
-        Position = new(x, 40),
-        Font = new FontUsage(size: 8, weight: "Bold"),
-        Colour = AimModPalette.Cyan,
-    };
-
-    private static Container filterSurface(float x, float y, float width, float height, Anchor anchor = Anchor.TopLeft) => new()
-    {
-        Anchor = anchor,
-        Origin = anchor,
-        Position = new(x, y),
-        Size = new(width, height),
-        Masking = true,
-        CornerRadius = AimModVisualStyle.ControlRadius,
-        Depth = 5,
-        Child = new Box
-        {
-            RelativeSizeAxes = Axes.Both,
-            Colour = AimModPalette.Panel,
-        },
-    };
-
     private static string formatSort(LocalLibrarySort value) => value switch
     {
-        LocalLibrarySort.Title => "Title A-Z",
-        LocalLibrarySort.StarRating => "Highest stars",
+        LocalLibrarySort.Title => "Title A–Z",
+        LocalLibrarySort.StarRating => "Hardest first",
+        LocalLibrarySort.RecentlyPlayed => "Recently played",
         _ => "Recently added",
     };
 
     private static string formatBpm(BpmFilter value) => value switch
     {
-        BpmFilter.Below160 => "Below 160 BPM",
-        BpmFilter.From160To200 => "160-200 BPM",
-        BpmFilter.Above200 => "Above 200 BPM",
+        BpmFilter.Below160 => "Under 160 BPM",
+        BpmFilter.From160To200 => "160–200 BPM",
+        BpmFilter.Above200 => "Over 200 BPM",
         _ => "Any BPM",
+    };
+
+    private static string formatBpmChoice(BpmFilter value) => value switch
+    {
+        BpmFilter.Below160 => "< 160",
+        BpmFilter.From160To200 => "160–200",
+        BpmFilter.Above200 => "> 200",
+        _ => "Any",
     };
 
     private static string formatLength(LengthFilter value) => value switch
     {
         LengthFilter.Short => "Under 2 min",
-        LengthFilter.Medium => "2-4 min",
+        LengthFilter.Medium => "2–4 min",
         LengthFilter.Long => "Over 4 min",
         _ => "Any length",
+    };
+
+    private static string formatLengthChoice(LengthFilter value) => value switch
+    {
+        LengthFilter.Short => "< 2 min",
+        LengthFilter.Medium => "2–4 min",
+        LengthFilter.Long => "> 4 min",
+        _ => "Any",
     };
 
     private static string formatPlayed(PlayedFilter value) => value switch
@@ -1350,9 +1029,10 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         _ => "All maps",
     };
 
-    private static string relativeDate(DateTimeOffset date)
+    private static string formatPlayedChoice(PlayedFilter value) => value switch
     {
-        int days = Math.Max(0, (int)(DateTimeOffset.Now - date).TotalDays);
-        return days switch { 0 => "today", 1 => "yesterday", < 30 => $"{days} days ago", _ => date.ToString("yyyy-MM-dd") };
-    }
+        PlayedFilter.Played => "Played",
+        PlayedFilter.Unplayed => "Unplayed",
+        _ => "Any",
+    };
 }

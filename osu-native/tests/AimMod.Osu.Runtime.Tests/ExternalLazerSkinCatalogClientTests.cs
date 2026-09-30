@@ -66,6 +66,27 @@ public sealed class ExternalLazerSkinCatalogClientTests
         Assert.That(exception.Code, Is.EqualTo("invalid_worker_response"));
     }
 
+    [Test]
+    public async Task PreviewElementsRoundTripAndInvalidHashesAreRejected()
+    {
+        ExternalLazerSkinSummary summary(string hash) => new(Guid.NewGuid(), "Skin", "", "", false, 2)
+        {
+            PreviewFiles = [new ExternalLazerSkinFile("hitcircle@2x.png", hash)],
+        };
+        RecordingRuntimeClient respond(ExternalLazerSkinSummary skin) => new(request => new RuntimeResponse(
+            request.Id,
+            RuntimeProtocol.CurrentVersion,
+            true,
+            JsonSerializer.SerializeToElement(new ExternalLazerSkinCatalogSearchResult([skin], 1, 0, 20), RuntimeProtocol.JsonOptions)));
+        var input = new ExternalLazerSkinCatalogSearchRequest("/lazer", Limit: 20);
+
+        ExternalLazerSkinCatalogSearchResult result = await new ExternalLazerSkinCatalogClient(respond(summary(new string('d', 64)))).SearchAsync(input);
+        Assert.That(result.Skins[0].PreviewFiles.Single().LogicalName, Is.EqualTo("hitcircle@2x.png"));
+
+        Assert.ThrowsAsync<ExternalLazerSkinClientException>(async () =>
+            await new ExternalLazerSkinCatalogClient(respond(summary("not-a-hash"))).SearchAsync(input));
+    }
+
     private sealed class RecordingRuntimeClient(Func<RuntimeRequest, RuntimeResponse> responseFactory) : IRuntimeRequestClient
     {
         public RuntimeRequest? LastRequest { get; private set; }

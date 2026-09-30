@@ -28,7 +28,8 @@ public sealed record OsuDiscoveryEnvironment(
     string? ExplicitDataRoot = null,
     string? LocalAppData = null,
     string? ExplicitStableRoot = null,
-    string? CurrentUserName = null);
+    string? CurrentUserName = null,
+    IReadOnlyList<string>? RegisteredStableRoots = null);
 
 public sealed record DiscoveryEntry(
     DiscoveryEntryKind Kind,

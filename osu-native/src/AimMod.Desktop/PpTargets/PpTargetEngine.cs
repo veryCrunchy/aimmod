@@ -32,17 +32,19 @@ public static class PpTargetPreferenceProfiler
                             .ThenBy(setup => setup.Key, StringComparer.Ordinal)
                             .ToArray();
         Setup[] ppSetups = setups.Where(setup => validPp(setup.Pp)).ToArray();
-        double[] stars = setups.Select(setup => setup.Stars).Order().ToArray();
         double[] bpms = setups.Where(setup => validPositive(setup.Bpm)).Select(setup => setup.Bpm!.Value).Order().ToArray();
         double[] lengths = setups.Where(setup => validPositive(setup.LengthSeconds)).Select(setup => setup.LengthSeconds!.Value).Order().ToArray();
         double[] accuracies = setups.Select(setup => setup.Accuracy).Order().ToArray();
         double[] pp = ppSetups.Select(setup => setup.Pp!.Value).Order().ToArray();
 
+        DateTimeOffset newest = runs[0].PlayedAt;
+        double recency(DateTimeOffset played, double halfLife) => Math.Pow(0.5, Math.Max(0, (newest - played).TotalDays) / halfLife);
+        double legacyWeight = runs.Where(r => r.LegacyScore || r.Origin == LocalLibraryOrigin.Stable).Sum(r => recency(r.PlayedAt, 14));
         return new PpTargetPreferenceProfile(
             runs.Length,
             setups.Length,
             pp.Length,
-            preferredRange(stars, 0.5),
+            preferredStarRange(setups, newest),
             preferredRange(bpms, 15),
             preferredRange(lengths, 30),
             percentile(accuracies, 0.5),
@@ -57,7 +59,37 @@ public static class PpTargetPreferenceProfiler
             ppSetups.Select(setup => new PpTargetPerformanceSample(setup.Stars, setup.Pp!.Value, setup.Accuracy)).ToArray(),
             PreferredModSetup: setups.GroupBy(setup => string.Join(',', PpTargetMods.Normalise(setup.Mods)), StringComparer.Ordinal)
                 .OrderByDescending(group => group.Count()).ThenBy(group => group.Key, StringComparer.Ordinal)
-                .Select(group => PpTargetMods.Normalise(group.First().Mods)).First());
+                .Select(group => PpTargetMods.Normalise(group.First().Mods)).First(),
+            // The client played recently decides the scoring system, not all-time volume.
+            LegacyScore: legacyWeight > runs.Sum(r => recency(r.PlayedAt, 14)) / 2);
+    }
+
+    // Recency-weighted percentiles, stretched upwards to include the stars of recent high-PP passes.
+    private static PpTargetRange? preferredStarRange(Setup[] setups, DateTimeOffset newest)
+    {
+        if (setups.Length == 0)
+            return null;
+        double weight(Setup s) => Math.Pow(0.5, Math.Max(0, (newest - s.PlayedAt).TotalDays) / 30);
+        var stars = setups.Select(s => (Value: s.Stars, Weight: weight(s))).ToArray();
+        double centre = weightedPercentile(stars, .5);
+        double minimum = weightedPercentile(stars, setups.Length < 5 ? 0 : .2);
+        double maximum = weightedPercentile(stars, setups.Length < 5 ? 1 : .8);
+        var recent = setups.Where(s => validPp(s.Pp) && (newest - s.PlayedAt).TotalDays <= 30).ToArray();
+        if (recent.Length >= 3)
+        {
+            double threshold = weightedPercentile(recent.Select(s => (s.Pp!.Value, weight(s))).ToArray(), .75);
+            maximum = Math.Max(maximum, recent.Where(s => s.Pp >= threshold).Max(s => s.Stars));
+        }
+        return new PpTargetRange(Math.Max(0, Math.Min(minimum, centre - 0.25)), Math.Max(maximum, centre + 0.25));
+    }
+
+    private static double weightedPercentile(IReadOnlyList<(double Value, double Weight)> items, double fraction)
+    {
+        var ordered = items.OrderBy(i => i.Value).ToArray();
+        double total = ordered.Sum(i => i.Weight), threshold = Math.Clamp(fraction, 0, 1) * total, cumulative = 0;
+        foreach (var item in ordered)
+            if ((cumulative += item.Weight) >= threshold - 1e-12) return item.Value;
+        return ordered[^1].Value;
     }
 
     private static Setup buildSetup(IEnumerable<LocalReplay> values, IReadOnlyDictionary<Guid, LocalBeatmapSet> sets)
@@ -68,7 +100,7 @@ public static class PpTargetPreferenceProfiler
         LocalBeatmapDifficulty? difficulty = set?.Difficulties.FirstOrDefault(item => item.BeatmapId == representative.BeatmapId);
         return new Setup(
             setupKey(representative), representative.PlayedAt, representative.StarRating,
-            runs.Where(run => validAccuracy(run.Accuracy)).Select(run => run.Accuracy).DefaultIfEmpty(representative.Accuracy).Max(),
+            representative.Accuracy,
             runs.Where(run => validPp(run.PerformancePoints)).Select(run => run.PerformancePoints!.Value).DefaultIfEmpty(double.NaN).Max() is var best && double.IsFinite(best) ? best : null,
             normaliseMods(representative.Mods), clean(set?.Creator), clean(set?.Source), clean(representative.Artist), clean(representative.Title),
             validPositive(difficulty?.Bpm) ? difficulty!.Bpm : null,
@@ -114,7 +146,7 @@ public static class PpTargetPreferenceProfiler
     }
 
     private static string setupKey(LocalReplay run) =>
-        $"{run.BeatmapId:N}|{string.Join(',', normaliseMods(run.Mods).Select(mod => mod.ToUpperInvariant()))}";
+        ScoreMods.SetupKey(run);
 
     private static string[] normaliseMods(IReadOnlyList<string>? mods) =>
         (mods ?? []).Select(clean).Where(mod => mod.Length > 0 && !string.Equals(mod, "NoMod", StringComparison.OrdinalIgnoreCase))
@@ -122,6 +154,7 @@ public static class PpTargetPreferenceProfiler
 
     private static bool validRun(LocalReplay run) =>
         string.Equals(run.RulesetShortName, "osu", StringComparison.OrdinalIgnoreCase)
+        && run.Passed && ScoreMods.IsManualPlay(run)
         && run.StarRating > 0 && double.IsFinite(run.StarRating)
         && validAccuracy(run.Accuracy);
 
@@ -150,13 +183,15 @@ public static class PpTargetRanker
         PpTargetPreferenceProfile profile,
         IEnumerable<OfficialBeatmapSet> beatmapSets,
         PpTargetFilters? filters = null,
-        IReadOnlyDictionary<int, PpTargetEstimate>? exactEstimates = null)
+        IReadOnlyDictionary<int, PpTargetEstimate>? exactEstimates = null,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(profile);
         ArgumentNullException.ThrowIfNull(beatmapSets);
         NormalisedFilters query = normalise(filters ?? new PpTargetFilters());
 
-        FlatCandidate[] flattened = beatmapSets.Where(set => set is not null)
+        cancellationToken.ThrowIfCancellationRequested();
+        FlatCandidate[] flattened = beatmapSets.Where(set => { cancellationToken.ThrowIfCancellationRequested(); return set is not null; })
             .OrderBy(set => set.BeatmapSetId)
             .SelectMany(set => (set.Difficulties ?? []).Select(difficulty => new FlatCandidate(set, difficulty)))
             .Where(candidate => validDifficulty(candidate.Difficulty))
@@ -164,9 +199,11 @@ public static class PpTargetRanker
             .Select(group => group.OrderBy(candidate => candidate.Set.BeatmapSetId).ThenBy(candidate => candidate.Difficulty.Name, StringComparer.Ordinal).First())
             .ToArray();
 
-        PpTargetCandidate[] matching = flattened.Select(candidate => score(profile, candidate, exactEstimates))
+        var context = new RankContext(profile);
+        PpTargetCandidate[] matching = flattened.Where(candidate => matchesMetadata(candidate, query)).Select(candidate => { cancellationToken.ThrowIfCancellationRequested(); return score(profile, candidate, exactEstimates, context); })
             .Where(candidate => matches(candidate, query))
-            .OrderByDescending(candidate => candidate.RankScore)
+            .OrderByDescending(candidate => candidate.EvidenceTier)
+            .ThenByDescending(candidate => candidate.RankScore)
             .ThenByDescending(candidate => candidate.EstimatedAttainableGainPp)
             .ThenByDescending(candidate => candidate.Estimate == null ? (double?)null : candidate.Estimate.ExpectedPp)
             .ThenBy(candidate => candidate.BeatmapId)
@@ -178,18 +215,21 @@ public static class PpTargetRanker
     private static PpTargetCandidate score(
         PpTargetPreferenceProfile profile,
         FlatCandidate candidate,
-        IReadOnlyDictionary<int, PpTargetEstimate>? exactEstimates)
+        IReadOnlyDictionary<int, PpTargetEstimate>? exactEstimates,
+        RankContext context)
     {
         OfficialBeatmapSet set = candidate.Set;
         OfficialBeatmapDifficulty difficulty = candidate.Difficulty;
-        IReadOnlyList<string> mods = profile.PreferredModSetup ?? PpTargetMods.SelectCompatible(profile.CommonMods);
+        IReadOnlyList<string> mods = context.Mods;
         double preference = preferenceFit(profile, set, difficulty);
-        (double attainability, double scoreEvidence, int nearbySampleCount) = performanceFit(profile, difficulty.StarRating);
+        (double attainability, double scoreEvidence, int nearbySampleCount) = context.PerformanceFit(difficulty.StarRating);
+        PpTargetPassEstimate? passEstimate = context.Pass?.Estimate(difficulty.StarRating, difficulty.Bpm, difficulty.TotalLengthSeconds, difficulty.BeatmapId);
+        double? expectedAccuracy = passEstimate?.ConditionalAccuracy ?? profile.TypicalAccuracy;
         PpTargetEstimate? estimate = matchingEstimate(
-            exactEstimates?.GetValueOrDefault(difficulty.BeatmapId),
+            exactEstimates?.GetValueOrDefault(difficulty.BeatmapId) is {} exact && exact.LegacyScore == profile.LegacyScore && (exact.ModsJson ?? "") == (profile.PreferredModsJson ?? "") ? exact : null,
             difficulty.BeatmapId,
-            mods,
-            profile.TypicalAccuracy,
+            context.NormalisedMods,
+            expectedAccuracy,
             attainability);
         if (estimate?.PatternProfileIdentity is { } identity && identity != profile.PatternProfile?.Identity)
             estimate = null;
@@ -214,46 +254,55 @@ public static class PpTargetRanker
                 _ => PpTargetConfidence.Insufficient,
             };
         }
-        double? baseline = difficultyBaseline(profile.PerformanceSamples, difficulty.StarRating);
+        double? baseline = context.Baseline(difficulty.StarRating);
+        bool supportedScore = passEstimate is not null && (passEstimate.ConditionalAccuracy is not null
+            || estimate?.PatternPrediction is { Fit: not null, ExpectedAccuracy: not null });
         bool awardsPp = string.Equals(set.Status, "ranked", StringComparison.OrdinalIgnoreCase)
                         || string.Equals(set.Status, "approved", StringComparison.OrdinalIgnoreCase);
-        double? gain = estimate is null || baseline is null || !awardsPp
+        double? gain = estimate is null || baseline is null || !awardsPp || !supportedScore
             ? null
-            : Math.Max(0, estimate.ExpectedPp - baseline.Value);
-        double? accountGain = awardsPp && estimate is not null
-            ? PpTargetOpportunityModel.AccountGain(profile.Opportunities, difficulty.BeatmapId, estimate.ExpectedPp) : null;
-        PpTargetPassEstimate? passEstimate = PpTargetOpportunityModel.EstimatePass(profile.Opportunities,
-            difficulty.StarRating, difficulty.Bpm, difficulty.TotalLengthSeconds, mods);
+            : Math.Max(0, estimate.ExpectedPp - baseline.Value) * passEstimate!.Probability;
+        double? accountGain = awardsPp && estimate is not null && supportedScore
+            ? context.AccountGain.Gain(difficulty.BeatmapId, estimate.ExpectedPp) * passEstimate!.Probability : null;
         double? gainPerMinute = accountGain is { } account && difficulty.TotalLengthSeconds > 0
             ? account / (difficulty.TotalLengthSeconds / 60d) : null;
         double gainScore = accountGain is null
             ? 0
             : Math.Clamp(accountGain.Value / 20, 0, 1);
-        double modCompatibility = modFit(profile.CommonMods, mods);
+        double modCompatibility = context.ModCompatibility;
         double confidenceScore = (int)recommendation / 3d;
         // Preferences and reward break ties between playable targets; neither should
         // outweigh a demonstrated mechanical weakness on a lucrative map.
         double rank = 100 * (0.60 * attainability + 0.15 * (passEstimate?.Lower ?? attainability) + 0.10 * preference
                             + 0.08 * gainScore * attainability
                             + 0.04 * modCompatibility + 0.03 * confidenceScore);
+        // A reliable play that cannot improve any known best score is a warm-up,
+        // not a leading PP target. Keep mechanical fit dominant within useful gains.
+        if (accountGain is { } attainableAccountGain)
+        {
+            double gainScale = Math.Max(5, (profile.CompetitivePpFloor ?? 100) * .1);
+            rank *= .45 + .55 * attainableAccountGain / (attainableAccountGain + gainScale);
+        }
 
         return new PpTargetCandidate(
             set.BeatmapSetId, difficulty.BeatmapId, set.Title, set.Artist, set.Creator, set.Source, set.Status,
             difficulty.Name, difficulty.StarRating, difficulty.Bpm, difficulty.TotalLengthSeconds, difficulty.MaximumCombo,
             set.CoverUrl, preference, attainability, rank, baseline, gain, estimate, mods,
-            scoreEvidence, modCompatibility, recommendation, passEstimate, accountGain, gainPerMinute);
+            scoreEvidence, modCompatibility, recommendation, passEstimate, accountGain, gainPerMinute, expectedAccuracy,
+            awardsPp ? PpTargetForecastModel.Forecast(estimate, passEstimate,
+                context.Learning.Predict(estimate, difficulty.BeatmapId, difficulty.StarRating, difficulty.Bpm, difficulty.TotalLengthSeconds)) : null);
     }
 
     private static PpTargetEstimate? matchingEstimate(
         PpTargetEstimate? estimate,
         int beatmapId,
-        IReadOnlyList<string> mods,
+        IReadOnlyList<string> normalisedMods,
         double? expectedAccuracy,
         double attainability)
     {
         if (estimate is null || estimate.BeatmapId is { } estimateBeatmapId && estimateBeatmapId != beatmapId)
             return null;
-        if (estimate.Mods is not null && !PpTargetMods.Normalise(estimate.Mods).SequenceEqual(PpTargetMods.Normalise(mods)))
+        if (estimate.Mods is not null && !PpTargetMods.Normalise(estimate.Mods).SequenceEqual(normalisedMods))
             return null;
         if (estimate.ExpectedAccuracy is { } accuracy
             && (expectedAccuracy is null || Math.Abs(accuracy - expectedAccuracy.Value) > 0.000_001))
@@ -266,21 +315,18 @@ public static class PpTargetRanker
 
     private static (double Attainability, double Evidence, int SampleCount) performanceFit(
         PpTargetPreferenceProfile profile,
-        double starRating)
+        double starRating,
+        bool customSettings,
+        PpTargetPatternModel.ScoreFitIndex? scoreFit,
+        NearestSamples samples)
     {
-        if (profile.PatternProfile is { ScoreEvidence: not null } recent)
+        if (customSettings) return (.5, 0, 0);
+        if (scoreFit is not null)
         {
-            var support = PpTargetPatternModel.ScoreFit(recent, starRating,
-                profile.PreferredModSetup ?? PpTargetMods.SelectCompatible(profile.CommonMods));
+            var support = scoreFit.Fit(starRating);
             return (support.Fit, support.Confidence, support.Maps);
         }
-        PpTargetPerformanceSample[] nearby = profile.PerformanceSamples
-            .Where(sample => double.IsFinite(sample.StarRating) && sample.StarRating > 0
-                             && double.IsFinite(sample.Accuracy) && sample.Accuracy is >= 0 and <= 1)
-            .OrderBy(sample => Math.Abs(sample.StarRating - starRating))
-            .ThenByDescending(sample => sample.Accuracy)
-            .Take(24)
-            .ToArray();
+        PpTargetPerformanceSample[] nearby = samples.ByAccuracy(starRating);
         if (nearby.Length == 0)
             return (rangeFit(profile.PreferredStarRange, starRating, 1.5), 0, 0);
 
@@ -306,20 +352,144 @@ public static class PpTargetRanker
         return (Math.Clamp(evidenceFit * (0.7 + 0.3 * evidence) + preferenceFit * 0.3 * (1 - evidence), 0, 1), evidence, evidenceSampleCount);
     }
 
-    private static double? difficultyBaseline(IReadOnlyList<PpTargetPerformanceSample> samples, double starRating)
+    private static double? difficultyBaseline(NearestSamples samples, double starRating)
     {
-        double[] nearbyPp = samples.Where(sample => double.IsFinite(sample.StarRating)
-                                                    && Math.Abs(sample.StarRating - starRating) <= 1.25
-                                                    && double.IsFinite(sample.PerformancePoints)
-                                                    && sample.PerformancePoints > 0)
-                                   .OrderBy(sample => Math.Abs(sample.StarRating - starRating))
-                                   .Take(24)
-                                   .Select(sample => sample.PerformancePoints)
-                                   .Order()
-                                   .ToArray();
+        double[] nearbyPp = samples.PerformancePoints(starRating);
         return nearbyPp.Length == 0
             ? null
             : PpTargetPreferenceProfiler.percentile(nearbyPp, nearbyPp.Length >= 8 ? 0.65 : 0.5);
+    }
+
+    // Everything derived from the profile alone is computed once per ranking; star-dependent fits
+    // are memoised per exact star rating.
+    private sealed class RankContext
+    {
+        private readonly PpTargetPreferenceProfile profile;
+        private readonly bool customSettings;
+        private readonly PpTargetPatternModel.ScoreFitIndex? scoreFit;
+        private readonly NearestSamples samples;
+        private readonly Dictionary<double, (double Attainability, double Evidence, int SampleCount)> fits = new();
+        private readonly Dictionary<double, double?> baselines = new();
+
+        public RankContext(PpTargetPreferenceProfile profile)
+        {
+            this.profile = profile;
+            Mods = profile.PreferredModSetup ?? PpTargetMods.SelectCompatible(profile.CommonMods);
+            NormalisedMods = PpTargetMods.Normalise(Mods);
+            ModCompatibility = modFit(profile.CommonMods, Mods);
+            customSettings = ScoreMods.HasCustomSettings(profile.PreferredModsJson);
+            scoreFit = !customSettings && profile.PatternProfile is { ScoreEvidence: not null } recent
+                ? PpTargetPatternModel.ScoreFitIndex.Create(recent, Mods, profile.LegacyScore)
+                : null;
+            samples = new NearestSamples(profile.PerformanceSamples);
+            Pass = profile.Opportunities is { } opportunities
+                ? new PpTargetOpportunityModel.PassEstimator(opportunities, Mods, profile.PreferredModsJson, profile.LegacyScore)
+                : null;
+            AccountGain = new PpTargetOpportunityModel.AccountGainIndex(profile.Opportunities);
+            Learning = new PpTargetLearningModel.Predictor(profile.Opportunities, profile.PatternProfile, Mods, profile.PreferredModsJson, profile.LegacyScore);
+        }
+
+        public IReadOnlyList<string> Mods { get; }
+        public IReadOnlyList<string> NormalisedMods { get; }
+        public double ModCompatibility { get; }
+        public PpTargetOpportunityModel.PassEstimator? Pass { get; }
+        public PpTargetOpportunityModel.AccountGainIndex AccountGain { get; }
+        public PpTargetLearningModel.Predictor Learning { get; }
+
+        public (double Attainability, double Evidence, int SampleCount) PerformanceFit(double stars)
+        {
+            if (!fits.TryGetValue(stars, out var fit))
+                fits[stars] = fit = performanceFit(profile, stars, customSettings, scoreFit, samples);
+            return fit;
+        }
+
+        public double? Baseline(double stars)
+        {
+            if (!baselines.TryGetValue(stars, out double? baseline))
+                baselines[stars] = baseline = difficultyBaseline(samples, stars);
+            return baseline;
+        }
+    }
+
+    // Samples sorted by star rating so the nearest 24 come from a binary search and an outward walk.
+    // Ties resolve exactly like the stable OrderBy chains over the original sample order.
+    private sealed class NearestSamples
+    {
+        private const int limit = 24;
+        private readonly (PpTargetPerformanceSample Sample, int Order)[] accuracySamples;
+        private readonly double[] accuracyStars;
+        private readonly (PpTargetPerformanceSample Sample, int Order)[] performanceSamples;
+        private readonly double[] performanceStars;
+
+        public NearestSamples(IReadOnlyList<PpTargetPerformanceSample> samples)
+        {
+            (accuracySamples, accuracyStars) = index(samples, sample => double.IsFinite(sample.StarRating) && sample.StarRating > 0
+                && double.IsFinite(sample.Accuracy) && sample.Accuracy is >= 0 and <= 1);
+            (performanceSamples, performanceStars) = index(samples, sample => double.IsFinite(sample.StarRating)
+                && double.IsFinite(sample.PerformancePoints) && sample.PerformancePoints > 0);
+        }
+
+        public PpTargetPerformanceSample[] ByAccuracy(double stars) =>
+            nearest(accuracySamples, accuracyStars, stars, double.PositiveInfinity)
+                .OrderBy(item => Math.Abs(item.Sample.StarRating - stars))
+                .ThenByDescending(item => item.Sample.Accuracy)
+                .ThenBy(item => item.Order)
+                .Take(limit)
+                .Select(item => item.Sample)
+                .ToArray();
+
+        public double[] PerformancePoints(double stars) =>
+            nearest(performanceSamples, performanceStars, stars, 1.25)
+                .OrderBy(item => Math.Abs(item.Sample.StarRating - stars))
+                .ThenBy(item => item.Order)
+                .Take(limit)
+                .Select(item => item.Sample.PerformancePoints)
+                .Order()
+                .ToArray();
+
+        private static ((PpTargetPerformanceSample, int)[], double[]) index(
+            IReadOnlyList<PpTargetPerformanceSample> samples, Func<PpTargetPerformanceSample, bool> valid)
+        {
+            var sorted = samples.Select((sample, order) => (Sample: sample, Order: order))
+                .Where(item => valid(item.Sample))
+                .OrderBy(item => item.Sample.StarRating)
+                .ThenBy(item => item.Order)
+                .ToArray();
+            return (sorted, sorted.Select(item => item.Sample.StarRating).ToArray());
+        }
+
+        private static List<(PpTargetPerformanceSample Sample, int Order)> nearest(
+            (PpTargetPerformanceSample Sample, int Order)[] sorted, double[] stars, double target, double maximumDistance)
+        {
+            var chosen = new List<(PpTargetPerformanceSample, int)>(limit + 4);
+            if (sorted.Length == 0 || !double.IsFinite(target))
+                return chosen;
+            int right = Array.BinarySearch(stars, target);
+            if (right < 0)
+                right = ~right;
+            else
+                while (right > 0 && stars[right - 1] >= target)
+                    right--;
+            int left = right - 1;
+            double boundary = double.NaN;
+            while (true)
+            {
+                double leftDistance = left >= 0 ? Math.Abs(stars[left] - target) : double.PositiveInfinity;
+                double rightDistance = right < sorted.Length ? Math.Abs(stars[right] - target) : double.PositiveInfinity;
+                double distance = Math.Min(leftDistance, rightDistance);
+                if (double.IsPositiveInfinity(distance) || distance > maximumDistance)
+                    break;
+                if (chosen.Count >= limit && distance > boundary)
+                    break;
+                if (leftDistance <= rightDistance)
+                    chosen.Add(sorted[left--]);
+                else
+                    chosen.Add(sorted[right++]);
+                if (chosen.Count == limit)
+                    boundary = distance;
+            }
+            return chosen;
+        }
     }
 
     private static double modFit(IReadOnlyList<PpTargetPreference> preferences, IReadOnlyList<string> selected)
@@ -377,6 +547,18 @@ public static class PpTargetRanker
         return Math.Clamp(1 - distance / Math.Max(0.001, falloff), 0, 1);
     }
 
+    private static bool matchesMetadata(FlatCandidate candidate, NormalisedFilters filters)
+    {
+        var d = candidate.Difficulty; var set = candidate.Set;
+        if (!between(d.StarRating, filters.MinimumStars, filters.MaximumStars)
+            || !between(d.Bpm, filters.MinimumBpm, filters.MaximumBpm)
+            || !between(d.TotalLengthSeconds, filters.MinimumLengthSeconds, filters.MaximumLengthSeconds)
+            || filters.Statuses.Count > 0 && !filters.Statuses.Contains(set.Status)) return false;
+        if (filters.SearchTokens.Length == 0) return true;
+        string searchable = $"{set.Title} {set.Artist} {set.Creator} {set.Source} {d.Name} {set.Status}";
+        return filters.SearchTokens.All(token => searchable.Contains(token, StringComparison.OrdinalIgnoreCase));
+    }
+
     private static bool matches(PpTargetCandidate candidate, NormalisedFilters filters)
     {
         if (!between(candidate.StarRating, filters.MinimumStars, filters.MaximumStars)
@@ -392,7 +574,7 @@ public static class PpTargetRanker
                 return false;
         }
 
-        if (filters.HasExpectedFilter && (candidate.Estimate is null || !between(candidate.Estimate.ExpectedPp, filters.MinimumExpectedPp, filters.MaximumExpectedPp)))
+        if (filters.HasExpectedFilter && (candidate.FirstAttemptPp is not { } earned || !between(earned, filters.MinimumExpectedPp, filters.MaximumExpectedPp)))
             return false;
         return !filters.HasMaximumFilter
                || candidate.Estimate is not null && between(candidate.Estimate.RealisticMaximumPp, filters.MinimumRealisticMaximumPp, filters.MaximumRealisticMaximumPp);
@@ -412,7 +594,7 @@ public static class PpTargetRanker
             .Where(value => value.Length > 0).ToHashSet(StringComparer.OrdinalIgnoreCase);
         string[] search = PpTargetPreferenceProfiler.tokenise((filters.SearchText ?? string.Empty)[..Math.Min(filters.SearchText?.Length ?? 0, 256)]).ToArray();
         return new NormalisedFilters(search, minStars, maxStars, minExpected, maxExpected, minMaximum, maxMaximum,
-            minLength, maxLength, minBpm, maxBpm, statuses, Math.Clamp(filters.Limit, 1, 10_000));
+            minLength, maxLength, minBpm, maxBpm, statuses, Math.Clamp(filters.Limit, 1, 50_000));
     }
 
     private static (double? Minimum, double? Maximum) range(double? minimum, double? maximum, double floor)

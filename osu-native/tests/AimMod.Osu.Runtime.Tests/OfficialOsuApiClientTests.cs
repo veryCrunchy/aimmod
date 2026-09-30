@@ -6,7 +6,7 @@ using NUnit.Framework;
 namespace AimMod.Osu.Runtime.Tests;
 
 [TestFixture]
-public sealed class OfficialOsuApiClientTests
+public sealed partial class OfficialOsuApiClientTests
 {
     private const string access_token = "private-access-token";
     private string temporaryDirectory = null!;
@@ -312,7 +312,102 @@ public sealed class OfficialOsuApiClientTests
             Assert.That(result.Status, Is.EqualTo(OsuBestScoresFetchStatus.ServerError));
             Assert.That(result.Scores, Is.Null);
             Assert.That(result.IsFromCache, Is.False);
-            Assert.That(secondHandler.CallCount, Is.EqualTo(1));
+            Assert.That(secondHandler.CallCount, Is.EqualTo(2));
+        });
+    }
+
+    [Test]
+    public async Task TooManyRequestsSurfacesRateLimitAndHoldsTheEndpointUntilRetryAfter()
+    {
+        await writeSignedInSessionAsync("crunchy", access_token);
+        await using LazerSessionMonitor monitor = await LazerSessionMonitor.CreateAsync(gameIniPath);
+        var time = new ManualTimeProvider(new DateTimeOffset(2026, 8, 1, 0, 0, 0, TimeSpan.Zero));
+        var handler = new RecordingHandler(_ =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+            response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(90));
+            return response;
+        });
+        using var client = new OfficialOsuApiClient(monitor, handler, Path.Combine(temporaryDirectory, "cache"), time);
+
+        OsuBestScoresFetchResult limited = await client.FetchBestScoresAsync(profile());
+        OsuBestScoresFetchResult held = await client.FetchBestScoresAsync(profile());
+        OsuBestScoresFetchResult otherEndpoint = await client.FetchRecentScoresAsync(profile());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(limited.Status, Is.EqualTo(OsuBestScoresFetchStatus.RateLimited));
+            Assert.That(limited.RetryAfter, Is.EqualTo(time.GetUtcNow().AddSeconds(90)));
+            Assert.That(held.Status, Is.EqualTo(OsuBestScoresFetchStatus.RateLimited));
+            Assert.That(held.RetryAfter, Is.EqualTo(limited.RetryAfter));
+            Assert.That(handler.CallCount, Is.EqualTo(2));
+            Assert.That(otherEndpoint.Status, Is.EqualTo(OsuBestScoresFetchStatus.RateLimited));
+        });
+
+        time.Advance(TimeSpan.FromSeconds(91));
+        await client.FetchBestScoresAsync(profile());
+        Assert.That(handler.CallCount, Is.EqualTo(3));
+    }
+
+    [Test]
+    public async Task TooManyRequestsWithoutRetryAfterUsesADefaultCooldown()
+    {
+        await writeSignedInSessionAsync("crunchy", access_token);
+        await using LazerSessionMonitor monitor = await LazerSessionMonitor.CreateAsync(gameIniPath);
+        var time = new ManualTimeProvider(new DateTimeOffset(2026, 8, 1, 0, 0, 0, TimeSpan.Zero));
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.TooManyRequests));
+        using var client = new OfficialOsuApiClient(monitor, handler, Path.Combine(temporaryDirectory, "cache"), time);
+
+        OsuProfileFetchResult result = await client.FetchCurrentProfileAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(OsuProfileFetchStatus.RateLimited));
+            Assert.That(result.RetryAfter, Is.EqualTo(time.GetUtcNow().Add(HttpRequestPolicy.DefaultRateLimitCooldown)));
+        });
+    }
+
+    [Test]
+    public async Task TransientServerErrorIsRetriedOnceAndThenSucceeds()
+    {
+        await writeSignedInSessionAsync("crunchy", access_token);
+        await using LazerSessionMonitor monitor = await LazerSessionMonitor.CreateAsync(gameIniPath);
+        int calls = 0;
+        var handler = new RecordingHandler(_ => ++calls == 1
+            ? new HttpResponseMessage(HttpStatusCode.BadGateway)
+            : jsonResponse(HttpStatusCode.OK, validProfileJson("crunchy")));
+        using var client = new OfficialOsuApiClient(monitor, handler);
+
+        OsuProfileFetchResult result = await client.FetchCurrentProfileAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(OsuProfileFetchStatus.Success));
+            Assert.That(handler.CallCount, Is.EqualTo(2));
+        });
+    }
+
+    [Test]
+    public async Task StaleTemporaryCacheFilesAreSweptOnFirstWrite()
+    {
+        await writeSignedInSessionAsync("crunchy", access_token);
+        await using LazerSessionMonitor monitor = await LazerSessionMonitor.CreateAsync(gameIniPath);
+        string cacheDirectory = Path.Combine(temporaryDirectory, "cache");
+        Directory.CreateDirectory(cacheDirectory);
+        string stale = Path.Combine(cacheDirectory, ".best-scores.stale.tmp");
+        string fresh = Path.Combine(cacheDirectory, ".best-scores.fresh.tmp");
+        await File.WriteAllTextAsync(stale, "partial");
+        await File.WriteAllTextAsync(fresh, "partial");
+        File.SetLastWriteTimeUtc(stale, DateTime.UtcNow.AddHours(-2));
+        var handler = new RecordingHandler(_ => jsonResponse(HttpStatusCode.OK, scorePageJson(42, 1)));
+        using var client = new OfficialOsuApiClient(monitor, handler, cacheDirectory, TimeProvider.System);
+
+        await client.FetchBestScoresAsync(profile());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(File.Exists(stale), Is.False);
+            Assert.That(File.Exists(fresh), Is.True);
         });
     }
 

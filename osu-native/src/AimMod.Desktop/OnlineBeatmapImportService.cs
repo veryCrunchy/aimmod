@@ -19,6 +19,7 @@ public enum OnlineBeatmapImportStatus
     ServerError,
     ImportFailed,
     OsuInstallFailed,
+    RateLimited,
 }
 
 public sealed record OnlineBeatmapImportResult(
@@ -186,6 +187,7 @@ public sealed class OnlineBeatmapImportService
         OfficialBeatmapRequestStatus.SessionChanged => OnlineBeatmapImportStatus.SessionChanged,
         OfficialBeatmapRequestStatus.NetworkError => OnlineBeatmapImportStatus.NetworkError,
         OfficialBeatmapRequestStatus.ServerError => OnlineBeatmapImportStatus.ServerError,
+        OfficialBeatmapRequestStatus.RateLimited => OnlineBeatmapImportStatus.RateLimited,
         _ => OnlineBeatmapImportStatus.InvalidDownload,
     };
 

@@ -1,3 +1,4 @@
+using AimMod.Desktop.Coaching;
 using AimMod.Desktop.LocalLibrary;
 using AimMod.Osu.Runtime;
 using AimMod.Osu.Runtime.Contracts;
@@ -13,14 +14,17 @@ public sealed record PracticeMapCandidate(
     int AttemptsWithMisses = 0,
     double AverageMissConfidence = 0)
 {
-    public string Evidence => $"{MissCount:N0} exact {(MissCount == 1 ? "miss" : "misses")} across {AnalysedAttempts:N0} analysed {(AnalysedAttempts == 1 ? "attempt" : "attempts")}";
+    public string Evidence => MissCount == 0
+        ? $"Timing practice / {AnalysedAttempts:N0} analysed {(AnalysedAttempts == 1 ? "attempt" : "attempts")}"
+        : $"{MissCount:N0} exact {(MissCount == 1 ? "miss" : "misses")} across {AnalysedAttempts:N0} analysed {(AnalysedAttempts == 1 ? "attempt" : "attempts")}";
 }
 
 public sealed record PracticeMapGenerationRequest(
     PracticeMapCandidate Candidate,
     PracticeDrillType DrillType,
     PracticeMapOptions? Options = null,
-    IProgress<string>? Progress = null);
+    IProgress<string>? Progress = null, bool CreateSet = false, IReadOnlyList<LocalReplay>? SourceHistory = null, bool Automatic = false,
+    bool CreateBreakdown = false);
 
 public sealed record PracticeMapGenerationResult(
     bool Success,
@@ -107,7 +111,15 @@ public static class PracticeMapCandidateSearch
     private static bool isMatch(PracticeMapCandidate candidate, PracticeCandidateQuery query)
     {
         LocalReplay replay = candidate.SourceReplay;
-        if (replay.StarRating < query.MinimumStars || replay.StarRating > query.MaximumStars)
+        // The slider's ends mean "any": 0 includes unrated maps and 10 is shown as 10+.
+        bool lowerBound = query.MinimumStars > 0;
+        bool upperBound = query.MaximumStars < 10;
+        if (!double.IsFinite(replay.StarRating))
+        {
+            if (lowerBound || upperBound)
+                return false;
+        }
+        else if (lowerBound && replay.StarRating < query.MinimumStars || upperBound && replay.StarRating > query.MaximumStars)
             return false;
         if (query.Evidence switch
             {
@@ -159,17 +171,18 @@ public static class PracticeMapCandidateBuilder
         var evidence = group.Select(run => (Run: run, Analysis: analyses.GetValueOrDefault(run.ScoreId)))
                             .Where(item => item.Analysis?.Judgements is not null)
                             .ToArray();
-        ReplayObjectJudgement[] misses = evidence.SelectMany(item => item.Analysis!.Judgements)
-                                                  .Where(item => string.Equals(item.Result, "Miss", StringComparison.OrdinalIgnoreCase)
-                                                                 && item.ObjectIndex is >= 0)
-                                                  .ToArray();
-        if (misses.Length == 0)
+        ReplayObjectJudgement[][] missesByAttempt = evidence.Select(item => ReplayJudgementDigest.For(item.Analysis!).Misses
+                                                                 .Where(judgement => judgement.ObjectIndex is >= 0)
+                                                                 .ToArray())
+                                                        .ToArray();
+        ReplayObjectJudgement[] misses = ReplayJudgementClassifier.Concat(missesByAttempt);
+        int timingPhrases = evidence.Count(item => TappingCoaching.Build(item.Analysis) is not null);
+        if (misses.Length == 0 && timingPhrases == 0)
             return null;
 
-        double score = misses.Sum(item => 1 + Math.Clamp(item.MissAnalysis?.Confidence ?? 0.25, 0, 1));
-        int attemptsWithMisses = evidence.Count(item => item.Analysis!.Judgements.Any(judgement =>
-            string.Equals(judgement.Result, "Miss", StringComparison.OrdinalIgnoreCase) && judgement.ObjectIndex is >= 0));
-        double averageMissConfidence = misses.Average(item => Math.Clamp(item.MissAnalysis?.Confidence ?? 0.25, 0, 1));
+        double score = misses.Sum(item => 1 + Math.Clamp(item.MissAnalysis?.Confidence ?? 0.25, 0, 1)) + timingPhrases;
+        int attemptsWithMisses = missesByAttempt.Count(attempt => attempt.Length > 0);
+        double averageMissConfidence = misses.Length == 0 ? 0 : misses.Average(item => Math.Clamp(item.MissAnalysis?.Confidence ?? 0.25, 0, 1));
         LocalReplay source = evidence.OrderByDescending(item => item.Run.PlayedAt).First().Run;
         return new PracticeMapCandidate(source, evidence.Select(item => item.Run.ScoreId).ToArray(),
             evidence.Length, misses.Length, score, attemptsWithMisses, averageMissConfidence);

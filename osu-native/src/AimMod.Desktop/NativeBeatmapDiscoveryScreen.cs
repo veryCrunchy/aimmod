@@ -7,10 +7,12 @@ using osu.Framework.Bindables;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Colour;
 using osu.Framework.Graphics.Containers;
+using osu.Framework.Graphics.Cursor;
 using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
 using osu.Framework.Graphics.UserInterface;
 using osu.Framework.Input.Events;
+using osu.Framework.Localisation;
 using osu.Framework.Threading;
 using osu.Game.Graphics.Containers;
 using osu.Game.Graphics.Sprites;
@@ -30,7 +32,7 @@ public partial class NativeBeatmapDiscoveryScreen : CompositeDrawable
     private readonly Container page = null!;
     private readonly Container tabBar = null!;
     private readonly AimModSectionHeader workspaceHeader = null!;
-    private readonly OsuTabControl<BeatmapDiscoveryTab> tabs = null!;
+    private readonly AimModTabControl<BeatmapDiscoveryTab> tabs = null!;
     private readonly Bindable<BeatmapDiscoveryTab> currentTab = new(BeatmapDiscoveryTab.Installed);
     private NativeInstalledBeatmapBrowser? installedScreen;
     private NativeOfficialBeatmapSearchScreen? onlineScreen;
@@ -58,32 +60,31 @@ public partial class NativeBeatmapDiscoveryScreen : CompositeDrawable
         {
             workspaceHeader = new AimModSectionHeader(
                 "Beatmaps",
-                "Browse your installed library or discover maps from the official osu! catalog.",
-                "MAP LIBRARY")
+                "Your installed maps and the official osu! catalog.")
             {
                 Depth = -110,
             },
             page = new Container
             {
                 RelativeSizeAxes = Axes.Both,
-                Padding = new MarginPadding { Top = 76 },
+                Padding = new MarginPadding { Top = 120 },
                 Masking = true,
                 Depth = 0,
             },
             tabBar = new Container
             {
                 RelativeSizeAxes = Axes.X,
-                Height = 72,
+                Height = 116,
                 Depth = -100,
                 Children = new Drawable[]
                 {
-                    tabs = new OsuTabControl<BeatmapDiscoveryTab>
+                    tabs = new AimModTabControl<BeatmapDiscoveryTab>
                     {
-                        Anchor = Anchor.TopRight,
-                        Origin = Anchor.TopRight,
-                        Position = new(0, 18),
-                        Size = new(210, 38),
-                        AccentColour = AimModPalette.Pink,
+                        Anchor = Anchor.TopLeft,
+                        Origin = Anchor.TopLeft,
+                        Position = new(0, 72),
+                        Height = AimModVisualStyle.ControlHeight,
+
                         Current = currentTab,
                     },
                 },
@@ -95,17 +96,6 @@ public partial class NativeBeatmapDiscoveryScreen : CompositeDrawable
     {
         base.LoadComplete();
         currentTab.BindValueChanged(tab => showTab(tab.NewValue), true);
-    }
-
-    protected override void Update()
-    {
-        base.Update();
-
-        float inspectorWidth = currentTab.Value == BeatmapDiscoveryTab.Installed && DrawWidth >= 1_280
-            ? Math.Clamp(DrawWidth * 0.27f, 350, 390)
-            : 0;
-        tabs.Position = new(-inspectorWidth, 18);
-        workspaceHeader.Width = Math.Max(0, DrawWidth - inspectorWidth - 230);
     }
 
     public void OpenSet(int setId)
@@ -171,21 +161,33 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
 {
     private readonly ILocalLibrarySource? localLibrary;
     private readonly Func<int, CancellationToken, Task>? openBeatmap;
-    private readonly Dictionary<int, OnlineBeatmapCard> visibleCards = new();
     private const int result_limit = 24;
     private const float content_inset = 12;
+    private const int connection_attempt_limit = 10;
+    private const int session_retry_limit = 3;
+    private const double max_rate_limit_auto_retry_ms = 30_000;
+    private static readonly TimeSpan installed_cache_lifetime = TimeSpan.FromMinutes(2);
+    private readonly KeyedFlow<int, OfficialBeatmapSet, OnlineBeatmapSetBlock> resultBlocks;
+    private readonly AimModInlineStatus searchStatus;
+    private AimModLayout.ChangeTracker<float> layoutTracker;
+    private int sessionRetries;
+    private bool retryWhenVisible;
+    private (DateTime LoadedAt, HashSet<int> Difficulties)? installedCache;
 
     private readonly Func<IOfficialBeatmapDiscoveryClient?> client;
     private readonly Func<OnlineBeatmapImportService?> importer;
     private readonly AimModSearchBox searchBox;
     private readonly TruncatingSpriteText resultStatus;
-    private readonly FillFlowContainer results;
-    private readonly AimModLoadingOverlay loadingOverlay;
+    private readonly FillFlowContainer<Drawable> results;
+    private bool searchLoaded;
     private readonly Container filterBand;
-    private readonly Container searchGroup;
-    private readonly Container categoryGroup;
-    private readonly Container sortGroup;
+    private readonly AimModResetButton resetFilters;
     private readonly Container resultViewport;
+    private readonly Container inspectorRail;
+    private readonly OnlineSetInspector inspector;
+    private OnlineBeatmapSetBlock? selectedBlock;
+    private bool sideInspector;
+    internal const float SideInspectorWidth = 900;
     private readonly AimModStarRatingFilter starSlider;
     private readonly osu.Game.Graphics.UserInterfaceV2.ShearedDropdown<OfficialBeatmapCategory> categoryDropdown;
     private readonly osu.Game.Graphics.UserInterfaceV2.ShearedDropdown<OfficialBeatmapSort> sortDropdown;
@@ -203,6 +205,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
     {
         selectedSetId = setId;
         connectionAttempts = 0;
+        sessionRetries = 0;
         if (IsLoaded)
             startSearch();
     }
@@ -220,173 +223,256 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
 
         InternalChildren = new Drawable[]
         {
-            new AimModSectionHeader(
-                "Discover beatmaps",
-                "Save a set in AimMod, then open the same download in your selected osu! client.",
-                "osu! API") { Depth = -20 },
+            // Filters render ahead of the status line and results so their menus are never covered.
             filterBand = new Container
             {
-                Position = new(0, 76),
                 RelativeSizeAxes = Axes.X,
-                Height = 72,
+                Height = AimModVisualStyle.ControlHeight,
                 Depth = -20,
                 Children = new Drawable[]
                 {
-                    new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
-                    searchGroup = new Container
+                    searchBox = new AimModSearchBox
                     {
-                        Children = new Drawable[]
-                        {
-                            filterLabel("SEARCH"),
-                            searchBox = new AimModSearchBox
-                            {
-                                Position = new(0, 17),
-                                RelativeSizeAxes = Axes.X,
-                                Height = AimModVisualStyle.CompactControlHeight,
-                                PlaceholderText = "Title, artist, mapper, or tag",
-                            },
-                        },
+                        Height = AimModVisualStyle.ControlHeight,
+                        SearchHint = "Search title, artist, mapper or tag",
                     },
                     starSlider = new AimModStarRatingFilter
                     {
+                        Size = new(264, AimModVisualStyle.ControlHeight),
                         LowerBound = minimumStars,
                         UpperBound = maximumStars,
                         DefaultStringLowerBound = "0",
                         DefaultStringUpperBound = "10+",
                     },
-                    categoryGroup = dropdownGroup("STATUS", categoryDropdown = new BeatmapFilterDropdown<OfficialBeatmapCategory>()
+                    categoryDropdown = new BeatmapFilterDropdown<OfficialBeatmapCategory>("Status", formatCategory)
                     {
                         Items = new[] { OfficialBeatmapCategory.Any, OfficialBeatmapCategory.Ranked, OfficialBeatmapCategory.Loved, OfficialBeatmapCategory.Pending },
                         Current = category,
-                    }),
-                    sortGroup = dropdownGroup("SORT", sortDropdown = new BeatmapFilterDropdown<OfficialBeatmapSort>()
+                    },
+                    sortDropdown = new BeatmapFilterDropdown<OfficialBeatmapSort>("Sort", formatSort)
                     {
                         Items = new[] { OfficialBeatmapSort.Relevance, OfficialBeatmapSort.Updated, OfficialBeatmapSort.Plays },
                         Current = sort,
-                    }),
+                    },
                 },
             },
             resultStatus = new TruncatingSpriteText
             {
-                Y = 160,
                 Text = "Connecting to osu!...",
-                Font = new FontUsage(size: 11, weight: "SemiBold"),
-                Colour = AimModPalette.Muted,
-                Depth = -20,
+                Font = AimModVisualStyle.BodyStrongFont,
+                Colour = AimModPalette.Text,
+                Depth = 0,
             },
             resultViewport = new Container
             {
                 RelativeSizeAxes = Axes.Both,
-                Padding = new MarginPadding { Top = 184 },
                 Masking = true,
                 Depth = 10,
                 Child = new AimModScrollContainer
                 {
                     RelativeSizeAxes = Axes.Both,
-                    Child = results = new FillFlowContainer
+                    Child = new FillFlowContainer
                     {
                         RelativeSizeAxes = Axes.X,
                         AutoSizeAxes = Axes.Y,
                         Direction = FillDirection.Vertical,
                         Spacing = new(AimModVisualStyle.RelatedSpacing),
                         Padding = new MarginPadding { Right = content_inset, Bottom = 32 },
+                        Children = new Drawable[]
+                        {
+                            searchStatus = new AimModInlineStatus(),
+                            results = new FillFlowContainer<Drawable>
+                            {
+                                RelativeSizeAxes = Axes.X,
+                                AutoSizeAxes = Axes.Y,
+                                Direction = FillDirection.Vertical,
+                                Spacing = new(0, 6),
+                            },
+                        },
                     },
                 },
             },
-            loadingOverlay = new AimModLoadingOverlay(),
+            inspectorRail = new Container
+            {
+                Masking = true,
+                Depth = 5,
+                Alpha = 0,
+                Child = inspector = new OnlineSetInspector(openBeatmap),
+            },
+            resetFilters = new AimModResetButton(() => {
+                searchBox.Current.Value = string.Empty; minimumStars.Value = 0; maximumStars.Value = 10;
+                category.Value = OfficialBeatmapCategory.Any; sort.Value = OfficialBeatmapSort.Relevance; scheduleSearch();
+            }, "Reset all") { Height = 26, Width = 84, Alpha = 0 },
         };
+        resultBlocks = new KeyedFlow<int, OfficialBeatmapSet, OnlineBeatmapSetBlock>(results,
+            set => set.BeatmapSetId,
+            set => $"{set.Status}|{set.DownloadDisabled}|{string.Join(',', set.Difficulties.Select(d => d.BeatmapId))}",
+            set => new OnlineBeatmapSetBlock(set, importBeatmap, installInLazer, openBeatmap, !sideInspector && selectedSetId == set.BeatmapSetId, blockClicked));
     }
+
+    internal static NativeBeatmapFilterLayout CalculateFilterLayout(float width) => width switch
+    {
+        < 640 => NativeBeatmapFilterLayout.Stacked,
+        < 980 => NativeBeatmapFilterLayout.TwoColumns,
+        _ => NativeBeatmapFilterLayout.Row,
+    };
 
     protected override void Update()
     {
         base.Update();
 
-        float width = Math.Max(640, DrawWidth);
-        const float gap = AimModVisualStyle.RelatedSpacing;
-        bool compact = width < 940;
-
-        if (compact)
+        if (retryWhenVisible && isVisible())
         {
-            float columnWidth = (width - content_inset * 2 - gap) / 2;
-            filterBand.Height = 128;
-            placeGroup(searchGroup, content_inset, 8, columnWidth, 54);
-            placeSlider(starSlider, content_inset + columnWidth + gap, 3, columnWidth);
-            placeGroup(categoryGroup, content_inset, 68, columnWidth, 52);
-            placeGroup(sortGroup, content_inset + columnWidth + gap, 68, columnWidth, 52);
-            resultStatus.Y = 216;
-            resultViewport.Padding = new MarginPadding { Top = 240 };
+            retryWhenVisible = false;
+            startSearch();
+        }
+
+        bool filtered = !string.IsNullOrWhiteSpace(searchBox.Current.Value) || !minimumStars.IsDefault || !maximumStars.IsDefault
+                        || category.Value != OfficialBeatmapCategory.Any || sort.Value != OfficialBeatmapSort.Relevance;
+        resetFilters.Alpha = filtered ? 1 : 0;
+
+        if (!layoutTracker.Update(DrawWidth))
+            return;
+
+        float width = Math.Max(1, DrawWidth);
+        const float gap = AimModVisualStyle.RelatedSpacing;
+        const float row = AimModVisualStyle.ControlHeight + gap;
+        NativeBeatmapFilterLayout layout = CalculateFilterLayout(width);
+        float rows;
+
+        if (layout == NativeBeatmapFilterLayout.Stacked)
+        {
+            // Phone-width windows stack every filter so none of them clip or overlap.
+            float half = (width - gap) / 2;
+            place(searchBox, 0, 0, width);
+            place(starSlider, 0, row, width);
+            place(categoryDropdown, 0, row * 2, half);
+            place(sortDropdown, half + gap, row * 2, half);
+            rows = 3;
+        }
+        else if (layout == NativeBeatmapFilterLayout.TwoColumns)
+        {
+            const float dropdownWidth = 180;
+            place(searchBox, 0, 0, width);
+            place(starSlider, 0, row, Math.Max(0, width - dropdownWidth * 2 - gap * 2));
+            place(categoryDropdown, width - dropdownWidth * 2 - gap, row, dropdownWidth);
+            place(sortDropdown, width - dropdownWidth, row, dropdownWidth);
+            rows = 2;
         }
         else
         {
-            float available = width - content_inset * 2 - gap * 3;
-            float searchWidth = Math.Clamp(available * 0.34f, 280, 430);
-            float sliderWidth = Math.Clamp(available * 0.29f, 240, 360);
-            float dropdownWidth = (available - searchWidth - sliderWidth) / 2;
-            filterBand.Height = 72;
-            placeGroup(searchGroup, content_inset, 8, searchWidth, 54);
-            placeSlider(starSlider, content_inset + searchWidth + gap, 3, sliderWidth);
-            placeGroup(categoryGroup, content_inset + searchWidth + gap + sliderWidth + gap, 8, dropdownWidth, 54);
-            placeGroup(sortGroup, width - content_inset - dropdownWidth, 8, dropdownWidth, 54);
-            resultStatus.Y = 160;
-            resultViewport.Padding = new MarginPadding { Top = 184 };
+            const float stars_width = 264, category_width = 180, sort_width = 196;
+            float searchWidth = width - stars_width - category_width - sort_width - gap * 3;
+            place(searchBox, 0, 0, searchWidth);
+            place(starSlider, searchWidth + gap, 0, stars_width);
+            place(categoryDropdown, searchWidth + stars_width + gap * 2, 0, category_width);
+            place(sortDropdown, width - sort_width, 0, sort_width);
+            rows = 1;
         }
 
-        resultStatus.MaxWidth = Math.Max(0, width - content_inset * 2);
+        filterBand.Height = rows * row - gap;
+        resultStatus.Y = rows * row + 4;
+        resetFilters.Position = new(width - resetFilters.Width, rows * row);
+        resultStatus.MaxWidth = Math.Max(0, width - resetFilters.Width - 16);
+        float top = rows * row + 26 + 14;
+        sideInspector = width >= SideInspectorWidth;
+        float railWidth = sideInspector ? Math.Clamp(width * 0.32f, 330, 470) : 0;
+        resultViewport.Padding = new MarginPadding { Top = top, Right = sideInspector ? railWidth : 0 };
+        inspectorRail.Position = new(width - railWidth, top);
+        inspectorRail.Size = new(railWidth, Math.Max(0, DrawHeight - top));
+        inspectorRail.Padding = new MarginPadding { Left = AimModVisualStyle.SectionSpacing };
+        inspectorRail.Alpha = sideInspector ? 1 : 0;
+        applyInspectorMode();
     }
 
-    private static void placeSlider(Drawable slider, float x, float y, float width)
+    internal static bool UsesSideInspector(float width) => width >= SideInspectorWidth;
+
+    private void clearResults()
     {
-        slider.Anchor = Anchor.TopLeft;
-        slider.Origin = Anchor.TopLeft;
-        slider.Position = new(x, y + 18);
-        slider.Size = new(width, 30);
+        resultBlocks.Clear();
+        selectedBlock = null;
+        inspector.ClearSelection();
     }
 
-    private static void placeGroup(Container group, float x, float y, float width, float height)
+    private void applyInspectorMode()
     {
-        group.Position = new(x, y);
-        group.Size = new(width, height);
+        foreach (OnlineBeatmapSetBlock block in resultBlocks.Rows)
+            block.SetInline(!sideInspector);
+        if (sideInspector && selectedBlock is null && resultBlocks.Rows.FirstOrDefault() is { } first)
+            selectBlock(first);
     }
 
-    private static SpriteText filterLabel(string value) => new()
+    private void blockClicked(OnlineBeatmapSetBlock block)
     {
-        Text = value,
-        Font = new FontUsage(size: 8, weight: "Bold"),
-        Colour = AimModPalette.Cyan,
+        if (sideInspector)
+            selectBlock(block);
+        else
+            block.Toggle();
+    }
+
+    private void selectBlock(OnlineBeatmapSetBlock block)
+    {
+        selectedBlock?.Card.SetSelected(false);
+        selectedBlock = block;
+        block.Card.SetSelected(true);
+        inspector.Show(block.Set, block.Card);
+    }
+
+    private void refreshSelection()
+    {
+        if (selectedBlock is not null && !resultBlocks.Rows.Contains(selectedBlock))
+            selectedBlock = null;
+        OnlineBeatmapSetBlock? target = selectedBlock
+                                        ?? (selectedSetId is int id && resultBlocks.TryGet(id, out var match) ? match : resultBlocks.Rows.FirstOrDefault());
+        if (target is null)
+        {
+            inspector.ClearSelection();
+            return;
+        }
+        foreach (OnlineBeatmapSetBlock block in resultBlocks.Rows)
+            block.SetInline(!sideInspector);
+        if (sideInspector)
+            selectBlock(target);
+    }
+
+    private static void place(Drawable drawable, float x, float y, float width)
+    {
+        drawable.Anchor = Anchor.TopLeft;
+        drawable.Origin = Anchor.TopLeft;
+        drawable.Position = new(x, y);
+        drawable.Width = width;
+    }
+
+    private static string formatCategory(OfficialBeatmapCategory value) => value switch
+    {
+        OfficialBeatmapCategory.Any => "Any status",
+        _ => value.ToString(),
     };
 
-    private static Container dropdownGroup(string label, Drawable dropdown)
+    private static string formatSort(OfficialBeatmapSort value) => value switch
     {
-        dropdown.Position = new(0, 17);
-        dropdown.RelativeSizeAxes = Axes.X;
-        dropdown.Width = 1;
-        return new Container
-        {
-            Children = new Drawable[]
-            {
-                filterLabel(label),
-                dropdown,
-            },
-        };
-    }
+        OfficialBeatmapSort.Updated => "Recently updated",
+        OfficialBeatmapSort.Plays => "Most played",
+        _ => "Best match",
+    };
 
-    private sealed partial class BeatmapFilterDropdown<T> : osu.Game.Graphics.UserInterfaceV2.ShearedDropdown<T>
+    private sealed partial class BeatmapFilterDropdown<T> : AimMod.Desktop.Coaching.BoundedShearedDropdown<T>
     {
-        public BeatmapFilterDropdown() : base(string.Empty)
+        private readonly Func<T, string> format;
+
+        public BeatmapFilterDropdown(string label, Func<T, string> format) : base(label)
         {
-            if (Header is ShearedDropdownHeader header)
-            {
-                // Match the native labelled header without constraining its popup menu.
-                header.LabelContainer.AutoSizeAxes = Axes.X;
-                header.LabelContainer.Height = 30;
-            }
+            this.format = format;
         }
+
+        protected override LocalisableString GenerateItemText(T item) => format(item);
     }
 
     protected override void LoadComplete()
     {
         base.LoadComplete();
-        searchBox.Committed += () => { selectedSetId = null; startSearch(); };
+        searchBox.QueryChanged += _ => { selectedSetId = null; startSearch(); };
+        searchBox.MoveToResults += () => AimModInteractiveSurface.FocusFirst(results);
         minimumStars.BindValueChanged(_ => scheduleSearch());
         maximumStars.BindValueChanged(_ => scheduleSearch());
         category.BindValueChanged(_ => startSearch());
@@ -402,10 +488,52 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
         scheduledSearch = Scheduler.AddDelayed(startSearch, 250);
     }
 
+    private void retrySearch()
+    {
+        connectionAttempts = 0;
+        sessionRetries = 0;
+        startSearch();
+    }
+
+    private bool isVisible()
+    {
+        for (Drawable? drawable = this; drawable is not null; drawable = drawable.Parent)
+        {
+            if (drawable.Alpha <= 0 || !drawable.IsPresent)
+                return false;
+        }
+        return true;
+    }
+
+    /// <summary>Automatic retries wait while the tab is hidden and resume when it is shown again.</summary>
+    private void scheduleAutomaticRetry(double delay)
+    {
+        scheduledSearch?.Cancel();
+        scheduledSearch = Scheduler.AddDelayed(() =>
+        {
+            scheduledSearch = null;
+            if (isVisible())
+                startSearch();
+            else
+                retryWhenVisible = true;
+        }, delay);
+    }
+
+    private void cancelSearch()
+    {
+        scheduledSearch?.Cancel();
+        scheduledSearch = null;
+        retryWhenVisible = false;
+        requestCancellation?.Cancel();
+        resultStatus.Text = searchLoaded ? "Search cancelled. Showing the previous results." : "Search cancelled.";
+        searchStatus.ShowMessage("Search cancelled.", retrySearch);
+    }
+
     private void startSearch()
     {
         scheduledSearch?.Cancel();
         scheduledSearch = null;
+        retryWhenVisible = false;
         requestCancellation?.Cancel();
         requestCancellation?.Dispose();
         requestCancellation = new CancellationTokenSource();
@@ -414,23 +542,26 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
         if (currentClient is null)
         {
             connectionAttempts++;
-            resultStatus.Text = connectionAttempts < 10
-                ? "AimMod is still connecting to osu!lazer..."
-                : "AimMod could not find a usable osu!lazer session.";
-            if (connectionAttempts < 10)
-                loadingOverlay.ShowLoading("Connecting to osu!", "Waiting for the signed-in lazer session");
+            if (connectionAttempts < connection_attempt_limit)
+            {
+                resultStatus.Text = "AimMod is still connecting to osu!...";
+                searchStatus.ShowLoading("Waiting for your osu! installation to connect...", cancelSearch);
+                scheduleAutomaticRetry(1000);
+            }
             else
-                loadingOverlay.HideLoading();
-            results.Clear();
-            if (connectionAttempts < 10 || selectedSetId is not null)
-                scheduledSearch = Scheduler.AddDelayed(startSearch, connectionAttempts < 10 ? 1000 : 5000);
+            {
+                resultStatus.Text = "osu! is not connected";
+                searchStatus.ShowError("AimMod could not connect to osu! for online search.",
+                    "Check that osu! is installed, then retry. Installed beatmaps remain available on the Installed tab.", retrySearch);
+            }
+            clearResults();
             return;
         }
 
         connectionAttempts = 0;
 
         resultStatus.Text = "Searching osu!...";
-        loadingOverlay.ShowLoading("Searching beatmaps", "Loading results from the osu! catalog");
+        searchStatus.ShowLoading(searchLoaded ? "Updating results..." : "Searching the osu! beatmap catalog...", cancelSearch);
         _ = searchAsync(currentClient, cancellationToken);
     }
 
@@ -464,8 +595,10 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                 {
                     if (cancellationToken.IsCancellationRequested)
                         return;
-                    resultStatus.Text = $"Could not search osu!: {error.Message}";
-                    loadingOverlay.HideLoading();
+                    resultStatus.Text = searchLoaded ? "Showing the previous results" : "Search unavailable";
+                    searchStatus.ShowError(error, "Searching osu!", retrySearch);
+                    // Keep older results readable but clearly out of date until a retry succeeds.
+                    results.FadeTo(0.45f, AimModVisualStyle.HoverTransition);
                 });
             }
         }
@@ -473,63 +606,43 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
 
     private void applySearchResult(OfficialBeatmapSearchResult response)
     {
-        visibleCards.Clear();
-        results.Clear();
-        loadingOverlay.HideLoading();
+        searchLoaded = true;
+        results.FadeIn(AimModVisualStyle.HoverTransition);
         if (response.Status != OfficialBeatmapRequestStatus.Success)
         {
-            resultStatus.Text = searchFailureMessage(response.Status);
-            if (response.Status is OfficialBeatmapRequestStatus.SignedOut or
+            // Results from another account or an expired session are stale; do not leave them under the error.
+            clearResults();
+            string message = searchFailureMessage(response.Status, response.RetryAfter);
+            resultStatus.Text = "Online search unavailable";
+            bool sessionProblem = response.Status is OfficialBeatmapRequestStatus.SignedOut or
                 OfficialBeatmapRequestStatus.TokenExpired or
                 OfficialBeatmapRequestStatus.SessionUnavailable or
-                OfficialBeatmapRequestStatus.SessionChanged)
-                scheduledSearch = Scheduler.AddDelayed(startSearch, 5000);
+                OfficialBeatmapRequestStatus.SessionChanged;
+            double retryDelay = 5000;
+            if (response.Status == OfficialBeatmapRequestStatus.RateLimited && response.RetryAfter is DateTimeOffset retryAt)
+            {
+                retryDelay = Math.Max(1000, (retryAt - DateTimeOffset.UtcNow).TotalMilliseconds);
+                sessionProblem = retryDelay <= max_rate_limit_auto_retry_ms;
+            }
+
+            searchStatus.ShowError(message, null, retrySearch);
+            if (sessionProblem && sessionRetries++ < session_retry_limit)
+                scheduleAutomaticRetry(retryDelay);
             return;
         }
 
-        foreach (OfficialBeatmapSet set in response.BeatmapSets)
-        {
-            var card = new OnlineBeatmapCard(set, importBeatmap, installInLazer);
-            visibleCards[set.BeatmapSetId] = card;
-            results.Add(card);
-            if (set.Difficulties.Count > 0)
-            {
-                foreach (OfficialBeatmapDifficulty difficulty in set.Difficulties)
-                    results.Add(new FillFlowContainer
-                    {
-                        RelativeSizeAxes = Axes.X,
-                        AutoSizeAxes = Axes.Y,
-                        Direction = FillDirection.Vertical,
-                        Padding = new MarginPadding { Horizontal = 18, Vertical = 8 },
-                        Spacing = new(0, 6),
-                        Children = new Drawable[]
-                        {
-                            new OpenBeatmapButton(openBeatmap is null ? null : token => openBeatmap(difficulty.BeatmapId, token)),
-                            new TruncatingSpriteText
-                            {
-                                RelativeSizeAxes = Axes.X,
-                                Text = $"{difficulty.Name} ({difficulty.RulesetShortName})",
-                                Font = new FontUsage(size: 14, weight: "SemiBold"),
-                                Colour = AimModPalette.Text,
-                            },
-                            new TruncatingSpriteText
-                            {
-                                RelativeSizeAxes = Axes.X,
-                                Text = $"{difficulty.StarRating:0.00} stars   {difficulty.Bpm:0.#} BPM   {difficulty.TotalLengthSeconds / 60}:{difficulty.TotalLengthSeconds % 60:00}   CS {difficulty.CircleSize:0.#}   AR {difficulty.ApproachRate:0.#}   OD {difficulty.OverallDifficulty:0.#}   HP {difficulty.DrainRate:0.#}",
-                                Font = new FontUsage(size: 11),
-                                Colour = AimModPalette.Muted,
-                            },
-                        },
-                    });
-            }
-        }
+        sessionRetries = 0;
+        searchStatus.Dismiss();
+        resultBlocks.Apply(response.BeatmapSets);
+        refreshSelection();
 
         resultStatus.Text = response.BeatmapSets.Count switch
         {
             1 when selectedSetId is int id => $"Beatmap set {id}",
-            0 => "No matching osu!standard beatmap sets",
-            1 => "1 matching beatmap set",
-            _ => $"{response.BeatmapSets.Count:N0} sets shown from {response.ServerTotal:N0} server matches",
+            0 => "No matching sets",
+            1 => "1 set",
+            var count when response.ServerTotal > count => $"{count:N0} of {response.ServerTotal:N0} sets",
+            var count => $"{count:N0} sets",
         };
     }
 
@@ -549,8 +662,9 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
         return await currentImporter.InstallInLazerAsync(archive).ConfigureAwait(false);
     }
 
-    private static string searchFailureMessage(OfficialBeatmapRequestStatus status) => status switch
+    private static string searchFailureMessage(OfficialBeatmapRequestStatus status, DateTimeOffset? retryAfter = null) => status switch
     {
+        OfficialBeatmapRequestStatus.RateLimited => $"osu! is rate limiting searches. {OsuRateLimitText.RetryHint(retryAfter)}",
         OfficialBeatmapRequestStatus.SignedOut => "Sign in to osu!lazer to search the official beatmap catalog.",
         OfficialBeatmapRequestStatus.TokenExpired => "osu!lazer's session is refreshing. Try the search again in a moment.",
         OfficialBeatmapRequestStatus.Unauthorized => "osu! refused this inherited session. Reopen osu!lazer, then try again.",
@@ -571,18 +685,26 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
 
     private async Task markInstalledAsync(IReadOnlyList<OfficialBeatmapSet> sets, CancellationToken token)
     {
-        var difficulties = new HashSet<int>();
         try
         {
-            int offset = 0;
-            while (true)
+            // Scanning the whole local library per search is expensive; reuse a recent snapshot.
+            HashSet<int> difficulties;
+            if (installedCache is { } cached && DateTime.UtcNow - cached.LoadedAt < installed_cache_lifetime)
+                difficulties = cached.Difficulties;
+            else
             {
-                var page = await localLibrary!.SearchBeatmapSetsAsync(new LocalLibraryQuery(RulesetShortName: "", Offset: offset, Limit: 200), token).ConfigureAwait(false);
-                foreach (var map in page.Items)
-                    foreach (var difficulty in map.Difficulties)
-                        if (difficulty.OnlineId > 0) difficulties.Add(difficulty.OnlineId);
-                if (!page.HasMore || page.Items.Count == 0) break;
-                offset += page.Items.Count;
+                difficulties = new HashSet<int>();
+                int offset = 0;
+                while (true)
+                {
+                    var page = await localLibrary!.SearchBeatmapSetsAsync(new LocalLibraryQuery(RulesetShortName: "", Offset: offset, Limit: 200), token).ConfigureAwait(false);
+                    foreach (var map in page.Items)
+                        foreach (var difficulty in map.Difficulties)
+                            if (difficulty.OnlineId > 0) difficulties.Add(difficulty.OnlineId);
+                    if (!page.HasMore || page.Items.Count == 0) break;
+                    offset += page.Items.Count;
+                }
+                installedCache = (DateTime.UtcNow, difficulties);
             }
             var installed = sets.Where(set => set.Difficulties.Count > 0 && set.Difficulties.All(d => difficulties.Contains(d.BeatmapId)))
                 .Select(set => set.BeatmapSetId).ToArray();
@@ -590,29 +712,378 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
             {
                 if (token.IsCancellationRequested) return;
                 foreach (int id in installed)
-                    if (visibleCards.TryGetValue(id, out var card)) card.SetInstalled();
+                    if (resultBlocks.TryGet(id, out var block)) block.Card.SetInstalled();
             });
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
         catch (Exception) { /* Unknown availability must not disable downloads. */ }
     }
 
+    /// <summary>Details and the one primary action for the selected online set.</summary>
+    private sealed partial class OnlineSetInspector : Container
+    {
+        private readonly Func<int, CancellationToken, Task>? openBeatmap;
+        private readonly AimModScrollContainer scroll;
+        private readonly FillFlowContainer<Drawable> content;
+        private OnlineBeatmapCard? card;
+        private PrimaryAction? action;
+
+        public OnlineSetInspector(Func<int, CancellationToken, Task>? openBeatmap)
+        {
+            this.openBeatmap = openBeatmap;
+            RelativeSizeAxes = Axes.Both;
+            Child = scroll = new AimModScrollContainer
+            {
+                RelativeSizeAxes = Axes.Both,
+                Child = content = new FillFlowContainer<Drawable>
+                {
+                    RelativeSizeAxes = Axes.X,
+                    AutoSizeAxes = Axes.Y,
+                    Direction = FillDirection.Vertical,
+                    Spacing = new(AimModVisualStyle.SectionSpacing),
+                    Padding = new MarginPadding { Right = AimModVisualStyle.RelatedSpacing + 4, Bottom = AimModVisualStyle.SectionSpacing },
+                },
+            };
+        }
+
+        internal string? ActionLabelForTesting => action?.Label;
+
+        public void ClearSelection()
+        {
+            card = null;
+            action = null;
+            content.Clear();
+        }
+
+        public void Show(OfficialBeatmapSet set, OnlineBeatmapCard owner)
+        {
+            card = owner;
+            content.Clear();
+            double[] stars = set.Difficulties.Select(d => d.StarRating).ToArray();
+            double bpm = set.Difficulties.Count == 0 ? 0 : set.Difficulties.Max(d => d.Bpm);
+            int length = set.Difficulties.Count == 0 ? 0 : set.Difficulties.Max(d => d.TotalLengthSeconds);
+            long plays = set.Difficulties.Sum(d => (long)d.PlayCount);
+            long passes = set.Difficulties.Sum(d => (long)d.PassCount);
+
+            content.Add(new Container
+            {
+                RelativeSizeAxes = Axes.X,
+                Height = 136,
+                Masking = true,
+                CornerRadius = AimModVisualStyle.CardRadius,
+                BorderThickness = 1,
+                BorderColour = AimModPalette.Border,
+                Children = new Drawable[]
+                {
+                    new MapBrowserCover(null, set.CoverUrl ?? set.CardUrl, stars.Length == 0 ? 0 : stars.Max(), fullResolution: true,
+                        showPlaceholderIcon: false, cornerRadius: AimModVisualStyle.CardRadius) { RelativeSizeAxes = Axes.Both },
+                    new Box { RelativeSizeAxes = Axes.Both, Colour = ColourInfo.GradientVertical(AimModPalette.Canvas.Opacity(0.05f), AimModPalette.Canvas.Opacity(0.92f)) },
+                    new MapBrowserStatusBadge(set.Status) { Position = new(12, 12) },
+                    new FillFlowContainer
+                    {
+                        Anchor = Anchor.BottomLeft,
+                        Origin = Anchor.BottomLeft,
+                        RelativeSizeAxes = Axes.X,
+                        AutoSizeAxes = Axes.Y,
+                        Direction = FillDirection.Vertical,
+                        Spacing = new(3),
+                        Padding = new MarginPadding(14),
+                        Children = new Drawable[]
+                        {
+                            new TruncatingSpriteText { RelativeSizeAxes = Axes.X, Text = set.Title, Font = new FontUsage(size: 20, weight: "Bold"), Colour = AimModPalette.Text },
+                            new TruncatingSpriteText { RelativeSizeAxes = Axes.X, Text = $"{set.Artist}  ·  mapped by {set.Creator}", Font = AimModVisualStyle.BodyFont, Colour = AimModPalette.Text },
+                            new TruncatingSpriteText
+                            {
+                                RelativeSizeAxes = Axes.X,
+                                Text = $"{MapBrowserFormat.Bpm(bpm)}  ·  {MapBrowserFormat.DurationSeconds(length)}  ·  {MapBrowserFormat.DifficultyCount(set.Difficulties.Count)}",
+                                Font = AimModVisualStyle.CaptionStrongFont,
+                                Colour = AimModPalette.Muted,
+                            },
+                        },
+                    },
+                },
+            });
+
+            content.Add(new FillFlowContainer
+            {
+                RelativeSizeAxes = Axes.X,
+                AutoSizeAxes = Axes.Y,
+                Direction = FillDirection.Vertical,
+                Spacing = new(12),
+                Children = new Drawable[]
+                {
+                    action = new PrimaryAction(owner),
+                    new FillFlowContainer
+                    {
+                        RelativeSizeAxes = Axes.X,
+                        AutoSizeAxes = Axes.Y,
+                        Direction = FillDirection.Horizontal,
+                        Children = new Drawable[]
+                        {
+                            stat("Plays", MapBrowserFormat.Count(plays > 0 ? plays : set.PlayCount), 0),
+                            stat("Pass rate", plays > 0 ? $"{Math.Clamp(passes / (double)plays, 0, 1) * 100:0}%" : "–", 1),
+                            stat("Favourites", MapBrowserFormat.Count(set.FavouriteCount), 2),
+                        },
+                    },
+                    new TruncatingSpriteText
+                    {
+                        RelativeSizeAxes = Axes.X,
+                        Text = set.RankedAt is { } ranked
+                            ? $"{MapBrowserFormat.Status(set.Status)} {ranked.ToLocalTime().ToString("MMM yyyy", System.Globalization.CultureInfo.InvariantCulture)}  ·  pass rate = plays that finished"
+                            : "Pass rate = plays that finished the map",
+                        Font = AimModVisualStyle.CaptionFont,
+                        Colour = AimModPalette.Muted,
+                    },
+                },
+            });
+
+            var list = new FillFlowContainer
+            {
+                RelativeSizeAxes = Axes.X,
+                AutoSizeAxes = Axes.Y,
+                Direction = FillDirection.Vertical,
+                Spacing = new(6),
+            };
+            foreach (OfficialBeatmapDifficulty difficulty in set.Difficulties.OrderBy(d => d.StarRating))
+                list.Add(new InspectorDifficulty(difficulty, openBeatmap));
+            content.Add(new FillFlowContainer
+            {
+                RelativeSizeAxes = Axes.X,
+                AutoSizeAxes = Axes.Y,
+                Direction = FillDirection.Vertical,
+                Spacing = new(10),
+                Children = new Drawable[]
+                {
+                    new SpriteText { Text = "Difficulties", Font = new FontUsage(size: 15, weight: "Bold"), Colour = AimModPalette.Text },
+                    list,
+                },
+            });
+            scroll.ScrollToStart(false);
+        }
+
+        private static Drawable stat(string label, string value, int index) => new Container
+        {
+            RelativeSizeAxes = Axes.X,
+            Width = 1 / 3f,
+            Height = 50,
+            Padding = new MarginPadding { Left = index == 0 ? 0 : 4, Right = index == 2 ? 0 : 4 },
+            Child = new Container
+            {
+                RelativeSizeAxes = Axes.Both,
+                Masking = true,
+                CornerRadius = AimModVisualStyle.ControlRadius,
+                Children = new Drawable[]
+                {
+                    new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
+                    new SpriteText { Position = new(12, 8), Text = value, Font = new FontUsage(size: 16, weight: "Bold"), Colour = AimModPalette.Text },
+                    new SpriteText { Position = new(12, 29), Text = label, Font = AimModVisualStyle.CaptionFont, Colour = AimModPalette.Muted },
+                },
+            },
+        };
+
+        /// <summary>Mint while the set can be downloaded; mirrors the row action's progress afterwards.</summary>
+        private sealed partial class PrimaryAction : ClickableContainer
+        {
+            private readonly OnlineBeatmapCard owner;
+            private readonly Box background;
+            private readonly SpriteText caption;
+
+            public string Label => caption.Text.ToString();
+
+            public PrimaryAction(OnlineBeatmapCard owner)
+            {
+                this.owner = owner;
+                RelativeSizeAxes = Axes.X;
+                Height = AimModVisualStyle.ControlHeight;
+                Masking = true;
+                CornerRadius = AimModVisualStyle.ControlRadius;
+                Action = owner.TriggerAction;
+                Children = new Drawable[]
+                {
+                    background = new Box { RelativeSizeAxes = Axes.Both },
+                    caption = new SpriteText { Anchor = Anchor.Centre, Origin = Anchor.Centre, Font = new FontUsage(size: 14, weight: "SemiBold") },
+                };
+            }
+
+            protected override void Update()
+            {
+                base.Update();
+                bool actionable = owner.CanAct;
+                string label = owner.ActionLabel == "Download" ? "Download and add to osu!" : owner.ActionLabel;
+                if (caption.Text != label)
+                    caption.Text = label;
+                background.Colour = actionable ? (IsHovered ? Colour4.FromHex("74E9C8") : AimModPalette.Accent) : AimModPalette.AccentMuted;
+                caption.Colour = actionable ? AimModPalette.Canvas : AimModPalette.Accent;
+            }
+        }
+    }
+
+    private sealed partial class InspectorDifficulty : CompositeDrawable
+    {
+        public InspectorDifficulty(OfficialBeatmapDifficulty difficulty, Func<int, CancellationToken, Task>? openBeatmap)
+        {
+            RelativeSizeAxes = Axes.X;
+            Height = 52;
+            Masking = true;
+            CornerRadius = AimModVisualStyle.ControlRadius;
+            string? passRate = MapBrowserFormat.PassRate(difficulty.PlayCount, difficulty.PassCount);
+            InternalChildren = new Drawable[]
+            {
+                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
+                new FillFlowContainer
+                {
+                    Position = new(10, 8),
+                    AutoSizeAxes = Axes.Both,
+                    Direction = FillDirection.Horizontal,
+                    Spacing = new(8, 0),
+                    Children = new Drawable[]
+                    {
+                        new AimModDifficultyPill(difficulty.StarRating) { Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft },
+                        new TruncatingSpriteText { Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft, Text = difficulty.Name, MaxWidth = 150, Font = AimModVisualStyle.BodyStrongFont, Colour = AimModPalette.Text },
+                    },
+                },
+                new SpriteText
+                {
+                    Position = new(12, 32),
+                    Text = $"AR {difficulty.ApproachRate:0.#} · OD {difficulty.OverallDifficulty:0.#} · CS {difficulty.CircleSize:0.#}" + (passRate is null ? string.Empty : $" · {passRate}"),
+                    Font = AimModVisualStyle.CaptionFont,
+                    Colour = AimModPalette.Muted,
+                },
+                new OpenBeatmapButton(openBeatmap is null ? null : token => openBeatmap(difficulty.BeatmapId, token))
+                {
+                    Anchor = Anchor.CentreRight, Origin = Anchor.CentreRight, X = -10, Width = 112, Height = 30,
+                },
+            };
+        }
+    }
+
+    /// <summary>One search result: the set card, with its difficulties revealed on demand.</summary>
+    private partial class OnlineBeatmapSetBlock : FillFlowContainer<Drawable>
+    {
+        public OnlineBeatmapCard Card { get; }
+        private readonly FillFlowContainer<Drawable> difficultyList;
+
+        public OnlineBeatmapSetBlock(
+            OfficialBeatmapSet set,
+            Func<OfficialBeatmapSet, Task<OnlineBeatmapImportResult>> import,
+            Func<LazerBeatmapArchive, Task<LazerBeatmapInstallResult>> installInLazer,
+            Func<int, CancellationToken, Task>? openBeatmap,
+            bool expanded = false,
+            Action<OnlineBeatmapSetBlock>? clicked = null)
+        {
+            Set = set;
+            RelativeSizeAxes = Axes.X;
+            AutoSizeAxes = Axes.Y;
+            Direction = FillDirection.Vertical;
+            Spacing = new(0, 2);
+            Add(Card = new OnlineBeatmapCard(set, import, installInLazer) { ToggleDetails = () => { if (clicked is null) Toggle(); else clicked(this); } });
+            Add(difficultyList = new FillFlowContainer<Drawable>
+            {
+                RelativeSizeAxes = Axes.X,
+                AutoSizeAxes = Axes.Y,
+                Direction = FillDirection.Vertical,
+                Spacing = new(0, 2),
+                Alpha = 0,
+            });
+            foreach (OfficialBeatmapDifficulty difficulty in set.Difficulties.OrderBy(d => d.StarRating))
+                difficultyList.Add(new OnlineDifficultyRow(difficulty, openBeatmap));
+            if (expanded)
+                Toggle();
+        }
+
+        public OfficialBeatmapSet Set { get; }
+
+        public bool Expanded => difficultyList.Alpha > 0;
+
+        /// <summary>Inline difficulty lists are only used when no inspector is beside the results.</summary>
+        public void SetInline(bool inline)
+        {
+            Card.SetInlineDetails(inline);
+            if (!inline && Expanded)
+                Toggle();
+        }
+
+        public void Toggle()
+        {
+            bool open = difficultyList.Alpha == 0;
+            difficultyList.Alpha = open ? 1 : 0;
+            Card.SetExpanded(open);
+        }
+    }
+
+    private sealed partial class OnlineDifficultyRow : CompositeDrawable
+    {
+        public OnlineDifficultyRow(OfficialBeatmapDifficulty difficulty, Func<int, CancellationToken, Task>? openBeatmap)
+        {
+            RelativeSizeAxes = Axes.X;
+            Height = 42;
+            Masking = true;
+            CornerRadius = 4;
+            string? passRate = MapBrowserFormat.PassRate(difficulty.PlayCount, difficulty.PassCount);
+            InternalChildren = new Drawable[]
+            {
+                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel, Alpha = 0.7f },
+                new FillFlowContainer
+                {
+                    Anchor = Anchor.CentreLeft,
+                    Origin = Anchor.CentreLeft,
+                    X = 150,
+                    AutoSizeAxes = Axes.Both,
+                    Direction = FillDirection.Horizontal,
+                    Spacing = new(8, 0),
+                    Children = new Drawable[]
+                    {
+                        new AimModDifficultyPill(difficulty.StarRating) { Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft },
+                        new TruncatingSpriteText { Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft, Text = difficulty.Name, MaxWidth = 220, Font = AimModVisualStyle.BodyStrongFont, Colour = AimModPalette.Text },
+                        new SpriteText
+                        {
+                            Anchor = Anchor.CentreLeft,
+                            Origin = Anchor.CentreLeft,
+                            Text = $"AR {difficulty.ApproachRate:0.#}  ·  OD {difficulty.OverallDifficulty:0.#}  ·  CS {difficulty.CircleSize:0.#}" + (passRate is null ? string.Empty : $"  ·  {passRate}"),
+                            Font = AimModVisualStyle.CaptionFont,
+                            Colour = AimModPalette.Muted,
+                        },
+                    },
+                },
+                new OpenBeatmapButton(openBeatmap is null ? null : token => openBeatmap(difficulty.BeatmapId, token))
+                {
+                    Anchor = Anchor.CentreRight, Origin = Anchor.CentreRight, X = -12, Height = 30,
+                },
+            };
+        }
+    }
+
     private partial class OnlineBeatmapCard : AimModInteractiveSurface
     {
+        public const float CardHeight = 88;
+        private const float cover_width = 128;
+        private const float facts_width = 90;
+        private const float stats_width = 110;
+        private const float action_width = 148;
         private readonly OfficialBeatmapSet set;
         private readonly Func<OfficialBeatmapSet, Task<OnlineBeatmapImportResult>> import;
         private readonly Func<LazerBeatmapArchive, Task<LazerBeatmapInstallResult>> installInLazer;
+        private readonly Container textColumn;
         private readonly TruncatingSpriteText titleText;
         private readonly TruncatingSpriteText artistText;
-        private readonly TruncatingSpriteText detailText;
+        private readonly Container factsColumn;
+        private readonly Container statsColumn;
+        private readonly Container expandHint;
+        private readonly SpriteIcon chevron;
         private readonly SpriteText actionText;
+        private readonly SpriteIcon actionIcon;
+        private readonly Box selectionBar;
         private readonly Box actionBackground;
+        private AimModLayout.ChangeTracker<float> widthTracker;
         private bool importing;
         private bool imported;
         private bool installed;
         private bool installingInLazer;
         private bool sentToLazer;
         private LazerBeatmapArchive? lazerArchive;
+
+        /// <summary>Shows or hides the set's difficulty list when the card body is clicked.</summary>
+        public Action? ToggleDetails { get; set; }
 
         public OnlineBeatmapCard(
             OfficialBeatmapSet set,
@@ -623,114 +1094,180 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
             this.import = import;
             this.installInLazer = installInLazer;
             RelativeSizeAxes = Axes.X;
-            Height = 104;
-            CornerRadius = AimModVisualStyle.ControlRadius;
+            Height = CardHeight;
+            BorderThickness = 0;
             BackgroundColour = AimModPalette.Panel;
-            double maximumStars = set.Difficulties.Count == 0 ? 0 : set.Difficulties.Max(difficulty => difficulty.StarRating);
-            Colour4 difficultyColour = AimModVisualStyle.DifficultyColour(maximumStars);
+            Action = () => ToggleDetails?.Invoke();
+            double[] stars = set.Difficulties.Select(difficulty => difficulty.StarRating).ToArray();
+            double maximumStars = stars.Length == 0 ? 0 : stars.Max();
+            double bpm = set.Difficulties.Count == 0 ? 0 : set.Difficulties.Max(difficulty => difficulty.Bpm);
+            int length = set.Difficulties.Count == 0 ? 0 : set.Difficulties.Max(difficulty => difficulty.TotalLengthSeconds);
+            long plays = set.Difficulties.Sum(difficulty => (long)difficulty.PlayCount);
+            long passes = set.Difficulties.Sum(difficulty => (long)difficulty.PassCount);
 
             Children = new Drawable[]
             {
-                new Box
+                new MapBrowserCover(null, set.CardUrl ?? set.CoverUrl, maximumStars)
                 {
-                    RelativeSizeAxes = Axes.Both,
-                    Colour = ColourInfo.GradientHorizontal(difficultyColour, AimModPalette.Panel),
-                    Alpha = 0.18f,
+                    Position = new(8, 8),
+                    Size = new(cover_width, CardHeight - 16),
                 },
-                new AimModOnlineArtworkHost(set.CoverUrl),
-                new Box
+                textColumn = new Container
                 {
-                    RelativeSizeAxes = Axes.Both,
-                    Colour = ColourInfo.GradientHorizontal(AimModPalette.Canvas, AimModPalette.Panel),
-                    Alpha = 0.86f,
-                },
-                new Box { RelativeSizeAxes = Axes.Y, Width = 4, Colour = difficultyColour },
-                new FillFlowContainer
-                {
-                    AutoSizeAxes = Axes.Both,
-                    Position = new(18, 9),
-                    Direction = FillDirection.Vertical,
-                    Spacing = new(3),
+                    RelativeSizeAxes = Axes.Y,
+                    X = 8 + cover_width + 14,
                     Children = new Drawable[]
                     {
-                        titleText = new TruncatingSpriteText
+                        titleText = new TruncatingSpriteText { Y = 11, Text = set.Title, Font = new FontUsage(size: 15, weight: "Bold"), Colour = AimModPalette.Text },
+                        artistText = new TruncatingSpriteText { Y = 32, Text = $"{set.Artist}  ·  {set.Creator}", Font = AimModVisualStyle.BodyFont, Colour = AimModPalette.Muted },
+                        new FillFlowContainer
                         {
-                            Text = set.Title,
-                            Font = new FontUsage(size: 15, weight: "Bold"),
-                            Colour = AimModPalette.Text,
-                            MaxWidth = 120,
-                        },
-                        artistText = new TruncatingSpriteText
-                        {
-                            Text = set.Artist,
-                            Font = new FontUsage(size: 11, weight: "SemiBold"),
-                            Colour = AimModPalette.Muted,
-                            MaxWidth = 120,
-                        },
-                        detailText = new TruncatingSpriteText
-                        {
-                            Text = $"mapped by {set.Creator}  /  {set.Status}  /  {set.PlayCount:N0} plays  /  {set.FavouriteCount:N0} favourites",
-                            Font = new FontUsage(size: 9),
-                            Colour = AimModPalette.Muted,
-                            MaxWidth = 120,
+                            Y = 55,
+                            AutoSizeAxes = Axes.Both,
+                            Direction = FillDirection.Horizontal,
+                            Spacing = new(10, 0),
+                            Children = new Drawable[]
+                            {
+                                new MapBrowserStatusBadge(set.Status) { Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft },
+                                new MapBrowserDifficultySpread(stars) { Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft },
+                            },
                         },
                     },
                 },
-                new FillFlowContainer
+                factsColumn = column(facts_width, action_width + stats_width + 52,
+                    MapBrowserFormat.Bpm(bpm), MapBrowserFormat.DurationSeconds(length)),
+                statsColumn = column(stats_width, action_width + 38,
+                    $"{MapBrowserFormat.Count(plays > 0 ? plays : set.PlayCount)} plays", MapBrowserFormat.PassRate(plays, passes) ?? $"{MapBrowserFormat.Count(set.FavouriteCount)} favourites"),
+                expandHint = new Container
                 {
-                    Anchor = Anchor.BottomLeft,
-                    Origin = Anchor.BottomLeft,
+                    Anchor = Anchor.CentreRight,
+                    Origin = Anchor.CentreRight,
                     AutoSizeAxes = Axes.Both,
-                    Margin = new MarginPadding { Left = 18, Bottom = 9 },
-                    Direction = FillDirection.Horizontal,
-                    Spacing = new(AimModVisualStyle.RelatedSpacing),
-                    Children = visibleDifficulties(set).ToArray(),
+                    X = -(action_width + 28),
+                    Child = new FillFlowContainer
+                    {
+                        AutoSizeAxes = Axes.Both,
+                        Direction = FillDirection.Horizontal,
+                        Spacing = new(5, 0),
+                        Children = new Drawable[]
+                        {
+                            new SpriteText { Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft, Text = set.Difficulties.Count == 1 ? "1 diff" : $"{set.Difficulties.Count} diffs", Font = AimModVisualStyle.CaptionStrongFont, Colour = AimModPalette.Muted },
+                            chevron = new SpriteIcon { Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft, Size = new(10), Icon = FontAwesome.Solid.ChevronDown, Colour = AimModPalette.Muted },
+                        },
+                    },
                 },
-                new ClickableContainer
+                new ImportAction(set.DownloadDisabled
+                    ? "The mapper or osu! has disabled downloads for this beatmap set."
+                    : "Download this set, then add it to your osu! client.")
                 {
                     Anchor = Anchor.CentreRight,
                     Origin = Anchor.CentreRight,
                     Margin = new MarginPadding { Right = 12 },
-                    Size = new(148, AimModVisualStyle.CompactControlHeight),
+                    Size = new(action_width, AimModVisualStyle.CompactControlHeight),
                     Masking = true,
                     CornerRadius = AimModVisualStyle.ControlRadius,
+                    BorderThickness = 1,
+                    BorderColour = AimModPalette.Border,
                     Action = beginImport,
                     Children = new Drawable[]
                     {
-                        actionBackground = new Box
-                        {
-                            RelativeSizeAxes = Axes.Both,
-                            Colour = set.DownloadDisabled ? AimModPalette.PanelHover : AimModPalette.Pink,
-                        },
-                        actionText = new SpriteText
+                        actionBackground = new Box { RelativeSizeAxes = Axes.Both },
+                        new FillFlowContainer
                         {
                             Anchor = Anchor.Centre,
                             Origin = Anchor.Centre,
-                            Text = set.DownloadDisabled ? "Unavailable" : "Save in AimMod",
-                            Font = new FontUsage(size: 10, weight: "Bold"),
-                            Colour = set.DownloadDisabled ? AimModPalette.Muted : AimModPalette.Canvas,
+                            AutoSizeAxes = Axes.Both,
+                            Direction = FillDirection.Horizontal,
+                            Spacing = new(7, 0),
+                            Children = new Drawable[]
+                            {
+                                actionIcon = new SpriteIcon { Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft, Size = new(11) },
+                                actionText = new SpriteText
+                                {
+                                    Anchor = Anchor.CentreLeft,
+                                    Origin = Anchor.CentreLeft,
+                                    Text = set.DownloadDisabled ? "Download disabled" : "Download",
+                                    Font = new FontUsage(size: 13, weight: "SemiBold"),
+                                },
+                            },
                         },
                     },
                 },
+                selectionBar = new Box { RelativeSizeAxes = Axes.Y, Width = 3, Colour = AimModPalette.Accent, Alpha = 0 },
             };
+            style(set.DownloadDisabled ? ActionTone.Disabled : ActionTone.Idle);
+        }
+
+        private static Container column(float width, float right, string primary, string secondary) => new()
+        {
+            Anchor = Anchor.TopRight,
+            Origin = Anchor.TopRight,
+            Width = width,
+            RelativeSizeAxes = Axes.Y,
+            Margin = new MarginPadding { Right = right },
+            Children = new Drawable[]
+            {
+                new SpriteText { Anchor = Anchor.TopRight, Origin = Anchor.TopRight, Y = 24, Text = primary, Font = AimModVisualStyle.BodyStrongFont, Colour = AimModPalette.Text },
+                new SpriteText { Anchor = Anchor.TopRight, Origin = Anchor.TopRight, Y = 46, Text = secondary, Font = AimModVisualStyle.CaptionFont, Colour = AimModPalette.Muted },
+            },
+        };
+
+        /// <summary>Beside an inspector the difficulties live there, so the inline expander is hidden.</summary>
+        public void SetInlineDetails(bool inline)
+        {
+            if (inlineDetails == inline)
+                return;
+            inlineDetails = inline;
+            expandHint.Alpha = inline ? 1 : 0;
+            widthTracker = default;
+        }
+
+        private bool inlineDetails = true;
+
+        public void SetExpanded(bool expanded)
+        {
+            chevron.Icon = expanded ? FontAwesome.Solid.ChevronUp : FontAwesome.Solid.ChevronDown;
+            BackgroundColour = expanded ? AimModPalette.PanelRaised : AimModPalette.Panel;
         }
 
         protected override void Update()
         {
             base.Update();
-            float available = Math.Max(80, DrawWidth - 190);
+            if (!widthTracker.Update(DrawWidth))
+                return;
+            // Narrow cards drop the play statistics first, then BPM and length.
+            bool showStats = DrawWidth >= (inlineDetails ? 820 : 760);
+            bool showFacts = DrawWidth >= (inlineDetails ? 640 : 580);
+            statsColumn.Alpha = showStats ? 1 : 0;
+            factsColumn.Alpha = showFacts ? 1 : 0;
+            // Columns are laid out from the right edge so hidden ones leave no gap.
+            float right = 12 + action_width + 16;
+            if (inlineDetails)
+            {
+                expandHint.X = -right;
+                right += 64;
+            }
+            if (showStats)
+            {
+                statsColumn.Margin = new MarginPadding { Right = right };
+                right += stats_width + 14;
+            }
+            if (showFacts)
+            {
+                factsColumn.Margin = new MarginPadding { Right = right };
+                right += facts_width + 14;
+            }
+            float available = Math.Max(60, DrawWidth - textColumn.X - right);
+            textColumn.Width = available;
             titleText.MaxWidth = available;
             artistText.MaxWidth = available;
-            detailText.MaxWidth = available;
         }
 
-        private static IEnumerable<Drawable> visibleDifficulties(OfficialBeatmapSet set)
+        private partial class ImportAction : ClickableContainer, IHasTooltip
         {
-            foreach (OfficialBeatmapDifficulty difficulty in set.Difficulties.Take(3))
-                yield return new DifficultyChip(difficulty);
+            public ImportAction(string tooltip) => TooltipText = tooltip;
 
-            if (set.Difficulties.Count > 3)
-                yield return new AimModPill($"+{set.Difficulties.Count - 3}", AimModPillTone.Neutral);
+            public LocalisableString TooltipText { get; }
         }
 
         private void beginImport()
@@ -747,7 +1284,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
 
             importing = true;
             actionText.Text = "Downloading...";
-            actionBackground.Colour = AimModPalette.Cyan;
+            style(ActionTone.Busy);
             _ = importAsync();
         }
 
@@ -755,7 +1292,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
         {
             installed = true;
             actionText.Text = "Installed";
-            actionBackground.Colour = AimModPalette.PanelHover;
+            style(ActionTone.Done);
         }
 
         private async Task importAsync()
@@ -790,26 +1327,20 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                 OnlineBeatmapImportStatus.Unauthorized => "Session refused",
                 OnlineBeatmapImportStatus.SessionChanged => "Account changed",
                 OnlineBeatmapImportStatus.NetworkError => "Network error",
+                OnlineBeatmapImportStatus.RateLimited => "Rate limited, wait",
                 OnlineBeatmapImportStatus.DownloadDisabled => "Unavailable",
                 OnlineBeatmapImportStatus.InvalidDownload => "Invalid download",
                 OnlineBeatmapImportStatus.ServerError => "osu! server error",
                 _ => "Import failed",
             };
-            actionBackground.Colour = result.Status == OnlineBeatmapImportStatus.Success && result.LazerArchive is not null
-                ? AimModPalette.Pink
-                : result.Status == OnlineBeatmapImportStatus.Success
-                    ? AimModPalette.Success
-                : AimModPalette.PinkDark;
-            actionText.Colour = result.Status == OnlineBeatmapImportStatus.Success
-                ? AimModPalette.Canvas
-                : AimModPalette.Text;
+            style(result.Status == OnlineBeatmapImportStatus.Success ? ActionTone.Done : ActionTone.Problem);
         }
 
         private void beginLazerInstall(LazerBeatmapArchive archive)
         {
             installingInLazer = true;
             actionText.Text = "Opening osu!...";
-            actionBackground.Colour = AimModPalette.Cyan;
+            style(ActionTone.Busy);
             _ = installInLazerAsync(archive);
         }
 
@@ -844,30 +1375,59 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                 LazerBeatmapInstallStatus.LazerRejected => "osu! refused it",
                 _ => "Could not open osu!",
             };
-            actionBackground.Colour = sentToLazer ? AimModPalette.Success : AimModPalette.PinkDark;
-            actionText.Colour = sentToLazer ? AimModPalette.Canvas : AimModPalette.Text;
+            style(sentToLazer ? ActionTone.Done : ActionTone.Problem);
         }
 
-        private partial class DifficultyChip : CircularContainer
+        private enum ActionTone
         {
-            public DifficultyChip(OfficialBeatmapDifficulty difficulty)
+            Idle,
+            Busy,
+            Done,
+            Problem,
+            Disabled,
+        }
+
+        /// <summary>Row actions stay secondary; the selected set's inspector owns the one primary action.</summary>
+        private void style(ActionTone tone)
+        {
+            (Colour4 background, Colour4 text) = tone switch
             {
-                AutoSizeAxes = Axes.Both;
-                Masking = true;
-                Colour4 colour = AimModVisualStyle.DifficultyColour(difficulty.StarRating);
-                Children = new Drawable[]
-                {
-                    new Box { RelativeSizeAxes = Axes.Both, Colour = colour, Alpha = 0.2f },
-                    new TruncatingSpriteText
-                    {
-                        Text = $"{difficulty.Name}  {difficulty.StarRating:0.00}*",
-                        Font = new FontUsage(size: 10, weight: "SemiBold"),
-                        Colour = colour,
-                        Padding = new MarginPadding { Horizontal = 10, Vertical = 4 },
-                        MaxWidth = 150,
-                    },
-                };
-            }
+                ActionTone.Busy or ActionTone.Done => (AimModPalette.AccentMuted, AimModPalette.Accent),
+                ActionTone.Problem => (AimModPalette.PanelRaised, AimModPalette.Yellow),
+                ActionTone.Disabled => (AimModPalette.Panel, AimModPalette.Muted),
+                _ => (AimModPalette.PanelRaised, AimModPalette.Text),
+            };
+            actionBackground.Colour = background;
+            actionText.Colour = text;
+            actionIcon.Colour = text;
+            actionIcon.Icon = tone switch
+            {
+                ActionTone.Done => FontAwesome.Solid.Check,
+                ActionTone.Problem => FontAwesome.Solid.Redo,
+                ActionTone.Disabled => FontAwesome.Solid.Ban,
+                _ => FontAwesome.Solid.Download,
+            };
+        }
+
+        /// <summary>The current action caption, mirrored by the inspector's primary button.</summary>
+        public string ActionLabel => actionText.Text.ToString();
+
+        /// <summary>True when pressing the action would start a download or an osu! import.</summary>
+        public bool CanAct => !(installed || importing || installingInLazer || sentToLazer || set.DownloadDisabled);
+
+        public void TriggerAction() => beginImport();
+
+        public void SetSelected(bool value)
+        {
+            selectionBar.Alpha = value ? 1 : 0;
+            BackgroundColour = value ? AimModPalette.PanelRaised : AimModPalette.Panel;
         }
     }
+}
+
+public enum NativeBeatmapFilterLayout
+{
+    Row,
+    TwoColumns,
+    Stacked,
 }

@@ -10,6 +10,106 @@ namespace AimMod.Desktop.Tests;
 public sealed class NativePpTargetsWorkspaceTests
 {
     [Test]
+    public void CatalogPreviewsPreserveActiveProgressAndCalculation()
+    {
+        using var workspace = new NativePpTargetsWorkspace(new InMemoryLocalLibrarySource([], []), () => null, () => null);
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+        var type = typeof(NativePpTargetsWorkspace);
+        var scan = new CancellationTokenSource(); // Owned and disposed by the workspace.
+        type.GetField("exactCalculation", flags)!.SetValue(workspace, scan);
+        type.GetField("exactScanRunning", flags)!.SetValue(workspace, true);
+        var status = (osu.Framework.Graphics.Sprites.SpriteText)type.GetField("status", flags)!.GetValue(workspace)!;
+        status.Text = "Current scan progress";
+        var catalog = snapshot().Catalog;
+        type.GetMethod("applyCatalog", flags)!.Invoke(workspace,
+            [new OfficialBeatmapSearchResult(OfficialBeatmapRequestStatus.Success, catalog, catalog.Count, true), true]);
+        Assert.That(scan.IsCancellationRequested, Is.False);
+        Assert.That(type.GetField("exactScanRunning", flags)!.GetValue(workspace), Is.True);
+        Assert.That(status.Text.ToString(), Is.EqualTo("Current scan progress"));
+    }
+
+    [TestCase("catalogScanRunning")]
+    [TestCase("exactScanRunning")]
+    [TestCase("patternBuildRunning")]
+    [TestCase("skillAnalysisRunning")]
+    public void AutomaticHistoryUpdatesWaitForTheActiveScan(string stage)
+    {
+        using var workspace = new NativePpTargetsWorkspace(new InMemoryLocalLibrarySource([], []), () => null, () => null);
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+        var type = typeof(NativePpTargetsWorkspace);
+        var scan = new CancellationTokenSource(); // Owned and disposed by the workspace.
+        type.GetField("exactCalculation", flags)!.SetValue(workspace, scan);
+        type.GetField(stage, flags)!.SetValue(workspace, true);
+        for (int i = 0; i < 10; i++) type.GetMethod("requestAutomaticRefresh", flags)!.Invoke(workspace, null);
+        Assert.That(scan.IsCancellationRequested, Is.False);
+        Assert.That(type.GetField("automaticRefreshPending", flags)!.GetValue(workspace), Is.True);
+    }
+
+    [Test]
+    public void ReplayBatchesQueueOnlyOneRefreshAfterLibraryAnalysisCompletes()
+    {
+        using var workspace = new NativePpTargetsWorkspace(new InMemoryLocalLibrarySource([], []), () => null, () => null);
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+        var type = typeof(NativePpTargetsWorkspace);
+        for (int completed = 0; completed < 100; completed += 10)
+        {
+            workspace.SetSkillAnalysisProgress(completed, 100);
+            workspace.RefreshSkillEvidence();
+            Assert.That(type.GetField("scheduledPatternRefresh", flags)!.GetValue(workspace), Is.Null);
+        }
+        Assert.That(type.GetField("automaticRefreshPending", flags)!.GetValue(workspace), Is.True);
+        workspace.SetSkillAnalysisProgress(100, 100);
+        var scheduled = type.GetField("scheduledPatternRefresh", flags)!.GetValue(workspace);
+        Assert.That(scheduled, Is.Not.Null);
+        workspace.SetSkillAnalysisProgress(0, 0);
+        Assert.That(type.GetField("scheduledPatternRefresh", flags)!.GetValue(workspace), Is.SameAs(scheduled));
+    }
+
+    [Test]
+    public void CompletedScanIdentityIgnoresOrderingAndNoiseButTracksRealChanges()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var request = new PpTargetExactRequest(1, null, [], .97, .8, new("profile-a", now, 30, []));
+        var other = request with { BeatmapId = 2 };
+        string key = NativePpTargetsWorkspace.ScanIdentity([request, other], now);
+        Assert.That(NativePpTargetsWorkspace.ScanIdentity([other, request], now), Is.EqualTo(key));
+        Assert.That(NativePpTargetsWorkspace.ScanIdentity([request with { ExpectedAccuracy = .97000000000001 }, other], now), Is.EqualTo(key));
+        foreach (var changed in new[] { request with { ExpectedAccuracy = .96 }, request with { Mods = ["HD"] },
+                     request with { PatternProfile = request.PatternProfile! with { Identity = "profile-b" } },
+                     request with { BeatmapHash = new string('a', 32) }, request with { Attainability = .7 } })
+            Assert.That(NativePpTargetsWorkspace.ScanIdentity([changed, other], now), Is.Not.EqualTo(key));
+        Assert.That(NativePpTargetsWorkspace.ScanIdentity([request, other], now.AddHours(6)), Is.Not.EqualTo(key));
+        Assert.That(NativePpTargetsWorkspace.ScanIdentity([request], now), Is.Not.EqualTo(key));
+    }
+
+    [TestCase("catalogScanRunning")]
+    [TestCase("patternBuildRunning")]
+    public void ExactScanWaitsForCatalogAndInitialProfile(string stage)
+    {
+        int starts = 0;
+        using var workspace = new NativePpTargetsWorkspace(new InMemoryLocalLibrarySource([], []), () => null, () => null,
+            exactCalculator: () => { starts++; return null; });
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+        var type = typeof(NativePpTargetsWorkspace);
+        type.GetField(stage, flags)!.SetValue(workspace, true);
+        type.GetMethod("startExactCalculations", flags)!.Invoke(workspace, null);
+        Assert.That(starts, Is.Zero);
+    }
+
+    [Test]
+    public void CatalogRefreshCacheExpiresAndRespectsChangedFilters()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var query = new OfficialBeatmapSearchQuery("aim", 4, 6, OfficialBeatmapCategory.Ranked);
+        string identity = System.Text.Json.JsonSerializer.Serialize(query);
+        Assert.That(NativePpTargetsWorkspace.CanReuseCatalog(query, identity, now.AddHours(-1), now), Is.True);
+        Assert.That(NativePpTargetsWorkspace.CanReuseCatalog(query, identity, now.AddHours(-6), now), Is.False);
+        Assert.That(NativePpTargetsWorkspace.CanReuseCatalog(query, identity, now.AddSeconds(1), now), Is.False);
+        Assert.That(NativePpTargetsWorkspace.CanReuseCatalog(query with { MinimumStars = 5 }, identity, now, now), Is.False);
+        Assert.That(NativePpTargetsWorkspace.CanReuseCatalog(query, null, now, now), Is.False);
+    }
+
+    [Test]
     public void InstalledStateRequiresTheExactLocalDifficulty()
     {
         var difficulty = new AimMod.Desktop.LocalLibrary.LocalBeatmapDifficulty(Guid.NewGuid(), 123, "Hard", "osu", 4, 180, 120000, 4, 9, 8, 5, 0);
@@ -79,7 +179,13 @@ public sealed class NativePpTargetsWorkspaceTests
         Assert.That(pass.Passed, Is.True);
         Assert.That(pass.Bpm, Is.EqualTo(map.Bpm));
         Assert.That(pass.LengthSeconds, Is.EqualTo(125));
-        Assert.That(PpTargetSkillHistory.PassHistory([local], [], saved.LocalSets).Single().Passed, Is.Null);
+        Assert.That(PpTargetSkillHistory.PassHistory([local], [], saved.LocalSets).Single().Passed, Is.True);
+        Assert.That(PpTargetSkillHistory.PassHistory([local with { Passed = false }], [], saved.LocalSets).Single().Passed, Is.False);
+        Assert.That(PpTargetSkillHistory.PassHistory([local with { Origin = LocalLibraryOrigin.Stable, LegacyScore = true }], [], saved.LocalSets).Single().Passed, Is.Null);
+        var bestOnly = online with { Provenance = ScoreHistoryProvenance.OnlineBest };
+        var displayAdapters = PpTargetSkillHistory.Merge([], [bestOnly], saved.LocalSets);
+        var opportunity = PpTargetOpportunityModel.Build(PpTargetSkillHistory.PassHistory(displayAdapters, [bestOnly], saved.LocalSets));
+        Assert.That(opportunity.RecentAttempts, Is.Empty, "Online best-score display adapters must not become local attempt evidence.");
     }
 
     [Test]
@@ -89,13 +195,18 @@ public sealed class NativePpTargetsWorkspaceTests
         using var workspace = new NativePpTargetsWorkspace(new InMemoryLocalLibrarySource([], []), () => null, () => null);
         const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
         typeof(NativePpTargetsWorkspace).GetField("setsById", flags)!.SetValue(workspace, saved.Catalog.ToDictionary(s => s.BeatmapSetId));
-        var candidates = PpTargetRanker.Rank(saved.Profile, saved.Catalog).Candidates.ToArray();
+        var candidates = PpTargetRanker.Rank(saved.Profile, saved.Catalog).Candidates
+            .Select(candidate => new NativePpTargetsWorkspace.RankedTarget(candidate, NativePpTargetsWorkspace.RowKey(candidate, NativePpTargetsWorkspace.TargetSort.BestFit)))
+            .ToArray();
         var render = typeof(NativePpTargetsWorkspace).GetMethod("renderCandidates", flags)!;
         render.Invoke(workspace, [candidates]);
+        var rows = (System.Collections.IDictionary)typeof(NativePpTargetsWorkspace).GetField("targetRows", flags)!.GetValue(workspace)!;
+        object firstRow = rows[456]!;
         render.Invoke(workspace, [candidates]);
+        Assert.That(rows[456], Is.SameAs(firstRow), "an unchanged target keeps its row");
         Assert.That(typeof(NativePpTargetsWorkspace).GetField("selectedBeatmapId", flags)!.GetValue(workspace), Is.EqualTo(456));
         Assert.That(typeof(NativePpTargetsWorkspace).GetField("selectedDetails", flags)!.GetValue(workspace), Is.Not.Null);
-        render.Invoke(workspace, [Array.Empty<PpTargetCandidate>()]);
+        render.Invoke(workspace, [Array.Empty<NativePpTargetsWorkspace.RankedTarget>()]);
         Assert.That(typeof(NativePpTargetsWorkspace).GetField("selectedBeatmapId", flags)!.GetValue(workspace), Is.Null);
     }
 
@@ -107,6 +218,22 @@ public sealed class NativePpTargetsWorkspaceTests
         string copy = string.Join("\n", NativePpTargetsWorkspace.TargetDetails(target, saved.Catalog.Single(), null));
         Assert.That(copy, Does.Contain("AR 9").And.Contain("PP calculation pending").And.Contain("Skill evidence loading")
             .And.Contain("Pattern fit unmeasured").And.Contain("Pass chance unknown"));
+    }
+
+    [Test]
+    public void SessionDetailsUseTheSameModAliasesScoringModeAndExpiryAsThePrediction()
+    {
+        var saved = snapshot();
+        var target = PpTargetRanker.Rank(saved.Profile, saved.Catalog).Candidates.Single() with
+        { SuggestedMods = ["NC"], Estimate = new(100, 200, new(80, 120), 5, PpTargetConfidence.Low, "synthetic") };
+        var form = new PpSessionForm(DateTimeOffset.UtcNow.AddHours(1),
+            [new("DT", "Jumps", .002, 0, 6, 3, "above your usual level", UsesSimilarMaps: true)]);
+        var profile = new PpPatternProfile("synthetic", DateTimeOffset.UtcNow, 30, [], SessionForm: form);
+        string copy = string.Join("\n", NativePpTargetsWorkspace.TargetDetails(target, saved.Catalog.Single(), profile));
+        Assert.That(copy, Does.Contain("Current session").And.Contain("similar patterns in your earlier plays"));
+        Assert.That(copy, Does.Not.Contain("those maps and mod settings"));
+        Assert.That(string.Join("\n", NativePpTargetsWorkspace.TargetDetails(target with { Estimate = target.Estimate! with { LegacyScore = true } }, saved.Catalog.Single(), profile)), Does.Not.Contain("Current session"));
+        Assert.That(string.Join("\n", NativePpTargetsWorkspace.TargetDetails(target, saved.Catalog.Single(), profile with { SessionForm = form with { ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(-1) } })), Does.Contain("no active session"));
     }
 
     [Test]
@@ -124,20 +251,50 @@ public sealed class NativePpTargetsWorkspaceTests
     }
 
     [Test]
-    public async Task BroadCalculationVisitsAllBatchesNotOnlyFirstFifty()
+    public async Task RepeatedCompletedScanDoesNotCallCalculatorAgainButNewProfileDoes()
+    {
+        using var workspace = new NativePpTargetsWorkspace(new InMemoryLocalLibrarySource([], []), () => null, () => null);
+        var saved = snapshot();
+        var calculator = new RecordingCalculator { ReturnEstimates = true };
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+        var type = typeof(NativePpTargetsWorkspace);
+        type.GetField("profile", flags)!.SetValue(workspace, saved.Profile);
+        type.GetField("catalog", flags)!.SetValue(workspace, saved.Catalog);
+        var method = type.GetMethod("planExactScanAsync", flags)!;
+        var scheduler = (osu.Framework.Threading.Scheduler)typeof(osu.Framework.Graphics.Drawable)
+            .GetProperty("Scheduler", flags | System.Reflection.BindingFlags.Public)!.GetValue(workspace)!;
+        async Task scan(PpTargetPreferenceProfile profile)
+        {
+            await (Task)method.Invoke(workspace, [calculator, profile, saved.Catalog, saved.LocalSets, new PpTargetFilters(), CancellationToken.None])!;
+            scheduler.Update();
+        }
+        await scan(saved.Profile);
+        Assert.That(calculator.BatchSizes, Is.Not.Empty);
+        Assert.That(type.GetField("lastCompletedScanIdentity", flags)!.GetValue(workspace), Is.Not.Null);
+        int initialCalls = calculator.BatchSizes.Count;
+        await scan(saved.Profile);
+        await scan(saved.Profile);
+        Assert.That(calculator.BatchSizes.Count, Is.EqualTo(initialCalls));
+        await scan(saved.Profile with { PatternProfile = new("new-skill-evidence", DateTimeOffset.UtcNow, 30, []) });
+        Assert.That(calculator.BatchSizes.Count, Is.GreaterThan(initialCalls));
+    }
+
+    [Test]
+    public async Task BroadCalculationVisitsAllBatchesWithFewerWorkerStarts()
     {
         var source = new InMemoryLocalLibrarySource([], []);
         using var workspace = new NativePpTargetsWorkspace(source, () => null, () => null);
         var calculator = new RecordingCalculator();
-        var requests = Enumerable.Range(1, 123).Select(id => new PpTargetExactRequest(id, null, [], .95, .8)).ToArray();
+        var requests = Enumerable.Range(1, 423).Select(id => new PpTargetExactRequest(id, null, [], .95, .8)).ToArray();
         var method = typeof(NativePpTargetsWorkspace).GetMethod("calculateExactAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
-        await (Task)method.Invoke(workspace, [calculator, requests, CancellationToken.None])!;
-        Assert.That(calculator.BatchSizes, Is.EqualTo(new[] { 50, 50, 23 }));
-        Assert.That(calculator.Ids.Distinct().Count(), Is.EqualTo(123));
+        await (Task)method.Invoke(workspace, [calculator, requests, "synthetic-scan", CancellationToken.None])!;
+        Assert.That(calculator.BatchSizes, Is.EqualTo(new[] { 200, 200, 23 }));
+        Assert.That(calculator.Ids.Distinct().Count(), Is.EqualTo(423));
     }
 
     private sealed class RecordingCalculator : IPpTargetExactCalculationService
     {
+        public bool ReturnEstimates { get; init; }
         public Action? OnBatch { get; init; }
         public List<int> BatchSizes { get; } = [];
         public List<int> Ids { get; } = [];
@@ -147,7 +304,11 @@ public sealed class NativePpTargetsWorkspaceTests
             BatchSizes.Add(requests.Count);
             Ids.AddRange(requests.Select(request => request.BeatmapId));
             OnBatch?.Invoke();
-            return Task.FromResult<IReadOnlyDictionary<int, PpTargetEstimate>>(new Dictionary<int, PpTargetEstimate>());
+            return Task.FromResult<IReadOnlyDictionary<int, PpTargetEstimate>>(ReturnEstimates
+                ? requests.ToDictionary(r => r.BeatmapId, r => new PpTargetEstimate(100, 200, new(80, 120), 3,
+                    PpTargetConfidence.Low, "synthetic", BeatmapId: r.BeatmapId, ExpectedAccuracy: r.ExpectedAccuracy,
+                    Attainability: r.Attainability, PatternProfileIdentity: r.PatternProfile?.Identity))
+                : new Dictionary<int, PpTargetEstimate>());
         }
     }
 
@@ -157,10 +318,10 @@ public sealed class NativePpTargetsWorkspaceTests
         using var cancellation = new CancellationTokenSource();
         using var workspace = new NativePpTargetsWorkspace(new InMemoryLocalLibrarySource([], []), () => null, () => null);
         var calculator = new RecordingCalculator { OnBatch = cancellation.Cancel };
-        var requests = Enumerable.Range(1, 123).Select(id => new PpTargetExactRequest(id, null, [], .95, .8)).ToArray();
+        var requests = Enumerable.Range(1, 423).Select(id => new PpTargetExactRequest(id, null, [], .95, .8)).ToArray();
         var method = typeof(NativePpTargetsWorkspace).GetMethod("calculateExactAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
-        await (Task)method.Invoke(workspace, [calculator, requests, cancellation.Token])!;
-        Assert.That(calculator.BatchSizes, Is.EqualTo(new[] { 50 }));
+        await (Task)method.Invoke(workspace, [calculator, requests, "synthetic-scan", cancellation.Token])!;
+        Assert.That(calculator.BatchSizes, Is.EqualTo(new[] { 200 }));
     }
 
     [Test]
@@ -191,6 +352,11 @@ public sealed class NativePpTargetsWorkspaceTests
 
     [TestCase(4)]
     [TestCase(7)]
+    [TestCase(8)]
+    [TestCase(9)]
+    [TestCase(10)]
+    [TestCase(12)]
+    [TestCase(13)]
     public async Task OldSmallPoolCacheIsInvalidatedAndPartialStatusRoundTrips(int oldVersion)
     {
         string path = Path.Combine(temporaryDirectory, "workspace.json");
@@ -198,7 +364,7 @@ public sealed class NativePpTargetsWorkspaceTests
         await cache.SaveAsync(snapshot() with { CatalogScanStatus = "Partial catalog: page limit reached." });
         Assert.That(cache.Load()!.CatalogScanStatus, Is.EqualTo("Partial catalog: page limit reached."));
         var document = System.Text.Json.Nodes.JsonNode.Parse(await File.ReadAllTextAsync(path))!;
-        Assert.That(document["version"]!.GetValue<int>(), Is.EqualTo(8));
+        Assert.That(document["version"]!.GetValue<int>(), Is.EqualTo(14));
         document["version"] = oldVersion;
         await File.WriteAllTextAsync(path, document.ToJsonString());
         Assert.That(cache.Load(), Is.Null);

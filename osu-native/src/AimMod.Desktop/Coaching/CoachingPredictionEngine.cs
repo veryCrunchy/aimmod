@@ -15,15 +15,20 @@ public static class CoachingPredictionEngine
     public static CoachingIntelligence Build(
         IReadOnlyList<LocalReplay> runs,
         IReadOnlyDictionary<Guid, ReplayAnalysisResult> analyses,
-        Guid? selectedScoreId = null)
+        Guid? selectedScoreId = null) => Build(runs, analyses, selectedScoreId, null);
+
+    /// <param name="globalProfile">A profile already built from the same runs; rebuilt when omitted.</param>
+    internal static CoachingIntelligence Build(
+        IReadOnlyList<LocalReplay> runs,
+        IReadOnlyDictionary<Guid, ReplayAnalysisResult> analyses,
+        Guid? selectedScoreId,
+        GlobalCoachingProfile? globalProfile)
     {
         ArgumentNullException.ThrowIfNull(runs);
         ArgumentNullException.ThrowIfNull(analyses);
 
-        LocalReplay[] history = runs.Where(isStandardRun)
-                                    .OrderBy(run => run.PlayedAt)
-                                    .TakeLast(CoachingLimits.MaximumRuns)
-                                    .ToArray();
+        var index = new HistoryIndex(History(runs));
+        LocalReplay[] history = index.Chronological;
         LocalReplay? selected = selectedScoreId is { } scoreId
             ? history.FirstOrDefault(run => run.ScoreId == scoreId)
             : null;
@@ -33,20 +38,44 @@ public static class CoachingPredictionEngine
         var quality = new CoachingHistoryQuality(
             history.Length,
             validAccuracyCount,
-            history.Select(setupKey).Distinct().Count(),
+            index.SetupCount,
             exactAnalysisCount);
 
         return new CoachingIntelligence(
             quality,
             buildTrend(history),
             buildDifficultyFit(history),
-            selected is null ? null : Predict(history, selected),
-            selected is null ? null : BuildSetupBenchmark(history, selected),
+            selected is null ? null : predict(index, selected),
+            selected is null ? null : setupBenchmark(index, selected),
             buildSessionDrift(history),
             buildMechanics(history, analyses),
-            buildPpPlan(history),
-            buildRecommendations(history, analyses));
+            buildPpPlan(index),
+            buildRecommendations(index, analyses, globalProfile));
     }
+
+    /// <summary>Recomputes only the selection-dependent parts of <paramref name="global"/> for another selected play.</summary>
+    internal static CoachingIntelligence WithSelection(CoachingIntelligence global, IReadOnlyList<LocalReplay> runs, Guid? selectedScoreId)
+    {
+        ArgumentNullException.ThrowIfNull(global);
+        ArgumentNullException.ThrowIfNull(runs);
+
+        var index = new HistoryIndex(History(runs));
+        LocalReplay? selected = selectedScoreId is { } scoreId
+            ? index.Chronological.FirstOrDefault(run => run.ScoreId == scoreId)
+            : null;
+        return global with
+        {
+            SelectedRunPrediction = selected is null ? null : predict(index, selected),
+            SelectedRunBenchmark = selected is null ? null : setupBenchmark(index, selected),
+        };
+    }
+
+    /// <summary>The chronological, manual osu!standard runs every estimate in this engine is based on.</summary>
+    internal static LocalReplay[] History(IReadOnlyList<LocalReplay> runs) =>
+        runs.Where(isStandardRun)
+            .OrderBy(run => run.PlayedAt)
+            .TakeLast(CoachingLimits.MaximumRuns)
+            .ToArray();
 
     /// <summary>
     /// Estimates a target play using prior plays only. Similar star ratings, matching mods,
@@ -57,16 +86,27 @@ public static class CoachingPredictionEngine
         ArgumentNullException.ThrowIfNull(runs);
         ArgumentNullException.ThrowIfNull(target);
 
-        WeightedRun[] neighbours = runs.Where(run => run.ScoreId != target.ScoreId
-                                                     && isStandardRun(run)
-                                                     && validAccuracy(run.Accuracy)
-                                                     && run.PlayedAt < target.PlayedAt)
-                                           .OrderByDescending(run => run.PlayedAt)
-                                           .Select((run, age) => new WeightedRun(run, similarityWeight(run, target, age)))
-                                           .Where(item => item.Weight >= 0.04)
-                                           .OrderByDescending(item => item.Weight)
-                                           .Take(CoachingLimits.PredictionNeighbourLimit)
-                                           .ToArray();
+        return predict(new HistoryIndex(runs.OrderBy(run => run.PlayedAt).ToArray()), target);
+    }
+
+    private static CoachingAccuracyPrediction? predict(HistoryIndex index, LocalReplay target)
+    {
+        // The maximum weight is 5. From age 320, even that falls below 0.04.
+        // Avoid parsing mod configurations for neighbours we must discard.
+        var recent = new List<WeightedRun>(320);
+        foreach (LocalReplay run in index.PriorNewestFirst(target.PlayedAt))
+        {
+            if (run.ScoreId == target.ScoreId || !isStandardRun(run) || !validAccuracy(run.Accuracy))
+                continue;
+            recent.Add(new WeightedRun(run, similarityWeight(run, target, recent.Count)));
+            if (recent.Count == 320)
+                break;
+        }
+
+        WeightedRun[] neighbours = recent.Where(item => item.Weight >= 0.04)
+                                         .OrderByDescending(item => item.Weight)
+                                         .Take(CoachingLimits.PredictionNeighbourLimit)
+                                         .ToArray();
         if (neighbours.Length == 0)
             return null;
 
@@ -75,7 +115,8 @@ public static class CoachingPredictionEngine
         double expectedMisses = neighbours.Sum(item => Math.Max(0, item.Run.MissCount) * item.Weight) / weight;
         double variance = neighbours.Sum(item => item.Weight * square(item.Run.Accuracy - expectedAccuracy)) / weight;
         double effectiveSampleSize = square(weight) / neighbours.Sum(item => square(item.Weight));
-        int sameSetupCount = neighbours.Count(item => setupKey(item.Run) == setupKey(target));
+        string targetSetup = setupKey(target);
+        int sameSetupCount = neighbours.Count(item => setupKey(item.Run) == targetSetup);
         CoachingConfidence confidence = predictionConfidence(effectiveSampleSize, sameSetupCount);
 
         // This is a weighted historical spread, not a calibrated confidence interval.
@@ -111,6 +152,18 @@ public static class CoachingPredictionEngine
                                                 && validAccuracy(run.Accuracy))
                                       .OrderBy(run => run.PlayedAt)
                                       .ToArray();
+        return setupBenchmark(prior, target);
+    }
+
+    private static CoachingSetupBenchmark setupBenchmark(HistoryIndex index, LocalReplay target) =>
+        setupBenchmark(index.SameSetup(setupKey(target))
+                            .Where(run => run.ScoreId != target.ScoreId
+                                          && run.PlayedAt < target.PlayedAt
+                                          && validAccuracy(run.Accuracy))
+                            .ToArray(), target);
+
+    private static CoachingSetupBenchmark setupBenchmark(LocalReplay[] prior, LocalReplay target)
+    {
         if (prior.Length == 0 || !validAccuracy(target.Accuracy))
         {
             return new CoachingSetupBenchmark(
@@ -301,17 +354,11 @@ public static class CoachingPredictionEngine
                                               .Where(validAnalysis)
                                               .Cast<ReplayAnalysisResult>()
                                               .ToArray();
-        ReplayObjectJudgement[] judgements = exact.SelectMany(analysis => analysis.Judgements).ToArray();
-        double[] offsets = judgements.Where(isTapTimingSample)
-                                     .Select(judgement => judgement.TimeOffsetMs)
-                                     .ToArray();
-        double[] cursorDistances = judgements.Where(judgement => !isMiss(judgement)
-                                                                  && judgement.ObjectPosition is not null
-                                                                  && judgement.CursorPosition is not null)
-                                               .Select(judgement => distance(judgement.ObjectPosition!, judgement.CursorPosition!))
-                                               .Where(double.IsFinite)
-                                               .ToArray();
-        ReplayObjectJudgement[] misses = judgements.Where(isMiss).ToArray();
+        ReplayJudgementDigest[] digests = exact.Select(ReplayJudgementDigest.For).ToArray();
+        int judgementCount = digests.Sum(digest => digest.JudgementCount);
+        double[] offsets = ReplayJudgementClassifier.Concat(digests.Select(digest => digest.TapTimingOffsets).ToArray());
+        double[] cursorDistances = ReplayJudgementClassifier.Concat(digests.Select(digest => digest.CursorDistances).ToArray());
+        ReplayObjectJudgement[] misses = ReplayJudgementClassifier.Concat(digests.Select(digest => digest.Misses).ToArray());
         IReadOnlyDictionary<ReplayMissReason, int> missReasonCounts = misses.Where(miss => miss.MissAnalysis is not null)
                                                                                .Select(miss => miss.MissAnalysis!.Reason)
                                                                                .GroupBy(reason => reason)
@@ -321,7 +368,7 @@ public static class CoachingPredictionEngine
                                                                .ThenBy(pair => pair.Key)
                                                                .Select(pair => (ReplayMissReason?)pair.Key)
                                                                .FirstOrDefault();
-        CoachingMapSegment[] segments = buildMapSegments(exact);
+        CoachingMapSegment[] segments = buildMapSegments(digests);
         string? weakestSegment = segments.Where(segment => segment.PrimaryJudgementCount > 0)
                                          .OrderByDescending(segment => segment.MissRate)
                                          .ThenByDescending(segment => segment.MissCount)
@@ -331,7 +378,7 @@ public static class CoachingPredictionEngine
                 : null;
         return new CoachingMechanicsProfile(
             exact.Length,
-            judgements.Length,
+            judgementCount,
             offsets.Length,
             offsets.Length == 0 ? null : offsets.Average(),
             offsets.Length == 0 ? null : standardDeviation(offsets),
@@ -349,13 +396,15 @@ public static class CoachingPredictionEngine
     }
 
     private static IReadOnlyList<CoachingRecommendation> buildRecommendations(
-        IReadOnlyList<LocalReplay> history,
-        IReadOnlyDictionary<Guid, ReplayAnalysisResult> analyses)
+        HistoryIndex index,
+        IReadOnlyDictionary<Guid, ReplayAnalysisResult> analyses,
+        GlobalCoachingProfile? profile)
     {
-        if (history.Count == 0)
+        LocalReplay[] history = index.Chronological;
+        if (history.Length == 0)
             return Array.Empty<CoachingRecommendation>();
 
-        GlobalCoachingProfile globalProfile = GlobalCoachingProfileBuilder.Build(history, analyses);
+        GlobalCoachingProfile globalProfile = profile ?? GlobalCoachingProfileBuilder.Build(history, analyses);
         var candidates = new List<RecommendationCandidate>();
         LocalReplay[][] recentSetups = history.Where(run => validAccuracy(run.Accuracy))
                                                .GroupBy(setupKey)
@@ -371,19 +420,17 @@ public static class CoachingPredictionEngine
                 ScoreId = Guid.Empty,
                 PlayedAt = history[^1].PlayedAt.AddTicks(1),
             };
-            CoachingAccuracyPrediction? prediction = Predict(history, forecastTarget);
-            CoachingSetupBenchmark benchmark = BuildSetupBenchmark(history, latest);
+            CoachingAccuracyPrediction? prediction = predict(index, forecastTarget);
+            CoachingSetupBenchmark benchmark = setupBenchmark(index, latest);
             string intent;
             string reason;
             double priority;
             CoachingConfidence recommendationConfidence = prediction?.Confidence ?? CoachingConfidence.Insufficient;
             int recommendationSampleCount = prediction?.SampleCount ?? 0;
 
-            var setupMissReason = setup.SelectMany(run => analyses.GetValueOrDefault(run.ScoreId)?.Judgements
-                                                                  .Where(isMiss)
-                                                                  .Where(judgement => judgement.MissAnalysis is { Reason: not ReplayMissReason.Unknown })
-                                                                  .Select(judgement => judgement.MissAnalysis!.Reason)
-                                                      ?? Enumerable.Empty<ReplayMissReason>())
+            var setupMissReason = setup.SelectMany(run => analyses.GetValueOrDefault(run.ScoreId) is { Judgements: not null } analysis
+                                                      ? ReplayJudgementDigest.For(analysis).ClassifiedMisses.Select(judgement => judgement.MissAnalysis!.Reason)
+                                                      : Enumerable.Empty<ReplayMissReason>())
                                        .GroupBy(value => value)
                                        .Select(group => new { Reason = group.Key, Count = group.Count() })
                                        .OrderByDescending(group => group.Count)
@@ -479,8 +526,9 @@ public static class CoachingPredictionEngine
                          .ToArray();
     }
 
-    private static CoachingPpPlan buildPpPlan(IReadOnlyList<LocalReplay> history)
+    private static CoachingPpPlan buildPpPlan(HistoryIndex index)
     {
+        LocalReplay[] history = index.Chronological;
         LocalReplay[] ppRuns = history.Where(run => validAccuracy(run.Accuracy)
                                                     && validStars(run.StarRating)
                                                     && validPp(run.PerformancePoints))
@@ -515,19 +563,28 @@ public static class CoachingPredictionEngine
                                                     .Take(CoachingLimits.MaximumPpCandidateSetups)
                                                     .ToArray();
 
+        LocalReplay[] bestRunsByStars = distinctSetupBestRuns.OrderBy(run => run.StarRating).ToArray();
+        double[] bestRunStars = bestRunsByStars.Select(run => run.StarRating).ToArray();
+        var profileBaseline = new CoachingPpWeighting.ProfileBaseline(ppRuns);
         var candidates = new List<PpCandidate>();
         foreach (LocalReplay[] setup in candidateSetups)
         {
             LocalReplay latest = setup[^1];
             double currentPp = latest.PerformancePoints!.Value;
             LocalReplay[] priorSameSetup = setup.Take(setup.Length - 1).ToArray();
-            LocalReplay[] similarStarRuns = distinctSetupBestRuns.Where(run => Math.Abs(run.StarRating - latest.StarRating) <= 0.75
-                                                                              && modSimilarity(run.Mods, latest.Mods) >= 0.5)
-                                                                .ToArray();
+            // Only the count and the PP percentile of this set are used, so its order does not matter.
+            var similarStarRuns = new List<LocalReplay>();
+            int first = lowerBound(bestRunStars, latest.StarRating - 0.76);
+            for (int i = first; i < bestRunsByStars.Length && bestRunStars[i] <= latest.StarRating + 0.76; i++)
+            {
+                LocalReplay run = bestRunsByStars[i];
+                if (Math.Abs(run.StarRating - latest.StarRating) <= 0.75 && modSimilarity(run, latest) >= 0.5)
+                    similarStarRuns.Add(run);
+            }
             double setupBestPp = setup.Max(run => run.PerformancePoints!.Value);
-            double similarCeiling = similarStarRuns.Length == 0
+            double similarCeiling = similarStarRuns.Count == 0
                 ? currentPp
-                : percentile(similarStarRuns.Select(run => run.PerformancePoints!.Value), similarStarRuns.Length >= 12 ? 0.8 : 0.7);
+                : percentile(similarStarRuns.Select(run => run.PerformancePoints!.Value), similarStarRuns.Count >= 12 ? 0.8 : 0.7);
             double observedCeiling = Math.Max(setupBestPp, similarCeiling);
             double recoverableGain = Math.Max(0, setupBestPp - currentPp);
             double stretchGain = Math.Max(0, observedCeiling - currentPp) * 0.45;
@@ -535,11 +592,11 @@ public static class CoachingPredictionEngine
             double realisticGain = Math.Max(0, projectedPp - currentPp);
             if (realisticGain < 1)
                 continue;
-            double profilePpGain = CoachingPpWeighting.CalculateProfileGain(ppRuns, latest.BeatmapId, projectedPp);
+            double profilePpGain = profileBaseline.Gain(latest.BeatmapId, projectedPp);
             if (profilePpGain < 0.05)
                 continue;
 
-            CoachingAccuracyPrediction? prediction = Predict(history, latest with
+            CoachingAccuracyPrediction? prediction = predict(index, latest with
             {
                 ScoreId = Guid.Empty,
                 PlayedAt = history[^1].PlayedAt.AddTicks(1),
@@ -551,11 +608,11 @@ public static class CoachingPredictionEngine
             int? targetMissCount = priorSameSetup.Length == 0
                 ? latest.MissCount
                 : Math.Min(latest.MissCount, priorSameSetup.Min(run => Math.Max(0, run.MissCount)));
-            CoachingConfidence opportunityConfidence = ppOpportunityConfidence(priorSameSetup.Length, similarStarRuns.Length, prediction?.Confidence);
+            CoachingConfidence opportunityConfidence = ppOpportunityConfidence(priorSameSetup.Length, similarStarRuns.Count, prediction?.Confidence);
             string reason = recoverableGain >= stretchGain
                 ? $"A previous matching setup reached {setupBestPp:0.0}pp. The current local play is {currentPp:0.0}pp, so the model treats most of that gap as recoverable."
                 : $"Nearby-star local plays with similar mods put this setup in a {observedCeiling:0.0}pp observed window. The projection uses only part of that gap.";
-            candidates.Add(new PpCandidate(latest, currentPp, projectedPp, realisticGain, profilePpGain, targetAccuracy, targetMissCount, opportunityConfidence, priorSameSetup.Length, similarStarRuns.Length, reason));
+            candidates.Add(new PpCandidate(latest, currentPp, projectedPp, realisticGain, profilePpGain, targetAccuracy, targetMissCount, opportunityConfidence, priorSameSetup.Length, similarStarRuns.Count, reason));
         }
 
         CoachingPpOpportunity[] opportunities = candidates.GroupBy(candidate => candidate.Run.BeatmapId)
@@ -611,33 +668,19 @@ public static class CoachingPredictionEngine
             topThreeProfileGain);
     }
 
-    private static CoachingMapSegment[] buildMapSegments(IReadOnlyList<ReplayAnalysisResult> analyses)
+    private static CoachingMapSegment[] buildMapSegments(IReadOnlyList<ReplayJudgementDigest> digests)
     {
-        const int segment_count = 3;
+        const int segment_count = ReplayJudgementDigest.SegmentCount;
         int[] judgementCounts = new int[segment_count];
-        int[] missCounts = new int[3];
+        int[] missCounts = new int[segment_count];
         int[] sliderBreakCounts = new int[segment_count];
-        foreach (ReplayAnalysisResult analysis in analyses)
+        foreach (ReplayJudgementDigest digest in digests)
         {
-            double duration = analysis.Judgements.Count == 0 ? 0 : analysis.Judgements.Max(judgement => judgement.EndTimeMs);
-            if (!double.IsFinite(duration) || duration <= 0)
-                continue;
-
-            foreach (ReplayObjectJudgement judgement in analysis.Judgements)
+            for (int segment = 0; segment < segment_count; segment++)
             {
-                if (!double.IsFinite(judgement.StartTimeMs))
-                    continue;
-
-                int segment = Math.Clamp((int)(judgement.StartTimeMs / duration * segment_count), 0, segment_count - 1);
-                if (judgement.NestedPath is null)
-                {
-                    judgementCounts[segment]++;
-                    if (isMiss(judgement))
-                        missCounts[segment]++;
-                }
-
-                if (isSliderBreak(judgement))
-                    sliderBreakCounts[segment]++;
+                judgementCounts[segment] += digest.SegmentJudgements[segment];
+                missCounts[segment] += digest.SegmentMisses[segment];
+                sliderBreakCounts[segment] += digest.SegmentSliderBreaks[segment];
             }
         }
 
@@ -651,52 +694,99 @@ public static class CoachingPredictionEngine
             sliderBreakCounts[index])).ToArray();
     }
 
-    private static double median(IEnumerable<double> values)
-    {
-        double[] ordered = values.Where(double.IsFinite).OrderBy(value => value).ToArray();
-        if (ordered.Length == 0)
-            return double.NaN;
-        return ordered.Length % 2 == 1
-            ? ordered[ordered.Length / 2]
-            : (ordered[ordered.Length / 2 - 1] + ordered[ordered.Length / 2]) / 2;
-    }
+    private static double median(IEnumerable<double> values) => ReplayJudgementClassifier.Median(values);
 
-    private static double percentile(IEnumerable<double> values, double quantile)
-    {
-        double[] ordered = values.Where(double.IsFinite).OrderBy(value => value).ToArray();
-        if (ordered.Length == 0)
-            return double.NaN;
-
-        int nearestRank = Math.Clamp((int)Math.Ceiling(Math.Clamp(quantile, 0, 1) * ordered.Length) - 1, 0, ordered.Length - 1);
-        return ordered[nearestRank];
-    }
-
-    private static bool isSliderBreak(ReplayObjectJudgement judgement) =>
-        judgement.Result switch
-        {
-            "LargeTickMiss" or "SmallTickMiss" or "SliderTailMiss" => true,
-            _ => false,
-        };
+    private static double percentile(IEnumerable<double> values, double quantile) =>
+        ReplayJudgementClassifier.NearestRankPercentile(values, quantile);
 
     private static double similarityWeight(LocalReplay run, LocalReplay target, int age)
     {
         double starWeight = validStars(run.StarRating) && validStars(target.StarRating)
             ? Math.Exp(-Math.Abs(run.StarRating - target.StarRating) / 0.75)
             : 0.5;
-        double modWeight = 0.75 + 1.25 * modSimilarity(run.Mods, target.Mods);
+        double modWeight = 0.75 + 1.25 * (CoachingRunKeys.Configuration(run) == CoachingRunKeys.Configuration(target) ? 1 : 0);
         double beatmapWeight = run.BeatmapId != Guid.Empty && run.BeatmapId == target.BeatmapId ? 2.5 : 1;
         double recencyWeight = Math.Pow(0.985, age);
         return starWeight * modWeight * beatmapWeight * recencyWeight;
     }
 
-    private static double modSimilarity(IReadOnlyList<string>? left, IReadOnlyList<string>? right)
+    /// <summary>Jaccard similarity of the stored mod acronyms, ignoring case.</summary>
+    private static double modSimilarity(LocalReplay left, LocalReplay right)
     {
-        HashSet<string> a = (left ?? Array.Empty<string>()).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        HashSet<string> b = (right ?? Array.Empty<string>()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        HashSet<string> a = CoachingRunKeys.ModSet(left);
+        HashSet<string> b = CoachingRunKeys.ModSet(right);
         if (a.Count == 0 && b.Count == 0)
             return 1;
-        int union = a.Union(b, StringComparer.OrdinalIgnoreCase).Count();
-        return union == 0 ? 1 : (double)a.Intersect(b, StringComparer.OrdinalIgnoreCase).Count() / union;
+        int intersection = 0;
+        foreach (string mod in a)
+        {
+            if (b.Contains(mod))
+                intersection++;
+        }
+        int union = a.Count + b.Count - intersection;
+        return union == 0 ? 1 : (double)intersection / union;
+    }
+
+    private static int lowerBound(double[] sorted, double value)
+    {
+        int low = 0, high = sorted.Length;
+        while (low < high)
+        {
+            int middle = (low + high) >>> 1;
+            if (sorted[middle] < value)
+                low = middle + 1;
+            else
+                high = middle;
+        }
+        return low;
+    }
+
+    /// <summary>Chronological history with the lookups repeated by every prediction and benchmark.</summary>
+    private sealed class HistoryIndex
+    {
+        private readonly Dictionary<string, LocalReplay[]> bySetup;
+
+        public HistoryIndex(LocalReplay[] chronological)
+        {
+            Chronological = chronological;
+            bySetup = chronological.GroupBy(setupKey, StringComparer.Ordinal)
+                                   .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
+        }
+
+        public LocalReplay[] Chronological { get; }
+
+        public int SetupCount => bySetup.Count;
+
+        public IReadOnlyList<LocalReplay> SameSetup(string key) => bySetup.GetValueOrDefault(key) ?? [];
+
+        /// <summary>
+        /// Plays before <paramref name="before"/>, newest first. Plays sharing a timestamp keep their
+        /// chronological order, matching a stable descending sort.
+        /// </summary>
+        public IEnumerable<LocalReplay> PriorNewestFirst(DateTimeOffset before)
+        {
+            int low = 0, high = Chronological.Length;
+            while (low < high)
+            {
+                int middle = (low + high) >>> 1;
+                if (Chronological[middle].PlayedAt < before)
+                    low = middle + 1;
+                else
+                    high = middle;
+            }
+
+            int end = low;
+            while (end > 0)
+            {
+                DateTimeOffset time = Chronological[end - 1].PlayedAt;
+                int start = end - 1;
+                while (start > 0 && Chronological[start - 1].PlayedAt == time)
+                    start--;
+                for (int i = start; i < end; i++)
+                    yield return Chronological[i];
+                end = start;
+            }
+        }
     }
 
     private static CoachingConfidence predictionConfidence(double effectiveSampleSize, int sameSetupCount) =>
@@ -708,23 +798,10 @@ public static class CoachingPredictionEngine
             _ => CoachingConfidence.Insufficient,
         };
 
-    private static string setupKey(LocalReplay run)
-    {
-        string beatmap = run.BeatmapId != Guid.Empty
-            ? run.BeatmapId.ToString("N")
-            : !string.IsNullOrWhiteSpace(run.BeatmapHash)
-                ? $"hash:{run.BeatmapHash.Trim().ToUpperInvariant()}"
-                : $"score:{run.ScoreId:N}";
-        string mods = string.Join(',', (run.Mods ?? Array.Empty<string>())
-            .Where(mod => !string.IsNullOrWhiteSpace(mod))
-            .Select(mod => mod.Trim().ToUpperInvariant())
-            .Distinct(StringComparer.Ordinal)
-            .OrderBy(mod => mod, StringComparer.Ordinal));
-        return $"{beatmap}|{mods}";
-    }
+    private static string setupKey(LocalReplay run) => CoachingRunKeys.SetupKey(run);
 
     private static bool isStandardRun(LocalReplay run) =>
-        string.Equals(run.RulesetShortName, "osu", StringComparison.OrdinalIgnoreCase);
+        string.Equals(run.RulesetShortName, "osu", StringComparison.OrdinalIgnoreCase) && CoachingRunKeys.IsManualPlay(run);
 
     private static bool validAccuracy(double value) => double.IsFinite(value) && value is >= 0 and <= 1;
 
@@ -734,18 +811,6 @@ public static class CoachingPredictionEngine
 
     private static bool validAnalysis(ReplayAnalysisResult? analysis) =>
         analysis is { Judgements: not null, Summary: not null };
-
-    private static bool isMiss(ReplayObjectJudgement judgement) =>
-        string.Equals(judgement.Result, "Miss", StringComparison.OrdinalIgnoreCase);
-
-    private static bool isTapTimingSample(ReplayObjectJudgement judgement) =>
-        !isMiss(judgement)
-        && double.IsFinite(judgement.TimeOffsetMs)
-        && string.Equals(judgement.MaximumResult, "Great", StringComparison.OrdinalIgnoreCase)
-        && judgement.ObjectType.EndsWith("Circle", StringComparison.OrdinalIgnoreCase);
-
-    private static double distance(ReplayPoint left, ReplayPoint right) =>
-        Math.Sqrt(square(left.X - right.X) + square(left.Y - right.Y));
 
     private static double standardDeviation(IEnumerable<double> values)
     {

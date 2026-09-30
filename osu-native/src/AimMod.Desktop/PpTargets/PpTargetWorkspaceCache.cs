@@ -19,13 +19,15 @@ public sealed record PpTargetWorkspaceSnapshot(
     string CatalogScanStatus = "",
     string Sort = "BestFit",
     PpPatternProfile? PendingPatternProfile = null,
-    string ModSelection = "Automatic");
+    string ModSelection = "Automatic",
+    string? CatalogQueryIdentity = null,
+    DateTimeOffset? CatalogUpdatedAt = null);
 
 public sealed class PpTargetWorkspaceCache
 {
     public static readonly TimeSpan Freshness = TimeSpan.FromHours(6);
 
-    private const int current_version = 8;
+    private const int current_version = 14;
     private static readonly JsonSerializerOptions json_options = new(JsonSerializerDefaults.Web);
 
     private readonly string path;
@@ -49,7 +51,7 @@ public sealed class PpTargetWorkspaceCache
             if (!File.Exists(path))
                 return null;
 
-            using FileStream stream = File.OpenRead(path);
+            using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             CacheDocument? document = JsonSerializer.Deserialize<CacheDocument>(stream, json_options);
             return document?.Version == current_version && validSnapshot(document.Snapshot) ? document.Snapshot : null;
         }

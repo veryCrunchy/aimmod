@@ -7,6 +7,7 @@ public sealed class ExternalLazerLocalLibrarySource : ILocalLibrarySource
 {
     private readonly string libraryRoot;
     private readonly Func<ExternalLazerCatalogSearchRequest, CancellationToken, Task<ExternalLazerCatalogSearchResult>> search;
+    private static readonly TimeSpan worker_deadline = TimeSpan.FromMinutes(3);
     private readonly SemaphoreSlim queryGate = new(1, 1);
 
     public ExternalLazerLocalLibrarySource(string libraryRoot)
@@ -99,7 +100,7 @@ public sealed class ExternalLazerLocalLibrarySource : ILocalLibrarySource
             artworkPaths.GetValueOrDefault(replay.ScoreId.ToString("D"), string.Empty),
             replay.HitStatistics,
             replay.ModsJson,
-            replay.OnlineScoreId)).ToArray();
+            replay.OnlineScoreId, Passed: replay.Passed, LegacyScore: replay.LegacyScore)).ToArray();
 
         return new LocalLibraryPage<LocalReplay>(replays, result.Total, result.Offset, result.Limit);
     }
@@ -120,8 +121,10 @@ public sealed class ExternalLazerLocalLibrarySource : ILocalLibrarySource
 
             // Once dispatched, let the dedicated worker finish and delete its
             // private Realm snapshot. The controller's revision check discards
-            // this result if a newer query superseded it.
-            ExternalLazerCatalogSearchResult result = await search(request, CancellationToken.None).ConfigureAwait(false);
+            // this result if a newer query superseded it. A hung worker stops
+            // holding the gate after a bound, so it cannot block every later query.
+            ExternalLazerCatalogSearchResult result = await search(request, CancellationToken.None)
+                .WaitAsync(worker_deadline).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
             return result;
         }

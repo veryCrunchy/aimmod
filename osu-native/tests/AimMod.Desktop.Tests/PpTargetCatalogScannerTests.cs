@@ -8,6 +8,25 @@ namespace AimMod.Desktop.Tests;
 public sealed class PpTargetCatalogScannerTests
 {
     [Test]
+    public async Task ExpandedScanSearchesPlayerBandsAndPublishesAnEarlySnapshot()
+    {
+        int calls = 0;
+        var client = new StubClient((query, _) => Task.FromResult(success([set(++calls, calls * 10)], $"cursor-{calls}")));
+        var previews = new List<PpTargetCatalogScanResult>();
+        var scan = await new PpTargetCatalogScanner(client).ScanAsync(new(MinimumStars:3, MaximumStars:8),
+            focusStars:new(4.5, 5.5), preview:new ImmediatePreview(previews));
+        Assert.That(scan.Pages, Is.EqualTo(120));
+        Assert.That(previews.Single().Pages, Is.EqualTo(12));
+        Assert.That(previews.Single().SetCount, Is.EqualTo(12), "The published snapshot must remain immutable as search continues.");
+        Assert.That(client.Requests.First().MinimumStars, Is.EqualTo(4));
+        Assert.That(client.Requests.Any(q => q.MinimumStars == 3 && q.MaximumStars == 8), Is.True, "Broad discovery remains available.");
+        Assert.That(client.Requests.All(q => q.MinimumStars >= 3 && q.MaximumStars <= 8), Is.True);
+    }
+
+    private sealed class ImmediatePreview(List<PpTargetCatalogScanResult> values) : IProgress<PpTargetCatalogScanResult>
+    { public void Report(PpTargetCatalogScanResult value) => values.Add(value); }
+
+    [Test]
     public async Task AlternatesSortsFollowsOpaqueCursorsAndMergesDuplicateSetDifficulties()
     {
         const string cursor = "opaque+/=cursor";

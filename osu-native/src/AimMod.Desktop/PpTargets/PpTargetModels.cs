@@ -38,7 +38,11 @@ public sealed record PpTargetPreferenceProfile(
     IReadOnlyList<PpTargetPerformanceSample> PerformanceSamples,
     PpPatternProfile? PatternProfile = null,
     IReadOnlyList<string>? PreferredModSetup = null,
-    PpTargetOpportunityProfile? Opportunities = null)
+    PpTargetOpportunityProfile? Opportunities = null,
+    string? PreferredModsJson = null,
+    bool LegacyScore = false, string? PlayerName = null,
+    PpOutcomeProfile? Outcomes = null,
+    int OtherScoringModeRuns = 0)
 {
     public static PpTargetPreferenceProfile Empty { get; } = new(
         0, 0, 0, null, null, null, null, null, null, PpTargetConfidence.Insufficient,
@@ -57,7 +61,10 @@ public sealed record PpTargetEstimate(
     double? ExpectedAccuracy = null,
     double? Attainability = null,
     PpPatternPrediction? PatternPrediction = null,
-    string? PatternProfileIdentity = null);
+    string? PatternProfileIdentity = null,
+    string? ModsJson = null,
+    PpPatternFeatures? Features = null, bool LegacyScore = false,
+    PpOutcomeEstimate? Outcome = null);
 
 public sealed record PpTargetFilters(
     string SearchText = "",
@@ -100,7 +107,28 @@ public sealed record PpTargetCandidate(
     PpTargetConfidence RecommendationConfidence,
     PpTargetPassEstimate? PassEstimate = null,
     double? EstimatedAccountGainPp = null,
-    double? AccountGainPerMinute = null);
+    double? AccountGainPerMinute = null,
+    double? ExpectedScoreAccuracy = null,
+    PpTargetForecast? Forecast = null)
+{
+    // PP if the next attempt passes. Pass chance is shown beside it, never multiplied in.
+    public double? FirstAttemptPp => Forecast?.PpIfPass ?? (ExpectedEarnedPp is null ? null : Estimate?.ExpectedPp);
+    public double? DisplayedExpectedPp => FirstAttemptPp ?? Estimate?.ExpectedPp;
+    public bool IsConditionalPp => PassEstimate is null && DisplayedExpectedPp is not null;
+    public string ExpectedPpCaption => Forecast is { PreviousTries: > 0 } ? "NEXT TRY PP" : "FIRST TRY PP";
+    public double? TargetPp => Forecast?.TargetPp;
+    // Ranking only: failed attempts earn nothing. An exact PP calculation is conditional on a completed score, not proof of a pass.
+    public double? ExpectedEarnedPp => Estimate is { } pp && PassEstimate is { } pass
+        && (string.Equals(Status, "ranked", StringComparison.OrdinalIgnoreCase) || string.Equals(Status, "approved", StringComparison.OrdinalIgnoreCase))
+        && (pass.ConditionalAccuracy is not null || pp.PatternPrediction is { Fit: not null, ExpectedAccuracy: not null } || pp.Outcome is { Distribution.EffectiveSamples: >= 2 })
+        ? (Forecast?.PpIfPass ?? pp.ExpectedPp) * pass.Probability : null;
+    public int EvidenceTier => ExpectedEarnedPp is null ? 0
+        : PassEstimate!.Probability >= .5 && Attainability >= .5 ? 2 : 1;
+    public string ReadinessLabel => PassEstimate is null ? "Pass unverified"
+        : PassEstimate.Probability < .5 ? "Low pass chance"
+        : ExpectedEarnedPp is null ? "Score unverified"
+        : EvidenceTier == 1 ? "Stretch target" : "Supported by recent plays";
+}
 
 public sealed record PpTargetRankingResult(
     PpTargetPreferenceProfile Profile,
@@ -155,6 +183,12 @@ internal static class PpTargetMods
             values.Remove("EZ");
         return values.Order(StringComparer.Ordinal).ToArray();
     }
+
+    public static string NormaliseForSkill(string mod) => NormaliseOne(mod) switch
+    {
+        "NC" => "DT",
+        var value => value,
+    };
 
     public static string NormaliseOne(string? mod) => (mod ?? string.Empty).Trim().ToUpperInvariant() switch
     {

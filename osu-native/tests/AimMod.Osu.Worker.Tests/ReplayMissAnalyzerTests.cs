@@ -83,6 +83,54 @@ public sealed class ReplayMissAnalyzerTests
         Assert.That(result.Reason, Is.EqualTo(ReplayMissReason.OnTargetNoClick));
     }
 
+    [Test]
+    public void MatchesTheReferenceImplementationOnRandomReplays()
+    {
+        var random = new Random(1234);
+        for (int iteration = 0; iteration < 300; iteration++)
+        {
+            var frames = new List<OsuReplayFrame>();
+            double time = -2000;
+            bool held = false;
+            while (time < 2000)
+            {
+                time += random.Next(1, iteration % 3 == 0 ? 90 : 20);
+                if (random.Next(6) == 0)
+                    held = !held;
+                var position = new Vector2(random.Next(0, 512), random.Next(0, 384));
+                frames.Add(held
+                    ? new OsuReplayFrame(time, position, random.Next(2) == 0 ? OsuAction.LeftButton : OsuAction.RightButton)
+                    : new OsuReplayFrame(time, position));
+            }
+
+            double objectTime = random.Next(-500, 500);
+            var objectPosition = new Vector2(random.Next(0, 512), random.Next(0, 384));
+            double radius = 20 + random.Next(40);
+            double window = 50 + random.Next(150);
+
+            Assert.That(
+                ReplayMissAnalyzer.Analyse(frames, objectPosition, objectTime, radius, window),
+                Is.EqualTo(ReferenceReplayMissAnalyzer.Analyse(frames, objectPosition, objectTime, radius, window)),
+                $"iteration {iteration}");
+        }
+    }
+
+    [Test]
+    public void HandlesSingleFrameAndWindowsOutsideTheReplay()
+    {
+        OsuReplayFrame[] frames = [frame(0, 100, 100)];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                ReplayMissAnalyzer.Analyse(frames, target, 5000, 30, 150),
+                Is.EqualTo(ReferenceReplayMissAnalyzer.Analyse(frames, target, 5000, 30, 150)));
+            Assert.That(
+                ReplayMissAnalyzer.Analyse(frames, target, -5000, 30, 150),
+                Is.EqualTo(ReferenceReplayMissAnalyzer.Analyse(frames, target, -5000, 30, 150)));
+        });
+    }
+
     private static ReplayMissAnalysis analyse(params OsuReplayFrame[] frames) =>
         ReplayMissAnalyzer.Analyse(frames, target, 0, 30, 150)
         ?? throw new AssertionException("Expected miss evidence.");

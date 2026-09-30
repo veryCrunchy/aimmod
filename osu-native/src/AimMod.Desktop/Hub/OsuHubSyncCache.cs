@@ -24,6 +24,8 @@ public sealed class FileOsuHubSyncCache : IOsuHubSyncCache
 
     private readonly string path;
     private readonly SemaphoreSlim gate = new(1, 1);
+    private readonly object memoryGate = new();
+    private OsuHubSyncCacheEntry[]? memory;
 
     public FileOsuHubSyncCache(string path)
     {
@@ -33,8 +35,15 @@ public sealed class FileOsuHubSyncCache : IOsuHubSyncCache
         this.path = path;
     }
 
-    public OsuHubSyncCacheEntry? Find(string contentHash) => loadEntries()
+    public OsuHubSyncCacheEntry? Find(string contentHash) => current()
         .FirstOrDefault(entry => string.Equals(entry.ContentHash, contentHash, StringComparison.OrdinalIgnoreCase));
+
+    // Reading the file per lookup is slow and, on Windows, blocks the replacing move of a concurrent save.
+    private OsuHubSyncCacheEntry[] current()
+    {
+        lock (memoryGate)
+            return memory ??= loadEntries().ToArray();
+    }
 
     public async Task SaveAsync(OsuHubSyncCacheEntry entry, CancellationToken cancellationToken = default)
     {
@@ -42,7 +51,7 @@ public sealed class FileOsuHubSyncCache : IOsuHubSyncCache
         string? temporaryPath = null;
         try
         {
-            OsuHubSyncCacheEntry[] entries = loadEntries()
+            OsuHubSyncCacheEntry[] entries = current()
                 .Where(candidate => !string.Equals(candidate.ContentHash, entry.ContentHash, StringComparison.OrdinalIgnoreCase))
                 .Append(entry)
                 .OrderBy(candidate => candidate.SyncedAt)
@@ -58,6 +67,8 @@ public sealed class FileOsuHubSyncCache : IOsuHubSyncCache
                 await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
             }
             File.Move(temporaryPath, path, true);
+            lock (memoryGate)
+                memory = entries;
         }
         finally
         {
@@ -76,9 +87,11 @@ public sealed class FileOsuHubSyncCache : IOsuHubSyncCache
         {
             if (!File.Exists(path))
                 return [];
-            using FileStream stream = File.OpenRead(path);
+            using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             CacheDocument? document = JsonSerializer.Deserialize<CacheDocument>(stream, json_options);
-            return document?.Version == current_version && document.Entries is not null ? document.Entries : [];
+            return document?.Version == current_version && document.Entries is not null
+                ? document.Entries.Where(entry => entry?.ContentHash is not null).ToArray()
+                : [];
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException)
         {

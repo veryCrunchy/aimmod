@@ -26,6 +26,22 @@ public sealed record InstalledLazerSkin(
     public bool HasPreview => !string.IsNullOrWhiteSpace(PreviewPath)
                               && Path.IsPathFullyQualified(PreviewPath)
                               && File.Exists(PreviewPath);
+
+    /// <summary>Readable label for the UI only; <see cref="Name"/> stays the stored identifier.</summary>
+    public string DisplayName => SkinDisplayName.Split(Name).Title;
+
+    /// <summary>A leading team or creator tag split from the stored name ("《CK》 …" → "CK"), if any.</summary>
+    public string? DisplayTag => SkinDisplayName.Split(Name).Tag;
+
+    /// <summary>Logical skin file name (for example "hitcircle@2x.png") to a verified local file, for thumbnails.</summary>
+    public IReadOnlyDictionary<string, string> ElementFiles { get; init; } = new Dictionary<string, string>();
+
+    /// <summary>When the skin arrived on this computer, if known.</summary>
+    public DateTimeOffset? AddedAt { get; init; }
+
+    public bool HasFolder => Origin == InstalledSkinOrigin.Stable
+                             && Path.IsPathFullyQualified(SourcePath)
+                             && Directory.Exists(SourcePath);
 }
 
 public sealed record InstalledLazerSkinPage(IReadOnlyList<InstalledLazerSkin> Items, int Total, int Offset, int Limit)
@@ -71,10 +87,40 @@ public sealed class ExternalLazerInstalledSkinSource : IInstalledSkinSource
         ExternalLazerSkinCatalogSearchResult result = await search(request, cancellationToken).ConfigureAwait(false);
         IReadOnlyDictionary<Guid, string> previews = resolvePreviewPaths(result.Skins);
         return new InstalledLazerSkinPage(
-            result.Skins.Select(skin => new InstalledLazerSkin(skin, previews.GetValueOrDefault(skin.SkinId) ?? string.Empty)).ToArray(),
+            result.Skins.Select(skin => withElements(new InstalledLazerSkin(skin, previews.GetValueOrDefault(skin.SkinId) ?? string.Empty))).ToArray(),
             result.Total,
             result.Offset,
             result.Limit);
+    }
+
+    // Element files are resolved by hash in lazer's store; a missing or linked file only drops that element.
+    private InstalledLazerSkin withElements(InstalledLazerSkin skin)
+    {
+        if (skin.Summary.PreviewFiles.Count == 0)
+            return skin;
+        try
+        {
+            LazerStoredFileReference[] references = skin.Summary.PreviewFiles
+                .Select(file => new LazerStoredFileReference(LazerLibraryAssetKind.Skin, skin.SkinId.ToString("D"), file.LogicalName, file.Hash))
+                .ToArray();
+            var files = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            DateTimeOffset? added = null;
+            foreach (ResolvedLazerStoredFile file in new LazerHashedFileResolver().Resolve(Path.Combine(libraryRoot, "files"), references))
+            {
+                if (file.SourcePath is null)
+                    continue;
+                files.TryAdd(file.Reference.LogicalName, file.SourcePath);
+                if (string.Equals(file.Reference.LogicalName, "skin.ini", StringComparison.OrdinalIgnoreCase))
+                    added = File.GetCreationTimeUtc(file.SourcePath);
+            }
+            if (added is null && files.Count > 0)
+                added = File.GetCreationTimeUtc(files.Values.First());
+            return skin with { ElementFiles = files, AddedAt = added };
+        }
+        catch (Exception error) when (error is ExternalLazerLibraryException or IOException or UnauthorizedAccessException)
+        {
+            return skin;
+        }
     }
 
     public async Task<InstalledLazerSkin?> GetAsync(Guid skinId, CancellationToken cancellationToken = default)
@@ -87,7 +133,7 @@ public sealed class ExternalLazerInstalledSkinSource : IInstalledSkinSource
         if (skin is null)
             return null;
         string preview = resolvePreviewPaths(new[] { skin }).GetValueOrDefault(skin.SkinId) ?? string.Empty;
-        return new InstalledLazerSkin(skin, preview);
+        return withElements(new InstalledLazerSkin(skin, preview));
     }
 
     private IReadOnlyDictionary<Guid, string> resolvePreviewPaths(IEnumerable<ExternalLazerSkinSummary> skins)
@@ -200,14 +246,23 @@ public sealed class ExternalLazerSkinApplyService
         try
         {
             await createArchiveAsync(archivePath, files, cancellationToken).ConfigureAwait(false);
-            Live<SkinInfo> imported = await skinManager.Import(
+            Live<SkinInfo>? imported = await skinManager.Import(
                 new ImportTask(archivePath),
                 new ImportParameters { ImportImmediately = true },
                 cancellationToken).ConfigureAwait(false);
+            if (imported is null)
+                throw new ExternalLazerSkinApplyException("skin_import_failed", "AimMod could not import this lazer skin into its embedded player.");
             skinManager.Rename(imported, skin.Name);
 
-            var next = new ExternalSkinMapping(skin.SkinId, skin.ContentHash, imported.ID);
-            await mappings.SaveAsync(next, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await mappings.SaveAsync(new ExternalSkinMapping(skin.SkinId, skin.ContentHash, imported.ID), cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // The skin is imported; a lost mapping only means the next apply re-checks it.
+                System.Diagnostics.Trace.TraceWarning($"Could not save the lazer skin mapping: {exception.Message}");
+            }
             return imported.ID;
         }
         catch (ExternalLazerSkinApplyException)
@@ -310,6 +365,7 @@ public sealed class ExternalSkinMappingStore
 {
     private const int maximum_mappings = 256;
     private readonly string path;
+    private readonly SemaphoreSlim saveGate = new(1, 1);
 
     public ExternalSkinMappingStore(string path)
     {
@@ -326,9 +382,10 @@ public sealed class ExternalSkinMappingStore
 
         try
         {
-            using FileStream stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-            ExternalSkinMapping[] entries = JsonSerializer.Deserialize<ExternalSkinMapping[]>(stream, RuntimeProtocol.JsonOptions) ?? [];
+            using FileStream stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            ExternalSkinMapping?[] entries = JsonSerializer.Deserialize<ExternalSkinMapping?[]>(stream, RuntimeProtocol.JsonOptions) ?? [];
             return entries
+                   .OfType<ExternalSkinMapping>()
                    .Where(valid)
                    .Take(maximum_mappings)
                    .GroupBy(entry => entry.ExternalSkinId)
@@ -345,18 +402,28 @@ public sealed class ExternalSkinMappingStore
         if (!valid(mapping))
             throw new ArgumentException("The external skin mapping is invalid.", nameof(mapping));
 
-        var entries = Load().Values.Where(entry => entry.ExternalSkinId != mapping.ExternalSkinId).Append(mapping).TakeLast(maximum_mappings).ToArray();
-        string? directory = Path.GetDirectoryName(path);
-        if (directory is not null)
-            Directory.CreateDirectory(directory);
-
-        string temporary = path + ".tmp";
-        await using (var stream = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None, 4096, FileOptions.Asynchronous))
+        await saveGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        string temporary = $"{path}.{Guid.NewGuid():N}.tmp";
+        try
         {
-            await JsonSerializer.SerializeAsync(stream, entries, RuntimeProtocol.JsonOptions, cancellationToken).ConfigureAwait(false);
-            await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            var entries = Load().Values.Where(entry => entry.ExternalSkinId != mapping.ExternalSkinId).Append(mapping).TakeLast(maximum_mappings).ToArray();
+            string? directory = Path.GetDirectoryName(path);
+            if (directory is not null)
+                Directory.CreateDirectory(directory);
+
+            await using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.Asynchronous))
+            {
+                await JsonSerializer.SerializeAsync(stream, entries, RuntimeProtocol.JsonOptions, cancellationToken).ConfigureAwait(false);
+                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
+            File.Move(temporary, path, overwrite: true);
         }
-        File.Move(temporary, path, overwrite: true);
+        finally
+        {
+            try { File.Delete(temporary); }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { }
+            saveGate.Release();
+        }
     }
 
     private static bool valid(ExternalSkinMapping mapping) =>

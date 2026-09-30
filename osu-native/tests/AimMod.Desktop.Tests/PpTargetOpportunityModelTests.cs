@@ -123,6 +123,7 @@ public class PpTargetOpportunityModelTests
         Assert.That(PpTargetOpportunityModel.EstimatePass(repeats, 5, 180, 120, []), Is.Null);
         var profile = PpTargetOpportunityModel.Build(Enumerable.Range(1, 8).Select(i => entry(i, true)), reference);
         Assert.That(PpTargetOpportunityModel.EstimatePass(profile, 5, 180, 120, ["NF"]), Is.Null);
+        Assert.That(PpTargetOpportunityModel.EstimatePass(profile, 5, 180, 120, ["CN"]), Is.Null);
         Assert.That(PpTargetOpportunityModel.EstimatePass(profile, 5, 180, 120, ["HR"]), Is.Null);
         Assert.That(PpTargetOpportunityModel.EstimatePass(profile, 7, 180, 120, []), Is.Null);
         Assert.That(PpTargetOpportunityModel.EstimatePass(profile, 5, 280, 500, []), Is.Null);
@@ -132,4 +133,33 @@ public class PpTargetOpportunityModelTests
         ScoreHistoryProvenance provenance = ScoreHistoryProvenance.OnlineRecent) => new(
             $"synthetic:{id}", id, id, 1, null, null, "Map", "Artist", "Difficulty", reference.AddDays(-1),
             5, .95, 100, 100000, 100, 1, [], provenance, false, passed, 180, 120);
+
+    [Test]
+    public void SameDifficultyFailuresTakePriorityOverSuccessfulNeighbouringMaps()
+    {
+        var scores = Enumerable.Range(1, 12).Select(i => entry(i, true))
+            .Concat(Enumerable.Range(20, 5).Select(i => entry(i, false) with { OnlineBeatmapId = 100 }));
+        var profile = PpTargetOpportunityModel.Build(scores, reference);
+        var exact = PpTargetOpportunityModel.EstimatePass(profile, 5, 180, 120, [], 100)!;
+        Assert.Multiple(() => {
+            Assert.That(exact.SameMap, Is.True);
+            Assert.That(exact.Attempts, Is.EqualTo(5));
+            Assert.That(exact.Probability, Is.LessThan(.2));
+            Assert.That(exact.ConditionalAccuracy, Is.Null, "Failed high-accuracy fragments are not completed-score evidence.");
+        });
+    }
+
+    [Test]
+    public void CompletedComparablePlaysProvideAccuracyAndCustomRatesStaySeparate()
+    {
+        var scores = Enumerable.Range(1, 12).Select(i => entry(i, i <= 8) with {
+            Accuracy = i <= 8 ? .92 : 1,
+            Mods = ["DT"], ModsJson = "[{\"acronym\":\"DT\",\"settings\":{\"speed_change\":1.1}}]",
+        });
+        var profile = PpTargetOpportunityModel.Build(scores, reference);
+        Assert.That(PpTargetOpportunityModel.EstimatePass(profile, 5, 180, 120, ["DT"]), Is.Null);
+        var matched = PpTargetOpportunityModel.EstimatePass(profile, 5, 180, 120, ["DT"],
+            modsJson: "[{\"acronym\":\"DT\",\"settings\":{\"speed_change\":1.1}}]");
+        Assert.That(matched!.ConditionalAccuracy, Is.EqualTo(.92).Within(.0001));
+    }
 }

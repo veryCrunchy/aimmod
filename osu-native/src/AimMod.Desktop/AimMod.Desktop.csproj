@@ -5,12 +5,19 @@
     <StartupObject>AimMod.Desktop.Program</StartupObject>
     <Description>Native AimMod desktop shell.</Description>
     <ApplicationIcon>Resources/Brand/aimmod.ico</ApplicationIcon>
+    <AimModTwitchClientId Condition="'$(AimModTwitchClientId)' == ''">$(AIMMOD_TWITCH_CLIENT_ID)</AimModTwitchClientId>
+    <AimModTwitchClientId Condition="'$(AimModTwitchClientId)' == ''">oux2ceretxv9ojshojyw8byrf5mswq</AimModTwitchClientId>
   </PropertyGroup>
   <ItemGroup>
+    <AssemblyMetadata Include="TwitchClientId" Value="$(AimModTwitchClientId)" Condition="'$(AimModTwitchClientId)' != ''" />
     <PackageReference Include="Microsoft.Playwright" Version="1.62.0" />
     <PackageReference Include="OsuParsers" Version="1.7.2" />
     <PackageReference Include="ppy.osu.Game" Version="2026.730.0" />
     <PackageReference Include="ppy.osu.Game.Rulesets.Osu" Version="2026.730.0" />
+    <PackageReference Include="ppy.osu.Game.Rulesets.Taiko" Version="2026.730.0" />
+    <PackageReference Include="ppy.osu.Game.Rulesets.Catch" Version="2026.730.0" />
+    <PackageReference Include="ppy.osu.Game.Rulesets.Mania" Version="2026.730.0" />
+
     <PackageReference Include="Velopack" Version="1.2.0" />
   </ItemGroup>
   <ItemGroup>
@@ -18,6 +25,11 @@
     <ProjectReference Include="../AimMod.Osu.Worker/AimMod.Osu.Worker.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <EmbeddedResource Include="../../changelogs/*.md" Exclude="../../changelogs/unreleased.md" LogicalName="AimMod.Changelogs.%(Filename).md" />
+    <EmbeddedResource Include="Resources/Audio/*.ogg" LogicalName="AimMod.Resources.Audio.%(Filename)%(Extension)" />
+    <Content Include="Resources/Audio/INSTRUMENT-NOTICES.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <EmbeddedResource Include="Resources/TrainingMusic/*.json" LogicalName="AimMod.Resources.TrainingMusic.%(Filename).json" />
+    <EmbeddedResource Include="Resources/Audio/*.wav" LogicalName="AimMod.Resources.Audio.%(Filename)%(Extension)" />
     <EmbeddedResource Include="Resources/Skins/creator-releases.json" LogicalName="AimMod.Resources.Skins.creator-releases.json" />
     <EmbeddedResource Include="Resources/Brand/*.png" LogicalName="AimMod.Resources.Brand.%(Filename)%(Extension)" />
     <EmbeddedResource Include="Resources/Brand/aimmod.ico" LogicalName="AimMod.Resources.Brand.aimmod.ico" />

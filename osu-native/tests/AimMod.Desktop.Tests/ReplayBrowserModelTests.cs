@@ -82,11 +82,22 @@ public sealed class ReplayBrowserModelTests
         var route = new NativeReplayRouteView();
 
         invoke(route, "applyReplayBrowser", snapshot);
-        Assert.That(replayRows(route), Has.Count.EqualTo(1), "Only the map header should be visible while collapsed.");
+        Drawable group = replayRows(route).Single();
+        Assert.That(visibleAttempts(group), Is.Zero, "Only the map header should be visible while collapsed.");
 
         invoke(route, "toggleReplayMap", snapshot.Maps[0].Key);
-        Assert.That(replayRows(route), Has.Count.EqualTo(3), "The map header and both attempts should be visible after expansion.");
+        Assert.Multiple(() =>
+        {
+            Assert.That(replayRows(route).Single(), Is.SameAs(group), "Expanding keeps the existing map group.");
+            Assert.That(visibleAttempts(group), Is.EqualTo(2), "Both attempts should be visible after expansion.");
+        });
+
+        invoke(route, "applyReplayBrowser", snapshot);
+        Assert.That(replayRows(route).Single(), Is.SameAs(group), "Re-applying unchanged results must not rebuild the group.");
     }
+
+    private static int visibleAttempts(Drawable group) =>
+        (int)group.GetType().GetProperty("VisibleAttemptCount")!.GetValue(group)!;
 
     private static ILocalLibrarySource source(IEnumerable<LocalReplay> replays) =>
         new InMemoryLocalLibrarySource([], replays);

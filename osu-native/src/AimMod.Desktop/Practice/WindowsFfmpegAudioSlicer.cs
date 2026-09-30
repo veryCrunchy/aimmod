@@ -59,14 +59,14 @@ public sealed class WindowsFfmpegAudioSlicer : IPracticeAudioSlicer
 {
     internal static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(90);
 
-    private readonly string executablePath;
+    private string? executablePath;
     private readonly IPracticeProcessRunner runner;
     private readonly TimeSpan timeout;
 
     public WindowsFfmpegAudioSlicer()
-        : this(FfmpegExecutableLocator.Find() ?? throw new FileNotFoundException("FFmpeg is not installed or could not be found."),
-            new PracticeProcessRunner(), DefaultTimeout)
     {
+        runner = new PracticeProcessRunner();
+        timeout = DefaultTimeout;
     }
 
     internal WindowsFfmpegAudioSlicer(string executablePath, IPracticeProcessRunner runner, TimeSpan timeout)
@@ -75,6 +75,11 @@ public sealed class WindowsFfmpegAudioSlicer : IPracticeAudioSlicer
         this.executablePath = executablePath;
         this.runner = runner ?? throw new ArgumentNullException(nameof(runner));
         this.timeout = timeout > TimeSpan.Zero ? timeout : throw new ArgumentOutOfRangeException(nameof(timeout));
+    }
+
+    internal async Task PrepareAsync(CancellationToken token)
+    {
+        executablePath ??= await FfmpegInstaller.ResolveAsync(token).ConfigureAwait(false);
     }
 
     public async Task SliceAsync(
@@ -96,6 +101,7 @@ public sealed class WindowsFfmpegAudioSlicer : IPracticeAudioSlicer
             throw new ArgumentOutOfRangeException(nameof(request), "The requested repetition count is invalid.");
 
         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        executablePath ??= await FfmpegInstaller.ResolveAsync(cancellationToken).ConfigureAwait(false);
         ProcessStartInfo startInfo = CreateStartInfo(executablePath, request, destination);
         PracticeProcessResult result = await runner.RunAsync(startInfo, timeout, cancellationToken).ConfigureAwait(false);
         if (result.ExitCode != 0)
@@ -164,7 +170,10 @@ public static class FfmpegExecutableLocator
         {
             try
             {
-                string candidate = Path.GetFullPath(Path.Combine(directory.Trim('"'), filename));
+                // Relative PATH entries resolve against the working directory; never run a binary from there.
+                string entry = directory.Trim('"');
+                if (!Path.IsPathFullyQualified(entry)) continue;
+                string candidate = Path.GetFullPath(Path.Combine(entry, filename));
                 if (File.Exists(candidate))
                     return candidate;
             }

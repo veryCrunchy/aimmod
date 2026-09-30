@@ -302,6 +302,66 @@ public static class CoachingPpWeighting
               .Take(maximum_weighted_scores)
               .Select((score, index) => score * Math.Pow(score_weight, index))
               .Sum();
+
+    /// <summary>
+    /// The per-beatmap bests of one history, prepared once so many single-map projections can be priced
+    /// without regrouping the history. <see cref="Gain"/> equals <see cref="CalculateProfileGain"/>.
+    /// </summary>
+    internal sealed class ProfileBaseline
+    {
+        private readonly Dictionary<Guid, double> bestByBeatmap;
+        private readonly double[] descending;
+        private readonly double before;
+
+        public ProfileBaseline(IReadOnlyList<LocalReplay> history)
+        {
+            ArgumentNullException.ThrowIfNull(history);
+            bestByBeatmap = history.Where(run => run.BeatmapId != Guid.Empty
+                                                 && run.PerformancePoints is { } pp
+                                                 && double.IsFinite(pp)
+                                                 && pp >= 0)
+                                   .GroupBy(run => run.BeatmapId)
+                                   .ToDictionary(group => group.Key, group => group.Max(run => run.PerformancePoints!.Value));
+            descending = bestByBeatmap.Values.OrderByDescending(score => score).ToArray();
+            before = weightedTotal(descending);
+        }
+
+        public double Gain(Guid beatmapId, double projectedPp)
+        {
+            if (beatmapId == Guid.Empty || !double.IsFinite(projectedPp) || projectedPp < 0)
+                return 0;
+
+            bool existing = bestByBeatmap.TryGetValue(beatmapId, out double current);
+            double next = Math.Max(projectedPp, current);
+            double total = 0;
+            int index = 0;
+            bool removed = !existing;
+            bool inserted = false;
+            for (int i = 0; i < descending.Length && index < maximum_weighted_scores; i++)
+            {
+                double score = descending[i];
+                if (!removed && score == current)
+                {
+                    removed = true;
+                    continue;
+                }
+
+                if (!inserted && next >= score)
+                {
+                    total += next * Math.Pow(score_weight, index++);
+                    inserted = true;
+                    if (index >= maximum_weighted_scores)
+                        break;
+                }
+
+                total += score * Math.Pow(score_weight, index++);
+            }
+
+            if (!inserted && index < maximum_weighted_scores)
+                total += next * Math.Pow(score_weight, index);
+            return Math.Max(0, total - before);
+        }
+    }
 }
 
 public sealed record CoachingIntelligence(

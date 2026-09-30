@@ -14,21 +14,58 @@ public static class CoachingReportBuilder
         IReadOnlyList<LocalReplay> runs,
         IReadOnlyDictionary<Guid, ReplayAnalysisResult> analyses) => build(runs, analyses, null, selectLatestByDefault: false);
 
+    /// <param name="globalProfile">A profile already built from the same runs; rebuilt when omitted.</param>
+    internal static CoachingReport BuildGlobal(
+        IReadOnlyList<LocalReplay> runs,
+        IReadOnlyDictionary<Guid, ReplayAnalysisResult> analyses,
+        GlobalCoachingProfile? globalProfile) => build(runs, analyses, null, selectLatestByDefault: false, globalProfile);
+
+    /// <summary>
+    /// Derives the report for one selected play from a global report built over the same runs, recomputing
+    /// only the parts that depend on the selection. Equivalent to <see cref="Build"/> for that play.
+    /// </summary>
+    internal static CoachingReport BuildForSelection(
+        CoachingReport globalReport,
+        IReadOnlyList<LocalReplay> runs,
+        IReadOnlyDictionary<Guid, ReplayAnalysisResult> analyses,
+        Guid selectedScoreId)
+    {
+        ArgumentNullException.ThrowIfNull(globalReport);
+        ArgumentNullException.ThrowIfNull(runs);
+        ArgumentNullException.ThrowIfNull(analyses);
+
+        LocalReplay[] recent = normalise(runs);
+        LocalReplay? selected = recent.FirstOrDefault(run => run.ScoreId == selectedScoreId);
+        if (selected is null)
+            return build(runs, analyses, selectedScoreId, selectLatestByDefault: true);
+
+        return globalReport with
+        {
+            SelectedRun = CoachingRunSearch.ToRecentRun(selected),
+            NextPlay = buildAdvice(selected, recent, analyses),
+            Intelligence = CoachingPredictionEngine.WithSelection(globalReport.Intelligence, recent, selected.ScoreId),
+        };
+    }
+
+    private static LocalReplay[] normalise(IReadOnlyList<LocalReplay> runs) =>
+        runs.Where(isStandardRun)
+            .GroupBy(run => run.ScoreId)
+            .Select(group => group.OrderByDescending(run => run.PlayedAt).First())
+            .OrderByDescending(run => run.PlayedAt)
+            .Take(CoachingLimits.MaximumRuns)
+            .ToArray();
+
     private static CoachingReport build(
         IReadOnlyList<LocalReplay> runs,
         IReadOnlyDictionary<Guid, ReplayAnalysisResult> analyses,
         Guid? selectedScoreId,
-        bool selectLatestByDefault)
+        bool selectLatestByDefault,
+        GlobalCoachingProfile? globalProfile = null)
     {
         ArgumentNullException.ThrowIfNull(runs);
         ArgumentNullException.ThrowIfNull(analyses);
 
-        LocalReplay[] recent = runs.Where(isStandardRun)
-                                  .GroupBy(run => run.ScoreId)
-                                  .Select(group => group.OrderByDescending(run => run.PlayedAt).First())
-                                  .OrderByDescending(run => run.PlayedAt)
-                                  .Take(CoachingLimits.MaximumRuns)
-                                  .ToArray();
+        LocalReplay[] recent = normalise(runs);
         LocalReplay? selected = selectedScoreId is { } scoreId
             ? recent.FirstOrDefault(run => run.ScoreId == scoreId)
             : selectLatestByDefault ? recent.FirstOrDefault() : null;
@@ -47,7 +84,7 @@ public static class CoachingReportBuilder
             series,
             nextPlay)
         {
-            Intelligence = CoachingPredictionEngine.Build(recent, analyses, selected?.ScoreId),
+            Intelligence = CoachingPredictionEngine.Build(recent, analyses, selected?.ScoreId, globalProfile),
         };
     }
 
@@ -102,7 +139,7 @@ public static class CoachingReportBuilder
                                                  .Where(analysis => validAnalysis(analysis))
                                                  .Cast<ReplayAnalysisResult>()
                                                  .ToArray();
-        double[] offsets = available.SelectMany(timingOffsets).ToArray();
+        double[] offsets = ReplayJudgementClassifier.Concat(available.Select(timingOffsets).ToArray());
         if (offsets.Length == 0)
             return new CoachingTimingSummary(available.Length, 0, null, null, null, 0, 0, 0);
 
@@ -143,7 +180,7 @@ public static class CoachingReportBuilder
         CoachingChartPoint[] timing = chronological.Select(run =>
                                                      {
                                                          ReplayAnalysisResult? analysis = analyses.GetValueOrDefault(run.ScoreId);
-                                                         double[] offsets = validAnalysis(analysis) ? timingOffsets(analysis!).ToArray() : Array.Empty<double>();
+                                                         double[] offsets = validAnalysis(analysis) ? timingOffsets(analysis!) : Array.Empty<double>();
                                                          return offsets.Length == 0
                                                              ? null
                                                              : new CoachingChartPoint(run.ScoreId, run.PlayedAt, offsets.Average());
@@ -187,7 +224,7 @@ public static class CoachingReportBuilder
         if (validAnalysis(analysis))
         {
             ReplayObjectJudgement? firstMiss = analysis!.Judgements
-                                                         .Where(judgement => isMiss(judgement) && double.IsFinite(judgement.StartTimeMs))
+                                                         .Where(judgement => ReplayJudgementClassifier.IsMiss(judgement) && double.IsFinite(judgement.StartTimeMs))
                                                          .OrderBy(judgement => judgement.StartTimeMs)
                                                          .FirstOrDefault();
             if (firstMiss is not null)
@@ -209,7 +246,7 @@ public static class CoachingReportBuilder
             if (analysis.Summary.SliderBreaks > 0)
             {
                 ReplayObjectJudgement? firstBreak = analysis.Judgements
-                                                                  .Where(judgement => isSliderBreak(judgement)
+                                                                  .Where(judgement => ReplayJudgementClassifier.IsSliderBreak(judgement)
                                                                                       && double.IsFinite(judgement.StartTimeMs))
                                                                   .OrderBy(judgement => judgement.StartTimeMs)
                                                                   .FirstOrDefault();
@@ -222,7 +259,7 @@ public static class CoachingReportBuilder
                     reviewTime);
             }
 
-            double[] offsets = timingOffsets(analysis).ToArray();
+            double[] offsets = timingOffsets(analysis);
             if (offsets.Length >= CoachingLimits.MinimumTimingSamplesForDirectionAdvice)
             {
                 double mean = offsets.Average();
@@ -288,12 +325,8 @@ public static class CoachingReportBuilder
 
     private static string formatAccuracy(double accuracy) => $"{accuracy * 100:0.0}%";
 
-    private static IEnumerable<double> timingOffsets(ReplayAnalysisResult analysis) =>
-        analysis.Judgements.Where(judgement => !isMiss(judgement)
-                                                && double.IsFinite(judgement.TimeOffsetMs)
-                                                && string.Equals(judgement.MaximumResult, "Great", StringComparison.OrdinalIgnoreCase)
-                                                && judgement.ObjectType.EndsWith("Circle", StringComparison.OrdinalIgnoreCase))
-                .Select(judgement => judgement.TimeOffsetMs);
+    private static double[] timingOffsets(ReplayAnalysisResult analysis) =>
+        ReplayJudgementDigest.For(analysis).TapTimingOffsets;
 
     private static bool validAnalysis(ReplayAnalysisResult? analysis) =>
         analysis is { Summary: not null, Judgements: not null };
@@ -302,12 +335,6 @@ public static class CoachingReportBuilder
 
     private static bool isStandardRun(LocalReplay run) =>
         string.Equals(run.RulesetShortName, "osu", StringComparison.OrdinalIgnoreCase);
-
-    private static bool isMiss(ReplayObjectJudgement judgement) =>
-        string.Equals(judgement.Result, "Miss", StringComparison.OrdinalIgnoreCase);
-
-    private static bool isSliderBreak(ReplayObjectJudgement judgement) =>
-        judgement.Result is "LargeTickMiss" or "SmallTickMiss" or "SliderTailMiss";
 
     private static string displayName(LocalReplay run) => $"{run.Title} [{run.Difficulty}]";
 

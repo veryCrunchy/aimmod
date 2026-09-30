@@ -30,23 +30,36 @@ public sealed class PpTargetCatalogScanner
     private readonly int maximumPages;
     private readonly int maximumSets;
 
-    public PpTargetCatalogScanner(IOfficialBeatmapDiscoveryClient client, int maximumPages = 24, int maximumSets = 1200)
+    public PpTargetCatalogScanner(IOfficialBeatmapDiscoveryClient client, int maximumPages = 120, int maximumSets = 6000)
     {
         this.client = client ?? throw new ArgumentNullException(nameof(client));
-        if (maximumPages is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(maximumPages));
-        if (maximumSets is < 1 or > 5000) throw new ArgumentOutOfRangeException(nameof(maximumSets));
+        if (maximumPages is < 1 or > 240) throw new ArgumentOutOfRangeException(nameof(maximumPages));
+        if (maximumSets is < 1 or > 12000) throw new ArgumentOutOfRangeException(nameof(maximumSets));
         this.maximumPages = maximumPages;
         this.maximumSets = maximumSets;
     }
 
     public async Task<PpTargetCatalogScanResult> ScanAsync(OfficialBeatmapSearchQuery query,
-        CancellationToken cancellationToken = default, IProgress<PpTargetCatalogScanProgress>? progress = null)
+        CancellationToken cancellationToken = default, IProgress<PpTargetCatalogScanProgress>? progress = null,
+        PpTargetRange? focusStars = null, IProgress<PpTargetCatalogScanResult>? preview = null)
     {
         ArgumentNullException.ThrowIfNull(query);
         cancellationToken.ThrowIfCancellationRequested();
         OfficialBeatmapSearchQuery captured = query.Normalised() with { Limit = 50 };
-        var streams = new[] { captured.Sort, OfficialBeatmapSort.Rating, OfficialBeatmapSort.Plays, OfficialBeatmapSort.Favourites }
-            .Distinct().Select(sort => new ScanStream(sort, sort == captured.Sort ? captured.Cursor : null)).ToArray();
+        var searches = new List<OfficialBeatmapSearchQuery>();
+        if (focusStars is {} focus)
+        {
+            double minimum = Math.Max(captured.MinimumStars ?? 0, focus.Minimum - .5);
+            double maximum = Math.Min(captured.MaximumStars ?? 20, focus.Maximum + .5);
+            // Search within the player's range as well as globally. Lower-playcount
+            // maps can otherwise remain buried behind popular, unrelated difficulties.
+            for (double lower = minimum; lower < maximum; lower += .75)
+                foreach (var sort in new[] { OfficialBeatmapSort.Plays, OfficialBeatmapSort.Rating })
+                    searches.Add(captured with { MinimumStars = lower, MaximumStars = Math.Min(maximum, lower + .75), Sort = sort, Cursor = null });
+        }
+        searches.AddRange(new[] { captured.Sort, OfficialBeatmapSort.Rating, OfficialBeatmapSort.Plays, OfficialBeatmapSort.Favourites }
+            .Distinct().Select(sort => captured with { Sort = sort, Cursor = sort == captured.Sort ? captured.Cursor : null }));
+        var streams = searches.Distinct().Select(q => new ScanStream(q)).ToArray();
         var sets = new Dictionary<int, OfficialBeatmapSet>();
         int pages = 0;
         bool repeatedCursor = false;
@@ -60,7 +73,7 @@ public sealed class PpTargetCatalogScanner
                 OfficialBeatmapSearchResult page;
                 try
                 {
-                    page = await client.SearchAsync(captured with { Sort = stream.Sort, Cursor = stream.Cursor }, cancellationToken).ConfigureAwait(false);
+                    page = await client.SearchAsync(stream.Query with { Cursor = stream.Cursor }, cancellationToken).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
                 catch (Exception error) when (error is HttpRequestException or IOException or TaskCanceledException)
@@ -86,6 +99,7 @@ public sealed class PpTargetCatalogScanner
                     }
                 }
                 progress?.Report(new(pages, sets.Count, sets.Values.Sum(set => set.Difficulties.Count)));
+                if (pages == 12 && sets.Count > 0) preview?.Report(result(OfficialBeatmapRequestStatus.Success, PpTargetCatalogScanStopReason.PageLimit));
                 if (page.Status != OfficialBeatmapRequestStatus.Success)
                     return result(page.Status, PpTargetCatalogScanStopReason.RequestFailed);
                 if (sets.Count >= maximumSets) return result(page.Status, PpTargetCatalogScanStopReason.SetLimit);
@@ -104,11 +118,11 @@ public sealed class PpTargetCatalogScanner
             new(status, Array.AsReadOnly(sets.Values.ToArray()), pages, reason);
     }
 
-    private sealed class ScanStream(OfficialBeatmapSort sort, string? cursor)
+    private sealed class ScanStream(OfficialBeatmapSearchQuery query)
     {
-        public OfficialBeatmapSort Sort { get; } = sort;
-        public string? Cursor { get; set; } = cursor;
+        public OfficialBeatmapSearchQuery Query { get; } = query;
+        public string? Cursor { get; set; } = query.Cursor;
         public bool Complete { get; set; }
-        public HashSet<string> Seen { get; } = string.IsNullOrEmpty(cursor) ? new(StringComparer.Ordinal) : new([cursor], StringComparer.Ordinal);
+        public HashSet<string> Seen { get; } = string.IsNullOrEmpty(query.Cursor) ? new(StringComparer.Ordinal) : new([query.Cursor], StringComparer.Ordinal);
     }
 }

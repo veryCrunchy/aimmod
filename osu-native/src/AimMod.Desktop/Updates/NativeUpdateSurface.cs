@@ -3,111 +3,141 @@ using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
-using osu.Framework.Input.Events;
 using osu.Game.Graphics.Sprites;
 
 namespace AimMod.Desktop.Updates;
 
+/// <summary>
+/// A one-line app-update status for the bottom of Home. The action appears only when there is something to do;
+/// the release channel and changelog stay behind "Options".
+/// </summary>
 internal partial class NativeUpdateSurface : CompositeDrawable
 {
+    private const float row_height = 48;
+    private const float notes_height = 370;
+
     private readonly INativeUpdateService updateService;
+    private readonly SpriteIcon statusIcon;
     private readonly FillFlowContainer statusFlow;
     private readonly TruncatingSpriteText title;
     private readonly TruncatingSpriteText detail;
-    private readonly FillFlowContainer channelControls;
-    private readonly UpdateChannelButton stableButton;
-    private readonly UpdateChannelButton previewButton;
-    private readonly UpdateActionButton actionButton;
+    private readonly FillFlowContainer rowActions;
+    private readonly AimModButton primaryAction;
+    private readonly AimModButton secondaryAction;
+    private readonly AimModButton optionsButton;
     private readonly Box progressFill;
+    private readonly FillFlowContainer options;
+    private readonly AimModButton stableButton;
+    private readonly AimModButton previewButton;
+    private readonly AimModButton notesButton;
+    private readonly Container notesHost;
+    private readonly NativeReleaseNotesPanel notesPanel;
+    private bool optionsOpen;
+    private bool notesOpen;
+    private AimModLayout.ChangeTracker<float> widthTracker;
 
     public NativeUpdateSurface(INativeUpdateService updateService)
     {
         this.updateService = updateService;
         RelativeSizeAxes = Axes.X;
-        Height = 108;
+        Height = row_height;
         Masking = true;
         CornerRadius = AimModVisualStyle.CardRadius;
 
         InternalChildren = new Drawable[]
         {
-            new Box
+            new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
+            new FillFlowContainer
             {
-                RelativeSizeAxes = Axes.Both,
-                Colour = AimModPalette.Panel,
-            },
-            new Box
-            {
-                RelativeSizeAxes = Axes.Y,
-                Width = 4,
-                Colour = AimModPalette.Pink,
-            },
-            statusFlow = new FillFlowContainer
-            {
-                Anchor = Anchor.CentreLeft,
-                Origin = Anchor.CentreLeft,
-                AutoSizeAxes = Axes.Y,
-                Width = 430,
-                X = 22,
-                Direction = FillDirection.Vertical,
-                Spacing = new(4),
-                Children = new Drawable[]
-                {
-                    new OsuSpriteText
-                    {
-                        Text = "APP UPDATE",
-                        Font = new FontUsage(size: 10, weight: "Bold"),
-                        Colour = AimModPalette.Cyan,
-                    },
-                    title = new TruncatingSpriteText
-                    {
-                        Font = new FontUsage(size: 18, weight: "SemiBold"),
-                        Colour = AimModPalette.Text,
-                    },
-                    detail = new TruncatingSpriteText
-                    {
-                        Font = new FontUsage(size: 12),
-                        Colour = AimModPalette.Muted,
-                    },
-                },
-            },
-            channelControls = new FillFlowContainer
-            {
-                Anchor = Anchor.CentreRight,
-                Origin = Anchor.CentreRight,
-                AutoSizeAxes = Axes.Both,
-                Margin = new MarginPadding { Right = 174 },
-                Direction = FillDirection.Horizontal,
-                Spacing = new(5),
-                Children = new Drawable[]
-                {
-                    stableButton = new UpdateChannelButton("Stable", () => _ = updateService.SelectChannelAsync(NativeUpdateChannel.Stable)),
-                    previewButton = new UpdateChannelButton("Preview", () => _ = updateService.SelectChannelAsync(NativeUpdateChannel.Preview)),
-                },
-            },
-            actionButton = new UpdateActionButton(runPrimaryAction)
-            {
-                Anchor = Anchor.CentreRight,
-                Origin = Anchor.CentreRight,
-                Margin = new MarginPadding { Right = 18 },
-            },
-            new Container
-            {
-                Anchor = Anchor.BottomLeft,
-                Origin = Anchor.BottomLeft,
                 RelativeSizeAxes = Axes.X,
-                Height = 3,
+                AutoSizeAxes = Axes.Y,
+                Direction = FillDirection.Vertical,
                 Children = new Drawable[]
                 {
-                    new Box
+                    new Container
                     {
-                        RelativeSizeAxes = Axes.Both,
-                        Colour = AimModPalette.PanelHover,
+                        RelativeSizeAxes = Axes.X,
+                        Height = row_height,
+                        Children = new Drawable[]
+                        {
+                            statusIcon = new SpriteIcon { Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft, X = 16, Size = new(14) },
+                            statusFlow = new FillFlowContainer
+                            {
+                                Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft, X = 42, AutoSizeAxes = Axes.Both,
+                                Direction = FillDirection.Horizontal, Spacing = new(10),
+                                Children = new Drawable[]
+                                {
+                                    title = new TruncatingSpriteText
+                                    {
+                                        Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft,
+                                        Font = AimModVisualStyle.BodyStrongFont, Colour = AimModPalette.Text,
+                                    },
+                                    detail = new TruncatingSpriteText
+                                    {
+                                        Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft,
+                                        Font = AimModVisualStyle.CaptionFont, Colour = AimModPalette.Muted,
+                                    },
+                                },
+                            },
+                            rowActions = new FillFlowContainer
+                            {
+                                Anchor = Anchor.CentreRight, Origin = Anchor.CentreRight, X = -8, AutoSizeAxes = Axes.Both,
+                                Direction = FillDirection.Horizontal, Spacing = new(AimModVisualStyle.RelatedSpacing),
+                                Children = new Drawable[]
+                                {
+                                    primaryAction = new AimModButton(string.Empty, runPrimaryAction, primary: true) { Height = AimModVisualStyle.CompactControlHeight },
+                                    secondaryAction = new AimModButton(string.Empty, runPrimaryAction) { Height = AimModVisualStyle.CompactControlHeight },
+                                    optionsButton = new AimModButton("Options", toggleOptions) { Height = AimModVisualStyle.CompactControlHeight },
+                                },
+                            },
+                            new Container
+                            {
+                                Anchor = Anchor.BottomLeft, Origin = Anchor.BottomLeft, RelativeSizeAxes = Axes.X, Height = 2,
+                                Child = progressFill = new Box { RelativeSizeAxes = Axes.Both, Width = 0, Colour = AimModPalette.Accent },
+                            },
+                        },
                     },
-                    progressFill = new Box
+                    options = new FillFlowContainer
                     {
-                        RelativeSizeAxes = Axes.Both,
-                        Width = 0,
-                        Colour = AimModPalette.Pink,
+                        RelativeSizeAxes = Axes.X,
+                        Direction = FillDirection.Vertical,
+                        Spacing = new(AimModVisualStyle.RelatedSpacing),
+                        Padding = new MarginPadding { Horizontal = 16, Bottom = 16 },
+                        Height = 0,
+                        Masking = true,
+                        Alpha = 0,
+                        Children = new Drawable[]
+                        {
+                            new Box { RelativeSizeAxes = Axes.X, Height = 1, Colour = AimModPalette.Border },
+                            new FillFlowContainer
+                            {
+                                AutoSizeAxes = Axes.Both, Direction = FillDirection.Horizontal, Spacing = new(AimModVisualStyle.RelatedSpacing),
+                                Margin = new MarginPadding { Top = 8 },
+                                Children = new Drawable[]
+                                {
+                                    new OsuSpriteText
+                                    {
+                                        Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft, Margin = new MarginPadding { Right = 4 },
+                                        Text = "Release channel", Font = AimModVisualStyle.BodyStrongFont, Colour = AimModPalette.Text,
+                                    },
+                                    stableButton = new AimModButton("Stable", () => _ = updateService.SelectChannelAsync(NativeUpdateChannel.Stable))
+                                        { Height = AimModVisualStyle.CompactControlHeight },
+                                    previewButton = new AimModButton("Preview", () => _ = updateService.SelectChannelAsync(NativeUpdateChannel.Preview))
+                                        { Height = AimModVisualStyle.CompactControlHeight },
+                                    new OsuSpriteText
+                                    {
+                                        Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft, Margin = new MarginPadding { Left = 4 },
+                                        Text = "Preview gets new features first.", Font = AimModVisualStyle.CaptionFont, Colour = AimModPalette.Muted,
+                                    },
+                                },
+                            },
+                            notesButton = new AimModButton("What's new", toggleNotes) { Height = AimModVisualStyle.CompactControlHeight },
+                            notesHost = new Container
+                            {
+                                RelativeSizeAxes = Axes.X, Height = 0, Alpha = 0, Masking = true,
+                                Child = notesPanel = new NativeReleaseNotesPanel(),
+                            },
+                        },
                     },
                 },
             },
@@ -117,6 +147,9 @@ internal partial class NativeUpdateSurface : CompositeDrawable
         applyState(updateService.State);
     }
 
+    internal bool OptionsOpen => optionsOpen;
+
+    /// <summary>Which parts of the status row fit. Channels share the row only on wide pages.</summary>
     internal static NativeUpdateSurfaceLayout CalculateLayout(float width)
     {
         bool showChannels = width >= 840;
@@ -143,16 +176,13 @@ internal partial class NativeUpdateSurface : CompositeDrawable
     protected override void Update()
     {
         base.Update();
-
+        if (!widthTracker.Update(DrawWidth + rowActions.DrawWidth))
+            return;
         NativeUpdateSurfaceLayout layout = CalculateLayout(DrawWidth);
-        statusFlow.X = layout.TextX;
-        statusFlow.Width = layout.TextWidth;
-        title.MaxWidth = layout.TextWidth;
-        detail.MaxWidth = layout.TextWidth;
+        float available = Math.Max(80, DrawWidth - statusFlow.X - rowActions.DrawWidth - 24);
         detail.Alpha = layout.ShowDetail ? 1 : 0;
-        channelControls.Alpha = layout.ShowChannels ? 1 : 0;
-        actionButton.Width = layout.ActionWidth;
-        actionButton.Margin = new MarginPadding { Right = layout.ActionRight };
+        title.MaxWidth = layout.ShowDetail ? Math.Max(80, available * .5f) : available;
+        detail.MaxWidth = Math.Max(0, available - title.DrawWidth - 10);
     }
 
     private void updateStateChanged(NativeUpdateState state)
@@ -161,28 +191,100 @@ internal partial class NativeUpdateSurface : CompositeDrawable
             Schedule(() => applyState(state));
     }
 
+    /// <summary>What the row says for a state: short title, one-line detail and the icon colour.</summary>
+    internal static (string Title, string Detail, IconUsage Icon, Colour4 Colour) Describe(NativeUpdateState state) => state.Stage switch
+    {
+        NativeUpdateStage.Unavailable => ("Automatic updates off", "Only copies set up by the AimMod installer can update themselves.",
+            FontAwesome.Solid.InfoCircle, AimModPalette.Muted),
+        NativeUpdateStage.Current => ("AimMod is up to date", state.Version is { Length: > 0 } version ? $"Version {version}" : state.Detail,
+            FontAwesome.Solid.CheckCircle, AimModPalette.Accent),
+        NativeUpdateStage.Available or NativeUpdateStage.ReadyToRestart => (state.Title, state.Detail, FontAwesome.Solid.ArrowCircleUp, AimModPalette.Accent),
+        NativeUpdateStage.Downloading => (state.Title, state.Detail, FontAwesome.Solid.Download, AimModPalette.Cyan),
+        NativeUpdateStage.Failed => (state.Title, state.Detail, FontAwesome.Solid.ExclamationTriangle, AimModPalette.Yellow),
+        NativeUpdateStage.Checking => ("Checking for updates", string.Empty, FontAwesome.Solid.Sync, AimModPalette.Muted),
+        _ => ("App updates", string.Empty, FontAwesome.Solid.Sync, AimModPalette.Muted),
+    };
+
     private void applyState(NativeUpdateState state)
     {
-        title.Text = state.Title;
-        detail.Text = state.Detail;
-        stableButton.Active = state.Channel == NativeUpdateChannel.Stable;
-        previewButton.Active = state.Channel == NativeUpdateChannel.Preview;
-        progressFill.Width = state.Stage is NativeUpdateStage.Downloading or NativeUpdateStage.ReadyToRestart
+        notesPanel.SetState(state);
+        (string heading, string text, IconUsage icon, Colour4 colour) = Describe(state);
+        title.Text = heading;
+        detail.Text = text;
+        statusIcon.Icon = icon;
+        statusIcon.Colour = colour;
+        stableButton.SetSelected(state.Channel == NativeUpdateChannel.Stable);
+        previewButton.SetSelected(state.Channel == NativeUpdateChannel.Preview);
+        // Progress arrives in coarse steps; ease between them instead of jumping.
+        progressFill.ResizeWidthTo(ProgressFraction(state), AimModVisualStyle.HoverTransition * 2, Easing.OutQuint);
+
+        (string label, _, bool enabled, _) = ActionFor(state);
+        bool important = state.Stage is NativeUpdateStage.Available or NativeUpdateStage.ReadyToRestart;
+        primaryAction.SetCaption(label);
+        secondaryAction.SetCaption(label);
+        primaryAction.Alpha = enabled && important ? 1 : 0;
+        secondaryAction.Alpha = enabled && !important ? 1 : 0;
+        widthTracker.Reset();
+    }
+
+    internal static float ProgressFraction(NativeUpdateState state) =>
+        state.Stage is NativeUpdateStage.Downloading or NativeUpdateStage.ReadyToRestart
             ? Math.Clamp(state.Progress / 100f, 0, 1)
             : 0;
 
-        (string label, IconUsage icon, bool enabled) = state.Stage switch
-        {
-            NativeUpdateStage.Available => ("Download", FontAwesome.Solid.Download, true),
-            NativeUpdateStage.ReadyToRestart => ("Restart", FontAwesome.Solid.Sync, true),
-            NativeUpdateStage.Failed => ("Try again", FontAwesome.Solid.Sync, true),
-            NativeUpdateStage.Current => ("Check again", FontAwesome.Solid.Sync, true),
-            NativeUpdateStage.Idle => ("Check now", FontAwesome.Solid.Sync, true),
-            NativeUpdateStage.Downloading => ($"{state.Progress}%", FontAwesome.Solid.Download, false),
-            NativeUpdateStage.Checking => ("Checking", FontAwesome.Solid.Sync, false),
-            _ => ("Unavailable", FontAwesome.Solid.Download, false),
-        };
-        actionButton.SetState(label, icon, enabled);
+    internal static (string Label, IconUsage Icon, bool Enabled, string Tooltip) ActionFor(NativeUpdateState state) => state.Stage switch
+    {
+        NativeUpdateStage.Available => ("Download", FontAwesome.Solid.Download, true, "Download the update in the background."),
+        NativeUpdateStage.ReadyToRestart => ("Restart", FontAwesome.Solid.Sync, true, "Restart AimMod to finish updating."),
+        NativeUpdateStage.Failed => ("Try again", FontAwesome.Solid.Sync, true, "Check for updates again."),
+        NativeUpdateStage.Current => ("Check again", FontAwesome.Solid.Sync, true, "Check for a newer release."),
+        NativeUpdateStage.Idle => ("Check now", FontAwesome.Solid.Sync, true, "Check for a newer release."),
+        NativeUpdateStage.Downloading => ($"Cancel {Math.Clamp(state.Progress, 0, 100)}%", FontAwesome.Solid.Times, true, "Stop downloading this update."),
+        NativeUpdateStage.Checking => ("Checking", FontAwesome.Solid.Sync, false, "Looking for a newer release."),
+        _ => ("Unavailable", FontAwesome.Solid.Download, false,
+            "This copy of AimMod was not set up by its installer, so it cannot update itself. Install AimMod to receive updates."),
+    };
+
+    private void toggleOptions()
+    {
+        optionsOpen = !optionsOpen;
+        options.Alpha = optionsOpen ? 1 : 0;
+        applyHeight();
+        optionsButton.SetSelected(optionsOpen);
+        if (!optionsOpen && notesOpen)
+            toggleNotes();
+    }
+
+    private void toggleNotes()
+    {
+        notesOpen = !notesOpen;
+        if (notesOpen && !optionsOpen)
+            toggleOptions();
+        notesHost.Alpha = notesOpen ? 1 : 0;
+        notesHost.Height = notesOpen ? notes_height : 0;
+        notesButton.SetCaption(notesOpen ? "Hide changelog" : "What's new");
+        notesButton.SetSelected(notesOpen);
+        applyHeight();
+    }
+
+    /// <summary>Explicit heights keep the page flow exact while the options open and close.</summary>
+    internal static float HeightFor(bool optionsOpen, bool notesOpen)
+    {
+        if (!optionsOpen)
+            return row_height;
+        // Divider, channel row, changelog button and the optional notes, with their spacing and bottom padding.
+        float options = 1 + AimModVisualStyle.RelatedSpacing + 8 + AimModVisualStyle.CompactControlHeight
+                        + AimModVisualStyle.RelatedSpacing + AimModVisualStyle.CompactControlHeight + 16;
+        if (notesOpen)
+            options += AimModVisualStyle.RelatedSpacing + notes_height;
+        return row_height + options;
+    }
+
+    private void applyHeight()
+    {
+        float target = HeightFor(optionsOpen, notesOpen);
+        options.Height = target - row_height;
+        Height = target;
     }
 
     private void runPrimaryAction()
@@ -200,6 +302,8 @@ internal partial class NativeUpdateSurface : CompositeDrawable
             case NativeUpdateStage.Idle:
             case NativeUpdateStage.Current:
             case NativeUpdateStage.Failed:
+            // Starting a new check cancels the running download and returns to the available release.
+            case NativeUpdateStage.Downloading:
                 _ = updateService.CheckAsync();
                 break;
         }
@@ -209,108 +313,6 @@ internal partial class NativeUpdateSurface : CompositeDrawable
     {
         updateService.StateChanged -= updateStateChanged;
         base.Dispose(isDisposing);
-    }
-
-    private partial class UpdateChannelButton : ClickableContainer
-    {
-        private readonly Action action;
-        private readonly Box background;
-        private readonly OsuSpriteText label;
-        private bool active;
-
-        public UpdateChannelButton(string text, Action action)
-        {
-            this.action = action;
-            Size = new(76, AimModVisualStyle.CompactControlHeight);
-            Masking = true;
-            CornerRadius = AimModVisualStyle.ControlRadius;
-            Children = new Drawable[]
-            {
-                background = new Box { RelativeSizeAxes = Axes.Both },
-                label = new OsuSpriteText
-                {
-                    Anchor = Anchor.Centre,
-                    Origin = Anchor.Centre,
-                    Text = text,
-                    Font = new FontUsage(size: 11, weight: "SemiBold"),
-                },
-            };
-        }
-
-        public bool Active
-        {
-            get => active;
-            set
-            {
-                active = value;
-                background.Colour = value ? AimModPalette.PinkDark : AimModPalette.PanelRaised;
-                label.Colour = value ? AimModPalette.Text : AimModPalette.Muted;
-            }
-        }
-
-        protected override bool OnClick(ClickEvent e)
-        {
-            action();
-            return true;
-        }
-    }
-
-    private partial class UpdateActionButton : AimModInteractiveSurface
-    {
-        private readonly Action action;
-        private readonly SpriteIcon icon;
-        private readonly OsuSpriteText label;
-        private bool enabled;
-
-        public UpdateActionButton(Action action)
-        {
-            this.action = action;
-            Size = new(138, AimModVisualStyle.ControlHeight);
-            BackgroundColour = AimModPalette.PinkDark;
-            Children = new Drawable[]
-            {
-                new FillFlowContainer
-                {
-                    Anchor = Anchor.Centre,
-                    Origin = Anchor.Centre,
-                    AutoSizeAxes = Axes.Both,
-                    Direction = FillDirection.Horizontal,
-                    Spacing = new(8),
-                    Children = new Drawable[]
-                    {
-                        icon = new SpriteIcon
-                        {
-                            Anchor = Anchor.CentreLeft,
-                            Origin = Anchor.CentreLeft,
-                            Size = new(13),
-                            Colour = AimModPalette.Text,
-                        },
-                        label = new OsuSpriteText
-                        {
-                            Anchor = Anchor.CentreLeft,
-                            Origin = Anchor.CentreLeft,
-                            Font = new FontUsage(size: 11, weight: "Bold"),
-                            Colour = AimModPalette.Text,
-                        },
-                    },
-                },
-            };
-        }
-
-        public void SetState(string text, IconUsage iconUsage, bool isEnabled)
-        {
-            label.Text = text;
-            icon.Icon = iconUsage;
-            enabled = isEnabled;
-            Alpha = isEnabled ? 1 : 0.45f;
-        }
-
-        protected override bool OnClick(ClickEvent e)
-        {
-            if (enabled)
-                action();
-            return true;
-        }
     }
 }
 

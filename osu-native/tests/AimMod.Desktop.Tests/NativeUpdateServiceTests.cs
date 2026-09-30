@@ -100,7 +100,8 @@ public sealed class NativeUpdateServiceTests
     [Test]
     public async Task AvailableUpdateDownloadsWithProgressAndRestarts()
     {
-        var release = new NativeUpdateRelease("2.3.4", new object());
+        const string notes = "# AimMod 2.3.4\n- Practice-map titles include the original difficulty.";
+        var release = new NativeUpdateRelease("2.3.4", new object(), notes);
         var backend = new FakeBackend
         {
             IsInstalled = true,
@@ -109,8 +110,12 @@ public sealed class NativeUpdateServiceTests
         };
         using var service = createService(backend);
 
+        var states = new List<NativeUpdateState>();
+        service.StateChanged += states.Add;
+
         await service.CheckAsync();
         Assert.That(service.State.Stage, Is.EqualTo(NativeUpdateStage.Available));
+        Assert.That(service.State.ReleaseNotes, Is.EqualTo(notes));
 
         await service.DownloadAsync();
         Assert.Multiple(() =>
@@ -118,10 +123,27 @@ public sealed class NativeUpdateServiceTests
             Assert.That(service.State.Stage, Is.EqualTo(NativeUpdateStage.ReadyToRestart));
             Assert.That(service.State.Progress, Is.EqualTo(100));
             Assert.That(backend.Downloaded, Is.SameAs(release));
+            Assert.That(states.Where(state => state.Stage is NativeUpdateStage.Available or NativeUpdateStage.Downloading or NativeUpdateStage.ReadyToRestart)
+                .All(state => state.ReleaseNotes == notes), Is.True);
         });
 
         service.ApplyAndRestart();
         Assert.That(backend.Applied, Is.SameAs(release));
+    }
+
+    [Test]
+    public async Task FailedDownloadKeepsTheTargetsReleaseNotes()
+    {
+        var backend = new FakeBackend { IsInstalled = true, Release = new("2.3.4", new object(), "Changes for 2.3.4"),
+            DownloadError = new IOException("Connection ended") };
+        using var service = createService(backend);
+        await service.CheckAsync();
+        await service.DownloadAsync();
+        Assert.Multiple(() => {
+            Assert.That(service.State.Stage, Is.EqualTo(NativeUpdateStage.Failed));
+            Assert.That(service.State.Version, Is.EqualTo("2.3.4"));
+            Assert.That(service.State.ReleaseNotes, Is.EqualTo("Changes for 2.3.4"));
+        });
     }
 
     [Test]
@@ -196,6 +218,7 @@ public sealed class NativeUpdateServiceTests
         public NativeUpdateRelease? Release { get; init; }
 
         public Exception? CheckError { get; init; }
+        public Exception? DownloadError { get; init; }
 
         public int[] DownloadProgress { get; init; } = [];
 
@@ -218,7 +241,7 @@ public sealed class NativeUpdateServiceTests
             Downloaded = release;
             foreach (int value in DownloadProgress)
                 progress(value);
-            return Task.CompletedTask;
+            return DownloadError is null ? Task.CompletedTask : Task.FromException(DownloadError);
         }
 
         public void ApplyAndRestart(NativeUpdateRelease release) => Applied = release;

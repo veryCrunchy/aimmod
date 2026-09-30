@@ -71,7 +71,8 @@ internal sealed class LocalLibraryController : IDisposable
     public async Task<LocalLibraryLoadState> LoadAsync(
         LocalLibraryQuery query,
         bool append = false,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Func<LocalBeatmapSet, bool>? beatmapFilter = null)
     {
         ArgumentNullException.ThrowIfNull(query);
 
@@ -98,20 +99,23 @@ internal sealed class LocalLibraryController : IDisposable
             append ? previous.Total : 0,
             false));
 
+        CancellationToken requestToken = requestCancellation.Token;
         try
         {
             if (mode == NativeLocalLibraryMode.Beatmaps)
             {
-                LocalLibraryPage<LocalBeatmapSet> page = await source.SearchBeatmapSetsAsync(query, requestCancellation.Token)
-                    .AsTask().WaitAsync(requestTimeout, requestCancellation.Token).ConfigureAwait(false);
+                Task<LocalLibraryPage<LocalBeatmapSet>> search = Task.Run(async () => beatmapFilter is null
+                    ? await source.SearchBeatmapSetsAsync(query, requestToken).ConfigureAwait(false)
+                    : await ReadFilteredBeatmapPageAsync(source, query, beatmapFilter, requestToken).ConfigureAwait(false), requestCancellation.Token);
+                LocalLibraryPage<LocalBeatmapSet> page = await search.WaitAsync(requestTimeout, requestCancellation.Token).ConfigureAwait(false);
                 IReadOnlyList<LocalBeatmapSet> items = append
                     ? previous.BeatmapSets.Concat(page.Items).ToArray()
                     : page.Items;
                 return publishResult(generation, items, Array.Empty<LocalReplay>(), page.Total, page.HasMore, page.Warning);
             }
 
-            LocalLibraryPage<LocalReplay> replayPage = await source.SearchReplaysAsync(query, requestCancellation.Token)
-                .AsTask().WaitAsync(requestTimeout, requestCancellation.Token).ConfigureAwait(false);
+            LocalLibraryPage<LocalReplay> replayPage = await Task.Run(async () => await source.SearchReplaysAsync(query, requestToken).ConfigureAwait(false), requestCancellation.Token)
+                .WaitAsync(requestTimeout, requestCancellation.Token).ConfigureAwait(false);
             IReadOnlyList<LocalReplay> replays = append
                 ? previous.Replays.Concat(replayPage.Items).ToArray()
                 : replayPage.Items;
@@ -145,6 +149,25 @@ internal sealed class LocalLibraryController : IDisposable
 
             requestCancellation.Dispose();
         }
+    }
+
+    internal static async Task<LocalLibraryPage<LocalBeatmapSet>> ReadFilteredBeatmapPageAsync(
+        ILocalLibrarySource source, LocalLibraryQuery query, Func<LocalBeatmapSet, bool> matches, CancellationToken token)
+    {
+        // Apply the extra filters before paging, including matches beyond the first source page.
+        var filtered = new List<LocalBeatmapSet>();
+        var scan = query with { Offset = 0, Limit = 200 };
+        string? warning = null;
+        while (true)
+        {
+            token.ThrowIfCancellationRequested();
+            var page = await source.SearchBeatmapSetsAsync(scan, token).ConfigureAwait(false);
+            warning ??= page.Warning;
+            filtered.AddRange(page.Items.Where(matches));
+            if (!page.HasMore || page.Items.Count == 0) break;
+            scan = scan with { Offset = scan.Offset + page.Items.Count };
+        }
+        return new(filtered.Skip(query.Offset).Take(query.Limit).ToArray(), filtered.Count, query.Offset, query.Limit) { Warning = warning };
     }
 
     public void Cancel()

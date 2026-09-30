@@ -137,17 +137,33 @@ public sealed class ReplayAnalysisBatchService
                     new ReplayAnalysisRequest(staging.DirectoryPath, staging.BeatmapPath, staging.ReplayPath),
                     cancellationToken).ConfigureAwait(false);
                 completed[replay.ScoreId] = result;
-                if (onCompleted is not null)
-                    await onCompleted(replay.ScoreId, result).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;
             }
-            catch (Exception error) when (error is ExternalLazerReplayOpenException or ReplayAnalysisClientException or IOException or UnauthorizedAccessException)
+            catch (Exception error)
             {
+                // Any replay-specific failure (for example an empty or oversized file) is recorded
+                // so later batches move past it instead of retrying it first forever.
                 failed.Add(replay.ScoreId);
                 log(DescribeFailure(replay, error));
+                continue;
+            }
+
+            if (onCompleted is null)
+                continue;
+            try
+            {
+                await onCompleted(replay.ScoreId, completed[replay.ScoreId]).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception error)
+            {
+                log($"Replay analysis result for {replay.ScoreId:N} could not be published: {error.GetType().Name}: {error.Message}");
             }
         }
 

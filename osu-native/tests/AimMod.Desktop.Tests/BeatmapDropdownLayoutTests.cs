@@ -1,5 +1,6 @@
 using System.Reflection;
 using AimMod.Desktop.LocalLibrary;
+using AimMod.Desktop.Visuals;
 using NUnit.Framework;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
@@ -11,7 +12,7 @@ public sealed class BeatmapDropdownLayoutTests
 {
     [TestCase(false)]
     [TestCase(true)]
-    public void EmptyLabelPreservesNativeHeaderHeightWithoutFixingMenuHeight(bool ppTargets)
+    public void SharedHeaderKeepsMenuHeightUnconstrained(bool ppTargets)
     {
         using CompositeDrawable workspace = ppTargets
             ? new NativePpTargetsWorkspace(new InMemoryLocalLibrarySource([], []), () => null, () => null)
@@ -20,14 +21,27 @@ public sealed class BeatmapDropdownLayoutTests
         {
             var dropdown = (CompositeDrawable)workspace.GetType().GetField(field, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(workspace)!;
             object header = property(dropdown, "Header");
-            var label = (Container)property(header, "LabelContainer");
             Assert.Multiple(() =>
             {
-                Assert.That(label.AutoSizeAxes, Is.EqualTo(Axes.X));
-                Assert.That(label.Height, Is.EqualTo(30));
+                Assert.That(((Drawable)header).Height, Is.EqualTo(AimModVisualStyle.ControlHeight));
                 Assert.That(dropdown.AutoSizeAxes.HasFlag(Axes.Y), Is.True, "The menu must still grow when opened.");
             });
         }
+    }
+
+    [Test]
+    public void PpMenuAncestorsRenderAheadOfStatusAndResultsWithoutClipping()
+    {
+        using var workspace = new NativePpTargetsWorkspace(new InMemoryLocalLibrarySource([], []), () => null, () => null);
+        var band = (Container)property(workspace, "filterBand");
+        var header = (Container)property(workspace, "filterHeader");
+        Assert.Multiple(() =>
+        {
+            Assert.That(band.Depth, Is.LessThan(((Drawable)property(workspace, "status")).Depth));
+            Assert.That(band.Depth, Is.LessThan(((Drawable)property(workspace, "resultCount")).Depth));
+            Assert.That(header.Depth, Is.LessThan(((Drawable)property(workspace, "resultViewport")).Depth));
+            Assert.That(band.Masking || header.Masking, Is.False);
+        });
     }
 
     private static object property(object instance, string name)

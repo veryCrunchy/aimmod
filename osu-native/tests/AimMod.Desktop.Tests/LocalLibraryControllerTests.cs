@@ -146,6 +146,34 @@ public sealed class LocalLibraryControllerTests
         });
     }
 
+    [Test]
+    public async Task ExtraFiltersSearchPastTheFirstPageAndAppendWithoutLosingMatches()
+    {
+        var maps = Enumerable.Range(0, 450).Select(i => new LocalBeatmapSet(Guid.NewGuid(), i + 1,
+            $"Map {i}", "Artist", "Mapper", "", DateTimeOffset.UnixEpoch, null, [], 0)).ToArray();
+        var source = new FakeLocalLibrarySource {
+            BeatmapSearch = (query, token) => {
+                token.ThrowIfCancellationRequested();
+                return ValueTask.FromResult(new LocalLibraryPage<LocalBeatmapSet>(
+                    maps.Skip(query.Offset).Take(query.Limit).ToArray(), maps.Length, query.Offset, query.Limit));
+            },
+        };
+        using var controller = new LocalLibraryController(source, NativeLocalLibraryMode.Beatmaps);
+        Func<LocalBeatmapSet, bool> filter = set => set.OnlineId > 400;
+        var first = await controller.LoadAsync(new LocalLibraryQuery(Limit: 30), beatmapFilter: filter);
+        Assert.Multiple(() => {
+            Assert.That(first.Total, Is.EqualTo(50));
+            Assert.That(first.BeatmapSets, Has.Count.EqualTo(30));
+            Assert.That(first.HasMore, Is.True);
+            Assert.That(first.BeatmapSets[0].OnlineId, Is.EqualTo(401));
+        });
+        var final = await controller.LoadAsync(new LocalLibraryQuery(Offset: 30, Limit: 30), append: true, beatmapFilter: filter);
+        Assert.Multiple(() => {
+            Assert.That(final.BeatmapSets.Select(m => m.OnlineId), Is.EqualTo(Enumerable.Range(401, 50)));
+            Assert.That(final.HasMore, Is.False);
+        });
+    }
+
     private static LocalReplay replay(Guid id, string title) => new(
         id,
         Guid.Empty,

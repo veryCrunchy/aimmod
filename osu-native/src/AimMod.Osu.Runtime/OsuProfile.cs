@@ -30,9 +30,13 @@ public enum OsuProfileFetchStatus
     NetworkError,
     InvalidResponse,
     ServerError,
+    RateLimited,
 }
 
-public sealed record OsuProfileFetchResult(OsuProfileFetchStatus Status, OsuProfile? Profile = null);
+public sealed record OsuProfileFetchResult(
+    OsuProfileFetchStatus Status,
+    OsuProfile? Profile = null,
+    DateTimeOffset? RetryAfter = null);
 
 public sealed record OsuBestScore(
     long ScoreId,
@@ -88,13 +92,15 @@ public enum OsuBestScoresFetchStatus
     NetworkError,
     InvalidResponse,
     ServerError,
+    RateLimited,
 }
 
 public sealed record OsuBestScoresFetchResult(
     OsuBestScoresFetchStatus Status,
     IReadOnlyList<OsuBestScore>? Scores = null,
     bool IsFromCache = false,
-    DateTimeOffset? FetchedAt = null);
+    DateTimeOffset? FetchedAt = null,
+    DateTimeOffset? RetryAfter = null);
 
 public sealed record OsuUserBeatmapScore(
     long ScoreId,
@@ -113,7 +119,8 @@ public sealed record OsuUserBeatmapScoresFetchResult(
     OsuBestScoresFetchStatus Status,
     IReadOnlyList<OsuUserBeatmapScore>? Scores = null,
     bool IsFromCache = false,
-    DateTimeOffset? FetchedAt = null);
+    DateTimeOffset? FetchedAt = null,
+    DateTimeOffset? RetryAfter = null);
 
 internal sealed record OsuBestScoresCacheDocument(
     int SchemaVersion,

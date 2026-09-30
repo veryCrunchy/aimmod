@@ -148,7 +148,6 @@ public sealed partial class RealmLocalReplayMetadataSource : Component, ILocalRe
 
     internal static List<ScoreInfo> ReadDetachedScores(Realm realm, int? userId) =>
         realm.GetAllLocalScoresForUser(userId)
-             .Filter($"{nameof(ScoreInfo.Ruleset)}.{nameof(RulesetInfo.ShortName)} == $0", "osu")
              .OrderByDescending(score => score.Date)
              // Realm cannot translate Take. Enumerate lazily before applying the limit.
              .AsEnumerable()
@@ -205,7 +204,17 @@ public sealed partial class RealmLocalReplayMetadataSource : Component, ILocalRe
                 score.Statistics.GetValueOrDefault(HitResult.Miss),
                 score.PP,
                 mods,
-                hasReplayFile);
+                hasReplayFile,
+                BeatmapHash: beatmap.Hash,
+                HitStatistics: new AimMod.Osu.Runtime.Contracts.PpScoreStatistics(
+                    score.Statistics.GetValueOrDefault(HitResult.Great), score.Statistics.GetValueOrDefault(HitResult.Ok),
+                    score.Statistics.GetValueOrDefault(HitResult.Meh), score.Statistics.GetValueOrDefault(HitResult.Miss),
+                    score.Statistics.GetValueOrDefault(HitResult.SliderTailHit), score.Statistics.GetValueOrDefault(HitResult.LargeTickMiss),
+                    score.Statistics.GetValueOrDefault(HitResult.Perfect), score.Statistics.GetValueOrDefault(HitResult.Good),
+                    score.Statistics.GetValueOrDefault(HitResult.LargeTickHit), score.Statistics.GetValueOrDefault(HitResult.SmallTickHit),
+                    score.Statistics.GetValueOrDefault(HitResult.SmallTickMiss)),
+                ModsJson: Newtonsoft.Json.JsonConvert.SerializeObject(score.APIMods),
+                Passed: score.Passed, LegacyScore: score.IsLegacyScore);
         }
     }
 }

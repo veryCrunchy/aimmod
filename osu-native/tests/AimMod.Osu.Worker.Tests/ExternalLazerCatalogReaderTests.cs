@@ -126,6 +126,58 @@ public sealed class ExternalLazerCatalogReaderTests
         Assert.That(exception.Code, Is.EqualTo("catalog_query_invalid"));
     }
 
+    [Test]
+    public async Task PagesEverySortFromOneScanOfTheSameSnapshot()
+    {
+        var reader = new DynamicRealmLazerLibraryCatalogReader();
+        LazerLibrarySnapshot shared = snapshot();
+
+        ExternalLazerCatalogSearchResult first = await reader.ReadCatalogAsync(
+            shared,
+            new ExternalLazerCatalogSearchRequest(temporaryDirectory, ExternalLazerCatalogEntryKind.BeatmapSets, Sort: ExternalLazerCatalogSort.Title, Limit: 1));
+        ExternalLazerCatalogSearchResult second = await reader.ReadCatalogAsync(
+            shared,
+            new ExternalLazerCatalogSearchRequest(temporaryDirectory, ExternalLazerCatalogEntryKind.BeatmapSets, Sort: ExternalLazerCatalogSort.Title, Offset: 1, Limit: 1));
+        ExternalLazerCatalogSearchResult byStars = await reader.ReadCatalogAsync(
+            shared,
+            new ExternalLazerCatalogSearchRequest(temporaryDirectory, ExternalLazerCatalogEntryKind.BeatmapSets, Sort: ExternalLazerCatalogSort.StarRating, Limit: 1));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first.Total, Is.EqualTo(2));
+            Assert.That(second.Total, Is.EqualTo(2));
+            Assert.That(first.BeatmapSets.Single().Title, Is.EqualTo("Fixture Remix"));
+            Assert.That(second.BeatmapSets.Single().Title, Is.EqualTo("Fixture Title"));
+            Assert.That(first.HasMore, Is.True);
+            Assert.That(second.HasMore, Is.False);
+            Assert.That(byStars.BeatmapSets.Single().Title, Is.EqualTo("Fixture Remix"));
+        });
+    }
+
+    [Test]
+    public async Task RescansWhenADifferentSnapshotIsRead()
+    {
+        var reader = new DynamicRealmLazerLibraryCatalogReader();
+        var query = new ExternalLazerCatalogSearchRequest(temporaryDirectory, ExternalLazerCatalogEntryKind.Replays, Limit: 20);
+
+        ExternalLazerCatalogSearchResult before = await reader.ReadCatalogAsync(snapshot(), query);
+        using (Realm realm = Realm.GetInstance(new RealmConfiguration(realmPath)
+        {
+            SchemaVersion = RealmLazerLibrarySnapshotFactory.SupportedSchemaVersion,
+        }))
+        {
+            realm.Write(() => realm.RemoveAll<ScoreInfo>());
+        }
+
+        ExternalLazerCatalogSearchResult after = await reader.ReadCatalogAsync(snapshot(), query);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(before.Total, Is.EqualTo(2));
+            Assert.That(after.Total, Is.Zero);
+        });
+    }
+
     private LazerLibrarySnapshot snapshot() =>
         new(Guid.NewGuid(), realmPath, Path.Combine(temporaryDirectory, "files"), DateTimeOffset.UtcNow);
 

@@ -139,7 +139,8 @@ public sealed class HubPublicAccountScoreHistoryService : IAccountScoreHistorySe
                 item.BeatmapSetId, null, null, item.Title ?? "", item.Artist ?? "", item.Difficulty ?? "", item.PlayedAt,
                 item.StarRating, item.Accuracy, item.PerformancePoints, item.TotalScore, item.MaxCombo, item.CountMiss,
                 item.Mods?.Where(mod => !string.IsNullOrWhiteSpace(mod)).ToArray() ?? [], ScoreHistoryProvenance.OnlinePublic,
-                false, item.Passed, item.Bpm, (int)Math.Clamp(item.LengthMs / 1000, 0, int.MaxValue)))
+                false, item.Passed, item.Bpm, (int)Math.Clamp(item.LengthMs / 1000, 0, int.MaxValue),
+                LegacyScore: item.PpCalculation?.Lazer == false))
             .OrderByDescending(item => item.PlayedAt).ToArray();
         return new(publicProfile, scores, coverage(mapStatus(payload.Coverage.Best.Status), "public best score window", fetchedAt),
             coverage(mapStatus(payload.Coverage.Recent.Status), "public recent score window", fetchedAt));
@@ -191,5 +192,6 @@ public sealed class HubPublicAccountScoreHistoryService : IAccountScoreHistorySe
     private sealed record Item(long OnlineScoreId, int OsuUserId, int BeatmapId, int BeatmapSetId, string? Ruleset,
         string? Source, string? Title, string? Artist, string? Difficulty, DateTimeOffset PlayedAt, double StarRating,
         double Accuracy, double? PerformancePoints, long TotalScore, int MaxCombo, int CountMiss, string[]? Mods,
-        bool? Passed, double Bpm, long LengthMs);
+        bool? Passed, double Bpm, long LengthMs, PpInput? PpCalculation);
+    private sealed record PpInput(bool? Lazer);
 }

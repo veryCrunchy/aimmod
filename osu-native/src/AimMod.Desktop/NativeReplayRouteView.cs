@@ -1,79 +1,95 @@
 using AimMod.Desktop.Coaching;
 using AimMod.Desktop.Hub;
 using AimMod.Desktop.LocalLibrary;
+using AimMod.Desktop.PpTargets;
+using AimMod.Desktop.Replays;
 using AimMod.Desktop.Visuals;
 using AimMod.Osu.Runtime;
 using AimMod.Osu.Runtime.Contracts;
+using osu.Framework.Allocation;
 using osu.Framework.Bindables;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
 using osu.Framework.Input.Events;
-using osu.Game.Graphics.Sprites;
+using osu.Framework.Platform;
 using osu.Game.Graphics.Containers;
-using osu.Game.Graphics.UserInterface;
+using osu.Game.Graphics.Sprites;
 using osu.Game.Screens;
+using osuTK;
+using osuTK.Input;
 
 namespace AimMod.Desktop;
+
+public enum ReplaySidePanelTab
+{
+    Library,
+    Summary,
+    Mistakes,
+}
 
 /// <summary>
 /// Native workspace around osu!'s official replay player. Score, artwork and
 /// analysis values all originate in the local lazer library.
 /// </summary>
+/// <remarks>
+/// Two columns: the playback column (title row, letterboxed viewport and transport) and one tabbed side
+/// panel holding the library, the run summary and the mistake list. Narrow widths stack the side panel
+/// below playback.
+/// </remarks>
 public partial class NativeReplayRouteView : Container
 {
-    private const float browser_width = 320;
-    private const float inspector_width = 340;
-    private const float transport_height = 240;
+    private const float header_height = 80;
+    private const float column_gap = 12;
+    private const float side_panel_fraction = 0.28f;
+    private const float side_panel_min_width = 340;
+    private const float side_panel_max_width = 440;
+    private const float stacked_width = 800;
+    private const float stacked_panel_min_height = 300;
+    private const float side_tabs_height = 52;
+    private const float browser_list_top = 122;
+    private const float max_playback_offset = 24;
+
+    private readonly Container playbackColumn;
+    private readonly Container playbackArea;
+    private readonly Container sidePanel;
+    private readonly Container[] sideContents;
+    private readonly Bindable<ReplaySidePanelTab> sideTab = new(ReplaySidePanelTab.Library);
+    private AimModLayout.ChangeTracker<Vector2> layoutTracker;
+    private AimModLayout.ChangeTracker<float> statusWidthTracker;
+    private bool footageOpen;
+    private AimModButton? footageButton;
+    public void OpenFootage() => footageButton?.Action?.Invoke();
 
     public OsuScreenStack ScreenStack { get; } = new() { RelativeSizeAxes = Axes.Both };
 
-    private readonly ILocalLibrarySource? source;
-    private readonly IReadOnlyDictionary<Guid, ReplayAnalysisResult> analyses;
     private readonly Action<LocalReplay>? openReplay;
-    private readonly OsuTextBox searchBox;
-    private readonly SpriteText replayCount;
-    private readonly FillFlowContainer<Drawable> replayList;
+    private readonly Action<string>? openPractice;
+    private readonly Func<LocalReplay, CancellationToken, Task>? openBeatmap;
+
+    // Playback column.
+    private readonly ReplayTransportController transport = new();
+    private readonly ReplayNowPlayingBar nowPlaying;
+    private readonly ReplayViewport viewport;
+    private readonly ReplayTransportBar transportBar;
+    private readonly ReplayDisplaySettingsPanel displaySettings;
+    private readonly Container displaySettingsDismiss;
+    private readonly BindableBool showGameplayHud = new(true);
+    private AimModPopupLayer? displaySettingsLayer;
+    private ReplayPlaybackLayout playbackLayout;
     private readonly Container statusLayer;
     private readonly SpriteIcon statusIcon;
     private readonly TruncatingSpriteText statusTitle;
-    private readonly TruncatingSpriteText statusDetail;
-    private readonly SpriteText summaryAccuracy;
-    private readonly SpriteText summaryPerformance;
-    private readonly SpriteText summaryMisses;
-    private readonly SpriteText summaryCombo;
-    private readonly SpriteText analysisTitle;
-    private readonly WrappedLabel analysisSummary;
-    private readonly WrappedLabel analysisNextPlay;
-    private readonly FillFlowContainer<Drawable> notableRows;
-    private readonly FillFlowContainer<Drawable> mapPatternRows;
-    private readonly FillFlowContainer<Drawable> momentButtons;
-    private readonly AimModScrollContainer momentScroll;
-    private readonly ReplayJudgementTimeline judgementTimeline;
-    private readonly SpriteText currentTimeText;
-    private readonly SpriteText durationText;
-    private readonly SpriteText pauseLabel;
-    private readonly SpriteText speedLabel;
-    private readonly Container analysisCard;
-    private readonly AimModLoadingOverlay loadingOverlay;
-    private readonly NativeHubReplaySharePanel hubSharePanel;
-    private readonly OsuButton practiceButton;
-    private readonly Action<string>? openPractice;
-    private readonly Func<LocalReplay, CancellationToken, Task>? openBeatmap;
-    private IBindable<double>? currentTime;
-    private IBindable<double>? duration;
-    private IBindable<bool>? paused;
-    private NativeReplayPlayer? player;
+    private readonly WrappedLabel statusDetail;
+    private readonly FillFlowContainer statusActions;
+
+    [Resolved(canBeNull: true)]
+    private GameHost? host { get; set; }
+
+    private NativeReplayPlayer? player => transport.Player;
+
     private LocalReplay? selectedReplay;
-    private CancellationTokenSource? loading;
-    private CancellationTokenSource? mapPatternLoading;
-    private ReplayBrowserSnapshot replayBrowser = ReplayBrowserSnapshot.Empty;
-    private readonly HashSet<string> expandedReplayMaps = new(StringComparer.Ordinal);
-    private long analysisRevision;
-    private double playbackSpeed = 1;
-    private bool analysisInProgress;
-    private bool analysisHasResult;
 
     public NativeReplayRouteView(
         ILocalLibrarySource? source = null,
@@ -86,277 +102,118 @@ public partial class NativeReplayRouteView : Container
         Action<Uri>? openUrl = null,
         Action<string>? copyText = null,
         Action<string>? openPractice = null,
-        Func<LocalReplay, CancellationToken, Task>? openBeatmap = null)
+        Func<LocalReplay, CancellationToken, Task>? openBeatmap = null,
+        Func<ILocalScorePpHydrationService?>? ppHydrator = null,
+        Func<LocalReplay?, Action, Drawable>? footageFactory = null)
     {
         this.source = source;
+        this.ppHydrator = ppHydrator;
         this.analyses = analyses ?? new Dictionary<Guid, ReplayAnalysisResult>();
         this.openReplay = openReplay;
         this.openPractice = openPractice;
         this.openBeatmap = openBeatmap;
         RelativeSizeAxes = Axes.Both;
 
-        Children = new Drawable[]
+        statusLayer = createStatusLayer(out statusIcon, out statusTitle, out statusDetail, out statusActions);
+        sideContents = new Container[]
         {
-            makePanel(new Container
+            tabContent(createLibraryContent()),
+            tabContent(createSummaryContent(hubShareService, hubCredentialStore, hubUploadQueue, hubPreferenceStore, openUrl, copyText)),
+            tabContent(createMistakesContent()),
+        };
+
+        playbackColumn = new Container
+        {
+            Children = new Drawable[]
             {
-                RelativeSizeAxes = Axes.Y,
-                Width = browser_width,
-                Padding = new MarginPadding(12),
-                Children = new Drawable[]
+                nowPlaying = new ReplayNowPlayingBar(),
+                playbackArea = new Container
                 {
-                    place(section("REPLAY LIBRARY"), y: 2),
-                    replayCount = place(makeText("Loading local runs...", 10, AimModPalette.Muted, "SemiBold"), y: 22),
-                    searchBox = new OsuTextBox
-                    {
-                        RelativeSizeAxes = Axes.X,
-                        Height = AimModVisualStyle.ControlHeight,
-                        Y = 44,
-                        PlaceholderText = "Search replays",
-                    },
-                    new AimModScrollContainer
-                    {
-                        RelativeSizeAxes = Axes.Both,
-                        Padding = new MarginPadding { Top = 94 },
-                        Child = replayList = new FillFlowContainer<Drawable>
-                        {
-                            RelativeSizeAxes = Axes.X,
-                            AutoSizeAxes = Axes.Y,
-                            Padding = new MarginPadding { Bottom = 12 },
-                            Direction = FillDirection.Vertical,
-                            Spacing = new(AimModVisualStyle.RelatedSpacing),
-                        },
-                    },
-                },
-            }, Anchor.TopLeft, Anchor.TopLeft, null, browser_width),
-            new Container
-            {
-                RelativeSizeAxes = Axes.Both,
-                Padding = new MarginPadding { Left = browser_width + AimModVisualStyle.RowSpacing, Right = inspector_width + AimModVisualStyle.RowSpacing },
-                Children = new Drawable[]
-                {
-                    new Container
-                    {
-                        RelativeSizeAxes = Axes.Both,
-                        Padding = new MarginPadding { Bottom = transport_height + AimModVisualStyle.RowSpacing },
-                        Masking = true,
-                        Children = new Drawable[]
-                        {
-                            ScreenStack,
-                            statusLayer = new Container
-                            {
-                                RelativeSizeAxes = Axes.Both,
-                                Children = new Drawable[]
-                                {
-                                    new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas },
-                                    new FillFlowContainer
-                                    {
-                                        Anchor = Anchor.Centre,
-                                        Origin = Anchor.Centre,
-                                        RelativeSizeAxes = Axes.X,
-                                        AutoSizeAxes = Axes.Y,
-                                        Width = 1,
-                                        Padding = new MarginPadding { Horizontal = 40 },
-                                        Direction = FillDirection.Vertical,
-                                        Spacing = new(10),
-                                        Children = new Drawable[]
-                                        {
-                                            new Container
-                                            {
-                                                RelativeSizeAxes = Axes.X,
-                                                Height = 44,
-                                                Child = statusIcon = new SpriteIcon
-                                                {
-                                                    Anchor = Anchor.Centre,
-                                                    Origin = Anchor.Centre,
-                                                    Size = new(34),
-                                                    Icon = FontAwesome.Solid.PlayCircle,
-                                                    Colour = AimModPalette.Cyan,
-                                                },
-                                            },
-                                            statusTitle = truncatingText("Choose a replay", 25, AimModPalette.Text, 540, "Bold", Anchor.TopCentre),
-                                            statusDetail = truncatingText("Expand a map on the left, then choose an attempt to inspect.", 13, AimModPalette.Muted, 540, anchor: Anchor.TopCentre),
-                                        },
-                                    },
-                                },
-                            },
-                        },
-                    },
-                    makePanel(new Container
-                    {
-                        RelativeSizeAxes = Axes.Both,
-                        Padding = new MarginPadding { Left = 14, Top = 12, Right = 14, Bottom = 10 },
-                        Children = new Drawable[]
-                        {
-                            new FillFlowContainer
-                            {
-                                RelativeSizeAxes = Axes.X,
-                                Height = 36,
-                                Direction = FillDirection.Horizontal,
-                                Spacing = new(AimModVisualStyle.RelatedSpacing),
-                                Children = new Drawable[]
-                                {
-                                    new TransportButton("-5s", () => player?.SeekTo((currentTime?.Value ?? 0) - 5000)),
-                                    new TransportButton("Play", () => player?.TogglePause(), pauseLabel = makeText("Play", 12, AimModPalette.Text, "Bold")),
-                                    new TransportButton("+5s", () => player?.SeekTo((currentTime?.Value ?? 0) + 5000)),
-                                    new TransportButton("1.00x", cycleSpeed, speedLabel = makeText("1.00x", 12, AimModPalette.Text, "Bold")),
-                                },
-                            },
-                            currentTimeText = place(makeText("0:00.000", 12, AimModPalette.Text, "SemiBold"), y: 44),
-                            durationText = place(makeText("0:00.000", 12, AimModPalette.Muted, "SemiBold"), y: 44, anchor: Anchor.TopRight, origin: Anchor.TopRight),
-                            new ReplayScrubber(
-                                () => currentTime?.Value ?? 0,
-                                () => duration?.Value ?? 0,
-                                time => player?.SeekTo(time))
-                            {
-                                RelativeSizeAxes = Axes.X,
-                                Height = 24,
-                                Y = 58,
-                            },
-                            place(makeText("JUDGEMENT TIMELINE", 11, AimModPalette.Muted, "Bold"), y: 91),
-                            createJudgementLegend(),
-                            judgementTimeline = new ReplayJudgementTimeline { Y = 116 },
-                            momentScroll = new AimModScrollContainer(Direction.Horizontal)
-                            {
-                                RelativeSizeAxes = Axes.X,
-                                Height = 42,
-                                Y = 166,
-                                Child = momentButtons = new FillFlowContainer<Drawable>
-                                {
-                                    AutoSizeAxes = Axes.Both,
-                                    Direction = FillDirection.Horizontal,
-                                    Spacing = new(AimModVisualStyle.RelatedSpacing),
-                                },
-                            },
-                        },
-                    }, Anchor.BottomLeft, Anchor.BottomLeft, transport_height),
-                },
-            },
-            makePanel(new AimModScrollContainer
-            {
-                RelativeSizeAxes = Axes.Both,
-                Child = new FillFlowContainer
-                {
-                    RelativeSizeAxes = Axes.X,
-                    AutoSizeAxes = Axes.Y,
-                    Padding = new MarginPadding { Left = 14, Top = 14, Right = 8, Bottom = 24 },
-                    Direction = FillDirection.Vertical,
-                    Spacing = new(AimModVisualStyle.RowSpacing),
+                    RelativeSizeAxes = Axes.Both,
+                    Padding = new MarginPadding { Top = ReplayNowPlayingBar.BarHeight + AimModVisualStyle.RelatedSpacing },
                     Children = new Drawable[]
                     {
-                        new AimModSubsectionHeader("Run summary", "selected attempt"),
-                        new GridContainer
+                        viewport = new ReplayViewport(ScreenStack, statusLayer) { RelativeSizeAxes = Axes.X, Height = 270 },
+                        transportBar = new ReplayTransportBar(transport, toggleDisplaySettings),
+                        displaySettingsDismiss = new ClickableContainer
                         {
-                            RelativeSizeAxes = Axes.X,
-                            Height = 104,
-                            ColumnDimensions = new[]
-                            {
-                                new Dimension(GridSizeMode.Relative, 0.5f),
-                                new Dimension(GridSizeMode.Relative, 0.5f),
-                            },
-                            RowDimensions = new[]
-                            {
-                                new Dimension(GridSizeMode.Relative, 0.5f),
-                                new Dimension(GridSizeMode.Relative, 0.5f),
-                            },
-                            Content = new[]
-                            {
-                                new Drawable[]
-                                {
-                                    summaryMetric("ACCURACY", "--", AimModPalette.Text, out summaryAccuracy),
-                                    summaryMetric("PERFORMANCE", "--", AimModPalette.Cyan, out summaryPerformance),
-                                },
-                                new Drawable[]
-                                {
-                                    summaryMetric("MISSES", "--", AimModPalette.Text, out summaryMisses),
-                                    summaryMetric("MAX COMBO", "--", AimModPalette.Text, out summaryCombo),
-                                },
-                            },
-                        },
-                        new AimModSubsectionHeader("Analysis summary", "exact judgements"),
-                        analysisCard = new Container
-                        {
-                            RelativeSizeAxes = Axes.X,
-                            AutoSizeAxes = Axes.Y,
-                            Masking = true,
-                            CornerRadius = AimModVisualStyle.CardRadius,
+                            RelativeSizeAxes = Axes.Both,
                             Alpha = 0,
-                            Children = new Drawable[]
-                            {
-                                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
-                                new Box { RelativeSizeAxes = Axes.Y, Width = 3, Colour = AimModPalette.Cyan },
-                                new FillFlowContainer
-                                {
-                                    RelativeSizeAxes = Axes.X,
-                                    AutoSizeAxes = Axes.Y,
-                                    Padding = new MarginPadding { Left = 14, Top = 12, Right = 12, Bottom = 12 },
-                                    Direction = FillDirection.Vertical,
-                                    Spacing = new(AimModVisualStyle.RelatedSpacing),
-                                    Children = new Drawable[]
-                                    {
-                                        analysisTitle = makeText("Analysing exact judgements...", 13, AimModPalette.Text, "Bold"),
-                                        analysisSummary = new WrappedLabel("Preparing replay details", 11, AimModPalette.Muted),
-                                    },
-                                },
-                            },
+                            Action = () => setDisplaySettingsOpen(false),
                         },
-                        new AimModSubsectionHeader("Notable moments", "click to review"),
-                        notableRows = new FillFlowContainer<Drawable>
+                        displaySettings = new ReplayDisplaySettingsPanel(showGameplayHud)
                         {
-                            RelativeSizeAxes = Axes.X,
-                            AutoSizeAxes = Axes.Y,
-                            Direction = FillDirection.Vertical,
-                            Spacing = new(AimModVisualStyle.RelatedSpacing),
-                        },
-                        new AimModSubsectionHeader("Across attempts", "same difficulty"),
-                        mapPatternRows = new FillFlowContainer<Drawable>
-                        {
-                            RelativeSizeAxes = Axes.X,
-                            AutoSizeAxes = Axes.Y,
-                            Direction = FillDirection.Vertical,
-                            Spacing = new(5),
-                        },
-                        new OpenBeatmapButton(() => selectedReplay, openBeatmap) { RelativeSizeAxes = Axes.X, Width = 1 },
-                        practiceButton = new PracticeActionButton
-                        {
-                            RelativeSizeAxes = Axes.X,
-                            Height = 38,
-                            Text = "Practice this map",
-                            Action = () => { if (selectedReplay is not null) openPractice?.Invoke(selectedReplay.Title); },
-                            Enabled = { Value = false },
-                        },
-                        new AimModSubsectionHeader("AimMod Hub", "manual sharing"),
-                        hubSharePanel = new NativeHubReplaySharePanel(
-                            hubShareService,
-                            hubCredentialStore,
-                            hubUploadQueue,
-                            hubPreferenceStore,
-                            openUrl,
-                            copyText),
-                        new AimModSubsectionHeader("Focus for your next play"),
-                        new Container
-                        {
-                            RelativeSizeAxes = Axes.X,
-                            AutoSizeAxes = Axes.Y,
-                            Masking = true,
-                            CornerRadius = AimModVisualStyle.ControlRadius,
-                            Children = new Drawable[]
-                            {
-                                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
-                                new Box { RelativeSizeAxes = Axes.Y, Width = 3, Colour = AimModPalette.Success },
-                                new Container
-                                {
-                                    Padding = new MarginPadding { Left = 14, Top = 12, Right = 12, Bottom = 12 },
-                                    RelativeSizeAxes = Axes.X,
-                                    AutoSizeAxes = Axes.Y,
-                                    Child = analysisNextPlay = new WrappedLabel("Select a run to get a measured next step.", 12, AimModPalette.Text, "SemiBold"),
-                                },
-                            },
+                            Anchor = Anchor.TopRight,
+                            Origin = Anchor.TopRight,
+                            Position = new(-AimModVisualStyle.RelatedSpacing, AimModVisualStyle.RelatedSpacing),
+                            Alpha = 0,
+                            CloseRequested = () => setDisplaySettingsOpen(false),
                         },
                     },
                 },
-            }, Anchor.TopRight, Anchor.TopRight, null, inspector_width),
-            loadingOverlay = new AimModLoadingOverlay(),
+            },
         };
+
+        sidePanel = makePanel(new Container
+        {
+            RelativeSizeAxes = Axes.Both,
+            Children = new Drawable[]
+            {
+                new Container
+                {
+                    RelativeSizeAxes = Axes.X,
+                    Height = side_tabs_height,
+                    Padding = new MarginPadding { Horizontal = 12, Top = 12 },
+                    Child = new AimModTabControl<ReplaySidePanelTab> { Current = sideTab },
+                },
+                new Box { RelativeSizeAxes = Axes.X, Height = 1, Y = side_tabs_height, Colour = AimModPalette.Border },
+                new Container
+                {
+                    RelativeSizeAxes = Axes.Both,
+                    Padding = new MarginPadding { Top = side_tabs_height + 1 },
+                    Children = sideContents,
+                },
+            },
+        }, Anchor.TopLeft, Anchor.TopLeft);
+
+        Add(new AimModSectionHeader("Replays", "Watch your plays, compare attempts, and review mistakes.") { Width = .75f });
+        Add(new Container
+        {
+            RelativeSizeAxes = Axes.Both,
+            Padding = new MarginPadding { Top = header_height },
+            // The side panel precedes playback so the playback column's popovers draw above it.
+            Children = new Drawable[] { sidePanel, playbackColumn },
+        });
+
+        if (footageFactory is not null)
+        {
+            Drawable? footage = null;
+            nowPlaying.AddAction(footageButton = new AimModButton("Find footage", () =>
+            {
+                if (footage is not null) return;
+                SuspendPlayback();
+                setDisplaySettingsOpen(false);
+                var previousVisibility = Children.ToDictionary(child => child, child => child.Alpha);
+                foreach (Drawable child in previousVisibility.Keys) child.Hide();
+                footageOpen = true;
+                footage = footageFactory(selectedReplay, () =>
+                {
+                    if (footage is null) return;
+                    Remove(footage, true);
+                    footage = null;
+                    footageOpen = false;
+                    foreach (var child in previousVisibility) child.Key.Alpha = child.Value;
+                });
+                footage.Depth = -100;
+                Add(footage);
+            }));
+        }
+
+        sideTab.BindValueChanged(tab =>
+        {
+            for (int index = 0; index < sideContents.Length; index++)
+                sideContents[index].Alpha = index == (int)tab.NewValue ? 1 : 0;
+        }, true);
 
         analysisTitle.Text = "No replay selected";
         analysisSummary.Text = "Choose an attempt to calculate exact judgements and coaching evidence.";
@@ -365,21 +222,190 @@ public partial class NativeReplayRouteView : Container
         showMapPatternState("Choose a map with multiple attempts to compare repeated mistakes.");
     }
 
+    private static Container tabContent(Drawable content) => new()
+    {
+        RelativeSizeAxes = Axes.Both,
+        Alpha = 0,
+        Child = content,
+    };
+
+    /// <summary>The side panel tab currently shown.</summary>
+    public Bindable<ReplaySidePanelTab> SideTab => sideTab;
+
     protected override void LoadComplete()
     {
         base.LoadComplete();
-        searchBox.OnCommit += (_, _) => loadReplayBrowser();
+        practiceButton.Enabled.BindValueChanged(enabled => practiceButton.FadeTo(enabled.NewValue ? 1 : 0.45f, AimModVisualStyle.FastTransition), true);
+        searchBox.QueryChanged += _ => loadReplayBrowser();
+        searchBox.MoveToResults += () => AimModInteractiveSurface.FocusFirst(replayList);
+        gameMode.BindValueChanged(_ => loadReplayBrowser());
+        modSelection.BindValueChanged(_ => loadReplayBrowser());
         if (source is not null)
             loadReplayBrowser();
+    }
+
+    public override bool HandleNonPositionalInput => true;
+
+    protected override bool OnKeyDown(KeyDownEvent e)
+    {
+        if (footageOpen || e.ControlPressed || e.AltPressed || GetContainingInputManager()?.FocusedDrawable is osu.Framework.Graphics.UserInterface.TextBox)
+            return base.OnKeyDown(e);
+
+        switch (e.Key)
+        {
+            case Key.Escape when displaySettings.Alpha > 0:
+                setDisplaySettingsOpen(false);
+                return true;
+
+            case Key.Space when player is not null && !e.Repeat:
+                transport.TogglePause();
+                return true;
+
+            case Key.Left or Key.Right when player is not null:
+                double step = e.ShiftPressed ? ReplayTransportController.FineSeekStepMs : ReplayTransportController.SeekStepMs;
+                transport.SeekBy(e.Key == Key.Left ? -step : step);
+                return true;
+
+            case Key.Comma or Key.Period when player is not null:
+                transport.StepFrame(e.Key == Key.Comma ? -1 : 1);
+                return true;
+
+            case Key.J or Key.BracketLeft when player is not null:
+                transport.JumpToMoment(-1);
+                return true;
+
+            case Key.K or Key.BracketRight when player is not null:
+                transport.JumpToMoment(1);
+                return true;
+        }
+
+        return base.OnKeyDown(e);
+    }
+
+    /// <summary>Splits the route into the playback column and the side panel.</summary>
+    internal static ReplayRouteLayout CalculateLayout(float width, float height)
+    {
+        width = Math.Max(0, width);
+        height = Math.Max(0, height);
+        if (width >= stacked_width)
+        {
+            float side = Math.Clamp(width * side_panel_fraction, side_panel_min_width, side_panel_max_width);
+            float playback = Math.Max(0, width - side - column_gap);
+            ReplayPlaybackLayout block = ReplayPlaybackLayout.Calculate(playback, height - ReplayNowPlayingBar.BarHeight - AimModVisualStyle.RelatedSpacing);
+            return new(ReplayRouteLayoutMode.TwoColumn, new(0, 0, playback, height), new(playback + column_gap, 0, side, height), block);
+        }
+
+        // Stacked: playback on top, as large as the width allows while leaving the panel usable.
+        float available = height - ReplayNowPlayingBar.BarHeight - AimModVisualStyle.RelatedSpacing - column_gap - stacked_panel_min_height;
+        ReplayPlaybackLayout stacked = ReplayPlaybackLayout.Calculate(width, available);
+        float playbackHeight = ReplayNowPlayingBar.BarHeight + AimModVisualStyle.RelatedSpacing + stacked.Height;
+        float panelTop = playbackHeight + column_gap;
+        return new(ReplayRouteLayoutMode.Stacked, new(0, 0, width, playbackHeight), new(0, panelTop, width, Math.Max(0, height - panelTop)), stacked);
     }
 
     protected override void Update()
     {
         base.Update();
-        currentTimeText.Text = formatTime(currentTime?.Value ?? 0);
-        durationText.Text = formatTime(duration?.Value ?? 0);
-        pauseLabel.Text = paused?.Value != false ? "Play" : "Pause";
-        statusTitle.MaxWidth = statusDetail.MaxWidth = Math.Max(120, statusLayer.DrawWidth - 80);
+        if (footageOpen) { SuspendPlayback(); return; }
+
+        var size = new Vector2(DrawWidth, Math.Max(0, DrawHeight - header_height));
+        if (layoutTracker.Update(size))
+            applyLayout(CalculateLayout(size.X, size.Y));
+
+        updateBrowserStatusPadding();
+
+        if (statusWidthTracker.Update(statusLayer.DrawWidth))
+            statusTitle.MaxWidth = Math.Max(120, statusLayer.DrawWidth - 80);
+    }
+
+    private void applyLayout(ReplayRouteLayout layout)
+    {
+        playbackColumn.Position = layout.Playback.Location;
+        playbackColumn.Size = layout.Playback.Size;
+        sidePanel.Position = layout.Side.Location;
+        sidePanel.Size = layout.Side.Size;
+        playbackLayout = layout.Block;
+        // When width limits the viewport, balance a small spare band above and below the player. The offset
+        // is capped so the title row stays visually attached to the viewport.
+        float area = layout.Playback.Height - ReplayNowPlayingBar.BarHeight - AimModVisualStyle.RelatedSpacing;
+        float offset = layout.Mode == ReplayRouteLayoutMode.TwoColumn ? Math.Clamp((area - playbackLayout.Height) / 2, 0, max_playback_offset) : 0;
+        viewport.Y = offset;
+        viewport.Height = playbackLayout.ViewportSize.Y;
+        transportBar.Y = offset + playbackLayout.TransportY;
+        displaySettings.Y = offset + AimModVisualStyle.RelatedSpacing;
+        displaySettings.MaximumHeight = Math.Max(160, layout.Playback.Height - ReplayNowPlayingBar.BarHeight - AimModVisualStyle.RelatedSpacing * 3);
+    }
+
+    private void toggleDisplaySettings() => setDisplaySettingsOpen(displaySettings.Alpha <= 0);
+
+    private void setDisplaySettingsOpen(bool open)
+    {
+        bool isOpen = displaySettings.Alpha > 0;
+        if (open == isOpen)
+            return;
+
+        displaySettingsLayer?.Dispose();
+        displaySettingsLayer = null;
+        if (open)
+        {
+            displaySettings.EnsurePopulated();
+            // The popover must draw above the side panel and the transport.
+            displaySettingsLayer = new AimModPopupLayer(displaySettings, action => (host?.UpdateThread.Scheduler ?? Scheduler).Add(action));
+            displaySettings.FadeIn(AimModVisualStyle.FastTransition);
+            displaySettingsDismiss.Alpha = 1;
+            displaySettingsDismiss.AlwaysPresent = true;
+        }
+        else
+        {
+            displaySettings.FadeOut(AimModVisualStyle.FastTransition);
+            displaySettings.Alpha = 0;
+            displaySettingsDismiss.Alpha = 0;
+            displaySettingsDismiss.AlwaysPresent = false;
+        }
+
+        transportBar.SetDisplaySettingsOpen(open);
+    }
+
+    internal bool DisplaySettingsOpen => displaySettings.Alpha > 0;
+
+    internal ReplayDisplaySettingsPanel DisplaySettings => displaySettings;
+
+    internal ReplayTransportBar TransportBar => transportBar;
+
+    internal ReplayViewport Viewport => viewport;
+
+    internal ReplayNowPlayingBar NowPlaying => nowPlaying;
+
+    internal Container PlaybackColumn => playbackColumn;
+
+    internal Container SidePanel => sidePanel;
+
+    internal Drawable ModeFilter => modeDropdown;
+
+    internal Drawable ModFilter => modDropdown;
+
+    internal void OpenPlaybackSettingsForCapture() => setDisplaySettingsOpen(true);
+
+    internal void OpenSpeedMenuForCapture() => transportBar.SpeedDropdown.SetMenuOpen(true);
+
+    internal void ShowTabForCapture(ReplaySidePanelTab tab) => sideTab.Value = tab;
+
+    private void retrySelectedReplay()
+    {
+        if (selectedReplay is { } replay && replay.RulesetShortName == "osu")
+            openReplay?.Invoke(replay);
+    }
+
+    private void chooseAnotherReplay()
+    {
+        statusIcon.Icon = FontAwesome.Solid.PlayCircle;
+        statusIcon.Colour = AimModPalette.Cyan;
+        statusTitle.Text = "Choose a replay";
+        statusTitle.Colour = AimModPalette.Text;
+        statusDetail.Text = "Pick a map in the library, then choose an attempt to watch.";
+        statusActions.FadeOut(AimModVisualStyle.FastTransition);
+        sideTab.Value = ReplaySidePanelTab.Library;
+        searchBox.FocusSearch();
     }
 
     public void SetReplaySummary(LocalReplay replay)
@@ -388,430 +414,84 @@ public partial class NativeReplayRouteView : Container
         practiceButton.Enabled.Value = openPractice is not null;
         expandedReplayMaps.Add(ReplayBrowserModel.MapKeyFor(replay));
         analysisRevision = -1;
-        analysisInProgress = false;
         analysisHasResult = false;
-        summaryAccuracy.Text = formatAccuracy(replay.Accuracy);
-        summaryPerformance.Text = replay.PerformancePoints is { } pp ? $"{pp:0.#}pp" : $"{replay.TotalScore:N0}";
-        summaryMisses.Text = replay.MissCount.ToString("N0");
-        summaryCombo.Text = $"{replay.MaxCombo:N0}x";
+        showRunSummary(replay);
+        nowPlaying.SetReplay(replay);
         statusIcon.Icon = FontAwesome.Solid.PlayCircle;
         statusIcon.Colour = AimModPalette.Cyan;
         statusTitle.Text = replay.Title;
         statusTitle.Colour = AimModPalette.Text;
-        statusDetail.Text = $"{replay.Difficulty}  //  {formatAccuracy(replay.Accuracy)}  //  {replay.PlayedAt.LocalDateTime:g}";
+        statusDetail.Text = $"{replay.Difficulty}  ·  {formatAccuracy(replay.Accuracy)}  ·  {replay.PlayedAt.LocalDateTime:g}";
+        statusActions.Alpha = 0;
         statusLayer.FadeIn(80);
+        // Choosing an attempt moves on to its summary; the Library tab is one click away.
+        sideTab.Value = ReplaySidePanelTab.Summary;
         hubSharePanel.SetReplay(replay, analyses.ContainsKey(replay.ScoreId));
 
-        if (analyses.TryGetValue(replay.ScoreId, out ReplayAnalysisResult? cachedAnalysis))
+        if (replay.RulesetShortName != "osu")
+        {
+            practiceButton.Enabled.Value = false;
+            analysisTitle.Text = "Score details";
+            analysisSummary.Text = "PP and score statistics are available for this mode.";
+            analysisNextPlay.Text = "Replay playback and coaching currently support osu!standard.";
+            judgementCounts.Alpha = 0;
+            mapPatternRows.Clear();
+            showNotableState("Mistake review is available for osu!standard replays.", AimModPalette.Muted);
+            clearMoments();
+            transport.Attach(null);
+            statusDetail.Text = "Playback and mistake review currently support osu!standard replays.";
+        }
+        else if (analyses.TryGetValue(replay.ScoreId, out ReplayAnalysisResult? cachedAnalysis))
             showCompletedAnalysis(cachedAnalysis);
         else
             showPendingAnalysis();
 
-        loadReplayBrowser();
-    }
-
-    private partial class PracticeActionButton : OsuButton
-    {
-        public PracticeActionButton() => AutoSizeAxes = Axes.None;
+        // Selection only changes highlighting; the library itself has not changed.
+        if (browserLoaded)
+            renderReplayBrowser();
+        else
+            loadReplayBrowser();
     }
 
     public void AttachPlayer(NativeReplayPlayer replayPlayer)
     {
         player?.SuspendPlayback();
-        player = replayPlayer;
-        currentTime = replayPlayer.CurrentTime;
-        duration = replayPlayer.Duration;
-        paused = replayPlayer.IsPaused;
+        transport.Attach(replayPlayer);
+        replayPlayer.ShowGameplayHud.BindTo(showGameplayHud);
     }
 
     public void SuspendPlayback() => player?.SuspendPlayback();
+
+    public bool SeekToMoment(double timeMs) => double.IsFinite(timeMs) && timeMs >= 0 && player?.SeekTo(timeMs) == true;
+
+    private void jumpToMoment(ReplayMoment moment)
+    {
+        Console.Error.WriteLine($"[AimMod] Jumping to notable replay moment {ReplayTimeFormat.Precise(moment.TimeMs)}.");
+        transport.JumpToMoment(moment);
+    }
 
     public void ShowReady() => statusLayer.FadeOut(180);
 
     public void ShowError(string message)
     {
-        analysisInProgress = false;
-        loadingOverlay.HideLoading();
         statusIcon.Icon = FontAwesome.Solid.ExclamationTriangle;
-        statusIcon.Colour = AimModPalette.Pink;
+        statusIcon.Colour = AimModPalette.Danger;
         statusTitle.Text = "Replay could not be opened";
-        statusTitle.Colour = AimModPalette.Pink;
+        statusTitle.Colour = AimModPalette.Text;
         statusDetail.Text = message;
+        statusActions.Alpha = 1;
+        statusActions.Children[0].Alpha = selectedReplay?.RulesetShortName == "osu" && openReplay is not null ? 1 : 0;
         statusLayer.FadeIn(120);
 
         if (!analysisHasResult)
             showAnalysisFailure("Replay analysis could not start because the replay did not open.", "Resolve the replay loading error, then select the run again.");
     }
 
-    public void ShowAnalysisState(ReplayAnalysisState state)
-    {
-        if (state.Revision < analysisRevision)
-            return;
-
-        analysisRevision = state.Revision;
-        switch (state.Status)
-        {
-            case ReplayAnalysisStatus.Running:
-                analysisInProgress = true;
-                analysisHasResult = false;
-                loadingOverlay.HideLoading();
-                analysisTitle.Text = "Analysing exact judgements...";
-                analysisSummary.Text = "Running accelerated official ruleset playback";
-                showNotableState("Exact judgement analysis is in progress.", AimModPalette.Muted);
-                momentButtons.Clear();
-                judgementTimeline.ClearResult();
-                analysisNextPlay.Text = "A measured focus will appear when exact judgement analysis completes.";
-                analysisCard.FadeIn(150);
-                break;
-
-            case ReplayAnalysisStatus.Completed when state.Result is not null:
-                showCompletedAnalysis(state.Result);
-                break;
-
-            case ReplayAnalysisStatus.Failed:
-                analysisInProgress = false;
-                analysisHasResult = false;
-                loadingOverlay.HideLoading();
-                showAnalysisFailure(
-                    state.Error?.Message ?? "AimMod could not analyse this replay.",
-                    "Exact coaching focus is unavailable for this run. Replay playback is still available.");
-                break;
-
-            case ReplayAnalysisStatus.Cancelled:
-                analysisInProgress = false;
-                analysisHasResult = false;
-                loadingOverlay.HideLoading();
-                showAnalysisFailure(
-                    "Exact replay analysis was cancelled.",
-                    "Select the run again to calculate its coaching focus.");
-                break;
-
-            case ReplayAnalysisStatus.Idle:
-                analysisInProgress = false;
-                analysisHasResult = false;
-                loadingOverlay.HideLoading();
-                showAnalysisFailure(
-                    "Exact replay analysis has not started.",
-                    "Open this run to calculate notable moments and a measured coaching focus.");
-                break;
-        }
-    }
-
-    public void ShowAnalysisError(string message)
-    {
-        analysisInProgress = false;
-        analysisHasResult = false;
-        loadingOverlay.HideLoading();
-        showAnalysisFailure(message, "Exact coaching focus is unavailable for this run. Replay playback is still available.");
-    }
-
-    public void ShowMapAnalysisProgress(int completed, int total, string currentTitle)
-    {
-        if (total <= 0)
-            return;
-
-        showMapPatternState(completed >= total
-            ? "Updating repeated-pattern analysis..."
-            : $"Analysing matching attempt {completed + 1:N0}/{total:N0}: {currentTitle}");
-    }
-
-    public void RefreshMapPattern() => loadMapPattern();
-
-    private void showPendingAnalysis()
-    {
-        analysisTitle.Text = "Waiting for exact replay analysis";
-        analysisSummary.Text = "Opening the replay and preparing exact judgement data.";
-        showNotableState("Notable moments will appear when analysis completes.", AimModPalette.Muted);
-        momentButtons.Clear();
-        judgementTimeline.ClearResult();
-        analysisNextPlay.Text = "A measured focus will appear when exact judgement analysis completes.";
-        showMapPatternState("Analyse this replay to compare it with other attempts.");
-        analysisCard.FadeIn(150);
-    }
-
-    private void showCompletedAnalysis(ReplayAnalysisResult result)
-    {
-        analysisInProgress = false;
-        analysisHasResult = true;
-        loadingOverlay.HideLoading();
-        ReplayAnalysisPresentation presentation = ReplayAnalysisPresenter.Present(result);
-        analysisTitle.Text = "Exact replay analysis";
-        analysisSummary.Text = wrap(presentation.Summary, 37);
-        analysisNextPlay.Text = wrap(measuredNextPlay(result, presentation.NextPlay), 35);
-        judgementTimeline.SetResult(result);
-        showMomentButtons(result);
-        showNotableRows(result);
-        hubSharePanel.SetAnalysisAvailable(true);
-        loadMapPattern();
-        analysisCard.FadeIn(150);
-    }
-
-    private void showAnalysisFailure(string message, string nextPlay)
-    {
-        analysisTitle.Text = "Replay analysis unavailable";
-        analysisSummary.Text = message;
-        showNotableState(message, AimModPalette.Pink);
-        momentButtons.Clear();
-        judgementTimeline.ClearResult();
-        analysisNextPlay.Text = nextPlay;
-        analysisCard.FadeIn(150);
-    }
-
-    private void showNotableState(string message, Colour4 colour)
-    {
-        notableRows.Clear();
-        notableRows.Add(new InspectorStateRow(message, colour));
-    }
-
-    private void loadReplayBrowser()
-    {
-        if (source is null)
-            return;
-
-        loading?.Cancel();
-        loading?.Dispose();
-        loading = new CancellationTokenSource();
-        CancellationToken cancellationToken = loading.Token;
-        if (selectedReplay is null && !analysisInProgress)
-            loadingOverlay.ShowLoading("Loading replays", "Reading your local osu!lazer play history");
-        _ = loadReplayBrowserAsync(searchBox.Current.Value, cancellationToken);
-    }
-
-    private async Task loadReplayBrowserAsync(string search, CancellationToken cancellationToken)
-    {
-        try
-        {
-            ILocalLibrarySource availableSource = source ?? throw new InvalidOperationException("The local replay library is not available.");
-            ReplayBrowserSnapshot page = await ReplayBrowserModel.LoadAsync(
-                availableSource,
-                search,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
-            if (!IsDisposed && !cancellationToken.IsCancellationRequested)
-                Schedule(() => applyReplayBrowser(page));
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-        }
-        catch (Exception error)
-        {
-            if (!IsDisposed)
-                Schedule(() =>
-                {
-                    if (!analysisInProgress)
-                        loadingOverlay.HideLoading();
-                    replayCount.Text = $"Local replays unavailable: {error.Message}";
-                });
-        }
-    }
-
-    private void applyReplayBrowser(ReplayBrowserSnapshot snapshot)
-    {
-        replayBrowser = snapshot;
-        if (selectedReplay is not null)
-            expandedReplayMaps.Add(ReplayBrowserModel.MapKeyFor(selectedReplay));
-
-        renderReplayBrowser();
-        if (!analysisInProgress)
-            loadingOverlay.HideLoading();
-    }
-
-    private void renderReplayBrowser()
-    {
-        int shownMaps = replayBrowser.Maps.Count;
-        string shownMapLabel = shownMaps == 1 ? "map" : "maps";
-        replayCount.Text = replayBrowser.TotalMapCount > shownMaps
-            ? $"Newest {shownMaps:N0} {shownMapLabel} of {replayBrowser.TotalMapCount:N0}  //  {replayBrowser.TotalReplayCount:N0} runs"
-            : $"{shownMaps:N0} {shownMapLabel}  //  {replayBrowser.TotalReplayCount:N0} runs";
-        replayList.Clear();
-
-        foreach (ReplayBrowserMapGroup group in replayBrowser.Maps)
-        {
-            bool expanded = expandedReplayMaps.Contains(group.Key);
-            replayList.Add(new ReplayGroupHeader(group, expanded, () => toggleReplayMap(group.Key), openBeatmap));
-            if (!expanded)
-                continue;
-
-            foreach (LocalReplay replay in group.Attempts)
-                replayList.Add(new ReplayBrowserRow(replay, replay.ScoreId == selectedReplay?.ScoreId, () => openReplay?.Invoke(replay), openBeatmap));
-        }
-
-        if (replayBrowser.Maps.Count == 0)
-            replayList.Add(new ReplayBrowserEmptyState(
-                string.IsNullOrWhiteSpace(searchBox.Current.Value) ? "No saved replays" : "No matching replays",
-                string.IsNullOrWhiteSpace(searchBox.Current.Value)
-                    ? "Play an osu!standard map with replay recording enabled, then return here."
-                    : "Try a title, artist, difficulty, player, or mod."));
-    }
-
-    private void toggleReplayMap(string key)
-    {
-        if (!expandedReplayMaps.Add(key))
-            expandedReplayMaps.Remove(key);
-
-        renderReplayBrowser();
-    }
-
-    private void showMomentButtons(ReplayAnalysisResult result)
-    {
-        momentButtons.Clear();
-        foreach (ReplayObjectJudgement judgement in ReplayAnalysisPresenter.SelectNotableJudgements(result))
-        {
-            double seekTime = Math.Max(0, judgement.StartTimeMs - 1500);
-            string label = formatTime(judgement.StartTimeMs);
-            momentButtons.Add(new MomentButton(label, () =>
-            {
-                Console.Error.WriteLine($"[AimMod] Jumping to notable replay moment {label}.");
-                player?.Seek(seekTime);
-            }));
-        }
-    }
-
-    private void showNotableRows(ReplayAnalysisResult result)
-    {
-        notableRows.Clear();
-        IReadOnlyList<ReplayObjectJudgement> judgements = ReplayAnalysisPresenter.SelectNotableJudgements(result);
-        foreach (ReplayObjectJudgement judgement in judgements)
-        {
-            string objectLabel = judgement.ObjectIndex is { } index ? $"Object {index + 1:N0}" : judgement.ObjectType;
-            notableRows.Add(new NotableMomentRow(
-                formatTime(judgement.StartTimeMs),
-                objectLabel,
-                judgement.Result,
-                ReplayMissInsightPresenter.Describe(judgement),
-                () =>
-            {
-                string label = formatTime(judgement.StartTimeMs);
-                Console.Error.WriteLine($"[AimMod] Jumping to notable replay moment {label}.");
-                player?.Seek(Math.Max(0, judgement.StartTimeMs - 1500));
-            }));
-        }
-
-        if (judgements.Count == 0)
-            notableRows.Add(new WrappedLabel("No misses or slider breaks were found.", 12, AimModPalette.Success, "SemiBold"));
-    }
-
-    private void loadMapPattern()
-    {
-        mapPatternLoading?.Cancel();
-        mapPatternLoading?.Dispose();
-        mapPatternLoading = new CancellationTokenSource();
-        CancellationToken cancellationToken = mapPatternLoading.Token;
-        LocalReplay? replay = selectedReplay;
-        if (replay is null)
-            return;
-
-        showMapPatternState("Checking this difficulty across saved attempts...");
-        if (source is null)
-        {
-            applyMapPattern(replay, new[] { replay });
-            return;
-        }
-
-        _ = loadMapPatternAsync(replay, cancellationToken);
-    }
-
-    private async Task loadMapPatternAsync(LocalReplay replay, CancellationToken cancellationToken)
-    {
-        try
-        {
-            LocalLibraryPage<LocalReplay> page = await source!.SearchReplaysAsync(new LocalLibraryQuery(
-                SearchText: replay.Title,
-                RulesetShortName: "osu",
-                Sort: LocalLibrarySort.RecentlyPlayed,
-                Limit: 200), cancellationToken).ConfigureAwait(false);
-            if (!IsDisposed && !cancellationToken.IsCancellationRequested)
-                Schedule(() => applyMapPattern(replay, page.Items));
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-        }
-        catch
-        {
-            if (!IsDisposed)
-                Schedule(() => applyMapPattern(replay, new[] { replay }));
-        }
-    }
-
-    private void applyMapPattern(LocalReplay replay, IReadOnlyList<LocalReplay> history)
-    {
-        if (selectedReplay?.ScoreId != replay.ScoreId)
-            return;
-
-        ReplayMapPatternReport report = ReplayMapPatternAnalyzer.Build(replay, history, analyses);
-        mapPatternRows.Clear();
-        mapPatternRows.Add(new WrappedLabel(
-            $"{report.AnalysedAttempts:N0} of {report.TotalAttempts:N0} saved attempts have exact analysis.",
-            11,
-            AimModPalette.Muted));
-
-        foreach (ReplayRecurringMiss pattern in report.RecurringMisses.Take(4))
-        {
-            string reason = pattern.DominantReason is { } value ? ReplayMissInsightPresenter.Label(value) : "misses";
-            mapPatternRows.Add(new WrappedLabel(
-                $"{formatTime(pattern.StartTimeMs)} · object {pattern.ObjectIndex + 1:N0} missed in {pattern.MissedAttempts:N0}/{pattern.AnalysedAttempts:N0} attempts · {reason}",
-                11,
-                AimModPalette.Pink,
-                "SemiBold"));
-        }
-
-        if (report.RecurringMisses.Count == 0)
-        {
-            string message = report.AnalysedAttempts < 2
-                ? "At least two analysed attempts are needed to identify repeated mistakes."
-                : "No object was missed in more than one analysed attempt.";
-            mapPatternRows.Add(new WrappedLabel(message, 11, AimModPalette.Text));
-        }
-
-        if (report.MissReasons.Count > 0)
-        {
-            string dominant = report.MissReasons.OrderByDescending(pair => pair.Value).ThenBy(pair => pair.Key).First() is var pair
-                ? $"Most common: {ReplayMissInsightPresenter.Label(pair.Key)} ({pair.Value:N0})."
-                : string.Empty;
-            mapPatternRows.Add(new WrappedLabel(dominant, 11, AimModPalette.Cyan, "SemiBold"));
-        }
-    }
-
-    private void showMapPatternState(string message)
-    {
-        mapPatternRows.Clear();
-        mapPatternRows.Add(new InspectorStateRow(message, AimModPalette.Muted));
-    }
-
-    private string measuredNextPlay(ReplayAnalysisResult result, string fallback)
-    {
-        if (selectedReplay is null)
-            return fallback;
-
-        try
-        {
-            Dictionary<Guid, ReplayAnalysisResult> available = new(analyses) { [selectedReplay.ScoreId] = result };
-            CoachingReport report = CoachingReportBuilder.Build(new[] { selectedReplay }, available, selectedReplay.ScoreId);
-            CoachingRecommendation? recommendation = report.Intelligence.Recommendations.FirstOrDefault();
-            return recommendation is null ? fallback : $"{recommendation.Intent}: {recommendation.Reason}";
-        }
-        catch
-        {
-            return fallback;
-        }
-    }
-
-    private void cycleSpeed()
-    {
-        playbackSpeed = playbackSpeed switch
-        {
-            < 0.75 => 0.75,
-            < 1 => 1,
-            < 1.25 => 1.25,
-            < 1.5 => 1.5,
-            _ => 0.5,
-        };
-        if (player?.SetPlaybackRate(playbackSpeed) == true)
-            speedLabel.Text = $"{playbackSpeed:0.00}x";
-    }
-
     protected override void Dispose(bool isDisposing)
     {
         SuspendPlayback();
+        displaySettingsLayer?.Dispose();
+        displaySettingsLayer = null;
         loading?.Cancel();
         loading?.Dispose();
         mapPatternLoading?.Cancel();
@@ -819,509 +499,67 @@ public partial class NativeReplayRouteView : Container
         base.Dispose(isDisposing);
     }
 
-    private static Container makePanel(Drawable child, Anchor anchor, Anchor origin, float? height = null, float? width = null) => new()
+    private Container createStatusLayer(out SpriteIcon icon, out TruncatingSpriteText title, out WrappedLabel detail, out FillFlowContainer actions) => new()
     {
-        Anchor = anchor,
-        Origin = origin,
-        RelativeSizeAxes = height is null ? Axes.Y : Axes.X,
-        Width = width ?? 1,
-        Height = height ?? 1,
-        Masking = true,
-        CornerRadius = AimModVisualStyle.CardRadius,
+        RelativeSizeAxes = Axes.Both,
         Children = new Drawable[]
         {
-            new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
-            child,
-        },
-    };
-
-    private static SpriteText section(string value) => makeText(value, 11, AimModPalette.Muted, "Bold");
-
-    private static FillFlowContainer<Drawable> createJudgementLegend()
-    {
-        var legend = new FillFlowContainer<Drawable>
-        {
-            Anchor = Anchor.TopRight,
-            Origin = Anchor.TopRight,
-            AutoSizeAxes = Axes.Both,
-            Y = 89,
-            Direction = FillDirection.Horizontal,
-            Spacing = new(12, 0),
-        };
-        legend.AddRange(new[]
-        {
-            legendItem("300", ReplayTimelineTone.Great),
-            legendItem("100", ReplayTimelineTone.Ok),
-            legendItem("50", ReplayTimelineTone.Meh),
-            legendItem("miss", ReplayTimelineTone.Miss),
-        });
-        return legend;
-    }
-
-    private static FillFlowContainer<Drawable> legendItem(string label, ReplayTimelineTone tone) => new()
-    {
-        AutoSizeAxes = Axes.Both,
-        Direction = FillDirection.Horizontal,
-        Spacing = new(4, 0),
-        Children = new Drawable[]
-        {
-            new CircularContainer
+            new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas },
+            new FillFlowContainer
             {
-                Anchor = Anchor.CentreLeft,
-                Origin = Anchor.CentreLeft,
-                Size = new(8),
-                Masking = true,
-                Child = new Box { RelativeSizeAxes = Axes.Both, Colour = ReplayJudgementTimeline.ColourFor(tone) },
-            },
-            makeText(label, 10, AimModPalette.Muted, "SemiBold"),
-        },
-    };
-
-    private static FillFlowContainer<Drawable> summaryMetric(
-        string labelValue,
-        string value,
-        Colour4 colour,
-        out SpriteText valueText)
-    {
-        valueText = makeText(value, 22, colour, "Bold");
-        return new FillFlowContainer<Drawable>
-        {
-            RelativeSizeAxes = Axes.X,
-            AutoSizeAxes = Axes.Y,
-            Direction = FillDirection.Vertical,
-            Spacing = new(3),
-            Children = new Drawable[]
-            {
-                makeText(labelValue, 9, AimModPalette.Muted, "Bold"),
-                valueText,
-            },
-        };
-    }
-
-    private static string formatAccuracy(double value) => double.IsFinite(value) ? $"{value * 100:0.00}%" : "--";
-
-    private static string wrap(string value, int width)
-    {
-        var lines = new List<string>();
-        var current = new List<string>();
-        int length = 0;
-        foreach (string word in value.Split(' ', StringSplitOptions.RemoveEmptyEntries))
-        {
-            if (length > 0 && length + word.Length + 1 > width)
-            {
-                lines.Add(string.Join(' ', current));
-                current.Clear();
-                length = 0;
-            }
-
-            current.Add(word);
-            length += word.Length + (length == 0 ? 0 : 1);
-        }
-
-        if (current.Count > 0)
-            lines.Add(string.Join(' ', current));
-        return string.Join('\n', lines.Take(4));
-    }
-
-    private static string formatTime(double milliseconds)
-    {
-        TimeSpan time = TimeSpan.FromMilliseconds(Math.Max(0, milliseconds));
-        return $"{(int)time.TotalMinutes}:{time.Seconds:00}.{time.Milliseconds:000}";
-    }
-
-    private static SpriteText makeText(string value, float size, Colour4 colour, string weight = "Regular") => new()
-    {
-        Text = value,
-        Font = new FontUsage(size: size, weight: weight),
-        Colour = colour,
-    };
-
-    private static TruncatingSpriteText truncatingText(
-        string value,
-        float size,
-        Colour4 colour,
-        float maxWidth,
-        string weight = "Regular",
-        Anchor anchor = Anchor.TopLeft) => new()
-    {
-        Text = value,
-        Font = new FontUsage(size: size, weight: weight),
-        Colour = colour,
-        MaxWidth = maxWidth,
-        Anchor = anchor,
-        Origin = anchor,
-    };
-
-    private static SpriteText place(SpriteText drawable, float x = 0, float y = 0, Anchor anchor = Anchor.TopLeft, Anchor origin = Anchor.TopLeft)
-    {
-        drawable.Position = new(x, y);
-        drawable.Anchor = anchor;
-        drawable.Origin = origin;
-        return drawable;
-    }
-
-    private partial class ReplayBrowserEmptyState : CompositeDrawable
-    {
-        public ReplayBrowserEmptyState(string title, string detail)
-        {
-            RelativeSizeAxes = Axes.X;
-            Height = 150;
-            Masking = true;
-            CornerRadius = AimModVisualStyle.CardRadius;
-            InternalChildren = new Drawable[]
-            {
-                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas, Alpha = 0.5f },
-                new SpriteIcon
-                {
-                    Anchor = Anchor.TopCentre,
-                    Origin = Anchor.TopCentre,
-                    Y = 25,
-                    Size = new(24),
-                    Icon = FontAwesome.Solid.PlayCircle,
-                    Colour = AimModPalette.Cyan,
-                },
-                new FillFlowContainer
-                {
-                    Anchor = Anchor.TopCentre,
-                    Origin = Anchor.TopCentre,
-                    RelativeSizeAxes = Axes.X,
-                    AutoSizeAxes = Axes.Y,
-                    Y = 62,
-                    Padding = new MarginPadding { Horizontal = 24 },
-                    Direction = FillDirection.Vertical,
-                    Spacing = new(AimModVisualStyle.RelatedSpacing),
-                    Children = new Drawable[]
-                    {
-                        truncatingText(title, 15, AimModPalette.Text, 240, "SemiBold", Anchor.TopCentre),
-                        new WrappedLabel(detail, 11, AimModPalette.Muted),
-                    },
-                },
-            };
-        }
-    }
-
-    private partial class InspectorStateRow : CompositeDrawable
-    {
-        public InspectorStateRow(string message, Colour4 colour)
-        {
-            RelativeSizeAxes = Axes.X;
-            Height = 52;
-            Masking = true;
-            CornerRadius = AimModVisualStyle.ControlRadius;
-            InternalChildren = new Drawable[]
-            {
-                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
-                new Box { RelativeSizeAxes = Axes.Y, Width = 4, Colour = colour },
-                new SpriteIcon
-                {
-                    Anchor = Anchor.CentreLeft,
-                    Origin = Anchor.CentreLeft,
-                    Position = new(14, 0),
-                    Size = new(12),
-                    Icon = FontAwesome.Solid.InfoCircle,
-                    Colour = colour,
-                },
-                new Container
-                {
-                    RelativeSizeAxes = Axes.Both,
-                    Padding = new MarginPadding { Left = 36, Right = 12, Top = 11, Bottom = 9 },
-                    Child = new WrappedLabel(message, 10, colour, "SemiBold"),
-                },
-            };
-        }
-    }
-
-    private partial class ReplayGroupHeader : AimModInteractiveSurface
-    {
-        private readonly TruncatingSpriteText title;
-        private readonly TruncatingSpriteText detail;
-
-        public ReplayGroupHeader(ReplayBrowserMapGroup group, bool expanded, Action action, Func<LocalReplay, CancellationToken, Task>? openBeatmap = null)
-        {
-            RelativeSizeAxes = Axes.X;
-            Height = 100;
-            Action = action;
-            CornerRadius = AimModVisualStyle.CardRadius;
-            BackgroundColour = expanded ? AimModPalette.PanelRaised : AimModPalette.Panel;
-            LocalReplay latest = group.Attempts[0];
-            Children = new Drawable[]
-            {
-                new OpenBeatmapButton(() => latest, openBeatmap) { Position = new(12, 64), Height = 28 },
-                new Box
-                {
-                    RelativeSizeAxes = Axes.Y,
-                    Width = 3,
-                    Colour = AimModVisualStyle.DifficultyColour(latest.StarRating),
-                },
-                title = new TruncatingSpriteText
-                {
-                    Text = group.Title,
-                    Position = new(12, 7),
-                    Font = new FontUsage(size: 13, weight: "Bold"),
-                    Colour = AimModPalette.Text,
-                    MaxWidth = 240,
-                },
-                detail = new TruncatingSpriteText
-                {
-                    Text = $"{group.Artist}  //  {group.Difficulty}",
-                    Position = new(12, 28),
-                    Font = new FontUsage(size: 10, weight: "Regular"),
-                    Colour = AimModPalette.Cyan,
-                    MaxWidth = 240,
-                },
-                place(makeText(
-                    $"{group.Attempts.Count:N0} {(group.Attempts.Count == 1 ? "attempt" : "attempts")}  //  best {group.Attempts.Max(replay => replay.Accuracy) * 100:0.00}%",
-                    9,
-                    AimModPalette.Muted,
-                    "SemiBold"), 12, 46),
-                new SpriteIcon
-                {
-                    Anchor = Anchor.CentreRight,
-                    Origin = Anchor.CentreRight,
-                    Position = new(-12, 0),
-                    Size = new(11),
-                    Icon = expanded ? FontAwesome.Solid.ChevronUp : FontAwesome.Solid.ChevronDown,
-                    Colour = AimModPalette.Muted,
-                },
-            };
-        }
-
-        protected override void Update()
-        {
-            base.Update();
-            title.MaxWidth = detail.MaxWidth = Math.Max(100, DrawWidth - 48);
-        }
-    }
-
-    private partial class ReplayBrowserRow : AimModInteractiveSurface
-    {
-        public ReplayBrowserRow(LocalReplay replay, bool selected, Action action, Func<LocalReplay, CancellationToken, Task>? openBeatmap = null)
-        {
-            RelativeSizeAxes = Axes.X;
-            Height = 94;
-            CornerRadius = AimModVisualStyle.ControlRadius;
-            BackgroundColour = selected ? AimModPalette.PanelHover : AimModPalette.PanelRaised;
-            Action = action;
-            Children = new Drawable[]
-            {
-                new OpenBeatmapButton(() => replay, openBeatmap) { Position = new(12, 60), Height = 28, Depth = -1 },
-                new Box
-                {
-                    RelativeSizeAxes = Axes.Y,
-                    Width = 3,
-                    Colour = selected ? AimModPalette.Pink : AimModVisualStyle.DifficultyColour(replay.StarRating),
-                },
-                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Pink, Alpha = selected ? 0.08f : 0 },
-                new FillFlowContainer
-                {
-                    RelativeSizeAxes = Axes.X,
-                    AutoSizeAxes = Axes.Y,
-                    Padding = new MarginPadding { Left = 12, Top = 8, Right = 10 },
-                    Direction = FillDirection.Vertical,
-                    Spacing = new(4),
-                    Children = new Drawable[]
-                    {
-                        new FillFlowContainer
-                        {
-                            AutoSizeAxes = Axes.Both,
-                            Direction = FillDirection.Horizontal,
-                            Spacing = new(7),
-                            Children = new Drawable[]
-                            {
-                                new AimModDifficultyPill(replay.StarRating),
-                                makeText(formatAccuracy(replay.Accuracy), 15, AimModPalette.Text, "Bold"),
-                                makeText($"{replay.MissCount:N0} {(replay.MissCount == 1 ? "miss" : "misses")}", 9, replay.MissCount > 0 ? AimModPalette.Pink : AimModPalette.Success, "SemiBold"),
-                            },
-                        },
-                        makeText(
-                            $"{replay.PlayedAt.LocalDateTime:g}  //  {(replay.Mods.Count == 0 ? "No Mod" : string.Join(' ', replay.Mods))}",
-                            9,
-                            AimModPalette.Muted),
-                    },
-                },
-            };
-        }
-
-    }
-
-    private partial class NotableMomentRow : AimModInteractiveSurface
-    {
-        public NotableMomentRow(string time, string objectLabel, string result, string detail, Action action)
-        {
-            RelativeSizeAxes = Axes.X;
-            Height = 72;
-            Action = action;
-            CornerRadius = AimModVisualStyle.ControlRadius;
-            BackgroundColour = AimModPalette.PanelRaised;
-            Children = new Drawable[]
-            {
-                new Box { RelativeSizeAxes = Axes.Y, Width = 3, Colour = result == "Miss" ? ReplayJudgementTimeline.ColourFor(ReplayTimelineTone.Miss) : AimModPalette.Cyan },
-                place(makeText(time, 11, AimModPalette.Pink, "Bold"), 12, 9),
-                place(makeText(objectLabel, 10, AimModPalette.Text, "SemiBold"), 82, 10),
-                place(makeText(result.ToUpperInvariant(), 9, result == "Miss" ? ReplayJudgementTimeline.ColourFor(ReplayTimelineTone.Miss) : AimModPalette.Muted, "Bold"), -10, 10, Anchor.TopRight, Anchor.TopRight),
-                new Container
-                {
-                    RelativeSizeAxes = Axes.X,
-                    Height = 34,
-                    Y = 32,
-                    Padding = new MarginPadding { Left = 12, Right = 10 },
-                    Child = new WrappedLabel(detail, 10, AimModPalette.Muted),
-                },
-            };
-        }
-    }
-
-    private partial class TransportButton : AimModInteractiveSurface
-    {
-        public TransportButton(string label, Action action, SpriteText? suppliedLabel = null)
-        {
-            Width = label.Length > 4 ? 70 : 54;
-            Height = AimModVisualStyle.CompactControlHeight;
-            Action = action;
-            CornerRadius = AimModVisualStyle.ControlRadius;
-            BackgroundColour = AimModPalette.PanelRaised;
-            Children = new Drawable[]
-            {
-                suppliedLabel ?? place(makeText(label, 12, AimModPalette.Text, "Bold"), anchor: Anchor.Centre, origin: Anchor.Centre),
-            };
-            if (suppliedLabel is not null)
-            {
-                suppliedLabel.Anchor = Anchor.Centre;
-                suppliedLabel.Origin = Anchor.Centre;
-            }
-        }
-    }
-
-    private partial class ReplayScrubber : ClickableContainer
-    {
-        private readonly Func<double> currentTime;
-        private readonly Func<double> duration;
-        private readonly Action<double> seek;
-        private readonly Box progress;
-        private readonly CircularContainer handle;
-
-        public ReplayScrubber(Func<double> currentTime, Func<double> duration, Action<double> seek)
-        {
-            this.currentTime = currentTime;
-            this.duration = duration;
-            this.seek = seek;
-
-            Children = new Drawable[]
-            {
-                new Box
-                {
-                    RelativeSizeAxes = Axes.X,
-                    Height = 4,
-                    Anchor = Anchor.CentreLeft,
-                    Origin = Anchor.CentreLeft,
-                    Colour = AimModPalette.Border,
-                },
-                progress = new Box
-                {
-                    RelativeSizeAxes = Axes.X,
-                    Height = 4,
-                    Anchor = Anchor.CentreLeft,
-                    Origin = Anchor.CentreLeft,
-                    Colour = AimModPalette.Pink,
-                },
-                handle = new CircularContainer
-                {
-                    RelativePositionAxes = Axes.X,
-                    Anchor = Anchor.CentreLeft,
-                    Origin = Anchor.Centre,
-                    Size = new(14),
-                    Masking = true,
-                    Child = new Box
-                    {
-                        RelativeSizeAxes = Axes.Both,
-                        Colour = AimModPalette.Text,
-                    },
-                },
-            };
-        }
-
-        protected override void Update()
-        {
-            base.Update();
-            double total = duration();
-            float position = total > 0 ? (float)Math.Clamp(currentTime() / total, 0, 1) : 0;
-            progress.Width = position;
-            handle.X = position;
-        }
-
-        protected override bool OnClick(ClickEvent e)
-        {
-            seekTo(e.ScreenSpaceMousePosition);
-            return true;
-        }
-
-        protected override bool OnDragStart(DragStartEvent e) => duration() > 0;
-
-        protected override void OnDrag(DragEvent e) => seekTo(e.ScreenSpaceMousePosition);
-
-        private void seekTo(osuTK.Vector2 screenPosition)
-        {
-            double total = duration();
-            if (total <= 0 || DrawWidth <= 0)
-                return;
-
-            float localX = ToLocalSpace(screenPosition).X;
-            seek(Math.Clamp(localX / DrawWidth, 0, 1) * total);
-        }
-    }
-
-    private partial class MomentButton : AimModInteractiveSurface
-    {
-        public MomentButton(string time, Action action)
-        {
-            Size = new(92, 30);
-            Action = action;
-            CornerRadius = AimModVisualStyle.ControlRadius;
-            BackgroundColour = AimModPalette.PanelRaised;
-            Children = new Drawable[]
-            {
-                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Cyan, Alpha = 0.18f },
-                padded(makeText($"Jump {time}", 11, AimModPalette.Cyan, "SemiBold"), new MarginPadding { Horizontal = 10, Vertical = 6 }),
-            };
-        }
-    }
-
-    private partial class WrappedLabel : CompositeDrawable
-    {
-        private readonly TextFlowContainer flow;
-        private string text = string.Empty;
-
-        public WrappedLabel(string value, float size, Colour4 colour, string weight = "Regular")
-        {
-            RelativeSizeAxes = Axes.X;
-            AutoSizeAxes = Axes.Y;
-            InternalChild = flow = new TextFlowContainer(sprite =>
-            {
-                sprite.Font = new FontUsage(size: size, weight: weight);
-                sprite.Colour = colour;
-            })
-            {
+                Anchor = Anchor.Centre,
+                Origin = Anchor.Centre,
                 RelativeSizeAxes = Axes.X,
                 AutoSizeAxes = Axes.Y,
-            };
-            Text = value;
-        }
+                Padding = new MarginPadding { Horizontal = 40 },
+                Direction = FillDirection.Vertical,
+                Spacing = new(10),
+                Children = new Drawable[]
+                {
+                    new Container
+                    {
+                        RelativeSizeAxes = Axes.X,
+                        Height = 44,
+                        Child = icon = new SpriteIcon
+                        {
+                            Anchor = Anchor.Centre,
+                            Origin = Anchor.Centre,
+                            Size = new(34),
+                            Icon = FontAwesome.Solid.PlayCircle,
+                            Colour = AimModPalette.Cyan,
+                        },
+                    },
+                    title = truncatingText("Choose a replay", 22, AimModPalette.Text, 540, "Bold", Anchor.TopCentre),
+                    detail = new WrappedLabel("Pick a map in the library, then choose an attempt to watch.", 13, AimModPalette.Muted, centred: true),
+                    actions = new FillFlowContainer
+                    {
+                        Anchor = Anchor.TopCentre,
+                        Origin = Anchor.TopCentre,
+                        AutoSizeAxes = Axes.Both,
+                        Direction = FillDirection.Horizontal,
+                        Spacing = new(AimModVisualStyle.RowSpacing),
+                        Margin = new MarginPadding { Top = AimModVisualStyle.RelatedSpacing },
+                        Alpha = 0,
+                        Children = new Drawable[]
+                        {
+                            new AimModButton("Try again", retrySelectedReplay, primary: true),
+                            new AimModButton("Choose another replay", chooseAnotherReplay),
+                        },
+                    },
+                },
+            },
+        },
+    };
 
-        public string Text
-        {
-            get => text;
-            set
-            {
-                text = value ?? string.Empty;
-                flow.Clear();
-                flow.AddText(text);
-            }
-        }
-    }
-
-    private static SpriteText padded(SpriteText drawable, MarginPadding padding)
+    internal enum ReplayRouteLayoutMode
     {
-        drawable.Padding = padding;
-        return drawable;
+        TwoColumn,
+        Stacked,
     }
+
+    internal readonly record struct ReplayRouteLayout(
+        ReplayRouteLayoutMode Mode,
+        osu.Framework.Graphics.Primitives.RectangleF Playback,
+        osu.Framework.Graphics.Primitives.RectangleF Side,
+        ReplayPlaybackLayout Block);
 }

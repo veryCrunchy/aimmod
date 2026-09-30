@@ -7,6 +7,19 @@ namespace AimMod.Desktop.Tests;
 [TestFixture]
 public sealed class RealmLocalReplayMetadataSourceTests
 {
+    private SynchronizationContext? originalSynchronizationContext;
+
+    // Realm posts notifications to the current context; NUnit's context can run them after the realm is freed.
+    [SetUp]
+    public void SetUp()
+    {
+        originalSynchronizationContext = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(null);
+    }
+
+    [TearDown]
+    public void TearDown() => SynchronizationContext.SetSynchronizationContext(originalSynchronizationContext);
+
     [Test]
     public void SnapshotQueryRunsAgainstRealRealmWithoutUnsupportedTake()
     {

@@ -47,7 +47,7 @@ public sealed class FileHubCredentialStore : IHubCredentialStore
             byte[] payload = protector.Unprotect(protectedBytes);
             CredentialDocument? document = JsonSerializer.Deserialize<CredentialDocument>(payload, json_options);
             return document?.Version == current_version
-                   && !string.IsNullOrWhiteSpace(document.Credential.UploadToken)
+                   && !string.IsNullOrWhiteSpace(document.Credential?.UploadToken)
                 ? document.Credential
                 : null;
         }
@@ -71,7 +71,12 @@ public sealed class FileHubCredentialStore : IHubCredentialStore
         string temporaryPath = $"{path}.{Guid.NewGuid():N}.tmp";
         try
         {
-            await File.WriteAllBytesAsync(temporaryPath, protectedBytes, cancellationToken).ConfigureAwait(false);
+            var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None, Options = FileOptions.Asynchronous };
+            // Create the file private from the start instead of narrowing it after the token is written.
+            if (!OperatingSystem.IsWindows())
+                options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+            await using (FileStream stream = new(temporaryPath, options))
+                await stream.WriteAsync(protectedBytes, cancellationToken).ConfigureAwait(false);
             restrictUnixPermissions(temporaryPath);
             File.Move(temporaryPath, path, true);
             restrictUnixPermissions(path);

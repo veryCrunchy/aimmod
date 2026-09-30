@@ -55,7 +55,20 @@ public sealed class OsuSkinArchiveDestinationService : IOnlineSkinArchiveDestina
                 return new OnlineSkinImportResult(false, "The skin handoff directory is not safe to use.");
             trimHandoffs();
             string handoff = Path.Combine(handoffRoot, $"skin-{Guid.NewGuid():N}.osk");
-            await copyAsync(validatedOskPath, handoff, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await copyAsync(validatedOskPath, handoff, cancellationToken).ConfigureAwait(false);
+                if (!await sameContentAsync(validatedOskPath, handoff, cancellationToken).ConfigureAwait(false))
+                {
+                    deleteQuietly(handoff);
+                    return new OnlineSkinImportResult(false, "The skin archive changed while it was being prepared.");
+                }
+            }
+            catch
+            {
+                deleteQuietly(handoff);
+                throw;
+            }
 
             ProcessStartInfo? command = createCommand(destination(), handoff);
             if (command is null)
@@ -133,6 +146,30 @@ public sealed class OsuSkinArchiveDestinationService : IOnlineSkinArchiveDestina
         await using FileStream input = new(source, FileMode.Open, FileAccess.Read, FileShare.Read, 81_920, FileOptions.Asynchronous | FileOptions.SequentialScan);
         await using FileStream output = new(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81_920, FileOptions.Asynchronous | FileOptions.SequentialScan);
         await input.CopyToAsync(output, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<bool> sameContentAsync(string source, string copy, CancellationToken cancellationToken)
+    {
+        using var sha = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
+        byte[] first = await hashAsync(source, sha, cancellationToken).ConfigureAwait(false);
+        byte[] second = await hashAsync(copy, sha, cancellationToken).ConfigureAwait(false);
+        return first.AsSpan().SequenceEqual(second);
+    }
+
+    private static async Task<byte[]> hashAsync(string path, System.Security.Cryptography.IncrementalHash sha, CancellationToken cancellationToken)
+    {
+        await using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.Read, 81_920, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        byte[] buffer = new byte[81_920];
+        int read;
+        while ((read = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
+            sha.AppendData(buffer, 0, read);
+        return sha.GetHashAndReset();
+    }
+
+    private static void deleteQuietly(string path)
+    {
+        try { File.Delete(path); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
     }
 
     private void trimHandoffs()

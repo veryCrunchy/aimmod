@@ -62,7 +62,12 @@ public sealed class ExternalLazerSkinCatalogClient(IRuntimeRequestClient runtime
         && skin.FileCount is >= 0 and <= ExternalLazerSkinProtocol.MaximumFilesPerSkin
         && validOptionalHash(skin.PreviewHash)
         && validText(skin.PreviewLogicalName)
-        && (skin.PreviewHash.Length == 0) == (skin.PreviewLogicalName.Length == 0);
+        && (skin.PreviewHash.Length == 0) == (skin.PreviewLogicalName.Length == 0)
+        && skin.PreviewFiles is not null
+        && skin.PreviewFiles.Count <= ExternalLazerSkinProtocol.MaximumPreviewFilesPerSkin
+        && skin.PreviewFiles.All(file => file is not null
+                                         && file.LogicalName is { Length: > 0 and <= 260 }
+                                         && validOptionalHash(file.Hash) && file.Hash.Length == 64);
 
     private static bool validText(string value) =>
         value is not null && value.Length <= ExternalLazerSkinProtocol.MaximumTextFieldLength;

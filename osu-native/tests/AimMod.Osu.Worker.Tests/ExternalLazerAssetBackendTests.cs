@@ -141,6 +141,54 @@ public sealed class ExternalLazerAssetBackendTests
         Assert.That(exception.Code, Is.EqualTo("staging_path_invalid"));
     }
 
+    [Test]
+    public async Task SnapshotCleanupFailureNeverReplacesTheStagedResult()
+    {
+        byte[] content = "staged despite cleanup failure"u8.ToArray();
+        string hash = Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant();
+        string sourceDirectory = Path.Combine(filesRoot, hash[..1], hash[..2]);
+        Directory.CreateDirectory(sourceDirectory);
+        await File.WriteAllBytesAsync(Path.Combine(sourceDirectory, hash), content);
+        var reference = new LazerStoredFileReference(LazerLibraryAssetKind.Beatmap, hash, "map.osu", hash);
+        var snapshotFactory = new RecordingSnapshotFactory(snapshotDirectory, filesRoot) { ThrowOnDelete = true };
+        var backend = createBackend(snapshotFactory, new[] { reference });
+
+        ExternalLazerAssetResolveResult result = await backend.ResolveAsync(
+            new ExternalLazerAssetResolveRequest(libraryRoot, stagingDirectory, new[] { hash }, Array.Empty<Guid>()),
+            CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Files, Has.Count.EqualTo(1));
+            Assert.That(File.Exists(result.Files[0].StagedPath), Is.True);
+            Assert.That(snapshotFactory.DeleteCount, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void SnapshotCleanupFailureNeverMasksAnAssetError()
+    {
+        byte[] content = "asset that fails verification"u8.ToArray();
+        string hash = new('a', 64);
+        string sourceDirectory = Path.Combine(filesRoot, hash[..1], hash[..2]);
+        Directory.CreateDirectory(sourceDirectory);
+        File.WriteAllBytes(Path.Combine(sourceDirectory, hash), content);
+        var reference = new LazerStoredFileReference(LazerLibraryAssetKind.Beatmap, hash, "map.osu", hash);
+        var snapshotFactory = new RecordingSnapshotFactory(snapshotDirectory, filesRoot) { ThrowOnDelete = true };
+        var backend = createBackend(snapshotFactory, new[] { reference });
+
+        RuntimeCommandException exception = Assert.ThrowsAsync<RuntimeCommandException>(async () =>
+            await backend.ResolveAsync(
+                new ExternalLazerAssetResolveRequest(libraryRoot, stagingDirectory, new[] { hash }, Array.Empty<Guid>()),
+                CancellationToken.None))!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exception.Code, Is.EqualTo("asset_changed"));
+            Assert.That(Directory.EnumerateFileSystemEntries(stagingDirectory), Is.Empty);
+        });
+    }
+
     private ExternalLazerAssetBackend createBackend(
         RecordingSnapshotFactory snapshotFactory,
         IReadOnlyList<LazerStoredFileReference> references)
@@ -156,6 +204,7 @@ public sealed class ExternalLazerAssetBackendTests
     private sealed class RecordingSnapshotFactory(string snapshots, string files) : ILazerLibrarySnapshotFactory
     {
         public int DeleteCount { get; private set; }
+        public bool ThrowOnDelete { get; init; }
 
         public Task<LazerLibrarySnapshot> CreateSnapshotAsync(
             ValidatedExternalLazerLibraryLocation location,
@@ -169,6 +218,8 @@ public sealed class ExternalLazerAssetBackendTests
         public ValueTask DeleteSnapshotAsync(LazerLibrarySnapshot snapshot)
         {
             DeleteCount++;
+            if (ThrowOnDelete)
+                throw new ExternalLazerLibraryException("snapshot_path_invalid", "synthetic delete failure");
             return ValueTask.CompletedTask;
         }
     }

@@ -24,6 +24,19 @@ public sealed class LocalScorePpHydrationServiceTests
             Directory.Delete(temporaryDirectory, true);
     }
 
+    [TestCase("taiko", 1)]
+    [TestCase("fruits", 2)]
+    [TestCase("mania", 3)]
+    public void ModeAndFullJudgementsReachCalculator(string mode, int id) {
+        var run = validRun(1) with { RulesetShortName = mode, Passed = false, LegacyScore = true,
+            HitStatistics = new(1,2,3,4,0,1,Perfect:5,Good:6,LargeTickHit:7,SmallTickHit:8,SmallTickMiss:9) };
+        var request = LocalScorePpHydrationService.CreateCalculationRequest(run, Path.Combine(temporaryDirectory,"map.osu"));
+        Assert.That(request.RulesetId, Is.EqualTo(id));
+        Assert.That(request.Passed, Is.False);
+        Assert.That(request.LegacyScore, Is.True);
+        Assert.That(request.Statistics, Is.EqualTo(run.HitStatistics));
+    }
+
     [Test]
     public void StableCalculationUsesLegacyScoringAndLocalStaging()
     {
@@ -31,9 +44,23 @@ public sealed class LocalScorePpHydrationServiceTests
         var stable = validRun(1) with { Origin = LocalLibraryOrigin.Stable, Mods = ["HD"] };
         var request = LocalScorePpHydrationService.CreateCalculationRequest(stable, map);
         Assert.That(request.LegacyScore, Is.True);
+        Assert.That(request.LegacyTotalScore, Is.EqualTo(stable.TotalScore));
+        Assert.That(LocalScorePpHydrationService.CreateCalculationRequest(stable with { Origin = LocalLibraryOrigin.Lazer }, map).LegacyTotalScore, Is.Null);
         Assert.That(request.BeatmapPath, Is.EqualTo(map));
         Assert.That(request.Mods, Is.EqualTo(new[] { "HD" }));
         Assert.That(LocalScorePpHydrationService.CreateCalculationRequest(stable with { Origin = LocalLibraryOrigin.Lazer }, map).LegacyScore, Is.False);
+    }
+
+    [Test]
+    public async Task ChangedLegacyRawScoreInvalidatesHydratedPp()
+    {
+        string cachePath = Path.Combine(temporaryDirectory, "legacy-score.json");
+        var stable = validRun(1) with { Origin = LocalLibraryOrigin.Stable };
+        await new LocalScorePpHydrationService(temporaryDirectory, cachePath, (_, _) => Task.FromResult<double?>(123)).HydrateAsync([stable]);
+        var result = await new LocalScorePpHydrationService(temporaryDirectory, cachePath, (_, _) => Task.FromResult<double?>(456))
+            .HydrateAsync([stable with { TotalScore = stable.TotalScore + 1000 }]);
+        Assert.That(result.CalculatedCount, Is.EqualTo(1));
+        Assert.That(result.Runs.Single().PerformancePoints, Is.EqualTo(456));
     }
 
     [Test]

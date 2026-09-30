@@ -9,6 +9,7 @@
     "ppy-packages.json"
   ],
   "allowedFilePatterns": [
+    "^app/Resources/Audio/INSTRUMENT-NOTICES\\.txt$",
     "^app/(.+/)?[^/]+\\.dll$",
     "^app/(.+/)?[^/]+\\.json$",
     "^app/(.+/)?[^/]+\\.so(\\.[0-9]+)*$",
@@ -16,6 +17,7 @@
     "^app/share/icons/hicolor/(16|24|32|48|64|128|256|512|1024)x\\1/apps/aimmod-osu\\.png$"
   ],
   "requiredFiles": [
+    "app/Resources/Audio/INSTRUMENT-NOTICES.txt",
     "app/AimMod",
     "app/AimMod.dll",
     "app/AimMod.deps.json",
@@ -32,7 +34,10 @@
     "app/share/icons/hicolor/128x128/apps/aimmod-osu.png",
     "app/share/icons/hicolor/256x256/apps/aimmod-osu.png",
     "app/share/icons/hicolor/512x512/apps/aimmod-osu.png",
-    "app/share/icons/hicolor/1024x1024/apps/aimmod-osu.png"
+    "app/share/icons/hicolor/1024x1024/apps/aimmod-osu.png",
+    "app/osu.Game.Rulesets.Catch.dll",
+    "app/osu.Game.Rulesets.Mania.dll",
+    "app/osu.Game.Rulesets.Taiko.dll"
   ],
   "deniedPathFragments": [
     "kovaak",
@@ -56,10 +61,7 @@
   ],
   "deniedAssemblyNames": [
     "osu.Desktop.dll",
-    "osu.Game.Tournament.dll",
-    "osu.Game.Rulesets.Catch.dll",
-    "osu.Game.Rulesets.Mania.dll",
-    "osu.Game.Rulesets.Taiko.dll"
+    "osu.Game.Tournament.dll"
   ],
   "deniedFileNames": [
     "aimmod-osu-worker",

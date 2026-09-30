@@ -10,6 +10,7 @@ public sealed class LazerSessionMonitor : IAsyncDisposable
     private const int maximum_token_characters = 16 * 1024;
     private static readonly TimeSpan default_reconciliation_interval = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan minimum_access_token_lifetime = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan racy_timestamp_window = TimeSpan.FromSeconds(2);
 
     private readonly string gameIniPath;
     private readonly TimeProvider timeProvider;
@@ -28,6 +29,10 @@ public sealed class LazerSessionMonitor : IAsyncDisposable
     private Task? reconciliationTask;
     private SessionSnapshot snapshot = SessionSnapshot.Unavailable;
     private LazerSessionState current = new(LazerSessionStatus.Unavailable, null, 0);
+    private IniFields? cachedFields;
+    private long cachedTicks;
+    private long cachedLength;
+    private int parseCount;
     private bool hasLoaded;
     private bool disposed;
 
@@ -53,6 +58,8 @@ public sealed class LazerSessionMonitor : IAsyncDisposable
                 return current;
         }
     }
+
+    internal int ParseCount => Volatile.Read(ref parseCount);
 
     public event Action<LazerSessionState>? StateChanged;
 
@@ -189,6 +196,30 @@ public sealed class LazerSessionMonitor : IAsyncDisposable
     {
         byte[]? bytes = null;
 
+        long stampTicks = 0;
+        long stampLength = 0;
+        bool stamped = false;
+        try
+        {
+            var info = new FileInfo(gameIniPath);
+            if (!info.Exists)
+            {
+                cachedFields = null;
+                return SessionSnapshot.Unavailable;
+            }
+
+            stampTicks = info.LastWriteTimeUtc.Ticks;
+            stampLength = info.Length;
+            stamped = true;
+            if (cachedFields is { } unchanged && cachedTicks == stampTicks && cachedLength == stampLength)
+                return createSnapshot(unchanged, timeProvider.GetUtcNow());
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            cachedFields = null;
+            return SessionSnapshot.Unavailable;
+        }
+
         try
         {
             await using var stream = new FileStream(
@@ -232,10 +263,26 @@ public sealed class LazerSessionMonitor : IAsyncDisposable
                 return SessionSnapshot.Unavailable;
 
             string contents = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true).GetString(bytes, 0, bytesRead);
-            return parse(contents, timeProvider.GetUtcNow());
+            Interlocked.Increment(ref parseCount);
+            IniFields? fields = parseFields(contents);
+            cachedFields = null;
+            if (fields is null)
+                return SessionSnapshot.Unavailable;
+
+            // A file rewritten within the same timestamp tick and length would be indistinguishable,
+            // so only files that have been quiet for a moment are trusted for reuse.
+            if (stamped && DateTime.UtcNow - new DateTime(stampTicks, DateTimeKind.Utc) > racy_timestamp_window)
+            {
+                cachedTicks = stampTicks;
+                cachedLength = stampLength;
+                cachedFields = fields;
+            }
+
+            return createSnapshot(fields, timeProvider.GetUtcNow());
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or DecoderFallbackException)
         {
+            cachedFields = null;
             return SessionSnapshot.Unavailable;
         }
         finally
@@ -245,7 +292,10 @@ public sealed class LazerSessionMonitor : IAsyncDisposable
         }
     }
 
-    private static SessionSnapshot parse(string contents, DateTimeOffset now)
+    private static SessionSnapshot parse(string contents, DateTimeOffset now) =>
+        parseFields(contents) is { } fields ? createSnapshot(fields, now) : SessionSnapshot.Unavailable;
+
+    private static IniFields? parseFields(string contents)
     {
         string? username = null;
         string? tokenValue = null;
@@ -259,7 +309,7 @@ public sealed class LazerSessionMonitor : IAsyncDisposable
 
             int separator = line.IndexOf('=');
             if (separator < 1)
-                return SessionSnapshot.Unavailable;
+                continue;
 
             string key = line[..separator].Trim();
             string value = line[(separator + 1)..].Trim();
@@ -269,13 +319,20 @@ public sealed class LazerSessionMonitor : IAsyncDisposable
             else if (key.Equals("Token", StringComparison.OrdinalIgnoreCase))
                 tokenValue = value;
             else if (key.Equals("SavePassword", StringComparison.OrdinalIgnoreCase) && !bool.TryParse(value, out savePassword))
-                return SessionSnapshot.Unavailable;
+                return null;
         }
 
         if (username?.Length > maximum_username_characters || tokenValue?.Length > maximum_token_characters)
-            return SessionSnapshot.Unavailable;
+            return null;
 
-        username = string.IsNullOrWhiteSpace(username) ? null : username;
+        return new IniFields(string.IsNullOrWhiteSpace(username) ? null : username, tokenValue, savePassword);
+    }
+
+    private static SessionSnapshot createSnapshot(IniFields fields, DateTimeOffset now)
+    {
+        string? username = fields.Username;
+        string? tokenValue = fields.TokenValue;
+        bool savePassword = fields.SavePassword;
 
         if (!savePassword || string.IsNullOrEmpty(tokenValue))
             return new SessionSnapshot(LazerSessionStatus.SignedOut, username, null, null);
@@ -418,7 +475,17 @@ public sealed class LazerSessionMonitor : IAsyncDisposable
 
     private void onFileChanged(object sender, FileSystemEventArgs eventArgs) => scheduleFileRefresh();
 
-    private void onWatcherError(object sender, ErrorEventArgs eventArgs) => scheduleFileRefresh();
+    private void onWatcherError(object sender, ErrorEventArgs eventArgs)
+    {
+        lock (stateLock)
+        {
+            watcher?.Dispose();
+            watcher = null;
+        }
+
+        tryStartWatcher();
+        scheduleFileRefresh();
+    }
 
     private bool isCurrentRevision(long revision)
     {
@@ -477,6 +544,8 @@ public sealed class LazerSessionMonitor : IAsyncDisposable
         {
         }
     }
+
+    private sealed record IniFields(string? Username, string? TokenValue, bool SavePassword);
 
     private sealed record SessionSnapshot(LazerSessionStatus Status, string? Username, string? AccessToken, DateTimeOffset? ExpiresAt)
     {

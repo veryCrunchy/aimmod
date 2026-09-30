@@ -75,7 +75,7 @@ public sealed partial class AimModSkillRadar : CompositeDrawable
                     Anchor = alignment == TextAlignment.Centre ? Anchor.TopCentre : alignment == TextAlignment.Right ? Anchor.TopRight : Anchor.TopLeft,
                     Origin = alignment == TextAlignment.Centre ? Anchor.TopCentre : alignment == TextAlignment.Right ? Anchor.TopRight : Anchor.TopLeft,
                     Text = metric.Label,
-                    Font = new FontUsage(size: 9, weight: "SemiBold"),
+                    Font = new FontUsage(size: AimModVisualStyle.MinReadableFontSize, weight: "SemiBold"),
                     Colour = AimModPalette.Muted,
                 },
                 new SpriteText

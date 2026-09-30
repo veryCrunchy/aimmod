@@ -27,7 +27,7 @@ public interface ILocalScorePpHydrationService
 
 public sealed class LocalScorePpHydrationService : ILocalScorePpHydrationService
 {
-    private const int cache_version = 1;
+    private const int cache_version = 3;
     private const int hashes_per_batch = 128;
     private const int maximum_cache_entries = 20_000;
     private static readonly JsonSerializerOptions json_options = new(JsonSerializerDefaults.Web);
@@ -65,6 +65,8 @@ public sealed class LocalScorePpHydrationService : ILocalScorePpHydrationService
         IProgress<LocalScorePpHydrationProgress>? progress = null)
     {
         ArgumentNullException.ThrowIfNull(runs);
+        if (runs.Any(run => run is null))
+            runs = runs.Where(run => run is not null).ToArray();
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -173,8 +175,19 @@ public sealed class LocalScorePpHydrationService : ILocalScorePpHydrationService
                         {
                             cancellationToken.ThrowIfCancellationRequested();
                             string[] hashes = batch.Select(group => group.Key).ToArray();
-                            await using ExternalLazerAssetStagingLease lease = await assetClient.ResolveToPrivateStagingAsync(
-                                libraryRoot, hashes, Array.Empty<Guid>(), cancellationToken).ConfigureAwait(false);
+                            ExternalLazerAssetStagingLease lease;
+                            try
+                            {
+                                lease = await assetClient.ResolveToPrivateStagingAsync(
+                                    libraryRoot, hashes, Array.Empty<Guid>(), cancellationToken).ConfigureAwait(false);
+                            }
+                            catch (ExternalLazerAssetClientException)
+                            {
+                                processed += batch.Sum(group => group.Count());
+                                progress?.Report(new LocalScorePpHydrationProgress(processed, missing.Length));
+                                continue;
+                            }
+                            await using ExternalLazerAssetStagingLease staged = lease;
                             Dictionary<string, ExternalLazerResolvedAsset> beatmaps = lease.Result.Files
                                 .Where(file => string.Equals(file.Kind, "Beatmap", StringComparison.Ordinal))
                                 .GroupBy(file => file.OwnerId, StringComparer.OrdinalIgnoreCase)
@@ -191,15 +204,9 @@ public sealed class LocalScorePpHydrationService : ILocalScorePpHydrationService
                                 }
                                 try
                                 {
-                                    PpWhatIfResult result = await ppClient.CalculateAsync(new PpWhatIfRequest(
-                                        Path.GetDirectoryName(beatmap.StagedPath)!,
-                                        beatmap.StagedPath,
-                                        run.Mods,
-                                        run.Accuracy,
-                                        run.MissCount,
-                                        run.MaxCombo,
-                                        run.HitStatistics,
-                                        run.ModsJson), cancellationToken).ConfigureAwait(false);
+                                    PpWhatIfResult result = await ppClient.CalculateAsync(CreateCalculationRequest(run, beatmap.StagedPath), cancellationToken).ConfigureAwait(false);
+                                    if (!validPp(result.PerformancePoints))
+                                        continue;
                                     recordCalculated(run, result.PerformancePoints, ppByScore);
                                     calculated++;
                                     pendingCacheEntries++;
@@ -278,7 +285,7 @@ public sealed class LocalScorePpHydrationService : ILocalScorePpHydrationService
             }
             return true;
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or NotSupportedException)
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or NotSupportedException or ArgumentException)
         {
             Console.Error.WriteLine($"AimMod local score PP cache persistence failed for '{cachePath}': {error}");
             return false;
@@ -295,11 +302,13 @@ public sealed class LocalScorePpHydrationService : ILocalScorePpHydrationService
             CacheDocument? document = JsonSerializer.Deserialize<CacheDocument>(stream, json_options);
             if (document?.Version != cache_version || document.Entries is null)
                 return new Dictionary<string, CacheEntry>(StringComparer.Ordinal);
-            return document.Entries.Where(entry => entry.Key.Length == 64 && validPp(entry.PerformancePoints))
-                           .TakeLast(maximum_cache_entries)
-                           .ToDictionary(entry => entry.Key, StringComparer.Ordinal);
+            var entries = new Dictionary<string, CacheEntry>(StringComparer.Ordinal);
+            foreach (CacheEntry entry in document.Entries.TakeLast(maximum_cache_entries))
+                if (entry?.Key is { Length: 64 } && validPp(entry.PerformancePoints))
+                    entries[entry.Key] = entry;
+            return entries;
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or NotSupportedException)
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or NotSupportedException or ArgumentException)
         {
             return new Dictionary<string, CacheEntry>(StringComparer.Ordinal);
         }
@@ -326,14 +335,17 @@ public sealed class LocalScorePpHydrationService : ILocalScorePpHydrationService
             run.Accuracy.ToString("R", CultureInfo.InvariantCulture),
             run.MaxCombo,
             statistics.Great, statistics.Ok, statistics.Meh, statistics.Miss,
-            statistics.SliderTailHit, statistics.LargeTickMiss);
-        if (run.Origin == LocalLibraryOrigin.Stable) raw += "|stable";
+            statistics.SliderTailHit, statistics.LargeTickMiss,
+            run.RulesetShortName, run.Passed, run.LegacyScore, statistics.Perfect, statistics.Good, statistics.LargeTickHit, statistics.SmallTickHit, statistics.SmallTickMiss);
+        if (run.Origin == LocalLibraryOrigin.Stable) raw += "|stable|" + run.TotalScore.ToString(CultureInfo.InvariantCulture);
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(raw))).ToLowerInvariant();
     }
 
     internal static PpWhatIfRequest CreateCalculationRequest(LocalReplay run, string stagedPath) => new(
         Path.GetDirectoryName(stagedPath)!, stagedPath, run.Mods, run.Accuracy, run.MissCount,
-        run.MaxCombo, run.HitStatistics, run.ModsJson, LegacyScore: run.Origin == LocalLibraryOrigin.Stable);
+        run.MaxCombo, run.HitStatistics, run.ModsJson, LegacyScore: run.Origin == LocalLibraryOrigin.Stable || run.LegacyScore, Passed: run.Passed,
+        LegacyTotalScore: run.Origin == LocalLibraryOrigin.Stable && run.TotalScore > 0 ? run.TotalScore : null,
+        RulesetId: run.RulesetShortName switch { "osu" => 0, "taiko" => 1, "fruits" => 2, "mania" => 3, _ => -1 });
 
     private sealed record CacheDocument(int Version, IReadOnlyList<CacheEntry> Entries);
     private sealed record CacheEntry(string Key, double PerformancePoints, DateTimeOffset CalculatedAt);

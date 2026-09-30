@@ -1,4 +1,5 @@
 using AimMod.Desktop.LocalLibrary;
+using AimMod.Desktop.Coaching;
 using AimMod.Desktop.Visuals;
 using AimMod.Osu.Runtime;
 using osu.Framework.Bindables;
@@ -9,12 +10,16 @@ using osu.Framework.Graphics.Sprites;
 using osu.Framework.Localisation;
 using osu.Framework.Threading;
 using osu.Game.Graphics.Sprites;
+using osu.Framework.Input.Events;
 using osu.Game.Graphics.UserInterface;
+using osuTK;
+using osuTK.Input;
 
 namespace AimMod.Desktop.Practice;
 
 public partial class NativePracticeWorkspace : CompositeDrawable
 {
+    public void SetRunStatus(string message) => status.Text = message;
     private readonly Func<PracticeMapCandidate, CancellationToken, Task<IReadOnlyList<PracticeSectionChoice>>> inspect;
     private readonly Func<PracticeMapGenerationRequest, CancellationToken, Task<PracticeMapGenerationResult>> generate;
     private readonly Func<SavedPracticeMap, CancellationToken, Task<LazerBeatmapInstallResult>> open;
@@ -25,7 +30,9 @@ public partial class NativePracticeWorkspace : CompositeDrawable
     private readonly AimModLoadingOverlay loadingOverlay;
     private readonly PracticeMapList list = new() { RelativeSizeAxes = Axes.None };
     private readonly FillFlowContainer detail = flow();
-    private readonly OsuTextBox search = new() { RelativeSizeAxes = Axes.X, Height = 40, PlaceholderText = "Search maps or difficulties" };
+    private readonly AimModTextBox search = new() { RelativeSizeAxes = Axes.X, Height = 40, PlaceholderText = "Search maps or difficulties" };
+    private readonly Bindable<string> modSelection = new(ScoreMods.Any);
+    private readonly ScoreModFilterDropdown modDropdown;
     private readonly Bindable<PracticeCandidateSort> sort = new(PracticeCandidateSort.WeakestFirst);
     private readonly Bindable<PracticeEvidenceFilter> evidence = new(PracticeEvidenceFilter.AnyEvidence);
     private readonly Bindable<PracticeLibrarySort> librarySort = new(PracticeLibrarySort.Newest);
@@ -62,12 +69,28 @@ public partial class NativePracticeWorkspace : CompositeDrawable
     private IReadOnlyList<SavedPracticeMap> savedMaps = [];
     private bool libraryLoading;
     private int dataRevision;
-    private (bool Saved, string Search, PracticeCandidateSort Sort, PracticeEvidenceFilter Evidence, double Min, double Max, PracticeLibrarySort LibrarySort, int Scenario, bool Favourites, int Revision)? rendered;
+    private (bool Saved, string Search, PracticeCandidateSort Sort, PracticeEvidenceFilter Evidence, double Min, double Max, PracticeLibrarySort LibrarySort, int Scenario, bool Favourites, int Revision, string Mods)? rendered;
     private bool savedView;
     private bool busy;
     private bool generating;
     private int epoch;
     private DateTimeOffset started;
+    private int? tappingFirstObject;
+    private bool advancedSettings;
+    private readonly Action close;
+    private bool guidedEditor;
+    private bool createAllSections;
+    private bool createBreakdown;
+    private IReadOnlyList<PracticeSectionRange>? preparedSections;
+    public Action<SavedPracticeMap, PracticeDifficultyIdentity>? StartDifficulty { get; set; }
+    private bool showIncludedSections;
+    public bool IsShowingSavedPractice => savedView;
+    private IReadOnlyList<LocalReplay> sourceHistory = [];
+    public void SetSourceHistory(IReadOnlyList<LocalReplay> history) => sourceHistory = history;
+    public void OpenSaved(SavedPracticeMap map) { Alpha = 1; showIncludedSections = false; guidedEditor = true; savedView = true; showSaved(map); }
+    private readonly Drawable browserHeader;
+    private readonly Container guidedHeader;
+    private readonly OsuSpriteText guidedTitle;
 
     public NativePracticeWorkspace(
         Func<PracticeMapCandidate, CancellationToken, Task<IReadOnlyList<PracticeSectionChoice>>> inspect,
@@ -75,6 +98,7 @@ public partial class NativePracticeWorkspace : CompositeDrawable
         Func<SavedPracticeMap, CancellationToken, Task<LazerBeatmapInstallResult>> open,
         PracticeMapLibrary library, Action close, Func<LocalReplay, CancellationToken, Task>? openBeatmap = null)
     {
+        this.close = close;
         this.inspect = inspect;
         this.generate = generate;
         this.open = open;
@@ -88,14 +112,14 @@ public partial class NativePracticeWorkspace : CompositeDrawable
         minimumStars.Value = double.IsFinite(settings.MinimumStars) ? Math.Clamp(settings.MinimumStars, 0, 10) : 0;
         maximumStars.Value = double.IsFinite(settings.MaximumStars) ? Math.Clamp(settings.MaximumStars, minimumStars.Value, 10) : 10;
         duration.Value = new[] { 30, 60, 90, 120 }.Contains(settings.DurationSeconds) ? settings.DurationSeconds : 60;
-        rounds.Value = new[] { 2, 4, 6, 8, 12, 16 }.Contains(settings.MinimumRounds) ? settings.MinimumRounds : 6;
+        rounds.Value = new[] { 2, 3, 4, 6, 8, 12, 16 }.Contains(settings.MinimumRounds) ? settings.MinimumRounds : 6;
         leadIn.Value = new[] { 2, 4, 6, 8 }.Contains(settings.LeadInSeconds) ? settings.LeadInSeconds : 4;
         recovery.Value = Math.Clamp(settings.PaddingSeconds, 1, 5);
         speed.Value = new[] { 75, 85, 90, 95, 100, 105, 110, 120 }.Contains(settings.SpeedPercent) ? settings.SpeedPercent : 100;
         RelativeSizeAxes = Axes.Both;
         Alpha = 0;
         Depth = -50;
-        var header = new GridContainer
+        browserHeader = new GridContainer
         {
             RelativeSizeAxes = Axes.X, Height = 44,
             ColumnDimensions = [new Dimension(GridSizeMode.Relative, .4f), new Dimension(GridSizeMode.Relative, .3f), new Dimension(GridSizeMode.Relative, .3f)],
@@ -106,12 +130,16 @@ public partial class NativePracticeWorkspace : CompositeDrawable
                 new Button("Saved drills", FontAwesome.Solid.Folder, () => switchView(true)),
             } },
         };
+        guidedHeader = new Container { RelativeSizeAxes = Axes.X, Height = 60, Alpha = 0,
+            Children = [new Button("Back to coaching", FontAwesome.Solid.ArrowLeft, close) { RelativeSizeAxes = Axes.None, Width = 190 },
+                guidedTitle = text("Prepare your practice map", 24).With(t => { t.X = 220; t.Width = .6f; })] };
         sourceFilters = new Container { RelativeSizeAxes = Axes.X, Height = 42, Child = new GridContainer
         {
             RelativeSizeAxes = Axes.Both,
-            ColumnDimensions = [new Dimension(GridSizeMode.Relative, .35f), new Dimension(GridSizeMode.Relative, .35f), new Dimension(GridSizeMode.Relative, .3f)],
+            ColumnDimensions = [new Dimension(GridSizeMode.Relative, .25f), new Dimension(GridSizeMode.Relative, .25f), new Dimension(GridSizeMode.Relative, .25f), new Dimension(GridSizeMode.Relative, .25f)],
             Content = new[] { new Drawable[]
             {
+                new StatisticsFilterBar { RelativeSizeAxes=Axes.Both, Child=modDropdown=new ScoreModFilterDropdown(modSelection) },
                 dropdown(sort, Enum.GetValues<PracticeCandidateSort>(), value => value switch
                 {
                     PracticeCandidateSort.WeakestFirst => "Highest priority", PracticeCandidateSort.MostRepeated => "Repeated misses",
@@ -150,10 +178,11 @@ public partial class NativePracticeWorkspace : CompositeDrawable
         statusText.Add(status = text("", 14));
         statusText.Add(elapsed = text("", 12, AimModPalette.Muted));
         cancel = new Button("Cancel", FontAwesome.Solid.Times, cancelOperation) { Width = 110, RelativeSizeAxes = Axes.None, Anchor = Anchor.TopRight, Origin = Anchor.TopRight };
-        createButton = new Button("Create practice map", FontAwesome.Solid.Plus, create) { Width = 230, RelativeSizeAxes = Axes.None, Anchor = Anchor.TopRight, Origin = Anchor.TopRight, Alpha = 0 };
+        createButton = new Button("Create practice map", FontAwesome.Solid.Plus, create, true) { Width = 230, RelativeSizeAxes = Axes.None, Anchor = Anchor.TopRight, Origin = Anchor.TopRight, Alpha = 0 };
         statusHost = new Container { RelativeSizeAxes = Axes.X, Height = 60, Anchor = Anchor.BottomLeft, Origin = Anchor.BottomLeft, Children = [statusText, cancel, createButton] };
-        InternalChildren = [new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas }, header, filtersScroll, columns, statusHost];
+        InternalChildren = [new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas }, browserHeader, guidedHeader, filtersScroll, columns, statusHost];
         search.Current.BindValueChanged(_ => scheduleRefresh());
+        modSelection.BindValueChanged(_ => scheduleRefresh());
         sort.BindValueChanged(_ => refreshList());
         evidence.BindValueChanged(_ => refreshList());
         librarySort.BindValueChanged(_ => refreshList());
@@ -173,6 +202,7 @@ public partial class NativePracticeWorkspace : CompositeDrawable
     {
         if (ReferenceEquals(candidates, values)) return;
         candidates = values;
+        modDropdown.SetScores(values.Select(v=>v.SourceReplay));
         dataRevision++;
         if (Alpha > 0) refreshList();
     }
@@ -184,10 +214,34 @@ public partial class NativePracticeWorkspace : CompositeDrawable
         switchView(savedView);
     }
 
-    public void OpenCandidate(PracticeMapCandidate candidate) { Open(candidate.SourceReplay.Title); select(candidate); }
+    public void OpenCandidate(PracticeMapCandidate candidate) { createBreakdown = false; Open(candidate.SourceReplay.Title); select(candidate); guidedEditor = true; showIncludedSections = false; createAllSections = true; advancedSettings = false; detailScroll.ScrollTo(0, false); }
+    public void OpenBreakdown(PracticeMapCandidate candidate, int? firstObjectIndex = null)
+    {
+        OpenCandidate(candidate);
+        tappingFirstObject = firstObjectIndex;
+        createAllSections = false;
+        createBreakdown = true;
+    }
+
+    public void OpenNextBreakdown(PracticeMapCandidate candidate, IReadOnlyList<PracticeSectionRange> prepared)
+    {
+        OpenBreakdown(candidate);
+        preparedSections = prepared;
+    }
+    public void OpenTappingPhrase(PracticeMapCandidate candidate, int firstObjectIndex, int playbackSpeed)
+    {
+        createBreakdown = false;
+        Open(candidate.SourceReplay.Title);
+        select(candidate);
+        tappingFirstObject = firstObjectIndex;
+        guidedEditor = true; showIncludedSections = false; createAllSections = true; advancedSettings = false; detailScroll.ScrollTo(0, false);
+        speed.Value = playbackSpeed;
+        rounds.Value = 3;
+    }
 
     private void switchView(bool saved)
     {
+        guidedEditor = false;
         savedView = saved;
         sourceFilters.Alpha = saved ? 0 : 1;
         savedFilters.Alpha = saved ? 1 : 0;
@@ -207,7 +261,7 @@ public partial class NativePracticeWorkspace : CompositeDrawable
         if (IsDisposed) return;
         saveSettings();
         var state = (savedView, search.Current.Value, sort.Value, evidence.Value, minimumStars.Value, maximumStars.Value,
-            librarySort.Value, savedScenario.Value, favouriteFilter.Value, dataRevision);
+            librarySort.Value, savedScenario.Value, favouriteFilter.Value, dataRevision, modSelection.Value);
         if (rendered == state) return;
         rendered = state;
         var rows = new List<PracticeMapListRow>();
@@ -225,7 +279,7 @@ public partial class NativePracticeWorkspace : CompositeDrawable
         }
         else
         {
-            PracticeCandidatePage page = PracticeMapCandidateSearch.Search(candidates,
+            PracticeCandidatePage page = PracticeMapCandidateSearch.Search(candidates.Where(c=>CoachingRunKeys.Matches(c.SourceReplay,modSelection.Value)).ToArray(),
                 new PracticeCandidateQuery(search.Current.Value, sort.Value, evidence.Value, minimumStars.Value, maximumStars.Value));
             count.Text = $"Find drills / {page.Total} matching maps / {candidates.Count} in coaching timeframe";
             foreach (PracticeMapCandidate candidate in page.Items)
@@ -234,7 +288,16 @@ public partial class NativePracticeWorkspace : CompositeDrawable
                     candidate.SourceReplay.BackgroundPath, selectRow));
         }
         list.SetRows(rows);
-        if (rows.Count == 0) count.Text = libraryLoading && savedView ? "Loading saved drills..." : "No matching maps";
+        if (rows.Count == 0)
+        {
+            bool filtered = search.Current.Value.Length > 0 || (savedView
+                ? savedScenario.Value != -1 || favouriteFilter.Value
+                : modSelection.Value != ScoreMods.Any || evidence.Value != PracticeEvidenceFilter.AnyEvidence || minimumStars.Value > 0 || maximumStars.Value < 10);
+            count.Text = libraryLoading && savedView ? "Loading saved drills..."
+                : filtered ? "No maps match these filters. Clear the search or widen the filters."
+                : savedView ? "No saved drills yet. Create one from Find drills."
+                : "No practice maps yet. Analysed replays with misses or timing patterns appear here.";
+        }
     }
 
     private void selectRow(string key)
@@ -301,6 +364,8 @@ public partial class NativePracticeWorkspace : CompositeDrawable
     private void select(PracticeMapCandidate candidate)
     {
         if (generating) return;
+        tappingFirstObject = null;
+        preparedSections = null;
         selected = candidate;
         choice = null;
         int ticket = startOperation("Reading source patterns");
@@ -317,37 +382,137 @@ public partial class NativePracticeWorkspace : CompositeDrawable
             IReadOnlyList<PracticeSectionChoice> result = await inspect(candidate, token).ConfigureAwait(false);
             deliver(ticket, () =>
             {
+                if (preparedSections is { } prepared)
+                    result = PracticeSectionQueue.Remaining(result, prepared);
                 finishOperation($"{result.Count} practice sections available");
                 sections = result;
-                scenario.Value = result.FirstOrDefault()?.Scenario ?? PracticeDrillType.Mixed;
-                sectionIndex.Value = 0;
+                var target = tappingFirstObject is { } first
+                    ? result.Where(s => s.Section.FirstObjectIndex <= first && s.Section.LastObjectIndex >= first)
+                        .OrderBy(s => s.Section.LastObjectIndex - s.Section.FirstObjectIndex).FirstOrDefault()
+                    : null;
+                scenario.Value = target?.Scenario ?? result.FirstOrDefault()?.Scenario ?? PracticeDrillType.Mixed;
+                sectionIndex.Value = target is null ? 0 : result.Where(s => s.Scenario == scenario.Value).ToList().IndexOf(target);
                 showEditor();
             });
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
-        catch { deliver(ticket, () => { finishOperation("The source map could not be read. Select it again to retry."); detail.Clear(); showEmpty(); }); }
+        catch (Exception error) { deliver(ticket, () => showSourceFailure(candidate, error)); }
+    }
+
+    private void showSourceFailure(PracticeMapCandidate candidate, Exception error)
+    {
+        finishOperation("Practice map could not be prepared");
+        sections = []; choice = null;
+        detail.Clear();
+        detail.Add(text(candidate.SourceReplay.Title, 24));
+        detail.Add(text(candidate.SourceReplay.Difficulty, 16, AimModPalette.Cyan));
+        detail.Add(text("We could not load this map", 22));
+        string help = error is ExternalLazerReplayOpenException sourceError ? sourceError.Code switch {
+            "audio_file_missing" => "The map's audio is missing. Reinstall the map in osu!, then retry.",
+            "beatmap_missing" or "beatmap_file_missing" or "beatmap_hash_invalid" => "This difficulty is unavailable locally. Install it in osu!, then retry.",
+            "lazer_library_unavailable" => "Connect your osu! library in Settings, then retry.",
+            "ruleset_unsupported" => "Choose an osu!standard play for practice.",
+            _ => "Check that the map and its audio are installed in osu!, then retry."
+        } : "Check that the map and its audio are installed in osu!, then retry.";
+        detail.Add(text(help, 16, AimModPalette.Muted));
+        int? target = tappingFirstObject;
+        detail.Add(new Button("Retry loading this map", FontAwesome.Solid.Redo, () => {
+            select(candidate); tappingFirstObject = target;
+        }, true));
+        detail.Add(new Button("Back to coaching", FontAwesome.Solid.ArrowLeft, close));
+        detailScroll.ScrollTo(0, false);
     }
 
     private void showEditor()
     {
         detail.Clear();
-        if (selected is null || sections.Count == 0) { detail.Add(text("No supported practice sections found", 16)); return; }
+        if (selected is null || sections.Count == 0)
+        {
+            detail.Add(text(preparedSections is null ? "No supported practice sections found" : "No more new sections to prepare", 18));
+            if (preparedSections is not null)
+            {
+                detail.Add(paragraph("The suggested sections are already in your saved exercises. Return to coaching to repeat one or try the full map again."));
+                detail.Add(new AimModButton("Back to your map", close, true));
+            }
+            return;
+        }
         detail.Add(text(selected.SourceReplay.Title, 20));
         detail.Add(text(selected.SourceReplay.Difficulty, 13, AimModPalette.Cyan));
+        detail.Add(text("Original setup: " + ScoreMods.Display(selected.SourceReplay),14,AimModPalette.Muted));
+        if (preparedSections is not null)
+        {
+            detail.Add(text($"{sections.Count} remaining sections to choose from", 16, AimModPalette.Accent));
+            var remaining = new FillFlowContainer<Drawable> { RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Direction = FillDirection.Full, Spacing = new(8) };
+            foreach (var candidate in sections)
+            {
+                var button = new AimModButton($"{timestamp(candidate.Section.SourceStartTimeMs)} - {timestamp(candidate.Section.SourceEndTimeMs)} · {PracticeMapPlanner.Label(candidate.Scenario)}", () =>
+                {
+                    scenario.Value = candidate.Scenario;
+                    sectionIndex.Value = sections.Where(s => s.Scenario == candidate.Scenario).ToList().IndexOf(candidate);
+                    showEditor();
+                });
+                button.SetSelected(candidate.Scenario == scenario.Value && sections.Where(s => s.Scenario == scenario.Value).ToList().IndexOf(candidate) == sectionIndex.Value);
+                remaining.Add(button);
+            }
+            detail.Add(remaining);
+        }
+        if (guidedEditor) detail.Add(text("Choose a comfortable speed and a short practice length.", 15, AimModPalette.Muted));
         LocalReplay sourceReplay = selected.SourceReplay;
-        detail.Add(new OpenBeatmapButton(() => sourceReplay, openBeatmap));
+
+        var modes = new FillFlowContainer { RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Direction = FillDirection.Full, Spacing = new(8) };
+        addMode("All sections", createAllSections && !createBreakdown, () => { createAllSections = true; createBreakdown = false; });
+        addMode("One section", !createAllSections && !createBreakdown, () => { createAllSections = false; createBreakdown = false; });
+        addMode("Break down this section", createBreakdown, () => { createAllSections = false; createBreakdown = true; });
+        if (preparedSections is null) detail.Add(modes);
+        else modes.Dispose();
+        void addMode(string label, bool active, Action selectMode)
+        {
+            var button = new AimModButton(label, () => { selectMode(); showEditor(); });
+            button.SetSelected(active); modes.Add(button);
+        }
+        if (createBreakdown)
+        {
+            detail.Add(paragraph("Four connected difficulties: rhythm with less movement, aim with Relax, both together, then the original section."));
+            detail.Add(paragraph("Compare reduced movement with the original at the same speed. Aim-focus results are kept separate."));
+        }
+        if (createAllSections)
+            detail.Add(text("One mapset, with a separate difficulty for each practice section. Speed and length apply to each difficulty.", 13, AimModPalette.Muted));
         var scenarioControl = dropdown(new Bindable<PracticeDrillType>(scenario.Value), sections.Select(item => item.Scenario).Distinct(), PracticeMapPlanner.Label);
         scenarioControl.Current.BindValueChanged(change => { scenario.Value = change.NewValue; sectionIndex.Value = 0; showEditor(); });
-        detail.Add(field("Scenario", scenarioControl));
+
         PracticeSectionChoice[] matches = sections.Where(item => item.Scenario == scenario.Value).ToArray();
+        if (matches.Length == 0)
+        {
+            scenario.Value = sections[0].Scenario;
+            matches = sections.Where(item => item.Scenario == scenario.Value).ToArray();
+        }
         sectionIndex.Value = Math.Clamp(sectionIndex.Value, 0, matches.Length - 1);
         choice = matches[sectionIndex.Value];
         var sectionControl = dropdown(new Bindable<int>(sectionIndex.Value), Enumerable.Range(0, matches.Length), index =>
-            $"{timestamp(matches[index].Section.SourceStartTimeMs)} - {timestamp(matches[index].Section.SourceEndTimeMs)} / {matches[index].Section.WeakObjects.Sum(item => item.MissCount)} misses");
+            $"{timestamp(matches[index].Section.SourceStartTimeMs)} - {timestamp(matches[index].Section.SourceEndTimeMs)}" + (matches[index].Section.WeakObjects.Count > 0 ? $" / {matches[index].Section.WeakObjects.Sum(item => item.MissCount)} misses" : ""));
         sectionControl.Current.BindValueChanged(change => { sectionIndex.Value = change.NewValue; showEditor(); });
-        detail.Add(field("Source section", sectionControl));
-        detail.Add(new PatternPreview(choice.Section));
-        detail.Add(text($"{choice.Section.HitObjects.Count} objects / {choice.Section.WeakObjects.Count} missed locations", 13, AimModPalette.Cyan));
+        if (!createAllSections) detail.Add(optionPair(field("Pattern", scenarioControl), field("Section", sectionControl)));
+        else
+        {
+            var included = sections.Where(s => s.Scenario == PracticeDrillType.Mixed)
+                .DistinctBy(s => (s.Section.FirstObjectIndex, s.Section.LastObjectIndex)).ToArray();
+            detail.Add(text($"{included.Length} {(included.Length == 1 ? "difficulty" : "difficulties")} in this practice set", 18, AimModPalette.Cyan));
+            if (included.Length > 3)
+                detail.Add(new Button(showIncludedSections ? "Hide included difficulties" : "Show included difficulties", FontAwesome.Solid.List,
+                    () => { showIncludedSections = !showIncludedSections; showEditor(); }));
+            if (showIncludedSections || included.Length <= 3) foreach (var item in included)
+                detail.Add(text($"{PracticeMapPlanner.Label(item.Section.DrillType)} / {timestamp(item.Section.SourceStartTimeMs)} - {timestamp(item.Section.SourceEndTimeMs)}", 14, AimModPalette.Muted));
+        }
+        detail.Add(optionPair(field("Speed", dropdown(speed.GetBoundCopy(), new[] { 75, 85, 90, 95, 100, 105, 110, 120 }, value => $"{value}%")),
+            field("Practice length", dropdown(duration.GetBoundCopy(), new[] { 30, 60, 90, 120 }, value => $"{value} seconds"))));
+
+        if (!createAllSections)
+        {
+        detail.Add(text(choice.Section.WeaknessScore == 0
+            ? $"{choice.Section.HitObjects.Count} objects / section practice"
+            : $"{choice.Section.HitObjects.Count} objects / {choice.Section.WeakObjects.Count} missed locations", 13, AimModPalette.Cyan));
+        if (choice.Section.WeaknessScore == 0)
+            detail.Add(text("Choose a section you want to repeat. This selection is based on the map's patterns.", 13, AimModPalette.Muted));
         var reasons = choice.Section.WeakObjects.SelectMany(item => item.Reasons).GroupBy(item => item.Key)
             .Where(group => group.Key != AimMod.Osu.Runtime.Contracts.ReplayMissReason.Unknown)
             .OrderByDescending(group => group.Sum(item => item.Value)).Take(2);
@@ -363,11 +528,20 @@ public partial class NativePracticeWorkspace : CompositeDrawable
             _ => "Focus: repeat the difficult phrase with its original approach.",
         };
         detail.Add(text(focus, 12, AimModPalette.Muted));
-        detail.Add(field("Target duration", dropdown(duration.GetBoundCopy(), new[] { 30, 60, 90, 120 }, value => $"{value} seconds")));
-        detail.Add(field("Speed", dropdown(speed.GetBoundCopy(), new[] { 75, 85, 90, 95, 100, 105, 110, 120 }, value => $"{value}%")));
-        detail.Add(field("Minimum rounds", dropdown(rounds.GetBoundCopy(), new[] { 2, 4, 6, 8, 12, 16 }, value => $"{value} rounds")));
-        detail.Add(field("Lead-in", dropdown(leadIn.GetBoundCopy(), new[] { 2, 4, 6, 8 }, value => $"{value} seconds")));
-        detail.Add(field("Audio padding per side", dropdown(recovery.GetBoundCopy(), new[] { 1, 2, 3, 4, 5 }, value => $"{value} seconds")));
+        }
+        else detail.Add(text("Practise each difficulty, then return to the original map to check your progress.", 13, AimModPalette.Muted));
+        detail.Add(new Button(advancedSettings ? "Hide repetition & lead-in settings" : "Repetition & lead-in settings",
+            advancedSettings ? FontAwesome.Solid.ChevronUp : FontAwesome.Solid.ChevronDown,
+            () => { advancedSettings = !advancedSettings; showEditor(); }));
+        if (advancedSettings)
+        {
+            detail.Add(optionPair(field("Minimum rounds", dropdown(rounds.GetBoundCopy(), new[] { 2, 3, 4, 6, 8, 12, 16 }, value => $"{value} rounds")),
+                field("Lead-in", dropdown(leadIn.GetBoundCopy(), new[] { 2, 4, 6, 8 }, value => $"{value} seconds"))));
+            detail.Add(field("Audio padding per side", dropdown(recovery.GetBoundCopy(), new[] { 1, 2, 3, 4, 5 }, value => $"{value} seconds")));
+            detail.Add(text("Longer practice lengths can add rounds above your minimum.", 13, AimModPalette.Muted));
+        }
+
+        if (advancedSettings) detail.Add(new PatternPreview(choice.Section) { Height = 130 });
     }
 
     private void create()
@@ -379,7 +553,7 @@ public partial class NativePracticeWorkspace : CompositeDrawable
             AudioPaddingMs: recovery.Value * 1000, TargetDurationMs: duration.Value * 1000,
             MinimumRepetitions: rounds.Value, MaximumRepetitions: 24, FirstObjectIndex: choice.Section.FirstObjectIndex, PlaybackRate: speed.Value / 100d);
         var progress = new Progress<string>(message => deliver(ticket, () => { status.Text = message; loadingOverlay.ShowLoading("Creating practice map", message); }));
-        _ = createAsync(new PracticeMapGenerationRequest(selected, scenario.Value, options, progress), ticket, operation!.Token);
+        _ = createAsync(new PracticeMapGenerationRequest(selected, scenario.Value, options, progress, createAllSections, sourceHistory, CreateBreakdown: createBreakdown), ticket, operation!.Token);
     }
 
     private async Task createAsync(PracticeMapGenerationRequest request, int ticket, CancellationToken token)
@@ -392,7 +566,7 @@ public partial class NativePracticeWorkspace : CompositeDrawable
                 finishOperation(result.Success ? "Practice map saved" : result.Message);
                 if (result.Success)
                 {
-                    savedView = true;
+                    savedView = true; showIncludedSections = false;
                     search.Current.Value = "";
                     sourceFilters.Alpha = 0;
                     savedFilters.Alpha = 1;
@@ -408,24 +582,48 @@ public partial class NativePracticeWorkspace : CompositeDrawable
     {
         if (busy) return;
         detail.Clear();
+        detailScroll.ScrollTo(0, false);
         detail.Add(text(map.Title, 20));
         detail.Add(text(map.Difficulty, 13, AimModPalette.Cyan));
-        detail.Add(text(PracticeMapPlanner.Label(map.Scenario), 18));
-        if (map.SourceEndMs > 0) detail.Add(text($"Source: {timestamp(map.SourceStartMs)} - {timestamp(map.SourceEndMs)}", 14));
-        detail.Add(text($"{map.DurationMs / 1000:0} seconds / {map.Repetitions} rounds / {map.ObjectCount} objects", 14));
+        if (map.Tracking is { } tracking)
+        {
+            detail.Add(text($"{tracking.Difficulties.Count} practice {(tracking.Difficulties.Count == 1 ? "difficulty" : "difficulties")}", 18));
+            if (tracking.Difficulties.Count > 3) detail.Add(new Button(showIncludedSections ? "Hide difficulties" : "Show difficulties", FontAwesome.Solid.List,
+                () => { showIncludedSections = !showIncludedSections; showSaved(map); }));
+            if (showIncludedSections || tracking.Difficulties.Count <= 3)
+                foreach (var difficulty in tracking.Difficulties) detail.Add(text(difficulty.Name, 14, AimModPalette.Cyan));
+            if (tracking.Difficulties.Any(d => d.BreakdownGroupId.Length > 0))
+            {
+                detail.Add(paragraph("Start with an original-section attempt, then compare it with reduced movement. Try the combined, easier version before your next original attempt."));
+                foreach (var difficulty in tracking.Difficulties.Where(d => d.BreakdownGroupId.Length > 0))
+                {
+                    if (StartDifficulty is not null)
+                        detail.Add(new AimModButton("Play " + PracticeBreakdownPlanner.Label(difficulty.BreakdownVariant), () => StartDifficulty?.Invoke(map, difficulty)));
+                }
+                detail.Add(paragraph("Aim focus uses Relax to handle tapping. Its results are tracked separately from manual plays."));
+            }
+        }
+        else detail.Add(text(PracticeMapPlanner.Label(map.Scenario), 18));
+        if (map.SourceEndMs > 0 && (map.Tracking?.Difficulties.Count ?? 1) == 1) detail.Add(text($"Source: {timestamp(map.SourceStartMs)} - {timestamp(map.SourceEndMs)}", 14));
+        detail.Add(text($"{map.DurationMs / 1000:0} seconds total / {map.ObjectCount} objects", 14));
         detail.Add(text($"{map.PlaybackRate * 100:0}% speed", 14, AimModPalette.Cyan));
         detail.Add(text($"Created {map.CreatedAt:dd MMM yyyy HH:mm}", 12, AimModPalette.Muted));
-        detail.Add(new Button("Open in osu!", FontAwesome.Solid.Play, () =>
+        detail.Add(new Button("Open practice map in osu!", FontAwesome.Solid.Play, () =>
         {
             if (busy) return;
             int ticket = startOperation("Opening in osu!");
             _ = openAsync(map, ticket, operation!.Token);
         }));
+        if (guidedEditor)
+        {
+            detail.Add(text("After practice, play the original map again. Return to Coaching to review your results.", 15, AimModPalette.Muted));
+            return;
+        }
         detail.Add(new Button(map.Favourite ? "Remove favourite" : "Favourite", FontAwesome.Solid.Star, () =>
         {
             _ = updateSavedAsync(map with { Favourite = !map.Favourite });
         }));
-        var rename = new OsuTextBox { RelativeSizeAxes = Axes.X, Height = 40, Current = new Bindable<string>(map.Title) };
+        var rename = new AimModTextBox { RelativeSizeAxes = Axes.X, Height = 40, Current = new Bindable<string>(map.Title) };
         detail.Add(field("Library name", rename));
         detail.Add(new Button("Rename", FontAwesome.Solid.Pen, () =>
         {
@@ -501,23 +699,87 @@ public partial class NativePracticeWorkspace : CompositeDrawable
     }
     private void showEmpty() => detail.Add(text(savedView ? "Select a saved drill" : "Select a map to inspect its practice sections", 18, AimModPalette.Muted));
 
+    private (Vector2 Size, bool Guided)? layoutState;
+    private (bool Saved, bool Prepared, bool Breakdown, bool AllSections, bool Busy, bool HasChoice)? chromeState;
+    private int shownElapsedSeconds = -1;
+
     protected override void Update()
     {
         base.Update();
-        float available = Math.Max(220, DrawHeight - 264);
+        var layout = (DrawSize, guidedEditor);
+        if (layoutState != layout)
+        {
+            layoutState = layout;
+            updateLayout();
+        }
+
+        var chrome = (savedView, preparedSections is not null, createBreakdown, createAllSections, busy, choice is not null);
+        if (chromeState != chrome)
+        {
+            chromeState = chrome;
+            guidedTitle.Text = savedView ? "Your practice is ready" : preparedSections is not null ? "Choose your next section" : createBreakdown ? "Break down this section" : createAllSections ? "Prepare your practice set" : "Prepare your practice map";
+            cancel.Alpha = busy ? 1 : 0;
+            createButton.SetTitle(createBreakdown ? "Create section breakdown" : createAllSections ? "Create practice set" : "Create practice map");
+            createButton.Alpha = !busy && !savedView && choice is not null ? 1 : 0;
+        }
+
+        int elapsedSeconds = busy ? (int)(DateTimeOffset.UtcNow - started).TotalSeconds : -1;
+        if (elapsedSeconds != shownElapsedSeconds)
+        {
+            shownElapsedSeconds = elapsedSeconds;
+            elapsed.Text = busy ? $"{elapsedSeconds}s elapsed" : "";
+        }
+    }
+
+    private void updateLayout()
+    {
+        browserHeader.Alpha = guidedEditor ? 0 : 1;
+        guidedHeader.Alpha = guidedEditor ? 1 : 0;
+        filtersScroll.Alpha = guidedEditor ? 0 : 1;
+        list.Alpha = guidedEditor ? 0 : 1;
+        columns.Y = guidedEditor ? 76 : 192;
+        float available = Math.Max(220, DrawHeight - (guidedEditor ? 150 : 264));
         columns.Height = available;
         bool narrow = DrawWidth < 820;
-        float left = narrow ? DrawWidth : DrawWidth * .44f;
+        float left = narrow ? DrawWidth : DrawWidth * .34f;
         list.Size = new(left - (narrow ? 0 : 16), narrow ? available * .36f : available);
         detailScroll.Position = new(narrow ? 0 : left, narrow ? available * .36f + 12 : 0);
         detailScroll.Size = new(narrow ? DrawWidth : DrawWidth - left, narrow ? available * .64f - 12 : available);
+        if (guidedEditor)
+        {
+            float width = Math.Min(920, DrawWidth);
+            detailScroll.Position = new((DrawWidth - width) / 2, 0);
+            detailScroll.Size = new(width, available);
+        }
         loadingOverlay.Position = detailScroll.Position;
         loadingOverlay.Size = detailScroll.Size;
-        statusText.Width = Math.Max(100, DrawWidth - 244);
         statusText.RelativeSizeAxes = Axes.None;
-        cancel.Alpha = busy ? 1 : 0;
-        createButton.Alpha = !busy && !savedView && choice is not null ? 1 : 0;
-        elapsed.Text = busy ? $"{(DateTimeOffset.UtcNow - started).TotalSeconds:0}s elapsed" : "";
+        statusText.Width = Math.Max(100, DrawWidth - 244);
+    }
+
+    protected override bool OnKeyDown(KeyDownEvent e)
+    {
+        if (Alpha <= 0)
+            return base.OnKeyDown(e);
+
+        if (e.ControlPressed && e.Key == Key.F && !guidedEditor)
+        {
+            GetContainingFocusManager()?.ChangeFocus(search);
+            return true;
+        }
+
+        if (e.Key == Key.Escape && !e.Repeat)
+        {
+            if (busy)
+                cancelOperation();
+            else if (!guidedEditor && search.Current.Value.Length > 0)
+                search.Current.Value = string.Empty;
+            else
+                close();
+            return true;
+        }
+
+        return base.OnKeyDown(e);
     }
 
     protected override void Dispose(bool isDisposing)
@@ -539,8 +801,21 @@ public partial class NativePracticeWorkspace : CompositeDrawable
         _ => "Aim deviation",
     };
     private static FillFlowContainer flow() => new() { RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Direction = FillDirection.Vertical, Spacing = new(10), Padding = new MarginPadding { Right = 10, Bottom = 12 } };
+    private static Drawable paragraph(string value) => new TextFlowContainer(sprite =>
+    {
+        sprite.Font = new FontUsage("Torus", 13);
+        sprite.Colour = AimModPalette.Muted;
+    }) { RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y }.With(flow => flow.AddText(value));
+
     private static OsuSpriteText text(string value, float size, Colour4? colour = null) => new TruncatingSpriteText
     { Text = value, Font = new osu.Framework.Graphics.Sprites.FontUsage("Torus", size), Colour = colour ?? AimModPalette.Text, RelativeSizeAxes = Axes.X };
+    private Drawable optionPair(Drawable left, Drawable right) => new GridContainer
+    {
+        RelativeSizeAxes = Axes.X, Height = 84, Depth = -100 + detail.Children.Count,
+        ColumnDimensions = [new Dimension(GridSizeMode.Relative, .5f), new Dimension(GridSizeMode.Relative, .5f)],
+        Content = new[] { new[] { left, right } },
+    };
+
     private static Drawable field(string name, Drawable control)
     {
         var body = flow(); body.Depth = -10; body.Add(text(name, 12, AimModPalette.Cyan)); body.Add(control); return body;
@@ -548,19 +823,21 @@ public partial class NativePracticeWorkspace : CompositeDrawable
     private static Dropdown<T> dropdown<T>(Bindable<T> current, IEnumerable<T> items, Func<T, string> label) where T : notnull =>
         new(label) { RelativeSizeAxes = Axes.X, Width = .98f, Items = items, Current = current, Depth = -10 };
 
-    private partial class Dropdown<T>(Func<T, string> label) : OsuDropdown<T> where T : notnull
+    private partial class Dropdown<T>(Func<T, string> label) : AimModDropdown<T> where T : notnull
     {
         protected override LocalisableString GenerateItemText(T item) => label(item);
     }
 
     private partial class Button : ClickableContainer
     {
-        public Button(string title, IconUsage icon, Action action)
+        private readonly OsuSpriteText caption;
+        public void SetTitle(string title) => caption.Text = title;
+        public Button(string title, IconUsage icon, Action action, bool primary = false)
         {
             RelativeSizeAxes = Axes.X; Height = 40; Action = action; Masking = true; CornerRadius = 4;
-            Children = [new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
-                new SpriteIcon { Icon = icon, Size = new(16), Position = new(12, 12), Colour = AimModPalette.Cyan },
-                new Container { RelativeSizeAxes = Axes.Both, Padding = new MarginPadding { Left = 38, Right = 12, Top = 11 }, Child = text(title, 14) }];
+            Children = [new Box { RelativeSizeAxes = Axes.Both, Colour = primary ? Colour4.FromHex("38D9A9") : AimModPalette.PanelRaised },
+                new SpriteIcon { Icon = icon, Size = new(16), Position = new(12, 12), Colour = primary ? AimModPalette.Canvas : AimModPalette.Cyan },
+                new Container { RelativeSizeAxes = Axes.Both, Padding = new MarginPadding { Left = 38, Right = 12, Top = 11 }, Child = caption = text(title, 14, primary ? AimModPalette.Canvas : AimModPalette.Text) }];
         }
     }
 

@@ -1,5 +1,7 @@
+using System.Text.Json;
 using AimMod.Desktop.Coaching;
 using AimMod.Desktop.LocalLibrary;
+using AimMod.Osu.Runtime.Contracts;
 using NUnit.Framework;
 
 namespace AimMod.Desktop.Tests;
@@ -67,6 +69,58 @@ public sealed class CoachingPpProjectionServiceTests
         double gain = CoachingPpWeighting.CalculateProfileGain(history, map, 100);
 
         Assert.That(gain, Is.Zero);
+    }
+
+    [Test]
+    public void TargetKeysIncludeEveryComboEstimateInputAndNeverCollideWithCurrentKeys()
+    {
+        CoachingPpProjectionRequest request = createRequest(currentCombo: 400, currentMisses: 2, targetMisses: 2, currentAccuracy: 0.95, targetAccuracy: 0.95);
+        string key = CoachingPpProjectionService.TargetCacheKey(request);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(CoachingPpProjectionService.TargetCacheKey(request with { Run = request.Run with { Accuracy = 0.93 } }), Is.Not.EqualTo(key));
+            Assert.That(CoachingPpProjectionService.TargetCacheKey(request with { Run = request.Run with { MissCount = 5 } }), Is.Not.EqualTo(key));
+            Assert.That(CoachingPpProjectionService.TargetCacheKey(request with { Run = request.Run with { MaxCombo = 300 } }), Is.Not.EqualTo(key));
+            Assert.That(CoachingPpProjectionService.TargetCacheKey(request with { Opportunity = request.Opportunity with { TargetMissCount = 1 } }), Is.Not.EqualTo(key));
+            Assert.That(CoachingPpProjectionService.TargetCacheKey(request with { Run = request.Run with { ScoreId = Guid.NewGuid() } }), Is.EqualTo(key));
+            Assert.That(CoachingPpProjectionService.CurrentCacheKey(request.Run), Is.Not.EqualTo(key),
+                "a target equal to the recorded play still uses an estimated combo");
+            Assert.That(CoachingPpProjectionService.CurrentCacheKey(request.Run with { HitStatistics = new(100, 5, 1, 2, 10, 0) }),
+                Is.Not.EqualTo(CoachingPpProjectionService.CurrentCacheKey(request.Run)));
+        });
+    }
+
+    [Test]
+    public async Task CacheWithRepeatedKeysLoadsTheNewestEntry()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "aimmod-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            CoachingPpProjectionRequest request = createRequest(currentCombo: 400, currentMisses: 2, targetMisses: 1, currentAccuracy: 0.95, targetAccuracy: 0.97);
+            string key = CoachingPpProjectionService.TargetCacheKey(request);
+            object entry(double pp, int minutes) => new
+            {
+                key,
+                calculatedAt = new DateTimeOffset(2026, 1, 1, 0, minutes, 0, TimeSpan.Zero),
+                result = new PpWhatIfResult(PpCalculationProtocol.EngineVersion, 1, 5.2, 900, 600, 580, 15, 3, 1, 0.97, pp, null, null, null, null, null, null),
+            };
+            string cachePath = Path.Combine(root, "projection.json");
+            await File.WriteAllTextAsync(cachePath, JsonSerializer.Serialize(
+                new { version = 3, entries = new[] { entry(180, 5), entry(150, 1) } },
+                new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+
+            var service = new CoachingPpProjectionService(root, cachePath);
+            IReadOnlyDictionary<Guid, CoachingExactPpProjection> projections = await service.CalculateAsync([request, request]);
+
+            Assert.That(projections, Has.Count.EqualTo(1));
+            Assert.That(projections[request.Run.ScoreId].ProjectedPp, Is.EqualTo(180));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
     }
 
     private static CoachingPpProjectionRequest createRequest(

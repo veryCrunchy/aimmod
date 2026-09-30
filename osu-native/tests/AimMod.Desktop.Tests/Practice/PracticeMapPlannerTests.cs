@@ -16,6 +16,66 @@ public sealed class PracticeMapPlannerTests
     public void TearDown() => Directory.Delete(directory, true);
 
     [Test]
+    public async Task PracticeSetPackagesEveryWeakSectionWithDistinctAudioAndHashes()
+    {
+        var source=read(map(objects:circleObjects(60,100,4))); write("audio.ogg","audio");
+        var misses=new[]{analysis(miss(7,.9),miss(23,.9),miss(45,.8))};
+        var plans=PracticeSetArtifactBuilder.Plan(source,misses,new(PracticeDrillType.Mixed),true);
+        foreach(int index in new[]{7,23,45})
+            Assert.That(plans.Any(plan=>plan.SourceSection.FirstObjectIndex<=index && plan.SourceSection.LastObjectIndex>=index),Is.True);
+        string output=Directory.CreateTempSubdirectory("aimmod-set-test-").FullName;
+        try
+        {
+            var artifact=await new PracticeSetArtifactBuilder(new CopyingAudioSlicer()).BuildAsync(source,plans,output);
+            using var zip=System.IO.Compression.ZipFile.OpenRead(artifact.ArchivePath);
+            Assert.That(zip.Entries.Count,Is.EqualTo(plans.Count*2));
+            Assert.That(zip.Entries.Select(entry=>entry.FullName).Distinct().Count(),Is.EqualTo(zip.Entries.Count));
+            Assert.That(artifact.Difficulties.Select(d=>d.Sha256).Distinct().Count(),Is.EqualTo(plans.Count));
+            Assert.That(artifact.Plans.Select(plan=>plan.OutputSetTitle).Distinct().Count(),Is.EqualTo(1));
+            foreach(var file in zip.Entries.Where(entry=>entry.Name.EndsWith(".osu")))
+            {
+                using var reader=new StreamReader(file.Open()); string content=reader.ReadToEnd();
+                Assert.That(content,Does.Contain("BeatmapSetID:-1"));
+                Assert.That(content, Does.Contain("Title:Source Song [Original] - AimMod practice "));
+                Assert.That(content, Does.Contain("TitleUnicode:Source Song [Original] - AimMod practice "));
+                string audio=content.Split('\n').Single(line=>line.StartsWith("AudioFilename:")).Split(':',2)[1].Trim();
+                Assert.That(zip.GetEntry(audio),Is.Not.Null);
+            }
+        }
+        finally { Directory.Delete(output,true); }
+    }
+
+    [Test]
+    public void PatternPracticeWithoutAnalysisDoesNotInventMissEvidence()
+    {
+        var source = read(map(objects: circleObjects(60, 100, 20)));
+        Assert.That(PracticeMapPlanner.FindSections(source, [], new(PracticeDrillType.Mixed)), Is.Empty);
+        var sections = PracticeMapPlanner.FindSections(source, [], new(PracticeDrillType.Mixed, AllowPatternPractice: true));
+        Assert.That(sections, Has.Count.EqualTo(3));
+        Assert.That(sections.All(section => section.WeakObjects.Count == 0 && section.WeaknessScore == 0), Is.True);
+        var plan = PracticeMapPlanner.CreatePlans(source, [], new(PracticeDrillType.Mixed,
+            FirstObjectIndex: sections[1].FirstObjectIndex, AllowPatternPractice: true)).Single();
+        Assert.That(plan.SourceSection.FirstObjectIndex, Is.EqualTo(21), "Three original notes lead into the selected phrase.");
+        Assert.That(plan.SourceSection.LastObjectIndex, Is.EqualTo(47));
+    }
+
+    [Test]
+    public void TimingDrillKeepsLeadInWithoutInventingMisses()
+    {
+        var source = read(map(objects: circleObjects(14, 100, 20)));
+        var notes = source.HitObjects.Select((o, i) => new ReplayObjectJudgement(i, null, "HitCircle",
+            o.StartTimeMs, o.EndTimeMs, "Great", "Great", o.StartTimeMs - i * 8, -i * 8, 1, null, null, i, i + 1)).ToArray();
+        var result = analysis(notes);
+        var plan = PracticeMapPlanner.CreatePlans(source, [result], new(PracticeDrillType.Mixed, PlaybackRate: .75)).First();
+        Assert.Multiple(() => {
+            Assert.That(plan.SourceSection.WeakObjects, Is.Empty);
+            Assert.That(plan.SourceSection.FirstObjectIndex, Is.Zero);
+            Assert.That(plan.HitObjects[0].StartTimeMs, Is.GreaterThan(0));
+            Assert.That(plan.AudioSlice.PlaybackRate, Is.EqualTo(.75));
+        });
+    }
+
+    [Test]
     public void ReaderAcceptsStandardAndRejectsOtherRulesets()
     {
         PracticeSourceBeatmap source = read(map(mode: 0, objects: circleObjects(8, 100, 20)));
@@ -99,6 +159,60 @@ public sealed class PracticeMapPlannerTests
         IReadOnlyList<PracticeMapPlan> plans = PracticeMapPlanner.CreatePlans(source,
             new[] { analysis(miss(5, 0.9)) }, new PracticeMapOptions(PracticeDrillType.Streams));
         Assert.That(plans, Is.Empty);
+    }
+
+    [Test]
+    public void JumpPracticeRepeatsThreeOriginalRunUpNotesBeforeTheSelectedContext()
+    {
+        string objects = string.Join('\n', Enumerable.Range(0, 30).Select(index =>
+            $"{(index % 2 == 0 ? 40 : 460)},192,{10000 + index * 260},1,0,0:0:0:0:"));
+        var source = read(map(objects: objects));
+        var options = new PracticeMapOptions(PracticeDrillType.LongJumps, 1, 2, 4);
+        var section = PracticeMapPlanner.FindSections(source, [analysis(miss(12, .9))], options).Single();
+        var plan = PracticeMapPlanner.CreatePlans(source, [analysis(miss(12, .9))], options with { FirstObjectIndex = section.FirstObjectIndex }).Single();
+        Assert.That(section.FirstObjectIndex, Is.EqualTo(7));
+        Assert.That(section.WeakObjects.Single().ObjectIndex, Is.EqualTo(12));
+        int count = section.HitObjects.Count;
+        for (int round = 0; round < plan.RepeatCount; round++)
+        {
+            var actual = plan.HitObjects.Skip(round * count).Take(count).ToArray();
+            Assert.That(actual.Select(o => (o.SourceIndex, o.X, o.Y)), Is.EqualTo(source.HitObjects.Skip(7).Take(count).Select(o => (o.SourceIndex, o.X, o.Y))));
+            Assert.That(actual[5].StartTimeMs - actual[0].StartTimeMs, Is.EqualTo(5 * 260));
+            Assert.That(actual[0].StartTimeMs, Is.EqualTo(plan.AudioLeadInMs + (section.SourceStartTimeMs - plan.AudioSlice.SourceStartTimeMs) + round * plan.AudioSlice.CycleDurationMs).Within(.01));
+        }
+    }
+
+    [TestCase(.75, 2)]
+    [TestCase(1, 3)]
+    [TestCase(1.25, 3)]
+    public void ExtraPlayableLeadUpNeverExceedsOneAndAHalfSecondsAtTheSelectedSpeed(double rate, int count)
+    {
+        var source = read(map(objects: circleObjects(25, 500, 10)));
+        var plan = PracticeMapPlanner.CreatePlans(source, [analysis(miss(10, .9))],
+            new(PracticeDrillType.Mixed, 1, 0, 4, PlaybackRate: rate)).Single();
+        Assert.That(plan.SourceSection.FirstObjectIndex, Is.EqualTo(10 - count));
+        Assert.That(plan.HitObjects[count].StartTimeMs - plan.HitObjects[0].StartTimeMs, Is.LessThanOrEqualTo(1500));
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void LeadUpDoesNotReachAcrossABreakOrSpinner(bool spinner)
+    {
+        string objects = string.Join('\n', Enumerable.Range(0, 25).Select(index =>
+            spinner && index == 9 ? "256,192,12340,8,0,12500,0:0:0:0:"
+                : $"256,192,{10000 + index * 260 + (!spinner && index >= 10 ? 5000 : 0)},1,0,0:0:0:0:"));
+        var source = read(map(objects: objects));
+        var plan = PracticeMapPlanner.CreatePlans(source, [analysis(miss(10, .9))], new(PracticeDrillType.Mixed, 1, 0, 4)).Single();
+        Assert.That(plan.SourceSection.FirstObjectIndex, Is.EqualTo(10));
+    }
+
+    [Test]
+    public void OpeningSectionDoesNotInventNotesBeforeTheSong()
+    {
+        var source = read(map(objects: circleObjects(25, 250, 10)));
+        var plan = PracticeMapPlanner.CreatePlans(source, [analysis(miss(1, .9))], new(PracticeDrillType.Mixed, 1, 0, 4)).Single();
+        Assert.That(plan.SourceSection.FirstObjectIndex, Is.Zero);
+        Assert.That(plan.SourceSection.HitObjects[0], Is.EqualTo(source.HitObjects[0]));
     }
 
     [Test]
@@ -254,6 +368,7 @@ public sealed class PracticeMapPlannerTests
             Assert.That(plan.AudioSlice.PlaybackRate, Is.EqualTo(rate));
         });
         PracticeSourceBeatmap decoded = read(PracticeMapExporter.Serialize(source, plan));
+        Assert.That(decoded.Metadata.Title, Is.EqualTo("Source Song [Original] - AimMod practice"));
         Assert.That(decoded.HitObjects.Count, Is.EqualTo(plan.HitObjects.Count));
     }
 

@@ -12,13 +12,16 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
 {
     private readonly string installRoot;
     private readonly string songsRoot;
+    private static readonly TimeSpan failure_backoff = TimeSpan.FromSeconds(30);
     private readonly object snapshotLock = new();
-    private Task<InMemoryLocalLibrarySource>? snapshotTask;
+    private Task<Snapshot>? snapshotTask;
+    private DateTimeOffset? snapshotFailedAt;
+    private readonly TimeProvider timeProvider;
     private DatabaseStamp snapshotStamp;
     private LocalLibraryProgress? progress;
     public LocalLibraryProgress? Progress => Volatile.Read(ref progress);
 
-    public OsuStableLocalLibrarySource(string installRoot, string songsRoot)
+    public OsuStableLocalLibrarySource(string installRoot, string songsRoot, TimeProvider? timeProvider = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(installRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(songsRoot);
@@ -27,22 +30,23 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
 
         this.installRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(installRoot));
         this.songsRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(songsRoot));
+        this.timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async ValueTask<LocalLibraryPage<LocalBeatmapSet>> SearchBeatmapSetsAsync(
         LocalLibraryQuery query,
         CancellationToken cancellationToken = default)
     {
-        InMemoryLocalLibrarySource snapshot = await getSnapshot(cancellationToken).ConfigureAwait(false);
-        return await snapshot.SearchBeatmapSetsAsync(query, cancellationToken).ConfigureAwait(false);
+        Snapshot snapshot = await getSnapshot(cancellationToken).ConfigureAwait(false);
+        return (await snapshot.Source.SearchBeatmapSetsAsync(query, cancellationToken).ConfigureAwait(false)) with { Warning = snapshot.Warning };
     }
 
     public async ValueTask<LocalLibraryPage<LocalReplay>> SearchReplaysAsync(
         LocalLibraryQuery query,
         CancellationToken cancellationToken = default)
     {
-        InMemoryLocalLibrarySource snapshot = await getSnapshot(cancellationToken).ConfigureAwait(false);
-        return await snapshot.SearchReplaysAsync(query, cancellationToken).ConfigureAwait(false);
+        Snapshot snapshot = await getSnapshot(cancellationToken).ConfigureAwait(false);
+        return (await snapshot.Source.SearchReplaysAsync(query, cancellationToken).ConfigureAwait(false)) with { Warning = snapshot.Warning };
     }
 
     public void Invalidate()
@@ -51,34 +55,46 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
             snapshotTask = null;
     }
 
-    private Task<InMemoryLocalLibrarySource> getSnapshot(CancellationToken cancellationToken)
+    private Task<Snapshot> getSnapshot(CancellationToken cancellationToken)
     {
-        Task<InMemoryLocalLibrarySource> task;
+        Task<Snapshot> task;
         lock (snapshotLock)
         {
             DatabaseStamp current = getStamp();
-            if (snapshotTask is null || snapshotTask.IsFaulted || snapshotTask.IsCanceled || current != snapshotStamp)
+            DateTimeOffset now = timeProvider.GetUtcNow();
+            bool failed = snapshotTask is { IsFaulted: true } or { IsCanceled: true };
+            if (failed)
+                snapshotFailedAt ??= now;
+            // A database that fails to decode keeps failing until it changes; sharing violations clear up quickly.
+            bool backingOff = failed && current == snapshotStamp && !isTransientFailure(snapshotTask!)
+                && now - snapshotFailedAt!.Value < failure_backoff;
+            if (snapshotTask is null || failed && !backingOff || current != snapshotStamp
+                || snapshotTask.IsCompletedSuccessfully && snapshotTask.Result.RetryAfter <= now)
             {
                 snapshotStamp = current;
+                snapshotFailedAt = null;
                 snapshotTask = Task.Run(() =>
                 {
                     try { return buildSnapshot(); }
                     finally { Volatile.Write(ref progress, null); }
                 }, CancellationToken.None);
             }
-            task = snapshotTask ??= Task.Run(buildSnapshot, CancellationToken.None);
+            task = snapshotTask;
         }
         return task.WaitAsync(cancellationToken);
     }
 
-    private InMemoryLocalLibrarySource buildSnapshot()
+    private static bool isTransientFailure(Task task) =>
+        task.IsCanceled || task.Exception?.GetBaseException() is IOException and not EndOfStreamException and not FileNotFoundException;
+
+    private Snapshot buildSnapshot()
     {
         Volatile.Write(ref progress, new("Reading osu!stable beatmap database"));
         OsuDatabase beatmapDatabase = decodeSharedDatabase(
             Path.Combine(installRoot, "osu!.db"),
             DatabaseDecoder.DecodeOsu);
         Volatile.Write(ref progress, new("Reading osu!stable score history"));
-        ScoresDatabase? scoreDatabase = tryDecodeScores(Path.Combine(installRoot, "scores.db"));
+        ScoresDatabase? scoreDatabase = tryDecodeScores(Path.Combine(installRoot, "scores.db"), out bool scoresUnavailable);
 
         Dictionary<string, List<Score>> scoresByBeatmap = (scoreDatabase?.Scores ?? [])
             .Where(group => !string.IsNullOrWhiteSpace(group.Item1))
@@ -109,7 +125,7 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
         }
 
         var beatmapsByHash = new Dictionary<string, StableBeatmap>(StringComparer.OrdinalIgnoreCase);
-        DbBeatmap[] standardMaps = beatmapDatabase.Beatmaps.Where(beatmap => beatmap.Ruleset == Ruleset.Standard).ToArray();
+        DbBeatmap[] standardMaps = beatmapDatabase.Beatmaps.Where(beatmap => (int)beatmap.Ruleset is >= 0 and <= 3).ToArray();
         int checkedMaps = 0;
         foreach (DbBeatmap beatmap in standardMaps)
         {
@@ -121,9 +137,9 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
             string folderPath = Path.GetDirectoryName(beatmapPath)!;
             bool installed = File.Exists(beatmapPath);
             string backgroundPath = installed ? resolveBackground(beatmapPath, folderPath) : string.Empty;
-            double stars = beatmap.StandardStarRating.TryGetValue(Mods.None, out double noModStars)
+            double stars = starRatings(beatmap).TryGetValue(Mods.None, out double noModStars)
                 ? noModStars
-                : beatmap.StandardStarRating.Values.DefaultIfEmpty().Min();
+                : starRatings(beatmap).Values.DefaultIfEmpty().Min();
             int localScoreCount = scoresByBeatmap.GetValueOrDefault(beatmap.MD5Hash)?.Count ?? 0;
             beatmapsByHash[beatmap.MD5Hash] = new StableBeatmap(beatmap, installed ? beatmapPath : string.Empty, backgroundPath, stars, localScoreCount);
         }
@@ -145,7 +161,9 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
             .GroupBy(beatmap => setKey(beatmap.Entry))
             .Select(group => createSet(group, lastPlayedByHash))
             .ToArray();
-        return new InMemoryLocalLibrarySource(sets, replays);
+        return new Snapshot(new InMemoryLocalLibrarySource(sets, replays),
+            scoresUnavailable ? "osu!stable score history is temporarily unavailable. AimMod will retry shortly." : null,
+            scoresUnavailable ? timeProvider.GetUtcNow().AddSeconds(2) : DateTimeOffset.MaxValue);
     }
 
     private LocalBeatmapSet createSet(
@@ -158,7 +176,7 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
             stableGuid("beatmap", beatmap.Entry.MD5Hash),
             beatmap.Entry.BeatmapId,
             beatmap.Entry.Difficulty,
-            "osu",
+            rulesetName(beatmap.Entry.Ruleset),
             beatmap.StarRating,
             beatmap.Entry.TimingPoints.Where(point => !point.Inherited).Select(point => point.BPM).DefaultIfEmpty().Max(),
             beatmap.Entry.TotalTime,
@@ -167,7 +185,7 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
             beatmap.Entry.OverallDifficulty,
             beatmap.Entry.HPDrain,
             beatmap.LocalScoreCount,
-            beatmap.Entry.MD5Hash)).OrderBy(difficulty => difficulty.StarRating).ToArray();
+            beatmap.Entry.MD5Hash, beatmap.BeatmapPath, LocalLibraryOrigin.Stable)).OrderBy(difficulty => difficulty.StarRating).ToArray();
         string folder = Path.GetDirectoryName(representative.BeatmapPath)!;
         DateTimeOffset dateAdded = new DirectoryInfo(folder).CreationTimeUtc;
         DateTimeOffset? lastPlayed = group.Select(beatmap => lastPlayedByHash.GetValueOrDefault(beatmap.Entry.MD5Hash))
@@ -191,17 +209,24 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
 
     private LocalReplay? createReplay(Score score, StableBeatmap? beatmap, string? indexedReplayPath)
     {
-        if (score.Ruleset != Ruleset.Standard)
+        if ((int)score.Ruleset is < 0 or > 3)
             return null;
 
-        int totalHits = score.Count300 + score.Count100 + score.Count50 + score.CountMiss;
-        double accuracy = totalHits == 0
-            ? 0
-            : (score.Count300 * 300d + score.Count100 * 100d + score.Count50 * 50d) / (totalHits * 300d);
+        int mode = (int)score.Ruleset;
+        int totalHits = score.Count300 + score.Count100 + score.Count50 + score.CountMiss
+            + (mode == 3 ? score.CountGeki + score.CountKatu : mode == 2 ? score.CountKatu : 0);
+        double accuracy = totalHits == 0 ? 0 : mode switch {
+            1 => (score.Count300 + score.Count100 * .5) / (score.Count300 + score.Count100 + (double)score.CountMiss),
+            2 => (score.Count300 + score.Count100 + score.Count50) / (double)totalHits,
+            3 => ((score.CountGeki + score.Count300) * 300d + score.CountKatu * 200d + score.Count100 * 100d + score.Count50 * 50d) / (totalHits * 300d),
+            _ => (score.Count300 * 300d + score.Count100 * 100d + score.Count50 * 50d) / (totalHits * 300d)
+        };
         string replayPath = indexedReplayPath ?? resolveReplayPath(score.ReplayMD5Hash);
-        string[] mods = enumerateMods(score.Mods);
+        string[] mods = enumerateMods(score.Mods, score.Ruleset);
         DateTimeOffset playedAt = new(DateTime.SpecifyKind(score.ScoreTimestamp, DateTimeKind.Utc));
-        var statistics = new PpScoreStatistics(score.Count300, score.Count100, score.Count50, score.CountMiss, 0, 0);
+        var statistics = new PpScoreStatistics(score.Count300, mode == 2 ? 0 : score.Count100, mode == 2 ? 0 : score.Count50, score.CountMiss, 0, 0,
+            Perfect: mode == 3 ? score.CountGeki : 0, Good: mode == 3 ? score.CountKatu : 0,
+            LargeTickHit: mode == 2 ? score.Count100 : 0, SmallTickHit: mode == 2 ? score.Count50 : 0, SmallTickMiss: mode == 2 ? score.CountKatu : 0);
 
         return new LocalReplay(
             stableGuid("score", score.ReplayMD5Hash.Length > 0
@@ -212,10 +237,10 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
             beatmap?.Entry.Title ?? "Beatmap not installed",
             beatmap?.Entry.Artist ?? string.Empty,
             beatmap?.Entry.Difficulty ?? string.Empty,
-            "osu",
+            rulesetName(score.Ruleset),
             score.PlayerName,
             playedAt,
-            beatmap?.Entry.StandardStarRating.GetValueOrDefault(score.Mods, beatmap.StarRating) ?? 0,
+            beatmap is null ? 0 : StarRatingFor(starRatings(beatmap.Entry), score.Mods, beatmap.StarRating),
             accuracy,
             score.ReplayScore,
             score.Combo,
@@ -232,6 +257,22 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
             Origin: LocalLibraryOrigin.Stable,
             OnlineBeatmapId: Math.Max(0, beatmap?.Entry.BeatmapId ?? 0));
     }
+
+    internal static double StarRatingFor(IReadOnlyDictionary<Mods, double> ratings, Mods mods, double fallback)
+    {
+        if (ratings.TryGetValue(mods, out double exact))
+            return exact;
+        Mods effective = mods.HasFlag(Mods.Nightcore) ? mods | Mods.DoubleTime : mods;
+        Mods difficulty = effective & (Mods.Easy | Mods.HardRock | Mods.DoubleTime | Mods.HalfTime);
+        if (ratings.TryGetValue(difficulty | (effective & Mods.Flashlight), out double withFlashlight))
+            return withFlashlight;
+        return ratings.TryGetValue(difficulty, out double masked) ? masked : fallback;
+    }
+
+    private static string rulesetName(Ruleset mode) => (int)mode switch { 1 => "taiko", 2 => "fruits", 3 => "mania", _ => "osu" };
+    private static Dictionary<Mods,double> starRatings(DbBeatmap map) => (int)map.Ruleset switch {
+        1 => map.TaikoStarRating, 2 => map.CatchStarRating, 3 => map.ManiaStarRating, _ => map.StandardStarRating
+    };
 
     private string resolveReplayPath(string replayHash)
     {
@@ -277,8 +318,9 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
         return decode(snapshot);
     }
 
-    private static ScoresDatabase? tryDecodeScores(string path)
+    private static ScoresDatabase? tryDecodeScores(string path, out bool unavailable)
     {
+        unavailable = false;
         if (!File.Exists(path))
             return null;
         try
@@ -287,11 +329,17 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or EndOfStreamException)
         {
+            unavailable = true;
             return null;
         }
     }
 
-    private static string[] enumerateMods(Mods value) => new osu.Game.Rulesets.Osu.OsuRuleset()
+    private static osu.Game.Rulesets.Ruleset createRuleset(Ruleset mode) => (int)mode switch {
+        1 => new osu.Game.Rulesets.Taiko.TaikoRuleset(), 2 => new osu.Game.Rulesets.Catch.CatchRuleset(),
+        3 => new osu.Game.Rulesets.Mania.ManiaRuleset(), _ => new osu.Game.Rulesets.Osu.OsuRuleset()
+    };
+
+    private static string[] enumerateMods(Mods value, Ruleset mode) => createRuleset(mode)
         .ConvertFromLegacyMods((osu.Game.Beatmaps.Legacy.LegacyMods)(int)value)
         .Select(mod => mod.Acronym)
         .ToArray();
@@ -342,4 +390,5 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
         int LocalScoreCount);
 
     private readonly record struct DatabaseStamp(long Beatmaps, long Scores, long ReplayCache, long Exports);
+    private sealed record Snapshot(InMemoryLocalLibrarySource Source, string? Warning, DateTimeOffset RetryAfter);
 }

@@ -35,6 +35,20 @@ public sealed class OfficialReplayAnalysisEngineTests
         Assert.That(watchdog.ShouldComplete(10_000, true), Is.True);
     }
 
+    [Test]
+    public void ErrorTextNamesStagedFilesWithoutTheirPaths()
+    {
+        string staging = Path.Combine(Path.GetTempPath(), "aimmod-analysis-stage");
+        var input = new ValidatedReplayInput(staging, Path.Combine(staging, "map.osu"), Path.Combine(staging, "play.osr"));
+
+        string message = OfficialReplayAnalysisEngine.boundedError(
+            new IOException($"Could not read {input.BeatmapPath} or {input.ReplayPath} in {staging}\nretry"),
+            input);
+
+        Assert.That(message, Is.EqualTo("Could not read <beatmap> or <replay> in <staging> retry"));
+    }
+
+    [Test]
     public void UsesOfficialGameplayTimelineAsTerminalFallback()
     {
         var watchdog = new ReplayAnalysisCompletionWatchdog(120_000, 2_000);

@@ -34,11 +34,38 @@
           "ppy.osu.Game.Resources": "2026.710.0"
         }
       },
+      "ppy.osu.Game.Rulesets.Catch": {
+        "type": "Direct",
+        "requested": "[2026.730.0, )",
+        "resolved": "2026.730.0",
+        "contentHash": "/KUIV8/T7SCLGpwBFzw8MJzcVdSYTGPcjTq/6ACtnZyRe8dwg9HlKnoJcb7Mz+CE23rcclmw17kM+TrUoeboHw==",
+        "dependencies": {
+          "ppy.osu.Game": "2026.730.0"
+        }
+      },
+      "ppy.osu.Game.Rulesets.Mania": {
+        "type": "Direct",
+        "requested": "[2026.730.0, )",
+        "resolved": "2026.730.0",
+        "contentHash": "b5vXDlpYuAggf8NM/jIsitTEh0k5ECQa2ryJmI+D9yKylHUqVIGUbktsGxH0O0xz3jhSb/GK+L807os4z48jvg==",
+        "dependencies": {
+          "ppy.osu.Game": "2026.730.0"
+        }
+      },
       "ppy.osu.Game.Rulesets.Osu": {
         "type": "Direct",
         "requested": "[2026.730.0, )",
         "resolved": "2026.730.0",
         "contentHash": "+OvxH7ACj0148/on+R1MDJuYUZVrZDEd/Q3FJ9UBkKbGcw/krYbS8Kn1ZlD/8xF0lscAa08ok9l7OWUqrSK/7g==",
+        "dependencies": {
+          "ppy.osu.Game": "2026.730.0"
+        }
+      },
+      "ppy.osu.Game.Rulesets.Taiko": {
+        "type": "Direct",
+        "requested": "[2026.730.0, )",
+        "resolved": "2026.730.0",
+        "contentHash": "2iWymShE/LmFgACNNSUperF7g5cjlZCKBtJGy5PldJwQw9VfMHvDnInVt5PVNzSiZGH2MVq4p+NOF0neEpxXVw==",
         "dependencies": {
           "ppy.osu.Game": "2026.730.0"
         }

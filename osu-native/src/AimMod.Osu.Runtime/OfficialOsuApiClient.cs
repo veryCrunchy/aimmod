@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Mime;
@@ -6,7 +7,7 @@ using System.Text.Json.Serialization;
 
 namespace AimMod.Osu.Runtime;
 
-public sealed class OfficialOsuApiClient : IDisposable
+public sealed partial class OfficialOsuApiClient : IDisposable
 {
     private const int maximum_response_bytes = 1024 * 1024;
     private const int maximum_scores_response_bytes = 8 * 1024 * 1024;
@@ -14,6 +15,10 @@ public sealed class OfficialOsuApiClient : IDisposable
     private const int maximum_score_pages = 20;
     private const int score_cache_schema_version = 3;
     private const string osu_api_version = "20220705";
+    private const string best_scores_endpoint = "best";
+    private const string recent_scores_endpoint = "recent";
+    private const string beatmap_scores_endpoint = "beatmap-scores";
+    private const string profile_endpoint_key = "profile";
     private static readonly TimeSpan score_cache_lifetime = TimeSpan.FromMinutes(15);
     private static readonly Uri profile_endpoint = new("https://osu.ppy.sh/api/v2/me/osu", UriKind.Absolute);
     private static readonly JsonSerializerOptions json_options = new(JsonSerializerDefaults.Web);
@@ -53,6 +58,10 @@ public sealed class OfficialOsuApiClient : IDisposable
         };
     }
 
+    private static readonly TimeSpan stale_temporary_age = TimeSpan.FromMinutes(10);
+
+    private readonly ConcurrentDictionary<string, DateTimeOffset> cooldowns = new();
+    private int temporaryFilesSwept;
     private readonly SemaphoreSlim bestScoresGate = new(1, 1);
     private readonly SemaphoreSlim recentScoresGate = new(1, 1);
 
@@ -108,6 +117,12 @@ public sealed class OfficialOsuApiClient : IDisposable
                 cached.FetchedAt);
         }
 
+        if (activeCooldown(best_scores_endpoint) is { } bestCooldown)
+        {
+            accessToken = string.Empty;
+            return new OsuBestScoresFetchResult(OsuBestScoresFetchStatus.RateLimited, RetryAfter: bestCooldown);
+        }
+
         var scores = new List<OsuBestScore>();
 
         try
@@ -116,20 +131,19 @@ public sealed class OfficialOsuApiClient : IDisposable
             {
                 int offset = page * scores_page_size;
                 Uri endpoint = new($"https://osu.ppy.sh/api/v2/users/{profile.UserId}/scores/best?mode=osu&limit={scores_page_size}&offset={offset}");
-                using var request = new HttpRequestMessage(HttpMethod.Get, endpoint);
-                request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue(MediaTypeNames.Application.Json));
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
-                request.Headers.TryAddWithoutValidation("x-api-version", osu_api_version);
+                string token = accessToken;
 
-                using HttpResponseMessage response = await httpClient.SendAsync(
-                    request,
-                    HttpCompletionOption.ResponseHeadersRead,
+                using HttpResponseMessage response = await HttpRequestPolicy.SendWithSingleRetryAsync(
+                    httpClient,
+                    () => createAuthorizedRequest(endpoint, token, osu_api_version),
                     cancellationToken);
 
                 OsuBestScoresFetchStatus? sessionStatus = await validateScoreSessionAsync(startingState, lease, profile, cancellationToken);
                 if (sessionStatus is not null)
                     return new OsuBestScoresFetchResult(sessionStatus.Value);
 
+                if (HttpRequestPolicy.IsRateLimited(response.StatusCode))
+                    return new OsuBestScoresFetchResult(OsuBestScoresFetchStatus.RateLimited, RetryAfter: registerRateLimit(best_scores_endpoint, response));
                 if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
                     return new OsuBestScoresFetchResult(OsuBestScoresFetchStatus.Unauthorized);
                 if ((int)response.StatusCode is >= 300 and < 400)
@@ -241,18 +255,26 @@ public sealed class OfficialOsuApiClient : IDisposable
                 cached.FetchedAt);
         }
 
+        if (activeCooldown(beatmap_scores_endpoint) is { } beatmapCooldown)
+        {
+            accessToken = string.Empty;
+            return new OsuUserBeatmapScoresFetchResult(OsuBestScoresFetchStatus.RateLimited, RetryAfter: beatmapCooldown);
+        }
+
         try
         {
             Uri endpoint = new($"https://osu.ppy.sh/api/v2/beatmaps/{beatmapId}/scores/users/{profile.UserId}/all?ruleset=osu");
-            using var request = new HttpRequestMessage(HttpMethod.Get, endpoint);
-            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue(MediaTypeNames.Application.Json));
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
-            request.Headers.TryAddWithoutValidation("x-api-version", osu_api_version);
+            string token = accessToken;
 
-            using HttpResponseMessage response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            using HttpResponseMessage response = await HttpRequestPolicy.SendWithSingleRetryAsync(
+                httpClient,
+                () => createAuthorizedRequest(endpoint, token, osu_api_version),
+                cancellationToken);
             OsuBestScoresFetchStatus? sessionStatus = await validateScoreSessionAsync(startingState, lease, profile, cancellationToken);
             if (sessionStatus is not null)
                 return new OsuUserBeatmapScoresFetchResult(sessionStatus.Value);
+            if (HttpRequestPolicy.IsRateLimited(response.StatusCode))
+                return new OsuUserBeatmapScoresFetchResult(OsuBestScoresFetchStatus.RateLimited, RetryAfter: registerRateLimit(beatmap_scores_endpoint, response));
             if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
                 return new OsuUserBeatmapScoresFetchResult(OsuBestScoresFetchStatus.Unauthorized);
             if ((int)response.StatusCode is >= 300 and < 400)
@@ -348,18 +370,26 @@ public sealed class OfficialOsuApiClient : IDisposable
             return new OsuBestScoresFetchResult(OsuBestScoresFetchStatus.Success, cached.Scores, true, cached.FetchedAt);
         }
 
+        if (activeCooldown(recent_scores_endpoint) is { } recentCooldown)
+        {
+            accessToken = string.Empty;
+            return new OsuBestScoresFetchResult(OsuBestScoresFetchStatus.RateLimited, RetryAfter: recentCooldown);
+        }
+
         try
         {
             Uri endpoint = new($"https://osu.ppy.sh/api/v2/users/{profile.UserId}/scores/recent?mode=osu&include_fails=1&limit={scores_page_size}&offset=0");
-            using var request = new HttpRequestMessage(HttpMethod.Get, endpoint);
-            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue(MediaTypeNames.Application.Json));
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
-            request.Headers.TryAddWithoutValidation("x-api-version", osu_api_version);
-            using HttpResponseMessage response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            string token = accessToken;
+            using HttpResponseMessage response = await HttpRequestPolicy.SendWithSingleRetryAsync(
+                httpClient,
+                () => createAuthorizedRequest(endpoint, token, osu_api_version),
+                cancellationToken);
 
             OsuBestScoresFetchStatus? sessionStatus = await validateScoreSessionAsync(startingState, lease, profile, cancellationToken);
             if (sessionStatus is not null)
                 return new OsuBestScoresFetchResult(sessionStatus.Value);
+            if (HttpRequestPolicy.IsRateLimited(response.StatusCode))
+                return new OsuBestScoresFetchResult(OsuBestScoresFetchStatus.RateLimited, RetryAfter: registerRateLimit(recent_scores_endpoint, response));
             if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
                 return new OsuBestScoresFetchResult(OsuBestScoresFetchStatus.Unauthorized);
             if ((int)response.StatusCode is >= 300 and < 400)
@@ -410,15 +440,18 @@ public sealed class OfficialOsuApiClient : IDisposable
         if (lease is null || !lease.TryGetAccessToken(out string accessToken))
             return withoutToken(startingState.Status);
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, profile_endpoint);
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue(MediaTypeNames.Application.Json));
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        if (activeCooldown(profile_endpoint_key) is { } profileCooldown)
+        {
+            accessToken = string.Empty;
+            return new OsuProfileFetchResult(OsuProfileFetchStatus.RateLimited, RetryAfter: profileCooldown);
+        }
 
         try
         {
-            using HttpResponseMessage response = await httpClient.SendAsync(
-                request,
-                HttpCompletionOption.ResponseHeadersRead,
+            string token = accessToken;
+            using HttpResponseMessage response = await HttpRequestPolicy.SendWithSingleRetryAsync(
+                httpClient,
+                () => createAuthorizedRequest(profile_endpoint, token, apiVersion: null),
                 cancellationToken);
 
             try
@@ -432,6 +465,8 @@ public sealed class OfficialOsuApiClient : IDisposable
             if (session.Current.Revision != startingState.Revision || !lease.TryGetAccessToken(out _))
                 return new OsuProfileFetchResult(OsuProfileFetchStatus.SessionChanged);
 
+            if (HttpRequestPolicy.IsRateLimited(response.StatusCode))
+                return new OsuProfileFetchResult(OsuProfileFetchStatus.RateLimited, RetryAfter: registerRateLimit(profile_endpoint_key, response));
             if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
                 return new OsuProfileFetchResult(OsuProfileFetchStatus.Unauthorized);
             if ((int)response.StatusCode is >= 300 and < 400)
@@ -507,31 +542,53 @@ public sealed class OfficialOsuApiClient : IDisposable
         int maximumBytes,
         CancellationToken cancellationToken)
     {
-        if (response.Content.Headers.ContentLength > maximumBytes)
-            return default;
+        using PooledBody? body = await PooledBody.ReadAsync(response.Content, maximumBytes, cancellationToken);
+        return body is { } content ? JsonSerializer.Deserialize<T>(content.Span, json_options) : default;
+    }
 
-        await using Stream stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        byte[] buffer = new byte[maximumBytes + 1];
-        int bytesRead = 0;
+    private static HttpRequestMessage createAuthorizedRequest(Uri endpoint, string accessToken, string? apiVersion)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get, endpoint);
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue(MediaTypeNames.Application.Json));
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        if (apiVersion is not null)
+            request.Headers.TryAddWithoutValidation("x-api-version", apiVersion);
+        return request;
+    }
 
-        while (bytesRead < buffer.Length)
-        {
-            int read = await stream.ReadAsync(buffer.AsMemory(bytesRead, buffer.Length - bytesRead), cancellationToken);
-            if (read == 0)
-                break;
-            bytesRead += read;
-        }
+    private DateTimeOffset? activeCooldown(string endpoint) =>
+        cooldowns.TryGetValue(endpoint, out DateTimeOffset until) && until > timeProvider.GetUtcNow() ? until : null;
 
-        if (bytesRead > maximumBytes)
-            return default;
+    private DateTimeOffset registerRateLimit(string endpoint, HttpResponseMessage response)
+    {
+        DateTimeOffset now = timeProvider.GetUtcNow();
+        DateTimeOffset until = now + HttpRequestPolicy.ClampCooldown(HttpRequestPolicy.ParseRetryAfter(response.Headers.RetryAfter, now));
+        cooldowns.AddOrUpdate(endpoint, until, (_, existing) => existing > until ? existing : until);
+        return until;
+    }
+
+    private void sweepStaleTemporaryFiles()
+    {
+        if (Interlocked.Exchange(ref temporaryFilesSwept, 1) != 0)
+            return;
 
         try
         {
-            return JsonSerializer.Deserialize<T>(buffer.AsSpan(0, bytesRead), json_options);
+            DateTime threshold = timeProvider.GetUtcNow().UtcDateTime - stale_temporary_age;
+            foreach (string path in Directory.EnumerateFiles(scoreCacheDirectory, ".*.tmp"))
+            {
+                try
+                {
+                    if (File.GetLastWriteTimeUtc(path) < threshold)
+                        File.Delete(path);
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                }
+            }
         }
-        finally
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            Array.Clear(buffer, 0, bytesRead);
         }
     }
 
@@ -594,6 +651,7 @@ public sealed class OfficialOsuApiClient : IDisposable
     private async Task writeScoreCacheAsync(OsuBestScoresCacheDocument document, CancellationToken cancellationToken, string category = "best")
     {
         Directory.CreateDirectory(scoreCacheDirectory);
+        sweepStaleTemporaryFiles();
         string destination = getScoreCachePath(document.UserId, category);
         string temporary = Path.Combine(scoreCacheDirectory, $".{Path.GetFileName(destination)}.{Guid.NewGuid():N}.tmp");
 
@@ -665,6 +723,7 @@ public sealed class OfficialOsuApiClient : IDisposable
     private async Task tryWriteBeatmapScoreCacheAsync(OsuUserBeatmapScoresCacheDocument document, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(scoreCacheDirectory);
+        sweepStaleTemporaryFiles();
         string destination = getBeatmapScoreCachePath(document.UserId, document.BeatmapId);
         string temporary = Path.Combine(scoreCacheDirectory, $".{Path.GetFileName(destination)}.{Guid.NewGuid():N}.tmp");
         try

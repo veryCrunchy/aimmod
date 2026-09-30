@@ -73,12 +73,7 @@ public sealed class CachedOfficialBeatmapDiscoveryClient : IOfficialBeatmapDisco
             if (!File.Exists(path))
                 return null;
 
-            using FileStream stream = File.OpenRead(path);
-            CacheDocument? document = JsonSerializer.Deserialize<CacheDocument>(stream, json_options);
-            if (document?.Version != current_version || document.Entries is null)
-                return null;
-
-            CacheEntry? entry = document.Entries.FirstOrDefault(candidate => candidate.Key == key);
+            CacheEntry? entry = loadEntries().FirstOrDefault(candidate => candidate.Key == key);
             if (entry is null || DateTimeOffset.UtcNow - entry.CachedAt > search_ttl)
                 return null;
             return entry.Result.Status == OfficialBeatmapRequestStatus.Success ? entry.Result : null;
@@ -92,6 +87,7 @@ public sealed class CachedOfficialBeatmapDiscoveryClient : IOfficialBeatmapDisco
     private async Task saveAsync(string key, OfficialBeatmapSearchResult result, CancellationToken cancellationToken)
     {
         await writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        string? temporaryPath = null;
         try
         {
             CacheEntry[] existing = loadEntries();
@@ -104,7 +100,7 @@ public sealed class CachedOfficialBeatmapDiscoveryClient : IOfficialBeatmapDisco
             if (!string.IsNullOrWhiteSpace(directory))
                 Directory.CreateDirectory(directory);
 
-            string temporaryPath = $"{path}.{Guid.NewGuid():N}.tmp";
+            temporaryPath = $"{path}.{Guid.NewGuid():N}.tmp";
             await using (var stream = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, FileOptions.Asynchronous))
             {
                 await JsonSerializer.SerializeAsync(stream, new CacheDocument(current_version, entries), json_options, cancellationToken).ConfigureAwait(false);
@@ -117,6 +113,11 @@ public sealed class CachedOfficialBeatmapDiscoveryClient : IOfficialBeatmapDisco
         }
         finally
         {
+            if (temporaryPath is not null)
+            {
+                try { File.Delete(temporaryPath); }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { }
+            }
             writeGate.Release();
         }
     }
@@ -127,10 +128,11 @@ public sealed class CachedOfficialBeatmapDiscoveryClient : IOfficialBeatmapDisco
         {
             if (!File.Exists(path))
                 return [];
-            using FileStream stream = File.OpenRead(path);
+            // Readers must not block the replacing move of a concurrent save on Windows.
+            using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             CacheDocument? document = JsonSerializer.Deserialize<CacheDocument>(stream, json_options);
             return document?.Version == current_version && document.Entries is not null
-                ? document.Entries.ToArray()
+                ? document.Entries.Where(entry => entry?.Key is not null && entry.Result is not null).ToArray()
                 : [];
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)

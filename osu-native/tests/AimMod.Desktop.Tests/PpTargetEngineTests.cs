@@ -9,6 +9,44 @@ namespace AimMod.Desktop.Tests;
 public sealed class PpTargetEngineTests
 {
     [Test]
+    public void StableTargetsDisplayCalculatedPpWithoutInventingPassChanceOrAccountGain()
+    {
+        var profile = profileWithHistory() with { LegacyScore = true };
+        var estimate = new PpTargetEstimate(180, 250, new(140, 210), 1, PpTargetConfidence.Low, "Official osu! ruleset") { LegacyScore = true };
+        var result = PpTargetRanker.Rank(profile, [set(1, "ranked", difficulty(10, 5.2))],
+            exactEstimates: new Dictionary<int, PpTargetEstimate> { [10] = estimate });
+        var target = result.Candidates.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(target.DisplayedExpectedPp, Is.EqualTo(180));
+            Assert.That(target.ExpectedPpCaption, Is.EqualTo("FIRST TRY PP"));
+            Assert.That(target.IsConditionalPp, Is.True, "Shown as PP if you pass, without a pass chance.");
+            Assert.That(target.FirstAttemptPp, Is.Null);
+            Assert.That(target.Forecast, Is.Null);
+            Assert.That(target.EstimatedAccountGainPp, Is.Null);
+            Assert.That(target.PassEstimate, Is.Null);
+            Assert.That((target with { Estimate = null }).DisplayedExpectedPp, Is.Null);
+        });
+    }
+
+    [Test]
+    public void FailedAndAssistedRunsCannotInflateCompletedPerformance()
+    {
+        var profile = PpTargetPreferenceProfiler.Build([
+            replay(1, 1, 5, .95, 200),
+            replay(2, 1, 5, 1, 5) with { Passed = false },
+            replay(3, 1, 5, .99, 100),
+            replay(4, 2, 10, 1, 1000, "RX"),
+            replay(5, 3, 10, 1, 1000) with { ModsJson = "[{\"acronym\":\"AP\"}]" },
+        ]);
+        Assert.That(profile.ValidRunCount, Is.EqualTo(2));
+        Assert.That(profile.HistoricalBestPp, Is.EqualTo(200));
+        Assert.That(profile.TypicalAccuracy, Is.EqualTo(.95));
+        Assert.That(profile.PerformanceSamples.Single().Accuracy, Is.EqualTo(.95),
+            "Accuracy and PP must come from the same actual play.");
+    }
+
+    [Test]
     public void EmptyAndInvalidHistoryDoesNotInventPreferencesOrPp()
     {
         LocalReplay[] history =
@@ -158,7 +196,7 @@ public sealed class PpTargetEngineTests
     [Test]
     public void FiltersAllSupportedMetadataAndEstimateFields()
     {
-        PpTargetPreferenceProfile profile = profileWithHistory();
+        PpTargetPreferenceProfile profile = withPassEvidence(profileWithHistory(), 5.2);
         OfficialBeatmapSet matching = set(1, "Ranked", difficulty(10, 5.2) with { Bpm = 180, TotalLengthSeconds = 130 }) with
         {
             Title = "Target Song", Artist = "Composer", Creator = "Mapper", Source = "Game OST",
@@ -169,8 +207,8 @@ public sealed class PpTargetEngineTests
         PpTargetFilters filters = new(
             SearchText: "target mapper game",
             MinimumStars: 5, MaximumStars: 5.5,
-            MinimumExpectedPp: official.ExpectedPp - 1,
-            MaximumExpectedPp: official.ExpectedPp + 1,
+            MinimumExpectedPp: 100,
+            MaximumExpectedPp: official.ExpectedPp,
             MinimumRealisticMaximumPp: official.RealisticMaximumPp - 1,
             MaximumRealisticMaximumPp: official.RealisticMaximumPp + 1,
             MinimumLengthSeconds: 120, MaximumLengthSeconds: 140,
@@ -223,7 +261,7 @@ public sealed class PpTargetEngineTests
     }
 
     [Test]
-    public void OfficialDifficultyEstimateEnablesPpFiltering()
+    public void OfficialDifficultyCalculationAloneDoesNotEnableExpectedPpFiltering()
     {
         PpTargetPreferenceProfile profile = PpTargetPreferenceProfiler.Build([
             replay(1, 1, 5, 0.95, null),
@@ -238,12 +276,11 @@ public sealed class PpTargetEngineTests
             new PpTargetFilters(MinimumExpectedPp: 320, MaximumExpectedPp: 322),
             new Dictionary<int, PpTargetEstimate> { [10] = official });
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(result.Candidates, Has.Count.EqualTo(1));
-            Assert.That(result.Candidates.Single().Estimate, Is.SameAs(official));
-            Assert.That(result.Candidates.Single().EstimatedAttainableGainPp, Is.Null);
-        });
+        Assert.That(result.Candidates, Is.Empty);
+        var browsing = PpTargetRanker.Rank(profile, [set(1, "ranked", difficulty(10, 5))],
+            exactEstimates: new Dictionary<int, PpTargetEstimate> { [10] = official }).Candidates.Single();
+        Assert.That(browsing.Estimate, Is.SameAs(official));
+        Assert.That(browsing.ExpectedEarnedPp, Is.Null);
     }
 
     [TestCase(1.0, 0, 1000)]
@@ -321,7 +358,7 @@ public sealed class PpTargetEngineTests
         PpTargetRankingResult result = PpTargetRanker.Rank(
             profile,
             [set(1, "ranked", difficulty(10, 24.1))],
-            new PpTargetFilters(MinimumStars: 20, MinimumExpectedPp: 2_000),
+            new PpTargetFilters(MinimumStars: 20, MinimumRealisticMaximumPp: 2_000),
             new Dictionary<int, PpTargetEstimate>
             {
                 [10] = new(2_200, 2_900, new PpTargetRange(2_000, 2_500), 1, PpTargetConfidence.High,
@@ -345,7 +382,7 @@ public sealed class PpTargetEngineTests
             .Concat(Enumerable.Range(20, 12)
                 .Select(index => replay(index, index, 8 + index % 3 * 0.05, 0.96, 580 + index)))
             .ToArray();
-        PpTargetPreferenceProfile profile = PpTargetPreferenceProfiler.Build(history);
+        PpTargetPreferenceProfile profile = withPassEvidence(PpTargetPreferenceProfiler.Build(history), 5.05, 8.05);
         PpTargetRankingResult result = PpTargetRanker.Rank(
             profile,
             [set(1, "ranked", difficulty(10, 5.05), difficulty(11, 8.05))],
@@ -543,6 +580,31 @@ public sealed class PpTargetEngineTests
     }
 
     [Test]
+    public void PlanReservesAQuarterOfTheBudgetForHighEarnedPpStretchTargets()
+    {
+        // One tempo/length band per star rating, so exploration alone reaches only a few hard maps.
+        var catalog = Enumerable.Range(1, 200).Select(i => set(i, "ranked", difficulty(i, 4.8)))
+            .Concat(Enumerable.Range(1, 40).Select(i => set(1_000 + i, "ranked", difficulty(1_000 + i, 6.1))));
+        var profile = profileWithHistory();
+        var selected = PpTargetScanPlanner.Select(profile, catalog, new PpTargetFilters(), 40);
+        var comfortable = PpTargetRanker.Rank(profile, catalog, new PpTargetFilters(Limit: 50_000)).Candidates.Take(40).ToArray();
+        int stretch = selected.Count(c => c.StarRating > 6);
+        Assert.That(selected, Has.Count.EqualTo(40));
+        Assert.That(stretch, Is.GreaterThanOrEqualTo(10), "A quarter of the calculations go to harder, higher-PP candidates.");
+        Assert.That(stretch, Is.GreaterThan(comfortable.Count(c => c.StarRating > 6)));
+    }
+
+    [Test]
+    public void ExpandedPlanRetainsTwoThousandUniqueCandidatesAndFiltersBeforeScoring()
+    {
+        var catalog = Enumerable.Range(1, 6000).Select(i => set(i, "ranked", difficulty(i, i % 3 == 0 ? 10 : 5.2))).ToArray();
+        var selected = PpTargetScanPlanner.Select(profileWithHistory(), catalog, new PpTargetFilters(MaximumStars:6), 2000);
+        Assert.That(selected, Has.Count.EqualTo(2000));
+        Assert.That(selected.Select(c => c.BeatmapId).Distinct().Count(), Is.EqualTo(2000));
+        Assert.That(selected.All(c => c.StarRating <= 6), Is.True);
+    }
+
+    [Test]
     public void StatusCategoryContractUsesOfficialCategoryNames()
     {
         Assert.Multiple(() =>
@@ -555,6 +617,78 @@ public sealed class PpTargetEngineTests
 
     private static PpTargetPreferenceProfile profileWithHistory() => PpTargetPreferenceProfiler.Build(
         Enumerable.Range(1, 20).Select(index => replay(index, index, 4.8 + index % 5 * 0.15, 0.94 + index % 4 * 0.01, 180 + index * 3, "Hidden")));
+
+    private static PpTargetPreferenceProfile withPassEvidence(PpTargetPreferenceProfile profile, params double[] bands)
+    {
+        var now = DateTimeOffset.UtcNow;
+        return profile with { Opportunities = new(now, [new(5000, 100)], bands.SelectMany((stars, band) =>
+            Enumerable.Range(1, 12).Select(i => new PpTargetPassSample(1000 + band * 100 + i, now.AddDays(-1),
+                stars, 180, 120, string.Join(',', profile.PreferredModSetup ?? []), i <= 10, Accuracy: .96))).ToArray()) };
+    }
+
+    [Test]
+    public void UsefulGainOutranksSameSkillMapWithAnUnimprovableKnownBest()
+    {
+        var profile = withPassEvidence(profileWithHistory(), 5.2);
+        profile = profile with { Opportunities = profile.Opportunities! with { BestPlays = [new(10, 300)] } };
+        var estimate = new PpTargetEstimate(220, 300, new(180, 250), 1, PpTargetConfidence.Low, "test");
+        var ranked = PpTargetRanker.Rank(profile, [set(1, "ranked", difficulty(10,5.2), difficulty(11,5.2))],
+            exactEstimates:new Dictionary<int,PpTargetEstimate> { [10] = estimate, [11] = estimate });
+        Assert.That(ranked.Candidates.First().BeatmapId, Is.EqualTo(11));
+        Assert.That(ranked.Candidates.Single(c => c.BeatmapId == 10).EstimatedAccountGainPp, Is.Zero);
+    }
+
+    [Test]
+    public void UnsupportedTenStarRewardCannotOutrankSupportedFiveStarTarget()
+    {
+        var profile = withPassEvidence(profileWithHistory(), 5.2);
+        var result = PpTargetRanker.Rank(profile, [set(1, "ranked", difficulty(10, 5.2), difficulty(11, 10.36))],
+            exactEstimates: new Dictionary<int, PpTargetEstimate> {
+                [10] = new(220, 300, new(180, 250), 1, PpTargetConfidence.Low, "Official osu! ruleset"),
+                [11] = new(969, 1596, new(562, 1376), 1, PpTargetConfidence.Low, "Official osu! ruleset"),
+            });
+        var playable = result.Candidates.Single(c => c.BeatmapId == 10);
+        var extreme = result.Candidates.Single(c => c.BeatmapId == 11);
+        Assert.Multiple(() => {
+            Assert.That(result.Candidates.First().BeatmapId, Is.EqualTo(10));
+            Assert.That(playable.ExpectedEarnedPp, Is.GreaterThan(0).And.LessThan(220));
+            Assert.That(playable.EstimatedAccountGainPp, Is.GreaterThan(0));
+            Assert.That(extreme.ExpectedEarnedPp, Is.Null);
+            Assert.That(extreme.EstimatedAccountGainPp, Is.Null);
+            Assert.That(extreme.ReadinessLabel, Is.EqualTo("Pass unverified"));
+            Assert.That(extreme.Estimate!.RealisticMaximumPp, Is.EqualTo(1596));
+            Assert.That(playable.ExpectedEarnedPp, Is.EqualTo(220 * playable.PassEstimate!.Probability));
+            Assert.That(playable.EstimatedAccountGainPp, Is.EqualTo(
+                PpTargetOpportunityModel.AccountGain(profile.Opportunities, playable.BeatmapId, 220) * playable.PassEstimate.Probability));
+        });
+        foreach (var sort in Enum.GetValues<NativePpTargetsWorkspace.TargetSort>())
+            Assert.That(NativePpTargetsWorkspace.OrderTargets(result.Candidates, sort).First().BeatmapId, Is.EqualTo(10), sort.ToString());
+        var filtered = PpTargetRanker.Rank(profile, [set(1, "ranked", difficulty(11, 10.36))],
+            new PpTargetFilters(MinimumExpectedPp: 800), new Dictionary<int, PpTargetEstimate> { [11] = extreme.Estimate! });
+        Assert.That(filtered.Candidates, Is.Empty);
+    }
+
+    [Test]
+    public void RowKeysAreStableAcrossRankingsAndChangeWithDisplayedValues()
+    {
+        var profile = withPassEvidence(profileWithHistory(), 5.2);
+        PpTargetCandidate rank(double expected) => PpTargetRanker.Rank(profile, [set(1, "ranked", difficulty(10, 5.2))],
+            exactEstimates: new Dictionary<int, PpTargetEstimate>
+            {
+                [10] = new(expected, 300, new(180, 250), 1, PpTargetConfidence.Low, "Official osu! ruleset"),
+            }).Candidates.Single();
+
+        PpTargetCandidate first = rank(220);
+        PpTargetCandidate again = rank(220);
+        var sort = NativePpTargetsWorkspace.TargetSort.BestFit;
+        Assert.Multiple(() =>
+        {
+            Assert.That(again, Is.Not.SameAs(first));
+            Assert.That(NativePpTargetsWorkspace.RowKey(again, sort), Is.EqualTo(NativePpTargetsWorkspace.RowKey(first, sort)));
+            Assert.That(NativePpTargetsWorkspace.RowKey(first, NativePpTargetsWorkspace.TargetSort.Stars), Is.Not.EqualTo(NativePpTargetsWorkspace.RowKey(first, sort)));
+            Assert.That(NativePpTargetsWorkspace.RowKey(rank(240), sort), Is.Not.EqualTo(NativePpTargetsWorkspace.RowKey(first, sort)));
+        });
+    }
 
     private static LocalReplay replay(int day, int beatmap, double stars, double accuracy, double? pp, params string[] mods) => new(
         id(10_000 + day), id(1_000 + beatmap), id(beatmap), $"Map {beatmap}", "Artist", "Insane", "osu", "Player",

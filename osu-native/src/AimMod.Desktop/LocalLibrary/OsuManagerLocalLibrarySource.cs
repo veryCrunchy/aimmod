@@ -81,7 +81,24 @@ public sealed class OsuManagerLocalLibrarySource : ILocalLibrarySource, ILocalRe
         Task<InMemoryLocalLibrarySource> index;
 
         lock (snapshotLock)
-            index = beatmapIndexTask ??= Task.Run(() => buildBeatmapIndex(CancellationToken.None), CancellationToken.None);
+        {
+            if (beatmapIndexTask is { IsFaulted: true } or { IsCanceled: true })
+                beatmapIndexTask = null;
+            if (beatmapIndexTask is null)
+            {
+                Task<InMemoryLocalLibrarySource> created = Task.Run(() => buildBeatmapIndex(CancellationToken.None), CancellationToken.None);
+                beatmapIndexTask = created;
+                _ = created.ContinueWith(completed =>
+                {
+                    lock (snapshotLock)
+                    {
+                        if (ReferenceEquals(beatmapIndexTask, completed))
+                            beatmapIndexTask = null;
+                    }
+                }, CancellationToken.None, TaskContinuationOptions.NotOnRanToCompletion | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            }
+            index = beatmapIndexTask;
+        }
 
         return index.WaitAsync(cancellationToken);
     }

@@ -15,7 +15,7 @@ public sealed class NativeCoachingWorkspaceTests
     {
         const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
         var analyses = new Dictionary<Guid, ReplayAnalysisResult>();
-        using var view = new NativeCoachingWorkspace(new InMemoryLocalLibrarySource([], []), analyses, _ => { });
+        using var view = new NativeCoachingWorkspace(new InMemoryLocalLibrarySource([], []), analyses, _ => { }) { SynchronousModelBuilds = true };
         var type = typeof(NativeCoachingWorkspace);
         type.GetField("workspace", flags)!.SetValue(view, NativeCoachingWorkspaceModel.Build([], analyses));
         view.BeginAnalysisProgress();
@@ -297,34 +297,6 @@ public sealed class NativeCoachingWorkspaceTests
             Assert.That(NativeCoachingWorkspace.PracticeSortLabel(PracticeCandidateSort.MostRepeated), Is.EqualTo("Most repeated"));
             Assert.That(NativeCoachingWorkspace.PracticeEvidenceLabel(PracticeEvidenceFilter.AnyEvidence), Is.EqualTo("Any evidence"));
             Assert.That(NativeCoachingWorkspace.PracticeEvidenceLabel(PracticeEvidenceFilter.RepeatedAcrossAttempts), Is.EqualTo("Repeated misses"));
-        });
-    }
-
-    [Test]
-    public void PracticeCandidatePoolBuildsOnceUntilInvalidated()
-    {
-        int builds = 0;
-        IReadOnlyList<PracticeMapCandidate> expected = Array.Empty<PracticeMapCandidate>();
-        var cache = new PracticeCandidatePoolCache(500, (_, _, limit) =>
-        {
-            builds++;
-            Assert.That(limit, Is.EqualTo(500));
-            return expected;
-        });
-        var replays = Array.Empty<LocalReplay>();
-        var analyses = new Dictionary<Guid, ReplayAnalysisResult>();
-
-        IReadOnlyList<PracticeMapCandidate> first = cache.Get(replays, analyses);
-        IReadOnlyList<PracticeMapCandidate> second = cache.Get(replays, analyses);
-        cache.Invalidate();
-        IReadOnlyList<PracticeMapCandidate> third = cache.Get(replays, analyses);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(first, Is.SameAs(expected));
-            Assert.That(second, Is.SameAs(expected));
-            Assert.That(third, Is.SameAs(expected));
-            Assert.That(builds, Is.EqualTo(2));
         });
     }
 

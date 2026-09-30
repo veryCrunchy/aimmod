@@ -42,10 +42,14 @@ public partial class ReplayHistoryScreen : CompositeDrawable
     private readonly GraphCard secondaryGraph;
     private readonly GraphCard rollingAccuracyGraph;
     private readonly GraphCard missFreeGraph;
-    private readonly GridContainer statisticsTrendGraphs;
-    private readonly OsuTextBox search;
+    private readonly FillFlowContainer<Drawable> statisticsTrendGraphs;
+    private readonly FillFlowContainer<Drawable> metrics;
+    private readonly FillFlowContainer<Drawable> primaryGraphs;
+    private readonly AimModTextBox search;
     private readonly FillFlowContainer<Drawable> runList;
-    private readonly AimModLoadingOverlay loadingOverlay;
+    private readonly AimModInlineStatus loadStatus;
+    private readonly Dictionary<string, HistoryGroupBlock> groupBlocks = new(StringComparer.Ordinal);
+    private AimModLayout.ChangeTracker<float> layoutTracker;
 
     private CancellationTokenSource? loading;
     private IReadOnlyList<LocalReplay> replays = Array.Empty<LocalReplay>();
@@ -99,73 +103,24 @@ public partial class ReplayHistoryScreen : CompositeDrawable
                             : "Start with the whole pattern, then inspect the runs that changed it.",
                         mode == ReplayHistoryScreenMode.Statistics ? "play history" : "your coach"),
                     status = label("Loading your local play history...", 13, AimModPalette.Muted),
+                    loadStatus = new AimModInlineStatus(),
                     adviceCard = createAdviceCard(out adviceTitle, out adviceDetail),
-                    new GridContainer
-                    {
-                        RelativeSizeAxes = Axes.X,
-                        Height = 104,
-                        ColumnDimensions = new[]
-                        {
-                            new Dimension(GridSizeMode.Relative, 0.25f),
-                            new Dimension(GridSizeMode.Relative, 0.25f),
-                            new Dimension(GridSizeMode.Relative, 0.25f),
-                            new Dimension(GridSizeMode.Relative, 0.25f),
-                        },
-                        Content = new[]
-                        {
-                            new Drawable[]
-                            {
-                                metricCard(mode == ReplayHistoryScreenMode.Statistics ? "Score in local history" : "Average accuracy", out averageAccuracy, out accuracyChange),
-                                metricCard(mode == ReplayHistoryScreenMode.Statistics ? "Recorded plays" : "Misses per play", out missAverage, out cleanRuns),
-                                metricCard(mode == ReplayHistoryScreenMode.Statistics ? "Rolling accuracy" : "Average hit timing", out timingBias, out analysedRuns),
-                                metricCard(mode == ReplayHistoryScreenMode.Statistics ? "Miss-free rate" : "Runs in view", out runCount, out historyWindow),
-                            },
-                        },
-                    },
-                    new GridContainer
-                    {
-                        RelativeSizeAxes = Axes.X,
-                        Height = 252,
-                        ColumnDimensions = new[]
-                        {
-                            new Dimension(GridSizeMode.Relative, 0.5f),
-                            new Dimension(GridSizeMode.Relative, 0.5f),
-                        },
-                        Content = new[]
-                        {
-                            new Drawable[]
-                            {
-                                primaryGraph.Drawable,
-                                secondaryGraph.Drawable,
-                            },
-                        },
-                    },
-                    statisticsTrendGraphs = new GridContainer
-                    {
-                        RelativeSizeAxes = Axes.X,
-                        Height = 252,
-                        ColumnDimensions = new[]
-                        {
-                            new Dimension(GridSizeMode.Relative, 0.5f),
-                            new Dimension(GridSizeMode.Relative, 0.5f),
-                        },
-                        Content = new[]
-                        {
-                            new Drawable[]
-                            {
-                                rollingAccuracyGraph.Drawable,
-                                missFreeGraph.Drawable,
-                            },
-                        },
-                    },
+                    metrics = responsiveRow(104,
+                        metricCard(mode == ReplayHistoryScreenMode.Statistics ? "Score in local history" : "Average accuracy", out averageAccuracy, out accuracyChange),
+                        metricCard(mode == ReplayHistoryScreenMode.Statistics ? "Recorded plays" : "Misses per play", out missAverage, out cleanRuns),
+                        metricCard(mode == ReplayHistoryScreenMode.Statistics ? "Rolling accuracy" : "Average hit timing", out timingBias, out analysedRuns),
+                        metricCard(mode == ReplayHistoryScreenMode.Statistics ? "Miss-free rate" : "Runs in view", out runCount, out historyWindow)),
+                    primaryGraphs = responsiveRow(252, primaryGraph.Drawable, secondaryGraph.Drawable),
+                    statisticsTrendGraphs = responsiveRow(252, rollingAccuracyGraph.Drawable, missFreeGraph.Drawable),
                     new AimModSubsectionHeader(
                         "Replay history",
                         "Grouped by difficulty"),
-                    search = new OsuTextBox
+                    search = new AimModTextBox
                     {
                         RelativeSizeAxes = Axes.X,
                         Height = AimModVisualStyle.ControlHeight,
                         PlaceholderText = "Search title, artist, difficulty, player, or mod",
+                        FocusOnSearchShortcut = true,
                     },
                     runList = new FillFlowContainer<Drawable>
                     {
@@ -177,23 +132,61 @@ public partial class ReplayHistoryScreen : CompositeDrawable
                     },
                 },
             },
-            loadingOverlay = new AimModLoadingOverlay(),
         };
 
         adviceCard.Alpha = mode == ReplayHistoryScreenMode.Coaching ? 1 : 0;
         adviceCard.Height = mode == ReplayHistoryScreenMode.Coaching ? 112 : 0;
         statisticsTrendGraphs.Alpha = mode == ReplayHistoryScreenMode.Statistics ? 1 : 0;
-        statisticsTrendGraphs.Height = mode == ReplayHistoryScreenMode.Statistics ? 252 : 0;
 
         runCount.Text = "0";
         historyWindow.Text = "Waiting for local scores";
     }
 
+    /// <summary>Cards per row for the metric and graph rows at a given width.</summary>
+    internal static int ColumnsFor(float width, int preferred) =>
+        AimModLayout.ColumnsFor(width, preferred == 4 ? 220 : 380, preferred);
+
+    private static FillFlowContainer<Drawable> responsiveRow(float height, params Drawable[] cards)
+    {
+        foreach (Drawable card in cards)
+        {
+            card.RelativeSizeAxes = Axes.None;
+            card.Height = height;
+        }
+
+        return new FillFlowContainer<Drawable>
+        {
+            RelativeSizeAxes = Axes.X,
+            AutoSizeAxes = Axes.Y,
+            Direction = FillDirection.Full,
+            Spacing = new(0, AimModVisualStyle.RelatedSpacing),
+            Children = cards,
+        };
+    }
+
+    protected override void Update()
+    {
+        base.Update();
+        if (!layoutTracker.Update(metrics.DrawWidth) || metrics.DrawWidth <= 0)
+            return;
+        layoutRow(metrics, 4);
+        layoutRow(primaryGraphs, 2);
+        layoutRow(statisticsTrendGraphs, 2);
+    }
+
+    private static void layoutRow(FillFlowContainer<Drawable> row, int preferred)
+    {
+        int columns = ColumnsFor(row.DrawWidth, preferred);
+        float width = (float)Math.Floor(row.DrawWidth / columns);
+        foreach (Drawable card in row)
+            card.Width = width;
+    }
+
     protected override void LoadComplete()
     {
         base.LoadComplete();
-        search.OnCommit += (_, _) => refreshRunList();
-        search.Current.BindValueChanged(_ => refreshRunList());
+        search.QueryChanged += _ => refreshRunList();
+        search.MoveToResults += () => AimModInteractiveSurface.FocusFirst(runList);
         load();
     }
 
@@ -204,9 +197,14 @@ public partial class ReplayHistoryScreen : CompositeDrawable
         loading = new CancellationTokenSource();
         CancellationToken cancellationToken = loading.Token;
         status.Text = "Loading your local play history...";
-        loadingOverlay.ShowLoading(
-            mode == ReplayHistoryScreenMode.Statistics ? "Loading statistics" : "Preparing coaching",
-            "Reading your local osu!standard play history");
+        loadStatus.ShowLoading(mode == ReplayHistoryScreenMode.Statistics
+            ? "Reading your local osu!standard play history..."
+            : "Preparing coaching from your local plays...", () =>
+        {
+            loading?.Cancel();
+            status.Text = "Loading cancelled";
+            loadStatus.ShowMessage("Loading was cancelled.", load);
+        });
         _ = loadAsync(cancellationToken);
     }
 
@@ -245,8 +243,10 @@ public partial class ReplayHistoryScreen : CompositeDrawable
             if (!IsDisposed)
                 Schedule(() =>
                 {
-                    loadingOverlay.HideLoading();
-                    status.Text = $"Your play history could not be loaded. {error.Message}";
+                    if (cancellationToken.IsCancellationRequested)
+                        return;
+                    status.Text = "Your play history could not be loaded.";
+                    loadStatus.ShowError(error, "Loading your play history", load);
                 });
         }
     }
@@ -259,7 +259,7 @@ public partial class ReplayHistoryScreen : CompositeDrawable
     {
         replays = nextReplays;
         report = nextReport;
-        loadingOverlay.HideLoading();
+        loadStatus.Dismiss();
 
         if (mode == ReplayHistoryScreenMode.Statistics)
         {
@@ -369,15 +369,15 @@ public partial class ReplayHistoryScreen : CompositeDrawable
 
     private void refreshRunList()
     {
-        runList.Clear();
         CoachingRunPage page = CoachingRunSearch.Search(replays, new CoachingRunQuery(
             SearchText: search.Current.Value,
             Sort: CoachingRunSort.Recent,
             Limit: 40));
-        IReadOnlyDictionary<Guid, LocalReplay> byId = replays.ToDictionary(replay => replay.ScoreId);
 
         if (page.Items.Count == 0)
         {
+            groupBlocks.Clear();
+            runList.Clear();
             runList.Add(new ReplayHistoryEmptyState(
                 replays.Count == 0 ? "No saved runs yet" : "No matching runs",
                 replays.Count == 0
@@ -386,6 +386,7 @@ public partial class ReplayHistoryScreen : CompositeDrawable
             return;
         }
 
+        IReadOnlyDictionary<Guid, LocalReplay> byId = replays.ToDictionary(replay => replay.ScoreId);
         CoachingRecentRun[][] groups = page.Items
             .GroupBy(historyMapKey)
             .Select(group => group.ToArray())
@@ -396,24 +397,99 @@ public partial class ReplayHistoryScreen : CompositeDrawable
             initialRunExpansionApplied = true;
         }
 
-        foreach (CoachingRecentRun[] group in groups)
+        // Keep unchanged groups so typing and expanding do not rebuild every row.
+        if (groupBlocks.Count == 0)
+            runList.Clear();
+        var incoming = groups.Select(group => historyMapKey(group[0])).ToHashSet(StringComparer.Ordinal);
+        foreach (string stale in ListDiff.Stale(groupBlocks.Keys, incoming))
         {
-            string key = historyMapKey(group[0]);
-            bool expanded = expandedRunMaps.Contains(key);
-            runList.Add(new RecentMapGroupRow(group, expanded, () =>
-            {
-                if (!expandedRunMaps.Add(key))
-                    expandedRunMaps.Remove(key);
-                refreshRunList();
-            }));
-            if (!expanded)
-                continue;
+            runList.Remove(groupBlocks[stale], true);
+            groupBlocks.Remove(stale);
+        }
 
-            foreach (CoachingRecentRun run in group)
+        for (int index = 0; index < groups.Length; index++)
+        {
+            CoachingRecentRun[] group = groups[index];
+            string key = historyMapKey(group[0]);
+            string signature = string.Join(',', group.Select(run => run.ScoreId.ToString("N")));
+            if (groupBlocks.TryGetValue(key, out HistoryGroupBlock? existing) && existing.Signature != signature)
             {
-                if (byId.TryGetValue(run.ScoreId, out LocalReplay? replay))
-                    runList.Add(new RecentRunRow(run, run.CanAnalyse ? () => openReplay(replay) : null));
+                runList.Remove(existing, true);
+                groupBlocks.Remove(key);
             }
+
+            if (!groupBlocks.TryGetValue(key, out HistoryGroupBlock? block))
+            {
+                block = new HistoryGroupBlock(group, signature, expandedRunMaps.Contains(key), expanded =>
+                {
+                    if (expanded)
+                        expandedRunMaps.Add(key);
+                    else
+                        expandedRunMaps.Remove(key);
+                }, run => byId.TryGetValue(run.ScoreId, out LocalReplay? replay) && run.CanAnalyse ? () => openReplay(replay) : null);
+                groupBlocks[key] = block;
+                runList.Add(block);
+            }
+
+            runList.SetLayoutPosition(block, index);
+        }
+    }
+
+    private partial class HistoryGroupBlock : FillFlowContainer<Drawable>
+    {
+        private readonly RecentMapGroupRow header;
+        private readonly FillFlowContainer<Drawable> rows;
+        private readonly IReadOnlyList<CoachingRecentRun> runs;
+        private readonly Func<CoachingRecentRun, Action?> action;
+        private bool expanded;
+        private bool populated;
+
+        public string Signature { get; }
+
+        public HistoryGroupBlock(IReadOnlyList<CoachingRecentRun> runs, string signature, bool expanded, Action<bool> expansionChanged, Func<CoachingRecentRun, Action?> action)
+        {
+            this.runs = runs;
+            this.action = action;
+            Signature = signature;
+            RelativeSizeAxes = Axes.X;
+            AutoSizeAxes = Axes.Y;
+            Direction = FillDirection.Vertical;
+            Spacing = new(AimModVisualStyle.RelatedSpacing);
+            Children = new Drawable[]
+            {
+                header = new RecentMapGroupRow(runs, expanded, () =>
+                {
+                    SetExpanded(!this.expanded);
+                    expansionChanged(this.expanded);
+                }),
+                rows = new FillFlowContainer<Drawable>
+                {
+                    RelativeSizeAxes = Axes.X,
+                    AutoSizeAxes = Axes.Y,
+                    Direction = FillDirection.Vertical,
+                    Spacing = new(AimModVisualStyle.RelatedSpacing),
+                },
+            };
+            SetExpanded(expanded);
+        }
+
+        public void SetExpanded(bool value)
+        {
+            if (populated == value && expanded == value)
+                return;
+            expanded = value;
+            header.SetExpanded(value);
+            if (value && !populated)
+            {
+                populated = true;
+                foreach (CoachingRecentRun run in runs)
+                    rows.Add(new RecentRunRow(run, action(run)));
+            }
+
+            rows.Alpha = value ? 1 : 0;
+            rows.AutoSizeAxes = value ? Axes.Y : Axes.None;
+            if (!value)
+                rows.Height = 0;
         }
     }
 
@@ -654,7 +730,7 @@ public partial class ReplayHistoryScreen : CompositeDrawable
     private static OsuSpriteText label(string text, float size, Colour4 colour, string weight = "Regular") => new()
     {
         Text = text,
-        Font = new FontUsage(size: size, weight: weight),
+        Font = new FontUsage(size: AimModVisualStyle.Readable(size), weight: weight),
         Colour = colour,
     };
 
@@ -724,6 +800,8 @@ public partial class ReplayHistoryScreen : CompositeDrawable
     {
         private readonly TruncatingSpriteText title;
         private readonly TruncatingSpriteText artist;
+        private readonly SpriteIcon chevron;
+        private AimModLayout.ChangeTracker<float> widthTracker;
 
         public RecentMapGroupRow(IReadOnlyList<CoachingRecentRun> runs, bool expanded, Action action)
         {
@@ -732,7 +810,6 @@ public partial class ReplayHistoryScreen : CompositeDrawable
             Height = 62;
             Action = action;
             CornerRadius = AimModVisualStyle.CardRadius;
-            BackgroundColour = expanded ? AimModPalette.PanelRaised : AimModPalette.Panel;
             Children = new Drawable[]
             {
                 new Box
@@ -753,7 +830,7 @@ public partial class ReplayHistoryScreen : CompositeDrawable
                 {
                     Text = latest.Artist,
                     Position = new(14, 30),
-                    Font = new FontUsage(size: 10),
+                    Font = AimModVisualStyle.CaptionFont,
                     Colour = AimModPalette.Muted,
                     MaxWidth = 600,
                 },
@@ -767,22 +844,29 @@ public partial class ReplayHistoryScreen : CompositeDrawable
                     text.Origin = Anchor.CentreRight;
                     text.Margin = new MarginPadding { Right = 42 };
                 }),
-                new SpriteIcon
+                chevron = new SpriteIcon
                 {
                     Anchor = Anchor.CentreRight,
                     Origin = Anchor.CentreRight,
                     Position = new(-14, 0),
                     Size = new(11),
-                    Icon = expanded ? FontAwesome.Solid.ChevronUp : FontAwesome.Solid.ChevronDown,
                     Colour = AimModPalette.Muted,
                 },
             };
+            SetExpanded(expanded);
+        }
+
+        public void SetExpanded(bool expanded)
+        {
+            BackgroundColour = expanded ? AimModPalette.PanelRaised : AimModPalette.Panel;
+            chevron.Icon = expanded ? FontAwesome.Solid.ChevronUp : FontAwesome.Solid.ChevronDown;
         }
 
         protected override void Update()
         {
             base.Update();
-            title.MaxWidth = artist.MaxWidth = Math.Max(160, DrawWidth - 350);
+            if (widthTracker.Update(DrawWidth))
+                title.MaxWidth = artist.MaxWidth = Math.Max(160, DrawWidth - 350);
         }
     }
 

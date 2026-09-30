@@ -6,6 +6,7 @@ namespace AimMod.Osu.Runtime.Contracts;
 public static class RuntimeProtocol
 {
     public const int CurrentVersion = 1;
+    public const string ParentProcessIdVariable = "AIMMOD_OSU_PARENT_PID";
 
     public static JsonSerializerOptions JsonOptions { get; } = new(JsonSerializerDefaults.Web)
     {
@@ -21,7 +22,30 @@ public static class RuntimeProtocolFraming
 {
     public const int MaximumRequestLineCharacters = 1024 * 1024;
     public const int MaximumResponseLineCharacters = 64 * 1024 * 1024;
-    public const int LineReadBufferCharacters = 4 * 1024;
+    public const int LineReadBufferCharacters = 32 * 1024;
+}
+
+public static class RuntimeProtocolTimeouts
+{
+    public static TimeSpan DefaultClientTimeout { get; } = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// Upper bound the worker applies to a command before it answers with a timeout error.
+    /// </summary>
+    public static TimeSpan WorkerTimeout(string command) => command switch
+    {
+        RuntimeCommands.AnalyseReplay => TimeSpan.FromMilliseconds(ReplayAnalysisProtocol.WallClockTimeoutMs),
+        RuntimeCommands.ResolveExternalLazerAssets => TimeSpan.FromMinutes(5),
+        RuntimeCommands.SearchExternalLazerCatalog or RuntimeCommands.SearchExternalLazerSkins => TimeSpan.FromSeconds(100),
+        RuntimeCommands.CalculatePp => TimeSpan.FromSeconds(90),
+        _ => TimeSpan.FromSeconds(30),
+    };
+
+    /// <summary>
+    /// Upper bound the host waits for a response before it kills the worker. It always
+    /// exceeds <see cref="WorkerTimeout"/> so the worker gets the chance to answer first.
+    /// </summary>
+    public static TimeSpan ClientTimeout(string command) => WorkerTimeout(command) + TimeSpan.FromSeconds(30);
 }
 
 public static class RuntimeCommands
@@ -32,6 +56,7 @@ public static class RuntimeCommands
     public const string ReadReplay = "replays.read";
     public const string AnalyseReplay = "replays.analyse";
     public const string CalculatePp = "pp.whatif.calculate";
+    public const string ReadExternalTrainerSettings = "library.trainer-settings";
     public const string SearchExternalLazerCatalog = "library.catalog.search";
     public const string SearchExternalLazerSkins = "skins.installed.search";
     public const string ResolveExternalLazerAssets = "library.resolve-assets";
@@ -159,7 +184,10 @@ public sealed record PpWhatIfRequest(
     int? MaxCombo = null,
     PpScoreStatistics? Statistics = null,
     string? ModsJson = null,
-    bool LegacyScore = false);
+    bool LegacyScore = false,
+    int RulesetId = 0,
+    bool Passed = true,
+    long? LegacyTotalScore = null);
 
 public sealed record PpScoreStatistics(
     int Great,
@@ -167,7 +195,12 @@ public sealed record PpScoreStatistics(
     int Meh,
     int Miss,
     int SliderTailHit,
-    int LargeTickMiss);
+    int LargeTickMiss,
+    int Perfect = 0,
+    int Good = 0,
+    int LargeTickHit = 0,
+    int SmallTickHit = 0,
+    int SmallTickMiss = 0);
 
 public sealed record PpWhatIfResult(
     string EngineVersion,
@@ -259,10 +292,52 @@ public sealed record ExternalLazerSkinSummary(
     bool IsBuiltIn,
     int FileCount,
     string PreviewHash = "",
-    string PreviewLogicalName = "");
+    string PreviewLogicalName = "")
+{
+    /// <summary>Hashed gameplay elements (hit circles, numbers, cursor, judgements and skin.ini) used to draw thumbnails.</summary>
+    public IReadOnlyList<ExternalLazerSkinFile> PreviewFiles { get; init; } = [];
+}
+
+public sealed record ExternalLazerSkinFile(string LogicalName, string Hash);
 
 public static class ExternalLazerSkinProtocol
 {
+    public const int MaximumPreviewFilesPerSkin = 160;
+
+    private static readonly HashSet<string> preview_elements = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "hitcircle", "hitcircleoverlay", "approachcircle", "sliderstartcircle", "sliderstartcircleoverlay",
+        "cursor", "cursortrail", "cursormiddle", "sliderb", "sliderb0", "sliderfollowcircle", "reversearrow",
+        "hit300", "hit100", "hit50", "hit0", "hit300-0", "hit100-0", "hit50-0", "hit0-0",
+        "scorebar-bg", "scorebar-colour", "scorebar-colour-0",
+    };
+
+    /// <summary>
+    /// Ranks a skin file for thumbnail rendering: 0 for skin.ini and core gameplay elements,
+    /// 1 for number-font sprites (digits, x, comma, dot, percent; skins configure their prefixes), -1 otherwise.
+    /// </summary>
+    public static int PreviewElementPriority(string logicalName)
+    {
+        if (string.IsNullOrWhiteSpace(logicalName) || logicalName.Length > 260)
+            return -1;
+        string normalised = logicalName.Replace('\\', '/');
+        if (normalised.Count(character => character == '/') > 1 || normalised.Contains("..", StringComparison.Ordinal))
+            return -1;
+        string name = normalised[(normalised.LastIndexOf('/') + 1)..];
+        if (normalised.Length == name.Length && string.Equals(name, "skin.ini", StringComparison.OrdinalIgnoreCase))
+            return 0;
+        if (!name.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
+            return -1;
+        name = name[..^4];
+        if (name.EndsWith("@2x", StringComparison.OrdinalIgnoreCase))
+            name = name[..^3];
+        if (!normalised.Contains('/') && preview_elements.Contains(name))
+            return 0;
+        bool numbered = name.Length >= 3 && name[^2] == '-' && char.IsAsciiDigit(name[^1]);
+        bool fontSymbol = name.EndsWith("-x", StringComparison.OrdinalIgnoreCase) || name.EndsWith("-comma", StringComparison.OrdinalIgnoreCase)
+                          || name.EndsWith("-dot", StringComparison.OrdinalIgnoreCase) || name.EndsWith("-percent", StringComparison.OrdinalIgnoreCase);
+        return numbered || fontSymbol && name.Length > 2 ? 1 : -1;
+    }
     public const int MaximumSearchTextLength = 256;
     public const int MaximumPageSize = 100;
     public const int MaximumOffset = 10_000;
@@ -360,7 +435,9 @@ public sealed record ExternalLazerReplaySummary(
     string BackgroundHash = "",
     PpScoreStatistics? HitStatistics = null,
     string ModsJson = "",
-    long OnlineScoreId = 0);
+    long OnlineScoreId = 0,
+    bool Passed = true,
+    bool LegacyScore = false);
 
 public static class ExternalLazerCatalogProtocol
 {

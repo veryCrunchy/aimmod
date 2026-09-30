@@ -11,6 +11,9 @@ public sealed record PracticeMapExportResult(string DirectoryPath, string Beatma
 
 public sealed class PracticeMapExporter
 {
+    internal static string SourcePracticeTitle(PracticeSourceBeatmap source) =>
+        $"{source.Metadata.Title} [{source.Metadata.Version}] - AimMod practice";
+
     public async Task<PracticeMapExportResult> ExportAsync(
         PracticeSourceBeatmap source,
         PracticeMapPlan plan,
@@ -69,11 +72,15 @@ public sealed class PracticeMapExporter
         appendSection(builder, "Metadata", replace(source.Sections.GetValueOrDefault("Metadata", Array.Empty<string>()), new Dictionary<string, string>
         {
             ["Version"] = plan.OutputVersion,
+            ["Title"] = plan.OutputSetTitle ?? SourcePracticeTitle(source),
+            ["TitleUnicode"] = plan.OutputSetTitle ?? SourcePracticeTitle(source),
             ["Source"] = plan.Attribution,
             ["BeatmapID"] = "0",
             ["BeatmapSetID"] = "-1",
         }));
-        appendSection(builder, "Difficulty", source.Sections.GetValueOrDefault("Difficulty", Array.Empty<string>()));
+        appendSection(builder, "Difficulty", plan.DifficultyOverrides is { } overrides
+            ? replace(source.Sections.GetValueOrDefault("Difficulty", Array.Empty<string>()), overrides)
+            : source.Sections.GetValueOrDefault("Difficulty", Array.Empty<string>()));
         appendSection(builder, "Events", practiceEvents(plan));
         appendSection(builder, "TimingPoints", plan.TimingPoints.Select(point => string.Join(',', point.Fields)));
         appendSection(builder, "Colours", source.Sections.GetValueOrDefault("Colours", Array.Empty<string>()));

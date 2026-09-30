@@ -9,7 +9,10 @@ public sealed record HubSharingPreferences(
     bool AutomaticSharingEnabled = false,
     double MinimumPp = 0,
     double MinimumAccuracy = 95,
-    Guid AutomaticSharingGeneration = default)
+    Guid AutomaticSharingGeneration = default,
+    bool TrainingSyncEnabled = true,
+    bool TrainingPublicSharing = true,
+    Guid TrainingSyncGeneration = default)
 {
     public static HubSharingPreferences Default { get; } = new();
 
@@ -47,21 +50,39 @@ public sealed class FileHubSharingPreferenceStore : IHubSharingPreferenceStore
 
     public HubSharingPreferences Load()
     {
+        saveGate.Wait();
+        try { return loadCore(); }
+        finally { saveGate.Release(); }
+    }
+
+    private HubSharingPreferences loadCore()
+    {
         try
         {
-            if (!File.Exists(path))
-                return HubSharingPreferences.Default;
-            using FileStream stream = File.OpenRead(path);
-            PreferenceDocument? document = JsonSerializer.Deserialize<PreferenceDocument>(stream, json_options);
-            return document?.Version == current_version && document.Preferences is not null
-                ? document.Preferences.Normalised()
-                : HubSharingPreferences.Default;
+            HubSharingPreferences preferences = HubSharingPreferences.Default;
+            if (File.Exists(path))
+            {
+                using FileStream stream = File.OpenRead(path);
+                PreferenceDocument? document = JsonSerializer.Deserialize<PreferenceDocument>(stream, json_options);
+                if (document?.Version != current_version || document.Preferences is null)
+                    return unavailablePreferences;
+                preferences = document.Preferences.Normalised();
+            }
+            // Persist the initial generation so first-run sessions can sync and pending uploads survive restarts.
+            if (preferences.TrainingSyncEnabled && preferences.TrainingSyncGeneration == Guid.Empty)
+            {
+                preferences = preferences with { TrainingSyncGeneration = Guid.NewGuid() };
+                saveCoreAsync(preferences, CancellationToken.None).GetAwaiter().GetResult();
+            }
+            return preferences;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException)
         {
-            return HubSharingPreferences.Default;
+            return unavailablePreferences;
         }
     }
+
+    private static readonly HubSharingPreferences unavailablePreferences = new(TrainingSyncEnabled: false, TrainingPublicSharing: false);
 
     public Task SaveAsync(HubSharingPreferences preferences, CancellationToken cancellationToken = default)
     {
@@ -75,13 +96,17 @@ public sealed class FileHubSharingPreferenceStore : IHubSharingPreferenceStore
         await saveGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            HubSharingPreferences previous = Load();
+            HubSharingPreferences previous = loadCore();
             HubSharingPreferences preferences = update(previous).Normalised();
             preferences = preferences with
             {
                 AutomaticSharingGeneration = preferences.AutomaticSharingEnabled
                     ? previous.AutomaticSharingEnabled && previous.AutomaticSharingGeneration != Guid.Empty
                         ? previous.AutomaticSharingGeneration : Guid.NewGuid()
+                    : Guid.Empty,
+                TrainingSyncGeneration = preferences.TrainingSyncEnabled
+                    ? previous.TrainingSyncEnabled && previous.TrainingSyncGeneration != Guid.Empty
+                        ? previous.TrainingSyncGeneration : Guid.NewGuid()
                     : Guid.Empty,
             };
             await saveCoreAsync(preferences, cancellationToken).ConfigureAwait(false);

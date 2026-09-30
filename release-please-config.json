@@ -1,9 +1,11 @@
 {
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
-  "release-type": "simple",
+  "separate-pull-requests": true,
   "packages": {
     ".": {
       "release-type": "simple",
+      "include-component-in-tag": false,
+      "exclude-paths": ["osu-native"],
       "extra-files": [
         {
           "type": "json",
@@ -15,6 +17,23 @@
           "path": "src-tauri/Cargo.toml",
           "jsonpath": "$.package.version"
         }
+      ]
+    },
+    "osu-native": {
+      "release-type": "simple",
+      "component": "aimmod-osu",
+      "include-component-in-tag": true,
+      "package-name": "AimMod for osu!",
+      "changelog-path": "CHANGELOG.md",
+      "bump-minor-pre-major": true,
+      "pull-request-title-pattern": "chore(osu): release AimMod for osu! ${version}",
+      "changelog-sections": [
+        { "type": "feat", "section": "Features" },
+        { "type": "fix", "section": "Fixes" },
+        { "type": "perf", "section": "Performance" },
+        { "type": "refactor", "section": "Internal", "hidden": true },
+        { "type": "test", "section": "Tests", "hidden": true },
+        { "type": "chore", "section": "Maintenance", "hidden": true }
       ]
     }
   }

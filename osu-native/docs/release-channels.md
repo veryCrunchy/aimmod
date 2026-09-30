@@ -39,7 +39,17 @@ The selected channel release also holds the Velopack package referenced by its f
 
 ## Publishing
 
-Push a dedicated version tag to build, test, and publish both platforms:
+Releases are cut from `main` with release-please. `osu-native` is its own release-please package (component `aimmod-osu`), tracked in `.release-please-manifest.json` and `osu-native/version.txt`. Conventional commits that touch `osu-native/` (`feat:` for a minor bump before 1.0, `fix:` and `perf:` for a patch) open or update a separate "release AimMod for osu!" pull request. That pull request bumps the version and updates `osu-native/CHANGELOG.md`.
+
+While you work, add short, player-facing bullets to `changelogs/unreleased.md` under `##` headings. When the release pull request is created or updated, the Release Please workflow moves those entries into `changelogs/VERSION.md` with a `# AimMod VERSION` heading and resets `unreleased.md`. If `unreleased.md` has no entries, it derives the notes from the generated `CHANGELOG.md` section instead. Review and edit `changelogs/VERSION.md` in the release pull request; an existing file is never overwritten. The release workflow refuses to package a version without its own notes.
+
+Merging the release pull request tags `aimmod-osu-vVERSION`, creates the GitHub release, and calls the `AimMod osu Release` workflow to build, attest and publish both platforms to the stable channel (or preview for prerelease versions).
+
+The same file supplies GitHub release notes, a downloadable changelog, and the Markdown notes in both Velopack feeds. AimMod displays the target version's feed notes before downloading the update, and keeps them visible during download and before restart. Released changelog files are also embedded in the app for offline history. Keep each version within 24,000 characters and 300 lines, and use headings, paragraphs and bullets. Do not add HTML or remote images.
+
+Versions published before this workflow may have no feed notes. AimMod shows a clear unavailable state for those versions instead of showing notes from a different release.
+
+To publish outside release-please (for example a hotfix or a preview build), write `changelogs/VERSION.md` yourself and push a dedicated version tag to build, test, and publish both platforms:
 
 ```sh
 git tag aimmod-osu-v1.0.0

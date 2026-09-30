@@ -25,6 +25,67 @@ public sealed class PpTargetExactCalculationServiceTests
     }
 
     [Test]
+    public async Task StableOnlyCalculationWithKnownHashDownloadsWithoutResolvingLazerDatabase()
+    {
+        const int id = 459;
+        string beatmap = createBeatmap(id);
+        string hash = Convert.ToHexString(System.Security.Cryptography.MD5.HashData(System.Text.Encoding.UTF8.GetBytes(beatmap))).ToLowerInvariant();
+        var download = new StubDifficultyClient(id, beatmap);
+        var service = new PpTargetExactCalculationService(temporaryDirectory, Path.Combine(temporaryDirectory, "stable.json"),
+            download, Path.Combine(temporaryDirectory, "downloads"), () => SidecarRuntimeClient.Start(desktopExecutablePath()));
+        Assert.That(File.Exists(Path.Combine(temporaryDirectory, "client.realm")), Is.False);
+        var results = await service.CalculateAsync([new(id, hash, [], .96, .7, LegacyScore: true)]);
+        Assert.That(results[id].RealisticMaximumPp, Is.GreaterThan(0));
+        Assert.That(results[id].Features, Is.Not.Null);
+        Assert.That(download.RequestedBeatmapIds, Is.EqualTo(new[] { id }));
+    }
+
+    [Test]
+    public void PerformanceCacheTracksScoreInputsButNotStagingPaths()
+    {
+        var request = new PpWhatIfRequest("stage", "map.osu", ["HD"], .98);
+        string key = PpTargetExactCalculationService.PerformanceIdentity("content", request);
+        Assert.That(PpTargetExactCalculationService.PerformanceIdentity("content", request with { StagingDirectory = "other", BeatmapPath = "other.osu" }), Is.EqualTo(key));
+        foreach (var changed in new[] { request with { Accuracy = .97 }, request with { MissCount = 1 },
+                     request with { MaxCombo = 10 }, request with { Mods = ["DT"] }, request with { Passed = false },
+                     request with { LegacyScore = true }, request with { RulesetId = 1 },
+                     request with { Statistics = new(100, 1, 0, 0, 0, 0) }, request with { ModsJson = "custom" } })
+            Assert.That(PpTargetExactCalculationService.PerformanceIdentity("content", changed), Is.Not.EqualTo(key));
+        Assert.That(PpTargetExactCalculationService.PerformanceIdentity("changed-content", request), Is.Not.EqualTo(key));
+    }
+
+    [Test]
+    public async Task ChangedProfileReusesPersistedPerformanceWithoutStartingWorkers()
+    {
+        const int id = 456;
+        string path = Path.Combine(temporaryDirectory, "profile-change.json");
+        var service = new PpTargetExactCalculationService(temporaryDirectory, path,
+            new StubDifficultyClient(id, createBeatmap(id)), Path.Combine(temporaryDirectory, "downloads"),
+            () => SidecarRuntimeClient.Start(desktopExecutablePath()));
+        var request = new PpTargetExactRequest(id, null, [], .94, .5);
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var cold = await service.CalculateAsync([request]);
+        long coldMs = watch.ElapsedMilliseconds;
+        var reopened = new PpTargetExactCalculationService(temporaryDirectory, path,
+            new FailingDifficultyClient(), Path.Combine(temporaryDirectory, "downloads"),
+            () => throw new AssertionException("An unchanged score shape must reuse raw performance after a profile update."));
+        watch.Restart();
+        var warm = await reopened.CalculateAsync([request with { PatternProfile = new("updated-player", DateTimeOffset.UtcNow, 30, []) }]);
+        TestContext.WriteLine($"Exact map cold: {coldMs}ms; changed-profile cached refresh: {watch.ElapsedMilliseconds}ms (no worker or download).");
+        Assert.That(warm[id].ExpectedPp, Is.EqualTo(cold[id].ExpectedPp));
+        Assert.That(warm[id].PatternProfileIdentity, Is.EqualTo("updated-player"));
+        Assert.That(warm[id].Features, Is.Not.Null);
+    }
+
+    [Test]
+    public void ConfiguredModsHaveSeparateCalculationCaches() {
+        var request=new PpTargetExactRequest(42,null,["DT"],.98,.5);
+        var configured=request with { ModsJson="[{\"acronym\":\"DT\",\"settings\":{\"speed_change\":1.2}}]" };
+        Assert.That(PpTargetExactCalculationService.CacheIdentity(configured,"synthetic"),
+            Is.Not.EqualTo(PpTargetExactCalculationService.CacheIdentity(request,"synthetic")));
+    }
+
+    [Test]
     public void FrequentMissesDoNotRetainHalfTheMaximumCombo()
     {
         var one = PpTargetExactCalculationService.ExpectedScoreShape(.5, 1000, 1000, .001);
@@ -165,6 +226,26 @@ public sealed class PpTargetExactCalculationServiceTests
     }
 
     [Test]
+    public async Task ConfiguredGeometryAndScoringModeReachTheWorkerAndCache()
+    {
+        const int id = 456;
+        var download = new StubDifficultyClient(id, createBeatmap(id) + "\n256,192,24000,2,0,L|384:192,1,128\n");
+        var service = new PpTargetExactCalculationService(temporaryDirectory, Path.Combine(temporaryDirectory, "configured.json"),
+            download, Path.Combine(temporaryDirectory, "downloads"), () => SidecarRuntimeClient.Start(desktopExecutablePath()));
+        var request = new PpTargetExactRequest(id, null, ["DT"], .96, .7,
+            ModsJson: "[{\"acronym\":\"DT\",\"settings\":{\"speed_change\":1.2}}]");
+        var lazer = (await service.CalculateAsync([request]))[id];
+        var stable = (await service.CalculateAsync([request with { LegacyScore = true }]))[id];
+        Assert.That(lazer.Features!.ClockRate, Is.EqualTo(1.2).Within(.0001));
+        Assert.That(stable.LegacyScore, Is.True);
+        Assert.That(lazer.LegacyScore, Is.False);
+        Assert.That(stable.ExpectedPp, Is.Not.EqualTo(lazer.ExpectedPp));
+        Assert.That(PpTargetExactCalculationService.CacheIdentity(request, "content"),
+            Is.Not.EqualTo(PpTargetExactCalculationService.CacheIdentity(request with { LegacyScore = true }, "content")));
+        Assert.That((await service.CalculateAsync([request]))[id], Is.EqualTo(lazer));
+    }
+
+    [Test]
     public async Task RemoteDifficultyUsesOfficialCalculatorForExpectedAndFullComboPp()
     {
         const int beatmapId = 456;
@@ -254,15 +335,19 @@ public sealed class PpTargetExactCalculationServiceTests
         await using SidecarRuntimeClient runtime = SidecarRuntimeClient.Start(desktopExecutablePath());
         var calculator = new PpWhatIfClient(new SidecarRuntimeRequestClient(runtime));
         PpWhatIfResult ceiling = await calculator.CalculateAsync(new PpWhatIfRequest(temporaryDirectory, exactPath, [], 1, 0, null));
-        (int misses, int combo) = PpTargetExactCalculationService.ExpectedScoreShape(prediction.Fit!.Value, ceiling.MaxCombo, ceiling.ObjectCount, prediction.ExpectedMissRate);
-        PpWhatIfResult expectedScenario = await calculator.CalculateAsync(new PpWhatIfRequest(temporaryDirectory, exactPath, [], prediction.ExpectedAccuracy!.Value, misses, combo));
+        // PP if passed integrates official scenarios over the fitted miss distribution rather than one plug-in score.
+        PpOutcomeEstimate outcome = weak.Outcome!;
+        PpScenario scenario = outcome.Scenarios.First(s => s.Misses > 0);
+        PpWhatIfResult expectedScenario = await calculator.CalculateAsync(new PpWhatIfRequest(temporaryDirectory, exactPath, [], scenario.Accuracy, scenario.Misses, scenario.Combo));
         Assert.Multiple(() =>
         {
-            Assert.That(prediction.ExpectedAccuracy, Is.EqualTo(expectedScenario.Accuracy));
-            Assert.That(prediction.ExpectedAccuracy, Is.EqualTo(0.82).Within(0.006));
+            Assert.That(prediction.ExpectedAccuracy, Is.EqualTo(0.82).Within(0.000001), "Head evidence is reported as measured.");
             Assert.That(prediction.ExpectedMissRate, Is.EqualTo(0.15).Within(0.000001));
-            Assert.That(misses, Is.EqualTo(18));
-            Assert.That(weak.ExpectedPp, Is.EqualTo(expectedScenario.PerformancePoints));
+            Assert.That(outcome.Distribution.MissMean, Is.EqualTo(18).Within(0.000001), "Without score history the head miss rate is the prior.");
+            Assert.That(outcome.Scenarios.Select(s => s.Misses), Does.Contain(0).And.Contain(21).And.Not.Contain(1), "Scenarios follow the probability mass.");
+            Assert.That(scenario.Pp, Is.EqualTo(expectedScenario.PerformancePoints));
+            Assert.That(weak.ExpectedPp, Is.EqualTo(PpTargetOutcomeModel.Mean(outcome.Atoms)).Within(1e-9));
+            Assert.That(outcome.CalibrationSamples, Is.Zero);
             Assert.That(weak.ExpectedPp, Is.LessThan(strong.ExpectedPp));
             Assert.That(weak.RealisticMaximumPp, Is.EqualTo(baseline.RealisticMaximumPp));
             Assert.That(weak.RealisticMaximumPp, Is.EqualTo(ceiling.PerformancePoints));
@@ -346,10 +431,45 @@ public sealed class PpTargetExactCalculationServiceTests
         Assert.Multiple(() =>
         {
             Assert.That(PpTargetExactCalculationService.FeasibleAccuracy(0.99, 12, 120), Is.EqualTo(0.9));
-            Assert.That(estimate.PatternPrediction!.ExpectedAccuracy, Is.EqualTo(0.9).Within(0.000001));
+            Assert.That(estimate.PatternPrediction!.ExpectedAccuracy, Is.EqualTo(0.99).Within(0.000001));
             Assert.That(estimate.PatternPrediction.ExpectedMissRate, Is.EqualTo(0.1).Within(0.000001));
+            Assert.That(estimate.Outcome!.Scenarios, Is.Not.Empty);
+            Assert.That(estimate.Outcome.Scenarios.All(s => s.Accuracy <= 1 - s.Misses / 120d + 1e-9), Is.True, "Every official scenario is feasible.");
             Assert.That(estimate.ExpectedAccuracy, Is.EqualTo(0.98), "Original request remains the matching identity.");
             Assert.That(estimate.RealisticMaximumPp, Is.GreaterThan(estimate.ExpectedPp));
+        });
+    }
+
+    [Test]
+    public async Task RecordedPpCalibratesTheScenarioIntegralAndScoreHistoryShapesIt()
+    {
+        const int id = 657;
+        var service = new PpTargetExactCalculationService(temporaryDirectory, Path.Combine(temporaryDirectory, "calibrated.json"),
+            new StubDifficultyClient(id, createBeatmap(id)), Path.Combine(temporaryDirectory, "downloads"),
+            () => SidecarRuntimeClient.Start(desktopExecutablePath()));
+        string exactPath = Path.Combine(temporaryDirectory, "calibration-map.osu");
+        File.WriteAllText(exactPath, createBeatmap(id));
+        await using SidecarRuntimeClient runtime = SidecarRuntimeClient.Start(desktopExecutablePath());
+        var calculator = new PpWhatIfClient(new SidecarRuntimeRequestClient(runtime));
+        PpWhatIfResult recorded = await calculator.CalculateAsync(new PpWhatIfRequest(temporaryDirectory, exactPath, [], .97, 1, 100));
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        PpOutcomeObservation pass(int day, double? pp) => new(Guid.NewGuid(), $"online:{id}", id, null, now.AddDays(-day), 4, 120, 22, 8, 9,
+            [], "", "", false, true, PpOutcomeSource.Local, .97, 1, 100, 120, 120, pp);
+        var map = new PpTargetMapContext(4, 120, 22, 8, 9);
+        var request = new PpTargetExactRequest(id, null, [], .95, .7, Map: map);
+        var plain = (await service.CalculateAsync([request with { Outcomes = new("plain", now, [pass(1, null), pass(2, null), pass(3, null)]) }]))[id];
+        var calibrated = (await service.CalculateAsync([request with { Outcomes = new("recorded", now,
+            [pass(1, recorded.PerformancePoints * .8), pass(2, recorded.PerformancePoints * .8), pass(3, recorded.PerformancePoints * .8)]) }]))[id];
+        Assert.Multiple(() =>
+        {
+            Assert.That(plain.Outcome!.CalibrationSamples, Is.Zero);
+            Assert.That(plain.Outcome.Distribution.Passes, Is.EqualTo(3));
+            Assert.That(plain.Outcome.Distribution.MissMean, Is.EqualTo(1).Within(.3), "Score history, not the attainability guess, sets the misses.");
+            Assert.That(plain.Features!.StarRating, Is.EqualTo(4));
+            Assert.That(plain.Features.ApproachRate, Is.EqualTo(9).Within(1e-9));
+            Assert.That(calibrated.Outcome!.CalibrationSamples, Is.EqualTo(1), "Identical score statistics are one calibration sample.");
+            Assert.That(calibrated.Outcome.CalibrationFactor, Is.LessThan(.97).And.GreaterThan(.8), "Shrunk towards one.");
+            Assert.That(calibrated.ExpectedPp / plain.ExpectedPp, Is.EqualTo(calibrated.Outcome.CalibrationFactor).Within(.01));
         });
     }
 

@@ -5,6 +5,9 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../AimMod.Osu.Runtime/AimMod.Osu.Runtime.csproj" />
+    <PackageReference Include="ppy.osu.Game.Rulesets.Taiko" Version="2026.730.0" />
+    <PackageReference Include="ppy.osu.Game.Rulesets.Catch" Version="2026.730.0" />
+    <PackageReference Include="ppy.osu.Game.Rulesets.Mania" Version="2026.730.0" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="ppy.osu.Game" Version="2026.730.0" />

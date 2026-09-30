@@ -28,7 +28,7 @@ public interface ICoachingPpProjectionService
 
 public sealed class CoachingPpProjectionService : ICoachingPpProjectionService
 {
-    private const int cache_version = 1;
+    private const int cache_version = 3;
     private const int maximum_cache_entries = 2_048;
     private const int maximum_batch_size = 8;
 
@@ -57,7 +57,7 @@ public sealed class CoachingPpProjectionService : ICoachingPpProjectionService
     {
         ArgumentNullException.ThrowIfNull(requests);
         CoachingPpProjectionRequest[] valid = requests.Where(isValid)
-                                                       .DistinctBy(request => cacheKey(request))
+                                                       .DistinctBy(request => request.Run.ScoreId)
                                                        .Take(maximum_batch_size)
                                                        .ToArray();
         if (valid.Length == 0)
@@ -97,7 +97,7 @@ public sealed class CoachingPpProjectionService : ICoachingPpProjectionService
                     continue;
 
                 string stagingDirectory = Path.GetDirectoryName(beatmap.StagedPath)!;
-                string targetKey = cacheKey(request);
+                string targetKey = TargetCacheKey(request);
                 PpWhatIfResult result;
                 if (cache.TryGetValue(targetKey, out CacheEntry? cachedTarget) && validResult(cachedTarget.Result))
                 {
@@ -111,7 +111,7 @@ public sealed class CoachingPpProjectionService : ICoachingPpProjectionService
                         normaliseMods(request.Run.Mods),
                         request.Opportunity.TargetAccuracy!.Value,
                         request.Opportunity.TargetMissCount!.Value,
-                        null);
+                        null, ModsJson: request.Run.ModsJson, LegacyScore: request.Run.LegacyScore || request.Run.Origin == LocalLibraryOrigin.Stable);
                     PpWhatIfResult ceiling = await ppClient.CalculateAsync(ceilingRequest, cancellationToken).ConfigureAwait(false);
                     int targetCombo = estimateTargetCombo(request, ceiling.MaxCombo);
                     result = targetCombo == ceiling.MaxCombo
@@ -151,7 +151,7 @@ public sealed class CoachingPpProjectionService : ICoachingPpProjectionService
         CoachingPpProjectionRequest request,
         IDictionary<Guid, CoachingExactPpProjection> completed)
     {
-        if (!cache.TryGetValue(cacheKey(request), out CacheEntry? entry)
+        if (!cache.TryGetValue(TargetCacheKey(request), out CacheEntry? entry)
             || !validResult(entry.Result))
             return false;
 
@@ -173,11 +173,7 @@ public sealed class CoachingPpProjectionService : ICoachingPpProjectionService
         IPpWhatIfClient client,
         CancellationToken cancellationToken)
     {
-        string key = scenarioCacheKey(
-            request.Run,
-            request.Run.Accuracy,
-            request.Run.MissCount,
-            request.Run.MaxCombo);
+        string key = CurrentCacheKey(request.Run);
         if (cache.TryGetValue(key, out CacheEntry? cached) && validResult(cached.Result))
             return cached.Result.PerformancePoints;
 
@@ -187,7 +183,7 @@ public sealed class CoachingPpProjectionService : ICoachingPpProjectionService
             normaliseMods(request.Run.Mods),
             request.Run.Accuracy,
             request.Run.MissCount,
-            request.Run.MaxCombo), cancellationToken).ConfigureAwait(false);
+            request.Run.MaxCombo, Statistics: request.Run.HitStatistics, ModsJson: request.Run.ModsJson, LegacyScore: request.Run.LegacyScore || request.Run.Origin == LocalLibraryOrigin.Stable), cancellationToken).ConfigureAwait(false);
         cache[key] = new CacheEntry(key, DateTimeOffset.UtcNow, result);
         return result.PerformancePoints;
     }
@@ -239,7 +235,11 @@ public sealed class CoachingPpProjectionService : ICoachingPpProjectionService
             if (document?.Version != cache_version || document.Entries is null)
                 return new Dictionary<string, CacheEntry>(StringComparer.Ordinal);
 
-            return document.Entries.Where(entry => !string.IsNullOrWhiteSpace(entry.Key) && validResult(entry.Result))
+            // A hand-edited or concurrently written cache may repeat a key; keep the newest entry.
+            return document.Entries.Where(entry => entry is not null && !string.IsNullOrWhiteSpace(entry.Key) && validResult(entry.Result))
+                           .GroupBy(entry => entry.Key, StringComparer.Ordinal)
+                           .Select(group => group.MaxBy(entry => entry.CalculatedAt)!)
+                           .OrderBy(entry => entry.CalculatedAt)
                            .TakeLast(maximum_cache_entries)
                            .ToDictionary(entry => entry.Key, StringComparer.Ordinal);
         }
@@ -314,19 +314,37 @@ public sealed class CoachingPpProjectionService : ICoachingPpProjectionService
                                          .Order(StringComparer.Ordinal)
                                          .ToArray();
 
-    private static string cacheKey(CoachingPpProjectionRequest request) => scenarioCacheKey(
-        request.Run,
-        request.Opportunity.TargetAccuracy!.Value,
+    /// <summary>
+    /// Identifies a target calculation. The target combo is estimated from the current combo, misses and accuracy
+    /// as well as the target, so all of them are part of the key.
+    /// </summary>
+    internal static string TargetCacheKey(CoachingPpProjectionRequest request) => string.Join('|',
+        "target",
+        scenarioKey(request.Run),
+        format(request.Opportunity.TargetAccuracy!.Value),
         request.Opportunity.TargetMissCount!.Value,
-        request.Run.MaxCombo);
+        request.Run.MaxCombo,
+        request.Run.MissCount,
+        format(request.Run.Accuracy));
 
-    private static string scenarioCacheKey(LocalReplay run, double accuracy, int misses, int combo) => string.Join('|',
+    /// <summary>Identifies the calculation of the play as recorded, including its hit statistics.</summary>
+    internal static string CurrentCacheKey(LocalReplay run) => string.Join('|',
+        "current",
+        scenarioKey(run),
+        format(run.Accuracy),
+        run.MissCount,
+        run.MaxCombo,
+        run.HitStatistics is { } statistics
+            ? string.Join(',', statistics.Great, statistics.Ok, statistics.Meh, statistics.Miss, statistics.SliderTailHit, statistics.LargeTickMiss,
+                statistics.Perfect, statistics.Good, statistics.LargeTickHit, statistics.SmallTickHit, statistics.SmallTickMiss)
+            : "-");
+
+    private static string scenarioKey(LocalReplay run) => string.Join('|',
         PpCalculationProtocol.EngineVersion,
         run.BeatmapHash.ToLowerInvariant(),
-        string.Join(',', normaliseMods(run.Mods)),
-        accuracy.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
-        misses,
-        combo);
+        ScoreMods.SetupKey(run));
+
+    private static string format(double value) => value.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
 
     private sealed record CacheDocument(int Version, IReadOnlyList<CacheEntry> Entries);
 

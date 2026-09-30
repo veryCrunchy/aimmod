@@ -50,7 +50,7 @@ public partial class AimModSlantedAccentPanel : Container
             },
         };
 
-        AccentColour = AimModPalette.Pink;
+        AccentColour = AimModPalette.Accent;
     }
 
     public Colour4 AccentColour
@@ -67,97 +67,22 @@ public partial class AimModSlantedAccentPanel : Container
 
 public partial class AimModSectionHeader : CompositeDrawable
 {
-    private readonly OsuSpriteText eyebrowText;
-    private readonly OsuSpriteText titleText;
-    private readonly OsuSpriteText subtitleText;
-    private readonly Box accent;
-
+    private readonly TruncatingSpriteText titleText;
+    private readonly TruncatingSpriteText subtitleText;
     public AimModSectionHeader(string title, string? subtitle = null, string? eyebrow = null)
     {
-        RelativeSizeAxes = Axes.X;
-        AutoSizeAxes = Axes.Y;
+        RelativeSizeAxes = Axes.X; Height = 64;
+        InternalChildren = [
+            titleText = new TruncatingSpriteText { RelativeSizeAxes = Axes.X, Font = new FontUsage(size:26,weight:"SemiBold"), Colour = AimModPalette.Text },
+            subtitleText = new TruncatingSpriteText { RelativeSizeAxes = Axes.X, Y = 34, Font = new FontUsage(size:13), Colour = AimModPalette.Muted },
 
-        InternalChild = new FillFlowContainer
-        {
-            RelativeSizeAxes = Axes.X,
-            AutoSizeAxes = Axes.Y,
-            Direction = FillDirection.Vertical,
-            Spacing = new(AimModVisualStyle.RelatedSpacing),
-            Children = new Drawable[]
-            {
-                new FillFlowContainer
-                {
-                    AutoSizeAxes = Axes.Both,
-                    Direction = FillDirection.Horizontal,
-                    Spacing = new(9),
-                    Children = new Drawable[]
-                    {
-                        accent = new Box
-                        {
-                            Size = new(28, 2),
-                            Shear = new(-0.35f, 0),
-                            Anchor = Anchor.CentreLeft,
-                            Origin = Anchor.CentreLeft,
-                        },
-                        eyebrowText = new OsuSpriteText
-                        {
-                            Font = new FontUsage(size: 10, weight: "Bold"),
-                            Colour = AimModPalette.Cyan,
-                            Anchor = Anchor.CentreLeft,
-                            Origin = Anchor.CentreLeft,
-                        },
-                    },
-                },
-                titleText = new OsuSpriteText
-                {
-                    Font = new FontUsage(size: 24, weight: "Bold"),
-                    Colour = AimModPalette.Text,
-                },
-                subtitleText = new OsuSpriteText
-                {
-                    Font = new FontUsage(size: 12),
-                    Colour = AimModPalette.Muted,
-                },
-            },
-        };
-
-        AccentColour = AimModPalette.Pink;
-        Title = title;
-        Subtitle = subtitle;
-        Eyebrow = eyebrow;
+        ];
+        Title = title; Subtitle = subtitle;
     }
-
-    public Colour4 AccentColour
-    {
-        get => accent.Colour;
-        set => accent.Colour = value;
-    }
-
-    public string Title
-    {
-        get => titleText.Text.ToString();
-        set => titleText.Text = value ?? string.Empty;
-    }
-
-    public string? Subtitle
-    {
-        get => subtitleText.Text.ToString();
-        set
-        {
-            subtitleText.Text = value ?? string.Empty;
-            subtitleText.Alpha = string.IsNullOrWhiteSpace(value) ? 0 : 1;
-        }
-    }
-
-    public string? Eyebrow
-    {
-        get => eyebrowText.Text.ToString();
-        set
-        {
-            eyebrowText.Text = value?.ToUpperInvariant() ?? string.Empty;
-            eyebrowText.Alpha = string.IsNullOrWhiteSpace(value) ? 0 : 1;
-        }
-    }
+    public Colour4 AccentColour { get; set; } = AimModPalette.Accent;
+    public string Title { get => titleText.Text.ToString(); set => titleText.Text = value; }
+    public string? Subtitle { get => subtitleText.Text.ToString(); set => subtitleText.Text = value ?? string.Empty; }
+    public string? Eyebrow { get; set; }
 }
 
 public partial class AimModBeatmapBanner : CompositeDrawable
@@ -206,7 +131,7 @@ public partial class AimModBeatmapBanner : CompositeDrawable
                 Width = 120,
                 X = 42,
                 Shear = new(-0.22f, 0),
-                Colour = AimModPalette.Pink,
+                Colour = AimModPalette.Accent,
                 Alpha = 0.14f,
             },
             new FillFlowContainer

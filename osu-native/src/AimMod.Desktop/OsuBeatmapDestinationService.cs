@@ -71,6 +71,7 @@ public sealed class OsuBeatmapDestinationService : IOsuBeatmapDestinationService
     private readonly string handoffDirectory;
     private readonly LazerExecutableLocator lazerLocator = new();
     private readonly Func<ProcessStartInfo, TimeSpan, CancellationToken, Task<DestinationLaunchOutcome>> launch;
+    private readonly object destinationGate = new();
     private OsuClientDestination destination;
 
     public OsuBeatmapDestinationService(
@@ -104,15 +105,29 @@ public sealed class OsuBeatmapDestinationService : IOsuBeatmapDestinationService
 
     public OsuClientDestination Destination
     {
-        get => destination;
+        get
+        {
+            lock (destinationGate)
+                return destination;
+        }
         set
         {
             if (!Enum.IsDefined(value))
                 throw new ArgumentOutOfRangeException(nameof(value));
-            if (destination == value)
-                return;
-            preferences.Save(value);
-            destination = value;
+            lock (destinationGate)
+            {
+                if (destination == value)
+                    return;
+                destination = value;
+                try
+                {
+                    preferences.Save(value);
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                {
+                    Trace.TraceWarning($"Could not save the osu! destination preference: {error.Message}");
+                }
+            }
             DestinationChanged?.Invoke(value);
         }
     }
@@ -196,7 +211,7 @@ public sealed class OsuBeatmapDestinationService : IOsuBeatmapDestinationService
         {
             throw;
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException or NotSupportedException)
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException or NotSupportedException or System.ComponentModel.Win32Exception)
         {
             return new LazerBeatmapInstallResult(LazerBeatmapInstallStatus.LaunchFailed, "osu!stable");
         }
@@ -247,7 +262,7 @@ public sealed class OsuBeatmapDestinationService : IOsuBeatmapDestinationService
                 ? new LazerBeatmapInstallResult(LazerBeatmapInstallStatus.LazerStarted, "osu!stable")
                 : new LazerBeatmapInstallResult(LazerBeatmapInstallStatus.LaunchFailed, "osu!stable");
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException or NotSupportedException)
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException or NotSupportedException or System.ComponentModel.Win32Exception)
         {
             return new LazerBeatmapInstallResult(LazerBeatmapInstallStatus.LaunchFailed, "osu!stable");
         }
@@ -263,6 +278,8 @@ public sealed class OsuBeatmapDestinationService : IOsuBeatmapDestinationService
             return new DestinationLaunchOutcome(false, false, 0);
         Task exit = process.WaitForExitAsync(CancellationToken.None);
         Task observed = await Task.WhenAny(exit, Task.Delay(observationTime, cancellationToken)).ConfigureAwait(false);
+        if (observed != exit)
+            cancellationToken.ThrowIfCancellationRequested();
         return observed == exit
             ? new DestinationLaunchOutcome(true, true, process.ExitCode)
             : new DestinationLaunchOutcome(true, false, 0);

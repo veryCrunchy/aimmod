@@ -3,8 +3,11 @@ namespace AimMod.Desktop.LocalLibrary;
 public sealed class CompositeLocalLibrarySource : ILocalLibrarySource, ILocalLibraryProgressSource
 {
     private const int source_page_size = 200;
+    private static readonly TimeSpan prefix_lifetime = TimeSpan.FromSeconds(10);
     private readonly IReadOnlyList<ILocalLibrarySource> sources;
     private readonly TimeSpan sourceTimeout;
+    private readonly PrefixCache<LocalBeatmapSet> setPrefixes = new();
+    private readonly PrefixCache<LocalReplay> replayPrefixes = new();
     public LocalLibraryProgress? Progress => sources.OfType<ILocalLibraryProgressSource>()
         .Select(source => source.Progress).FirstOrDefault(progress => progress is not null);
 
@@ -24,8 +27,8 @@ public sealed class CompositeLocalLibrarySource : ILocalLibrarySource, ILocalLib
         CancellationToken cancellationToken = default)
     {
         LocalLibraryQuery normalised = query.Normalised();
-        SourceRows<LocalBeatmapSet>[] rows = await Task.WhenAll(sources.Select(source =>
-            readSafely(source.SearchBeatmapSetsAsync, normalised, cancellationToken))).ConfigureAwait(false);
+        SourceRows<LocalBeatmapSet>[] rows = await readAllAsync(setPrefixes, normalised,
+            source => source.SearchBeatmapSetsAsync, cancellationToken).ConfigureAwait(false);
         ensureAvailable(rows);
         LocalBeatmapSet[] raw = rows.SelectMany(row => row.Items).ToArray();
         LocalBeatmapSet[] merged = raw
@@ -43,8 +46,8 @@ public sealed class CompositeLocalLibrarySource : ILocalLibrarySource, ILocalLib
         CancellationToken cancellationToken = default)
     {
         LocalLibraryQuery normalised = query.Normalised();
-        SourceRows<LocalReplay>[] rows = await Task.WhenAll(sources.Select(source =>
-            readSafely(source.SearchReplaysAsync, normalised, cancellationToken))).ConfigureAwait(false);
+        SourceRows<LocalReplay>[] rows = await readAllAsync(replayPrefixes, normalised,
+            source => source.SearchReplaysAsync, cancellationToken).ConfigureAwait(false);
         ensureAvailable(rows);
         LocalReplay[] raw = rows.SelectMany(row => row.Items).ToArray();
         LocalReplay[] merged = raw
@@ -59,18 +62,38 @@ public sealed class CompositeLocalLibrarySource : ILocalLibrarySource, ILocalLib
 
     public void Invalidate()
     {
+        setPrefixes.Clear();
+        replayPrefixes.Clear();
         foreach (ILocalLibrarySource source in sources)
             source.Invalidate();
     }
 
+    // Later pages of a query reuse the rows already read from each source, so paging
+    // deeper only fetches new rows. A first-page request always starts fresh.
+    private async Task<SourceRows<T>[]> readAllAsync<T>(
+        PrefixCache<T> cache,
+        LocalLibraryQuery query,
+        Func<ILocalLibrarySource, Func<LocalLibraryQuery, CancellationToken, ValueTask<LocalLibraryPage<T>>>> searchOf,
+        CancellationToken cancellationToken)
+    {
+        LocalLibraryQuery key = query with { Offset = 0, Limit = 1 };
+        SourcePrefix<T>[] prefixes = cache.Acquire(key, sources.Count, prefix_lifetime, reuse: query.Offset > 0);
+        SourceRows<T>[] rows = await Task.WhenAll(prefixes.Select((prefix, index) =>
+            readSafely(prefix, searchOf(sources[index]), query, cancellationToken))).ConfigureAwait(false);
+        if (rows.Any(row => row.Error is not null || row.Warning is not null))
+            cache.Remove(key, prefixes);
+        return rows;
+    }
+
     private async Task<SourceRows<T>> readSafely<T>(
+        SourcePrefix<T> prefix,
         Func<LocalLibraryQuery, CancellationToken, ValueTask<LocalLibraryPage<T>>> search,
         LocalLibraryQuery query, CancellationToken cancellationToken)
     {
         using var request = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         try
         {
-            return await readPrefix(search, query, request.Token)
+            return await readPrefix(prefix, search, query, request.Token)
                 .WaitAsync(sourceTimeout, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
@@ -89,27 +112,31 @@ public sealed class CompositeLocalLibrarySource : ILocalLibrarySource, ILocalLib
 
     private static string? warning<T>(SourceRows<T>[] rows) => rows.Any(row => row.Error is not null)
         ? "Partial library: an osu! installation is unavailable. Retry to include it."
-        : null;
+        : rows.Select(row => row.Warning).FirstOrDefault(message => message is not null);
 
     private static async Task<SourceRows<T>> readPrefix<T>(
+        SourcePrefix<T> prefix,
         Func<LocalLibraryQuery, CancellationToken, ValueTask<LocalLibraryPage<T>>> search,
         LocalLibraryQuery query,
         CancellationToken cancellationToken)
     {
         int wanted = query.Offset + query.Limit;
-        var rows = new List<T>(wanted);
-        int total = 0;
-        while (rows.Count < wanted)
+        await prefix.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            LocalLibraryPage<T> page = await search(
-                query with { Offset = rows.Count, Limit = Math.Min(source_page_size, wanted - rows.Count) },
-                cancellationToken).ConfigureAwait(false);
-            rows.AddRange(page.Items);
-            total = page.Total;
-            if (!page.HasMore || page.Items.Count == 0)
-                break;
+            while (prefix.Rows.Count < wanted && !prefix.Exhausted)
+            {
+                LocalLibraryPage<T> page = await search(
+                    query with { Offset = prefix.Rows.Count, Limit = source_page_size },
+                    cancellationToken).ConfigureAwait(false);
+                prefix.Rows.AddRange(page.Items);
+                prefix.Total = page.Total;
+                prefix.Warning ??= page.Warning;
+                prefix.Exhausted = !page.HasMore || page.Items.Count == 0;
+            }
+            return new SourceRows<T>(prefix.Rows.Take(wanted).ToArray(), prefix.Total, Warning: prefix.Warning);
         }
-        return new SourceRows<T>(rows.ToArray(), total);
+        finally { prefix.Gate.Release(); }
     }
 
     private static string mapKey(LocalBeatmapSet set)
@@ -151,5 +178,56 @@ public sealed class CompositeLocalLibrarySource : ILocalLibrarySource, ILocalLib
         + (replay.PerformancePoints is not null ? 2 : 0)
         + (replay.IsLocallyStored ? 1 : 0);
 
-    private sealed record SourceRows<T>(T[] Items, int Total, Exception? Error = null);
+    private sealed record SourceRows<T>(T[] Items, int Total, Exception? Error = null, string? Warning = null);
+
+    private sealed class SourcePrefix<T>
+    {
+        public SemaphoreSlim Gate { get; } = new(1, 1);
+        public List<T> Rows { get; } = [];
+        public int Total { get; set; }
+        public string? Warning { get; set; }
+        public bool Exhausted { get; set; }
+    }
+
+    private sealed class PrefixCache<T>
+    {
+        private const int maximum_entries = 8;
+        private readonly object gate = new();
+        private readonly Dictionary<LocalLibraryQuery, (SourcePrefix<T>[] Prefixes, DateTime ExpiresAt)> entries = new();
+
+        public SourcePrefix<T>[] Acquire(LocalLibraryQuery key, int sourceCount, TimeSpan lifetime, bool reuse)
+        {
+            lock (gate)
+            {
+                DateTime now = DateTime.UtcNow;
+                if (reuse && entries.TryGetValue(key, out var existing) && existing.ExpiresAt > now)
+                {
+                    entries[key] = (existing.Prefixes, now + lifetime);
+                    return existing.Prefixes;
+                }
+                foreach (LocalLibraryQuery expired in entries.Where(entry => entry.Value.ExpiresAt <= now).Select(entry => entry.Key).ToArray())
+                    entries.Remove(expired);
+                if (entries.Count >= maximum_entries)
+                    entries.Remove(entries.MinBy(entry => entry.Value.ExpiresAt).Key);
+                SourcePrefix<T>[] created = Enumerable.Range(0, sourceCount).Select(_ => new SourcePrefix<T>()).ToArray();
+                entries[key] = (created, now + lifetime);
+                return created;
+            }
+        }
+
+        public void Remove(LocalLibraryQuery key, SourcePrefix<T>[] prefixes)
+        {
+            lock (gate)
+            {
+                if (entries.TryGetValue(key, out var existing) && ReferenceEquals(existing.Prefixes, prefixes))
+                    entries.Remove(key);
+            }
+        }
+
+        public void Clear()
+        {
+            lock (gate)
+                entries.Clear();
+        }
+    }
 }

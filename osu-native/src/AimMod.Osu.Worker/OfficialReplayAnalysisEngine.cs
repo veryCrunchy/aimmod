@@ -7,6 +7,7 @@ using osu.Framework.Platform;
 using osu.Framework.Timing;
 using osu.Game;
 using osu.Game.Beatmaps;
+using osu.Game.Database;
 using osu.Game.Online.API;
 using osu.Game.Rulesets;
 using osu.Game.Rulesets.Configuration;
@@ -43,7 +44,15 @@ internal sealed class OfficialReplayAnalysisEngine : IReplayAnalysisEngine
         };
 
         analysisThread.Start();
-        return await completion.Task.ConfigureAwait(false);
+        _ = completion.Task.ContinueWith(
+            static task => _ = task.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+
+        // The analysis thread is a background thread and its host exits when the token fires.
+        // If the host ignores that, the thread is abandoned rather than blocking the worker.
+        return await completion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private static void runAnalysis(
@@ -69,6 +78,7 @@ internal sealed class OfficialReplayAnalysisEngine : IReplayAnalysisEngine
 
         try
         {
+            using var storage = ReplayWorkerStorage.Acquire(cancellationToken);
             // Load the ruleset assembly before constructing LegacyBeatmapDecoder.
             // AssemblyRulesetStore can then resolve Mode:0 without scanning plugins.
             _ = typeof(OsuRuleset).Assembly;
@@ -79,10 +89,12 @@ internal sealed class OfficialReplayAnalysisEngine : IReplayAnalysisEngine
             // The official headless host uses the "No sound" device, a dummy
             // renderer, no window and no input handlers. Its isolated temporary
             // storage never opens the user's live osu! Realm.
-            using (var host = new CleanRunHeadlessGameHost(realtime: false, callingMethodName: "aimmod-replay-analysis"))
+            using (var host = new ReplayAnalysisHost(storage))
             using (cancellationToken.Register(host.Exit))
+            using (storage.Watch(host.Exit))
                 host.Run(game);
 
+            storage.ThrowIfLimitExceeded();
             cancellationToken.ThrowIfCancellationRequested();
 
             if (game.Failure is not null)
@@ -106,12 +118,14 @@ internal sealed class OfficialReplayAnalysisEngine : IReplayAnalysisEngine
         }
     }
 
-    private static string boundedError(Exception exception, ValidatedReplayInput input)
+    internal static string boundedError(Exception exception, ValidatedReplayInput input)
     {
+        // The staged files live inside the staging directory, so they are replaced first.
         string message = exception.Message
-                                  .Replace(input.StagingDirectory, "<staging>", StringComparison.Ordinal)
                                   .Replace(input.BeatmapPath, "<beatmap>", StringComparison.Ordinal)
                                   .Replace(input.ReplayPath, "<replay>", StringComparison.Ordinal)
+                                  .Replace(input.StagingDirectory, "<staging>", StringComparison.Ordinal);
+        message = ReplayWorkerStorage.RedactLocalPaths(message)
                                   .Replace('\r', ' ')
                                   .Replace('\n', ' ')
                                   .Trim();
@@ -173,6 +187,11 @@ internal sealed partial class ReplayAnalysisGame : OsuGameBase
         dependencies.CacheAs(backgroundStack);
         return dependencies;
     }
+
+    // A replay supplies its decoded beatmap directly. The default updater starts
+    // an online.db download for every isolated host, and that download can outlive
+    // host disposal. Never initialise online metadata maintenance in this worker.
+    protected override IBeatmapUpdater CreateBeatmapUpdater() => new ReplayOnlyBeatmapUpdater();
 
     protected override void LoadComplete()
     {
@@ -412,6 +431,7 @@ internal sealed partial class AnalysisReplayPlayer : ReplayPlayer
     private readonly List<ReplayObjectJudgement> judgements = new();
     private Dictionary<HitObject, ObjectAddress> addresses = new(ReferenceEqualityComparer.Instance);
     private ReplayAnalysisCompletionWatchdog? completionWatchdog;
+    private double missHitWindow;
     private bool finished;
     protected override bool PauseOnFocusLost => false;
 
@@ -450,6 +470,9 @@ internal sealed partial class AnalysisReplayPlayer : ReplayPlayer
         }
 
         addresses = indexObjects(GameplayState.Beatmap);
+        var hitWindows = new OsuHitWindows();
+        hitWindows.SetDifficulty(GameplayState.Beatmap.Difficulty.OverallDifficulty);
+        missHitWindow = hitWindows.WindowFor(HitResult.Meh);
         completionWatchdog = new ReplayAnalysisCompletionWatchdog(
             GameplayState.Beatmap.GetLastObjectTime(),
             judgement_settling_time,
@@ -512,15 +535,13 @@ internal sealed partial class AnalysisReplayPlayer : ReplayPlayer
         ReplayMissAnalysis? missAnalysis = null;
         if (result.Type == HitResult.Miss && objectPosition is { } missTarget)
         {
-            var hitWindows = new OsuHitWindows();
-            hitWindows.SetDifficulty(GameplayState.Beatmap.Difficulty.OverallDifficulty);
             double hitRadius = result.HitObject is OsuHitObject hitObject ? hitObject.Radius : OsuHitObject.OBJECT_RADIUS;
             missAnalysis = ReplayMissAnalyzer.Analyse(
                 replayFrames,
                 missTarget,
                 result.HitObject.StartTime,
                 hitRadius,
-                hitWindows.WindowFor(HitResult.Meh));
+                missHitWindow);
         }
 
         judgements.Add(new ReplayObjectJudgement(

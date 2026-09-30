@@ -133,7 +133,13 @@ public sealed class OnlineSkinPreviewService
                     if (!string.IsNullOrWhiteSpace(resolved.FileName))
                         skin = skin with { Name = Path.GetFileNameWithoutExtension(resolved.FileName) };
                 }
-                else await cache.PutFileAsync(cacheKey, previewPath, "osk", cancellationToken).ConfigureAwait(false);
+                else
+                {
+                    try { await cache.PutFileAsync(cacheKey, previewPath, "osk", cancellationToken).ConfigureAwait(false); }
+                    catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or System.Text.Json.JsonException)
+                    {
+                    }
+                }
             }
 
             OnlineSkinArchiveValidation validation = await validator.ValidateAsync(previewPath, cancellationToken).ConfigureAwait(false);

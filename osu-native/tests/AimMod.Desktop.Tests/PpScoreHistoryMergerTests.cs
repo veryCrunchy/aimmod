@@ -9,6 +9,31 @@ namespace AimMod.Desktop.Tests;
 public sealed class PpScoreHistoryMergerTests
 {
     [Test]
+    public void StableModdedStarsUseTheCatalogScaleForTargetComparisons()
+    {
+        var run = localRun() with { StarRating = 9, Mods = ["DT"], Origin = LocalLibraryOrigin.Stable };
+        var set = new LocalBeatmapSet(run.SetId, 1, "Synthetic", "Synthetic", "Synthetic", "", DateTimeOffset.UtcNow, null,
+            [new LocalBeatmapDifficulty(run.BeatmapId, 1234, "Test", "osu", 6, 180, 120000, 4, 9, 8, 6, 0)], 0);
+        Assert.That(PpTargetSkillHistory.Merge([run], [], [set]).Single().StarRating, Is.EqualTo(6));
+        Assert.That(PpTargetSkillHistory.PassHistory([run], [], [set]).Single().StarRating, Is.EqualTo(6));
+    }
+
+    [Test]
+    public void ImportedOtherPlayersAndAnonymousScoresDoNotTrainTheAccount()
+    {
+        var own = localRun() with { Player = "TestPlayer" };
+        var other = own with { ScoreId = Guid.NewGuid(), Player = "GuestPlayer" };
+        var anonymous = own with { ScoreId = Guid.NewGuid(), Player = "" };
+        Assert.That(PpTargetSkillHistory.ForPlayer([own, other, anonymous], "testplayer"), Is.EqualTo(new[] { own }));
+        Assert.That(PpTargetSkillHistory.ForPlayer([own, other], null), Is.Empty);
+        Assert.That(PpTargetSkillHistory.ForPlayer([own, anonymous], null), Is.EqualTo(new[] { own }));
+        var cache = PpTargetPreferenceProfile.Empty with { PlayerName = "TestPlayer" };
+        Assert.That(NativePpTargetsWorkspace.CacheMatchesPlayer(cache, "TestPlayer"), Is.True);
+        Assert.That(NativePpTargetsWorkspace.CacheMatchesPlayer(cache, "GuestPlayer"), Is.False);
+        Assert.That(NativePpTargetsWorkspace.CacheMatchesPlayer(cache, null), Is.False);
+    }
+
+    [Test]
     public void SubmittedScoreReplacesCalculatedPpWithoutBeingDuplicated()
     {
         LocalReplay local = localRun() with { PerformancePoints = 200, OnlineScoreId = 99 };
@@ -54,6 +79,23 @@ public sealed class PpScoreHistoryMergerTests
             Assert.That(merged.IsLocallyStored, Is.False);
             Assert.That(merged.HitStatistics?.Great, Is.EqualTo(600));
             Assert.That(merged.ModsJson, Does.Contain("HD"));
+        });
+    }
+
+    [Test]
+    public void IncompleteOnlineSummaryDoesNotEraseRecordedMissesComboOrScore()
+    {
+        LocalReplay local = localRun() with { OnlineScoreId = 99, MissCount = 9 };
+        OsuBestScore online = onlineScore(99, 321) with {
+            TotalScore = 0, MaximumCombo = 0, Statistics = new OsuScoreStatistics(0, 0, 0, 0),
+        };
+        var submitted = AimMod.Desktop.ScoreHistory.ScoreHistoryMerger.MergeOnline([online], []);
+        var merged = AimMod.Desktop.ScoreHistory.ScoreHistoryMerger.MergeAsLocalReplays([local], submitted).Single();
+        Assert.Multiple(() => {
+            Assert.That(merged.MissCount, Is.EqualTo(9));
+            Assert.That(merged.MaxCombo, Is.EqualTo(local.MaxCombo));
+            Assert.That(merged.TotalScore, Is.EqualTo(local.TotalScore));
+            Assert.That(merged.PerformancePoints, Is.EqualTo(321));
         });
     }
 

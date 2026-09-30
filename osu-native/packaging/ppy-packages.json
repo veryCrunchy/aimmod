@@ -18,6 +18,30 @@
         "src/AimMod.Desktop/AimMod.Desktop.csproj",
         "src/AimMod.Osu.Worker/AimMod.Osu.Worker.csproj"
       ]
+    },
+    {
+      "id": "ppy.osu.Game.Rulesets.Taiko",
+      "version": "2026.730.0",
+      "usedBy": [
+        "src/AimMod.Desktop/AimMod.Desktop.csproj",
+        "src/AimMod.Osu.Worker/AimMod.Osu.Worker.csproj"
+      ]
+    },
+    {
+      "id": "ppy.osu.Game.Rulesets.Catch",
+      "version": "2026.730.0",
+      "usedBy": [
+        "src/AimMod.Desktop/AimMod.Desktop.csproj",
+        "src/AimMod.Osu.Worker/AimMod.Osu.Worker.csproj"
+      ]
+    },
+    {
+      "id": "ppy.osu.Game.Rulesets.Mania",
+      "version": "2026.730.0",
+      "usedBy": [
+        "src/AimMod.Desktop/AimMod.Desktop.csproj",
+        "src/AimMod.Osu.Worker/AimMod.Osu.Worker.csproj"
+      ]
     }
   ],
   "containerFallback": {

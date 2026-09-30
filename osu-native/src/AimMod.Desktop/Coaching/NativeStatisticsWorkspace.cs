@@ -8,51 +8,90 @@ using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
 using osu.Framework.Input.Events;
 using osu.Framework.Threading;
-using osu.Game.Graphics.Containers;
 using osu.Game.Graphics.Sprites;
-using osu.Game.Graphics.UserInterface;
+using osuTK.Input;
 
 namespace AimMod.Desktop.Coaching;
 
 public partial class NativeStatisticsWorkspace : CompositeDrawable
 {
+    private const float header_height = 156;
+    private const float toolbar_y = 72;
+    private const float chip_row_y = 118;
+    private const float wide_chart_width = 900;
+    private const float inspector_overlay_width = 860;
+    private const int visible_row_limit = 100;
+    private const double filter_debounce = 60;
+
     private readonly ILocalLibrarySource source;
     private readonly ILocalLibrarySourceChanged? sourceChanges;
     private readonly Action<LocalReplay> openReplay;
     private readonly Func<LocalReplay, CancellationToken, Task>? openBeatmap;
     private readonly Func<IAccountScoreHistoryService?> accountHistory;
-    private readonly ShearedFilterTextBox search;
-    private ScheduledDelegate? searchRefresh;
+    private readonly ScoreHistorySession history;
+    private readonly LatestBackgroundQuery<StatisticsWorkspaceModel> statisticsQuery = new();
+
     private readonly Bindable<StatisticsTimeRange> timeRange = new(StatisticsTimeRange.All);
-    private readonly Bindable<StatisticsModFilter> modFilter = new(StatisticsModFilter.Any);
+    private readonly Bindable<string> modFilter = new(ScoreMods.Any);
     private readonly Bindable<StatisticsRunSort> sort = new(StatisticsRunSort.Recent);
     private readonly Bindable<StatisticsScoreSource> scoreSource = new(StatisticsScoreSource.All);
-    private readonly Bindable<StatisticsStarBand> starBand = new(StatisticsStarBand.Any);
+    private readonly BindableDouble minimumStars = new(0) { MinValue = 0, MaxValue = 10, Default = 0 };
+    private readonly BindableDouble maximumStars = new(10) { MinValue = 0, MaxValue = 10, Default = 10 };
     private readonly Bindable<StatisticsResultFilter> resultFilter = new(StatisticsResultFilter.All);
-    private readonly SpriteText scopeText;
-    private readonly SpriteText resultText;
-    private readonly Container filterBar;
-    private readonly GridContainer metricGrid;
-    private readonly MetricCard averageAccuracy;
-    private readonly MetricCard medianPp;
-    private readonly MetricCard missFree;
-    private readonly MetricCard averageStars;
-    private readonly StatisticsGraphCard accuracyGraph;
-    private readonly StatisticsGraphCard ppGraph;
-    private readonly StatisticsGraphCard starsGraph;
-    private readonly StatisticsGraphCard missesGraph;
-    private readonly FillFlowContainer<Drawable> runList;
+    private readonly Bindable<StatisticsMetric> chartMetric = new(StatisticsMetric.Accuracy);
+
+    private readonly AimModSearchBox search;
+    private readonly StatisticsSegmentedControl<StatisticsTimeRange> periodControl;
+    private readonly AimModButton filtersButton;
+    private readonly FillFlowContainer<Drawable> chipRow;
+    private readonly OsuSpriteText countText;
+    private readonly StatisticsInfoIcon sourceInfo;
+    private readonly FillFlowContainer<Drawable> chips;
+    private readonly AimModResetButton clearButton;
+    private readonly Container filterLayer;
+    private readonly Container filterPopover;
+    private readonly ScoreModFilterDropdown modDropdown;
+
     private readonly Container contentViewport;
     private readonly Container mainColumn;
+    private readonly AimModScrollContainer runScroll;
+    private readonly WorkspaceStateCard stateCard;
+    private readonly FillFlowContainer<Drawable> kpiFlow;
+    private readonly Dictionary<StatisticsMetric, StatisticsKpiCard> kpiCards = [];
+    private readonly Container chartSection;
+    private readonly Container trendCard;
+    private readonly OsuSpriteText trendTitle;
+    private readonly FillFlowContainer trendLegend;
+    private readonly StatisticsSegmentedControl<StatisticsMetric> metricControl;
+    private readonly StatisticsTrendChart trendChart;
+    private readonly AimModSubsectionHeader playsHeader;
+    private readonly StatisticsPlaysHeader tableHeader;
+    private readonly FillFlowContainer<Drawable> runList;
+    private readonly OsuSpriteText listFooter;
+
     private readonly Container inspectorColumn;
     private readonly FillFlowContainer<Drawable> inspectorContent;
     private readonly AimModLoadingOverlay loadingOverlay;
 
+    private readonly Dictionary<Guid, StatisticsPlayRow> runRows = new();
+    private readonly List<StatisticsPlayRow> visibleRows = new();
+    private readonly Dictionary<Guid, LocalReplay> runsById = new();
+    private StatisticsEmptyState? emptyState;
+    private StatisticsMapIndex mapIndex = StatisticsMapIndex.Empty;
+    private StatisticsWorkspaceModel? lastModel;
+    private ScheduledDelegate? searchRefresh;
     private CancellationTokenSource? loading;
     private IReadOnlyList<LocalReplay> allRuns = Array.Empty<LocalReplay>();
-    private IReadOnlyList<LocalReplay> visibleRuns = Array.Empty<LocalReplay>();
     private LocalReplay? selected;
     private OnlineAccountScoreHistoryResult? onlineHistory;
+    private bool loadedOnce;
+    private int renderRevision;
+    private bool filtersOpen;
+    private bool inspectorOverlay;
+    private bool inspectorOverlayOpen;
+    private float layoutWidth = -1;
+    private float mainLayoutWidth = -1;
+    private bool hasHistory = true;
 
     public NativeStatisticsWorkspace(
         ILocalLibrarySource source,
@@ -61,6 +100,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
         Func<LocalReplay, CancellationToken, Task>? openBeatmap = null)
     {
         this.source = source ?? throw new ArgumentNullException(nameof(source));
+        history = ScoreHistorySession.For(source);
         this.openReplay = openReplay ?? throw new ArgumentNullException(nameof(openReplay));
         this.openBeatmap = openBeatmap;
         this.accountHistory = accountHistory ?? (() => null);
@@ -70,70 +110,21 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
 
         RelativeSizeAxes = Axes.Both;
 
+        modDropdown = new ScoreModFilterDropdown(modFilter);
+        filterPopover = createFilterPopover();
+
         InternalChildren = new Drawable[]
         {
-            new Container
-            {
-                RelativeSizeAxes = Axes.X,
-                Height = 242,
-                Depth = -10,
-                Children = new Drawable[]
-                {
-                    new AimModSectionHeader(
-                        "Statistics",
-                        "Explore the unified osu!standard score dataset, combining online best/recent records with replay-rich local attempts.",
-                        "performance history"),
-                    scopeText = text("Loading score scope...", 10, AimModPalette.Muted).With(drawable => drawable.Y = 62),
-                    filterBar = new StatisticsFilterBar
-                    {
-                        RelativeSizeAxes = Axes.X,
-                        Position = new(0, 82),
-                        Height = 144,
-                        Padding = new MarginPadding { Horizontal = 10 },
-                        Children = new Drawable[]
-                        {
-                            search = new ShearedFilterTextBox
-                            {
-                                RelativeSizeAxes = Axes.X,
-                                PlaceholderText = "Title, artist, difficulty",
-                            },
-                            new GridContainer
-                            {
-                                RelativeSizeAxes = Axes.X,
-                                Y = 66,
-                                Height = 78,
-                                ColumnDimensions = Enumerable.Repeat(new Dimension(GridSizeMode.Relative, 1f / 3), 3).ToArray(),
-                                RowDimensions = twoEqualRows(),
-                                Content = new[]
-                                {
-                                    new Drawable[]
-                                    {
-                                        filterField("Period", timeRange, -3),
-                                        filterField("Source", scoreSource, -3),
-                                        filterField("Sort", sort, -3),
-                                    },
-                                    new Drawable[]
-                                    {
-                                        filterField("Mods", modFilter, -2),
-                                        filterField("Stars", starBand, -2),
-                                        filterField("Result", resultFilter, -2),
-                                    },
-                                },
-                            },
-                        },
-                    },
-                },
-            },
             contentViewport = new Container
             {
                 RelativeSizeAxes = Axes.Both,
-                Padding = new MarginPadding { Top = 242 },
+                Padding = new MarginPadding { Top = header_height },
                 Children = new Drawable[]
                 {
                     mainColumn = new Container
                     {
                         RelativeSizeAxes = Axes.Y,
-                        Child = new AimModScrollContainer
+                        Child = runScroll = new AimModScrollContainer
                         {
                             RelativeSizeAxes = Axes.Both,
                             Padding = new MarginPadding { Right = 4 },
@@ -142,70 +133,42 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
                                 RelativeSizeAxes = Axes.X,
                                 AutoSizeAxes = Axes.Y,
                                 Direction = FillDirection.Vertical,
-                                Spacing = new(AimModVisualStyle.RowSpacing),
+                                Spacing = new(AimModVisualStyle.SectionSpacing),
                                 Padding = new MarginPadding { Bottom = 28, Right = 12 },
                                 Children = new Drawable[]
                                 {
-                                    new AimModSubsectionHeader("Overview", "Filtered performance at a glance"),
-                                    metricGrid = new GridContainer
+                                    stateCard = new WorkspaceStateCard(),
+                                    kpiFlow = new FillFlowContainer<Drawable>
                                     {
                                         RelativeSizeAxes = Axes.X,
-                                        Height = 96,
-                                        ColumnDimensions = fourEqualColumns(),
-                                        Content = new[]
-                                        {
-                                            new Drawable[]
-                                            {
-                                                (averageAccuracy = new MetricCard("Average accuracy", AimModPalette.Cyan, FontAwesome.Solid.Crosshairs)).WithPadding(),
-                                                (medianPp = new MetricCard("Median PP", AimModPalette.Pink, FontAwesome.Solid.ChartLine)).WithPadding(),
-                                                (missFree = new MetricCard("Miss-free rate", AimModPalette.Success, FontAwesome.Solid.CheckCircle)).WithPadding(),
-                                                (averageStars = new MetricCard("Average difficulty", AimModPalette.Yellow, FontAwesome.Solid.Star)).WithPadding(),
-                                            },
-                                        },
+                                        AutoSizeAxes = Axes.Y,
+                                        Direction = FillDirection.Full,
+                                        Margin = new MarginPadding { Bottom = -AimModVisualStyle.RelatedSpacing },
                                     },
-                                    new AimModSubsectionHeader("Performance trends", "Hover to inspect an exact play"),
-                                    new GridContainer
+                                    chartSection = new Container
                                     {
                                         RelativeSizeAxes = Axes.X,
-                                        Height = 210,
-                                        ColumnDimensions = twoEqualColumns(),
-                                        Content = new[] { new Drawable[]
-                                        {
-                                            (accuracyGraph = new StatisticsGraphCard("Accuracy", AimModPalette.Cyan, value => $"{value:0.00}%")).WithPadding(),
-                                            (ppGraph = new StatisticsGraphCard("Performance points", AimModPalette.Pink, value => $"{value:0.#}pp")).WithPadding(),
-                                        } },
+                                        Child = trendCard = chartCard(),
                                     },
-                                    new GridContainer
-                                    {
-                                        RelativeSizeAxes = Axes.X,
-                                        Height = 210,
-                                        ColumnDimensions = twoEqualColumns(),
-                                        Content = new[] { new Drawable[]
-                                        {
-                                            (starsGraph = new StatisticsGraphCard("Difficulty played", AimModPalette.Yellow, value => $"{value:0.00} stars")).WithPadding(),
-                                            (missesGraph = new StatisticsGraphCard("Misses per play", AimModPalette.Success, value => $"{value:0} misses")).WithPadding(),
-                                        } },
-                                    },
-                                    new Container
-                                    {
-                                        RelativeSizeAxes = Axes.X,
-                                        Height = 40,
-                                        Children = new Drawable[]
-                                        {
-                                            new AimModSubsectionHeader("Plays in view"),
-                                            resultText = text(string.Empty, 11, AimModPalette.Muted, "SemiBold").With(label =>
-                                            {
-                                                label.Anchor = Anchor.CentreRight;
-                                                label.Origin = Anchor.CentreRight;
-                                            }),
-                                        },
-                                    },
-                                    runList = new FillFlowContainer<Drawable>
+                                    new FillFlowContainer
                                     {
                                         RelativeSizeAxes = Axes.X,
                                         AutoSizeAxes = Axes.Y,
                                         Direction = FillDirection.Vertical,
                                         Spacing = new(AimModVisualStyle.RelatedSpacing),
+                                        Children = new Drawable[]
+                                        {
+                                            playsHeader = new AimModSubsectionHeader("Plays"),
+                                            tableHeader = new StatisticsPlaysHeader(sort),
+                                            runList = new FillFlowContainer<Drawable>
+                                            {
+                                                RelativeSizeAxes = Axes.X,
+                                                AutoSizeAxes = Axes.Y,
+                                                Direction = FillDirection.Vertical,
+                                                Spacing = new(4),
+                                            },
+                                            listFooter = StatisticsChartFormat.Text(string.Empty, 12, AimModPalette.Muted),
+                                        },
                                     },
                                 },
                             },
@@ -220,7 +183,7 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
                         CornerRadius = AimModVisualStyle.CardRadius,
                         Children = new Drawable[]
                         {
-                            new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
+                            new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
                             new AimModScrollContainer
                             {
                                 RelativeSizeAxes = Axes.Both,
@@ -230,93 +193,294 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
                                     RelativeSizeAxes = Axes.X,
                                     AutoSizeAxes = Axes.Y,
                                     Direction = FillDirection.Vertical,
-                                    Spacing = new(AimModVisualStyle.RowSpacing),
-                                    Padding = new MarginPadding { Left = 16, Top = 12, Bottom = 16, Right = 16 },
+                                    Spacing = new(AimModVisualStyle.RelatedSpacing),
+                                    Padding = new MarginPadding { Left = 16, Top = 12, Bottom = 16, Right = 12 },
                                 },
                             },
                         },
                     },
                 },
             },
+            // The toolbar and its popover are drawn above the scrolling content.
+            new Container
+            {
+                RelativeSizeAxes = Axes.X,
+                Height = header_height,
+                Depth = -10,
+                Children = new Drawable[]
+                {
+                    new AimModSectionHeader("Statistics", "Your accuracy, PP and misses over time."),
+                    new Container
+                    {
+                        RelativeSizeAxes = Axes.X,
+                        Y = toolbar_y,
+                        Height = AimModVisualStyle.ControlHeight,
+                        Children = new Drawable[]
+                        {
+                            search = new AimModSearchBox { PlaceholderText = "Search title, artist, difficulty or mod" },
+                            periodControl = new StatisticsSegmentedControl<StatisticsTimeRange>(timeRange,
+                            [
+                                (StatisticsTimeRange.Days30, "30 days"), (StatisticsTimeRange.Days90, "90 days"),
+                                (StatisticsTimeRange.Year, "Year"), (StatisticsTimeRange.All, "All time"),
+                            ]),
+                            filtersButton = new AimModButton("Filters", toggleFilters) { Anchor = Anchor.TopRight, Origin = Anchor.TopRight },
+                        },
+                    },
+                    chipRow = new FillFlowContainer<Drawable>
+                    {
+                        RelativeSizeAxes = Axes.X,
+                        Y = chip_row_y,
+                        Height = 28,
+                        Direction = FillDirection.Horizontal,
+                        Spacing = new(AimModVisualStyle.RelatedSpacing),
+                        Children = new Drawable[]
+                        {
+                            countText = StatisticsChartFormat.Text("Loading plays...", 13, AimModPalette.Text, "SemiBold").With(t => { t.Anchor = Anchor.CentreLeft; t.Origin = Anchor.CentreLeft; }),
+                            sourceInfo = new StatisticsInfoIcon { Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft, Margin = new MarginPadding { Right = 8 } },
+                            chips = new FillFlowContainer<Drawable>
+                            {
+                                AutoSizeAxes = Axes.Both,
+                                Anchor = Anchor.CentreLeft,
+                                Origin = Anchor.CentreLeft,
+                                Direction = FillDirection.Horizontal,
+                                Spacing = new(6),
+                            },
+                            clearButton = new AimModResetButton(resetFilters, "Clear all") { Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft, Height = 28, Width = 84, Alpha = 0 },
+                        },
+                    },
+                },
+            },
+            filterLayer = new Container
+            {
+                RelativeSizeAxes = Axes.Both,
+                Depth = -20,
+                Alpha = 0,
+                Children = new Drawable[]
+                {
+                    new ClickableContainer { RelativeSizeAxes = Axes.Both, Action = closeFilters },
+                    filterPopover,
+                },
+            },
             loadingOverlay = new AimModLoadingOverlay(),
         };
 
-        search.Current.BindValueChanged(_ =>
+        trendCard.AddRange(new Drawable[]
         {
-            searchRefresh?.Cancel();
-            searchRefresh = Scheduler.AddDelayed(render, 150);
+            trendTitle = StatisticsChartFormat.Text("Accuracy over time", 16, AimModPalette.Text, "SemiBold").With(t => t.Position = new(16, 14)),
+            trendLegend = new FillFlowContainer
+            {
+                Position = new(16, 38),
+                AutoSizeAxes = Axes.Both,
+                Direction = FillDirection.Horizontal,
+                Spacing = new(14),
+            },
+            metricControl = new StatisticsSegmentedControl<StatisticsMetric>(chartMetric,
+            [
+                (StatisticsMetric.Accuracy, "Accuracy"), (StatisticsMetric.Performance, "PP"),
+                (StatisticsMetric.Misses, "Misses"), (StatisticsMetric.Stars, "Stars"),
+            ], AimModVisualStyle.CompactControlHeight)
+            {
+                Anchor = Anchor.TopRight,
+                Origin = Anchor.TopRight,
+                Position = new(-12, 12),
+            },
+            new Container
+            {
+                RelativeSizeAxes = Axes.Both,
+                Padding = new MarginPadding { Top = 64, Left = 8, Right = 12, Bottom = 10 },
+                Child = trendChart = new StatisticsTrendChart(),
+            },
         });
-        timeRange.BindValueChanged(_ => render());
-        modFilter.BindValueChanged(_ => render());
-        sort.BindValueChanged(_ => render());
-        scoreSource.BindValueChanged(_ => render());
-        starBand.BindValueChanged(_ => render());
-        resultFilter.BindValueChanged(_ => render());
+
+        foreach (StatisticsMetric metric in Enum.GetValues<StatisticsMetric>())
+        {
+            StatisticsMetric value = metric;
+            var card = new StatisticsKpiCard(metric, () => chartMetric.Value = value);
+            kpiCards[metric] = card;
+            kpiFlow.Add(new Container
+            {
+                RelativeSizeAxes = Axes.X,
+                Height = 104,
+                Padding = new MarginPadding { Right = AimModVisualStyle.RelatedSpacing, Bottom = AimModVisualStyle.RelatedSpacing },
+                Child = card,
+            });
+        }
+
+        trendChart.ResolvePlay = id => runsById.GetValueOrDefault(id);
+        trendChart.PlaySelected += id =>
+        {
+            if (runsById.TryGetValue(id, out LocalReplay? replay))
+                select(replay, openDetails: true);
+        };
+
+        search.Current.BindValueChanged(_ => scheduleRender(150));
+        timeRange.BindValueChanged(_ => scheduleRender(filter_debounce));
+        modFilter.BindValueChanged(_ => scheduleRender(filter_debounce));
+        sort.BindValueChanged(_ => scheduleRender(filter_debounce));
+        scoreSource.BindValueChanged(_ => scheduleRender(filter_debounce));
+        minimumStars.BindValueChanged(_ => scheduleRender(150));
+        maximumStars.BindValueChanged(_ => scheduleRender(150));
+        resultFilter.BindValueChanged(_ => scheduleRender(filter_debounce));
+        chartMetric.BindValueChanged(_ => applyChartMetric());
         showEmptyInspector();
+        updateChips();
     }
 
     protected override void LoadComplete()
     {
         base.LoadComplete();
-        search.PlaceholderText = "Title, artist, difficulty";
+        search.PlaceholderText = "Search title, artist, difficulty or mod";
         load();
     }
 
     protected override void Update()
     {
         base.Update();
-        float available = Math.Max(720, contentViewport.DrawWidth);
-        float inspectorWidth = Math.Clamp(available * 0.285f, 306, 400);
-        inspectorColumn.Width = inspectorWidth;
-        mainColumn.Width = Math.Max(420, available - inspectorWidth - AimModVisualStyle.SectionSpacing);
+        layoutToolbar(DrawWidth);
+        if (contentViewport.DrawWidth != layoutWidth)
+        {
+            layoutWidth = contentViewport.DrawWidth;
+            layoutColumns(Math.Max(1, layoutWidth));
+        }
+
+        float mainWidth = runScroll.ChildSize.X;
+        if (mainWidth != mainLayoutWidth && mainWidth > 1)
+        {
+            mainLayoutWidth = mainWidth;
+            layoutMain(mainWidth);
+        }
     }
 
-    private void load()
+    private void layoutColumns(float available)
+    {
+        bool overlay = available < inspector_overlay_width;
+        inspectorOverlay = overlay;
+        if (!hasHistory)
+        {
+            // Nothing to inspect yet: give the empty state the whole width.
+            inspectorColumn.Alpha = 0;
+            mainColumn.Alpha = 1;
+            mainColumn.Width = available;
+            return;
+        }
+
+        if (overlay)
+        {
+            inspectorColumn.Width = available;
+            mainColumn.Width = available;
+            inspectorColumn.Alpha = inspectorOverlayOpen ? 1 : 0;
+            mainColumn.Alpha = inspectorOverlayOpen ? 0 : 1;
+        }
+        else
+        {
+            inspectorOverlayOpen = false;
+            float inspectorWidth = Math.Clamp(available * 0.27f, 280, 380);
+            inspectorColumn.Width = inspectorWidth;
+            inspectorColumn.Alpha = 1;
+            mainColumn.Alpha = 1;
+            mainColumn.Width = Math.Max(0, available - inspectorWidth - AimModVisualStyle.SectionSpacing);
+        }
+
+        if (selected is not null)
+            showInspector(selected);
+    }
+
+    private void layoutToolbar(float width)
+    {
+        float buttons = filtersButton.DrawWidth + AimModVisualStyle.RelatedSpacing;
+        float period = periodControl.DrawWidth + AimModVisualStyle.RelatedSpacing;
+        float searchWidth = Math.Max(160, width - buttons - period);
+        if (search.Width != searchWidth)
+            search.Width = searchWidth;
+        periodControl.X = searchWidth + AimModVisualStyle.RelatedSpacing;
+    }
+
+    private void layoutMain(float width)
+    {
+        bool twoByTwo = width < 760;
+        foreach (Drawable cell in kpiFlow)
+            cell.Width = twoByTwo ? 0.5f : 0.25f;
+
+        float trendHeight = width >= wide_chart_width ? 380 : 340;
+        trendCard.Width = width - AimModVisualStyle.RelatedSpacing;
+        trendCard.Height = trendHeight;
+        chartSection.Height = trendHeight;
+
+        // Hide the chart legend before it collides with the metric selector.
+        trendLegend.Alpha = trendCard.Width - metricControl.DrawWidth - 40 > trendLegend.DrawWidth ? 1 : 0;
+        trendTitle.Y = trendLegend.Alpha > 0 ? 14 : 20;
+    }
+
+    /// <summary>Re-reads the local history, reusing cached results when nothing changed.</summary>
+    public void RefreshHistory()
+    {
+        if (IsLoaded && !IsDisposed)
+            load(refresh: true);
+    }
+
+    private void reload()
+    {
+        source.Invalidate();
+        history.Invalidate();
+        load();
+    }
+
+    private void load(bool refresh = false)
     {
         loading?.Cancel();
         loading?.Dispose();
         loading = new CancellationTokenSource();
         CancellationToken token = loading.Token;
-        loadingOverlay.ShowLoading("Loading statistics", "Reading local history and cached online score records");
-        _ = loadAsync(token);
+        stateCard.Dismiss();
+        if (!loadedOnce)
+            loadingOverlay.ShowLoading("Loading statistics", "Reading your plays");
+        else
+            countText.Text = "Refreshing plays...";
+        var service = accountHistory();
+        _ = Task.Run(() => loadAsync(service, refresh, token));
     }
 
-    private async Task loadAsync(CancellationToken token)
+    private async Task loadAsync(IAccountScoreHistoryService? service, bool refresh, CancellationToken token)
     {
         try
         {
-            Task<StatisticsHistoryLoadResult> localTask = StatisticsHistoryLoader.LoadAsync(source, token).AsTask();
-            IAccountScoreHistoryService? service = accountHistory();
-            Task<OnlineAccountScoreHistoryResult?> onlineTask = service is null
-                ? Task.FromResult<OnlineAccountScoreHistoryResult?>(null)
-                : loadOnlineAsync(service, token);
+            Task<StatisticsHistoryLoadResult> localTask = history.GetLocalAsync(refresh, token);
+            Task<OnlineAccountScoreHistoryResult?> onlineTask = loadOnlineAsync(service, token);
             await Task.WhenAll(localTask, onlineTask).ConfigureAwait(false);
             StatisticsHistoryLoadResult result = await localTask.ConfigureAwait(false);
             OnlineAccountScoreHistoryResult? online = await onlineTask.ConfigureAwait(false);
+            IReadOnlyList<LocalReplay> merged = history.Merge(result.Runs, online?.Scores ?? []);
+            IReadOnlyList<ScoreModChoice> choices = ReferenceEquals(merged, allRuns) ? [] : ScoreMods.Choices(merged);
+            StatisticsMapIndex index = ReferenceEquals(merged, allRuns) ? mapIndex : new StatisticsMapIndex(merged);
             if (!IsDisposed)
-                Schedule(() => applyLoaded(result, online));
+                Schedule(() => { if (!IsDisposed && !token.IsCancellationRequested) applyLoaded(merged, online, choices, index); });
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
         }
-        catch (Exception)
+        catch (Exception error)
         {
+            Console.Error.WriteLine($"Statistics could not be loaded: {error}");
             if (!IsDisposed)
                 Schedule(() =>
                 {
+                    if (IsDisposed || token.IsCancellationRequested) return;
                     loadingOverlay.HideLoading();
-                    scopeText.Text = "Statistics could not be loaded. Reopen this workspace to try again.";
+                    countText.Text = "Plays could not be loaded";
+                    stateCard.Show(FontAwesome.Solid.ExclamationTriangle, "Statistics could not be loaded",
+                        "AimMod could not read your osu! plays. Check the osu! installation in Settings, then retry.",
+                        AimModPalette.Danger, "Retry", reload);
                 });
         }
     }
 
-    private static async Task<OnlineAccountScoreHistoryResult?> loadOnlineAsync(
-        IAccountScoreHistoryService service,
+    private async Task<OnlineAccountScoreHistoryResult?> loadOnlineAsync(
+        IAccountScoreHistoryService? service,
         CancellationToken cancellationToken)
     {
         try
         {
-            return await service.FetchAccountAsync(cancellationToken).ConfigureAwait(false);
+            return await history.GetOnlineAsync(service, cancellationToken: cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -328,258 +492,342 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
         }
     }
 
-    private void applyLoaded(StatisticsHistoryLoadResult result, OnlineAccountScoreHistoryResult? online)
+    private void applyLoaded(IReadOnlyList<LocalReplay> runs, OnlineAccountScoreHistoryResult? online, IReadOnlyList<ScoreModChoice> choices, StatisticsMapIndex index)
     {
+        loadedOnce = true;
         onlineHistory = online;
-        allRuns = StatisticsUnifiedScoreAdapter.Merge(result.Runs, online?.Scores ?? []);
         loadingOverlay.HideLoading();
+        if (ReferenceEquals(allRuns, runs))
+        {
+            if (lastModel is not null)
+                applyModel(lastModel);
+            else
+                render();
+            return;
+        }
+
+        allRuns = runs;
+        mapIndex = index;
+        runsById.Clear();
+        foreach (LocalReplay run in runs)
+            runsById.TryAdd(run.ScoreId, run);
+        modDropdown.SetChoices(choices);
         render();
+    }
+
+    private void scheduleRender(double delay)
+    {
+        updateChips();
+        searchRefresh?.Cancel();
+        searchRefresh = Scheduler.AddDelayed(render, delay);
     }
 
     private void render()
     {
         searchRefresh?.Cancel();
         searchRefresh = null;
-        if (allRuns.Count == 0)
-        {
-            scopeText.Text = "No local osu!standard history or cached online scores are available.";
-        }
-
-        (double minStars, double maxStars) = starBand.Value switch
-        {
-            StatisticsStarBand.BelowFour => (0, 4),
-            StatisticsStarBand.FourToFive => (4, 5),
-            StatisticsStarBand.FiveToSix => (5, 6),
-            StatisticsStarBand.SixToSeven => (6, 7),
-            StatisticsStarBand.SevenPlus => (7, 100),
-            _ => (0, 100),
-        };
-        StatisticsWorkspaceModel model = StatisticsWorkspaceModel.Build(allRuns, new StatisticsRunQuery(
+        var runs = allRuns;
+        int revision = ++renderRevision;
+        var query = new StatisticsRunQuery(
             search.Current.Value,
             timeRange.Value,
-            modFilter.Value,
+            StatisticsModFilter.Any,
             sort.Value,
             scoreSource.Value,
-            minStars,
-            maxStars,
-            resultFilter.Value == StatisticsResultFilter.MissFree));
-
-        int localCount = model.UnfilteredRunCount - model.CachedOnlineRunCount;
-        scopeText.Text = model.CachedOnlineRunCount > 0
-            ? $"Unified scope: {model.CachedOnlineRunCount:N0} online best/recent and {localCount:N0} local records. Online windows are limited, not complete history."
-            : onlineHistory is null
-                ? $"Unified scope currently contains {localCount:N0} local records; online score service is unavailable."
-                : $"Unified scope currently contains {localCount:N0} local records; online best/recent returned no scores.";
-        resultText.Text = model.Runs.Count == 1 ? "1 matching play" : $"{model.Runs.Count:N0} matching plays";
-        search.StatusText = resultText.Text;
-        if (model.Runs.Count == 0)
+            minimumStars.Value,
+            maximumStars.Value >= maximumStars.MaxValue ? 100 : maximumStars.Value,
+            resultFilter.Value == StatisticsResultFilter.MissFree,
+            modFilter.Value);
+        statisticsQuery.Submit(token =>
         {
-            averageAccuracy.Set("-", "No plays in this view");
-            medianPp.Set("-", "No PP values in this view");
-            missFree.Set("-", "No results in this view");
-            averageStars.Set("-", "No difficulties in this view");
+            token.ThrowIfCancellationRequested();
+            return StatisticsWorkspaceModel.Build(runs, query);
+        }, model =>
+        {
+            if (!IsDisposed) Schedule(() =>
+            {
+                if (!IsDisposed && revision == renderRevision) applyModel(model);
+            });
+        }, error =>
+        {
+            Console.Error.WriteLine($"Statistics filtering failed: {error}");
+            if (!IsDisposed) Schedule(() =>
+            {
+                if (IsDisposed || revision != renderRevision) return;
+                stateCard.Show(FontAwesome.Solid.ExclamationTriangle, "These filters could not be applied",
+                    "Try again, or clear the filters.", AimModPalette.Danger, "Retry", render);
+            });
+        });
+    }
+
+    private bool filtersActive => search.Current.Value.Length > 0 || timeRange.Value != StatisticsTimeRange.All || popoverFilterCount > 0;
+
+    private int popoverFilterCount => (modFilter.Value != ScoreMods.Any ? 1 : 0) + (scoreSource.Value != StatisticsScoreSource.All ? 1 : 0)
+                                      + (!minimumStars.IsDefault || !maximumStars.IsDefault ? 1 : 0)
+                                      + (resultFilter.Value != StatisticsResultFilter.All ? 1 : 0);
+
+    private void resetFilters()
+    {
+        search.Current.Value = string.Empty;
+        timeRange.Value = StatisticsTimeRange.All;
+        modFilter.Value = ScoreMods.Any;
+        sort.Value = StatisticsRunSort.Recent;
+        scoreSource.Value = StatisticsScoreSource.All;
+        minimumStars.SetDefault();
+        maximumStars.SetDefault();
+        resultFilter.Value = StatisticsResultFilter.All;
+    }
+
+    private void applyModel(StatisticsWorkspaceModel model)
+    {
+        lastModel = model;
+        stateCard.Dismiss();
+        StatisticsInsights insights = model.Insights;
+        string count = model.Runs.Count == allRuns.Count || allRuns.Count == 0
+            ? $"{model.Runs.Count:N0} {(model.Runs.Count == 1 ? "play" : "plays")}"
+            : $"{model.Runs.Count:N0} of {allRuns.Count:N0} plays";
+        countText.Text = allRuns.Count == 0 ? string.Empty : model.Runs.Count < 2 ? count : $"{count}  ·  {dateRange(model.Runs)}";
+        if (hasHistory != allRuns.Count > 0)
+        {
+            hasHistory = allRuns.Count > 0;
+            layoutWidth = -1;
+        }
+
+        kpiFlow.Alpha = chartSection.Alpha = playsHeader.Alpha = tableHeader.Alpha = sourceInfo.Alpha = hasHistory ? 1 : 0;
+        kpiFlow.AutoSizeAxes = hasHistory ? Axes.Y : Axes.None;
+        if (!hasHistory)
+        {
+            kpiFlow.Height = 0;
+            chartSection.Height = 0;
         }
         else
         {
-            averageAccuracy.Set(formatPercent(model.AverageAccuracy), model.BestAccuracy is { } best ? $"Best {best:P2}" : "No accuracy data");
-            medianPp.Set(model.MedianPerformancePoints is { } pp ? $"{pp:0.#}pp" : "-", $"{model.PerformancePointRunCount:N0} plays with PP");
-            missFree.Set($"{model.MissFreeRate:P0}", $"Best combo {model.BestCombo:N0}x");
-            averageStars.Set(model.AverageStarRating is { } stars ? $"{stars:0.00} stars" : "-", compactScore(model.TotalScore));
+            mainLayoutWidth = -1;
         }
-        updateGraph(accuracyGraph, model.Series.Single(series => series.Key == "statisticsAccuracy"));
-        updateGraph(ppGraph, model.Series.Single(series => series.Key == "statisticsPp"));
-        updateGraph(starsGraph, model.Series.Single(series => series.Key == "statisticsStars"));
-        updateGraph(missesGraph, model.Series.Single(series => series.Key == "statisticsMisses"));
-        visibleRuns = model.Runs;
+        sourceInfo.TooltipText = sourceSummary(insights);
+        playsHeader.Detail = model.Runs.Count > visible_row_limit ? $"Newest {visible_row_limit} shown" : null;
+        if (sort.Value != StatisticsRunSort.Recent && model.Runs.Count > visible_row_limit)
+            playsHeader.Detail = $"Top {visible_row_limit} shown";
+
+        foreach ((StatisticsMetric metric, StatisticsKpiCard card) in kpiCards)
+            card.Set(insights.For(metric), kpiDetail(metric, model, insights));
+
+        applyChartMetric();
+
         if (selected is null || !model.Runs.Any(run => run.ScoreId == selected.ScoreId))
             selected = model.Runs.FirstOrDefault();
 
         renderRuns(model.Runs);
+        listFooter.Text = model.Runs.Count > visible_row_limit
+            ? $"{model.Runs.Count - visible_row_limit:N0} more plays match. Search or filter to find a specific play."
+            : string.Empty;
+        listFooter.Alpha = model.Runs.Count > visible_row_limit ? 1 : 0;
         if (selected is null)
             showEmptyInspector();
         else
             showInspector(selected);
     }
 
-    private void renderRuns(IReadOnlyList<LocalReplay> runs)
+    private static string dateRange(IReadOnlyList<LocalReplay> runs)
     {
-        runList.Clear();
-        if (runs.Count == 0)
-        {
-            runList.Add(new StatisticsEmptyState(
-                allRuns.Count == 0 ? "No score history yet" : "No plays match these filters",
-                allRuns.Count == 0
-                    ? "Local and online osu!standard plays will appear here when available."
-                    : "Try widening the period, difficulty, result, or source filters."));
-            return;
-        }
-
-        foreach (LocalReplay replay in runs.Take(100))
-            runList.Add(new StatisticsRunRow(replay, selected?.ScoreId == replay.ScoreId, () => select(replay)));
+        DateTimeOffset first = runs.Min(run => run.PlayedAt).ToLocalTime();
+        DateTimeOffset last = runs.Max(run => run.PlayedAt).ToLocalTime();
+        string format = first.Year == last.Year ? "d MMM" : "d MMM yyyy";
+        return $"{first.ToString(format, System.Globalization.CultureInfo.InvariantCulture)} – {last.ToString(format, System.Globalization.CultureInfo.InvariantCulture)}";
     }
 
-    private void select(LocalReplay? replay)
+    private static string kpiDetail(StatisticsMetric metric, StatisticsWorkspaceModel model, StatisticsInsights insights) => metric switch
     {
+        StatisticsMetric.Accuracy => model.BestAccuracy is { } best ? $"best {best * 100:0.00}%" : string.Empty,
+        StatisticsMetric.Performance => insights.MissingPpCount > 0 ? $"{insights.MissingPpCount:N0} without PP" : string.Empty,
+        StatisticsMetric.Misses => insights.MissFreeRate is { } rate ? $"{rate:0}% miss-free" : string.Empty,
+        _ => string.Empty,
+    };
+
+    private string sourceSummary(StatisticsInsights insights)
+    {
+        string online = onlineHistory is null
+            ? "Online scores are unavailable. Sign in from Settings to include them."
+            : "Online scores include only your best and recent plays.";
+        return $"On this PC: {insights.LocalCount:N0} plays\nSubmitted online: {insights.SubmittedCount:N0} ({insights.OnlineOnlyCount:N0} only online)\n{online}";
+    }
+
+    private void applyChartMetric()
+    {
+        StatisticsMetric metric = chartMetric.Value;
+        foreach ((StatisticsMetric key, StatisticsKpiCard card) in kpiCards)
+            card.SetSelected(key == metric);
+        StatisticsMetricView view = lastModel?.Insights.For(metric) ?? StatisticsMetricView.Empty(metric);
+        trendTitle.Text = $"{StatisticsChartFormat.Name(metric)} over time";
+        trendChart.SetView(view, selected?.ScoreId);
+        updateLegend(view);
+    }
+
+    private void updateLegend(StatisticsMetricView view)
+    {
+        trendLegend.Clear();
+        if (view.Plays.Count == 0)
+            return;
+        trendLegend.Add(legendItem(new CircularContainer { Size = new(6), Masking = true, Child = new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Cyan.Opacity(0.55f) } }, "Each play"));
+        if (view.RollingWindow > 1)
+            trendLegend.Add(legendItem(new Container
+            {
+                Size = new(14, 8),
+                Children = new Drawable[]
+                {
+                    new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Cyan.Opacity(0.22f) },
+                    new Box { RelativeSizeAxes = Axes.X, Height = 1.6f, Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft, Colour = AimModPalette.Cyan },
+                },
+            }, $"{view.RollingWindow}-play average"));
+        trendLegend.Add(legendItem(new FillFlowContainer
+        {
+            AutoSizeAxes = Axes.Both,
+            Direction = FillDirection.Horizontal,
+            Spacing = new(2),
+            Children = Enumerable.Range(0, 3).Select(_ => (Drawable)new Box { Size = new(4, 1.5f), Colour = AimModPalette.Text.Opacity(0.6f) }).ToArray(),
+        }, $"{(view.Metric == StatisticsMetric.Performance ? "Median" : "Average")} {StatisticsChartFormat.Value(view.Metric, StatisticsTrendChart.ReferenceValue(view))}"));
+        mainLayoutWidth = -1;
+    }
+
+    private static Drawable legendItem(Drawable mark, string label) => new FillFlowContainer
+    {
+        AutoSizeAxes = Axes.Both,
+        Direction = FillDirection.Horizontal,
+        Spacing = new(6),
+        Children = new[]
+        {
+            mark.With(d => { d.Anchor = Anchor.CentreLeft; d.Origin = Anchor.CentreLeft; }),
+            StatisticsChartFormat.Text(label, 11, AimModPalette.Muted).With(d => { d.Anchor = Anchor.CentreLeft; d.Origin = Anchor.CentreLeft; }),
+        },
+    };
+
+    /// <summary>Updates the visible rows in place: unchanged plays keep their row and only its order changes.</summary>
+    private void renderRuns(IReadOnlyList<LocalReplay> runs)
+    {
+        var previous = new Dictionary<Guid, StatisticsPlayRow>(runRows);
+        runRows.Clear();
+        visibleRows.Clear();
+        if (emptyState is not null)
+        {
+            runList.Remove(emptyState, true);
+            emptyState = null;
+        }
+
+        DateTimeOffset now = DateTimeOffset.Now;
+        int position = 0;
+        foreach (LocalReplay replay in runs.Take(visible_row_limit))
+        {
+            if (!previous.Remove(replay.ScoreId, out StatisticsPlayRow? row) || !ReferenceEquals(row.Replay, replay))
+            {
+                if (row is not null)
+                    runList.Remove(row, true);
+                LocalReplay current = replay;
+                row = new StatisticsPlayRow(replay, () => select(current, openDetails: true), now);
+                runList.Add(row);
+            }
+
+            row.SetSelected(selected?.ScoreId == replay.ScoreId);
+            runList.SetLayoutPosition(row, position++);
+            runRows[replay.ScoreId] = row;
+            visibleRows.Add(row);
+        }
+
+        foreach (StatisticsPlayRow unused in previous.Values)
+            runList.Remove(unused, true);
+
+        if (runs.Count == 0)
+        {
+            bool noHistory = allRuns.Count == 0;
+            runList.Add(emptyState = new StatisticsEmptyState(
+                noHistory ? "No plays yet" : "No plays match these filters",
+                noHistory
+                    ? "Play a map in osu!, or connect your osu! installation and account in Settings."
+                    : "Try a longer period or fewer filters.",
+                !noHistory && filtersActive ? resetFilters : null));
+        }
+    }
+
+    private void select(LocalReplay? replay, bool openDetails = false)
+    {
+        if (openDetails && inspectorOverlay && replay is not null)
+            setInspectorOverlay(true);
+        if (selected == replay) return;
+        if (selected is not null && runRows.TryGetValue(selected.ScoreId, out StatisticsPlayRow? previousRow))
+            previousRow.SetSelected(false);
         selected = replay;
-        renderRuns(visibleRuns);
+        if (replay is not null && runRows.TryGetValue(replay.ScoreId, out StatisticsPlayRow? row))
+            row.SetSelected(true);
+        trendChart.SetView(trendChart.View, replay?.ScoreId);
         if (replay is null)
             showEmptyInspector();
         else
             showInspector(replay);
     }
 
-    private void showEmptyInspector()
+    private void setInspectorOverlay(bool open)
     {
-        inspectorContent.Clear();
-        inspectorContent.Add(new StatisticsInspectorEmptyState());
+        inspectorOverlayOpen = open && inspectorOverlay;
+        if (!inspectorOverlay)
+            return;
+        inspectorColumn.FadeTo(inspectorOverlayOpen ? 1 : 0, AimModVisualStyle.FastTransition);
+        mainColumn.FadeTo(inspectorOverlayOpen ? 0 : 1, AimModVisualStyle.FastTransition);
+        if (selected is not null)
+            showInspector(selected);
     }
 
-    private void showInspector(LocalReplay replay)
+    protected override bool OnKeyDown(KeyDownEvent e)
     {
-        StatisticsMapSummary map = StatisticsWorkspaceModel.BuildMapSummary(allRuns, replay.BeatmapId);
-        inspectorContent.Clear();
-        inspectorContent.AddRange(new Drawable[]
+        if (e.ControlPressed && e.Key == Key.F)
         {
-            new Box
-            {
-                RelativeSizeAxes = Axes.X,
-                Height = 4,
-                Colour = AimModVisualStyle.DifficultyColour(replay.StarRating),
-                Margin = new MarginPadding { Bottom = 2 },
-            },
-            sectionLabel("SELECTED PLAY", AimModPalette.Cyan),
-            truncatingText(replay.Title, 20, AimModPalette.Text, Math.Max(220, inspectorColumn.DrawWidth - 40), "Bold"),
-            truncatingText($"{replay.Artist}  /  [{replay.Difficulty}]", 12, AimModPalette.Muted, Math.Max(220, inspectorColumn.DrawWidth - 40)),
-            new FillFlowContainer
-            {
-                RelativeSizeAxes = Axes.X,
-                AutoSizeAxes = Axes.Y,
-                Direction = FillDirection.Horizontal,
-                Spacing = new(8),
-                Children = pills(replay),
-            },
-            divider(),
-            sectionLabel("RUN SUMMARY", AimModPalette.Muted),
-            new GridContainer
-            {
-                RelativeSizeAxes = Axes.X,
-                Height = 104,
-                ColumnDimensions = twoEqualColumns(),
-                RowDimensions = twoEqualRows(),
-                Content = new[]
-                {
-                    new Drawable[]
-                    {
-                        inspectorMetric("ACCURACY", replay.Accuracy.ToString("P2"), AimModPalette.Cyan),
-                        inspectorMetric("PERFORMANCE", replay.PerformancePoints is { } pp ? $"{pp:0.##}pp" : "Not stored", AimModPalette.Pink),
-                    },
-                    new Drawable[]
-                    {
-                        inspectorMetric("SCORE", compactNumber(replay.TotalScore), AimModPalette.Text),
-                        inspectorMetric("COMBO / MISSES", $"{replay.MaxCombo:N0}x  /  {replay.MissCount:N0}", AimModPalette.Text),
-                    },
-                },
-            },
-            divider(),
-            sectionLabel("PLAY DETAILS", AimModPalette.Muted),
-            detail("PLAYED", replay.PlayedAt.ToString("dd MMM yyyy  HH:mm")),
-            detail("SOURCE", replay.IsLocallyStored
-                ? replay.OnlineScoreId > 0 ? "Local + cached online" : "Local score history"
-                : "Cached online best/recent"),
-            divider(),
-            sectionLabel("DIFFICULTY HISTORY", AimModPalette.Pink),
-            detail("PLAYS", map.PlayCount.ToString("N0")),
-            detail("AVERAGE / BEST", $"{formatPercent(map.AverageAccuracy)}  /  {formatPercent(map.BestAccuracy)}"),
-            detail("CHANGE", map.AccuracyChange is { } change ? $"{change * 100:+0.00;-0.00;0.00} points first to latest" : "More plays needed"),
-            detail("BEST PP", map.BestPerformancePoints is { } bestPp ? $"{bestPp:0.##}pp" : "Not stored"),
-            detail("MISS-FREE", map.MissFreeRate.ToString("P0")),
-            detail("BEST COMBO", $"{map.BestCombo:N0}x"),
-            replay.HasReplayFile ? actionButton("Open replay", () => openReplay(replay)) : text("Replay file is unavailable for this score.", 11, AimModPalette.Muted),
-            new OpenBeatmapButton(() => replay, openBeatmap) { RelativeSizeAxes = Axes.X, Width = 1 },
-        });
+            GetContainingFocusManager()?.ChangeFocus(search);
+            return true;
+        }
+
+        if (e.Key == Key.Escape && filtersOpen)
+        {
+            closeFilters();
+            return true;
+        }
+
+        if (e.Key == Key.Escape && inspectorOverlayOpen)
+        {
+            setInspectorOverlay(false);
+            return true;
+        }
+
+        if (e.Key is Key.Up or Key.Down && visibleRows.Count > 0 && !e.ControlPressed && !e.AltPressed)
+        {
+            int index = selected is null ? -1 : visibleRows.FindIndex(row => row.Replay.ScoreId == selected.ScoreId);
+            index = Math.Clamp(index + (e.Key == Key.Down ? 1 : -1), 0, visibleRows.Count - 1);
+            select(visibleRows[index].Replay);
+            runScroll.ScrollIntoView(visibleRows[index]);
+            return true;
+        }
+
+        if (e.Key is Key.Enter or Key.KeypadEnter && selected is { HasReplayFile: true } replay)
+        {
+            openReplay(replay);
+            return true;
+        }
+
+        if (e.Key == Key.Escape && search.Current.Value.Length > 0)
+        {
+            search.Current.Value = string.Empty;
+            return true;
+        }
+
+        return base.OnKeyDown(e);
     }
-
-    private static Drawable[] pills(LocalReplay replay)
-    {
-        var result = new List<Drawable>();
-        if (double.IsFinite(replay.StarRating))
-            result.Add(new AimModDifficultyPill(replay.StarRating));
-        else
-            result.Add(new AimModPill("Stars unknown"));
-        if (replay.Mods.Count == 0)
-            result.Add(new AimModPill("No Mod"));
-        else
-            result.AddRange(replay.Mods.Take(4).Select(mod => new AimModPill(mod, AimModPillTone.Accent)));
-        return result.ToArray();
-    }
-
-    private static Drawable inspectorMetric(string heading, string value, Colour4 colour) => new Container
-    {
-        RelativeSizeAxes = Axes.Both,
-        Padding = new MarginPadding { Right = 10, Bottom = 8 },
-        Child = new FillFlowContainer
-        {
-            RelativeSizeAxes = Axes.X,
-            AutoSizeAxes = Axes.Y,
-            Direction = FillDirection.Vertical,
-            Spacing = new(3),
-            Children = new Drawable[]
-            {
-                text(heading, 9, AimModPalette.Muted, "Bold"),
-                text(value, 17, colour, "Bold"),
-            },
-        },
-    };
-
-    private static Drawable detail(string heading, string value) => new FillFlowContainer
-    {
-        RelativeSizeAxes = Axes.X,
-        AutoSizeAxes = Axes.Y,
-        Direction = FillDirection.Vertical,
-        Spacing = new(3),
-        Children = new Drawable[]
-        {
-            text(heading, 9, AimModPalette.Muted, "Bold"),
-            text(value, 14, AimModPalette.Text, "SemiBold"),
-        },
-    };
-
-    private static Drawable divider() => new Box
-    {
-        RelativeSizeAxes = Axes.X,
-        Height = 1,
-        Colour = AimModPalette.Border,
-        Margin = new MarginPadding { Vertical = 3 },
-    };
-
-    private static Drawable actionButton(string label, Action action) => new ClickableContainer
-    {
-        RelativeSizeAxes = Axes.X,
-        Height = AimModVisualStyle.ControlHeight,
-        Action = action,
-        Masking = true,
-        CornerRadius = AimModVisualStyle.ControlRadius,
-        Children = new Drawable[]
-        {
-            new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Pink },
-            text(label, 12, AimModPalette.Canvas, "Bold").With(text =>
-            {
-                text.Anchor = Anchor.Centre;
-                text.Origin = Anchor.Centre;
-            }),
-        },
-    };
-
-    private static void updateGraph(StatisticsGraphCard graph, CoachingChartSeries series) => graph.SetSeries(series.Points);
 
     private void sourceChanged()
     {
         if (!IsDisposed)
-            Schedule(load);
+            Schedule(() => load());
     }
 
     protected override void Dispose(bool isDisposing)
     {
+        statisticsQuery.Dispose();
         searchRefresh?.Cancel();
         loading?.Cancel();
         loading?.Dispose();
@@ -588,60 +836,53 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
         base.Dispose(isDisposing);
     }
 
-    private static Drawable filterField<T>(string heading, Bindable<T> current, float depth)
-        where T : struct, Enum => new Container
+    private static Container chartCard() => new()
     {
-        RelativeSizeAxes = Axes.Both,
-        // Menus in the upper row must draw and receive input above the lower row.
-        Depth = depth,
-        Padding = new MarginPadding { Right = 16 },
-        Child = new StatisticsFilterDropdown<T>(heading, current),
+        Masking = true,
+        CornerRadius = AimModVisualStyle.CardRadius,
+        BorderThickness = 1,
+        BorderColour = AimModPalette.Border,
+        Child = new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
     };
 
-    private static SpriteText sectionLabel(string value, Colour4 colour) => text(value, 10, colour, "Bold");
-
-    private static Dimension[] fourEqualColumns() => Enumerable.Repeat(new Dimension(GridSizeMode.Relative, 0.25f), 4).ToArray();
-    private static Dimension[] twoEqualColumns() => Enumerable.Repeat(new Dimension(GridSizeMode.Relative, 0.5f), 2).ToArray();
-    private static Dimension[] twoEqualRows() => Enumerable.Repeat(new Dimension(GridSizeMode.Relative, 0.5f), 2).ToArray();
-    private static string formatPercent(double? value) => value is { } number ? number.ToString("P2") : "-";
-    private static string compactNumber(long value) => value switch
+    /// <summary>Puts the page into a named state for off-screen visual checks.</summary>
+    internal void ApplyCaptureState(string state)
     {
-        >= 1_000_000_000 => $"{value / 1_000_000_000d:0.##}B",
-        >= 1_000_000 => $"{value / 1_000_000d:0.##}M",
-        >= 1_000 => $"{value / 1_000d:0.##}K",
-        _ => value.ToString("N0"),
-    };
-    private static string compactScore(long value) => value switch
-    {
-        >= 1_000_000_000 => $"{value / 1_000_000_000d:0.##}B total score",
-        >= 1_000_000 => $"{value / 1_000_000d:0.##}M total score",
-        >= 1_000 => $"{value / 1_000d:0.##}K total score",
-        _ => $"{value:N0} total score",
-    };
-
-    private static OsuSpriteText text(string value, float size, Colour4 colour, string weight = "Regular") => new()
-    {
-        Text = value,
-        Font = new FontUsage(size: size, weight: weight),
-        Colour = colour,
-    };
-
-    private static TruncatingSpriteText truncatingText(string value, float size, Colour4 colour, float maxWidth, string weight = "Regular") => new()
-    {
-        Text = value,
-        Font = new FontUsage(size: size, weight: weight),
-        Colour = colour,
-        MaxWidth = maxWidth,
-    };
-
-    private enum StatisticsStarBand
-    {
-        Any,
-        BelowFour,
-        FourToFive,
-        FiveToSix,
-        SixToSeven,
-        SevenPlus,
+        switch (state)
+        {
+            case "filters":
+                openFilters();
+                break;
+            case "filters-menu":
+                openFilters();
+                modDropdown.SetChoices(new[] { new ScoreModChoice(ScoreMods.Any, "All mods") }
+                                       .Concat(Enumerable.Range(1, 40).Select(i => new ScoreModChoice("capture:" + i, $"Exact: HD + DT (setup {i})"))).ToArray());
+                Scheduler.AddDelayed(() => ((osu.Framework.Graphics.UserInterface.Menu)typeof(osu.Framework.Graphics.UserInterface.Dropdown<string>)
+                                                .GetField("Menu", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                                                .GetValue(modDropdown)!).Open(), 200);
+                break;
+            case "hover":
+                Scheduler.AddDelayed(() => trendChart.ShowHoverAt(0.7f), 100);
+                break;
+            case "metric-pp":
+                chartMetric.Value = StatisticsMetric.Performance;
+                break;
+            case "metric-misses":
+                chartMetric.Value = StatisticsMetric.Misses;
+                break;
+            case "period-30":
+                timeRange.Value = StatisticsTimeRange.Days30;
+                scoreSource.Value = StatisticsScoreSource.Local;
+                minimumStars.Value = 4;
+                break;
+            case "details":
+                if (visibleRows.Count > 3)
+                    select(visibleRows[3].Replay, openDetails: true);
+                break;
+            case "plays":
+                runScroll.ScrollTo(playsHeader, false);
+                break;
+        }
     }
 
     private enum StatisticsResultFilter
@@ -650,451 +891,16 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
         MissFree,
     }
 
-    private sealed partial class MetricCard : CompositeDrawable
-    {
-        private readonly SpriteText value;
-        private readonly SpriteText detailText;
-
-        public MetricCard(string heading, Colour4 accent, IconUsage icon)
-        {
-            RelativeSizeAxes = Axes.Both;
-            Masking = true;
-            CornerRadius = AimModVisualStyle.ControlRadius;
-            InternalChildren = new Drawable[]
-            {
-                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
-                new Box { RelativeSizeAxes = Axes.Y, Width = 3, Colour = accent },
-                new Container
-                {
-                    Anchor = Anchor.TopRight,
-                    Origin = Anchor.TopRight,
-                    Position = new(-14, 14),
-                    Size = new(24),
-                    Child = new SpriteIcon
-                    {
-                        Anchor = Anchor.Centre,
-                        Origin = Anchor.Centre,
-                        Size = new(13),
-                        Icon = icon,
-                        Colour = accent,
-                    },
-                },
-                new FillFlowContainer
-                {
-                    RelativeSizeAxes = Axes.X,
-                    AutoSizeAxes = Axes.Y,
-                    Padding = new MarginPadding { Top = 11, Bottom = 10, Left = 14, Right = 42 },
-                    Direction = FillDirection.Vertical,
-                    Spacing = new(5),
-                    Children = new Drawable[]
-                    {
-                        text(heading.ToUpperInvariant(), 9, AimModPalette.Muted, "Bold"),
-                        value = text("-", 20, AimModPalette.Text, "Bold"),
-                        detailText = text(string.Empty, 9, AimModPalette.Muted),
-                    },
-                },
-            };
-        }
-
-        public void Set(string nextValue, string detail)
-        {
-            value.Text = nextValue;
-            detailText.Text = detail;
-        }
-    }
-
-    private sealed partial class StatisticsGraphCard : CompositeDrawable
-    {
-        private readonly Func<double, string> formatter;
-        private readonly Colour4 colour;
-        private readonly Container plotViewport;
-        private readonly Container plotArea;
-        private readonly LineGraph graph;
-        private readonly Container pointLayer;
-        private readonly SpriteText range;
-        private readonly SpriteText chartMeta;
-        private readonly Container emptyState;
-        private readonly Container hoverLine;
-        private readonly CircularContainer hoverPoint;
-        private readonly Container tooltip;
-        private readonly SpriteText tooltipValue;
-        private readonly SpriteText tooltipDate;
-        private CoachingChartPoint[] points = Array.Empty<CoachingChartPoint>();
-        private float minimumValue;
-        private float maximumValue = 1;
-
-        public StatisticsGraphCard(string heading, Colour4 colour, Func<double, string> formatter)
-        {
-            this.formatter = formatter;
-            this.colour = colour;
-            RelativeSizeAxes = Axes.Both;
-            Masking = true;
-            CornerRadius = AimModVisualStyle.ControlRadius;
-            InternalChildren = new Drawable[]
-            {
-                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
-                new Box { RelativeSizeAxes = Axes.X, Height = 2, Colour = colour, Alpha = 0.8f },
-                text(heading, 14, AimModPalette.Text, "SemiBold").With(text => text.Position = new(14, 12)),
-                range = text("No data", 10, AimModPalette.Muted).With(text =>
-                {
-                    text.Anchor = Anchor.TopRight;
-                    text.Origin = Anchor.TopRight;
-                    text.Position = new(-14, 12);
-                }),
-                chartMeta = text("No plays in current view", 9, AimModPalette.Muted).With(text =>
-                {
-                    text.Anchor = Anchor.TopRight;
-                    text.Origin = Anchor.TopRight;
-                    text.Position = new(-14, 29);
-                }),
-                plotViewport = new Container
-                {
-                    RelativeSizeAxes = Axes.Both,
-                    Padding = new MarginPadding { Top = 52, Bottom = 16, Left = 14, Right = 14 },
-                    Child = plotArea = new Container
-                    {
-                        RelativeSizeAxes = Axes.Both,
-                        Masking = true,
-                        Children = new Drawable[]
-                        {
-                            gridLine(0.25f),
-                            gridLine(0.5f),
-                            gridLine(0.75f),
-                            graph = new LineGraph
-                            {
-                                RelativeSizeAxes = Axes.Both,
-                                LineColour = colour,
-                                DefaultValueCount = 80,
-                            },
-                            pointLayer = new Container { RelativeSizeAxes = Axes.Both },
-                            hoverLine = new Container
-                            {
-                                RelativeSizeAxes = Axes.Y,
-                                Height = 1,
-                                Width = 1,
-                                Alpha = 0,
-                                Child = new Box { RelativeSizeAxes = Axes.Both, Colour = Colour4.White.Opacity(0.5f) },
-                            },
-                            hoverPoint = new CircularContainer
-                            {
-                                Size = new(9),
-                                Origin = Anchor.Centre,
-                                Masking = true,
-                                Alpha = 0,
-                                BorderThickness = 2,
-                                BorderColour = AimModPalette.Text,
-                                Child = new Box { RelativeSizeAxes = Axes.Both, Colour = colour },
-                            },
-                        },
-                    },
-                },
-                emptyState = new Container
-                {
-                    RelativeSizeAxes = Axes.Both,
-                    Padding = new MarginPadding { Top = 48 },
-                    Child = text("No plays in this view", 11, AimModPalette.Muted).With(label =>
-                    {
-                        label.Anchor = Anchor.Centre;
-                        label.Origin = Anchor.Centre;
-                        label.Alpha = 0.72f;
-                    }),
-                },
-                tooltip = new Container
-                {
-                    Position = new(15, 51),
-                    Size = new(142, 50),
-                    Alpha = 0,
-                    Masking = true,
-                    CornerRadius = 5,
-                    Children = new Drawable[]
-                    {
-                        new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Canvas.Opacity(0.96f) },
-                        tooltipValue = text(string.Empty, 12, AimModPalette.Text, "Bold").With(text => text.Position = new(9, 7)),
-                        tooltipDate = text(string.Empty, 9, AimModPalette.Muted).With(text => text.Position = new(9, 27)),
-                    },
-                },
-            };
-        }
-
-        public void SetSeries(IReadOnlyList<CoachingChartPoint> source)
-        {
-            points = downsample(source, 120);
-            if (points.Length == 0)
-            {
-                graph.Alpha = 0;
-                pointLayer.Clear();
-                range.Text = "No data";
-                range.Colour = AimModPalette.Muted;
-                chartMeta.Text = "No plays in current view";
-                plotViewport.FadeOut(80);
-                hoverLine.FadeOut(80);
-                hoverPoint.FadeOut(80);
-                tooltip.FadeOut(80);
-                emptyState.FadeIn(100);
-                return;
-            }
-
-            double minimum = points.Min(point => point.Value);
-            double maximum = points.Max(point => point.Value);
-            double padding = Math.Max(0.01, (maximum - minimum) * 0.1);
-            minimumValue = (float)Math.Max(0, minimum - padding);
-            maximumValue = (float)Math.Max(minimumValue + 0.01, maximum + padding);
-            graph.MinValue = minimumValue;
-            graph.MaxValue = maximumValue;
-            graph.DefaultValueCount = Math.Max(2, points.Length);
-            graph.Values = points.Select(point => (float)point.Value).ToArray();
-            rebuildPoints();
-            graph.FadeIn(120);
-            plotViewport.FadeIn(120);
-            emptyState.FadeOut(80);
-            range.Text = formatter(points[^1].Value);
-            range.Colour = colour;
-            chartMeta.Text = $"{points.Length:N0} plays  /  {formatDateRange(points)}";
-        }
-
-        protected override bool OnHover(HoverEvent e)
-        {
-            updateHover(ToLocalSpace(e.ScreenSpaceMousePosition).X);
-            return true;
-        }
-
-        protected override bool OnMouseMove(MouseMoveEvent e)
-        {
-            updateHover(ToLocalSpace(e.ScreenSpaceMousePosition).X);
-            return true;
-        }
-
-        protected override void OnHoverLost(HoverLostEvent e)
-        {
-            hoverLine.FadeOut(80);
-            hoverPoint.FadeOut(80);
-            tooltip.FadeOut(80);
-            base.OnHoverLost(e);
-        }
-
-        private void updateHover(float localX)
-        {
-            if (points.Length == 0)
-                return;
-            float graphWidth = Math.Max(1, plotArea.DrawWidth);
-            float x = Math.Clamp(localX - plotViewport.Padding.Left, 0, graphWidth);
-            int index = points.Length == 1 ? 0 : (int)Math.Round(x / graphWidth * (points.Length - 1));
-            CoachingChartPoint point = points[Math.Clamp(index, 0, points.Length - 1)];
-            float y = valueY(point.Value, Math.Max(1, plotArea.DrawHeight));
-            hoverLine.X = x;
-            hoverPoint.Position = new(x, y);
-            tooltip.X = Math.Clamp(15 + x + 7, 6, Math.Max(6, DrawWidth - tooltip.Width - 6));
-            tooltipValue.Text = formatter(point.Value);
-            tooltipDate.Text = point.PlayedAt.ToString("dd MMM yyyy  HH:mm");
-            hoverLine.FadeIn(60);
-            hoverPoint.FadeIn(60);
-            tooltip.FadeIn(60);
-        }
-
-        private void rebuildPoints()
-        {
-            pointLayer.Clear();
-            if (points.Length > 36)
-                return;
-
-            for (int index = 0; index < points.Length; index++)
-            {
-                float x = points.Length == 1 ? 0.5f : index / (points.Length - 1f);
-                float y = normalisedY(points[index].Value);
-                pointLayer.Add(new CircularContainer
-                {
-                    RelativePositionAxes = Axes.Both,
-                    Position = new(Math.Clamp(x, 0.012f, 0.988f), Math.Clamp(y, 0.025f, 0.975f)),
-                    Origin = Anchor.Centre,
-                    Size = new(6),
-                    Masking = true,
-                    BorderThickness = 1.5f,
-                    BorderColour = AimModPalette.Panel,
-                    Child = new Box { RelativeSizeAxes = Axes.Both, Colour = colour },
-                });
-            }
-        }
-
-        private float normalisedY(double value) => 1 - Math.Clamp(((float)value - minimumValue) / Math.Max(0.0001f, maximumValue - minimumValue), 0, 1);
-
-        private float valueY(double value, float height) => Math.Clamp(normalisedY(value) * height, 4, Math.Max(4, height - 4));
-
-        private static Box gridLine(float y) => new()
-        {
-            RelativePositionAxes = Axes.Y,
-            RelativeSizeAxes = Axes.X,
-            Y = y,
-            Height = 1,
-            Colour = AimModPalette.Border,
-            Alpha = 0.58f,
-        };
-
-        private static string formatDateRange(IReadOnlyList<CoachingChartPoint> source)
-        {
-            string first = source[0].PlayedAt.ToString("dd MMM");
-            string last = source[^1].PlayedAt.ToString("dd MMM");
-            return first == last ? first : $"{first} - {last}";
-        }
-
-        private static CoachingChartPoint[] downsample(IReadOnlyList<CoachingChartPoint> source, int limit)
-        {
-            if (source.Count <= limit)
-                return source.ToArray();
-            return Enumerable.Range(0, limit)
-                             .Select(index => source[(int)Math.Round(index * (source.Count - 1d) / (limit - 1))])
-                             .ToArray();
-        }
-    }
-
-    private sealed partial class StatisticsRunRow : ClickableContainer
-    {
-        private readonly Box background;
-        private readonly Box selectionLayer;
-        private readonly TruncatingSpriteText title;
-        private readonly TruncatingSpriteText subtitle;
-        private readonly bool selected;
-
-        public StatisticsRunRow(LocalReplay replay, bool selected, Action action)
-        {
-            this.selected = selected;
-            Action = action;
-            RelativeSizeAxes = Axes.X;
-            Height = 72;
-            Masking = true;
-            CornerRadius = AimModVisualStyle.ControlRadius;
-            string mods = replay.Mods.Count == 0 ? "NM" : string.Join(" ", replay.Mods);
-            Children = new Drawable[]
-            {
-                background = new Box { RelativeSizeAxes = Axes.Both, Colour = selected ? AimModPalette.PanelRaised : AimModPalette.Panel },
-                selectionLayer = new Box
-                {
-                    RelativeSizeAxes = Axes.Both,
-                    Colour = AimModPalette.Pink,
-                    Alpha = selected ? 0.08f : 0,
-                },
-                new Box { RelativeSizeAxes = Axes.Y, Width = selected ? 4 : 3, Colour = AimModVisualStyle.DifficultyColour(replay.StarRating) },
-                new FillFlowContainer
-                {
-                    Anchor = Anchor.CentreLeft,
-                    Origin = Anchor.CentreLeft,
-                    RelativeSizeAxes = Axes.X,
-                    AutoSizeAxes = Axes.Y,
-                    Width = 0.62f,
-                    Margin = new MarginPadding { Left = 16 },
-                    Direction = FillDirection.Vertical,
-                    Spacing = new(4),
-                    Children = new Drawable[]
-                    {
-                        title = truncatingText($"{replay.Title} [{replay.Difficulty}]", 13, AimModPalette.Text, 500, "SemiBold"),
-                        subtitle = truncatingText($"{replay.Artist}  /  {replay.PlayedAt:dd MMM yyyy HH:mm}  /  {mods}", 10, AimModPalette.Muted, 500),
-                    },
-                },
-                new FillFlowContainer
-                {
-                    Anchor = Anchor.CentreRight,
-                    Origin = Anchor.CentreRight,
-                    AutoSizeAxes = Axes.Both,
-                    Margin = new MarginPadding { Right = 14 },
-                    Direction = FillDirection.Horizontal,
-                    Spacing = new(14),
-                    Children = new Drawable[]
-                    {
-                        text($"{replay.Accuracy:P2}", 12, AimModPalette.Cyan, "Bold"),
-                        text(replay.PerformancePoints is { } pp ? $"{pp:0.#}pp" : "PP -", 12, AimModPalette.Pink, "Bold"),
-                        double.IsFinite(replay.StarRating)
-                            ? new AimModDifficultyPill(replay.StarRating)
-                            : new AimModPill("Stars unknown"),
-                    },
-                },
-            };
-        }
-
-        protected override void Update()
-        {
-            base.Update();
-            float available = Math.Max(140, DrawWidth - 314);
-            title.MaxWidth = available;
-            subtitle.MaxWidth = available;
-        }
-
-        protected override bool OnHover(HoverEvent e)
-        {
-            background.FadeColour(AimModPalette.PanelHover, 90);
-            selectionLayer.FadeTo(selected ? 0.14f : 0.055f, 90);
-            return true;
-        }
-
-        protected override void OnHoverLost(HoverLostEvent e)
-        {
-            background.FadeColour(selected ? AimModPalette.PanelRaised : AimModPalette.Panel, 90);
-            selectionLayer.FadeTo(selected ? 0.08f : 0, 90);
-            base.OnHoverLost(e);
-        }
-    }
-
     private sealed partial class StatisticsEmptyState : CompositeDrawable
     {
-        public StatisticsEmptyState(string heading, string detail)
+        public StatisticsEmptyState(string heading, string detail, Action? reset = null)
         {
             RelativeSizeAxes = Axes.X;
-            Height = 92;
-            InternalChildren = new Drawable[]
-            {
-                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel, Alpha = 0.45f },
-                new FillFlowContainer
-                {
-                    Anchor = Anchor.Centre,
-                    Origin = Anchor.Centre,
-                    AutoSizeAxes = Axes.Both,
-                    Direction = FillDirection.Vertical,
-                    Spacing = new(4),
-                    Children = new Drawable[]
-                    {
-                        text(heading, 13, AimModPalette.Text, "SemiBold"),
-                        text(detail, 10, AimModPalette.Muted),
-                    },
-                },
-            };
+            AutoSizeAxes = Axes.Y;
+            var card = new WorkspaceStateCard();
+            InternalChild = card;
+            card.Show(reset is null ? FontAwesome.Solid.Music : FontAwesome.Solid.Filter, heading, detail,
+                actionLabel: reset is null ? null : "Clear filters", action: reset);
         }
     }
-
-    private sealed partial class StatisticsInspectorEmptyState : CompositeDrawable
-    {
-        public StatisticsInspectorEmptyState()
-        {
-            RelativeSizeAxes = Axes.X;
-            Height = 250;
-            InternalChild = new FillFlowContainer
-            {
-                Anchor = Anchor.Centre,
-                Origin = Anchor.Centre,
-                AutoSizeAxes = Axes.Both,
-                Direction = FillDirection.Vertical,
-                Spacing = new(8),
-                Children = new Drawable[]
-                {
-                    new SpriteIcon
-                    {
-                        Anchor = Anchor.TopCentre,
-                        Origin = Anchor.TopCentre,
-                        Size = new(24),
-                        Icon = FontAwesome.Solid.MousePointer,
-                        Colour = AimModPalette.Cyan,
-                    },
-                    text("Select a play", 16, AimModPalette.Text, "SemiBold"),
-                    text("Choose a row to inspect its score and difficulty history.", 11, AimModPalette.Muted),
-                },
-            };
-        }
-    }
-}
-
-internal static class StatisticsDrawableExtensions
-{
-    public static Container WithPadding(this Drawable drawable) => new()
-    {
-        RelativeSizeAxes = Axes.Both,
-        Padding = new MarginPadding { Right = 8 },
-        Child = drawable,
-    };
 }
