@@ -899,6 +899,7 @@ public partial class AimModGame : OsuGameBase
             RelativeSizeAxes = Axes.Both,
         };
         switchWorkspaceRoute(NativeRoute.Statistics, statisticsScreen);
+        statisticsScreen.RefreshHistory();
     }
 
     private void showSettings()
@@ -950,6 +951,11 @@ public partial class AimModGame : OsuGameBase
             prepareCatalogReplayMoment, () => { showTrainers(); trainersWorkspace?.StartGuidedPractice(TrainerGuidedFocus.MovementComparison); }, showTrainers)
         {
             RelativeSizeAxes = Axes.Both,
+            CancelAnalysisRequested = () =>
+            {
+                stopReplayLibraryAnalysis();
+                coachingWorkspace?.ApplyNewAnalyses(0, 0);
+            },
         };
         coachingWorkspace.ConfigurePracticeSessions(new CoachingPracticeSessionStore(Storage.GetFullPath($"coaching/practice-sessions-{currentOsuProfile?.UserId ?? 0}.json", true)),
             () => new TrainerHistoryStore(Storage.GetFullPath($"trainers/history-{currentOsuProfile?.UserId ?? 0}.json", true)).Load());
