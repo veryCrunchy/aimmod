@@ -52,6 +52,23 @@ static class CoreFormatChecks
             Check(gap.Actors.Length == 0 && moving.Actors.Length == 1 && Math.Abs(moving.Actors[0][1] - (1000 + 300.4)) < 1, "format 2 target track with gap");
             Check(catalog.List().Any(r => r.Id == "1790000000-42-2" && r.Frames > 100), "format 2 replay is listed from its header");
 
+            // Replay start gate: a clear reason until the game shows the replay's world paused.
+            GameScene Scene(string scenario = "Synthetic target test", bool challenge = false, bool paused = false, bool loading = false) =>
+                new(true, scenario, "Map_A", 1, challenge, challenge, loading, paused);
+            Check(ReplayStartGate.Evaluate(compact, Scene("Other"), true, "unavailable")?.Reason == "scenario-mismatch", "other scenario blocks with its name");
+            Check(ReplayStartGate.Evaluate(compact, Scene("Other"), true, "unavailable")!.Message.Contains("Synthetic target test"), "mismatch names the scenario to load");
+            Check(ReplayStartGate.Evaluate(compact, Scene(challenge: true), true, "unavailable")?.Reason == "challenge-active", "running challenge blocks");
+            Check(ReplayStartGate.Evaluate(compact, Scene(loading: true), true, "unavailable")?.Reason == "scenario-loading", "loading scenario blocks");
+            Check(ReplayStartGate.Evaluate(compact, Scene(challenge: true, paused: true), true, "unavailable") is null, "paused challenge world starts");
+            Check(ReplayStartGate.Evaluate(compact, Scene(), false, "challenge-active")?.Reason == "challenge-active", "renderer preflight reason surfaced");
+            Check(ReplayStartGate.Evaluate(compact, null, false, "unavailable")?.Reason == "game-unavailable", "no game");
+            var startGate = new ReplayStartGate();
+            startGate.Wait(compact.Id, compact.Scenario, new("scenario-mismatch", "x"));
+            var sceneNow = Scene("Other");
+            Check(startGate.Poll(_ => compact, () => sceneNow, () => (true, "unavailable")) is null && startGate.Block?.Reason == "scenario-mismatch", "pending start keeps waiting");
+            sceneNow = Scene();
+            Check(startGate.Poll(_ => compact, () => sceneNow, () => (true, "unavailable")) == compact && startGate.PendingId is null, "pending start begins once the scenario is ready");
+
             // Protocol 6 publishes a render-rate motion window while playing.
             var playback = new NativeReplayPlayback(root, () => true, () => 6);
             playback.Load(compact);

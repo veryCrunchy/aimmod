@@ -9,6 +9,9 @@ sealed class WorkspaceHost : IAsyncDisposable
 {
     readonly WebApplication app;
     readonly NativeReplayPlayback playback;
+    readonly ReplayStartGate startGate = new();
+    readonly CancellationTokenSource startLoop = new();
+    ReplayCatalog? replayCatalog;
     readonly ReplayKeyboard keyboard;
     readonly RendererAcknowledgement renderer;
     readonly OverlaySettings overlaySettings;
@@ -33,7 +36,7 @@ sealed class WorkspaceHost : IAsyncDisposable
     bool RendererReady => renderer.Read().Ready;
     object PlaybackStatus() {
         var acknowledgement = renderer.Read();
-        return new { playback = playback.Status, rendererReady = acknowledgement.Ready, rendererReason = acknowledgement.Reason };
+        return new { playback = playback.Status, rendererReady = acknowledgement.Ready, rendererReason = acknowledgement.Reason, start = startGate.Status };
     }
     string data = "{}";
     public string Url { get; private set; } = "";
@@ -91,6 +94,7 @@ sealed class WorkspaceHost : IAsyncDisposable
         using var reader = new StreamReader(stream, Encoding.UTF8);
         var html = reader.ReadToEnd();
         var replays = new ReplayCatalog(output);
+        replayCatalog = replays;
         var library = new ReplayLibrary(replays, output);
         app.MapGet(prefix + "/ui", () => Results.Content(html, "text/html", Encoding.UTF8));
         app.MapGet(prefix + "/settings.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.SettingsScript")!, "application/javascript"));
@@ -157,12 +161,21 @@ sealed class WorkspaceHost : IAsyncDisposable
                 var command = await context.Request.ReadFromJsonAsync<PlaybackCommand>(context.RequestAborted);
                 if (command is null) return Results.BadRequest();
                 if (command.Action == "load") {
-                    if (!RendererReady) return Results.StatusCode(409);
                     var replay = replays.Read(command.Id ?? "");
                     if (replay is null || replay.Frames.Count < 2) return Results.NotFound();
                     if (string.IsNullOrWhiteSpace(replay.MapName) || replay.MapScale is null) return Results.UnprocessableEntity();
+                    // Start now if the game shows the replay's world in the pause
+                    // menu; otherwise wait (with the reason) and start by itself.
+                    var acknowledgement = renderer.Read();
+                    var blocked = ReplayStartGate.Evaluate(replay, GameScene.Read(outputFolder), acknowledgement.Ready, acknowledgement.Reason);
+                    if (blocked is not null) { startGate.Wait(replay.Id, replay.Scenario, blocked); return Results.Json(PlaybackStatus(), statusCode: 202); }
+                    startGate.Clear();
                     playback.Load(replay);
-                } else if (!playback.Command(command.Action ?? "", command.Value, command.Area)) return Results.BadRequest();
+                } else if (command.Action == "cancel") startGate.Clear();
+                else {
+                    if (command.Action == "close") startGate.Clear();
+                    if (!playback.Command(command.Action ?? "", command.Value, command.Area)) return Results.BadRequest();
+                }
                 return Results.Json(PlaybackStatus());
             } catch (Exception ex) when (ex is System.Text.Json.JsonException or BadHttpRequestException) { return Results.BadRequest(); }
         });
@@ -199,6 +212,18 @@ sealed class WorkspaceHost : IAsyncDisposable
         await app.StartAsync(token);
         playback.Start();
         keyboard.Start();
+        _ = Task.Run(async () => {
+            // Pending replay starts: re-evaluated four times a second.
+            try {
+                while (!startLoop.IsCancellationRequested) {
+                    await Task.Delay(250, startLoop.Token);
+                    try {
+                        var ready = startGate.Poll(id => replayCatalog?.Read(id), () => GameScene.Read(outputFolder), () => { var a = renderer.Read(); return (a.Ready, a.Reason); });
+                        if (ready is not null) playback.Load(ready);
+                    } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { }
+                }
+            } catch (OperationCanceledException) { }
+        });
         // Recover the registered UI route without exposing a general file server.
         var endpoint = ((Microsoft.AspNetCore.Routing.IEndpointRouteBuilder)app).DataSources.SelectMany(s => s.Endpoints)
             .OfType<Microsoft.AspNetCore.Routing.RouteEndpoint>().First(e => e.RoutePattern.RawText!.EndsWith("/ui"));
@@ -214,6 +239,7 @@ sealed class WorkspaceHost : IAsyncDisposable
     {
         // Stop accepting requests first, then publish a closed replay frame and
         // retract this process's overlay URL so the game never loads a dead port.
+        startLoop.Cancel();
         await keyboard.DisposeAsync();
         try { await app.StopAsync(); } catch (Exception ex) when (ex is OperationCanceledException or InvalidOperationException) { }
         await playback.DisposeAsync(); await obs.DisposeAsync(); await app.DisposeAsync();
