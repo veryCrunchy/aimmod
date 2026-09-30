@@ -16,12 +16,15 @@ relative to the game's install folder, written `<game>`.
   `SteamNetworkingUtils004`, `SteamFriends018` and `SteamUser023`. The installed
   Steam client provides them. The relay network (SDR) serves a config for
   824270. The probe measured 25 valid relays and 36 points of presence.
-- **The game already has Steam multiplayer code.** It includes a Duels mode
+- **The game ships unused Steam multiplayer code.** It includes a Duels mode
   behind `IsDuelsEnabled`, built on UE replication, Steam lobbies (the UWorks
-  plugin and OnlineSubsystemSteam), and legacy `ISteamNetworking` P2P. We can
-  avoid colliding with it. Use `ISteamNetworkingSockets` P2P on a dedicated
-  virtual port. Namespace lobby keys `aimmod.*` and never set UE's session keys.
-  Don't use lobby invites. Use rich-presence connect strings or the Hub.
+  plugin and OnlineSubsystemSteam), and legacy `ISteamNetworking` P2P. The
+  developer confirmed the game uses Steamworks only for the Workshop.
+  - Use `ISteamNetworkingSockets` P2P on a dedicated virtual port.
+  - Namespace lobby keys `aimmod.*` and never set UE's session keys.
+  - AimMod takes over Steam invites. That can be rich-presence invites, or
+    friends-only lobby invites once the kit confirms the game's leftover
+    handlers stay inert.
 - **Recommended design:** a thin Steam bridge in C++ inside the game process. It
   only moves bytes and never touches gameplay. The native service owns lobby,
   match and verification state, and the Gameface UI shows it. Transport is SDR
@@ -212,7 +215,7 @@ are registered and that other KovaaK's clients may search for lobbies under
 | Transport | legacy `ISteamNetworking` P2P (UE net driver), UE ports and channels | `ISteamNetworkingSockets012` P2P (`ConnectP2P` / `CreateListenSocketP2P`) on one dedicated virtual port, e.g. `0x414D`. This is a separate namespace from legacy P2P channels. The game registers no `SteamNetConnectionStatusChangedCallback_t` (1221) handler because it has no sockets code. We open the listen socket only while in a match, and accept only SteamIDs the match expects. The first message is a handshake (`AMP1`, protocol version, match id); on any mismatch we close the connection. Avoid `ISteamNetworkingMessages`: its channels are closer to the legacy model and it's easier to misroute. |
 | Lobby metadata | `OWNINGID`, `SESSIONFLAGS`, `P2PADDR`, `BUILDID` + UE session settings | Keys are only `aimmod.proto`, `aimmod.match`, `aimmod.scenario`, `aimmod.state`. We never set UE keys, so the OSS session search treats our lobbies as invalid and skips them. |
 | Lobby visibility | UWorks and OSS `RequestLobbyList` | Only `FriendsOnly` (the friends flow) or `Private` lobbies. Never `Public`, and never `Invisible` (Invisible lobbies **are** returned by searches). Call `SetLobbyJoinable(false)` once the match is full. Public matchmaking goes through the Hub, not Steam lobby search. |
-| Invites | OSS and UWorks handle `GameLobbyJoinRequested_t` and `LobbyInvite_t` (the OSS turns them into session invites) | Don't use `InviteUserToLobby` or `ActivateGameOverlayInviteDialog(lobby)`, because the game's handlers would try to join our lobby as a UE session. Use rich presence `connect` = `aimmod:<opaque token>` together with `ActivateGameOverlayInviteDialogConnectString` (in `SteamFriends018`, vtable). The OSS only reacts to `+connect` or `+connect_lobby`, so it ignores our string. When the game isn't running, Steam passes the string on the command line, and the mod reads it with `ISteamApps::GetLaunchCommandLine`. |
+| Invites | OSS and UWorks register `GameLobbyJoinRequested_t`, `LobbyInvite_t` and `GameRichPresenceJoinRequested_t` handlers, and the OSS parses `+connect_lobby`, `+connect` and `SteamConnectIP=`. The developer confirmed the game uses Steamworks only for the Workshop, so nothing acts on these, but the handlers are still compiled in. | AimMod owns invite handling (see "Steam invites" in section 4): either rich presence `connect=-aimmodjoin=aimmod:<ver>:<room>` with `InviteUserToGame`, or a friends-only lobby with `InviteUserToLobby`. Before the lobby path ships, the kit's test 3 must confirm that the game's handlers stay inert. |
 | Rich presence | the game may set keys through UWorks `SetRichPresence` | Set only `connect` (and maybe `status`), and only while in an AimMod match. Clear only the keys we set. `steam_display` needs localization tokens that the developer uploads, so we can't set custom display text. |
 | Lobby chat | UWorks `LobbyChatMsg` delegate | Not used. Ready state lives in lobby member data (`aimmod.ready`). |
 
@@ -350,11 +353,7 @@ leaderboards, and never touch KovaaK's ranked submission.
 
 ### Discovery and invites
 
-1. **Friends.** The host creates a `FriendsOnly` lobby (`aimmod.*` keys only)
-   and sets rich presence `connect=aimmod:lobby:<id>`. Friends see "Join Game"
-   in Steam. Invites go through
-   `ActivateGameOverlayInviteDialogConnectString`. We never use lobby invites
-   (see section 2).
+1. **Friends.** Steam invites handled by AimMod; see "Steam invites" below.
 2. **Hub.** The Hub hands out a room code. Players join by code or through
    Hub matchmaking (by scenario and skill band). The Hub exchanges the players'
    SteamIDs, which were linked with consent. Peers then `ConnectP2P` directly,
@@ -362,6 +361,69 @@ leaderboards, and never touch KovaaK's ranked submission.
 3. **Discord.** Join secret = Hub room code, which the
    `feat/kovaaks-discord-rpc` work can carry. The service resolves it through
    the Hub and then continues as in 2.
+
+### Steam invites
+
+The KovaaK's developer confirmed that the game uses Steamworks only for the
+Workshop and nothing multiplayer, so AimMod can take over Steam invites. Two
+mechanisms are viable. Both are in the test kit.
+
+**A. Rich-presence game invite (preferred first step).**
+
+- The host sets rich presence `connect=-aimmodjoin=aimmod:<version>:<room>`
+  and `status="In an AimMod match (needs AimMod to join)"`.
+- It then invites through `InviteUserToGame(friend, <same string>)` (flat
+  export in 1.47) or `ActivateGameOverlayInviteDialogConnectString`
+  (`SteamFriends018`, vtable). Friends also get "Join Game" on the host in the
+  friends list.
+- **Friend running KovaaK's:** `GameRichPresenceJoinRequested_t` (337) fires
+  with the string, and AimModCore's listener handles it. The game's own OSS
+  handler also receives it. It only acts on `SteamConnectIP=` and otherwise
+  logs "Failed to parse connection URL" and returns, so it ignores our string.
+- **Friend not running KovaaK's:** Steam starts the game with the connect
+  string appended to its command line.
+- **Why the `-` prefix.** UE's `StartGameInstance` treats a first command-line
+  token that doesn't start with `-` as the startup map URL. `aimmod:…` alone
+  could make UE try to "browse" to it before falling back to the default map.
+  A `-aimmodjoin=` switch is ignored by UE and by the OSS, which only looks for
+  `+connect` and `+connect_lobby`.
+- **Custom status text.** `steam_display` only works with localization tokens
+  that the developer uploads for AppID 824270. Without them, friends see the
+  normal "Playing KovaaK's". The `status` key shows up in Steam's "view game
+  info". Custom `steam_display` text needs the developer to add tokens.
+
+**B. Friends-only lobby invite.**
+
+- The host creates a `FriendsOnly` lobby with only `aimmod.*` keys and calls
+  `InviteUserToLobby` or opens the overlay invite dialog.
+- **Friend running:** `GameLobbyJoinRequested_t` (333) fires. AimModCore joins
+  by lobby ID.
+- **Friend not running:** Steam starts the game with `+connect_lobby <id>`.
+  UE's OSS also parses that at start-up and runs its own
+  find-lobby-for-invite task. With our keys missing, the task should fail
+  quietly. Test 3 in the kit checks that empirically, both with the game
+  running and with it launched by the invite: the menu loads normally, and
+  there's no travel or Duels map. If it doesn't stay inert, AimModCore must
+  consume the request first. The fallback is to use only variant A.
+- Lobby membership is also a natural place for ready state and member data.
+
+**Friends without AimMod:**
+
+- **Variant A:** the game launches normally or ignores the invite, and the
+  status text tells them AimMod is required.
+- **Variant B:** the same, provided test 3 shows the OSS stays inert.
+
+**How AimModCore consumes the launch case:**
+
+- At `on_unreal_init`, read `GetCommandLineW()` once. Don't use
+  `ISteamApps::GetLaunchCommandLine`, which only covers `steam://run` URLs.
+- Parse `-aimmodjoin=<value>` (variant A) or `+connect_lobby <id>`
+  (variant B).
+- Validate the `aimmod:<version>:<room>` format and version. Hand it to the
+  service as a pending join, which the UI confirms after the menu has loaded.
+  If it's already running, a 337/333 event goes through the same path.
+- Never act on it before SteamAPI is initialised.
+- Log only a redacted room or lobby ID.
 
 ### Match flow
 
@@ -485,6 +547,21 @@ Expected log lines, in order: `readiness: relay=…`, `readiness: p2p cert=…`,
 `stage 2 sockets: in-memory pair round trips 5/5 …`, and
 `stage 2: done (relay+cert=ready lobby=ok sockets=ok)`.
 
+**In-game result (KovaaK's 3.9.11): PASS.**
+
+| Check | Result |
+| --- | --- |
+| Relay after warm-up | `Current`: 24 valid relays (10 great, 11 good+), 36 points of presence |
+| P2P certificate | ready |
+| Private lobby create | 287 ms |
+| `SetLobbyJoinable(false)` | returned 1 |
+| `aimmod.proto` | set and read back |
+| Lobby chat loopback to self | 242 ms, then the lobby was left |
+| In-memory socket pair | 5/5 round trips, about 1 µs each |
+| Callback dispatch | game thread |
+
+The default read-only config was restored in the game afterwards.
+
 **Stage 3 (prepared, not run):**
 
 - This is the two-account relay-only P2P test. It's compiled only with
@@ -597,17 +674,65 @@ through Valve's relays either way.
    - Neither UE4SS.log nor the game log shows any `FOnlineAsyncEvent*` line or
      Duels activity at the same time.
 
-The harness can run the same test without the game:
+### Test kit (harness, no UE4SS needed)
+
+The easiest way to run stage 3 with a friend is the standalone harness. Build
+it as a static-runtime, harness-only build with stage 3:
 
 ```
-aimmod_steam_probe_harness --steam-api <copy of steam_api64.dll> --stage3-role listen  --stage3-peer <B's SteamID64> --stage3-match <token>
-aimmod_steam_probe_harness --steam-api <copy of steam_api64.dll> --stage3-role connect --stage3-peer <A's SteamID64> --stage3-match <token>
+cmake -S in-game/steam-probe -B in-game/steam-probe/build-kit -G "Visual Studio 17 2022" -A x64 -DAIMMOD_PROBE_STAGE3=ON -DAIMMOD_PROBE_STATIC_RUNTIME=ON
+cmake --build in-game/steam-probe/build-kit --config Release
+```
+
+The kit contains:
+
+- the exe, renamed `aimmod-steam-test.exe`
+- `steam_appid.txt` (`824270`)
+- `.cmd` scripts that prompt for the peer ID and the code
+- a README
+
+It doesn't bundle `steam_api64.dll`. The harness loads the copy inside the
+local KovaaK's install, which it finds through Steam's `libraryfolders.vdf`,
+and only loads it, never copies or modifies it.
+
+**Requirements and behaviour:**
+
+- **Steam init:** `SteamAPI_Init` works with Steam running. The AppID comes
+  from `SteamAppId` (set by the harness) or `steam_appid.txt` in the working
+  directory. The init only succeeds for accounts that own KovaaK's. The P2P
+  cert and relay access are per app as well. So the friend must own KovaaK's
+  and have it installed, but doesn't need UE4SS or AimMod.
+- **The game must be closed** while the harness runs. The harness registers
+  as the same app, so Steam could route a P2P connection or invite to either
+  process. Running both at once worked for stage 1, but isn't reliable for
+  these tests.
+- **Extra flags:**
+  - `--print-steamid` prints the account's SteamID64. This is local console
+    only; logs stay redacted.
+  - The connector retries every 3 s until the listener is up.
+  - The listener waits up to 300 s.
+- **Result:** a short PASS/FAIL block covering RTT min/median/max, relayed,
+  encrypted/authenticated, the peer check, the handshake and the relay POP,
+  with no SteamIDs or addresses. It's also saved as `aimmod-p2p-result.txt`.
+  The exit code is 0 on pass.
+- **Invite test:** `--invite-test send|receive`, with
+  `--invite-variant rp|lobby` on the sender. It covers the two invite
+  mechanisms in section 4 and saves `aimmod-invite-result.txt`. The receiver
+  also reads the sender's `connect` rich presence to check it's visible to
+  friends.
+
+```
+aimmod-steam-test.exe --stage3-role listen  --stage3-peer <friend's SteamID64> --stage3-match <code>
+aimmod-steam-test.exe --stage3-role connect --stage3-peer <user's SteamID64>   --stage3-match <code>
+aimmod-steam-test.exe --invite-test receive --stage3-peer <sender's SteamID64> --stage3-match <code>
+aimmod-steam-test.exe --invite-test send --invite-variant rp|lobby --stage3-peer <receiver's SteamID64> --stage3-match <code>
 ```
 
 ## 6. Next steps
 
-1. Run stage 2 in-game and record its timings here.
-2. Run the stage 3 test between two accounts.
+1. Run the kit's tests 1–3 with a friend and record the results here.
+2. Pick the invite variant from the results. Implement launch-argument and
+   337/333 handling in AimModCore as described in "Steam invites".
 3. Build `AimModNet`, the service match engine and the Hub room and relay
    endpoints behind a feature flag. AimMod PvP results must stay separate
    from KovaaK's ranked leaderboards.

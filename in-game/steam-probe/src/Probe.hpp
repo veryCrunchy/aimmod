@@ -86,7 +86,48 @@ namespace probe
 
     // Stage 3. See Stage3P2P.cpp. Same gating as stage 2 with its own build
     // option (AIMMOD_PROBE_STAGE3) and stage3_role.
-    bool RunStage3(const SteamApi& api, const Options& options, const LogFn& log, const GameThreadFn& onGameThread);
+    struct Stage3Result
+    {
+        bool ran = false;
+        bool pass = false;
+        bool connected = false;
+        double connectMs = -1;
+        bool relayed = false;
+        bool authenticated = false; // authenticated and encrypted by Steam
+        bool peerMatch = false;
+        bool handshake = false;
+        std::string pop;            // relay data-centre code, e.g. "fra"
+        int pongs = 0;              // connector: pongs received of 20
+        int echoed = 0;             // listener: pings echoed
+        bool bye = false;           // listener: Bye received
+        double rttMinMs = -1, rttMedianMs = -1, rttMaxMs = -1;
+        std::string failure;        // first failure reason, empty on pass
+    };
+
+    bool RunStage3(const SteamApi& api, const Options& options, const LogFn& log, const GameThreadFn& onGameThread,
+                   Stage3Result* result = nullptr);
+
+    // Steam invite test (harness, AIMMOD_PROBE_STAGE3 builds). See InviteTest.cpp.
+    struct InviteOptions
+    {
+        std::string role;    // "send" or "receive"
+        std::string variant; // sender: "rp" (rich presence + InviteUserToGame) or "lobby"
+        std::uint64_t peer = 0;
+        std::string code;
+        int seconds = 180;
+    };
+    struct InviteResult
+    {
+        std::string role, variant;
+        bool sent = false;            // sender: invite call succeeded
+        bool received = false;        // receiver: join request arrived
+        bool joined = false;          // lobby variant: peer joined / we joined
+        bool sawRichPresence = false; // receiver: sender's AimMod connect key visible
+        bool pass = false;
+        std::string failure;
+    };
+    bool RunInviteTest(const SteamApi& api, const InviteOptions& options, const LogFn& log, const GameThreadFn& onGameThread,
+                       InviteResult* result = nullptr);
 
     // Waits (up to timeoutSeconds) for the relay network and this account's
     // P2P certificate to be ready, logging both with elapsed times. Asks the

@@ -22,11 +22,21 @@ if(AIMMOD_PROBE_BUILD_MOD)
     add_subdirectory("${AIMMOD_UE4SS_DIR}" RE-UE4SS)
 endif()
 
+# Static MSVC runtime for a harness you hand to someone else (no VC++
+# redistributable needed). The UE4SS mod must keep the dynamic runtime.
+option(AIMMOD_PROBE_STATIC_RUNTIME "Link the harness against the static MSVC runtime" OFF)
+if(AIMMOD_PROBE_STATIC_RUNTIME)
+    if(AIMMOD_PROBE_BUILD_MOD)
+        message(FATAL_ERROR "AIMMOD_PROBE_STATIC_RUNTIME is for harness-only builds")
+    endif()
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_library(aimmod_steam_probe STATIC src/Probe.cpp src/Stage2Loopback.cpp src/Stage3P2P.cpp)
+add_library(aimmod_steam_probe STATIC src/Probe.cpp src/Stage2Loopback.cpp src/Stage3P2P.cpp src/InviteTest.cpp)
 target_include_directories(aimmod_steam_probe PUBLIC src)
 target_link_libraries(aimmod_steam_probe PUBLIC version)
 if(MSVC)

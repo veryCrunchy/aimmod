@@ -27,7 +27,7 @@
 namespace probe
 {
 #if !defined(AIMMOD_PROBE_STAGE3)
-    bool RunStage3(const SteamApi&, const Options& options, const LogFn& log, const GameThreadFn&)
+    bool RunStage3(const SteamApi&, const Options& options, const LogFn& log, const GameThreadFn&, Stage3Result*)
     {
         if (!options.stage3Role.empty()) log("stage 3: requested in config but not compiled into this build; skipped");
         return false;
@@ -217,53 +217,61 @@ namespace probe
         }
     } // namespace
 
-    bool RunStage3(const SteamApi& api, const Options& options, const LogFn& log, const GameThreadFn& onGameThread)
+
+    bool RunStage3(const SteamApi& api, const Options& options, const LogFn& log, const GameThreadFn& onGameThread, Stage3Result* out)
     {
+        Stage3Result local;
+        Stage3Result& r = out ? *out : local;
+        r = Stage3Result{};
+        auto fail = [&](const std::string& why) {
+            if (r.failure.empty()) r.failure = why;
+            log("stage 3: " + why);
+            return false;
+        };
         if (options.stage3Role.empty()) return false;
-        if (!api.Initialised())
-        {
-            log("stage 3: SteamAPI not initialised; skipped");
-            return false;
-        }
-        if (options.stage3Peer == 0 || options.stage3Match.empty())
-        {
-            log("stage 3: stage3_peer and stage3_match are required; skipped");
-            return false;
-        }
+        r.ran = true;
+        if (!api.Initialised()) return fail("SteamAPI not initialised");
+        if (options.stage3Peer == 0 || options.stage3Match.empty()) return fail("stage3_peer and stage3_match are required");
+        if (!api.User_GetSteamID) return fail("SteamUser flat exports unavailable");
+        if (auto* user = api.Interface("SteamUser020"); user && api.User_GetSteamID(reinterpret_cast<std::intptr_t>(user)) == options.stage3Peer)
+            return fail("stage3_peer is this account's own SteamID; use the other person's");
         auto* sockets = static_cast<ISteamNetworkingSockets*>(api.Interface("SteamNetworkingSockets012"));
-        if (!sockets)
-        {
-            log("stage 3: SteamNetworkingSockets012 unavailable");
-            return false;
-        }
+        if (!sockets) return fail("SteamNetworkingSockets012 unavailable");
         const bool listen = options.stage3Role == "listen";
         const std::uint64_t match = Fnv1a(options.stage3Match);
         char line[256];
         std::snprintf(line, sizeof(line), "stage 3 (P2P): role=%s peer=%s vport=%d relay-only", options.stage3Role.c_str(),
                       RedactSteamId(options.stage3Peer).c_str(), AimModVirtualPort);
         log(line);
-        if (!WaitForRelayAndCert(api, 30, log))
-        {
-            log("stage 3: relay or cert not ready; skipped");
-            return false;
-        }
+        if (!WaitForRelayAndCert(api, 30, log)) return fail("relay network or P2P cert not ready");
 
         Session session(api, sockets, onGameThread, log);
         const SteamNetworkingConfigValue_t relayOnly = RelayOnly();
         const auto start = Clock::now();
         const auto deadline = start + std::chrono::seconds(options.stage3Seconds);
+        SteamNetConnectionInfo_t info{};
+
+        auto waitConnected = [&]() {
+            while (Clock::now() < deadline)
+            {
+                if (!sockets->GetConnectionInfo(session.m_conn, &info)) return false;
+                if (info.m_eState == k_EConnState_Connected) return true;
+                if (info.m_eState == k_EConnState_ClosedByPeer || info.m_eState == k_EConnState_ProblemDetectedLocally ||
+                    info.m_eState == k_EConnState_None)
+                    return false;
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            }
+            return false;
+        };
 
         if (listen)
         {
             session.RegisterListener();
             session.m_listen = sockets->CreateListenSocketP2P(AimModVirtualPort, 1, &relayOnly);
-            if (!session.m_listen)
-            {
-                log("stage 3: CreateListenSocketP2P failed");
-                return false;
-            }
-            log("stage 3: listening; waiting for the peer");
-            while (!session.m_conn && Clock::now() < deadline)
+            if (!session.m_listen) return fail("CreateListenSocketP2P failed");
+            std::snprintf(line, sizeof(line), "stage 3: listening; waiting up to %d s for the peer", options.stage3Seconds);
+            log(line);
+            while (!r.connected && Clock::now() < deadline)
             {
                 for (const auto& event : session.m_listener->Drain())
                 {
@@ -276,7 +284,17 @@ namespace probe
                     if (sockets->AcceptConnection(event.conn) == 1) session.m_conn = event.conn;
                     else Reject(sockets, event.conn, "aimmod: accept failed", log);
                 }
-                if (!session.m_conn) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                if (session.m_conn)
+                {
+                    r.connected = waitConnected();
+                    if (!r.connected)
+                    {
+                        // The peer gave up or the route failed: close and keep listening.
+                        sockets->CloseConnection(session.m_conn, 0, "aimmod: retry", false);
+                        session.m_conn = k_HSteamNetConnection_Invalid;
+                    }
+                }
+                else std::this_thread::sleep_for(std::chrono::milliseconds(20));
             }
         }
         else
@@ -285,41 +303,40 @@ namespace probe
             peer.m_eType = 16; // k_ESteamNetworkingIdentityType_SteamID
             peer.m_cbSize = sizeof(std::uint64_t);
             peer.m_steamID64 = options.stage3Peer;
-            session.m_conn = sockets->ConnectP2P(peer, AimModVirtualPort, 1, &relayOnly);
+            // Retry until the listener is up or the deadline passes.
+            int attempt = 0;
+            while (!r.connected && Clock::now() < deadline)
+            {
+                ++attempt;
+                session.m_conn = sockets->ConnectP2P(peer, AimModVirtualPort, 1, &relayOnly);
+                if (!session.m_conn) return fail("ConnectP2P failed");
+                r.connected = waitConnected();
+                if (!r.connected)
+                {
+                    std::snprintf(line, sizeof(line), "stage 3: attempt %d not connected (state=%d end=%d); retrying", attempt, info.m_eState,
+                                  info.m_eEndReason);
+                    log(line);
+                    sockets->CloseConnection(session.m_conn, 0, "aimmod: retry", false);
+                    session.m_conn = k_HSteamNetConnection_Invalid;
+                    std::this_thread::sleep_for(std::chrono::seconds(3));
+                }
+            }
         }
-        if (!session.m_conn)
-        {
-            log("stage 3: no connection (timed out or ConnectP2P failed)");
-            return false;
-        }
+        if (!r.connected) return fail("no connection before the deadline (is the other side running with your SteamID?)");
 
-        // Wait for Connected by polling (no callback needed on this side).
-        SteamNetConnectionInfo_t info{};
-        while (Clock::now() < deadline)
-        {
-            if (!sockets->GetConnectionInfo(session.m_conn, &info)) break;
-            if (info.m_eState == k_EConnState_Connected || info.m_eState == k_EConnState_ClosedByPeer ||
-                info.m_eState == k_EConnState_ProblemDetectedLocally)
-                break;
-            std::this_thread::sleep_for(std::chrono::milliseconds(20));
-        }
-        if (info.m_eState != k_EConnState_Connected)
-        {
-            std::snprintf(line, sizeof(line), "stage 3: not connected (state=%d end=%d)", info.m_eState, info.m_eEndReason);
-            log(line);
-            return false;
-        }
-        const bool relayed = (info.m_nFlags & k_nConnFlags_Relayed) != 0;
-        const bool authenticated = (info.m_nFlags & (k_nConnFlags_Unauthenticated | k_nConnFlags_Unencrypted)) == 0;
-        const bool rightPeer = info.m_identityRemote.m_steamID64 == options.stage3Peer;
-        std::snprintf(line, sizeof(line), "stage 3: connected in %.0f ms; relayed=%d authenticated+encrypted=%d peer-match=%d relay POP=%s",
-                      ElapsedMs(start), relayed, authenticated, rightPeer, PopName(info.m_idPOPRelay).c_str());
+        r.connectMs = ElapsedMs(start);
+        r.relayed = (info.m_nFlags & k_nConnFlags_Relayed) != 0;
+        r.authenticated = (info.m_nFlags & (k_nConnFlags_Unauthenticated | k_nConnFlags_Unencrypted)) == 0;
+        r.peerMatch = info.m_identityRemote.m_steamID64 == options.stage3Peer;
+        r.pop = PopName(info.m_idPOPRelay);
+        std::snprintf(line, sizeof(line), "stage 3: connected after %.0f ms; relayed=%d authenticated+encrypted=%d peer-match=%d relay POP=%s",
+                      r.connectMs, r.relayed, r.authenticated, r.peerMatch, r.pop.c_str());
         log(line);
-        if (!rightPeer || !authenticated)
+        if (!r.peerMatch || !r.authenticated)
         {
             Reject(sockets, session.m_conn, "aimmod: identity check failed", log);
             session.m_conn = k_HSteamNetConnection_Invalid;
-            return false;
+            return fail("identity check failed");
         }
 
         auto* utils = static_cast<ISteamNetworkingUtils*>(api.Interface("SteamNetworkingUtils004"));
@@ -329,13 +346,13 @@ namespace probe
             // Connector: Hello -> HelloAck, then pings.
             Send(sockets, session.m_conn, MakeFrame(Hello, match), k_nSteamNetworkingSend_Reliable);
             auto* ack = ReceiveOne(sockets, session.m_conn, 10000);
-            const bool ok = Valid(ack, match, frame) && frame.type == HelloAck;
+            r.handshake = Valid(ack, match, frame) && frame.type == HelloAck;
             if (ack) ack->m_pfnRelease(ack);
-            if (!ok)
+            if (!r.handshake)
             {
                 Reject(sockets, session.m_conn, "aimmod: bad handshake", log);
                 session.m_conn = k_HSteamNetConnection_Invalid;
-                return false;
+                return fail("handshake failed (do both sides use the same --stage3-match code?)");
             }
             log("stage 3: handshake ok");
             std::vector<long long> rtts;
@@ -354,28 +371,35 @@ namespace probe
             Send(sockets, session.m_conn, MakeFrame(Bye, match), k_nSteamNetworkingSend_Reliable);
             session.m_linger = true;
             std::sort(rtts.begin(), rtts.end());
-            std::snprintf(line, sizeof(line), "stage 3: %zu/20 pongs; RTT min %.1f ms, median %.1f ms, max %.1f ms", rtts.size(),
-                          rtts.empty() ? -1.0 : rtts.front() / 1000.0, rtts.empty() ? -1.0 : rtts[rtts.size() / 2] / 1000.0,
-                          rtts.empty() ? -1.0 : rtts.back() / 1000.0);
+            r.pongs = static_cast<int>(rtts.size());
+            if (!rtts.empty())
+            {
+                r.rttMinMs = rtts.front() / 1000.0;
+                r.rttMedianMs = rtts[rtts.size() / 2] / 1000.0;
+                r.rttMaxMs = rtts.back() / 1000.0;
+            }
+            std::snprintf(line, sizeof(line), "stage 3: %d/20 pongs; RTT min %.1f ms, median %.1f ms, max %.1f ms", r.pongs, r.rttMinMs,
+                          r.rttMedianMs, r.rttMaxMs);
             log(line);
-            return rtts.size() >= 15 && relayed;
+            if (r.pongs < 15) return fail("too few pongs");
+            if (!r.relayed) return fail("connection was not relayed");
+            r.pass = true;
+            return true;
         }
 
         // Listener: expect Hello, answer HelloAck, echo pings until Bye.
         auto* hello = ReceiveOne(sockets, session.m_conn, 10000);
-        const bool ok = Valid(hello, match, frame) && frame.type == Hello;
+        r.handshake = Valid(hello, match, frame) && frame.type == Hello;
         if (hello) hello->m_pfnRelease(hello);
-        if (!ok)
+        if (!r.handshake)
         {
             Reject(sockets, session.m_conn, "aimmod: bad handshake", log);
             session.m_conn = k_HSteamNetConnection_Invalid;
-            return false;
+            return fail("handshake failed (do both sides use the same --stage3-match code?)");
         }
         Send(sockets, session.m_conn, MakeFrame(HelloAck, match), k_nSteamNetworkingSend_Reliable);
         log("stage 3: handshake ok; echoing pings");
-        int echoed = 0;
-        bool bye = false;
-        while (!bye && Clock::now() < deadline)
+        while (!r.bye && Clock::now() < deadline)
         {
             auto* message = ReceiveOne(sockets, session.m_conn, 500);
             if (!message)
@@ -388,15 +412,18 @@ namespace probe
                 if (frame.type == Ping)
                 {
                     Send(sockets, session.m_conn, MakeFrame(Pong, match, frame.seq, frame.timeUs), k_nSteamNetworkingSend_UnreliableNoDelay);
-                    ++echoed;
+                    ++r.echoed;
                 }
-                else if (frame.type == Bye) bye = true;
+                else if (frame.type == Bye) r.bye = true;
             }
             message->m_pfnRelease(message);
         }
-        std::snprintf(line, sizeof(line), "stage 3: echoed %d pings, bye=%d", echoed, bye);
+        std::snprintf(line, sizeof(line), "stage 3: echoed %d pings, bye=%d", r.echoed, r.bye);
         log(line);
-        return bye && relayed;
+        if (!r.bye) return fail("the connector did not finish (no Bye)");
+        if (!r.relayed) return fail("connection was not relayed");
+        r.pass = true;
+        return true;
     }
 #endif
 } // namespace probe
