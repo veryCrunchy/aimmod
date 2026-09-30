@@ -111,37 +111,31 @@ public static class GlobalCoachingProfileBuilder
                                      .Where(item => valid(item.Analysis))
                                      .Select(item => item with { Analysis = item.Analysis! })
                                      .ToArray();
-        ReplayObjectJudgement[] judgements = exact.SelectMany(item => item.Analysis!.Judgements).ToArray();
-        ClassifiedMiss[] classifiedMisses = exact.SelectMany(item => item.Analysis!.Judgements
-                                                                         .Where(isMiss)
-                                                                         .Where(judgement => judgement.MissAnalysis is { Reason: not ReplayMissReason.Unknown })
-                                                                         .Select(judgement => new ClassifiedMiss(item, judgement)))
+        ReplayJudgementDigest[] digests = exact.Select(item => ReplayJudgementDigest.For(item.Analysis!)).ToArray();
+        int judgementCount = digests.Sum(digest => digest.JudgementCount);
+        int missCount = digests.Sum(digest => digest.Misses.Length);
+        ClassifiedMiss[] classifiedMisses = exact.SelectMany((item, index) => digests[index].ClassifiedMisses
+                                                                                  .Select(judgement => new ClassifiedMiss(item, judgement)))
                                                   .ToArray();
-        ReplayObjectJudgement[] misses = judgements.Where(isMiss).ToArray();
-        double[] timing = judgements.Where(isTimingSample).Select(item => item.TimeOffsetMs).ToArray();
-        double[] cursorDistances = judgements.Where(item => !isMiss(item)
-                                                             && item.ObjectPosition is not null
-                                                             && item.CursorPosition is not null)
-                                              .Select(item => distance(item.ObjectPosition!, item.CursorPosition!))
-                                              .Where(double.IsFinite)
-                                              .ToArray();
+        double[] timing = ReplayJudgementClassifier.Concat(digests.Select(digest => digest.TimingOffsets).ToArray());
+        double[] cursorDistances = ReplayJudgementClassifier.Concat(digests.Select(digest => digest.CursorDistances).ToArray());
 
         int distinctMaps = history.Select(mapKey).Distinct(StringComparer.Ordinal).Count();
         int analysedMaps = exact.Select(item => mapKey(item.Run)).Distinct(StringComparer.Ordinal).Count();
         int replayAvailableRuns = Math.Max(history.Count(run => run.HasReplayFile), exact.Length);
         CoachingConfidence confidence = confidenceFor(exact.Length, analysedMaps, replayAvailableRuns);
-        CoachingConfidence classificationCoverageConfidence = confidenceForCoverage(misses.Length == 0
+        CoachingConfidence classificationCoverageConfidence = confidenceForCoverage(missCount == 0
             ? 0
-            : (double)classifiedMisses.Length / misses.Length);
+            : (double)classifiedMisses.Length / missCount);
         var coverage = new GlobalCoachingCoverage(
             history.Length,
             replayAvailableRuns,
             exact.Length,
             distinctMaps,
             analysedMaps,
-            judgements.Length,
+            judgementCount,
             confidence,
-            misses.Length,
+            missCount,
             classifiedMisses.Length);
 
         GlobalMissReasonShare[] reasons = classifiedMisses.GroupBy(item => item.Judgement.MissAnalysis!.Reason)
@@ -211,9 +205,7 @@ public static class GlobalCoachingProfileBuilder
         foreach (IGrouping<string, AnalysedRun> map in exact.GroupBy(item => mapKey(item.Run), StringComparer.Ordinal)
                                                             .Where(group => group.Count() >= 2))
         {
-            var mapReasons = map.SelectMany(item => item.Analysis!.Judgements
-                                                        .Where(isMiss)
-                                                        .Where(judgement => judgement.MissAnalysis is { Reason: not ReplayMissReason.Unknown })
+            var mapReasons = map.SelectMany(item => ReplayJudgementDigest.For(item.Analysis!).ClassifiedMisses
                                                         .Select(judgement => new { item.Run.ScoreId, Reason = judgement.MissAnalysis!.Reason }))
                                 .ToArray();
             if (mapReasons.Length < 2)
@@ -474,44 +466,14 @@ public static class GlobalCoachingProfileBuilder
 
     private static bool valid(ReplayAnalysisResult? analysis) => analysis?.Summary is not null && analysis.Judgements is not null;
 
-    private static bool isMiss(ReplayObjectJudgement judgement) =>
-        string.Equals(judgement.Result, "Miss", StringComparison.OrdinalIgnoreCase);
-
-    private static bool isTimingSample(ReplayObjectJudgement judgement) =>
-        !isMiss(judgement)
-        && string.Equals(judgement.MaximumResult, "Great", StringComparison.OrdinalIgnoreCase)
-        && double.IsFinite(judgement.TimeOffsetMs);
-
     private static string mapKey(LocalReplay run) => run.BeatmapId != Guid.Empty
         ? run.BeatmapId.ToString("N")
         : $"{run.Title}\u001f{run.Difficulty}";
 
-    private static double distance(ReplayPoint left, ReplayPoint right)
-    {
-        double x = left.X - right.X;
-        double y = left.Y - right.Y;
-        return Math.Sqrt(x * x + y * y);
-    }
+    private static double standardDeviation(IEnumerable<double> values) => ReplayJudgementClassifier.StandardDeviation(values);
 
-    private static double standardDeviation(IEnumerable<double> values)
-    {
-        double[] samples = values.Where(double.IsFinite).ToArray();
-        if (samples.Length == 0)
-            return 0;
-        double mean = samples.Average();
-        return Math.Sqrt(samples.Average(value => Math.Pow(value - mean, 2)));
-    }
-
-    private static double percentile(IEnumerable<double> values, double percentile)
-    {
-        double[] ordered = values.Where(double.IsFinite).OrderBy(value => value).ToArray();
-        if (ordered.Length == 0)
-            return 0;
-        double index = Math.Clamp(percentile, 0, 1) * (ordered.Length - 1);
-        int lower = (int)Math.Floor(index);
-        int upper = (int)Math.Ceiling(index);
-        return lower == upper ? ordered[lower] : ordered[lower] + (ordered[upper] - ordered[lower]) * (index - lower);
-    }
+    private static double percentile(IEnumerable<double> values, double percentile) =>
+        ReplayJudgementClassifier.InterpolatedPercentile(values, percentile);
 
     private static string formatSigned(double value) => $"{value:+0.0;-0.0;0.0} ms";
 
