@@ -47,6 +47,7 @@ public partial class NativePpTargetsWorkspace
         private readonly SpriteIcon icon;
         private readonly TruncatingSpriteText title;
         private readonly TruncatingSpriteText detail;
+        private readonly Container actionHost;
 
         public PpTargetWorkspaceState()
         {
@@ -79,22 +80,40 @@ public partial class NativePpTargetsWorkspace
                     Font = new FontUsage(size: 12, weight: "SemiBold"),
                     Colour = AimModPalette.Muted,
                 },
+                actionHost = new Container
+                {
+                    Anchor = Anchor.Centre,
+                    Origin = Anchor.TopCentre,
+                    Position = new(0, 66),
+                    AutoSizeAxes = Axes.Both,
+                },
             };
         }
 
-        public void ShowState(IconUsage stateIcon, string heading, string description)
+        public void ShowState(IconUsage stateIcon, string heading, string description, string? actionLabel = null, Action? action = null)
         {
             icon.Icon = stateIcon;
             title.Text = heading;
             detail.Text = description;
+            actionHost.Clear();
+            if (actionLabel is not null && action is not null)
+                actionHost.Add(new AimMod.Desktop.Coaching.WorkspaceButton(actionLabel, action, AimModPalette.Accent)
+                {
+                    Anchor = Anchor.TopCentre,
+                    Origin = Anchor.TopCentre,
+                });
             this.FadeIn(150, Easing.OutQuint);
         }
 
         public void HideState() => this.FadeOut(120, Easing.OutQuint);
 
+        private float layoutWidth = -1;
+
         protected override void Update()
         {
             base.Update();
+            if (DrawWidth == layoutWidth) return;
+            layoutWidth = DrawWidth;
             float maxWidth = Math.Clamp(DrawWidth - 80, 260, 560);
             title.MaxWidth = maxWidth;
             detail.MaxWidth = maxWidth;
@@ -118,16 +137,26 @@ public partial class NativePpTargetsWorkspace
         private readonly Container artwork;
         private readonly Container expectedMetric;
         private readonly Container maximumMetric;
+        private readonly AimMod.Desktop.Coaching.WorkspaceFocusRing focusRing;
         private bool importing;
         private bool installed;
+
+        public string Key { get; }
+
+        public OfficialBeatmapSet Set => set;
+
+        public bool Installed => installed;
+
+        public void SetFocused(bool focused) => focusRing.SetVisible(focused);
 
         public PpTargetRow(
             PpTargetCandidate candidate,
             OfficialBeatmapSet set,
             Func<OfficialBeatmapSet, Task<OnlineBeatmapImportResult>> import,
             Func<int, CancellationToken, Task>? openBeatmap,
-            TargetSort ordering, bool installed = false)
+            TargetSort ordering, bool installed = false, string key = "")
         {
+            Key = key;
             this.installed = installed;
             this.set = set;
             this.import = import;
@@ -203,7 +232,7 @@ public partial class NativePpTargetsWorkspace
                     Children = new Drawable[]
                     {
                         title = new TruncatingSpriteText { Text = candidate.Title, Font = new FontUsage(size: 15, weight: "Bold"), Colour = AimModPalette.Text, MaxWidth = 450 },
-                        artist = new TruncatingSpriteText { Text = $"{candidate.Artist}  /  mapped by {candidate.Creator}", Font = new FontUsage(size: 10, weight: "SemiBold"), Colour = AimModPalette.Muted, MaxWidth = 450 },
+                        artist = new TruncatingSpriteText { Text = $"{candidate.Artist}  /  mapped by {candidate.Creator}", Font = new FontUsage(size: 11, weight: "SemiBold"), Colour = AimModPalette.Muted, MaxWidth = 450 },
                         mapDetails = truncatingText($"[{candidate.Difficulty}]   {candidate.StarRating:0.00}*   {candidate.Bpm:0} BPM   {formatLength(candidate.TotalLengthSeconds)}   {combo}   {mods}", 10, difficultyColour, "Bold"),
                         mechanicsDetails = truncatingText(
                             $"AR {difficulty?.ApproachRate:0.#}   OD {difficulty?.OverallDifficulty:0.#}   CS {difficulty?.CircleSize:0.#}   HP {difficulty?.DrainRate:0.#}   " +
@@ -238,12 +267,17 @@ public partial class NativePpTargetsWorkspace
                             out saveBackground, out saveText),
                     },
                 },
+                focusRing = new AimMod.Desktop.Coaching.WorkspaceFocusRing(),
             };
         }
+
+        private float layoutWidth = -1;
 
         protected override void Update()
         {
             base.Update();
+            if (DrawWidth == layoutWidth) return;
+            layoutWidth = DrawWidth;
             const float actionColumn = 128;
             float metricWidth = DrawWidth < 880 ? 88 : 106;
             bool compact = DrawWidth < 980;
