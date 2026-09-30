@@ -47,43 +47,54 @@
   function number(value, digits) { return F().number(value, digits); }
   function append(parent, child) { parent.appendChild(child); return child; }
   function button(label, action, active) { var b = node('button', label, 'button' + (active ? ' primary' : '')); b.type = 'button'; b.onclick = action; return b; }
-  function metric(parent, title, value, note) { var m = append(parent, node('div', undefined, 'metric')); append(m, node('div', title, 'metric-label')); append(m, node('div', value, 'metric-value')); append(m, node('div', note || '', 'metric-note')); }
+  function metric(parent, title, value, note, change) { var m = append(parent, node('div', undefined, 'metric')); append(m, node('div', title, 'metric-label')); append(m, node('div', value, 'metric-value')); var foot = append(m, node('div', undefined, 'metric-note')); var pct = change && typeof change.ChangePercent === 'number' ? change.ChangePercent : null; if (pct !== null) { var kind = F().trend(pct); append(foot, node('span', (kind === 'up' ? '▲ ' : kind === 'down' ? '▼ ' : '') + F().signed(pct) + '%', 'change ' + kind)); } append(foot, node('span', note || '')); }
+  function changeNote(c) { return c && typeof c.ChangePercent === 'number' ? 'vs previous period' : 'Needs 3+ runs in this and the previous period'; }
+  function mostCommon(bins) { var best = null; bins.forEach(function (b) { if (b && F().known(b.Count) && b.Count > 0 && (!best || b.Count > best.Count)) best = b; }); return best; }
   function panel(title) { var p = node('div', undefined, 'panel stats-panel'); append(p, node('h2', title)); return p; }
   function empty(parent, title) { append(parent, node('p', title, 'stats-muted')); }
-  function changeText(c) { if (!c || typeof c.ChangePercent !== 'number') return 'Needs 3+ runs in this and the previous period'; return F().signed(c.ChangePercent) + '% vs previous period'; }
   function legend(parent, items) { var row = append(parent, node('div', undefined, 'stats-legend')); items.forEach(function (item) { var entry = append(row, node('span', undefined, 'stats-legend-item')); var swatch = append(entry, node('span', undefined, 'stats-legend-swatch')); swatch.style.background = item[1]; append(entry, node('span', item[0])); }); }
   function fraction(points, p, index) { return typeof p.RunNumber === 'number' && typeof points[0].RunNumber === 'number' ? (p.RunNumber - points[0].RunNumber) / Math.max(points[points.length - 1].RunNumber - points[0].RunNumber, 1) : index / Math.max(points.length - 1, 1); }
-  function chart(canvas, points, histogram) {
-    var w = parseFloat(canvas.style.width)||widthOf(canvas), h = 280; canvas.chartHits = []; if (!w) return;
+  function message(c, w, h, text) { c.fillStyle = '#a7bab0'; c.font = '14px Arial'; c.textAlign = 'center'; c.fillText(text, w / 2, h / 2); }
+  // One readable trend: runs (faint), 5-run average (bold) with a +/-1 SD band,
+  // and the fitted trend. The spread chart marks the average and median.
+  function chart(canvas, points, histogram, marks) {
+    var w = parseFloat(canvas.style.width)||widthOf(canvas), h = parseFloat(canvas.style.height)||280; canvas.chartHits = []; if (!w) return;
     var ratio = global.devicePixelRatio || 1; canvas.width = w * ratio; canvas.height = h * ratio;
     var c = canvas.getContext('2d'); c.scale(ratio, ratio); c.clearRect(0, 0, w, h);
-    if (!points.length) { c.fillStyle = '#a4b3b8'; c.font = '14px Arial'; c.fillText('No scores in this period yet', 20, 100); return; }
-    var values = points.map(function (p) { return histogram ? p.Count : pointValue(p,chartMetric); }).filter(function (v) { return typeof v === 'number' && isFinite(v); });
-    if (!values.length) { c.fillStyle = '#a4b3b8'; c.font = '14px Arial'; c.fillText('No measurements for this metric yet', 20, 100); return; }
-    var lo = histogram ? 0 : Math.min.apply(null, values), hi = Math.max.apply(null, values);
-    if (!histogram) { var padding = Math.max((hi - lo) * 0.12, Math.abs(hi) * 0.02, hi - lo > 0 ? 0 : 1); lo -= padding; hi += padding; if (lo < 0 && Math.min.apply(null, values) >= 0) lo = 0; }
+    if (!points.length) { message(c, w, h, 'No scores in this period yet'); return; }
+    var values = points.map(function (p) { return histogram ? p.Count : pointValue(p,chartMetric); });
+    var known = values.filter(function (v) { return typeof v === 'number' && isFinite(v); });
+    if (!known.length) { message(c, w, h, 'No measurements for this metric yet'); return; }
+    var band = histogram ? [] : F().rolling(values, 5), range = known.slice();
+    band.forEach(function (b) { if (b) { range.push(b.mean + b.sd); range.push(b.mean - b.sd); } });
+    var lo = histogram ? 0 : Math.min.apply(null, range), hi = Math.max.apply(null, range);
+    if (!histogram) { var padding = Math.max((hi - lo) * 0.08, Math.abs(hi) * 0.01, hi - lo > 0 ? 0 : 1); lo -= padding; hi += padding; if (lo < 0 && Math.min.apply(null, known) >= 0) lo = 0; }
     var axis = F().ticks(lo, hi, 4); lo = axis.min; hi = axis.max;
-    var left = 64, right = w - 18, top = 16, bottom = h - 30;
+    var left = histogram ? 44 : 60, right = w - 14, top = 14, bottom = h - 28;
     function y(v) { return bottom - (v - lo) / (hi - lo) * (bottom - top); }
     c.font = '12px Arial'; c.textAlign = 'right';
-    axis.values.forEach(function (n) { c.strokeStyle = '#2a3a3f'; c.beginPath(); c.moveTo(left, y(n)); c.lineTo(right, y(n)); c.stroke(); c.fillStyle = '#9aacb3'; c.fillText(histogram ? number(n, 0) : F().tick(n, axis), left - 8, y(n) + 4); });
+    axis.values.forEach(function (n) { var yy = Math.round(y(n)) + .5; c.strokeStyle = '#22302a'; c.lineWidth = 1; c.beginPath(); c.moveTo(left, yy); c.lineTo(right, yy); c.stroke(); c.fillStyle = '#a7bab0'; c.fillText(histogram ? number(n, 0) : F().tick(n, axis), left - 8, yy + 4); });
     if (histogram) {
-      var width = (right - left) / points.length;
-      points.forEach(function (p, index) { c.fillStyle = SERIES.value; c.fillRect(left + index * width + 2, y(p.Count), Math.max(1, width - 4), bottom - y(p.Count)); canvas.chartHits.push({ x: left + (index + .5) * width, y: y(p.Count), text: number(p.From) + '–' + number(p.To) + ' · ' + number(p.Count, 0) + (p.Count === 1 ? ' run' : ' runs') }); });
-      c.fillStyle = '#9aacb3'; c.textAlign = 'left'; c.fillText(number(points[0].From), left, h - 8); c.textAlign = 'right'; c.fillText(number(points[points.length - 1].To), right, h - 8);
-    } else {
-      var line = function (key, color, weight) {
-        c.beginPath(); var connected = false;
-        points.forEach(function (p, index) { var v = pointValue(p,key); if (typeof v !== 'number') { connected = false; return; } var x = left + fraction(points, p, index) * (right - left); if (connected) c.lineTo(x, y(v)); else c.moveTo(x, y(v)); connected = true; });
-        c.strokeStyle = color; c.lineWidth = weight; c.stroke();
-      };
-      line(chartMetric, SERIES.value, 1.5); if (chartMetric === 'Score') { line('RollingAverage', SERIES.average, 2); line('TrendLine', SERIES.trend, 1.5); }
-      // An isolated measured run must remain visible even when neighboring
-      // runs are missing this metric and the line correctly breaks there.
-      c.fillStyle=SERIES.value;points.forEach(function(p,index){var v=pointValue(p,chartMetric);if(v===null)return;var x=left+fraction(points,p,index)*(right-left);c.beginPath();c.arc(x,y(v),2.5,0,Math.PI*2);c.fill();canvas.chartHits.push({x:x,y:y(v),text:(p.Date?F().dateTime(p.Date)+' · ':'')+chartValueText(chartMetric,v)});});
-      var first = points[0].Date, last = points[points.length - 1].Date;
-      c.fillStyle = '#9aacb3'; c.textAlign = 'left'; c.fillText(first ? F().date(first) : 'Earlier runs', left, h - 8); c.textAlign = 'right'; c.fillText(last ? F().date(last) : 'Latest runs', right, h - 8);
+      var width = (right - left) / points.length, from = points[0].From, to = points[points.length - 1].To;
+      points.forEach(function (p, index) { c.fillStyle = SERIES.value; c.fillRect(left + index * width + 1.5, y(p.Count), Math.max(1, width - 3), bottom - y(p.Count)); canvas.chartHits.push({ x: left + (index + .5) * width, y: y(p.Count), text: number(p.From) + '–' + number(p.To) + ' · ' + number(p.Count, 0) + (p.Count === 1 ? ' run' : ' runs') }); });
+      (marks || []).forEach(function (m) { if (!F().known(m.value) || !(to > from)) return; var x = left + (m.value - from) / (to - from) * (right - left); if (x < left || x > right) return; c.strokeStyle = m.color; c.lineWidth = 2; if (m.dash && c.setLineDash) c.setLineDash([4, 3]); c.beginPath(); c.moveTo(x, top); c.lineTo(x, bottom); c.stroke(); if (c.setLineDash) c.setLineDash([]); });
+      c.fillStyle = '#a7bab0'; c.textAlign = 'left'; c.fillText(number(from, 0), left, h - 8); c.textAlign = 'right'; c.fillText(number(to, 0), right, h - 8);
+      return;
     }
+    function x(p, index) { return left + fraction(points, p, index) * (right - left); }
+    var first = -1; band.forEach(function (b, i) { if (b && first < 0) first = i; });
+    if (first >= 0) { c.beginPath(); var started = false; for (var i = first; i < band.length; i++) if (band[i]) { var px = x(points[i], i), py = y(band[i].mean + band[i].sd); if (started) c.lineTo(px, py); else { c.moveTo(px, py); started = true; } } for (var j = band.length - 1; j >= first; j--) if (band[j]) c.lineTo(x(points[j], j), y(band[j].mean - band[j].sd)); c.closePath(); c.fillStyle = 'rgba(39,228,161,0.14)'; c.fill(); }
+    c.beginPath(); var connected = false;
+    points.forEach(function (p, index) { var v = values[index]; if (typeof v !== 'number' || !isFinite(v)) { connected = false; return; } if (connected) c.lineTo(x(p, index), y(v)); else c.moveTo(x(p, index), y(v)); connected = true; });
+    c.strokeStyle = 'rgba(39,228,161,0.45)'; c.lineWidth = 1.2; c.stroke();
+    // An isolated measured run must remain visible even when neighboring
+    // runs are missing this metric and the line correctly breaks there.
+    c.fillStyle = SERIES.value; points.forEach(function (p, index) { var v = values[index]; if (typeof v !== 'number' || !isFinite(v)) return; c.beginPath(); c.arc(x(p, index), y(v), points.length > 120 ? 1.6 : 2.4, 0, Math.PI * 2); c.fill(); canvas.chartHits.push({ x: x(p, index), y: y(v), text: (p.Date ? F().dateTime(p.Date) + ' · ' : '') + chartValueText(chartMetric, v) + (band[index] ? ' · 5-run avg ' + chartValueText(chartMetric, band[index].mean) : '') }); });
+    if (first >= 0) { c.beginPath(); var on = false; band.forEach(function (b, i) { if (!b) return; if (on) c.lineTo(x(points[i], i), y(b.mean)); else { c.moveTo(x(points[i], i), y(b.mean)); on = true; } }); c.strokeStyle = SERIES.average; c.lineWidth = 2.5; c.stroke(); }
+    if (chartMetric === 'Score') { c.beginPath(); var t = false; points.forEach(function (p, index) { if (!F().known(p.TrendLine)) return; if (t) c.lineTo(x(p, index), y(p.TrendLine)); else { c.moveTo(x(p, index), y(p.TrendLine)); t = true; } }); if (c.setLineDash) c.setLineDash([6, 4]); c.strokeStyle = SERIES.trend; c.lineWidth = 1.5; c.stroke(); if (c.setLineDash) c.setLineDash([]); }
+    var firstDate = points[0].Date, lastDate = points[points.length - 1].Date;
+    c.fillStyle = '#a7bab0'; c.textAlign = 'left'; c.fillText(firstDate ? F().date(firstDate) : 'Earlier runs', left, h - 8); c.textAlign = 'right'; c.fillText(lastDate ? F().date(lastDate) : 'Latest runs', right, h - 8);
+    if (firstDate && lastDate && points.length > 8) { var midIndex = Math.floor(points.length / 2), mid = points[midIndex]; if (mid.Date) { c.textAlign = 'center'; c.fillText(F().date(mid.Date), x(mid, midIndex), h - 8); } }
   }
   // Nearest-point tooltip; the chart stores hit positions while drawing.
   function hover(canvas, wrap) {
@@ -95,46 +106,45 @@
     if (!root || !report || !report.Periods) return; root.textContent = '';
     var period = report.Periods.filter(function (p) { return p.Key === periodKey; })[0] || report.Periods[0];
     if (!period) { var none = append(root, node('div', undefined, 'empty')); append(none, node('h3', 'No practice to show yet')); append(none, node('p', 'Complete a few runs and your trends will appear here.')); return; }
-    var toolbar = append(root, node('div', undefined, 'toolbar'));
-    append(toolbar, node('h2', 'Practice trends'));
-    report.Periods.forEach(function (p) { var b = append(toolbar, button(p.Days ? p.Days + ' days' : 'All time', function () { periodKey = p.Key; draw(); }, p.Key === period.Key)); b.setAttribute('aria-pressed', String(p.Key === period.Key)); });
-    var totals = append(root, node('div', undefined, 'metrics'));
-    metric(totals, 'Runs', number(period.Runs, 0), number(period.Scenarios, 0) + (period.Scenarios === 1 ? ' scenario' : ' scenarios'));
-    metric(totals, 'Practice time', number(period.Hours) + 'h', period.Days ? changeText(period.PracticeChange) : 'All available history');
-    metric(totals, 'Active days', number(period.ActiveDays, 0), 'Days with at least one run');
     var selected = runFilter==='warmup'&&period.Warmup?period.Warmup:runFilter==='settled'&&period.Settled?period.Settled:period.Selected;
+    var toolbar = append(root, node('div', undefined, 'toolbar stats-toolbar'));
+    var heading = append(toolbar, node('div', undefined, 'stats-heading')); append(heading, node('h2', selected && selected.Name || 'Choose a scenario'));
+    append(heading, node('p', selected ? number(selected.Runs, 0) + (selected.Runs === 1 ? ' run' : ' runs') + (period.Days ? ' in the last ' + period.Days + ' days' : ' in your history') : 'Pick a scenario in the top bar.', 'stats-muted'));
+    if(period.Warmup&&period.Settled){var filters=append(toolbar,node('div',undefined,'segmented stats-filter'));[['all','All runs'],['warmup','Warm-up ('+period.Warmup.Runs+')'],['settled','Other runs ('+period.Settled.Runs+')']].forEach(function(f){var b=append(filters,button(f[1],function(){runFilter=f[0];draw();},runFilter===f[0]));b.setAttribute('aria-pressed',String(runFilter===f[0]));});}
+    var periods = append(toolbar, node('div', undefined, 'segmented'));
+    report.Periods.forEach(function (p) { var b = append(periods, button(p.Days ? p.Days + ' days' : 'All time', function () { periodKey = p.Key; draw(); }, p.Key === period.Key)); b.setAttribute('aria-pressed', String(p.Key === period.Key)); });
+    if(runFilter!=='all'&&period.Warmup)empty(root,'Warm-up runs are early, lower scores that recover later in the same session. This filter applies to this scenario’s analysis.');
     if (!selected) { empty(root, 'Choose a scenario to see its score trend.'); return; }
     var availableMetrics=[['Score','Score'],['Accuracy','Accuracy'],['Smoothness','Control'],['Efficiency','Path'],['Jitter','Jitter'],['Correction','Correction']].concat(measures).filter(function(item){return (selected.Points||[]).some(function(p){return pointValue(p,item[0])!==null;});});
     if(!availableMetrics.some(function(item){return item[0]===chartMetric;}))chartMetric=availableMetrics.length?availableMetrics[0][0]:'Score';
-    var summary = append(root, panel(selected.Name || 'Choose a scenario'));
-    if(period.Warmup&&period.Settled){var filters=append(summary,node('div',undefined,'stats-chart-controls'));[['all','All runs'],['warmup','Warm-up ('+period.Warmup.Runs+')'],['settled','Other runs ('+period.Settled.Runs+')']].forEach(function(f){var b=append(filters,button(f[1],function(){runFilter=f[0];draw();},runFilter===f[0]));b.setAttribute('aria-pressed',String(runFilter===f[0]));});if(runFilter!=='all')empty(summary,'Warm-up runs are early, lower scores that recover later in the same session. This filter applies to this scenario’s analysis.');}
-    var stats = append(summary, node('div', undefined, 'metrics'));
+    var stats = append(root, node('div', undefined, 'metrics'));
     metric(stats, 'Best score', number(selected.Best), 'Best in this period');
-    metric(stats, 'Average score', number(selected.Average), period.Days ? changeText(selected.ScoreChange) : number(selected.Runs, 0) + (selected.Runs === 1 ? ' run' : ' runs'));
-    metric(stats, 'Median score', number(selected.Median), 'Middle score, less affected by outliers');
-    metric(stats, 'Consistency', F().percent(selected.VariationPercent), 'Score spread vs average · lower is steadier');
+    metric(stats, 'Average score', number(selected.Average), period.Days ? changeNote(selected.ScoreChange) : number(selected.Runs, 0) + (selected.Runs === 1 ? ' run' : ' runs'), period.Days ? selected.ScoreChange : null);
+    metric(stats, 'Consistency', F().percent(selected.VariationPercent), 'Run-to-run spread · lower is steadier');
+    metric(stats, 'Practice', F().hours(period.Hours), number(period.Runs, 0) + ' runs · ' + number(period.ActiveDays, 0) + ' active days', period.Days ? period.PracticeChange : null);
     var charts = append(root, node('div', undefined, 'stats-columns'));
-    var trend = append(charts, panel('Progression'));
+    var trend = append(charts, panel(chartMetric === 'Score' ? 'Score trend' : ((availableMetrics.filter(function (m) { return m[0] === chartMetric; })[0] || [0, chartMetric])[1]) + ' trend'));
     var chartButtons = append(trend, node('div', undefined, 'stats-chart-controls'));
-    availableMetrics.forEach(function(item){var b=append(chartButtons,button(item[1],function(){chartMetric=item[0];draw();},chartMetric===item[0]));b.setAttribute('aria-pressed',String(chartMetric===item[0]));});
+    availableMetrics.forEach(function(item){var b=append(chartButtons,button(item[1],function(){chartMetric=item[0];draw();},chartMetric===item[0]));b.className='button compact'+(chartMetric===item[0]?' primary':'');b.setAttribute('aria-pressed',String(chartMetric===item[0]));});
     var selectedMeasure=measure(chartMetric);
-    if (chartMetric === 'Score') legend(trend, [['Score', SERIES.value], ['5-run average', SERIES.average], ['Trend', SERIES.trend]]);
-    else empty(trend, selectedMeasure ? selectedMeasure[1]+' ('+(selectedMeasure[2]||'recorded value').trim()+'). Runs without this measurement leave a gap.' : chartMetric === 'Smoothness' ? 'Movement control, out of 100.' : chartMetric === 'Accuracy' ? 'Accuracy (%) per run.' : chartMetric + ' per run. Runs without this measurement leave a gap.');
+    legend(trend, [[chartMetric === 'Score' ? 'Each run' : 'Each measured run', 'rgba(39,228,161,0.6)'], ['5-run average', SERIES.average], ['±1 SD band', '#1c4a3a']].concat(chartMetric === 'Score' ? [['Trend', SERIES.trend]] : []));
+    if (chartMetric !== 'Score') empty(trend, selectedMeasure ? selectedMeasure[1]+' ('+(selectedMeasure[2]||'recorded value').trim()+'). Runs without this measurement leave a gap.' : chartMetric === 'Smoothness' ? 'Movement control, out of 100.' : chartMetric === 'Accuracy' ? 'Accuracy (%) per run.' : chartMetric + ' per run. Runs without this measurement leave a gap.');
     var trendWrap = append(trend, node('div', undefined, 'stats-chart-wrap'));
     var trendCanvas = append(trendWrap, node('canvas', undefined, 'stats-chart')); hover(trendCanvas, trendWrap);
+    var distribution = append(charts, panel('Score spread'));
+    append(distribution, node('p', 'How often each score range came up.', 'stats-muted'));
+    legend(distribution, [['Average', '#66ccff'], ['Median', '#f0b45a']]);
+    var distributionWrap = append(distribution, node('div', undefined, 'stats-chart-wrap'));
+    var distributionCanvas = append(distributionWrap, node('canvas', undefined, 'stats-chart')); hover(distributionCanvas, distributionWrap);
+    var common = mostCommon(selected.Distribution || []);
+    append(distribution, node('p', common ? 'Most runs landed between ' + number(common.From, 0) + ' and ' + number(common.To, 0) + '.' : 'Play a few more runs to see your spread.', 'stats-muted stats-foot'));
     var details=append(root,node('div',undefined,'stats-details'));
     var detailButtons=append(details,node('div',undefined,'stats-detail-controls'));
     append(detailButtons,node('span','Explore more','stats-detail-label'));
-    [['distribution','Score spread'],['movement','Movement & timing'],['practice','Practice pattern'],['scenarios','Compare scenarios']].forEach(function(item){
+    [['movement','Movement & timing'],['practice','Practice pattern'],['scenarios','Compare scenarios']].forEach(function(item){
       var control=button(item[1],function(){detailKey=detailKey===item[0]?'':item[0];draw();},detailKey===item[0]);
       control.setAttribute('aria-expanded',detailKey===item[0]?'true':'false');append(detailButtons,control);
     });
-    var distribution=null,distributionCanvas=null;
-    if(detailKey==='distribution'){
-      distribution=append(details,panel('Score distribution'));empty(distribution,'How often you reached each score range.');
-      var distributionWrap=append(distribution,node('div',undefined,'stats-chart-wrap'));
-      distributionCanvas=append(distributionWrap,node('canvas',undefined,'stats-chart'));hover(distributionCanvas,distributionWrap);
-    }
     if(detailKey==='movement')renderMeasurements(append(details,panel('Movement and timing')),selected.Measurements);
     if(detailKey==='practice'){
     var calendar = period.Calendar || [], blockList = period.Blocks || [];
@@ -170,8 +180,11 @@
     var searchTimer = null;
     search.oninput = function () { scenarioQuery = search.value; scenarioLimit = 200; if (searchTimer) clearTimeout(searchTimer); searchTimer = setTimeout(function () { searchTimer = null; rows(); }, 120); }; rows();
     }
-    setTimeout(function () { var width=widthOf(root);if(width){charts.style.width=width+'px';[trend,distribution].forEach(function(p){if(p){p.style.width=width+'px';p.style.marginRight='0px';}});[trendCanvas,distributionCanvas].forEach(function(c){if(c){c.style.width=Math.max(120,width-44)+'px';c.style.height='280px';}});}
-      chart(trendCanvas, selected.Points || [], false); if(distributionCanvas)chart(distributionCanvas, selected.Distribution || [], true); }, 0);
+    // Gameface: explicit pixel columns (no calc/flex-basis), side by side when wide.
+    setTimeout(function () { var width=widthOf(root),wide=width>=1100,trendWidth=wide?Math.round((width-16)*0.68):width,spreadWidth=wide?width-16-trendWidth:width;
+      if(width){charts.style.width=width+'px';trend.style.width=trendWidth+'px';distribution.style.width=spreadWidth+'px';trend.style.marginRight=wide?'16px':'0px';charts.style.display=wide?'flex':'block';
+        trendCanvas.style.width=Math.max(120,trendWidth-40)+'px';trendCanvas.style.height='300px';distributionCanvas.style.width=Math.max(120,spreadWidth-40)+'px';distributionCanvas.style.height=wide?'254px':'220px';}
+      chart(trendCanvas, selected.Points || [], false); chart(distributionCanvas, selected.Distribution || [], true, [{value:selected.Average,color:'#66ccff'},{value:selected.Median,color:'#f0b45a',dash:true}]); }, 0);
   }
   function focusedSearch() { var active = global.document && global.document.activeElement; return !!(active && active.className === 'stats-search'); }
   global.AimModStatistics = {
