@@ -47,6 +47,38 @@ public class ExternalTrainerSettingsReaderTests
     }
 
     [Test]
+    public void AnInvalidLibraryIsReportedWithItsValidationCode()
+    {
+        AimMod.Osu.Runtime.RuntimeCommandException error = Assert.ThrowsAsync<AimMod.Osu.Runtime.RuntimeCommandException>(async () =>
+            await ExternalTrainerSettingsReader.ReadAsync(Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}"), CancellationToken.None))!;
+        Assert.That(error.Code, Is.EqualTo("library_path_invalid"));
+    }
+
+    [Test]
+    public async Task OverlongAndEmptyCombinationsAreSkipped()
+    {
+        string root = Directory.CreateTempSubdirectory("trainer-settings-test-").FullName;
+        Directory.CreateDirectory(Path.Combine(root, "files"));
+        string database = Path.Combine(root, "client.realm");
+        var config = new RealmConfiguration(database) { SchemaVersion = 51, Schema = new[] { typeof(RealmKeyBinding) } };
+        try
+        {
+            using (var realm = Realm.GetInstance(config))
+                realm.Write(() =>
+                {
+                    realm.Add(new RealmKeyBinding(OsuAction.LeftButton, new KeyBinding(InputKey.A, OsuAction.LeftButton).KeyCombination, "osu", 0));
+                    realm.Add(new RealmKeyBinding(OsuAction.RightButton, new KeyBinding(InputKey.S, OsuAction.RightButton).KeyCombination, "osu", 0)
+                    {
+                        KeyCombinationString = new string('1', ExternalTrainerSettingsReader.MaximumCombinationLength + 1),
+                    });
+                });
+            var result = await ExternalTrainerSettingsReader.ReadAsync(root, CancellationToken.None);
+            Assert.That(result.Bindings.Select(b => b.Action), Is.EqualTo(new[] { (int)OsuAction.LeftButton }));
+        }
+        finally { Realm.DeleteRealm(config); Directory.Delete(root, true); }
+    }
+
+    [Test]
     public void CancelledReadDoesNotOpenOrCreateAnything()
     {
         using var cancellation = new CancellationTokenSource();

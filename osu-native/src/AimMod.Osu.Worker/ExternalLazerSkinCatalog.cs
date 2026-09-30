@@ -19,7 +19,7 @@ internal sealed class ExternalLazerSkinCatalogBackend : IExternalLazerSkinCatalo
     private readonly ExternalLazerLibraryValidator validator;
 
     public ExternalLazerSkinCatalogBackend()
-        : this(new RealmLazerLibrarySnapshotFactory(), new DynamicRealmLazerSkinCatalogReader(), new ExternalLazerLibraryValidator())
+        : this(CachedLazerLibrarySnapshotFactory.Shared, new DynamicRealmLazerSkinCatalogReader(), new ExternalLazerLibraryValidator())
     {
     }
 
@@ -40,7 +40,7 @@ internal sealed class ExternalLazerSkinCatalogBackend : IExternalLazerSkinCatalo
         ArgumentNullException.ThrowIfNull(request);
         request = DynamicRealmLazerSkinCatalogReader.ValidateQuery(request);
 
-        string snapshotDirectory = Directory.CreateTempSubdirectory("aimmod-lazer-skins-").FullName;
+        string snapshotDirectory = AimModTempDirectories.Create(AimModTempDirectories.SkinsPrefix);
         LazerLibrarySnapshot? snapshot = null;
         try
         {
@@ -64,29 +64,17 @@ internal sealed class ExternalLazerSkinCatalogBackend : IExternalLazerSkinCatalo
         finally
         {
             if (snapshot is not null)
-                await snapshotFactory.DeleteSnapshotAsync(snapshot).ConfigureAwait(false);
+            {
+                try
+                {
+                    await snapshotFactory.DeleteSnapshotAsync(snapshot).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (exception is not OutOfMemoryException)
+                {
+                }
+            }
 
-            deleteOwnedSnapshotDirectory(snapshotDirectory);
-        }
-    }
-
-    private static void deleteOwnedSnapshotDirectory(string path)
-    {
-        if (!Directory.Exists(path))
-            return;
-        if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0
-            || !Path.GetFileName(path).StartsWith("aimmod-lazer-skins-", StringComparison.Ordinal))
-        {
-            throw new RuntimeCommandException("snapshot_cleanup_failed", "AimMod refused to clean an unrecognised skin snapshot directory.");
-        }
-
-        try
-        {
-            Directory.Delete(path, recursive: false);
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            throw new RuntimeCommandException("snapshot_cleanup_failed", "AimMod could not remove its private skin snapshot directory.");
+            AimModTempDirectories.TryDelete(snapshotDirectory, AimModTempDirectories.SkinsPrefix);
         }
     }
 }

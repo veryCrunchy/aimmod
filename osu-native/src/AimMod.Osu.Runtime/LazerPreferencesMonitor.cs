@@ -10,36 +10,24 @@ namespace AimMod.Osu.Runtime;
 public sealed class LazerPreferencesMonitor : IAsyncDisposable
 {
     private const int maximum_file_bytes = 1024 * 1024;
-    private static readonly TimeSpan reconciliation_interval = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan default_reconciliation_interval = TimeSpan.FromSeconds(5);
 
     private readonly string dataRoot;
+    private readonly TimeSpan reconciliationInterval;
     private readonly SemaphoreSlim refreshGate = new(1, 1);
     private readonly CancellationTokenSource lifetime = new();
     private readonly object stateLock = new();
-    private readonly FileSystemWatcher? watcher;
+    private FileSystemWatcher? watcher;
     private readonly Task reconciliationTask;
     private LazerPreferencesState current = LazerPreferencesState.Unavailable;
+    private int watcherRefreshQueued;
     private bool disposed;
 
-    private LazerPreferencesMonitor(string dataRoot)
+    private LazerPreferencesMonitor(string dataRoot, TimeSpan reconciliationInterval)
     {
         this.dataRoot = Path.GetFullPath(dataRoot);
-
-        if (Directory.Exists(this.dataRoot))
-        {
-            watcher = new FileSystemWatcher(this.dataRoot)
-            {
-                Filter = "*.ini",
-                NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.CreationTime | NotifyFilters.Size,
-            };
-            watcher.Changed += onFileChanged;
-            watcher.Created += onFileChanged;
-            watcher.Deleted += onFileChanged;
-            watcher.Renamed += onFileChanged;
-            watcher.Error += onWatcherError;
-            watcher.EnableRaisingEvents = true;
-        }
-
+        this.reconciliationInterval = reconciliationInterval;
+        tryStartWatcher();
         reconciliationTask = reconcileAsync(lifetime.Token);
     }
 
@@ -54,10 +42,17 @@ public sealed class LazerPreferencesMonitor : IAsyncDisposable
 
     public event Action<LazerPreferencesState>? StateChanged;
 
-    public static async Task<LazerPreferencesMonitor> CreateAsync(string dataRoot, CancellationToken cancellationToken = default)
+    public static Task<LazerPreferencesMonitor> CreateAsync(string dataRoot, CancellationToken cancellationToken = default) =>
+        CreateAsync(dataRoot, default_reconciliation_interval, cancellationToken);
+
+    internal static async Task<LazerPreferencesMonitor> CreateAsync(
+        string dataRoot,
+        TimeSpan reconciliationInterval,
+        CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dataRoot);
-        var monitor = new LazerPreferencesMonitor(dataRoot);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(reconciliationInterval, TimeSpan.Zero);
+        var monitor = new LazerPreferencesMonitor(dataRoot, reconciliationInterval);
 
         try
         {
@@ -74,6 +69,7 @@ public sealed class LazerPreferencesMonitor : IAsyncDisposable
     public async Task RefreshAsync(CancellationToken cancellationToken = default)
     {
         throwIfDisposed();
+        tryStartWatcher();
         using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lifetime.Token);
         await refreshGate.WaitAsync(linkedCancellation.Token);
 
@@ -109,20 +105,30 @@ public sealed class LazerPreferencesMonitor : IAsyncDisposable
             disposed = true;
             lifetime.Cancel();
             watcher?.Dispose();
+            watcher = null;
         }
 
         try
         {
-            await reconciliationTask;
+            await reconciliationTask.ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
+        catch (Exception exception) when (exception is not OutOfMemoryException)
         {
         }
 
-        await refreshGate.WaitAsync();
-        refreshGate.Release();
-        refreshGate.Dispose();
-        lifetime.Dispose();
+        try
+        {
+            await refreshGate.WaitAsync().ConfigureAwait(false);
+            refreshGate.Release();
+        }
+        catch (Exception exception) when (exception is ObjectDisposedException or SemaphoreFullException)
+        {
+        }
+        finally
+        {
+            refreshGate.Dispose();
+            lifetime.Dispose();
+        }
     }
 
     private async Task<LazerPreferencesSnapshot> readIniAsync(string path, CancellationToken cancellationToken)
@@ -251,9 +257,62 @@ public sealed class LazerPreferencesMonitor : IAsyncDisposable
 
     private async Task reconcileAsync(CancellationToken cancellationToken)
     {
-        using var timer = new PeriodicTimer(reconciliation_interval);
-        while (await timer.WaitForNextTickAsync(cancellationToken))
-            await RefreshAsync(cancellationToken);
+        using var timer = new PeriodicTimer(reconciliationInterval);
+        try
+        {
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+            {
+                try
+                {
+                    await RefreshAsync(cancellationToken);
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException and not OutOfMemoryException)
+                {
+                    // A failed pass is retried on the next tick; polling must never stop.
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private void tryStartWatcher()
+    {
+        lock (stateLock)
+        {
+            if (disposed || watcher is not null || !Directory.Exists(dataRoot))
+                return;
+
+            try
+            {
+                var created = new FileSystemWatcher(dataRoot)
+                {
+                    Filter = "*.ini",
+                    NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.CreationTime | NotifyFilters.Size,
+                };
+                created.Changed += onFileChanged;
+                created.Created += onFileChanged;
+                created.Deleted += onFileChanged;
+                created.Renamed += onFileChanged;
+                created.Error += onWatcherError;
+                created.EnableRaisingEvents = true;
+                watcher = created;
+            }
+            catch (Exception exception) when (exception is IOException or ArgumentException or UnauthorizedAccessException or PlatformNotSupportedException)
+            {
+                // Polling keeps the state fresh until a watcher can be created.
+            }
+        }
+    }
+
+    private void discardWatcher()
+    {
+        lock (stateLock)
+        {
+            watcher?.Dispose();
+            watcher = null;
+        }
     }
 
     private void onFileChanged(object sender, FileSystemEventArgs eventArgs)
@@ -264,21 +323,32 @@ public sealed class LazerPreferencesMonitor : IAsyncDisposable
             _ = refreshFromWatcherAsync();
     }
 
-    private void onWatcherError(object sender, ErrorEventArgs eventArgs) => _ = refreshFromWatcherAsync();
+    private void onWatcherError(object sender, ErrorEventArgs eventArgs)
+    {
+        discardWatcher();
+        tryStartWatcher();
+        _ = refreshFromWatcherAsync();
+    }
 
     private async Task refreshFromWatcherAsync()
     {
+        // One queued refresh absorbs the burst of events a single write produces.
+        if (Interlocked.Exchange(ref watcherRefreshQueued, 1) == 1)
+            return;
+
         try
         {
-            await Task.Delay(100, lifetime.Token);
-            await RefreshAsync(lifetime.Token);
+            await Task.Delay(100, lifetime.Token).ConfigureAwait(false);
+            Volatile.Write(ref watcherRefreshQueued, 0);
+            await RefreshAsync(lifetime.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
-        {
-        }
-        catch
+        catch (Exception exception) when (exception is not OutOfMemoryException)
         {
             // Periodic reconciliation will retry transient read failures.
+        }
+        finally
+        {
+            Volatile.Write(ref watcherRefreshQueued, 0);
         }
     }
 

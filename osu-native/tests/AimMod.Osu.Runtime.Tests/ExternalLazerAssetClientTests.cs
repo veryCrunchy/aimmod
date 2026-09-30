@@ -109,7 +109,7 @@ public sealed class ExternalLazerAssetClientTests
     }
 
     [Test]
-    public async Task CancellationWaitsForWorkerCleanupThenRemovesPrivateStaging()
+    public async Task CancellationReachesTheWorkerCallAndRemovesPrivateStaging()
     {
         byte[] content = "cancelled staged asset"u8.ToArray();
         string hash = Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant();
@@ -125,8 +125,6 @@ public sealed class ExternalLazerAssetClientTests
         await runtime.Started.Task;
         cancellation.Cancel();
 
-        Assert.That(operation.IsCompleted, Is.False);
-        runtime.Release.SetResult();
         Assert.CatchAsync<OperationCanceledException>(async () => await operation);
         Assert.That(Directory.Exists(runtime.StagingDirectory), Is.False);
     }
@@ -257,11 +255,11 @@ public sealed class ExternalLazerAssetClientTests
 
         public async Task<RuntimeResponse> SendAsync(RuntimeRequest request, CancellationToken cancellationToken = default)
         {
-            Assert.That(cancellationToken.CanBeCanceled, Is.False);
+            Assert.That(cancellationToken.CanBeCanceled, Is.True);
             ExternalLazerAssetResolveRequest input = request.Payload!.Value.Deserialize<ExternalLazerAssetResolveRequest>(RuntimeProtocol.JsonOptions)!;
             StagingDirectory = input.StagingDirectory;
             Started.SetResult();
-            await Release.Task;
+            await Release.Task.WaitAsync(cancellationToken);
 
             string path = Path.Combine(input.StagingDirectory, $"0000-beatmap-{hash}.osu");
             await File.WriteAllBytesAsync(path, content);

@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Security.Cryptography;
 using AimMod.Osu.Runtime;
 using AimMod.Osu.Runtime.Contracts;
 using osu.Game.Beatmaps;
@@ -10,6 +12,7 @@ using osu.Game.Scoring;
 using osu.Game.Tests.Beatmaps;
 using osu.Game.Online.API;
 using osu.Game.Rulesets;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
 namespace AimMod.Osu.Worker;
@@ -114,6 +117,10 @@ internal static class PpInputValidator
 
 internal sealed class OfficialPpWhatIfCalculator : IPpWhatIfCalculator
 {
+    private const int maximum_cached_difficulties = 64;
+
+    private readonly ConcurrentDictionary<DifficultyKey, CachedDifficulty> difficultyCache = new();
+
     public ValueTask<PpWhatIfResult> CalculateAsync(ValidatedPpInput input, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -130,6 +137,10 @@ internal sealed class OfficialPpWhatIfCalculator : IPpWhatIfCalculator
                 mods.Any(m=>m.IncompatibleMods.Any(type=>mods.Any(other=>other!=m && type.IsInstanceOfType(other)))))
                 throw new RuntimeCommandException("incompatible_mods", "These mods cannot be used together.");
             var workingBeatmap = new FlatWorkingBeatmap(input.BeatmapPath);
+            var difficultyKey = new DifficultyKey(
+                Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(input.BeatmapPath))),
+                input.RulesetId,
+                difficultyModsKey(mods));
             if (input.RulesetId != 0) {
                 var modeStatistics = input.Statistics ?? throw new RuntimeCommandException("statistics_required", "This mode requires the score's exact judgements.");
                 var stats = new Dictionary<HitResult,int> {
@@ -140,13 +151,19 @@ internal sealed class OfficialPpWhatIfCalculator : IPpWhatIfCalculator
                     [HitResult.SmallTickHit] = modeStatistics.SmallTickHit, [HitResult.SmallTickMiss] = modeStatistics.SmallTickMiss
                 };
                 var mode = ModePerformance.Calculate(workingBeatmap, ruleset, mods, stats, input.Accuracy,
-                    input.MaxCombo ?? 0, !input.LegacyScore, input.Passed, 0, null, cancellationToken);
+                    input.MaxCombo ?? 0, !input.LegacyScore, input.Passed, 0, null, cancellationToken,
+                    calculator =>
+                    {
+                        CachedDifficulty cached = getOrCalculateDifficulty(difficultyKey, calculator, mods, cancellationToken);
+                        return (cached.Attributes, cached.Version);
+                    });
                 return ValueTask.FromResult(new PpWhatIfResult(PpCalculationProtocol.EngineVersion,
                     mode.RulesetVersion, mode.Stars, mode.MaxCombo, mode.ObjectCount,
                     modeStatistics.Great, modeStatistics.Ok, modeStatistics.Meh, modeStatistics.Miss, input.Accuracy, mode.Pp,
                     null, null, null, null, null, null));
             }
-            DifficultyAttributes attributes = ruleset.CreateDifficultyCalculator(workingBeatmap).Calculate(mods, cancellationToken);
+            CachedDifficulty difficulty = getOrCalculateDifficulty(difficultyKey, ruleset.CreateDifficultyCalculator(workingBeatmap), mods, cancellationToken);
+            DifficultyAttributes attributes = difficulty.Attributes;
             if (attributes is not OsuDifficultyAttributes osuAttributes)
                 throw new RuntimeCommandException("unsupported_ruleset", "PP calculation currently supports osu!standard only.");
 
@@ -178,7 +195,7 @@ internal sealed class OfficialPpWhatIfCalculator : IPpWhatIfCalculator
             var osuPerformance = performance as OsuPerformanceAttributes;
             return ValueTask.FromResult(new PpWhatIfResult(
                 PpCalculationProtocol.EngineVersion,
-                ruleset.CreateDifficultyCalculator(workingBeatmap).Version,
+                difficulty.Version,
                 osuAttributes.StarRating,
                 osuAttributes.MaxCombo,
                 objectCount,
@@ -208,6 +225,27 @@ internal sealed class OfficialPpWhatIfCalculator : IPpWhatIfCalculator
             throw new RuntimeCommandException("pp_calculation_failed", boundedError(exception, input));
         }
     }
+
+    private static string difficultyModsKey(Mod[] mods) =>
+        string.Join('|', mods.Select(mod => mod.Acronym + ":" + JsonConvert.SerializeObject(new APIMod(mod).Settings)).Order(StringComparer.Ordinal));
+
+    private CachedDifficulty getOrCalculateDifficulty(DifficultyKey key, DifficultyCalculator calculator, Mod[] mods, CancellationToken cancellationToken)
+    {
+        if (difficultyCache.TryGetValue(key, out CachedDifficulty? cached))
+            return cached;
+
+        cached = new CachedDifficulty(calculator.Calculate(mods, cancellationToken), calculator.Version);
+        if (difficultyCache.Count >= maximum_cached_difficulties)
+            difficultyCache.Clear();
+        difficultyCache[key] = cached;
+        return cached;
+    }
+
+    internal int CachedDifficultyCount => difficultyCache.Count;
+
+    private sealed record DifficultyKey(string BeatmapSha256, int RulesetId, string Mods);
+
+    private sealed record CachedDifficulty(DifficultyAttributes Attributes, int Version);
 
     internal static PpGeneratedStatistics GenerateStatistics(int objectCount, double targetAccuracy, int requestedMisses)
     {
@@ -262,9 +300,9 @@ internal sealed class OfficialPpWhatIfCalculator : IPpWhatIfCalculator
 
     private static string boundedError(Exception exception, ValidatedPpInput input)
     {
-        string message = exception.Message
-                                  .Replace(input.StagingDirectory, "<staging>", StringComparison.Ordinal)
+        string message = ReplayWorkerStorage.RedactLocalPaths(exception.Message
                                   .Replace(input.BeatmapPath, "<beatmap>", StringComparison.Ordinal)
+                                  .Replace(input.StagingDirectory, "<staging>", StringComparison.Ordinal))
                                   .Replace('\r', ' ')
                                   .Replace('\n', ' ')
                                   .Trim();

@@ -33,8 +33,12 @@ public class ModePpTests {
             var request = new PpWhatIfRequest(directory,path,[],1,MaxCombo:processor.MaximumCombo,Statistics:stats,LegacyScore:!lazer,RulesetId:mode);
             var calculator = new OfficialPpWhatIfCalculator();
             var perfect = await calculator.CalculateAsync(PpInputValidator.Validate(request),CancellationToken.None);
-            var missed = await calculator.CalculateAsync(PpInputValidator.Validate(request with { Accuracy=.98, MaxCombo=1,
-                Statistics=stats with { Perfect=mode==3 ? stats.Perfect-1 : 0, Great=mode==3 ? 0 : stats.Great-1, Miss=1 } }),CancellationToken.None);
+            var missedRequest = request with { Accuracy=.98, MaxCombo=1,
+                Statistics=stats with { Perfect=mode==3 ? stats.Perfect-1 : 0, Great=mode==3 ? 0 : stats.Great-1, Miss=1 } };
+            var missed = await calculator.CalculateAsync(PpInputValidator.Validate(missedRequest),CancellationToken.None);
+            var uncached = await new OfficialPpWhatIfCalculator().CalculateAsync(PpInputValidator.Validate(missedRequest),CancellationToken.None);
+            Assert.That(calculator.CachedDifficultyCount,Is.EqualTo(1));
+            Assert.That(missed,Is.EqualTo(uncached));
             Assert.That(perfect.PerformancePoints,Is.GreaterThan(0));
             Assert.That(missed.PerformancePoints,Is.LessThan(perfect.PerformancePoints));
             Assert.That(perfect.ObjectCount,Is.EqualTo(mode==3 && lazer ? 134 : 100));

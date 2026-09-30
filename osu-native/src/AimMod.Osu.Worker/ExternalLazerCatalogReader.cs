@@ -11,18 +11,31 @@ namespace AimMod.Osu.Worker;
 /// </summary>
 public sealed class DynamicRealmLazerLibraryCatalogReader : ILazerLibraryCatalogReader
 {
+    private readonly object cacheLock = new();
+    private ScanCache<ExternalLazerBeatmapSet>? beatmapSetScan;
+    private ScanCache<ExternalLazerReplaySummary>? replayScan;
+
     public Task<ExternalLazerCatalogSearchResult> ReadCatalogAsync(
         LazerLibrarySnapshot snapshot,
         ExternalLazerCatalogSearchRequest query,
         CancellationToken cancellationToken = default) =>
         Task.Run(() => readCatalog(snapshot, validateQuery(query), cancellationToken), cancellationToken);
 
-    private static ExternalLazerCatalogSearchResult readCatalog(
+    private ExternalLazerCatalogSearchResult readCatalog(
         LazerLibrarySnapshot snapshot,
         ExternalLazerCatalogSearchRequest query,
         CancellationToken cancellationToken)
     {
         validateSnapshot(snapshot);
+
+        var scanKey = new ScanKey(snapshot.SnapshotId, query.SearchText, query.RulesetShortName, query.MinimumStars, query.MaximumStars);
+        lock (cacheLock)
+        {
+            if (query.Kind == ExternalLazerCatalogEntryKind.BeatmapSets && beatmapSetScan?.Key == scanKey)
+                return pageBeatmapSets(beatmapSetScan, query);
+            if (query.Kind == ExternalLazerCatalogEntryKind.Replays && replayScan?.Key == scanKey)
+                return pageReplays(replayScan, query);
+        }
 
         var configuration = new RealmConfiguration(snapshot.DatabasePath)
         {
@@ -32,12 +45,76 @@ public sealed class DynamicRealmLazerLibraryCatalogReader : ILazerLibraryCatalog
         };
 
         using Realm realm = Realm.GetInstance(configuration);
-        return query.Kind == ExternalLazerCatalogEntryKind.BeatmapSets
-            ? readBeatmapSets(realm, query, cancellationToken)
-            : readReplays(realm, query, cancellationToken);
+        if (query.Kind == ExternalLazerCatalogEntryKind.BeatmapSets)
+        {
+            var scan = new ScanCache<ExternalLazerBeatmapSet>(scanKey, readBeatmapSets(realm, query, cancellationToken));
+            lock (cacheLock)
+            {
+                beatmapSetScan = scan;
+                return pageBeatmapSets(scan, query);
+            }
+        }
+
+        var replays = new ScanCache<ExternalLazerReplaySummary>(scanKey, readReplays(realm, query, cancellationToken));
+        lock (cacheLock)
+        {
+            replayScan = replays;
+            return pageReplays(replays, query);
+        }
     }
 
-    private static ExternalLazerCatalogSearchResult readBeatmapSets(
+    private static ExternalLazerCatalogSearchResult pageBeatmapSets(
+        ScanCache<ExternalLazerBeatmapSet> scan,
+        ExternalLazerCatalogSearchRequest query)
+    {
+        ExternalLazerBeatmapSet[] sorted = scan.Sorted(query.Sort, (items, sort) => sort switch
+        {
+            ExternalLazerCatalogSort.RecentlyPlayed => items.OrderByDescending(set => set.LastPlayed).ThenBy(set => set.Title, StringComparer.OrdinalIgnoreCase).ToArray(),
+            ExternalLazerCatalogSort.Title => items.OrderBy(set => set.Title, StringComparer.OrdinalIgnoreCase).ThenBy(set => set.Artist, StringComparer.OrdinalIgnoreCase).ToArray(),
+            ExternalLazerCatalogSort.StarRating => items.OrderByDescending(set => set.Difficulties.Max(difficulty => difficulty.StarRating)).ThenBy(set => set.Title, StringComparer.OrdinalIgnoreCase).ToArray(),
+            _ => items.OrderByDescending(set => set.DateAdded).ThenBy(set => set.Title, StringComparer.OrdinalIgnoreCase).ToArray(),
+        });
+        ExternalLazerBeatmapSet[] page = sorted.Skip(query.Offset).Take(query.Limit).ToArray();
+        return new ExternalLazerCatalogSearchResult(query.Kind, page, Array.Empty<ExternalLazerReplaySummary>(), sorted.Length, query.Offset, query.Limit);
+    }
+
+    private static ExternalLazerCatalogSearchResult pageReplays(
+        ScanCache<ExternalLazerReplaySummary> scan,
+        ExternalLazerCatalogSearchRequest query)
+    {
+        ExternalLazerReplaySummary[] sorted = scan.Sorted(query.Sort, (items, sort) => sort switch
+        {
+            ExternalLazerCatalogSort.Title => items.OrderBy(replay => replay.Title, StringComparer.OrdinalIgnoreCase).ThenBy(replay => replay.Difficulty, StringComparer.OrdinalIgnoreCase).ToArray(),
+            ExternalLazerCatalogSort.StarRating => items.OrderByDescending(replay => replay.StarRating).ThenByDescending(replay => replay.PlayedAt).ToArray(),
+            ExternalLazerCatalogSort.Score => items.OrderByDescending(replay => replay.TotalScore).ThenByDescending(replay => replay.PlayedAt).ToArray(),
+            ExternalLazerCatalogSort.Accuracy => items.OrderByDescending(replay => replay.Accuracy).ThenByDescending(replay => replay.TotalScore).ToArray(),
+            _ => items.OrderByDescending(replay => replay.PlayedAt).ToArray(),
+        });
+        ExternalLazerReplaySummary[] page = sorted.Skip(query.Offset).Take(query.Limit).ToArray();
+        return new ExternalLazerCatalogSearchResult(query.Kind, Array.Empty<ExternalLazerBeatmapSet>(), page, sorted.Length, query.Offset, query.Limit);
+    }
+
+    private readonly record struct ScanKey(Guid SnapshotId, string SearchText, string RulesetShortName, double? MinimumStars, double? MaximumStars);
+
+    private sealed class ScanCache<T>(ScanKey key, List<T> items)
+    {
+        private readonly Dictionary<ExternalLazerCatalogSort, T[]> sortedBySort = new();
+
+        public ScanKey Key { get; } = key;
+
+        public T[] Sorted(ExternalLazerCatalogSort sort, Func<List<T>, ExternalLazerCatalogSort, T[]> order)
+        {
+            if (!sortedBySort.TryGetValue(sort, out T[]? sorted))
+            {
+                sorted = order(items, sort);
+                sortedBySort[sort] = sorted;
+            }
+
+            return sorted;
+        }
+    }
+
+    private static List<ExternalLazerBeatmapSet> readBeatmapSets(
         Realm realm,
         ExternalLazerCatalogSearchRequest query,
         CancellationToken cancellationToken)
@@ -99,18 +176,10 @@ public sealed class DynamicRealmLazerLibraryCatalogReader : ILazerLibraryCatalog
                 backgroundHash));
         }
 
-        IEnumerable<ExternalLazerBeatmapSet> ordered = query.Sort switch
-        {
-            ExternalLazerCatalogSort.RecentlyPlayed => sets.OrderByDescending(set => set.LastPlayed).ThenBy(set => set.Title, StringComparer.OrdinalIgnoreCase),
-            ExternalLazerCatalogSort.Title => sets.OrderBy(set => set.Title, StringComparer.OrdinalIgnoreCase).ThenBy(set => set.Artist, StringComparer.OrdinalIgnoreCase),
-            ExternalLazerCatalogSort.StarRating => sets.OrderByDescending(set => set.Difficulties.Max(difficulty => difficulty.StarRating)).ThenBy(set => set.Title, StringComparer.OrdinalIgnoreCase),
-            _ => sets.OrderByDescending(set => set.DateAdded).ThenBy(set => set.Title, StringComparer.OrdinalIgnoreCase),
-        };
-        ExternalLazerBeatmapSet[] page = ordered.Skip(query.Offset).Take(query.Limit).ToArray();
-        return new ExternalLazerCatalogSearchResult(query.Kind, page, Array.Empty<ExternalLazerReplaySummary>(), sets.Count, query.Offset, query.Limit);
+        return sets;
     }
 
-    private static ExternalLazerCatalogSearchResult readReplays(
+    private static List<ExternalLazerReplaySummary> readReplays(
         Realm realm,
         ExternalLazerCatalogSearchRequest query,
         CancellationToken cancellationToken)
@@ -179,16 +248,7 @@ public sealed class DynamicRealmLazerLibraryCatalogReader : ILazerLibraryCatalog
                 getOptional(score, "Passed", true), getOptional(score, "IsLegacyScore", false)));
         }
 
-        IEnumerable<ExternalLazerReplaySummary> ordered = query.Sort switch
-        {
-            ExternalLazerCatalogSort.Title => replays.OrderBy(replay => replay.Title, StringComparer.OrdinalIgnoreCase).ThenBy(replay => replay.Difficulty, StringComparer.OrdinalIgnoreCase),
-            ExternalLazerCatalogSort.StarRating => replays.OrderByDescending(replay => replay.StarRating).ThenByDescending(replay => replay.PlayedAt),
-            ExternalLazerCatalogSort.Score => replays.OrderByDescending(replay => replay.TotalScore).ThenByDescending(replay => replay.PlayedAt),
-            ExternalLazerCatalogSort.Accuracy => replays.OrderByDescending(replay => replay.Accuracy).ThenByDescending(replay => replay.TotalScore),
-            _ => replays.OrderByDescending(replay => replay.PlayedAt),
-        };
-        ExternalLazerReplaySummary[] page = ordered.Skip(query.Offset).Take(query.Limit).ToArray();
-        return new ExternalLazerCatalogSearchResult(query.Kind, Array.Empty<ExternalLazerBeatmapSet>(), page, replays.Count, query.Offset, query.Limit);
+        return replays;
     }
 
     private static (Dictionary<string, int> Scores, Dictionary<string, int> Replays, int Scanned) readScoreCounts(

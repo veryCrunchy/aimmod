@@ -298,11 +298,18 @@ public sealed class ExternalLazerLibraryImportBridge(
         }
         catch
         {
-            await snapshotFactory.DeleteSnapshotAsync(snapshot).ConfigureAwait(false);
+            // A failed snapshot cleanup must not replace the error that caused it.
+            try
+            {
+                await snapshotFactory.DeleteSnapshotAsync(snapshot).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException)
+            {
+            }
+
             throw;
         }
     }
-
 }
 
 public sealed class ExternalLazerLibraryException(string code, string message) : Exception(message)

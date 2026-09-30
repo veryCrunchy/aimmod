@@ -103,6 +103,20 @@ public sealed class ReplayAnalysisControllerTests
         Assert.That(final.Error, Is.EqualTo(new ReplayAnalysisFailure("analysis_failed", "AimMod could not analyse this replay.")));
     }
 
+    [Test]
+    public void AnUnresponsiveWorkerIsReportedAsATimeout()
+    {
+        using var controller = new ReplayAnalysisController(new FailingClient(new TimeoutException("worker detail")));
+
+        ReplayAnalysisState final = controller.AnalyseAsync(request).GetAwaiter().GetResult();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(final.Status, Is.EqualTo(ReplayAnalysisStatus.Failed));
+            Assert.That(final.Error?.Code, Is.EqualTo("analysis_timeout"));
+        });
+    }
+
     private sealed class ImmediateClient(ReplayAnalysisResult result) : IReplayAnalysisClient
     {
         public Task<ReplayAnalysisResult> AnalyseAsync(ReplayAnalysisRequest request, CancellationToken cancellationToken = default) =>
