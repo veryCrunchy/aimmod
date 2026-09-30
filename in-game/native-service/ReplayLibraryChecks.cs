@@ -25,6 +25,9 @@ static class ReplayLibraryChecks
                 Check(list.RootElement[0].GetProperty("favorite").GetBoolean(), "favorite survives reopen");
             Check(library.Export("synthetic") && File.ReadAllText(Path.Combine(exports, "synthetic.amreplay")) == replay, "export preserves exact replay bytes");
             Check(library.Export("synthetic") && Directory.GetFiles(exports).Length == 2, "second export does not overwrite");
+            Check(catalog.Resolve("synthetic\n") is null && catalog.Read("synthetic\n") is null && !library.Favorite("synthetic\n", true), "identifier with trailing newline rejected");
+            File.WriteAllText(Path.Combine(root, "replay-favorites.json"), "{");
+            Check(JsonSerializer.Serialize(library.List()).Contains("\"favorite\":false"), "damaged favorites file does not block listing");
             Check(library.Delete("synthetic") && !File.Exists(path), "explicit deletion removes replay");
             Check(File.ReadAllText(Path.Combine(root, "replays", "active.partial")) == "recording", "active recording untouched");
             Check(File.ReadAllText(Path.Combine(root, "completed.tsv")) == "score history", "scores untouched");

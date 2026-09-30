@@ -17,10 +17,11 @@ sealed record NativeReplay(int Version, string Id, string Scenario, string Recor
 sealed class ReplayCatalog
 {
     const long MaxBytes = 64 * 1024 * 1024;
-    const int MaxFrames = 36000, MaxActors = 128, MaxInputs = 500000, MaxLine = 131072;
+    const int MaxFrames = 36000, MaxActors = 128, MaxInputs = 500000, MaxLine = 131072, MaxActorSamples = 2_000_000;
     readonly string directory;
     readonly string completedJournal;
-    static readonly Regex IdPattern = new("^[A-Za-z0-9_-]{1,100}$", RegexOptions.CultureInvariant);
+    // \z, not $: "$" also matches before a trailing newline.
+    static readonly Regex IdPattern = new(@"^[A-Za-z0-9_-]{1,100}\z", RegexOptions.CultureInvariant);
     static readonly HashSet<string> Actions = new(StringComparer.Ordinal) {
         "AxisTurn", "AxisLookUp", "AxisMoveForward", "AxisMoveRight", "FirePressed", "FireReleased",
         "AltFirePressed", "AltFireReleased", "JumpPressed", "JumpReleased", "CrouchPressed", "CrouchReleased",
@@ -92,6 +93,7 @@ sealed class ReplayCatalog
             var inputs = new List<ReplayInput>();
             string? reason = null;
             double lastFrame = -1, lastInput = -1;
+            long actorSamples = 0;
             while (ReadLine(reader) is { } line)
             {
                 if (reason is not null) throw new InvalidDataException("Data after end marker");
@@ -106,6 +108,10 @@ sealed class ReplayCatalog
                         if (camera[6] is <= 1 or >= 179) throw new InvalidDataException("Invalid FOV");
                         var entities = row.GetProperty("actors");
                         if (entities.GetArrayLength() > MaxActors) throw new InvalidDataException();
+                        // Total budget across frames: the 64 MB file cap alone still admits
+                        // several million compact actor rows (hundreds of MB once parsed).
+                        actorSamples += entities.GetArrayLength();
+                        if (actorSamples > MaxActorSamples) throw new InvalidDataException("Replay exceeds actor sample budget");
                         var actors = entities.EnumerateArray().Select(a => Vector(a, 6)).ToArray();
                         var ids = new HashSet<double>();
                         foreach (var a in actors)

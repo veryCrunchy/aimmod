@@ -29,6 +29,7 @@ sealed class NativeReplayPlayback : IAsyncDisposable
         try { if (File.Exists(commandPath) && new FileInfo(commandPath).Length <= 1024) lastCommand = File.ReadAllText(commandPath); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
     double Time => replay is null ? 0 : Math.Clamp(position + (playing ? Stopwatch.GetElapsedTime(anchor).TotalSeconds * speed : 0), 0, replay.Frames[^1].T);
+    public bool Visible { get { lock (gate) return visible && replay is not null; } }
     public object Status { get { lock (gate) return new { id = replay?.Id, time = Time, duration = replay?.Frames.LastOrDefault()?.T ?? 0, playing, speed, visible }; } }
     internal (long Session, string? Id, long Revision) KeyboardState { get { lock (gate) return visible && replay is not null ? (keyboardSession, replay.Id, keyboardRevision) : (0, null, 0); } }
     internal bool KeyboardCommand(long session, string action, double? value = null) {
@@ -126,6 +127,7 @@ sealed class NativeReplayPlayback : IAsyncDisposable
         pump = Task.Run(async () => {
             string? last = null;
             long lastHeartbeat = 0;
+            var pacer = new FramePacer();
             try {
                 while (!cancellation.IsCancellationRequested) {
                     try {
@@ -144,10 +146,10 @@ sealed class NativeReplayPlayback : IAsyncDisposable
                     }
                     var data = Snapshot();
                     if (data != last) {
-                        try { File.WriteAllText(path + ".next", data, new UTF8Encoding(false)); File.Move(path + ".next", path, true); last = data; }
+                        try { File.WriteAllText(path + ".next", data, Utf8); File.Move(path + ".next", path, true); last = data; }
                         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* Retry a shared-file race on the next frame. */ }
                     }
-                    await Task.Delay(active ? 33 : 100, cancellation.Token);
+                    await Task.Delay(pacer.Next(active ? ActiveInterval : IdleInterval), cancellation.Token);
                     } catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { break; }
                       catch (Exception ex) {
                         // Keep transport available after a malformed frame or an
@@ -177,9 +179,36 @@ sealed class NativeReplayPlayback : IAsyncDisposable
     }
     public async ValueTask DisposeAsync()
     {
+        if (disposed) return;
+        disposed = true;
         cancellation.Cancel(); if (pump is not null) await pump;
         Command("close");
-        try { File.WriteAllText(path, Snapshot()); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        // Publish a closed frame atomically, and remove the heartbeat so the game
+        // sees the worker as unavailable immediately rather than after 3 s.
+        try { AtomicFile.WriteText(path, Snapshot()); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        if (pump is not null) try { File.Delete(heartbeatPath); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         cancellation.Dispose();
+    }
+    bool disposed;
+    static readonly UTF8Encoding Utf8 = new(false);
+    internal static readonly TimeSpan ActiveInterval = TimeSpan.FromTicks(TimeSpan.TicksPerSecond / 30), IdleInterval = TimeSpan.FromMilliseconds(100);
+}
+
+// Deadline-based pacing. Task.Delay rounds each wait up to the system timer
+// tick (typically 15.6 ms), so fixed 33 ms delays run at roughly 21 Hz. Waiting
+// until an absolute deadline keeps the average publication rate at the target
+// without raising the global timer resolution. A late frame never triggers a
+// burst: when more than one interval behind, the schedule restarts from now.
+sealed class FramePacer(Func<long>? clock = null)
+{
+    readonly Func<long> now = clock ?? Stopwatch.GetTimestamp;
+    long deadline;
+    internal TimeSpan Next(TimeSpan interval)
+    {
+        var current = now();
+        var step = (long)(interval.TotalSeconds * Stopwatch.Frequency);
+        deadline = deadline == 0 || current - deadline > step ? current + step : deadline + step;
+        var wait = deadline - current;
+        return wait <= 0 ? TimeSpan.Zero : TimeSpan.FromSeconds((double)wait / Stopwatch.Frequency);
     }
 }
