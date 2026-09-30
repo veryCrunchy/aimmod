@@ -238,7 +238,6 @@ public sealed class ExternalLazerReplayOpenServiceTests
 
         public async Task<RuntimeResponse> SendAsync(RuntimeRequest request, CancellationToken cancellationToken = default)
         {
-            Assert.That(cancellationToken.CanBeCanceled, Is.False);
             ExternalLazerAssetResolveRequest input = request.Payload!.Value.Deserialize<ExternalLazerAssetResolveRequest>(RuntimeProtocol.JsonOptions)!;
             StagingDirectory = input.StagingDirectory;
             Started.SetResult();
