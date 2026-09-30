@@ -108,6 +108,33 @@ public sealed class StatisticsWorkspaceModelTests
     }
 
     [Test]
+    public void MapIndexMatchesTheFullScanAndIncludesOnlineRecordsOfTheSameDifficulty()
+    {
+        Guid beatmap = Guid.NewGuid();
+        LocalReplay first = run(1, DateTimeOffset.Parse("2026-01-01"), 5, 0.91, 3, 100, []) with { BeatmapId = beatmap };
+        LocalReplay latest = run(2, DateTimeOffset.Parse("2026-01-03"), 5, 0.96, 0, 160, []) with { BeatmapId = beatmap };
+        LocalReplay other = run(3, DateTimeOffset.Parse("2026-01-04"), 7, 0.99, 0, 300, []);
+        LocalReplay[] local = [first, latest, other];
+        var index = new StatisticsMapIndex(local);
+
+        LocalReplay submitted = latest with { OnlineBeatmapId = 77 };
+        LocalReplay onlineOnly = run(4, DateTimeOffset.Parse("2026-01-05"), 5, 0.98, 0, 190, [], onlineScoreId: 9) with
+        {
+            OnlineBeatmapId = 77,
+            IsLocallyStored = false,
+        };
+        var merged = new StatisticsMapIndex([first with { OnlineBeatmapId = 77 }, submitted, onlineOnly, other]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(index.Summarise(latest), Is.EqualTo(StatisticsWorkspaceModel.BuildMapSummary(local, beatmap)));
+            Assert.That(merged.Summarise(submitted).PlayCount, Is.EqualTo(3));
+            Assert.That(merged.Summarise(submitted).BestPerformancePoints, Is.EqualTo(190));
+            Assert.That(merged.Summarise(other).PlayCount, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
     public void MissingPpRemainsMissingInsteadOfInventingValues()
     {
         StatisticsWorkspaceModel model = StatisticsWorkspaceModel.Build(

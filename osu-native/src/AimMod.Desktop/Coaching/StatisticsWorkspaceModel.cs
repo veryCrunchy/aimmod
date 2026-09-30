@@ -155,9 +155,12 @@ public sealed record StatisticsWorkspaceModel(
     public static StatisticsMapSummary BuildMapSummary(IReadOnlyList<LocalReplay> source, Guid beatmapId)
     {
         ArgumentNullException.ThrowIfNull(source);
-        LocalReplay[] runs = source.Where(run => run.BeatmapId == beatmapId)
-                                  .OrderBy(run => run.PlayedAt)
-                                  .ToArray();
+        return Summarise(source.Where(run => run.BeatmapId == beatmapId), beatmapId);
+    }
+
+    internal static StatisticsMapSummary Summarise(IEnumerable<LocalReplay> source, Guid beatmapId)
+    {
+        LocalReplay[] runs = source.OrderBy(run => run.PlayedAt).ToArray();
         double[] accuracies = runs.Where(run => validAccuracy(run.Accuracy)).Select(run => run.Accuracy).ToArray();
         double? change = accuracies.Length < 2 ? null : accuracies[^1] - accuracies[0];
         return new StatisticsMapSummary(
@@ -214,6 +217,30 @@ public sealed record StatisticsWorkspaceModel(
     };
 
     private static long saturatingAdd(long left, long right) => left > long.MaxValue - right ? long.MaxValue : left + right;
+}
+
+/// <summary>
+/// Plays grouped by difficulty once per history, so selecting a play does not rescan the history. Online-only
+/// records share a group with the local plays of the same online difficulty.
+/// </summary>
+public sealed class StatisticsMapIndex
+{
+    private readonly ILookup<string, LocalReplay> runs;
+
+    public StatisticsMapIndex(IEnumerable<LocalReplay> source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        runs = source.ToLookup(MapKey, StringComparer.Ordinal);
+    }
+
+    public static StatisticsMapIndex Empty { get; } = new(Array.Empty<LocalReplay>());
+
+    public StatisticsMapSummary Summarise(LocalReplay replay) =>
+        StatisticsWorkspaceModel.Summarise(runs[MapKey(replay)].DistinctBy(run => run.ScoreId), replay.BeatmapId);
+
+    internal static string MapKey(LocalReplay run) => run.OnlineBeatmapId > 0
+        ? "online:" + run.OnlineBeatmapId.ToString(System.Globalization.CultureInfo.InvariantCulture)
+        : "local:" + run.BeatmapId.ToString("N");
 }
 
 public static class StatisticsUnifiedScoreAdapter

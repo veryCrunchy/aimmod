@@ -9,17 +9,19 @@ public sealed record CoachingTrainingPlan(
 public sealed record CoachingTrainingReview(int Attempts, int SuccessfulAttempts, bool Complete, string Message);
 
 public static class CoachingTrainingPlanner {
-    public static CoachingTrainingPlan? Build(NativeCoachingWorkspaceModel model) {
-        var candidates = model.History.Where(r => r.Passed && ScoreMods.IsManualPlay(r) && r.Accuracy is >= .7 and <= 1
+    public static CoachingTrainingPlan? Build(NativeCoachingWorkspaceModel model) => Build(model.History, model.GlobalProfile);
+
+    internal static CoachingTrainingPlan? Build(IReadOnlyList<LocalReplay> history, GlobalCoachingProfile profile) {
+        var candidates = history.Where(r => r.Passed && CoachingRunKeys.IsManualPlay(r) && r.Accuracy is >= .7 and <= 1
             && double.IsFinite(r.Accuracy) && r.MissCount >= 0 && r.PlayedAt <= DateTimeOffset.UtcNow)
-            .GroupBy(r => (r.Player, Setup:ScoreMods.SetupKey(r)))
+            .GroupBy(r => (r.Player, Setup:CoachingRunKeys.SetupKey(r)))
             .Select(g => g.OrderByDescending(r=>r.PlayedAt).Take(5).ToArray()).ToArray();
         var group = candidates.OrderByDescending(g=>g.Length>=3).ThenByDescending(g=>g[0].PlayedAt).FirstOrDefault();
         if (group is null) return null;
         var target=group[0];
         double accuracy=median(group.Select(r=>r.Accuracy));
         int misses=(int)Math.Round(median(group.Select(r=>(double)r.MissCount)));
-        var skill=model.GlobalProfile.MeasuredSkillAreas.Where(s=>s.Confidence>=CoachingConfidence.Medium && s.RunCount>=3 && s.MapCount>=2)
+        var skill=profile.MeasuredSkillAreas.Where(s=>s.Confidence>=CoachingConfidence.Medium && s.RunCount>=3 && s.MapCount>=2)
             .OrderByDescending(s=>s.ShareOfClassifiedMisses).FirstOrDefault();
         string focus="Make your result repeatable";
         string why=$"Your baseline from {group.Length} matching {(group.Length == 1 ? "play" : "plays")}: {accuracy:P2} accuracy and {misses} {(misses == 1 ? "miss" : "misses")}.";

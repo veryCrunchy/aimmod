@@ -11,11 +11,12 @@ public static class CoachingReplayObservations
     public static IReadOnlyList<CoachingReplayObservation> Build(LocalReplay selected,
         IEnumerable<LocalReplay> history, IReadOnlyDictionary<Guid, ReplayAnalysisResult> analyses)
     {
-        if (!ScoreMods.IsManualPlay(selected) || !analyses.TryGetValue(selected.ScoreId, out var analysis)
+        if (!CoachingRunKeys.IsManualPlay(selected) || !analyses.TryGetValue(selected.ScoreId, out var analysis)
             || analysis.EngineVersion != ReplayAnalysisProtocol.EngineVersion) return [];
-        var runs = history.Append(selected).Where(r => ScoreMods.IsManualPlay(r)
-                && string.Equals(r.Player, selected.Player, StringComparison.OrdinalIgnoreCase)
-                && ScoreMods.SetupKey(r) == ScoreMods.SetupKey(selected)
+        string setup = CoachingRunKeys.SetupKey(selected);
+        var runs = history.Append(selected).Where(r => string.Equals(r.Player, selected.Player, StringComparison.OrdinalIgnoreCase)
+                && CoachingRunKeys.IsManualPlay(r)
+                && CoachingRunKeys.SetupKey(r) == setup
                 && r.PlayedAt <= DateTimeOffset.UtcNow)
             .DistinctBy(r => r.ScoreId).OrderByDescending(r => r.PlayedAt).Take(100)
             .Where(r => analyses.TryGetValue(r.ScoreId, out var a) && a.EngineVersion == ReplayAnalysisProtocol.EngineVersion).ToArray();
@@ -47,7 +48,7 @@ public static class CoachingReplayObservations
         return observations.Take(3).ToArray();
     }
 
-    private static bool validMiss(ReplayObjectJudgement j) => j.Result == "Miss" && j.ObjectIndex is >= 0
+    private static bool validMiss(ReplayObjectJudgement j) => ReplayJudgementClassifier.IsMiss(j) && j.ObjectIndex is >= 0
         && string.IsNullOrEmpty(j.NestedPath) && double.IsFinite(j.StartTimeMs) && j.StartTimeMs >= 0
         && j.MissAnalysis is { Confidence: >= .7, HitRadius: > 0 } m && double.IsFinite(m.HitRadius);
 

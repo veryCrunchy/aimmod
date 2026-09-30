@@ -651,6 +651,28 @@ public sealed class PpTargetEngineTests
         Assert.That(filtered.Candidates, Is.Empty);
     }
 
+    [Test]
+    public void RowKeysAreStableAcrossRankingsAndChangeWithDisplayedValues()
+    {
+        var profile = withPassEvidence(profileWithHistory(), 5.2);
+        PpTargetCandidate rank(double expected) => PpTargetRanker.Rank(profile, [set(1, "ranked", difficulty(10, 5.2))],
+            exactEstimates: new Dictionary<int, PpTargetEstimate>
+            {
+                [10] = new(expected, 300, new(180, 250), 1, PpTargetConfidence.Low, "Official osu! ruleset"),
+            }).Candidates.Single();
+
+        PpTargetCandidate first = rank(220);
+        PpTargetCandidate again = rank(220);
+        var sort = NativePpTargetsWorkspace.TargetSort.BestFit;
+        Assert.Multiple(() =>
+        {
+            Assert.That(again, Is.Not.SameAs(first));
+            Assert.That(NativePpTargetsWorkspace.RowKey(again, sort), Is.EqualTo(NativePpTargetsWorkspace.RowKey(first, sort)));
+            Assert.That(NativePpTargetsWorkspace.RowKey(first, NativePpTargetsWorkspace.TargetSort.Stars), Is.Not.EqualTo(NativePpTargetsWorkspace.RowKey(first, sort)));
+            Assert.That(NativePpTargetsWorkspace.RowKey(rank(240), sort), Is.Not.EqualTo(NativePpTargetsWorkspace.RowKey(first, sort)));
+        });
+    }
+
     private static LocalReplay replay(int day, int beatmap, double stars, double accuracy, double? pp, params string[] mods) => new(
         id(10_000 + day), id(1_000 + beatmap), id(beatmap), $"Map {beatmap}", "Artist", "Insane", "osu", "Player",
         new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero).AddDays(day), stars, accuracy, 1_000_000, 500, 0, pp, mods, true);

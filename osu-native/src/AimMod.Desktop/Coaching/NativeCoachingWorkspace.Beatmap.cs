@@ -41,6 +41,7 @@ public partial class NativeCoachingWorkspace
 
     private void renderCoachingMap()
     {
+        trainerRunsCache = null;
         mapDetailHost.Clear();
         mapDetailHost.Spacing = new(10);
         mapDetailHost.Padding = new MarginPadding { Right = 12, Bottom = 12 };
@@ -91,7 +92,7 @@ public partial class NativeCoachingWorkspace
                     practiceWorkspace.OpenBreakdown(new PracticeMapCandidate(run, [run.ScoreId], 1, run.MissCount, 0), tapping?.FirstObjectIndex);
                     return;
                 }
-                coachingTargetScoreId=run.ScoreId;renderSession(workspace ?? buildWorkspace());showCoachingPage(0);
+                coachingTargetScoreId=run.ScoreId;renderSession();showCoachingPage(0);
             },sets.Length==0,true));
             if (run is null)
                 actions.Add(new CoachingButton("Choose a play to create a practice set", () => showCoachingPage(2), true, true));

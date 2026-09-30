@@ -47,51 +47,41 @@ public sealed record NativeCoachingWorkspaceModel(
         IReadOnlyDictionary<Guid, ReplayAnalysisResult> analyses,
         Guid? selectedScoreId = null,
         CoachingTimeRange timeRange = CoachingTimeRange.Days30,
+        DateTimeOffset? now = null) =>
+        new CoachingModelBuilder().Build(runs, analyses, selectedScoreId, timeRange, now);
+
+    internal static DateTimeOffset? EarliestPlay(CoachingTimeRange timeRange, DateTimeOffset reference) => timeRange switch
+    {
+        CoachingTimeRange.Days7 => reference.AddDays(-7),
+        CoachingTimeRange.Days30 => reference.AddDays(-30),
+        CoachingTimeRange.Days90 => reference.AddDays(-90),
+        CoachingTimeRange.Year => reference.AddYears(-1),
+        _ => null,
+    };
+
+    /// <summary>Latest record per score of manual osu!standard plays within the range, newest first.</summary>
+    internal static LocalReplay[] NormaliseHistory(
+        IReadOnlyList<LocalReplay> runs,
+        CoachingTimeRange timeRange,
         DateTimeOffset? now = null)
     {
-        ArgumentNullException.ThrowIfNull(runs);
-        ArgumentNullException.ThrowIfNull(analyses);
-
-        DateTimeOffset reference = now ?? DateTimeOffset.Now;
-        DateTimeOffset? earliest = timeRange switch
-        {
-            CoachingTimeRange.Days7 => reference.AddDays(-7),
-            CoachingTimeRange.Days30 => reference.AddDays(-30),
-            CoachingTimeRange.Days90 => reference.AddDays(-90),
-            CoachingTimeRange.Year => reference.AddYears(-1),
-            _ => null,
-        };
-        LocalReplay[] history = runs.Where(run => string.Equals(run.RulesetShortName, "osu", StringComparison.OrdinalIgnoreCase))
-                                    .Where(ScoreMods.IsManualPlay)
-                                    .GroupBy(run => run.ScoreId)
-                                    .Select(group => group.OrderByDescending(run => run.PlayedAt).First())
-                                    .Where(run => earliest is null || run.PlayedAt >= earliest)
-                                    .OrderByDescending(run => run.PlayedAt)
-                                    .Take(CoachingLimits.MaximumRuns)
-                                    .ToArray();
-        LocalReplay? selected = selectedScoreId is { } scoreId
-            ? history.FirstOrDefault(run => run.ScoreId == scoreId)
-            : null;
-
-        LocalReplay[] trendRuns = history.OrderBy(run => run.PlayedAt)
-                                         .TakeLast(MaximumTrendRuns)
-                                         .ToArray();
-        LocalReplay[] sessionRuns = selected is null
-            ? Array.Empty<LocalReplay>()
-            : findSession(history, selected.ScoreId);
-        CoachingSessionSummary? session = sessionRuns.Length == 0 ? null : summariseSession(sessionRuns);
-        GlobalCoachingSummary global = summariseGlobal(history, analyses);
-        CoachingReport report = selected is null
-            ? CoachingReportBuilder.BuildGlobal(history, analyses)
-            : CoachingReportBuilder.Build(history, analyses, selected.ScoreId);
-
-        return new NativeCoachingWorkspaceModel(history, trendRuns, sessionRuns, selected, session, global, report)
-        {
-            GlobalProfile = GlobalCoachingProfileBuilder.Build(history, analyses),
-        };
+        DateTimeOffset? earliest = EarliestPlay(timeRange, now ?? DateTimeOffset.Now);
+        return runs.Where(run => string.Equals(run.RulesetShortName, "osu", StringComparison.OrdinalIgnoreCase))
+                   .Where(CoachingRunKeys.IsManualPlay)
+                   .GroupBy(run => run.ScoreId)
+                   .Select(group => group.OrderByDescending(run => run.PlayedAt).First())
+                   .Where(run => earliest is null || run.PlayedAt >= earliest)
+                   .OrderByDescending(run => run.PlayedAt)
+                   .Take(CoachingLimits.MaximumRuns)
+                   .ToArray();
     }
 
-    private static GlobalCoachingSummary summariseGlobal(
+    internal static LocalReplay[] TrendRunsOf(IReadOnlyList<LocalReplay> history) =>
+        history.OrderBy(run => run.PlayedAt)
+               .TakeLast(MaximumTrendRuns)
+               .ToArray();
+
+    internal static GlobalCoachingSummary SummariseGlobal(
         IReadOnlyList<LocalReplay> history,
         IReadOnlyDictionary<Guid, ReplayAnalysisResult> analyses)
     {
@@ -119,9 +109,9 @@ public sealed record NativeCoachingWorkspaceModel(
             median);
     }
 
-    private static LocalReplay[] findSession(IReadOnlyList<LocalReplay> history, Guid selectedScoreId)
+    /// <param name="chronological">History ordered by play time, oldest first.</param>
+    internal static LocalReplay[] FindSession(IReadOnlyList<LocalReplay> chronological, Guid selectedScoreId)
     {
-        LocalReplay[] chronological = history.OrderBy(run => run.PlayedAt).ToArray();
         var sessions = new List<List<LocalReplay>>();
         foreach (LocalReplay run in chronological)
         {
@@ -138,7 +128,7 @@ public sealed record NativeCoachingWorkspaceModel(
                ?? Array.Empty<LocalReplay>();
     }
 
-    private static CoachingSessionSummary summariseSession(IReadOnlyList<LocalReplay> runs)
+    internal static CoachingSessionSummary SummariseSession(IReadOnlyList<LocalReplay> runs)
     {
         LocalReplay[] chronological = runs.OrderBy(run => run.PlayedAt).ToArray();
         double[] accuracies = chronological.Select(run => run.Accuracy)

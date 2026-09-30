@@ -1,3 +1,4 @@
+using AimMod.Desktop.Coaching;
 using AimMod.Desktop.LocalLibrary;
 using AimMod.Osu.Runtime.Contracts;
 
@@ -74,7 +75,8 @@ public static class ReplayMapPatternAnalyzer
                                                .Cast<ReplayAnalysisResult>()
                                                .ToArray();
 
-        ReplayRecurringMiss[] recurring = exact.SelectMany(result => result.Judgements.Where(isTopLevelMiss))
+        ReplayObjectJudgement[] misses = exact.SelectMany(result => ReplayJudgementDigest.For(result).Misses.Where(isTopLevelMiss)).ToArray();
+        ReplayRecurringMiss[] recurring = misses
                                                 .Where(judgement => judgement.ObjectIndex is not null)
                                                 .GroupBy(judgement => judgement.ObjectIndex!.Value)
                                                 .Select(group => new ReplayRecurringMiss(
@@ -88,9 +90,7 @@ public static class ReplayMapPatternAnalyzer
                                                 .ThenBy(pattern => pattern.ObjectIndex)
                                                 .Take(8)
                                                 .ToArray();
-        IReadOnlyDictionary<ReplayMissReason, int> reasons = exact.SelectMany(result => result.Judgements)
-                                                                  .Where(isTopLevelMiss)
-                                                                  .Select(judgement => judgement.MissAnalysis?.Reason ?? ReplayMissReason.Unknown)
+        IReadOnlyDictionary<ReplayMissReason, int> reasons = misses.Select(judgement => judgement.MissAnalysis?.Reason ?? ReplayMissReason.Unknown)
                                                                   .GroupBy(reason => reason)
                                                                   .ToDictionary(group => group.Key, group => group.Count());
 
@@ -131,6 +131,5 @@ public static class ReplayMapPatternAnalyzer
         : string.Join(',', replay.Mods.OrderBy(mod => mod, StringComparer.OrdinalIgnoreCase).Select(mod => mod.ToUpperInvariant()));
 
     private static bool isTopLevelMiss(ReplayObjectJudgement judgement) =>
-        string.Equals(judgement.Result, "Miss", StringComparison.OrdinalIgnoreCase)
-        && string.IsNullOrEmpty(judgement.NestedPath);
+        ReplayJudgementClassifier.IsMiss(judgement) && string.IsNullOrEmpty(judgement.NestedPath);
 }

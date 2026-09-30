@@ -195,13 +195,18 @@ public sealed class NativePpTargetsWorkspaceTests
         using var workspace = new NativePpTargetsWorkspace(new InMemoryLocalLibrarySource([], []), () => null, () => null);
         const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
         typeof(NativePpTargetsWorkspace).GetField("setsById", flags)!.SetValue(workspace, saved.Catalog.ToDictionary(s => s.BeatmapSetId));
-        var candidates = PpTargetRanker.Rank(saved.Profile, saved.Catalog).Candidates.ToArray();
+        var candidates = PpTargetRanker.Rank(saved.Profile, saved.Catalog).Candidates
+            .Select(candidate => new NativePpTargetsWorkspace.RankedTarget(candidate, NativePpTargetsWorkspace.RowKey(candidate, NativePpTargetsWorkspace.TargetSort.BestFit)))
+            .ToArray();
         var render = typeof(NativePpTargetsWorkspace).GetMethod("renderCandidates", flags)!;
         render.Invoke(workspace, [candidates]);
+        var rows = (System.Collections.IDictionary)typeof(NativePpTargetsWorkspace).GetField("targetRows", flags)!.GetValue(workspace)!;
+        object firstRow = rows[456]!;
         render.Invoke(workspace, [candidates]);
+        Assert.That(rows[456], Is.SameAs(firstRow), "an unchanged target keeps its row");
         Assert.That(typeof(NativePpTargetsWorkspace).GetField("selectedBeatmapId", flags)!.GetValue(workspace), Is.EqualTo(456));
         Assert.That(typeof(NativePpTargetsWorkspace).GetField("selectedDetails", flags)!.GetValue(workspace), Is.Not.Null);
-        render.Invoke(workspace, [Array.Empty<PpTargetCandidate>()]);
+        render.Invoke(workspace, [Array.Empty<NativePpTargetsWorkspace.RankedTarget>()]);
         Assert.That(typeof(NativePpTargetsWorkspace).GetField("selectedBeatmapId", flags)!.GetValue(workspace), Is.Null);
     }
 

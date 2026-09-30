@@ -1,5 +1,5 @@
+using System.Buffers.Binary;
 using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using AimMod.Desktop.LocalLibrary;
 using AimMod.Osu.Runtime.Contracts;
@@ -57,7 +57,7 @@ public sealed record PpPatternPrediction(double? Fit, double? ExpectedAccuracy, 
 
 public static class PpTargetPatternModel
 {
-    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<ReplayAnalysisResult, Dictionary<string, PpPatternEvidence>> measuredReplays = new();
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<ReplayAnalysisResult, Dictionary<MeasurementKey, PpPatternEvidence>> measuredReplays = new();
     public const string Version = "geometry-v8";
     private const double normalized_radius = 50;
     private const double jump_spacing = 150;
@@ -127,12 +127,17 @@ public static class PpTargetPatternModel
             }
             // Analysis results are immutable snapshots. Reuse measurements while still
             // recalculating recency and map balancing as the player's history changes.
-            LocalBeatmapDifficulty? sourceDifficulty = !string.IsNullOrWhiteSpace(replay.BeatmapHash)
+            string map = mapKey(replay);
+            string mods = modsKey(replay.Mods);
+            bool legacy = replay.LegacyScore || replay.Origin == LocalLibraryOrigin.Stable;
+            PpPatternContext? context = contexts?.GetValueOrDefault(replay.ScoreId);
+            LocalBeatmapDifficulty? difficulty = !string.IsNullOrWhiteSpace(replay.BeatmapHash)
                 ? hashes.GetValueOrDefault(replay.BeatmapHash.Trim()) : difficulties.GetValueOrDefault(replay.BeatmapId);
-            string measurementKey = JsonSerializer.Serialize(new { Version, replay.ScoreId, Map = mapKey(replay),
-                replay.PlayedAt, replay.LegacyScore, replay.Origin, Mods = modsKey(replay.Mods), replay.ModsJson,
-                Context = contexts?.GetValueOrDefault(replay.ScoreId), sourceDifficulty,
-                Fallback = difficulties.GetValueOrDefault(replay.BeatmapId) });
+            if (difficulty is null && difficulties.TryGetValue(replay.BeatmapId, out var byId)
+                && string.IsNullOrWhiteSpace(byId.BeatmapHash)) difficulty = byId;
+            // Every input the measurement below reads besides the (immutable) analysis itself.
+            var measurementKey = new MeasurementKey(replay.ScoreId, map, replay.PlayedAt.UtcTicks, replay.PlayedAt.Offset, legacy,
+                string.Join('\u001f', replay.Mods), replay.ModsJson, context?.HitRadius, context?.ClockRate, difficulty?.CircleSize);
             var measurements = measuredReplays.GetOrCreateValue(analysis);
             lock (measurements)
                 if (measurements.TryGetValue(measurementKey, out var measurement))
@@ -150,12 +155,7 @@ public static class PpTargetPatternModel
 
             // Uniform per-judgement gameplay rate is measured evidence. Variable/absent rate stays unknown.
             double? rate = contextRate(contexts, replay.ScoreId, heads);
-            double? radius = contexts is not null && contexts.TryGetValue(replay.ScoreId, out var supplied) ? positive(supplied.HitRadius) : null;
-            string mods = modsKey(replay.Mods);
-            LocalBeatmapDifficulty? difficulty = !string.IsNullOrWhiteSpace(replay.BeatmapHash)
-                ? hashes.GetValueOrDefault(replay.BeatmapHash.Trim()) : difficulties.GetValueOrDefault(replay.BeatmapId);
-            if (difficulty is null && difficulties.TryGetValue(replay.BeatmapId, out var byId)
-                && string.IsNullOrWhiteSpace(byId.BeatmapHash)) difficulty = byId;
+            double? radius = context is not null ? positive(context.HitRadius) : null;
             if (radius is null && difficulty is not null)
                 radius = localRadius(difficulty.CircleSize, mods, replay.ModsJson);
 
@@ -174,9 +174,8 @@ public static class PpTargetPatternModel
                     judged.Count(j => j.Result == "Miss") / (double)judged.Length, reasons);
             }
             if (!outcomes.TryGetValue("Overall", out var overall) || overall.ObjectCount < 3) continue;
-            var result = new PpPatternEvidence(replay.ScoreId, mapKey(replay), mods, replay.PlayedAt, measured.Features, decay(replay), outcomes,
-                ScoreMods.Configuration(replay.Mods, replay.ModsJson, PpTargetMods.NormaliseForSkill),
-                replay.LegacyScore || replay.Origin == LocalLibraryOrigin.Stable);
+            var result = new PpPatternEvidence(replay.ScoreId, map, mods, replay.PlayedAt, measured.Features, decay(replay), outcomes,
+                ScoreMods.Configuration(replay.Mods, replay.ModsJson, PpTargetMods.NormaliseForSkill), legacy);
             lock (measurements)
             {
                 if (measurements.Count >= 8) measurements.Clear();
@@ -201,16 +200,163 @@ public static class PpTargetPatternModel
             return g.Select(e => e with { Weight = e.Weight / total * newest });
         }).OrderBy(e => e.ScoreId).ToArray();
         var form = PpTargetSessionFormModel.Build(balanced, reference);
-        string identity = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
-            JsonSerializer.Serialize(new { Version, recencyDays, Evidence = balanced, Scores = scores, Form = form.Patterns })))).ToLowerInvariant();
-        return new PpPatternProfile(identity, reference, recencyDays, balanced, scores, form);
+        return new PpPatternProfile(identity(recencyDays, balanced, scores, form), reference, recencyDays, balanced, scores, form);
+    }
+
+    private readonly record struct MeasurementKey(Guid ScoreId, string Map, long PlayedAtTicks, TimeSpan PlayedAtOffset, bool LegacyScore,
+        string Mods, string ModsJson, double? HitRadius, double? ClockRate, float? CircleSize);
+
+    // A digest of every profile field predictions read, written as compact binary rather than JSON.
+    // Dictionaries are hashed in enumeration order because that order can affect summation.
+    private static string identity(int recencyDays, PpPatternEvidence[] evidence,
+        PpScoreSkillEvidence[] scores, PpSessionForm form)
+    {
+        var w = new IdentityWriter();
+        w.Text(Version);
+        w.Int(recencyDays);
+        w.Int(evidence.Length);
+        foreach (PpPatternEvidence e in evidence)
+        {
+            w.Id(e.ScoreId); w.Text(e.MapKey); w.Text(e.ModsKey); w.Time(e.PlayedAt); w.Real(e.Weight);
+            w.Text(e.SetupKey); w.Bool(e.LegacyScore);
+            PpPatternFeatures f = e.Features;
+            w.Int(f.PointCount); w.Int(f.TransitionCount); w.Int(f.InvalidPointCount);
+            w.Real(f.HitRadius); w.Real(f.ClockRate); w.Real(f.MeanSpacing); w.Real(f.PeakSpacing);
+            w.Real(f.JumpDistance); w.Real(f.JumpFraction); w.Real(f.NotesPerSecond); w.Real(f.PeakNotesPerSecond);
+            w.Real(f.NormalizedSpeed); w.Real(f.BurstFraction); w.Real(f.StreamFraction);
+            w.Real(f.MeanDirectionChangeDegrees); w.Real(f.SharpTurnFraction); w.Real(f.DurationSeconds);
+            w.Int(f.PatternObjectCounts?.Count ?? -1);
+            foreach (var (pattern, count) in f.PatternObjectCounts ?? new Dictionary<string, int>())
+            {
+                w.Text(pattern); w.Int(count);
+            }
+            w.Int(e.Outcomes.Count);
+            foreach (var (pattern, outcome) in e.Outcomes)
+            {
+                w.Text(pattern); w.Int(outcome.ObjectCount); w.Real(outcome.Accuracy); w.Real(outcome.MissRate);
+                w.Int(outcome.MissReasons.Count);
+                foreach (var (reason, count) in outcome.MissReasons)
+                {
+                    w.Int((int)reason); w.Int(count);
+                }
+            }
+        }
+        w.Int(scores.Length);
+        foreach (PpScoreSkillEvidence s in scores)
+        {
+            w.Id(s.ScoreId); w.Text(s.MapKey); w.Text(s.ModsKey); w.Time(s.PlayedAt);
+            w.Real(s.StarRating); w.Real(s.Accuracy); w.Real(s.Weight); w.Bool(s.LegacyScore);
+        }
+        // Form patterns exist only while the session is active; its expiry and support counts do not affect predictions.
+        w.Int(form.Patterns.Count);
+        foreach (PpSessionPatternForm p in form.Patterns)
+        {
+            w.Text(p.Setup); w.Text(p.Pattern); w.Real(p.AccuracyDelta); w.Real(p.MissRateDelta); w.Int(p.Plays); w.Int(p.Maps);
+            w.Text(p.Observation); w.Bool(p.LegacyScore); w.Bool(p.UsesSimilarMaps);
+        }
+        return w.Hash();
+    }
+
+    private sealed class IdentityWriter
+    {
+        private byte[] buffer = new byte[16 * 1024];
+        private int length;
+
+        public void Int(int value) => BinaryPrimitives.WriteInt32LittleEndian(take(4), value);
+        public void Bool(bool value) => take(1)[0] = value ? (byte)1 : (byte)0;
+        public void Real(double value) => BinaryPrimitives.WriteInt64LittleEndian(take(8), BitConverter.DoubleToInt64Bits(value));
+
+        public void Real(double? value)
+        {
+            Bool(value is not null);
+            if (value is { } present) Real(present);
+        }
+
+        public void Time(DateTimeOffset value)
+        {
+            BinaryPrimitives.WriteInt64LittleEndian(take(8), value.UtcTicks);
+            BinaryPrimitives.WriteInt64LittleEndian(take(8), value.Offset.Ticks);
+        }
+
+        public void Id(Guid value) => value.TryWriteBytes(take(16));
+
+        public void Text(string? value)
+        {
+            if (value is null)
+            {
+                Int(-1);
+                return;
+            }
+            Int(value.Length);
+            foreach (char c in value) BinaryPrimitives.WriteUInt16LittleEndian(take(2), c);
+        }
+
+        public string Hash() => Convert.ToHexString(SHA256.HashData(buffer.AsSpan(0, length))).ToLowerInvariant();
+
+        private Span<byte> take(int count)
+        {
+            if (length + count > buffer.Length)
+                Array.Resize(ref buffer, Math.Max(buffer.Length * 2, length + count));
+            var span = buffer.AsSpan(length, count);
+            length += count;
+            return span;
+        }
     }
 
     internal static (double Fit, double Confidence, int Maps) ScoreFit(PpPatternProfile profile, double stars, IEnumerable<string> mods, bool legacyScore = false)
     {
         string key = modsKey(mods);
-        var nearby = (profile.ScoreEvidence ?? []).Where(e => e.LegacyScore == legacyScore && e.ModsKey == key && Math.Abs(e.StarRating - stars) <= 1.25
-                && e.Weight > 0 && double.IsFinite(e.Weight))
+        return fitFor((profile.ScoreEvidence ?? []).Where(e => e.LegacyScore == legacyScore && e.ModsKey == key && Math.Abs(e.StarRating - stars) <= 1.25
+            && e.Weight > 0 && double.IsFinite(e.Weight)), stars);
+    }
+
+    // ScoreFit for one setup across many candidates: evidence is filtered and sorted by star rating once,
+    // and each query visits only the +/-1.25 star window, restored to the original order.
+    internal sealed class ScoreFitIndex
+    {
+        private readonly (PpScoreSkillEvidence Evidence, int Order)[] sorted;
+        private readonly double[] stars;
+
+        private ScoreFitIndex((PpScoreSkillEvidence Evidence, int Order)[] sorted)
+        {
+            this.sorted = sorted;
+            stars = sorted.Select(item => item.Evidence.StarRating).ToArray();
+        }
+
+        public static ScoreFitIndex Create(PpPatternProfile profile, IEnumerable<string> mods, bool legacyScore = false)
+        {
+            string key = modsKey(mods);
+            return new ScoreFitIndex((profile.ScoreEvidence ?? [])
+                .Select((evidence, order) => (Evidence: evidence, Order: order))
+                .Where(item => item.Evidence.LegacyScore == legacyScore && item.Evidence.ModsKey == key
+                    && double.IsFinite(item.Evidence.StarRating) && item.Evidence.Weight > 0 && double.IsFinite(item.Evidence.Weight))
+                .OrderBy(item => item.Evidence.StarRating)
+                .ToArray());
+        }
+
+        public (double Fit, double Confidence, int Maps) Fit(double target)
+        {
+            if (!double.IsFinite(target))
+                return fitFor([], target);
+            int low = 0, high = stars.Length;
+            double minimum = target - 1.25 - 1e-6;
+            while (low < high)
+            {
+                int middle = (low + high) / 2;
+                if (stars[middle] < minimum) low = middle + 1; else high = middle;
+            }
+            var window = new List<(PpScoreSkillEvidence Evidence, int Order)>();
+            for (int index = low; index < sorted.Length && stars[index] <= target + 1.25 + 1e-6; index++)
+                if (Math.Abs(stars[index] - target) <= 1.25)
+                    window.Add(sorted[index]);
+            window.Sort((a, b) => a.Order.CompareTo(b.Order));
+            return fitFor(window.Select(item => item.Evidence), target);
+        }
+    }
+
+    private static (double Fit, double Confidence, int Maps) fitFor(IEnumerable<PpScoreSkillEvidence> candidates, double stars)
+    {
+        var nearby = candidates
             .GroupBy(e => e.MapKey).OrderBy(g => g.Min(e => Math.Abs(e.StarRating - stars)))
             .ThenBy(g => g.Key, StringComparer.Ordinal).Take(24).SelectMany(g => g).ToArray();
         double total = 0, fit = 0;

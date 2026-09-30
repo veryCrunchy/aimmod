@@ -10,7 +10,10 @@ using osu.Framework.Graphics.Sprites;
 using osu.Framework.Localisation;
 using osu.Framework.Threading;
 using osu.Game.Graphics.Sprites;
+using osu.Framework.Input.Events;
 using osu.Game.Graphics.UserInterface;
+using osuTK;
+using osuTK.Input;
 
 namespace AimMod.Desktop.Practice;
 
@@ -276,7 +279,7 @@ public partial class NativePracticeWorkspace : CompositeDrawable
         }
         else
         {
-            PracticeCandidatePage page = PracticeMapCandidateSearch.Search(candidates.Where(c=>ScoreMods.Matches(c.SourceReplay,modSelection.Value)).ToArray(),
+            PracticeCandidatePage page = PracticeMapCandidateSearch.Search(candidates.Where(c=>CoachingRunKeys.Matches(c.SourceReplay,modSelection.Value)).ToArray(),
                 new PracticeCandidateQuery(search.Current.Value, sort.Value, evidence.Value, minimumStars.Value, maximumStars.Value));
             count.Text = $"Find drills / {page.Total} matching maps / {candidates.Count} in coaching timeframe";
             foreach (PracticeMapCandidate candidate in page.Items)
@@ -285,7 +288,16 @@ public partial class NativePracticeWorkspace : CompositeDrawable
                     candidate.SourceReplay.BackgroundPath, selectRow));
         }
         list.SetRows(rows);
-        if (rows.Count == 0) count.Text = libraryLoading && savedView ? "Loading saved drills..." : "No matching maps";
+        if (rows.Count == 0)
+        {
+            bool filtered = search.Current.Value.Length > 0 || (savedView
+                ? savedScenario.Value != -1 || favouriteFilter.Value
+                : modSelection.Value != ScoreMods.Any || evidence.Value != PracticeEvidenceFilter.AnyEvidence || minimumStars.Value > 0 || maximumStars.Value < 10);
+            count.Text = libraryLoading && savedView ? "Loading saved drills..."
+                : filtered ? "No maps match these filters. Clear the search or widen the filters."
+                : savedView ? "No saved drills yet. Create one from Find drills."
+                : "No practice maps yet. Analysed replays with misses or timing patterns appear here.";
+        }
     }
 
     private void selectRow(string key)
@@ -469,6 +481,11 @@ public partial class NativePracticeWorkspace : CompositeDrawable
         scenarioControl.Current.BindValueChanged(change => { scenario.Value = change.NewValue; sectionIndex.Value = 0; showEditor(); });
 
         PracticeSectionChoice[] matches = sections.Where(item => item.Scenario == scenario.Value).ToArray();
+        if (matches.Length == 0)
+        {
+            scenario.Value = sections[0].Scenario;
+            matches = sections.Where(item => item.Scenario == scenario.Value).ToArray();
+        }
         sectionIndex.Value = Math.Clamp(sectionIndex.Value, 0, matches.Length - 1);
         choice = matches[sectionIndex.Value];
         var sectionControl = dropdown(new Bindable<int>(sectionIndex.Value), Enumerable.Range(0, matches.Length), index =>
@@ -682,12 +699,42 @@ public partial class NativePracticeWorkspace : CompositeDrawable
     }
     private void showEmpty() => detail.Add(text(savedView ? "Select a saved drill" : "Select a map to inspect its practice sections", 18, AimModPalette.Muted));
 
+    private (Vector2 Size, bool Guided)? layoutState;
+    private (bool Saved, bool Prepared, bool Breakdown, bool AllSections, bool Busy, bool HasChoice)? chromeState;
+    private int shownElapsedSeconds = -1;
+
     protected override void Update()
     {
         base.Update();
+        var layout = (DrawSize, guidedEditor);
+        if (layoutState != layout)
+        {
+            layoutState = layout;
+            updateLayout();
+        }
+
+        var chrome = (savedView, preparedSections is not null, createBreakdown, createAllSections, busy, choice is not null);
+        if (chromeState != chrome)
+        {
+            chromeState = chrome;
+            guidedTitle.Text = savedView ? "Your practice is ready" : preparedSections is not null ? "Choose your next section" : createBreakdown ? "Break down this section" : createAllSections ? "Prepare your practice set" : "Prepare your practice map";
+            cancel.Alpha = busy ? 1 : 0;
+            createButton.SetTitle(createBreakdown ? "Create section breakdown" : createAllSections ? "Create practice set" : "Create practice map");
+            createButton.Alpha = !busy && !savedView && choice is not null ? 1 : 0;
+        }
+
+        int elapsedSeconds = busy ? (int)(DateTimeOffset.UtcNow - started).TotalSeconds : -1;
+        if (elapsedSeconds != shownElapsedSeconds)
+        {
+            shownElapsedSeconds = elapsedSeconds;
+            elapsed.Text = busy ? $"{elapsedSeconds}s elapsed" : "";
+        }
+    }
+
+    private void updateLayout()
+    {
         browserHeader.Alpha = guidedEditor ? 0 : 1;
         guidedHeader.Alpha = guidedEditor ? 1 : 0;
-        guidedTitle.Text = savedView ? "Your practice is ready" : preparedSections is not null ? "Choose your next section" : createBreakdown ? "Break down this section" : createAllSections ? "Prepare your practice set" : "Prepare your practice map";
         filtersScroll.Alpha = guidedEditor ? 0 : 1;
         list.Alpha = guidedEditor ? 0 : 1;
         columns.Y = guidedEditor ? 76 : 192;
@@ -706,12 +753,33 @@ public partial class NativePracticeWorkspace : CompositeDrawable
         }
         loadingOverlay.Position = detailScroll.Position;
         loadingOverlay.Size = detailScroll.Size;
-        statusText.Width = Math.Max(100, DrawWidth - 244);
         statusText.RelativeSizeAxes = Axes.None;
-        cancel.Alpha = busy ? 1 : 0;
-        createButton.SetTitle(createBreakdown ? "Create section breakdown" : createAllSections ? "Create practice set" : "Create practice map");
-        createButton.Alpha = !busy && !savedView && choice is not null ? 1 : 0;
-        elapsed.Text = busy ? $"{(DateTimeOffset.UtcNow - started).TotalSeconds:0}s elapsed" : "";
+        statusText.Width = Math.Max(100, DrawWidth - 244);
+    }
+
+    protected override bool OnKeyDown(KeyDownEvent e)
+    {
+        if (Alpha <= 0)
+            return base.OnKeyDown(e);
+
+        if (e.ControlPressed && e.Key == Key.F && !guidedEditor)
+        {
+            GetContainingFocusManager()?.ChangeFocus(search);
+            return true;
+        }
+
+        if (e.Key == Key.Escape && !e.Repeat)
+        {
+            if (busy)
+                cancelOperation();
+            else if (!guidedEditor && search.Current.Value.Length > 0)
+                search.Current.Value = string.Empty;
+            else
+                close();
+            return true;
+        }
+
+        return base.OnKeyDown(e);
     }
 
     protected override void Dispose(bool isDisposing)

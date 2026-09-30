@@ -24,18 +24,54 @@ public static class PpTargetLearningModel
         PpTargetEstimate? estimate, int beatmapId, double stars, double bpm, int seconds,
         IReadOnlyList<string> mods, string? modsJson = null, bool legacyScore = false)
     {
-        if (history is null || patterns is null || estimate?.Features is not { } features
-            || !double.IsFinite(estimate.ExpectedPp) || estimate.ExpectedPp <= 0
-            || !double.IsFinite(estimate.RealisticMaximumPp) || estimate.RealisticMaximumPp <= 0
-            || !double.IsFinite(stars) || stars <= 0 || !double.IsFinite(bpm) || bpm <= 0 || seconds <= 0)
-            return null;
-        if (PpTargetMods.Normalise(mods).Any(m => m is "NF" or "RX" or "AP" or "AT" or "CN" or "SD" or "PF")) return null;
-        string setup = configuration(mods, modsJson);
-        var sessions = cache.GetValue(patterns, _ => new()).GetValue(history, h => build(h, patterns));
+        if (history is null || patterns is null || estimate?.Features is null) return null;
+        return new Predictor(history, patterns, mods, modsJson, legacyScore).Predict(estimate, beatmapId, stars, bpm, seconds);
+    }
+
+    // Predict for a fixed history and mod setup, so a ranking resolves both once.
+    internal sealed class Predictor(PpTargetOpportunityProfile? history, PpPatternProfile? patterns,
+        IReadOnlyList<string> mods, string? modsJson, bool legacyScore)
+    {
+        private readonly bool unsupported = PpTargetMods.Normalise(mods).Any(m => m is "NF" or "RX" or "AP" or "AT" or "CN" or "SD" or "PF");
+        private readonly string setup = configuration(mods, modsJson);
+        private Session[]? sessions;
+        private Dictionary<int, PpTargetPassSample[]>? direct;
+
+        public PpTargetLearningForecast? Predict(PpTargetEstimate? estimate, int beatmapId, double stars, double bpm, int seconds)
+        {
+            if (history is null || patterns is null || estimate?.Features is not { } features
+                || !double.IsFinite(estimate.ExpectedPp) || estimate.ExpectedPp <= 0
+                || !double.IsFinite(estimate.RealisticMaximumPp) || estimate.RealisticMaximumPp <= 0
+                || !double.IsFinite(stars) || stars <= 0 || !double.IsFinite(bpm) || bpm <= 0 || seconds <= 0)
+                return null;
+            if (unsupported) return null;
+            sessions ??= cache.GetValue(patterns, _ => new()).GetValue(history, h => build(h, patterns));
+            direct ??= directAttempts(history);
+            return predict(history, sessions, beatmapId > 0 ? direct.GetValueOrDefault(beatmapId) ?? [] : [],
+                setup, estimate, features, beatmapId, stars, bpm, seconds, legacyScore);
+        }
+
+        private Dictionary<int, PpTargetPassSample[]> directAttempts(PpTargetOpportunityProfile source)
+        {
+            var setups = new Dictionary<(string, string), string>();
+            return source.RecentAttempts.Where(a => a.LocalAttempt && a.LegacyScore == legacyScore && a.BeatmapId > 0
+                    && a.PlayedAt <= source.AsOf && configurationOf(a) == setup)
+                .GroupBy(a => a.BeatmapId).ToDictionary(g => g.Key, g => g.ToArray());
+
+            string configurationOf(PpTargetPassSample attempt)
+            {
+                if (!setups.TryGetValue((attempt.Mods, attempt.ModsJson), out string? value))
+                    setups[(attempt.Mods, attempt.ModsJson)] = value = configuration(attempt.Mods.Split(','), attempt.ModsJson);
+                return value;
+            }
+        }
+    }
+
+    private static PpTargetLearningForecast? predict(PpTargetOpportunityProfile history, Session[] sessions, PpTargetPassSample[] attempts,
+        string setup, PpTargetEstimate estimate, PpPatternFeatures features, int beatmapId, double stars, double bpm, int seconds, bool legacyScore)
+    {
         // A target already practised in this session starts at its next observed attempt.
-        var direct = history.RecentAttempts.Where(a => a.LocalAttempt && a.LegacyScore == legacyScore && a.BeatmapId == beatmapId && beatmapId > 0
-                && a.PlayedAt <= history.AsOf && configuration(a.Mods.Split(','), a.ModsJson) == setup)
-            .GroupBy(a => (a.LocalScoreId, a.PlayedAt)).Select(g => g.First())
+        var direct = attempts.GroupBy(a => (a.LocalScoreId, a.PlayedAt)).Select(g => g.First())
             .OrderByDescending(a => a.PlayedAt).ToArray();
         int previous = 0;
         DateTimeOffset last = history.AsOf;

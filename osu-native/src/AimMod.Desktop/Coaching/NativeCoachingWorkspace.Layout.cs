@@ -6,6 +6,7 @@ using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
 using osu.Framework.Input.Events;
 using osu.Game.Graphics.Sprites;
+using osuTK;
 
 namespace AimMod.Desktop.Coaching;
 
@@ -37,24 +38,31 @@ public partial class NativeCoachingWorkspace
 
     private sealed partial class CoachingMapRow : AimModInteractiveSurface
     {
+        private readonly WorkspaceFocusRing focusRing;
+
         public CoachingMapRow(string title, string difficulty, string statistics, string actionLabel, Action action)
         {
             RelativeSizeAxes = Axes.X; Height = 78; Action = action;
-            Child = new Container {
-                RelativeSizeAxes = Axes.Both, Padding = new MarginPadding { Horizontal = 14, Vertical = 10 },
-                Children = [
-                    new Container {
-                        RelativeSizeAxes = Axes.Both, Padding = new MarginPadding { Right = 144 },
-                        Children = [
-                            new TruncatingSpriteText { RelativeSizeAxes = Axes.X, Text = title, Font = new osu.Framework.Graphics.Sprites.FontUsage(size:17,weight:"SemiBold"), Colour = AimModPalette.Text },
-                            new TruncatingSpriteText { RelativeSizeAxes = Axes.X, Y = 23, Text = difficulty, Font = new osu.Framework.Graphics.Sprites.FontUsage(size:12), Colour = coachingAccent },
-                            new TruncatingSpriteText { RelativeSizeAxes = Axes.X, Y = 43, Text = statistics, Font = new osu.Framework.Graphics.Sprites.FontUsage(size:12), Colour = AimModPalette.Muted },
-                        ],
-                    },
-                    new CoachingButton(actionLabel,action,compact:true) { Anchor = Anchor.CentreRight, Origin = Anchor.CentreRight },
-                ],
-            };
+            Children = [
+                new Container {
+                    RelativeSizeAxes = Axes.Both, Padding = new MarginPadding { Horizontal = 14, Vertical = 10 },
+                    Children = [
+                        new Container {
+                            RelativeSizeAxes = Axes.Both, Padding = new MarginPadding { Right = 144 },
+                            Children = [
+                                new TruncatingSpriteText { RelativeSizeAxes = Axes.X, Text = title, Font = new osu.Framework.Graphics.Sprites.FontUsage(size:17,weight:"SemiBold"), Colour = AimModPalette.Text },
+                                new TruncatingSpriteText { RelativeSizeAxes = Axes.X, Y = 23, Text = difficulty, Font = new osu.Framework.Graphics.Sprites.FontUsage(size:12), Colour = coachingAccent },
+                                new TruncatingSpriteText { RelativeSizeAxes = Axes.X, Y = 43, Text = statistics, Font = new osu.Framework.Graphics.Sprites.FontUsage(size:12), Colour = AimModPalette.Muted },
+                            ],
+                        },
+                        new CoachingButton(actionLabel,action,compact:true) { Anchor = Anchor.CentreRight, Origin = Anchor.CentreRight },
+                    ],
+                },
+                focusRing = new WorkspaceFocusRing(),
+            ];
         }
+
+        public void SetFocused(bool focused) => focusRing.SetVisible(focused);
     }
 
     private void showCoachingPage(int index)
@@ -68,12 +76,13 @@ public partial class NativeCoachingWorkspace
         }
     }
 
-    private void startTraining(CoachingTrainingPlan plan, NativeCoachingWorkspaceModel model)
+    private void startTraining(CoachingTrainingPlan plan)
     {
         if (activeTraining?.TargetScoreId == plan.TargetScoreId) return;
         activeTraining = plan with { StartedAt = DateTimeOffset.UtcNow };
         saveTraining();
-        renderSession(model);
+        trainingPlanCache = null;
+        renderSession();
     }
 
     private void chooseCoachingRun(Guid scoreId)
@@ -85,32 +94,42 @@ public partial class NativeCoachingWorkspace
     {
         // Keep the row's play even when a refresh completes between display and click.
         coachingTargetScoreId = run.ScoreId;
-        renderSession(workspace ?? buildWorkspace());
+        renderSession();
         openCoachingMap(null, run);
     }
 
-    private static bool eligibleForCoaching(LocalReplay run) => run.Passed && ScoreMods.IsManualPlay(run)
+    private static bool eligibleForCoaching(LocalReplay run) => run.Passed && CoachingRunKeys.IsManualPlay(run)
         && double.IsFinite(run.Accuracy) && run.Accuracy is >= .7 and <= 1
         && run.MissCount >= 0 && run.PlayedAt <= DateTimeOffset.UtcNow;
 
-    private CoachingTrainingPlan? chosenPlan(NativeCoachingWorkspaceModel model)
+    private (Guid? Id, IReadOnlyList<LocalReplay> History, int Analyses, CoachingTrainingPlan? Plan)? trainingPlanCache;
+
+    private CoachingTrainingPlan? chosenPlan()
     {
         Guid? id = coachingTargetScoreId ?? activeTraining?.TargetScoreId;
         if (activeTraining is not null && id == activeTraining.TargetScoreId) return activeTraining;
+        if (trainingPlanCache is { } cached && cached.Id == id && ReferenceEquals(cached.History, allReplays) && cached.Analyses == analyses.Count)
+            return cached.Plan;
         var run = allReplays.FirstOrDefault(r => r.ScoreId == id);
-        if (run is null || !eligibleForCoaching(run)) return null;
-        var matching = allReplays.Where(r => r.Player == run.Player && ScoreMods.SetupKey(r) == ScoreMods.SetupKey(run)).ToArray();
-        var scoped = NativeCoachingWorkspaceModel.Build(matching, analyses, run.ScoreId, CoachingTimeRange.All);
-        return CoachingTrainingPlanner.Build(scoped) is { } plan
-            ? plan with { TargetScoreId = run.ScoreId, TargetTitle = run.Title, Difficulty = run.Difficulty }
-            : null;
+        CoachingTrainingPlan? plan = null;
+        if (run is not null && eligibleForCoaching(run))
+        {
+            string setup = CoachingRunKeys.SetupKey(run);
+            var matching = NativeCoachingWorkspaceModel.NormaliseHistory(
+                allReplays.Where(r => r.Player == run.Player && CoachingRunKeys.SetupKey(r) == setup).ToArray(), CoachingTimeRange.All);
+            plan = CoachingTrainingPlanner.Build(matching, GlobalCoachingProfileBuilder.Build(matching, analyses)) is { } built
+                ? built with { TargetScoreId = run.ScoreId, TargetTitle = run.Title, Difficulty = run.Difficulty }
+                : null;
+        }
+        trainingPlanCache = (id, allReplays, analyses.Count, plan);
+        return plan;
     }
 
-    private void renderSession(NativeCoachingWorkspaceModel model)
+    private void renderSession()
     {
         trainingHost.Clear(); reviewHost.Clear();
         trainingHost.Add(new CoachingButton("Back to beatmap", () => { renderCoachingMap(); showCoachingPage(4); }));
-        var plan = chosenPlan(model);
+        var plan = chosenPlan();
         if (plan is null)
         {
             trainingHost.Add(flow("Choose a completed play to prepare your practice plan.", 23, AimModPalette.Text));
@@ -131,7 +150,7 @@ public partial class NativeCoachingWorkspace
             body.Add(flow("Check your starting point, practise the parts, then return to your map.", 14, AimModPalette.Muted));
             if (run is not null && practiceWorkspace is not null)
                 body.Add(new CoachingButton("Break down this section", () => {
-                    startTraining(plan, model);
+                    startTraining(plan);
                     practiceWorkspace.OpenBreakdown(new PracticeMapCandidate(run, [run.ScoreId], 1, run.MissCount, 0), tapping?.FirstObjectIndex);
                 }, true));
             var secondary = new FillFlowContainer<Drawable> { RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y,
@@ -157,7 +176,7 @@ public partial class NativeCoachingWorkspace
             review.Add(flow("Play the original map with the same mods and speed. Then refresh here to check your new attempts.", 18, AimModPalette.Muted));
             var run = allReplays.FirstOrDefault(r => r.ScoreId == tracked.TargetScoreId);
             if (run is not null && openBeatmap is not null) review.Add(new OpenBeatmapButton(() => run, openBeatmap));
-            review.Add(new CoachingButton("Refresh my results", load, true));
+            review.Add(new CoachingButton("Refresh my results", () => load(refresh: true), true));
             review.Add(flow(CoachingTrainingPlanner.Review(tracked, allReplays).Message, 17, AimModPalette.Text));
             review.Add(flow($"Starting point: {tracked.BaselineAccuracy:P2} accuracy, {tracked.BaselineMisses} misses across {tracked.BaselineCount} comparable plays. Include your worse attempts when comparing.", 15, AimModPalette.Muted));
         }
@@ -177,9 +196,14 @@ public partial class NativeCoachingWorkspace
             RelativeSizeAxes = Axes.X; AutoSizeAxes = Axes.Y;
             Children = [left, right];
         }
+        private Vector2 layoutSize = new(-1);
+
         protected override void Update()
         {
             base.Update();
+            var size = new Vector2(DrawWidth, left.DrawHeight);
+            if (size == layoutSize) return;
+            layoutSize = size;
             bool stacked = DrawWidth < 1000;
             left.Width = stacked ? 1 : .57f;
             right.Width = stacked ? 1 : .41f;
@@ -204,5 +228,17 @@ public partial class NativeCoachingWorkspace
     {
         public CoachingButton(string text, Action action, bool primary = false, bool compact = false) : base(text, action, primary)
         { if (compact) Height = AimModVisualStyle.CompactControlHeight; }
+
+        protected override bool OnMouseDown(osu.Framework.Input.Events.MouseDownEvent e)
+        {
+            this.ScaleTo(0.97f, 80, Easing.OutQuint);
+            return base.OnMouseDown(e);
+        }
+
+        protected override void OnMouseUp(osu.Framework.Input.Events.MouseUpEvent e)
+        {
+            this.ScaleTo(1, 160, Easing.OutQuint);
+            base.OnMouseUp(e);
+        }
     }
 }

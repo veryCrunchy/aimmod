@@ -31,9 +31,9 @@ public class CoachingNavigationTests
         var run = new LocalReplay(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "Practice", "Artist", "Normal",
             "osu", "Practice Player", DateTimeOffset.UtcNow.AddMinutes(-5), 3, .95, 10000, 100, 0, null, [], true);
         using var view = new NativeCoachingWorkspace(new InMemoryLocalLibrarySource([], [run]),
-            new Dictionary<Guid, ReplayAnalysisResult>(), _ => { });
+            new Dictionary<Guid, ReplayAnalysisResult>(), _ => { }) { SynchronousModelBuilds = true };
         var type = typeof(NativeCoachingWorkspace);
-        type.GetMethod("apply", flags)!.Invoke(view, new object[] { new[] { run } });
+        type.GetMethod("apply", flags)!.Invoke(view, new object[] { new[] { run }, ScoreMods.Choices([run]) });
         var pages = (AimModScrollContainer[])type.GetField("coachingPages", flags)!.GetValue(view)!;
         Assert.That(pages.Select(p => p.Alpha), Is.EqualTo(new[] { 0f, 0f, 1f, 0f, 0f }));
         type.GetMethod("showCoachingPage", flags)!.Invoke(view, new object[] { 2 });
@@ -48,7 +48,7 @@ public class CoachingNavigationTests
     public void SavedPracticeSetsAreReachableWithoutSelectingAPlay()
     {
         using var view = new NativeCoachingWorkspace(new InMemoryLocalLibrarySource([], []),
-            new Dictionary<Guid, ReplayAnalysisResult>(), _ => { });
+            new Dictionary<Guid, ReplayAnalysisResult>(), _ => { }) { SynchronousModelBuilds = true };
         var type = typeof(NativeCoachingWorkspace);
         type.GetMethod("showCoachingPage", flags)!.Invoke(view, new object[] { 3 });
         var pages = (AimModScrollContainer[])type.GetField("coachingPages", flags)!.GetValue(view)!;
@@ -64,12 +64,11 @@ public class CoachingNavigationTests
         var other = chosen with { ScoreId = Guid.NewGuid(), BeatmapId = Guid.NewGuid(), Title = "Newer unrelated map",
             PlayedAt = DateTimeOffset.UtcNow.AddMinutes(-1), Accuracy = .8 };
         using var view = new NativeCoachingWorkspace(new InMemoryLocalLibrarySource([], [chosen, other]),
-            new Dictionary<Guid, ReplayAnalysisResult>(), _ => { });
+            new Dictionary<Guid, ReplayAnalysisResult>(), _ => { }) { SynchronousModelBuilds = true };
         var type = typeof(NativeCoachingWorkspace);
-        type.GetMethod("apply", flags)!.Invoke(view, new object[] { new[] { chosen, other } });
+        type.GetMethod("apply", flags)!.Invoke(view, new object[] { new[] { chosen, other }, ScoreMods.Choices([chosen, other]) });
         type.GetMethod("chooseCoachingRun", flags)!.Invoke(view, new object[] { chosen.ScoreId });
-        var model = (NativeCoachingWorkspaceModel)type.GetField("workspace", flags)!.GetValue(view)!;
-        var plan = (CoachingTrainingPlan)type.GetMethod("chosenPlan", flags)!.Invoke(view, new object[] { model })!;
+        var plan = (CoachingTrainingPlan)type.GetMethod("chosenPlan", flags)!.Invoke(view, [])!;
         Assert.Multiple(() => {
             Assert.That(plan.TargetScoreId, Is.EqualTo(chosen.ScoreId));
             Assert.That(plan.TargetTitle, Is.EqualTo(chosen.Title));
@@ -89,8 +88,7 @@ public class CoachingNavigationTests
             "setup", "No mods", "Practice Player", 3, .95, 0, .952, 0, DateTimeOffset.UtcNow.AddMinutes(-10));
         var type = typeof(NativeCoachingWorkspace);
         type.GetField("activeTraining", flags)!.SetValue(view, plan);
-        var model = NativeCoachingWorkspaceModel.Build([], new Dictionary<Guid, ReplayAnalysisResult>());
-        type.GetMethod("startTraining", flags)!.Invoke(view, new object[] { plan with { StartedAt = null }, model });
+        type.GetMethod("startTraining", flags)!.Invoke(view, new object[] { plan with { StartedAt = null } });
         Assert.That(type.GetField("activeTraining", flags)!.GetValue(view), Is.SameAs(plan));
     }
 }
