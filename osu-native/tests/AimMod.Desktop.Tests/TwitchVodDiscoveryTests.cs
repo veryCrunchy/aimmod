@@ -184,6 +184,16 @@ public sealed class TwitchVodDiscoveryTests
     }
 
     [Test]
+    public void MissingOrMalformedSignInWindowGivesAFriendlyError()
+    {
+        var auth = new Handler(_ => json(new { device_code = "private-code", user_code = "ABCD", interval = "soon",
+            verification_uri = "https://www.twitch.tv/activate" }));
+        using var connection = new TwitchConnection("client", new Store { Value = null }, auth, new Clock());
+        var error = Assert.ThrowsAsync<InvalidDataException>(async () => await connection.BeginAsync(default));
+        Assert.That(error!.Message, Does.StartWith("Twitch returned"));
+    }
+
+    [Test]
     public async Task DeviceConnectionWaitsForApprovalThenValidatesAndSavesTheAccount()
     {
         var store = new Store { Value = null }; int polls = 0;

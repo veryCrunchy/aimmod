@@ -31,12 +31,14 @@ public partial class AimModGame
         preparingTrainer = true;
         trainersWorkspace?.SetPreparationStatus(true, "Preparing your practice...");
         TrainerBeatmap? prepared = null;
+        // Read workspace state on the update thread, before continuing on the thread pool.
+        var selectedSong = trainersWorkspace?.SelectedSong;
         try
         {
             await refreshTrainerSettingsAsync().ConfigureAwait(false);
             if (settings.Music == "song")
             {
-                var selected = trainersWorkspace?.SelectedSong ?? throw new InvalidOperationException("Choose a song first.");
+                var selected = selectedSong ?? throw new InvalidOperationException("Choose a song first.");
                 var service = replayOpenService ?? throw new InvalidOperationException("Connect your osu! library first.");
                 await using var lease = await service.OpenBeatmapSourceAsync(selected).ConfigureAwait(false);
                 var data = await Task.Run(() =>
@@ -72,7 +74,7 @@ public partial class AimModGame
                 preparingTrainer = false;
                 trainersWorkspace?.SetPreparationStatus(false, "Practice stopped.");
                 trainersWorkspace?.CompleteOsuSession(null);
-                trainersWorkspace?.SetPreparationStatus(false, error is IOException or InvalidOperationException
+                trainersWorkspace?.SetPreparationStatus(false, error is IOException or InvalidOperationException or InvalidDataException
                     ? error.Message : "Practice could not start. Choose another song or try again.", reveal: true);
             });
         }

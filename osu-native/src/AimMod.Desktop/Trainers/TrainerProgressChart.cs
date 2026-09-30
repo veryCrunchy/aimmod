@@ -22,7 +22,7 @@ public partial class TrainerProgressChart(double[] values) : Container
     protected override void Update()
     {
         base.Update();
-        if (Math.Abs(renderedWidth - DrawWidth) < .5f || DrawWidth < 100) return;
+        if (Math.Abs(renderedWidth - DrawWidth) < .5f || DrawWidth < 100 || values.Length == 0) return;
         renderedWidth = DrawWidth;
         Clear();
         double maximum = Math.Max(10, Math.Ceiling(values.Max() / 10) * 10);
@@ -32,7 +32,7 @@ public partial class TrainerProgressChart(double[] values) : Container
         Vector2? previous = null;
         for (int i = 0; i < values.Length; i++)
         {
-            var position = new Vector2(52 + (DrawWidth - 68) * i / (values.Length - 1), 70 - 58 * (float)(values[i] / maximum));
+            var position = new Vector2(52 + (DrawWidth - 68) * i / Math.Max(1, values.Length - 1), 70 - 58 * (float)(values[i] / maximum));
             if (previous is {} start)
             {
                 var delta = position - start;

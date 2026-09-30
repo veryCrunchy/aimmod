@@ -47,7 +47,7 @@ public partial class TrainerDrillPreview(TrainerSettings settings, bool compact 
         var circle = new Circle { Position = position, Origin = Anchor.Centre, Size = new(diameter), Colour = AimModPalette.Accent };
         Add(circle); notes.Add((circle, beat));
         if (label is not null) Add(new OsuSpriteText { Position = position, Origin = Anchor.Centre,
-            Text = label, UseFullGlyphHeight = false, Font = new FontUsage(size: 10, weight: "Bold"), Colour = AimModPalette.Canvas });
+            Text = label, UseFullGlyphHeight = false, Font = new FontUsage(size: 11, weight: "Bold"), Colour = AimModPalette.Canvas });
     }
 
     private void rhythm()
@@ -65,7 +65,7 @@ public partial class TrainerDrillPreview(TrainerSettings settings, bool compact 
                 double beat = bar * 4 + note.Beat;
                 dot(new(left + width * (float)beat / 8, y), compact ? 4 : 5, beat);
             }
-        if (!compact) Add(new OsuSpriteText { Text = "2 bars", Font = new FontUsage(size: 10),
+        if (!compact) Add(new OsuSpriteText { Text = "2 bars", Font = new FontUsage(size: 11),
             Colour = AimModPalette.Muted, Anchor = Anchor.BottomRight, Origin = Anchor.BottomRight });
     }
 

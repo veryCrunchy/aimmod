@@ -294,7 +294,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         else if (settings.Kind == TrainerKind.Reaction) reaction = new(sessionSettings);
         else if (settings.Kind == TrainerKind.Spinner) { status.Text = "Open the osu! gameplay connection to practise spinners."; return; }
         else pointer = new(sessionSettings);
-        began = Time.Current; running = true;
+        began = Time.Current; running = true; liveText.Clear();
         lastAudioPosition = 0; lastAudioAdvance = Time.Current;
         controls.Hide(); timingControls.Hide(); exerciseChoices.Hide(); advanced.Hide(); advancedToggle.Hide(); stop.Show();
         start.SetCaption("Session running"); field.Reset();
@@ -365,8 +365,16 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
             return;
         }
         if (tapping is { } tap && time + settings.OffsetMs < tap.StartMs)
-            status.Text = $"Count-in  {Math.Clamp((int)((time + settings.OffsetMs - 500) / tap.BeatMs) + 1, 1, 4)} / 4";
-        else status.Text = $"{Math.Max(0, (end - time) / 1000):0}s remaining  |  {(tapping?.Hits.Count ?? reaction?.Trials.Count(t => t.Outcome == ReactionOutcome.Hit) ?? pointer!.Responses.Count)} hits  |  Escape to stop";
+            showLive(status, $"Count-in  {Math.Clamp((int)((time + settings.OffsetMs - 500) / tap.BeatMs) + 1, 1, 4)} / 4");
+        else showLive(status, $"{Math.Max(0, (end - time) / 1000):0}s remaining  |  {(tapping?.Hits.Count ?? reaction?.Trials.Count(t => t.Outcome == ReactionOutcome.Hit) ?? pointer!.Responses.Count)} hits  |  Escape to stop");
+    }
+
+    // Per-frame labels: replacing a text flow rebuilds its sprites, so only write changes.
+    private readonly Dictionary<TextFlowContainer, string> liveText = [];
+    private void showLive(TextFlowContainer target, string value)
+    {
+        if (liveText.TryGetValue(target, out string? shown) && shown == value) return;
+        liveText[target] = value; target.Text = value;
     }
 
     protected override bool OnKeyDown(KeyDownEvent e)
@@ -606,7 +614,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
             _ => null,
         };
         var field = new Container { Width = width, Height = hint is null ? 56 : 104,
-            Children = [text(label, 10, AimModPalette.Muted), dropdown] };
+            Children = [text(label, 11, AimModPalette.Muted), dropdown] };
         if (hint is not null) field.Add(new OsuTextFlowContainer(t => { t.Font = new(size:12); t.Colour = AimModPalette.Muted; })
             { RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Y = 62, Text = hint });
         return field;
@@ -629,6 +637,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         private readonly List<(int Index, CircularContainer Dot)> notes = [];
         private double nextRebuild;
         private Vector2 targetSize;
+        private static readonly FontUsage reactionFont = new(size: 30, weight: "SemiBold");
         private double drawnReactionCue = -1;
         private bool drawnReactionReady;
         public double? LastOffset { get; set; }
@@ -683,8 +692,8 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
                 cue.Colour = ready && !stopCue ? AimModPalette.Canvas : AimModPalette.Text;
                 cue.Y = 0;
                 bool choice = owner.settings.ReactionMode is ReactionMode.Choice or ReactionMode.ChoiceGoNoGo;
-                string key = owner.settings.Keys.Split(" / ")[reaction.RequiredKey];
-                cue.Font = new FontUsage(size: 30, weight: "SemiBold");
+                // Assigning a font re-lays out the text. Only change it when it differs.
+                if (!cue.Font.Equals(reactionFont)) cue.Font = reactionFont;
                 cue.Y = choice ? -95 : 0;
                 if (reaction.CueTime != drawnReactionCue || ready != drawnReactionReady || targetSize != DrawSize)
                 {
@@ -698,7 +707,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
                             marks.Add(cap);
                         }
                 }
-                cue.Text = ready ? stopCue ? "STOP · do not tap" : choice ? $"GO · {key}" : "GO · tap now"
+                cue.Text = ready ? stopCue ? "STOP · do not tap" : choice ? $"GO · {owner.settings.Keys.Split(" / ")[reaction.RequiredKey]}" : "GO · tap now"
                     : time < reaction.FeedbackUntil ? reaction.LastFeedback : "Wait for the cue";
             }
             else if (owner.pointer is { } pointer)

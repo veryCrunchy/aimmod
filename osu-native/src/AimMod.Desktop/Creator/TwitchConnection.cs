@@ -96,7 +96,7 @@ public sealed class TwitchConnection : IDisposable
             || uri.Scheme != "https" || uri.Host is not ("www.twitch.tv" or "twitch.tv")
             || uri.AbsolutePath != "/activate" || !uri.IsDefaultPort || uri.UserInfo.Length > 0)
             throw new InvalidDataException("Twitch returned an invalid sign-in address.");
-        int expires = body.GetProperty("expires_in").GetInt32(), interval = body.GetProperty("interval").GetInt32();
+        int expires = integer(body, "expires_in"), interval = integer(body, "interval");
         if (expires is < 1 or > 3600 || interval is < 1 or > 120) throw new InvalidDataException("Twitch returned an invalid sign-in window.");
         return new(code, userCode, uri, clock.GetUtcNow().AddSeconds(expires), interval);
     }
@@ -188,7 +188,7 @@ public sealed class TwitchConnection : IDisposable
     }
     private TwitchCredential parseCredential(JsonElement body, TwitchAccount? account)
     {
-        int seconds = body.GetProperty("expires_in").GetInt32();
+        int seconds = integer(body, "expires_in");
         if (seconds is < 1 or > 60 * 24 * 3600) throw new InvalidDataException("Twitch returned an invalid connection expiry.");
         return new(clientId, required(body, "access_token"), required(body, "refresh_token"), clock.GetUtcNow().AddSeconds(seconds), account);
     }
@@ -206,6 +206,9 @@ public sealed class TwitchConnection : IDisposable
     { Content = new FormUrlEncodedContent(fields) };
     private static string optional(JsonElement body, string key) => body.ValueKind == JsonValueKind.Object && body.TryGetProperty(key, out var value)
         && value.ValueKind == JsonValueKind.String ? value.GetString() ?? "" : "";
+    private static int integer(JsonElement body, string key) => body.ValueKind == JsonValueKind.Object && body.TryGetProperty(key, out var value)
+        && value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out int number) ? number
+        : throw new InvalidDataException("Twitch returned incomplete information.");
     internal static string required(JsonElement body, string key)
     {
         string value = optional(body, key);

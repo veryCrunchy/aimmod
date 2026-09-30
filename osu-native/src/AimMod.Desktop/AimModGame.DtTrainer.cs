@@ -52,7 +52,9 @@ public partial class AimModGame
         catch (Exception error)
         {
             prepared?.ReleaseAudio();
-            if (lease is not null) await lease.DisposeAsync();
+            // This is an async void handler: a failing cleanup must not escape it.
+            try { if (lease is not null) await lease.DisposeAsync(); }
+            catch (Exception cleanup) { logFailure("release DT practice map", cleanup); }
             if (!IsDisposed) Schedule(() => { preparingTrainer = false; failure(error is InvalidOperationException ? error.Message : "This map could not start. Check your osu! library and try again."); });
         }
     }

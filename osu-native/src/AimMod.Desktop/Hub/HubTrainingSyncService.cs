@@ -107,7 +107,8 @@ public sealed class HubTrainingSyncService(string path, HttpClient client, Uri b
             items.Add(new(owner, generation, session)); save(items);
             status = $"{items.Count} training sessions waiting to sync.";
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException)
+        // Fire-and-forget from the result callback: never leave an unobserved fault behind.
+        catch (Exception)
         { status = "Training could not be queued. Your result remains in local history."; }
         finally { gate.Release(); }
     }
@@ -115,7 +116,16 @@ public sealed class HubTrainingSyncService(string path, HttpClient client, Uri b
     public async Task RunAsync(CancellationToken cancellationToken)
     {
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(10));
-        try { do { await FlushAsync(cancellationToken).ConfigureAwait(false); } while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false)); }
+        try
+        {
+            do
+            {
+                // One unexpected failure (an unreadable credential or response) must not stop later retries.
+                try { await FlushAsync(cancellationToken).ConfigureAwait(false); }
+                catch (Exception error) when (error is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+                { status = "Training sync could not finish. It will retry automatically."; }
+            } while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false));
+        }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
     }
 
@@ -161,7 +171,8 @@ public sealed class HubTrainingSyncService(string path, HttpClient client, Uri b
                     ? "Training sync is not available on the server yet. Sessions are saved locally."
                     : "Training sync could not finish. It will retry automatically.";
             }
-            catch (Exception error) when (error is HttpRequestException or JsonException || error is OperationCanceledException && !cancellationToken.IsCancellationRequested)
+            catch (Exception error) when (error is HttpRequestException or JsonException or NotSupportedException
+                || error is OperationCanceledException && !cancellationToken.IsCancellationRequested)
             { status = "Training is saved locally. Sync will retry when the connection is available."; }
             await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try

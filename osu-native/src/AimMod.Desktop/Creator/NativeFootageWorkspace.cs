@@ -6,7 +6,9 @@ using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
+using osu.Framework.Input.Events;
 using osu.Framework.Threading;
+using osuTK.Input;
 
 namespace AimMod.Desktop.Creator;
 
@@ -15,6 +17,7 @@ public partial class NativeFootageWorkspace : Container
 {
     private readonly ILocalLibrarySource? scores;
     private readonly FootageLibraryStore store;
+    private readonly Action back;
     private readonly Action<Uri> openUrl;
     private readonly Action<string> copy;
     private readonly Func<OsuScoreAddress, CancellationToken, Task<LocalReplay>> onlineScore;
@@ -47,6 +50,7 @@ public partial class NativeFootageWorkspace : Container
     {
         this.scores = scores;
         this.store = store;
+        this.back = back;
         this.openUrl = openUrl;
         this.copy = copy;
         this.onlineScore = onlineScore;
@@ -112,6 +116,17 @@ public partial class NativeFootageWorkspace : Container
         float top = Math.Max(114, navigation.Y + navigation.DrawHeight + 12);
         filters.Y = top;
         scrollRegion.Padding = new MarginPadding { Top = recordingsPage || accountsPage ? top : top + 98, Bottom = 12 };
+    }
+
+    protected override bool OnKeyDown(KeyDownEvent e)
+    {
+        if (e.Key != Key.Escape || e.Repeat) return base.OnKeyDown(e);
+        // Step back one level: editor, sub-page or selected score, then leave the workspace.
+        if (editingRecording) render();
+        else if (accountsPage || recordingsPage || selected is not null)
+        { debounce?.Cancel(); cancelQuery(); accountsPage = recordingsPage = false; selected = null; render(); loadScores(0); }
+        else back();
+        return true;
     }
 
     private async Task initialise()
@@ -482,7 +497,9 @@ public partial class NativeFootageWorkspace : Container
 
     protected override void Dispose(bool isDisposing)
     {
-        lifetime.Cancel(); debounce?.Cancel(); cancelQuery(); lifetime.Dispose();
+        // Background tasks read lifetime.Token after disposal starts. Cancel it, but do not
+        // dispose it: a disposed source makes those reads throw instead of cancelling.
+        lifetime.Cancel(); debounce?.Cancel(); cancelQuery();
         twitchLinkLifetime?.Cancel(); twitchLinkLifetime?.Dispose();
         archiveLifetime?.Cancel(); archiveLifetime?.Dispose();
         base.Dispose(isDisposing);

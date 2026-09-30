@@ -43,7 +43,9 @@ public partial class AimModGame
         }
         catch(OperationCanceledException) when(appLifetime.IsCancellationRequested) { }
         catch(Exception error) { logFailure("trainer skill evidence",error); }
-        finally { trainerEvidenceLoading=false; }
+        // Clear the flag on the update thread. A switch during loading otherwise left the new
+        // account without replay evidence until the trainers were reopened.
+        finally { Schedule(()=> { trainerEvidenceLoading=false; if(trainersWorkspace is not null && currentOsuProfile?.UserId!=account.UserId) _=refreshTrainerSkillEvidenceAsync(); }); }
     }
 
     private Task refreshTrainerSettingsAsync()

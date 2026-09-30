@@ -34,8 +34,9 @@ public partial class AimModGame
             Schedule(() =>
             {
                 preparingTrainer = false;
-                if (IsDisposed || currentRoute.Value != NativeRoute.Coaching || trainerPlayer is not null
-                    || account != (currentOsuProfile?.UserId ?? 0)) return;
+                if (IsDisposed) return;
+                if (currentRoute.Value != NativeRoute.Coaching || trainerPlayer is not null || account != (currentOsuProfile?.UserId ?? 0))
+                { coachingWorkspace?.SetPracticeRunStatus("Practice was not started. Open the section again when you are ready."); return; }
                 bool assisted = difficulty.RequiredMods == "RX";
                 Mod[] mods = assisted ? [new OsuModNoFail(), new OsuModRelax()] : [new OsuModNoFail()];
                 var settings = new TrainerSettings(Seconds: 180, Keys: inherited.Keys, OffsetMs: inherited.OffsetMs);

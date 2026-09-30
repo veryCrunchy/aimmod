@@ -26,7 +26,7 @@ public partial class NativeTrainersWorkspace
     {
         var labels = column(); labels.Padding = new MarginPadding { Left = 44, Top = 9, Right = 8 }; labels.Spacing = new(3);
         labels.Add(choiceText(caption, 12));
-        var hint = choiceText(description, 10); hint.Colour = AimModPalette.Muted; labels.Add(hint);
+        var hint = choiceText(description, 11); hint.Colour = AimModPalette.Muted; labels.Add(hint);
         return new Container { RelativeSizeAxes = Axes.Both, Children = [
             new SpriteIcon { Icon = icon, Size = new(20), Position = new(13, 18), Colour = AimModPalette.Accent }, labels] };
     }

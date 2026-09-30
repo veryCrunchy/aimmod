@@ -119,7 +119,7 @@ public static class TrainerReadingPatterns
                 {
                     Vector2 desired = position;
                     position = Enumerable.Range(0, 20).Select(cell => new Vector2(76 + cell % 5 * 90, 72 + cell / 5 * 80))
-                        .Where(clear).OrderBy(candidate => Vector2.DistanceSquared(candidate, desired)).First();
+                        .Where(clear).OrderBy(candidate => Vector2.DistanceSquared(candidate, desired)).DefaultIfEmpty(desired).First();
                 }
                 result[index] = position;
             }

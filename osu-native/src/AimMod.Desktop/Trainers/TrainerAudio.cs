@@ -65,7 +65,8 @@ public sealed class TrainerAudio : IResourceStore<byte[]>
         writer.Write(16); writer.Write((short)1); writer.Write((short)1); writer.Write(rate);
         writer.Write(rate * 2); writer.Write((short)2); writer.Write((short)16);
         writer.Write("data"u8); writer.Write(pcm.Length * 2);
-        foreach (short sample in pcm) writer.Write(sample);
+        // RIFF PCM is little-endian, as are all supported desktop targets.
+        writer.Write(System.Runtime.InteropServices.MemoryMarshal.AsBytes(pcm.AsSpan()));
         return stream.ToArray();
     }
 }
