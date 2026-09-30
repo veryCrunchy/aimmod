@@ -112,6 +112,10 @@ static class DiscordPresenceChecks
         Check(playing.Buttons.All(b => b.Label.Length <= 32 && b.Url.Length <= 512), "Buttons stay within Discord limits");
         var json = playing.ToJson();
         Check(json["timestamps"]!["end"]!.GetValue<long>() == playing.End && json["assets"]!["large_image"]!.GetValue<string>().StartsWith("https://"), "Activity JSON carries timer and assets");
+        Check(json["assets"]!["small_image"] is null && json["assets"]!["small_text"] is null, "No small image: the application has no such asset");
+        Check(playing.LargeText == "5 kills · 38/40 hits · On pace for 1,076", "Run counters on the image hover text");
+        Check(json["assets"]!["large_text"]!.GetValue<string>() == playing.LargeText, "Hover text is sent");
+        Check(new[] { playing.Details, playing.State, playing.LargeText }.All(t => t.Length is >= 2 and <= 128), "Text fields stay within Discord limits");
         Check(playing.ToJson(scenarioButton: false)["buttons"]!.AsArray().Count == 1, "Game link can be dropped when Discord rejects it");
         var elapsed = DiscordActivityBuilder.Build(new(Live(remaining: null), false, emptySession, null, now), defaults);
         Check(elapsed.Start == now.ToUnixTimeSeconds() - 18 && elapsed.End is null, "Without remaining time the elapsed time counts up");
@@ -121,9 +125,28 @@ static class DiscordPresenceChecks
         var pbOnly = DiscordActivityBuilder.Build(new(Live(delta: null), false, emptySession, null, now), new DiscordSettingsValue(true, false, true, false));
         Check(pbOnly.State == "PB 1,020", "PB without a projection shows the PB");
         var paused = DiscordActivityBuilder.Build(new(Live(paused: true), false, emptySession, null, now), defaults);
-        Check(paused.Phase == "paused" && paused.State == "Paused · Score 812.5 · PB 1,020" && paused.Start is null && paused.End is null, "Paused stops the timer");
+        Check(paused.Phase == "paused" && paused.State == "Paused · Score 812.5 · 94.3% acc · PB 1,020" && paused.Start is null && paused.End is null, "Paused stops the timer");
         var replay = DiscordActivityBuilder.Build(new(Menu with { Replay = true }, true, emptySession, "synthetic-player", now), defaults);
-        Check(replay.Phase == "replay" && replay.Details == "Watching a replay" && replay.Buttons.Single().Label == "AimMod Hub profile", "Replay viewing");
+        Check(replay.Phase == "replay" && replay.Details == "Watching a replay" && replay.State == "In AimMod" && replay.Buttons.Single().Label == "AimMod Hub profile", "Replay viewing");
+        var replayNamed = DiscordActivityBuilder.Build(new(Menu, true, emptySession, null, now, ReplayScenario: "Synthetic Track"), defaults);
+        Check(replayNamed.Details == "Synthetic Track" && replayNamed.State == "Watching a replay", "Replay names its scenario");
+        // AimMod panel pages.
+        var stats = DiscordActivityBuilder.Build(new(Menu, false, emptySession, null, now, Page: "trends"), defaults);
+        Check(stats.Phase == "workspace:trends" && stats.Details == "In AimMod · Statistics" && stats.State == "Ready to train" && stats.Start == started.ToUnixTimeSeconds(), "Panel page with the session timer");
+        Check(DiscordActivityBuilder.Build(new(Menu, false, emptySession, null, now, Page: "run-details"), defaults).Details == "Reviewing a run", "Run analysis page");
+        Check(DiscordActivityBuilder.Build(new(Menu, false, emptySession, null, now, Page: "replays"), defaults).Details == "Browsing replays", "Replay library page");
+        Check(DiscordActivityBuilder.Build(new(Menu, false, emptySession, null, now, Page: "coaching"), defaults).Details == "In AimMod · Coaching", "Coaching page");
+        Check(DiscordActivityBuilder.Build(new(Menu, false, emptySession, null, now, Page: "future-page"), defaults).Details == "In AimMod", "Unknown page stays generic");
+        var pausedPanel = DiscordActivityBuilder.Build(new(Live(paused: true), false, emptySession, null, now, Page: "coaching"), defaults);
+        Check(pausedPanel.State == "Paused · Synthetic Track · Score 812.5 · 94.3% acc · PB 1,020" && pausedPanel.Buttons.Count == 1, "Panel over a paused run keeps the run");
+        Check(DiscordActivityBuilder.Build(new(Live(), false, emptySession, null, now, Page: "coaching"), defaults).Phase == "playing", "A running challenge wins over a stale page");
+        var view = new DiscordWorkspaceView();
+        view.Report("history", true, now);
+        Check(view.Current(now.AddSeconds(9)) == "history" && view.Current(now.AddSeconds(11)) is null, "Page report expires after 10 s");
+        view.Report("history", false, now); Check(view.Current(now) is null, "Hidden panel has no page");
+        Check(DiscordWorkspaceView.ValidPage("run-details") && !DiscordWorkspaceView.ValidPage("Run") && !DiscordWorkspaceView.ValidPage("a/b") && !DiscordWorkspaceView.ValidPage(new string('a', 40)), "Page keys are validated");
+        var redacted = DiscordDiagnostics.Redact("{\"cmd\":\"DISPATCH\",\"evt\":\"READY\",\"data\":{\"v\":1,\"user\":{\"id\":\"1\",\"username\":\"synthetic\"}}}");
+        Check(redacted.Contains("\"user\":\"[redacted]\"") && !redacted.Contains("synthetic"), "Diagnostics redact the Discord user");
         var menu = DiscordActivityBuilder.Build(new(Menu, false, emptySession, null, now), defaults);
         Check(menu.Phase == "menu" && menu.Start == started.ToUnixTimeSeconds() && menu.Buttons.Count == 0, "Menu shows the session timer");
         var control = DiscordActivityBuilder.Build(new(Live(scenario: "Bad\nName\u0001 " + new string('x', 300)), false, emptySession, null, now), defaults);
@@ -211,6 +234,7 @@ static class DiscordPresenceChecks
         {
             await using var client = new DiscordIpcClient(DiscordPresenceHost.ClientId, new DiscordNamedPipe(fake.Prefix, 1), TimeSpan.FromSeconds(3));
             Check(!await client.Connect(CancellationToken.None) && !client.Connected, "Rejected handshake is a failed connect");
+            Check(client.LastError?.Contains("4000 Invalid Client ID") == true, "Handshake rejection reason is kept");
         }
         {
             await using var client = new DiscordIpcClient(DiscordPresenceHost.ClientId, new DiscordNamedPipe("aimmod-absent-" + Guid.NewGuid().ToString("N") + "-", 10));
@@ -227,8 +251,9 @@ static class DiscordPresenceChecks
             var settings = new DiscordSettings(output);
             var clock = now;
             var snapshot = Live();
+            var logged = new List<string>();
             await using var host = new DiscordPresenceHost(output, settings, () => snapshot, () => false, () => "synthetic-player",
-                new DiscordNamedPipe(fake.Prefix, 1), () => clock, () => 4242, TimeSpan.FromHours(1));
+                new DiscordNamedPipe(fake.Prefix, 1), () => clock, () => 4242, TimeSpan.FromHours(1), log: line => { lock (logged) logged.Add(line); });
             void Ack(string state) => File.WriteAllText(Path.Combine(output, DiscordHandoff.GameFile), $"AIMMOD_DISCORD_GAME_1\t{state}\t{clock.ToUnixTimeSeconds()}\n");
             var request = Path.Combine(output, DiscordHandoff.RequestFile);
             await host.Step(CancellationToken.None);
@@ -256,6 +281,10 @@ static class DiscordPresenceChecks
             settings.ApplyJson(Encoding.UTF8.GetBytes("{\"discordPresenceEnabled\":false}"));
             clock = clock.AddSeconds(1); await host.Step(CancellationToken.None);
             Check(!File.Exists(request) && host.Status == "off", "Turning presence off withdraws the request");
+            Check(logged.Contains("connected: handshake READY (user redacted)"), "Log records the handshake");
+            Check(logged.Any(l => l.StartsWith("SET_ACTIVITY playing") && l.Contains("rejected (4000 invalid url); dropping the play-this-scenario button")), "Log records the rejected button with Discord's reason");
+            Check(logged.Any(l => l.StartsWith("SET_ACTIVITY playing") && l.EndsWith(": ok")), "Log records accepted activities");
+            Check(logged.Any(l => l.StartsWith("disconnected from Discord (game reports Game)")) && logged.Contains("handoff request withdrawn"), "Log records hand-back");
         }
         finally { Directory.Delete(output, true); }
 
@@ -284,6 +313,16 @@ static class DiscordPresenceChecks
                     using var response = await http.SendAsync(request);
                     Check(response.IsSuccessStatusCode && !store.Current.ShowScore, "Change persists through the endpoint");
                 }
+                async Task<System.Net.HttpStatusCode> View(string body, bool header = true)
+                {
+                    using var request = new HttpRequestMessage(HttpMethod.Post, root + "/workspace-view");
+                    if (header) request.Headers.Add("X-AimMod-UI", "1");
+                    request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+                    using var response = await http.SendAsync(request); return response.StatusCode;
+                }
+                Check(await View("{\"page\":\"coaching\",\"visible\":true}", header: false) == System.Net.HttpStatusCode.Forbidden && workspace.View.Current(DateTimeOffset.UtcNow) is null, "Page report requires the UI header");
+                Check(await View("{\"page\":\"../x\",\"visible\":true}") == System.Net.HttpStatusCode.BadRequest, "Invalid page rejected");
+                Check(await View("{\"page\":\"coaching\",\"visible\":true}") == System.Net.HttpStatusCode.OK && workspace.View.Current(DateTimeOffset.UtcNow) == "coaching", "Page report reaches the presence");
                 using (var response = await http.GetAsync(root + "/discord-settings.js"))
                     Check(response.IsSuccessStatusCode && (await response.Content.ReadAsStringAsync()).Contains("AimModDiscordSettings"), "Settings card script is embedded");
             }

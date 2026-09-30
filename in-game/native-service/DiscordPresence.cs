@@ -27,14 +27,19 @@ sealed record DiscordSession(DateTimeOffset Started, int Runs, Run? Last, bool L
     }
 }
 
-sealed record DiscordPresenceInput(LiveOverlaySnapshot Live, bool Replay, DiscordSession Session, string? HubHandle, DateTimeOffset Now);
+// Page: the AimMod workspace page while the panel is open (null when closed).
+// ReplayScenario: scenario of the replay being watched, when known.
+sealed record DiscordPresenceInput(LiveOverlaySnapshot Live, bool Replay, DiscordSession Session, string? HubHandle, DateTimeOffset Now, string? ReplayScenario = null, string? Page = null);
 
 sealed record DiscordButton(string Label, string Url);
 
-sealed record DiscordActivity(string Phase, string Details, string State, long? Start, long? End, IReadOnlyList<DiscordButton> Buttons, string? Scenario)
+sealed record DiscordActivity(string Phase, string Details, string State, long? Start, long? End, IReadOnlyList<DiscordButton> Buttons, string? Scenario, string LargeText = DiscordActivity.DefaultLargeText)
 {
+    public const string DefaultLargeText = "AimMod for KovaaK's";
+    // The AimMod application has no uploaded art assets, so images are direct
+    // URLs. No small image: the previous app-icon URL no longer resolves and
+    // Discord draws a missing small image as a "?" badge.
     public const string LargeImage = "https://s.crun.zip/aimmod.png";
-    public const string SmallImage = "https://cdn.discordapp.com/app-icons/1162428887066742904/798981b85db0ce80a8168c1184ef92a2.png?size=1280";
     public const string SteamAppId = "824270";
     public JsonObject ToJson(bool scenarioButton = true)
     {
@@ -42,7 +47,7 @@ sealed record DiscordActivity(string Phase, string Details, string State, long? 
         {
             ["details"] = Details,
             ["state"] = State,
-            ["assets"] = new JsonObject { ["large_image"] = LargeImage, ["large_text"] = "AimMod for KovaaK's", ["small_image"] = SmallImage, ["small_text"] = "KovaaK's" },
+            ["assets"] = new JsonObject { ["large_image"] = LargeImage, ["large_text"] = LargeText },
         };
         if (Start is not null || End is not null)
         {
@@ -63,7 +68,7 @@ sealed record DiscordActivity(string Phase, string Details, string State, long? 
         previous is null || previous.Phase != Phase || previous.Details != Details || !previous.Buttons.SequenceEqual(Buttons)
         || Moved(previous.Start, Start) || Moved(previous.End, End);
     static bool Moved(long? a, long? b) => a.HasValue != b.HasValue || (a is long x && b is long y && Math.Abs(x - y) > 3);
-    public bool SameContent(DiscordActivity? previous) => previous is not null && !Structural(previous) && previous.State == State;
+    public bool SameContent(DiscordActivity? previous) => previous is not null && !Structural(previous) && previous.State == State && previous.LargeText == LargeText;
 }
 
 static class DiscordActivityBuilder
@@ -90,49 +95,108 @@ static class DiscordActivityBuilder
     internal static string HubProfile(string handle) => "https://aimmod.app/profiles/" + Uri.EscapeDataString(handle);
     internal static string PlayScenario(string scenario) =>
         $"steam://run/{DiscordActivity.SteamAppId}//?action=jump-to-scenario&name={Uri.EscapeDataString(scenario)}&mode=challenge";
+    // Workspace page keys as used by the in-game UI (index.html titles).
+    internal static string PageLabel(string page) => page switch
+    {
+        "overview" => "In AimMod · Overview",
+        "trends" or "statistics" => "In AimMod · Statistics",
+        "history" => "In AimMod · History",
+        "run-details" => "Reviewing a run",
+        "coaching" => "In AimMod · Coaching",
+        "mechanics" => "In AimMod · Mechanics",
+        "replays" => "Browsing replays",
+        "benchmarks" => "In AimMod · Benchmarks",
+        "leaderboard" => "In AimMod · Leaderboard",
+        "account" => "In AimMod · Account",
+        "overlays" => "In AimMod · Overlays",
+        "settings" => "In AimMod · Settings",
+        _ => "In AimMod",
+    };
+    // Hover text on the large image while a run is open: counters that do not
+    // fit the state line.
+    static string RunDetail(LiveOverlaySnapshot live, DiscordSettingsValue settings)
+    {
+        var parts = new List<string>();
+        if (live.Kills is double kills) parts.Add(Number(kills) + (kills == 1 ? " kill" : " kills"));
+        if (settings.ShowScore && live.ScorePerMinute is double spm) parts.Add(Number(spm) + " SPM");
+        if (settings.ShowScore && live.Hits is double hits && live.Shots is double shots && shots > 0) parts.Add($"{Number(hits)}/{Number(shots)} hits");
+        if (settings.ShowPersonalBest && live.ProjectedScore is double projected && live.OpponentSource == "personal-best") parts.Add("On pace for " + Number(projected));
+        return parts.Count == 0 ? DiscordActivity.DefaultLargeText : Clean(string.Join(" · ", parts), DiscordActivity.DefaultLargeText);
+    }
+    static string? RunLine(LiveOverlaySnapshot live, DiscordSettingsValue settings, bool paused)
+    {
+        var parts = new List<string>();
+        if (settings.ShowScore && live.Score is double score) parts.Add("Score " + Number(score));
+        if (settings.ShowScore && live.Accuracy is double accuracy) parts.Add(accuracy.ToString("0.0", CultureInfo.InvariantCulture) + "% acc");
+        if (settings.ShowPersonalBest && live.PersonalBest is double best && best > 0)
+            parts.Add(!paused && live.ProjectedDelta is double delta && live.OpponentSource == "personal-best" ? "Pace " + Signed(delta) + " vs PB" : "PB " + Number(best));
+        return parts.Count == 0 ? null : string.Join(" · ", parts);
+    }
+    static string SessionLine(DiscordSession session, DiscordSettingsValue settings)
+    {
+        if (session.Last is not Run last) return "Ready to train";
+        var parts = new List<string>();
+        if (settings.ShowScore) parts.Add("Last " + Number(last.Score));
+        if (settings.ShowPersonalBest && session.LastIsPersonalBest) parts.Add("New PB!");
+        else if (settings.ShowPersonalBest && settings.ShowScore && session.PersonalBest is double best && best > 0) parts.Add("PB " + Number(best));
+        parts.Add(Runs(session.Runs));
+        return string.Join(" · ", parts);
+    }
 
     public static DiscordActivity Build(DiscordPresenceInput input, DiscordSettingsValue settings)
     {
         var live = input.Live; var session = input.Session;
         var now = input.Now.ToUnixTimeSeconds();
         var buttons = new List<DiscordButton>();
-        string phase, details, state; long? start = null, end = null; string? scenario = null;
+        string phase, details, state, largeText = DiscordActivity.DefaultLargeText; long? start = null, end = null; string? scenario = null;
+        var inRun = live.Active && !string.IsNullOrWhiteSpace(live.Scenario);
         if (input.Replay)
         {
-            phase = "replay"; details = "Watching a replay";
-            state = session.Runs > 0 ? Runs(session.Runs) : "Reviewing a run in AimMod";
+            phase = "replay";
+            var replayScenario = string.IsNullOrWhiteSpace(input.ReplayScenario) ? null : input.ReplayScenario;
+            details = replayScenario is null ? "Watching a replay" : Clean(replayScenario, "Watching a replay");
+            state = replayScenario is null ? "In AimMod" : "Watching a replay";
+            if (session.Runs > 0) state += " · " + Runs(session.Runs);
         }
-        else if (live.Active && !string.IsNullOrWhiteSpace(live.Scenario))
+        else if (inRun && !live.Paused)
         {
-            scenario = live.Scenario;
+            phase = "playing"; scenario = live.Scenario;
             details = Clean(live.Scenario, "In a challenge");
-            var parts = new List<string>();
-            if (live.Paused) parts.Add("Paused");
-            if (settings.ShowScore && live.Score is double score) parts.Add("Score " + Number(score));
-            if (settings.ShowScore && !live.Paused && live.Accuracy is double accuracy) parts.Add(accuracy.ToString("0.0", CultureInfo.InvariantCulture) + "% acc");
-            if (settings.ShowPersonalBest && live.PersonalBest is double best && best > 0)
-                parts.Add(!live.Paused && live.ProjectedDelta is double delta && live.OpponentSource == "personal-best" ? "Pace " + Signed(delta) + " vs PB" : "PB " + Number(best));
-            if (parts.Count == 0) parts.Add(live.Paused ? "Paused" : "In a challenge");
-            state = string.Join(" · ", parts);
-            if (live.Paused) phase = "paused";
-            else
+            state = RunLine(live, settings, paused: false) ?? "In a challenge";
+            largeText = RunDetail(live, settings);
+            // Remaining time counts down; without it the elapsed time counts up.
+            if (live.RemainingSeconds is double remaining && remaining > 0) end = now + (long)Math.Round(remaining);
+            else if (live.Seconds is double elapsed && elapsed >= 0) start = now - (long)Math.Round(elapsed);
+        }
+        else if (input.Page is string page)
+        {
+            // The AimMod panel lives in the pause menu, so a paused run is
+            // common here: name the page and keep the run's standing.
+            phase = "workspace:" + page;
+            details = PageLabel(page);
+            start = session.Started.ToUnixTimeSeconds();
+            if (inRun)
             {
-                phase = "playing";
-                // Remaining time counts down; without it the elapsed time counts up.
-                if (live.RemainingSeconds is double remaining && remaining > 0) end = now + (long)Math.Round(remaining);
-                else if (live.Seconds is double elapsed && elapsed >= 0) start = now - (long)Math.Round(elapsed);
+                scenario = live.Scenario;
+                var run = RunLine(live, settings, paused: true);
+                state = "Paused · " + Clean(live.Scenario, "a challenge") + (run is null ? "" : " · " + run);
+                largeText = RunDetail(live, settings);
             }
+            else state = SessionLine(session, settings);
+        }
+        else if (inRun)
+        {
+            phase = "paused"; scenario = live.Scenario;
+            details = Clean(live.Scenario, "In a challenge");
+            var run = RunLine(live, settings, paused: true);
+            state = run is null ? "Paused" : "Paused · " + run;
+            largeText = RunDetail(live, settings);
         }
         else if (session.Last is Run last)
         {
             phase = "results"; scenario = last.Scenario;
             details = Clean(last.Scenario, "Between runs");
-            var parts = new List<string>();
-            if (settings.ShowScore) parts.Add("Last " + Number(last.Score));
-            if (settings.ShowPersonalBest && session.LastIsPersonalBest) parts.Add("New PB!");
-            else if (settings.ShowPersonalBest && settings.ShowScore && session.PersonalBest is double best && best > 0) parts.Add("PB " + Number(best));
-            parts.Add(Runs(session.Runs));
-            state = string.Join(" · ", parts);
+            state = SessionLine(session, settings);
             start = session.Started.ToUnixTimeSeconds();
         }
         else
@@ -143,8 +207,20 @@ static class DiscordActivityBuilder
         if (scenario is not null && scenario.Length <= 256) buttons.Add(new("Play this scenario", PlayScenario(scenario)));
         if (settings.ShowHubButton && !string.IsNullOrWhiteSpace(input.HubHandle) && input.HubHandle.Length <= 64)
             buttons.Add(new("AimMod Hub profile", HubProfile(input.HubHandle)));
-        return new(phase, Clean(details, "KovaaK's"), Clean(state, "Training"), start, end, buttons, scenario);
+        return new(phase, Clean(details, "KovaaK's"), Clean(state, "Training"), start, end, buttons, scenario, largeText);
     }
+}
+
+// The workspace page the in-game UI reports while the AimMod panel is shown.
+// The UI re-reports every few seconds; a report older than 10 s means closed.
+sealed class DiscordWorkspaceView
+{
+    static readonly System.Text.RegularExpressions.Regex Key = new("^[a-z][a-z-]{0,31}$");
+    readonly object gate = new();
+    string? page; DateTimeOffset at;
+    public static bool ValidPage(string? value) => value is not null && Key.IsMatch(value);
+    public void Report(string page, bool visible, DateTimeOffset now) { lock (gate) { this.page = visible ? page : null; at = now; } }
+    public string? Current(DateTimeOffset now) { lock (gate) return page is not null && now - at <= TimeSpan.FromSeconds(10) && at - now <= TimeSpan.FromSeconds(2) ? page : null; }
 }
 
 // File handoff with the in-game mod (DiscordPresence.lua), which owns KovaaK's
@@ -197,9 +273,11 @@ sealed class DiscordPresenceHost : IAsyncDisposable
     readonly DiscordSettings settings;
     readonly Func<LiveOverlaySnapshot> live;
     readonly Func<bool> replay;
+    readonly Func<string?> replayScenario, page;
     readonly Func<string?> hubHandle;
     readonly Func<DateTimeOffset> clock;
     readonly Func<int> pid;
+    readonly Action<string> log;
     readonly TimeSpan tick;
     readonly DiscordIpcClient client;
     readonly DiscordRateLimit rate = new();
@@ -212,14 +290,18 @@ sealed class DiscordPresenceHost : IAsyncDisposable
     // requested starts true so a disabled first step also clears a request
     // file left behind by a previous worker that did not shut down cleanly.
     bool requested = true, scenarioButton = true;
+    string? loggedStatus;
     volatile string status = "starting";
     CancellationTokenSource? stop;
     Task? loop;
     public DiscordPresenceHost(string output, DiscordSettings settings, Func<LiveOverlaySnapshot> live, Func<bool> replay, Func<string?> hubHandle,
-        IDiscordPipe? pipe = null, Func<DateTimeOffset>? clock = null, Func<int>? pid = null, TimeSpan? tick = null)
+        IDiscordPipe? pipe = null, Func<DateTimeOffset>? clock = null, Func<int>? pid = null, TimeSpan? tick = null,
+        Func<string?>? replayScenario = null, Func<string?>? page = null, Action<string>? log = null)
     {
         this.output = output; this.settings = settings; this.live = live; this.replay = replay; this.hubHandle = hubHandle;
         this.clock = clock ?? (() => DateTimeOffset.UtcNow); this.pid = pid ?? GamePid; this.tick = tick ?? TimeSpan.FromSeconds(1);
+        this.replayScenario = replayScenario ?? (() => null); this.page = page ?? (() => null);
+        this.log = log ?? (line => Console.WriteLine("[Discord] " + line));
         client = new DiscordIpcClient(ClientId, pipe ?? new DiscordNamedPipe());
         started = this.clock();
     }
@@ -234,11 +316,20 @@ sealed class DiscordPresenceHost : IAsyncDisposable
         try { return processes.Length > 0 ? processes[0].Id : Environment.ProcessId; }
         finally { foreach (var process in processes) process.Dispose(); }
     }
+    // One log line per status change, so a steady state does not fill the log.
+    void SetStatus(string value, string? detail = null)
+    {
+        status = value;
+        var line = detail is null ? value : value + ": " + detail;
+        if (line != loggedStatus) { loggedStatus = line; log("status " + line); }
+    }
+    static string Quote(string text) => "\"" + text.Replace("\"", "'") + "\"";
     public void Start(CancellationToken token)
     {
         if (loop is not null) return;
         stop = CancellationTokenSource.CreateLinkedTokenSource(token);
         var cancel = stop.Token;
+        log($"presence host started (application {ClientId})");
         loop = Task.Run(async () =>
         {
             while (!cancel.IsCancellationRequested)
@@ -246,17 +337,17 @@ sealed class DiscordPresenceHost : IAsyncDisposable
                 try { await Step(cancel); }
                 catch (OperationCanceledException) when (cancel.IsCancellationRequested) { break; }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException)
-                { Console.Error.WriteLine($"Discord presence step failed ({ex.GetType().Name})."); }
+                { log($"step failed ({ex.GetType().Name})"); }
                 try { await Task.Delay(tick, cancel); } catch (OperationCanceledException) { break; }
             }
         });
     }
     // Closing the connection makes Discord drop this application's activity.
-    async Task Release(bool withdraw)
+    async Task Release(bool withdraw, string reason)
     {
-        if (client.Connected) await client.Disconnect();
+        if (client.Connected) { await client.Disconnect(); log("disconnected from Discord (" + reason + ")"); }
         sent = null;
-        if (withdraw && requested) { DiscordHandoff.Withdraw(output); requested = false; requestedAt = DateTimeOffset.MinValue; }
+        if (withdraw && requested) { DiscordHandoff.Withdraw(output); requested = false; requestedAt = DateTimeOffset.MinValue; log("handoff request withdrawn"); }
     }
     internal async Task Step(CancellationToken token)
     {
@@ -268,7 +359,7 @@ sealed class DiscordPresenceHost : IAsyncDisposable
     {
         var now = clock();
         var preferences = settings.Current;
-        if (!preferences.Enabled) { await Release(withdraw: true); status = "off"; return; }
+        if (!preferences.Enabled) { await Release(withdraw: true, "presence turned off"); SetStatus("off"); return; }
         if (!requested || now - requestedAt >= RequestRefresh) { DiscordHandoff.Request(output, now); requested = true; requestedAt = now; }
         var game = DiscordHandoff.ReadGame(output, now);
         if (game == DiscordHandoff.GameState.Released) releasedAt = now;
@@ -278,30 +369,40 @@ sealed class DiscordPresenceHost : IAsyncDisposable
         var held = game == DiscordHandoff.GameState.Released || (game == DiscordHandoff.GameState.Unknown && client.Connected && now - releasedAt <= TimeSpan.FromSeconds(3));
         if (!held)
         {
-            await Release(withdraw: false);
-            status = game switch { DiscordHandoff.GameState.Off => "game-off", DiscordHandoff.GameState.Unavailable => "unsupported", _ => "waiting" };
+            await Release(withdraw: false, "game reports " + game);
+            SetStatus(game switch { DiscordHandoff.GameState.Off => "game-off", DiscordHandoff.GameState.Unavailable => "unsupported", _ => "waiting" }, "game handoff " + game);
             return;
         }
         if (!client.Connected)
         {
-            if (now < nextConnect) { status = "discord-unavailable"; return; }
+            if (now < nextConnect) return;
+            log("connecting to Discord");
             if (!await client.Connect(token))
             {
-                failures++; nextConnect = now + DiscordBackoff.Delay(failures); status = "discord-unavailable"; return;
+                failures++; var delay = DiscordBackoff.Delay(failures); nextConnect = now + delay;
+                log($"connect failed: {client.LastError ?? "unknown"}; retry in {delay.TotalSeconds:0} s");
+                SetStatus("discord-unavailable", client.LastError); return;
             }
+            log("connected: handshake READY (user redacted)");
             failures = 0; sent = null; rate.Reset();
         }
-        var activity = DiscordActivityBuilder.Build(new(live(), replay(), DiscordSession.Summarize(Volatile.Read(ref runs), started), hubHandle(), now), preferences);
-        status = "showing";
+        var activity = DiscordActivityBuilder.Build(new(live(), replay(), DiscordSession.Summarize(Volatile.Read(ref runs), started), hubHandle(), now, replayScenario(), page()), preferences);
+        SetStatus("showing");
         if (activity.SameContent(sent)) return;
         var due = activity.Structural(sent) ? now - sentAt >= MinimumSpacing : now - sentAt >= StateRefresh;
         if (!due || !rate.TryTake(now.UtcDateTime)) return;
         var result = await client.SetActivity(pid(), activity.ToJson(scenarioButton), token);
-        if (result == DiscordSendResult.Ok) { sent = activity; sentAt = now; return; }
+        var summary = $"SET_ACTIVITY {activity.Phase} details={Quote(activity.Details)} state={Quote(activity.State)} buttons={activity.Buttons.Count(b => scenarioButton || !b.Url.StartsWith("steam:", StringComparison.Ordinal))}";
+        if (result == DiscordSendResult.Ok) { log(summary + ": ok"); sent = activity; sentAt = now; return; }
         if (result == DiscordSendResult.Rejected && scenarioButton && activity.Buttons.Any(b => b.Url.StartsWith("steam:", StringComparison.Ordinal)))
-        { scenarioButton = false; return; } // Retried next step without the game link.
-        if (result == DiscordSendResult.Rejected) { sent = activity; sentAt = now; return; } // Do not resend rejected content.
-        failures++; nextConnect = now + DiscordBackoff.Delay(failures); status = "discord-unavailable";
+        {
+            log(summary + ": rejected (" + client.LastError + "); dropping the play-this-scenario button");
+            scenarioButton = false; return; // Retried next step without the game link.
+        }
+        if (result == DiscordSendResult.Rejected) { log(summary + ": rejected (" + client.LastError + ")"); sent = activity; sentAt = now; return; } // Do not resend rejected content.
+        failures++; var retry = DiscordBackoff.Delay(failures); nextConnect = now + retry;
+        log(summary + ": failed (" + client.LastError + "); reconnect in " + retry.TotalSeconds.ToString("0", CultureInfo.InvariantCulture) + " s");
+        SetStatus("discord-unavailable", client.LastError);
     }
     public object StatusInfo => new { state = status };
     public async ValueTask DisposeAsync()
@@ -309,7 +410,7 @@ sealed class DiscordPresenceHost : IAsyncDisposable
         stop?.Cancel();
         if (loop is not null) { try { await loop; } catch (OperationCanceledException) { } }
         await stepGate.WaitAsync();
-        try { await Release(withdraw: true); await client.DisposeAsync(); }
+        try { await Release(withdraw: true, "worker stopping"); await client.DisposeAsync(); }
         finally { stepGate.Release(); }
         stop?.Dispose();
     }
