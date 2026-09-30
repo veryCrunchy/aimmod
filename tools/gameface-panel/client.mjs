@@ -14,7 +14,9 @@ export async function connect(viewId = '0') {
     let sequence = 0;
     const pending = new Map();
     ws.on('message', data => {
-        const message = JSON.parse(data);
+        let message;
+        try { message = JSON.parse(data); } catch { return; }
+        if (!message || typeof message !== 'object') return;
         const request = pending.get(message.id);
         if (!request) return;
         pending.delete(message.id);

@@ -66,7 +66,20 @@ test('delete requires explicit inline choice and only removes row after success'
 
 test('favorite filter reports no match without claiming library is empty',()=>{
   const s=setup();s.browser.enter();s.requests[0].finish(200,[row]);
-  s.all().find(n=>n.textContent==='Favorites').onclick();assert.ok(s.all().some(n=>n.textContent==='No replays match your filters.'));
+  s.all().find(n=>n.textContent==='Favorites').onclick();assert.ok(s.all().some(n=>n.textContent==='No favorite replays yet. Mark a replay as a favorite to keep it here.'));
+  assert.ok(!s.all().some(n=>n.textContent==='No replays saved yet'));
+  s.all().find(n=>n.textContent==='Clear filters').onclick();assert.ok(s.all().some(n=>n.textContent==='Synthetic run'));
+});
+test('search keeps its field while filtering and names stay literal text',()=>{
+  const s=setup();s.browser.enter();s.requests[0].finish(200,[row,{...row,id:'second',scenario:'<img src=x onerror=alert(1)>'}]);
+  const input=s.all().find(n=>n.tag==='input');input.value='img';input.onchange();
+  assert.equal(s.all().find(n=>n.tag==='input'),input);assert.ok(s.all().some(n=>n.textContent==='<img src=x onerror=alert(1)>'));assert.ok(!s.all().some(n=>n.tag==='img'));
+  assert.ok(!s.all().some(n=>n.textContent==='Synthetic run'));
+  input.value='nothing';input.onchange();assert.ok(s.all().some(n=>n.textContent==='No replays match your filters.'));
+});
+test('libraries above the display cap say how many are shown',()=>{
+  const s=setup();s.browser.enter();s.requests[0].finish(200,Array.from({length:260},(_,i)=>({...row,id:'r'+i})));
+  assert.ok(s.all().some(n=>n.textContent==='250 of 260 in-game replays'));
 });
 
 

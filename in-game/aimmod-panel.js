@@ -55,7 +55,8 @@
     close.onclick = function () { setOpen(false); };
     function boundedText(value) {
         // Never retain an event object or call user-defined coercion methods.
-        if (typeof value === 'number' && isFinite(value)) return String(value);
+        // One decimal keeps live counters readable (no float noise) without Intl.
+        if (typeof value === 'number' && isFinite(value)) return String(Math.round(value * 10) / 10);
         if (typeof value === 'string' && value.length <= 64) return value;
         return '\u2014';
     }

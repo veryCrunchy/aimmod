@@ -32,6 +32,8 @@
         if(!state.rendererReady){fail(state.rendererReason==='challenge-active'||state.rendererReason==='scenario-active'?'Finish the current run before opening a replay.':'In-game replay playback is not available yet.');return;}
         request('POST',{action:'load',id:row.id||row.Id},function(status){
           if(status===422){fail('This recording does not include the map data needed for in-game playback.');return;}
+          if(status===404){fail('This replay file is missing or incomplete. Refresh the library and try another replay.');return;}
+          if(status===409){fail('In-game playback is not ready yet. Wait a moment, then try again.');return;}
           if(status!==200){fail('This replay could not be opened.');return;}
           transferred=true;note.textContent='Opening replay in the game…';
           // A successful native handoff hides this workspace and cancels the

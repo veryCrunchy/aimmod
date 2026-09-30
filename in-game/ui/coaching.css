@@ -1,10 +1,70 @@
-#coaching-profile .coach-workspace{padding:0;margin:0 0 22px;color:#edf3f3}
-#coaching-profile .coach-toolbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;min-height:38px}#coaching-profile .coach-scopes{display:flex}#coaching-profile .coach-scopes>.button{margin:0 8px 0 0;min-width:118px}#coaching-profile .coach-sample{font-size:12px;color:#a4b3b8;margin-left:18px;white-space:nowrap}#coaching-profile .coach-scope-name{font-size:13px;color:#b9c7cb;margin:0 0 18px;line-height:1.5;word-wrap:break-word}
-#coaching-profile .coach-summary{padding:20px 24px;margin-bottom:20px;background:#172124;border:1px solid #304045;border-radius:10px}#coaching-profile .coach-eyebrow{display:block;color:#86a29e;font-size:10px;font-weight:600;letter-spacing:1.1px;text-transform:uppercase}#coaching-profile .coach-summary h2{font-size:25px;font-weight:500;line-height:1.3;margin:8px 0 9px;color:#edf3f3;letter-spacing:-.5px}#coaching-profile .coach-summary p{font-size:13px;line-height:1.6;margin:0;color:#a4b3b8}
-#coaching-profile .coach-columns{display:flex;flex-direction:row;align-items:flex-start;width:100%}#coaching-profile .coach-profile,#coaching-profile .coach-advice{flex-grow:0;flex-shrink:0;min-width:0}#coaching-profile .coach-signal-row{display:flex;justify-content:space-between;margin-bottom:22px;width:100%}#coaching-profile .coach-signal{padding:15px 17px;min-height:76px;background:#172124;border:1px solid #2c3c41;border-radius:8px;flex-grow:0;flex-shrink:0}#coaching-profile .coach-signal strong{display:block;margin-top:9px;color:#edf3f3;font-size:16px;font-weight:500;line-height:1.35}#coaching-profile .coach-strength strong{color:#65dfb0}#coaching-profile .coach-focus{border-color:#42514e}
-#coaching-profile .coach-axes{padding:0 3px}#coaching-profile .coach-axes h3{margin:0 0 6px;font-size:15px;font-weight:500;color:#dce7e9}#coaching-profile .coach-axis-caption{margin:0 0 18px;font-size:11px;line-height:1.55;color:#83999f}#coaching-profile .coach-axis{margin-bottom:13px}#coaching-profile .coach-axis-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;font-size:12px;color:#b9c8cd}#coaching-profile .coach-axis-value{font-size:10px;color:#829a9f;margin-left:16px;font-variant-numeric:tabular-nums}#coaching-profile .coach-axis-track{height:5px;background:#26383d;border-radius:3px;overflow:hidden}#coaching-profile .coach-axis-fill{height:5px;background:#48b997;border-radius:3px}
-#coaching-profile .coach-primary{padding:22px 24px;background:#172124;border:1px solid #38524b;border-left:3px solid #39dfa0;border-radius:9px;margin-bottom:12px}#coaching-profile .coach-primary>.coach-eyebrow{color:#62d7ad}#coaching-profile .coach-primary h3{font-size:19px;line-height:1.4;letter-spacing:-.3px;margin:9px 0 10px;color:#edf3f3;font-weight:500}#coaching-profile .coach-action{font-size:13px;line-height:1.7;color:#aebfc2;margin:0 0 13px}#coaching-profile .coach-more{padding:14px 17px;border:1px solid #293b40;border-radius:8px;background:#131d20;margin-bottom:9px}#coaching-profile .coach-more h3{font-size:13px;line-height:1.5;font-weight:500;color:#c9d7da;margin:0 0 5px}#coaching-profile .coach-details-toggle{font-size:11px;min-height:28px;padding:5px 0;border:0;background:transparent;color:#72c6ac}#coaching-profile .coach-details-toggle:hover{color:#adf3d8;background:transparent}#coaching-profile .coach-details{padding:13px 0 4px;margin-top:8px;border-top:1px solid #2a3d42}#coaching-profile .coach-details p{font-size:12px;line-height:1.75;color:#a4b3b8;margin:0 0 12px;word-wrap:break-word}#coaching-profile .coach-details .coach-tip{color:#c3d4d6}#coaching-profile .coach-drills{margin:16px 0 6px}#coaching-profile .coach-drill{margin:10px 7px 0 0;min-height:32px;padding:7px 11px;font-size:11px;white-space:normal;text-align:left;line-height:1.5;max-width:100%}#coaching-profile .coach-empty{padding:38px 26px;background:#172124;border:1px solid #304045;border-radius:10px;text-align:center}#coaching-profile .coach-empty h3{font-size:19px;font-weight:500;color:#edf3f3;margin:0 0 12px}#coaching-profile .coach-empty p{font-size:13px;line-height:1.7;color:#a4b3b8;margin:0}
-@media(max-width:1000px){#coaching-profile .coach-columns{display:block}#coaching-profile .coach-profile,#coaching-profile .coach-advice{width:100%!important;margin-right:0!important}#coaching-profile .coach-profile{margin-bottom:22px}#coaching-profile .coach-axes{padding:0}#coaching-profile .coach-axis{margin-bottom:11px}}
-@media(max-width:700px){#coaching-profile .coach-toolbar{display:block}#coaching-profile .coach-sample{display:block;margin:12px 0 0}#coaching-profile .coach-summary{padding:18px}#coaching-profile .coach-summary h2{font-size:22px}#coaching-profile .coach-primary{padding:18px}#coaching-profile .coach-signal{padding:13px}#coaching-profile .coach-signal strong{font-size:14px}}
-
-.coach-feedback{display:flex;margin:12px 0}.coach-feedback .button{font-size:11px;padding:7px 10px}.coach-history{clear:both;border-top:1px solid #34513e;margin-top:18px;padding-top:14px}.coach-history-entry{border-top:1px solid #294532;padding:12px 0}.coach-history-entry h4{margin:6px 0;font-size:14px}.coach-history-entry p{font-size:12px;color:#9cbaa6}
+#coaching-profile .coach-workspace{padding:0;margin:0 0 20px;color:#eef5f1}
+#coaching-profile .coach-toolbar{display:flex;align-items:center;margin-bottom:16px;min-height:36px}
+#coaching-profile .coach-scopes{display:flex;padding:3px;background:#101916;border:1px solid #30433a;border-radius:7px}
+#coaching-profile .coach-scopes>.button{height:30px;line-height:30px;border:0;margin:0;padding:0 14px;background:none;color:#a7bab0}
+#coaching-profile .coach-scopes>.button:hover{background:#1d2b26;color:#eef5f1}
+#coaching-profile .coach-scopes>.button.primary{background:#173b2f;color:#27e4a1}
+#coaching-profile .coach-sample{font-size:13px;color:#a7bab0;margin-left:14px;white-space:nowrap}
+#coaching-profile .coach-scope-name{font-size:13px;color:#a7bab0;margin:0 0 14px;word-wrap:break-word}
+#coaching-profile .coach-summary{padding:18px 22px;margin-bottom:16px;background:#173b2f;border:1px solid #2c6b52;border-radius:8px}
+#coaching-profile .coach-eyebrow{display:block;color:#7f968a;font-size:11px;font-weight:600;letter-spacing:1px;text-transform:uppercase}
+#coaching-profile .coach-summary .coach-eyebrow{color:#27e4a1}
+#coaching-profile .coach-summary h2{font-size:22px;font-weight:600;line-height:1.3;margin:6px 0 4px;color:#eef5f1}
+#coaching-profile .coach-summary p{font-size:14px;line-height:1.55;color:#dcebe3}
+#coaching-profile .coach-columns{display:flex;flex-direction:row;align-items:flex-start;width:100%}
+#coaching-profile .coach-profile,#coaching-profile .coach-advice{flex-grow:0;flex-shrink:0;min-width:0}
+/* Room to improve */
+#coaching-profile .coach-ranking{background:#151f1c;border:1px solid #22302a;border-radius:8px;overflow:hidden;margin-bottom:16px}
+#coaching-profile .coach-panel-head{padding:16px 18px 10px}
+#coaching-profile .coach-panel-head h3{font-size:16px;font-weight:600;margin:0 0 3px}
+#coaching-profile .coach-rank{display:flex;align-items:center;width:100%;min-height:64px;padding:10px 18px;border-top:1px solid #22302a;text-align:left}
+#coaching-profile .coach-rank:hover,#coaching-profile .coach-rank:focus{background:#1d2b26}
+#coaching-profile .coach-rank.selected{background:#173b2f}
+#coaching-profile .coach-rank-index{width:26px;flex-shrink:0;font-size:14px;font-weight:600;color:#7f968a}
+#coaching-profile .coach-rank-body{display:block;flex:1;min-width:0;padding-right:14px}
+#coaching-profile .coach-rank-name{display:block;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#coaching-profile .coach-rank-issue{display:block;margin-top:3px;font-size:12px;color:#a7bab0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#coaching-profile .coach-rank-issue b{font-weight:600;color:#27e4a1}
+#coaching-profile .coach-rank-issue.gap b,#coaching-profile .coach-rank-issue.accuracy b{color:#f0b45a}
+#coaching-profile .coach-rank-issue.consistency b{color:#66ccff}
+#coaching-profile .coach-spark{display:flex;align-items:flex-end;flex-shrink:0;width:90px;height:32px;margin-right:12px;border-top:1px dashed #3f5a4d}
+#coaching-profile .coach-spark-bar{display:block;width:7px;margin-right:2px;border-radius:2px 2px 0 0;background:#30433a}
+#coaching-profile .coach-spark-bar.last{background:#27e4a1}
+#coaching-profile .coach-rank-gap{width:56px;flex-shrink:0;text-align:right;font-size:14px;font-weight:600;color:#f0b45a}
+#coaching-profile .coach-rank-empty{padding:0 18px 18px;font-size:13px;color:#a7bab0}
+/* Signals */
+#coaching-profile .coach-signals{background:#151f1c;border:1px solid #22302a;border-radius:8px;padding:18px;margin-bottom:16px}
+#coaching-profile .coach-signal-row{display:flex;justify-content:space-between;margin-bottom:18px;width:100%}
+#coaching-profile .coach-signal{padding:12px 16px;background:#1d2b26;border:1px solid #30433a;border-radius:8px;flex-grow:0;flex-shrink:0}
+#coaching-profile .coach-signal strong{display:block;margin-top:4px;color:#eef5f1;font-size:16px;font-weight:600}
+#coaching-profile .coach-strength strong{color:#27e4a1}
+#coaching-profile .coach-axes h3{margin:0 0 3px;font-size:16px;font-weight:600}
+#coaching-profile .coach-axis-caption{margin:0 0 14px;font-size:12px;line-height:1.5;color:#a7bab0}
+#coaching-profile .coach-axis-list{display:flex;flex-wrap:wrap;justify-content:space-between}
+#coaching-profile .coach-axis{margin-bottom:12px}
+#coaching-profile .coach-axis-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;font-size:13px;color:#dcebe3}
+#coaching-profile .coach-axis-value{font-size:12px;color:#a7bab0;margin-left:14px}
+#coaching-profile .coach-axis-track{height:6px;background:#30433a;border-radius:3px;overflow:hidden}
+#coaching-profile .coach-axis-fill{height:6px;background:#27e4a1;border-radius:3px}
+/* Advice */
+#coaching-profile .coach-primary{padding:18px 20px;background:#151f1c;border:1px solid #2c6b52;border-left:3px solid #27e4a1;border-radius:8px;margin-bottom:10px}
+#coaching-profile .coach-primary>.coach-eyebrow{color:#27e4a1}
+#coaching-profile .coach-primary h3{font-size:18px;line-height:1.35;margin:6px 0 6px;color:#eef5f1;font-weight:600}
+#coaching-profile .coach-action{font-size:14px;line-height:1.6;color:#dcebe3;margin:0 0 10px}
+#coaching-profile .coach-more{padding:12px 16px;border:1px solid #22302a;border-radius:8px;background:#151f1c;margin-bottom:8px}
+#coaching-profile .coach-more h3{font-size:14px;line-height:1.45;font-weight:600;color:#eef5f1;margin:0 0 4px}
+#coaching-profile .coach-details-toggle{font-size:12px;height:28px;line-height:28px;padding:0;border:0;background:transparent;color:#27e4a1}
+#coaching-profile .coach-details-toggle:hover{color:#5bedb9;background:transparent}
+#coaching-profile .coach-details{padding:10px 0 2px;margin-top:6px;border-top:1px solid #22302a}
+#coaching-profile .coach-details p{font-size:13px;line-height:1.65;color:#a7bab0;margin:0 0 10px;word-wrap:break-word}
+#coaching-profile .coach-details .coach-tip{color:#dcebe3}
+#coaching-profile .coach-drills{margin:12px 0 4px}
+#coaching-profile .coach-drill{margin:8px 6px 0 0;height:auto;min-height:30px;padding:5px 10px;font-size:12px;white-space:normal;text-align:left;line-height:1.5;max-width:100%}
+#coaching-profile .coach-empty{padding:34px 24px;background:#151f1c;border:1px solid #22302a;border-radius:8px;text-align:center}
+#coaching-profile .coach-empty h3{font-size:18px;font-weight:600;color:#eef5f1;margin:0 0 8px}
+#coaching-profile .coach-empty p{font-size:14px;line-height:1.6;color:#a7bab0;margin:0}
+.coach-feedback{display:flex;margin:10px 0 4px}.coach-feedback .button{height:28px;line-height:26px;font-size:12px;padding:0 10px}
+.coach-history{border-top:1px solid #22302a;margin-top:14px;padding-top:12px}
+.coach-history-entry{border-top:1px solid #22302a;padding:10px 0}.coach-history-entry h4{margin:4px 0;font-size:14px}.coach-history-entry p{font-size:13px;color:#a7bab0}
+@media(max-width:1250px){#coaching-profile .coach-columns{display:block}#coaching-profile .coach-profile,#coaching-profile .coach-advice{width:100%!important;margin-right:0!important}#coaching-profile .coach-axis{width:100%!important}}
+@media(max-width:1000px){#coaching-profile .coach-spark{display:none}}

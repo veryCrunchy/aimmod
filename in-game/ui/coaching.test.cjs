@@ -46,4 +46,25 @@ test('feedback stores generated advice once and supports useful, hide, prior adv
  button(root,'Hide this advice').onclick();requests[2].finish(200,{feedback:[{scope:'all',id:card.id,feedback:'not_for_me'}],history});assert.ok(!all(root,n=>n.tag==='h3'&&n.textContent===card.title).length);
  button(root,'Advice history').onclick();assert.ok(button(root,'Restore advice'));button(root,'Restore advice').onclick();assert.equal(JSON.parse(requests[3].body).feedback,'none');requests[3].finish(200,{feedback:[],history});assert.ok(all(root,n=>n.tag==='h3'&&n.textContent===card.title).length);
 });
-test('feedback failure exposes retry without pretending preferences were saved',()=>{const c=load(),root=dom(c),requests=feedbackClient(c);c.AimModCoaching.render(root,{coachingHistory:runs()});requests[0].finish(503,{});assert.ok(button(root,'Retry preferences'));assert.match(root.textContent,/could not be saved/);assert.equal(requests.length,1);});
+test('feedback failure exposes retry without pretending preferences were saved',()=>{const c=load(),root=dom(c),requests=feedbackClient(c);c.AimModCoaching.render(root,{coachingHistory:runs()});requests[0].finish(503,{});assert.ok(button(root,'Retry preferences'));assert.match(root.textContent,/preferences are unavailable/);assert.equal(requests.length,1);
+ // Advice itself stays visible when only the preference service fails.
+ assert.equal(css(root,'coach-primary').length,1);assert.doesNotMatch(root.textContent,/Loading advice/);});
+test('scenarios are ranked by room to improve with one measured issue each',()=>{const c=load();const t0=Date.UTC(2026,8,1);const rows=[];
+ const add=(key,scores,acc)=>scores.forEach((s,i)=>rows.push({id:key+i,normalizedScenario:key,timestampMs:t0+i*60000,score:s,accuracy:acc?acc[i]:80}));
+ add('steady',[100,101,99,100,100,101,100,99,100,100]);
+ add('fading',[100,105,110,115,120,119,108,107,106,108]);
+ add('shaky',[100,70,105,75,110,72,108,74,106,73]);
+ add('aimdrop',[100,100,100,100,100,100,100,99,99,99],[85,86,84,85,86,85,78,77,78,77]);
+ add('few',[1,2,3]);
+ const ranked=c.AimModCoaching.rankScenarios(rows,{fading:'Fading <Scenario>'});
+ assert.deepEqual(Array.from(ranked,r=>r.key).slice(0,2),['shaky','fading']);assert.ok(!ranked.some(r=>r.key==='few'));
+ assert.equal(ranked.find(r=>r.key==='fading').name,'Fading <Scenario>');assert.equal(ranked.find(r=>r.key==='fading').kind,'gap');
+ assert.equal(ranked.find(r=>r.key==='shaky').kind,'consistency');assert.equal(ranked.find(r=>r.key==='aimdrop').kind,'accuracy');assert.equal(ranked.find(r=>r.key==='steady').kind,'close');
+ assert.match(ranked.find(r=>r.key==='aimdrop').detail,/% in your last 5 runs vs /);});
+test('room to improve renders literal names and selects the scenario on click',()=>{const c=load(),root=dom(c);let chosen;const history=runs().map(r=>({...r,normalizedScenario:r.normalizedScenario==='small'?'<b>small</b>':'large'}));
+ c.AimModCoaching.render(root,{coachingHistory:history,selectedScenario:'',scenarios:[{name:'<b>Small</b>'}]},name=>chosen=name);
+ const rank=css(root,'coach-rank');assert.ok(rank.length>=1);const target=rank.find(r=>r.textContent.includes('<b>Small</b>'));assert.ok(target);target.onclick();assert.equal(chosen,'<b>Small</b>');
+ assert.ok(!all(root,n=>n.tag==='b'&&n.textContent==='small').length);});
+test('unchanged history across polls reuses the engine result instead of re-analysing',()=>{const c=load(),root=dom(c);const state={coachingHistory:runs(),selectedScenario:''};c.AimModCoaching.render(root,state);const view=root.aimmodCoachingView,first=view.results.all;
+ c.AimModCoaching.render(root,{coachingHistory:JSON.parse(JSON.stringify(runs())),selectedScenario:''});assert.equal(root.aimmodCoachingView.results.all,first);
+ const changed=runs();changed[0].score=1;c.AimModCoaching.render(root,{coachingHistory:changed,selectedScenario:''});assert.notEqual(root.aimmodCoachingView.results.all,first);});

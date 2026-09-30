@@ -10,20 +10,34 @@
     xhr.onreadystatechange=function(){if(xhr.readyState!==4)return;if(xhr.status!==200){finish(false);return;}try{finish(true,JSON.parse(xhr.responseText));}catch(e){finish(false);}};
     xhr.onerror=xhr.ontimeout=function(){finish(false);};xhr.send();
   }
-  function number(value){return typeof value==='number'&&isFinite(value)?String(Math.round(value*100)/100):'—';}
+  function number(value){return root.AimModFormat.number(value,2);}
   function notice(text){container.appendChild(el('p','benchmark-empty',text));}
+  function widthOf(node){return node.offsetWidth||node.clientWidth||0;}
   function list(){detailPage=null;cancel();clear();var card=el('div','benchmark-panel');container.appendChild(card);card.appendChild(el('h2','','Benchmarks'));
-    card.appendChild(el('p','subtle','See your ranks and the scores needed for your next step.'));
-    var filters=el('div','benchmark-filters'),search=el('input','benchmark-search');search.type='search';search.placeholder='Find a benchmark';search.setAttribute('aria-label','Find a benchmark');search.value=query;search.onchange=function(){query=search.value;list();};filters.appendChild(search);
-    var filter=button(rankedOnly?'Ranked only':'All ranks',function(){rankedOnly=!rankedOnly;list();},'button'+(rankedOnly?' primary':''));filter.setAttribute('aria-pressed',String(rankedOnly));filters.appendChild(filter);filters.appendChild(button('Refresh',load));card.appendChild(filters);
-    if(!linked){card.appendChild(el('p','benchmark-empty','Link your AimMod account in Account to see your benchmark ranks.'));return;}
-    var shown=items.filter(function(x){return (!rankedOnly||x.rank)&&(!query||(x.name+' '+x.author+' '+x.type).toLowerCase().indexOf(query.toLowerCase())>=0);});
-    if(!shown.length){card.appendChild(el('p','benchmark-empty',items.length?'No benchmarks match your filters.':'No benchmarks are available yet. Refresh Hub history in Account to check for new ranks.'));return;}
-    var heading=el('div','benchmark-row benchmark-heading');heading.appendChild(el('span','benchmark-name','Benchmark'));heading.appendChild(el('span','benchmark-rank','Your rank'));heading.appendChild(el('span','benchmark-open',''));card.appendChild(heading);
-    shown.forEach(function(item){var row=button('',function(){detail(item);},'benchmark-row benchmark-item'),name=el('span','benchmark-name');name.appendChild(el('strong','',item.name));name.appendChild(el('span','benchmark-meta',[item.type,item.author].filter(Boolean).join(' · ')));row.appendChild(name);row.appendChild(el('span','benchmark-rank'+(item.rank?' is-ranked':''),item.rank?item.rank.name:'Unranked'));row.appendChild(el('span','benchmark-open','View'));card.appendChild(row);});
+    card.appendChild(el('p','subtle','Your ranks, and the score you need for the next one.'));
+    if(!linked){var empty=el('div','benchmark-empty');empty.appendChild(el('p','','Link your AimMod account to see your benchmark ranks.'));if(root.AimModWorkspace)empty.appendChild(button('Link account',function(){root.AimModWorkspace.open('account');},'button primary'));card.appendChild(empty);return;}
+    var filters=el('div','benchmark-filters'),search=el('input','benchmark-search');search.type='search';search.placeholder='Find a benchmark';search.setAttribute('aria-label','Find a benchmark');search.value=query;filters.appendChild(search);
+    var filter=button(rankedOnly?'Ranked only':'All ranks',function(){rankedOnly=!rankedOnly;filter.textContent=rankedOnly?'Ranked only':'All ranks';filter.className='button'+(rankedOnly?' primary':'');filter.setAttribute('aria-pressed',String(rankedOnly));rows();},'button'+(rankedOnly?' primary':''));filter.setAttribute('aria-pressed',String(rankedOnly));filters.appendChild(filter);filters.appendChild(button('Refresh',load));card.appendChild(filters);
+    var results=el('div','benchmark-results');card.appendChild(results);
+    // Only the result rows are rebuilt, so the search field keeps focus while typing.
+    function rows(){while(results.firstChild)results.removeChild(results.firstChild);
+      var q=query.toLowerCase(),shown=items.filter(function(x){return (!rankedOnly||x.rank)&&(!q||(x.name+' '+(x.author||'')+' '+(x.type||'')).toLowerCase().indexOf(q)>=0);});
+      if(!shown.length){results.appendChild(el('p','benchmark-empty',items.length?'No benchmarks match your filters.':'No benchmarks are available yet. Refresh your Hub history in Account to check for new ranks.'));return;}
+      var heading=el('div','benchmark-row benchmark-heading');heading.appendChild(el('span','benchmark-name','Benchmark'));heading.appendChild(el('span','benchmark-rank','Your rank'));heading.appendChild(el('span','benchmark-open',''));results.appendChild(heading);
+      shown.forEach(function(item){var row=button('',function(){detail(item);},'benchmark-row benchmark-item'),name=el('span','benchmark-name');name.appendChild(el('strong','',item.name));name.appendChild(el('span','benchmark-meta',[item.type,item.author].filter(Boolean).join(' · ')));row.appendChild(name);row.appendChild(el('span','benchmark-rank'+(item.rank?' is-ranked':''),item.rank&&item.rank.name?item.rank.name:'Unranked'));row.appendChild(el('span','benchmark-open','View'));results.appendChild(row);});
+    }
+    var timer=null;search.oninput=function(){if(timer)root.clearTimeout(timer);timer=root.setTimeout(function(){timer=null;if(query!==search.value){query=search.value;rows();}},150);};
+    search.onchange=function(){if(timer){root.clearTimeout(timer);timer=null;}query=search.value;rows();};rows();
   }
   var detailPage=null,categoryIndex=0,scenarioQuery='',openScenario=-1;
   function thresholdsFor(scenario){return (scenario.thresholds||[]).filter(function(t){return typeof t.score==='number'&&isFinite(t.score)&&t.score>=0;}).sort(function(a,b){return a.score-b.score;});}
+  // Rank ladder: each threshold gets an equal step so low ranks stay readable;
+  // the fill moves linearly between the thresholds around your score.
+  function ladderPosition(score,thresholds){var n=thresholds.length;if(!n||typeof score!=='number'||!isFinite(score)||score<=0)return 0;for(var i=0;i<n;i++){if(score<thresholds[i].score){var from=i?thresholds[i-1].score:0,span=thresholds[i].score-from;return (i+(span>0?(score-from)/span:0))/n;}}return 1;}
+  function ladder(scenario,thresholds){var box=el('div','benchmark-ladder'),track=el('div','benchmark-ladder-track'),fill=el('div','benchmark-ladder-fill');var position=ladderPosition(scenario.score,thresholds);fill.style.width=Math.round(position*1000)/10+'%';track.appendChild(fill);
+    thresholds.forEach(function(t,i){var tick=el('span','benchmark-ladder-tick'+(scenario.score>=t.score?' reached':''));tick.style.left=Math.round((i+1)/thresholds.length*1000)/10+'%';track.appendChild(tick);});box.appendChild(track);
+    var labels=el('div','benchmark-ladder-labels');thresholds.forEach(function(t){var label=el('span','benchmark-ladder-label'+(scenario.score>=t.score?' reached':''),t.rank);label.style.width=Math.floor(1000/thresholds.length)/10+'%';labels.appendChild(label);});box.appendChild(labels);
+    track.setAttribute('role','img');track.setAttribute('aria-label','Rank ladder: '+(scenario.rank?scenario.rank.name:'Unranked')+', '+number(scenario.score)+' points');return box;}
   function nextFor(scenario,thresholds){for(var i=0;i<thresholds.length;i++)if(thresholds[i].score>scenario.score)return thresholds[i];return null;}
   function drawDetail(){
     if(!container||!detailPage)return;clear();var page=detailPage;
@@ -41,7 +55,7 @@
       page.categories.forEach(function(c,index){var entries=matching(c),choice=button('',function(){categoryIndex=index;openScenario=-1;drawBody();},'benchmark-category'+(index===categoryIndex?' active':''));choice.setAttribute('aria-pressed',String(index===categoryIndex));choice.appendChild(el('span','',c.name||'Scenarios'));choice.appendChild(el('small','',String(entries.length)));nav.appendChild(choice);});
       var panel=el('section','benchmark-category-content');body.appendChild(panel);
       // Explicit widths avoid unsupported calc/flex basis behaviour in Gameface.
-      var width=container.clientWidth||container.offsetWidth||900,side=width>=820?190:150;nav.style.width=side+'px';nav.style.flexShrink='0';panel.style.width=Math.max(200,width-side-18)+'px';panel.style.flexShrink='0';if(width<560){body.style.display='block';nav.style.width=width+'px';nav.style.maxHeight='160px';nav.style.marginBottom='16px';panel.style.width=width+'px';}else body.style.display='flex';
+      var width=widthOf(container)||900,side=width>=820?190:150;nav.style.width=side+'px';nav.style.flexShrink='0';panel.style.width=Math.max(200,width-side-18)+'px';panel.style.flexShrink='0';if(width<560){body.style.display='block';nav.style.width=width+'px';nav.style.maxHeight='160px';nav.style.marginBottom='16px';panel.style.width=width+'px';}else body.style.display='flex';
       var categoryHeading=el('div','benchmark-category-title');categoryHeading.appendChild(el('h3','',category.name||'Scenarios'));categoryHeading.appendChild(el('span','benchmark-count',matching(category).length+' scenarios'));panel.appendChild(categoryHeading);
       var labels=el('div','benchmark-compact-row benchmark-compact-head');['Scenario','Score','Rank','Next rank',''].forEach(function(label,i){labels.appendChild(el('span','benchmark-col-'+i,label));});panel.appendChild(labels);
       var matches=matching(category);if(!matches.length)panel.appendChild(el('p','benchmark-empty','No scenarios match in this category. Choose another category or change your search.'));
@@ -53,6 +67,7 @@
         if(next){var track=el('span','benchmark-progress'),fill=el('span','benchmark-progress-fill');fill.style.width=Math.max(0,Math.min(100,scenario.score/next.score*100))+'%';track.setAttribute('role','progressbar');track.setAttribute('aria-label',scenario.name+' progress to '+next.rank);track.setAttribute('aria-valuemin','0');track.setAttribute('aria-valuemax',String(next.score));track.setAttribute('aria-valuenow',String(Math.max(0,scenario.score)));track.appendChild(fill);progress.appendChild(track);}row.appendChild(progress);row.appendChild(el('span','benchmark-col-4',isOpen?'−':'+'));panel.appendChild(row);
         if(!isOpen)return;
         var details=el('div','benchmark-expanded');details.appendChild(el('h4','',scenario.name));var actions=el('div','benchmark-detail-actions');actions.appendChild(el('span','subtle',next?number(next.score-scenario.score)+' to '+next.rank+' · '+number(next.score)+' target':thresholds.length?'Highest listed target reached':'Thresholds unavailable'));if(onScenario)actions.appendChild(button('View stats',function(){onScenario(scenario.name);}));details.appendChild(actions);
+        if(thresholds.length)details.appendChild(ladder(scenario,thresholds));
         var ranks=el('div','benchmark-rank-table'),rankHeader=el('div','benchmark-rank-line benchmark-compact-head');['Rank','Target score','Your progress'].forEach(function(label){rankHeader.appendChild(el('span','',label));});ranks.appendChild(rankHeader);
         thresholds.forEach(function(t){var achieved=scenario.score>=t.score,line=el('div','benchmark-rank-line'+(achieved?' achieved':''));line.appendChild(el('span','',t.rank));line.appendChild(el('strong','',number(t.score)));line.appendChild(el('span','',achieved?'Reached':number(t.score-scenario.score)+' remaining'));ranks.appendChild(line);});if(thresholds.length)details.appendChild(ranks);panel.appendChild(details);
       });
@@ -61,5 +76,5 @@
   }
   function detail(item){cancel();clear();container.appendChild(button('Back to benchmarks',list));notice('Loading benchmark…');get('benchmark?id='+encodeURIComponent(item.id),function(ok,page){if(!ok||!page||!Array.isArray(page.categories)){clear();container.appendChild(button('Back to benchmarks',list));notice('Could not load this benchmark. Please try again.');container.appendChild(button('Try again',function(){detail(item);}));return;}detailPage=page;categoryIndex=0;scenarioQuery='';openScenario=-1;drawDetail();});}
   function load(){clear();notice('Loading benchmarks…');get('benchmarks',function(ok,data){if(!ok||!data||!Array.isArray(data.items)){clear();notice('Could not load benchmarks. Please try again.');container.appendChild(button('Try again',load));return;}linked=!!data.linked;items=data.items.filter(function(x){return x&&typeof x.id==='number'&&x.id>0&&typeof x.name==='string';});list();});}
-  root.AimModBenchmarks={enter:function(target,selectScenario){cancel();onScenario=typeof selectScenario==='function'?selectScenario:null;container=target;if(container)load();},resize:function(){if(container&&detailPage)drawDetail();},leave:function(){cancel();container=null;detailPage=null;}};
+  root.AimModBenchmarks={enter:function(target,selectScenario){cancel();onScenario=typeof selectScenario==='function'?selectScenario:null;container=target;if(container)load();},resize:function(){if(container&&detailPage)drawDetail();},back:function(){if(container&&detailPage)list();},leave:function(){cancel();container=null;detailPage=null;}};
 })(window);

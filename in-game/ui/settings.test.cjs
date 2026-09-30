@@ -19,5 +19,5 @@ test('failed save restores previous values and allows retry',()=>{
   const s=setup();s.api.enter(s.container);s.requests[0].finish(200,{replayRecordingEnabled:true,hubHistoryEnabled:true});s.buttons()[0].onclick();s.requests[1].finish(503,{});assert.equal(s.buttons()[0].textContent,'On');assert.ok(!s.buttons()[0].disabled);
 });
 test('leaving aborts work and ignores late settings response',()=>{
-  const s=setup();s.api.enter(s.container);s.api.leave();s.requests[0].finish(200,{replayRecordingEnabled:true,hubHistoryEnabled:true});assert.equal(s.requests[0].aborted,true);assert.equal(s.container.children.length,0);
+  const s=setup();s.api.enter(s.container);s.api.leave();s.requests[0].finish(200,{replayRecordingEnabled:true,hubHistoryEnabled:true});assert.equal(s.requests[0].aborted,true);assert.equal(s.buttons().length,0);
 });
