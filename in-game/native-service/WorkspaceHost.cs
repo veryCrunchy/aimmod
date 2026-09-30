@@ -27,6 +27,10 @@ sealed class WorkspaceHost : IAsyncDisposable
         Volatile.Write(ref overlayRuns, runs);
     }
     Run? PersonalBest(string scenario) => Volatile.Read(ref personalBests).GetValueOrDefault(scenario);
+    // Discord presence reads the same live snapshot without sharing the overlay
+    // feed's transient-gap memory.
+    public LiveOverlaySnapshot ReadLive() => LiveOverlayState.Read(outputFolder, PersonalBest, playback.Visible);
+    public bool ReplayVisible => playback.Visible;
     object OverlayState() => new { live = opponents.Apply(liveFeed.Accept(LiveOverlayState.Read(outputFolder, PersonalBest, playback.Visible), DateTime.UtcNow)), settings = overlaySettings.Current with { Layouts = [] } };
     object ObsState() => overlaySettings.Current.ObsEnabled ? OverlayState() : new { live = new { available = false, active = false }, settings = overlaySettings.Current with { Layouts = [] } };
     internal static int ReadRendererProtocol(string path) => new RendererAcknowledgement(path).Read().Protocol;
@@ -38,7 +42,7 @@ sealed class WorkspaceHost : IAsyncDisposable
     string data = "{}";
     public string Url { get; private set; } = "";
     public void Update(string json) => Volatile.Write(ref data, json);
-    public WorkspaceHost(Hub hub, string output, string? historyPath = null, NativeSettings? settings = null, CsvHistory? csvHistory = null)
+    public WorkspaceHost(Hub hub, string output, string? historyPath = null, NativeSettings? settings = null, CsvHistory? csvHistory = null, DiscordSettings? discordSettings = null, Func<object>? discordStatus = null)
     {
         outputFolder = output;
         overlaySettings = new OverlaySettings(output);
@@ -54,6 +58,8 @@ sealed class WorkspaceHost : IAsyncDisposable
         LoopbackServer.UseGuards(app, capability);
         (settings ?? new NativeSettings(output)).MapEndpoints(app, prefix);
         overlaySettings.MapEndpoints(app, prefix);
+        discordSettings?.MapEndpoints(app, prefix, discordStatus);
+        app.MapGet(prefix + "/discord-settings.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.DiscordSettingsScript")!, "application/javascript"));
         new CoachingFeedback(output).MapEndpoints(app, prefix);
         var importedHistory = csvHistory ?? new CsvHistory(output);
         app.MapGet(prefix + "/history-import.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.HistoryImport")!, "application/javascript"));

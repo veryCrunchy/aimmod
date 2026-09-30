@@ -2,7 +2,7 @@
   'use strict';
   var container=null,request=null,generation=0,value=null;
   function node(tag,css,text){var el=root.document.createElement(tag);el.className=css||'';if(text!==undefined)el.textContent=text;return el;}
-  function leave(){if(root.AimModHistoryImport)root.AimModHistoryImport.leave();generation++;if(request){request.abort();request=null;}container=null;}
+  function leave(){if(root.AimModHistoryImport)root.AimModHistoryImport.leave();if(root.AimModDiscordSettings)root.AimModDiscordSettings.leave();generation++;if(request){request.abort();request=null;}container=null;}
   function send(patch,done){
     var ticket=++generation,xhr=new root.XMLHttpRequest();request=xhr;
     var path=root.location.pathname;path=path.slice(0,path.lastIndexOf('/'));
@@ -33,6 +33,7 @@
     left.appendChild(panel);
     if(root.AimModHistoryImport)root.AimModHistoryImport.render(right,typeof value.statsFolder==='string'?value.statsFolder:'');
     var storage=node('div','panel settings-card');storage.appendChild(node('h2','','Replay library'));storage.appendChild(node('p','subtle','Favorite, export or delete replays from Replays. Exports are saved in Documents / AimMod / Replays.'));if(root.AimModWorkspace){var openRow=node('div','actions');var open=node('button','button','Open replays');open.type='button';open.onclick=function(){root.AimModWorkspace.open('replays');};openRow.appendChild(open);storage.appendChild(openRow);}left.appendChild(storage);
+    if(root.AimModDiscordSettings)root.AimModDiscordSettings.render(left);
   }
   function load(){send(null,function(ok,data){if(ok)value=data;render(ok?'':'Could not load your settings. Please try again.');});}
   root.AimModSettings={enter:function(element){leave();container=element;value=null;if(container){container.textContent='';var loading=node('div','panel settings-card');loading.appendChild(node('p','subtle','Loading settings…'));container.appendChild(loading);load();}},leave:leave};
