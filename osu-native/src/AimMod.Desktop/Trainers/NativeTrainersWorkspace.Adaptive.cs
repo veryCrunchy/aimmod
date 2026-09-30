@@ -6,8 +6,7 @@ namespace AimMod.Desktop.Trainers;
 
 public partial class NativeTrainersWorkspace
 {
-    private AimModButton adaptiveToggle = null!;
-    private osu.Game.Graphics.Containers.OsuTextFlowContainer adaptiveSummary = null!;
+    private AimModTrainerSwitch adaptiveToggle = null!;
 
     private TrainerSettings adaptiveSettings(TrainerSettings selected, IEnumerable<TrainerResult>? runs = null) =>
         TrainerAdaptiveDifficulty.Apply(selected with { AdaptiveDifficulty = preferences.AdaptiveDifficulty },
@@ -16,23 +15,21 @@ public partial class NativeTrainersWorkspace
 
     private void buildAdaptiveControls(FillFlowContainer<Drawable> body)
     {
-        body.Add(adaptiveToggle = new AimModButton("", () => {
+        body.Add(adaptiveToggle = new AimModTrainerSwitch("Adaptive difficulty", "Recent runs set tempo, load and objects", () => {
             preferences = preferences with { AdaptiveDifficulty = !preferences.AdaptiveDifficulty };
             settings = settings with { AdaptiveDifficulty = preferences.AdaptiveDifficulty };
             saveTrainerPreferences(); updateInstruction(); refreshHistory();
         }));
-        body.Add(adaptiveSummary = paragraph(""));
+        adaptiveToggle.TooltipText = "Turn off to choose an exact tempo, pattern and difficulty.";
         refreshAdaptiveSummary();
     }
 
     private void refreshAdaptiveSummary()
     {
-        if (adaptiveSummary is null) return;
-        adaptiveToggle.SetCaption(preferences.AdaptiveDifficulty ? "Adaptive session: On" : "Manual session: On");
-        adaptiveToggle.SetSelected(preferences.AdaptiveDifficulty);
-        adaptiveSummary.Text = preferences.AdaptiveDifficulty ? TrainerAdaptiveDifficulty.Describe(adaptiveSettings(settings))
-            : settings.RandomizePatterns ? "Choose your exact settings below. The skill randomizer is on; turn it off to keep the exact pattern."
-            : "Choose your tempo, patterns, sliders and difficulty below. Fixed drills keep your chosen rhythm over the song.";
+        if (adaptiveToggle is null) return;
+        adaptiveToggle.SetValue(preferences.AdaptiveDifficulty);
+        adaptiveToggle.Hint = preferences.AdaptiveDifficulty ? "Recent runs set tempo, load and objects" : "Off · you choose tempo, patterns and difficulty";
+        refreshSessionPlan();
         refreshAdaptiveVisibility();
     }
 

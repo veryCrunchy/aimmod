@@ -34,7 +34,7 @@ public partial class NativeTrainersWorkspace
 
     private void buildGuidedControls(FillFlowContainer<Drawable> body)
     {
-        body.Add(text("How do you want to practise?", 13, AimModPalette.Muted));
+        body.Add(new AimModSubsectionHeader("Mode"));
         var choices = flow();
         foreach (var (intent, caption) in new[] { (PracticeIntent.Quick, "Practise a skill"),
             (PracticeIntent.Compare, "Compare aim & tapping"), (PracticeIntent.Build, "Build consistency") })
@@ -157,12 +157,17 @@ public partial class NativeTrainersWorkspace
         results.Clear(); showingResults = true; setup.Hide(); results.Show();
         contentScroll.ScrollTo(0, false);
         results.Add(text(plan.Focus switch { TrainerGuidedFocus.MovementComparison => "Compare aim & tapping",
-            TrainerGuidedFocus.Spacing => "Build aim distance", TrainerGuidedFocus.GroupLength => "Build longer groups", _ => "Build endurance" }, 20, AimModPalette.Text));
-        results.Add(paragraph($"{DisplayName(plan.Baseline.Kind)} · {plan.Baseline.TempoDescription} · {plan.Baseline.Seconds} seconds"));
+            TrainerGuidedFocus.Spacing => "Build aim distance", TrainerGuidedFocus.GroupLength => "Build longer groups", _ => "Build endurance" }, 22, AimModPalette.Text));
+        var chips = flow(); chips.Spacing = new(6);
+        chips.Add(new AimModTrainerChip(DisplayName(plan.Baseline.Kind), tone: AimModTrainerChipTone.Accent));
+        chips.Add(new AimModTrainerChip(plan.Baseline.TempoDescription, FontAwesome.Solid.Music));
+        chips.Add(new AimModTrainerChip($"{plan.Baseline.Seconds} s per run", FontAwesome.Regular.Clock));
+        chips.Add(new AimModTrainerChip("Music, layout, keys and offset stay fixed", FontAwesome.Solid.Lock,
+            tooltip: "Keys and offset use the setup selected when you started."));
+        results.Add(chips);
         results.Add(paragraph(plan.Focus == TrainerGuidedFocus.MovementComparison
-            ? "Six runs, alternating original and compact movement. Keep your setup unchanged and take a break whenever you need one. Only cursor travel changes."
-            : "Repeat the same setup three times before considering a change. Each next step changes only the demand you chose. You decide when to continue."));
-        results.Add(paragraph("Music and layout stay fixed for this practice. Keys and offset use the setup selected when you started."));
+            ? "Six runs alternating full and compact movement; only cursor travel changes. Take breaks whenever you need."
+            : "Repeat the same setup three times, then change only the demand you chose. You decide when to continue."));
         addGuidedActions(null);
     }
 
@@ -218,12 +223,12 @@ public partial class NativeTrainersWorkspace
         if (plan.Focus == TrainerGuidedFocus.MovementComparison)
         {
             var comparison = TrainerGuidedPractice.CompareMovement(plan.Id, runs);
-            results.Add(text("Movement comparison", 16, AimModPalette.Text));
+            results.Add(new AimModSubsectionHeader("Movement comparison", $"run {Math.Min(plan.Step + 1, 6)} of 6"));
             var metrics = flow();
-            metrics.Add(metric(ms(comparison.OriginalSpreadMs), $"original spread · {comparison.OriginalRuns} runs"));
-            metrics.Add(metric(ms(comparison.CompactSpreadMs), $"compact spread · {comparison.CompactRuns} runs"));
-            metrics.Add(metric(comparison.OriginalAccuracy is {} original ? $"{original:0.00}%" : "-", "original accuracy"));
-            metrics.Add(metric(comparison.CompactAccuracy is {} compact ? $"{compact:0.00}%" : "-", "compact accuracy"));
+            metrics.Add(new AimModTrainerKpi("ORIGINAL SPREAD", ms(comparison.OriginalSpreadMs), $"{comparison.OriginalRuns} runs · full movement"));
+            metrics.Add(new AimModTrainerKpi("COMPACT SPREAD", ms(comparison.CompactSpreadMs), $"{comparison.CompactRuns} runs · less movement"));
+            metrics.Add(new AimModTrainerKpi("ORIGINAL ACCURACY", comparison.OriginalAccuracy is {} original ? $"{original:0.00}%" : "--"));
+            metrics.Add(new AimModTrainerKpi("COMPACT ACCURACY", comparison.CompactAccuracy is {} compact ? $"{compact:0.00}%" : "--"));
             if (comparison.OriginalRuns + comparison.CompactRuns > 0)
             { results.Add(metrics); results.Add(paragraph(comparison.Observation)); }
             else metrics.Dispose();

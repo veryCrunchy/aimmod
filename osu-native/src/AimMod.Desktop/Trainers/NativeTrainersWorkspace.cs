@@ -45,11 +45,9 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
     private readonly AimModButton stop;
     private readonly AimModButton restoreControls;
     private readonly OsuSpriteText exerciseTitle;
-    private readonly OsuSpriteText historyTitle;
     private bool advancedOpen;
     private AimModDropdown<string> keySelector = null!;
     private AimModDropdown<int> offsetSelector = null!;
-    private readonly OsuTextFlowContainer settingsStatus;
     private InterpolatingFramedClock? audioClock;
     private TrainerHistoryStore? activeHistory;
     private TrainerSession? tapping;
@@ -63,7 +61,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
     private double lastAudioAdvance;
     private double volume = .85;
     private readonly OsuTextFlowContainer instruction;
-    private readonly OsuTextFlowContainer status;
+    private OsuTextFlowContainer status = null!;
     private readonly OsuSpriteText feedback;
     private readonly FillFlowContainer<Drawable> results;
     private readonly FillFlowContainer<Drawable> recent;
@@ -71,7 +69,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
     private readonly TrainerField field;
     private readonly FillFlowContainer<Drawable> timingControls;
     private readonly FillFlowContainer<Drawable> controls;
-    private readonly FillFlowContainer<Drawable> setup;
+    private readonly Container setup;
     private readonly AimModScrollContainer contentScroll;
     private bool showingResults;
     private bool isTiming => settings.Kind <= TrainerKind.Rhythm;
@@ -84,13 +82,13 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         preferences = history().LoadPreferences();
         settings = settings with { RandomizePatterns = preferences.RandomizePatterns, GuidedCues = preferences.GuidedCues, AdaptiveDifficulty = preferences.AdaptiveDifficulty };
         freshAimLayout = preferences.FreshLayout;
-        settingsStatus = paragraph("Using default keys and offset until an osu! client is connected.");
         RelativeSizeAxes = Axes.Both;
-        var body = new FillFlowContainer<Drawable> { RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y,
-            Direction = FillDirection.Vertical, Spacing = new(12), Padding = new MarginPadding { Right = 14, Bottom = 24 } };
+        pageBody = new Container { RelativeSizeAxes = Axes.X, Padding = new MarginPadding { Right = 14 } };
         InternalChildren = [new AimModSectionHeader("Trainers", "Focused drills for timing, control and reading."),
-            skillPage = new Container { RelativeSizeAxes = Axes.Both, Padding = new MarginPadding { Top = 120 },
-                Child = contentScroll = new AimModScrollContainer { RelativeSizeAxes = Axes.Both, Child = body } }];
+            skillPage = new Container { RelativeSizeAxes = Axes.Both, Padding = new MarginPadding { Top = 120 }, Children = [
+                contentScroll = new AimModScrollContainer { RelativeSizeAxes = Axes.Both, Child = pageBody },
+                actionsLayer = new Container { RelativeSizeAxes = Axes.Both },
+            ] }];
         var tabs = new FillFlowContainer<Drawable> { Y = 72, AutoSizeAxes = Axes.Both, Direction = FillDirection.Horizontal, Spacing = new(8) };
         tabs.Add(skillEntry = new AimModButton("Skill trainers", showSkillTrainers));
         tabs.Add(dtEntry = new AimModButton("Mod trainers", openDtTrainer));
@@ -98,11 +96,16 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         AddInternal(tabs);
         AddInternal(modPage = new Container { RelativeSizeAxes = Axes.Both, Padding = new MarginPadding { Top = 120 }, Alpha = 0 });
         buildWarmupTab(tabs);
-        body.Add(results = column());
-        setup = column(); body.Add(setup);
-        body = setup;
-        body.Add(text("1. Choose a skill", 16, AimModPalette.Text));
+        pageBody.Add(results = column());
+        results.Padding = new MarginPadding { Bottom = 24 };
+        pageBody.Add(setup = new Container { RelativeSizeAxes = Axes.X });
+        setup.Add(choices = column()); choices.RelativeSizeAxes = Axes.None; choices.Spacing = new(12);
+        setup.Add(progress = column()); progress.RelativeSizeAxes = Axes.None; progress.Spacing = new(12);
+        buildSessionCard();
+        var body = choices;
+        body.Add(new AimModSubsectionHeader("Skill"));
         body.Add(exerciseChoices = flow());
+        exerciseChoices.Margin = new MarginPadding { Top = -4 };
         foreach (var kind in Enum.GetValues<TrainerKind>())
         {
             var button = skillChoice(kind);
@@ -114,52 +117,48 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         instruction.Hide();
         buildPresetControls(body);
         buildGuidedControls(body);
-        body.Add(text("3. Set your session", 16, AimModPalette.Text));
         controls = flow(); controls.Depth = -10;
-        controls.Add(selector("SESSION LENGTH", new[] { 15, 30, 60, 120, 180 }.Select(s => new KeyValuePair<string, int>($"{s} seconds", s)),
-            settings.Seconds, s => { Suspend(); settings = settings with { Seconds = s }; refreshHistory(); }, 150, d => durationSelector = d));
-        timingControls = flow(); timingControls.Width = 150; timingControls.RelativeSizeAxes = Axes.None;
-        timingControls.Add(selector("TEMPO", Enumerable.Range(6, 19).Select(i => new KeyValuePair<string, int>($"{i * 10} BPM", i * 10)),
-            settings.Bpm, b => { Suspend(); settings = settings with { Bpm = b }; refreshMusicDescription(); refreshHistory(); }, 150, d => tempoSelector = d));
-        controls.Add(timingControls);
-        body.Add(controls);
-        buildAdaptiveControls(body);
-        buildStarControls(body);
-        buildMusicControls(body);
+        controls.RelativeSizeAxes = Axes.None; controls.Width = 142; controls.Anchor = controls.Origin = Anchor.TopRight;
+        controls.Add(stretch(selector("LENGTH", new[] { 15, 30, 60, 120, 180 }.Select(s => new KeyValuePair<string, int>(s < 60 ? $"{s} seconds" : $"{s / 60} minute{(s == 60 ? "" : "s")}", s)),
+            settings.Seconds, s => { Suspend(); settings = settings with { Seconds = s }; refreshHistory(); }, 150, d => durationSelector = d), 1));
+        sessionHeader.Add(controls);
+        timingControls = flow(); timingControls.Depth = -9.9f;
+        timingControls.Add(stretch(selector("TEMPO", Enumerable.Range(6, 19).Select(i => new KeyValuePair<string, int>($"{i * 10} BPM", i * 10)),
+            settings.Bpm, b => { Suspend(); settings = settings with { Bpm = b }; refreshMusicDescription(); refreshHistory(); }, 150, d => tempoSelector = d), .5f));
+        sessionBody.Add(timingControls);
+        buildAdaptiveControls(sessionBody);
+        buildStarControls(sessionBody);
+        buildMusicControls(sessionBody);
         practiceOptionsToggle = new AimModButton("Adjust patterns & difficulty", TogglePracticeOptions);
         practiceOptions = column();
         practiceOptions.Depth = -9;
         buildPatternControls(practiceOptions);
         buildAimControls(practiceOptions);
-        body.Add(readingControls);
-        buildObjectAndGuideControls(body);
-        practiceOptions.Hide();
-        advanced = column(); advanced.Depth = -8; advanced.Alpha = 0;
-        var actions = flow();
-        actions.Add(start = new AimModButton("Start practice", startSelectedPractice, true));
-        actions.Add(stop = new AimModButton("Stop session", () => Suspend()) { Alpha = 0 });
-        actions.Add(advancedToggle = new AimModButton("Controls & audio", () =>
-        { advancedOpen = !advancedOpen; advanced.Alpha = advancedOpen ? 1 : 0; advancedToggle!.SetSelected(advancedOpen); }));
-        actions.Add(new AimModButton("Practise a beatmap", openCoaching));
-        body.Add(actions);
         body.Add(practiceOptionsToggle);
         body.Add(practiceOptions);
-        body.Add(settingsStatus);
+        body.Add(readingControls);
+        buildObjectAndGuideControls(body, sessionBody);
+        practiceOptions.Hide();
+        advanced = column(); advanced.Depth = -8; advanced.Alpha = 0;
+        start = new AimModButton("Start practice", startSelectedPractice, true) { AutoSizeAxes = Axes.None, RelativeSizeAxes = Axes.X, Height = 44 };
+        stop = new AimModButton("Stop session", () => Suspend()) { Alpha = 0 };
+        advancedToggle = new AimModButton("Controls & audio", () =>
+        { advancedOpen = !advancedOpen; advanced.Alpha = advancedOpen ? 1 : 0; advancedToggle!.SetSelected(advancedOpen); });
         var audioControls = flow();
-        audioControls.Add(selector("TAPPING KEYS", new[] { "Z / X", "D / F", "J / K" }.Select(s => new KeyValuePair<string, string>(s, s)),
-            settings.Keys, s => { Suspend(); settings = settings with { Keys = s }; if (!applyingSettings) { customSettings = true; settingsStatus.Text = $"Custom controls: {settings.Keys}, {settings.OffsetMs:+0;-0;0} ms offset."; } updateInstruction(); refreshHistory(); }, 150, d => keySelector = d));
-        audioControls.Add(selector("AUDIO OFFSET", Enumerable.Range(-50, 101).Select(i => new KeyValuePair<string, int>($"{i * 10:+0;-0;0} ms", i * 10)),
-            0, o => { Suspend(); settings = settings with { OffsetMs = o }; if (!applyingSettings) { customSettings = true; settingsStatus.Text = $"Custom controls: {settings.Keys}, {settings.OffsetMs:+0;-0;0} ms offset."; } refreshHistory(); }, 150, d => offsetSelector = d));
-        audioControls.Add(selector("MUSIC VOLUME", new[] { 0, 25, 50, 70, 85, 100 }.Select(i => new KeyValuePair<string, int>($"{i}%", i)),
-            85, v => { volume = v / 100.0; if (track is not null) track.Volume.Value = volume; }, 165));
+        audioControls.Add(stretch(selector("TAPPING KEYS", new[] { "Z / X", "D / F", "J / K" }.Select(s => new KeyValuePair<string, string>(s, s)),
+            settings.Keys, s => { Suspend(); settings = settings with { Keys = s }; if (!applyingSettings) { customSettings = true; refreshInputChips(); } updateInstruction(); refreshHistory(); }, 150, d => keySelector = d), .5f));
+        audioControls.Add(stretch(selector("AUDIO OFFSET", Enumerable.Range(-50, 101).Select(i => new KeyValuePair<string, int>($"{i * 10:+0;-0;0} ms", i * 10)),
+            0, o => { Suspend(); settings = settings with { OffsetMs = o }; if (!applyingSettings) { customSettings = true; refreshInputChips(); } refreshHistory(); }, 150, d => offsetSelector = d), .5f));
+        audioControls.Add(stretch(selector("MUSIC VOLUME", new[] { 0, 25, 50, 70, 85, 100 }.Select(i => new KeyValuePair<string, int>($"{i}%", i)),
+            85, v => { volume = v / 100.0; if (track is not null) track.Volume.Value = volume; }, 165), .5f));
         advanced.Add(audioControls);
         advanced.Add(restoreControls = new AimModButton("Restore osu! controls", () => { customSettings = false; if (inheritedSettings is {} inherited) ApplyOsuSettings(inherited); }) { Alpha = 0 });
-        body.Add(advanced);
+        sessionBody.Add(advanced);
+        buildSessionActions();
         body.Add(field = new TrainerField(this) { RelativeSizeAxes = Axes.X, Height = 210 });
         body.Add(feedback = text("", 18, AimModPalette.Accent));
-        body.Add(status = paragraph("Four-beat count-in. Escape ends the session."));
-        body.Add(historyTitle = text("Your progress", 18, AimModPalette.Text));
-        body.Add(recent = column());
+        progress.Add(historyHeader = new AimModSubsectionHeader("Progress"));
+        progress.Add(recent = column());
         chooseMusic(settings.Music);
         updateInstruction(); refreshHistory();
         buildReactionStage();
@@ -223,12 +222,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
             keySelector.Current.Value = inherited.Keys; offsetSelector.Current.Value = inherited.OffsetMs;
             settings = settings with { Keys = inherited.Keys, OffsetMs = inherited.OffsetMs };
             mouseButtons = inherited.MouseButtons;
-            string inheritedDescription = $"Using {inherited.Source}: {inherited.Keys}, {inherited.OffsetMs:+0;-0;0} ms offset, mouse buttons {(mouseButtons ? "on" : "off")}.";
-            if (inherited.Input is {} input)
-                inheritedDescription += input.Tablet is { Enabled: true } tablet
-                    ? $" Tablet area: {tablet.AreaSize.X:0.#} x {tablet.AreaSize.Y:0.#} mm."
-                    : $" Mouse sensitivity: {input.Sensitivity:0.##}x. External tablet drivers keep their own mapping.";
-            settingsStatus.Text = inheritedDescription;
+            refreshInputChips();
             updateInstruction(); refreshHistory();
         }
         finally { applyingSettings = false; }
@@ -332,12 +326,8 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
     protected override void Update()
     {
         base.Update();
-        if (exerciseChoices.DrawWidth > 0)
-        {
-            float tileWidth = Math.Clamp((exerciseChoices.DrawWidth - 6 * 8 - 1) / 7, 94, 130);
-            foreach (var button in exerciseButtons.Values)
-                if (Math.Abs(button.Width - tileWidth) > .5f) button.Width = tileWidth;
-        }
+        updateLayout();
+        updateWarmupGrid();
         if (!running) return;
         audioClock?.ProcessFrame();
         if (!host.IsActive.Value) { Suspend("Session stopped when AimMod lost focus. Start again when you are ready."); return; }
@@ -418,79 +408,131 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
     private void showResult(TrainerResult r)
     {
         contentScroll.ScrollTo(0, false);
-        results.Add(text(r.WarmupRun is not null ? "Warmup drill result" : r.Assisted ? "Assisted session result" : r.Settings.GuidedCues ? "Guided practice result" : "Session result", 18, AimModPalette.Text));
-        results.Add(paragraph(r.Settings.Kind == TrainerKind.Reaction
-            ? $"{ReactionSession.Name(r.Settings.ReactionMode)} · {r.Settings.ReactionWindowMs} ms response window · {r.Settings.Seconds} seconds"
-            : $"{DisplayName(r.Settings.Kind)}  ·  {r.Settings.TempoDescription}  ·  {r.PlayedSeconds ?? r.Settings.Seconds:0.#} seconds"));
+        var savedRuns = history().Load();
+        var last = savedRuns.Where(p => p.Id != r.Id && p.CompletedAt < r.CompletedAt && p.Assisted == r.Assisted
+            && p.Settings.Kind == r.Settings.Kind && p.UsesOsuJudgements == r.UsesOsuJudgements).OrderByDescending(p => p.CompletedAt).FirstOrDefault();
+        addResultHeader(r);
+        results.Add(resultKpis(r, last));
+        if (!addGuidedActions(r)) addNextRun(r, savedRuns);
+        if ((r.UsesOsuJudgements || r.Settings.Kind <= TrainerKind.Rhythm) && r.Settings.Kind != TrainerKind.Spinner && r.MeanMs is not null)
+            results.Add(new TrainerTimingHistogram(r, last));
+        if (r.Settings.Kind == TrainerKind.Spinner)
+            results.Add(paragraph("Radius is in osu! pixels. A smaller circle only helps while rotation stays smooth. Guided and unguided runs are compared separately."));
+        addSpecializedResults(r);
+        if (r.Settings.Kind != TrainerKind.Spinner && TrainerProgressComparison.Build(r, savedRuns) is { } comparison && r.UsesOsuJudgements)
+        {
+            results.Add(new AimModSubsectionHeader("Same drill", "first 3 runs vs latest 3"));
+            var changes = flow();
+            changes.Add(comparisonMetric("ACCURACY", comparison.FirstAccuracy, comparison.LatestAccuracy, "%", AimModTrainerTrend.HigherIsBetter));
+            changes.Add(comparisonMetric("MISSES", comparison.FirstMisses, comparison.LatestMisses, "", AimModTrainerTrend.LowerIsBetter));
+            changes.Add(comparisonMetric("TIMING SPREAD", comparison.FirstSpread, comparison.LatestSpread, " ms", AimModTrainerTrend.LowerIsBetter));
+            results.Add(changes);
+        }
+        else if (last is null) results.Add(paragraph("Complete another run to compare your results."));
+    }
+
+    private void addResultHeader(TrainerResult r)
+    {
+        results.Add(text(r.WarmupRun is not null ? "Warmup drill complete" : r.Assisted ? "Assisted session complete" : r.Settings.GuidedCues ? "Guided practice complete" : "Session complete", 22, AimModPalette.Text));
+        var chips = flow(); chips.Spacing = new(6);
+        chips.Add(new AimModTrainerChip(DisplayName(r.Settings.Kind), tone: AimModTrainerChipTone.Accent));
+        if (TrainerPresets.For(r.Settings.Kind).FirstOrDefault(p => p.Matches(r.Settings)) is { } preset) chips.Add(new AimModTrainerChip(preset.Title));
+        if (r.Settings.Kind == TrainerKind.Reaction)
+        {
+            chips.Add(new AimModTrainerChip(ReactionSession.Name(r.Settings.ReactionMode), FontAwesome.Solid.Bolt));
+            chips.Add(new AimModTrainerChip($"{r.Settings.ReactionWindowMs} ms window", FontAwesome.Solid.Stopwatch));
+        }
+        else chips.Add(new AimModTrainerChip(r.Settings.TempoDescription, FontAwesome.Solid.Music));
+        chips.Add(new AimModTrainerChip($"{r.PlayedSeconds ?? r.Settings.Seconds:0.#} s", FontAwesome.Regular.Clock));
         if (r.Settings.Kind == TrainerKind.Reading)
-            results.Add(paragraph($"{TrainerPatterns.Choices(TrainerKind.Reading).First(p => p.Value == r.Settings.Pattern).Key} · {r.Settings.ReadingGroupSize}-note phrases · AR {r.Settings.ApproachRate} · {(r.Settings.ReadingHidden ? "Hidden" : "Normal visibility")}"));
-        if (r.Settings.Music == "song") results.Add(paragraph($"{r.Settings.SongTitle} · +{r.Settings.SongStartSeconds}s"));
-        var metrics = flow(); results.Add(metrics);
+        {
+            chips.Add(new AimModTrainerChip($"{r.Settings.ReadingGroupSize}-note phrases"));
+            chips.Add(new AimModTrainerChip($"AR {r.Settings.ApproachRate}"));
+            if (r.Settings.ReadingHidden) chips.Add(new AimModTrainerChip("Hidden", FontAwesome.Solid.EyeSlash));
+        }
+        if (r.Settings.Music == "song") chips.Add(new AimModTrainerChip($"{r.Settings.SongTitle} · +{r.Settings.SongStartSeconds}s", FontAwesome.Solid.Headphones));
+        if (r.Settings.MeasuredStars is { } stars) chips.Add(new AimModTrainerChip($"{stars:0.00}", FontAwesome.Solid.Star, tooltip: TrainerStarTarget.Describe(r.Settings)));
+        results.Add(chips);
+    }
+
+    private Drawable resultKpis(TrainerResult r, TrainerResult? last)
+    {
+        var metrics = flow();
+        string versus(double? now, double? before, string unit, string pattern = "0.0") => now is { } a && before is { } b
+            ? $"{(a - b).ToString("+" + pattern + ";-" + pattern + ";0")}{unit} vs last" : last is null ? "first run" : "no previous value";
+        double? change(double? now, double? before) => now is { } a && before is { } b ? a - b : null;
         if (r.Reaction is {} reactionResult)
         {
-            metrics.Add(metric(ms(reactionResult.MedianMs), "median response"));
-            metrics.Add(metric(ms(reactionResult.Slow90Ms), "90th percentile"));
-            metrics.Add(metric($"{reactionResult.Correct}", "correct taps"));
-            metrics.Add(metric($"{reactionResult.Missed}", "missed cues"));
-            metrics.Add(metric($"{reactionResult.Early}", "early taps"));
-            metrics.Add(metric($"{reactionResult.WrongKey}", "wrong keys"));
-            metrics.Add(metric($"{reactionResult.Withheld}", "correct holds"));
-            metrics.Add(metric($"{reactionResult.FalseAlarms}", "STOP errors"));
+            var previous = last?.Reaction;
+            metrics.Add(new AimModTrainerKpi("MEDIAN RESPONSE", ms(reactionResult.MedianMs), versus(reactionResult.MedianMs, previous?.MedianMs, " ms", "0"),
+                change(reactionResult.MedianMs, previous?.MedianMs), AimModTrainerTrend.LowerIsBetter));
+            metrics.Add(new AimModTrainerKpi("SLOWEST 10%", ms(reactionResult.Slow90Ms), "90th percentile", tooltip: "Your slower responses. Keep mistakes low before shortening the window."));
+            metrics.Add(new AimModTrainerKpi("CORRECT", $"{reactionResult.Correct}", $"{reactionResult.Missed} missed cues"));
+            metrics.Add(new AimModTrainerKpi("EARLY TAPS", $"{reactionResult.Early}", versus(reactionResult.Early, previous?.Early, "", "0"), change(reactionResult.Early, previous?.Early), AimModTrainerTrend.LowerIsBetter));
+            if (r.Settings.ReactionMode is ReactionMode.Choice or ReactionMode.ChoiceGoNoGo) metrics.Add(new AimModTrainerKpi("WRONG KEYS", $"{reactionResult.WrongKey}"));
+            if (r.Settings.ReactionMode is ReactionMode.GoNoGo or ReactionMode.ChoiceGoNoGo)
+            {
+                metrics.Add(new AimModTrainerKpi("CORRECT HOLDS", $"{reactionResult.Withheld}", "stayed still on STOP"));
+                metrics.Add(new AimModTrainerKpi("STOP ERRORS", $"{reactionResult.FalseAlarms}", "tapped on STOP"));
+            }
         }
         else if (r.Settings.Kind == TrainerKind.Spinner && r.SpinnerPractice is {} spin)
         {
-            metrics.Add(metric($"{spin.MeanRpm:0}", "average RPM while held"));
-            metrics.Add(metric(spin.SpeedVariationPercent is {} variation ? $"{variation:0}%" : "--", "speed variation"));
-            metrics.Add(metric($"{spin.HeldPercent:0}%", "time holding a key"));
-            metrics.Add(metric($"{spin.DirectionChanges}", "direction changes"));
-            metrics.Add(metric($"{spin.Attempts}", "spinners practised"));
-            metrics.Add(metric(spin.MeanRadius is {} radius ? $"{radius:0} px" : "--", "average circle radius"));
-            results.Add(paragraph("Radius is measured in osu! playfield units. Compare speed and control together. A smaller circle helps only if you can keep rotating smoothly. Guided and unguided runs are compared separately."));
+            var previous = last?.SpinnerPractice;
+            metrics.Add(new AimModTrainerKpi("AVERAGE RPM", $"{spin.MeanRpm:0}", versus(spin.MeanRpm, previous?.MeanRpm, "", "0"), change(spin.MeanRpm, previous?.MeanRpm), AimModTrainerTrend.HigherIsBetter, tooltip: "Average rotations per minute while a key is held."));
+            metrics.Add(new AimModTrainerKpi("SPEED VARIATION", spin.SpeedVariationPercent is {} variation ? $"{variation:0}%" : "--", versus(spin.SpeedVariationPercent, previous?.SpeedVariationPercent, "%", "0"),
+                change(spin.SpeedVariationPercent, previous?.SpeedVariationPercent), AimModTrainerTrend.LowerIsBetter, tooltip: "How much your speed changes during a spin. Lower is smoother."));
+            metrics.Add(new AimModTrainerKpi("KEY HELD", $"{spin.HeldPercent:0}%", versus(spin.HeldPercent, previous?.HeldPercent, "%", "0"), change(spin.HeldPercent, previous?.HeldPercent), AimModTrainerTrend.HigherIsBetter));
+            metrics.Add(new AimModTrainerKpi("DIRECTION CHANGES", $"{spin.DirectionChanges}"));
+            metrics.Add(new AimModTrainerKpi("SPINNERS", $"{spin.Attempts}"));
+            metrics.Add(new AimModTrainerKpi("CIRCLE RADIUS", spin.MeanRadius is {} radius ? $"{radius:0} px" : "--"));
         }
         else if (r.UsesOsuJudgements || r.Settings.Kind <= TrainerKind.Rhythm)
         {
-            if (r.Settings.MeasuredStars is not null) results.Add(paragraph(TrainerStarTarget.Describe(r.Settings)));
-            if (r.UsesOsuJudgements) metrics.Add(metric($"{r.Accuracy:0.00}%", "accuracy"));
-            metrics.Add(metric($"{r.OnTimePercent:0.0}%", "within 25 ms"));
-            metrics.Add(metric(ms(r.MeanMs), "average offset"));
-            metrics.Add(metric(ms(r.SpreadMs), "timing spread"));
-            metrics.Add(metric(ms(r.DriftMs), "end vs start"));
             if (r.UsesOsuJudgements)
-                results.Add(paragraph($"{r.Hits}/{r.Notes} hit  |  {r.Misses} missed"));
-            else results.Add(paragraph($"{r.Hits}/{r.Notes} hit  |  {r.Misses} missed  |  {r.Extras} extra taps  |  {r.RepeatedKeys} repeated keys"));
-            results.Add(paragraph("Spread measures how evenly taps line up; lower is steadier. Negative offset is early, positive is late. Audio offset follows the same sign as osu!."));
+                metrics.Add(new AimModTrainerKpi("HIT ACCURACY", $"{r.Accuracy:0.00}%", versus(r.Accuracy, last?.Accuracy, "%"), change(r.Accuracy, last?.Accuracy), AimModTrainerTrend.HigherIsBetter,
+                    tooltip: "osu! accuracy from 300s, 100s, 50s and misses."));
+            metrics.Add(new AimModTrainerKpi("TIMING SPREAD", ms(r.SpreadMs), versus(r.SpreadMs, last?.SpreadMs, " ms"), change(r.SpreadMs, last?.SpreadMs), AimModTrainerTrend.LowerIsBetter,
+                tooltip: "How much your tap timing varies (standard deviation). Lower is steadier."));
+            metrics.Add(new AimModTrainerKpi("TAPS WITHIN ±25 MS", $"{r.OnTimePercent:0.0}%", versus(r.OnTimePercent, last?.OnTimePercent, "%"), change(r.OnTimePercent, last?.OnTimePercent), AimModTrainerTrend.HigherIsBetter,
+                tooltip: "Share of taps that landed within 25 ms of the note."));
+            metrics.Add(new AimModTrainerKpi("MISSES", $"{r.Misses}", last is null ? r.UsesOsuJudgements ? $"{r.Hits} of {r.Notes} hit" : $"{r.Extras} extra · {r.RepeatedKeys} repeated" : versus(r.Misses, last.Misses, "", "0"),
+                change(r.Misses, last?.Misses), AimModTrainerTrend.LowerIsBetter, tooltip: $"{r.Hits} of {r.Notes} notes hit."));
+            // Offset and drift are best near zero, so compare their distance from zero.
+            string towardZero(double? now, double? before) => now is { } a && before is { } b
+                ? Math.Abs(Math.Abs(a) - Math.Abs(b)) < .05 ? "same distance from 0" : $"{Math.Abs(Math.Abs(a) - Math.Abs(b)):0.0} ms {(Math.Abs(a) < Math.Abs(b) ? "closer to" : "further from")} 0"
+                : now is { } n ? Math.Abs(n) < 1 ? "centred" : n < 0 ? "early on average" : "late on average" : "--";
+            double? distance(double? now, double? before) => now is { } a && before is { } b ? Math.Abs(a) - Math.Abs(b) : null;
+            metrics.Add(new AimModTrainerKpi("AVERAGE OFFSET", r.MeanMs is { } mean ? $"{mean:+0.0;-0.0;0} ms" : "--", towardZero(r.MeanMs, last?.MeanMs),
+                distance(r.MeanMs, last?.MeanMs), AimModTrainerTrend.LowerIsBetter,
+                tooltip: "Negative is early, positive is late; best near 0. Same sign as osu! audio offset."));
+            if (r.DriftMs is { } drift)
+                metrics.Add(new AimModTrainerKpi("DRIFT", $"{drift:+0.0;-0.0;0} ms", last?.DriftMs is null ? "end vs start" : towardZero(drift, last.DriftMs),
+                    distance(drift, last?.DriftMs), AimModTrainerTrend.LowerIsBetter,
+                    tooltip: "How your average timing moved between the first and last third of the run; best near 0."));
         }
         else
         {
-            metrics.Add(metric(ms(r.ResponseMs), r.Settings.Kind == TrainerKind.Reaction ? "median reaction" : "median target time"));
-            metrics.Add(metric($"{r.Hits}", "targets hit"));
-            metrics.Add(metric($"{r.Extras}", r.Settings.Kind == TrainerKind.Reaction ? "false starts" : "off-target taps"));
+            metrics.Add(new AimModTrainerKpi(r.Settings.Kind == TrainerKind.Reaction ? "MEDIAN REACTION" : "MEDIAN TARGET TIME", ms(r.ResponseMs)));
+            metrics.Add(new AimModTrainerKpi("TARGETS HIT", $"{r.Hits}"));
+            metrics.Add(new AimModTrainerKpi(r.Settings.Kind == TrainerKind.Reaction ? "FALSE STARTS" : "OFF-TARGET TAPS", $"{r.Extras}"));
         }
-        var savedRuns = history().Load();
-        addSpecializedResults(r);
-        var previous = savedRuns.Where(p => p.Id != r.Id && p.CompletedAt < r.CompletedAt && p.Assisted == r.Assisted && p.Settings.ComparisonKey() == r.Settings.ComparisonKey() && p.Engine == r.Engine).OrderByDescending(p => p.CompletedAt).FirstOrDefault();
-        if (r.Settings.Kind != TrainerKind.Spinner && TrainerProgressComparison.Build(r, savedRuns) is { } comparison && r.UsesOsuJudgements)
-        {
-            results.Add(text("Same drill · first 3 runs / latest 3 runs", 15, AimModPalette.Text));
-            var changes = flow();
-            changes.Add(comparisonMetric("Average accuracy", comparison.FirstAccuracy, comparison.LatestAccuracy, "%"));
-            changes.Add(comparisonMetric("Average misses", comparison.FirstMisses, comparison.LatestMisses, ""));
-            changes.Add(comparisonMetric("Timing spread", comparison.FirstSpread, comparison.LatestSpread, " ms"));
-            results.Add(changes);
-            results.Add(paragraph("Compare accuracy and misses together with timing spread. These runs use matching practice settings."));
-        }
-        else if (previous?.SpinnerPractice is {} previousSpin && r.Settings.Kind == TrainerKind.Spinner)
-            results.Add(paragraph($"Previous matching run: {previousSpin.MeanRpm:0} RPM, {previousSpin.HeldPercent:0}% key hold time."));
-        else if (previous is not null)
-            results.Add(paragraph(r.UsesOsuJudgements || r.Settings.Kind <= TrainerKind.Rhythm
-                ? $"Previous matching run: {previous.OnTimePercent:0.0}% within 25 ms, {ms(previous.SpreadMs)} spread."
-                : $"Previous matching run: {ms(previous.ResponseMs)} median, {previous.Extras} {(r.Settings.Kind == TrainerKind.Reaction ? "false starts" : "off-target taps")}."));
-        else results.Add(paragraph("Complete another run with these settings to start comparing results."));
-        if (addGuidedActions(r)) return;
-        results.Add(text("Next run", 15, AimModPalette.Text));
-        results.Add(paragraph(TrainerSession.NextStep(r)));
+        return metrics;
+    }
+
+    private void addNextRun(TrainerResult r, IReadOnlyList<TrainerResult> savedRuns)
+    {
+        var next = column(); next.Spacing = new(8);
+        next.Add(new AimModSubsectionHeader("Next run", preferences.AdaptiveDifficulty && !r.Assisted ? "adapted from this result" : null));
+        next.Add(paragraph(TrainerSession.NextStep(r)));
         if (preferences.AdaptiveDifficulty && !r.Assisted)
-            results.Add(paragraph(TrainerAdaptiveDifficulty.Describe(adaptiveSettings(r.Settings, savedRuns.Append(r)))));
+        {
+            var planned = adaptiveSettings(r.Settings, savedRuns.Append(r));
+            var plan = flow();
+            foreach (var gauge in gauges(planned, usual(r.Settings.Kind))) { gauge.Width = 112; plan.Add(gauge); }
+            next.Add(plan);
+        }
+        results.Add(next);
         var nextActions = flow();
         nextActions.Add(new AimModButton(preferences.AdaptiveDifficulty ? "Start next run" : "Repeat exercise", () => repeat(r.Settings, 0), true));
         nextActions.Add(new AimModButton("Practice settings", returnToPracticeSettings));
@@ -507,14 +549,8 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         results.Hide();
         setup.Show();
         refreshPracticeIntent();
+        // Start sticks to the bottom edge, so the top of the choices is the useful place to return to.
         contentScroll.ScrollTo(0, false);
-        Scheduler.AddDelayed(() =>
-        {
-            if (showingResults || !setup.IsPresent) return;
-            float bottom = contentScroll.ToLocalSpace(start.ToScreenSpace(new Vector2(0, start.DrawHeight))).Y;
-            float overflow = bottom - contentScroll.DrawHeight + 12;
-            if (overflow > 0) contentScroll.ScrollTo(contentScroll.Current + overflow, false);
-        }, 100);
     }
 
     private void repeat(TrainerSettings selected, int tempoChange)
@@ -542,54 +578,29 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         refreshSkillSummary();
         refreshPracticeIntent();
         if (recent is null) return;
-        recent.Clear();
-        historyTitle.Text = $"Your progress · {DisplayName(settings.Kind)}";
-        var runs = history().Load().Where(r => !r.Assisted && r.Settings.Kind == settings.Kind).ToArray();
-        if (runs.Length == 0) { recent.Add(paragraph("Complete this exercise to track your accuracy and consistency here.")); return; }
-        recent.Add(paragraph($"{runs.Length} completed {(runs.Length == 1 ? "session" : "sessions")}  ·  {runs.Sum(r => r.PlayedSeconds ?? r.Settings.Seconds) / 60.0:0.#} minutes practised"));
-        string engine = TrainerResult.EngineFor(settings);
-        var comparison=TrainerSkillProfile.Apply(settings,currentSkillLimits()).ComparisonKey();
-        var matching = runs.Where(r => r.Engine == engine && r.Settings.ComparisonKey() == comparison && r.SpreadMs is not null).Take(12).Reverse().ToArray();
-        if (matching.Length >= 2)
-        {
-            recent.Add(paragraph($"Timing spread at {settings.TempoDescription} · lower is steadier"));
-            recent.Add(new TrainerProgressChart(matching.Select(r => r.SpreadMs!.Value).ToArray()));
-        }
-        foreach (var run in runs.Take(8))
-        {
-            string value = run.SpinnerPractice is {} spinnerResult && run.Settings.Kind == TrainerKind.Spinner
-                ? $"{spinnerResult.MeanRpm:0} RPM · {spinnerResult.HeldPercent:0}% key hold time"
-                : run.UsesOsuJudgements
-                ? $"{run.Settings.TempoDescription}  ·  {run.Accuracy:0.00}% acc  ·  {ms(run.SpreadMs)} spread"
-                : run.Settings.Kind <= TrainerKind.Rhythm ? $"{run.Settings.TempoDescription}  ·  {run.OnTimePercent:0.0}% on time"
-                : $"{ms(run.ResponseMs)} median  ·  {run.Extras} early taps";
-            recent.Add(new AimModButton($"{(run.WarmupRun is null ? "" : "Warmup · ")}{run.CompletedAt.LocalDateTime:dd MMM HH:mm}  ·  {run.Settings.Seconds}s  ·  {value}",
-                () => { if (!running) { results.Clear(); showResult(run); showingResults = true; setup.Hide(); results.Show(); } }));
-        }
+        renderProgress();
     }
 
     protected override void Dispose(bool isDisposing)
     { songSearchCancellation?.Cancel(); songSearchCancellation?.Dispose(); track?.Stop(); track?.Dispose(); tracks?.Dispose(); base.Dispose(isDisposing); }
 
     private static string ms(double? value) => value is { } n ? $"{n:0.0} ms" : "--";
-    private static Drawable comparisonMetric(string title, double? first, double? latest, string unit)
+    private static Drawable comparisonMetric(string title, double? first, double? latest, string unit, AimModTrainerTrend trend)
     {
         string format(double? value) => value is { } n ? $"{n:0.0}{unit}" : "--";
-        return new FillFlowContainer<Drawable> { Width = 230, Height = 60, Direction = FillDirection.Vertical, Spacing = new(6),
-            Children = [text(title, 12, AimModPalette.Muted), text($"{format(first)} to {format(latest)}", 19, AimModPalette.Text)] };
+        return new AimModTrainerKpi(title, format(latest), $"from {format(first)}", first is { } a && latest is { } b ? b - a : null, trend);
     }
     private static FillFlowContainer<Drawable> flow() => new() { RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Spacing = new(8), Direction = FillDirection.Full };
     private static FillFlowContainer<Drawable> column() => new() { RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Spacing = new(8), Direction = FillDirection.Vertical };
     private static OsuSpriteText text(string value, float size, Colour4 colour) => new() { Text = value, Font = new FontUsage(size: size), Colour = colour };
     private static OsuTextFlowContainer paragraph(string value) => new(t => { t.Font = new FontUsage(size: 14); t.Colour = AimModPalette.Muted; }) { RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Text = value };
-    private static Drawable metric(string value, string label) => new FillFlowContainer<Drawable> { Width = 148, Height = 60, Direction = FillDirection.Vertical, Spacing = new(4),
-        Children = [text(value, 23, AimModPalette.Accent), text(label, 12, AimModPalette.Muted)] };
     private const float selectorLabelSpacing = 20;
 
-    private static Drawable selector<T>(string label, IEnumerable<KeyValuePair<string, T>> options, T selected, Action<T> changed, float width, Action<AimModDropdown<T>>? capture = null)
+    private Drawable selector<T>(string label, IEnumerable<KeyValuePair<string, T>> options, T selected, Action<T> changed, float width, Action<AimModDropdown<T>>? capture = null)
     {
         var labels = options.ToArray();
         var dropdown = new TrainerDropdown<T>(v => labels.FirstOrDefault(p => EqualityComparer<T>.Default.Equals(p.Value, v)).Key ?? v?.ToString() ?? "") { RelativeSizeAxes = Axes.X, Y = selectorLabelSpacing, Items = labels.Select(p => p.Value) };
+        cardMenus.Add(dropdown);
         capture?.Invoke(dropdown);
         dropdown.Current.Value = selected; dropdown.Current.BindValueChanged(e => changed(e.NewValue));
         string? hint = label switch
@@ -620,9 +631,12 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         return field;
     }
 
-    private partial class TrainerDropdown<T>(Func<T, string> label) : AimModDropdown<T>
+    private interface ITrainerMenu { bool MenuOpen { get; } }
+
+    private partial class TrainerDropdown<T>(Func<T, string> label) : AimModDropdown<T>, ITrainerMenu
     {
         public Func<T,string> Label { get; set; } = label;
+        public bool MenuOpen => Menu.State == osu.Framework.Graphics.UserInterface.MenuState.Open;
         protected override LocalisableString GenerateItemText(T item) => Label(item);
     }
 

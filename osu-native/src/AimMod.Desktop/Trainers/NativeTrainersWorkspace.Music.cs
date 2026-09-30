@@ -22,8 +22,8 @@ public partial class NativeTrainersWorkspace
     private AimModDropdown<int> songStartSelector = null!;
     private int songPage;
     private int songTotal;
-    private Drawable cueControl = null!;
-    private AimModButton shuffleToggle = null!;
+    private Drawable cueControl = null!, musicField = null!;
+    private AimModTrainerSwitch shuffleToggle = null!;
     private AimModDropdown<string> cueSelector = null!;
 
     public void SetPreparationStatus(bool busy, string message, bool reveal = false)
@@ -32,8 +32,8 @@ public partial class NativeTrainersWorkspace
         start.SetCaption(busy ? "Preparing..." : "Start practice");
         status.Text = message;
         if (warmupStatus is not null) warmupStatus.Text = message;
-        if (reveal) Scheduler.AddDelayed(() => contentScroll.ScrollTo(contentScroll.Current
-            + contentScroll.ToLocalSpace(status.ToScreenSpace(osuTK.Vector2.Zero)).Y - 100, false), 200);
+        // The status line sits with the pinned session actions, so it is already on screen.
+        _ = reveal;
     }
 
     private void buildMusicControls(FillFlowContainer<Drawable> body)
@@ -43,24 +43,23 @@ public partial class NativeTrainersWorkspace
         var musicOptions = new Dictionary<string, string> { ["AimMod cues"] = "cues" };
         foreach (var song in TrainerMusicCatalog.Songs) musicOptions.Add(song.Value, song.Key);
         musicOptions.Add("Installed beatmap song", "song");
-        row.Add(selector("PRACTISE WITH", musicOptions, settings.Music, chooseMusic, 285, d => musicSelector = d));
-        shuffleToggle = new AimModButton("", () => {
-            preferences = preferences with { ShuffleMusic = !preferences.ShuffleMusic }; saveTrainerPreferences(); refreshShuffle();
-        });
-        row.Add(new Container { Width = 155, Height = 56, Child = shuffleToggle });
-        shuffleToggle.Y = 20;
-        refreshShuffle();
-        row.Add(cueControl = selector("CUE SOUND", new Dictionary<string, string>
+        row.Add(musicField = stretch(selector("MUSIC", musicOptions, settings.Music, chooseMusic, 285, d => musicSelector = d), .6f));
+        row.Add(cueControl = stretch(selector("CUE SOUND", new Dictionary<string, string>
         { ["Pulse · warm bass"] = "pulse", ["Glass · bright pluck"] = "glass", ["Snap · short attack"] = "snap" },
-            "pulse", cue => { Suspend(); settings = settings with { Cue = cue }; refreshHistory(); }, 215, d => cueSelector = d));
+            "pulse", cue => { Suspend(); settings = settings with { Cue = cue }; refreshHistory(); }, 215, d => cueSelector = d), .4f));
+        row.Add(shuffleToggle = new AimModTrainerSwitch("Shuffle", "", () => {
+            preferences = preferences with { ShuffleMusic = !preferences.ShuffleMusic }; saveTrainerPreferences(); refreshShuffle();
+        }) { RelativeSizeAxes = Axes.X, Width = .4f, Margin = new MarginPadding { Top = selectorLabelSpacing - 4 }, TooltipText = "Play a different AimMod song each run." });
         musicControls.Add(row);
-        musicControls.Add(musicDescription = paragraph("A clear cue on every target, with four beats to count you in."));
+        musicControls.Add(musicDescription = paragraph(""));
+        refreshShuffle();
         songControls = column(); songControls.Depth = -1; songControls.Hide();
-        songSearch = new AimModSearchBox { RelativeSizeAxes = Axes.X, SearchHint = "Search installed songs by title, artist or mapper" };
+        songSearch = new AimModSearchBox { RelativeSizeAxes = Axes.X, SearchHint = "Search installed songs" };
         songSearch.Current.BindValueChanged(change => { songPage = 0; _ = searchSongsAsync(); });
         songControls.Add(songSearch);
         songSelector = new TrainerDropdown<LocalReplay>(s => s is null ? "Choose a song" : $"{s.Artist} — {s.Title}")
         { RelativeSizeAxes = Axes.X, Items = Array.Empty<LocalReplay>(), Depth = -2 };
+        cardMenus.Add((ITrainerMenu)songSelector);
         songSelector.Current.BindValueChanged(e =>
         {
             SelectedSong = e.NewValue;
@@ -69,13 +68,17 @@ public partial class NativeTrainersWorkspace
         });
         songControls.Add(songSelector);
         var navigation = flow();
-        navigation.Add(new AimModButton("Previous songs", () => { if (songPage > 0) { songPage--; _ = searchSongsAsync(); } }));
-        navigation.Add(new AimModButton("More songs", () => { if ((songPage + 1) * 30 < songTotal) { songPage++; _ = searchSongsAsync(); } }));
-        navigation.Add(new AimModButton("Clear search", () => { songPage = 0; songSearch.Current.Value = ""; _ = searchSongsAsync(); }));
-        navigation.Add(selector("START IN SONG", new Dictionary<string, int>
+        navigation.Add(stretch(selector("START IN SONG", new Dictionary<string, int>
         { ["First notes"] = 0, ["+30 seconds"] = 30, ["+1 minute"] = 60, ["+2 minutes"] = 120, ["+3 minutes"] = 180 },
-            0, seconds => { settings = settings with { SongStartSeconds = seconds }; refreshHistory(); }, 170, d => songStartSelector = d));
+            0, seconds => { settings = settings with { SongStartSeconds = seconds }; refreshHistory(); }, 170, d => songStartSelector = d), .5f));
         songControls.Add(navigation);
+        var paging = flow();
+        foreach (var (caption, action) in new (string, Action)[] {
+            ("Previous", () => { if (songPage > 0) { songPage--; _ = searchSongsAsync(); } }),
+            ("More", () => { if ((songPage + 1) * 30 < songTotal) { songPage++; _ = searchSongsAsync(); } }),
+            ("Clear search", () => { songPage = 0; songSearch.Current.Value = ""; _ = searchSongsAsync(); }) })
+            paging.Add(new AimModButton(caption, action) { Height = AimModVisualStyle.CompactControlHeight });
+        songControls.Add(paging);
         songControls.Add(songStatus = paragraph("Search your installed osu! library."));
         musicControls.Add(songControls);
         body.Add(musicControls);
@@ -89,6 +92,7 @@ public partial class NativeTrainersWorkspace
         settings = settings with { Music = music, Bpm = bpm };
         tempoSelector.Current.Value = bpm;
         cueControl.Alpha = music == "cues" ? 1 : 0;
+        musicField.Width = music == "cues" || TrainerMusicCatalog.IsSong(music) && practiceIntent == PracticeIntent.Quick ? .6f : 1;
         songControls.Alpha = music == "song" ? 1 : 0;
         shuffleToggle.Alpha = TrainerMusicCatalog.IsSong(music) ? 1 : 0;
         refreshMusicDescription();
@@ -98,8 +102,7 @@ public partial class NativeTrainersWorkspace
 
     private void refreshShuffle()
     {
-        shuffleToggle.SetCaption($"Shuffle: {(preferences.ShuffleMusic ? "On" : "Off")}");
-        shuffleToggle.SetSelected(preferences.ShuffleMusic);
+        shuffleToggle.SetValue(preferences.ShuffleMusic);
         refreshMusicDescription();
     }
 
@@ -108,13 +111,14 @@ public partial class NativeTrainersWorkspace
         if (musicDescription is null) return;
         bool fixedMusic = practiceIntent != PracticeIntent.Quick;
         shuffleToggle.Alpha = !fixedMusic && TrainerMusicCatalog.IsSong(settings.Music) ? 1 : 0;
+        if (musicField is not null) musicField.Width = settings.Music == "cues" || shuffleToggle.Alpha > 0 ? .6f : 1;
+        musicDescription.Alpha = settings.Music == "song" || fixedMusic && TrainerMusicCatalog.IsSong(settings.Music) ? 1 : 0;
         musicDescription.Text = settings.Music switch
         {
-            "song" => preferences.AdaptiveDifficulty ? "Practice follows the map's authored notes and slider holds, including tempo changes."
-                : "Your chosen drill follows the map's tempo changes. Fixed patterns can differ from the song's melody.",
-            "cues" => "A clear cue on every target, with four beats to count you in.",
-            _ => $"{TrainerMusicCatalog.Songs[settings.Music]}. " + (preferences.AdaptiveDifficulty ? "Tempo and patterns are matched to your level and the music. " : $"{settings.Bpm} BPM. Explicit note rates keep their rhythm over the song. ") + (fixedMusic ? "This song stays the same throughout your comparison or progression."
-                : preferences.ShuffleMusic ? "Shuffle picks a different song each run." : "This song stays selected for your next run."),
+            "song" => preferences.AdaptiveDifficulty ? "Follows the map's notes, holds and tempo changes." : "Your drill follows the map's tempo changes.",
+            "cues" => "A cue on every note · four-beat count-in.",
+            _ => (preferences.AdaptiveDifficulty ? "Patterns follow the music." : $"{settings.Bpm} BPM · fixed note rate.")
+                + (fixedMusic ? " Same song for the whole plan." : ""),
         };
     }
 
@@ -142,7 +146,7 @@ public partial class NativeTrainersWorkspace
                 songSelector.Items = selection is not null && !songs.Contains(selection) ? new[] { selection }.Concat(songs) : songs;
                 if (selection is not null) songSelector.Current.Value = selection;
                 songStatus.Text = songs.Length == 0 ? "No installed songs found. Try another search or install a map in osu!."
-                    : $"{page * 30 + 1}–{page * 30 + found.Items.Count} of {found.Total} songs. Choose a song to start practising.";
+                    : $"{page * 30 + 1}–{page * 30 + found.Items.Count} of {found.Total} songs";
             });
         }
         catch (OperationCanceledException) { }
