@@ -39,7 +39,8 @@ static class AccountVault
     public static T? ReadRecord<T>(string path) where T : class
     {
         if (!File.Exists(path)) return null;
-        if (new FileInfo(path).Length > 65536) throw new IOException("Invalid saved account.");
+        var length = new FileInfo(path).Length;
+        if (length is 0 or > 65536) throw new IOException("Invalid saved account.");
         var bytes = Transform(File.ReadAllBytes(path), false);
         try { return JsonSerializer.Deserialize<T>(bytes); }
         finally { CryptographicOperations.ZeroMemory(bytes); }
@@ -47,7 +48,9 @@ static class AccountVault
     public static void Save<T>(string path, T account)
     {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(account);
-        try { File.WriteAllBytes(path + ".next", Transform(bytes, true)); File.Move(path + ".next", path, true); }
+        // Flushed before the rename: a power loss must not replace a working
+        // credential with an empty file.
+        try { AtomicFile.WriteBytes(path, Transform(bytes, true), durable: true); }
         finally { CryptographicOperations.ZeroMemory(bytes); }
     }
 }
