@@ -15,8 +15,9 @@ override its standard paths. Never put runtime data in source control.
 - Workspace.lua: private loopback UI and visibility notifications.
 - Telemetry.lua: post-observed metrics and completed-run journal.
 - ReplayCapture.lua: bounded camera, target-state and input-event recording.
+- DiscordPresence.lua: hands KovaaK's own Discord presence to the worker and back.
 - Native worker: local/Hub history, encrypted account linking, coaching, replay
-  loading, snapshots and embedded UI resources.
+  loading, snapshots, Discord presence and embedded UI resources.
 
 The local server binds only a dynamic IPv4 loopback port. Routes require a
 random per-process capability path and expose no general file access. Account
@@ -44,6 +45,38 @@ hooks, which fail on 3.9.11.
 No callback replaces scores, submits scores, or injects gameplay input.
 Hub previews fill gaps without overwriting richer local records. Hub currently
 caps scenario history without pagination; coverage can be incomplete.
+
+## Discord presence
+
+KovaaK's 3.9.11 publishes its own presence from a background thread in the
+game (its own client for the local `discord-ipc-N` pipe, no Discord DLL). The
+thread runs while the game's "Discord Rich Presence" setting is on: turning it
+off clears the activity and closes the connection, turning it on reconnects.
+The setting is exposed as the static reflected functions
+`MetaGameUserSettings:GetDiscordRichPresence` / `SetDiscordRichPresence`.
+
+AimMod replaces that presence without hooking the game:
+
+1. The worker, while its Discord presence is on, refreshes
+   `discord-takeover.tsv` every 2 s.
+2. DiscordPresence.lua sees a fresh request, records `discord-restore.tsv`,
+   turns KovaaK's switch off and acknowledges `released` in
+   `discord-game.tsv` (refreshed every second).
+3. Only while it reads `released` does the worker connect with the AimMod
+   application and publish. It sends at most five updates per 20 s and
+   reconnects with back-off.
+4. When the worker turns its presence off or stops, it closes its connection
+   first and then withdraws the request. When the request is withdrawn or more
+   than 6 s old, the mod turns KovaaK's switch back on and deletes the restore
+   file. A leftover restore file (crash) is applied on the next launch.
+
+If KovaaK's own presence is already off, the mod reports `off` and nothing is
+published. While AimMod holds the switch, turning it on in KovaaK's menu is
+turned off again within a second; use AimMod's Settings > Discord to go back to
+KovaaK's presence. Builds without the switch report `unavailable` and keep
+their own presence. The switch is the game's own persisted user setting, so a
+game crash while held leaves it off until the mod next starts; uninstalling
+AimMod at that point needs the option turned back on in KovaaK's settings.
 
 ## Replays and limits
 
