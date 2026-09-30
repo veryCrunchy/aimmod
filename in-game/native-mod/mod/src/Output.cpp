@@ -1,5 +1,7 @@
 #include "Output.hpp"
 
+#include "Log.hpp"
+
 #include <aimmod/Formats.hpp>
 #include <aimmod/Settings.hpp>
 
@@ -7,6 +9,7 @@
 #include <ShlObj.h>
 
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 
 namespace aimmod
@@ -107,12 +110,6 @@ namespace aimmod
         }
         m_wake.notify_all();
         m_thread.join();
-        for (auto& [id, handle] : m_replays)
-        {
-            CloseHandle(handle);
-            DeleteFileW((m_root / L"replays" / std::filesystem::path(id + ".partial")).c_str());
-        }
-        m_replays.clear();
         // Retract the handshake so the Lua mod resumes immediately.
         DeleteFileW((m_root / L"core-active.tsv").c_str());
         if (m_view) UnmapViewOfFile(m_view);
@@ -124,7 +121,7 @@ namespace aimmod
     {
         {
             std::lock_guard lock(m_mutex);
-            m_jobs.push_back({Job::Kind::Journal, {}, std::move(line)});
+            m_jobs.push_back({Job::Kind::Journal, std::move(line)});
         }
         m_wake.notify_one();
     }
@@ -156,30 +153,14 @@ namespace aimmod
         m_capsDirty = true;
     }
 
-    void Output::ReplayOpen(const std::string& id)
+    void Output::ReplayWrite(std::unique_ptr<replay2::Capture> capture)
     {
+        if (!capture) return;
         {
             std::lock_guard lock(m_mutex);
-            m_jobs.push_back({Job::Kind::ReplayOpen, id, {}});
-        }
-        m_wake.notify_one();
-    }
-
-    void Output::ReplayAppend(const std::string& id, std::string chunk)
-    {
-        if (chunk.empty()) return;
-        {
-            std::lock_guard lock(m_mutex);
-            m_jobs.push_back({Job::Kind::ReplayAppend, id, std::move(chunk)});
-        }
-        m_wake.notify_one();
-    }
-
-    void Output::ReplayClose(const std::string& id, bool publish)
-    {
-        {
-            std::lock_guard lock(m_mutex);
-            m_jobs.push_back({Job::Kind::ReplayClose, id, {}, publish});
+            Job job{Job::Kind::Replay};
+            job.capture = std::move(capture);
+            m_jobs.push_back(std::move(job));
         }
         m_wake.notify_one();
     }
@@ -225,35 +206,36 @@ namespace aimmod
             CloseHandle(file);
             return ok;
         }
-        case Job::Kind::ReplayOpen:
+        case Job::Kind::Replay:
         {
-            if (!IsValidAttemptId(job.id) || m_replays.contains(job.id)) return true;
-            HANDLE file = CreateFileW((replays / std::filesystem::path(job.id + ".partial")).c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
-                                      CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-            if (file != INVALID_HANDLE_VALUE) m_replays.emplace(job.id, file);
-            return true; // a failed open drops this recording only
-        }
-        case Job::Kind::ReplayAppend:
-        {
-            auto it = m_replays.find(job.id);
-            if (it == m_replays.end()) return true;
-            if (!WriteAll(it->second, job.data))
+            const replay2::Capture& c = *job.capture;
+            replay2::EncodeReport report;
+            const std::vector<std::uint8_t> bytes = replay2::Encode(c, {}, &report);
+            if (bytes.empty())
             {
-                CloseHandle(it->second);
-                DeleteFileW((replays / std::filesystem::path(job.id + ".partial")).c_str());
-                m_replays.erase(it);
+                Warn("replay not saved: capture unusable (id=" + c.header.id + ")");
+                return true;
             }
-            return true;
-        }
-        case Job::Kind::ReplayClose:
-        {
-            auto it = m_replays.find(job.id);
-            if (it == m_replays.end()) return true;
-            CloseHandle(it->second);
-            m_replays.erase(it);
-            const auto partial = replays / std::filesystem::path(job.id + ".partial");
-            const auto final = replays / std::filesystem::path(job.id + ".amreplay");
-            if (!job.publish || !MoveFileExW(partial.c_str(), final.c_str(), 0)) DeleteFileW(partial.c_str());
+            const auto partial = replays / std::filesystem::path(c.header.id + ".partial");
+            const auto final = replays / std::filesystem::path(c.header.id + ".amreplay");
+            HANDLE file = CreateFileW(partial.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (file == INVALID_HANDLE_VALUE) return false; // retried
+            const bool ok = WriteAll(file, std::string(bytes.begin(), bytes.end()));
+            CloseHandle(file);
+            if (!ok || !MoveFileExW(partial.c_str(), final.c_str(), 0))
+            {
+                DeleteFileW(partial.c_str());
+                Warn("replay not saved: write failed (id=" + c.header.id + ")");
+                return true;
+            }
+            char line[512];
+            std::snprintf(line, sizeof(line),
+                          "replay saved id=%s bytes=%zu (%.1f KB/min, body %zu) frames=%u inputs=%u samples=%u keyframes=%u targets %u->%u points "
+                          "yaw/unit=%.9g pitch/unit=%.9g quantum=%.9g drift max=%.4f rms=%.5f deg",
+                          c.header.id.c_str(), report.fileBytes, report.duration > 0 ? report.fileBytes / 1024.0 / (report.duration / 60.0) : 0.0,
+                          report.bodyBytes, report.engineFrames, report.inputEvents, report.cameraSamples, report.keyframes, report.actorSamples,
+                          report.actorPoints, report.yawPerUnit, report.pitchPerUnit, report.quantum, report.keyframeErrorMax, report.keyframeErrorRms);
+            Log(line);
             return true;
         }
         }

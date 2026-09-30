@@ -2,10 +2,12 @@
 // Usage: aimmod_core_tests [--write-samples <dir>]
 #include <aimmod/Formats.hpp>
 #include <aimmod/Lifecycle.hpp>
+#include <aimmod/ReplayV2.hpp>
 #include <aimmod/ReplayWriter.hpp>
 #include <aimmod/Settings.hpp>
 #include <aimmod/Supervisor.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -136,6 +138,78 @@ static void Replay()
     limited.AddFrame(Frame(0.1));
     limited.AddFrame(Frame(0.2));
     CHECK(limited.AddFrame(Frame(0.3)) == ReplayRecording::Result::Full, "frame limit");
+}
+
+// Synthetic attempt: 400 fps engine frames, mouse counts x 0.07, a view that
+// follows the counts through 0.114586 deg/unit, one target with a gap.
+static replay2::Capture SyntheticCapture(std::uint32_t compressionSeed = 0)
+{
+    replay2::Capture c;
+    c.header = {"1790000000-42-2", "Synthetic target test", 1767225600, "Map_A", 1.0, "native"};
+    c.reason = "completed";
+    c.score = 321.5;
+    c.profiles[1] = "Bot";
+    double yaw = 10, pitch = 0;
+    for (std::uint32_t f = 0; f < 1200; ++f)
+    {
+        c.frameTimes.push_back(0.001 + f / 400.0);
+        const int dx = static_cast<int>((f * 7 + compressionSeed) % 11) - 5, dy = static_cast<int>(f % 5) - 2;
+        if (dx) c.inputs.push_back({f, replay2::AxisTurn, static_cast<float>(dx * 0.07)});
+        if (dy) c.inputs.push_back({f, replay2::AxisLookUp, static_cast<float>(dy * 0.07)});
+        yaw += static_cast<double>(static_cast<float>(dx * 0.07)) * 0.114586;
+        pitch += static_cast<double>(static_cast<float>(dy * 0.07)) * -0.114586;
+        if (f == 600) c.inputs.push_back({f, 4, 1.0f}); // FirePressed
+        if (f % 7 == 0)
+        {
+            c.camera.push_back({f, 0, 0, 0, pitch, yaw, 0, 103});
+            if (f < 500 || f > 700)
+                c.actors.push_back({f, 1, 1000.0 + f, -50, 30, 32, 90, 0.5, true, 0, 90, 0});
+            c.stats.push_back({f, f * 0.5, std::floor(f / 10.0), std::floor(f / 20.0), 0.0, 0.0, f / 400.0});
+        }
+    }
+    return c;
+}
+
+static void ReplayFormat2()
+{
+    using namespace replay2;
+    Capture c = SyntheticCapture();
+    EncodeReport report;
+    EncodeOptions options;
+    auto bytes = Encode(c, options, &report);
+    CHECK(!bytes.empty() && report.fileBytes == bytes.size(), "format 2 encodes");
+    CHECK(std::fabs(report.quantum - 0.07) < 1e-6, "mouse count quantum detected");
+    CHECK(std::fabs(report.yawPerUnit - 0.114586) < 1e-4 && std::fabs(report.pitchPerUnit + 0.114586) < 1e-4, "rotation per unit fitted");
+    CHECK(report.keyframeErrorMax < options.rotationTolerance + 1e-9, "drift stays within tolerance");
+    auto d = Decode(bytes.data(), bytes.size());
+    CHECK(d.has_value(), "format 2 decodes");
+    if (!d) return;
+    double worst = 0;
+    for (const CameraSample& s : c.camera)
+    {
+        double r[3];
+        d->Rotation(s.frame, r);
+        worst = std::max({worst, std::fabs(r[0] - s.pitch), std::fabs(std::fmod(r[1] - s.yaw + 540.0, 360.0) - 180.0)});
+    }
+    CHECK(worst <= options.rotationTolerance + 1e-3, "decoded rotation matches every sample");
+    CHECK(d->frameTimes.size() == c.frameTimes.size() && std::fabs(d->frameTimes[123] - c.frameTimes[123]) < 5e-5, "frame clock preserved");
+    CHECK(d->inputs.size() == c.inputs.size(), "every input kept");
+    CHECK(d->actors.size() == 1 && d->actors[0].profile == "Bot", "target and profile kept");
+    int starts = 0;
+    for (const auto& p : d->actors[0].points) starts += p.segmentStart;
+    CHECK(starts == 2 && d->actors[0].points.size() < 10, "linear target compresses to its segments (gap kept)");
+    CHECK(d->headerJson.find("\"version\":2") != std::string::npos && d->headerJson.find("\"reason\":\"completed\"") != std::string::npos &&
+              d->headerJson.find("\"score\":321.5") != std::string::npos,
+          "header carries the summary");
+    std::vector<std::uint8_t> damaged = bytes;
+    damaged.resize(damaged.size() - 3);
+    CHECK(!Decode(damaged.data(), damaged.size()), "truncated file rejected");
+    // Without inputs the encoder falls back to dense keyframes (still exact).
+    Capture noInputs = c;
+    noInputs.inputs.clear();
+    auto dense = Encode(noInputs, options, &report);
+    auto dd = Decode(dense.data(), dense.size());
+    CHECK(dd && dd->keyframes.size() > c.camera.size() / 2, "missing input stream degrades to keyframes");
 }
 
 static void Settings()
@@ -394,6 +468,8 @@ static void WriteSamples(const std::filesystem::path& dir)
     }
     std::ofstream out(dir / "replays" / (run.id + ".amreplay"), std::ios::binary);
     out << r.TakePending() << r.Finish("completed", 321.5);
+    auto compact = replay2::Encode(SyntheticCapture(), {});
+    std::ofstream(dir / "replays" / "1790000000-42-2.amreplay", std::ios::binary).write(reinterpret_cast<const char*>(compact.data()), static_cast<std::streamsize>(compact.size()));
 }
 
 int main(int argc, char** argv)
@@ -405,6 +481,7 @@ int main(int argc, char** argv)
     }
     Formats();
     Replay();
+    ReplayFormat2();
     Settings();
     Backoff();
     LifecycleChecks();

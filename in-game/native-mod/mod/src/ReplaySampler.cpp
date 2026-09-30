@@ -15,7 +15,12 @@ namespace aimmod
     namespace
     {
         constexpr std::size_t MaxActors = 128;
-        constexpr double FlushSeconds = 1.0;
+        // Memory bounds (about 10 minutes at 400 fps with two look axes).
+        constexpr std::size_t MaxEngineFrames = 400 * 60 * 15;
+        constexpr std::size_t MaxInputs = 4'000'000;
+        constexpr std::size_t MaxSamples = 36000;
+        constexpr std::size_t MaxActorSamples = 2'000'000;
+        constexpr std::size_t MaxPendingInputs = 256;
     } // namespace
 
     double ReplaySampler::GameTime(UObject* player) const
@@ -26,7 +31,7 @@ namespace aimmod
 
     void ReplaySampler::PublishStatus(const char* state, const std::string& reason)
     {
-        m_output.PublishReplayStatus(FormatReplayStatus(state, m_recording.frames(), m_recording.inputs(), reason));
+        m_output.PublishReplayStatus(FormatReplayStatus(state, m_samples, m_inputs, reason));
     }
 
     std::uint32_t ReplaySampler::ActorId(UObject* actor)
@@ -62,7 +67,8 @@ namespace aimmod
             m_stopReason = "capture-clock-unavailable";
             return false;
         }
-        ReplayHeader header;
+        auto capture = std::make_unique<replay2::Capture>();
+        ReplayHeader& header = capture->header;
         header.id = id;
         header.scenario = scenario;
         header.recordedAt = std::time(nullptr);
@@ -78,42 +84,34 @@ namespace aimmod
                 header.mapScale = scale;
             }
         }
+        capture->frameTimes.reserve(60 * 400);
+        capture->inputs.reserve(60 * 1000);
+        m_capture = std::move(capture);
         m_player = player;
         m_character = character;
-        const ClassInfo& c = Describe(character);
-        m_recorder = c.playbackComponent.Object(character);
+        m_recorder = Describe(character).playbackComponent.Object(character);
         m_start = start;
-        m_frameTime = start;
-        m_nextFlush = 0;
+        m_lastTime = -1;
+        m_samples = m_inputs = 0;
+        m_nextStatus = 0;
         m_ids.clear();
-        m_profiles.clear();
         m_nextId = 0;
-        m_observedHits.reset();
-        m_hitTime.reset();
-        m_hitDelta.reset();
-        m_hitTarget.reset();
-        m_hitTargetTime = -1;
-        m_recording.Begin(header);
-        m_output.ReplayOpen(id);
-        m_output.ReplayAppend(id, m_recording.TakePending());
+        m_pendingInputs.clear();
+        m_pendingHits.clear();
+        m_moveAxes[0] = m_moveAxes[1] = 0;
         PublishStatus("recording", "");
         return true;
     }
 
-    bool ReplaySampler::Sample(const AttemptStats& stats, double now)
+    bool ReplaySampler::Tick(const AttemptStats& stats, bool sample)
     {
-        if (!m_recording.started()) return false;
+        if (!m_capture) return false;
         UObject* player = m_player.Get();
-        UObject* character = m_character.Get();
         if (!player)
         {
             Finish("world-changed", std::nullopt);
             return false;
         }
-        // A transiently missing character skips the frame; not a boundary.
-        if (!character) return true;
-        UObject* camera = m_b.cameraManager.Object(player);
-        if (!camera) return true;
         const double gameTime = GameTime(player);
         if (gameTime < 0) return true;
         const double t = gameTime - m_start;
@@ -122,27 +120,60 @@ namespace aimmod
             Finish("clock-reset", std::nullopt);
             return false;
         }
+        replay2::Capture& c = *m_capture;
+        if (t <= m_lastTime)
+        {
+            // Game time is frozen (pause): inputs of this frame changed nothing.
+            m_pendingInputs.clear();
+            m_pendingHits.clear();
+            return true;
+        }
+        if (c.frameTimes.size() >= MaxEngineFrames || c.inputs.size() + m_pendingInputs.size() > MaxInputs || m_samples >= MaxSamples ||
+            c.actors.size() >= MaxActorSamples)
+        {
+            Finish("size-limit", std::nullopt);
+            return false;
+        }
+        const auto frame = static_cast<std::uint32_t>(c.frameTimes.size());
+        c.frameTimes.push_back(t);
+        m_lastTime = t;
+        for (replay2::InputEvent& e : m_pendingInputs)
+        {
+            e.frame = frame;
+            c.inputs.push_back(e);
+        }
+        m_inputs += static_cast<std::uint32_t>(m_pendingInputs.size());
+        m_pendingInputs.clear();
+        for (std::uint32_t target : m_pendingHits) c.hits.push_back({frame, target});
+        m_pendingHits.clear();
+        if (sample && SampleState(frame, stats)) ++m_samples;
+        if (t >= m_nextStatus)
+        {
+            m_nextStatus = t + 1.0;
+            PublishStatus("recording", "");
+        }
+        return true;
+    }
 
-        ReplayFrame& f = m_frame;
-        f.t = t;
-        f.actors.clear();
-        f.stats = {};
+    bool ReplaySampler::SampleState(std::uint32_t frame, const AttemptStats& stats)
+    {
+        replay2::Capture& c = *m_capture;
+        UObject* player = m_player.Get();
+        UObject* character = m_character.Get();
+        UObject* camera = player ? m_b.cameraManager.Object(player) : nullptr;
+        if (!character || !camera) return false;
         double location[3], rotation[3];
         auto fov = m_b.cameraFov.Number(camera);
-        if (!m_b.cameraLocation.Vector(camera, location) || !m_b.cameraRotation.Vector(camera, rotation) || !fov) return true;
-        f.camera[0] = location[0];
-        f.camera[1] = location[1];
-        f.camera[2] = location[2];
-        f.camera[3] = rotation[0];
-        f.camera[4] = rotation[1];
-        f.camera[5] = rotation[2];
-        f.camera[6] = *fov;
+        if (!m_b.cameraLocation.Vector(camera, location) || !m_b.cameraRotation.Vector(camera, rotation) || !fov || *fov <= 1 || *fov >= 179)
+            return false;
+        c.camera.push_back({frame, location[0], location[1], location[2], rotation[0], rotation[1], rotation[2], *fov});
 
         if (UObject* gameState = m_scene.GameState(); gameState && m_b.characters.Objects(gameState, m_actors, MaxActors + 1))
         {
+            std::size_t count = 0;
             for (UObject* actor : m_actors)
             {
-                if (actor == character || f.actors.size() >= MaxActors) continue;
+                if (actor == character || count >= MaxActors) continue;
                 if (auto hiddenFlag = m_b.hidden.Bool(actor); hiddenFlag && *hiddenFlag) continue;
                 UObject* capsule = m_b.capsule.Object(actor);
                 if (!capsule) continue;
@@ -151,7 +182,8 @@ namespace aimmod
                 double p[3];
                 // The reader rejects a whole replay for one invalid capsule.
                 if (!radius || !half || *radius <= 0 || *half < *radius || !m_b.actorLocation.Vector(actor, p)) continue;
-                ReplayActor a;
+                replay2::ActorSample a;
+                a.frame = frame;
                 a.id = ActorId(actor);
                 a.x = p[0];
                 a.y = p[1];
@@ -159,113 +191,81 @@ namespace aimmod
                 a.radius = *radius;
                 a.halfHeight = *half;
                 const ClassInfo& info = Describe(actor);
-                if (info.healthPercent.ok()) a.healthPercent = info.healthPercent.Number(actor);
-                auto profile = m_profiles.find(a.id);
-                if (profile == m_profiles.end())
+                if (info.healthPercent.ok()) a.health = info.healthPercent.Number(actor);
+                auto profile = c.profiles.find(a.id);
+                if (profile == c.profiles.end())
                 {
                     std::string name;
                     if (!info.profileName.String(actor, name) || name.empty() || name.size() > 256) name.clear();
                     for (char ch : name)
                         if (static_cast<unsigned char>(ch) < 0x20) name.clear();
-                    profile = m_profiles.emplace(a.id, std::move(name)).first;
+                    profile = c.profiles.emplace(a.id, std::move(name)).first;
                 }
                 if (!profile->second.empty())
                 {
                     double r[3];
                     if (m_b.actorRotation.Vector(actor, r))
                     {
-                        a.profile = &profile->second;
+                        a.hasRotation = true;
                         a.pitch = r[0];
                         a.yaw = r[1];
                         a.roll = r[2];
                     }
                 }
-                f.actors.push_back(a);
+                c.actors.push_back(a);
+                ++count;
             }
         }
-
-        // Stats measured by the observer; hit markers from the weapon counter.
-        f.stats.score = stats.score;
-        f.stats.shots = stats.shots;
-        f.stats.hits = stats.hits;
-        f.stats.kills = stats.kills;
-        f.stats.damage = stats.damage;
-        f.stats.seconds = stats.seconds;
-        if (stats.hits)
-        {
-            if (m_observedHits && *stats.hits > *m_observedHits)
-            {
-                m_hitTime = t;
-                m_hitDelta = *stats.hits - *m_observedHits;
-                if (m_hitTargetTime >= 0 && m_hitTargetTime < t - 0.1) m_hitTarget.reset();
-            }
-            if (m_observedHits && *stats.hits < *m_observedHits)
-            {
-                m_hitTime.reset();
-                m_hitDelta.reset();
-            }
-            m_observedHits = stats.hits;
-        }
-        f.stats.hitTime = m_hitTime;
-        f.stats.hitDelta = m_hitDelta;
-        if (m_hitTarget && m_hitTargetTime <= t)
-        {
-            f.stats.hitTarget = m_hitTarget;
-            f.stats.hitTime = m_hitTargetTime;
-            f.stats.hitDelta = 1.0;
-        }
-
-        switch (m_recording.AddFrame(f))
-        {
-        case ReplayRecording::Result::Full: Finish(m_recording.frames() >= ReplayLimits{}.maxFrames ? "frame-limit" : "size-limit", std::nullopt); return false;
-        default: break;
-        }
-        if (now >= m_nextFlush)
-        {
-            m_nextFlush = now + FlushSeconds;
-            m_output.ReplayAppend(m_recording.id(), m_recording.TakePending());
-            PublishStatus("recording", "");
-        }
+        c.stats.push_back({frame, stats.score, stats.shots, stats.hits, stats.kills, stats.damage, stats.seconds});
         return true;
-    }
-
-    void ReplaySampler::BeginFrame()
-    {
-        UObject* player = m_player.Get();
-        m_frameTime = player ? GameTime(player) : -1;
     }
 
     void ReplaySampler::OnInput(UObject* component, const char* action, bool axis, double value)
     {
-        if (!m_recording.started() || m_recording.full()) return;
+        if (!m_capture || m_pendingInputs.size() >= MaxPendingInputs) return;
         if (m_recorder && component != m_recorder) return; // another recorder on the same character
-        if (m_frameTime < 0) return;
-        m_recording.AddInput(m_frameTime - m_start, action, axis ? value : 1.0);
+        const int index = replay2::ActionIndex(action);
+        if (index < 0 || !IsUsableNumber(value)) return;
+        // Look axes are per-frame deltas: zeros carry nothing. Movement axes
+        // are held values: only changes (press/release) are kept.
+        if (index == replay2::AxisTurn || index == replay2::AxisLookUp)
+        {
+            if (value == 0) return;
+        }
+        else if (axis)
+        {
+            float& last = m_moveAxes[index == 2 ? 0 : 1];
+            if (static_cast<float>(value) == last) return;
+            last = static_cast<float>(value);
+        }
+        m_pendingInputs.push_back({0, static_cast<std::uint8_t>(index), static_cast<float>(axis ? value : 1.0)});
     }
 
     void ReplaySampler::OnShotHit(UObject* shooter, UObject* target)
     {
-        if (!m_recording.started() || !shooter || !target || shooter != m_character.Get()) return;
+        if (!m_capture || !shooter || !target || shooter != m_character.Get()) return;
         const std::uint64_t key = reinterpret_cast<std::uint64_t>(target) ^ (static_cast<std::uint64_t>(target->GetInternalIndex()) << 47);
         auto it = m_ids.find(key);
-        if (it == m_ids.end()) return; // only targets already recorded in this world
-        UObject* player = m_player.Get();
-        const double gameTime = player ? GameTime(player) : -1;
-        if (gameTime < 0) return;
-        m_hitTarget = it->second;
-        m_hitTargetTime = gameTime - m_start;
+        if (it != m_ids.end() && m_pendingHits.size() < 16) m_pendingHits.push_back(it->second);
     }
 
     void ReplaySampler::Finish(const std::string& reason, std::optional<double> score)
     {
-        if (!m_recording.started()) return;
-        const std::string id = m_recording.id();
-        m_output.ReplayAppend(id, m_recording.Finish(reason, score));
-        m_output.ReplayClose(id, reason == "completed" && m_recording.frames() > 1);
+        if (!m_capture) return;
+        std::unique_ptr<replay2::Capture> capture = std::move(m_capture);
         m_stopReason = reason;
         m_player.Reset();
         m_character.Reset();
         m_recorder = nullptr;
+        m_pendingInputs.clear();
+        m_pendingHits.clear();
+        // Only completed attempts are published; interrupted captures are dropped.
+        if (reason == "completed" && m_samples > 1)
+        {
+            capture->reason = reason;
+            capture->score = score;
+            m_output.ReplayWrite(std::move(capture));
+        }
         PublishStatus("ready", reason);
     }
 

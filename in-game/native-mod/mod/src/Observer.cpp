@@ -531,9 +531,6 @@ namespace aimmod
         m_lastTick = now;
         ++m_tickIndex;
         if (now >= m_nextRebind) Rebind(now);
-        // One clock read per frame for input timestamps (axis inputs arrive
-        // several times per frame).
-        if (m_sampler.recording()) m_sampler.BeginFrame();
         if (!m_pendingSignals.empty())
         {
             std::vector<Signal> signals;
@@ -545,11 +542,14 @@ namespace aimmod
             m_nextPoll = now + PollInterval;
             Poll(now);
         }
-        if (m_sampler.recording() && m_running && !m_paused && now >= m_nextSample)
+        if (m_sampler.recording())
         {
-            m_nextSample = now + SampleInterval * 0.9; // never slower than 60 Hz at 60+ fps
+            // Every engine frame: its game time and the inputs it consumed.
+            // State samples at 60 Hz while the challenge runs.
+            const bool sample = m_running && !m_paused && now >= m_nextSample;
+            if (sample) m_nextSample = now + SampleInterval * 0.9; // never slower than 60 Hz at 60+ fps
             if (!m_output.recordingEnabled()) m_sampler.Finish("recording-disabled", std::nullopt);
-            else m_sampler.Sample(m_stats, now);
+            else m_sampler.Tick(m_stats, sample);
         }
         m_inTick = false;
     }

@@ -27,6 +27,7 @@ add_library(aimmod_core STATIC
     core/src/Formats.cpp
     core/src/Lifecycle.cpp
     core/src/ReplayWriter.cpp
+    core/src/ReplayV2.cpp
     core/src/Supervisor.cpp
     core/src/Settings.cpp
 )
@@ -37,6 +38,8 @@ if(MSVC)
 endif()
 
 if(AIMMOD_BUILD_TESTS)
+    add_executable(aimmod_replay_tool tests/ReplayTool.cpp)
+    target_link_libraries(aimmod_replay_tool PRIVATE aimmod_core)
     add_executable(aimmod_core_tests tests/CoreTests.cpp)
     target_link_libraries(aimmod_core_tests PRIVATE aimmod_core)
     if(MSVC)

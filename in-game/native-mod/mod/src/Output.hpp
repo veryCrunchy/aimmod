@@ -1,10 +1,13 @@
 #pragma once
 // Writer thread: owns every file the mod writes. The game thread only hands
 // over small immutable jobs (never blocks on disk).
+#include <aimmod/ReplayV2.hpp>
+
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <filesystem>
 #include <mutex>
 #include <string>
@@ -30,9 +33,8 @@ namespace aimmod
         void AppendJournal(std::string line);
         void PublishLive(std::string body);
         void PublishReplayStatus(std::string body);
-        void ReplayOpen(const std::string& id);
-        void ReplayAppend(const std::string& id, std::string chunk);
-        void ReplayClose(const std::string& id, bool publish);
+        // Encodes (format 2) and publishes a completed recording.
+        void ReplayWrite(std::unique_ptr<replay2::Capture> capture);
         void SetCapabilities(std::string capabilities);
 
         bool recordingEnabled() const { return m_recording.load(std::memory_order_relaxed); }
@@ -42,11 +44,10 @@ namespace aimmod
     private:
         struct Job
         {
-            enum class Kind { Journal, ReplayOpen, ReplayAppend, ReplayClose };
+            enum class Kind { Journal, Replay };
             Kind kind{};
-            std::string id;
             std::string data;
-            bool publish{};
+            std::shared_ptr<replay2::Capture> capture;
             int attempts{};
         };
 
@@ -69,7 +70,6 @@ namespace aimmod
         std::atomic<bool> m_playback{false};
 
         // Writer-thread state.
-        std::unordered_map<std::string, void*> m_replays;
         std::string m_lastLive, m_writtenCaps;
         std::uint64_t m_lastLiveWrite{}, m_lastHeartbeat{}, m_lastSettings{}, m_lastPlaybackCheck{};
         void* m_mapping{};
