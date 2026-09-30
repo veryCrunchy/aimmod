@@ -14,6 +14,12 @@ public static class AimModTempDirectories
 
     public static readonly TimeSpan DefaultStaleAge = TimeSpan.FromMinutes(30);
 
+    /// <summary>
+    /// Asset staging leases can back an open replay for a long session, and a restarted worker
+    /// in the same session sweeps too, so their directories are only swept when much older.
+    /// </summary>
+    public static readonly TimeSpan AssetsStaleAge = TimeSpan.FromHours(12);
+
     private static readonly string[] sweptPrefixes = [SnapshotPrefix, CatalogPrefix, SkinsPrefix, AssetsPrefix];
     private static int sweepStarted;
 
@@ -61,8 +67,9 @@ public static class AimModTempDirectories
 
     /// <summary>
     /// Removes managed directories under <paramref name="root"/> that have not been modified
-    /// for <paramref name="maximumAge"/>. Directories still held open by another process are
-    /// left for a later sweep.
+    /// for <paramref name="maximumAge"/> (by default <see cref="DefaultStaleAge"/>, or
+    /// <see cref="AssetsStaleAge"/> for asset staging). Directories still held open by another
+    /// process are left for a later sweep.
     /// </summary>
     public static int SweepStale(TimeSpan? maximumAge = null, string? root = null, DateTime? utcNow = null)
     {
@@ -70,9 +77,10 @@ public static class AimModTempDirectories
         try
         {
             string searchRoot = root ?? Path.GetTempPath();
-            DateTime threshold = (utcNow ?? DateTime.UtcNow) - (maximumAge ?? DefaultStaleAge);
+            DateTime now = utcNow ?? DateTime.UtcNow;
             foreach (string prefix in sweptPrefixes)
             {
+                DateTime threshold = now - (maximumAge ?? (prefix == AssetsPrefix ? AssetsStaleAge : DefaultStaleAge));
                 foreach (string directory in Directory.EnumerateDirectories(searchRoot, prefix + "*", SearchOption.TopDirectoryOnly))
                 {
                     try

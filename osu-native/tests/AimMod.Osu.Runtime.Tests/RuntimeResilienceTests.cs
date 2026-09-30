@@ -30,11 +30,13 @@ public sealed class RuntimeResilienceTests
         File.WriteAllText(staleFile, "x");
         File.SetAttributes(staleFile, FileAttributes.ReadOnly);
         string staleAssets = Directory.CreateDirectory(Path.Combine(temporaryDirectory, AimModTempDirectories.AssetsPrefix + "stale")).FullName;
+        string leasedAssets = Directory.CreateDirectory(Path.Combine(temporaryDirectory, AimModTempDirectories.AssetsPrefix + "leased")).FullName;
         string fresh = Directory.CreateDirectory(Path.Combine(temporaryDirectory, AimModTempDirectories.CatalogPrefix + "fresh")).FullName;
         string unrelated = Directory.CreateDirectory(Path.Combine(temporaryDirectory, "someone-elses-folder")).FullName;
         DateTime old = DateTime.UtcNow.AddHours(-2);
         Directory.SetLastWriteTimeUtc(stale, old);
-        Directory.SetLastWriteTimeUtc(staleAssets, old);
+        Directory.SetLastWriteTimeUtc(staleAssets, DateTime.UtcNow - AimModTempDirectories.AssetsStaleAge - TimeSpan.FromHours(1));
+        Directory.SetLastWriteTimeUtc(leasedAssets, old);
         Directory.SetLastWriteTimeUtc(unrelated, old);
 
         int removed = AimModTempDirectories.SweepStale(root: temporaryDirectory);
@@ -44,6 +46,7 @@ public sealed class RuntimeResilienceTests
             Assert.That(removed, Is.EqualTo(2));
             Assert.That(Directory.Exists(stale), Is.False);
             Assert.That(Directory.Exists(staleAssets), Is.False);
+            Assert.That(Directory.Exists(leasedAssets), Is.True, "a long-lived asset lease must survive a worker restart");
             Assert.That(Directory.Exists(fresh), Is.True);
             Assert.That(Directory.Exists(unrelated), Is.True);
         });
@@ -153,6 +156,20 @@ public sealed class RuntimeResilienceTests
 
         using var declaredTooLarge = new ByteArrayContent(payload);
         Assert.That(await PooledBody.ReadAsync(declaredTooLarge, 10, CancellationToken.None), Is.Null);
+    }
+
+    [Test]
+    public void PooledBodyFailsAStalledBodyAsANetworkErrorButHonoursCallerCancellation()
+    {
+        using var stalled = new StreamContent(new StallingStream());
+        HttpRequestException stall = Assert.ThrowsAsync<HttpRequestException>(async () =>
+            await PooledBody.ReadAsync(stalled, 1024, CancellationToken.None, TimeSpan.FromMilliseconds(100)))!;
+        Assert.That(stall.Message, Does.Contain("in time"));
+
+        using var cancelledBody = new StreamContent(new StallingStream());
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+        Assert.CatchAsync<OperationCanceledException>(async () =>
+            await PooledBody.ReadAsync(cancelledBody, 1024, cancellation.Token, TimeSpan.FromSeconds(30)));
     }
 
     [Test]
@@ -283,6 +300,30 @@ public sealed class RuntimeResilienceTests
         public override DateTimeOffset GetUtcNow() => utcNow;
 
         public void Advance(TimeSpan duration) => utcNow += duration;
+    }
+
+    private sealed class StallingStream : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return 0;
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     private sealed class ChunkedStream(byte[] content, int chunk) : Stream

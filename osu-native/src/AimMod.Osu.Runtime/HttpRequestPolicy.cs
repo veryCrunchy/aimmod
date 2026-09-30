@@ -81,10 +81,32 @@ internal readonly struct PooledBody(byte[] buffer, int length) : IDisposable
         ArrayPool<byte>.Shared.Return(buffer);
     }
 
+    public static readonly TimeSpan DefaultBodyTimeout = TimeSpan.FromSeconds(30);
+
     /// <summary>
     /// Reads at most <paramref name="maximumBytes"/> bytes. Returns null when the body is larger.
+    /// HttpClient.Timeout does not cover a body read after ResponseHeadersRead, so a body that
+    /// does not finish within <paramref name="timeout"/> fails with <see cref="HttpRequestException"/>.
     /// </summary>
-    public static async ValueTask<PooledBody?> ReadAsync(HttpContent content, int maximumBytes, CancellationToken cancellationToken)
+    public static async ValueTask<PooledBody?> ReadAsync(
+        HttpContent content,
+        int maximumBytes,
+        CancellationToken cancellationToken,
+        TimeSpan? timeout = null)
+    {
+        using var bodyTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        bodyTimeout.CancelAfter(timeout ?? DefaultBodyTimeout);
+        try
+        {
+            return await readAsync(content, maximumBytes, bodyTimeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested && bodyTimeout.IsCancellationRequested)
+        {
+            throw new HttpRequestException("The response body did not arrive in time.", exception);
+        }
+    }
+
+    private static async ValueTask<PooledBody?> readAsync(HttpContent content, int maximumBytes, CancellationToken cancellationToken)
     {
         long? declared = content.Headers.ContentLength;
         if (declared > maximumBytes)
