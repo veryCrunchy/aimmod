@@ -82,27 +82,42 @@ public sealed class ExternalLazerReplayOpenService : ILocalReplayOpenService
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            await cleanAfterFailure(bundle, assetLease).ConfigureAwait(false);
+            await cleanQuietly(bundle, assetLease).ConfigureAwait(false);
             throw;
         }
         catch (ExternalLazerReplayOpenException)
         {
-            await cleanAfterFailure(bundle, assetLease).ConfigureAwait(false);
+            await cleanQuietly(bundle, assetLease).ConfigureAwait(false);
             throw;
         }
         catch (ExternalLazerAssetClientException error)
         {
-            await cleanBundle(bundle).ConfigureAwait(false);
+            await cleanQuietly(bundle, assetLease).ConfigureAwait(false);
             throw new ExternalLazerReplayOpenException(error.Code, error.Message, error);
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or NotSupportedException)
         {
-            await cleanAfterFailure(bundle, assetLease).ConfigureAwait(false);
+            await cleanQuietly(bundle, assetLease).ConfigureAwait(false);
             throw new ExternalLazerReplayOpenException(
                 "replay_staging_failed",
                 "AimMod could not prepare the selected lazer replay for playback.",
                 error);
         }
+        catch
+        {
+            await cleanQuietly(bundle, assetLease).ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private static async Task cleanQuietly(
+        ExternalLazerPlayableReplayBundle? bundle,
+        ExternalLazerAssetStagingLease assetLease)
+    {
+        try { await cleanBundle(bundle).ConfigureAwait(false); }
+        catch (Exception) { }
+        try { await assetLease.DisposeAsync().ConfigureAwait(false); }
+        catch (Exception) { }
     }
 
     public Task<ExternalLazerPlayableReplayBundle> OpenAsync(
@@ -159,7 +174,7 @@ public sealed class ExternalLazerReplayOpenService : ILocalReplayOpenService
         }
         catch
         {
-            await bundle.DisposeAsync().ConfigureAwait(false);
+            await cleanBundleQuietly(bundle).ConfigureAwait(false);
             throw;
         }
     }
@@ -305,11 +320,11 @@ public sealed class ExternalLazerReplayOpenService : ILocalReplayOpenService
         CancellationToken cancellationToken)
     {
         string directory = Directory.CreateTempSubdirectory(bundle_prefix).FullName;
-        setPrivateDirectoryPermissions(directory);
         var bundle = new ExternalLazerPlayableReplayBundle(directory);
 
         try
         {
+            setPrivateDirectoryPermissions(directory);
             await copyAsset(selected.Beatmap, bundle.BeatmapPath, cancellationToken).ConfigureAwait(false);
             await copyAsset(selected.Replay, bundle.ReplayPath, cancellationToken).ConfigureAwait(false);
             bundle.AudioPath = await copyLogicalAsset(selected.Audio, directory, cancellationToken).ConfigureAwait(false);
@@ -323,7 +338,7 @@ public sealed class ExternalLazerReplayOpenService : ILocalReplayOpenService
         }
         catch
         {
-            await bundle.DisposeAsync().ConfigureAwait(false);
+            await cleanBundleQuietly(bundle).ConfigureAwait(false);
             throw;
         }
     }
@@ -428,19 +443,10 @@ public sealed class ExternalLazerReplayOpenService : ILocalReplayOpenService
             File.SetUnixFileMode(destination, UnixFileMode.UserRead | UnixFileMode.UserWrite);
     }
 
-    private static async Task cleanAfterFailure(
-        ExternalLazerPlayableReplayBundle? bundle,
-        ExternalLazerAssetStagingLease assetLease)
+    private static async Task cleanBundleQuietly(ExternalLazerPlayableReplayBundle? bundle)
     {
-        await cleanBundle(bundle).ConfigureAwait(false);
-        try
-        {
-            await assetLease.DisposeAsync().ConfigureAwait(false);
-        }
-        catch (ExternalLazerAssetClientException error)
-        {
-            throw new ExternalLazerReplayOpenException(error.Code, error.Message, error);
-        }
+        try { await cleanBundle(bundle).ConfigureAwait(false); }
+        catch (Exception error) when (error is ExternalLazerReplayOpenException or IOException or UnauthorizedAccessException) { }
     }
 
     private static async Task cleanBundle(ExternalLazerPlayableReplayBundle? bundle)

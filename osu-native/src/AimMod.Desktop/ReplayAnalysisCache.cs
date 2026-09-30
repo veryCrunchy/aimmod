@@ -19,18 +19,80 @@ public sealed class ReplayAnalysisCache
     private readonly string path;
     private readonly long maximumFileBytes;
     private readonly SemaphoreSlim writeGate = new(1, 1);
+    private readonly TimeSpan saveDelay;
+    private readonly object scheduleGate = new();
+    private IReadOnlyDictionary<Guid, ReplayAnalysisResult>? pendingSave;
+    private long scheduleVersion;
+    private Task flushTask = Task.CompletedTask;
 
-    public ReplayAnalysisCache(string path) : this(path, MaximumFileBytes)
+    public ReplayAnalysisCache(string path, TimeSpan? saveDelay = null) : this(path, MaximumFileBytes, saveDelay)
     {
     }
 
-    internal ReplayAnalysisCache(string path, long maximumFileBytes)
+    internal ReplayAnalysisCache(string path, long maximumFileBytes, TimeSpan? saveDelay = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         if (maximumFileBytes < 128 || maximumFileBytes > MaximumFileBytes)
             throw new ArgumentOutOfRangeException(nameof(maximumFileBytes));
         this.path = Path.GetFullPath(path);
         this.maximumFileBytes = maximumFileBytes;
+        this.saveDelay = saveDelay is { } delay && delay >= TimeSpan.Zero ? delay : TimeSpan.FromSeconds(2);
+    }
+
+    /// <summary>Reads the cache on a worker thread. Safe while a save is in flight.</summary>
+    public Task<IReadOnlyDictionary<Guid, ReplayAnalysisResult>> LoadAsync(CancellationToken cancellationToken = default) =>
+        Task.Run(Load, cancellationToken);
+
+    /// <summary>Coalesces rapid saves; only the latest snapshot is written after a quiet period.</summary>
+    public void ScheduleSave(IReadOnlyDictionary<Guid, ReplayAnalysisResult> analyses)
+    {
+        ArgumentNullException.ThrowIfNull(analyses);
+        long version;
+        lock (scheduleGate)
+        {
+            pendingSave = analyses;
+            version = ++scheduleVersion;
+        }
+        _ = saveWhenQuietAsync(version);
+    }
+
+    /// <summary>Writes any scheduled snapshot now and waits for saves already in flight.</summary>
+    public Task FlushAsync() => startFlush();
+
+    private async Task saveWhenQuietAsync(long version)
+    {
+        await Task.Delay(saveDelay).ConfigureAwait(false);
+        lock (scheduleGate)
+        {
+            if (version != scheduleVersion)
+                return;
+        }
+        await startFlush().ConfigureAwait(false);
+    }
+
+    private Task startFlush()
+    {
+        lock (scheduleGate)
+        {
+            IReadOnlyDictionary<Guid, ReplayAnalysisResult>? snapshot = pendingSave;
+            pendingSave = null;
+            if (snapshot is not null)
+                flushTask = saveAfterAsync(flushTask, snapshot);
+            return flushTask;
+        }
+    }
+
+    private async Task saveAfterAsync(Task previous, IReadOnlyDictionary<Guid, ReplayAnalysisResult> snapshot)
+    {
+        await previous.ConfigureAwait(false);
+        try
+        {
+            await SaveAsync(snapshot).ConfigureAwait(false);
+        }
+        catch (Exception error)
+        {
+            System.Diagnostics.Trace.TraceWarning($"Could not save the replay analysis cache: {error.GetType().Name}: {error.Message}");
+        }
     }
 
     public IReadOnlyDictionary<Guid, ReplayAnalysisResult> Load()
@@ -45,17 +107,18 @@ public sealed class ReplayAnalysisCache
             {
                 Mode = FileMode.Open,
                 Access = FileAccess.Read,
-                Share = FileShare.Read,
+                Share = FileShare.ReadWrite | FileShare.Delete,
                 Options = FileOptions.SequentialScan,
             });
             CacheDocument? document = JsonSerializer.Deserialize<CacheDocument>(stream, jsonOptions);
             if (document is null || document.Version != CurrentVersion || document.Entries is null)
                 return new Dictionary<Guid, ReplayAnalysisResult>();
 
-            return document.Entries
-                           .Where(entry => entry.ScoreId != Guid.Empty && isValid(entry.Result))
-                           .TakeLast(MaximumEntries)
-                           .ToDictionary(entry => entry.ScoreId, entry => entry.Result!);
+            var entries = new Dictionary<Guid, ReplayAnalysisResult>();
+            foreach (CacheEntry? entry in document.Entries.TakeLast(MaximumEntries))
+                if (entry is not null && entry.ScoreId != Guid.Empty && isValid(entry.Result))
+                    entries[entry.ScoreId] = entry.Result!;
+            return entries;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or NotSupportedException)
         {
