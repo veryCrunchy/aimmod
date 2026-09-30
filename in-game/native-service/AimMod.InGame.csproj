@@ -31,4 +31,5 @@
     <EmbeddedResource Include="../replay/native-browser.js" LogicalName="AimMod.NativeReplayBrowser" />
   </ItemGroup>
   <ItemGroup><EmbeddedResource Include="../ui/history-import.js" LogicalName="AimMod.HistoryImport" /></ItemGroup>
+  <ItemGroup><EmbeddedResource Include="../ui/discord-settings.js" LogicalName="AimMod.DiscordSettingsScript" /></ItemGroup>
 </Project>

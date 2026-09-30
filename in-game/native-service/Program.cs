@@ -4,7 +4,7 @@ using System.Text.Json;
 using AimMod.InGame;
 
 CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
-if (args.Contains("--self-test")) { Checks.Run(); HistoryCompletenessChecks.Run(); CsvHistoryChecks.Run(); await HubChecks.Run(); HubPaginationChecks.Run(); await HubLeaderboardChecks.Run(); Coaching.SelfTest(); CoachingFeedbackChecks.Run(); StatsChecks.Run(); WarmupChecks.Run(); RunInspectionChecks.Run(); NativeSettingsChecks.Run(); LiveOverlayChecks.Run(); LiveOverlayFeedChecks.Run(); OverlaySettingsChecks.Run(); await ObsOverlayChecks.Run(); BenchmarkChecks.Run(); ReplayLibraryChecks.Run(); await WorkspaceChecks.Run(); ReplayChecks.Run(); ReplayKeyboardChecks.Run(); await NativeReplayPlaybackChecks.Run(); await HardeningChecks.Run(); return; }
+if (args.Contains("--self-test")) { Checks.Run(); HistoryCompletenessChecks.Run(); CsvHistoryChecks.Run(); await HubChecks.Run(); HubPaginationChecks.Run(); await HubLeaderboardChecks.Run(); Coaching.SelfTest(); CoachingFeedbackChecks.Run(); StatsChecks.Run(); WarmupChecks.Run(); RunInspectionChecks.Run(); NativeSettingsChecks.Run(); LiveOverlayChecks.Run(); LiveOverlayFeedChecks.Run(); OverlaySettingsChecks.Run(); await ObsOverlayChecks.Run(); BenchmarkChecks.Run(); ReplayLibraryChecks.Run(); await WorkspaceChecks.Run(); ReplayChecks.Run(); ReplayKeyboardChecks.Run(); await NativeReplayPlaybackChecks.Run(); await HardeningChecks.Run(); await DiscordPresenceChecks.Run(); return; }
 var output = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AimMod", "KovaaksNative");
 var database = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "com.verycrunchy.kovaaks", "stats.sqlite3");
 var exitWithGame = false;
@@ -41,11 +41,17 @@ string? detailsFingerprint = null;
 var settings = new NativeSettings(output);
 using var hub = new Hub(output, historyEnabled: () => settings.Current.HubHistoryEnabled);
 var csvHistory = new CsvHistory(output);
+var discordSettings = new DiscordSettings(output);
+DiscordPresenceHost? discord = null;
 var failures = 0;
 try
 {
-await using var workspace = new WorkspaceHost(hub, output, database, settings, csvHistory);
+await using var workspace = new WorkspaceHost(hub, output, database, settings, csvHistory, discordSettings, () => discord?.StatusInfo ?? new { state = "starting" });
 await workspace.Start(cancellation.Token);
+// Declared after the workspace so it is disposed first: the presence is
+// cleared and KovaaK's own presence handed back before the UI closes.
+await using var discordHost = discord = new DiscordPresenceHost(output, discordSettings, workspace.ReadLive, () => workspace.ReplayVisible, () => hub.LinkedHandle);
+discord.Start(cancellation.Token);
 var workspaceUrlPath = Path.Combine(output, "workspace-url.txt");
 AtomicFile.WriteText(workspaceUrlPath, workspace.Url);
 try
@@ -74,6 +80,7 @@ try
                 if (nextDetails != detailsFingerprint)
                 { details = selectedRun is null ? null : RunMetrics.Read(database, selectedRun.Id); detailsFingerprint = nextDetails; }
                 workspace.UpdateHistory(runs);
+                discord.UpdateHistory(runs);
                 workspace.Update(WorkspaceData.Build(runs, hub, details,measurements));
                 var content = Views.Encode(Views.Build(runs, hub.HistoryPage, hub.SelectedScenario).Concat(hub.Rows()));
                 AtomicFile.WriteText(Path.Combine(output, "views.tsv"), content);
