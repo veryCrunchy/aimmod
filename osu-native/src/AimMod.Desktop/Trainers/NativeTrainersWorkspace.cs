@@ -606,7 +606,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
             _ => null,
         };
         var field = new Container { Width = width, Height = hint is null ? 56 : 104,
-            Children = [text(label, 10, AimModPalette.Muted), dropdown] };
+            Children = [text(label, 11, AimModPalette.Muted), dropdown] };
         if (hint is not null) field.Add(new OsuTextFlowContainer(t => { t.Font = new(size:12); t.Colour = AimModPalette.Muted; })
             { RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Y = 62, Text = hint });
         return field;
