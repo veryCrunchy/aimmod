@@ -263,6 +263,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         base.LoadComplete();
         search.OnCommit += (_, _) => refreshRunList();
         search.Current.BindValueChanged(_ => scheduleRunListRefresh());
+        refreshRunList();
         load();
         _ = watchPracticeScores(practiceTrackingLifetime.Token);
     }

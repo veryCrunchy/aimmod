@@ -436,51 +436,6 @@ public partial class NativeCoachingWorkspace
         }
     }
 
-    private partial class GlobalEvidenceStrip : CompositeDrawable
-    {
-        public GlobalEvidenceStrip(GlobalCoachingProfile profile)
-        {
-            RelativeSizeAxes = Axes.X;
-            Height = 66;
-
-            GlobalMissReasonShare[] reasons = profile.MissReasons.Take(4).ToArray();
-            var bar = new FillFlowContainer
-            {
-                RelativeSizeAxes = Axes.X,
-                Height = 8,
-                Direction = FillDirection.Horizontal,
-                Spacing = new(2),
-            };
-            if (reasons.Length == 0)
-            {
-                bar.Add(new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Border });
-            }
-            else
-            {
-                Colour4[] colours = { AimModPalette.Pink, AimModPalette.Cyan, AimModPalette.Yellow, AimModPalette.Success };
-                double visibleTotal = reasons.Sum(item => item.Share);
-                for (int i = 0; i < reasons.Length; i++)
-                {
-                    bar.Add(new Box
-                    {
-                        RelativeSizeAxes = Axes.Both,
-                        Width = visibleTotal <= 0 ? 1f / reasons.Length : (float)(reasons[i].Share / visibleTotal),
-                        Colour = colours[i % colours.Length],
-                    });
-                }
-            }
-
-            string missSummary = ProfileEvidenceSummary(profile);
-            InternalChildren = new Drawable[]
-            {
-                bar,
-                truncatingLabel(missSummary, 10, AimModPalette.Muted, 760).With(text => text.Y = 14),
-                truncatingLabel(ProfileTendencySummary(profile), 11, AimModPalette.Text, 760, "SemiBold")
-                    .With(text => text.Y = 38),
-            };
-        }
-    }
-
     private partial class SectionLine : AimModSubsectionHeader
     {
         public SectionLine(string titleText, string detailText)
@@ -574,86 +529,6 @@ public partial class NativeCoachingWorkspace
             CoachingConfidence.Low => "Low confidence",
             _ => "More plays needed",
         };
-    }
-
-    private partial class RunPickerRow : ClickableContainer
-    {
-        private readonly Action select;
-        private readonly Box background;
-        private readonly Colour4 restingColour;
-
-        public RunPickerRow(CoachingRecentRun run, bool selected, Action select)
-        {
-            this.select = select;
-            restingColour = selected ? AimModPalette.PanelRaised : AimModPalette.Panel;
-            RelativeSizeAxes = Axes.X;
-            Height = 64;
-            Masking = true;
-            CornerRadius = AimModVisualStyle.ControlRadius;
-            Children = new Drawable[]
-            {
-                background = new Box { RelativeSizeAxes = Axes.Both, Colour = restingColour },
-                new Box
-                {
-                    RelativeSizeAxes = Axes.Y,
-                    Width = selected ? 4 : 3,
-                    Colour = AimModVisualStyle.DifficultyColour(run.StarRating),
-                },
-                new FillFlowContainer
-                {
-                    Anchor = Anchor.CentreLeft,
-                    Origin = Anchor.CentreLeft,
-                    RelativeSizeAxes = Axes.X,
-                    AutoSizeAxes = Axes.Y,
-                    Width = 1,
-                    Margin = new MarginPadding { Left = 17 },
-                    Padding = new MarginPadding { Right = 280 },
-                    Direction = FillDirection.Vertical,
-                    Spacing = new(2),
-                    Children = new Drawable[]
-                    {
-                        truncatingLabel($"{run.Title} [{run.Difficulty}]", 14, AimModPalette.Text, 520, "SemiBold"),
-                        truncatingLabel($"{run.Artist}  //  {run.PlayedAt:MMM d, HH:mm}  //  {formatMods(run.Mods)}", 10, AimModPalette.Muted, 520),
-                    },
-                },
-                new FillFlowContainer
-                {
-                    Anchor = Anchor.CentreRight,
-                    Origin = Anchor.CentreRight,
-                    AutoSizeAxes = Axes.Both,
-                    Margin = new MarginPadding { Right = 16 },
-                    Direction = FillDirection.Horizontal,
-                    Spacing = new(12),
-                    Children = new Drawable[]
-                    {
-                        label($"{run.Accuracy:P2}", 13, AimModPalette.Cyan, "Bold"),
-                        label($"{run.MissCount:N0} miss", 11, run.MissCount == 0 ? AimModPalette.Success : AimModPalette.Muted),
-                        new AimModDifficultyPill(run.StarRating),
-                        label(selected ? "Selected" : "Inspect", 11, selected ? AimModPalette.Pink : AimModPalette.Muted, "SemiBold"),
-                    },
-                },
-            };
-        }
-
-        protected override bool OnClick(ClickEvent e)
-        {
-            select();
-            return true;
-        }
-
-        protected override bool OnHover(HoverEvent e)
-        {
-            background.FadeColour(AimModPalette.PanelHover, 100);
-            return true;
-        }
-
-        protected override void OnHoverLost(HoverLostEvent e)
-        {
-            background.FadeColour(restingColour, AimModVisualStyle.HoverTransition);
-            base.OnHoverLost(e);
-        }
-
-        private static string formatMods(IReadOnlyList<string> mods) => mods.Count == 0 ? "No Mod" : string.Join(' ', mods);
     }
 
     private partial class ActionButton : ClickableContainer
