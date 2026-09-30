@@ -5,6 +5,10 @@ each with its own `materialSets` entry. This is how the editor itself stores bru
 vertices were edited, so arbitrary convex brushes survive with per-face materials.
 Coordinates are KovaaK's map units (Unreal axes: X forward, Y right, Z up); the scenario's
 MapScale multiplies them into Unreal centimetres at load time.
+
+Procedural vertices are an exception: the loader multiplies them by MapScale once more (world =
+location + scale * vertex * MapScale, in map units). The editor therefore stores a unit cube as
+100 / MapScale (26.2295 at 3.8125, 20 at 5). Vertices are written divided by MapScale.
 """
 from __future__ import annotations
 
@@ -82,7 +86,8 @@ def _tangent(face: scene.Face, n_ue) -> Tuple[float, float, float]:
     return t
 
 
-def brush_object(b: scene.Brush, unit: float, tex_slot: Dict[str, int], slots: List[Slot]) -> dict:
+def brush_object(b: scene.Brush, unit: float, tex_slot: Dict[str, int], slots: List[Slot],
+                 map_scale: float = 1.0) -> dict:
     visible = b.kind not in (scene.CLIP,)
     world = [[to_ue(p, unit) for p in f.polygon] for f in b.faces]
     lo = tuple(min(p[k] for poly in world for p in poly) for k in range(3))
@@ -96,7 +101,7 @@ def brush_object(b: scene.Brush, unit: float, tex_slot: Dict[str, int], slots: L
     sections, msets = [], []
     for f, poly in zip(b.faces, world):
         n = (f.normal[0], -f.normal[1], f.normal[2])
-        local = [g.sub(p, lo) for p in poly]
+        local = [g.mul(g.sub(p, lo), 1.0 / map_scale) for p in poly]
         tris = g.triangulate_fan(len(local))
         # The editor's winding: cross(v1 - v0, v2 - v0) points against the outward normal.
         a, b_, c = local[0], local[1], local[2]
@@ -110,10 +115,10 @@ def brush_object(b: scene.Brush, unit: float, tex_slot: Dict[str, int], slots: L
         if visible:
             tan = _tangent(f, n)
             for p_local, p_src in zip(local, f_poly):
-                verts.append({"location": _f(p_local, 2), "normal": _f(n), "tangent": _f(tan) + ", false",
+                verts.append({"location": _f(p_local, 4), "normal": _f(n), "tangent": _f(tan) + ", false",
                               "uv0": _f(_uv(p_src, f))})
         else:
-            verts = [{"location": _f(p, 2), "normal": _f(n)} for p in local]
+            verts = [{"location": _f(p, 4), "normal": _f(n)} for p in local]
         sections.append({"indices": indices, "vertices": verts})
         if visible:
             if best_area < 0:
@@ -144,7 +149,7 @@ def spawn_object(sp: scene.Spawn, idx: int, unit: float, map_scale: float, playe
 
 def build(sc: scene.Scene, slots: List[Slot], tex_slot: Dict[str, int], groups: int, unit: float,
           map_scale: float, player_profile: str = "") -> dict:
-    objects = [brush_object(b, unit, tex_slot, slots) for b in sc.brushes]
+    objects = [brush_object(b, unit, tex_slot, slots, map_scale) for b in sc.brushes]
     objects += [spawn_object(sp, i, unit, map_scale, player_profile) for i, sp in enumerate(sc.spawns)]
     return {"materialSets": _material_sets(slots, groups), "objects": objects, "version": "1.0.0"}
 

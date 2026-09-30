@@ -8,7 +8,7 @@ import re
 import sys
 from typing import List, Optional
 
-from . import archive, bsp, cleanup, kovaaks_json, materials, preview, reflex, scenario, vmf
+from . import archive, bsp, cleanup, kovaaks_json, materials, preview, reflex, scenario, spawns, vmf
 
 
 def _safe_name(name: str) -> str:
@@ -31,6 +31,7 @@ def convert_file(path: str, out: str, args) -> dict:
     if not args.keep_skybox:
         cleanup.remove_3d_skybox(sc)
         cleanup.remove_detached(sc)
+    spawns.fix_spawns(sc)
     table = materials.load_table(args.materials)
     slots, tex_slot = materials.allocate(sc, table, args.groups)
     os.makedirs(out, exist_ok=True)
@@ -65,7 +66,7 @@ def convert_file(path: str, out: str, args) -> dict:
         with open(rp, "w", encoding="utf-8", newline="") as fh:
             fh.write(reflex.write(sc, table))
         report["files"]["map_reflex"] = os.path.relpath(rp, out)
-    if args.preview:
+    if not args.no_preview:
         pp = os.path.join(out, base + ".preview.png")
         with open(pp, "wb") as fh:
             fh.write(preview.render(sc, slots, tex_slot))
@@ -94,7 +95,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--materials", help="alternative material mapping table (JSON)")
     ap.add_argument("--keep-skybox", action="store_true", help="keep the 3D skybox room and detached areas")
     ap.add_argument("--no-scenario", action="store_true")
-    ap.add_argument("--preview", action="store_true", help="also write a top-down PNG (radar orientation)")
+    ap.add_argument("--no-preview", action="store_true",
+                    help="skip the preview check PNG (top-down + side view with the player hull at every spawn)")
     ap.add_argument("--pick", help="when an archive holds several maps, convert only names containing this")
     args = ap.parse_args(argv)
 

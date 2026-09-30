@@ -12,6 +12,9 @@ from dataclasses import dataclass
 from typing import List, Tuple
 
 UE_GRAVITY = 980.0  # Unreal default world gravity, cm/s^2; the profile's Gravity is a scale on it
+# Default character-model pack: Meso (skins Genji, McCree, Pharah, Tracer), Endo, Ecto, ...
+BOT_MODEL = "Meso"
+BOT_SKIN = "McCree"
 
 
 @dataclass
@@ -88,8 +91,10 @@ def character_profile(name: str, mv: Movement, s: float, weapon: str, bot: bool 
         ("HealthRegenDelay", "0.0"), ("JumpSpeedPenaltyDuration", "0.0"), ("JumpSpeedPenaltyPercent", "0.0"),
         ("ThirdPersonCamera", "false"), ("TPSArmLength", "300.0"), ("TPSOffset", _v(0, 150, 150)),
         ("BrakingDeceleration", "0.0"), ("TerminalVelocity", f"{mv.max_velocity * s:.1f}"),
-        ("CharacterModel", "Stylized Shape" if bot else "None"), ("CharacterSkin", "Default"),
-        ("MeshHitDetection", "false"), ("SpawnOffsetMin", _v(0, 0, 0)), ("SpawnOffsetMax", _v(0, 0, 0)),
+        # Bots use the humanoid "Meso" skeletal model (184 cm mesh fitted to the hull) with a real skin;
+        # per-mesh hit detection gives them a head and body like a CS player model.
+        ("CharacterModel", BOT_MODEL if bot else "None"), ("CharacterSkin", BOT_SKIN if bot else "Default"),
+        ("MeshHitDetection", _b(bot)), ("SpawnOffsetMin", _v(0, 0, 0)), ("SpawnOffsetMax", _v(0, 0, 0)),
         ("InvertBlockedSpawn", "false"), ("ViewBobTime", "0.0"), ("ViewBobAngleAdjustment", "0.0"),
         ("ViewBobCameraZOffset", "0.0"), ("ViewBobAffectsShots", "false"), ("IsFlyer", "false"),
         ("FlightObeysPitch", "false"), ("FlightVelocityUp", "800.0"), ("FlightAccelUp", "800.0"),

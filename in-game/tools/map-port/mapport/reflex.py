@@ -15,8 +15,12 @@ CLIP_MATERIAL = "internal/editor/textures/editor_clip"
 
 
 def to_reflex(p, unit: float):
-    # Source Z-up -> Reflex Y-up; the mirror on the last axis keeps the layout unmirrored.
-    return (p[0] * unit, p[2] * unit, -p[1] * unit)
+    """Source -> Reflex axes as KovaaK's loads them (Reflex (a, b, c) is Unreal (c, a, b)).
+
+    Checked against a map shipped in both formats (cataicfps.map and its JSON remake). Combined with
+    Unreal's (x, -y, z) this keeps the Source layout unmirrored.
+    """
+    return (-p[1] * unit, p[2] * unit, p[0] * unit)
 
 
 def _colour(refl) -> str:
@@ -64,7 +68,7 @@ def write(sc: scene.Scene, table: dict, unit: float = 1.0) -> str:
     for sp in sc.spawns:
         x, y, z = to_reflex(sp.origin, unit)
         out += ["\tentity", "\t\ttype PlayerSpawn", f"\t\tVector3 position {x:.6f} {y:.6f} {z:.6f}",
-                f"\t\tVector3 angles {-sp.yaw + 90:.6f} 0.000000 0.000000"]
+                f"\t\tVector3 angles {(-sp.yaw) % 360:.6f} 0.000000 0.000000"]
         if sp.team == 1:
             out.append("\t\tBool8 teamB 0")
         elif sp.team == 2:

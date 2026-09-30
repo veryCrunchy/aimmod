@@ -104,13 +104,22 @@ class JsonTests(unittest.TestCase):
         # The floor spans y -32..96 in Source; Unreal mirrors Y, so it must span -96..32.
         solid = next(o for o in self.brushes if o["name"] == "Default")
         loc = self.vec(solid["location"])
-        ys = [loc[1] + self.vec(x["location"])[1] for s in solid["procedural"] for x in s["vertices"]]
+        # Procedural vertices are multiplied by MapScale (4) on load, on top of the location.
+        ys = [loc[1] + 4.0 * self.vec(x["location"])[1] for s in solid["procedural"] for x in s["vertices"]]
         self.assertAlmostEqual(min(ys), -96.0, places=2)
         self.assertAlmostEqual(max(ys), 32.0, places=2)
         # Facing Source north (+Y) is Unreal yaw -90; its right vector (yaw 0) is +X: east stays on the right.
         m = [kovaaks_json.to_ue(e, 1.0) for e in ((1, 0, 0), (0, 1, 0), (0, 0, 1))]
         self.assertEqual(m[0], (1.0, 0.0, 0.0))
         self.assertEqual(m[1], (0.0, -1.0, 0.0))
+
+    def test_vertex_scale_matches_editor(self):
+        # The editor stores a 100-unit cube as 100 / MapScale; so a 128 x 128 x 16 floor at MapScale 4
+        # must be stored as 32 x 32 x 4.
+        solid = next(o for o in self.brushes if o["name"] == "Default")
+        pts = [self.vec(x["location"]) for s in solid["procedural"] for x in s["vertices"]]
+        ext = [round(max(p[k] for p in pts) - min(p[k] for p in pts), 3) for k in range(3)]
+        self.assertEqual(ext, [32.0, 32.0, 4.0])
 
     def test_spawns(self):
         spawns = [o for o in self.doc["objects"] if o["type"] == "gameObject"]
@@ -122,6 +131,33 @@ class JsonTests(unittest.TestCase):
 
     def test_dumps_is_json(self):
         self.assertEqual(json.loads(kovaaks_json.dumps(self.doc)), self.doc)
+
+
+class SpawnTests(unittest.TestCase):
+    def test_nudged_out_of_brush(self):
+        from mapport import spawns
+        sc = bsp.load(synthetic.build_bsp(with_displacement=False), "s")
+        sc.spawns = [scene.Spawn(origin=(16.0, 16.0, 16.0), yaw=0.0, team=1)]  # inside the clip cube
+        spawns.fix_spawns(sc)
+        self.assertEqual(sc.stats.get("spawns_nudged"), 1)
+        solids = spawns._solids(sc)
+        self.assertIsNone(spawns.blocked(spawns.hull_box(sc.spawns[0].origin), solids))
+
+    def test_free_spawn_untouched(self):
+        from mapport import spawns
+        sc = bsp.load(synthetic.build_bsp(with_displacement=False), "s")
+        before = [s.origin for s in sc.spawns]
+        spawns.fix_spawns(sc)
+        self.assertEqual([s.origin for s in sc.spawns], before)
+
+
+class ReflexTests(unittest.TestCase):
+    def test_axes_match_json(self):
+        # KovaaK's loads Reflex (a, b, c) as Unreal (c, a, b); both writers must agree.
+        from mapport import reflex
+        p = (10.0, 20.0, 30.0)
+        a, b, c = reflex.to_reflex(p, 1.0)
+        self.assertEqual((c, a, b), kovaaks_json.to_ue(p, 1.0))
 
 
 class MaterialTests(unittest.TestCase):
@@ -213,7 +249,7 @@ class CliTests(unittest.TestCase):
             with open(src, "wb") as fh:
                 fh.write(synthetic.build_bsp())
             out = os.path.join(tmp, "out")
-            self.assertEqual(cli.main([src, "--out", out, "--format", "both", "--preview"]), 0)
+            self.assertEqual(cli.main([src, "--out", out, "--format", "both"]), 0)
             for rel in ("maps/aim_test.json", "maps/aim_test.map", "Scenarios/aim_test CS Movement.sce",
                         "aim_test.preview.png", "aim_test.report.json"):
                 self.assertTrue(os.path.isfile(os.path.join(out, rel)), rel)

@@ -15,7 +15,7 @@ Output in `<dir>`:
 | `maps/<map>.json` | `FPSAimTrainer/maps/` |
 | `Scenarios/<map> CS Movement.sce` | `FPSAimTrainer/Saved/SaveGames/Scenarios/` |
 | `<map>.report.json` | not installed: brush counts, drop reasons, material slots |
-| `<map>.preview.png` (`--preview`) | not installed: top-down view in radar orientation |
+| `<map>.preview.png` | not installed: preview check (see below); `--no-preview` skips it |
 
 The scenario embeds the map (`[Map Data]`), like the scenarios the game saves, and also names the
 map file in `MapName`.
@@ -32,6 +32,7 @@ map file in `MapName`.
 | `--disp-thickness` | `8` | thickness of displacement slabs, Source units |
 | `--materials file.json` | built-in | alternative mapping table |
 | `--bots` | `5` | harmless strafing target bots on the counter-terrorist spawns |
+| `--no-preview` | off | skip the preview check PNG |
 | `--keep-skybox` | off | keep the 3D skybox and areas detached from the spawns |
 | `--pick text` | | convert only archive members whose name contains `text` |
 
@@ -50,6 +51,12 @@ map file in `MapName`.
   `tangent` = `x, y, z, flipY`). Each section gets a `materialSets` entry `{group, surface}`.
   map-port writes every convex Source brush this way, so the JSON format can represent arbitrary
   convex brushes and per-face materials. The legacy `.map` is not needed as a fallback.
+- **Procedural vertices are scaled twice.** In map units, world = location + scale x vertex x
+  MapScale. So the editor stores a 100-unit cube as `100 / MapScale` (26.2295 at 3.8125, 20 at 5).
+  Locations and spawn points are only scaled once, by MapScale. map-port divides vertices by
+  MapScale. Without that, every brush grows around its corner and the map feels cramped.
+  This was calibrated against `cataicfps.map` and its JSON remake. Reflex `(a, b, c)` loads as JSON
+  `(c, a, b)` in the same units, and the Reflex yaw equals the Unreal yaw.
 - Triangle winding in `procedural` sections: `cross(v1 - v0, v2 - v0)` points against the outward
   normal.
 - Brush `name` is the brush type: `Default`, `DefaultNoCollision`, `Clip` (invisible player
@@ -100,6 +107,9 @@ Outlaws, Pixel, Christmas, N0ted, Timmy). The Anime pack is DLC.
   non-planar cells are split into two triangular prisms.
 - The 3D skybox (the component around `sky_camera`) and areas detached from the spawn areas are
   dropped.
+- Every spawn is checked against the blocking brushes with a standing CS hull (32 x 72). If the
+  hull overlaps a brush, the spawn is moved upwards, then sideways in growing rings. The report
+  lists `spawns_nudged` and `spawns_stuck`.
 - Spawns come from `info_player_terrorist` (team 1), `info_player_counterterrorist` (team 2) and
   deathmatch/start spawns (both teams). They are lifted 40 units so the player drops onto the floor.
 - Supported inputs: BSP versions 19 to 21, LZMA-compressed lumps and the L4D2-style lump header.
@@ -125,6 +135,23 @@ With the default `--map-scale 4`:
 
 The character's collision capsule follows the main bounding box, so the hull fits Source doorways.
 KovaaK's bundled "Counter-Striker" profile uses roughly the same scale (MaxSpeed 1100, step 75).
+
+## Preview check
+
+`<map>.preview.png` has a top-down view in radar orientation (+X east, +Y north) with a 256-unit
+scale bar. Below it is one zoomed side section per team, looking north through the spawn area.
+Each spawn's CS hull (32 x 72) is drawn as a box, and a white bar marks 72 units. Use it to see
+that spawns are clear of walls and that doorways and ceilings fit the player before testing
+in-game.
+
+## Bots
+
+Target bots use the humanoid `Meso` character model with the `McCree` skin from the Default
+character pack, with `MeshHitDetection=true`, so shots register on the mesh's head and body. The
+Meso mesh is 184 cm tall, floor-aligned and fitted to the 72 x 32 CS hull. Other free models are
+Endo, Ecto, StylizedEcto, StylizedShape, Pill, Pigeon, Witch, Mummy, Ghost, Diver, Medusa,
+JackOLantern and Pumpkin. Meso skins are Genji, McCree, Pharah and Tracer. Change `BOT_MODEL` and
+`BOT_SKIN` in `mapport/scenario.py` to use another one.
 
 ## Not converted yet
 
