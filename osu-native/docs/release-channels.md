@@ -24,7 +24,7 @@ https://github.com/veryCrunchy/aimmod/releases/download/aimmod-osu-stable/aimmod
 https://github.com/veryCrunchy/aimmod/releases/download/aimmod-osu-preview/aimmod-osu-preview.json
 ```
 
-Each manifest identifies the exact version release and records the file name, download URL, byte count, and SHA-256 digest for every supported runtime. The dedicated releases are created with `latest=false`; the repository-wide latest release remains owned by the main AimMod channel.
+Each manifest identifies the exact version release and records the file name, download URL, byte count, and SHA-256 digest for every supported runtime. The dedicated releases are created with `latest=false`. The repository-wide latest release is the rolling `aimmod-latest` release, maintained by the `Latest Downloads` workflow. After every release it holds only the newest stable downloads of AimMod for KovaaK's (including the `latest.json` its updater reads) and AimMod for osu!, and removes files from older versions. Version releases keep their own notes and downloads.
 
 Native update feeds are kept separate by operating system and release channel:
 
