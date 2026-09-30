@@ -718,8 +718,10 @@ internal static class ReferencePpTargetPatternModel
                 var reasons = judged.Where(j => j.Result == "Miss")
                     .GroupBy(j => j.MissAnalysis?.Reason ?? ReplayMissReason.Unknown)
                     .OrderBy(g => g.Key).ToDictionary(g => g.Key, g => g.Count());
+                // Real-time hit error was added with the forecast breakdown; not part of the v0.3.1 geometry.
+                (double? offset, double? deviation) = PpTargetPatternModel.HitError(judged, speed);
                 outcomes[pattern] = new PpPatternOutcome(judged.Length, judged.Average(j => judgementAccuracy(j)!.Value),
-                    judged.Count(j => j.Result == "Miss") / (double)judged.Length, reasons);
+                    judged.Count(j => j.Result == "Miss") / (double)judged.Length, reasons, offset, deviation);
             }
             if (!outcomes.TryGetValue("Overall", out var overall) || overall.ObjectCount < 3) continue;
             var result = new PpPatternEvidence(replay.ScoreId, mapKey(replay), mods, replay.PlayedAt, measured.Features, decay(replay), outcomes,

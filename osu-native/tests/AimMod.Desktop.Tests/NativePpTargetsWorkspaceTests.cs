@@ -356,6 +356,7 @@ public sealed class NativePpTargetsWorkspaceTests
     [TestCase(9)]
     [TestCase(10)]
     [TestCase(12)]
+    [TestCase(13)]
     public async Task OldSmallPoolCacheIsInvalidatedAndPartialStatusRoundTrips(int oldVersion)
     {
         string path = Path.Combine(temporaryDirectory, "workspace.json");
@@ -363,7 +364,7 @@ public sealed class NativePpTargetsWorkspaceTests
         await cache.SaveAsync(snapshot() with { CatalogScanStatus = "Partial catalog: page limit reached." });
         Assert.That(cache.Load()!.CatalogScanStatus, Is.EqualTo("Partial catalog: page limit reached."));
         var document = System.Text.Json.Nodes.JsonNode.Parse(await File.ReadAllTextAsync(path))!;
-        Assert.That(document["version"]!.GetValue<int>(), Is.EqualTo(13));
+        Assert.That(document["version"]!.GetValue<int>(), Is.EqualTo(14));
         document["version"] = oldVersion;
         await File.WriteAllTextAsync(path, document.ToJsonString());
         Assert.That(cache.Load(), Is.Null);

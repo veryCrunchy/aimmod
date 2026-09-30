@@ -39,8 +39,13 @@ public sealed record PpPatternFeatures
     public double? ApproachRate { get; init; }
 }
 
+/// <param name="HitErrorMeanMs">Mean hit offset of judged, non-miss heads in real time (negative is early).</param>
+/// <param name="HitErrorDeviationMs">Standard deviation of those offsets in real time; ten times this is the unstable rate.</param>
 public sealed record PpPatternOutcome(int ObjectCount, double Accuracy, double MissRate,
-    IReadOnlyDictionary<ReplayMissReason, int> MissReasons);
+    IReadOnlyDictionary<ReplayMissReason, int> MissReasons, double? HitErrorMeanMs = null, double? HitErrorDeviationMs = null)
+{
+    public double? UnstableRate => HitErrorDeviationMs * 10;
+}
 
 public sealed record PpPatternEvidence(Guid ScoreId, string MapKey, string ModsKey, DateTimeOffset PlayedAt,
     PpPatternFeatures Features, double Weight, IReadOnlyDictionary<string, PpPatternOutcome> Outcomes, string? SetupKey = null, bool LegacyScore = false,
@@ -53,17 +58,25 @@ public sealed record PpPatternProfile(string Identity, DateTimeOffset ReferenceT
 public sealed record PpScoreSkillEvidence(Guid ScoreId, string MapKey, string ModsKey,
     DateTimeOffset PlayedAt, double StarRating, double Accuracy, double Weight, bool LegacyScore = false);
 
+/// <param name="HitErrorMeanMs">Similarity-weighted mean hit offset of the neighbour plays, in real-time ms (negative is early).</param>
+/// <param name="UnstableRate">Ten times the pooled within-play standard deviation of real-time hit offsets.</param>
 public sealed record PpPatternFit(string Pattern, double? Fit, double? ExpectedAccuracy,
-    double Confidence, int DistinctMaps, double? ExpectedMissRate = null);
+    double Confidence, int DistinctMaps, double? ExpectedMissRate = null, double? HitErrorMeanMs = null, double? UnstableRate = null,
+    int TimingPlays = 0);
 
 public sealed record PpPatternPrediction(double? Fit, double? ExpectedAccuracy, double EvidenceConfidence,
     IReadOnlyList<string> Strengths, IReadOnlyList<string> Risks, IReadOnlyList<PpPatternFit> PatternFits,
-    IReadOnlyList<string>? CoverageNotes = null, double? ExpectedMissRate = null);
+    IReadOnlyList<string>? CoverageNotes = null, double? ExpectedMissRate = null)
+{
+    /// <summary>The overall pattern's predicted timing, when neighbour replays carried judgement offsets.</summary>
+    public PpPatternFit? Timing => PatternFits.FirstOrDefault(f => f.Pattern == "Overall" && f.UnstableRate is not null)
+        ?? PatternFits.FirstOrDefault(f => f.UnstableRate is not null);
+}
 
 public static class PpTargetPatternModel
 {
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<ReplayAnalysisResult, Dictionary<MeasurementKey, PpPatternEvidence>> measuredReplays = new();
-    public const string Version = "geometry-v9";
+    public const string Version = "geometry-v10";
     private const double normalized_radius = 50;
     private const double jump_spacing = 150;
     private const double tapping_spacing = 100;
@@ -183,8 +196,9 @@ public static class PpTargetPatternModel
                 var reasons = judged.Where(j => j.Result == "Miss")
                     .GroupBy(j => j.MissAnalysis?.Reason ?? ReplayMissReason.Unknown)
                     .OrderBy(g => g.Key).ToDictionary(g => g.Key, g => g.Count());
+                (double? offset, double? deviation) = HitError(judged, speed);
                 outcomes[pattern] = new PpPatternOutcome(judged.Length, judged.Average(j => judgementAccuracy(j)!.Value),
-                    judged.Count(j => j.Result == "Miss") / (double)judged.Length, reasons);
+                    judged.Count(j => j.Result == "Miss") / (double)judged.Length, reasons, offset, deviation);
             }
             if (!outcomes.TryGetValue("Overall", out var overall) || overall.ObjectCount < 3) continue;
             var result = new PpPatternEvidence(replay.ScoreId, map, mods, replay.PlayedAt, measured.Features, decay(replay), outcomes,
@@ -249,6 +263,7 @@ public static class PpTargetPatternModel
             foreach (var (pattern, outcome) in e.Outcomes)
             {
                 w.Text(pattern); w.Int(outcome.ObjectCount); w.Real(outcome.Accuracy); w.Real(outcome.MissRate);
+                w.Real(outcome.HitErrorMeanMs); w.Real(outcome.HitErrorDeviationMs);
                 w.Int(outcome.MissReasons.Count);
                 foreach (var (reason, count) in outcome.MissReasons)
                 {
@@ -457,7 +472,8 @@ public static class PpTargetPatternModel
             double fit = Math.Clamp((accuracy - 0.7) / 0.3, 0, 1) * (1 - misses);
             double confidence = Math.Min(0.85, maps / 6d) * relevant.Average(e => e.Similarity)
                 * Math.Min(1, weight / maps);
-            fits.Add(new(pattern, fit, accuracy, confidence, maps, misses));
+            var timing = PoolTiming(relevant.Select(e => (e.Evidence.Weight * e.Similarity, e.Evidence.Outcomes[pattern])));
+            fits.Add(new(pattern, fit, accuracy, confidence, maps, misses, timing?.Mean, timing?.UnstableRate, timing?.Plays ?? 0));
             if (pattern != "Overall" && accuracy >= 0.97 && misses < 0.01)
                 strengths.Add($"{pattern}: {accuracy:P1} head accuracy across {maps} comparable maps.");
             if (accuracy < 0.95 || misses >= 0.02)
@@ -567,6 +583,52 @@ public static class PpTargetPatternModel
             PatternObjectCounts = exposureCounts,
         };
         return (features, patterns);
+    }
+
+    /// <summary>
+    /// Mean and standard deviation of the hit offsets of judged, non-miss heads in real time. osu! reports the
+    /// unstable rate on real-time offsets, so gameplay-time offsets are divided by the play's clock rate.
+    /// </summary>
+    internal static (double? Mean, double? Deviation) HitError(IEnumerable<ReplayObjectJudgement> judgements, double? clockRate)
+    {
+        double sum = 0, squares = 0;
+        int count = 0;
+        foreach (var j in judgements)
+        {
+            if (j.Result is not ("Great" or "Ok" or "Meh") || !double.IsFinite(j.TimeOffsetMs)) continue;
+            double rate = positive(j.GameplayRate) ?? positive(clockRate) ?? 1;
+            double offset = j.TimeOffsetMs / rate;
+            // Offsets beyond the widest hit window are not timing on this object.
+            if (Math.Abs(offset) > 400) continue;
+            sum += offset;
+            squares += offset * offset;
+            count++;
+        }
+        if (count < 5) return (null, null);
+        double mean = sum / count;
+        double variance = Math.Max(0, (squares - count * mean * mean) / (count - 1));
+        return (mean, Math.Sqrt(variance));
+    }
+
+    /// <summary>
+    /// Weighted timing of neighbour plays: the mean offset averages play means, and the unstable rate pools
+    /// within-play variance so separate plays with different biases are not mistaken for inconsistency.
+    /// </summary>
+    internal static (double Mean, double UnstableRate, int Plays)? PoolTiming(IEnumerable<(double Weight, PpPatternOutcome Outcome)> plays)
+    {
+        double weight = 0, mean = 0, variance = 0;
+        int count = 0;
+        foreach (var (w, outcome) in plays)
+        {
+            if (w <= 0 || !double.IsFinite(w) || outcome.HitErrorMeanMs is not { } m || outcome.HitErrorDeviationMs is not { } d
+                || !double.IsFinite(m) || !double.IsFinite(d)) continue;
+            weight += w;
+            mean += w * m;
+            variance += w * d * d;
+            count++;
+        }
+        if (count == 0 || weight <= 0) return null;
+        return (mean / weight, 10 * Math.Sqrt(variance / weight), count);
     }
 
     private static bool isHead(ReplayObjectJudgement j) => j.ObjectIndex is >= 0 && j.ObjectPosition is { } p

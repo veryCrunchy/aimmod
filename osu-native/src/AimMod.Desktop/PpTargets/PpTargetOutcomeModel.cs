@@ -62,7 +62,8 @@ public sealed record PpOutcomeAtom(double Pp, double Probability);
 public sealed record PpCalibrationSample(string Setup, bool LegacyScore, double Stars, DateTimeOffset PlayedAt, double Ratio);
 
 public sealed record PpOutcomeEstimate(PpOutcomeDistribution Distribution, IReadOnlyList<PpScenario> Scenarios,
-    IReadOnlyList<PpOutcomeAtom> Atoms, double AccuracySlope, double CalibrationFactor, int CalibrationSamples);
+    IReadOnlyList<PpOutcomeAtom> Atoms, double AccuracySlope, double CalibrationFactor, int CalibrationSamples,
+    int ObjectCount = 0, int MaximumCombo = 0);
 
 public static class PpTargetOutcomeModel
 {
@@ -494,6 +495,13 @@ public static class PpTargetOutcomeModel
         double scale = total > cap ? cap / total : 1;
         return g.Select(s => s with { Weight = s.Weight * scale });
     });
+
+    /// <summary>Official calculator PP at a miss count, interpolated log-linearly between the calculated scenarios.</summary>
+    public static double ScenarioPp(IReadOnlyList<PpScenario> scenarios, int misses)
+    {
+        var points = scenarios.Where(s => double.IsFinite(s.Pp) && s.Pp >= 0).OrderBy(s => s.Misses).DistinctBy(s => s.Misses).ToArray();
+        return points.Length == 0 ? 0 : interpolate(points, Math.Max(0, misses));
+    }
 
     private static double interpolate(PpScenario[] points, int misses)
     {

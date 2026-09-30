@@ -6,7 +6,7 @@ namespace AimMod.Desktop.PpTargets;
 public sealed record PpTargetForecast(double PpIfPass, PpTargetRange PpIfPassRange, double? PassChance, double? ExpectedEarnedPp,
     double? TargetPp, int Tries, double? ReachProbability, int PreviousTries, PpTargetConfidence Confidence,
     double CalibrationFactor, int CalibrationSamples, double EffectiveSamples, int EvidenceMaps, bool CrossMode, bool UsesBestScores,
-    int LearningSessions, double LearningAdjustment);
+    int LearningSessions, double LearningAdjustment, PpTargetForecastBreakdown? Breakdown = null);
 
 public static class PpTargetForecastModel
 {
@@ -44,6 +44,7 @@ public static class PpTargetForecastModel
         return new PpTargetForecast(ppIfPass, range, chance, chance is { } earned ? ppIfPass * earned : null,
             reach?.Pp, tries, reach?.Probability, learning?.PreviousTries ?? 0, confidence,
             outcome.CalibrationFactor, outcome.CalibrationSamples, distribution.EffectiveSamples, distribution.Maps,
-            distribution.CrossMode || pass?.CrossMode == true, distribution.UsesBestScores, learning?.Sessions ?? 0, next);
+            distribution.CrossMode || pass?.CrossMode == true, distribution.UsesBestScores, learning?.Sessions ?? 0, next,
+            PpTargetForecastBreakdownModel.Create(estimate, next));
     }
 }
