@@ -52,9 +52,15 @@ public sealed class SkinScreenshotCache(ISecureSkinHttpClient http, string direc
             {
                 await image.SaveAsPngAsync(temporary, cancellationToken).ConfigureAwait(false);
                 File.Move(temporary, path, true);
-                DiskCacheBudget.Trim(directory, ".png", 192, 128L * 1024 * 1024, TimeSpan.FromDays(30), path);
             }
-            finally { if (File.Exists(temporary)) File.Delete(temporary); }
+            finally
+            {
+                try { File.Delete(temporary); }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+            }
+            try { DiskCacheBudget.Trim(directory, ".png", 192, 128L * 1024 * 1024, TimeSpan.FromDays(30), path); }
+            // Eviction is housekeeping; the screenshot is still usable unless the budget rejected it.
+            catch (Exception error) when ((error is IOException or UnauthorizedAccessException) && File.Exists(path)) { }
             return path;
         }
         finally { downloads.Release(); }

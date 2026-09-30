@@ -47,7 +47,7 @@ public sealed class OnlineSkinCatalogCache
         }
         finally
         {
-            File.Delete(temporary);
+            deleteQuietly(temporary);
         }
     }
 
@@ -64,7 +64,7 @@ public sealed class OnlineSkinCatalogCache
         }
         finally
         {
-            File.Delete(temporary);
+            deleteQuietly(temporary);
         }
     }
 
@@ -226,7 +226,8 @@ public sealed class OnlineSkinCatalogCache
         try
         {
             await using FileStream stream = File.OpenRead(indexPath);
-            return await JsonSerializer.DeserializeAsync<List<CacheEntry>>(stream, json_options, cancellationToken).ConfigureAwait(false) ?? [];
+            List<CacheEntry?> entries = await JsonSerializer.DeserializeAsync<List<CacheEntry?>>(stream, json_options, cancellationToken).ConfigureAwait(false) ?? [];
+            return entries.OfType<CacheEntry>().Where(entry => entry.Key is not null && entry.FileName is not null).ToList();
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException)
         {
@@ -310,13 +311,13 @@ public sealed class CachedOnlineSkinCatalogProvider : IOnlineSkinCatalogProvider
     {
         query = query.Normalize();
         string key = $"catalog:{Id}:search:{JsonSerializer.Serialize(query, json_options)}";
-        byte[]? cached = await cache.ReadBytesAsync(key, search_lifetime, cancellationToken).ConfigureAwait(false);
-        if (cached is not null)
-            return JsonSerializer.Deserialize<OnlineSkinCatalogPage>(cached, json_options)!;
+        OnlineSkinCatalogPage? hit = await readCachedAsync<OnlineSkinCatalogPage>(key, search_lifetime, cancellationToken).ConfigureAwait(false);
+        if (hit is not null)
+            return hit;
 
         OnlineSkinCatalogPage page = await inner.SearchAsync(query, cancellationToken).ConfigureAwait(false);
         if (page.Status == OnlineSkinCatalogStatus.Success)
-            await cache.PutBytesAsync(key, JsonSerializer.SerializeToUtf8Bytes(page, json_options), "catalog", cancellationToken).ConfigureAwait(false);
+            await putCachedAsync(key, page, cancellationToken).ConfigureAwait(false);
         return page;
     }
 
@@ -324,13 +325,56 @@ public sealed class CachedOnlineSkinCatalogProvider : IOnlineSkinCatalogProvider
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
         string key = $"catalog:{Id}:details:v3:{id}";
-        byte[]? cached = await cache.ReadBytesAsync(key, details_lifetime, cancellationToken).ConfigureAwait(false);
-        if (cached is not null)
-            return JsonSerializer.Deserialize<OnlineSkinCatalogEntry>(cached, json_options);
+        OnlineSkinCatalogEntry? hit = await readCachedAsync<OnlineSkinCatalogEntry>(key, details_lifetime, cancellationToken).ConfigureAwait(false);
+        if (hit is not null)
+            return hit;
 
         OnlineSkinCatalogEntry? details = await inner.GetDetailsAsync(id, cancellationToken).ConfigureAwait(false);
         if (details is not null)
-            await cache.PutBytesAsync(key, JsonSerializer.SerializeToUtf8Bytes(details, json_options), "catalog", cancellationToken).ConfigureAwait(false);
+            await putCachedAsync(key, details, cancellationToken).ConfigureAwait(false);
         return details;
+    }
+
+    private async Task<T?> readCachedAsync<T>(string key, TimeSpan maximumAge, CancellationToken cancellationToken) where T : class
+    {
+        byte[]? cached;
+        try
+        {
+            cached = await cache.ReadBytesAsync(key, maximumAge, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+        if (cached is null)
+            return null;
+        try
+        {
+            T? value = JsonSerializer.Deserialize<T>(cached, json_options);
+            if (value is not null)
+                return value;
+        }
+        catch (Exception error) when (error is JsonException or NotSupportedException or ArgumentException or FormatException or UriFormatException)
+        {
+        }
+        try
+        {
+            await cache.RemoveAsync(key, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+        }
+        return null;
+    }
+
+    private async Task putCachedAsync<T>(string key, T value, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await cache.PutBytesAsync(key, JsonSerializer.SerializeToUtf8Bytes(value, json_options), "catalog", cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or JsonException)
+        {
+        }
     }
 }

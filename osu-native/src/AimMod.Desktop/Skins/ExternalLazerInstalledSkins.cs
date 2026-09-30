@@ -200,14 +200,23 @@ public sealed class ExternalLazerSkinApplyService
         try
         {
             await createArchiveAsync(archivePath, files, cancellationToken).ConfigureAwait(false);
-            Live<SkinInfo> imported = await skinManager.Import(
+            Live<SkinInfo>? imported = await skinManager.Import(
                 new ImportTask(archivePath),
                 new ImportParameters { ImportImmediately = true },
                 cancellationToken).ConfigureAwait(false);
+            if (imported is null)
+                throw new ExternalLazerSkinApplyException("skin_import_failed", "AimMod could not import this lazer skin into its embedded player.");
             skinManager.Rename(imported, skin.Name);
 
-            var next = new ExternalSkinMapping(skin.SkinId, skin.ContentHash, imported.ID);
-            await mappings.SaveAsync(next, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await mappings.SaveAsync(new ExternalSkinMapping(skin.SkinId, skin.ContentHash, imported.ID), cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // The skin is imported; a lost mapping only means the next apply re-checks it.
+                System.Diagnostics.Trace.TraceWarning($"Could not save the lazer skin mapping: {exception.Message}");
+            }
             return imported.ID;
         }
         catch (ExternalLazerSkinApplyException)
@@ -310,6 +319,7 @@ public sealed class ExternalSkinMappingStore
 {
     private const int maximum_mappings = 256;
     private readonly string path;
+    private readonly SemaphoreSlim saveGate = new(1, 1);
 
     public ExternalSkinMappingStore(string path)
     {
@@ -326,9 +336,10 @@ public sealed class ExternalSkinMappingStore
 
         try
         {
-            using FileStream stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-            ExternalSkinMapping[] entries = JsonSerializer.Deserialize<ExternalSkinMapping[]>(stream, RuntimeProtocol.JsonOptions) ?? [];
+            using FileStream stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            ExternalSkinMapping?[] entries = JsonSerializer.Deserialize<ExternalSkinMapping?[]>(stream, RuntimeProtocol.JsonOptions) ?? [];
             return entries
+                   .OfType<ExternalSkinMapping>()
                    .Where(valid)
                    .Take(maximum_mappings)
                    .GroupBy(entry => entry.ExternalSkinId)
@@ -345,18 +356,28 @@ public sealed class ExternalSkinMappingStore
         if (!valid(mapping))
             throw new ArgumentException("The external skin mapping is invalid.", nameof(mapping));
 
-        var entries = Load().Values.Where(entry => entry.ExternalSkinId != mapping.ExternalSkinId).Append(mapping).TakeLast(maximum_mappings).ToArray();
-        string? directory = Path.GetDirectoryName(path);
-        if (directory is not null)
-            Directory.CreateDirectory(directory);
-
-        string temporary = path + ".tmp";
-        await using (var stream = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None, 4096, FileOptions.Asynchronous))
+        await saveGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        string temporary = $"{path}.{Guid.NewGuid():N}.tmp";
+        try
         {
-            await JsonSerializer.SerializeAsync(stream, entries, RuntimeProtocol.JsonOptions, cancellationToken).ConfigureAwait(false);
-            await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            var entries = Load().Values.Where(entry => entry.ExternalSkinId != mapping.ExternalSkinId).Append(mapping).TakeLast(maximum_mappings).ToArray();
+            string? directory = Path.GetDirectoryName(path);
+            if (directory is not null)
+                Directory.CreateDirectory(directory);
+
+            await using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.Asynchronous))
+            {
+                await JsonSerializer.SerializeAsync(stream, entries, RuntimeProtocol.JsonOptions, cancellationToken).ConfigureAwait(false);
+                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
+            File.Move(temporary, path, overwrite: true);
         }
-        File.Move(temporary, path, overwrite: true);
+        finally
+        {
+            try { File.Delete(temporary); }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { }
+            saveGate.Release();
+        }
     }
 
     private static bool valid(ExternalSkinMapping mapping) =>
