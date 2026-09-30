@@ -18,6 +18,7 @@ public sealed class CachedLocalLibrarySource : ILocalLibrarySource, ILocalLibrar
     private const long memory_budget = 32 * 1024 * 1024;
     private long revision;
     private long invalidatedAt;
+    private long useCounter;
     public LocalLibraryProgress? Progress => (source as ILocalLibraryProgressSource)?.Progress;
 
     public CachedLocalLibrarySource(ILocalLibrarySource source, string cacheDirectory, params string[] databasePaths)
@@ -101,7 +102,10 @@ public sealed class CachedLocalLibrarySource : ILocalLibrarySource, ILocalLibrar
         lock (memoryLock)
         {
             if (memory.TryGetValue(key, out var entry) && entry.Revision == currentRevision)
+            {
                 saved = entry.Document as Document<T>;
+                entry.LastUsed = ++useCounter;
+            }
         }
         long bytes = 0;
         if (saved is null)
@@ -136,16 +140,19 @@ public sealed class CachedLocalLibrarySource : ILocalLibrarySource, ILocalLibrar
             if (memory.Remove(key, out var previous)) memoryBytes -= previous.Bytes;
             while (memory.Count > 0 && (memory.Count >= 128 || memoryBytes + bytes > memory_budget))
             {
-                string oldest = memory.Keys.First();
+                string oldest = memory.MinBy(candidate => candidate.Value.LastUsed).Key;
                 memoryBytes -= memory[oldest].Bytes;
                 memory.Remove(oldest);
             }
-            memory.Add(key, new(document, bytes, currentRevision));
+            memory.Add(key, new(document, bytes, currentRevision) { LastUsed = ++useCounter });
             memoryBytes += bytes;
         }
     }
 
-    private sealed record MemoryEntry(object Document, long Bytes, long Revision);
+    private sealed record MemoryEntry(object Document, long Bytes, long Revision)
+    {
+        public long LastUsed { get; set; }
+    }
 
     private string? databaseStamp()
     {

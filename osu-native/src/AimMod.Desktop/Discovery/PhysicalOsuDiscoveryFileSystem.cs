@@ -65,21 +65,20 @@ public sealed class PhysicalOsuDiscoveryFileSystem : IOsuDiscoveryFileSystem
         if (stream.Length > maximumBytes)
             throw new InvalidDataException($"File is larger than {maximumBytes} bytes.");
 
-        var bytes = new byte[maximumBytes + 1];
-        int totalRead = 0;
-
-        while (totalRead < bytes.Length)
+        // Size by the file, not the limit: a 32 MiB limit must not allocate 32 MiB for a tiny file.
+        using var bytes = new MemoryStream((int)Math.Min(stream.Length, maximumBytes));
+        byte[] chunk = new byte[81_920];
+        long totalRead = 0;
+        int read;
+        while ((read = stream.Read(chunk, 0, chunk.Length)) > 0)
         {
-            int read = stream.Read(bytes, totalRead, bytes.Length - totalRead);
-            if (read == 0)
-                break;
             totalRead += read;
+            if (totalRead > maximumBytes)
+                throw new InvalidDataException($"File grew beyond {maximumBytes} bytes while it was read.");
+            bytes.Write(chunk, 0, read);
         }
 
-        if (totalRead > maximumBytes)
-            throw new InvalidDataException($"File grew beyond {maximumBytes} bytes while it was read.");
-
-        return bytes[..totalRead];
+        return bytes.ToArray();
     }
 
     public IEnumerable<string> EnumerateFiles(string directory, string searchPattern)

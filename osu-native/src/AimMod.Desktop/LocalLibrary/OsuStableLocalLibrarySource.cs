@@ -12,8 +12,10 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
 {
     private readonly string installRoot;
     private readonly string songsRoot;
+    private static readonly TimeSpan failure_backoff = TimeSpan.FromSeconds(30);
     private readonly object snapshotLock = new();
     private Task<Snapshot>? snapshotTask;
+    private DateTimeOffset? snapshotFailedAt;
     private readonly TimeProvider timeProvider;
     private DatabaseStamp snapshotStamp;
     private LocalLibraryProgress? progress;
@@ -59,20 +61,31 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
         lock (snapshotLock)
         {
             DatabaseStamp current = getStamp();
-            if (snapshotTask is null || snapshotTask.IsFaulted || snapshotTask.IsCanceled || current != snapshotStamp
-                || snapshotTask.IsCompletedSuccessfully && snapshotTask.Result.RetryAfter <= timeProvider.GetUtcNow())
+            DateTimeOffset now = timeProvider.GetUtcNow();
+            bool failed = snapshotTask is { IsFaulted: true } or { IsCanceled: true };
+            if (failed)
+                snapshotFailedAt ??= now;
+            // A database that fails to decode keeps failing until it changes; sharing violations clear up quickly.
+            bool backingOff = failed && current == snapshotStamp && !isTransientFailure(snapshotTask!)
+                && now - snapshotFailedAt!.Value < failure_backoff;
+            if (snapshotTask is null || failed && !backingOff || current != snapshotStamp
+                || snapshotTask.IsCompletedSuccessfully && snapshotTask.Result.RetryAfter <= now)
             {
                 snapshotStamp = current;
+                snapshotFailedAt = null;
                 snapshotTask = Task.Run(() =>
                 {
                     try { return buildSnapshot(); }
                     finally { Volatile.Write(ref progress, null); }
                 }, CancellationToken.None);
             }
-            task = snapshotTask ??= Task.Run(buildSnapshot, CancellationToken.None);
+            task = snapshotTask;
         }
         return task.WaitAsync(cancellationToken);
     }
+
+    private static bool isTransientFailure(Task task) =>
+        task.IsCanceled || task.Exception?.GetBaseException() is IOException and not EndOfStreamException and not FileNotFoundException;
 
     private Snapshot buildSnapshot()
     {
@@ -227,7 +240,7 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
             rulesetName(score.Ruleset),
             score.PlayerName,
             playedAt,
-            beatmap is null ? 0 : starRatings(beatmap.Entry).GetValueOrDefault(score.Mods, beatmap.StarRating),
+            beatmap is null ? 0 : StarRatingFor(starRatings(beatmap.Entry), score.Mods, beatmap.StarRating),
             accuracy,
             score.ReplayScore,
             score.Combo,
@@ -243,6 +256,17 @@ public sealed class OsuStableLocalLibrarySource : ILocalLibrarySource, ILocalLib
             ReplayPath: replayPath,
             Origin: LocalLibraryOrigin.Stable,
             OnlineBeatmapId: Math.Max(0, beatmap?.Entry.BeatmapId ?? 0));
+    }
+
+    internal static double StarRatingFor(IReadOnlyDictionary<Mods, double> ratings, Mods mods, double fallback)
+    {
+        if (ratings.TryGetValue(mods, out double exact))
+            return exact;
+        Mods effective = mods.HasFlag(Mods.Nightcore) ? mods | Mods.DoubleTime : mods;
+        Mods difficulty = effective & (Mods.Easy | Mods.HardRock | Mods.DoubleTime | Mods.HalfTime);
+        if (ratings.TryGetValue(difficulty | (effective & Mods.Flashlight), out double withFlashlight))
+            return withFlashlight;
+        return ratings.TryGetValue(difficulty, out double masked) ? masked : fallback;
     }
 
     private static string rulesetName(Ruleset mode) => (int)mode switch { 1 => "taiko", 2 => "fruits", 3 => "mania", _ => "osu" };
