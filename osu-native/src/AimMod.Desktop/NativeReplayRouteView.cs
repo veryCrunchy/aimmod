@@ -915,6 +915,16 @@ public partial class NativeReplayRouteView : Container
         }
     }
 
+    private void toggleReplayMap(string key)
+    {
+        if (!groupBlocks.TryGetValue(key, out ReplayGroupBlock? block))
+            return;
+        bool expanded = expandedReplayMaps.Add(key);
+        if (!expanded)
+            expandedReplayMaps.Remove(key);
+        block.SetExpanded(expanded);
+    }
+
     internal static string ReplayGroupSignature(ReplayBrowserMapGroup group) =>
         string.Join(',', group.Attempts.Select(replay => $"{replay.ScoreId:N}:{replay.PerformancePoints:0.#}"));
 
@@ -1305,6 +1315,9 @@ public partial class NativeReplayRouteView : Container
         private bool populated;
 
         public string Signature { get; }
+
+        /// <summary>Attempt rows currently shown under the header.</summary>
+        public int VisibleAttemptCount => expanded ? rows.Children.Count : 0;
 
         public ReplayGroupBlock(
             ReplayBrowserMapGroup group,
