@@ -50,6 +50,26 @@ const cardCopy:Record<string,[string,string]>={
  'global-stable':['Change one thing at a time','Keep your routine and add a small, deliberate challenge.']
 };
 function measuredAxes(profile:any){return (profile.axes||[]).filter((axis:any)=>{const measured=profile.metrics&&profile.metrics[axisMetric[axis.key]];return typeof measured==='number'&&Number.isFinite(measured)&&typeof axis.valuePct==='number'&&Number.isFinite(axis.valuePct)&&axis.valuePct>=0&&axis.valuePct<=100;});}
+function mean(values:number[]){return values.length?values.reduce((a,b)=>a+b,0)/values.length:0;}
+function deviation(values:number[]){const m=mean(values);return values.length?Math.sqrt(values.reduce((a,b)=>a+(b-m)*(b-m),0)/values.length):0;}
+function fmt(value:number,digits=0){const f=(window as any).AimModFormat;return f?f.number(value,digits):String(Math.round(value));}
+// Ranks scenarios by room to improve: how far the last five runs sit below the
+// best, with the main measured issue as one line. Accuracy input is percent.
+function rankScenarios(input:any[],names?:Record<string,string>){
+ const groups=new Map<string,any[]>();
+ (input||[]).forEach(r=>{if(!r||typeof r.normalizedScenario!=='string'||!r.normalizedScenario||!Number.isFinite(r.score)||!Number.isFinite(r.timestampMs))return;const a=groups.get(r.normalizedScenario)||[];a.push(r);groups.set(r.normalizedScenario,a);});
+ const rows:any[]=[];
+ groups.forEach((runs,key)=>{if(runs.length<5)return;runs.sort((a,b)=>a.timestampMs-b.timestampMs);const scores=runs.map(r=>r.score),best=Math.max.apply(null,scores);if(!(best>0))return;
+  const recent=runs.slice(-5),recentAvg=mean(recent.map(r=>r.score)),gap=Math.max(0,1-recentAvg/best),last=runs.slice(-10).map(r=>r.score),spread=mean(last)>0?deviation(last)/mean(last):0;
+  const accuracy=runs.map(r=>r.accuracy).filter((v:any)=>Number.isFinite(v)),recentAccuracy=recent.map(r=>r.accuracy).filter((v:any)=>Number.isFinite(v));
+  const usual=mean(accuracy),now=mean(recentAccuracy);let issue:string,detail:string,kind:string;
+  if(accuracy.length>=8&&recentAccuracy.length>=3&&usual-now>=3){kind='accuracy';issue='Accuracy is down';detail=fmt(now)+'% in your last 5 runs vs '+fmt(usual)+'% usually';}
+  else if(last.length>=8&&spread>=0.08){kind='consistency';issue='Scores swing a lot';detail='Your last '+last.length+' runs vary by ±'+fmt(spread*100)+'% around '+fmt(mean(last));}
+  else if(gap>=0.05){kind='gap';issue='Below your best';detail='Last 5 average '+fmt(recentAvg)+' is '+fmt(gap*100)+'% under your best '+fmt(best);}
+  else {kind='close';issue='Close to your best';detail='Last 5 average is within '+Math.max(1,Math.ceil(gap*100))+'% of your best '+fmt(best);}
+  rows.push({key,name:names&&names[key]||key,runs:runs.length,best,recentAvg,gap,spread,kind,issue,detail,recent:last,lastPlayed:runs[runs.length-1].timestampMs});});
+ rows.sort((a,b)=>b.gap-a.gap||b.runs-a.runs);return rows;
+}
 function render(container:HTMLElement,state:any,onScenario?:(name:string)=>void,onDrillSearch?:(query:string)=>void){
  const host=container as any;const view=host.aimmodCoachingView||{scope:'all',expanded:{},input:null,results:{}};host.aimmodCoachingView=view;
  view.redraw=null;view.observed=view.observed||{};view.feedback=view.feedback||{feedback:[],history:[]};
@@ -68,16 +88,28 @@ function render(container:HTMLElement,state:any,onScenario?:(name:string)=>void,
   const cacheKey=scenario?'scenario:'+scenario:'all';const result=view.results[cacheKey]||(view.results[cacheKey]=analyze(input,scenario));
   node(toolbar,'span',result.samples+' runs','coach-sample');
   if(scenario)node(shell,'p',state.selectedScenario,'coach-scope-name');
-  if(!result.profile){const empty=node(shell,'div',undefined,'coach-empty');node(empty,'h3','Build your practice profile');node(empty,'p','Complete a few more runs to reveal a useful next focus.');history(shell,cacheKey);return;}
+  const names:Record<string,string>={};(state.scenarios||[]).forEach((x:any)=>{if(x&&typeof x.name==='string')names[x.name.trim().toLowerCase()]=x.name;});
+  if(!view.ranking||view.rankingSignature!==view.signature){view.ranking=rankScenarios(input,names);view.rankingSignature=view.signature;}
+  function ranking(parent:HTMLElement){const panel=node(parent,'div',undefined,'coach-ranking');const head=node(panel,'div',undefined,'coach-panel-head');node(head,'h3','Room to improve');node(head,'p','Scenarios ranked by how far your last 5 runs sit below your best.','coach-axis-caption');
+   const rows=view.ranking.slice(0,6);if(!rows.length){node(panel,'p','Play at least 5 runs on a scenario to rank it here.','coach-rank-empty');return;}
+   const selectedKey=String(state.selectedScenario||'').trim().toLowerCase();
+   rows.forEach((row:any,index:number)=>{const item=button(panel,'',()=>{view.scope='scenario';if(onScenario)onScenario(row.name);draw();},'coach-rank'+(row.key===selectedKey?' selected':''));item.setAttribute('aria-label',row.name+': '+row.issue);
+    node(item,'span',String(index+1),'coach-rank-index');const body=node(item,'span',undefined,'coach-rank-body');node(body,'strong',row.name,'coach-rank-name');const line=node(body,'span',undefined,'coach-rank-issue '+row.kind);node(line,'b',row.issue);node(line,'span',' · '+row.detail);
+    // Mini visual: last runs as bars, scaled from 90% of the lowest run to the best.
+    const bars=node(item,'span',undefined,'coach-spark');const low=Math.min.apply(null,row.recent)*0.9,span=Math.max(1e-6,row.best-low);row.recent.forEach((v:number,i:number)=>{const bar=node(bars,'span',undefined,'coach-spark-bar'+(i===row.recent.length-1?' last':''));bar.style.height=Math.max(3,Math.round((v-low)/span*30))+'px';});
+    node(item,'span',row.gap>=0.005?'-'+fmt(row.gap*100)+'%':'At best','coach-rank-gap');});}
+  if(!result.profile){ranking(shell);const empty=node(shell,'div',undefined,'coach-empty');node(empty,'h3','Build your practice profile');node(empty,'p','Complete a few more runs to reveal a useful next focus.');history(shell,cacheKey);return;}
   const profile=result.profile,axes=measuredAxes(profile);const validKeys=axes.map((a:any)=>a.key);
   const strength=profile.strengths.filter(s=>validKeys.indexOf(s.key)>=0)[0];const focus=profile.constraints.filter(s=>validKeys.indexOf(s.key)>=0)[0];
   const lead=node(shell,'div',undefined,'coach-summary');node(lead,'span','NEXT BLOCK','coach-eyebrow');
   node(lead,'h2',focus?'Focus on '+focus.label.toLowerCase():'Keep building your baseline');node(lead,'p',focus?(focusCopy[focus.key]||'Choose one clear focus for your next block.'):'Keep your routine steady and change one demand at a time.');
-  const columns=node(shell,'div',undefined,'coach-columns');const overview=node(columns,'div',undefined,'coach-profile');overview.style.width='43%';overview.style.marginRight='3%';const advice=node(columns,'div',undefined,'coach-advice');advice.style.width='54%';
-  const signalRow=node(overview,'div',undefined,'coach-signal-row');
-  for(const item of [{title:'Strength',signal:strength,cls:'coach-strength'},{title:'Focus next',signal:focus,cls:'coach-focus'}]){const tile=node(signalRow,'div',undefined,'coach-signal '+item.cls);tile.style.width='48%';node(tile,'span',item.title,'coach-eyebrow');node(tile,'strong',item.signal?item.signal.label:'Still developing');}
-  const indicators=node(overview,'div',undefined,'coach-axes');node(indicators,'h3','Practice signals');node(indicators,'p','Relative indicators from your recorded practice.','coach-axis-caption');
-  axes.forEach((axis:any)=>{const row=node(indicators,'div',undefined,'coach-axis');const heading=node(row,'div',undefined,'coach-axis-heading');node(heading,'span',axis.label);node(heading,'span',Math.round(axis.valuePct)+' / 100','coach-axis-value');const track=node(row,'div',undefined,'coach-axis-track');track.setAttribute('role','img');track.setAttribute('aria-label',axis.label+': '+Math.round(axis.valuePct)+' of 100');const fill=node(track,'div',undefined,'coach-axis-fill');fill.style.width=axis.valuePct+'%';});
+  const columns=node(shell,'div',undefined,'coach-columns');const left=node(columns,'div',undefined,'coach-profile');left.style.width='49%';left.style.marginRight='2%';const advice=node(columns,'div',undefined,'coach-advice');advice.style.width='49%';
+  ranking(left);
+  const overview=node(shell,'div',undefined,'coach-signals');const signalRow=node(overview,'div',undefined,'coach-signal-row');
+  for(const item of [{title:'Strength',signal:strength,cls:'coach-strength'},{title:'Focus next',signal:focus,cls:'coach-focus'}]){const tile=node(signalRow,'div',undefined,'coach-signal '+item.cls);tile.style.width='49%';node(tile,'span',item.title,'coach-eyebrow');node(tile,'strong',item.signal?item.signal.label:'Still developing');}
+  const indicators=node(overview,'div',undefined,'coach-axes');node(indicators,'h3','Practice signals');node(indicators,'p','Relative scores out of 100 from your recorded practice. These are not accuracy percentages.','coach-axis-caption');
+  const axisList=node(indicators,'div',undefined,'coach-axis-list');
+  axes.forEach((axis:any)=>{const row=node(axisList,'div',undefined,'coach-axis');row.style.width='48%';const heading=node(row,'div',undefined,'coach-axis-heading');node(heading,'span',axis.label);node(heading,'span',Math.round(axis.valuePct)+' / 100','coach-axis-value');const track=node(row,'div',undefined,'coach-axis-track');track.setAttribute('role','img');track.setAttribute('aria-label',axis.label+': '+Math.round(axis.valuePct)+' of 100');const fill=node(track,'div',undefined,'coach-axis-fill');fill.style.width=axis.valuePct+'%';});
   if(!axes.length)node(indicators,'p','Practice signals will appear as more measurements become available.','coach-axis-caption');
   function recommendation(card:any,index:number){const copy=cardCopy[card.id]||[card.title,card.tip];const item=node(advice,'div',undefined,index===0?'coach-primary':'coach-more');if(index===0)node(item,'span','TRY THIS NEXT','coach-eyebrow');node(item,'h3',copy[0]);if(index===0)node(item,'p',copy[1],'coach-action');
    const details=node(item,'div',undefined,'coach-details');const detailKey=cacheKey+':'+card.id;details.style.display=view.expanded[detailKey]?'block':'none';node(details,'p',card.body);node(details,'p',card.tip,'coach-tip');
@@ -89,10 +121,10 @@ function render(container:HTMLElement,state:any,onScenario?:(name:string)=>void,
   if(window.XMLHttpRequest&&!view.observed[observed]&&!view.busy&&!view.feedbackError){if(Object.keys(view.observed).length>=32)view.observed={};view.observed[observed]=true;send({action:'observe',scope:cacheKey,cards:cards.map((card:any)=>({id:card.id,title:(cardCopy[card.id]||[card.title])[0],body:card.body||'',tip:card.tip||''}))},()=>{});}
   if(view.feedbackError){node(advice,'p','Your advice preferences are unavailable right now, so hidden advice may reappear.','coach-axis-caption');button(advice,'Retry preferences',()=>{view.feedbackError=false;view.observed={};send(null,()=>{});});}
   // Preferences only filter advice; a failed preference request must not hide it.
-  if(!window.XMLHttpRequest||view.feedbackLoaded||view.feedbackError){const visibleCards=cards.filter((card:any)=>feedbackFor(cacheKey,card.id)!=='not_for_me');visibleCards.forEach(recommendation);if(cards.length&&!visibleCards.length)node(advice,'p','Your current advice is hidden. Restore it from Advice history.');}else node(advice,'p','Loading advice…');
+  if(!window.XMLHttpRequest||view.feedbackLoaded||view.feedbackError){const visibleCards=cards.filter((card:any)=>feedbackFor(cacheKey,card.id)!=='not_for_me');const limit=view.allAdvice?visibleCards.length:4;visibleCards.slice(0,limit).forEach(recommendation);if(visibleCards.length>4){const more=button(advice,view.allAdvice?'Show fewer ideas':'Show '+(visibleCards.length-4)+' more ideas',()=>{view.allAdvice=!view.allAdvice;draw();},'button compact coach-more-toggle');more.setAttribute('aria-expanded',String(!!view.allAdvice));}if(cards.length&&!visibleCards.length)node(advice,'p','Your current advice is hidden. Restore it from Advice history.');}else node(advice,'p','Loading advice…');
   history(shell,cacheKey);
   if(!result.cards.length){node(advice,'h3','Keep your next block deliberate');node(advice,'p','Choose one focus, then compare your runs.');}
  }
  view.redraw=draw;draw();if(window.XMLHttpRequest&&!view.feedbackLoaded&&!view.busy&&!view.feedbackError)send(null,()=>{});
 }
-window.AimModCoaching={render,analyze,measuredAxes};
+window.AimModCoaching={render,analyze,measuredAxes,rankScenarios};
