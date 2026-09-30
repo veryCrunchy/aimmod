@@ -294,7 +294,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         else if (settings.Kind == TrainerKind.Reaction) reaction = new(sessionSettings);
         else if (settings.Kind == TrainerKind.Spinner) { status.Text = "Open the osu! gameplay connection to practise spinners."; return; }
         else pointer = new(sessionSettings);
-        began = Time.Current; running = true;
+        began = Time.Current; running = true; liveText.Clear();
         lastAudioPosition = 0; lastAudioAdvance = Time.Current;
         controls.Hide(); timingControls.Hide(); exerciseChoices.Hide(); advanced.Hide(); advancedToggle.Hide(); stop.Show();
         start.SetCaption("Session running"); field.Reset();
@@ -365,8 +365,16 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
             return;
         }
         if (tapping is { } tap && time + settings.OffsetMs < tap.StartMs)
-            status.Text = $"Count-in  {Math.Clamp((int)((time + settings.OffsetMs - 500) / tap.BeatMs) + 1, 1, 4)} / 4";
-        else status.Text = $"{Math.Max(0, (end - time) / 1000):0}s remaining  |  {(tapping?.Hits.Count ?? reaction?.Trials.Count(t => t.Outcome == ReactionOutcome.Hit) ?? pointer!.Responses.Count)} hits  |  Escape to stop";
+            showLive(status, $"Count-in  {Math.Clamp((int)((time + settings.OffsetMs - 500) / tap.BeatMs) + 1, 1, 4)} / 4");
+        else showLive(status, $"{Math.Max(0, (end - time) / 1000):0}s remaining  |  {(tapping?.Hits.Count ?? reaction?.Trials.Count(t => t.Outcome == ReactionOutcome.Hit) ?? pointer!.Responses.Count)} hits  |  Escape to stop");
+    }
+
+    // Per-frame labels: replacing a text flow rebuilds its sprites, so only write changes.
+    private readonly Dictionary<TextFlowContainer, string> liveText = [];
+    private void showLive(TextFlowContainer target, string value)
+    {
+        if (liveText.TryGetValue(target, out string? shown) && shown == value) return;
+        liveText[target] = value; target.Text = value;
     }
 
     protected override bool OnKeyDown(KeyDownEvent e)

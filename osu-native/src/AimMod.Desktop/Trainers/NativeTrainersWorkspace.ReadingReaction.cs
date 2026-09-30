@@ -59,8 +59,8 @@ public partial class NativeTrainersWorkspace
         if (reaction is null) return;
         // Feedback follows a resolved cue. Never predict the next cue or shorten its delay.
         var last = reaction.Trials.LastOrDefault();
-        if (time > reaction.FeedbackUntil) { reactionInstructions.Text = reactionHelp(); return; }
-        reactionInstructions.Text = last?.Outcome switch
+        if (time > reaction.FeedbackUntil) { showLive(reactionInstructions, reactionHelp()); return; }
+        showLive(reactionInstructions, last?.Outcome switch
         {
             ReactionOutcome.Early => "Let the cue appear before pressing. Keep your fingers relaxed during the wait.",
             ReactionOutcome.WrongKey => "Take a moment to read the key before pressing. Keep each finger ready over its own key.",
@@ -68,7 +68,7 @@ public partial class NativeTrainersWorkspace
             ReactionOutcome.Missed => "Stay ready through the wait. Read the cue as it appears; a longer response window can help.",
             ReactionOutcome.Hit => "Release the key and reset. Wait for the next cue instead of guessing its timing.",
             _ => reactionHelp()
-        };
+        });
     }
 
     private void addSpecializedResults(TrainerResult result)
