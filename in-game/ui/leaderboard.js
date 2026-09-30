@@ -10,9 +10,9 @@
   function rows(){if(!list)return;while(list.firstChild)list.removeChild(list.firstChild);var data=page?(mode==='records'?page.records:page.topScores)||[]:[];if(!data.length){list.appendChild(node('p',page?'No scores to show yet.':'','community-empty'));return;}
    for(var i=0;i<Math.min(data.length,shown);i++){var r=data[i]||{},row=node('div',undefined,'community-row'),left=node('div',undefined,'community-player'),right=node('div',undefined,'community-score');
     if(mode==='topScores')row.appendChild(node('span','#'+(i+1),'community-rank'));
-    left.appendChild(node('strong',typeof r.scenario==='string'?r.scenario:'Unknown scenario'));left.appendChild(node('span',typeof r.player==='string'&&r.player?r.player:'Unknown player'));
+    left.appendChild(node('strong',F().safeText(r.scenario,'Unknown scenario')));left.appendChild(node('span',F().safeText(r.player,'Unknown player')));
     right.appendChild(node('strong',F().number(r.score,2)));right.appendChild(node('span',F().known(r.accuracy)?F().percent(r.accuracy,1)+' accuracy':''));row.appendChild(left);row.appendChild(right);list.appendChild(row);}
-   if(data.length>shown){var more=button('Show more scores');more.onclick=function(){shown+=100;rows();};list.appendChild(more);}
+   if(data.length>shown){var more=button('Show more scores');more.onclick=function(){shown+=100;rows();};var moreRow=node('div',undefined,'actions community-more');moreRow.appendChild(more);list.appendChild(moreRow);}
   }
   function load(){if(request)return;status.textContent='Loading community scores…';var xhr=new root.XMLHttpRequest();request=xhr;xhr.open('GET',base()+'leaderboard',true);xhr.timeout=15000;
    xhr.onreadystatechange=function(){if(xhr.readyState!==4||request!==xhr)return;request=null;if(xhr.status!==200){unavailable();return;}try{var next=JSON.parse(xhr.responseText);if(!next||typeof next!=='object')throw Error();page=next;var stamp=F().parse(page.retrievedAt);status.textContent=(page.cached?'Saved scores from ':'Updated ')+(stamp?F().dateTime(stamp):'recently');rows();}catch(e){unavailable();}};
