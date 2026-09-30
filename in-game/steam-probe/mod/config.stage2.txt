@@ -1,0 +1,18 @@
+# AimModSteamProbe settings for the approved stage 2 run. Deploy as
+# Mods\AimModSteamProbe\config.txt together with a main.dll built with
+# -DAIMMOD_PROBE_STAGE2=ON.
+
+# Stage 1 (read-only) plus relay warm-up: the Steam client fetches the relay
+# (SDR) config and pings Valve relays. Sends nothing to any player.
+relay_warmup=1
+relay_wait_seconds=20
+
+observe_callbacks=1
+observe_seconds=30
+
+# Stage 2: private, non-joinable single-slot lobby (aimmod.proto only), chat
+# loopback to self, leave; then an in-memory socket-pair round trip.
+stage2_loopback=1
+
+# Stage 3 (two-account P2P) stays off.
+stage3_role=

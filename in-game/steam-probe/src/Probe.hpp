@@ -7,6 +7,7 @@
 #include <Windows.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -32,11 +33,25 @@ namespace probe
         // ourselves). Needs both the AIMMOD_PROBE_STAGE2 build option and
         // this runtime flag. Off by default.
         bool stage2Loopback = false;
+        // Stage 3 (relay-only P2P test between two accounts). Needs the
+        // AIMMOD_PROBE_STAGE3 build option and stage3_role=listen|connect.
+        std::string stage3Role;       // "", "listen" or "connect"
+        std::uint64_t stage3Peer = 0; // the other account's SteamID64 (local config only)
+        std::string stage3Match;      // shared token, hashed into the handshake
+        int stage3Seconds = 120;
     };
 
+    // AimMod's own SteamNetworkingSockets P2P virtual port ("AM").
+    constexpr int AimModVirtualPort = 0x414D;
+
+    // Runs a function on the host's game thread and waits for it. The mod
+    // drains it from the engine tick; the harness runs it directly.
+    using GameThreadFn = std::function<void(const std::function<void()>&)>;
+
     // Reads key=value lines (relay_warmup, relay_wait_seconds,
-    // observe_callbacks, observe_seconds, stage2_loopback). Missing file or
-    // keys keep the defaults.
+    // observe_callbacks, observe_seconds, stage2_loopback, stage3_role,
+    // stage3_peer, stage3_match, stage3_seconds). Missing file or keys keep
+    // the defaults.
     Options LoadOptions(const std::filesystem::path& file, const LogFn& log);
 
     struct SteamApi
@@ -68,6 +83,18 @@ namespace probe
     // Stage 2. See Stage2Loopback.cpp. Logs and returns false when the build
     // or the runtime flag does not enable it.
     bool RunStage2(const SteamApi& api, const Options& options, const LogFn& log);
+
+    // Stage 3. See Stage3P2P.cpp. Same gating as stage 2 with its own build
+    // option (AIMMOD_PROBE_STAGE3) and stage3_role.
+    bool RunStage3(const SteamApi& api, const Options& options, const LogFn& log, const GameThreadFn& onGameThread);
+
+    // Waits (up to timeoutSeconds) for the relay network and this account's
+    // P2P certificate to be ready, logging both with elapsed times. Asks the
+    // Steam client to fetch them first (contacts Valve only).
+    bool WaitForRelayAndCert(const SteamApi& api, int timeoutSeconds, const LogFn& log);
+
+    // Milliseconds since `start`, for timing logs.
+    double ElapsedMs(std::chrono::steady_clock::time_point start);
 
     // Passive listeners. Construct, Register() on the thread that owns the
     // host's Steam usage (the game thread), Report() later, and always

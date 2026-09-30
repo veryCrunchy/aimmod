@@ -8,8 +8,11 @@ project(AimModSteamProbe LANGUAGES CXX)
 #    AimModCore). Build the Game__Shipping__Win64 configuration.
 #  - AIMMOD_PROBE_STAGE2 (OFF): compiles the lobby/loopback second stage.
 #    Even when compiled, it only runs with stage2_loopback=1 in config.txt.
+#  - AIMMOD_PROBE_STAGE3 (OFF): compiles the two-account relay-only P2P test.
+#    Even when compiled, it only runs with stage3_role set in config.txt.
 option(AIMMOD_PROBE_BUILD_MOD "Build the UE4SS probe mod (requires a local RE-UE4SS checkout)" OFF)
 option(AIMMOD_PROBE_STAGE2 "Compile the write stage (private lobby + loopback)" OFF)
+option(AIMMOD_PROBE_STAGE3 "Compile the two-account relay-only P2P test" OFF)
 set(AIMMOD_UE4SS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../external/RE-UE4SS" CACHE PATH "Local RE-UE4SS checkout (never committed)")
 
 if(AIMMOD_PROBE_BUILD_MOD)
@@ -23,7 +26,7 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_library(aimmod_steam_probe STATIC src/Probe.cpp src/Stage2Loopback.cpp)
+add_library(aimmod_steam_probe STATIC src/Probe.cpp src/Stage2Loopback.cpp src/Stage3P2P.cpp)
 target_include_directories(aimmod_steam_probe PUBLIC src)
 target_link_libraries(aimmod_steam_probe PUBLIC version)
 if(MSVC)
@@ -32,6 +35,9 @@ if(MSVC)
 endif()
 if(AIMMOD_PROBE_STAGE2)
     target_compile_definitions(aimmod_steam_probe PRIVATE AIMMOD_PROBE_STAGE2=1)
+endif()
+if(AIMMOD_PROBE_STAGE3)
+    target_compile_definitions(aimmod_steam_probe PRIVATE AIMMOD_PROBE_STAGE3=1)
 endif()
 
 add_executable(aimmod_steam_probe_harness harness/main.cpp)

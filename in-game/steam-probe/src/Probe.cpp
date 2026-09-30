@@ -113,10 +113,25 @@ namespace probe
             else if (key == "observe_callbacks") options.observeCallbacks = ParseBool(value, options.observeCallbacks);
             else if (key == "observe_seconds") options.observeSeconds = ParseInt(value, options.observeSeconds, 1, 600);
             else if (key == "stage2_loopback") options.stage2Loopback = ParseBool(value, options.stage2Loopback);
+            else if (key == "stage3_role") options.stage3Role = (value == "listen" || value == "connect") ? value : std::string();
+            else if (key == "stage3_match") options.stage3Match = value;
+            else if (key == "stage3_seconds") options.stage3Seconds = ParseInt(value, options.stage3Seconds, 10, 600);
+            else if (key == "stage3_peer")
+            {
+                try
+                {
+                    options.stage3Peer = value.empty() ? 0 : std::stoull(value);
+                }
+                catch (...)
+                {
+                    options.stage3Peer = 0;
+                }
+            }
         }
         char summary[200];
-        std::snprintf(summary, sizeof(summary), "config: relay_warmup=%d observe_callbacks=%d stage2_loopback=%d", options.relayWarmup,
-                      options.observeCallbacks, options.stage2Loopback);
+        std::snprintf(summary, sizeof(summary), "config: relay_warmup=%d observe_callbacks=%d stage2_loopback=%d stage3_role=%s",
+                      options.relayWarmup, options.observeCallbacks, options.stage2Loopback,
+                      options.stage3Role.empty() ? "off" : options.stage3Role.c_str());
         log(summary);
         return options;
     }
@@ -277,6 +292,45 @@ namespace probe
 
         log("stage 1: done");
         return true;
+    }
+
+    double ElapsedMs(std::chrono::steady_clock::time_point start)
+    {
+        return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    }
+
+    bool WaitForRelayAndCert(const SteamApi& api, int timeoutSeconds, const LogFn& log)
+    {
+        auto* utils = static_cast<steamabi::ISteamNetworkingUtils*>(api.Interface("SteamNetworkingUtils004"));
+        auto* sockets = static_cast<steamabi::ISteamNetworkingSockets*>(api.Interface("SteamNetworkingSockets012"));
+        if (!utils || !sockets)
+        {
+            log("readiness: networking interfaces unavailable");
+            return false;
+        }
+        const auto start = std::chrono::steady_clock::now();
+        utils->CheckPingDataUpToDate(1e10f); // InitRelayNetworkAccess
+        sockets->InitAuthentication();       // idempotent; requests the cert if missing
+        double relayAt = -1, certAt = -1;
+        steamabi::SteamRelayNetworkStatus_t relay{};
+        steamabi::SteamNetAuthenticationStatus_t cert{};
+        const auto deadline = start + std::chrono::seconds(timeoutSeconds);
+        while (std::chrono::steady_clock::now() < deadline && (relayAt < 0 || certAt < 0))
+        {
+            if (relayAt < 0 && utils->GetRelayNetworkStatus(&relay) == 100) relayAt = ElapsedMs(start);
+            if (certAt < 0 && sockets->GetAuthenticationStatus(&cert) == 100) certAt = ElapsedMs(start);
+            if (relayAt < 0 || certAt < 0) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        const auto relayNow = utils->GetRelayNetworkStatus(&relay);
+        const auto certNow = sockets->GetAuthenticationStatus(&cert);
+        char line[512];
+        std::snprintf(line, sizeof(line), "readiness: relay=%s after %.0f ms (\"%s\")", steamabi::AvailabilityName(relayNow), relayAt,
+                      Clean(relay.m_debugMsg, sizeof(relay.m_debugMsg)).c_str());
+        log(line);
+        std::snprintf(line, sizeof(line), "readiness: p2p cert=%s after %.0f ms (\"%s\")", steamabi::AvailabilityName(certNow), certAt,
+                      Clean(cert.m_debugMsg, sizeof(cert.m_debugMsg)).c_str());
+        log(line);
+        return relayAt >= 0 && certAt >= 0;
     }
 
     // --- passive callback listeners -------------------------------------

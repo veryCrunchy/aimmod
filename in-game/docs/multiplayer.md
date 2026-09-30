@@ -27,10 +27,11 @@ relative to the game's install folder, written `<game>`.
   match and verification state, and the Gameface UI shows it. Transport is SDR
   P2P with relay-only routing, so peers never learn each other's IP. The
   fallback is a Hub WebSocket relay that uses the same message schema.
-- **The main risk is policy, not technology.** Our mod would use KovaaK's own
-  AppID, its lobbies and its relay allocation, and nothing in Valve's terms
-  covers a third-party mod doing that. Get the KovaaK's developers' agreement
-  before shipping. Keep PvP opt-in. Keep a switch that forces Hub-only transport.
+- **The developer has given permission.** The KovaaK's developer allows
+  decompiling and modifying the game, provided we don't touch the ranked
+  leaderboard system in an unfair way. AimMod PvP results therefore stay
+  completely separate from KovaaK's ranked leaderboards. PvP stays opt-in, with
+  a switch that forces Hub-only transport.
 
 ## 1. Steam access from our mod
 
@@ -80,10 +81,30 @@ Notes:
   client start fetching the SDR config and requesting a P2P certificate. No
   player traffic is involved.
 - The in-game mod runs the same checks against the game's own SteamAPI
-  instance. Section 5 covers how to deploy it. The in-game run is the one that
-  answers the threading question from 1.4.
+  instance (section 5). See 1.2.1 for its results.
 - `steam_api64.dll` prints the full SteamID to the harness's stdout. Don't paste
   harness output into public issues without redacting it.
+
+### 1.2.1 In-game results (stage 1, KovaaK's 3.9.11)
+
+The mod ran inside the game against the game's own SteamAPI instance:
+
+- `steam_api64.dll` 5.53.33.78 was loaded, and SteamAPI had been initialised
+  by the game (user handle 1, pipe 1).
+- Every interface resolved: `SteamUser023`, `SteamFriends018`,
+  `SteamMatchMaking009`, `SteamUtils010`, `SteamNetworking006`,
+  `SteamNetworkingSockets012`, `SteamNetworkingMessages002` and
+  `SteamNetworkingUtils004`. The vtable check was OK.
+- Logged on as an individual in the public universe, AppID 824270.
+- At start-up (no warm-up) the relay was `avail=Waiting config=Attempting`, and
+  the P2P cert was `Requesting cert`.
+- Callbacks: `PersonaStateChange` x5 and `SteamRelayNetworkStatus` x4, with
+  the **first dispatch on the game thread**. No lobby or rich-presence join
+  requests.
+
+So in 3.9.11 the game pumps `SteamAPI_RunCallbacks` on the game thread. The
+bridge still treats handlers as "any thread", because an update could move
+the pump.
 
 ### 1.3 How to resolve interfaces: flat exports and version strings, not OnlineSubsystemSteam
 
@@ -126,8 +147,8 @@ Why not OnlineSubsystemSteam or UWorks:
 - **Who pumps.** The game has OnlineSubsystemSteam
   (`OnlineAsyncTaskThreadSteam %s` is in the exe), and in UE4 its async task
   thread calls `SteamAPI_RunCallbacks`. UWorks may pump too. So callbacks can
-  arrive on a thread that isn't the game thread. The in-game probe logs which
-  thread its passive listeners fire on. Until that result is in, assume "any
+  arrive on a thread that isn't the game thread. The in-game probe measured
+  the game thread on 3.9.11 (see 1.2.1). Handlers are still written for "any
   thread".
 - **Listening doesn't steal.** `steam_api` broadcasts each callback to every
   registered `CCallbackBase`. Our listeners (`SteamAPI_RegisterCallback`) sit
@@ -207,30 +228,35 @@ Allowed, or at least not in question:
 - Showing SteamIDs to lobby or match peers. That's inherent in Steam lobbies
   and P2P.
 
-Grey:
+- **Developer permission.** The KovaaK's developer has given permission to
+  decompile and modify the game freely, provided we don't touch the ranked
+  leaderboard system in an unfair way. That covers our use of the game's
+  AppID for lobbies, relays, rich presence and invites.
 
-- Only the game's developer has agreed to the Steamworks SDK Access Agreement.
-  Our mod would be a third party using the developer's AppID for lobbies,
-  relay bandwidth that Valve provides to that app, and rich presence and
-  invites that show up as "KovaaK's". No rule explicitly allows a mod to do
-  this, and none explicitly forbids it. If the developers object, they or
-  Valve can end it.
+Constraints that follow from the permission:
+
+- AimMod PvP results are kept completely separate from KovaaK's ranked
+  leaderboards. We never submit, alter, block or reorder ranked scores, and a
+  PvP result never becomes a KovaaK's leaderboard entry.
+- A run inside a PvP match is still an ordinary KovaaK's run. Whatever the game
+  itself submits for it is untouched.
+
+Remaining grey areas:
+
+- Valve's Steamworks terms are between Valve and the developer. The
+  developer's permission is what makes our use of their AppID acceptable.
+  Valve could still act on abuse, for example flooding lobbies.
 - Our lobbies count toward the game's usage. If our lobbies were ever
   misfiltered, they'd appear to the game's Duels code.
-- The Subscriber Agreement's conduct rules and KovaaK's own terms govern
-  unauthorized third-party software in online play. PvP between AimMod users
-  that doesn't change gameplay or KovaaK's leaderboards is unlike cheating.
-  Still, "a mod that talks to other players" deserves the developers' explicit
-  OK.
 - The Hub can't verify Steam auth tickets for 824270. `ISteamUserAuth/AuthenticateUserTicket`
   and encrypted app tickets need the AppID owner's publisher key. The Hub
   verifies players through its own account linking. Inside a match, SDR P2P
   connections are certificate-authenticated by Steam, so the remote SteamID of
   a `ConnectP2P` connection can be trusted.
 
-Actions: ask the KovaaK's developers before shipping. Ship PvP opt-in and off
-by default. Provide a switch that forces Hub-only transport. Never touch
-KovaaK's ranked submission or leaderboards.
+Actions: ship PvP opt-in and off by default. Provide a switch that forces
+Hub-only transport. Keep AimMod PvP results separate from KovaaK's ranked
+leaderboards, and never touch KovaaK's ranked submission.
 
 ### Anybrain
 
@@ -436,14 +462,34 @@ harness. It isn't part of AimModCore.
 **Stage 2 (off twice over):**
 
 - It's compiled only with `-DAIMMOD_PROBE_STAGE2=ON`, and even then runs only
-  with `stage2_loopback=1`.
+  with `stage2_loopback=1` (`mod/config.stage2.txt`).
+- It first waits up to 30 s for the relay network and the P2P certificate. It
+  logs each one's state and how many ms it took.
 - It creates one Private, non-joinable, single-slot lobby. Private lobbies are
   invite-only and never listed. "Invisible" would be listed in searches.
-- It sets `aimmod.proto`, loops a lobby chat message back to itself, and leaves.
-- It then loops one message through an in-memory `CreateSocketPair` (no
-  network).
-- Nothing reaches another player. Proving SDR P2P between two accounts is the
-  next step after that, and needs a second account.
+- It sets only `aimmod.proto` and reads it back, loops a lobby chat message
+  back to itself, and leaves. Each step is logged with its timing.
+- It then times five reliable round trips through an in-memory
+  `CreateSocketPair` (no network).
+- It never sends an invite, never sets rich presence, never writes the game's
+  UE session keys and never touches Duels.
+- Scope guards always leave the lobby and close the socket pair, including on
+  failure. If `CreateLobby` hasn't completed when the probe gives up, the guard
+  keeps polling for 30 s and leaves a lobby that appears late.
+- Nothing reaches another player.
+
+Expected log lines, in order: `readiness: relay=…`, `readiness: p2p cert=…`,
+`stage 2 lobby: private lobby … created in N ms`, `SetLobbyJoinable(false)=1`,
+`SetLobbyData(aimmod.proto)=1, read back ok`,
+`chat loopback send=1 received after N ms`, `LeaveLobby issued`,
+`stage 2 sockets: in-memory pair round trips 5/5 …`, and
+`stage 2: done (relay+cert=ready lobby=ok sockets=ok)`.
+
+**Stage 3 (prepared, not run):**
+
+- This is the two-account relay-only P2P test. It's compiled only with
+  `-DAIMMOD_PROBE_STAGE3=ON`, and runs only with `stage3_role` set (see
+  "Stage 3 test" below).
 
 ### Build
 
@@ -463,7 +509,8 @@ cmake --build in-game/steam-probe/build-mod --config Game__Shipping__Win64 --tar
 ```
 
 Output: `build-mod/Game__Shipping__Win64/main.dll`. Add
-`-DAIMMOD_PROBE_STAGE2=ON` only for a build where stage 2 has been approved.
+`-DAIMMOD_PROBE_STAGE2=ON` only for a build where stage 2 has been approved,
+and `-DAIMMOD_PROBE_STAGE3=ON` only for the two-account test.
 
 ### Deploy (manual; the game must be closed)
 
@@ -479,6 +526,14 @@ Output: `build-mod/Game__Shipping__Win64/main.dll`. Add
    is redacted before sharing them.
 6. Remove it: delete the folder and the `mods.txt` and `mods.json` entries.
 
+To upgrade an existing install to the stage 2 build, close the game and
+replace just two files in `Mods\AimModSteamProbe`:
+
+- `dlls\main.dll`: the build configured with `-DAIMMOD_PROBE_STAGE2=ON`
+- `config.txt`: a copy of `mod/config.stage2.txt`
+
+The build stages both under `build-mod/deploy/AimModSteamProbe/`.
+
 ### Harness
 
 The harness inits Steam itself, so the account shows KovaaK's as running
@@ -488,16 +543,71 @@ while it runs:
 aimmod_steam_probe_harness --steam-api <copy of the game's steam_api64.dll> [--relay-warmup] [--observe-seconds 10]
 ```
 
+### Stage 3 test: relay-only P2P between two accounts
+
+This needs two Steam accounts that both own KovaaK's, on two machines. Two
+machines on the same network are fine, because ICE is off and traffic goes
+through Valve's relays either way.
+
+**What it checks:**
+
+- **Transport:** `ISteamNetworkingSockets` P2P on AimMod's virtual port
+  `0x414D` (16717). `P2P_Transport_ICE_Enable` is set to `Disable` on both the
+  listen socket and the outgoing connection, so the connection is relay-only.
+  The remote address is never logged.
+- **Accepting:** the listener sees incoming connections through a passive
+  `SteamNetConnectionStatusChangedCallback_t` (1221) listener. It registers
+  that listener on the game thread and only enqueues events. It accepts only
+  the configured peer arriving on its own listen socket, and closes anything
+  else with reason 5002. No lobby, invite or rich presence is involved.
+- **After connecting:** it checks that Steam authenticated and encrypted the
+  connection, that it is relayed, and that the remote SteamID is the
+  configured peer. It logs the relay's data-centre code.
+- **Handshake:** each frame is 28 bytes:
+  - the magic `AMP1`
+  - protocol version 1
+  - the message type (Hello, HelloAck, Ping, Pong, Bye)
+  - the 64-bit FNV-1a hash of `stage3_match`
+  - a sequence number and a timestamp
+
+  A mismatch in the magic, version or match hash closes the connection. Hello
+  and HelloAck are reliable.
+- **Measurement:** the connector sends 20 unreliable pings 100 ms apart, then
+  logs RTT min/median/max and a reliable Bye.
+- **Cleanup:** a session object always closes the connection and the listen
+  socket, and unregisters the listener.
+
+**Setup, on each machine:**
+
+1. Build with `-DAIMMOD_PROBE_STAGE3=ON`, as the mod or with the harness only.
+2. In the local `config.txt`, set:
+   - `stage3_role`: `listen` on machine A, `connect` on machine B
+   - `stage3_peer`: the **other** account's SteamID64
+   - `stage3_match`: the same token on both
+
+   These values stay in the local config and never go in the repository.
+3. Start A first, then B. Each side runs stage 3 after stage 1, or after
+   stage 2 if that's enabled. `stage3_seconds` (default 120) bounds the
+   listener's wait.
+4. Pass criteria:
+   - Both sides log `connected … relayed=1 authenticated+encrypted=1 peer-match=1`
+     and `handshake ok`.
+   - B logs at least 15/20 pongs with its RTTs.
+   - A logs `bye=1`.
+   - Neither UE4SS.log nor the game log shows any `FOnlineAsyncEvent*` line or
+     Duels activity at the same time.
+
+The harness can run the same test without the game:
+
+```
+aimmod_steam_probe_harness --steam-api <copy of steam_api64.dll> --stage3-role listen  --stage3-peer <B's SteamID64> --stage3-match <token>
+aimmod_steam_probe_harness --steam-api <copy of steam_api64.dll> --stage3-role connect --stage3-peer <A's SteamID64> --stage3-match <token>
+```
+
 ## 6. Next steps
 
-1. Run the in-game probe (stage 1) and record which thread the callbacks
-   arrive on.
-2. With approval, run stage 2 in-game.
-3. Write a two-account SDR test: `CreateListenSocketP2P` and `ConnectP2P` on
-   the AimMod virtual port with ICE off. Measure RTT and confirm that no
-   game-side handler reacts. Watch UE4SS.log and the game log for
-   `FOnlineAsyncEvent*`.
-4. Contact the KovaaK's developers about using the AppID for opt-in AimMod
-   PvP.
-5. Build `AimModNet`, the service match engine and the Hub room and relay
-   endpoints behind a feature flag.
+1. Run stage 2 in-game and record its timings here.
+2. Run the stage 3 test between two accounts.
+3. Build `AimModNet`, the service match engine and the Hub room and relay
+   endpoints behind a feature flag. AimMod PvP results must stay separate
+   from KovaaK's ranked leaderboards.

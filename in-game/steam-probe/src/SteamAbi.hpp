@@ -79,6 +79,7 @@ namespace steamabi
     using PFN_ISteamMatchmaking_SendLobbyChatMsg = bool (*)(std::intptr_t self, std::uint64_t lobby, const void* data, int size);
     using PFN_ISteamMatchmaking_GetLobbyChatEntry = int (*)(std::intptr_t self, std::uint64_t lobby, int chatId, std::uint64_t* user,
                                                             void* data, int size, int* entryType);
+    using PFN_ISteamMatchmaking_GetLobbyData = const char* (*)(std::intptr_t self, std::uint64_t lobby, const char* key);
     using PFN_ISteamMatchmaking_LeaveLobby = void (*)(std::intptr_t self, std::uint64_t lobby);
 
     // ELobbyType. Private lobbies are joinable by invite only and never
@@ -156,6 +157,86 @@ namespace steamabi
     static_assert(offsetof(SteamNetworkingMessage_t, m_pfnRelease) == 184);
 #pragma pack(pop)
 
+    using HSteamListenSocket = std::uint32_t;
+    constexpr HSteamListenSocket k_HSteamListenSocket_Invalid = 0;
+
+    // ESteamNetworkingConnectionState
+    constexpr int k_EConnState_None = 0;
+    constexpr int k_EConnState_Connecting = 1;
+    constexpr int k_EConnState_FindingRoute = 2;
+    constexpr int k_EConnState_Connected = 3;
+    constexpr int k_EConnState_ClosedByPeer = 4;
+    constexpr int k_EConnState_ProblemDetectedLocally = 5;
+
+    // SteamNetConnectionInfo_t::m_nFlags
+    constexpr int k_nConnFlags_Unauthenticated = 1;
+    constexpr int k_nConnFlags_Unencrypted = 2;
+    constexpr int k_nConnFlags_Relayed = 16;
+
+    // ESteamNetworkingConfigValue / ESteamNetworkingConfigDataType
+    constexpr int k_ESteamNetworkingConfig_TimeoutInitial = 24;
+    constexpr int k_ESteamNetworkingConfig_P2P_Transport_ICE_Enable = 104;
+    constexpr int k_nSteamNetworkingConfig_P2P_Transport_ICE_Enable_Disable = 0;
+    constexpr int k_ESteamNetworkingConfig_Int32 = 1;
+
+    constexpr int k_iSteamNetConnectionStatusChanged = 1221; // k_iSteamNetworkingSocketsCallbacks + 1
+
+#pragma pack(push, 1)
+    struct SteamNetworkingIPAddr
+    {
+        std::uint8_t m_ipv6[16];
+        std::uint16_t m_port;
+    };
+    static_assert(sizeof(SteamNetworkingIPAddr) == 18);
+#pragma pack(pop)
+
+#pragma pack(push, 8)
+    struct SteamNetworkingConfigValue_t
+    {
+        int m_eValue;
+        int m_eDataType;
+        union
+        {
+            std::int32_t m_int32;
+            std::int64_t m_int64;
+            float m_float;
+            const char* m_string;
+            void* m_ptr;
+        } m_val;
+    };
+    static_assert(sizeof(SteamNetworkingConfigValue_t) == 16);
+
+    struct SteamNetConnectionInfo_t
+    {
+        SteamNetworkingIdentity m_identityRemote;
+        std::int64_t m_nUserData;
+        HSteamListenSocket m_hListenSocket;
+        SteamNetworkingIPAddr m_addrRemote; // never logged
+        std::uint16_t m__pad1;
+        SteamNetworkingPOPID m_idPOPRemote;
+        SteamNetworkingPOPID m_idPOPRelay;
+        int m_eState;
+        int m_eEndReason;
+        char m_szEndDebug[128];
+        char m_szConnectionDescription[128];
+        int m_nFlags;
+        std::uint32_t reserved[63];
+    };
+    static_assert(offsetof(SteamNetConnectionInfo_t, m_nUserData) == 136);
+    static_assert(offsetof(SteamNetConnectionInfo_t, m_idPOPRemote) == 168);
+    static_assert(offsetof(SteamNetConnectionInfo_t, m_eState) == 176);
+    static_assert(sizeof(SteamNetConnectionInfo_t) == 696);
+
+    struct SteamNetConnectionStatusChangedCallback_t
+    {
+        HSteamNetConnection m_hConn;
+        SteamNetConnectionInfo_t m_info;
+        int m_eOldState;
+    };
+    static_assert(offsetof(SteamNetConnectionStatusChangedCallback_t, m_info) == 8);
+    static_assert(sizeof(SteamNetConnectionStatusChangedCallback_t) == 712);
+#pragma pack(pop)
+
     // "SteamNetworkingUtils004". InitRelayNetworkAccess() is an inline helper
     // in the public header (CheckPingDataUpToDate(1e10f)), not a vtable slot.
     class ISteamNetworkingUtils
@@ -184,11 +265,13 @@ namespace steamabi
     public:
         virtual void Slot0_CreateListenSocketIP() = 0;
         virtual void Slot1_ConnectByIPAddress() = 0;
-        virtual void Slot2_CreateListenSocketP2P() = 0;
-        virtual void Slot3_ConnectP2P() = 0;
-        virtual void Slot4_AcceptConnection() = 0;
+        virtual HSteamListenSocket CreateListenSocketP2P(int localVirtualPort, int nOptions,
+                                                         const SteamNetworkingConfigValue_t* options) = 0; // 2
+        virtual HSteamNetConnection ConnectP2P(const SteamNetworkingIdentity& remote, int remoteVirtualPort, int nOptions,
+                                               const SteamNetworkingConfigValue_t* options) = 0; // 3
+        virtual EResult AcceptConnection(HSteamNetConnection conn) = 0;                            // 4
         virtual bool CloseConnection(HSteamNetConnection peer, int reason, const char* debug, bool linger) = 0; // 5
-        virtual void Slot6_CloseListenSocket() = 0;
+        virtual bool CloseListenSocket(HSteamListenSocket socket) = 0;                             // 6
         virtual void Slot7_SetConnectionUserData() = 0;
         virtual void Slot8_GetConnectionUserData() = 0;
         virtual void Slot9_SetConnectionName() = 0;
@@ -198,7 +281,7 @@ namespace steamabi
         virtual void Slot12_SendMessages() = 0;
         virtual void Slot13_FlushMessagesOnConnection() = 0;
         virtual int ReceiveMessagesOnConnection(HSteamNetConnection conn, SteamNetworkingMessage_t** out, int max) = 0; // 14
-        virtual void Slot15_GetConnectionInfo() = 0;
+        virtual bool GetConnectionInfo(HSteamNetConnection conn, SteamNetConnectionInfo_t* info) = 0; // 15
         virtual void Slot16_GetConnectionRealTimeStatus() = 0;
         virtual void Slot17_GetDetailedConnectionStatus() = 0;
         virtual void Slot18_GetListenSocketAddress() = 0;
@@ -213,6 +296,7 @@ namespace steamabi
     };
 
     constexpr int k_nSteamNetworkingSend_Reliable = 8;
+    constexpr int k_nSteamNetworkingSend_UnreliableNoDelay = 0 | 4 | 1;
 
     // Layout of steam_api's CCallbackBase (steam_api_common.h). The dll
     // dispatches through this vtable; MSVC lays the overloads out exactly as

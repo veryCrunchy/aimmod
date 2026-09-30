@@ -8,6 +8,8 @@
 //   aimmod_steam_probe_harness --steam-api <path\to\steam_api64.dll>
 //       [--app-id 824270] [--relay-warmup] [--observe-seconds 10]
 //       [--stage2-loopback]   (only honoured by an AIMMOD_PROBE_STAGE2 build)
+//       [--stage3-role listen|connect --stage3-peer <SteamID64> --stage3-match <token> [--stage3-seconds 120]]
+//                             (only honoured by an AIMMOD_PROBE_STAGE3 build)
 #include "Probe.hpp"
 
 #include <Windows.h>
@@ -41,6 +43,18 @@ int wmain(int argc, wchar_t** argv)
         else if (arg == L"--relay-warmup") options.relayWarmup = true;
         else if (arg == L"--observe-seconds" && i + 1 < argc) options.observeSeconds = _wtoi(argv[++i]);
         else if (arg == L"--stage2-loopback") options.stage2Loopback = true;
+        else if (arg == L"--stage3-role" && i + 1 < argc)
+        {
+            const std::wstring role = argv[++i];
+            options.stage3Role = role == L"listen" ? "listen" : role == L"connect" ? "connect" : "";
+        }
+        else if (arg == L"--stage3-peer" && i + 1 < argc) options.stage3Peer = _wcstoui64(argv[++i], nullptr, 10);
+        else if (arg == L"--stage3-match" && i + 1 < argc)
+        {
+            const std::wstring match = argv[++i];
+            for (const wchar_t c : match) options.stage3Match.push_back(c < 0x80 ? static_cast<char>(c) : '?');
+        }
+        else if (arg == L"--stage3-seconds" && i + 1 < argc) options.stage3Seconds = _wtoi(argv[++i]);
         else
         {
             std::fwprintf(stderr, L"unknown argument: %s\n", arg.c_str());
@@ -105,6 +119,8 @@ int wmain(int argc, wchar_t** argv)
         Print("callbacks: (harness) \"game thread\" means the harness's RunCallbacks pump thread");
     }
     probe::RunStage2(api, options, Print);
+    // The harness has no game thread; its jobs run on the calling thread.
+    probe::RunStage3(api, options, Print, [](const std::function<void()>& fn) { fn(); });
 
     // Stop dispatching before the listeners go away.
     pump = false;
