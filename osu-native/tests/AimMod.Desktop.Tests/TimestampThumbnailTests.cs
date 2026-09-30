@@ -35,6 +35,27 @@ public sealed class TimestampThumbnailTests
         finally { Directory.Delete(root, true); }
     }
 
+    [Test]
+    public void CacheCleanupRemovesInterruptedCaptures()
+    {
+        string root = Path.Combine(TestContext.CurrentContext.WorkDirectory, "thumbnail-cache-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            string stale = Path.Combine(root, "stale.jpg.tmp"), fresh = Path.Combine(root, "fresh.jpg.tmp");
+            File.WriteAllBytes(stale, [1]); File.SetLastWriteTimeUtc(stale, DateTime.UtcNow.AddHours(-2));
+            File.WriteAllBytes(fresh, [1]);
+            string orphan = Path.Combine(root, "orphan.jpg.json"); File.WriteAllText(orphan, "{}");
+            string kept = Path.Combine(root, "kept.jpg"); File.WriteAllBytes(kept, [1]); File.WriteAllText(kept + ".json", "{}");
+            TimestampThumbnailService.Prune(root, DateTime.UtcNow);
+            Assert.That(File.Exists(stale), Is.False);
+            Assert.That(File.Exists(orphan), Is.False);
+            Assert.That(File.Exists(fresh), Is.True, "An in-progress capture is kept.");
+            Assert.That(File.Exists(kept + ".json"), Is.True);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
     [Test, Explicit("Fetches one public VOD frame configured by the operator; no full video download.")]
     public async Task CaptureSelectedPublicVodFrame()
     {

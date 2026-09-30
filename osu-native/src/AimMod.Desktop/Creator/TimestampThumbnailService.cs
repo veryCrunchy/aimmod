@@ -109,6 +109,11 @@ public sealed partial class TimestampThumbnailService(string cacheDirectory)
 
     internal static void Prune(string directory, DateTime now)
     {
+        // Interrupted captures leave temporary frames and metadata without an image.
+        foreach (var stale in new DirectoryInfo(directory).EnumerateFiles("*.tmp").Where(f => now - f.LastWriteTimeUtc > TimeSpan.FromHours(1))
+            .Concat(new DirectoryInfo(directory).EnumerateFiles("*.jpg.json").Where(f => !File.Exists(f.FullName[..^5]))))
+            try { stale.Delete(); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
         var files = new DirectoryInfo(directory).EnumerateFiles("*.jpg").OrderByDescending(f => f.LastWriteTimeUtc).ToArray();
         long kept = 0; int count = 0;
         foreach (var file in files)
