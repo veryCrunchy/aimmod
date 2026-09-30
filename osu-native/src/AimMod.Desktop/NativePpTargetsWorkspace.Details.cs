@@ -20,7 +20,7 @@ public partial class NativePpTargetsWorkspace
             target.Title,
             $"{target.Artist} / {target.Creator}",
             $"[{target.Difficulty}]",
-            $"{target.StarRating:0.00} stars / {target.Bpm:0} BPM / {TimeSpan.FromSeconds(target.TotalLengthSeconds):m\\:ss}",
+            $"{target.StarRating:0.00} stars / {target.Bpm:0} BPM / {Math.Max(0, target.TotalLengthSeconds) / 60}:{Math.Max(0, target.TotalLengthSeconds) % 60:00}",
             $"{set.Status} / {(target.SuggestedMods.Count == 0 ? "NM" : string.Join(" + ", target.SuggestedMods))}",
             $"AR {difficulty?.ApproachRate:0.#} / OD {difficulty?.OverallDifficulty:0.#} / CS {difficulty?.CircleSize:0.#} / HP {difficulty?.DrainRate:0.#}",
             target.MaximumCombo is { } combo ? $"Maximum combo: {combo:N0}x" : "Maximum combo unavailable",
@@ -175,9 +175,9 @@ public partial class NativePpTargetsWorkspace
             if (!IsDisposed) Schedule(() => { busy = false; actionStatus.Text = message; });
         }
 
-        private static ClickableContainer button(string label, IconUsage icon, Action? action, float x, float y, float width) => new()
+        private static ClickableContainer button(string label, IconUsage icon, Action? action, float x, float y, float width) => new DetailButton
         {
-            Position = new(x, y), Size = new(width, 32), Action = action,
+            Position = new(x, y), Size = new(width, 32), Action = action, Masking = true, CornerRadius = AimModVisualStyle.ControlRadius,
             Children =
             [
                 new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
@@ -185,5 +185,34 @@ public partial class NativePpTargetsWorkspace
                 text(label, 11, action is null ? AimModPalette.Muted : AimModPalette.Text).With(d => d.Position = new(32, 9)),
             ],
         };
+
+        private sealed partial class DetailButton : ClickableContainer
+        {
+            protected override bool OnHover(osu.Framework.Input.Events.HoverEvent e)
+            {
+                if (Action is not null)
+                    Children.OfType<Box>().First().FadeColour(AimModPalette.PanelHover, AimModVisualStyle.FastTransition);
+                return Action is not null;
+            }
+
+            protected override void OnHoverLost(osu.Framework.Input.Events.HoverLostEvent e)
+            {
+                Children.OfType<Box>().First().FadeColour(AimModPalette.PanelRaised, AimModVisualStyle.HoverTransition);
+                base.OnHoverLost(e);
+            }
+
+            protected override bool OnMouseDown(osu.Framework.Input.Events.MouseDownEvent e)
+            {
+                if (Action is not null)
+                    this.ScaleTo(0.97f, 80, Easing.OutQuint);
+                return base.OnMouseDown(e);
+            }
+
+            protected override void OnMouseUp(osu.Framework.Input.Events.MouseUpEvent e)
+            {
+                this.ScaleTo(1, 160, Easing.OutQuint);
+                base.OnMouseUp(e);
+            }
+        }
     }
 }
