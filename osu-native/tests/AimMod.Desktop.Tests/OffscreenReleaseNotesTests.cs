@@ -43,9 +43,11 @@ public sealed partial class OffscreenVisualCaptureTests
                 {
                     var service = new NotesFixtureService(missingNotes);
                     Action nothing = () => { };
-                    var home = (Drawable)Activator.CreateInstance(typeof(AimModGame).GetNestedType("HomeScreen", BindingFlags.NonPublic)!,
-                        [service, nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing])!;
-                    home.RelativeSizeAxes = Axes.Both;
+                    var library = new InMemoryLocalLibrarySource([], []);
+                    var home = new AimMod.Desktop.Home.NativeHomeDashboard(
+                        new AimMod.Desktop.Home.HomeDashboardSources(library, () => null, () => null, _ => null, () => null, () => null, () => [], () => null, () => null),
+                        new AimMod.Desktop.Home.HomeDashboardActions(nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing, _ => { }, _ => { }),
+                        service);
                     var content = (Container)typeof(AimModGame).GetField("content", flags)!.GetValue(this)!;
                     content.Padding = AimModVisualStyle.PagePadding;
                     content.Child = home;

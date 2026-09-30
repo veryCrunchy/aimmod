@@ -63,7 +63,7 @@ public partial class AimModGame : OsuGameBase
     private readonly AimModLaunchOptions launchOptions;
     private readonly ILocalLibrarySource? configuredLocalLibrary;
     private Container content = null!;
-    private HomeScreen? homeScreen;
+    private Home.NativeHomeDashboard? homeScreen;
     private NativeBeatmapDiscoveryScreen? beatmapsScreen;
     private NativeReplayRouteView? replayRoute;
     private Creator.FootageLibraryStore? footageLibraryStore;
@@ -736,8 +736,26 @@ public partial class AimModGame : OsuGameBase
 
     private void showHome()
     {
-        homeScreen ??= new HomeScreen(updateService!, showBeatmaps, showSkins, showReplays, showStatistics, showCoaching, showPpTargets, showTrainers, showSettings) { RelativeSizeAxes = Axes.Both };
+        homeScreen ??= new Home.NativeHomeDashboard(createHomeSources(), new Home.HomeDashboardActions(
+            showBeatmaps, showSkins, showReplays, showStatistics, showCoaching, showPpTargets, showTrainers, showSettings,
+            () => { showTrainers(); trainersWorkspace?.ResumeGuidedPractice(); }, openBeatmapPractice, prepareCatalogReplay), updateService!);
         switchWorkspaceRoute(NativeRoute.Home, homeScreen);
+        homeScreen.Refresh();
+    }
+
+    private Home.HomeDashboardSources createHomeSources()
+    {
+        string accountPath(string relative) => Storage.GetFullPath(string.Format(relative, currentOsuProfile?.UserId ?? 0), true);
+        return new Home.HomeDashboardSources(
+            localLibrary,
+            () => accountScoreHistoryService,
+            () => currentOsuProfile,
+            profile => new Home.HomeProfileHistoryStore(Storage.GetFullPath($"home/profile-history-{profile.UserId}.json", true)).Record(profile, DateTimeOffset.Now),
+            () => new CoachingTrainingStore(accountPath("coaching/session-{0}.json")).Load(),
+            () => new TrainerHistoryStore(accountPath("trainers/history-{0}.json")).LoadGuidedPlan(),
+            () => new TrainerHistoryStore(accountPath("trainers/history-{0}.json")).Load(),
+            () => new PpTargetWorkspaceCache(Storage.GetFullPath("cache/pp-target-workspace-v1.json", true)).Load(),
+            () => localScorePpHydrationService);
     }
 
     private void showBeatmaps()
@@ -1255,6 +1273,7 @@ public partial class AimModGame : OsuGameBase
             ? new OfficialAccountScoreHistoryService(() => officialApiClient)
             : stablePublicScoreHistoryService;
         header.SetProfilePreference(useLazer ? verifiedLazerProfile : null);
+        homeScreen?.Refresh();
     }
 
     internal static bool UseLazerAccount(OsuClientDestination destination, bool stableInstalled, OsuProfile? verifiedLazer)
@@ -2119,72 +2138,6 @@ public partial class AimModGame : OsuGameBase
         }
     }
 
-    private partial class HomeScreen : Container
-    {
-        private const float link_height = 128;
-        private readonly FillFlowContainer<Drawable> links;
-        private AimModLayout.ChangeTracker<float> widthTracker;
-
-        public HomeScreen(
-            INativeUpdateService updateService,
-            Action showBeatmaps,
-            Action showSkins,
-            Action showReplays,
-            Action showStatistics,
-            Action showCoaching,
-            Action showPpTargets,
-            Action showTrainers,
-            Action showSettings)
-        {
-            Children = [
-                new AimModSectionHeader("Your osu! workspace", "Find a map, review your plays, and choose what to practise next.", "AimMod"),
-                new Container
-                {
-                    RelativeSizeAxes = Axes.Both, Padding = new MarginPadding { Top = 80 },
-                    Child = new AimModScrollContainer
-                    {
-                        RelativeSizeAxes = Axes.Both,
-                        Child = new FillFlowContainer
-                        {
-                            RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Direction = FillDirection.Vertical,
-                            Spacing = new(AimModVisualStyle.RowSpacing), Padding = new MarginPadding { Right = 8, Bottom = 16 },
-                            Children = [
-                                text("WHAT WOULD YOU LIKE TO WORK ON?", AimModVisualStyle.MinReadableFontSize, AimModPalette.Accent, "Bold"),
-                                links = new FillFlowContainer<Drawable>
-                                {
-                                    RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Direction = FillDirection.Full,
-                                    Children = [
-                                        new WorkspaceLink("Improve a map", "Coaching · Turn difficult sections into exercises", showCoaching, WorkspaceIllustrationKind.Coaching),
-                                        new WorkspaceLink("Train a skill", "Trainers · Warmup, timing, aim and reading", showTrainers, WorkspaceIllustrationKind.Trainers),
-                                        new WorkspaceLink("Review a play", "Replays · Watch your movement and timing", showReplays, WorkspaceIllustrationKind.Replays),
-                                        new WorkspaceLink("Find your next PP play", "PP targets · Find maps that fit your skills", showPpTargets, WorkspaceIllustrationKind.Targets),
-                                        new WorkspaceLink("See your progress", "Statistics · Follow your results over time", showStatistics, WorkspaceIllustrationKind.Statistics),
-                                        new WorkspaceLink("Browse beatmaps", "Beatmaps · Find songs and install maps", showBeatmaps, WorkspaceIllustrationKind.Beatmaps),
-                                        new WorkspaceLink("Choose your skin", "Skins · Make osu! feel like home", showSkins, WorkspaceIllustrationKind.Skins),
-                                        new WorkspaceLink("Connect & customise", "Settings · Your osu! setup, keys and audio", showSettings, WorkspaceIllustrationKind.Settings),
-                                    ],
-                                },
-                                new Container { RelativeSizeAxes = Axes.X, Height = AimModVisualStyle.RowSpacing },
-                                new NativeUpdateSurface(updateService),
-                            ],
-                        },
-                    },
-                },
-            ];
-        }
-
-        protected override void Update()
-        {
-            base.Update();
-            if (!widthTracker.Update(links.DrawWidth) || links.DrawWidth <= 0)
-                return;
-            int columns = AimModLayout.ColumnsFor(links.DrawWidth, 320, 2);
-            float width = (float)Math.Floor(links.DrawWidth / columns);
-            foreach (Drawable link in links)
-                link.Size = new(width, link_height);
-        }
-    }
-
     private partial class LaunchErrorScreen : Container
     {
         private readonly FillFlowContainer panel;
@@ -2229,47 +2182,6 @@ public partial class AimModGame : OsuGameBase
             base.Update();
             if (widthTracker.Update(DrawWidth))
                 panel.Width = Math.Clamp(DrawWidth, 1, 680);
-        }
-    }
-
-    private partial class WorkspaceLink : AimModInteractiveSurface
-    {
-        private readonly AimModWorkspaceIllustration illustration;
-        private readonly FillFlowContainer<Drawable> labels;
-        private AimModLayout.ChangeTracker<float> widthTracker;
-
-        public WorkspaceLink(string title, string description, Action action, WorkspaceIllustrationKind kind)
-        {
-            Padding = new MarginPadding(AimModVisualStyle.RelatedSpacing);
-            CornerRadius = AimModVisualStyle.ControlRadius;
-            BackgroundColour = AimModPalette.Panel;
-            Action = action;
-            illustration = new AimModWorkspaceIllustration(kind, () => IsHovered || HasFocus)
-            {
-                Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft, X = 12, Width = 144, Height = 96,
-            };
-            labels = new FillFlowContainer<Drawable>
-            {
-                Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft, RelativeSizeAxes = Axes.X,
-                AutoSizeAxes = Axes.Y, Direction = FillDirection.Vertical, Spacing = new(6),
-                Children = [copy(title, 17, AimModPalette.Text, "SemiBold"), copy(description, 12, AimModPalette.Muted)],
-            };
-            Children = [illustration, labels,
-                new SpriteIcon { Anchor = Anchor.CentreRight, Origin = Anchor.CentreRight, X = -10,
-                    Icon = FontAwesome.Solid.ChevronRight, Size = new(9), Colour = AimModPalette.Muted }];
-        }
-
-        private static osu.Game.Graphics.Containers.OsuTextFlowContainer copy(string value, float size, Colour4 colour, string weight = "Regular") => new(t =>
-            { t.Font = new FontUsage(size: size, weight: weight); t.Colour = colour; })
-            { RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Text = value };
-
-        protected override void Update()
-        {
-            base.Update();
-            if (!widthTracker.Update(DrawWidth))
-                return;
-            illustration.Width = DrawWidth < 420 ? 104 : 144;
-            labels.Padding = new MarginPadding { Left = illustration.Width + 28, Right = 28 };
         }
     }
 
