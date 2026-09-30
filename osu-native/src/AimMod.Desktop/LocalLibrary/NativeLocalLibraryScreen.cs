@@ -36,10 +36,12 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
     private readonly BindableList<LocalLibraryRow> rows = new();
     [Cached]
     private readonly Bindable<Guid?> selectedRowId = new();
-    private readonly OsuTextBox searchBox;
+    private readonly AimModTextBox searchBox;
     private readonly TruncatingSpriteText resultStatus;
     private readonly LoadMoreButton loadMoreButton;
-    private readonly AimModLoadingOverlay loadingOverlay;
+    private readonly AimModInlineStatus loadStatus;
+    private AimModLayout.ChangeTracker<float> layoutTracker;
+    private AimModLayout.ChangeTracker<(string, int, int)> progressTracker;
     private readonly AimModStarRatingFilter starSlider;
     private readonly OsuDropdown<LocalLibrarySort> sortDropdown;
     private readonly Bindable<LocalLibrarySort> sortMode;
@@ -104,7 +106,7 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
             {
                 Y = 72,
                 Text = mode == NativeLocalLibraryMode.Beatmaps ? "SEARCH INSTALLED MAPS" : "SEARCH LOCAL PLAYS",
-                Font = new FontUsage(size: 10, weight: "Bold"),
+                Font = AimModVisualStyle.LabelFont,
                 Colour = AimModPalette.Cyan,
             },
             searchBox = new AimModTextBox
@@ -116,6 +118,7 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
                 PlaceholderText = mode == NativeLocalLibraryMode.Beatmaps
                     ? "Search beatmaps, artists, mappers, or difficulties"
                     : "Search replays, players, maps, or mods",
+                FocusOnSearchShortcut = true,
             },
             starSlider = new AimModStarRatingFilter
             {
@@ -134,7 +137,7 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
                 Origin = Anchor.TopRight,
                 Position = new(0, 72),
                 Text = "SORT",
-                Font = new FontUsage(size: 10, weight: "Bold"),
+                Font = AimModVisualStyle.LabelFont,
                 Colour = AimModPalette.Cyan,
             },
             sortDropdown = new AimModDropdown<LocalLibrarySort>
@@ -163,13 +166,26 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
                 Anchor = Anchor.BottomCentre,
                 Origin = Anchor.BottomCentre,
             },
-            loadingOverlay = new AimModLoadingOverlay(),
+            loadStatus = new AimModInlineStatus
+            {
+                Anchor = Anchor.BottomCentre,
+                Origin = Anchor.BottomCentre,
+                Y = -(AimModVisualStyle.ControlHeight + AimModVisualStyle.RowSpacing),
+                Depth = -1,
+            },
         };
     }
 
     protected override void Update()
     {
         base.Update();
+
+        if (loadStatus.IsShowing && !loadStatus.IsError && controller.Progress is { } progress
+            && progressTracker.Update((progress.State, progress.Completed, progress.Total)))
+            loadStatus.SetLoadingText(progress.Total > 0 ? $"{progress.State}  {progress.Completed:N0} / {progress.Total:N0}" : progress.State);
+
+        if (!layoutTracker.Update(DrawWidth))
+            return;
 
         float width = Math.Max(640, DrawWidth);
         const float gap = AimModVisualStyle.SectionSpacing;
@@ -193,7 +209,7 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
     protected override void LoadComplete()
     {
         base.LoadComplete();
-        searchBox.OnCommit += (_, _) => resetQuery();
+        searchBox.QueryChanged += _ => resetQuery();
         minimumStars.BindValueChanged(_ => scheduleQuery());
         maximumStars.BindValueChanged(_ => scheduleQuery());
         sortMode.BindValueChanged(_ => resetQuery());
@@ -251,12 +267,19 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
             return;
 
         displayedRevision = state.Revision;
-        IEnumerable<LocalLibraryRow> nextRows = mode == NativeLocalLibraryMode.Beatmaps
-            ? state.BeatmapSets.Select(LocalLibraryRow.FromBeatmapSet)
-            : state.Replays.Select(replay => LocalLibraryRow.FromReplay(replay, openReplay));
+        IReadOnlyList<Guid> nextIds = mode == NativeLocalLibraryMode.Beatmaps
+            ? state.BeatmapSets.Select(set => set.SetId).ToArray()
+            : state.Replays.Select(replay => replay.ScoreId).ToArray();
+        IReadOnlyList<Guid> currentIds = rows.Select(row => row.Id).ToArray();
 
-        rows.Clear();
-        rows.AddRange(nextRows);
+        // Appending keeps the virtualised list and its scroll position; only new queries replace rows.
+        if (ListDiff.IsAppend(currentIds, nextIds))
+            rows.AddRange(rowsFor(state).Skip(currentIds.Count));
+        else if (!ListDiff.SameOrder(currentIds, nextIds))
+        {
+            rows.Clear();
+            rows.AddRange(rowsFor(state));
+        }
 
         switch (state.Status)
         {
@@ -264,15 +287,21 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
                 resultStatus.Text = state.ItemCount == 0 ? "Searching library..." : $"Loading more after {state.ItemCount:N0} results...";
                 loadMoreButton.SetState(false, "Loading...");
                 if (state.ItemCount == 0)
-                    loadingOverlay.ShowLoading(
-                        mode == NativeLocalLibraryMode.Beatmaps ? "Loading beatmaps" : "Loading replays",
-                        "Reading your local osu! library", progress: () => controller.Progress);
+                {
+                    progressTracker.Reset();
+                    loadStatus.ShowLoading("Reading your local osu! library...", () =>
+                    {
+                        controller.Cancel();
+                        loadStatus.ShowMessage("Loading was cancelled.", resetQuery);
+                        loadMoreButton.SetState(true, "Try again");
+                    });
+                }
                 break;
 
             case LocalLibraryLoadStatus.Empty:
                 resultStatus.Text = state.ErrorMessage ?? (mode == NativeLocalLibraryMode.Beatmaps ? "No beatmaps found" : "No replays found");
                 loadMoreButton.SetState(false, "No results", visible: false);
-                loadingOverlay.HideLoading();
+                loadStatus.Dismiss();
                 break;
 
             case LocalLibraryLoadStatus.Ready:
@@ -280,16 +309,21 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
                 if (state.ErrorMessage is not null)
                     resultStatus.Text = state.ErrorMessage;
                 loadMoreButton.SetState(state.HasMore, state.HasMore ? "Load more" : "All loaded");
-                loadingOverlay.HideLoading();
+                loadStatus.Dismiss();
                 break;
 
             case LocalLibraryLoadStatus.Error:
-                resultStatus.Text = $"Could not load the library: {state.ErrorMessage}";
+                resultStatus.Text = "Could not load the library";
                 loadMoreButton.SetState(true, "Try again");
-                loadingOverlay.HideLoading();
+                loadStatus.ShowError("AimMod could not read your local osu! library. Check that the osu! drive is connected, then retry.",
+                    state.ErrorMessage, state.ItemCount > 0 ? loadNextPage : resetQuery);
                 break;
         }
     }
+
+    private IEnumerable<LocalLibraryRow> rowsFor(LocalLibraryLoadState state) => mode == NativeLocalLibraryMode.Beatmaps
+        ? state.BeatmapSets.Select(LocalLibraryRow.FromBeatmapSet)
+        : state.Replays.Select(replay => LocalLibraryRow.FromReplay(replay, openReplay));
 
     private static string sortDescription(LocalLibrarySort sort) => sort switch
     {
@@ -523,10 +557,13 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
             updateTextBounds();
         }
 
+        private AimModLayout.ChangeTracker<float> widthTracker;
+
         protected override void Update()
         {
             base.Update();
-            updateTextBounds();
+            if (widthTracker.Update(DrawWidth))
+                updateTextBounds();
         }
 
         protected override bool OnClick(ClickEvent e)
@@ -598,14 +635,14 @@ public partial class NativeLocalLibraryScreen : CompositeDrawable
                             new TruncatingSpriteText
                             {
                                 Text = chip.Name,
-                                Font = new FontUsage(size: 10, weight: "SemiBold"),
+                                Font = AimModVisualStyle.CaptionStrongFont,
                                 Colour = AimModPalette.Text,
                                 MaxWidth = 145,
                             },
                             new SpriteText
                             {
                                 Text = $"{chip.Stars:0.00}*",
-                                Font = new FontUsage(size: 10, weight: "Bold"),
+                                Font = new FontUsage(size: 11, weight: "Bold"),
                                 Colour = colour,
                             },
                         },
