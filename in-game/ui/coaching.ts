@@ -57,7 +57,9 @@ function render(container:HTMLElement,state:any,onScenario?:(name:string)=>void,
  function mark(scope:string,id:string,feedback:string){send({action:'feedback',scope,id,feedback},()=>{});}
  function feedbackFor(scope:string,id:string){return view.feedback.feedback.filter((x:any)=>x.scope===scope&&x.id===id)[0]?.feedback;}
  function history(parent:HTMLElement,scope:string){const group=node(parent,'div',undefined,'coach-history');const toggle=button(group,view.historyOpen?'Close advice history':'Advice history',()=>{view.historyOpen=!view.historyOpen;draw();});toggle.setAttribute('aria-expanded',String(!!view.historyOpen));if(!view.historyOpen)return;const previous=view.feedback.history.filter((x:any)=>x.scope===scope).slice(0,20);if(!previous.length)node(group,'p','Previous advice will appear here after you review a recommendation.');previous.forEach((entry:any)=>{const row=node(group,'div',undefined,'coach-history-entry');node(row,'span',String(entry.seenAt).slice(0,10),'coach-axis-caption');node(row,'h4',entry.title);node(row,'p',entry.tip);if(feedbackFor(scope,entry.id)==='not_for_me'){const restore=button(row,'Restore advice',()=>mark(scope,entry.id,'none'));restore.disabled=!!view.busy;}});}
- const input=state.coachingHistory||[];if(view.input!==input){view.input=input;view.results={};}
+ // Every poll parses a fresh state object; only re-run the engine when the
+ // history records themselves change.
+ const input=state.coachingHistory||[];let signature='';try{signature=JSON.stringify(input);}catch(e){signature=String(Math.random());}if(view.signature!==signature){view.signature=signature;view.input=input;view.results={};}
  if(!state.selectedScenario)view.scope='all';
  function button(parent:HTMLElement,label:string,action:()=>void,cls='button'){const b=node(parent,'button',label,cls) as HTMLButtonElement;b.type='button';b.onclick=action;return b;}
  function draw(){container.textContent='';const shell=node(container,'div',undefined,'coach-workspace');const toolbar=node(shell,'div',undefined,'coach-toolbar');const scopes=node(toolbar,'div',undefined,'coach-scopes');
@@ -85,8 +87,9 @@ function render(container:HTMLElement,state:any,onScenario?:(name:string)=>void,
   }
   const cards=result.cards.slice(0,16);const observed=JSON.stringify([cacheKey,cards.map((card:any)=>[card.id,card.title,card.body,card.tip])]);
   if(window.XMLHttpRequest&&!view.observed[observed]&&!view.busy&&!view.feedbackError){if(Object.keys(view.observed).length>=32)view.observed={};view.observed[observed]=true;send({action:'observe',scope:cacheKey,cards:cards.map((card:any)=>({id:card.id,title:(cardCopy[card.id]||[card.title])[0],body:card.body||'',tip:card.tip||''}))},()=>{});}
-  if(view.feedbackError){node(advice,'p','Advice preferences could not be saved.');button(advice,'Retry preferences',()=>{view.feedbackError=false;view.observed={};send(null,()=>{});});}
-  if(!window.XMLHttpRequest||view.feedbackLoaded){const visibleCards=cards.filter((card:any)=>feedbackFor(cacheKey,card.id)!=='not_for_me');visibleCards.forEach(recommendation);if(cards.length&&!visibleCards.length)node(advice,'p','Your current advice is hidden. Restore it from Advice history.');}else node(advice,'p','Loading advice…');
+  if(view.feedbackError){node(advice,'p','Your advice preferences are unavailable right now, so hidden advice may reappear.','coach-axis-caption');button(advice,'Retry preferences',()=>{view.feedbackError=false;view.observed={};send(null,()=>{});});}
+  // Preferences only filter advice; a failed preference request must not hide it.
+  if(!window.XMLHttpRequest||view.feedbackLoaded||view.feedbackError){const visibleCards=cards.filter((card:any)=>feedbackFor(cacheKey,card.id)!=='not_for_me');visibleCards.forEach(recommendation);if(cards.length&&!visibleCards.length)node(advice,'p','Your current advice is hidden. Restore it from Advice history.');}else node(advice,'p','Loading advice…');
   history(shell,cacheKey);
   if(!result.cards.length){node(advice,'h3','Keep your next block deliberate');node(advice,'p','Choose one focus, then compare your runs.');}
  }

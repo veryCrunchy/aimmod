@@ -46,4 +46,9 @@ test('feedback stores generated advice once and supports useful, hide, prior adv
  button(root,'Hide this advice').onclick();requests[2].finish(200,{feedback:[{scope:'all',id:card.id,feedback:'not_for_me'}],history});assert.ok(!all(root,n=>n.tag==='h3'&&n.textContent===card.title).length);
  button(root,'Advice history').onclick();assert.ok(button(root,'Restore advice'));button(root,'Restore advice').onclick();assert.equal(JSON.parse(requests[3].body).feedback,'none');requests[3].finish(200,{feedback:[],history});assert.ok(all(root,n=>n.tag==='h3'&&n.textContent===card.title).length);
 });
-test('feedback failure exposes retry without pretending preferences were saved',()=>{const c=load(),root=dom(c),requests=feedbackClient(c);c.AimModCoaching.render(root,{coachingHistory:runs()});requests[0].finish(503,{});assert.ok(button(root,'Retry preferences'));assert.match(root.textContent,/could not be saved/);assert.equal(requests.length,1);});
+test('feedback failure exposes retry without pretending preferences were saved',()=>{const c=load(),root=dom(c),requests=feedbackClient(c);c.AimModCoaching.render(root,{coachingHistory:runs()});requests[0].finish(503,{});assert.ok(button(root,'Retry preferences'));assert.match(root.textContent,/preferences are unavailable/);assert.equal(requests.length,1);
+ // Advice itself stays visible when only the preference service fails.
+ assert.equal(css(root,'coach-primary').length,1);assert.doesNotMatch(root.textContent,/Loading advice/);});
+test('unchanged history across polls reuses the engine result instead of re-analysing',()=>{const c=load(),root=dom(c);const state={coachingHistory:runs(),selectedScenario:''};c.AimModCoaching.render(root,state);const view=root.aimmodCoachingView,first=view.results.all;
+ c.AimModCoaching.render(root,{coachingHistory:JSON.parse(JSON.stringify(runs())),selectedScenario:''});assert.equal(root.aimmodCoachingView.results.all,first);
+ const changed=runs();changed[0].score=1;c.AimModCoaching.render(root,{coachingHistory:changed,selectedScenario:''});assert.notEqual(root.aimmodCoachingView.results.all,first);});
