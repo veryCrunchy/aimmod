@@ -4,8 +4,8 @@
  function F(){return root.AimModFormat;}
  function node(tag,text,css){var n=root.document.createElement(tag);if(text!==undefined)n.textContent=text;if(css)n.className=css;return n;}
  function render(container,state,onRun,onHistory){
-  container.textContent='';var toolbar=node('div',undefined,'toolbar');toolbar.appendChild(node('h2','Movement & timing'));
-  [['7','7 days'],['30','30 days'],['90','90 days'],['all','All time']].forEach(function(pair){var b=node('button',pair[1],'button'+(pair[0]===period?' primary':''));b.type='button';b.setAttribute('aria-pressed',String(pair[0]===period));b.onclick=function(){period=pair[0];render(container,state,onRun,onHistory);};toolbar.appendChild(b);});container.appendChild(toolbar);
+  container.textContent='';var toolbar=node('div',undefined,'toolbar');toolbar.appendChild(node('h2','Movement & timing'));var periods=node('div',undefined,'segmented');toolbar.appendChild(periods);
+  [['7','7 days'],['30','30 days'],['90','90 days'],['all','All time']].forEach(function(pair){var b=node('button',pair[1],'button'+(pair[0]===period?' primary':''));b.type='button';b.setAttribute('aria-pressed',String(pair[0]===period));b.onclick=function(){period=pair[0];render(container,state,onRun,onHistory);};periods.appendChild(b);});container.appendChild(toolbar);
   var periods=state.statistics&&state.statistics.Periods||[],selected=periods.filter(function(p){return p.Key===period;})[0];
   var summaries=selected&&selected.Selected?selected.Selected.Measurements||[]:[];
   var section=node('div');container.appendChild(section);if(root.AimModStatistics)root.AimModStatistics.renderMeasurements(section,summaries);
