@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Security.Cryptography;
 using AimMod.Osu.Runtime;
 using AimMod.Osu.Runtime.Contracts;
 using osu.Game.Beatmaps;
@@ -10,6 +12,7 @@ using osu.Game.Scoring;
 using osu.Game.Tests.Beatmaps;
 using osu.Game.Online.API;
 using osu.Game.Rulesets;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
 namespace AimMod.Osu.Worker;
@@ -114,6 +117,10 @@ internal static class PpInputValidator
 
 internal sealed class OfficialPpWhatIfCalculator : IPpWhatIfCalculator
 {
+    private const int maximum_cached_difficulties = 64;
+
+    private readonly ConcurrentDictionary<DifficultyKey, CachedDifficulty> difficultyCache = new();
+
     public ValueTask<PpWhatIfResult> CalculateAsync(ValidatedPpInput input, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -146,7 +153,19 @@ internal sealed class OfficialPpWhatIfCalculator : IPpWhatIfCalculator
                     modeStatistics.Great, modeStatistics.Ok, modeStatistics.Meh, modeStatistics.Miss, input.Accuracy, mode.Pp,
                     null, null, null, null, null, null));
             }
-            DifficultyAttributes attributes = ruleset.CreateDifficultyCalculator(workingBeatmap).Calculate(mods, cancellationToken);
+            var difficultyKey = new DifficultyKey(
+                Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(input.BeatmapPath))),
+                difficultyModsKey(mods));
+            if (!difficultyCache.TryGetValue(difficultyKey, out CachedDifficulty? difficulty))
+            {
+                DifficultyCalculator calculator = ruleset.CreateDifficultyCalculator(workingBeatmap);
+                difficulty = new CachedDifficulty(calculator.Calculate(mods, cancellationToken), calculator.Version);
+                if (difficultyCache.Count >= maximum_cached_difficulties)
+                    difficultyCache.Clear();
+                difficultyCache[difficultyKey] = difficulty;
+            }
+
+            DifficultyAttributes attributes = difficulty.Attributes;
             if (attributes is not OsuDifficultyAttributes osuAttributes)
                 throw new RuntimeCommandException("unsupported_ruleset", "PP calculation currently supports osu!standard only.");
 
@@ -178,7 +197,7 @@ internal sealed class OfficialPpWhatIfCalculator : IPpWhatIfCalculator
             var osuPerformance = performance as OsuPerformanceAttributes;
             return ValueTask.FromResult(new PpWhatIfResult(
                 PpCalculationProtocol.EngineVersion,
-                ruleset.CreateDifficultyCalculator(workingBeatmap).Version,
+                difficulty.Version,
                 osuAttributes.StarRating,
                 osuAttributes.MaxCombo,
                 objectCount,
@@ -208,6 +227,13 @@ internal sealed class OfficialPpWhatIfCalculator : IPpWhatIfCalculator
             throw new RuntimeCommandException("pp_calculation_failed", boundedError(exception, input));
         }
     }
+
+    private static string difficultyModsKey(Mod[] mods) =>
+        string.Join('|', mods.Select(mod => mod.Acronym + ":" + JsonConvert.SerializeObject(new APIMod(mod).Settings)).Order(StringComparer.Ordinal));
+
+    private sealed record DifficultyKey(string BeatmapSha256, string Mods);
+
+    private sealed record CachedDifficulty(DifficultyAttributes Attributes, int Version);
 
     internal static PpGeneratedStatistics GenerateStatistics(int objectCount, double targetAccuracy, int requestedMisses)
     {

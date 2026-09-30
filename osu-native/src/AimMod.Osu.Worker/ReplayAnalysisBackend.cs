@@ -92,7 +92,27 @@ internal sealed class ReplayAnalysisBackend : IRuntimeBackend
             RuntimeCapabilities.SkinRead,
         });
 
+    internal TimeSpan? OperationTimeoutOverride { get; init; }
+
     public async ValueTask<JsonElement?> ExecuteAsync(string command, JsonElement? payload, CancellationToken cancellationToken)
+    {
+        if (command == RuntimeCommands.AnalyseReplay)
+            return await analyseReplayAsync(payload, cancellationToken);
+
+        TimeSpan operationTimeout = OperationTimeoutOverride ?? RuntimeProtocolTimeouts.WorkerTimeout(command);
+        using var timeoutCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCancellation.CancelAfter(operationTimeout);
+        try
+        {
+            return await executeBoundedAsync(command, payload, timeoutCancellation.Token).AsTask().WaitAsync(timeoutCancellation.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeoutCancellation.IsCancellationRequested)
+        {
+            throw new RuntimeCommandException("operation_timeout", $"The worker command exceeded its {operationTimeout.TotalSeconds:0.#} second limit.");
+        }
+    }
+
+    private async ValueTask<JsonElement?> executeBoundedAsync(string command, JsonElement? payload, CancellationToken cancellationToken)
     {
         if (command == RuntimeCommands.ResolveExternalLazerAssets)
         {
@@ -130,13 +150,17 @@ internal sealed class ReplayAnalysisBackend : IRuntimeBackend
         {
             PpWhatIfRequest ppRequest = deserializePpRequest(payload);
             ValidatedPpInput ppInput = PpInputValidator.Validate(ppRequest);
-            PpWhatIfResult result = await ppCalculator.CalculateAsync(ppInput, cancellationToken);
+            PpWhatIfResult result = await Task.Run(
+                () => ppCalculator.CalculateAsync(ppInput, cancellationToken).AsTask(),
+                cancellationToken).WaitAsync(cancellationToken);
             return JsonSerializer.SerializeToElement(result, RuntimeProtocol.JsonOptions);
         }
 
-        if (command != RuntimeCommands.AnalyseReplay)
-            throw new RuntimeCommandException("unsupported_command", $"The worker does not implement '{command}'.");
+        throw new RuntimeCommandException("unsupported_command", $"The worker does not implement '{command}'.");
+    }
 
+    private async ValueTask<JsonElement?> analyseReplayAsync(JsonElement? payload, CancellationToken cancellationToken)
+    {
         ReplayAnalysisRequest request = deserializeRequest(payload);
         ValidatedReplayInput input = inputValidator.Validate(request);
 
@@ -307,7 +331,7 @@ internal sealed class ExternalLazerAssetBackend : IExternalLazerAssetBackend
 
     public ExternalLazerAssetBackend()
         : this(new ExternalLazerLibraryImportBridge(
-            new RealmLazerLibrarySnapshotFactory(),
+            CachedLazerLibrarySnapshotFactory.Shared,
             new DynamicRealmLazerLibraryManifestReader(),
             new ExternalLazerLibraryValidator(),
             new LazerHashedFileResolver()))
@@ -326,11 +350,13 @@ internal sealed class ExternalLazerAssetBackend : IExternalLazerAssetBackend
         ArgumentNullException.ThrowIfNull(request);
 
         string stagingDirectory = validateStagingDirectory(request.LibraryRoot, request.StagingDirectory);
-        string snapshotDirectory = Directory.CreateTempSubdirectory("aimmod-lazer-snapshot-").FullName;
+        string snapshotDirectory = AimModTempDirectories.Create(AimModTempDirectories.SnapshotPrefix);
         var stagedPaths = new List<string>();
+        ExternalLazerLibraryAssetLease? lease = null;
+        bool succeeded = false;
         try
         {
-            await using ExternalLazerLibraryAssetLease lease = await bridge.ResolveAssetsAsync(
+            lease = await bridge.ResolveAssetsAsync(
                 new ExternalLazerLibraryLocation(request.LibraryRoot, snapshotDirectory),
                 new LazerLibraryAssetQuery(request.BeatmapHashes, request.ScoreIds, request.SkinIds),
                 cancellationToken).ConfigureAwait(false);
@@ -376,12 +402,14 @@ internal sealed class ExternalLazerAssetBackend : IExternalLazerAssetBackend
                     file.Length.Value));
             }
 
-            return new ExternalLazerAssetResolveResult(
+            var result = new ExternalLazerAssetResolveResult(
                 files,
                 missingFiles,
                 missingBeatmaps.Order(StringComparer.OrdinalIgnoreCase).ToArray(),
                 missingScores.Order().ToArray(),
                 missingSkins.Order().ToArray());
+            succeeded = true;
+            return result;
         }
         catch (ExternalLazerLibraryException exception)
         {
@@ -410,7 +438,21 @@ internal sealed class ExternalLazerAssetBackend : IExternalLazerAssetBackend
         }
         finally
         {
-            deleteOwnedSnapshotDirectory(snapshotDirectory);
+            if (!succeeded)
+                deleteStagedFiles(stagedPaths);
+
+            if (lease is not null)
+            {
+                try
+                {
+                    await lease.DisposeAsync().ConfigureAwait(false);
+                }
+                catch (Exception exception) when (exception is not OutOfMemoryException)
+                {
+                }
+            }
+
+            AimModTempDirectories.TryDelete(snapshotDirectory, AimModTempDirectories.SnapshotPrefix);
         }
     }
 
@@ -521,32 +563,9 @@ internal sealed class ExternalLazerAssetBackend : IExternalLazerAssetBackend
             {
                 File.Delete(path);
             }
-            catch (IOException)
+            catch (Exception exception) when (exception is not OutOfMemoryException)
             {
             }
-            catch (UnauthorizedAccessException)
-            {
-            }
-        }
-    }
-
-    private static void deleteOwnedSnapshotDirectory(string path)
-    {
-        if (!Directory.Exists(path))
-            return;
-        if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0
-            || !Path.GetFileName(path).StartsWith("aimmod-lazer-snapshot-", StringComparison.Ordinal))
-        {
-            throw new RuntimeCommandException("snapshot_cleanup_failed", "AimMod refused to clean an unrecognised snapshot directory.");
-        }
-
-        try
-        {
-            Directory.Delete(path, recursive: true);
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            throw new RuntimeCommandException("snapshot_cleanup_failed", "AimMod could not remove its private lazer snapshot.");
         }
     }
 }

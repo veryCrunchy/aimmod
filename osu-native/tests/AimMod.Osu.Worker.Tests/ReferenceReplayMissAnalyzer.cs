@@ -3,9 +3,9 @@ using osu.Game.Rulesets.Osu;
 using osu.Game.Rulesets.Osu.Replays;
 using osuTK;
 
-namespace AimMod.Osu.Worker;
+namespace AimMod.Osu.Worker.Tests;
 
-internal static class ReplayMissAnalyzer
+internal static class ReferenceReplayMissAnalyzer
 {
     private const double sample_interval = 4;
 
@@ -26,56 +26,27 @@ internal static class ReplayMissAnalyzer
 
         double windowStart = objectTime - hitWindow;
         double windowEnd = objectTime + hitWindow;
-        if (windowStart > windowEnd)
-            return null;
-
-        ReplayPress? press = findNearestPress(frames, objectTime, windowStart, windowEnd, target);
-        bool hasClosest = false;
-        CursorSample closest = default;
-        bool enteredBefore = false;
-        bool enteredAfter = false;
-        bool insideBeforePress = false;
-        double firstInsideTime = 0;
-        double lastInsideTime = 0;
-        bool anyInside = false;
+        var samples = new List<CursorSample>();
         for (double time = windowStart; time <= windowEnd; time += sample_interval)
-        {
-            CursorSample value = sample(frames, time, target);
-            if (!hasClosest || value.Distance < closest.Distance)
-            {
-                closest = value;
-                hasClosest = true;
-            }
-
-            if (value.Distance > hitRadius)
-                continue;
-
-            if (value.Time <= objectTime)
-                enteredBefore = true;
-            else
-                enteredAfter = true;
-            if (press is { } pressed && value.Time < pressed.Time)
-                insideBeforePress = true;
-            if (!anyInside)
-            {
-                firstInsideTime = value.Time;
-                anyInside = true;
-            }
-
-            lastInsideTime = value.Time;
-        }
-
-        if (!hasClosest)
+            samples.Add(sample(frames, time, target));
+        if (samples.Count == 0)
             return null;
 
+        CursorSample closest = samples.MinBy(value => value.Distance)!;
         CursorSample atObject = sample(frames, objectTime, target);
         CursorSample beforeObject = sample(frames, objectTime - 12, target);
         CursorSample afterObject = sample(frames, objectTime + 12, target);
         double radialVelocity = (afterObject.Distance - beforeObject.Distance) / 24;
 
-        bool leftBeforePress = press is { } leftPress && insideBeforePress && leftPress.Distance > hitRadius;
-        double? firstEntry = anyInside ? firstInsideTime - objectTime : null;
-        double? lastExit = anyInside ? lastInsideTime - objectTime : null;
+        ReplayPress? press = findNearestPress(frames, objectTime, windowStart, windowEnd, target);
+        bool enteredBefore = samples.Any(value => value.Time <= objectTime && value.Distance <= hitRadius);
+        bool enteredAfter = samples.Any(value => value.Time > objectTime && value.Distance <= hitRadius);
+        bool leftBeforePress = press is not null
+                               && samples.Any(value => value.Time < press.Time && value.Distance <= hitRadius)
+                               && press.Distance > hitRadius;
+        CursorSample[] inside = samples.Where(value => value.Distance <= hitRadius).ToArray();
+        double? firstEntry = inside.Length == 0 ? null : inside[0].Time - objectTime;
+        double? lastExit = inside.Length == 0 ? null : inside[^1].Time - objectTime;
         double maximumFrameGap = maximumGap(frames, windowStart, windowEnd);
         bool keyHeldAtObject = isPressed(frameAtOrBefore(frames, objectTime));
 
@@ -99,7 +70,7 @@ internal static class ReplayMissAnalyzer
             point(closest.Position),
             press?.Time - objectTime,
             press?.Distance,
-            press is { } reported ? point(reported.Position) : null,
+            press is null ? null : point(press.Position),
             atObject.Distance,
             enteredBefore,
             enteredAfter,
@@ -124,13 +95,13 @@ internal static class ReplayMissAnalyzer
         double radialVelocity,
         double objectTime)
     {
-        if (press is { } click)
+        if (press is not null)
         {
-            if (click.Time < objectTime && click.Distance > radius && (enteredAfter || closest.Time > click.Time && closest.Distance <= radius))
+            if (press.Time < objectTime && press.Distance > radius && (enteredAfter || closest.Time > press.Time && closest.Distance <= radius))
                 return ReplayMissReason.EarlyClick;
-            if (click.Time > objectTime && click.Distance > radius && (leftBeforePress || enteredBefore))
+            if (press.Time > objectTime && press.Distance > radius && (leftBeforePress || enteredBefore))
                 return ReplayMissReason.LateClick;
-            if (click.Distance > radius)
+            if (press.Distance > radius)
                 return radialVelocity < -0.02 ? ReplayMissReason.Undershoot
                     : radialVelocity > 0.02 ? ReplayMissReason.Overshoot
                     : ReplayMissReason.AimDeviation;
@@ -153,31 +124,19 @@ internal static class ReplayMissAnalyzer
         double windowEnd,
         Vector2 target)
     {
-        int start = lowerBound(frames, windowStart);
-        bool wasPressed = start > 0 && isPressed(frames[start - 1]);
-        ReplayPress? nearest = null;
-        double nearestOffset = double.PositiveInfinity;
-        for (int index = start; index < frames.Count; index++)
+        bool wasPressed = false;
+        var presses = new List<ReplayPress>();
+        foreach (OsuReplayFrame frame in frames)
         {
-            OsuReplayFrame frame = frames[index];
+            bool pressed = isPressed(frame);
+            if (frame.Time >= windowStart && frame.Time <= windowEnd && pressed && !wasPressed)
+                presses.Add(new ReplayPress(frame.Time, frame.Position, Vector2.Distance(frame.Position, target)));
+            wasPressed = pressed;
             if (frame.Time > windowEnd)
                 break;
-
-            bool pressed = isPressed(frame);
-            if (pressed && !wasPressed)
-            {
-                double offset = Math.Abs(frame.Time - objectTime);
-                if (offset < nearestOffset)
-                {
-                    nearest = new ReplayPress(frame.Time, frame.Position, Vector2.Distance(frame.Position, target));
-                    nearestOffset = offset;
-                }
-            }
-
-            wasPressed = pressed;
         }
 
-        return nearest;
+        return presses.OrderBy(value => Math.Abs(value.Time - objectTime)).FirstOrDefault();
     }
 
     private static bool isPressed(OsuReplayFrame frame) =>
@@ -193,20 +152,13 @@ internal static class ReplayMissAnalyzer
 
     private static double maximumGap(IReadOnlyList<OsuReplayFrame> frames, double start, double end)
     {
-        int index = lowerBound(frames, start);
-        int count = 0;
-        double previous = 0;
+        OsuReplayFrame[] local = frames.Where(frame => frame.Time >= start && frame.Time <= end).ToArray();
+        if (local.Length < 2)
+            return end - start;
         double maximum = 0;
-        for (; index < frames.Count && frames[index].Time <= end; index++)
-        {
-            double time = frames[index].Time;
-            if (count > 0)
-                maximum = Math.Max(maximum, time - previous);
-            previous = time;
-            count++;
-        }
-
-        return count < 2 ? end - start : maximum;
+        for (int index = 1; index < local.Length; index++)
+            maximum = Math.Max(maximum, local[index].Time - local[index - 1].Time);
+        return maximum;
     }
 
     private static double confidenceFor(
@@ -266,6 +218,6 @@ internal static class ReplayMissAnalyzer
 
     private static ReplayPoint point(Vector2 position) => new(position.X, position.Y);
 
-    private readonly record struct CursorSample(double Time, Vector2 Position, double Distance);
-    private readonly record struct ReplayPress(double Time, Vector2 Position, double Distance);
+    private sealed record CursorSample(double Time, Vector2 Position, double Distance);
+    private sealed record ReplayPress(double Time, Vector2 Position, double Distance);
 }

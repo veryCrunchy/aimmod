@@ -18,6 +18,7 @@ public sealed class SidecarRuntimeClient : IAsyncDisposable
     private Task? terminationTask;
     private TaskCompletionSource<object?>? disposalCompletion;
     private bool disposing;
+    private bool processDisposed;
 
     private SidecarRuntimeClient(Process process)
     {
@@ -48,10 +49,11 @@ public sealed class SidecarRuntimeClient : IAsyncDisposable
             throw new ArgumentException("The osu runtime worker requires redirected protocol streams.", nameof(startInfo));
 
         Process started = Process.Start(startInfo) ?? throw new InvalidOperationException("The osu runtime worker did not start.");
+        WorkerJobObject.TryAssign(started);
         return new SidecarRuntimeClient(started);
     }
 
-    internal bool HasExited => process.HasExited;
+    internal bool HasExited => hasExited();
 
     internal static ProcessStartInfo CreateStartInfo(string executablePath)
     {
@@ -64,18 +66,31 @@ public sealed class SidecarRuntimeClient : IAsyncDisposable
             CreateNoWindow = true,
         };
         startInfo.ArgumentList.Add("--worker");
+        startInfo.Environment[RuntimeProtocol.ParentProcessIdVariable] = Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture);
         return startInfo;
     }
 
-    public Task<RuntimeResponse> SendAsync(RuntimeRequest request, CancellationToken cancellationToken = default) =>
-        sendAsync(request, cancellationToken, allowWhileDisposing: false);
+    public Task<RuntimeResponse> SendAsync(RuntimeRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return sendAsync(request, RuntimeProtocolTimeouts.ClientTimeout(request.Command), cancellationToken, allowWhileDisposing: false);
+    }
+
+    /// <summary>
+    /// Sends a request and kills the worker if no response arrives within <paramref name="timeout"/>.
+    /// </summary>
+    public Task<RuntimeResponse> SendAsync(RuntimeRequest request, TimeSpan timeout, CancellationToken cancellationToken = default) =>
+        sendAsync(request, timeout, cancellationToken, allowWhileDisposing: false);
 
     private async Task<RuntimeResponse> sendAsync(
         RuntimeRequest request,
+        TimeSpan timeout,
         CancellationToken cancellationToken,
         bool allowWhileDisposing)
     {
         ArgumentNullException.ThrowIfNull(request);
+        if (timeout != Timeout.InfiniteTimeSpan)
+            ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(timeout, TimeSpan.Zero);
 
         string json = JsonSerializer.Serialize(request, RuntimeProtocol.JsonOptions);
         if (json.Length > RuntimeProtocolFraming.MaximumRequestLineCharacters)
@@ -97,47 +112,73 @@ public sealed class SidecarRuntimeClient : IAsyncDisposable
                 throw new InvalidOperationException($"Request {request.Id} is already pending.");
         }
 
-        bool dispatched = false;
+        using var timeoutCancellation = new CancellationTokenSource();
+        CancellationTokenSource? requestCancellation = null;
         try
         {
-            await writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            if (timeout != Timeout.InfiniteTimeSpan)
+                timeoutCancellation.CancelAfter(timeout);
+            requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCancellation.Token);
+            return await dispatchAsync(request.Id, json, completion, requestCancellation.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeoutCancellation.IsCancellationRequested)
+        {
+            throw new TimeoutException($"The osu runtime worker did not answer '{request.Command}' within {timeout.TotalSeconds:0.#} seconds.");
+        }
+        finally
+        {
+            requestCancellation?.Dispose();
+            pending.TryRemove(request.Id, out _);
+        }
+    }
+
+    private async Task<RuntimeResponse> dispatchAsync(
+        Guid requestId,
+        string json,
+        TaskCompletionSource<RuntimeResponse> completion,
+        CancellationToken requestToken)
+    {
+        bool dispatched = false;
+        await writeGate.WaitAsync(requestToken).ConfigureAwait(false);
+        try
+        {
+            Exception? failure = Volatile.Read(ref terminalFailure);
+            if (failure is not null)
+                throw unavailable(failure);
+
             try
             {
-                Exception? failure = Volatile.Read(ref terminalFailure);
-                if (failure is not null)
-                    throw unavailable(failure);
-
-                try
-                {
-                    await process.StandardInput.WriteLineAsync(json.AsMemory(), lifetime.Token).ConfigureAwait(false);
-                    await process.StandardInput.FlushAsync(lifetime.Token).ConfigureAwait(false);
-                    dispatched = true;
-                }
-                catch (Exception exception) when (exception is IOException or InvalidOperationException or OperationCanceledException)
-                {
-                    var protocolFailure = new IOException("The osu runtime request frame could not be written completely.", exception);
-                    await terminateWorkerAsync(protocolFailure).ConfigureAwait(false);
-                    throw protocolFailure;
-                }
+                // A write blocked on a full pipe cannot be interrupted directly, so the worker is
+                // killed when the request is cancelled mid-frame. That also releases the gate.
+                using CancellationTokenRegistration killOnCancel = requestToken.Register(
+                    static state => _ = ((SidecarRuntimeClient)state!).terminateWorkerAsync(
+                        new IOException("The osu runtime worker was terminated while a request frame was being written.")),
+                    this);
+                await process.StandardInput.WriteLineAsync(json.AsMemory(), requestToken).ConfigureAwait(false);
+                await process.StandardInput.FlushAsync(requestToken).ConfigureAwait(false);
+                dispatched = true;
             }
-            finally
+            catch (Exception exception) when (exception is IOException or InvalidOperationException or OperationCanceledException or ObjectDisposedException)
             {
-                writeGate.Release();
-            }
-
-            try
-            {
-                return await completion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (dispatched && cancellationToken.IsCancellationRequested)
-            {
-                await terminateWorkerAsync(new IOException("The osu runtime worker was terminated after a dispatched request was cancelled.")).ConfigureAwait(false);
-                throw;
+                var protocolFailure = new IOException("The osu runtime request frame could not be written completely.", exception);
+                await terminateWorkerAsync(protocolFailure).ConfigureAwait(false);
+                requestToken.ThrowIfCancellationRequested();
+                throw protocolFailure;
             }
         }
         finally
         {
-            pending.TryRemove(request.Id, out _);
+            writeGate.Release();
+        }
+
+        try
+        {
+            return await completion.Task.WaitAsync(requestToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (dispatched && requestToken.IsCancellationRequested)
+        {
+            await terminateWorkerAsync(new IOException($"The osu runtime worker was terminated after request {requestId} was cancelled or timed out.")).ConfigureAwait(false);
+            throw;
         }
     }
 
@@ -181,13 +222,14 @@ public sealed class SidecarRuntimeClient : IAsyncDisposable
 
     private async Task disposeCoreAsync()
     {
-        if (!process.HasExited && Volatile.Read(ref terminalFailure) is null)
+        if (!hasExited() && Volatile.Read(ref terminalFailure) is null)
         {
             using var shutdownTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
             try
             {
                 await sendAsync(
                     RuntimeProtocol.CreateRequest(RuntimeCommands.Shutdown),
+                    TimeSpan.FromSeconds(2),
                     shutdownTimeout.Token,
                     allowWhileDisposing: true).ConfigureAwait(false);
                 await process.WaitForExitAsync(shutdownTimeout.Token).ConfigureAwait(false);
@@ -197,14 +239,27 @@ public sealed class SidecarRuntimeClient : IAsyncDisposable
                 await terminateWorkerAsync(new IOException("The osu runtime worker did not shut down cleanly.", exception)).ConfigureAwait(false);
             }
         }
-        else if (!process.HasExited)
+        else if (!hasExited())
         {
             await terminateWorkerAsync(terminalFailure ?? new ObjectDisposedException(nameof(SidecarRuntimeClient))).ConfigureAwait(false);
         }
 
         lifetime.Cancel();
-        await responsePump.ConfigureAwait(false);
+        try
+        {
+            await responsePump.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+        }
 
+        Task? termination;
+        lock (stateLock)
+            termination = terminationTask;
+        if (termination is not null)
+            await termination.ConfigureAwait(false);
+
+        Volatile.Write(ref processDisposed, true);
         process.Dispose();
         lifetime.Dispose();
     }
@@ -265,20 +320,35 @@ public sealed class SidecarRuntimeClient : IAsyncDisposable
     {
         try
         {
-            if (!process.HasExited)
+            if (!hasExited())
                 process.Kill(entireProcessTree: true);
         }
-        catch (Exception exception) when (exception is InvalidOperationException or NotSupportedException)
+        catch (Exception exception) when (exception is InvalidOperationException or NotSupportedException or System.ComponentModel.Win32Exception)
         {
         }
 
         try
         {
-            if (!process.HasExited)
+            if (!hasExited())
                 await process.WaitForExitAsync().ConfigureAwait(false);
         }
         catch (InvalidOperationException)
         {
+        }
+    }
+
+    private bool hasExited()
+    {
+        if (Volatile.Read(ref processDisposed))
+            return true;
+
+        try
+        {
+            return process.HasExited;
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            return true;
         }
     }
 
@@ -321,7 +391,7 @@ public sealed class SidecarRuntimeClient : IAsyncDisposable
 
         public async ValueTask<string?> ReadLineAsync(CancellationToken cancellationToken = default)
         {
-            var line = new StringBuilder(Math.Min(maximumLineCharacters + 1, RuntimeProtocolFraming.LineReadBufferCharacters));
+            StringBuilder? line = null;
 
             while (true)
             {
@@ -331,18 +401,27 @@ public sealed class SidecarRuntimeClient : IAsyncDisposable
                     bufferPosition = 0;
 
                     if (bufferedCharacters == 0)
-                        return line.Length == 0 ? null : createLine(line);
+                        return line is null || line.Length == 0 ? null : createLine(line);
                 }
 
-                char character = readBuffer[bufferPosition++];
-                if (character == '\n')
+                line ??= new StringBuilder(Math.Min(maximumLineCharacters + 1, RuntimeProtocolFraming.LineReadBufferCharacters));
+                if (consumeBuffered(line))
                     return createLine(line);
-
-                if (line.Length == maximumLineCharacters + 1)
-                    throw responseTooLong();
-
-                line.Append(character);
             }
+        }
+
+        private bool consumeBuffered(StringBuilder line)
+        {
+            ReadOnlySpan<char> chunk = readBuffer.AsSpan(bufferPosition, bufferedCharacters - bufferPosition);
+            int newline = chunk.IndexOf('\n');
+            ReadOnlySpan<char> segment = newline >= 0 ? chunk[..newline] : chunk;
+            bufferPosition += segment.Length + (newline >= 0 ? 1 : 0);
+
+            if (line.Length + segment.Length > maximumLineCharacters + 1)
+                throw responseTooLong();
+
+            line.Append(segment);
+            return newline >= 0;
         }
 
         private string createLine(StringBuilder line)

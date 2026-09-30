@@ -44,7 +44,15 @@ internal sealed class OfficialReplayAnalysisEngine : IReplayAnalysisEngine
         };
 
         analysisThread.Start();
-        return await completion.Task.ConfigureAwait(false);
+        _ = completion.Task.ContinueWith(
+            static task => _ = task.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+
+        // The analysis thread is a background thread and its host exits when the token fires.
+        // If the host ignores that, the thread is abandoned rather than blocking the worker.
+        return await completion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private static void runAnalysis(
@@ -421,6 +429,7 @@ internal sealed partial class AnalysisReplayPlayer : ReplayPlayer
     private readonly List<ReplayObjectJudgement> judgements = new();
     private Dictionary<HitObject, ObjectAddress> addresses = new(ReferenceEqualityComparer.Instance);
     private ReplayAnalysisCompletionWatchdog? completionWatchdog;
+    private double missHitWindow;
     private bool finished;
     protected override bool PauseOnFocusLost => false;
 
@@ -459,6 +468,9 @@ internal sealed partial class AnalysisReplayPlayer : ReplayPlayer
         }
 
         addresses = indexObjects(GameplayState.Beatmap);
+        var hitWindows = new OsuHitWindows();
+        hitWindows.SetDifficulty(GameplayState.Beatmap.Difficulty.OverallDifficulty);
+        missHitWindow = hitWindows.WindowFor(HitResult.Meh);
         completionWatchdog = new ReplayAnalysisCompletionWatchdog(
             GameplayState.Beatmap.GetLastObjectTime(),
             judgement_settling_time,
@@ -521,15 +533,13 @@ internal sealed partial class AnalysisReplayPlayer : ReplayPlayer
         ReplayMissAnalysis? missAnalysis = null;
         if (result.Type == HitResult.Miss && objectPosition is { } missTarget)
         {
-            var hitWindows = new OsuHitWindows();
-            hitWindows.SetDifficulty(GameplayState.Beatmap.Difficulty.OverallDifficulty);
             double hitRadius = result.HitObject is OsuHitObject hitObject ? hitObject.Radius : OsuHitObject.OBJECT_RADIUS;
             missAnalysis = ReplayMissAnalyzer.Analyse(
                 replayFrames,
                 missTarget,
                 result.HitObject.StartTime,
                 hitRadius,
-                hitWindows.WindowFor(HitResult.Meh));
+                missHitWindow);
         }
 
         judgements.Add(new ReplayObjectJudgement(

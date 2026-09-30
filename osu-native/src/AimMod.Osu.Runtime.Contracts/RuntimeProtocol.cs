@@ -6,6 +6,7 @@ namespace AimMod.Osu.Runtime.Contracts;
 public static class RuntimeProtocol
 {
     public const int CurrentVersion = 1;
+    public const string ParentProcessIdVariable = "AIMMOD_OSU_PARENT_PID";
 
     public static JsonSerializerOptions JsonOptions { get; } = new(JsonSerializerDefaults.Web)
     {
@@ -21,7 +22,30 @@ public static class RuntimeProtocolFraming
 {
     public const int MaximumRequestLineCharacters = 1024 * 1024;
     public const int MaximumResponseLineCharacters = 64 * 1024 * 1024;
-    public const int LineReadBufferCharacters = 4 * 1024;
+    public const int LineReadBufferCharacters = 32 * 1024;
+}
+
+public static class RuntimeProtocolTimeouts
+{
+    public static TimeSpan DefaultClientTimeout { get; } = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// Upper bound the worker applies to a command before it answers with a timeout error.
+    /// </summary>
+    public static TimeSpan WorkerTimeout(string command) => command switch
+    {
+        RuntimeCommands.AnalyseReplay => TimeSpan.FromMilliseconds(ReplayAnalysisProtocol.WallClockTimeoutMs),
+        RuntimeCommands.ResolveExternalLazerAssets => TimeSpan.FromMinutes(5),
+        RuntimeCommands.SearchExternalLazerCatalog or RuntimeCommands.SearchExternalLazerSkins => TimeSpan.FromSeconds(100),
+        RuntimeCommands.CalculatePp => TimeSpan.FromSeconds(90),
+        _ => TimeSpan.FromSeconds(30),
+    };
+
+    /// <summary>
+    /// Upper bound the host waits for a response before it kills the worker. It always
+    /// exceeds <see cref="WorkerTimeout"/> so the worker gets the chance to answer first.
+    /// </summary>
+    public static TimeSpan ClientTimeout(string command) => WorkerTimeout(command) + TimeSpan.FromSeconds(30);
 }
 
 public static class RuntimeCommands
