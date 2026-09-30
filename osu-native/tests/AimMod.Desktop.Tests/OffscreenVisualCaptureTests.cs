@@ -15,6 +15,7 @@ using osu.Framework;
 using osu.Framework.Allocation;
 using osu.Framework.Configuration;
 using osu.Framework.Platform;
+using osu.Framework.Testing;
 using osu.Game;
 using osu.Game.Overlays;
 using SixLabors.ImageSharp;
@@ -95,6 +96,10 @@ public sealed partial class OffscreenVisualCaptureTests
     [TestCase("ppTargets-evidence", 800, 760)]
     [TestCase("ppTargets-details", 1100, 760)]
     [TestCase("ppTargets-details", 800, 760)]
+    [TestCase("ppTargets-details", 1600, 900)]
+    [TestCase("ppTargets-tooltip", 800, 760)]
+    [TestCase("ppTargets-tooltip", 1100, 760)]
+    [TestCase("ppTargets-tooltip", 1600, 900)]
     [TestCase("trainers", 1600, 900)]
     [TestCase("trainers", 800, 760)]
     [TestCase("trainers-aim", 1600, 900)]
@@ -156,7 +161,7 @@ public sealed partial class OffscreenVisualCaptureTests
         await WindowsPrivateDesktopCapture.CaptureAsync(
             (host, succeeded, failed) => route switch
             {
-                "ppTargets" or "ppTargets-filters" or "ppTargets-populated" or "ppTargets-details" or "ppTargets-menu" or "ppTargets-evidence" => new CapturePpTargetsGame(host, ppCache!, outputPath, width, height, succeeded, failed, route == "ppTargets-details"),
+                "ppTargets" or "ppTargets-filters" or "ppTargets-populated" or "ppTargets-details" or "ppTargets-menu" or "ppTargets-evidence" or "ppTargets-tooltip" => new CapturePpTargetsGame(host, ppCache!, outputPath, width, height, succeeded, failed, route == "ppTargets-details"),
                 "beatmaps-populated" => new CaptureBeatmapGame(host, source, outputPath, width, height, succeeded, failed),
                 "statistics-mods" => new CaptureStatisticsGame(host, source, outputPath, width, height, succeeded, failed),
                 "statistics-populated" => new CaptureStatisticsGame(host, source, outputPath, width, height, succeeded, failed),
@@ -319,11 +324,12 @@ public sealed partial class OffscreenVisualCaptureTests
             var prediction = new PpPatternPrediction(0.94 - i * 0.06, 0.976 - i * 0.006, 0.82,
                 ["Jumps: 98.6% accuracy across 12 maps; controlled spacing and consistent cursor placement"],
                 ["Streams: 92.4% accuracy across 8 maps; late clicks after sustained high-speed tapping sequences", "Sharp turns: 94.1% accuracy across 6 maps; repeated overshoot on direction changes"],
-                [new("Jumps", 0.94, 0.986, 0.86, 12), new("Streams", 0.62, 0.924, 0.72, 8), new("Sharp turns", 0.71, 0.941, 0.65, 6)],
+                [new("Overall", 0.8 - i * 0.03, 0.972, 0.8, 14, .004, -11.5 + i * 3, 104 + i * 6, 22), new("Jumps", 0.94, 0.986, 0.86, 12, .002, -8, 98, 12),
+                    new("Streams", 0.62, 0.924, 0.72, 8, .01, -14, 131, 8), new("Sharp turns", 0.71, 0.941, 0.65, 6)],
                 ["Slider tracking is not measured by head geometry"]);
-            estimates[beatmapId] = new(185 + i * 21, 276 + i * 29, new(170 + i * 21, 202 + i * 21), 24,
+            estimates[beatmapId] = syntheticOutcomeEstimate(new(185 + i * 21, 276 + i * 29, new(170 + i * 21, 202 + i * 21), 24,
                 PpTargetConfidence.High, "Official osu! ruleset / fixture", BeatmapId: beatmapId,
-                PatternPrediction: prediction, PatternProfileIdentity: identity);
+                PatternPrediction: prediction, PatternProfileIdentity: identity), i, 1250 + i * 110);
             if (evidenceComparison && i >= 2)
             {
                 difficulty = difficulty with { StarRating = 10.36, Bpm = 230, TotalLengthSeconds = 359 };
@@ -340,6 +346,24 @@ public sealed partial class OffscreenVisualCaptureTests
             OfficialBeatmapCategory.Ranked, Sort: evidenceComparison ? "ExpectedPp" : "BestFit"));
         Assert.That(cache.Load()?.ExactEstimates.Count, Is.EqualTo(8), "The populated snapshot must survive persistence.");
         return cache;
+    }
+
+    /// <summary>A fitted outcome distribution with calculator scenarios, so captures show the forecast breakdown.</summary>
+    private static PpTargetEstimate syntheticOutcomeEstimate(PpTargetEstimate estimate, int index, int maximumCombo)
+    {
+        int objects = (int)(maximumCombo * .72);
+        var distribution = new PpOutcomeDistribution(1.1 + index * .45, 2.4, .978 - index * .004, .007, .96, .9, 38 - index * 3, 14, 40,
+            false, false, .9, -.012);
+        double clean = estimate.RealisticMaximumPp * .9;
+        var scenarios = PpTargetOutcomeModel.ScenarioMisses(distribution, objects).Select(m => new PpScenario(m,
+            distribution.ScenarioAccuracy(m, objects), distribution.ScenarioCombo(m, objects, maximumCombo), clean * Math.Pow(.94, m))).ToArray();
+        var atoms = PpTargetOutcomeModel.Integrate(distribution, scenarios, objects, 3, estimate.RealisticMaximumPp, .97);
+        return estimate with
+        {
+            ExpectedPp = PpTargetOutcomeModel.Mean(atoms),
+            ExpectedPpRange = new(PpTargetOutcomeModel.Quantile(atoms, .2), PpTargetOutcomeModel.Quantile(atoms, .8)),
+            Outcome = new PpOutcomeEstimate(distribution, scenarios, atoms, 3, .97, 37, objects, maximumCombo),
+        };
     }
 
     private static int countSampledColours(Image<Rgba32> image)
@@ -1034,6 +1058,23 @@ public sealed partial class OffscreenVisualCaptureTests
             base.LoadComplete();
             frameworkConfig.SetValue(FrameworkSetting.WindowMode, WindowMode.Windowed);
             frameworkConfig.SetValue(FrameworkSetting.WindowedSize, new System.Drawing.Size(width, height));
+            whenReady(scheduleActions, Clock.CurrentTime);
+        }
+
+        /// <summary>Waits for all fixture rows to load, so a busy machine cannot race the scripted interactions.</summary>
+        private void whenReady(Action action, double started)
+        {
+            const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+            var rows = (osu.Framework.Graphics.Containers.FillFlowContainer<osu.Framework.Graphics.Drawable>)
+                typeof(NativePpTargetsWorkspace).GetField("results", flags)!.GetValue(workspace)!;
+            if (rows.Count == 8 && rows.Children.All(r => r.IsLoaded) || Clock.CurrentTime - started > 20_000)
+                Scheduler.AddDelayed(action, 700);
+            else
+                Scheduler.AddDelayed(() => whenReady(action, started), 100);
+        }
+
+        private void scheduleActions()
+        {
             if (showDetails)
                 Scheduler.AddDelayed(() =>
                 {
@@ -1044,9 +1085,10 @@ public sealed partial class OffscreenVisualCaptureTests
                     Scheduler.AddDelayed(() =>
                     {
                         var details = typeof(NativePpTargetsWorkspace).GetField("selectedDetails", flags)!.GetValue(workspace)!;
-                        ((AimModScrollContainer)details.GetType().GetField("scroll", flags)!.GetValue(details)!).ScrollTo(outputPath.Contains("pp-learning", StringComparison.Ordinal) ? 180 : 450, false);
+                        var card = (osu.Framework.Graphics.Drawable)details.GetType().GetField("forecastCard", flags)!.GetValue(details)!;
+                        ((AimModScrollContainer)details.GetType().GetField("scroll", flags)!.GetValue(details)!).ScrollTo(outputPath.Contains("pp-learning", StringComparison.Ordinal) ? 180 : Math.Max(1, card.Y - 12), false);
                     }, 200);
-                }, 1500);
+                }, 300);
             if (outputPath.Contains("ppTargets-menu", StringComparison.Ordinal))
                 Scheduler.AddDelayed(() =>
                 {
@@ -1056,7 +1098,7 @@ public sealed partial class OffscreenVisualCaptureTests
                     var menu = (osu.Framework.Graphics.UserInterface.Menu)
                         typeof(osu.Framework.Graphics.UserInterface.Dropdown<OfficialBeatmapCategory>).GetField("Menu", flags)!.GetValue(dropdown)!;
                     menu.Open();
-                }, 1500);
+                }, 300);
             if (outputPath.Contains("ppTargets-filters", StringComparison.Ordinal))
             {
                 Scheduler.AddDelayed(() =>
@@ -1079,9 +1121,35 @@ public sealed partial class OffscreenVisualCaptureTests
                             catch (Exception error) { failed(error); host.Exit(); }
                         }, i * 20);
                     }
-                }, 1500);
+                }, 300);
             }
-            Scheduler.AddDelayed(capture, outputPath.Contains("ppTargets-filters", StringComparison.Ordinal) ? 3200 : 2200);
+            if (outputPath.Contains("ppTargets-tooltip", StringComparison.Ordinal))
+                Scheduler.AddDelayed(showTooltip, 300);
+            Scheduler.AddDelayed(capture, outputPath.Contains("ppTargets-filters", StringComparison.Ordinal) ? 2000 : 1000);
+        }
+
+        private osu.Framework.Graphics.Drawable? tooltip;
+
+        /// <summary>
+        /// Shows the second row's popover where the tooltip container would: it is added above every workspace layer at a
+        /// hover point over that row's PP metrics, then placed by the tooltip's own Move, as the container does each frame.
+        /// </summary>
+        private void showTooltip()
+        {
+            const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+            var rows = (osu.Framework.Graphics.Containers.FillFlowContainer<osu.Framework.Graphics.Drawable>)
+                typeof(NativePpTargetsWorkspace).GetField("results", flags)!.GetValue(workspace)!;
+            var row = rows.Children.Skip(1).First();
+            var provider = (osu.Framework.Graphics.Cursor.IHasCustomTooltip<PpTargetCandidate>)row;
+            var popover = provider.GetCustomTooltip();
+            popover.SetContent(provider.TooltipContent!);
+            var drawable = (osu.Framework.Graphics.Containers.VisibilityContainer)popover;
+            drawable.Depth = float.MinValue;
+            Add(drawable);
+            drawable.Show();
+            var hover = row.ToScreenSpace(new osuTK.Vector2(Math.Min(360, row.DrawWidth * .35f), row.DrawHeight / 2));
+            Scheduler.AddDelayed(() => popover.Move(drawable.Parent!.ToLocalSpace(hover) + new osuTK.Vector2(12, 18)), 100, true);
+            tooltip = drawable;
         }
 
         private void capture()
@@ -1089,6 +1157,20 @@ public sealed partial class OffscreenVisualCaptureTests
             try
             {
                 const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+                if (tooltip is not null)
+                {
+                    // Layering regression: the popover sits in the top-level layer, fully inside the window, above the rows.
+                    var window = tooltip.Parent!;
+                    var topLeft = window.ToLocalSpace(tooltip.ToScreenSpace(osuTK.Vector2.Zero));
+                    var bottomRight = window.ToLocalSpace(tooltip.ToScreenSpace(tooltip.DrawSize));
+                    Assert.That(tooltip.Alpha, Is.EqualTo(1).Within(.01));
+                    Assert.That(tooltip.DrawHeight, Is.GreaterThan(200), "The popover card must render its sections.");
+                    Assert.That(topLeft.X, Is.GreaterThanOrEqualTo(0));
+                    Assert.That(topLeft.Y, Is.GreaterThanOrEqualTo(0));
+                    Assert.That(bottomRight.X, Is.LessThanOrEqualTo(window.DrawWidth), "The popover escapes the right edge.");
+                    Assert.That(bottomRight.Y, Is.LessThanOrEqualTo(window.DrawHeight), "The popover escapes the bottom edge.");
+                    Assert.That(tooltip.Depth, Is.LessThan(workspace.Parent!.Depth), "The popover must draw above the workspace.");
+                }
                 if (showDetails)
                 {
                     var pane = (osu.Framework.Graphics.Containers.Container)typeof(NativePpTargetsWorkspace).GetField("detailViewport", flags)!.GetValue(workspace)!;
@@ -1110,12 +1192,13 @@ public sealed partial class OffscreenVisualCaptureTests
                 var rows = (osu.Framework.Graphics.Containers.FillFlowContainer<osu.Framework.Graphics.Drawable>)
                     typeof(NativePpTargetsWorkspace).GetField("results", flags)!.GetValue(workspace)!;
                 Assert.That(rows.Count, Is.EqualTo(8), "Capture must show PP target rows, never Home or a loading placeholder.");
-                foreach (var row in rows.Children)
+                var list = (AimModScrollContainer)typeof(NativePpTargetsWorkspace).GetField("resultScroll", flags)!.GetValue(workspace)!;
+                foreach (var row in list.Alpha > 0 ? rows.Children : [])
                 {
-                    var tooltip = (osu.Framework.Graphics.Cursor.IHasTooltip)row;
-                    Assert.That(tooltip.TooltipText.ToString(), Does.Match("[Pp]ass").And.Match("[Aa]ccount gain"));
+                    Assert.That(row, Is.Not.InstanceOf<osu.Framework.Graphics.Cursor.IHasTooltip>(), "Rows show the visual popover, not a text tooltip.");
+                    Assert.That(((osu.Framework.Graphics.Cursor.IHasCustomTooltip<PpTargetCandidate>)row).TooltipContent, Is.Not.Null);
                     float previousBottom = 0;
-                    foreach (string field in new[] { "title", "artist", "mapDetails", "mechanicsDetails", "confidenceDetails", "patternDetails" })
+                    foreach (string field in new[] { "title", "artist", "mapDetails", "performanceDetails", "confidenceDetails" })
                     {
                         var line = (osu.Framework.Graphics.Sprites.SpriteText)row.GetType().GetField(field, flags)!.GetValue(row)!;
                         var top = row.ToLocalSpace(line.ToScreenSpace(osuTK.Vector2.Zero));
@@ -1128,6 +1211,17 @@ public sealed partial class OffscreenVisualCaptureTests
                     }
                     var skill = (osu.Framework.Graphics.Sprites.SpriteText)row.GetType().GetField("confidenceDetails", flags)!.GetValue(row)!;
                     Assert.That(skill.Text.ToString(), Does.Match("Supported by recent plays|Stretch target|Pass unverified|Score unverified|Low pass chance"));
+                    foreach (string field in new[] { "expectedMetric", "maximumMetric" })
+                    {
+                        // Chance labels and values must fit their metric column, not run into the actions.
+                        var metric = (osu.Framework.Graphics.Containers.Container)row.GetType().GetField(field, flags)!.GetValue(row)!;
+                        float metricRight = row.ToLocalSpace(metric.ToScreenSpace(new osuTK.Vector2(metric.DrawWidth, 0))).X;
+                        foreach (var sprite in metric.ChildrenOfType<osu.Framework.Graphics.Sprites.SpriteText>())
+                            Assert.That(row.ToLocalSpace(sprite.ToScreenSpace(sprite.DrawSize)).X, Is.LessThanOrEqualTo(metricRight + .5f), $"{field} text '{sprite.Text}' is cut off");
+                    }
+                    var performance = (osu.Framework.Graphics.Sprites.SpriteText)row.GetType().GetField("performanceDetails", flags)!.GetValue(row)!;
+                    if (!outputPath.Contains("ppTargets-evidence", StringComparison.Ordinal))
+                        Assert.That(performance.Text.ToString(), Does.Match(@"acc .* miss"), "Rows show the predicted performance behind the PP.");
                 }
             }
             catch (Exception error)
