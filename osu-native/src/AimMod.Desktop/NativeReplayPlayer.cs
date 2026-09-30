@@ -1,7 +1,11 @@
 using osu.Framework.Bindables;
+using osu.Framework.Graphics;
+using osu.Framework.Graphics.Containers;
+using osu.Framework.Testing;
 using osu.Game.Beatmaps;
 using osu.Game.Scoring;
 using osu.Game.Screens.Play;
+using osu.Game.Screens.Play.HUD;
 
 namespace AimMod.Desktop;
 
@@ -44,6 +48,22 @@ public partial class NativeReplayPlayer : ReplayPlayer
 
     protected override bool PauseOnFocusLost => false;
 
+    private readonly BindableBool showGameplayHud = new(true);
+    private ReplayOverlay? detachedReplayOverlay;
+    private double nextChromeCheck;
+
+    /// <summary>
+    /// Whether osu!'s gameplay HUD (score, accuracy, combo and skin HUD elements) is shown.
+    /// AimMod owns this value for the embedded player and leaves the user's osu! HUD setting untouched.
+    /// </summary>
+    public Bindable<bool> ShowGameplayHud => showGameplayHud;
+
+    /// <summary>
+    /// True once osu!'s own replay chrome (settings panels, playback message, seek buttons,
+    /// quit button and song progress) has been removed from the embedded player.
+    /// </summary>
+    internal bool ReplayChromeRemoved => detachedReplayOverlay is not null;
+
     public NativeReplayPlayer(Score score, Action onReady, Action<string> onError)
         : base(score, new PlayerConfiguration
         {
@@ -56,6 +76,9 @@ public partial class NativeReplayPlayer : ReplayPlayer
     {
         this.onReady = onReady;
         this.onError = onError;
+        // ReplayPlayer enables the solo leaderboard after configuration. It only repeats
+        // this run's score beside the playfield, so the embedded player leaves it out.
+        Configuration.ShowLeaderboard = false;
     }
 
     protected override void LoadComplete()
@@ -68,10 +91,67 @@ public partial class NativeReplayPlayer : ReplayPlayer
             return;
         }
 
+        removeReplayChrome();
+        // The HUD binds its own visibility handlers in its LoadComplete, which runs after this one.
+        // Taking over ShowHud before then would leave the HUD hidden.
+        if (HUDOverlay.IsLoaded)
+            bindHudVisibility();
+        else
+            HUDOverlay.OnLoadComplete += _ => bindHudVisibility();
         duration.Value = Math.Max(0, GameplayState.Beatmap.GetLastObjectTime());
         updateTransportState();
         isTransportReady.Value = true;
         onReady();
+    }
+
+    /// <summary>
+    /// AimMod draws playback, visual settings and the timeline around the viewport, so the
+    /// official replay overlay (PLAYBACK and VISUAL SETTINGS panels, seek buttons and the
+    /// "Watching" message) is detached. It stays alive so rulesets can still add settings
+    /// groups to it through <see cref="ReplayPlayer.AddSettings"/>.
+    /// </summary>
+    private void removeReplayChrome()
+    {
+        if (ReplayOverlay is { } overlay && overlay.Parent is Container<Drawable> parent)
+        {
+            parent.Remove(overlay, false);
+            detachedReplayOverlay = overlay;
+        }
+
+        // The hold-to-quit button would exit the embedded screen and leave an empty viewport.
+        HUDOverlay.BottomRightElements.Hide();
+        hideSongProgress();
+    }
+
+    private void bindHudVisibility() =>
+        showGameplayHud.BindValueChanged(visible => applyHudVisibility(visible.NewValue), true);
+
+    private void applyHudVisibility(bool visible)
+    {
+        Bindable<bool> showHud = HUDOverlay.ShowHud;
+        // Rulesets without gameplay overlays disable the HUD before AimMod sees it.
+        if (showHud.Disabled && !hudOverridden)
+            return;
+
+        showHud.Disabled = false;
+        showHud.Value = visible;
+        showHud.Disabled = true;
+        hudOverridden = true;
+    }
+
+    private bool hudOverridden;
+
+    /// <summary>
+    /// osu!'s skinnable song progress duplicates AimMod's scrubber. Skins can recreate HUD
+    /// components, so the check repeats at a low rate.
+    /// </summary>
+    private void hideSongProgress()
+    {
+        foreach (SongProgress progress in HUDOverlay.ChildrenOfType<SongProgress>())
+        {
+            if (progress.State.Value == Visibility.Visible)
+                progress.Hide();
+        }
     }
 
     protected override void Update()
@@ -80,6 +160,12 @@ public partial class NativeReplayPlayer : ReplayPlayer
 
         if (!isTransportReady.Value)
             return;
+
+        if (Time.Current >= nextChromeCheck)
+        {
+            nextChromeCheck = Time.Current + 250;
+            hideSongProgress();
+        }
 
         if (ScoreProcessor.HasCompleted.Value)
         {
@@ -168,6 +254,18 @@ public partial class NativeReplayPlayer : ReplayPlayer
         });
     }
 
+    /// <summary>
+    /// Pauses and moves to the previous or next recorded replay frame using osu!'s own frame stepping.
+    /// </summary>
+    /// <returns>Whether the command was accepted for scheduling.</returns>
+    public bool StepReplayFrame(int direction)
+    {
+        if (direction == 0)
+            return false;
+
+        return scheduleTransportAction(_ => StepFrame(Math.Sign(direction)));
+    }
+
     private bool scheduleTransportAction(Action<GameplayClockContainer> action)
     {
         if (!isTransportReady.Value || !transportLifetime.TryCapture(out int generation))
@@ -248,6 +346,9 @@ public partial class NativeReplayPlayer : ReplayPlayer
         isTransportReady.Value = false;
         isPaused.Value = true;
         base.Dispose(isDisposing);
+        // A detached drawable is no longer disposed by its former parent.
+        detachedReplayOverlay?.Dispose();
+        detachedReplayOverlay = null;
     }
 }
 
