@@ -12,6 +12,34 @@ namespace AimMod.Desktop;
 
 public partial class NativePpTargetsWorkspace
 {
+    /// <summary>What each displayed PP number means for this target, for the row tooltip and the detail pane.</summary>
+    internal static IReadOnlyList<string> ForecastExplanation(PpTargetCandidate target)
+    {
+        if (target.Forecast is not { } forecast)
+            return target.Estimate is { } pp
+                ? [$"PP if you pass: {pp.ExpectedPp:0} (calculated score; the pass chance and target need more history)."]
+                : [];
+        string attempt = forecast.PreviousTries > 0 ? "next try" : "first try";
+        var lines = new List<string>
+        {
+            $"{char.ToUpperInvariant(attempt[0])}{attempt[1..]} PP {forecast.PpIfPass:0} is the PP you can expect if this attempt passes "
+            + $"(typically {forecast.PpIfPassRange.Minimum:0}-{forecast.PpIfPassRange.Maximum:0}). It is not reduced by the pass chance.",
+            forecast.PassChance is { } chance
+                ? $"Pass chance: {chance:P0} per attempt{(forecast.CrossMode ? ", partly from your other scoring mode" : "")}."
+                : "Pass chance unknown: more comparable pass/fail history is needed.",
+            forecast.TargetPp is { } targetPp
+                ? $"Target PP {targetPp:0}: your best score within ~{forecast.Tries} {(forecast.PreviousTries > 0 ? "more " : "")}tries reaches it with about {forecast.ReachProbability:P0} chance. Failed tries earn nothing; capped at the full-combo ceiling."
+                : "Target PP unavailable: passing within a few tries is too unlikely or the pass chance is unknown.",
+            $"{forecast.Confidence} confidence: {forecast.EffectiveSamples:0.#} weighted passes on {forecast.EvidenceMaps} similar maps"
+            + (forecast.CrossMode ? ", including plays from your other scoring mode" : "")
+            + (forecast.UsesBestScores ? ", topped up with submitted best scores" : "") + ".",
+            forecast.CalibrationSamples > 0
+                ? $"Calibrated with {forecast.CalibrationSamples} recorded PP score{(forecast.CalibrationSamples == 1 ? "" : "s")}: {forecast.CalibrationFactor:0.00}x the calculator at the same statistics."
+                : "Not calibrated: no comparable recorded PP scores yet.",
+        };
+        return lines;
+    }
+
     internal static IReadOnlyList<string> TargetDetails(PpTargetCandidate target, OfficialBeatmapSet set, PpPatternProfile? profile)
     {
         var difficulty = set.Difficulties.FirstOrDefault(d => d.BeatmapId == target.BeatmapId);
@@ -42,19 +70,16 @@ public partial class NativePpTargetsWorkspace
             }
             else lines.Add(profile?.SessionForm?.StatusFor(setup, pp.LegacyScore, DateTimeOffset.UtcNow)
                 ?? "Session form: recent replay results are not available yet. Your longer-term skill profile is used.");
-            if (target.Learning is { } learning)
-            {
-                lines.Add($"{(learning.PreviousTries == 0 ? "First try this session" : "Next try")}: {learning.FirstTryPp:0.0} expected PP; typical range {learning.FirstTryRange.Minimum:0}-{learning.FirstTryRange.Maximum:0}. Failed attempts count as zero.");
-                lines.Add($"Best realistic target: {learning.TargetPp:0} PP in about {learning.LikelyTries} {(learning.PreviousTries > 0 ? "more " : "")}tries. Estimated chance by then: {learning.ReachProbability:P0}.");
-                lines.Add($"Based on {learning.Sessions} recorded practice sessions across {learning.Maps} similar-pattern maps with matching mods. Low confidence; retry habits and unrecorded attempts can change this estimate.");
-                lines.Add($"Target is the median best score within {learning.SupportedTries} observed tries, not a guaranteed score or lifetime limit. PP is scaled from your comparable score progression; the count is not extrapolated beyond recorded sessions.");
-            }
-            else lines.Add("Learning target unavailable: more recorded retry sessions with comparable patterns and PP results are needed.");
+            lines.AddRange(ForecastExplanation(target));
+            if (target.Forecast is { LearningSessions: > 0 } learned)
+                lines.Add($"Retry trend: {learned.LearningSessions} recorded practice sessions on similar maps scale the next pass by {learned.LearningAdjustment:0.00}x. Failed tries are counted in the pass chance, not as zero PP.");
             lines.Add(target.ExpectedEarnedPp is { } earned
-                ? $"Expected per attempt: {earned:0.0} PP. Projected score weighted by estimated pass chance; failed attempts earn no PP."
-                : "A per-attempt PP estimate needs more comparable completed and failed plays.");
-            lines.Add($"PP if the projected score is completed: {pp.ExpectedPp:0.0} ({pp.ExpectedPpRange.Minimum:0.0}-{pp.ExpectedPpRange.Maximum:0.0}). This is conditional, not a pass prediction.");
+                ? $"Expected earned per attempt (ranking only): {earned:0.0} PP, PP if you pass times pass chance."
+                : "Expected earned PP needs more comparable completed and failed plays.");
             lines.Add($"100% FC ceiling: {pp.RealisticMaximumPp:0.0} PP");
+            if (pp.Outcome is { } outcome)
+                lines.Add($"Fitted passes: {outcome.Distribution.MissMean:0.0} misses on average, {outcome.Distribution.HitAccuracy:P1} accuracy on hit objects, "
+                    + $"{outcome.Distribution.FullComboEfficiency:P0} of max combo without misses. {outcome.Scenarios.Count} official PP scenarios.");
             lines.Add(pp.PatternPrediction?.ExpectedAccuracy is { } accuracy
                 ? $"Projected head accuracy: {accuracy:P1}" : target.PassEstimate?.ConditionalAccuracy is { } observed
                     ? $"Accuracy from comparable completed plays: {observed:P1}" : "General accuracy fallback; comparable score evidence is missing");

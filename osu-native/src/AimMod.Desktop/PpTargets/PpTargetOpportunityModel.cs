@@ -13,7 +13,7 @@ public sealed record PpTargetOpportunityProfile(DateTimeOffset AsOf, IReadOnlyLi
     IReadOnlyList<PpTargetPassSample> RecentAttempts);
 public sealed record PpTargetPassEstimate(double Probability, double Lower, double Upper, int Attempts, int Maps,
     bool BroaderComparison = false, PpTargetConfidence Confidence = PpTargetConfidence.Low,
-    bool DurationAdjusted = false, bool SameMap = false, double? ConditionalAccuracy = null);
+    bool DurationAdjusted = false, bool SameMap = false, double? ConditionalAccuracy = null, bool CrossMode = false);
 
 public static class PpTargetOpportunityModel
 {
@@ -34,6 +34,10 @@ public static class PpTargetOpportunityModel
         public EligibleAttempts For(IReadOnlyList<string> mods, string? json, bool legacyScore) =>
             eligible.GetOrAdd((ScoreMods.Configuration(mods, json, PpTargetMods.NormaliseForSkill), legacyScore), key =>
                 new((bySetup.GetValueOrDefault(key.Setup) ?? []).Where(s => s.LegacyScore == key.LegacyScore).ToArray(), asOf));
+        public EligibleAttempts ForBothModes(IReadOnlyList<string> mods, string? json) =>
+            both.GetOrAdd(ScoreMods.Configuration(mods, json, PpTargetMods.NormaliseForSkill), key =>
+                new(bySetup.GetValueOrDefault(key) ?? [], asOf));
+        private readonly ConcurrentDictionary<string, EligibleAttempts> both = new();
     }
 
     // Attempts for one setup, indexed by beatmap and by star rating. Queries return indices in the
@@ -80,17 +84,24 @@ public static class PpTargetOpportunityModel
     internal sealed class PassEstimator
     {
         private readonly EligibleAttempts? eligible;
+        private readonly EligibleAttempts? both;
 
         public PassEstimator(PpTargetOpportunityProfile profile, IReadOnlyList<string> mods, string? modsJson, bool legacyScore)
         {
-            if (!modKey(mods).Split(',').Any(m => m is "NF" or "SD" or "PF" or "RX" or "AP" or "AT" or "CN"))
-                eligible = indexes.GetValue(profile, p => new AttemptIndex(p)).For(mods, modsJson, legacyScore);
+            if (modKey(mods).Split(',').Any(m => m is "NF" or "SD" or "PF" or "RX" or "AP" or "AT" or "CN")) return;
+            AttemptIndex index = indexes.GetValue(profile, p => new AttemptIndex(p));
+            eligible = index.For(mods, modsJson, legacyScore);
+            both = index.ForBothModes(mods, modsJson);
         }
 
         public PpTargetPassEstimate? Estimate(double stars, double bpm, int seconds, int beatmapId)
         {
             if (!double.IsFinite(stars) || stars <= 0 || seconds <= 0 || eligible is null) return null;
-            return estimate(eligible, stars, bpm, seconds, beatmapId);
+            // Pass/fail barely depends on the scoring system. A player who switched clients keeps
+            // their other-mode history instead of silently losing it, at low confidence.
+            return estimate(eligible, stars, bpm, seconds, beatmapId)
+                ?? (both!.Samples.Length > eligible.Samples.Length && estimate(both, stars, bpm, seconds, beatmapId) is { } crossed
+                    ? crossed with { CrossMode = true, Confidence = PpTargetConfidence.Low } : null);
         }
     }
 

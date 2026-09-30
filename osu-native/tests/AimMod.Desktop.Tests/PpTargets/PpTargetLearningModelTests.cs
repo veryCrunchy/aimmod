@@ -12,15 +12,16 @@ public sealed class PpTargetLearningModelTests
     private static PpTargetEstimate estimate(PpPatternFeatures? features = null) => new(200, 400, new(150, 250), 20,
         PpTargetConfidence.Low, "synthetic", Features: features ?? jumps);
 
-    private static (PpTargetOpportunityProfile History, PpPatternProfile Patterns) history(double[] pp, PpPatternFeatures? shape = null, string mods = "")
+    private static (PpTargetOpportunityProfile History, PpPatternProfile Patterns) history(double?[] pp, PpPatternFeatures? shape = null, string mods = "",
+        Func<int, int, int, DateTimeOffset>? at = null)
     {
         var attempts = new List<PpTargetPassSample>();
         var evidence = new List<PpPatternEvidence>();
         for (int map = 1; map <= 3; map++) for (int session = 0; session < 2; session++) for (int i = 0; i < pp.Length; i++)
         {
             Guid id = Guid.NewGuid();
-            var time = now.AddDays(-5 + session).AddHours(map).AddMinutes(i * 3);
-            attempts.Add(new(map, time, 5, 180, 120, mods, pp[i] > 0, LocalScoreId: id, Pp: pp[i], LocalAttempt: true));
+            var time = at?.Invoke(map, session, i) ?? now.AddDays(-5 + session).AddHours(map).AddMinutes(i * 3);
+            attempts.Add(new(map, time, 5, 180, 120, mods, pp[i] != 0, LocalScoreId: id, Pp: pp[i], LocalAttempt: true));
             evidence.Add(new(id, $"map-{map}", mods, time, shape ?? jumps, 1, new Dictionary<string, PpPatternOutcome>()));
         }
         return (new(now, [], attempts), new("synthetic", now, 30, evidence));
@@ -30,33 +31,29 @@ public sealed class PpTargetLearningModelTests
         PpTargetLearningModel.Predict(h, p, e ?? estimate(), 99, 5, 180, 120, []);
 
     [Test]
-    public void LearnsOrderedRetriesAndIncludesFailuresInFirstTry()
+    public void RatiosSharePassesOnlyDenominatorAndFailuresAreNotZeroPp()
     {
-        var data = history([0, 80, 100, 140]);
+        // Mean passed PP is 100; a failed first attempt must not turn the first-try ratio into zero.
+        var data = history([0, 80, 100, 120]);
         var result = predict(data.History, data.Patterns)!;
-        Assert.That(result, Is.Not.Null);
-        Assert.That(result.FirstTryPp, Is.Zero);
-        Assert.That(result.TargetPp, Is.EqualTo(262));
-        Assert.That(result.LikelyTries, Is.EqualTo(4));
-        Assert.That(result.SupportedTries, Is.EqualTo(4));
+        Assert.That(result.Sessions, Is.EqualTo(6));
         Assert.That(result.Maps, Is.EqualTo(3));
+        Assert.That(result.Ratio(0), Is.EqualTo(1), "No passed first attempts leaves the neutral ratio.");
+        Assert.That(result.Ratio(1), Is.LessThan(1).And.GreaterThanOrEqualTo(.8));
+        Assert.That(result.Ratio(3), Is.GreaterThan(result.Ratio(2)));
         Assert.That(result.Confidence, Is.EqualTo(PpTargetConfidence.Low));
-        var reverse = history([140, 100, 80, 0]);
-        var early = predict(reverse.History, reverse.Patterns)!;
-        Assert.That(early.TargetPp, Is.EqualTo(result.TargetPp));
-        Assert.That(early.LikelyTries, Is.EqualTo(1), "Same distribution but different chronology changes time to target.");
     }
 
     [Test]
-    public void DoesNotInventLearningForFlatHistoryOrExceedTheFcCeiling()
+    public void FlatHistoryIsNeutralAndImprovementIsShrunkAndBounded()
     {
         var flat = history([100, 100, 100]);
         var result = predict(flat.History, flat.Patterns)!;
-        Assert.That(result.FirstTryPp, Is.EqualTo(200).Within(.001));
-        Assert.That(result.TargetPp, Is.EqualTo(200));
-        Assert.That(result.LikelyTries, Is.EqualTo(1));
-        var improving = history([0, 80, 100, 140]);
-        Assert.That(predict(improving.History, improving.Patterns, estimate() with { RealisticMaximumPp = 220 })!.TargetPp, Is.EqualTo(220));
+        Assert.That(result.PassRatios, Is.All.EqualTo(1).Within(1e-9));
+        var improving = history([50, 150, 400]);
+        var bounded = predict(improving.History, improving.Patterns)!;
+        Assert.That(bounded.Ratio(0), Is.EqualTo(.8));
+        Assert.That(bounded.Ratio(2), Is.LessThanOrEqualTo(1.2));
     }
 
     [Test]
@@ -73,54 +70,49 @@ public sealed class PpTargetLearningModelTests
     }
 
     [Test]
-    public void UsesNextAttemptForAnAlreadyPractisedTargetAndDoesNotExtrapolate()
+    public void OnePassWithoutPpSkipsOnlyThatAttempt()
     {
-        var data = history([0, 80, 100, 140]);
+        var data = history([90, 100, 110]);
+        var attempts = data.History.RecentAttempts.ToArray();
+        attempts[1] = attempts[1] with { Pp = null };
+        var result = predict(data.History with { RecentAttempts = attempts }, data.Patterns);
+        Assert.That(result, Is.Not.Null);
+        Assert.That(result!.Sessions, Is.EqualTo(6));
+    }
+
+    [Test]
+    public void UsesNextAttemptForAnAlreadyPractisedTarget()
+    {
+        var data = history([80, 100, 120, 140]);
         var current = new PpTargetPassSample(99, now.AddMinutes(-3), 5, 180, 120, "", false, LocalScoreId: Guid.NewGuid(), Pp: 0, LocalAttempt: true);
         var result = predict(data.History with { RecentAttempts = data.History.RecentAttempts.Append(current).ToArray() }, data.Patterns)!;
         Assert.That(result.PreviousTries, Is.EqualTo(1));
-        Assert.That(result.FirstTryPp, Is.EqualTo(150).Within(.001));
-        Assert.That(result.LikelyTries, Is.EqualTo(3));
         Assert.That(result.SupportedTries, Is.EqualTo(3));
-        var many = Enumerable.Range(0, 20).Select(i => current with { LocalScoreId = Guid.NewGuid(), PlayedAt = now.AddMinutes(-i) });
-        Assert.That(predict(data.History with { RecentAttempts = data.History.RecentAttempts.Concat(many).ToArray() }, data.Patterns), Is.Null);
+        var fresh = predict(data.History, data.Patterns)!;
+        Assert.That(result.Ratio(0), Is.GreaterThan(fresh.Ratio(0)), "Later attempts in comparable sessions scored higher.");
+        var many = Enumerable.Range(0, 25).Select(i => current with { LocalScoreId = Guid.NewGuid(), PlayedAt = now.AddMinutes(-i) });
+        Assert.That(predict(data.History with { RecentAttempts = data.History.RecentAttempts.Concat(many).ToArray() }, data.Patterns)!.PreviousTries, Is.EqualTo(19));
     }
 
     [Test]
-    public void EarlySuccessesAndAbandonmentsRemainInTheForecast()
+    public void CurrentSessionAttemptsTrainOtherTargetsAtLowerWeight()
     {
-        var data = history([0, 80, 100, 140]);
-        var original = predict(data.History, data.Patterns)!;
-        var successes = new List<PpTargetPassSample>();
-        for (int map = 1; map <= 3; map++)
-            successes.Add(new(map, now.AddDays(-2).AddHours(map), 5, 180, 120, "", true,
-                LocalScoreId: Guid.NewGuid(), Pp: 140, LocalAttempt: true));
-        var improved = predict(data.History with { RecentAttempts = data.History.RecentAttempts.Concat(successes).ToArray() }, data.Patterns)!;
-        Assert.That(improved.Sessions, Is.EqualTo(9));
-        Assert.That(improved.FirstTryPp, Is.GreaterThan(original.FirstTryPp));
-        var failures = successes.Select(a => a with { Passed = false, Pp = 0 });
-        var abandoned = predict(data.History with { RecentAttempts = data.History.RecentAttempts.Concat(failures).ToArray() }, data.Patterns)!;
-        Assert.That(abandoned.Sessions, Is.EqualTo(9));
-        Assert.That(abandoned.ReachProbability, Is.LessThan(original.ReachProbability));
-    }
-
-    [Test]
-    public void TargetMapAndStillOpenSessionsDoNotTrainTheirOwnForecast()
-    {
-        var data = history([0, 80, 100, 140]);
-        Assert.That(PpTargetLearningModel.Predict(data.History, data.Patterns, estimate(), 1, 5, 180, 120, []), Is.Null,
+        var closed = history([80, 100, 120]);
+        var open = history([80, 100, 120], at: (map, session, i) => now.AddMinutes(-60 + map * 12 + session * 4 + i));
+        Assert.That(predict(open.History, open.Patterns), Is.Not.Null, "Sessions ended less than six hours ago are still evidence.");
+        Assert.That(PpTargetLearningModel.Predict(closed.History, closed.Patterns, estimate(), 1, 5, 180, 120, []), Is.Null,
             "Excluding the target leaves fewer than three independent maps.");
-        var current = data.History.RecentAttempts.Select(a => a with { PlayedAt = now.AddMinutes(-10) }).ToArray();
-        Assert.That(predict(data.History with { RecentAttempts = current }, data.Patterns), Is.Null);
     }
 
     [Test]
     public void FutureAttemptsCannotChangeForecastAndDuplicateScoresAreNotExtraPractice()
     {
         var data = history([0, 80, 100, 140]);
-        var original = predict(data.History, data.Patterns);
+        var original = predict(data.History, data.Patterns)!;
         var augmented = data.History with { RecentAttempts = data.History.RecentAttempts.Concat(data.History.RecentAttempts)
             .Concat(data.History.RecentAttempts.Select(a => a with { LocalScoreId = Guid.NewGuid(), PlayedAt = now.AddDays(1), Pp = 10000 })).ToArray() };
-        Assert.That(predict(augmented, data.Patterns), Is.EqualTo(original));
+        var repeated = predict(augmented, data.Patterns)!;
+        Assert.That(repeated.PassRatios, Is.EqualTo(original.PassRatios));
+        Assert.That(repeated.Sessions, Is.EqualTo(original.Sessions));
     }
 }

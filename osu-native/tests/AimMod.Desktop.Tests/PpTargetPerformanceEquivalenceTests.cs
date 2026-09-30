@@ -43,8 +43,8 @@ public sealed class PpTargetPerformanceEquivalenceTests
         if (seed is 6 or 7)
         {
             PpTargetCandidate[] all = PpTargetRanker.Rank(profile, catalog, filters[0], estimates).Candidates.ToArray();
-            Assert.That(all.Count(c => c.PassEstimate?.SameMap == true) * all.Count(c => c.EstimatedAccountGainPp is not null) * all.Count(c => c.Learning is not null),
-                Is.Positive, "Synthetic data must reach direct pass estimates, account gain and learning forecasts.");
+            Assert.That(all.Count(c => c.PassEstimate?.SameMap == true) * all.Count(c => c.EstimatedAccountGainPp is not null) * all.Count(c => c.Forecast is not null),
+                Is.Positive, "Synthetic data must reach direct pass estimates, account gain and PP forecasts.");
         }
         foreach (PpTargetFilters filter in filters)
         {
@@ -424,6 +424,10 @@ public sealed class PpTargetPerformanceEquivalenceTests
                     [new("Overall", random.Next(2) == 0 ? null : Math.Round(random.NextDouble(), 3), null, .2, 1), new("Jumps", null, null, 0, 0)]),
             };
             double expected = random.Next(20) == 0 ? double.NaN : Math.Round(20 + random.NextDouble() * 400, 2);
+            PpOutcomeEstimate? outcome = random.Next(3) == 0 ? null : new PpOutcomeEstimate(
+                new PpOutcomeDistribution(Math.Round(random.NextDouble() * 4, 2), random.Next(2) == 0 ? 1.5 : PpOutcomeDistribution.PoissonShape,
+                    .97, .01, .95, 1, Math.Round(random.NextDouble() * 20, 1), random.Next(1, 8), random.Next(1, 30), random.Next(4) == 0, random.Next(6) == 0, .9, -.012),
+                [], [new(expected * .7, .25), new(expected * .95, .45), new(expected * 1.25, .3)], 2, random.Next(2) == 0 ? 1 : .93, random.Next(3));
             estimates[beatmap] = new PpTargetEstimate(expected, random.Next(20) == 0 ? 0 : expected * 1.4, new(expected * .8, expected * 1.2), random.Next(30),
                 (PpTargetConfidence)random.Next(4), "synthetic",
                 random.Next(12) == 0 ? beatmap + 1 : random.Next(2) == 0 ? beatmap : null,
@@ -431,7 +435,7 @@ public sealed class PpTargetPerformanceEquivalenceTests
                 random.Next(10) == 0 ? profile.TypicalAccuracy : null, null, prediction,
                 random.Next(3) switch { 0 => null, 1 => "pattern-a", _ => "stale" },
                 random.Next(8) == 0 ? "[]" : profile.PreferredModsJson,
-                random.Next(2) == 0 ? jumps : null, random.Next(8) == 0 ? !profile.LegacyScore : profile.LegacyScore);
+                random.Next(2) == 0 ? jumps : null, random.Next(8) == 0 ? !profile.LegacyScore : profile.LegacyScore, outcome);
         }
         return estimates;
     }

@@ -33,13 +33,18 @@ public sealed record PpPatternFeatures
     public double? SharpTurnFraction { get; init; }
     public double? DurationSeconds { get; init; }
     public IReadOnlyDictionary<string, int>? PatternObjectCounts { get; init; }
+    // Map context rather than geometry: base star rating plus mod- and rate-adjusted OD and AR.
+    public double? StarRating { get; init; }
+    public double? OverallDifficulty { get; init; }
+    public double? ApproachRate { get; init; }
 }
 
 public sealed record PpPatternOutcome(int ObjectCount, double Accuracy, double MissRate,
     IReadOnlyDictionary<ReplayMissReason, int> MissReasons);
 
 public sealed record PpPatternEvidence(Guid ScoreId, string MapKey, string ModsKey, DateTimeOffset PlayedAt,
-    PpPatternFeatures Features, double Weight, IReadOnlyDictionary<string, PpPatternOutcome> Outcomes, string? SetupKey = null, bool LegacyScore = false);
+    PpPatternFeatures Features, double Weight, IReadOnlyDictionary<string, PpPatternOutcome> Outcomes, string? SetupKey = null, bool LegacyScore = false,
+    bool Passed = true);
 
 public sealed record PpPatternProfile(string Identity, DateTimeOffset ReferenceTime, int RecencyDays,
     IReadOnlyList<PpPatternEvidence> Evidence, IReadOnlyList<PpScoreSkillEvidence>? ScoreEvidence = null, PpSessionForm? SessionForm = null);
@@ -58,7 +63,7 @@ public sealed record PpPatternPrediction(double? Fit, double? ExpectedAccuracy, 
 public static class PpTargetPatternModel
 {
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<ReplayAnalysisResult, Dictionary<MeasurementKey, PpPatternEvidence>> measuredReplays = new();
-    public const string Version = "geometry-v8";
+    public const string Version = "geometry-v9";
     private const double normalized_radius = 50;
     private const double jump_spacing = 150;
     private const double tapping_spacing = 100;
@@ -122,7 +127,7 @@ public static class PpTargetPatternModel
                     && saved.LegacyScore == (replay.LegacyScore || replay.Origin == LocalLibraryOrigin.Stable)
                     && saved.ModsKey == modsKey(replay.Mods) && saved.PlayedAt == replay.PlayedAt
                     && (saved.SetupKey is null || saved.SetupKey == ScoreMods.Configuration(replay.Mods, replay.ModsJson, PpTargetMods.NormaliseForSkill)))
-                    evidence.Add(saved with { Weight = decay(replay) });
+                    evidence.Add(saved with { Weight = decay(replay), Passed = replay.Passed });
                 continue;
             }
             // Analysis results are immutable snapshots. Reuse measurements while still
@@ -137,7 +142,8 @@ public static class PpTargetPatternModel
                 && string.IsNullOrWhiteSpace(byId.BeatmapHash)) difficulty = byId;
             // Every input the measurement below reads besides the (immutable) analysis itself.
             var measurementKey = new MeasurementKey(replay.ScoreId, map, replay.PlayedAt.UtcTicks, replay.PlayedAt.Offset, legacy,
-                string.Join('\u001f', replay.Mods), replay.ModsJson, context?.HitRadius, context?.ClockRate, difficulty?.CircleSize);
+                string.Join('\u001f', replay.Mods), replay.ModsJson, context?.HitRadius, context?.ClockRate, difficulty?.CircleSize,
+                replay.StarRating, replay.Passed, difficulty?.OverallDifficulty, difficulty?.ApproachRate);
             var measurements = measuredReplays.GetOrCreateValue(analysis);
             lock (measurements)
                 if (measurements.TryGetValue(measurementKey, out var measurement))
@@ -162,6 +168,13 @@ public static class PpTargetPatternModel
             PpPatternPoint[] points = heads.Select((j, i) => new PpPatternPoint(j.StartTimeMs, j.ObjectPosition!.X, j.ObjectPosition.Y,
                 i > 0 && j.ObjectIndex != heads[i - 1].ObjectIndex + 1)).ToArray();
             var measured = measure(points, radius, rate);
+            double? speed = rate ?? PpTargetDifficulty.ClockRate(PpTargetMods.Normalise(replay.Mods), replay.ModsJson);
+            measured = (measured.Features with
+            {
+                StarRating = double.IsFinite(replay.StarRating) && replay.StarRating > 0 ? replay.StarRating : null,
+                OverallDifficulty = PpTargetDifficulty.OverallDifficulty(difficulty?.OverallDifficulty, replay.Mods, speed),
+                ApproachRate = PpTargetDifficulty.ApproachRate(difficulty?.ApproachRate, replay.Mods, speed),
+            }, measured.Patterns);
             var outcomes = new Dictionary<string, PpPatternOutcome>();
             foreach (var (pattern, indices) in measured.Patterns)
             {
@@ -175,7 +188,7 @@ public static class PpTargetPatternModel
             }
             if (!outcomes.TryGetValue("Overall", out var overall) || overall.ObjectCount < 3) continue;
             var result = new PpPatternEvidence(replay.ScoreId, map, mods, replay.PlayedAt, measured.Features, decay(replay), outcomes,
-                ScoreMods.Configuration(replay.Mods, replay.ModsJson, PpTargetMods.NormaliseForSkill), legacy);
+                ScoreMods.Configuration(replay.Mods, replay.ModsJson, PpTargetMods.NormaliseForSkill), legacy, replay.Passed);
             lock (measurements)
             {
                 if (measurements.Count >= 8) measurements.Clear();
@@ -204,7 +217,8 @@ public static class PpTargetPatternModel
     }
 
     private readonly record struct MeasurementKey(Guid ScoreId, string Map, long PlayedAtTicks, TimeSpan PlayedAtOffset, bool LegacyScore,
-        string Mods, string ModsJson, double? HitRadius, double? ClockRate, float? CircleSize);
+        string Mods, string ModsJson, double? HitRadius, double? ClockRate, float? CircleSize,
+        double Stars, bool Passed, float? OverallDifficulty, float? ApproachRate);
 
     // A digest of every profile field predictions read, written as compact binary rather than JSON.
     // Dictionaries are hashed in enumeration order because that order can affect summation.
@@ -218,13 +232,14 @@ public static class PpTargetPatternModel
         foreach (PpPatternEvidence e in evidence)
         {
             w.Id(e.ScoreId); w.Text(e.MapKey); w.Text(e.ModsKey); w.Time(e.PlayedAt); w.Real(e.Weight);
-            w.Text(e.SetupKey); w.Bool(e.LegacyScore);
+            w.Text(e.SetupKey); w.Bool(e.LegacyScore); w.Bool(e.Passed);
             PpPatternFeatures f = e.Features;
             w.Int(f.PointCount); w.Int(f.TransitionCount); w.Int(f.InvalidPointCount);
             w.Real(f.HitRadius); w.Real(f.ClockRate); w.Real(f.MeanSpacing); w.Real(f.PeakSpacing);
             w.Real(f.JumpDistance); w.Real(f.JumpFraction); w.Real(f.NotesPerSecond); w.Real(f.PeakNotesPerSecond);
             w.Real(f.NormalizedSpeed); w.Real(f.BurstFraction); w.Real(f.StreamFraction);
             w.Real(f.MeanDirectionChangeDegrees); w.Real(f.SharpTurnFraction); w.Real(f.DurationSeconds);
+            w.Real(f.StarRating); w.Real(f.OverallDifficulty); w.Real(f.ApproachRate);
             w.Int(f.PatternObjectCounts?.Count ?? -1);
             foreach (var (pattern, count) in f.PatternObjectCounts ?? new Dictionary<string, int>())
             {
@@ -385,7 +400,8 @@ public static class PpTargetPatternModel
 
         string key = modsKey(mods ?? []);
         string configuration = ScoreMods.Configuration(mods ?? [], modsJson, PpTargetMods.NormaliseForSkill);
-        var compatible = profile.Evidence.Where(e => e.LegacyScore == legacyScore && e.ModsKey == key
+        // Failed attempts stop early; they describe how a run ended, not a completed score.
+        var compatible = profile.Evidence.Where(e => e.Passed && e.LegacyScore == legacyScore && e.ModsKey == key
             && (e.SetupKey ?? ScoreMods.Configuration(e.ModsKey.Split([',', '+']), null, PpTargetMods.NormaliseForSkill)) == configuration
             && e.Features.HitRadius is not null
             && e.Features.ClockRate is { } rate && Math.Abs(rate - candidate.ClockRate.Value) < 0.01).ToArray();
@@ -420,8 +436,17 @@ public static class PpTargetPatternModel
                 continue;
             }
             double weight = relevant.Sum(e => e.Evidence.Weight * e.Similarity);
-            double accuracy = relevant.Sum(e => e.Evidence.Weight * e.Similarity * e.Evidence.Outcomes[pattern].Accuracy) / weight;
-            double misses = relevant.Sum(e => e.Evidence.Weight * e.Similarity * e.Evidence.Outcomes[pattern].MissRate) / weight;
+            // Neighbours at other star ratings move to the candidate's difficulty along a shrunk monotone trend.
+            double delta(PpPatternEvidence e) => candidate.StarRating is { } target && e.Features.StarRating is { } stars ? target - stars : 0;
+            var trend = relevant.Where(e => candidate.StarRating is not null && e.Evidence.Features.StarRating is not null).ToArray();
+            double accuracySlope = PpTargetOutcomeModel.ShrunkSlope(trend.Select(e => (e.Evidence.Weight * e.Similarity, -delta(e.Evidence),
+                e.Evidence.Outcomes[pattern].Accuracy)), PpTargetOutcomeModel.PriorAccuracyStarSlope, -.05, 0);
+            double missSlope = PpTargetOutcomeModel.ShrunkSlope(trend.Select(e => (e.Evidence.Weight * e.Similarity, -delta(e.Evidence),
+                Math.Log(e.Evidence.Outcomes[pattern].MissRate + .002))), PpTargetOutcomeModel.PriorMissStarSlope, 0, 2.5);
+            double accuracy = relevant.Sum(e => e.Evidence.Weight * e.Similarity
+                * Math.Clamp(e.Evidence.Outcomes[pattern].Accuracy + accuracySlope * delta(e.Evidence), 0, 1)) / weight;
+            double misses = relevant.Sum(e => e.Evidence.Weight * e.Similarity
+                * Math.Clamp(e.Evidence.Outcomes[pattern].MissRate * Math.Exp(missSlope * delta(e.Evidence)), 0, 1)) / weight;
             string setup = ScoreMods.Configuration(mods ?? [], modsJson ?? "", PpTargetMods.NormaliseForSkill);
             var form = profile.SessionForm?.Patterns.FirstOrDefault(p => p.LegacyScore == legacyScore && p.Setup == setup && p.Pattern == pattern);
             if (form is not null && profile.SessionForm!.ExpiresAt > profile.ReferenceTime)
@@ -588,6 +613,9 @@ public static class PpTargetPatternModel
                 differences.Add(Math.Abs(xx - yy) / scale);
         }
         compare(a.NotesPerSecond, b.NotesPerSecond, 1.5);
+        compare(a.StarRating, b.StarRating, .6);
+        compare(a.OverallDifficulty, b.OverallDifficulty, 2);
+        compare(a.ApproachRate, b.ApproachRate, 1.5);
         compare(a.MeanSpacing, b.MeanSpacing, 80);
         compare(a.PeakSpacing, b.PeakSpacing, 120);
         compare(a.PeakNotesPerSecond, b.PeakNotesPerSecond, 2);

@@ -19,8 +19,10 @@ public sealed class PpTargetEngineTests
         Assert.Multiple(() =>
         {
             Assert.That(target.DisplayedExpectedPp, Is.EqualTo(180));
-            Assert.That(target.ExpectedPpCaption, Is.EqualTo("PP IF PASSED"));
+            Assert.That(target.ExpectedPpCaption, Is.EqualTo("FIRST TRY PP"));
+            Assert.That(target.IsConditionalPp, Is.True, "Shown as PP if you pass, without a pass chance.");
             Assert.That(target.FirstAttemptPp, Is.Null);
+            Assert.That(target.Forecast, Is.Null);
             Assert.That(target.EstimatedAccountGainPp, Is.Null);
             Assert.That(target.PassEstimate, Is.Null);
             Assert.That((target with { Estimate = null }).DisplayedExpectedPp, Is.Null);
@@ -575,6 +577,21 @@ public sealed class PpTargetEngineTests
         var highOnly = PpTargetScanPlanner.Select(profileWithHistory(), catalog, new PpTargetFilters(MinimumStars: 5, MaximumStars: 7), 500);
         Assert.That(highOnly, Has.Count.EqualTo(2));
         Assert.That(highOnly.All(candidate => candidate.StarRating >= 5), Is.True);
+    }
+
+    [Test]
+    public void PlanReservesAQuarterOfTheBudgetForHighEarnedPpStretchTargets()
+    {
+        // One tempo/length band per star rating, so exploration alone reaches only a few hard maps.
+        var catalog = Enumerable.Range(1, 200).Select(i => set(i, "ranked", difficulty(i, 4.8)))
+            .Concat(Enumerable.Range(1, 40).Select(i => set(1_000 + i, "ranked", difficulty(1_000 + i, 6.1))));
+        var profile = profileWithHistory();
+        var selected = PpTargetScanPlanner.Select(profile, catalog, new PpTargetFilters(), 40);
+        var comfortable = PpTargetRanker.Rank(profile, catalog, new PpTargetFilters(Limit: 50_000)).Candidates.Take(40).ToArray();
+        int stretch = selected.Count(c => c.StarRating > 6);
+        Assert.That(selected, Has.Count.EqualTo(40));
+        Assert.That(stretch, Is.GreaterThanOrEqualTo(10), "A quarter of the calculations go to harder, higher-PP candidates.");
+        Assert.That(stretch, Is.GreaterThan(comfortable.Count(c => c.StarRating > 6)));
     }
 
     [Test]

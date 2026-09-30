@@ -29,6 +29,9 @@ public static class Program
         if (args is ["--probe"])
             return runProbe();
 
+        if (args is ["--pp-backtest"])
+            return PpTargets.PpTargetBacktestProbe.Run();
+
         if (ShouldRunVelopackBootstrap(args))
         {
             var app = VelopackApp.Build();
@@ -40,7 +43,7 @@ public static class Program
         return runDesktop(args);
     }
 
-    internal static bool ShouldRunVelopackBootstrap(string[] args) => args is not ["--worker"] and not ["--probe"] and not ["--creator-test", _];
+    internal static bool ShouldRunVelopackBootstrap(string[] args) => args is not ["--worker"] and not ["--probe"] and not ["--pp-backtest"] and not ["--creator-test", _];
 
     private static int runCreatorTest(Creator.CreatorTestInstance instance)
     {
