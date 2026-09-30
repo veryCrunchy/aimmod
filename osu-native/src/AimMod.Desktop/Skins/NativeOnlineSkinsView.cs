@@ -17,7 +17,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
 {
     private const float gap = AimModVisualStyle.RelatedSpacing;
     private const string browseProviderId = "browse-provider";
-    private const float min_card_width = 220;
+    private const float min_card_width = 200;
 
     private readonly OnlineSkinCatalogBackend? backend;
     private IOnlineSkinArchiveDestination? destination;
