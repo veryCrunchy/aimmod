@@ -4,6 +4,7 @@
 // signature is verified before first use; a call never passes anything but
 // zeroed parameters, a world context object and explicit sentinels.
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -73,6 +74,8 @@ namespace aimmod::game
         ObjectArray, // TArray<UObject*> return value
         ValueElse,   // OutValue (numeric) + Result (enum/byte) out parameters
         Observe,     // hook target only; never called
+        Command,     // replay presentation only: plain value inputs (vector,
+                     // rotator, float, bool, int), no return value used
     };
 
     class Getter
@@ -109,6 +112,8 @@ namespace aimmod::game
             double value{};
         };
         ValueElseResult ValueElse(UObject* self, UObject* context = nullptr) const;
+        // Command shape: `fill` writes each input parameter (by name/kind).
+        bool Call(UObject* self, const std::function<void(std::uint8_t* value, const Param& param)>& fill) const;
 
     private:
         bool Invoke(UObject* self, std::uint8_t* buffer, UObject* context) const;

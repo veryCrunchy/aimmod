@@ -274,11 +274,14 @@ namespace aimmod::game
                 m_params.clear();
                 return false;
             }
-            // Only world context objects and plain integers (zero) are passed in.
+            // Only world context objects and plain integers (zero) are passed in;
+            // commands also take plain values the caller fills.
             for (const Param& p : m_params)
             {
                 if (p.ret || p.out) continue;
                 if (p.worldContext || p.kind == Kind::Int32) continue;
+                if (shape == Shape::Command && (p.kind == Kind::Vector || p.kind == Kind::Rotator || p.kind == Kind::Float || p.kind == Kind::Bool))
+                    continue;
                 m_error = "unsupported input " + p.name + ":" + KindName(p.kind);
                 m_params.clear();
                 return false;
@@ -349,7 +352,7 @@ namespace aimmod::game
 
     bool Getter::Invoke(UObject* self, std::uint8_t* buffer, UObject* context) const
     {
-        if (!ok() || !self || m_shape == Shape::Observe) return false;
+        if (!ok() || !self || m_shape == Shape::Observe || m_shape == Shape::Command) return false;
         // Never call a function on an object of another class.
         if (m_owner && !self->IsA(m_owner)) return false;
         std::memset(buffer, 0, m_parmsSize);
@@ -491,6 +494,23 @@ namespace aimmod::game
         }
         Release(buffer);
         return r;
+    }
+
+    bool Getter::Call(UObject* self, const std::function<void(std::uint8_t*, const Param&)>& fill) const
+    {
+        alignas(16) std::uint8_t buffer[MaxParms];
+        if (!ok() || !self || m_shape != Shape::Command) return false;
+        if (m_owner && !self->IsA(m_owner)) return false;
+        std::memset(buffer, 0, m_parmsSize);
+        for (const Param& p : m_params)
+            if (!p.ret && !p.out) fill(buffer + p.offset, p);
+        if (!GuardedProcessEvent(self, m_function, buffer))
+        {
+            ++m_faults;
+            return false;
+        }
+        Release(buffer);
+        return true;
     }
 
     bool Field::Bind(UClass* cls, const wchar_t* name)

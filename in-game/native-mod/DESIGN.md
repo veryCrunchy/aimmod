@@ -88,16 +88,22 @@ States: `Idle -> Running -> Ending -> Idle`.
 - Restart: while running, the elapsed timer drops back to <= 1 s and a
   following poll advances again: the current attempt is cancelled
   (`restart`) and a new one starts.
-- End: running -> not running (while not paused) enters `Ending` with a 3 s
-  deadline. The attempt completes when `StatsManager:GetLastScore` or
-  `GetLastChallengeTimeRemaining` changes from the value captured at start,
-  or a completion hook fires, or the deadline passes after the timer ran out
-  (<= 0.5 s remaining at the last running poll). Otherwise it is cancelled
-  (`quit`). Scenario changes cancel.
-- Final score: `StatsManager:GetLastScore` (the value the end screen shows),
-  else the last `PerformanceIndicatorsStateReceiver:Get_Score_ValueElse`
-  value with `Result == HasValue`. A run without either is not journalled.
-  Scores are never computed.
+- End: running -> not running (while not paused) enters `Ending` with a 5 s
+  deadline and starts watching `FPSAimTrainer\stats` for the CSV the game
+  writes when (and only when) a challenge completes (matched by scenario and
+  its `Challenge Start` time within 5 s). That record completes the attempt
+  and supplies the final score, hits, misses, kills and damage. Without it,
+  only a run whose timer ran out (<= 0.5 s remaining at the last running
+  poll) completes at the deadline; anything else is cancelled (`quit`).
+  `GetLastScore`/`GetLastChallengeTimeRemaining` are never completion
+  evidence: they reset (to 0) when a scenario is left (live test #2: a quit
+  after 2 s was journalled as a completion by that rule).
+- Final score: the stats record, else a `GetLastScore` that changed during
+  the attempt (a 0 never replaces a non-zero live score; live test #2 read 0
+  at completion for a 10533 run), else the last
+  `PerformanceIndicatorsStateReceiver:Get_Score_ValueElse` value with
+  `Result == HasValue`. A run without any is not journalled. Scores are
+  never computed.
 
 ### Values (ValueElse / ValueOr contract)
 
@@ -125,6 +131,8 @@ All under `%LOCALAPPDATA%\AimMod\KovaaksNative\`:
   id. `ReplayCatalog.cs` reads format 2 and the older JSON-lines format 1
   (`ReplayCapture.lua`), so existing libraries keep working.
 - `replay-status.json`: capture status for the workspace.
+- `core-scene.json` (new): current scenario/map/challenge/pause state for
+  the replay start gate, rewritten at least once a second.
 - `core-active.tsv` (new): handshake `AIMMOD_CORE_1\t<version>\t<unix
   seconds>\t<capabilities>` refreshed every second and removed on shutdown.
   The Lua mod steps aside for each capability listed (`telemetry`,
@@ -181,12 +189,29 @@ frame (keyframe plus the deltas consumed since); `Motion` answers the exact
 pose at any playback instant; a 60 Hz frame list is also produced for the
 browser, HUD and older consumers.
 
-Playback: renderer protocol 6 adds a 0.4 s window of 120 Hz camera samples
-and per-target velocities to each published frame. The Lua renderer runs
-its own clock every engine frame (pulled gently toward the published time,
-snapping on seeks), interpolates the window and extrapolates targets, so the
-view moves at render rate rather than the 30 Hz publication rate. Protocol
-5 renderers and services keep working unchanged.
+Playback: renderer protocol 6 adds a 0.4 s window of 120 Hz camera samples,
+per-target velocities and the wall-clock publication instant (`clock`) to
+each published frame. AimModCore's presenter (`mod/src/Presenter`) reads the
+frame file at 60 Hz and, in the engine tick pre-callback (before the world
+and camera update of that frame), sets the replay camera and target proxies
+to the pose at the exact playback instant: publication time plus elapsed
+wall time times speed; no smoothing or clock correction is needed because
+both sides share the wall clock. It moves only the actors the Lua scene
+lists in `replay-proxies.tsv` (its own camera actor and inert proxies), only
+while that camera is the player's view target and the game is paused, and
+logs its apply rate, frame interval and playback-step error every 5 s. Its
+heartbeat (`replay-presenter.tsv`) tells the Lua renderer to leave the view
+and target locations alone; if the count stops advancing Lua falls back to
+its own render-rate loop. Protocol 5 renderers and services keep working.
+
+Replay start: the service checks `core-scene.json` (scenario, map, challenge
+and pause state published by AimModCore) before loading. A replay plays in
+the world it was recorded in, from the pause menu; a start that cannot be
+honoured yet stays pending with a reason and message
+(`GET /native-replay` -> `start`) and begins by itself once the game is
+ready (cancel with `{"action":"cancel"}`; 10 minute limit). Loading the
+replay's scenario automatically is not done yet: startup logs the
+signatures of the candidate game entry points so a safe one can be chosen.
 
 Measured on live test #1 (60 s tracking run, 378 fps, 43821 inputs):
 format 1 4.04 MB/min, format 2 54.6 KB/min (74x smaller; XPRESS 61.5,
@@ -228,6 +253,17 @@ service and Lua UI mod when given), enables them in `mods.txt`, and writes
 `-Repair` re-applies the manifest after a game update (Steam verification can
 remove the proxy); `Uninstall-AimModCore.ps1` removes exactly the files in
 the manifest. Nothing is downloaded at runtime.
+
+```
+install\Build-AimModPackage.ps1                  # -> out\package (mod, self-contained service, Lua UI, settings)
+install\Install-AimModCore.ps1 -Package out\package -Ue4ssZip <UE4SS_v3.0.1-1152-ge3ba1016.zip>
+install\Install-AimModCore.ps1 -Repair           # after a game update; uses the cached package
+install\Uninstall-AimModCore.ps1                 # restores backed-up files; keeps run data
+```
+
+The installer refuses to run while this game install is running, backs up
+any file it replaces (`<name>.aimmod-backup`) and restores those on
+uninstall; installer-created mod lists and folders are removed.
 
 ## Building
 

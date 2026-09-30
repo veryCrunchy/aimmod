@@ -2,10 +2,12 @@
 // Game-thread observer: drives the lifecycle machine from polls (and optional
 // broadcast observations), publishes live telemetry, writes the journal and
 // runs the replay sampler. Read-only with respect to the game.
+#include "Presenter.hpp"
 #include "ReplaySampler.hpp"
 #include "World.hpp"
 
 #include <aimmod/Formats.hpp>
+#include <aimmod/GameStats.hpp>
 #include <aimmod/Lifecycle.hpp>
 
 #include <atomic>
@@ -66,6 +68,7 @@ namespace aimmod
         void UpdateMeasurements(bool running, double elapsed, double remaining, const game::Getter::ValueElseResult& score);
         void Handle(const std::vector<LifecycleEvent>& events);
         void PublishLive(const PollSample& sample, bool running);
+        void PublishScene(const PollSample& sample, UObject* manager);
         void LogCompatibility(const char* reason);
         bool OnGameThread() const;
 
@@ -75,6 +78,7 @@ namespace aimmod
         game::Scene m_scene;
         Lifecycle m_lifecycle;
         ReplaySampler m_sampler;
+        Presenter m_presenter;
 
         // Callback registrations.
         std::vector<std::uint64_t> m_callbacks;
@@ -107,6 +111,10 @@ namespace aimmod
         // Scenario name cache.
         std::uint64_t m_scenarioKey{};
         std::string m_scenarioName;
+        std::string m_mapName;
+        std::optional<double> m_mapScale;
+        UObject* m_mapState{};
+        std::uint64_t m_mapScenarioKey{};
 
         // Current attempt measurements (never computed scores).
         AttemptStats m_stats;
@@ -119,6 +127,10 @@ namespace aimmod
         std::uint64_t m_attemptKillBase{};
         std::uint32_t m_attempts{}, m_completed{}, m_journalled{};
         std::string m_sources; // per-attempt value sources, for the log
+        std::int64_t m_attemptUnixMs{};
+        std::optional<double> m_attemptLocalStart;
+        bool m_statsWatch{};
+        std::optional<GameStats> m_gameStats;
         bool m_replayProbed{};
     };
 } // namespace aimmod

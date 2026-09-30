@@ -5,10 +5,12 @@ package.preload.ReplayEffects=function()return {create=function()return {update=
 package.preload.ReplayHealthBars=function()return {create=function()return {update=function()end,close=function()end}end}end
 local checks=0;local function check(v,m)assert(v,m);checks=checks+1 end
 local poses={}
+lastPresented=nil
 package.loaded.ReplayMainScene={
     proofFrame=function()return {camera={0,0,0,0,10,0,90},actors={}}end,
     verify=function()end,
-    create=function()return {verify=function()end,bind=function()end,frame=function()end,close=function()end,
+    create=function()return {verify=function()end,bind=function()end,frame=function(_,presented)lastPresented=presented end,close=function()end,
+        proxyVersion=1,proxies=function()return 'AIMMOD_PROXIES_1\ncamera\t/Game/Map.Map:PersistentLevel.CameraActor_1\n' end,
         pose=function(camera,moves)poses[#poses+1]={camera=camera,moves=moves}end}end
 }
 package.loaded.ReplayHUD={create=function()return {update=function()end,close=function()end}end}
@@ -66,4 +68,19 @@ files['root/AimMod/KovaaksNative/replay-frame.tsv']=head:gsub('\t1\t1\n','\t2\t1
 poll()
 local count=#poses;real=real+0.05;loops[1]()
 check(#poses==count,'paused playback is not advanced')
+check(files['root/AimMod/KovaaksNative/replay-proxies.tsv']:find('CameraActor_1',1,true),'proxy paths published for the native presenter')
+-- Native presenter: while its apply count advances Lua leaves the view alone.
+local presenterFile='root/AimMod/KovaaksNative/replay-presenter.tsv'
+local revision=3
+local function playFrame()
+    revision=revision+1
+    files['root/AimMod/KovaaksNative/replay-frame.tsv']=head:gsub('\t1\t1\n','\t'..revision..'\t1\n',1)..motion
+end
+files[presenterFile]='AIMMOD_PRESENTER_1\t4\t10\n';playFrame();poll()
+files[presenterFile]='AIMMOD_PRESENTER_1\t5\t20\n';playFrame();poll()
+count=#poses;real=real+0.05;loops[1]()
+check(#poses==count and lastPresented==true,'presenter active: Lua neither poses nor moves proxies')
+for _=1,3 do playFrame();poll()end -- count stopped advancing
+real=real+0.05;loops[1]()
+check(#poses>count and lastPresented==false,'stalled presenter hands the view back to Lua')
 print('PASS '..checks..' render-rate motion checks')

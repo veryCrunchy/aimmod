@@ -28,7 +28,7 @@ namespace aimmod
     enum class Signal
     {
         Start,    // a start/queued broadcast was observed
-        Complete, // a completion broadcast was observed
+        Complete, // completion evidence: the game's stats CSV for this attempt (or a completion broadcast)
         Cancel,   // a cancel broadcast was observed
     };
 
@@ -41,14 +41,13 @@ namespace aimmod
         std::string startEvent;          // Started: how the start was confirmed
         std::string reason;              // Canceled: restart|quit|scenario-changed|world-changed|canceled
         std::optional<double> score;     // Completed: final score, never computed
-        std::string scoreSource;         // Completed: stats-last-score|indicator|hook
+        std::string scoreSource;         // Completed: game-stats|stats-last-score|indicator
         double duration{};               // Completed/Canceled: challenge seconds observed
     };
 
     struct LifecycleConfig
     {
-        double endGraceSeconds = 3.0;       // wait for the final score after the challenge stops
-        double scoreSettleSeconds = 0.5;    // wait for GetLastScore after other completion evidence
+        double endGraceSeconds = 5.0;       // wait for completion evidence after the challenge stops
         double timerExpiredSeconds = 0.5;   // remaining time that counts as "timer ran out"
         double rewindThreshold = 0.05;      // timer jitter tolerance
         double restartMaxElapsed = 1.0;     // a restart returns the timer to its start
@@ -83,7 +82,6 @@ namespace aimmod
             double lastRemaining{-1};
             std::optional<double> rewindCandidate;
             double endDeadline{};
-            double evidenceAt{-1};
             bool completionSignal{};
             std::optional<double> signalScore;
             double unavailableSince{-1};

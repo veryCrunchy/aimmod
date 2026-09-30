@@ -89,6 +89,8 @@ sealed class NativeReplayPlayback : IAsyncDisposable
         lock (gate)
         {
             var time = Time;
+            // Wall-clock instant of `time`: the native presenter extrapolates from it exactly.
+            var clockStamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             if (replay is not null && playing && time >= replay.Frames[^1].T) { position = time; playing = false; revision++; }
             static string N(double value) => value.ToString("R", CultureInfo.InvariantCulture);
             // Extensions require explicit renderer support. Production supplies a
@@ -114,6 +116,7 @@ sealed class NativeReplayPlayback : IAsyncDisposable
                 foreach (var actor in frame.Actors) { text.Append("actor"); foreach (var n in actor) text.Append('\t').Append(N(n)); text.Append('\n'); }
                 if (protocol >= 4 && frame.Health is not null)
                     foreach (var health in frame.Health) text.Append("health\t").Append(N(health.Id)).Append('\t').Append(N(health.Percent)).Append('\n');
+                if (protocol >= 6 && playing) text.Append("clock\t").Append(clockStamp.ToString(CultureInfo.InvariantCulture)).Append('\t').Append(N(time)).Append('\n');
                 if (protocol >= 6 && playing) {
                     // Render-rate motion: the renderer advances its own clock
                     // every engine frame and interpolates these samples, so view

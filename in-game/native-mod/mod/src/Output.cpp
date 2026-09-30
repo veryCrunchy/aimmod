@@ -9,6 +9,7 @@
 #include <ShlObj.h>
 
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -74,6 +75,12 @@ namespace aimmod
         if (m_thread.joinable() || root.empty()) return false;
         m_root = root;
         m_version = std::move(version);
+        {
+            // <game>\FPSAimTrainer\Binaries\Win64\<exe> -> <game>\FPSAimTrainer\stats
+            wchar_t exe[MAX_PATH * 4]{};
+            const DWORD length = GetModuleFileNameW(nullptr, exe, static_cast<DWORD>(std::size(exe)));
+            if (length > 0 && length < std::size(exe)) m_stats = std::filesystem::path(exe).parent_path().parent_path().parent_path() / L"stats";
+        }
         std::error_code error;
         std::filesystem::create_directories(m_root / L"replays", error);
         if (!std::filesystem::is_directory(m_root, error)) return false;
@@ -112,6 +119,7 @@ namespace aimmod
         m_thread.join();
         // Retract the handshake so the Lua mod resumes immediately.
         DeleteFileW((m_root / L"core-active.tsv").c_str());
+        DeleteFileW((m_root / L"core-scene.json").c_str());
         if (m_view) UnmapViewOfFile(m_view);
         if (m_mapping) CloseHandle(m_mapping);
         m_view = m_mapping = nullptr;
@@ -134,6 +142,14 @@ namespace aimmod
         m_liveDirty = true;
     }
 
+    void Output::PublishScene(std::string body)
+    {
+        std::lock_guard lock(m_mutex);
+        if (body == m_sceneBody) return;
+        m_sceneBody = std::move(body);
+        m_sceneDirty = true;
+    }
+
     void Output::PublishReplayStatus(std::string body)
     {
         {
@@ -151,6 +167,76 @@ namespace aimmod
         if (capabilities == m_capabilities) return;
         m_capabilities = std::move(capabilities);
         m_capsDirty = true;
+    }
+
+    void Output::WatchGameStats(std::string scenario, std::int64_t sinceUnixMs, std::optional<double> localStartSeconds)
+    {
+        std::lock_guard lock(m_mutex);
+        m_found.reset();
+        m_watch = StatsWatch{std::move(scenario), sinceUnixMs, localStartSeconds, NowMs() + 15000};
+    }
+
+    void Output::StopGameStats()
+    {
+        std::lock_guard lock(m_mutex);
+        m_watch.reset();
+        m_found.reset();
+    }
+
+    std::optional<GameStats> Output::TakeGameStats()
+    {
+        std::lock_guard lock(m_mutex);
+        std::optional<GameStats> out;
+        out.swap(m_found);
+        return out;
+    }
+
+    void Output::ScanGameStats(std::uint64_t now)
+    {
+        std::optional<StatsWatch> watch;
+        {
+            std::lock_guard lock(m_mutex);
+            if (!m_watch || m_found) return;
+            if (now >= m_watch->expires)
+            {
+                m_watch.reset();
+                return;
+            }
+            watch = m_watch;
+        }
+        if (m_stats.empty() || now - m_lastStatsScan < 150) return;
+        m_lastStatsScan = now;
+        std::error_code error;
+        const auto since = std::chrono::system_clock::time_point(std::chrono::milliseconds(watch->since - 2000));
+        for (const auto& entry : std::filesystem::directory_iterator(m_stats, error))
+        {
+            std::error_code itemError;
+            const std::wstring name = entry.path().filename().wstring();
+            if (m_consumed.contains(name) || !entry.is_regular_file(itemError)) continue;
+            const auto written = std::chrono::clock_cast<std::chrono::system_clock>(entry.last_write_time(itemError));
+            if (itemError || written < since) continue;
+            const std::string narrow = entry.path().filename().string();
+            if (!IsChallengeStatsFile(narrow)) continue;
+            std::string text;
+            if (!ReadSmall(entry.path(), text, 256 * 1024)) continue;
+            auto stats = ParseGameStats(text);
+            if (!stats) continue; // possibly still being written: retried next scan
+            m_consumed.insert(name);
+            if (stats->scenario != watch->scenario) continue;
+            if (watch->localStart && stats->challengeStartSeconds)
+            {
+                double delta = std::fabs(*stats->challengeStartSeconds - *watch->localStart);
+                delta = std::min(delta, 86400.0 - delta);
+                if (delta > 5.0) continue;
+            }
+            std::lock_guard lock(m_mutex);
+            if (m_watch && m_watch->scenario == watch->scenario && m_watch->since == watch->since)
+            {
+                m_found = std::move(stats);
+                m_watch.reset();
+            }
+            return;
+        }
     }
 
     void Output::ReplayWrite(std::unique_ptr<replay2::Capture> capture)
@@ -245,7 +331,7 @@ namespace aimmod
     void Output::Periodic(bool force)
     {
         const std::uint64_t now = NowMs();
-        std::string live, status, caps;
+        std::string live, status, caps, scene;
         bool liveDirty = false, statusDirty = false;
         {
             std::lock_guard lock(m_mutex);
@@ -264,7 +350,14 @@ namespace aimmod
             }
             caps = m_capabilities;
             m_capsDirty = false;
+            if (m_sceneDirty || (!m_sceneBody.empty() && now - m_lastSceneWrite >= 1000))
+            {
+                scene = m_sceneBody;
+                m_sceneDirty = false;
+            }
         }
+        // Rewritten at least once a second: readers treat it as stale after 3 s.
+        if (!scene.empty() && WriteAtomic(m_root / L"core-scene.json", scene)) m_lastSceneWrite = now;
         if (!live.empty())
         {
             // Readers treat live-overlay.json older than 2 s as stale: rewrite
@@ -298,6 +391,7 @@ namespace aimmod
                 m_recording.store(parsed && parsed->replayRecordingEnabled, std::memory_order_relaxed);
             }
         }
+        ScanGameStats(now);
         if (force || now - m_lastPlaybackCheck >= 500)
         {
             m_lastPlaybackCheck = now;

@@ -101,7 +101,7 @@ namespace aimmod
     Observer::Observer(Output& output, std::string version)
         : m_output(output), m_version(std::move(version)),
           m_lifecycle(std::to_string(static_cast<long long>(std::time(nullptr))) + "-" + std::to_string(GetCurrentProcessId())),
-          m_sampler(m_b, m_scene, output)
+          m_sampler(m_b, m_scene, output), m_presenter(m_b, m_scene, output)
     {
     }
 
@@ -118,6 +118,7 @@ namespace aimmod
         std::string caps;
         if (m_b.lifecycleReady()) caps = "telemetry";
         if (m_b.replayReady()) caps += caps.empty() ? "replay" : ",replay";
+        if (m_presenter.ready()) caps += caps.empty() ? "presenter" : ",presenter";
         return caps;
     }
 
@@ -180,6 +181,19 @@ namespace aimmod
                 }
                 OnTick();
             }, tick);
+            id != ERROR_ID)
+            m_callbacks.push_back(id);
+
+        // Replay presentation before the world ticks, so this frame's camera
+        // update renders the pose at this frame's playback instant.
+        FCallbackOptions present{};
+        present.bReadonly = true;
+        present.OwnerModName = STR("AimModCore");
+        present.HookName = STR("AimModCore.Present");
+        if (auto id = RegisterEngineTickPreCallback([this](TCallbackIterationData<void>&, UEngine*, float, bool) {
+                if (m_shutdown.load(std::memory_order_relaxed) || !OnGameThread()) return;
+                m_presenter.Apply();
+            }, present);
             id != ERROR_ID)
             m_callbacks.push_back(id);
 
@@ -290,7 +304,9 @@ namespace aimmod
         if (m_initialized.exchange(true)) return;
         m_mainThread = FindMainThread();
         BindFunctions();
+        m_presenter.Bind();
         RegisterCallbacks();
+        m_presenter.Start();
         m_output.SetCapabilities(Capabilities());
         m_output.PublishLive(FormatLiveOverlay({}));
         m_output.PublishReplayStatus(FormatReplayStatus(m_b.replayReady() ? "ready" : "unsupported", 0, 0, ""));
@@ -300,6 +316,18 @@ namespace aimmod
                                       &m_b.characters, &m_b.timeSeconds};
         for (const Getter* g : signatures)
             if (g->ok()) Log("  signature " + g->Signature());
+        // Diagnostic only (never called): candidate entry points for loading a
+        // replay's scenario on request, to choose a safe one from real signatures.
+        for (const wchar_t* path : {STR("/Script/GameSkillsTrainer.ScenarioLoader:LoadScenario"), STR("/Script/GameSkillsTrainer.ScenarioLoader:LoadScenarioFromManager"),
+                                    STR("/Script/GameSkillsTrainer.ScenarioLoader:LoadScenarioAfterDelay"), STR("/Script/GameSkillsTrainer.Start_Scenario:Start_Scenario"),
+                                    STR("/Script/GameSkillsTrainer.ScenarioManager:GetLocalScenarioByName"), STR("/Script/GameSkillsTrainer.ScenarioManager:PlayCurrentScenario"),
+                                    STR("/Script/GameSkillsTrainer.ScenarioManager:InitializeScenario"), STR("/Script/GameSkillsTrainer.ScenarioManager:SetCurrentScenarioPlayType"),
+                                    STR("/Script/GameSkillsTrainer.ScenarioManager:SetLoadingScenario")})
+        {
+            Getter candidate;
+            if (candidate.BindPath(path, Shape::Observe)) Log("  scenario-load candidate " + candidate.Signature());
+            else Log("  scenario-load candidate missing: " + game::Narrow(path));
+        }
         LogCompatibility("startup");
     }
 
@@ -308,6 +336,7 @@ namespace aimmod
         if (!m_initialized.load() || m_shutdown.exchange(true)) return;
         for (std::uint64_t id : m_callbacks) RC::Unreal::Hook::UnregisterCallback(id);
         m_callbacks.clear();
+        m_presenter.Stop();
         for (auto& [function, ids] : m_hooks) UObjectGlobals::UnregisterHook(function, ids);
         m_hooks.clear();
         for (auto& hook : m_inputHooks) UObjectGlobals::UnregisterHook(hook->function, hook->ids);
@@ -666,9 +695,53 @@ namespace aimmod
         // counters, not the previous poll's (shots keep landing until the end).
         const bool before = m_lifecycle.active();
         if (before) UpdateMeasurements(m_running, s.elapsed, s.remaining, score);
+        // The game's stats CSV is the completion record and the final values.
+        if (m_statsWatch)
+            if (auto stats = m_output.TakeGameStats())
+            {
+                m_gameStats = std::move(stats);
+                Handle(m_lifecycle.OnSignal(Signal::Complete, now, m_gameStats->score));
+            }
         Handle(m_lifecycle.Poll(s));
+        if (m_lifecycle.state() == Lifecycle::State::Ending && !m_statsWatch)
+        {
+            m_statsWatch = true;
+            m_output.WatchGameStats(m_lifecycle.attemptScenario(), m_attemptUnixMs, m_attemptLocalStart);
+        }
         if (!before && m_lifecycle.active()) UpdateMeasurements(m_running, s.elapsed, s.remaining, score);
         if (m_polls % 2 == 0) PublishLive(s, m_running);
+        if (m_polls % 5 == 0) PublishScene(s, manager);
+    }
+
+    // What the game shows now, for the service's replay start gate: the
+    // scenario and map a replay must match, and whether a challenge runs.
+    void Observer::PublishScene(const PollSample& s, UObject* manager)
+    {
+        UObject* state = m_scene.GameState();
+        if (state != m_mapState || s.scenarioKey != m_mapScenarioKey)
+        {
+            m_mapState = state;
+            m_mapScenarioKey = s.scenarioKey;
+            m_mapName.clear();
+            m_mapScale.reset();
+            if (state && m_b.mapName.String(state, m_mapName)) m_mapScale = m_b.mapScale.Number(state);
+        }
+        const bool inChallenge = manager && m_b.isInChallenge.Bool(manager).value_or(false);
+        const bool loading = manager && m_b.isScenarioLoading.ok() && m_b.isScenarioLoading.Bool(manager).value_or(false);
+        std::string body = "{\"version\":1,\"available\":";
+        body += s.available ? "true" : "false";
+        body += ",\"scenario\":";
+        AppendJsonString(body, m_scenarioName);
+        body += ",\"mapName\":";
+        AppendJsonString(body, m_mapName);
+        if (m_mapScale && IsUsableNumber(*m_mapScale))
+        {
+            body += ",\"mapScale\":";
+            AppendNumber(body, *m_mapScale, 9);
+        }
+        body += std::string(",\"inChallenge\":") + (inChallenge ? "true" : "false") + ",\"running\":" + (s.running ? "true" : "false") +
+                ",\"loading\":" + (loading ? "true" : "false") + ",\"paused\":" + (s.paused ? "true" : "false") + "}";
+        m_output.PublishScene(std::move(body));
     }
 
     void Observer::PublishLive(const PollSample& s, bool running)
@@ -714,6 +787,16 @@ namespace aimmod
             {
                 ++m_attempts;
                 m_stats = {};
+                m_gameStats.reset();
+                if (m_statsWatch) m_output.StopGameStats();
+                m_statsWatch = false;
+                m_attemptUnixMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+                {
+                    SYSTEMTIME local;
+                    GetLocalTime(&local);
+                    // The attempt is confirmed one poll after the timer starts.
+                    m_attemptLocalStart = local.wHour * 3600.0 + local.wMinute * 60.0 + local.wSecond + local.wMilliseconds / 1000.0;
+                }
                 m_remaining.reset();
                 m_lastTimeToKill.reset();
                 m_attemptKillBase = m_killCredits.load(std::memory_order_relaxed);
@@ -727,6 +810,18 @@ namespace aimmod
             case LifecycleEvent::Kind::Completed:
             {
                 ++m_completed;
+                if (m_statsWatch) m_output.StopGameStats();
+                m_statsWatch = false;
+                // Final values from the game's completion record when present.
+                if (m_gameStats)
+                {
+                    m_stats.hits = m_gameStats->hits;
+                    m_stats.shots = m_gameStats->shots();
+                    m_stats.kills = m_gameStats->kills;
+                    m_stats.damage = m_gameStats->damage;
+                    m_sources = "game-stats";
+                }
+                m_gameStats.reset();
                 const auto& st = m_stats;
                 if (m_sampler.recording()) m_sampler.Finish("completed", e.score);
                 if (!e.score)
@@ -753,6 +848,9 @@ namespace aimmod
                 break;
             }
             case LifecycleEvent::Kind::Canceled:
+                if (m_statsWatch) m_output.StopGameStats();
+                m_statsWatch = false;
+                m_gameStats.reset();
                 if (m_sampler.recording()) m_sampler.Finish("interrupted", std::nullopt);
                 Log("attempt ended without completion id=" + e.id + " reason=" + e.reason);
                 break;
