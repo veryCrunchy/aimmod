@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using osuTK.Input;
 
@@ -246,16 +247,31 @@ public sealed class TrainerHistoryStore(string path)
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(target))!);
         File.WriteAllText(target+".tmp", JsonSerializer.Serialize(preferences)); File.Move(target+".tmp",target,true);
     }
+    // The workspace reads history on most control changes. Reuse the parsed file until it changes on disk.
+    // Comparing raw bytes is far cheaper than deserialising up to 500 results again.
+    private static readonly ConcurrentDictionary<string, (byte[] Content, TrainerResult[] Results)> loaded = new(StringComparer.OrdinalIgnoreCase);
+
     public IReadOnlyList<TrainerResult> Load()
     {
-        try { return JsonSerializer.Deserialize<TrainerResult[]>(File.ReadAllText(path)) ?? []; }
+        try
+        {
+            if (!File.Exists(path)) return [];
+            string key = Path.GetFullPath(path);
+            byte[] content = File.ReadAllBytes(path);
+            if (loaded.TryGetValue(key, out var cached) && cached.Content.AsSpan().SequenceEqual(content)) return cached.Results;
+            var results = (JsonSerializer.Deserialize<TrainerResult[]>(content) ?? []).Where(r => r?.Settings is not null).ToArray();
+            loaded[key] = (content, results);
+            return results;
+        }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return []; }
     }
     public void Add(TrainerResult result)
     {
         var results = Load().Where(r => r.Id != result.Id).Append(result).OrderByDescending(r => r.CompletedAt).Take(500).ToArray();
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
-        File.WriteAllText(path + ".tmp", JsonSerializer.Serialize(results));
+        byte[] content = JsonSerializer.SerializeToUtf8Bytes(results);
+        File.WriteAllBytes(path + ".tmp", content);
         File.Move(path + ".tmp", path, true);
+        loaded[Path.GetFullPath(path)] = (content, results);
     }
 }
