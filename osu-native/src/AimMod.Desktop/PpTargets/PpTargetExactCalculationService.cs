@@ -322,7 +322,7 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
                         PatternProfileIdentity = request.PatternProfile?.Identity,
                         ModsJson = request.ModsJson,
                         LegacyScore = request.LegacyScore,
-                        Outcome = new PpOutcomeEstimate(distribution, scenarios, atoms, slope, factor, calibrated),
+                        Outcome = new PpOutcomeEstimate(distribution, scenarios, atoms, slope, factor, calibrated, objects, ceiling.MaxCombo),
                         SampleCount = distribution.Passes,
                         Confidence = distribution.EffectiveSamples >= 12 && distribution.Maps >= 5 ? PpTargetConfidence.High
                             : distribution.EffectiveSamples >= 4 && distribution.Maps >= 2 ? PpTargetConfidence.Medium : PpTargetConfidence.Low,
