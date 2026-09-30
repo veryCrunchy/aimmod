@@ -8,6 +8,12 @@ local resolveLiveManager
 local live={version=1,active=false,paused=false}
 function M.liveSnapshot()return live end
 local function finite(n)return type(n)=='number' and n==n and math.abs(n)<1e12 end
+-- Constant key lists: the live poll runs ten times per second on the game thread.
+local STATE_KEYS={'score','shots','hits','kills','damage'}
+local OUTPUT_KEYS={'score','seconds','shots','hits','kills','damage','remainingSeconds','lastTimeToKillSeconds'}
+-- The worker treats live-overlay.json older than two seconds as stale. Rewrite
+-- unchanged content at most once per wall-clock second instead of every poll.
+local lastPublished,lastPublishedAt
 local function pollLive()
     local next={version=1,active=false,paused=false}
     local ok=pcall(function()
@@ -37,7 +43,7 @@ local function pollLive()
         if pullOk and finite(pulled.score) and state.score~=pulled.score then
             state.score=pulled.score;state.revision=state.revision+1
         end
-        for _,key in ipairs({'score','shots','hits','kills','damage'})do if finite(state[key])then next[key]=state[key]end end
+        for _,key in ipairs(STATE_KEYS)do if finite(state[key])then next[key]=state[key]end end
         local elapsed=manager:GetChallengeTimeElapsed()
         if finite(elapsed) and elapsed>=0 then next.seconds=elapsed end
         local remainingOk,remaining=pcall(function()return manager:GetChallengeTimeRemaining()end)
@@ -71,22 +77,44 @@ local function pollLive()
     if live.id and live.id:match('^[%w%-]+$') then fields[#fields+1]='"id":"'..live.id..'"' end
     if live.transient then fields[#fields+1]='"transient":true' end
     if live.scenario then fields[#fields+1]='"scenario":"'..live.scenario:gsub('[%z\1-\31\\"]',function(c)return string.format('\\u%04x',string.byte(c))end)..'"'end
-    for _,key in ipairs({'score','seconds','shots','hits','kills','damage','remainingSeconds','lastTimeToKillSeconds'})do if finite(live[key])then fields[#fields+1]='"'..key..'":'..string.format('%.9g',live[key])end end
+    for _,key in ipairs(OUTPUT_KEYS)do if finite(live[key])then fields[#fields+1]='"'..key..'":'..string.format('%.9g',live[key])end end
+    local body='{'..table.concat(fields,',')..'}'
+    local second=os.time()
+    if body==lastPublished and second==lastPublishedAt then return end
     local path=(os.getenv('LOCALAPPDATA')or'')..'/AimMod/KovaaksNative/live-overlay.json'
-    local file=io.open(path..'.next','wb');if file then local written=file:write('{'..table.concat(fields,',')..'}');file:close();if written then os.remove(path);os.rename(path..'.next',path)end end
+    local file=io.open(path..'.next','wb')
+    if file then
+        local written=file:write(body);file:close()
+        if written then os.remove(path);if os.rename(path..'.next',path) then lastPublished=body;lastPublishedAt=second end end
+    end
 end
 local sessionNonce=tostring(os.time()) .. '-' .. tostring(math.floor(os.clock()*1000000)) .. '-' .. tostring({}):gsub('[^%w]','')
 local function escape(value)
     return tostring(value or ''):gsub('%%','%%25'):gsub('\t','%%09'):gsub('\r','%%0D'):gsub('\n','%%0A')
 end
+local unavailable={}
+-- Each observer registers independently: a native event missing from another
+-- game build must not prevent completion or metric observers from registering.
 local function hook(path, callback)
-    local f = StaticFindObject(path)
-    assert(f:IsValid(), 'Missing native event: ' .. path)
-    RegisterHook(path, function() end, function(...)
+    local found, f = pcall(StaticFindObject, path)
+    if not found or not f or not f:IsValid() then unavailable[#unavailable+1]=path; return false end
+    local failures=0
+    local registered, reason = pcall(RegisterHook, path, function() end, function(...)
         local ok, err = pcall(callback, ...)
-        if not ok then print('[AimModTelemetry] ' .. tostring(err) .. '\n') end
+        if not ok then
+            -- Bounded logging: a signature mismatch can fail on every native call.
+            failures=failures+1
+            if failures<=3 then print('[AimModTelemetry] ' .. tostring(err) .. '\n')
+            elseif failures==4 then print('[AimModTelemetry] further errors suppressed for ' .. path .. '\n') end
+        end
         -- Nil preserves the original return value and parameters.
     end)
+    if not registered then
+        unavailable[#unavailable+1]=path
+        print('[AimModTelemetry] observer unavailable: ' .. path .. ': ' .. tostring(reason) .. '\n')
+        return false
+    end
+    return true
 end
 local function start(source, scenario)
     local name=scenario:get():ToString()
@@ -211,7 +239,7 @@ function M.start()
         state.score=finalScore
         local accuracy = state.shots and state.shots>0 and state.hits and state.hits>=0 and state.hits<=state.shots and state.hits/state.shots*100 or ''
         local duration=state.seconds
-        if not duration and state.startedAt and state.clockContext:IsValid() then
+        if not duration and state.startedAt and state.clock and state.clockContext and state.clockContext:IsValid() then
             local ok,stamp=pcall(function() return state.clock:GetTimeSeconds(state.clockContext) end)
             if ok and type(stamp)=='number' and stamp>state.startedAt then duration=stamp-state.startedAt end
         end
@@ -228,6 +256,7 @@ function M.start()
             print('[AimModTelemetry] completed run saved\n')
         end)
     end)
+    if #unavailable>0 then print('[AimModTelemetry] native events unavailable in this build: ' .. table.concat(unavailable, ', ') .. '\n') end
     -- Start alongside telemetry so UE4SS reloads that retain the original main
     -- chunk still pick up recording. ReplayCapture.start is idempotent.
     local replayOk, replayError=pcall(function() require('ReplayCapture').start(M) end)
