@@ -108,7 +108,8 @@ public sealed record OfficialBeatmapSearchResult(
     IReadOnlyList<OfficialBeatmapSet> BeatmapSets,
     int ServerTotal = 0,
     bool IsTruncated = false,
-    string? NextCursor = null)
+    string? NextCursor = null,
+    DateTimeOffset? RetryAfter = null)
 {
     public static OfficialBeatmapSearchResult Empty(OfficialBeatmapRequestStatus status) => new(status, []);
 }
@@ -116,13 +117,15 @@ public sealed record OfficialBeatmapSearchResult(
 public sealed record OfficialBeatmapDownloadResult(
     OfficialBeatmapRequestStatus Status,
     string? ArchivePath = null,
-    long ArchiveBytes = 0);
+    long ArchiveBytes = 0,
+    DateTimeOffset? RetryAfter = null);
 
 public sealed record OfficialBeatmapDifficultyDownloadResult(
     OfficialBeatmapRequestStatus Status,
     int BeatmapId,
     string? BeatmapPath = null,
-    long BeatmapBytes = 0);
+    long BeatmapBytes = 0,
+    DateTimeOffset? RetryAfter = null);
 
 public interface IOfficialBeatmapDifficultyClient
 {

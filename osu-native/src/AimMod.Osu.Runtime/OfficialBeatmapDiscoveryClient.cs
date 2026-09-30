@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.IO.Compression;
 using System.Net;
@@ -14,11 +15,25 @@ public sealed class OfficialBeatmapDiscoveryClient : IOfficialBeatmapDiscoveryCl
     private const long maximum_archive_bytes = 512L * 1024 * 1024;
     private const long maximum_difficulty_bytes = 16L * 1024 * 1024;
     private const int maximum_redirects = 3;
+    private const int maximum_cached_difficulties = 32;
+    private const int maximum_cached_difficulty_bytes = 2 * 1024 * 1024;
+    private const string search_key = "search";
+    private const string set_key = "set";
+    private const string download_key = "download";
+    private const string difficulty_key = "difficulty";
+    private static readonly TimeSpan default_download_stall_timeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan difficulty_cache_lifetime = TimeSpan.FromMinutes(30);
+    private static readonly TimeSpan stale_partial_age = TimeSpan.FromHours(1);
     private static readonly Uri search_endpoint = new("https://osu.ppy.sh/api/v2/beatmapsets/search", UriKind.Absolute);
     private static readonly JsonSerializerOptions json_options = new(JsonSerializerDefaults.Web);
 
     private readonly LazerSessionMonitor? session;
     private readonly HttpClient httpClient;
+    private readonly TimeProvider timeProvider;
+    private readonly TimeSpan downloadStallTimeout;
+    private readonly ConcurrentDictionary<string, DateTimeOffset> cooldowns = new();
+    private readonly ConcurrentDictionary<int, CachedDifficulty> difficultyCache = new();
+    private readonly ConcurrentDictionary<string, bool> sweptDirectories = new(StringComparer.OrdinalIgnoreCase);
 
     // Individual .osu files are public and do not require a lazer installation.
     public OfficialBeatmapDiscoveryClient()
@@ -31,15 +46,24 @@ public sealed class OfficialBeatmapDiscoveryClient : IOfficialBeatmapDiscoveryCl
     {
     }
 
-    internal OfficialBeatmapDiscoveryClient(LazerSessionMonitor session, HttpMessageHandler handler)
-        : this(handler)
+    internal OfficialBeatmapDiscoveryClient(
+        LazerSessionMonitor session,
+        HttpMessageHandler handler,
+        TimeProvider? timeProvider = null,
+        TimeSpan? downloadStallTimeout = null)
+        : this(handler, timeProvider, downloadStallTimeout)
     {
         this.session = session ?? throw new ArgumentNullException(nameof(session));
     }
 
-    internal OfficialBeatmapDiscoveryClient(HttpMessageHandler handler)
+    internal OfficialBeatmapDiscoveryClient(
+        HttpMessageHandler handler,
+        TimeProvider? timeProvider = null,
+        TimeSpan? downloadStallTimeout = null)
     {
         ArgumentNullException.ThrowIfNull(handler);
+        this.timeProvider = timeProvider ?? TimeProvider.System;
+        this.downloadStallTimeout = downloadStallTimeout ?? default_download_stall_timeout;
         httpClient = new HttpClient(handler, disposeHandler: true)
         {
             Timeout = TimeSpan.FromSeconds(60),
@@ -60,23 +84,24 @@ public sealed class OfficialBeatmapDiscoveryClient : IOfficialBeatmapDiscoveryCl
         if (lease is null || !lease.TryGetAccessToken(out string accessToken))
             return OfficialBeatmapSearchResult.Empty(withoutToken(startingState.Status));
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, buildSearchUri(normalised));
-        addJsonHeaders(request, accessToken);
+        if (activeCooldown(search_key) is { } searchCooldown)
+            return OfficialBeatmapSearchResult.Empty(OfficialBeatmapRequestStatus.RateLimited) with { RetryAfter = searchCooldown };
 
+        Uri searchUri = buildSearchUri(normalised);
         try
         {
-            using HttpResponseMessage response = await httpClient.SendAsync(
-                request,
-                HttpCompletionOption.ResponseHeadersRead,
+            using HttpResponseMessage response = await HttpRequestPolicy.SendWithSingleRetryAsync(
+                httpClient,
+                () => createJsonRequest(searchUri, accessToken),
                 cancellationToken).ConfigureAwait(false);
 
             OfficialBeatmapRequestStatus? sessionFailure = await validateSessionAsync(startingState, lease, cancellationToken).ConfigureAwait(false);
             if (sessionFailure is not null)
                 return OfficialBeatmapSearchResult.Empty(sessionFailure.Value);
 
-            OfficialBeatmapRequestStatus? responseFailure = classifyFailure(response);
+            OfficialBeatmapRequestStatus? responseFailure = classifyFailure(response, search_key);
             if (responseFailure is not null)
-                return OfficialBeatmapSearchResult.Empty(responseFailure.Value);
+                return OfficialBeatmapSearchResult.Empty(responseFailure.Value) with { RetryAfter = retryAfter(responseFailure.Value, search_key) };
 
             SearchResponse? payload = await readJsonPayloadAsync<SearchResponse>(response, maximum_search_response_bytes, cancellationToken).ConfigureAwait(false);
             if (payload?.BeatmapSets is null || payload.Total < 0)
@@ -121,14 +146,18 @@ public sealed class OfficialBeatmapDiscoveryClient : IOfficialBeatmapDiscoveryCl
         using LazerAccessTokenLease? lease = session.TryLeaseAccessToken();
         if (lease is null || !lease.TryGetAccessToken(out string accessToken))
             return OfficialBeatmapSearchResult.Empty(withoutToken(startingState.Status));
-        using var request = new HttpRequestMessage(HttpMethod.Get, $"https://osu.ppy.sh/api/v2/beatmapsets/{beatmapSetId}");
-        addJsonHeaders(request, accessToken);
+        if (activeCooldown(set_key) is { } setCooldown)
+            return OfficialBeatmapSearchResult.Empty(OfficialBeatmapRequestStatus.RateLimited) with { RetryAfter = setCooldown };
+        Uri setUri = new($"https://osu.ppy.sh/api/v2/beatmapsets/{beatmapSetId}");
         try
         {
-            using HttpResponseMessage response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
-            var failure = await validateSessionAsync(startingState, lease, cancellationToken).ConfigureAwait(false) ?? classifyFailure(response);
+            using HttpResponseMessage response = await HttpRequestPolicy.SendWithSingleRetryAsync(
+                httpClient,
+                () => createJsonRequest(setUri, accessToken),
+                cancellationToken).ConfigureAwait(false);
+            var failure = await validateSessionAsync(startingState, lease, cancellationToken).ConfigureAwait(false) ?? classifyFailure(response, set_key);
             if (failure is not null)
-                return OfficialBeatmapSearchResult.Empty(failure.Value);
+                return OfficialBeatmapSearchResult.Empty(failure.Value) with { RetryAfter = retryAfter(failure.Value, set_key) };
             var payload = await readJsonPayloadAsync<SearchBeatmapSet>(response, maximum_search_response_bytes, cancellationToken).ConfigureAwait(false);
             var set = payload is null ? null : parseSet(payload);
             return set?.BeatmapSetId == beatmapSetId
@@ -163,8 +192,13 @@ public sealed class OfficialBeatmapDiscoveryClient : IOfficialBeatmapDiscoveryCl
         if (lease is null || !lease.TryGetAccessToken(out string accessToken))
             return new OfficialBeatmapDownloadResult(withoutToken(startingState.Status));
 
+        if (activeCooldown(download_key) is { } downloadCooldown)
+            return new OfficialBeatmapDownloadResult(OfficialBeatmapRequestStatus.RateLimited, RetryAfter: downloadCooldown);
+
         Directory.CreateDirectory(destinationDirectory);
+        sweepStalePartialFiles(destinationDirectory);
         string archivePath = Path.Combine(destinationDirectory, $"aimmod-{beatmapSetId}-{Guid.NewGuid():N}.osz");
+        string partialPath = partialPathFor(archivePath);
 
         try
         {
@@ -175,35 +209,36 @@ public sealed class OfficialBeatmapDiscoveryClient : IOfficialBeatmapDiscoveryCl
             if (sessionFailure is not null)
                 return new OfficialBeatmapDownloadResult(sessionFailure.Value);
 
-            OfficialBeatmapRequestStatus? responseFailure = classifyFailure(response);
+            OfficialBeatmapRequestStatus? responseFailure = classifyFailure(response, download_key);
             if (responseFailure is not null)
-                return new OfficialBeatmapDownloadResult(responseFailure.Value);
+                return new OfficialBeatmapDownloadResult(responseFailure.Value, RetryAfter: retryAfter(responseFailure.Value, download_key));
             if (response.Content.Headers.ContentLength is > maximum_archive_bytes)
                 return new OfficialBeatmapDownloadResult(OfficialBeatmapRequestStatus.InvalidResponse);
 
-            long bytesWritten = await copyBoundedAsync(response.Content, archivePath, cancellationToken).ConfigureAwait(false);
-            if (bytesWritten <= 0 || !isBeatmapArchive(archivePath))
+            long bytesWritten = await copyBoundedAsync(response.Content, partialPath, cancellationToken).ConfigureAwait(false);
+            if (bytesWritten <= 0 || !isBeatmapArchive(partialPath))
             {
-                deleteIfPresent(archivePath);
+                deleteIfPresent(partialPath);
                 return new OfficialBeatmapDownloadResult(OfficialBeatmapRequestStatus.InvalidResponse);
             }
 
             if (!lease.TryGetAccessToken(out _))
             {
-                deleteIfPresent(archivePath);
+                deleteIfPresent(partialPath);
                 return new OfficialBeatmapDownloadResult(OfficialBeatmapRequestStatus.SessionChanged);
             }
 
+            File.Move(partialPath, archivePath);
             return new OfficialBeatmapDownloadResult(OfficialBeatmapRequestStatus.Success, archivePath, bytesWritten);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            deleteIfPresent(archivePath);
+            deleteIfPresent(partialPath);
             throw;
         }
         catch (Exception exception) when (exception is HttpRequestException or IOException or TaskCanceledException)
         {
-            deleteIfPresent(archivePath);
+            deleteIfPresent(partialPath);
             return new OfficialBeatmapDownloadResult(
                 exception is HttpRequestException or TaskCanceledException
                     ? OfficialBeatmapRequestStatus.NetworkError
@@ -223,34 +258,57 @@ public sealed class OfficialBeatmapDiscoveryClient : IOfficialBeatmapDiscoveryCl
             throw new ArgumentException("The beatmap difficulty download directory must be absolute.", nameof(destinationDirectory));
 
         Directory.CreateDirectory(destinationDirectory);
+        sweepStalePartialFiles(destinationDirectory);
         string beatmapPath = Path.Combine(destinationDirectory, $"aimmod-{beatmapId}-{Guid.NewGuid():N}.osu");
+        string partialPath = partialPathFor(beatmapPath);
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, new Uri($"https://osu.ppy.sh/osu/{beatmapId}"));
-            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/plain"));
-            using HttpResponseMessage response = await httpClient.SendAsync(
-                request,
-                HttpCompletionOption.ResponseHeadersRead,
+            if (tryGetCachedDifficulty(beatmapId) is { } cachedContent)
+            {
+                await File.WriteAllBytesAsync(beatmapPath, cachedContent, cancellationToken).ConfigureAwait(false);
+                return new OfficialBeatmapDifficultyDownloadResult(
+                    OfficialBeatmapRequestStatus.Success,
+                    beatmapId,
+                    beatmapPath,
+                    cachedContent.Length);
+            }
+
+            if (activeCooldown(difficulty_key) is { } difficultyCooldown)
+                return new OfficialBeatmapDifficultyDownloadResult(OfficialBeatmapRequestStatus.RateLimited, beatmapId, RetryAfter: difficultyCooldown);
+
+            Uri difficultyUri = new($"https://osu.ppy.sh/osu/{beatmapId}");
+            using HttpResponseMessage response = await HttpRequestPolicy.SendWithSingleRetryAsync(
+                httpClient,
+                () =>
+                {
+                    var request = new HttpRequestMessage(HttpMethod.Get, difficultyUri);
+                    request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/plain"));
+                    return request;
+                },
                 cancellationToken).ConfigureAwait(false);
 
-            OfficialBeatmapRequestStatus? failure = classifyFailure(response);
+            OfficialBeatmapRequestStatus? failure = classifyFailure(response, difficulty_key);
             if (failure is not null)
-                return new OfficialBeatmapDifficultyDownloadResult(failure.Value, beatmapId);
+                return new OfficialBeatmapDifficultyDownloadResult(failure.Value, beatmapId, RetryAfter: retryAfter(failure.Value, difficulty_key));
             if (response.Content.Headers.ContentLength is > maximum_difficulty_bytes)
                 return new OfficialBeatmapDifficultyDownloadResult(OfficialBeatmapRequestStatus.InvalidResponse, beatmapId);
 
             long bytesWritten = await copyBoundedAsync(
                 response.Content,
-                beatmapPath,
+                partialPath,
                 maximum_difficulty_bytes,
                 "The beatmap difficulty exceeds AimMod's download limit.",
                 cancellationToken).ConfigureAwait(false);
-            if (bytesWritten <= 0 || !isExpectedDifficulty(beatmapPath, beatmapId))
+            if (bytesWritten <= 0 || !isExpectedDifficulty(partialPath, beatmapId))
             {
-                deleteIfPresent(beatmapPath);
+                deleteIfPresent(partialPath);
                 return new OfficialBeatmapDifficultyDownloadResult(OfficialBeatmapRequestStatus.InvalidResponse, beatmapId);
             }
 
+            if (bytesWritten <= maximum_cached_difficulty_bytes)
+                await cacheDifficultyAsync(beatmapId, partialPath, cancellationToken).ConfigureAwait(false);
+
+            File.Move(partialPath, beatmapPath);
             return new OfficialBeatmapDifficultyDownloadResult(
                 OfficialBeatmapRequestStatus.Success,
                 beatmapId,
@@ -259,11 +317,13 @@ public sealed class OfficialBeatmapDiscoveryClient : IOfficialBeatmapDiscoveryCl
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            deleteIfPresent(partialPath);
             deleteIfPresent(beatmapPath);
             throw;
         }
         catch (Exception exception) when (exception is HttpRequestException or IOException or TaskCanceledException)
         {
+            deleteIfPresent(partialPath);
             deleteIfPresent(beatmapPath);
             return new OfficialBeatmapDifficultyDownloadResult(
                 exception is HttpRequestException or TaskCanceledException
@@ -290,17 +350,25 @@ public sealed class OfficialBeatmapDiscoveryClient : IOfficialBeatmapDiscoveryCl
                 HttpCompletionOption.ResponseHeadersRead,
                 cancellationToken).ConfigureAwait(false);
 
-            if ((int)response.StatusCode is < 300 or >= 400)
-                return response;
+            try
+            {
+                if ((int)response.StatusCode is < 300 or >= 400)
+                    return response;
 
-            Uri? redirectUri = response.Headers.Location;
-            if (redirectUri is not null && !redirectUri.IsAbsoluteUri)
-                redirectUri = new Uri(current, redirectUri);
-            if (redirect == maximum_redirects || !isTrustedDownloadUri(redirectUri))
-                return response;
+                Uri? redirectUri = response.Headers.Location;
+                if (redirectUri is not null && !redirectUri.IsAbsoluteUri)
+                    redirectUri = new Uri(current, redirectUri);
+                if (redirect == maximum_redirects || !isTrustedDownloadUri(redirectUri))
+                    return response;
 
-            response.Dispose();
-            current = redirectUri!;
+                response.Dispose();
+                current = redirectUri!;
+            }
+            catch
+            {
+                response.Dispose();
+                throw;
+            }
         }
 
         throw new InvalidOperationException("The redirect limit was not enforced.");
@@ -325,10 +393,14 @@ public sealed class OfficialBeatmapDiscoveryClient : IOfficialBeatmapDiscoveryCl
             : null;
     }
 
-    private static OfficialBeatmapRequestStatus? classifyFailure(HttpResponseMessage response)
+    private OfficialBeatmapRequestStatus? classifyFailure(HttpResponseMessage response, string endpoint)
     {
-        if (response.StatusCode == HttpStatusCode.TooManyRequests)
+        if (HttpRequestPolicy.IsRateLimited(response.StatusCode))
+        {
+            registerRateLimit(endpoint, response);
             return OfficialBeatmapRequestStatus.RateLimited;
+        }
+
         if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
             return OfficialBeatmapRequestStatus.Unauthorized;
         if ((int)response.StatusCode is >= 300 and < 400)
@@ -337,6 +409,73 @@ public sealed class OfficialBeatmapDiscoveryClient : IOfficialBeatmapDiscoveryCl
             return OfficialBeatmapRequestStatus.ServerError;
         return null;
     }
+
+    private DateTimeOffset? activeCooldown(string endpoint) =>
+        cooldowns.TryGetValue(endpoint, out DateTimeOffset until) && until > timeProvider.GetUtcNow() ? until : null;
+
+    private DateTimeOffset? retryAfter(OfficialBeatmapRequestStatus status, string endpoint) =>
+        status == OfficialBeatmapRequestStatus.RateLimited && cooldowns.TryGetValue(endpoint, out DateTimeOffset until) ? until : null;
+
+    private void registerRateLimit(string endpoint, HttpResponseMessage response)
+    {
+        DateTimeOffset now = timeProvider.GetUtcNow();
+        DateTimeOffset until = now + HttpRequestPolicy.ClampCooldown(HttpRequestPolicy.ParseRetryAfter(response.Headers.RetryAfter, now));
+        cooldowns.AddOrUpdate(endpoint, until, (_, existing) => existing > until ? existing : until);
+    }
+
+    private byte[]? tryGetCachedDifficulty(int beatmapId)
+    {
+        if (difficultyCache.TryGetValue(beatmapId, out CachedDifficulty? entry))
+        {
+            if (timeProvider.GetUtcNow() - entry.CachedAt < difficulty_cache_lifetime)
+                return entry.Content;
+
+            difficultyCache.TryRemove(beatmapId, out _);
+        }
+
+        return null;
+    }
+
+    private async Task cacheDifficultyAsync(int beatmapId, string verifiedPath, CancellationToken cancellationToken)
+    {
+        byte[] content = await File.ReadAllBytesAsync(verifiedPath, cancellationToken).ConfigureAwait(false);
+        difficultyCache[beatmapId] = new CachedDifficulty(content, timeProvider.GetUtcNow());
+        if (difficultyCache.Count <= maximum_cached_difficulties)
+            return;
+
+        foreach (KeyValuePair<int, CachedDifficulty> oldest in difficultyCache.OrderBy(pair => pair.Value.CachedAt).Take(difficultyCache.Count - maximum_cached_difficulties))
+            difficultyCache.TryRemove(oldest.Key, out _);
+    }
+
+    private static string partialPathFor(string finalPath) =>
+        Path.Combine(Path.GetDirectoryName(finalPath)!, $".{Path.GetFileName(finalPath)}.partial");
+
+    private void sweepStalePartialFiles(string directory)
+    {
+        if (!sweptDirectories.TryAdd(directory, true))
+            return;
+
+        try
+        {
+            DateTime threshold = timeProvider.GetUtcNow().UtcDateTime - stale_partial_age;
+            foreach (string path in Directory.EnumerateFiles(directory, ".aimmod-*.partial"))
+            {
+                try
+                {
+                    if (File.GetLastWriteTimeUtc(path) < threshold)
+                        File.Delete(path);
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                }
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private sealed record CachedDifficulty(byte[] Content, DateTimeOffset CachedAt);
 
     private static Uri buildSearchUri(OfficialBeatmapSearchQuery query)
     {
@@ -357,10 +496,12 @@ public sealed class OfficialBeatmapDiscoveryClient : IOfficialBeatmapDiscoveryCl
         return new UriBuilder(search_endpoint) { Query = encoded }.Uri;
     }
 
-    private static void addJsonHeaders(HttpRequestMessage request, string accessToken)
+    private static HttpRequestMessage createJsonRequest(Uri uri, string accessToken)
     {
+        var request = new HttpRequestMessage(HttpMethod.Get, uri);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue(MediaTypeNames.Application.Json));
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        return request;
     }
 
     private static async Task<T?> readJsonPayloadAsync<T>(
@@ -368,23 +509,8 @@ public sealed class OfficialBeatmapDiscoveryClient : IOfficialBeatmapDiscoveryCl
         int maximumBytes,
         CancellationToken cancellationToken)
     {
-        if (response.Content.Headers.ContentLength > maximumBytes)
-            return default;
-
-        await using Stream stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        byte[] buffer = new byte[maximumBytes + 1];
-        int bytesRead = 0;
-        while (bytesRead < buffer.Length)
-        {
-            int read = await stream.ReadAsync(buffer.AsMemory(bytesRead, buffer.Length - bytesRead), cancellationToken).ConfigureAwait(false);
-            if (read == 0)
-                break;
-            bytesRead += read;
-        }
-
-        if (bytesRead > maximumBytes)
-            return default;
-        return JsonSerializer.Deserialize<T>(buffer.AsSpan(0, bytesRead), json_options);
+        using PooledBody? body = await PooledBody.ReadAsync(response.Content, maximumBytes, cancellationToken).ConfigureAwait(false);
+        return body is { } content ? JsonSerializer.Deserialize<T>(content.Span, json_options) : default;
     }
 
     private static OfficialBeatmapSet? parseSet(SearchBeatmapSet payload)
@@ -466,10 +592,10 @@ public sealed class OfficialBeatmapDiscoveryClient : IOfficialBeatmapDiscoveryCl
         (string.Equals(uri.Host, "osu.ppy.sh", StringComparison.OrdinalIgnoreCase) ||
          uri.Host.EndsWith(".ppy.sh", StringComparison.OrdinalIgnoreCase));
 
-    private static Task<long> copyBoundedAsync(HttpContent content, string path, CancellationToken cancellationToken) =>
+    private Task<long> copyBoundedAsync(HttpContent content, string path, CancellationToken cancellationToken) =>
         copyBoundedAsync(content, path, maximum_archive_bytes, "The beatmap archive exceeds AimMod's download limit.", cancellationToken);
 
-    private static async Task<long> copyBoundedAsync(
+    private async Task<long> copyBoundedAsync(
         HttpContent content,
         string path,
         long maximumBytes,
@@ -480,9 +606,20 @@ public sealed class OfficialBeatmapDiscoveryClient : IOfficialBeatmapDiscoveryCl
         await using var output = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, FileOptions.Asynchronous);
         byte[] buffer = new byte[81920];
         long total = 0;
+        using var stall = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         while (true)
         {
-            int read = await input.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+            stall.CancelAfter(downloadStallTimeout);
+            int read;
+            try
+            {
+                read = await input.ReadAsync(buffer, stall.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new HttpRequestException("The beatmap download stalled.");
+            }
+
             if (read == 0)
                 break;
             total += read;
