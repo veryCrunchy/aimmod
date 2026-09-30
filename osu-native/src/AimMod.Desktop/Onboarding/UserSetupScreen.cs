@@ -3,7 +3,9 @@ using AimMod.Desktop.Visuals;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
+using osu.Framework.Input.Events;
 using osu.Game.Graphics.Sprites;
+using osuTK.Input;
 
 namespace AimMod.Desktop.Onboarding;
 
@@ -35,6 +37,14 @@ public partial class UserSetupScreen : CompositeDrawable
     private static OsuSpriteText text(string value,float size,Colour4 colour)=>new(){Text=value,Font=new osu.Framework.Graphics.Sprites.FontUsage("Torus",size),Colour=colour};
     private void paragraph(string value)=>body.Add(new OsuTextFlowContainer(t=>{t.Font=new osu.Framework.Graphics.Sprites.FontUsage("Torus",14);t.Colour=AimModPalette.Muted;}){RelativeSizeAxes=Axes.X,AutoSizeAxes=Axes.Y,Text=value});
     public void Restart(){step=0;render();}
+    protected override bool OnKeyDown(KeyDownEvent e)
+    {
+        // The settings step hosts text fields and dropdowns with their own Enter and Escape handling.
+        if(e.Repeat||step==1)return base.OnKeyDown(e);
+        if(e.Key is Key.Enter or Key.KeypadEnter){if(step==3)finish();else{step++;render();}return true;}
+        if(e.Key==Key.Escape&&step>0){step--;render();return true;}
+        return base.OnKeyDown(e);
+    }
     private void finish()
     {
         try {store.Save(store.Load() with {Completed=true});complete();}
@@ -63,7 +73,7 @@ public partial class UserSetupScreen : CompositeDrawable
         }
         else if(step==2)
         {
-            var tourTiles=new List<Drawable>();
+            var tourTiles=new List<IntroTile>();
             foreach(var (title,description) in new[]{
                 ("Home","Your starting point and shortcuts to the workspaces."),
                 ("Beatmaps","Browse and search maps, inspect difficulties, then open or install them in your selected osu! client."),
@@ -92,11 +102,13 @@ public partial class UserSetupScreen : CompositeDrawable
     }
     private sealed partial class IntroTile : Container
     {
+        private readonly FillFlowContainer<Drawable> copy;
+        public float ContentHeight=>copy.DrawHeight;
         public IntroTile(string title,string description,string? eyebrow=null,float height=116)
         {
             RelativeSizeAxes=Axes.X;Height=height;Masking=true;CornerRadius=8;
             BorderThickness=1;BorderColour=Colour4.White.Opacity(.07f);
-            var copy=new FillFlowContainer<Drawable>{RelativeSizeAxes=Axes.X,AutoSizeAxes=Axes.Y,Direction=FillDirection.Vertical,Spacing=new(8),Padding=new MarginPadding(18)};
+            copy=new FillFlowContainer<Drawable>{RelativeSizeAxes=Axes.X,AutoSizeAxes=Axes.Y,Direction=FillDirection.Vertical,Spacing=new(8),Padding=new MarginPadding(18)};
             if(eyebrow is not null)copy.Add(text(eyebrow,11,Colour4.FromHex("38D9A9")));
             copy.Add(text(title,eyebrow=="WELCOME"?24:18,AimModPalette.Text));
             copy.Add(new OsuTextFlowContainer(t=>{t.Font=new osu.Framework.Graphics.Sprites.FontUsage("Torus",14);t.Colour=AimModPalette.Muted;}){RelativeSizeAxes=Axes.X,AutoSizeAxes=Axes.Y,Text=description});
@@ -105,19 +117,27 @@ public partial class UserSetupScreen : CompositeDrawable
     }
     private sealed partial class IntroTiles : Container
     {
-        private readonly Drawable[] tiles;
-        public IntroTiles(Drawable[] tiles){this.tiles=tiles;RelativeSizeAxes=Axes.X;Children=tiles;}
-        protected override void Update()
+        private readonly IntroTile[] tiles;
+        public IntroTiles(IntroTile[] tiles){this.tiles=tiles;RelativeSizeAxes=Axes.X;Children=tiles;}
+        protected override void UpdateAfterChildren()
         {
-            base.Update();
+            base.UpdateAfterChildren();
             int columns=tiles.Length==3 && DrawWidth>=900?3:DrawWidth>=700?2:1;
-            float tileHeight=tiles.Length==3?144:112;
+            float minimum=tiles.Length==3?144:112;
             float width=(DrawWidth-(columns-1)*12)/columns;
-            for(int i=0;i<tiles.Length;i++){
-                tiles[i].RelativeSizeAxes=Axes.None;tiles[i].Width=width;tiles[i].Height=tileHeight;
-                tiles[i].Position=new((i%columns)*(width+12),(i/columns)*(tileHeight+12));
+            float y=0;
+            // Narrow windows wrap descriptions onto more lines. Grow each row to fit its text.
+            for(int first=0;first<tiles.Length;first+=columns){
+                int last=Math.Min(tiles.Length,first+columns);
+                float height=minimum;
+                for(int i=first;i<last;i++)height=Math.Max(height,tiles[i].ContentHeight);
+                for(int i=first;i<last;i++){
+                    tiles[i].RelativeSizeAxes=Axes.None;tiles[i].Width=width;tiles[i].Height=height;
+                    tiles[i].Position=new((i-first)*(width+12),y);
+                }
+                y+=height+12;
             }
-            Height=((tiles.Length+columns-1)/columns)*(tileHeight+12)-12;
+            Height=Math.Max(0,y-12);
         }
     }
     internal sealed partial class SetupButton : AimModButton
