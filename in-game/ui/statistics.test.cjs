@@ -49,14 +49,14 @@ test('empty period stays usable without plotting invalid coordinates',()=>{
 });
 test('supplementary timing and movement preserve units, zero, missing samples, and independent series',()=>{
  const s=surface();const data=fixture();const selected=data.Periods[0].Selected;
- selected.Measurements=[{Key:'AverageTimeToKillMs',Average:800,Samples:1},{Key:'AverageFireToHitMs',Average:45,Samples:1},{Key:'Overshoot',Average:0,Samples:1},{Key:'DirectionalBias',Average:null,Samples:0}];
+ selected.Measurements=[{Key:'AverageTimeToKillMs',Average:800,Samples:1},{Key:'AverageFireToHitMs',Average:45,Samples:1},{Key:'Overshoot',Average:0,Samples:1},{Key:'CorrectiveShotRatio',Average:0,Samples:1},{Key:'KillsPerSecond',Average:0.04,Samples:2},{Key:'ClickTimingVariation',Average:0.004,Samples:2},{Key:'DirectionalBias',Average:null,Samples:0}];
  selected.Points[0].Measurements={AverageTimeToKillMs:800,AverageFireToHitMs:45,Overshoot:0};
  s.api.render(s.root,data);
  s.all().find(e=>e.tag==='button'&&e.textContent==='Movement & timing').onclick();
  assert.ok(s.all().some(e=>e.textContent==='800 ms'));
  assert.ok(s.all().some(e=>e.textContent==='45 ms'));
  assert.ok(s.all().some(e=>e.textContent==='0%'));
- assert.ok(!s.all().some(e=>e.textContent==='Directional bias'));
+ assert.ok(!s.all().some(e=>e.textContent==='Directional bias'));assert.ok(!s.all().some(e=>e.textContent==='Overshoot'&&e.className==='metric-label'));assert.ok(s.all().some(e=>e.textContent==='2.4 per min'));assert.ok(s.all().some(e=>e.textContent==='<0.01 CV'));
  s.all().find(e=>e.tag==='button'&&e.textContent==='Average shot-to-hit interval').onclick();
  assert.ok(s.all().some(e=>e.textContent.includes('Average shot-to-hit interval (ms)')));
  assert.ok(s.drawing()>0);

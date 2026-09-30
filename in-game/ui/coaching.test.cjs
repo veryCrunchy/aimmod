@@ -44,7 +44,7 @@ test('feedback stores generated advice once and supports useful, hide, prior adv
  const history=[{...card,key:'synthetic-key',scope:'all',seenAt:'2026-01-01T00:00:00Z'}];requests[0].finish(200,{feedback:[],history});
  c.AimModCoaching.render(root,state);assert.equal(requests.length,1);button(root,'Useful').onclick();assert.equal(JSON.parse(requests[1].body).feedback,'helpful');requests[1].finish(200,{feedback:[{scope:'all',id:card.id,feedback:'helpful'}],history});assert.ok(button(root,'Marked useful'));
  button(root,'Hide this advice').onclick();requests[2].finish(200,{feedback:[{scope:'all',id:card.id,feedback:'not_for_me'}],history});assert.ok(!all(root,n=>n.tag==='h3'&&n.textContent===card.title).length);
- button(root,'Advice history').onclick();assert.ok(button(root,'Restore advice'));button(root,'Restore advice').onclick();assert.equal(JSON.parse(requests[3].body).feedback,'none');requests[3].finish(200,{feedback:[],history});assert.ok(all(root,n=>n.tag==='h3'&&n.textContent===card.title).length);
+ button(root,'Show advice history').onclick();assert.ok(button(root,'Restore advice'));button(root,'Restore advice').onclick();assert.equal(JSON.parse(requests[3].body).feedback,'none');requests[3].finish(200,{feedback:[],history});assert.ok(all(root,n=>n.tag==='h3'&&n.textContent===card.title).length);
 });
 test('feedback failure exposes retry without pretending preferences were saved',()=>{const c=load(),root=dom(c),requests=feedbackClient(c);c.AimModCoaching.render(root,{coachingHistory:runs()});requests[0].finish(503,{});assert.ok(button(root,'Retry preferences'));assert.match(root.textContent,/preferences are unavailable/);assert.equal(requests.length,1);
  // Advice itself stays visible when only the preference service fails.

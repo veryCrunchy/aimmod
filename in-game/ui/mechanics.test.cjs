@@ -16,6 +16,6 @@ test('recorded runs show readable dates and never print NaN for missing control'
  const {window}=setup();const root=new El('div');let opened;
  window.AimModMechanics.render(root,{statistics:{Periods:[]},mechanics:[{Id:'a',Timestamp:'2026.06.03-09.05.00',Smoothness:null,Score:1234.5},{Id:'b',Timestamp:null,Smoothness:71.26}]},r=>opened=r,()=>{});
  const text=flat(root).map(e=>e.textContent);
- assert.ok(text.includes('3 Jun 2026, 09:05'));assert.ok(text.includes('Control —'));assert.ok(text.includes('Control 71.3'));assert.ok(text.includes('1,234.5 score · Open →'));assert.ok(!text.some(t=>/NaN|undefined/.test(t)));
+ assert.ok(text.includes('3 Jun 2026, 09:05'));assert.ok(text.includes('Control —'));assert.ok(text.includes('Control 71.3'));assert.ok(text.includes('1,234.5 score · Open run'));assert.ok(!text.some(t=>/NaN|undefined/.test(t)));
  flat(root).filter(e=>e.tag==='button'&&e.className==='mechanics-run')[0].onclick();assert.equal(opened.Id,'a');
 });

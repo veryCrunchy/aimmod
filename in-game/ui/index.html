@@ -8,12 +8,20 @@
 *{box-sizing:border-box}
 html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#0b1110;color:#eef5f1;font-family:Roboto,Arial,sans-serif;font-size:14px;line-height:1.45}
 h1,h2,h3,h4,p{margin:0}
-button,input,select,textarea{font:inherit;color:inherit}
-button{cursor:pointer;border:0;background:none;padding:0;text-align:inherit}
+button,input,select,textarea{font-family:Roboto,Arial,sans-serif;font-size:14px;color:#eef5f1}
+button{cursor:pointer;border:0;background:none;padding:0;text-align:left;color:#eef5f1}
 button:disabled{opacity:.45;cursor:default}
 button:focus,input:focus,select:focus,textarea:focus{outline:2px solid #27e4a1;outline-offset:2px}
 input,select,textarea{color:#eef5f1;background:#101916;border:1px solid #30433a;border-radius:6px;padding:9px 12px;font-size:14px}
-input::placeholder{color:#7f968a}
+/* Gameface: no placeholders, inline-block or inherit. Inputs get a .field hint, and
+   stand-alone buttons sit in .actions rows so they size to their label. */
+.field{position:relative;display:block}.field>input{display:block;width:100%}
+.field-hint{position:absolute;left:13px;top:0;height:36px;line-height:36px;font-size:14px;color:#7f968a;white-space:nowrap;overflow:hidden;pointer-events:none}
+.actions{display:flex;flex-direction:row;flex-wrap:wrap;align-items:center}
+.actions.center{justify-content:center}.actions>.button{margin:0 8px 8px 0}.actions>.button+.button{margin-left:0}
+.tri{display:block;width:0;height:0;margin-right:5px;border-left:4px solid transparent;border-right:4px solid transparent}
+.tri.up{border-bottom:6px solid #27e4a1}.tri.down{border-top:6px solid #f0b45a}
+.chev{display:block;width:8px;height:8px;border-right:2px solid #27e4a1;border-bottom:2px solid #27e4a1;transform:rotate(-45deg)}
 /* Shell */
 .app{display:flex;width:100%;height:100%;overflow:hidden;border:1px solid #30433a;border-radius:12px}
 .sidebar{width:208px;flex-shrink:0;display:flex;flex-direction:column;padding:22px 12px 18px;background:#101916;border-right:1px solid #22302a;overflow-y:auto}
@@ -25,8 +33,8 @@ input::placeholder{color:#7f968a}
 .nav button.active{background:#173b2f;color:#27e4a1}
 .nav canvas{display:block;flex-shrink:0;width:18px;height:18px;margin-right:12px}
 .sidebar-foot{margin-top:auto;padding:16px 12px 0;border-top:1px solid #22302a;color:#a7bab0;font-size:12px;line-height:1.6}
-.sidebar-foot strong{display:block;color:#eef5f1;font-size:13px;font-weight:500}
-.online-dot{display:inline-block;width:7px;height:7px;margin-right:7px;border-radius:50%;background:#27e4a1}
+.sidebar-foot strong{display:flex;align-items:center;color:#eef5f1;font-size:13px;font-weight:500}
+.online-dot{display:block;flex-shrink:0;width:7px;height:7px;margin-right:8px;border-radius:4px;background:#27e4a1}
 .main{flex:1;min-width:0;display:flex;flex-direction:column;background:#0b1110}
 .topbar{height:72px;flex-shrink:0;display:flex;align-items:center;padding:0 28px;background:#101916;border-bottom:1px solid #22302a}
 .title-wrap{flex:1;min-width:0;padding-right:16px}
@@ -40,9 +48,9 @@ input::placeholder{color:#7f968a}
 /* Scenario switcher lives in the top bar on scenario pages */
 .scenario-switch{position:relative;display:flex;align-items:center;margin-right:10px}
 .scenario-label{font-size:12px;color:#7f968a;margin-right:10px;white-space:nowrap}
-.selector{display:block;width:300px;height:36px;padding:0 34px 0 12px;background:#1d2b26;border:1px solid #30433a;border-radius:6px;color:#eef5f1;font-size:14px;font-weight:500;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;position:relative}
+.selector{display:block;width:300px;height:36px;line-height:34px;padding:0 34px 0 12px;background:#1d2b26;border:1px solid #30433a;border-radius:6px;color:#eef5f1;font-size:14px;font-weight:500;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;position:relative}
 .selector:hover{border-color:#3f5a4d;background:#263a32}
-.selector:after{content:'▾';position:absolute;right:12px;top:8px;color:#27e4a1;font-size:13px}
+.selector:after{content:'';position:absolute;right:13px;top:15px;width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:6px solid #27e4a1}
 .picker{display:none;position:absolute;right:0;top:44px;width:460px;padding:10px;background:#151f1c;border:1px solid #3f5a4d;border-radius:8px;z-index:30;box-shadow:0 16px 40px rgba(0,0,0,.5)}
 .picker.open{display:block}.picker input{display:block;width:100%;margin-bottom:8px}
 .scenario-list{max-height:360px;overflow-y:auto}
@@ -52,7 +60,7 @@ input::placeholder{color:#7f968a}
 .scenario-list small{flex-shrink:0;margin-left:14px;font-size:12px;color:#a7bab0}
 .picker-note{margin:10px;font-size:13px;color:#a7bab0}
 /* Shared components */
-.button{display:inline-block;height:36px;padding:0 14px;border:1px solid #30433a;border-radius:6px;background:#1d2b26;color:#eef5f1;font-size:13px;font-weight:500;line-height:34px;white-space:nowrap;text-align:center;vertical-align:middle}
+.button{display:flex;align-items:center;justify-content:center;flex-shrink:0;height:36px;padding:0 14px;border:1px solid #30433a;border-radius:6px;background:#1d2b26;color:#eef5f1;font-size:13px;font-weight:500;line-height:34px;white-space:nowrap;text-align:center;vertical-align:middle}
 .button:hover{background:#263a32;border-color:#3f5a4d}
 .button.primary{background:#27e4a1;border-color:#27e4a1;color:#06231a;font-weight:600}
 .button.primary:hover{background:#5bedb9;border-color:#5bedb9}
@@ -61,7 +69,7 @@ input::placeholder{color:#7f968a}
 .button.quiet:hover{background:#173b2f}
 .button.danger{color:#ffb3b3;border-color:#5b3333;background:#2a1919}
 .button+.button{margin-left:8px}
-.segmented{display:inline-flex;align-items:center;padding:3px;background:#101916;border:1px solid #30433a;border-radius:7px}
+.segmented{display:flex;flex-direction:row;flex-shrink:0;align-items:center;padding:3px;background:#101916;border:1px solid #30433a;border-radius:7px}
 .segmented .button{height:30px;line-height:30px;border:0;background:none;color:#a7bab0;margin:0;padding:0 12px;font-size:13px}
 .segmented .button:hover{color:#eef5f1;background:#1d2b26}
 .segmented .button.primary{background:#173b2f;color:#27e4a1;font-weight:600}
@@ -78,23 +86,22 @@ input::placeholder{color:#7f968a}
 .metric{flex:1;flex-basis:0;min-width:0;margin:0 6px 12px;padding:16px 18px;background:#151f1c;border:1px solid #22302a;border-radius:8px}
 .metric-label{font-size:12px;font-weight:500;color:#a7bab0;margin-bottom:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .metric-value{font-size:28px;line-height:34px;font-weight:600;letter-spacing:-.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.metric-note{font-size:12px;color:#a7bab0;margin-top:6px;line-height:1.45}
+.metric-note{display:flex;flex-direction:row;flex-wrap:wrap;align-items:center;font-size:12px;color:#a7bab0;margin-top:6px;line-height:1.45;min-height:20px}
 .mint{color:#27e4a1}
-.change{display:inline-block;padding:1px 7px;margin-right:6px;border-radius:10px;font-size:12px;font-weight:600;line-height:18px}
+.change{display:flex;align-items:center;flex-shrink:0;padding:0 8px;margin-right:6px;border-radius:10px;font-size:12px;font-weight:600;line-height:20px;height:20px}
 .change.up{background:#173b2f;color:#27e4a1}.change.down{background:#3a2c17;color:#f0b45a}.change.flat{background:#1d2b26;color:#a7bab0}
-.empty{padding:40px 24px;text-align:center;color:#a7bab0;font-size:14px;line-height:1.6}
+.empty{display:flex;flex-direction:column;align-items:center;padding:40px 24px;text-align:center;color:#a7bab0;font-size:14px;line-height:1.6}
 .empty h3{color:#eef5f1;font-size:18px;font-weight:600;margin-bottom:6px}
 .empty p{margin:0 auto 16px;max-width:520px}
 .empty .button{margin:0 4px}
-.notice{display:none;font-size:13px;color:#dcebe3;padding:11px 14px;background:#173b2f;border:1px solid #2c6b52;border-radius:6px;margin-bottom:18px;line-height:1.5}
-.notice:before{content:'';display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:10px;background:#27e4a1;vertical-align:middle}
+.notice{display:none;font-size:13px;color:#dcebe3;padding:11px 14px;background:#173b2f;border:1px solid #2c6b52;border-left:3px solid #27e4a1;border-radius:6px;margin-bottom:18px;line-height:1.5}
 .toolbar{display:flex;align-items:center;flex-wrap:wrap;margin-bottom:16px;min-height:36px}
 .toolbar h2{flex:1;min-width:0;font-size:16px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .toast{position:absolute;bottom:24px;right:28px;max-width:460px;padding:12px 18px;background:#1d2b26;border:1px solid #2c6b52;border-radius:8px;color:#eef5f1;font-size:13px;display:none;z-index:40}
-.legend{display:inline-flex;align-items:center;margin-left:16px;font-size:12px;color:#a7bab0;white-space:nowrap}
-.legend i{display:inline-block;width:14px;height:3px;border-radius:2px;margin-right:6px;background:#27e4a1}
-.legend i.band{height:10px;background:#1c4a3a;border-radius:2px}
-.legend i.best{background:none;border-top:2px dashed #a7bab0;height:0}
+.legend{display:flex;align-items:center;margin-left:16px;font-size:12px;color:#a7bab0;white-space:nowrap}
+.swatch{display:block;flex-shrink:0;width:14px;height:3px;border-radius:2px;margin-right:6px;background:#27e4a1}
+.swatch.band{height:10px;background:#1f5a45}
+.swatch.best{height:2px;background:#a7bab0}
 .row{display:flex;align-items:flex-start;margin:0 -10px}
 .col{min-width:0;padding:0 10px}.col-main{width:66.6%}.col-side{width:33.4%}.col-half{width:50%}
 .card{padding:18px 20px;background:#151f1c;border:1px solid #22302a;border-radius:8px;margin-bottom:12px}
@@ -113,11 +120,11 @@ input::placeholder{color:#7f968a}
 .next-text{flex:1;min-width:0}
 .next-text h3{font-size:15px;font-weight:600;line-height:1.35}
 .next-text p{font-size:13px;color:#a7bab0;margin-top:3px;line-height:1.5}
-.next-text .button{margin-top:10px}
+.next-text .actions{margin-top:10px}.next-text .actions>.button{margin-bottom:0}
 .recent-row{display:flex;align-items:center;width:100%;height:48px;padding:0 20px;border-top:1px solid #22302a;text-align:left}
 .recent-row:hover,.recent-row:focus{background:#1d2b26}
 .recent-row>span{display:block;flex-shrink:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:13px}
-.recent-name{width:46%;font-weight:500;color:#eef5f1}.recent-when{width:20%;color:#a7bab0}.recent-score{width:16%;text-align:right;font-weight:600}.recent-acc{width:13%;text-align:right;color:#a7bab0}.recent-go{width:5%;text-align:right;color:#27e4a1}
+.recent-name{width:46%;font-weight:500;color:#eef5f1}.recent-when{width:20%;color:#a7bab0}.recent-score{width:16%;text-align:right;font-weight:600;color:#eef5f1}.recent-acc{width:13%;text-align:right;color:#dcebe3}.recent-go{width:5%;display:flex!important;justify-content:flex-end}
 .recent-head{height:34px;border-top:0}.recent-head>span{font-size:11px;font-weight:600;letter-spacing:.6px;text-transform:uppercase;color:#7f968a}.recent-head:hover{background:none}
 .week{display:flex;align-items:flex-end;height:120px;padding:0 20px}
 .week-day{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:120px;padding:0 4px}
@@ -126,28 +133,28 @@ input::placeholder{color:#7f968a}
 .week-label{margin-top:8px;font-size:12px;color:#a7bab0}.week-label.today{color:#27e4a1;font-weight:600}
 .week-summary{padding:0 20px 18px;font-size:13px;color:#a7bab0}.week-summary strong{color:#eef5f1;font-weight:600}
 /* History */
-.history-search{width:300px;height:36px;margin-right:8px}
+.history-field{width:300px;margin-right:8px}.history-search{height:36px}
 .history-table{width:100%;font-size:13px}
-.history-row{display:flex;align-items:center;width:100%;height:48px;border-top:1px solid #22302a}
-.history-row:hover{background:#1d2b26}
+.history-row{display:flex;align-items:center;width:100%;height:48px;border-top:1px solid #22302a;text-align:left}.history-row .chev{margin-right:18px}.history-go{width:4%;display:flex;justify-content:flex-end}
+.history-row:hover,.history-row:focus{background:#1d2b26}.history-row:hover .history-scenario{color:#27e4a1!important}
 .history-row>div{padding:0 18px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;flex-shrink:0;color:#dcebe3}
-.history-scenario{width:43%}.history-date{width:21%;color:#a7bab0!important}.history-score{width:14%;text-align:right;font-weight:600}.history-accuracy{width:12%;text-align:right}.history-duration{width:10%;text-align:right}
+.history-scenario{width:41%;color:#eef5f1!important;font-weight:500}.history-date{width:21%;color:#a7bab0!important}.history-score{width:14%;text-align:right;font-weight:600}.history-accuracy{width:12%;text-align:right}.history-duration{width:8%;text-align:right}
 .history-head{height:38px;border-top:0;background:#101916}.history-head:hover{background:#101916}
 .history-head>div{color:#7f968a!important;font-size:11px;font-weight:600;letter-spacing:.6px;text-transform:uppercase}
 .scenario-button{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#eef5f1;font-weight:500}
 .scenario-button:hover{color:#27e4a1}
 #history-rows{max-height:none}
 .pager{display:flex;align-items:center;margin-top:4px}
-.pager span{flex:1;font-size:13px;color:#a7bab0}
+.pager span{flex:1;font-size:13px;color:#a7bab0}.pager .button{margin-left:8px}.history-filter{margin-left:8px}
 /* Account */
 .account-layout{display:flex;align-items:flex-start}
-.account-card{flex:1;min-width:0;padding:28px;max-width:860px}
+.account-card{display:flex;flex-direction:column;flex:1;min-width:0;padding:28px;max-width:860px}
 .account-aside{width:320px;flex-shrink:0;margin-left:20px}
 .account-aside p{margin-bottom:10px}
-.account-badge{display:inline-block;margin-bottom:16px;padding:4px 10px;border-radius:12px;background:#173b2f;color:#27e4a1;font-size:12px;font-weight:600}
+.account-badge{display:block;align-self:flex-start;margin-bottom:16px;padding:4px 10px;border-radius:12px;background:#173b2f;color:#27e4a1;font-size:12px;font-weight:600}
 .account-card h2{font-size:24px;font-weight:600;margin-bottom:8px}
 .account-card p{color:#a7bab0;font-size:14px;line-height:1.6;max-width:620px}
-.account-actions{margin-top:22px}
+.account-actions{display:flex;flex-direction:row;flex-wrap:wrap;align-items:center;margin-top:22px}.account-actions>.button{margin:0 8px 8px 0}.account-actions>.button+.button{margin-left:0}
 .account-code{display:none}
 .account-details{display:flex;margin-top:24px;padding-top:20px;border-top:1px solid #22302a}
 .account-details div{margin-right:36px}
@@ -162,21 +169,21 @@ input::placeholder{color:#7f968a}
 @media(max-width:1000px){.sidebar{width:176px;padding:18px 8px}.brand{margin-left:6px}.brand img{width:130px;height:auto}.nav button{font-size:13px;padding:0 9px}.nav canvas{margin-right:9px}.topbar{padding:0 18px}.pages{padding:18px}.scenario-label{display:none}.selector{width:200px}.account-layout{display:block}.account-aside{width:auto;margin:0}.history-search{width:200px}.history-row>div{padding:0 10px}.metric{flex-basis:40%}}
 @media(max-height:760px){.topbar{height:64px}.pages{padding-top:18px}.graph-wrap{height:250px}.metric{padding:13px 16px}.metric-value{font-size:24px;line-height:30px}.nav button{height:36px}.nav-label{padding-top:12px;padding-bottom:6px}.brand{margin-bottom:10px}}
 </style><link rel="stylesheet" href="workspace-theme.css"><link rel="stylesheet" href="coaching.css"><link rel="stylesheet" href="benchmarks.css"></head><body>
-<div class="app"><aside class="sidebar"><div class="brand"><img src="logo.png" alt="AimMod" style="width:150px;height:40px"></div><nav class="nav" id="nav" aria-label="AimMod"></nav><div class="sidebar-foot"><strong><span class="online-dot"></span>Your practice</strong><div id="practice-total">Loading your history…</div></div></aside>
-<main class="main"><header class="topbar"><div class="title-wrap"><h1 id="page-title">Home</h1><p id="page-subtitle"></p></div><div class="top-actions"><div class="scenario-switch" id="scenario-contextbar"><span class="scenario-label">Scenario</span><button class="selector" id="selector" type="button">Choose a scenario</button><div class="picker" id="picker"><input id="scenario-search" placeholder="Find a scenario" autocomplete="off"><div class="scenario-list" id="scenario-list" role="listbox"></div></div></div><button class="button" id="account-shortcut" type="button">Link account</button><button class="close" id="close" type="button" title="Return to KovaaK’s" aria-label="Return to KovaaK’s">×</button></div></header>
+<div class="app"><aside class="sidebar"><div class="brand"><img src="logo.png" alt="AimMod" style="width:150px;height:40px"></div><nav class="nav" id="nav" aria-label="AimMod"></nav><div class="sidebar-foot"><strong><span class="online-dot"></span><span>Your practice</span></strong><div id="practice-total">Loading your history…</div></div></aside>
+<main class="main"><header class="topbar"><div class="title-wrap"><h1 id="page-title">Home</h1><p id="page-subtitle"></p></div><div class="top-actions"><div class="scenario-switch" id="scenario-contextbar"><span class="scenario-label">Scenario</span><button class="selector" id="selector" type="button">Choose a scenario</button><div class="picker" id="picker"><input id="scenario-search" autocomplete="off"><div class="scenario-list" id="scenario-list" role="listbox"></div></div></div><button class="button" id="account-shortcut" type="button">Link account</button><button class="close" id="close" type="button" title="Return to KovaaK’s" aria-label="Return to KovaaK’s">×</button></div></header>
 <div class="pages" id="pages"><div class="notice" id="notice" role="status"></div>
 <section class="page active" id="overview"><div class="metrics" id="metrics"></div>
-<div class="row"><div class="col col-main"><div class="panel"><div class="panel-head"><div class="head-text"><h2>Score history</h2><p id="graph-caption"></p></div><span class="legend"><i></i>Score</span><span class="legend"><i class="band"></i>5-run average</span><span class="legend"><i class="best"></i>Best</span></div><div class="graph-wrap" id="graph-wrap"><canvas id="score-chart"></canvas><div class="graph-tooltip" id="graph-tooltip"></div></div></div>
+<div class="row"><div class="col col-main"><div class="panel"><div class="panel-head"><div class="head-text"><h2>Score history</h2><p id="graph-caption"></p></div><span class="legend"><span class="swatch"></span><span>Score</span></span><span class="legend" id="legend-average"><span class="swatch band"></span><span>5-run average</span></span><span class="legend"><span class="swatch best"></span><span>Best</span></span></div><div class="graph-wrap" id="graph-wrap"><canvas id="score-chart"></canvas><div class="graph-tooltip" id="graph-tooltip"></div></div></div>
 <div class="panel"><div class="panel-head"><h2>Recent runs</h2><button class="button compact" id="all-runs" type="button">All runs</button></div><div id="recent-runs" class="panel-list"></div></div></div>
 <div class="col col-side"><div class="panel"><div class="panel-head"><h2 id="next-title">Next up</h2></div><div id="next-up"></div></div><div class="panel"><div class="panel-head"><h2>This week</h2></div><div class="week-summary" id="week-summary"></div><div class="week" id="week-bars"></div><div style="height:18px"></div></div></div></div></section>
 <section class="page" id="trends"></section>
-<section class="page" id="history"><div class="toolbar"><h2 id="history-title">All runs</h2><input type="search" class="history-search" id="history-search" placeholder="Search scenarios" aria-label="Search run history"><button class="button" id="all-history" type="button">All scenarios</button></div><div class="panel"><div class="history-table" role="table"><div class="history-row history-head" role="row"><div class="history-scenario" role="columnheader">Scenario</div><div class="history-date" role="columnheader">Played</div><div class="history-score" role="columnheader">Score</div><div class="history-accuracy" role="columnheader">Accuracy</div><div class="history-duration" role="columnheader">Length</div></div><div id="history-rows" role="rowgroup"></div></div><div id="history-empty" class="empty" style="display:none"></div></div><div class="pager"><span id="history-count"></span><button class="button" id="previous" type="button">← Previous</button><button class="button" id="next" type="button">Next →</button></div></section>
-<section class="page" id="run-details"><button class="button quiet" id="back-history" type="button">← Back to history</button><div id="run-details-content"></div></section>
-<section class="page" id="coaching"><div id="coaching-profile"></div><button class="button compact" id="run-notes-toggle" type="button" aria-expanded="false">Notes on your latest run</button><div id="coaching-cards" style="display:none"></div></section>
+<section class="page" id="history"><div class="toolbar"><h2 id="history-title">All runs</h2><input type="search" class="history-search" id="history-search" aria-label="Search run history"><button class="button history-filter" id="only-scenario" type="button">Only this scenario</button><button class="button history-filter" id="all-history" type="button">All scenarios</button></div><div class="panel"><div class="history-table" role="table"><div class="history-row history-head" role="row"><div class="history-scenario" role="columnheader">Scenario</div><div class="history-date" role="columnheader">Played</div><div class="history-score" role="columnheader">Score</div><div class="history-accuracy" role="columnheader">Accuracy</div><div class="history-duration" role="columnheader">Length</div><div class="history-go"></div></div><div id="history-rows" role="rowgroup"></div></div><div id="history-empty" class="empty" style="display:none"></div></div><div class="pager"><span id="history-count"></span><button class="button" id="previous" type="button">Previous</button><button class="button" id="next" type="button">Next</button></div></section>
+<section class="page" id="run-details"><div class="actions"><button class="button quiet" id="back-history" type="button">Back to history</button></div><div id="run-details-content"></div></section>
+<section class="page" id="coaching"><div id="coaching-profile"></div><div class="actions"><button class="button quiet disclosure" id="run-notes-toggle" type="button" aria-expanded="false">Show notes on your latest run</button></div><div id="coaching-cards" style="display:none"></div></section>
 <section class="page" id="mechanics"><div id="mechanics-workspace"></div></section>
 <section class="page" id="replays"><div class="notice replay-status" id="replay-status" style="display:block">Checking recording status…</div><div id="replay-content"><div class="empty"><h3>Your recorded runs</h3><p>Recorded runs will appear here for playback.</p></div></div></section>
 <section class="page" id="benchmarks"><div id="benchmark-workspace"></div><button class="button" id="refresh-benchmarks" style="display:none" type="button">Refresh</button></section>
-<section class="page" id="account"><div class="account-layout"><div class="panel account-card"><div class="account-badge" id="account-badge">AimMod Hub</div><h2 id="account-name">Bring your practice with you</h2><p id="account-status">Link your account to add Hub scores to your history.</p><div class="account-code" id="account-code"></div><div class="account-actions" id="account-actions"></div><div class="account-details" id="account-details"></div></div><div class="card account-aside"><div class="eyebrow">Why link</div><h3>One history, everywhere</h3><p>Your Hub scores join your local runs, so trends and coaching see all of your practice.</p><p>Saved Hub history stays available offline.</p></div></div></section><section class="page" id="settings"></section><section class="page" id="overlays"></section>
+<section class="page" id="account"><div class="account-layout"><div class="panel account-card"><div class="account-badge" id="account-badge">AimMod Hub</div><h2 id="account-name">Bring your practice with you</h2><p id="account-status">Link your account to add Hub scores to your history.</p><div class="account-code" id="account-code"></div><div class="account-actions" id="account-actions"></div><div class="account-details" id="account-details"></div></div><div class="card account-aside" id="account-aside"><div class="eyebrow">Why link</div><h3>One history, everywhere</h3><p>Your Hub scores join your local runs, so trends and coaching see all of your practice.</p><p>Saved Hub history stays available offline.</p></div></div></section><section class="page" id="settings"></section><section class="page" id="overlays"></section>
 </div></main></div><div class="toast" id="toast" role="status"></div>
 <script src="coui://uiresources/javascript/cohtml.js"></script>
 <script>
@@ -211,10 +218,24 @@ function decimals(step){var text=String(Math.round(step*1e6)/1e6),dot=text.index
 // Rounded axis ticks so small ranges (CV, KPS) do not collapse into repeated labels.
 function ticks(lo,hi,count){if(!known(lo)||!known(hi))return {min:0,max:1,step:.25,decimals:2,values:[0,.25,.5,.75,1]};if(hi<=lo)hi=lo+(Math.abs(lo)>1?Math.abs(lo)*.1:1);var raw=(hi-lo)/Math.max(1,count||4),mag=Math.pow(10,Math.floor(Math.log(raw)/Math.LN10)),norm=raw/mag,step=(norm<=1?1:norm<=2?2:norm<=2.5?2.5:norm<=5?5:10)*mag,start=Math.floor(lo/step+1e-9)*step,end=Math.ceil(hi/step-1e-9)*step,values=[];for(var i=0;i<=100&&start+i*step<=end+step*1e-6;i++)values.push(Math.round((start+i*step)/step)*step);return {min:start,max:end,step:step,decimals:decimals(step),values:values};}
 function tick(value,axis){return number(value,axis&&axis.decimals||0);}
+// Counts (histograms, runs) need whole-number ticks only.
+function countTicks(max,count){var top=Math.max(1,Math.ceil(known(max)?max:1)),step=Math.max(1,Math.ceil(top/Math.max(1,count||4))),values=[];for(var v=0;v<=top+step-1&&values.length<=count+1;v+=step)values.push(v);return {min:0,max:values[values.length-1],step:step,decimals:0,values:values};}
+// The workspace font covers Latin, Greek and Cyrillic. Text in other scripts
+// (for example CJK author names) would render as empty boxes, so callers get
+// a readable fallback instead.
+function renderable(text){return typeof text==='string'&&!/[^\u0000-\u024F\u0370-\u03FF\u0400-\u04FF\u1E00-\u1EFF\u2010-\u2027\u2030-\u205E]/.test(text);}
+function safeText(text,fallback){return renderable(text)&&text.trim()?text:(fallback===undefined?'':fallback);}
+// Gameface does not draw input placeholders. field() wraps an input with a
+// hint that hides once the input has a value; labels stay available to readers.
+function field(input,hint,extra){var doc=root.document||(typeof document!=='undefined'?document:null),box=doc.createElement('div'),label=doc.createElement('span');box.className='field'+(extra?' '+extra:'');label.className='field-hint';label.textContent=hint;if(input.setAttribute&&!(input.getAttribute&&input.getAttribute('aria-label')))input.setAttribute('aria-label',hint);box.appendChild(input);box.appendChild(label);
+ function sync(){label.style.display=input.value?'none':'block';}
+ if(input.addEventListener){input.addEventListener('input',sync);input.addEventListener('change',sync);input.addEventListener('keyup',sync);input.addEventListener('focus',sync);input.addEventListener('blur',sync);}
+ box.sync=sync;input.syncHint=sync;sync();return box;}
+function perMinute(kps){return known(kps)&&kps>0&&kps<0.1;}
 // Trailing rolling mean and standard deviation; null until the window is full.
 function rolling(values,size){var out=[];for(var i=0;i<values.length;i++){var win=[];for(var j=Math.max(0,i-size+1);j<=i;j++)if(known(values[j]))win.push(values[j]);if(win.length<size){out.push(null);continue;}var mean=0;win.forEach(function(v){mean+=v;});mean/=win.length;var sd=0;win.forEach(function(v){sd+=(v-mean)*(v-mean);});out.push({mean:mean,sd:Math.sqrt(sd/win.length)});}return out;}
 function trend(change){return !known(change)?'flat':change>=0.5?'up':change<=-0.5?'down':'flat';}
-root.AimModFormat={known:known,number:number,fixed:fixed,percent:percent,signed:signed,unit:unit,parse:parse,date:date,shortDate:shortDate,time:time,dateTime:dateTime,weekday:weekday,dayKey:dayKey,relative:relative,duration:duration,hours:hours,millis:millis,ticks:ticks,tick:tick,rolling:rolling,trend:trend};
+root.AimModFormat={known:known,number:number,fixed:fixed,percent:percent,signed:signed,unit:unit,parse:parse,date:date,shortDate:shortDate,time:time,dateTime:dateTime,weekday:weekday,dayKey:dayKey,relative:relative,duration:duration,hours:hours,millis:millis,ticks:ticks,tick:tick,countTicks:countTicks,renderable:renderable,safeText:safeText,field:field,perMinute:perMinute,rolling:rolling,trend:trend};
 })(window);
 /*format:end*/
 </script>
@@ -265,18 +286,19 @@ function change(page){
  if(page==='coaching'&&state&&window.AimModCoaching)setTimeout(function(){if(active==='coaching')AimModCoaching.render(el('coaching-profile'),state,selectScenario,openDrillSearch)},30);
 }
 buildNav();change('overview');
+(function(){var h=el('history-search'),parent=h.parentNode,next=h.nextSibling,box=F.field(h,'Search scenarios','history-field');parent.insertBefore(box,next);var sc=el('scenario-search'),pp=sc.parentNode,nn=sc.nextSibling;pp.insertBefore(F.field(sc,'Find a scenario'),nn)})();
 window.AimModWorkspace={open:function(page){if(titles[page])change(page)},openRun:function(r){openRun(r)}};
-el('run-notes-toggle').onclick=function(){var c=el('coaching-cards'),open=c.style.display==='none';c.style.display=open?'block':'none';this.setAttribute('aria-expanded',String(open))};
+el('run-notes-toggle').onclick=function(){var c=el('coaching-cards'),open=c.style.display==='none';c.style.display=open?'block':'none';this.setAttribute('aria-expanded',String(open));this.textContent=(open?'Hide':'Show')+' notes on your latest run'};
 el('back-history').onclick=function(){change('history')};
 function openRun(r){change('run-details');AimModRunDetails.open(el('run-details-content'),r.Id,request,r)}
 el('close').onclick=function(){command('close')};el('account-shortcut').onclick=function(){change('account')};el('all-runs').onclick=function(){change('history')};
-el('previous').onclick=function(){command('history-previous')};el('next').onclick=function(){command('history-next')};el('all-history').onclick=function(){command('history-all')};el('refresh-benchmarks').onclick=function(){command('refresh-hub')};
+el('previous').onclick=function(){command('history-previous')};el('next').onclick=function(){command('history-next')};el('all-history').onclick=function(){command('history-all')};el('only-scenario').onclick=function(){if(state&&state.selectedScenario)command('scenario\t'+escape(state.selectedScenario))};el('refresh-benchmarks').onclick=function(){command('refresh-hub')};
 var searchTimer;el('history-search').oninput=function(){clearTimeout(searchTimer);var query=this.value;searchTimer=setTimeout(function(){command('search-history\t'+escape(query))},300)};
 el('selector').onclick=function(){openPicker(el('picker').className.indexOf('open')<0)};el('selector').setAttribute('aria-haspopup','listbox');el('selector').setAttribute('aria-expanded','false');el('scenario-search').setAttribute('aria-label','Find a scenario');el('scenario-search').oninput=renderScenarios;
 el('scenario-search').onkeydown=function(e){var code=e.keyCode;if(code===13){var first=scenarioMatches()[0];if(first){e.preventDefault();selectScenario(first.name)}}else if(code===40){var b=el('scenario-list').getElementsByTagName('button')[0];if(b){e.preventDefault();b.focus()}}};
 el('scenario-list').onkeydown=function(e){var code=e.keyCode;if(code!==38&&code!==40)return;var buttons=el('scenario-list').getElementsByTagName('button'),index=-1;for(var i=0;i<buttons.length;i++)if(buttons[i]===document.activeElement)index=i;if(index<0)return;e.preventDefault();if(code===38&&index===0)el('scenario-search').focus();else if(buttons[index+(code===40?1:-1)])buttons[index+(code===40?1:-1)].focus()};
 function selectScenario(name){command('scenario\t'+escape(name));openPicker(false);el('selector').textContent=name;if(SCENARIO_PAGES.indexOf(active)<0)change('overview')}
-function openDrillSearch(query){el('scenario-search').value=query;openPicker(true);}
+function openDrillSearch(query){el('scenario-search').value=query;if(el('scenario-search').syncHint)el('scenario-search').syncHint();openPicker(true);}
 // Escape backs out of the innermost open layer; it never closes KovaaK's menus.
 document.onkeydown=function(e){if((e||window.event).keyCode!==27)return;if(el('picker').className.indexOf('open')>=0){openPicker(false);el('selector').focus();return}if(active==='run-details'){change('history');return}if(active==='benchmarks'&&window.AimModBenchmarks&&AimModBenchmarks.back)AimModBenchmarks.back()};
 document.onmousedown=function(e){var target=(e||window.event).target;if(el('picker').className.indexOf('open')>=0&&!inside(target,el('picker'))&&!inside(target,el('selector')))openPicker(false)};
@@ -286,9 +308,9 @@ function scenarioMatches(){var query=el('scenario-search').value.toLowerCase();r
 function renderScenarios(){if(!state)return;var list=el('scenario-list');list.textContent='';var matches=scenarioMatches();matches.slice(0,PICKER_LIMIT).forEach(function(s){var b=node('button','');b.type='button';b.setAttribute('role','option');b.appendChild(node('span','',s.name));b.appendChild(node('small','',number(s.count,0)+(s.count===1?' run':' runs')));b.onclick=function(){selectScenario(s.name)};list.appendChild(b)});if(!matches.length)list.appendChild(node('p','picker-note',(state.scenarios||[]).length?'No scenarios match. Try a shorter search.':'Complete a run to add your first scenario.'));else if(matches.length>PICKER_LIMIT)list.appendChild(node('p','picker-note','Showing '+PICKER_LIMIT+' of '+number(matches.length,0)+'. Keep typing to narrow the list.'))}
 function openPicker(open){el('picker').className=open?'picker open':'picker';el('selector').setAttribute('aria-expanded',open?'true':'false');if(open){renderScenarios();el('scenario-search').focus()}}
 function inside(target,container){for(var n=target;n;n=n.parentNode)if(n===container)return true;return false}
-function changeChip(parent,change,suffix){var kind=F.trend(change);parent.appendChild(node('span','change '+kind,(kind==='up'?'▲ ':kind==='down'?'▼ ':'')+F.signed(change)+'%'));if(suffix)parent.appendChild(node('span','kpi-context',suffix))}
+function changeChip(parent,change,suffix){var kind=F.trend(change),chip=node('span','change '+kind);if(kind!=='flat')chip.appendChild(node('span','tri '+kind));chip.appendChild(node('span','',F.signed(change)+'%'));parent.appendChild(chip);if(suffix)parent.appendChild(node('span','kpi-context',suffix))}
 // Key number + change + one line of context, as in the osu! home.
-function metric(label,value,note,change){var box=node('div','metric');box.appendChild(node('div','metric-label',label));box.appendChild(node('div','metric-value',value));var foot=node('div','metric-note');if(F.known(change))changeChip(foot,change,note);else foot.textContent=note||'';box.appendChild(foot);return box}
+function metric(label,value,note,change){var box=node('div','metric');box.appendChild(node('div','metric-label',label));box.appendChild(node('div','metric-value',value));var foot=node('div','metric-note');if(F.known(change))changeChip(foot,change,note);else foot.appendChild(node('span','',note||''));box.appendChild(foot);return box}
 function card(title,body,focus){var box=node('div','card'+(focus?' focus':''));if(focus)box.appendChild(node('div','eyebrow','Focus for next run'));box.appendChild(node('h3','',title));box.appendChild(node('p','',body));return box}
 function period(s,key){var periods=s.statistics&&s.statistics.Periods||[];for(var i=0;i<periods.length;i++)if(periods[i].Key===key)return periods[i];return null}
 function renderKpis(s){var latest=s.latest||{},week=period(s,'7'),m=el('metrics');m.textContent='';
@@ -297,53 +319,53 @@ function renderKpis(s){var latest=s.latest||{},week=period(s,'7'),m=el('metrics'
  var ofBest=F.known(latest.Score)&&F.known(s.best)&&s.best>0?latest.Score/s.best*100:null;
  m.appendChild(metric('Latest score',number(latest.Score),F.known(latest.Score)?(ofBest!==null?number(ofBest,0)+'% of your best · ':'')+F.relative(latest.Timestamp):'No run on this scenario yet'));
  m.appendChild(metric('Personal best',number(s.best),F.known(s.best)?'Best in your history':'Play this scenario to set one'));
- m.appendChild(metric('Last 5 average',number(s.average),F.known(s.trend)?'vs the 5 before':'Play 10 runs to see your trend',F.known(s.trend)?s.trend:null));
+ m.appendChild(metric('Last 5 average',number(s.average,0),F.known(s.trend)?'vs the 5 before':'Play 10 runs to see your trend',F.known(s.trend)?s.trend:null));
 }
 // Next up: short, actionable suggestions from measured data only.
 function renderNextUp(s){var box=el('next-up');box.textContent='';var items=[];
  var focus=(s.coaching||[])[0];if(focus&&focus.Heading)items.push({mark:'',title:focus.Heading,body:focus.Body,label:'Open coaching',action:function(){change('coaching')}});
  var month=period(s,'30'),candidate=null;((month&&month.ScenarioTable)||[]).forEach(function(row){if(!row||row.Runs<5||!F.known(row.Average)||!F.known(row.Best)||row.Best<=0)return;var gap=1-row.Average/row.Best;if(!candidate||gap>candidate.gap)candidate={row:row,gap:gap}});
  if(candidate&&candidate.gap>=0.05)items.push({mark:'cyan',title:'Room to improve: '+candidate.row.Name,body:'Your 30-day average is '+number(candidate.gap*100,0)+'% below your best.',label:'Show scenario',action:function(){selectScenario(candidate.row.Name);change('trends')}});
- var week=period(s,'7');if(week&&week.Runs===0)items.push({mark:'amber',title:'Start a short block',body:'No runs this week yet. Ten focused minutes keep your baseline fresh.'});
+ var week=period(s,'7');if(week&&week.Runs===0&&!focus)items.push({mark:'amber',title:'Start a short block',body:'No runs this week yet. Ten focused minutes keep your baseline fresh.'});
  else if(s.account&&s.account.linked)items.push({mark:'amber',title:'Check your benchmark ranks',body:'See how close you are to the next threshold.',label:'Open benchmarks',action:function(){change('benchmarks')}});
- if(!items.length)items.push({mark:'',title:'Build your baseline',body:'Repeat one scenario for a short block. AimMod suggests a focus once it has enough runs.'});
+ if(!items.length)items.push({mark:'',title:'Build your baseline',body:'Repeat one scenario for a short block. AimMod suggests a focus once it has enough runs.',label:'Import past runs',action:function(){change('settings')}});
  el('next-title').textContent=(s.totalRuns||0)>0?'Next up':'Get started';
- items.slice(0,3).forEach(function(item){var row=node('div','next-item');row.appendChild(node('span','next-mark'+(item.mark?' '+item.mark:'')));var text=node('div','next-text');text.appendChild(node('h3','',item.title));if(item.body)text.appendChild(node('p','',item.body));if(item.action)text.appendChild(button(item.label,item.action,false,'compact'));row.appendChild(text);box.appendChild(row)})}
+ items.slice(0,3).forEach(function(item){var row=node('div','next-item');row.appendChild(node('span','next-mark'+(item.mark?' '+item.mark:'')));var text=node('div','next-text');text.appendChild(node('h3','',item.title));if(item.body)text.appendChild(node('p','',item.body));if(item.action){var act=node('div','actions');act.appendChild(button(item.label,item.action,false,'compact'));text.appendChild(act)}row.appendChild(text);box.appendChild(row)})}
 function renderRecent(s){var box=el('recent-runs');box.textContent='';var runs=(s.history||[]).slice(0,6);if(!runs.length){var e=node('div','empty');e.appendChild(node('h3','','No runs yet'));e.appendChild(node('p','','Play any scenario in KovaaK’s. AimMod reads your scores automatically.'));box.appendChild(e);return}
  var head=node('div','recent-row recent-head');['Scenario','When','Score','Accuracy',''].forEach(function(t,i){head.appendChild(node('span',['recent-name','recent-when','recent-score','recent-acc','recent-go'][i],t))});box.appendChild(head);
- var now=Date.now();runs.forEach(function(r){var b=node('button','recent-row');b.type='button';b.title='Open run analysis';b.appendChild(node('span','recent-name',r.Scenario||'Unknown scenario'));b.appendChild(node('span','recent-when',F.relative(r.Timestamp,now)));b.appendChild(node('span','recent-score',number(r.Score)));b.appendChild(node('span','recent-acc',percent(r.Accuracy)));b.appendChild(node('span','recent-go','›'));b.onclick=function(){openRun(r)};box.appendChild(b)})}
+ var now=Date.now();runs.forEach(function(r){var b=node('button','recent-row');b.type='button';b.title='Open run analysis';b.appendChild(node('span','recent-name',r.Scenario||'Unknown scenario'));b.appendChild(node('span','recent-when',F.relative(r.Timestamp,now)));b.appendChild(node('span','recent-score',number(r.Score)));b.appendChild(node('span','recent-acc',percent(r.Accuracy)));var go=node('span','recent-go');go.appendChild(node('span','chev'));b.appendChild(go);b.onclick=function(){openRun(r)};box.appendChild(b)})}
 function renderWeek(s){var week=period(s,'7'),minutes={},bars=el('week-bars');bars.textContent='';((week&&week.Calendar)||[]).forEach(function(d){if(d&&d.Date)minutes[d.Date]=(minutes[d.Date]||0)+(F.known(d.Minutes)?d.Minutes:0)});
  var days=[],today=new Date();today.setHours(12,0,0,0);for(var i=6;i>=0;i--){var d=new Date(today.getTime()-i*86400000);days.push({key:F.dayKey(d),label:i===0?'Today':F.weekday(d)})}
  var max=1;days.forEach(function(d){max=Math.max(max,minutes[d.key]||0)});
  days.forEach(function(d){var col=node('div','week-day'),value=minutes[d.key]||0,bar=node('div','week-bar'+(value?'':' none'));bar.style.height=Math.max(4,Math.round(value/max*84))+'px';bar.title=d.label+' · '+number(value,0)+' min';col.appendChild(bar);col.appendChild(node('div','week-label'+(d.label==='Today'?' today':''),d.label));bars.appendChild(col)});
- var summary=el('week-summary');summary.textContent='';if(!week||!week.Runs){summary.textContent='No practice yet this week.';return}summary.appendChild(node('strong','',F.hours(week.Hours)));summary.appendChild(document.createTextNode(' across '+number(week.Runs,0)+(week.Runs===1?' run':' runs')+' on '+number(week.ActiveDays,0)+(week.ActiveDays===1?' day':' days')))}
+ var summary=el('week-summary');summary.textContent='';bars.style.display=week&&week.Runs?'':'none';if(!week||!week.Runs){var last=(s.history||[])[0];summary.textContent=last?'No runs yet this week. Last practised '+F.relative(last.Timestamp).toLowerCase()+' on '+(last.Scenario||'a scenario')+'.':'No practice yet this week.';return}summary.appendChild(node('strong','',F.hours(week.Hours)));summary.appendChild(document.createTextNode(' across '+number(week.Runs,0)+(week.Runs===1?' run':' runs')+' on '+number(week.ActiveDays,0)+(week.ActiveDays===1?' day':' days')))}
 function render(s){state=s;if(active==='trends'&&window.AimModStatistics)AimModStatistics.render(el('trends'),s.statistics,selectScenario);var account=s.account||{};
  el('practice-total').textContent=number(s.totalRuns,0)+' runs · '+F.hours(s.hours);el('selector').textContent=s.selectedScenario||'Choose a scenario';el('account-shortcut').textContent=account.linked?(account.label||'Account'):'Link account';el('account-shortcut').className='button'+(account.linked?'':' primary');
  renderKpis(s);
  var graphCount=(s.graph||[]).length;el('graph-caption').textContent=graphCount?(s.selectedScenario||'All scenarios')+' · last '+graphCount+(graphCount===1?' run':' runs'):'Choose a scenario and complete a run to start your score history.';drawChart();
  renderNextUp(s);renderRecent(s);renderWeek(s);
- var table=el('history-rows');table.textContent='';(s.history||[]).forEach(function(r){var tr=node('div','history-row');tr.setAttribute('role','row');var name=node('div','history-scenario');var b=node('button','scenario-button',r.Scenario);b.type='button';b.title='Open run analysis';b.onclick=function(){openRun(r)};name.appendChild(b);tr.appendChild(name);tr.appendChild(node('div','history-date',F.dateTime(r.Timestamp)));tr.appendChild(node('div','history-score',number(r.Score)));tr.appendChild(node('div','history-accuracy',percent(r.Accuracy)));tr.appendChild(node('div','history-duration',F.duration(r.Duration)));table.appendChild(tr)});
- var pages=Math.max(1,s.historyPages||1),pageIndex=Math.max(0,s.historyPage||0);el('history-title').textContent=s.scenarioFiltered?s.selectedScenario:'All runs';el('all-history').style.display=s.scenarioFiltered?'':'none';el('history-count').textContent=(s.historyCount?number(s.historyCount,0)+(s.historyCount===1?' run':' runs')+(pages>1?' · Page '+(pageIndex+1)+' of '+pages:''):'');el('previous').disabled=pageIndex<=0;el('next').disabled=pageIndex>=pages-1;el('previous').style.display=el('next').style.display=pages>1?'':'none';
+ var table=el('history-rows');table.textContent='';(s.history||[]).forEach(function(r){var tr=node('button','history-row');tr.type='button';tr.setAttribute('role','row');tr.title='Open run analysis';tr.onclick=function(){openRun(r)};tr.appendChild(node('div','history-scenario',r.Scenario||'Unknown scenario'));tr.appendChild(node('div','history-date',F.dateTime(r.Timestamp)));tr.appendChild(node('div','history-score',number(r.Score)));tr.appendChild(node('div','history-accuracy',percent(r.Accuracy)));tr.appendChild(node('div','history-duration',F.duration(r.Duration)));var go=node('div','history-go');go.appendChild(node('span','chev'));tr.appendChild(go);table.appendChild(tr)});
+ var pages=Math.max(1,s.historyPages||1),pageIndex=Math.max(0,s.historyPage||0);el('history-title').textContent=s.scenarioFiltered?s.selectedScenario:'All runs';el('all-history').style.display=s.scenarioFiltered?'':'none';el('only-scenario').style.display=!s.scenarioFiltered&&s.selectedScenario?'':'none';el('only-scenario').textContent=s.selectedScenario?'Only '+(s.selectedScenario.length>28?s.selectedScenario.slice(0,27)+'…':s.selectedScenario):'Only this scenario';el('history-count').textContent=(s.historyCount?number(s.historyCount,0)+(s.historyCount===1?' run':' runs')+(pages>1?' · Page '+(pageIndex+1)+' of '+pages:''):'');el('previous').disabled=pageIndex<=0;el('next').disabled=pageIndex>=pages-1;el('previous').style.display=el('next').style.display=pages>1?'':'none';
  var emptyBox=el('history-empty');emptyBox.style.display=(s.history||[]).length?'none':'block';emptyBox.textContent='';if(el('history-search').value){emptyBox.appendChild(node('p','','No runs match “'+el('history-search').value+'”.'));emptyBox.appendChild(button('Clear search',function(){el('history-search').value='';command('search-history\t')}))}else if(s.scenarioFiltered){emptyBox.appendChild(node('p','','No runs for this scenario yet.'));emptyBox.appendChild(button('Show all scenarios',function(){command('history-all')}))}else emptyBox.appendChild(node('p','','Complete a run in KovaaK’s to start your history.'));
  if(active==='coaching'&&window.AimModCoaching)AimModCoaching.render(el('coaching-profile'),s,selectScenario,openDrillSearch);var coaching=el('coaching-cards');coaching.textContent='';(s.coaching||[]).forEach(function(c,i){coaching.appendChild(card(c.Heading,c.Body,i===0))});(s.moments||[]).forEach(function(c){coaching.appendChild(card(c.Title,c.Detail))});el('run-notes-toggle').style.display=coaching.children.length?'':'none';
  if(active==='mechanics'&&window.AimModMechanics)AimModMechanics.render(el('mechanics-workspace'),s,openRun,showScenarioHistory);
  el('account-badge').textContent=account.linked?'Linked':account.pending?'Awaiting approval':'Not linked';el('account-name').textContent=account.label||'Bring your practice with you';el('account-status').textContent=account.status||'Link your account to add Hub scores to your history.';el('account-code').textContent=account.pending?account.code:'';var actions=el('account-actions');actions.textContent='';if(account.pending){actions.appendChild(button('Reopen browser',function(){command('open-link')},true));actions.appendChild(button('Cancel',function(){command('cancel-link')}))}else if(!account.linked)actions.appendChild(button('Link account',function(){command('link');toast('Opening your browser…')},true));else{actions.appendChild(button('Refresh Hub history',function(){command('refresh-hub')},true));actions.appendChild(button('Unlink this device',function(){command('unlink')}))}
- var details=el('account-details');details.textContent='';if(account.linked){var d=node('div','');d.appendChild(node('strong','',number(account.cachedRuns,0)));d.appendChild(node('span','','Hub runs saved for offline use'));details.appendChild(d);if(account.partial){var p=node('div','');p.appendChild(node('span','','More history may be available on Hub.'));details.appendChild(p)}}else details.style.display='none';if(account.linked)details.style.display='flex';}
+ var details=el('account-details');details.textContent='';if(account.linked){var d=node('div','');d.appendChild(node('strong','',number(account.cachedRuns,0)));d.appendChild(node('span','','Hub runs saved for offline use'));details.appendChild(d);if(account.partial){var p=node('div','');p.appendChild(node('span','','Some older Hub runs are not downloaded yet. Select Refresh Hub history to fetch more.'));details.appendChild(p)}}else details.style.display='none';if(account.linked)details.style.display='flex';el('account-aside').style.display=account.linked?'none':'';}
 // Score history: runs, 5-run rolling average with a ±1 SD band, and personal best.
 function drawChart(){if(active!=='overview'||!state)return;var canvas=el('score-chart'),w=canvas.offsetWidth,h=canvas.offsetHeight;if(!w||!h)return;var ratio=window.devicePixelRatio||1;canvas.width=Math.round(w*ratio);canvas.height=Math.round(h*ratio);var ctx=canvas.getContext('2d');ctx.scale(ratio,ratio);ctx.clearRect(0,0,w,h);var points=(state.graph||[]).filter(function(p){return p&&F.known(p.score)});chartPoints=[];
- if(!points.length){ctx.font='14px Roboto,Arial';ctx.fillStyle='#a7bab0';ctx.textAlign='center';ctx.fillText('Your score history will appear here',w/2,h/2);return;}
+ if(!points.length){ctx.font='14px Roboto';ctx.fillStyle='#a7bab0';ctx.textAlign='center';ctx.fillText('Your score history will appear here',w/2,h/2);return;}
  var values=points.map(function(p){return p.score}),band=F.rolling(values,5),all=values.slice();band.forEach(function(b){if(b){all.push(b.mean+b.sd);all.push(b.mean-b.sd)}});if(F.known(state.best))all.push(state.best);
  var lo=Math.min.apply(null,all),hi=Math.max.apply(null,all),pad=(hi-lo)||Math.max(Math.abs(hi)*.1,1);var axis=F.ticks(lo>=0?Math.max(0,lo-pad*.08):lo-pad*.08,hi+pad*.08,4);lo=axis.min;hi=axis.max;
  var left=58,right=w-16,top=12,bottom=h-28;function y(n){return bottom-(n-lo)/(hi-lo)*(bottom-top)}function x(i){return points.length===1?(left+right)/2:left+i/(points.length-1)*(right-left)}
- ctx.lineWidth=1;ctx.font='12px Roboto,Arial';ctx.textAlign='right';axis.values.forEach(function(value){var yy=Math.round(y(value))+.5;ctx.strokeStyle='#22302a';ctx.beginPath();ctx.moveTo(left,yy);ctx.lineTo(right,yy);ctx.stroke();ctx.fillStyle='#a7bab0';ctx.fillText(F.tick(value,axis),left-10,yy+4)});
+ ctx.lineWidth=1;ctx.font='12px Roboto';ctx.textAlign='right';axis.values.forEach(function(value){var yy=Math.round(y(value))+.5;ctx.strokeStyle='#22302a';ctx.beginPath();ctx.moveTo(left,yy);ctx.lineTo(right,yy);ctx.stroke();ctx.fillStyle='#a7bab0';ctx.fillText(F.tick(value,axis),left-10,yy+4)});
  // Band
- var first=-1;band.forEach(function(b,i){if(b&&first<0)first=i});if(first>=0){ctx.beginPath();for(var i=first;i<band.length;i++)ctx.lineTo(x(i),y(band[i].mean+band[i].sd));for(var j=band.length-1;j>=first;j--)ctx.lineTo(x(j),y(band[j].mean-band[j].sd));ctx.closePath();ctx.fillStyle='rgba(39,228,161,0.14)';ctx.fill()}
+ var first=-1;band.forEach(function(b,i){if(b&&first<0)first=i});el('legend-average').style.display=first>=0?'':'none';if(first>=0){ctx.beginPath();for(var i=first;i<band.length;i++)ctx.lineTo(x(i),y(band[i].mean+band[i].sd));for(var j=band.length-1;j>=first;j--)ctx.lineTo(x(j),y(band[j].mean-band[j].sd));ctx.closePath();ctx.fillStyle='#19402f';ctx.fill()}
  if(F.known(state.best)){ctx.strokeStyle='#a7bab0';if(ctx.setLineDash)ctx.setLineDash([5,5]);ctx.beginPath();ctx.moveTo(left,y(state.best));ctx.lineTo(right,y(state.best));ctx.stroke();if(ctx.setLineDash)ctx.setLineDash([]);ctx.fillStyle='#a7bab0';ctx.textAlign='right';ctx.fillText('Best '+number(state.best),right,y(state.best)-6)}
  points.forEach(function(p,i){chartPoints.push({x:x(i),y:y(p.score),data:p,avg:band[i]})});
- ctx.beginPath();chartPoints.forEach(function(p,i){if(i===0)ctx.moveTo(p.x,p.y);else ctx.lineTo(p.x,p.y)});ctx.strokeStyle='rgba(39,228,161,0.55)';ctx.lineWidth=1.5;ctx.stroke();
+ ctx.beginPath();chartPoints.forEach(function(p,i){if(i===0)ctx.moveTo(p.x,p.y);else ctx.lineTo(p.x,p.y)});ctx.strokeStyle='#1f9a6f';ctx.lineWidth=1.5;ctx.stroke();
  chartPoints.forEach(function(p){ctx.beginPath();ctx.arc(p.x,p.y,points.length>50?2:3,0,Math.PI*2);ctx.fillStyle='#27e4a1';ctx.fill()});
  if(first>=0){ctx.beginPath();for(var k=first;k<band.length;k++){if(k===first)ctx.moveTo(x(k),y(band[k].mean));else ctx.lineTo(x(k),y(band[k].mean))}ctx.strokeStyle='#c8f3e0';ctx.lineWidth=2.5;ctx.stroke()}
- ctx.fillStyle='#a7bab0';ctx.font='12px Roboto,Arial';ctx.textAlign='left';ctx.fillText(date(points[0].date),left,h-8);ctx.textAlign='right';ctx.fillText(date(points[points.length-1].date),right,h-8);}
+ ctx.fillStyle='#a7bab0';ctx.font='12px Roboto';ctx.textAlign='left';ctx.fillText(date(points[0].date),left,h-8);ctx.textAlign='right';ctx.fillText(date(points[points.length-1].date),right,h-8);}
 el('score-chart').onmousemove=function(e){if(!chartPoints.length)return;var rect=this.getBoundingClientRect(),x=e.clientX-rect.left,closest=chartPoints[0];chartPoints.forEach(function(p){if(Math.abs(p.x-x)<Math.abs(closest.x-x))closest=p});var tip=el('graph-tooltip');tip.textContent=F.dateTime(closest.data.date)+' · '+number(closest.data.score)+(F.known(closest.data.accuracy)?' · '+percent(closest.data.accuracy)+' accuracy':'')+(closest.avg?' · 5-run avg '+number(closest.avg.mean):'');tip.style.left=Math.max(15,Math.min(rect.width-330,closest.x+15))+'px';tip.style.top=Math.max(7,closest.y-20)+'px';tip.style.display='block'};el('score-chart').onmouseleave=function(){el('graph-tooltip').style.display='none'};
 function showScenarioHistory(){if(state&&state.selectedScenario)command('scenario\t'+escape(state.selectedScenario));change('history');}
 function drawTimeline(){if(active==='mechanics'&&state&&window.AimModMechanics)AimModMechanics.render(el('mechanics-workspace'),state,openRun,showScenarioHistory);}

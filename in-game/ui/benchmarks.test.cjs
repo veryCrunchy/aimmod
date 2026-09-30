@@ -29,7 +29,7 @@ test('search and rank filter use structured benchmark summaries',()=>{
 
  s.requests[0].finish(200,{linked:true,items:[item,{...item,id:8,name:'Unranked',rank:null}]});
 
- s.buttons().find(b=>b.textContent==='All ranks').onclick();
+ assert.equal(s.buttons().filter(b=>b.className==='benchmark-row benchmark-item').length,1);s.buttons().find(b=>b.textContent==='All').onclick();assert.equal(s.buttons().filter(b=>b.className==='benchmark-row benchmark-item').length,2);s.buttons().find(b=>b.textContent==='Ranked').onclick();
 
  assert.equal(s.buttons().filter(b=>b.className==='benchmark-row benchmark-item').length,1);
 
@@ -92,9 +92,16 @@ test('filtering keeps the same search field and large scores are grouped',()=>{
  assert.equal(s.all().find(e=>e.tag==='input'),input);assert.equal(s.buttons().filter(b=>b.className==='benchmark-row benchmark-item').length,1);assert.ok(s.all().some(e=>e.textContent==='Other <b>'));
  s.buttons().find(b=>b.className==='benchmark-row benchmark-item').onclick();s.requests[1].finish(200,{...item,categories:[{name:'Big',scenarios:[{name:'Large',score:12000,rank:null,thresholds:[{rank:'Gold',score:15500.5}]}]}]});
  assert.ok(s.all().some(e=>e.textContent==='12,000'));assert.ok(s.all().some(e=>e.textContent==='3,500.5 to Gold'));
- s.api.back();assert.ok(s.all().some(e=>e.textContent==='Benchmarks'));
+ s.api.back();assert.ok(s.all().some(e=>e.textContent==='Your benchmarks'));
 });
 test('unlinked accounts get a direct link action instead of empty filters',()=>{
  const s=setup();let opened;s.window.AimModWorkspace={open:p=>opened=p};s.api.enter(s.container);s.requests[0].finish(200,{linked:false,items:[]});
  assert.ok(!s.all().some(e=>e.tag==='input'));s.buttons().find(b=>b.textContent==='Link account').onclick();assert.equal(opened,'account');
+});
+test('Gameface: stand-alone buttons sit in flex action rows and CJK authors fall back',()=>{
+ const s=setup();s.api.enter(s.container);s.requests[0].finish(503,{});
+ const retry=s.buttons().find(b=>b.textContent==='Try again');assert.ok(s.all().some(e=>e.className==='actions'&&e.children.includes(retry)));
+ retry.onclick();s.requests[1].finish(200,{linked:true,items:[{...item,author:'小明',rank:{name:'Gold',index:3}}]});
+ assert.ok(!s.all().some(e=>/小明/.test(e.textContent||'')));assert.ok(s.all().some(e=>e.textContent==='Tracking'));
+ const rank=s.all().find(e=>e.className==='benchmark-rank is-ranked');assert.equal(rank.textContent,'Gold');assert.ok(rank.style.color);
 });

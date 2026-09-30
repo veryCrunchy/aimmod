@@ -19,7 +19,7 @@
     if(!container)return;while(container.firstChild)container.removeChild(container.firstChild);
     var panel=node('div','panel settings-card');panel.appendChild(node('h2','','Capture & privacy'));
     panel.appendChild(node('p','subtle','Choose what AimMod records and downloads.'));
-    if(!value){if(message)panel.appendChild(node('p','notice',message));var retry=node('button','button primary','Try again');retry.type='button';retry.onclick=load;panel.appendChild(retry);container.appendChild(panel);return;}
+    if(!value){if(message)panel.appendChild(node('p','notice',message));var retryRow=node('div','actions');var retry=node('button','button primary','Try again');retry.type='button';retry.onclick=load;retryRow.appendChild(retry);panel.appendChild(retryRow);container.appendChild(panel);return;}
     function toggle(key,title,description){
       var row=node('div','settings-row'),info=node('div','settings-info');info.appendChild(node('h3','',title));info.appendChild(node('p','subtle',description));row.appendChild(info);
       row.appendChild(node('span','switch-state',value[key]?'On':'Off'));
@@ -28,9 +28,11 @@
     toggle('replayRecordingEnabled','Record replays','Save new runs for in-game playback. Turning this off discards an unfinished recording; saved replays are kept.');
     toggle('hubHistoryEnabled','Download Hub history','Keep your linked account’s history up to date. Local runs and saved Hub history stay available when this is off.');
     if(message)panel.appendChild(node('p',ok?'saved-note':'notice',message));
-    container.appendChild(panel);
-    if(root.AimModHistoryImport)root.AimModHistoryImport.render(container);
-    var storage=node('div','panel settings-card');storage.appendChild(node('h2','','Replay library'));storage.appendChild(node('p','subtle','Favorite, export or delete replays from Replays. Exports are saved in Documents / AimMod / Replays.'));if(root.AimModWorkspace){var open=node('button','button','Open replays');open.type='button';open.onclick=function(){root.AimModWorkspace.open('replays');};storage.appendChild(open);}container.appendChild(storage);
+    // Two columns at wide sizes: preferences and library on the left, import on the right.
+    var columns=node('div','settings-columns'),left=node('div','settings-col'),right=node('div','settings-col');columns.appendChild(left);columns.appendChild(right);container.appendChild(columns);
+    left.appendChild(panel);
+    if(root.AimModHistoryImport)root.AimModHistoryImport.render(right,typeof value.statsFolder==='string'?value.statsFolder:'');
+    var storage=node('div','panel settings-card');storage.appendChild(node('h2','','Replay library'));storage.appendChild(node('p','subtle','Favorite, export or delete replays from Replays. Exports are saved in Documents / AimMod / Replays.'));if(root.AimModWorkspace){var openRow=node('div','actions');var open=node('button','button','Open replays');open.type='button';open.onclick=function(){root.AimModWorkspace.open('replays');};openRow.appendChild(open);storage.appendChild(openRow);}left.appendChild(storage);
   }
   function load(){send(null,function(ok,data){if(ok)value=data;render(ok?'':'Could not load your settings. Please try again.');});}
   root.AimModSettings={enter:function(element){leave();container=element;value=null;if(container){container.textContent='';var loading=node('div','panel settings-card');loading.appendChild(node('p','subtle','Loading settings…'));container.appendChild(loading);load();}},leave:leave};

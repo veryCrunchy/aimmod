@@ -73,6 +73,57 @@ test('workspace code avoids Intl-dependent formatting',()=>{
     assert.doesNotMatch(fs.readFileSync(path.join(__dirname,file),'utf8'),/toLocale(String|DateString|TimeString)\(|Intl\./,file);
   }
 });
+test('styles and scripts stay inside the Gameface feature set',()=>{
+  const dir=__dirname,css=fs.readdirSync(dir).filter(f=>f.endsWith('.css'));
+  const inline=fs.readFileSync(path.join(dir,'index.html'),'utf8').match(/<style>([\s\S]*?)<\/style>/)[1].replace(/\/\*[\s\S]*?\*\//g,'');
+  for(const [name,text] of [...css.map(f=>[f,fs.readFileSync(path.join(dir,f),'utf8').replace(/\/\*[\s\S]*?\*\//g,'')]),['index.html <style>',inline]]){
+    assert.doesNotMatch(text,/display:\s*(inline-)?grid|(^|[;{\s])(row-|column-)?gap\s*:|position:\s*sticky|var\(--|calc\(|@supports/,name);
+  }
+  const scripts=fs.readdirSync(dir).filter(f=>f.endsWith('.js')&&f!=='coaching.js').map(f=>path.join(dir,f)).concat(['browser.js','native-browser.js'].map(f=>path.join(dir,'..','replay',f)));
+  for(const file of scripts){const text=fs.readFileSync(file,'utf8');
+    assert.doesNotMatch(text,/\bfetch\(|AbortController|requestAnimationFrame|IntersectionObserver|ResizeObserver|\bPromise\b|=>/,file);
+    // clientWidth/clientHeight are missing in Gameface; only allowed as a fallback after offsetWidth.
+    for(const m of text.matchAll(/clientWidth|clientHeight/g)){const before=text.slice(Math.max(0,m.index-40),m.index);assert.match(before,/offsetWidth\|\|[\w.]*$/,file);}
+  }
+});
+// Rules below come from live Gameface rendering in KovaaK's 3.9.11.
+const uiDir=__dirname;
+function uiCss(){const out=fs.readdirSync(uiDir).filter(f=>f.endsWith('.css')).map(f=>[f,fs.readFileSync(path.join(uiDir,f),'utf8')]);out.push(['index.html <style>',fs.readFileSync(path.join(uiDir,'index.html'),'utf8').match(/<style>([\s\S]*?)<\/style>/)[1]]);return out.map(([n,t])=>[n,t.replace(/\/\*[\s\S]*?\*\//g,'')]);}
+function uiScripts(){return fs.readdirSync(uiDir).filter(f=>/\.(js|ts)$/.test(f)&&f!=='coaching.js').map(f=>[f,fs.readFileSync(path.join(uiDir,f),'utf8')]).concat(['browser.js','native-browser.js'].map(f=>['replay/'+f,fs.readFileSync(path.join(uiDir,'..','replay',f),'utf8')]),[['index.html',fs.readFileSync(path.join(uiDir,'index.html'),'utf8')]]);}
+test('Gameface: no inline-block or inline-flex (they lay out as blocks and stack controls)',()=>{
+  for(const [name,text] of uiCss())assert.doesNotMatch(text,/display:\s*inline/,name);
+  for(const [name,text] of uiScripts())assert.doesNotMatch(text,/display\s*=\s*['"]inline|display:\s*inline/,name);
+});
+test('Gameface: no inherit keyword (buttons fell back to a dark default colour)',()=>{
+  for(const [name,text] of uiCss())assert.doesNotMatch(text,/:\s*inherit\b|font:\s*inherit/,name);
+  assert.match(uiCss().find(([n])=>n==='index.html <style>')[1],/button\{[^}]*color:#eef5f1/);
+});
+test('Gameface: canvas text uses the loaded Roboto face, never a fallback list',()=>{
+  for(const [name,text] of uiScripts())for(const m of text.matchAll(/\.font\s*=\s*'([^']*)'/g))assert.match(m[1],/^(bold |600 )?\d+px Roboto$/,name+': '+m[1]);
+});
+test('Gameface: canvas colours are solid, not rgba',()=>{
+  for(const [name,text] of uiScripts())assert.doesNotMatch(text,/(fillStyle|strokeStyle)\s*=\s*['"]rgba|['"]rgba\(/,name);
+});
+test('Gameface: only glyphs the game font covers (no ▲ ▼ ★ › ▾ arrows)',()=>{
+  const ok=ch=>{const n=ch.codePointAt(0);return n<0x80||(n>=0xA0&&n<=0xFF)||[0x2013,0x2014,0x2018,0x2019,0x201C,0x201D,0x2026].includes(n);};
+  for(const [name,text] of uiScripts().concat(uiCss())){const bad=[...new Set([...text].filter(ch=>!ok(ch)))];assert.deepEqual(bad,[],name);}
+});
+test('Gameface: inputs never rely on placeholder text, and inline b/i elements are not used',()=>{
+  for(const [name,text] of uiScripts()){const code=text.replace(/\/\/.*$/gm,'').replace(/\/\*[\s\S]*?\*\//g,'');assert.doesNotMatch(code,/placeholder/,name);assert.doesNotMatch(code,/createElement\(['"](b|i|em)['"]\)|node\([^,]*,\s*['"](b|i|em)['"]|<(b|i|em)>|<i /,name);}
+});
+test('field() hint replaces the placeholder and hides once the input has a value',()=>{
+  const c=vm.createContext({});class El{constructor(t){this.tag=t;this.children=[];this.style={};this.attrs={};this.value='';this.listeners={};}appendChild(x){this.children.push(x);return x;}setAttribute(k,v){this.attrs[k]=v;}getAttribute(k){return this.attrs[k];}addEventListener(e,f){(this.listeners[e]=this.listeners[e]||[]).push(f);}}
+  c.window={document:{createElement:t=>new El(t)}};const G=loadFormat(c);const input=new El('input');const box=G.field(input,'Find a scenario');
+  const hint=box.children[1];assert.equal(hint.textContent,'Find a scenario');assert.equal(hint.style.display,'block');assert.equal(input.attrs['aria-label'],'Find a scenario');
+  input.value='abc';input.listeners.input.forEach(f=>f());assert.equal(hint.style.display,'none');input.value='';input.syncHint();assert.equal(hint.style.display,'block');
+});
+test('text in scripts the font lacks gets a readable fallback',()=>{
+  assert.equal(F.safeText('Voltaic','x'),'Voltaic');assert.equal(F.safeText('Ренат','x'),'Ренат');assert.equal(F.safeText('Ώρα','x'),'Ώρα');assert.equal(F.safeText('Café – S5','x'),'Café – S5');
+  assert.equal(F.safeText('小明的基准','Benchmark 3'),'Benchmark 3');assert.equal(F.safeText('   ','fallback'),'fallback');assert.equal(F.safeText(null),'');
+});
+test('count axes use whole-number ticks only',()=>{
+  for(const max of [1,2,3,5,7,13,48]){const axis=F.countTicks(max,4);assert.ok(axis.values.every(Number.isInteger),String(max));assert.ok(axis.max>=max);assert.equal(new Set(axis.values).size,axis.values.length);}
+});
 test('pages never send the capability path as a referrer',()=>{
   for(const file of ['index.html','overlay.html'])assert.match(fs.readFileSync(path.join(__dirname,file),'utf8'),/<meta name="referrer" content="no-referrer">/,file);
 });
