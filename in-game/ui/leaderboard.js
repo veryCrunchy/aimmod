@@ -5,7 +5,7 @@
  function button(label,cls){var b=node('button',label,cls||'button');b.type='button';return b;}
  function base(){var path=root.location&&root.location.pathname||'';return path.slice(0,path.lastIndexOf('/')+1);}
  function mount(container){if(!container)return;var opened=false,page=null,mode='records',shown=100,request=null,body,status,list;
-  var shell=node('div',undefined,'community-panel'),toggle=button('Browse community scores');toggle.setAttribute('aria-expanded','false');shell.appendChild(toggle);container.appendChild(shell);
+  var shell=node('div',undefined,'community-panel'),toggle=button('Browse community scores');toggle.setAttribute('aria-expanded','false');var head=node('div',undefined,'community-head'),copy=node('div',undefined,'community-copy');copy.appendChild(node('h2','Community scores'));copy.appendChild(node('p','Scenario records and top scores from AimMod Hub.','subtle'));head.appendChild(copy);head.appendChild(toggle);shell.appendChild(head);container.appendChild(shell);
   function unavailable(){status.textContent='Community scores are unavailable right now. Select Refresh to try again.';}
   function rows(){if(!list)return;while(list.firstChild)list.removeChild(list.firstChild);var data=page?(mode==='records'?page.records:page.topScores)||[]:[];if(!data.length){list.appendChild(node('p',page?'No scores to show yet.':'','community-empty'));return;}
    for(var i=0;i<Math.min(data.length,shown);i++){var r=data[i]||{},row=node('div',undefined,'community-row'),left=node('div',undefined,'community-player'),right=node('div',undefined,'community-score');

@@ -31,6 +31,13 @@
   }
   var detailPage=null,categoryIndex=0,scenarioQuery='',openScenario=-1;
   function thresholdsFor(scenario){return (scenario.thresholds||[]).filter(function(t){return typeof t.score==='number'&&isFinite(t.score)&&t.score>=0;}).sort(function(a,b){return a.score-b.score;});}
+  // Rank ladder: each threshold gets an equal step so low ranks stay readable;
+  // the fill moves linearly between the thresholds around your score.
+  function ladderPosition(score,thresholds){var n=thresholds.length;if(!n||typeof score!=='number'||!isFinite(score)||score<=0)return 0;for(var i=0;i<n;i++){if(score<thresholds[i].score){var from=i?thresholds[i-1].score:0,span=thresholds[i].score-from;return (i+(span>0?(score-from)/span:0))/n;}}return 1;}
+  function ladder(scenario,thresholds){var box=el('div','benchmark-ladder'),track=el('div','benchmark-ladder-track'),fill=el('div','benchmark-ladder-fill');var position=ladderPosition(scenario.score,thresholds);fill.style.width=Math.round(position*1000)/10+'%';track.appendChild(fill);
+    thresholds.forEach(function(t,i){var tick=el('span','benchmark-ladder-tick'+(scenario.score>=t.score?' reached':''));tick.style.left=Math.round((i+1)/thresholds.length*1000)/10+'%';track.appendChild(tick);});box.appendChild(track);
+    var labels=el('div','benchmark-ladder-labels');thresholds.forEach(function(t){var label=el('span','benchmark-ladder-label'+(scenario.score>=t.score?' reached':''),t.rank);label.style.width=Math.floor(1000/thresholds.length)/10+'%';labels.appendChild(label);});box.appendChild(labels);
+    track.setAttribute('role','img');track.setAttribute('aria-label','Rank ladder: '+(scenario.rank?scenario.rank.name:'Unranked')+', '+number(scenario.score)+' points');return box;}
   function nextFor(scenario,thresholds){for(var i=0;i<thresholds.length;i++)if(thresholds[i].score>scenario.score)return thresholds[i];return null;}
   function drawDetail(){
     if(!container||!detailPage)return;clear();var page=detailPage;
@@ -60,6 +67,7 @@
         if(next){var track=el('span','benchmark-progress'),fill=el('span','benchmark-progress-fill');fill.style.width=Math.max(0,Math.min(100,scenario.score/next.score*100))+'%';track.setAttribute('role','progressbar');track.setAttribute('aria-label',scenario.name+' progress to '+next.rank);track.setAttribute('aria-valuemin','0');track.setAttribute('aria-valuemax',String(next.score));track.setAttribute('aria-valuenow',String(Math.max(0,scenario.score)));track.appendChild(fill);progress.appendChild(track);}row.appendChild(progress);row.appendChild(el('span','benchmark-col-4',isOpen?'−':'+'));panel.appendChild(row);
         if(!isOpen)return;
         var details=el('div','benchmark-expanded');details.appendChild(el('h4','',scenario.name));var actions=el('div','benchmark-detail-actions');actions.appendChild(el('span','subtle',next?number(next.score-scenario.score)+' to '+next.rank+' · '+number(next.score)+' target':thresholds.length?'Highest listed target reached':'Thresholds unavailable'));if(onScenario)actions.appendChild(button('View stats',function(){onScenario(scenario.name);}));details.appendChild(actions);
+        if(thresholds.length)details.appendChild(ladder(scenario,thresholds));
         var ranks=el('div','benchmark-rank-table'),rankHeader=el('div','benchmark-rank-line benchmark-compact-head');['Rank','Target score','Your progress'].forEach(function(label){rankHeader.appendChild(el('span','',label));});ranks.appendChild(rankHeader);
         thresholds.forEach(function(t){var achieved=scenario.score>=t.score,line=el('div','benchmark-rank-line'+(achieved?' achieved':''));line.appendChild(el('span','',t.rank));line.appendChild(el('strong','',number(t.score)));line.appendChild(el('span','',achieved?'Reached':number(t.score-scenario.score)+' remaining'));ranks.appendChild(line);});if(thresholds.length)details.appendChild(ranks);panel.appendChild(details);
       });
