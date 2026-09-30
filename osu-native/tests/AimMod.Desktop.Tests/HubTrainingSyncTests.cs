@@ -25,7 +25,7 @@ public sealed class HubTrainingSyncTests
         directory = Path.Combine(Path.GetTempPath(), "aimmod-training-tests-" + Guid.NewGuid().ToString("N"));
         preferences = new(Path.Combine(directory, "preferences.json"));
         await preferences.SaveAsync(new(TrainingSyncEnabled: true, TrainingPublicSharing: false));
-        credentials.Value = new("synthetic-token", "practice-player", DateTimeOffset.UtcNow);
+        credentials.Value = new("synthetic-token", "practice-player", DateTimeOffset.UtcNow); credentials.Failure = null;
         account = 123; handler = new(); client = new(handler);
     }
     [TearDown] public void TearDown() { client.Dispose(); if (Directory.Exists(directory)) Directory.Delete(directory, true); }
@@ -192,6 +192,18 @@ public sealed class HubTrainingSyncTests
         handler.Release.SetResult(); await upload;
         Assert.That(JsonSerializer.Deserialize<HubTrainingSyncService.Pending[]>(File.ReadAllText(queue), json), Has.Length.EqualTo(1));
     }
+    [Test] public async Task UnexpectedFailureDoesNotStopBackgroundRetries()
+    {
+        service().BeginSession()!(result()); await waitQueued();
+        credentials.Failure = new CryptographicException("synthetic");
+        using var cancellation = new CancellationTokenSource();
+        Task running = service().RunAsync(cancellation.Token);
+        await Task.Delay(200);
+        Assert.That(running.IsCompleted, Is.False);
+        cancellation.Cancel();
+        await running;
+        Assert.That(handler.Requests, Is.Empty);
+    }
     private sealed class Handler : HttpMessageHandler
     {
         public HttpStatusCode Status = HttpStatusCode.OK;
@@ -210,7 +222,8 @@ public sealed class HubTrainingSyncTests
     private sealed class Credentials : IHubCredentialStore
     {
         public HubCredential? Value;
-        public HubCredential? Load() => Value;
+        public Exception? Failure;
+        public HubCredential? Load() => Failure is null ? Value : throw Failure;
         public Task SaveAsync(HubCredential credential, CancellationToken cancellationToken = default) { Value = credential; return Task.CompletedTask; }
         public void Clear() => Value = null;
     }
