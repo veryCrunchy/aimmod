@@ -18,6 +18,9 @@ local proofFrame,currentMeta
 local lastPreflightError
 local lastWorkerHeartbeat
 local rejectedData
+local presenterCount,presenterSeen,publishedProxies,publishedVersion
+local presenting=false
+local motion,motionClock,motionAt,realClock
 local function finite(n)return type(n)=='number' and n==n and math.abs(n)<1e12 end
 local function read(name,max)
     local file=io.open(base..name,'rb');if not file then return end
@@ -113,6 +116,9 @@ function M.parse(data)
             local previous=frame.motion[#frame.motion]
             assert(#frame.motion<64 and m[1]>=frame.time.time-0.0001 and (not previous or m[1]>=previous[1]) and m[8]>1 and m[8]<179,'invalid replay motion')
             frame.motion[#frame.motion+1]=m
+        elseif row[1]=='clock' then
+            -- Wall-clock publication instant for the native presenter.
+            assert(v6 and #row==3 and tonumber(row[2]) and finite(tonumber(row[3])),'invalid replay clock')
         elseif row[1]=='velocity' then
             assert(v6 and #row==5,'invalid replay velocity')
             local id,x,y,z=tonumber(row[2]),tonumber(row[3]),tonumber(row[4]),tonumber(row[5])
@@ -140,6 +146,8 @@ local function close()
     if active and onExit then pcall(onExit)end
     active=false;lastData=nil;lastRevision=nil;currentId=nil;proofActive=false;proofFrame=nil;currentMeta=nil;lastWorkerHeartbeat=nil
     motion=nil;motionClock=nil;motionAt=nil
+    if publishedProxies then publish('replay-proxies.tsv','AIMMOD_PROXIES_1\n');publishedProxies=nil;publishedVersion=nil end
+    presenting=false
     ack(approved and 'ready' or 'unverified','validated')
     if safety then safety.snapshot()end
 end
@@ -167,7 +175,6 @@ end
 -- is pulled gently toward the published time, so the view moves at render
 -- rate instead of the 30 Hz publication rate. Targets are extrapolated with
 -- their published velocity until the next frame.
-local motion,motionClock,motionAt,realClock
 local function realTime()
     local ok,value=pcall(function()
         if not realClock or not realClock:IsValid() then realClock=StaticFindObject('/Script/Engine.Default__GameplayStatics')end
@@ -206,11 +213,25 @@ local function takeMotion(frame,now)
     motion={samples=frame.motion,time=published,speed=frame.time.speed,actors=frame.actors,velocity=frame.velocity or {}}
     if now then motionAt=now;applyMotion(now)end
 end
+-- Native presenter (AimModCore) handshake: while its apply count advances it
+-- owns the view and target locations; Lua then only spawns and styles.
+local function presenterActive()
+    local raw=read('replay-presenter.tsv',64)
+    local count=raw and tonumber(raw:match('^AIMMOD_PRESENTER_1\t%d+\t(%d+)'))
+    if count and count>0 and count~=presenterCount then presenterSeen=0 else presenterSeen=(presenterSeen or 3)+1 end
+    if count then presenterCount=count end
+    return presenterSeen~=nil and presenterSeen<=2
+end
+local function publishProxies()
+    if not scene or not scene.proxies or (publishedProxies and scene.proxyVersion==publishedVersion) then return end
+    local ok,body=pcall(scene.proxies)
+    if ok and (body==publishedProxies or publish('replay-proxies.tsv',body))then publishedProxies=body;publishedVersion=scene.proxyVersion end
+end
 local motionStarted=false
 local function startMotionLoop()
     if motionStarted then return end;motionStarted=true
     LoopInGameThreadWithDelay(1,function()
-        if not motion then return end
+        if not motion or presenting then return end
         local ok,reason=pcall(function()local now=realTime();if now then applyMotion(now)end end)
         if not ok then motion=nil;print('[AimModReplay] motion playback stopped: '..tostring(reason)..'\n')end
     end)
@@ -264,6 +285,7 @@ function M.attach(menu,enter,leave)
                 assert(workerAvailable(now),'replay worker unavailable')
             end
             if now>=nextAck then nextAck=now+1;ack(approved and 'ready' or (errorCode and 'error' or 'unverified'),errorCode or (approved and 'validated' or 'checking-world'))end
+            if active then presenting=presenterActive() end
             local data=read('replay-frame.tsv',524288)
             if not data or data==lastData or (not active and data==rejectedData) then
                 if active and scene then scene.verify()end
@@ -283,7 +305,7 @@ function M.attach(menu,enter,leave)
                 Scene.verify(owner,frame.meta)
                 scene=Scene.create(owner);scene.bind(frame.meta)
                 -- Window closes only after the scene has verified map and score isolation.
-                scene.frame(frame);active=true;currentId=frame.meta.id;currentMeta=frame.meta
+                scene.frame(frame);active=true;currentId=frame.meta.id;currentMeta=frame.meta;publishProxies()
                 if onEnter then onEnter()end
                 hud=HUD.create(owner,send)
                 effects=Effects.create(owner)
@@ -292,9 +314,9 @@ function M.attach(menu,enter,leave)
             else
                 assert(frame.meta.scenario==currentMeta.scenario,'scenario-mismatch')
                 assert(frame.meta.mapName==currentMeta.mapName and frame.meta.mapScale==currentMeta.mapScale,'map-mismatch')
-                scene.frame(frame)
+                scene.frame(frame,frame.time.playing and presenting);publishProxies()
             end
-            takeMotion(frame,frame.motion and realTime() or nil)
+            if presenting then motion=nil else takeMotion(frame,frame.motion and realTime() or nil)end
             if motion then startMotionLoop()end
             local feedback=effects and effects.update(frame) or false
             if healthBars then healthBars.update(frame)end

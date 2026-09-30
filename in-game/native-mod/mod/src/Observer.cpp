@@ -101,7 +101,7 @@ namespace aimmod
     Observer::Observer(Output& output, std::string version)
         : m_output(output), m_version(std::move(version)),
           m_lifecycle(std::to_string(static_cast<long long>(std::time(nullptr))) + "-" + std::to_string(GetCurrentProcessId())),
-          m_sampler(m_b, m_scene, output)
+          m_sampler(m_b, m_scene, output), m_presenter(m_b, m_scene, output)
     {
     }
 
@@ -118,6 +118,7 @@ namespace aimmod
         std::string caps;
         if (m_b.lifecycleReady()) caps = "telemetry";
         if (m_b.replayReady()) caps += caps.empty() ? "replay" : ",replay";
+        if (m_presenter.ready()) caps += caps.empty() ? "presenter" : ",presenter";
         return caps;
     }
 
@@ -180,6 +181,19 @@ namespace aimmod
                 }
                 OnTick();
             }, tick);
+            id != ERROR_ID)
+            m_callbacks.push_back(id);
+
+        // Replay presentation before the world ticks, so this frame's camera
+        // update renders the pose at this frame's playback instant.
+        FCallbackOptions present{};
+        present.bReadonly = true;
+        present.OwnerModName = STR("AimModCore");
+        present.HookName = STR("AimModCore.Present");
+        if (auto id = RegisterEngineTickPreCallback([this](TCallbackIterationData<void>&, UEngine*, float, bool) {
+                if (m_shutdown.load(std::memory_order_relaxed) || !OnGameThread()) return;
+                m_presenter.Apply();
+            }, present);
             id != ERROR_ID)
             m_callbacks.push_back(id);
 
@@ -290,7 +304,9 @@ namespace aimmod
         if (m_initialized.exchange(true)) return;
         m_mainThread = FindMainThread();
         BindFunctions();
+        m_presenter.Bind();
         RegisterCallbacks();
+        m_presenter.Start();
         m_output.SetCapabilities(Capabilities());
         m_output.PublishLive(FormatLiveOverlay({}));
         m_output.PublishReplayStatus(FormatReplayStatus(m_b.replayReady() ? "ready" : "unsupported", 0, 0, ""));
@@ -308,6 +324,7 @@ namespace aimmod
         if (!m_initialized.load() || m_shutdown.exchange(true)) return;
         for (std::uint64_t id : m_callbacks) RC::Unreal::Hook::UnregisterCallback(id);
         m_callbacks.clear();
+        m_presenter.Stop();
         for (auto& [function, ids] : m_hooks) UObjectGlobals::UnregisterHook(function, ids);
         m_hooks.clear();
         for (auto& hook : m_inputHooks) UObjectGlobals::UnregisterHook(hook->function, hook->ids);

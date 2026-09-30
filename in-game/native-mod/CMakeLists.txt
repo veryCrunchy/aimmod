@@ -29,6 +29,7 @@ add_library(aimmod_core STATIC
     core/src/ReplayWriter.cpp
     core/src/ReplayV2.cpp
     core/src/GameStats.cpp
+    core/src/PlaybackFrame.cpp
     core/src/Supervisor.cpp
     core/src/Settings.cpp
 )
@@ -55,6 +56,7 @@ if(AIMMOD_BUILD_MOD)
         mod/src/Observer.cpp
         mod/src/ReplaySampler.cpp
         mod/src/World.cpp
+        mod/src/Presenter.cpp
         mod/src/Output.cpp
         mod/src/ServiceHost.cpp
     )

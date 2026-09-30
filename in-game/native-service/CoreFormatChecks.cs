@@ -63,6 +63,8 @@ static class CoreFormatChecks
             var motionRows = lines.Where(l => l.StartsWith("motion\t")).ToArray();
             Check(motionRows.Length is > 2 and <= NativeReplayPlayback.MotionSamples && motionRows.All(l => l.Split('\t').Length == 9), "motion window rows");
             Check(lines.Any(l => l.StartsWith("velocity\t1\t")), "target velocity row");
+            Check(lines.Count(l => l.StartsWith("clock\t") && l.Split('\t').Length == 3 && long.TryParse(l.Split('\t')[1], out var ms) && Math.Abs(ms - DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()) < 5000) == 1 && !paused.Contains("\nclock\t"),
+                "publication clock row only while playing");
             var legacy = new NativeReplayPlayback(root, () => true, () => 5);
             legacy.Load(compact); legacy.Command("play");
             Check(!legacy.Snapshot().Contains("motion\t"), "older renderers receive protocol 5 frames");

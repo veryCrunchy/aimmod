@@ -2,6 +2,7 @@
 // Usage: aimmod_core_tests [--write-samples <dir>]
 #include <aimmod/Formats.hpp>
 #include <aimmod/GameStats.hpp>
+#include <aimmod/PlaybackFrame.hpp>
 #include <aimmod/Lifecycle.hpp>
 #include <aimmod/ReplayV2.hpp>
 #include <aimmod/ReplayWriter.hpp>
@@ -227,6 +228,23 @@ static void GameStatsChecks()
     CHECK(s && s->challengeStartSeconds && std::fabs(*s->challengeStartSeconds - (3600 + 11 * 60 + 40.178)) < 1e-6, "challenge start parsed");
     CHECK(!ParseGameStats("Scenario:,x\n") && !ParseGameStats("Score:,nan\nScenario:,x\n"), "incomplete stats rejected");
     CHECK(IsChallengeStatsFile("Synthetic - Challenge - 2026.10.01-01.12.40 Stats.csv") && !IsChallengeStatsFile("notes.csv"), "stats file name");
+}
+
+static void PlaybackChecks()
+{
+    const char* text = "AIMMOD_REPLAY_6\t7\t1\nmeta\tid\tS\tM\t1\ntime\t5\t60\t1\t1\ncamera\t0\t0\t0\t0\t0\t0\t90\n"
+                       "actor\t1\t100\t0\t0\t10\t20\nclock\t1000000\t5\nmotion\t5\t0\t0\t0\t0\t170\t0\t90\n"
+                       "motion\t5.1\t0\t0\t0\t1\t-170\t0\t90\nvelocity\t1\t100\t0\t0\n";
+    auto f = ParsePlaybackFrame(text);
+    CHECK(f && f->revision == 7 && f->playing && f->clockUnixMs == 1000000 && f->motion.size() == 2 && f->targets.size() == 1 && f->targets[0].moving,
+          "protocol 6 frame parsed");
+    if (!f) return;
+    CHECK(std::fabs(PlaybackTime(*f, 1000050) - 5.05) < 1e-9, "playback time from the publication clock");
+    CHECK(PlaybackTime(*f, 1009999) == 5.1, "clamped to the motion window");
+    double pose[7];
+    CHECK(CameraAt(*f, 5.05, pose) && std::fabs(pose[3] - 0.5) < 1e-9 && std::fabs(std::fabs(pose[4]) - 180) < 1e-9, "yaw interpolates across the wrap");
+    CHECK(!ParsePlaybackFrame("AIMMOD_REPLAY_5\t1\t1\n") && !ParsePlaybackFrame("AIMMOD_REPLAY_6\t1\t1\nvelocity\t9\t0\t0\t0\n"),
+          "other protocols and orphan rows rejected");
 }
 
 static void Settings()
@@ -524,6 +542,7 @@ int main(int argc, char** argv)
     Replay();
     ReplayFormat2();
     GameStatsChecks();
+    PlaybackChecks();
     Settings();
     Backoff();
     LifecycleChecks();
