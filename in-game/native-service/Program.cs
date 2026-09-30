@@ -4,19 +4,34 @@ using System.Text.Json;
 using AimMod.InGame;
 
 CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
-if (args.Contains("--self-test")) { Checks.Run(); HistoryCompletenessChecks.Run(); CsvHistoryChecks.Run(); await HubChecks.Run(); HubPaginationChecks.Run(); await HubLeaderboardChecks.Run(); Coaching.SelfTest(); CoachingFeedbackChecks.Run(); StatsChecks.Run(); WarmupChecks.Run(); RunInspectionChecks.Run(); NativeSettingsChecks.Run(); LiveOverlayChecks.Run(); LiveOverlayFeedChecks.Run(); OverlaySettingsChecks.Run(); await ObsOverlayChecks.Run(); BenchmarkChecks.Run(); ReplayLibraryChecks.Run(); await WorkspaceChecks.Run(); ReplayChecks.Run(); ReplayKeyboardChecks.Run(); await NativeReplayPlaybackChecks.Run(); return; }
+if (args.Contains("--self-test")) { Checks.Run(); HistoryCompletenessChecks.Run(); CsvHistoryChecks.Run(); await HubChecks.Run(); HubPaginationChecks.Run(); await HubLeaderboardChecks.Run(); Coaching.SelfTest(); CoachingFeedbackChecks.Run(); StatsChecks.Run(); WarmupChecks.Run(); RunInspectionChecks.Run(); NativeSettingsChecks.Run(); LiveOverlayChecks.Run(); LiveOverlayFeedChecks.Run(); OverlaySettingsChecks.Run(); await ObsOverlayChecks.Run(); BenchmarkChecks.Run(); ReplayLibraryChecks.Run(); await WorkspaceChecks.Run(); ReplayChecks.Run(); ReplayKeyboardChecks.Run(); await NativeReplayPlaybackChecks.Run(); await HardeningChecks.Run(); return; }
 var output = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AimMod", "KovaaksNative");
 var database = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "com.verycrunchy.kovaaks", "stats.sqlite3");
+var exitWithGame = false;
 for (int i = 0; i < args.Length; i++)
 {
     if (args[i] == "--output" && i + 1 < args.Length) output = Path.GetFullPath(args[++i]);
     else if (args[i] == "--history" && i + 1 < args.Length) database = Path.GetFullPath(args[++i]);
+    else if (args[i] == "--exit-with-game") exitWithGame = true;
 }
 Directory.CreateDirectory(output);
 using var singleton = new Mutex(true, "Local\\AimMod.KovaaksNative.History", out var ownsMutex);
-if (!ownsMutex) return;
+if (!ownsMutex) { Console.Error.WriteLine("Another AimMod worker is already running for this user."); return; }
 using var cancellation = new CancellationTokenSource();
+using var stopped = new ManualResetEventSlim(false);
+// Ctrl+C, console window close, logoff and shutdown all request the same
+// graceful stop: the listeners close, playback publishes a closed frame and
+// the published URLs/heartbeat are retracted. Close/shutdown handlers wait
+// briefly because Windows terminates the process when they return.
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cancellation.Cancel(); };
+void RequestStop(System.Runtime.InteropServices.PosixSignalContext context)
+{
+    context.Cancel = true;
+    try { cancellation.Cancel(); stopped.Wait(TimeSpan.FromSeconds(4)); } catch (ObjectDisposedException) { }
+}
+using var hangup = System.Runtime.InteropServices.PosixSignalRegistration.Create(System.Runtime.InteropServices.PosixSignal.SIGHUP, RequestStop);
+using var terminate = System.Runtime.InteropServices.PosixSignalRegistration.Create(System.Runtime.InteropServices.PosixSignal.SIGTERM, RequestStop);
+var gameWatch = exitWithGame ? new GameProcessWatch() : null;
 string? fingerprint = null;
 string? localFingerprint = null;
 IReadOnlyList<Run> localRuns = [];
@@ -26,9 +41,13 @@ string? detailsFingerprint = null;
 var settings = new NativeSettings(output);
 using var hub = new Hub(output, historyEnabled: () => settings.Current.HubHistoryEnabled);
 var csvHistory = new CsvHistory(output);
+var failures = 0;
+try
+{
 await using var workspace = new WorkspaceHost(hub, output, database, settings, csvHistory);
 await workspace.Start(cancellation.Token);
-File.WriteAllText(Path.Combine(output, "workspace-url.txt"), workspace.Url);
+var workspaceUrlPath = Path.Combine(output, "workspace-url.txt");
+AtomicFile.WriteText(workspaceUrlPath, workspace.Url);
 try
 {
     while (!cancellation.IsCancellationRequested)
@@ -57,9 +76,7 @@ try
                 workspace.UpdateHistory(runs);
                 workspace.Update(WorkspaceData.Build(runs, hub, details,measurements));
                 var content = Views.Encode(Views.Build(runs, hub.HistoryPage, hub.SelectedScenario).Concat(hub.Rows()));
-                var temp = Path.Combine(output, "views.next");
-                File.WriteAllText(temp, content, new UTF8Encoding(false));
-                File.Move(temp, Path.Combine(output, "views.tsv"), true);
+                AtomicFile.WriteText(Path.Combine(output, "views.tsv"), content);
                 var scenario = hub.SelectedScenario.Length > 0 ? hub.SelectedScenario : runs.FirstOrDefault()?.Scenario;
                 var scenarioRuns = runs.Where(r => r.Scenario.Equals(scenario,StringComparison.OrdinalIgnoreCase)).ToArray();
                 var points = scenarioRuns.Take(80).Reverse().ToArray();
@@ -67,24 +84,58 @@ try
                     data=points.Select(r=>r.Score), labels=points.Select(r=>r.Timestamp),
                     personalBest=scenarioRuns.Length>0 ? scenarioRuns.Max(r=>r.Score) : 0,
                     sessionBest=0, primaryColor="27E4A1FF" });
-                var graphTemp=Path.Combine(output,"graph.next");
-                File.WriteAllText(graphTemp,graph,new UTF8Encoding(false));
-                File.Move(graphTemp,Path.Combine(output,"graph.json"),true);
+                AtomicFile.WriteText(Path.Combine(output,"graph.json"),graph);
                 fingerprint = next;
                 Console.WriteLine($"Refreshed {runs.Length} history records.");
             }
+            failures = 0;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         { Console.Error.WriteLine($"History refresh failed: {ex.Message}"); }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellation.IsCancellationRequested)
+        {
+            // Unexpected data must not terminate the worker the game depends on.
+            // Back off so a persistent fault does not spin, and never log payloads.
+            failures = Math.Min(failures + 1, 30);
+            Console.Error.WriteLine($"History refresh failed unexpectedly ({ex.GetType().Name}).");
+        }
         if (args.Contains("--once")) break;
-        await Task.Delay(TimeSpan.FromSeconds(1), cancellation.Token);
+        if (gameWatch?.Exited() == true) { Console.WriteLine("KovaaK's exited; stopping."); break; }
+        await Task.Delay(TimeSpan.FromSeconds(1 + failures), cancellation.Token);
     }
 }
 catch (OperationCanceledException) { }
+finally { AtomicFile.DeleteIfContent(workspaceUrlPath, workspace.Url); }
+}
+finally { stopped.Set(); }
 
 namespace AimMod.InGame
 {
     record Row(string Page, string Heading, string Body);
+    // Optional (--exit-with-game): stop after KovaaK's has been observed and then
+    // closes, so a worker started alongside the game does not outlive it. The
+    // worker never starts, stops or attaches to the game process.
+    sealed class GameProcessWatch(Func<bool>? running = null)
+    {
+        const string GameProcess = "FPSAimTrainer-Win64-Shipping";
+        readonly Func<bool> isRunning = running ?? Running;
+        bool seen;
+        long nextCheck;
+        static bool Running()
+        {
+            var processes = System.Diagnostics.Process.GetProcessesByName(GameProcess);
+            try { return processes.Length > 0; }
+            finally { foreach (var process in processes) process.Dispose(); }
+        }
+        public bool Exited(bool force = false)
+        {
+            var now = System.Diagnostics.Stopwatch.GetTimestamp();
+            if (!force && now < nextCheck) return false;
+            nextCheck = now + 5 * System.Diagnostics.Stopwatch.Frequency;
+            if (isRunning()) { seen = true; return false; }
+            return seen;
+        }
+    }
     static class Views
     {
         public static string Escape(string text) => text.Replace("%", "%25").Replace("\t", "%09").Replace("\r", "%0D").Replace("\n", "%0A");
@@ -163,7 +214,12 @@ namespace AimMod.InGame
             Assert(NativeRuns.Parse("run\tid\tScenario\tNaN\t90\t60\t1\t1\t2026-01-01") is null, "Reject non-finite score");
             Assert(NativeRuns.Parse("run\tid\tScenario\t10\t90\t\t1\t1\t2026-01-01") is null, "Reject unknown duration");
             Assert(NativeRuns.Decode("A%2509%09B") == "A%09\tB", "Decode once only");
-            Console.WriteLine("8 native history checks passed.");
+            var running = false;
+            var watch = new GameProcessWatch(() => running);
+            Assert(!watch.Exited(true), "Worker keeps running before the game is observed");
+            running = true; Assert(!watch.Exited(true), "Running game keeps worker alive");
+            running = false; Assert(watch.Exited(true), "Observed game exit stops the worker");
+            Console.WriteLine("11 native history checks passed.");
         }
     }
 }

@@ -1,10 +1,7 @@
-using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Logging;
 
 namespace AimMod.InGame;
 
@@ -20,8 +17,17 @@ sealed class WorkspaceHost : IAsyncDisposable
     readonly string outputFolder;
     readonly LiveOverlayFeed liveFeed = new();
     Run[] overlayRuns = [];
-    public void UpdateHistory(Run[] runs) => Volatile.Write(ref overlayRuns, runs);
-    object OverlayState() => new { live = opponents.Apply(liveFeed.Read(outputFolder, Volatile.Read(ref overlayRuns))), settings = overlaySettings.Current with { Layouts = [] } };
+    IReadOnlyDictionary<string, Run> personalBests = new Dictionary<string, Run>();
+    string? overlayUrl;
+    // Overlay sources poll several times a second; resolve personal bests once
+    // per history revision instead of scanning the complete history per poll.
+    public void UpdateHistory(Run[] runs)
+    {
+        Volatile.Write(ref personalBests, LiveOverlayState.PersonalBests(runs));
+        Volatile.Write(ref overlayRuns, runs);
+    }
+    Run? PersonalBest(string scenario) => Volatile.Read(ref personalBests).GetValueOrDefault(scenario);
+    object OverlayState() => new { live = opponents.Apply(liveFeed.Accept(LiveOverlayState.Read(outputFolder, PersonalBest, playback.Visible), DateTime.UtcNow)), settings = overlaySettings.Current with { Layouts = [] } };
     object ObsState() => overlaySettings.Current.ObsEnabled ? OverlayState() : new { live = new { available = false, active = false }, settings = overlaySettings.Current with { Layouts = [] } };
     internal static int ReadRendererProtocol(string path) => new RendererAcknowledgement(path).Read().Protocol;
     bool RendererReady => renderer.Read().Ready;
@@ -41,12 +47,11 @@ sealed class WorkspaceHost : IAsyncDisposable
         renderer = new RendererAcknowledgement(Path.Combine(output, "native-replay-renderer.json"));
         playback = new NativeReplayPlayback(output, () => RendererReady, () => renderer.Read().Protocol);
         keyboard = new ReplayKeyboard(playback, output);
-        var builder = WebApplication.CreateSlimBuilder();
-        builder.Logging.ClearProviders();
-        builder.WebHost.ConfigureKestrel(options => options.Listen(IPAddress.Loopback, 0));
-        app = builder.Build();
+        app = LoopbackServer.Build(0);
+        // 192 random bits; compared in constant time before routing.
         var capability = Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
         var prefix = "/" + capability;
+        LoopbackServer.UseGuards(app, capability);
         (settings ?? new NativeSettings(output)).MapEndpoints(app, prefix);
         overlaySettings.MapEndpoints(app, prefix);
         new CoachingFeedback(output).MapEndpoints(app, prefix);
@@ -59,7 +64,7 @@ sealed class WorkspaceHost : IAsyncDisposable
                 using var doc = await System.Text.Json.JsonDocument.ParseAsync(context.Request.Body, cancellationToken: context.RequestAborted);
                 if (!doc.RootElement.TryGetProperty("directory", out var value) || value.ValueKind != System.Text.Json.JsonValueKind.String) return Results.BadRequest();
                 var directory = value.GetString();
-                if (string.IsNullOrWhiteSpace(directory) || directory.Length > 1024 || !Path.IsPathFullyQualified(directory)) return Results.BadRequest();
+                if (!CsvHistory.AcceptableDirectory(directory)) return Results.BadRequest();
                 var result = await Task.Run(() => importedHistory.Import(directory, Volatile.Read(ref overlayRuns)));
                 return Results.Json(result);
             } catch (Exception ex) when (ex is System.Text.Json.JsonException or ArgumentException or InvalidOperationException) { return Results.BadRequest(); }
@@ -87,13 +92,6 @@ sealed class WorkspaceHost : IAsyncDisposable
         var html = reader.ReadToEnd();
         var replays = new ReplayCatalog(output);
         var library = new ReplayLibrary(replays, output);
-        app.Use(async (context, next) =>
-        {
-            if (context.Request.Host.Host != "127.0.0.1") { context.Response.StatusCode = 403; return; }
-            context.Response.Headers.CacheControl = "no-store";
-            context.Response.Headers.XContentTypeOptions = "nosniff";
-            await next(context);
-        });
         app.MapGet(prefix + "/ui", () => Results.Content(html, "text/html", Encoding.UTF8));
         app.MapGet(prefix + "/settings.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.SettingsScript")!, "application/javascript"));
         app.MapGet(prefix + "/coaching.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.CoachingScript")!, "application/javascript"));
@@ -107,12 +105,12 @@ sealed class WorkspaceHost : IAsyncDisposable
         app.MapGet(prefix + "/leaderboard.css", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.LeaderboardStyle")!, "text/css"));
         app.MapGet(prefix + "/leaderboard", async (string? scenarioType, CancellationToken token) => {
             try { var page = await hub.Leaderboard(scenarioType ?? "", token); return page is null ? Results.BadRequest() : Results.Json(page); }
-            catch (Exception ex) when (ex is IOException or HttpRequestException or System.Text.Json.JsonException) { return Results.StatusCode(503); }
+            catch (Exception ex) when (HubUnavailable(ex, token)) { return Results.StatusCode(503); }
         });
         app.MapGet(prefix + "/benchmark", async (uint id, CancellationToken token) => {
             if (id == 0) return Results.BadRequest();
             try { var detail = await hub.BenchmarkPage(id, token); return detail is null ? Results.NotFound() : Results.Json(detail); }
-            catch (Exception ex) when (ex is IOException or HttpRequestException or System.Text.Json.JsonException) { return Results.StatusCode(503); }
+            catch (Exception ex) when (HubUnavailable(ex, token)) { return Results.StatusCode(503); }
         });
         app.MapGet(prefix + "/statistics.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.StatisticsScript")!, "application/javascript"));
         app.MapGet(prefix + "/statistics.css", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.StatisticsStyle")!, "text/css"));
@@ -204,14 +202,26 @@ sealed class WorkspaceHost : IAsyncDisposable
         // Recover the registered UI route without exposing a general file server.
         var endpoint = ((Microsoft.AspNetCore.Routing.IEndpointRouteBuilder)app).DataSources.SelectMany(s => s.Endpoints)
             .OfType<Microsoft.AspNetCore.Routing.RouteEndpoint>().First(e => e.RoutePattern.RawText!.EndsWith("/ui"));
-        Url = app.Urls.Single() + endpoint.RoutePattern.RawText;
-        File.WriteAllText(Path.Combine(outputFolder, "live-overlay-url.txt"), Url[..^3] + "/overlay?surface=game");
+        Url = LoopbackServer.VerifiedAddress(app) + endpoint.RoutePattern.RawText;
+        overlayUrl = Url[..^3] + "/overlay?surface=game";
+        AtomicFile.WriteText(Path.Combine(outputFolder, "live-overlay-url.txt"), overlayUrl);
         try { await obs.Start(token); }
         catch (Exception ex) when (ex is IOException or InvalidDataException or System.Text.Json.JsonException or UnauthorizedAccessException) {
             await obs.DisposeAsync(); Console.Error.WriteLine("OBS browser source could not start (" + ex.GetType().Name + ").");
         }
     }
-    public async ValueTask DisposeAsync() { await keyboard.DisposeAsync(); await app.StopAsync(); await playback.DisposeAsync(); await obs.DisposeAsync(); await app.DisposeAsync(); }
+    public async ValueTask DisposeAsync()
+    {
+        // Stop accepting requests first, then publish a closed replay frame and
+        // retract this process's overlay URL so the game never loads a dead port.
+        await keyboard.DisposeAsync();
+        try { await app.StopAsync(); } catch (Exception ex) when (ex is OperationCanceledException or InvalidOperationException) { }
+        await playback.DisposeAsync(); await obs.DisposeAsync(); await app.DisposeAsync();
+        if (overlayUrl is not null) AtomicFile.DeleteIfContent(Path.Combine(outputFolder, "live-overlay-url.txt"), overlayUrl);
+    }
+    // An HttpClient timeout surfaces as a cancellation that the caller did not request.
+    static bool HubUnavailable(Exception ex, CancellationToken token) => ex is IOException or HttpRequestException or System.Text.Json.JsonException
+        || ex is OperationCanceledException && !token.IsCancellationRequested;
     sealed record PlaybackCommand(string? Action, string? Id, double? Value, double[]? Area);
     sealed record LibraryCommand(string? Action, string? Id, bool? Favorite);
 }
@@ -248,8 +258,12 @@ sealed class RendererAcknowledgement(string path, Func<DateTime>? clock = null)
                 cached = new(true, protocol, "unavailable");
                 validUntil = stamp.AddSeconds(3);
                 return cached;
-            } catch (IOException) { return Transient(); }
-              catch (Exception ex) when (ex is System.Text.Json.JsonException or InvalidOperationException or UnauthorizedAccessException) { return Invalidate(); }
+            }
+            // Opening a file that Lua is deleting/replacing (os.remove + os.rename)
+            // reports access denied on Windows: that is a publication gap, not a
+            // renderer failure, so it is transient exactly like a sharing violation.
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return Transient(); }
+            catch (Exception ex) when (ex is System.Text.Json.JsonException or InvalidOperationException) { return Invalidate(); }
         }
     }
 }
