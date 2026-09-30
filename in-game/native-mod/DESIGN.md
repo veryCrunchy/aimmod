@@ -229,6 +229,17 @@ service and Lua UI mod when given), enables them in `mods.txt`, and writes
 remove the proxy); `Uninstall-AimModCore.ps1` removes exactly the files in
 the manifest. Nothing is downloaded at runtime.
 
+```
+install\Build-AimModPackage.ps1                  # -> out\package (mod, self-contained service, Lua UI, settings)
+install\Install-AimModCore.ps1 -Package out\package -Ue4ssZip <UE4SS_v3.0.1-1152-ge3ba1016.zip>
+install\Install-AimModCore.ps1 -Repair           # after a game update; uses the cached package
+install\Uninstall-AimModCore.ps1                 # restores backed-up files; keeps run data
+```
+
+The installer refuses to run while this game install is running, backs up
+any file it replaces (`<name>.aimmod-backup`) and restores those on
+uninstall; installer-created mod lists and folders are removed.
+
 ## Building
 
 ```
