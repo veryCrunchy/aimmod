@@ -31,6 +31,12 @@ public interface ILazerBeatmapInstallService
         CancellationToken cancellationToken = default);
 
     void Discard(LazerBeatmapArchive archive);
+
+    Task DiscardAsync(LazerBeatmapArchive archive, CancellationToken cancellationToken = default)
+    {
+        Discard(archive);
+        return Task.CompletedTask;
+    }
 }
 
 /// <summary>
@@ -45,6 +51,7 @@ public sealed class LazerBeatmapInstallService : ILazerBeatmapInstallService
     private const int maximum_cached_archives = 8;
     private const int maximum_zip_entries = 100_000;
     private static readonly TimeSpan launcher_observation_time = TimeSpan.FromSeconds(4);
+    private static readonly TimeSpan stale_partial_age = TimeSpan.FromMinutes(10);
 
     private readonly string archiveDirectory;
     private readonly LazerExecutableLocator locator;
@@ -85,6 +92,7 @@ public sealed class LazerBeatmapInstallService : ILazerBeatmapInstallService
         try
         {
             ensureArchiveDirectory();
+            trimStalePartialFiles();
             var archive = new LazerBeatmapArchive(beatmapSetId, Guid.NewGuid());
             string destination = getArchivePath(archive);
             temporaryPath = Path.Combine(archiveDirectory, $".aimmod-handoff-{Guid.NewGuid():N}.partial");
@@ -191,7 +199,32 @@ public sealed class LazerBeatmapInstallService : ILazerBeatmapInstallService
     {
         ArgumentNullException.ThrowIfNull(archive);
         validateArchiveIdentity(archive.BeatmapSetId);
-        deleteFile(getArchivePath(archive));
+        string path = getArchivePath(archive);
+        gate.Wait();
+        try
+        {
+            deleteFile(path);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    public async Task DiscardAsync(LazerBeatmapArchive archive, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(archive);
+        validateArchiveIdentity(archive.BeatmapSetId);
+        string path = getArchivePath(archive);
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            deleteFile(path);
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     internal static ProcessStartInfo CreateStartInfo(LazerLaunchCommand command, string archivePath)
@@ -222,7 +255,8 @@ public sealed class LazerBeatmapInstallService : ILazerBeatmapInstallService
             return new LazerLaunchOutcome(false, false, 0);
 
         Task exit = process.WaitForExitAsync(CancellationToken.None);
-        Task observed = await Task.WhenAny(exit, Task.Delay(observationTime, CancellationToken.None)).ConfigureAwait(false);
+        Task observed = await Task.WhenAny(exit, Task.Delay(observationTime, cancellationToken)).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
         return observed == exit
             ? new LazerLaunchOutcome(true, true, process.ExitCode)
             : new LazerLaunchOutcome(true, false, 0);
@@ -233,6 +267,28 @@ public sealed class LazerBeatmapInstallService : ILazerBeatmapInstallService
         Directory.CreateDirectory(archiveDirectory);
         if ((File.GetAttributes(archiveDirectory) & FileAttributes.ReparsePoint) != 0)
             throw new IOException("The lazer handoff directory cannot be a symbolic link.");
+    }
+
+    private void trimStalePartialFiles()
+    {
+        try
+        {
+            DateTime threshold = DateTime.UtcNow - stale_partial_age;
+            foreach (string path in Directory.EnumerateFiles(archiveDirectory, ".aimmod-handoff-*.partial", SearchOption.TopDirectoryOnly))
+            {
+                try
+                {
+                    if (File.GetLastWriteTimeUtc(path) < threshold)
+                        deleteFile(path);
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                }
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+        }
     }
 
     private string getArchivePath(LazerBeatmapArchive archive)

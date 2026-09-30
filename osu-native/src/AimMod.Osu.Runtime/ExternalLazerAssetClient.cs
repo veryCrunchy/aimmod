@@ -26,21 +26,34 @@ public sealed class ExternalLazerAssetClient(IRuntimeRequestClient runtimeClient
     {
         validateSelections(libraryRoot, beatmapHashes, scoreIds, skinIds);
 
-        string stagingDirectory = Directory.CreateTempSubdirectory("aimmod-lazer-assets-").FullName;
+        string stagingDirectory = AimModTempDirectories.Create(AimModTempDirectories.AssetsPrefix);
         setPrivateDirectoryPermissions(stagingDirectory);
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
             ExternalLazerAssetResolveResult result = await ResolveAsync(
                 new ExternalLazerAssetResolveRequest(libraryRoot, stagingDirectory, beatmapHashes, scoreIds, skinIds),
-                CancellationToken.None).ConfigureAwait(false);
+                cancellationToken).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
             return new ExternalLazerAssetStagingLease(stagingDirectory, result);
         }
         catch
         {
-            deleteOwnedStagingDirectory(stagingDirectory, null);
+            tryDeleteStagingDirectory(stagingDirectory, null);
             throw;
+        }
+    }
+
+    internal static bool tryDeleteStagingDirectory(string directory, IReadOnlyList<string>? expectedFiles)
+    {
+        try
+        {
+            deleteOwnedStagingDirectory(directory, expectedFiles);
+            return true;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            return AimModTempDirectories.TryDelete(directory, AimModTempDirectories.AssetsPrefix);
         }
     }
 
@@ -210,7 +223,7 @@ public sealed class ExternalLazerAssetClient(IRuntimeRequestClient runtimeClient
             return;
 
         string root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
-        if (!Path.GetFileName(root).StartsWith("aimmod-lazer-assets-", StringComparison.Ordinal)
+        if (!Path.GetFileName(root).StartsWith(AimModTempDirectories.AssetsPrefix, StringComparison.Ordinal)
             || (File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
         {
             throw new ExternalLazerAssetClientException("staging_cleanup_failed", "AimMod refused to clean an unrecognised asset staging directory.");
@@ -268,16 +281,7 @@ public sealed class ExternalLazerAssetStagingLease : IAsyncDisposable
         if (directory is null)
             return ValueTask.CompletedTask;
 
-        try
-        {
-            ExternalLazerAssetClient.deleteOwnedStagingDirectory(directory, Result.Files.Select(file => file.StagedPath).ToArray());
-        }
-        catch
-        {
-            Interlocked.CompareExchange(ref stagingDirectory, directory, null);
-            throw;
-        }
-
+        ExternalLazerAssetClient.tryDeleteStagingDirectory(directory, Result.Files.Select(file => file.StagedPath).ToArray());
         return ValueTask.CompletedTask;
     }
 }
