@@ -157,21 +157,12 @@ public partial class NativeCoachingWorkspace
             AimModPalette.Yellow,
             FontAwesome.Solid.PauseCircle);
 
-        public void ShowReady(GlobalCoachingProfile profile, int merged, int submitted, string period, int totalRuns = -1)
+        public void ShowReady(GlobalCoachingProfile profile, int merged, int submitted, string period)
         {
             if (merged == 0)
             {
-                bool allTime = string.Equals(period, "All time", StringComparison.Ordinal);
-                bool noHistory = totalRuns == 0 || allTime;
-                set(
-                    "NO PLAY HISTORY",
-                    noHistory ? "No osu!standard plays found" : $"No osu!standard plays in the {period.ToLowerInvariant()}",
-                    noHistory
-                        ? "Play a map, or connect your osu! installation and account in Settings to begin coaching."
-                        : "Choose a longer profile period or complete a new play.",
-                    0,
-                    AimModPalette.Pink,
-                    FontAwesome.Solid.ExclamationCircle);
+                // The play list explains an empty history or filters that exclude every play.
+                this.FadeOut(AimModVisualStyle.HoverTransition, Easing.OutQuint);
                 return;
             }
 
@@ -222,6 +213,7 @@ public partial class NativeCoachingWorkspace
         private void set(string phaseText, string titleText, string detailText, float? fraction, Colour4 colour, IconUsage iconUsage,
             string? nextActionLabel = null, Action? nextAction = null)
         {
+            this.FadeIn(AimModVisualStyle.HoverTransition, Easing.OutQuint);
             phase.Text = phaseText;
             phase.Colour = colour;
             title.Text = titleText;

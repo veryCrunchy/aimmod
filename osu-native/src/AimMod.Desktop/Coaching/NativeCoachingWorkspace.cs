@@ -177,7 +177,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         progressContent.Add(coachingDetails);
         coachingDetails.Add(createSessionHeader(out headerArtwork, out sessionTitle, out sessionPlays,
             out sessionDuration, out sessionAccuracy, out sessionTrend, coachingTimeRange));
-        coachingDetails.Add(analysisBanner = new AnalysisProgressBanner());
+        analysisBanner = new AnalysisProgressBanner();
         coachingDetails.Add(new CoachingColumns(
             createPerformancePanel(out trendChart, out globalProfileSectionLine, out selectedRunHost, out exactAnalysisHost)
                 .With(panel => { panel.RelativeSizeAxes = Axes.X; panel.Height = 540; }),
@@ -188,6 +188,8 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         var playsContent = pageFlow();
         playsContent.Add(flow("Which map do you want to improve?", 19, AimModPalette.Text));
         playsContent.Add(flow("Pick a recent play to find difficult sections, practise aim and tapping separately, and check if it helps on the full map.", 14, AimModPalette.Muted));
+        // History loading, replay analysis progress and errors belong on the page players land on.
+        playsContent.Add(analysisBanner);
 
         playsContent.Add(search = new AimModTextBox {
             RelativeSizeAxes = Axes.X, Height = AimModVisualStyle.ControlHeight, PlaceholderText = "Search maps, difficulties, artists or mods",
@@ -503,7 +505,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         if (pendingCompletion is not null)
             showCompletion();
         else if (!acceptingAnalysisProgress)
-            analysisBanner.ShowReady(model.GlobalProfile, replays.Count, scopedSubmittedRunCount(), TimeRangeLabel(coachingTimeRange.Value), allReplays.Count);
+            analysisBanner.ShowReady(model.GlobalProfile, replays.Count, scopedSubmittedRunCount(), TimeRangeLabel(coachingTimeRange.Value));
     }
 
     private IReadOnlyList<LocalReplay> filteredRuns()
@@ -1144,6 +1146,9 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
 
     protected override bool OnKeyDown(KeyDownEvent e)
     {
+        if (practiceWorkspace is { Alpha: > 0 })
+            return base.OnKeyDown(e);
+
         if (e.ControlPressed && e.Key == Key.F && selectedCoachingPage is 2 or 3)
         {
             GetContainingFocusManager()?.ChangeFocus(selectedCoachingPage == 2 ? search : savedPracticeSearch);
