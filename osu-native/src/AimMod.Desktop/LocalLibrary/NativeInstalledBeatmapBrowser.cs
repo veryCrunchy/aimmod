@@ -631,7 +631,13 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             setRows.Add(filtered
                 ? new EmptyState(FontAwesome.Solid.Filter, "No beatmaps match these filters", "Remove a filter above, or reset them all.", "Reset filters", clearFilters)
                 : new EmptyState(FontAwesome.Solid.Music, "No installed beatmaps yet", "Find maps on the Online tab, then they appear here."));
-            inspector.ClearSelection();
+            // With nothing to select, a "select a beatmap" hint beside the empty list would mislead.
+            inspector.ClearSelection(showHint: false);
+            selectedSet = null;
+            selectedDifficulty = null;
+            detailsFor = null;
+            scheduledDetails?.Cancel();
+            detailCancellation?.Cancel();
             positionChips();
             return;
         }

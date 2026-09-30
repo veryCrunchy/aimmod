@@ -61,12 +61,13 @@ public partial class NativeInstalledBeatmapBrowser
             ClearSelection();
         }
 
-        public void ClearSelection()
+        public void ClearSelection(bool showHint = true)
         {
             set = null;
             difficulty = null;
             content.Clear();
-            content.Add(new EmptyState(FontAwesome.Solid.MousePointer, "Select a beatmap", "Its difficulties, PP and your scores appear here."));
+            if (showHint)
+                content.Add(new EmptyState(FontAwesome.Solid.MousePointer, "Select a beatmap", "Its difficulties, PP and your scores appear here."));
         }
 
         public void SetHistory(InstalledBeatmapHistory value, IReadOnlyList<LocalBeatmapSet> sets)
