@@ -8,7 +8,7 @@ function surface(){
   const ctx=new Proxy({}, {get(_,key){return function(...args){drawing++;for(const value of args)if(typeof value==='number')assert.ok(Number.isFinite(value),`finite canvas ${key}`)}},set(){return true}});
   function element(tag){let text='';return {tag,children:[],style:{},value:'',offsetWidth:600,appendChild(child){this.children.push(child);return child},setAttribute(){},getContext(){return ctx},get textContent(){return text},set textContent(value){text=String(value);this.children=[]}}}
   const context=vm.createContext({window:{devicePixelRatio:1},document:{createElement:element},setTimeout:callback=>callback()});
-  vm.runInContext("Date.prototype.toLocaleString=function(){throw Error('Intl unavailable')}",context);
+  require('./test-format.cjs').loadFormat(context);
   vm.runInContext(fs.readFileSync(path.join(__dirname,'statistics.js'),'utf8'),context);
   const root=element('div');
   function all(e=root){return [e,...e.children.flatMap(c=>all(c))]}
