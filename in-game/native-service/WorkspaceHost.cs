@@ -10,6 +10,7 @@ sealed class WorkspaceHost : IAsyncDisposable
     readonly WebApplication app;
     readonly NativeReplayPlayback playback;
     readonly ReplayStartGate startGate = new();
+    readonly GameCommands gameCommands;
     readonly CancellationTokenSource startLoop = new();
     ReplayCatalog? replayCatalog;
     readonly ReplayKeyboard keyboard;
@@ -44,6 +45,7 @@ sealed class WorkspaceHost : IAsyncDisposable
     public WorkspaceHost(Hub hub, string output, string? historyPath = null, NativeSettings? settings = null, CsvHistory? csvHistory = null)
     {
         outputFolder = output;
+        gameCommands = new GameCommands(output);
         overlaySettings = new OverlaySettings(output);
         opponents = new OpponentData(output);
         obs = new ObsOverlayHost(output, ObsState);
@@ -153,6 +155,23 @@ sealed class WorkspaceHost : IAsyncDisposable
               catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return Results.StatusCode(503); }
         });
         app.MapGet(prefix + "/native-replay", () => Results.Json(PlaybackStatus()));
+        // Game control (multiplayer lobby, replay scenario load). AimModCore
+        // validates again and refuses while a challenge runs.
+        app.MapGet(prefix + "/game-command", () => Results.Json(new { capabilities = GameCommands.Capabilities(outputFolder), result = gameCommands.Result() }));
+        app.MapPost(prefix + "/game-command", async (HttpContext context) => {
+            if (context.Request.Headers["X-AimMod-UI"] != "1" || context.Request.ContentLength is null or > 2048) return Results.StatusCode(403);
+            if (!context.Request.HasJsonContentType()) return Results.StatusCode(415);
+            try {
+                var request = await context.Request.ReadFromJsonAsync<GameCommandRequest>(context.RequestAborted);
+                if (request is null) return Results.BadRequest();
+                var capabilities = GameCommands.Capabilities(outputFolder);
+                var needed = request.Action == "load-scenario" ? "load" : "start";
+                if (!capabilities.Contains(needed)) return Results.Json(new { error = "unsupported" }, statusCode: 409);
+                var (sequence, error) = gameCommands.Send(request);
+                return sequence is null ? Results.Json(new { error }, statusCode: 400) : Results.Json(new { sequence });
+            } catch (Exception ex) when (ex is System.Text.Json.JsonException or BadHttpRequestException) { return Results.BadRequest(); }
+              catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return Results.StatusCode(503); }
+        });
         app.MapPost(prefix + "/native-replay", async (HttpContext context) => {
             if (context.Request.Headers["X-AimMod-UI"] != "1" || context.Request.ContentLength is null or > 1024)
                 return Results.StatusCode(403);
@@ -220,6 +239,7 @@ sealed class WorkspaceHost : IAsyncDisposable
                     try {
                         var ready = startGate.Poll(id => replayCatalog?.Read(id), () => GameScene.Read(outputFolder), () => { var a = renderer.Read(); return (a.Ready, a.Reason); });
                         if (ready is not null) playback.Load(ready);
+                        else AutoLoadScenario();
                     } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { }
                 }
             } catch (OperationCanceledException) { }
@@ -234,6 +254,30 @@ sealed class WorkspaceHost : IAsyncDisposable
         catch (Exception ex) when (ex is IOException or InvalidDataException or System.Text.Json.JsonException or UnauthorizedAccessException) {
             await obs.DisposeAsync(); Console.Error.WriteLine("OBS browser source could not start (" + ex.GetType().Name + ").");
         }
+    }
+    // A pending replay in another scenario: ask AimModCore to load that
+    // scenario (once per pending start) and show its progress or refusal.
+    void AutoLoadScenario()
+    {
+        var id = startGate.PendingId;
+        if (id is null || startGate.Block?.Reason is not ("scenario-mismatch" or "scenario-loading")) return;
+        var scenario = startGate.PendingScenario;
+        if (startGate.LoadSequence is not long sequence)
+        {
+            if (startGate.Block?.Reason != "scenario-mismatch" || scenario is null || !GameCommands.Capabilities(outputFolder).Contains("load")) return;
+            var sent = gameCommands.Send(new("load-scenario", scenario, null, null, null, null, null, null));
+            if (sent.Sequence is long s) {
+                startGate.LoadRequested(id, s);
+                startGate.Report(id, new("scenario-loading", $"Loading \"{scenario}\" in KovaaK's; the replay starts when it is ready."));
+            }
+            return;
+        }
+        var result = gameCommands.Result();
+        if (result is null || result.Sequence != sequence) return;
+        if (result.State == "error")
+            startGate.Report(id, new(result.Code == "challenge-active" ? "challenge-active" : "scenario-mismatch",
+                result.Code == "challenge-active" ? "A challenge is running. Finish or quit it; then load the replay's scenario."
+                    : $"Could not load \"{scenario}\" automatically ({result.Message}). Load it in KovaaK's; the replay starts when it is ready."));
     }
     public async ValueTask DisposeAsync()
     {
