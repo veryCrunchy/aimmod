@@ -386,11 +386,17 @@ namespace aimmod
             m_nextWatch = now + WatchInterval;
             RefreshWatch();
         }
-        if (changed && now >= m_nextCompatibility)
+        if (changed)
         {
-            m_nextCompatibility = now + 10;
-            LogCompatibility("world");
             m_replayProbed = false;
+            if (m_compatibilityDue < 0) m_compatibilityDue = now + 10;
+        }
+        // Log once the scene is complete (or after 10 s), not per object found.
+        const bool complete = m_scene.Manager() && m_scene.Stats() && m_scene.Indicators() && m_scene.Player() && m_scene.GameState();
+        if (m_compatibilityDue >= 0 && (complete || now >= m_compatibilityDue))
+        {
+            m_compatibilityDue = -1;
+            LogCompatibility("world");
         }
         if (!m_replayProbed && m_scene.Player() && m_scene.GameState())
         {
@@ -427,6 +433,7 @@ namespace aimmod
             for (std::size_t i = 0; i < m_watchCounts.size(); ++i)
                 if (m_watchCounts[i].first == name) return static_cast<std::uint16_t>(i);
             m_watchCounts.emplace_back(name, 0);
+            m_watchSeen.push_back(~0ULL);
             return static_cast<std::uint16_t>(m_watchCounts.size() - 1);
         };
         m_broadcastFunctions = std::size(functions);
@@ -496,6 +503,9 @@ namespace aimmod
             {
                 if (w.function != function || (w.object && w.object != context)) continue;
                 if (!OnGameThread()) break;
+                auto& seen = m_watchSeen[w.counter];
+                if (seen == m_tickIndex) break; // another handler of the same broadcast
+                seen = m_tickIndex;
                 ++m_watchCounts[w.counter].second;
                 if (!w.counts) m_pendingSignals.push_back(w.signal);
                 break;
@@ -519,7 +529,11 @@ namespace aimmod
         m_inTick = true;
         const double now = Seconds();
         m_lastTick = now;
+        ++m_tickIndex;
         if (now >= m_nextRebind) Rebind(now);
+        // One clock read per frame for input timestamps (axis inputs arrive
+        // several times per frame).
+        if (m_sampler.recording()) m_sampler.BeginFrame();
         if (!m_pendingSignals.empty())
         {
             std::vector<Signal> signals;
@@ -647,10 +661,13 @@ namespace aimmod
         }
         m_running = s.available && s.running;
         m_paused = s.paused;
+        // Values are read every poll while an attempt is open, and before the
+        // lifecycle step: a completion in this poll must journal the final
+        // counters, not the previous poll's (shots keep landing until the end).
         const bool before = m_lifecycle.active();
+        if (before) UpdateMeasurements(m_running, s.elapsed, s.remaining, score);
         Handle(m_lifecycle.Poll(s));
-        // Values: 10 Hz, only while an attempt is open (or just ended).
-        if (m_lifecycle.active() && (m_polls % 2 == 0 || !before)) UpdateMeasurements(m_running, s.elapsed, s.remaining, score);
+        if (!before && m_lifecycle.active()) UpdateMeasurements(m_running, s.elapsed, s.remaining, score);
         if (m_polls % 2 == 0) PublishLive(s, m_running);
     }
 

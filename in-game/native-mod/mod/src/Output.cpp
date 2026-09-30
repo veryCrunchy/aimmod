@@ -74,6 +74,15 @@ namespace aimmod
         std::error_code error;
         std::filesystem::create_directories(m_root / L"replays", error);
         if (!std::filesystem::is_directory(m_root, error)) return false;
+        // Unfinished recordings from earlier sessions (either recorder) are
+        // never published; remove ones not touched for ten minutes.
+        const auto cutoff = std::filesystem::file_time_type::clock::now() - std::chrono::minutes(10);
+        for (const auto& entry : std::filesystem::directory_iterator(m_root / L"replays", error))
+        {
+            std::error_code itemError;
+            if (entry.path().extension() != L".partial" || !entry.is_regular_file(itemError)) continue;
+            if (entry.last_write_time(itemError) < cutoff && !itemError) std::filesystem::remove(entry.path(), itemError);
+        }
         m_mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, static_cast<DWORD>(SharedLiveSize), SharedLiveName);
         if (m_mapping) m_view = MapViewOfFile(m_mapping, FILE_MAP_WRITE, 0, 0, SharedLiveSize);
         if (m_view)

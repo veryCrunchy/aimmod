@@ -31,6 +31,8 @@ namespace aimmod
         // One frame. Returns false when the recording had to stop (reason set).
         bool Sample(const AttemptStats& stats, double now);
         void OnInput(UObject* component, const char* action, bool axis, double value);
+        // Caches the game clock for this frame's input events.
+        void BeginFrame();
         void OnShotHit(UObject* shooter, UObject* target);
         // Closes the recording. Published only for "completed" with >1 frame.
         void Finish(const std::string& reason, std::optional<double> score);
@@ -54,6 +56,7 @@ namespace aimmod
         std::string m_stopReason;
         double m_start{};
         double m_nextFlush{};
+        double m_frameTime{-1};
         RC::Unreal::FWeakObjectPtr m_player, m_character;
         UObject* m_recorder{};
         std::unordered_map<std::uint64_t, std::uint32_t> m_ids;

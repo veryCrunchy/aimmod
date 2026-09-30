@@ -83,6 +83,7 @@ namespace aimmod
         const ClassInfo& c = Describe(character);
         m_recorder = c.playbackComponent.Object(character);
         m_start = start;
+        m_frameTime = start;
         m_nextFlush = 0;
         m_ids.clear();
         m_profiles.clear();
@@ -228,15 +229,18 @@ namespace aimmod
         return true;
     }
 
+    void ReplaySampler::BeginFrame()
+    {
+        UObject* player = m_player.Get();
+        m_frameTime = player ? GameTime(player) : -1;
+    }
+
     void ReplaySampler::OnInput(UObject* component, const char* action, bool axis, double value)
     {
         if (!m_recording.started() || m_recording.full()) return;
         if (m_recorder && component != m_recorder) return; // another recorder on the same character
-        UObject* player = m_player.Get();
-        if (!player) return;
-        const double gameTime = GameTime(player);
-        if (gameTime < 0) return;
-        m_recording.AddInput(gameTime - m_start, action, axis ? value : 1.0);
+        if (m_frameTime < 0) return;
+        m_recording.AddInput(m_frameTime - m_start, action, axis ? value : 1.0);
     }
 
     void ReplaySampler::OnShotHit(UObject* shooter, UObject* target)

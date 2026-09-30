@@ -95,6 +95,9 @@ namespace aimmod
         std::vector<std::unique_ptr<WatchSet>> m_watchSets;
         std::vector<Signal> m_pendingSignals;
         std::vector<std::pair<std::string, std::uint64_t>> m_watchCounts;
+        std::vector<std::uint64_t> m_watchSeen; // tick index of the last count
+        std::uint64_t m_tickIndex{};
+        double m_compatibilityDue{-1};
         std::size_t m_broadcastFunctions{}, m_broadcastFound{}, m_delegateHandlers{};
 
         // Schedules (seconds, steady clock).
