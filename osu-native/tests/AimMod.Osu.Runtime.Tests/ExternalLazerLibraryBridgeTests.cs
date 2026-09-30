@@ -134,6 +134,27 @@ public sealed class ExternalLazerLibraryBridgeTests
     }
 
     [Test]
+    public void FailedSnapshotCleanupDoesNotReplaceTheManifestError()
+    {
+        var snapshotFactory = new RecordingSnapshotFactory(snapshotDirectory, Path.Combine(libraryRoot, "files")) { FailDeletes = true };
+        var bridge = new ExternalLazerLibraryImportBridge(
+            snapshotFactory,
+            new FailingManifestReader(),
+            new ExternalLazerLibraryValidator(),
+            new LazerHashedFileResolver());
+
+        InvalidOperationException error = Assert.ThrowsAsync<InvalidOperationException>(async () => await bridge.ResolveAssetsAsync(
+            new ExternalLazerLibraryLocation(libraryRoot, snapshotDirectory),
+            new LazerLibraryAssetQuery(Array.Empty<string>(), Array.Empty<Guid>())))!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(error.Message, Is.EqualTo("synthetic failure"));
+            Assert.That(snapshotFactory.DeleteCount, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
     public async Task SuccessfulImportsReturnAnIdempotentSnapshotLease()
     {
         var snapshotFactory = new RecordingSnapshotFactory(snapshotDirectory, Path.Combine(libraryRoot, "files"));
@@ -156,6 +177,8 @@ public sealed class ExternalLazerLibraryBridgeTests
     {
         public int DeleteCount { get; private set; }
 
+        public bool FailDeletes { get; init; }
+
         public Task<LazerLibrarySnapshot> CreateSnapshotAsync(
             ValidatedExternalLazerLibraryLocation location,
             CancellationToken cancellationToken = default)
@@ -167,6 +190,8 @@ public sealed class ExternalLazerLibraryBridgeTests
         public ValueTask DeleteSnapshotAsync(LazerLibrarySnapshot snapshot)
         {
             DeleteCount++;
+            if (FailDeletes)
+                throw new IOException("synthetic cleanup failure");
             return ValueTask.CompletedTask;
         }
     }

@@ -25,6 +25,10 @@ internal sealed class ReplayWorkerStorage : IDisposable
     }
 
     public static ReplayWorkerStorage Acquire(CancellationToken token, string? root = null,
+        long maximumBytes = MaximumBytes, Func<long>? freeBytes = null) =>
+        Acquire(token, TimeSpan.FromSeconds(30), root, maximumBytes, freeBytes);
+
+    internal static ReplayWorkerStorage Acquire(CancellationToken token, TimeSpan leaseWait, string? root = null,
         long maximumBytes = MaximumBytes, Func<long>? freeBytes = null)
     {
         bool defaultLocation = root is null;
@@ -44,9 +48,13 @@ internal sealed class ReplayWorkerStorage : IDisposable
                 lease = new FileStream(leasePath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
                 break;
             }
-            catch (IOException) when (waiting.Elapsed < TimeSpan.FromSeconds(30))
+            catch (IOException) when (waiting.Elapsed < leaseWait)
             {
                 token.WaitHandle.WaitOne(50);
+            }
+            catch (IOException)
+            {
+                throw new ReplayAnalysisException("analysis_busy", "Another replay analysis is still using the scratch storage. Try again shortly.");
             }
         }
 
@@ -54,7 +62,7 @@ internal sealed class ReplayWorkerStorage : IDisposable
         try
         {
             if (defaultLocation)
-                CleanupLegacyRuns(Path.Combine(Path.GetTempPath(), "of-test-headless"), DateTime.UtcNow.AddDays(-1));
+                tryCleanupLegacyRuns(Path.Combine(Path.GetTempPath(), "of-test-headless"), DateTime.UtcNow.AddDays(-1));
             // A single cross-process lease prevents pruning another live worker.
             // A crash releases the OS handle, so the next worker removes its files.
             foreach (string directory in Directory.EnumerateDirectories(root, run_prefix + "*"))
@@ -71,6 +79,33 @@ internal sealed class ReplayWorkerStorage : IDisposable
         {
             lease.Dispose();
             throw;
+        }
+    }
+
+    /// <summary>Removes temp and profile directories, which name the user, from error text.</summary>
+    internal static string RedactLocalPaths(string message)
+    {
+        foreach ((string? path, string replacement) in new[]
+                 {
+                     (Path.GetTempPath(), "<temp>"),
+                     (Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "<home>"),
+                 })
+        {
+            string trimmed = string.IsNullOrEmpty(path) ? string.Empty : Path.TrimEndingDirectorySeparator(path);
+            if (trimmed.Length > 3)
+                message = message.Replace(trimmed, replacement, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        }
+
+        return message;
+    }
+
+    // Legacy cleanup is housekeeping and must never block a new analysis.
+    private static void tryCleanupLegacyRuns(string root, DateTime olderThanUtc)
+    {
+        try { CleanupLegacyRuns(root, olderThanUtc); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            Console.Error.WriteLine("[AimMod] Legacy replay scratch cleanup was skipped.");
         }
     }
 
@@ -120,17 +155,25 @@ internal sealed class ReplayWorkerStorage : IDisposable
     private sealed class StorageWatch : IDisposable
     {
         private readonly Timer timer;
+        private int checking;
+
         public StorageWatch(ReplayWorkerStorage storage, Action stop)
         {
             timer = new Timer(_ =>
             {
+                // A slow scan must not overlap the next tick, and nothing may escape the
+                // timer callback because an unhandled exception there ends the worker.
+                if (Interlocked.Exchange(ref checking, 1) != 0)
+                    return;
+
                 try { storage.ThrowIfLimitExceeded(); }
-                catch (Exception error) when (error is IOException or UnauthorizedAccessException or ReplayAnalysisException)
+                catch (Exception error) when (error is not OutOfMemoryException)
                 {
                     Interlocked.Exchange(ref storage.limitExceeded, 1);
                     try { stop(); }
-                    catch (ObjectDisposedException) { }
+                    catch (Exception stopError) when (stopError is not OutOfMemoryException) { }
                 }
+                finally { Volatile.Write(ref checking, 0); }
             }, null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
         }
         public void Dispose() => timer.DisposeAsync().AsTask().GetAwaiter().GetResult();
@@ -148,15 +191,50 @@ internal sealed class ReplayWorkerStorage : IDisposable
         finally { lease.Dispose(); }
     }
 
-    private static long Measure(string directory)
+    internal static long Measure(string directory)
     {
         RejectLinks(directory);
+        return measureTree(directory);
+    }
+
+    // The headless host creates and removes Realm sidecars while it runs, so entries that
+    // vanish during the scan are skipped instead of being reported as a storage failure.
+    private static long measureTree(string directory)
+    {
         long total = 0;
-        foreach (string path in Directory.EnumerateFileSystemEntries(directory))
+        IEnumerable<FileSystemInfo> entries;
+        try { entries = new DirectoryInfo(directory).EnumerateFileSystemInfos(); }
+        catch (DirectoryNotFoundException) { return 0; }
+
+        try
         {
-            RejectLinks(path);
-            total = checked(total + (Directory.Exists(path) ? Measure(path) : new FileInfo(path).Length));
+            foreach (FileSystemInfo entry in entries)
+            {
+                FileAttributes attributes;
+                try { attributes = entry.Attributes; }
+                catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException) { continue; }
+
+                if ((int)attributes == -1)
+                    continue;
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                    throw new IOException("Replay scratch storage cannot use symbolic links or junctions.");
+
+                long size;
+                if ((attributes & FileAttributes.Directory) != 0)
+                    size = measureTree(entry.FullName);
+                else
+                {
+                    try { size = ((FileInfo)entry).Length; }
+                    catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException) { continue; }
+                }
+
+                total = size > long.MaxValue - total ? long.MaxValue : total + size;
+            }
         }
+        catch (DirectoryNotFoundException)
+        {
+        }
+
         return total;
     }
 

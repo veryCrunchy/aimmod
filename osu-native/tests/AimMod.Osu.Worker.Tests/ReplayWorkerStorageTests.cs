@@ -134,6 +134,56 @@ public sealed class ReplayWorkerStorageTests
         Assert.That(Directory.Exists(unknown), Is.True);
     }
 
+    [Test]
+    public void ABusyLeaseEventuallyReportsAnAnalysisError()
+    {
+        using var active = acquire();
+        ReplayAnalysisException error = Assert.Throws<ReplayAnalysisException>(() =>
+            ReplayWorkerStorage.Acquire(CancellationToken.None, TimeSpan.FromMilliseconds(200), root, freeBytes: () => long.MaxValue))!;
+        Assert.That(error.Code, Is.EqualTo("analysis_busy"));
+    }
+
+    [Test]
+    public void MeasureCountsNestedFilesAndRejectsLinks()
+    {
+        string nested = Directory.CreateDirectory(Path.Combine(root, "a", "b")).FullName;
+        File.WriteAllBytes(Path.Combine(root, "a", "one.bin"), new byte[10]);
+        File.WriteAllBytes(Path.Combine(nested, "two.bin"), new byte[32]);
+        Assert.That(ReplayWorkerStorage.Measure(root), Is.EqualTo(42));
+
+        string outside = Directory.CreateTempSubdirectory("aimmod-storage-external-test-").FullName;
+        try
+        {
+            try { Directory.CreateSymbolicLink(Path.Combine(nested, "link"), outside); }
+            catch (UnauthorizedAccessException) { Assert.Ignore("Symbolic links are unavailable."); }
+            catch (IOException error) when ((error.HResult & 0xffff) == 1314)
+            {
+                Assert.Ignore("Creating symbolic links requires a Windows privilege unavailable to this test process.");
+            }
+            Assert.Throws<IOException>(() => ReplayWorkerStorage.Measure(root));
+        }
+        finally
+        {
+            string link = Path.Combine(nested, "link");
+            if (Directory.Exists(link)) Directory.Delete(link);
+            Directory.Delete(outside, true);
+        }
+    }
+
+    [Test]
+    public void LocalPathsAreRedactedFromErrorText()
+    {
+        string temp = Path.Combine(Path.GetTempPath(), "AimMod", "replay-worker", ".lease");
+        string home = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "osu", "client.realm");
+        string redacted = ReplayWorkerStorage.RedactLocalPaths($"The process cannot access '{temp}' or '{home}'.");
+        Assert.Multiple(() =>
+        {
+            Assert.That(redacted, Does.Not.Contain(Path.TrimEndingDirectorySeparator(Path.GetTempPath())));
+            Assert.That(redacted, Does.Not.Contain(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)));
+            Assert.That(redacted, Does.Contain("<temp>"));
+        });
+    }
+
     private string makeLegacy(string name, DateTime date)
     {
         string path = Directory.CreateDirectory(Path.Combine(root, name)).FullName;

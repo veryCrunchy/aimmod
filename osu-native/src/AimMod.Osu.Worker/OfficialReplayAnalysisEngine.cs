@@ -118,12 +118,14 @@ internal sealed class OfficialReplayAnalysisEngine : IReplayAnalysisEngine
         }
     }
 
-    private static string boundedError(Exception exception, ValidatedReplayInput input)
+    internal static string boundedError(Exception exception, ValidatedReplayInput input)
     {
+        // The staged files live inside the staging directory, so they are replaced first.
         string message = exception.Message
-                                  .Replace(input.StagingDirectory, "<staging>", StringComparison.Ordinal)
                                   .Replace(input.BeatmapPath, "<beatmap>", StringComparison.Ordinal)
                                   .Replace(input.ReplayPath, "<replay>", StringComparison.Ordinal)
+                                  .Replace(input.StagingDirectory, "<staging>", StringComparison.Ordinal);
+        message = ReplayWorkerStorage.RedactLocalPaths(message)
                                   .Replace('\r', ' ')
                                   .Replace('\n', ' ')
                                   .Trim();

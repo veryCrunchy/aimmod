@@ -288,9 +288,9 @@ internal sealed class OfficialPpWhatIfCalculator : IPpWhatIfCalculator
 
     private static string boundedError(Exception exception, ValidatedPpInput input)
     {
-        string message = exception.Message
-                                  .Replace(input.StagingDirectory, "<staging>", StringComparison.Ordinal)
+        string message = ReplayWorkerStorage.RedactLocalPaths(exception.Message
                                   .Replace(input.BeatmapPath, "<beatmap>", StringComparison.Ordinal)
+                                  .Replace(input.StagingDirectory, "<staging>", StringComparison.Ordinal))
                                   .Replace('\r', ' ')
                                   .Replace('\n', ' ')
                                   .Trim();
