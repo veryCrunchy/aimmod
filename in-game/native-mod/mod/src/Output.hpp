@@ -1,6 +1,7 @@
 #pragma once
 // Writer thread: owns every file the mod writes. The game thread only hands
 // over small immutable jobs (never blocks on disk).
+#include <aimmod/GameCommand.hpp>
 #include <aimmod/GameStats.hpp>
 #include <aimmod/ReplayV2.hpp>
 
@@ -13,6 +14,7 @@
 #include <mutex>
 #include <optional>
 #include <set>
+#include <variant>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -37,6 +39,9 @@ namespace aimmod
         void PublishLive(std::string body);
         // core-scene.json: what the game currently shows (replay start gate).
         void PublishScene(std::string body);
+        // core-command.tsv requests (validated) and their answers.
+        std::optional<std::variant<GameCommand, CommandError>> TakeCommand();
+        void PublishCommandResult(std::string body);
         void PublishReplayStatus(std::string body);
         // Encodes (format 2) and publishes a completed recording.
         void ReplayWrite(std::unique_ptr<replay2::Capture> capture);
@@ -83,6 +88,12 @@ namespace aimmod
         std::optional<GameStats> m_found;
         std::set<std::wstring> m_consumed;
         std::uint64_t m_lastStatsScan{};
+        std::deque<std::variant<GameCommand, CommandError>> m_commands;
+        std::string m_commandText;
+        std::uint64_t m_commandSequence{}, m_lastCommandCheck{};
+        bool m_commandPrimed{};
+        std::deque<std::string> m_results;
+        void ReadCommand(std::uint64_t now);
         std::string m_version;
         std::thread m_thread;
         std::mutex m_mutex;

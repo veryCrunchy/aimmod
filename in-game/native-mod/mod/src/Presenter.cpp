@@ -73,7 +73,8 @@ namespace aimmod
         m_setLocationRotation.BindPath(STR("/Script/Engine.Actor:K2_SetActorLocationAndRotation"), Shape::Command);
         m_setLocation.BindPath(STR("/Script/Engine.Actor:K2_SetActorLocation"), Shape::Command);
         m_setFov.BindPath(STR("/Script/Engine.CameraComponent:SetFieldOfView"), Shape::Command);
-        m_viewTarget.BindPath(STR("/Script/Engine.PlayerController:GetViewTarget"), Shape::Object);
+        // AController::GetViewTarget (APlayerController does not redeclare it as a UFUNCTION).
+        m_viewTarget.BindPath(STR("/Script/Engine.Controller:GetViewTarget"), Shape::Object);
         m_cameraActorClass = FindClass(STR("/Script/Engine.CameraActor"));
         m_cameraComponent.Bind(m_cameraActorClass, STR("CameraComponent"));
         m_ready = m_setLocationRotation.ok() && m_setLocation.ok() && m_setFov.ok() && m_viewTarget.ok() && m_cameraActorClass && m_cameraComponent.ok() &&
@@ -231,27 +232,34 @@ namespace aimmod
         }
         if (!proxies.empty()) Resolve(proxies);
         const double now = Seconds();
-        auto idle = [&] {
+        auto idle = [&](const char* reason) {
             if (m_active) Report(now + 1e9); // flush the period when presentation ends
             m_active = false;
             m_lastApply = -1;
+            // Say once why a playing replay is not presented natively.
+            if (frame && frame->visible && frame->playing && reason != m_idleReason)
+            {
+                m_idleReason = reason;
+                Log(std::string("replay presenter idle: ") + reason);
+            }
         };
-        if (!frame || !frame->visible || !frame->playing || frame->motion.size() < 2 || !frame->clockUnixMs) return idle();
+        if (!frame || !frame->visible || !frame->playing || frame->motion.size() < 2 || !frame->clockUnixMs) return idle("no motion window");
         UObject* camera = m_camera.Get();
         UObject* player = m_scene.Player();
-        if (!camera || !player) return idle();
+        if (!camera || !player) return idle(camera ? "player unavailable" : "replay camera not bound (replay-proxies.tsv)");
         // Only the replay's own camera while the player looks through it, in
         // a paused world.
-        if (m_viewTarget.Object(player) != camera || !m_b.gamePaused.Bool(m_b.statics, player).value_or(false)) return idle();
+        if (m_viewTarget.Object(player) != camera) return idle("replay camera is not the view target");
+        if (!m_b.gamePaused.Bool(m_b.statics, player).value_or(false)) return idle("game not paused");
         UObject* component = m_cameraComponent.Object(camera);
-        if (!component) return idle();
+        if (!component) return idle("camera component unavailable");
 
         const double t = PlaybackTime(*frame, UnixMs());
         double pose[7];
-        if (!CameraAt(*frame, t, pose)) return idle();
+        if (!CameraAt(*frame, t, pose)) return idle("no pose");
         const double location[3] = {pose[0], pose[1], pose[2]};
         const double rotation[3] = {pose[3], pose[4], pose[5]};
-        if (!m_setLocationRotation.Call(camera, Filler(location, rotation, 0)) || !m_setFov.Call(component, Filler(nullptr, nullptr, pose[6]))) return idle();
+        if (!m_setLocationRotation.Call(camera, Filler(location, rotation, 0)) || !m_setFov.Call(component, Filler(nullptr, nullptr, pose[6]))) return idle("camera update failed");
         const double ahead = std::clamp(t - frame->time, 0.0, 0.1);
         for (const auto& target : frame->targets)
         {
@@ -280,6 +288,7 @@ namespace aimmod
             Log("replay presenter: presenting (targets bound " + std::to_string(m_targets.size()) + ")");
         }
         m_active = true;
+        m_idleReason = nullptr;
         m_lastApply = now;
         m_lastPlayback = t;
         ++m_applies;

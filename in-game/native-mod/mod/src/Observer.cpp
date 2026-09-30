@@ -101,7 +101,7 @@ namespace aimmod
     Observer::Observer(Output& output, std::string version)
         : m_output(output), m_version(std::move(version)),
           m_lifecycle(std::to_string(static_cast<long long>(std::time(nullptr))) + "-" + std::to_string(GetCurrentProcessId())),
-          m_sampler(m_b, m_scene, output), m_presenter(m_b, m_scene, output)
+          m_sampler(m_b, m_scene, output), m_presenter(m_b, m_scene, output), m_control(m_b, m_scene, output)
     {
     }
 
@@ -119,6 +119,8 @@ namespace aimmod
         if (m_b.lifecycleReady()) caps = "telemetry";
         if (m_b.replayReady()) caps += caps.empty() ? "replay" : ",replay";
         if (m_presenter.ready()) caps += caps.empty() ? "presenter" : ",presenter";
+        if (m_control.canLoad()) caps += caps.empty() ? "load" : ",load";
+        if (m_control.canStart()) caps += caps.empty() ? "start" : ",start";
         return caps;
     }
 
@@ -305,6 +307,7 @@ namespace aimmod
         m_mainThread = FindMainThread();
         BindFunctions();
         m_presenter.Bind();
+        m_control.Bind();
         RegisterCallbacks();
         m_presenter.Start();
         m_output.SetCapabilities(Capabilities());
@@ -571,6 +574,7 @@ namespace aimmod
             m_nextPoll = now + PollInterval;
             Poll(now);
         }
+        m_control.Tick(now, m_scenarioName, m_inChallenge, m_loading);
         if (m_sampler.recording())
         {
             // Every engine frame: its game time and the inputs it consumed.
@@ -710,7 +714,7 @@ namespace aimmod
         }
         if (!before && m_lifecycle.active()) UpdateMeasurements(m_running, s.elapsed, s.remaining, score);
         if (m_polls % 2 == 0) PublishLive(s, m_running);
-        if (m_polls % 5 == 0) PublishScene(s, manager);
+        PublishScene(s, manager); // also refreshes the challenge/loading state game control uses
     }
 
     // What the game shows now, for the service's replay start gate: the
@@ -728,6 +732,8 @@ namespace aimmod
         }
         const bool inChallenge = manager && m_b.isInChallenge.Bool(manager).value_or(false);
         const bool loading = manager && m_b.isScenarioLoading.ok() && m_b.isScenarioLoading.Bool(manager).value_or(false);
+        m_inChallenge = inChallenge;
+        m_loading = loading;
         std::string body = "{\"version\":1,\"available\":";
         body += s.available ? "true" : "false";
         body += ",\"scenario\":";

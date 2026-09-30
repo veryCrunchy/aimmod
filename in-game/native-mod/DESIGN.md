@@ -209,9 +209,10 @@ and pause state published by AimModCore) before loading. A replay plays in
 the world it was recorded in, from the pause menu; a start that cannot be
 honoured yet stays pending with a reason and message
 (`GET /native-replay` -> `start`) and begins by itself once the game is
-ready (cancel with `{"action":"cancel"}`; 10 minute limit). Loading the
-replay's scenario automatically is not done yet: startup logs the
-signatures of the candidate game entry points so a safe one can be chosen.
+ready (cancel with `{"action":"cancel"}`; 10 minute limit). When the
+reason is another scenario and AimModCore advertises `load`, the service
+asks it to load the replay's scenario (game command below) and shows the
+progress, or the refusal, in the same message.
 
 Measured on live test #1 (60 s tracking run, 378 fps, 43821 inputs):
 format 1 4.04 MB/min, format 2 54.6 KB/min (74x smaller; XPRESS 61.5,
@@ -222,6 +223,70 @@ playback sampled at the format 1 frame times differs by at most 0.008 deg and
 target at 363 of 431 hit samples in both the recording and the
 reconstruction (100% agreement). `aimmod_replay_tool convert` and the
 service's `--compare-replays` reproduce these numbers.
+
+## Game commands
+
+The user approved AimMod changing game state where a feature needs it
+(replay scenario load, multiplayer starts); ranked play stays untouched.
+AimModCore performs these on the game thread, one at a time.
+
+Transport: the service writes `core-command.tsv` (atomically) and AimModCore
+answers in `core-command-result.tsv`. HTTP (workspace capability URL,
+header `X-AimMod-UI: 1`): `POST <prefix>/game-command` with JSON
+`{"action","scenario","mode","timeScale","targetSize","targetSpeed","mapScale","weapon"}`
+returns `{"sequence":n}` (409 `{"error":"unsupported"}` without the
+capability, 400 `{"error":code}` when malformed); `GET <prefix>/game-command`
+returns `{"capabilities":[...],"result":{sequence,state,code,message}}`.
+Capabilities come from `core-active.tsv`: `load` (scenario load) and `start`
+(start with a play type).
+
+```
+AIMMOD_CORE_COMMAND_1
+seq	<increasing integer; a request left from an earlier session is ignored>
+action	load-scenario | start-scenario | reset-overrides
+scenario	<exact scenario name>             (load/start)
+mode	freeplay | challenge                   (start; default freeplay)
+timeScale	<0.1..4>                          (start, freeplay only)
+targetSize	<0.1..10>                        (start, freeplay only)
+targetSpeed	<0.1..10>                       (start, freeplay only)
+mapScale	<0.1..10>                          (start, freeplay only)
+weapon	<weapon profile name>                (start, freeplay only)
+```
+
+Result: `AIMMOD_CORE_RESULT_1	<seq>	<accepted|done|error|notice>	<code>	<%-escaped message>`.
+Codes: `loading`/`starting` (accepted), `loaded`/`already-loaded`/`started`/`reset`
+(done), `challenge-active`, `busy`, `game-unavailable`, `unsupported`,
+`unknown-scenario`, `start-failed`, `timeout`, `mode-mismatch`,
+`override-failed`, `invalid-*`, `overrides-freeplay-only` (error),
+`challenge-cancelled` (notice, sequence 0).
+
+Entry points (verified in the 3.9.11 dumps; resolved at startup, a missing
+one disables the capability and the start gate falls back to "load it in
+KovaaK's"): the scenario browser's own path `Start_Scenario(InOuter,
+InScenarioName, InFromWorkshop, InPlayOnLoad)` + `BlueprintAsyncActionBase:Activate`
+(load: InPlayOnLoad false; start: true after
+`ScenarioManager:SetPersistentPlayType`), `GetLocalScenarioHash` /
+`GetOnlineScenarioHash` to check the scenario exists, and
+`PlayCurrentScenario(Challenge, Start)` once if a challenge start did not
+begin by itself. Overrides: `GameplayStatics:SetGlobalTimeDilation`,
+`MetaGameState:SetMapScale`, `AdaptiveDifficultySystem:Import_OverrideProfile`
+(fixed target size/speed multipliers: min = max, no adjustment) and
+`WeaponHandler:SetWeaponProfileByString`.
+
+Rules:
+- Every field is validated (names: 1-256 bytes, no control characters;
+  numbers in range; unknown fields rejected), again in the mod.
+- Refused while a challenge is running (leaving it would cancel a ranked
+  attempt) and while a scenario loads.
+- Ranked safety: KovaaK's submits leaderboard scores only for challenge
+  runs (the stats CSV and upload path are challenge-only). Overrides are
+  accepted for freeplay only, are reset before any scenario load/start and
+  whenever the scenario changes, and if a challenge begins while any
+  override is still active AimModCore cancels it (`CancelChallenge`) before
+  it can finish or submit, and says so (`challenge-cancelled`).
+- Every request and outcome is logged (`game command <seq>: ...`).
+- Target size/speed and time scale semantics (adaptive override profile,
+  global time dilation) are the first live-verified items of test #4.
 
 ## Native service
 

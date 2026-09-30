@@ -2,6 +2,7 @@
 // Game-thread observer: drives the lifecycle machine from polls (and optional
 // broadcast observations), publishes live telemetry, writes the journal and
 // runs the replay sampler. Read-only with respect to the game.
+#include "GameControl.hpp"
 #include "Presenter.hpp"
 #include "ReplaySampler.hpp"
 #include "World.hpp"
@@ -79,6 +80,8 @@ namespace aimmod
         Lifecycle m_lifecycle;
         ReplaySampler m_sampler;
         Presenter m_presenter;
+        GameControl m_control;
+        bool m_inChallenge{}, m_loading{};
 
         // Callback registrations.
         std::vector<std::uint64_t> m_callbacks;

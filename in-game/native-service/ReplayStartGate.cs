@@ -40,6 +40,13 @@ sealed class ReplayStartGate
     string? pendingScenario;
     DateTime pendingSince;
     ReplayStartBlock? block;
+    long? loadSequence;
+
+    /// <summary>The scenario-load request issued for the pending start, if any.</summary>
+    public long? LoadSequence { get { lock (gate) return loadSequence; } }
+    public void LoadRequested(string id, long sequence) { lock (gate) if (pendingId == id) loadSequence = sequence; }
+    /// <summary>Progress or failure of the automatic scenario load, shown instead of the gate reason.</summary>
+    public void Report(string id, ReplayStartBlock reason) { lock (gate) if (pendingId == id) block = reason; }
 
     internal static ReplayStartBlock? Evaluate(NativeReplay replay, GameScene? scene, bool rendererReady, string rendererReason)
     {
@@ -65,6 +72,7 @@ sealed class ReplayStartGate
 
     public ReplayStartBlock? Block { get { lock (gate) return block; } }
     public string? PendingId { get { lock (gate) return pendingId; } }
+    public string? PendingScenario { get { lock (gate) return pendingScenario; } }
     public object Status
     {
         get
@@ -79,11 +87,11 @@ sealed class ReplayStartGate
     {
         lock (gate)
         {
-            if (pendingId != id) pendingSince = DateTime.UtcNow;
+            if (pendingId != id) { pendingSince = DateTime.UtcNow; loadSequence = null; }
             pendingId = id; pendingScenario = scenario; block = reason;
         }
     }
-    public void Clear(ReplayStartBlock? reason = null) { lock (gate) { pendingId = null; pendingScenario = null; block = reason; } }
+    public void Clear(ReplayStartBlock? reason = null) { lock (gate) { pendingId = null; pendingScenario = null; block = reason; loadSequence = null; } }
 
     /// <summary>Re-evaluates a pending start; returns the replay to load when it may start now.</summary>
     public NativeReplay? Poll(Func<string, NativeReplay?> read, Func<GameScene?> scene, Func<(bool Ready, string Reason)> renderer)
@@ -107,8 +115,9 @@ sealed class ReplayStartGate
         lock (gate)
         {
             if (pendingId != id) return null;
-            if (reason is not null) { block = reason; return null; }
-            pendingId = null; block = null;
+            // While an automatic load is in flight its progress message stays.
+            if (reason is not null) { if (loadSequence is null || reason.Reason != "scenario-mismatch") block = reason; return null; }
+            pendingId = null; block = null; loadSequence = null;
         }
         return replay;
     }

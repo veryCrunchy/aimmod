@@ -69,6 +69,21 @@ static class CoreFormatChecks
             sceneNow = Scene();
             Check(startGate.Poll(_ => compact, () => sceneNow, () => (true, "unavailable")) == compact && startGate.PendingId is null, "pending start begins once the scenario is ready");
 
+            // Game commands: file format shared with AimModCore (GameCommand.cpp).
+            var commands = new GameCommands(root);
+            var sent = commands.Send(new("start-scenario", "Synthetic target test", "freeplay", 0.5, 1.5, null, null, "Track Master 100"));
+            var written = File.ReadAllText(Path.Combine(root, "core-command.tsv"));
+            Check(sent.Sequence is > 0 && written.StartsWith("AIMMOD_CORE_COMMAND_1\nseq\t" + sent.Sequence + "\naction\tstart-scenario\nscenario\tSynthetic target test\nmode\tfreeplay\ntimeScale\t0.5\ntargetSize\t1.5\nweapon\tTrack Master 100\n"),
+                "start command written in the native format");
+            var second = commands.Send(new("reset-overrides", null, null, null, null, null, null, null));
+            Check(second.Sequence > sent.Sequence && !File.ReadAllText(Path.Combine(root, "core-command.tsv")).Contains("scenario"), "sequences increase; reset carries no scenario");
+            Check(commands.Send(new("delete", "x", null, null, null, null, null, null)).Error == "invalid-command" && commands.Send(new("load-scenario", "a\u0001b", null, null, null, null, null, null)).Error == "invalid-scenario",
+                "malformed commands rejected before the game sees them");
+            File.WriteAllText(Path.Combine(root, "core-command-result.tsv"), "AIMMOD_CORE_RESULT_1\t42\terror\tchallenge-active\tFinish%09it\n");
+            Check(commands.Result() == new GameCommandResult(42, "error", "challenge-active", "Finish\tit"), "native result parsed");
+            File.WriteAllText(Path.Combine(root, "core-active.tsv"), $"AIMMOD_CORE_1\t0.1.0\t{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}\ttelemetry,replay,load,start\n");
+            Check(GameCommands.Capabilities(root).Contains("load") && GameCommands.Capabilities(root).Contains("start"), "capabilities from the heartbeat");
+
             // Protocol 6 publishes a render-rate motion window while playing.
             var playback = new NativeReplayPlayback(root, () => true, () => 6);
             playback.Load(compact);
