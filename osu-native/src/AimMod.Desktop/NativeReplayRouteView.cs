@@ -10,7 +10,9 @@ using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
+using osu.Framework.Graphics.Cursor;
 using osu.Framework.Input.Events;
+using osu.Framework.Localisation;
 using osu.Game.Graphics.Sprites;
 using osu.Game.Graphics.Containers;
 using osu.Game.Graphics.UserInterface;
@@ -27,12 +29,29 @@ public partial class NativeReplayRouteView : Container
     private const float browser_width = 280;
     private const float inspector_width = 300;
     private const float transport_height = 240;
+    private const float browser_list_top = 178;
+    private const float narrow_width = 760;
+    private const float wide_width = 1120;
 
     private readonly Drawable browserPanel;
     private readonly Container playbackPanel;
     private readonly Drawable inspectorPanel;
     private readonly AimModButton detailsToggle;
+    private readonly AimModButton libraryToggle;
+    private readonly AimModScrollContainer browserScroll;
+    private readonly AimModInlineStatus browserStatus;
+    private readonly FillFlowContainer statusActions;
     private bool compactDetailsOpen;
+    private bool narrowLibraryOpen = true;
+    private AimModLayout.ChangeTracker<float> layoutTracker;
+    private AimModLayout.ChangeTracker<float> browserStatusTracker;
+    private AimModLayout.ChangeTracker<float> statusWidthTracker;
+    private AimModLayout.ChangeTracker<int> currentTimeTracker;
+    private AimModLayout.ChangeTracker<int> durationTracker;
+    private AimModLayout.ChangeTracker<bool> pausedTracker;
+    private readonly Dictionary<string, ReplayGroupBlock> groupBlocks = new(StringComparer.Ordinal);
+    private (string Search, string Mods, string Ruleset)? loadedQuery;
+    private bool browserLoadingShown;
     private bool footageOpen;
     private AimModButton? footageButton;
     public void OpenFootage() => footageButton?.Action?.Invoke();
@@ -42,7 +61,7 @@ public partial class NativeReplayRouteView : Container
     private readonly ILocalLibrarySource? source;
     private readonly IReadOnlyDictionary<Guid, ReplayAnalysisResult> analyses;
     private readonly Action<LocalReplay>? openReplay;
-    private readonly OsuTextBox searchBox;
+    private readonly AimModTextBox searchBox;
     private readonly Bindable<string> modSelection = new(ScoreMods.Any);
     private readonly ScoreModFilterDropdown modDropdown;
     private readonly Bindable<string> gameMode = new("All modes");
@@ -52,7 +71,7 @@ public partial class NativeReplayRouteView : Container
     private readonly Container statusLayer;
     private readonly SpriteIcon statusIcon;
     private readonly TruncatingSpriteText statusTitle;
-    private readonly TruncatingSpriteText statusDetail;
+    private readonly WrappedLabel statusDetail;
     private readonly SpriteText summaryAccuracy;
     private readonly SpriteText summaryPerformance;
     private readonly SpriteText summaryMisses;
@@ -70,7 +89,6 @@ public partial class NativeReplayRouteView : Container
     private readonly SpriteText pauseLabel;
     private readonly SpriteText speedLabel;
     private readonly Container analysisCard;
-    private readonly AimModLoadingOverlay loadingOverlay;
     private readonly NativeHubReplaySharePanel hubSharePanel;
     private readonly OsuButton practiceButton;
     private readonly Action<string>? openPractice;
@@ -86,7 +104,6 @@ public partial class NativeReplayRouteView : Container
     private readonly HashSet<string> expandedReplayMaps = new(StringComparer.Ordinal);
     private long analysisRevision;
     private double playbackSpeed = 1;
-    private bool analysisInProgress;
     private bool analysisHasResult;
 
     public NativeReplayRouteView(
@@ -122,23 +139,26 @@ public partial class NativeReplayRouteView : Container
                 Children = new Drawable[]
                 {
                     place(section("REPLAY LIBRARY"), y: 2),
-                    new AimModResetButton(() => { searchBox!.Current.Value = string.Empty; gameMode.Value = "All modes"; modSelection.Value = ScoreMods.Any; loadReplayBrowser(); }) {
+                    new AimModResetButton(() => { searchBox!.Current.Value = string.Empty; gameMode.Value = "All modes"; modSelection.Value = ScoreMods.Any; loadReplayBrowser(force: true); }) {
                         Anchor = Anchor.TopRight, Origin = Anchor.TopRight, Width = 90, Height = 25, Y = -4,
                     },
-                    replayCount = place(makeText("Loading local runs...", 10, AimModPalette.Muted, "SemiBold"), y: 22),
+                    replayCount = place(makeText("Loading local runs...", AimModVisualStyle.MinReadableFontSize, AimModPalette.Muted, "SemiBold"), y: 22),
                     searchBox = new AimModTextBox
                     {
                         RelativeSizeAxes = Axes.X,
                         Height = AimModVisualStyle.ControlHeight,
                         Y = 44,
                         PlaceholderText = "Search maps, players or mods",
+                        FocusOnSearchShortcut = true,
                     },
                     new AimModDropdown<string> { Y = 88, RelativeSizeAxes = Axes.X, Width = 1, Items = new[] { "All modes", "osu!", "osu!taiko", "osu!catch", "osu!mania" }, Current = gameMode },
                     new StatisticsFilterBar { Y=130, RelativeSizeAxes=Axes.X, Height=40, Depth=-2, Child=modDropdown=new ScoreModFilterDropdown(modSelection) },
-                    new AimModScrollContainer
+                    browserStatus = new AimModInlineStatus { Y = browser_list_top },
+                    browserScroll = new AimModScrollContainer
                     {
                         RelativeSizeAxes = Axes.Both,
-                        Padding = new MarginPadding { Top = 178 },
+                        Padding = new MarginPadding { Top = browser_list_top },
+                        Depth = 1,
                         Child = replayList = new FillFlowContainer<Drawable>
                         {
                             RelativeSizeAxes = Axes.X,
@@ -196,7 +216,22 @@ public partial class NativeReplayRouteView : Container
                                                 },
                                             },
                                             statusTitle = truncatingText("Choose a replay", 25, AimModPalette.Text, 540, "Bold", Anchor.TopCentre),
-                                            statusDetail = truncatingText("Expand a map on the left, then choose an attempt to inspect.", 13, AimModPalette.Muted, 540, anchor: Anchor.TopCentre),
+                                            statusDetail = new WrappedLabel("Expand a map on the left, then choose an attempt to inspect.", 13, AimModPalette.Muted, centred: true),
+                                            statusActions = new FillFlowContainer
+                                            {
+                                                Anchor = Anchor.TopCentre,
+                                                Origin = Anchor.TopCentre,
+                                                AutoSizeAxes = Axes.Both,
+                                                Direction = FillDirection.Horizontal,
+                                                Spacing = new(AimModVisualStyle.RowSpacing),
+                                                Margin = new MarginPadding { Top = AimModVisualStyle.RelatedSpacing },
+                                                Alpha = 0,
+                                                Children = new Drawable[]
+                                                {
+                                                    new AimModButton("Try again", retrySelectedReplay, primary: true),
+                                                    new AimModButton("Choose another replay", chooseAnotherReplay),
+                                                },
+                                            },
                                         },
                                     },
                                 },
@@ -223,8 +258,8 @@ public partial class NativeReplayRouteView : Container
                                     new TransportButton("1.00x", cycleSpeed, speedLabel = makeText("1.00x", 12, AimModPalette.Text, "Bold")),
                                 },
                             },
-                            currentTimeText = place(makeText("0:00.000", 12, AimModPalette.Text, "SemiBold"), y: 44),
-                            durationText = place(makeText("0:00.000", 12, AimModPalette.Muted, "SemiBold"), y: 44, anchor: Anchor.TopRight, origin: Anchor.TopRight),
+                            currentTimeText = place(makeText("0:00.0", 12, AimModPalette.Text, "SemiBold"), y: 44),
+                            durationText = place(makeText("0:00.0", 12, AimModPalette.Muted, "SemiBold"), y: 44, anchor: Anchor.TopRight, origin: Anchor.TopRight),
                             new ReplayScrubber(
                                 () => currentTime?.Value ?? 0,
                                 () => duration?.Value ?? 0,
@@ -377,14 +412,16 @@ public partial class NativeReplayRouteView : Container
                     },
                 },
             }, Anchor.TopRight, Anchor.TopRight, null, inspector_width),
-            loadingOverlay = new AimModLoadingOverlay(),
         };
 
         Drawable[] body = Children.ToArray();
         Clear(false);
         Add(new AimModSectionHeader("Replays", "Watch your plays, compare attempts, and review mistakes.") { Width = .75f });
-        Add(detailsToggle = new AimModButton("Run details", () => compactDetailsOpen = !compactDetailsOpen) {
+        Add(detailsToggle = new AimModButton("Run details", () => { compactDetailsOpen = !compactDetailsOpen; if (compactDetailsOpen) narrowLibraryOpen = false; layoutTracker.Reset(); }) {
             Anchor = Anchor.TopRight, Origin = Anchor.TopRight,
+        });
+        Add(libraryToggle = new AimModButton("Library", () => { narrowLibraryOpen = !narrowLibraryOpen; compactDetailsOpen = false; layoutTracker.Reset(); }) {
+            Anchor = Anchor.TopRight, Origin = Anchor.TopRight, Alpha = 0,
         });
         if (footageFactory is not null)
         {
@@ -417,40 +454,119 @@ public partial class NativeReplayRouteView : Container
         showMapPatternState("Choose a map with multiple attempts to compare repeated mistakes.");
     }
 
-    private osu.Framework.Threading.ScheduledDelegate? searchRefresh;
     private bool browserLoaded;
 
     protected override void LoadComplete()
     {
         base.LoadComplete();
-        searchBox.OnCommit += (_, _) => { searchRefresh?.Cancel(); loadReplayBrowser(); };
-        searchBox.Current.BindValueChanged(_ => {
-            searchRefresh?.Cancel(); searchRefresh = Scheduler.AddDelayed(loadReplayBrowser, 250);
-        });
+        searchBox.QueryChanged += _ => loadReplayBrowser();
+        searchBox.MoveToResults += () => AimModInteractiveSurface.FocusFirst(replayList);
         gameMode.BindValueChanged(_ => loadReplayBrowser());
         modSelection.BindValueChanged(_ => loadReplayBrowser());
         if (source is not null)
             loadReplayBrowser();
     }
 
+    public override bool HandleNonPositionalInput => true;
+
+    protected override bool OnKeyDown(KeyDownEvent e)
+    {
+        if (footageOpen || e.ControlPressed || e.AltPressed || GetContainingInputManager()?.FocusedDrawable is osu.Framework.Graphics.UserInterface.TextBox)
+            return base.OnKeyDown(e);
+
+        switch (e.Key)
+        {
+            case osuTK.Input.Key.Escape when compactDetailsOpen:
+                compactDetailsOpen = false;
+                layoutTracker.Reset();
+                return true;
+
+            case osuTK.Input.Key.Space when player is not null && !e.Repeat:
+                player.TogglePause();
+                return true;
+
+            case osuTK.Input.Key.Left or osuTK.Input.Key.Right when player is not null:
+                double step = e.ShiftPressed ? 1000 : 5000;
+                player.SeekTo((currentTime?.Value ?? 0) + (e.Key == osuTK.Input.Key.Left ? -step : step));
+                return true;
+        }
+
+        return base.OnKeyDown(e);
+    }
+
+    internal static ReplayRouteLayout CalculateLayout(float width, bool detailsOpen, bool libraryOpen)
+    {
+        if (width >= wide_width)
+            return new(ReplayRouteLayoutMode.Wide, browser_width, true, true, true);
+        if (width >= narrow_width)
+            return new(ReplayRouteLayoutMode.Medium, 240, true, !detailsOpen, detailsOpen);
+        // One pane at a time keeps playback usable instead of squeezing it beside the library.
+        bool library = libraryOpen && !detailsOpen;
+        return new(ReplayRouteLayoutMode.Narrow, width, library, !library && !detailsOpen, detailsOpen);
+    }
+
     protected override void Update()
     {
         base.Update();
         if (footageOpen) { SuspendPlayback(); return; }
-        bool wide = DrawWidth >= 1120;
-        bool showInspector = wide || compactDetailsOpen;
-        float leftWidth = wide ? browser_width : 240;
-        browserPanel.Width = leftWidth;
-        inspectorPanel.Alpha = showInspector ? 1 : 0;
-        inspectorPanel.Width = wide ? inspector_width : Math.Max(0, DrawWidth-leftWidth-12);
-        playbackPanel.Alpha = !wide && showInspector ? 0 : 1;
-        playbackPanel.Padding = new MarginPadding { Left = leftWidth+12, Right = wide ? inspector_width+12 : 0 };
+        if (layoutTracker.Update(DrawWidth))
+            applyLayout(CalculateLayout(DrawWidth, compactDetailsOpen, narrowLibraryOpen));
+
+        float statusHeight = browserStatus.IsShowing ? browserStatus.DrawHeight + AimModVisualStyle.RelatedSpacing : 0;
+        if (browserStatusTracker.Update(statusHeight))
+            browserScroll.Padding = new MarginPadding { Top = browser_list_top + statusHeight };
+
+        double now = currentTime?.Value ?? 0;
+        if (currentTimeTracker.Update((int)(Math.Max(0, now) / 100)))
+            currentTimeText.Text = formatClock(now);
+        double total = duration?.Value ?? 0;
+        if (durationTracker.Update((int)(Math.Max(0, total) / 100)))
+            durationText.Text = formatClock(total);
+        bool isPaused = paused?.Value != false;
+        if (pausedTracker.Update(isPaused))
+            pauseLabel.Text = isPaused ? "Play" : "Pause";
+        if (statusWidthTracker.Update(statusLayer.DrawWidth))
+            statusTitle.MaxWidth = Math.Max(120, statusLayer.DrawWidth - 80);
+        float libraryX = -(detailsToggle.DrawWidth + AimModVisualStyle.RelatedSpacing);
+        if (libraryToggle.Alpha > 0 && libraryToggle.X != libraryX)
+            libraryToggle.X = libraryX;
+    }
+
+    private void applyLayout(ReplayRouteLayout layout)
+    {
+        bool narrow = layout.Mode == ReplayRouteLayoutMode.Narrow;
+        bool wide = layout.Mode == ReplayRouteLayoutMode.Wide;
+        browserPanel.Width = layout.BrowserWidth;
+        browserPanel.Alpha = layout.ShowBrowser ? 1 : 0;
+        float left = narrow ? 0 : layout.BrowserWidth + 12;
+        inspectorPanel.Alpha = layout.ShowInspector ? 1 : 0;
+        inspectorPanel.Width = wide ? inspector_width : Math.Max(0, DrawWidth - left);
+        playbackPanel.Alpha = layout.ShowPlayback ? 1 : 0;
+        playbackPanel.Padding = new MarginPadding { Left = left, Right = wide ? inspector_width + 12 : 0 };
         detailsToggle.Alpha = wide ? 0 : 1;
         detailsToggle.SetCaption(compactDetailsOpen ? "Back to playback" : "Run details");
-        currentTimeText.Text = formatTime(currentTime?.Value ?? 0);
-        durationText.Text = formatTime(duration?.Value ?? 0);
-        pauseLabel.Text = paused?.Value != false ? "Play" : "Pause";
-        statusTitle.MaxWidth = statusDetail.MaxWidth = Math.Max(120, statusLayer.DrawWidth - 80);
+        libraryToggle.Alpha = narrow ? 1 : 0;
+        libraryToggle.SetCaption(layout.ShowBrowser ? "Back to playback" : "Library");
+    }
+
+    private void retrySelectedReplay()
+    {
+        if (selectedReplay is { } replay && replay.RulesetShortName == "osu")
+            openReplay?.Invoke(replay);
+    }
+
+    private void chooseAnotherReplay()
+    {
+        statusIcon.Icon = FontAwesome.Solid.PlayCircle;
+        statusIcon.Colour = AimModPalette.Cyan;
+        statusTitle.Text = "Choose a replay";
+        statusTitle.Colour = AimModPalette.Text;
+        statusDetail.Text = "Expand a map on the left, then choose an attempt to inspect.";
+        statusActions.FadeOut(AimModVisualStyle.FastTransition);
+        narrowLibraryOpen = true;
+        compactDetailsOpen = false;
+        layoutTracker.Reset();
+        searchBox.FocusSearch();
     }
 
     public void SetReplaySummary(LocalReplay replay)
@@ -459,7 +575,6 @@ public partial class NativeReplayRouteView : Container
         practiceButton.Enabled.Value = openPractice is not null;
         expandedReplayMaps.Add(ReplayBrowserModel.MapKeyFor(replay));
         analysisRevision = -1;
-        analysisInProgress = false;
         analysisHasResult = false;
         summaryAccuracy.Text = formatAccuracy(replay.Accuracy);
         summaryPerformance.Text = replay.PerformancePoints is { } pp ? $"{pp:0.#}pp" : $"{replay.TotalScore:N0}";
@@ -470,7 +585,13 @@ public partial class NativeReplayRouteView : Container
         statusTitle.Text = replay.Title;
         statusTitle.Colour = AimModPalette.Text;
         statusDetail.Text = $"{replay.Difficulty}  //  {formatAccuracy(replay.Accuracy)}  //  {replay.PlayedAt.LocalDateTime:g}";
+        statusActions.Alpha = 0;
         statusLayer.FadeIn(80);
+        if (narrowLibraryOpen)
+        {
+            narrowLibraryOpen = false;
+            layoutTracker.Reset();
+        }
         hubSharePanel.SetReplay(replay, analyses.ContainsKey(replay.ScoreId));
 
         if (replay.RulesetShortName != "osu") {
@@ -487,7 +608,11 @@ public partial class NativeReplayRouteView : Container
         else
             showPendingAnalysis();
 
-        loadReplayBrowser();
+        // Selection only changes highlighting; the library itself has not changed.
+        if (browserLoaded)
+            renderReplayBrowser();
+        else
+            loadReplayBrowser();
     }
 
     private partial class PracticeActionButton : OsuButton
@@ -520,13 +645,13 @@ public partial class NativeReplayRouteView : Container
 
     public void ShowError(string message)
     {
-        analysisInProgress = false;
-        loadingOverlay.HideLoading();
         statusIcon.Icon = FontAwesome.Solid.ExclamationTriangle;
-        statusIcon.Colour = AimModPalette.Pink;
+        statusIcon.Colour = AimModPalette.Danger;
         statusTitle.Text = "Replay could not be opened";
-        statusTitle.Colour = AimModPalette.Pink;
+        statusTitle.Colour = AimModPalette.Text;
         statusDetail.Text = message;
+        statusActions.Alpha = 1;
+        statusActions.Children[0].Alpha = selectedReplay?.RulesetShortName == "osu" && openReplay is not null ? 1 : 0;
         statusLayer.FadeIn(120);
 
         if (!analysisHasResult)
@@ -542,9 +667,7 @@ public partial class NativeReplayRouteView : Container
         switch (state.Status)
         {
             case ReplayAnalysisStatus.Running:
-                analysisInProgress = true;
                 analysisHasResult = false;
-                loadingOverlay.HideLoading();
                 analysisTitle.Text = "Analysing exact judgements...";
                 analysisSummary.Text = "Running accelerated official ruleset playback";
                 showNotableState("Exact judgement analysis is in progress.", AimModPalette.Muted);
@@ -559,27 +682,21 @@ public partial class NativeReplayRouteView : Container
                 break;
 
             case ReplayAnalysisStatus.Failed:
-                analysisInProgress = false;
                 analysisHasResult = false;
-                loadingOverlay.HideLoading();
                 showAnalysisFailure(
                     state.Error?.Message ?? "AimMod could not analyse this replay.",
                     "Exact coaching focus is unavailable for this run. Replay playback is still available.");
                 break;
 
             case ReplayAnalysisStatus.Cancelled:
-                analysisInProgress = false;
                 analysisHasResult = false;
-                loadingOverlay.HideLoading();
                 showAnalysisFailure(
                     "Exact replay analysis was cancelled.",
                     "Select the run again to calculate its coaching focus.");
                 break;
 
             case ReplayAnalysisStatus.Idle:
-                analysisInProgress = false;
                 analysisHasResult = false;
-                loadingOverlay.HideLoading();
                 showAnalysisFailure(
                     "Exact replay analysis has not started.",
                     "Open this run to calculate notable moments and a measured coaching focus.");
@@ -589,9 +706,7 @@ public partial class NativeReplayRouteView : Container
 
     public void ShowAnalysisError(string message)
     {
-        analysisInProgress = false;
         analysisHasResult = false;
-        loadingOverlay.HideLoading();
         showAnalysisFailure(message, "Exact coaching focus is unavailable for this run. Replay playback is still available.");
     }
 
@@ -621,13 +736,11 @@ public partial class NativeReplayRouteView : Container
 
     private void showCompletedAnalysis(ReplayAnalysisResult result)
     {
-        analysisInProgress = false;
         analysisHasResult = true;
-        loadingOverlay.HideLoading();
         ReplayAnalysisPresentation presentation = ReplayAnalysisPresenter.Present(result);
         analysisTitle.Text = "Exact replay analysis";
-        analysisSummary.Text = wrap(presentation.Summary, 37);
-        analysisNextPlay.Text = wrap(measuredNextPlay(result, presentation.NextPlay), 35);
+        analysisSummary.Text = presentation.Summary;
+        analysisNextPlay.Text = measuredNextPlay(result, presentation.NextPlay);
         judgementTimeline.SetResult(result);
         showMomentButtons(result);
         showNotableRows(result);
@@ -653,18 +766,33 @@ public partial class NativeReplayRouteView : Container
         notableRows.Add(new InspectorStateRow(message, colour));
     }
 
-    private void loadReplayBrowser()
+    private void loadReplayBrowser() => loadReplayBrowser(force: false);
+
+    private void loadReplayBrowser(bool force)
     {
         if (source is null)
             return;
+
+        string ruleset = gameMode.Value switch { "osu!" => "osu", "osu!taiko" => "taiko", "osu!catch" => "fruits", "osu!mania" => "mania", _ => "" };
+        var query = (searchBox.Current.Value, modSelection.Value, ruleset);
+        // Enter after a debounced edit, or a filter set to its current value, must not reload twice.
+        if (!force && loadedQuery == query)
+            return;
+        loadedQuery = query;
 
         loading?.Cancel();
         loading?.Dispose();
         loading = new CancellationTokenSource();
         CancellationToken cancellationToken = loading.Token;
-        if (!browserLoaded && selectedReplay is null && !analysisInProgress)
-            loadingOverlay.ShowLoading("Loading replays", "Reading your local osu!lazer play history");
-        _ = loadReplayBrowserAsync(searchBox.Current.Value, modSelection.Value, gameMode.Value switch { "osu!" => "osu", "osu!taiko" => "taiko", "osu!catch" => "fruits", "osu!mania" => "mania", _ => "" }, cancellationToken);
+        browserLoadingShown = true;
+        browserStatus.ShowLoading(browserLoaded ? "Updating replays..." : "Reading your local play history...", () =>
+        {
+            loading?.Cancel();
+            loadedQuery = null;
+            browserLoadingShown = false;
+            browserStatus.ShowMessage("Loading was cancelled.", () => loadReplayBrowser(force: true));
+        });
+        _ = loadReplayBrowserAsync(query.Item1, query.Item2, ruleset, cancellationToken);
     }
 
     private async Task loadReplayBrowserAsync(string search, string mods, string ruleset, CancellationToken cancellationToken)
@@ -693,9 +821,14 @@ public partial class NativeReplayRouteView : Container
             if (!IsDisposed)
                 Schedule(() =>
                 {
-                    if (!analysisInProgress)
-                        loadingOverlay.HideLoading();
-                    replayCount.Text = $"Local replays unavailable: {error.Message}";
+                    if (cancellationToken.IsCancellationRequested)
+                        return;
+                    browserLoadingShown = false;
+                    loadedQuery = null;
+                    replayCount.Text = "Local replays unavailable";
+                    browserStatus.ShowError(error, "Loading local replays", () => loadReplayBrowser(force: true));
+                    // Older results stay visible but read as out of date until a retry succeeds.
+                    replayList.FadeTo(0.45f, AimModVisualStyle.HoverTransition);
                 });
         }
     }
@@ -713,8 +846,12 @@ public partial class NativeReplayRouteView : Container
             if (updated?.PerformancePoints is {} pp) summaryPerformance.Text = $"{pp:0.#}pp";
         }
         renderReplayBrowser();
-        if (!analysisInProgress)
-            loadingOverlay.HideLoading();
+        replayList.FadeIn(AimModVisualStyle.HoverTransition);
+        if (browserLoadingShown)
+        {
+            browserLoadingShown = false;
+            browserStatus.Dismiss();
+        }
     }
 
     private void renderReplayBrowser()
@@ -724,33 +861,72 @@ public partial class NativeReplayRouteView : Container
         replayCount.Text = replayBrowser.TotalMapCount > shownMaps
             ? $"Newest {shownMaps:N0} {shownMapLabel} of {replayBrowser.TotalMapCount:N0}  //  {replayBrowser.TotalReplayCount:N0} runs"
             : $"{shownMaps:N0} {shownMapLabel}  //  {replayBrowser.TotalReplayCount:N0} runs";
-        replayList.Clear();
-
-        foreach (ReplayBrowserMapGroup group in replayBrowser.Maps)
-        {
-            bool expanded = expandedReplayMaps.Contains(group.Key);
-            replayList.Add(new ReplayGroupHeader(group, expanded, () => toggleReplayMap(group.Key), openBeatmap));
-            if (!expanded)
-                continue;
-
-            foreach (LocalReplay replay in group.Attempts)
-                replayList.Add(new ReplayBrowserRow(replay, replay.ScoreId == selectedReplay?.ScoreId, () => { if (replay.RulesetShortName == "osu") openReplay?.Invoke(replay); else { SuspendPlayback(); SetReplaySummary(replay); } }, openBeatmap));
-        }
 
         if (replayBrowser.Maps.Count == 0)
+        {
+            groupBlocks.Clear();
+            replayList.Clear();
             replayList.Add(new ReplayBrowserEmptyState(
                 string.IsNullOrWhiteSpace(searchBox.Current.Value) ? "No saved replays" : "No matching replays",
                 string.IsNullOrWhiteSpace(searchBox.Current.Value)
                     ? "Play a map with replay recording enabled, then return here."
                     : "Try a title, artist, difficulty, player, or mod."));
+            return;
+        }
+
+        // Keep unchanged map groups so expanding, selecting or refreshing preserves rows and scroll.
+        if (groupBlocks.Count == 0)
+            replayList.Clear();
+
+        var incoming = replayBrowser.Maps.Select(group => group.Key).ToHashSet(StringComparer.Ordinal);
+        foreach (string stale in ListDiff.Stale(groupBlocks.Keys, incoming))
+        {
+            replayList.Remove(groupBlocks[stale], true);
+            groupBlocks.Remove(stale);
+        }
+
+        for (int index = 0; index < replayBrowser.Maps.Count; index++)
+        {
+            ReplayBrowserMapGroup group = replayBrowser.Maps[index];
+            string signature = ReplayGroupSignature(group);
+            if (groupBlocks.TryGetValue(group.Key, out ReplayGroupBlock? existing) && existing.Signature != signature)
+            {
+                replayList.Remove(existing, true);
+                groupBlocks.Remove(group.Key);
+            }
+
+            if (!groupBlocks.TryGetValue(group.Key, out ReplayGroupBlock? block))
+            {
+                string key = group.Key;
+                block = new ReplayGroupBlock(group, signature, expandedReplayMaps.Contains(key), expanded =>
+                {
+                    if (expanded)
+                        expandedReplayMaps.Add(key);
+                    else
+                        expandedReplayMaps.Remove(key);
+                }, selectBrowserReplay, openBeatmap);
+                groupBlocks[key] = block;
+                replayList.Add(block);
+            }
+
+            block.SetExpanded(expandedReplayMaps.Contains(group.Key));
+            block.SetSelected(selectedReplay?.ScoreId);
+            replayList.SetLayoutPosition(block, index);
+        }
     }
 
-    private void toggleReplayMap(string key)
-    {
-        if (!expandedReplayMaps.Add(key))
-            expandedReplayMaps.Remove(key);
+    internal static string ReplayGroupSignature(ReplayBrowserMapGroup group) =>
+        string.Join(',', group.Attempts.Select(replay => $"{replay.ScoreId:N}:{replay.PerformancePoints:0.#}"));
 
-        renderReplayBrowser();
+    private void selectBrowserReplay(LocalReplay replay)
+    {
+        if (replay.RulesetShortName == "osu")
+            openReplay?.Invoke(replay);
+        else
+        {
+            SuspendPlayback();
+            SetReplaySummary(replay);
+        }
     }
 
     private void showMomentButtons(ReplayAnalysisResult result)
@@ -1002,39 +1178,23 @@ public partial class NativeReplayRouteView : Container
 
     private static string formatAccuracy(double value) => double.IsFinite(value) ? $"{value * 100:0.00}%" : "--";
 
-    private static string wrap(string value, int width)
-    {
-        var lines = new List<string>();
-        var current = new List<string>();
-        int length = 0;
-        foreach (string word in value.Split(' ', StringSplitOptions.RemoveEmptyEntries))
-        {
-            if (length > 0 && length + word.Length + 1 > width)
-            {
-                lines.Add(string.Join(' ', current));
-                current.Clear();
-                length = 0;
-            }
-
-            current.Add(word);
-            length += word.Length + (length == 0 ? 0 : 1);
-        }
-
-        if (current.Count > 0)
-            lines.Add(string.Join(' ', current));
-        return string.Join('\n', lines.Take(4));
-    }
-
     private static string formatTime(double milliseconds)
     {
         TimeSpan time = TimeSpan.FromMilliseconds(Math.Max(0, milliseconds));
         return $"{(int)time.TotalMinutes}:{time.Seconds:00}.{time.Milliseconds:000}";
     }
 
+    /// <summary>Transport clock at tenth-of-a-second precision so labels change at most ten times a second.</summary>
+    internal static string formatClock(double milliseconds)
+    {
+        TimeSpan time = TimeSpan.FromMilliseconds(Math.Max(0, milliseconds));
+        return $"{(int)time.TotalMinutes}:{time.Seconds:00}.{time.Milliseconds / 100}";
+    }
+
     private static SpriteText makeText(string value, float size, Colour4 colour, string weight = "Regular") => new()
     {
         Text = value,
-        Font = new FontUsage(size: size, weight: weight),
+        Font = new FontUsage(size: AimModVisualStyle.Readable(size), weight: weight),
         Colour = colour,
     };
 
@@ -1047,7 +1207,7 @@ public partial class NativeReplayRouteView : Container
         Anchor anchor = Anchor.TopLeft) => new()
     {
         Text = value,
-        Font = new FontUsage(size: size, weight: weight),
+        Font = new FontUsage(size: AimModVisualStyle.Readable(size), weight: weight),
         Colour = colour,
         MaxWidth = maxWidth,
         Anchor = anchor,
@@ -1127,9 +1287,87 @@ public partial class NativeReplayRouteView : Container
                 {
                     RelativeSizeAxes = Axes.Both,
                     Padding = new MarginPadding { Left = 36, Right = 12, Top = 11, Bottom = 9 },
-                    Child = new WrappedLabel(message, 10, colour, "SemiBold"),
+                    Child = new WrappedLabel(message, AimModVisualStyle.MinReadableFontSize, colour, "SemiBold"),
                 },
             };
+        }
+    }
+
+    private partial class ReplayGroupBlock : FillFlowContainer<Drawable>
+    {
+        private readonly ReplayGroupHeader header;
+        private readonly FillFlowContainer<Drawable> rows;
+        private readonly ReplayBrowserMapGroup group;
+        private readonly Func<LocalReplay, CancellationToken, Task>? openBeatmap;
+        private readonly Action<LocalReplay> open;
+        private readonly Action<bool> expansionChanged;
+        private bool expanded;
+        private bool populated;
+
+        public string Signature { get; }
+
+        public ReplayGroupBlock(
+            ReplayBrowserMapGroup group,
+            string signature,
+            bool expanded,
+            Action<bool> expansionChanged,
+            Action<LocalReplay> open,
+            Func<LocalReplay, CancellationToken, Task>? openBeatmap)
+        {
+            Signature = signature;
+            this.group = group;
+            this.open = open;
+            this.openBeatmap = openBeatmap;
+            this.expansionChanged = expansionChanged;
+            RelativeSizeAxes = Axes.X;
+            AutoSizeAxes = Axes.Y;
+            Direction = FillDirection.Vertical;
+            Spacing = new(AimModVisualStyle.RelatedSpacing);
+            Children = new Drawable[]
+            {
+                header = new ReplayGroupHeader(group, expanded, () =>
+                {
+                    SetExpanded(!this.expanded);
+                    this.expansionChanged(this.expanded);
+                }, openBeatmap),
+                rows = new FillFlowContainer<Drawable>
+                {
+                    RelativeSizeAxes = Axes.X,
+                    AutoSizeAxes = Axes.Y,
+                    Direction = FillDirection.Vertical,
+                    Spacing = new(AimModVisualStyle.RelatedSpacing),
+                },
+            };
+            SetExpanded(expanded);
+        }
+
+        public void SetExpanded(bool value)
+        {
+            if (populated == value && expanded == value)
+                return;
+            expanded = value;
+            header.SetExpanded(value);
+            if (value && !populated)
+            {
+                // Attempt rows are built on first expansion only.
+                populated = true;
+                foreach (LocalReplay replay in group.Attempts)
+                {
+                    LocalReplay target = replay;
+                    rows.Add(new ReplayBrowserRow(replay, false, () => open(target), openBeatmap));
+                }
+            }
+
+            rows.Alpha = value ? 1 : 0;
+            rows.AutoSizeAxes = value ? Axes.Y : Axes.None;
+            if (!value)
+                rows.Height = 0;
+        }
+
+        public void SetSelected(Guid? scoreId)
+        {
+            foreach (ReplayBrowserRow row in rows.OfType<ReplayBrowserRow>())
+                row.SetSelected(row.ScoreId == scoreId);
         }
     }
 
@@ -1137,6 +1375,8 @@ public partial class NativeReplayRouteView : Container
     {
         private readonly TruncatingSpriteText title;
         private readonly TruncatingSpriteText detail;
+        private readonly SpriteIcon chevron;
+        private AimModLayout.ChangeTracker<float> widthTracker;
 
         public ReplayGroupHeader(ReplayBrowserMapGroup group, bool expanded, Action action, Func<LocalReplay, CancellationToken, Task>? openBeatmap = null)
         {
@@ -1144,7 +1384,6 @@ public partial class NativeReplayRouteView : Container
             Height = 68;
             Action = action;
             CornerRadius = AimModVisualStyle.CardRadius;
-            BackgroundColour = expanded ? AimModPalette.PanelRaised : AimModPalette.Panel;
             LocalReplay latest = group.Attempts[0];
             Children = new Drawable[]
             {
@@ -1166,42 +1405,56 @@ public partial class NativeReplayRouteView : Container
                 {
                     Text = $"{group.Artist}  //  {group.Difficulty}",
                     Position = new(12, 28),
-                    Font = new FontUsage(size: 10, weight: "Regular"),
+                    Font = AimModVisualStyle.CaptionFont,
                     Colour = AimModPalette.Cyan,
                     MaxWidth = 240,
                 },
                 place(makeText(
                     $"{group.Attempts.Count:N0} {(group.Attempts.Count == 1 ? "attempt" : "attempts")}  //  best {group.Attempts.Max(replay => replay.Accuracy) * 100:0.00}%",
-                    9,
+                    AimModVisualStyle.MinReadableFontSize,
                     AimModPalette.Muted,
                     "SemiBold"), 12, 46),
-                new SpriteIcon
+                chevron = new SpriteIcon
                 {
                     Anchor = Anchor.CentreRight,
                     Origin = Anchor.CentreRight,
                     Position = new(-12, 0),
                     Size = new(11),
-                    Icon = expanded ? FontAwesome.Solid.ChevronUp : FontAwesome.Solid.ChevronDown,
                     Colour = AimModPalette.Muted,
                 },
             };
+            SetExpanded(expanded);
+        }
+
+        public void SetExpanded(bool expanded)
+        {
+            BackgroundColour = expanded ? AimModPalette.PanelRaised : AimModPalette.Panel;
+            chevron.Icon = expanded ? FontAwesome.Solid.ChevronUp : FontAwesome.Solid.ChevronDown;
         }
 
         protected override void Update()
         {
             base.Update();
-            title.MaxWidth = detail.MaxWidth = Math.Max(100, DrawWidth - 48);
+            if (widthTracker.Update(DrawWidth))
+                title.MaxWidth = detail.MaxWidth = Math.Max(100, DrawWidth - 48);
         }
     }
 
     private partial class ReplayBrowserRow : AimModInteractiveSurface
     {
+        private readonly Box accent;
+        private readonly Box selectionTint;
+        private readonly Colour4 difficultyColour;
+
+        public Guid ScoreId { get; }
+
         public ReplayBrowserRow(LocalReplay replay, bool selected, Action action, Func<LocalReplay, CancellationToken, Task>? openBeatmap = null)
         {
+            ScoreId = replay.ScoreId;
+            difficultyColour = AimModVisualStyle.DifficultyColour(replay.StarRating);
             RelativeSizeAxes = Axes.X;
             Height = 80;
             CornerRadius = AimModVisualStyle.ControlRadius;
-            BackgroundColour = selected ? AimModPalette.PanelHover : AimModPalette.PanelRaised;
             Action = action;
             Children = new Drawable[]
             {
@@ -1211,13 +1464,12 @@ public partial class NativeReplayRouteView : Container
                     Text = replay.PerformancePoints is {} pp ? $"{pp:0.#}pp" : "PP unavailable",
                     Font = new osu.Framework.Graphics.Sprites.FontUsage(size:12, weight:"Bold"), Colour = AimModPalette.Cyan
                 },
-                new Box
+                accent = new Box
                 {
                     RelativeSizeAxes = Axes.Y,
                     Width = 3,
-                    Colour = selected ? AimModPalette.Accent : AimModVisualStyle.DifficultyColour(replay.StarRating),
                 },
-                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Accent, Alpha = selected ? 0.08f : 0 },
+                selectionTint = new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Accent, Alpha = 0 },
                 new FillFlowContainer
                 {
                     RelativeSizeAxes = Axes.X,
@@ -1241,13 +1493,20 @@ public partial class NativeReplayRouteView : Container
                         },
                         makeText(
                             $"{replay.PlayedAt.LocalDateTime:g}  //  {ScoreMods.Display(replay)}",
-                            9,
+                            AimModVisualStyle.MinReadableFontSize,
                             AimModPalette.Muted),
                     },
                 },
             };
+            SetSelected(selected);
         }
 
+        public void SetSelected(bool selected)
+        {
+            BackgroundColour = selected ? AimModPalette.PanelHover : AimModPalette.PanelRaised;
+            accent.Colour = selected ? AimModPalette.Accent : difficultyColour;
+            selectionTint.Alpha = selected ? 0.08f : 0;
+        }
     }
 
     private partial class NotableMomentRow : AimModInteractiveSurface
@@ -1298,8 +1557,21 @@ public partial class NativeReplayRouteView : Container
         }
     }
 
-    private partial class ReplayScrubber : ClickableContainer
+    private partial class ReplayScrubber : ClickableContainer, IHasTooltip
     {
+        private double hoverTime = -1;
+
+        public LocalisableString TooltipText => hoverTime >= 0 && duration() > 0 ? formatClock(hoverTime) : string.Empty;
+
+        protected override bool OnMouseMove(MouseMoveEvent e)
+        {
+            double total = duration();
+            hoverTime = total > 0 && DrawWidth > 0
+                ? Math.Clamp(ToLocalSpace(e.ScreenSpaceMousePosition).X / DrawWidth, 0, 1) * total
+                : -1;
+            return base.OnMouseMove(e);
+        }
+
         private readonly Func<double> currentTime;
         private readonly Func<double> duration;
         private readonly Action<double> seek;
@@ -1351,6 +1623,8 @@ public partial class NativeReplayRouteView : Container
             base.Update();
             double total = duration();
             float position = total > 0 ? (float)Math.Clamp(currentTime() / total, 0, 1) : 0;
+            if (progress.Width == position)
+                return;
             progress.Width = position;
             handle.X = position;
         }
@@ -1396,19 +1670,21 @@ public partial class NativeReplayRouteView : Container
     {
         private readonly TextFlowContainer flow;
         private string text = string.Empty;
+        private bool initialised;
 
-        public WrappedLabel(string value, float size, Colour4 colour, string weight = "Regular")
+        public WrappedLabel(string value, float size, Colour4 colour, string weight = "Regular", bool centred = false)
         {
             RelativeSizeAxes = Axes.X;
             AutoSizeAxes = Axes.Y;
             InternalChild = flow = new TextFlowContainer(sprite =>
             {
-                sprite.Font = new FontUsage(size: size, weight: weight);
+                sprite.Font = new FontUsage(size: AimModVisualStyle.Readable(size), weight: weight);
                 sprite.Colour = colour;
             })
             {
                 RelativeSizeAxes = Axes.X,
                 AutoSizeAxes = Axes.Y,
+                TextAnchor = centred ? Anchor.TopCentre : Anchor.TopLeft,
             };
             Text = value;
         }
@@ -1418,12 +1694,29 @@ public partial class NativeReplayRouteView : Container
             get => text;
             set
             {
+                if (initialised && text == (value ?? string.Empty))
+                    return;
                 text = value ?? string.Empty;
                 flow.Clear();
                 flow.AddText(text);
+                initialised = true;
             }
         }
     }
+
+    internal enum ReplayRouteLayoutMode
+    {
+        Wide,
+        Medium,
+        Narrow,
+    }
+
+    internal readonly record struct ReplayRouteLayout(
+        ReplayRouteLayoutMode Mode,
+        float BrowserWidth,
+        bool ShowBrowser,
+        bool ShowPlayback,
+        bool ShowInspector);
 
     private static SpriteText padded(SpriteText drawable, MarginPadding padding)
     {

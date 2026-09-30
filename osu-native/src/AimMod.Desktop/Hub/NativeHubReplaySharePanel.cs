@@ -5,6 +5,7 @@ using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
 using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
+using osu.Game.Graphics.Containers;
 using osu.Game.Graphics.Sprites;
 using osu.Game.Graphics.UserInterface;
 
@@ -27,7 +28,8 @@ public partial class NativeHubReplaySharePanel : CompositeDrawable
     private readonly OsuButton cancelRetryButton;
     private readonly OsuButton copyButton;
     private readonly OsuButton openButton;
-    private readonly TruncatingSpriteText status;
+    private readonly OsuTextFlowContainer status;
+    private string statusText = string.Empty;
     private LocalReplay? replay;
     private bool analysisAvailable;
     private Guid? queueItemId;
@@ -49,55 +51,76 @@ public partial class NativeHubReplaySharePanel : CompositeDrawable
         this.openUrl = openUrl;
         this.copyText = copyText;
 
-        AutoSizeAxes = Axes.None;
         RelativeSizeAxes = Axes.X;
-        Height = 270;
+        AutoSizeAxes = Axes.Y;
+        // A vertical flow lets long status and error text wrap without overlapping the controls.
         InternalChildren = new Drawable[]
         {
-            new Container
+            new FillFlowContainer
             {
-                RelativeSizeAxes = Axes.Both,
-                Depth = 0,
+                RelativeSizeAxes = Axes.X,
+                AutoSizeAxes = Axes.Y,
+                Direction = FillDirection.Vertical,
+                Spacing = new(AimModVisualStyle.RowSpacing),
                 Padding = new MarginPadding { Left = 14, Top = 12, Right = 12, Bottom = 12 },
                 Children = new Drawable[]
                 {
-                    status = text("Choose a replay to share.", 11, AimModPalette.Muted, "SemiBold", 0),
+                    status = new OsuTextFlowContainer(t =>
+                    {
+                        t.Font = new FontUsage(size: AimModVisualStyle.MinReadableFontSize, weight: "SemiBold");
+                    })
+                    {
+                        RelativeSizeAxes = Axes.X,
+                        AutoSizeAxes = Axes.Y,
+                        Colour = AimModPalette.Muted,
+                    },
                     new AimModDropdown<OsuHubVisibility>
                     {
                         RelativeSizeAxes = Axes.X,
                         Depth = -10,
-                        Y = 28,
                         Items = Enum.GetValues<OsuHubVisibility>(),
                         Current = visibility,
                     },
                     replayFileCheckbox = new OsuCheckbox
                     {
-                        Y = 74,
                         LabelText = "Replay file",
                         Current = uploadReplayFile,
                     },
                     analysisCheckbox = new OsuCheckbox
                     {
-                        Y = 100,
                         LabelText = "Judgement analysis",
                         Current = uploadAnalysis,
                     },
-                    shareButton = button("Share replay", share, 118, AimModPalette.Pink, 0, 136),
-                    cancelRetryButton = button("Cancel", cancelOrRetry, 82, AimModPalette.PanelHover, 128, 136),
-                    copyButton = button("Copy link", copyLink, 92, AimModPalette.PanelHover, 0, 180),
-                    openButton = button("Open", openLink, 72, AimModPalette.PanelHover, 102, 180),
+                    new FillFlowContainer
+                    {
+                        RelativeSizeAxes = Axes.X,
+                        AutoSizeAxes = Axes.Y,
+                        Direction = FillDirection.Full,
+                        Spacing = new(AimModVisualStyle.RelatedSpacing),
+                        Children = new Drawable[]
+                        {
+                            shareButton = button("Share replay", share, 118, AimModPalette.Pink),
+                            cancelRetryButton = button("Cancel", cancelOrRetry, 82, AimModPalette.PanelHover),
+                            copyButton = button("Copy link", copyLink, 92, AimModPalette.PanelHover),
+                            openButton = button("Open", openLink, 72, AimModPalette.PanelHover),
+                        },
+                    },
                 },
             },
         };
+        setStatus("Choose a replay to share.", AimModPalette.Muted);
         cancelRetryButton.Alpha = copyButton.Alpha = openButton.Alpha = 0;
         cancelRetryButton.Enabled.Value = copyButton.Enabled.Value = openButton.Enabled.Value = false;
         refreshAvailability();
     }
 
-    protected override void Update()
+    private void setStatus(string text, Colour4 colour)
     {
-        base.Update();
-        status.MaxWidth = Math.Max(100, DrawWidth - 28);
+        status.Colour = colour;
+        if (statusText == text)
+            return;
+        statusText = text;
+        status.Text = text;
     }
 
     protected override void LoadComplete()
@@ -168,12 +191,11 @@ public partial class NativeHubReplaySharePanel : CompositeDrawable
     {
         bool linked = credentialStore?.Load() is not null;
         shareButton.Enabled.Value = replay is not null && shareService is not null && linked;
-        status.Text = !linked
+        setStatus(!linked
             ? "Link an AimMod Hub account in Settings before sharing."
             : replay is null
                 ? "Choose a replay to share."
-                : "Nothing uploads until you press Share replay.";
-        status.Colour = linked ? AimModPalette.Muted : AimModPalette.Pink;
+                : "Nothing uploads until you press Share replay.", linked ? AimModPalette.Muted : AimModPalette.Pink);
     }
 
     private void share()
@@ -187,8 +209,7 @@ public partial class NativeHubReplaySharePanel : CompositeDrawable
         }
         if (uploadAnalysis.Value && !analysisAvailable)
         {
-            status.Text = "Wait for exact judgement analysis before including it.";
-            status.Colour = AimModPalette.Pink;
+            setStatus("Wait for exact judgement analysis before including it.", AimModPalette.Pink);
             return;
         }
 
@@ -202,8 +223,7 @@ public partial class NativeHubReplaySharePanel : CompositeDrawable
         cancelRetryButton.Text = "Cancel";
         cancelRetryButton.Alpha = 1;
         cancelRetryButton.Enabled.Value = true;
-        status.Text = "Preparing a verified Hub upload...";
-        status.Colour = AimModPalette.Cyan;
+        setStatus("Preparing a verified Hub upload...", AimModPalette.Cyan);
         _ = prepareAsync(new HubReplayShareSelection(replay, visibility.Value, uploadReplayFile.Value, uploadAnalysis.Value), preparing.Token);
     }
 
@@ -239,8 +259,8 @@ public partial class NativeHubReplaySharePanel : CompositeDrawable
                     if (cancellationToken.IsCancellationRequested)
                         return;
                     resetActions();
-                    status.Text = error.Message;
-                    status.Colour = AimModPalette.Pink;
+                    // Share-service validation messages are written for players; anything else is not.
+                    setStatus(error is InvalidOperationException ? error.Message : AimModFriendlyError.Message(error, "Preparing the upload"), AimModPalette.Pink);
                     shareButton.Enabled.Value = true;
                 });
         }
@@ -262,22 +282,21 @@ public partial class NativeHubReplaySharePanel : CompositeDrawable
     {
         queueItemId = item.Id;
         shareUrl = item.ShareUrl;
-        status.Text = item.Status switch
+        setStatus(item.Status switch
         {
             HubUploadQueueStatus.Queued => "Queued for upload.",
             HubUploadQueueStatus.Uploading => "Uploading to AimMod Hub...",
             HubUploadQueueStatus.Completed when item.Request.Visibility == "private" => "Private Hub copy is ready.",
             HubUploadQueueStatus.Completed => "Share link is ready.",
-            HubUploadQueueStatus.Failed => item.Error,
+            HubUploadQueueStatus.Failed => string.IsNullOrWhiteSpace(item.Error) ? "Upload failed. Retry when you are online." : item.Error,
             _ => "Upload cancelled.",
-        };
-        status.Colour = item.Status switch
+        }, item.Status switch
         {
             HubUploadQueueStatus.Completed => AimModPalette.Success,
             HubUploadQueueStatus.Failed => AimModPalette.Pink,
             HubUploadQueueStatus.Uploading => AimModPalette.Cyan,
             _ => AimModPalette.Muted,
-        };
+        });
 
         bool active = item.Status is HubUploadQueueStatus.Queued or HubUploadQueueStatus.Uploading;
         bool retryable = item.Status is HubUploadQueueStatus.Failed or HubUploadQueueStatus.Cancelled;
@@ -334,23 +353,13 @@ public partial class NativeHubReplaySharePanel : CompositeDrawable
         _ => $"lazer:{replay.ScoreId:N}",
     };
 
-    private static OsuButton button(string label, Action action, float width, Colour4 colour, float x = 0, float y = 0) => new HubButton
+    private static OsuButton button(string label, Action action, float width, Colour4 colour) => new HubButton
     {
         Text = label,
         Action = action,
         Width = width,
         Height = AimModVisualStyle.CompactControlHeight,
-        Position = new(x, y),
         BackgroundColour = colour,
-    };
-
-    private static TruncatingSpriteText text(string value, float size, Colour4 colour, string weight = "Regular", float y = 0) => new()
-    {
-        Text = value,
-        Font = new FontUsage(size: size, weight: weight),
-        Colour = colour,
-        MaxWidth = 280,
-        Y = y,
     };
 
     private partial class HubButton : OsuButton
