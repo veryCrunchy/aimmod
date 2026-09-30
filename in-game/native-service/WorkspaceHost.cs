@@ -254,7 +254,7 @@ sealed class RendererAcknowledgement(string path, Func<DateTime>? clock = null)
                     var reason = root.TryGetProperty("detail", out var detail) ? detail.GetString() : null;
                     return new(false, 2, reason is "challenge-active" or "scenario-active" or "map-mismatch" or "scenario-mismatch" ? reason : "unavailable");
                 }
-                var protocol = root.TryGetProperty("protocol", out var capability) && capability.TryGetInt32(out var version) && version >= 3 ? Math.Min(version, 5) : 2;
+                var protocol = root.TryGetProperty("protocol", out var capability) && capability.TryGetInt32(out var version) && version >= 3 ? Math.Min(version, 6) : 2;
                 cached = new(true, protocol, "unavailable");
                 validUntil = stamp.AddSeconds(3);
                 return cached;

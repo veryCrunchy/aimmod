@@ -11,7 +11,8 @@ sealed record ReplayFrame(double T, double[] Camera, double[][] Actors, ReplaySt
 sealed record ReplayInput(double T, string Action, double Value);
 sealed record ReplaySummary(string Id, string Scenario, string RecordedAt, string Reason, int Frames, int InputEvents);
 sealed record NativeReplay(int Version, string Id, string Scenario, string RecordedAt, string Reason,
-    double Duration, IReadOnlyList<ReplayFrame> Frames, IReadOnlyList<ReplayInput> Inputs, string? MapName = null, double? MapScale = null);
+    double Duration, IReadOnlyList<ReplayFrame> Frames, IReadOnlyList<ReplayInput> Inputs, string? MapName = null, double? MapScale = null,
+    [property: System.Text.Json.Serialization.JsonIgnore] Motion? Motion = null);
 
 /// <summary>Private state replays only. No score database writes or game commands.</summary>
 sealed class ReplayCatalog
@@ -54,6 +55,21 @@ sealed class ReplayCatalog
                 var path = Resolve(id);
                 if (path is null) continue;
                 using var stream = File.OpenRead(path);
+                using (var compact = ReplayFormat2.ReadHeader(stream))
+                {
+                    // Format 2 carries its summary in the header.
+                    if (compact is not null)
+                    {
+                        var c = compact.RootElement;
+                        if (Text(c, "kind") != "header" || Text(c, "id") != id || Text(c, "reason") != "completed") continue;
+                        var compactFrames = c.GetProperty("frames").GetInt32();
+                        var compactInputs = c.GetProperty("inputEvents").GetInt32();
+                        if (compactFrames < 2 || compactInputs < 0) continue;
+                        result.Add(new(id, Text(c, "scenario"), Text(c, "recordedAt"), "completed", compactFrames, compactInputs));
+                        continue;
+                    }
+                }
+                stream.Seek(0, SeekOrigin.Begin);
                 using var reader = new StreamReader(stream);
                 using var header = JsonDocument.Parse(ReadLine(reader) ?? "{}");
                 var h = header.RootElement;
@@ -85,6 +101,16 @@ sealed class ReplayCatalog
         {
             using var stream = File.OpenRead(path);
             if (stream.Length > MaxBytes) return null;
+            Span<byte> magic = stackalloc byte[8];
+            if (stream.Read(magic) == 8 && ReplayFormat2.IsFormat2(magic))
+            {
+                var bytes = new byte[stream.Length];
+                stream.Seek(0, SeekOrigin.Begin);
+                stream.ReadExactly(bytes);
+                var compact = ReplayFormat2.Decode(bytes, id);
+                return compact.Frames.Count < 2 ? null : compact;
+            }
+            stream.Seek(0, SeekOrigin.Begin);
             using var reader = new StreamReader(stream);
             using var header = JsonDocument.Parse(ReadLine(reader) ?? "{}");
             var h = header.RootElement;

@@ -73,6 +73,9 @@ sealed class NativeReplayPlayback : IAsyncDisposable
         double Mix(double x, double y) => x + (y - x) * amount;
         double Angle(double x, double y) => x + (((y - x + 540) % 360 + 360) % 360 - 180) * amount;
         var camera = a.Camera.Select((n, i) => i is >= 3 and <= 5 ? Angle(n, b.Camera[i]) : Mix(n, b.Camera[i])).ToArray();
+        // Format 2: exact motion at this instant (rotation from the input
+        // stream, tracks from their keyframes), not a blend of 60 Hz frames.
+        if (value.Motion is { } motion) { var pose = motion.Pose(time); return new(time, pose.Camera, pose.Actors, a.Stats, pose.Health, pose.Appearance); }
         var next = b.Actors.ToDictionary(actor => actor[0]);
         var actors = a.Actors.Select(actor => !next.TryGetValue(actor[0], out var other) ? actor.ToArray() : actor.Select((n, i) => i == 0 ? n : Mix(n, other[i])).ToArray()).ToArray();
         var nextAppearance = b.Appearance?.ToDictionary(value => value.Id);
@@ -91,7 +94,7 @@ sealed class NativeReplayPlayback : IAsyncDisposable
             // capability reader; standalone playback defaults to the current protocol.
             var protocol = rendererProtocol?.Invoke() ?? 5;
             var extended = protocol >= 3;
-            var text = new StringBuilder(protocol >= 5 ? "AIMMOD_REPLAY_5\t" : protocol >= 4 ? "AIMMOD_REPLAY_4\t" : extended ? "AIMMOD_REPLAY_3\t" : "AIMMOD_REPLAY_2\t").Append(revision).Append('\t').Append(visible && replay is not null ? '1' : '0');
+            var text = new StringBuilder(protocol >= 6 ? "AIMMOD_REPLAY_6\t" : protocol >= 5 ? "AIMMOD_REPLAY_5\t" : protocol >= 4 ? "AIMMOD_REPLAY_4\t" : extended ? "AIMMOD_REPLAY_3\t" : "AIMMOD_REPLAY_2\t").Append(revision).Append('\t').Append(visible && replay is not null ? '1' : '0');
             text.Append('\n');
             if (visible && replay is not null)
             {
@@ -110,6 +113,30 @@ sealed class NativeReplayPlayback : IAsyncDisposable
                 foreach (var actor in frame.Actors) { text.Append("actor"); foreach (var n in actor) text.Append('\t').Append(N(n)); text.Append('\n'); }
                 if (protocol >= 4 && frame.Health is not null)
                     foreach (var health in frame.Health) text.Append("health\t").Append(N(health.Id)).Append('\t').Append(N(health.Percent)).Append('\n');
+                if (protocol >= 6 && playing) {
+                    // Render-rate motion: the renderer advances its own clock
+                    // every engine frame and interpolates these samples, so view
+                    // motion is not limited to this file's publication rate.
+                    var end = replay.Frames[^1].T;
+                    for (int i = 0; i < MotionSamples; i++) {
+                        var at = Math.Min(time + i * MotionStep * speed, end);
+                        var pose = Sample(replay, at);
+                        text.Append("motion\t").Append(N(at));
+                        foreach (var n in pose.Camera) text.Append('\t').Append(N(n));
+                        text.Append('\n');
+                        if (at >= end) break;
+                    }
+                    var ahead = Sample(replay, Math.Min(time + VelocityStep, end));
+                    var span = Math.Min(time + VelocityStep, end) - time;
+                    if (span > 0)
+                        foreach (var actor in frame.Actors) {
+                            var next = ahead.Actors.FirstOrDefault(a => a[0] == actor[0]);
+                            if (next is null) continue;
+                            text.Append("velocity\t").Append(N(actor[0]));
+                            for (int k = 1; k <= 3; k++) text.Append('\t').Append(N((next[k] - actor[k]) / span));
+                            text.Append('\n');
+                        }
+                }
                 if (protocol >= 5) {
                     if (replay.Frames[^1].Stats?.Score is double finalScore) text.Append("result\t").Append(N(finalScore)).Append('\n');
                     foreach (var appearance in frame.Appearance ?? []) {
@@ -191,6 +218,9 @@ sealed class NativeReplayPlayback : IAsyncDisposable
     }
     bool disposed;
     static readonly UTF8Encoding Utf8 = new(false);
+    // Motion window: 0.4 s of playback at 120 Hz (the renderer interpolates between).
+    internal const int MotionSamples = 48;
+    internal const double MotionStep = 1.0 / 120, VelocityStep = 0.02;
     internal static readonly TimeSpan ActiveInterval = TimeSpan.FromTicks(TimeSpan.TicksPerSecond / 30), IdleInterval = TimeSpan.FromMilliseconds(100);
 }
 
