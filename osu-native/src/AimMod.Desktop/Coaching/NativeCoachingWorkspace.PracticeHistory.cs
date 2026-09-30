@@ -93,7 +93,7 @@ public partial class NativeCoachingWorkspace
             int attempts = group.SelectMany(s => s.Progress.Attempts).Where(a => !a.Original).DistinctBy(a => a.ScoreId).Count();
             practiceHistoryHost.Add(new CoachingMapRow(latest.Map.Title, latest.Map.Difficulty,
                 $"{group.Count()} {(group.Count() == 1 ? "set" : "sets")}  ·  {attempts} attempts  ·  Updated {latest.Map.CreatedAt.ToLocalTime():dd MMM}",
-                "Open session", () => openCoachingMap(group.Key)));
+                () => openCoachingMap(group.Key)));
         }
         if (coachingMapId is not null || coachingMapRun is not null) renderCoachingMap();
     }

@@ -103,12 +103,14 @@ public partial class NativeCoachingWorkspace
                     new osu.Framework.Graphics.Shapes.Box { RelativeSizeAxes = Axes.X, Y = 20, Height = 5, Colour = AimModPalette.Border },
                     new osu.Framework.Graphics.Shapes.Box { RelativeSizeAxes = Axes.X, Y = 20, Height = 5,
                         Width = !stage.Skipped && stage.Required > 0 ? Math.Clamp((float)stage.Completed / stage.Required, 0, 1) : 0,
-                        Colour = stage.Stage == selected ? AimModPalette.Accent : AimModPalette.Muted }],
+                        Colour = stage.Stage == selected ? AimModPalette.Accent : stage.IsComplete ? AimModPalette.Accent.Opacity(0.55f) : AimModPalette.Muted }],
             }).ToArray() },
         };
         body.Add(progress);
         if (practiceRunStatus.Length > 0) body.Add(flow(practiceRunStatus, 14, coachingAccent));
-        renderSectionNavigation(body, set, groupId, run);
+        // Every secondary action for the session shares one row at the bottom of the card.
+        var navigation = actionFlow();
+        renderSectionNavigation(body, navigation, set, groupId, run);
         var steps = actionFlow();
         foreach (var stage in review.Stages.Where(s => s.Stage < CoachingPracticeStage.Transfer))
         {
@@ -186,12 +188,13 @@ public partial class NativeCoachingWorkspace
                 ("MEDIAN ACCURACY", currentResults.MedianAccuracy is {} accuracy ? $"{accuracy:P2}" : "--"),
                 ("MEDIAN MISSES", currentResults.MedianMisses is {} misses ? $"{misses:0.#}" : "--")));
         }
-        var navigation = actionFlow();
         if ((current.IsComplete || current.Skipped || baselineClosed) && nextStage is { } next && next != selected)
-            navigation.Add(new CoachingButton($"Continue: {review.Stages.First(s => s.Stage == next).Label}", () =>
+            navigation.Insert(-1, new CoachingButton($"Continue: {review.Stages.First(s => s.Stage == next).Label}", () =>
             { viewedStages[set.Map.Id] = next; renderCoachingMap(); }, primary: true, compact: true));
         navigation.Add(new CoachingButton(showPracticeSteps ? "Hide session steps" : "View all session steps", () =>
         { showPracticeSteps = !showPracticeSteps; renderCoachingMap(); }, compact: true));
+        navigation.Add(new CoachingButton(showPracticeComparisonDetails ? "Hide results & comparisons" : "View results & comparisons", () =>
+        { showPracticeComparisonDetails = !showPracticeComparisonDetails; renderCoachingMap(); }, compact: true));
         navigation.Add(new CoachingButton("Refresh results", () => load(refresh: true), compact: true));
         body.Add(navigation);
         steps.Add(new CoachingButton(current.Skipped ? "Restore step" : "Skip this step", () =>
@@ -210,8 +213,6 @@ public partial class NativeCoachingWorkspace
             body.Add(optional);
         }
         if (selected == CoachingPracticeStage.Transfer && selectingTransferFor == set.Map.Id) renderTransferPicker(body, set, session);
-        body.Add(new CoachingButton(showPracticeComparisonDetails ? "Hide results & comparisons" : "View results & comparisons", () =>
-        { showPracticeComparisonDetails = !showPracticeComparisonDetails; renderCoachingMap(); }, compact: true));
         if (showPracticeComparisonDetails && review.Cohorts.Count > 0)
         {
             body.Add(flow("Section results", 15, AimModPalette.Text));
@@ -251,7 +252,7 @@ public partial class NativeCoachingWorkspace
                 && (r.Title + " " + r.Difficulty).Contains(checkMapSearch, StringComparison.OrdinalIgnoreCase))
                 .OrderByDescending(r => r.PlayedAt).DistinctBy(ScoreMods.SetupKey).Take(10).ToArray();
             foreach (var target in targets)
-                choices.Add(new CoachingMapRow(target.Title, target.Difficulty, $"{target.Accuracy:P2} · {ScoreMods.Display(target)}", "Use this map",
+                choices.Add(new CoachingMapRow(target.Title, target.Difficulty, $"{target.Accuracy:P2} · {ScoreMods.Display(target)}",
                     () => startPracticeCheck(set, session, CoachingPracticeStage.Transfer, target)));
             if (targets.Length == 0) choices.Add(flow("No matching plays. Try another title or play a comparison map first.", 13, AimModPalette.Muted));
         }

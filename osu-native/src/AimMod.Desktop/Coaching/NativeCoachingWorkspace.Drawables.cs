@@ -22,35 +22,38 @@ namespace AimMod.Desktop.Coaching;
 
 public partial class NativeCoachingWorkspace
 {
+    /// <summary>
+    /// One thin line for history loading, replay analysis progress, warnings and errors. It collapses once the
+    /// profile is ready so it never competes with the map list.
+    /// </summary>
     private partial class AnalysisProgressBanner : CompositeDrawable
     {
-        private readonly Box accent;
         private readonly WorkspaceProgressStrip progress;
         private readonly SpriteIcon icon;
-        private readonly OsuSpriteText phase;
         private readonly TruncatingSpriteText title;
         private readonly TruncatingSpriteText detail;
-        private readonly Container actionHost;
+        private readonly FillFlowContainer actionHost;
         private string? actionLabel;
         private Action? action;
+        private ScheduledDelegate? scheduledHide;
 
         public AnalysisProgressBanner()
         {
             RelativeSizeAxes = Axes.X;
-            Height = 76;
+            Height = 36;
             Masking = true;
             CornerRadius = AimModVisualStyle.ControlRadius;
             InternalChildren = new Drawable[]
             {
-                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
-                accent = new Box { RelativeSizeAxes = Axes.Y, Width = 3, Colour = AimModPalette.Cyan },
+                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
                 new GridContainer
                 {
                     RelativeSizeAxes = Axes.Both,
-                    Padding = new MarginPadding { Left = 14, Right = 14, Bottom = 4 },
+                    Padding = new MarginPadding { Left = 12, Right = 2, Bottom = 3 },
                     ColumnDimensions = new[]
                     {
-                        new Dimension(GridSizeMode.Absolute, 30),
+                        new Dimension(GridSizeMode.Absolute, 24),
+                        new Dimension(GridSizeMode.AutoSize),
                         new Dimension(),
                         new Dimension(GridSizeMode.AutoSize),
                     },
@@ -62,41 +65,32 @@ public partial class NativeCoachingWorkspace
                             {
                                 Anchor = Anchor.CentreLeft,
                                 Origin = Anchor.CentreLeft,
-                                Size = new(16),
+                                Size = new(13),
                                 Icon = FontAwesome.Solid.ChartLine,
                                 Colour = AimModPalette.Cyan,
                             },
-                            new FillFlowContainer
+                            title = new TruncatingSpriteText
+                            {
+                                Anchor = Anchor.CentreLeft,
+                                Origin = Anchor.CentreLeft,
+                                MaxWidth = 420,
+                                Font = new FontUsage(size: 13, weight: "SemiBold"),
+                                Colour = AimModPalette.Text,
+                            },
+                            detail = new TruncatingSpriteText
                             {
                                 Anchor = Anchor.CentreLeft,
                                 Origin = Anchor.CentreLeft,
                                 RelativeSizeAxes = Axes.X,
-                                AutoSizeAxes = Axes.Y,
-                                Direction = FillDirection.Vertical,
-                                Spacing = new(2),
-                                Children = new Drawable[]
-                                {
-                                    phase = label("LOADING HISTORY", 11, AimModPalette.Cyan, "Bold"),
-                                    title = new TruncatingSpriteText
-                                    {
-                                        RelativeSizeAxes = Axes.X,
-                                        Font = new FontUsage(size: 14, weight: "SemiBold"),
-                                        Colour = AimModPalette.Text,
-                                    },
-                                    detail = new TruncatingSpriteText
-                                    {
-                                        RelativeSizeAxes = Axes.X,
-                                        Font = new FontUsage(size: 12),
-                                        Colour = AimModPalette.Muted,
-                                    },
-                                },
+                                Padding = new MarginPadding { Left = 10, Right = 8 },
+                                Font = new FontUsage(size: 12),
+                                Colour = AimModPalette.Muted,
                             },
-                            actionHost = new Container
+                            actionHost = new FillFlowContainer
                             {
                                 Anchor = Anchor.CentreRight,
                                 Origin = Anchor.CentreRight,
                                 AutoSizeAxes = Axes.Both,
-                                Margin = new MarginPadding { Left = 12 },
                             },
                         },
                     },
@@ -111,25 +105,22 @@ public partial class NativeCoachingWorkspace
         }
 
         public void ShowHistoryLoading() => set(
-            "LOADING HISTORY",
-            "Building your global profile",
-            "Reading local and submitted plays",
+            "Loading your plays",
+            "Reading local and submitted scores",
             null,
             AimModPalette.Cyan,
-            FontAwesome.Solid.ChartLine);
+            FontAwesome.Solid.CircleNotch);
 
         public void ShowUpdating() => set(
-            "UPDATING",
-            "Updating your coaching report",
-            "Your current report stays visible until the new one is ready",
+            "Updating",
+            "The current list stays until the new one is ready",
             null,
             AimModPalette.Cyan,
             FontAwesome.Solid.CircleNotch);
 
         public void ShowStarting(int cached) => set(
-            "ANALYSING REPLAYS",
-            "Preparing the next replay",
-            $"{Math.Max(0, cached):N0} replay analyses already available",
+            "Analysing replays",
+            $"{Math.Max(0, cached):N0} already analysed",
             null,
             AimModPalette.Cyan,
             FontAwesome.Solid.CircleNotch);
@@ -137,11 +128,10 @@ public partial class NativeCoachingWorkspace
         public void ShowAnalysing(int completed, int total, string currentTitle, int cached, string? remaining = null, Action? cancel = null)
         {
             float fraction = total <= 0 ? 0 : Math.Clamp(completed / (float)total, 0, 1);
-            string counts = AnalysisProgressDetail(completed, total, cached);
+            string counts = $"{Math.Clamp(completed, 0, Math.Max(0, total)):N0} of {Math.Max(0, total):N0}";
             set(
-                "ANALYSING REPLAYS",
-                string.IsNullOrWhiteSpace(currentTitle) ? "Reading replay judgements" : currentTitle,
-                remaining is null ? counts : $"{counts}  //  {remaining}",
+                "Analysing replays",
+                string.Join("  ·  ", new[] { counts, remaining, string.IsNullOrWhiteSpace(currentTitle) ? null : currentTitle }.Where(part => part is not null)),
                 fraction,
                 AimModPalette.Cyan,
                 FontAwesome.Solid.CircleNotch,
@@ -150,75 +140,65 @@ public partial class NativeCoachingWorkspace
         }
 
         public void ShowCancelling() => set(
-            "ANALYSIS STOPPING",
-            "Stopping replay analysis",
-            "Finished analyses are kept and used in your report",
+            "Stopping analysis",
+            "Finished replays are kept",
             null,
             AimModPalette.Yellow,
             FontAwesome.Solid.PauseCircle);
 
         public void ShowReady(GlobalCoachingProfile profile, int merged, int submitted, string period)
         {
-            if (merged == 0)
-            {
-                // The play list explains an empty history or filters that exclude every play.
-                this.FadeOut(AimModVisualStyle.HoverTransition, Easing.OutQuint);
-                return;
-            }
-
-            int cached = profile.Coverage.AnalysedRunCount;
-            set(
-                cached > 0 ? "GLOBAL PROFILE READY" : "REPLAY ANALYSIS READY",
-                cached > 0
-                    ? $"{cached:N0} replays analysed across {profile.Coverage.AnalysedMapCount:N0} maps"
-                    : $"{merged:N0} plays loaded for coaching",
-                cached > 0
-                    ? $"{ConfidenceLabel(profile.Coverage.Confidence)} confidence  //  {ProfileCoverageValue(profile)} replay coverage  //  {period}"
-                    : $"{profile.Coverage.ReplayAvailableRunCount:N0} saved replays  //  {submitted:N0} submitted scores  //  {period}",
-                cached > 0 ? 1 : 0,
-                cached > 0 ? AimModPalette.Success : AimModPalette.Yellow,
-                cached > 0 ? FontAwesome.Solid.CheckCircle : FontAwesome.Solid.Clock);
+            // The profile panel and the ranked list carry the counts; this line is only for work in progress.
+            collapse();
         }
 
-        public void ShowComplete(GlobalCoachingProfile profile, int completed, int failed) => set(
-            "GLOBAL PROFILE UPDATED",
-            completed > 0
-                ? $"Added {completed:N0} new replay {(completed == 1 ? "analysis" : "analyses")}"
-                : "Replay analysis is up to date",
-            AnalysisCompletionDetail(profile.Coverage.AnalysedRunCount, failed),
-            1,
-            failed > 0 && completed == 0 ? AimModPalette.Yellow : AimModPalette.Success,
-            failed > 0 && completed == 0 ? FontAwesome.Solid.ExclamationCircle : FontAwesome.Solid.CheckCircle);
+        public void ShowComplete(GlobalCoachingProfile profile, int completed, int failed)
+        {
+            set(
+                completed > 0 ? $"{completed:N0} new {(completed == 1 ? "replay" : "replays")} analysed" : "Replay analysis is up to date",
+                failed > 0 ? $"{failed:N0} could not be read" : "Maps re-ranked",
+                1,
+                failed > 0 && completed == 0 ? AimModPalette.Yellow : AimModPalette.Success,
+                failed > 0 && completed == 0 ? FontAwesome.Solid.ExclamationCircle : FontAwesome.Solid.CheckCircle);
+            scheduledHide = Scheduler.AddDelayed(collapse, 5_000);
+        }
 
         public void ShowWarning(string titleText, string detailText, string? retryLabel = null, Action? retry = null) => set(
-            "LIMITED DATA",
             titleText,
             detailText,
-            1,
+            null,
             AimModPalette.Yellow,
             FontAwesome.Solid.ExclamationCircle,
             retryLabel,
-            retry);
+            retry,
+            progressVisible: false);
 
         public void ShowError(string titleText, string detailText, string? retryLabel = null, Action? retry = null) => set(
-            "SOMETHING WENT WRONG",
             titleText,
             detailText,
-            1,
-            AimModPalette.Pink,
+            null,
+            AimModPalette.Danger,
             FontAwesome.Solid.ExclamationCircle,
             retryLabel,
-            retry);
+            retry,
+            progressVisible: false);
 
-        private void set(string phaseText, string titleText, string detailText, float? fraction, Colour4 colour, IconUsage iconUsage,
-            string? nextActionLabel = null, Action? nextAction = null)
+        private void collapse()
         {
+            scheduledHide?.Cancel();
+            scheduledHide = null;
+            this.FadeOut(AimModVisualStyle.HoverTransition, Easing.OutQuint);
+        }
+
+        private void set(string titleText, string detailText, float? fraction, Colour4 colour, IconUsage iconUsage,
+            string? nextActionLabel = null, Action? nextAction = null, bool progressVisible = true)
+        {
+            scheduledHide?.Cancel();
+            scheduledHide = null;
             this.FadeIn(AimModVisualStyle.HoverTransition, Easing.OutQuint);
-            phase.Text = phaseText;
-            phase.Colour = colour;
             title.Text = titleText;
             detail.Text = detailText;
-            accent.Colour = colour;
+            progress.Alpha = progressVisible ? 1 : 0;
             progress.FillColour = colour;
             progress.SetProgress(fraction);
             icon.Icon = iconUsage;
@@ -230,7 +210,7 @@ public partial class NativeCoachingWorkspace
             action = nextAction;
             actionHost.Clear();
             if (nextActionLabel is not null && nextAction is not null)
-                actionHost.Add(new WorkspaceButton(nextActionLabel, nextAction, colour));
+                actionHost.Add(new CoachingButton(nextActionLabel, nextAction, compact: true) { Height = 30 });
         }
     }
 

@@ -9,7 +9,8 @@ public partial class NativeCoachingWorkspace
 {
     private sealed record SavedSection(PracticeSetProgress Set, PracticeDifficultyIdentity Difficulty);
 
-    private void renderSectionNavigation(FillFlowContainer<Drawable> body, PracticeSetProgress current, string groupId, LocalReplay? run)
+    /// <summary>Section choices go in <paramref name="body"/> (only when there is more than one); moving on goes in <paramref name="footer"/>.</summary>
+    private void renderSectionNavigation(FillFlowContainer<Drawable> body, FillFlowContainer<Drawable> footer, PracticeSetProgress current, string groupId, LocalReplay? run)
     {
         string key = CoachingMapKey(current.Map);
         var saved = practiceSets.Where(s => CoachingMapKey(s.Map) == key && !s.Map.PayloadRemoved && s.Map.RetiredAt is null)
@@ -32,29 +33,32 @@ public partial class NativeCoachingWorkspace
             renderCoachingMap();
             coachingPages[4].ScrollTo(0, false);
         }
-        body.Add(flow($"Sections in your saved exercises · {saved.Count(repeated)} / {saved.Length} have completed their practice runs", 13, coachingAccent));
-        var choices = actionFlow();
-        foreach (var (section, index) in saved.Select((s, i) => (s, i)))
+        if (saved.Length > 1)
         {
-            string progress = repeated(section) ? "Runs complete" : "To practise";
-            var button = new CoachingButton($"{index + 1}. {TimeSpan.FromMilliseconds(section.Difficulty.SourceStartMs):m\\:ss} - {TimeSpan.FromMilliseconds(section.Difficulty.SourceEndMs):m\\:ss} · {progress}",
-                () => selectSection(section), compact: true);
-            button.SetSelected(section.Difficulty.BreakdownGroupId == groupId); choices.Add(button);
+            body.Add(label($"Sections · {saved.Count(repeated)} of {saved.Length} done", 12, AimModPalette.Muted, "SemiBold"));
+            var choices = actionFlow();
+            foreach (var (section, index) in saved.Select((s, i) => (s, i)))
+            {
+                string progress = repeated(section) ? "done" : "to practise";
+                var button = new CoachingButton($"{index + 1}. {TimeSpan.FromMilliseconds(section.Difficulty.SourceStartMs):m\\:ss}–{TimeSpan.FromMilliseconds(section.Difficulty.SourceEndMs):m\\:ss} · {progress}",
+                    () => selectSection(section), compact: true);
+                button.SetSelected(section.Difficulty.BreakdownGroupId == groupId); choices.Add(button);
+            }
+            body.Add(choices);
         }
-        body.Add(choices);
         var next = saved.FirstOrDefault(s => s.Difficulty.BreakdownGroupId != groupId && !repeated(s));
         var currentSection = saved.FirstOrDefault(s => s.Difficulty.BreakdownGroupId == groupId);
         bool ready = currentSection is not null && repeated(currentSection);
         if (next is not null)
-            body.Add(new CoachingButton("Next section", () => selectSection(next), ready, true));
+            footer.Add(new CoachingButton("Next section", () => selectSection(next), ready, true));
         else if (run is not null && practiceWorkspace is not null)
-            body.Add(new CoachingButton("Choose next section", () =>
+            footer.Add(new CoachingButton("Choose next section", () =>
             {
                 viewedPracticeSets.Remove(key);
                 selectingTransferFor = null;
                 practiceWorkspace.OpenNextBreakdown(new PracticeMapCandidate(run, [run.ScoreId], 1, run.MissCount, 0),
                     saved.Select(s => new PracticeSectionRange(s.Difficulty.SourceStartMs, s.Difficulty.SourceEndMs)).ToArray());
             }, ready, true));
-        if (ready) body.Add(flow("You have completed the planned runs for this section. Move to another section, or repeat this one if it still needs work.", 13, AimModPalette.Muted));
+        if (ready) body.Add(flow("Section done. Move on, or repeat it if it still needs work.", 13, AimModPalette.Success));
     }
 }
