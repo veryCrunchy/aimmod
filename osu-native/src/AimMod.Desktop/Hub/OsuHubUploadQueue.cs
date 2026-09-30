@@ -82,7 +82,7 @@ public sealed class OsuHubUploadQueue : IOsuHubUploadQueue, IDisposable
         {
             worker = Task.Run(processAsync);
             if (items.Any(item => item.Status == HubUploadQueueStatus.Queued))
-                signal.Release();
+                releaseSignal();
         }
     }
 
@@ -96,7 +96,7 @@ public sealed class OsuHubUploadQueue : IOsuHubUploadQueue, IDisposable
     {
         lock (stateGate)
             automaticPermission = permission;
-        signal.Release();
+        releaseSignal();
     }
 
     public async Task<HubUploadQueueItem?> TryEnqueueAutomaticAsync(OsuHubSyncRequest request, string? replayPath, string title,
@@ -130,8 +130,8 @@ public sealed class OsuHubUploadQueue : IOsuHubUploadQueue, IDisposable
             await persistAsync(cancellationToken).ConfigureAwait(false);
             lock (stateGate)
                 unpersistedAutomaticItems.Remove(item.Id);
-            Changed?.Invoke();
-            signal.Release();
+            raiseChanged();
+            releaseSignal();
             return item;
         }
         catch
@@ -169,9 +169,22 @@ public sealed class OsuHubUploadQueue : IOsuHubUploadQueue, IDisposable
                 replayPath ?? string.Empty);
             items.Add(item);
         }
-        await persistAsync(cancellationToken).ConfigureAwait(false);
-        Changed?.Invoke();
-        signal.Release();
+        try
+        {
+            await persistAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            lock (stateGate)
+                items.RemoveAll(candidate => candidate.Id == item.Id);
+            throw;
+        }
+        catch (Exception error)
+        {
+            traceFailure("persist", error);
+        }
+        raiseChanged();
+        releaseSignal();
         return item;
     }
 
@@ -198,8 +211,8 @@ public sealed class OsuHubUploadQueue : IOsuHubUploadQueue, IDisposable
         cancellation?.Cancel();
         if (!changed)
             return false;
-        await persistAsync(cancellationToken).ConfigureAwait(false);
-        Changed?.Invoke();
+        await persistSafeAsync(cancellationToken).ConfigureAwait(false);
+        raiseChanged();
         return true;
     }
 
@@ -222,9 +235,9 @@ public sealed class OsuHubUploadQueue : IOsuHubUploadQueue, IDisposable
         }
         if (!changed)
             return false;
-        await persistAsync(cancellationToken).ConfigureAwait(false);
-        Changed?.Invoke();
-        signal.Release();
+        releaseSignal();
+        await persistSafeAsync(cancellationToken).ConfigureAwait(false);
+        raiseChanged();
         return true;
     }
 
@@ -241,75 +254,142 @@ public sealed class OsuHubUploadQueue : IOsuHubUploadQueue, IDisposable
                 break;
             }
 
-            while (true)
+            while (!lifetime.IsCancellationRequested)
             {
-                HubUploadQueueItem? next;
-                lock (stateGate)
-                {
-                    next = items.FirstOrDefault(item => item.Status == HubUploadQueueStatus.Queued
-                        && !unpersistedAutomaticItems.Contains(item.Id)
-                        && (string.IsNullOrEmpty(item.AutomaticAccountScope) || automaticPermission?.Invoke(item) == true));
-                    if (next is null)
-                        break;
-                    int index = items.FindIndex(item => item.Id == next.Id);
-                    next = next with
-                    {
-                        Status = HubUploadQueueStatus.Uploading,
-                        AttemptCount = next.AttemptCount + 1,
-                        UpdatedAt = DateTimeOffset.UtcNow,
-                        Error = "",
-                    };
-                    items[index] = next;
-                    activeId = next.Id;
-                    activeUpload = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
-                }
-
-                await persistAsync(CancellationToken.None).ConfigureAwait(false);
-                Changed?.Invoke();
-
                 try
                 {
-                    string? replayPath = string.IsNullOrWhiteSpace(next.ReplayPath) ? null : next.ReplayPath;
-                    OsuHubUploadResult result = string.IsNullOrEmpty(next.AutomaticAccountScope)
-                        ? await uploader.UploadAsync(next.Request, replayPath, activeUpload.Token).ConfigureAwait(false)
-                        : await uploader.UploadAutomaticAsync(next.Request, next.AutomaticAccountScope, replayPath, activeUpload.Token).ConfigureAwait(false);
-                    update(next.Id, item => item with
-                    {
-                        Status = HubUploadQueueStatus.Completed,
-                        UpdatedAt = DateTimeOffset.UtcNow,
-                        ShareUrl = result.ShareUri.AbsoluteUri,
-                        Error = "",
-                    });
-                }
-                catch (OperationCanceledException)
-                {
-                    update(next.Id, item => lifetime.IsCancellationRequested
-                        ? item with { Status = HubUploadQueueStatus.Queued, UpdatedAt = DateTimeOffset.UtcNow, Error = "" }
-                        : item with { Status = HubUploadQueueStatus.Cancelled, UpdatedAt = DateTimeOffset.UtcNow, Error = "Cancelled by user." });
+                    if (!await runNextAsync().ConfigureAwait(false))
+                        break;
                 }
                 catch (Exception error)
                 {
-                    update(next.Id, item => item with
+                    traceFailure("worker", error);
+                    if (lifetime.IsCancellationRequested)
+                        break;
+                }
+            }
+        }
+    }
+
+    private async Task<bool> runNextAsync()
+    {
+        HubUploadQueueItem? next;
+        CancellationToken uploadToken;
+        lock (stateGate)
+        {
+            next = items.FirstOrDefault(item => item.Status == HubUploadQueueStatus.Queued
+                && !unpersistedAutomaticItems.Contains(item.Id)
+                && (string.IsNullOrEmpty(item.AutomaticAccountScope) || automaticPermission?.Invoke(item) == true));
+            if (next is null)
+                return false;
+            int index = items.FindIndex(item => item.Id == next.Id);
+            next = next with
+            {
+                Status = HubUploadQueueStatus.Uploading,
+                AttemptCount = next.AttemptCount + 1,
+                UpdatedAt = DateTimeOffset.UtcNow,
+                Error = "",
+            };
+            items[index] = next;
+            activeId = next.Id;
+            activeUpload = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+            uploadToken = activeUpload.Token;
+        }
+
+        try
+        {
+            await persistSafeAsync(CancellationToken.None).ConfigureAwait(false);
+            raiseChanged();
+
+            try
+            {
+                string? replayPath = string.IsNullOrWhiteSpace(next.ReplayPath) ? null : next.ReplayPath;
+                OsuHubUploadResult result = string.IsNullOrEmpty(next.AutomaticAccountScope)
+                    ? await uploader.UploadAsync(next.Request, replayPath, uploadToken).ConfigureAwait(false)
+                    : await uploader.UploadAutomaticAsync(next.Request, next.AutomaticAccountScope, replayPath, uploadToken).ConfigureAwait(false);
+                update(next.Id, item => item with
+                {
+                    Status = HubUploadQueueStatus.Completed,
+                    UpdatedAt = DateTimeOffset.UtcNow,
+                    ShareUrl = result.ShareUri.AbsoluteUri,
+                    Error = "",
+                });
+            }
+            catch (OperationCanceledException)
+            {
+                update(next.Id, item => item.Status != HubUploadQueueStatus.Uploading
+                    ? item
+                    : lifetime.IsCancellationRequested
+                        ? item with { Status = HubUploadQueueStatus.Queued, UpdatedAt = DateTimeOffset.UtcNow, Error = "" }
+                        : item with { Status = HubUploadQueueStatus.Cancelled, UpdatedAt = DateTimeOffset.UtcNow, Error = "Cancelled by user." });
+            }
+            catch (Exception error)
+            {
+                update(next.Id, item => item.Status != HubUploadQueueStatus.Uploading
+                    ? item
+                    : item with
                     {
                         Status = HubUploadQueueStatus.Failed,
                         UpdatedAt = DateTimeOffset.UtcNow,
                         Error = userFacingError(error),
                     });
-                }
-                finally
-                {
-                    lock (stateGate)
-                    {
-                        activeUpload?.Dispose();
-                        activeUpload = null;
-                        activeId = null;
-                    }
-                    await persistAsync(CancellationToken.None).ConfigureAwait(false);
-                    Changed?.Invoke();
-                }
             }
         }
+        finally
+        {
+            lock (stateGate)
+            {
+                activeUpload?.Dispose();
+                activeUpload = null;
+                activeId = null;
+                int index = items.FindIndex(candidate => candidate.Id == next.Id);
+                if (index >= 0 && items[index].Status == HubUploadQueueStatus.Uploading)
+                    items[index] = items[index] with
+                    {
+                        Status = HubUploadQueueStatus.Failed,
+                        UpdatedAt = DateTimeOffset.UtcNow,
+                        Error = "The replay could not be uploaded. Retry when AimMod Hub is available.",
+                    };
+            }
+            await persistSafeAsync(CancellationToken.None).ConfigureAwait(false);
+            raiseChanged();
+        }
+
+        return true;
     }
+
+    private async Task persistSafeAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await persistAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception error)
+        {
+            traceFailure("persist", error);
+        }
+    }
+
+    private void raiseChanged()
+    {
+        Action? handlers = Changed;
+        if (handlers is null)
+            return;
+        foreach (Delegate handler in handlers.GetInvocationList())
+        {
+            try { ((Action)handler)(); }
+            catch (Exception error) { traceFailure("changed handler", error); }
+        }
+    }
+
+    private void releaseSignal()
+    {
+        try { signal.Release(); }
+        catch (Exception error) when (error is ObjectDisposedException or SemaphoreFullException) { }
+    }
+
+    private static void traceFailure(string operation, Exception error) =>
+        System.Diagnostics.Trace.TraceWarning($"Hub upload queue {operation} failed: {error.GetType().Name}: {error.Message}");
 
     private void update(Guid id, Func<HubUploadQueueItem, HubUploadQueueItem> transform)
     {
@@ -398,8 +478,7 @@ public sealed class OsuHubUploadQueue : IOsuHubUploadQueue, IDisposable
         lifetime.Cancel();
         lock (stateGate)
             activeUpload?.Cancel();
-        try { signal.Release(); }
-        catch (SemaphoreFullException) { }
+        releaseSignal();
         bool stopped = false;
         try { stopped = worker?.Wait(TimeSpan.FromSeconds(2)) != false; }
         catch (AggregateException error) when (error.InnerExceptions.All(inner => inner is OperationCanceledException)) { stopped = true; }
