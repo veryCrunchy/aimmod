@@ -99,7 +99,7 @@ public partial class NativeHubReplaySharePanel : CompositeDrawable
                         Spacing = new(AimModVisualStyle.RelatedSpacing),
                         Children = new Drawable[]
                         {
-                            shareButton = button("Share replay", share, 118, AimModPalette.Pink),
+                            shareButton = button("Share replay", share, 118, AimModPalette.Accent, AimModPalette.Canvas),
                             cancelRetryButton = button("Cancel", cancelOrRetry, 82, AimModPalette.PanelHover),
                             copyButton = button("Copy link", copyLink, 92, AimModPalette.PanelHover),
                             openButton = button("Open", openLink, 72, AimModPalette.PanelHover),
@@ -195,7 +195,7 @@ public partial class NativeHubReplaySharePanel : CompositeDrawable
             ? "Link an AimMod Hub account in Settings before sharing."
             : replay is null
                 ? "Choose a replay to share."
-                : "Nothing uploads until you press Share replay.", linked ? AimModPalette.Muted : AimModPalette.Pink);
+                : "Nothing uploads until you press Share replay.", linked ? AimModPalette.Muted : AimModPalette.Yellow);
     }
 
     private void share()
@@ -209,7 +209,7 @@ public partial class NativeHubReplaySharePanel : CompositeDrawable
         }
         if (uploadAnalysis.Value && !analysisAvailable)
         {
-            setStatus("Wait for exact judgement analysis before including it.", AimModPalette.Pink);
+            setStatus("Wait for exact judgement analysis before including it.", AimModPalette.Yellow);
             return;
         }
 
@@ -260,7 +260,7 @@ public partial class NativeHubReplaySharePanel : CompositeDrawable
                         return;
                     resetActions();
                     // Share-service validation messages are written for players; anything else is not.
-                    setStatus(error is InvalidOperationException ? error.Message : AimModFriendlyError.Message(error, "Preparing the upload"), AimModPalette.Pink);
+                    setStatus(error is InvalidOperationException ? error.Message : AimModFriendlyError.Message(error, "Preparing the upload"), AimModPalette.Danger);
                     shareButton.Enabled.Value = true;
                 });
         }
@@ -293,7 +293,7 @@ public partial class NativeHubReplaySharePanel : CompositeDrawable
         }, item.Status switch
         {
             HubUploadQueueStatus.Completed => AimModPalette.Success,
-            HubUploadQueueStatus.Failed => AimModPalette.Pink,
+            HubUploadQueueStatus.Failed => AimModPalette.Danger,
             HubUploadQueueStatus.Uploading => AimModPalette.Cyan,
             _ => AimModPalette.Muted,
         });
@@ -353,7 +353,7 @@ public partial class NativeHubReplaySharePanel : CompositeDrawable
         _ => $"lazer:{replay.ScoreId:N}",
     };
 
-    private static OsuButton button(string label, Action action, float width, Colour4 colour) => new HubButton
+    private static OsuButton button(string label, Action action, float width, Colour4 colour, Colour4? textColour = null) => new HubButton(textColour)
     {
         Text = label,
         Action = action,
@@ -364,9 +364,19 @@ public partial class NativeHubReplaySharePanel : CompositeDrawable
 
     private partial class HubButton : OsuButton
     {
-        public HubButton()
+        private readonly Colour4? textColour;
+
+        public HubButton(Colour4? textColour = null)
         {
+            this.textColour = textColour;
             AutoSizeAxes = Axes.None;
+        }
+
+        protected override void LoadComplete()
+        {
+            base.LoadComplete();
+            if (textColour is { } colour)
+                SpriteText.Colour = colour;
         }
     }
 }

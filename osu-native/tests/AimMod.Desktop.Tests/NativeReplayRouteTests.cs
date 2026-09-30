@@ -21,7 +21,7 @@ public sealed class NativeReplayRouteTests
     {
         string? opened = null;
         using var route = new NativeReplayRouteView(openPractice: title => opened = title);
-        var button = (osu.Game.Graphics.UserInterface.OsuButton)field(route, "practiceButton");
+        var button = (AimModButton)field(route, "practiceButton");
         Assert.That(button.Enabled.Value, Is.False);
         LocalReplay selected = replay(Guid.NewGuid());
         route.SetReplaySummary(selected);
