@@ -12,6 +12,7 @@ jobs:
   release-please:
     runs-on: ubuntu-latest
     outputs:
+      releases_created: ${{ steps.release.outputs.releases_created }}
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
       osu_release_created: ${{ steps.release.outputs['osu-native--release_created'] }}
@@ -30,6 +31,27 @@ jobs:
         run: |
           echo "KovaaK's: ${{ steps.release.outputs.tag_name }}"
           echo "osu!: ${{ steps.release.outputs['osu-native--tag_name'] }}"
+
+      # The repository-wide latest release is the rolling "aimmod-latest" download release, which the
+      # KovaaK's updater reads. release-please marks every new release as latest, so hand it back
+      # straight away; the downloads themselves are refreshed once the builds have published.
+      - name: Keep the rolling download release as latest
+        if: ${{ steps.release.outputs.releases_created == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          id=$(gh api "repos/$REPO/releases/tags/aimmod-latest" --jq .id 2>/dev/null || true)
+          if [ -z "$id" ]; then
+            id=$(gh api "repos/$REPO/releases?per_page=100" --jq \
+              '[.[] | select(.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) | select(.draft | not) | select(.prerelease | not)][0].id // empty')
+          fi
+          if [ -z "$id" ]; then
+            echo "No release to keep as latest."
+            exit 0
+          fi
+          gh api -X PATCH "repos/$REPO/releases/$id" -f make_latest=true --jq '"Latest release: \(.tag_name)"'
 
   # The osu! app bundles changelogs/<version>.md for its in-app changelog, so the release PR
   # must carry that file. Build it from changelogs/unreleased.md, or from the generated
@@ -91,3 +113,11 @@ jobs:
       attestations: write
       contents: write
       id-token: write
+
+  # Refresh the rolling "aimmod-latest" release with the newest downloads of both apps.
+  latest-downloads:
+    needs: [release-please, build, osu-build]
+    if: ${{ always() && needs.release-please.outputs.releases_created == 'true' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    uses: ./.github/workflows/latest-downloads.yml
+    permissions:
+      contents: write

@@ -1,0 +1,96 @@
+name: Latest Downloads
+
+# Keeps one rolling "AimMod" release marked as the repository's latest release. It holds only the
+# current stable downloads of both apps, so /releases/latest always offers the newest AimMod for
+# KovaaK's and AimMod for osu!, and the KovaaK's updater keeps finding latest.json there.
+# Version releases keep their own notes and history and are never marked latest.
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: aimmod-latest-downloads
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      TAG: aimmod-latest
+    steps:
+      - name: Collect the newest stable downloads
+        id: collect
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/releases?per_page=100" --paginate > releases.json
+
+          # Newest stable release of each app that actually has downloads attached.
+          kovaaks=$(jq -r '[.[] | select(.draft | not) | select(.prerelease | not)
+            | select(.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))
+            | select(any(.assets[]; .name == "latest.json"))] | sort_by(.published_at) | last | .tag_name // empty' releases.json)
+          osu=$(jq -r '[.[] | select(.draft | not) | select(.prerelease | not)
+            | select(.tag_name | test("^aimmod-osu-v[0-9]+\\.[0-9]+\\.[0-9]+$"))
+            | select(any(.assets[]; .name | endswith("-Setup.exe")))] | sort_by(.published_at) | last | .tag_name // empty' releases.json)
+          if [ -z "$kovaaks" ] && [ -z "$osu" ]; then
+            echo "No published downloads found." >&2
+            exit 1
+          fi
+
+          mkdir -p assets
+          if [ -n "$kovaaks" ]; then
+            gh release download "$kovaaks" -R "$REPO" -D assets -p "*.exe" -p "*.sig" -p "latest.json"
+          fi
+          if [ -n "$osu" ]; then
+            gh release download "$osu" -R "$REPO" -D assets \
+              -p "AimMod.Osu-win-*-Setup.exe" -p "AimMod.Osu-linux-*.AppImage" \
+              -p "aimmod-osu-*-win-x64.zip*" -p "aimmod-osu-*-linux-x64.tar.gz*" \
+              -p "aimmod-osu-*-checksums.sha256"
+          fi
+          ls -la assets
+          echo "kovaaks=$kovaaks" >> "$GITHUB_OUTPUT"
+          echo "osu=$osu" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the rolling release
+        shell: bash
+        env:
+          KOVAAKS: ${{ steps.collect.outputs.kovaaks }}
+          OSU: ${{ steps.collect.outputs.osu }}
+        run: |
+          set -euo pipefail
+          server="${GITHUB_SERVER_URL}/${REPO}"
+          {
+            echo "The newest downloads for both AimMod apps."
+            echo
+            if [ -n "$KOVAAKS" ]; then
+              echo "- **AimMod for KovaaK's ${KOVAAKS#v}** · Windows · [release notes](${server}/releases/tag/${KOVAAKS})"
+            fi
+            if [ -n "$OSU" ]; then
+              echo "- **AimMod for osu! ${OSU#aimmod-osu-v}** · Windows and Linux · [release notes](${server}/releases/tag/${OSU})"
+            fi
+            echo
+            echo "Installed apps update themselves. Older versions are available from their own releases."
+          } > notes.md
+
+          if ! gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
+            gh release create "$TAG" -R "$REPO" --target "$GITHUB_SHA" \
+              --title "AimMod · latest downloads" --notes-file notes.md --latest
+          fi
+
+          # Upload first so latest.json is never missing, then drop anything from older versions.
+          gh release upload "$TAG" -R "$REPO" assets/* --clobber
+          keep=$(cd assets && ls -1)
+          gh release view "$TAG" -R "$REPO" --json assets --jq '.assets[].name' | while read -r name; do
+            if ! grep -qxF "$name" <<< "$keep"; then
+              gh release delete-asset "$TAG" "$name" -R "$REPO" -y
+            fi
+          done
+
+          gh release edit "$TAG" -R "$REPO" --title "AimMod · latest downloads" --notes-file notes.md --latest
+          gh api "repos/$REPO/releases/latest" --jq '"Latest release: \(.tag_name) with \(.assets | length) downloads"'

@@ -325,6 +325,13 @@ jobs:
               --notes-file "osu-native/changelogs/${VERSION}.md" \
               --latest=false \
               "${prerelease_args[@]}"
+          else
+            # release-please creates the version release first; keep it off the repository-wide
+            # latest release (owned by the main AimMod channel) and use the player-facing notes.
+            gh release edit "$TAG" \
+              --title "AimMod osu ${VERSION}" \
+              --notes-file "osu-native/changelogs/${VERSION}.md" \
+              --latest=false
           fi
           gh release upload "$TAG" release-assets/* --clobber
 
