@@ -71,7 +71,8 @@ for _,mode in ipairs({'native-proxy','plain-array','wrapped-array','missing-map'
     os.rename=function(from,to) files[to]=files[from]; files[from]=nil; return true end
     local capture=dofile('../ue4ss/AimModNativeUI/Scripts/ReplayCapture.lua')
     local confirmations={}
-    local telemetry={state=function()return state end}
+    local completionListener
+    local telemetry={state=function()return state end,onCompleted=function(fn)completionListener=fn end}
     if mode=='plain-array' then
         telemetry.confirmAttempt=function(restarted,elapsed)
             confirmations[#confirmations+1]={restarted=restarted,elapsed=elapsed}
@@ -82,7 +83,7 @@ for _,mode in ipairs({'native-proxy','plain-array','wrapped-array','missing-map'
     capture.start(telemetry);capture.start(telemetry)
     check(#loops==1,'start is idempotent')
     local function complete(name)
-        hooks['/Script/GameSkillsTrainer.AnalyticsManager:OnChallengeCompleted']({}, {get=function()return {ToString=function()return name or state.scenario end}end},{get=function()return 123 end})
+        completionListener({scenario=name or state.scenario,id=state.id,score=123})
     end
     local tick=loops[1]; tick(); check(opens==0,'idle does not open a replay')
     check(capture.status().state=='ready','ready status exported')

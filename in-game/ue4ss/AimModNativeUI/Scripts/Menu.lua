@@ -5,6 +5,7 @@ local LiveHUD = require('LiveHUD')
 local Telemetry = require('Telemetry')
 local menu, header, frame, entry, texture
 local opened = false
+local attachControls
 local source = debug.getinfo(1, 'S').source:sub(2):gsub('\\','/')
 local assets = source:match('^(.*)/Scripts/[^/]+$') .. '/Assets/'
 local function valid(o) return o ~= nil and o:IsValid() end
@@ -47,6 +48,19 @@ function M.attach()
     replacement:SetContent(view)
     removeOwned(root,'AimMod workspace')
     frame=replacement
+    -- Roll back a partial attachment so the retry loop rebuilds it instead of
+    -- keeping a workspace without its header entry.
+    local ok,reason=pcall(attachControls,root)
+    if not ok then
+        pcall(function() if valid(frame) then frame:RemoveFromParent() end end)
+        pcall(function() if valid(entry) then entry:RemoveFromParent() end end)
+        frame=nil;entry=nil
+        error(reason,0)
+    end
+    log('AimMod Gameface workspace attached')
+    return true
+end
+attachControls=function(root)
     local slot=root:AddChildToCanvas(frame)
     slot:SetAnchors({Minimum={X=0,Y=0},Maximum={X=1,Y=1}})
     slot:SetOffsets({Left=35,Top=106,Right=35,Bottom=24})
@@ -84,20 +98,27 @@ function M.attach()
         opened=savedOpened or false
         if valid(frame) and savedFrameVisibility~=nil then frame:SetVisibility(savedFrameVisibility)end
         Workspace.update(opened and valid(menu) and menu:IsVisible())
+        local lib=StaticFindObject('/Script/UMG.Default__WidgetBlueprintLibrary')
         if valid(menu) and menu:IsVisible()then
-            StaticFindObject('/Script/UMG.Default__WidgetBlueprintLibrary'):SetInputMode_UIOnlyEx(menu:GetOwningPlayer(),menu,0)
+            lib:SetInputMode_UIOnlyEx(menu:GetOwningPlayer(),menu,0)
+        elseif valid(menu) then
+            -- The replay controls held UI-only input and are now removed. With
+            -- the pause menu hidden and the game running, return the player's
+            -- ordinary game input mode instead of focusing a removed widget.
+            local player=menu:GetOwningPlayer()
+            local api=StaticFindObject('/Script/Engine.Default__GameplayStatics')
+            if valid(player) and valid(api) and not api:IsGamePaused(player) then lib:SetInputMode_GameOnly(player) end
         end
         savedMenuVisibility=nil;savedFrameVisibility=nil;savedOpened=nil
     end)
-    log('AimMod Gameface workspace attached')
-    return true
 end
 function M.start()
     RegisterHook('/Script/GameSkillsTrainer.PalettedButtonWidgetNative:Button_NotifyClicked',function() end,function(context)
-        if valid(entry) and context:get():GetFullName()==entry:GetFullName() then
-            local ok,reason=pcall(show,not opened)
-            if not ok then log(reason) end
-        end
+        -- Game callback: never raise, never override the native result.
+        local ok,reason=pcall(function()
+            if valid(entry) and context:get():GetFullName()==entry:GetFullName() then show(not opened) end
+        end)
+        if not ok then log(reason) end
     end)
     -- This runtime dispatches key binds on an input thread that can overlap
     -- the game-thread Lua loop. The native header button remains the entry.

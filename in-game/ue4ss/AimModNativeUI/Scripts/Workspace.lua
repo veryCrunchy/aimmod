@@ -10,6 +10,9 @@ local function url()
     if value and value:match('^http://127%.0%.0%.1:%d+/%x+/ui$') then return value end
 end
 function M.create(owner)
+    -- Check the worker before constructing widgets: attach retries while the
+    -- worker is stopped must not create an orphaned view every retry.
+    assert(url(), 'Start the AimMod native worker to load the workspace')
     local lib=StaticFindObject('/Script/UMG.Default__WidgetBlueprintLibrary')
     local class=StaticFindObject('/Game/UI/MetaGraphWidget.MetaGraphWidget_C')
     assert(class:IsValid(), 'KovaaK stats view unavailable')

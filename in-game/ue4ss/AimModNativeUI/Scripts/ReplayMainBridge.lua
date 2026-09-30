@@ -17,6 +17,7 @@ local currentId,proofActive=nil,false
 local proofFrame,currentMeta
 local lastPreflightError
 local lastWorkerHeartbeat
+local rejectedData
 local function finite(n)return type(n)=='number' and n==n and math.abs(n)<1e12 end
 local function read(name,max)
     local file=io.open(base..name,'rb');if not file then return end
@@ -185,6 +186,8 @@ function M.attach(menu,enter,leave)
                 if not ready and tostring(why)~=lastPreflightError then
                     lastPreflightError=tostring(why);print('[AimModReplay] preflight: '..lastPreflightError..'\n')
                 elseif ready then lastPreflightError=nil end
+                -- A newly approved world re-evaluates a frame rejected earlier.
+                if ready and not approved then rejectedData=nil end
                 approved=ready
                 if ready then errorCode=nil else errorCode=errorDetail(why)end
             end
@@ -193,14 +196,18 @@ function M.attach(menu,enter,leave)
             end
             if now>=nextAck then nextAck=now+1;ack(approved and 'ready' or (errorCode and 'error' or 'unverified'),errorCode or (approved and 'validated' or 'checking-world'))end
             local data=read('replay-frame.tsv',524288)
-            if not data or data==lastData then
+            if not data or data==lastData or (not active and data==rejectedData) then
                 if active and scene then scene.verify()end
                 if hud and hud.refreshControls then hud.refreshControls()end
                 return
             end
-            local frame=M.parse(data)
-            if not frame.visible then close();awaitingClose=false;lastData=data;return end
-            if awaitingClose or not approved then return end
+            local parsed,frame=pcall(M.parse,data)
+            -- A malformed file fails once, not on every poll until it changes.
+            if not parsed then rejectedData=data;error(frame,0)end
+            if not frame.visible then close();awaitingClose=false;rejectedData=nil;lastData=data;return end
+            -- Fenced or unapproved frames are not re-parsed (up to 512 KiB) on
+            -- every idle poll; a changed file or a new approval re-evaluates.
+            if awaitingClose or not approved then rejectedData=data;return end
             assert(workerAvailable(now),'replay worker unavailable')
             if scene and currentId~=frame.meta.id then close()end
             if not scene then

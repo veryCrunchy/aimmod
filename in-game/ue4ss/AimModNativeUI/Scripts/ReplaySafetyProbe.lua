@@ -7,6 +7,10 @@ local limit = 1000000000
 local events = {
     {'challenge_completed', '/Script/GameSkillsTrainer.AnalyticsManager:OnChallengeCompleted'},
     {'challenge_broadcast', '/Script/GameSkillsTrainer.ScenarioManager:BroadcastChallengeCompleted'},
+    -- KovaaK's 3.9.11+ framework lifecycle broadcasts.
+    {'framework_complete', '/Script/KovaaKFramework.ScenarioBroadcastReceiver:Send_ChallengeComplete'},
+    {'framework_post_complete', '/Script/KovaaKFramework.ScenarioBroadcastReceiver:Send_PostChallengeComplete'},
+    {'framework_start', '/Script/KovaaKFramework.ScenarioBroadcastReceiver:Send_Start'},
     {'stats_saved', '/Script/GameSkillsTrainer.MetaCharacter:SaveStatsAndResetAllAccuracy'},
     {'damage_notified', '/Script/GameSkillsTrainer.ScenarioManager:NotifyDamageDealt'},
     {'death_notified', '/Script/GameSkillsTrainer.ScenarioManager:NotifyCharacterDeath'},

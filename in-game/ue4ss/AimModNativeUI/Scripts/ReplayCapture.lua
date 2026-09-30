@@ -9,10 +9,25 @@ local resumeGate
 local metricsSource
 local attemptSequence=0
 local lastFrames, lastInputs, lastReason, publishedStatus = 0, 0, '', nil
+local completed=false
+-- A failed attempt stops only that recording. Repeated consecutive failures
+-- (for example an unsupported game build) disable capture until reload.
+local failed, failures, MAX_FAILURES = false, 0, 3
 local MAX_ACTORS, MAX_FRAMES, MAX_BYTES = 128, 36000, 64 * 1024 * 1024
+-- Room kept for the closing record once the size budget is reached.
+local END_RESERVE = 4096
+-- Constant key lists reused by every 60 Hz sample.
+local METRIC_KEYS = {'score','shots','hits','kills','damage','seconds','scenario','hitStamp','hitDelta'}
+local FRAME_STAT_KEYS = {'score','shots','hits','kills','damage','seconds'}
+local EMPTY = {}
 local function valid(o) return o and o:IsValid() end
 local function finite(n) return type(n)=='number' and n==n and math.abs(n)<1e12 end
 local function number(n) assert(finite(n), 'non-finite replay value'); return string.format('%.7g',n) end
+-- Tests exercise bounds with small budgets. Limits can only be lowered.
+function M.lowerLimits(bytes,frames)
+    if finite(bytes) and bytes>END_RESERVE and bytes<MAX_BYTES then MAX_BYTES=bytes end
+    if finite(frames) and frames>=1 and frames<MAX_FRAMES then MAX_FRAMES=frames end
+end
 local function quote(s)
     return '"' .. tostring(s):gsub('[%z\1-\31\\"]', function(c)
         if c=='\\' then return '\\\\' elseif c=='"' then return '\\"' end
@@ -20,7 +35,7 @@ local function quote(s)
     end) .. '"'
 end
 function M.status()
-    return {state=not recordingEnabled and 'disabled' or (disabled and 'error' or (active and 'recording' or ((pending or settingsWait) and (pending and pending.unsupported and 'unsupported' or 'awaiting') or 'ready'))),
+    return {state=not recordingEnabled and 'disabled' or ((disabled or failed) and 'error' or (active and 'recording' or ((pending or settingsWait) and (pending and pending.unsupported and 'unsupported' or 'awaiting') or 'ready'))),
         frames=active and active.frames or (pending and 0 or lastFrames),inputEvents=active and active.inputEvents or (pending and 0 or lastInputs),reason=lastReason}
 end
 local function readSettings(force)
@@ -105,11 +120,15 @@ local function flush()
     active.file:flush(); active.pending={}
     publishStatus()
 end
-local function emit(line)
-    if not active then return end
-    active.bytes=active.bytes+#line+1
-    if active.bytes>MAX_BYTES then error('replay size limit reached') end
+-- Returns false once the size budget is reached; the capture loop then ends
+-- the attempt as 'size-limit' instead of raising inside a game callback.
+local function emit(line,final)
+    if not active then return false end
+    local size=#line+1
+    if not final and active.bytes+size>MAX_BYTES-END_RESERVE then active.full=true;return false end
+    active.bytes=active.bytes+size
     active.pending[#active.pending+1]=line
+    return true
 end
 local function finish(reason,boundary,finalScore)
     if not active then return end
@@ -119,17 +138,31 @@ local function finish(reason,boundary,finalScore)
     -- as temporary data, while ordinary canceled attempts discard their temp.
     local ok=pcall(function()
         local score=reason=='completed' and finite(finalScore) and ',"score":'..number(finalScore) or ''
-        emit('{"kind":"end","reason":'..quote(reason)..',"frames":'..a.frames..',"inputEvents":'..a.inputEvents..score..'}')
+        emit('{"kind":"end","reason":'..quote(reason)..',"frames":'..a.frames..',"inputEvents":'..a.inputEvents..score..'}',true)
         flush()
     end)
-    a.file:close(); lastFrames=a.frames; lastInputs=a.inputEvents; lastReason=reason; active=nil
-    if ok and reason=='completed' and a.frames>1 then os.rename(a.partial,a.final)
-    elseif reason~='completed' then
+    -- The writer is released even if the closing record could not be written.
+    active=nil
+    local closed=pcall(a.file.close,a.file); lastFrames=a.frames; lastInputs=a.inputEvents; lastReason=reason
+    if ok and closed and reason=='completed' then failures=0 end
+    if ok and closed and reason=='completed' and a.frames>1 then os.rename(a.partial,a.final)
+    elseif reason~='completed' or (ok and closed) then
         -- This is the exact temporary file owned by this recorder and closed
-        -- above. Interrupted attempts are never published into the library.
+        -- above. Interrupted attempts and completed attempts without motion are
+        -- never published into the library.
         os.remove(a.partial)
     end
     publishStatus()
+end
+-- Ends only the current attempt after an unexpected error. Never raises.
+local function fault(reason,err)
+    pcall(finish,reason)
+    active=nil;pending=nil;completed=false
+    pcall(function()if metricsSource then lastAttempt=metricsSource.state().id end end)
+    failures=failures+1;failed=true;lastReason=reason
+    if failures>=MAX_FAILURES then disabled=true end
+    pcall(publishStatus)
+    print('[AimModReplay] capture stopped ('..reason..'): '..tostring(err)..(disabled and '; disabled until reload' or '; next attempt will retry')..'\n')
 end
 local function resolveContext()
     local helpers=StaticFindObject('/Script/Engine.Default__GameplayStatics')
@@ -180,6 +213,7 @@ local function begin(state,context)
     local partial,final=root..id..'.partial',root..id..'.amreplay'
     -- The worker creates the directory; do not shell out from the game.
     local file=assert(io.open(partial,'wb'))
+    failed=false
     active={gate=context.captureGate,scenario=state.scenario,notificationId=state.id,notifications=1,file=file,partial=partial,final=final,id=id,helpers=helpers,player=player,camera=camera,world=world,
         start=helpers:GetTimeSeconds(player),last=-1,flushAt=1,frames=0,bytes=0,pending={},ids={},nextId=0,inputEvents=0,axisValues={}}
     local character=player.MyCharacter
@@ -192,7 +226,7 @@ local function begin(state,context)
     end
     lastReason=''; publishStatus()
     local source=''
-    if state.startEvent=='started' or state.startEvent=='restarted' or state.startEvent=='replayed' then source=',"startEvent":'..quote(state.startEvent) end
+    if type(state.startEvent)=='string' and #state.startEvent<=32 and state.startEvent:match('^[a-z][a-z%-]*$') then source=',"startEvent":'..quote(state.startEvent) end
     emit('{"kind":"header","version":1,"id":'..quote(id)..',"scenario":'..quote(state.scenario or '')..
         ',"recordedAt":'..quote(os.date('!%Y-%m-%dT%H:%M:%SZ'))..',"coordinates":"unreal-centimeters","nominalHz":60'..map..source..'}')
 end
@@ -270,6 +304,10 @@ end
 local function sample()
     local a=active
     if not valid(a.player) or not valid(a.camera) or not valid(a.world) then finish('world-changed'); return end
+    if a.full then finish('size-limit'); return end
+    -- A transiently missing local character skips this frame; it is not an
+    -- attempt boundary and must not raise inside the capture loop.
+    if not valid(a.player.MyCharacter) then return end
     local t=time()
     -- Unreal game time freezes during pause. Do not emit duplicate pause frames
     -- or interpolate across world travel / clock resets.
@@ -278,9 +316,10 @@ local function sample()
     if a.frames>=MAX_FRAMES then finish('frame-limit'); return end
     local camera,actors,health,appearance=snapshot(a)
     local fields={}
-    local observed=metricsSource and metricsSource.state() or {}
+    local observed=metricsSource and metricsSource.state() or EMPTY
+    -- Copy only the measured fields; telemetry state also holds UObject handles.
     local metrics={}
-    for key,value in pairs(observed) do metrics[key]=value end
+    for i=1,#METRIC_KEYS do local key=METRIC_KEYS[i]; metrics[key]=observed[key] end
     -- Current builds can omit UI metric notifications. Read only the local
     -- character's weapon session counters; never count other bots' damage.
     pcall(function()
@@ -316,7 +355,7 @@ local function sample()
     end)
     if a.gate and finite(a.gate.elapsed) then metrics.seconds=a.gate.elapsed end
     if metrics.scenario==a.scenario then
-        for _,key in ipairs({'score','shots','hits','kills','damage','seconds'}) do
+        for _,key in ipairs(FRAME_STAT_KEYS) do
             if finite(metrics[key]) then fields[#fields+1]=quote(key)..':'..number(metrics[key]) end
         end
         if a.hitEvent and a.hitEvent.time<=t then
@@ -331,7 +370,9 @@ local function sample()
     local stats=#fields>0 and ',"stats":{'..table.concat(fields,',')..'}' or ''
     local healthData=#health>0 and ',"health":['..table.concat(health,',')..']' or ''
     local appearanceData=#appearance>0 and ',"appearance":['..table.concat(appearance,',')..']' or ''
-    emit('{"kind":"frame","t":'..number(t)..',"camera":['..table.concat(camera,',')..'],"actors":['..table.concat(actors,',')..']'..healthData..appearanceData..stats..'}')
+    if not emit('{"kind":"frame","t":'..number(t)..',"camera":['..table.concat(camera,',')..'],"actors":['..table.concat(actors,',')..']'..healthData..appearanceData..stats..'}') then
+        finish('size-limit'); return
+    end
     a.frames=a.frames+1; a.last=t
     if t>=a.flushAt then flush(); a.flushAt=t+1 end
 end
@@ -343,36 +384,42 @@ local function inputHooks()
         'AltFirePressed','AltFireReleased','JumpPressed','JumpReleased','CrouchPressed','CrouchReleased',
         'ReloadPressed','ReloadReleased','ADSPressed','ADSReleased','AbilityPressed','AbilityReleased',
         'WeaponPressed','WeaponReleased'}
+    -- Axis events arrive every frame. Keep the per-event path free of closure
+    -- allocation: one prebuilt recorder runs under pcall.
+    local function record(event,axis,quoted,context,value)
+        local component=context:get()
+        -- A different recorder attached to the same character must
+        -- not double the input stream. Current builds expose the
+        -- player's concrete native playback/recording component.
+        -- Ownership is verified once at capture start, avoiding
+        -- thousands of reflected GetOwner calls per second.
+        if not active.recorderAddress or not valid(component) or component:GetAddress()~=active.recorderAddress then return end
+        if not valid(active.player.MyCharacter) or active.player.MyCharacter:GetAddress()~=active.inputOwnerAddress then return end
+        local v=value and value:get() or 1
+        if not finite(v) then return end
+        if axis then
+            local previous=active.axisValues[event]
+            active.axisValues[event]=v
+            -- Mouse look values are additive deltas: repeated
+            -- nonzero values MUST survive. Only redundant zeros
+            -- are inert. Keep the first zero and every transition
+            -- back to zero, including paused-time transitions.
+            if v==0 and previous==0 then return end
+        end
+        -- Over budget: dropped here; the capture loop ends the attempt.
+        if emit('{"kind":"input","t":'..number(time())..',"action":'..quoted..',"value":'..number(v)..'}') then
+            active.inputEvents=active.inputEvents+1
+        end
+    end
     for _,name in ipairs(names) do
-        local event=name
+        local event,axis,quoted=name,name:sub(1,4)=='Axis',quote(name)
         local path='/Script/GameSkillsTrainer.MetaInputRecordingComponent:Record'..name
-        if valid(StaticFindObject(path)) then
+        local found,fn=pcall(StaticFindObject,path)
+        if found and valid(fn) then
             RegisterHook(path,function() end,function(context,value)
-                if not active or active.suspended then return end
-                local ok,err=pcall(function()
-                    local component=context:get()
-                    -- A different recorder attached to the same character must
-                    -- not double the input stream. Current builds expose the
-                    -- player's concrete native playback/recording component.
-                    -- Ownership is verified once at capture start, avoiding
-                    -- thousands of reflected GetOwner calls per second.
-                    if not active.recorderAddress or not valid(component) or component:GetAddress()~=active.recorderAddress then return end
-                    if not valid(active.player.MyCharacter) or active.player.MyCharacter:GetAddress()~=active.inputOwnerAddress then return end
-                    local v=value and value:get() or 1
-                    if not finite(v) then return end
-                    if event:sub(1,4)=='Axis' then
-                        local previous=active.axisValues[event]
-                        active.axisValues[event]=v
-                        -- Mouse look values are additive deltas: repeated
-                        -- nonzero values MUST survive. Only redundant zeros
-                        -- are inert. Keep the first zero and every transition
-                        -- back to zero, including paused-time transitions.
-                        if v==0 and previous==0 then return end
-                    end
-                    emit('{"kind":"input","t":'..number(time())..',"action":'..quote(event)..',"value":'..number(v)..'}')
-                    active.inputEvents=active.inputEvents+1
-                end)
-                if not ok then finish('input-error'); disabled=true; lastReason='input-error'; publishStatus(); print('[AimModReplay] '..tostring(err)..'\n') end
+                if not active or active.suspended or active.full then return end
+                local ok,err=pcall(record,event,axis,quoted,context,value)
+                if not ok then fault('input-error',err) end
                 -- Nil: no parameter or return override.
             end)
         end
@@ -408,22 +455,19 @@ function M.start(telemetry)
         end)
     end)
     ExecuteInGameThreadWithDelay(0,function() M.probe() end)
-    local completed=false
-    RegisterHook('/Script/GameSkillsTrainer.AnalyticsManager:OnChallengeCompleted',function() end,function(_,scenario,score)
-        -- Associate completion with the recorder itself. Telemetry hooks may
-        -- already have changed active/id before this post hook is invoked.
-        if not scenario then return end
-        local ok,name=pcall(function()
-            local value=scenario:get()
-            return type(value)=='string' and value or value:ToString()
-        end)
-        if ok and settingsWait and name==telemetry.state().scenario then settingsWait=false;resumeGate=nil end
-        if not active then return end
-        if ok and name==active.scenario then
-            local scoreOk,finalScore=pcall(function()return score:get()end)
-            completed={intentId=telemetry.state().id,score=scoreOk and finite(finalScore) and finalScore or nil}
+    completed=false
+    -- Completion comes from telemetry, which resolves the lifecycle source of
+    -- this game build (legacy analytics or framework broadcasts). The event
+    -- carries the completed intent ID, so a newer Play event cannot steal it.
+    local function onCompleted(event)
+        if type(event)~='table' or type(event.scenario)~='string' then return end
+        if settingsWait and event.scenario==telemetry.state().scenario then settingsWait=false;resumeGate=nil end
+        if active and event.scenario==active.scenario then
+            completed={intentId=event.id,score=finite(event.score) and event.score or nil}
         end
-    end)
+    end
+    if type(telemetry.onCompleted)=='function' then telemetry.onCompleted(onCompleted)
+    else print('[AimModReplay] telemetry completion unavailable; replays are not published\n') end
     local function awaitAttempt(state,context,reusedId,nativeRestart)
         pending={id=state.id,scenario=state.scenario,startEvent=state.startEvent,nativeRestart=nativeRestart}
         local resolved,value=pcall(function()return context or gateContext(resolveContext())end)
@@ -468,6 +512,9 @@ function M.start(telemetry)
                     -- Consume only the intent observed at completion, never the
                     -- newer state.id, so the next attempt can arm immediately.
                     local result=completed;lastAttempt=result.intentId;completed=false;finish('completed',nil,result.score);pending=nil
+                elseif not valid(active.player) or not valid(active.world) then
+                    -- Level change/teardown: never read the clock through a stale controller.
+                    lastAttempt=state.id;finish('world-changed');pending=nil
                 elseif time()<active.last then
                     lastAttempt=state.id;finish('clock-reset');pending=nil
                 elseif not state.active then
@@ -532,7 +579,7 @@ function M.start(telemetry)
             end
             if active and not active.suspended then sample() end
         end)
-        if not ok then finish('capture-error'); disabled=true; lastReason='capture-error'; publishStatus(); print('[AimModReplay] capture stopped: '..tostring(err)..'\n') end
+        if not ok then fault('capture-error',err) end
     end)
 end
 return M
