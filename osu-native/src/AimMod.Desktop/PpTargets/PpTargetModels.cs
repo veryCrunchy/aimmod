@@ -40,7 +40,9 @@ public sealed record PpTargetPreferenceProfile(
     IReadOnlyList<string>? PreferredModSetup = null,
     PpTargetOpportunityProfile? Opportunities = null,
     string? PreferredModsJson = null,
-    bool LegacyScore = false, string? PlayerName = null)
+    bool LegacyScore = false, string? PlayerName = null,
+    PpOutcomeProfile? Outcomes = null,
+    int OtherScoringModeRuns = 0)
 {
     public static PpTargetPreferenceProfile Empty { get; } = new(
         0, 0, 0, null, null, null, null, null, null, PpTargetConfidence.Insufficient,
@@ -61,7 +63,8 @@ public sealed record PpTargetEstimate(
     PpPatternPrediction? PatternPrediction = null,
     string? PatternProfileIdentity = null,
     string? ModsJson = null,
-    PpPatternFeatures? Features = null, bool LegacyScore = false);
+    PpPatternFeatures? Features = null, bool LegacyScore = false,
+    PpOutcomeEstimate? Outcome = null);
 
 public sealed record PpTargetFilters(
     string SearchText = "",
@@ -106,20 +109,19 @@ public sealed record PpTargetCandidate(
     double? EstimatedAccountGainPp = null,
     double? AccountGainPerMinute = null,
     double? ExpectedScoreAccuracy = null,
-    PpTargetLearningForecast? Learning = null)
+    PpTargetForecast? Forecast = null)
 {
-    public double? FirstAttemptPp => Learning?.FirstTryPp ?? ExpectedEarnedPp;
-    // Display a calculated score even when stable history cannot establish pass frequency.
-    // Ranking, reward and per-attempt filters still require FirstAttemptPp evidence.
+    // PP if the next attempt passes. Pass chance is shown beside it, never multiplied in.
+    public double? FirstAttemptPp => Forecast?.PpIfPass ?? (ExpectedEarnedPp is null ? null : Estimate?.ExpectedPp);
     public double? DisplayedExpectedPp => FirstAttemptPp ?? Estimate?.ExpectedPp;
-    public bool IsConditionalPp => FirstAttemptPp is null && Estimate is not null;
-    public string ExpectedPpCaption => Learning is { } learning ? learning.PreviousTries > 0 ? "NEXT TRY PP" : "FIRST TRY PP"
-        : IsConditionalPp ? "PP IF PASSED" : "EXPECTED PP";
-    // An exact PP calculation is conditional on a completed score, not proof of a pass.
+    public bool IsConditionalPp => PassEstimate is null && DisplayedExpectedPp is not null;
+    public string ExpectedPpCaption => Forecast is { PreviousTries: > 0 } ? "NEXT TRY PP" : "FIRST TRY PP";
+    public double? TargetPp => Forecast?.TargetPp;
+    // Ranking only: failed attempts earn nothing. An exact PP calculation is conditional on a completed score, not proof of a pass.
     public double? ExpectedEarnedPp => Estimate is { } pp && PassEstimate is { } pass
         && (string.Equals(Status, "ranked", StringComparison.OrdinalIgnoreCase) || string.Equals(Status, "approved", StringComparison.OrdinalIgnoreCase))
-        && (pass.ConditionalAccuracy is not null || pp.PatternPrediction is { Fit: not null, ExpectedAccuracy: not null })
-        ? pp.ExpectedPp * pass.Probability : null;
+        && (pass.ConditionalAccuracy is not null || pp.PatternPrediction is { Fit: not null, ExpectedAccuracy: not null } || pp.Outcome is { Distribution.EffectiveSamples: >= 2 })
+        ? (Forecast?.PpIfPass ?? pp.ExpectedPp) * pass.Probability : null;
     public int EvidenceTier => ExpectedEarnedPp is null ? 0
         : PassEstimate!.Probability >= .5 && Attainability >= .5 ? 2 : 1;
     public string ReadinessLabel => PassEstimate is null ? "Pass unverified"

@@ -32,17 +32,19 @@ public static class PpTargetPreferenceProfiler
                             .ThenBy(setup => setup.Key, StringComparer.Ordinal)
                             .ToArray();
         Setup[] ppSetups = setups.Where(setup => validPp(setup.Pp)).ToArray();
-        double[] stars = setups.Select(setup => setup.Stars).Order().ToArray();
         double[] bpms = setups.Where(setup => validPositive(setup.Bpm)).Select(setup => setup.Bpm!.Value).Order().ToArray();
         double[] lengths = setups.Where(setup => validPositive(setup.LengthSeconds)).Select(setup => setup.LengthSeconds!.Value).Order().ToArray();
         double[] accuracies = setups.Select(setup => setup.Accuracy).Order().ToArray();
         double[] pp = ppSetups.Select(setup => setup.Pp!.Value).Order().ToArray();
 
+        DateTimeOffset newest = runs[0].PlayedAt;
+        double recency(DateTimeOffset played, double halfLife) => Math.Pow(0.5, Math.Max(0, (newest - played).TotalDays) / halfLife);
+        double legacyWeight = runs.Where(r => r.LegacyScore || r.Origin == LocalLibraryOrigin.Stable).Sum(r => recency(r.PlayedAt, 14));
         return new PpTargetPreferenceProfile(
             runs.Length,
             setups.Length,
             pp.Length,
-            preferredRange(stars, 0.5),
+            preferredStarRange(setups, newest),
             preferredRange(bpms, 15),
             preferredRange(lengths, 30),
             percentile(accuracies, 0.5),
@@ -58,7 +60,36 @@ public static class PpTargetPreferenceProfiler
             PreferredModSetup: setups.GroupBy(setup => string.Join(',', PpTargetMods.Normalise(setup.Mods)), StringComparer.Ordinal)
                 .OrderByDescending(group => group.Count()).ThenBy(group => group.Key, StringComparer.Ordinal)
                 .Select(group => PpTargetMods.Normalise(group.First().Mods)).First(),
-            LegacyScore: runs.Count(r => r.LegacyScore || r.Origin == LocalLibraryOrigin.Stable) > runs.Length / 2);
+            // The client played recently decides the scoring system, not all-time volume.
+            LegacyScore: legacyWeight > runs.Sum(r => recency(r.PlayedAt, 14)) / 2);
+    }
+
+    // Recency-weighted percentiles, stretched upwards to include the stars of recent high-PP passes.
+    private static PpTargetRange? preferredStarRange(Setup[] setups, DateTimeOffset newest)
+    {
+        if (setups.Length == 0)
+            return null;
+        double weight(Setup s) => Math.Pow(0.5, Math.Max(0, (newest - s.PlayedAt).TotalDays) / 30);
+        var stars = setups.Select(s => (Value: s.Stars, Weight: weight(s))).ToArray();
+        double centre = weightedPercentile(stars, .5);
+        double minimum = weightedPercentile(stars, setups.Length < 5 ? 0 : .2);
+        double maximum = weightedPercentile(stars, setups.Length < 5 ? 1 : .8);
+        var recent = setups.Where(s => validPp(s.Pp) && (newest - s.PlayedAt).TotalDays <= 30).ToArray();
+        if (recent.Length >= 3)
+        {
+            double threshold = weightedPercentile(recent.Select(s => (s.Pp!.Value, weight(s))).ToArray(), .75);
+            maximum = Math.Max(maximum, recent.Where(s => s.Pp >= threshold).Max(s => s.Stars));
+        }
+        return new PpTargetRange(Math.Max(0, Math.Min(minimum, centre - 0.25)), Math.Max(maximum, centre + 0.25));
+    }
+
+    private static double weightedPercentile(IReadOnlyList<(double Value, double Weight)> items, double fraction)
+    {
+        var ordered = items.OrderBy(i => i.Value).ToArray();
+        double total = ordered.Sum(i => i.Weight), threshold = Math.Clamp(fraction, 0, 1) * total, cumulative = 0;
+        foreach (var item in ordered)
+            if ((cumulative += item.Weight) >= threshold - 1e-12) return item.Value;
+        return ordered[^1].Value;
     }
 
     private static Setup buildSetup(IEnumerable<LocalReplay> values, IReadOnlyDictionary<Guid, LocalBeatmapSet> sets)
@@ -258,7 +289,8 @@ public static class PpTargetRanker
             difficulty.Name, difficulty.StarRating, difficulty.Bpm, difficulty.TotalLengthSeconds, difficulty.MaximumCombo,
             set.CoverUrl, preference, attainability, rank, baseline, gain, estimate, mods,
             scoreEvidence, modCompatibility, recommendation, passEstimate, accountGain, gainPerMinute, expectedAccuracy,
-            awardsPp ? context.Learning.Predict(estimate, difficulty.BeatmapId, difficulty.StarRating, difficulty.Bpm, difficulty.TotalLengthSeconds) : null);
+            awardsPp ? PpTargetForecastModel.Forecast(estimate, passEstimate,
+                context.Learning.Predict(estimate, difficulty.BeatmapId, difficulty.StarRating, difficulty.Bpm, difficulty.TotalLengthSeconds)) : null);
     }
 
     private static PpTargetEstimate? matchingEstimate(

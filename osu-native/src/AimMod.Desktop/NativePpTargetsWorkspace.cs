@@ -90,17 +90,16 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
     private readonly Dictionary<string,LocalReplay> observedModSetups = new();
     private PpTargetPreferenceProfile selectedModProfile(PpTargetPreferenceProfile value)
     {
-        return resolveModProfile(value, selectedMods.Value, patternHistory, observedModSetups.GetValueOrDefault(selectedMods.Value));
+        return ResolveModProfile(value, selectedMods.Value, patternHistory, observedModSetups.GetValueOrDefault(selectedMods.Value));
     }
-    private static PpTargetPreferenceProfile resolveModProfile(PpTargetPreferenceProfile value, string selection,
+    internal static PpTargetPreferenceProfile ResolveModProfile(PpTargetPreferenceProfile value, string selection,
         IReadOnlyList<LocalReplay> history, LocalReplay? run)
     {
-        if (selection == "Automatic")
-            run = history.Where(ScoreMods.IsManualPlay)
-                .Where(r=>PpTargetMods.Normalise(r.Mods).SequenceEqual(value.PreferredModSetup ?? []))
-                .GroupBy(ScoreMods.Configuration).OrderByDescending(g=>g.Count()).Select(g=>g.First()).FirstOrDefault();
+        int other = 0;
+        if (selection == "Automatic" && PpTargetScoringMode.Select(history, value.PreferredModSetup ?? []) is { } choice)
+            (run, other) = (choice.Run, choice.OtherModeRecentRuns);
         return run is not null
-            ? value with { PreferredModSetup=ScoreMods.Acronyms(run), PreferredModsJson=run.ModsJson, LegacyScore=run.LegacyScore || run.Origin == LocalLibraryOrigin.Stable }
+            ? value with { PreferredModSetup=ScoreMods.Acronyms(run), PreferredModsJson=run.ModsJson, LegacyScore=PpTargetScoringMode.IsLegacy(run), OtherScoringModeRuns=other }
             : WithSelectedMods(value,selection) with { PreferredModsJson=null };
     }
     private readonly Bindable<string> selectedMods = new("Automatic");
@@ -297,7 +296,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                                 DefaultStringLowerBound = "0",
                                 DefaultStringUpperBound = "10+",
                             },
-                            expectedPpSlider = new ShearedRangeSlider("Expected PP")
+                            expectedPpSlider = new ShearedRangeSlider("First try PP")
                             {
                                 LowerBound = minimumExpectedPp,
                                 UpperBound = maximumExpectedPp,
@@ -681,9 +680,12 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             IReadOnlyList<LocalReplay> runs = PpTargetSkillHistory.Merge(
                 hydration?.Runs ?? history.Runs,
                 online?.Scores ?? [], loadedSets);
+            IReadOnlyList<LocalReplay> localRuns = hydration?.Runs ?? history.Runs;
+            IReadOnlyList<ScoreHistoryEntry> passHistory = PpTargetSkillHistory.PassHistory(localRuns, online?.Scores ?? [], loadedSets);
             PpTargetPreferenceProfile next = PpTargetPreferenceProfiler.Build(runs, loadedSets) with
             {
-                Opportunities = PpTargetOpportunityModel.Build(PpTargetSkillHistory.PassHistory(hydration?.Runs ?? history.Runs, online?.Scores ?? [], loadedSets)),
+                Opportunities = PpTargetOpportunityModel.Build(passHistory),
+                Outcomes = PpTargetOutcomeModel.Build(passHistory, localRuns, loadedSets),
                 PlayerName = player?.Trim() ?? history.Runs.FirstOrDefault()?.Player.Trim(),
             };
             if (!IsDisposed && !cancellationToken.IsCancellationRequested)
@@ -742,7 +744,14 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                     patternHistory = runs;
                     localSets = maps;
                     if (online is not null && online.RecentCoverage.IsSuccess)
-                        profile = profile with { Opportunities = PpTargetOpportunityModel.Build(PpTargetSkillHistory.PassHistory(hydration?.Runs ?? history.Runs, online.Scores, maps)) };
+                    {
+                        var passHistory = PpTargetSkillHistory.PassHistory(hydration?.Runs ?? history.Runs, online.Scores, maps);
+                        profile = profile with
+                        {
+                            Opportunities = PpTargetOpportunityModel.Build(passHistory),
+                            Outcomes = PpTargetOutcomeModel.Build(passHistory, hydration?.Runs ?? history.Runs, maps),
+                        };
+                    }
                     refreshPatternEvidence();
                 });
         }
@@ -1146,12 +1155,17 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
     {
         try
         {
-            var candidates = await Task.Run(() => PpTargetScanPlanner.Select(scanProfile, scanCatalog, filters, calculation_scan_limit), cancellationToken).ConfigureAwait(false);
+            var previous = exactEstimates;
+            var candidates = await Task.Run(() => PpTargetScanPlanner.Select(scanProfile, scanCatalog, filters, calculation_scan_limit, previous), cancellationToken).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
             Dictionary<int, LocalBeatmapDifficulty> installed = installedSets.SelectMany(set => set.Difficulties)
                 .Where(difficulty => difficulty.OnlineId > 0 && !string.IsNullOrWhiteSpace(difficulty.BeatmapHash))
                 .GroupBy(difficulty => difficulty.OnlineId)
                 .ToDictionary(group => group.Key, group => group.First());
+            Dictionary<int, OfficialBeatmapDifficulty> maps = scanCatalog.SelectMany(set => set.Difficulties ?? [])
+                .Where(difficulty => difficulty.BeatmapId > 0).GroupBy(difficulty => difficulty.BeatmapId)
+                .ToDictionary(group => group.Key, group => group.First());
+            PpOutcomeProfile? outcomes = scanProfile.Outcomes is { } history ? PpTargetOutcomeModel.WithMaps(history, maps) : null;
             PpTargetExactRequest[] requests = candidates
                 .Select(candidate => new PpTargetExactRequest(
                     candidate.BeatmapId,
@@ -1159,7 +1173,9 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
                     candidate.SuggestedMods,
                     candidate.ExpectedScoreAccuracy ?? scanProfile.TypicalAccuracy!.Value,
                     candidate.Attainability,
-                    scanProfile.PatternProfile, scanProfile.PreferredModsJson, scanProfile.LegacyScore))
+                    scanProfile.PatternProfile, scanProfile.PreferredModsJson, scanProfile.LegacyScore,
+                    outcomes, maps.GetValueOrDefault(candidate.BeatmapId) is { } map
+                        ? new PpTargetMapContext(map.StarRating, map.Bpm, map.TotalLengthSeconds, map.OverallDifficulty, map.ApproachRate) : null))
                 .ToArray();
             if (requests.Length == 0)
             {
@@ -1338,7 +1354,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         var observed = observedModSetups.GetValueOrDefault(modSelection);
         ranking.Submit(token =>
         {
-            var ranked = PpTargetRanker.Rank(resolveModProfile(currentProfile, modSelection, history, observed), currentCatalog, filters, estimates, token);
+            var ranked = PpTargetRanker.Rank(ResolveModProfile(currentProfile, modSelection, history, observed), currentCatalog, filters, estimates, token);
             token.ThrowIfCancellationRequested();
             return OrderTargets(ranked.Candidates.Where(candidate => estimates.Count == 0 || candidate.Estimate is not null), ordering)
                 .Take(200)
@@ -1430,7 +1446,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
             bool ppRange = minimumExpectedPp.Value > 0 || maximumExpectedPp.Value < 1000;
             workspaceState.ShowState(FontAwesome.Solid.Filter, "No matching beatmaps",
                 ppRange
-                    ? "Expected PP needs comparable completed plays and pass evidence. Clear the PP range to include unverified maps."
+                    ? "First try PP needs a finished PP calculation. Clear the PP range to include maps still being calculated."
                     : "Try widening the star, PP, status, or length filters.",
                 "Reset filters", resetFilters);
         }
@@ -1564,12 +1580,17 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         string evidenceSummary = evidence is null ? "Skill evidence loading"
             : $"{evidence.ScoreEvidence?.Select(item => item.MapKey).Distinct().Count() ?? 0:N0} score-supported maps / " +
               $"{evidence.Evidence.Select(item => item.MapKey).Distinct().Count():N0} exact-replay maps (30 days)";
+        PpTargetPreferenceProfile scoring = selectedModProfile(profile);
+        string mode = scoring.LegacyScore ? "stable" : "lazer";
+        string scoringSummary = scoring.OtherScoringModeRuns > 0
+            ? $"{mode} scoring ({scoring.OtherScoringModeRuns:N0} recent {(scoring.LegacyScore ? "lazer" : "stable")} plays used at lower weight)"
+            : $"{mode} scoring";
         profileSummary.Text = profile.ValidRunCount == 0
             ? "No score history is available for PP recommendations."
             : evidence?.SessionForm is { Patterns.Count: > 0 } form
-                ? $"{form.Summary}  /  {profile.ValidRunCount:N0} plays{skillProgress}"
+                ? $"{form.Summary}  /  {profile.ValidRunCount:N0} plays  /  {scoringSummary}{skillProgress}"
                 : $"{profile.ValidRunCount:N0} plays  /  {onlineBestCount:N0} submitted  /  " +
-                  $"{evidenceSummary}  /  {mods}{skillProgress}";
+                  $"{evidenceSummary}  /  {mods}  /  {scoringSummary}{skillProgress}";
     }
 
     private void showRefresh(string message, int completed, int total)
@@ -1766,7 +1787,7 @@ public partial class NativePpTargetsWorkspace : CompositeDrawable
         TargetSort.AccountGain => "Best account PP gain",
         TargetSort.PassProbability => "Safest estimated pass",
         TargetSort.GainPerMinute => "Account PP per minute",
-        TargetSort.ExpectedPp => "Highest expected PP",
+        TargetSort.ExpectedPp => "Highest first try PP",
         TargetSort.MaximumPp => "Highest max PP",
         TargetSort.Stars => "Lowest star rating",
         _ => "Best skill fit",

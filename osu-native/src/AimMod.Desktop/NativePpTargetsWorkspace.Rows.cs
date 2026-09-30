@@ -170,10 +170,8 @@ public partial class NativePpTargetsWorkspace
             string gainDetails = candidate.EstimatedAccountGainPp is { } gainPp
                 ? $"Estimated account gain per attempt: +{gainPp:0.0}pp, weighted by pass chance. Uses known best plays; excludes bonus PP and unknown scores."
                 : "Account gain unverified: comparable completed plays and pass evidence are needed.";
-            TooltipText = string.Join("\n", new[] { candidate.ReadinessLabel, passDetails, gainDetails }
-                .Concat(pattern?.Risks.Take(2) ?? []));
-            if (candidate.Learning is { } retry)
-                TooltipText += $"\nEstimated first/next try: {retry.FirstTryPp:0} PP. Target: {retry.TargetPp:0} PP in about {retry.LikelyTries} tries ({retry.ReachProbability:P0} chance). Low confidence; {retry.Sessions} recorded sessions on {retry.Maps} similar-pattern maps.";
+            TooltipText = string.Join("\n", new[] { candidate.ReadinessLabel }.Concat(ForecastExplanation(candidate))
+                .Concat([passDetails, gainDetails]).Concat(pattern?.Risks.Take(2) ?? []));
             RelativeSizeAxes = Axes.X;
             Height = 112;
             CornerRadius = AimModVisualStyle.ControlRadius;
@@ -201,7 +199,8 @@ public partial class NativePpTargetsWorkspace
                 TargetSort.GainPerMinute => ("ACCOUNT PP / MIN", candidate.AccountGainPerMinute is { } efficient ? $"+{efficient:0.0}" : "-", personalPass),
                 TargetSort.PassProbability => ("EST. PASS", candidate.PassEstimate is { } chance ? $"{chance.Probability:P0}" : "-",
                     candidate.PassEstimate is { } range ? $"{range.Lower:P0}-{range.Upper:P0} range" : "More history needed"),
-                _ when candidate.Learning is { } forecast => ("TARGET PP", $"{forecast.TargetPp:0}", $"~{forecast.LikelyTries} {(forecast.PreviousTries > 0 ? "more " : "")}tries"),
+                _ when candidate.Forecast is { TargetPp: { } target } forecast => ("TARGET PP", $"{target:0}",
+                    forecast.PreviousTries > 0 ? $"~{forecast.Tries} more tries" : $"~{forecast.Tries} tries, {forecast.ReachProbability:P0}"),
                 _ => ("MAX PP", maximum, candidate.Estimate is null ? "pending" : "100% FC ceiling"),
             };
             string mods = ScoreMods.Display(candidate.SuggestedMods, candidate.Estimate?.ModsJson);
@@ -242,12 +241,12 @@ public partial class NativePpTargetsWorkspace
                             $"{candidate.ReadinessLabel}{(candidate.PassEstimate is null ? string.Empty : $"   /   {personalPass}")}{gain}",
                             9, candidate.EvidenceTier == 2 ? AimModPalette.Success : AimModPalette.Muted, "SemiBold"),
                         patternDetails = truncatingText(candidate.IsConditionalPp
-                            ? "PP for your projected score if passed. Pass chance needs more history."
+                            ? "PP if you pass. Pass chance needs more comparable pass/fail history."
                             : $"{skillLabel} / {patternSummary}", 10, AimModPalette.Muted),
                     },
                 },
                 expectedMetric = metric(candidate.ExpectedPpCaption, expected, AimModPalette.Cyan,
-                    candidate.Learning is not null ? "low confidence" : candidate.Estimate is null ? "pending" : candidate.IsConditionalPp ? "projected score" : "per attempt"),
+                    candidate.Estimate is null ? "pending" : candidate.PassEstimate is { } odds ? $"if pass, {odds.Probability:P0}" : "if you pass"),
                 maximumMetric = metric(priorityCaption, priorityValue, Colour4.FromHex("FFD45A"), priorityDetail),
                 new Container
                 {
