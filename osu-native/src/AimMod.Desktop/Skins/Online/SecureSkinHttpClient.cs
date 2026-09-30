@@ -92,11 +92,14 @@ public sealed class SecureSkinHttpClient : ISecureSkinHttpClient, IDisposable
 
         string fullPath = Path.GetFullPath(destinationPath);
         Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+        FileStream stream = new(fullPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81_920, FileOptions.Asynchronous);
         try
         {
-            await using var stream = new FileStream(fullPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81_920, FileOptions.Asynchronous);
-            SkinHttpTransfer transfer = await fetchAsync(uri, stream, options, cancellationToken).ConfigureAwait(false);
-            return new SkinHttpFile(fullPath, transfer.Length, transfer.FinalUri, transfer.ContentType);
+            await using (stream.ConfigureAwait(false))
+            {
+                SkinHttpTransfer transfer = await fetchAsync(uri, stream, options, cancellationToken).ConfigureAwait(false);
+                return new SkinHttpFile(fullPath, transfer.Length, transfer.FinalUri, transfer.ContentType);
+            }
         }
         catch
         {
@@ -167,7 +170,15 @@ public sealed class SecureSkinHttpClient : ISecureSkinHttpClient, IDisposable
                 long total = 0;
                 while (true)
                 {
-                    int read = await source.ReadAsync(buffer, timeout.Token).ConfigureAwait(false);
+                    int read;
+                    try
+                    {
+                        read = await source.ReadAsync(buffer, timeout.Token).ConfigureAwait(false);
+                    }
+                    catch (IOException error)
+                    {
+                        throw new SkinHttpException("network_error", "The skin download was interrupted.", innerException: error);
+                    }
                     if (read == 0)
                         break;
                     total += read;

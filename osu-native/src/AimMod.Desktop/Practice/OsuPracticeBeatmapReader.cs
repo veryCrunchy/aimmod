@@ -38,6 +38,7 @@ public static class OsuPracticeBeatmapReader
         PracticeTimingPoint[] timing = section(sections, "TimingPoints")
             .Where(contentLine)
             .Select(parseTimingPoint)
+            .OfType<PracticeTimingPoint>()
             .OrderBy(point => point.TimeMs)
             .ToArray();
         double[] decodedEndTimes = decodeEndTimes(fullPath);
@@ -86,13 +87,16 @@ public static class OsuPracticeBeatmapReader
         return match is null ? fallback : match[prefix.Length..].Trim();
     }
 
-    private static PracticeTimingPoint parseTimingPoint(string line)
+    private static PracticeTimingPoint? parseTimingPoint(string line)
     {
         string[] fields = line.Split(',');
-        if (fields.Length < 2)
-            throw new InvalidDataException("A timing point in the source beatmap is malformed.");
-        double time = parseDouble(fields[0], "timing point time");
+        if (fields.Length < 2
+            || !double.TryParse(fields[0].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double time) || !double.IsFinite(time)
+            || !double.TryParse(fields[1].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double beatLength) || !double.IsFinite(beatLength))
+            return null;
         bool uninherited = fields.Length < 7 || fields[6].Trim() != "0";
+        if (uninherited && beatLength <= 0)
+            return null;
         return new PracticeTimingPoint(time, uninherited, fields);
     }
 

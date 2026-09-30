@@ -80,8 +80,8 @@ public sealed class OfficialAccountScoreHistoryService : IAccountScoreHistorySer
     private static readonly TimeSpan profile_lifetime = TimeSpan.FromMinutes(5);
     private readonly Func<OfficialOsuApiClient?> api;
     private readonly SemaphoreSlim profileLock = new(1, 1);
-    private OsuProfile? cachedProfile;
-    private DateTimeOffset profileFetchedAt;
+    private readonly object profileState = new();
+    private CachedProfile? cachedProfile;
 
     public OfficialAccountScoreHistoryService(Func<OfficialOsuApiClient?> api)
     {
@@ -136,26 +136,41 @@ public sealed class OfficialAccountScoreHistoryService : IAccountScoreHistorySer
         OfficialOsuApiClient? client = api();
         if (client is null)
             return (null, null, OsuBestScoresFetchStatus.SessionUnavailable);
-        if (cachedProfile is not null && DateTimeOffset.UtcNow - profileFetchedAt < profile_lifetime)
-            return (client, cachedProfile, OsuBestScoresFetchStatus.Success);
+        if (freshProfile(client) is { } hit)
+            return (client, hit, OsuBestScoresFetchStatus.Success);
 
         await profileLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (cachedProfile is not null && DateTimeOffset.UtcNow - profileFetchedAt < profile_lifetime)
-                return (client, cachedProfile, OsuBestScoresFetchStatus.Success);
+            if (freshProfile(client) is { } racedHit)
+                return (client, racedHit, OsuBestScoresFetchStatus.Success);
             OsuProfileFetchResult result = await client.FetchCurrentProfileAsync(cancellationToken).ConfigureAwait(false);
+            lock (profileState)
+                cachedProfile = result.Status == OsuProfileFetchStatus.Success && result.Profile is not null
+                    ? new CachedProfile(client, result.Profile, DateTimeOffset.UtcNow)
+                    : null;
             if (result.Status != OsuProfileFetchStatus.Success || result.Profile is null)
                 return (client, null, mapProfileStatus(result.Status));
-            cachedProfile = result.Profile;
-            profileFetchedAt = DateTimeOffset.UtcNow;
-            return (client, cachedProfile, OsuBestScoresFetchStatus.Success);
+            return (client, result.Profile, OsuBestScoresFetchStatus.Success);
         }
         finally
         {
             profileLock.Release();
         }
     }
+
+    // A profile belongs to the session that fetched it; another client means another account.
+    private OsuProfile? freshProfile(OfficialOsuApiClient client)
+    {
+        lock (profileState)
+        {
+            if (cachedProfile is { } cached && ReferenceEquals(cached.Client, client) && DateTimeOffset.UtcNow - cached.FetchedAt < profile_lifetime)
+                return cached.Profile;
+            return null;
+        }
+    }
+
+    private sealed record CachedProfile(OfficialOsuApiClient Client, OsuProfile Profile, DateTimeOffset FetchedAt);
 
     private static ScoreHistoryEntry fromExact(OsuUserBeatmapScore score, int beatmapId) => new(
         $"osu:{score.ScoreId}", score.ScoreId, beatmapId, 0, null, null, string.Empty, string.Empty, string.Empty,

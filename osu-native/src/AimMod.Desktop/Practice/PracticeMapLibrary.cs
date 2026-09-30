@@ -124,7 +124,17 @@ public sealed class PracticeMapLibrary
         string path = Path.Combine(ownedDirectory(id), "progress.json");
         if (!File.Exists(path)) return PracticeProgress.Empty;
         if (new FileInfo(path).Length > 64_000_000) throw new InvalidDataException("Practice history is too large.");
-        return JsonSerializer.Deserialize<PracticeProgress>(File.ReadAllText(path)) ?? PracticeProgress.Empty;
+        try
+        {
+            PracticeProgress? progress = JsonSerializer.Deserialize<PracticeProgress>(File.ReadAllText(path));
+            return progress?.Attempts is null ? PracticeProgress.Empty : progress with { Attempts = progress.Attempts.Where(attempt => attempt is not null).ToArray() };
+        }
+        catch (JsonException)
+        {
+            // One unreadable history must not break every practice set; keep a copy for recovery.
+            File.Copy(path, path + ".corrupt", overwrite: true);
+            return PracticeProgress.Empty;
+        }
     }
 
     /// <summary>Records a completed embedded practice attempt. Original-map scores still come from score history.</summary>
@@ -157,13 +167,17 @@ public sealed class PracticeMapLibrary
         var runs=history.ToArray(); var result=new List<PracticeSetProgress>();
         foreach (var map in List().Where(m=>m.Tracking is not null && (m.Tracking.AccountId == 0 || m.Tracking.AccountId == accountId)))
         {
-            var previous=LoadProgress(map.Id); var next=PracticeProgressTracker.Reconcile(map,previous,runs,accountId);
-            if (!previous.Attempts.SequenceEqual(next.Attempts))
+            try
             {
-                string path=Path.Combine(ownedDirectory(map.Id),"progress.json");
-                File.WriteAllText(path+".tmp",JsonSerializer.Serialize(next)); File.Move(path+".tmp",path,true);
+                var previous=LoadProgress(map.Id); var next=PracticeProgressTracker.Reconcile(map,previous,runs,accountId);
+                if (!previous.Attempts.SequenceEqual(next.Attempts))
+                {
+                    string path=Path.Combine(ownedDirectory(map.Id),"progress.json");
+                    File.WriteAllText(path+".tmp",JsonSerializer.Serialize(next)); File.Move(path+".tmp",path,true);
+                }
+                result.Add(new(map,next));
             }
-            result.Add(new(map,next));
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException) { }
         }
         return result;
     }

@@ -149,7 +149,7 @@ public static class PracticeMapPlanner
             double interval = current.StartTimeMs - previous.StartTimeMs;
             double distance = Math.Sqrt(Math.Pow(current.X - previous.X, 2) + Math.Pow(current.Y - previous.Y, 2));
             PracticeTimingPoint? timing = beatmap.TimingPoints.LastOrDefault(point => point.Uninherited && point.TimeMs <= current.StartTimeMs);
-            double beatLength = timing is not null && double.TryParse(timing.Fields[1], System.Globalization.NumberStyles.Float,
+            double beatLength = timing is { Fields.Count: > 1 } && double.TryParse(timing.Fields[1], System.Globalization.NumberStyles.Float,
                 System.Globalization.CultureInfo.InvariantCulture, out double value) && value > 0 ? value : 500;
             // Require a contiguous circle run, not several unrelated fast links or slider heads.
             bool fastLink = previous.IsCircle && current.IsCircle && interval >= 40
@@ -247,7 +247,9 @@ public static class PracticeMapPlanner
     {
         string[] fields = point.Fields.ToArray();
         fields[0] = format(point.TimeMs / rate);
-        if (point.Uninherited) fields[1] = format(double.Parse(fields[1], System.Globalization.CultureInfo.InvariantCulture) / rate);
+        if (point.Uninherited && fields.Length > 1 && double.TryParse(fields[1], System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out double beatLength) && double.IsFinite(beatLength))
+            fields[1] = format(beatLength / rate);
         return point with { TimeMs = point.TimeMs / rate, Fields = fields };
     }
 

@@ -110,10 +110,18 @@ public sealed class OsuHubSyncClient : IOsuHubUploader
             request.Replay?.Sha256 ?? "",
             replayUploaded,
             DateTimeOffset.UtcNow);
-        await cache.SaveAsync(entry, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await cache.SaveAsync(entry, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            // The Hub already accepted the share; losing local deduplication must not report a failed upload.
+            System.Diagnostics.Trace.TraceWarning($"Hub sync cache could not be saved: {error.Message}");
+        }
         return new OsuHubUploadResult(
             payload.ShareId,
-            new Uri(baseUri, "osu/replays/" + payload.ShareId),
+            shareUri(payload.ShareId),
             payload.Visibility,
             payload.Created,
             replayUploaded,
@@ -149,11 +157,14 @@ public sealed class OsuHubSyncClient : IOsuHubUploader
 
     private OsuHubUploadResult resultFromCache(OsuHubSyncCacheEntry entry) => new(
         entry.ShareId,
-        new Uri(baseUri, "osu/replays/" + entry.ShareId),
+        shareUri(entry.ShareId),
         entry.Visibility,
         false,
         entry.ReplayUploaded,
         true);
+
+    // Share ids come from the server; escaping keeps them a single path segment on the Hub origin.
+    private Uri shareUri(string shareId) => new(baseUri, "osu/replays/" + Uri.EscapeDataString(shareId));
 
     private static async Task ensureSuccessAsync(HttpResponseMessage response, CancellationToken cancellationToken)
     {

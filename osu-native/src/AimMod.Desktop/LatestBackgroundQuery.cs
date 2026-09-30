@@ -47,7 +47,12 @@ internal sealed class LatestBackgroundQuery<T> : IDisposable
             catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
             catch (Exception error)
             {
-                if (!cancellation.IsCancellationRequested) work.Failed(error);
+                // A throwing callback must not strand the worker: later submissions would never run.
+                if (!cancellation.IsCancellationRequested)
+                {
+                    try { work.Failed(error); }
+                    catch (Exception callbackError) { System.Diagnostics.Trace.TraceError($"Background query failure handler threw: {callbackError}"); }
+                }
             }
             finally
             {

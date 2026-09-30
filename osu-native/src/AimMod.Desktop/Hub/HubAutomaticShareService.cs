@@ -62,6 +62,8 @@ public sealed class HubAutomaticShareService
                 return;
             }
 
+            // Persist observations once per batch; the queue's own deduplication keys cover a crash in between.
+            bool observedChanged = false;
             foreach (LocalReplay play in plays.OrderBy(play => play.PlayedAt))
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -78,7 +80,7 @@ public sealed class HubAutomaticShareService
                     if (identities.Any(identity => !state.Observed.Contains(identity)))
                     {
                         state.Observed.UnionWith(identities);
-                        await persistAsync(cancellationToken).ConfigureAwait(false);
+                        observedChanged = true;
                     }
                     continue;
                 }
@@ -95,8 +97,10 @@ public sealed class HubAutomaticShareService
                 }
                 // Remember below-threshold plays too: lowering a threshold is not a backfill operation.
                 state.Observed.UnionWith(identities);
-                await persistAsync(cancellationToken).ConfigureAwait(false);
+                observedChanged = true;
             }
+            if (observedChanged)
+                await persistAsync(cancellationToken).ConfigureAwait(false);
         }
         finally { observationGate.Release(); }
     }

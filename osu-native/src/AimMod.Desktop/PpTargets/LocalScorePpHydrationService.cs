@@ -65,6 +65,8 @@ public sealed class LocalScorePpHydrationService : ILocalScorePpHydrationService
         IProgress<LocalScorePpHydrationProgress>? progress = null)
     {
         ArgumentNullException.ThrowIfNull(runs);
+        if (runs.Any(run => run is null))
+            runs = runs.Where(run => run is not null).ToArray();
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -173,8 +175,19 @@ public sealed class LocalScorePpHydrationService : ILocalScorePpHydrationService
                         {
                             cancellationToken.ThrowIfCancellationRequested();
                             string[] hashes = batch.Select(group => group.Key).ToArray();
-                            await using ExternalLazerAssetStagingLease lease = await assetClient.ResolveToPrivateStagingAsync(
-                                libraryRoot, hashes, Array.Empty<Guid>(), cancellationToken).ConfigureAwait(false);
+                            ExternalLazerAssetStagingLease lease;
+                            try
+                            {
+                                lease = await assetClient.ResolveToPrivateStagingAsync(
+                                    libraryRoot, hashes, Array.Empty<Guid>(), cancellationToken).ConfigureAwait(false);
+                            }
+                            catch (ExternalLazerAssetClientException)
+                            {
+                                processed += batch.Sum(group => group.Count());
+                                progress?.Report(new LocalScorePpHydrationProgress(processed, missing.Length));
+                                continue;
+                            }
+                            await using ExternalLazerAssetStagingLease staged = lease;
                             Dictionary<string, ExternalLazerResolvedAsset> beatmaps = lease.Result.Files
                                 .Where(file => string.Equals(file.Kind, "Beatmap", StringComparison.Ordinal))
                                 .GroupBy(file => file.OwnerId, StringComparer.OrdinalIgnoreCase)
@@ -192,6 +205,8 @@ public sealed class LocalScorePpHydrationService : ILocalScorePpHydrationService
                                 try
                                 {
                                     PpWhatIfResult result = await ppClient.CalculateAsync(CreateCalculationRequest(run, beatmap.StagedPath), cancellationToken).ConfigureAwait(false);
+                                    if (!validPp(result.PerformancePoints))
+                                        continue;
                                     recordCalculated(run, result.PerformancePoints, ppByScore);
                                     calculated++;
                                     pendingCacheEntries++;
@@ -270,7 +285,7 @@ public sealed class LocalScorePpHydrationService : ILocalScorePpHydrationService
             }
             return true;
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or NotSupportedException)
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or NotSupportedException or ArgumentException)
         {
             Console.Error.WriteLine($"AimMod local score PP cache persistence failed for '{cachePath}': {error}");
             return false;
@@ -287,11 +302,13 @@ public sealed class LocalScorePpHydrationService : ILocalScorePpHydrationService
             CacheDocument? document = JsonSerializer.Deserialize<CacheDocument>(stream, json_options);
             if (document?.Version != cache_version || document.Entries is null)
                 return new Dictionary<string, CacheEntry>(StringComparer.Ordinal);
-            return document.Entries.Where(entry => entry.Key.Length == 64 && validPp(entry.PerformancePoints))
-                           .TakeLast(maximum_cache_entries)
-                           .ToDictionary(entry => entry.Key, StringComparer.Ordinal);
+            var entries = new Dictionary<string, CacheEntry>(StringComparer.Ordinal);
+            foreach (CacheEntry entry in document.Entries.TakeLast(maximum_cache_entries))
+                if (entry?.Key is { Length: 64 } && validPp(entry.PerformancePoints))
+                    entries[entry.Key] = entry;
+            return entries;
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or NotSupportedException)
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or NotSupportedException or ArgumentException)
         {
             return new Dictionary<string, CacheEntry>(StringComparer.Ordinal);
         }

@@ -10,10 +10,13 @@ internal static class DiskCacheBudget
     {
         lock (gate)
         {
-            for (string? ancestor = Path.GetFullPath(directory); ancestor is not null; ancestor = Path.GetDirectoryName(ancestor))
-                if ((File.GetAttributes(ancestor) & FileAttributes.ReparsePoint) != 0)
-                    throw new IOException("Cache directory cannot use symbolic links.");
-            var entries = new DirectoryInfo(directory).EnumerateFiles("*" + extension)
+            // Only the cache directory itself matters: symlinked ancestors such as a
+            // relocated home directory are common and do not redirect eviction.
+            string root = Path.GetFullPath(directory);
+            if ((File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
+                throw new IOException("Cache directory cannot use symbolic links.");
+            string preserved = Path.GetFullPath(preservedPath);
+            var entries = new DirectoryInfo(root).EnumerateFiles("*" + extension)
                 .Where(file => Path.GetFileNameWithoutExtension(file.Name) is { Length: 64 } hash &&
                                hash.All(char.IsAsciiHexDigit) && (file.Attributes & FileAttributes.ReparsePoint) == 0)
                 .OrderBy(file => file.LastWriteTimeUtc).ToList();
@@ -22,7 +25,7 @@ internal static class DiskCacheBudget
             DateTime cutoff = DateTime.UtcNow - lifetime;
             foreach (FileInfo file in entries)
             {
-                if (string.Equals(file.FullName, Path.GetFullPath(preservedPath), StringComparison.OrdinalIgnoreCase)) continue;
+                if (string.Equals(file.FullName, preserved, StringComparison.OrdinalIgnoreCase)) continue;
                 if (file.LastWriteTimeUtc >= cutoff && count <= maximumCount && bytes <= maximumBytes) continue;
                 long length = file.Length;
                 try { file.Delete(); }
@@ -35,9 +38,9 @@ internal static class DiskCacheBudget
             {
                 // A locked old entry must not allow every subsequent write to add
                 // more bytes. Reject the newly published, reproducible cache item.
-                FileInfo? added = entries.FirstOrDefault(file => string.Equals(file.FullName,
-                    Path.GetFullPath(preservedPath), StringComparison.OrdinalIgnoreCase));
-                added?.Delete();
+                FileInfo? added = entries.FirstOrDefault(file => string.Equals(file.FullName, preserved, StringComparison.OrdinalIgnoreCase));
+                try { added?.Delete(); }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
                 throw new IOException("Cache could not be kept within its storage budget.");
             }
         }

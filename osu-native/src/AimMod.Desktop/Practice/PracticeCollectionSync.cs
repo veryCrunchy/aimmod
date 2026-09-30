@@ -11,6 +11,7 @@ public static class PracticeCollectionSync
 {
     public const string CollectionName = "AimMod coaching";
     private const ulong schemaVersion = 51;
+    private const int retained_journal_entries = 8;
 
     public static PracticeCollectionResult Lazer(string root, string journalDirectory, IEnumerable<string> active, IEnumerable<string> retired)
     {
@@ -51,6 +52,7 @@ public static class PracticeCollectionSync
             hashes.Clear(); foreach (string hash in next) hashes.Add(hash);
             collection.DynamicApi.Set("LastModified", DateTimeOffset.UtcNow);
         });
+        pruneJournal(journalDirectory);
         return new(installed, count);
     }
 
@@ -110,7 +112,29 @@ public static class PracticeCollectionSync
             if (isRunning()) throw new IOException("Close osu!stable once to update the AimMod coaching collection.");
             if (File.Exists(path)) File.Replace(temporary, path, null); else File.Move(temporary, path);
         }
-        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        finally
+        {
+            try { File.Delete(temporary); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+        }
+        pruneJournal(journalDirectory);
+    }
+
+    // Every change keeps a rollback copy; bound them so a stable collection.db is not duplicated forever.
+    private static void pruneJournal(string journalDirectory)
+    {
+        try
+        {
+            if (!Directory.Exists(journalDirectory)) return;
+            foreach (FileInfo old in new DirectoryInfo(journalDirectory).EnumerateFiles("collection-*")
+                         .Where(file => (file.Attributes & FileAttributes.ReparsePoint) == 0)
+                         .OrderByDescending(file => file.LastWriteTimeUtc).Skip(retained_journal_entries))
+            {
+                try { old.Delete(); }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+            }
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
     }
 
     private static string readString(BinaryReader reader) => reader.ReadByte() switch

@@ -840,6 +840,70 @@ public sealed class OsuHubSyncTests
         }
     }
 
+    [Test]
+    public async Task QueueWorkerSurvivesPersistenceAndChangedHandlerFailures()
+    {
+        string blocker = Path.Combine(temporaryDirectory, "blocker");
+        File.WriteAllText(blocker, "file");
+        (LocalReplay replay, LocalBeatmapSet set, LocalBeatmapDifficulty difficulty) = createLocalData();
+        OsuHubSyncRequest request = await OsuHubContractFactory.CreateAsync(new OsuHubSyncInput(
+            replay, set, difficulty, new OsuHubProfile(42, "player"), null));
+        using var queue = new OsuHubUploadQueue(Path.Combine(blocker, "queue.json"), new FakeUploader());
+        queue.Changed += () => throw new InvalidOperationException("handler failure");
+
+        HubUploadQueueItem first = await queue.EnqueueAsync(request, null, "First");
+        HubUploadQueueItem second = await queue.EnqueueAsync(request, null, "Second");
+
+        Assert.That(SpinWait.SpinUntil(
+            () => queue.Snapshot().Count(item => item.Status == HubUploadQueueStatus.Completed) == 2,
+            TimeSpan.FromSeconds(5)), Is.True);
+        Assert.That(queue.Snapshot().Select(item => item.Id), Is.EquivalentTo(new[] { first.Id, second.Id }));
+    }
+
+    [Test]
+    public async Task RetryDuringCancelledUploadRunsAgainAndDoesNotKeepCancelled()
+    {
+        (LocalReplay replay, LocalBeatmapSet set, LocalBeatmapDifficulty difficulty) = createLocalData();
+        OsuHubSyncRequest request = await OsuHubContractFactory.CreateAsync(new OsuHubSyncInput(
+            replay, set, difficulty, new OsuHubProfile(42, "player"), null));
+        var uploader = new BlockingThenSucceedingUploader();
+        using var queue = new OsuHubUploadQueue(Path.Combine(temporaryDirectory, "queue.json"), uploader);
+
+        HubUploadQueueItem item = await queue.EnqueueAsync(request, null, "Race");
+        await uploader.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.That(await queue.CancelAsync(item.Id), Is.True);
+        Assert.That(await queue.RetryAsync(item.Id), Is.True);
+
+        Assert.That(SpinWait.SpinUntil(
+            () => queue.Snapshot().Single().Status == HubUploadQueueStatus.Completed, TimeSpan.FromSeconds(5)), Is.True);
+        Assert.That(queue.Snapshot().Single().AttemptCount, Is.EqualTo(2));
+    }
+
+    [Test]
+    public void QueueOperationsAfterDisposeDoNotThrow()
+    {
+        var queue = new OsuHubUploadQueue(Path.Combine(temporaryDirectory, "queue.json"), new FakeUploader());
+        queue.Dispose();
+
+        Assert.DoesNotThrow(() => queue.SetAutomaticUploadPermission(_ => true));
+    }
+
+    private sealed class BlockingThenSucceedingUploader : IOsuHubUploader
+    {
+        private int calls;
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<OsuHubUploadResult> UploadAsync(OsuHubSyncRequest request, string? replayPath = null, CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Increment(ref calls) == 1)
+            {
+                Started.TrySetResult();
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+            }
+            return new OsuHubUploadResult("share-id", new Uri("https://hub.example/osu/replays/share-id"), request.Visibility, true, false, false);
+        }
+    }
+
     private sealed class FakeUploader : IOsuHubUploader
     {
         public Task<OsuHubUploadResult> UploadAutomaticAsync(OsuHubSyncRequest request, string accountScope,

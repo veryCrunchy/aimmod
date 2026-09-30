@@ -24,7 +24,8 @@ internal static class WindowsStableInstallationPaths
                     if (RootFromCommand(command?.GetValue(null) as string) is { } root) roots.Add(root);
                 }
                 using var uninstall = registry.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Uninstall\osu!");
-                if (uninstall?.GetValue("InstallLocation") is string location && Path.IsPathFullyQualified(location)) roots.Add(location.Trim('"'));
+                if (uninstall?.GetValue("InstallLocation") is string location && location.Trim().Trim('"') is { } unquoted
+                    && Path.IsPathFullyQualified(unquoted)) roots.Add(unquoted);
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException or SecurityException) { }
         }

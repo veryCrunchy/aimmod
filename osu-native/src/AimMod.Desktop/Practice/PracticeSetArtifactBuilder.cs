@@ -51,7 +51,9 @@ public sealed class PracticeSetArtifactBuilder
                     plan.BreakdownVariant,plan.BreakdownGroupId,plan.RequiredMods));
                 exports.Add(export); outputPlans.Add(plan);
             }
-            using (var stream=new FileStream(archive,FileMode.CreateNew,FileAccess.Write))
+            // Publish the archive only once it is complete; an interrupted build never looks finished.
+            string partial=archive+".partial";
+            using (var stream=new FileStream(partial,FileMode.CreateNew,FileAccess.Write))
             using (var zip=new ZipArchive(stream,ZipArchiveMode.Create,false,Encoding.UTF8))
                 foreach(var export in exports)
                     foreach(string path in new[]{export.BeatmapPath,export.AudioPath})
@@ -61,8 +63,9 @@ public sealed class PracticeSetArtifactBuilder
                         await using var input=File.OpenRead(path); await using var output=entry.Open();
                         await input.CopyToAsync(output,token).ConfigureAwait(false);
                     }
-            using(var zip=ZipFile.OpenRead(archive))
+            using(var zip=ZipFile.OpenRead(partial))
                 if(zip.Entries.Count!=plans.Count*2 || zip.Entries.Any(e=>e.Length==0)) throw new InvalidDataException("The practice set is incomplete.");
+            File.Move(partial,archive);
             return new(archive,outputPlans,identities);
         }
         catch { PracticeMapArtifactBuilder.TryDelete(root); throw; }

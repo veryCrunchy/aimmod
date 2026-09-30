@@ -50,8 +50,8 @@ public sealed class HubDeviceLinkClient
         return new HubDeviceLinkSession(
             payload.DeviceCode,
             payload.UserCode,
-            new Uri(payload.VerificationUri, UriKind.Absolute),
-            new Uri(payload.VerificationUriComplete, UriKind.Absolute),
+            verificationUri(payload.VerificationUri),
+            verificationUri(payload.VerificationUriComplete),
             TimeSpan.FromSeconds(Math.Max(1, payload.ExpiresIn)),
             TimeSpan.FromSeconds(Math.Max(1, payload.Interval)));
     }
@@ -94,6 +94,15 @@ public sealed class HubDeviceLinkClient
             await Task.Delay(session.PollInterval, cancellationToken).ConfigureAwait(false);
         }
         return new HubDeviceLinkPollResult(HubDeviceLinkStatus.Expired);
+    }
+
+    // The link is opened in the user's browser, so only web URLs no weaker than the Hub connection are accepted.
+    private Uri verificationUri(string? value)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out Uri? uri)
+            || uri.Scheme != Uri.UriSchemeHttps && !(uri.Scheme == Uri.UriSchemeHttp && baseUri.Scheme == Uri.UriSchemeHttp))
+            throw new InvalidDataException("Hub returned an invalid device-link verification address.");
+        return uri;
     }
 
     private static Uri normalizeBaseUri(Uri value)

@@ -47,13 +47,25 @@ public sealed class OnlineSkinCatalogService
                 .Cast<IOnlineSkinCatalogProvider>()
                 .Distinct()
                 .ToArray();
-        OnlineSkinProviderResult[] results = await Task.WhenAll(selected.Select(async provider =>
-            new OnlineSkinProviderResult(
-                provider.Id,
-                provider.DisplayName,
-                provider.HomePage,
-                await provider.SearchAsync(query, cancellationToken).ConfigureAwait(false)))).ConfigureAwait(false);
+        OnlineSkinProviderResult[] results = await Task.WhenAll(selected.Select(provider => searchProviderAsync(provider, query, cancellationToken))).ConfigureAwait(false);
         return new OnlineSkinCatalogSearchResult(results);
+    }
+
+    private static async Task<OnlineSkinProviderResult> searchProviderAsync(
+        IOnlineSkinCatalogProvider provider,
+        OnlineSkinCatalogQuery query,
+        CancellationToken cancellationToken)
+    {
+        OnlineSkinCatalogPage page;
+        try
+        {
+            page = await provider.SearchAsync(query, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception error) when (error is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            page = OnlineSkinCatalogPage.Unavailable(query, $"{provider.DisplayName} is unavailable right now.");
+        }
+        return new OnlineSkinProviderResult(provider.Id, provider.DisplayName, provider.HomePage, page);
     }
 
     public Task<OnlineSkinCatalogEntry?> GetDetailsAsync(
