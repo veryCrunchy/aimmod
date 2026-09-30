@@ -7,10 +7,12 @@ using osu.Framework.Bindables;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Colour;
 using osu.Framework.Graphics.Containers;
+using osu.Framework.Graphics.Cursor;
 using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
 using osu.Framework.Graphics.UserInterface;
 using osu.Framework.Input.Events;
+using osu.Framework.Localisation;
 using osu.Framework.Threading;
 using osu.Game.Graphics.Containers;
 using osu.Game.Graphics.Sprites;
@@ -97,14 +99,6 @@ public partial class NativeBeatmapDiscoveryScreen : CompositeDrawable
         currentTab.BindValueChanged(tab => showTab(tab.NewValue), true);
     }
 
-    protected override void Update()
-    {
-        base.Update();
-
-        tabs.Position = new(0, 72);
-        workspaceHeader.Width = 1;
-    }
-
     public void OpenSet(int setId)
     {
         SelectTab(BeatmapDiscoveryTab.Online);
@@ -168,16 +162,23 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
 {
     private readonly ILocalLibrarySource? localLibrary;
     private readonly Func<int, CancellationToken, Task>? openBeatmap;
-    private readonly Dictionary<int, OnlineBeatmapCard> visibleCards = new();
     private const int result_limit = 24;
     private const float content_inset = 12;
+    private const int connection_attempt_limit = 10;
+    private const int session_retry_limit = 3;
+    private static readonly TimeSpan installed_cache_lifetime = TimeSpan.FromMinutes(2);
+    private readonly KeyedFlow<int, OfficialBeatmapSet, OnlineBeatmapSetBlock> resultBlocks;
+    private readonly AimModInlineStatus searchStatus;
+    private AimModLayout.ChangeTracker<float> layoutTracker;
+    private int sessionRetries;
+    private bool retryWhenVisible;
+    private (DateTime LoadedAt, HashSet<int> Difficulties)? installedCache;
 
     private readonly Func<IOfficialBeatmapDiscoveryClient?> client;
     private readonly Func<OnlineBeatmapImportService?> importer;
     private readonly AimModSearchBox searchBox;
     private readonly TruncatingSpriteText resultStatus;
-    private readonly FillFlowContainer results;
-    private readonly AimModLoadingOverlay loadingOverlay;
+    private readonly FillFlowContainer<Drawable> results;
     private bool searchLoaded;
     private readonly Container filterBand;
     private readonly AimModResetButton resetFilters;
@@ -202,6 +203,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
     {
         selectedSetId = setId;
         connectionAttempts = 0;
+        sessionRetries = 0;
         if (IsLoaded)
             startSearch();
     }
@@ -278,13 +280,24 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                 Child = new AimModScrollContainer
                 {
                     RelativeSizeAxes = Axes.Both,
-                    Child = results = new FillFlowContainer
+                    Child = new FillFlowContainer
                     {
                         RelativeSizeAxes = Axes.X,
                         AutoSizeAxes = Axes.Y,
                         Direction = FillDirection.Vertical,
                         Spacing = new(AimModVisualStyle.RelatedSpacing),
                         Padding = new MarginPadding { Right = content_inset, Bottom = 32 },
+                        Children = new Drawable[]
+                        {
+                            searchStatus = new AimModInlineStatus(),
+                            results = new FillFlowContainer<Drawable>
+                            {
+                                RelativeSizeAxes = Axes.X,
+                                AutoSizeAxes = Axes.Y,
+                                Direction = FillDirection.Vertical,
+                                Spacing = new(AimModVisualStyle.RelatedSpacing),
+                            },
+                        },
                     },
                 },
             },
@@ -292,19 +305,50 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                 searchBox.Current.Value = string.Empty; minimumStars.Value = 0; maximumStars.Value = 10;
                 category.Value = OfficialBeatmapCategory.Any; sort.Value = OfficialBeatmapSort.Relevance; scheduleSearch();
             }) { Anchor = Anchor.TopRight, Origin = Anchor.TopRight, Height = 24 },
-            loadingOverlay = new AimModLoadingOverlay(),
         };
+        resultBlocks = new KeyedFlow<int, OfficialBeatmapSet, OnlineBeatmapSetBlock>(results,
+            set => set.BeatmapSetId,
+            set => $"{set.Status}|{set.DownloadDisabled}|{string.Join(',', set.Difficulties.Select(d => d.BeatmapId))}",
+            set => new OnlineBeatmapSetBlock(set, importBeatmap, installInLazer, openBeatmap));
     }
+
+    internal static NativeBeatmapFilterLayout CalculateFilterLayout(float width) => width switch
+    {
+        < 640 => NativeBeatmapFilterLayout.Stacked,
+        < 940 => NativeBeatmapFilterLayout.TwoColumns,
+        _ => NativeBeatmapFilterLayout.Row,
+    };
 
     protected override void Update()
     {
         base.Update();
 
-        float width = Math.Max(640, DrawWidth);
-        const float gap = AimModVisualStyle.RelatedSpacing;
-        bool compact = width < 940;
+        if (retryWhenVisible && isVisible())
+        {
+            retryWhenVisible = false;
+            startSearch();
+        }
 
-        if (compact)
+        if (!layoutTracker.Update(DrawWidth))
+            return;
+
+        float width = Math.Max(1, DrawWidth);
+        const float gap = AimModVisualStyle.RelatedSpacing;
+        NativeBeatmapFilterLayout layout = CalculateFilterLayout(width);
+
+        if (layout == NativeBeatmapFilterLayout.Stacked)
+        {
+            // Phone-width windows stack every filter so none of them clip or overlap.
+            float column = width - content_inset * 2;
+            filterBand.Height = 248;
+            placeGroup(searchGroup, content_inset, 8, column, 54);
+            placeSlider(starSlider, content_inset, 64, column);
+            placeGroup(categoryGroup, content_inset, 128, column, 52);
+            placeGroup(sortGroup, content_inset, 186, column, 52);
+            resultStatus.Y = 260;
+            resultViewport.Padding = new MarginPadding { Top = 284 };
+        }
+        else if (layout == NativeBeatmapFilterLayout.TwoColumns)
         {
             float columnWidth = (width - content_inset * 2 - gap) / 2;
             filterBand.Height = 128;
@@ -351,7 +395,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
     private static SpriteText filterLabel(string value) => new()
     {
         Text = value,
-        Font = new FontUsage(size: 8, weight: "Bold"),
+        Font = AimModVisualStyle.LabelFont,
         Colour = AimModPalette.Cyan,
     };
 
@@ -386,8 +430,8 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
     protected override void LoadComplete()
     {
         base.LoadComplete();
-        searchBox.Committed += () => { selectedSetId = null; startSearch(); };
-        searchBox.Current.BindValueChanged(_ => scheduleSearch());
+        searchBox.QueryChanged += _ => { selectedSetId = null; startSearch(); };
+        searchBox.MoveToResults += () => AimModInteractiveSurface.FocusFirst(results);
         minimumStars.BindValueChanged(_ => scheduleSearch());
         maximumStars.BindValueChanged(_ => scheduleSearch());
         category.BindValueChanged(_ => startSearch());
@@ -403,10 +447,52 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
         scheduledSearch = Scheduler.AddDelayed(startSearch, 250);
     }
 
+    private void retrySearch()
+    {
+        connectionAttempts = 0;
+        sessionRetries = 0;
+        startSearch();
+    }
+
+    private bool isVisible()
+    {
+        for (Drawable? drawable = this; drawable is not null; drawable = drawable.Parent)
+        {
+            if (drawable.Alpha <= 0 || !drawable.IsPresent)
+                return false;
+        }
+        return true;
+    }
+
+    /// <summary>Automatic retries wait while the tab is hidden and resume when it is shown again.</summary>
+    private void scheduleAutomaticRetry(double delay)
+    {
+        scheduledSearch?.Cancel();
+        scheduledSearch = Scheduler.AddDelayed(() =>
+        {
+            scheduledSearch = null;
+            if (isVisible())
+                startSearch();
+            else
+                retryWhenVisible = true;
+        }, delay);
+    }
+
+    private void cancelSearch()
+    {
+        scheduledSearch?.Cancel();
+        scheduledSearch = null;
+        retryWhenVisible = false;
+        requestCancellation?.Cancel();
+        resultStatus.Text = searchLoaded ? "Search cancelled. Showing the previous results." : "Search cancelled.";
+        searchStatus.ShowMessage("Search cancelled.", retrySearch);
+    }
+
     private void startSearch()
     {
         scheduledSearch?.Cancel();
         scheduledSearch = null;
+        retryWhenVisible = false;
         requestCancellation?.Cancel();
         requestCancellation?.Dispose();
         requestCancellation = new CancellationTokenSource();
@@ -415,24 +501,26 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
         if (currentClient is null)
         {
             connectionAttempts++;
-            resultStatus.Text = connectionAttempts < 10
-                ? "AimMod is still connecting to osu!lazer..."
-                : "AimMod could not find a usable osu!lazer session.";
-            if (connectionAttempts < 10)
-                loadingOverlay.ShowLoading("Connecting to osu!", "Waiting for the signed-in lazer session");
+            if (connectionAttempts < connection_attempt_limit)
+            {
+                resultStatus.Text = "AimMod is still connecting to osu!...";
+                searchStatus.ShowLoading("Waiting for your osu! installation to connect...", cancelSearch);
+                scheduleAutomaticRetry(1000);
+            }
             else
-                loadingOverlay.HideLoading();
-            results.Clear();
-            if (connectionAttempts < 10 || selectedSetId is not null)
-                scheduledSearch = Scheduler.AddDelayed(startSearch, connectionAttempts < 10 ? 1000 : 5000);
+            {
+                resultStatus.Text = "osu! is not connected";
+                searchStatus.ShowError("AimMod could not connect to osu! for online search.",
+                    "Check that osu! is installed, then retry. Installed beatmaps remain available on the Installed tab.", retrySearch);
+            }
+            resultBlocks.Clear();
             return;
         }
 
         connectionAttempts = 0;
 
         resultStatus.Text = "Searching osu!...";
-        if (!searchLoaded)
-            loadingOverlay.ShowLoading("Searching beatmaps", "Loading results from the osu! catalog");
+        searchStatus.ShowLoading(searchLoaded ? "Updating results..." : "Searching the osu! beatmap catalog...", cancelSearch);
         _ = searchAsync(currentClient, cancellationToken);
     }
 
@@ -466,8 +554,10 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                 {
                     if (cancellationToken.IsCancellationRequested)
                         return;
-                    resultStatus.Text = $"Could not search osu!: {error.Message}";
-                    loadingOverlay.HideLoading();
+                    resultStatus.Text = searchLoaded ? "Showing the previous results" : "Search unavailable";
+                    searchStatus.ShowError(error, "Searching osu!", retrySearch);
+                    // Keep older results readable but clearly out of date until a retry succeeds.
+                    results.FadeTo(0.45f, AimModVisualStyle.HoverTransition);
                 });
             }
         }
@@ -476,46 +566,26 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
     private void applySearchResult(OfficialBeatmapSearchResult response)
     {
         searchLoaded = true;
-        visibleCards.Clear();
-        results.Clear();
-        loadingOverlay.HideLoading();
+        results.FadeIn(AimModVisualStyle.HoverTransition);
         if (response.Status != OfficialBeatmapRequestStatus.Success)
         {
-            resultStatus.Text = searchFailureMessage(response.Status);
-            if (response.Status is OfficialBeatmapRequestStatus.SignedOut or
+            // Results from another account or an expired session are stale; do not leave them under the error.
+            resultBlocks.Clear();
+            string message = searchFailureMessage(response.Status);
+            resultStatus.Text = "Online search unavailable";
+            bool sessionProblem = response.Status is OfficialBeatmapRequestStatus.SignedOut or
                 OfficialBeatmapRequestStatus.TokenExpired or
                 OfficialBeatmapRequestStatus.SessionUnavailable or
-                OfficialBeatmapRequestStatus.SessionChanged)
-                scheduledSearch = Scheduler.AddDelayed(startSearch, 5000);
+                OfficialBeatmapRequestStatus.SessionChanged;
+            searchStatus.ShowError(message, null, retrySearch);
+            if (sessionProblem && sessionRetries++ < session_retry_limit)
+                scheduleAutomaticRetry(5000);
             return;
         }
 
-        foreach (OfficialBeatmapSet set in response.BeatmapSets)
-        {
-            var card = new OnlineBeatmapCard(set, importBeatmap, installInLazer);
-            visibleCards[set.BeatmapSetId] = card;
-            results.Add(card);
-            if (set.Difficulties.Count > 0)
-            {
-                foreach (OfficialBeatmapDifficulty difficulty in set.Difficulties)
-                    results.Add(new Container {
-                        RelativeSizeAxes = Axes.X, Height = 54,
-                        Children = [
-                            new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
-                            new Container { RelativeSizeAxes = Axes.Both, Padding = new MarginPadding { Left = 18, Right = 168, Top = 7 }, Children = [
-                                new TruncatingSpriteText { RelativeSizeAxes = Axes.X, Text = difficulty.Name,
-                                    Font = new FontUsage(size:14,weight:"SemiBold"), Colour = AimModPalette.Text },
-                                new TruncatingSpriteText { RelativeSizeAxes = Axes.X, Y = 22,
-                                    Text = $"{difficulty.StarRating:0.00} stars · {difficulty.Bpm:0.#} BPM · {difficulty.TotalLengthSeconds / 60}:{difficulty.TotalLengthSeconds % 60:00} · CS {difficulty.CircleSize:0.#} · AR {difficulty.ApproachRate:0.#} · OD {difficulty.OverallDifficulty:0.#}",
-                                    Font = new FontUsage(size:11), Colour = AimModPalette.Muted },
-                            ] },
-                            new OpenBeatmapButton(openBeatmap is null ? null : token => openBeatmap(difficulty.BeatmapId, token)) {
-                                Anchor = Anchor.CentreRight, Origin = Anchor.CentreRight, X = -12, Height = 30,
-                            },
-                        ],
-                    });
-            }
-        }
+        sessionRetries = 0;
+        searchStatus.Dismiss();
+        resultBlocks.Apply(response.BeatmapSets);
 
         resultStatus.Text = response.BeatmapSets.Count switch
         {
@@ -564,18 +634,26 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
 
     private async Task markInstalledAsync(IReadOnlyList<OfficialBeatmapSet> sets, CancellationToken token)
     {
-        var difficulties = new HashSet<int>();
         try
         {
-            int offset = 0;
-            while (true)
+            // Scanning the whole local library per search is expensive; reuse a recent snapshot.
+            HashSet<int> difficulties;
+            if (installedCache is { } cached && DateTime.UtcNow - cached.LoadedAt < installed_cache_lifetime)
+                difficulties = cached.Difficulties;
+            else
             {
-                var page = await localLibrary!.SearchBeatmapSetsAsync(new LocalLibraryQuery(RulesetShortName: "", Offset: offset, Limit: 200), token).ConfigureAwait(false);
-                foreach (var map in page.Items)
-                    foreach (var difficulty in map.Difficulties)
-                        if (difficulty.OnlineId > 0) difficulties.Add(difficulty.OnlineId);
-                if (!page.HasMore || page.Items.Count == 0) break;
-                offset += page.Items.Count;
+                difficulties = new HashSet<int>();
+                int offset = 0;
+                while (true)
+                {
+                    var page = await localLibrary!.SearchBeatmapSetsAsync(new LocalLibraryQuery(RulesetShortName: "", Offset: offset, Limit: 200), token).ConfigureAwait(false);
+                    foreach (var map in page.Items)
+                        foreach (var difficulty in map.Difficulties)
+                            if (difficulty.OnlineId > 0) difficulties.Add(difficulty.OnlineId);
+                    if (!page.HasMore || page.Items.Count == 0) break;
+                    offset += page.Items.Count;
+                }
+                installedCache = (DateTime.UtcNow, difficulties);
             }
             var installed = sets.Where(set => set.Difficulties.Count > 0 && set.Difficulties.All(d => difficulties.Contains(d.BeatmapId)))
                 .Select(set => set.BeatmapSetId).ToArray();
@@ -583,11 +661,50 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
             {
                 if (token.IsCancellationRequested) return;
                 foreach (int id in installed)
-                    if (visibleCards.TryGetValue(id, out var card)) card.SetInstalled();
+                    if (resultBlocks.TryGet(id, out var block)) block.Card.SetInstalled();
             });
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
         catch (Exception) { /* Unknown availability must not disable downloads. */ }
+    }
+
+    /// <summary>One search result: the set card followed by its difficulties, kept together by set id.</summary>
+    private partial class OnlineBeatmapSetBlock : FillFlowContainer<Drawable>
+    {
+        public OnlineBeatmapCard Card { get; }
+
+        public OnlineBeatmapSetBlock(
+            OfficialBeatmapSet set,
+            Func<OfficialBeatmapSet, Task<OnlineBeatmapImportResult>> import,
+            Func<LazerBeatmapArchive, Task<LazerBeatmapInstallResult>> installInLazer,
+            Func<int, CancellationToken, Task>? openBeatmap)
+        {
+            RelativeSizeAxes = Axes.X;
+            AutoSizeAxes = Axes.Y;
+            Direction = FillDirection.Vertical;
+            Spacing = new(AimModVisualStyle.RelatedSpacing);
+            Add(Card = new OnlineBeatmapCard(set, import, installInLazer));
+            foreach (OfficialBeatmapDifficulty difficulty in set.Difficulties)
+            {
+                Add(new Container
+                {
+                    RelativeSizeAxes = Axes.X, Height = 54,
+                    Children = [
+                        new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
+                        new Container { RelativeSizeAxes = Axes.Both, Padding = new MarginPadding { Left = 18, Right = 168, Top = 7 }, Children = [
+                            new TruncatingSpriteText { RelativeSizeAxes = Axes.X, Text = difficulty.Name,
+                                Font = new FontUsage(size:14,weight:"SemiBold"), Colour = AimModPalette.Text },
+                            new TruncatingSpriteText { RelativeSizeAxes = Axes.X, Y = 22,
+                                Text = $"{difficulty.StarRating:0.00} stars · {difficulty.Bpm:0.#} BPM · {difficulty.TotalLengthSeconds / 60}:{difficulty.TotalLengthSeconds % 60:00} · CS {difficulty.CircleSize:0.#} · AR {difficulty.ApproachRate:0.#} · OD {difficulty.OverallDifficulty:0.#}",
+                                Font = new FontUsage(size:11), Colour = AimModPalette.Muted },
+                        ] },
+                        new OpenBeatmapButton(openBeatmap is null ? null : token => openBeatmap(difficulty.BeatmapId, token)) {
+                            Anchor = Anchor.CentreRight, Origin = Anchor.CentreRight, X = -12, Height = 30,
+                        },
+                    ],
+                });
+            }
+        }
     }
 
     private partial class OnlineBeatmapCard : AimModInteractiveSurface
@@ -600,6 +717,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
         private readonly TruncatingSpriteText detailText;
         private readonly SpriteText actionText;
         private readonly Box actionBackground;
+        private AimModLayout.ChangeTracker<float> widthTracker;
         private bool importing;
         private bool imported;
         private bool installed;
@@ -663,7 +781,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                         detailText = new TruncatingSpriteText
                         {
                             Text = $"mapped by {set.Creator}  /  {set.Status}  /  {set.PlayCount:N0} plays  /  {set.FavouriteCount:N0} favourites",
-                            Font = new FontUsage(size: 9),
+                            Font = AimModVisualStyle.CaptionFont,
                             Colour = AimModPalette.Muted,
                             MaxWidth = 120,
                         },
@@ -679,7 +797,9 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                     Spacing = new(AimModVisualStyle.RelatedSpacing),
                     Children = visibleDifficulties(set).ToArray(),
                 },
-                new ClickableContainer
+                new ImportAction(set.DownloadDisabled
+                    ? "The mapper or osu! has disabled downloads for this beatmap set."
+                    : "Download this set into AimMod, then add it to your osu! client.")
                 {
                     Anchor = Anchor.CentreRight,
                     Origin = Anchor.CentreRight,
@@ -699,8 +819,8 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                         {
                             Anchor = Anchor.Centre,
                             Origin = Anchor.Centre,
-                            Text = set.DownloadDisabled ? "Unavailable" : "Save in AimMod",
-                            Font = new FontUsage(size: 10, weight: "Bold"),
+                            Text = set.DownloadDisabled ? "Download disabled" : "Save in AimMod",
+                            Font = new FontUsage(size: 11, weight: "Bold"),
                             Colour = set.DownloadDisabled ? AimModPalette.Muted : AimModPalette.Canvas,
                         },
                     },
@@ -711,10 +831,19 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
         protected override void Update()
         {
             base.Update();
+            if (!widthTracker.Update(DrawWidth))
+                return;
             float available = Math.Max(80, DrawWidth - 190);
             titleText.MaxWidth = available;
             artistText.MaxWidth = available;
             detailText.MaxWidth = available;
+        }
+
+        private partial class ImportAction : ClickableContainer, IHasTooltip
+        {
+            public ImportAction(string tooltip) => TooltipText = tooltip;
+
+            public LocalisableString TooltipText { get; }
         }
 
         private static IEnumerable<Drawable> visibleDifficulties(OfficialBeatmapSet set)
@@ -854,7 +983,7 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
                     new TruncatingSpriteText
                     {
                         Text = $"{difficulty.Name}  {difficulty.StarRating:0.00}*",
-                        Font = new FontUsage(size: 10, weight: "SemiBold"),
+                        Font = new FontUsage(size: 11, weight: "SemiBold"),
                         Colour = colour,
                         Padding = new MarginPadding { Horizontal = 10, Vertical = 4 },
                         MaxWidth = 150,
@@ -863,4 +992,11 @@ public partial class NativeOfficialBeatmapSearchScreen : CompositeDrawable
             }
         }
     }
+}
+
+public enum NativeBeatmapFilterLayout
+{
+    Row,
+    TwoColumns,
+    Stacked,
 }
