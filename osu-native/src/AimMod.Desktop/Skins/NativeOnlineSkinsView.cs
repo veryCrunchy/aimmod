@@ -217,7 +217,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
                                                 selectedName = text(19, AimModPalette.Text, "Bold", "Select an online skin"),
                                                 selectedCreator = text(12, AimModPalette.Cyan, "SemiBold", "Screenshots and source details appear here."),
                                                 selectedMetadata = text(11, AimModPalette.Muted, "Regular", string.Empty),
-                                                attribution = text(10, AimModPalette.Muted, "Regular", string.Empty),
+                                                attribution = text(AimModVisualStyle.MinReadableFontSize, AimModPalette.Muted, "Regular", string.Empty),
                                                 downloadStatus = new TextFlowContainer(sprite =>
                                                 {
                                                     sprite.Font = osu.Game.Graphics.OsuFont.GetFont(size: 13);

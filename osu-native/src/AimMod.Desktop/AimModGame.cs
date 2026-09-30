@@ -2172,7 +2172,7 @@ public partial class AimModGame : OsuGameBase
             base.Update();
             if (!widthTracker.Update(links.DrawWidth) || links.DrawWidth <= 0)
                 return;
-            int columns = AimModLayout.ColumnsFor(links.DrawWidth, 420, 2);
+            int columns = AimModLayout.ColumnsFor(links.DrawWidth, 320, 2);
             float width = (float)Math.Floor(links.DrawWidth / columns);
             foreach (Drawable link in links)
                 link.Size = new(width, link_height);
