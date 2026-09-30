@@ -87,6 +87,7 @@ public partial class NativeTrainerPlayer : Player
             JudgementMisses: judgements.Count(j => j.Type == HitResult.Miss),
             TapTargets: beatmap.HitObjects.Count(h => h is HitCircle or Slider),
             SpinnerPractice: spinnerPractice,
+            OffsetHistogram: offsets.Length > 0 ? TrainerResult.Histogram(offsets) : null,
             ReadingWindows: settings.Kind != TrainerKind.Reading ? null : judgements.Where(j => IsTapObject(j.HitObject))
                 .GroupBy(j => (int)((j.HitObject.StartTime - start) / 10000))
                 .Select(g => new ReadingWindowResult(g.Key * 10, g.Count(), g.Count(j => !j.IsHit))).OrderBy(w => w.StartSeconds).ToArray());
