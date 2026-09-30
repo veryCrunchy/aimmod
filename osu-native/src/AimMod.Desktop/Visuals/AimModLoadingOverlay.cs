@@ -8,22 +8,35 @@ using osu.Framework.Graphics.UserInterface;
 using osu.Framework.Input.Events;
 using osu.Game.Graphics.Sprites;
 using osu.Game.Graphics.UserInterface;
+using osuTK.Input;
 
 namespace AimMod.Desktop.Visuals;
 
+/// <summary>
+/// Modal progress for work that must finish before the covered area is usable. Prefer
+/// <see cref="AimModInlineStatus"/> for searches and refreshes. A cancellable request shows
+/// a Cancel button and answers Escape.
+/// </summary>
 public partial class AimModLoadingOverlay : Container
 {
-    private readonly Container statusPanel;
+    private const float max_panel_width = 560;
+
+    private readonly FillFlowContainer statusPanel;
     private readonly LoadingSpinner spinner;
     private readonly TruncatingSpriteText title;
     private readonly TruncatingSpriteText detail;
     private readonly ProgressBar progressBar;
+    private readonly AimModInteractiveSurface cancelButton;
     private bool indeterminate;
     private bool loading;
     private readonly Stopwatch elapsed = new();
     private readonly TruncatingSpriteText timing;
     private Func<LocalLibraryProgress?>? readProgress;
     private string currentState = string.Empty;
+    private Action? cancelRequested;
+    private AimModLayout.ChangeTracker<float> widthTracker;
+    private AimModLayout.ChangeTracker<int> timingTracker;
+    private AimModLayout.ChangeTracker<(string, int, int)> progressTracker;
     public string? LoadingHint { get; set; }
     private readonly TruncatingSpriteText hint;
 
@@ -42,34 +55,33 @@ public partial class AimModLoadingOverlay : Container
                 Alpha = 0.88f,
             },
             new InputBlocker { RelativeSizeAxes = Axes.Both },
-            statusPanel = new Container
+            statusPanel = new FillFlowContainer
             {
                 Anchor = Anchor.Centre,
                 Origin = Anchor.Centre,
-                Width = 560,
-                Height = 192,
+                AutoSizeAxes = Axes.Y,
+                Width = max_panel_width,
+                Direction = FillDirection.Vertical,
+                Spacing = new(AimModVisualStyle.RowSpacing),
                 Children = new Drawable[]
                 {
                     spinner = new LoadingSpinner
                     {
                         Anchor = Anchor.TopCentre,
-                        Origin = Anchor.Centre,
-                        Y = 25,
+                        Origin = Anchor.TopCentre,
                         Size = new(52),
                     },
                     title = new TruncatingSpriteText
                     {
                         Anchor = Anchor.TopCentre,
                         Origin = Anchor.TopCentre,
-                        Y = 61,
-                        Font = new FontUsage(size: 20, weight: "Bold"),
+                        Font = AimModVisualStyle.HeadingFont,
                         Colour = AimModPalette.Text,
                     },
                     detail = new TruncatingSpriteText
                     {
                         Anchor = Anchor.TopCentre,
                         Origin = Anchor.TopCentre,
-                        Y = 91,
                         Font = new FontUsage(size: 12, weight: "SemiBold"),
                         Colour = AimModPalette.Muted,
                     },
@@ -78,7 +90,6 @@ public partial class AimModLoadingOverlay : Container
                         RelativeSizeAxes = Axes.None,
                         Anchor = Anchor.TopCentre,
                         Origin = Anchor.TopCentre,
-                        Y = 124,
                         Width = 420,
                         Height = 7,
                         FillColour = AimModPalette.Accent,
@@ -89,7 +100,6 @@ public partial class AimModLoadingOverlay : Container
                     {
                         Anchor = Anchor.TopCentre,
                         Origin = Anchor.TopCentre,
-                        Y = 148,
                         Font = new FontUsage(size: 12),
                         Colour = AimModPalette.Muted,
                     },
@@ -97,28 +107,51 @@ public partial class AimModLoadingOverlay : Container
                     {
                         Anchor = Anchor.TopCentre,
                         Origin = Anchor.TopCentre,
-                        Y = 175,
                         Font = new FontUsage(size: 12),
                         Colour = AimModPalette.Muted,
+                    },
+                    cancelButton = new AimModInteractiveSurface
+                    {
+                        Anchor = Anchor.TopCentre,
+                        Origin = Anchor.TopCentre,
+                        Size = new(120, AimModVisualStyle.CompactControlHeight),
+                        BackgroundColour = AimModPalette.PanelRaised,
+                        Alpha = 0,
+                        Child = new OsuSpriteText
+                        {
+                            Anchor = Anchor.Centre,
+                            Origin = Anchor.Centre,
+                            Text = "Cancel",
+                            Font = AimModVisualStyle.BodyStrongFont,
+                            Colour = AimModPalette.Text,
+                        },
                     },
                 },
             },
         };
+
+        cancelButton.Action = cancel;
     }
 
+    public bool IsLoading => loading;
+
     public void ShowLoading(string heading, string state, int? completed = null, int? total = null,
-        Func<LocalLibraryProgress?>? progress = null)
+        Func<LocalLibraryProgress?>? progress = null, Action? onCancel = null)
     {
         title.Text = heading;
         currentState = state;
         readProgress = progress;
-        detail.Text = state;
+        setDetail(state);
+        progressTracker.Reset();
+        cancelRequested = onCancel;
+        cancelButton.Alpha = onCancel is null ? 0 : 1;
         indeterminate = completed is null || total is null || total <= 0;
         if (!indeterminate)
             progressBar.CurrentTime = Math.Clamp((double)completed!.Value / total!.Value, 0, 1);
         if (loading) return;
         loading = true;
         elapsed.Restart();
+        timingTracker.Reset();
         this.FinishTransforms();
         spinner.Show();
         this.FadeTo(0.01f, 50)
@@ -128,10 +161,15 @@ public partial class AimModLoadingOverlay : Container
 
     public void SetProgress(string state, int completed, int total)
     {
-        currentState = total > 0 ? $"{state}  {completed:N0} / {total:N0}" : state;
-        detail.Text = currentState;
+        if (progressTracker.Update((state, completed, total)))
+        {
+            currentState = total > 0 ? $"{state}  {completed:N0} / {total:N0}" : state;
+            setDetail(currentState);
+        }
+
         indeterminate = total <= 0;
-        progressBar.CurrentTime = total <= 0 ? 0 : Math.Clamp((double)completed / total, 0, 1);
+        if (!indeterminate)
+            progressBar.CurrentTime = Math.Clamp((double)completed / total, 0, 1);
     }
 
     public void HideLoading()
@@ -139,33 +177,74 @@ public partial class AimModLoadingOverlay : Container
         loading = false;
         elapsed.Stop();
         readProgress = null;
+        cancelRequested = null;
+        cancelButton.Alpha = 0;
         indeterminate = false;
         this.FinishTransforms();
         this.FadeOut(LoadingSpinner.TRANSITION_DURATION / 2, Easing.OutQuint);
         spinner.Hide();
     }
 
+    private void cancel()
+    {
+        Action? callback = cancelRequested;
+        if (callback is null)
+            return;
+        HideLoading();
+        callback();
+    }
+
+    public override bool HandleNonPositionalInput => loading && cancelRequested is not null;
+
+    protected override bool OnKeyDown(KeyDownEvent e)
+    {
+        if (loading && cancelRequested is not null && e.Key == Key.Escape)
+        {
+            cancel();
+            return true;
+        }
+
+        return base.OnKeyDown(e);
+    }
+
+    private void setDetail(string value)
+    {
+        if (detail.Text != value)
+            detail.Text = value;
+    }
+
     protected override void Update()
     {
         base.Update();
-        float panelWidth = Math.Clamp(DrawWidth - 32, 1, 560);
-        statusPanel.Width = panelWidth;
-        title.MaxWidth = panelWidth;
-        detail.MaxWidth = panelWidth;
-        timing.MaxWidth = panelWidth;
-        hint.MaxWidth = panelWidth;
-        hint.Text = LoadingHint ?? string.Empty;
-        progressBar.Width = Math.Max(1, panelWidth - 48);
-        if (loading)
+        float panelWidth = AimModLayout.ClampPanelWidth(DrawWidth, max_panel_width);
+        if (widthTracker.Update(panelWidth))
         {
-            if (readProgress?.Invoke() is { } progress)
-                SetProgress(progress.State, progress.Completed, progress.Total);
-            else
-                detail.Text = currentState;
-            timing.Text = elapsed.Elapsed.TotalSeconds < 15 || !string.IsNullOrEmpty(LoadingHint)
+            statusPanel.Width = panelWidth;
+            title.MaxWidth = panelWidth;
+            detail.MaxWidth = panelWidth;
+            timing.MaxWidth = panelWidth;
+            hint.MaxWidth = panelWidth;
+            progressBar.Width = Math.Max(1, Math.Min(420, panelWidth - 48));
+        }
+
+        string hintText = LoadingHint ?? string.Empty;
+        if (hint.Text != hintText)
+            hint.Text = hintText;
+
+        if (!loading)
+            return;
+
+        if (readProgress?.Invoke() is { } progress)
+            SetProgress(progress.State, progress.Completed, progress.Total);
+
+        int seconds = (int)elapsed.Elapsed.TotalSeconds;
+        if (timingTracker.Update(seconds))
+        {
+            timing.Text = seconds < 15 || !string.IsNullOrEmpty(LoadingHint)
                 ? $"Elapsed {elapsed.Elapsed:mm\\:ss}"
                 : $"Elapsed {elapsed.Elapsed:mm\\:ss}  -  Taking longer than usual";
         }
+
         if (indeterminate)
             progressBar.CurrentTime = 0.08 + 0.84 * (0.5 + 0.5 * Math.Sin(Time.Current / 520));
     }

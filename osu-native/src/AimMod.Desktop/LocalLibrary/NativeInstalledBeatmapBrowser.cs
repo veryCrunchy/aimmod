@@ -26,6 +26,8 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
 {
     private const int page_size = 80;
     private const float toolbar_height = 114;
+    private const float compact_toolbar_height = 202;
+    private const double detail_debounce_ms = 150;
 
     private readonly ILocalLibrarySource source;
     private readonly Func<IPpTargetExactCalculationService?> exactCalculator;
@@ -33,15 +35,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
     private readonly Func<int, CancellationToken, Task>? openBeatmap;
     private readonly LocalLibraryController controller;
     private readonly AimModSearchBox searchBox;
-    private readonly Container searchSurface;
-    private readonly Container starsSurface;
-    private readonly Container sortSurface;
-    private readonly Container bpmSurface;
-    private readonly Container lengthSurface;
-    private readonly Container playedSurface;
-    private readonly SpriteText bpmLabel;
-    private readonly SpriteText lengthLabel;
-    private readonly SpriteText playedLabel;
+    private readonly AimModResetButton resetButton;
     private readonly PrettyDropdown<LocalLibrarySort> sortDropdown;
     private readonly PrettyDropdown<BpmFilter> bpmDropdown;
     private readonly PrettyDropdown<LengthFilter> lengthDropdown;
@@ -57,13 +51,20 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
     private readonly FillFlowContainer<Drawable> setRows;
     private readonly OsuScrollContainer listScroll;
     private readonly BeatmapInspector inspector;
-    private readonly AimModLoadingOverlay loading;
+    private readonly AimModInlineStatus loadStatus;
     private readonly Container rightRail;
     private readonly Container listPanel;
     private readonly ILocalLibrarySourceChanged? sourceChanges;
 
     private ScheduledDelegate? scheduledQuery;
+    private ScheduledDelegate? scheduledDetails;
     private CancellationTokenSource? detailCancellation;
+    private (Guid Set, Guid Difficulty)? detailsFor;
+    private readonly List<Guid> displayedSetIds = [];
+    private AimModResetButton? loadMoreButton;
+    private AimModLayout.ChangeTracker<(float, float)> layoutTracker;
+    private AimModLayout.ChangeTracker<(string, int, int)> progressTracker;
+    private float currentToolbarHeight = toolbar_height;
     private LocalBeatmapSet? selectedSet;
     private LocalBeatmapDifficulty? selectedDifficulty;
     private long displayedRevision;
@@ -98,15 +99,13 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                 Depth = -20,
                 Children = new Drawable[]
                 {
-                    searchSurface = filterSurface(0, 0, 480, AimModVisualStyle.ControlHeight),
                     searchBox = new AimModSearchBox
                     {
                         Width = 0.52f,
                         Height = AimModVisualStyle.ControlHeight,
                         PlaceholderText = "Search beatmaps, artists, mappers, or difficulties",
                     },
-                    new AimModResetButton(clearFilters) { Anchor = Anchor.TopRight, Origin = Anchor.TopRight, Y = 0, Depth = -1 },
-                    starsSurface = filterSurface(490, 51, 260, 46),
+                    resetButton = new AimModResetButton(clearFilters) { Anchor = Anchor.TopRight, Origin = Anchor.TopRight, Y = 0, Depth = -1 },
                     stars = new AimModStarRatingFilter
                     {
                         Position = new(490, 52),
@@ -116,7 +115,6 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                         DefaultStringLowerBound = "0",
                         DefaultStringUpperBound = "10+",
                     },
-                    sortSurface = filterSurface(0, 51, 178, AimModVisualStyle.ControlHeight, Anchor.TopRight),
                     sortDropdown = new PrettyDropdown<LocalLibrarySort>("Sort", formatSort)
                     {
                         Anchor = Anchor.TopRight,
@@ -147,12 +145,6 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                         Items = Enum.GetValues<PlayedFilter>(),
                         Current = playedFilter,
                     },
-                    bpmSurface = filterSurface(0, 51, 150, AimModVisualStyle.ControlHeight),
-                    lengthSurface = filterSurface(160, 51, 150, AimModVisualStyle.ControlHeight),
-                    playedSurface = filterSurface(320, 51, 160, AimModVisualStyle.ControlHeight),
-                    bpmLabel = filterLabel("BPM", 4),
-                    lengthLabel = filterLabel("LENGTH", 164),
-                    playedLabel = filterLabel("PLAYED", 324),
                     status = new TruncatingSpriteText
                     {
                         Depth = 1,
@@ -171,13 +163,24 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                 Child = listScroll = new AimModScrollContainer
                 {
                     RelativeSizeAxes = Axes.Both,
-                    Child = setRows = new FillFlowContainer<Drawable>
+                    Child = new FillFlowContainer
                     {
                         RelativeSizeAxes = Axes.X,
                         AutoSizeAxes = Axes.Y,
                         Direction = FillDirection.Vertical,
                         Spacing = new(AimModVisualStyle.RelatedSpacing),
                         Padding = new MarginPadding { Right = AimModVisualStyle.RelatedSpacing, Bottom = AimModVisualStyle.SectionSpacing },
+                        Children = new Drawable[]
+                        {
+                            loadStatus = new AimModInlineStatus(),
+                            setRows = new FillFlowContainer<Drawable>
+                            {
+                                RelativeSizeAxes = Axes.X,
+                                AutoSizeAxes = Axes.Y,
+                                Direction = FillDirection.Vertical,
+                                Spacing = new(AimModVisualStyle.RelatedSpacing),
+                            },
+                        },
                     },
                 },
             },
@@ -195,7 +198,6 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                     inspector = new BeatmapInspector(openBeatmap, openPractice),
                 },
             },
-            loading = new AimModLoadingOverlay(),
         };
     }
 
@@ -212,7 +214,8 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
     {
         base.LoadComplete();
         searchBox.PlaceholderText = "Search beatmaps, artists, mappers, or difficulties";
-        searchBox.Current.BindValueChanged(_ => scheduleQuery());
+        searchBox.QueryChanged += _ => resetQuery();
+        searchBox.MoveToResults += () => moveSelection(1);
         minimumStars.BindValueChanged(_ => scheduleQuery());
         maximumStars.BindValueChanged(_ => scheduleQuery());
         sort.BindValueChanged(_ => resetQuery());
@@ -222,75 +225,130 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         resetQuery();
     }
 
+    internal static bool UsesCompactToolbar(float width) => width < AimModLayout.CompactWidth;
+
     protected override void Update()
     {
         base.Update();
+
+        if (loadStatus.IsShowing && !loadStatus.IsError && controller.Progress is { } progress
+            && progressTracker.Update((progress.State, progress.Completed, progress.Total)))
+        {
+            loadStatus.SetLoadingText(progress.Total > 0
+                ? $"{progress.State}  {progress.Completed:N0} / {progress.Total:N0}"
+                : progress.State);
+        }
+
+        if (layoutTracker.Update((DrawWidth, DrawHeight)))
+            applyLayout();
+    }
+
+    private void applyLayout()
+    {
+        bool compact = UsesCompactToolbar(DrawWidth);
+        currentToolbarHeight = compact ? compact_toolbar_height : toolbar_height;
         bool stacked = DrawWidth < 900;
         float railWidth = stacked ? DrawWidth : Math.Clamp(DrawWidth * 0.30f, 310, 390);
-        float availableHeight = Math.Max(0, DrawHeight - toolbar_height);
+        float availableHeight = Math.Max(0, DrawHeight - currentToolbarHeight);
         float inspectorHeight = stacked ? availableHeight * 0.48f : availableHeight;
         rightRail.RelativeSizeAxes = Axes.None;
         rightRail.Width = railWidth;
         rightRail.Height = inspectorHeight;
-        rightRail.Y = stacked ? DrawHeight - inspectorHeight : toolbar_height;
+        rightRail.Y = stacked ? DrawHeight - inspectorHeight : currentToolbarHeight;
         rightRail.Padding = new MarginPadding { Left = stacked ? 0 : 14, Top = stacked ? 8 : 0 };
-        listPanel.Padding = new MarginPadding { Top = toolbar_height, Right = stacked ? 0 : railWidth, Bottom = stacked ? inspectorHeight : 0 };
+        listPanel.Padding = new MarginPadding { Top = currentToolbarHeight, Right = stacked ? 0 : railWidth, Bottom = stacked ? inspectorHeight : 0 };
         float usableWidth = Math.Max(0, DrawWidth - 10);
         searchBox.Position = new(0, 0);
-        searchBox.Width = Math.Max(0, usableWidth - 404);
         searchBox.Height = AimModVisualStyle.ControlHeight;
         searchBox.StatusText = string.Empty;
-        status.Alpha = 1;
-        searchSurface.Alpha = starsSurface.Alpha = sortSurface.Alpha = bpmSurface.Alpha = lengthSurface.Alpha = playedSurface.Alpha = 0;
-        bpmLabel.Alpha = lengthLabel.Alpha = playedLabel.Alpha = 0;
-        searchSurface.Width = searchBox.Width;
-        searchSurface.Height = AimModVisualStyle.ControlHeight;
-
-        const float gap = 8;
-        float filterWidth = Math.Max(0, usableWidth - gap * 3);
-        float bpmWidth = filterWidth * 0.22f;
-        float lengthWidth = filterWidth * 0.24f;
-        float playedWidth = filterWidth * 0.24f;
-        float sortWidth = filterWidth * 0.30f;
-        const float filterY = 44;
-        const float starsX = 10;
-        float sortX = usableWidth - sortWidth;
-
-        bpmDropdown.Position = new(0, filterY);
-        bpmDropdown.Width = bpmWidth;
-        bpmSurface.Position = bpmDropdown.Position;
-        bpmSurface.Width = bpmWidth;
-        bpmLabel.Position = new(4, 50);
-
-        lengthDropdown.Position = new(bpmWidth + gap, filterY);
-        lengthDropdown.Width = lengthWidth;
-        lengthSurface.Position = lengthDropdown.Position;
-        lengthSurface.Width = lengthWidth;
-        lengthLabel.Position = new(bpmWidth + gap + 4, 50);
-
-        playedDropdown.Position = new(bpmWidth + lengthWidth + gap * 2, filterY);
-        playedDropdown.Width = playedWidth;
-        playedSurface.Position = playedDropdown.Position;
-        playedSurface.Width = playedWidth;
-        playedLabel.Position = new(bpmWidth + lengthWidth + gap * 2 + 4, 50);
-
-        stars.Position = new(Math.Max(0, usableWidth - 388), 0);
-        stars.Width = 264;
-        stars.Height = AimModVisualStyle.ControlHeight;
-        starsSurface.Position = new(starsX, filterY);
-        starsSurface.Width = stars.Width;
-
         sortDropdown.Anchor = Anchor.TopLeft;
         sortDropdown.Origin = Anchor.TopLeft;
-        sortDropdown.Position = new(sortX, filterY);
-        sortDropdown.Width = sortWidth;
-        sortSurface.Anchor = Anchor.TopLeft;
-        sortSurface.Origin = Anchor.TopLeft;
-        sortSurface.Position = new(sortX, filterY);
-        sortSurface.Width = sortWidth;
+        stars.Height = AimModVisualStyle.ControlHeight;
+        const float gap = 8;
 
-        status.Y = 88;
+        if (compact)
+        {
+            // Narrow windows give each filter a readable width instead of squeezing one row.
+            float column = Math.Max(0, (usableWidth - gap) / 2);
+            searchBox.Width = Math.Max(0, usableWidth - resetButton.Width - gap);
+            stars.Position = new(0, 44);
+            stars.Width = usableWidth;
+            bpmDropdown.Position = new(0, 88);
+            bpmDropdown.Width = column;
+            lengthDropdown.Position = new(column + gap, 88);
+            lengthDropdown.Width = column;
+            playedDropdown.Position = new(0, 132);
+            playedDropdown.Width = column;
+            sortDropdown.Position = new(column + gap, 132);
+            sortDropdown.Width = column;
+            status.Y = 176;
+        }
+        else
+        {
+            searchBox.Width = Math.Max(0, usableWidth - 404);
+            float filterWidth = Math.Max(0, usableWidth - gap * 3);
+            float bpmWidth = filterWidth * 0.22f;
+            float lengthWidth = filterWidth * 0.24f;
+            float playedWidth = filterWidth * 0.24f;
+            float sortWidth = filterWidth * 0.30f;
+            const float filterY = 44;
+            bpmDropdown.Position = new(0, filterY);
+            bpmDropdown.Width = bpmWidth;
+            lengthDropdown.Position = new(bpmWidth + gap, filterY);
+            lengthDropdown.Width = lengthWidth;
+            playedDropdown.Position = new(bpmWidth + lengthWidth + gap * 2, filterY);
+            playedDropdown.Width = playedWidth;
+            stars.Position = new(Math.Max(0, usableWidth - 388), 0);
+            stars.Width = 264;
+            sortDropdown.Position = new(usableWidth - sortWidth, filterY);
+            sortDropdown.Width = sortWidth;
+            status.Y = 88;
+        }
+
         status.MaxWidth = Math.Max(220, usableWidth - 14);
+    }
+
+    public override bool HandleNonPositionalInput => true;
+
+    protected override bool OnKeyDown(KeyDownEvent e)
+    {
+        if (e.ControlPressed || e.AltPressed || !isVisible()
+            || GetContainingInputManager()?.FocusedDrawable is osu.Framework.Graphics.UserInterface.TextBox)
+            return base.OnKeyDown(e);
+
+        switch (e.Key)
+        {
+            case osuTK.Input.Key.Down:
+                return moveSelection(1);
+
+            case osuTK.Input.Key.Up:
+                return moveSelection(-1);
+        }
+
+        return base.OnKeyDown(e);
+    }
+
+    private bool isVisible()
+    {
+        for (Drawable? drawable = this; drawable is not null; drawable = drawable.Parent)
+        {
+            if (drawable.Alpha <= 0 || !drawable.IsPresent)
+                return false;
+        }
+        return true;
+    }
+
+    private bool moveSelection(int direction)
+    {
+        BeatmapSetRow[] rows = setRows.OfType<BeatmapSetRow>().ToArray();
+        if (rows.Length == 0)
+            return false;
+        int current = Array.FindIndex(rows, row => row.SetId == selectedSet?.SetId);
+        int next = Math.Clamp(current < 0 ? 0 : current + direction, 0, rows.Length - 1);
+        GetContainingFocusManager()?.ChangeFocus(null);
+        selectSet(rows[next].Set);
+        listScroll.ScrollIntoView(rows[next]);
+        return true;
     }
 
     private void scheduleQuery()
@@ -346,32 +404,39 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
 
         if (state.Status == LocalLibraryLoadStatus.Loading)
         {
-            status.Text = libraryLoaded ? "Updating results..." : "Reading installed beatmaps...";
-            if (!libraryLoaded)
-                loading.ShowLoading("Loading installed beatmaps", "Reading your local osu! library", progress: () => controller.Progress);
+            bool appending = state.BeatmapSets.Count > 0;
+            status.Text = appending ? $"Loading more after {state.BeatmapSets.Count:N0} sets..." : libraryLoaded ? "Updating results..." : "Reading installed beatmaps...";
+            loadMoreButton?.SetLoading(true);
+            if (!appending)
+            {
+                progressTracker.Reset();
+                loadStatus.ShowLoading(libraryLoaded ? "Updating results..." : "Reading your installed beatmaps...", cancelQuery);
+            }
             return;
         }
 
-        loading.HideLoading();
-        libraryLoaded = state.Status != LocalLibraryLoadStatus.Error;
-        setRows.Clear();
         if (state.Status == LocalLibraryLoadStatus.Error)
         {
-            status.Text = $"Library unavailable: {state.ErrorMessage}";
-            setRows.Add(new EmptyState(FontAwesome.Solid.ExclamationTriangle, "Could not read the local library", "Check the osu! data location and retry the search."));
-            setRows.Add(new BasicButton
+            libraryLoaded = state.BeatmapSets.Count > 0;
+            status.Text = "Library unavailable";
+            loadStatus.ShowError("AimMod could not read your installed beatmaps. Check that the osu! drive is connected, then retry.",
+                state.ErrorMessage, state.BeatmapSets.Count > 0 ? loadMore : resetQuery);
+            if (state.BeatmapSets.Count == 0)
             {
-                Text = "Retry library",
-                Width = 160,
-                Height = 40,
-                Action = resetQuery,
-            });
+                clearRows();
+                setRows.Add(new EmptyState(FontAwesome.Solid.ExclamationTriangle, "Could not read the local library", "Check the osu! data location, then retry."));
+            }
+            loadMoreButton?.SetLoading(false);
             return;
         }
+
+        loadStatus.Dismiss();
+        libraryLoaded = true;
 
         if (state.Status == LocalLibraryLoadStatus.Empty)
         {
             status.Text = state.ErrorMessage ?? "No installed beatmaps match these filters";
+            clearRows();
             setRows.Add(new EmptyState(FontAwesome.Solid.Search, "No beatmaps found", "Change the search or star range to see more of your library."));
             inspector.ClearSelection();
             return;
@@ -381,6 +446,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         if (visibleSets.Length == 0)
         {
             status.Text = "No installed beatmaps match these filters";
+            clearRows();
             setRows.Add(new EmptyState(FontAwesome.Solid.Filter, "No beatmaps match", "Broaden the BPM, length, or played filters to see more sets."));
             inspector.ClearSelection();
             return;
@@ -389,16 +455,56 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         status.Text = $"Showing {visibleSets.Length:N0} of {state.Total:N0} matching sets";
         if (state.ErrorMessage is not null)
             status.Text = state.ErrorMessage;
-        foreach ((LocalBeatmapSet set, int index) in visibleSets.Select((value, index) => (value, index)))
-            setRows.Add(new BeatmapSetRow(index + 1, set, selectSet, selectDifficulty));
 
+        Guid[] incoming = visibleSets.Select(set => set.SetId).ToArray();
+        if (ListDiff.IsAppend(displayedSetIds, incoming))
+        {
+            // Load more only adds rows, so the reader keeps their place in the list.
+            for (int index = displayedSetIds.Count; index < visibleSets.Length; index++)
+                setRows.Add(new BeatmapSetRow(index + 1, visibleSets[index], selectSet, selectDifficulty));
+        }
+        else
+        {
+            clearRows();
+            foreach ((LocalBeatmapSet set, int index) in visibleSets.Select((value, index) => (value, index)))
+                setRows.Add(new BeatmapSetRow(index + 1, set, selectSet, selectDifficulty));
+            listScroll.ScrollToStart(false);
+        }
+        displayedSetIds.Clear();
+        displayedSetIds.AddRange(incoming);
+
+        if (loadMoreButton is not null)
+        {
+            setRows.Remove(loadMoreButton, true);
+            loadMoreButton = null;
+        }
         if (state.HasMore)
-            setRows.Add(new AimModResetButton(loadMore, "Load more maps") { Width = 160, Height = 38 });
+            setRows.Add(loadMoreButton = new AimModResetButton(loadMore, "Load more maps") { Width = 160, Height = 38 });
 
-        LocalBeatmapSet next = selectedSet is not null
-            ? visibleSets.FirstOrDefault(set => set.SetId == selectedSet.SetId) ?? visibleSets[0]
-            : visibleSets[0];
-        selectSet(next);
+        LocalBeatmapSet? current = selectedSet is null ? null : visibleSets.FirstOrDefault(set => set.SetId == selectedSet.SetId);
+        if (current is null)
+            selectSet(visibleSets[0]);
+        else
+        {
+            foreach (BeatmapSetRow row in setRows.OfType<BeatmapSetRow>())
+                row.SetSelection(current.SetId, selectedDifficulty?.BeatmapId ?? Guid.Empty);
+        }
+    }
+
+    private void clearRows()
+    {
+        setRows.Clear();
+        displayedSetIds.Clear();
+        loadMoreButton = null;
+    }
+
+    private void cancelQuery()
+    {
+        scheduledQuery?.Cancel();
+        controller.Cancel();
+        status.Text = "Loading cancelled";
+        loadStatus.ShowMessage("Loading was cancelled.", resetQuery);
+        loadMoreButton?.SetLoading(false);
     }
 
     private static bool matchesFilters(LocalBeatmapSet set, BpmFilter bpm, LengthFilter length, PlayedFilter played)
@@ -437,8 +543,14 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         selectedDifficulty = difficulty;
         foreach (BeatmapSetRow row in setRows.Children.OfType<BeatmapSetRow>())
             row.SetSelection(set.SetId, difficulty.BeatmapId);
+        if (detailsFor == (set.SetId, difficulty.BeatmapId))
+            return;
+        detailsFor = (set.SetId, difficulty.BeatmapId);
         inspector.ShowSelection(set, difficulty, controller.State.BeatmapSets);
-        loadDetails(set, difficulty);
+        // Moving through rows quickly should not start an exact PP calculation per row.
+        scheduledDetails?.Cancel();
+        detailCancellation?.Cancel();
+        scheduledDetails = Scheduler.AddDelayed(() => loadDetails(set, difficulty), detail_debounce_ms);
     }
 
     private void loadDetails(LocalBeatmapSet set, LocalBeatmapDifficulty difficulty)
@@ -448,7 +560,23 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         detailCancellation = new CancellationTokenSource();
         CancellationToken token = detailCancellation.Token;
 
-        _ = Task.Run(async () =>
+        _ = Task.Run(() => loadDetailsAsync(set, difficulty, token), token).ContinueWith(task =>
+        {
+            if (task.IsFaulted && !token.IsCancellationRequested && !IsDisposed)
+            {
+                Exception error = task.Exception!.GetBaseException();
+                Schedule(() =>
+                {
+                    if (!token.IsCancellationRequested)
+                        inspector.ShowDetails([], unavailableOnlineHistory(difficulty.OnlineId, OsuBestScoresFetchStatus.InvalidResponse),
+                            new Dictionary<int, double>(), error, error);
+                });
+            }
+        }, TaskScheduler.Default);
+    }
+
+    private async Task loadDetailsAsync(LocalBeatmapSet set, LocalBeatmapDifficulty difficulty, CancellationToken token)
+    {
         {
             Task<OnlineBeatmapScoreHistoryResult> onlineTask = loadOnlineHistory(difficulty.OnlineId, token);
             IReadOnlyList<LocalReplay> matching = Array.Empty<LocalReplay>();
@@ -511,8 +639,8 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             OnlineBeatmapScoreHistoryResult online = await onlineTask.ConfigureAwait(false);
             IReadOnlyList<ScoreHistoryEntry> plays = ScoreHistoryMerger.Merge(matching, online.Scores);
             if (!token.IsCancellationRequested && !IsDisposed)
-                Schedule(() => inspector.ShowDetails(plays, online, ppAtAccuracy, replayError, ppError));
-        }, token);
+                Schedule(() => { if (!token.IsCancellationRequested) inspector.ShowDetails(plays, online, ppAtAccuracy, replayError, ppError); });
+        }
     }
 
     private async Task<OnlineBeatmapScoreHistoryResult> loadOnlineHistory(int beatmapId, CancellationToken cancellationToken)
@@ -546,6 +674,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
     protected override void Dispose(bool isDisposing)
     {
         scheduledQuery?.Cancel();
+        scheduledDetails?.Cancel();
         detailCancellation?.Cancel();
         detailCancellation?.Dispose();
         controller.StateChanged -= stateChanged;
@@ -573,6 +702,11 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         private readonly Box selectionBar;
         private readonly SpriteText indexText;
         private bool expanded;
+        private AimModLayout.ChangeTracker<float> widthTracker;
+
+        public Guid SetId => set.SetId;
+
+        public LocalBeatmapSet Set => set;
 
         public BeatmapSetRow(int index, LocalBeatmapSet set, Action<LocalBeatmapSet> selectSet, Action<LocalBeatmapSet, LocalBeatmapDifficulty> selectDifficulty)
         {
@@ -604,7 +738,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                 title = new TruncatingSpriteText { Text = set.Title, Position = new(196, 14), Font = new FontUsage(size: 17, weight: "Bold"), Colour = AimModPalette.Text },
                 artist = new TruncatingSpriteText { Text = set.Artist, Position = new(196, 39), Font = new FontUsage(size: 12), Colour = AimModPalette.Text },
                 creator = new TruncatingSpriteText { Text = $"mapped by {set.Creator}", Position = new(196, 59), Font = new FontUsage(size: 11), Colour = AimModPalette.Cyan },
-                metadata = new TruncatingSpriteText { Text = $"{representative.Bpm:0} BPM   {formatDuration(representative.LengthMilliseconds)}   /   Added {relativeDate(set.DateAdded)}   /   {(set.LocalReplayCount is { } count ? $"{count:N0} local plays" : "Local plays unavailable")}", Position = new(196, 78), Font = new FontUsage(size: 10), Colour = AimModPalette.Muted },
+                metadata = new TruncatingSpriteText { Text = $"{representative.Bpm:0} BPM   {formatDuration(representative.LengthMilliseconds)}   /   Added {relativeDate(set.DateAdded)}   /   {(set.LocalReplayCount is { } count ? $"{count:N0} local plays" : "Local plays unavailable")}", Position = new(196, 78), Font = AimModVisualStyle.CaptionFont, Colour = AimModPalette.Muted },
                 new AimModDifficultyPill(maxStars) { Anchor = Anchor.TopRight, Origin = Anchor.TopRight, Margin = new MarginPadding { Top = 13, Right = 13 } },
                 pillScroll = new AimModScrollContainer(Direction.Horizontal)
                 {
@@ -689,6 +823,8 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         protected override void Update()
         {
             base.Update();
+            if (!widthTracker.Update(DrawWidth))
+                return;
             float textWidth = Math.Max(0, DrawWidth - 210);
             title.MaxWidth = Math.Max(0, textWidth - 80);
             artist.MaxWidth = creator.MaxWidth = metadata.MaxWidth = textWidth;
@@ -729,7 +865,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         {
             Text = value,
             Position = new(x, 10),
-            Font = new FontUsage(size: 8, weight: "Bold"),
+            Font = AimModVisualStyle.LabelFont,
             Colour = AimModPalette.Muted,
         };
     }
@@ -758,8 +894,8 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                     Padding = new MarginPadding { Horizontal = 9, Vertical = 5 },
                     Children = new Drawable[]
                     {
-                        new SpriteText { Text = $"{difficulty.StarRating:0.00}", Font = new FontUsage(size: 10, weight: "Bold"), Colour = AimModVisualStyle.DifficultyColour(difficulty.StarRating) },
-                        new TruncatingSpriteText { Text = difficulty.Name, Font = new FontUsage(size: 10), Colour = AimModPalette.Text, MaxWidth = 82 },
+                        new SpriteText { Text = $"{difficulty.StarRating:0.00}", Font = new FontUsage(size: 11, weight: "Bold"), Colour = AimModVisualStyle.DifficultyColour(difficulty.StarRating) },
+                        new TruncatingSpriteText { Text = difficulty.Name, Font = AimModVisualStyle.CaptionFont, Colour = AimModPalette.Text, MaxWidth = 82 },
                     },
                 },
             };
@@ -815,7 +951,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             Text = value,
             Position = new(x, 10),
             MaxWidth = width,
-            Font = new FontUsage(size: 10, weight: bold ? "SemiBold" : "Regular"),
+            Font = new FontUsage(size: 11, weight: bold ? "SemiBold" : "Regular"),
             Colour = AimModPalette.Text,
         };
     }
@@ -900,6 +1036,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
     private partial class InspectorPanel : Container
     {
         private readonly Container content;
+        private AimModLayout.ChangeTracker<float> widthTracker;
 
         protected override Container<Drawable> Content => content;
 
@@ -925,7 +1062,8 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         protected override void Update()
         {
             base.Update();
-            constrainText(content);
+            if (widthTracker.Update(content.DrawWidth))
+                constrainText(content);
         }
 
         private static void constrainText(Container container)
@@ -953,7 +1091,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                 new TruncatingSpriteText { Text = set.Title, Font = new FontUsage(size: 16, weight: "Bold"), Colour = AimModPalette.Text, MaxWidth = 285 },
                 new TruncatingSpriteText { Text = difficulty.Name, Y = 25, Font = new FontUsage(size: 12), Colour = AimModPalette.Cyan, MaxWidth = 285 },
                 new AimModDifficultyPill(difficulty.StarRating) { Y = 51 },
-                new TruncatingSpriteText { Text = $"AR {difficulty.ApproachRate:0.#}   OD {difficulty.OverallDifficulty:0.#}   CS {difficulty.CircleSize:0.#}   HP {difficulty.DrainRate:0.#}", Y = 82, Font = new FontUsage(size: 10), Colour = AimModPalette.Muted },
+                new TruncatingSpriteText { Text = $"AR {difficulty.ApproachRate:0.#}   OD {difficulty.OverallDifficulty:0.#}   CS {difficulty.CircleSize:0.#}   HP {difficulty.DrainRate:0.#}", Y = 82, Font = AimModVisualStyle.CaptionFont, Colour = AimModPalette.Muted },
             };
         }
     }
@@ -970,7 +1108,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             {
                 Text = "Estimated from this difficulty's star rating and map settings",
                 Y = 18,
-                Font = new FontUsage(size: 9),
+                Font = AimModVisualStyle.CaptionFont,
                 Colour = AimModPalette.Muted,
             });
 
@@ -1021,15 +1159,15 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                     Padding = new MarginPadding { Right = 4 },
                     Children = new Drawable[]
                     {
-                        new TruncatingSpriteText { Text = accuracy == 100 ? "SS" : $"{accuracy}%", RelativeSizeAxes = Axes.X, Font = new FontUsage(size: 10), Colour = AimModPalette.Muted },
+                        new TruncatingSpriteText { Text = accuracy == 100 ? "SS" : $"{accuracy}%", RelativeSizeAxes = Axes.X, Font = AimModVisualStyle.CaptionFont, Colour = AimModPalette.Muted },
                         new TruncatingSpriteText { Text = values.TryGetValue(accuracy, out double pp) ? $"{pp:0}" : "--", RelativeSizeAxes = Axes.X, Y = 23, Font = new FontUsage(size: 16, weight: "Bold"), Colour = AimModPalette.Accent },
                     },
                 });
             }
             if (values.TryGetValue(98, out double expected) && values.TryGetValue(100, out double maximum))
             {
-                Add(new TruncatingSpriteText { Text = $"EXPECTED  {expected:0}pp", Y = 87, Font = new FontUsage(size: 10, weight: "SemiBold"), Colour = AimModPalette.Cyan });
-                Add(new TruncatingSpriteText { Text = $"REALISTIC MAX  {maximum:0}pp", Y = 103, Font = new FontUsage(size: 10, weight: "SemiBold"), Colour = AimModPalette.Cyan });
+                Add(new TruncatingSpriteText { Text = $"EXPECTED  {expected:0}pp", Y = 87, Font = AimModVisualStyle.CaptionStrongFont, Colour = AimModPalette.Cyan });
+                Add(new TruncatingSpriteText { Text = $"REALISTIC MAX  {maximum:0}pp", Y = 103, Font = AimModVisualStyle.CaptionStrongFont, Colour = AimModPalette.Cyan });
             }
         }
     }
@@ -1069,7 +1207,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                 Text = coverageText(plays, online),
                 Y = 45,
                 MaxWidth = 285,
-                Font = new FontUsage(size: 8),
+                Font = AimModVisualStyle.CaptionFont,
                 Colour = online.IsSuccess ? AimModPalette.Cyan : AimModPalette.Muted,
             });
         }
@@ -1089,7 +1227,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             Add(new SpriteText { Text = $"NEXT MAPS  {next.Length} / 3", Font = new FontUsage(size: 11, weight: "Bold"), Colour = AimModPalette.Text });
             if (next.Length == 0)
             {
-                Add(new SpriteText { Text = "No nearby installed difficulties.", Y = 31, Font = new FontUsage(size: 10), Colour = AimModPalette.Muted });
+                Add(new SpriteText { Text = "No nearby installed difficulties.", Y = 31, Font = AimModVisualStyle.CaptionFont, Colour = AimModPalette.Muted });
                 return;
             }
 
@@ -1111,11 +1249,11 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
                             Padding = new MarginPadding { Right = 48 },
                             Children = new Drawable[]
                             {
-                                new TruncatingSpriteText { Text = set.Title, Position = new(9, 5), MaxWidth = 205, Font = new FontUsage(size: 10, weight: "SemiBold"), Colour = AimModPalette.Text },
-                                new TruncatingSpriteText { Text = nearest.Name, Position = new(9, 20), MaxWidth = 205, Font = new FontUsage(size: 8), Colour = AimModPalette.Cyan },
+                                new TruncatingSpriteText { Text = set.Title, Position = new(9, 3), MaxWidth = 205, Font = AimModVisualStyle.CaptionStrongFont, Colour = AimModPalette.Text },
+                                new TruncatingSpriteText { Text = nearest.Name, Position = new(9, 18), MaxWidth = 205, Font = AimModVisualStyle.CaptionFont, Colour = AimModPalette.Cyan },
                             },
                         },
-                        new SpriteText { Anchor = Anchor.CentreRight, Origin = Anchor.CentreRight, Margin = new MarginPadding { Right = 9 }, Text = $"{nearest.StarRating:0.00}*", Font = new FontUsage(size: 10, weight: "Bold"), Colour = AimModVisualStyle.DifficultyColour(nearest.StarRating) },
+                        new SpriteText { Anchor = Anchor.CentreRight, Origin = Anchor.CentreRight, Margin = new MarginPadding { Right = 9 }, Text = $"{nearest.StarRating:0.00}*", Font = new FontUsage(size: 11, weight: "Bold"), Colour = AimModVisualStyle.DifficultyColour(nearest.StarRating) },
                     },
                 });
             }
@@ -1133,7 +1271,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             RelativeSizeAxes = Axes.X;
             Height = 158;
             Add(new SpriteText { Text = "RECENT PERFORMANCE", Font = new FontUsage(size: 11, weight: "Bold"), Colour = AimModPalette.Text });
-            Add(new TruncatingSpriteText { Text = coverageText(plays, online), Y = 20, MaxWidth = 285, Font = new FontUsage(size: 8), Colour = online.IsSuccess ? AimModPalette.Cyan : AimModPalette.Muted });
+            Add(new TruncatingSpriteText { Text = coverageText(plays, online), Y = 20, MaxWidth = 285, Font = AimModVisualStyle.CaptionFont, Colour = online.IsSuccess ? AimModPalette.Cyan : AimModPalette.Muted });
             if (plays.Count == 0)
             {
                 Add(new TruncatingSpriteText { Text = emptyHistoryText(online, error), Y = 45, MaxWidth = 285, Font = new FontUsage(size: 11), Colour = AimModPalette.Muted });
@@ -1145,7 +1283,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             Add(new PerformanceSparkline(plays) { Position = new(0, 84), RelativeSizeAxes = Axes.X, Height = 48 });
             ScoreHistoryEntry latest = plays[^1];
             string mods = latest.Mods.Count == 0 ? "NM" : string.Join(string.Empty, latest.Mods);
-            Add(new TruncatingSpriteText { Text = $"Latest  {latest.PlayedAt.LocalDateTime:g}  {mods}  {latest.MissCount} miss", Y = 137, MaxWidth = 285, Font = new FontUsage(size: 9), Colour = AimModPalette.Muted });
+            Add(new TruncatingSpriteText { Text = $"Latest  {latest.PlayedAt.LocalDateTime:g}  {mods}  {latest.MissCount} miss", Y = 136, MaxWidth = 285, Font = AimModVisualStyle.CaptionFont, Colour = AimModPalette.Muted });
         }
     }
 
@@ -1205,7 +1343,7 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
             {
                 new SpriteIcon { Icon = FontAwesome.Solid.CircleNotch, Size = new(18), Colour = AimModPalette.Accent },
                 new SpriteText { Text = title, Position = new(30, 0), Font = new FontUsage(size: 12, weight: "Bold"), Colour = AimModPalette.Text },
-                new TruncatingSpriteText { Text = detail, Position = new(30, 25), MaxWidth = 250, Font = new FontUsage(size: 10), Colour = AimModPalette.Muted },
+                new TruncatingSpriteText { Text = detail, Position = new(30, 25), MaxWidth = 250, Font = AimModVisualStyle.CaptionFont, Colour = AimModPalette.Muted },
             };
         }
     }
@@ -1328,30 +1466,6 @@ public partial class NativeInstalledBeatmapBrowser : CompositeDrawable
         TimeSpan duration = TimeSpan.FromMilliseconds(Math.Max(0, milliseconds));
         return $"{(int)duration.TotalMinutes}:{duration.Seconds:00}";
     }
-
-    private static SpriteText filterLabel(string value, float x) => new SpriteText
-    {
-        Text = value,
-        Position = new(x, 40),
-        Font = new FontUsage(size: 8, weight: "Bold"),
-        Colour = AimModPalette.Cyan,
-    };
-
-    private static Container filterSurface(float x, float y, float width, float height, Anchor anchor = Anchor.TopLeft) => new()
-    {
-        Anchor = anchor,
-        Origin = anchor,
-        Position = new(x, y),
-        Size = new(width, height),
-        Masking = true,
-        CornerRadius = AimModVisualStyle.ControlRadius,
-        Depth = 5,
-        Child = new Box
-        {
-            RelativeSizeAxes = Axes.Both,
-            Colour = AimModPalette.Panel,
-        },
-    };
 
     private static string formatSort(LocalLibrarySort value) => value switch
     {

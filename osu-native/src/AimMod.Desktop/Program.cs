@@ -77,7 +77,12 @@ public static class Program
                 return 0;
             // Older instances have no receiver. Keep the link available in a review window.
         }
-        AimModProtocolRegistration.Refresh();
+        // Registry refresh is best-effort and must not delay the first frame.
+        _ = Task.Run(() =>
+        {
+            try { AimModProtocolRegistration.Refresh(); }
+            catch (Exception error) { Console.Error.WriteLine($"AimMod link registration failed: {error.Message}"); }
+        });
         host.Run(new AimModGame(launchOptions) { LinkInbox = inbox });
         return 0;
     }

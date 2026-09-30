@@ -26,7 +26,10 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
     private readonly Bindable<string> provider = new("All providers");
     private readonly Bindable<OnlineSkinRuleset> ruleset = new(OnlineSkinRuleset.Standard);
     private readonly Bindable<OnlineSkinSort> sort = new(OnlineSkinSort.Newest);
-    private readonly OsuTextBox search;
+    private readonly AimModTextBox search;
+    private readonly AimModInlineStatus searchStatus;
+    private readonly KeyedFlow<string, OnlineSkinCatalogEntry, OnlineSkinRow> rows;
+    private AimModLayout.ChangeTracker<(float, float)> layoutTracker;
     private readonly Container filterBand;
     private readonly Container searchGroup;
     private readonly Container providerGroup;
@@ -36,7 +39,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
     private readonly AimModResetButton resetFilters;
     private readonly Container resultViewport;
     private readonly Container listPanel;
-    private readonly FillFlowContainer results;
+    private readonly FillFlowContainer<Drawable> results;
     private readonly OnlineListState listState;
     private readonly Container detailPanel;
     private readonly Container detailContent;
@@ -101,6 +104,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
                         RelativeSizeAxes = Axes.X,
                         Height = AimModVisualStyle.CompactControlHeight,
                         PlaceholderText = "Skin name or creator",
+                        FocusOnSearchShortcut = true,
                     }),
                     providerGroup = filterField("PROVIDER", new AimModDropdown<string>
                     {
@@ -151,13 +155,24 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
                             new AimModScrollContainer
                             {
                                 RelativeSizeAxes = Axes.Both,
-                                Child = results = new FillFlowContainer
+                                Child = new FillFlowContainer
                                 {
                                     RelativeSizeAxes = Axes.X,
                                     AutoSizeAxes = Axes.Y,
                                     Direction = FillDirection.Vertical,
                                     Spacing = new(gap),
                                     Padding = new MarginPadding { Left = gap, Right = AimModVisualStyle.SectionSpacing, Vertical = gap },
+                                    Children = new Drawable[]
+                                    {
+                                        searchStatus = new AimModInlineStatus(),
+                                        results = new FillFlowContainer<Drawable>
+                                        {
+                                            RelativeSizeAxes = Axes.X,
+                                            AutoSizeAxes = Axes.Y,
+                                            Direction = FillDirection.Vertical,
+                                            Spacing = new(gap),
+                                        },
+                                    },
                                 },
                             },
                             listState = new OnlineListState(),
@@ -202,7 +217,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
                                                 selectedName = text(19, AimModPalette.Text, "Bold", "Select an online skin"),
                                                 selectedCreator = text(12, AimModPalette.Cyan, "SemiBold", "Screenshots and source details appear here."),
                                                 selectedMetadata = text(11, AimModPalette.Muted, "Regular", string.Empty),
-                                                attribution = text(10, AimModPalette.Muted, "Regular", string.Empty),
+                                                attribution = text(AimModVisualStyle.MinReadableFontSize, AimModPalette.Muted, "Regular", string.Empty),
                                                 downloadStatus = new TextFlowContainer(sprite =>
                                                 {
                                                     sprite.Font = osu.Game.Graphics.OsuFont.GetFont(size: 13);
@@ -223,8 +238,16 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
             },
             loading = new AimModLoadingOverlay(),
         };
+        rows = new KeyedFlow<string, OnlineSkinCatalogEntry, OnlineSkinRow>(results, rowKey,
+            item => $"{item.Name}|{item.Creator}|{item.IsSensitive}|{item.PreviewUris.FirstOrDefault()}",
+            item => new OnlineSkinRow(item, isSelected(item), () => select(item), backend?.Screenshots));
         updateDetails();
     }
+
+    private static string rowKey(OnlineSkinCatalogEntry item) => $"{item.ProviderId}/{item.Id}";
+
+    private bool isSelected(OnlineSkinCatalogEntry item) =>
+        selected is not null && selected.ProviderId == item.ProviderId && selected.Id == item.Id;
 
     private (string Provider, string Id)? pendingLink;
     private bool linkRoutingReady;
@@ -249,7 +272,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
         select(null);
         loaded = [];
         refreshRows();
-        loading.ShowLoading("Loading skin details", "Reading the selected skin");
+        searchStatus.ShowLoading("Loading the linked skin...", cancelSearch);
         _ = openLinkAsync(target.Provider, target.Id, requestRevision, requestCancellation.Token);
     }
 
@@ -263,7 +286,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
                 {
                     if (requestRevision != revision || token.IsCancellationRequested)
                         return;
-                    loading.HideLoading();
+                    searchStatus.Dismiss();
                     loaded = details is null ? [] : [details];
                     selected = details;
                     status.Text = details is null ? "This skin is unavailable. Try again or visit its source." : details.Name;
@@ -276,14 +299,15 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
         catch (Exception error)
         {
             if (!IsDisposed)
-                Schedule(() => showError(requestRevision, error.Message));
+                Schedule(() => showError(requestRevision, error, "Loading the linked skin"));
         }
     }
 
     protected override void LoadComplete()
     {
         base.LoadComplete();
-        search.Current.BindValueChanged(_ => scheduleSearch());
+        search.QueryChanged += _ => searchCatalog();
+        search.MoveToResults += () => AimModInteractiveSurface.FocusFirst(results);
         provider.BindValueChanged(_ => scheduleSearch());
         ruleset.BindValueChanged(_ => scheduleSearch());
         sort.BindValueChanged(_ => scheduleSearch());
@@ -294,16 +318,31 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
             searchCatalog();
     }
 
+    /// <summary>Below this width the result list and inspector stack vertically.</summary>
+    internal const float StackedWidth = 720;
+
     protected override void Update()
     {
         base.Update();
-        resetFilters.Y = status.Y - 4;
+        if (!layoutTracker.Update((DrawWidth, detailContent.DrawWidth)))
+            return;
 
-        float width = Math.Max(640, DrawWidth);
+        float width = Math.Max(1, DrawWidth);
         const float inset = 12;
         bool compactFilters = width < 980;
         float available = width - inset * 2;
-        if (compactFilters)
+        if (width < 640)
+        {
+            // Narrow windows give each filter a full row.
+            filterBand.Height = 248;
+            place(searchGroup, inset, 8, available);
+            place(providerGroup, inset, 68, available);
+            place(rulesetGroup, inset, 128, available);
+            place(sortGroup, inset, 188, available);
+            status.Y = 260;
+            resultViewport.Padding = new MarginPadding { Top = 284 };
+        }
+        else if (compactFilters)
         {
             float column = (available - gap) / 2;
             filterBand.Height = 128;
@@ -327,13 +366,32 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
             resultViewport.Padding = new MarginPadding { Top = 108 };
         }
 
-        float panelWidth = Math.Max(300, (DrawWidth - AimModVisualStyle.SectionSpacing) * 0.6f);
-        panelWidth = Math.Min(panelWidth, Math.Max(0, DrawWidth - 300 - AimModVisualStyle.SectionSpacing));
-        listPanel.Width = panelWidth;
-        listPanel.RelativeSizeAxes = Axes.Y;
-        detailPanel.Width = Math.Max(0, DrawWidth - panelWidth - AimModVisualStyle.SectionSpacing);
-        detailPanel.RelativeSizeAxes = Axes.Y;
-        status.MaxWidth = panelWidth;
+        resetFilters.Y = status.Y - 4;
+        float panelWidth;
+        if (width < StackedWidth)
+        {
+            panelWidth = width;
+            listPanel.RelativeSizeAxes = Axes.Both;
+            listPanel.Width = 1;
+            listPanel.Height = 0.5f;
+            detailPanel.RelativeSizeAxes = Axes.Both;
+            detailPanel.Anchor = detailPanel.Origin = Anchor.BottomLeft;
+            detailPanel.Width = 1;
+            detailPanel.Height = 0.48f;
+        }
+        else
+        {
+            panelWidth = Math.Max(300, (width - AimModVisualStyle.SectionSpacing) * 0.6f);
+            panelWidth = Math.Min(panelWidth, Math.Max(0, width - 300 - AimModVisualStyle.SectionSpacing));
+            listPanel.RelativeSizeAxes = Axes.Y;
+            listPanel.Width = panelWidth;
+            listPanel.Height = 1;
+            detailPanel.RelativeSizeAxes = Axes.Y;
+            detailPanel.Anchor = detailPanel.Origin = Anchor.TopRight;
+            detailPanel.Width = Math.Max(0, width - panelWidth - AimModVisualStyle.SectionSpacing);
+            detailPanel.Height = 1;
+        }
+        status.MaxWidth = Math.Max(0, panelWidth - 120);
         float detailTextWidth = Math.Max(0, detailContent.DrawWidth - 32);
         selectedName.MaxWidth = detailTextWidth;
         selectedCreator.MaxWidth = detailTextWidth;
@@ -370,9 +428,10 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
         requestCancellation?.Dispose();
         requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
         int requestRevision = ++revision;
+        scheduledSearch?.Cancel();
         status.Text = "Searching online skin catalogs";
-        listState.SetState(FontAwesome.Solid.Search, "Searching skin catalogs", "Reading cached provider pages and public metadata.", true);
-        loading.ShowLoading("Loading online skins", provider.Value == "All providers" ? "Searching osuskins.net and skins.osuck.net" : $"Searching {provider.Value}");
+        listState.SetState(FontAwesome.Solid.Search, "Searching skin catalogs", "Reading cached provider pages and public metadata.", loaded.Count == 0);
+        searchStatus.ShowLoading(provider.Value == "All providers" ? "Searching osuskins.net and skins.osuck.net..." : $"Searching {provider.Value}...", cancelSearch);
         string[]? providers = provider.Value == "All providers"
             ? null
             : backend.Catalog.Providers.Where(item => item.DisplayName == provider.Value).Select(item => item.Id).ToArray();
@@ -394,15 +453,26 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
         catch (Exception error)
         {
             if (!IsDisposed)
-                Schedule(() => showError(requestRevision, error.Message));
+                Schedule(() => showError(requestRevision, error, "Searching online skins"));
         }
+    }
+
+    private void cancelSearch()
+    {
+        scheduledSearch?.Cancel();
+        requestCancellation?.Cancel();
+        ++revision;
+        status.Text = "Search cancelled";
+        searchStatus.ShowMessage("Search cancelled.", searchCatalog);
+        listState.SetState(FontAwesome.Solid.Search, "Search cancelled", "Retry to search the skin catalogs again.", loaded.Count == 0);
     }
 
     private void showResults(int requestRevision, OnlineSkinCatalogSearchResult response)
     {
         if (requestRevision != revision)
             return;
-        loading.HideLoading();
+        searchStatus.Dismiss();
+        results.FadeIn(AimModVisualStyle.HoverTransition);
         var skins = response.Items
             .GroupBy(item => $"{item.Name}\n{item.Creator}", StringComparer.OrdinalIgnoreCase)
             .Select(group => group.First())
@@ -417,27 +487,27 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
             "No online skins found",
             unavailable.Length == response.Providers.Count ? "The providers are unavailable. Open a source site or try again later." : "Try a different search, mode, provider, or sort order.",
             loaded.Count == 0);
+        refreshRows();
         if (selected is null || loaded.All(item => item.ProviderId != selected.ProviderId || item.Id != selected.Id))
             select(loaded.FirstOrDefault());
-        else
-            refreshRows();
     }
 
-    private void showError(int requestRevision, string message)
+    private void showError(int requestRevision, Exception error, string action)
     {
         if (requestRevision != revision)
             return;
-        loading.HideLoading();
-        loaded = [];
-        results.Clear();
-        status.Text = $"Online skin search failed: {message}";
-        listState.SetState(FontAwesome.Solid.ExclamationTriangle, "Could not search skin catalogs", "Try again or open a provider site in your browser.", true);
+        status.Text = "Online skins unavailable";
+        searchStatus.ShowError(error, action, searchCatalog);
+        // Earlier results stay readable but dimmed until a retry succeeds.
+        results.FadeTo(0.45f, AimModVisualStyle.HoverTransition);
+        listState.SetState(FontAwesome.Solid.ExclamationTriangle, "Could not search skin catalogs", "Try again or open a provider site in your browser.", loaded.Count == 0);
     }
 
     private void refreshRows()
     {
-        results.Clear();
-        results.AddRange(loaded.Select(item => new OnlineSkinRow(item, ReferenceEquals(item, selected), () => select(item), backend?.Screenshots)));
+        rows.Apply(loaded);
+        foreach (OnlineSkinRow row in rows.Rows)
+            row.SetSelected(isSelected(row.Entry));
     }
 
     private void select(OnlineSkinCatalogEntry? item, bool readDetails = true)
@@ -452,7 +522,8 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
         selected = item;
         handoffUri = null;
         downloadStatus.Clear();
-        refreshRows();
+        foreach (OnlineSkinRow row in rows.Rows)
+            row.SetSelected(isSelected(row.Entry));
         updateDetails();
         if (item is not null && readDetails && !browseOnly)
             _ = loadDetails(item, selectionCancellation.Token);
@@ -481,7 +552,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
                 Schedule(() =>
                 {
                     if (!IsDisposed && !cancellationToken.IsCancellationRequested)
-                        status.Text = $"Could not load skin details: {error.Message}";
+                        status.Text = AimModFriendlyError.Message(error, "Loading skin details");
                 });
         }
     }
@@ -548,7 +619,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
             return;
         }
         preparing = true;
-        loading.ShowLoading("Downloading skin", "Downloading and checking the skin archive");
+        loading.ShowLoading("Downloading skin", "Downloading and checking the skin archive", onCancel: cancelPreparation);
         updateDetails();
         _ = prepareAsync(selected, selectionCancellation?.Token ?? lifetime.Token, afterPrepared, browseOnly);
     }
@@ -624,7 +695,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
                     if (IsDisposed || cancellationToken.IsCancellationRequested) return;
                     preparing = false;
                     loading.HideLoading();
-                    status.Text = $"Could not prepare skin: {error.Message}";
+                    status.Text = AimModFriendlyError.Message(error, "Preparing the skin");
                     setDownloadStatus(status.Text.ToString());
                     updateDetails();
                 });
@@ -672,7 +743,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
                 {
                     if (IsDisposed || cancellationToken.IsCancellationRequested) return;
                     preparing = false;
-                    status.Text = $"Could not save skin: {error.Message}";
+                    status.Text = AimModFriendlyError.Message(error, "Saving the skin");
                     setDownloadStatus(status.Text.ToString());
                     updateDetails();
                 });
@@ -692,7 +763,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
             prepareSelected(importSelected);
             return;
         }
-        loading.ShowLoading("Importing skin", "Opening the validated .osk in your selected osu! client");
+        loading.ShowLoading("Importing skin", "Opening the validated .osk in your selected osu! client", onCancel: cancelPreparation);
         preparing = true;
         updateDetails();
         _ = importAsync(preparedPreview, selectionCancellation?.Token ?? lifetime.Token);
@@ -725,7 +796,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
                     if (IsDisposed || cancellationToken.IsCancellationRequested) return;
                     loading.HideLoading();
                     preparing = false;
-                    status.Text = $"Could not import skin: {error.Message}";
+                    status.Text = AimModFriendlyError.Message(error, "Importing the skin");
                     setDownloadStatus(status.Text.ToString());
                     updateDetails();
                 });
@@ -743,10 +814,22 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
             }
             catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException)
             {
-                status.Text = $"Could not open browser: {error.Message}";
+                status.Text = "Could not open your browser. Open the source page manually.";
                 setDownloadStatus(status.Text.ToString());
             }
         }
+    }
+
+    /// <summary>Stops a download or import and returns the inspector to an idle, retryable state.</summary>
+    private void cancelPreparation()
+    {
+        selectionCancellation?.Cancel();
+        selectionCancellation?.Dispose();
+        selectionCancellation = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+        preparing = false;
+        status.Text = "Download cancelled";
+        setDownloadStatus("Download cancelled. You can start it again at any time.");
+        updateDetails();
     }
 
     private async Task releasePreparedPreview()
@@ -774,7 +857,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
         Height = 54,
         Children = new[]
         {
-            new OsuSpriteText { Text = label, Font = new FontUsage(size: 8, weight: "Bold"), Colour = AimModPalette.Cyan },
+            new OsuSpriteText { Text = label, Font = AimModVisualStyle.LabelFont, Colour = AimModPalette.Cyan },
             control.With(drawable => drawable.Y = 17),
         },
     };
@@ -796,13 +879,17 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
     {
         private readonly TruncatingSpriteText name;
         private readonly TruncatingSpriteText creator;
+        private readonly Box marker;
+        private AimModLayout.ChangeTracker<float> widthTracker;
+
+        public OnlineSkinCatalogEntry Entry { get; }
 
         public OnlineSkinRow(OnlineSkinCatalogEntry skin, bool selected, Action action, SkinScreenshotCache? screenshots)
         {
+            Entry = skin;
             RelativeSizeAxes = Axes.X;
             Height = 92;
             CornerRadius = AimModVisualStyle.ControlRadius;
-            BackgroundColour = selected ? AimModPalette.PanelHover : AimModPalette.PanelRaised;
             Action = action;
             Children = new Drawable[]
             {
@@ -817,11 +904,10 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
                             ? new SpriteIcon { Icon = FontAwesome.Solid.Globe, Anchor = Anchor.Centre, Origin = Anchor.Centre, Size = new(30), Colour = AimModPalette.Cyan }
                             : new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelHover },
                 },
-                new Box
+                marker = new Box
                 {
                     RelativeSizeAxes = Axes.Y,
                     Width = 3,
-                    Colour = selected ? AimModPalette.Accent : AimModPalette.Cyan,
                 },
                 name = text(14, AimModPalette.Text, "SemiBold", skin.Name).With(drawable => drawable.Position = new(158, 18)),
                 creator = text(11, AimModPalette.Muted, "Regular", $"{skin.Creator}  ·  {skin.Attribution.ProviderName}").With(drawable => drawable.Position = new(158, 45)),
@@ -832,12 +918,20 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
                     Margin = new MarginPadding(10),
                 },
             };
+            SetSelected(selected);
+        }
+
+        public void SetSelected(bool selected)
+        {
+            BackgroundColour = selected ? AimModPalette.PanelHover : AimModPalette.PanelRaised;
+            marker.Colour = selected ? AimModPalette.Accent : AimModPalette.Cyan;
         }
 
         protected override void Update()
         {
             base.Update();
-
+            if (!widthTracker.Update(DrawWidth))
+                return;
             name.MaxWidth = Math.Max(80, DrawWidth - 270);
             creator.MaxWidth = Math.Max(80, DrawWidth - 270);
         }
@@ -848,6 +942,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
         private readonly Container artwork;
         private readonly FillFlowContainer thumbnails;
         private readonly SkinScreenshotCache? screenshots;
+        private AimModLayout.ChangeTracker<(float, int)> layoutTracker;
 
         public OnlinePreviewGallery(SkinScreenshotCache? screenshots)
         {
@@ -894,7 +989,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
             base.Update();
 
             int count = thumbnails.Children.Count;
-            if (count == 0) return;
+            if (count == 0 || !layoutTracker.Update((DrawWidth, count))) return;
             float width = Math.Clamp((DrawWidth - 16 - (count - 1) * 6) / count, 1, 76);
             foreach (Drawable thumbnail in thumbnails.Children) thumbnail.Width = width;
         }
@@ -960,6 +1055,7 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
         private readonly TruncatingSpriteText label;
         private readonly Colour4 enabledColour;
         private bool enabled;
+        private AimModLayout.ChangeTracker<float> widthTracker;
 
         public OnlineActionButton(IconUsage icon, string label, Action action, Colour4? enabledColour = null)
         {
@@ -992,7 +1088,8 @@ public partial class NativeOnlineSkinsView : CompositeDrawable
         {
             base.Update();
 
-            label.MaxWidth = Math.Max(40, DrawWidth - 50);
+            if (widthTracker.Update(DrawWidth))
+                label.MaxWidth = Math.Max(40, DrawWidth - 50);
         }
 
         protected override bool OnClick(ClickEvent e)

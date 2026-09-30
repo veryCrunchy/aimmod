@@ -1,9 +1,11 @@
 using AimMod.Desktop.Visuals;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
+using osu.Framework.Graphics.Cursor;
 using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
 using osu.Framework.Input.Events;
+using osu.Framework.Localisation;
 using osu.Game.Graphics.Sprites;
 
 namespace AimMod.Desktop.Updates;
@@ -23,6 +25,7 @@ internal partial class NativeUpdateSurface : CompositeDrawable
     private readonly Container notesHost;
     private readonly NativeReleaseNotesPanel notesPanel;
     private bool notesOpen;
+    private AimModLayout.ChangeTracker<float> widthTracker;
 
     public NativeUpdateSurface(INativeUpdateService updateService)
     {
@@ -59,7 +62,7 @@ internal partial class NativeUpdateSurface : CompositeDrawable
                     new OsuSpriteText
                     {
                         Text = "APP UPDATE",
-                        Font = new FontUsage(size: 10, weight: "Bold"),
+                        Font = AimModVisualStyle.LabelFont,
                         Colour = AimModPalette.Cyan,
                     },
                     title = new TruncatingSpriteText
@@ -156,6 +159,8 @@ internal partial class NativeUpdateSurface : CompositeDrawable
     {
         base.Update();
 
+        if (!widthTracker.Update(DrawWidth))
+            return;
         NativeUpdateSurfaceLayout layout = CalculateLayout(DrawWidth);
         statusFlow.X = layout.TextX;
         statusFlow.Width = layout.TextWidth;
@@ -181,23 +186,30 @@ internal partial class NativeUpdateSurface : CompositeDrawable
         detail.Text = state.Detail;
         stableButton.Active = state.Channel == NativeUpdateChannel.Stable;
         previewButton.Active = state.Channel == NativeUpdateChannel.Preview;
-        progressFill.Width = state.Stage is NativeUpdateStage.Downloading or NativeUpdateStage.ReadyToRestart
+        // Progress arrives in coarse steps; ease between them instead of jumping.
+        progressFill.ResizeWidthTo(ProgressFraction(state), AimModVisualStyle.HoverTransition * 2, Easing.OutQuint);
+
+        (string label, IconUsage icon, bool enabled, string tooltip) = ActionFor(state);
+        actionButton.SetState(label, icon, enabled, tooltip);
+    }
+
+    internal static float ProgressFraction(NativeUpdateState state) =>
+        state.Stage is NativeUpdateStage.Downloading or NativeUpdateStage.ReadyToRestart
             ? Math.Clamp(state.Progress / 100f, 0, 1)
             : 0;
 
-        (string label, IconUsage icon, bool enabled) = state.Stage switch
-        {
-            NativeUpdateStage.Available => ("Download", FontAwesome.Solid.Download, true),
-            NativeUpdateStage.ReadyToRestart => ("Restart", FontAwesome.Solid.Sync, true),
-            NativeUpdateStage.Failed => ("Try again", FontAwesome.Solid.Sync, true),
-            NativeUpdateStage.Current => ("Check again", FontAwesome.Solid.Sync, true),
-            NativeUpdateStage.Idle => ("Check now", FontAwesome.Solid.Sync, true),
-            NativeUpdateStage.Downloading => ($"{state.Progress}%", FontAwesome.Solid.Download, false),
-            NativeUpdateStage.Checking => ("Checking", FontAwesome.Solid.Sync, false),
-            _ => ("Unavailable", FontAwesome.Solid.Download, false),
-        };
-        actionButton.SetState(label, icon, enabled);
-    }
+    internal static (string Label, IconUsage Icon, bool Enabled, string Tooltip) ActionFor(NativeUpdateState state) => state.Stage switch
+    {
+        NativeUpdateStage.Available => ("Download", FontAwesome.Solid.Download, true, "Download the update in the background."),
+        NativeUpdateStage.ReadyToRestart => ("Restart", FontAwesome.Solid.Sync, true, "Restart AimMod to finish updating."),
+        NativeUpdateStage.Failed => ("Try again", FontAwesome.Solid.Sync, true, "Check for updates again."),
+        NativeUpdateStage.Current => ("Check again", FontAwesome.Solid.Sync, true, "Check for a newer release."),
+        NativeUpdateStage.Idle => ("Check now", FontAwesome.Solid.Sync, true, "Check for a newer release."),
+        NativeUpdateStage.Downloading => ($"Cancel {Math.Clamp(state.Progress, 0, 100)}%", FontAwesome.Solid.Times, true, "Stop downloading this update."),
+        NativeUpdateStage.Checking => ("Checking", FontAwesome.Solid.Sync, false, "Looking for a newer release."),
+        _ => ("Unavailable", FontAwesome.Solid.Download, false,
+            "This copy of AimMod was not set up by its installer, so it cannot update itself. Install AimMod to receive updates."),
+    };
 
     private void toggleNotes()
     {
@@ -223,6 +235,8 @@ internal partial class NativeUpdateSurface : CompositeDrawable
             case NativeUpdateStage.Idle:
             case NativeUpdateStage.Current:
             case NativeUpdateStage.Failed:
+            // Starting a new check cancels the running download and returns to the available release.
+            case NativeUpdateStage.Downloading:
                 _ = updateService.CheckAsync();
                 break;
         }
@@ -278,12 +292,14 @@ internal partial class NativeUpdateSurface : CompositeDrawable
         }
     }
 
-    private partial class UpdateActionButton : AimModInteractiveSurface
+    private partial class UpdateActionButton : AimModInteractiveSurface, IHasTooltip
     {
         private readonly Action action;
         private readonly SpriteIcon icon;
         private readonly OsuSpriteText label;
         private bool enabled;
+
+        public LocalisableString TooltipText { get; private set; }
 
         public UpdateActionButton(Action action)
         {
@@ -320,12 +336,13 @@ internal partial class NativeUpdateSurface : CompositeDrawable
             };
         }
 
-        public void SetState(string text, IconUsage iconUsage, bool isEnabled)
+        public void SetState(string text, IconUsage iconUsage, bool isEnabled, string tooltip = "")
         {
             label.Text = text;
             icon.Icon = iconUsage;
             enabled = isEnabled;
-            Alpha = isEnabled ? 1 : 0.45f;
+            TooltipText = tooltip;
+            Alpha = isEnabled ? 1 : 0.6f;
         }
 
         protected override bool OnClick(ClickEvent e)

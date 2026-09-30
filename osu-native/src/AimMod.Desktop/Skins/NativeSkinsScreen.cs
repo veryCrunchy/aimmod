@@ -19,11 +19,12 @@ public partial class NativeSkinsScreen : CompositeDrawable
     private IInstalledSkinSource? source;
     private Func<InstalledLazerSkin, CancellationToken, Task>? applySkin;
     private readonly CancellationTokenSource lifetime = new();
-    private ScheduledDelegate? scheduledSearch;
     private CancellationTokenSource? skinSearch;
-    private readonly OsuTextBox searchBox;
+    private readonly AimModTextBox searchBox;
     private readonly TruncatingSpriteText status;
     private readonly FillFlowContainer list;
+    private readonly KeyedFlow<Guid, InstalledLazerSkin, SkinRow> rows;
+    private AimModLayout.ChangeTracker<(float, float)> layoutTracker;
     private readonly Container searchPanel;
     private readonly Container listPanel;
     private readonly SkinListState listState;
@@ -84,7 +85,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
                     {
                         Y = 122,
                         Text = "SEARCH INSTALLED SKINS",
-                        Font = new FontUsage(size: 10, weight: "Bold"),
+                        Font = AimModVisualStyle.LabelFont,
                         Colour = AimModPalette.Cyan,
                     },
                     searchPanel = new Container
@@ -94,7 +95,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
                         Height = AimModVisualStyle.ControlHeight,
                         Children = [
                             new Container { RelativeSizeAxes = Axes.Both, Padding = new MarginPadding { Right = 114 },
-                                Child = searchBox = new AimModTextBox { RelativeSizeAxes = Axes.X, Height = AimModVisualStyle.ControlHeight, PlaceholderText = "Search skin name or creator" } },
+                                Child = searchBox = new AimModTextBox { RelativeSizeAxes = Axes.X, Height = AimModVisualStyle.ControlHeight, PlaceholderText = "Search skin name or creator", FocusOnSearchShortcut = true } },
                             new AimModResetButton(() => searchBox.Current.Value = string.Empty, "Clear search") { Anchor = Anchor.CentreRight, Origin = Anchor.CentreRight },
                         ],
                     },
@@ -142,7 +143,8 @@ public partial class NativeSkinsScreen : CompositeDrawable
                                         source is null ? "Connect osu!" : "Reading installed skins",
                                         source is null
                                             ? "AimMod will show skins from your local osu! installations here."
-                                            : "Your installed skins will appear here."),
+                                            : "Your installed skins will appear here.",
+                                        () => loadSkins()),
                                 },
                             },
                             detailPanel = new Container
@@ -212,24 +214,49 @@ public partial class NativeSkinsScreen : CompositeDrawable
                 },
             },
         };
+        rows = new KeyedFlow<Guid, InstalledLazerSkin, SkinRow>(list, skin => skin.SkinId,
+            skin => $"{skin.Name}|{skin.Creator}|{skin.SkinId == lazerSkinId}|{skin.SkinId == appliedExternalSkinId}",
+            skin => new SkinRow(skin, skin.SkinId == selected?.SkinId, skin.SkinId == lazerSkinId, skin.SkinId == appliedExternalSkinId, () => select(skin)));
     }
+
+    /// <summary>Below this width the list and inspector stack instead of squeezing side by side.</summary>
+    internal const float StackedWidth = 720;
 
     protected override void Update()
     {
         base.Update();
 
+        if (!layoutTracker.Update((DrawWidth, detailContent.DrawWidth)))
+            return;
+
         float availableWidth = Math.Max(0, DrawWidth);
         const float panelGap = AimModVisualStyle.SectionSpacing;
-        float listWidth = Math.Max(300, (availableWidth - panelGap) * 0.6f);
-        listWidth = Math.Min(listWidth, Math.Max(0, availableWidth - 280 - panelGap));
-        listPanel.Width = listWidth;
-        listPanel.RelativeSizeAxes = Axes.Y;
-
-        searchPanel.Width = listWidth;
-        status.MaxWidth = listWidth;
-
-        detailPanel.Width = Math.Max(0, availableWidth - listWidth - panelGap);
-        detailPanel.RelativeSizeAxes = Axes.Y;
+        if (availableWidth < StackedWidth)
+        {
+            listPanel.RelativeSizeAxes = Axes.Both;
+            listPanel.Width = 1;
+            listPanel.Height = 0.52f;
+            detailPanel.RelativeSizeAxes = Axes.Both;
+            detailPanel.Anchor = detailPanel.Origin = Anchor.BottomLeft;
+            detailPanel.Width = 1;
+            detailPanel.Height = 0.46f;
+            searchPanel.Width = availableWidth;
+            status.MaxWidth = availableWidth;
+        }
+        else
+        {
+            float listWidth = Math.Max(300, (availableWidth - panelGap) * 0.6f);
+            listWidth = Math.Min(listWidth, Math.Max(0, availableWidth - 280 - panelGap));
+            listPanel.RelativeSizeAxes = Axes.Y;
+            listPanel.Width = listWidth;
+            listPanel.Height = 1;
+            searchPanel.Width = listWidth;
+            status.MaxWidth = listWidth;
+            detailPanel.RelativeSizeAxes = Axes.Y;
+            detailPanel.Anchor = detailPanel.Origin = Anchor.TopRight;
+            detailPanel.Width = Math.Max(0, availableWidth - listWidth - panelGap);
+            detailPanel.Height = 1;
+        }
 
         float detailTextWidth = Math.Max(0, detailContent.DrawWidth - 32);
         selectedName.MaxWidth = detailTextWidth;
@@ -241,13 +268,8 @@ public partial class NativeSkinsScreen : CompositeDrawable
     {
         base.LoadComplete();
         currentTab.BindValueChanged(value => showTab(value.NewValue), true);
-        searchBox.Current.BindValueChanged(_ =>
-        {
-            ++revision;
-            skinSearch?.Cancel();
-            scheduledSearch?.Cancel();
-            scheduledSearch = Scheduler.AddDelayed(loadSkins, 200);
-        });
+        searchBox.QueryChanged += _ => loadSkins();
+        searchBox.MoveToResults += () => AimModInteractiveSurface.FocusFirst(list);
         loadSkins();
     }
 
@@ -312,14 +334,13 @@ public partial class NativeSkinsScreen : CompositeDrawable
 
     private void loadSkins()
     {
-        scheduledSearch?.Cancel();
         skinSearch?.Cancel();
         skinSearch?.Dispose();
         if (source is null) return;
         skinSearch = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
         int requestRevision = ++revision;
         status.Text = "Reading installed skins";
-        listState.SetState(FontAwesome.Solid.PaintBrush, "Reading installed skins", "Your local osu! skin libraries are being refreshed.", true);
+        listState.SetState(FontAwesome.Solid.PaintBrush, "Reading installed skins", "Your local osu! skin libraries are being refreshed.", loadedSkins.Count == 0);
         var currentSource = source;
         string query = searchBox.Current.Value;
         var token = skinSearch.Token;
@@ -340,7 +361,7 @@ public partial class NativeSkinsScreen : CompositeDrawable
         catch (Exception error)
         {
             if (!IsDisposed)
-                Schedule(() => showError(requestRevision, error.Message));
+                Schedule(() => showError(requestRevision, error));
         }
     }
 
@@ -370,31 +391,30 @@ public partial class NativeSkinsScreen : CompositeDrawable
         updateDetails();
     }
 
-    private void showError(int requestRevision, string message)
+    private void showError(int requestRevision, Exception error)
     {
         if (requestRevision != revision)
             return;
         loadedSkins = Array.Empty<InstalledLazerSkin>();
-        list.Clear();
-        status.Text = $"Could not read installed skins: {message}";
-        listState.SetState(FontAwesome.Solid.ExclamationTriangle, "Installed skins unavailable", "Reconnect osu! and try again.", true);
+        rows.Clear();
+        status.Text = AimModFriendlyError.Message(error, "Reading installed skins");
+        listState.SetState(FontAwesome.Solid.ExclamationTriangle, "Installed skins unavailable",
+            "Check that osu! is installed and its skins folder is readable, then retry.", true, showRetry: true);
     }
 
     private void refreshRows()
     {
-        list.Clear();
-        list.AddRange(loadedSkins.Select(skin => new SkinRow(
-            skin,
-            skin.SkinId == selected?.SkinId,
-            skin.SkinId == lazerSkinId,
-            skin.SkinId == appliedExternalSkinId,
-            () => select(skin))));
+        // Rows are kept by skin; only badge changes rebuild a row, and selection just restyles it.
+        rows.Apply(loadedSkins);
+        foreach (SkinRow row in rows.Rows)
+            row.SetSelected(row.SkinId == selected?.SkinId);
     }
 
     private void select(InstalledLazerSkin skin)
     {
         selected = skin;
-        refreshRows();
+        foreach (SkinRow row in rows.Rows)
+            row.SetSelected(row.SkinId == skin.SkinId);
         updateDetails();
     }
 
@@ -452,7 +472,10 @@ public partial class NativeSkinsScreen : CompositeDrawable
             if (!IsDisposed)
                 Schedule(() =>
                 {
-                    status.Text = $"Could not apply {target.Name}: {error.Message}";
+                    // Apply-service exceptions carry player-facing reasons; others are summarised.
+                    status.Text = error is ExternalLazerSkinApplyException or InvalidOperationException
+                        ? $"Could not apply {target.Name}: {error.Message}"
+                        : AimModFriendlyError.Message(error, $"Applying {target.Name}");
                     updateDetails();
                 });
         }
@@ -460,7 +483,6 @@ public partial class NativeSkinsScreen : CompositeDrawable
 
     protected override void Dispose(bool isDisposing)
     {
-        scheduledSearch?.Cancel();
         skinSearch?.Cancel();
         skinSearch?.Dispose();
         lifetime.Cancel();
@@ -569,15 +591,17 @@ public partial class NativeSkinsScreen : CompositeDrawable
         private readonly SpriteIcon icon;
         private readonly OsuSpriteText title;
         private readonly OsuSpriteText detail;
+        private readonly AimModButton retryButton;
 
-        public SkinListState(IconUsage initialIcon, string initialTitle, string initialDetail)
+        public SkinListState(IconUsage initialIcon, string initialTitle, string initialDetail, Action? retry = null)
         {
             RelativeSizeAxes = Axes.Both;
             InternalChild = new FillFlowContainer
             {
                 Anchor = Anchor.Centre,
                 Origin = Anchor.Centre,
-                Width = 420,
+                RelativeSizeAxes = Axes.X,
+                Padding = new MarginPadding { Horizontal = 24 },
                 AutoSizeAxes = Axes.Y,
                 Direction = FillDirection.Vertical,
                 Spacing = new(AimModVisualStyle.RowSpacing),
@@ -607,15 +631,22 @@ public partial class NativeSkinsScreen : CompositeDrawable
                         Font = new FontUsage(size: 12),
                         Colour = AimModPalette.Muted,
                     },
+                    retryButton = new AimModButton("Retry", () => retry?.Invoke())
+                    {
+                        Anchor = Anchor.TopCentre,
+                        Origin = Anchor.TopCentre,
+                        Alpha = 0,
+                    },
                 },
             };
         }
 
-        public void SetState(IconUsage stateIcon, string stateTitle, string stateDetail, bool visible)
+        public void SetState(IconUsage stateIcon, string stateTitle, string stateDetail, bool visible, bool showRetry = false)
         {
             icon.Icon = stateIcon;
             title.Text = stateTitle;
             detail.Text = stateDetail;
+            retryButton.Alpha = showRetry ? 1 : 0;
             this.FadeTo(visible ? 1 : 0, 120);
         }
     }
@@ -625,22 +656,27 @@ public partial class NativeSkinsScreen : CompositeDrawable
         private readonly TruncatingSpriteText name;
         private readonly TruncatingSpriteText creator;
         private readonly FillFlowContainer<Drawable> badgeFlow;
+        private readonly Box marker;
+        private readonly bool active;
+        private AimModLayout.ChangeTracker<(float, float)> widthTracker;
+
+        public Guid SkinId { get; }
 
         public SkinRow(InstalledLazerSkin skin, bool selected, bool activeInLazer, bool activeInAimMod, Action action)
         {
+            SkinId = skin.SkinId;
+            active = activeInLazer || activeInAimMod;
             RelativeSizeAxes = Axes.X;
             Height = 68;
             CornerRadius = AimModVisualStyle.ControlRadius;
-            BackgroundColour = selected ? AimModPalette.PanelHover : AimModPalette.PanelRaised;
             Action = action;
             Children = new Drawable[]
             {
-                new Box
+                marker = new Box
                 {
                     RelativeSizeAxes = Axes.Y,
                     Width = 3,
                     Colour = activeInAimMod ? AimModPalette.Success : activeInLazer ? AimModPalette.Cyan : AimModPalette.Accent,
-                    Alpha = selected || activeInLazer || activeInAimMod ? 1 : 0,
                 },
                 name = truncatingDetailText(14, AimModPalette.Text, "SemiBold", skin.Name).With(text => text.Position = new(16, 14)),
                 creator = truncatingDetailText(11, AimModPalette.Muted, "Regular", skin.Creator.Length > 0 ? skin.Creator : "Creator not specified")
@@ -656,11 +692,20 @@ public partial class NativeSkinsScreen : CompositeDrawable
                     Children = badges(skin, activeInLazer, activeInAimMod),
                 },
             };
+            SetSelected(selected);
+        }
+
+        public void SetSelected(bool selected)
+        {
+            BackgroundColour = selected ? AimModPalette.PanelHover : AimModPalette.PanelRaised;
+            marker.Alpha = selected || active ? 1 : 0;
         }
 
         protected override void Update()
         {
             base.Update();
+            if (!widthTracker.Update((DrawWidth, badgeFlow.DrawWidth)))
+                return;
             float textWidth = Math.Max(60, DrawWidth - badgeFlow.DrawWidth - 46);
             name.MaxWidth = textWidth;
             creator.MaxWidth = textWidth;

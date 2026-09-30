@@ -93,7 +93,7 @@ public partial class NativeHubSettingsPanel : CompositeDrawable
                 }),
                 panel("Sharing", "Default options for new replay shares.", new Drawable[]
                 {
-                    text("VISIBILITY", 10, AimModPalette.Cyan, "Bold"),
+                    text("VISIBILITY", AimModVisualStyle.MinReadableFontSize, AimModPalette.Cyan, "Bold"),
                     new AimModDropdown<OsuHubVisibility>
                     {
                         Width = 360,
@@ -218,7 +218,7 @@ public partial class NativeHubSettingsPanel : CompositeDrawable
                 {
                     setAccountState(error is HttpRequestException
                         ? "AimMod Hub could not be reached. Check your connection and try again."
-                        : error.Message, AimModPalette.Pink);
+                        : AimModFriendlyError.Message(error, "Linking this device"), AimModPalette.Pink);
                     linkButton.Enabled.Value = true;
                 });
         }
@@ -350,7 +350,7 @@ public partial class NativeHubSettingsPanel : CompositeDrawable
                     Children = new Drawable[]
                     {
                         text(item.Title, 11, AimModPalette.Text, "SemiBold"),
-                        text(queueDetail(item), 9, statusColour(item.Status)),
+                        text(queueDetail(item), AimModVisualStyle.MinReadableFontSize, statusColour(item.Status)),
                     },
                 },
                 action,

@@ -4,6 +4,7 @@ using osu.Framework.Graphics.Shapes;
 using osu.Framework.Graphics.Sprites;
 using osu.Framework.Input.Events;
 using osu.Game.Graphics.Sprites;
+using osuTK.Input;
 
 namespace AimMod.Desktop.Visuals;
 
@@ -58,6 +59,153 @@ public partial class AimModInteractiveSurface : ClickableContainer
         }
     }
 
+    /// <summary>When false the surface never takes keyboard focus.</summary>
+    public bool KeyboardFocusable { get; set; } = true;
+
+    public override bool AcceptsFocus => KeyboardFocusable && Enabled.Value && Action is not null && IsPresent;
+
+    private bool pointerActivated;
+    private bool keyboardFocused;
+    private float restingBorderThickness;
+    private osu.Framework.Graphics.Colour.ColourInfo restingBorderColour;
+
+    /// <summary>Moves keyboard focus here and shows the focus ring.</summary>
+    public void FocusFromKeyboard()
+    {
+        if (!AcceptsFocus)
+            return;
+        pointerActivated = false;
+        GetContainingFocusManager()?.ChangeFocus(this);
+    }
+
+    protected override void OnFocus(FocusEvent e)
+    {
+        // Pointer clicks also focus the surface. Only keyboard focus shows a ring and handles keys,
+        // so Space still reaches page shortcuts after a click.
+        keyboardFocused = !pointerActivated;
+        pointerActivated = false;
+        if (keyboardFocused)
+        {
+            restingBorderThickness = BorderThickness;
+            restingBorderColour = BorderColour;
+            BorderColour = AimModPalette.Accent;
+            BorderThickness = 2;
+        }
+        base.OnFocus(e);
+    }
+
+    protected override void OnFocusLost(FocusLostEvent e)
+    {
+        if (keyboardFocused)
+        {
+            BorderThickness = restingBorderThickness;
+            BorderColour = restingBorderColour;
+        }
+        keyboardFocused = false;
+        base.OnFocusLost(e);
+    }
+
+    protected override bool OnKeyDown(KeyDownEvent e)
+    {
+        if (!HasFocus || !keyboardFocused || e.ControlPressed || e.AltPressed)
+            return base.OnKeyDown(e);
+
+        switch (e.Key)
+        {
+            case Key.Enter or Key.KeypadEnter or Key.Space:
+                if (e.Repeat || Action is null || !Enabled.Value)
+                    return false;
+                flashLayer.FadeOutFromOne(500, Easing.OutQuint);
+                TriggerClick();
+                return true;
+
+            case Key.Down or Key.Up:
+                return MoveFocus(e.Key == Key.Down ? 1 : -1);
+
+            case Key.Escape:
+                GetContainingFocusManager()?.ChangeFocus(null);
+                return true;
+        }
+
+        return base.OnKeyDown(e);
+    }
+
+    /// <summary>Moves keyboard focus to the previous or next visible surface in the same scroll region.</summary>
+    public bool MoveFocus(int direction)
+    {
+        Drawable? scope = this.FindClosestParent<ScrollContainer<Drawable>>() ?? (Drawable?)Parent;
+        if (scope is not CompositeDrawable root)
+            return false;
+
+        List<AimModInteractiveSurface> candidates = FocusCandidates(root);
+        int index = candidates.IndexOf(this);
+        if (index < 0 || index + direction < 0 || index + direction >= candidates.Count)
+            return false;
+
+        AimModInteractiveSurface target = candidates[index + direction];
+        target.FocusFromKeyboard();
+        this.FindClosestParent<ScrollContainer<Drawable>>()?.ScrollIntoView(target);
+        return true;
+    }
+
+    /// <summary>Visible, focusable surfaces in reading order.</summary>
+    public static List<AimModInteractiveSurface> FocusCandidates(CompositeDrawable root)
+    {
+        var candidates = new List<AimModInteractiveSurface>();
+        collect(root, candidates);
+        candidates.Sort((left, right) =>
+        {
+            int vertical = left.ScreenSpaceDrawQuad.TopLeft.Y.CompareTo(right.ScreenSpaceDrawQuad.TopLeft.Y);
+            return vertical != 0 ? vertical : left.ScreenSpaceDrawQuad.TopLeft.X.CompareTo(right.ScreenSpaceDrawQuad.TopLeft.X);
+        });
+        return candidates;
+    }
+
+    /// <summary>Focuses the first visible surface below <paramref name="root"/>, for search-box Down arrows.</summary>
+    public static bool FocusFirst(CompositeDrawable root)
+    {
+        List<AimModInteractiveSurface> candidates = FocusCandidates(root);
+        if (candidates.Count == 0)
+            return false;
+        candidates[0].FocusFromKeyboard();
+        root.FindClosestParent<ScrollContainer<Drawable>>()?.ScrollIntoView(candidates[0]);
+        return true;
+    }
+
+    private static void collect(Drawable drawable, List<AimModInteractiveSurface> result)
+    {
+        if (!drawable.IsPresent || drawable.Alpha <= 0)
+            return;
+        if (drawable is AimModInteractiveSurface { AcceptsFocus: true } surface)
+        {
+            result.Add(surface);
+            return;
+        }
+        if (drawable is IContainerEnumerable<Drawable> container)
+        {
+            foreach (Drawable child in container.Children)
+                collect(child, result);
+        }
+        else if (drawable is CompositeDrawable composite)
+        {
+            foreach (AimModInteractiveSurface nested in osu.Framework.Testing.TestingExtensions.ChildrenOfType<AimModInteractiveSurface>(composite))
+            {
+                if (nested.AcceptsFocus && isVisible(nested, composite))
+                    result.Add(nested);
+            }
+        }
+    }
+
+    private static bool isVisible(Drawable drawable, Drawable root)
+    {
+        for (Drawable? current = drawable; current is not null && current != root; current = current.Parent)
+        {
+            if (!current.IsPresent || current.Alpha <= 0)
+                return false;
+        }
+        return true;
+    }
+
     protected override bool OnHover(HoverEvent e)
     {
         hoverLayer.FadeTo(0.2f, 40, Easing.OutQuint)
@@ -80,6 +228,7 @@ public partial class AimModInteractiveSurface : ClickableContainer
 
     protected override bool OnMouseDown(MouseDownEvent e)
     {
+        pointerActivated = true;
         content.ScaleTo(0.995f, 80, Easing.OutQuint);
         return base.OnMouseDown(e);
     }

@@ -18,6 +18,7 @@ public partial class OsuClientSettingsScreen : CompositeDrawable
     private readonly FillFlowContainer content;
     private readonly FillFlowContainer settingsNavigation = new() {RelativeSizeAxes=Axes.X,AutoSizeAxes=Axes.Y,Direction=FillDirection.Full,Spacing=new(8)};
     private readonly List<Drawable> settingsPages = [];
+    private readonly List<AimModButton> settingsTabs = [];
     private int selectedSettingsPage;
 
     public OsuClientSettingsScreen(IOsuBeatmapDestinationService destinationService)
@@ -42,7 +43,7 @@ public partial class OsuClientSettingsScreen : CompositeDrawable
             RelativeSizeAxes = Axes.Both,
             Child = content = new FillFlowContainer
             {
-                Width = 680,
+                RelativeSizeAxes = Axes.X,
                 AutoSizeAxes = Axes.Y,
                 Direction = FillDirection.Vertical,
                 Spacing = new(20),
@@ -56,7 +57,7 @@ public partial class OsuClientSettingsScreen : CompositeDrawable
             new SpriteText
             {
                 Text = "OPEN AND INSTALL DESTINATION",
-                Font = new FontUsage(size: 10, weight: "Bold"),
+                Font = AimModVisualStyle.LabelFont,
                 Colour = AimModPalette.Cyan,
             },
             new AimModDropdown<string>
@@ -100,7 +101,7 @@ public partial class OsuClientSettingsScreen : CompositeDrawable
             content.Add(new SpriteText {Text="STARTUP & INTRODUCTION",Font=new FontUsage(size:14,weight:"Bold"),Colour=AimModPalette.Cyan});
             var sound=new Bindable<string>(setupStore.Load().StartupSound?"Startup sound on":"Startup sound off");
             content.Add(new AimModDropdown<string>{Width=360,Items=new[]{"Startup sound on","Startup sound off"},Current=sound});
-            var soundStatus=new SpriteText {Text="AimMod electronic pulse · follows app volume",Font=new FontUsage(size:12),Colour=AimModPalette.Muted};content.Add(soundStatus);
+            var soundStatus=note("AimMod electronic pulse · follows app volume");content.Add(soundStatus);
             sound.BindValueChanged(v=>{try{setupStore.Save(setupStore.Load() with {StartupSound=v.NewValue=="Startup sound on"});}catch(IOException){soundStatus.Text="Could not save startup sound. Try again.";}});
             if(previewSound is not null)content.Add(new UserSetupScreen.SetupButton("Preview startup sound",previewSound));
             if(reopenSetup is not null)content.Add(new UserSetupScreen.SetupButton("Open setup & app tour",reopenSetup));
@@ -131,14 +132,30 @@ public partial class OsuClientSettingsScreen : CompositeDrawable
     private void showSettingsPage(int selected)
     {
         selectedSettingsPage=selected;
-        settingsNavigation.Clear();
-        foreach(var (name,index) in new[]{"General","Account & sharing","Practice","Startup & tour"}.Select((name,index)=>(name,index)))
+        if(settingsTabs.Count==0)
+        {
+            foreach(var (name,index) in new[]{"General","Account & sharing","Practice","Startup & tour"}.Select((name,index)=>(name,index)))
             {
-            var tab = new AimModButton(name,()=>showSettingsPage(index));
-            tab.SetSelected(index==selected); settingsNavigation.Add(tab);
+                var tab=new AimModButton(name,()=>showSettingsPage(index));
+                settingsTabs.Add(tab);
+                settingsNavigation.Add(tab);
+            }
         }
+        for(int i=0;i<settingsTabs.Count;i++)settingsTabs[i].SetSelected(i==selected);
         for(int i=0;i<settingsPages.Count;i++)settingsPages[i].Alpha=i==selected?1:0;
     }
+
+    /// <summary>Muted explanatory copy that wraps instead of running past narrow pages.</summary>
+    private static osu.Game.Graphics.Containers.OsuTextFlowContainer note(string text, float size = 12) => new(t =>
+    {
+        t.Font = new FontUsage(size: size);
+        t.Colour = AimModPalette.Muted;
+    })
+    {
+        RelativeSizeAxes = Axes.X,
+        AutoSizeAxes = Axes.Y,
+        Text = text,
+    };
     private sealed partial class SettingsSurface : Container
     {
         public SettingsSurface(Drawable body)
@@ -153,7 +170,7 @@ public partial class OsuClientSettingsScreen : CompositeDrawable
     {
         var settings=store.Load();
         content.Add(new SpriteText {Text="AUTOMATIC PRACTICE",Font=new FontUsage(size:14,weight:"Bold"),Colour=AimModPalette.Cyan});
-        content.Add(new SpriteText {Text="Create sets from recent replay results and update them as you improve.",Font=new FontUsage(size:13),Colour=AimModPalette.Muted});
+        content.Add(note("Create sets from recent replay results and update them as you improve.",13));
         var enabled=new Bindable<string>(settings.Enabled?"On":"Off");
         content.Add(new AimModDropdown<string>{Width=360,Items=new[]{"Off","On"},Current=enabled});
         var status=new SpriteText {Font=new FontUsage(size:12),Colour=AimModPalette.Muted};
@@ -170,8 +187,8 @@ public partial class OsuClientSettingsScreen : CompositeDrawable
         var capacity=new Bindable<string>($"{settings.MaximumActiveMaps} sets");
         content.Add(new AimModDropdown<string>{Width=360,
             Items=new[]{5,10,25,50,100,settings.MaximumActiveMaps}.Distinct().Order().Select(count=>$"{count} sets").ToArray(),Current=capacity});
-        content.Add(new SpriteText {Text="One set per source map, with several practice difficulties. More sets use more disk space.",Font=new FontUsage(size:12),Colour=AimModPalette.Muted});
-        content.Add(new SpriteText {Text="Lowering the limit pauses new sets until space opens up. Existing sets are kept.",Font=new FontUsage(size:12),Colour=AimModPalette.Muted});
+        content.Add(note("One set per source map, with several practice difficulties. More sets use more disk space."));
+        content.Add(note("Lowering the limit pauses new sets until space opens up. Existing sets are kept."));
         capacity.BindValueChanged(v=> {
             try { settings=settings with {MaximumActiveMaps=int.Parse(v.NewValue.Split(' ')[0])};store.Save(settings);updateStatus(); }
             catch(IOException){status.Text="Could not save the practice limit. Try again.";}
@@ -179,15 +196,9 @@ public partial class OsuClientSettingsScreen : CompositeDrawable
         content.Add(new SpriteText {Text="CLEANUP",Font=new FontUsage(size:12,weight:"Bold"),Colour=AimModPalette.Cyan});
         var cleanup=new Bindable<string>(settings.Cleanup?"Automatic":"Keep all sets");
         content.Add(new AimModDropdown<string>{Width=360,Items=new[]{"Automatic","Keep all sets"},Current=cleanup});
-        content.Add(new SpriteText {Text="Archive mastered or 30-day inactive sets. Remove old generated files after 7 days.",Font=new FontUsage(size:12),Colour=AimModPalette.Muted});
-        content.Add(new SpriteText {Text="Progress history and favourites are kept. Manual sets are never cleaned up.",Font=new FontUsage(size:12),Colour=AimModPalette.Muted});
+        content.Add(note("Archive mastered or 30-day inactive sets. Remove old generated files after 7 days."));
+        content.Add(note("Progress history and favourites are kept. Manual sets are never cleaned up."));
         cleanup.BindValueChanged(v=> {try{settings=settings with {Cleanup=v.NewValue=="Automatic"};store.Save(settings);}catch(IOException){status.Text="Could not save cleanup. Try again.";}});
-    }
-
-    protected override void Update()
-    {
-        base.Update();
-        content.Width = Math.Max(0, DrawWidth);
     }
 
     protected override void LoadComplete()

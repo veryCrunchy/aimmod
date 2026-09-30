@@ -16,6 +16,8 @@ public partial class AimModWorkspaceIllustration(WorkspaceIllustrationKind kind,
     private Drawable? moving;
     private double phase;
     private Vector2[] motionPath = [];
+    private AimModLayout.ChangeTracker<Vector2> sizeTracker;
+    private AimModLayout.ChangeTracker<bool> activeTracker;
 
     public AimModWorkspaceIllustration(WorkspaceIllustrationKind kind) : this(kind, () => false) { }
 
@@ -29,11 +31,14 @@ public partial class AimModWorkspaceIllustration(WorkspaceIllustrationKind kind,
     protected override void Update()
     {
         base.Update();
-        drawing.Scale = new(Math.Min(DrawWidth / 144, DrawHeight / 96));
+        if (sizeTracker.Update(DrawSize))
+            drawing.Scale = new(Math.Min(DrawWidth / 144, DrawHeight / 96));
         if (moving is null) return;
         bool hovered = active();
+        if (!activeTracker.Update(hovered) && !hovered) return;
         moving.Alpha = hovered ? 1 : 0;
-        if (hovered) phase += Time.Elapsed / 1800;
+        if (!hovered) return;
+        phase += Time.Elapsed / 1800;
         // Follow the numbered route in order. Reset at the end instead of reversing through it.
         float step = (float)(phase % 1) * (motionPath.Length - 1);
         int segment = Math.Min((int)step, motionPath.Length - 2);
