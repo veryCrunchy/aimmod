@@ -1,5 +1,6 @@
 using AimMod.Desktop.LocalLibrary;
 using AimMod.Desktop.Visuals;
+using osu.Framework.Allocation;
 using osu.Framework.Bindables;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
@@ -8,11 +9,16 @@ using osu.Framework.Graphics.Sprites;
 using osu.Game.Graphics.Containers;
 using osu.Game.Graphics.Sprites;
 using osu.Game.Graphics.UserInterface;
+using osu.Game.Overlays;
 
 namespace AimMod.Desktop.Hub;
 
 public partial class NativeHubReplaySharePanel : CompositeDrawable
 {
+    // Gives the osu! share switches AimMod's mint accent instead of their pink default.
+    [Cached]
+    private readonly OverlayColourProvider switchColours = new(OverlayColourScheme.Aquamarine);
+
     private readonly OsuHubReplayShareService? shareService;
     private readonly IHubCredentialStore? credentialStore;
     private readonly IOsuHubUploadQueue? uploadQueue;
