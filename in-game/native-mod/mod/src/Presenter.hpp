@@ -73,5 +73,6 @@ namespace aimmod
         double m_dtSum{}, m_dtMax{}, m_stepErrorMax{};
         std::uint64_t m_periodApplies{};
         double m_nextReport{}, m_nextBeat{};
+        const char* m_idleReason{};
     };
 } // namespace aimmod

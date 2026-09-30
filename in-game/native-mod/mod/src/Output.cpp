@@ -142,6 +142,46 @@ namespace aimmod
         m_liveDirty = true;
     }
 
+    std::optional<std::variant<GameCommand, CommandError>> Output::TakeCommand()
+    {
+        std::lock_guard lock(m_mutex);
+        if (m_commands.empty()) return std::nullopt;
+        auto command = std::move(m_commands.front());
+        m_commands.pop_front();
+        return command;
+    }
+
+    void Output::PublishCommandResult(std::string body)
+    {
+        {
+            std::lock_guard lock(m_mutex);
+            m_results.push_back(std::move(body));
+        }
+        m_wake.notify_one();
+    }
+
+    void Output::ReadCommand(std::uint64_t now)
+    {
+        if (now - m_lastCommandCheck < 100) return;
+        m_lastCommandCheck = now;
+        std::string text;
+        if (!ReadSmall(m_root / L"core-command.tsv", text, 4097) || text == m_commandText) return;
+        m_commandText = text;
+        auto parsed = ParseGameCommand(text);
+        const std::uint64_t sequence = std::holds_alternative<GameCommand>(parsed) ? std::get<GameCommand>(parsed).sequence : std::get<CommandError>(parsed).sequence;
+        // A request left from an earlier session is never replayed.
+        if (!m_commandPrimed)
+        {
+            m_commandPrimed = true;
+            m_commandSequence = sequence;
+            return;
+        }
+        if (sequence != 0 && sequence <= m_commandSequence) return;
+        if (sequence != 0) m_commandSequence = sequence;
+        std::lock_guard lock(m_mutex);
+        if (m_commands.size() < 8) m_commands.push_back(std::move(parsed));
+    }
+
     void Output::PublishScene(std::string body)
     {
         std::lock_guard lock(m_mutex);
@@ -392,6 +432,16 @@ namespace aimmod
             }
         }
         ScanGameStats(now);
+        if (!m_commandPrimed && now - m_lastCommandCheck >= 100 && !std::filesystem::exists(m_root / L"core-command.tsv")) m_commandPrimed = true;
+        ReadCommand(now);
+        {
+            std::deque<std::string> results;
+            {
+                std::lock_guard lock(m_mutex);
+                results.swap(m_results);
+            }
+            for (const std::string& r : results) WriteAtomic(m_root / L"core-command-result.tsv", r);
+        }
         if (force || now - m_lastPlaybackCheck >= 500)
         {
             m_lastPlaybackCheck = now;
@@ -414,7 +464,7 @@ namespace aimmod
             bool stop;
             {
                 std::unique_lock lock(m_mutex);
-                m_wake.wait_for(lock, std::chrono::milliseconds(100), [this] { return m_stop || !m_jobs.empty() || m_statusDirty; });
+                m_wake.wait_for(lock, std::chrono::milliseconds(100), [this] { return m_stop || !m_jobs.empty() || m_statusDirty || !m_results.empty(); });
                 jobs.swap(m_jobs);
                 stop = m_stop;
             }

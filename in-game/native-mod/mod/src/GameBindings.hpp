@@ -59,6 +59,7 @@ namespace aimmod::game
         bool worldContext{};
         RC::Unreal::FBoolProperty* boolProperty{};
         Kind inner{Kind::Other}; // Array element kind
+        RC::Unreal::UStruct* structType{}; // plain structs (command inputs)
         std::string name;        // ASCII
     };
 
@@ -74,8 +75,9 @@ namespace aimmod::game
         ObjectArray, // TArray<UObject*> return value
         ValueElse,   // OutValue (numeric) + Result (enum/byte) out parameters
         Observe,     // hook target only; never called
-        Command,     // replay presentation only: plain value inputs (vector,
-                     // rotator, float, bool, int), no return value used
+        Command,     // explicit actions: plain value inputs (vector, rotator,
+                     // numbers, bool, enum byte, string, object, plain struct)
+                     // filled by the caller
     };
 
     class Getter
@@ -113,7 +115,8 @@ namespace aimmod::game
         };
         ValueElseResult ValueElse(UObject* self, UObject* context = nullptr) const;
         // Command shape: `fill` writes each input parameter (by name/kind).
-        bool Call(UObject* self, const std::function<void(std::uint8_t* value, const Param& param)>& fill) const;
+        bool Call(UObject* self, const std::function<void(std::uint8_t* value, const Param& param)>& fill,
+                  const std::function<void(const std::uint8_t* buffer, const std::vector<Param>& params)>& read = nullptr) const;
 
     private:
         bool Invoke(UObject* self, std::uint8_t* buffer, UObject* context) const;
@@ -149,6 +152,12 @@ namespace aimmod::game
         Kind m_kind{Kind::Other};
         RC::Unreal::FBoolProperty* m_bool{};
     };
+
+    // Command input helpers. Strings are allocated with the engine allocator
+    // and released by Getter::Call after the call.
+    void WriteString(std::uint8_t* value, const std::string& utf8);
+    bool SetStructField(std::uint8_t* value, RC::Unreal::UStruct* type, const char* field, double number);
+    UObject* ReadObject(const std::uint8_t* buffer, const Param& param);
 
     // Describe a parameter/property.
     Param Describe(RC::Unreal::FProperty* property);

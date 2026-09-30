@@ -1,6 +1,7 @@
 // Engine-independent checks for AimModCore. Synthetic data only.
 // Usage: aimmod_core_tests [--write-samples <dir>]
 #include <aimmod/Formats.hpp>
+#include <aimmod/GameCommand.hpp>
 #include <aimmod/GameStats.hpp>
 #include <aimmod/PlaybackFrame.hpp>
 #include <aimmod/Lifecycle.hpp>
@@ -245,6 +246,33 @@ static void PlaybackChecks()
     CHECK(CameraAt(*f, 5.05, pose) && std::fabs(pose[3] - 0.5) < 1e-9 && std::fabs(std::fabs(pose[4]) - 180) < 1e-9, "yaw interpolates across the wrap");
     CHECK(!ParsePlaybackFrame("AIMMOD_REPLAY_5\t1\t1\n") && !ParsePlaybackFrame("AIMMOD_REPLAY_6\t1\t1\nvelocity\t9\t0\t0\t0\n"),
           "other protocols and orphan rows rejected");
+}
+
+static void CommandChecks()
+{
+    auto parse = [](const char* text) { return ParseGameCommand(text); };
+    auto load = parse("AIMMOD_CORE_COMMAND_1\nseq\t7\naction\tload-scenario\nscenario\tVT PGT Novice S5\n");
+    CHECK(std::holds_alternative<GameCommand>(load) && std::get<GameCommand>(load).scenario == "VT PGT Novice S5" &&
+              std::get<GameCommand>(load).action == GameCommand::Action::LoadScenario,
+          "load command parsed");
+    auto start = parse("AIMMOD_CORE_COMMAND_1\r\nseq\t8\r\naction\tstart-scenario\r\nscenario\tX\r\nmode\tfreeplay\r\ntimeScale\t0.5\r\ntargetSize\t1.5\r\ntargetSpeed\t2\r\nweapon\tTrack Master 100\r\n");
+    CHECK(std::holds_alternative<GameCommand>(start) && std::get<GameCommand>(start).HasOverrides() && *std::get<GameCommand>(start).timeScale == 0.5,
+          "freeplay start with overrides parsed");
+    auto code = [&](const char* text) {
+        auto r = parse(text);
+        return std::holds_alternative<CommandError>(r) ? std::get<CommandError>(r).code : std::string("accepted");
+    };
+    CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t9\naction\tstart-scenario\nscenario\tX\nmode\tchallenge\ntargetSize\t2\n") == "overrides-freeplay-only",
+          "challenge runs cannot be modified");
+    CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t9\naction\tstart-scenario\nscenario\tX\nmode\tchallenge\n") == "accepted", "plain challenge start allowed");
+    CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t9\naction\tstart-scenario\nscenario\tX\ntimeScale\t9\n") == "invalid-override", "out-of-range override rejected");
+    CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t9\naction\tload-scenario\nscenario\tX\ntimeScale\t1\n") == "invalid-command", "overrides only on start");
+    CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t9\naction\tdelete-scores\n") == "invalid-command", "unknown action rejected");
+    CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t9\naction\tload-scenario\nscenario\tA\x01B\n") == "invalid-scenario", "control characters rejected");
+    CHECK(code("AIMMOD_CORE_COMMAND_1\naction\treset-overrides\n") == "invalid-command", "sequence required");
+    CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t9\naction\treset-overrides\nextra\t1\n") == "invalid-command", "unknown fields rejected");
+    CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t9\naction\treset-overrides\n") == "accepted", "reset accepted");
+    CHECK(FormatCommandResult(7, "error", "challenge-active", "Finish\tit") == "AIMMOD_CORE_RESULT_1\t7\terror\tchallenge-active\tFinish%09it\n", "result line");
 }
 
 static void Settings()
@@ -543,6 +571,7 @@ int main(int argc, char** argv)
     ReplayFormat2();
     GameStatsChecks();
     PlaybackChecks();
+    CommandChecks();
     Settings();
     Backoff();
     LifecycleChecks();

@@ -169,6 +169,8 @@ namespace aimmod::game
         out.out = !out.ret && p->HasAnyPropertyFlags(CPF_OutParm) && !p->HasAnyPropertyFlags(CPF_ConstParm);
         out.worldContext = out.kind == Kind::Object && out.name.find("WorldContext") != std::string::npos;
         if (out.kind == Kind::Bool) out.boolProperty = CastField<FBoolProperty>(p);
+        if (out.kind == Kind::Other)
+            if (auto* s = CastField<FStructProperty>(p)) out.structType = s->GetStruct();
         if (out.kind == Kind::Array)
         {
             if (auto* array = CastField<FArrayProperty>(p); array && array->GetInner())
@@ -280,7 +282,9 @@ namespace aimmod::game
             {
                 if (p.ret || p.out) continue;
                 if (p.worldContext || p.kind == Kind::Int32) continue;
-                if (shape == Shape::Command && (p.kind == Kind::Vector || p.kind == Kind::Rotator || p.kind == Kind::Float || p.kind == Kind::Bool))
+                if (shape == Shape::Command &&
+                    (p.kind == Kind::Vector || p.kind == Kind::Rotator || p.kind == Kind::Float || p.kind == Kind::Bool || p.kind == Kind::UInt8 ||
+                     p.kind == Kind::String || p.kind == Kind::Object || (p.kind == Kind::Other && p.structType)))
                     continue;
                 m_error = "unsupported input " + p.name + ":" + KindName(p.kind);
                 m_params.clear();
@@ -496,7 +500,8 @@ namespace aimmod::game
         return r;
     }
 
-    bool Getter::Call(UObject* self, const std::function<void(std::uint8_t*, const Param&)>& fill) const
+    bool Getter::Call(UObject* self, const std::function<void(std::uint8_t*, const Param&)>& fill,
+                      const std::function<void(const std::uint8_t*, const std::vector<Param>&)>& read) const
     {
         alignas(16) std::uint8_t buffer[MaxParms];
         if (!ok() || !self || m_shape != Shape::Command) return false;
@@ -504,13 +509,63 @@ namespace aimmod::game
         std::memset(buffer, 0, m_parmsSize);
         for (const Param& p : m_params)
             if (!p.ret && !p.out) fill(buffer + p.offset, p);
-        if (!GuardedProcessEvent(self, m_function, buffer))
+        const bool ok = GuardedProcessEvent(self, m_function, buffer);
+        if (!ok) ++m_faults;
+        else if (read) read(buffer, m_params);
+        // Inputs this call allocated (strings), then engine-allocated outputs.
+        for (const Param& p : m_params)
         {
-            ++m_faults;
-            return false;
+            if (p.ret || p.out || p.kind != Kind::String) continue;
+            RawArray raw;
+            std::memcpy(&raw, buffer + p.offset, sizeof(raw));
+            if (raw.data) FMemory::Free(raw.data);
         }
-        Release(buffer);
-        return true;
+        if (ok) Release(buffer);
+        return ok;
+    }
+
+    void WriteString(std::uint8_t* value, const std::string& utf8)
+    {
+        const int length = MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), nullptr, 0);
+        RawArray raw{nullptr, 0, 0};
+        if (length > 0)
+        {
+            auto* chars = static_cast<wchar_t*>(FMemory::Malloc(static_cast<SIZE_T>(length + 1) * sizeof(wchar_t)));
+            if (!chars) return;
+            MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), chars, length);
+            chars[length] = L'\0';
+            raw = {chars, length + 1, length + 1};
+        }
+        std::memcpy(value, &raw, sizeof(raw));
+    }
+
+    bool SetStructField(std::uint8_t* value, UStruct* type, const char* field, double number)
+    {
+        if (!type) return false;
+        for (FProperty* p : type->ForEachProperty())
+        {
+            Param d = Describe(p);
+            if (d.name != field) continue;
+            std::uint8_t* at = value + d.offset;
+            switch (d.kind)
+            {
+            case Kind::Float: { const float f = static_cast<float>(number); std::memcpy(at, &f, 4); return true; }
+            case Kind::Double: std::memcpy(at, &number, 8); return true;
+            case Kind::Int32: { const std::int32_t i = static_cast<std::int32_t>(number); std::memcpy(at, &i, 4); return true; }
+            case Kind::UInt8: *at = static_cast<std::uint8_t>(number); return true;
+            case Kind::Bool: if (!d.boolProperty) return false; d.boolProperty->SetPropertyValue(at, number != 0); return true;
+            default: return false;
+            }
+        }
+        return false;
+    }
+
+    UObject* ReadObject(const std::uint8_t* buffer, const Param& param)
+    {
+        if (param.kind != Kind::Object || param.size != sizeof(void*)) return nullptr;
+        UObject* value;
+        std::memcpy(&value, buffer + param.offset, sizeof(value));
+        return value;
     }
 
     bool Field::Bind(UClass* cls, const wchar_t* name)
