@@ -13,6 +13,7 @@ test('successful game handoff survives workspace hiding',()=>{const f=fixture();
 test('leaving before handoff cancels and prevents late transfer',()=>{const f=fixture();f.ready();const load=f.requests.at(-1);f.context.AimModNativeReplayBrowser.leave();assert.equal(f.requests.at(-1).body.action,'close');load.respond(200,{});assert.equal(f.timers.size,0);});
 test('unavailable renderer never blames menu state or requests a replay load',()=>{const f=fixture();f.requests[0].respond(200,{rendererReady:false});assert.equal(f.requests.length,1);assert.match(f.target.children[1].textContent,/not available yet/);});
 test('old recording lacking map identity gives accurate recovery text',()=>{const f=fixture();f.ready();f.requests.at(-1).respond(422,{});assert.match(f.target.children[1].textContent,/map data/);assert.equal(f.target.children[2].style.display,'');});
+test('missing replay files and renderer races get specific recovery text',()=>{for(const [code,text] of [[404,/missing or incomplete/],[409,/not ready yet/]]){const f=fixture();f.ready();f.requests.at(-1).respond(code,{});assert.match(f.target.children[1].textContent,text);assert.equal(f.target.children[2].style.display,'');}});
 test('retry repeats readiness check rather than bypassing it',()=>{const f=fixture();f.requests[0].respond(500,{});f.target.children[2].onclick();assert.equal(f.requests.at(-1).method,'GET');});
 test('a workspace that never hands off cancels the pending replay and offers retry',()=>{
  const f=fixture();f.ready();f.requests.at(-1).respond(200,{});
