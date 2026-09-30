@@ -104,7 +104,7 @@ public sealed partial class OffscreenVisualCaptureTests
                 workspace.CompleteOsuSession(TrainerWarmupTests.Result(launched, 88));
                 await capture("adaptive-result");
                 invoke("returnToPracticeSettings");
-                ((AimModButton)field("adaptiveToggle")!).Action!();
+                ((ClickableContainer)field("adaptiveToggle")!).Action!();
                 Assert.That(history.LoadPreferences().AdaptiveDifficulty, Is.False);
                 Assert.That(((Drawable)field("objectControls")!).Alpha, Is.EqualTo(1));
                 Assert.That(((Drawable)field("timingControls")!).Alpha, Is.EqualTo(1));
@@ -114,7 +114,7 @@ public sealed partial class OffscreenVisualCaptureTests
                 var patterns = (Drawable)field("patternControls")!;
                 var geometry = (Drawable)field("geometryControls")!;
                 var scroll = (AimModScrollContainer)field("contentScroll")!;
-                ((AimModButton)field("starTargetToggle")!).Action!();
+                ((ClickableContainer)field("starTargetToggle")!).Action!();
                 ((osu.Framework.Bindables.BindableDouble)field("targetMinimum")!).Value = 4;
                 ((osu.Framework.Bindables.BindableDouble)field("targetMaximum")!).Value = 5;
                 Assert.That(((TrainerSettings)field("settings")!).MinimumStars, Is.EqualTo(4));
@@ -131,7 +131,7 @@ public sealed partial class OffscreenVisualCaptureTests
                 await capture("star-target-unavailable");
                 Assert.That(preparationStatus.DrawHeight, Is.GreaterThan(width == 800 ? 20 : 0));
                 Assert.That(preparationStatus.ScreenSpaceDrawQuad.BottomRight.Y, Is.LessThanOrEqualTo(height));
-                ((AimModButton)field("starTargetToggle")!).Action!();
+                ((ClickableContainer)field("starTargetToggle")!).Action!();
                 ((AimModDropdown<TrainerSliderStyle>)field("sliderSelector")!).Current.Value = TrainerSliderStyle.Mixed;
                 ((AimModDropdown<TrainerSliderShape>)field("sliderShapeSelector")!).Current.Value = TrainerSliderShape.Mixed;
                 var objects = (Drawable)field("objectControls")!;
@@ -158,7 +158,7 @@ public sealed partial class OffscreenVisualCaptureTests
                 Assert.That(launched!.AdaptiveDifficulty, Is.False);
                 Assert.That(launched.SkillLimits, Is.Null);
                 workspace.CompleteOsuSession(null);
-                ((AimModButton)field("adaptiveToggle")!).Action!();
+                ((ClickableContainer)field("adaptiveToggle")!).Action!();
                 Assert.That(history.LoadPreferences().AdaptiveDifficulty, Is.True);
                 var controls = (Drawable)field("controls")!;
                 var music = (Drawable)field("musicControls")!;
