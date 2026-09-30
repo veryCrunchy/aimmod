@@ -1,6 +1,7 @@
 // Engine-independent checks for AimModCore. Synthetic data only.
 // Usage: aimmod_core_tests [--write-samples <dir>]
 #include <aimmod/Formats.hpp>
+#include <aimmod/GameStats.hpp>
 #include <aimmod/Lifecycle.hpp>
 #include <aimmod/ReplayV2.hpp>
 #include <aimmod/ReplayWriter.hpp>
@@ -212,6 +213,22 @@ static void ReplayFormat2()
     CHECK(dd && dd->keyframes.size() > c.camera.size() / 2, "missing input stream degrades to keyframes");
 }
 
+static void GameStatsChecks()
+{
+    const char* csv =
+        "Kill #,Timestamp,Bot,Weapon,TTK,Shots,Hits,Accuracy,Damage Done,Damage Possible,Efficiency,Cheated,OverShots\r\n\r\n"
+        "Weapon,Shots,Hits,Damage Done,Damage Possible,,Sens Scale\r\nTrack Master 100,5967,3511,3511.0,5967.0,\r\n\r\n"
+        "Kills:,0\r\nDeaths:,0\r\nFight Time:,0.0\r\nDamage Done:,3511.0\r\nHit Count:,3511\r\nMiss Count:,2456\r\n"
+        "Score:,10533.0\r\nScenario:,Synthetic, Track + Slowed\r\nChallenge Start:,01:11:40.178\r\n";
+    auto s = ParseGameStats(csv);
+    CHECK(s && s->score == 10533 && s->scenario == "Synthetic, Track + Slowed" && s->hits == 3511 && s->shots() == 5967 && s->kills == 0 &&
+              s->damage == 3511,
+          "stats CSV parsed");
+    CHECK(s && s->challengeStartSeconds && std::fabs(*s->challengeStartSeconds - (3600 + 11 * 60 + 40.178)) < 1e-6, "challenge start parsed");
+    CHECK(!ParseGameStats("Scenario:,x\n") && !ParseGameStats("Score:,nan\nScenario:,x\n"), "incomplete stats rejected");
+    CHECK(IsChallengeStatsFile("Synthetic - Challenge - 2026.10.01-01.12.40 Stats.csv") && !IsChallengeStatsFile("notes.csv"), "stats file name");
+}
+
 static void Settings()
 {
     auto s = ParseNativeSettings("AIMMOD_SETTINGS_1\nreplayRecordingEnabled\t0\nhubHistoryEnabled\t1\n");
@@ -289,6 +306,28 @@ static void LifecycleChecks()
 {
     using K = LifecycleEvent::Kind;
     {
+        Run r; // live test: quit after 2 s while the stats manager resets to 0
+        r.s.lastScore = 3773;
+        r.Idle(1);
+        r.Play(0, 2.1);
+        r.s.running = false;
+        r.s.lastScore = 0;
+        r.s.lastTimeRemaining = 0;
+        for (int i = 0; i < 120; ++i) r.Poll();
+        CHECK(r.Count(K::Completed) == 0 && r.Last(K::Canceled) && r.Last(K::Canceled)->reason == "quit", "a reset stats score is not a completion");
+    }
+    {
+        Run r; // live test: GetLastScore reads 0 at completion, the live score is 10533
+        r.Idle(1);
+        r.s.indicatorScore = 10533;
+        r.Play(0, 59.95);
+        r.s.running = false;
+        r.s.lastScore = 0;
+        for (int i = 0; i < 120; ++i) r.Poll();
+        CHECK(r.Last(K::Completed) && r.Last(K::Completed)->score == 10533 && r.Last(K::Completed)->scoreSource == "indicator",
+              "a zero never replaces the live score");
+    }
+    {
         Run r;
         r.Idle(3);
         r.Play(0, 59.95);
@@ -299,7 +338,7 @@ static void LifecycleChecks()
         r.Poll();
         r.s.lastScore = 812.5;
         r.s.lastTimeRemaining = 0;
-        r.Poll();
+        for (int i = 0; i < 110; ++i) r.Poll();
         auto* done = r.Last(K::Completed);
         CHECK(done && done->score == 812.5 && done->scoreSource == "stats-last-score", "completion takes StatsManager last score");
         CHECK(done && std::fabs(done->duration - 60) < 0.06, "duration includes the expired timer");
@@ -311,7 +350,7 @@ static void LifecycleChecks()
         Run r;
         r.Idle(1);
         r.Play(0, 20);
-        r.Idle(80);
+        r.Idle(120);
         CHECK(r.Count(K::Canceled) == 1 && r.Last(K::Canceled)->reason == "quit" && r.Count(K::Completed) == 0, "quit is not a completion");
     }
     {
@@ -336,20 +375,22 @@ static void LifecycleChecks()
         r.Idle(1);
         r.Play(0, 59.95);
         r.s.running = false;
-        for (int i = 0; i < 70; ++i) r.Poll();
+        for (int i = 0; i < 110; ++i) r.Poll();
         auto* done = r.Last(K::Completed);
         CHECK(done && done->score == 50, "timer expiry completes even when the score repeats");
     }
     {
-        Run r; // kill-count challenge ends early; only the stored time changes
+        Run r; // kill-count challenge ends early: only the game's stats record proves it
         r.Idle(1);
         r.Play(0, 30);
         r.s.running = false;
         r.s.lastTimeRemaining = 30;
+        for (int i = 0; i < 20; ++i) r.Poll();
+        CHECK(r.Count(K::Completed) == 0, "stored values alone are not completion evidence");
+        r.machine.OnSignal(Signal::Complete, r.s.now, 4321.0);
         r.Poll();
-        CHECK(r.Count(K::Completed) == 0, "wait briefly for the last score to settle");
-        for (int i = 0; i < 12; ++i) r.Poll();
-        CHECK(r.Count(K::Completed) == 1 && r.Last(K::Completed)->score == 50, "early completion with a repeated score");
+        CHECK(r.Count(K::Completed) == 1 && r.Last(K::Completed)->score == 4321.0 && r.Last(K::Completed)->scoreSource == "game-stats",
+              "early completion takes the game's record");
         CHECK(std::fabs(r.Last(K::Completed)->duration - 30) < 0.06, "early completion duration");
     }
     {
@@ -400,8 +441,8 @@ static void LifecycleChecks()
         r.s.lastScore.reset();
         r.Poll();
         for (int i = 0; i < 12; ++i) r.Poll();
-        CHECK(r.Last(K::Completed) && r.Last(K::Completed)->score == 77.0 && r.Last(K::Completed)->scoreSource == "hook",
-              "completion hook score is used without a stats score");
+        CHECK(r.Last(K::Completed) && r.Last(K::Completed)->score == 77.0 && r.Last(K::Completed)->scoreSource == "game-stats",
+              "the completion record's score wins");
     }
     {
         Run r; // no score source at all
@@ -409,7 +450,7 @@ static void LifecycleChecks()
         r.s.lastScore.reset();
         r.Play(0, 59.95);
         r.s.running = false;
-        for (int i = 0; i < 70; ++i) r.Poll();
+        for (int i = 0; i < 110; ++i) r.Poll();
         CHECK(r.Last(K::Completed) && !r.Last(K::Completed)->score, "completion without a score is reported unscored");
     }
     {
@@ -420,7 +461,7 @@ static void LifecycleChecks()
         r.Play(0, 59.95);
         r.s.running = false;
         r.s.indicatorScore.reset();
-        for (int i = 0; i < 70; ++i) r.Poll();
+        for (int i = 0; i < 110; ++i) r.Poll();
         CHECK(r.Last(K::Completed) && r.Last(K::Completed)->score == 640 && r.Last(K::Completed)->scoreSource == "indicator",
               "last indicator score is the fallback");
     }
@@ -482,6 +523,7 @@ int main(int argc, char** argv)
     Formats();
     Replay();
     ReplayFormat2();
+    GameStatsChecks();
     Settings();
     Backoff();
     LifecycleChecks();

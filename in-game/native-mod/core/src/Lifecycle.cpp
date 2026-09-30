@@ -55,14 +55,10 @@ namespace aimmod
         out.push_back(std::move(e));
     }
 
-    bool Lifecycle::Evidence(const PollSample& s) const
-    {
-        const Attempt& a = m_attempt;
-        if (a.completionSignal) return true;
-        if (s.lastScore && (!a.baselineScore || *s.lastScore != *a.baselineScore)) return true;
-        if (s.lastTimeRemaining && (!a.baselineTimeRemaining || *s.lastTimeRemaining != *a.baselineTimeRemaining)) return true;
-        return false;
-    }
+    // Only the game's own completion record counts. GetLastScore and
+    // GetLastChallengeTimeRemaining also change when a scenario is left or
+    // reset (to 0), so they are score candidates, never completion evidence.
+    bool Lifecycle::Evidence(const PollSample&) const { return m_attempt.completionSignal; }
 
     void Lifecycle::Complete(const PollSample& s, std::vector<LifecycleEvent>& out)
     {
@@ -72,22 +68,30 @@ namespace aimmod
         e.id = a.id;
         e.scenario = a.scenario;
         e.duration = Duration();
-        // The end screen shows the stats manager's last score. Fall back to the
-        // score the game broadcast or its last indicator value; never compute.
-        if (s.lastScore)
+        // Preference: the game's completion record, then a stats-manager score
+        // that changed during this attempt, then the last live indicator
+        // value. A zero never replaces a non-zero live score. Never computed.
+        const bool lastChanged = s.lastScore && (!a.baselineScore || *s.lastScore != *a.baselineScore);
+        const bool indicatorLive = a.indicatorScore && *a.indicatorScore != 0;
+        if (a.signalScore)
+        {
+            e.score = a.signalScore;
+            e.scoreSource = "game-stats";
+        }
+        else if (lastChanged && (*s.lastScore != 0 || !indicatorLive))
         {
             e.score = s.lastScore;
             e.scoreSource = "stats-last-score";
-        }
-        else if (a.signalScore)
-        {
-            e.score = a.signalScore;
-            e.scoreSource = "hook";
         }
         else if (a.indicatorScore)
         {
             e.score = a.indicatorScore;
             e.scoreSource = "indicator";
+        }
+        else if (s.lastScore && *s.lastScore != 0)
+        {
+            e.score = s.lastScore;
+            e.scoreSource = "stats-last-score";
         }
         out.push_back(std::move(e));
     }
@@ -214,8 +218,7 @@ namespace aimmod
             return out;
         }
         const bool evidence = Evidence(s);
-        if (evidence && a.evidenceAt < 0) a.evidenceAt = s.now;
-        const bool scoreChanged = s.lastScore && (!a.baselineScore || *s.lastScore != *a.baselineScore);
+        const bool timerExpired = a.lastRemaining >= 0 && a.lastRemaining <= m_config.timerExpiredSeconds;
         if (s.running)
         {
             if (s.elapsed >= a.lastElapsed - m_config.rewindThreshold && !evidence)
@@ -227,12 +230,12 @@ namespace aimmod
                 return out;
             }
             // The next attempt already started.
-            if (evidence) Complete(s, out);
+            if (evidence || timerExpired) Complete(s, out);
             else Cancel("restart", out);
             ToIdle(true, s.elapsed);
             return out;
         }
-        if (evidence && (scoreChanged || s.now - a.evidenceAt >= m_config.scoreSettleSeconds))
+        if (evidence)
         {
             Complete(s, out);
             ToIdle(false, std::nullopt);
@@ -240,8 +243,8 @@ namespace aimmod
         }
         if (s.now >= a.endDeadline)
         {
-            const bool timerExpired = a.lastRemaining >= 0 && a.lastRemaining <= m_config.timerExpiredSeconds;
-            if (evidence || timerExpired) Complete(s, out);
+            // Without the completion record only a run whose timer ran out counts.
+            if (timerExpired) Complete(s, out);
             else Cancel("quit", out);
             ToIdle(false, std::nullopt);
         }

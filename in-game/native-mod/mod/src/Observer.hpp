@@ -6,6 +6,7 @@
 #include "World.hpp"
 
 #include <aimmod/Formats.hpp>
+#include <aimmod/GameStats.hpp>
 #include <aimmod/Lifecycle.hpp>
 
 #include <atomic>
@@ -119,6 +120,10 @@ namespace aimmod
         std::uint64_t m_attemptKillBase{};
         std::uint32_t m_attempts{}, m_completed{}, m_journalled{};
         std::string m_sources; // per-attempt value sources, for the log
+        std::int64_t m_attemptUnixMs{};
+        std::optional<double> m_attemptLocalStart;
+        bool m_statsWatch{};
+        std::optional<GameStats> m_gameStats;
         bool m_replayProbed{};
     };
 } // namespace aimmod

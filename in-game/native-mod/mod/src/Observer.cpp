@@ -666,7 +666,19 @@ namespace aimmod
         // counters, not the previous poll's (shots keep landing until the end).
         const bool before = m_lifecycle.active();
         if (before) UpdateMeasurements(m_running, s.elapsed, s.remaining, score);
+        // The game's stats CSV is the completion record and the final values.
+        if (m_statsWatch)
+            if (auto stats = m_output.TakeGameStats())
+            {
+                m_gameStats = std::move(stats);
+                Handle(m_lifecycle.OnSignal(Signal::Complete, now, m_gameStats->score));
+            }
         Handle(m_lifecycle.Poll(s));
+        if (m_lifecycle.state() == Lifecycle::State::Ending && !m_statsWatch)
+        {
+            m_statsWatch = true;
+            m_output.WatchGameStats(m_lifecycle.attemptScenario(), m_attemptUnixMs, m_attemptLocalStart);
+        }
         if (!before && m_lifecycle.active()) UpdateMeasurements(m_running, s.elapsed, s.remaining, score);
         if (m_polls % 2 == 0) PublishLive(s, m_running);
     }
@@ -714,6 +726,16 @@ namespace aimmod
             {
                 ++m_attempts;
                 m_stats = {};
+                m_gameStats.reset();
+                if (m_statsWatch) m_output.StopGameStats();
+                m_statsWatch = false;
+                m_attemptUnixMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+                {
+                    SYSTEMTIME local;
+                    GetLocalTime(&local);
+                    // The attempt is confirmed one poll after the timer starts.
+                    m_attemptLocalStart = local.wHour * 3600.0 + local.wMinute * 60.0 + local.wSecond + local.wMilliseconds / 1000.0;
+                }
                 m_remaining.reset();
                 m_lastTimeToKill.reset();
                 m_attemptKillBase = m_killCredits.load(std::memory_order_relaxed);
@@ -727,6 +749,18 @@ namespace aimmod
             case LifecycleEvent::Kind::Completed:
             {
                 ++m_completed;
+                if (m_statsWatch) m_output.StopGameStats();
+                m_statsWatch = false;
+                // Final values from the game's completion record when present.
+                if (m_gameStats)
+                {
+                    m_stats.hits = m_gameStats->hits;
+                    m_stats.shots = m_gameStats->shots();
+                    m_stats.kills = m_gameStats->kills;
+                    m_stats.damage = m_gameStats->damage;
+                    m_sources = "game-stats";
+                }
+                m_gameStats.reset();
                 const auto& st = m_stats;
                 if (m_sampler.recording()) m_sampler.Finish("completed", e.score);
                 if (!e.score)
@@ -753,6 +787,9 @@ namespace aimmod
                 break;
             }
             case LifecycleEvent::Kind::Canceled:
+                if (m_statsWatch) m_output.StopGameStats();
+                m_statsWatch = false;
+                m_gameStats.reset();
                 if (m_sampler.recording()) m_sampler.Finish("interrupted", std::nullopt);
                 Log("attempt ended without completion id=" + e.id + " reason=" + e.reason);
                 break;
