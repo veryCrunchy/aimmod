@@ -32,7 +32,7 @@ public partial class NativePpTargetsWorkspace
     internal static class ForecastText
     {
         public static string Chance(double probability) => !double.IsFinite(probability) ? "-"
-            : probability >= .995 ? ">99%" : probability < .005 ? "<1%" : $"{probability:P0}";
+            : probability >= .995 ? ">99%" : probability < .005 ? "<1%" : $"{probability * 100:0}%";
 
         public static string Accuracy(double accuracy) => $"{Math.Clamp(accuracy, 0, 1) * 100:0.0}%";
 
