@@ -54,14 +54,19 @@ public sealed class ScoreHistorySessionTests
     public async Task InvalidateCancelsTheLoadInFlightAndReloads()
     {
         int loads = 0;
+        var firstLoadStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var session = new ScoreHistorySession(new InMemoryLocalLibrarySource([], []), async (_, token) =>
         {
             if (Interlocked.Increment(ref loads) == 1)
+            {
+                firstLoadStarted.SetResult();
                 await Task.Delay(Timeout.Infinite, token);
+            }
             return result(play(loads));
         });
 
         Task<StatisticsHistoryLoadResult> stale = session.GetLocalAsync();
+        await firstLoadStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
         int revision = session.Revision;
         session.Invalidate();
 

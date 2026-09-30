@@ -11,8 +11,21 @@ public class PracticeCollectionDeliveryTests
 {
     private string root = null!;
     private const string first = "11111111111111111111111111111111", second = "22222222222222222222222222222222", other = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    [SetUp] public void SetUp() => root = Directory.CreateTempSubdirectory("aimmod-collection-test-").FullName;
-    [TearDown] public void TearDown() => Directory.Delete(root, true);
+    private SynchronizationContext? originalSynchronizationContext;
+
+    // Realm posts notifications to the current context; NUnit's context can run them after the realm is freed.
+    [SetUp] public void SetUp()
+    {
+        originalSynchronizationContext = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(null);
+        root = Directory.CreateTempSubdirectory("aimmod-collection-test-").FullName;
+    }
+
+    [TearDown] public void TearDown()
+    {
+        try { Directory.Delete(root, true); }
+        finally { SynchronizationContext.SetSynchronizationContext(originalSynchronizationContext); }
+    }
 
     [Test]
     public void BeatmapFixtureUsesThePersistedOsuTableName()
