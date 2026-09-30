@@ -68,6 +68,7 @@ namespace aimmod
         void UpdateMeasurements(bool running, double elapsed, double remaining, const game::Getter::ValueElseResult& score);
         void Handle(const std::vector<LifecycleEvent>& events);
         void PublishLive(const PollSample& sample, bool running);
+        void PublishScene(const PollSample& sample, UObject* manager);
         void LogCompatibility(const char* reason);
         bool OnGameThread() const;
 
@@ -110,6 +111,10 @@ namespace aimmod
         // Scenario name cache.
         std::uint64_t m_scenarioKey{};
         std::string m_scenarioName;
+        std::string m_mapName;
+        std::optional<double> m_mapScale;
+        UObject* m_mapState{};
+        std::uint64_t m_mapScenarioKey{};
 
         // Current attempt measurements (never computed scores).
         AttemptStats m_stats;

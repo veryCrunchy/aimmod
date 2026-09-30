@@ -35,6 +35,8 @@ namespace aimmod
 
         void AppendJournal(std::string line);
         void PublishLive(std::string body);
+        // core-scene.json: what the game currently shows (replay start gate).
+        void PublishScene(std::string body);
         void PublishReplayStatus(std::string body);
         // Encodes (format 2) and publishes a completed recording.
         void ReplayWrite(std::unique_ptr<replay2::Capture> capture);
@@ -86,15 +88,15 @@ namespace aimmod
         std::mutex m_mutex;
         std::condition_variable m_wake;
         std::deque<Job> m_jobs;
-        std::string m_live, m_status, m_capabilities;
-        bool m_liveDirty{}, m_statusDirty{}, m_capsDirty{};
+        std::string m_live, m_status, m_capabilities, m_sceneBody;
+        bool m_liveDirty{}, m_statusDirty{}, m_capsDirty{}, m_sceneDirty{};
         bool m_stop{};
         std::atomic<bool> m_recording{true};
         std::atomic<bool> m_playback{false};
 
         // Writer-thread state.
         std::string m_lastLive, m_writtenCaps;
-        std::uint64_t m_lastLiveWrite{}, m_lastHeartbeat{}, m_lastSettings{}, m_lastPlaybackCheck{};
+        std::uint64_t m_lastLiveWrite{}, m_lastSceneWrite{}, m_lastHeartbeat{}, m_lastSettings{}, m_lastPlaybackCheck{};
         void* m_mapping{};
         void* m_view{};
     };

@@ -316,6 +316,18 @@ namespace aimmod
                                       &m_b.characters, &m_b.timeSeconds};
         for (const Getter* g : signatures)
             if (g->ok()) Log("  signature " + g->Signature());
+        // Diagnostic only (never called): candidate entry points for loading a
+        // replay's scenario on request, to choose a safe one from real signatures.
+        for (const wchar_t* path : {STR("/Script/GameSkillsTrainer.ScenarioLoader:LoadScenario"), STR("/Script/GameSkillsTrainer.ScenarioLoader:LoadScenarioFromManager"),
+                                    STR("/Script/GameSkillsTrainer.ScenarioLoader:LoadScenarioAfterDelay"), STR("/Script/GameSkillsTrainer.Start_Scenario:Start_Scenario"),
+                                    STR("/Script/GameSkillsTrainer.ScenarioManager:GetLocalScenarioByName"), STR("/Script/GameSkillsTrainer.ScenarioManager:PlayCurrentScenario"),
+                                    STR("/Script/GameSkillsTrainer.ScenarioManager:InitializeScenario"), STR("/Script/GameSkillsTrainer.ScenarioManager:SetCurrentScenarioPlayType"),
+                                    STR("/Script/GameSkillsTrainer.ScenarioManager:SetLoadingScenario")})
+        {
+            Getter candidate;
+            if (candidate.BindPath(path, Shape::Observe)) Log("  scenario-load candidate " + candidate.Signature());
+            else Log("  scenario-load candidate missing: " + game::Narrow(path));
+        }
         LogCompatibility("startup");
     }
 
@@ -698,6 +710,38 @@ namespace aimmod
         }
         if (!before && m_lifecycle.active()) UpdateMeasurements(m_running, s.elapsed, s.remaining, score);
         if (m_polls % 2 == 0) PublishLive(s, m_running);
+        if (m_polls % 5 == 0) PublishScene(s, manager);
+    }
+
+    // What the game shows now, for the service's replay start gate: the
+    // scenario and map a replay must match, and whether a challenge runs.
+    void Observer::PublishScene(const PollSample& s, UObject* manager)
+    {
+        UObject* state = m_scene.GameState();
+        if (state != m_mapState || s.scenarioKey != m_mapScenarioKey)
+        {
+            m_mapState = state;
+            m_mapScenarioKey = s.scenarioKey;
+            m_mapName.clear();
+            m_mapScale.reset();
+            if (state && m_b.mapName.String(state, m_mapName)) m_mapScale = m_b.mapScale.Number(state);
+        }
+        const bool inChallenge = manager && m_b.isInChallenge.Bool(manager).value_or(false);
+        const bool loading = manager && m_b.isScenarioLoading.ok() && m_b.isScenarioLoading.Bool(manager).value_or(false);
+        std::string body = "{\"version\":1,\"available\":";
+        body += s.available ? "true" : "false";
+        body += ",\"scenario\":";
+        AppendJsonString(body, m_scenarioName);
+        body += ",\"mapName\":";
+        AppendJsonString(body, m_mapName);
+        if (m_mapScale && IsUsableNumber(*m_mapScale))
+        {
+            body += ",\"mapScale\":";
+            AppendNumber(body, *m_mapScale, 9);
+        }
+        body += std::string(",\"inChallenge\":") + (inChallenge ? "true" : "false") + ",\"running\":" + (s.running ? "true" : "false") +
+                ",\"loading\":" + (loading ? "true" : "false") + ",\"paused\":" + (s.paused ? "true" : "false") + "}";
+        m_output.PublishScene(std::move(body));
     }
 
     void Observer::PublishLive(const PollSample& s, bool running)

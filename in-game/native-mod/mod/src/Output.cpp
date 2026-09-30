@@ -119,6 +119,7 @@ namespace aimmod
         m_thread.join();
         // Retract the handshake so the Lua mod resumes immediately.
         DeleteFileW((m_root / L"core-active.tsv").c_str());
+        DeleteFileW((m_root / L"core-scene.json").c_str());
         if (m_view) UnmapViewOfFile(m_view);
         if (m_mapping) CloseHandle(m_mapping);
         m_view = m_mapping = nullptr;
@@ -139,6 +140,14 @@ namespace aimmod
         if (body == m_live) return;
         m_live = std::move(body);
         m_liveDirty = true;
+    }
+
+    void Output::PublishScene(std::string body)
+    {
+        std::lock_guard lock(m_mutex);
+        if (body == m_sceneBody) return;
+        m_sceneBody = std::move(body);
+        m_sceneDirty = true;
     }
 
     void Output::PublishReplayStatus(std::string body)
@@ -322,7 +331,7 @@ namespace aimmod
     void Output::Periodic(bool force)
     {
         const std::uint64_t now = NowMs();
-        std::string live, status, caps;
+        std::string live, status, caps, scene;
         bool liveDirty = false, statusDirty = false;
         {
             std::lock_guard lock(m_mutex);
@@ -341,7 +350,14 @@ namespace aimmod
             }
             caps = m_capabilities;
             m_capsDirty = false;
+            if (m_sceneDirty || (!m_sceneBody.empty() && now - m_lastSceneWrite >= 1000))
+            {
+                scene = m_sceneBody;
+                m_sceneDirty = false;
+            }
         }
+        // Rewritten at least once a second: readers treat it as stale after 3 s.
+        if (!scene.empty() && WriteAtomic(m_root / L"core-scene.json", scene)) m_lastSceneWrite = now;
         if (!live.empty())
         {
             // Readers treat live-overlay.json older than 2 s as stale: rewrite
