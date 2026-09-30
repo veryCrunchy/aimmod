@@ -115,7 +115,9 @@ public sealed partial class TimestampThumbnailService(string cacheDirectory)
         {
             kept += file.Length; count++;
             if (count <= 100 && kept <= maximumCacheBytes - 2 * 1024 * 1024 && now - file.LastWriteTimeUtc <= TimeSpan.FromDays(7)) continue;
-            file.Delete(); File.Delete(file.FullName + ".json");
+            // A preview can still be open; leave locked files for the next prune.
+            try { file.Delete(); File.Delete(file.FullName + ".json"); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
         }
     }
 }
