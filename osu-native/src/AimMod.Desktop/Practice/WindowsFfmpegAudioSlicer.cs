@@ -170,7 +170,10 @@ public static class FfmpegExecutableLocator
         {
             try
             {
-                string candidate = Path.GetFullPath(Path.Combine(directory.Trim('"'), filename));
+                // Relative PATH entries resolve against the working directory; never run a binary from there.
+                string entry = directory.Trim('"');
+                if (!Path.IsPathFullyQualified(entry)) continue;
+                string candidate = Path.GetFullPath(Path.Combine(entry, filename));
                 if (File.Exists(candidate))
                     return candidate;
             }
