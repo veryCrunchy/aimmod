@@ -70,7 +70,7 @@ public static class TrainerGuidedPractice
         var original = matching.Where(r => r.Settings.MovementScale == 1).ToArray();
         var compact = matching.Where(r => r.Settings.MovementScale == .55).ToArray();
         double? spread(TrainerResult[] a) => a.Any(r => r.SpreadMs.HasValue) ? median(a.Where(r => r.SpreadMs.HasValue).Select(r => r.SpreadMs!.Value)) : null;
-        double? accuracy(TrainerResult[] a) => a.Length == 0 ? null : median(a.Select(r => r.Accuracy!.Value));
+        double? accuracy(TrainerResult[] a) => a.Any(r => r.Accuracy.HasValue) ? median(a.Where(r => r.Accuracy.HasValue).Select(r => r.Accuracy!.Value)) : null;
         string observation = original.Length < MinimumRuns || compact.Length < MinimumRuns
             ? $"Complete {MinimumRuns} original and {MinimumRuns} compact runs before comparing. Skipped and stopped runs do not count."
             : "Compare the timing spread and accuracy below. These runs show how added movement affected this exercise; they do not identify a cause on their own.";

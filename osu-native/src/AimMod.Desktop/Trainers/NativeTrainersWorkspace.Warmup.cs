@@ -129,8 +129,9 @@ public partial class NativeTrainersWorkspace
                 warmup = plan; warmupStore = store; warmupAccount = account; warmupMessage = ""; renderWarmup();
             });
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException)
-        { Schedule(() => { loadingWarmup = false; warmupMessage = "Warmup could not be prepared. Try again."; renderWarmup(); }); }
+        // async void: any escaping exception would terminate the app.
+        catch (Exception)
+        { Schedule(() => { loadingWarmup = false; if (IsDisposed) return; warmupMessage = "Warmup could not be prepared. Try again."; renderWarmup(); }); }
     }
 
     private void launchWarmup()

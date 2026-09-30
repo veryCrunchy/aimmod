@@ -85,6 +85,35 @@ public class TrainerGuidedPracticeTests
     }
 
     [Test]
+    public void MovementComparisonToleratesRunsWithoutAccuracy()
+    {
+        var plan = TrainerGuidedPractice.Create(new(PatternSeed: 123), TrainerGuidedFocus.MovementComparison);
+        var runs = Enumerable.Range(0, 6).Select(i => result(plan with { Step = i }, i) with { Accuracy = i < 2 ? null : 95 }).ToArray();
+        var comparison = TrainerGuidedPractice.CompareMovement(plan.Id, runs);
+        Assert.That(comparison.OriginalAccuracy, Is.EqualTo(95));
+        Assert.That(TrainerGuidedPractice.CompareMovement(plan.Id, runs.Take(2)).OriginalAccuracy, Is.Null);
+    }
+
+    [Test]
+    public void HistoryReloadsWhenTheFileChangesOutsideTheStore()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "aimmod-history-tests-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            string path = Path.Combine(directory, "history.json");
+            var store = new TrainerHistoryStore(path);
+            var plan = TrainerGuidedPractice.Create(new(PatternSeed: 123), TrainerGuidedFocus.MovementComparison);
+            var first = result(plan, 0);
+            store.Add(first);
+            Assert.That(store.Load().Single().Id, Is.EqualTo(first.Id));
+            var second = result(plan, 1);
+            File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(new TrainerResult?[] { second, null }));
+            Assert.That(new TrainerHistoryStore(path).Load().Single().Id, Is.EqualTo(second.Id));
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    }
+
+    [Test]
     public void RepeatedDifficultRunsSuggestOnlyOneEasierDemand()
     {
         var plan = TrainerGuidedPractice.Create(new(AimSpacing: 100, PatternSeed: 123), TrainerGuidedFocus.Spacing);
