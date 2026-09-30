@@ -98,6 +98,13 @@ public sealed class ReplayAnalysisController : IDisposable
                 ReplayAnalysisStatus.Failed,
                 error: new ReplayAnalysisFailure(exception.Code, exception.Message));
         }
+        catch (TimeoutException)
+        {
+            return publish(
+                generation,
+                ReplayAnalysisStatus.Failed,
+                error: new ReplayAnalysisFailure("analysis_timeout", "The replay worker stopped responding and was restarted."));
+        }
         catch (Exception)
         {
             return publish(
@@ -138,7 +145,7 @@ public sealed class ReplayAnalysisController : IDisposable
             generation = ++requestGeneration;
         }
 
-        requestToCancel?.Cancel();
+        cancel(requestToCancel);
         publish(generation, ReplayAnalysisStatus.Idle);
     }
 
@@ -157,7 +164,19 @@ public sealed class ReplayAnalysisController : IDisposable
             requestGeneration++;
         }
 
-        requestToCancel?.Cancel();
+        cancel(requestToCancel);
+    }
+
+    // The request that owns the source disposes it when it finishes, which can race a cancel.
+    private static void cancel(CancellationTokenSource? request)
+    {
+        try
+        {
+            request?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
     }
 
     private ReplayAnalysisState publish(

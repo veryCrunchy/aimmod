@@ -8,6 +8,8 @@ namespace AimMod.Osu.Runtime;
 
 public sealed class SidecarRuntimeClient : IAsyncDisposable
 {
+    private static readonly TimeSpan termination_wait = TimeSpan.FromSeconds(5);
+
     private readonly Process process;
     private readonly ConcurrentDictionary<Guid, TaskCompletionSource<RuntimeResponse>> pending = new();
     private readonly CancellationTokenSource lifetime = new();
@@ -16,6 +18,7 @@ public sealed class SidecarRuntimeClient : IAsyncDisposable
     private readonly Task responsePump;
     private Exception? terminalFailure;
     private Task? terminationTask;
+    private Task lastDispatched = Task.CompletedTask;
     private TaskCompletionSource<object?>? disposalCompletion;
     private bool disposing;
     private bool processDisposed;
@@ -116,10 +119,17 @@ public sealed class SidecarRuntimeClient : IAsyncDisposable
         CancellationTokenSource? requestCancellation = null;
         try
         {
-            if (timeout != Timeout.InfiniteTimeSpan)
-                timeoutCancellation.CancelAfter(timeout);
             requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCancellation.Token);
-            return await dispatchAsync(request.Id, json, completion, requestCancellation.Token).ConfigureAwait(false);
+            return await dispatchAsync(
+                request.Id,
+                json,
+                completion,
+                () =>
+                {
+                    if (timeout != Timeout.InfiniteTimeSpan)
+                        timeoutCancellation.CancelAfter(timeout);
+                },
+                requestCancellation.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeoutCancellation.IsCancellationRequested)
         {
@@ -136,15 +146,26 @@ public sealed class SidecarRuntimeClient : IAsyncDisposable
         Guid requestId,
         string json,
         TaskCompletionSource<RuntimeResponse> completion,
+        Action startTimeout,
         CancellationToken requestToken)
     {
         bool dispatched = false;
+        Task predecessor;
         await writeGate.WaitAsync(requestToken).ConfigureAwait(false);
         try
         {
             Exception? failure = Volatile.Read(ref terminalFailure);
             if (failure is not null)
                 throw unavailable(failure);
+
+            // The worker answers frames in the order they were written, so a request's time
+            // limit starts only once every earlier frame has been answered or has failed.
+            predecessor = lastDispatched;
+            lastDispatched = completion.Task.ContinueWith(
+                static _ => { },
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
 
             try
             {
@@ -173,6 +194,8 @@ public sealed class SidecarRuntimeClient : IAsyncDisposable
 
         try
         {
+            await Task.WhenAny(predecessor, completion.Task).WaitAsync(requestToken).ConfigureAwait(false);
+            startTimeout();
             return await completion.Task.WaitAsync(requestToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (dispatched && requestToken.IsCancellationRequested)
@@ -327,12 +350,14 @@ public sealed class SidecarRuntimeClient : IAsyncDisposable
         {
         }
 
+        // Bounded so a worker that cannot be killed never hangs disposal.
+        using var exitTimeout = new CancellationTokenSource(termination_wait);
         try
         {
             if (!hasExited())
-                await process.WaitForExitAsync().ConfigureAwait(false);
+                await process.WaitForExitAsync(exitTimeout.Token).ConfigureAwait(false);
         }
-        catch (InvalidOperationException)
+        catch (Exception exception) when (exception is InvalidOperationException or OperationCanceledException)
         {
         }
     }

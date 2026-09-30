@@ -132,6 +132,28 @@ public sealed class SidecarRuntimeClientTests
     }
 
     [Test]
+    public async Task AQueuedRequestTimeoutStartsOnlyAfterEarlierFramesAreAnswered()
+    {
+        string shell = findShell();
+        await using SidecarRuntimeClient client = startShell(shell, """
+            IFS= read -r first; IFS= read -r second; sleep 2
+            for line in "$first" "$second"; do
+                id=${line#*\"id\":\"}
+                id=${id%%\"*}
+                printf '{"id":"%s","protocolVersion":1,"success":true}\n' "$id"
+            done
+            sleep 30
+            """);
+
+        Task<RuntimeResponse> slow = client.SendAsync(RuntimeProtocol.CreateRequest("test.slow"), TimeSpan.FromSeconds(20));
+        Task<RuntimeResponse> queued = client.SendAsync(RuntimeProtocol.CreateRequest("test.queued"), TimeSpan.FromSeconds(1));
+
+        RuntimeResponse[] responses = await Task.WhenAll(slow, queued).WaitAsync(TimeSpan.FromSeconds(15));
+
+        Assert.That(responses.All(response => response.Success), Is.True);
+    }
+
+    [Test]
     public async Task DisposeAfterATimeoutCompletesPromptlyAndHasExitedStaysSafe()
     {
         SidecarRuntimeClient client = startBlockingResponder();
@@ -230,9 +252,11 @@ public sealed class SidecarRuntimeClientTests
             """);
     }
 
-    private static SidecarRuntimeClient startShell(string script)
+    private static SidecarRuntimeClient startShell(string script) => startShell("/bin/sh", script);
+
+    private static SidecarRuntimeClient startShell(string shell, string script)
     {
-        var startInfo = new ProcessStartInfo("/bin/sh")
+        var startInfo = new ProcessStartInfo(shell)
         {
             UseShellExecute = false,
             RedirectStandardInput = true,
@@ -263,6 +287,23 @@ public sealed class SidecarRuntimeClientTests
         startInfo.ArgumentList.Add("/C");
         startInfo.ArgumentList.Add("set /p request= & ping 127.0.0.1 -n 31 >nul");
         return SidecarRuntimeClient.Start(startInfo);
+    }
+
+    // Prefers /bin/sh; on Windows a POSIX sh on PATH (for example from Git) is used when present.
+    private static string findShell()
+    {
+        if (!OperatingSystem.IsWindows() && File.Exists("/bin/sh"))
+            return "/bin/sh";
+
+        foreach (string directory in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty).Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        {
+            string candidate = Path.Combine(directory, OperatingSystem.IsWindows() ? "sh.exe" : "sh");
+            if (File.Exists(candidate))
+                return candidate;
+        }
+
+        Assert.Ignore("This process-boundary test requires a POSIX shell.");
+        return string.Empty;
     }
 
     private static void requirePosixShell()
