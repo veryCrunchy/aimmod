@@ -1,1 +1,36 @@
 # Unreleased
+
+## PP targets that match how you play
+
+- Predictions now come from how your passes on similar maps actually go, including your misses, accuracy and combo, instead of an average of every attempt. Estimates land much closer to the PP you really set.
+- Hover a target to see why: your expected accuracy, how many misses to expect, whether you tend to hit early or late, and how that adds up to the PP.
+- Pass and target percentages are clearly labelled as chances, so they are no longer confused with accuracy.
+- Fixed stable and lazer scoring being chosen from your oldest play instead of your recent ones.
+
+## See where a map goes wrong
+
+- Coaching ranks your maps by how much you can still gain and shows the main issue for each one.
+- A timeline of the whole map shows the sections where you lose the most, with a zoomed view of the worst one. Click a section to watch it.
+
+## A proper replay viewer
+
+- The whole playfield now fits at any window size, without osu!'s own replay panels on top.
+- New playback controls with every miss marked on the timeline, frame stepping, speed and display settings.
+- Library, Summary and Mistakes sit in one side panel next to the replay.
+
+## A clearer workspace
+
+- Home shows your rank, PP and recent form, your latest plays and suggestions for what to do next.
+- Beatmaps show how hard each map is compared to what you usually play, and the PP it is worth at each accuracy.
+- Skins have readable names, real thumbnails and a gameplay-style preview.
+- Statistics show one clear trend over time with averages and spread, and a proper plays table.
+- Trainers keep Start in view and show where every tap landed compared to your last run.
+
+## Faster and more reliable
+
+- Faster startup, and coaching and statistics load much quicker on large libraries.
+- Replay analysis can no longer hang, and temporary files are cleaned up.
+- osu! rate limits now show when you can try again.
+- Many fixes for uploads, skin downloads, caches and practice maps.
+
+PP estimates are recalculated once after updating. Timing predictions appear once your replays have been analysed again.

@@ -24,12 +24,26 @@ on:
         required: true
         default: false
         type: boolean
+  workflow_call:
+    inputs:
+      version:
+        description: SemVer version without the aimmod-osu-v prefix
+        required: true
+        type: string
+      channel:
+        description: Release channel (stable or preview)
+        required: true
+        type: string
+      publish:
+        description: Publish GitHub releases and update the selected channel
+        required: true
+        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: aimmod-osu-release-${{ github.ref_name || inputs.version }}
+  group: aimmod-osu-release-${{ inputs.version || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -55,7 +69,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ "$EVENT_NAME" == "push" ]]; then
+          # Called workflows see the caller's event, so explicit inputs take precedence over the ref.
+          if [[ -z "$INPUT_VERSION" && "$EVENT_NAME" == "push" ]]; then
             tag="$REF_NAME"
             version=${tag#aimmod-osu-v}
             publish=true
