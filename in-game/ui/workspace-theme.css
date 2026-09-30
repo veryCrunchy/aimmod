@@ -39,8 +39,8 @@
 .replay-main{display:flex;align-items:center;padding:16px 18px}
 .replay-info{flex:1;min-width:0;padding-right:14px}
 .replay-title{font-size:15px;font-weight:600;color:#eef5f1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.replay-meta{font-size:12px;color:#a7bab0;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.replay-badge{display:inline-block;margin-left:8px;padding:0 7px;border-radius:9px;background:#3a2c17;color:#f0b45a;font-size:11px;font-weight:600;line-height:18px;vertical-align:1px}
+.replay-meta{display:flex;flex-direction:row;align-items:center;font-size:12px;color:#a7bab0;margin-top:4px;white-space:nowrap;overflow:hidden}
+.replay-badge{display:block;flex-shrink:0;margin-left:8px;padding:0 7px;border-radius:9px;background:#3a2c17;color:#f0b45a;font-size:11px;font-weight:600;line-height:18px}.replay-fav{display:block;flex-shrink:0;margin-right:8px;padding:0 7px;border-radius:9px;background:#3a3317;color:#ffcc22;font-size:11px;font-weight:600;line-height:18px}.replay-stats{display:flex;flex-direction:row;margin-top:8px}.replay-stat{margin-right:18px}.replay-stat span{display:block;font-size:11px;color:#7f968a}.replay-stat strong{display:block;font-size:14px;font-weight:600;color:#eef5f1}.replay-title-row{display:flex;flex-direction:row;align-items:center;min-width:0}
 .replay-star{width:32px;height:32px;flex-shrink:0;margin-right:10px;border-radius:6px;color:#7f968a;font-size:18px;line-height:30px;text-align:center}
 .replay-star:hover{background:#1d2b26;color:#eef5f1}.replay-star.on{color:#ffcc22}
 .replay-actions{display:flex;align-items:center;min-height:40px;padding:4px 10px;border-top:1px solid #22302a;background:#101916}
@@ -52,3 +52,7 @@
 .benchmark-panel{background:#151f1c!important;border-color:#22302a!important}
 @media(max-width:1250px){.replay-card{width:100%}}
 @media(max-width:1000px){.replay-search{width:200px}.mechanics-run span{font-size:12px}}
+.replay-search-field{width:280px;margin-right:8px}.replay-search-field .replay-search{width:100%;margin:0}.replay-scope{margin-right:8px}.replay-actions.confirm{background:#2a1919}.replay-actions.confirm .subtle{color:#ffd0d0}.replay-toolbar>.button{margin-left:0}
+.mechanics-note{display:block!important;margin:0 0 14px}#mechanics-workspace>.toolbar{align-items:center}
+.settings-columns{display:flex;flex-direction:row;align-items:flex-start;margin:0 -10px}.settings-col{width:50%;padding:0 10px}.settings-col .settings-card{max-width:none}.import-field{margin:8px 0 14px}.import-actions .button{margin-top:0}@media(max-width:1400px){.settings-columns{display:block;margin:0}.settings-col{width:100%;padding:0}}
+.native-replay{display:flex;flex-direction:column;align-items:flex-start;padding:20px 22px;background:#151f1c;border:1px solid #22302a;border-radius:8px}.native-replay h3{font-size:18px;font-weight:600}
