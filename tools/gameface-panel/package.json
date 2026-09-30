@@ -1,0 +1,12 @@
+{
+  "name": "aimmod-gameface-panel-tool",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test panel.test.mjs"
+  },
+  "dependencies": {
+    "aimmod": "file:../..",
+    "ws": "8.18.3"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "aimmod-ingame-coaching-build",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "core-js": "3.45.1",
+    "esbuild": "0.25.9",
+    "typescript": "5.9.3"
+  }
+}

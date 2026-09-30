@@ -62,3 +62,11 @@ visual-captures/
 diag-*/
 codex-clipboard-*
 .tools/
+
+codex-clipboard-*
+.tools/
+# Native worker build products and private runtime state
+in-game/native-service/bin/
+in-game/native-service/obj/
+in-game/**/account.bin*
+in-game/**/hub-cache.json*
