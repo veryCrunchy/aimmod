@@ -30,7 +30,8 @@ internal static class ModePerformance
 
     public static ModeResult Calculate(WorkingBeatmap working, Ruleset ruleset, Mod[] mods,
         Dictionary<HitResult,int> stats, double accuracy, int combo, bool lazer, bool passed,
-        long totalScore, long? legacyTotalScore, CancellationToken token)
+        long totalScore, long? legacyTotalScore, CancellationToken token,
+        Func<DifficultyCalculator, (DifficultyAttributes Attributes, int Version)>? difficulty = null)
     {
         int mode = ruleset.RulesetInfo.OnlineID;
         if (working.BeatmapInfo.Ruleset.OnlineID != 0 && working.BeatmapInfo.Ruleset.OnlineID != mode)
@@ -47,7 +48,7 @@ internal static class ModePerformance
         if (count <= 0 || count > 100000 || stats.Values.Any(n => n < 0) || (judged > count && !(mode == 2 && !lazer)) || (passed && judged != count && !(mode == 2 && !lazer)))
             throw new ArgumentException("Score judgements do not match this beatmap revision.");
         var calculator = ruleset.CreateDifficultyCalculator(working);
-        var attributes = calculator.Calculate(mods, token);
+        var (attributes, difficultyVersion) = difficulty?.Invoke(calculator) ?? (calculator.Calculate(mods, token), calculator.Version);
         if (combo < 0 || combo > attributes.MaxCombo) throw new ArgumentException("Score combo exceeds the beatmap maximum.");
         if (mode == 2 && !lazer) {
             // Stable tiny-droplet rounding differs from lazer. Validate combo objects
@@ -75,7 +76,7 @@ internal static class ModePerformance
         double maxPp = CalculatePp(perfect, 1, attributes.MaxCombo);
         if (!double.IsFinite(pp) || !double.IsFinite(maxPp) || pp < 0 || maxPp < 0)
             throw new ArgumentException("Calculation returned invalid PP.");
-        return new(pp, maxPp, attributes.StarRating, count, attributes.MaxCombo, calculator.Version);
+        return new(pp, maxPp, attributes.StarRating, count, attributes.MaxCombo, difficultyVersion);
     }
 }
 internal sealed record ModeResult(double Pp, double MaxPp, double Stars, int ObjectCount, int MaxCombo, int RulesetVersion);
