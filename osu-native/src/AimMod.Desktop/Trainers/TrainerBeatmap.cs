@@ -35,6 +35,7 @@ public sealed class TrainerBeatmap : WorkingBeatmap
     {
         var plan = TrainerStarTarget.RequireTarget(TrainerStarTarget.Fit(settings));
         settings = plan.Settings;
+        RequirePlayable(plan.Map);
         return new(plan.Map, new TrainerSession(plan.Settings), audio, volume,
             settings.Music == "cues" ? null : TrainerAudio.Asset(TrainerMusicCatalog.Asset(settings.Music, settings.Bpm)), settings.Music == "cues" ? ".wav" : ".ogg");
     }
@@ -181,12 +182,20 @@ public sealed class TrainerBeatmap : WorkingBeatmap
         var plan = TrainerStarTarget.RequireTarget(TrainerStarTarget.Fit(settings, candidate => Create(candidate, SongNotes(candidate, source), source.ControlPointInfo)));
         settings = plan.Settings;
         var map = plan.Map;
+        RequirePlayable(map);
         map.Metadata.Title = source.Metadata.Title;
         map.Metadata.Artist = source.Metadata.Artist;
         map.Metadata.BackgroundFile = source.Metadata.BackgroundFile;
         double leadIn = 4 * source.ControlPointInfo.TimingPointAt(notes[0].TimeMs).BeatLength;
         return new TrainerBeatmap(map, new TrainerSession(settings), audio, volume, audioBytes, extension)
         { SeekTime = Math.Max(0, notes[0].TimeMs - leadIn) };
+    }
+
+    // Very low adaptive note-rate limits can leave no playable attack at a fast tempo.
+    public static void RequirePlayable(Beatmap<OsuHitObject> map)
+    {
+        if (map.HitObjects.Count == 0)
+            throw new InvalidOperationException("This setup has no playable notes at the current tempo. Try a slower tempo, another song or a different pattern.");
     }
 
     public static IReadOnlyList<TrainerNote> SongNotes(TrainerSettings settings, IBeatmap source)
