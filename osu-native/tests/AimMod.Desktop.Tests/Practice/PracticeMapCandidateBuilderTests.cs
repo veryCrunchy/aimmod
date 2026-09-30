@@ -94,6 +94,28 @@ public sealed class PracticeMapCandidateBuilderTests
         });
     }
 
+    [Test]
+    public void StarRangeEndsMeanAnyDifficulty()
+    {
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        PracticeMapCandidate[] candidates =
+        [
+            candidate("Marathon", "Extra", 10.6, 2, 5, 9, now, []),
+            candidate("Unrated", "Normal", double.NaN, 2, 5, 8, now, []),
+            candidate("Middle", "Hard", 5, 2, 5, 7, now, []),
+        ];
+
+        string[] titles(double minimum, double maximum) => PracticeMapCandidateSearch.Search(candidates,
+            new PracticeCandidateQuery(MinimumStars: minimum, MaximumStars: maximum)).Items.Select(item => item.SourceReplay.Title).ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(titles(0, 10), Is.EqualTo(new[] { "Marathon", "Unrated", "Middle" }));
+            Assert.That(titles(6, 10), Is.EqualTo(new[] { "Marathon" }));
+            Assert.That(titles(0, 6), Is.EqualTo(new[] { "Middle" }));
+        });
+    }
+
     private static LocalReplay replay(Guid scoreId, Guid beatmapId, string title, bool local) => new(
         scoreId, Guid.NewGuid(), beatmapId, title, "Artist", "Difficulty", "osu", "Player",
         DateTimeOffset.UtcNow, 5, 0.95, 1_000_000, 500, 1, 100, Array.Empty<string>(), true,

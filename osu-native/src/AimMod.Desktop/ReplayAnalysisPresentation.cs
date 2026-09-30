@@ -1,3 +1,4 @@
+using AimMod.Desktop.Coaching;
 using AimMod.Osu.Runtime.Contracts;
 
 namespace AimMod.Desktop;
@@ -70,11 +71,9 @@ public static class ReplayAnalysisPresenter
                     .ToArray();
     }
 
-    private static bool isObjectMiss(ReplayObjectJudgement judgement) =>
-        string.Equals(judgement.Result, "Miss", StringComparison.OrdinalIgnoreCase);
+    private static bool isObjectMiss(ReplayObjectJudgement judgement) => ReplayJudgementClassifier.IsMiss(judgement);
 
-    private static bool isSliderBreak(ReplayObjectJudgement judgement) =>
-        judgement.Result is "LargeTickMiss" or "SmallTickMiss" or "SliderTailMiss";
+    private static bool isSliderBreak(ReplayObjectJudgement judgement) => ReplayJudgementClassifier.IsSliderBreak(judgement);
 
     private static string formatMoment(ReplayObjectJudgement judgement)
     {
