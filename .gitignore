@@ -70,3 +70,7 @@ in-game/native-service/bin/
 in-game/native-service/obj/
 in-game/**/account.bin*
 in-game/**/hub-cache.json*
+
+# Local RE-UE4SS checkout and Steam probe build products
+external/RE-UE4SS/
+in-game/steam-probe/build*/
