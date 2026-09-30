@@ -17,6 +17,7 @@ using osu.Framework.Threading;
 using osu.Game.Graphics.Containers;
 using osu.Game.Graphics.Sprites;
 using osu.Game.Graphics.UserInterface;
+using osuTK.Input;
 
 namespace AimMod.Desktop.Coaching;
 
@@ -29,6 +30,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     private const int practice_candidate_pool_limit = 500;
     private const int practice_candidate_display_limit = 100;
     internal const double PracticeFilterDebounceMilliseconds = 180;
+    private const float minimum_text_size = 11;
 
     private readonly ILocalLibrarySource source;
     private readonly ILocalLibrarySourceChanged? sourceChanges;
@@ -68,7 +70,25 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     private readonly Bindable<PracticeEvidenceFilter> practiceEvidence = new(PracticeEvidenceFilter.AnyEvidence);
     private readonly BindableDouble practiceMinimumStars = new(0) { MinValue = 0, MaxValue = 10, Default = 0 };
     private readonly BindableDouble practiceMaximumStars = new(10) { MinValue = 0, MaxValue = 10, Default = 10 };
-    private readonly PracticeCandidatePoolCache practiceCandidatePool = new(practice_candidate_pool_limit);
+    private const double analysis_refresh_interval = 1_500;
+    private readonly ScoreHistorySession history;
+    private readonly CoachingModelBuilder modelBuilder = new();
+    private readonly LatestBackgroundQuery<CoachingModelResult> modelQuery = new();
+    private readonly WorkspaceProgressEstimator analysisEstimate = new();
+    private readonly object modChoiceGate = new();
+    private IReadOnlyList<LocalReplay>? modChoiceSource;
+    private IReadOnlyList<ScoreModChoice>? modChoices;
+    private IReadOnlyList<LocalReplay>? filteredSource;
+    private string? filteredMods;
+    private IReadOnlyList<LocalReplay> filtered = Array.Empty<LocalReplay>();
+    private IReadOnlyList<PracticeMapCandidate> practicePool = Array.Empty<PracticeMapCandidate>();
+    private int modelGeneration;
+    private bool buildingModel;
+    private (int Completed, int Failed)? pendingCompletion;
+    private ScheduledDelegate? scheduledRunListRefresh;
+    private readonly List<CoachingMapRow> runRows = new();
+    private int focusedRun = -1;
+    private Action? cancelAnalysisAction;
     private readonly OsuTextBox search;
     private readonly FillFlowContainer<Drawable> runList;
     private readonly AimModLoadingOverlay loadingOverlay;
@@ -125,6 +145,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         this.trainingStore = trainingStore;
         activeTraining = trainingStore?.Load();
         this.source = source ?? throw new ArgumentNullException(nameof(source));
+        history = ScoreHistorySession.For(source);
         this.analyses = analyses ?? throw new ArgumentNullException(nameof(analyses));
         this.openReplay = openReplay ?? throw new ArgumentNullException(nameof(openReplay));
         this.openReplayMoment = openReplayMoment;
@@ -181,7 +202,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Direction = FillDirection.Full, Spacing = new(8),
             Children = [
                 new CoachingButton("Create a practice set", () => showCoachingPage(2), true, true),
-                new CoachingButton("Refresh results", () => { source.Invalidate(); load(); }, compact:true),
+                new CoachingButton("Refresh results", reloadHistory, compact:true),
                 new AimModResetButton(() => savedPracticeSearch.Current.Value = string.Empty, "Clear search"),
             ],
         };
@@ -226,7 +247,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         if (practiceWorkspace is not null) AddInternal(practiceWorkspace);
         showCoachingPage(2);
 
-        practiceSearch.Current.BindValueChanged(_ => updatePracticeMapsImmediately());
+        practiceSearch.Current.BindValueChanged(_ => schedulePracticeMapRefresh());
         practiceSort.BindValueChanged(_ => updatePracticeMapsImmediately());
         practiceEvidence.BindValueChanged(_ => updatePracticeMapsImmediately());
         practiceMinimumStars.BindValueChanged(_ => schedulePracticeMapRefresh());
@@ -239,17 +260,32 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     {
         base.LoadComplete();
         search.OnCommit += (_, _) => refreshRunList();
+        search.Current.BindValueChanged(_ => scheduleRunListRefresh());
         load();
         _ = watchPracticeScores(practiceTrackingLifetime.Token);
     }
 
+    /// <summary>Builds models on the calling thread; used by tests that drive the workspace without a game host.</summary>
+    internal bool SynchronousModelBuilds { get; set; }
+
+    /// <summary>Raised when the player cancels the running replay analysis pass from the progress banner.</summary>
+    public Action? CancelAnalysisRequested { get; set; }
+
+    /// <summary>Reloads score history, reusing cached results when nothing changed.</summary>
     public void RefreshHistory()
     {
         if (IsLoaded && !IsDisposed && historyLoadTask.IsCompleted)
-            load();
+            load(refresh: true);
     }
 
-    private void load()
+    private void reloadHistory()
+    {
+        source.Invalidate();
+        history.Invalidate();
+        load();
+    }
+
+    private void load(bool refresh = false)
     {
         loading?.Cancel();
         loading?.Dispose();
@@ -268,25 +304,26 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         var retainedSubmittedScores = submittedScores;
         var token = loading.Token;
         int account = practiceAccountId();
-        historyLoadTask = Task.Run(() => loadAsync(service, retainedSubmittedScores, account, token));
+        historyLoadTask = Task.Run(() => loadAsync(service, retainedSubmittedScores, account, refresh, token));
     }
 
     private async Task loadAsync(IAccountScoreHistoryService? service, IReadOnlyList<ScoreHistoryEntry> retainedSubmittedScores,
-        int account, CancellationToken cancellationToken)
+        int account, bool refresh, CancellationToken cancellationToken)
     {
         try
         {
-            StatisticsHistoryLoadResult history = await StatisticsHistoryLoader.LoadAsync(source, cancellationToken).ConfigureAwait(false);
-            IReadOnlyList<LocalReplay> local = ScoreHistoryMerger.MergeAsLocalReplays(history.Runs, retainedSubmittedScores);
-            scheduleHistoryUpdate(() => apply(local), account, cancellationToken);
+            StatisticsHistoryLoadResult local = await history.GetLocalAsync(refresh, cancellationToken).ConfigureAwait(false);
+            IReadOnlyList<LocalReplay> merged = history.Merge(local.Runs, retainedSubmittedScores);
+            IReadOnlyList<ScoreModChoice> choices = modChoicesFor(merged);
+            scheduleHistoryUpdate(() => apply(merged, choices), account, cancellationToken);
 
             if (service is null)
                 return;
 
-            OnlineAccountScoreHistoryResult online;
+            OnlineAccountScoreHistoryResult? online;
             try
             {
-                online = await service.FetchAccountAsync(cancellationToken).ConfigureAwait(false);
+                online = await history.GetOnlineAsync(service, cancellationToken: cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -296,18 +333,31 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             {
                 scheduleHistoryUpdate(() => analysisBanner.ShowWarning(
                         "Submitted scores could not be refreshed",
-                        "Your saved plays remain available. Try refreshing shortly."), account, cancellationToken);
+                        "Your saved plays are still shown. Retry to include your latest submitted scores.",
+                        "Retry", reloadHistory), account, cancellationToken);
                 return;
             }
+
+            if (online is null)
+                return;
 
             var refreshedSubmittedScores = online.BestCoverage.IsSuccess && online.RecentCoverage.IsSuccess
                 ? online.Scores
                 : online.Scores.Concat(retainedSubmittedScores).DistinctBy(score => score.Identity).ToArray();
-            IReadOnlyList<LocalReplay> merged = ScoreHistoryMerger.MergeAsLocalReplays(history.Runs, refreshedSubmittedScores);
+            merged = history.Merge(local.Runs, refreshedSubmittedScores);
+            choices = modChoicesFor(merged);
+            bool unavailable = !online.BestCoverage.IsSuccess && !online.RecentCoverage.IsSuccess;
             scheduleHistoryUpdate(() =>
             {
                 submittedScores = refreshedSubmittedScores;
-                apply(merged);
+                apply(merged, choices);
+                if (unavailable)
+                {
+                    analysisBanner.ShowWarning(
+                        "Submitted scores are unavailable",
+                        "Sign in to osu! in Settings to include submitted scores. Your saved plays are still used.",
+                        "Retry", reloadHistory);
+                }
             }, account, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -320,9 +370,27 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
                     loadingOverlay.HideLoading();
                     analysisBanner.ShowError(
                         "Score history could not be loaded",
-                        "Check the local osu! data source and reopen Coaching.");
+                        "AimMod could not read your osu! plays. Check the osu! installation in Settings, then retry.",
+                        "Retry", reloadHistory);
                 }, account, cancellationToken);
         }
+    }
+
+    private IReadOnlyList<ScoreModChoice> modChoicesFor(IReadOnlyList<LocalReplay> runs)
+    {
+        lock (modChoiceGate)
+        {
+            if (ReferenceEquals(modChoiceSource, runs) && modChoices is { } cached)
+                return cached;
+        }
+
+        IReadOnlyList<ScoreModChoice> choices = ScoreMods.Choices(runs);
+        lock (modChoiceGate)
+        {
+            modChoiceSource = runs;
+            modChoices = choices;
+        }
+        return choices;
     }
 
     private void scheduleHistoryUpdate(Action update, int account, CancellationToken token)
@@ -334,59 +402,136 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         });
     }
 
-    private void apply(IReadOnlyList<LocalReplay> nextReplays)
+    private void apply(IReadOnlyList<LocalReplay> nextReplays, IReadOnlyList<ScoreModChoice> choices)
     {
-        if (workspace is not null && renderedAnalysisCount == analyses.Count && allReplays.SequenceEqual(nextReplays))
+        if (workspace is not null && ReferenceEquals(allReplays, nextReplays) && renderedAnalysisCount == analyses.Count)
         {
             refreshPracticeProgress();
             loadingOverlay.HideLoading();
             return;
         }
-        Guid? selectedScoreId = workspace?.SelectedRun?.ScoreId;
-        allReplays = nextReplays;
-        if (coachingMapRun is { } selectedMapRun)
-            coachingMapRun = nextReplays.FirstOrDefault(r => r.ScoreId == selectedMapRun.ScoreId) ?? selectedMapRun;
-        practiceWorkspace?.SetSourceHistory(nextReplays);
+        if (!ReferenceEquals(allReplays, nextReplays))
+        {
+            allReplays = nextReplays;
+            if (coachingMapRun is { } selectedMapRun)
+                coachingMapRun = nextReplays.FirstOrDefault(r => r.ScoreId == selectedMapRun.ScoreId) ?? selectedMapRun;
+            practiceWorkspace?.SetSourceHistory(nextReplays);
+            modDropdown.SetChoices(choices);
+            trainingPlanCache = null;
+        }
         refreshPracticeProgress();
-        modDropdown.SetScores(nextReplays);
-        workspace = buildWorkspace(selectedScoreId);
-        replays = workspace.History;
-        renderedAnalysisCount = analyses.Count;
-        invalidatePracticeCandidates();
+        requestModel(workspace?.SelectedRun?.ScoreId);
+    }
+
+    /// <summary>
+    /// Builds the model for the current filters off the update thread. Cached scopes apply immediately;
+    /// otherwise the visible content stays in place with an updating indicator until the build completes.
+    /// </summary>
+    private void requestModel(Guid? selectedScoreId)
+    {
+        scheduledAnalysisRefresh?.Cancel();
+        scheduledAnalysisRefresh = null;
+        IReadOnlyList<LocalReplay> runs = filteredRuns();
+        CoachingTimeRange range = coachingTimeRange.Value;
+        int analysisCount = analyses.Count;
+        int generation = ++modelGeneration;
+        if (modelBuilder.TryGetCached(runs, analyses, selectedScoreId, range, out NativeCoachingWorkspaceModel? cached)
+            && modelBuilder.TryGetPracticePool(cached, out IReadOnlyList<PracticeMapCandidate>? cachedPool))
+        {
+            applyModel(cached, cachedPool, analysisCount);
+            return;
+        }
+
+        CoachingModelResult build(CancellationToken token)
+        {
+            NativeCoachingWorkspaceModel model = modelBuilder.Build(runs, analyses, selectedScoreId, range);
+            token.ThrowIfCancellationRequested();
+            IReadOnlyList<PracticeMapCandidate> pool = modelBuilder.GetPracticePool(model, analyses, practice_candidate_pool_limit);
+            return new CoachingModelResult(model, pool, analysisCount);
+        }
+
+        if (SynchronousModelBuilds)
+        {
+            CoachingModelResult result = build(CancellationToken.None);
+            applyModel(result.Model, result.PracticePool, result.AnalysisCount);
+            return;
+        }
+
+        buildingModel = true;
+        if (workspace is null)
+        {
+            if (!acceptingAnalysisProgress)
+                loadingOverlay.ShowLoading("Preparing coaching", "Building your coaching report");
+        }
+        else if (!acceptingAnalysisProgress)
+            analysisBanner.ShowUpdating();
+
+        modelQuery.Submit(build, result =>
+        {
+            if (!IsDisposed) Schedule(() =>
+            {
+                if (!IsDisposed && generation == modelGeneration)
+                    applyModel(result.Model, result.PracticePool, result.AnalysisCount);
+            });
+        }, error =>
+        {
+            Console.Error.WriteLine($"Coaching report could not be built: {error}");
+            if (!IsDisposed) Schedule(() =>
+            {
+                if (IsDisposed || generation != modelGeneration) return;
+                buildingModel = false;
+                loadingOverlay.HideLoading();
+                analysisBanner.ShowError("Coaching report could not be prepared",
+                    "Your plays are still saved. Retry to rebuild the report.", "Retry", () => requestModel(selectedScoreId));
+            });
+        });
+    }
+
+    private void applyModel(NativeCoachingWorkspaceModel model, IReadOnlyList<PracticeMapCandidate> pool, int analysisCount)
+    {
+        buildingModel = false;
+        workspace = model;
+        replays = model.History;
+        renderedAnalysisCount = analysisCount;
+        if (!ReferenceEquals(practicePool, pool))
+        {
+            practicePool = pool;
+            renderedPracticePage = null;
+        }
         loadingOverlay.HideLoading();
         updateWorkspace();
-        if (!acceptingAnalysisProgress)
-            analysisBanner.ShowReady(workspace.GlobalProfile, replays.Count, scopedSubmittedRunCount(), TimeRangeLabel(coachingTimeRange.Value));
+        if (pendingCompletion is not null)
+            showCompletion();
+        else if (!acceptingAnalysisProgress)
+            analysisBanner.ShowReady(model.GlobalProfile, replays.Count, scopedSubmittedRunCount(), TimeRangeLabel(coachingTimeRange.Value), allReplays.Count);
+    }
+
+    private IReadOnlyList<LocalReplay> filteredRuns()
+    {
+        if (ReferenceEquals(filteredSource, allReplays) && filteredMods == modSelection.Value)
+            return filtered;
+        filteredSource = allReplays;
+        filteredMods = modSelection.Value;
+        return filtered = modSelection.Value == ScoreMods.Any
+            ? allReplays
+            : allReplays.Where(r => CoachingRunKeys.Matches(r, modSelection.Value)).ToArray();
     }
 
     private void selectRun(Guid scoreId)
     {
-        workspace = buildWorkspace(scoreId);
-        updateWorkspace();
+        requestModel(scoreId);
         showCoachingPage(1);
     }
 
-    private void showGlobalOverview()
-    {
-        workspace = buildWorkspace();
-        updateWorkspace();
-    }
+    private void showGlobalOverview() => requestModel(null);
 
     private void changeTimeRange()
     {
         if (workspace is null && allReplays.Count == 0)
             return;
 
-        workspace = buildWorkspace(workspace?.SelectedRun?.ScoreId);
-        replays = workspace.History;
-        invalidatePracticeCandidates();
-        updateWorkspace();
-        if (!acceptingAnalysisProgress)
-            analysisBanner.ShowReady(workspace.GlobalProfile, replays.Count, scopedSubmittedRunCount(), TimeRangeLabel(coachingTimeRange.Value));
+        requestModel(workspace?.SelectedRun?.ScoreId);
     }
-
-    private NativeCoachingWorkspaceModel buildWorkspace(Guid? selectedScoreId = null) =>
-        NativeCoachingWorkspaceModel.Build(allReplays.Where(r => ScoreMods.Matches(r,modSelection.Value)).ToArray(), analyses, selectedScoreId, coachingTimeRange.Value);
 
     private int scopedSubmittedRunCount() => replays.Count(run => run.OnlineScoreId > 0);
 
@@ -395,24 +540,25 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         if (!acceptingAnalysisProgress || total <= 0)
             return;
 
-        if (workspace is not null && renderedAnalysisCount != analyses.Count)
+        if (workspace is not null && renderedAnalysisCount != analyses.Count && !buildingModel)
         {
             scheduledAnalysisRefresh ??= Scheduler.AddDelayed(() =>
             {
                 scheduledAnalysisRefresh = null;
                 if (IsDisposed || !acceptingAnalysisProgress) return;
-                workspace = buildWorkspace(workspace?.SelectedRun?.ScoreId);
-                renderedAnalysisCount = analyses.Count;
-                invalidatePracticeCandidates();
-                updateWorkspace();
-            }, 750);
+                requestModel(workspace?.SelectedRun?.ScoreId);
+            }, analysis_refresh_interval);
         }
 
+        analysisEstimate.Report(completed);
+        TimeSpan? remaining = analysisEstimate.Remaining(completed, total);
         analysisBanner.ShowAnalysing(
             completed,
             total,
             currentTitle,
-            workspace?.GlobalProfile.Coverage.AnalysedRunCount ?? analyses.Count);
+            workspace?.GlobalProfile.Coverage.AnalysedRunCount ?? analyses.Count,
+            remaining is { } eta ? WorkspaceProgressEstimator.FormatRemaining(eta) : null,
+            CancelAnalysisRequested is null ? null : cancelAnalysisAction ??= cancelAnalysis);
         if (workspace is null)
         {
             loadingOverlay.SetProgress(
@@ -426,9 +572,16 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         }
     }
 
+    private void cancelAnalysis()
+    {
+        analysisBanner.ShowCancelling();
+        CancelAnalysisRequested?.Invoke();
+    }
+
     public void BeginAnalysisProgress()
     {
         acceptingAnalysisProgress = true;
+        analysisEstimate.Reset();
         analysisBanner.ShowStarting(workspace?.GlobalProfile.Coverage.AnalysedRunCount ?? analyses.Count);
         if (workspace is null)
             loadingOverlay.ShowLoading("Preparing coaching", "Loading score history before replay analysis");
@@ -441,32 +594,38 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         scheduledAnalysisRefresh?.Cancel();
         scheduledAnalysisRefresh = null;
         acceptingAnalysisProgress = false;
-        Guid? selectedScoreId = workspace?.SelectedRun?.ScoreId;
-        workspace = buildWorkspace(selectedScoreId);
-        renderedAnalysisCount = analyses.Count;
-        invalidatePracticeCandidates();
-        updateWorkspace();
-
-        analysisBanner.ShowComplete(workspace.GlobalProfile, completed, failed);
-        loadingOverlay.HideLoading();
+        pendingCompletion = (completed, failed);
+        requestModel(workspace?.SelectedRun?.ScoreId);
     }
 
     public void SetAnalysisError()
     {
         acceptingAnalysisProgress = false;
+        pendingCompletion = null;
         loadingOverlay.HideLoading();
         analysisBanner.ShowError(
             "Replay analysis paused",
-            "Your existing coaching profile and generated drills are still available.");
+            "Your existing coaching profile and practice maps are still available.");
     }
+
+    private void showCompletion()
+    {
+        if (pendingCompletion is not { } result || workspace is null)
+            return;
+        pendingCompletion = null;
+        analysisBanner.ShowComplete(workspace.GlobalProfile, result.Completed, result.Failed);
+    }
+
+    private sealed record CoachingModelResult(NativeCoachingWorkspaceModel Model, IReadOnlyList<PracticeMapCandidate> PracticePool, int AnalysisCount);
 
     private void updateWorkspace()
     {
-        NativeCoachingWorkspaceModel model = workspace ?? buildWorkspace();
+        if (workspace is not { } model)
+            return;
         CoachingReport report = model.Report;
         LocalReplay? selected = model.SelectedRun;
 
-        updateTraining(model);
+        renderSession();
         updateSessionHeader(model);
         globalProfileSectionLine.SetDetail(TimeRangeLabel(coachingTimeRange.Value));
         trendChart.SetRuns(model.TrendRuns, selected?.ScoreId, selectRun);
@@ -497,7 +656,7 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
 
     private void updatePracticeMaps()
     {
-        IReadOnlyList<PracticeMapCandidate> available = practiceCandidatePool.Get(replays, analyses);
+        IReadOnlyList<PracticeMapCandidate> available = practicePool;
         PracticeCandidatePage candidates = PracticeMapCandidateSearch.Search(
             available,
             new PracticeCandidateQuery(
@@ -677,12 +836,6 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         }
     }
 
-    private void invalidatePracticeCandidates()
-    {
-        practiceCandidatePool.Invalidate();
-        renderedPracticePage = null;
-    }
-
     internal static bool SamePracticeCandidatePage(PracticeCandidatePage? previous, PracticeCandidatePage current)
     {
         if (previous is null || previous.Total != current.Total || previous.Available != current.Available || previous.Items.Count != current.Items.Count)
@@ -843,8 +996,6 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             AimModPalette.Muted));
     }
 
-    private void updateTraining(NativeCoachingWorkspaceModel model) => renderSession(model);
-
     private void saveTraining() {
         try { trainingStore?.Save(activeTraining); trainingSaveFailed=false; }
         catch(Exception error) when(error is IOException or UnauthorizedAccessException) {
@@ -920,35 +1071,131 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
             run is { HasReplayFile: true } ? () => openReplay(run) : null));
     }
 
+    private void scheduleRunListRefresh()
+    {
+        scheduledRunListRefresh?.Cancel();
+        scheduledRunListRefresh = Scheduler.AddDelayed(refreshRunList, PracticeFilterDebounceMilliseconds);
+    }
+
     private void refreshRunList()
     {
+        scheduledRunListRefresh?.Cancel();
+        scheduledRunListRefresh = null;
         runList.Clear();
-        CoachingRunPage page = CoachingRunSearch.Search(replays.Where(eligibleForCoaching).ToArray(), new CoachingRunQuery(
+        runRows.Clear();
+        focusedRun = -1;
+        LocalReplay[] eligible = replays.Where(eligibleForCoaching).ToArray();
+        CoachingRunPage page = CoachingRunSearch.Search(eligible, new CoachingRunQuery(
             SearchText: search.Current.Value,
             Sort: CoachingRunSort.Recent,
             Limit: visible_run_limit));
-        runList.Add(new Container { RelativeSizeAxes = Axes.X, Height = 32, Children = [
-            flow($"{page.Items.Count} recent plays shown",12,AimModPalette.Muted),
-            new AimModResetButton(() => { search.Current.Value = string.Empty; modSelection.Value = ScoreMods.Any; coachingTimeRange.Value = CoachingTimeRange.All; }) { Anchor = Anchor.TopRight, Origin = Anchor.TopRight },
-        ] });
-        if (page.Items.Count == 0)
+        bool filtered = search.Current.Value.Length > 0 || modSelection.Value != ScoreMods.Any || coachingTimeRange.Value != CoachingTimeRange.All;
+        void resetFilters()
         {
-            runList.Add(flow("No completed plays match these filters. Try a wider date range or play a map with at least 70% accuracy.", 14, AimModPalette.Muted).With(text => text.Padding = new MarginPadding(18)));
-            if (openTrainers is not null)
-            {
-                runList.Add(visualEntry("Train a skill", "Practise now, even without saved plays.", PracticeSketchKind.Timing, openTrainers));
-            }
+            search.Current.Value = string.Empty;
+            modSelection.Value = ScoreMods.Any;
+            coachingTimeRange.Value = CoachingTimeRange.All;
+        }
+        runList.Add(new Container { RelativeSizeAxes = Axes.X, Height = 32, Children = [
+            flow(page.Total > page.Items.Count ? $"{page.Items.Count} of {page.Total:N0} matching plays shown" : $"{page.Items.Count} recent plays shown", 12, AimModPalette.Muted),
+            new AimModResetButton(resetFilters) { Anchor = Anchor.TopRight, Origin = Anchor.TopRight },
+        ] });
+        if (workspace is null)
+        {
+            runList.Add(new WorkspaceSkeleton(4, 78));
             return;
         }
 
+        if (page.Items.Count == 0)
+        {
+            var empty = new WorkspaceStateCard();
+            runList.Add(empty);
+            if (allReplays.Count == 0)
+            {
+                empty.Show(FontAwesome.Solid.Music, "No plays yet",
+                    "Play a map in osu!, or connect your osu! installation and account in Settings. Your plays will appear here.");
+            }
+            else if (filtered)
+            {
+                empty.Show(FontAwesome.Solid.Filter, "No plays match these filters",
+                    "Try a wider date range, another mod filter or a different search.", actionLabel: "Reset filters", action: resetFilters);
+            }
+            else
+            {
+                empty.Show(FontAwesome.Solid.InfoCircle, "No completed plays to coach yet",
+                    "Coaching uses passed plays with at least 70% accuracy. Finish a map you are comfortable with to begin.");
+            }
+            if (openTrainers is not null)
+                runList.Add(visualEntry("Train a skill", "Practise now, even without saved plays.", PracticeSketchKind.Timing, openTrainers));
+            return;
+        }
+
+        var byScore = eligible.GroupBy(run => run.ScoreId).ToDictionary(group => group.Key, group => group.First());
         foreach (CoachingRecentRun item in page.Items)
         {
-            var replay = replays.FirstOrDefault(r => r.ScoreId == item.ScoreId);
-            if (replay is null) continue;
-            runList.Add(new CoachingMapRow(replay.Title, replay.Difficulty,
+            if (!byScore.TryGetValue(item.ScoreId, out LocalReplay? replay)) continue;
+            var row = new CoachingMapRow(replay.Title, replay.Difficulty,
                 $"{replay.Accuracy:P2} accuracy  ·  {replay.MissCount} misses  ·  {ScoreMods.Display(replay)}  ·  {replay.PlayedAt.ToLocalTime():dd MMM, HH:mm}",
-                "Open coaching", () => openCoachingRun(replay)));
+                "Open coaching", () => openCoachingRun(replay));
+            runRows.Add(row);
+            runList.Add(row);
         }
+    }
+
+    protected override bool OnKeyDown(KeyDownEvent e)
+    {
+        if (e.ControlPressed && e.Key == Key.F && selectedCoachingPage is 2 or 3)
+        {
+            GetContainingFocusManager()?.ChangeFocus(selectedCoachingPage == 2 ? search : savedPracticeSearch);
+            return true;
+        }
+
+        if (selectedCoachingPage == 2 && runRows.Count > 0 && !e.ControlPressed && !e.AltPressed)
+        {
+            switch (e.Key)
+            {
+                case Key.Down:
+                    focusRun(focusedRun + 1);
+                    return true;
+                case Key.Up:
+                    focusRun(focusedRun - 1);
+                    return true;
+                case Key.Enter or Key.KeypadEnter when focusedRun >= 0:
+                    runRows[focusedRun].TriggerClick();
+                    return true;
+            }
+        }
+
+        if (e.Key == Key.Escape && !e.Repeat)
+        {
+            if (selectedCoachingPage == 2 && search.Current.Value.Length > 0)
+            {
+                search.Current.Value = string.Empty;
+                return true;
+            }
+            if (selectedCoachingPage == 4)
+            {
+                showCoachingPage(3);
+                return true;
+            }
+            if (selectedCoachingPage is 0 or 1)
+            {
+                showCoachingPage(2);
+                return true;
+            }
+        }
+
+        return base.OnKeyDown(e);
+    }
+
+    private void focusRun(int index)
+    {
+        if (focusedRun >= 0 && focusedRun < runRows.Count)
+            runRows[focusedRun].SetFocused(false);
+        focusedRun = Math.Clamp(index, 0, runRows.Count - 1);
+        CoachingMapRow row = runRows[focusedRun];
+        row.SetFocused(true);
+        coachingPages[2].ScrollIntoView(row);
     }
 
     private static Container createSessionHeader(
@@ -1368,19 +1615,12 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
 
     private static string formatSignedMilliseconds(double value) => $"{value:+0.0;-0.0;0.0} ms";
 
-    private static double standardDeviation(IEnumerable<double> values)
-    {
-        double[] samples = values.Where(double.IsFinite).ToArray();
-        if (samples.Length == 0)
-            return 0;
-        double mean = samples.Average();
-        return Math.Sqrt(samples.Average(value => Math.Pow(value - mean, 2)));
-    }
+    private static double standardDeviation(IEnumerable<double> values) => ReplayJudgementClassifier.StandardDeviation(values);
 
     private void sourceChanged()
     {
         if (!IsDisposed)
-            Schedule(load);
+            Schedule(() => load());
     }
 
     protected override void Dispose(bool isDisposing)
@@ -1396,6 +1636,8 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
         practiceLaunch?.Dispose();
         scheduledPracticeRefresh?.Cancel();
         scheduledPracticeRefresh = null;
+        scheduledRunListRefresh?.Cancel();
+        modelQuery.Dispose();
         if (sourceChanges is not null)
             sourceChanges.SourceChanged -= sourceChanged;
         base.Dispose(isDisposing);
@@ -1412,21 +1654,21 @@ public partial class NativeCoachingWorkspace : CompositeDrawable
     private static OsuSpriteText label(string text, float size, Colour4 colour, string weight = "Regular") => new()
     {
         Text = text,
-        Font = new FontUsage(size: size, weight: weight),
+        Font = new FontUsage(size: Math.Max(minimum_text_size, size), weight: weight),
         Colour = colour,
     };
 
     private static TruncatingSpriteText truncatingLabel(string text, float size, Colour4 colour, float maxWidth, string weight = "Regular") => new()
     {
         Text = text,
-        Font = new FontUsage(size: size, weight: weight),
+        Font = new FontUsage(size: Math.Max(minimum_text_size, size), weight: weight),
         Colour = colour,
         MaxWidth = maxWidth,
     };
 
     private static OsuTextFlowContainer flow(string text, float size, Colour4 colour, string weight = "Regular") => new(sprite =>
     {
-        sprite.Font = new FontUsage(size: size, weight: weight);
+        sprite.Font = new FontUsage(size: Math.Max(minimum_text_size, size), weight: weight);
         sprite.Colour = colour;
     })
     {

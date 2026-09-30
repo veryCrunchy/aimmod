@@ -23,7 +23,7 @@ public sealed partial class CoachingHistoryRefreshTests
         var older = run();
         var source = new MutableSource { Runs = [older] };
         var online = new HistoryService();
-        using var view = new TestWorkspace(source, online);
+        using var view = new TestWorkspace(source, online) { SynchronousModelBuilds = true };
         await refresh(view);
         var submitted = view.PracticeSourceHistory.Single(r => !r.IsLocallyStored);
         invoke(view, "chooseCoachingRun", submitted.ScoreId);
@@ -46,8 +46,9 @@ public sealed partial class CoachingHistoryRefreshTests
     public void DisplayedPlayCanOpenPracticeEvenWhenHistoryChangedBeforeClick(LocalLibraryOrigin origin)
     {
         var selected = run() with { Origin = origin, HasReplayFile = false };
-        using var view = new TestWorkspace(new MutableSource(), new HistoryService());
-        invoke(view, "apply", (object)new[] { run() });
+        using var view = new TestWorkspace(new MutableSource(), new HistoryService()) { SynchronousModelBuilds = true };
+        LocalReplay[] runs = [run()];
+        invoke(view, "apply", runs, ScoreMods.Choices(runs));
         invoke(view, "openCoachingRun", selected);
         Assert.That(field(view, "coachingMapRun"), Is.EqualTo(selected));
         Assert.That(buttons(view).Select(caption), Does.Contain("Prepare practice set"));
@@ -70,7 +71,7 @@ public sealed partial class CoachingHistoryRefreshTests
 
     private static async Task refresh(TestWorkspace view)
     {
-        invoke(view, "load");
+        invoke(view, "load", true);
         await ((Task)field(view, "historyLoadTask")!).WaitAsync(TimeSpan.FromSeconds(10));
         view.Drain();
     }

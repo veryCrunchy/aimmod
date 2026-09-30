@@ -16,6 +16,7 @@ namespace AimMod.Desktop.Coaching;
 
 public partial class NativeStatisticsWorkspace : CompositeDrawable
 {
+    private const float minimum_text_size = 11;
     private readonly ILocalLibrarySource source;
     private readonly ILocalLibrarySourceChanged? sourceChanges;
     private readonly Action<LocalReplay> openReplay;
@@ -658,14 +659,14 @@ public partial class NativeStatisticsWorkspace : CompositeDrawable
     private static OsuSpriteText text(string value, float size, Colour4 colour, string weight = "Regular") => new()
     {
         Text = value,
-        Font = new FontUsage(size: size, weight: weight),
+        Font = new FontUsage(size: Math.Max(minimum_text_size, size), weight: weight),
         Colour = colour,
     };
 
     private static TruncatingSpriteText truncatingText(string value, float size, Colour4 colour, float maxWidth, string weight = "Regular") => new()
     {
         Text = value,
-        Font = new FontUsage(size: size, weight: weight),
+        Font = new FontUsage(size: Math.Max(minimum_text_size, size), weight: weight),
         Colour = colour,
         MaxWidth = maxWidth,
     };

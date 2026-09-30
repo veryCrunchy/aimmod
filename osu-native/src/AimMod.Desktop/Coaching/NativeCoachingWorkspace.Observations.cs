@@ -8,9 +8,13 @@ namespace AimMod.Desktop.Coaching;
 
 public partial class NativeCoachingWorkspace
 {
+    private (LocalReplay Run, IReadOnlyList<LocalReplay> History, int Analyses, IReadOnlyList<CoachingReplayObservation> Observations)? observationCache;
+
     private void renderReplayObservations(FillFlowContainer<Drawable> host, LocalReplay run)
     {
-        var observations = CoachingReplayObservations.Build(run, allReplays, analyses);
+        if (observationCache is not { } cached || !ReferenceEquals(cached.Run, run) || !ReferenceEquals(cached.History, allReplays) || cached.Analyses != analyses.Count)
+            observationCache = cached = (run, allReplays, analyses.Count, CoachingReplayObservations.Build(run, allReplays, analyses));
+        var observations = cached.Observations;
         foreach (var observation in observations)
         {
             var body = pageFlow(); body.Spacing = new(6);

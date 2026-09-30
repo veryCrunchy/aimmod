@@ -10,6 +10,7 @@ public partial class NativeCoachingWorkspace
     private IReadOnlyList<PracticeSetProgress> practiceSets=[];
     private int practiceRefreshEpoch;
     private bool practiceHistoryFailed;
+    private string? practiceSetsFingerprint;
     private bool showArchivedPractice;
     private string automaticPracticeStatus = "";
     public void SetAutomaticPracticeStatus(string message) { automaticPracticeStatus = message; renderPracticeHistory(); }
@@ -40,9 +41,12 @@ public partial class NativeCoachingWorkspace
         try
         {
             var result=await practiceLibrary!.RunAsync(()=>loadSavedPracticeSets(runs,account)).ConfigureAwait(false);
+            string fingerprint=System.Text.Json.JsonSerializer.Serialize(result);
             if(!IsDisposed) Schedule(()=> {
                 if(IsDisposed || epoch!=practiceRefreshEpoch || account!=practiceAccountId()) return;
-                practiceSets=result; practiceHistoryFailed=false; renderPracticeHistory();
+                bool unchanged=fingerprint==practiceSetsFingerprint && !practiceHistoryFailed;
+                practiceSets=result; practiceSetsFingerprint=fingerprint; practiceHistoryFailed=false;
+                if(!unchanged) renderPracticeHistory();
             });
         }
         catch(Exception error) when(error is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)

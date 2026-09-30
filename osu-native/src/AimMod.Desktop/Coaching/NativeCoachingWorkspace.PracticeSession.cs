@@ -33,6 +33,24 @@ public partial class NativeCoachingWorkspace
         trainerHistory = history;
     }
 
+    private IReadOnlyList<TrainerResult>? trainerRunsCache;
+
+    /// <summary>Trainer history read once per render pass instead of once per use.</summary>
+    private IReadOnlyList<TrainerResult> trainerRuns()
+    {
+        if (trainerRunsCache is not null)
+            return trainerRunsCache;
+        try
+        {
+            trainerRunsCache = trainerHistory?.Invoke() ?? [];
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+        {
+            trainerRunsCache = [];
+        }
+        return trainerRunsCache;
+    }
+
     private CoachingPracticeSession sessionFor(PracticeSetProgress set)
     {
         if (!practiceSessions.TryGetValue(set.Map.Id, out var session))
@@ -41,7 +59,7 @@ public partial class NativeCoachingWorkspace
             savePracticeSession(session);
         }
         var next = CoachingPracticeSessionPlanner.Reconcile(session, set, allReplays, practiceAccountId(), DateTimeOffset.UtcNow,
-            trainerHistory?.Invoke().Select(r => r.CompletedAt));
+            trainerRuns().Select(r => r.CompletedAt));
         if (System.Text.Json.JsonSerializer.Serialize(next) != System.Text.Json.JsonSerializer.Serialize(session)) savePracticeSession(next);
         return next;
     }
@@ -174,7 +192,7 @@ public partial class NativeCoachingWorkspace
             { viewedStages[set.Map.Id] = next; renderCoachingMap(); }, primary: true, compact: true));
         navigation.Add(new CoachingButton(showPracticeSteps ? "Hide session steps" : "View all session steps", () =>
         { showPracticeSteps = !showPracticeSteps; renderCoachingMap(); }, compact: true));
-        navigation.Add(new CoachingButton("Refresh results", load, compact: true));
+        navigation.Add(new CoachingButton("Refresh results", () => load(refresh: true), compact: true));
         body.Add(navigation);
         steps.Add(new CoachingButton(current.Skipped ? "Restore step" : "Skip this step", () =>
         {
@@ -208,11 +226,11 @@ public partial class NativeCoachingWorkspace
                 body.Add(flow(comparison.Label, 15, AimModPalette.Text));
                 body.Add(flow(comparison.Detail, 13, AimModPalette.Muted));
             }
-        var trainerRuns = trainerHistory?.Invoke() ?? [];
-        var guided = trainerRuns.LastOrDefault(r => r.GuidedRun?.Focus == TrainerGuidedFocus.MovementComparison)?.GuidedRun;
+        var completedTrainerRuns = trainerRuns();
+        var guided = completedTrainerRuns.LastOrDefault(r => r.GuidedRun?.Focus == TrainerGuidedFocus.MovementComparison)?.GuidedRun;
         if (showPracticeComparisonDetails && guided is not null)
         {
-            var comparison = TrainerGuidedPractice.CompareMovement(guided.PlanId, trainerRuns);
+            var comparison = TrainerGuidedPractice.CompareMovement(guided.PlanId, completedTrainerRuns);
             body.Add(flow("Trainer movement comparison", 15, AimModPalette.Text));
             body.Add(flow(comparison.Observation, 13, AimModPalette.Muted));
         }
@@ -246,7 +264,7 @@ public partial class NativeCoachingWorkspace
         try
         {
             savePracticeSession(CoachingPracticeSessionPlanner.StartCheck(session, set, stage, target, allReplays, DateTimeOffset.UtcNow,
-                trainerHistory?.Invoke().Select(r => r.CompletedAt)));
+                trainerRuns().Select(r => r.CompletedAt)));
             selectingTransferFor = null;
             practiceRunStatus = "Check started. Play the selected map with the saved mods and speed, then refresh your results.";
         }

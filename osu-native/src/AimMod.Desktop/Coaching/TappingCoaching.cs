@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using AimMod.Osu.Runtime.Contracts;
 
 namespace AimMod.Desktop.Coaching;
@@ -8,9 +9,17 @@ public sealed record TappingLesson(string Pattern, string Observation, string Cu
 /// <summary>Local observations from evenly spaced, consecutive hit circles; not a diagnosis of the player.</summary>
 public static class TappingCoaching
 {
+    private static readonly ConditionalWeakTable<ReplayAnalysisResult, StrongBox<TappingLesson?>> lessons = new();
+
+    /// <summary>Finds the strongest tapping observation once per analysis; later calls reuse it.</summary>
     public static TappingLesson? Build(ReplayAnalysisResult? analysis)
     {
         if (analysis is null || analysis.EngineVersion != ReplayAnalysisProtocol.EngineVersion) return null;
+        return lessons.GetValue(analysis, static value => new StrongBox<TappingLesson?>(build(value))).Value;
+    }
+
+    private static TappingLesson? build(ReplayAnalysisResult analysis)
+    {
         var notes = analysis.Judgements.OrderBy(j => j.StartTimeMs).ToArray();
         TappingLesson? best = null;
         double strongest = 0;

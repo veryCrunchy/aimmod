@@ -25,111 +25,149 @@ public partial class NativeCoachingWorkspace
     private partial class AnalysisProgressBanner : CompositeDrawable
     {
         private readonly Box accent;
-        private readonly Box progressFill;
+        private readonly WorkspaceProgressStrip progress;
         private readonly SpriteIcon icon;
         private readonly OsuSpriteText phase;
         private readonly TruncatingSpriteText title;
         private readonly TruncatingSpriteText detail;
+        private readonly Container actionHost;
+        private string? actionLabel;
+        private Action? action;
 
         public AnalysisProgressBanner()
         {
             RelativeSizeAxes = Axes.X;
-            Height = 64;
+            Height = 76;
             Masking = true;
             CornerRadius = AimModVisualStyle.ControlRadius;
             InternalChildren = new Drawable[]
             {
                 new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
                 accent = new Box { RelativeSizeAxes = Axes.Y, Width = 3, Colour = AimModPalette.Cyan },
-                icon = new SpriteIcon
+                new GridContainer
                 {
-                    Anchor = Anchor.CentreLeft,
-                    Origin = Anchor.CentreLeft,
-                    Position = new(16, -1),
-                    Size = new(16),
-                    Icon = FontAwesome.Solid.ChartLine,
-                    Colour = AimModPalette.Cyan,
-                },
-                new FillFlowContainer
-                {
-                    Anchor = Anchor.CentreLeft,
-                    Origin = Anchor.CentreLeft,
-                    AutoSizeAxes = Axes.Y,
-                    RelativeSizeAxes = Axes.X,
-                    Width = 0.56f,
-                    Margin = new MarginPadding { Left = 42 },
-                    Direction = FillDirection.Vertical,
-                    Spacing = new(2),
-                    Children = new Drawable[]
+                    RelativeSizeAxes = Axes.Both,
+                    Padding = new MarginPadding { Left = 14, Right = 14, Bottom = 4 },
+                    ColumnDimensions = new[]
                     {
-                        phase = label("LOADING HISTORY", 9, AimModPalette.Cyan, "Bold"),
-                        title = truncatingLabel("Building your global profile", 14, AimModPalette.Text, 520, "SemiBold"),
+                        new Dimension(GridSizeMode.Absolute, 30),
+                        new Dimension(),
+                        new Dimension(GridSizeMode.AutoSize),
                     },
-                },
-                detail = truncatingLabel("Reading local and submitted plays", 11, AimModPalette.Muted, 460).With(text =>
-                {
-                    text.Anchor = Anchor.CentreRight;
-                    text.Origin = Anchor.CentreRight;
-                    text.Margin = new MarginPadding { Right = 18 };
-                }),
-                new Container
-                {
-                    Anchor = Anchor.BottomLeft,
-                    Origin = Anchor.BottomLeft,
-                    RelativeSizeAxes = Axes.X,
-                    Height = 3,
-                    Children = new Drawable[]
+                    Content = new[]
                     {
-                        new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Border },
-                        progressFill = new Box
+                        new Drawable[]
                         {
-                            RelativeSizeAxes = Axes.Both,
-                            Width = 0.12f,
-                            Colour = AimModPalette.Cyan,
+                            icon = new SpriteIcon
+                            {
+                                Anchor = Anchor.CentreLeft,
+                                Origin = Anchor.CentreLeft,
+                                Size = new(16),
+                                Icon = FontAwesome.Solid.ChartLine,
+                                Colour = AimModPalette.Cyan,
+                            },
+                            new FillFlowContainer
+                            {
+                                Anchor = Anchor.CentreLeft,
+                                Origin = Anchor.CentreLeft,
+                                RelativeSizeAxes = Axes.X,
+                                AutoSizeAxes = Axes.Y,
+                                Direction = FillDirection.Vertical,
+                                Spacing = new(2),
+                                Children = new Drawable[]
+                                {
+                                    phase = label("LOADING HISTORY", 11, AimModPalette.Cyan, "Bold"),
+                                    title = new TruncatingSpriteText
+                                    {
+                                        RelativeSizeAxes = Axes.X,
+                                        Font = new FontUsage(size: 14, weight: "SemiBold"),
+                                        Colour = AimModPalette.Text,
+                                    },
+                                    detail = new TruncatingSpriteText
+                                    {
+                                        RelativeSizeAxes = Axes.X,
+                                        Font = new FontUsage(size: 12),
+                                        Colour = AimModPalette.Muted,
+                                    },
+                                },
+                            },
+                            actionHost = new Container
+                            {
+                                Anchor = Anchor.CentreRight,
+                                Origin = Anchor.CentreRight,
+                                AutoSizeAxes = Axes.Both,
+                                Margin = new MarginPadding { Left = 12 },
+                            },
                         },
                     },
                 },
+                progress = new WorkspaceProgressStrip(3)
+                {
+                    Anchor = Anchor.BottomLeft,
+                    Origin = Anchor.BottomLeft,
+                },
             };
+            ShowHistoryLoading();
         }
 
         public void ShowHistoryLoading() => set(
             "LOADING HISTORY",
             "Building your global profile",
             "Reading local and submitted plays",
-            0.12f,
+            null,
             AimModPalette.Cyan,
             FontAwesome.Solid.ChartLine);
+
+        public void ShowUpdating() => set(
+            "UPDATING",
+            "Updating your coaching report",
+            "Your current report stays visible until the new one is ready",
+            null,
+            AimModPalette.Cyan,
+            FontAwesome.Solid.CircleNotch);
 
         public void ShowStarting(int cached) => set(
             "ANALYSING REPLAYS",
             "Preparing the next replay",
             $"{Math.Max(0, cached):N0} replay analyses already available",
-            0.04f,
+            null,
             AimModPalette.Cyan,
             FontAwesome.Solid.CircleNotch);
 
-        public void ShowAnalysing(int completed, int total, string currentTitle, int cached)
+        public void ShowAnalysing(int completed, int total, string currentTitle, int cached, string? remaining = null, Action? cancel = null)
         {
-            float progress = total <= 0 ? 0 : Math.Clamp(completed / (float)total, 0, 1);
+            float fraction = total <= 0 ? 0 : Math.Clamp(completed / (float)total, 0, 1);
+            string counts = AnalysisProgressDetail(completed, total, cached);
             set(
                 "ANALYSING REPLAYS",
                 string.IsNullOrWhiteSpace(currentTitle) ? "Reading replay judgements" : currentTitle,
-                AnalysisProgressDetail(completed, total, cached),
-                progress,
+                remaining is null ? counts : $"{counts}  //  {remaining}",
+                fraction,
                 AimModPalette.Cyan,
-                FontAwesome.Solid.CircleNotch);
+                FontAwesome.Solid.CircleNotch,
+                cancel is null ? null : "Cancel",
+                cancel);
         }
 
-        public void ShowReady(GlobalCoachingProfile profile, int merged, int submitted, string period)
+        public void ShowCancelling() => set(
+            "ANALYSIS STOPPING",
+            "Stopping replay analysis",
+            "Finished analyses are kept and used in your report",
+            null,
+            AimModPalette.Yellow,
+            FontAwesome.Solid.PauseCircle);
+
+        public void ShowReady(GlobalCoachingProfile profile, int merged, int submitted, string period, int totalRuns = -1)
         {
             if (merged == 0)
             {
                 bool allTime = string.Equals(period, "All time", StringComparison.Ordinal);
+                bool noHistory = totalRuns == 0 || allTime;
                 set(
                     "NO PLAY HISTORY",
-                    allTime ? "No osu!standard plays found" : $"No osu!standard plays in the {period.ToLowerInvariant()}",
-                    allTime
-                        ? "Play a map or connect an osu! account to begin coaching."
+                    noHistory ? "No osu!standard plays found" : $"No osu!standard plays in the {period.ToLowerInvariant()}",
+                    noHistory
+                        ? "Play a map, or connect your osu! installation and account in Settings to begin coaching."
                         : "Choose a longer profile period or complete a new play.",
                     0,
                     AimModPalette.Pink,
@@ -161,40 +199,46 @@ public partial class NativeCoachingWorkspace
             failed > 0 && completed == 0 ? AimModPalette.Yellow : AimModPalette.Success,
             failed > 0 && completed == 0 ? FontAwesome.Solid.ExclamationCircle : FontAwesome.Solid.CheckCircle);
 
-        public void ShowWarning(string titleText, string detailText) => set(
+        public void ShowWarning(string titleText, string detailText, string? retryLabel = null, Action? retry = null) => set(
             "LIMITED DATA",
             titleText,
             detailText,
             1,
             AimModPalette.Yellow,
-            FontAwesome.Solid.ExclamationCircle);
+            FontAwesome.Solid.ExclamationCircle,
+            retryLabel,
+            retry);
 
-        public void ShowError(string titleText, string detailText) => set(
-            "ANALYSIS PAUSED",
+        public void ShowError(string titleText, string detailText, string? retryLabel = null, Action? retry = null) => set(
+            "SOMETHING WENT WRONG",
             titleText,
             detailText,
             1,
             AimModPalette.Pink,
-            FontAwesome.Solid.ExclamationCircle);
+            FontAwesome.Solid.ExclamationCircle,
+            retryLabel,
+            retry);
 
-        private void set(string phaseText, string titleText, string detailText, float progress, Colour4 colour, IconUsage iconUsage)
+        private void set(string phaseText, string titleText, string detailText, float? fraction, Colour4 colour, IconUsage iconUsage,
+            string? nextActionLabel = null, Action? nextAction = null)
         {
             phase.Text = phaseText;
             phase.Colour = colour;
             title.Text = titleText;
             detail.Text = detailText;
             accent.Colour = colour;
-            progressFill.Colour = colour;
-            progressFill.ResizeWidthTo(Math.Clamp(progress, 0, 1), 180, Easing.OutQuint);
+            progress.FillColour = colour;
+            progress.SetProgress(fraction);
             icon.Icon = iconUsage;
             icon.Colour = colour;
-        }
+            if (nextActionLabel == actionLabel && ReferenceEquals(nextAction, action))
+                return;
 
-        protected override void Update()
-        {
-            base.Update();
-            title.MaxWidth = Math.Max(180, DrawWidth * 0.5f - 64);
-            detail.MaxWidth = Math.Max(160, DrawWidth * 0.4f - 28);
+            actionLabel = nextActionLabel;
+            action = nextAction;
+            actionHost.Clear();
+            if (nextActionLabel is not null && nextAction is not null)
+                actionHost.Add(new WorkspaceButton(nextActionLabel, nextAction, colour));
         }
     }
 
@@ -278,15 +322,19 @@ public partial class NativeCoachingWorkspace
                     new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.PanelRaised },
                     new Box { RelativeSizeAxes = Axes.Y, Width = 3, Colour = accentColour },
                     label(titleText, 8, AimModPalette.Muted, "Bold").With(text => text.Position = new(11, 6)),
-                    value = truncatingLabel(valueText, 13, accentColour, 160, "Bold").With(text => text.Position = new(11, 20)),
-                    detail = truncatingLabel(detailText, 10, AimModPalette.Muted, 160).With(text => text.Position = new(11, 39)),
+                    value = truncatingLabel(valueText, 13, accentColour, 160, "Bold").With(text => text.Position = new(11, 21)),
+                    detail = truncatingLabel(detailText, 11, AimModPalette.Muted, 160).With(text => text.Position = new(11, 40)),
                 },
             };
         }
 
+        private float layoutWidth = -1;
+
         protected override void Update()
         {
             base.Update();
+            if (DrawWidth == layoutWidth) return;
+            layoutWidth = DrawWidth;
             value.MaxWidth = detail.MaxWidth = Math.Max(60, DrawWidth - 28);
         }
     }
@@ -296,7 +344,7 @@ public partial class NativeCoachingWorkspace
         public InsightRow(string title, string detail, string value, Colour4 accent)
         {
             RelativeSizeAxes = Axes.X;
-            Height = 73;
+            Height = 80;
             InternalChildren = new Drawable[]
             {
                 new Box
@@ -486,7 +534,7 @@ public partial class NativeCoachingWorkspace
         public RecommendationCard(CoachingRecommendation recommendation, Action? open)
         {
             RelativeSizeAxes = Axes.X;
-            Height = 146;
+            Height = 156;
             Masking = true;
             CornerRadius = AimModVisualStyle.CardRadius;
             InternalChildren = new Drawable[]
@@ -730,9 +778,13 @@ public partial class NativeCoachingWorkspace
             };
         }
 
+        private float layoutWidth = -1;
+
         protected override void Update()
         {
             base.Update();
+            if (DrawWidth == layoutWidth) return;
+            layoutWidth = DrawWidth;
             title.MaxWidth = Math.Max(120, DrawWidth - 98);
             evidence.MaxWidth = source.MaxWidth = Math.Max(120, DrawWidth - 30);
         }

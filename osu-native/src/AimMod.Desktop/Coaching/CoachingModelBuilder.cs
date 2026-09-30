@@ -81,6 +81,15 @@ internal sealed class CoachingModelBuilder
         }
     }
 
+    public bool TryGetPracticePool(NativeCoachingWorkspaceModel model, [NotNullWhen(true)] out IReadOnlyList<PracticeMapCandidate>? pool)
+    {
+        lock (gate)
+        {
+            pool = scope is not null && ReferenceEquals(scope.Global.History, model.History) ? scope.PracticePool : null;
+            return pool is not null;
+        }
+    }
+
     /// <summary>Builds the practice candidate pool for the scope of <paramref name="model"/> once.</summary>
     public IReadOnlyList<PracticeMapCandidate> GetPracticePool(
         NativeCoachingWorkspaceModel model,
