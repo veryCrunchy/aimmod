@@ -4,6 +4,7 @@ using System.Text.Json;
 using AimMod.InGame;
 
 CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
+if (args.Contains("--discord-test")) { Environment.ExitCode = await DiscordDiagnostics.Run(args); return; }
 if (args.Contains("--self-test")) { Checks.Run(); HistoryCompletenessChecks.Run(); CsvHistoryChecks.Run(); await HubChecks.Run(); HubPaginationChecks.Run(); await HubLeaderboardChecks.Run(); Coaching.SelfTest(); CoachingFeedbackChecks.Run(); StatsChecks.Run(); WarmupChecks.Run(); RunInspectionChecks.Run(); NativeSettingsChecks.Run(); LiveOverlayChecks.Run(); LiveOverlayFeedChecks.Run(); OverlaySettingsChecks.Run(); await ObsOverlayChecks.Run(); BenchmarkChecks.Run(); ReplayLibraryChecks.Run(); await WorkspaceChecks.Run(); ReplayChecks.Run(); ReplayKeyboardChecks.Run(); await NativeReplayPlaybackChecks.Run(); await HardeningChecks.Run(); CoreFormatChecks.Run(); await DiscordPresenceChecks.Run(); return; }
 if (args.Length == 4 && args[0] == "--compare-replays") { Environment.ExitCode = ReplayCompare.Run(args[1], args[2], args[3]); return; }
 var output = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AimMod", "KovaaksNative");
@@ -51,7 +52,8 @@ await using var workspace = new WorkspaceHost(hub, output, database, settings, c
 await workspace.Start(cancellation.Token);
 // Declared after the workspace so it is disposed first: the presence is
 // cleared and KovaaK's own presence handed back before the UI closes.
-await using var discordHost = discord = new DiscordPresenceHost(output, discordSettings, workspace.ReadLive, () => workspace.ReplayVisible, () => hub.LinkedHandle);
+await using var discordHost = discord = new DiscordPresenceHost(output, discordSettings, workspace.ReadLive, () => workspace.ReplayVisible, () => hub.LinkedHandle,
+    replayScenario: () => workspace.ReplayScenario, page: () => workspace.View.Current(DateTimeOffset.UtcNow));
 discord.Start(cancellation.Token);
 var workspaceUrlPath = Path.Combine(output, "workspace-url.txt");
 AtomicFile.WriteText(workspaceUrlPath, workspace.Url);

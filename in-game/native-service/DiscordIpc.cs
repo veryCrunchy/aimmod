@@ -94,7 +94,20 @@ sealed class DiscordIpcClient : IAsyncDisposable
     Task? reader;
     TaskCompletionSource<bool>? ready;
     long nonce;
+    volatile string? lastError;
     public bool Connected { get { lock (gate) return stream is not null; } }
+    // Why the last connect or SET_ACTIVITY failed ("code message" from Discord,
+    // or a transport reason). Never contains the Discord user.
+    public string? LastError => lastError;
+    // Every received frame, for diagnostics (--discord-test). Called on the reader.
+    public Action<int, string>? Received { get; set; }
+    static string ErrorText(JsonElement data)
+    {
+        var code = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("code", out var c) && c.ValueKind == JsonValueKind.Number ? c.GetRawText() : "?";
+        var message = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("message", out var m) && m.ValueKind == JsonValueKind.String ? m.GetString() ?? "" : "";
+        if (message.Length > 300) message = message[..300];
+        return (code + " " + message).Trim();
+    }
     public DiscordIpcClient(string clientId, IDiscordPipe? pipe = null, TimeSpan? timeout = null)
     { this.clientId = clientId; this.pipe = pipe ?? new DiscordNamedPipe(); this.timeout = timeout ?? TimeSpan.FromSeconds(5); }
 
@@ -102,15 +115,16 @@ sealed class DiscordIpcClient : IAsyncDisposable
     {
         await Disconnect(sendClose: false);
         var opened = await pipe.Open(token);
-        if (opened is null) return false;
+        if (opened is null) { lastError = "no discord-ipc pipe found"; return false; }
+        lastError = null;
         var handshakeReady = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var stop = new CancellationTokenSource();
         lock (gate) { stream = opened; ready = handshakeReady; readerStop = stop; }
         reader = Task.Run(() => ReadLoop(opened, stop.Token));
         var handshake = new JsonObject { ["v"] = 1, ["client_id"] = clientId }.ToJsonString();
-        if (!await Write(opened, DiscordFrames.Handshake, handshake, token)) { await Disconnect(false); return false; }
+        if (!await Write(opened, DiscordFrames.Handshake, handshake, token)) { lastError = "handshake write failed"; await Disconnect(false); return false; }
         var finished = await Task.WhenAny(handshakeReady.Task, Task.Delay(timeout, token));
-        if (finished != handshakeReady.Task || !handshakeReady.Task.Result) { await Disconnect(false); return false; }
+        if (finished != handshakeReady.Task || !handshakeReady.Task.Result) { lastError ??= finished != handshakeReady.Task ? "no READY within timeout" : "connection closed during handshake"; await Disconnect(false); return false; }
         return true;
     }
 
@@ -118,7 +132,8 @@ sealed class DiscordIpcClient : IAsyncDisposable
     public async Task<DiscordSendResult> SetActivity(int pid, JsonObject? activity, CancellationToken token)
     {
         Stream? current; lock (gate) current = stream;
-        if (current is null) return DiscordSendResult.Failed;
+        if (current is null) { lastError = "not connected"; return DiscordSendResult.Failed; }
+        lastError = null;
         var id = "aimmod-" + Interlocked.Increment(ref nonce);
         var response = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         lock (gate) pending[id] = response;
@@ -130,9 +145,9 @@ sealed class DiscordIpcClient : IAsyncDisposable
                 ["args"] = new JsonObject { ["pid"] = pid, ["activity"] = activity?.DeepClone() },
                 ["nonce"] = id,
             }.ToJsonString();
-            if (!await Write(current, DiscordFrames.Frame, payload, token)) { await Disconnect(false); return DiscordSendResult.Failed; }
+            if (!await Write(current, DiscordFrames.Frame, payload, token)) { lastError = "write failed"; await Disconnect(false); return DiscordSendResult.Failed; }
             var finished = await Task.WhenAny(response.Task, Task.Delay(timeout, token));
-            if (finished != response.Task) { await Disconnect(false); return DiscordSendResult.Failed; }
+            if (finished != response.Task) { lastError = "no reply within timeout"; await Disconnect(false); return DiscordSendResult.Failed; }
             return response.Task.Result ? DiscordSendResult.Ok : Connected ? DiscordSendResult.Rejected : DiscordSendResult.Failed;
         }
         finally { lock (gate) pending.Remove(id); }
@@ -156,8 +171,14 @@ sealed class DiscordIpcClient : IAsyncDisposable
                 var frame = await DiscordFrames.Read(source, token);
                 if (frame is null) break;
                 var (opcode, json) = frame.Value;
+                Received?.Invoke(opcode, json);
                 if (opcode == DiscordFrames.Ping) { await Write(source, DiscordFrames.Pong, json, token); continue; }
-                if (opcode == DiscordFrames.Close) break;
+                if (opcode == DiscordFrames.Close)
+                {
+                    try { using var closing = JsonDocument.Parse(json); lastError = "closed by Discord: " + ErrorText(closing.RootElement); }
+                    catch (JsonException) { lastError = "closed by Discord"; }
+                    break;
+                }
                 if (opcode != DiscordFrames.Frame) continue;
                 using var document = JsonDocument.Parse(json, new JsonDocumentOptions { MaxDepth = 32 });
                 var root = document.RootElement;
@@ -169,11 +190,13 @@ sealed class DiscordIpcClient : IAsyncDisposable
                 {
                     TaskCompletionSource<bool>? waiter;
                     lock (gate) pending.TryGetValue(n.GetString()!, out waiter);
+                    if (evt == "ERROR") lastError = root.TryGetProperty("data", out var data) ? ErrorText(data) : "error";
                     waiter?.TrySetResult(evt != "ERROR");
                 }
             }
         }
-        catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidDataException or JsonException or DecoderFallbackException or OperationCanceledException) { }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidDataException or JsonException or DecoderFallbackException) { lastError ??= "connection lost (" + ex.GetType().Name + ")"; }
+        catch (OperationCanceledException) { }
         // A closed or broken pipe ends the session; wake every waiter.
         lock (gate)
         {

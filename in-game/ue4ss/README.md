@@ -78,6 +78,15 @@ their own presence. The switch is the game's own persisted user setting, so a
 game crash while held leaves it off until the mod next starts; uninstalling
 AimMod at that point needs the option turned back on in KovaaK's settings.
 
+The worker logs each handoff state change, Discord connect and READY (the
+Discord user is never logged), every SET_ACTIVITY with Discord's result or
+error, dropped buttons and reconnect delays with a `[Discord]` prefix. While
+the AimMod panel is shown the UI reports its page, so the presence reads for
+example "In AimMod · Statistics" or "Browsing replays". To check the pipeline
+without the game, run the worker with `--discord-test` (optionally
+`--discord-test-seconds N`): it publishes a sample activity, prints Discord's
+replies with the user redacted, then clears it.
+
 ## Replays and limits
 
 Replays reconstruct recorded state, not screen recordings. See

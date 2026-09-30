@@ -50,5 +50,21 @@
     leave();target=container;value=null;status=null;
     var panel=node('div','panel settings-card');panel.appendChild(node('p','subtle','Loading Discord settings…'));container.appendChild(panel);load(panel);
   }
-  root.AimModDiscordSettings={render:render,leave:leave};
+  // Tells the worker which AimMod page is shown, for the Discord status. Resent
+  // every 4 s while shown; the worker treats 10 s of silence as closed.
+  var viewPage=null,viewShown=false,viewTimer=null;
+  function report(){
+    if(!viewPage)return;
+    var xhr=new root.XMLHttpRequest(),path=root.location.pathname;path=path.slice(0,path.lastIndexOf('/'));
+    xhr.open('POST',path+'/workspace-view',true);xhr.timeout=5000;xhr.setRequestHeader('X-AimMod-UI','1');xhr.setRequestHeader('Content-Type','application/json');
+    xhr.send(JSON.stringify({page:viewPage,visible:viewShown}));
+  }
+  function view(page,shown){
+    if(typeof page!=='string'||!/^[a-z][a-z-]{0,31}$/.test(page))return;
+    var changed=page!==viewPage||!!shown!==viewShown;viewPage=page;viewShown=!!shown;
+    if(viewShown&&!viewTimer&&root.setInterval)viewTimer=root.setInterval(report,4000);
+    if(!viewShown&&viewTimer){root.clearInterval(viewTimer);viewTimer=null;}
+    if(changed)report();
+  }
+  root.AimModDiscordSettings={render:render,leave:leave,view:view};
 })(window);

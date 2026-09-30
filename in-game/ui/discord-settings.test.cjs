@@ -39,6 +39,15 @@ test('malformed response and late responses are ignored',()=>{
   const t=setup();t.api.render(t.container);t.api.leave();assert.equal(t.requests[0].aborted,true);
   t.requests[0].finish(200,{settings:all});assert.equal(t.buttons().length,0);
 });
+test('reports the shown workspace page',()=>{
+  const s=setup();
+  s.api.view('trends',true);
+  assert.equal(s.requests[0].url,'/private/workspace-view');assert.equal(s.requests[0].headers['X-AimMod-UI'],'1');
+  assert.deepEqual(JSON.parse(s.requests[0].body),{page:'trends',visible:true});
+  s.api.view('trends',true);assert.equal(s.requests.length,1,'unchanged view is not resent immediately');
+  s.api.view('coaching',false);assert.deepEqual(JSON.parse(s.requests[1].body),{page:'coaching',visible:false});
+  s.api.view('../bad',true);assert.equal(s.requests.length,2,'invalid page keys are never sent');
+});
 test('Gameface-safe source',()=>{
   for(const banned of ['grid','gap:','var(--','calc(','inline-block','placeholder'])assert.ok(!source.includes(banned),banned);
 });

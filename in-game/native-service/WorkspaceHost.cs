@@ -31,6 +31,9 @@ sealed class WorkspaceHost : IAsyncDisposable
     // feed's transient-gap memory.
     public LiveOverlaySnapshot ReadLive() => LiveOverlayState.Read(outputFolder, PersonalBest, playback.Visible);
     public bool ReplayVisible => playback.Visible;
+    public string? ReplayScenario => playback.VisibleScenario;
+    // Page of the AimMod panel while it is shown, as reported by the UI.
+    public readonly DiscordWorkspaceView View = new();
     object OverlayState() => new { live = opponents.Apply(liveFeed.Accept(LiveOverlayState.Read(outputFolder, PersonalBest, playback.Visible), DateTime.UtcNow)), settings = overlaySettings.Current with { Layouts = [] } };
     object ObsState() => overlaySettings.Current.ObsEnabled ? OverlayState() : new { live = new { available = false, active = false }, settings = overlaySettings.Current with { Layouts = [] } };
     internal static int ReadRendererProtocol(string path) => new RendererAcknowledgement(path).Read().Protocol;
@@ -59,6 +62,20 @@ sealed class WorkspaceHost : IAsyncDisposable
         (settings ?? new NativeSettings(output)).MapEndpoints(app, prefix);
         overlaySettings.MapEndpoints(app, prefix);
         discordSettings?.MapEndpoints(app, prefix, discordStatus);
+        app.MapPost(prefix + "/workspace-view", async (HttpContext context) => {
+            if (context.Request.Headers["X-AimMod-UI"] != "1" || context.Request.ContentLength is null or > 256) return Results.StatusCode(403);
+            if (!context.Request.HasJsonContentType()) return Results.StatusCode(415);
+            try {
+                using var doc = await System.Text.Json.JsonDocument.ParseAsync(context.Request.Body, cancellationToken: context.RequestAborted);
+                var root = doc.RootElement;
+                if (root.ValueKind != System.Text.Json.JsonValueKind.Object || !root.TryGetProperty("page", out var page) || page.ValueKind != System.Text.Json.JsonValueKind.String
+                    || !root.TryGetProperty("visible", out var shown) || shown.ValueKind is not (System.Text.Json.JsonValueKind.True or System.Text.Json.JsonValueKind.False)) return Results.BadRequest();
+                var key = page.GetString();
+                if (!DiscordWorkspaceView.ValidPage(key)) return Results.BadRequest();
+                View.Report(key!, shown.GetBoolean(), DateTimeOffset.UtcNow);
+                return Results.Json(new { ok = true });
+            } catch (Exception ex) when (ex is System.Text.Json.JsonException or BadHttpRequestException) { return Results.BadRequest(); }
+        });
         app.MapGet(prefix + "/discord-settings.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.DiscordSettingsScript")!, "application/javascript"));
         new CoachingFeedback(output).MapEndpoints(app, prefix);
         var importedHistory = csvHistory ?? new CsvHistory(output);
