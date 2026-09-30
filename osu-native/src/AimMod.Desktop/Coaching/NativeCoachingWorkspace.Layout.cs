@@ -40,22 +40,23 @@ public partial class NativeCoachingWorkspace
     {
         private readonly WorkspaceFocusRing focusRing;
 
-        public CoachingMapRow(string title, string difficulty, string statistics, string actionLabel, Action action)
+        public CoachingMapRow(string title, string difficulty, string statistics, Action action)
         {
-            RelativeSizeAxes = Axes.X; Height = 78; Action = action;
+            RelativeSizeAxes = Axes.X; Height = 72; Action = action;
             Children = [
                 new Container {
                     RelativeSizeAxes = Axes.Both, Padding = new MarginPadding { Horizontal = 14, Vertical = 10 },
                     Children = [
                         new Container {
-                            RelativeSizeAxes = Axes.Both, Padding = new MarginPadding { Right = 144 },
+                            RelativeSizeAxes = Axes.Both, Padding = new MarginPadding { Right = 40 },
                             Children = [
                                 new TruncatingSpriteText { RelativeSizeAxes = Axes.X, Text = title, Font = new osu.Framework.Graphics.Sprites.FontUsage(size:17,weight:"SemiBold"), Colour = AimModPalette.Text },
                                 new TruncatingSpriteText { RelativeSizeAxes = Axes.X, Y = 23, Text = difficulty, Font = new osu.Framework.Graphics.Sprites.FontUsage(size:12), Colour = coachingAccent },
                                 new TruncatingSpriteText { RelativeSizeAxes = Axes.X, Y = 43, Text = statistics, Font = new osu.Framework.Graphics.Sprites.FontUsage(size:12), Colour = AimModPalette.Muted },
                             ],
                         },
-                        new CoachingButton(actionLabel,action,compact:true) { Anchor = Anchor.CentreRight, Origin = Anchor.CentreRight },
+                        new osu.Framework.Graphics.Sprites.SpriteIcon { Icon = osu.Framework.Graphics.Sprites.FontAwesome.Solid.ChevronRight, Size = new(12),
+                            Colour = AimModPalette.Muted, Anchor = Anchor.CentreRight, Origin = Anchor.CentreRight },
                     ],
                 },
                 focusRing = new WorkspaceFocusRing(),
@@ -72,7 +73,8 @@ public partial class NativeCoachingWorkspace
         for (int i = 0; i < coachingPages.Length; i++)
         {
             coachingPages[i].Alpha = i == selectedCoachingPage ? 1 : 0;
-            navigationButtons[i].SetSelected(i == selectedCoachingPage || (i == 3 && selectedCoachingPage != 2));
+            int tab = selectedCoachingPage switch { 4 => detailReturnPage, 0 or 1 => 3, _ => selectedCoachingPage };
+            navigationButtons[i].SetSelected(i == tab);
         }
     }
 
