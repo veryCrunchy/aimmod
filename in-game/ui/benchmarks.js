@@ -13,7 +13,7 @@
   function number(value){return root.AimModFormat.number(value,2);}
   function notice(text){container.appendChild(el('p','benchmark-empty',text));}
   function widthOf(node){return node.offsetWidth||node.clientWidth||0;}
-  function list(){detailPage=null;cancel();clear();var card=el('div','benchmark-panel');container.appendChild(card);card.appendChild(el('h2','','Benchmarks'));
+  function list(){detailPage=null;cancel();clear();var card=el('div','benchmark-panel');container.appendChild(card);card.appendChild(el('h2','','Your benchmarks'));
     card.appendChild(el('p','subtle','Your ranks, and the score you need for the next one.'));
     if(!linked){var empty=el('div','benchmark-empty');empty.appendChild(el('p','','Link your AimMod account to see your benchmark ranks.'));if(root.AimModWorkspace)empty.appendChild(button('Link account',function(){root.AimModWorkspace.open('account');},'button primary'));card.appendChild(empty);return;}
     var filters=el('div','benchmark-filters'),search=el('input','benchmark-search');search.type='search';search.placeholder='Find a benchmark';search.setAttribute('aria-label','Find a benchmark');search.value=query;filters.appendChild(search);

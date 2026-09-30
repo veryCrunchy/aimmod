@@ -92,7 +92,7 @@ test('filtering keeps the same search field and large scores are grouped',()=>{
  assert.equal(s.all().find(e=>e.tag==='input'),input);assert.equal(s.buttons().filter(b=>b.className==='benchmark-row benchmark-item').length,1);assert.ok(s.all().some(e=>e.textContent==='Other <b>'));
  s.buttons().find(b=>b.className==='benchmark-row benchmark-item').onclick();s.requests[1].finish(200,{...item,categories:[{name:'Big',scenarios:[{name:'Large',score:12000,rank:null,thresholds:[{rank:'Gold',score:15500.5}]}]}]});
  assert.ok(s.all().some(e=>e.textContent==='12,000'));assert.ok(s.all().some(e=>e.textContent==='3,500.5 to Gold'));
- s.api.back();assert.ok(s.all().some(e=>e.textContent==='Benchmarks'));
+ s.api.back();assert.ok(s.all().some(e=>e.textContent==='Your benchmarks'));
 });
 test('unlinked accounts get a direct link action instead of empty filters',()=>{
  const s=setup();let opened;s.window.AimModWorkspace={open:p=>opened=p};s.api.enter(s.container);s.requests[0].finish(200,{linked:false,items:[]});

@@ -105,7 +105,7 @@
   function draw() {
     if (!root || !report || !report.Periods) return; root.textContent = '';
     var period = report.Periods.filter(function (p) { return p.Key === periodKey; })[0] || report.Periods[0];
-    if (!period) { var none = append(root, node('div', undefined, 'empty')); append(none, node('h3', 'No practice to show yet')); append(none, node('p', 'Complete a few runs and your trends will appear here.')); return; }
+    if (!period) { var none = append(root, node('div', undefined, 'panel empty')); append(none, node('h3', 'No practice to show yet')); append(none, node('p', 'Complete a few runs and your trends will appear here.')); return; }
     var selected = runFilter==='warmup'&&period.Warmup?period.Warmup:runFilter==='settled'&&period.Settled?period.Settled:period.Selected;
     var toolbar = append(root, node('div', undefined, 'toolbar stats-toolbar'));
     var heading = append(toolbar, node('div', undefined, 'stats-heading')); append(heading, node('h2', selected && selected.Name || 'Choose a scenario'));

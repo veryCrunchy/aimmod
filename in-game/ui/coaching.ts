@@ -98,7 +98,7 @@ function render(container:HTMLElement,state:any,onScenario?:(name:string)=>void,
     // Mini visual: last runs as bars, scaled from 90% of the lowest run to the best.
     const bars=node(item,'span',undefined,'coach-spark');const low=Math.min.apply(null,row.recent)*0.9,span=Math.max(1e-6,row.best-low);row.recent.forEach((v:number,i:number)=>{const bar=node(bars,'span',undefined,'coach-spark-bar'+(i===row.recent.length-1?' last':''));bar.style.height=Math.max(3,Math.round((v-low)/span*30))+'px';});
     node(item,'span',row.gap>=0.005?'-'+fmt(row.gap*100)+'%':'At best','coach-rank-gap');});}
-  if(!result.profile){ranking(shell);const empty=node(shell,'div',undefined,'coach-empty');node(empty,'h3','Build your practice profile');node(empty,'p','Complete a few more runs to reveal a useful next focus.');history(shell,cacheKey);return;}
+  if(!result.profile){if(view.ranking.length)ranking(shell);const empty=node(shell,'div',undefined,'coach-empty');node(empty,'h3','Build your practice profile');node(empty,'p','Complete a few more runs to reveal a useful next focus.');history(shell,cacheKey);return;}
   const profile=result.profile,axes=measuredAxes(profile);const validKeys=axes.map((a:any)=>a.key);
   const strength=profile.strengths.filter(s=>validKeys.indexOf(s.key)>=0)[0];const focus=profile.constraints.filter(s=>validKeys.indexOf(s.key)>=0)[0];
   const lead=node(shell,'div',undefined,'coach-summary');node(lead,'span','NEXT BLOCK','coach-eyebrow');
