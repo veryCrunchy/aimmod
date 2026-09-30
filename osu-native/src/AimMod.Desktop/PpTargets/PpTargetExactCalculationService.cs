@@ -36,6 +36,7 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
     private readonly string difficultyDownloadDirectory;
     private readonly Func<SidecarRuntimeClient> runtimeFactory;
     private readonly SemaphoreSlim calculationGate = new(1, 1);
+    private readonly SemaphoreSlim saveGate = new(1, 1);
     private readonly Dictionary<string, CacheEntry> cache;
     private readonly Dictionary<string, PpWhatIfResult> performanceCache;
     private readonly PpTargetBeatmapPatternReader patternReader;
@@ -83,25 +84,55 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
             ? Path.Combine(this.cachePath, "beatmap-patterns") : this.cachePath + ".beatmaps");
     }
 
+    /// <summary>Estimates keyed by beatmap id. When several variants of one beatmap are requested, the first requested variant wins.</summary>
     public async Task<IReadOnlyDictionary<int, PpTargetEstimate>> CalculateAsync(
         IReadOnlyList<PpTargetExactRequest> requests,
         CancellationToken cancellationToken = default,
         IProgress<PpTargetExactCalculationProgress>? progress = null)
     {
         ArgumentNullException.ThrowIfNull(requests);
-        PpTargetExactRequest[] valid = requests.Where(isValid)
-                                               .DistinctBy(request => cacheKey(request))
-                                               .Take(maximum_batch_size)
-                                               .ToArray();
+        PpTargetExactRequest[] valid = selectValid(requests);
+        Dictionary<string, PpTargetEstimate> byVariant = await calculateCoreAsync(valid, cancellationToken, progress).ConfigureAwait(false);
+        var byBeatmap = new Dictionary<int, PpTargetEstimate>();
+        foreach (PpTargetExactRequest request in valid)
+            if (byVariant.TryGetValue(VariantKey(request), out PpTargetEstimate? estimate))
+                byBeatmap.TryAdd(request.BeatmapId, estimate);
+        return byBeatmap;
+    }
+
+    /// <summary>Estimates keyed by <see cref="VariantKey"/>, so variants of one beatmap never collide.</summary>
+    public async Task<IReadOnlyDictionary<string, PpTargetEstimate>> CalculateVariantsAsync(
+        IReadOnlyList<PpTargetExactRequest> requests,
+        CancellationToken cancellationToken = default,
+        IProgress<PpTargetExactCalculationProgress>? progress = null)
+    {
+        ArgumentNullException.ThrowIfNull(requests);
+        return await calculateCoreAsync(selectValid(requests), cancellationToken, progress).ConfigureAwait(false);
+    }
+
+    public static string VariantKey(PpTargetExactRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return cacheKey(request);
+    }
+
+    private static PpTargetExactRequest[] selectValid(IReadOnlyList<PpTargetExactRequest> requests) =>
+        requests.Where(isValid).DistinctBy(request => cacheKey(request)).Take(maximum_batch_size).ToArray();
+
+    private async Task<Dictionary<string, PpTargetEstimate>> calculateCoreAsync(
+        PpTargetExactRequest[] valid,
+        CancellationToken cancellationToken,
+        IProgress<PpTargetExactCalculationProgress>? progress)
+    {
         if (valid.Length == 0)
-            return new Dictionary<int, PpTargetEstimate>();
+            return new Dictionary<string, PpTargetEstimate>();
 
         await calculationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         int pendingCacheWrites = 0;
         var checkpointTimer = System.Diagnostics.Stopwatch.StartNew();
         try
         {
-            var completed = new Dictionary<int, PpTargetEstimate>();
+            var completed = new Dictionary<string, PpTargetEstimate>();
             var retainedFiles = new Dictionary<string, PpTargetBeatmapFile>();
             var missingRequests = new List<PpTargetExactRequest>();
             foreach (PpTargetExactRequest request in valid)
@@ -125,19 +156,30 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
             bool resolveLazerFiles = hashes.Length > 0 && File.Exists(Path.Combine(libraryRoot, "client.realm"));
             await using SidecarRuntimeClient? runtime = resolveLazerFiles ? runtimeFactory() : null;
 
-            await using ExternalLazerAssetStagingLease? lease = !resolveLazerFiles
-                ? null
-                : await new ExternalLazerAssetClient(new SidecarRuntimeRequestClient(runtime!)).ResolveToPrivateStagingAsync(
-                    libraryRoot,
-                    hashes,
-                    Array.Empty<Guid>(),
-                    cancellationToken).ConfigureAwait(false);
+            Exception? firstCalculationFailure = null;
+            ExternalLazerAssetStagingLease? resolved = null;
+            if (resolveLazerFiles)
+            {
+                try
+                {
+                    resolved = await new ExternalLazerAssetClient(new SidecarRuntimeRequestClient(runtime!)).ResolveToPrivateStagingAsync(
+                        libraryRoot,
+                        hashes,
+                        Array.Empty<Guid>(),
+                        cancellationToken).ConfigureAwait(false);
+                }
+                catch (ExternalLazerAssetClientException error)
+                {
+                    // Official difficulty downloads can still cover maps the local library could not stage.
+                    firstCalculationFailure = error;
+                }
+            }
+            await using ExternalLazerAssetStagingLease? lease = resolved;
             Dictionary<string, ExternalLazerResolvedAsset> beatmaps = (lease?.Result.Files ?? [])
                 .Where(file => string.Equals(file.Kind, "Beatmap", StringComparison.Ordinal))
                 .GroupBy(file => file.OwnerId, StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
 
-            Exception? firstCalculationFailure = null;
             int finished = valid.Length - missing.Length;
             using var resultGate = new SemaphoreSlim(1, 1);
             using var preparationGate = new SemaphoreSlim(1, 1);
@@ -255,19 +297,24 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
                             Math.Min(estimate.RealisticMaximumPp, estimate.ExpectedPp * (1 + uncertainty))),
                     };
                     string key = cacheKey(request, file.ContentHash);
+                    CacheEntry[]? checkpoint = null;
                     await resultGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
                     try
                     {
                         cache[key] = new CacheEntry(key, DateTimeOffset.UtcNow, estimate);
-                        completed[request.BeatmapId] = estimate;
+                        completed[cacheKey(request)] = estimate;
                         // Checkpoint periodically; the outer finally also flushes on cancellation.
                         if (++pendingCacheWrites >= 25 && checkpointTimer.Elapsed >= TimeSpan.FromSeconds(15))
                         {
-                            if (await trySaveCacheAsync().ConfigureAwait(false)) pendingCacheWrites = 0;
+                            checkpoint = snapshotEntries();
+                            pendingCacheWrites = 0;
                             checkpointTimer.Restart();
                         }
                     }
                     finally { resultGate.Release(); }
+                    // Serialise outside the result gate so other lanes keep calculating.
+                    if (checkpoint is not null)
+                        await trySaveCacheAsync(checkpoint).ConfigureAwait(false);
                 }
                 catch (Exception error) when (error is not OperationCanceledException)
                 {
@@ -377,12 +424,12 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
                     PpTargetEstimate estimate = createEstimate(request, expected, ceiling);
                     cache[cacheKey(request)] = new CacheEntry(cacheKey(request), DateTimeOffset.UtcNow, estimate);
                     completed[accuracy] = accuracy == 100 ? estimate.RealisticMaximumPp : estimate.ExpectedPp;
-                    await trySaveCacheAsync().ConfigureAwait(false);
                 }
-
             }
             finally
             {
+                if (completed.Count > 0)
+                    await trySaveCacheAsync().ConfigureAwait(false);
                 if (downloadedPath is not null)
                     deleteIfPresent(downloadedPath);
             }
@@ -456,22 +503,25 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
 
     private static double? measuredFraction(double? value) => value is >= 0 and <= 1 && double.IsFinite(value.Value) ? value : null;
 
-    private bool tryReadCached(PpTargetExactRequest request, string contentHash, IDictionary<int, PpTargetEstimate> completed)
+    private bool tryReadCached(PpTargetExactRequest request, string contentHash, IDictionary<string, PpTargetEstimate> completed)
     {
         if (!cache.TryGetValue(cacheKey(request, contentHash), out CacheEntry? entry) || !validEstimate(entry.Estimate))
             return false;
-        completed[request.BeatmapId] = entry.Estimate;
+        completed[cacheKey(request)] = entry.Estimate;
         return true;
     }
 
-    private async Task<bool> trySaveCacheAsync()
+    private CacheEntry[] snapshotEntries() => cache.Values.OrderBy(entry => entry.CalculatedAt).TakeLast(maximum_cache_entries).ToArray();
+
+    private async Task<bool> trySaveCacheAsync(CacheEntry[]? snapshot = null)
     {
+        await saveGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
         try
         {
             string? directory = Path.GetDirectoryName(cachePath);
             if (!string.IsNullOrWhiteSpace(directory))
                 Directory.CreateDirectory(directory);
-            CacheEntry[] entries = cache.Values.OrderBy(entry => entry.CalculatedAt).TakeLast(maximum_cache_entries).ToArray();
+            CacheEntry[] entries = snapshot ?? snapshotEntries();
             string temporaryPath = $"{cachePath}.{Guid.NewGuid():N}.tmp";
             try
             {
@@ -496,11 +546,12 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
             }
             return true;
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or NotSupportedException)
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or NotSupportedException or ArgumentException)
         {
             Console.Error.WriteLine($"AimMod exact PP cache persistence failed for '{cachePath}': {error}");
             return false;
         }
+        finally { saveGate.Release(); }
     }
 
     private static Dictionary<string, CacheEntry> loadCache(string path)
@@ -513,11 +564,13 @@ public sealed class PpTargetExactCalculationService : IPpTargetExactCalculationS
             CacheDocument? document = JsonSerializer.Deserialize<CacheDocument>(stream, json_options);
             if (document?.Version != cache_version || document.Entries is null)
                 return new Dictionary<string, CacheEntry>(StringComparer.Ordinal);
-            return document.Entries.Where(entry => !string.IsNullOrWhiteSpace(entry.Key) && validEstimate(entry.Estimate))
-                           .TakeLast(maximum_cache_entries)
-                           .ToDictionary(entry => entry.Key, StringComparer.Ordinal);
+            var entries = new Dictionary<string, CacheEntry>(StringComparer.Ordinal);
+            foreach (CacheEntry entry in document.Entries.TakeLast(maximum_cache_entries))
+                if (entry is not null && !string.IsNullOrWhiteSpace(entry.Key) && validEstimate(entry.Estimate))
+                    entries[entry.Key] = entry;
+            return entries;
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or NotSupportedException)
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or NotSupportedException or ArgumentException)
         {
             return new Dictionary<string, CacheEntry>(StringComparer.Ordinal);
         }

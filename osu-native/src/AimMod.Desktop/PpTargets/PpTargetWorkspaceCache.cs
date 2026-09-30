@@ -51,7 +51,7 @@ public sealed class PpTargetWorkspaceCache
             if (!File.Exists(path))
                 return null;
 
-            using FileStream stream = File.OpenRead(path);
+            using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             CacheDocument? document = JsonSerializer.Deserialize<CacheDocument>(stream, json_options);
             return document?.Version == current_version && validSnapshot(document.Snapshot) ? document.Snapshot : null;
         }
