@@ -21,3 +21,8 @@ test('failed save restores previous values and allows retry',()=>{
 test('leaving aborts work and ignores late settings response',()=>{
   const s=setup();s.api.enter(s.container);s.api.leave();s.requests[0].finish(200,{replayRecordingEnabled:true,hubHistoryEnabled:true});assert.equal(s.requests[0].aborted,true);assert.equal(s.buttons().length,0);
 });
+test('Gameface: retry and navigation buttons are wrapped so they size to their label',()=>{
+  const s=setup();s.api.enter(s.container);s.requests[0].finish(503,{});
+  const walk=e=>[e,...e.children.flatMap(walk)];const retry=s.buttons().find(b=>b.textContent==='Try again');
+  assert.ok(walk(s.container).some(e=>e.className==='actions'&&e.children.includes(retry)));
+});

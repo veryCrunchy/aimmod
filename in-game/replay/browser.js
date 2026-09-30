@@ -39,6 +39,8 @@
     xhr.onerror = xhr.ontimeout = function () { finish(false, 0); };
     xhr.send(body ? JSON.stringify(body) : null);
   }
+  function known(v) { return typeof v === 'number' && isFinite(v); }
+  function fmt(v) { return root.AimModFormat ? root.AimModFormat.number(v, 1) : String(Math.round(v * 10) / 10); }
   function button(label, callback, primary) {
     var el = node('button', 'button' + (primary ? ' primary' : ''), label);
     el.type = 'button'; el.onclick = function(){if(!busy)callback();}; return el;
@@ -46,7 +48,7 @@
   function status(title, message, action, label) {
     clear(); var card = node('div', 'empty');
     card.appendChild(node('h3', '', title)); card.appendChild(node('p', '', message));
-    if (action) card.appendChild(button(label || 'Try again', action, true));
+    if (action) { var row = node('div', 'actions center'); row.appendChild(button(label || 'Try again', action, true)); card.appendChild(row); }
     container.appendChild(card);
   }
   function date(value) {
@@ -70,10 +72,12 @@
       empty.appendChild(node('p', '', 'Play a run with replay recording on and it will appear here. Older score history may not include a replay.'));
       container.appendChild(empty); return;
     }
-    var search=node('input','replay-search');search.type='search';search.placeholder='Find a scenario';search.value=query;search.setAttribute&&search.setAttribute('aria-label','Find a replay by scenario');
-    toolbar.appendChild(search);
-    var favorite=button(favoritesOnly?'Show all replays':'Favorites',function(){favoritesOnly=!favoritesOnly;favorite.textContent=favoritesOnly?'Show all replays':'Favorites';favorite.className='button'+(favoritesOnly?' primary':'');draw();},favoritesOnly);
-    toolbar.appendChild(favorite);toolbar.appendChild(button('Refresh', refresh));
+    var search=node('input','replay-search');search.type='search';search.value=query;search.setAttribute&&search.setAttribute('aria-label','Find a replay by scenario');
+    toolbar.appendChild(root.AimModFormat&&root.AimModFormat.field?root.AimModFormat.field(search,'Find a scenario','replay-search-field'):search);
+    // A segmented toggle makes the favorites filter state visible.
+    var scope=node('div','segmented replay-scope'),everything=button('All replays',function(){setFavorites(false);},!favoritesOnly),favorite=button('Favorites',function(){setFavorites(true);},favoritesOnly);
+    function setFavorites(value){favoritesOnly=value;everything.className='button'+(favoritesOnly?'':' primary');favorite.className='button'+(favoritesOnly?' primary':'');everything.setAttribute&&everything.setAttribute('aria-pressed',String(!favoritesOnly));favorite.setAttribute&&favorite.setAttribute('aria-pressed',String(favoritesOnly));draw();}
+    scope.appendChild(everything);scope.appendChild(favorite);toolbar.appendChild(scope);toolbar.appendChild(button('Refresh', refresh));
     var panel = node('div', 'replay-cards');container.appendChild(panel);
     // Search redraws only the cards, so the field keeps focus while typing.
     search.oninput=function(){if(searchTimer)root.clearTimeout(searchTimer);searchTimer=root.setTimeout(function(){searchTimer=null;if(!busy&&query!==search.value){query=search.value;draw();}},150);};
@@ -87,10 +91,14 @@
       // One primary action: the whole card plays the replay in game.
       var item = node('button', 'replay-main', ''); item.type = 'button';
       var info = node('div', 'replay-info');
-      var title = node('div', 'replay-title', (row.favorite ? '★ ' : '') + (row.scenario || 'Untitled scenario'));
+      var titleRow = node('div', 'replay-title-row'); if (row.favorite) titleRow.appendChild(node('span', 'replay-fav', 'Favorite')); titleRow.appendChild(node('div', 'replay-title', row.scenario || 'Untitled scenario'));
       var sub = node('div', 'replay-meta', date(row.recordedAt) || 'Date unknown');
       if (row.reason !== 'completed') sub.appendChild(node('span', 'replay-badge', 'Partial run'));
-      info.appendChild(title); info.appendChild(sub); item.appendChild(info);
+      info.appendChild(titleRow); info.appendChild(sub);
+      // Score, length and accuracy appear when the library provides them.
+      var facts = [['Score', known(row.score) ? fmt(row.score) : null], ['Accuracy', known(row.accuracy) ? fmt(row.accuracy) + '%' : null], ['Length', known(row.duration) ? Math.round(row.duration) + 's' : null]].filter(function (f) { return f[1] !== null; });
+      if (facts.length) { var stats = node('div', 'replay-stats'); facts.forEach(function (f) { var cell = node('div', 'replay-stat'); cell.appendChild(node('span', '', f[0])); cell.appendChild(node('strong', '', f[1])); stats.appendChild(cell); }); info.appendChild(stats); }
+      item.appendChild(info);
       item.appendChild(node('span', 'button primary', 'Play replay'));
       item.onclick = function () { open(row); }; group.appendChild(item);
       var actions=node('div','replay-actions');
@@ -100,8 +108,8 @@
       actions.appendChild(node('span','spacer'));
       actions.appendChild(quiet('Export',function(){act('export');}));
       var del=quiet('Delete',function(){
-        while(actions.firstChild)actions.removeChild(actions.firstChild);
-        actions.appendChild(node('span','subtle','Delete this replay? Your score history is kept.'));
+        while(actions.firstChild)actions.removeChild(actions.firstChild);actions.className='replay-actions confirm';
+        actions.appendChild(node('span','subtle','Delete this replay permanently? Your score history is kept.'));
         actions.appendChild(button('Keep replay',list));var remove=button('Delete replay',function(){act('delete');});remove.className='button danger';actions.appendChild(remove);
       });del.className='button quiet delete';actions.appendChild(del);group.appendChild(actions);panel.appendChild(card);
     });
@@ -117,7 +125,7 @@
     cancel();clear();
     if(!root.AimModNativeReplayBrowser){status('Replay unavailable','The in-game replay view could not be loaded.',list,'Back to replays');return;}
     var bar=node('div','toolbar');bar.appendChild(button('Back to replays',list));container.appendChild(bar);
-    var nativeTarget=node('div','');container.appendChild(nativeTarget);
+    var nativeTarget=node('div','native-replay');container.appendChild(nativeTarget);
     nativeOpen=true;root.AimModNativeReplayBrowser.enter(nativeTarget,row);
   }
   function refresh() {
