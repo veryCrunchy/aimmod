@@ -629,6 +629,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
         private readonly List<(int Index, CircularContainer Dot)> notes = [];
         private double nextRebuild;
         private Vector2 targetSize;
+        private static readonly FontUsage reactionFont = new(size: 30, weight: "SemiBold");
         private double drawnReactionCue = -1;
         private bool drawnReactionReady;
         public double? LastOffset { get; set; }
@@ -683,8 +684,8 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
                 cue.Colour = ready && !stopCue ? AimModPalette.Canvas : AimModPalette.Text;
                 cue.Y = 0;
                 bool choice = owner.settings.ReactionMode is ReactionMode.Choice or ReactionMode.ChoiceGoNoGo;
-                string key = owner.settings.Keys.Split(" / ")[reaction.RequiredKey];
-                cue.Font = new FontUsage(size: 30, weight: "SemiBold");
+                // Assigning a font re-lays out the text. Only change it when it differs.
+                if (!cue.Font.Equals(reactionFont)) cue.Font = reactionFont;
                 cue.Y = choice ? -95 : 0;
                 if (reaction.CueTime != drawnReactionCue || ready != drawnReactionReady || targetSize != DrawSize)
                 {
@@ -698,7 +699,7 @@ public partial class NativeTrainersWorkspace : CompositeDrawable
                             marks.Add(cap);
                         }
                 }
-                cue.Text = ready ? stopCue ? "STOP · do not tap" : choice ? $"GO · {key}" : "GO · tap now"
+                cue.Text = ready ? stopCue ? "STOP · do not tap" : choice ? $"GO · {owner.settings.Keys.Split(" / ")[reaction.RequiredKey]}" : "GO · tap now"
                     : time < reaction.FeedbackUntil ? reaction.LastFeedback : "Wait for the cue";
             }
             else if (owner.pointer is { } pointer)

@@ -7,6 +7,7 @@ public partial class NativeTrainerPlayer
 {
     private TrainerGuidanceOverlay? guide;
     private OsuHitObject[] guideObjects = [];
+    private Spinner[] spinners = [];
     private readonly SpinnerPracticeMetrics spinMetrics = new();
     private Spinner? activeSpin;
     private double? previousSpinAngle;
@@ -16,14 +17,18 @@ public partial class NativeTrainerPlayer
     private void loadPracticeGuide()
     {
         guideObjects = GameplayState.Beatmap.HitObjects.OfType<OsuHitObject>().ToArray();
+        spinners = guideObjects.OfType<Spinner>().ToArray();
         if (settings.GuidedCues) AddInternal(guide = new TrainerGuidanceOverlay { Depth = -100 });
     }
 
     private void updatePracticeGuide()
     {
         double time = CurrentTime;
-        var spinner = DrawableRuleset.Playfield.AllHitObjects.OfType<DrawableSpinner>()
-            .FirstOrDefault(s => s.HitObject.StartTime <= time && s.HitObject.EndTime > time);
+        // Most drills have no spinners. Avoid scanning every drawable object each frame.
+        bool spinning = false;
+        foreach (var s in spinners) if (s.StartTime <= time && s.EndTime > time) { spinning = true; break; }
+        var spinner = spinning ? DrawableRuleset.Playfield.AllHitObjects.OfType<DrawableSpinner>()
+            .FirstOrDefault(s => s.HitObject.StartTime <= time && s.HitObject.EndTime > time) : null;
         if (spinner is not null)
         {
             if (!ReferenceEquals(activeSpin, spinner.HitObject))
