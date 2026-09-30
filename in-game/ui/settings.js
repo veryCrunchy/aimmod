@@ -28,7 +28,7 @@
     toggle('hubHistoryEnabled','Download Hub history','Keep your linked account’s history up to date. Turning this off pauses downloads; local runs and previously saved Hub history stay available.');
     container.appendChild(panel);
     if(root.AimModHistoryImport)root.AimModHistoryImport.render(container);
-    var storage=node('div','panel settings-card');storage.appendChild(node('h2','','Your replay library'));storage.appendChild(node('p','subtle','Manage favorites, export a copy, or delete individual replays from Replays. Exports are saved in Documents / AimMod / Replays.'));container.appendChild(storage);
+    var storage=node('div','panel settings-card');storage.appendChild(node('h2','','Your replay library'));storage.appendChild(node('p','subtle','Manage favorites, export a copy, or delete individual replays from Replays. Exports are saved in Documents / AimMod / Replays.'));if(root.AimModWorkspace){var open=node('button','button','Open replays');open.type='button';open.onclick=function(){root.AimModWorkspace.open('replays');};storage.appendChild(open);}container.appendChild(storage);
   }
   function load(){send(null,function(ok,data){if(ok)value=data;render(ok?'':'Could not load your settings. Please try again.');});}
   root.AimModSettings={enter:function(element){leave();container=element;value=null;if(container){container.textContent='Loading settings…';load();}},leave:leave};

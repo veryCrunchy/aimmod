@@ -4,11 +4,14 @@
   var surface=/(?:\?|&)surface=obs(?:&|$)/.test(root.location.search||'')?'obs':'game';
   var hud=doc.getElementById('hud'),stats=doc.getElementById('stats'),versus=doc.getElementById('versus');
   function known(n){return typeof n==='number'&&isFinite(n);}
-  function format(n,digits){return known(n)?n.toFixed(digits||0):'—';}
+  // Standalone page (OBS/game HUD): grouped digits without Intl, never "-0".
+  function format(n,digits){if(!known(n))return '—';var parts=Math.abs(n).toFixed(digits||0).split('.'),text=parts[0].replace(/\B(?=(\d{3})+(?!\d))/g,',')+(parts[1]?'.'+parts[1]:'');return (n<0&&/[1-9]/.test(text)?'-':'')+text;}
   function hide(){hud.style.display='none';last=null;lastSignature='';}
   function begin(parent){parent.hudRows=parent.hudRows||{};parent.hudUsed={};}
   function finishRows(parent){Object.keys(parent.hudRows).forEach(function(key){if(!parent.hudUsed[key]){parent.removeChild(parent.hudRows[key].row);delete parent.hudRows[key];}});}
-  function value(parent,label,text,css){var entry=parent.hudRows[label];if(!entry){var row=doc.createElement('div'),caption=doc.createElement('span'),number=doc.createElement('strong');caption.textContent=label;row.appendChild(caption);row.appendChild(number);parent.appendChild(row);entry=parent.hudRows[label]={row:row,number:number};}parent.hudUsed[label]=true;entry.row.className='hud-value'+(css?' '+css:'');if(entry.number.textContent!==text)entry.number.textContent=text;}
+  // Rows are keyed separately from their caption so a player named like a
+  // metric ("Current") cannot collide with it.
+  function value(parent,label,text,css,key){key=key||label;var entry=parent.hudRows[key];if(!entry){var row=doc.createElement('div'),caption=doc.createElement('span'),number=doc.createElement('strong');row.appendChild(caption);row.appendChild(number);parent.appendChild(row);entry=parent.hudRows[key]={row:row,caption:caption,number:number};}parent.hudUsed[key]=true;if(entry.caption.textContent!==label)entry.caption.textContent=label;entry.row.className='hud-value'+(css?' '+css:'');if(entry.number.textContent!==text)entry.number.textContent=text;}
   function place(card,layout,opacity){
     if(!layout||!layout.visible){card.style.display='none';return;}
     card.style.display='block';card.style.opacity=String(opacity);
@@ -38,7 +41,7 @@
     finishRows(values);
     var opponent=live.opponentScore,opponentName=live.opponentName||'Personal best';
     doc.getElementById('vs-title').textContent='VS '+opponentName.toUpperCase();
-    values=doc.getElementById('vs-values');begin(values);value(values,'Current',format(live.score),'major');value(values,opponentName,format(opponent));
+    values=doc.getElementById('vs-values');begin(values);value(values,'Current',format(live.score),'major');value(values,opponentName,format(opponent),'','opponent');
     // Same desktop VS concept: compare measured live pace with an actual prior
     // scenario score. The worker provides its explicitly estimated final score.
     value(values,'Projected',format(live.projectedScore));var delta=live.projectedDelta;
