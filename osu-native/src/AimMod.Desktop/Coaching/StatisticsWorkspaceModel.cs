@@ -100,9 +100,8 @@ public sealed record StatisticsWorkspaceModel(
         bool unrestrictedStars = minimumStars <= 0 && maximumStars >= 100;
         int onlineRunCount = all.Count(run => run.OnlineScoreId > 0);
         int localRunCount = all.Count(run => run.IsLocallyStored);
-        IEnumerable<LocalReplay> filtered = all.Where(run => unrestrictedStars && !double.IsFinite(run.StarRating)
+        IEnumerable<LocalReplay> candidates = all.Where(run => unrestrictedStars && !double.IsFinite(run.StarRating)
                                                               || run.StarRating >= minimumStars && run.StarRating <= maximumStars)
-                                               .Where(run => earliest is null || run.PlayedAt >= earliest)
                                                .Where(run => !query.MissFreeOnly || run.MissCount == 0)
                                                .Where(run => query.Source switch
                                                {
@@ -114,14 +113,16 @@ public sealed record StatisticsWorkspaceModel(
                                                .Where(run => ScoreMods.Matches(run, query.ModSelection));
         if (!string.IsNullOrWhiteSpace(search))
         {
-            filtered = filtered.Where(run => contains(run.Title, search)
+            candidates = candidates.Where(run => contains(run.Title, search)
                                              || contains(run.Artist, search)
                                              || contains(run.Difficulty, search)
                                              || contains(run.Player, search)
                                              || run.Mods.Any(mod => contains(mod, search)));
         }
 
-        LocalReplay[] runs = sort(filtered, query.Sort).ToArray();
+        // Every filter except the period; the comparison windows are drawn from these plays.
+        LocalReplay[] matching = candidates.ToArray();
+        LocalReplay[] runs = sort(matching.Where(run => earliest is null || run.PlayedAt >= earliest), query.Sort).ToArray();
         LocalReplay[] chronological = runs.OrderBy(run => run.PlayedAt).ToArray();
         double[] accuracies = chronological.Where(run => validAccuracy(run.Accuracy)).Select(run => run.Accuracy).ToArray();
         double[] performancePoints = chronological.Where(run => run.PerformancePoints is >= 0)
@@ -149,7 +150,47 @@ public sealed record StatisticsWorkspaceModel(
                 series("statisticsPp", "Performance", "pp", chronological.Where(run => run.PerformancePoints is >= 0), run => run.PerformancePoints!.Value),
                 series("statisticsStars", "Difficulty", "stars", chronological.Where(run => double.IsFinite(run.StarRating) && run.StarRating >= 0), run => run.StarRating),
                 series("statisticsMisses", "Misses", "count", chronological, run => Math.Max(0, run.MissCount)),
-            });
+            })
+        {
+            Insights = buildInsights(chronological, matching, query.TimeRange, earliest, reference),
+        };
+    }
+
+    /// <summary>Headline, trend and change for each metric. Unbounded views compare the latest 30 days.</summary>
+    public StatisticsInsights Insights { get; init; } = StatisticsInsights.Empty;
+
+    private static StatisticsInsights buildInsights(
+        LocalReplay[] chronological,
+        LocalReplay[] matching,
+        StatisticsTimeRange range,
+        DateTimeOffset? earliest,
+        DateTimeOffset reference)
+    {
+        DateTimeOffset end;
+        DateTimeOffset start;
+        string label;
+        if (earliest is { } periodStart)
+        {
+            end = reference;
+            start = periodStart;
+            label = range switch
+            {
+                StatisticsTimeRange.Days30 => "vs prev 30d",
+                StatisticsTimeRange.Days90 => "vs prev 90d",
+                _ => "vs prev year",
+            };
+        }
+        else
+        {
+            end = chronological.Length == 0 ? reference : chronological[^1].PlayedAt;
+            start = end.AddDays(-30);
+            label = "vs prev 30d";
+        }
+
+        TimeSpan span = end - start;
+        LocalReplay[] recent = matching.Where(run => run.PlayedAt >= start && run.PlayedAt <= end).ToArray();
+        LocalReplay[] previous = matching.Where(run => run.PlayedAt >= start - span && run.PlayedAt < start).ToArray();
+        return StatisticsInsightsBuilder.Build(chronological, recent, previous, label);
     }
 
     public static StatisticsMapSummary BuildMapSummary(IReadOnlyList<LocalReplay> source, Guid beatmapId)
@@ -219,6 +260,8 @@ public sealed record StatisticsWorkspaceModel(
     private static long saturatingAdd(long left, long right) => left > long.MaxValue - right ? long.MaxValue : left + right;
 }
 
+public sealed record StatisticsTypicalResult(int PlayCount, double? AccuracyPercent, double? MedianPerformancePoints);
+
 /// <summary>
 /// Plays grouped by difficulty once per history, so selecting a play does not rescan the history. Online-only
 /// records share a group with the local plays of the same online difficulty.
@@ -227,16 +270,47 @@ public sealed class StatisticsMapIndex
 {
     private readonly ILookup<string, LocalReplay> runs;
 
+    private readonly LocalReplay[] byStars;
+
     public StatisticsMapIndex(IEnumerable<LocalReplay> source)
     {
         ArgumentNullException.ThrowIfNull(source);
-        runs = source.ToLookup(MapKey, StringComparer.Ordinal);
+        LocalReplay[] all = source as LocalReplay[] ?? source.ToArray();
+        runs = all.ToLookup(MapKey, StringComparer.Ordinal);
+        byStars = all.Where(run => double.IsFinite(run.StarRating)).OrderBy(run => run.StarRating).ToArray();
+    }
+
+    /// <summary>Your usual accuracy and PP on any map within <paramref name="range"/> stars of a rating.</summary>
+    public StatisticsTypicalResult Typical(double stars, double range = 0.25)
+    {
+        if (!double.IsFinite(stars) || byStars.Length == 0)
+            return new StatisticsTypicalResult(0, null, null);
+        int low = 0;
+        int high = byStars.Length;
+        while (low < high)
+        {
+            int middle = (low + high) / 2;
+            if (byStars[middle].StarRating < stars - range) low = middle + 1;
+            else high = middle;
+        }
+
+        var band = new List<LocalReplay>();
+        for (int index = low; index < byStars.Length && byStars[index].StarRating <= stars + range; index++)
+            band.Add(byStars[index]);
+        return new StatisticsTypicalResult(
+            band.Count,
+            StatisticsInsightsBuilder.Aggregate(band, StatisticsMetric.Accuracy),
+            StatisticsInsightsBuilder.Aggregate(band, StatisticsMetric.Performance));
     }
 
     public static StatisticsMapIndex Empty { get; } = new(Array.Empty<LocalReplay>());
 
     public StatisticsMapSummary Summarise(LocalReplay replay) =>
         StatisticsWorkspaceModel.Summarise(runs[MapKey(replay)].DistinctBy(run => run.ScoreId), replay.BeatmapId);
+
+    /// <summary>Every recorded attempt on the same difficulty, oldest first.</summary>
+    public IReadOnlyList<LocalReplay> Attempts(LocalReplay replay) =>
+        runs[MapKey(replay)].DistinctBy(run => run.ScoreId).OrderBy(run => run.PlayedAt).ToArray();
 
     internal static string MapKey(LocalReplay run) => run.OnlineBeatmapId > 0
         ? "online:" + run.OnlineBeatmapId.ToString(System.Globalization.CultureInfo.InvariantCulture)

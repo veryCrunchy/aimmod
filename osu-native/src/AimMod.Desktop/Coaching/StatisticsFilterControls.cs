@@ -60,6 +60,7 @@ public partial class ScoreModFilterDropdown : BoundedShearedDropdown<string> {
         if (!labels.ContainsKey(Current.Value)) Current.Value=AimMod.Desktop.LocalLibrary.ScoreMods.Any;
     }
     protected override LocalisableString GenerateItemText(string item) => labels.GetValueOrDefault(item,item);
+    public string GetItemLabel(string item) => labels.GetValueOrDefault(item, item);
 }
 
 // Long score-derived lists must scroll within the window, including when resized.

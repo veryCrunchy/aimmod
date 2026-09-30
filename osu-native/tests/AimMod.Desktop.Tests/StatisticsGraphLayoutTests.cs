@@ -1,9 +1,9 @@
 using System.Reflection;
 using AimMod.Desktop.Coaching;
+using AimMod.Desktop.LocalLibrary;
 using NUnit.Framework;
 using osu.Framework.Graphics;
 using osu.Framework.Graphics.Containers;
-using osu.Game.Graphics.UserInterface;
 
 namespace AimMod.Desktop.Tests;
 
@@ -11,94 +11,107 @@ namespace AimMod.Desktop.Tests;
 public sealed class StatisticsGraphLayoutTests
 {
     [Test]
-    public void TraceIsClippedToInsetPlotViewport()
+    public void NiceTicksCoverTheDataWithRoundSteps()
     {
-        Type cardType = typeof(NativeStatisticsWorkspace).GetNestedType(
-            "StatisticsGraphCard",
-            BindingFlags.NonPublic) ?? throw new AssertionException("Statistics graph card type was not found.");
-
-        var card = (CompositeDrawable?)Activator.CreateInstance(
-            cardType,
-            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-            binder: null,
-            args: ["Accuracy", Colour4.Cyan, (Func<double, string>)(value => $"{value:0.00}%")],
-            culture: null) ?? throw new AssertionException("Statistics graph card could not be constructed.");
-
-        var viewport = getField<Container>(cardType, card, "plotViewport");
-        var graph = getField<LineGraph>(cardType, card, "graph");
-        var innerViewport = viewport.Child as Container;
+        double[] accuracy = StatisticsChartFormat.NiceTicks(80.4, 99.6);
+        double[] pp = StatisticsChartFormat.NiceTicks(21, 139);
 
         Assert.Multiple(() =>
         {
-            Assert.That(card.Masking, Is.True, "The card must clip all decoration to its rounded bounds.");
-            Assert.That(viewport.RelativeSizeAxes, Is.EqualTo(Axes.Both));
-            Assert.That(viewport.Padding.Top, Is.GreaterThanOrEqualTo(48), "The plot must clear the card heading and range label.");
-            Assert.That(viewport.Padding.Bottom, Is.GreaterThanOrEqualTo(16), "The trace must not touch the card's bottom edge.");
-            Assert.That(viewport.Padding.Left, Is.GreaterThanOrEqualTo(12));
-            Assert.That(viewport.Padding.Right, Is.GreaterThanOrEqualTo(12));
-            Assert.That(innerViewport, Is.Not.Null, "The padded viewport must contain a dedicated clipping container.");
-            Assert.That(innerViewport?.Masking, Is.True, "The inner plot area must mask the chart trace.");
-            Assert.That(innerViewport?.RelativeSizeAxes, Is.EqualTo(Axes.Both));
-            Assert.That(innerViewport?.Children, Does.Contain(graph), "The graph must be clipped by the inner plot viewport.");
-            Assert.That(graph.RelativeSizeAxes, Is.EqualTo(Axes.Both));
+            Assert.That(accuracy.First(), Is.LessThanOrEqualTo(80.4));
+            Assert.That(accuracy.Last(), Is.GreaterThanOrEqualTo(99.6));
+            Assert.That(accuracy, Is.EqualTo(new double[] { 80, 85, 90, 95, 100 }));
+            Assert.That(pp.First(), Is.LessThanOrEqualTo(21));
+            Assert.That(pp.Last(), Is.GreaterThanOrEqualTo(139));
+            Assert.That(pp.Zip(pp.Skip(1), (a, b) => b - a).Distinct().Count(), Is.EqualTo(1), "Ticks must be evenly spaced.");
         });
     }
 
     [Test]
-    public void SparseSeriesAddsOnlyBoundedPointMarkers()
+    public void TimeTicksUseMonthsForLongRangesAndDaysForShortOnes()
     {
-        (Type cardType, CompositeDrawable card) = createCard();
-        var points = new[]
-        {
-            new CoachingChartPoint(Guid.NewGuid(), DateTimeOffset.UtcNow.AddDays(-2), 91),
-            new CoachingChartPoint(Guid.NewGuid(), DateTimeOffset.UtcNow.AddDays(-1), 95),
-            new CoachingChartPoint(Guid.NewGuid(), DateTimeOffset.UtcNow, 93),
-        };
-
-        cardType.GetMethod("SetSeries", BindingFlags.Instance | BindingFlags.Public)?.Invoke(card, [points]);
-        var pointLayer = getField<Container>(cardType, card, "pointLayer");
+        var start = new DateTimeOffset(2026, 4, 1, 12, 0, 0, TimeSpan.Zero);
+        var months = StatisticsChartFormat.TimeTicks(start, start.AddDays(182), 8);
+        var days = StatisticsChartFormat.TimeTicks(start, start.AddDays(30), 8);
 
         Assert.Multiple(() =>
         {
-            Assert.That(pointLayer.Masking, Is.False, "The containing plot viewport owns clipping for every marker.");
-            Assert.That(pointLayer.Children, Has.Count.EqualTo(points.Length));
-            Assert.That(pointLayer.Children.All(point => point.RelativePositionAxes == Axes.Both), Is.True);
-            Assert.That(pointLayer.Children.All(point => point.X is >= 0 and <= 1), Is.True);
-            Assert.That(pointLayer.Children.All(point => point.Y is >= 0 and <= 1), Is.True);
+            Assert.That(months.Length, Is.InRange(4, 8));
+            Assert.That(months.All(tick => tick.Time.ToLocalTime().Day == 1), Is.True, "Long ranges are labelled at month starts.");
+            Assert.That(days.Length, Is.InRange(2, 8));
+            Assert.That(days.All(tick => tick.Time >= start && tick.Time <= start.AddDays(30)), Is.True);
         });
     }
 
     [Test]
-    public void DenseSeriesAvoidsRenderingACloudOfMarkers()
+    public void MissingValuesUseADashRatherThanZero()
     {
-        (Type cardType, CompositeDrawable card) = createCard();
-        CoachingChartPoint[] points = Enumerable.Range(0, 80)
-                                                        .Select(index => new CoachingChartPoint(Guid.NewGuid(), DateTimeOffset.UtcNow.AddMinutes(index), index))
-                                                        .ToArray();
-
-        cardType.GetMethod("SetSeries", BindingFlags.Instance | BindingFlags.Public)?.Invoke(card, [points]);
-
-        Assert.That(getField<Container>(cardType, card, "pointLayer").Children, Is.Empty);
+        Assert.Multiple(() =>
+        {
+            Assert.That(StatisticsChartFormat.Value(StatisticsMetric.Performance, null), Is.EqualTo(StatisticsChartFormat.Missing));
+            Assert.That(StatisticsChartFormat.Value(StatisticsMetric.Accuracy, 91.234), Is.EqualTo("91.23%"));
+            Assert.That(StatisticsChartFormat.Value(StatisticsMetric.Misses, 0), Is.EqualTo("0"));
+        });
     }
 
-    private static (Type Type, CompositeDrawable Card) createCard()
+    [Test]
+    public void ChangeColourFollowsWhichDirectionIsBetter()
     {
-        Type cardType = typeof(NativeStatisticsWorkspace).GetNestedType(
-            "StatisticsGraphCard",
-            BindingFlags.NonPublic) ?? throw new AssertionException("Statistics graph card type was not found.");
-
-        var card = (CompositeDrawable?)Activator.CreateInstance(
-            cardType,
-            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-            binder: null,
-            args: ["Accuracy", Colour4.Cyan, (Func<double, string>)(value => $"{value:0.00}%")],
-            culture: null) ?? throw new AssertionException("Statistics graph card could not be constructed.");
-
-        return (cardType, card);
+        Assert.Multiple(() =>
+        {
+            Assert.That(StatisticsChartFormat.ChangeStyle(StatisticsMetric.Accuracy, 1.2, true).Colour, Is.EqualTo(AimModPalette.Success));
+            Assert.That(StatisticsChartFormat.ChangeStyle(StatisticsMetric.Misses, 1.2, false).Colour, Is.EqualTo(AimModPalette.Danger));
+            Assert.That(StatisticsChartFormat.ChangeStyle(StatisticsMetric.Misses, -0.8, false).Colour, Is.EqualTo(AimModPalette.Success));
+            Assert.That(StatisticsChartFormat.ChangeStyle(StatisticsMetric.Stars, 0.4, null).Colour, Is.EqualTo(AimModPalette.Cyan),
+                "Harder maps are neither better nor worse.");
+            Assert.That(StatisticsChartFormat.ChangeStyle(StatisticsMetric.Accuracy, 0.01, true).Colour, Is.EqualTo(AimModPalette.Muted));
+        });
     }
 
-    private static T getField<T>(Type owner, object instance, string name)
+    [Test]
+    public void ReferenceLineUsesMedianForPpAndMeanOtherwise()
+    {
+        CoachingChartPoint[] points = [point(0, 10), point(1, 20), point(2, 90)];
+        var pp = new StatisticsMetricView(StatisticsMetric.Performance, points, [], 0, [], 20, null, string.Empty, [], [], 0);
+        var accuracy = pp with { Metric = StatisticsMetric.Accuracy, Headline = 40 };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(StatisticsTrendChart.ReferenceValue(pp), Is.EqualTo(20));
+            Assert.That(StatisticsTrendChart.ReferenceValue(accuracy), Is.EqualTo(40).Within(0.001));
+            Assert.That(StatisticsTrendChart.ReferenceValue(StatisticsMetricView.Empty(StatisticsMetric.Accuracy)), Is.Null);
+        });
+    }
+
+    [Test]
+    public void FilterPopoverAndToolbarDrawAboveTheScrollingContentWithoutClipping()
+    {
+        using var workspace = new NativeStatisticsWorkspace(new InMemoryLocalLibrarySource([], []), _ => { });
+        var layer = field<Container>(workspace, "filterLayer");
+        var popover = field<Container>(workspace, "filterPopover");
+        var content = field<Container>(workspace, "contentViewport");
+        var dropdown = field<ScoreModFilterDropdown>(workspace, "modDropdown");
+        var modsRow = popover.Children.OfType<Container>().Single(row => row.Children.Any(child => ReferenceEquals(child, dropdown)));
+        Drawable[] otherRows = popover.Children.Where(child => !ReferenceEquals(child, modsRow) && child.Y > 0 && child.Y < modsRow.Y).ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(layer.Depth, Is.LessThan(content.Depth), "The popover must draw and receive input above the charts and plays.");
+            Assert.That(popover.Masking, Is.False, "An open mods menu must be able to extend beyond the popover.");
+            Assert.That(layer.Masking, Is.False);
+            Assert.That(modsRow.Masking, Is.False);
+            Assert.That(otherRows, Is.Not.Empty);
+            Assert.That(otherRows.All(row => modsRow.Depth < row.Depth), Is.True, "The mods menu must cover the rows beside it.");
+            Assert.That(popover.Children.OfType<FillFlowContainer>(), Is.Empty,
+                "Rows are fixed-position so the popup layer can raise one without reordering a flow.");
+        });
+    }
+
+    private static CoachingChartPoint point(int day, double value) =>
+        new(Guid.NewGuid(), new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero).AddDays(day), value);
+
+    private static T field<T>(object instance, string name)
         where T : class =>
-        owner.GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(instance) as T
-        ?? throw new AssertionException($"{owner.Name}.{name} was not found.");
+        instance.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(instance) as T
+        ?? throw new AssertionException($"{instance.GetType().Name}.{name} was not found.");
 }
