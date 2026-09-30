@@ -73,6 +73,19 @@ test('workspace code avoids Intl-dependent formatting',()=>{
     assert.doesNotMatch(fs.readFileSync(path.join(__dirname,file),'utf8'),/toLocale(String|DateString|TimeString)\(|Intl\./,file);
   }
 });
+test('styles and scripts stay inside the Gameface feature set',()=>{
+  const dir=__dirname,css=fs.readdirSync(dir).filter(f=>f.endsWith('.css'));
+  const inline=fs.readFileSync(path.join(dir,'index.html'),'utf8').match(/<style>([\s\S]*?)<\/style>/)[1].replace(/\/\*[\s\S]*?\*\//g,'');
+  for(const [name,text] of [...css.map(f=>[f,fs.readFileSync(path.join(dir,f),'utf8').replace(/\/\*[\s\S]*?\*\//g,'')]),['index.html <style>',inline]]){
+    assert.doesNotMatch(text,/display:\s*(inline-)?grid|(^|[;{\s])(row-|column-)?gap\s*:|position:\s*sticky|var\(--|calc\(|@supports/,name);
+  }
+  const scripts=fs.readdirSync(dir).filter(f=>f.endsWith('.js')&&f!=='coaching.js').map(f=>path.join(dir,f)).concat(['browser.js','native-browser.js'].map(f=>path.join(dir,'..','replay',f)));
+  for(const file of scripts){const text=fs.readFileSync(file,'utf8');
+    assert.doesNotMatch(text,/\bfetch\(|AbortController|requestAnimationFrame|IntersectionObserver|ResizeObserver|\bPromise\b|=>/,file);
+    // clientWidth/clientHeight are missing in Gameface; only allowed as a fallback after offsetWidth.
+    for(const m of text.matchAll(/clientWidth|clientHeight/g)){const before=text.slice(Math.max(0,m.index-40),m.index);assert.match(before,/offsetWidth\|\|[\w.]*$/,file);}
+  }
+});
 test('pages never send the capability path as a referrer',()=>{
   for(const file of ['index.html','overlay.html'])assert.match(fs.readFileSync(path.join(__dirname,file),'utf8'),/<meta name="referrer" content="no-referrer">/,file);
 });

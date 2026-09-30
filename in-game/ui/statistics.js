@@ -13,7 +13,7 @@
   function F() { return global.AimModFormat; }
   function measure(key) { return measures.filter(function(m){return m[0]===key;})[0]; }
   function pointValue(p,key) { var m=measure(key);var v=m ? p.Measurements && p.Measurements[key] : p[key];return typeof v==='number' && isFinite(v) ? v*(m?m[3]:1) : null; }
-  function widthOf(e) { return Math.max(0,e.clientWidth||e.offsetWidth||0); }
+  function widthOf(e) { return Math.max(0,e.offsetWidth||e.clientWidth||0); }
   function measurementText(m,value) {
     if(m[2]===' ms')return F().millis(value);
     if(m[0]==='AverageSpeed')return number(value,0)+' px/s';
