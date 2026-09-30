@@ -14,7 +14,7 @@ public partial class NativeTrainersWorkspace
 
     private void buildPresetControls(FillFlowContainer<Drawable> body)
     {
-        body.Add(text("2. Choose a drill", 16, AimModPalette.Text));
+        body.Add(new AimModSubsectionHeader("Drill"));
         body.Add(presetChoices = flow());
         body.Add(presetSummary = paragraph(""));
         rebuildPresets();
@@ -36,7 +36,7 @@ public partial class NativeTrainersWorkspace
             content.Add(choiceText(preset.Title, 14));
             content.Add(new TrainerDrillPreview(preset.Apply(settings), tempo: () => settings.Bpm) { RelativeSizeAxes = Axes.X, Height = 48 });
             content.Add(description);
-            button.SetVisualContent(content, 108);
+            button.SetVisualContent(content, 118);
             presetChoices.Add(button);
             presetButtons.Add((preset, button));
         }

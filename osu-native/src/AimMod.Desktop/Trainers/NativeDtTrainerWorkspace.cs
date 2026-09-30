@@ -108,10 +108,10 @@ public partial class NativeDtTrainerWorkspace : Container
                 {
                     if (token.IsCancellationRequested) return;
                     maps.Clear(); difficultyButtons.Clear(); mapScroll.ScrollToStart();
-                    mapStatus.Text = $"{found.Total:N0} installed sets | Choose a difficulty you can finish comfortably.";
+                    mapStatus.Text = $"{found.Total:N0} installed sets · pick a difficulty you can finish comfortably";
                     foreach (var set in found.Items)
                     {
-                        var group = new AimModChoiceGroup(set.Title, $"{set.Artist} | mapped by {set.Creator}");
+                        var group = new AimModChoiceGroup(set.Title, $"{set.Artist} · mapped by {set.Creator}");
                         foreach (var d in set.Difficulties.Where(d => d.RulesetShortName == "osu"))
                         {
                             var map = new LocalReplay(Guid.Empty, set.SetId, d.BeatmapId, set.Title, set.Artist, d.Name, "osu", "", DateTimeOffset.UnixEpoch,
@@ -123,7 +123,7 @@ public partial class NativeDtTrainerWorkspace : Container
                                     RelativeSizeAxes = Axes.X, Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft,
                                     Text = d.Name, Font = new FontUsage(size: 13), Colour = AimModPalette.Text } }
                             ] }, 36);
-                            button.Width = 238;
+                            button.AutoSizeAxes = Axes.None; button.RelativeSizeAxes = Axes.X; button.Width = .495f;
                             button.SetSelected(selected is not null && MapKey(selected) == MapKey(map));
                             difficultyButtons[MapKey(map)] = button;
                             group.Choices.Add(button);
@@ -165,17 +165,16 @@ public partial class NativeDtTrainerWorkspace : Container
         {
             detail.Add(text("Your path to DT", 20));
             detail.Add(speedTrack(100));
-            detail.Add(text("Start with a map you know", 18));
-            detail.Add(text("Choose an installed difficulty. Your first attempt plays the full map at normal speed."));
-            detail.Add(new AimModChoiceGroup("01  Play at your current speed", "Use your usual osu! controls and skin. Finish the map to record an attempt."));
-            detail.Add(new AimModChoiceGroup("02  Find your pace", "Your accuracy sets a personal target. Stronger runs earn bigger speed increases; a few misses allow a smaller step."));
-            detail.Add(new AimModChoiceGroup("03  Work towards 150%", "Struggling lowers the speed a little. Your progress is saved for each map."));
+            detail.Add(text("Pick a map you know. The first attempt plays it at normal speed."));
+            detail.Add(step(FontAwesome.Solid.Play, "Play at 100%", "Finish the map with your usual controls and skin."));
+            detail.Add(step(FontAwesome.Solid.Bullseye, "Set your target", "Your accuracy becomes the bar for speeding up."));
+            detail.Add(step(FontAwesome.Solid.FastForward, "Climb to 150%", "Clean runs speed up; struggles ease off. Saved per map."));
             if (message.Length > 0) detail.Add(text(message));
             return;
         }
         detail.Add(text("YOUR NEXT ATTEMPT", 12));
         detail.Add(text(selected.Title, 20));
-        detail.Add(text($"{selected.Artist} | {selected.Difficulty} | {selected.StarRating:0.00} stars", 13));
+        detail.Add(text($"{selected.Artist} · {selected.Difficulty} · {selected.StarRating:0.00} stars", 13));
         if (progress is { } p)
         {
             var metrics = row();
@@ -189,9 +188,14 @@ public partial class NativeDtTrainerWorkspace : Container
                 { AutoSizeAxes = Axes.None, RelativeSizeAxes = Axes.X, Height = 44 };
             detail.Add(play);
             detail.Add(text(p.Completed ? "DT reached. Keep practising here or choose another map."
-                : p.Speed == 150 && p.CleanRuns == 1 ? "One more run within your accuracy target with few misses to confirm full DT."
-                : accuracyTarget is { } goal ? $"Aim for {goal:0.00}% accuracy or better with few misses. Your next speed depends on how the run goes."
-                : "Play a complete run to set your accuracy target. Speed will adapt to your result."));
+                : p.Speed == 150 && p.CleanRuns == 1 ? "One more clean run within your target confirms full DT."
+                : accuracyTarget is { } goal ? $"Reach {goal:0.00}% with few misses to speed up."
+                : "Finish a run to set your accuracy target."));
+            var rules = row(); rules.Spacing = new(6);
+            rules.Add(new AimModTrainerChip("+1–3% on target", FontAwesome.Solid.ArrowUp, AimModTrainerChipTone.Accent, "Stronger runs earn bigger speed increases."));
+            rules.Add(new AimModTrainerChip("smaller step with misses", FontAwesome.Solid.Minus));
+            rules.Add(new AimModTrainerChip("-1–5% when control drops", FontAwesome.Solid.ArrowDown, tooltip: "Struggling lowers the speed a little."));
+            detail.Add(rules);
             if (p.History.LastOrDefault() is { } last)
             {
                 detail.Add(text("LAST ATTEMPT", 12));
@@ -206,12 +210,30 @@ public partial class NativeDtTrainerWorkspace : Container
                 foreach (var attempt in p.History.TakeLast(6).Reverse())
                     detail.Add(attemptRow($"{attempt.Speed}%", $"{attempt.Accuracy:0.00}%", $"{attempt.Misses}", $"{attempt.NextSpeed}%"));
             }
-            detail.Add(text("Speed adapts after each run: +1-3% when you're on target, smaller steps with misses, and -1-5% when accuracy or control drops.", 12));
-            detail.Add(text("No Fail is on. Quitting keeps your speed. Practice scores stay off osu! leaderboards.", 12));
+            var facts = row(); facts.Spacing = new(6);
+            facts.Add(new AimModTrainerChip("No Fail", FontAwesome.Solid.ShieldAlt));
+            facts.Add(new AimModTrainerChip("Quitting keeps your speed", FontAwesome.Solid.Pause));
+            facts.Add(new AimModTrainerChip("Off osu! leaderboards", FontAwesome.Solid.EyeSlash));
+            detail.Add(facts);
             if (p.Speed > 100 || p.History.Length > 0)
                 detail.Add(new AimModButton("Restart at 100%", reset));
         }
         else if (message.Length > 0) detail.Add(text(message));
+    }
+
+    private static Container step(IconUsage icon, string title, string description)
+    {
+        var body = new FillFlowContainer<Drawable> { RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Direction = FillDirection.Vertical, Spacing = new(2),
+            Padding = new MarginPadding { Left = 52, Right = 12, Vertical = 10 }, Children = [
+                new SpriteText { Text = title, Font = new FontUsage(size: 15, weight: "SemiBold"), Colour = AimModPalette.Text },
+                new TextFlowContainer(t => { t.Font = new FontUsage(size: 12); t.Colour = AimModPalette.Muted; }) { RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Text = description },
+            ] };
+        return new Container { RelativeSizeAxes = Axes.X, AutoSizeAxes = Axes.Y, Masking = true, CornerRadius = AimModVisualStyle.CardRadius, Children = [
+            new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.Panel },
+            new CircularContainer { Size = new(28), X = 14, Anchor = Anchor.CentreLeft, Origin = Anchor.CentreLeft, Masking = true, Children = [
+                new Box { RelativeSizeAxes = Axes.Both, Colour = AimModPalette.AccentMuted },
+                new SpriteIcon { Icon = icon, Size = new(12), Anchor = Anchor.Centre, Origin = Anchor.Centre, Colour = AimModPalette.Accent } ] },
+            body ] };
     }
 
     private static Container attemptRow(string speed, string accuracy, string misses, string next, bool header = false)

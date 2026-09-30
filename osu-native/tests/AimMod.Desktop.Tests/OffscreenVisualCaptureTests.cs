@@ -759,10 +759,10 @@ public sealed partial class OffscreenVisualCaptureTests
                         var offset = (AimModDropdown<int>)typeof(NativeTrainersWorkspace).GetField("offsetSelector", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(trainer)!;
                         var recent = (osu.Framework.Graphics.Containers.FillFlowContainer<osu.Framework.Graphics.Drawable>)typeof(NativeTrainersWorkspace).GetField("recent", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(trainer)!;
                         offset.Current.Value = 10;
-                        Assert.That(recent.Children.OfType<TrainerProgressChart>(), Is.Empty, "Changed controls must not retain a comparison from different offsets.");
+                        Assert.That(recent.Children.OfType<TrainerProgressTrend>(), Is.Empty, "Changed controls must not retain a comparison from different offsets.");
                         ((AimModButton)typeof(NativeTrainersWorkspace).GetField("restoreControls", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(trainer)!).Action.Invoke();
                         Assert.That(offset.Current.Value, Is.Zero);
-                        Assert.That(recent.Children.OfType<TrainerProgressChart>().Count(), Is.EqualTo(1));
+                        Assert.That(recent.Children.OfType<TrainerProgressTrend>().Count(), Is.EqualTo(1));
                     }
                 }, 1000);
             }
@@ -799,6 +799,9 @@ public sealed partial class OffscreenVisualCaptureTests
                     if (route is "trainers-results" or "trainers-spinner-results")
                     {
                         ((AimModDropdown<int>)typeof(NativeTrainersWorkspace).GetField("durationSelector", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(trainer)!).Current.Value = 15;
+                        // The default music is a random song; the scripted run expects the short cue track.
+                        if (route == "trainers-results")
+                            ((AimModDropdown<string>)typeof(NativeTrainersWorkspace).GetField("musicSelector", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(trainer)!).Current.Value = "cues";
                     }
                     if (route == "trainers-music")
                         ((AimModDropdown<string>)typeof(NativeTrainersWorkspace).GetField("musicSelector", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(trainer)!).Current.Value = "mint-current";
@@ -848,7 +851,9 @@ public sealed partial class OffscreenVisualCaptureTests
                             Assert.That(store.Load(), Has.Count.EqualTo(1));
                             Assert.That(trainerOutroDuration, Is.InRange(1700,2600), "Keep the player alive through the final-tap grace and music fade.");
                             Assert.That((bool)typeof(NativeTrainersWorkspace).GetField("showingResults",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(trainer)!,Is.True);
-                            Assert.That(store.Load()[0].Engine, Is.EqualTo("osu-moving-v2"));
+                            // Adaptive sessions are the default, so the engine follows the resolved session (patterns and sliders).
+                            Assert.That(store.Load()[0].Engine, Is.EqualTo(TrainerResult.EngineFor(store.Load()[0].Settings)));
+                            Assert.That(store.Load()[0].UsesOsuJudgements, Is.True);
                             Assert.That(store.Load()[0].Misses, Is.EqualTo(store.Load()[0].Notes));
                         }
                         else if (route == "trainers-stop")

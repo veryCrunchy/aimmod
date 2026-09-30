@@ -13,7 +13,7 @@ public partial class NativeTrainersWorkspace
     private AimModDropdown<int> sliderLengthSelector = null!, approachSelector = null!;
     private AimModDropdown<TrainerPathStyle> pathSelector = null!;
     private AimModDropdown<TrainerReactionDelay> reactionDelaySelector = null!;
-    private AimModButton randomizeToggle = null!;
+    private AimModTrainerSwitch randomizeToggle = null!;
     private Drawable pathControl = null!;
     private TrainerWorkspacePreferences preferences = new();
     public IReadOnlyList<TrainerSkillEvidence> SkillEvidence { get; set; } = [];
@@ -52,10 +52,11 @@ public partial class NativeTrainersWorkspace
             settings.Sliders, v => { settings = settings with { Sliders = v }; refreshObjectAndGuideControls(); refreshHistory(); }, 185, d => sliderSelector = d);
         sliderLengthControl = selector("SLIDER LENGTH LIMIT", new[] {1,2,4}.Select(v => new KeyValuePair<string,int>($"{v} beat{(v==1?"":"s")}",v)),
             1, v => { settings = settings with { SliderBeats = v }; refreshHistory(); }, 140, d => sliderLengthSelector = d);
-        randomizeToggle = new AimModButton("", () => {
+        randomizeToggle = new AimModTrainerSwitch("Skill randomizer", "Mix patterns within your limits", () => {
             settings = settings with { RandomizePatterns = !settings.RandomizePatterns };
             preferences = preferences with { RandomizePatterns = settings.RandomizePatterns }; saveTrainerPreferences(); refreshPatternToggle(); refreshHistory();
         }) { Margin = new MarginPadding { Top = selectorLabelSpacing } };
+        randomizeToggle.RelativeSizeAxes = Axes.None; randomizeToggle.Width = 250;
         patternControls.Add(randomizeToggle); refreshPatternToggle();
         body.Add(patternControls);
         body.Add(skillSummary=paragraph(""));
@@ -76,8 +77,7 @@ public partial class NativeTrainersWorkspace
     }
     private void refreshPatternToggle()
     {
-        randomizeToggle.SetCaption($"Skill randomizer: {(settings.RandomizePatterns ? "On" : "Off")}");
-        randomizeToggle.SetSelected(settings.RandomizePatterns);
+        randomizeToggle.SetValue(settings.RandomizePatterns);
         refreshSkillSummary();
     }
     private void restorePatternControls(TrainerSettings s)

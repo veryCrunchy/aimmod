@@ -13,10 +13,9 @@ public partial class NativeTrainersWorkspace
     private AimModDropdown<TrainerSliderShape> sliderShapeSelector = null!;
     private AimModDropdown<TrainerSpinnerPattern> spinnerPatternSelector = null!;
     private Drawable sliderShapeControl = null!, spinnerPatternControl = null!;
-    private AimModButton guideToggle = null!;
-    private osu.Game.Graphics.Containers.OsuTextFlowContainer guideDescription = null!;
+    private AimModTrainerSwitch guideToggle = null!;
 
-    private void buildObjectAndGuideControls(FillFlowContainer<Drawable> body)
+    private void buildObjectAndGuideControls(FillFlowContainer<Drawable> body, FillFlowContainer<Drawable> card)
     {
         objectControls = flow(); objectControls.Depth = -9.1f;
         objectControls.Add(sliderControl); objectControls.Add(sliderLengthControl);
@@ -36,26 +35,22 @@ public partial class NativeTrainersWorkspace
             ["Even duration"] = TrainerSpinnerPattern.Steady, ["Build duration"] = TrainerSpinnerPattern.BuildUp,
             ["Mixed lengths"] = TrainerSpinnerPattern.MixedLengths }, settings.SpinnerPattern,
             pattern => { settings = settings with { SpinnerPattern = pattern }; refreshHistory(); }, 180, d => spinnerPatternSelector = d));
-        body.Add(guideToggle = new AimModButton("", () =>
+        card.Add(guideToggle = new AimModTrainerSwitch("Practice guide", "", () =>
         {
             settings = settings with { GuidedCues = !settings.GuidedCues };
             preferences = preferences with { GuidedCues = settings.GuidedCues };
             saveTrainerPreferences(); refreshObjectAndGuideControls(); refreshHistory();
         }));
-        body.Add(guideDescription = paragraph(""));
         refreshObjectAndGuideControls();
     }
 
     private void refreshObjectAndGuideControls()
     {
         if (guideToggle is null) return;
-        guideToggle.SetCaption($"Practice guide: {(settings.GuidedCues ? "On" : "Off")}");
-        guideToggle.SetSelected(settings.GuidedCues);
-        guideDescription.Text = settings.GuidedCues
-            ? settings.Kind == TrainerKind.Spinner ? "Follow the circle example, check your live RPM, then finish without prompts. Use a comfortable circle size."
-                : settings.Kind == TrainerKind.Reaction ? "Get a reminder after each response. Cues still arrive at unpredictable times."
-                : "Get short cues as you practise, then finish the last part without prompts."
-            : "Turn on the practice guide for cues during the exercise.";
+        guideToggle.SetValue(settings.GuidedCues);
+        guideToggle.Hint = settings.Kind == TrainerKind.Spinner ? "Circle example and live RPM, then no prompts"
+            : settings.Kind == TrainerKind.Reaction ? "A reminder after each response"
+            : "Short cues while you play, then a final part without prompts";
         objectControls.Alpha = settings.Kind == TrainerKind.Reaction ? 0 : 1;
         sliderControl.Alpha = sliderLengthControl.Alpha = spinnerFrequencyControl.Alpha = settings.Kind == TrainerKind.Spinner ? 0 : 1;
         sliderLengthControl.Alpha = settings.Sliders != TrainerSliderStyle.None && settings.Kind != TrainerKind.Spinner ? 1 : 0;

@@ -91,8 +91,20 @@ public sealed record TrainerResult(Guid Id, DateTimeOffset CompletedAt, TrainerS
     double? SpreadMs, double? DriftMs, double? ResponseMs = null, string Engine = "cue", double? Accuracy = null, double? PlayedSeconds = null, TrainerDemand? Demand = null,
     TrainerGuidedRun? GuidedRun = null, int? JudgementMisses = null, bool Assisted = false,
     ReactionSummary? Reaction = null, ReadingWindowResult[]? ReadingWindows = null,
-    SpinnerPracticeSummary? SpinnerPractice = null, int? TapTargets = null, TrainerWarmupRun? WarmupRun = null)
+    SpinnerPracticeSummary? SpinnerPractice = null, int? TapTargets = null, TrainerWarmupRun? WarmupRun = null,
+    int[]? OffsetHistogram = null)
 {
+    public const int HistogramBinMs = 5;
+    public const int HistogramRangeMs = 60;
+    /// <summary>Hit offsets in 5 ms bins from -60 to +60 ms. Offsets beyond the range are kept in the outer bins.</summary>
+    public static int[] Histogram(IEnumerable<double> offsets)
+    {
+        var bins = new int[2 * HistogramRangeMs / HistogramBinMs];
+        foreach (double offset in offsets)
+            if (double.IsFinite(offset)) bins[Math.Clamp((int)Math.Floor((offset + HistogramRangeMs) / HistogramBinMs), 0, bins.Length - 1)]++;
+        return bins;
+    }
+
     public bool UsesOsuJudgements => Engine is "osu-song-v2" or "osu-song-v1" or "osu" or "osu-moving-v2" or "osu-patterns-v3" or "osu-adaptive-v4" or "osu-reading-v2" or "osu-reading-v3" or "osu-reading-v4" or "osu-spinner-v1";
     public static string EngineFor(TrainerSettings s) => s.Kind == TrainerKind.Reaction ? "reaction-v2"
         : TrainerMusicCatalog.IsSong(s.Music) ? "osu-song-v2"
@@ -167,7 +179,7 @@ public sealed class TrainerSession
         double[] late = Hits.Where(h => Notes[h.NoteIndex].TimeMs >= StartMs + Settings.Seconds * 2000 / 3.0).Select(h => h.OffsetMs).ToArray();
         double? drift = early.Length >= 3 && late.Length >= 3 ? late.Average() - early.Average() : null;
         return new(Guid.NewGuid(), now, Settings, Notes.Count, Hits.Count, offsets.Count(x => Math.Abs(x) <= 25), Extras,
-            RepeatedKeys, mean, spread, drift);
+            RepeatedKeys, mean, spread, drift, OffsetHistogram: offsets.Length > 0 ? TrainerResult.Histogram(offsets) : null);
     }
 
     public bool WasHit(int index) => judged[index];

@@ -75,15 +75,19 @@ public partial class NativeTrainersWorkspace
     {
         if (result.Reaction is {} r)
         {
-            results.Add(text("Response consistency", 15, AimModPalette.Text));
-            results.Add(paragraph($"First half: {ms(r.FirstHalfMs)} median · second half: {ms(r.LastHalfMs)} median. Only correct responses are included."));
+            results.Add(new AimModSubsectionHeader("Response consistency", "correct responses only"));
+            var halves = flow();
+            halves.Add(new AimModTrainerKpi("FIRST HALF", ms(r.FirstHalfMs), "median response"));
+            halves.Add(new AimModTrainerKpi("SECOND HALF", ms(r.LastHalfMs), r.FirstHalfMs is { } a && r.LastHalfMs is { } b ? $"{b - a:+0;-0;0} ms vs first half" : "median response",
+                r.FirstHalfMs is { } first && r.LastHalfMs is { } second ? second - first : null, AimModTrainerTrend.LowerIsBetter));
+            results.Add(halves);
             var responses = r.Trials.Where(t => t.Outcome == ReactionOutcome.Hit).Select(t => t.ResponseMs!.Value).ToArray();
             if (responses.Length >= 2) results.Add(new TrainerProgressChart(responses));
-            results.Add(paragraph("The 90th percentile shows your slower responses. Keep mistakes low before shortening the response window. Visual reaction uses screen timing; audio offset is not applied."));
+            results.Add(paragraph("Keep mistakes low before shortening the window. Uses screen timing; audio offset is not applied."));
         }
         if (result.ReadingWindows is { Length: > 0 } windows)
         {
-            results.Add(text("Where the sequence broke down", 15, AimModPalette.Text));
+            results.Add(new AimModSubsectionHeader("Where the sequence broke down", "10 s windows"));
             foreach (var window in windows)
             {
                 var row = flow();
@@ -91,7 +95,7 @@ public partial class NativeTrainersWorkspace
                 row.Add(text($"{window.HitPercent:0}% tap hits · {window.Misses} misses / {window.Circles} taps", 13, AimModPalette.Text));
                 results.Add(row);
             }
-            results.Add(paragraph("These are circle and slider-head results across the exercise. Misses can come from reading, aim or tapping; compare with an easier setup to narrow it down."));
+            results.Add(paragraph("Circle and slider-head results. Misses can come from reading, aim or tapping; try an easier setup to narrow it down."));
         }
     }
 }
