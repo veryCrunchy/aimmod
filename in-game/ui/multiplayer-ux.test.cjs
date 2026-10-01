@@ -75,3 +75,9 @@ test('settings editor: title and Done come first, advanced settings fold away un
   const t=setup().open(view({lobby:lobby({settings:ffa})}));t.button('Edit').onclick();
   assert.ok(t.text().includes('Target speed'),'opens by itself when targets are changed');assert.ok(!t.all().some(e=>e.className==='mp-lock'));
 });
+test('home: personal multiplayer settings fold to a summary, but key conflicts still show',()=>{
+  const s=setup().open(view({prefs:{hotkey:'F6',sounds:true,spectatePrivacy:'ask'},keys:{clip:'F8',taken:[],conflicts:['F6 is also KovaaK’s reset key.']}}));
+  assert.ok(s.text().includes('Hotkey F6 · Sounds on · Spectating asks you first'));assert.ok(!s.text().includes('Ready when I join'));
+  assert.ok(s.text().includes('F6 is also KovaaK’s reset key.'),'a conflict is never folded away');
+  s.button('Change').onclick();assert.ok(s.text().includes('Ready when I join'));s.button('Done').onclick();assert.ok(!s.text().includes('Ready when I join'));
+});

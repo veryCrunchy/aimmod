@@ -295,9 +295,14 @@
     });
   }
   // This player's own multiplayer preferences (saved on this PC).
+  var prefsOpen=false;
   function prefsPanel(){
     var pr=view.prefs||{};var p=node('div','panel mp-prefs');var head=node('div','panel-head');var text=node('div','head-text');
-    add(text,node('h2','','Your multiplayer settings'),node('p','','Saved on this PC.'));head.appendChild(text);p.appendChild(head);
+    // Folded to a one-line summary until the player asks to change something.
+    var spec={friends:'Friends can spectate you',ask:'Spectating asks you first',off:'Nobody can spectate you'};
+    add(text,node('h2','','Your multiplayer settings'),node('p','',prefsOpen?'Saved on this PC.':'Hotkey '+(pr.hotkey||'F7')+' · Sounds '+(pr.sounds?'on':'off')+' · '+(spec[pr.spectatePrivacy]||spec.friends)));head.appendChild(text);
+    head.appendChild(actions(button(prefsOpen?'Done':'Change',function(){prefsOpen=!prefsOpen;render();},'compact')));p.appendChild(head);
+    if(!prefsOpen){p.className+=' folded';((view.keys&&view.keys.conflicts)||[]).forEach(function(c){p.appendChild(node('p','mp-warn-text mp-prefs-warn',safe(c,'')));});return p;}
     var body=node('div','mp-prefs-body');p.appendChild(body);
     function pref(key,value){var o={};o[key]=value;act('prefs',{prefs:o});}
     function flag(key,title,note){body.appendChild(settingRow(title,note,toggleSwitch(!!pr[key],title,function(){pref(key,!pr[key]);})));}
