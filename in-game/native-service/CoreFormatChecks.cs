@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace AimMod.InGame;
 
 // Byte-exact samples produced by the AimModCore formatter
@@ -19,6 +21,8 @@ static class CoreFormatChecks
 
     // Format 2 (compact) synthetic attempt from the same tool, LZMS compressed.
     const string Compact = "QU1SUExBWTICAAAAzQEAAHsia2luZCI6ImhlYWRlciIsInZlcnNpb24iOjIsImlkIjoiMTc5MDAwMDAwMC00Mi0yIiwic2NlbmFyaW8iOiJTeW50aGV0aWMgdGFyZ2V0IHRlc3QiLCJyZWNvcmRlZEF0IjoiMjAyNi0wMS0wMVQwMDowMDowMFoiLCJjb29yZGluYXRlcyI6InVucmVhbC1jZW50aW1ldGVycyIsIm5vbWluYWxIeiI6NjAsIm1hcE5hbWUiOiJNYXBfQSIsIm1hcFNjYWxlIjoxLCJzdGFydEV2ZW50IjoibmF0aXZlIiwicmVhc29uIjoiY29tcGxldGVkIiwiZnJhbWVzIjoxNzIsImlucHV0RXZlbnRzIjoyMDUyLCJzY29yZSI6MzIxLjUsImR1cmF0aW9uIjoyLjk5ODUsImVuY29kaW5nIjp7ImtleWZyYW1lcyI6NiwicXVhbnR1bSI6MC4wNywieWF3UGVyVW5pdCI6MC4xMTQ1ODU5OTksInBpdGNoUGVyVW5pdCI6LTAuMTE0NTg2LCJrZXlmcmFtZUVycm9yTWF4Ijo3LjM3NGUtMTAsImtleWZyYW1lRXJyb3JSbXMiOjUuMTI3ZS0xMH19BQAAAM0gAAAKUeXAGADoBc0gAAAAAAAAzSAAAAAAAABMAQAAC0qy1doDBybVsUyvB3hxLFGmoQSQ1H8ePNlBXUa5KZq7gkedYSami6iPAAAAmhhwZs9VAKYP7E/AOjgQqHIDBzbYAQeYDeAHIIDV0mENsYgH4gAWRascnCQCYDoW9EMfUF/4BJAhB0oxhojIB+IBjNAygC7wTo/WkAEEdG9CAwEB187A88LHwNvXDW7ZAAaqTu9h9s8irjSBB8QvTMAqYBmAgdJTABjA4NfqSVBeRf30Vgk+CDBv63vSJAgQMKgGEAgKrCsDrgSBAIOAgwECBIECgQCFAcs2ASugwcABgQBCQYDAgAKBlRAQMGBAcCCAEFBQESgIDBAEJFj9DAQOAhAGCggEBBQGAggGEuyZ4dUk2GfS3PCJBBNuUrYAxZsGru0Z4tXUZ9LEdhaPBOhtXsKNwxcQoPUEMKsKAACAIPyJXS8EqQAGODIUCbA=";
+
+    static bool Throws(Action action) { try { action(); return false; } catch (ArgumentException) { return true; } }
 
     public static void Run()
     {
@@ -83,6 +87,42 @@ static class CoreFormatChecks
             Check(commands.Result() == new GameCommandResult(42, "error", "challenge-active", "Finish\tit"), "native result parsed");
             File.WriteAllText(Path.Combine(root, "core-active.tsv"), $"AIMMOD_CORE_1\t0.1.0\t{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}\ttelemetry,replay,load,start\n");
             Check(GameCommands.Capabilities(root).Contains("load") && GameCommands.Capabilities(root).Contains("start"), "capabilities from the heartbeat");
+
+            // Received replays: format 2 only, decoded before they enter the library.
+            var importRoot = Path.Combine(root, "import");
+            var imported = ReplayImport.Import(importRoot, Convert.FromBase64String(Compact));
+            Check(imported.Id == "1790000000-42-2" && imported.Scenario == "Synthetic target test" && new ReplayCatalog(importRoot).Read("1790000000-42-2") is not null, "received replay imported");
+            Check(ReplayImport.Import(importRoot, Convert.FromBase64String(Compact)).Id == "1790000000-42-2", "same replay again is idempotent");
+            var damagedReplay = Convert.FromBase64String(Compact); damagedReplay[^5] ^= 0x55;
+            Check(ReplayImport.Import(Path.Combine(root, "import2"), damagedReplay).Error == "invalid-replay" && ReplayImport.Import(importRoot, "{\"kind\":\"header\"}"u8.ToArray()).Error == "unsupported-format",
+                "damaged or format 1 transfers rejected");
+
+            // Run vs run: the comparison replay's camera on the same timeline.
+            var versus = new NativeReplayPlayback(root, () => true, () => 6);
+            versus.Load(compact, compact);
+            versus.Command("seek", 0.4); versus.Command("play");
+            var versusLines = versus.Snapshot().Split('\n');
+            Check(versusLines.Count(l => l.StartsWith("ghost\t") && l.Split('\t').Length == 8) == 1 && versusLines.Count(l => l.StartsWith("ghostmotion\t")) > 2, "ghost rows for the comparison run");
+            var other = compact with { Scenario = "Other" };
+            Check(Throws(() => versus.Load(compact, other)), "comparison must be the same scenario");
+
+            // Spectating: pose format 1 from the bridge, shown behind the newest pose.
+            var posePath = Path.Combine(root, "spectate-pose.tsv");
+            var poseMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            File.WriteAllText(posePath, "AIMMOD_POSE_1\t1\nmeta\tSynthetic%20target%20test\tMap_A\t1\n" + string.Concat(Enumerable.Range(0, 10).Select(i => $"pose\t{poseMs + i * 33}\t0\t0\t0\t0\t{i * 3}\t0\t90\n")) + "target\t1\t100\t0\t0\t40\t90\n");
+            var frame = LivePoseFrame.Parse(File.ReadAllText(posePath));
+            Check(frame is { Poses.Count: 10, Targets.Count: 1, Scenario: "Synthetic target test" }, "pose stream parsed");
+            Check(LivePoseFrame.Parse("AIMMOD_POSE_1\t1\npose\t5\t0\t0\t0\t0\t0\t0\t90\npose\t4\t0\t0\t0\t0\t0\t0\t90\n") is null, "pose times must increase");
+            var spectate = new NativeReplayPlayback(root, () => true, () => 6);
+            var feed = new LivePoseFeed(posePath);
+            Check(feed.Update(), "live feed reads the stream");
+            spectate.Spectate(feed, "Synthetic target test", "Map_A", 1, "peer");
+            var liveLines = spectate.Snapshot().Split('\n');
+            var liveMotion = liveLines.Where(l => l.StartsWith("motion\t")).Select(l => double.Parse(l.Split('\t')[1], CultureInfo.InvariantCulture)).ToArray();
+            var liveTime = double.Parse(liveLines.First(l => l.StartsWith("time\t")).Split('\t')[1], CultureInfo.InvariantCulture);
+            Check(liveLines[0].EndsWith("\t1") && liveMotion.Length >= 2 && Math.Abs(liveMotion[0] - liveTime) < 1e-9 && Math.Abs(liveMotion[^1] - liveTime - LivePoseFeed.Delay) < 0.002
+                && liveLines.Any(l => l.StartsWith("actor\t1\t")) && liveLines.Any(l => l.StartsWith("clock\t")), "live frames: delayed display time, window to the newest pose, targets");
+            Check(!spectate.Command("seek", 1), "live view cannot be seeked");
 
             // Protocol 6 publishes a render-rate motion window while playing.
             var playback = new NativeReplayPlayback(root, () => true, () => 6);

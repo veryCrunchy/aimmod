@@ -119,6 +119,17 @@ function M.parse(data)
         elseif row[1]=='clock' then
             -- Wall-clock publication instant for the native presenter.
             assert(v6 and #row==3 and tonumber(row[2]) and finite(tonumber(row[3])),'invalid replay clock')
+        elseif row[1]=='ghost' or row[1]=='ghostmotion' then
+            -- Protocol 6: the comparison run's camera (now / ahead) on this timeline.
+            local motionRow=row[1]=='ghostmotion'
+            assert(v6 and #row==(motionRow and 9 or 8),'invalid replay ghost')
+            local m={};for j=2,#row do local n=tonumber(row[j]);assert(finite(n),'invalid replay ghost');m[#m+1]=n end
+            if motionRow then
+                frame.ghostMotion=frame.ghostMotion or {}
+                local previous=frame.ghostMotion[#frame.ghostMotion]
+                assert(#frame.ghostMotion<64 and (not previous or m[1]>=previous[1]),'invalid replay ghost')
+                frame.ghostMotion[#frame.ghostMotion+1]=m
+            else assert(frame.ghost==nil,'invalid replay ghost');frame.ghost=m end
         elseif row[1]=='velocity' then
             assert(v6 and #row==5,'invalid replay velocity')
             local id,x,y,z=tonumber(row[2]),tonumber(row[3]),tonumber(row[4]),tonumber(row[5])
@@ -203,6 +214,14 @@ local function applyMotion(now)
         if v then moves[#moves+1]={actor[1],actor[2]+v[1]*ahead,actor[3]+v[2]*ahead,actor[4]+v[3]*ahead}end
     end
     scene.pose(camera,moves)
+    local g=m.ghost
+    if g and #g>=1 and scene.ghost then
+        local gt=math.max(g[1][1],math.min(t,g[#g][1]))
+        local j=1;while j<#g and g[j+1][1]<gt do j=j+1 end
+        local ga,gb=g[j],g[math.min(j+1,#g)]
+        local gu=gb[1]>ga[1] and (gt-ga[1])/(gb[1]-ga[1]) or 0
+        scene.ghost({ga[2]+(gb[2]-ga[2])*gu,ga[3]+(gb[3]-ga[3])*gu,ga[4]+(gb[4]-ga[4])*gu,ga[5]+(gb[5]-ga[5])*gu,lerpAngle(ga[6],gb[6],gu),lerpAngle(ga[7],gb[7],gu),ga[8]+(gb[8]-ga[8])*gu})
+    end
 end
 local function takeMotion(frame,now)
     if not frame.motion or #frame.motion<2 or not frame.time.playing or not scene or not scene.pose then motion=nil;motionClock=nil;return end
@@ -210,7 +229,7 @@ local function takeMotion(frame,now)
     -- Seeks, pauses and large drift snap; small drift is corrected slowly.
     if not motion or not motionClock or math.abs(motionClock-published)>0.25 then motionClock=published
     else motionClock=motionClock+(published-motionClock)*0.1 end
-    motion={samples=frame.motion,time=published,speed=frame.time.speed,actors=frame.actors,velocity=frame.velocity or {}}
+    motion={samples=frame.motion,time=published,speed=frame.time.speed,actors=frame.actors,velocity=frame.velocity or {},ghost=frame.ghostMotion}
     if now then motionAt=now;applyMotion(now)end
 end
 -- Native presenter (AimModCore) handshake: while its apply count advances it
@@ -315,6 +334,7 @@ function M.attach(menu,enter,leave)
                 assert(frame.meta.scenario==currentMeta.scenario,'scenario-mismatch')
                 assert(frame.meta.mapName==currentMeta.mapName and frame.meta.mapScale==currentMeta.mapScale,'map-mismatch')
                 scene.frame(frame,frame.time.playing and presenting);publishProxies()
+                if scene.ghost and not (frame.time.playing and presenting) then scene.ghost(frame.ghost) end
             end
             if presenting then motion=nil else takeMotion(frame,frame.motion and realTime() or nil)end
             if motion then startMotionLoop()end

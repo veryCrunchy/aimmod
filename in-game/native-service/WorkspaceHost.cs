@@ -155,6 +155,15 @@ sealed class WorkspaceHost : IAsyncDisposable
               catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return Results.StatusCode(503); }
         });
         app.MapGet(prefix + "/native-replay", () => Results.Json(PlaybackStatus()));
+        // Replays received from other players (format 2 only), validated
+        // completely before they enter the library.
+        app.MapPost(prefix + "/replays/import", async (HttpContext context) => {
+            if (context.Request.Headers["X-AimMod-UI"] != "1" || context.Request.ContentLength is null or <= 24 or > 8 * 1024 * 1024) return Results.StatusCode(403);
+            using var body = new MemoryStream();
+            await context.Request.Body.CopyToAsync(body, context.RequestAborted);
+            var result = ReplayImport.Import(outputFolder, body.ToArray());
+            return result.Id is null ? Results.Json(new { error = result.Error }, statusCode: 422) : Results.Json(new { id = result.Id, scenario = result.Scenario });
+        });
         // Game control (multiplayer lobby, replay scenario load). AimModCore
         // validates again and refuses while a challenge runs.
         app.MapGet(prefix + "/game-command", () => Results.Json(new { capabilities = GameCommands.Capabilities(outputFolder), result = gameCommands.Result() }));
@@ -179,17 +188,38 @@ sealed class WorkspaceHost : IAsyncDisposable
             try {
                 var command = await context.Request.ReadFromJsonAsync<PlaybackCommand>(context.RequestAborted);
                 if (command is null) return Results.BadRequest();
+                if (command.Action == "spectate") {
+                    // Follow a live view (multiplayer bridge -> spectate-pose.tsv) in this world.
+                    if (string.IsNullOrWhiteSpace(command.Scenario) || command.Scenario.Length > 512 || string.IsNullOrWhiteSpace(command.MapName) || command.MapScale is not > 0)
+                        return Results.BadRequest();
+                    var feed = new LivePoseFeed(Path.Combine(outputFolder, "spectate-pose.tsv"));
+                    if (!feed.Update()) return Results.Json(new { error = "stream-unavailable", message = "No live view is being received." }, statusCode: 409);
+                    var placeholder = new NativeReplay(2, "live", command.Scenario, "", "live", 0, [], [], command.MapName, command.MapScale);
+                    var ack = renderer.Read();
+                    var blockedLive = ReplayStartGate.Evaluate(placeholder, GameScene.Read(outputFolder), ack.Ready, ack.Reason);
+                    if (blockedLive is not null) return Results.Json(new { error = blockedLive.Reason, message = blockedLive.Message }, statusCode: 409);
+                    var label = new string((command.Label ?? "peer").Where(char.IsAsciiLetterOrDigit).Take(32).ToArray());
+                    playback.Spectate(feed, command.Scenario, command.MapName, command.MapScale.Value, label.Length > 0 ? label : "peer");
+                    return Results.Json(PlaybackStatus());
+                }
                 if (command.Action == "load") {
                     var replay = replays.Read(command.Id ?? "");
                     if (replay is null || replay.Frames.Count < 2) return Results.NotFound();
                     if (string.IsNullOrWhiteSpace(replay.MapName) || replay.MapScale is null) return Results.UnprocessableEntity();
+                    // Run vs run: a second replay of the same scenario as a ghost.
+                    NativeReplay? compareWith = null;
+                    if (command.CompareId is { Length: > 0 } compareId) {
+                        compareWith = replays.Read(compareId);
+                        if (compareWith is null || compareWith.Frames.Count < 2) return Results.NotFound();
+                        if (compareWith.Scenario != replay.Scenario) return Results.Json(new { error = "scenario-mismatch", message = "Both runs must be of the same scenario." }, statusCode: 422);
+                    }
                     // Start now if the game shows the replay's world in the pause
                     // menu; otherwise wait (with the reason) and start by itself.
                     var acknowledgement = renderer.Read();
                     var blocked = ReplayStartGate.Evaluate(replay, GameScene.Read(outputFolder), acknowledgement.Ready, acknowledgement.Reason);
-                    if (blocked is not null) { startGate.Wait(replay.Id, replay.Scenario, blocked); return Results.Json(PlaybackStatus(), statusCode: 202); }
+                    if (blocked is not null) { startGate.Wait(replay.Id, replay.Scenario, blocked, compareWith?.Id); return Results.Json(PlaybackStatus(), statusCode: 202); }
                     startGate.Clear();
-                    playback.Load(replay);
+                    playback.Load(replay, compareWith);
                 } else if (command.Action == "cancel") startGate.Clear();
                 else {
                     if (command.Action == "close") startGate.Clear();
@@ -238,7 +268,11 @@ sealed class WorkspaceHost : IAsyncDisposable
                     await Task.Delay(250, startLoop.Token);
                     try {
                         var ready = startGate.Poll(id => replayCatalog?.Read(id), () => GameScene.Read(outputFolder), () => { var a = renderer.Read(); return (a.Ready, a.Reason); });
-                        if (ready is not null) playback.Load(ready);
+                        if (ready is not null) {
+                            var compareId = startGate.TakeCompare();
+                            var compareWith = compareId is null ? null : replayCatalog?.Read(compareId);
+                            playback.Load(ready, compareWith is not null && compareWith.Scenario == ready.Scenario ? compareWith : null);
+                        }
                         else AutoLoadScenario();
                     } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { }
                 }
@@ -292,7 +326,7 @@ sealed class WorkspaceHost : IAsyncDisposable
     // An HttpClient timeout surfaces as a cancellation that the caller did not request.
     static bool HubUnavailable(Exception ex, CancellationToken token) => ex is IOException or HttpRequestException or System.Text.Json.JsonException
         || ex is OperationCanceledException && !token.IsCancellationRequested;
-    sealed record PlaybackCommand(string? Action, string? Id, double? Value, double[]? Area);
+    sealed record PlaybackCommand(string? Action, string? Id, double? Value, double[]? Area, string? CompareId = null, string? Scenario = null, string? MapName = null, double? MapScale = null, string? Label = null);
     sealed record LibraryCommand(string? Action, string? Id, bool? Favorite);
 }
 

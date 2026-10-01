@@ -316,6 +316,29 @@ function M.create(owner)
         if not ok then s.close();error(err)end
         return true
     end
+    -- Ghost: a small inert marker where the comparison run aims (800 cm along
+    -- its view). nil hides it.
+    function s.ghost(camera)
+        local ok,err=pcall(function()
+            if camera==nil then
+                if valid(s.ghostMarker)then s.owned[s.ghostMarker:GetAddress()]=nil;destroy(s.ghostMarker);s.ghostMarker=nil;s.proxyVersion=(s.proxyVersion or 0)+1 end
+                return
+            end
+            assert(type(camera)=='table' and #camera==7,'invalid ghost pose')
+            for _,n in ipairs(camera)do assert(finite(n),'invalid ghost pose')end
+            if not valid(s.ghostMarker)then
+                local marker=spawn('StaticMeshActor');local component=marker.StaticMeshComponent
+                component:SetMobility(2);component:SetCollisionEnabled(0);component:SetSimulatePhysics(false);component:SetComponentTickEnabled(false)
+                assert(component:SetStaticMesh(StaticFindObject('/Engine/BasicShapes/Sphere.Sphere')),'ghost mesh unavailable')
+                marker:SetActorScale3D(vector(0.12,0.12,0.12))
+                s.ghostMarker=marker;s.proxyVersion=(s.proxyVersion or 0)+1
+            end
+            local p,y=math.rad(camera[4]),math.rad(camera[5])
+            local d=800
+            s.ghostMarker:K2_SetActorLocation(vector(camera[1]+d*math.cos(p)*math.cos(y),camera[2]+d*math.cos(p)*math.sin(y),camera[3]+d*math.sin(p)),false,{},true)
+        end)
+        if not ok then s.close();error(err)end
+    end
     -- Object paths of the replay-owned camera and target proxies, for the
     -- native presenter (which moves nothing else).
     function s.proxies()
@@ -323,6 +346,8 @@ function M.create(owner)
         local lines={'AIMMOD_PROXIES_1'}
         local camera=valid(s.camera) and path(s.camera)
         if camera then lines[#lines+1]='camera\t'..camera end
+        local ghost=valid(s.ghostMarker) and path(s.ghostMarker)
+        if ghost then lines[#lines+1]='ghost\t'..ghost end
         local ids={};for id in pairs(s.actors)do ids[#ids+1]=id end;table.sort(ids)
         for _,id in ipairs(ids)do local p=valid(s.actors[id]) and path(s.actors[id]);if p then lines[#lines+1]='actor\t'..id..'\t'..p end end
         return table.concat(lines,'\n')..'\n'

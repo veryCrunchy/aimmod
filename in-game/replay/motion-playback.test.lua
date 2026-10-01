@@ -43,6 +43,11 @@ for _,bad in ipairs({
     check(not pcall(bridge.parse,bad),'invalid motion rejected')
 end
 check(bridge.parse(head).motion==nil,'motion stays optional')
+local ghostRows='ghost\t0\t0\t0\t1\t2\t0\t90\nghostmotion\t5\t0\t0\t0\t1\t2\t0\t90\nghostmotion\t5.1\t0\t0\t0\t1\t4\t0\t90\n'
+local versus=bridge.parse(head..motion..ghostRows)
+check(versus.ghost[5]==2 and #versus.ghostMotion==2,'comparison run rows parsed')
+check(not pcall(bridge.parse,head:gsub('AIMMOD_REPLAY_6','AIMMOD_REPLAY_5')..ghostRows) and not pcall(bridge.parse,head..'ghostmotion\t5.1\t0\t0\t0\t1\t4\t0\t90\nghostmotion\t5\t0\t0\t0\t1\t4\t0\t90\n'),
+    'ghost rows need protocol 6 and ordered samples')
 
 bridge.attach({IsValid=function()return true end},function()end,function()end)
 local poll=loops[33]
