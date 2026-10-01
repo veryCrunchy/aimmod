@@ -1,6 +1,7 @@
 // Tests for the Steam-independent parts of AimModSteam: JSON, base64, ids,
 // lobby keys, join strings, launch command lines and the AMP1 wire format.
 // Synthetic ids only.
+#include "AvatarPath.hpp"
 #include "Codec.hpp"
 #include "GhostMath.hpp"
 #include "Json.hpp"
@@ -412,6 +413,30 @@ int main()
     Check(UgcMatches("AimMod - Dust2 (CSGO) - CS Movement", "", "", "aimmod - "), "text search ignores case");
     Check(!UgcMatches("Pole Long Dodge", "", "", "AimMod - "), "text search filters titles");
     Check(UgcMatches("anything", "", "", ""), "no filter matches everything");
+    // Avatar path (offline avatar spike)
+    {
+        using ghost::AvatarPath;
+        const std::string text = "AIMMOD_AVATAR_PATH_1\r\nmeta\tSynthetic%20Arena\tarena.map\t2.5\np\t0\t0\t0\t164\t0\t0\np\t100\t100\t0\t164\t-10\t90\np\t1000\t100\t900\t164\t0\t-170\n";
+        std::string error;
+        auto path = AvatarPath::Parse(text, &error);
+        Check(path && path->scenario == "Synthetic Arena" && path->map == "arena.map" && path->scale == 2.5 && path->rows.size() == 3, "parses an avatar path");
+        Check(path && std::fabs(path->Duration() - 1.0) < 1e-9, "path duration is the last row");
+        if (path)
+        {
+            auto a = path->At(0.05, 64);
+            Check(std::fabs(a.x - 50) < 1e-6 && std::fabs(a.z - 100) < 1e-6 && std::fabs(a.yaw - 45) < 1e-6 && std::fabs(a.vx - 1000) < 1e-6, "interpolates, lowers the eye to the capsule centre and derives velocity");
+            auto wrapped = path->At(1.05, 64);
+            Check(std::fabs(wrapped.x - a.x) < 1e-6 && std::fabs(wrapped.y - a.y) < 1e-6, "the path loops");
+            auto gap = path->At(0.5, 64);
+            Check(gap.vx == 0 && gap.vy == 0 && std::fabs(gap.yaw - (90 + 100.0 * 0.4 / 0.9)) < 1e-6, "long gaps hold velocity at zero and yaw takes the short way");
+        }
+        Check(!AvatarPath::Parse("AIMMOD_POSE_1\np\t0\t0\t0\t0\t0\t0\n"), "refuses another format");
+        Check(!AvatarPath::Parse("AIMMOD_AVATAR_PATH_1\np\t10\t0\t0\t0\t0\t0\np\t5\t0\t0\t0\t0\t0\n"), "refuses rows going back in time");
+        Check(!AvatarPath::Parse("AIMMOD_AVATAR_PATH_1\np\t0\t0\t0\t0\t95\t0\np\t5\t0\t0\t0\t0\t0\n"), "refuses impossible pitch");
+        Check(!AvatarPath::Parse("AIMMOD_AVATAR_PATH_1\nmeta\tbad%0Aname\tm\t1\np\t0\t0\t0\t0\t0\t0\np\t5\t0\t0\t0\t0\t0\n"), "refuses control characters in meta");
+        Check(!AvatarPath::Parse("AIMMOD_AVATAR_PATH_1\np\t0\t0\t0\t0\t0\t0\n"), "needs at least two rows");
+        Check(!AvatarPath::Parse("AIMMOD_AVATAR_PATH_1\np\t0\tnan\t0\t0\t0\t0\np\t5\t0\t0\t0\t0\t0\n"), "refuses non-finite numbers");
+    }
     std::printf("%d/%d checks passed\n", checks - failures, checks);
     return failures == 0 ? 0 : 1;
 }

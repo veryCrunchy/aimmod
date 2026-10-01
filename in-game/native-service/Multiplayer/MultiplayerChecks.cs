@@ -386,6 +386,12 @@ static class MultiplayerChecks
         Check(arena.Contains("AddedBots=AimMod Hidden Bot.bot\n") && arena.Contains("BotCharacters=AimMod Hidden Bot.bot\n") && arena.Contains("InvinciblePlayer=true\n") && arena.Contains("ScorePerDamage=0.0\n") && arena.Contains("Timelimit=20.0\n"), "Tracking arena: hidden helper bot only, invincible, no native scoring, the run outlasts the round");
         var hidden = arena[arena.IndexOf("[Character Profile]\nName=AimMod Hidden\n", StringComparison.Ordinal)..];
         Check(hidden.Contains("CharacterModel=None\n") && hidden.Contains("MainBBHide=true\n") && hidden.Contains("DisableCharacterCollision=true\n") && arena.Contains("[Bot Profile]\nName=AimMod Hidden Bot\n") && arena.Contains("NoAiming=true\n"), "The helper bot is invisible, passable and inert");
+        // Offline avatar spike: a replay's camera becomes a 30 Hz path for AimModSteam's avatar test.
+        var recorded = new NativeReplay(1, "synthetic", "Synthetic Arena", "2026-01-01", "completed", 1,
+            [new(0, [0, 0, 164, -5, 0, 0, 90], []), new(1, [300, 0, 164, 5, 90, 0, 90], [])], [], "arena.map", 2.5);
+        var exported = AvatarPathExport.Build(recorded).Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Check(exported[0] == "AIMMOD_AVATAR_PATH_1" && exported[1] == "meta\tSynthetic%20Arena\tarena.map\t2.5" && exported.Length == 2 + 31
+            && exported[2] == "p\t0\t0\t0\t164\t-5\t0" && exported[^1].StartsWith("p\t1000\t300\t0\t164\t5\t", StringComparison.Ordinal), "A replay exports as a 30 Hz avatar path with escaped scenario and map");
         Check(arena == MatchScenario.Generate(new(BaseScenario, duel with { Scenario = new ScenarioChoice("Synthetic A", ContentLibrary.TextHash(BaseScenario), "synthetic_map", ContentLibrary.TextHash("m"), 60) })), "The arena is deterministic");
     }
 

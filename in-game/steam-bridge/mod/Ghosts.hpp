@@ -9,6 +9,7 @@
 //    be spawned, it falls back to engine basic shapes (no collision).
 // It never touches ranked, leaderboards or the local player; it only reads
 // the local pose and spawns, drives and removes its own actors.
+#include "AvatarPath.hpp"
 #include "Bridge.hpp"
 #include "GameBindings.hpp"
 #include "GhostMath.hpp"
@@ -16,7 +17,9 @@
 #include <Unreal/FWeakObjectPtr.hpp>
 
 #include <cstdint>
+#include <filesystem>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 
@@ -29,6 +32,9 @@ namespace aimmod
         int moveMode = 5;          // EMovementMode while driven: 5 Flying (default), 1 Walking, 0 None
         bool driveWithUpdate = true; // UpdateClientLocAndRot(bPlayAnim) vs K2_SetActorLocationAndRotation
         bool avatarTest = false;   // offline check: one avatar circling the local player, no network
+        // Offline avatar spike: with avatar_test=1, a recorded path in this file (exported by the
+        // service with --export-avatar-path) replaces the circle when its scenario is loaded.
+        std::filesystem::path avatarTestPath;
         bool showRemote = true;    // show remote players (ghost demo); the local pose/camera is read either way
     };
 
@@ -103,5 +109,12 @@ namespace aimmod
         double m_nextDiagnostic = 0;
         std::map<std::uint64_t, Ghost> m_ghosts;
         double m_testStart = -1;
+        // Offline avatar spike (recorded path).
+        std::optional<bridge::ghost::AvatarPath> m_testPath;
+        bool m_testPathTried = false;
+        std::string m_testPathScene; // the scenario last reported as not matching the path
+        double m_eyeAboveCentre = 64; // local camera height above the capsule centre, measured live
+        double m_testPathStart = -1;
+        bool LoadTestPath();
     };
 } // namespace aimmod

@@ -129,6 +129,8 @@ public:
         m_ghostOptions.avatars = Flag(config, "avatars", true);
         m_ghostOptions.showRemote = m_ghostDemo;
         m_ghostOptions.avatarTest = Flag(config, "avatar_test", false);
+        // Offline avatar spike: the service exports a replay's camera path here (--export-avatar-path).
+        m_ghostOptions.avatarTestPath = std::filesystem::path(ScenePath()).parent_path() / L"avatar-test-path.tsv";
         if (auto it = config.find("avatar_profile"); it != config.end()) m_ghostOptions.avatarProfile = it->second;
         if (auto it = config.find("avatar_drive"); it != config.end()) m_ghostOptions.driveWithUpdate = it->second != "teleport";
         if (auto it = config.find("avatar_move_mode"); it != config.end())

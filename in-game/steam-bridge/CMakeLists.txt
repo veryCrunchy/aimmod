@@ -22,7 +22,7 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_library(aimmod_steam_core STATIC src/Codec.cpp src/Json.cpp src/PoseFile.cpp)
+add_library(aimmod_steam_core STATIC src/Codec.cpp src/Json.cpp src/PoseFile.cpp src/AvatarPath.cpp)
 target_include_directories(aimmod_steam_core PUBLIC src)
 
 add_library(aimmod_steam_bridge STATIC src/Bridge.cpp src/Pipe.cpp src/Steam.cpp)

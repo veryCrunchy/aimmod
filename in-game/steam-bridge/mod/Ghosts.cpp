@@ -18,6 +18,8 @@
 #include <cstdio>
 #include <cstring>
 #include <exception>
+#include <fstream>
+#include <iterator>
 #include <vector>
 
 namespace aimmod
@@ -505,7 +507,8 @@ namespace aimmod
             UObject* world = static_cast<AActor*>(character)->GetWorld();
             std::map<std::uint64_t, bool> seen;
 
-            // Offline check: one avatar circling 4 m around the player.
+            // Offline check: one avatar circling 4 m around the player, or following a
+            // recorded path (avatar-test-path.tsv) on the scenario it was recorded in.
             if (m_options.avatarTest)
             {
                 if (m_testStart < 0)
@@ -513,16 +516,40 @@ namespace aimmod
                     m_testStart = now;
                     m_log("avatars: offline test active (avatar_test=1)");
                 }
-                const double t = now - m_testStart, w = 0.6, r = 400;
+                if (!m_testPathTried) LoadTestPath();
+                // Eye height above the capsule centre, so the recorded camera becomes a standing body.
+                double eye[3]{};
+                if (camera && m_cameraLocation.Vector(camera, eye) && eye[2] - location[2] > 0 && eye[2] - location[2] < 300) m_eyeAboveCentre = eye[2] - location[2];
+                const std::string scene = m_bridge.LocalScene();
+                const bool pathHere = m_testPath && (m_testPath->scenario.empty() || scene.empty() || scene == m_testPath->scenario);
+                if (m_testPath && !pathHere && m_testPathScene != scene)
+                {
+                    m_testPathScene = scene;
+                    m_log("avatars: recorded path is for \"" + m_testPath->scenario + "\", not this scenario; circling instead");
+                }
                 Sample s;
-                s.x = location[0] + std::cos(t * w) * r;
-                s.y = location[1] + std::sin(t * w) * r;
-                s.z = location[2] + (std::fmod(t, 6.0) < 0.6 ? std::sin(std::fmod(t, 6.0) / 0.6 * 3.14159265358979) * 60 : 0); // a hop every 6 s
-                s.vx = -std::sin(t * w) * r * w;
-                s.vy = std::cos(t * w) * r * w;
-                s.yaw = std::atan2(s.vy, s.vx) * 180.0 / 3.14159265358979;
-                s.crouch = std::fmod(t, 10.0) > 7.0;
-                s.halfHeight = s.crouch ? bridge::ghost::DefaultHalfHeight * 0.6 : bridge::ghost::DefaultHalfHeight;
+                if (pathHere)
+                {
+                    if (m_testPathStart < 0)
+                    {
+                        m_testPathStart = now;
+                        m_log("avatars: following the recorded path (" + std::to_string(m_testPath->rows.size()) + " rows, " + std::to_string(static_cast<int>(m_testPath->Duration())) + " s, looping)");
+                    }
+                    s = m_testPath->At(now - m_testPathStart, m_eyeAboveCentre);
+                }
+                else
+                {
+                    m_testPathStart = -1;
+                    const double t = now - m_testStart, w = 0.6, r = 400;
+                    s.x = location[0] + std::cos(t * w) * r;
+                    s.y = location[1] + std::sin(t * w) * r;
+                    s.z = location[2] + (std::fmod(t, 6.0) < 0.6 ? std::sin(std::fmod(t, 6.0) / 0.6 * 3.14159265358979) * 60 : 0); // a hop every 6 s
+                    s.vx = -std::sin(t * w) * r * w;
+                    s.vy = std::cos(t * w) * r * w;
+                    s.yaw = std::atan2(s.vy, s.vx) * 180.0 / 3.14159265358979;
+                    s.crouch = std::fmod(t, 10.0) > 7.0;
+                    s.halfHeight = s.crouch ? bridge::ghost::DefaultHalfHeight * 0.6 : bridge::ghost::DefaultHalfHeight;
+                }
                 seen[TestPeer] = true;
                 Show(TestPeer, m_ghosts[TestPeer], s, world, character);
             }
@@ -568,6 +595,36 @@ namespace aimmod
             m_log(std::string("ghost demo: disabled after an error: ") + e.what());
         }
     }
+    // Reads the recorded path once per session. A missing file is normal (circle test).
+    bool GhostDemo::LoadTestPath()
+    {
+        m_testPathTried = true;
+        if (m_options.avatarTestPath.empty()) return false;
+        std::error_code ec;
+        const auto size = std::filesystem::file_size(m_options.avatarTestPath, ec);
+        if (ec)
+        {
+            m_log("avatars: no recorded path (avatar-test-path.tsv); circling");
+            return false;
+        }
+        if (size > 4 * 1024 * 1024)
+        {
+            m_log("avatars: recorded path is too large; circling");
+            return false;
+        }
+        std::ifstream file(m_options.avatarTestPath, std::ios::binary);
+        const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        std::string error;
+        m_testPath = bridge::ghost::AvatarPath::Parse(text, &error);
+        if (!m_testPath)
+        {
+            m_log("avatars: recorded path unreadable (" + error + "); circling");
+            return false;
+        }
+        m_log("avatars: loaded a recorded path for \"" + m_testPath->scenario + "\" (" + std::to_string(m_testPath->rows.size()) + " rows)");
+        return true;
+    }
+
     void GhostDemo::Shutdown()
     {
         try

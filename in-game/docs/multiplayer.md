@@ -1368,6 +1368,19 @@ player at 4 m and crouches 3 s out of every 10, with no network. Use it to
 check spawning, the inert AI, movement and the animations before a session
 with a friend. Watch for the `avatars:` lines in `UE4SS.log`.
 
+**Offline recorded path (phase 0 spike, `game-modes.md` §9.3).**
+
+- `AimMod.InGame.exe --export-avatar-path <replay id>` writes
+  `avatar-test-path.tsv` (the run's camera at 30 Hz) next to the other AimMod
+  runtime files.
+- With `avatar_test=1`, the avatar follows that path, looping, while the
+  scenario it was recorded in is loaded. It circles on any other scenario.
+- The recorded camera is lowered by the local player's own eye height, measured
+  live, so the bot stands where the player stood.
+- Shooting it tests mesh and hull hits, hit feedback and the tracking duel's
+  ray against a moving, realistically driven avatar. None of this needs a
+  second player.
+
 **Not yet confirmed in game:**
 
 - whether `UpdateClientLocAndRot` plus `Velocity` animates, or whether
