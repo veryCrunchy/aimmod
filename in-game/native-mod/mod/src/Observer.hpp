@@ -3,6 +3,7 @@
 // broadcast observations), publishes live telemetry, writes the journal and
 // runs the replay sampler. Read-only with respect to the game.
 #include "Cosmetics.hpp"
+#include "CosmeticsPreview.hpp"
 #include "GameControl.hpp"
 #include "MatchPlay.hpp"
 #include "Presenter.hpp"
@@ -98,6 +99,7 @@ namespace aimmod
         ReplaySampler m_sampler;
         Presenter m_presenter;
         GameControl m_control;
+        CosmeticsPreview m_preview;
         bool m_inChallenge{}, m_loading{};
         // Clip hotkey edge detection; self-pose stream; freeplay timer probe.
         bool m_clipKeyDown{};
@@ -113,6 +115,14 @@ namespace aimmod
         void PollClipKey();
         void PublishSelfPose(double now);
         std::uint32_t PoseId(UObject* actor);
+        struct QuitAudit
+        {
+            double until{};
+            std::uint64_t completes{}, uploads{};
+            std::string scenario;
+        };
+        std::optional<QuitAudit> m_quitAudit;
+        void AuditQuit(double now);
         MatchPlay m_match;
         Cosmetics m_cosmetics;
 

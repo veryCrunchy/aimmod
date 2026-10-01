@@ -1,5 +1,6 @@
 // Engine-independent checks for AimModCore. Synthetic data only.
 // Usage: aimmod_core_tests [--write-samples <dir>]
+#include <aimmod/CosmeticsPreview.hpp>
 #include <aimmod/Formats.hpp>
 #include <aimmod/GameCommand.hpp>
 #include <aimmod/GameStats.hpp>
@@ -230,6 +231,10 @@ static void GameStatsChecks()
     CHECK(s && s->challengeStartSeconds && std::fabs(*s->challengeStartSeconds - (3600 + 11 * 60 + 40.178)) < 1e-6, "challenge start parsed");
     CHECK(!ParseGameStats("Scenario:,x\n") && !ParseGameStats("Score:,nan\nScenario:,x\n"), "incomplete stats rejected");
     CHECK(IsChallengeStatsFile("Synthetic - Challenge - 2026.10.01-01.12.40 Stats.csv") && !IsChallengeStatsFile("notes.csv"), "stats file name");
+    // Scenario names outside the ANSI code page (stars, CJK) in the stats folder.
+    CHECK(IsChallengeStatsFile(std::wstring_view(L"Synthetic ★ 練習 - Challenge - 2026.10.01-01.12.40 Stats.csv")) &&
+              !IsChallengeStatsFile(std::wstring_view(L"★ notes.csv")),
+          "wide stats file names");
 }
 
 static void PlaybackChecks()
@@ -283,6 +288,9 @@ static void CommandChecks()
               code("AIMMOD_CORE_COMMAND_1\nseq\t11\naction\tload-scenario\nscenario\tX\nseed\t5\n") == "invalid-seed",
           "seed range and action checked");
     CHECK(SeedFor(7, 0) == SeedFor(7, 0) && SeedFor(7, 0) != SeedFor(7, 1) && SeedFor(7, 1) != SeedFor(8, 1), "per-event seeds reproducible and distinct");
+    // A freeplay seed must stop when a challenge starts in the same scenario.
+    CHECK(SeedAllowed("Synthetic Clicking", false) && !SeedAllowed("Synthetic Clicking", true) && SeedAllowed("AimMod Match - Cata - ab93", true),
+          "freeplay seeds never drive a ranked challenge");
     const char* thumb = "AIMMOD_CORE_COMMAND_1\nseq\t10\naction\tcapture-thumbnail\nscenario\tAimMod - Dust2 (CSGO) - CS Movement\nwidth\t1920\nheight\t1080\n"
                         "out\tdust2 thumb.png\nview1\t100,-20.5,300,-10,45,90\nview2\t0,0,0,0,180,70\n";
     auto t = parse(thumb);
@@ -653,6 +661,19 @@ static void EndRunChecks()
               std::holds_alternative<CommandError>(parse("action\tquit-run\nmode\tfreeplay\n")) &&
               std::holds_alternative<CommandError>(parse("action\tquit-run\nthen\treset\n")),
           "quit-run takes no fields");
+
+    // Every override reset must undo a weapon change (the scenario's own loadout comes back).
+    auto weapon = parse("action\tstart-scenario\nscenario\tX\nmode\tfreeplay\nweapon\tSynthetic Rifle\n");
+    CHECK(std::holds_alternative<GameCommand>(weapon) && RestoreFor(std::get<GameCommand>(weapon)).weapon &&
+              !RestoreFor(std::get<GameCommand>(weapon)).timeDilation,
+          "a weapon override is restored on reset");
+    auto scaled = parse("action\tstart-scenario\nscenario\tX\ntimeScale\t0.5\ntargetSize\t2\nmapScale\t1.5\n");
+    CHECK(std::holds_alternative<GameCommand>(scaled) && RestoreFor(std::get<GameCommand>(scaled)).timeDilation &&
+              RestoreFor(std::get<GameCommand>(scaled)).adaptive && RestoreFor(std::get<GameCommand>(scaled)).mapScale &&
+              !RestoreFor(std::get<GameCommand>(scaled)).weapon,
+          "each requested override has a restore");
+    auto plain = parse("action\tstart-scenario\nscenario\tX\n");
+    CHECK(std::holds_alternative<GameCommand>(plain) && !RestoreFor(std::get<GameCommand>(plain)).Any(), "no overrides, nothing to restore");
 }
 
 static void MatchPlayChecks()
@@ -695,8 +716,75 @@ static void MatchPlayChecks()
     const double body[3] = {0, 0, 0};
     CHECK(!IsHeadHit(body, c, 90), "centre is a body hit");
 
+    auto round = ParseRoundState("AIMMOD_ROUND_1\t12\nmatch\tAimMod Match - Arena - 0a1b2c3d\nspawn\tr3-t\t100.5\t-20\t30\t90\n"
+                                 "phase\tfreeze\t1\t1\t1790000005000\nloadout\tAK-47 Rifle\t-\t100\t1\t0\n");
+    CHECK(round && round->sequence == 12 && round->spawn && round->spawn->id == "r3-t" && round->spawn->x == 100.5 && round->spawn->yaw == 90 &&
+              round->phase && round->phase->name == "freeze" && round->phase->frozen && round->phase->buy && round->phase->endsMs == 1790000005000 &&
+              round->loadout && round->loadout->primary == "AK-47 Rifle" && round->loadout->pistol == "-" && round->loadout->helmet && !round->loadout->kit,
+          "round state parses");
+    auto dmRound = ParseRoundState("AIMMOD_ROUND_1\t1\r\nmatch\tAimMod Match - X - 0a1b2c3d\r\nspawn\t7\t0\t0\t0\t0\r\n");
+    CHECK(dmRound && dmRound->spawn && !dmRound->phase && !dmRound->loadout, "deathmatch round state: spawn only");
+    CHECK(!ParseRoundState("AIMMOD_ROUND_1\t1\nspawn\t7\t0\t0\t0\t0\n") && !ParseRoundState("AIMMOD_ROUND_2\t1\nmatch\tA\n") &&
+              !ParseRoundState("AIMMOD_ROUND_1\t1\nmatch\tA\nphase\twarmup\t0\t0\t0\n") &&
+              !ParseRoundState("AIMMOD_ROUND_1\t1\nmatch\tA\nspawn\tbad id\t0\t0\t0\t0\n") &&
+              !ParseRoundState("AIMMOD_ROUND_1\t1\nmatch\tA\nloadout\t\t-\t0\t0\t0\n") &&
+              !ParseRoundState("AIMMOD_ROUND_1\t1\nmatch\tA\nspawn\t1\t0\t0\t0\t0\nspawn\t2\t0\t0\t0\t0\n") &&
+              !ParseRoundState("AIMMOD_ROUND_1\t1\nmatch\tA\nteleport\t0\n"),
+          "malformed round states are rejected whole");
+
     ShotRecord shot{1790000000123, 4, {1, 2, 3}, {1, 0, 0}, 1, 9, true, false};
     CHECK(FormatShot(shot) == "shot\t1790000000123\t4\t1\t2\t3\t1\t0\t0\t1\t9\t1\t0\n", "shot row layout");
+}
+
+// Cosmetics page preview: request validation and where it may run.
+static void PreviewChecks()
+{
+    const std::int64_t now = 1790000000;
+    const std::string good = "v=1\r\nexpires=1790000005\nseq=7\nmodel=Meso\nskin=McCree\nyaw=-35.5\n"
+                             "vector=PrimaryColor:0.85,0.22,0.05,1\nscalar=Roughness:0.6\nfuture=ignored\n";
+    auto r = ParsePreviewRequest(good, now);
+    CHECK(r && r->seq == 7 && r->model == "Meso" && r->skin == "McCree" && r->yaw == -35.5, "preview request parses");
+    CHECK(r && r->vectors.size() == 1 && r->vectors[0].name == "PrimaryColor" && r->vectors[0].value[1] == 0.22 && r->scalars.size() == 1, "preview parameters parse");
+    auto same = ParsePreviewRequest("v=1\nexpires=1790000005\nseq=8\nmodel=Meso\nskin=McCree\nyaw=90\nvector=PrimaryColor:0.85,0.22,0.05,1\nscalar=Roughness:0.6\n", now);
+    CHECK(r && same && r->LookKey() == same->LookKey(), "rotation alone does not change the look");
+    auto other = ParsePreviewRequest("v=1\nexpires=1790000005\nseq=9\nmodel=Endo\n", now);
+    CHECK(other && r && other->LookKey() != r->LookKey() && other->skin.empty() && other->yaw == 0, "model change changes the look; skin and yaw optional");
+
+    const char* bad[] = {
+        "v=2\nexpires=1790000005\nseq=1\nmodel=Meso\n",                         // version
+        "v=1\nexpires=1790000000\nseq=1\nmodel=Meso\n",                         // expired
+        "v=1\nexpires=1790000016\nseq=1\nmodel=Meso\n",                         // too far ahead
+        "v=1\nexpires=1790000005\nmodel=Meso\n",                                // no seq
+        "v=1\nexpires=1790000005\nseq=1\n",                                     // no model
+        "v=1\nexpires=1790000005\nseq=1\nmodel=../Meso\n",                      // path-like model
+        "v=1\nexpires=1790000005\nseq=1\nmodel=C:/skins/me.png\n",              // file, not a model
+        "v=1\nexpires=1790000005\nseq=1\nmodel=Meso\nyaw=200\n",                // yaw range
+        "v=1\nexpires=1790000005\nseq=1\nmodel=Meso\nyaw=nan\n",                // not finite
+        "v=1\nexpires=1790000005\nseq=1\nmodel=Meso\nvector=Tint:2,0,0,1\n",    // colour range
+        "v=1\nexpires=1790000005\nseq=1\nmodel=Meso\nvector=Tint:1,0,0\n",      // three channels
+        "v=1\nexpires=1790000005\nseq=1\nmodel=Meso\nscalar=Rough:11\n",        // scalar range
+        "v=1\nexpires=1790000005\nseq=1\nmodel=Meso\nmodel=Endo\n",             // duplicate key
+        "v=1\nexpires=1790000005\nseq=-1\nmodel=Meso\n",                        // negative seq
+        "v=1\nexpires=1790000005\nseq=1\nmodel=Meso\nnoequals\n",               // malformed line
+        "",                                                                    // empty
+    };
+    for (const char* text : bad) CHECK(!ParsePreviewRequest(text, now), text);
+    std::string many = "v=1\nexpires=1790000005\nseq=1\nmodel=Meso\n";
+    for (int i = 0; i < 9; ++i) many += "scalar=S" + std::to_string(i) + ":1\n";
+    CHECK(!ParsePreviewRequest(many, now), "at most 8 scalars");
+    CHECK(!ParsePreviewRequest(std::string(MaxPreviewRequestBytes + 1, 'x'), now), "oversized request");
+
+    // Never in challenges (ranked), benchmarks, the editor or while loading; unknown counts as no.
+    const PreviewGameState menu{false, false, false, false};
+    CHECK(DecidePreview(r, menu).run, "preview runs in freeplay or menus with the page open");
+    CHECK(!DecidePreview(std::nullopt, menu).run, "no request: no preview");
+    CHECK(!DecidePreview(r, {true, false, false, false}).run, "never in a challenge");
+    CHECK(!DecidePreview(r, {false, true, false, false}).run, "never in a benchmark");
+    CHECK(!DecidePreview(r, {false, false, true, false}).run, "never in the scenario editor");
+    CHECK(!DecidePreview(r, {false, false, false, true}).run, "never while loading");
+    CHECK(!DecidePreview(r, {std::nullopt, false, false, false}).run, "unknown challenge state counts as a challenge");
+    CHECK(!DecidePreview(r, {false, std::nullopt, false, false}).run, "unknown benchmark state counts as a benchmark");
+    CHECK(FormatPreviewFrame(3, "preview-1.png", 384, 384) == "v=1\nseq=3\nfile=preview-1.png\nwidth=384\nheight=384\n", "frame record format");
 }
 
 int main(int argc, char** argv)
@@ -719,6 +807,7 @@ int main(int argc, char** argv)
     MatchPlayChecks();
     EndRunChecks();
     cosmetics_checks::Run();
+    PreviewChecks();
     std::printf("%d AimModCore checks, %d failed.\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

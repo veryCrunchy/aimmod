@@ -29,12 +29,17 @@ sealed class LobbyCore
         public int Round = 1; public long? StartsAt, EndsAt, NextAt; public List<string> Players = [];
         public Dictionary<string, Line> Live = new(); public List<RoundResult> Rounds = []; public HashSet<string> Rematch = [];
         public Dictionary<string, string> Names = new(); public string? WinnerId; public bool Over; public long? RematchDeadline; public HashSet<string> Loaded = [];
-        // Tracking duel: the current round's roles and samples, and the last host score.
-        public TrackingRound? Tracking; public TrackResult? TrackLast; public long TrackComputedAt;
+        // Tracking duel: the current round's samples, and the last host scores (first, second player).
+        public TrackingRound? Tracking; public (TrackResult First, TrackResult Second)? TrackLast; public long TrackComputedAt;
         // Combat modes: the host's health, frags and respawns for the whole match.
         public CombatMatch? Combat; public long CombatEvents = -1;
+        // CS: the round machine, economy and bomb (its CombatMatch validates the hits).
+        public CsMatch? Cs; public string? CsKey;
     }
-    bool Combat => match is not null && LobbyModes.Combat(match.Settings.Mode);
+    bool Combat => match is not null && LobbyModes.Shooting(match.Settings.Mode);
+    // The arena's CS objectives (bomb sites, buy zones, side spawns), set by the service.
+    MapObjectives? csObjectives;
+    public void SetCsObjectives(MapObjectives? objectives) => csObjectives = objectives;
     // The arena's spawn points for host-chosen respawns (set by the service from the generated scenario).
     IReadOnlyList<SpawnPoint> combatSpawns = [];
     public void SetCombatSpawns(IReadOnlyList<SpawnPoint> spawns)
@@ -123,6 +128,8 @@ sealed class LobbyCore
         // A player of the running match who dropped out (crash, lost connection) rejoins as a player.
         var returning = match is not null && match.Players.Contains(id);
         if (!returning && (PlayerCount >= Settings.MaxPlayers || (inMatch && !Settings.LateJoin))) role = MemberRoles.Spectator;
+        // Tournament lobbies: only the match's players play; anyone else can only watch.
+        if (Settings.Tournament is { Players.Count: > 0 } locked && !locked.Players.Contains(id)) role = MemberRoles.Spectator;
         if (role == MemberRoles.Spectator && (!Settings.Spectators || members.Count(m => m.Role == MemberRoles.Spectator) >= LobbySettings.MaxSpectators))
             return LobbyResult.Fail(inMatch ? "in-match" : "full", inMatch ? "A match is in progress and late join is off." : "This lobby is full.");
         var member = new Member { Id = id, Name = UniqueName(LobbyRules.CleanName(name, "Player")), Role = role, JoinedAt = clock(), Simulated = simulated, Link = simulated ? "simulated" : "relay", Version = version };
@@ -151,13 +158,14 @@ sealed class LobbyCore
         if (members.Count == 0) { Closed = true; Changed(); return LobbyResult.Success; }
         if (id == HostId) Migrate(member.Name);
         // Combat: a player leaving drops out; the match ends when fewer than two remain.
+        if (match is { Phase: MatchPhases.Live, Cs: { } leftCs }) leftCs.Leave(id, clock());
         if (match is { Phase: MatchPhases.Live, Combat: { } combat })
         {
             combat.Leave(id);
             if (match.Players.Count(p => Find(p) is not null) < 2) { CloseRound(); return LobbyResult.Success; }
         }
         // A tracking round needs both players: it ends when either leaves.
-        if (match is { Phase: MatchPhases.Live, Tracking: { } tr } && (tr.Attacker == id || tr.Dodger == id)) { CloseRound(); return LobbyResult.Success; }
+        if (match is { Phase: MatchPhases.Live, Tracking: { } tr } && (tr.First == id || tr.Second == id)) { CloseRound(); return LobbyResult.Success; }
         if (match is { Phase: MatchPhases.Live } m && m.Live.Values.All(l => l.Status is not (LineStates.Waiting or LineStates.Playing))) CloseRound();
         return LobbyResult.Success;
     }
@@ -312,6 +320,8 @@ sealed class LobbyCore
             case "loaded":
                 if (match is { Phase: MatchPhases.Loading } lm && lm.Players.Contains(from) && lm.Loaded.Add(from)) Changed();
                 return LobbyResult.Success;
+            case "buy" or "use":
+                return CsAction(member, action, args);
             case "avatar":
                 // How this member looks in other players' games (any member, any time).
                 if (AvatarProfiles.Find(Text("avatar")) is not { } look) return LobbyResult.Fail("invalid", "Unknown look.");
@@ -387,21 +397,45 @@ sealed class LobbyCore
         var m = match!;
         m.Phase = MatchPhases.Countdown; m.StartsAt = clock() + m.Settings.Countdown * 1000L; m.EndsAt = null; m.NextAt = null;
         m.Live = m.Players.ToDictionary(id => id, id => new Line { Status = Find(id) is null ? LineStates.Left : LineStates.Waiting });
-        m.Tracking = null; m.TrackLast = null; m.Combat = null; m.CombatEvents = -1;
+        m.Tracking = null; m.TrackLast = null; m.Combat = null; m.CombatEvents = -1; m.Cs = null; m.CsKey = null;
+        if (m.Settings.Mode == LobbyModes.Cs)
+        {
+            m.Cs = new CsMatch(m.Players.Where(id => Find(id) is not null).ToList(), m.StartsAt.Value, m.Settings.HalfRounds, m.Settings.Overtime, csObjectives);
+            m.Combat = m.Cs.Combat;
+        }
         if (LobbyModes.Combat(m.Settings.Mode))
             m.Combat = new CombatMatch(m.Settings.Mode, m.Players.Where(id => Find(id) is not null), m.Settings.EffectiveFragLimit, m.Settings.Lifesteal,
                 m.StartsAt.Value, m.StartsAt.Value + (long)(m.Settings.EffectiveTimeLimit * 1000)) { Spawns = combatSpawns };
+        // Both players track each other at once, every round.
         if (m.Settings.Mode == LobbyModes.Tracking && m.Players.Count >= 2)
-        {
-            // Roles alternate: the first player tracks in odd rounds, the second in even rounds.
-            var attacker = m.Players[(m.Round - 1) % 2]; var dodger = m.Players[m.Round % 2];
-            m.Tracking = new TrackingRound(attacker, dodger, m.StartsAt.Value, m.StartsAt.Value + (long)(m.Settings.EffectiveTimeLimit * 1000));
-            if (m.Live[dodger].Status != LineStates.Left) m.Live[dodger].Status = LineStates.Dodger;
-        }
+            m.Tracking = new TrackingRound(m.Players[0], m.Players[1], m.StartsAt.Value, m.StartsAt.Value + (long)(m.Settings.EffectiveTimeLimit * 1000), m.Settings.RequireFire);
         // Late joiners in modes that allow it take part from the next round.
         if (m.Settings.LateJoin) foreach (var p in members.Where(x => x.Role == MemberRoles.Player && !m.Players.Contains(x.Id))) { m.Players.Add(p.Id); m.Names[p.Id] = p.Name; m.Live[p.Id] = new Line(); }
         Changed();
     }
+    // Tournament lobbies: the tournament (not a member) sets the game, scenario and
+    // seed. A finished game's results are cleared so the next game can start.
+    public LobbyResult LockTournament(LobbySettings settings)
+    {
+        if (settings.Tournament is null) return LobbyResult.Fail("invalid", "Not a tournament game.");
+        if (match is { Phase: not MatchPhases.Final }) return LobbyResult.Fail("in-match", "A game is still running.");
+        var next = LobbyRules.Normalize(settings, PlayerCount);
+        if (next == Settings && match is null) return LobbyResult.Success;
+        var newGame = Settings.Tournament is not { } was || was.MatchId != next.Tournament!.MatchId || was.Game != next.Tournament.Game;
+        var scenarioChanged = next.Scenario?.Hash != Settings.Scenario?.Hash;
+        Settings = next;
+        foreach (var m in members.Where(m => m.Role == MemberRoles.Player && next.Tournament!.Players.Count > 0 && !next.Tournament.Players.Contains(m.Id))) { m.Role = MemberRoles.Spectator; m.Ready = false; }
+        if (scenarioChanged) foreach (var m in members.Where(m => m.Id != HostId)) { m.Scenario = ContentStates.Unknown; m.Map = ContentStates.Unknown; }
+        if (newGame)
+        {
+            match = null;
+            foreach (var m in members) m.Ready = false;
+            System(next.Tournament!.Label + ": game " + (next.Tournament.Game + 1) + (Settings.Scenario is { } s ? " on " + s.Name : "") + ".");
+        }
+        Changed();
+        return LobbyResult.Success;
+    }
+
     void EndMatch()
     {
         match = null;
@@ -438,7 +472,9 @@ sealed class LobbyCore
         var limit = m.Settings.EffectiveTimeLimit;
         // Mutual checks from the design: the final score matches the stream and the run length matches the limit.
         var disputed = run.Seconds > limit + 5 || run.Seconds < limit - 5
-            || (line.Score is { } last && line.Remaining is < 2 && Math.Abs(run.Score - last) > Math.Max(5, Math.Abs(last) * 0.1));
+            || (line.Score is { } last && line.Remaining is < 2 && Math.Abs(run.Score - last) > Math.Max(5, Math.Abs(last) * 0.1))
+            // The run can't be longer than the round has been live on the host clock.
+            || (m.StartsAt is { } started && clock() - started < (run.Seconds - 5) * 1000);
         line.Score = run.Score; line.Seconds = run.Seconds; line.Remaining = 0; line.Shots = run.Shots; line.Hits = run.Hits; line.Kills = run.Kills;
         line.Status = LineStates.Finished; line.Disputed = disputed;
         Changed();
@@ -457,7 +493,7 @@ sealed class LobbyCore
             return LobbyResult.Success;
         }
         if (match is not { Phase: MatchPhases.Live or MatchPhases.Countdown, Tracking: { } tracking } m || batch.MatchId != m.Id || batch.Round != m.Round) return LobbyResult.Fail("stale", "Not the current round.");
-        if (from != tracking.Attacker && from != tracking.Dodger) return LobbyResult.Fail("not-playing", "Not playing this round.");
+        if (from != tracking.First && from != tracking.Second) return LobbyResult.Fail("not-playing", "Not playing this round.");
         tracking.Add(from, batch);
         return LobbyResult.Success;
     }
@@ -466,9 +502,10 @@ sealed class LobbyCore
     public LobbyResult Claim(string from, HitClaim claim)
     {
         if (match is not { Phase: MatchPhases.Live, Combat: { } combat } m || claim.MatchId != m.Id || claim.Round != m.Round) return LobbyResult.Fail("stale", "Not the current match.");
+        if (m.Cs is { Phase: not ("live" or "planted") }) return LobbyResult.Fail("round-phase", "No shooting between rounds.");
         var refused = combat.Claim(from, claim, clock(), Find(from)?.Ping);
         UpdateCombat(m, combat);
-        if (combat.Leader is not null) CloseRound();
+        if (m.Cs is null && combat.Leader is not null) CloseRound();
         return refused is null ? LobbyResult.Success : LobbyResult.Fail(refused, "Hit not accepted (" + refused + ").");
     }
 
@@ -494,11 +531,12 @@ sealed class LobbyCore
         int TeamPlace(int team) => view.TeamFrags is { } tf && team is 1 or 2 ? (tf[team - 1] >= tf[2 - team] ? 1 : 2) : 0;
         var rows = view.Players.OrderBy(p => combat.Teams ? TeamPlace(p.Team) : 0).ThenByDescending(p => p.Frags).ThenBy(p => p.Deaths).ToArray();
         var results = new List<Placement>();
+        // Places are among the players still here: someone who left neither places nor pushes others down.
         foreach (var p in rows)
         {
             var present = Find(p.Member) is not null;
             if (m.Live.TryGetValue(p.Member, out var line) && line.Status is LineStates.Waiting or LineStates.Playing) line.Status = present ? LineStates.Finished : LineStates.Left;
-            var place = !present ? 0 : combat.Teams ? TeamPlace(p.Team) : 1 + rows.Count(o => o.Frags > p.Frags || (o.Frags == p.Frags && o.Deaths < p.Deaths));
+            var place = !present ? 0 : combat.Teams ? TeamPlace(p.Team) : 1 + rows.Count(o => Find(o.Member) is not null && (o.Frags > p.Frags || (o.Frags == p.Frags && o.Deaths < p.Deaths)));
             double? accuracy = p.Claims > 0 ? Math.Round((p.Claims - p.Rejected) * 100.0 / p.Claims, 1) : null;
             results.Add(new Placement(p.Member, m.Names.GetValueOrDefault(p.Member, "Player"), place, p.Frags, accuracy, p.Frags, present ? LineStates.Finished : LineStates.Left,
                 p.Claims >= 10 && p.Rejected > p.Claims * 0.2));
@@ -510,42 +548,80 @@ sealed class LobbyCore
         FinishMatch();
     }
 
+    // CS: the team with more rounds places first (a draw places everyone first); points are kills.
+    void CloseCsMatch(Match m, CsMatch cs)
+    {
+        var view = cs.View();
+        var winner = cs.WinnerTeam ?? (view.Score[0] == view.Score[1] ? (int?)null : view.Score[0] > view.Score[1] ? 1 : 2);
+        var results = view.Players.OrderBy(p => winner is null || p.Team == winner ? 1 : 2).ThenByDescending(p => p.Kills).Select(p =>
+        {
+            var present = Find(p.Member) is not null;
+            if (m.Live.TryGetValue(p.Member, out var line) && line.Status is LineStates.Waiting or LineStates.Playing) line.Status = present ? LineStates.Finished : LineStates.Left;
+            return new Placement(p.Member, m.Names.GetValueOrDefault(p.Member, "Player"), !present ? 0 : winner is null || p.Team == winner ? 1 : 2, p.Kills, null, p.Kills,
+                present ? LineStates.Finished : LineStates.Left, false);
+        }).ToList();
+        m.Rounds.Add(new RoundResult(m.Round, results, null));
+        m.Over = true;
+        FinishMatch();
+    }
+
+    // CS actions from a player's own client: buy an item, hold or release the use key.
+    LobbyResult CsAction(Member member, string action, JsonElement args)
+    {
+        if (match is not { Phase: MatchPhases.Live, Cs: { } cs } m || !m.Players.Contains(member.Id)) return LobbyResult.Fail("invalid", "No CS round is running.");
+        string? refused;
+        if (action == "buy")
+            refused = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("item", out var item) && item.ValueKind == JsonValueKind.String ? cs.Buy(member.Id, item.GetString() ?? "", clock()) : "unknown-item";
+        else
+            refused = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("held", out var held) && held.ValueKind is JsonValueKind.True or JsonValueKind.False ? cs.Use(member.Id, held.GetBoolean(), clock()) : "invalid";
+        Changed();
+        return refused is null ? LobbyResult.Success : LobbyResult.Fail(refused, refused switch
+        {
+            "money" => "Not enough money.", "buy-time" => "Buy time is over.", "buy-zone" => "Go back to your buy zone.", "side" => "Your side can't buy that.",
+            "owned" => "You already have that.", "not-in-site" => "Plant at a bomb site.", "moving" => "Stand still to plant.", "not-at-bomb" => "Get to the bomb to defuse.",
+            _ => "Not now (" + refused + ").",
+        });
+    }
+
     void UpdateTracking(Match m, TrackingRound tracking, long now)
     {
         m.TrackComputedAt = now;
-        var result = tracking.Compute(now, Find(tracking.Attacker)?.Ping, Find(tracking.Dodger)?.Ping);
+        var result = tracking.Compute(now, id => Find(id)?.Ping);
         if (result == m.TrackLast) return;
         m.TrackLast = result;
-        if (m.Live.TryGetValue(tracking.Attacker, out var line) && line.Status is LineStates.Waiting or LineStates.Playing)
-        {
-            line.Score = result.Percent; line.Seconds = Math.Max(0, Math.Min(now, tracking.End) - tracking.Start) / 1000.0;
-            line.Remaining = Math.Max(0, tracking.End - now) / 1000.0; line.Shots = result.Samples; line.Hits = result.OnSamples; line.Kills = 0;
-            if (result.Samples > 0) line.Status = LineStates.Playing;
-            line.Disputed = result.Disputed;
-        }
+        foreach (var (id, r) in new[] { (tracking.First, result.First), (tracking.Second, result.Second) })
+            if (m.Live.TryGetValue(id, out var line) && line.Status is LineStates.Waiting or LineStates.Playing)
+            {
+                line.Score = r.Percent; line.Seconds = Math.Max(0, Math.Min(now, tracking.End) - tracking.Start) / 1000.0;
+                line.Remaining = Math.Max(0, tracking.End - now) / 1000.0; line.Shots = r.Samples; line.Hits = r.OnSamples; line.Kills = 0;
+                if (r.Samples > 0) line.Status = LineStates.Playing;
+                line.Disputed = r.Disputed;
+            }
         Changed();
     }
 
-    // One attack per round: the attacker gets its time on target (percent of the
-    // round), the dodger nothing. The match is decided on the total.
+    // Both players' time on target (percent of the round); the higher share takes the
+    // round. The match goes to the most rounds won, then the higher total.
     void CloseTrackingRound(Match m, TrackingRound tracking)
     {
         var now = clock();
         UpdateTracking(m, tracking, Math.Max(now, tracking.End));
-        var r = m.TrackLast!;
-        var attacker = m.Live.GetValueOrDefault(tracking.Attacker);
-        var attackerPresent = Find(tracking.Attacker) is not null && attacker is not null && attacker.Status != LineStates.Left;
-        var complete = now >= tracking.End && Find(tracking.Dodger) is not null;
-        if (attacker is not null && attacker.Status is LineStates.Waiting or LineStates.Playing) attacker.Status = complete ? LineStates.Finished : LineStates.Dnf;
-        double? accuracy = r.Samples > 0 ? Math.Round(r.OnSamples * 100.0 / r.Samples, 1) : null;
-        var scored = attackerPresent && complete;
-        var results = new List<Placement>
+        var (first, second) = m.TrackLast!.Value;
+        var complete = now >= tracking.End && Find(tracking.First) is not null && Find(tracking.Second) is not null;
+        Placement Place(string id, TrackResult r, TrackResult other)
         {
-            new(tracking.Attacker, m.Names.GetValueOrDefault(tracking.Attacker, "Player"), scored ? 1 : 0, scored ? r.Percent : null, accuracy, 0, attacker?.Status ?? LineStates.Left, r.Disputed),
-            new(tracking.Dodger, m.Names.GetValueOrDefault(tracking.Dodger, "Player"), 0, null, null, 0, Find(tracking.Dodger) is null ? LineStates.Left : LineStates.Dodger, false),
-        };
-        m.Rounds.Add(new RoundResult(m.Round, results, null));
-        m.Over = m.Round >= m.Settings.Rounds * 2 || m.Players.Count(id => Find(id) is not null) < 2;
+            var line = m.Live.GetValueOrDefault(id);
+            var present = Find(id) is not null && line is not null && line.Status != LineStates.Left;
+            if (line is not null && line.Status is LineStates.Waiting or LineStates.Playing) line.Status = complete ? LineStates.Finished : present ? LineStates.Dnf : LineStates.Left;
+            double? accuracy = r.Samples > 0 ? Math.Round(r.OnSamples * 100.0 / r.Samples, 1) : null;
+            var place = !complete || !present ? 0 : r.Percent >= other.Percent ? 1 : 2;
+            return new(id, m.Names.GetValueOrDefault(id, "Player"), place, complete && present ? r.Percent : null, accuracy, complete && r.Percent > other.Percent ? 1 : 0,
+                line?.Status ?? LineStates.Left, r.Disputed);
+        }
+        var results = new List<Placement> { Place(tracking.First, first, second), Place(tracking.Second, second, first) }.OrderBy(p => p.Place == 0 ? 3 : p.Place).ToList();
+        var winner = complete && first.Percent != second.Percent ? (first.Percent > second.Percent ? tracking.First : tracking.Second) : null;
+        m.Rounds.Add(new RoundResult(m.Round, results, winner));
+        m.Over = m.Round >= m.Settings.Rounds || m.Players.Count(id => Find(id) is not null) < 2;
         m.Phase = MatchPhases.Round; m.NextAt = clock() + ResultsMs;
         Changed();
     }
@@ -574,7 +650,15 @@ sealed class LobbyCore
             match.EndsAt = match.StartsAt + (long)(match.Settings.EffectiveTimeLimit * 1000) + (Tracking ? TrackGraceMs : RoundGraceMs);
             Changed();
         }
-        if (match.Phase == MatchPhases.Live && match.Combat is { } combat)
+        if (match.Phase == MatchPhases.Live && match.Cs is { } cs)
+        {
+            cs.Tick(now);
+            UpdateCombat(match, cs.Combat);
+            var csKey = cs.Round + "|" + cs.Phase + "|" + cs.View().Events.LastOrDefault()?.Id;
+            if (csKey != match.CsKey) { match.CsKey = csKey; Changed(); }
+            if (cs.Over || match.Players.Count(id => Find(id) is not null) < 2) CloseRound();
+        }
+        else if (match.Phase == MatchPhases.Live && match.Combat is { } combat)
         {
             combat.Tick(now);
             UpdateCombat(match, combat);
@@ -608,6 +692,7 @@ sealed class LobbyCore
         var m = match!;
         var s = m.Settings;
         if (m.Tracking is { } tracking) { CloseTrackingRound(m, tracking); return; }
+        if (m.Cs is { } csMatch) { CloseCsMatch(m, csMatch); return; }
         if (m.Combat is { } combatMatch) { CloseCombatRound(m, combatMatch); return; }
         var ranked = m.Live.Select(kv => (Id: kv.Key, Line: kv.Value))
             .OrderBy(x => x.Line.Status == LineStates.Finished ? 0 : x.Line.Status == LineStates.Dnf ? 1 : 2)
@@ -628,19 +713,26 @@ sealed class LobbyCore
         }
         if (finished.Length > 0 && finished.Count(f => f.Line.Score == finished[0].Line.Score) == 1) winner = finished[0].Id;
         m.Rounds.Add(new RoundResult(m.Round, results, LobbyModes.Scored(s.Mode) ? winner : null));
-        var standings = Standings(m);
-        m.Over = s.Mode switch
-        {
-            LobbyModes.Race or LobbyModes.Rounds => m.Round >= s.Rounds,
-            LobbyModes.Duel => standings.Any(x => x.Wins >= s.FirstTo) || m.Round >= s.FirstTo * 2 + 2 || m.Players.Count(id => Find(id) is not null) < 2,
-            LobbyModes.Tracking => m.Round >= s.Rounds * 2 || m.Players.Count(id => Find(id) is not null) < 2,
-            _ => false,
-        };
-        if (m.Players.Count(id => Find(id) is not null) == 0) m.Over = true;
+        m.Over = Decided(m);
         // A single deciding round goes straight to the final screen.
         if (m.Over && m.Rounds.Count == 1) { FinishMatch(); return; }
         m.Phase = MatchPhases.Round; m.NextAt = clock() + ResultsMs;
         Changed();
+    }
+
+    // Whether the rounds played so far decide the match (no further round).
+    bool Decided(Match m)
+    {
+        var s = m.Settings;
+        var present = m.Players.Count(id => Find(id) is not null);
+        if (present == 0 || LobbyModes.Shooting(s.Mode)) return true;
+        return s.Mode switch
+        {
+            LobbyModes.Race or LobbyModes.Rounds => m.Round >= s.Rounds,
+            LobbyModes.Duel => Standings(m).Any(x => x.Wins >= s.FirstTo) || m.Round >= s.FirstTo * 2 + 2 || present < 2,
+            LobbyModes.Tracking => m.Round >= s.Rounds || present < 2,
+            _ => false,
+        };
     }
 
     void FinishMatch()
@@ -664,11 +756,14 @@ sealed class LobbyCore
             return new Standing(id, m.Names.GetValueOrDefault(id, "Player"), 0, mine.Count(x => x.Round.WinnerId == id), mine.Sum(x => x.P.Points),
                 scores.Length > 0 ? scores.Max() : null, scores.Sum(), mine.Length);
         }).ToList();
+        var placed = m.Rounds.SelectMany(r => r.Results).Where(p => p.Place > 0).GroupBy(p => p.MemberId).ToDictionary(g => g.Key, g => g.Min(p => p.Place));
         Func<Standing, (double, double)> key = mode switch
         {
             LobbyModes.Duel => s => (s.Wins, s.Total),
-            LobbyModes.Tracking => s => (s.Total, s.Best ?? 0),
-            var cm when LobbyModes.Combat(cm) => s => (s.Points, s.Total),
+            LobbyModes.Tracking => s => (s.Wins, s.Total),
+            // Combat: the match placement (frags, then fewer deaths, or the team); players who left come last.
+            var cm when LobbyModes.Combat(cm) => s => (-(double)placed.GetValueOrDefault(s.MemberId, 1000), m.Settings.Mode == LobbyModes.TeamDeathmatch ? 0 : s.Points),
+            var cm when LobbyModes.Shooting(cm) => s => (s.Points, s.Total),
             LobbyModes.Rounds => s => (s.Points, s.Total),
             _ => s => (s.Best ?? double.MinValue, s.Total),
         };
@@ -684,8 +779,8 @@ sealed class LobbyCore
         return new MatchSnapshot(m.Id, m.Phase, s.Mode, s.Scenario?.Name ?? "", s.EffectiveTimeLimit, m.Round, s.TotalRounds,
             s.Mode == LobbyModes.Duel ? s.FirstTo : null, m.StartsAt, m.EndsAt, m.NextAt, m.Players.ToArray(),
             m.Live.Select(kv => kv.Value.View(kv.Key)).ToArray(), m.Rounds.ToArray(), Standings(m), m.WinnerId, m.Rematch.ToArray(), m.RematchDeadline, m.Loaded.ToArray(),
-            m.Tracking?.Attacker, m.Tracking is { } t && m.TrackLast is { } r ? new TrackView(t.Attacker, t.Dodger, r.Percent, r.OnTargetSeconds, r.Coverage, r.LagMs, r.Disputed, r.Reason) : null,
-            m.Combat?.View());
+            null, m.Tracking is { } t && m.TrackLast is { } r ? [TrackView.Of(t.First, r.First), TrackView.Of(t.Second, r.Second)] : null,
+            m.Combat?.View(), m.Cs?.View());
     }
 
     // A client that becomes host rebuilds the authority from the last snapshot it mirrored.
@@ -718,9 +813,11 @@ sealed class LobbyCore
                 if (ms.Combat is { } cv) match.Combat.Restore(cv);
             }
             // A tracking round in progress restarts its scoring on the new host (the old host's samples are gone); the short coverage marks it disputed.
-            if (snapshot.Settings.Mode == LobbyModes.Tracking && ms.Attacker is { } attacker && ms.StartsAt is { } startsAt && ms.Phase is MatchPhases.Countdown or MatchPhases.Live && ms.Players.FirstOrDefault(p => p != attacker) is { } dodger)
-                match.Tracking = new TrackingRound(attacker, dodger, startsAt, startsAt + (long)(snapshot.Settings.EffectiveTimeLimit * 1000));
+            if (snapshot.Settings.Mode == LobbyModes.Tracking && ms.StartsAt is { } startsAt && ms.Phase is MatchPhases.Countdown or MatchPhases.Live && ms.Players.Count >= 2)
+                match.Tracking = new TrackingRound(ms.Players[0], ms.Players[1], startsAt, startsAt + (long)(snapshot.Settings.EffectiveTimeLimit * 1000), snapshot.Settings.RequireFire);
             core.match = match;
+            // Over is not in the snapshot: between rounds, decide again so the last results end the match.
+            if (ms.Phase == MatchPhases.Round) match.Over = core.Decided(match);
         }
         if (snapshot.HostId != newHostId) core.System(snapshot.Members.FirstOrDefault(m => m.Id == snapshot.HostId)?.Name + " (host) left. " + self.Name + " is now the host.");
         return core;

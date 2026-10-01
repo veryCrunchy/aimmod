@@ -66,6 +66,13 @@ namespace aimmod
             std::uint64_t version{};
         };
         PlayStateSnapshot playState() const;
+        // round-state.tsv (service, same rules as play-state.tsv).
+        struct RoundStateSnapshot
+        {
+            std::shared_ptr<const RoundState> state;
+            std::uint64_t version{};
+        };
+        RoundStateSnapshot roundState() const;
 
         // Cosmetics inputs (DESIGN.md "Cosmetics"): the installed catalog,
         // verified once against its manifest by the writer thread, and the
@@ -98,6 +105,9 @@ namespace aimmod
         // 5 s of `localStartSeconds` when known). Polled by the writer thread.
         void WatchGameStats(std::string scenario, std::int64_t sinceUnixMs, std::optional<double> localStartSeconds);
         void StopGameStats();
+        // Logs whether the game wrote a challenge stats CSV for `scenario`
+        // within 15 s (quit-run audit; a quit must not write one).
+        void AuditQuitStats(std::string scenario);
         std::optional<GameStats> TakeGameStats();
         const std::filesystem::path& statsFolder() const { return m_stats; }
 
@@ -138,7 +148,7 @@ namespace aimmod
         std::string m_commandText;
         std::uint64_t m_commandSequence{}, m_lastCommandCheck{};
         bool m_commandPrimed{};
-        std::deque<std::string> m_results;
+        std::deque<std::string> m_results, m_resultHistory;
         void ReadCommand(std::uint64_t now);
         std::string m_version;
         std::thread m_thread;
@@ -157,6 +167,18 @@ namespace aimmod
         std::shared_ptr<const PlayState> m_playState;
         std::uint64_t m_playStateVersion{}, m_playStateStamp{}, m_lastPlayStateCheck{}, m_playStateSeenAt{};
         void ReadPlayState(std::uint64_t now);
+        std::shared_ptr<const RoundState> m_roundState;
+        std::uint64_t m_roundStateVersion{}, m_roundStateStamp{};
+        void ReadRoundState(std::uint64_t now);
+        struct QuitStats
+        {
+            std::string scenario;
+            std::filesystem::file_time_type since;
+            std::uint64_t until{};
+            bool found{};
+        };
+        std::optional<QuitStats> m_quitStats;
+        void CheckQuitStats(std::uint64_t now);
         std::filesystem::path m_catalogDir, m_paksDir;
         bool m_libraryLoaded{};
         CosmeticsInputs m_cosmetics;

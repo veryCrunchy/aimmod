@@ -38,11 +38,20 @@ namespace aimmod
         bool canCapture() const { return m_canCapture; }
         // "quit": leave the current run the way pause -> Quit does (abandoned, never submitted).
         bool canQuit() const { return m_cancel.ok(); }
+        // The scenario of a challenge quit-run just left (once), for the
+        // post-quit audit (no completion, upload or stats CSV expected).
+        std::optional<std::string> TakeQuitDone()
+        {
+            auto out = std::move(m_quitDone);
+            m_quitDone.reset();
+            return out;
+        }
         bool overridesActive() const { return m_overrides.active; }
         // Shared match randomness: the game draws from the CRT rand() state of
         // its game thread (it imports rand/srand from the UCRT, like this
         // module). Seeded when the seeded scenario starts or a challenge
         // attempt in it starts, and before each target death/kill (respawn).
+        // A challenge outside "AimMod Match - " scenarios ends seeding.
         void OnAttemptStarted(const std::string& scenario);
         void OnSpawnEvent();
         // Called every engine frame on the game thread.
@@ -63,21 +72,22 @@ namespace aimmod
         game::Scene& m_scene;
         Output& m_output;
         game::Getter m_start, m_activate, m_persistentPlayType, m_playCurrent, m_localHash, m_onlineHash, m_cancel;
-        game::Getter m_timeDilation, m_mapScale, m_adaptiveOverride, m_adaptiveReset, m_weapon;
+        game::Getter m_timeDilation, m_mapScale, m_adaptiveOverride, m_adaptiveReset, m_weapon, m_loadWeapons;
         game::Getter m_refreshLocal, m_reloadProfiles;
-        // quit-run: the pause menu's Quit Challenge handler (Blueprint, bound
-        // when first needed), CancelChallenge as fallback, and the freeplay
-        // session reset.
-        game::Getter m_quitHandler, m_resetFreeplay;
+        // quit-run: ScenarioManager:CancelChallenge (the game's cancel path,
+        // which broadcasts ChallengeCanceled, not ChallengeComplete) and the
+        // freeplay session reset.
+        game::Getter m_resetFreeplay;
         struct Quitting
         {
             std::uint64_t sequence{};
-            double deadline{}, fallbackAt{};
-            bool fallback{};
-            std::string path;
+            double deadline{}, retryAt{};
+            bool retried{};
+            std::string scenario;
         };
         std::optional<Quitting> m_quitting;
-        void BeginQuit(const GameCommand& command, double now, bool inChallenge);
+        std::optional<std::string> m_quitDone;
+        void BeginQuit(const GameCommand& command, double now, bool inChallenge, const std::string& current);
         void TickQuit(double now, bool inChallenge);
         // Thumbnail capture (camera actor + HighResShot).
         game::Getter m_exec, m_spawnBegin, m_spawnFinish, m_setViewTarget, m_getViewTarget, m_destroy, m_hide, m_place, m_fov;
@@ -131,7 +141,7 @@ namespace aimmod
         struct Overrides
         {
             bool active{};
-            bool timeDilation{}, adaptive{};
+            bool timeDilation{}, adaptive{}, weapon{};
             std::optional<double> mapScaleBefore;
             std::string scenario;
         } m_overrides;
@@ -146,6 +156,8 @@ namespace aimmod
         };
         std::optional<Seeding> m_seeding;
         std::uint64_t m_tick{};
+        bool m_inChallenge{};
         void Reseed(std::uint32_t index, const char* why);
+        void StopSeeding(const char* why);
     };
 } // namespace aimmod

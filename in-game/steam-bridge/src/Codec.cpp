@@ -95,6 +95,34 @@ namespace bridge
         return "..." + (digits.size() > 4 ? digits.substr(digits.size() - 4) : digits);
     }
 
+    std::string FormatBanList(const std::vector<std::uint64_t>& ids)
+    {
+        std::string out;
+        for (const std::uint64_t id : ids)
+        {
+            if (!IsIndividualId(id)) continue;
+            const std::string digits = std::to_string(id);
+            if (out.size() + digits.size() + (out.empty() ? 0 : 1) > MaxLobbyValue) break;
+            if (!out.empty()) out += ',';
+            out += digits;
+        }
+        return out;
+    }
+
+    std::vector<std::uint64_t> ParseBanList(std::string_view text)
+    {
+        std::vector<std::uint64_t> ids;
+        if (text.size() > MaxLobbyValue) return ids;
+        while (!text.empty())
+        {
+            const auto comma = text.find(',');
+            if (const auto id = ParseId(text.substr(0, comma)); id && IsIndividualId(*id) && std::find(ids.begin(), ids.end(), *id) == ids.end())
+                ids.push_back(*id);
+            text = comma == std::string_view::npos ? std::string_view{} : text.substr(comma + 1);
+        }
+        return ids;
+    }
+
     bool ValidLobbyKey(std::string_view key)
     {
         constexpr std::string_view prefix = "aimmod.";
@@ -102,6 +130,32 @@ namespace bridge
         for (const char c : key.substr(prefix.size()))
             if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-')) return false;
         return true;
+    }
+
+    bool ValidMatchToken(std::string_view token)
+    {
+        if (token.size() < 8 || token.size() > 64) return false;
+        for (const char c : token)
+            if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-')) return false;
+        return true;
+    }
+
+    bool ValidProfileName(std::string_view name)
+    {
+        if (name.empty() || name.size() > 64 || name.front() == ' ' || name.back() == ' ') return false;
+        for (const char c : name)
+            if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == ' ' || c == '_' || c == '-' || c == '.' || c == '(' ||
+                  c == ')' || c == '\''))
+                return false;
+        return true;
+    }
+
+    bool SameToken(std::string_view a, std::string_view b)
+    {
+        if (a.size() != b.size()) return false;
+        unsigned char diff = 0;
+        for (std::size_t i = 0; i < a.size(); ++i) diff |= static_cast<unsigned char>(a[i] ^ b[i]);
+        return diff == 0;
     }
 
     std::string JoinString(std::uint64_t lobby) { return "aimmod:" + std::to_string(JoinStringVersion) + ":" + std::to_string(lobby); }
@@ -223,8 +277,60 @@ namespace bridge
         return {privacy == SpectatePrivacy::Ask ? K::Ask : K::Accept, RejectCode::Declined};
     }
 
+    bool Encodable(const WireMessage& m)
+    {
+        auto finite = [](std::initializer_list<float> values, float limit) {
+            for (const float v : values)
+                if (!std::isfinite(v) || std::fabs(v) > limit) return false;
+            return true;
+        };
+        switch (m.type)
+        {
+        case WireType::Hello:
+        case WireType::Welcome:
+        case WireType::Reject:
+        case WireType::Ping:
+        case WireType::Pong:
+        case WireType::Kick:
+        case WireType::Bye:
+        case WireType::ChunkAck:
+        case WireType::Cancel:
+        case WireType::SpectateAccept: return true;
+        case WireType::Data: return !m.payload.empty() && m.payload.size() <= MaxPayload;
+        case WireType::Chunk: return !m.payload.empty() && m.payload.size() <= MaxChunk;
+        case WireType::SpectateSub: return m.rate <= MaxSpectateRate;
+        case WireType::SpectateHello: return m.rate >= 1 && m.rate <= MaxSpectateRate;
+        case WireType::TournamentHello: return ValidMatchToken(m.matchToken);
+        case WireType::Pose:
+        {
+            const Pose& p = m.pose;
+            if (!finite({p.x, p.y, p.z, p.yaw, p.pitch, p.vx, p.vy, p.vz}, 1e7f)) return false;
+            if ((p.flags & PoseFlagHalfHeight) && (!std::isfinite(p.halfHeight) || p.halfHeight < 0 || p.halfHeight > 10000)) return false;
+            for (const char c : p.scene.substr(0, MaxPoseScene))
+                if (static_cast<unsigned char>(c) < 0x20) return false;
+            return true;
+        }
+        case WireType::Camera:
+        {
+            const CameraFrame& c = m.camera;
+            return finite({c.x, c.y, c.z, c.pitch, c.yaw, c.roll, c.fov}, 1e7f) && c.fov > 1 && c.fov < 179;
+        }
+        case WireType::CameraMeta:
+        {
+            if (!std::isfinite(m.camera.fov) || m.camera.fov < 0 || m.camera.fov > 1000) return false;
+            for (const std::string* s : {&m.scenario, &m.map})
+                for (const char c : s->substr(0, MaxPoseScene))
+                    if (static_cast<unsigned char>(c) < 0x20) return false;
+            return true;
+        }
+        case WireType::Score: return finite({m.score.score, m.score.seconds, m.score.remaining}, 1e9f);
+        }
+        return false;
+    }
+
     std::vector<std::uint8_t> Encode(const WireMessage& m)
     {
+        if (!Encodable(m)) return {};
         std::vector<std::uint8_t> out = {'A', 'M', 'P', '1', WireVersion, static_cast<std::uint8_t>(m.type), 0, 0};
         switch (m.type)
         {
@@ -256,6 +362,15 @@ namespace bridge
             break;
         }
         case WireType::SpectateHello: out.push_back(m.rate); break;
+        case WireType::TournamentHello:
+        {
+            Put(out, m.lobby, 8);
+            Put(out, m.token, 8);
+            const std::size_t n = std::min<std::size_t>(m.matchToken.size(), 64);
+            out.push_back(static_cast<std::uint8_t>(n));
+            out.insert(out.end(), m.matchToken.begin(), m.matchToken.begin() + static_cast<std::ptrdiff_t>(n));
+            break;
+        }
         case WireType::SpectateAccept: break;
         case WireType::Score:
         {
@@ -397,6 +512,17 @@ namespace bridge
         case WireType::SpectateAccept:
             if (n != 0) return std::nullopt;
             break;
+        case WireType::TournamentHello:
+        {
+            if (n < 17) return std::nullopt;
+            const std::size_t len = body[16];
+            if (len < 1 || len > 64 || n != 17 + len) return std::nullopt;
+            m.lobby = Get(body, 8);
+            m.token = Get(body + 8, 8);
+            m.matchToken.assign(reinterpret_cast<const char*>(body + 17), len);
+            if (!ValidMatchToken(m.matchToken)) return std::nullopt;
+            break;
+        }
         case WireType::Score:
         {
             if (n != 8 + 1 + 12 + 12) return std::nullopt;

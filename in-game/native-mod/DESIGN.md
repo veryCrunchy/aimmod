@@ -318,7 +318,10 @@ The user approved AimMod changing game state where a feature needs it
 AimModCore performs these on the game thread, one at a time.
 
 Transport: the service writes `core-command.tsv` (atomically) and AimModCore
-answers in `core-command-result.tsv`. HTTP (workspace capability URL,
+answers in `core-command-result.tsv` (the last 8 results, oldest first, one
+`AIMMOD_CORE_RESULT_1` line each; `GET` also returns them as `results`). Every
+override reset also reloads the scenario's weapons (`LoadWeapons`) when a
+weapon was overridden. HTTP (workspace capability URL,
 header `X-AimMod-UI: 1`): `POST <prefix>/game-command` with JSON
 `{"action","scenario","mode","timeScale","targetSize","targetSpeed","mapScale","weapon"}`
 returns `{"sequence":n}` (409 `{"error":"unsupported"}` without the
@@ -354,12 +357,16 @@ reload finished, or `end-failed` when no reload began within 5 s. Refused
 during a challenge and for any other scenario (`not-a-match`, `not-current`).
 
 `quit-run` (no fields; capability `quit`; any scenario): what the player does
-with pause, then Quit. In a challenge it calls the pause menu's own Quit
-Challenge handler (`PauseBox_C`, `BndEvt__QuitChallenge_..._OnClicked`) on the
-live widget, or `ScenarioManager:CancelChallenge` when that widget or
-function is missing, and again after 2.5 s if the challenge is still running.
-The run is abandoned and no score is submitted. Answered `accepted quitting`,
-then `done quit` once the challenge has ended, or `quit-failed` after 6 s.
+to leave a run. In a challenge it calls `ScenarioManager:CancelChallenge`
+(again after 2.5 s if the challenge is still running), the game's cancel
+path: it ends in the `ChallengeCanceled` broadcast, while the stats CSV and
+leaderboard uploads follow `ChallengeComplete`. The 3.9.11 pause menu shows
+no Quit Challenge button, so its leftover Blueprint handler is not used.
+Answered `accepted quitting`, then `done quit` once the challenge has ended,
+or `quit-failed` after 6 s. For 15 s after a quit, AimModCore audits and logs
+any challenge-complete broadcast, leaderboard upload (UWorks and
+Experiments upload nodes) or new stats CSV for the scenario; none is
+expected.
 Outside a challenge it resets the freeplay session (`Reset_FreeplaySession`)
 and answers `done quit` right away. Overrides and the match seed are reset
 either way, and every step is logged.
@@ -486,6 +493,32 @@ If `HandleDamage`, `SetHealth`, `Respawn`, `OnCharacterKilled`,
 `OverrideInvulnerable`, `ResetInvulnerable` or `GetCurrentHealth` is missing on
 the character class, match play is disabled for the session and the missing
 names are logged.
+
+`round-state.tsv` (service; `in-game/docs/game-modes.md` 6.2.1; same gate,
+freshness and whole-file validation as `play-state.tsv`):
+
+```
+AIMMOD_ROUND_1	<seq>
+match	<scenario name>
+spawn	<id>	<x>	<y>	<z>	<yaw>
+phase	<freeze|live|planted|end|over>	<frozen 0/1>	<buy 0/1>	<ends unix ms>
+loadout	<primary profile or ->	<pistol profile or ->	<armour>	<helmet 0/1>	<kit 0/1>
+```
+
+- `spawn`: `K2_TeleportTo` (and the controller's yaw) once per id, retried
+  for 2 s if the game refuses the spot. A spawn already present when the gate
+  opens is not replayed, except during a `freeze` phase. At a `freeze` phase
+  (CS round start) a dead player is respawned first (`Respawn`).
+- `frozen`: `Controller:SetIgnoreMoveInput(true)` (looking stays free),
+  re-applied if a respawn clears it, released when the phase ends or the gate
+  closes.
+- `loadout`: `WeaponHandler:SetWeaponProfileByString` on slots 0 and 1; `-`
+  empties a slot by clearing its `SelectableWeapon` entry (and selects the
+  other slot). Re-applied for a new weapon handler. When the gate closes the
+  original `SelectableWeapon` values come back and `LoadWeapons` restores the
+  scenario's loadout. Armour, helmet and kit are the service's (HUD) concern.
+- Missing `K2_TeleportTo`, `SetControlRotation`, `SetIgnoreMoveInput`,
+  `SetWeaponProfileByString` or `LoadWeapons` disables round state (logged).
 
 ## Cosmetics
 

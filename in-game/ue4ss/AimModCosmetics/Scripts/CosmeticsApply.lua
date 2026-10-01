@@ -106,7 +106,9 @@ function M.new(config, log, deps)
                 if not ok then
                     warnOnce(item.id .. R.name(material), ('%s does not fit %s (no parameter %s)'):format(item.id, R.name(material), missing))
                 else
-                    local mid = try(function() return lib:CreateDynamicMaterialInstance(owner, material, FName('AimModCosmetic_' .. item.id), 0) end)
+                    -- No fixed name: a second instance with the same name under the same
+                    -- owner (another slot, or weapon and arms) would replace the first.
+                    local mid = try(function() return lib:CreateDynamicMaterialInstance(owner, material, FName('None'), 0) end)
                     if valid(mid) then
                         for name, c in pairs(item.vector or {}) do try(function() mid:SetVectorParameterValue(FName(name), c) end) end
                         for name, v in pairs(item.scalar or {}) do try(function() mid:SetScalarParameterValue(FName(name), v) end) end

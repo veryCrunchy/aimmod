@@ -31,8 +31,19 @@ namespace bridge
 
     // Lobby data keys the service may set: "aimmod." + [a-z0-9._-]{1,32}.
     bool ValidLobbyKey(std::string_view key);
+    // Tournament match tokens from the Hub: [A-Za-z0-9_-]{8,64}.
+    bool ValidMatchToken(std::string_view token);
+    // KovaaK's character profile names (dev.avatar): letters, digits, space and _ - . ( ) ', 1..64, no edge spaces.
+    bool ValidProfileName(std::string_view name);
+    bool SameToken(std::string_view a, std::string_view b); // constant time for equal lengths
     constexpr std::size_t MaxLobbyValue = 256;
     constexpr std::size_t MaxServiceLobbyKeys = 24;
+
+    // Kicked members in host-owned lobby data, so a new host (transfer or
+    // migration) keeps refusing them: comma-separated SteamID64s, as many as
+    // fit in one lobby value. Parsing keeps only individual accounts.
+    std::string FormatBanList(const std::vector<std::uint64_t>& ids);
+    std::vector<std::uint64_t> ParseBanList(std::string_view text);
 
     // Join strings: rich presence connect / launch switch value
     // "aimmod:<version>:<lobby id>".
@@ -73,6 +84,7 @@ namespace bridge
         CameraMeta = 15,  // spectate: u64 origin, f32 map scale, u8 n, scenario, u8 m, map name
         SpectateHello = 16,  // lobby-less spectate request: u8 rate Hz (1..60)
         SpectateAccept = 17, // no body
+        TournamentHello = 19, // tournament lobby join: u64 lobby, u64 lobby token, u8 n, n bytes Hub match token
         Score = 18,          // live score: u64 origin, u8 flags (1 active, 2 paused), 3 x f32 (score seconds remaining), 3 x u32 (shots hits kills); -1 / 0xFFFFFFFF = unknown
     };
 
@@ -111,6 +123,7 @@ namespace bridge
         SpectateFull = 7, // too many spectators
         NotFriend = 8,    // only Steam friends may spectate
         Declined = 9,     // the target said no (or didn't answer)
+        NotEntrant = 10,  // tournament lobby: not the expected entrant, or a wrong match token
     };
     constexpr std::size_t WireHeader = 8;
 
@@ -140,9 +153,13 @@ namespace bridge
         Pose pose;
         CameraFrame camera;
         ScoreFrame score;
+        std::string matchToken; // TournamentHello
         std::string scenario, map; // CameraMeta (<= MaxPoseScene each); origin in lobby, scale in camera.fov
         std::uint8_t rate = 0; // SpectateSub (lobby/target reuse: lobby = target)
     };
+    // True when Decode would accept what Encode produces for message.
+    bool Encodable(const WireMessage& message);
+    // Empty when the message isn't Encodable: the sender never emits what a receiver must reject.
     std::vector<std::uint8_t> Encode(const WireMessage& message);
     // Strict: exact sizes per type, version match, payload bounds.
     std::optional<WireMessage> Decode(const std::uint8_t* data, std::size_t size);

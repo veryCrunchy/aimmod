@@ -34,7 +34,7 @@ function view(extra){return Object.assign({},base,extra||{});}
 test('home offers create and join, and Steam friends with join for joinable lobbies',()=>{
   const s=setup();s.api.enter(s.container);assert.equal(s.requests[0].url,'/private/multiplayer');s.requests[0].finish(200,view());
   const create=s.button('Create lobby');assert.ok(create&&create.parentNode.className==='actions','stand-alone buttons sit in an actions row');
-  s.button('Duel')||s.all().find(e=>e.className&&e.className.indexOf('mp-mode')===0&&e.children[0].textContent==='Duel').onclick();
+  s.all().find(e=>e.tag==='button'&&/^mp-mode( |$)/.test(e.className)&&e.children.some(c=>c.tag==='strong'&&c.textContent==='Score duel')).onclick();
   s.button('Create lobby').onclick();const post=s.last();assert.equal(post.method,'POST');assert.equal(post.headers['X-AimMod-UI'],'1');assert.deepEqual(JSON.parse(post.body),{action:'create',mode:'duel'});
   const join=s.buttons().filter(b=>b.textContent==='Join');assert.equal(join.length,2,'code join plus the joinable friend');join[1].onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'join-friend',friend:'f2'});
   assert.ok(!s.text().includes('765611'),'no Steam ids are shown');
@@ -62,7 +62,7 @@ test('a member sees read-only settings and readies up; missing content blocks re
 test('incoming Steam invites ask before joining',()=>{
   const s=setup();s.api.enter(s.container);
   s.requests[0].finish(200,view({invites:[{id:'join-1',fromName:'Synthetic Host',kind:'invite',summary:{mode:'duel',scenario:'Synthetic Scenario',players:1,maxPlayers:2},at:900,compatible:true}]}));
-  assert.ok(s.text().includes('Synthetic Host invited you'));assert.ok(s.text().includes('Duel'));
+  assert.ok(s.text().includes('Synthetic Host invited you'));assert.ok(s.text().includes('Score duel'));
   s.button('Accept').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'accept-invite',id:'join-1'});
   s.button('Decline').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'decline-invite',id:'join-1'});
   const launch=setup();launch.api.enter(launch.container);launch.requests[0].finish(200,view({invites:[{id:'join-2',fromName:'A friend',kind:'launch',summary:null,at:900,compatible:true}]}));
@@ -74,7 +74,7 @@ test('host settings editor sends validated keys, and score race locks overrides'
   lib.finish(200,{available:true,scenarios:[{name:'Synthetic Scenario',map:'synthetic_map',mapSource:'game',timeLimit:60}],maps:[{name:'synthetic_port',source:'ported',hash:'abc'}],weapons:['Synthetic Rifle'],characters:[],presets:[]});
   s.button('Show').onclick();assert.ok(s.all().some(e=>e.tag==='button'&&e.className.indexOf('mp-pick')===0&&e.disabled),'map override is locked in score race');
   s.button('60 s').onclick&&assert.ok(s.button('60 s').disabled,'time limit is locked in score race');
-  s.all().find(e=>e.className&&e.className.indexOf('mp-mode')===0&&e.children[0]&&e.children[0].textContent==='Free-for-all').onclick();
+  s.all().find(e=>e.tag==='button'&&/^mp-mode( |$)/.test(e.className)&&e.children.some(c=>c.tag==='strong'&&c.textContent==='Free-for-all')).onclick();
   assert.deepEqual(JSON.parse(s.last().body),{action:'settings',settings:{mode:'ffa-rounds'}});
   s.button('Done').onclick();assert.ok(s.button('Edit'));
 });
@@ -191,6 +191,29 @@ test('the cosmetics page lists catalog items only, equips by id and sets who to 
   const t=s.text();assert.ok(t.includes('only show in AimMod matches')&&t.includes('Tints and patterns')&&t.includes('Weapon finishes')&&t.includes('1 more need a newer AimMod'));
   s.button('Equip').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'cosmetic-equip',id:'meso-tint-ember'});
   s.button('Friends').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'cosmetic-view',show:'friends'});
+});
+test('the cosmetics preview heartbeats only while the page is open, shows the newest frame and stops on leave',()=>{
+  const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view());
+  const previews=()=>s.requests.filter(r=>r.url==='/private/cosmetic-preview');
+  assert.equal(previews().length,0,'no preview request before the page opens');
+  s.button('Cosmetics').onclick();
+  const first=previews()[0];assert.ok(first,'opening the page starts the preview');
+  assert.equal(first.method,'POST');assert.equal(first.headers['X-AimMod-UI'],'1');assert.deepEqual(JSON.parse(first.body),{open:true,yaw:0});
+  s.requests.find(r=>r.url==='/private/multiplayer?part=cosmetics').finish(200,{available:true,problem:null,version:1,show:'all',unavailable:0,
+    items:[{id:'meso-tint-ember',version:1,kind:'avatar_tint',name:'Ember',models:['Meso'],color:[0.85,0.22,0.05],equipped:false}]});
+  const img=()=>s.all().find(e=>e.tag==='img'&&/mp-cos-live-img/.test(e.className));
+  assert.equal(img().style.display,'none','no frame yet: the note shows instead');
+  first.finish(200,{frame:3});
+  assert.equal(img().src,'/private/cosmetic-preview.png?f=3');assert.equal(img().style.display,'block');
+  s.button('Preview').onclick();assert.deepEqual(JSON.parse(previews().at(-1).body),{open:true,yaw:0,item:'meso-tint-ember'},'trying an item on sends its id only');
+  assert.ok(!previews().some(r=>/file|path|png/i.test(r.body)),'the preview never sends files or paths');
+  s.api.leave();
+  assert.deepEqual(JSON.parse(previews().at(-1).body),{open:false},'leaving the page (or hiding the workspace) ends the preview');
+});
+test('the cosmetics page says cosmetics are coming soon while the catalog has nothing to pick',()=>{
+  const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view());
+  s.button('Cosmetics').onclick();s.requests.find(r=>r.url==='/private/multiplayer?part=cosmetics').finish(200,{available:true,problem:null,version:1,show:'all',unavailable:0,items:[]});
+  assert.ok(s.text().includes('Cosmetics are coming soon')&&s.text().includes('next AimMod update')&&s.text().includes('Show others’ cosmetics'));
 });
 test('the map library lists ports with size, Shift and Workshop state, and installs or hosts them',()=>{
   const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view());

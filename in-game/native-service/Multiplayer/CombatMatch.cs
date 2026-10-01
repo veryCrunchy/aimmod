@@ -31,11 +31,11 @@ static class CombatRules
 // A hit the shooter's game registered: host-clock time, the shot's camera ray,
 // whether the game counted a headshot, and where the game drew the target it hit.
 sealed record HitClaim(string MatchId, int Round, long Seq, long T, double X, double Y, double Z, double Pitch, double Yaw, bool Head,
-    double? TargetX, double? TargetY, double? TargetZ, double? TargetRadius, double? TargetHalfHeight)
+    double? TargetX, double? TargetY, double? TargetZ, double? TargetRadius, double? TargetHalfHeight, int Slot = 0)
 {
     public object Body() => new
     {
-        match = MatchId, round = Round, seq = Seq, t = T, o = new[] { R(X), R(Y), R(Z) }, r = new[] { R(Pitch), R(Yaw) }, head = Head,
+        match = MatchId, round = Round, seq = Seq, t = T, o = new[] { R(X), R(Y), R(Z) }, r = new[] { R(Pitch), R(Yaw) }, head = Head, w = Slot,
         target = TargetX is null ? null : new[] { R(TargetX.Value), R(TargetY!.Value), R(TargetZ!.Value), R(TargetRadius!.Value), R(TargetHalfHeight!.Value) },
     };
     static double R(double v) => Math.Round(v, 2);
@@ -63,7 +63,9 @@ sealed record HitClaim(string MatchId, int Round, long Seq, long T, double X, do
                 target = Nums(tg, 5);
                 if (target is null || target[3] is <= 0 or > 1000 || target[4] < target[3] || target[4] > 2000) return null;
             }
-            return new HitClaim(match, round, seq, t, o[0], o[1], o[2], r[0], r[1], head, target?[0], target?[1], target?[2], target?[3], target?[4]);
+            var slot = b.TryGetProperty("w", out var w) && w.TryGetInt32(out var sv) ? sv : 0;
+            if (slot is < 0 or > 7) return null;
+            return new HitClaim(match, round, seq, t, o[0], o[1], o[2], r[0], r[1], head, target?[0], target?[1], target?[2], target?[3], target?[4], slot);
         }
         catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or FormatException) { return null; }
     }
@@ -73,7 +75,7 @@ sealed record HitClaim(string MatchId, int Round, long Seq, long T, double X, do
 // Team: 0 in free-for-all modes, 1 or 2 in team deathmatch. Spawn on a respawn event: [x, y, z, yaw]
 // the host chose (null: the game's own spawn). TeamFrags: team 1 and team 2 totals.
 sealed record CombatPlayerView(string Member, double Health, bool Alive, int Frags, int Deaths, long? RespawnAt, long? ProtectedUntil, int Claims, int Rejected, int Team = 0);
-sealed record CombatEvent(long Id, string Kind, long T, string Member, string? Attacker, double Amount, bool Head, double Health, double? AttackerHealth, double[]? Spawn = null);
+sealed record CombatEvent(long Id, string Kind, long T, string Member, string? Attacker, double Amount, bool Head, double Health, double? AttackerHealth, double[]? Spawn = null, double[]? Dir = null);
 sealed record CombatView(int FragLimit, IReadOnlyList<CombatPlayerView> Players, IReadOnlyList<CombatEvent> Events, IReadOnlyList<int>? TeamFrags = null, int? WinnerTeam = null);
 // A spawn point of the arena (world units). TeamMask: bit 1 = team 1, bit 2 = team 2.
 sealed record SpawnPoint(double X, double Y, double Z, double Yaw, int TeamMask);
@@ -95,6 +97,32 @@ sealed class CombatMatch
     public long Start { get; }
     public long End { get; }
     public CombatWeapon Weapon { get; }
+    // Round-based modes (CS) set these: no respawns, a weapon per shooter and slot (null: that
+    // slot is empty), a damage model (armour), and a hook on every kill.
+    public bool Respawns { get; set; } = true;
+    public Func<string, int, CombatWeapon?>? WeaponFor { get; set; }
+    public Func<string, double, bool, CombatWeapon, double>? DamageModel { get; set; }
+    public Action<string, string, CombatWeapon, bool>? OnKill { get; set; }
+    public bool Alive(string id) => players.TryGetValue(id, out var p) && p.Alive;
+    public double Health(string id) => players.TryGetValue(id, out var p) ? p.Health : 0;
+    // The latest camera sample of a player (round modes: zone and bomb checks).
+    public TrackSample? Position(string id) => players.TryGetValue(id, out var p) && p.Track.Count > 0 ? p.Track[^1] : null;
+    // Horizontal speed over the last 200 ms (cm/s), from the player's own track.
+    public double Speed(string id)
+    {
+        if (!players.TryGetValue(id, out var p) || p.Track.Count < 2) return 0;
+        var last = p.Track[^1]; var before = At(p.Track, last.T - 200) ?? p.Track[0];
+        var dt = Math.Max(1, last.T - before.T) / 1000.0;
+        return Math.Sqrt((last.X - before.X) * (last.X - before.X) + (last.Y - before.Y) * (last.Y - before.Y)) / dt;
+    }
+    // Round start: everyone alive at full health, spawn-protected for a moment, scores kept.
+    public void Revive(string id, long now, double health, long protectMs = 0)
+    {
+        if (!players.TryGetValue(id, out var p)) return;
+        p.Alive = true; p.Health = health; p.RespawnAt = null; p.ProtectedUntil = now + protectMs; p.LastShot = long.MinValue;
+    }
+    public void SetTeam(string id, int team) { if (players.TryGetValue(id, out var p)) p.Team = team; }
+    public void Kill(string id, long now) { if (players.TryGetValue(id, out var p) && p.Alive) { p.Alive = false; p.Health = 0; p.RespawnAt = null; Emit("death", now, id, null, 0, false, 0, null); } }
     public double Lifesteal { get; }
     // The arena's spawn points (parsed from the generated scenario's map); empty: the game's own spawns.
     public IReadOnlyList<SpawnPoint> Spawns { get; set; } = [];
@@ -150,8 +178,8 @@ sealed class CombatMatch
         return new TrackSample((long)t, a.X + (b.X - a.X) * u, a.Y + (b.Y - a.Y) * u, a.Z + (b.Z - a.Z) * u, a.Pitch + (b.Pitch - a.Pitch) * u, a.Yaw + ((b.Yaw - a.Yaw + 540) % 360 - 180) * u);
     }
 
-    void Emit(string kind, long t, string member, string? attacker, double amount, bool head, double health, double? attackerHealth, double[]? spawn = null) =>
-        events.Add(new CombatEvent(++eventId, kind, t, member, attacker, Math.Round(amount, 1), head, Math.Round(health, 1), attackerHealth is { } a ? Math.Round(a, 1) : null, spawn));
+    void Emit(string kind, long t, string member, string? attacker, double amount, bool head, double health, double? attackerHealth, double[]? spawn = null, double[]? dir = null) =>
+        events.Add(new CombatEvent(++eventId, kind, t, member, attacker, Math.Round(amount, 1), head, Math.Round(health, 1), attackerHealth is { } a ? Math.Round(a, 1) : null, spawn, dir));
 
     // The spawn for a respawning player: allowed for its team, farthest from the
     // nearest living opponent (ties: the first listed). Null when the arena has none.
@@ -177,7 +205,9 @@ sealed class CombatMatch
         shooter.LastSeq = c.Seq;
         if (c.T < Start || c.T > End || c.T > now + 100 || c.T < now - CombatRules.ClaimWindowMs) return Reject("time");
         if (!shooter.Alive) return Reject("shooter-dead");
-        if (shooter.LastShot != long.MinValue && c.T - shooter.LastShot < Weapon.TimeBetweenShots * 1000 * 0.9) return Reject("fire-rate");
+        var weapon = WeaponFor is null ? Weapon : WeaponFor(from, c.Slot);
+        if (weapon is null) return Reject("weapon");
+        if (shooter.LastShot != long.MinValue && c.T - shooter.LastShot < weapon.TimeBetweenShots * 1000 * 0.9) return Reject("fire-rate");
         // The ray must start where the shooter's own track had its camera, looking the same way.
         if (At(shooter.Track, c.T) is not { } eye) return Reject("no-shooter-track");
         var dx0 = c.X - eye.X; var dy0 = c.Y - eye.Y; var dz0 = c.Z - eye.Z;
@@ -195,9 +225,12 @@ sealed class CombatMatch
             if (teammate && c.TargetX is null) continue; // friendly fire is off
             if (c.TargetX is { } tx)
             {
+                // The drawn hull must also sit at the victim's own height, and its size is the avatar's
+                // (at most the hull plus 8 cm), so a claim can't enlarge or move the target onto the ray.
                 for (long lag = 0; lag <= TrackingRound.RewindCapMs && victim is null; lag += 5)
-                    if (At(p.Track, c.T - lag) is { } d && Math.Sqrt((d.X - tx) * (d.X - tx) + (d.Y - c.TargetY!.Value) * (d.Y - c.TargetY.Value)) <= TrackingRound.MatchToleranceCm)
-                    { victim = p; cx = tx; cy = c.TargetY.Value; cz = c.TargetZ!.Value; radius = c.TargetRadius!.Value; half = c.TargetHalfHeight!.Value; }
+                    if (At(p.Track, c.T - lag) is { } d && Math.Sqrt((d.X - tx) * (d.X - tx) + (d.Y - c.TargetY!.Value) * (d.Y - c.TargetY.Value)) <= TrackingRound.MatchToleranceCm
+                        && TrackingRound.PlausibleHeight(d.Z - c.TargetZ!.Value))
+                    { victim = p; cx = tx; cy = c.TargetY.Value; cz = c.TargetZ.Value; radius = TrackingRound.HullRadius(c.TargetRadius!.Value); half = TrackingRound.HullHalfHeight(c.TargetHalfHeight!.Value); }
             }
             else
             {
@@ -216,7 +249,8 @@ sealed class CombatMatch
         // Headshot: the ray passes through the top sphere of the hull (radius 25 cm).
         var headR = Math.Min(25, radius);
         var head = TrackGeometry.HitsCapsule(c.X, c.Y, c.Z, dx, dy, dz, TrackingRound.RayLengthCm, cx, cy, cz + half - headR, headR, headR);
-        var damage = Math.Min(victim.Health, Weapon.Damage * (head ? Weapon.HeadMultiplier : 1));
+        var raw = weapon.Damage * (head ? weapon.HeadMultiplier : 1);
+        var damage = Math.Min(victim.Health, DamageModel is null ? raw : DamageModel(victim.Id, raw, head, weapon));
         victim.Health -= damage;
         double? healed = null;
         if (Lifesteal > 0)
@@ -225,11 +259,12 @@ sealed class CombatMatch
             shooter.Health = Math.Min(cap, shooter.Health + damage * Lifesteal);
             healed = shooter.Health;
         }
-        Emit("damage", c.T, victim.Id, shooter.Id, damage, head, victim.Health, healed);
+        Emit("damage", c.T, victim.Id, shooter.Id, damage, head, victim.Health, healed, null, [Math.Round(dx, 4), Math.Round(dy, 4), Math.Round(dz, 4)]);
         if (victim.Health <= 0.0001)
         {
-            victim.Health = 0; victim.Alive = false; victim.Deaths++; victim.RespawnAt = now + CombatRules.RespawnMs(Mode);
+            victim.Health = 0; victim.Alive = false; victim.Deaths++; victim.RespawnAt = Respawns ? now + CombatRules.RespawnMs(Mode) : null;
             shooter.Frags++;
+            OnKill?.Invoke(victim.Id, shooter.Id, weapon, head);
             if (Mode == LobbyModes.Vampiric) shooter.Health = Math.Min(CombatRules.MaxHealth, shooter.Health + CombatRules.VampiricHealthOnKill);
             Emit("death", c.T, victim.Id, shooter.Id, damage, head, 0, shooter.Health);
         }
@@ -309,31 +344,59 @@ static class CombatOverlay
 sealed class ShotFeed(string outputFolder)
 {
     readonly string path = Path.Combine(outputFolder, "self-shots.tsv");
-    long lastSequence = -1, lastShot = -1;
-    public void Reset() { lastSequence = -1; lastShot = -1; }
+    readonly string requestPath = Path.Combine(outputFolder, "self-shots.request");
+    long lastSequence = -1, lastShot = -1, requestedAt; string? session;
+    public void Reset() { lastSequence = -1; lastShot = -1; session = null; }
+    // AimModCore publishes shots only while self-shots.request is fresh (5 s).
+    public void Request(long nowMs)
+    {
+        if (nowMs - requestedAt < 2000) return;
+        requestedAt = nowMs;
+        try { File.WriteAllText(requestPath, nowMs.ToString(CultureInfo.InvariantCulture)); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
 
     public sealed record Shot(long UnixMs, long Seq, double X, double Y, double Z, double Pitch, double Yaw, int Weapon, int Target, bool Head);
 
-    public static (long Sequence, IReadOnlyList<Shot> Shots)? Parse(string text)
+    // AimModCore's self-shots.tsv (native-mod/DESIGN.md "Match play"):
+    //   AIMMOD_SHOTS_1\t<publish seq>\t<session>
+    //   shot\t<unix ms>\t<shot seq>\t<ox>\t<oy>\t<oz>\t<dx>\t<dy>\t<dz>\t<slot>\t<target>\t<headshot 0/1>\t<gameHit 0/1>
+    //   tag\t<target id>\t<stream id>
+    // The ray direction becomes pitch and yaw. The earlier pitch/yaw row shape still reads.
+    public static (long Sequence, string Session, IReadOnlyList<Shot> Shots)? Parse(string text)
     {
         var lines = text.Replace("\r\n", "\n").Split('\n', StringSplitOptions.RemoveEmptyEntries);
         if (lines.Length < 1 || text.Length > 65536) return null;
         var head = lines[0].Split('\t');
-        if (head.Length != 2 || head[0] != "AIMMOD_SHOTS_1" || !long.TryParse(head[1], NumberStyles.None, CultureInfo.InvariantCulture, out var sequence)) return null;
+        if (head.Length is not (2 or 3) || head[0] != "AIMMOD_SHOTS_1" || !long.TryParse(head[1], NumberStyles.None, CultureInfo.InvariantCulture, out var sequence)) return null;
+        var session = head.Length == 3 ? head[2] : "";
+        if (session.Length > 64 || session.Any(char.IsControl)) return null;
         var shots = new List<Shot>();
         static bool Num(string s, out double v) => double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out v) && double.IsFinite(v) && Math.Abs(v) < 1e9;
         foreach (var line in lines.Skip(1))
         {
             var c = line.Split('\t');
-            if (c.Length != 11 || c[0] != "shot" || shots.Count >= 64) return null;
+            if (c[0] == "tag") continue; // avatar tags: the claim carries the drawn target itself
+            if (c.Length is not (11 or 13) || c[0] != "shot" || shots.Count >= 64) return null;
             if (!long.TryParse(c[1], NumberStyles.None, CultureInfo.InvariantCulture, out var ms) || !long.TryParse(c[2], NumberStyles.None, CultureInfo.InvariantCulture, out var seq)) return null;
-            var v = new double[5];
-            for (var i = 0; i < 5; i++) if (!Num(c[i + 3], out v[i])) return null;
-            if (!int.TryParse(c[8], NumberStyles.None, CultureInfo.InvariantCulture, out var weapon) || weapon > 7 || !int.TryParse(c[9], NumberStyles.None, CultureInfo.InvariantCulture, out var target) || c[10] is not ("0" or "1")) return null;
+            var n = c.Length == 13 ? 6 : 5;
+            var v = new double[n];
+            for (var i = 0; i < n; i++) if (!Num(c[i + 3], out v[i])) return null;
+            double pitch, yaw;
+            if (n == 6)
+            {
+                var len = Math.Sqrt(v[3] * v[3] + v[4] * v[4] + v[5] * v[5]);
+                if (len < 0.5 || len > 1.5) return null;
+                pitch = Math.Asin(Math.Clamp(v[5] / len, -1, 1)) * 180 / Math.PI; yaw = Math.Atan2(v[4], v[3]) * 180 / Math.PI;
+            }
+            else { pitch = v[3]; yaw = v[4]; }
+            var at = 3 + n;
+            if (!int.TryParse(c[at], NumberStyles.None, CultureInfo.InvariantCulture, out var weapon) || weapon > 7 || !int.TryParse(c[at + 1], NumberStyles.None, CultureInfo.InvariantCulture, out var target) || c[at + 2] is not ("0" or "1")) return null;
+            if (n == 6 && c[at + 3] is not ("0" or "1")) return null;
             if (shots.Count > 0 && seq <= shots[^1].Seq) return null;
-            shots.Add(new Shot(ms, seq, v[0], v[1], v[2], v[3], v[4], weapon, target, c[10] == "1"));
+            shots.Add(new Shot(ms, seq, v[0], v[1], v[2], pitch, yaw, weapon, target, c[at + 2] == "1"));
         }
-        return (sequence, shots);
+        return (sequence, session, shots);
     }
 
     // New hits since the last call. targets: the drawn targets by id (latest self-pose frame).
@@ -352,9 +415,12 @@ sealed class ShotFeed(string outputFolder)
         return Take(Parse(text), matchId, round, offsetMs, targets);
     }
 
-    public IReadOnlyList<HitClaim> Take((long Sequence, IReadOnlyList<Shot> Shots)? parsed, string matchId, int round, long offsetMs, IReadOnlyDictionary<int, TrackSeen> targets)
+    public IReadOnlyList<HitClaim> Take((long Sequence, string Session, IReadOnlyList<Shot> Shots)? parsed, string matchId, int round, long offsetMs, IReadOnlyDictionary<int, TrackSeen> targets)
     {
-        if (parsed is not { } p || p.Sequence == lastSequence) return [];
+        if (parsed is not { } p) return [];
+        // A new AimModCore session restarts its shot sequence.
+        if (p.Session != session) { session = p.Session; lastSequence = -1; lastShot = -1; }
+        if (p.Sequence == lastSequence) return [];
         lastSequence = p.Sequence;
         var claims = new List<HitClaim>();
         foreach (var s in p.Shots)
@@ -363,7 +429,7 @@ sealed class ShotFeed(string outputFolder)
             lastShot = s.Seq;
             if (s.Target == 0) continue;
             targets.TryGetValue(s.Target, out var t);
-            claims.Add(new HitClaim(matchId, round, s.Seq, s.UnixMs + offsetMs, s.X, s.Y, s.Z, s.Pitch, s.Yaw, s.Head, t?.X, t?.Y, t?.Z, t?.Radius, t?.HalfHeight));
+            claims.Add(new HitClaim(matchId, round, s.Seq, s.UnixMs + offsetMs, s.X, s.Y, s.Z, s.Pitch, s.Yaw, s.Head, t?.X, t?.Y, t?.Z, t?.Radius, t?.HalfHeight, s.Weapon));
         }
         return claims;
     }
@@ -375,19 +441,45 @@ sealed class ShotFeed(string outputFolder)
 // protection, and the last damage taken (for the native hit effect).
 static class PlayState
 {
-    public static string Format(long sequence, string matchId, CombatPlayerView self, CombatEvent? lastHit, string? attackerHint, CombatEvent? lastSpawn = null)
+    static string N(double v) => v.ToString("0.#", CultureInfo.InvariantCulture);
+
+    // AimModCore's play-state.tsv (native-mod/DESIGN.md "Match play"): AIMMOD_PLAYSTATE_1, the
+    // match scenario's exact name, health, alive, respawnAt (local unix ms), protected and the last
+    // hit (attacker member id, damage, headshot, unit direction). Unknown rows reject the file, so
+    // nothing else goes here. hostToLocal: subtract from host-clock times.
+    public static string Format(long sequence, string scenario, CombatPlayerView self, CombatEvent? lastHit, long hostNow, long hostToLocal)
     {
-        static string N(double v) => v.ToString("0.#", CultureInfo.InvariantCulture);
         var text = new StringBuilder();
-        text.Append("AIMMOD_PLAY_1\t").Append(sequence).Append('\n');
-        text.Append("match\t").Append(Uri.EscapeDataString(matchId)).Append('\n');
-        text.Append("self\t").Append(self.Alive ? 1 : 0).Append('\t').Append(N(self.Health)).Append('\t').Append(N(CombatRules.MaxHealth)).Append('\t')
-            .Append(self.RespawnAt ?? 0).Append('\t').Append(self.ProtectedUntil ?? 0).Append('\n');
-        if (lastHit is not null)
-            text.Append("hit\t").Append(lastHit.Id).Append('\t').Append(N(lastHit.Amount)).Append('\t').Append(lastHit.Head ? 1 : 0).Append('\t').Append(attackerHint ?? "0").Append('\n');
-        // Where the host respawned this player (AimModCore teleports there once per event id).
+        text.Append("AIMMOD_PLAYSTATE_1\t").Append(sequence).Append('\n');
+        text.Append("match\t").Append(scenario).Append('\n');
+        text.Append("health\t").Append(N(Math.Clamp(self.Health, 0, CombatRules.MaxHealth))).Append('\t').Append(N(CombatRules.MaxHealth)).Append('\n');
+        text.Append("alive\t").Append(self.Alive ? 1 : 0).Append('\n');
+        text.Append("respawnAt\t").Append(self.RespawnAt is { } r && !self.Alive ? Math.Max(0, r - hostToLocal) : 0).Append('\n');
+        text.Append("protected\t").Append(self.Alive && self.ProtectedUntil is { } pu && pu > hostNow ? 1 : 0).Append('\n');
+        if (lastHit is { Attacker: { } attacker } && LobbyRules.IsStreamSafe(attacker))
+        {
+            var d = lastHit.Dir is { Length: 3 } dir ? dir : [1.0, 0, 0];
+            text.Append("hit\t").Append(lastHit.Id).Append('\t').Append(attacker).Append('\t').Append(N(lastHit.Amount)).Append('\t').Append(lastHit.Head ? 1 : 0)
+                .Append('\t').Append(d[0].ToString("0.####", CultureInfo.InvariantCulture)).Append('\t').Append(d[1].ToString("0.####", CultureInfo.InvariantCulture)).Append('\t').Append(d[2].ToString("0.####", CultureInfo.InvariantCulture)).Append('\n');
+        }
+        return text.ToString();
+    }
+
+    // round-state.tsv (new, for AimModCore; game-modes.md 6.2.1): where the host respawned this
+    // player and, in CS, the round phase and loadout:
+    //   AIMMOD_ROUND_1\t<seq>
+    //   match\t<scenario>
+    //   spawn\t<id>\t<x>\t<y>\t<z>\t<yaw>                 (teleport once per id)
+    //   phase\t<freeze|live|planted|end|over>\t<frozen 0/1>\t<buy window 0/1>\t<phase ends, local unix ms>
+    //   loadout\t<primary profile or ->\t<pistol profile or ->\t<armour>\t<helmet 0/1>\t<kit 0/1>
+    public static string Round(long sequence, string scenario, CombatEvent? lastSpawn, IEnumerable<string>? extra = null)
+    {
+        var text = new StringBuilder();
+        text.Append("AIMMOD_ROUND_1\t").Append(sequence).Append('\n');
+        text.Append("match\t").Append(scenario).Append('\n');
         if (lastSpawn?.Spawn is { Length: 4 } at)
             text.Append("spawn\t").Append(lastSpawn.Id).Append('\t').Append(N(at[0])).Append('\t').Append(N(at[1])).Append('\t').Append(N(at[2])).Append('\t').Append(N(at[3])).Append('\n');
+        foreach (var line in extra ?? []) text.Append(line).Append('\n');
         return text.ToString();
     }
 }

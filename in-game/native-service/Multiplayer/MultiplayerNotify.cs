@@ -22,7 +22,7 @@ sealed record GameNotice(string Id, string Kind, string Title, string Body, stri
 // AutoReady: ready up on joining, when the content arrives, and after each match.
 sealed record MultiplayerPrefs(string Hotkey = "F7", bool ReadyOnJoin = false, bool ReadyOnContent = true, bool ReadyAfterMatch = false,
     bool QuietDuringRanked = true, bool Sounds = true, double Volume = 0.8, string Avatar = AvatarProfiles.Default, bool HideScenario = false,
-    string SpectatePrivacy = "friends", bool ShowWatchers = true, bool Onboarded = false, bool FriendToasts = true)
+    string SpectatePrivacy = "friends", bool ShowWatchers = true, bool Onboarded = false, bool FriendToasts = true, bool LeaveRun = true, bool ShowBoard = true, string ScoreboardKey = "Tab")
 {
     public static MultiplayerPrefs Load(string? path)
     {
@@ -48,6 +48,9 @@ sealed record MultiplayerPrefs(string Hotkey = "F7", bool ReadyOnJoin = false, b
         if (Flag("showWatchers") is { } sw) p = p with { ShowWatchers = sw };
         if (Flag("onboarded") is { } ob) p = p with { Onboarded = ob };
         if (Flag("friendToasts") is { } ft) p = p with { FriendToasts = ft };
+        if (Flag("leaveRun") is { } lr) p = p with { LeaveRun = lr };
+        if (Flag("showBoard") is { } sb) p = p with { ShowBoard = sb };
+        if (e.TryGetProperty("scoreboardKey", out var sk) && sk.ValueKind == JsonValueKind.String && MultiplayerHotkey.ParseHold(sk.GetString()).Name == sk.GetString()) p = p with { ScoreboardKey = sk.GetString()! };
         if (e.TryGetProperty("spectatePrivacy", out var sp) && sp.GetString() is "friends" or "ask" or "off") p = p with { SpectatePrivacy = sp.GetString()! };
         if (e.TryGetProperty("avatar", out var av) && av.ValueKind == JsonValueKind.String && AvatarProfiles.Find(av.GetString()) is { } look) p = p with { Avatar = look.Id };
         if (e.TryGetProperty("volume", out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetDouble(out var vol) && double.IsFinite(vol)) p = p with { Volume = Math.Round(Math.Clamp(vol, 0, 1), 2) };
@@ -150,6 +153,10 @@ sealed class MultiplayerHotkey : IDisposable
     readonly CancellationTokenSource stop = new();
     readonly Func<bool> armed;
     readonly Action pressed;
+    // The hold-to-show scoreboard key (Tab by default), only while a match is on.
+    public Func<bool>? BoardArmed { get; set; }
+    public Action<bool>? BoardHeld { get; set; }
+    int holdKey = 0x09; bool holdDown;
     readonly string settingsPath;
     Task? pump;
     Process? game;
@@ -165,6 +172,7 @@ sealed class MultiplayerHotkey : IDisposable
     }
 
     // {"hotkey":"F7"}: F1 to F12. Anything else keeps F7.
+    internal static (int Code, string Name) ParseHold(string? name) => name switch { "CapsLock" => (0x14, "CapsLock"), "Tilde" => (0xC0, "Tilde"), _ => (0x09, "Tab") };
     internal static (int Code, string Name) Parse(string? name) =>
         name is { Length: 2 or 3 } && name[0] is 'F' or 'f' && int.TryParse(name[1..], out var n) && n is >= 1 and <= 12 ? (0x6F + n, "F" + n) : (0x76, "F7");
     void ReadSettings()
@@ -175,6 +183,7 @@ sealed class MultiplayerHotkey : IDisposable
             using var doc = JsonDocument.Parse(File.ReadAllText(settingsPath));
             var value = doc.RootElement.TryGetProperty("hotkey", out var h) && h.ValueKind == JsonValueKind.String ? h.GetString() : null;
             (key, KeyName) = Parse(value);
+            holdKey = ParseHold(doc.RootElement.TryGetProperty("scoreboardKey", out var sk) && sk.ValueKind == JsonValueKind.String ? sk.GetString() : null).Code;
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException) { }
     }
@@ -208,6 +217,9 @@ sealed class MultiplayerHotkey : IDisposable
                     try
                     {
                         if (Environment.TickCount64 - settingsAt > 5000) { settingsAt = Environment.TickCount64; ReadSettings(); }
+                        // The scoreboard shows while its key is held, in a match, with the game in front.
+                        var hold = BoardHeld is not null && BoardArmed?.Invoke() == true && GameForeground() && (GetAsyncKeyState(holdKey) & 0x8000) != 0;
+                        if (hold != holdDown) { holdDown = hold; BoardHeld?.Invoke(hold); }
                         if (!armed() || !GameForeground()) { wasDown = true; continue; }
                         // Ctrl, Alt and Shift combinations belong to the game and the OS.
                         var modifier = (GetAsyncKeyState(0x11) & 0x8000) != 0 || (GetAsyncKeyState(0x12) & 0x8000) != 0 || (GetAsyncKeyState(0x10) & 0x8000) != 0;

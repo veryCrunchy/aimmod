@@ -71,6 +71,7 @@ namespace aimmod
         m_adaptiveOverride.BindPath(STR("/Script/GameSkillsTrainer.AdaptiveDifficultySystem:Import_OverrideProfile"), Shape::Command);
         m_adaptiveReset.BindPath(STR("/Script/GameSkillsTrainer.AdaptiveDifficultySystem:Reset_Profile"), Shape::Command);
         m_weapon.BindPath(STR("/Script/GameSkillsTrainer.WeaponHandler:SetWeaponProfileByString"), Shape::Command);
+        m_loadWeapons.BindPath(STR("/Script/GameSkillsTrainer.WeaponHandler:LoadWeapons"), Shape::Command);
         // The game indexes local scenarios at startup; these rescan them (the
         // second is what the pause menu's Reload Profiles button reloads).
         m_refreshLocal.BindPath(STR("/Script/GameSkillsTrainer.ScenarioManager:RefreshLocalScenarios"), Shape::Command);
@@ -168,6 +169,9 @@ namespace aimmod
     {
         UObject* player = m_scene.Player();
         bool ok = true;
+        // Restores are recorded before anything is applied: a partly applied
+        // override is still undone.
+        m_overrides.weapon |= RestoreFor(c).weapon;
         if (c.timeScale)
         {
             const bool set = m_timeDilation.Call(m_b.statics, [&](std::uint8_t* value, const Param& p) {
@@ -251,6 +255,14 @@ namespace aimmod
             RC::Unreal::UObjectGlobals::FindAllOf(STR("AdaptiveDifficultySystem"), systems);
             for (UObject* s : systems)
                 if (IsLiveInstance(s)) m_adaptiveReset.Call(s, [](std::uint8_t*, const Param&) {});
+        }
+        if (m_overrides.weapon)
+        {
+            // The scenario's own weapons, so an override never carries into a later run.
+            UObject* character = player ? m_b.myCharacter.Object(player) : nullptr;
+            UObject* handler = character ? game::Describe(character).weaponHandler.Object(character) : nullptr;
+            const bool restored = handler && m_loadWeapons.Call(handler, [](std::uint8_t*, const Param&) {});
+            Log(std::string("game control: scenario weapons ") + (restored ? "reloaded" : "not reloaded (no weapon handler; the next scenario load restores them)"));
         }
         if (m_overrides.mapScaleBefore)
             if (UObject* state = m_scene.GameState())
@@ -476,9 +488,22 @@ namespace aimmod
         if (index < 4 || index % 25 == 0) Log("match seed: event " + std::to_string(index) + " (" + why + ")");
     }
 
+    void GameControl::StopSeeding(const char* why)
+    {
+        if (!m_seeding) return;
+        m_seeding.reset();
+        // The game's RNG must not stay on a predictable sequence.
+        LARGE_INTEGER counter{};
+        QueryPerformanceCounter(&counter);
+        std::srand(static_cast<unsigned>(counter.QuadPart ^ (counter.QuadPart >> 32) ^ GetCurrentThreadId()));
+        Log(std::string("match seed: off (") + why + ")");
+    }
+
     void GameControl::OnAttemptStarted(const std::string& scenario)
     {
         if (!m_seeding || !m_seeding->active || scenario != m_seeding->scenario) return;
+        // Attempts are challenges: a freeplay seed never reaches a ranked one.
+        if (!SeedAllowed(scenario, true)) return StopSeeding("challenge started in a seeded freeplay scenario");
         m_seeding->events = 0;
         Reseed(0, "attempt start");
     }
@@ -486,21 +511,24 @@ namespace aimmod
     void GameControl::OnSpawnEvent()
     {
         if (!m_seeding || !m_seeding->active || m_lastScenario != m_seeding->scenario) return;
+        if (!SeedAllowed(m_seeding->scenario, m_inChallenge)) return StopSeeding("challenge in a seeded freeplay scenario");
         // Kill credit and character death can both fire for one death: one event per frame.
         if (m_seeding->lastEventTick == m_tick) return;
         m_seeding->lastEventTick = m_tick;
         Reseed(++m_seeding->events, "spawn event");
     }
 
-    // The player's own pause -> Quit: leaves the run without completing it.
-    // A challenge left this way is abandoned (nothing is submitted); a
-    // freeplay run only has its session reset.
-    void GameControl::BeginQuit(const GameCommand& c, double now, bool inChallenge)
+    // Leaving a run without completing it. In a challenge this is
+    // ScenarioManager:CancelChallenge, the game's cancel path (it ends in the
+    // ChallengeCanceled broadcast; ChallengeComplete, the stats CSV and
+    // leaderboard uploads belong to completion). AimModCore already uses it
+    // to cancel a challenge started with overrides. Outside a challenge only
+    // the freeplay session is reset.
+    void GameControl::BeginQuit(const GameCommand& c, double now, bool inChallenge, const std::string& current)
     {
         UObject* manager = m_scene.Manager();
         ResetOverrides("run quit");
-        if (m_seeding) Log("match seed: off (run quit)");
-        m_seeding.reset();
+        StopSeeding("run quit");
         if (!inChallenge)
         {
             const bool reset = m_resetFreeplay.ok() && m_resetFreeplay.Call(manager, [](std::uint8_t*, const Param&) {});
@@ -508,21 +536,10 @@ namespace aimmod
             return Answer(c.sequence, "done", "quit", reset ? "" : "No run to quit.");
         }
         if (!m_cancel.ok()) return Answer(c.sequence, "error", "unsupported", "Quitting a run is unavailable in this game version.");
-        // The pause menu's Quit Challenge button handler, on the game's own widget.
-        if (!m_quitHandler.ok())
-            m_quitHandler.BindPath(STR("/Game/FirstPersonBP/Blueprints/UI/PauseBox.PauseBox_C:BndEvt__QuitChallenge_K2Node_ComponentBoundEvent_23_OnClicked__DelegateSignature"),
-                                   Shape::Command);
-        UObject* box = m_quitHandler.ok() ? RC::Unreal::UObjectGlobals::FindFirstOf(STR("PauseBox_C")) : nullptr;
-        Quitting q{c.sequence, now + 6.0, now + 2.5, false, ""};
-        if (box && IsLiveInstance(box) && m_quitHandler.Call(box, [](std::uint8_t*, const Param&) {})) q.path = "pause menu Quit Challenge";
-        else
-        {
-            m_cancel.Call(manager, [](std::uint8_t*, const Param&) {});
-            q.path = "CancelChallenge";
-            q.fallback = true;
-        }
-        Log("game control: quit-run: leaving the challenge through " + q.path + " (abandoned, no score submitted)");
-        m_quitting = q;
+        if (!m_cancel.Call(manager, [](std::uint8_t*, const Param&) {}))
+            return Answer(c.sequence, "error", "quit-failed", "The game did not accept the cancel. Press Esc and leave the run.");
+        Log("game control: quit-run: CancelChallenge in \"" + current + "\" (abandoned, no score submitted)");
+        m_quitting = Quitting{c.sequence, now + 6.0, now + 2.5, false, current};
         Answer(c.sequence, "accepted", "quitting", "");
     }
 
@@ -532,22 +549,22 @@ namespace aimmod
         if (!inChallenge)
         {
             const auto seq = q.sequence;
-            Log("game control: quit-run: challenge left (" + q.path + ")");
+            Log("game control: quit-run: challenge left" + std::string(q.retried ? " (after a second CancelChallenge)" : ""));
+            m_quitDone = q.scenario;
             m_quitting.reset();
             return Answer(seq, "done", "quit", "");
         }
-        if (!q.fallback && now >= q.fallbackAt)
+        if (!q.retried && now >= q.retryAt)
         {
             if (UObject* manager = m_scene.Manager()) m_cancel.Call(manager, [](std::uint8_t*, const Param&) {});
-            q.fallback = true;
-            q.path += ", then CancelChallenge";
-            Log("game control: quit-run: still in the challenge; CancelChallenge");
+            q.retried = true;
+            Log("game control: quit-run: still in the challenge; CancelChallenge again");
         }
         if (now > q.deadline)
         {
             const auto seq = q.sequence;
             m_quitting.reset();
-            Answer(seq, "error", "quit-failed", "The game did not leave the challenge. Press Esc, then Quit.");
+            Answer(seq, "error", "quit-failed", "The game did not leave the challenge. Press Esc and leave the run.");
         }
     }
 
@@ -565,8 +582,7 @@ namespace aimmod
         if (c.action == GameCommand::Action::CaptureThumbnail) return BeginCapture(c, now, m_lastScenario, manager);
         const bool load = c.action == GameCommand::Action::LoadScenario;
         ResetOverrides("scenario-change");
-        if (m_seeding) Log("match seed: off (new scenario request)");
-        m_seeding.reset();
+        StopSeeding("new scenario request");
         m_pending = Pending{c, now + (load ? 30.0 : 45.0)};
         // Replays view the scenario without starting it; starts use the
         // requested play type (freeplay for any override).
@@ -604,7 +620,7 @@ namespace aimmod
         if (c.action == GameCommand::Action::QuitRun)
         {
             if (m_pending || m_capture || m_refreshing || m_quitting) return Answer(c.sequence, "error", "busy", "Another game command is running. Try again in a moment.");
-            return BeginQuit(c, now, inChallenge);
+            return BeginQuit(c, now, inChallenge, current);
         }
         // Never interrupt a challenge: leaving it would cancel a ranked attempt.
         if (inChallenge) return Answer(c.sequence, "error", "challenge-active", "A challenge is running. Finish or quit it first.");
@@ -622,8 +638,7 @@ namespace aimmod
             if (!m_canLoad) return Answer(c.sequence, "error", "unsupported", "Ending a run is unavailable in this game version.");
             if (current != c.scenario) return Answer(c.sequence, "error", "not-current", "\"" + c.scenario + "\" is not the scenario being played.");
             ResetOverrides("run ended");
-            if (m_seeding) Log("match seed: off (run ended)");
-            m_seeding.reset();
+            StopSeeding("run ended");
             m_pending = Pending{c, now + 30.0};
             m_pending->issued = now;
             if (c.reset && !SetPlayType(manager, GameCommand::Mode::FreePlay))
@@ -662,11 +677,9 @@ namespace aimmod
     void GameControl::Tick(double now, const std::string& current, bool inChallenge, bool loading)
     {
         ++m_tick;
-        if (m_seeding && m_seeding->active && current != m_seeding->scenario)
-        {
-            Log("match seed: off (scenario changed)");
-            m_seeding.reset();
-        }
+        m_inChallenge = inChallenge;
+        if (m_seeding && m_seeding->active && current != m_seeding->scenario) StopSeeding("scenario changed");
+        if (m_seeding && !SeedAllowed(m_seeding->scenario, inChallenge)) StopSeeding("challenge in a seeded freeplay scenario");
         if (auto request = m_output.TakeCommand())
         {
             if (auto* error = std::get_if<CommandError>(&*request)) Answer(error->sequence, "error", error->code, error->message);

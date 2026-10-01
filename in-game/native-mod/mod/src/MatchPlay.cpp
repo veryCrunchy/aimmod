@@ -47,6 +47,7 @@ namespace aimmod
     {
         TickShots(now, poseId, poseNames);
         TickPlayState(now, scenario, inChallenge, loading);
+        TickRound(now, scenario, inChallenge, loading);
     }
 
     // ---------------------------------------------------------------- shots
@@ -330,5 +331,223 @@ namespace aimmod
             m_nextHealthCheck = now + 0.25;
             if (auto current = Health(character); current && std::fabs(*current - s->health) > 0.5) SetHealth(character, s->health);
         }
+    }
+
+    // ----------------------------------------------------------- round state
+
+    bool MatchPlay::BindRound()
+    {
+        if (m_roundBound) return !m_roundDisabled;
+        m_roundBound = true;
+        m_teleport.BindPath(STR("/Script/Engine.Actor:K2_TeleportTo"), Shape::Command);
+        m_controlRotation.BindPath(STR("/Script/Engine.Controller:SetControlRotation"), Shape::Command);
+        m_ignoreMove.BindPath(STR("/Script/Engine.Controller:SetIgnoreMoveInput"), Shape::Command);
+        m_moveIgnored.BindPath(STR("/Script/Engine.Controller:IsMoveInputIgnored"), Shape::Bool);
+        m_setWeapon.BindPath(STR("/Script/GameSkillsTrainer.WeaponHandler:SetWeaponProfileByString"), Shape::Command);
+        m_loadWeapons.BindPath(STR("/Script/GameSkillsTrainer.WeaponHandler:LoadWeapons"), Shape::Command);
+        m_selectWeapon.BindPath(STR("/Script/GameSkillsTrainer.WeaponHandler:SetSelectedWeapon"), Shape::Command);
+        m_selectedWeapon.BindPath(STR("/Script/GameSkillsTrainer.WeaponHandler:GetSelectedWeapon"), Shape::Number);
+        m_selectable.Bind(FindClass(STR("/Script/GameSkillsTrainer.WeaponHandler")), "SelectableWeapon");
+        std::string missing;
+        const std::pair<const Getter*, const char*> required[] = {
+            {&m_teleport, "K2_TeleportTo"}, {&m_controlRotation, "SetControlRotation"}, {&m_ignoreMove, "SetIgnoreMoveInput"},
+            {&m_setWeapon, "SetWeaponProfileByString"}, {&m_loadWeapons, "LoadWeapons"},
+        };
+        for (const auto& [getter, name] : required)
+            if (!getter->ok()) missing += std::string(missing.empty() ? "" : ", ") + name;
+        if (!missing.empty())
+        {
+            m_roundDisabled = true;
+            Log("match play: round state disabled; missing " + missing);
+            return false;
+        }
+        Log(std::string("match play: round state bindings ready") +
+            (m_selectable.ok() && m_selectWeapon.ok() && m_selectedWeapon.ok() ? "" : " (empty slots unsupported)"));
+        return true;
+    }
+
+    void MatchPlay::ApplyLoadout(UObject* character, const RoundState::Loadout& l)
+    {
+        UObject* handler = Describe(character).weaponHandler.Object(character);
+        if (!handler) return;
+        const std::string key = l.primary + "\t" + l.pistol;
+        // A new handler (respawn) starts from the scenario loadout again.
+        if (handler == m_loadoutHandler && key == m_loadoutKey) return;
+        if (handler != m_loadoutHandler) m_selectableBefore.clear();
+        m_loadoutHandler = handler;
+        m_loadoutKey = key;
+        m_loadoutChanged = true;
+        std::vector<const std::uint8_t*> slots;
+        const bool canEmpty = m_selectable.ok() && m_selectable.Elements(handler, slots, 8);
+        const std::string names[2] = {l.primary, l.pistol};
+        std::string result;
+        for (int slot = 0; slot < 2; ++slot)
+        {
+            const bool empty = names[slot] == "-";
+            if (canEmpty && static_cast<std::size_t>(slot) < slots.size())
+            {
+                auto* flag = const_cast<std::uint8_t*>(slots[static_cast<std::size_t>(slot)]);
+                if (std::none_of(m_selectableBefore.begin(), m_selectableBefore.end(), [&](const auto& e) { return e.first == slot; }))
+                    m_selectableBefore.push_back({slot, *flag != 0});
+                *flag = empty ? 0 : 1;
+            }
+            if (empty)
+            {
+                result += " slot" + std::to_string(slot) + (canEmpty ? "=empty" : "=empty-unsupported");
+                continue;
+            }
+            std::int32_t code = -1;
+            m_setWeapon.Call(
+                handler,
+                [&](std::uint8_t* value, const Param& p) {
+                    if (p.kind == Kind::String) WriteString(value, names[slot]);
+                    else if (p.kind == Kind::Int32) std::memcpy(value, &slot, 4);
+                },
+                [&](const std::uint8_t* buffer, const std::vector<Param>& params) {
+                    for (const Param& p : params)
+                        if (p.ret && p.kind == Kind::Int32) std::memcpy(&code, buffer + p.offset, 4);
+                });
+            result += " slot" + std::to_string(slot) + "=\"" + names[slot] + "\"->" + std::to_string(code);
+        }
+        // Never leave an emptied slot selected.
+        if (canEmpty && m_selectWeapon.ok() && m_selectedWeapon.ok())
+        {
+            const int selected = static_cast<int>(m_selectedWeapon.Number(handler).value_or(0));
+            if (selected >= 0 && selected < 2 && names[selected] == "-" && names[1 - selected] != "-")
+            {
+                const int other = 1 - selected;
+                m_selectWeapon.Call(handler, [&](std::uint8_t* value, const Param& p) { if (p.kind == Kind::Int32) std::memcpy(value, &other, 4); });
+            }
+        }
+        Log("match play: loadout" + result);
+    }
+
+    void MatchPlay::ReleaseRound(const char* why)
+    {
+        if (!m_roundEngaged) return;
+        UObject* player = m_scene.Player();
+        UObject* character = player ? m_b.myCharacter.Object(player) : nullptr;
+        if (m_frozen && player) m_ignoreMove.Call(player, [](std::uint8_t* value, const Param& p) { if (p.boolProperty) p.boolProperty->SetPropertyValue(value, false); });
+        if (m_loadoutChanged && character)
+        {
+            UObject* handler = Describe(character).weaponHandler.Object(character);
+            if (handler && handler == m_loadoutHandler)
+            {
+                std::vector<const std::uint8_t*> slots;
+                if (m_selectable.ok() && m_selectable.Elements(handler, slots, 8))
+                    for (const auto& [slot, value] : m_selectableBefore)
+                        if (static_cast<std::size_t>(slot) < slots.size()) *const_cast<std::uint8_t*>(slots[static_cast<std::size_t>(slot)]) = value ? 1 : 0;
+                m_loadWeapons.Call(handler, [](std::uint8_t*, const Param&) {}); // the scenario's own loadout
+            }
+        }
+        Log(std::string("match play: round state released (") + why + ")" + (m_frozen ? "; movement restored" : "") +
+            (m_loadoutChanged ? "; scenario loadout restored" : ""));
+        m_roundEngaged = m_frozen = m_loadoutChanged = false;
+        m_loadoutHandler = nullptr;
+        m_loadoutKey.clear();
+        m_selectableBefore.clear();
+        m_pendingSpawn.reset();
+    }
+
+    void MatchPlay::TickRound(double now, const std::string& scenario, bool inChallenge, bool loading)
+    {
+        const auto snapshot = m_output.roundState();
+        if (snapshot.version != m_roundVersion)
+        {
+            m_roundVersion = snapshot.version;
+            m_round = snapshot.state;
+        }
+        const RoundState* r = m_round.get();
+        const char* closed = nullptr;
+        if (!r) closed = "no round state";
+        else if (inChallenge) closed = "challenge";
+        else if (loading) closed = "loading";
+        else if (!scenario.starts_with(MatchScenarioPrefix)) closed = "not a match scenario";
+        else if (r->scenario != scenario) closed = "round state is for another scenario";
+        UObject* player = m_scene.Player();
+        UObject* character = player ? m_b.myCharacter.Object(player) : nullptr;
+        if (!closed && (!player || !character)) closed = "no character";
+        if (!closed && !BindRound()) closed = "disabled";
+        if (closed)
+        {
+            if (m_roundEngaged) ReleaseRound(closed);
+            else if (r && m_roundClosed != closed) Log(std::string("match play: round state ignored (") + closed + ")");
+            m_roundClosed = r ? closed : "";
+            return;
+        }
+        m_roundClosed.clear();
+        const bool freezePhase = r->phase && r->phase->name == "freeze";
+        if (!m_roundEngaged)
+        {
+            m_roundEngaged = true;
+            // A spawn already in the file is history, except at a round start.
+            m_spawnId = r->spawn && !freezePhase ? r->spawn->id : "";
+            Log("match play: round state engaged in \"" + scenario + "\"");
+        }
+        // Spawn: once per id. At a CS round start a dead player respawns first.
+        if (r->spawn && r->spawn->id != m_spawnId)
+        {
+            m_spawnId = r->spawn->id;
+            double delay = 0;
+            if (freezePhase && BindCharacter(character) && Health(character).value_or(1) <= 0)
+            {
+                m_respawn.Call(character, [](std::uint8_t* value, const Param& p) { if (p.boolProperty) p.boolProperty->SetPropertyValue(value, true); });
+                m_dead = false;
+                delay = 0.15; // let the respawn place the character first
+                Log("match play: respawned for the round start");
+            }
+            m_pendingSpawn = PendingSpawn{*r->spawn, now + delay, now + 2.0};
+        }
+        if (m_pendingSpawn && now >= m_pendingSpawn->notBefore)
+        {
+            const RoundState::Spawn& s = m_pendingSpawn->spawn;
+            const double location[3] = {s.x, s.y, s.z}, rotation[3] = {0, s.yaw, 0};
+            bool moved = false;
+            m_teleport.Call(
+                character,
+                [&](std::uint8_t* value, const Param& p) {
+                    if ((p.kind == Kind::Vector || p.kind == Kind::Rotator) && p.size == 12)
+                    {
+                        const double* v = p.kind == Kind::Vector ? location : rotation;
+                        const float f[3] = {static_cast<float>(v[0]), static_cast<float>(v[1]), static_cast<float>(v[2])};
+                        std::memcpy(value, f, 12);
+                    }
+                },
+                [&](const std::uint8_t* buffer, const std::vector<Param>& params) {
+                    for (const Param& p : params)
+                        if (p.ret && p.boolProperty) moved = p.boolProperty->GetPropertyValue(const_cast<std::uint8_t*>(buffer) + p.offset);
+                });
+            if (moved)
+            {
+                m_controlRotation.Call(player, [&](std::uint8_t* value, const Param& p) {
+                    if (p.kind == Kind::Rotator && p.size == 12)
+                    {
+                        const float f[3] = {0, static_cast<float>(s.yaw), 0};
+                        std::memcpy(value, f, 12);
+                    }
+                });
+                Log("match play: teleported to spawn " + s.id);
+                m_pendingSpawn.reset();
+            }
+            else if (now > m_pendingSpawn->giveUp)
+            {
+                Log("match play: teleport to spawn " + s.id + " refused by the game (blocked location?)");
+                m_pendingSpawn.reset();
+            }
+        }
+        // Freeze: movement off, looking stays. Re-applied if a respawn or
+        // possession reset the controller's ignore flags.
+        const bool wantFrozen = r->phase && r->phase->frozen;
+        auto setIgnore = [&](bool on) {
+            m_ignoreMove.Call(player, [&](std::uint8_t* value, const Param& p) { if (p.boolProperty) p.boolProperty->SetPropertyValue(value, on); });
+        };
+        if (wantFrozen != m_frozen)
+        {
+            setIgnore(wantFrozen);
+            m_frozen = wantFrozen;
+            Log(wantFrozen ? "match play: frozen (movement off)" : "match play: unfrozen");
+        }
+        else if (m_frozen && m_moveIgnored.ok() && !m_moveIgnored.Bool(player).value_or(true)) setIgnore(true);
+        if (r->loadout) ApplyLoadout(character, *r->loadout);
     }
 } // namespace aimmod

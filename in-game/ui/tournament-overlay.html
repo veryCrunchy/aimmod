@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>AimMod tournament overlay</title>
+<style>
+html,body{margin:0;background:transparent;font-family:Roboto,Arial,sans-serif;color:#eef5f1}
+#bar{position:absolute;left:40px;right:40px;bottom:36px;display:none}
+.card{background:#0f1513;border:1px solid #2a3631;border-radius:12px;padding:12px 18px}
+.top{display:flex;align-items:center;justify-content:space-between;font-size:13px;color:#8fa69b;text-transform:uppercase;letter-spacing:1px}
+.row{display:flex;align-items:center;justify-content:space-between;margin-top:8px}
+.side{width:40%;display:flex;align-items:baseline}
+.side.right{justify-content:flex-end;text-align:right}
+.name{font-size:26px;font-weight:600}
+.live{font-size:20px;color:#b9c8c1;margin:0 14px}
+.series{font-size:36px;font-weight:700;color:#27e4a1}
+.lead{color:#27e4a1}
+#bracket{position:absolute;right:40px;top:36px;display:none}
+</style></head>
+<body><div id="bar" class="card"><div class="top"><span id="label"></span><span id="game"></span></div><div class="row"><div class="side"><span id="a" class="name"></span><span id="la" class="live"></span></div><div id="series" class="series"></div><div class="side right"><span id="lb" class="live"></span><span id="b" class="name"></span></div></div></div>
+<canvas id="bracket" width="560" height="300"></canvas><script src="tournament-overlay.js"></script></body></html>

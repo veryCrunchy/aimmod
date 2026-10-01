@@ -8,16 +8,63 @@
   'use strict';
   var F=root.AimModFormat;
   var MODES=[
-    {id:'score-race',label:'Score race',short:'Race',text:'Same scenario, best score wins.'},
-    {id:'duel',label:'Duel',short:'Duel',text:'One on one, first to the set round wins.'},
-    {id:'ffa-rounds',label:'Free-for-all',short:'FFA',text:'Several rounds, points for placing.'},
-    {id:'practice',label:'Practice together',short:'Practice',text:'Side by side, live scores, no ranking.'},
-    {id:'tracking-duel',label:'Tracking duel',short:'Tracking',text:'Take turns tracking. Most time on target wins.'},
-    {id:'deathmatch',label:'Deathmatch',short:'DM',text:'Everyone against everyone, first to the frag limit.'},
-    {id:'vampiric',label:'Vampiric 1v1',short:'Vampiric',text:'One on one. Damage heals you, health drains.'},
-    {id:'instagib',label:'Instagib',short:'Instagib',text:'Every hit kills. First to the frag limit.'},
-    {id:'team-deathmatch',label:'Team deathmatch',short:'TDM',text:'Two teams. First team to the frag limit. No friendly fire.'}
+    {id:'score-race',group:'score',label:'Score race',short:'Race',text:'Same scenario, best score wins.',detail:'2 to 8 players · one run each · best score wins'},
+    {id:'duel',group:'score',label:'Score duel',short:'Duel',text:'One on one on the scenario’s targets. Win rounds by scoring higher.',detail:'2 players · rounds of the same scenario · first to the set wins'},
+    {id:'ffa-rounds',group:'score',label:'Free-for-all',short:'FFA',text:'Several rounds, points for placing.',detail:'2 to 8 players · several rounds · placement points'},
+    {id:'practice',group:'score',label:'Practice together',short:'Practice',text:'Side by side, live scores, no ranking.',detail:'Any number · live scores · nothing ranked'},
+    {id:'tracking-duel',group:'pvp',label:'Tracking duel',short:'Tracking',text:'Both track each other at once. Most time on target wins.',detail:'2 players · track and dodge at the same time · time on target wins'},
+    {id:'deathmatch',group:'pvp',label:'Deathmatch',short:'DM',text:'Everyone against everyone, first to the frag limit.',detail:'2 to 8 players · frag limit · respawns'},
+    {id:'vampiric',group:'pvp',label:'Vampiric 1v1',short:'Vampiric',text:'One on one. Damage heals you, health drains.',detail:'2 players · health drains over time · hits heal you'},
+    {id:'instagib',group:'pvp',label:'Instagib',short:'Instagib',text:'Every hit kills. First to the frag limit.',detail:'2 to 8 players · one hit, one kill · frag limit'},
+    {id:'team-deathmatch',group:'pvp',label:'Team deathmatch',short:'TDM',text:'Two teams. First team to the frag limit. No friendly fire.',detail:'4 to 8 players · two teams · team frag limit'},
+    {id:'cs',label:'CS competitive',short:'CS',text:'3v3 to 5v5. Buy, plant and defuse; halves and sides like CS2.',group:'pvp',detail:'3v3 to 5v5 · CS2 economy · plant and defuse'}
   ];
+  var MODE_GROUPS=[{id:'score',label:'Score modes',text:'Play the scenario’s targets and compare scores.'},{id:'pvp',label:'PvP modes',text:'Fight each other in an arena. No targets.'}];
+  // Card art, drawn on canvas (solid colours only): mint when selected, green-grey otherwise.
+  function modeArt(id,on,big){
+    var w=big?240:160,h=big?90:56,c=node('canvas','mp-mode-art');c.width=w*2;c.height=h*2;c.setAttribute('aria-hidden','true');
+    var x=c.getContext&&c.getContext('2d');if(!x)return c;x.scale(2,2);
+    var bg=on?'#123027':'#16211d',ink=on?'#27e4a1':'#7f968a',soft=on?'#1f5a45':'#2a3a33',alt=on?'#66ccff':'#a7bab0',hot=on?'#ff8fa3':'#8e7a7f';
+    x.fillStyle=bg;x.fillRect(0,0,w,h);var u=h/56,cx=w/2;
+    function circle(px,py,r,fill){x.beginPath();x.arc(px,py,r*u,0,Math.PI*2);if(fill){x.fillStyle=fill;x.fill();}else x.stroke();}
+    function line(a){x.beginPath();for(var i=0;i<a.length;i++){if(i)x.lineTo(a[i][0],a[i][1]);else x.moveTo(a[i][0],a[i][1]);}x.stroke();}
+    function cross(px,py,r,col){x.strokeStyle=col;x.lineWidth=1.6*u;circle(px,py,r);line([[px-r*u*1.5,py],[px-r*u*0.45,py]]);line([[px+r*u*0.45,py],[px+r*u*1.5,py]]);line([[px,py-r*u*1.5],[px,py-r*u*0.45]]);line([[px,py+r*u*0.45],[px,py+r*u*1.5]]);}
+    x.lineCap='round';x.lineJoin='round';
+    if(id==='score-race'){[[-30,30,soft],[-10,42,ink],[10,22,soft]].forEach(function(b){x.fillStyle=b[2];x.fillRect(cx+b[0]*u,h-8*u-b[1]*u*0.95,18*u,b[1]*u*0.95);});}
+    else if(id==='duel'){cross(cx-26*u,h/2,8,ink);cross(cx+26*u,h/2,8,alt);x.fillStyle=soft;x.fillRect(cx-2*u,h/2-10*u,4*u,20*u);}
+    else if(id==='ffa-rounds'){[[-40,-10,ink],[-18,12,alt],[4,-14,ink],[24,8,hot],[42,-6,alt]].forEach(function(d){circle(cx+d[0]*u,h/2+d[1]*u,5,d[2]);});}
+    else if(id==='practice'){x.strokeStyle=soft;x.lineWidth=1.6*u;x.strokeRect(cx-46*u,10*u,40*u,36*u);x.strokeRect(cx+6*u,10*u,40*u,36*u);circle(cx-26*u,28*u,6,ink);circle(cx+26*u,28*u,6,alt);}
+    else if(id==='tracking-duel'){x.strokeStyle=soft;x.lineWidth=2*u;x.beginPath();x.moveTo(cx-50*u,40*u);x.bezierCurveTo(cx-30*u,10*u,cx-6*u,46*u,cx+6*u,22*u);x.stroke();circle(cx+6*u,22*u,4,ink);cross(cx+6*u,22*u,7,ink);
+      x.strokeStyle=soft;x.beginPath();x.moveTo(cx+50*u,14*u);x.bezierCurveTo(cx+36*u,42*u,cx+22*u,10*u,cx+14*u,40*u);x.stroke();circle(cx+40*u,30*u,3.5,alt);cross(cx+40*u,30*u,6,alt);}
+    else if(id==='deathmatch'){x.fillStyle=ink;circle(cx,h/2-4*u,14,ink);x.fillRect(cx-8*u,h/2+6*u,16*u,8*u);x.fillStyle=bg;circle(cx-5*u,h/2-5*u,3.5,bg);circle(cx+5*u,h/2-5*u,3.5,bg);x.fillRect(cx-1*u,h/2+6*u,2*u,8*u);
+      x.strokeStyle=hot;x.lineWidth=2*u;line([[cx-44*u,14*u],[cx-32*u,26*u]]);line([[cx-32*u,14*u],[cx-44*u,26*u]]);line([[cx+32*u,30*u],[cx+44*u,42*u]]);line([[cx+44*u,30*u],[cx+32*u,42*u]]);}
+    else if(id==='vampiric'){function heart(px,py,r,col){x.fillStyle=col;x.beginPath();x.moveTo(px,py+r*0.9);x.bezierCurveTo(px-r*1.4,py-r*0.2,px-r*0.7,py-r*1.2,px,py-r*0.4);x.bezierCurveTo(px+r*0.7,py-r*1.2,px+r*1.4,py-r*0.2,px,py+r*0.9);x.fill();}
+      heart(cx-22*u,h/2,16*u,hot);heart(cx+30*u,h/2+2*u,9*u,soft);x.strokeStyle=ink;x.lineWidth=2*u;line([[cx+18*u,h/2+2*u],[cx-2*u,h/2+2*u]]);line([[cx+4*u,h/2-3*u],[cx-2*u,h/2+2*u],[cx+4*u,h/2+7*u]]);}
+    else if(id==='instagib'){x.strokeStyle=alt;x.lineWidth=3*u;line([[cx-54*u,h/2+8*u],[cx+54*u,h/2-8*u]]);x.strokeStyle=ink;x.lineWidth=1.2*u;line([[cx-54*u,h/2+8*u],[cx+54*u,h/2-8*u]]);
+      x.fillStyle=ink;x.beginPath();x.moveTo(cx-4*u,6*u);x.lineTo(cx-12*u,h/2+2*u);x.lineTo(cx-2*u,h/2+2*u);x.lineTo(cx-8*u,h-6*u);x.lineTo(cx+10*u,h/2-6*u);x.lineTo(cx,h/2-6*u);x.lineTo(cx+6*u,6*u);x.closePath();x.fill();}
+    else if(id==='cs'){
+      // Two teams around a bomb on its plant site.
+      function body(px,py,col){x.fillStyle=col;circle(px,py-7*u,3.5,col);x.fillRect(px-3.5*u,py-3*u,7*u,11*u);}
+      body(cx-44*u,h/2+2*u,ink);body(cx-32*u,h/2+6*u,ink);body(cx+32*u,h/2+6*u,hot);body(cx+44*u,h/2+2*u,hot);
+      x.strokeStyle=soft;x.lineWidth=1.6*u;x.strokeRect(cx-15*u,h/2-12*u,30*u,24*u);
+      x.fillStyle=alt;x.fillRect(cx-9*u,h/2-4*u,18*u,10*u);x.fillStyle=bg;x.fillRect(cx-6*u,h/2-1*u,12*u,2*u);x.fillStyle=hot;circle(cx+6*u,h/2-6*u,2,hot);}
+    else if(id==='team-deathmatch'){[[-44,-10],[-36,10],[-24,-2]].forEach(function(d){circle(cx+d[0]*u,h/2+d[1]*u,5,ink);});[[44,-10],[36,10],[24,-2]].forEach(function(d){circle(cx+d[0]*u,h/2+d[1]*u,5,hot);});x.fillStyle=soft;x.fillRect(cx-1*u,8*u,2*u,h-16*u);}
+    return c;
+  }
+  // The mode picker: score modes and PvP modes under their own headings, with art on every card.
+  function modePicker(selected,choose,compact){
+    var box=node('div','mp-modes'+(compact?' compact':''));
+    MODE_GROUPS.forEach(function(g){
+      var head=node('div','mp-mode-group');add(head,node('strong','',g.label),node('span','',g.text));box.appendChild(head);
+      var pick=node('div','mp-mode-pick'+(compact?' compact':''));
+      MODES.filter(function(m){return m.group===g.id;}).forEach(function(m){var on=m.id===selected;var b=node('button','mp-mode'+(on?' on':''));b.type='button';b.setAttribute('aria-pressed',String(on));
+        add(b,add(node('span','mp-mode-pic'),modeArt(m.id,on,false)),node('strong','',m.label),node('span','mp-mode-text',m.text));b.onclick=function(){choose(m.id);};pick.appendChild(b);});
+      box.appendChild(pick);
+    });
+    return box;
+  }
+  // The selected mode, larger, with what the lobby starts with.
+  function modeHero(id){var m=mode(id);var card=node('div','mp-mode-hero');add(card,add(node('span','mp-mode-pic'),modeArt(m.id,true,true)),add(node('div','mp-mode-hero-text'),node('div','eyebrow',m.group==='pvp'?'PvP mode':'Score mode'),node('strong','',m.label),node('span','',m.text),node('span','mp-mode-detail',m.detail)));return card;}
   function combat(m){return m==='deathmatch'||m==='vampiric'||m==='instagib'||m==='team-deathmatch';}
   var PRIVACY={friends:'Friends only',invite:'Invite only',public:'Public (room code)'};
   var PRESETS=[{id:'default',label:'Scenario default'},{id:'cs',label:'Counter-Strike-like'},{id:'valorant',label:'Valorant-like'},{id:'apex',label:'Apex-like'},{id:'quake',label:'Quake-like'},{id:'custom',label:'Custom'}];
@@ -167,10 +214,9 @@
     if(view.rejoin&&rejoinHidden!==rejoinKey)page.appendChild(add(node('div','panel mp-rejoin'),add(node('div','mp-rejoin-text'),node('strong','','Rejoin '+safe(view.rejoin.hostName,'your host')+'’s lobby?'),node('span','','You left it '+(view.rejoin.minutes<1?'just now':view.rejoin.minutes+' min ago')+' when KovaaK’s closed.')),actions(button('Not now',function(){rejoinHidden=rejoinKey;render();},'quiet'),button('Rejoin',function(){act('rejoin');},'primary'))));
     var hero=node('div','panel mp-hero');page.appendChild(hero);
     var left=node('div','mp-hero-main');
-    add(left,node('div','eyebrow','Multiplayer'),node('h2','','Play KovaaK’s together'),node('p','mp-lead','Race friends on the same scenario, duel first to three, or practise side by side with live scores. Results stay in AimMod and never touch KovaaK’s leaderboards.'));
-    var pick=node('div','mp-mode-pick');
-    MODES.forEach(function(m){var b=node('button','mp-mode'+(m.id===quickMode?' on':''));b.type='button';b.setAttribute('aria-pressed',String(m.id===quickMode));add(b,node('strong','',m.label),node('span','',m.text));b.onclick=function(){quickMode=m.id;render();};pick.appendChild(b);});
-    left.appendChild(pick);
+    add(left,node('div','eyebrow','Multiplayer'),node('h2','','Play KovaaK’s together'),node('p','mp-lead','Compare scores on the same scenario, or fight each other in a PvP arena. Results stay in AimMod and never touch KovaaK’s leaderboards.'));
+    left.appendChild(modePicker(quickMode,function(id){quickMode=id;render();},false));
+    left.appendChild(modeHero(quickMode));
     var create=button('Create lobby',function(){act('create',{mode:quickMode});},'primary mp-big');
     left.appendChild(actions(create));
     if(!view.library.available)left.appendChild(node('p','mp-note','AimMod couldn’t find your KovaaK’s scenarios, so you can join lobbies but not pick content yet.'));
@@ -353,6 +399,7 @@
     flag('quietDuringRanked','Quiet during ranked runs','No popups or hotkey while you play a scenario of your own.');
     flag('sounds','Sounds','Uses KovaaK’s own menu sounds.');
     flag('hideScenario','Hide my scenario from friends','Friends see you’re in AimMod, not what you play.');
+    flag('leaveRun','Leave my run automatically when a match starts','A 5 second notice first: stay in your run, or press the lobby key to leave now.');
     flag('friendToasts','Tell me when friends start AimMod','A short note in game with Join or Watch. Never during a run.');
     body.appendChild(settingRow('Who can spectate me','Friends watch from their own game, osu!-style.',segmented([{id:'friends',label:'Friends'},{id:'ask',label:'Ask me'},{id:'off',label:'Nobody'}],pr.spectatePrivacy||'friends',function(id){pref('spectatePrivacy',id);},false,'spectate privacy')));
     flag('showWatchers','Show who’s watching while I play','A small line at the top of the screen.');
@@ -362,6 +409,8 @@
     body.appendChild(settingRow('Hotkey','Ready up or open the lobby from in game.',segmented(keys,pr.hotkey||'F7',function(id){pref('hotkey',id);},false,'hotkey')));
     var ks=view.keys||{};var clipOptions=['F6','F8','F9','F10','F11','Insert','Home','PageUp'].map(function(k){return {id:k,label:keyLabel(k)};});
     body.appendChild(settingRow('Clip key','Marks a moment of a recorded run as a clip.',segmented(clipOptions,ks.clip||'F8',function(id){pref('clipKey',id);},false,'clip key')));
+    flag('showBoard','Standings panel in matches','A small leaderboard in the top right corner while a match runs.');
+    body.appendChild(settingRow('Scoreboard key','Hold it during a match to see the full standings.',segmented((ks.scoreboardKeys||['Tab','CapsLock','Tilde']).map(function(k){return {id:k,label:keyLabel(k)};}),ks.scoreboard||'Tab',function(id){pref('scoreboardKey',id);},false,'scoreboard key')));
     (ks.conflicts||[]).forEach(function(c){body.appendChild(node('p','mp-warn-text',safe(c,'')));});
     body.appendChild(actions(button('Show the tour again',function(){touring=true;tourStep=0;render();},'compact quiet')));
     return p;
@@ -381,7 +430,7 @@
   function finishTour(){touring=false;tourSkipped=true;tourStep=0;if(view.prefs&&!view.prefs.onboarded)act('prefs',{prefs:{onboarded:true}});render();}
   function openAccount(){finishTour();var nav=root.document.getElementById('nav-account');if(nav&&nav.click)nav.click();}
   var TOUR=[
-    {title:'Play KovaaK’s together',text:'Race friends on the same scenario, duel first to three, or practise side by side with live scores. Results stay in AimMod and never touch KovaaK’s leaderboards.',points:[
+    {title:'Play KovaaK’s together',text:'Compare scores on the same scenario, or fight each other in a PvP arena. Results stay in AimMod and never touch KovaaK’s leaderboards.',points:[
       ['Lobbies','Create one, invite Steam friends or share the room code. AimMod checks everyone has the same scenario and sends what’s missing.'],
       ['Map library','Counter-Strike maps ported to KovaaK’s with CS movement, installed from the Steam Workshop.'],
       ['Spectate','Watch a friend play from your own game, with or without a lobby.'],
@@ -467,7 +516,42 @@
   // Cosmetics: curated catalog items, shown only in AimMod matches ------------
   var cosmeticsOpen=false,cosmeticsData=null;
   var COSMETIC_GROUPS=[['Tints and patterns',['avatar_tint','avatar_pattern','player_model']],['Weapon finishes',['weapon_finish','weapon_pattern','weapon_model','reload_animation']],['Accessories',['accessory']]];
-  function openCosmetics(){cosmeticsOpen=true;mapsOpen=false;historyOpen=false;loadCosmetics();render();}
+  function openCosmetics(){cosmeticsOpen=true;mapsOpen=false;historyOpen=false;loadCosmetics();render();previewTick();}
+  // Live character preview: while this page is open and visible, a heartbeat asks
+  // AimModCore to render the game's own preview stage (never during challenges);
+  // the newest PNG is shown and dragging turns the character. The heartbeat
+  // stops when the page closes or the workspace hides, and the request expires.
+  var preview={yaw:0,frame:0,img:null,note:null,timer:null,drag:null,item:null,sent:0,fastUntil:0,open:false};
+  function previewUrl(){return path()+'/cosmetic-preview.png?f='+preview.frame;}
+  function previewShow(){if(!preview.img)return;if(preview.frame>0){preview.img.src=previewUrl();preview.img.style.display='block';if(preview.note)preview.note.style.display='none';}else{preview.img.style.display='none';if(preview.note)preview.note.style.display='block';}}
+  function previewSend(){
+    preview.sent=Date.now();preview.open=true;var body={open:true,yaw:Math.round(preview.yaw*10)/10};if(preview.item)body.item=preview.item;
+    xhr('POST','/cosmetic-preview',body,function(ok,data){if(ok&&data&&typeof data.frame==='number'&&data.frame!==preview.frame){preview.frame=data.frame;previewShow();}});
+  }
+  function previewTick(){
+    clearTimeout(preview.timer);preview.timer=null;
+    if(!container||!cosmeticsOpen){previewStop();return;}
+    previewSend();preview.timer=setTimeout(previewTick,Date.now()<preview.fastUntil?250:1000);
+  }
+  function previewStop(){
+    clearTimeout(preview.timer);preview.timer=null;preview.drag=null;preview.item=null;preview.img=null;preview.note=null;
+    if(!preview.open)return;preview.open=false;
+    var x=new root.XMLHttpRequest();x.open('POST',path()+'/cosmetic-preview',true);x.setRequestHeader('X-AimMod-UI','1');x.setRequestHeader('Content-Type','application/json');x.send(JSON.stringify({open:false}));
+  }
+  function previewTurn(clientX){
+    if(!preview.drag)return;var yaw=preview.drag.yaw+(clientX-preview.drag.x)*0.5;yaw=((yaw+180)%360+360)%360-180;preview.yaw=yaw;preview.fastUntil=Date.now()+2000;
+    if(Date.now()-preview.sent>=100)previewSend();
+  }
+  function previewPanel(){
+    var pv=node('div','panel mp-card mp-cos-live');
+    var img=node('img','mp-cos-live-img');img.setAttribute('alt','Your character');img.draggable=false;
+    var note=node('p','mp-note','Your character appears here while this page is open. It isn’t shown during challenges, benchmarks or the scenario editor.');
+    img.onmousedown=function(e){preview.drag={x:e.clientX,yaw:preview.yaw};if(e.preventDefault)e.preventDefault();};
+    preview.img=img;preview.note=note;previewShow();
+    add(pv,node('h3','mp-cos-group','Preview'),img,note,node('p','mp-note','Drag to turn. The game renders it off to the side; your scenario doesn’t change.'));
+    return pv;
+  }
+  if(root.addEventListener){root.addEventListener('mousemove',function(e){previewTurn(e.clientX);});root.addEventListener('mouseup',function(e){if(preview.drag){previewTurn(e.clientX);preview.drag=null;previewSend();}});}
   function loadCosmetics(){xhr('GET','/multiplayer?part=cosmetics',null,function(ok,data){if(ok&&data){cosmeticsData=data;if(cosmeticsOpen)render();}});}
   function cosmeticAct(action,extra){act(action,extra,function(ok){if(ok)loadCosmetics();});}
   function swatch(item){
@@ -486,12 +570,15 @@
     add(t,node('div','eyebrow','Multiplayer'),node('h2','','Cosmetics'),node('p','subtle','Tints, finishes and accessories made by the AimMod team. Others see the ids you pick, never files.'));
     add(head,t,actions(button('Back',function(){cosmeticsOpen=false;render();},'primary')));page.appendChild(head);
     page.appendChild(banner('info','Cosmetics only show in AimMod matches and while spectating them. Normal scenarios, challenges, benchmarks and ranked runs always look like the base game.'));
+    page.appendChild(previewPanel());
     var d=cosmeticsData;
     if(!d){page.appendChild(add(node('div','panel mp-card'),node('p','subtle','Loading the catalog…')));return;}
     var setting=node('div','panel mp-card mp-cos-setting');
     setting.appendChild(settingRow('Show others’ cosmetics','Only applies inside AimMod matches.',segmented([{id:'all',label:'All'},{id:'friends',label:'Friends'},{id:'off',label:'Off'}],d.show||'all',function(id){cosmeticAct('cosmetic-view',{show:id});},false,'show others')));
     page.appendChild(setting);
-    if(!d.available){page.appendChild(add(node('div','panel mp-empty'),node('span','','The cosmetics catalog isn’t installed yet. It ships with AimMod updates.')));return;}
+    // No catalog yet, or only items still being made: say what's coming instead of an empty page.
+    if(!d.available||!(d.items||[]).length){var soon=node('div','panel mp-cos-soon');add(soon,add(node('div','mp-cos-soon-art'),swatch({kind:'avatar_tint',color:[0.15,0.89,0.63]}),swatch({kind:'weapon_finish',color:[0.4,0.8,1]}),swatch({kind:'accessory',color:[0.94,0.71,0.35]})),
+      add(node('div','mp-cos-soon-text'),node('strong','','Cosmetics are coming soon'),node('span','','The first tints, finishes and accessories arrive with the next AimMod update. Everything here is made by the AimMod team.')));page.appendChild(soon);return;}
     COSMETIC_GROUPS.forEach(function(g){
       var list=(d.items||[]).filter(function(i){return g[1].indexOf(i.kind)>=0;});if(!list.length)return;
       page.appendChild(node('h3','mp-cos-group',g[0]));
@@ -501,7 +588,8 @@
         card.appendChild(add(node('div','mp-cos-art'),swatch(i)));
         var info=node('div','mp-port-info');add(info,add(node('div','mp-port-title'),node('strong','',safe(i.name,i.id)),i.equipped?chip('Equipped','mint'):null),node('span','mp-port-facts',(i.models&&i.models.length?i.models.join(', ')+' · ':'')+'Version '+i.version));
         card.appendChild(info);
-        card.appendChild(actions(i.equipped?button('Remove',function(){cosmeticAct('cosmetic-remove',{id:i.id});},'compact quiet'):button('Equip',function(){cosmeticAct('cosmetic-equip',{id:i.id});},'compact primary')));
+        var tryOn=!i.equipped&&(i.kind==='avatar_tint'||i.kind==='avatar_pattern'||i.kind==='player_model')?button(preview.item===i.id?'Previewing':'Preview',function(){preview.item=preview.item===i.id?null:i.id;preview.fastUntil=Date.now()+2000;previewSend();render();},'compact quiet'):null;
+        card.appendChild(actions(i.equipped?button('Remove',function(){cosmeticAct('cosmetic-remove',{id:i.id});},'compact quiet'):button('Equip',function(){cosmeticAct('cosmetic-equip',{id:i.id});},'compact primary'),tryOn));
         grid.appendChild(cell);
       });
     });
@@ -822,7 +910,7 @@
     kv('Scenario',s.scenario?safe(s.scenario.name,'Scenario'):'Not chosen');
     kv('Map',s.mapOverride?safe(s.mapOverride.name,'Map')+(s.mapOverride.source==='ported'?' (ported)':''):'Scenario map');
     if(combat(s.mode)){kv('Frag limit',F.number(s.fragLimit||(s.mode==='vampiric'?10:s.mode==='instagib'?25:s.mode==='team-deathmatch'?50:20),0)+' kills');if(s.mode==='vampiric')kv('Lifesteal',F.number(typeof s.lifesteal==='number'?s.lifesteal:50,0)+' %');}
-    else kv(s.mode==='duel'?'First to':s.mode==='score-race'?'Attempts':s.mode==='tracking-duel'?'Rounds each':'Rounds',s.mode==='duel'?F.number(s.firstTo,0)+' wins':s.mode==='practice'?'As many as you like':F.number(s.rounds,0));
+    else kv(s.mode==='duel'?'First to':s.mode==='score-race'?'Attempts':'Rounds',s.mode==='duel'?F.number(s.firstTo,0)+' wins':s.mode==='practice'?'As many as you like':F.number(s.rounds,0));
     kv(combat(s.mode)?'Match length':s.mode==='tracking-duel'?'Round length':'Time limit',s.timeLimit?F.duration(s.timeLimit):'Scenario ('+F.duration(s.scenario?s.scenario.timeLimit:60)+')');
     kv('Loadout',profileText(s.weapon,'weapon')+' · '+profileText(s.movement,'movement'));
     if(s.character&&s.character.preset!=='default')kv('Character',profileText(s.character,'character'));
@@ -876,9 +964,8 @@
     var cols=node('div','mp-row');page.appendChild(cols);var a=node('div','mp-col mp-half'),b=node('div','mp-col mp-half');cols.appendChild(a);cols.appendChild(b);
     var left=node('div','panel mp-editor');a.appendChild(left);var right=node('div','panel mp-editor');b.appendChild(right);
     // Mode
-    var m=section('Mode');var modes=node('div','mp-mode-pick compact');
-    MODES.forEach(function(x){var btn=node('button','mp-mode'+(x.id===s.mode?' on':''));btn.type='button';btn.setAttribute('aria-pressed',String(x.id===s.mode));add(btn,node('strong','',x.label),node('span','',x.text));btn.onclick=function(){if(x.id!==s.mode)setting('mode',x.id);};modes.appendChild(btn);});
-    m.appendChild(modes);left.appendChild(m);
+    var m=section('Mode');
+    m.appendChild(modePicker(s.mode,function(id){if(id!==s.mode)setting('mode',id);},true));left.appendChild(m);
     // Scenario
     var sc=section('Scenario','Everyone needs the same scenario. AimMod checks that each player’s copy matches yours.');
     var current=node('button','mp-pick');current.type='button';add(current,node('strong','',s.scenario?safe(s.scenario.name,'Scenario'):'Choose a scenario'),node('span','',s.scenario?'Map '+safe(s.scenario.map,'')+' · '+F.duration(s.scenario.timeLimit)+' · Change':'From your KovaaK’s library'));
@@ -890,14 +977,22 @@
     // lifesteal, rounds each, match or round length) are basics; the rest is More options.
     var pl=section('Players and rounds');
     var oneOnOne=s.mode==='duel'||s.mode==='tracking-duel'||s.mode==='vampiric';
-    pl.appendChild(settingRow('Max players',oneOnOne?'Always one against one in this mode.':'Including you.',stepper(s.maxPlayers,2,8,1,function(v){return F.number(v,0);},function(v){setting('maxPlayers',v);},oneOnOne,'max players')));
+    if(s.mode==='cs')pl.appendChild(settingRow('Team size','CS is 3v3, 4v4 or 5v5.',segmented([{id:'6',label:'3v3'},{id:'8',label:'4v4'},{id:'10',label:'5v5'}],String(s.maxPlayers),function(id){setting('maxPlayers',Number(id));},false,'team size')));
+    else pl.appendChild(settingRow('Max players',oneOnOne?'Always one against one in this mode.':'Including you.',stepper(s.maxPlayers,2,8,1,function(v){return F.number(v,0);},function(v){setting('maxPlayers',v);},oneOnOne,'max players')));
     if(s.mode==='duel')pl.appendChild(settingRow('First to','Round wins needed to take the duel.',stepper(s.firstTo,1,7,1,function(v){return F.number(v,0)+(v===1?' win':' wins');},function(v){setting('firstTo',v);},false,'first to')));
+    else if(s.mode==='cs'){
+      pl.appendChild(settingRow('Rounds per half','Sides switch after this many rounds; first to one more than that wins (CS2: 12).',stepper(s.halfRounds||12,6,15,1,function(v){return F.number(v,0);},function(v){setting('halfRounds',v);},false,'rounds per half')));
+      pl.appendChild(settingRow('Overtime','A tie goes to overtime halves of 3 rounds with $12,500.',toggleSwitch(s.overtime!==false,'Overtime',function(){setting('overtime',s.overtime===false);})));
+    }
     else if(combat(s.mode)){
       var fragDefault=s.mode==='vampiric'?10:s.mode==='instagib'?25:s.mode==='team-deathmatch'?50:20;
       pl.appendChild(settingRow('Frag limit','First to this many kills wins.',stepper(s.fragLimit||fragDefault,1,100,1,function(v){return F.number(v,0);},function(v){setting('fragLimit',v);},false,'frag limit')));
       if(s.mode==='vampiric')pl.appendChild(settingRow('Lifesteal','How much of the damage you deal heals you.',stepper(typeof s.lifesteal==='number'?s.lifesteal:50,0,200,5,function(v){return F.number(v,0)+' %';},function(v){setting('lifesteal',v);},false,'lifesteal')));
     }
-    else if(s.mode==='tracking-duel')pl.appendChild(settingRow('Rounds each','How many times each player tracks. Roles swap every round.',stepper(s.rounds,1,5,1,function(v){return F.number(v,0);},function(v){setting('rounds',v);},false,'rounds')));
+    else if(s.mode==='tracking-duel'){
+      pl.appendChild(settingRow('Rounds','Both players track each other every round; more time on target takes it.',stepper(s.rounds,1,9,1,function(v){return F.number(v,0);},function(v){setting('rounds',v);},false,'rounds')));
+      pl.appendChild(settingRow('Require fire','Count time on target only while the fire button is held.',toggleSwitch(!!s.requireFire,'Require fire',function(){setting('requireFire',!s.requireFire);})));
+    }
     else if(s.mode==='practice')pl.appendChild(settingRow('Rounds','Practice runs until you end it.',node('span','mp-muted','Unlimited')));
     else pl.appendChild(settingRow(s.mode==='score-race'?'Attempts':'Rounds',s.mode==='score-race'?'Each player’s best attempt counts.':'Each round gives points by placing.',stepper(s.rounds,1,s.mode==='score-race'?5:10,1,function(v){return F.number(v,0);},function(v){setting('rounds',v);},false,'rounds')));
     var limits=[{id:'default',label:'Scenario'},{id:'30',label:'30 s'},{id:'60',label:'60 s'},{id:'90',label:'90 s'},{id:'120',label:'2 min'}];
@@ -1025,7 +1120,7 @@
   }
 
   // Match screens ------------------------------------------------------------
-  function roundLabel(match){if(match.mode==='tracking-duel')return 'Round '+match.round+' of '+match.totalRounds+(match.attacker?' · '+(match.attacker===(view&&view.lobby&&view.lobby.self)?'you track':nameOf(match.attacker)+' tracks'):'');return match.mode==='duel'?'Round '+match.round+' · first to '+match.firstTo:match.totalRounds?'Round '+match.round+' of '+match.totalRounds:'Run '+match.round;}
+  function roundLabel(match){if(match.mode==='tracking-duel')return 'Round '+match.round+' of '+match.totalRounds;return match.mode==='duel'?'Round '+match.round+' · first to '+match.firstTo:match.totalRounds?'Round '+match.round+' of '+match.totalRounds:'Run '+match.round;}
   function matchScreen(page,lobby){
     if(lobby.spectate)page.appendChild(add(banner('info','Spectating '+safe(lobby.spectate.name)+' · '+statLine(lobby.spectate.score)+'. Their view plays in the pause menu.'),actions(button('Stop',function(){act('spectate-stop');},'compact quiet'))));
     var match=lobby.match;
@@ -1106,8 +1201,7 @@
   function roundResults(page,lobby,match){
     var last=match.rounds[match.rounds.length-1];if(!last)return;
     var hero=node('div','panel mp-result-hero');var winner=last.winnerId;
-    var tracked=match.mode==='tracking-duel'&&last.results[0]?last.results[0]:null;
-    add(hero,node('div','eyebrow',mode(match.mode).label+' · '+roundLabel(match)),node('h2','',tracked?(tracked.memberId===lobby.self?'You':nameOf(tracked.memberId))+' tracked '+(tracked.score===null?'—':F.number(tracked.score,1)+' %'):match.mode==='practice'?'Run '+match.round+' done':winner?(winner===lobby.self?'You take the round':nameOf(winner)+' takes the round'):'Round drawn'));
+    add(hero,node('div','eyebrow',mode(match.mode).label+' · '+roundLabel(match)),node('h2','',match.mode==='practice'?'Run '+match.round+' done':winner?(winner===lobby.self?'You take the round':nameOf(winner)+' takes the round'):'Round drawn'));
     var next=node('p','subtle','');countNodes.push({node:next,at:match.nextAt,format:function(ms){return 'Next round in '+seconds(ms)+' s';}});hero.appendChild(next);
     if(lobby.isHost)hero.appendChild(actions(button('Next round now',function(){act('next');},'compact primary'),button(match.mode==='practice'?'End session':'End match',function(){act('end');},'compact quiet danger')));
     page.appendChild(hero);
@@ -1151,6 +1245,6 @@
   }
 
   function enter(element){leave();container=element;generation++;if(!container)return;clear();var p=node('div','panel mp-card mp-joining');add(p,node('div','mp-spinner'),node('p','subtle','Loading multiplayer…'));container.appendChild(p);lastKey='';poll();}
-  function leave(){generation++;clearTimeout(deferred);deferred=null;clearTimeout(timer);clearTimeout(ticker);timer=null;ticker=null;inflight=false;again=false;if(container)clear();container=null;toastNode=null;}
+  function leave(){previewStop();generation++;clearTimeout(deferred);deferred=null;clearTimeout(timer);clearTimeout(ticker);timer=null;ticker=null;inflight=false;again=false;if(container)clear();container=null;toastNode=null;}
   root.AimModMultiplayer={enter:enter,leave:leave,resize:function(){if(container&&view)render();},_state:function(){return {view:view,editing:editing,picker:picker};}};
 })(window);

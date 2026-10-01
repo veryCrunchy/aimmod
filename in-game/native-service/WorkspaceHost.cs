@@ -18,6 +18,8 @@ sealed class WorkspaceHost : IAsyncDisposable
     readonly OverlaySettings overlaySettings;
     readonly OpponentData opponents;
     readonly ObsOverlayHost obs;
+    Tournaments.TournamentService? tournaments;
+    public Tournaments.TournamentService? TournamentsService => tournaments;
     readonly string outputFolder;
     readonly LiveOverlayFeed liveFeed = new();
     Run[] overlayRuns = [];
@@ -57,7 +59,7 @@ sealed class WorkspaceHost : IAsyncDisposable
         gameCommands = new GameCommands(output);
         overlaySettings = new OverlaySettings(output);
         opponents = new OpponentData(output);
-        obs = new ObsOverlayHost(output, ObsState);
+        obs = new ObsOverlayHost(output, ObsState, () => tournaments?.ObsView() ?? new { v = 1 }, () => multiplayer?.BoardView());
         renderer = new RendererAcknowledgement(Path.Combine(output, "native-replay-renderer.json"));
         playback = new NativeReplayPlayback(output, () => RendererReady, () => renderer.Read().Protocol);
         keyboard = new ReplayKeyboard(playback, output);
@@ -89,6 +91,14 @@ sealed class WorkspaceHost : IAsyncDisposable
         multiplayer = Multiplayer.MultiplayerHosting.Create(hub, output, args, () => liveFeed.Read(outputFolder, Volatile.Read(ref overlayRuns)), () => Volatile.Read(ref overlayRuns));
         multiplayer.MapEndpoints(app, prefix);
         Multiplayer.MultiplayerHosting.MapAssets(app, prefix);
+        // Tournaments come from AimMod Hub as the linked account; developer mode can simulate one.
+        var live = multiplayer;
+        tournaments = new Tournaments.TournamentService(new HubTournamentSource(hub), new Tournaments.MultiplayerTournamentLobby(live), () => live.SimulationOn,
+            live.LibraryScenarioNames, () => live.SelfName, args is null ? null : output, autoTick: args is not null);
+        multiplayer.Tournaments = tournaments;
+        tournaments.MapEndpoints(app, prefix);
+        app.MapGet(prefix + "/tournaments.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.TournamentsScript")!, "application/javascript"));
+        app.MapGet(prefix + "/tournaments.css", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.TournamentsStyle")!, "text/css"));
         var importedHistory = csvHistory ?? new CsvHistory(output);
         app.MapGet(prefix + "/history-import.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.HistoryImport")!, "application/javascript"));
         app.MapPost(prefix + "/history-import", async (HttpContext context) => {
@@ -118,7 +128,7 @@ sealed class WorkspaceHost : IAsyncDisposable
         });
         ObsOverlayHost.MapAssets(app, prefix);
         app.MapGet(prefix + "/overlay-state", () => Results.Json(OverlayState()));
-        app.MapGet(prefix + "/overlay-setup", () => Results.Json(new { obsAvailable = obs.Available, obsUrl = obs.Url, width = 1920, height = 1080 }));
+        app.MapGet(prefix + "/overlay-setup", () => Results.Json(new { obsAvailable = obs.Available, obsUrl = obs.Url, boardUrl = obs.BoardUrl, width = 1920, height = 1080 }));
         app.MapGet(prefix + "/overlay-editor.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.OverlayEditor")!, "application/javascript"));
         app.MapGet(prefix + "/overlay-editor.css", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.OverlayEditorStyle")!, "text/css"));
         using var stream = typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.UI")!;
@@ -195,7 +205,7 @@ sealed class WorkspaceHost : IAsyncDisposable
         });
         // Game control (multiplayer lobby, replay scenario load). AimModCore
         // validates again and refuses while a challenge runs.
-        app.MapGet(prefix + "/game-command", () => Results.Json(new { capabilities = GameCommands.Capabilities(outputFolder), result = gameCommands.Result() }));
+        app.MapGet(prefix + "/game-command", () => Results.Json(new { capabilities = GameCommands.Capabilities(outputFolder), result = gameCommands.Result(), results = gameCommands.Results() }));
         app.MapPost(prefix + "/game-command", async (HttpContext context) => {
             if (context.Request.Headers["X-AimMod-UI"] != "1" || context.Request.ContentLength is null or > 2048) return Results.StatusCode(403);
             if (!context.Request.HasJsonContentType()) return Results.StatusCode(415);
@@ -338,8 +348,8 @@ sealed class WorkspaceHost : IAsyncDisposable
             }
             return;
         }
-        var result = gameCommands.Result();
-        if (result is null || result.Sequence != sequence) return;
+        var result = gameCommands.ResultFor(sequence);
+        if (result is null) return;
         if (result.State == "error")
             startGate.Report(id, new(result.Code == "challenge-active" ? "challenge-active" : "scenario-mismatch",
                 result.Code == "challenge-active" ? "A challenge is running. Finish or quit it; then load the replay's scenario."
@@ -350,6 +360,7 @@ sealed class WorkspaceHost : IAsyncDisposable
         // Stop accepting requests first, then publish a closed replay frame and
         // retract this process's overlay URL so the game never loads a dead port.
         startLoop.Cancel();
+        tournaments?.Dispose();
         multiplayer.Dispose();
         await keyboard.DisposeAsync();
         try { await app.StopAsync(); } catch (Exception ex) when (ex is OperationCanceledException or InvalidOperationException) { }
@@ -383,7 +394,12 @@ sealed class RendererAcknowledgement(string path, Func<DateTime>? clock = null)
                 if (!file.Exists) return Transient();
                 var stamp = file.LastWriteTimeUtc;
                 if (file.Length > 4096 || now - stamp > TimeSpan.FromSeconds(3) || stamp - now > TimeSpan.FromSeconds(1)) return Invalidate();
-                using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+                // Share read, write and delete: the publisher (Lua os.remove + os.rename, or an
+                // atomic move) must never be blocked by this 30 Hz reader.
+                string text;
+                using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                using (var reader = new StreamReader(stream)) text = reader.ReadToEnd();
+                using var doc = System.Text.Json.JsonDocument.Parse(text);
                 var root = doc.RootElement;
                 if (!root.TryGetProperty("state", out var state) || state.GetString() != "ready"
                     || !root.TryGetProperty("mode", out var mode) || mode.GetString() != "main") {

@@ -666,39 +666,53 @@ protection and lifesteal. Clients only claim hits.
   view (≤ 4 per second; the last 16 events).
 - Each client writes its own state for AimModCore to apply.
 
-**Contracts for AimModCore** (requested through the coordinator; until they
-exist the mode runs but can't hurt anyone in game):
+**Contracts with AimModCore.** AimModCore implemented the first two; their
+exact shapes are in `native-mod/DESIGN.md` ("Match play"), and the service
+follows them:
 
-```
-self-shots.tsv   (written while self-pose.request is fresh; latest 64 shots; temp file + rename)
-AIMMOD_SHOTS_1\t<file sequence>
-shot\t<unix ms>\t<shot seq, increasing>\t<x>\t<y>\t<z>\t<pitch>\t<yaw>\t<weapon slot 0-7>\t<hit target id from self-pose target rows, 0 = miss>\t<headshot 0/1>
-```
+- `self-shots.tsv`: the shots AimModCore publishes while
+  `self-shots.request` is fresh; the service touches that file every 2 s
+  during a match.
+  - Header `AIMMOD_SHOTS_1\t<publish seq>\t<session>`. A new session restarts
+    the shot sequence.
+  - Rows `shot\t<ms>\t<seq>\t<origin x y z>\t<unit direction x y z>\t<slot>\t<target>\t<headshot>\t<gameHit>`.
+    The service turns the direction into pitch and yaw and claims every shot
+    with a target.
+  - `tag` rows are allowed.
+  - The earlier pitch/yaw row shape still reads.
+- `play-state.tsv`: written by the service on change and at least every
+  second, because AimModCore drops it after 5 s. Unknown rows reject the
+  whole file, so it holds only:
 
-`self-shots.tsv` comes from polling the local weapon's `ShotsFiredThisSession`
-and `ShotsHitThisSession`, plus `CharactersHit` and `bAnyHeadshots`, at frame
-rate (the shot hooks don't fire, 9.1). The ray is the camera at that frame.
+  ```
+  AIMMOD_PLAYSTATE_1\t<seq>
+  match\t<the match scenario's exact name>
+  health\t<current>\t<max>
+  alive\t<0/1>
+  respawnAt\t<local unix ms, 0 = none>
+  protected\t<0/1>
+  hit\t<event id>\t<attacker member id>\t<damage>\t<headshot 0/1>\t<dx>\t<dy>\t<dz>   (the shot's direction, from the host)
+  ```
 
-```
-play-state.tsv   (written by the service on change; absolute and idempotent)
-AIMMOD_PLAY_1\t<sequence>
-match\t<%-escaped match id>
-self\t<alive 0/1>\t<health>\t<max health>\t<respawn at unix ms, 0 = none>\t<spawn protected until unix ms>
-hit\t<event id>\t<amount>\t<headshot 0/1>\t<attacker member id>      (last damage taken, for the native hit effect)
-spawn\t<event id>\t<x>\t<y>\t<z>\t<yaw>      (where the host respawned this player; teleport once per event id)
-```
+  AimModCore applies it only in that scenario, in freeplay:
+  - `protected`: invulnerability;
+  - a new hit: `HandleDamage`, for the native effect, never lethal by itself;
+  - `alive` 1 → 0: `OnCharacterKilled`, and `SetRespawnTimer` to
+    `respawnAt`;
+  - `alive` 0 → 1: `Respawn`;
+  - health follows `SetHealth`.
+- **New, requested from AimModCore:** `round-state.tsv`, so `play-state.tsv`
+  stays as AimModCore parses it. It carries what doesn't fit there:
 
-How AimModCore applies `play-state.tsv`:
+  ```
+  AIMMOD_ROUND_1\t<seq>
+  match\t<scenario>
+  spawn\t<id>\t<x>\t<y>\t<z>\t<yaw>                                  (teleport once per id: host-chosen respawns, CS round starts)
+  phase\t<freeze|live|planted|end|over>\t<frozen 0/1>\t<buy window 0/1>\t<phase ends, local unix ms>   (CS)
+  loadout\t<primary profile or ->\t<pistol profile or ->\t<armour>\t<helmet 0/1>\t<kit 0/1>          (CS)
+  ```
 
-- Only while armed: an AimMod match scenario in freeplay, never a challenge.
-- It reconciles the local character to the file:
-  - each new `hit` event: `HandleDamage(amount, attacker avatar)`, for the
-    native knockback, aim punch and death camera, then `SetHealth(health)`;
-  - `alive=0`: let the native death run, or call `Death`;
-  - `alive` back to 1: `Respawn`, then `SetHealth(max)`.
-
-  The host stays the authority: any drift is corrected to the file's
-  values.
+  It's rewritten on change and every second.
 
 **Checks:** 32 self-tests cover the rules, every rejection reason, headshots,
 death, frag, respawn, spawn protection, the host-rewind fallback, lifesteal,
@@ -733,7 +747,7 @@ the arena.
     teamA/teamB flags.
 
   On respawn it picks the team-allowed spawn farthest from the nearest living
-  opponent. The respawn event carries it, and `play-state.tsv` gets a `spawn`
+  opponent. The respawn event carries it, and `round-state.tsv` gets a `spawn`
   line that AimModCore teleports to once per event id. Without spawn points,
   the game's own respawn stands. The coordinate conversion follows map-port's
   calibration and needs a live check.
@@ -759,24 +773,28 @@ bridge change above.
 
 ### 6.3 Tracking duel
 
-The duel that fits KovaaK's best. Two variants, chosen in the lobby:
+**Decided (user): simultaneous.** Both players track each other at the same
+time while trying not to be tracked. There are no alternating attacker and
+dodger rounds.
 
-- **Alternating (default).** Each round has an attacker (tracks) and a
-  dodger (moves, no weapon or a harmless weapon). Rounds are 10 s, and roles
-  swap every round. A match is 6 rounds (3 each), and the higher total wins.
-  This removes the "both shoot, both dodge" conflict and makes the score a
-  pure tracking measurement.
-- **Simultaneous.** Both track and dodge at once for a 20 s round, best of 5.
+- Each player's score is their own time on target against the other's avatar
+  hull.
+- One round has both players tracking. The higher time-on-target share takes
+  the round, and the match goes to the most rounds won, then the higher total.
+- Rounds (default 3, up to 9) and round length (default 10 s, 10–60 s) are
+  lobby settings.
+- Holding fire is not required. "Require fire" is an optional lobby setting,
+  off by default, that counts time on target only while the fire button is
+  held. It uses AimModCore's `fire` row.
 
-**Scoring.** Measured on the attacker's machine every engine frame, weighted
-by frame time, from what the attacker sees:
+**Scoring.** Measured for each player from that player's own stream, every
+sample weighted by its frame time, from what that player sees:
 
 - `onTarget(t)` is true when the camera ray (at the frame's final view
   rotation) intersects the opponent avatar's hull at its rendered pose. The
-  hull is the avatar profile's bounding body (capsule) and head (sphere). A
-  later "fire to score" option would also require the fire button to be held
-  (`FireHeld`). The default is **off**, so aiming alone scores, and the first
-  build has no option.
+  hull is the avatar profile's bounding body (capsule) and head (sphere).
+  With "require fire" on, a sample counts only when its publication's `fire`
+  row says the weapon fired.
 - **Time-on-target:** `TOT = Σ onTarget(t) · dt`. Round score = `TOT /
   roundDuration` in %, shown with one decimal.
 - **Head bonus** (optional, default off): a ray through the head sphere counts
@@ -791,12 +809,12 @@ by frame time, from what the attacker sees:
 **Fairness when both move.**
 
 - Both players see each other through the same pipeline (render delay D plus
-  one-way latency), so the visual lag of the target is symmetric. In
-  alternating mode the dodger has no aim at all, so latency only affects how
-  "stale" the target looks, equally for both roles across a match.
-- The host recomputes `onTarget` from the attacker's `aim` samples and the
-  dodger's pose history rewound to the attacker's render time (section 5.3).
-  If the two disagree by more than 3% of round time, the round is disputed.
+  one-way latency), so the visual lag of the target is symmetric, and both
+  are scored by the same rules in both directions.
+- The host scores each direction against the hull the shooter's game drew,
+  only where it matches the target's own track within 200 ms (the rewind cap).
+  Otherwise it rewinds the target's track itself. Mismatched hulls (> 10%),
+  short coverage (< 80%) or a missing target track dispute the round.
 - Both players use the same movement profile and avatar hull (the lobby
   forces one character profile for both; skins are cosmetic and use the same
   hit hull), and the arena is symmetric with mirrored spawns.
@@ -804,6 +822,19 @@ by frame time, from what the attacker sees:
   `minSpeed` for more than 1 s, the attacker's TOT accrues at 1.25×.
 
 #### 6.3.1 What's built (lobby service, `feat/kovaaks-game-modes`)
+
+**Update: the simultaneous rework is in.**
+- `TrackingRound` scores both players at once (`ScoreFor` each direction), so
+  every round has two scored placements and a winner.
+- The HUD shows two bars, yours and theirs (time on target so far), both
+  scores, round wins and the seconds left.
+- Drawn targets use AimModCore's `tag` rows (target → the player's stream
+  `s-<16 hex>`, the bridge's FNV-1a of `aimmod-spectate:<SteamID64>`), so the
+  helper bot and any other bot are ignored without guessing.
+- `fire` rows mark samples for "require fire".
+
+The text below describes the first, alternating build; the data path and
+validation are unchanged.
 
 The defaults are under user review: alternating rounds, aim-only scoring, and
 host-checked hits with a 200 ms rewind cap.
@@ -1007,6 +1038,107 @@ preset):
 - **Markers:** the bomb is a spawned mesh with a blinking material parameter,
   sites have floor decals or text labels ("A", "B"), and the HUD shows bomb
   state and timer.
+
+#### 6.6.1 Decided and built (service side)
+
+**User decisions:**
+- Team sizes are 3v3, 4v4 or 5v5 only, so the lobby limit is 10 for CS (8
+  elsewhere).
+- The CS2 economy, armour and keys as tabled above.
+- Armour is buyable: kevlar, and kevlar plus helmet, with the CS2 damage and
+  headshot rules.
+- Default keys are B (buy) and E (use, plant, defuse), checked against
+  KovaaK's binds in
+  `%LOCALAPPDATA%\FPSAimTrainer\Saved\Config\WindowsNoEditor\Input.ini`.
+
+**Built** (`CsMode.cs`, `MultiplayerService.Cs.cs`, lobby mode `cs`):
+
+- **Teams.** Teams are assigned by join order (team 1 starts T). The start is
+  blocked unless there are 6, 8 or 10 players (`cs-teams`). Friendly fire is
+  off.
+- **Round machine.**
+  - Phases: freeze (15 s) → live (1:55; buying in freeze time and the first
+    20 s) → planted (40 s bomb) → end (7 s) → next round.
+  - Win conditions: elimination; bomb explodes (T); defuse (CT); time (CT).
+    If every CT dies after the plant, the T win.
+  - Each round, AimModCore gets the round phase and whether the player is
+    frozen, the loadout, and a side spawn from the metadata (`play-state.tsv`,
+    below).
+- **Economy (CS2):**
+  - start $800, max $16,000;
+  - win $3,250 (elimination or time) or $3,500 (bomb or defuse);
+  - loss bonus $1,400 + $500 per consecutive loss up to $3,400, stepping
+    down by one on a win;
+  - Terrorists get +$800 each after a plant, and none if they survive a lost
+    time-out;
+  - $300 for the planter and the defuser;
+  - kill rewards per weapon class (pistol and rifle $300, SMG $600, AWP
+    $100).
+- **Shop:** Glock-18 / USP-S (starting pistols, $200), Desert Eagle $700,
+  MAC-10 $1,050 (T), MP9 $1,250 (CT), AK-47 $2,700 (T), M4A1-S $2,900 (CT),
+  AWP $4,750, Kevlar $650, Kevlar + helmet $1,000 ($350 upgrade), defuse kit
+  $400 (CT). Every profile is in the arena.
+- **Buy validation (host):** buy window, alive, inside your side's buy zone
+  (when the map has them), side, money, already owned. Buys are lobby
+  commands (`buy {item}`).
+- **Damage.** The claim names the weapon slot (`w`: 0 primary, 1 pistol). The
+  host uses the bought weapon (damage, ×4 headshot, fire rate) and applies
+  armour the CS2 way:
+  - the weapon's armour-penetration share goes to health;
+  - armour absorbs the rest at 0.5 armour per point;
+  - a headshot is reduced only with a helmet.
+
+  Dead players lose their gear.
+- **Bomb.**
+  - A Terrorist in turn carries it, and it drops where the carrier dies. Any
+    Terrorist who walks over it picks it up.
+  - Plant: the carrier holds E inside a bomb site, standing still, for 3.2 s.
+    Moving more than 40 cm cancels it.
+  - Defuse: a CT within 1 m of the bomb holds E for 10 s, or 5 s with a kit.
+- **Halves and overtime.** Sides switch after `halfRounds` (default 12,
+  6–15): money resets to $800, the loss bonus resets, and gear is gone. The
+  first to `halfRounds + 1` wins. A tie goes to overtime (default on): MR3
+  halves at $12,500, first to 4 of 6 per block.
+- **Objectives.** The host reads `aimmod_<map>_<game>.aimmod.json` (map-port,
+  `aimmod.map-objectives` v1, × `map_scale`) from KovaaK's `maps` folder or
+  AimMod's own `maps` folder. It uses the bomb sites (unnamed ones become A,
+  B, …), the buy zones per side, and the team spawns. Without metadata, buying
+  and planting work anywhere.
+- **Keys.** The service reads B, E and the digits only while the game window
+  has focus and a CS round runs:
+  - B toggles the buy menu in the buy window;
+  - digits buy from it;
+  - holding E sends `use {held}` edges.
+
+  A clash with an Input.ini bind is shown on the HUD.
+- **HUD.** The notice layer's top strip, `cs` in `multiplayer-notify.json`,
+  shows:
+  - health and armour, or "Down";
+  - side and score, the round number and the phase;
+  - money and kit;
+  - planting and defusing progress;
+  - the bomb timer or round clock;
+  - the numbered buy menu while open;
+  - any key clashes.
+- **For AimModCore:** CS uses the `phase`, `loadout` and per-round `spawn`
+  lines of `round-state.tsv` (6.2.1). Health, life and hits stay in
+  `play-state.tsv`.
+
+  While frozen: `SetIgnoreMoveInput(true)`, with looking allowed. The loadout
+  goes to slots 0 and 1 (`SetWeaponProfileByString`, "-" empties a slot). At
+  round start, a dead player respawns and everyone teleports.
+- **Checks:** 32 self-tests, including the armour maths, loss bonus,
+  prices, lobby team sizes, arena, key clashes, metadata parsing, a full 3v3
+  run (buy rules, plant 3.2 s, kit defuse 5 s, rewards, elimination,
+  halftime switch, first to 7), the time-out rule, and lobby buy commands.
+
+**Not yet:**
+- weapon drops and pickups between players;
+- a full buy panel with clicks (digits work now);
+- per-round avatar resets in AimModSteam beyond `avatar-state.tsv`;
+- host migration mid-match (a CS match on a new host restarts its round
+  state);
+- the native round-start respawn and freeze in AimModCore.
 
 ### 6.7 Capture the flag
 
@@ -1403,16 +1535,15 @@ message types.
 2. **Hit authority:** favour-the-shooter claims with host rewind validation,
    capped at 200 ms (recommended), or host-only ray tests (worse feel at
    higher ping).
-3. **Tracking duel defaults** (built as recommended, awaiting confirmation):
-   alternating attacker/dodger rounds, aim-only time on target (no fire
-   button), host-checked against drawn hulls with a 200 ms rewind cap, 10 s
-   rounds and 3 attacks each.
-4. **CS rules:** CS2 values (as tabled) or a simplified economy; whether to
-   model armour (host-side, no native equivalent); team size cap 5v5 (needs
-   the lobby limit raised to 10).
-5. **Keys:** defaults for buy (B), use/plant/defuse (E) and grapple (an
-   ability slot). These must not clash with KovaaK's own binds and are read
-   through the game's input only.
+3. **Tracking duel (decided):** simultaneous. Both players track and dodge
+   at once, the higher time-on-target share takes the round, fire isn't
+   required ("require fire" is an option, off), host-validated with the
+   200 ms rewind cap. Rounds and round length are settings.
+4. **CS rules (decided):** 3v3/4v4/5v5 only (lobby limit 10 for CS), the CS2
+   economy, and buyable kevlar and kevlar plus helmet with the CS2 damage and
+   headshot rules.
+5. **Keys (decided):** B buy, E use/plant/defuse, checked against KovaaK's
+   `Input.ini` binds. Grapple stays on an ability slot.
 6. **Lifesteal source:** host rule with native heal effect (recommended), not
    the native `LifeStealPercent` field (client-side, can't be validated).
 7. **Map metadata format:** the `<map>.aimmod.json` sidecar (recommended), and

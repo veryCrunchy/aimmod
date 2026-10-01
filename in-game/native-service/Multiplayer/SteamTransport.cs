@@ -339,6 +339,23 @@ sealed class SteamTransport : IMultiplayerTransport
         lock (gate) { var list = events.ToArray(); events.Clear(); return list; }
     }
 
+    string? tournamentToken, tournamentEntrant;
+    public void PrepareTournament(string? token, string? entrant)
+    {
+        lock (gate)
+        {
+            var valid = IMultiplayerTransport.ValidTournamentToken(token) && entrant is not null && Steam(entrant);
+            tournamentToken = valid ? token : null; tournamentEntrant = valid ? entrant : null;
+        }
+    }
+    public bool BeginTournamentJoin(string lobbyId, string token)
+    {
+        if (!Available || !Steam(lobbyId) || !IMultiplayerTransport.ValidTournamentToken(token)) return false;
+        var id = Command("lobby.join", new JsonObject { ["lobby"] = lobbyId, ["token"] = token }, withId: true);
+        lock (gate) joinId = id;
+        return id >= 0;
+    }
+
     public void Advertise(LobbySnapshot s)
     {
         bool create, host;
@@ -364,13 +381,20 @@ sealed class SteamTransport : IMultiplayerTransport
         {
             var max = Math.Clamp(s.Settings.MaxPlayers + (s.Settings.Spectators ? LobbySettings.MaxSpectators : 0), 2, 16);
             foreach (var empty in data.Where(kv => kv.Value is null).Select(kv => kv.Key).ToArray()) data.Remove(empty);
-            var id = Command("lobby.create", new JsonObject { ["privacy"] = s.Settings.Privacy == LobbyPrivacy.Invite ? "invite" : "friends", ["maxMembers"] = max, ["data"] = data }, withId: true);
+            string? token, entrant;
+            lock (gate) { token = tournamentToken; entrant = tournamentEntrant; }
+            var request = new JsonObject { ["privacy"] = s.Settings.Privacy == LobbyPrivacy.Invite ? "invite" : "friends", ["maxMembers"] = max, ["data"] = data };
+            // A tournament lobby: invisible, only the expected opponent with the match token gets in.
+            if (s.Settings.Tournament is not null && token is not null && entrant is not null) { request["privacy"] = "tournament"; request["token"] = token; request["entrant"] = entrant; }
+            var id = Command("lobby.create", request, withId: true);
             lock (gate) { createId = id; if (id < 0) creating = false; }
             return;
         }
         if (!host) return;
         var dataJson = data.ToJsonString();
         var joinable = (s.Match is null || s.Match.Phase == MatchPhases.Final || s.Settings.LateJoin) && players < s.Settings.MaxPlayers;
+        // The bridge locks a tournament lobby once the opponent is in; never reopen it.
+        if (s.Settings.Tournament is not null) joinable = false;
         var status = s.Match is { Phase: not MatchPhases.Final } ? "In an AimMod match" : "In an AimMod lobby (" + players + "/" + s.Settings.MaxPlayers + ")";
         bool sendData, sendJoinable, sendStatus;
         lock (gate)
@@ -443,11 +467,14 @@ sealed class SteamTransport : IMultiplayerTransport
         return Command("ugc.query", fields, withId: true) >= 0;
     }
     public IReadOnlyList<WorkshopItem> WorkshopItems { get { lock (gate) return workshopItems; } }
-    // Contract addition: dev.avatar {on, mode: circle|path}, answered by a result.
-    public bool DevAvatar(bool on, string mode)
+    // Contract addition: dev.avatar {on, mode: circle|path, profile?}, answered by a result.
+    public bool DevAvatar(bool on, string mode, string? profile = null)
     {
         bool can; lock (gate) can = ready && devAvatar;
-        return can && mode is "circle" or "path" && Command("dev.avatar", new JsonObject { ["on"] = on, ["mode"] = mode }, withId: true) >= 0;
+        if (!can || mode is not ("circle" or "path")) return false;
+        var fields = new JsonObject { ["on"] = on, ["mode"] = mode };
+        if (on && profile is { Length: > 0 and <= 64 } && profile.All(c => char.IsAsciiLetterOrDigit(c) || c == ' ')) fields["profile"] = profile;
+        return Command("dev.avatar", fields, withId: true) >= 0;
     }
     public void Kick(string peer) { if (Steam(peer)) Command("lobby.kick", new JsonObject { ["peer"] = peer }); }
     public void Transfer(string peer) { if (Steam(peer)) Command("lobby.transfer", new JsonObject { ["peer"] = peer }); }

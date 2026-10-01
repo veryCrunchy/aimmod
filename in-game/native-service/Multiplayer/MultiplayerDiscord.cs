@@ -33,7 +33,7 @@ static class MultiplayerDiscord
     public static string ModeLabel(string mode) => mode switch
     {
         LobbyModes.Race => "Score race",
-        LobbyModes.Duel => "Duel",
+        LobbyModes.Duel => "Score duel",
         LobbyModes.Rounds => "Rounds",
         LobbyModes.Practice => "Practice",
         _ => "Match",

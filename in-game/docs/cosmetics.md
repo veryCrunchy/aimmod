@@ -434,12 +434,91 @@ A **Cosmetics** page in the AimMod workspace, listing catalog items only:
 
 Items that need a newer catalog or a missing pak show as unavailable.
 
-**Preview:**
-
-- **Phase 1:** team-rendered 2D thumbnails shipped with the catalog.
-- **Phase 2:** an in-game 3D preview by AimModCore. It spawns its own preview actor with a scene capture into a render target, the way the game's `ACharacterSkinPreviewActor` and `UCharacterSkinPreviewSceneCaptureComponent2D` do, and shows it in a UMG image beside the Gameface view. The preview actor is AimMod's own, outside any scenario.
+**Preview:** a live 3D view of your own character (see [Character preview](#character-preview)), plus team-rendered 2D thumbnails for the item cards.
 
 Others only ever see items from the catalog.
+
+## Character preview
+
+The Cosmetics page shows your own character, live, while you customise it. Dragging the picture turns the character.
+
+### Findings
+
+**Gameface live views can't be used from a mod.** The Coherent plugin is compiled into the game exe. Reflection exposes only these:
+
+| API | Takes |
+|---|---|
+| `UCohtmlBaseComponent` / `UCohtmlWidget:AddPreloadedTexture` | a `UTexture2D` |
+| `RemovePreloadedTexture` | a `UTexture2D` |
+| `PreloadTextureSync`, `PreloadTextureAsync` | an asset path |
+| `UCohtmlWidget:GetRenderTexture` | (returns the view's own output) |
+
+- **Preloading:** a render target isn't a `UTexture2D`. The only conversion, `ConvertRenderTargetToTexture2DEditorOnly`, is editor-only.
+- **Live-view hook:** the exe has `CohtmlOnLiveViewSizeRequest__DelegateSignature(compo, Name, Width, Height)`. Nothing in reflection owns or binds it, and the exe contains no live-view URL scheme string.
+- **Page origin:** the AimMod workspace is a `UCohtmlWidget` loading `http://127.0.0.1:<port>/<cap>/ui`, so its image URLs resolve over HTTP, not to engine assets.
+- **Conclusion:** reaching the plugin's internal live-view code would need signature scanning into its C++, which is fragile and exactly the kind of poking we avoid. **The prototype uses the PNG path.**
+
+**The game already has a preview stage.**
+
+- **The stage actor:** `CharacterSkinPreviewActorUserInterfaceBP_C`, an `ACharacterSkinPreviewActor`. It holds:
+  - `SkeletalMesh` and the hitbox shape meshes under `Meshes`;
+  - `Floor`, `Wall`, `DirectionalLight`, `PointLight` and `PointLight1`;
+  - a `SpringArm` and `Cameras` rig;
+  - `SceneCaptureComponent2D`, a `UCharacterSkinPreviewSceneCaptureComponent2D`.
+- **The menu's own render target:** `CharacterSkinPreviewRenderTarget2D`, shown by `CharacterSkinPreviewViewport_C`, which also implements drag rotation (`IsDragging`, `OriginalMousePosition`).
+- **Applying a look:** the actor implements `ICharacterModelInterface`, so `CharacterModelFunctionLibrary:ApplyCharacterModel` and `CharacterSkinFunctionLibrary:ApplyCharacterSkin` dress it exactly as the game does.
+- **Engine support:** `KismetRenderingLibrary:CreateRenderTarget2D`, `ExportRenderTarget`, `SceneCaptureComponent2D:CaptureScene` and `ShowOnlyActorComponents` are all present.
+
+### How the prototype works
+
+| Step | Who | What |
+|---|---|---|
+| 1 | Cosmetics page (`multiplayer.js`) | While the page is open and the workspace visible, it POSTs `/cosmetic-preview {open, yaw, item?}`: every second, every 250 ms for 2 s after an interaction, and at most every 100 ms while dragging. It sends `{open:false}` when the page closes or the workspace hides. |
+| 2 | Service (`MultiplayerService.CosmeticPreview.cs`) | It writes `cosmetics-preview.txt`. The look comes from your chosen avatar profile. Parameters come from equipped or tried-on **catalog** body items without paks, resolved by id. The request expires in 5 s, and `seq` bumps on every change. |
+| 3 | AimModCore (`CosmeticsPreview.cpp`) | It reads the request every 0.2 s on the game thread. If `DecidePreview` allows it (not in a challenge, benchmark or the editor, and not loading), it spawns the game's preview stage, dresses it, turns `Meshes`, and captures on change only. |
+| 4 | AimModCore | It exports a 384×384 RGBA8 render target as `cosmetics-preview/preview-0.png` or `preview-1.png` (alternating), then atomically writes `cosmetics-preview-frame.txt` (`v=1, seq, file, width, height`). |
+| 5 | Service | It serves the newest PNG at `/cosmetic-preview.png`, and the POST answer carries its frame number, so the page swaps `<img src>` only on a new frame. |
+
+**Request format (`cosmetics-preview.txt`):**
+
+```
+v=1
+expires=<unix seconds>   (now, now + 15]
+seq=<n>
+model=Meso | Endo        Default-pack model
+skin=McCree              optional Default-pack skin
+yaw=<-180..180>
+vector=<Param>:r,g,b,a   up to 8, 0..1
+scalar=<Param>:v         up to 8, -10..10
+```
+
+`ParsePreviewRequest` validates the whole file (C++ core, unit-tested) and rejects anything else.
+
+**Isolation.** Nothing in the scenario changes:
+
+- **Placement:** the stage spawns 5 km above the origin with collision off.
+- **Capture:** its capture writes to an **AimMod render target** (never the game's shared one) and renders only the stage's own components (`PRM_UseShowOnlyList`).
+- **Lighting:** the stage's directional light is switched off, so it can't light the map. Its point lights can't reach 5 km down, and its meshes cast no shadows.
+- **Looks:** only names from the free Default packs are applied, even here. A DLC look is never shown.
+- **Teardown:** the stage and render target are destroyed as soon as the request is stale or the gate closes. Unknown game state counts as "no".
+
+**Cost.**
+
+- **Idle:** with the page open but no changes, nothing is captured or exported.
+- **Per change:** one scene capture plus one synchronous read-back and PNG encode (384², roughly 100–250 KB). Rotation is capped at 10 captures a second; a look change triggers re-captures at +0.35 s and +1.2 s while meshes stream in.
+- **Read-back stall:** expect a few milliseconds per export; **measure live**.
+- **When it runs:** only while the page is open, usually from the pause menu.
+
+### Verify in a live run
+
+1. The stage spawns outside the menu level, and `ApplyCharacterModel`/`ApplyCharacterSkin` dress it through the `TScriptInterface` built from the class's interface offset.
+2. The stage's `FadeIn` timeline doesn't leave it transparent while the game is paused. If it does, call `FadeIn`, or capture once the timeline finishes.
+3. `CaptureScene` works while paused, and `ExportRenderTarget` writes a PNG for `RTF_RGBA8` at `FilePath/FileName`.
+4. No visible light or shadow change in the map below.
+5. Gameface reloads `<img>` when only the query string changes.
+6. The read-back cost at 384².
+
+If step 3 fails, the fallback is reading the render target's pixels from C++ (through the RHI) and encoding the PNG ourselves. The reflected per-pixel reads (`ReadRenderTargetRawPixel`, `ReadRenderTargetPixel`) are far too slow for a whole frame.
 
 ## Plan
 

@@ -67,4 +67,9 @@ namespace aimmod
     {
         return name.size() > 30 && name.find(" - Challenge - ") != std::string_view::npos && name.ends_with(" Stats.csv");
     }
+
+    bool IsChallengeStatsFile(std::wstring_view name)
+    {
+        return name.size() > 30 && name.find(L" - Challenge - ") != std::wstring_view::npos && name.ends_with(L" Stats.csv");
+    }
 } // namespace aimmod

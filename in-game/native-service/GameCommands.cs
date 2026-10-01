@@ -63,7 +63,9 @@ sealed class GameCommands(string output)
         if (request.Then is not null && (request.Action != "end-run" || request.Then is not ("stop" or "reset"))) return (null, "invalid-command");
         if (request.Action == "end-run" && request.Scenario?.StartsWith("AimMod Match - ", StringComparison.Ordinal) != true) return (null, "not-a-match");
         if (request.Seed is not null && (request.Action != "start-scenario" || request.Seed is < 0 or > uint.MaxValue)) return (null, "invalid-seed");
-        // Never in ranked play (AimModCore enforces the same rule).
+        // Never in ranked play (AimModCore enforces the same rules): a challenge runs exactly as published.
+        if (request.Mode == "challenge" && (request.TimeScale is not null || request.TargetSize is not null || request.TargetSpeed is not null || request.MapScale is not null || request.Weapon is not null))
+            return (null, "overrides-freeplay-only");
         if (request.Seed is not null && request.Mode == "challenge" && request.Scenario?.StartsWith("AimMod Match - ", StringComparison.Ordinal) != true) return (null, "seed-not-allowed");
         var text = new StringBuilder("AIMMOD_CORE_COMMAND_1\n");
         long sequence;
@@ -96,16 +98,28 @@ sealed class GameCommands(string output)
         return (sequence, null);
     }
 
-    public GameCommandResult? Result()
+    /// <summary>The newest answer AimModCore wrote.</summary>
+    public GameCommandResult? Result() => Results() is { Count: > 0 } all ? all[^1] : null;
+
+    /// <summary>The newest answer to one request, if it is still among the recent ones.</summary>
+    public GameCommandResult? ResultFor(long sequence) => Results().LastOrDefault(r => r.Sequence == sequence);
+
+    /// <summary>The recent answers (AimModCore keeps the last 8, oldest first, one per line).</summary>
+    public IReadOnlyList<GameCommandResult> Results()
     {
         try
         {
             var path = Path.Combine(output, "core-command-result.tsv");
-            if (!File.Exists(path) || new FileInfo(path).Length > 4096) return null;
-            var cells = File.ReadAllText(path).TrimEnd('\r', '\n').Split('\t');
-            if (cells.Length != 5 || cells[0] != "AIMMOD_CORE_RESULT_1" || !long.TryParse(cells[1], out var sequence)) return null;
-            return new(sequence, cells[2], cells[3], NativeRuns.Decode(cells[4]));
+            if (!File.Exists(path) || new FileInfo(path).Length > 32768) return [];
+            var list = new List<GameCommandResult>();
+            foreach (var line in File.ReadAllText(path).Split('\n'))
+            {
+                var cells = line.TrimEnd('\r').Split('\t');
+                if (cells.Length != 5 || cells[0] != "AIMMOD_CORE_RESULT_1" || !long.TryParse(cells[1], out var sequence)) continue;
+                list.Add(new(sequence, cells[2], cells[3], NativeRuns.Decode(cells[4])));
+            }
+            return list;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return []; }
     }
 }

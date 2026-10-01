@@ -16,6 +16,10 @@ sealed class NativeReplayPlayback : IAsyncDisposable
     readonly Func<bool>? rendererReady;
     readonly Func<int>? rendererProtocol;
     readonly CancellationTokenSource cancellation = new();
+    // Completes the first time playback closes (a command, the renderer going away);
+    // lets checks wait for the pump's own decision instead of guessing its timing.
+    readonly TaskCompletionSource closedSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    internal Task Closed => closedSignal.Task;
     Task? pump;
     NativeReplay? replay;
     // Optional second run on the same timeline (ghost), or a live view.
@@ -69,7 +73,7 @@ sealed class NativeReplayPlayback : IAsyncDisposable
     {
         lock (gate)
         {
-            if (action == "close") { visible = false; playing = false; replay = null; compare = null; live = null; revision++; return true; }
+            if (action == "close") { visible = false; playing = false; replay = null; compare = null; live = null; revision++; closedSignal.TrySetResult(); return true; }
             if (replay is null || live is not null) return false;
             var now = Time;
             switch (action)

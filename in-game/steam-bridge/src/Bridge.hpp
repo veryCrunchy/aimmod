@@ -88,6 +88,7 @@ namespace bridge
             bool on = false;
             bool path = false;     // follow avatar-test-path.tsv
             int generation = 0;    // bumps on every command (reload the path)
+            std::string profile;   // character profile for the test avatar's look (empty = scenario default)
         };
         DevAvatar DevAvatarState();
         static double Now();
@@ -117,6 +118,10 @@ namespace bridge
             // Lobby-less spectating (kept in m_direct): Watcher = they watch us, Watched = we watch them.
             enum class Role { Lobby, Watcher, Watched } role = Role::Lobby;
             bool asked = false; // waiting for spectate.answer
+            // Inbound frame budget (token bucket) so one peer can't flood relays or the pipe.
+            double budget = 400;
+            Clock::time_point budgetAt{};
+            int dropped = 0;
             int rate = 0;
         };
 
@@ -149,6 +154,8 @@ namespace bridge
             std::string privacy;
             int maxMembers = 0;
             std::map<std::string, std::string> data;
+            std::string matchToken;    // tournament: Hub match token
+            std::uint64_t entrant = 0; // tournament host: the one SteamID allowed in
             Clock::time_point deadline;
         };
 
@@ -176,6 +183,8 @@ namespace bridge
         void PollConnections();
         void ReceiveAll();
         void OnWire(Conn& conn, const WireMessage& m, bool reliable);
+        static bool Admit(Conn& conn); // false: over the per-peer budget, drop this frame
+        Clock::time_point m_lastSpectateFrame{};
 
         // Lobby
         void EnterLobby(std::uint64_t lobby, bool created, const PendingCall* call);
@@ -288,6 +297,8 @@ namespace bridge
         std::map<std::string, std::string> m_data;
         std::set<std::uint64_t> m_banned;
         std::vector<PendingCall> m_calls;
+        std::vector<PendingCall> m_lateCalls; // timed out; undone if they complete late
+        void PollLateCalls();
         std::vector<Avatar> m_avatars;
         std::optional<PendingJoin> m_pendingJoin;
         std::map<std::uint64_t, Conn> m_conns;
@@ -296,6 +307,9 @@ namespace bridge
         Clock::time_point m_nextConnect{};
         std::map<std::uint64_t, Clock::time_point> m_presenceRequested;
         std::string m_status;
+        std::string m_tournamentToken;      // host: token the entrant must present
+        std::uint64_t m_tournamentEntrant = 0;
+        std::string m_joinToken;            // joiner: token to present to the host
 
         std::map<std::pair<std::uint64_t, std::uint32_t>, Xfer> m_outgoing; // (peer, transfer)
         std::set<std::pair<std::uint64_t, std::uint32_t>> m_incoming;

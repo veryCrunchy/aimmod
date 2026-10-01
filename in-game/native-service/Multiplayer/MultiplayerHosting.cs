@@ -27,6 +27,7 @@ static class MultiplayerHosting
         {
             var hotkey = new MultiplayerHotkey(output, () => service.HotkeyArmed, service.Hotkey);
             service.HotkeyName = hotkey.KeyName; service.Companion = hotkey;
+            hotkey.BoardArmed = () => service.BoardArmed; hotkey.BoardHeld = service.ScoreboardHeld;
             hotkey.Start();
         }
         return service;
@@ -54,6 +55,8 @@ static class MultiplayerHosting
         routes.MapGet(prefix + "/multiplayer.css", () => Results.Stream(typeof(MultiplayerHosting).Assembly.GetManifestResourceStream("AimMod.MultiplayerStyle")!, "text/css"));
         routes.MapGet(prefix + "/developer.js", () => Results.Stream(typeof(MultiplayerHosting).Assembly.GetManifestResourceStream("AimMod.DeveloperScript")!, "application/javascript"));
         routes.MapGet(prefix + "/developer.css", () => Results.Stream(typeof(MultiplayerHosting).Assembly.GetManifestResourceStream("AimMod.DeveloperStyle")!, "text/css"));
+        routes.MapGet(prefix + "/standings.js", () => Results.Stream(typeof(MultiplayerHosting).Assembly.GetManifestResourceStream("AimMod.StandingsScript")!, "application/javascript"));
+        routes.MapGet(prefix + "/standings.css", () => Results.Stream(typeof(MultiplayerHosting).Assembly.GetManifestResourceStream("AimMod.StandingsStyle")!, "text/css"));
         // The always-on notice layer AimModNativeUI shows outside the AimMod panel.
         routes.MapGet(prefix + "/notify", () => Results.Stream(typeof(MultiplayerHosting).Assembly.GetManifestResourceStream("AimMod.NotifyPage")!, "text/html"));
         routes.MapGet(prefix + "/notify.js", () => Results.Stream(typeof(MultiplayerHosting).Assembly.GetManifestResourceStream("AimMod.NotifyScript")!, "application/javascript"));

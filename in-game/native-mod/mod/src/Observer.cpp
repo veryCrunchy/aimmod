@@ -102,7 +102,8 @@ namespace aimmod
         : m_output(output), m_version(std::move(version)),
           m_lifecycle(std::to_string(static_cast<long long>(std::time(nullptr))) + "-" + std::to_string(GetCurrentProcessId())),
           m_sampler(m_b, m_scene, output), m_presenter(m_b, m_scene, output), m_control(m_b, m_scene, output),
-          m_match(m_b, m_scene, output), m_cosmetics(m_b, m_scene, output)
+          m_match(m_b, m_scene, output), m_cosmetics(m_b, m_scene, output),
+          m_preview(m_scene, output.root())
     {
     }
 
@@ -364,6 +365,7 @@ namespace aimmod
         for (std::uint64_t id : m_callbacks) RC::Unreal::Hook::UnregisterCallback(id);
         m_callbacks.clear();
         m_presenter.Stop();
+        m_preview.Shutdown();
         for (auto& [function, ids] : m_hooks) UObjectGlobals::UnregisterHook(function, ids);
         m_hooks.clear();
         for (auto& hook : m_inputHooks) UObjectGlobals::UnregisterHook(hook->function, hook->ids);
@@ -483,6 +485,10 @@ namespace aimmod
             {STR("/Script/GameSkillsTrainer.PerformanceIndicatorsBroadcastReceiver:Send_ShotFired"), Signal::Start, true},
             {STR("/Script/GameSkillsTrainer.PerformanceIndicatorsBroadcastReceiver:Send_ShotHit"), Signal::Start, true},
             {STR("/Script/GameSkillsTrainer.PerformanceIndicatorsBroadcastReceiver:Send_Kill"), Signal::Start, true},
+            // Counted only: score uploads, for the post-quit audit.
+            {STR("/Script/UWorksCore.CoreUploadLeaderboardScoreNode:UploadLeaderboardScoreNode"), Signal::Start, true},
+            {STR("/Script/UWorksCore.UWorksInterfaceCoreUserStats:UploadLeaderboardScore"), Signal::Start, true},
+            {STR("/Script/GameSkillsTrainer.ExperimentsUploadLeaderboardScoreNode:UploadLeaderboardScoreNode"), Signal::Start, true},
         };
         auto next = std::make_unique<WatchSet>();
         auto counter = [this](const std::string& name) -> std::uint16_t {
@@ -599,12 +605,14 @@ namespace aimmod
             Poll(now);
         }
         m_control.Tick(now, m_scenarioName, m_inChallenge, m_loading);
+        AuditQuit(now);
         {
             const bool wasAvailable = m_match.available();
             m_match.Tick(now, m_scenarioName, m_inChallenge, m_loading, [this](UObject* actor) { return PoseId(actor); }, m_poseNames);
             if (wasAvailable != m_match.available()) m_output.SetCapabilities(Capabilities());
         }
         m_cosmetics.Tick(now);
+        m_preview.Tick(now, m_inChallenge, m_loading);
         PollClipKey();
         if (m_output.poseRequested() && now >= m_nextPose)
         {
@@ -637,6 +645,35 @@ namespace aimmod
         if (owner != self) return;
         if (m_sampler.Mark()) Log("clip marked (" + clips.key + "); saved when the run completes");
         else Log("clip key pressed outside a recorded run; nothing marked");
+    }
+
+    // After quit-run leaves a challenge: for 15 s, did anything of a
+    // completion happen (complete broadcast, leaderboard upload, stats CSV)?
+    void Observer::AuditQuit(double now)
+    {
+        auto total = [this]() {
+            std::uint64_t completes = 0, uploads = 0;
+            for (const auto& [name, count] : m_watchCounts)
+            {
+                if (name.find("ChallengeComplete") != std::string::npos || name.find("ChallengeCompleted") != std::string::npos) completes += count;
+                if (name.find("UploadLeaderboardScore") != std::string::npos) uploads += count;
+            }
+            return std::pair{completes, uploads};
+        };
+        if (auto scenario = m_control.TakeQuitDone())
+        {
+            auto [completes, uploads] = total();
+            m_quitAudit = QuitAudit{now + 15.0, completes, uploads, *scenario};
+            m_output.AuditQuitStats(*scenario);
+            Log("quit-run audit: watching 15 s for a completion, leaderboard upload or stats CSV");
+            return;
+        }
+        if (!m_quitAudit || now < m_quitAudit->until) return;
+        auto [completes, uploads] = total();
+        const std::uint64_t c = completes - m_quitAudit->completes, u = uploads - m_quitAudit->uploads;
+        Log("quit-run audit: challenge-complete broadcasts +" + std::to_string(c) + ", leaderboard uploads +" + std::to_string(u) +
+            (c || u ? " - UNEXPECTED, please report" : " (none, as expected)") + "; completed.tsv not written");
+        m_quitAudit.reset();
     }
 
     // Stable per-session target id of an actor (self-pose and self-shots).

@@ -144,6 +144,8 @@ sealed partial class MultiplayerService : IDisposable
                     // Your look is a personal preference, applied to whichever lobby you're in.
                     if (AvatarProfiles.Find(Text("avatar")) is not { } look) return LobbyResult.Fail("invalid", "Unknown look.");
                     SetPrefs(JsonSerializer.SerializeToElement(new { prefs = new { avatar = look.Id } }));
+                    // A running test avatar changes into the new look too.
+                    if (devAvatarState is { On: true } testAvatar) DevAvatar(true, testAvatar.Mode);
                     return Current is null ? LobbyResult.Success : Command("avatar", args);
                 case "rejoin":
                     if (transport.LastLobby is not { } last) return LobbyResult.Fail("none", "There’s no lobby to rejoin.");
@@ -239,10 +241,14 @@ sealed partial class MultiplayerService : IDisposable
                         simulatedMissing = true; download?.Reset(); ReportContent(force: true); return LobbyResult.Success;
                     }
                     return Simulation.Control(core, op, Text("member"));
+                case "tournament-ready" or "tournament-checkin" or "tournament-confirm" or "tournament-open" or "tournament-dismiss":
+                    return Tournaments?.NoticeAction(action, Text("id")) ?? LobbyResult.Fail("unavailable", "Tournaments aren’t available.");
                 case "friend-join" or "friend-invite" or "friend-watch" or "friend-dismiss":
                     return FriendNotice(action, Text("id"));
                 case "cosmetic-equip" or "cosmetic-remove" or "cosmetic-view":
                     return CosmeticAction(action, args);
+                case "leave-run-cancel" or "leave-run-now":
+                    return LeaveRunAction(action);
                 case "favourite":
                     return Favourite(Text("scenario"), !(args.TryGetProperty("on", out var favOn) && favOn.ValueKind == JsonValueKind.False));
                 case "settings" when core is not null && args.ValueKind == JsonValueKind.Object && args.TryGetProperty("settings", out var pickedSettings) && pickedSettings.ValueKind == JsonValueKind.Object
@@ -399,9 +405,10 @@ sealed partial class MultiplayerService : IDisposable
         var friend = Friends().FirstOrDefault(f => f.Id == friendId);
         if (friend is null) return LobbyResult.Fail("invalid", "Choose a friend from the list.");
         if (!friend.Spectatable) return LobbyResult.Fail("private", friend.Name + " isn’t open to spectators right now.");
+        // The bridge replaces the stream being watched (spectate.request ends it as "switched"); stopping
+        // here would close the stream just requested.
         if (!transport.RequestSpectate(friend.Id)) return LobbyResult.Fail("unavailable", "Spectating needs the Steam bridge.");
-        if (watch is not null && watch.Peer != friend.Id) transport.StopSpectate();
-        watch = new WatchState(friend.Id, friend.Name, friend.Scenario, "requesting", "Asking " + friend.Name + "…", clock());
+        watch =new WatchState(friend.Id, friend.Name, friend.Scenario, "requesting", "Asking " + friend.Name + "…", clock());
         return LobbyResult.Success;
     }
 
@@ -660,6 +667,8 @@ sealed partial class MultiplayerService : IDisposable
         if (!fresh && contentOk && !autoContentOk) want |= prefs.ReadyOnContent;
         if (!fresh && autoInMatch && !inMatch && contentOk) want |= prefs.ReadyAfterMatch;
         autoContentOk = contentOk; autoInMatch = inMatch;
+        // A tournament game starts as soon as both players have the scenario.
+        if (lobby.Settings.Tournament is not null && contentOk && !inMatch) want = true;
         if (want && !me.Ready && !inMatch) Command("ready", JsonSerializer.SerializeToElement(new { ready = true }));
     }
 
@@ -753,7 +762,9 @@ sealed partial class MultiplayerService : IDisposable
     {
         var clip = KeyBinds.ReadClipKey(outputFolder);
         var game = KeyBinds.GameKeys(library.Root);
-        return new { hotkey = prefs.Hotkey, clip, clipKeys = KeyBinds.ClipKeys, taken = KeyBinds.ClipKeys.Where(game.Contains), conflicts = KeyBinds.Conflicts(prefs.Hotkey, clip, game) };
+        var conflicts = KeyBinds.Conflicts(prefs.Hotkey, clip, game).ToList();
+        if (game.Contains(prefs.ScoreboardKey)) conflicts.Add("KovaaK’s already uses " + prefs.ScoreboardKey + "; the scoreboard shows while it’s held, so pick another scoreboard key if that clashes.");
+        return new { hotkey = prefs.Hotkey, clip, clipKeys = KeyBinds.ClipKeys, taken = KeyBinds.ClipKeys.Concat(ScoreboardKeys).Where(game.Contains), conflicts, scoreboard = prefs.ScoreboardKey, scoreboardKeys = ScoreboardKeys };
     }
     LobbyResult SetPrefs(JsonElement args)
     {
@@ -786,6 +797,7 @@ sealed partial class MultiplayerService : IDisposable
     GameNotice? ComputeNotice(long now)
     {
         if (DevNoticeNow(now) is { } dev) return dev;
+        if (LeaveNotice(now) is { } leaving) return leaving;
         var key = HotkeyName;
         // Quiet while the player runs a ranked scenario of their own: no invite or ready popups.
         var quiet = OwnRankedRun();
@@ -802,6 +814,8 @@ sealed partial class MultiplayerService : IDisposable
         if (watchAsks.FirstOrDefault(a => now - a.At < 60_000) is { Peer: not null } ask)
             return new GameNotice("ask-" + ask.Peer + "-" + ask.At, "invite", ask.Name + " wants to watch you", "They would see your view from their game.", null, null, quiet ? "none" : "popup")
                 { Actions = [new("Allow", "spectate-allow", ask.Peer), new("Deny", "spectate-deny", ask.Peer)] };
+        // Tournament calls (match ready, check-in, your ban, confirm the result), unless a game is running.
+        if (!quiet && Current is null or { Match: null or { Phase: MatchPhases.Final } } && Tournaments?.Notice() is { } tournamentNotice) return tournamentNotice;
         if (Current is not { } lobby) return flash is { } f && now < f.Until ? f.Notice : null;
         var me = lobby.Members.FirstOrDefault(m => m.Id == SelfId);
         if (lobby.Match is { } match && match.Players.Contains(SelfId) && match.Phase is MatchPhases.Countdown && match.StartsAt is { } at)
@@ -810,10 +824,10 @@ sealed partial class MultiplayerService : IDisposable
             var round = match.Round > 1 ? "Round " + match.Round + " starting" : "Match starting";
             var how = plan is { } p && p.Key == match.Id + "#" + match.Round ? p.Message : "Get ready.";
             // Tracking duel: the countdown says who tracks (the duel HUD repeats it during the round).
-            if (match.Mode == LobbyModes.Tracking && match.Attacker is { } attacker)
+            if (match.Mode == LobbyModes.Tracking)
             {
                 var other = lobby.Members.FirstOrDefault(x => x.Id != SelfId && match.Players.Contains(x.Id))?.Name ?? "your opponent";
-                how = attacker == SelfId ? "You track " + other + ". Keep your crosshair on them." : "You dodge. " + other + " tracks you.";
+                how = "Track " + other + " and dodge their aim" + (lobby.Settings.RequireFire ? " (hold fire to score)." : ".");
             }
             return new GameNotice("cd-" + match.Id + "-" + match.Round, "countdown", round + " in " + seconds, LobbyRules.CleanName(match.Scenario, "Scenario") + " · " + how, null, seconds, "countdown");
         }
@@ -834,6 +848,7 @@ sealed partial class MultiplayerService : IDisposable
         {
             var now = clock();
             var notice = ComputeNotice(now);
+            if (notice?.Id.StartsWith("leave-", StringComparison.Ordinal) == true) { LeaveRunAction("leave-run-now"); return; }
             if (notice?.Kind == "ready" && notice.Body.Contains("ready up", StringComparison.Ordinal) && Command("ready", JsonSerializer.SerializeToElement(new { ready = true })).Ok)
             {
                 flash = (new GameNotice("ok-" + now, "info", "You’re ready", "The host can start now.", null, null, "click"), now + 3000);
@@ -849,7 +864,7 @@ sealed partial class MultiplayerService : IDisposable
         }
     }
 
-    static string ModeLabel(string mode) => mode switch { LobbyModes.Race => "a score race", LobbyModes.Duel => "a duel", LobbyModes.Rounds => "free-for-all", LobbyModes.Tracking => "a tracking duel", _ => "practice" };
+    static string ModeLabel(string mode) => mode switch { LobbyModes.Race => "a score race", LobbyModes.Duel => "a score duel", LobbyModes.Rounds => "free-for-all", LobbyModes.Tracking => "a tracking duel", _ => "practice" };
 
     // Ask AimModNativeUI to open the AimMod panel on the Multiplayer page. It waits for
     // the main menu, and never interrupts a running scenario: the request stays until then.
@@ -892,7 +907,7 @@ sealed partial class MultiplayerService : IDisposable
         string? Leader, int? LeaderFrags, int? Team, int? TeamFrags, int? OtherFrags, int? Left, string Phase, IReadOnlyList<FeedLine> Feed);
     internal CombatHudView? CombatHud()
     {
-        if (Current is not { Match: { Phase: MatchPhases.Countdown or MatchPhases.Live } m } lobby || !LobbyModes.Combat(m.Mode) || !m.Players.Contains(SelfId) || LiveCombat(m) is not { } view) return null;
+        if (Current is not { Match: { Phase: MatchPhases.Countdown or MatchPhases.Live } m } lobby || !LobbyModes.Shooting(m.Mode) || m.Cs is not null || !m.Players.Contains(SelfId) || LiveCombat(m) is not { } view) return null;
         if (view.Players.FirstOrDefault(p => p.Member == SelfId) is not { } me) return null;
         var hostNow = clock() + (core is null && hostPeer is not null ? clocks.GetValueOrDefault(hostPeer)?.Offset ?? 0 : 0);
         string Name(string id) => id == SelfId ? "You" : LobbyRules.CleanName(lobby.Members.FirstOrDefault(x => x.Id == id)?.Name ?? m.Standings.FirstOrDefault(s => s.MemberId == id)?.Name, "Player");
@@ -907,23 +922,30 @@ sealed partial class MultiplayerService : IDisposable
             team, team is { } t && view.TeamFrags is { } tf ? tf[t - 1] : null, team is { } t2 && view.TeamFrags is { } tf2 ? tf2[2 - t2] : null, left, m.Phase, feed);
     }
 
-    internal sealed record DuelView(string Role, string Opponent, double? Percent, double? OnTarget, int? Left, int Round, int Rounds, string Phase, bool Disputed);
+    // Simultaneous duel: both players' scores so far (your %, their %), each player's share of
+    // the elapsed round on target for the bars, round wins, seconds left and round count.
+    internal sealed record DuelView(string Opponent, double? You, double? Them, double? YouShare, double? ThemShare, int Wins, int TheirWins, int? Left, int Round, int Rounds,
+        string Phase, bool Disputed, bool RequireFire);
     internal DuelView? DuelHud()
     {
-        if (Current is not { Match: { Mode: LobbyModes.Tracking, Phase: MatchPhases.Countdown or MatchPhases.Live, Attacker: { } attacker } m } lobby || !m.Players.Contains(SelfId)) return null;
-        var opponent = lobby.Members.FirstOrDefault(x => x.Id != SelfId && m.Players.Contains(x.Id))?.Name ?? "Opponent";
+        if (Current is not { Match: { Mode: LobbyModes.Tracking, Phase: MatchPhases.Countdown or MatchPhases.Live } m } lobby || !m.Players.Contains(SelfId)) return null;
+        var opponentId = m.Players.FirstOrDefault(p => p != SelfId);
+        var opponent = lobby.Members.FirstOrDefault(x => x.Id == opponentId)?.Name ?? "Opponent";
         // Match times are on the host clock.
         var hostNow = clock() + (core is null && hostPeer is not null ? clocks.GetValueOrDefault(hostPeer)?.Offset ?? 0 : 0);
-        int? left = null; double? share = null;
+        int? left = null; double elapsed = 0;
         if (m.Phase == MatchPhases.Live && m.StartsAt is { } start)
         {
             var end = start + (long)(m.TimeLimit * 1000);
             left = (int)Math.Max(0, Math.Ceiling((end - hostNow) / 1000.0));
-            var elapsed = Math.Clamp(hostNow - start, 0, end - start) / 1000.0;
-            if (m.Tracking is { } t && elapsed > 0.5) share = Math.Round(Math.Min(100, t.Seconds * 100 / elapsed), 1);
+            elapsed = Math.Clamp(hostNow - start, 0, end - start) / 1000.0;
         }
-        return new DuelView(attacker == SelfId ? "track" : "dodge", LobbyRules.CleanName(opponent, "Opponent"), m.Phase == MatchPhases.Live ? m.Tracking?.Percent ?? 0 : null, share,
-            left, m.Round, m.TotalRounds ?? m.Round, m.Phase, m.Tracking?.Disputed == true);
+        var mine = m.Tracking?.FirstOrDefault(t => t.Member == SelfId); var theirs = m.Tracking?.FirstOrDefault(t => t.Member == opponentId);
+        double? Share(TrackView? t) => t is not null && elapsed > 0.5 ? Math.Round(Math.Min(100, t.Seconds * 100 / elapsed), 1) : null;
+        var live = m.Phase == MatchPhases.Live;
+        return new DuelView(LobbyRules.CleanName(opponent, "Opponent"), live ? mine?.Percent ?? 0 : null, live ? theirs?.Percent ?? 0 : null, Share(mine), Share(theirs),
+            m.Rounds.Count(r => r.WinnerId == SelfId), m.Rounds.Count(r => r.WinnerId == opponentId), left, m.Round, m.TotalRounds ?? m.Round, m.Phase,
+            mine?.Disputed == true || theirs?.Disputed == true, lobby.Settings.RequireFire);
     }
     string NoticeJson(GameNotice? notice = null)
     {
@@ -933,11 +955,13 @@ sealed partial class MultiplayerService : IDisposable
             var badge = Badge();
             var duel = DuelHud();
             var combat = CombatHud();
-            if (notice is null && badge is null && duel is null && combat is null) return "{\"version\":1,\"active\":false}";
+            var cs = CsHud();
+            var (board, boardFull) = NoticeBoards();
+            if (notice is null && badge is null && duel is null && combat is null && cs is null && board is null && boardFull is null) return "{\"version\":1,\"active\":false}";
             return JsonSerializer.Serialize(new
             {
                 version = 1, active = notice is not null, badge, notice?.Id, notice?.Kind, notice?.Title, notice?.Body, notice?.Key, notice?.Countdown, notice?.Sound, notice?.Invite,
-                actions = notice?.Actions, interactive = notice?.Actions is { Count: > 0 }, volume = prefs.Sounds ? prefs.Volume : 0, duel, combat,
+                actions = notice?.Actions, interactive = notice?.Actions is { Count: > 0 }, volume = prefs.Sounds ? prefs.Volume : 0, duel, combat, cs, board, boardFull,
             }, Protocol.Json);
         }
     }
@@ -1317,6 +1341,9 @@ sealed partial class MultiplayerService : IDisposable
 
     void HandleAsHost(string peer, Envelope m)
     {
+        // Only members talk to the lobby: a friend's spectate link or a refused join gets no content,
+        // no relayed replays and no say. Joining starts with hello.
+        if (m.T != "hello" && core!.Members.All(x => x.Id != peer)) return;
         switch (m.T)
         {
             case "hello":
@@ -1557,6 +1584,39 @@ sealed partial class MultiplayerService : IDisposable
     }
 
     long blockedRetryAt;
+    // Leaving a run for the match: a 5 s notice (Cancel stays, F7 leaves now), then quit-run.
+    string? leaveKey, leaveCancelled; long leaveAt; long? quitSequence;
+    const long LeaveDelayMs = 5000;
+    void AutoLeave(string key)
+    {
+        if (!prefs.LeaveRun || !game.Capabilities.Contains("quit") || leaveCancelled == key || game.ChallengeRunning != true) return;
+        var now = clock();
+        if (leaveKey != key) { leaveKey = key; leaveAt = now + LeaveDelayMs; quitSequence = null; }
+        if (quitSequence is null && now >= leaveAt)
+        {
+            quitSequence = game.QuitRun();
+            plan = plan! with { Message = quitSequence is null ? FinishRunFirst : "Leaving your run for the match…" };
+            if (quitSequence is null) leaveCancelled = key;
+        }
+        else if (quitSequence is null) plan = plan! with { Message = "Leaving your run for the match in " + Math.Max(1, (int)Math.Ceiling((leaveAt - now) / 1000.0)) + " s. Cancel in the notice to stay." };
+        // AimModCore refused (or the run can't be left): fall back to doing it yourself.
+        if (quitSequence is { } q && game.Result is { Sequence: var seq, State: "error" } r && seq == q)
+        { leaveCancelled = key; plan = plan! with { Message = FinishRunFirst + " (" + r.Code + ")" }; }
+    }
+    LobbyResult LeaveRunAction(string action)
+    {
+        if (plan is not { State: "blocked" } || leaveKey != plan.Key) return LobbyResult.Fail("none", "No run is waiting to be left.");
+        if (action == "leave-run-cancel") { leaveCancelled = leaveKey; plan = plan with { Message = FinishRunFirst }; }
+        else if (quitSequence is null) leaveAt = clock();
+        return LobbyResult.Success;
+    }
+    GameNotice? LeaveNotice(long now)
+    {
+        if (plan is not { State: "blocked" } p || leaveKey != p.Key || leaveCancelled == p.Key || quitSequence is not null) return null;
+        var seconds = Math.Max(1, (int)Math.Ceiling((leaveAt - now) / 1000.0));
+        return new GameNotice("leave-" + p.Key, "countdown", "Leaving your run for the match in " + seconds + "…", "Press " + HotkeyName + " to leave now.", HotkeyName, seconds, "countdown")
+            { Actions = [new("Stay in my run", "leave-run-cancel", p.Key)] };
+    }
     const string FinishRunFirst = "Finish or quit your current run (Esc, then Quit). The match loads by itself after that.";
 
     static string FindIt(string scenario, bool generated) =>
@@ -1578,6 +1638,8 @@ sealed partial class MultiplayerService : IDisposable
             var generated = MatchScenario.Needed(s);
             var scenario = s.Scenario?.Name ?? "";
             var mode = MatchScenario.SafeMode(generated ? MatchScenario.Name(s) : s.Scenario?.Name ?? "", generated ? "freeplay" : "challenge");
+            // Tournament games never touch KovaaK's ranked leaderboards: always freeplay.
+            if (s.Tournament is not null) mode = "freeplay";
             string? problem = null;
             if (generated)
             {
@@ -1594,10 +1656,11 @@ sealed partial class MultiplayerService : IDisposable
             else plan = new RoundPlan(key, scenario, mode, generated, "manual", FindIt(scenario, generated) + " Start when the countdown ends.");
         }
         if (plan is null || plan.Key != key) return;
+        if (plan.State == "blocked") AutoLeave(key);
         // The challenge that blocked the load is over: load now, or start if the round already runs.
         if (plan.State == "blocked" && game.ChallengeRunning != true && clock() >= blockedRetryAt)
         {
-            if (match.Phase == MatchPhases.Live && caps.Contains("start") && game.Start(plan.Scenario, MatchScenario.SafeMode(plan.Scenario, plan.Mode)) is long late)
+            if (match.Phase == MatchPhases.Live && caps.Contains("start") && game.Start(plan.Scenario, MatchScenario.SafeMode(plan.Scenario, plan.Mode), lobby.Settings.Tournament?.Seed) is long late)
                 plan = plan with { State = "starting", Message = "Starting your run…", StartSequence = late, LoadSequence = null };
             else if (match.Phase != MatchPhases.Live && game.Load(plan.Scenario) is long again)
                 plan = plan with { State = "loading", Message = "Loading “" + plan.Scenario + "” in KovaaK’s…", LoadSequence = again, StartSequence = null };
@@ -1607,7 +1670,7 @@ sealed partial class MultiplayerService : IDisposable
         { loadedSent = key; Command("loaded", JsonSerializer.SerializeToElement(new { match = match.Id, round = match.Round })); }
         if (match.Phase == MatchPhases.Live && plan.StartSequence is null && plan.State is "loading" or "ready" or "manual")
         {
-            if (caps.Contains("start") && game.Start(plan.Scenario, MatchScenario.SafeMode(plan.Scenario, plan.Mode)) is long start) plan = plan with { State = "starting", Message = "Starting your run…", StartSequence = start };
+            if (caps.Contains("start") && game.Start(plan.Scenario, MatchScenario.SafeMode(plan.Scenario, plan.Mode), lobby.Settings.Tournament?.Seed) is long start) plan = plan with { State = "starting", Message = "Starting your run…", StartSequence = start };
             else plan = plan with { State = "manual", Message = "Go! " + FindIt(plan.Scenario, plan.Generated) };
         }
         if (game.Result is { } refused && (refused.Sequence == plan.LoadSequence || refused.Sequence == plan.StartSequence) && refused.Code == "challenge-active")
@@ -1645,6 +1708,7 @@ sealed partial class MultiplayerService : IDisposable
             if (s.CharacterProfile is { Preset: ProfilePresets.Custom, Custom: { } character }) characterText = library.PathOf("character", character) is { } c ? File.ReadAllText(c) : null;
             var text = MatchScenario.Generate(new MatchScenario.Inputs(File.ReadAllText(basePath), s, mapFile, mapText, weaponText, characterText));
             if (LobbyModes.Combat(s.Mode)) { arenaSpawns = MatchScenario.Spawns(text); core?.SetCombatSpawns(arenaSpawns); }
+            if (s.Mode == LobbyModes.Cs) { csObjectives = LoadObjectives(text); core?.SetCsObjectives(csObjectives); }
             var (ok, error) = scenarios.Write(name, text, clock());
             return ok ? null : error == "name-taken" ? "A scenario of yours already uses the match name. Rename it to play." : "Couldn’t save the match scenario.";
         }
@@ -1668,7 +1732,7 @@ sealed partial class MultiplayerService : IDisposable
         if (match.Phase is not (MatchPhases.Countdown or MatchPhases.Live)) return;
         // Samples travel on the host clock: offset = host - local.
         var offset = core is not null || hostPeer is null ? 0 : clocks.GetValueOrDefault(hostPeer)?.Offset ?? 0;
-        poseTracker.Poll(offset);
+        poseTracker.Poll(offset, match.Players);
         foreach (var batch in poseTracker.Drain(match.Id, match.Round))
         {
             if (core is not null) core.Track(SelfId, batch);
@@ -1678,13 +1742,14 @@ sealed partial class MultiplayerService : IDisposable
 
     // Combat modes: the same camera stream, plus hit claims from AimModCore's shot
     // feed, and the host's verdict for this player written back for AimModCore.
-    ShotFeed? shotFeed; string? shotKey;
+    ShotFeed? shotFeed; string? shotKey; long playWrittenAt, roundWrittenAt, roundSequence; string? lastRoundState;
     long playSequence; string? lastPlayState;
     void StreamCombat(MatchSnapshot match)
     {
         if (outputFolder is null) return;
         StreamTracking(match);
         shotFeed ??= new ShotFeed(outputFolder);
+        shotFeed.Request(clock());
         if (shotKey != match.Id + "#" + match.Round) { shotKey = match.Id + "#" + match.Round; shotFeed.Reset(); }
         if (match.Phase == MatchPhases.Live && poseTracker is not null)
         {
@@ -1700,11 +1765,26 @@ sealed partial class MultiplayerService : IDisposable
         {
             var lastHit = view.Events.LastOrDefault(e => e.Member == SelfId && e.Kind is "damage");
             var lastSpawn = view.Events.LastOrDefault(e => e.Member == SelfId && e.Kind is "respawn");
-            var body = PlayState.Format(0, match.Id, self, lastHit, lastHit?.Attacker, lastSpawn);
-            if (body != lastPlayState)
+            var extra = CsPlayLines(match).ToList();
+            if (match.Cs is { } csv && csv.Spawns?.GetValueOrDefault(SelfId) is { Length: 4 } rs)
+                lastSpawn = new CombatEvent(1_000_000 + csv.Round, "respawn", 0, SelfId, null, 0, false, 100, null, rs); // one teleport per CS round
+            // The match scenario's exact name: AimModCore applies play state only there.
+            var scenario = plan is { } pl && pl.Key == match.Id + "#" + match.Round ? pl.Scenario : Current is { } cur ? MatchScenario.Name(cur.Settings) : match.Scenario;
+            var hostNow = clock() + HostOffset();
+            var now = clock();
+            var body = PlayState.Format(0, scenario, self, lastHit, hostNow, HostOffset());
+            // AimModCore drops a play state not rewritten for 5 s: rewrite on change and every second.
+            if (body != lastPlayState || now - playWrittenAt >= 1000)
             {
-                lastPlayState = body;
-                try { AtomicFile.WriteText(Path.Combine(outputFolder, "play-state.tsv"), PlayState.Format(++playSequence, match.Id, self, lastHit, lastHit?.Attacker, lastSpawn)); }
+                lastPlayState = body; playWrittenAt = now;
+                try { AtomicFile.WriteText(Path.Combine(outputFolder, "play-state.tsv"), PlayState.Format(++playSequence, scenario, self, lastHit, hostNow, HostOffset())); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            }
+            var round = PlayState.Round(0, scenario, lastSpawn, extra);
+            if (round != lastRoundState || now - roundWrittenAt >= 1000)
+            {
+                lastRoundState = round; roundWrittenAt = now;
+                try { AtomicFile.WriteText(Path.Combine(outputFolder, "round-state.tsv"), PlayState.Round(++roundSequence, scenario, lastSpawn, extra)); }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             }
             WriteAvatarState(match, view, self);
@@ -1774,7 +1854,7 @@ sealed partial class MultiplayerService : IDisposable
     {
         if (Current is not { Match: { } match } || !match.Players.Contains(SelfId)) { trackedRound = null; return; }
         if (match.Mode == LobbyModes.Tracking) { StreamTracking(match); return; }
-        if (LobbyModes.Combat(match.Mode)) { StreamCombat(match); return; }
+        if (LobbyModes.Shooting(match.Mode)) { StreamCombat(match); if (match.Cs is not null) CsInput(match); return; }
         var roundKey = match.Id + "#" + match.Round;
         if (trackedRound != roundKey)
         {
@@ -1935,9 +2015,11 @@ sealed partial class MultiplayerService : IDisposable
             "maps" => Results.Json(MapsView(), Protocol.Json),
             "history" => Results.Json(HistoryView(), Protocol.Json),
             "cosmetics" => Results.Json(CosmeticsView(), Protocol.Json),
+            "board" => Results.Json(new { version = 1, board = BoardView() }, Protocol.Json),
             "preview" => MapPreview(key) is { } image ? Results.File(image, MapPorts.ContentType(image)) : Results.NotFound(),
             _ => Results.Json(View(), Protocol.Json),
         });
+        MapPreviewEndpoints(routes, prefix);
         // Developer mode and its tools (off by default; local UI only).
         Developer.DeveloperEndpoints.Map(routes, prefix, new Developer.DeveloperMode(outputFolder), this, outputFolder is null ? null : new Developer.DeveloperTools(outputFolder, library, this));
         // Read-only notice for the always-on in-game layer (notify.html).
@@ -1963,7 +2045,7 @@ sealed partial class MultiplayerService : IDisposable
 
     // Disposed with the service (the hotkey reader).
     public IDisposable? Companion { get; set; }
-    public void Dispose() { timer?.Dispose(); Companion?.Dispose(); lock (gate) { Leave("closed"); DeleteSessionMarker(); } transport.Dispose(); }
+    public void Dispose() { timer?.Dispose(); Companion?.Dispose(); lock (gate) { Leave("closed"); DeleteSessionMarker(); DeletePreviewRequest(); } transport.Dispose(); }
 }
 
 static class WindowsClipboard
