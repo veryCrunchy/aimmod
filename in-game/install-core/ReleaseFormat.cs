@@ -194,9 +194,17 @@ sealed record UpdateFeed(
     [property: JsonPropertyName("notes")] string? Notes,
     [property: JsonPropertyName("minimumSteamBuildId")] long MinimumSteamBuildId,
     [property: JsonPropertyName("manifestSha256")] string ManifestSha256,
-    [property: JsonPropertyName("package")] FeedPackage Package)
+    [property: JsonPropertyName("package")] FeedPackage Package,
+    // Optional (feeds from before the installer have neither): the oldest
+    // AimMod-Setup.exe that can install this release, and where to download
+    // the current installer. The service ignores both.
+    [property: JsonPropertyName("minimumInstallerVersion")] string? MinimumInstallerVersion = null,
+    [property: JsonPropertyName("installerUrl")] string? InstallerUrl = null)
 {
     public const string SchemaName = "aimmod.ingame.feed/1";
+    // Feeds of a later format start with this; an older installer reports
+    // that a new installer is needed instead of failing.
+    public const string SchemaPrefix = "aimmod.ingame.feed/";
     public const int MaximumBytes = 256 * 1024;
     public const long MaximumPackage = 512L << 20;
     public SemanticVersion SemVer => SemanticVersion.Parse(Version);
@@ -211,6 +219,8 @@ sealed record UpdateFeed(
         if (!Sha256Hex.IsValid(feed.ManifestSha256) || feed.MinimumSteamBuildId < 0 || (feed.Notes?.Length ?? 0) > 16384) throw new ReleaseFormatException("Invalid feed entry.");
         if (feed.Package is null || !Sha256Hex.IsValid(feed.Package.Sha256) || feed.Package.Size is <= 0 or > MaximumPackage || !IsHttps(feed.Package.Url))
             throw new ReleaseFormatException("Invalid feed package.");
+        if ((feed.MinimumInstallerVersion is not null && !SemanticVersion.TryParse(feed.MinimumInstallerVersion, out _)) || (feed.InstallerUrl is not null && !IsHttps(feed.InstallerUrl)))
+            throw new ReleaseFormatException("Invalid feed installer entry.");
         return feed;
     }
     public static bool IsHttps(string? url) =>

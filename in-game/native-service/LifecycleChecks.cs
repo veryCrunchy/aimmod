@@ -296,6 +296,16 @@ static class LifecycleChecks
             await Rejected("developer installs are not updated", Feed("1.1.0", Sha256Hex.Of(zipBytes), zipBytes.Length, "https://example.invalid/AimMod-InGame-1.1.0.zip"), current: InstallManifest.Parse("{\"files\":[]}"));
             Publish(Feed("1.1.0", Sha256Hex.Of(zipBytes), zipBytes.Length, "https://example.invalid/AimMod-InGame-1.1.0.zip", channel: "beta"));
             Check((await updater.Check(new UpdatePreferences(true, "beta"), feedUrl, installed1, 1000, CancellationToken.None)).State == UpdateState.Ready, "stable release offered on the beta channel");
+            // Installer fields (minimumInstallerVersion, installerUrl) are optional and ignored by the service.
+            var plainFeed = UpdateFeed.Parse(Feed("1.1.0", Sha256Hex.Of(zipBytes), zipBytes.Length, "https://example.invalid/AimMod-InGame-1.1.0.zip"));
+            Check(plainFeed.MinimumInstallerVersion is null && plainFeed.InstallerUrl is null, "feeds without installer fields parse");
+            byte[] InstallerFeed(string? minimum, string? url) => JsonSerializer.SerializeToUtf8Bytes(plainFeed with { MinimumInstallerVersion = minimum, InstallerUrl = url });
+            var installerFeed = UpdateFeed.Parse(InstallerFeed("1.2.0", "https://example.invalid/AimMod-Setup.exe"));
+            Check(installerFeed.MinimumInstallerVersion == "1.2.0" && installerFeed.InstallerUrl == "https://example.invalid/AimMod-Setup.exe", "installer fields parse");
+            Throws<ReleaseFormatException>(() => UpdateFeed.Parse(InstallerFeed("1.2", null)), "invalid minimum installer version rejected");
+            Throws<ReleaseFormatException>(() => UpdateFeed.Parse(InstallerFeed(null, "http://example.invalid/AimMod-Setup.exe")), "plain HTTP installer link rejected");
+            Publish(InstallerFeed("99.0.0", "https://example.invalid/AimMod-Setup.exe"));
+            Check((await updater.Check(prefs, feedUrl, installed1, 1000, CancellationToken.None)).State == UpdateState.Ready, "the service updates whatever installer the feed asks for");
             updater.ClearStaged();
             // A zip whose files do not match its own manifest (pinned by the feed) is rejected.
             var (forged, _) = Package(Path.Combine(temp, "pkg-forged"), "1.1.0", files2, mods: ["AimModCore", "AimModNativeUI"]);
@@ -342,7 +352,7 @@ static class LifecycleChecks
             var cliGame = Game(Path.Combine(cliRoot, "lib"));
             var output = Path.Combine(cliRoot, "local");
             Check(Lifecycle.RunCommand(["--install", "--package", root1, "--game-dir", cliGame, "--output", output], _ => false, serviceStandIn) == 0, "install command");
-            Check(InstallManifest.Read(cliGame)!.Version == "1.0.0" && File.Exists(Path.Combine(Lifecycle.PackageCache(output), InstallLayout.PackageManifest)), "install caches the package for repairs");
+            Check(InstallManifest.Read(cliGame)!.Version == "1.0.0" && File.Exists(Path.Combine(InstallState.PackageCache(output), InstallLayout.PackageManifest)), "install caches the package for repairs");
             File.Delete(Path.Combine(cliGame, "dwmapi.dll"));
             Check(Lifecycle.RunCommand(["--install-status", "--game-dir", cliGame, "--output", output], _ => false, serviceStandIn) == 3, "status reports a needed repair");
             Check(Lifecycle.RunCommand(["--repair", "--game-dir", cliGame, "--output", output], _ => true, serviceStandIn) == 2 && !File.Exists(Path.Combine(cliGame, "dwmapi.dll")), "repair waits for the game to close");
@@ -363,7 +373,7 @@ static class LifecycleChecks
             Throws<JsonException>(() => lifecycle.Act("format-disk"), "unknown action rejected");
             Check(Lifecycle.RunCommand(["--apply-pending", "--game-dir", cliGame, "--output", output], _ => false, serviceStandIn) == 0 && !JsonSerializer.Serialize(lifecycle.Snapshot()).Contains("\"requested\":true"), "requested repair applied after close");
             Check(Lifecycle.RunCommand(["--rollback", "--game-dir", cliGame, "--output", output], _ => false, serviceStandIn) == 0 && InstallManifest.Read(cliGame)!.Version == "1.0.0", "rollback command");
-            Check(VerifiedPackage.Open(Lifecycle.PackageCache(output)).Manifest.Version == "1.0.0", "rollback restores the cached package");
+            Check(VerifiedPackage.Open(InstallState.PackageCache(output)).Manifest.Version == "1.0.0", "rollback restores the cached package");
             Check(Lifecycle.RunCommand(["--uninstall", "--game-dir", cliGame, "--output", output], _ => false, serviceStandIn) == 0 && !File.Exists(Path.Combine(cliGame, "dwmapi.dll")) && !Directory.Exists(Path.Combine(cliGame, "ue4ss")), "uninstall removes everything it created");
             await lifecycle.DisposeAsync();
         }

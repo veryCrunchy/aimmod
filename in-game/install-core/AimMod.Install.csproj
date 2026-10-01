@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The release format and the install, update, repair, rollback and uninstall
+       code shared by the service (in-game/native-service) and the installer
+       (in-game/installer). See in-game/docs/install-lifecycle.md. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>AimMod.InGame</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="AimMod.InGame" />
+    <InternalsVisibleTo Include="AimMod-Setup" />
+    <InternalsVisibleTo Include="AimMod.Setup.Checks" />
+  </ItemGroup>
+</Project>
