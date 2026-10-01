@@ -8,10 +8,10 @@
   'use strict';
   var F=root.AimModFormat;
   var MODES=[
-    {id:'score-race',label:'Score race',short:'Race',text:'Same scenario, highest score wins.'},
-    {id:'duel',label:'Duel',short:'Duel',text:'One against one, first to win the set number of rounds.'},
-    {id:'ffa-rounds',label:'Free-for-all',short:'FFA',text:'Several rounds; placement points decide the winner.'},
-    {id:'practice',label:'Practice together',short:'Practice',text:'Play side by side with live scores and no ranking.'}
+    {id:'score-race',label:'Score race',short:'Race',text:'Same scenario, best score wins.'},
+    {id:'duel',label:'Duel',short:'Duel',text:'One on one, first to the set round wins.'},
+    {id:'ffa-rounds',label:'Free-for-all',short:'FFA',text:'Several rounds, points for placing.'},
+    {id:'practice',label:'Practice together',short:'Practice',text:'Side by side, live scores, no ranking.'}
   ];
   var PRIVACY={friends:'Friends only',invite:'Invite only',public:'Public (room code)'};
   var PRESETS=[{id:'default',label:'Scenario default'},{id:'cs',label:'Counter-Strike-like'},{id:'valorant',label:'Valorant-like'},{id:'apex',label:'Apex-like'},{id:'quake',label:'Quake-like'},{id:'custom',label:'Custom'}];
@@ -326,16 +326,16 @@
   function joinCode(){var code=(drafts.code||'').toUpperCase().replace(/[^A-Z0-9]/g,'');if(code.length!==6){toast('Room codes are six letters and numbers.');return;}act('join',{code:code},function(ok){if(ok)drafts.code='';});}
   function steamState(){
     var box=node('div','mp-steam '+(view.transport.online?'on':'off'));
-    add(box,node('span','mp-dot'),node('span','',view.transport.online?'Steam connected · invites and friends ready':view.simulation?'Developer simulation · Steam bridge not connected':'Steam bridge not connected · install AimModSteam for invites'));
+    add(box,node('span','mp-dot'),node('span','',view.transport.online?'Connected to Steam':view.simulation?'Developer simulation, not connected to Steam':'Not connected to Steam, so invites and the friends list are off. Room codes still work.'));
     return box;
   }
   function friendStatus(f){return f.status==='aimmod-lobby'?chip('In a lobby','mint'):f.status==='aimmod'?chip('AimMod','mint'):f.status==='kovaaks'?chip('KovaaK’s','cyan'):chip(f.status==='away'?'Away':'Online','');}
   function friendsPanel(inLobby){
     var p=node('div','panel mp-friends');var head=node('div','panel-head');var text=node('div','head-text');
-    add(text,node('h2','',inLobby?'Invite friends':'Friends playing'),node('p','',view.friends.source==='steam'?'Online Steam friends, AimMod players first.':view.friends.source==='simulation'?'Simulated friends for testing.':'Steam friends appear here once the AimModSteam bridge is connected.'));
+    add(text,node('h2','',inLobby?'Invite friends':'Friends playing'),node('p','',view.friends.source==='steam'?'Online Steam friends, AimMod players first.':view.friends.source==='simulation'?'Simulated friends for testing.':'Your Steam friends show here when AimMod is connected to Steam.'));
     head.appendChild(text);p.appendChild(head);
     var items=view.friends.items||[];
-    if(!items.length){p.appendChild(node('div','mp-empty',view.friends.source==='unavailable'?'No friends list without Steam. Share your room code instead.':'None of your friends are online right now.'));return p;}
+    if(!items.length){p.appendChild(node('div','mp-empty',view.friends.source==='unavailable'?'Until then, share your room code to play together.':'None of your friends are online right now.'));return p;}
     var list=node('div','mp-list');p.appendChild(list);
     items.slice(0,inLobby?8:12).forEach(function(f){
       var row=node('div','mp-friend');var info=node('div','mp-friend-info');
@@ -641,6 +641,8 @@
     return bar;
   }
   function mb(bytes){return F.number((bytes||0)/1048576,bytes<10485760?1:0)+' MB';}
+  // File sizes: small files (scenarios, profiles) read as KB instead of "0 MB".
+  function size(bytes){return bytes>0&&bytes<1048576?F.number(Math.max(1,bytes/1024),0)+' KB':mb(bytes);}
   // Download what this player is missing: Workshop first, otherwise from the host.
   function downloadPanel(lobby,prefix){
     var pre=prefix||'';
@@ -648,10 +650,10 @@
     var workshop=v.source==='workshop';var fromFriend=v.source==='friend';
     var head=node('div','mp-download-head');var text=node('div','mp-download-text');
     var title=v.state==='manifest'?'Checking what you need…':v.state==='done'?'Content installed and verified':v.state==='verifying'?'Verifying files…':v.state==='installing'?'Installing…':v.state==='downloading'?(workshop?'Downloading from the Steam Workshop':'Downloading from the host'):v.state==='error'?'Download stopped':v.state==='cancelled'?'Download paused':'Get the content for this lobby';
-    add(text,node('strong','',title),node('span','',v.state==='error'?safe(v.error,'Something went wrong.'):v.state==='done'?'You can ready up now.':workshop?'Official Workshop copy, verified against the lobby.':'Sent by the host over Steam’s relay and checked against the lobby’s hashes.'));
+    add(text,node('strong','',title),node('span','',v.state==='error'?safe(v.error,'Something went wrong.'):v.state==='done'?'You can ready up now.':workshop?'The official Workshop copy, checked to match the lobby.':'Sent by the host through Steam and checked to match the lobby.'));
     add(head,text,chip(workshop?'Steam Workshop':fromFriend?'From your friend':'From the host',workshop?'cyan':'mint'));p.appendChild(head);
     if(d.conflicts&&d.conflicts.length)p.appendChild(node('p','mp-warn-text','You already have a different “'+safe(d.conflicts[0],'file')+'”. AimMod won’t replace your file. Rename or move it, then download.'));
-    var files=node('div','mp-download-files');(v.files||[]).forEach(function(f){add(files,add(node('div','mp-download-file'),node('span','mp-download-kind',f.kind==='scenario'?'Scenario':f.kind==='map'?'Map':f.kind==='ability'?'Ability':f.kind==='weapon'?'Weapon':'Character'),node('span','mp-download-name',safe(f.name,'file')),node('span','mp-muted',mb(f.size))));});
+    var files=node('div','mp-download-files');(v.files||[]).forEach(function(f){add(files,add(node('div','mp-download-file'),node('span','mp-download-kind',f.kind==='scenario'?'Scenario':f.kind==='map'?'Map':f.kind==='ability'?'Ability':f.kind==='weapon'?'Weapon':'Character'),node('span','mp-download-name',safe(f.name,'file')),node('span','mp-muted',size(f.size))));});
     if((v.files||[]).length&&v.state!=='done')p.appendChild(files);
     var total=workshop&&d.workshopProgress?d.workshopProgress.total:v.packed,done=workshop&&d.workshopProgress?d.workshopProgress.done:v.done;
     if(v.state==='downloading'||v.state==='cancelled'||v.state==='error'&&done>0){
@@ -677,7 +679,7 @@
     var rows=node('div','mp-kv');p.appendChild(rows);
     function kv(k,v,note){var r=node('div','mp-kv-row');add(r,node('span','mp-k',k),node('span','mp-v',v));if(note)r.appendChild(node('span','mp-kv-note',note));rows.appendChild(r);}
     kv('Mode',mode(s.mode).label);
-    kv('Scenario',s.scenario?safe(s.scenario.name,'Scenario'):'Not chosen',s.scenario?'#'+s.scenario.hash.slice(0,8):null);
+    kv('Scenario',s.scenario?safe(s.scenario.name,'Scenario'):'Not chosen');
     kv('Map',s.mapOverride?safe(s.mapOverride.name,'Map')+(s.mapOverride.source==='ported'?' (ported)':''):'Scenario map');
     kv(s.mode==='duel'?'First to':s.mode==='score-race'?'Attempts':'Rounds',s.mode==='duel'?F.number(s.firstTo,0)+' wins':s.mode==='practice'?'As many as you like':F.number(s.rounds,0));
     kv('Time limit',s.timeLimit?F.duration(s.timeLimit):'Scenario ('+F.duration(s.scenario?s.scenario.timeLimit:60)+')');
@@ -923,7 +925,7 @@
     var p=node('div','panel mp-live');var head=node('div','panel-head');var text=node('div','head-text');add(text,node('h2','','Live scores'),node('p','',safe(match.scenario,'Scenario')+' · '+roundLabel(match)));head.appendChild(text);p.appendChild(head);
     var body=node('div','mp-live-body');body.appendChild(hud(lobby,match));p.appendChild(body);main.appendChild(p);
     var you=node('div','panel mp-card');add(you,node('h2','','Your run'));var plan=planBox(lobby);if(plan)you.appendChild(plan);else you.appendChild(node('p','subtle','Play the round in KovaaK’s. Your score streams to the lobby as you play.'));
-    you.appendChild(node('p','mp-note','Scores come from each player’s own run and are checked against the live stream at the end.'));
+    you.appendChild(node('p','mp-note','Each score comes from that player’s own run in their game.'));
     side.appendChild(you);
     var others=match.players.filter(function(id){var m=member(id);return id!==lobby.self&&m&&!m.simulated;});
     if(others.length){var sp=node('div','panel mp-spectate');var sh=node('div','panel-head');var st=node('div','head-text');add(st,node('h2','','Spectate'),node('p','','Follow a player from the pause menu in the same scenario.'));sh.appendChild(st);sp.appendChild(sh);

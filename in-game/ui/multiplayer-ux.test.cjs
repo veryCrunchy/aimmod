@@ -81,3 +81,10 @@ test('home: personal multiplayer settings fold to a summary, but key conflicts s
   assert.ok(s.text().includes('F6 is also KovaaK’s reset key.'),'a conflict is never folded away');
   s.button('Change').onclick();assert.ok(s.text().includes('Ready when I join'));s.button('Done').onclick();assert.ok(!s.text().includes('Ready when I join'));
 });
+test('wording: no bridge or hash jargon, and small files read in KB',()=>{
+  const off=setup().open(view({transport:{kind:'none',online:false},friends:{source:'unavailable',items:[]}}));
+  assert.doesNotMatch(off.text(),/bridge|AimModSteam/,'offline copy names Steam, not internals');assert.ok(off.text().includes('Room codes still work.'));
+  const files=[{kind:'scenario',name:'Synthetic Scenario.sce',size:40000},{kind:'map',name:'synthetic_map.json',size:5000000}];
+  const g=setup().open(view({lobby:lobby({self:'p2',isHost:false,content:{scenario:'missing',map:'missing',profiles:'none'},download:{view:{state:'ready',source:'host',total:5040000,packed:1200000,done:0,speed:0,files},conflicts:[]}})}));
+  assert.ok(g.text().includes('39 KB'),'not 0 MB');assert.doesNotMatch(g.text(),/hashes|#0123456/,'no hashes in the lobby');
+});
