@@ -41,6 +41,8 @@ namespace aimmod
         // "map": ensure-map (KovaaK's SetCurrentMapName + SetMapData with the
         // scenario's own parsed map).
         bool canMap() const { return m_canMap; }
+        // Bumped whenever AimModCore changed the world's map (scene reports re-read it).
+        std::uint32_t mapGeneration() const { return m_mapGeneration; }
         // "quit": leave the current run the way pause -> Quit does (abandoned, never submitted).
         bool canQuit() const { return m_cancel.ok(); }
         // The scenario of a challenge quit-run just left (once), for the
@@ -86,6 +88,7 @@ namespace aimmod
         game::Getter m_challengeProfile, m_setMapName, m_setMapData, m_respawn, m_inBenchmark, m_inEditor;
         game::Path m_profileMapName, m_profileMapScale, m_profileMapData, m_dataLines, m_dataScale, m_repoMapName;
         bool m_canMap{};
+        std::uint32_t m_mapGeneration{};
 
         game::Bindings& m_b;
         game::Scene& m_scene;

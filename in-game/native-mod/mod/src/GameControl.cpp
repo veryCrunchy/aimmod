@@ -385,6 +385,7 @@ namespace aimmod
                     if (p.kind == Kind::String) WriteString(value, name);
                 });
                 // The array is lent to the call (SetMapData copies it); it stays owned by the profile.
+                ++m_mapGeneration;
                 const bool loaded = named && m_setMapData.Call(state, [&](std::uint8_t* value, const Param& p) {
                     if (!p.structType) return;
                     std::memcpy(const_cast<std::uint8_t*>(m_dataLines.At(value)), &lines, sizeof(lines));

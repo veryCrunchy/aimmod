@@ -485,6 +485,14 @@ the editor, and only for AimMod's generated scenarios. It only ever loads the
 current scenario's own map, which is what KovaaK's would have done. A map
 that is already right is left alone, so repeated calls are harmless.
 
+`core-scene.json`'s `mapName`/`mapScale` (and the pose feed's map line) are
+`MetaGameState` `GetCurrentMapName`/`GetMapScale`, the values ensure-map
+checks. They are read again every 0.5 s and right after AimModCore loads a
+map, not only when the scenario changes. They used to be read once per
+scenario, so a map applied later stayed hidden: the scene kept the previous
+map's name and scale (for example `defaultscenario.map` at 4.33) while the
+world had the scenario's map at its own scale.
+
 Live check (game running with this AimModCore):
 `AimMod.InGame.exe --check-map-load "<AimMod scenario>" [--game <root>]
 [--no-load]` loads the scenario, sends ensure-map, and prints

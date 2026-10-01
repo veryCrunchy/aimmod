@@ -1788,11 +1788,13 @@ static partial class MultiplayerChecks
         // Answers like AimModCore: the latest load is done, then the latest start.
         // ensure-map ("map" capability): loads the scenario's own map, unless EnsureUnsupported (an older game).
         public bool EnsureUnsupported;
+        // ensure-map loads the map, but the scene report keeps naming the previous one (a stale core-scene.json).
+        public bool EnsureLeavesStaleScene;
         public long? EnsureMap(string scenario)
         {
             if (!Capabilities.Contains("map")) return null;
             Calls.Add("ensure-map " + scenario);
-            if (!EnsureUnsupported && scenario == loadedScenario) StuckMap = null;
+            if (!EnsureUnsupported && !EnsureLeavesStaleScene && scenario == loadedScenario) StuckMap = null;
             return lastEnsure = Calls.Count;
         }
         public GameCommandResult? Result => lastEnsure > lastStart && lastEnsure > lastLoad

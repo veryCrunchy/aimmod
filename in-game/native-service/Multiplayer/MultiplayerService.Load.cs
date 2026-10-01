@@ -12,7 +12,7 @@ sealed partial class MultiplayerService
     public const long MapMismatchRetryMs = 15_000, MapMismatchFailMs = 30_000;
     string? verifyKey, waitSent; long verifySince, verifyRetriedAt; int verifyGood; string? failedScenario;
     // ensure-map (AimModCore loads the scenario's own map itself): the pending request and why it failed.
-    long? mapFixSequence; string? mapFixError;
+    long? mapFixSequence; string? mapFixError; bool mapConfirmed, mapDisagreeLogged;
 
     // The map a round's scenario loads: from the match scenario AimMod built, else the base file.
     (string? MapName, double? MapScale) ExpectedMap(string scenario)
@@ -63,8 +63,28 @@ sealed partial class MultiplayerService
             return;
         }
         if (plan.State is not ("ready" or "started")) return;
-        if (verifyKey != key) { verifyKey = key; verifySince = clock(); verifyRetriedAt = 0; verifyGood = 0; mapFixSequence = null; mapFixError = null; }
-        var problem = SceneProblem(game.Scene, plan.Scenario, ExpectedMap(plan.Scenario));
+        if (verifyKey != key) { verifyKey = key; verifySince = clock(); verifyRetriedAt = 0; verifyGood = 0; mapFixSequence = null; mapFixError = null; mapConfirmed = false; mapDisagreeLogged = false; }
+        var scene = game.Scene;
+        var problem = SceneProblem(scene, plan.Scenario, ExpectedMap(plan.Scenario));
+        // AimModCore answered ensure-map: an unsupported game falls back to loading the scenario again.
+        if (mapFixSequence is long fix && game.Result is { Sequence: var answered } fixResult && answered == fix)
+        {
+            mapFixSequence = null;
+            if (fixResult.State == "done" && fixResult.Code is "map-ok" or "map-loaded") mapConfirmed = true;
+            else if (fixResult.State == "error" && fixResult.Code == "unsupported" && problem is not null && ReloadScenario(problem)) return;
+            else if (fixResult.State == "error") mapFixError = fixResult.Code + (fixResult.Message.Length > 0 ? ": " + fixResult.Message : "");
+        }
+        // AimModCore verified the round's map itself (ensure-map done): that counts, even if a scene
+        // report still names another map, as long as it shows the round's scenario, not loading.
+        if (problem is not null && problem != "loading" && mapConfirmed && scene is { Available: true, Loading: false } && string.Equals(scene.Scenario, plan.Scenario, StringComparison.Ordinal))
+        {
+            if (!mapDisagreeLogged)
+            {
+                mapDisagreeLogged = true;
+                Console.Error.WriteLine("Load gate: AimModCore loaded the map of " + plan.Scenario + " (ensure-map), but core-scene.json shows " + scene.MapName + " at " + scene.MapScale + "; counting the map as loaded.");
+            }
+            problem = null;
+        }
         if (problem is null)
         {
             if (++verifyGood < 2) { plan = plan with { Map = "checking", Message = "Checking the map…" }; return; }
@@ -73,16 +93,9 @@ sealed partial class MultiplayerService
             return;
         }
         verifyGood = 0;
-        // AimModCore answered ensure-map: an unsupported game falls back to loading the scenario again.
-        if (mapFixSequence is long fix && game.Result is { Sequence: var answered } fixResult && answered == fix)
-        {
-            mapFixSequence = null;
-            if (fixResult.State == "error" && fixResult.Code == "unsupported" && ReloadScenario(problem)) return;
-            if (fixResult.State == "error") mapFixError = fixResult.Code + (fixResult.Message.Length > 0 ? ": " + fixResult.Message : "");
-        }
         plan = problem == "loading" ? plan with { Map = "checking", Message = "KovaaK’s is loading the map…" } : plan with { Map = "wrong", Message = problem };
         var waited = clock() - verifySince;
-        var mapWrong = problem != "loading" && game.Scene is { } shown && string.Equals(shown.Scenario, plan.Scenario, StringComparison.Ordinal);
+        var mapWrong = problem != "loading" && scene is { } shown && string.Equals(shown.Scenario, plan.Scenario, StringComparison.Ordinal);
         if (problem != "loading" && verifyRetriedAt == 0 && ((mapWrong && game.Capabilities.Contains("map")) || waited >= MapMismatchRetryMs))
         {
             verifyRetriedAt = clock();
