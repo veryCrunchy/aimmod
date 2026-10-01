@@ -45,7 +45,7 @@ sealed class GameCommands(string output)
     /// <summary>Writes the request; returns its sequence, or null with a reason.</summary>
     public (long? Sequence, string? Error) Send(GameCommandRequest request)
     {
-        if (request.Action is not ("load-scenario" or "start-scenario" or "reset-overrides" or "refresh-scenarios" or "capture-thumbnail" or "end-run")) return (null, "invalid-command");
+        if (request.Action is not ("load-scenario" or "start-scenario" or "reset-overrides" or "refresh-scenarios" or "capture-thumbnail" or "end-run" or "quit-run")) return (null, "invalid-command");
         var named = request.Action is "load-scenario" or "start-scenario" or "capture-thumbnail" or "end-run";
         if (request.Action == "capture-thumbnail")
         {

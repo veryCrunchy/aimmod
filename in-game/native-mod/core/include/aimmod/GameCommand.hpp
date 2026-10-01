@@ -13,7 +13,7 @@ namespace aimmod
 {
     struct GameCommand
     {
-        enum class Action { LoadScenario, StartScenario, ResetOverrides, RefreshScenarios, CaptureThumbnail, EndRun };
+        enum class Action { LoadScenario, StartScenario, ResetOverrides, RefreshScenarios, CaptureThumbnail, EndRun, QuitRun };
         enum class Mode { FreePlay, Challenge };
         std::uint64_t sequence{};
         Action action{};

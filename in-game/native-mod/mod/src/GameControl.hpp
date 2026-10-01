@@ -36,6 +36,8 @@ namespace aimmod
         bool canLoad() const { return m_canLoad; }
         bool canStart() const { return m_canStart; }
         bool canCapture() const { return m_canCapture; }
+        // "quit": leave the current run the way pause -> Quit does (abandoned, never submitted).
+        bool canQuit() const { return m_cancel.ok(); }
         bool overridesActive() const { return m_overrides.active; }
         // Shared match randomness: the game draws from the CRT rand() state of
         // its game thread (it imports rand/srand from the UCRT, like this
@@ -63,6 +65,20 @@ namespace aimmod
         game::Getter m_start, m_activate, m_persistentPlayType, m_playCurrent, m_localHash, m_onlineHash, m_cancel;
         game::Getter m_timeDilation, m_mapScale, m_adaptiveOverride, m_adaptiveReset, m_weapon;
         game::Getter m_refreshLocal, m_reloadProfiles;
+        // quit-run: the pause menu's Quit Challenge handler (Blueprint, bound
+        // when first needed), CancelChallenge as fallback, and the freeplay
+        // session reset.
+        game::Getter m_quitHandler, m_resetFreeplay;
+        struct Quitting
+        {
+            std::uint64_t sequence{};
+            double deadline{}, fallbackAt{};
+            bool fallback{};
+            std::string path;
+        };
+        std::optional<Quitting> m_quitting;
+        void BeginQuit(const GameCommand& command, double now, bool inChallenge);
+        void TickQuit(double now, bool inChallenge);
         // Thumbnail capture (camera actor + HighResShot).
         game::Getter m_exec, m_spawnBegin, m_spawnFinish, m_setViewTarget, m_getViewTarget, m_destroy, m_hide, m_place, m_fov;
         game::Field m_cameraComponent, m_fullyLoaded, m_mapLoading;

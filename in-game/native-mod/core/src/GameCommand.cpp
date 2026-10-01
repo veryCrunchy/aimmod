@@ -34,6 +34,7 @@ namespace aimmod
         case GameCommand::Action::RefreshScenarios: return "refresh-scenarios";
         case GameCommand::Action::CaptureThumbnail: return "capture-thumbnail";
         case GameCommand::Action::EndRun: return "end-run";
+        case GameCommand::Action::QuitRun: return "quit-run";
         default: return "reset-overrides";
         }
     }
@@ -91,6 +92,7 @@ namespace aimmod
         else if (*action == "refresh-scenarios") c.action = GameCommand::Action::RefreshScenarios;
         else if (*action == "capture-thumbnail") c.action = GameCommand::Action::CaptureThumbnail;
         else if (*action == "end-run") c.action = GameCommand::Action::EndRun;
+        else if (*action == "quit-run") c.action = GameCommand::Action::QuitRun;
         else return fail("invalid-command", "Unknown action.");
         if (c.action == GameCommand::Action::LoadScenario || c.action == GameCommand::Action::StartScenario ||
             c.action == GameCommand::Action::CaptureThumbnail || c.action == GameCommand::Action::EndRun)
@@ -105,6 +107,7 @@ namespace aimmod
             if (*then != "stop" && *then != "reset") return fail("invalid-command", "end-run then must be stop or reset.");
             c.reset = *then == "reset";
         }
+        if (c.action == GameCommand::Action::QuitRun && get("scenario")) return fail("invalid-command", "quit-run takes no scenario.");
         if (c.action == GameCommand::Action::EndRun && !std::string_view(c.scenario).starts_with(MatchScenarioPrefix))
             return fail("not-a-match", "end-run applies to AimMod match scenarios only.");
         if (const std::string* mode = get("mode"))

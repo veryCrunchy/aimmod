@@ -97,6 +97,8 @@ static class CoreFormatChecks
             Check(ended.Sequence is > 0 && File.ReadAllText(Path.Combine(root, "core-command.tsv")).EndsWith("action\tend-run\nscenario\tAimMod Match - Synthetic - 0a1b2c3d\nthen\treset\n"), "end-run written");
             Check(commands.Send(new("end-run", "VT Pasu", null, null, null, null, null, null)).Error == "not-a-match"
                 && commands.Send(new("load-scenario", "X", null, null, null, null, null, null, Then: "reset")).Error == "invalid-command", "end-run kept to match scenarios");
+            var quit = commands.Send(new("quit-run", null, null, null, null, null, null, null));
+            Check(quit.Sequence is > 0 && File.ReadAllText(Path.Combine(root, "core-command.tsv")).EndsWith("\naction\tquit-run\n"), "quit-run written without fields");
             var second = commands.Send(new("reset-overrides", null, null, null, null, null, null, null));
             Check(second.Sequence > sent.Sequence && !File.ReadAllText(Path.Combine(root, "core-command.tsv")).Contains("scenario"), "sequences increase; reset carries no scenario");
             Check(commands.Send(new("delete", "x", null, null, null, null, null, null)).Error == "invalid-command" && commands.Send(new("load-scenario", "a\u0001b", null, null, null, null, null, null)).Error == "invalid-scenario",

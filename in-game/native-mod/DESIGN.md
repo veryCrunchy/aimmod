@@ -353,6 +353,17 @@ browser path, without playing (`stop`) or playing again in freeplay
 reload finished, or `end-failed` when no reload began within 5 s. Refused
 during a challenge and for any other scenario (`not-a-match`, `not-current`).
 
+`quit-run` (no fields; capability `quit`; any scenario): what the player does
+with pause, then Quit. In a challenge it calls the pause menu's own Quit
+Challenge handler (`PauseBox_C`, `BndEvt__QuitChallenge_..._OnClicked`) on the
+live widget, or `ScenarioManager:CancelChallenge` when that widget or
+function is missing, and again after 2.5 s if the challenge is still running.
+The run is abandoned and no score is submitted. Answered `accepted quitting`,
+then `done quit` once the challenge has ended, or `quit-failed` after 6 s.
+Outside a challenge it resets the freeplay session (`Reset_FreeplaySession`)
+and answers `done quit` right away. Overrides and the match seed are reset
+either way, and every step is logged.
+
 `capture-thumbnail` (capability `capture`, also `refresh-scenarios` and
 `action` list above): refused during a challenge; loads the scenario in
 freeplay if it is not the current one (with the same new-file rescan as
