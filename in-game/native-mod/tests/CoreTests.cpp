@@ -661,6 +661,19 @@ static void EndRunChecks()
               std::holds_alternative<CommandError>(parse("action\tquit-run\nmode\tfreeplay\n")) &&
               std::holds_alternative<CommandError>(parse("action\tquit-run\nthen\treset\n")),
           "quit-run takes no fields");
+
+    // Every override reset must undo a weapon change (the scenario's own loadout comes back).
+    auto weapon = parse("action\tstart-scenario\nscenario\tX\nmode\tfreeplay\nweapon\tSynthetic Rifle\n");
+    CHECK(std::holds_alternative<GameCommand>(weapon) && RestoreFor(std::get<GameCommand>(weapon)).weapon &&
+              !RestoreFor(std::get<GameCommand>(weapon)).timeDilation,
+          "a weapon override is restored on reset");
+    auto scaled = parse("action\tstart-scenario\nscenario\tX\ntimeScale\t0.5\ntargetSize\t2\nmapScale\t1.5\n");
+    CHECK(std::holds_alternative<GameCommand>(scaled) && RestoreFor(std::get<GameCommand>(scaled)).timeDilation &&
+              RestoreFor(std::get<GameCommand>(scaled)).adaptive && RestoreFor(std::get<GameCommand>(scaled)).mapScale &&
+              !RestoreFor(std::get<GameCommand>(scaled)).weapon,
+          "each requested override has a restore");
+    auto plain = parse("action\tstart-scenario\nscenario\tX\n");
+    CHECK(std::holds_alternative<GameCommand>(plain) && !RestoreFor(std::get<GameCommand>(plain)).Any(), "no overrides, nothing to restore");
 }
 
 static void MatchPlayChecks()

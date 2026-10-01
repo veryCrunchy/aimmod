@@ -71,6 +71,7 @@ namespace aimmod
         m_adaptiveOverride.BindPath(STR("/Script/GameSkillsTrainer.AdaptiveDifficultySystem:Import_OverrideProfile"), Shape::Command);
         m_adaptiveReset.BindPath(STR("/Script/GameSkillsTrainer.AdaptiveDifficultySystem:Reset_Profile"), Shape::Command);
         m_weapon.BindPath(STR("/Script/GameSkillsTrainer.WeaponHandler:SetWeaponProfileByString"), Shape::Command);
+        m_loadWeapons.BindPath(STR("/Script/GameSkillsTrainer.WeaponHandler:LoadWeapons"), Shape::Command);
         // The game indexes local scenarios at startup; these rescan them (the
         // second is what the pause menu's Reload Profiles button reloads).
         m_refreshLocal.BindPath(STR("/Script/GameSkillsTrainer.ScenarioManager:RefreshLocalScenarios"), Shape::Command);
@@ -168,6 +169,9 @@ namespace aimmod
     {
         UObject* player = m_scene.Player();
         bool ok = true;
+        // Restores are recorded before anything is applied: a partly applied
+        // override is still undone.
+        m_overrides.weapon |= RestoreFor(c).weapon;
         if (c.timeScale)
         {
             const bool set = m_timeDilation.Call(m_b.statics, [&](std::uint8_t* value, const Param& p) {
@@ -251,6 +255,14 @@ namespace aimmod
             RC::Unreal::UObjectGlobals::FindAllOf(STR("AdaptiveDifficultySystem"), systems);
             for (UObject* s : systems)
                 if (IsLiveInstance(s)) m_adaptiveReset.Call(s, [](std::uint8_t*, const Param&) {});
+        }
+        if (m_overrides.weapon)
+        {
+            // The scenario's own weapons, so an override never carries into a later run.
+            UObject* character = player ? m_b.myCharacter.Object(player) : nullptr;
+            UObject* handler = character ? game::Describe(character).weaponHandler.Object(character) : nullptr;
+            const bool restored = handler && m_loadWeapons.Call(handler, [](std::uint8_t*, const Param&) {});
+            Log(std::string("game control: scenario weapons ") + (restored ? "reloaded" : "not reloaded (no weapon handler; the next scenario load restores them)"));
         }
         if (m_overrides.mapScaleBefore)
             if (UObject* state = m_scene.GameState())
@@ -516,8 +528,7 @@ namespace aimmod
     {
         UObject* manager = m_scene.Manager();
         ResetOverrides("run quit");
-        if (m_seeding) Log("match seed: off (run quit)");
-        m_seeding.reset();
+        StopSeeding("run quit");
         if (!inChallenge)
         {
             const bool reset = m_resetFreeplay.ok() && m_resetFreeplay.Call(manager, [](std::uint8_t*, const Param&) {});
@@ -571,8 +582,7 @@ namespace aimmod
         if (c.action == GameCommand::Action::CaptureThumbnail) return BeginCapture(c, now, m_lastScenario, manager);
         const bool load = c.action == GameCommand::Action::LoadScenario;
         ResetOverrides("scenario-change");
-        if (m_seeding) Log("match seed: off (new scenario request)");
-        m_seeding.reset();
+        StopSeeding("new scenario request");
         m_pending = Pending{c, now + (load ? 30.0 : 45.0)};
         // Replays view the scenario without starting it; starts use the
         // requested play type (freeplay for any override).
@@ -628,8 +638,7 @@ namespace aimmod
             if (!m_canLoad) return Answer(c.sequence, "error", "unsupported", "Ending a run is unavailable in this game version.");
             if (current != c.scenario) return Answer(c.sequence, "error", "not-current", "\"" + c.scenario + "\" is not the scenario being played.");
             ResetOverrides("run ended");
-            if (m_seeding) Log("match seed: off (run ended)");
-            m_seeding.reset();
+            StopSeeding("run ended");
             m_pending = Pending{c, now + 30.0};
             m_pending->issued = now;
             if (c.reset && !SetPlayType(manager, GameCommand::Mode::FreePlay))

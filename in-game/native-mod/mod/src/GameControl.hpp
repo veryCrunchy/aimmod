@@ -72,7 +72,7 @@ namespace aimmod
         game::Scene& m_scene;
         Output& m_output;
         game::Getter m_start, m_activate, m_persistentPlayType, m_playCurrent, m_localHash, m_onlineHash, m_cancel;
-        game::Getter m_timeDilation, m_mapScale, m_adaptiveOverride, m_adaptiveReset, m_weapon;
+        game::Getter m_timeDilation, m_mapScale, m_adaptiveOverride, m_adaptiveReset, m_weapon, m_loadWeapons;
         game::Getter m_refreshLocal, m_reloadProfiles;
         // quit-run: ScenarioManager:CancelChallenge (the game's cancel path,
         // which broadcasts ChallengeCanceled, not ChallengeComplete) and the
@@ -141,7 +141,7 @@ namespace aimmod
         struct Overrides
         {
             bool active{};
-            bool timeDilation{}, adaptive{};
+            bool timeDilation{}, adaptive{}, weapon{};
             std::optional<double> mapScaleBefore;
             std::string scenario;
         } m_overrides;

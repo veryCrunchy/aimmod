@@ -38,6 +38,16 @@ namespace aimmod
         bool HasOverrides() const { return timeScale || targetSize || targetSpeed || mapScale || !weapon.empty(); }
     };
 
+    // What resetting a start-scenario's overrides must undo. Requested (not
+    // only successfully applied) overrides count, so a partly applied weapon
+    // change is still restored.
+    struct OverrideRestore
+    {
+        bool timeDilation{}, adaptive{}, mapScale{}, weapon{};
+        bool Any() const { return timeDilation || adaptive || mapScale || weapon; }
+    };
+    OverrideRestore RestoreFor(const GameCommand& command);
+
     struct CommandError
     {
         std::uint64_t sequence{};

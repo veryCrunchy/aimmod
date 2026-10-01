@@ -193,6 +193,17 @@ namespace aimmod
         return c;
     }
 
+    OverrideRestore RestoreFor(const GameCommand& c)
+    {
+        OverrideRestore r;
+        if (c.action != GameCommand::Action::StartScenario) return r;
+        r.timeDilation = c.timeScale.has_value();
+        r.adaptive = c.targetSize.has_value() || c.targetSpeed.has_value();
+        r.mapScale = c.mapScale.has_value();
+        r.weapon = !c.weapon.empty();
+        return r;
+    }
+
     bool IsScenarioFileName(std::string_view name)
     {
         if (!SafeName(name) || name.back() == '.' || name.back() == ' ' || name == "." || name == "..") return false;
