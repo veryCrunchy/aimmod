@@ -276,9 +276,12 @@
 .mp-cos-setting{padding:6px 20px;margin-bottom:16px}
 .mp-cos-group{font-size:14px;font-weight:600;margin:6px 0 10px}
 .mp-cos-cell{width:25%}
-.mp-cos-art{display:block;height:120px;background:#101916;text-align:center}
+.mp-cos-art{display:block;height:120px;background:#121a17;text-align:center}
 .mp-cos-preview{display:block;width:160px;height:120px;margin:0 auto}
 .mp-cos.on{border-color:#2c6b52}
+.mp-cos-live{padding:16px 20px 12px}
+.mp-cos-live-img{display:block;width:384px;height:384px;max-width:100%;margin:4px auto 10px;background:#121a17;border:1px solid #22302a;border-radius:8px}
+.mp-cos-live .mp-note{text-align:center}
 /* Map library */
 .mp-hero-link{margin-top:18px;padding-top:14px;border-top:1px solid #22302a;font-size:12px;color:#a7bab0;line-height:1.5}
 .mp-hero-link .actions{margin-top:8px}.mp-hero-link .actions>.button{margin:0 8px 0 0}

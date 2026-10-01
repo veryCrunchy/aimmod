@@ -555,14 +555,38 @@
   if(root.addEventListener){root.addEventListener('mousemove',function(e){previewTurn(e.clientX);});root.addEventListener('mouseup',function(e){if(preview.drag){previewTurn(e.clientX);preview.drag=null;previewSend();}});}
   function loadCosmetics(){xhr('GET','/multiplayer?part=cosmetics',null,function(ok,data){if(ok&&data){cosmeticsData=data;if(cosmeticsOpen)render();}});}
   function cosmeticAct(action,extra){act(action,extra,function(ok){if(ok)loadCosmetics();});}
+  // Card swatches: the item's own colours as a finish chip. The service sends
+  // sRGB hex (main colour first); older services sent one linear colour.
+  var HEX=/^#[0-9a-f]{6}$/;
+  function hexOf(v){return '#'+v.slice(0,3).map(function(n){var h=Math.round(Math.max(0,Math.min(1,+n||0))*255).toString(16);return h.length<2?'0'+h:h;}).join('');}
+  function swatchColours(item){
+    var list=(item.swatch||[]).filter(function(h){return typeof h==='string'&&HEX.test(h);});
+    if(!list.length&&item.color&&item.color.length>=3)list=[hexOf(item.color)];
+    return list.length?list:['#27e4a1'];
+  }
+  // Mixes a hex colour with white (t>0) or black (t<0), for the sheen and the rim.
+  function shade(hex,t){var out='#';for(var i=1;i<7;i+=2){var v=parseInt(hex.substr(i,2),16);v=t>0?v+(255-v)*t:v*(1+t);var h=Math.round(v).toString(16);out+=h.length<2?'0'+h:h;}return out;}
   function swatch(item){
-    // 2D preview: the item's colour on a body or weapon silhouette, or a ring for accessories.
     var c=node('canvas','mp-cos-preview');c.width=160;c.height=120;var x=c.getContext&&c.getContext('2d');
-    if(x){x.scale(2,2);x.fillStyle='#101916';x.fillRect(0,0,80,60);
-      var col=item.color?'#'+item.color.map(function(v){var h=Math.round(Math.max(0,Math.min(1,v))*255).toString(16);return h.length<2?'0'+h:h;}).join(''):'#27e4a1';
-      if(item.kind.indexOf('weapon')===0||item.kind==='reload_animation'){x.fillStyle=col;x.fillRect(14,24,44,10);x.fillRect(46,30,8,16);x.fillRect(56,26,12,5);}
-      else if(item.kind==='accessory'){x.strokeStyle=col;x.lineWidth=3;x.beginPath();x.arc(40,30,9,0,Math.PI*2);x.stroke();x.fillStyle='#30433a';x.beginPath();x.arc(40,30,5,0,Math.PI*2);x.fill();}
-      else{x.fillStyle=col;x.beginPath();x.arc(40,15,7,0,Math.PI*2);x.fill();x.fillRect(31,24,18,22);x.fillRect(32,46,6,10);x.fillRect(42,46,6,10);}
+    if(x){x.scale(2,2);x.fillStyle='#121a17';x.fillRect(0,0,80,60);
+      var cols=swatchColours(item),main=cols[0],second=cols[1]||shade(main,-0.35),metal=cols[2]||shade(main,0.25),shine=Math.max(0,Math.min(1,+item.shine||0));
+      var cx=40,cy=30,r=21,tau=Math.PI*2;
+      if(item.kind.indexOf('weapon')===0||item.kind==='reload_animation'){
+        // Weapon finish: a gunmetal chip with the accent as a ring and its glow at the centre.
+        x.fillStyle='#262f2b';x.beginPath();x.arc(cx,cy,r,0,tau);x.fill();
+        x.strokeStyle=main;x.lineWidth=5;x.beginPath();x.arc(cx,cy,r-5,0,tau);x.stroke();
+        x.fillStyle=second;x.beginPath();x.arc(cx,cy,6,0,tau);x.fill();
+      }else if(item.kind==='accessory'){
+        x.strokeStyle=main;x.lineWidth=3;x.beginPath();x.arc(cx,cy,10,0,tau);x.stroke();
+      }else{
+        // Body tint: paint chip split between body paint and panel colour, with a metal rim.
+        x.fillStyle=main;x.beginPath();x.arc(cx,cy,r,0,tau);x.fill();
+        x.fillStyle=second;x.beginPath();x.moveTo(cx,cy);x.arc(cx,cy,r,-Math.PI/4,Math.PI*3/4);x.closePath();x.fill();
+        x.strokeStyle=metal;x.lineWidth=2;x.beginPath();x.arc(cx,cy,r,0,tau);x.stroke();
+        x.strokeStyle='#121a17';x.lineWidth=1.5;x.beginPath();x.moveTo(cx-r*0.72,cy+r*0.72);x.lineTo(cx+r*0.72,cy-r*0.72);x.stroke();
+      }
+      // Sheen: larger and brighter on metallic finishes.
+      x.fillStyle=shade(item.kind==='accessory'?main:cols[0],0.35+shine*0.45);x.beginPath();x.arc(cx-r*0.45,cy-r*0.45,2+shine*3,0,tau);x.fill();
     }
     c.setAttribute('aria-hidden','true');return c;
   }
@@ -578,7 +602,7 @@
     setting.appendChild(settingRow('Show others’ cosmetics','Only applies inside AimMod matches.',segmented([{id:'all',label:'All'},{id:'friends',label:'Friends'},{id:'off',label:'Off'}],d.show||'all',function(id){cosmeticAct('cosmetic-view',{show:id});},false,'show others')));
     page.appendChild(setting);
     // No catalog yet, or only items still being made: say what's coming instead of an empty page.
-    if(!d.available||!(d.items||[]).length){var soon=node('div','panel mp-cos-soon');add(soon,add(node('div','mp-cos-soon-art'),swatch({kind:'avatar_tint',color:[0.15,0.89,0.63]}),swatch({kind:'weapon_finish',color:[0.4,0.8,1]}),swatch({kind:'accessory',color:[0.94,0.71,0.35]})),
+    if(!d.available||!(d.items||[]).length){var soon=node('div','panel mp-cos-soon');add(soon,add(node('div','mp-cos-soon-art'),swatch({kind:'avatar_tint',swatch:['#27cb95','#eff3f1','#959e99']}),swatch({kind:'avatar_tint',swatch:['#f0c675','#3e3b37','#f9e2aa'],shine:0.9}),swatch({kind:'weapon_finish',swatch:['#7ccfff','#6fbcee']})),
       add(node('div','mp-cos-soon-text'),node('strong','','Cosmetics are coming soon'),node('span','','The first tints, finishes and accessories arrive with the next AimMod update. Everything here is made by the AimMod team.')));page.appendChild(soon);return;}
     COSMETIC_GROUPS.forEach(function(g){
       var list=(d.items||[]).filter(function(i){return g[1].indexOf(i.kind)>=0;});if(!list.length)return;

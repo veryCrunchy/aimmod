@@ -1310,7 +1310,8 @@ static partial class MultiplayerChecks
               {"id":"Bad-Id","version":1,"kind":"avatar_tint","parts":["body"],"models":["Meso"],"vector":{"PrimaryColor":{"R":1,"G":1,"B":1,"A":1}}},
               {"id":"twice","version":1,"kind":"weapon_finish","parts":["weapon"],"vector":{"PrimaryColor":{"R":1,"G":1,"B":1,"A":1}}},
               {"id":"twice","version":1,"kind":"weapon_finish","parts":["weapon"],"vector":{"PrimaryColor":{"R":0,"G":0,"B":0,"A":1}}},
-              {"id":"meso-tint-hot","version":1,"kind":"avatar_tint","parts":["body"],"models":["Meso"],"vector":{"PrimaryColor":{"R":2,"G":0,"B":0,"A":1}}}]}
+              {"id":"meso-tint-hot","version":1,"kind":"avatar_tint","parts":["body"],"models":["Meso"],"vector":{"PrimaryColor":{"R":2,"G":0,"B":0,"A":1}}},
+              {"id":"tint-mint","version":1,"kind":"avatar_tint","name":"AimMod Mint","models":["Meso","Endo"],"parts":["body"],"vector":{"MetalPaint":{"R":0.02,"G":0.6,"B":0.3,"A":1},"TriangularPaint":{"R":0.86,"G":0.9,"B":0.88,"A":1},"RawMetal":{"R":0.3,"G":0.34,"B":0.32,"A":1}},"scalar":{"Roughness":0.35,"Metallic":0.1}}]}
             """;
         File.WriteAllText(Path.Combine(folder, CosmeticsCatalog.CatalogFile), catalog);
         void Manifest(string sha) => File.WriteAllText(Path.Combine(folder, CosmeticsCatalog.ManifestFile), JsonSerializer.Serialize(new { version = 1, files = new[] { new { name = CosmeticsCatalog.CatalogFile, size = new FileInfo(Path.Combine(folder, CosmeticsCatalog.CatalogFile)).Length, sha256 = sha } } }));
@@ -1318,7 +1319,7 @@ static partial class MultiplayerChecks
         Check(!CosmeticsCatalog.Load(folder, null).Available && CosmeticsCatalog.Load(folder, null).Problem == "manifest-mismatch", "A catalog that doesn't match its manifest is not used");
         Manifest(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(Path.Combine(folder, CosmeticsCatalog.CatalogFile)))));
         var loaded = CosmeticsCatalog.Load(folder, null);
-        Check(loaded.Available && loaded.Pickable.Select(i => i.Id).OrderBy(x => x).SequenceEqual(["meso-tint-ember", "weapon-finish-sand"]), "Only valid, non-draft items with their paks are pickable; bad kinds, ids, ranges and duplicates are dropped");
+        Check(loaded.Available && loaded.Pickable.Select(i => i.Id).OrderBy(x => x).SequenceEqual(["meso-tint-ember", "tint-mint", "weapon-finish-sand"]), "Only valid, non-draft items with their paks are pickable; bad kinds, ids, ranges and duplicates are dropped");
         Check(loaded.Filter([new("meso-tint-ember", 1), new("unknown-item", 1), new("weapon-finish-sand", 1), new("accessory-halo", 1)]).Select(r => r.Id).SequenceEqual(["meso-tint-ember"]), "Shared looks resolve only to the same id and version in the viewer's own catalog");
         Check(CosmeticLooks.Format([new("meso-tint-ember", 1)], [("76561190000000001", [new CosmeticRef("weapon-finish-sand", 2)]), ("sim-bot", [new CosmeticRef("meso-tint-ember", 1)])])
             == "v=1\npeer=76561190000000001 items=weapon-finish-sand@2\nself=meso-tint-ember@1\n", "cosmetic-looks.txt has v=1, Steam peers only, and a self line");
@@ -1327,6 +1328,10 @@ static partial class MultiplayerChecks
         var previewBody = CosmeticPreviewFormat.Body("Meso", "McCree", -35.5, [tint]);
         Check(previewBody is not null && previewBody.StartsWith("model=Meso\nskin=McCree\nyaw=-35.5\nvector=", StringComparison.Ordinal), "Preview request carries the look, the rotation and the item's parameters");
         Check(CosmeticPreviewFormat.Body("Endo", "Default", 0, []) == "model=Endo\nyaw=0\n", "A model's default skin is not sent");
+        var mint = loaded.Pickable.First(i => i.Id == "tint-mint");
+        Check(CosmeticPreviewFormat.Body("Endo", null, 0, [mint]) is { } mintBody && mintBody.Contains("vector=MetalPaint:0.02,0.6,0.3,1\n") && mintBody.Contains("scalar=Metallic:0.1\n"), "Preview carries a tint's probed material parameters");
+        Check(mint.Swatch.SequenceEqual(["#27cb95", "#eff3f1", "#959e99"]) && Math.Abs(mint.Shine - 0.1) < 1e-9 && mint.Color is [0.02, 0.6, 0.3], "Card swatch: body paint, panels and metal as sRGB, with the finish's shine");
+        Check(loaded.Pickable.First(i => i.Id == "weapon-finish-sand").Swatch.Count == 1 && loaded.Pickable.First(i => i.Id == "meso-tint-ember").Swatch.Count == 1, "Single-colour items get one swatch colour");
         Check(CosmeticPreviewFormat.Body("../Meso", null, 0, []) is null && CosmeticPreviewFormat.Body("Meso", "C:/me.png", 0, []) is null, "Preview names are look names, never paths");
         Check(CosmeticPreviewFormat.Body("Meso", null, 999, [])!.Contains("yaw=180\n"), "Preview rotation is clamped");
         var bad = tint with { Vectors = new Dictionary<string, double[]> { ["Bad Name"] = [1, 0, 0, 1], ["Hot"] = [5, 0, 0, 1] } };
@@ -1341,6 +1346,7 @@ static partial class MultiplayerChecks
         Check(service.Act("cosmetic-equip", J(new { id = "meso-tint-ember" })).Ok && !service.Act("cosmetic-equip", J(new { id = "accessory-halo" })).Ok && !service.Act("cosmetic-equip", J(new { id = "unknown-item" })).Ok, "Only pickable catalog items can be equipped");
         var view = JsonSerializer.SerializeToElement(service.CosmeticsView(), Protocol.Json);
         Check(view.GetProperty("items").EnumerateArray().Single(i => i.GetProperty("id").GetString() == "meso-tint-ember").GetProperty("equipped").GetBoolean() && view.GetProperty("show").GetString() == "all", "The Cosmetics page shows what's equipped; others' cosmetics default to all");
+        Check(view.GetProperty("items").EnumerateArray().Single(i => i.GetProperty("id").GetString() == "tint-mint").GetProperty("swatch").GetArrayLength() == 3, "The Cosmetics page gets each item's swatch");
         var looksFile = Path.Combine(output, CosmeticLooks.FileName);
         Check(!File.Exists(looksFile), "No looks file outside an AimMod session");
         service.Act("create", J(new { mode = "practice", scenario = "Synthetic Plain" }));

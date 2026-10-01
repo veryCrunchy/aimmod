@@ -19,12 +19,12 @@
 --            install (AimModCore, phase 2).
 --   attach   accessories: bone or socket role; per-model names and offsets
 --            are filled in from the probe.
---   draft    true until the parameter names are confirmed with the probe.
+--   draft    true while the item is not ready (its pak has not shipped).
 --            Drafts never appear in the picker and apply only for team tests
 --            with allow_drafts=1.
 local M = {}
 
-M.version = 1
+M.version = 2
 
 M.kinds = {
     avatar_tint = {parts={body=true}, needsPak=false},
@@ -37,26 +37,47 @@ M.kinds = {
     player_model = {parts={body=true}, needsPak=true},
 }
 
--- First curated set. Parameter names are placeholders until the probe lists
--- the real names on MI_PaintedMetal_Meso_TS1/TS2, the Endo materials and the
--- MI_* weapon materials; every item is a draft until then.
+-- First curated set: material parameters only, no pak. The names come from
+-- the probe: the Meso and Endo body and head slots share MM_BaseDummy
+-- (vectors MetalPaint, TriangularPaint, RawMetal, Silicone; scalars
+-- Roughness, Metallic) and weapons share M_SingleAssetMaster (vectors
+-- AccentColor, Emissive). Colours are linear. A weapon's emissive is never
+-- brighter than the game's own orange accent. Pak items stay drafts until the
+-- pak ships. catalog.json is the shipped copy (catalog.test.cjs keeps them equal).
+local function rgba(r, g, b, a) return {R=r, G=g, B=b, A=a or 1} end
 M.items = {
-    {id='meso-tint-ember', version=1, kind='avatar_tint', name='Ember', models={'Meso'}, parts={'body'},
-        vector={PrimaryColor={R=0.85, G=0.22, B=0.05, A=1}}, draft=true},
-    {id='meso-tint-glacier', version=1, kind='avatar_tint', name='Glacier', models={'Meso'}, parts={'body'},
-        vector={PrimaryColor={R=0.55, G=0.80, B=0.95, A=1}}, draft=true},
-    {id='meso-tint-graphite', version=1, kind='avatar_tint', name='Graphite', models={'Meso'}, parts={'body'},
-        vector={PrimaryColor={R=0.12, G=0.12, B=0.13, A=1}}, scalar={Roughness=0.6}, draft=true},
-    {id='endo-tint-verdant', version=1, kind='avatar_tint', name='Verdant', models={'Endo'}, parts={'body'},
-        vector={PrimaryColor={R=0.20, G=0.65, B=0.30, A=1}}, draft=true},
+    {id='tint-mint', version=1, kind='avatar_tint', name='AimMod Mint', models={'Meso', 'Endo'}, parts={'body'},
+        vector={MetalPaint=rgba(0.02, 0.6, 0.3), TriangularPaint=rgba(0.86, 0.9, 0.88), RawMetal=rgba(0.3, 0.34, 0.32), Silicone=rgba(0.02, 0.025, 0.022)},
+        scalar={Roughness=0.35, Metallic=0.1}},
+    {id='tint-carbon', version=1, kind='avatar_tint', name='Carbon', models={'Meso', 'Endo'}, parts={'body'},
+        vector={MetalPaint=rgba(0.012, 0.013, 0.015), TriangularPaint=rgba(0.06, 0.065, 0.07), RawMetal=rgba(0.1, 0.11, 0.12), Silicone=rgba(0.005, 0.005, 0.006)},
+        scalar={Roughness=0.6, Metallic=0.2}},
+    {id='tint-ivory', version=1, kind='avatar_tint', name='Ivory', models={'Meso', 'Endo'}, parts={'body'},
+        vector={MetalPaint=rgba(0.78, 0.74, 0.64), TriangularPaint=rgba(0.3, 0.27, 0.22), RawMetal=rgba(0.55, 0.52, 0.46), Silicone=rgba(0.05, 0.045, 0.04)},
+        scalar={Roughness=0.45, Metallic=0}},
+    {id='tint-crimson', version=1, kind='avatar_tint', name='Crimson', models={'Meso', 'Endo'}, parts={'body'},
+        vector={MetalPaint=rgba(0.02, 0.02, 0.022), TriangularPaint=rgba(0.55, 0.02, 0.035), RawMetal=rgba(0.35, 0.33, 0.33), Silicone=rgba(0.01, 0.01, 0.01)},
+        scalar={Roughness=0.4, Metallic=0.1}},
+    {id='tint-gold', version=1, kind='avatar_tint', name='Gold', models={'Meso', 'Endo'}, parts={'body'},
+        vector={MetalPaint=rgba(0.85, 0.58, 0.18), TriangularPaint=rgba(0.05, 0.045, 0.04), RawMetal=rgba(0.95, 0.75, 0.4), Silicone=rgba(0.02, 0.018, 0.015)},
+        scalar={Roughness=0.25, Metallic=0.9}},
+    {id='tint-chrome', version=1, kind='avatar_tint', name='Chrome', models={'Meso', 'Endo'}, parts={'body'},
+        vector={MetalPaint=rgba(0.8, 0.82, 0.85), TriangularPaint=rgba(0.3, 0.32, 0.36), RawMetal=rgba(0.9, 0.92, 0.95), Silicone=rgba(0.02, 0.02, 0.022)},
+        scalar={Roughness=0.12, Metallic=1}},
+    {id='finish-mint', version=1, kind='weapon_finish', name='AimMod Mint', parts={'weapon'},
+        vector={AccentColor=rgba(0.02, 0.78, 0.36, 0), Emissive=rgba(0.02, 0.62, 0.29, 0)}},
+    {id='finish-crimson', version=1, kind='weapon_finish', name='Crimson', parts={'weapon'},
+        vector={AccentColor=rgba(0.85, 0.02, 0.06, 0), Emissive=rgba(0.85, 0.02, 0.06, 0)}},
+    {id='finish-gold', version=1, kind='weapon_finish', name='Gold', parts={'weapon'},
+        vector={AccentColor=rgba(1, 0.62, 0.12, 0), Emissive=rgba(0.85, 0.5, 0.08, 0)}},
+    {id='finish-ice', version=1, kind='weapon_finish', name='Ice', parts={'weapon'},
+        vector={AccentColor=rgba(0.2, 0.62, 1, 0), Emissive=rgba(0.16, 0.5, 0.85, 0)}},
+    {id='finish-violet', version=1, kind='weapon_finish', name='Violet', parts={'weapon'},
+        vector={AccentColor=rgba(0.45, 0.15, 1, 0), Emissive=rgba(0.45, 0.15, 1, 0)}},
+    {id='finish-ghost', version=1, kind='weapon_finish', name='Ghost', parts={'weapon'},
+        vector={AccentColor=rgba(0.75, 0.78, 0.8, 0), Emissive=rgba(0.55, 0.58, 0.6, 0)}},
     {id='meso-pattern-stripes', version=1, kind='avatar_pattern', name='Racing stripes', models={'Meso'}, parts={'body'},
         pak={file='AimModCosmetics-1.pak', sha256=''}, draft=true},
-    {id='weapon-finish-gunmetal', version=1, kind='weapon_finish', name='Gunmetal', parts={'weapon'},
-        vector={PrimaryColor={R=0.30, G=0.32, B=0.35, A=1}}, scalar={Metallic=1.0}, draft=true},
-    {id='weapon-finish-sand', version=1, kind='weapon_finish', name='Sand', parts={'weapon'},
-        vector={PrimaryColor={R=0.76, G=0.66, B=0.48, A=1}}, draft=true},
-    {id='weapon-finish-aimmod', version=1, kind='weapon_finish', name='AimMod colours', parts={'weapon', 'arms'},
-        vector={PrimaryColor={R=0.98, G=0.45, B=0.10, A=1}}, draft=true},
     -- Proof accessories: rigid head items, no cloth or physics.
     {id='accessory-halo', version=1, kind='accessory', name='Halo', models={'Meso', 'Endo'}, parts={'body'},
         attach='head', pak={file='AimModCosmetics-1.pak', sha256=''}, draft=true},

@@ -116,7 +116,7 @@ assert(changes() == 0, 'pak item without a verified pak')
 local unknown = new('cosmetics=1\navatar_item=someone-elses-model\n')
 mock.calls = {}; unknown.tick()
 assert(changes() == 0, 'unknown catalog id')
-local drafts = Apply.new(Util.parseConfig('cosmetics=1\navatar_item=meso-tint-ember\n'), function() end,
+local drafts = Apply.new(Util.parseConfig('cosmetics=1\navatar_item=meso-pattern-stripes\n'), function() end,
     {now=function() return clock end, readMarker=function() return markerText end})
 mock.calls = {}; drafts.tick()
 assert(changes() == 0, 'shipped drafts need allow_drafts')

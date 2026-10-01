@@ -129,7 +129,7 @@ sealed partial class MultiplayerService
             return new
             {
                 available = catalog.Available, problem = catalog.Problem, version = catalog.Version, show = cosmeticView,
-                items = catalog.Pickable.Select(i => new { i.Id, i.Version, i.Kind, i.Name, i.Models, i.Color, equipped = mine.Contains(i.Id) }),
+                items = catalog.Pickable.Select(i => new { i.Id, i.Version, i.Kind, i.Name, i.Models, i.Color, i.Swatch, i.Shine, equipped = mine.Contains(i.Id) }),
                 unavailable = catalog.Items.Count(i => !i.Draft) - catalog.Pickable.Count,
             };
         }

@@ -9,9 +9,25 @@ namespace AimMod.InGame.Multiplayer;
 sealed record CosmeticRef(string Id, int Version);
 
 // One curated catalog item (in-game/docs/cosmetics.md, CosmeticsCatalog.lua).
-// Color is the item's PrimaryColor (0..1 RGB) for the 2D preview, when it has one.
+// Color is the item's main colour (linear 0..1 RGB) for the 2D preview, when it has one.
 sealed record CosmeticItem(string Id, int Version, string Kind, string Name, IReadOnlyList<string> Models, IReadOnlyList<string> Parts, double[]? Color, string? Pak, bool Draft,
-    IReadOnlyDictionary<string, double[]>? Vectors = null, IReadOnlyDictionary<string, double>? Scalars = null);
+    IReadOnlyDictionary<string, double[]>? Vectors = null, IReadOnlyDictionary<string, double>? Scalars = null)
+{
+    // Card swatch, main colour first: body paint, panels and bare metal, or a
+    // weapon's accent and glow. Material colours are linear; the page gets sRGB hex.
+    static readonly string[][] SwatchParams = [["MetalPaint", "AccentColor", "PrimaryColor", "Color"], ["TriangularPaint", "Emissive"], ["RawMetal"]];
+    public IReadOnlyList<string> Swatch => SwatchParams
+        .Select(names => names.Select(n => Vectors?.GetValueOrDefault(n)).FirstOrDefault(v => v is { Length: >= 3 }))
+        .OfType<double[]>().Select(Hex).ToArray();
+    // How metallic the finish is (0..1), for the swatch's highlight.
+    public double Shine => Math.Clamp(Scalars?.GetValueOrDefault("Metallic") ?? 0, 0, 1);
+    static string Hex(double[] linear) => "#" + string.Concat(linear.Take(3).Select(c =>
+    {
+        c = Math.Clamp(c, 0, 1);
+        var s = c <= 0.0031308 ? c * 12.92 : 1.055 * Math.Pow(c, 1 / 2.4) - 0.055;
+        return ((int)Math.Round(s * 255)).ToString("x2", System.Globalization.CultureInfo.InvariantCulture);
+    }));
+}
 
 // The curated cosmetics catalog AimMod ships (catalog.json), used only when it
 // matches its manifest (catalog-manifest.json: file sizes and SHA-256). Players
@@ -109,10 +125,12 @@ sealed partial class CosmeticsCatalog
                 if (p.Value.ValueKind != JsonValueKind.Object) return null;
                 var c = new double[4];
                 for (var i = 0; i < 4; i++) { if (!p.Value.TryGetProperty("RGBA"[i].ToString(), out var x) || !InRange(x, 0, 1)) return null; c[i] = x.GetDouble(); }
-                hasParameters = true; vectors[p.Name] = c; if (p.Name == "PrimaryColor") color = c[..3];
+                hasParameters = true; vectors[p.Name] = c;
             }
         if (e.TryGetProperty("scalar", out var scalar) && scalar.ValueKind == JsonValueKind.Object)
             foreach (var p in scalar.EnumerateObject()) { if (!InRange(p.Value, -10, 10)) return null; hasParameters = true; scalars[p.Name] = p.Value.GetDouble(); }
+        foreach (var main in new[] { "MetalPaint", "AccentColor", "PrimaryColor", "Color" })
+            if (color is null && vectors.TryGetValue(main, out var mc)) color = mc[..3];
         string? pak = e.TryGetProperty("pak", out var pk) && pk.ValueKind == JsonValueKind.Object && pk.TryGetProperty("file", out var file) && file.ValueKind == JsonValueKind.String ? file.GetString() : null;
         if (rules.NeedsPak && pak is null) return null;
         if (!rules.NeedsPak && !hasParameters) return null;
