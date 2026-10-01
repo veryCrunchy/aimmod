@@ -550,6 +550,30 @@ namespace aimmod
         if (c.action == GameCommand::Action::CaptureThumbnail && !m_canCapture)
             return Answer(c.sequence, "error", "unsupported", "Thumbnail capture is unavailable in this game version.");
         if (m_capture) return Answer(c.sequence, "error", "busy", "A thumbnail capture is running.");
+        if (c.action == GameCommand::Action::EndRun)
+        {
+            // Lobby time limit: end the freeplay match run cleanly by reloading
+            // the scenario (stop: without playing; reset: playing again).
+            if (!m_canLoad) return Answer(c.sequence, "error", "unsupported", "Ending a run is unavailable in this game version.");
+            if (current != c.scenario) return Answer(c.sequence, "error", "not-current", "\"" + c.scenario + "\" is not the scenario being played.");
+            ResetOverrides("run ended");
+            if (m_seeding) Log("match seed: off (run ended)");
+            m_seeding.reset();
+            m_pending = Pending{c, now + 30.0};
+            m_pending->issued = now;
+            if (c.reset && !SetPlayType(manager, GameCommand::Mode::FreePlay))
+            {
+                m_pending.reset();
+                return Answer(c.sequence, "error", "end-failed", "The game did not accept the play type.");
+            }
+            if (!StartScenario(c.scenario, c.reset))
+            {
+                m_pending.reset();
+                return Answer(c.sequence, "error", "end-failed", "The game did not reload \"" + c.scenario + "\".");
+            }
+            m_pending->started = true;
+            return Answer(c.sequence, "accepted", "ending", "");
+        }
         if (load && current == c.scenario) return Answer(c.sequence, "done", "already-loaded", "");
         if (m_refreshing) return Answer(c.sequence, "error", "busy", "Scenarios are being refreshed. Try again in a moment.");
         if (!ScenarioKnown(manager, c.scenario))
@@ -640,6 +664,17 @@ namespace aimmod
             m_pending.reset();
             return Answer(seq, "error", "timeout", "\"" + c.scenario + "\" did not finish loading.");
         }
+        if (c.action == GameCommand::Action::EndRun && !p.sawLoading)
+        {
+            if (loading || current != c.scenario) p.sawLoading = true;
+            else if (now - p.issued > 5.0)
+            {
+                const auto seq = c.sequence;
+                m_pending.reset();
+                return Answer(seq, "error", "end-failed", "The game did not reload the scenario.");
+            }
+            return;
+        }
         if (current != c.scenario || loading)
         {
             p.loadedAt = -1;
@@ -652,6 +687,13 @@ namespace aimmod
         {
             m_pending.reset();
             return Answer(seq, "done", "loaded", "");
+        }
+        if (c.action == GameCommand::Action::EndRun)
+        {
+            const bool reset = c.reset;
+            m_pending.reset();
+            if (inChallenge) return Answer(seq, "error", "mode-mismatch", "The game started a challenge instead of freeplay.");
+            return Answer(seq, "done", reset ? "reset" : "stopped", "");
         }
         if (c.mode == GameCommand::Mode::Challenge)
         {

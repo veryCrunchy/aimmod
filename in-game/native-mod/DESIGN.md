@@ -125,7 +125,15 @@ All under `%LOCALAPPDATA%\AimMod\KovaaksNative\`:
 - `live-overlay.json`: `{"version":1,"active":..,"paused":..,...}` exactly
   as `Telemetry.lua` wrote it; replaced atomically; rewritten on change and
   at least once per second while the game runs; read by
-  `LiveOverlayState.cs` (2 s freshness) and the Lua HUD.
+  `LiveOverlayState.cs` (2 s freshness) and the Lua HUD. Freeplay runs of
+  `AimMod Match - ` scenarios (no challenge attempt) publish too, with
+  `"mode":"freeplay"` and an `fp-<unix>-<pid>-<n>` id that changes on every
+  reload: `seconds` is wall time since the run began minus pauses; shots,
+  hits, kills and damage are the indicator values or the local counters
+  since the run began; `score` only when the indicator has one. Nothing is
+  journalled or recorded for them.
+- `core-scene.json`: rewritten on every change (20 Hz polls) and at least
+  once a second; `inChallenge`, `running`, `loading`, `paused` are current.
 - `replays/<id>.amreplay`: replay format 2 (below), written once when an
   attempt completes (`.partial` then rename). The replay id equals the journal
   id. `ReplayCatalog.cs` reads format 2 and the older JSON-lines format 1
@@ -334,7 +342,16 @@ seed	<0..4294967295>                          (start; freeplay, or challenge of 
 width	<64..3840> / height	<64..2160>       (capture-thumbnail)
 out	<name>.png                              (capture-thumbnail; plain file name)
 view1..view4	<x>,<y>,<z>,<pitch>,<yaw>,<fov> (capture-thumbnail; 1-4, in order)
+then	stop | reset                            (end-run; default stop)
 ```
+
+`end-run` (capability `load`; `scenario` must be the current `AimMod Match - `
+scenario, played in freeplay): ends a lobby round at its time limit. It
+resets overrides and the match seed, then reloads the scenario through the
+browser path, without playing (`stop`) or playing again in freeplay
+(`reset`). Answered `accepted ending`, then `done stopped|reset` once the
+reload finished, or `end-failed` when no reload began within 5 s. Refused
+during a challenge and for any other scenario (`not-a-match`, `not-current`).
 
 `capture-thumbnail` (capability `capture`, also `refresh-scenarios` and
 `action` list above): refused during a challenge; loads the scenario in

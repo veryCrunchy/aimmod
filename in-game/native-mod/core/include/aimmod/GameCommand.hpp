@@ -13,7 +13,7 @@ namespace aimmod
 {
     struct GameCommand
     {
-        enum class Action { LoadScenario, StartScenario, ResetOverrides, RefreshScenarios, CaptureThumbnail };
+        enum class Action { LoadScenario, StartScenario, ResetOverrides, RefreshScenarios, CaptureThumbnail, EndRun };
         enum class Mode { FreePlay, Challenge };
         std::uint64_t sequence{};
         Action action{};
@@ -24,6 +24,9 @@ namespace aimmod
         // start-scenario: shared randomness for match players (freeplay, or
         // challenge only for generated "AimMod Match - " scenarios).
         std::optional<std::uint32_t> seed;
+        // end-run (freeplay AimMod match scenarios only): reload the scenario
+        // without playing (stop, default) or restart it in freeplay (reset).
+        bool reset{};
         // capture-thumbnail: 1-4 camera views, PNG size, output file name.
         struct View
         {

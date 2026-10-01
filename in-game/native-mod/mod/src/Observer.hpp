@@ -73,6 +73,19 @@ namespace aimmod
         void UpdateMeasurements(bool running, double elapsed, double remaining, const game::Getter::ValueElseResult& score);
         void Handle(const std::vector<LifecycleEvent>& events);
         void PublishLive(const PollSample& sample, bool running);
+        // Freeplay runs of AimMod match scenarios (lobby scoring and time
+        // limits): a live feed without a challenge attempt.
+        void UpdateFreeplay(const PollSample& sample, UObject* manager, double now);
+        struct FreeplayRun
+        {
+            std::string id, scenario;
+            std::uint64_t key{};
+            double started{}, paused{}, last{};
+            game::LocalCounters base;
+            LiveSnapshot live;
+        };
+        std::optional<FreeplayRun> m_freeplay;
+        std::uint32_t m_freeplayRuns{};
         void PublishScene(const PollSample& sample, UObject* manager);
         void LogCompatibility(const char* reason);
         bool OnGameThread() const;

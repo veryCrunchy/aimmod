@@ -629,6 +629,24 @@ static void WriteSamples(const std::filesystem::path& dir)
 
 #include "CosmeticsTests.inl"
 
+static void EndRunChecks()
+{
+    auto parse = [](const std::string& body) { return ParseGameCommand("AIMMOD_CORE_COMMAND_1\nseq\t9\n" + body); };
+    auto stop = parse("action\tend-run\nscenario\tAimMod Match - Synthetic - 0a1b2c3d\n");
+    CHECK(std::holds_alternative<GameCommand>(stop) && std::get<GameCommand>(stop).action == GameCommand::Action::EndRun &&
+              !std::get<GameCommand>(stop).reset && std::string(ActionName(GameCommand::Action::EndRun)) == "end-run",
+          "end-run stops by default");
+    auto reset = parse("action\tend-run\nscenario\tAimMod Match - Synthetic - 0a1b2c3d\nthen\treset\n");
+    CHECK(std::holds_alternative<GameCommand>(reset) && std::get<GameCommand>(reset).reset, "end-run reset");
+    auto other = parse("action\tend-run\nscenario\tVT Pasu\n");
+    CHECK(std::holds_alternative<CommandError>(other) && std::get<CommandError>(other).code == "not-a-match", "end-run only for match scenarios");
+    CHECK(std::holds_alternative<CommandError>(parse("action\tend-run\nscenario\tAimMod Match - X - 0a1b2c3d\nthen\tquit\n")) &&
+              std::holds_alternative<CommandError>(parse("action\tend-run\nscenario\tAimMod Match - X - 0a1b2c3d\nmode\tchallenge\n")) &&
+              std::holds_alternative<CommandError>(parse("action\tload-scenario\nscenario\tX\nthen\treset\n")) &&
+              std::holds_alternative<CommandError>(parse("action\tend-run\n")),
+          "end-run fields validated");
+}
+
 static void MatchPlayChecks()
 {
     const std::string good = "AIMMOD_PLAYSTATE_1\t7\nmatch\tAimMod Match - Synthetic - 1\nhealth\t62.5\t100\nalive\t1\nrespawnAt\t0\nprotected\t0\n"
@@ -691,6 +709,7 @@ int main(int argc, char** argv)
     Backoff();
     LifecycleChecks();
     MatchPlayChecks();
+    EndRunChecks();
     cosmetics_checks::Run();
     std::printf("%d AimModCore checks, %d failed.\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
