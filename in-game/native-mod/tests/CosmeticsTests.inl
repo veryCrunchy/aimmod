@@ -104,28 +104,36 @@ namespace cosmetics_checks
 
     void CatalogChecks()
     {
-        // The shipped catalog is valid, and every item is a draft until probed.
+        // The shipped catalog is valid: parameter items are pickable today,
+        // pak items stay drafts until the pak ships.
         std::string error;
         auto shipped = ParseCatalog(ReadText(std::filesystem::path(AIMMOD_SOURCE_DIR) / "cosmetics" / "catalog.json"), &error);
-        CHECK(shipped && shipped->errors.empty() && shipped->version == 1, "shipped catalog parses");
+        CHECK(shipped && shipped->errors.empty() && shipped->version == 2, "shipped catalog parses");
         std::vector<std::string> errors;
         Index byId = BuildIndex(shipped ? shipped->items : std::vector<Item>{}, errors);
-        CHECK(errors.empty() && byId.size() == 11 && shipped && byId.size() == shipped->items.size(), "shipped catalog validates");
-        bool drafts = true, freeModels = true;
+        CHECK(errors.empty() && byId.size() == 16 && shipped && byId.size() == shipped->items.size(), "shipped catalog validates");
+        bool pakDrafts = true, freeModels = true;
         for (const auto& [id, item] : byId)
         {
-            drafts &= item.draft;
+            if (item.pak) pakDrafts &= item.draft;
             for (const std::string& m : item.models) freeModels &= m == "Meso" || m == "Endo";
         }
-        CHECK(drafts && freeModels, "every shipped item is a draft on free base models");
-        CHECK(Pickable(byId).empty(), "drafts are not offered in the picker");
+        CHECK(pakDrafts && freeModels, "pak items are drafts; every item is on free base models");
+        const auto pickable = Pickable(byId);
+        CHECK(pickable.size() == 12 && std::none_of(pickable.begin(), pickable.end(), [](const Item* i) { return i->draft || i->pak; }),
+              "the parameter tints and finishes are offered in the picker, drafts are not");
 
         ResolveOptions none, drafted{true, {}}, paks{true, {"AimModCosmetics-1.pak"}};
         CHECK(!Resolve(byId, "not-an-item", none) && !Resolve(byId, "", none), "unknown and empty ids fall back");
-        CHECK(!Resolve(byId, "meso-tint-ember", none), "draft hidden by default");
-        CHECK(Resolve(byId, "meso-tint-ember", drafted) && Resolve(byId, "meso-tint-ember", drafted)->id == "meso-tint-ember", "drafts for team tests");
+        CHECK(Resolve(byId, "tint-mint", none) && Resolve(byId, "finish-gold", none), "shipped parameter items resolve");
+        CHECK(!Resolve(byId, "meso-pattern-stripes", drafted), "draft pak item needs a verified pak");
+        CHECK(!Resolve(byId, "accessory-visor", none), "draft hidden by default");
         CHECK(!Resolve(byId, "accessory-visor", drafted), "pak item needs a verified pak");
         CHECK(Resolve(byId, "accessory-visor", paks) != nullptr, "pak item with a verified pak");
+        Plan meso = PlanAvatar(byId, {{"tint-gold", 1}}, none, "Meso"), endo = PlanAvatar(byId, {{"tint-gold", 1}}, none, "Endo");
+        CHECK(meso.body && meso.body->id == "tint-gold" && endo.body && endo.body->id == "tint-gold", "tints fit both free models");
+        Plan own = PlanLocal(byId, {{"finish-ice", 1}}, none, "Rifle");
+        CHECK(own.weapon && own.weapon->id == "finish-ice" && !own.arms, "weapon finishes dress the own weapon only");
 
         CHECK(!Validate(Good()), "good item");
         auto bad = [&](auto change, const char* why) {

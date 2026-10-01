@@ -61,4 +61,41 @@ namespace aimmod
 
     // cosmetics-preview-frame.txt: "v=1\nseq=<n>\nfile=<name>\nwidth=<w>\nheight=<h>\n".
     std::string FormatPreviewFrame(std::uint64_t seq, std::string_view file, int width, int height);
+
+    // ------------------------------------------------------- frame composition
+    //
+    // AimModCore captures the stage twice at PreviewSupersample x the output
+    // size: once as final colour, once as world normals. Nothing but the stage
+    // is rendered, so every pixel whose normal equals the corner pixels' is
+    // empty background. ComposePreview turns the two captures into the frame
+    // the page shows:
+    //   - the character is cut out with that mask (no dependence on how dark
+    //     the map's sky or fog is) and placed on a studio backdrop in the
+    //     page's colours, with a soft floor shadow;
+    //   - its brightness is levelled so the brightest few percent of its
+    //     pixels sit near white (bounded gain, so a dark material stays dark);
+    //   - it is framed on its own silhouette: centred, with a margin, scaled
+    //     on its height so turning it does not zoom;
+    //   - the result is box-filtered down to `size` (anti-aliased edges).
+    struct PreviewPixels
+    {
+        int width{}, height{};
+        std::vector<std::uint8_t> rgba; // 8-bit sRGB, row-major, 4 bytes per pixel
+        bool Valid() const { return width > 0 && height > 0 && rgba.size() == static_cast<std::size_t>(width) * height * 4; }
+    };
+    struct PreviewComposition
+    {
+        PreviewPixels image;
+        bool empty{true};       // no character pixels: backdrop only
+        double gain{1};         // brightness levelling applied
+        double coverage{};      // share of capture pixels that are character
+        int left{}, top{}, right{}, bottom{}; // character bounds in the capture
+    };
+    inline constexpr int PreviewSize = 384, PreviewSupersample = 2;
+    inline constexpr std::uint8_t PreviewBackdropCentre[3] = {0x20, 0x2d, 0x28}, PreviewBackdropEdge[3] = {0x12, 0x1a, 0x17};
+    PreviewComposition ComposePreview(const PreviewPixels& color, const PreviewPixels& normals, int size);
+
+    // Camera distance (cm) that fits a character of `halfHeight` and
+    // `halfWidth` into a square view with `fovDegrees`, with room to turn.
+    double PreviewCameraDistance(double halfHeight, double halfWidth, double fovDegrees);
 } // namespace aimmod

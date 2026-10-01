@@ -1,27 +1,40 @@
 package.path = '../Scripts/?.lua;' .. package.path
 local Cat = require('CosmeticsCatalog')
 
--- The shipped catalog is structurally valid, and every item is still a draft
--- until the probe confirms the parameter names.
+-- The shipped catalog is structurally valid. Parameter items use only the
+-- parameter names the probe found; pak items stay drafts until the pak ships.
+local probed = {
+    body = {vector={MetalPaint=true, TriangularPaint=true, RawMetal=true, Silicone=true}, scalar={Roughness=true, Metallic=true}},
+    weapon = {vector={AccentColor=true, Emissive=true}, scalar={}},
+}
 local byId, errors = Cat.index()
 assert(#errors == 0, table.concat(errors, '; '))
-local count = 0
+local count, ready = 0, 0
 for _, item in pairs(byId) do
     count = count + 1
-    assert(item.draft, item.id .. ' must stay a draft until probed')
+    if item.pak then assert(item.draft, item.id .. ': pak items stay drafts until the pak ships') end
+    if not item.draft then
+        ready = ready + 1
+        for _, part in ipairs(item.parts) do
+            for name in pairs(item.vector or {}) do assert(probed[part].vector[name], item.id .. ': ' .. name .. ' is not a probed ' .. part .. ' parameter') end
+            for name in pairs(item.scalar or {}) do assert(probed[part].scalar[name], item.id .. ': ' .. name .. ' is not a probed ' .. part .. ' parameter') end
+        end
+    end
     for _, model in ipairs(item.models or {}) do
         assert(model == 'Meso' or model == 'Endo', item.id .. ': base models must be free Default-pack models')
     end
     for _, field in ipairs({'file', 'path', 'url', 'texture'}) do assert(item[field] == nil, item.id .. ' references ' .. field) end
 end
 assert(count == #Cat.items)
-assert(#Cat.pickable(byId) == 0, 'drafts are not offered in the picker')
+assert(ready >= 6 and #Cat.pickable(byId) == ready, 'parameter items are offered in the picker, drafts are not')
 
 -- Resolution: unknown ids, drafts and unverified pak items fall back.
 assert(Cat.resolve(byId, 'not-an-item') == nil)
 assert(Cat.resolve(byId, '') == nil and Cat.resolve(byId, nil) == nil)
-assert(Cat.resolve(byId, 'meso-tint-ember') == nil, 'draft hidden by default')
-assert(Cat.resolve(byId, 'meso-tint-ember', {allowDrafts=true}).id == 'meso-tint-ember')
+assert(Cat.resolve(byId, 'tint-mint').id == 'tint-mint', 'a shipped parameter item resolves')
+local drafts = Cat.index({{id='d-1', version=1, kind='avatar_tint', models={'Meso'}, parts={'body'}, vector={MetalPaint={R=1, G=0, B=0, A=1}}, draft=true}})
+assert(Cat.resolve(drafts, 'd-1') == nil, 'draft hidden by default')
+assert(Cat.resolve(drafts, 'd-1', {allowDrafts=true}).id == 'd-1')
 assert(Cat.resolve(byId, 'accessory-visor', {allowDrafts=true}) == nil, 'pak item needs a verified pak')
 assert(Cat.resolve(byId, 'accessory-visor', {allowDrafts=true, verifiedPaks={['AimModCosmetics-1.pak']=true}}).id == 'accessory-visor')
 

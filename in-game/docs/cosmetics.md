@@ -264,7 +264,7 @@ exactly as trusted as the AimMod install that ships it.
 
 **Producing it.**
 
-1. **Catalog source:** `in-game/cosmetics/catalog.json`. `catalog.test.cjs` keeps it in sync with the Lua testbed copy, and keeps every item a draft until the probe confirms the parameter names.
+1. **Catalog source:** `in-game/cosmetics/catalog.json`. `catalog.test.cjs` keeps it in sync with the Lua testbed copy and the AimModCore test copy (`native-mod/cosmetics/catalog.json`). It allows only probed parameter names, and keeps pak items drafts until their pak ships.
 2. **Paks:** the team builds them (cooking needs the UE editor). They are not stored in the repository.
 3. **Package build:** `Build-AimModPackage.ps1 [-CosmeticsPaks <folder>]` runs `in-game/cosmetics/New-CosmeticsManifest.ps1`. That script:
    - validates the catalog (the same rules as `Catalog.validate` and the service's `Cosmetics.cs`);
@@ -475,9 +475,57 @@ The Cosmetics page shows your own character, live, while you customise it. Dragg
 |---|---|---|
 | 1 | Cosmetics page (`multiplayer.js`) | While the page is open and the workspace visible, it POSTs `/cosmetic-preview {open, yaw, item?}`: every second, every 250 ms for 2 s after an interaction, and at most every 100 ms while dragging. It sends `{open:false}` when the page closes or the workspace hides. |
 | 2 | Service (`MultiplayerService.CosmeticPreview.cs`) | It writes `cosmetics-preview.txt`. The look comes from your chosen avatar profile. Parameters come from equipped or tried-on **catalog** body items without paks, resolved by id. The request expires in 5 s, and `seq` bumps on every change. |
-| 3 | AimModCore (`CosmeticsPreview.cpp`) | It reads the request every 0.2 s on the game thread. If `DecidePreview` allows it (not in a challenge, benchmark or the editor, and not loading), it spawns the game's preview stage, dresses it, turns `Meshes`, and captures on change only. |
-| 4 | AimModCore | It exports a 384×384 RGBA8 render target as `cosmetics-preview/preview-0.png` or `preview-1.png` (alternating), then atomically writes `cosmetics-preview-frame.txt` (`v=1, seq, file, width, height`). |
+| 3 | AimModCore (`CosmeticsPreview.cpp`) | It reads the request every 0.2 s on the game thread. If `DecidePreview` allows it (not in a challenge, benchmark or the editor, and not loading), it spawns the game's preview stage and dresses its skeletal mesh with the requested look (below). It turns `Meshes` and captures on change only. |
+| 4 | AimModCore | It captures a 768×768 RGBA8 render target twice, as final colour and as world normals. `ComposePreview` (core, unit-tested) builds the 384×384 frame from the two. AimModCore writes it through WIC as `cosmetics-preview/preview-0.png` or `preview-1.png` (alternating), then atomically writes `cosmetics-preview-frame.txt` (`v=1, seq, file, width, height`). |
 | 5 | Service | It serves the newest PNG at `/cosmetic-preview.png`, and the POST answer carries its frame number, so the page swaps `<img src>` only on a new frame. |
+
+**Dressing the stage.**
+
+- **The look:** the game loads its Default model and skin packs only for the
+  character menu, so AimModCore loads them itself (game assets at fixed paths,
+  through the asset registry). It finds the requested model and skin by name
+  there, so a DLC look is never found. It sets the skin's mesh, the model's
+  animation blueprint and the skin's materials straight on the stage's
+  `SkeletalMesh`. One animation evaluation gives a standing pose, even while
+  the game is paused.
+- **Hidden:** the shape models (cylinder, sphere, cube), the weapons, the wall
+  and the floor.
+- **Catalog parameters:** set on fresh dynamic instances of the look's own
+  materials.
+
+**Light and exposure.** The first prototype's frame was almost black. It had
+the stage's only key light (its directional light) switched off, and a scene
+capture keeps no eye-adaptation history, so auto exposure started from nothing.
+Now:
+
+- **Fixed exposure:** the capture's post-process pins the minimum and maximum
+  brightness to one value: luminance 1, or EV100 3 when the project extends
+  the luminance range (detected from the negative defaults). Vignette, grain,
+  motion blur and lens flares are off, and bloom is low.
+- **Own rig:** three point lights, in candela converted to each light's unit.
+  The key light sits camera-left and above, the fill camera-right and low, and
+  a mint rim light behind. They reach 900 cm and cast no shadows. A light
+  whose reach can't be set is switched off. When every rig light accepts it,
+  rig and character move to lighting channel 1, so the map's lights don't
+  change the character.
+
+**Framing.** The camera keeps the stage camera's front view at a 30 degree
+field of view. It moves back until the character's bounds fit with room to
+turn (`PreviewCameraDistance`).
+
+**Composition (`ComposePreview`).**
+
+1. **Cut-out:** with only the stage rendered, every pixel whose normal matches
+   the corners' is background. The mask doesn't depend on the map's sky, fog
+   or bloom.
+2. **Backdrop:** the page's dark green-grey (`#202d28` centre to `#121a17`
+   edge), with a soft floor shadow under the feet.
+3. **Brightness:** levelled so that the 97th percentile of the character's
+   luminance sits near 0.8. The gain is bounded to 0.7 to 5, so dark finishes
+   stay dark.
+4. **Framing:** centred on the silhouette and scaled on its height with a
+   margin, so turning doesn't zoom.
+5. **Downsample:** 2×2 supersampled to 384×384, which anti-aliases the edges.
 
 **Request format (`cosmetics-preview.txt`):**
 
@@ -498,14 +546,19 @@ scalar=<Param>:v         up to 8, -10..10
 
 - **Placement:** the stage spawns 5 km above the origin with collision off.
 - **Capture:** its capture writes to an **AimMod render target** (never the game's shared one) and renders only the stage's own components (`PRM_UseShowOnlyList`).
-- **Lighting:** the stage's directional light is switched off, so it can't light the map. Its point lights can't reach 5 km down, and its meshes cast no shadows.
+- **Lighting:** the stage's directional light is switched off, so it can't light the map. The rig's point lights reach 900 cm, far short of the 5 km down to the map, and nothing on the stage casts a shadow.
 - **Looks:** only names from the free Default packs are applied, even here. A DLC look is never shown.
 - **Teardown:** the stage and render target are destroyed as soon as the request is stale or the gate closes. Unknown game state counts as "no".
 
 **Cost.**
 
 - **Idle:** with the page open but no changes, nothing is captured or exported.
-- **Per change:** one scene capture plus one synchronous read-back and PNG encode (384², roughly 100–250 KB). Rotation is capped at 10 captures a second; a look change triggers re-captures at +0.35 s and +1.2 s while meshes stream in.
+- **Per change:**
+  - two scene captures and two synchronous read-backs at 768²;
+  - two PNG decodes, the composition, and one PNG encode at 384².
+
+  Rotation is capped at about 6 frames a second. A look change triggers
+  re-captures at +0.35 s and +1.2 s while meshes stream in.
 - **Read-back stall:** expect a few milliseconds per export; **measure live**.
 - **When it runs:** only while the page is open, usually from the pause menu.
 
@@ -592,29 +645,48 @@ The mod (`in-game/native-mod/mod/src`) gains:
 
 ## First curated catalog
 
-The draft entries in `CosmeticsCatalog.lua` are:
+The first set works today. It is material parameters only, with no pak, and
+uses the names the probe found:
+
+- **Meso and Endo body and head slots** (all `MM_BaseDummy`): vectors
+  `MetalPaint` (body paint), `TriangularPaint` (panels), `RawMetal` and
+  `Silicone`; scalars `Roughness` and `Metallic`.
+- **Viewmodel weapons** (all `M_SingleAssetMaster`): vectors `AccentColor` and
+  `Emissive`. Their base colour is a texture, so finishes recolour the accent
+  and its glow.
+
+Colours are linear. `catalog.test.cjs` checks that every non-draft item uses
+only these names. It also checks that a weapon's emissive is never brighter
+than the game's own orange accent (no beacons).
+
+| id | kind | look |
+|---|---|---|
+| `tint-mint` | avatar tint | AimMod mint paint, off-white panels, satin |
+| `tint-carbon` | avatar tint | near-black paint and panels, matte |
+| `tint-ivory` | avatar tint | warm ivory, taupe panels |
+| `tint-crimson` | avatar tint | black body, crimson panels |
+| `tint-gold` | avatar tint | metallic gold, black panels |
+| `tint-chrome` | avatar tint | mirror chrome, gunmetal panels |
+| `finish-mint`, `finish-crimson`, `finish-gold`, `finish-ice`, `finish-violet`, `finish-ghost` | weapon finish | accent and glow colour on your own weapon |
+
+Tints fit both free models (Meso and Endo). Finishes dress your own selected
+weapon in AimMod matches only. The Cosmetics page draws each card as a swatch
+from the item's own colours: the service sends them as sRGB hex with the
+finish's `Metallic`.
+
+Still drafts:
 
 | id | kind | needs |
 |---|---|---|
-| `meso-tint-ember`, `meso-tint-glacier`, `meso-tint-graphite` | avatar tint | Meso body/head vector (and scalar) parameter names |
-| `endo-tint-verdant` | avatar tint | Endo parameter names |
-| `meso-pattern-stripes` | avatar pattern | AimMod pak with a Meso mask texture, plus the mask parameter name |
-| `weapon-finish-gunmetal`, `weapon-finish-sand`, `weapon-finish-aimmod` | weapon finish | weapon and arms material parameter names, for the common weapons |
-| `accessory-halo`, `accessory-visor`, `accessory-headband` | accessory | AimMod pak with the mesh and our material, plus the Meso and Endo head bone names and per-model offsets |
+| `meso-pattern-stripes` | avatar pattern | an AimMod pak with a Meso mask texture, plus the mask parameter name |
+| `accessory-halo`, `accessory-visor`, `accessory-headband` | accessory | an AimMod pak with the mesh and our material, plus the Meso and Endo head bone names and per-model offsets |
 
-To make them real:
+For the pattern and accessories:
 
-1. From the probe:
-   - **Character parameters:** vector and scalar parameter names on the Meso and Endo `CharacterMesh0` slots, and which slot is body or head.
-   - **Weapon parameters:** weapon and arms parameter names for 2–3 common weapons.
-   - **Bones and sockets:** the head and upper spine bones for Meso and Endo.
-   - **Skin mesh check:** whether the four Default skins share `S_Meso`.
-2. Replace the placeholder parameter names (`PrimaryColor`, `Roughness`, `Metallic`), check the colours in an AimMod match, render thumbnails, and clear `draft`.
-3. For the pattern and accessories:
-   - the 4.26 project, internal UV reference, mask texture, and the halo, visor and headband meshes within budget;
-   - the release build's manifest generation, which fills in the `sha256` values;
-   - the AimModCore manifest check.
-4. Service: the session marker, the looks file and the `cosmetic.look` frame. Bridge: the avatar tag.
+- the 4.26 project, internal UV reference, mask texture, and the halo, visor
+  and headband meshes within budget;
+- the release build's manifest generation, which fills in the `sha256` values;
+- the AimModCore pak check.
 
 ## Decisions
 
