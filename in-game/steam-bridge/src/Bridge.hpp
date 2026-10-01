@@ -62,6 +62,7 @@ namespace bridge
             SpectatePrivacy spectatePrivacy = SpectatePrivacy::Friends; // lobby-less spectating
             bool showSpectating = false; // publish whom we spectate in rich presence
             std::wstring pipeName;       // override for development harnesses (default PipeName)
+            bool lobbyPoses = true;      // stream poses in every lobby (avatars), not only the ghost demo
         };
         void SetOptions(Options options) { m_options = std::move(options); } // before Start
         struct GhostSample

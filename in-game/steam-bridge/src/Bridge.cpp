@@ -306,7 +306,7 @@ namespace bridge
         EnsureListen();
         PollDirect();
         ReceiveDirect();
-        if (m_options.ghostDemo) GhostTick();
+        if (m_options.ghostDemo || m_options.lobbyPoses) GhostTick();
         if (Clock::now() >= m_nextScene)
         {
             m_nextScene = Clock::now() + 1s;
@@ -1635,7 +1635,7 @@ namespace bridge
             break;
         case WireType::Bye: CloseConn(peer, false, "bye"); break;
         case WireType::Pose:
-            if (m_options.ghostDemo) OnPose(conn, m.pose);
+            if (m_options.ghostDemo || m_options.lobbyPoses) OnPose(conn, m.pose);
             break;
         case WireType::SpectateSub:
             if (!conn.outgoing && IsHost())

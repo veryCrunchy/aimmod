@@ -1,5 +1,7 @@
 #include "Ghosts.hpp"
 
+#include "PoseFile.hpp"
+
 #include <Unreal/AActor.hpp>
 #include <Unreal/FAssetData.hpp>
 #include <Unreal/FHitResult.hpp>
@@ -14,7 +16,11 @@
 #include <Unreal/UnrealCoreStructs.hpp>
 #include <Unreal/World.hpp>
 
+#include <Windows.h>
+
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <cstdio>
 #include <cstring>
 #include <exception>
@@ -126,6 +132,7 @@ namespace aimmod
         m_getTeam.BindPath(mc_(STR("GetTeam")).c_str(), Shape::Number);
         m_loadCharacterProfile.BindPath(mc_(STR("LoadCharacterProfile")).c_str(), Shape::Command);
         m_setMovementMode.BindPath(STR("/Script/Engine.CharacterMovementComponent:SetMovementMode"), Shape::Command);
+        m_updateVisibility.BindPath(mc_(STR("UpdateVisibility")).c_str(), Shape::Command);
         m_movementComponent.Bind(game::FindClass(STR("/Script/Engine.Character")), STR("CharacterMovement"));
         m_aiControllerDefault = UObjectGlobals::StaticFindObject<UObject*>(nullptr, nullptr, STR("/Script/GameSkillsTrainer.Default__TheMetaAIController"));
         ok &= m_aiControllerDefault != nullptr;
@@ -189,9 +196,23 @@ namespace aimmod
     std::string GhostDemo::ScenarioBotProfile(int& team)
     {
         team = 2;
-        if (!m_options.avatarProfile.empty()) return m_options.avatarProfile;
+        // 1. the lobby's avatar bot (generated match scenarios ship it, possibly as an invisible helper),
+        // 2. the config override, 3. any bot the scenario already has.
+        std::string named = m_bridge.LobbyValue("aimmod.avatar_bot");
+        if (named.empty()) named = m_options.avatarProfile;
         std::vector<UObject*> found;
         UObjectGlobals::FindAllOf(STR("TheMetaAIController"), found);
+        if (!named.empty())
+        {
+            for (UObject* controller : found)
+            {
+                if (!game::IsLiveInstance(controller) || m_ownControllers.count(controller) || ReadFString(controller, STR("MyProfileName")) != named) continue;
+                if (UObject* pawn = m_getMetaCharacter.Object(controller))
+                    if (auto t = m_getTeam.ok() ? m_getTeam.Number(pawn) : std::nullopt; t && *t >= 0 && *t < 16) team = static_cast<int>(*t);
+                break;
+            }
+            return named;
+        }
         for (UObject* controller : found)
         {
             if (!game::IsLiveInstance(controller) || m_ownControllers.count(controller)) continue;
@@ -249,6 +270,9 @@ namespace aimmod
         ghost.spawnFailures = 0;
         ghost.crouching = false;
         ghost.characterProfile.clear();
+        ghost.botProfile = profile;
+        ghost.spawnedFrom = profile;
+        m_avatarMapDirty = true;
         ghost.nextInert = 0;
         m_ownControllers.insert(controller);
         KeepInert(ghost);
@@ -264,6 +288,19 @@ namespace aimmod
         UObject* controller = ghost.controller.Get();
         UObject* pawn = ghost.pawn.Get();
         if (!controller || !pawn) return;
+        // The game re-profiles bots in place across scenario changes: notice and re-apply the looks.
+        if (const std::string current = ReadFString(controller, STR("MyProfileName")); !current.empty() && current != ghost.botProfile)
+        {
+            m_log("avatars: the game re-profiled an avatar to \"" + current + "\"; re-applying");
+            ghost.botProfile = current;
+            ghost.characterProfile.clear();
+        }
+        // Shown even when spawned from an invisible helper profile.
+        static_cast<AActor*>(pawn)->SetActorHiddenInGame(false);
+        if (m_updateVisibility.ok())
+            m_updateVisibility.Call(pawn, [](std::uint8_t* value, const Param& p) {
+                if (p.kind == Kind::Bool) *value = 0;
+            });
         m_setUseWeapons.Call(controller, [](std::uint8_t* value, const Param& p) {
             if (p.kind == Kind::Bool) *value = 0;
         });
@@ -321,6 +358,7 @@ namespace aimmod
             m_ownControllers.erase(controller);
         }
         else if (pawn) static_cast<AActor*>(pawn)->K2_DestroyActor();
+        if (controller || pawn) m_avatarMapDirty = true;
         ghost.controller = FWeakObjectPtr{};
         ghost.pawn = FWeakObjectPtr{};
     }
@@ -418,7 +456,15 @@ namespace aimmod
         {
             DestroyShapes(ghost);
             // Appearance: a character profile the host put in lobby data (generated scenarios ship it).
-            const std::string wanted = m_bridge.LobbyValue("aimmod.char." + std::to_string(peer));
+            // A lobby-wide avatar bot change needs a new spawn.
+            if (const std::string bot = m_bridge.LobbyValue("aimmod.avatar_bot"); !bot.empty() && !ghost.spawnedFrom.empty() && bot != ghost.spawnedFrom && peer != TestPeer)
+            {
+                m_log("avatars: lobby avatar bot is now \"" + bot + "\"; respawning");
+                RemoveAvatar(ghost);
+                return;
+            }
+            std::string wanted = m_bridge.LobbyValue("aimmod.char." + std::to_string(peer));
+            if (wanted.empty()) wanted = m_bridge.LobbyValue("aimmod.avatar_char");
             if (!wanted.empty() && wanted != ghost.characterProfile && m_loadCharacterProfile.ok())
             {
                 ghost.characterProfile = wanted;
@@ -503,6 +549,19 @@ namespace aimmod
                 }
             }
             if (!m_options.showRemote) return;
+            // Scenario changed in the same world: the game may have reset or re-profiled our bots.
+            if (const std::string scene = m_bridge.LocalScene(); scene != m_lastScene)
+            {
+                if (!m_lastScene.empty() && !m_ghosts.empty()) m_log("avatars: scenario changed; re-applying looks and AI-off");
+                m_lastScene = scene;
+                m_avatarMapDirty = true;
+                for (auto& [_, g] : m_ghosts)
+                {
+                    g.nextInert = 0;
+                    g.characterProfile.clear();
+                    g.spawnFailures = 0;
+                }
+            }
 
             UObject* world = static_cast<AActor*>(character)->GetWorld();
             std::map<std::uint64_t, bool> seen;
@@ -594,7 +653,35 @@ namespace aimmod
             m_failed = true;
             m_log(std::string("ghost demo: disabled after an error: ") + e.what());
         }
+        if (m_avatarMapDirty) WriteAvatarMap();
     }
+
+    // avatars.tsv for AimModCore: which actor is which remote player's stream.
+    void GhostDemo::WriteAvatarMap()
+    {
+        m_avatarMapDirty = false;
+        if (m_options.stateDir.empty()) return;
+        std::string text = "AIMMOD_AVATARS_1\n";
+        int lines = 0;
+        for (const auto& [peer, g] : m_ghosts)
+        {
+            UObject* pawn = g.pawn.Get();
+            if (!pawn || lines >= 64) continue;
+            const std::string name = game::Narrow(std::wstring(pawn->GetName()));
+            if (name.empty() || name.find_first_of("\t\r\n") != std::string::npos) continue;
+            text += name + "\t" + bridge::posefile::StreamIdFor(peer) + "\n";
+            ++lines;
+        }
+        const std::filesystem::path file = std::filesystem::path(m_options.stateDir) / L"avatars.tsv";
+        const std::wstring temp = file.wstring() + L".tmp";
+        {
+            std::ofstream out(temp, std::ios::binary | std::ios::trunc);
+            if (!out) return;
+            out << text;
+        }
+        MoveFileExW(temp.c_str(), file.c_str(), MOVEFILE_REPLACE_EXISTING);
+    }
+
     // Reads the recorded path once per session. A missing file is normal (circle test).
     bool GhostDemo::LoadTestPath()
     {
@@ -635,5 +722,6 @@ namespace aimmod
         {
         }
         m_ghosts.clear();
+        WriteAvatarMap(); // header only: no avatars
     }
 } // namespace aimmod

@@ -22,3 +22,5 @@ avatars=1
 spectate_privacy=friends
 # show_spectating=1 publishes whom you are watching in rich presence.
 # hide_scenario=1 keeps your current scenario out of rich presence.
+# lobby_avatars=0 stops streaming poses and showing other players in lobbies.
+lobby_avatars=1

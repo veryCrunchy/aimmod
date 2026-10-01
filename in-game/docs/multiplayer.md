@@ -1363,6 +1363,38 @@ widget. The character's `Infobar` widget shows the profile's display name.
 - After 3 failed spawns for a peer, that peer falls back to the shapes. So
   do all peers when the spawn bindings are missing.
 
+**In service lobbies and generated match scenarios.**
+
+- Avatars aren't limited to the ghost demo any more. With `lobby_avatars=1`
+  (the default; `0` turns it off), every lobby streams poses and shows
+  remote players on the same scenario.
+- The bot profile comes from lobby key `aimmod.avatar_bot` when the service
+  sets it, then `avatar_profile` from config, then any bot the scenario
+  already has. A generated arena can ship that profile as an invisible,
+  inert helper bot. The avatar spawned from it is forced visible
+  (`SetActorHiddenInGame(false)`, `UpdateVisibility(false)`).
+- Appearance comes from `aimmod.char.<peer>`, else `aimmod.avatar_char`.
+- Changing `aimmod.avatar_bot` respawns the avatars.
+
+**Scenario changes.** The game reuses and re-profiles the same bot object in
+place across scenario changes. So on every scenario change, and whenever the
+controller's `MyProfileName` changes, the avatar re-applies:
+
+- AI-off;
+- invulnerability;
+- movement mode;
+- visibility;
+- its character profile.
+
+**`avatars.tsv` for AimModCore** (ef6b259). The file lives in
+`%LOCALAPPDATA%\AimMod\KovaaksNative\` and is written atomically:
+
+- line 1 is `AIMMOD_AVATARS_1`;
+- then up to 64 lines of `<avatar actor name>\t<stream id>`, where the stream
+  id is the same `s-<16 hex>` as for spectate streams.
+
+It's rewritten on spawn, despawn, re-acquire and scenario change. With no
+avatars it holds only the header.
 **Offline check.** `avatar_test=1` spawns one avatar that circles the local
 player at 4 m and crouches 3 s out of every 10, with no network. Use it to
 check spawning, the inert AI, movement and the animations before a session

@@ -127,7 +127,9 @@ public:
         if (auto it = config.find("spectate_privacy"); it != config.end())
             if (auto p = bridge::ParseSpectatePrivacy(it->second)) m_spectatePrivacy = *p;
         m_ghostOptions.avatars = Flag(config, "avatars", true);
-        m_ghostOptions.showRemote = m_ghostDemo;
+        m_lobbyAvatars = Flag(config, "lobby_avatars", true);
+        m_ghostOptions.showRemote = m_ghostDemo || m_lobbyAvatars;
+        m_ghostOptions.stateDir = std::filesystem::path(ScenePath()).parent_path().wstring();
         m_ghostOptions.avatarTest = Flag(config, "avatar_test", false);
         // Offline avatar spike: the service exports a replay's camera path here (--export-avatar-path).
         m_ghostOptions.avatarTestPath = std::filesystem::path(ScenePath()).parent_path() / L"avatar-test-path.tsv";
@@ -185,6 +187,7 @@ private:
         auto bridge = std::make_unique<bridge::Bridge>(Log, [this](const std::function<void()>& fn) { RunOnGameThread(fn); });
         bridge::Bridge::Options options;
         options.ghostDemo = m_ghostDemo;
+        options.lobbyPoses = m_lobbyAvatars;
         options.scenePath = ScenePath();
         options.stateDir = std::filesystem::path(ScenePath()).parent_path().wstring();
         options.hideScenario = m_hideScenario;
@@ -243,6 +246,7 @@ private:
     std::unique_ptr<aimmod::GhostDemo> m_ghosts;
     bool m_ghostDemo = false;
     bool m_hideScenario = false;
+    bool m_lobbyAvatars = true;
     bool m_showSpectating = false;
     bridge::SpectatePrivacy m_spectatePrivacy = bridge::SpectatePrivacy::Friends;
     aimmod::GhostOptions m_ghostOptions;

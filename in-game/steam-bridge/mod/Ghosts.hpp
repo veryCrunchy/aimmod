@@ -35,6 +35,7 @@ namespace aimmod
         // Offline avatar spike: with avatar_test=1, a recorded path in this file (exported by the
         // service with --export-avatar-path) replaces the circle when its scenario is loaded.
         std::filesystem::path avatarTestPath;
+        std::wstring stateDir;     // KovaaksNative: avatars.tsv for AimModCore
         bool showRemote = true;    // show remote players (ghost demo); the local pose/camera is read either way
     };
 
@@ -58,6 +59,8 @@ namespace aimmod
             bool crouching = false;
             bool avatarLogged = false;
             std::string characterProfile; // applied character profile (appearance)
+            std::string botProfile;       // bot profile the game reports for it now
+            std::string spawnedFrom;      // bot profile we asked for
             std::string hiddenScene;      // non-empty while hidden because of a scenario mismatch
         };
         using Sample = bridge::ghost::RemoteTransform; // remote values only
@@ -99,7 +102,10 @@ namespace aimmod
         // Avatars
         game::Getter m_spawnBot, m_getMetaCharacter, m_setUseWeapons, m_stopAiming, m_removeSelf;
         game::Getter m_updateClientLocAndRot, m_overrideInvulnerable, m_startCrouching, m_startUncrouch, m_getTeam, m_loadCharacterProfile;
-        game::Getter m_setMovementMode;
+        game::Getter m_setMovementMode, m_updateVisibility;
+        std::string m_lastScene; // re-apply looks and AI-off when the scenario changes
+        bool m_avatarMapDirty = true;
+        void WriteAvatarMap();
         game::Field m_movementComponent;
         RC::Unreal::UObject* m_aiControllerDefault = nullptr;
         std::set<RC::Unreal::UObject*> m_ownControllers; // controllers we spawned (identity only)
