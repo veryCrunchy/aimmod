@@ -288,8 +288,12 @@ sealed class Lifecycle : IAsyncDisposable
     static string? Arg(string[] args, string name) { var i = Array.IndexOf(args, name); return i >= 0 && i + 1 < args.Length ? args[i + 1] : null; }
     public static readonly string[] Commands = ["--install", "--repair", "--apply-pending", "--rollback", "--uninstall", "--install-status"];
 
-    public static int RunCommand(string[] args, Func<string, bool>? gameRunningOverride = null)
+    // serviceFolder: where this service's files are, for finding the game and the bundled package when no
+    // --game-dir or --package is given. Checks pass a temporary folder so they never read or touch the
+    // folder the process runs from.
+    public static int RunCommand(string[] args, Func<string, bool>? gameRunningOverride = null, string? serviceFolder = null)
     {
+        var self = serviceFolder ?? AppContext.BaseDirectory;
         var output = Arg(args, "--output") is { } o ? Path.GetFullPath(o) : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AimMod", "KovaaksNative");
         var updatesRoot = Path.Combine(output, "updates");
         Directory.CreateDirectory(updatesRoot);
@@ -302,7 +306,7 @@ sealed class Lifecycle : IAsyncDisposable
         try
         {
             if (args.Contains("--apply-pending")) return ApplyPending(args, output, running, log);
-            var win64 = Arg(args, "--game-dir") is { } g ? ResolveGameDir(g) : InstallLayout.FindWin64FromService(AppContext.BaseDirectory) ?? InstallLayout.FindWin64FromSteam();
+            var win64 = Arg(args, "--game-dir") is { } g ? ResolveGameDir(g) : InstallLayout.FindWin64FromService(self) ?? InstallLayout.FindWin64FromSteam();
             if (win64 is null) { log.Line("KovaaK's was not found. Pass --game-dir <FPSAimTrainer folder>."); return 1; }
             var applier = new PackageApplier(updatesRoot, running);
             if (args.Contains("--install-status"))
@@ -332,8 +336,8 @@ sealed class Lifecycle : IAsyncDisposable
             if (applier.RecoverInterrupted()) log.Line("An interrupted install was undone.");
             string? root;
             if (Arg(args, "--package") is { } p) root = Path.GetFullPath(p);
-            else if (args.Contains("--install")) root = InstallLayout.FindPackageRoot(AppContext.BaseDirectory);
-            else root = Directory.Exists(PackageCache(output)) ? PackageCache(output) : InstallLayout.FindPackageRoot(AppContext.BaseDirectory);
+            else if (args.Contains("--install")) root = InstallLayout.FindPackageRoot(self);
+            else root = Directory.Exists(PackageCache(output)) ? PackageCache(output) : InstallLayout.FindPackageRoot(self);
             if (root is null) { log.Line("No AimMod package was found. Download AimMod again and run Install-AimMod.cmd."); return 1; }
             var package = VerifiedPackage.Open(root);
             log.Line($"AimMod {package.Manifest.Version}: all {package.Manifest.Files.Length} files match the release manifest.");

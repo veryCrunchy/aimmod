@@ -94,6 +94,11 @@ static class LifecycleChecks
 
         var temp = Path.Combine(Path.GetTempPath(), "aimmod-lifecycle-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(temp);
+        // The command line stands in for an installed service in a temporary folder: these checks
+        // install, repair, roll back and uninstall, and must never touch the folder this process runs from.
+        var serviceStandIn = Path.Combine(temp, "service");
+        Directory.CreateDirectory(serviceStandIn);
+        var ownFolder = FolderState(AppContext.BaseDirectory);
         try
         {
             // ---- manifests ----
@@ -336,17 +341,17 @@ static class LifecycleChecks
             var cliRoot = Path.Combine(temp, "cli");
             var cliGame = Game(Path.Combine(cliRoot, "lib"));
             var output = Path.Combine(cliRoot, "local");
-            Check(Lifecycle.RunCommand(["--install", "--package", root1, "--game-dir", cliGame, "--output", output], _ => false) == 0, "install command");
+            Check(Lifecycle.RunCommand(["--install", "--package", root1, "--game-dir", cliGame, "--output", output], _ => false, serviceStandIn) == 0, "install command");
             Check(InstallManifest.Read(cliGame)!.Version == "1.0.0" && File.Exists(Path.Combine(Lifecycle.PackageCache(output), InstallLayout.PackageManifest)), "install caches the package for repairs");
             File.Delete(Path.Combine(cliGame, "dwmapi.dll"));
-            Check(Lifecycle.RunCommand(["--install-status", "--game-dir", cliGame, "--output", output], _ => false) == 3, "status reports a needed repair");
-            Check(Lifecycle.RunCommand(["--repair", "--game-dir", cliGame, "--output", output], _ => true) == 2 && !File.Exists(Path.Combine(cliGame, "dwmapi.dll")), "repair waits for the game to close");
-            Check(Lifecycle.RunCommand(["--repair", "--game-dir", cliGame, "--output", output], _ => false) == 0 && File.Exists(Path.Combine(cliGame, "dwmapi.dll")), "repair from the cached package");
+            Check(Lifecycle.RunCommand(["--install-status", "--game-dir", cliGame, "--output", output], _ => false, serviceStandIn) == 3, "status reports a needed repair");
+            Check(Lifecycle.RunCommand(["--repair", "--game-dir", cliGame, "--output", output], _ => true, serviceStandIn) == 2 && !File.Exists(Path.Combine(cliGame, "dwmapi.dll")), "repair waits for the game to close");
+            Check(Lifecycle.RunCommand(["--repair", "--game-dir", cliGame, "--output", output], _ => false, serviceStandIn) == 0 && File.Exists(Path.Combine(cliGame, "dwmapi.dll")), "repair from the cached package");
             // Stage 1.1.0 as the service would, then apply it as the post-exit hand-off does.
             var cliUpdater = new Updater(Path.Combine(output, "updates"), handler);
             Publish(Feed("1.1.0", Sha256Hex.Of(zipBytes), zipBytes.Length, "https://example.invalid/AimMod-InGame-1.1.0.zip"));
             Check((await cliUpdater.Check(prefs, feedUrl, InstallManifest.Read(cliGame), 1000, CancellationToken.None)).State == UpdateState.Ready, "service stages the update");
-            Check(Lifecycle.RunCommand(["--apply-pending", "--game-dir", cliGame, "--output", output], _ => false) == 0, "hand-off applies the staged update");
+            Check(Lifecycle.RunCommand(["--apply-pending", "--game-dir", cliGame, "--output", output], _ => false, serviceStandIn) == 0, "hand-off applies the staged update");
             Check(InstallManifest.Read(cliGame)!.Version == "1.1.0" && cliUpdater.Staged() is null, "update applied and staging cleared");
             var lifecycle = new Lifecycle(output, cliGame, handler, _ => false);
             var snapshot = JsonSerializer.Serialize(lifecycle.Snapshot());
@@ -356,13 +361,26 @@ static class LifecycleChecks
             lifecycle.Act("repair");
             Check(JsonSerializer.Serialize(lifecycle.Snapshot()).Contains("\"requested\":true"), "repair requested from the UI");
             Throws<JsonException>(() => lifecycle.Act("format-disk"), "unknown action rejected");
-            Check(Lifecycle.RunCommand(["--apply-pending", "--game-dir", cliGame, "--output", output], _ => false) == 0 && !JsonSerializer.Serialize(lifecycle.Snapshot()).Contains("\"requested\":true"), "requested repair applied after close");
-            Check(Lifecycle.RunCommand(["--rollback", "--game-dir", cliGame, "--output", output], _ => false) == 0 && InstallManifest.Read(cliGame)!.Version == "1.0.0", "rollback command");
+            Check(Lifecycle.RunCommand(["--apply-pending", "--game-dir", cliGame, "--output", output], _ => false, serviceStandIn) == 0 && !JsonSerializer.Serialize(lifecycle.Snapshot()).Contains("\"requested\":true"), "requested repair applied after close");
+            Check(Lifecycle.RunCommand(["--rollback", "--game-dir", cliGame, "--output", output], _ => false, serviceStandIn) == 0 && InstallManifest.Read(cliGame)!.Version == "1.0.0", "rollback command");
             Check(VerifiedPackage.Open(Lifecycle.PackageCache(output)).Manifest.Version == "1.0.0", "rollback restores the cached package");
-            Check(Lifecycle.RunCommand(["--uninstall", "--game-dir", cliGame, "--output", output], _ => false) == 0 && !File.Exists(Path.Combine(cliGame, "dwmapi.dll")) && !Directory.Exists(Path.Combine(cliGame, "ue4ss")), "uninstall removes everything it created");
+            Check(Lifecycle.RunCommand(["--uninstall", "--game-dir", cliGame, "--output", output], _ => false, serviceStandIn) == 0 && !File.Exists(Path.Combine(cliGame, "dwmapi.dll")) && !Directory.Exists(Path.Combine(cliGame, "ue4ss")), "uninstall removes everything it created");
             await lifecycle.DisposeAsync();
         }
         finally { try { Directory.Delete(temp, true); } catch (IOException) { } }
+        Check(FolderState(AppContext.BaseDirectory) == ownFolder, "the checks leave the service's own folder untouched");
         Console.WriteLine($"{count} install lifecycle checks passed");
+    }
+
+    // Every file under a folder with its size and content hash, for spotting changes.
+    static string FolderState(string folder)
+    {
+        var lines = new List<string>();
+        foreach (var file in Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories).Order(StringComparer.OrdinalIgnoreCase))
+        {
+            try { lines.Add(Path.GetRelativePath(folder, file) + " " + new FileInfo(file).Length + " " + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(file)))); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { lines.Add(Path.GetRelativePath(folder, file) + " unreadable"); }
+        }
+        return string.Join("\n", lines);
     }
 }
