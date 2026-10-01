@@ -42,11 +42,15 @@ sealed class GameCommands(string output)
 
     static bool SafeName(string? s) => s is { Length: > 0 and <= 256 } && !s.Any(char.IsControl) && s.Trim().Length > 0;
 
+    /// <summary>Scenarios whose map AimModCore may load itself (ensure-map): the ones AimMod generates.</summary>
+    public static bool MapFixAllowed(string? scenario) => SafeName(scenario) && scenario!.IndexOfAny(['\\', '/', ':', '*', '?', '"', '<', '>', '|']) < 0
+        && (scenario.StartsWith("AimMod Match - ", StringComparison.Ordinal) || scenario.StartsWith("AimMod Probe ", StringComparison.Ordinal) || scenario.StartsWith("AimMod - ", StringComparison.Ordinal));
+
     /// <summary>Writes the request; returns its sequence, or null with a reason.</summary>
     public (long? Sequence, string? Error) Send(GameCommandRequest request)
     {
-        if (request.Action is not ("load-scenario" or "start-scenario" or "reset-overrides" or "refresh-scenarios" or "capture-thumbnail" or "end-run" or "quit-run")) return (null, "invalid-command");
-        var named = request.Action is "load-scenario" or "start-scenario" or "capture-thumbnail" or "end-run";
+        if (request.Action is not ("load-scenario" or "start-scenario" or "reset-overrides" or "refresh-scenarios" or "capture-thumbnail" or "end-run" or "quit-run" or "ensure-map")) return (null, "invalid-command");
+        var named = request.Action is "load-scenario" or "start-scenario" or "capture-thumbnail" or "end-run" or "ensure-map";
         if (request.Action == "capture-thumbnail")
         {
             if (request.Width is not (>= 64 and <= 3840) || request.Height is not (>= 64 and <= 2160)) return (null, "invalid-thumbnail");
@@ -62,6 +66,10 @@ sealed class GameCommands(string output)
         // end-run: freeplay AimMod match scenarios only; then = stop (default) or reset.
         if (request.Then is not null && (request.Action != "end-run" || request.Then is not ("stop" or "reset"))) return (null, "invalid-command");
         if (request.Action == "end-run" && request.Scenario?.StartsWith("AimMod Match - ", StringComparison.Ordinal) != true) return (null, "not-a-match");
+        // ensure-map: AimMod's own scenarios only, never with a mode or overrides (AimModCore also refuses challenges and benchmarks).
+        if (request.Action == "ensure-map" && !MapFixAllowed(request.Scenario)) return (null, "not-a-match");
+        if (request.Action == "ensure-map" && (request.Mode is not null || request.TimeScale is not null || request.TargetSize is not null || request.TargetSpeed is not null || request.MapScale is not null || request.Weapon is not null))
+            return (null, "invalid-command");
         if (request.Seed is not null && (request.Action != "start-scenario" || request.Seed is < 0 or > uint.MaxValue)) return (null, "invalid-seed");
         // Never in ranked play (AimModCore enforces the same rules): a challenge runs exactly as published.
         if (request.Mode == "challenge" && (request.TimeScale is not null || request.TargetSize is not null || request.TargetSpeed is not null || request.MapScale is not null || request.Weapon is not null))

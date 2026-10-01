@@ -39,7 +39,7 @@ static partial class MultiplayerChecks
         CsTeams();
         Marker();
         var root = Path.Combine(Path.GetTempPath(), "aimmod-mp-test-" + Guid.NewGuid().ToString("N"));
-        try { Content(root); Generator(root); Blocked(root); AutoLeave(root); LoadGateService(root); Service(root); Transfers(root); Replays(root); Maps(root); Tournaments(root); }
+        try { Content(root); Generator(root); Blocked(root); AutoLeave(root); LoadGateService(root); LoadGateEnsureMap(root); Service(root); Transfers(root); Replays(root); Maps(root); Tournaments(root); }
         finally { try { Directory.Delete(root, true); } catch (IOException) { } }
         Console.WriteLine($"{count} multiplayer checks passed.");
     }
@@ -1764,7 +1764,7 @@ static partial class MultiplayerChecks
     {
         public readonly List<string> Calls = [];
         public IReadOnlySet<string> Capabilities { get; } = caps.ToHashSet();
-        long lastLoad, lastStart;
+        long lastLoad, lastStart, lastEnsure;
         public long? Load(string scenario) { Calls.Add("load " + scenario); loadedScenario = scenario; return lastLoad = Calls.Count; }
         // core-scene.json as AimModCore would publish it: the loaded scenario and the map its file names
         // (read from the test game folder); StuckMap keeps an old map, like the live CS bug.
@@ -1786,7 +1786,18 @@ static partial class MultiplayerChecks
         public bool? SceneLoading { get; set; }
         bool refusedLoad;
         // Answers like AimModCore: the latest load is done, then the latest start.
-        public GameCommandResult? Result => lastStart > lastLoad ? new GameCommandResult(lastStart, "done", "started", "")
+        // ensure-map ("map" capability): loads the scenario's own map, unless EnsureUnsupported (an older game).
+        public bool EnsureUnsupported;
+        public long? EnsureMap(string scenario)
+        {
+            if (!Capabilities.Contains("map")) return null;
+            Calls.Add("ensure-map " + scenario);
+            if (!EnsureUnsupported && scenario == loadedScenario) StuckMap = null;
+            return lastEnsure = Calls.Count;
+        }
+        public GameCommandResult? Result => lastEnsure > lastStart && lastEnsure > lastLoad
+            ? (EnsureUnsupported ? new GameCommandResult(lastEnsure, "error", "unsupported", "") : new GameCommandResult(lastEnsure, "done", "map-loaded", ""))
+            : lastStart > lastLoad ? new GameCommandResult(lastStart, "done", "started", "")
             : lastLoad > 0 ? (refusedLoad ? new GameCommandResult(lastLoad, "error", "challenge-active", "") : new GameCommandResult(lastLoad, "done", "loaded", "")) : null;
         // The next load is refused as if a challenge started right after the check.
         public void RefuseNextLoad() => refusedLoad = true;

@@ -11,6 +11,8 @@ sealed partial class MultiplayerService
     readonly Dictionary<string, (string? MapName, double? MapScale)> expectedMaps = new(StringComparer.Ordinal);
     public const long MapMismatchRetryMs = 15_000, MapMismatchFailMs = 30_000;
     string? verifyKey, waitSent; long verifySince, verifyRetriedAt; int verifyGood; string? failedScenario;
+    // ensure-map (AimModCore loads the scenario's own map itself): the pending request and why it failed.
+    long? mapFixSequence; string? mapFixError;
 
     // The map a round's scenario loads: from the match scenario AimMod built, else the base file.
     (string? MapName, double? MapScale) ExpectedMap(string scenario)
@@ -35,8 +37,9 @@ sealed partial class MultiplayerService
         return null;
     }
 
-    // Loading phase: report loaded only once the scene matches for two polls in a row;
-    // retry the load once after 15 s of a wrong map, report the problem after 30 s.
+    // Loading phase: report loaded only once the scene matches for two polls in a row.
+    // The right scenario with the wrong map is fixed right away (ensure-map); anything else
+    // is retried once after 15 s; the problem is reported 15 s after the fix.
     void VerifyLoaded(MatchSnapshot match, string key)
     {
         if (plan is null || loadedSent == key) return;
@@ -60,7 +63,7 @@ sealed partial class MultiplayerService
             return;
         }
         if (plan.State is not ("ready" or "started")) return;
-        if (verifyKey != key) { verifyKey = key; verifySince = clock(); verifyRetriedAt = 0; verifyGood = 0; }
+        if (verifyKey != key) { verifyKey = key; verifySince = clock(); verifyRetriedAt = 0; verifyGood = 0; mapFixSequence = null; mapFixError = null; }
         var problem = SceneProblem(game.Scene, plan.Scenario, ExpectedMap(plan.Scenario));
         if (problem is null)
         {
@@ -70,25 +73,47 @@ sealed partial class MultiplayerService
             return;
         }
         verifyGood = 0;
+        // AimModCore answered ensure-map: an unsupported game falls back to loading the scenario again.
+        if (mapFixSequence is long fix && game.Result is { Sequence: var answered } fixResult && answered == fix)
+        {
+            mapFixSequence = null;
+            if (fixResult.State == "error" && fixResult.Code == "unsupported" && ReloadScenario(problem)) return;
+            if (fixResult.State == "error") mapFixError = fixResult.Code + (fixResult.Message.Length > 0 ? ": " + fixResult.Message : "");
+        }
         plan = problem == "loading" ? plan with { Map = "checking", Message = "KovaaK’s is loading the map…" } : plan with { Map = "wrong", Message = problem };
         var waited = clock() - verifySince;
-        if (problem != "loading" && waited >= MapMismatchRetryMs && verifyRetriedAt == 0)
+        var mapWrong = problem != "loading" && game.Scene is { } shown && string.Equals(shown.Scenario, plan.Scenario, StringComparison.Ordinal);
+        if (problem != "loading" && verifyRetriedAt == 0 && ((mapWrong && game.Capabilities.Contains("map")) || waited >= MapMismatchRetryMs))
         {
             verifyRetriedAt = clock();
             // The second wait ends at the fail limit.
-            if (FixWrongMap(problem)) { verifySince = clock() - MapMismatchRetryMs; return; }
+            if (FixWrongMap(problem, mapWrong)) { verifySince = clock() - MapMismatchRetryMs; return; }
         }
         if (waited >= MapMismatchFailMs)
         {
-            var reason = problem == "loading" ? "KovaaK’s is still loading the map." : problem;
+            var reason = problem == "loading" ? "KovaaK’s is still loading the map." : problem + (mapFixError is { } why ? " (AimMod’s map load: " + why + ")" : "");
             plan = plan with { Map = "failed", Message = reason + " The host can retry or end the match." };
             Report(false, reason);
         }
     }
 
-    // The one place a wrong map is handled: once per load attempt, after 15 s on the wrong map.
-    // Today it loads the scenario again; true while a fix is under way (the check restarts).
-    bool FixWrongMap(string problem)
+    // The one place a wrong map is handled, once per load attempt; true while a fix is under way
+    // (the check restarts). The right scenario with the wrong map: AimModCore loads the scenario's
+    // own map through KovaaK's map pipeline (ensure-map, "map" capability). Otherwise, or when
+    // AimModCore answers unsupported, the scenario is loaded again.
+    bool FixWrongMap(string problem, bool mapWrong)
+    {
+        if (plan is null) return false;
+        if (mapWrong && game.EnsureMap(plan.Scenario) is long fix)
+        {
+            mapFixSequence = fix;
+            plan = plan with { Map = "checking", Message = "KovaaK’s kept the previous map. Loading the map of “" + plan.Scenario + "”…" };
+            return true;
+        }
+        return ReloadScenario(problem);
+    }
+
+    bool ReloadScenario(string problem)
     {
         if (plan is null || game.Load(plan.Scenario) is not long again) return false;
         plan = plan with { State = "loading", Map = "checking", Message = "The map didn’t load (" + problem.TrimEnd('.') + "). Loading “" + plan.Scenario + "” again…", LoadSequence = again };

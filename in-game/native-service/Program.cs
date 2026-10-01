@@ -25,6 +25,9 @@ if (args.Length >= 2 && args[0] == "--install-probe-variants")
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AimMod", "KovaaksNative"));
     return;
 }
+// Diagnostic with the game running: --check-map-load "<AimMod scenario>" [--game <root>] [--output <folder>] [--no-load]
+// loads the scenario through AimModCore, asks for its map (ensure-map) and prints core-scene.json's map after each step.
+if (args.Length >= 2 && args[0] == "--check-map-load") { Environment.ExitCode = AimMod.InGame.Multiplayer.MapLoadDiagnostic.Run(args); return; }
 // Offline avatar spike: --export-avatar-path <replay id> [--output <folder>] writes avatar-test-path.tsv.
 if (args.Length is 2 or 4 && args[0] == "--export-avatar-path")
 {

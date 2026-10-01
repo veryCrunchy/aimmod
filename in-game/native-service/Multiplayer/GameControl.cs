@@ -20,6 +20,9 @@ interface IGameControl
     bool? SceneLoading => null;
     // Leave the current run the way pause > Quit does, never submitting it ("quit" capability).
     long? QuitRun() => null;
+    // Load the current AimMod scenario's own map through KovaaK's map pipeline when the game
+    // kept the previous one ("map" capability; never in a challenge or benchmark).
+    long? EnsureMap(string scenario) => null;
 }
 
 sealed class CoreGameControl(string output) : IGameControl
@@ -37,6 +40,7 @@ sealed class CoreGameControl(string output) : IGameControl
     public GameScene? Scene => GameScene.Read(output);
     public bool? SceneLoading => GameScene.Read(output) is { Available: true } scene ? scene.Loading : null;
     public long? QuitRun() => Capabilities.Contains("quit") ? commands.Send(new("quit-run", null, null, null, null, null, null, null)).Sequence : null;
+    public long? EnsureMap(string scenario) => Capabilities.Contains("map") ? commands.Send(new("ensure-map", scenario, null, null, null, null, null, null)).Sequence : null;
 }
 
 sealed class NoGameControl : IGameControl
