@@ -317,15 +317,16 @@ static partial class MultiplayerChecks
         static (double X, double Y, double Z) Body(long t) => (1000, 300 * Math.Sin((t - t0) / 1000.0 * 2 * Math.PI), 100);
         TrackSample Eye(long t) { var b = Body(t); return new TrackSample(t, b.X, b.Y, b.Z + 64, 0, 0); }
         TrackSample Aim(long t, (double X, double Y, double Z) at, bool fire = false) => new(t, 0, 0, 164, Math.Atan2(at.Z - 164, Math.Sqrt(at.X * at.X + at.Y * at.Y)) * 180 / Math.PI, Math.Atan2(at.Y, at.X) * 180 / Math.PI, fire);
-        TrackingRound Play(long seenLag, long aimLag, Func<long, (double, double, double)>? claimed = null, bool evidence = true, long attackUntil = length, bool requireFire = false, string? tag = null)
+        TrackingRound Play(long seenLag, long aimLag, Func<long, (double, double, double)>? claimed = null, bool evidence = true, long attackUntil = length, bool requireFire = false, string? tag = null,
+            double aimOffset = 0, double seenRadius = 45, double seenHalf = 115)
         {
             var round = new TrackingRound("a", "d", t0, t0 + length, requireFire);
             for (long t = t0; t < t0 + length; t += 17)
             {
                 var dodge = new List<TrackSample> { Eye(t) };
-                var aim = t < t0 + attackUntil ? new List<TrackSample> { Aim(t, Body(t - aimLag), fire: (t - t0) % 1000 < 500) } : [];
+                var aim = t < t0 + attackUntil ? new List<TrackSample> { Aim(t, Body(t - aimLag) is var at ? (at.X, at.Y + aimOffset, at.Z) : default, fire: (t - t0) % 1000 < 500) } : [];
                 var seen = new List<TrackSeen>();
-                if (evidence && (t - t0) % 34 == 0) { var c = (claimed ?? (x => Body(x - seenLag)))(t); seen.Add(new TrackSeen(t, 7, c.Item1, c.Item2, c.Item3, 45, 115, tag)); seen.Add(new TrackSeen(t, 3, -500, -500, 100, 45, 115)); }
+                if (evidence && (t - t0) % 34 == 0) { var c = (claimed ?? (x => Body(x - seenLag)))(t); seen.Add(new TrackSeen(t, 7, c.Item1, c.Item2, c.Item3, seenRadius, seenHalf, tag)); seen.Add(new TrackSeen(t, 3, -500, -500, 100, 45, 115)); }
                 round.Add("d", new TrackBatch("m", 1, dodge, []));
                 round.Add("a", new TrackBatch("m", 1, aim, seen));
             }
@@ -341,6 +342,8 @@ static partial class MultiplayerChecks
         var lie = Play(0, 0, claimed: t => { var b = Body(t); return (b.X + 250, b.Y, b.Z); }).ScoreFor("a", t0 + length, 40, 40);
         Check(lie.Disputed && lie.Reason == "seen-mismatch", "Drawn hulls that don't match the target's own track are rejected and dispute the round");
         var late = Play(350, 350).ScoreFor("a", t0 + length, 40, 40);
+        var huge = Play(120, 120, aimOffset: 300, seenRadius: 1000, seenHalf: 2000).ScoreFor("a", t0 + length, 40, 60);
+        Check(huge.Percent < 5, "Drawn hulls far larger than the avatar's don't count aim 3 m beside the target as on target");
         Check(late.Disputed && late.LagMs == TrackingRound.RewindCapMs && late.Percent < 60, "The rewind is capped at 200 ms: aiming at a target older than that doesn't count");
         var partial = Play(120, 120, attackUntil: length / 2).ScoreFor("a", t0 + length, 40, 40);
         Check(partial.Disputed && partial.Reason == "coverage" && partial.Percent is > 45 and < 55, "A stream covering half the round scores half and is disputed");

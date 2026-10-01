@@ -238,10 +238,12 @@ sealed class TrackingRound(string first, string second, long start, long end, bo
         var measuredLag = Median(matched.Select(r => (double)r.M!.Value.Lag).ToList());
         var estimated = double.IsNaN(measuredLag) ? 100 + ((shooterRtt ?? 0) + (targetRtt ?? 0)) / 2.0 : measuredLag;
         var lag = Math.Clamp(estimated, 0, RewindCapMs);
-        var eyeAbove = matched.Count > 0 ? Median(matched.Select(r => r.M!.Value.EyeDz).ToList()) : DefaultEyeAboveCentre;
-        var radius = rows.Count > 0 ? Median(rows.Select(r => r.Row.Radius).ToList()) : DefaultRadius;
-        var halfHeight = rows.Count > 0 ? Median(rows.Select(r => r.Row.HalfHeight).ToList()) : DefaultHalfHeight;
-        var valid = rows.Where(r => r.M is { } x && x.Distance <= MatchToleranceCm && x.Lag <= RewindCapMs).Select(r => r.Row).ToList();
+        // The attacker's rows only say where the dodger was drawn: the hull's size and height stay the avatar's.
+        var eyeAbove = matched.Count > 0 ? Math.Clamp(Median(matched.Select(r => r.M!.Value.EyeDz).ToList()), DefaultEyeAboveCentre - HeightToleranceCm, DefaultEyeAboveCentre + HeightToleranceCm) : DefaultEyeAboveCentre;
+        var radius = rows.Count > 0 ? HullRadius(Median(rows.Select(r => r.Row.Radius).ToList())) : DefaultRadius;
+        var halfHeight = rows.Count > 0 ? HullHalfHeight(Median(rows.Select(r => r.Row.HalfHeight).ToList())) : DefaultHalfHeight;
+        // Valid drawn hulls: matched within tolerance, at a plausible height and at most the rewind cap old.
+        var valid = rows.Where(r => r.M is { } x && x.Distance <= MatchToleranceCm && x.Lag <= RewindCapMs && PlausibleHeight(x.EyeDz)).Select(r => r.Row).ToList();
         var rejected = rows.Count - valid.Count;
 
         double on = 0, hostOnly = 0, covered = 0; int samples = 0, onSamples = 0;
@@ -259,7 +261,7 @@ sealed class TrackingRound(string first, string second, long start, long end, bo
             if (At(dodge, a.T - lag) is { } d)
                 hostHit = TrackGeometry.HitsCapsule(a.X, a.Y, a.Z, dx, dy, dz, RayLengthCm, d.X, d.Y, d.Z - eyeAbove, radius, halfHeight);
             var h = Drawn(valid, a.T);
-            var hit = h is not null ? TrackGeometry.HitsCapsule(a.X, a.Y, a.Z, dx, dy, dz, RayLengthCm, h.X, h.Y, h.Z, h.Radius, h.HalfHeight) : hostHit;
+            var hit = h is not null ? TrackGeometry.HitsCapsule(a.X, a.Y, a.Z, dx, dy, dz, RayLengthCm, h.X, h.Y, h.Z, HullRadius(h.Radius), HullHalfHeight(h.HalfHeight)) : hostHit;
             if (hostHit) hostOnly += dt;
             if (hit) { on += dt; onSamples++; }
         }
