@@ -230,7 +230,7 @@
   }
   // Saved setups for the host (the last one is used for new lobbies).
   function setupsPanel(){
-    var p=node('div','panel mp-setups');var head=node('div','panel-head');var text=node('div','head-text');add(text,node('h2','','Setups'),node('p','','Save this setup to reuse it. New lobbies start from your last one.'));head.appendChild(text);p.appendChild(head);
+    var p=node('div','panel mp-setups');var head=node('div','panel-head');var text=node('div','head-text');add(text,node('h2','','Saved setups'),node('p','','Save these settings to reuse them. New lobbies start from your last setup.'));head.appendChild(text);p.appendChild(head);
     var body=node('div','mp-setups-body');p.appendChild(body);
     (view.presets||[]).forEach(function(n){var row=node('div','mp-clip-row');add(row,node('span','mp-clip-name',safe(n,'Setup')));row.appendChild(actions(button('Load',function(){act('preset-load',{name:n});},'compact'),button('Delete',function(){act('preset-delete',{name:n});},'compact quiet danger')));body.appendChild(row);});
     var input=trackInput(node('input','mp-chat-input'),'preset');input.setAttribute('maxlength','32');input.setAttribute('autocomplete','off');
@@ -703,11 +703,28 @@
 
   // Host settings editor ----------------------------------------------------
   function section(title,note){var s=node('div','mp-section');add(s,node('h3','',title));if(note)s.appendChild(node('p','mp-section-note',note));return s;}
+  // The basics (mode, scenario, players, rounds, time, privacy) are always shown.
+  // Everything else sits under "More options", which opens by itself when one of
+  // those settings is already changed, so nothing that affects the match is hidden.
+  var advancedOpen=null;
+  function advancedChanged(s){
+    function custom(p){return !!p&&p.preset&&p.preset!=='default';}
+    return !!(s.mapOverride||custom(s.weapon)||custom(s.movement)||custom(s.character)||s.targetSpeed!==1||s.targetSize!==1||s.spectators||s.countdown!==5||s.lateJoin||s.autoStart||s.voting===false);
+  }
+  function advancedSummary(s){
+    var out=[s.mapOverride?'Map '+safe(s.mapOverride.name,'custom'):'Scenario map'];
+    var w=s.weapon&&s.weapon.preset!=='default'?profileText(s.weapon,'weapon'):null,mv=s.movement&&s.movement.preset!=='default'?profileText(s.movement,'movement'):null;
+    out.push(w||mv?[w,mv].filter(Boolean).join(' · '):'Scenario loadout');
+    if(s.targetSpeed!==1||s.targetSize!==1)out.push('Targets '+multiplier(s.targetSpeed)+' / '+multiplier(s.targetSize));
+    out.push('Countdown '+F.number(s.countdown,0)+' s');
+    out.push(s.spectators?'Spectators on':'No spectators');
+    if(s.lateJoin)out.push('Late join');if(s.autoStart)out.push('Auto start');if(s.voting===false)out.push('No suggestions');
+    return out.join(' · ');
+  }
   function settingsEditor(page,lobby){
-    var s=lobby.settings,overrides=s.mode!=='score-race',lockNote='Score race plays the scenario exactly as published, so scores compare with everyone’s history.';
-    page.appendChild(setupsPanel());
-    var top=node('div','mp-editor-top');var t=node('div','mp-editor-title');add(t,node('div','eyebrow','Lobby settings'),node('h2','','Set up the match'),node('p','subtle','Changes apply right away. Anything that changes the match clears everyone’s ready.'));
-    add(top,t,actions(button('Done',function(){editing=false;picker=null;render();},'primary')));page.appendChild(top);
+    var s=lobby.settings,overrides=s.mode!=='score-race',locked='Fixed in score race.';
+    var top=node('div','mp-editor-top');var t=node('div','mp-editor-title');add(t,node('div','eyebrow','Lobby settings'),node('h2','','Set up the match'),node('p','subtle','Changes apply right away. Changing the match clears everyone’s ready.'));
+    add(top,t,actions(button('Done',function(){editing=false;picker=null;advancedOpen=null;render();},'primary')));page.appendChild(top);
     var cols=node('div','mp-row');page.appendChild(cols);var a=node('div','mp-col mp-half'),b=node('div','mp-col mp-half');cols.appendChild(a);cols.appendChild(b);
     var left=node('div','panel mp-editor');a.appendChild(left);var right=node('div','panel mp-editor');b.appendChild(right);
     // Mode
@@ -715,55 +732,68 @@
     MODES.forEach(function(x){var btn=node('button','mp-mode'+(x.id===s.mode?' on':''));btn.type='button';btn.setAttribute('aria-pressed',String(x.id===s.mode));add(btn,node('strong','',x.label),node('span','',x.text));btn.onclick=function(){if(x.id!==s.mode)setting('mode',x.id);};modes.appendChild(btn);});
     m.appendChild(modes);left.appendChild(m);
     // Scenario
-    var sc=section('Scenario','Everyone needs the same scenario. AimMod checks each player’s copy against yours.');
-    var current=node('button','mp-pick');current.type='button';add(current,node('strong','',s.scenario?safe(s.scenario.name,'Scenario'):'Choose a scenario'),node('span','',s.scenario?'Map '+safe(s.scenario.map,'')+' · '+F.duration(s.scenario.timeLimit)+' · #'+s.scenario.hash.slice(0,8):'From your KovaaK’s library'));
+    var sc=section('Scenario','Everyone needs the same scenario. AimMod checks that each player’s copy matches yours.');
+    var current=node('button','mp-pick');current.type='button';add(current,node('strong','',s.scenario?safe(s.scenario.name,'Scenario'):'Choose a scenario'),node('span','',s.scenario?'Map '+safe(s.scenario.map,'')+' · '+F.duration(s.scenario.timeLimit)+' · Change':'From your KovaaK’s library'));
     current.onclick=function(){picker=picker==='scenario'?null:'scenario';pickerQuery='';loadLibrary();render();};sc.appendChild(current);
     if(picker==='scenario')sc.appendChild(pickerList('scenario',s));
     sc.appendChild(contentTable(lobby));
     left.appendChild(sc);
-    // Map
-    var mp=section('Map',overrides?'Play the scenario on another map, including maps from the map-port tool.':lockNote);
-    var mapBtn=node('button','mp-pick'+(overrides?'':' locked'));mapBtn.type='button';add(mapBtn,node('strong','',s.mapOverride?safe(s.mapOverride.name,'Map'):'Scenario map'),node('span','',s.mapOverride?(s.mapOverride.source==='ported'?'Ported map':'Custom map')+' · #'+s.mapOverride.hash.slice(0,8):'Uses the map the scenario was made for'));
-    mapBtn.disabled=!overrides;mapBtn.onclick=function(){picker=picker==='map'?null:'map';pickerQuery='';loadLibrary();render();};mp.appendChild(mapBtn);
-    if(overrides&&s.mapOverride)mp.appendChild(actions(button('Use the scenario map',function(){setting('mapOverride',null);},'compact quiet')));
-    if(picker==='map'&&overrides)mp.appendChild(pickerList('map',s));
-    mp.appendChild(actions(button('Browse the map library',openMaps,'compact quiet')));
-    left.appendChild(mp);
-    // Players and rounds
-    var pl=section('Players');
+    // Players, rounds and time
+    var pl=section('Players and rounds');
     pl.appendChild(settingRow('Max players',s.mode==='duel'?'A duel is always one against one.':'Including you.',stepper(s.maxPlayers,2,8,1,function(v){return F.number(v,0);},function(v){setting('maxPlayers',v);},s.mode==='duel','max players')));
-    pl.appendChild(settingRow('Spectators','Up to 4 people can watch.',toggleSwitch(s.spectators,'Spectators',function(){setting('spectators',!s.spectators);})));
-    right.appendChild(pl);
-    var rd=section('Rounds and time');
-    if(s.mode==='duel')rd.appendChild(settingRow('First to','Rounds a player must win.',stepper(s.firstTo,1,7,1,function(v){return F.number(v,0)+(v===1?' win':' wins');},function(v){setting('firstTo',v);},false,'first to')));
-    else if(s.mode==='practice')rd.appendChild(settingRow('Rounds','Practice runs until the host ends it.',node('span','mp-muted','Unlimited')));
-    else rd.appendChild(settingRow(s.mode==='score-race'?'Attempts':'Rounds',s.mode==='score-race'?'Best score across the attempts counts.':'Points per placement each round.',stepper(s.rounds,1,s.mode==='score-race'?5:10,1,function(v){return F.number(v,0);},function(v){setting('rounds',v);},false,'rounds')));
+    if(s.mode==='duel')pl.appendChild(settingRow('First to','Round wins needed to take the duel.',stepper(s.firstTo,1,7,1,function(v){return F.number(v,0)+(v===1?' win':' wins');},function(v){setting('firstTo',v);},false,'first to')));
+    else if(s.mode==='practice')pl.appendChild(settingRow('Rounds','Practice runs until you end it.',node('span','mp-muted','Unlimited')));
+    else pl.appendChild(settingRow(s.mode==='score-race'?'Attempts':'Rounds',s.mode==='score-race'?'Each player’s best attempt counts.':'Each round gives points by placing.',stepper(s.rounds,1,s.mode==='score-race'?5:10,1,function(v){return F.number(v,0);},function(v){setting('rounds',v);},false,'rounds')));
     var limits=[{id:'default',label:'Scenario'},{id:'30',label:'30 s'},{id:'60',label:'60 s'},{id:'90',label:'90 s'},{id:'120',label:'2 min'}];
-    rd.appendChild(settingRow('Time limit',overrides?'Scenario default is '+F.duration(s.scenario?s.scenario.timeLimit:60)+'.':lockNote,segmented(limits,s.timeLimit?String(s.timeLimit):'default',function(id){setting('timeLimit',id==='default'?null:Number(id));},!overrides,'time limit')));
-    rd.appendChild(settingRow('Countdown','Seconds before everyone starts.',stepper(s.countdown,3,10,1,function(v){return F.number(v,0)+' s';},function(v){setting('countdown',v);},false,'countdown')));
-    var lateOk=s.mode==='ffa-rounds'||s.mode==='practice';
-    rd.appendChild(settingRow('Late join',lateOk?'Players who join mid-match play from the next round.':'Only free-for-all and practice allow late join.',toggleSwitch(s.lateJoin,'Late join',function(){setting('lateJoin',!s.lateJoin);},!lateOk)));
-    rd.appendChild(settingRow('Auto start','Starts by itself a few seconds after everyone is ready.',toggleSwitch(!!s.autoStart,'Auto start',function(){setting('autoStart',!s.autoStart);})));
-    rd.appendChild(settingRow('Scenario suggestions','Players can suggest scenarios and vote; you pick.',toggleSwitch(s.voting!==false,'Scenario suggestions',function(){setting('voting',s.voting===false);})));
-    right.appendChild(rd);
-    // Loadout
-    var lo=section('Loadout',overrides?'Presets build a match scenario from the base scenario, so everyone gets the same feel.':lockNote);
-    lo.appendChild(profileRow('Weapon','weapon',s.weapon,PRESETS,overrides));
-    lo.appendChild(profileRow('Movement','movement',s.movement,PRESETS.filter(function(p){return p.id!=='custom';}),overrides));
-    lo.appendChild(profileRow('Character','character',s.character,[PRESETS[0],PRESETS[5]],overrides));
-    right.appendChild(lo);
-    // Targets
-    var tg=section('Targets',overrides?'Multiplies bot speed and size, like KovaaK’s freeplay settings.':lockNote);
-    tg.appendChild(settingRow('Target speed','',stepper(s.targetSpeed,0.25,3,0.05,multiplier,function(v){setting('targetSpeed',v);},!overrides,'target speed')));
-    tg.appendChild(settingRow('Target size','',stepper(s.targetSize,0.25,2,0.05,multiplier,function(v){setting('targetSize',v);},!overrides,'target size')));
-    if(overrides&&(s.targetSpeed!==1||s.targetSize!==1))tg.appendChild(actions(button('Reset targets',function(){act('settings',{settings:{targetSpeed:1,targetSize:1}});},'compact quiet')));
-    right.appendChild(tg);
+    pl.appendChild(settingRow('Time limit',overrides?'The scenario’s own is '+F.duration(s.scenario?s.scenario.timeLimit:60)+'.':locked,segmented(limits,s.timeLimit?String(s.timeLimit):'default',function(id){setting('timeLimit',id==='default'?null:Number(id));},!overrides,'time limit')));
+    right.appendChild(pl);
     // Privacy
-    var pv=section('Privacy');
-    pv.appendChild(segmented([{id:'friends',label:'Friends only'},{id:'invite',label:'Invite only'},{id:'public',label:'Public'}],s.privacy,function(id){setting('privacy',id);},false,'privacy'));
-    pv.appendChild(node('p','mp-section-note',s.privacy==='friends'?'Steam friends can join from their friends list or with your invite.':s.privacy==='invite'?'Only people you invite can join.':'Anyone with the room code can join once AimMod Hub rooms are live; until then it works like friends only.'));
-    left.appendChild(pv);
-    if(lobby.generated){var g=node('div','mp-generated');add(g,node('strong','','A custom scenario will be generated'),node('span','',safe(lobby.generated.name,'')),node('span','mp-muted','Freeplay, scored by AimMod. Ranked leaderboards are never involved.'));right.appendChild(g);}
+    var pv=section('Who can join');
+    pv.appendChild(segmented([{id:'friends',label:'Friends'},{id:'invite',label:'Invited only'},{id:'public',label:'Anyone with the code'}],s.privacy,function(id){setting('privacy',id);},false,'privacy'));
+    pv.appendChild(node('p','mp-section-note',s.privacy==='friends'?'Steam friends can join from their friends list or with your invite.':s.privacy==='invite'?'Only people you invite can join.':'Anyone with the room code can join once AimMod Hub rooms are live. Until then it works like Friends.'));
+    right.appendChild(pv);
+    if(lobby.generated){var g=node('div','mp-generated');add(g,node('strong','','A custom scenario will be generated'),node('span','',safe(lobby.generated.name,'')),node('span','mp-muted','Played in freeplay and scored by AimMod. Ranked leaderboards are never involved.'));right.appendChild(g);}
+    // More options
+    var open=advancedOpen===null?advancedChanged(s):advancedOpen;
+    var more=node('div','panel mp-more'+(open?' open':''));page.appendChild(more);
+    var head=node('div','mp-more-head');var ht=node('div','mp-more-text');
+    add(ht,node('strong','','More options'),node('span','',open?'Map, loadout, targets and lobby rules.':advancedSummary(s)));
+    add(head,ht,actions(button(open?'Hide':'Show',function(){advancedOpen=!open;if(!advancedOpen&&picker&&picker!=='scenario')picker=null;render();},'compact')));
+    more.appendChild(head);
+    if(open){
+      if(!overrides)more.appendChild(node('p','mp-lock','Score race plays the scenario exactly as published, so scores compare with everyone’s history. Pick another mode to change the map, time, loadout or targets.'));
+      var mc=node('div','mp-row');more.appendChild(mc);var c1=node('div','mp-col mp-half'),c2=node('div','mp-col mp-half');mc.appendChild(c1);mc.appendChild(c2);
+      // Map
+      var mp=section('Map',overrides?'Play the scenario on another map, including ported maps.':locked);
+      var mapBtn=node('button','mp-pick'+(overrides?'':' locked'));mapBtn.type='button';add(mapBtn,node('strong','',s.mapOverride?safe(s.mapOverride.name,'Map'):'Scenario map'),node('span','',s.mapOverride?(s.mapOverride.source==='ported'?'Ported map':'Custom map'):'The map the scenario was made for'));
+      mapBtn.disabled=!overrides;mapBtn.onclick=function(){picker=picker==='map'?null:'map';pickerQuery='';loadLibrary();render();};mp.appendChild(mapBtn);
+      if(overrides&&s.mapOverride)mp.appendChild(actions(button('Use the scenario map',function(){setting('mapOverride',null);},'compact quiet')));
+      if(picker==='map'&&overrides)mp.appendChild(pickerList('map',s));
+      mp.appendChild(actions(button('Browse the map library',openMaps,'compact quiet')));
+      c1.appendChild(mp);
+      // Loadout
+      var lo=section('Loadout',overrides?'Presets give everyone the same weapon and movement feel.':locked);
+      lo.appendChild(profileRow('Weapon','weapon',s.weapon,PRESETS,overrides));
+      lo.appendChild(profileRow('Movement','movement',s.movement,PRESETS.filter(function(p){return p.id!=='custom';}),overrides));
+      lo.appendChild(profileRow('Character','character',s.character,[PRESETS[0],PRESETS[5]],overrides));
+      c1.appendChild(lo);
+      // Targets
+      var tg=section('Targets',overrides?'Bot speed and size, like KovaaK’s freeplay settings.':locked);
+      tg.appendChild(settingRow('Target speed','',stepper(s.targetSpeed,0.25,3,0.05,multiplier,function(v){setting('targetSpeed',v);},!overrides,'target speed')));
+      tg.appendChild(settingRow('Target size','',stepper(s.targetSize,0.25,2,0.05,multiplier,function(v){setting('targetSize',v);},!overrides,'target size')));
+      if(overrides&&(s.targetSpeed!==1||s.targetSize!==1))tg.appendChild(actions(button('Reset targets',function(){act('settings',{settings:{targetSpeed:1,targetSize:1}});},'compact quiet')));
+      c2.appendChild(tg);
+      // Lobby rules
+      var rl=section('Lobby rules');
+      rl.appendChild(settingRow('Countdown','Seconds before everyone starts.',stepper(s.countdown,3,10,1,function(v){return F.number(v,0)+' s';},function(v){setting('countdown',v);},false,'countdown')));
+      rl.appendChild(settingRow('Spectators','Up to 4 people can watch.',toggleSwitch(s.spectators,'Spectators',function(){setting('spectators',!s.spectators);})));
+      var lateOk=s.mode==='ffa-rounds'||s.mode==='practice';
+      rl.appendChild(settingRow('Late join',lateOk?'Players who join mid-match play from the next round.':'Only free-for-all and practice allow it.',toggleSwitch(s.lateJoin,'Late join',function(){setting('lateJoin',!s.lateJoin);},!lateOk)));
+      rl.appendChild(settingRow('Auto start','Starts by itself a few seconds after everyone is ready.',toggleSwitch(!!s.autoStart,'Auto start',function(){setting('autoStart',!s.autoStart);})));
+      rl.appendChild(settingRow('Scenario suggestions','Players suggest scenarios and vote. You pick.',toggleSwitch(s.voting!==false,'Scenario suggestions',function(){setting('voting',s.voting===false);})));
+      c2.appendChild(rl);
+    }
+    page.appendChild(setupsPanel());
   }
   function settingRow(title,note,control){var r=node('div','mp-setting');var t=node('div','mp-setting-text');add(t,node('strong','',title));if(note)t.appendChild(node('span','',note));add(r,t,control);return r;}
   function profileRow(title,key,value,options,enabled){

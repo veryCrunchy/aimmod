@@ -72,7 +72,7 @@ test('host settings editor sends validated keys, and score race locks overrides'
   const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view({lobby:lobby()}));
   s.button('Edit').onclick();const lib=s.requests.find(r=>r.url==='/private/multiplayer?part=library');assert.ok(lib,'the library loads for pickers');
   lib.finish(200,{available:true,scenarios:[{name:'Synthetic Scenario',map:'synthetic_map',mapSource:'game',timeLimit:60}],maps:[{name:'synthetic_port',source:'ported',hash:'abc'}],weapons:['Synthetic Rifle'],characters:[],presets:[]});
-  assert.ok(s.all().some(e=>e.tag==='button'&&e.className.indexOf('mp-pick')===0&&e.disabled),'map override is locked in score race');
+  s.button('Show').onclick();assert.ok(s.all().some(e=>e.tag==='button'&&e.className.indexOf('mp-pick')===0&&e.disabled),'map override is locked in score race');
   s.button('60 s').onclick&&assert.ok(s.button('60 s').disabled,'time limit is locked in score race');
   s.all().find(e=>e.className&&e.className.indexOf('mp-mode')===0&&e.children[0]&&e.children[0].textContent==='Free-for-all').onclick();
   assert.deepEqual(JSON.parse(s.last().body),{action:'settings',settings:{mode:'ffa-rounds'}});

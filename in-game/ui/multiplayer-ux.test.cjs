@@ -60,3 +60,18 @@ test('an invite from a different AimMod version explains why and offers no Accep
   const r=setup().open(view({invites:[{id:'i3',fromName:'Synthetic Host',kind:'request',summary:null,at:900,compatible:true}]}));
   assert.ok(r.text().includes('Join request'));assert.ok(r.button('Let them in'));
 });
+test('settings editor: title and Done come first, advanced settings fold away unless one is changed',()=>{
+  const lib={available:true,scenarios:[],maps:[],weapons:[],characters:[],presets:[]};
+  const s=setup().open(view({lobby:lobby()}));s.button('Edit').onclick();s.requests.find(r=>/part=library/.test(r.url)).finish(200,lib);
+  const [title,more,setups]=order(s,['mp-editor-top','mp-more','mp-setups']);assert.ok(title>=0&&title<more&&more<setups,'title, then More options, then saved setups');
+  assert.ok(s.button('Done'));assert.ok(!s.text().includes('Target speed'),'targets are folded away by default');
+  assert.ok(s.text().includes('Scenario map · Scenario loadout · Countdown 5 s · No spectators'),'the folded panel says what it holds');
+  s.button('Show').onclick();assert.ok(s.text().includes('Target speed'));
+  const locks=s.all().filter(e=>e.className==='mp-lock');assert.equal(locks.length,1,'the score race reason is said once');
+  assert.equal(s.all().filter(e=>e.textContent==='Fixed in score race.').length,4,'locked rows get a short note');
+  s.button('Hide').onclick();assert.ok(!s.text().includes('Target speed'));
+  // A changed advanced setting is never hidden.
+  const ffa=Object.assign({},settings,{mode:'ffa-rounds',targetSpeed:1.5});
+  const t=setup().open(view({lobby:lobby({settings:ffa})}));t.button('Edit').onclick();
+  assert.ok(t.text().includes('Target speed'),'opens by itself when targets are changed');assert.ok(!t.all().some(e=>e.className==='mp-lock'));
+});

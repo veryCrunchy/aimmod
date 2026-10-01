@@ -275,3 +275,12 @@
 .mp-port-facts{display:block;margin-top:4px;font-size:12px;color:#a7bab0}
 .mp-port-state{margin-top:8px;font-size:12px;font-weight:600;color:#a7bab0}.mp-port-state.ok{color:#27e4a1}.mp-port-state.warn{color:#f0b45a}
 .mp-port .actions{padding:6px 16px 14px}.mp-port .actions>.button{margin:0 8px 0 0}
+/* Settings editor: More options (progressive disclosure) */
+.mp-more{margin-bottom:16px;padding:0}
+.mp-more-head{display:flex;flex-direction:row;align-items:center;padding:14px 22px}
+.mp-more-text{flex:1;min-width:0;padding-right:16px}.mp-more-text strong{display:block;font-size:15px;font-weight:600}
+.mp-more-text span{display:block;margin-top:2px;font-size:12px;color:#a7bab0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mp-more-head .actions>.button{margin:0}
+.mp-more.open .mp-more-head{border-bottom:1px solid #22302a}
+.mp-more>.mp-row{padding:0 22px 8px}.mp-more .mp-col{padding:0 20px}
+.mp-lock{margin:14px 22px 0;padding:9px 12px;font-size:12px;line-height:1.5;color:#dcebe3;background:#101916;border:1px solid #22302a;border-left:3px solid #66ccff;border-radius:6px}
