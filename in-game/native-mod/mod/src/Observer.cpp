@@ -102,7 +102,7 @@ namespace aimmod
         : m_output(output), m_version(std::move(version)),
           m_lifecycle(std::to_string(static_cast<long long>(std::time(nullptr))) + "-" + std::to_string(GetCurrentProcessId())),
           m_sampler(m_b, m_scene, output), m_presenter(m_b, m_scene, output), m_control(m_b, m_scene, output),
-          m_match(m_b, m_scene, output)
+          m_match(m_b, m_scene, output), m_cosmetics(m_b, m_scene, output)
     {
     }
 
@@ -125,6 +125,7 @@ namespace aimmod
         if (m_control.canCapture()) caps += caps.empty() ? "capture" : ",capture";
         if (m_b.replayReady()) caps += ",shots";
         if (m_b.replayReady() && m_match.available()) caps += ",match-play";
+        if (m_cosmetics.ready()) caps += ",cosmetics";
         return caps;
     }
 
@@ -329,6 +330,7 @@ namespace aimmod
         BindFunctions();
         m_presenter.Bind();
         m_control.Bind();
+        m_cosmetics.Bind();
         RegisterCallbacks();
         m_presenter.Start();
         m_output.SetCapabilities(Capabilities());
@@ -601,6 +603,7 @@ namespace aimmod
             m_match.Tick(now, m_scenarioName, m_inChallenge, m_loading, [this](UObject* actor) { return PoseId(actor); }, m_poseNames);
             if (wasAvailable != m_match.available()) m_output.SetCapabilities(Capabilities());
         }
+        m_cosmetics.Tick(now);
         PollClipKey();
         if (m_output.poseRequested() && now >= m_nextPose)
         {
@@ -867,6 +870,7 @@ namespace aimmod
             m_output.WatchGameStats(m_lifecycle.attemptScenario(), m_attemptUnixMs, m_attemptLocalStart);
         }
         if (!before && m_lifecycle.active()) UpdateMeasurements(m_running, s.elapsed, s.remaining, score);
+        UpdateFreeplay(s, manager, now);
         if (m_polls % 2 == 0) PublishLive(s, m_running);
         PublishScene(s, manager); // also refreshes the challenge/loading state game control uses
     }
@@ -904,9 +908,77 @@ namespace aimmod
         m_output.PublishScene(std::move(body));
     }
 
+    void Observer::UpdateFreeplay(const PollSample& s, UObject* manager, double now)
+    {
+        const bool inChallenge = !manager || m_b.isInChallenge.Bool(manager).value_or(true);
+        const bool loading = manager && m_b.isScenarioLoading.ok() && m_b.isScenarioLoading.Bool(manager).value_or(true);
+        const bool eligible = s.available && !inChallenge && !loading && !m_lifecycle.active() && !m_output.playbackActive() &&
+                              std::string_view(m_scenarioName).starts_with(MatchScenarioPrefix);
+        if (!eligible || (m_freeplay && m_freeplay->key != s.scenarioKey))
+        {
+            if (m_freeplay) Log("freeplay match run ended: " + m_freeplay->id + (loading ? " (reload)" : ""));
+            m_freeplay.reset();
+            if (!eligible) return;
+        }
+        UObject* player = m_scene.Player();
+        UObject* character = player ? m_b.myCharacter.Object(player) : nullptr;
+        game::LocalCounters local = game::ReadLocalCounters(character);
+        if (!m_freeplay)
+        {
+            FreeplayRun run;
+            run.id = "fp-" + std::to_string(static_cast<long long>(std::time(nullptr))) + "-" + std::to_string(GetCurrentProcessId()) + "-" +
+                     std::to_string(++m_freeplayRuns);
+            run.scenario = m_scenarioName;
+            run.key = s.scenarioKey;
+            run.started = run.last = now;
+            run.base = local;
+            m_freeplay = std::move(run);
+            Log("freeplay match run started: " + m_freeplay->id);
+        }
+        FreeplayRun& r = *m_freeplay;
+        if (s.paused) r.paused += now - r.last;
+        r.last = now;
+        // Counters since the run began: the indicator receiver when it has a
+        // value, else the local session counters minus the run's baseline.
+        UObject* indicators = m_scene.Indicators();
+        auto indicator = [&](const Getter& g) -> std::optional<double> {
+            if (!indicators || !g.ok()) return std::nullopt;
+            auto v = g.ValueElse(indicators);
+            return v.hasValue && IsUsableNumber(v.value) ? std::optional<double>(v.value) : std::nullopt;
+        };
+        auto since = [](const std::optional<double>& value, const std::optional<double>& base) -> std::optional<double> {
+            if (!Finite(value)) return std::nullopt;
+            return std::max(0.0, *value - (Finite(base) ? *base : 0.0));
+        };
+        auto pick = [&](const Getter& g, const std::optional<double>& value, const std::optional<double>& base) {
+            auto primary = indicator(g);
+            return primary ? primary : since(value, base);
+        };
+        LiveSnapshot& live = r.live;
+        live = {};
+        live.active = !s.paused;
+        live.paused = s.paused;
+        live.mode = "freeplay";
+        live.id = r.id;
+        live.scenario = r.scenario;
+        live.seconds = std::max(0.0, now - r.started - r.paused);
+        auto score = indicator(m_b.indicatorScore);
+        live.scoreStatus = score ? "available" : "no-native-value";
+        live.score = score;
+        live.shots = pick(m_b.indicatorShots, local.shots, r.base.shots);
+        live.hits = pick(m_b.indicatorHits, local.hits, r.base.hits);
+        live.kills = pick(m_b.indicatorKills, local.kills, r.base.kills);
+        live.damage = pick(m_b.indicatorDamage, local.damage, r.base.damage);
+    }
+
     void Observer::PublishLive(const PollSample& s, bool running)
     {
         LiveSnapshot live;
+        if (!m_output.playbackActive() && !m_lifecycle.active() && m_freeplay)
+        {
+            m_output.PublishLive(FormatLiveOverlay(m_freeplay->live));
+            return;
+        }
         if (m_output.playbackActive() || !m_lifecycle.active())
         {
             m_output.PublishLive(FormatLiveOverlay(live));

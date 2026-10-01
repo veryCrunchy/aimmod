@@ -2,6 +2,7 @@
 // Game-thread observer: drives the lifecycle machine from polls (and optional
 // broadcast observations), publishes live telemetry, writes the journal and
 // runs the replay sampler. Read-only with respect to the game.
+#include "Cosmetics.hpp"
 #include "GameControl.hpp"
 #include "MatchPlay.hpp"
 #include "Presenter.hpp"
@@ -72,6 +73,19 @@ namespace aimmod
         void UpdateMeasurements(bool running, double elapsed, double remaining, const game::Getter::ValueElseResult& score);
         void Handle(const std::vector<LifecycleEvent>& events);
         void PublishLive(const PollSample& sample, bool running);
+        // Freeplay runs of AimMod match scenarios (lobby scoring and time
+        // limits): a live feed without a challenge attempt.
+        void UpdateFreeplay(const PollSample& sample, UObject* manager, double now);
+        struct FreeplayRun
+        {
+            std::string id, scenario;
+            std::uint64_t key{};
+            double started{}, paused{}, last{};
+            game::LocalCounters base;
+            LiveSnapshot live;
+        };
+        std::optional<FreeplayRun> m_freeplay;
+        std::uint32_t m_freeplayRuns{};
         void PublishScene(const PollSample& sample, UObject* manager);
         void LogCompatibility(const char* reason);
         bool OnGameThread() const;
@@ -100,6 +114,7 @@ namespace aimmod
         void PublishSelfPose(double now);
         std::uint32_t PoseId(UObject* actor);
         MatchPlay m_match;
+        Cosmetics m_cosmetics;
 
         // Callback registrations.
         std::vector<std::uint64_t> m_callbacks;

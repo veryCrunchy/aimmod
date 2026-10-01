@@ -46,6 +46,7 @@ namespace aimmod
         std::string id;           // empty = omitted
         std::string scenario;     // empty = omitted
         std::string scoreStatus;  // empty = omitted; [a-z-]+ only
+        std::string mode;         // empty = omitted (challenge); "freeplay" for AimMod match runs
         std::optional<double> score, seconds, shots, hits, kills, damage, remainingSeconds, lastTimeToKillSeconds;
     };
     // live-overlay.json body (no trailing newline), field order as Telemetry.lua.

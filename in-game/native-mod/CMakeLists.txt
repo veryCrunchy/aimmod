@@ -34,6 +34,8 @@ add_library(aimmod_core STATIC
     core/src/Supervisor.cpp
     core/src/Settings.cpp
     core/src/MatchPlay.cpp
+    core/src/Json.cpp
+    core/src/Cosmetics.cpp
 )
 target_include_directories(aimmod_core PUBLIC core/include)
 if(MSVC)
@@ -46,6 +48,7 @@ if(AIMMOD_BUILD_TESTS)
     target_link_libraries(aimmod_replay_tool PRIVATE aimmod_core)
     add_executable(aimmod_core_tests tests/CoreTests.cpp)
     target_link_libraries(aimmod_core_tests PRIVATE aimmod_core)
+    target_compile_definitions(aimmod_core_tests PRIVATE AIMMOD_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     if(MSVC)
         target_compile_options(aimmod_core_tests PRIVATE /W4 /utf-8 /permissive-)
     endif()
@@ -63,6 +66,7 @@ if(AIMMOD_BUILD_MOD)
         mod/src/Output.cpp
         mod/src/ServiceHost.cpp
         mod/src/MatchPlay.cpp
+        mod/src/Cosmetics.cpp
     )
     target_include_directories(AimModCore PRIVATE mod/src)
     target_link_libraries(AimModCore PRIVATE aimmod_core)

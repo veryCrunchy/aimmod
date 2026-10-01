@@ -1,6 +1,7 @@
 #pragma once
 // Writer thread: owns every file the mod writes. The game thread only hands
 // over small immutable jobs (never blocks on disk).
+#include <aimmod/Cosmetics.hpp>
 #include <aimmod/GameCommand.hpp>
 #include <aimmod/GameStats.hpp>
 #include <aimmod/MatchPlay.hpp>
@@ -65,6 +66,26 @@ namespace aimmod
             std::uint64_t version{};
         };
         PlayStateSnapshot playState() const;
+
+        // Cosmetics inputs (DESIGN.md "Cosmetics"): the installed catalog,
+        // verified once against its manifest by the writer thread, and the
+        // session marker and looks the service writes, re-read every second.
+        struct CosmeticsLibrary
+        {
+            cosmetics::Index index;
+            std::set<std::string> verifiedPaks;
+            std::string status;
+        };
+        struct CosmeticsInputs
+        {
+            std::shared_ptr<const CosmeticsLibrary> library; // null until loaded
+            std::optional<cosmetics::Marker> marker;
+            std::shared_ptr<const cosmetics::Looks> looks;   // null: absent or malformed
+            bool allowDrafts{};                              // cosmetics-dev.txt (local team tests)
+        };
+        // Before Start: Mods\AimModCore\service\cosmetics and <game>\Content\Paks\~AimMod.
+        void SetCosmeticsSources(std::filesystem::path catalogDir, std::filesystem::path paksDir);
+        CosmeticsInputs cosmetics() const;
         // Clip hotkey and window (clip-settings.tsv, defaults F8 / 8 s / 2 s).
         ClipSettings clipSettings() const;
         void PublishReplayStatus(std::string body);
@@ -136,6 +157,13 @@ namespace aimmod
         std::shared_ptr<const PlayState> m_playState;
         std::uint64_t m_playStateVersion{}, m_playStateStamp{}, m_lastPlayStateCheck{}, m_playStateSeenAt{};
         void ReadPlayState(std::uint64_t now);
+        std::filesystem::path m_catalogDir, m_paksDir;
+        bool m_libraryLoaded{};
+        CosmeticsInputs m_cosmetics;
+        std::string m_markerText, m_looksText;
+        std::uint64_t m_lastCosmeticsCheck{};
+        void LoadCosmeticsLibrary();
+        void ReadCosmeticsInputs();
         ClipSettings m_clips;
         std::string m_selfPose;
         bool m_selfPoseDirty{};

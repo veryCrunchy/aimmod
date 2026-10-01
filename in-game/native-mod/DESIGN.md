@@ -125,7 +125,15 @@ All under `%LOCALAPPDATA%\AimMod\KovaaksNative\`:
 - `live-overlay.json`: `{"version":1,"active":..,"paused":..,...}` exactly
   as `Telemetry.lua` wrote it; replaced atomically; rewritten on change and
   at least once per second while the game runs; read by
-  `LiveOverlayState.cs` (2 s freshness) and the Lua HUD.
+  `LiveOverlayState.cs` (2 s freshness) and the Lua HUD. Freeplay runs of
+  `AimMod Match - ` scenarios (no challenge attempt) publish too, with
+  `"mode":"freeplay"` and an `fp-<unix>-<pid>-<n>` id that changes on every
+  reload: `seconds` is wall time since the run began minus pauses; shots,
+  hits, kills and damage are the indicator values or the local counters
+  since the run began; `score` only when the indicator has one. Nothing is
+  journalled or recorded for them.
+- `core-scene.json`: rewritten on every change (20 Hz polls) and at least
+  once a second; `inChallenge`, `running`, `loading`, `paused` are current.
 - `replays/<id>.amreplay`: replay format 2 (below), written once when an
   attempt completes (`.partial` then rename). The replay id equals the journal
   id. `ReplayCatalog.cs` reads format 2 and the older JSON-lines format 1
@@ -334,7 +342,16 @@ seed	<0..4294967295>                          (start; freeplay, or challenge of 
 width	<64..3840> / height	<64..2160>       (capture-thumbnail)
 out	<name>.png                              (capture-thumbnail; plain file name)
 view1..view4	<x>,<y>,<z>,<pitch>,<yaw>,<fov> (capture-thumbnail; 1-4, in order)
+then	stop | reset                            (end-run; default stop)
 ```
+
+`end-run` (capability `load`; `scenario` must be the current `AimMod Match - `
+scenario, played in freeplay): ends a lobby round at its time limit. It
+resets overrides and the match seed, then reloads the scenario through the
+browser path, without playing (`stop`) or playing again in freeplay
+(`reset`). Answered `accepted ending`, then `done stopped|reset` once the
+reload finished, or `end-failed` when no reload began within 5 s. Refused
+during a challenge and for any other scenario (`not-a-match`, `not-current`).
 
 `capture-thumbnail` (capability `capture`, also `refresh-scenarios` and
 `action` list above): refused during a challenge; loads the scenario in
@@ -458,6 +475,47 @@ If `HandleDamage`, `SetHealth`, `Respawn`, `OnCharacterKilled`,
 `OverrideInvulnerable`, `ResetInvulnerable` or `GetCurrentHealth` is missing on
 the character class, match play is disabled for the session and the missing
 names are logged.
+
+## Cosmetics
+
+Policy and plan: `in-game/docs/cosmetics.md`. Core (`core/Cosmetics`, tested
+with the Lua testbed's vectors): `IsMatchScenario`, `ParseMarker`, `Decide`
+(exact port of `CosmeticsScope.lua`), `IsFreeLook`, the catalog
+(`ParseCatalog`, `Validate`, `BuildIndex`, `Resolve`, `Pickable`; schema of
+`CosmeticsCatalog.lua` plus `textures`, `mesh`, `material` under
+`/Game/AimModCosmetics/` and `attach {role, models {<model>: {bone, location,
+rotation, scale}}}`), the manifest (`ParseManifest`, `VerifyManifest`: size
+then SHA-256 via BCrypt), `ParseLooks` and `PlanAvatar`/`PlanLocal`.
+
+Inputs:
+- `Mods\AimModCore\service\cosmetics\catalog.json` and `catalog-manifest.json`
+  (`{"version": <catalog version>, "files": [{name, size, sha256}], "items"?}`),
+  verified once by the writer thread. Paks: `<game>\FPSAimTrainer\Content\Paks\~AimMod\`;
+  unlisted or mismatched paks are logged and never referenced. A catalog that
+  does not match its manifest disables cosmetics.
+- `aimmod-session.txt` (service marker) and `cosmetic-looks.txt`
+  (`v=1`, `peer=<SteamID64> items=<id>@<v>,...`, at most one `self=<id>@<v>,...`,
+  at most 8 items per line; validated whole), re-read every second.
+- `cosmetics-dev.txt` with `allow_drafts=1`: local team tests of draft items
+  (affects only what this viewer sees).
+
+Applier (game thread, every second): the gate needs the marker, the
+ScenarioManager state (`IsInChallenge` on manager and scenario, benchmark,
+editor, loading) and the marker's match scenario. `match` dresses avatars and
+the own weapon/arms; `spectate` avatars only; anything else restores.
+- Avatars are characters with exactly one `AimMod.Peer.<SteamID64>` actor tag
+  whose `mCharacterProfileNative` model/skin are in the Default packs.
+- Parameter items: a new dynamic instance parented on each fitting slot's
+  material (`CreateDynamicMaterialInstance`, vector/scalar/texture
+  parameters), only when the material has every parameter. Restored to the
+  original when the gate closes or the look changes; a slot the game keeps
+  resetting is left to the game after 5 rounds.
+- Accessories: AimMod's own `StaticMeshComponent` (`AddComponentByClass`,
+  collision off before `SetStaticMesh`), snapped to the bone on `Mesh`, then the
+  catalog's relative transform; destroyed when the gate closes. Assets load
+  only from `/Game/AimModCosmetics/` of a verified pak.
+- Never touched: the game's meshes, collision, `ShotOrigin`, scenario bots,
+  paid looks. Capability `cosmetics` when the bindings resolve.
 
 ## Match seeds (shared randomness)
 

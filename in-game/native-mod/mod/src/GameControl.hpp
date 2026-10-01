@@ -98,6 +98,8 @@ namespace aimmod
             double deadline{};
             double loadedAt{-1};
             bool started{};
+            bool sawLoading{}; // end-run: the reload began
+            double issued{};
             RC::Unreal::FWeakObjectPtr action;
         };
         std::optional<Pending> m_pending;

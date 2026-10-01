@@ -134,6 +134,11 @@ namespace aimmod
             AppendJsonString(out, s.id);
         }
         if (s.transient) out += ",\"transient\":true";
+        if (IsSimpleToken(s.mode))
+        {
+            out += ",\"mode\":";
+            AppendJsonString(out, s.mode);
+        }
         if (!s.scenario.empty())
         {
             out += ",\"scenario\":";

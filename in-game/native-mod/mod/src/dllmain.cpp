@@ -27,6 +27,15 @@ namespace
         if (length == 0 || length >= std::size(path)) return {};
         return std::filesystem::path(path).parent_path().parent_path();
     }
+
+    // <game>\FPSAimTrainer\Binaries\Win64\<exe> -> <game>\FPSAimTrainer\Content\Paks\~AimMod
+    std::filesystem::path AimModPaks()
+    {
+        wchar_t path[MAX_PATH * 4]{};
+        DWORD length = GetModuleFileNameW(nullptr, path, static_cast<DWORD>(std::size(path)));
+        if (length == 0 || length >= std::size(path)) return {};
+        return std::filesystem::path(path).parent_path().parent_path().parent_path() / L"Content" / L"Paks" / L"~AimMod";
+    }
 } // namespace
 
 class AimModCore final : public RC::CppUserModBase
@@ -50,6 +59,7 @@ public:
     auto on_unreal_init() -> void override
     {
         const auto root = aimmod::Output::DefaultRoot();
+        m_output.SetCosmeticsSources(ModDirectory() / L"service" / L"cosmetics", AimModPaks());
         if (!m_output.Start(root, Version))
         {
             aimmod::Warn("output folder unavailable; AimModCore is disabled");

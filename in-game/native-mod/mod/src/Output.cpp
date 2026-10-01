@@ -241,6 +241,86 @@ namespace aimmod
         ++m_playStateVersion;
     }
 
+    void Output::SetCosmeticsSources(std::filesystem::path catalogDir, std::filesystem::path paksDir)
+    {
+        m_catalogDir = std::move(catalogDir);
+        m_paksDir = std::move(paksDir);
+    }
+
+    Output::CosmeticsInputs Output::cosmetics() const
+    {
+        std::lock_guard lock(const_cast<std::mutex&>(m_mutex));
+        return m_cosmetics;
+    }
+
+    // Writer thread, once: catalog.json counts only when it matches the
+    // manifest; pak items only when their pak does.
+    void Output::LoadCosmeticsLibrary()
+    {
+        m_libraryLoaded = true;
+        auto library = std::make_shared<CosmeticsLibrary>();
+        std::string manifestText, catalogText;
+        if (m_catalogDir.empty() || !ReadSmall(m_catalogDir / L"catalog-manifest.json", manifestText, (1u << 20) + 1) ||
+            !ReadSmall(m_catalogDir / L"catalog.json", catalogText, (4u << 20) + 1))
+        {
+            library->status = "not installed";
+            Log("cosmetics: catalog not installed");
+        }
+        else if (std::string error; auto manifest = cosmetics::ParseManifest(manifestText, &error))
+        {
+            auto check = cosmetics::VerifyManifest(*manifest, m_catalogDir, m_paksDir);
+            for (const std::string& problem : check.problems) Log("cosmetics: " + problem);
+            if (!check.catalogVerified) library->status = "catalog does not match its manifest";
+            else if (auto catalog = cosmetics::ParseCatalog(catalogText, &error))
+            {
+                std::vector<std::string> problems = catalog->errors;
+                cosmetics::ApplyManifestItems(*manifest, *catalog, problems);
+                library->index = cosmetics::BuildIndex(catalog->items, problems);
+                library->verifiedPaks = std::move(check.verifiedPaks);
+                for (const std::string& problem : problems) Log("cosmetics: catalog: " + problem);
+                library->status = "catalog " + std::to_string(static_cast<long long>(catalog->version)) + ", " + std::to_string(library->index.size()) +
+                                  " item(s), " + std::to_string(cosmetics::Pickable(library->index).size()) + " released, " +
+                                  std::to_string(library->verifiedPaks.size()) + " verified pak(s)";
+            }
+            else library->status = error;
+        }
+        else library->status = error;
+        Log("cosmetics: " + library->status);
+        std::lock_guard lock(m_mutex);
+        m_cosmetics.library = std::move(library);
+    }
+
+    void Output::ReadCosmeticsInputs()
+    {
+        std::string marker, looks, dev;
+        if (!ReadSmall(m_root / L"aimmod-session.txt", marker, 1025)) marker.clear();
+        if (!ReadSmall(m_root / L"cosmetic-looks.txt", looks, 65537)) looks.clear();
+        const bool drafts = ReadSmall(m_root / L"cosmetics-dev.txt", dev, 256) && dev.find("allow_drafts=1") != std::string::npos;
+        std::optional<cosmetics::Marker> parsedMarker;
+        std::shared_ptr<const cosmetics::Looks> parsedLooks;
+        const bool markerChanged = marker != m_markerText, looksChanged = looks != m_looksText;
+        if (!markerChanged && !looksChanged)
+        {
+            std::lock_guard lock(m_mutex);
+            m_cosmetics.allowDrafts = drafts;
+            return;
+        }
+        std::string reason;
+        if (!marker.empty()) parsedMarker = cosmetics::ParseMarker(marker, &reason);
+        if (markerChanged && !marker.empty() && !parsedMarker) Log("cosmetics: session marker ignored (" + reason + ")");
+        if (!looks.empty())
+        {
+            if (auto parsed = cosmetics::ParseLooks(looks, &reason)) parsedLooks = std::make_shared<const cosmetics::Looks>(std::move(*parsed));
+            else if (looksChanged) Log("cosmetics: looks ignored (" + reason + ")");
+        }
+        m_markerText = std::move(marker);
+        m_looksText = std::move(looks);
+        std::lock_guard lock(m_mutex);
+        m_cosmetics.marker = std::move(parsedMarker);
+        m_cosmetics.looks = std::move(parsedLooks);
+        m_cosmetics.allowDrafts = drafts;
+    }
+
     std::shared_ptr<const std::unordered_map<std::string, std::string>> Output::avatars() const
     {
         std::lock_guard lock(const_cast<std::mutex&>(m_mutex));
@@ -596,6 +676,12 @@ namespace aimmod
                 m_selfShotsDirty = false;
             }
             if (!shots.empty() && m_shotsRequested.load()) WriteAtomic(m_root / L"self-shots.tsv", shots);
+        }
+        if (!force && !m_libraryLoaded) LoadCosmeticsLibrary(); // first writer pass, off the game thread
+        if (force || now - m_lastCosmeticsCheck >= 1000)
+        {
+            m_lastCosmeticsCheck = now;
+            ReadCosmeticsInputs();
         }
         if (force || now - m_lastPlayStateCheck >= 15)
         {
