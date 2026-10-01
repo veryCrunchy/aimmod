@@ -85,8 +85,11 @@ sealed record LobbySettings(
     // CS: right-mouse zoom (AdsZooms: off, scoped weapons only as in CS2, or every gun) and the zoomed
     // sensitivity ratio (KovaaK's ADSZoomSensFactor; 1 keeps the hip-fire sensitivity).
     string AdsZoom = AdsZooms.Cs,
-    double AdsSensitivity = 1)
+    double AdsSensitivity = 1,
+    bool? FriendlyFire = null)
 {
+    // Team damage: on by default in CS competitive (CS2 rules), off elsewhere unless the host turns it on.
+    [JsonIgnore] public bool EffectiveFriendlyFire => FriendlyFire ?? Mode == LobbyModes.Cs;
     public const int MinPlayers = 2, MaxPlayerLimit = 10, MaxSpectators = 4;
     [JsonIgnore] public ProfileChoice WeaponProfile => Weapon ?? ProfileChoice.Default;
     [JsonIgnore] public ProfileChoice MovementProfile => Movement ?? ProfileChoice.Default;
@@ -125,7 +128,7 @@ static class TrackingDefaults { public const int RoundSeconds = 10, MaxRoundSeco
 // direct or simulated. Profiles: whether custom weapon/character profiles are present.
 sealed record LobbyMember(string Id, string Name, string Role, bool Ready, int? Ping, string Scenario, string Map, string Profiles,
     string Connection, string Link, long JoinedAt, bool Simulated, string Avatar = AvatarProfiles.Default, string? Version = null, bool Away = false,
-    IReadOnlyList<CosmeticRef>? Cosmetics = null, int Team = 0);
+    IReadOnlyList<CosmeticRef>? Cosmetics = null, int Team = 0, string? Bot = null);
 
 sealed record ScoreLine(string MemberId, double? Score, double? Seconds, double? Remaining, int Shots, int Hits, int Kills,
     string Status, bool Disputed);
@@ -173,7 +176,7 @@ static class LobbyRules
 {
     public const int MaxName = 32, MaxChat = 200, MaxContentName = 128;
     static readonly HashSet<string> Keys = ["mode", "scenario", "mapOverride", "maxPlayers", "spectators", "rounds", "firstTo",
-        "timeLimit", "weapon", "movement", "character", "targetSpeed", "targetSize", "privacy", "countdown", "lateJoin", "autoStart", "voting", "fragLimit", "lifesteal", "requireFire", "halfRounds", "overtime", "adsZoom", "adsSensitivity"];
+        "timeLimit", "weapon", "movement", "character", "targetSpeed", "targetSize", "privacy", "countdown", "lateJoin", "autoStart", "voting", "fragLimit", "lifesteal", "requireFire", "halfRounds", "overtime", "adsZoom", "adsSensitivity", "friendlyFire"];
 
     // A member id AimModCore accepts in play-state.tsv: [A-Za-z0-9_-]{1,64}.
     public static bool IsStreamSafe(string? id) => id is { Length: > 0 and <= 64 } && id.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_');
@@ -266,6 +269,7 @@ static class LobbyRules
                 case "overtime": if (Flag() is not { } ot) return (null, Bad("Overtime must be on or off.")); next = next with { Overtime = ot }; break;
                 case "adsZoom": if (Text() is not { } zoom || !AdsZooms.Values.Contains(zoom)) return (null, Bad("ADS zoom is off, CS-style or all weapons.")); next = next with { AdsZoom = zoom }; break;
                 case "adsSensitivity": if (Number() is not { } adsSens) return (null, Bad("Zoom sensitivity must be a number.")); next = next with { AdsSensitivity = Clamp(adsSens, 0.2, 2, 0.05) }; break;
+                case "friendlyFire": if (Flag() is not { } ff) return (null, Bad("Friendly fire must be on or off.")); next = next with { FriendlyFire = ff }; break;
                 case "requireFire": if (Flag() is not { } fire) return (null, Bad("Require fire must be on or off.")); next = next with { RequireFire = fire }; break;
                 case "lifesteal": if (Number() is not { } steal) return (null, Bad("Lifesteal must be a percentage.")); next = next with { Lifesteal = (int)Clamp(steal, 0, 200, 5) }; break;
             }

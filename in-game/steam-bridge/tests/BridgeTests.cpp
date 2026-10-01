@@ -4,6 +4,7 @@
 #include "AvatarImage.hpp"
 #include "AvatarPath.hpp"
 #include "AvatarState.hpp"
+#include "BotOrders.hpp"
 #include "Codec.hpp"
 #include "GhostMath.hpp"
 #include "Json.hpp"
@@ -624,7 +625,7 @@ int main()
         for (int i = 0; i < 60 * 40; ++i)
         {
             const auto s = w.Step(i / 60.0, 1 / 60.0, half, flat, open);
-            grounded &= s.z >= half - 0.01 && s.z <= half + ghost::Walker::JumpHeight + 0.01;
+            grounded &= s.z - s.halfHeight >= -0.01 && s.z - s.halfHeight <= ghost::Walker::JumpHeight + 0.01; // feet on the floor, crouched or not
             inside &= std::fabs(s.x) < 2000 && std::fabs(s.y) < 2000;
             moved |= std::hypot(s.x - 1000, s.y) > 500;
             crouched |= s.crouch;
@@ -673,6 +674,69 @@ int main()
             lastZ = s.z;
         }
         Check(!airWalk && lastZ <= half + ghost::Walker::JumpHeight + 0.01, "without a floor yet the walker waits at its spawn, then stands on the floor");
+
+        // Bots: a goal behind a wall is reached through a waypoint that sees both sides.
+        auto corner = [](double ax, double ay, double, double bx, double by, double) {
+            // A wall along x = 0 for y < 500: crossing it below y = 500 is blocked.
+            if ((ax < 0) == (bx < 0)) return true;
+            const double t = ax == bx ? 0 : (0 - ax) / (bx - ax);
+            return ay + (by - ay) * t >= 500;
+        };
+        ghost::Walker b;
+        b.spawns = {{-1000, 0, 0}, {-1000, 200, 0}, {-600, 900, 0}, {600, 900, 0}};
+        b.own = 2;
+        b.Place(0, half, flat);
+        b.goal = std::array<double, 3>{1000, 0, 0};
+        bool reached = false, throughWall = false;
+        double px = b.x, py = b.y;
+        for (int i = 0; i < 60 * 40 && !reached; ++i)
+        {
+            const auto s = b.Step(i / 60.0, 1 / 60.0, half, flat, corner);
+            throughWall |= !corner(px, py, 0, s.x, s.y, 0);
+            px = s.x; py = s.y;
+            reached |= std::hypot(s.x - 1000, s.y) < ghost::Walker::Arrive + 10;
+        }
+        Check(reached && !throughWall, "a bot walks to its goal around a wall by way of its waypoints");
+        // Arrived: it stays at the goal.
+        double drift = 0;
+        for (int i = 0; i < 60 * 5; ++i) { const auto s = b.Step(40 + i / 60.0, 1 / 60.0, half, flat, corner); drift = std::max(drift, std::hypot(s.x - 1000, s.y)); }
+        Check(drift < ghost::Walker::Arrive + 60, "at its goal the bot stays there");
+        // Hold: it stands still and faces the point it's given (yaw toward it, pitch down to a lower eye).
+        b.hold = true;
+        b.face = std::array<double, 3>{1000, 1000, half + 20};
+        const double hx = b.x, hy = b.y;
+        ghost::RemoteTransform held;
+        for (int i = 0; i < 60; ++i) held = b.Step(50 + i / 60.0, 1 / 60.0, half, flat, corner);
+        Check(std::hypot(held.x - hx, held.y - hy) < 0.01 && std::fabs(ghost::WrapAngle(held.yaw - 90)) < 3 && held.pitch < 0,
+              "holding, the bot stands still and aims at the point it faces");
+        // Placed only on its own spawns (the first `own` points), and at a given point on its floor.
+        bool ownOnly = true;
+        for (int i = 0; i < 40; ++i) { b.PlaceRandom(half, flat); ownOnly &= b.x == -1000; }
+        Check(ownOnly, "a bot is placed only on its own spawns, never on a waypoint");
+        b.PlaceAt(300, 400, 150, 45, half, flat);
+        Check(b.x == 300 && b.y == 400 && b.z == half && b.grounded && b.yaw == 45, "a bot stands at its round's spawn, on the floor below it");
+    }
+    // bot-orders.tsv and bot-sight.tsv
+    {
+        const auto o = bridge::bots::Parse("AIMMOD_BOTS_1\t7\nbot\t1\tgoal\t100\t-200.5\t30\nface\t1\t5\t6\t7\nplace\t1\tcs3\t1\t2\t3\t90\n"
+                                          "sight\t1\t4\t10\t20\t30\nsight\t1\t9\t11\t21\t31\nbot\t2\thold\npose\t3\t1\t2\t3\t180\nbot\t17\troam\nbot\tx\troam\n");
+        Check(o && o->sequence == 7 && o->bots.size() == 3, "parses bot orders (bad peers skipped)");
+        if (o && o->bots.size() == 3)
+        {
+            const auto& a = o->bots.at(1);
+            Check(a.mode == bridge::bots::Order::Mode::Goal && a.goal && (*a.goal)[1] == -200.5 && a.face && (*a.face)[2] == 7 && a.placeToken == "cs3" && a.placeAt[3] == 90,
+                  "a bot's goal, facing and round placement");
+            Check(a.sight.size() == 2 && a.sight[1].tag == 9 && a.sight[1].at[0] == 11, "a bot's sight targets");
+            Check(o->bots.at(2).mode == bridge::bots::Order::Mode::Hold && o->bots.at(3).mode == bridge::bots::Order::Mode::Pose && o->bots.at(3).pose[3] == 180,
+                  "hold, and a client's pose from the host");
+        }
+        Check(!bridge::bots::Parse("bot\t1\troam\n") && !bridge::bots::Parse("AIMMOD_BOTS_2\t1\n"), "bot orders need their header");
+        Check(bridge::bots::Parse("AIMMOD_BOTS_1\t1\nsight\t1\t2\tnan\t0\t0\nbot\t1\tgoal\t1e9\t0\t0\n")->bots.at(1).sight.empty(), "refuses non-finite and huge numbers");
+        bridge::bots::Report r;
+        r.peer = 2; r.x = 1; r.y = 2.25; r.z = -3; r.yaw = 90; r.seen = {{4, true}, {9, false}};
+        Check(bridge::bots::Format(1759300000000, {r}) == "AIMMOD_BOTSIGHT_1\t1759300000000\nbot\t2\t1.0\t2.2\t-3.0\t90.0\nseen\t2\t4\t1\nseen\t2\t9\t0\n" ||
+                  bridge::bots::Format(1759300000000, {r}) == "AIMMOD_BOTSIGHT_1\t1759300000000\nbot\t2\t1.0\t2.3\t-3.0\t90.0\nseen\t2\t4\t1\nseen\t2\t9\t0\n",
+              "formats bot-sight.tsv");
     }
     Check(ghost::IsHelperBot("AimMod Hidden Bot") && !ghost::IsHelperBot("AimMod Hidden") && !ghost::IsHelperBot("target") &&
               std::hypot(ghost::HelperParkX, ghost::HelperParkY) > 100000 && std::hypot(ghost::HelperParkX, ghost::HelperParkY) < 1048576,

@@ -45,6 +45,11 @@
   // The selected mode, larger, with what the lobby starts with.
   function modeHero(id){var m=mode(id);var card=node('div','mp-mode-hero');add(card,add(node('span','mp-mode-pic'),modeArt(m.id,true,true)),add(node('div','mp-mode-hero-text'),node('div','eyebrow',m.group==='pvp'?'PvP mode':'Score mode'),node('strong','',m.label),node('span','',m.text),node('span','mp-mode-detail',m.detail)));return card;}
   function combat(m){return m==='deathmatch'||m==='vampiric'||m==='instagib'||m==='team-deathmatch';}
+  // Bots play the shooting modes (not in tournament lobbies); the host adds them at this difficulty.
+  var botSkill='normal';
+  var BOT_SKILLS=[{id:'easy',label:'Easy'},{id:'normal',label:'Normal'},{id:'hard',label:'Hard'}];
+  function botsAllowed(s){return !!s&&(s.mode==='cs'||combat(s.mode))&&!s.tournament;}
+  function botLabel(k){return k==='easy'?'Easy':k==='hard'?'Hard':'Normal';}
   var PRIVACY={friends:'Friends only',invite:'Invite only',public:'Public (room code)'};
   var PRESETS=[{id:'default',label:'Scenario default'},{id:'cs',label:'Counter-Strike-like'},{id:'valorant',label:'Valorant-like'},{id:'apex',label:'Apex-like'},{id:'quake',label:'Quake-like'},{id:'custom',label:'Custom'}];
   var AVATAR=['mint','cyan','amber','violet','rose'];
@@ -995,6 +1000,12 @@
     ordered.forEach(function(m){list.appendChild(memberRow(m,lobby));});
     // One summary row for the free slots, with an invite shortcut.
     var free=s.maxPlayers-players;
+    if(lobby.isHost&&botsAllowed(s)&&!(lobby.match&&lobby.match.phase!=='final')&&free>0){
+      var bots=node('div','mp-member open mp-bots');add(bots,node('div','mp-avatar empty','B'),node('div','mp-member-info','Bots: they fill free slots and play on your PC'));
+      bots.appendChild(segmented(BOT_SKILLS,botSkill,function(id){botSkill=id;render();},false,'bot difficulty'));
+      bots.appendChild(actions(button('Add bot',function(){act('add-bot',{skill:botSkill});},'compact'),button('Fill with bots',function(){act('add-bot',{skill:botSkill,fill:true});},'compact quiet')));
+      list.appendChild(bots);
+    }
     if(free>0){var open=node('div','mp-member open');add(open,node('div','mp-avatar empty','+'),node('div','mp-member-info',free===1?'1 open slot':free+' open slots'));
       open.appendChild(actions(button('Invite friends',function(){act('invite',null,function(ok){if(ok)toast('Steam invite dialog opened.');});},'compact quiet')));list.appendChild(open);}
     return p;
@@ -1002,15 +1013,20 @@
   function memberRow(m,lobby){
     var row=node('div','mp-member'+(m.connection==='reconnecting'?' lost':'')+(m.id===lobby.self?' self':''));
     var info=node('div','mp-member-info');var name=node('div','mp-member-name');
-    add(name,node('strong','',safe(m.name)),m.id===lobby.hostId?crown():null,m.id===lobby.self&&safe(m.name)!=='You'?chip('You',''):null,m.role==='spectator'?chip('Spectator','cyan'):null,m.simulated?chip('Sim','violet'):null);
+    add(name,node('strong','',safe(m.name)),m.id===lobby.hostId?crown():null,m.id===lobby.self&&safe(m.name)!=='You'?chip('You',''):null,m.role==='spectator'?chip('Spectator','cyan'):null,m.simulated?chip('Sim','violet'):null,m.bot?chip('Bot · '+botLabel(m.bot),'cyan'):null);
     var c=contentState(m,lobby);var sub=node('div','mp-member-sub');
     add(sub,node('span','mp-content '+c.kind,c.text),node('span','mp-link'+(m.connection==='reconnecting'?' warn':''),linkText(m,lobby)));
     add(info,name,sub);
     add(row,avatar(m.name,false,pic(m.id)),info);
     var state=m.role==='spectator'?null:m.id===lobby.hostId?node('span','mp-ready host','Host'):m.away?node('span','mp-ready away','Away'):m.ready?node('span','mp-ready on','Ready'):node('span','mp-ready','Not ready');
     if(state)row.appendChild(state);
-    if(m.id!==lobby.self&&!m.simulated&&lobby.match&&lobby.match.phase==='live'&&m.role==='player'){var watch=actions(button(lobby.spectate&&lobby.spectate.member===m.id?'Watching':'Spectate',function(){spectate(m.id);},'compact quiet'));watch.className='actions mp-member-tools';row.appendChild(watch);}
-    if(lobby.isHost&&m.id!==lobby.self){
+    if(m.id!==lobby.self&&!m.simulated&&!m.bot&&lobby.match&&lobby.match.phase==='live'&&m.role==='player'){var watch=actions(button(lobby.spectate&&lobby.spectate.member===m.id?'Watching':'Spectate',function(){spectate(m.id);},'compact quiet'));watch.className='actions mp-member-tools';row.appendChild(watch);}
+    if(lobby.isHost&&m.bot){
+      var bt=actions(segmented(BOT_SKILLS,m.bot,function(id){act('bot-skill',{member:m.id,skill:id});},!!(lobby.match&&lobby.match.phase!=='final'),'bot difficulty'),
+        button('Remove',function(){act('remove-bot',{member:m.id});},'compact quiet danger'));
+      bt.className='actions mp-member-tools';row.appendChild(bt);
+    }
+    else if(lobby.isHost&&m.id!==lobby.self){
       var tools=actions(m.role==='player'&&!m.ready&&!m.away&&!lobby.match?button('Start without them',function(){act('skip',{member:m.id});},'compact quiet'):null,m.connection==='connected'&&m.role==='player'?button('Make host',function(){act('transfer',{member:m.id});},'compact quiet'):null,button('Kick',function(){act('kick',{member:m.id},function(ok){if(ok)toast(safe(m.name)+' was removed.');});},'compact quiet danger'));
       tools.className='actions mp-member-tools';row.appendChild(tools);
     }
@@ -1092,6 +1108,7 @@
       kv('Economy','$800 start · CS2 rewards and loss bonus');
       kv('Overtime',s.overtime===false?'Off':'On · halves of 3 with $12,500');
       kv('ADS zoom',{off:'Off',all:'All weapons'}[s.adsZoom]||'CS-style (AWP scope)');
+      kv('Friendly fire',s.friendlyFire===false?'Off':'On · 33 % damage, team kill -$300');
       if(s.scenario&&s.scenario.csProblem)kv('CS map','Not a CS map: '+safe(s.scenario.csProblem,'')).children[1].className+=' mp-warn-line';
     }
     else if(combat(s.mode)){kv('Frag limit',F.number(s.fragLimit||(s.mode==='vampiric'?10:s.mode==='instagib'?25:s.mode==='team-deathmatch'?50:20),0)+' kills');if(s.mode==='vampiric')kv('Lifesteal',F.number(typeof s.lifesteal==='number'?s.lifesteal:50,0)+' %');}
@@ -1173,10 +1190,12 @@
       pl.appendChild(settingRow('Overtime','A tie goes to overtime halves of 3 rounds with $12,500.',toggleSwitch(s.overtime!==false,'Overtime',function(){setting('overtime',s.overtime===false);})));
       pl.appendChild(settingRow('ADS zoom','Right mouse zoom. CS-style: only the AWP scopes, as in CS2.',segmented([{id:'off',label:'Off'},{id:'cs',label:'CS-style'},{id:'all',label:'All weapons'}],s.adsZoom||'cs',function(id){setting('adsZoom',id);},false,'ADS zoom')));
       if((s.adsZoom||'cs')!=='off')pl.appendChild(settingRow('Zoom sensitivity','Sensitivity while zoomed, against hip fire (1.0 keeps it).',stepper(typeof s.adsSensitivity==='number'?s.adsSensitivity:1,0.2,2,0.05,function(v){return F.number(v,2)+'x';},function(v){setting('adsSensitivity',v);},false,'zoom sensitivity')));
+      pl.appendChild(settingRow('Friendly fire','CS2 rules: teammates take a third of the damage, a team kill costs $300.',toggleSwitch(s.friendlyFire!==false,'Friendly fire',function(){setting('friendlyFire',s.friendlyFire===false);})));
     }
     else if(combat(s.mode)){
       var fragDefault=s.mode==='vampiric'?10:s.mode==='instagib'?25:s.mode==='team-deathmatch'?50:20;
       pl.appendChild(settingRow('Frag limit','',stepper(s.fragLimit||fragDefault,1,100,1,function(v){return F.number(v,0);},function(v){setting('fragLimit',v);},false,'frag limit')));
+      if(s.mode==='team-deathmatch')pl.appendChild(settingRow('Friendly fire','Teammates take a third of the damage.',toggleSwitch(s.friendlyFire===true,'Friendly fire',function(){setting('friendlyFire',s.friendlyFire!==true);})));
       if(s.mode==='vampiric')pl.appendChild(settingRow('Lifesteal','Share of damage dealt that heals you.',stepper(typeof s.lifesteal==='number'?s.lifesteal:50,0,200,5,function(v){return F.number(v,0)+' %';},function(v){setting('lifesteal',v);},false,'lifesteal')));
     }
     else if(s.mode==='tracking-duel'){

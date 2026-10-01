@@ -338,11 +338,64 @@ namespace aimmod
                 });
     }
 
-    void GhostDemo::DriveAvatar(Ghost& ghost, const Sample& s)
+    // The avatar mesh's lowest point against the actor origin, measured from the mesh's world bounds,
+    // so the feet (not a capsule of another size, or a mesh offset inside it) stand on the floor.
+    void GhostDemo::MeasureFeet(Ghost& ghost, double floorZ)
+    {
+        const double now = bridge::Bridge::Now();
+        if (now < ghost.nextFeetMeasure) return;
+        ghost.nextFeetMeasure = now + 2.0;
+        if (!m_feetBound)
+        {
+            m_feetBound = true;
+            m_componentBounds.BindPath(STR("/Script/Engine.KismetSystemLibrary:GetComponentBounds"), Shape::Command);
+            m_characterMesh.Bind(game::FindClass(STR("/Script/Engine.Character")), STR("Mesh"));
+            if (!m_kismetDefault) m_kismetDefault = UObjectGlobals::StaticFindObject<UObject*>(nullptr, nullptr, STR("/Script/Engine.Default__KismetSystemLibrary"));
+        }
+        UObject* pawn = ghost.pawn.Get();
+        UObject* mesh = pawn && m_characterMesh.ok() ? m_characterMesh.Object(pawn) : nullptr;
+        double actor[3]{};
+        if (!mesh || !m_componentBounds.ok() || !m_kismetDefault || !m_actorLocation.Vector(pawn, actor)) return;
+        double origin[3]{}, extent[3]{};
+        int vectors = 0;
+        m_componentBounds.Call(
+            m_kismetDefault, [&](std::uint8_t* value, const Param& p) { if (p.kind == Kind::Object) std::memcpy(value, &mesh, sizeof(mesh)); },
+            [&](const std::uint8_t* buffer, const std::vector<Param>& params) {
+                for (const Param& p : params)
+                    if (p.out && p.kind == Kind::Vector && vectors < 2)
+                    {
+                        float f[3];
+                        std::memcpy(f, buffer + p.offset, sizeof(f));
+                        double* v = vectors++ == 0 ? origin : extent;
+                        v[0] = f[0]; v[1] = f[1]; v[2] = f[2];
+                    }
+            });
+        if (vectors < 2 || extent[2] <= 10 || extent[2] > 1000) return;
+        const double feet = origin[2] - extent[2];
+        const double above = actor[2] - feet;
+        if (above <= 0 || above > 1000) return;
+        ghost.feetToActor = above;
+        if (!ghost.feetLogged)
+        {
+            ghost.feetLogged = true;
+            char line[200];
+            std::snprintf(line, sizeof(line), "avatars: %s feet at z=%.0f, floor z=%.0f, offset %.0f (origin %.0f above the feet)",
+                          bridge::Redact(ghost.peer).c_str(), feet, floorZ, feet - floorZ, above);
+            m_log(line);
+        }
+    }
+
+    void GhostDemo::DriveAvatar(Ghost& ghost, const Sample& input)
     {
         UObject* pawn = ghost.pawn.Get();
         if (!pawn) return;
         KeepInert(ghost);
+        // Feet on the floor: the sample's floor is its centre minus its own half-height (a remote
+        // player's capsule, or the walker's); the avatar stands on it by its measured feet.
+        Sample s = input;
+        const double floorZ = input.z - input.halfHeight;
+        MeasureFeet(ghost, floorZ);
+        if (ghost.feetToActor > 0) s.z = floorZ + ghost.feetToActor;
         if (m_options.driveWithUpdate && m_updateClientLocAndRot.ok())
             m_updateClientLocAndRot.Call(pawn, [&](std::uint8_t* value, const Param& p) {
                 if (p.kind == Kind::Vector) WriteFloats(value, p, s.x, s.y, s.z);
@@ -590,6 +643,12 @@ namespace aimmod
                 m_nextStateRead = now + 0.2;
                 ReadAvatarState();
             }
+            if (now >= m_nextOrdersRead)
+            {
+                m_nextOrdersRead = now + 0.1;
+                ReadBotOrders();
+            }
+            m_botReports.clear();
             // Scenario changed in the same world: the game may have reset or re-profiled our bots.
             if (const std::string scene = m_bridge.LocalScene(); scene != m_lastScene)
             {
@@ -662,10 +721,12 @@ namespace aimmod
                     for (const auto& w : dev.walkers)
                     {
                         DevWalk& walk = m_walkers[w.peer];
-                        if (walk.walker.spawns != w.spawns)
+                        if (walk.walker.spawns != w.spawns || walk.walker.own != w.own)
                         {
                             walk.walker = bridge::ghost::Walker{};
                             walk.walker.spawns = w.spawns;
+                            walk.walker.own = w.own;
+                            walk.placeToken.clear();
                             walk.walker.seed ^= static_cast<std::uint32_t>(w.peer * 2654435761u);
                             walk.at = -1;
                             m_log("avatars: simulated player " + std::to_string(w.peer) + " walks between " + std::to_string(w.spawns.size()) + " spawns");
@@ -690,10 +751,84 @@ namespace aimmod
                         double half = bridge::ghost::DefaultHalfHeight;
                         if (UObject* capsule = pawn && m_capsule.ok() ? m_capsule.Object(pawn) : nullptr)
                             if (auto h = m_capsuleHalfHeight.Number(capsule); h && *h > 20 && *h < 400) half = *h;
+                        // Bot orders: a client draws the host's bot where the host has it; the host's bots
+                        // walk to a goal, hold still, face an enemy and stand at their round's spawn.
+                        const bridge::bots::Order* order = nullptr;
+                        if (m_botOrders)
+                            if (const auto it = m_botOrders->bots.find(w.peer); it != m_botOrders->bots.end()) order = &it->second;
+                        if (order && order->mode == bridge::bots::Order::Mode::Pose)
+                        {
+                            Sample target;
+                            target.x = order->pose[0];
+                            target.y = order->pose[1];
+                            target.z = order->pose[2];
+                            target.yaw = order->pose[3];
+                            target.halfHeight = half;
+                            const double dt = walk.shownAt < 0 ? 0 : std::clamp(now - walk.shownAt, 0.0, 0.2);
+                            walk.shownAt = now;
+                            Sample ps = target;
+                            if (walk.shown && std::hypot(target.x - walk.shown->x, target.y - walk.shown->y) < 300 && std::fabs(target.z - walk.shown->z) < 200 && dt > 0)
+                            {
+                                // Smooth toward the host's position (it arrives 10 times a second).
+                                const double u = std::min(1.0, dt * 12);
+                                ps.x = walk.shown->x + (target.x - walk.shown->x) * u;
+                                ps.y = walk.shown->y + (target.y - walk.shown->y) * u;
+                                ps.z = walk.shown->z + (target.z - walk.shown->z) * u;
+                                ps.yaw = bridge::ghost::LerpAngle(walk.shown->yaw, target.yaw, u);
+                                ps.vx = (ps.x - walk.shown->x) / dt;
+                                ps.vy = (ps.y - walk.shown->y) / dt;
+                            }
+                            walk.shown = ps;
+                            if (!walk.poseLogged)
+                            {
+                                walk.poseLogged = true;
+                                m_log("avatars: bot " + std::to_string(w.peer) + " follows the host's position");
+                            }
+                            seen[w.peer] = true;
+                            Show(w.peer, m_ghosts[w.peer], ps, world, character);
+                            continue;
+                        }
+                        // A client's bot before the host's first position: nothing to draw yet.
+                        if (walk.walker.spawns.empty())
+                        {
+                            seen[w.peer] = true;
+                            continue;
+                        }
+                        walk.walker.goal = order && order->mode == bridge::bots::Order::Mode::Goal ? order->goal : std::nullopt;
+                        walk.walker.hold = order && order->mode == bridge::bots::Order::Mode::Hold;
+                        walk.walker.face = order ? order->face : std::nullopt;
+                        if (order && !order->placeToken.empty() && order->placeToken != walk.placeToken)
+                        {
+                            walk.placeToken = order->placeToken;
+                            walk.walker.PlaceAt(order->placeAt[0], order->placeAt[1], order->placeAt[2], order->placeAt[3], half, floor);
+                            m_ghosts[w.peer].respawned = false;
+                            if (!walk.placedLogged)
+                            {
+                                walk.placedLogged = true;
+                                m_log("avatars: bot " + std::to_string(w.peer) + " stands at its spawn z=" + std::to_string(static_cast<int>(walk.walker.z)) +
+                                      (walk.walker.grounded ? " on the traced floor" : " (no floor found yet)"));
+                            }
+                        }
                         if (std::exchange(m_ghosts[w.peer].respawned, false)) walk.walker.PlaceRandom(half, floor);
                         const double dt = walk.at < 0 ? 0 : now - walk.at;
                         walk.at = now;
                         const Sample ws = walk.walker.Step(now, dt, half, floor, clear);
+                        // Sight: is the line from the bot's eye to each target clear? (A hit close to the
+                        // target is the target's own body: in sight.)
+                        if (order && now >= walk.nextSight)
+                        {
+                            walk.nextSight = now + 0.15;
+                            walk.seen.clear();
+                            const double eye[3]{ws.x, ws.y, ws.z + ws.halfHeight * 0.73};
+                            for (const auto& t : order->sight)
+                            {
+                                const double to[3]{t.at[0], t.at[1], t.at[2]};
+                                const auto hit = Trace(character, eye, to, pawn, character);
+                                const bool visible = !hit || std::hypot(std::hypot((*hit)[0] - to[0], (*hit)[1] - to[1]), (*hit)[2] - to[2]) < 60;
+                                walk.seen.push_back({t.tag, visible});
+                            }
+                        }
+                        if (order) m_botReports.push_back({w.peer, ws.x, ws.y, ws.z, ws.yaw, walk.seen});
                         if (!wasPlaced && walk.walker.placed)
                             m_log("avatars: simulated player " + std::to_string(w.peer) + " placed at spawn " + std::to_string(walk.walker.at) + " z=" +
                                   std::to_string(static_cast<int>(walk.walker.z)) + (walk.walker.grounded ? " on the traced floor" : " (no floor found yet: waiting there)"));
@@ -796,6 +931,59 @@ namespace aimmod
             m_log(std::string("ghost demo: disabled after an error: ") + e.what());
         }
         if (m_avatarMapDirty) WriteAvatarMap();
+        WriteBotSight();
+    }
+
+    // bot-orders.tsv from the service. Older than 3 s: no orders (the bots walk on their own).
+    void GhostDemo::ReadBotOrders()
+    {
+        if (m_options.stateDir.empty()) return;
+        const std::filesystem::path file = std::filesystem::path(m_options.stateDir) / L"bot-orders.tsv";
+        WIN32_FILE_ATTRIBUTE_DATA info{};
+        if (!GetFileAttributesExW(file.c_str(), GetFileExInfoStandard, &info) || info.nFileSizeLow > 64 * 1024 || info.nFileSizeHigh != 0)
+        {
+            m_botOrders.reset();
+            return;
+        }
+        FILETIME now{};
+        GetSystemTimeAsFileTime(&now);
+        const auto u64 = [](FILETIME ft) { return (static_cast<std::uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime; };
+        if (u64(now) - u64(info.ftLastWriteTime) > 30'000'000ull)
+        {
+            m_botOrders.reset();
+            return;
+        }
+        std::ifstream in(file, std::ios::binary);
+        std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        m_botOrders = bridge::bots::Parse(text);
+        if (m_botOrders && !m_botOrders->bots.empty() && !m_botOrdersLogged)
+        {
+            m_botOrdersLogged = true;
+            m_log("avatars: bot orders for " + std::to_string(m_botOrders->bots.size()) + " bots (the service steers them; sight by line traces)");
+        }
+    }
+
+    // What the bot avatars report: where each is and which targets it sees (10 times a second).
+    void GhostDemo::WriteBotSight()
+    {
+        const auto reports = std::move(m_botReports);
+        m_botReports.clear();
+        if (m_options.stateDir.empty() || reports.empty()) return;
+        const double now = bridge::Bridge::Now();
+        if (now < m_nextSightWrite) return;
+        m_nextSightWrite = now + 0.1;
+        FILETIME ft{};
+        GetSystemTimeAsFileTime(&ft);
+        const std::uint64_t ticks = (static_cast<std::uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
+        const auto unixMs = static_cast<std::int64_t>((ticks - 116444736000000000ull) / 10000ull);
+        const std::filesystem::path file = std::filesystem::path(m_options.stateDir) / L"bot-sight.tsv";
+        const std::wstring temp = file.wstring() + L".tmp";
+        {
+            std::ofstream out(temp, std::ios::binary | std::ios::trunc);
+            if (!out) return;
+            out << bridge::bots::Format(unixMs, reports);
+        }
+        MoveFileExW(temp.c_str(), file.c_str(), MOVEFILE_REPLACE_EXISTING);
     }
 
     // The look of a developer stand-in: its walker's profile, else the test avatar's.

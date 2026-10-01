@@ -6,6 +6,7 @@
 
 #include "GhostMath.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -30,7 +31,16 @@ namespace bridge::ghost
         static constexpr double JumpHeight = 50, JumpTime = 0.55;
 
         std::vector<std::array<double, 3>> spawns;   // capsule centres (or feet) of the arena's spawns
-        double x = 0, y = 0, z = 0, yaw = 0;
+        // A bot's waypoints are its own spawns first, then other points on the map: only the first
+        // `own` are places to stand at (0: all of them).
+        int own = 0;
+        // Bot orders (BotOrders.hpp): walk to `goal` and stay there; `hold` still; `face` a point.
+        std::optional<std::array<double, 3>> goal;
+        bool hold = false;
+        std::optional<std::array<double, 3>> face;
+        static constexpr int GoalTarget = -2;        // `target` when walking straight to the goal
+        static constexpr double EyeAbove = 64;       // a standing body's eye above its centre
+        double x = 0, y = 0, z = 0, yaw = 0, pitch = 0;
         bool placed = false;
         bool grounded = false; // the current z came from a floor trace (never shown floating once true)
         double nextChoose = 0;
@@ -67,8 +77,25 @@ namespace bridge::ghost
         }
         bool PlaceRandom(double halfHeight, const Floor& floor)
         {
-            return !spawns.empty() && Place(static_cast<int>(Next() % spawns.size()), halfHeight, floor);
+            const std::size_t n = own > 0 ? std::min(spawns.size(), static_cast<std::size_t>(own)) : spawns.size();
+            return n > 0 && Place(static_cast<int>(Next() % n), halfHeight, floor);
         }
+        // Stand at a point the service gives (a round's spawn, a respawn), on its floor.
+        void PlaceAt(double px, double py, double pz, double facing, double halfHeight, const Floor& floor)
+        {
+            const auto ground = floor(px, py, pz + 10);
+            x = px;
+            y = py;
+            z = ground ? *ground + halfHeight : pz;
+            grounded = ground.has_value();
+            yaw = facing;
+            at = -1;
+            target = -1;
+            blocked = 0;
+            placed = true;
+            nextChoose = 0;
+        }
+        std::array<double, 3> Point(int i) const { return i == GoalTarget && goal ? *goal : spawns[static_cast<std::size_t>(i)]; }
 
         static constexpr double SegmentProbe = 100; // cm between floor probes along a walk segment
         static constexpr double FootAbove = 30;     // the foot-height line checked for walls, above the floor
@@ -97,7 +124,31 @@ namespace bridge::ghost
         {
             const int n = static_cast<int>(spawns.size());
             target = -1;
-            if (n < 2 || !grounded) return;
+            if (!grounded) return;
+            if (goal)
+            {
+                const auto& g = *goal;
+                const double gd = std::hypot(g[0] - x, g[1] - y);
+                if (gd < Arrive) return; // there: stay
+                if (Walkable(g[0], g[1], halfHeight, floor, clear)) { target = GoalTarget; return; }
+                // The reachable waypoint that gets closest to the goal (at most 8 tried, nearest first).
+                std::vector<std::pair<double, int>> closer;
+                for (int i = 0; i < n; ++i)
+                {
+                    if (i == at) continue;
+                    const auto& s = spawns[static_cast<std::size_t>(i)];
+                    const double d = std::hypot(g[0] - s[0], g[1] - s[1]);
+                    if (d < gd - 50) closer.push_back({d + Uniform(0, 150), i});
+                }
+                std::sort(closer.begin(), closer.end());
+                for (std::size_t k = 0; k < closer.size() && k < 8; ++k)
+                {
+                    const auto& s = spawns[static_cast<std::size_t>(closer[k].second)];
+                    if (Walkable(s[0], s[1], halfHeight, floor, clear)) { target = closer[k].second; return; }
+                }
+                // Nothing closer is reachable: wander to any reachable point and look again from there.
+            }
+            if (n < 2) return;
             for (int tries = 0; tries < std::min(2 * n, 24); ++tries)
             {
                 const int i = static_cast<int>(Next() % static_cast<std::uint32_t>(n));
@@ -124,19 +175,20 @@ namespace bridge::ghost
                     grounded = true;
                 }
             }
-            if (target < 0 && now >= nextChoose)
+            if (target == -1 && now >= nextChoose && !hold)
             {
                 Choose(clear, floor, halfHeight);
                 if (target < 0) nextChoose = now + 1.0; // nothing reachable from here: look again in a second
             }
             double vx = 0, vy = 0;
-            if (target >= 0 && grounded)
+            if (hold) target = -1;
+            if (target != -1 && grounded && !hold)
             {
-                const auto& goal = spawns[static_cast<std::size_t>(target)];
-                const double dx = goal[0] - x, dy = goal[1] - y, d = std::hypot(dx, dy);
+                const auto dest = Point(target);
+                const double dx = dest[0] - x, dy = dest[1] - y, d = std::hypot(dx, dy);
                 if (d < Arrive)
                 {
-                    at = target;
+                    at = target == GoalTarget ? -1 : target;
                     target = -1;
                 }
                 else
@@ -159,9 +211,10 @@ namespace bridge::ghost
                         vx = vy = 0;
                         if (++blocked > 3)
                         {
-                            at = target; // treat as visited and try another way
+                            at = target == GoalTarget ? -1 : target; // treat as visited and try another way
                             target = -1;
                             blocked = 0;
+                            nextChoose = now + 0.5;
                         }
                     }
                     else
@@ -180,6 +233,19 @@ namespace bridge::ghost
                 crouchUntil = now + Uniform(0.8, 1.6);
                 nextCrouch = now + Uniform(7, 12);
             }
+            // Facing a point (an enemy): turn the body and the aim there.
+            if (face)
+            {
+                const auto& f = *face;
+                const double dx = f[0] - x, dy = f[1] - y, dz = f[2] - (z + EyeAbove);
+                if (std::hypot(dx, dy) > 1)
+                {
+                    yaw = std::atan2(dy, dx) * 180.0 / 3.14159265358979;
+                    pitch = std::atan2(dz, std::hypot(dx, dy)) * 180.0 / 3.14159265358979;
+                }
+            }
+            else pitch = 0;
+            if (hold) nextJump = std::max(nextJump, now + 2); // no hops while standing to shoot or plant
             if (now >= nextJump && jumpStart < 0 && now >= crouchUntil)
             {
                 jumpStart = now;
@@ -200,11 +266,13 @@ namespace bridge::ghost
             s.halfHeight = s.crouch ? halfHeight * 0.6 : halfHeight;
             s.x = x;
             s.y = y;
-            s.z = z + hop;
+            // A crouched body is a shorter capsule standing on the same floor: its centre is lower.
+            s.z = z + hop - (s.crouch ? halfHeight - s.halfHeight : 0);
             s.vx = vx;
             s.vy = vy;
             s.vz = vz;
             s.yaw = yaw;
+            s.pitch = pitch;
             return s;
         }
     };

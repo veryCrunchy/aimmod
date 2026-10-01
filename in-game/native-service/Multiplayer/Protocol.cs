@@ -28,6 +28,7 @@ static class Protocol
         new("finish", true, "client>host", "{match, round, t, score, shots, hits, kills, replay}: final run result"),
         new("hit", true, "client>host", "{match, round, seq, t, o:[x,y,z], r:[pitch,yaw], head, target?:[x,y,z,radius,halfHeight]}: a hit the shooter's game registered (combat modes), host clock"),
         new("combat", true, "host>all", "{match, round, events:[...]}: combat events (damage, death, respawn) the moment the host decides them"),
+        new("bots", false, "host>all", "{match, round, b:[[member, x, y, z, yaw]]}: where the host's game has its bots (capsule centre), 10 Hz"),
         new("track", true, "client>host", "{match, round, s:[[t,x,y,z,pitch,yaw]], v:[[t,id,x,y,z,radius,halfHeight]]}: tracking duel camera samples and drawn avatars, host clock, every 100 ms"),
         new("ping", false, "any", "{t0}: clock sync request"),
         new("pong", false, "any", "{t0, t1}: clock sync reply"),
@@ -167,7 +168,7 @@ interface IMultiplayerTransport : IDisposable
     bool DevAvatar(bool on, string mode, string? profile, IReadOnlyList<double[]>? spawns) => spawns is null && DevAvatar(on, mode, profile);
     // Several simulated players walking at once (synthetic peers "1".."16"), each with its look and spawns.
     // False when the bridge can't (no "dev-avatar-walkers" feature).
-    bool DevWalkers(IReadOnlyList<(string Peer, string? Look, IReadOnlyList<double[]> Spawns)> walkers) => false;
+    bool DevWalkers(IReadOnlyList<(string Peer, string? Look, IReadOnlyList<double[]> Spawns, int Own)> walkers) => false;
     // Bulk file lane (bridge xfer.*): low-priority, in-order chunks of BulkChunkBytes, with a
     // small send window. BulkChunkBytes is 0 when the lane is missing; content then uses frames.
     int BulkChunkBytes { get; }

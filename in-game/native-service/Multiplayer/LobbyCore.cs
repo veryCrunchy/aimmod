@@ -15,8 +15,10 @@ sealed class LobbyCore
         public required string Id; public required string Name; public string Role = MemberRoles.Player;
         public bool Ready; public int? Ping; public string Scenario = ContentStates.Unknown, Map = ContentStates.Unknown, Profiles = ContentStates.None;
         public string Connection = Connections.Connected, Link = "local"; public long JoinedAt; public long? LostAt; public bool Simulated; public string Avatar = AvatarProfiles.Default; public string? Version; public bool Away; public IReadOnlyList<CosmeticRef> Cosmetics = []; public int Team;
+        // A bot the host runs (its difficulty: easy, normal or hard); null for people.
+        public string? Bot;
         public readonly Queue<long> ChatTimes = new();
-        public LobbyMember View() => new(Id, Name, Role, Ready, Ping, Scenario, Map, Profiles, Connection, Link, JoinedAt, Simulated, Avatar, Version, Away, Cosmetics, Team);
+        public LobbyMember View() => new(Id, Name, Role, Ready, Ping, Scenario, Map, Profiles, Connection, Link, JoinedAt, Simulated, Avatar, Version, Away, Cosmetics, Team, Bot);
     }
     sealed class Line
     {
@@ -111,7 +113,68 @@ sealed class LobbyCore
     public IReadOnlyList<LobbyMember> Members => members.Select(m => m.View()).ToArray();
     public const long ReadyCheckMs = 30_000;
     long? readyCheck, autoStartAt;
-    public LobbySnapshot Snapshot() => new(Protocol.Version, Id, Code, Revision, HostId, Settings, Members, MatchView(), chat.ToArray(), clock(), readyCheck, autoStartAt, suggestions.Select(s => new Suggestion(s.Scenario, s.By, s.Votes.ToArray())).ToArray());
+    public LobbySnapshot Snapshot() { KeepBotsReady(); return new(Protocol.Version, Id, Code, Revision, HostId, Settings, Members, MatchView(), chat.ToArray(), clock(), readyCheck, autoStartAt, suggestions.Select(s => new Suggestion(s.Scenario, s.By, s.Votes.ToArray())).ToArray()); }
+    // Bots have nothing to download or confirm: always connected, with the content, and ready.
+    void KeepBotsReady()
+    {
+        foreach (var b in members.Where(m => m.Bot is not null))
+        {
+            b.Scenario = ContentStates.Ok; b.Map = ContentStates.Ok; b.Connection = Connections.Connected; b.LostAt = null; b.Away = false;
+            if (b.Role == MemberRoles.Player && match is null or { Phase: MatchPhases.Final }) b.Ready = true;
+        }
+    }
+
+    // ---- bots (host-run players for the shooting modes) ------------------
+    static readonly string[] BotNames = ["Ace", "Blaze", "Cobra", "Dash", "Echo", "Flint", "Ghost", "Hawk", "Iron", "Jinx", "Kilo", "Lynx", "Moss", "Nyx", "Onyx", "Pike"];
+    int botNameIndex;
+    public static bool BotsAllowed(LobbySettings s) => LobbyModes.Shooting(s.Mode) && s.Mode != LobbyModes.Tracking && s.Tournament is null;
+    LobbyResult AddBots(JsonElement args)
+    {
+        if (!BotsAllowed(Settings)) return LobbyResult.Fail("mode", Settings.Tournament is not null ? "Tournament lobbies can't have bots." : "Bots play the shooting modes (CS, deathmatch, team deathmatch).");
+        if (match is { Phase: not MatchPhases.Final }) return LobbyResult.Fail("in-match", "Add bots between matches.");
+        var skill = BotSkills.Parse(args.ValueKind == JsonValueKind.Object && args.TryGetProperty("skill", out var sv) && sv.ValueKind == JsonValueKind.String ? sv.GetString() : null) ?? BotSkills.Normal;
+        var fill = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("fill", out var fv) && fv.ValueKind == JsonValueKind.True;
+        var team = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("team", out var tv) && tv.TryGetInt32(out var t) && t is >= 0 and <= 2 ? t : 0;
+        var free = Settings.MaxPlayers - PlayerCount;
+        if (free <= 0) return LobbyResult.Fail("full", "The lobby is full.");
+        var count = fill ? free : 1;
+        for (var i = 0; i < count; i++)
+        {
+            var id = "bot-" + Convert.ToHexString(RandomNumberGenerator.GetBytes(4)).ToLowerInvariant();
+            var name = UniqueName("BOT " + BotNames[botNameIndex++ % BotNames.Length]);
+            members.Add(new Member { Id = id, Name = name, Role = MemberRoles.Player, JoinedAt = clock(), Link = "bot", Bot = skill, Team = team, Ready = true, Scenario = ContentStates.Ok, Map = ContentStates.Ok });
+            System(name + " joined (" + BotSkills.Label(skill) + " bot).");
+        }
+        Changed();
+        return LobbyResult.Success;
+    }
+    void RemoveBots(string why)
+    {
+        var bots = members.Where(m => m.Bot is not null).ToArray();
+        foreach (var b in bots) members.Remove(b);
+        if (bots.Length > 0) { System(why); Changed(); }
+    }
+    // Where each match player is now (their track's latest eye sample) and how fast they move, for the bots.
+    public IReadOnlyDictionary<string, (TrackSample At, double Speed)> CombatPositions()
+    {
+        var list = new Dictionary<string, (TrackSample, double)>();
+        if (match is not { Combat: { } combat } m) return list;
+        foreach (var id in m.Players) if (combat.Position(id) is { } at) list[id] = (at, combat.Speed(id));
+        return list;
+    }
+    // A bot's shot that the host's bot logic decided hits (sight checked by the game's traces). The
+    // hit still goes through the match's rules: alive, fire rate, round phase, spawn protection,
+    // friendly fire, armour.
+    public LobbyResult BotShot(string bot, string victim, bool head, int slot, double[]? dir)
+    {
+        if (Find(bot) is not { Bot: not null }) return LobbyResult.Fail("not-bot", "Not a bot.");
+        if (match is not { Phase: MatchPhases.Live, Combat: { } combat } m || !m.Players.Contains(bot)) return LobbyResult.Fail("stale", "No match is running.");
+        if (m.Cs is { Phase: not ("live" or "planted") }) return LobbyResult.Fail("round-phase", "No shooting between rounds.");
+        var refused = combat.BotHit(bot, victim, head, clock(), slot, dir);
+        UpdateCombat(m, combat);
+        if (m.Cs is null && combat.Leader is not null) CloseRound();
+        return refused is null ? LobbyResult.Success : LobbyResult.Fail(refused, "Shot not applied (" + refused + ").");
+    }
     // Wait for everyone to load the scenario before the countdown (set when AimMod can load scenarios).
     public bool RequireLoading { get; set; }
     // How long everyone has to load before the host is asked to retry or abort. Clients
@@ -251,8 +314,9 @@ sealed class LobbyCore
                 var reset = next.PlayKey != Settings.PlayKey;
                 var scenarioChanged = next.Scenario?.Hash != Settings.Scenario?.Hash || next.MapOverride?.Hash != Settings.MapOverride?.Hash;
                 Settings = next;
-                if (reset) foreach (var m in members) m.Ready = false;
-                if (scenarioChanged) foreach (var m in members.Where(m => m.Id != HostId)) { m.Scenario = ContentStates.Unknown; m.Map = ContentStates.Unknown; }
+                if (reset) foreach (var m in members.Where(m => m.Bot is null)) m.Ready = false;
+                if (scenarioChanged) foreach (var m in members.Where(m => m.Id != HostId && m.Bot is null)) { m.Scenario = ContentStates.Unknown; m.Map = ContentStates.Unknown; }
+                if (!BotsAllowed(Settings)) RemoveBots("Bots left: they only play the shooting modes.");
                 if (scenarioChanged && Settings.Scenario is not null) System("Scenario set to " + Settings.Scenario.Name + ".");
                 Changed();
                 return LobbyResult.Success;
@@ -348,10 +412,30 @@ sealed class LobbyCore
                 if (!IsHost(from)) return HostOnly();
                 if (match is not { Phase: MatchPhases.Loading } rm) return LobbyResult.Fail("invalid", "Nothing is loading.");
                 rm.Loaded.Clear(); rm.LoadIssues.Clear(); rm.LoadWaiting.Clear(); rm.LoadFailed = false; rm.LoadAttempt++; rm.NextAt = clock() + LoadingMs;
+                foreach (var b in members.Where(x => x.Bot is not null && rm.Players.Contains(x.Id))) rm.Loaded.Add(b.Id);
                 System("Loading again.");
                 return LobbyResult.Success;
             case "buy" or "use" or "drop" or "hold":
                 return CsAction(member, action, args);
+            // Bots: the host adds one (skill easy, normal or hard; team 0, 1 or 2), or fills every free slot.
+            case "add-bot":
+                if (!IsHost(from)) return HostOnly();
+                return AddBots(args);
+            case "remove-bot":
+            {
+                if (!IsHost(from)) return HostOnly();
+                if (Text("member") is not { } botId || Find(botId) is not { Bot: not null } gone) return LobbyResult.Fail("invalid", "Choose a bot.");
+                if (match is { Phase: not MatchPhases.Final }) return LobbyResult.Fail("in-match", "Remove bots between matches.");
+                return Leave(gone.Id);
+            }
+            case "bot-skill":
+            {
+                if (!IsHost(from)) return HostOnly();
+                if (Text("member") is not { } botId || Find(botId) is not { Bot: not null } bot) return LobbyResult.Fail("invalid", "Choose a bot.");
+                if (BotSkills.Parse(Text("skill")) is not { } skill) return LobbyResult.Fail("invalid", "Pick easy, normal or hard.");
+                if (bot.Bot != skill) { bot.Bot = skill; Changed(); }
+                return LobbyResult.Success;
+            }
             case "avatar":
                 // How this member looks in other players' games (any member, any time).
                 if (AvatarProfiles.Find(Text("avatar")) is not { } look) return LobbyResult.Fail("invalid", "Unknown look.");
@@ -413,7 +497,7 @@ sealed class LobbyCore
     {
         if (match is not { Phase: MatchPhases.Final } m) return;
         var present = m.Players.Where(id => Find(id) is { Connection: Connections.Connected }).ToArray();
-        var voters = present.Where(m.Rematch.Contains).ToArray();
+        var voters = present.Where(id => m.Rematch.Contains(id) || Find(id)?.Bot is not null).ToArray();
         if (!(present.Length >= LobbySettings.MinPlayers && voters.Length == present.Length) && !timedOut) return;
         if (voters.Length < LobbySettings.MinPlayers)
         {
@@ -435,7 +519,12 @@ sealed class LobbyCore
         suggestions.Clear();
         match = new Match { Id = "m-" + Convert.ToHexString(RandomNumberGenerator.GetBytes(6)).ToLowerInvariant(), Settings = Settings, Players = players.Select(p => p.Id).ToList() };
         foreach (var p in players) match.Names[p.Id] = p.Name;
-        if (RequireLoading) { match.Phase = MatchPhases.Loading; match.NextAt = clock() + LoadingMs; match.Live = match.Players.ToDictionary(id => id, _ => new Line()); Changed(); }
+        if (RequireLoading)
+        {
+            match.Phase = MatchPhases.Loading; match.NextAt = clock() + LoadingMs; match.Live = match.Players.ToDictionary(id => id, _ => new Line());
+            foreach (var b in players.Where(p => p.Bot is not null)) match.Loaded.Add(b.Id); // bots have nothing to load
+            Changed();
+        }
         else StartRound();
     }
     void StartRound()
@@ -449,10 +538,11 @@ sealed class LobbyCore
             var csPlayers = m.Players.Where(id => Find(id) is not null).ToList();
             m.Cs = new CsMatch(csPlayers, m.StartsAt.Value, m.Settings.HalfRounds, m.Settings.Overtime, csObjectives, LobbyRules.ResolveTeams(csPlayers.Select(id => (id, Find(id)!.Team)).ToList()));
             m.Combat = m.Cs.Combat;
+            m.Combat.TeamDamage = m.Settings.EffectiveFriendlyFire ? CombatMatch.CsTeamDamage : 0;
         }
         if (LobbyModes.Combat(m.Settings.Mode))
             m.Combat = new CombatMatch(m.Settings.Mode, m.Players.Where(id => Find(id) is not null), m.Settings.EffectiveFragLimit, m.Settings.Lifesteal,
-                m.StartsAt.Value, m.StartsAt.Value + (long)(m.Settings.EffectiveTimeLimit * 1000)) { Spawns = combatSpawns };
+                m.StartsAt.Value, m.StartsAt.Value + (long)(m.Settings.EffectiveTimeLimit * 1000)) { Spawns = combatSpawns, TeamDamage = m.Settings.EffectiveFriendlyFire ? CombatMatch.CsTeamDamage : 0 };
         if (LobbyModes.Combat(m.Settings.Mode)) m.Combat!.PlaceAll(clock());
         // Both players track each other at once, every round.
         if (m.Settings.Mode == LobbyModes.Tracking && m.Players.Count >= 2)
@@ -858,8 +948,8 @@ sealed class LobbyCore
         foreach (var m in snapshot.Members.Where(m => m.Id != snapshot.HostId || m.Id == newHostId))
             core.members.Add(new Member { Id = m.Id, Name = m.Name, Role = m.Role, Ready = m.Ready, Ping = m.Id == newHostId ? null : m.Ping, Scenario = m.Scenario, Map = m.Map, Profiles = m.Profiles,
                 // Everyone else must reconnect to the new host, so they start as reconnecting.
-                Connection = m.Id == newHostId ? Connections.Connected : Connections.Reconnecting, Link = m.Id == newHostId ? "local" : m.Link,
-                JoinedAt = m.JoinedAt, Simulated = m.Simulated, LostAt = m.Id == newHostId ? null : clock(), Avatar = AvatarProfiles.Find(m.Avatar)?.Id ?? AvatarProfiles.Default, Version = m.Version, Away = m.Away, Cosmetics = (m.Cosmetics ?? []).Take(CosmeticsCatalog.MaxEquipped).ToArray(), Team = m.Team is 1 or 2 ? m.Team : 0 });
+                Connection = m.Id == newHostId || m.Bot is not null ? Connections.Connected : Connections.Reconnecting, Link = m.Id == newHostId ? "local" : m.Link, Bot = BotSkills.Parse(m.Bot),
+                JoinedAt = m.JoinedAt, Simulated = m.Simulated, LostAt = m.Id == newHostId || m.Bot is not null ? null : clock(), Avatar = AvatarProfiles.Find(m.Avatar)?.Id ?? AvatarProfiles.Default, Version = m.Version, Away = m.Away, Cosmetics = (m.Cosmetics ?? []).Take(CosmeticsCatalog.MaxEquipped).ToArray(), Team = m.Team is 1 or 2 ? m.Team : 0 });
         core.chat.AddRange(snapshot.Chat); core.chatId = snapshot.Chat.Count > 0 ? snapshot.Chat.Max(c => c.Id) : 0; core.readyCheck = snapshot.ReadyCheck;
         foreach (var s in snapshot.Suggestions ?? []) core.suggestions.Add((s.Scenario, s.By, s.Votes.ToHashSet()));
         if (snapshot.Match is { } ms)

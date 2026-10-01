@@ -6,6 +6,8 @@ namespace AimMod.InGame.Multiplayer;
 // each stream maps back to its member, its drawn positions become the member's own track on
 // the host (so hits on it validate like any player's), and avatar-state.tsv drives its team,
 // health and deaths. A bridge without several walkers shows the first one only (peer 1).
+// Bots (MultiplayerService.Bots.cs) are stand-ins too, on every machine: the host's walk on their
+// own (its bot logic steers them), a client's follow the positions the host sends.
 sealed partial class MultiplayerService
 {
     // AimModSteam's first synthetic peer (Ghosts.cpp TestPeer).
@@ -21,8 +23,9 @@ sealed partial class MultiplayerService
     void UpdateStandIn()
     {
         standIns.Clear();
-        if (Simulation is not null && core is not null && Current is { Match: { Phase: MatchPhases.Loading or MatchPhases.Countdown or MatchPhases.Live } match } lobby && match.Players.Contains(SelfId))
-            foreach (var (id, i) in match.Players.Where(id => id != SelfId && lobby.Members.Any(m => m.Id == id && m.Simulated)).Take(MaxStandIns).Select((id, i) => (id, i)))
+        var dev = Simulation is not null && core is not null;
+        if (Current is { Match: { Phase: MatchPhases.Loading or MatchPhases.Countdown or MatchPhases.Live } match } lobby && match.Players.Contains(SelfId))
+            foreach (var (id, i) in match.Players.Where(id => id != SelfId && lobby.Members.Any(m => m.Id == id && (IsBot(m) || (dev && m.Simulated)))).Take(MaxStandIns).Select((id, i) => (id, i)))
                 standIns[id] = (i + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
         if (standIns.Count == 0)
         {
@@ -31,16 +34,45 @@ sealed partial class MultiplayerService
         }
         // The developer menu's own test avatar wins.
         if (devAvatarState is { On: true } && !standInAuto) return;
-        var walkers = standIns.Select(p => (Peer: p.Value, Look: AvatarProfiles.Find(Current!.Members.FirstOrDefault(m => m.Id == p.Key)?.Avatar ?? "")?.ProfileName,
-            Spawns: (IReadOnlyList<double[]>)SpawnsFor(p.Key))).ToArray();
-        var key = string.Join("|", walkers.Select(w => w.Peer + ":" + w.Look + ":" + string.Join(";", w.Spawns.Select(s => string.Join(",", s)))));
+        var walkers = standIns.Select(p =>
+        {
+            var (points, own) = WalkPointsFor(p.Key);
+            return (Peer: p.Value, Look: AvatarProfiles.Find(Current!.Members.FirstOrDefault(m => m.Id == p.Key)?.Avatar ?? "")?.ProfileName, Spawns: (IReadOnlyList<double[]>)points, Own: own);
+        }).ToArray();
+        var key = string.Join("|", walkers.Select(w => w.Peer + ":" + w.Look + ":" + w.Own + ":" + string.Join(";", w.Spawns.Select(s => string.Join(",", s)))));
         if (key == standInSent || clock() - standInTriedAt < 2000) return;
         standInTriedAt = clock();
-        // Several walkers when the bridge can, else the first one walks (or circles you without spawns).
+        // Several walkers when the bridge can, else the first one walks (or, a developer's simulated
+        // player, circles you without spawns; a bot never circles).
         var first = walkers[0];
-        var sent = transport.DevWalkers(walkers)
-            || (first.Spawns.Count > 0 ? transport.DevAvatar(true, "walk", first.Look, first.Spawns) : transport.DevAvatar(true, "circle", first.Look));
+        var sent = transport.DevWalkers(walkers.Select(w => (w.Peer, w.Look, w.Spawns, w.Own)).ToArray())
+            || (first.Spawns.Count > 0 ? transport.DevAvatar(true, "walk", first.Look, first.Spawns) : dev && transport.DevAvatar(true, "circle", first.Look));
         if (sent) { standInAuto = true; standInSent = key; }
+    }
+
+    // Where a stand-in walks, and how many of those points (the first ones) it may be placed on. A
+    // simulated player walks between its spawns. The host's bots get waypoints across the map: their
+    // own spawns first, then (CS) the bomb sites, the callouts and the other side's spawns; a client's
+    // bots get none (they follow the host).
+    (double[][] Points, int Own) WalkPointsFor(string member)
+    {
+        var own = SpawnsFor(member);
+        if (Current?.Members.FirstOrDefault(m => m.Id == member) is not { Bot: not null }) return (own, own.Length);
+        if (core is null) return ([], 0);
+        own = own.Take(8).ToArray();
+        IEnumerable<double[]> more;
+        if (Current?.Match?.Cs is not null && csObjectives is { } map)
+            more = map.BombSites.Concat(map.Callouts).Select(z => new[] { Math.Round((z.Min[0] + z.Max[0]) / 2, 1), Math.Round((z.Min[1] + z.Max[1]) / 2, 1), Math.Round(z.Min[2] + 60, 1) })
+                .Concat(map.Spawns.Select(s => new[] { s.X, s.Y, s.Z }));
+        else more = arenaSpawns.Select(s => new[] { s.X, s.Y, s.Z });
+        var points = own.ToList();
+        foreach (var p in more)
+        {
+            if (points.Count >= 32) break;
+            if (points.Any(q => Math.Abs(q[0] - p[0]) < 50 && Math.Abs(q[1] - p[1]) < 50)) continue;
+            points.Add(p);
+        }
+        return (points.ToArray(), own.Length);
     }
 
     // A simulated player's spawns: its CS side's, its TDM team's, else every arena spawn (world cm).

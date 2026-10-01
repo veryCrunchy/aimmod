@@ -72,3 +72,7 @@
 .cs-refused{position:absolute;bottom:150px;left:50%;width:360px;margin-left:-180px;text-align:center;background:#3a1d25;color:#ff8fa3;border-radius:4px;padding:5px 0;font-size:14px}
 /* Hover and press from AimModCore's pointer fallback (notify.js adds .hover), like :hover. */
 .cs-item.hover{border-color:#3f5a4d}.cs-item.ok.hover{background:#173b2f}
+.cs-hurt-ring{position:absolute;left:50%;top:50%;width:0;height:0}
+.cs-hurt{position:absolute;width:26px;height:26px;margin-left:-13px;margin-top:-13px;border-radius:13px;border:3px solid #ff3b4f;background:#ff3b4f}
+.cs-hitmark{position:absolute;left:50%;top:50%;width:40px;height:40px;margin-left:-20px;margin-top:-22px;text-align:center;font-size:30px;line-height:40px;color:#eef5f1}
+.cs-hitmark.head{color:#f0b45a}.cs-hitmark.kill{color:#ff3b4f;font-size:34px}

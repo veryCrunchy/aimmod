@@ -114,6 +114,31 @@ static partial class MultiplayerChecks
         Check(tracker.LastSeen[7].Member is null, "Without a stand-in, peer 1's stream is nobody");
     }
 
+    // Team damage (CS2: 33 % for bullets), on by default in CS only; a team kill scores nothing.
+    static void FriendlyFire()
+    {
+        var content = new FakeContent();
+        var start = new LobbySettings(Scenario: content.Scenario("Synthetic A"));
+        Check(LobbyRules.Apply(start, J(new { mode = "cs" }), 6, content).Settings!.EffectiveFriendlyFire && !LobbyRules.Apply(start, J(new { mode = "team-deathmatch" }), 4, content).Settings!.EffectiveFriendlyFire
+            && LobbyRules.Apply(start, J(new { mode = "team-deathmatch", friendlyFire = true }), 4, content).Settings!.EffectiveFriendlyFire, "Friendly fire: on for CS, off for TDM unless the host turns it on");
+        const long t0 = 7_000_000;
+        var c = new CombatMatch(LobbyModes.TeamDeathmatch, ["a", "b", "c"], 20, 0, t0, t0 + 60_000) { TeamDamage = CombatMatch.CsTeamDamage };
+        // Tracks around each shot (a track keeps 10 s).
+        void Feed(long around)
+        {
+            foreach (var (id, x) in new[] { ("a", 0.0), ("b", 1000.0), ("c", 500.0) })
+                c.Track(id, new TrackBatch("m", 1, Enumerable.Range(0, 30).Select(k => new TrackSample(around - 300 + k * 17, x, 0, 164, 0, 0)).ToList(), []));
+        }
+        long seq = 0;
+        HitClaim At(long t, double tx) => new("m", 1, ++seq, t, 0, 0, 164, 0, 0, false, tx, 0, 100, 45, 115);
+        var at = t0 + 2000;
+        Feed(at);
+        Check(c.Claim("a", At(at, 500), at + 10, 40) is null && Math.Abs(c.View().Players.First(p => p.Member == "c").Health - (100 - c.Weapon.Damage * CombatMatch.CsTeamDamage)) < 0.2,
+            "With team damage on, a teammate takes a third of the damage");
+        for (var i = 1; i < 40 && c.View().Players.First(p => p.Member == "c").Alive; i++) { Feed(at + i * 600); c.Claim("a", At(at + i * 600, 500), at + i * 600 + 10, 40); }
+        Check(!c.View().Players.First(p => p.Member == "c").Alive && c.View().Players.First(p => p.Member == "a").Frags == 0, "A team kill scores no frag");
+    }
+
     // Every simulated player is a stand-in of its own (synthetic peers 1, 2, 3, ...), not just the first.
     static void StandIns(string root)
     {
