@@ -301,6 +301,7 @@ target\t<id>\t<x>\t<y>\t<z>\t<capsule radius>\t<capsule half height> (optional, 
 tag\t<target id>\t<stream id>                           (optional: that target is this player's avatar)
 self\t<unix ms>\t<x>\t<y>\t<z>\t<radius>\t<half height>\t<crouched 0|1>   (optional: the sender's own body)
 fire\t<unix ms>\t<shots fired total>\t<fired since previous publication 0|1>  (optional: the sender's weapon)
+weapon\t<unix ms>\t<slot 0-7>                            (optional: the weapon slot in hand, GetCurrentWeaponNum)
 ```
 
 Pose format compatibility: readers ignore row types they do not know
@@ -591,7 +592,8 @@ AIMMOD_ROUND_1	<seq>
 match	<scenario name>
 spawn	<id>	<x>	<y>	<z>	<yaw>
 phase	<freeze|live|planted|end|over>	<frozen 0/1>	<buy 0/1>	<ends unix ms>
-loadout	<primary profile or ->	<pistol profile or ->	<armour>	<helmet 0/1>	<kit 0/1>
+loadout	<primary profile or ->	<pistol profile or ->	<armour>	<helmet 0/1>	<kit 0/1>[	<knife profile or ->	<bomb profile or ->]
+bomb	<dropped|planted|defused>	<x>	<y>	<z>	<explodes at, local unix ms, 0>	<defusing 0/1>
 ```
 
 - `spawn`: `K2_TeleportTo` (and the controller's yaw) once per id, retried
@@ -610,6 +612,32 @@ loadout	<primary profile or ->	<pistol profile or ->	<armour>	<helmet 0/1>	<kit 
   other slot). Re-applied for a new weapon handler. When the gate closes the
   original `SelectableWeapon` values come back and `LoadWeapons` restores the
   scenario's loadout. Armour, helmet and kit are the service's (HUD) concern.
+  With the knife and bomb columns (CS, `in-game/docs/game-modes.md` 6.6.2)
+  slots 2 and 3 are filled the same way (the bomb only for its carrier), and
+  `CsGear` takes over the weapon in hand (below); without them the slots stay
+  as the scenario has them.
+- **CS gear** (`CsGear`, `core` `CsGear.hpp`; only with a CS loadout):
+  - Switching: KovaaK's own `Weapon1`..`Weapon4` keys switch the slots. The
+    mouse wheel (`MouseScrollDown` next, `MouseScrollUp` previous slot with a
+    weapon, wrapping) and `Q` (the weapon before, `cs::Switcher`) are read
+    with `PlayerController:WasInputKeyJustPressed` and press the same
+    `MetaPlayerController:Weapon<N>Pressed` action (released the next
+    frame), retried for up to 1 s while the game can't switch (reload,
+    firing). A changed loadout draws what CS would (`cs::AfterLoadout`: a
+    bought primary or pistol; the best weapon when the slot in hand emptied,
+    e.g. the bomb dropped or planted; picking up the bomb keeps the gun).
+  - In the hand: the knife and bomb profiles use KovaaK's `Blank`
+    viewmodel; AimMod's own models (`cs::KnifeModel`, `cs::BombModel`:
+    `/Engine/BasicShapes` cubes, a cylinder and a sphere on a scene
+    component, tinted through `BasicShapeMaterial`'s `Color`) are attached to
+    the character's `FirstPersonCamera` (`cs::InHand`) and shown while slot 2
+    or 3 is in hand. Built once per character, hidden, never destroyed.
+  - In the world: a `StaticMeshActor` with the bomb model (no collision) at
+    the `bomb` line's position, on the floor (the local player's eye height
+    below the carrier's eye), the same steady yaw on every machine. Planted,
+    its light flashes with the service's beep (`cs::LightOn`: 40 s left, then
+    every `BeepInterval`, 0.1 s on; solid in the last second). Hidden with no
+    `bomb` line, destroyed when the round state is released.
 - Missing `K2_TeleportTo`, `SetControlRotation`, `SetIgnoreMoveInput`,
   `SetWeaponProfileByString` or `LoadWeapons` disables round state (logged).
 
