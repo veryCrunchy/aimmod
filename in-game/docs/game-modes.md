@@ -957,7 +957,15 @@ host-checked hits with a 200 ms rewind cap.
   - the base scenario's target bots are removed;
   - one invisible, passable, inert helper bot (`AimMod Hidden Bot` with body
     `AimMod Hidden`) is added, because AimModSteam spawns avatars from a bot
-    profile the scenario already has;
+    profile the scenario already has. `MainBBHide`/`ProjBBHide` don't hide it
+    in 3.9.11: a live TDM showed its BodyBB components and collision cylinder
+    visible and colliding (QueryAndPhysics), so it took shots and counted for
+    KovaaK's accuracy. AimModSteam therefore parks the scenario's own instance
+    every second in AimMod arenas: hidden, collision off, AI and weapons off,
+    invulnerable, `MOVE_None`, at (5 km, 5 km, 500 m), outside any map and
+    inside the world bounds. Whether KovaaK's runs an arena with no bot at
+    all (empty `AddedBots`) is still untested; the spawn of avatars from the
+    profile may depend on it;
   - the KovaaK's run lasts 10 s longer than the round, so the host, not the
     game, ends the round.
 - **Data path.**

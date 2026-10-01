@@ -1296,6 +1296,7 @@ sealed partial class MultiplayerService : IDisposable
             PumpWatchContent();
             RememberSettings();
             PlanRound();
+            UpdateStandIn();
             TrackLocalRun();
             Remember();
         }
@@ -1796,9 +1797,10 @@ sealed partial class MultiplayerService : IDisposable
         if (match.Phase is not (MatchPhases.Countdown or MatchPhases.Live)) return;
         // Samples travel on the host clock: offset = host - local.
         var offset = core is not null || hostPeer is null ? 0 : clocks.GetValueOrDefault(hostPeer)?.Offset ?? 0;
-        poseTracker.Poll(offset, match.Players);
+        poseTracker.Poll(offset, match.Players, standInMember is { } standIn ? (StreamIds.For(StandInPeer), standIn) : null);
         foreach (var batch in poseTracker.Drain(match.Id, match.Round))
         {
+            FeedStandIn(batch);
             if (core is not null) core.Track(SelfId, batch);
             else if (hostPeer is not null) Send(hostPeer, "track", batch.Body());
         }
@@ -1904,7 +1906,7 @@ sealed partial class MultiplayerService : IDisposable
         {
             var died = view.Events.LastOrDefault(e => e.Member == p.Member && e.Kind == "death");
             var friend = self.Team != 0 && p.Team == self.Team;
-            return "peer\t" + p.Member + "\t" + (p.Alive ? 1 : 0) + "\t" + (friend ? "friend" : "enemy") + "\t" + Math.Round(p.Health).ToString(System.Globalization.CultureInfo.InvariantCulture)
+            return "peer\t" + AvatarPeer(p.Member) + "\t" + (p.Alive ? 1 : 0) + "\t" + (friend ? "friend" : "enemy") + "\t" + Math.Round(p.Health).ToString(System.Globalization.CultureInfo.InvariantCulture)
                 + "\t" + (p.Alive ? 0 : died?.T ?? 0) + "\t" + (p.Alive ? 0 : p.RespawnAt ?? 0);
         });
         var body = "match\t" + Uri.EscapeDataString(match.Id) + "\n" + string.Join("\n", rows) + "\n";

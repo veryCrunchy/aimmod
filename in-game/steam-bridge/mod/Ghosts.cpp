@@ -593,6 +593,8 @@ namespace aimmod
                 if (!m_lastScene.empty() && !m_ghosts.empty()) m_log("avatars: scenario changed; re-applying looks and AI-off");
                 m_lastScene = scene;
                 m_botsAllowed = bridge::ghost::AvatarBotsAllowed(scene);
+                m_parkedHelpers.clear();
+                m_nextHelperPark = 0;
                 if (!m_ghosts.empty() && !m_botsAllowed) m_log("avatars: not an AimMod match scenario; remote players drawn as shapes");
                 m_avatarMapDirty = true;
                 for (auto& [_, g] : m_ghosts)
@@ -601,6 +603,13 @@ namespace aimmod
                     g.characterProfile.clear();
                     g.spawnFailures = 0;
                 }
+            }
+
+            // The arena's own helper bot: re-applied every second (the game resets bots at run start).
+            if (m_botsAllowed && now >= m_nextHelperPark)
+            {
+                m_nextHelperPark = now + 1.0;
+                ParkHelperBots();
             }
 
             UObject* world = static_cast<AActor*>(character)->GetWorld();
@@ -705,6 +714,42 @@ namespace aimmod
             m_log(std::string("ghost demo: disabled after an error: ") + e.what());
         }
         if (m_avatarMapDirty) WriteAvatarMap();
+    }
+
+    // The scenario's own instance of the helper bot (not one of our avatars): hidden, no
+    // collision (shots and players pass), AI off, invulnerable, no movement, and parked far
+    // outside the map, so it can't be seen, hit, block anyone or count for accuracy.
+    void GhostDemo::ParkHelperBots()
+    {
+        if (!BindAvatars()) return;
+        std::vector<UObject*> found;
+        UObjectGlobals::FindAllOf(STR("TheMetaAIController"), found);
+        for (UObject* controller : found)
+        {
+            if (!game::IsLiveInstance(controller) || m_ownControllers.count(controller)) continue;
+            if (!bridge::ghost::IsHelperBot(ReadFString(controller, STR("MyProfileName")))) continue;
+            UObject* pawn = m_getMetaCharacter.Object(controller);
+            if (!pawn || !game::IsLiveInstance(pawn)) continue;
+            auto* actor = static_cast<AActor*>(pawn);
+            actor->SetActorHiddenInGame(true);
+            actor->SetActorEnableCollision(false);
+            static_cast<AActor*>(controller)->SetActorTickEnabled(false);
+            m_setUseWeapons.Call(controller, [](std::uint8_t* value, const Param& p) {
+                if (p.kind == Kind::Bool) *value = 0;
+            });
+            if (m_stopAiming.ok()) m_stopAiming.Call(controller, [](std::uint8_t*, const Param&) {});
+            m_overrideInvulnerable.Call(pawn, [](std::uint8_t* value, const Param& p) {
+                if (p.kind == Kind::Bool) *value = 1;
+            });
+            if (m_setMovementMode.ok() && m_movementComponent.ok())
+                if (UObject* movement = m_movementComponent.Object(pawn))
+                    m_setMovementMode.Call(movement, [](std::uint8_t* value, const Param& p) {
+                        if (p.kind == Kind::UInt8) *value = 0; // MOVE_None: no gravity, stays parked
+                    });
+            FHitResult hit{};
+            actor->K2_SetActorLocationAndRotation(FVector(bridge::ghost::HelperParkX, bridge::ghost::HelperParkY, bridge::ghost::HelperParkZ), FRotator(0, 0, 0), false, hit, true);
+            if (m_parkedHelpers.insert(pawn).second) m_log("avatars: parked the arena's helper bot outside the map (hidden, no collision, AI off)");
+        }
     }
 
     // avatar-state.tsv from the service (combat matches). Stale or missing = everyone alive, enemies.
