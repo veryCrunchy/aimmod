@@ -28,6 +28,8 @@ if (args.Length >= 2 && args[0] == "--install-probe-variants")
 // Diagnostic with the game running: --check-map-load "<AimMod scenario>" [--game <root>] [--output <folder>] [--no-load]
 // loads the scenario through AimModCore, asks for its map (ensure-map) and prints core-scene.json's map after each step.
 if (args.Length >= 2 && args[0] == "--check-map-load") { Environment.ExitCode = AimMod.InGame.Multiplayer.MapLoadDiagnostic.Run(args); return; }
+// Diagnostic: --write-bomb-sounds <folder> writes AimMod's synthesised CS round sounds as WAV files.
+if (args.Length == 2 && args[0] == "--write-bomb-sounds") { Environment.ExitCode = AimMod.InGame.Multiplayer.BombSounds.WriteFiles(Path.GetFullPath(args[1])); return; }
 // Offline avatar spike: --export-avatar-path <replay id> [--output <folder>] writes avatar-test-path.tsv.
 if (args.Length is 2 or 4 && args[0] == "--export-avatar-path")
 {
@@ -48,6 +50,8 @@ for (int i = 0; i < args.Length; i++)
     else if (args[i] == "--instance" && i + 1 < args.Length) instance = new string(args[++i].Where(char.IsAsciiLetterOrDigit).Take(32).ToArray());
 }
 Directory.CreateDirectory(output);
+// The real service may play CS round sounds (self-tests never open an audio device).
+AimMod.InGame.Multiplayer.BombAudio.DeviceAllowed = true;
 using var singleton = new Mutex(true, "Local\\AimMod.KovaaksNative.History" + (instance.Length > 0 ? "." + instance : ""), out var ownsMutex);
 if (!ownsMutex) { Console.Error.WriteLine("Another AimMod worker is already running for this user."); return; }
 using var cancellation = new CancellationTokenSource();

@@ -60,17 +60,35 @@ sealed partial class MultiplayerService
 
     long HostOffset() => core is null && hostPeer is not null ? clocks.GetValueOrDefault(hostPeer)?.Offset ?? 0 : 0;
 
-    // round-state.tsv lines for CS (contract in game-modes.md 6.6.1):
+    // round-state.tsv lines for CS (contract in game-modes.md 6.6.1 and 6.6.2):
     //   phase\t<phase>\t<frozen 0/1>\t<buy open 0/1>\t<phase ends, local unix ms>
-    //   loadout\t<primary profile or ->\t<pistol profile or ->\t<armour>\t<helmet 0/1>\t<kit 0/1>
+    //   loadout\t<primary or ->\t<pistol or ->\t<armour>\t<helmet 0/1>\t<kit 0/1>\t<knife or ->\t<bomb or ->
+    //     (weapon profile names for slots 0-3; the bomb only for its carrier)
+    //   bomb\t<dropped|planted|defused>\t<x>\t<y>\t<z>\t<explodes at, local unix ms, 0>\t<defusing 0/1>
+    //     (only while the bomb lies in the world: where AimModCore draws it)
     IEnumerable<string> CsPlayLines(MatchSnapshot match)
     {
         if (match.Cs is not { } cs || cs.Players.FirstOrDefault(p => p.Member == SelfId) is not { } me) yield break;
         var hostNow = clock() + HostOffset();
         var buyWindow = cs.Phase == "freeze" || (cs.Phase == "live" && cs.LiveAt is { } live && hostNow < live + CsRules.BuyMs);
         yield return "phase\t" + cs.Phase + "\t" + (cs.Phase == "freeze" ? 1 : 0) + "\t" + (buyWindow ? 1 : 0) + "\t" + (cs.PhaseEndsAt - HostOffset());
+        yield return CsLoadoutLine(me, cs.Bomb.Carrier == SelfId);
+        if (CsBombLine(cs.Bomb, HostOffset()) is { } bomb) yield return bomb;
+    }
+
+    internal static string CsLoadoutLine(CsPlayerView me, bool carrier)
+    {
         string Profile(string? id) => CsRules.Find(id)?.Combat.Name ?? "-";
-        yield return "loadout\t" + Profile(me.Primary) + "\t" + Profile(me.Secondary) + "\t" + Math.Round(me.Armor).ToString(CultureInfo.InvariantCulture) + "\t" + (me.Helmet ? 1 : 0) + "\t" + (me.Kit ? 1 : 0);
+        return "loadout\t" + Profile(me.Primary) + "\t" + Profile(me.Secondary) + "\t" + Math.Round(me.Armor).ToString(CultureInfo.InvariantCulture) + "\t" + (me.Helmet ? 1 : 0) + "\t" + (me.Kit ? 1 : 0)
+            + "\t" + (me.Alive ? CsRules.Knife.Combat.Name : "-") + "\t" + (carrier && me.Alive ? CsRules.Bomb.Combat.Name : "-");
+    }
+
+    internal static string? CsBombLine(CsBombView b, long hostToLocal)
+    {
+        if (b.State is not ("dropped" or "planted" or "defused") || b.Position is not { Length: 3 } at) return null;
+        static string N(double v) => Math.Round(v, 1).ToString("0.#", CultureInfo.InvariantCulture);
+        var explodes = b.State == "planted" && b.ExplodesAt is { } e ? Math.Max(0, e - hostToLocal) : 0;
+        return "bomb\t" + b.State + "\t" + N(at[0]) + "\t" + N(at[1]) + "\t" + N(at[2]) + "\t" + explodes.ToString(CultureInfo.InvariantCulture) + "\t" + (b.Defuser is not null ? 1 : 0);
     }
 
     // The buy menu: what this player's side can buy now, numbered for the digit keys.
@@ -92,6 +110,7 @@ sealed partial class MultiplayerService
     void CsInput(MatchSnapshot match)
     {
         if (match.Cs is not { } cs || cs.Players.FirstOrDefault(p => p.Member == SelfId) is not { } me) return;
+        CsSounds(match, cs);
         var key = match.Id + "#" + cs.Round;
         if (key != csRoundKey) { csRoundKey = key; buyOpen = false; }
         var hostNow = clock() + HostOffset();
@@ -108,9 +127,38 @@ sealed partial class MultiplayerService
             for (var i = 0; i < menu.Count; i++)
                 if (csKeys.Pressed((char)('1' + i))) Command("buy", JsonSerializer.SerializeToElement(new { item = menu[i].Item }));
         }
-        var held = csKeys.Down('E') && me.Alive && cs.Phase is "live" or "planted";
+        // Planting: E, or fire with the bomb in your hands (CS); defusing: E.
+        var holdingBomb = poseTracker?.Weapon == CsRules.BombSlot && cs.Bomb.Carrier == SelfId;
+        var held = (csKeys.Down('E') || (holdingBomb && !buyOpen && csKeys.Down((char)0x01))) && me.Alive && cs.Phase is "live" or "planted";
         if (held != useHeld) { useHeld = held; CsCommand("use", new { held }); }
         if (csKeys.Pressed('G') && me.Alive && !buyOpen) CsCommand("drop", new { });
+        CsHold(match, cs, me);
+    }
+
+    // Bomb and round sounds (BombAudio): the cues for what changed, and the planted bomb's beep
+    // from where it lies relative to this player's camera.
+    readonly BombAudio roundAudio = new();
+    readonly RoundSoundPlan roundSounds = new();
+    internal BombAudio RoundAudio => roundAudio;
+    void CsSounds(MatchSnapshot match, CsView cs)
+    {
+        (double X, double Y, double Yaw)? listener = ownRecent.Count > 0 ? (ownRecent[^1].X, ownRecent[^1].Y, ownRecent[^1].Yaw) : null;
+        var volume = prefs.RoundVolume;
+        foreach (var cue in roundSounds.Update(match.Id, cs, SelfId)) roundAudio.Play(cue, listener);
+        var bomb = RoundSoundPlan.Beeping(cs) is { } b ? (b.At, b.ExplodesAt - HostOffset()) : ((double[], long)?)null;
+        roundAudio.Update(volume, bomb, listener);
+    }
+
+    // Which weapon slot this player holds, for the item the others see in their hands: sent when
+    // it changes (and again each round, which starts the host's view from scratch).
+    string? csHoldSent;
+    void CsHold(MatchSnapshot match, CsView cs, CsPlayerView me)
+    {
+        if (poseTracker?.Weapon is not { } slot || !me.Alive) return;
+        var key = match.Id + "#" + cs.Round + "#" + slot;
+        if (key == csHoldSent) return;
+        csHoldSent = key;
+        Command("hold", JsonSerializer.SerializeToElement(new { slot }));
     }
 
     // CS HUD for the notice layer, kept clear of the crosshair: the score strip and clocks at
@@ -183,7 +231,7 @@ sealed partial class MultiplayerService
         {
             var parts = (e.Text ?? "").Split('\t');
             var killer = parts.Length > 0 ? parts[0] : null;
-            var weapon = parts.Length > 1 ? CsRules.Find(parts[1])?.Label ?? "" : "";
+            var weapon = parts.Length > 1 ? CsRules.FindAny(parts[1])?.Label ?? "" : "";
             return new CsFeedLine(e.Id, Name(killer), Name(e.Member), weapon, parts.Length > 2 && parts[2] == "1", killer == SelfId ? "killer" : e.Member == SelfId ? "victim" : null,
                 cs.Players.FirstOrDefault(p => p.Member == killer)?.Team ?? 0);
         }).ToArray();

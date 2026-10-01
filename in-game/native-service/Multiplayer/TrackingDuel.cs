@@ -307,8 +307,10 @@ sealed class SelfPoseTracker(string outputFolder)
     public const long SeenHistoryMs = 2000;
     // The latest drawn targets by AimModCore id (combat claims name the target they hit).
     public IReadOnlyDictionary<int, TrackSeen> LastSeen => lastSeen;
+    // The weapon slot the local player holds (AimModCore's weapon row), null before the first one.
+    public int? Weapon { get; private set; }
 
-    public void Reset() { lastPose = long.MinValue; lastSequence = -1; samples.Clear(); seenRows.Clear(); lastSeen.Clear(); seenHistory.Clear(); }
+    public void Reset() { lastPose = long.MinValue; lastSequence = -1; samples.Clear(); seenRows.Clear(); lastSeen.Clear(); seenHistory.Clear(); Weapon = null; }
 
     // Where target `id` was drawn at host time t: interpolated between the frames around t;
     // the nearest frame within 100 ms past either end; null without one.
@@ -341,6 +343,7 @@ sealed class SelfPoseTracker(string outputFolder)
     {
         if (frame is null || frame.Sequence == lastSequence) return;
         lastSequence = frame.Sequence;
+        if (frame.Weapon is { } held) Weapon = held;
         // The fire row covers this publication (about 33 ms): its poses count as firing.
         var fired = frame.Fire is { } f && f[2] == 1;
         foreach (var p in frame.Poses)
