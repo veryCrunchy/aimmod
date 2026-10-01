@@ -141,6 +141,9 @@ interface IMultiplayerTransport : IDisposable
     // WorkshopItems. False when the bridge can't list items ("ugc-query" feature).
     bool QueryWorkshop(string? text, string? tag = null) => false;
     IReadOnlyList<WorkshopItem> WorkshopItems => [];
+    // Developer: AimModSteam's test avatar on or off, circling you or following
+    // avatar-test-path.tsv (dev.avatar). False when the bridge can't ("dev-avatar" feature).
+    bool DevAvatar(bool on, string mode) => false;
     // Bulk file lane (bridge xfer.*): low-priority, in-order chunks of BulkChunkBytes, with a
     // small send window. BulkChunkBytes is 0 when the lane is missing; content then uses frames.
     int BulkChunkBytes { get; }

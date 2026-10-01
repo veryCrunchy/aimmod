@@ -12,9 +12,10 @@ function setup(){
     finish(status,data){this.status=status;this.responseText=JSON.stringify(data);this.readyState=4;this.onreadystatechange();}}
   const window={document:{createElement:t=>new El(t),getElementById:id=>id==='nav-developer'?navButton:null},XMLHttpRequest:Xhr,location:{pathname:'/private/ui'}};
   const context=vm.createContext({window,setTimeout:()=>1,clearTimeout:()=>{},JSON});
+  require('./test-format.cjs').loadFormat(context);
   vm.runInContext(fs.readFileSync(path.join(__dirname,'developer.js'),'utf8'),context);
   const text=root=>walk(root).map(e=>e.textContent||'').join('|');
-  return {api:window.AimModDeveloper,container,settings,navButton,requests,last:()=>requests[requests.length-1],
+  return {api:window.AimModDeveloper,container,settings,navButton,requests,last:()=>requests.filter(r=>/\/developer$/.test(r.url)).pop(),
     button:(root,label)=>walk(root).find(e=>e.tag==='button'&&e.textContent===label),all:root=>walk(root),text};
 }
 const off={enabled:false,notices:['invite','ready'],status:null};
@@ -34,6 +35,22 @@ test('the developer page creates simulated lobbies, drives them and fires notice
   s.button(s.container,'Someone chats').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'sim',op:'chat'});
   s.button(s.container,'Ready check').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'notice',kind:'ready'});
   assert.ok(s.all(s.container).filter(e=>e.tag==='button'&&/\bbutton\b/.test(e.className)).every(b=>b.parentNode.className==='actions'||/segmented/.test(b.parentNode.className)),'stand-alone buttons sit in actions rows');
+});
+test('the developer page offers avatars, loopback, game commands, content and Workshop tools',()=>{
+  const s=setup();s.api.enter(s.container);
+  const full=JSON.parse(JSON.stringify(on));full.status.looks=[{id:'meso-tracer',label:'Tracer'}];full.status.look='meso-tracer';
+  full.tools={replays:[{id:'run-1',scenario:'Synthetic Scenario',recordedAt:'2026-01-01T00:00:00Z',seconds:60},{id:'run-2',scenario:'Synthetic Scenario',recordedAt:'2026-01-01T00:01:00Z',seconds:60}],avatarPath:null,loopback:{source:'self',delay:2,scenario:'Synthetic Scenario',mapName:'m',mapScale:1},content:{state:'done',done:10,total:10,files:[{name:'Synthetic Scenario.sce'}]},logs:{service:['started'],game:['[AimModCore] ok']}};
+  full.camera=[1,2,3,-5,90,0,100];full.workshop=[{item:'1',title:'AimMod - Dust2 (CSGO) - CS Movement',bytes:71000000,installed:true,needsUpdate:false,port:true}];
+  s.last().finish(200,full);
+  s.button(s.container,'Spawn circling avatar').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'avatar',on:true,mode:'circle'});
+  s.all(s.container).filter(e=>e.tag==='button'&&e.textContent==='Use as A')[0].onclick();s.all(s.container).filter(e=>e.tag==='button'&&e.textContent==='Use as B')[1].onclick();
+  s.button(s.container,'A vs B').onclick();const vs=s.requests.filter(r=>/native-replay$/.test(r.url)).pop();assert.deepEqual(JSON.parse(vs.body),{action:'load',id:'run-1',compareId:'run-2'});
+  s.button(s.container,'Spectate yourself').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'loopback',source:'self',delay:2});
+  s.button(s.container,'Open the spectator view').onclick();assert.equal(JSON.parse(s.requests.filter(r=>/native-replay$/.test(r.url)).pop().body).action,'spectate');
+  s.button(s.container,'Start in freeplay').onclick();const start=JSON.parse(s.requests.filter(r=>/game-command$/.test(r.url)&&r.method==='POST').pop().body);assert.equal(start.mode,'freeplay','developer starts are freeplay only');
+  s.button(s.container,'Capture thumbnail').onclick();const cap=JSON.parse(s.requests.filter(r=>/game-command$/.test(r.url)&&r.method==='POST').pop().body);assert.deepEqual(cap.views,[{x:1,y:2,z:3,pitch:-5,yaw:90,fov:100}],'the current camera is the view');
+  s.button(s.container,'Receive and fail on purpose').onclick();assert.equal(JSON.parse(s.last().body).fail,true);
+  assert.ok(s.text(s.container).includes('AimMod - Dust2 (CSGO) - CS Movement')&&s.text(s.container).includes('[AimModCore] ok'));
 });
 test('with developer mode off the page explains where to turn it on',()=>{
   const s=setup();s.api.enter(s.container);s.last().finish(200,off);assert.ok(s.text(s.container).includes('Turn it on under Settings'));

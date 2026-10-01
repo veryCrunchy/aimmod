@@ -1818,7 +1818,7 @@ sealed partial class MultiplayerService : IDisposable
             _ => Results.Json(View(), Protocol.Json),
         });
         // Developer mode and its tools (off by default; local UI only).
-        Developer.DeveloperEndpoints.Map(routes, prefix, new Developer.DeveloperMode(outputFolder), this);
+        Developer.DeveloperEndpoints.Map(routes, prefix, new Developer.DeveloperMode(outputFolder), this, outputFolder is null ? null : new Developer.DeveloperTools(outputFolder, library, this));
         // Read-only notice for the always-on in-game layer (notify.html).
         routes.MapGet(prefix + "/multiplayer-notify", () => Results.Content(NoticeJson(), "application/json"));
         routes.MapPost(prefix + "/multiplayer", async (HttpRequest request, CancellationToken token) =>
