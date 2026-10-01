@@ -1428,7 +1428,15 @@ widget. The character's `Infobar` widget shows the profile's display name.
   sets it, then `avatar_profile` from config, then any bot the scenario
   already has. A generated arena can ship that profile as an invisible,
   inert helper bot. The avatar spawned from it is forced visible
-  (`SetActorHiddenInGame(false)`, `UpdateVisibility(false)`).
+  (`SetActorHiddenInGame(false)`, `UpdateVisibility(false)`). The scenario's
+  own instance of `AimMod Hidden Bot` is parked every second in AimMod arenas:
+  hidden, no collision, AI off, invulnerable, `MOVE_None`, far outside the map.
+- **Developer mode.** In a simulated lobby's match, the first simulated player
+  is shown as the test avatar (peer 1, `dev.avatar` circle, switched on and
+  off by the service unless the developer menu already has it on). Its
+  stream maps back to that member; the host uses its drawn hull as the
+  member's track, so hits on it validate; `avatar-state.tsv` lists it as
+  peer 1.
 - Appearance comes from `aimmod.char.<peer>`, else `aimmod.avatar_char`.
 - Changing `aimmod.avatar_bot` respawns the avatars.
 

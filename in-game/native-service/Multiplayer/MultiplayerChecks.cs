@@ -39,7 +39,7 @@ static partial class MultiplayerChecks
         CsTeams();
         Marker();
         var root = Path.Combine(Path.GetTempPath(), "aimmod-mp-test-" + Guid.NewGuid().ToString("N"));
-        try { Content(root); Generator(root); Blocked(root); AutoLeave(root); LoadGateService(root); LoadGateEnsureMap(root); Service(root); Transfers(root); Replays(root); Maps(root); Tournaments(root); }
+        try { Content(root); Generator(root); Blocked(root); AutoLeave(root); LoadGateService(root); StandInStream(root); LoadGateEnsureMap(root); Service(root); Transfers(root); Replays(root); Maps(root); Tournaments(root); }
         finally { try { Directory.Delete(root, true); } catch (IOException) { } }
         Console.WriteLine($"{count} multiplayer checks passed.");
     }
@@ -1938,6 +1938,8 @@ static partial class MultiplayerChecks
         var avatars = File.ReadAllText(Path.Combine(output, "avatar-state.tsv"));
         Check(avatars.StartsWith("AIMMOD_AVATARS_1\t", StringComparison.Ordinal) && avatars.Contains("\t1\tenemy\t100\t0\t0\n", StringComparison.Ordinal) && !avatars.Contains("peer\t" + service.SelfId, StringComparison.Ordinal),
             "avatar-state.tsv lists the other players' avatars (alive, enemy, health) for AimModSteam");
+        Check(avatars.Contains("peer	" + MultiplayerService.StandInPeer + "	1	enemy", StringComparison.Ordinal) && service.StandInMember is { } standIn && !avatars.Contains("peer	" + standIn + "	", StringComparison.Ordinal),
+            "Developer mode: the simulated opponent is AimModSteam's test avatar (peer 1), so it is drawn and its team and deaths apply");
         service.Act("end", default);
         // Host leaving a simulated lobby hands it over; invites and launch joins.
         service.Act("leave", default);

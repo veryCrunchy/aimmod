@@ -100,6 +100,20 @@ static partial class MultiplayerChecks
         Check(core.Apply("host", "end", default, content).Ok && core.Snapshot().Match is null or { Phase: MatchPhases.Final }, "The host can abort a failed load");
     }
 
+    // Developer mode's test avatar stands in for a simulated player: AimModCore tags its hull with
+    // bridge peer 1's stream, which maps back to that member.
+    static void StandInStream(string root)
+    {
+        var tracker = new SelfPoseTracker(Path.Combine(root, "standin"));
+        var frame = new LivePoseFrame(1, "", "AimMod Match - Synthetic", "synthetic_map", 1, [new LivePose(5000, [0, 0, 0, 0, 0])], [[7, 400, 0, 0, 45, 115], [8, 900, 0, 0, 45, 115]])
+            { Tags = new Dictionary<int, string> { [7] = StreamIds.For(MultiplayerService.StandInPeer), [8] = StreamIds.For("other") } };
+        tracker.Take(frame, 0, ["me", "sim-a", "other"], (StreamIds.For(MultiplayerService.StandInPeer), "sim-a"));
+        Check(tracker.LastSeen[7].Member == "sim-a" && tracker.LastSeen[8].Member == "other", "The test avatar's stream maps to the simulated member it stands in for");
+        tracker.Reset();
+        tracker.Take(frame, 0, ["me", "sim-a", "other"]);
+        Check(tracker.LastSeen[7].Member is null, "Without a stand-in, peer 1's stream is nobody");
+    }
+
     // A client whose KovaaK's keeps the previous map (the live CS bug): it loads again once,
     // then reports the problem; the host sees Retry and Abort; the scenario is kept for debugging.
     static void LoadGateService(string root)
