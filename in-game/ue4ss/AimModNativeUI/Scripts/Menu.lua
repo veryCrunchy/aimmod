@@ -160,7 +160,8 @@ function M.start()
         if not ok then pcall(LiveHUD.hide) end
         -- Multiplayer notices, shown while the AimMod panel itself is not on screen.
         local noticeOk=pcall(function()
-            Notify.update(opened and valid(menu) and menu:IsVisible(),ReplayMainBridge.active())
+            local menuUp=valid(menu) and menu:IsVisible()
+            Notify.update(opened and menuUp,ReplayMainBridge.active(),menuUp)
         end)
         if not noticeOk then pcall(Notify.hide) end
     end)

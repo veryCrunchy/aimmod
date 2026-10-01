@@ -3,7 +3,7 @@
 // countdowns. It only reads the service's notice; keys are handled by the service.
 (function(root){
   'use strict';
-  var box=root.document.getElementById('notice'),last='',timer=null;
+  var box=root.document.getElementById('notice'),timer=null,misses=0;
   function node(tag,css,text){var el=root.document.createElement(tag);if(css)el.className=css;if(text!==undefined&&text!==null)el.textContent=text;return el;}
   function base(){var p=root.location.pathname;return p.slice(0,p.lastIndexOf('/'));}
   // Standings: the compact corner panel during a match, the full scoreboard while its key is held.
@@ -16,22 +16,41 @@
   // CS: its own full-screen HUD layer (edges only), drawn whenever its state changes.
   var csRoot=root.document.getElementById('cs-hud'),lastCs='';
   function cs(n){var c=n&&n.cs||null;var key=c?JSON.stringify(c):'';if(key===lastCs||!root.AimModCsHud||!csRoot)return;lastCs=key;root.AimModCsHud.render(csRoot,c,answer);}
+  // The strips (duel, combat, badge) and the toast live in their own containers and are rebuilt
+  // only when their own fields change: the HUD data ticks every poll, and rebuilding the toast
+  // with it would swap its buttons between mouse down and mouse up, so clicks got lost.
+  var strips=null,card=null,stripKey='',toastKey='';
+  function clear(el){while(el.firstChild)el.removeChild(el.firstChild);}
+  function parts(){
+    if(strips)return;clear(box);
+    strips=node('div','strips');card=node('div','toast-slot');box.appendChild(strips);box.appendChild(card);
+  }
   function render(n){
-    boards(n);cs(n);
-    // The standings change every frame; the toast only re-renders for its own fields.
-    var key=n?JSON.stringify(n,function(k,v){return k==='board'||k==='boardFull'?undefined:v;}):'';if(key===last)return;last=key;
-    while(box.firstChild)box.removeChild(box.firstChild);
-    if(!n||(!n.active&&!n.badge&&!n.duel&&!n.combat&&!n.cs)){box.className='';return;}
+    boards(n);cs(n);parts();
+    var body=root.document.body,page=root.document.documentElement;
+    function input(on){if(body)body.className=on?'input':'';if(page)page.className=on?'input':'';}
+    if(!n||(!n.active&&!n.badge&&!n.duel&&!n.combat&&!n.cs)){box.className='';input(false);clear(strips);clear(card);stripKey=toastKey='';return;}
     // CS draws its own strip at the top, so notices move below it.
     var extra=n.cs&&root.AimModCsHud?' cs-on'+(n.cs.buyOpen?' cs-buying':''):n.duel||n.combat||n.cs?' duel-on':'';
-    box.className='show'+extra;
-    if(n.duel)box.appendChild(duel(n.duel));
-    if(n.combat)box.appendChild(combat(n.combat));
-    if(n.cs&&!root.AimModCsHud)box.appendChild(csHud(n.cs));
-    if(n.badge){var b=node('div','badge');b.appendChild(node('span','eye'));b.appendChild(node('span','',n.badge));box.appendChild(b);}
+    box.className=(n.active?'show '+(n.kind||'info'):'show')+extra;
+    // The toast-sized layer takes clicks as a whole while it asks for them (see notify.css).
+    input(!!n.interactive&&n.layout!=='full');
+    var sk=JSON.stringify([n.duel,n.combat,root.AimModCsHud?null:n.cs,n.badge]);
+    if(sk!==stripKey){
+      stripKey=sk;clear(strips);
+      if(n.duel)strips.appendChild(duel(n.duel));
+      if(n.combat)strips.appendChild(combat(n.combat));
+      if(n.cs&&!root.AimModCsHud)strips.appendChild(csHud(n.cs));
+      if(n.badge){var b=node('div','badge');b.appendChild(node('span','eye'));b.appendChild(node('span','',n.badge));strips.appendChild(b);}
+    }
+    var tk=n.active?JSON.stringify([n.id,n.kind,n.eyebrow,n.title,n.body,n.key,n.countdown,n.actions]):'';
+    if(tk===toastKey)return;
+    toastKey=tk;clear(card);
     if(!n.active)return;
-    box.className='show '+(n.kind||'info')+extra;
-    var card=node('div','toast');
+    card.appendChild(toast(n));
+  }
+  function toast(n){
+    var card=node('div','toast'+(n.actions&&n.actions.length?' has-actions':''));
     // The eyebrow says what kind of notice this is (the service can name it; otherwise by kind).
     var brands={invite:'AIMMOD · INVITE',ready:'AIMMOD · LOBBY',countdown:'AIMMOD · MATCH',friend:'AIMMOD · FRIENDS'};
     var top=node('div','brand',n.eyebrow?String(n.eyebrow).toUpperCase():(/^(t(ci|m[a-z])|fr|dev)-/.test(String(n.id||''))?brand(n):brands[n.kind]||brand(n)));card.appendChild(top);
@@ -40,9 +59,9 @@
     var text=node('div','text');text.appendChild(node('div','title',n.title||''));text.appendChild(node('div','body',n.body||''));row.appendChild(text);
     if(n.key)row.appendChild(node('div','key',n.key));
     card.appendChild(row);
-    // An incoming invite can be answered right here (the layer takes clicks only for these).
+    // Answerable notices (invite, ready, load failure) carry their buttons; the layer takes clicks only for these.
     if(n.actions&&n.actions.length){var row2=node('div','actions');n.actions.forEach(function(a,i){row2.appendChild(button(a.label,i===0?'primary':'',function(){answer(a.action,a.id);}));});card.appendChild(row2);}
-    box.appendChild(card);
+    return card;
   }
   // The small label above the title says where the notice comes from.
   function brand(n){var id=String(n.id||'');return 'AIMMOD · '+(/^t(ci|m[a-z])-/.test(id)?'TOURNAMENT':/^fr-/.test(id)?'FRIENDS':/^dev-/.test(id)?'DEVELOPER TEST':'MULTIPLAYER');}
@@ -114,13 +133,15 @@
   function answer(action,id){
     var x=new root.XMLHttpRequest();x.open('POST',base()+'/multiplayer',true);x.timeout=5000;
     x.setRequestHeader('X-AimMod-UI','1');x.setRequestHeader('Content-Type','application/json');
-    x.onreadystatechange=function(){if(x.readyState===4){last='';poll();}};
+    x.onreadystatechange=function(){if(x.readyState===4){toastKey='';poll();}};
     x.send(JSON.stringify({action:action,id:id}));
   }
+  // A missed poll keeps what is on screen, so a button doesn't vanish under the cursor; eight in a row (2 s) clear it.
+  function miss(){misses++;if(misses>=8)render(null);}
   function poll(){
     var x=new root.XMLHttpRequest();x.open('GET',base()+'/multiplayer-notify',true);x.timeout=2000;
-    x.onreadystatechange=function(){if(x.readyState!==4)return;if(x.status===200){try{render(JSON.parse(x.responseText));}catch(e){render(null);}}else render(null);};
-    x.onerror=x.ontimeout=function(){render(null);};
+    x.onreadystatechange=function(){if(x.readyState!==4)return;var n=null;if(x.status===200){try{n=JSON.parse(x.responseText);}catch(e){n=null;}}if(n){misses=0;render(n);}else miss();};
+    x.ontimeout=miss;
     x.send(null);
     clearTimeout(timer);timer=setTimeout(poll,250);
   }

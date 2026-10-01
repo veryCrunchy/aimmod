@@ -1,7 +1,8 @@
 -- Owned multiplayer notice layer: invites, "host is starting" and countdowns,
 -- shown even while the AimMod panel is closed. A small Gameface view at the top
--- centre, normally click-through. It only takes clicks for an incoming invite
--- while the game already shows the mouse cursor (menus); during play the
+-- centre, normally click-through. It takes clicks only for a notice that asks
+-- for them (invite, ready, load failure, the CS buy menu) while a cursor is on
+-- screen: KovaaK's menus are up, or the game shows its cursor. During play the
 -- service's hotkey (F7) answers instead. No input mode, focus or key callbacks.
 -- Call only from the native game thread.
 local M={}
@@ -11,8 +12,8 @@ local text
 local lastId,lastCount
 local interactive=false
 local base=(os.getenv('LOCALAPPDATA') or '')..'/AimMod/KovaaksNative/'
-local Width,Height=620,230
--- Two sizes: the toast (top centre, 620 x 230) for notices, and the whole screen for
+local Width,Height=620,340
+-- Two sizes: the toast (top centre, 620 x 340, room for a card with buttons) for notices, and the whole screen for
 -- the mode HUDs (CS, standings) that sit at the screen edges. The service says which.
 local function place(full)
     if not slot then return end
@@ -102,7 +103,9 @@ local function create(url)
     renderer:Load(url);loadedUrl=url
 end
 -- panelOpen: the AimMod panel is on screen (it shows the same things itself).
-function M.update(panelOpen,replayActive)
+-- menuVisible: KovaaK's own menus (scenario browser, settings) are on screen, so the
+-- player has a cursor even when the controller's bShowMouseCursor doesn't say so.
+function M.update(panelOpen,replayActive,menuVisible)
     if not valid(owner) then M.close();owner=nil;return end
     -- A few hundred bytes, read on every 100 ms tick so countdowns stay in step.
     text=read('multiplayer-notify.json',16385)
@@ -124,8 +127,8 @@ function M.update(panelOpen,replayActive)
     if not shown then shown=true;host:SetVisibility(3) end
     local full=text:find('"layout":"full"',1,true)~=nil
     if (full and layout~='full') or (not full and layout~='toast') then pcall(place,full) end
-    local cursor=false
-    pcall(function()cursor=owner:GetOwningPlayer().bShowMouseCursor==true end)
+    local cursor=menuVisible==true
+    if not cursor then pcall(function()cursor=owner:GetOwningPlayer().bShowMouseCursor==true end) end
     local wantInput=text:find('"interactive":true',1,true)~=nil and cursor
     if wantInput~=interactive then setInteractive(wantInput) end
     if id~=lastId then

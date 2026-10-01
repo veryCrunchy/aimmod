@@ -133,6 +133,8 @@ static partial class MultiplayerChecks
             && failed.GetProperty("actions").EnumerateArray().Select(a => a.GetProperty("action").GetString()).SequenceEqual(["retry-load", "end"]),
             "Still the wrong map: the host sees why, with Retry and Abort, and the match hasn't started");
         Check(Round().GetProperty("map").GetString() == "failed", "The round box says the map failed");
+        Check(failed.GetProperty("eyebrow").GetString() == "AimMod · Match" && failed.GetProperty("interactive").GetBoolean() && failed.GetProperty("layout").GetString() == "toast",
+            "The load failure is labelled as a match notice and asks for clicks in the toast layer");
         Check(File.Exists(Path.Combine(game, "Saved", "SaveGames", "Scenarios", name + ".sce")), "A failed match scenario stays on disk while the match is open");
         control.StuckMap = null;
         Check(service.Act("retry-load", J(new { id = failed.GetProperty("actions")[0].GetProperty("id").GetString() })).Ok, "The host retries the load");
