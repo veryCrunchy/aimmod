@@ -131,6 +131,18 @@ test('spectating a friend shows their stats with stop and switch; being watched 
   s.button('Remove').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'spectator-remove',id:'w1'});
   s.button('Stop spectating').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'watch-stop'});
 });
+test('the map library lists ports with size, Shift and Workshop state, and installs or hosts them',()=>{
+  const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view());
+  s.button('Map library').onclick();const ask=s.requests.find(r=>r.url==='/private/multiplayer?part=maps');assert.ok(ask,'the library asks for ports');
+  ask.finish(200,{available:true,source:'steam',canInstall:true,canLoad:true,lobby:null,ports:[
+    {key:'aaaaaaaaaaaa',scenario:'AimMod - Dust2 (CSGO) - CS Movement',display:'Dust2',game:'CSGO',variant:'CS Movement',bytes:71000000,shift:'walk',mapScale:4,workshop:true,installed:true,simulated:false,needsUpdate:true,preview:true,download:null},
+    {key:'bbbbbbbbbbbb',scenario:'AimMod - Mirage (CSGO) - CS Movement',display:'Mirage',game:'CSGO',variant:'CS Movement',bytes:61000000,shift:'walk',mapScale:0,workshop:true,installed:false,simulated:false,needsUpdate:false,preview:false,download:{state:'downloading',done:30500000,total:61000000}}]});
+  const t=s.text();assert.ok(t.includes('Dust2')&&t.includes('Shift walks')&&t.includes('Update available')&&t.includes('Downloading 50%'));
+  assert.ok(s.all().some(e=>e.tag==='img'&&e.src==='/private/multiplayer?part=preview&key=aaaaaaaaaaaa'),'preview by key, never by path');
+  assert.ok(!s.button('Install'),'no second install while one downloads');
+  s.button('Update').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'map-install',key:'aaaaaaaaaaaa'});
+  s.button('Host a lobby').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'create',mode:'practice',scenario:'AimMod - Dust2 (CSGO) - CS Movement'});
+});
 test('leaving stops polling and ignores late answers',()=>{
   const s=setup();s.api.enter(s.container);s.api.leave();s.requests[0].finish(200,view());assert.equal(s.buttons().length,0);
 });

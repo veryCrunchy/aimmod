@@ -104,7 +104,7 @@ sealed partial class ContentLibrary : IContentResolver
         if (s.CharacterProfile is { Preset: ProfilePresets.Custom, Custom: { } c } && PathOf("character", c) is { } characterPath) list.Add(("character", characterPath));
         return list;
     }
-    static IEnumerable<string> AbilityNames(string scenarioPath)
+    internal static IEnumerable<string> AbilityNames(string scenarioPath)
     {
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         try

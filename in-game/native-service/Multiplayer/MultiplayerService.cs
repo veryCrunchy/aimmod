@@ -17,7 +17,7 @@ sealed record RoundPlan(string Key, string Scenario, string Mode, bool Generated
 // Owns this machine's view of multiplayer. When this machine is the host (or
 // every other member is simulated) it runs the LobbyCore authority; otherwise
 // it mirrors the host's snapshots and sends commands over the transport.
-sealed class MultiplayerService : IDisposable
+sealed partial class MultiplayerService : IDisposable
 {
     public const int HistoryLimit = 20;
     readonly object gate = new();
@@ -229,6 +229,8 @@ sealed class MultiplayerService : IDisposable
                         simulatedMissing = true; download?.Reset(); ReportContent(force: true); return LobbyResult.Success;
                     }
                     return Simulation.Control(core, op, Text("member"));
+                case "map-install" or "map-load":
+                    return MapAction(action, KeyArg(args));
                 case "score" or "finish" or "content":
                     return LobbyResult.Fail("invalid", "That comes from your runs.");
                 default:
@@ -916,6 +918,7 @@ sealed class MultiplayerService : IDisposable
 
     void WorkshopUpdate(WorkshopProgress? progress)
     {
+        if (MapWorkshop(progress)) return;
         // A spectator's Workshop download: done means watch; failed means ask the friend instead.
         if (progress is not null && progress.Item == watchWorkshop && watch is { } w)
         {
@@ -1079,6 +1082,7 @@ sealed class MultiplayerService : IDisposable
         {
             foreach (var e in transport.Drain()) Handle(e);
             TakeSimulatedInvites();
+            MapTick();
             var now = clock();
             if (core is not null)
             {
@@ -1660,8 +1664,13 @@ sealed class MultiplayerService : IDisposable
 
     public void MapEndpoints(IEndpointRouteBuilder routes, string prefix)
     {
-        routes.MapGet(prefix + "/multiplayer", (string? part) =>
-            part == "library" ? Results.Json(LibraryView(), Protocol.Json) : Results.Json(View(), Protocol.Json));
+        routes.MapGet(prefix + "/multiplayer", (string? part, string? key) => part switch
+        {
+            "library" => Results.Json(LibraryView(), Protocol.Json),
+            "maps" => Results.Json(MapsView(), Protocol.Json),
+            "preview" => MapPreview(key) is { } image ? Results.File(image, MapPorts.ContentType(image)) : Results.NotFound(),
+            _ => Results.Json(View(), Protocol.Json),
+        });
         // Read-only notice for the always-on in-game layer (notify.html).
         routes.MapGet(prefix + "/multiplayer-notify", () => Results.Content(NoticeJson(), "application/json"));
         routes.MapPost(prefix + "/multiplayer", async (HttpRequest request, CancellationToken token) =>

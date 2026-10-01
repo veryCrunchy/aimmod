@@ -53,6 +53,7 @@
   }
   function poll(){
     if(!container)return;if(inflight){again=true;return;}inflight=true;
+    if(mapsOpen&&maps&&(maps.ports||[]).some(function(p){return !!p.download;}))loadMaps();
     xhr('GET','/multiplayer',null,function(ok,data){inflight=false;if(ok&&data&&data.v===1)accept(data);else if(!view)renderError();schedule();if(again){again=false;poll();}});
   }
   function fast(){var m=view&&view.lobby&&view.lobby.match;return !!(view&&(view.joining||view.watch||(m&&(m.phase==='countdown'||m.phase==='live'))));}
@@ -125,6 +126,7 @@
     if(view.notice)page.appendChild(banner(view.notice.kind==='error'?'warn':'info',view.notice.text,true));
     var l=view.lobby;
     if(view.joining&&!l)page.appendChild(joining());
+    else if(mapsOpen)mapLibrary(page);
     else if(!l)home(page);
     else if(l.match&&l.match.phase!=='final'&&!editing)matchScreen(page,l);
     else if(l.match&&l.match.phase==='final')finalScreen(page,l);
@@ -161,6 +163,7 @@
     var codeRow=node('div','mp-code-row');add(codeRow,field(input,'Room code','mp-code-field'),actions(button('Join',joinCode)));
     right.appendChild(codeRow);
     right.appendChild(steamState());
+    right.appendChild(add(node('div','mp-hero-link'),node('span','','Counter-Strike maps, ported for KovaaK’s.'),actions(button('Map library',openMaps,'compact'))));
     hero.appendChild(left);hero.appendChild(right);
     var row=node('div','mp-row');page.appendChild(row);
     var main=node('div','mp-col mp-main'),side=node('div','mp-col mp-side');row.appendChild(main);row.appendChild(side);
@@ -352,6 +355,70 @@
       list.appendChild(row);
     });
     return p;
+  }
+  // Map Library: AimMod map ports here and on the Steam Workshop --------------
+  var mapsOpen=false,maps=null,mapsBusy=false,mapsFilter='all';
+  function openMaps(){mapsOpen=true;picker=null;drafts.maps='';loadMaps();render();}
+  function loadMaps(){if(mapsBusy)return;mapsBusy=true;xhr('GET','/multiplayer?part=maps',null,function(ok,data){mapsBusy=false;if(!ok||!data)return;var changed=JSON.stringify(data)!==JSON.stringify(maps);maps=data;if(mapsOpen&&changed&&!focused)render();});}
+  function shiftText(p){return p.shift==='walk'?'Shift walks':p.shift==='sprint'?'Shift sprints':'No Shift ability';}
+  function portState(p){
+    if(p.download)return p.download.state==='queued'?'Queued…':'Downloading '+(p.download.total>0?Math.floor(p.download.done*100/p.download.total)+'%':'…');
+    if(p.installed&&p.simulated)return 'Installed (simulation)';
+    if(p.installed&&p.needsUpdate)return 'Update available';
+    if(p.installed)return p.workshop?'Installed from the Workshop':'Installed';
+    return 'On the Workshop';
+  }
+  function mapPreview(p){
+    var box=node('div','mp-port-preview '+tone(p.display));
+    if(p.preview){var img=node('img');img.src=path()+'/multiplayer?part=preview&key='+encodeURIComponent(p.key);img.setAttribute('alt','');box.appendChild(img);}
+    else box.appendChild(node('span','mp-port-initials',initials(p.display)));
+    return box;
+  }
+  function mapLibrary(page){
+    var head=node('div','mp-editor-top');var t=node('div','mp-editor-title');
+    add(t,node('div','eyebrow','Multiplayer'),node('h2','','Map library'),node('p','subtle','Counter-Strike and Garry’s Mod maps ported to KovaaK’s with matching movement. Install them from the Steam Workshop, then play or host a lobby on them.'));
+    add(head,t,actions(button('Back',function(){mapsOpen=false;render();},'primary')));page.appendChild(head);
+    if(!maps){page.appendChild(add(node('div','panel mp-card'),node('p','subtle','Loading the map library…')));loadMaps();return;}
+    var bar=node('div','mp-maps-bar');
+    var input=trackInput(node('input','mp-picker-search'),'maps');input.setAttribute('autocomplete','off');input.onchanged=function(){fill();};
+    add(bar,field(input,'Find a map','mp-maps-search'),segmented([{id:'all',label:'All'},{id:'installed',label:'Installed'},{id:'workshop',label:'Not installed'}],mapsFilter,function(id){mapsFilter=id;render();},false,'show'));
+    page.appendChild(bar);
+    if(maps.source==='none')page.appendChild(banner('warn','Steam isn’t connected, so only the maps you already have are listed.'));
+    else if(maps.source==='simulation')page.appendChild(banner('info','Simulation: Workshop maps are made up and installs write nothing.'));
+    var grid=node('div','mp-ports');page.appendChild(grid);
+    function fill(){
+      while(grid.firstChild)grid.removeChild(grid.firstChild);
+      var q=(drafts.maps||'').toLowerCase(),shown=0;
+      (maps.ports||[]).forEach(function(p){
+        if(mapsFilter==='installed'&&!p.installed)return;if(mapsFilter==='workshop'&&p.installed)return;
+        if(q&&(p.scenario+' '+p.display).toLowerCase().indexOf(q)<0)return;
+        shown++;grid.appendChild(portCard(p));
+      });
+      if(!shown)grid.appendChild(add(node('div','panel mp-empty'),node('span','',(maps.ports||[]).length?'No maps match.':'No map ports yet. Ported maps from the Workshop show up here.')));
+    }
+    fill();
+  }
+  function portCard(p){
+    var c=node('div','mp-port-cell');var card=node('div','panel mp-port');c.appendChild(card);
+    card.appendChild(mapPreview(p));
+    var info=node('div','mp-port-info');
+    var title=node('div','mp-port-title');add(title,node('strong','',safe(p.display,'Map')),p.game?chip(p.game,'cyan'):null);
+    add(info,title,node('span','mp-port-variant',safe(p.variant||p.scenario,'')));
+    var facts=[shiftText(p)];if(p.bytes>0)facts.push(mb(p.bytes));if(p.mapScale>0)facts.push('Scale '+F.number(p.mapScale,1));
+    info.appendChild(node('span','mp-port-facts',facts.join(' · ')));
+    info.appendChild(node('div','mp-port-state'+(p.needsUpdate?' warn':p.installed?' ok':''),portState(p)));
+    if(p.download&&p.download.total>0){var bar=node('div','mp-progress');var fillBar=node('div','mp-progress-fill');fillBar.style.width=Math.min(100,Math.floor(p.download.done*100/p.download.total))+'%';bar.appendChild(fillBar);info.appendChild(bar);}
+    card.appendChild(info);
+    var row=[];
+    if(!p.download&&p.workshop&&(!p.installed||p.needsUpdate)&&maps.canInstall)row.push(button(p.installed?'Update':'Install',function(){act('map-install',{key:p.key},function(){loadMaps();});},'primary compact'));
+    if(p.installed&&!p.simulated){
+      var l=maps.lobby;
+      if(l&&l.isHost)row.push(button(l.scenario===p.scenario?'In your lobby':'Use in lobby',function(){mapsOpen=false;setting('scenario',p.scenario);},'compact'+(l.scenario===p.scenario?' quiet':'')));
+      else if(!l)row.push(button('Host a lobby',function(){mapsOpen=false;act('create',{mode:'practice',scenario:p.scenario});},'compact'));
+      if(maps.canLoad)row.push(button('Play',function(){act('map-load',{key:p.key},function(ok){if(ok)toast('Loading '+safe(p.display,'the map')+' in KovaaK’s…');});},'compact quiet'));
+    }
+    if(row.length)card.appendChild(actions.apply(null,row));
+    return c;
   }
   function devPanel(inLobby){
     var p=node('div','mp-dev');add(p,node('span','mp-dev-label','Developer simulation'));
@@ -585,6 +652,7 @@
     mapBtn.disabled=!overrides;mapBtn.onclick=function(){picker=picker==='map'?null:'map';pickerQuery='';loadLibrary();render();};mp.appendChild(mapBtn);
     if(overrides&&s.mapOverride)mp.appendChild(actions(button('Use the scenario map',function(){setting('mapOverride',null);},'compact quiet')));
     if(picker==='map'&&overrides)mp.appendChild(pickerList('map',s));
+    mp.appendChild(actions(button('Browse the map library',openMaps,'compact quiet')));
     left.appendChild(mp);
     // Players and rounds
     var pl=section('Players');
