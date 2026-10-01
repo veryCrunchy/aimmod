@@ -123,6 +123,8 @@ sealed class LobbyCore
         // A player of the running match who dropped out (crash, lost connection) rejoins as a player.
         var returning = match is not null && match.Players.Contains(id);
         if (!returning && (PlayerCount >= Settings.MaxPlayers || (inMatch && !Settings.LateJoin))) role = MemberRoles.Spectator;
+        // Tournament lobbies: only the match's players play; anyone else can only watch.
+        if (Settings.Tournament is { Players.Count: > 0 } locked && !locked.Players.Contains(id)) role = MemberRoles.Spectator;
         if (role == MemberRoles.Spectator && (!Settings.Spectators || members.Count(m => m.Role == MemberRoles.Spectator) >= LobbySettings.MaxSpectators))
             return LobbyResult.Fail(inMatch ? "in-match" : "full", inMatch ? "A match is in progress and late join is off." : "This lobby is full.");
         var member = new Member { Id = id, Name = UniqueName(LobbyRules.CleanName(name, "Player")), Role = role, JoinedAt = clock(), Simulated = simulated, Link = simulated ? "simulated" : "relay", Version = version };
@@ -402,6 +404,29 @@ sealed class LobbyCore
         if (m.Settings.LateJoin) foreach (var p in members.Where(x => x.Role == MemberRoles.Player && !m.Players.Contains(x.Id))) { m.Players.Add(p.Id); m.Names[p.Id] = p.Name; m.Live[p.Id] = new Line(); }
         Changed();
     }
+    // Tournament lobbies: the tournament (not a member) sets the game, scenario and
+    // seed. A finished game's results are cleared so the next game can start.
+    public LobbyResult LockTournament(LobbySettings settings)
+    {
+        if (settings.Tournament is null) return LobbyResult.Fail("invalid", "Not a tournament game.");
+        if (match is { Phase: not MatchPhases.Final }) return LobbyResult.Fail("in-match", "A game is still running.");
+        var next = LobbyRules.Normalize(settings, PlayerCount);
+        if (next == Settings && match is null) return LobbyResult.Success;
+        var newGame = Settings.Tournament is not { } was || was.MatchId != next.Tournament!.MatchId || was.Game != next.Tournament.Game;
+        var scenarioChanged = next.Scenario?.Hash != Settings.Scenario?.Hash;
+        Settings = next;
+        foreach (var m in members.Where(m => m.Role == MemberRoles.Player && next.Tournament!.Players.Count > 0 && !next.Tournament.Players.Contains(m.Id))) { m.Role = MemberRoles.Spectator; m.Ready = false; }
+        if (scenarioChanged) foreach (var m in members.Where(m => m.Id != HostId)) { m.Scenario = ContentStates.Unknown; m.Map = ContentStates.Unknown; }
+        if (newGame)
+        {
+            match = null;
+            foreach (var m in members) m.Ready = false;
+            System(next.Tournament!.Label + ": game " + (next.Tournament.Game + 1) + (Settings.Scenario is { } s ? " on " + s.Name : "") + ".");
+        }
+        Changed();
+        return LobbyResult.Success;
+    }
+
     void EndMatch()
     {
         match = null;

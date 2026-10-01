@@ -71,7 +71,8 @@ sealed record LobbySettings(
     bool AutoStart = false,
     bool Voting = true,
     int? FragLimit = null,
-    int Lifesteal = 50)
+    int Lifesteal = 50,
+    TournamentLock? Tournament = null)
 {
     public const int MinPlayers = 2, MaxPlayerLimit = 8, MaxSpectators = 4;
     [JsonIgnore] public ProfileChoice WeaponProfile => Weapon ?? ProfileChoice.Default;
@@ -84,8 +85,14 @@ sealed record LobbySettings(
     [JsonIgnore] public int? TotalRounds => Mode switch { LobbyModes.Race or LobbyModes.Rounds => Rounds, LobbyModes.Tracking => Rounds * 2, LobbyModes.Deathmatch or LobbyModes.Vampiric or LobbyModes.Instagib or LobbyModes.TeamDeathmatch => 1, _ => null };
     // Values that change what people play. Changing any of them clears ready states.
     [JsonIgnore] public string PlayKey => string.Join('|', Mode, Scenario?.Hash, MapOverride?.Hash, Rounds, FirstTo, TimeLimit,
-        WeaponProfile, MovementProfile, CharacterProfile, TargetSpeed, TargetSize, FragLimit, Lifesteal);
+        WeaponProfile, MovementProfile, CharacterProfile, TargetSpeed, TargetSize, FragLimit, Lifesteal, Tournament?.MatchId, Tournament?.Game, Tournament?.Seed);
 }
+
+// A lobby created for a tournament match (AimMod Hub). Its settings follow the
+// tournament's ruleset and can't be changed in the lobby; only the match's two
+// players play (Players: member ids), everyone else watches. Game is the
+// 0-based game of the series and Seed its shared seed (same targets for both).
+sealed record TournamentLock(string TournamentId, string MatchId, string Label, int Game, long Seed, IReadOnlyList<string> Players, string? Name = null);
 
 static class MemberRoles { public const string Player = "player", Spectator = "spectator"; }
 static class ContentStates { public const string Ok = "ok", Missing = "missing", Mismatch = "mismatch", Unknown = "unknown", None = "none"; }
@@ -166,6 +173,7 @@ static class LobbyRules
     public static (LobbySettings? Settings, LobbyResult Result) Apply(LobbySettings current, JsonElement patch, int players, IContentResolver resolve)
     {
         if (patch.ValueKind != JsonValueKind.Object) return (null, LobbyResult.Fail("invalid", "Settings must be an object."));
+        if (current.Tournament is not null) return (null, LobbyResult.Fail("tournament-locked", "This lobby follows the tournament’s ruleset, so its settings can’t change."));
         var next = current;
         var seen = new HashSet<string>();
         foreach (var property in patch.EnumerateObject())
@@ -258,7 +266,8 @@ static class LobbyRules
     public static LobbySettings Normalize(LobbySettings s, int players)
     {
         if (LobbyModes.TwoPlayers(s.Mode)) s = s with { MaxPlayers = 2 };
-        if (!LobbyModes.AllowsOverrides(s.Mode))
+        // A tournament may set the game's length; its games run in freeplay, never ranked.
+        if (!LobbyModes.AllowsOverrides(s.Mode) && s.Tournament is null)
             s = s with { MapOverride = null, TimeLimit = null, Weapon = ProfileChoice.Default, Movement = ProfileChoice.Default, Character = ProfileChoice.Default, TargetSpeed = 1, TargetSize = 1 };
         if (!LobbyModes.AllowsLateJoin(s.Mode)) s = s with { LateJoin = false };
         // Picking the scenario's own length is no override, so no match scenario is generated for it.
@@ -276,6 +285,7 @@ static class LobbyRules
     public static bool Plausible(LobbySettings s) =>
         LobbyModes.All.Contains(s.Mode) && LobbyPrivacy.All.Contains(s.Privacy)
         && s.MaxPlayers is >= LobbySettings.MinPlayers and <= LobbySettings.MaxPlayerLimit && s.Rounds is >= 1 and <= 10 && s.FirstTo is >= 1 and <= 7
+        && (s.Tournament is null || s.Tournament is { Seed: >= 0 and <= uint.MaxValue, Game: >= 0 and < 64, Players.Count: <= 2 } t && t.MatchId.Length is > 0 and <= 32 && t.TournamentId.Length is > 0 and <= 64)
         && s.TimeLimit is null or (>= 10 and <= 600) && s.FragLimit is null or (>= 1 and <= 100) && s.Lifesteal is >= 0 and <= 200 && s.TargetSpeed is >= 0.25 and <= 3 && s.TargetSize is >= 0.25 and <= 2 && s.Countdown is >= 3 and <= 10
         && (s.Scenario is null || (ValidContentName(s.Scenario.Name) && ValidHash(s.Scenario.Hash) && s.Scenario.TimeLimit is > 0 and <= 3600))
         && (s.MapOverride is null || (ValidContentName(s.MapOverride.Name) && ValidHash(s.MapOverride.Hash)))
