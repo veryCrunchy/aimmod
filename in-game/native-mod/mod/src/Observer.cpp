@@ -162,6 +162,7 @@ namespace aimmod
         m_b.myCharacter.Bind(game::FindClass(STR("/Script/GameSkillsTrainer.MetaPlayerController")), STR("MyCharacter"));
         m_b.hidden.Bind(game::FindClass(STR("/Script/Engine.Actor")), STR("bHidden"));
         m_b.capsule.Bind(game::FindClass(STR("/Script/Engine.Character")), STR("CapsuleComponent"));
+        m_crouched.Bind(game::FindClass(STR("/Script/Engine.Character")), STR("bIsCrouched"));
         const wchar_t* state = STR("/Script/GameSkillsTrainer.MetaGameState:");
         m_b.characters.BindPath(path(state, STR("GetCharacters")).c_str(), Shape::ObjectArray);
         m_b.mapName.BindPath(path(state, STR("GetCurrentMapName")).c_str(), Shape::String);
@@ -647,6 +648,27 @@ namespace aimmod
             body += '\n';
         }
         UObject* character = m_b.myCharacter.Object(player);
+        // The sender's own body and weapon: modes need the dodger's position
+        // and whether the shooter is firing (shot counter advancing).
+        if (character)
+        {
+            UObject* capsule = m_b.capsule.Object(character);
+            auto radius = capsule ? m_b.capsuleRadius.Number(capsule) : std::nullopt;
+            auto half = capsule ? m_b.capsuleHalfHeight.Number(capsule) : std::nullopt;
+            double p[3];
+            if (radius && half && *radius > 0 && *half >= *radius && m_b.actorLocation.Vector(character, p))
+                body += "self\t" + std::to_string(ms) + "\t" + FormatNumber(p[0], 7) + "\t" + FormatNumber(p[1], 7) + "\t" + FormatNumber(p[2], 7) + "\t" +
+                        FormatNumber(*radius, 7) + "\t" + FormatNumber(*half, 7) + "\t" + (m_crouched.Bool(character).value_or(false) ? "1" : "0") + "\n";
+            game::LocalCounters counters = game::ReadLocalCounters(character);
+            if (counters.shots)
+            {
+                const bool fired = m_poseShots && *counters.shots > *m_poseShots;
+                m_poseShots = counters.shots;
+                body += "fire\t" + std::to_string(ms) + "\t" + FormatNumber(*counters.shots, 0) + "\t" + (fired ? "1" : "0") + "\n";
+            }
+        }
+        const auto avatars = m_output.avatars();
+        std::string tags;
         std::vector<UObject*> actors;
         if (UObject* state = m_scene.GameState(); state && m_b.characters.Objects(state, actors, 33))
             for (UObject* actor : actors)
@@ -660,11 +682,18 @@ namespace aimmod
                 if (!radius || !half || *radius <= 0 || *half < *radius || !m_b.actorLocation.Vector(actor, p)) continue;
                 const auto key = reinterpret_cast<std::uint64_t>(actor) ^ (static_cast<std::uint64_t>(actor->GetInternalIndex()) << 47);
                 auto it = m_poseIds.find(key);
-                if (it == m_poseIds.end()) it = m_poseIds.emplace(key, ++m_nextPoseId).first;
+                if (it == m_poseIds.end())
+                {
+                    it = m_poseIds.emplace(key, ++m_nextPoseId).first;
+                    m_poseNames[it->second] = game::ObjectName(actor);
+                }
+                if (!avatars->empty())
+                    if (auto tag = avatars->find(m_poseNames[it->second]); tag != avatars->end())
+                        tags += "tag\t" + std::to_string(it->second) + "\t" + tag->second + "\n";
                 body += "target\t" + std::to_string(it->second) + "\t" + FormatNumber(p[0], 7) + "\t" + FormatNumber(p[1], 7) + "\t" + FormatNumber(p[2], 7) +
                         "\t" + FormatNumber(*radius, 7) + "\t" + FormatNumber(*half, 7) + "\n";
             }
-        m_output.PublishSelfPose(std::move(body));
+        m_output.PublishSelfPose(std::move(body) + tags);
         (void)now;
     }
 

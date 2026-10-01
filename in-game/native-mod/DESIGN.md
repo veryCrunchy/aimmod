@@ -275,7 +275,27 @@ AIMMOD_POSE_1\t<sequence>[\t<stream id>]     (stream id: [A-Za-z0-9_-]{1,64}, e.
 meta\t<%-escaped scenario>\t<%-escaped map name>\t<map scale>
 pose\t<unix ms>\t<x>\t<y>\t<z>\t<pitch>\t<yaw>\t<roll>\t<fov>     (1-64 rows, increasing ms)
 target\t<id>\t<x>\t<y>\t<z>\t<capsule radius>\t<capsule half height> (optional, latest positions)
+tag\t<target id>\t<stream id>                           (optional: that target is this player's avatar)
+self\t<unix ms>\t<x>\t<y>\t<z>\t<radius>\t<half height>\t<crouched 0|1>   (optional: the sender's own body)
+fire\t<unix ms>\t<shots fired total>\t<fired since previous publication 0|1>  (optional: the sender's weapon)
 ```
+
+Pose format compatibility: readers ignore row types they do not know
+(the service's reader does since this change; the multiplayer bridge
+already did), and every row added later must be optional. Header and the
+`meta`/`pose`/`target` row shapes do not change. Deploy the service with
+this reader before a mod that writes `tag`/`self`/`fire` rows (an older
+service rejects unknown rows in spectate-pose.tsv).
+
+Avatars (tracking duel): the bridge writes `avatars.tsv` in the output
+folder - `AIMMOD_AVATARS_1`, then `<actor name>\t<stream id>` per drawn
+avatar (actor name as `UObject::GetName`, e.g. `BP_AvatarHull_C_3`; stream
+id `[A-Za-z0-9_-]{1,64}`, up to 64 rows). AimModCore reads it once a second
+while the pose stream is requested and adds a `tag` row for each target
+whose actor name matches. `self` is the sender's character location and
+capsule (no eye-height estimate needed); `fire` comes from the local
+weapons' session shot counters (`fired` = the total advanced since the
+previous publication, about every 33 ms).
 
 PB ghost while practising is not implemented yet: freeplay exposes no
 attempt clock the ghost could follow, and the mod would need to place

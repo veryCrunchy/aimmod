@@ -12,6 +12,12 @@ sealed record LivePose(long UnixMs, double[] Camera);
 /// </summary>
 sealed record LivePoseFrame(long Sequence, string Stream, string Scenario, string MapName, double? MapScale, IReadOnlyList<LivePose> Poses, IReadOnlyList<double[]> Targets)
 {
+    /// <summary>Optional: target id -> stream id of the player that target is (avatars).</summary>
+    public IReadOnlyDictionary<int, string> Tags { get; init; } = new Dictionary<int, string>();
+    /// <summary>Optional: the sender's own body (unix ms, x, y, z, radius, half height, crouched 0/1).</summary>
+    public double[]? Self { get; init; }
+    /// <summary>Optional: the sender's weapon (unix ms, shots fired total, fired since the previous publication 0/1).</summary>
+    public double[]? Fire { get; init; }
     public static LivePoseFrame? Parse(string text)
     {
         var lines = text.Replace("\r\n", "\n").Split('\n', StringSplitOptions.RemoveEmptyEntries);
@@ -22,7 +28,8 @@ sealed record LivePoseFrame(long Sequence, string Stream, string Scenario, strin
         var stream = head.Length == 3 ? head[2] : "";
         if (!IsStreamId(stream)) return null;
         string scenario = "", map = ""; double? scale = null;
-        var poses = new List<LivePose>(); var targets = new List<double[]>();
+        var poses = new List<LivePose>(); var targets = new List<double[]>(); var tags = new Dictionary<int, string>();
+        double[]? self = null, fire = null;
         static bool Num(string s, out double v) => double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out v) && double.IsFinite(v) && Math.Abs(v) < 1e12;
         foreach (var line in lines.Skip(1))
         {
@@ -47,10 +54,25 @@ sealed record LivePoseFrame(long Sequence, string Stream, string Scenario, strin
                     if (t[0] < 1 || t[0] != Math.Truncate(t[0]) || t[4] <= 0 || t[5] < t[4] || targets.Count >= 128 || targets.Any(x => x[0] == t[0])) return null;
                     targets.Add(t);
                     break;
-                default: return null;
+                case "tag" when c.Length == 3:
+                    if (!int.TryParse(c[1], NumberStyles.None, CultureInfo.InvariantCulture, out var tagged) || tagged < 1 || !IsStreamId(c[2]) || c[2].Length == 0 || tags.Count >= 128) return null;
+                    tags[tagged] = c[2];
+                    break;
+                case "self" when c.Length == 8:
+                    self = new double[7];
+                    for (int i = 0; i < 7; i++) if (!Num(c[i + 1], out self[i])) return null;
+                    if (self[4] <= 0 || self[5] < self[4] || self[6] is not (0 or 1)) return null;
+                    break;
+                case "fire" when c.Length == 4:
+                    fire = new double[3];
+                    for (int i = 0; i < 3; i++) if (!Num(c[i + 1], out fire[i])) return null;
+                    if (fire[1] < 0 || fire[2] is not (0 or 1)) return null;
+                    break;
+                case "meta" or "pose" or "target" or "tag" or "self" or "fire": return null; // known row, wrong shape
+                default: break; // rows added later are ignored, never fatal
             }
         }
-        return poses.Count == 0 ? null : new(sequence, stream, scenario, map, scale, poses, targets);
+        return poses.Count == 0 ? null : new(sequence, stream, scenario, map, scale, poses, targets) { Tags = tags, Self = self, Fire = fire };
     }
 
     /// <summary>Empty (unnamed stream) or [A-Za-z0-9_-]{1,64}.</summary>
