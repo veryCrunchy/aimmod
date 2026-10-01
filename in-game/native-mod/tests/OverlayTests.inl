@@ -163,6 +163,16 @@ namespace overlay_checks
         c.pauseMenuVisible = true;
         p = m9.Next(c);
         CHECK(!p.hidePauseMenu && p.forgetMenuInput, "no Escape: KovaaK's menu is left alone and input handed to it");
+        // KovaaK's menu closes while the buy menu is closed too: the game gets game-only input, once.
+        aimmod::overlay::Notice shut = *buy;
+        shut.cursor = false;
+        shut.interactive = false;
+        c.notice = shut;
+        c.pauseMenuVisible = false;
+        p = m9.Next(c);
+        CHECK(p.releaseMenuInput && !p.holdMenuInput, "after KovaaK's menu: game-only, never left in UI-only");
+        p = m9.Next(c);
+        CHECK(!p.releaseMenuInput, "once");
         // One log line per change.
         aimmod::overlay::Machine m6;
         aimmod::overlay::Plan before{}, after = m6.Next(f);

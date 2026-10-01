@@ -87,6 +87,7 @@ namespace aimmod::overlay
         bool m_holding{};
         bool m_pauseWasVisible{};
         bool m_suspended{}; // the window lost focus while the buy menu held input
+        bool m_handed{};    // the buy menu's input was handed to KovaaK's menu (or the panel)
     };
 
     // One "[AimModCore] overlay: ..." line for a change of plan (empty when nothing changed that matters).

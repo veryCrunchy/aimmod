@@ -18,6 +18,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace aimmod
 {
@@ -57,7 +58,20 @@ namespace aimmod
         bool m_bound{}, m_ready{}, m_warned{}, m_luaSeen{};
         game::Getter m_getPauseMenu, m_isVisible, m_isInViewport;
         game::Field m_showCursor, m_blockingAttack;
-        RC::Unreal::FWeakObjectPtr m_view, m_widget, m_player, m_character;
+        // m_host: our own UserWidget in the viewport, a canvas as its root; m_view sits in that
+        // canvas (m_slot), so its size is the slot's: the whole screen or the toast.
+        RC::Unreal::FWeakObjectPtr m_host, m_slot, m_view, m_widget, m_player, m_character;
+        void LogGeometry();
+        double m_geometryAt{-1.0};
+        // Focus: the raw foreground check and a debounced one (focus counts as lost after 0.5 s).
+        double m_focusedAt{};
+        bool m_rawFocused{true};
+        std::wstring m_lastForeground;
+        // Clicks for overlay-pointer.tsv (the page may poll slower than a click).
+        struct Click { long id, dx, dy, ux, uy; };
+        std::vector<Click> m_clicks;
+        long m_clickId{}, m_downX{}, m_downY{};
+        void PublishPointer(bool on, long x, long y, bool down, long width, long height);
         std::string m_url;
         overlay::Machine m_machine;
         overlay::Plan m_plan;

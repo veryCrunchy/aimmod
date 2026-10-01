@@ -115,6 +115,8 @@ namespace aimmod
             std::uint64_t version{};
         };
         OverlayInputs overlay() const;
+        // overlay-pointer.tsv: the buy menu's mouse for the notify page (the service relays it).
+        void PublishPointer(std::string body);
         void PublishReplayStatus(std::string body);
         // Encodes (format 2) and publishes a completed recording.
         void ReplayWrite(std::unique_ptr<replay2::Capture> capture);
@@ -212,6 +214,8 @@ namespace aimmod
         OverlayInputs m_overlay;
         std::uint64_t m_notifyStamp{}, m_lastOverlayCheck{};
         std::string m_notifyText;
+        std::string m_pointer;
+        bool m_pointerDirty{};
         void ReadOverlayInputs(std::uint64_t now);
         std::string m_selfPose;
         bool m_selfPoseDirty{};
