@@ -104,7 +104,7 @@ namespace aimmod
           m_sampler(m_b, m_scene, output), m_presenter(m_b, m_scene, output), m_control(m_b, m_scene, output),
           m_match(m_b, m_scene, output), m_cosmetics(m_b, m_scene, output),
           m_water(m_b, m_scene),
-          m_preview(m_scene, output), m_overlay(m_scene, output)
+          m_preview(m_scene, output), m_overlay(m_scene, output), m_tags(output)
     {
     }
 
@@ -626,6 +626,7 @@ namespace aimmod
             m_overlay.Tick(now, m_output.playbackActive());
             if (wasReady != m_overlay.ready()) m_output.SetCapabilities(Capabilities());
         }
+        TickTags(now);
         PollClipKey();
         if (m_output.poseRequested() && now >= m_nextPose)
         {
@@ -785,6 +786,41 @@ namespace aimmod
             }
         m_output.PublishSelfPose(std::move(body) + tags);
         (void)now;
+    }
+
+    // Teammates' names (and an aimed-at enemy's) over the avatars AimModSteam spawned.
+    void Observer::TickTags(double now)
+    {
+        UObject* widget = m_overlay.Gameface();
+        UObject* player = m_scene.Player();
+        UObject* camera = player ? m_b.cameraManager.Object(player) : nullptr;
+        double eye[3]{}, rotation[3]{};
+        std::vector<WorldTags::Avatar> avatars;
+        const auto streams = m_output.avatars();
+        if (widget && camera && !streams->empty() && m_b.cameraLocation.Vector(camera, eye) && m_b.cameraRotation.Vector(camera, rotation))
+        {
+            UObject* character = m_b.myCharacter.Object(player);
+            std::vector<UObject*> actors;
+            if (UObject* state = m_scene.GameState(); state && m_b.characters.Objects(state, actors, 33))
+                for (UObject* actor : actors)
+                {
+                    if (actor == character) continue;
+                    if (auto hidden = m_b.hidden.Bool(actor); hidden && *hidden) continue;
+                    const auto tag = streams->find(game::ObjectName(actor));
+                    if (tag == streams->end()) continue;
+                    UObject* capsule = m_b.capsule.Object(actor);
+                    auto radius = capsule ? m_b.capsuleRadius.Number(capsule) : std::nullopt;
+                    auto half = capsule ? m_b.capsuleHalfHeight.Number(capsule) : std::nullopt;
+                    WorldTags::Avatar a;
+                    if (!radius || !half || *radius <= 0 || *half < *radius || !m_b.actorLocation.Vector(actor, a.centre)) continue;
+                    a.actor = actor;
+                    a.stream = tag->second;
+                    a.radius = *radius;
+                    a.half = *half;
+                    avatars.push_back(std::move(a));
+                }
+        }
+        m_tags.Tick(now, player, eye, rotation, avatars, widget);
     }
 
     void Observer::UpdateMeasurements(bool running, double elapsed, double remaining, const Getter::ValueElseResult& score)

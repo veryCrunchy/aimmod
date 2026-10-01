@@ -1,0 +1,10 @@
+/* World tags (worldtags.js): names over other players, never taking clicks. Solid palette. */
+.wt-layer{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;overflow:hidden}
+.wt-tag{position:absolute;width:180px;margin-left:-90px;margin-top:-30px;text-align:center;font-family:Roboto,Arial,sans-serif;pointer-events:none}
+.wt-name{display:block;font-size:14px;font-weight:700;line-height:16px;color:#eef5f1;text-shadow:0 1px 2px #000000,0 0 3px #000000}
+.wt-dist{display:block;font-size:11px;line-height:12px;color:#cfe0d8;text-shadow:0 1px 2px #000000}
+.wt-tag.t .wt-name{color:#f0b45a}
+.wt-tag.ct .wt-name{color:#66ccff}
+.wt-tag.enemy .wt-name{color:#ff8fa3}
+.wt-tag.down .wt-name{color:#7f968a}
+.wt-tag.down .wt-dist{display:none}

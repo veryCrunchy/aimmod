@@ -1216,6 +1216,14 @@ preset):
     trace that starts inside geometry counts as no floor, so nobody stands
     on a roof.
   - The HUD strip shows how many players are alive on each side.
+- **Name tags (AimModCore + notice layer).** Teammates' names show over their
+  heads in their team colour, through walls. Enemies get a name only under
+  the crosshair and in line of sight. The service writes `world-tags.tsv`;
+  AimModCore projects and pushes the tags every frame (native-mod/DESIGN.md,
+  "World tags").
+  - Not built yet: a team-coloured outline or emissive accent on the
+    avatars. The bridge already puts avatars on the right team with
+    `SetTeam`.
 - **Leftover bots.** KovaaK's re-uses bots across scenario loads, and a
   direct map load left the previous scenario's bots in AimMod arenas. They
   were alive and took shots, which counted for KovaaK's accuracy. In an
