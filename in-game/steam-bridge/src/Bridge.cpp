@@ -108,7 +108,12 @@ namespace bridge
             {"spectate.answer", {"peer", "allow"}},
             {"spectate.privacy", {"mode"}},
             {"spectate.remove", {"peer"}},
+            {"ugc.query", {"tag", "text"}},
         };
+
+        constexpr std::uint64_t UgcQueryInvalid = 0xffffffffffffffffull;
+        constexpr std::size_t UgcQueryCap = 200;
+        constexpr std::uint32_t UgcPageSize = 50;
 
         const char* RejectReason(std::uint16_t code)
         {
@@ -204,7 +209,7 @@ namespace bridge
         LoadLast();
 
         m_pipe = std::make_unique<PipeServer>(
-            PipeName,
+            m_options.pipeName.empty() ? std::wstring(PipeName) : m_options.pipeName,
             [this](std::string&& message) {
                 {
                     std::lock_guard lock(m_mutex);
@@ -292,6 +297,7 @@ namespace bridge
         for (const auto& text : commands) HandleCommand(text);
         PollCalls();
         PollUgc();
+        PollUgcQuery();
         if (m_options.ghostDemo && m_pendingJoin && !m_lobby && m_calls.empty() && !(m_pipe && m_pipe->Connected()))
             AutoJoin(m_pendingJoin->lobby, m_pendingJoin->source.c_str());
         if (m_lobby) PollLobby(false);
@@ -999,6 +1005,31 @@ namespace bridge
             m_watchRate = rate;
             m_log(rate ? "spectating " + Redact(target) + " at " + std::to_string(rate) + " Hz" : std::string("spectating stopped"));
             Result(*id, true);
+        }
+        else if (name == "ugc.query")
+        {
+            const auto tag = c.Str("tag", 64).value_or("");
+            const auto search = c.Str("text", 128).value_or("");
+            if (!m_steam.ugc)
+            {
+                Result(*id, false, "unavailable", "Steam Workshop is unavailable.");
+                return;
+            }
+            if (tag.empty() && search.empty())
+            {
+                Result(*id, false, "invalid", "Give a tag, a text or both.");
+                return;
+            }
+            if (m_ugcQuery)
+            {
+                Result(*id, false, "busy", "A Workshop query is already running.");
+                return;
+            }
+            m_ugcQuery = UgcQuery{};
+            m_ugcQuery->commandId = *id;
+            m_ugcQuery->tag = tag;
+            m_ugcQuery->text = search;
+            if (!StartUgcPage()) FinishUgcQuery(false, "Steam refused the Workshop query.");
         }
         else if (name == "xfer.chunk")
         {
@@ -1787,7 +1818,7 @@ namespace bridge
             .Int("appId", KovaaksAppId)
             .Raw("self", json::Object().Str("peer", Id(m_self)).Str("name", name).Str("initials", Initials(name)).Done())
             .Str("relay", steamabi::AvailabilityName(avail))
-            .Raw("features", R"(["lobby","p2p","ugc","xfer"])")
+            .Raw("features", R"(["lobby","p2p","ugc","xfer","ugc-query","spectate-direct"])")
             .Int("maxChunk", static_cast<std::int64_t>(MaxChunk))
             .Int("xferWindow", static_cast<std::int64_t>(XferWindow));
         o.Str("spectatePrivacy", SpectatePrivacyName(m_spectatePrivacy));
@@ -2030,6 +2061,118 @@ namespace bridge
         }
     }
 
+    // --- Workshop query (read-only) ---------------------------------------
+
+    bool Bridge::StartUgcPage()
+    {
+        UgcQuery& q = *m_ugcQuery;
+        if (!q.subscribedPhase)
+        {
+            q.handle = m_steam.UGC_CreateQueryAll(m_steam.ugc, q.text.empty() ? UGCQueryRankedByPublicationDate : UGCQueryRankedByTextSearch, UGCMatchingItems,
+                                                  KovaaksAppId, KovaaksAppId, q.page);
+            if (q.handle == UgcQueryInvalid) return false;
+            if (!q.tag.empty()) m_steam.UGC_AddRequiredTag(m_steam.ugc, q.handle, q.tag.c_str());
+            if (!q.text.empty()) m_steam.UGC_SetSearchText(m_steam.ugc, q.handle, q.text.c_str());
+        }
+        else
+        {
+            const std::size_t left = q.subscribed.size() - q.subscribedOffset;
+            const auto count = static_cast<std::uint32_t>(std::min<std::size_t>(left, UgcPageSize));
+            if (count == 0) return false;
+            q.handle = m_steam.UGC_CreateQueryDetails(m_steam.ugc, q.subscribed.data() + q.subscribedOffset, count);
+            if (q.handle == UgcQueryInvalid) return false;
+            q.subscribedOffset += count;
+        }
+        q.call = m_steam.UGC_SendQuery(m_steam.ugc, q.handle);
+        q.deadline = Clock::now() + 30s;
+        if (q.call == steamabi::k_uAPICallInvalid)
+        {
+            m_steam.UGC_ReleaseQuery(m_steam.ugc, q.handle);
+            q.handle = 0;
+            return false;
+        }
+        return true;
+    }
+
+    void Bridge::PollUgcQuery()
+    {
+        if (!m_ugcQuery) return;
+        UgcQuery& q = *m_ugcQuery;
+        bool failed = false;
+        if (!m_steam.Utils_IsAPICallCompleted(m_steam.utils, q.call, &failed))
+        {
+            if (Clock::now() >= q.deadline)
+            {
+                m_steam.UGC_ReleaseQuery(m_steam.ugc, q.handle);
+                FinishUgcQuery(false, "The Workshop query timed out.");
+            }
+            return;
+        }
+        std::uint32_t got = 0;
+        if (!failed)
+        {
+            // GetQueryUGCResult writes the 1.47 SteamUGCDetails_t; the buffer has room to spare.
+            auto details = std::make_unique<std::uint8_t[]>(16 * 1024);
+            for (std::uint32_t i = 0; i < UgcPageSize; ++i)
+            {
+                std::memset(details.get(), 0, 16 * 1024);
+                if (!m_steam.UGC_GetQueryResult(m_steam.ugc, q.handle, i, details.get())) break;
+                ++got;
+                const auto* d = reinterpret_cast<const SteamUGCDetails_t*>(details.get());
+                if (d->m_eResult != 1 || d->m_nPublishedFileId == 0 || d->m_bBanned) continue;
+                const std::string title(d->m_rgchTitle, strnlen(d->m_rgchTitle, sizeof(d->m_rgchTitle)));
+                const std::string tags(d->m_rgchTags, strnlen(d->m_rgchTags, sizeof(d->m_rgchTags)));
+                if (!UgcMatches(title, tags, q.tag, q.text)) continue;
+                if (std::any_of(q.found.begin(), q.found.end(), [&](const UgcFound& f) { return f.item == d->m_nPublishedFileId; })) continue;
+                if (q.found.size() >= UgcQueryCap) break;
+                q.found.push_back({d->m_nPublishedFileId, title, d->m_nFileSize > 0 ? d->m_nFileSize : 0, d->m_rtimeUpdated});
+            }
+        }
+        m_steam.UGC_ReleaseQuery(m_steam.ugc, q.handle);
+        q.handle = 0;
+        if (failed && !q.subscribedPhase && q.page == 1) return FinishUgcQuery(false, "Steam could not run the Workshop query.");
+        // Next page of all items, then the user's subscriptions.
+        if (!q.subscribedPhase && got == UgcPageSize && q.found.size() < UgcQueryCap && q.page < UgcQueryCap / UgcPageSize)
+            ++q.page;
+        else if (!q.subscribedPhase)
+        {
+            q.subscribedPhase = true;
+            const std::uint32_t n = std::min<std::uint32_t>(m_steam.UGC_GetNumSubscribedItems(m_steam.ugc), static_cast<std::uint32_t>(UgcQueryCap));
+            q.subscribed.assign(n, 0);
+            q.subscribed.resize(n ? m_steam.UGC_GetSubscribedItems(m_steam.ugc, q.subscribed.data(), n) : 0);
+        }
+        if (q.found.size() >= UgcQueryCap || (q.subscribedPhase && q.subscribedOffset >= q.subscribed.size())) return FinishUgcQuery(true, {});
+        if (!StartUgcPage()) FinishUgcQuery(true, {});
+    }
+
+    void Bridge::FinishUgcQuery(bool ok, const std::string& message)
+    {
+        if (!m_ugcQuery) return;
+        UgcQuery q = std::move(*m_ugcQuery);
+        m_ugcQuery.reset();
+        if (!ok)
+        {
+            Result(q.commandId, false, "steam", message);
+            return;
+        }
+        std::vector<std::string> items;
+        for (const auto& f : q.found)
+        {
+            const std::uint32_t state = m_steam.UGC_GetItemState(m_steam.ugc, f.item);
+            items.push_back(json::Object()
+                                .Str("item", Id(f.item))
+                                .Str("title", f.title)
+                                .Int("bytes", f.bytes)
+                                .Int("updated", f.updated)
+                                .Bool("subscribed", (state & ItemSubscribed) != 0)
+                                .Bool("installed", (state & ItemInstalled) != 0)
+                                .Bool("needsUpdate", (state & ItemNeedsUpdate) != 0)
+                                .Done());
+        }
+        m_log("workshop query (" + (q.tag.empty() ? "text" : "tag " + q.tag) + "): " + std::to_string(items.size()) + " items");
+        Emit(json::Object().Int("v", ContractVersion).Str("ev", "ugc.items").Str("tag", q.tag).Str("text", q.text).Raw("items", json::Array(items)).Done());
+        Result(q.commandId, true);
+    }
     // --- bulk transfers ---------------------------------------------------
 
     bool Bridge::SendChunk(Conn& conn, const WireMessage& m)

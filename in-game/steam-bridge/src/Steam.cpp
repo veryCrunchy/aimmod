@@ -72,6 +72,15 @@ namespace bridge
         Bind(module, UGC_GetItemInstallInfo, "SteamAPI_ISteamUGC_GetItemInstallInfo", missing);
         Bind(module, UGC_GetItemDownloadInfo, "SteamAPI_ISteamUGC_GetItemDownloadInfo", missing);
         Bind(module, UGC_DownloadItem, "SteamAPI_ISteamUGC_DownloadItem", missing);
+        Bind(module, UGC_CreateQueryAll, "SteamAPI_ISteamUGC_CreateQueryAllUGCRequest", missing);
+        Bind(module, UGC_CreateQueryDetails, "SteamAPI_ISteamUGC_CreateQueryUGCDetailsRequest", missing);
+        Bind(module, UGC_AddRequiredTag, "SteamAPI_ISteamUGC_AddRequiredTag", missing);
+        Bind(module, UGC_SetSearchText, "SteamAPI_ISteamUGC_SetSearchText", missing);
+        Bind(module, UGC_SendQuery, "SteamAPI_ISteamUGC_SendQueryUGCRequest", missing);
+        Bind(module, UGC_GetQueryResult, "SteamAPI_ISteamUGC_GetQueryUGCResult", missing);
+        Bind(module, UGC_ReleaseQuery, "SteamAPI_ISteamUGC_ReleaseQueryUGCRequest", missing);
+        Bind(module, UGC_GetNumSubscribedItems, "SteamAPI_ISteamUGC_GetNumSubscribedItems", missing);
+        Bind(module, UGC_GetSubscribedItems, "SteamAPI_ISteamUGC_GetSubscribedItems", missing);
         if (!missing.empty() || !Initialised()) return false;
 
         const auto hUser = GetHSteamUser();

@@ -61,6 +61,7 @@ namespace bridge
             bool hideScenario = false; // keep the scenario out of rich presence
             SpectatePrivacy spectatePrivacy = SpectatePrivacy::Friends; // lobby-less spectating
             bool showSpectating = false; // publish whom we spectate in rich presence
+            std::wstring pipeName;       // override for development harnesses (default PipeName)
         };
         void SetOptions(Options options) { m_options = std::move(options); } // before Start
         struct GhostSample
@@ -195,6 +196,9 @@ namespace bridge
 
         // Workshop (read item state, subscribe, download)
         void PollUgc();
+        void PollUgcQuery();
+        bool StartUgcPage();
+        void FinishUgcQuery(bool ok, const std::string& message);
         void EmitUgcState(std::uint64_t item);
         bool InstallFolder(std::uint64_t item, std::string& folder);
 
@@ -288,6 +292,27 @@ namespace bridge
         std::set<std::pair<std::uint64_t, std::uint32_t>> m_incoming;
         std::map<std::uint64_t, UgcWatch> m_ugcWatch;
         std::vector<UgcCall> m_ugcCalls;
+        struct UgcFound
+        {
+            std::uint64_t item;
+            std::string title;
+            std::int64_t bytes;
+            std::uint32_t updated;
+        };
+        struct UgcQuery
+        {
+            std::int64_t commandId = -1;
+            std::string tag, text;
+            bool subscribedPhase = false;
+            std::uint32_t page = 1;
+            std::vector<std::uint64_t> subscribed;
+            std::size_t subscribedOffset = 0;
+            std::uint64_t handle = 0;
+            steamabi::SteamAPICall_t call = 0;
+            Clock::time_point deadline{};
+            std::vector<UgcFound> found;
+        };
+        std::optional<UgcQuery> m_ugcQuery;
 
         struct LastLobby
         {

@@ -158,6 +158,44 @@ namespace bridge
         return std::nullopt;
     }
 
+    namespace
+    {
+        std::string Lower(std::string_view s)
+        {
+            std::string out(s);
+            for (char& c : out)
+                if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+            return out;
+        }
+        std::string_view Trim(std::string_view s)
+        {
+            while (!s.empty() && (s.front() == ' ' || s.front() == '\t')) s.remove_prefix(1);
+            while (!s.empty() && (s.back() == ' ' || s.back() == '\t')) s.remove_suffix(1);
+            return s;
+        }
+    } // namespace
+
+    bool UgcMatches(std::string_view title, std::string_view tags, std::string_view tag, std::string_view text)
+    {
+        if (!tag.empty())
+        {
+            const std::string want = Lower(Trim(tag));
+            bool found = false;
+            std::size_t start = 0;
+            while (!found && start <= tags.size())
+            {
+                const auto comma = tags.find(',', start);
+                const auto piece = tags.substr(start, comma == std::string_view::npos ? std::string_view::npos : comma - start);
+                found = Lower(Trim(piece)) == want;
+                if (comma == std::string_view::npos) break;
+                start = comma + 1;
+            }
+            if (!found) return false;
+        }
+        if (!text.empty() && Lower(title).find(Lower(text)) == std::string::npos) return false;
+        return true;
+    }
+
     std::optional<SpectatePrivacy> ParseSpectatePrivacy(std::string_view text)
     {
         if (text == "off") return SpectatePrivacy::Off;

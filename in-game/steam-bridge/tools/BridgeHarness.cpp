@@ -24,12 +24,14 @@ int wmain(int argc, wchar_t** argv)
     std::wstring dll;
     int seconds = 120;
     bool ghost = false;
+    std::wstring pipe;
     for (int i = 1; i < argc; ++i)
     {
         const std::wstring a = argv[i];
         if (a == L"--steam-api" && i + 1 < argc) dll = argv[++i];
         else if (a == L"--seconds" && i + 1 < argc) seconds = _wtoi(argv[++i]);
         else if (a == L"--ghost-demo") ghost = true;
+        else if (a == L"--pipe" && i + 1 < argc) pipe = std::wstring(L"\\\\.\\pipe\\") + argv[++i];
     }
     if (dll.empty())
     {
@@ -89,7 +91,10 @@ int wmain(int argc, wchar_t** argv)
 
     {
         bridge::Bridge b(log, onGameThread);
-        b.SetOptions({ghost, {}});
+        bridge::Bridge::Options options;
+        options.ghostDemo = ghost;
+        options.pipeName = pipe;
+        b.SetOptions(options);
         if (!b.Start(module, GetCommandLineW())) return 1;
         log("harness: bridge running for " + std::to_string(seconds) + " s");
         std::this_thread::sleep_for(std::chrono::seconds(seconds));

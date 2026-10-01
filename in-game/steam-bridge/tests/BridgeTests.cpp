@@ -392,6 +392,13 @@ int main()
         Check(full.kind == K::Reject && full.reason == RejectCode::SpectateFull, "the spectator cap holds");
         Check(ParseSpectatePrivacy("ask") == SpectatePrivacy::Ask && !ParseSpectatePrivacy("public"), "parses the privacy setting");
     }
+    // Workshop query filter
+    Check(UgcMatches("AimMod - aim_map (CSS) - CS Movement", "Scenario, aimmod-port , Movement", "aimmod-port", ""), "matches a tag in the list");
+    Check(!UgcMatches("AimMod - aim_map", "Scenario,Movement", "aimmod-port", ""), "requires the tag");
+    Check(!UgcMatches("AimMod - aim_map", "aimmod-portx", "aimmod-port", ""), "tags match whole words");
+    Check(UgcMatches("AimMod - Dust2 (CSGO) - CS Movement", "", "", "aimmod - "), "text search ignores case");
+    Check(!UgcMatches("Pole Long Dodge", "", "", "AimMod - "), "text search filters titles");
+    Check(UgcMatches("anything", "", "", ""), "no filter matches everything");
     std::printf("%d/%d checks passed\n", checks - failures, checks);
     return failures == 0 ? 0 : 1;
 }

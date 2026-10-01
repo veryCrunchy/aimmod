@@ -8,6 +8,7 @@
 
 #include <Windows.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
@@ -88,6 +89,45 @@ namespace bridge
     static_assert(sizeof(GameRichPresenceJoinRequested_t) == 264);
     static_assert(sizeof(ItemInstalled_t) == 16);
     static_assert(sizeof(LobbyInvite_t) == 24);
+
+    // SteamUGCDetails_t as STEAMUGC_INTERFACE_VERSION014 writes it (SDK 1.47).
+#pragma pack(push, 8)
+    struct SteamUGCDetails_t
+    {
+        std::uint64_t m_nPublishedFileId;
+        int m_eResult;
+        int m_eFileType;
+        std::uint32_t m_nCreatorAppID;
+        std::uint32_t m_nConsumerAppID;
+        char m_rgchTitle[129];
+        char m_rgchDescription[8000];
+        std::uint64_t m_ulSteamIDOwner;
+        std::uint32_t m_rtimeCreated;
+        std::uint32_t m_rtimeUpdated;
+        std::uint32_t m_rtimeAddedToUserList;
+        int m_eVisibility;
+        bool m_bBanned;
+        bool m_bAcceptedForUse;
+        bool m_bTagsTruncated;
+        char m_rgchTags[1025];
+        std::uint64_t m_hFile;
+        std::uint64_t m_hPreviewFile;
+        char m_pchFileName[260];
+        std::int32_t m_nFileSize;
+        std::int32_t m_nPreviewFileSize;
+        char m_rgchURL[256];
+        std::uint32_t m_unVotesUp;
+        std::uint32_t m_unVotesDown;
+        float m_flScore;
+        std::uint32_t m_unNumChildren;
+    };
+#pragma pack(pop)
+    static_assert(offsetof(SteamUGCDetails_t, m_ulSteamIDOwner) == 8160);
+    static_assert(offsetof(SteamUGCDetails_t, m_nFileSize) == 9492);
+    static_assert(sizeof(SteamUGCDetails_t) == 9776);
+    constexpr int UGCQueryRankedByPublicationDate = 1;
+    constexpr int UGCQueryRankedByTextSearch = 11;
+    constexpr int UGCMatchingItems = 0;
     static_assert(sizeof(DownloadItemResult_t) == 24);
     static_assert(sizeof(RemoteStorageSubscribePublishedFileResult_t) == 16);
 
@@ -154,6 +194,16 @@ namespace bridge
         bool (*UGC_GetItemInstallInfo)(std::intptr_t, std::uint64_t, std::uint64_t*, char*, std::uint32_t, std::uint32_t*) = nullptr;
         bool (*UGC_GetItemDownloadInfo)(std::intptr_t, std::uint64_t, std::uint64_t*, std::uint64_t*) = nullptr;
         bool (*UGC_DownloadItem)(std::intptr_t, std::uint64_t, bool) = nullptr;
+        // Queries (read-only)
+        std::uint64_t (*UGC_CreateQueryAll)(std::intptr_t, int queryType, int matchingType, std::uint32_t creatorApp, std::uint32_t consumerApp, std::uint32_t page) = nullptr;
+        std::uint64_t (*UGC_CreateQueryDetails)(std::intptr_t, std::uint64_t* ids, std::uint32_t count) = nullptr;
+        bool (*UGC_AddRequiredTag)(std::intptr_t, std::uint64_t handle, const char* tag) = nullptr;
+        bool (*UGC_SetSearchText)(std::intptr_t, std::uint64_t handle, const char* text) = nullptr;
+        steamabi::SteamAPICall_t (*UGC_SendQuery)(std::intptr_t, std::uint64_t handle) = nullptr;
+        bool (*UGC_GetQueryResult)(std::intptr_t, std::uint64_t handle, std::uint32_t index, void* details) = nullptr;
+        bool (*UGC_ReleaseQuery)(std::intptr_t, std::uint64_t handle) = nullptr;
+        std::uint32_t (*UGC_GetNumSubscribedItems)(std::intptr_t) = nullptr;
+        std::uint32_t (*UGC_GetSubscribedItems)(std::intptr_t, std::uint64_t* ids, std::uint32_t max) = nullptr;
 
         // Resolves everything from an already-loaded module. Returns false and
         // names the first missing item in `missing` if anything is absent.

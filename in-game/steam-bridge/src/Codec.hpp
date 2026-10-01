@@ -156,4 +156,7 @@ namespace bridge
         RejectCode reason = RejectCode::Declined;
     };
     SpectateDecision DecideSpectate(SpectatePrivacy privacy, bool isFriend, std::size_t current);
+    // Workshop query filter: the item's comma-separated tag list must contain
+    // 	ag (if given) and its title must contain 	ext (if given); both ignore case.
+    bool UgcMatches(std::string_view title, std::string_view tags, std::string_view tag, std::string_view text);
 } // namespace bridge

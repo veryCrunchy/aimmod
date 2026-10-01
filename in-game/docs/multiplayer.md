@@ -903,6 +903,26 @@ receives the same broadcasts, as it does for its own Workshop use.
 `ugc.installed.folder` is the local install folder from
 `GetItemInstallInfo`. The service copies or links what it needs from there.
 
+**Workshop search (`ugc.query`, feature `ugc-query`).**
+
+- Command: `ugc.query {tag?, text?}`, with at least one of the two.
+- Answer: one `ugc.items {tag, text, items: [{item, title, bytes, updated,
+  subscribed, installed, needsUpdate}]}`, then `result`.
+- **How it queries:**
+  - `CreateQueryAllUGCRequest` for app 824270, ranked by text search when
+    `text` is given, otherwise by publication date.
+  - `AddRequiredTag(tag)` and `SetSearchText(text)`.
+  - Pages of 50, up to 200 items.
+  - Then the user's subscribed items (`GetSubscribedItems` +
+    `CreateQueryUGCDetailsRequest`) that match the same filter.
+- **Matching:** the tag must appear in the item's tag list, and the title
+  must contain the text; both ignore case (`UgcMatches`, unit tested).
+- `subscribed`, `installed` and `needsUpdate` come from `GetItemState`.
+- One query at a time; a second one gets `busy`. Read-only: no publish,
+  vote or edit.
+- **Untagged uploads:** the game's uploader doesn't set tags. A live check
+  found the map-port item with `text: "AimMod - "` but not with
+  `tag: "aimmod-port"`, so the UI should fall back to the text search.
 **Bulk transfers (host-to-joiner file streaming).** These are chunked JSON
 messages: no second pipe frame type, so the pipe stays one simple framing.
 
