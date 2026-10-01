@@ -324,6 +324,7 @@ sealed partial class MultiplayerService : IDisposable
         weapon = new { preset = s.WeaponProfile.Preset, custom = s.WeaponProfile.Custom }, movement = s.MovementProfile.Preset,
         character = new { preset = s.CharacterProfile.Preset, custom = s.CharacterProfile.Custom },
         targetSpeed = s.TargetSpeed, targetSize = s.TargetSize, privacy = s.Privacy, countdown = s.Countdown, lateJoin = s.LateJoin, autoStart = s.AutoStart, voting = s.Voting,
+        fragLimit = s.FragLimit, lifesteal = s.Lifesteal, requireFire = s.RequireFire, halfRounds = s.HalfRounds, overtime = s.Overtime,
     };
     PresetStore LoadPresets()
     {
@@ -1195,9 +1196,12 @@ sealed partial class MultiplayerService : IDisposable
             if (core is not null)
             {
                 core.RequireLoading = game.Capabilities.Contains("load");
+                // Kicks the Steam lobby remembers (from an earlier host too) stay refused here.
+                foreach (var kicked in transport.Banned) core.Ban(kicked);
                 Simulation?.Step(core, SelfId);
                 core.Tick();
-                if (core.Closed) { core = null; Reset(); return; }
+                // Closed (its last member left): withdraw the advert and drop the session like a leave.
+                if (core.Closed) { Leave("closed"); return; }
                 var snapshot = core.Snapshot();
                 // Transfer to a real remote member moves the authority to that machine.
                 if (snapshot.HostId != SelfId && snapshot.Members.FirstOrDefault(m => m.Id == snapshot.HostId) is { Simulated: false } heir)
@@ -1662,6 +1666,9 @@ sealed partial class MultiplayerService : IDisposable
         {
             if (match.Phase == MatchPhases.Live && caps.Contains("start") && game.Start(plan.Scenario, MatchScenario.SafeMode(plan.Scenario, plan.Mode), lobby.Settings.Tournament?.Seed) is long late)
                 plan = plan with { State = "starting", Message = "Starting your run…", StartSequence = late, LoadSequence = null };
+            // The game can't start runs: the player starts this one by hand.
+            else if (match.Phase == MatchPhases.Live && !caps.Contains("start"))
+                plan = plan with { State = "manual", Message = "Go! " + FindIt(plan.Scenario, plan.Generated), LoadSequence = null, StartSequence = null };
             else if (match.Phase != MatchPhases.Live && game.Load(plan.Scenario) is long again)
                 plan = plan with { State = "loading", Message = "Loading “" + plan.Scenario + "” in KovaaK’s…", LoadSequence = again, StartSequence = null };
         }
@@ -2021,7 +2028,8 @@ sealed partial class MultiplayerService : IDisposable
         });
         MapPreviewEndpoints(routes, prefix);
         // Developer mode and its tools (off by default; local UI only).
-        Developer.DeveloperEndpoints.Map(routes, prefix, new Developer.DeveloperMode(outputFolder), this, outputFolder is null ? null : new Developer.DeveloperTools(outputFolder, library, this));
+        DevTools = outputFolder is null ? null : new Developer.DeveloperTools(outputFolder, library, this);
+        Developer.DeveloperEndpoints.Map(routes, prefix, new Developer.DeveloperMode(outputFolder), this, DevTools);
         // Read-only notice for the always-on in-game layer (notify.html).
         routes.MapGet(prefix + "/multiplayer-notify", () => Results.Content(NoticeJson(), "application/json"));
         routes.MapPost(prefix + "/multiplayer", async (HttpRequest request, CancellationToken token) =>
@@ -2045,7 +2053,9 @@ sealed partial class MultiplayerService : IDisposable
 
     // Disposed with the service (the hotkey reader).
     public IDisposable? Companion { get; set; }
-    public void Dispose() { timer?.Dispose(); Companion?.Dispose(); lock (gate) { Leave("closed"); DeleteSessionMarker(); DeletePreviewRequest(); } transport.Dispose(); }
+    // The developer tools the endpoints use (their timer runs every 50 ms).
+    internal Developer.DeveloperTools? DevTools { get; private set; }
+    public void Dispose() { timer?.Dispose(); DevTools?.Dispose(); Companion?.Dispose(); lock (gate) { Leave("closed"); DeleteSessionMarker(); DeletePreviewRequest(); } transport.Dispose(); }
 }
 
 static class WindowsClipboard

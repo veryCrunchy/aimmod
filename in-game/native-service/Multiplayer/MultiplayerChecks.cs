@@ -810,6 +810,8 @@ static partial class MultiplayerChecks
     {
         public readonly Dictionary<string, MemoryTransport> Peers = new();
         public readonly Dictionary<string, string> Codes = new();
+        // The bridge's aimmod.banned lobby value: kicks the Steam lobby remembers for every host.
+        public readonly HashSet<string> Banned = [];
     }
     sealed class MemoryTransport(MemoryNetwork network, string id) : IMultiplayerTransport
     {
@@ -824,7 +826,8 @@ static partial class MultiplayerChecks
         public bool BeginJoin(string token) { if (network.Codes.GetValueOrDefault(token) is not { } host) return false; joinedCode = token; Inbox.Enqueue(new TransportEvent(host, TransportEvent.Connected, Host: true)); return true; }
         public void DismissJoin() { }
         public readonly List<string> HostActions = [];
-        public void Kick(string peer) => HostActions.Add("kick " + peer);
+        public void Kick(string peer) { HostActions.Add("kick " + peer); network.Banned.Add(peer); }
+        public IReadOnlyCollection<string> Banned => network.Banned;
         public void Transfer(string peer) => HostActions.Add("transfer " + peer);
         public string? HostHint => null;
         string? joinedCode;
@@ -969,6 +972,20 @@ static partial class MultiplayerChecks
         net.Peers["peer-b"].Inbox.Enqueue(new TransportEvent("", TransportEvent.Error, Reason: "Synthetic bridge error"));
         Pump();
         Check(View(b).GetProperty("notice").GetProperty("text").GetString() == "Synthetic bridge error", "Bridge errors surface as a notice");
+        // The host who kicked leaves: the next host still refuses the kicked player.
+        b.Act("leave", default);
+        Pump(); Pump();
+        Check(View(c).GetProperty("lobby").GetProperty("isHost").GetBoolean(), "The remaining member hosts after the kicking host left");
+        Check(d.Act("join", J(new { code = net.Codes.Single().Key })).Ok, "The kicked player tries the room code again");
+        Pump(); Pump();
+        Check(View(d).GetProperty("lobby").ValueKind == JsonValueKind.Null && View(c).GetProperty("lobby").GetProperty("members").EnumerateArray().All(m => m.GetProperty("id").GetString() != "peer-d"),
+            "A kick outlives a host change: the new host refuses the kicked player");
+        // A hosted lobby that closes (its last member, this machine, left the Steam lobby) is no longer advertised.
+        var alone = Make("peer-z");
+        Check(alone.Act("create", J(new { mode = "practice" })).Ok && net.Codes.ContainsValue("peer-z"), "A lone host advertises its lobby");
+        net.Peers["peer-z"].Inbox.Enqueue(new TransportEvent("peer-z", TransportEvent.Left));
+        Pump();
+        Check(View(alone).GetProperty("lobby").ValueKind == JsonValueKind.Null && !net.Codes.ContainsValue("peer-z"), "A lobby that closes withdraws its advertisement");
     }
 
     // A fake AimModSteam on a private pipe name checks the v1 contract both ways.
@@ -998,8 +1015,9 @@ static partial class MultiplayerChecks
         steam.Advertise(core.Snapshot());
         var create = Expect("lobby.create");
         Check(create.GetProperty("privacy").GetString() == "friends" && create.GetProperty("maxMembers").GetInt32() == 4 && create.GetProperty("data").GetProperty("aimmod.code").GetString() == "ABCDEF", "Advertise creates a friends lobby with aimmod.* data");
-        Write(new { v = 1, ev = "lobby.updated", lobby = lobbyId, owner = self, isHost = true, privacy = "friends", joinable = true, maxMembers = 4, members = new[] { new { peer = self, name = "Synthetic Host", initials = "SH", host = true, self = true, connected = true } }, data = new { } });
+        Write(new { v = 1, ev = "lobby.updated", lobby = lobbyId, owner = self, isHost = true, privacy = "friends", joinable = true, maxMembers = 4, members = new[] { new { peer = self, name = "Synthetic Host", initials = "SH", host = true, self = true, connected = true } }, data = new Dictionary<string, string> { ["aimmod.banned"] = "1001,x,1002,1001" } });
         Check(Until(() => steam.HostHint == self), "lobby.updated names the owner");
+        Check(steam.Banned.SequenceEqual(["1001", "1002"]), "The bridge's ban list is read from the lobby data, without junk or repeats");
         steam.Advertise(core.Snapshot());
         Check(Expect("lobby.setData").GetProperty("data").GetProperty("aimmod.players").GetString() == "1/4" && Expect("lobby.setJoinable").GetProperty("joinable").GetBoolean() && Expect("presence.set").GetProperty("status").GetString()!.StartsWith("In an AimMod lobby", StringComparison.Ordinal), "Later adverts update data, joinability and rich presence");
         var frame = Protocol.Encode(Protocol.Create("ping", "l", self, 1, 2, new { t0 = 2 }));
@@ -1242,6 +1260,23 @@ static partial class MultiplayerChecks
         control.Accept(); Run(2500);
         Check(control.Calls.Count(c => c == "load Synthetic A") == 3 && Round().GetProperty("state").GetString() is "loading" or "ready", "The load is retried once the game is free");
         service.Dispose();
+
+        // A game that can load scenarios but not start them: a challenge that ends after the round
+        // went live leaves the player to start it by hand, instead of holding the round forever.
+        var loadOnly = new FakeGame("load");
+        service = new MultiplayerService(new OfflineTransport(), new ContentLibrary(Path.Combine(root, "game")), loadOnly, () => new LocalRun(false, null, null, null, null, 0, 0, 0, null), () => [], () => null, null, simulation: true, () => now, autoTick: false, seed: 5);
+        service.Act("create", J(new { mode = "score-race", scenario = "Synthetic A" }));
+        service.Act("sim", J(new { op = "add" }));
+        Run(9000);
+        loadOnly.ChallengeRunning = true;
+        Check(service.Act("start", default).Ok, "The host starts while still in a challenge run (load only)");
+        Run(30_000);
+        Check(Phase() == MatchPhases.Live && Round().GetProperty("state").GetString() == "blocked", "The round goes live while the challenge still runs");
+        loadOnly.ChallengeRunning = false;
+        Run(2500);
+        Check(Round().GetProperty("state").GetString() == "manual" && Round().GetProperty("message").GetString()!.StartsWith("Go!", StringComparison.Ordinal),
+            "Once the challenge ends a game without start asks the player to start the round");
+        service.Dispose();
     }
 
     static void Marker()
@@ -1369,7 +1404,13 @@ static partial class MultiplayerChecks
             Check(!Tool(new { action = "import", path = Path.Combine(output, "nope.amreplay") }).Ok && !Tool(new { action = "avatar-path", replay = "missing" }).Ok, "Missing replays are refused");
         }
         Check(Dev(new { action = "enable", on = false }).Ok && !service.SimulationOn && !Dev(new { action = "notice", kind = "ready" }).Ok, "Turning developer mode off stops the simulation and the tools");
+        // The tools the endpoints create (a 50 ms timer) go with the service.
+        var app = LoopbackServer.Build(0);
+        service.MapEndpoints(app, "/synthetic");
+        var mapped = service.DevTools;
         service.Dispose();
+        Check(mapped is { Disposed: true }, "Disposing the service stops the developer tools' timer");
+        ((IDisposable)app).Dispose();
         static void Act(MultiplayerService s, JsonElement n)
         {
             // Clear popups that wait for an answer, as the player would.
@@ -1506,10 +1547,15 @@ static partial class MultiplayerChecks
         WriteText(Path.Combine(folder, lookalike + ".sce"), "Name=" + lookalike + "\nDescription=My own scenario\n");
         WriteText(Path.Combine(folder, "AimMod Match - notes.sce"), "Description=" + MatchScenario.Marker + "x\n");
         var keepName = MatchScenario.Prefix + "Synthetic A - CS - 11111112";
-        WriteText(Path.Combine(folder, keepName + ".sce"), "Name=" + keepName + "\nDescription=" + MatchScenario.Marker + "Synthetic A.\n");
+        Check(store.Write(keepName, "Name=" + keepName + "\nDescription=" + MatchScenario.Marker + "Synthetic A.\n", 14).Ok, "The current lobby's match scenario is rewritten");
         Check(store.Clean(keepName) == 2 && !File.Exists(Path.Combine(folder, marked + ".sce")) && File.Exists(Path.Combine(folder, keepName + ".sce")), "Cleanup removes leftover match scenarios (including older builds') but keeps the current lobby's");
         Check(File.Exists(Path.Combine(folder, lookalike + ".sce")) && File.Exists(Path.Combine(folder, taken + ".sce")) && File.Exists(Path.Combine(folder, "AimMod Match - notes.sce")), "Files without the marker or the generated name pattern are never deleted");
         Check(store.Clean(null) == 1 && !File.Exists(Path.Combine(folder, keepName + ".sce")) && store.Files().Count == 0, "Leaving removes the last one too");
+        // A match scenario the player changed after AimMod wrote it (still marked) is theirs now.
+        var edited = MatchScenario.Prefix + "Synthetic A - CS - 22222222";
+        Check(store.Write(edited, "Name=" + edited + "\nDescription=" + MatchScenario.Marker + "Synthetic A.\n", 20).Ok, "A match scenario is written for the edit check");
+        WriteText(Path.Combine(folder, edited + ".sce"), "Name=" + edited + "\nDescription=" + MatchScenario.Marker + "Synthetic A.\nTimelimit=90.0\n");
+        Check(store.Clean(null) == 0 && File.Exists(Path.Combine(folder, edited + ".sce")), "Cleanup never deletes a match scenario that changed after AimMod wrote it");
         Check(MatchScenario.SafeMode(MatchScenario.Name(cs), "challenge") == "freeplay" && MatchScenario.SafeMode("Synthetic A", "challenge") == "challenge", "Match scenarios never start as challenges");
     }
 
@@ -1753,6 +1799,14 @@ static partial class MultiplayerChecks
         // Setups: save one, and the next lobby starts from the last setup.
         Check(service.Act("preset-save", J(new { name = "Synthetic setup" })).Ok && View().GetProperty("presets").EnumerateArray().Any(p => p.GetString() == "Synthetic setup"), "The host saves a setup");
         Check(service.Act("preset-load", J(new { name = "Synthetic setup" })).Ok && !service.Act("preset-load", J(new { name = "Nope" })).Ok, "Saved setups load; missing ones are refused");
+        JsonElement SetupSettings() => View().GetProperty("lobby").GetProperty("settings");
+        service.Act("settings", Patch(new { mode = "deathmatch", fragLimit = 7, lifesteal = 75 }));
+        Check(service.Act("preset-save", J(new { name = "Synthetic combat" })).Ok, "The host saves a combat setup");
+        service.Act("settings", Patch(new { fragLimit = 3, lifesteal = 25 }));
+        Check(service.Act("preset-load", J(new { name = "Synthetic combat" })).Ok && SetupSettings().GetProperty("fragLimit").GetInt32() == 7 && SetupSettings().GetProperty("lifesteal").GetInt32() == 75,
+            "A saved setup keeps its frag limit and lifesteal");
+        service.Act("preset-load", J(new { name = "Synthetic setup" }));
+        Check(SetupSettings().GetProperty("mode").GetString() == "score-race" && SetupSettings().GetProperty("fragLimit").ValueKind == JsonValueKind.Null, "Loading the race setup again clears the frag limit");
         // Overrides build a match scenario and run it in freeplay.
         service.Act("end", default);
         service.Act("settings", Patch(new { mode = "ffa-rounds", rounds = 1, movement = "cs", targetSize = 1.5 }));

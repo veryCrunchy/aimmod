@@ -440,8 +440,10 @@ sealed class MatchScenarioStore(string scenariosFolder, string manifestPath, int
     static void Touch(List<Entry> entries, string file, string hash, long now) { entries.RemoveAll(e => e.File == file); entries.Add(new Entry(file, hash, now)); }
 
     // Remove every match scenario except the one the current lobby needs. A file goes only
-    // if its name has the generated pattern and its header carries the generated marker,
-    // so a user's own scenario is never touched. Returns how many were removed.
+    // if its name has the generated pattern, and either it is still exactly what this store
+    // wrote, or the store never wrote it and its header carries the generated marker (a
+    // leftover of an older build). A user's own scenario, or one changed after AimMod wrote
+    // it, is never touched. Returns how many were removed.
     public int Clean(string? keepName)
     {
         lock (gate)
@@ -454,8 +456,9 @@ sealed class MatchScenarioStore(string scenariosFolder, string manifestPath, int
             {
                 var file = Path.GetFileName(path);
                 if (file == keep || !MatchScenario.IsGeneratedName(file)) continue;
-                // Ours: it carries the marker, or it is still exactly what this store wrote.
-                if (!Marked(path) && !written.Any(e => e.File == file && Unchanged(path, e.Hash))) continue;
+                // Ours: still exactly what this store wrote; or, never written by it, it carries the marker.
+                var entry = written.LastOrDefault(e => e.File == file);
+                if (entry is not null ? !Unchanged(path, entry.Hash) : !Marked(path)) continue;
                 try { File.Delete(path); removed++; }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             }

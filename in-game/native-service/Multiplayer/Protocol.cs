@@ -110,6 +110,9 @@ interface IMultiplayerTransport : IDisposable
     // The current Steam lobby token, for the hashed Discord join secret. It never
     // leaves the service as text. Null when the transport has no such lobby.
     string? JoinToken => null;
+    // Members kicked from the Steam lobby (the bridge's host-owned aimmod.banned value), so a
+    // new host keeps refusing them. Empty when the transport has no such lobby.
+    IReadOnlyCollection<string> Banned => [];
     // The current Steam lobby, kept so a crashed or restarted client can rejoin it.
     string? LobbyToken { get; }
     // Bridge build (ready.bridge): players on different builds can't see each other.
