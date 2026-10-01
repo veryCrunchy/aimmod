@@ -28,7 +28,7 @@
 --            with allow_drafts=1.
 local M = {}
 
-M.version = 3
+M.version = 4
 
 M.kinds = {
     avatar_tint = {parts={body=true}, needsPak=false},
@@ -84,26 +84,18 @@ M.items = {
         pak={file='AimModCosmetics-1.pak', sha256=''}, draft=true},
     -- Accessories from the game's own map-editor brushes and the free Meso material,
     -- tinted through its probed parameters and fitted to any rig (no pak).
-    {id='accessory-halo', version=1, kind='accessory', name='Halo', models={'Meso', 'Endo'}, parts={'body'},
+    {id='accessory-halo', version=2, kind='accessory', name='Halo', models={'Meso', 'Endo'}, parts={'body'},
         mesh='/Game/Art/StaticMeshes/KMC/Brushes/SM_Torus.SM_Torus', material='/Game/Materials/Instances/Characters/S_Meso/Base/MI_PaintedMetal_Meso_TS1.MI_PaintedMetal_Meso_TS1',
-        vector={MetalPaint=rgba(0.95, 0.7, 0.25), TriangularPaint=rgba(0.95, 0.7, 0.25), RawMetal=rgba(0.95, 0.7, 0.25), Silicone=rgba(0.95, 0.7, 0.25)}, scalar={Roughness=0.25, Metallic=0.9},
-        attach={role='head', fit={bone='Head', anchor='top', offset={0, 0, 14}, size={28, 28, 3}}}},
-    {id='accessory-headband', version=1, kind='accessory', name='Headband', models={'Meso', 'Endo'}, parts={'body'},
+        vector={MetalPaint=rgba(0.95, 0.7, 0.25), TriangularPaint=rgba(0.95, 0.7, 0.25), RawMetal=rgba(0.95, 0.7, 0.25), Silicone=rgba(0.95, 0.7, 0.25)}, scalar={Roughness=0.2, Metallic=0.8, FullBright=1},
+        attach={role='head', fit={bone='Head', anchor='top', offset={0, 0, 0}, size={24, 24, 2}}}},
+    {id='accessory-headband', version=2, kind='accessory', name='Headband', models={'Meso', 'Endo'}, parts={'body'},
         mesh='/Game/Art/StaticMeshes/KMC/Brushes/SM_Torus.SM_Torus', material='/Game/Materials/Instances/Characters/S_Meso/Base/MI_PaintedMetal_Meso_TS1.MI_PaintedMetal_Meso_TS1',
         vector={MetalPaint=rgba(0.02, 0.6, 0.3), TriangularPaint=rgba(0.02, 0.6, 0.3), RawMetal=rgba(0.02, 0.6, 0.3), Silicone=rgba(0.02, 0.6, 0.3)}, scalar={Roughness=0.4, Metallic=0.1},
-        attach={role='head', fit={bone='Head', anchor='crown', offset={0, 0, 0}, size={27, 27, 5}}}},
-    {id='accessory-crown', version=1, kind='accessory', name='Crown band', models={'Meso', 'Endo'}, parts={'body'},
-        mesh='/Game/Art/StaticMeshes/KMC/Brushes/SM_Tube.SM_Tube', material='/Game/Materials/Instances/Characters/S_Meso/Base/MI_PaintedMetal_Meso_TS1.MI_PaintedMetal_Meso_TS1',
-        vector={MetalPaint=rgba(0.9, 0.62, 0.2), TriangularPaint=rgba(0.9, 0.62, 0.2), RawMetal=rgba(0.9, 0.62, 0.2), Silicone=rgba(0.9, 0.62, 0.2)}, scalar={Roughness=0.2, Metallic=0.9},
-        attach={role='head', fit={bone='Head', anchor='top', offset={0, 0, 3}, size={20, 20, 8}}}},
-    {id='accessory-collar', version=1, kind='accessory', name='Collar', models={'Meso', 'Endo'}, parts={'body'},
+        attach={role='head', fit={bone='Head', anchor='crown', offset={0, 0, 0}, size={25, 25, 4}}}},
+    {id='accessory-collar', version=2, kind='accessory', name='Collar', models={'Meso', 'Endo'}, parts={'body'},
         mesh='/Game/Art/StaticMeshes/KMC/Brushes/SM_Torus.SM_Torus', material='/Game/Materials/Instances/Characters/S_Meso/Base/MI_PaintedMetal_Meso_TS1.MI_PaintedMetal_Meso_TS1',
         vector={MetalPaint=rgba(0.03, 0.032, 0.035), TriangularPaint=rgba(0.03, 0.032, 0.035), RawMetal=rgba(0.03, 0.032, 0.035), Silicone=rgba(0.03, 0.032, 0.035)}, scalar={Roughness=0.5, Metallic=0.3},
-        attach={role='neck', fit={bone='Neck', anchor='bone', offset={0, 0, 0}, size={26, 26, 6}}}},
-    {id='accessory-back-ring', version=1, kind='accessory', name='Back ring', models={'Meso', 'Endo'}, parts={'body'},
-        mesh='/Game/Art/StaticMeshes/KMC/Brushes/SM_Torus.SM_Torus', material='/Game/Materials/Instances/Characters/S_Meso/Base/MI_PaintedMetal_Meso_TS1.MI_PaintedMetal_Meso_TS1',
-        vector={MetalPaint=rgba(0.02, 0.6, 0.3), TriangularPaint=rgba(0.02, 0.6, 0.3), RawMetal=rgba(0.02, 0.6, 0.3), Silicone=rgba(0.02, 0.6, 0.3)}, scalar={Roughness=0.3, Metallic=0.2},
-        attach={role='spine', fit={bone='Chest', anchor='bone', offset={-18, 0, 4}, size={3, 24, 24}}}},
+        attach={role='neck', fit={bone='Neck', anchor='bone', offset={0, 0, 0}, size={24, 24, 5}}}},
 }
 
 local function finite(n, lo, hi) return type(n) == 'number' and n == n and n >= lo and n <= hi end

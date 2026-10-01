@@ -571,48 +571,49 @@ namespace aimmod
         // model dithers away to scattered pixels. Apply the game's defaults.
         if (!ApplyMaterialDataDefaults(mesh)) Log("cosmetics preview: material data defaults unavailable; the model may look faded");
 
-        // Catalog tints: a paint job on fresh dynamic instances. A skin's
-        // material may use a master without the tint's parameters, so the
-        // parent is the mesh's own base material for the slot when that one has
-        // them (as in matches), else the slot's material. Each slot's
-        // parameters are logged once per look.
+        // Catalog tints keep the skin: on fresh dynamic instances of each slot's
+        // own material, only its paint and accent parameters are recoloured
+        // (cosmetics::MapColours), the same as on avatars in matches. Each
+        // slot's parameters and what was recoloured are logged once per look.
         if (!request.vectors.empty() || !request.scalars.empty())
         {
+            cosmetics::Item tint;
+            tint.id = "preview";
+            for (const PreviewParam& param : request.vectors) tint.vector.push_back({param.name, {param.value[0], param.value[1], param.value[2], param.value[3]}});
+            for (const PreviewParam& param : request.scalars) tint.scalar.push_back({param.name, param.value[0]});
             UObject* materials = Default(STR("/Script/Engine.Default__KismetMaterialLibrary"));
-            UObject* world = stage; // a live world context
-            std::set<std::string> vectorNames, scalarNames;
-            for (const PreviewParam& param : request.vectors) vectorNames.insert(param.name);
-            for (const PreviewParam& param : request.scalars) scalarNames.insert(param.name);
             for (std::int32_t slot = 0; slot < 16; ++slot)
             {
                 UObject* material = nullptr;
                 Call(mesh, STR("/Script/Engine.PrimitiveComponent:GetMaterial"), [&](const std::wstring& n, FProperty*, std::uint8_t* v) {
                     if (n == STR("ElementIndex")) std::memcpy(v, &slot, sizeof(slot));
                 }, &material);
-                if (!material) break;
-                UObject* base = m_params.MeshDefault(mesh, slot);
-                const bool skinFits = m_params.Has(material, vectorNames, scalarNames), baseFits = base && m_params.Has(base, vectorNames, scalarNames);
-                Log("cosmetics preview: slot " + std::to_string(slot) + " skin " + m_params.Describe(material) + (base && base != material ? "; base " + m_params.Describe(base) : "") +
-                    (baseFits ? " -> tint on base" : skinFits ? " -> tint on skin" : " -> tint parameters missing"));
-                if (baseFits) material = base;
-                else if (!skinFits) continue;
+                if (!Alive(material)) break;
+                std::set<std::string> vectors, scalars, textures;
+                m_params.Names(material, vectors, scalars, textures);
+                const auto colours = cosmetics::MapColours(tint, vectors);
+                const bool baseScheme = vectors.contains("MetalPaint") && vectors.contains("TriangularPaint");
+                std::string recoloured;
+                for (const auto& [name, c] : colours) recoloured += " " + name;
+                Log("cosmetics preview: slot " + std::to_string(slot) + " " + m_params.Describe(material) + " -> " + (colours.empty() ? std::string("nothing to recolour") : "recolours" + recoloured));
+                if (colours.empty()) continue;
                 UObject* mid = nullptr;
                 Call(materials, STR("/Script/Engine.KismetMaterialLibrary:CreateDynamicMaterialInstance"), [&](const std::wstring& n, FProperty*, std::uint8_t* v) {
-                    if (n == STR("WorldContextObject")) WriteObject(v, world);
+                    if (n == STR("WorldContextObject")) WriteObject(v, stage);
                     else if (n == STR("Parent")) WriteObject(v, material);
                 }, &mid);
-                if (!mid) continue;
-                for (const PreviewParam& param : request.vectors)
+                if (!Alive(mid)) continue;
+                for (const auto& [name, c] : colours)
                     Call(mid, STR("/Script/Engine.MaterialInstanceDynamic:SetVectorParameterValue"), [&](const std::wstring& n, FProperty* p, std::uint8_t* v) {
-                        if (n == STR("ParameterName")) WriteFName(v, p, Widen(param.name));
-                        else if (n == STR("Value"))
-                            WriteFloats(v, p, {static_cast<float>(param.value[0]), static_cast<float>(param.value[1]), static_cast<float>(param.value[2]), static_cast<float>(param.value[3])});
+                        if (n == STR("ParameterName")) WriteFName(v, p, Widen(name));
+                        else if (n == STR("Value")) WriteFloats(v, p, {static_cast<float>(c.r), static_cast<float>(c.g), static_cast<float>(c.b), static_cast<float>(c.a)});
                     });
-                for (const PreviewParam& param : request.scalars)
-                    Call(mid, STR("/Script/Engine.MaterialInstanceDynamic:SetScalarParameterValue"), [&](const std::wstring& n, FProperty* p, std::uint8_t* v) {
-                        if (n == STR("ParameterName")) WriteFName(v, p, Widen(param.name));
-                        else if (n == STR("Value")) WriteFloats(v, p, {static_cast<float>(param.value[0])});
-                    });
+                if (baseScheme)
+                    for (const PreviewParam& param : request.scalars)
+                        Call(mid, STR("/Script/Engine.MaterialInstanceDynamic:SetScalarParameterValue"), [&](const std::wstring& n, FProperty* p, std::uint8_t* v) {
+                            if (n == STR("ParameterName")) WriteFName(v, p, Widen(param.name));
+                            else if (n == STR("Value")) WriteFloats(v, p, {static_cast<float>(param.value[0])});
+                        });
                 Call(mesh, STR("/Script/Engine.PrimitiveComponent:SetMaterial"), [&](const std::wstring& n, FProperty*, std::uint8_t* v) {
                     if (n == STR("ElementIndex")) std::memcpy(v, &slot, sizeof(slot));
                     else if (n == STR("Material")) WriteObject(v, mid);
@@ -741,7 +742,17 @@ namespace aimmod
         {
             UObject* material = part.materials[static_cast<std::size_t>(slot)].Get();
             if (!Alive(material)) continue;
+            std::set<std::string> vectors, scalars, textures;
+            m_params.Names(material, vectors, scalars, textures);
+            const auto colours = finish ? cosmetics::MapColours(*finish, vectors) : std::vector<std::pair<std::string, cosmetics::Color>>{};
             if (finish)
+            {
+                std::string recoloured;
+                for (const auto& [name, c] : colours) recoloured += " " + name;
+                Log("cosmetics preview: weapon slot " + std::to_string(slot) + " " + m_params.Describe(material) + " -> " +
+                    (colours.empty() ? std::string("nothing to recolour") : "recolours" + recoloured));
+            }
+            if (finish && !colours.empty())
             {
                 UObject* mid = nullptr;
                 Call(Default(STR("/Script/Engine.Default__KismetMaterialLibrary")), STR("/Script/Engine.KismetMaterialLibrary:CreateDynamicMaterialInstance"),
@@ -752,7 +763,7 @@ namespace aimmod
                      &mid);
                 if (Alive(mid))
                 {
-                    for (const auto& [name, c] : finish->vector)
+                    for (const auto& [name, c] : colours)
                         Call(mid, STR("/Script/Engine.MaterialInstanceDynamic:SetVectorParameterValue"), [&](const std::wstring& n, FProperty* p, std::uint8_t* v) {
                             if (n == STR("ParameterName")) WriteFName(v, p, Widen(name));
                             else if (n == STR("Value")) WriteFloats(v, p, {static_cast<float>(c.r), static_cast<float>(c.g), static_cast<float>(c.b), static_cast<float>(c.a)});

@@ -108,10 +108,10 @@ namespace cosmetics_checks
         // pak items stay drafts until the pak ships.
         std::string error;
         auto shipped = ParseCatalog(ReadText(std::filesystem::path(AIMMOD_SOURCE_DIR) / "cosmetics" / "catalog.json"), &error);
-        CHECK(shipped && shipped->errors.empty() && shipped->version == 3, "shipped catalog parses");
+        CHECK(shipped && shipped->errors.empty() && shipped->version == 4, "shipped catalog parses");
         std::vector<std::string> errors;
         Index byId = BuildIndex(shipped ? shipped->items : std::vector<Item>{}, errors);
-        CHECK(errors.empty() && byId.size() == 18 && shipped && byId.size() == shipped->items.size(), "shipped catalog validates");
+        CHECK(errors.empty() && byId.size() == 16 && shipped && byId.size() == shipped->items.size(), "shipped catalog validates");
         bool pakDrafts = true, freeModels = true;
         for (const auto& [id, item] : byId)
         {
@@ -120,7 +120,7 @@ namespace cosmetics_checks
         }
         CHECK(pakDrafts && freeModels, "pak items are drafts; every item is on free base models");
         const auto pickable = Pickable(byId);
-        CHECK(pickable.size() == 17 && std::none_of(pickable.begin(), pickable.end(), [](const Item* i) { return i->draft || i->pak; }),
+        CHECK(pickable.size() == 15 && std::none_of(pickable.begin(), pickable.end(), [](const Item* i) { return i->draft || i->pak; }),
               "the tints, finishes and game-mesh accessories are offered in the picker, drafts are not");
 
         ResolveOptions none, drafted{true, {}}, paks{true, {"AimModCosmetics-1.pak"}};
@@ -129,9 +129,9 @@ namespace cosmetics_checks
         CHECK(!Resolve(byId, "meso-pattern-stripes", drafted), "draft pak item needs a verified pak");
         CHECK(!Resolve(byId, "meso-pattern-stripes", none), "draft hidden by default");
         CHECK(Resolve(byId, "meso-pattern-stripes", paks) != nullptr, "pak item with a verified pak");
-        Plan dressed = PlanAvatar(byId, {{"accessory-halo", 1}, {"accessory-collar", 1}, {"accessory-back-ring", 1}, {"accessory-crown", 1}}, none, "Endo");
-        CHECK(dressed.head && dressed.head->id == "accessory-halo" && dressed.neck && dressed.spine && dressed.skipped.size() == 1,
-              "shipped accessories: one per head, neck and back");
+        Plan dressed = PlanAvatar(byId, {{"accessory-halo", 2}, {"accessory-collar", 2}, {"accessory-headband", 2}}, none, "Endo");
+        CHECK(dressed.head && dressed.head->id == "accessory-halo" && dressed.neck && dressed.skipped.size() == 1,
+              "shipped accessories: one per head and neck");
         Plan meso = PlanAvatar(byId, {{"tint-gold", 1}}, none, "Meso"), endo = PlanAvatar(byId, {{"tint-gold", 1}}, none, "Endo");
         CHECK(meso.body && meso.body->id == "tint-gold" && endo.body && endo.body->id == "tint-gold", "tints fit both free models");
         Plan own = PlanLocal(byId, {{"finish-ice", 1}}, none, "Rifle");
@@ -345,6 +345,43 @@ namespace cosmetics_checks
         CHECK(plan.head && plan.head->id == "ring" && plan.neck && plan.neck->id == "collar" && plan.skipped.empty(), "one head and one neck accessory");
     }
 
+    void ColourChecks()
+    {
+        std::string error;
+        auto shipped = ParseCatalog(ReadText(std::filesystem::path(AIMMOD_SOURCE_DIR) / "cosmetics" / "catalog.json"), &error);
+        std::vector<std::string> errors;
+        Index byId = BuildIndex(shipped ? shipped->items : std::vector<Item>{}, errors);
+        const Item& mint = byId.at("tint-mint");
+        const Item& gold = byId.at("tint-gold");
+        auto find = [](const std::vector<std::pair<std::string, Color>>& m, const std::string& name) -> const Color* {
+            for (const auto& [n, c] : m)
+                if (n == name) return &c;
+            return nullptr;
+        };
+        // Skin masters from the live log: McCree, Genji, Tracer.
+        const std::set<std::string> mccree = {"BodyColor", "EmissiveColor", "HeadColor", "MetalBlack", "MetalRed", "MetalYellow", "RawMetal", "SiliconeBlack", "SiliconeBrown", "SiliconeWhite", "SiliconeYellow"};
+        const std::set<std::string> genji = {"BodyColor", "EmissiveColor", "HeadColor", "HexEmissiveColor", "HexPaint", "MetalBlack", "MetalBrown", "RawMetal", "Silicone"};
+        const std::set<std::string> tracer = {"BodyColor", "EmissiveColor", "HeadColor", "MetalBlack", "MetalBrown", "MetalGray", "MetalOrange", "MetalPattern", "MetalWhite", "MetalYellow", "RawMetal"};
+        const std::set<std::string> base = {"AccentColor", "BodyColor", "Color", "EmissiveColor", "HeadColor", "MetalPaint", "RawMetal", "Silicone", "TriangularPaint"};
+        const std::set<std::string> pistol = {"AccentColor", "Emissive"};
+        auto m = MapColours(mint, mccree);
+        CHECK(m.size() == 2 && find(m, "MetalRed") && find(m, "MetalYellow") && find(m, "MetalRed")->g == 0.6 && !find(m, "MetalBlack") && !find(m, "BodyColor") && !find(m, "RawMetal"),
+              "McCree: the tint recolours the red and yellow paint only; black, silicone and body colour stay the skin's");
+        auto g = MapColours(gold, mccree);
+        CHECK(g.size() == 2 && find(g, "MetalRed")->r != find(m, "MetalRed")->r, "McCree in Mint and in Gold differ");
+        auto h = MapColours(mint, genji);
+        CHECK(h.size() == 2 && find(h, "HexPaint") && find(h, "HexEmissiveColor") && !find(h, "EmissiveColor") &&
+                  0.2126 * find(h, "HexEmissiveColor")->r + 0.7152 * find(h, "HexEmissiveColor")->g + 0.0722 * find(h, "HexEmissiveColor")->b <= 0.5 + 1e-9,
+              "Genji: hex paint and a dimmed hex glow");
+        auto t = MapColours(mint, tracer);
+        CHECK(t.size() == 3 && find(t, "MetalOrange") && find(t, "MetalPattern") && find(t, "MetalYellow") && find(t, "MetalPattern")->r == 0.86, "Tracer: orange, pattern and yellow alternate main and trim");
+        auto b = MapColours(mint, base);
+        CHECK(b.size() == 4 && find(b, "MetalPaint") && find(b, "TriangularPaint") && find(b, "Silicone"), "the base paint material takes the tint's own scheme");
+        auto w = MapColours(byId.at("finish-ice"), pistol);
+        CHECK(w.size() == 2 && find(w, "AccentColor")->b == 1 && find(w, "Emissive"), "weapon finishes recolour the accent and its glow");
+        CHECK(MapColours(mint, {"BodyColor", "MetalBlack", "Silicone"}).empty(), "nothing to recolour: the skin stays as it is");
+    }
+
     void Json()
     {
         CHECK(aimmod::json::Parse(R"({"a":[1,-2.5e1,true,null,"\u00e9\ud83d\ude00"]})").has_value(), "json values");
@@ -365,6 +402,7 @@ namespace cosmetics_checks
         ManifestChecks();
         LooksChecks();
         AccessoryChecks();
+        ColourChecks();
         PlanChecks();
     }
 } // namespace cosmetics_checks

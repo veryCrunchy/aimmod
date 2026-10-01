@@ -4,7 +4,7 @@ local Cat = require('CosmeticsCatalog')
 -- The shipped catalog is structurally valid. Parameter items use only the
 -- parameter names the probe found; pak items stay drafts until the pak ships.
 local probed = {
-    body = {vector={MetalPaint=true, TriangularPaint=true, RawMetal=true, Silicone=true}, scalar={Roughness=true, Metallic=true}},
+    body = {vector={MetalPaint=true, TriangularPaint=true, RawMetal=true, Silicone=true}, scalar={Roughness=true, Metallic=true, FullBright=true}},
     weapon = {vector={AccentColor=true, Emissive=true}, scalar={}},
 }
 local byId, errors = Cat.index()

@@ -250,19 +250,24 @@ namespace aimmod
                     return;
                 }
             }
-            // Avatar tints are a paint job on the model's own base material (the
-            // mesh's default for the slot): a skin's material may use another
-            // master without the probed parameters. Otherwise the slot's material.
+            // Tints and finishes keep the skin: they recolour only the paint and
+            // accent parameters this slot's own material has (MapColours).
             UObject* parent = material;
-            if (want.scope == Scope::Avatar && item.textures.empty())
+            std::vector<std::pair<std::string, cosmetics::Color>> colours;
+            bool baseScheme = false;
+            if (item.textures.empty())
             {
-                std::set<std::string> vectorNames, scalarNames;
-                for (const auto& [name, c] : item.vector) vectorNames.insert(name);
-                for (const auto& [name, v] : item.scalar) scalarNames.insert(name);
-                UObject* base = m_params.MeshDefault(component, index);
-                if (base && base != material && m_params.Has(base, vectorNames, scalarNames)) parent = base;
+                std::set<std::string> vectors, scalars, textureNames;
+                m_params.Names(material, vectors, scalars, textureNames);
+                colours = cosmetics::MapColours(item, vectors);
+                baseScheme = vectors.contains("MetalPaint") && vectors.contains("TriangularPaint");
+                if (colours.empty())
+                {
+                    Once("nothing|" + item.id + "|" + ObjectName(material), item.id + ": nothing to recolour on " + ObjectName(material));
+                    continue;
+                }
             }
-            if (parent == material && !Fits(material, item)) continue;
+            else if (!Fits(material, item)) continue;
             std::vector<std::pair<std::string, UObject*>> textures;
             bool texturesOk = true;
             for (const auto& [name, path] : item.textures)
@@ -281,7 +286,7 @@ namespace aimmod
                 },
                 [&](const std::uint8_t* buffer, const std::vector<Param>& params) { mid = ReturnObject(buffer, params); });
             if (!Live(mid)) continue;
-            for (const auto& [name, c] : item.vector)
+            for (const auto& [name, c] : item.textures.empty() ? colours : item.vector)
                 m_setVector.Call(mid, [&](std::uint8_t* value, const Param& p) {
                     if (p.kind == Kind::Name) WriteName(value, p, name);
                     else if (p.structType)
@@ -292,11 +297,13 @@ namespace aimmod
                         SetStructField(value, p.structType, "A", c.a);
                     }
                 });
-            for (const auto& [name, v] : item.scalar)
-                m_setScalar.Call(mid, [&](std::uint8_t* value, const Param& p) {
-                    if (p.kind == Kind::Name) WriteName(value, p, name);
-                    else if (p.kind == Kind::Float) WriteFloat(value, v);
-                });
+            // Finish scalars (roughness, metallic) only on the base paint material: on a skin they would change its look.
+            if (baseScheme || !item.textures.empty())
+                for (const auto& [name, v] : item.scalar)
+                    m_setScalar.Call(mid, [&](std::uint8_t* value, const Param& p) {
+                        if (p.kind == Kind::Name) WriteName(value, p, name);
+                        else if (p.kind == Kind::Float) WriteFloat(value, v);
+                    });
             for (const auto& [name, texture] : textures)
                 m_setTexture.Call(mid, [&](std::uint8_t* value, const Param& p) {
                     if (p.kind == Kind::Name) WriteName(value, p, name);

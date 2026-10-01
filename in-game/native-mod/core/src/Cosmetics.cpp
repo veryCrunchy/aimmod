@@ -7,6 +7,7 @@
 #include <bcrypt.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
@@ -262,6 +263,60 @@ namespace aimmod::cosmetics
         x[0] = cp * cy, x[1] = cp * sy, x[2] = sp;
         y[0] = sr * sp * cy - cr * sy, y[1] = sr * sp * sy + cr * cy, y[2] = -sr * cp;
         z[0] = -(cr * sp * cy + sr * sy), z[1] = cy * sr - cr * sp * sy, z[2] = cr * cp;
+    }
+
+    Colours ItemColours(const Item& item)
+    {
+        Colours c;
+        bool main = false;
+        for (const auto& [name, v] : item.vector)
+        {
+            if ((name == "MetalPaint" || name == "AccentColor") && !main) c.main = v, main = true;
+            else if (name == "TriangularPaint") c.trim = v, c.hasTrim = true;
+            else if (name == "RawMetal") c.metal = v, c.hasMetal = true;
+            else if (name == "Emissive") c.glow = v, c.hasGlow = true;
+        }
+        if (!c.hasTrim) c.trim = c.main;
+        if (!c.hasGlow) c.glow = c.main;
+        return c;
+    }
+
+    std::vector<std::pair<std::string, Color>> MapColours(const Item& item, const std::set<std::string>& names)
+    {
+        std::vector<std::pair<std::string, Color>> out;
+        // The base paint material: the item's own scheme.
+        if (names.contains("MetalPaint") && names.contains("TriangularPaint"))
+        {
+            for (const auto& [name, v] : item.vector)
+                if (names.contains(name)) out.push_back({name, v});
+            return out;
+        }
+        const Colours c = ItemColours(item);
+        auto lower = [](std::string s) {
+            for (char& ch : s) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+            return s;
+        };
+        // Glow capped by luminance so a finish never makes a beacon.
+        auto dim = [](Color v, double limit) {
+            const double l = 0.2126 * v.r + 0.7152 * v.g + 0.0722 * v.b;
+            if (l > limit && l > 0) v.r *= limit / l, v.g *= limit / l, v.b *= limit / l;
+            return v;
+        };
+        static const std::set<std::string> neutral = {"metalblack", "metalwhite", "metalgray", "metalgrey", "metalbrown", "rawmetal"};
+        int accents = 0;
+        for (const std::string& name : names) // std::set: name order
+        {
+            const std::string n = lower(name);
+            if (n == "accentcolor" || (n.find("accent") != std::string::npos && n.find("emissive") == std::string::npos))
+                out.push_back({name, c.main});
+            else if (n == "emissive")
+                out.push_back({name, dim(c.glow, 0.6)});
+            else if (n != "emissivecolor" && n.size() > 13 && n.ends_with("emissivecolor"))
+                out.push_back({name, dim(c.main, 0.5)});
+            else if ((n.starts_with("metal") && !neutral.contains(n)) || (n.ends_with("paint") && n != "metalpaint") || n == "leathercolor")
+                out.push_back({name, accents++ % 2 == 0 ? c.main : c.trim});
+        }
+        return out;
     }
 
     std::optional<Placement> PlaceAccessory(const Fit& fit, const double localMin[3], const double localMax[3], const double anchor[3], const double forward[3])
