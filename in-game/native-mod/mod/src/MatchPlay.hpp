@@ -49,6 +49,11 @@ namespace aimmod
         void Release(const char* why);
         std::optional<double> Health(game::UObject* character) const;
         void SetHealth(game::UObject* character, double health);
+        // round-state.tsv: spawn teleports, freeze, loadout, CS round respawns.
+        void TickRound(double now, const std::string& scenario, bool inChallenge, bool loading);
+        bool BindRound();
+        void ReleaseRound(const char* why);
+        void ApplyLoadout(game::UObject* character, const RoundState::Loadout& loadout);
 
         game::Bindings& m_b;
         game::Scene& m_scene;
@@ -76,5 +81,22 @@ namespace aimmod
         double m_nextHealthCheck{};
         std::string m_closedReason;
         std::uint32_t m_applied{};
+
+        // Round state.
+        game::Getter m_teleport, m_controlRotation, m_ignoreMove, m_moveIgnored, m_setWeapon, m_loadWeapons, m_selectWeapon, m_selectedWeapon;
+        game::Path m_selectable; // WeaponHandler.SelectableWeapon (TArray<bool>)
+        bool m_roundBound{}, m_roundDisabled{}, m_roundEngaged{}, m_frozen{};
+        std::uint64_t m_roundVersion{~0ull};
+        std::shared_ptr<const RoundState> m_round;
+        std::string m_spawnId, m_loadoutKey, m_roundClosed;
+        game::UObject* m_loadoutHandler{};
+        std::vector<std::pair<int, bool>> m_selectableBefore; // slot -> original SelectableWeapon
+        bool m_loadoutChanged{};
+        struct PendingSpawn
+        {
+            RoundState::Spawn spawn;
+            double notBefore{}, giveUp{};
+        };
+        std::optional<PendingSpawn> m_pendingSpawn;
     };
 } // namespace aimmod

@@ -66,6 +66,13 @@ namespace aimmod
             std::uint64_t version{};
         };
         PlayStateSnapshot playState() const;
+        // round-state.tsv (service, same rules as play-state.tsv).
+        struct RoundStateSnapshot
+        {
+            std::shared_ptr<const RoundState> state;
+            std::uint64_t version{};
+        };
+        RoundStateSnapshot roundState() const;
 
         // Cosmetics inputs (DESIGN.md "Cosmetics"): the installed catalog,
         // verified once against its manifest by the writer thread, and the
@@ -160,6 +167,9 @@ namespace aimmod
         std::shared_ptr<const PlayState> m_playState;
         std::uint64_t m_playStateVersion{}, m_playStateStamp{}, m_lastPlayStateCheck{}, m_playStateSeenAt{};
         void ReadPlayState(std::uint64_t now);
+        std::shared_ptr<const RoundState> m_roundState;
+        std::uint64_t m_roundStateVersion{}, m_roundStateStamp{};
+        void ReadRoundState(std::uint64_t now);
         struct QuitStats
         {
             std::string scenario;

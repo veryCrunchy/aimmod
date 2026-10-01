@@ -491,6 +491,32 @@ If `HandleDamage`, `SetHealth`, `Respawn`, `OnCharacterKilled`,
 the character class, match play is disabled for the session and the missing
 names are logged.
 
+`round-state.tsv` (service; `in-game/docs/game-modes.md` 6.2.1; same gate,
+freshness and whole-file validation as `play-state.tsv`):
+
+```
+AIMMOD_ROUND_1	<seq>
+match	<scenario name>
+spawn	<id>	<x>	<y>	<z>	<yaw>
+phase	<freeze|live|planted|end|over>	<frozen 0/1>	<buy 0/1>	<ends unix ms>
+loadout	<primary profile or ->	<pistol profile or ->	<armour>	<helmet 0/1>	<kit 0/1>
+```
+
+- `spawn`: `K2_TeleportTo` (and the controller's yaw) once per id, retried
+  for 2 s if the game refuses the spot. A spawn already present when the gate
+  opens is not replayed, except during a `freeze` phase. At a `freeze` phase
+  (CS round start) a dead player is respawned first (`Respawn`).
+- `frozen`: `Controller:SetIgnoreMoveInput(true)` (looking stays free),
+  re-applied if a respawn clears it, released when the phase ends or the gate
+  closes.
+- `loadout`: `WeaponHandler:SetWeaponProfileByString` on slots 0 and 1; `-`
+  empties a slot by clearing its `SelectableWeapon` entry (and selects the
+  other slot). Re-applied for a new weapon handler. When the gate closes the
+  original `SelectableWeapon` values come back and `LoadWeapons` restores the
+  scenario's loadout. Armour, helmet and kit are the service's (HUD) concern.
+- Missing `K2_TeleportTo`, `SetControlRotation`, `SetIgnoreMoveInput`,
+  `SetWeaponProfileByString` or `LoadWeapons` disables round state (logged).
+
 ## Cosmetics
 
 Policy and plan: `in-game/docs/cosmetics.md`. Core (`core/Cosmetics`, tested
