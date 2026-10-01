@@ -876,6 +876,78 @@ be merged into it later. The stage-3 kit remains the fallback test tool.
 | `avatar` | `peer`, then either `w`, `h`, `rgba` (base64, w·h·4 bytes) or `missing` true |
 | `error` | `code`, `message`: for example `rejected` (a host refused us) or `p2p` |
 
+### Contract additions: Workshop downloads and bulk transfers (still version 1)
+
+These additions are backward compatible. `ready` now also carries
+`features: ["lobby","p2p","ugc","xfer"]`, `maxChunk` (32768) and `xferWindow`
+(4), so the service can feature-detect.
+
+**Workshop (ISteamUGC).**
+
+- The bridge uses `STEAMUGC_INTERFACE_VERSION014`, the version the game's 1.47
+  flat exports wrap and the one the game itself uses.
+- It only reads item state, subscribes and requests downloads. It never
+  publishes, edits, votes on or unsubscribes from items.
+- Item ids are Workshop `PublishedFileId`s as decimal strings.
+
+| Command | Fields | Result / events |
+| --- | --- | --- |
+| `ugc.state` | `item` | `ugc.state` {item, state (EItemState bits), subscribed, installed, downloading, needsUpdate, downloaded, total, folder?} |
+| `ugc.subscribe` | `item` | `result` once Steam answers (`SubscribeItem` call result 1313), then `ugc.state` |
+| `ugc.download` | `item`, `highPriority` (default true) | `result` (`DownloadItem` accepted). Then `ugc.progress` {item, downloaded, total}, polled every 500 ms and sent only on change. Ends with `ugc.installed` {item, folder} or `ugc.error` {item, result, message}. At most 16 downloads at once, each with a 15-minute limit. |
+
+`ItemInstalled_t` (3405) and `DownloadItemResult_t` (3406) are passive
+listeners, used only for items the bridge was asked to download. The game
+receives the same broadcasts, as it does for its own Workshop use.
+`ugc.installed.folder` is the local install folder from
+`GetItemInstallInfo`. The service copies or links what it needs from there.
+
+**Bulk transfers (host-to-joiner file streaming).** These are chunked JSON
+messages: no second pipe frame type, so the pipe stays one simple framing.
+
+- **Chunk size:** a chunk is up to `maxChunk` = 32 KiB of raw bytes, sent as
+  base64. That's about 43.7 KB, inside one 64 KiB pipe frame and far below
+  Steam's 512 KiB reliable-message limit.
+- **On the wire:** P2P frames are AMP1 `Chunk` (u32 transfer, u32 index,
+  bytes), `ChunkAck` (u32 transfer, u32 index) and `Cancel` (u32 transfer,
+  u16 reason).
+- **Priority:** after the handshake, each side configures two lanes on its
+  connection with `ConfigureConnectionLanes`: lane 0 at priority 0 for
+  `p2p.send` match traffic, and lane 1 at priority 1 for chunks, sent with
+  `SendMessages`. So match frames always overtake queued file data. If
+  lanes can't be configured, chunks fall back to lane 0, and the window
+  below still bounds the queue.
+- **Flow control:** credit-based. A transfer may have at most `xferWindow`
+  (4) unacknowledged chunks, so 128 KiB in flight. The receiving bridge sends
+  `ChunkAck` only once the chunk has been handed to its service over the
+  pipe, so a slow receiver slows the sender.
+- **Limits:** at most 4 transfers per peer in each direction. Transfer ids are
+  chosen by the sender's service: 1..2^31-1 and unique per peer while open.
+
+| Command | Fields | Notes |
+| --- | --- | --- |
+| `xfer.chunk` | `peer`, `transfer`, `index` (0..2^31-1), `data` base64 (1–32768 bytes) | Fails `window` when 4 chunks are unacknowledged: wait for `xfer.ack`. Fails `busy` with 4 open transfers to that peer, `not-connected` without a ready link. Resending an unacknowledged index is allowed. |
+| `xfer.cancel` | `peer`, `transfer`, `reason` `cancel`\|`complete`\|`error` (default `cancel`) | Sends `Cancel` and drops the state. The sender uses `complete` after the receiver has confirmed the file, typically through a service message. |
+
+| Event | Fields |
+| --- | --- |
+| `xfer.chunk` | `peer`, `transfer`, `index`, `data` (receiver side; ordered per transfer, because chunks are reliable on one lane) |
+| `xfer.ack` | `peer`, `transfer`, `index`, `credit` (free window slots) |
+| `xfer.end` | `peer`, `transfer`, `reason` (`complete`, `cancel`, `error` or `disconnected`), `by` (`peer`, or `local` for a disconnect) |
+
+**What the service owns:**
+
+- The offer and accept messages (file name, size, SHA-256, chunk count),
+  carried as normal `p2p.send` service frames.
+- Writing the chunks to a temporary file, checking the hash, and installing it
+  into `Saved\SaveGames\Scenarios` or `Maps`.
+- Retry policy: resend unacknowledged chunks after a reconnect, or restart
+  the transfer.
+
+**Testing so far:** the unit tests cover encoding of all three frames, the
+size bounds, and a chunk's base64 fitting in a pipe frame. The Workshop
+commands and a live transfer still need the game (for UGC) and two
+accounts (for P2P).
 ### Mapping to the service's `IMultiplayerTransport`
 
 This is the lobby UI agent's model on `feat/kovaaks-multiplayer-ui`

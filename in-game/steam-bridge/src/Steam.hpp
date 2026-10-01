@@ -25,6 +25,12 @@ namespace bridge
     constexpr int CbLobbyCreated = 513;
     constexpr int CbLobbyEnter = 504;
     constexpr int CbConnectionStatusChanged = 1221;
+    constexpr int CbItemInstalled = 3405;              // k_iClientUGCCallbacks + 5
+    constexpr int CbDownloadItemResult = 3406;         // k_iClientUGCCallbacks + 6
+    constexpr int CbRemoteStorageSubscribe = 1313;     // RemoteStorageSubscribePublishedFileResult_t (SubscribeItem call result)
+
+    // EItemState
+    constexpr std::uint32_t ItemSubscribed = 1, ItemInstalled = 4, ItemNeedsUpdate = 8, ItemDownloading = 16, ItemDownloadPending = 32;
 
 #pragma pack(push, 8)
     struct LobbyEnter_t
@@ -47,6 +53,22 @@ namespace bridge
         std::uint64_t m_steamIDLobby;
         std::uint64_t m_steamIDFriend;
     };
+    struct ItemInstalled_t
+    {
+        std::uint32_t m_unAppID;
+        std::uint64_t m_nPublishedFileId;
+    };
+    struct DownloadItemResult_t
+    {
+        std::uint32_t m_unAppID;
+        std::uint64_t m_nPublishedFileId;
+        int m_eResult;
+    };
+    struct RemoteStorageSubscribePublishedFileResult_t
+    {
+        int m_eResult;
+        std::uint64_t m_nPublishedFileId;
+    };
     struct GameRichPresenceJoinRequested_t
     {
         std::uint64_t m_steamIDFriend;
@@ -57,6 +79,9 @@ namespace bridge
     static_assert(sizeof(FriendGameInfo_t) == 24);
     static_assert(sizeof(GameLobbyJoinRequested_t) == 16);
     static_assert(sizeof(GameRichPresenceJoinRequested_t) == 264);
+    static_assert(sizeof(ItemInstalled_t) == 16);
+    static_assert(sizeof(DownloadItemResult_t) == 24);
+    static_assert(sizeof(RemoteStorageSubscribePublishedFileResult_t) == 16);
 
     struct Steam
     {
@@ -67,7 +92,7 @@ namespace bridge
         steamabi::PFN_SteamAPI_RegisterCallback RegisterCallback = nullptr;
         steamabi::PFN_SteamAPI_UnregisterCallback UnregisterCallback = nullptr;
 
-        std::intptr_t user = 0, friends = 0, mm = 0, utils = 0;
+        std::intptr_t user = 0, friends = 0, mm = 0, utils = 0, ugc = 0;
         steamabi::ISteamNetworkingSockets* sockets = nullptr;
         steamabi::ISteamNetworkingUtils* netUtils = nullptr;
 
@@ -113,6 +138,13 @@ namespace bridge
         const char* (*F_GetFriendRichPresence)(std::intptr_t, std::uint64_t, const char*) = nullptr;
         void (*F_RequestFriendRichPresence)(std::intptr_t, std::uint64_t) = nullptr;
         void (*F_ActivateGameOverlayInviteDialog)(std::intptr_t, std::uint64_t) = nullptr;
+
+        // ISteamUGC (STEAMUGC_INTERFACE_VERSION014, the version the 1.47 flat exports wrap). Read and download only.
+        steamabi::SteamAPICall_t (*UGC_SubscribeItem)(std::intptr_t, std::uint64_t) = nullptr;
+        std::uint32_t (*UGC_GetItemState)(std::intptr_t, std::uint64_t) = nullptr;
+        bool (*UGC_GetItemInstallInfo)(std::intptr_t, std::uint64_t, std::uint64_t*, char*, std::uint32_t, std::uint32_t*) = nullptr;
+        bool (*UGC_GetItemDownloadInfo)(std::intptr_t, std::uint64_t, std::uint64_t*, std::uint64_t*) = nullptr;
+        bool (*UGC_DownloadItem)(std::intptr_t, std::uint64_t, bool) = nullptr;
 
         // Resolves everything from an already-loaded module. Returns false and
         // names the first missing item in `missing` if anything is absent.

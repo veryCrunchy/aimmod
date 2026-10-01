@@ -278,7 +278,7 @@ namespace steamabi
         virtual void Slot10_GetConnectionName() = 0;
         virtual EResult SendMessageToConnection(HSteamNetConnection conn, const void* data, std::uint32_t size, int flags,
                                                 std::int64_t* outMessageNumber) = 0; // 11
-        virtual void Slot12_SendMessages() = 0;
+        virtual void SendMessages(int nMessages, SteamNetworkingMessage_t* const* messages, std::int64_t* outMessageNumberOrResult) = 0; // 12
         virtual void Slot13_FlushMessagesOnConnection() = 0;
         virtual int ReceiveMessagesOnConnection(HSteamNetConnection conn, SteamNetworkingMessage_t** out, int max) = 0; // 14
         virtual bool GetConnectionInfo(HSteamNetConnection conn, SteamNetConnectionInfo_t* info) = 0; // 15
@@ -287,7 +287,7 @@ namespace steamabi
         virtual void Slot18_GetListenSocketAddress() = 0;
         virtual bool CreateSocketPair(HSteamNetConnection* out1, HSteamNetConnection* out2, bool useNetworkLoopback,
                                       const SteamNetworkingIdentity* identity1, const SteamNetworkingIdentity* identity2) = 0; // 19
-        virtual void Slot20_ConfigureConnectionLanes() = 0;
+        virtual EResult ConfigureConnectionLanes(HSteamNetConnection conn, int nNumLanes, const int* lanePriorities, const std::uint16_t* laneWeights) = 0; // 20
         virtual void Slot21_GetIdentity() = 0;
         virtual ESteamNetworkingAvailability InitAuthentication() = 0;                                     // 22
         virtual ESteamNetworkingAvailability GetAuthenticationStatus(SteamNetAuthenticationStatus_t* details) = 0; // 23

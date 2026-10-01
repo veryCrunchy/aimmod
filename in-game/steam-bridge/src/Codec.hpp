@@ -65,7 +65,16 @@ namespace bridge
         Kick = 7,    // u64 lobby
         Bye = 8,     // no body
         Pose = 9,    // ghost demo: u64 origin, u32 seq, 8 x f32 (x y z yaw pitch vx vy vz), u8 flags, u8 n, n bytes scene
+        Chunk = 10,  // bulk: u32 transfer, u32 index, 1..MaxChunk bytes (low-priority lane)
+        ChunkAck = 11, // bulk: u32 transfer, u32 index
+        Cancel = 12, // bulk: u32 transfer, u16 reason
     };
+
+    // Bulk transfers (host-to-joiner file streaming). A chunk's base64 fits a
+    // 64 KiB pipe frame; Steam's reliable message limit is 512 KiB.
+    constexpr std::size_t MaxChunk = 32 * 1024;
+    constexpr std::size_t XferWindow = 4;          // unacknowledged chunks per transfer
+    constexpr std::size_t MaxTransfersPerPeer = 4;
     enum class RejectCode : std::uint16_t
     {
         NotMember = 1,
@@ -94,7 +103,8 @@ namespace bridge
         std::uint16_t code = 0;
         std::uint32_t seq = 0;
         std::int64_t time = 0;
-        std::vector<std::uint8_t> payload;
+        std::vector<std::uint8_t> payload; // Data and Chunk bytes
+        std::uint32_t transfer = 0, index = 0; // Chunk / ChunkAck / Cancel (code = reason)
         Pose pose;
     };
     std::vector<std::uint8_t> Encode(const WireMessage& message);

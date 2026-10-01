@@ -92,7 +92,22 @@ namespace bridge
             {"presence.set", {"status"}},
             {"p2p.send", {"peer", "reliable", "data"}},
             {"p2p.close", {"peer"}},
+            {"ugc.state", {"item"}},
+            {"ugc.subscribe", {"item"}},
+            {"ugc.download", {"item", "highPriority"}},
+            {"xfer.chunk", {"peer", "transfer", "index", "data"}},
+            {"xfer.cancel", {"peer", "transfer", "reason"}},
         };
+
+        const char* XferReason(std::uint16_t code)
+        {
+            switch (code)
+            {
+            case 0: return "complete";
+            case 1: return "cancel";
+            default: return "error";
+            }
+        }
     } // namespace
 
     // Passive listener: copies the callback and wakes the worker.
@@ -151,7 +166,9 @@ namespace bridge
 
         m_listeners = {new Listener(*this, CbGameLobbyJoinRequested, sizeof(GameLobbyJoinRequested_t)),
                        new Listener(*this, CbGameRichPresenceJoinRequested, sizeof(GameRichPresenceJoinRequested_t)),
-                       new Listener(*this, CbConnectionStatusChanged, sizeof(steamabi::SteamNetConnectionStatusChangedCallback_t))};
+                       new Listener(*this, CbConnectionStatusChanged, sizeof(steamabi::SteamNetConnectionStatusChangedCallback_t)),
+                       new Listener(*this, CbItemInstalled, sizeof(ItemInstalled_t)),
+                       new Listener(*this, CbDownloadItemResult, sizeof(DownloadItemResult_t))};
         m_onGameThread([this] {
             for (auto* l : m_listeners) m_steam.RegisterCallback(l, l->Id());
         });
@@ -242,6 +259,7 @@ namespace bridge
         for (const auto& cb : callbacks) HandleCallback(cb);
         for (const auto& text : commands) HandleCommand(text);
         PollCalls();
+        PollUgc();
         if (m_options.ghostDemo && m_pendingJoin && !m_lobby && m_calls.empty() && !(m_pipe && m_pipe->Connected()))
             AutoJoin(m_pendingJoin->lobby, m_pendingJoin->source.c_str());
         if (m_lobby)
@@ -290,6 +308,30 @@ namespace bridge
             m_log("join request (Join Game) for lobby " + Redact(target->lobby));
             EmitJoinRequest(*m_pendingJoin);
             if (m_options.ghostDemo && !(m_pipe && m_pipe->Connected())) AutoJoin(target->lobby, "Join Game");
+        }
+        else if (cb.id == CbItemInstalled && cb.bytes.size() == sizeof(ItemInstalled_t))
+        {
+            ItemInstalled_t e{};
+            std::memcpy(&e, cb.bytes.data(), sizeof(e));
+            if (e.m_unAppID != KovaaksAppId || !m_ugcWatch.count(e.m_nPublishedFileId)) return; // only items we asked for
+            m_ugcWatch.erase(e.m_nPublishedFileId);
+            std::string folder;
+            InstallFolder(e.m_nPublishedFileId, folder);
+            m_log("workshop item " + Id(e.m_nPublishedFileId) + " installed");
+            Emit(json::Object().Int("v", ContractVersion).Str("ev", "ugc.installed").Str("item", Id(e.m_nPublishedFileId)).Str("folder", folder).Done());
+        }
+        else if (cb.id == CbDownloadItemResult && cb.bytes.size() == sizeof(DownloadItemResult_t))
+        {
+            DownloadItemResult_t e{};
+            std::memcpy(&e, cb.bytes.data(), sizeof(e));
+            if (e.m_unAppID != KovaaksAppId || !m_ugcWatch.count(e.m_nPublishedFileId)) return;
+            if (e.m_eResult != 1)
+            {
+                m_ugcWatch.erase(e.m_nPublishedFileId);
+                m_log("workshop item " + Id(e.m_nPublishedFileId) + " download failed (result " + std::to_string(e.m_eResult) + ")");
+                Emit(json::Object().Int("v", ContractVersion).Str("ev", "ugc.error").Str("item", Id(e.m_nPublishedFileId)).Int("result", e.m_eResult).Str("message", "Steam could not download the item.").Done());
+            }
+            else m_ugcWatch[e.m_nPublishedFileId].next = Clock::now(); // installed state follows
         }
         else if (cb.id == CbConnectionStatusChanged && cb.bytes.size() == sizeof(steamabi::SteamNetConnectionStatusChangedCallback_t))
         {
@@ -621,6 +663,134 @@ namespace bridge
             const bool ok = SendWire(*conn, m, reliable);
             if (*id >= 0) Result(*id, ok, ok ? nullptr : "send-failed", ok ? std::string() : "Steam did not accept the message.");
         }
+        else if (name == "ugc.state" || name == "ugc.subscribe" || name == "ugc.download")
+        {
+            const auto s = c.Str("item", 20);
+            const auto item = s ? ParseId(*s) : std::nullopt;
+            if (!item)
+            {
+                Result(*id, false, "invalid", "item must be a Workshop item id.");
+                return;
+            }
+            if (!m_steam.ugc)
+            {
+                Result(*id, false, "unavailable", "Steam Workshop is unavailable.");
+                return;
+            }
+            if (name == "ugc.state")
+            {
+                EmitUgcState(*item);
+                Result(*id, true);
+            }
+            else if (name == "ugc.subscribe")
+            {
+                if (m_ugcCalls.size() >= 16)
+                {
+                    Result(*id, false, "busy", "Too many Workshop requests at once.");
+                    return;
+                }
+                UgcCall call;
+                call.item = *item;
+                call.commandId = *id;
+                call.call = m_steam.UGC_SubscribeItem(m_steam.ugc, *item);
+                call.deadline = Clock::now() + 30s;
+                m_ugcCalls.push_back(call);
+            }
+            else
+            {
+                const bool high = c.Bool("highPriority").value_or(true);
+                if (m_ugcWatch.size() >= 16 && !m_ugcWatch.count(*item))
+                {
+                    Result(*id, false, "busy", "Too many Workshop downloads at once.");
+                    return;
+                }
+                if (!m_steam.UGC_DownloadItem(m_steam.ugc, *item, high))
+                {
+                    Result(*id, false, "steam", "Steam refused the download (bad item id, or Steam is offline).");
+                    return;
+                }
+                auto& watch = m_ugcWatch[*item];
+                watch.next = Clock::now();
+                watch.deadline = Clock::now() + 15min;
+                m_log("workshop item " + Id(*item) + " download requested");
+                Result(*id, true);
+            }
+        }
+        else if (name == "xfer.chunk")
+        {
+            const auto peer = peerArg("peer");
+            const auto transfer = c.Int("transfer");
+            const auto index = c.Int("index");
+            Conn* conn = peer ? FindConn(*peer) : nullptr;
+            if (!conn || conn->state != ConnState::Ready)
+            {
+                Result(*id, false, "not-connected", "No connection to that peer.");
+                return;
+            }
+            if (!transfer || *transfer < 1 || *transfer > 0x7fffffff || !index || *index < 0 || *index > 0x7fffffff)
+            {
+                Result(*id, false, "invalid", "transfer must be 1..2^31-1 and index 0..2^31-1.");
+                return;
+            }
+            const auto data = c.Str("data", (MaxChunk + 2) / 3 * 4);
+            auto bytes = data ? Base64Decode(*data, MaxChunk) : std::nullopt;
+            if (!bytes || bytes->empty())
+            {
+                Result(*id, false, "invalid", "data must be base64 of 1 to 32768 bytes.");
+                return;
+            }
+            const auto key = std::make_pair(*peer, static_cast<std::uint32_t>(*transfer));
+            if (!m_outgoing.count(key))
+            {
+                std::size_t open = 0;
+                for (const auto& [k, _] : m_outgoing)
+                    if (k.first == *peer) ++open;
+                if (open >= MaxTransfersPerPeer)
+                {
+                    Result(*id, false, "busy", "Too many transfers to that peer.");
+                    return;
+                }
+            }
+            Xfer& x = m_outgoing[key];
+            if (x.inflight.size() >= XferWindow && !x.inflight.count(static_cast<std::uint32_t>(*index)))
+            {
+                Result(*id, false, "window", "Window full; wait for xfer.ack.");
+                return;
+            }
+            WireMessage m{WireType::Chunk};
+            m.transfer = key.second;
+            m.index = static_cast<std::uint32_t>(*index);
+            m.payload = std::move(*bytes);
+            if (!SendChunk(*conn, m))
+            {
+                Result(*id, false, "send-failed", "Steam did not accept the chunk.");
+                return;
+            }
+            x.inflight.insert(m.index);
+            Result(*id, true);
+        }
+        else if (name == "xfer.cancel")
+        {
+            const auto peer = peerArg("peer");
+            const auto transfer = c.Int("transfer");
+            const auto reason = c.Str("reason", 16).value_or("cancel");
+            if (!peer || !transfer || *transfer < 1 || *transfer > 0x7fffffff || (reason != "cancel" && reason != "complete" && reason != "error"))
+            {
+                Result(*id, false, "invalid", "peer, transfer and reason (cancel, complete or error) are required.");
+                return;
+            }
+            const auto key = std::make_pair(*peer, static_cast<std::uint32_t>(*transfer));
+            if (Conn* conn = FindConn(*peer); conn && conn->state == ConnState::Ready)
+            {
+                WireMessage m{WireType::Cancel};
+                m.transfer = key.second;
+                m.code = static_cast<std::uint16_t>(reason == "complete" ? 0 : reason == "cancel" ? 1 : 2);
+                SendWire(*conn, m, true);
+            }
+            m_outgoing.erase(key);
+            m_incoming.erase(key);
+            Result(*id, true);
+        }
         else if (name == "p2p.close")
         {
             const auto peer = peerArg("peer");
@@ -880,6 +1050,7 @@ namespace bridge
         if (it == m_conns.end()) return;
         Conn conn = it->second;
         m_conns.erase(it);
+        CancelTransfersWith(peer, "disconnected");
         if (bye && conn.state == ConnState::Ready) SendWire(conn, WireMessage{WireType::Bye}, true);
         m_steam.sockets->CloseConnection(conn.handle, 0, "aimmod", bye || linger);
         if (conn.state == ConnState::Ready) m_log("p2p disconnected from " + Redact(peer) + " (" + reason + ")");
@@ -1015,6 +1186,11 @@ namespace bridge
                 SendWire(*again, welcome, true);
                 m_log("p2p connected: " + Redact(peer) + " (client of this host)");
                 again->state = ConnState::Ready;
+                {
+                    const int priorities[2] = {0, 1};
+                    const std::uint16_t weights[2] = {1, 1};
+                    again->lanes = m_steam.sockets->ConfigureConnectionLanes(again->handle, 2, priorities, weights) == 1;
+                }
                 again->nextPing = Clock::now();
                 Emit(json::Object().Int("v", ContractVersion).Str("ev", "p2p.connected").Str("peer", Id(peer)).Bool("host", false).Done());
                 EmitLobby();
@@ -1033,6 +1209,11 @@ namespace bridge
             }
             conn.state = ConnState::Ready;
             conn.nextPing = Clock::now();
+            {
+                const int priorities[2] = {0, 1};
+                const std::uint16_t weights[2] = {1, 1};
+                conn.lanes = m_steam.sockets->ConfigureConnectionLanes(conn.handle, 2, priorities, weights) == 1;
+            }
             m_log("p2p connected: " + Redact(peer) + " (lobby host)");
             Emit(json::Object().Int("v", ContractVersion).Str("ev", "p2p.connected").Str("peer", Id(peer)).Bool("host", conn.outgoing).Done());
             EmitLobby();
@@ -1083,6 +1264,61 @@ namespace bridge
         case WireType::Pose:
             if (m_options.ghostDemo) OnPose(conn, m.pose);
             break;
+        case WireType::Chunk:
+        {
+            const auto key = std::make_pair(peer, m.transfer);
+            if (!m_incoming.count(key))
+            {
+                std::size_t open = 0;
+                for (const auto& k : m_incoming)
+                    if (k.first == peer) ++open;
+                if (open >= MaxTransfersPerPeer) return CloseConn(peer, false, "too many transfers");
+                m_incoming.insert(key);
+            }
+            Emit(json::Object()
+                     .Int("v", ContractVersion)
+                     .Str("ev", "xfer.chunk")
+                     .Str("peer", Id(peer))
+                     .Int("transfer", m.transfer)
+                     .Int("index", m.index)
+                     .Str("data", Base64Encode(m.payload.data(), m.payload.size()))
+                     .Done());
+            // Acknowledge once handed to the service: the sender's window follows the receiver's pace.
+            WireMessage ackMsg{WireType::ChunkAck};
+            ackMsg.transfer = m.transfer;
+            ackMsg.index = m.index;
+            SendWire(conn, ackMsg, true);
+            break;
+        }
+        case WireType::ChunkAck:
+        {
+            const auto it = m_outgoing.find(std::make_pair(peer, m.transfer));
+            if (it == m_outgoing.end() || !it->second.inflight.erase(m.index)) break;
+            Emit(json::Object()
+                     .Int("v", ContractVersion)
+                     .Str("ev", "xfer.ack")
+                     .Str("peer", Id(peer))
+                     .Int("transfer", m.transfer)
+                     .Int("index", m.index)
+                     .Int("credit", static_cast<std::int64_t>(XferWindow - it->second.inflight.size()))
+                     .Done());
+            break;
+        }
+        case WireType::Cancel:
+        {
+            const auto key = std::make_pair(peer, m.transfer);
+            const bool known = m_outgoing.erase(key) + m_incoming.erase(key) > 0;
+            if (known)
+                Emit(json::Object()
+                         .Int("v", ContractVersion)
+                         .Str("ev", "xfer.end")
+                         .Str("peer", Id(peer))
+                         .Int("transfer", m.transfer)
+                         .Str("reason", XferReason(m.code))
+                         .Str("by", "peer")
+                         .Done());
+            break;
+        }
         default: break; // handshake frames after the handshake are ignored
         }
     }
@@ -1204,7 +1440,10 @@ namespace bridge
             .Bool("steam", true)
             .Int("appId", KovaaksAppId)
             .Raw("self", json::Object().Str("peer", Id(m_self)).Str("name", name).Str("initials", Initials(name)).Done())
-            .Str("relay", steamabi::AvailabilityName(avail));
+            .Str("relay", steamabi::AvailabilityName(avail))
+            .Raw("features", R"(["lobby","p2p","ugc","xfer"])")
+            .Int("maxChunk", static_cast<std::int64_t>(MaxChunk))
+            .Int("xferWindow", static_cast<std::int64_t>(XferWindow));
         Emit(o.Done());
         if (m_pendingJoin) EmitJoinRequest(*m_pendingJoin);
     }
@@ -1309,6 +1548,160 @@ namespace bridge
                  .Int("h", h)
                  .Str("rgba", Base64Encode(rgba.data(), rgba.size()))
                  .Done());
+    }
+    // --- Workshop ---------------------------------------------------------
+
+    bool Bridge::InstallFolder(std::uint64_t item, std::string& folder)
+    {
+        std::uint64_t size = 0;
+        std::uint32_t stamp = 0;
+        char path[1024]{};
+        if (!m_steam.UGC_GetItemInstallInfo(m_steam.ugc, item, &size, path, sizeof(path), &stamp)) return false;
+        path[sizeof(path) - 1] = '\0';
+        folder = path;
+        return true;
+    }
+
+    void Bridge::EmitUgcState(std::uint64_t item)
+    {
+        const std::uint32_t state = m_steam.UGC_GetItemState(m_steam.ugc, item);
+        std::uint64_t downloaded = 0, total = 0;
+        m_steam.UGC_GetItemDownloadInfo(m_steam.ugc, item, &downloaded, &total);
+        json::Object o;
+        o.Int("v", ContractVersion)
+            .Str("ev", "ugc.state")
+            .Str("item", Id(item))
+            .Int("state", state)
+            .Bool("subscribed", (state & ItemSubscribed) != 0)
+            .Bool("installed", (state & ItemInstalled) != 0)
+            .Bool("downloading", (state & (ItemDownloading | ItemDownloadPending)) != 0)
+            .Bool("needsUpdate", (state & ItemNeedsUpdate) != 0)
+            .Int("downloaded", static_cast<std::int64_t>(downloaded))
+            .Int("total", static_cast<std::int64_t>(total));
+        std::string folder;
+        if ((state & ItemInstalled) && InstallFolder(item, folder)) o.Str("folder", folder);
+        Emit(o.Done());
+    }
+
+    void Bridge::PollUgc()
+    {
+        if (!m_steam.ugc) return;
+        const auto now = Clock::now();
+        // SubscribeItem call results.
+        auto calls = std::move(m_ugcCalls);
+        m_ugcCalls.clear();
+        for (auto& call : calls)
+        {
+            RemoteStorageSubscribePublishedFileResult_t r{};
+            bool failed = false;
+            if (!m_steam.PollCall(call.call, CbRemoteStorageSubscribe, &r, sizeof(r), failed))
+            {
+                if (now < call.deadline) m_ugcCalls.push_back(call);
+                else Result(call.commandId, false, "timeout", "Steam did not answer the subscription in time.");
+                continue;
+            }
+            if (failed || r.m_eResult != 1) Result(call.commandId, false, "steam", "Steam could not subscribe (result " + std::to_string(r.m_eResult) + ").");
+            else
+            {
+                m_log("workshop item " + Id(call.item) + " subscribed");
+                Result(call.commandId, true);
+                EmitUgcState(call.item);
+            }
+        }
+        // Downloads in progress.
+        for (auto it = m_ugcWatch.begin(); it != m_ugcWatch.end();)
+        {
+            const std::uint64_t item = it->first;
+            UgcWatch& w = it->second;
+            if (now < w.next)
+            {
+                ++it;
+                continue;
+            }
+            w.next = now + 500ms;
+            const std::uint32_t state = m_steam.UGC_GetItemState(m_steam.ugc, item);
+            std::uint64_t downloaded = 0, total = 0;
+            m_steam.UGC_GetItemDownloadInfo(m_steam.ugc, item, &downloaded, &total);
+            if (downloaded != w.downloaded || total != w.total)
+            {
+                w.downloaded = downloaded;
+                w.total = total;
+                Emit(json::Object()
+                         .Int("v", ContractVersion)
+                         .Str("ev", "ugc.progress")
+                         .Str("item", Id(item))
+                         .Int("downloaded", static_cast<std::int64_t>(downloaded))
+                         .Int("total", static_cast<std::int64_t>(total))
+                         .Done());
+            }
+            const bool busy = (state & (ItemDownloading | ItemDownloadPending | ItemNeedsUpdate)) != 0;
+            if ((state & ItemInstalled) && !busy)
+            {
+                std::string folder;
+                InstallFolder(item, folder);
+                m_log("workshop item " + Id(item) + " installed");
+                Emit(json::Object().Int("v", ContractVersion).Str("ev", "ugc.installed").Str("item", Id(item)).Str("folder", folder).Done());
+                it = m_ugcWatch.erase(it);
+                continue;
+            }
+            if (now >= w.deadline)
+            {
+                Emit(json::Object().Int("v", ContractVersion).Str("ev", "ugc.error").Str("item", Id(item)).Int("result", 0).Str("message", "The download did not finish in time.").Done());
+                it = m_ugcWatch.erase(it);
+                continue;
+            }
+            ++it;
+        }
+    }
+
+    // --- bulk transfers ---------------------------------------------------
+
+    bool Bridge::SendChunk(Conn& conn, const WireMessage& m)
+    {
+        const auto bytes = Encode(m);
+        if (!conn.lanes) return SendWire(conn, m, true);
+        // Lane 1 has lower priority than lane 0, so match traffic overtakes bulk data.
+        steamabi::SteamNetworkingMessage_t* msg = m_steam.netUtils->AllocateMessage(static_cast<int>(bytes.size()));
+        if (!msg) return false;
+        std::memcpy(msg->m_pData, bytes.data(), bytes.size());
+        msg->m_conn = conn.handle;
+        msg->m_nFlags = steamabi::k_nSteamNetworkingSend_Reliable;
+        msg->m_idxLane = 1;
+        std::int64_t result = 0;
+        m_steam.sockets->SendMessages(1, &msg, &result); // takes ownership
+        return result > 0;
+    }
+
+    void Bridge::CancelTransfersWith(std::uint64_t peer, const char* reason)
+    {
+        std::vector<std::uint32_t> ended;
+        for (auto it = m_outgoing.begin(); it != m_outgoing.end();)
+        {
+            if (it->first.first == peer)
+            {
+                ended.push_back(it->first.second);
+                it = m_outgoing.erase(it);
+            }
+            else ++it;
+        }
+        for (auto it = m_incoming.begin(); it != m_incoming.end();)
+        {
+            if (it->first == peer)
+            {
+                ended.push_back(it->second);
+                it = m_incoming.erase(it);
+            }
+            else ++it;
+        }
+        for (const auto transfer : ended)
+            Emit(json::Object()
+                     .Int("v", ContractVersion)
+                     .Str("ev", "xfer.end")
+                     .Str("peer", Id(peer))
+                     .Int("transfer", transfer)
+                     .Str("reason", reason)
+                     .Str("by", "local")
+                     .Done());
     }
     // --- ghost demo -------------------------------------------------------
 

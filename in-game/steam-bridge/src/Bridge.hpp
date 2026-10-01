@@ -95,6 +95,27 @@ namespace bridge
             Clock::time_point nextPing;
             std::uint32_t pingSeq = 0;
             std::optional<int> rtt;
+            bool lanes = false; // bulk chunks on a lower-priority lane
+        };
+
+        struct Xfer
+        {
+            std::set<std::uint32_t> inflight; // sent, not yet acknowledged
+        };
+
+        struct UgcWatch
+        {
+            std::uint64_t downloaded = 0, total = 0;
+            Clock::time_point next{};
+            Clock::time_point deadline{};
+        };
+
+        struct UgcCall
+        {
+            std::uint64_t item = 0;
+            std::int64_t commandId = -1;
+            steamabi::SteamAPICall_t call = 0;
+            Clock::time_point deadline{};
         };
 
         struct PendingCall
@@ -160,6 +181,15 @@ namespace bridge
         static std::string Initials(const std::string& name);
         std::string MemberJson(std::uint64_t peer) const;
 
+        // Workshop (read item state, subscribe, download)
+        void PollUgc();
+        void EmitUgcState(std::uint64_t item);
+        bool InstallFolder(std::uint64_t item, std::string& folder);
+
+        // Bulk transfers
+        bool SendChunk(Conn& conn, const WireMessage& m);
+        void CancelTransfersWith(std::uint64_t peer, const char* reason);
+
         // Ghost demo
         void GhostTick();
         void OnPose(Conn& conn, const Pose& pose);
@@ -205,6 +235,11 @@ namespace bridge
         Clock::time_point m_nextConnect{};
         std::map<std::uint64_t, Clock::time_point> m_presenceRequested;
         std::string m_status;
+
+        std::map<std::pair<std::uint64_t, std::uint32_t>, Xfer> m_outgoing; // (peer, transfer)
+        std::set<std::pair<std::uint64_t, std::uint32_t>> m_incoming;
+        std::map<std::uint64_t, UgcWatch> m_ugcWatch;
+        std::vector<UgcCall> m_ugcCalls;
 
         Options m_options;
         std::mutex m_ghostMutex; // guards the four members below

@@ -171,6 +171,9 @@ namespace bridge
         case WireType::Ping:
         case WireType::Pong: Put(out, m.seq, 4); Put(out, static_cast<std::uint64_t>(m.time), 8); break;
         case WireType::Bye: break;
+        case WireType::Chunk: Put(out, m.transfer, 4); Put(out, m.index, 4); out.insert(out.end(), m.payload.begin(), m.payload.end()); break;
+        case WireType::ChunkAck: Put(out, m.transfer, 4); Put(out, m.index, 4); break;
+        case WireType::Cancel: Put(out, m.transfer, 4); Put(out, m.code, 2); break;
         case WireType::Pose:
         {
             const Pose& p = m.pose;
@@ -194,7 +197,7 @@ namespace bridge
 
     std::optional<WireMessage> Decode(const std::uint8_t* data, std::size_t size)
     {
-        if (!data || size < WireHeader || size > WireHeader + MaxPayload) return std::nullopt;
+        if (!data || size < WireHeader || size > WireHeader + 8 + std::max(MaxPayload, MaxChunk)) return std::nullopt;
         if (std::memcmp(data, "AMP1", 4) != 0 || data[4] != WireVersion || data[6] != 0 || data[7] != 0) return std::nullopt;
         WireMessage m;
         m.type = static_cast<WireType>(data[5]);
@@ -228,6 +231,22 @@ namespace bridge
             break;
         case WireType::Bye:
             if (n != 0) return std::nullopt;
+            break;
+        case WireType::Chunk:
+            if (n <= 8 || n > 8 + MaxChunk) return std::nullopt;
+            m.transfer = static_cast<std::uint32_t>(Get(body, 4));
+            m.index = static_cast<std::uint32_t>(Get(body + 4, 4));
+            m.payload.assign(body + 8, body + n);
+            break;
+        case WireType::ChunkAck:
+            if (n != 8) return std::nullopt;
+            m.transfer = static_cast<std::uint32_t>(Get(body, 4));
+            m.index = static_cast<std::uint32_t>(Get(body + 4, 4));
+            break;
+        case WireType::Cancel:
+            if (n != 6) return std::nullopt;
+            m.transfer = static_cast<std::uint32_t>(Get(body, 4));
+            m.code = static_cast<std::uint16_t>(Get(body + 4, 2));
             break;
         case WireType::Pose:
         {

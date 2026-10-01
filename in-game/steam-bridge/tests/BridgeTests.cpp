@@ -148,6 +148,34 @@ int main()
         Check(!Decode(h.data(), h.size()), "rejects oversized data");
         Check(!Decode(nullptr, 0) && !Decode(bytes.data(), 4), "rejects short frames");
 
+        // Bulk transfer frames
+        WireMessage chunk{WireType::Chunk};
+        chunk.transfer = 7;
+        chunk.index = 123;
+        chunk.payload.assign(MaxChunk, 0xab);
+        auto ce = Encode(chunk);
+        auto cd = Decode(ce.data(), ce.size());
+        Check(cd && cd->type == WireType::Chunk && cd->transfer == 7 && cd->index == 123 && cd->payload.size() == MaxChunk, "full chunk round-trips");
+        chunk.payload.push_back(1);
+        auto big = Encode(chunk);
+        Check(!Decode(big.data(), big.size()), "rejects an oversized chunk");
+        WireMessage emptyChunk{WireType::Chunk};
+        auto ec = Encode(emptyChunk);
+        Check(!Decode(ec.data(), ec.size()), "rejects an empty chunk");
+        WireMessage ack{WireType::ChunkAck};
+        ack.transfer = 7;
+        ack.index = 9;
+        auto ae = Encode(ack);
+        auto ad = Decode(ae.data(), ae.size());
+        Check(ad && ad->transfer == 7 && ad->index == 9 && ae.size() == WireHeader + 8, "chunk ack round-trips");
+        WireMessage cancel{WireType::Cancel};
+        cancel.transfer = 7;
+        cancel.code = 2;
+        auto xe = Encode(cancel);
+        auto xd = Decode(xe.data(), xe.size());
+        Check(xd && xd->transfer == 7 && xd->code == 2, "cancel round-trips");
+        Check(Base64Encode(chunk.payload.data(), MaxChunk).size() + 200 < MaxPipeFrame, "a chunk's base64 fits one pipe frame");
+
         // Ghost demo pose
         WireMessage pose{WireType::Pose};
         pose.pose.origin = Person;
