@@ -69,6 +69,20 @@ class WorkshopTests(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+    def test_quake_port_tags_and_description(self):
+        title = "AimMod - Aerowalk (Q3) - Quake Movement"
+        self.assertEqual(bundle.NAME.match(title)["game"], "Q3")
+        sce = {"AimTypeTag": "Clicking", "AimSubTypeTag": "Dynamic",
+               "SearchTags": "AimMod, Map port, Quake 3, Quake, Quake movement, Strafe jumping, Duel, Jump pads"}
+        tags = bundle.tags_for(sce, "Q3")
+        self.assertEqual(tags[:5], ["AimMod", "Map port", "Quake 3", "Quake", "Quake movement"])
+        self.assertNotIn("Counter-Strike", tags)
+        self.assertIn("Q3", tags)
+        self.assertLessEqual(len(tags), bundle.TAG_COUNT_MAX)
+        text = bundle.description_for(title, "hub3aeroq3", "Q3", "Quake Movement", bundle.Source(), {})
+        self.assertIn("from Quake 3 with Quake movement", text)
+        self.assertNotIn("Counter-Strike", text)
+
     def test_png_round_trip_and_fit(self):
         image = png.read(synthetic_png(40, 30, 5))
         self.assertEqual(image[:2], (40, 30))
@@ -92,7 +106,7 @@ class WorkshopTests(unittest.TestCase):
         self.assertEqual(item["title"], TITLE)
         self.assertEqual(item["visibility"], "private")
         self.assertIsNone(item["publishedFileId"])
-        self.assertEqual(item["tags"], ["Clicking", "Dynamic", "Map port", "Counter-Strike", "Movement", "AimMod", "CS:GO"])
+        self.assertEqual(item["tags"], ["AimMod", "Map port", "Counter-Strike", "Movement", "Clicking", "Dynamic", "CS:GO"])
         self.assertTrue(item["checks"]["ready"])
         description = text(os.path.join(b, "description.txt"))
         for needle in ("[h1]" + TITLE, "de_dust2", "Counter-Strike: Global Offensive", "Synthetic Author",

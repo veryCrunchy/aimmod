@@ -435,6 +435,94 @@ class CheckTests(unittest.TestCase):
         self.assertNotIn(floater, sc.brushes)
 
 
+def _header(text: str) -> dict:
+    out = {}
+    for line in text.splitlines():
+        if line.startswith("["):
+            break
+        k, _, v = line.partition("=")
+        out.setdefault(k, v)
+    return out
+
+
+class TagTests(unittest.TestCase):
+    def tags_for(self, mapid, game, preset, objects=(), classnames=()):
+        from mapport import tags
+        mv = scenario.PRESETS[preset]
+        return tags.search_tags(mapid, game, mv.model, mv.clamp_air_speed, mv.variant, list(objects), classnames)
+
+    def test_quake_duel_with_pads(self):
+        objs = [{"kind": "jumppad", "name": "pad0"}, {"kind": "teleporter", "name": "tp0"},
+                {"kind": "hurt", "liquid": "lava", "name": "lava0"}, {"kind": "water", "liquid": "water", "name": "w"}]
+        got = self.tags_for("hub3aeroq3", "Q3", "quake", objs)
+        self.assertEqual(got, ["AimMod", "Map port", "Quake 3", "Quake", "Quake movement", "Strafe jumping", "Bunny hop",
+                               "Duel", "Water", "Lava", "Jump pads", "Teleporters"])
+        self.assertNotIn("Counter-Strike", got)
+        self.assertNotIn("CS movement", got)
+        self.assertIn("Deathmatch", self.tags_for("ztn3dm1", "Q3", "quake"))
+        self.assertIn("Duel", self.tags_for("pro_q3tourney7", "Q3", "quake"))
+        self.assertEqual(self.tags_for("q3dm17", "QL", "quake")[2:4], ["Quake Live", "Quake"])
+
+    def test_counter_strike_types_and_weapons(self):
+        got = self.tags_for("aim_deagle7k_2067", "CSS", "cs", [{"kind": "jumppad", "name": "ladder_pad0"}])
+        self.assertEqual(got, ["AimMod", "Map port", "Counter-Strike: Source", "Counter-Strike", "CS movement",
+                               "Aim map", "Deagle", "Ladders"])
+        self.assertEqual(self.tags_for("awp_lego", "CS16", "cs")[2:], ["Counter-Strike 1.6", "Counter-Strike",
+                                                                       "CS movement", "AWP"])  # map type and weapon deduped
+        self.assertIn("Fight yard", self.tags_for("fy_pool_day", "CSS", "cs", [{"kind": "water"}]))
+        de = self.tags_for("de_d2_remake", "CSS", "cs", classnames=["func_bomb_target"])
+        self.assertEqual(de.count("Defuse"), 1)
+        self.assertIn("Hostage", self.tags_for("mymap", "CSGO", "cs", classnames=["hostage_entity"]))
+        self.assertIn("Sprint movement", self.tags_for("aim_map", "CSS", "sprint"))
+        self.assertNotIn("Strafe jumping", self.tags_for("aim_map", "CSS", "cs"))
+
+    def test_limits_and_dedupe(self):
+        from mapport import tags
+        many = ["AimMod", "aimmod", "a,b", ""] + [f"Tag {i}" for i in range(40)] + ["x" * 40]
+        got = tags.clean(many)
+        self.assertEqual(got[:2], ["AimMod", "a b"])
+        self.assertLessEqual(len(got), tags.MAX_TAGS)
+        self.assertLessEqual(len(", ".join(got)), tags.MAX_TAGS_LENGTH)
+        self.assertTrue(all(len(t) <= tags.MAX_TAG_LENGTH and "," not in t for t in got))
+        self.assertEqual(len({t.lower() for t in got}), len(got))
+
+    def test_scenario_header_per_game(self):
+        from mapport import tags
+        q = scenario.PRESETS["quake"]
+        t = tags.search_tags("hub3aeroq3", "Q3", q.model, q.clamp_air_speed, q.variant)
+        d = tags.description("Aerowalk", "Q3", q.label, q.shift, ["Jump pads"], "hub3aeroq3.bsp")
+        h = _header(scenario.build("AimMod - Aerowalk (Q3) - Quake Movement", "m.json", "{}", 4.0, q, 1, d, t))
+        self.assertTrue(h["SearchTags"].startswith("AimMod, Map port, Quake 3, Quake, Quake movement"))
+        self.assertIn("Quake 3", h["Description"])
+        self.assertNotIn("Source", h["Description"].replace("Source file", ""))
+        self.assertNotIn("Counter-Strike", h["Description"])
+        self.assertEqual(h["DifficultyTag"], "3")
+        self.assertEqual((h["AimTypeTag"], h["AimSubTypeTag"]), ("Clicking", "Dynamic"))
+        cs = scenario.PRESETS["cs"]
+        h = _header(scenario.build("AimMod - x (CSS) - CS Movement", "m.json", "{}", 4.0, cs, 1,
+                                   tags.description("x", "CSS", cs.label, cs.shift), None))
+        self.assertEqual(h["SearchTags"], "AimMod, Map port, CS movement")
+        self.assertIn("Counter-Strike: Source", h["Description"])
+        self.assertEqual(h["DifficultyTag"], "2")
+        long = tags.description("y" * 400, "CSS", cs.label, cs.shift)
+        self.assertLessEqual(len(long), tags.MAX_DESCRIPTION)
+
+    def test_cli_writes_tags_from_the_map(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "fy_pool_test.bsp")
+            with open(src, "wb") as fh:
+                fh.write(synthetic.build_bsp(with_displacement=False, water=LiquidTests.POOL))
+            out = os.path.join(tmp, "out")
+            cli.main([src, "--out", out, "--no-preview", "--no-thumbnail", "--allow-check-fail"])
+            sce = os.path.join(out, "Scenarios", "AimMod - fy_pool_test (CSS) - CS Movement.sce")
+            with open(sce, encoding="utf-8") as fh:
+                h = _header(fh.read())
+            self.assertEqual(h["SearchTags"], "AimMod, Map port, Counter-Strike: Source, Counter-Strike, CS movement, "
+                                              "Fight yard, Water")
+            self.assertIn("fy_pool_test from Counter-Strike: Source", h["Description"])
+            self.assertIn("water", h["Description"])
+
+
 class ThumbnailTests(unittest.TestCase):
     def test_views_in_game_space(self):
         from mapport import thumbnail
