@@ -318,7 +318,10 @@ The user approved AimMod changing game state where a feature needs it
 AimModCore performs these on the game thread, one at a time.
 
 Transport: the service writes `core-command.tsv` (atomically) and AimModCore
-answers in `core-command-result.tsv`. HTTP (workspace capability URL,
+answers in `core-command-result.tsv` (the last 8 results, oldest first, one
+`AIMMOD_CORE_RESULT_1` line each; `GET` also returns them as `results`). Every
+override reset also reloads the scenario's weapons (`LoadWeapons`) when a
+weapon was overridden. HTTP (workspace capability URL,
 header `X-AimMod-UI: 1`): `POST <prefix>/game-command` with JSON
 `{"action","scenario","mode","timeScale","targetSize","targetSpeed","mapScale","weapon"}`
 returns `{"sequence":n}` (409 `{"error":"unsupported"}` without the
