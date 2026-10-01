@@ -192,6 +192,11 @@ test('the cosmetics page lists catalog items only, equips by id and sets who to 
   s.button('Equip').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'cosmetic-equip',id:'meso-tint-ember'});
   s.button('Friends').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'cosmetic-view',show:'friends'});
 });
+test('the cosmetics page says cosmetics are coming soon while the catalog has nothing to pick',()=>{
+  const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view());
+  s.button('Cosmetics').onclick();s.requests.find(r=>r.url==='/private/multiplayer?part=cosmetics').finish(200,{available:true,problem:null,version:1,show:'all',unavailable:0,items:[]});
+  assert.ok(s.text().includes('Cosmetics are coming soon')&&s.text().includes('next AimMod update')&&s.text().includes('Show others’ cosmetics'));
+});
 test('the map library lists ports with size, Shift and Workshop state, and installs or hosts them',()=>{
   const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view());
   s.button('Map library').onclick();const ask=s.requests.find(r=>r.url==='/private/multiplayer?part=maps');assert.ok(ask,'the library asks for ports');
