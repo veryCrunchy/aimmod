@@ -1519,10 +1519,15 @@ static partial class MultiplayerChecks
         WriteText(Path.Combine(folder, lookalike + ".sce"), "Name=" + lookalike + "\nDescription=My own scenario\n");
         WriteText(Path.Combine(folder, "AimMod Match - notes.sce"), "Description=" + MatchScenario.Marker + "x\n");
         var keepName = MatchScenario.Prefix + "Synthetic A - CS - 11111112";
-        WriteText(Path.Combine(folder, keepName + ".sce"), "Name=" + keepName + "\nDescription=" + MatchScenario.Marker + "Synthetic A.\n");
+        Check(store.Write(keepName, "Name=" + keepName + "\nDescription=" + MatchScenario.Marker + "Synthetic A.\n", 14).Ok, "The current lobby's match scenario is rewritten");
         Check(store.Clean(keepName) == 2 && !File.Exists(Path.Combine(folder, marked + ".sce")) && File.Exists(Path.Combine(folder, keepName + ".sce")), "Cleanup removes leftover match scenarios (including older builds') but keeps the current lobby's");
         Check(File.Exists(Path.Combine(folder, lookalike + ".sce")) && File.Exists(Path.Combine(folder, taken + ".sce")) && File.Exists(Path.Combine(folder, "AimMod Match - notes.sce")), "Files without the marker or the generated name pattern are never deleted");
         Check(store.Clean(null) == 1 && !File.Exists(Path.Combine(folder, keepName + ".sce")) && store.Files().Count == 0, "Leaving removes the last one too");
+        // A match scenario the player changed after AimMod wrote it (still marked) is theirs now.
+        var edited = MatchScenario.Prefix + "Synthetic A - CS - 22222222";
+        Check(store.Write(edited, "Name=" + edited + "\nDescription=" + MatchScenario.Marker + "Synthetic A.\n", 20).Ok, "A match scenario is written for the edit check");
+        WriteText(Path.Combine(folder, edited + ".sce"), "Name=" + edited + "\nDescription=" + MatchScenario.Marker + "Synthetic A.\nTimelimit=90.0\n");
+        Check(store.Clean(null) == 0 && File.Exists(Path.Combine(folder, edited + ".sce")), "Cleanup never deletes a match scenario that changed after AimMod wrote it");
         Check(MatchScenario.SafeMode(MatchScenario.Name(cs), "challenge") == "freeplay" && MatchScenario.SafeMode("Synthetic A", "challenge") == "challenge", "Match scenarios never start as challenges");
     }
 
