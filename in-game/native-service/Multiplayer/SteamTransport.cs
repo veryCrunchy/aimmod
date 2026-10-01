@@ -239,7 +239,10 @@ sealed class SteamTransport : IMultiplayerTransport
                             var spectatable = Bool(f, "spectatable") || Bool(f, "spectateAsks");
                             var watchers = Int(f, "spectators") ?? 0;
                             if (watchers > 0) detail += " · " + watchers + " watching";
-                            items.Add(new FriendEntry(peer, LobbyRules.CleanName(name, "Friend"), status, detail, joinLobby, joinable, spectatable, watchers, shown));
+                            // aimmod_workshop presence: the Workshop item of the scenario they play, if any.
+                            var workshopItem = Str(f, "workshop") ?? Str(f, "aimmodWorkshop");
+                            if (workshopItem is not { Length: > 0 and <= 20 } || !workshopItem.All(char.IsAsciiDigit)) workshopItem = null;
+                            items.Add(new FriendEntry(peer, LobbyRules.CleanName(name, "Friend"), status, detail, joinLobby, joinable, spectatable, watchers, shown, workshopItem));
                         }
                     // AimMod players first, then KovaaK's players, then everyone else online.
                     friends = items.OrderBy(f => f.Status switch { "aimmod-lobby" => 0, "aimmod" => 1, "kovaaks" => 2, "online" => 3, _ => 4 }).ThenBy(f => f.Name, StringComparer.OrdinalIgnoreCase).Take(200).ToArray();

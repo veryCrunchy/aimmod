@@ -54,6 +54,78 @@ sealed record MultiplayerPrefs(string Hotkey = "F7", bool ReadyOnJoin = false, b
     public void Save(string path) => AtomicFile.WriteText(path, JsonSerializer.Serialize(this, Protocol.Json));
 }
 
+// AimMod's keys and the clashes they would have. The clip key is AimModCore's
+// (clip-settings.tsv: AIMMOD_CLIPS_1 / key / before / after); this only edits its key line.
+static class KeyBinds
+{
+    public static readonly string[] ClipKeys = ["F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "Insert", "Home", "End", "PageUp", "PageDown", "Pause", "ScrollLock"];
+
+    public static string ReadClipKey(string? output)
+    {
+        try
+        {
+            var path = output is null ? null : Path.Combine(output, "clip-settings.tsv");
+            if (path is null || !File.Exists(path) || new FileInfo(path).Length > 1024) return "F8";
+            var key = File.ReadAllLines(path).Select(l => l.Split('\t')).FirstOrDefault(c => c.Length == 2 && c[0] == "key")?[1];
+            return ClipKeys.Contains(key) ? key! : "F8";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return "F8"; }
+    }
+    public static void WriteClipKey(string output, string key)
+    {
+        if (!ClipKeys.Contains(key)) return;
+        var path = Path.Combine(output, "clip-settings.tsv");
+        string before = "8", after = "2";
+        try
+        {
+            if (File.Exists(path) && new FileInfo(path).Length <= 1024)
+                foreach (var c in File.ReadAllLines(path).Select(l => l.Split('\t')).Where(c => c.Length == 2))
+                {
+                    if (c[0] == "before" && int.TryParse(c[1], out var b) && b is >= 0 and <= 60) before = c[1];
+                    if (c[0] == "after" && int.TryParse(c[1], out var a) && a is >= 0 and <= 60) after = c[1];
+                }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        AtomicFile.WriteText(path, "AIMMOD_CLIPS_1\nkey\t" + key + "\nbefore\t" + before + "\nafter\t" + after + "\n");
+    }
+
+    // Keys the game binds, from UE's Input.ini when the install has one (KovaaK's 3.9.11
+    // keeps most binds elsewhere, so this can be empty).
+    static (DateTime At, string? Root, IReadOnlySet<string> Keys) cached = (DateTime.MinValue, null, new HashSet<string>());
+    public static IReadOnlySet<string> GameKeys(string? root)
+    {
+        if (DateTime.UtcNow - cached.At < TimeSpan.FromSeconds(30) && cached.Root == root) return cached.Keys;
+        var read = ReadGameKeys(root); cached = (DateTime.UtcNow, root, read); return read;
+    }
+    static IReadOnlySet<string> ReadGameKeys(string? root)
+    {
+        var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var candidates = new List<string>();
+        if (root is not null) candidates.Add(Path.Combine(root, "Saved", "Config", "WindowsNoEditor", "Input.ini"));
+        var local = Environment.GetEnvironmentVariable("LOCALAPPDATA");
+        if (local is not null) candidates.Add(Path.Combine(local, "FPSAimTrainer", "Saved", "Config", "WindowsNoEditor", "Input.ini"));
+        foreach (var path in candidates)
+        {
+            try
+            {
+                if (!File.Exists(path) || new FileInfo(path).Length > 1 << 20) continue;
+                foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(File.ReadAllText(path), @"Key=([A-Za-z0-9_]+)")) keys.Add(m.Groups[1].Value);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+        return keys;
+    }
+
+    public static IReadOnlyList<string> Conflicts(string hotkey, string clipKey, IReadOnlySet<string> game)
+    {
+        var list = new List<string>();
+        if (hotkey == clipKey) list.Add("The lobby key and the clip key are both " + hotkey + ".");
+        if (game.Contains(hotkey)) list.Add("KovaaK’s already uses " + hotkey + "; pick another lobby key.");
+        if (game.Contains(clipKey)) list.Add("KovaaK’s already uses " + clipKey + "; pick another clip key.");
+        return list;
+    }
+}
+
 // The global multiplayer hotkey (default F7). Keys are read only while the game
 // window has focus and only while this machine is in a lobby or has an invite,
 // the same way the replay shortcuts are read; nothing is hooked or injected.
