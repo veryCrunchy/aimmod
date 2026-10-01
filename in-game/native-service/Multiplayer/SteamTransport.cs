@@ -38,6 +38,9 @@ sealed class SteamTransport : IMultiplayerTransport
     IReadOnlyList<FriendEntry> friends = [];
     long friendsAt;
     string? lastData, lastStatus; bool? lastJoinable;
+    // aimmod.banned: comma-separated SteamID64s the hosts kicked (written by the bridge only).
+    string[] banned = [];
+    public IReadOnlyCollection<string> Banned { get { lock (gate) return banned; } }
 
     public SteamTransport(string pipeName = DefaultPipe, Func<long>? clock = null)
     {
@@ -163,6 +166,8 @@ sealed class SteamTransport : IMultiplayerTransport
                     break;
                 case "lobby.updated":
                     lobby = Str(e, "lobby"); owner = Str(e, "owner"); isHost = Bool(e, "isHost"); creating = false; lastLobby = null;
+                    banned = e.TryGetProperty("data", out var lobbyData) && lobbyData.ValueKind == JsonValueKind.Object && Str(lobbyData, "aimmod.banned") is { Length: <= 4096 } bans
+                        ? bans.Split(',').Where(id => id.Length is > 0 and <= 20 && id.All(char.IsAsciiDigit)).Distinct().Take(64).ToArray() : [];
                     members.Clear();
                     if (e.TryGetProperty("members", out var list) && list.ValueKind == JsonValueKind.Array)
                         foreach (var m in list.EnumerateArray()) if (Str(m, "peer") is { } peer) members[peer] = (Bool(m, "connected"), Int(m, "rtt"));
@@ -176,7 +181,7 @@ sealed class SteamTransport : IMultiplayerTransport
                 case "lobby.left":
                     var reason = Str(e, "reason") ?? "left";
                     if (!isHost && owner is not null) events.Enqueue(new TransportEvent(owner, TransportEvent.Disconnected, Reason: reason));
-                    lobby = null; owner = null; isHost = false; members.Clear(); rtt.Clear(); lastData = null; lastJoinable = null;
+                    lobby = null; owner = null; isHost = false; members.Clear(); rtt.Clear(); lastData = null; lastJoinable = null; banned = [];
                     break;
                 case "invite.received":
                     // Proposed bridge event (LobbyInvite_t, 503): an invite the player hasn't accepted yet.

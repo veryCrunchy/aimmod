@@ -809,6 +809,8 @@ static partial class MultiplayerChecks
     {
         public readonly Dictionary<string, MemoryTransport> Peers = new();
         public readonly Dictionary<string, string> Codes = new();
+        // The bridge's aimmod.banned lobby value: kicks the Steam lobby remembers for every host.
+        public readonly HashSet<string> Banned = [];
     }
     sealed class MemoryTransport(MemoryNetwork network, string id) : IMultiplayerTransport
     {
@@ -823,7 +825,8 @@ static partial class MultiplayerChecks
         public bool BeginJoin(string token) { if (network.Codes.GetValueOrDefault(token) is not { } host) return false; joinedCode = token; Inbox.Enqueue(new TransportEvent(host, TransportEvent.Connected, Host: true)); return true; }
         public void DismissJoin() { }
         public readonly List<string> HostActions = [];
-        public void Kick(string peer) => HostActions.Add("kick " + peer);
+        public void Kick(string peer) { HostActions.Add("kick " + peer); network.Banned.Add(peer); }
+        public IReadOnlyCollection<string> Banned => network.Banned;
         public void Transfer(string peer) => HostActions.Add("transfer " + peer);
         public string? HostHint => null;
         string? joinedCode;
@@ -968,6 +971,14 @@ static partial class MultiplayerChecks
         net.Peers["peer-b"].Inbox.Enqueue(new TransportEvent("", TransportEvent.Error, Reason: "Synthetic bridge error"));
         Pump();
         Check(View(b).GetProperty("notice").GetProperty("text").GetString() == "Synthetic bridge error", "Bridge errors surface as a notice");
+        // The host who kicked leaves: the next host still refuses the kicked player.
+        b.Act("leave", default);
+        Pump(); Pump();
+        Check(View(c).GetProperty("lobby").GetProperty("isHost").GetBoolean(), "The remaining member hosts after the kicking host left");
+        Check(d.Act("join", J(new { code = net.Codes.Single().Key })).Ok, "The kicked player tries the room code again");
+        Pump(); Pump();
+        Check(View(d).GetProperty("lobby").ValueKind == JsonValueKind.Null && View(c).GetProperty("lobby").GetProperty("members").EnumerateArray().All(m => m.GetProperty("id").GetString() != "peer-d"),
+            "A kick outlives a host change: the new host refuses the kicked player");
     }
 
     // A fake AimModSteam on a private pipe name checks the v1 contract both ways.
@@ -997,8 +1008,9 @@ static partial class MultiplayerChecks
         steam.Advertise(core.Snapshot());
         var create = Expect("lobby.create");
         Check(create.GetProperty("privacy").GetString() == "friends" && create.GetProperty("maxMembers").GetInt32() == 4 && create.GetProperty("data").GetProperty("aimmod.code").GetString() == "ABCDEF", "Advertise creates a friends lobby with aimmod.* data");
-        Write(new { v = 1, ev = "lobby.updated", lobby = lobbyId, owner = self, isHost = true, privacy = "friends", joinable = true, maxMembers = 4, members = new[] { new { peer = self, name = "Synthetic Host", initials = "SH", host = true, self = true, connected = true } }, data = new { } });
+        Write(new { v = 1, ev = "lobby.updated", lobby = lobbyId, owner = self, isHost = true, privacy = "friends", joinable = true, maxMembers = 4, members = new[] { new { peer = self, name = "Synthetic Host", initials = "SH", host = true, self = true, connected = true } }, data = new Dictionary<string, string> { ["aimmod.banned"] = "1001,x,1002,1001" } });
         Check(Until(() => steam.HostHint == self), "lobby.updated names the owner");
+        Check(steam.Banned.SequenceEqual(["1001", "1002"]), "The bridge's ban list is read from the lobby data, without junk or repeats");
         steam.Advertise(core.Snapshot());
         Check(Expect("lobby.setData").GetProperty("data").GetProperty("aimmod.players").GetString() == "1/4" && Expect("lobby.setJoinable").GetProperty("joinable").GetBoolean() && Expect("presence.set").GetProperty("status").GetString()!.StartsWith("In an AimMod lobby", StringComparison.Ordinal), "Later adverts update data, joinability and rich presence");
         var frame = Protocol.Encode(Protocol.Create("ping", "l", self, 1, 2, new { t0 = 2 }));

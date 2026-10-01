@@ -1192,6 +1192,8 @@ sealed partial class MultiplayerService : IDisposable
             if (core is not null)
             {
                 core.RequireLoading = game.Capabilities.Contains("load");
+                // Kicks the Steam lobby remembers (from an earlier host too) stay refused here.
+                foreach (var kicked in transport.Banned) core.Ban(kicked);
                 Simulation?.Step(core, SelfId);
                 core.Tick();
                 if (core.Closed) { core = null; Reset(); return; }

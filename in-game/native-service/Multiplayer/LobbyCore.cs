@@ -196,6 +196,8 @@ sealed class LobbyCore
         if (member.Cosmetics.SequenceEqual(next)) return;
         member.Cosmetics = next; Changed();
     }
+    // A member kicked by an earlier host (the Steam lobby remembers kicks): refused from now on.
+    public void Ban(string id) { if (id != HostId && banned.Add(id) && Find(id) is not null) Leave(id, "kicked"); }
     public void SetVersion(string id, string? version) { if (Find(id) is { } m && version is not null && m.Version != version) { m.Version = version; Changed(); } }
     public void SetLink(string id, string? route, int? ping)
     {
