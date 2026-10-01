@@ -171,6 +171,10 @@ static class CoreFormatChecks
             Check(duel is { Self: [5, 10, 20, 30, 35, 88, 1], Fire: [5, 42, 1] } && duel.Tags[3] == "76561190000000001", "avatar tags, own body and firing parsed; unknown rows ignored");
             Check(LivePoseFrame.Parse("AIMMOD_POSE_1\t2\npose\t5\t0\t0\t0\t0\t0\t0\t90\nself\t5\t1\t2\t3\t40\t30\t0\n") is null
                 && LivePoseFrame.Parse("AIMMOD_POSE_1\t2\npose\t5\t0\t0\t0\t0\t0\t0\t90\nfire\t5\t-1\t0\n") is null, "malformed optional rows rejected");
+            // AimModCore writes real unix ms times (about 1.8e12) in pose, self and fire rows.
+            var realTimes = LivePoseFrame.Parse("AIMMOD_POSE_1\t3\npose\t1790871546958\t1\t2\t3\t0\t90\t0\t90\nself\t1790871546958\t1\t2\t-61\t34\t88\t0\nfire\t1790871546958\t12\t1\n");
+            Check(realTimes is { Self: [1790871546958, 1, 2, -61, 34, 88, 0], Fire: [1790871546958, 12, 1] } && realTimes.Poses[0].UnixMs == 1790871546958,
+                "self and fire rows with real unix ms times parse (the whole frame used to be dropped)");
             var spectate = new NativeReplayPlayback(root, () => true, () => 6);
             var feed = new LivePoseFeed(posePath);
             Check(feed.Update(), "live feed reads the stream");

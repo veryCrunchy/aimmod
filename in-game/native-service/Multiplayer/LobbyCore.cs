@@ -350,7 +350,7 @@ sealed class LobbyCore
                 rm.Loaded.Clear(); rm.LoadIssues.Clear(); rm.LoadWaiting.Clear(); rm.LoadFailed = false; rm.LoadAttempt++; rm.NextAt = clock() + LoadingMs;
                 System("Loading again.");
                 return LobbyResult.Success;
-            case "buy" or "use":
+            case "buy" or "use" or "drop":
                 return CsAction(member, action, args);
             case "avatar":
                 // How this member looks in other players' games (any member, any time).
@@ -620,13 +620,16 @@ sealed class LobbyCore
         string? refused;
         if (action == "buy")
             refused = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("item", out var item) && item.ValueKind == JsonValueKind.String ? cs.Buy(member.Id, item.GetString() ?? "", clock()) : "unknown-item";
+        else if (action == "drop") refused = cs.Drop(member.Id, clock());
         else
             refused = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("held", out var held) && held.ValueKind is JsonValueKind.True or JsonValueKind.False ? cs.Use(member.Id, held.GetBoolean(), clock()) : "invalid";
         Changed();
         return refused is null ? LobbyResult.Success : LobbyResult.Fail(refused, refused switch
         {
             "money" => "Not enough money.", "buy-time" => "Buy time is over.", "buy-zone" => "Go back to your buy zone.", "side" => "Your side can't buy that.",
-            "owned" => "You already have that.", "not-in-site" => "Plant at a bomb site.", "moving" => "Stand still to plant.", "not-at-bomb" => "Get to the bomb to defuse.",
+            "owned" => "You already have that.", "not-in-site" => "Not in a bomb site.", "moving" => "Stand still to plant.", "not-at-bomb" => "Get to the bomb to defuse.",
+            "no-bomb" => "You don’t have the bomb.", "freeze" => "Wait for freeze time to end.", "no-track" => "AimMod can’t see where you are (no pose feed from AimModCore).",
+            "dead" => "You’re down until the next round.", "busy" => "A teammate is already defusing.", "nothing-to-use" => "Nothing to use here.", "not-now" => "Not now.",
             _ => "Not now (" + refused + ").",
         });
     }

@@ -1,6 +1,12 @@
 /* CS HUD (cshud.js): everything sits at the screen edges, never near the crosshair. Solid palette. */
 #cs-hud{display:none;position:absolute;left:0;top:0;width:100%;height:100%}
 #cs-hud.show{display:block}
+.cs-compass{position:absolute;top:84px;left:50%;width:320px;margin-left:-160px;height:26px;border-bottom:1px solid #2c3a34}
+.cs-mark{position:absolute;top:0;width:56px;margin-left:-28px;text-align:center;color:#f0b45a;font-size:12px;line-height:13px}
+.cs-mark.behind{color:#7f968a}.cs-mark.here{color:#27e4a1}
+.cs-mark-name{display:block;font-weight:700;font-size:13px}.cs-mark-dist{display:block;font-size:10px;color:#9fb3a9}
+.cs-site{position:absolute;top:116px;left:50%;width:240px;margin-left:-120px;text-align:center;background:#0f1714;border:1px solid #27e4a1;border-radius:4px;padding:3px 0;color:#27e4a1;font-size:13px}
+.cs-site strong{display:block;font-size:15px}.cs-site span{display:block;color:#cfe0d8;font-size:12px}
 .cs-top{position:absolute;top:10px;left:0;right:0;display:flex;flex-direction:row;justify-content:center;align-items:stretch}
 .cs-score{display:flex;flex-direction:row;align-items:center;width:110px;padding:0 12px;background:#0f1714;border:1px solid #22302a}
 .cs-score.t{justify-content:flex-end;border-radius:8px 0 0 8px}.cs-score.ct{justify-content:flex-start;border-radius:0 8px 8px 0}
@@ -61,3 +67,6 @@
 @media(min-height:1300px){.cs-top{transform:scale(1.33);transform-origin:50% 0}.cs-buy{top:136px;transform:scale(1.33);transform-origin:0 0}
 .cs-me{transform:scale(1.33);transform-origin:0 100%}.cs-feed{top:128px;transform:scale(1.33);transform-origin:100% 0}
 .cs-banner,.cs-notice,.cs-use{transform:scale(1.33);transform-origin:50% 0}}
+.cs-bomb{margin-top:4px;font-size:12px;color:#f0b45a}.cs-bomb.mate{color:#cfe0d8}
+.cs-bomb-icon{background:#f0b45a;color:#0f1714;font-weight:700;font-size:10px;padding:0 4px;margin-right:6px;border-radius:2px}
+.cs-refused{position:absolute;bottom:150px;left:50%;width:360px;margin-left:-180px;text-align:center;background:#3a1d25;color:#ff8fa3;border-radius:4px;padding:5px 0;font-size:14px}

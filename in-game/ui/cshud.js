@@ -18,10 +18,12 @@
     return c;
   }
   var CATS=[['pistol','Pistols'],['smg','SMGs'],['rifle','Rifles'],['heavy','Heavy'],['gear','Gear']];
+  // The menu is built once per change of what it offers and kept in place while the clock or the
+  // rest of the HUD redraws, so a click is never lost to a redraw between press and release.
   function buyMenu(c,act){
     var box=node('div','cs-buy');box.setAttribute('role','dialog');box.setAttribute('aria-label','Buy menu');
     var head=node('div','cs-buy-head');head.appendChild(node('strong','','Buy'));head.appendChild(node('span','cs-buy-money',money(c.money)));
-    head.appendChild(node('span','cs-buy-left',typeof c.buyLeft==='number'?'Buy time '+clock(c.buyLeft):'Buy time over'));
+    var left=node('span','cs-buy-left',typeof c.buyLeft==='number'?'Buy time '+clock(c.buyLeft):'Buy time over');head.appendChild(left);box.timeNode=left;
     var close=node('button','cs-buy-close',c.buyKey+' closes');close.type='button';close.onclick=function(){act('cs-buy-menu','');};head.appendChild(close);
     box.appendChild(head);
     // Two columns so the whole menu fits at 720p: pistols, SMGs and heavy; rifles and gear.
@@ -45,10 +47,17 @@
     });
     return box;
   }
-  function render(target,c,act){
+  function render(root2,c,act){
+    // Two layers: the HUD (redrawn every time) and the buy menu (kept while it offers the same).
+    var layers=root2.csLayers;
+    if(!layers){while(root2.firstChild)root2.removeChild(root2.firstChild);layers=root2.csLayers={hud:node('div','cs-layer'),menu:node('div','cs-layer'),key:null};root2.appendChild(layers.hud);root2.appendChild(layers.menu);}
+    var target=layers.hud;
     while(target.firstChild)target.removeChild(target.firstChild);
-    if(!c){target.className='';return;}
-    target.className='show';
+    var menuKey=c&&c.buyOpen?JSON.stringify([c.buy,c.money,c.buyKey]):null;
+    if(menuKey!==layers.key){while(layers.menu.firstChild)layers.menu.removeChild(layers.menu.firstChild);layers.key=menuKey;if(menuKey)layers.menu.appendChild(buyMenu(c,act));}
+    else if(menuKey&&layers.menu.firstChild&&layers.menu.firstChild.timeNode)layers.menu.firstChild.timeNode.textContent=typeof c.buyLeft==='number'?'Buy time '+clock(c.buyLeft):'Buy time over';
+    if(!c){root2.className='';return;}
+    root2.className='show';
     // Top: score strip and the clock for this phase.
     var top=node('div','cs-top');
     var t=node('div','cs-score t'+(c.side==='T'?' mine':''));t.appendChild(node('span','cs-team','T'));t.appendChild(node('span','cs-points',c.tScore));
@@ -60,6 +69,15 @@
     mid.appendChild(node('span','cs-clock-round','Round '+c.round+' of '+c.rounds));
     var ct=node('div','cs-score ct'+(c.side==='CT'?' mine':''));ct.appendChild(node('span','cs-points',c.ctScore));ct.appendChild(node('span','cs-team','CT'));
     top.appendChild(t);top.appendChild(mid);top.appendChild(ct);target.appendChild(top);
+    // Bomb sites on a compass under the strip (90 degrees either side; behind clamps to an edge), and
+    // the site letter (and callout) while you stand in one.
+    if(c.sites&&c.sites.length&&!c.buyOpen){
+      var comp=node('div','cs-compass');
+      c.sites.forEach(function(s){var b=Math.max(-90,Math.min(90,s.bearing));var m=node('div','cs-mark'+(Math.abs(s.bearing)>90?' behind':'')+(c.inSite===s.name?' here':''));
+        m.style.left=Math.round((b+90)/180*100)+'%';m.appendChild(node('span','cs-mark-name',s.name));m.appendChild(node('span','cs-mark-dist',s.meters+' m'));comp.appendChild(m);});
+      target.appendChild(comp);
+    }
+    if(c.inSite||c.callout){var here=node('div','cs-site');if(c.inSite)here.appendChild(node('strong','','Bomb site '+c.inSite));if(c.callout)here.appendChild(node('span','',c.callout));target.appendChild(here);}
     // Banners: round end with the reason, halftime side switch.
     if(c.banner){var bn=node('div','cs-banner team'+c.banner.team+(c.banner.won?' won':' lost'));bn.appendChild(node('strong','',c.banner.title));bn.appendChild(node('span','',c.banner.reason));target.appendChild(bn);}
     if(c.notice)target.appendChild(node('div','cs-notice',c.notice));
@@ -67,6 +85,8 @@
     if(c.feed&&c.feed.length){var feed=node('div','cs-feed');c.feed.forEach(function(f){var l=node('div','cs-kill'+(f.you?' '+f.you:''));l.appendChild(node('span','cs-k team'+f.killerTeam,f.killer));l.appendChild(node('span','cs-w',(f.weapon||'')+(f.head?' · headshot':'')));l.appendChild(node('span','cs-v',f.victim));feed.appendChild(l);});target.appendChild(feed);}
     // Plant or defuse: a hint and the progress bar, low in the middle.
     var progress=typeof c.plantProgress==='number'?c.plantProgress:typeof c.defuseProgress==='number'?c.defuseProgress:null;
+    // Why the last plant, defuse or drop didn't happen ("Not in a bomb site", "You don't have the bomb").
+    if(c.refused&&progress===null)target.appendChild(node('div','cs-refused',c.refused));
     if(c.useHint||progress!==null){var use=node('div','cs-use');use.appendChild(node('span','cs-use-text',progress!==null?(typeof c.plantProgress==='number'?'Planting…':'Defusing…'):c.useHint));
       if(progress!==null){var bar=node('div','cs-bar');var fill=node('div','cs-fill');fill.style.width=Math.round(progress*100)+'%';bar.appendChild(fill);use.appendChild(bar);}target.appendChild(use);}
     // Bottom left: money with the last round's change, health, armour, helmet and kit.
@@ -77,10 +97,12 @@
     else vit.appendChild(node('span','cs-hp down','Down'));
     me.appendChild(vit);
     var gun=[c.primary,c.secondary].filter(function(x){return !!x;}).join(' · ');if(gun)me.appendChild(node('div','cs-guns',gun));
+    // The bomb: yours (with the drop key), or which teammate has it.
+    if(c.hasBomb){var bomb=node('div','cs-bomb');bomb.appendChild(node('span','cs-bomb-icon','C4'));bomb.appendChild(node('span','','You have the bomb · '+(c.dropKey||'G')+' drops it'));me.appendChild(bomb);}
+    else if(c.bombCarrier)me.appendChild(node('div','cs-bomb mate','Bomb: '+c.bombCarrier));
     if(c.buyWindow&&!c.buyOpen)me.appendChild(node('div','cs-key-hint','Press '+c.buyKey+' to buy'));
     (c.keyClashes||[]).forEach(function(k){me.appendChild(node('div','cs-clash',k));});
     target.appendChild(me);
-    if(c.buyOpen)target.appendChild(buyMenu(c,act));
   }
   root.AimModCsHud={render:render};
 })(window);

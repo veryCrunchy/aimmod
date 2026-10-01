@@ -73,8 +73,26 @@ sealed record ObjectiveZone(string Type, string Team, string Name, double[] Min,
         x >= Min[0] - margin && x <= Max[0] + margin && y >= Min[1] - margin && y <= Max[1] + margin && eyeZ >= Min[2] - 100 && eyeZ - 64 <= Max[2] + 150;
 }
 sealed record ObjectiveSpawn(string Team, double X, double Y, double Z, double Yaw);
-sealed record MapObjectives(IReadOnlyList<ObjectiveZone> Zones, IReadOnlyList<ObjectiveSpawn> Spawns)
+// CsProblem: why the map can't host CS competitive (null: it can). Only the AimMod CS map spec
+// (the file's "cs" block, "aimmod.cs-map" version 1: T and CT spawns, bomb sites A and B, T and
+// CT buy zones, optional callouts) makes a map eligible; the zones alone don't.
+sealed record MapObjectives(IReadOnlyList<ObjectiveZone> Zones, IReadOnlyList<ObjectiveSpawn> Spawns, string? CsProblem = MapObjectives.NoCsData)
 {
+    public const string NoCsData = "No CS map data";
+    public const int MinCsSpawns = 5;
+    public IReadOnlyList<ObjectiveZone> Callouts => Zones.Where(z => z.Type == "callout").ToArray();
+    // The same rules as the map port (tools/map-port/mapport/csmap.py problems()).
+    public static string? CsProblemOf(IReadOnlyList<ObjectiveZone> zones, IReadOnlyList<ObjectiveSpawn> spawns)
+    {
+        var sites = zones.Where(z => z.Type == "bomb_site").Select(z => z.Name).ToList();
+        if (sites.Count == 0) return "No bomb sites";
+        if (!sites.Contains("A") || !sites.Contains("B")) return "Needs bomb sites A and B";
+        foreach (var (side, team) in new[] { ("T", "terrorist"), ("CT", "counter_terrorist") })
+            if (spawns.Count(s => s.Team == team) < MinCsSpawns) return "Fewer than " + MinCsSpawns + " " + side + " spawns";
+        foreach (var (side, team) in new[] { ("T", "terrorist"), ("CT", "counter_terrorist") })
+            if (!zones.Any(z => z.Type == "buy_zone" && z.Team == team)) return "No " + side + " buy zone";
+        return null;
+    }
     public IReadOnlyList<ObjectiveZone> BombSites => Zones.Where(z => z.Type == "bomb_site").ToArray();
     public IReadOnlyList<ObjectiveZone> BuyZones(string side) => Zones.Where(z => z.Type == "buy_zone" && (z.Team == "any" || z.Team == (side == CsRules.T ? "terrorist" : "counter_terrorist"))).ToArray();
     public IReadOnlyList<ObjectiveSpawn> SpawnsFor(string side) => Spawns.Where(s => s.Team == "any" || s.Team == (side == CsRules.T ? "terrorist" : "counter_terrorist")).ToArray();
@@ -103,6 +121,35 @@ sealed record MapObjectives(IReadOnlyList<ObjectiveZone> Zones, IReadOnlyList<Ob
                     if (V(sp.GetProperty("origin")) is { } o)
                         spawns.Add(new ObjectiveSpawn(sp.TryGetProperty("team", out var t) ? t.GetString() ?? "any" : "any", o[0] * scale, o[1] * scale, o[2] * scale,
                             sp.TryGetProperty("yaw", out var y) && y.TryGetDouble(out var yaw) ? yaw : 0));
+            // The CS map spec replaces the raw zones and spawns for CS.
+            if (root.TryGetProperty("cs", out var cs) && cs.ValueKind == JsonValueKind.Object && cs.TryGetProperty("format", out var cf) && cf.GetString() == "aimmod.cs-map"
+                && cs.TryGetProperty("version", out var cv) && cv.TryGetInt32(out var version) && version == 1)
+            {
+                var csZones = new List<ObjectiveZone>(); var csSpawns = new List<ObjectiveSpawn>();
+                ObjectiveZone? Box(JsonElement b, string type, string team, string name) =>
+                    b.ValueKind == JsonValueKind.Object && b.TryGetProperty("min", out var lo2) && b.TryGetProperty("max", out var hi2) && V(lo2) is { } a && V(hi2) is { } c
+                        ? new ObjectiveZone(type, team, name, a.Select(v => v * scale).ToArray(), c.Select(v => v * scale).ToArray()) : null;
+                if (cs.TryGetProperty("bomb_sites", out var sites) && sites.ValueKind == JsonValueKind.Array)
+                    foreach (var site in sites.EnumerateArray().Take(8))
+                        if (Box(site, "bomb_site", "any", site.TryGetProperty("name", out var sn) ? sn.GetString() ?? "" : "") is { } z) csZones.Add(z);
+                foreach (var (side, team) in new[] { ("T", "terrorist"), ("CT", "counter_terrorist") })
+                {
+                    if (cs.TryGetProperty("buy_zones", out var buys) && buys.ValueKind == JsonValueKind.Object && buys.TryGetProperty(side, out var list) && list.ValueKind == JsonValueKind.Array)
+                        foreach (var box in list.EnumerateArray().Take(16))
+                            if (Box(box, "buy_zone", team, "") is { } z) csZones.Add(z);
+                    if (cs.TryGetProperty("spawns", out var sp) && sp.ValueKind == JsonValueKind.Object && sp.TryGetProperty(side, out var points) && points.ValueKind == JsonValueKind.Array)
+                        foreach (var point in points.EnumerateArray().Take(64))
+                            if (point.ValueKind == JsonValueKind.Array && point.GetArrayLength() == 4 && point.EnumerateArray().All(x => x.ValueKind == JsonValueKind.Number))
+                            {
+                                var v = point.EnumerateArray().Select(x => x.GetDouble()).ToArray();
+                                csSpawns.Add(new ObjectiveSpawn(team, v[0] * scale, v[1] * scale, v[2] * scale, v[3]));
+                            }
+                }
+                if (cs.TryGetProperty("callouts", out var calls) && calls.ValueKind == JsonValueKind.Array)
+                    foreach (var call in calls.EnumerateArray().Take(64))
+                        if (call.TryGetProperty("name", out var cn) && cn.GetString() is { Length: > 0 and <= 32 } callName && Box(call, "callout", "any", callName) is { } z) csZones.Add(z);
+                return new MapObjectives(csZones, csSpawns, CsProblemOf(csZones, csSpawns));
+            }
             // Unnamed bomb sites are A, B, ... in file order.
             var letter = 'A';
             zones = zones.Select(z => z.Type == "bomb_site" && z.Name.Length == 0 ? z with { Name = (letter++).ToString() } : z).ToList();
@@ -115,11 +162,14 @@ sealed record MapObjectives(IReadOnlyList<ObjectiveZone> Zones, IReadOnlyList<Ob
 // What clients mirror and the HUD shows.
 // InBuyZone: inside one of the side's buy zones now (null when the map has none, so buying works anywhere).
 sealed record CsPlayerView(string Member, int Team, string Side, int Money, bool Alive, double Health, double Armor, bool Helmet, bool Kit, string? Primary, string? Secondary, int Kills, int Deaths,
-    bool? InBuyZone = null);
+    bool? InBuyZone = null, string? Site = null, string? Callout = null);
+// A bomb site's centre (world units), for the HUD's site markers.
+sealed record CsSiteView(string Name, double X, double Y, double Z);
 sealed record CsBombView(string State, string? Carrier, string? Site, double[]? Position, long? ExplodesAt, string? Planter, long? PlantDoneAt, string? Defuser, long? DefuseDoneAt);
 sealed record CsEvent(long Id, string Kind, long T, string? Member, string? Text, int Amount = 0);
 sealed record CsView(int Round, string Phase, long PhaseEndsAt, long? LiveAt, int[] Score, string Team1Side, int HalfRounds, bool Overtime, IReadOnlyList<CsPlayerView> Players,
-    CsBombView Bomb, int? LastWinner, string? LastReason, int? WinnerTeam, IReadOnlyList<CsEvent> Events, IReadOnlyDictionary<string, double[]>? Spawns);
+    CsBombView Bomb, int? LastWinner, string? LastReason, int? WinnerTeam, IReadOnlyList<CsEvent> Events, IReadOnlyDictionary<string, double[]>? Spawns,
+    IReadOnlyList<CsSiteView>? Sites = null);
 
 sealed class CsMatch
 {
@@ -147,6 +197,10 @@ sealed class CsMatch
     int? lastWinner; string? lastReason;
     // Bomb.
     string bombState = "carried"; string? carrier, site, planter, defuser; double[]? bombAt; long? explodesAt, plantDoneAt, defuseDoneAt; double[]? plantFrom;
+    // Who dropped the bomb on purpose, and until when they can't pick it straight back up.
+    string? dropper; long dropperBlockedUntil;
+    public const long DropBlockMs = 1500;
+    public const double DropAheadCm = 70;
     bool plantedThisRound;
     readonly Dictionary<string, double[]> roundSpawns = new();
 
@@ -227,9 +281,11 @@ sealed class CsMatch
                 roundSpawns[p.Id] = [s.X, s.Y, s.Z, s.Yaw];
             }
         }
-        // The bomb: a Terrorist in turn carries it.
+        // The bomb: the last carrier keeps it if they're still a Terrorist, else a random Terrorist.
         var ts = Side(CsRules.T).ToList();
-        carrier = ts.Count > 0 ? ts[(Round - 1) % ts.Count].Id : null;
+        carrier = carrier is { } last && ts.Any(t => t.Id == last) ? last
+            : ts.Count > 0 ? ts[new Random(unchecked((int)(Combat.Start ^ Round * 7919L))).Next(ts.Count)].Id : null;
+        dropper = null; dropperBlockedUntil = 0;
         bombState = carrier is null ? "none" : "carried"; site = null; planter = null; defuser = null; bombAt = null; explodesAt = null; plantDoneAt = null; defuseDoneAt = null; plantedThisRound = false;
         Event("round", now, null, "Round " + Round);
     }
@@ -276,6 +332,22 @@ sealed class CsMatch
         return null;
     }
 
+    // The drop key (G): the carrier puts the bomb down in front of them, for a teammate to pick up.
+    public string? Drop(string id, long now)
+    {
+        if (!players.TryGetValue(id, out _) || !Combat.Alive(id)) return "dead";
+        if (carrier != id) return "no-bomb";
+        if (Phase is not ("freeze" or "live")) return "not-now";
+        if (Combat.Position(id) is not { } at) return "no-track";
+        var yaw = at.Yaw * Math.PI / 180;
+        carrier = null; bombState = "dropped";
+        bombAt = [Math.Round(at.X + Math.Cos(yaw) * DropAheadCm, 1), Math.Round(at.Y + Math.Sin(yaw) * DropAheadCm, 1), Math.Round(at.Z - 64, 1)];
+        dropper = id; dropperBlockedUntil = now + DropBlockMs;
+        if (planter == id) { planter = null; plantDoneAt = null; }
+        Event("bomb-dropped", now, id, null);
+        return null;
+    }
+
     // The use key (E): held to plant (carrier in a bomb site) or to defuse (CT at the bomb).
     public string? Use(string id, bool held, long now)
     {
@@ -288,6 +360,8 @@ sealed class CsMatch
         }
         var side = SideOf(p.Team);
         if (Combat.Position(id) is not { } at) return "no-track";
+        if (side == CsRules.T && Phase == "live" && carrier != id && bombState is "carried" or "dropped") return "no-bomb";
+        if (side == CsRules.T && Phase == "freeze") return "freeze";
         if (side == CsRules.T && Phase == "live" && carrier == id)
         {
             var inSite = map?.BombSites.FirstOrDefault(z => z.Contains(at.X, at.Y, at.Z));
@@ -308,12 +382,27 @@ sealed class CsMatch
         return "nothing-to-use";
     }
 
+    // A dropped bomb is picked up by an alive Terrorist walking over it (not by the one who just
+    // dropped it, for a moment); Counter-Terrorists walk over it.
+    void PickUp(long now)
+    {
+        if (bombState != "dropped" || bombAt is not { } drop) return;
+        foreach (var t in Side(CsRules.T))
+        {
+            if (t.Id == dropper && now < dropperBlockedUntil) continue;
+            if (Combat.Alive(t.Id) && Combat.Position(t.Id) is { } at && Math.Sqrt((at.X - drop[0]) * (at.X - drop[0]) + (at.Y - drop[1]) * (at.Y - drop[1])) <= CsRules.BombPickupCm
+                && Math.Abs(at.Z - 64 - drop[2]) <= 120)
+            { carrier = t.Id; bombState = "carried"; bombAt = null; dropper = null; Event("bomb-picked", now, t.Id, null); return; }
+        }
+    }
+
     public void Leave(string id, long now) { Combat.Kill(id, now); if (carrier == id) DropBomb(id); if (planter == id) planter = null; if (defuser == id) defuser = null; }
 
     public void Tick(long now)
     {
         if (Over) return;
         if (Phase == "freeze" && now >= PhaseEndsAt) { Phase = "live"; LiveAt = now; PhaseEndsAt = now + CsRules.RoundMs; Event("live", now, null, null); }
+        if (Phase == "freeze") PickUp(now);
         if (Phase is "live" or "planted")
         {
             // Plant and defuse progress: the holder must stay alive and in place.
@@ -341,11 +430,7 @@ sealed class CsMatch
                     return;
                 }
             }
-            // A dropped bomb is picked up by a Terrorist walking over it.
-            if (bombState == "dropped" && bombAt is { } drop)
-                foreach (var t in Side(CsRules.T))
-                    if (Combat.Alive(t.Id) && Combat.Position(t.Id) is { } at && Math.Sqrt((at.X - drop[0]) * (at.X - drop[0]) + (at.Y - drop[1]) * (at.Y - drop[1])) <= CsRules.BombPickupCm)
-                    { carrier = t.Id; bombState = "carried"; bombAt = null; Event("bomb-picked", now, t.Id, null); break; }
+            PickUp(now);
             var tAlive = Side(CsRules.T).Count(p => Combat.Alive(p.Id)); var ctAlive = Side(CsRules.CT).Count(p => Combat.Alive(p.Id));
             if (Phase == "planted")
             {
@@ -424,11 +509,16 @@ sealed class CsMatch
         return Combat.Position(p.Id) is { } at && zones.Any(z => z.Contains(at.X, at.Y, at.Z, 50));
     }
 
+    // The bomb site (letter) and callout the player stands in now.
+    string? SiteOf(P p) => map is not null && Combat.Position(p.Id) is { } at ? map.BombSites.FirstOrDefault(z => z.Contains(at.X, at.Y, at.Z))?.Name : null;
+    string? CalloutOf(P p) => map is not null && Combat.Position(p.Id) is { } at ? map.Callouts.FirstOrDefault(z => z.Contains(at.X, at.Y, at.Z))?.Name : null;
+
     void Finish(long now, int? winner) { Phase = "over"; WinnerTeam = winner; PhaseEndsAt = now; Event("match-end", now, null, null, winner ?? 0); }
 
     public CsView View() => new(Round, Phase, PhaseEndsAt, LiveAt, [score[0], score[1]], SideOf(1), HalfRounds, Overtime,
         players.Values.Select(p => new CsPlayerView(p.Id, p.Team, SideOf(p.Team), p.Money, Combat.Alive(p.Id), Math.Round(Combat.Health(p.Id), 1), Math.Round(p.Armor, 1), p.Helmet, p.Kit,
-            p.Primary?.Id, p.Secondary?.Id, p.Kills, p.Deaths, InBuyZone(p))).ToArray(),
+            p.Primary?.Id, p.Secondary?.Id, p.Kills, p.Deaths, InBuyZone(p), SiteOf(p), CalloutOf(p))).ToArray(),
         new CsBombView(bombState, carrier, site, bombAt, explodesAt, planter, plantDoneAt, defuser, defuseDoneAt), lastWinner, lastReason, WinnerTeam, events.TakeLast(16).ToArray(),
-        roundSpawns.Count > 0 ? new Dictionary<string, double[]>(roundSpawns) : null);
+        roundSpawns.Count > 0 ? new Dictionary<string, double[]>(roundSpawns) : null,
+        map?.BombSites.Select(z => new CsSiteView(z.Name, Math.Round((z.Min[0] + z.Max[0]) / 2), Math.Round((z.Min[1] + z.Max[1]) / 2), Math.Round((z.Min[2] + z.Max[2]) / 2))).ToArray());
 }

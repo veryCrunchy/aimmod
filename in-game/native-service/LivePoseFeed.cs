@@ -59,13 +59,18 @@ sealed record LivePoseFrame(long Sequence, string Stream, string Scenario, strin
                     tags[tagged] = c[2];
                     break;
                 case "self" when c.Length == 8:
+                    // The first cell is a unix ms time (about 1.8e12): an integer, outside Num's range.
                     self = new double[7];
-                    for (int i = 0; i < 7; i++) if (!Num(c[i + 1], out self[i])) return null;
+                    if (!long.TryParse(c[1], NumberStyles.None, CultureInfo.InvariantCulture, out var selfMs)) return null;
+                    self[0] = selfMs;
+                    for (int i = 1; i < 7; i++) if (!Num(c[i + 1], out self[i])) return null;
                     if (self[4] <= 0 || self[5] < self[4] || self[6] is not (0 or 1)) return null;
                     break;
                 case "fire" when c.Length == 4:
                     fire = new double[3];
-                    for (int i = 0; i < 3; i++) if (!Num(c[i + 1], out fire[i])) return null;
+                    if (!long.TryParse(c[1], NumberStyles.None, CultureInfo.InvariantCulture, out var fireMs)) return null;
+                    fire[0] = fireMs;
+                    for (int i = 1; i < 3; i++) if (!Num(c[i + 1], out fire[i])) return null;
                     if (fire[1] < 0 || fire[2] is not (0 or 1)) return null;
                     break;
                 case "meta" or "pose" or "target" or "tag" or "self" or "fire": return null; // known row, wrong shape
