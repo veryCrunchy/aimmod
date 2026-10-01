@@ -1,0 +1,3 @@
+# AimModSteam settings (Mods\AimModSteam\config.txt).
+# ghost_demo=1 enables the two-player ghost demo (see config.ghost-demo.txt).
+ghost_demo=0

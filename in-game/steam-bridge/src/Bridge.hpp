@@ -50,6 +50,30 @@ namespace bridge
         // unregisters callbacks and stops the threads.
         void Stop();
 
+        // Ghost demo (config ghost_demo=1): auto-join Steam invites when no
+        // service is connected, and stream poses at 30 Hz to lobby peers.
+        struct Options
+        {
+            bool ghostDemo = false;
+            std::wstring scenePath; // AimModCore's core-scene.json
+        };
+        void SetOptions(Options options) { m_options = std::move(options); } // before Start
+        struct GhostSample
+        {
+            double time; // local receive time, seconds (steady clock)
+            Pose pose;
+        };
+        struct GhostPeer
+        {
+            std::uint64_t peer = 0;
+            std::vector<GhostSample> samples; // oldest first
+        };
+        // Thread-safe; called from the game thread.
+        void SubmitLocalPose(const Pose& pose);
+        std::vector<GhostPeer> Ghosts();
+        std::string LocalScene();
+        static double Now();
+
     private:
         using Clock = std::chrono::steady_clock;
 
@@ -136,6 +160,12 @@ namespace bridge
         static std::string Initials(const std::string& name);
         std::string MemberJson(std::uint64_t peer) const;
 
+        // Ghost demo
+        void GhostTick();
+        void OnPose(Conn& conn, const Pose& pose);
+        void ForgetGhost(std::uint64_t peer);
+        void AutoJoin(std::uint64_t lobby, const char* why);
+
         // Steam P2P helpers
         bool SendWire(Conn& conn, const WireMessage& m, bool reliable);
         Conn* FindConn(std::uint64_t peer);
@@ -175,5 +205,16 @@ namespace bridge
         Clock::time_point m_nextConnect{};
         std::map<std::uint64_t, Clock::time_point> m_presenceRequested;
         std::string m_status;
+
+        Options m_options;
+        std::mutex m_ghostMutex; // guards the four members below
+        std::optional<Pose> m_localPose;
+        std::map<std::uint64_t, GhostPeer> m_ghosts;
+        std::string m_scene;
+        std::set<std::uint64_t> m_ghostSeen;
+        std::uint32_t m_poseSeq = 0;
+        Clock::time_point m_nextPose{};
+        Clock::time_point m_nextScene{};
+        std::map<std::uint64_t, Clock::time_point> m_nextPingLog;
     };
 } // namespace bridge

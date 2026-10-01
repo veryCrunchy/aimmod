@@ -958,6 +958,70 @@ prints every event with ids redacted.
 - `-Create` makes a friends-only lobby and opens the invite overlay.
 - `-Join <lobby>` joins a lobby.
 
+### Ghost demo (`ghost_demo=1`)
+
+The smallest two-player test of the transport and the in-world experience
+lives inside AimModSteam, so it doesn't depend on AimModCore or the service
+UI. Turn it on with `ghost_demo=1` in `Mods\AimModSteam\config.txt`
+(`mod/config.ghost-demo.txt`).
+
+**Joining.**
+
+- With no service connected to the pipe, AimModSteam auto-joins on any Steam
+  invite, "Join Game" or invite launch.
+- The host creates the lobby with `tools/Test-AimModSteamPipe.ps1 -Create`
+  (optionally `-InviteName <part of a friend's name>`).
+
+**Poses.**
+
+- On each engine tick, the mod reads the local player's position,
+  `MetaPlayerController.MyCharacter` → `K2_GetActorLocation`. It reads the view
+  rotation from `PlayerCameraManager.GetCameraRotation` and the velocity from
+  `GetVelocity`.
+- The bridge sends a `Pose` AMP1 frame at 30 Hz, unreliable. It carries origin,
+  seq, x/y/z, yaw/pitch, velocity, flags, and the scenario name from
+  AimModCore's `core-scene.json`.
+- The host relays client poses to the other clients (star topology). A client
+  may only send its own pose, and clients accept relays only from the host.
+- Frames are strictly sized, and the values must be finite.
+
+**Ghosts.**
+
+- For each remote member on the **same scenario**, the mod spawns three
+  `StaticMeshActor`s with engine basic shapes, sized from the local capsule:
+  a cylinder body, a sphere head and a cube visor that shows yaw.
+- Each actor is Movable, with no collision, no shadow and no gameplay
+  meaning.
+- They're moved 100 ms behind the newest sample. Positions are interpolated,
+  yaw follows the shortest path, and there's up to 100 ms of extrapolation
+  from velocity.
+- A peer on another scenario isn't shown, and the log says
+  `peer ...1234 on "<scenario>"`.
+- Ghosts are removed when a peer leaves or disconnects, after 3 s without
+  poses, on lobby leave, and when the world changes (they're respawned in
+  the new world).
+- Nothing reads or writes scoring or ranked state.
+
+**Log lines** (in `UE4SS.log`):
+
+- `created lobby` / `joined lobby`
+- `ghost demo: auto-joining lobby`
+- `member joined`
+- `p2p connected`
+- `ping ...: N ms` (every 10 s)
+- `ghost demo: receiving poses from …`
+- `ghost demo: local scenario is "…"`
+
+**Local checks.**
+
+- The unit tests cover the Pose encoding: round-trip, truncation, NaN and
+  long scene names.
+- `tools/BridgeHarness.cpp` runs the bridge outside the game under its own
+  SteamAPI. It exercised the pipe end to end: hello, friends, an unknown
+  command, a refused non-`aimmod.*` key, creating a private lobby,
+  `setData` + `lobby.updated`, and leave.
+- Two-instance P2P can't run on one account (same SteamID), so the friend
+  test is the P2P test.
 ## 7. Next steps
 
 1. Wire `SteamTransport` in the service to the pipe contract, in place of the

@@ -1,5 +1,7 @@
 #include "Codec.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 
 namespace bridge
@@ -169,6 +171,23 @@ namespace bridge
         case WireType::Ping:
         case WireType::Pong: Put(out, m.seq, 4); Put(out, static_cast<std::uint64_t>(m.time), 8); break;
         case WireType::Bye: break;
+        case WireType::Pose:
+        {
+            const Pose& p = m.pose;
+            Put(out, p.origin, 8);
+            Put(out, p.seq, 4);
+            for (const float f : {p.x, p.y, p.z, p.yaw, p.pitch, p.vx, p.vy, p.vz})
+            {
+                std::uint32_t bits = 0;
+                std::memcpy(&bits, &f, 4);
+                Put(out, bits, 4);
+            }
+            out.push_back(p.flags);
+            const std::size_t n = std::min(p.scene.size(), MaxPoseScene);
+            out.push_back(static_cast<std::uint8_t>(n));
+            out.insert(out.end(), p.scene.begin(), p.scene.begin() + static_cast<std::ptrdiff_t>(n));
+            break;
+        }
         }
         return out;
     }
@@ -210,6 +229,28 @@ namespace bridge
         case WireType::Bye:
             if (n != 0) return std::nullopt;
             break;
+        case WireType::Pose:
+        {
+            constexpr std::size_t fixed = 8 + 4 + 8 * 4 + 2;
+            if (n < fixed) return std::nullopt;
+            const std::size_t sceneLength = body[fixed - 1];
+            if (sceneLength > MaxPoseScene || n != fixed + sceneLength) return std::nullopt;
+            Pose& p = m.pose;
+            p.origin = Get(body, 8);
+            p.seq = static_cast<std::uint32_t>(Get(body + 8, 4));
+            float* fields[] = {&p.x, &p.y, &p.z, &p.yaw, &p.pitch, &p.vx, &p.vy, &p.vz};
+            for (int i = 0; i < 8; ++i)
+            {
+                const auto bits = static_cast<std::uint32_t>(Get(body + 12 + 4 * i, 4));
+                std::memcpy(fields[i], &bits, 4);
+                if (!std::isfinite(*fields[i]) || std::fabs(*fields[i]) > 1e7f) return std::nullopt;
+            }
+            p.flags = body[fixed - 2];
+            p.scene.assign(reinterpret_cast<const char*>(body + fixed), sceneLength);
+            for (const char c : p.scene)
+                if (static_cast<unsigned char>(c) < 0x20) return std::nullopt;
+            break;
+        }
         default: return std::nullopt;
         }
         return m;

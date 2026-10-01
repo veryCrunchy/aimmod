@@ -10,13 +10,18 @@ ue4ss\Mods\AimModSteam\dlls\main.dll and enables "AimModSteam" in
 ue4ss\Mods\mods.txt and mods.json. -Remove deletes the folder and the
 entries again. Nothing is downloaded.
 
+-Config copies a config.txt (for example the ghost demo one) next to dlls\.
+-Scenario copies .sce files to FPSAimTrainer\Saved\SaveGames\Scenarios.
+
 .EXAMPLE
-.\Install-AimModSteam.ps1 -Dll ..\build-mod\Game__Shipping__Win64\main.dll
+.\Install-AimModSteam.ps1 -Dll ..\build-mod\Game__Shipping__Win64\main.dll -Config ..\mod\config.ghost-demo.txt
 .\Install-AimModSteam.ps1 -Remove
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [string]$Dll,
+    [string]$Config,
+    [string[]]$Scenario,
     [string]$GameDir,
     [switch]$Remove
 )
@@ -74,5 +79,16 @@ if (-not $Dll) { $Dll = Join-Path $PSScriptRoot '..\build-mod\Game__Shipping__Wi
 if (-not (Test-Path -LiteralPath $Dll)) { throw "main.dll not found at $Dll; pass -Dll." }
 New-Item -ItemType Directory -Force -Path (Join-Path $target 'dlls') | Out-Null
 if ($PSCmdlet.ShouldProcess($target, 'install')) { Copy-Item -LiteralPath $Dll -Destination (Join-Path $target 'dlls\main.dll') -Force }
+if ($Config) {
+    if (-not (Test-Path -LiteralPath $Config)) { throw "Config not found: $Config" }
+    Copy-Item -LiteralPath $Config -Destination (Join-Path $target 'config.txt') -Force
+}
+foreach ($sce in @($Scenario | Where-Object { $_ })) {
+    if (-not (Test-Path -LiteralPath $sce)) { throw "Scenario not found: $sce" }
+    $scenarios = Join-Path (Split-Path -Parent (Split-Path -Parent $win64)) 'Saved\SaveGames\Scenarios'
+    New-Item -ItemType Directory -Force -Path $scenarios | Out-Null
+    Copy-Item -LiteralPath $sce -Destination $scenarios -Force
+    Write-Host "Scenario installed: $(Split-Path -Leaf $sce)"
+}
 $hash = (Get-FileHash -LiteralPath (Join-Path $target 'dlls\main.dll') -Algorithm SHA256).Hash
 Write-Host "AimModSteam installed (main.dll SHA-256 $hash). Start KovaaK's and look for [AimModSteam] lines in ue4ss\UE4SS.log."

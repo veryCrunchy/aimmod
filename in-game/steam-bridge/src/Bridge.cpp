@@ -242,12 +242,15 @@ namespace bridge
         for (const auto& cb : callbacks) HandleCallback(cb);
         for (const auto& text : commands) HandleCommand(text);
         PollCalls();
+        if (m_options.ghostDemo && m_pendingJoin && !m_lobby && m_calls.empty() && !(m_pipe && m_pipe->Connected()))
+            AutoJoin(m_pendingJoin->lobby, m_pendingJoin->source.c_str());
         if (m_lobby)
         {
             PollLobby(false);
             PollConnections();
             ReceiveAll();
         }
+        if (m_options.ghostDemo) GhostTick();
         // Avatars that were still loading.
         const auto now = Clock::now();
         auto avatars = std::move(m_avatars);
@@ -274,6 +277,7 @@ namespace bridge
             m_pendingJoin = PendingJoin{"steam-invite", e.m_steamIDLobby, e.m_steamIDFriend, JoinStringVersion};
             m_log("join request (Steam invite) for lobby " + Redact(e.m_steamIDLobby));
             EmitJoinRequest(*m_pendingJoin);
+            if (m_options.ghostDemo && !(m_pipe && m_pipe->Connected())) AutoJoin(e.m_steamIDLobby, "Steam invite");
         }
         else if (cb.id == CbGameRichPresenceJoinRequested && cb.bytes.size() == sizeof(GameRichPresenceJoinRequested_t))
         {
@@ -285,6 +289,7 @@ namespace bridge
             m_pendingJoin = PendingJoin{"rich-presence", target->lobby, e.m_steamIDFriend, target->version};
             m_log("join request (Join Game) for lobby " + Redact(target->lobby));
             EmitJoinRequest(*m_pendingJoin);
+            if (m_options.ghostDemo && !(m_pipe && m_pipe->Connected())) AutoJoin(target->lobby, "Join Game");
         }
         else if (cb.id == CbConnectionStatusChanged && cb.bytes.size() == sizeof(steamabi::SteamNetConnectionStatusChangedCallback_t))
         {
@@ -721,6 +726,11 @@ namespace bridge
         m_members.clear();
         m_data.clear();
         m_banned.clear();
+        {
+            std::lock_guard lock(m_ghostMutex);
+            m_ghosts.clear();
+            m_ghostSeen.clear();
+        }
         UpdatePresence();
         m_log(std::string("left lobby ") + Redact(left) + " (" + reason + ")");
         Emit(json::Object().Int("v", ContractVersion).Str("ev", "lobby.left").Str("lobby", Id(left)).Str("reason", reason).Done());
@@ -763,6 +773,7 @@ namespace bridge
             {
                 changed = true;
                 m_steam.F_RequestUserInformation(m_steam.friends, m, true);
+                m_log("member joined: " + Redact(m));
                 if (!m_members.empty()) // the first poll after entering is covered by lobby.updated
                     Emit(json::Object().Int("v", ContractVersion).Str("ev", "member.joined").Raw("member", MemberJson(m)).Done());
             }
@@ -771,6 +782,8 @@ namespace bridge
             {
                 changed = true;
                 Emit(json::Object().Int("v", ContractVersion).Str("ev", "member.left").Str("peer", Id(m)).Done());
+                m_log("member left: " + Redact(m));
+                ForgetGhost(m);
                 if (FindConn(m)) CloseConn(m, false, "left the lobby");
             }
         const bool ownerChanged = owner != m_owner;
@@ -869,6 +882,14 @@ namespace bridge
         m_conns.erase(it);
         if (bye && conn.state == ConnState::Ready) SendWire(conn, WireMessage{WireType::Bye}, true);
         m_steam.sockets->CloseConnection(conn.handle, 0, "aimmod", bye || linger);
+        if (conn.state == ConnState::Ready) m_log("p2p disconnected from " + Redact(peer) + " (" + reason + ")");
+        if (conn.outgoing)
+        {
+            std::lock_guard lock(m_ghostMutex);
+            m_ghosts.clear(); // every ghost came through our host link
+            m_ghostSeen.clear();
+        }
+        else ForgetGhost(peer);
         if (conn.state == ConnState::Ready)
             Emit(json::Object().Int("v", ContractVersion).Str("ev", "p2p.disconnected").Str("peer", Id(peer)).Str("reason", reason).Done());
         if (conn.outgoing) m_nextConnect = Clock::now() + ReconnectInterval;
@@ -992,6 +1013,7 @@ namespace bridge
                 WireMessage welcome{WireType::Welcome};
                 welcome.lobby = m_lobby;
                 SendWire(*again, welcome, true);
+                m_log("p2p connected: " + Redact(peer) + " (client of this host)");
                 again->state = ConnState::Ready;
                 again->nextPing = Clock::now();
                 Emit(json::Object().Int("v", ContractVersion).Str("ev", "p2p.connected").Str("peer", Id(peer)).Bool("host", false).Done());
@@ -1011,6 +1033,7 @@ namespace bridge
             }
             conn.state = ConnState::Ready;
             conn.nextPing = Clock::now();
+            m_log("p2p connected: " + Redact(peer) + " (lobby host)");
             Emit(json::Object().Int("v", ContractVersion).Str("ev", "p2p.connected").Str("peer", Id(peer)).Bool("host", conn.outgoing).Done());
             EmitLobby();
             return;
@@ -1042,6 +1065,12 @@ namespace bridge
                 if (rttUs >= 0 && rttUs < 10'000'000)
                 {
                     conn.rtt = static_cast<int>(rttUs / 1000);
+                    auto& nextLog = m_nextPingLog[peer];
+                    if (Clock::now() >= nextLog)
+                    {
+                        nextLog = Clock::now() + 10s;
+                        m_log("ping " + Redact(peer) + ": " + std::to_string(*conn.rtt) + " ms");
+                    }
                     Emit(json::Object().Int("v", ContractVersion).Str("ev", "p2p.ping").Str("peer", Id(peer)).Int("rtt", *conn.rtt).Done());
                 }
             }
@@ -1051,6 +1080,9 @@ namespace bridge
             if (conn.outgoing && peer == m_owner && m.lobby == m_lobby) LeaveLobby("kicked");
             break;
         case WireType::Bye: CloseConn(peer, false, "bye"); break;
+        case WireType::Pose:
+            if (m_options.ghostDemo) OnPose(conn, m.pose);
+            break;
         default: break; // handshake frames after the handshake are ignored
         }
     }
@@ -1089,6 +1121,7 @@ namespace bridge
 
     void Bridge::Result(std::int64_t id, bool ok, const char* code, const std::string& message)
     {
+        if (!ok) m_log(std::string("command failed: ") + (code ? code : "error") + " " + message);
         if (id < 0 && ok) return;
         json::Object o;
         o.Int("v", ContractVersion).Str("ev", "result");
@@ -1277,4 +1310,124 @@ namespace bridge
                  .Str("rgba", Base64Encode(rgba.data(), rgba.size()))
                  .Done());
     }
-} // namespace bridge
+    // --- ghost demo -------------------------------------------------------
+
+    double Bridge::Now() { return std::chrono::duration<double>(Clock::now().time_since_epoch()).count(); }
+
+    void Bridge::SubmitLocalPose(const Pose& pose)
+    {
+        std::lock_guard lock(m_ghostMutex);
+        m_localPose = pose;
+    }
+
+    std::vector<Bridge::GhostPeer> Bridge::Ghosts()
+    {
+        std::lock_guard lock(m_ghostMutex);
+        std::vector<GhostPeer> out;
+        out.reserve(m_ghosts.size());
+        for (const auto& [_, g] : m_ghosts) out.push_back(g);
+        return out;
+    }
+
+    std::string Bridge::LocalScene()
+    {
+        std::lock_guard lock(m_ghostMutex);
+        return m_scene;
+    }
+
+    void Bridge::ForgetGhost(std::uint64_t peer)
+    {
+        std::lock_guard lock(m_ghostMutex);
+        m_ghosts.erase(peer);
+        m_ghostSeen.erase(peer);
+    }
+
+    void Bridge::AutoJoin(std::uint64_t lobby, const char* why)
+    {
+        if (m_lobby == lobby || !m_calls.empty()) return;
+        if (m_lobby) LeaveLobby("switching lobby");
+        m_log(std::string("ghost demo: auto-joining lobby ") + Redact(lobby) + " (" + why + ")");
+        PendingCall call{PendingCall::Kind::Join};
+        call.commandId = -1;
+        call.lobby = lobby;
+        call.call = m_steam.MM_JoinLobby(m_steam.mm, lobby);
+        call.deadline = Clock::now() + CallTimeout;
+        m_calls.push_back(std::move(call));
+        if (m_pendingJoin && m_pendingJoin->lobby == lobby) m_pendingJoin.reset();
+    }
+
+    void Bridge::GhostTick()
+    {
+        const auto now = Clock::now();
+        if (now >= m_nextScene)
+        {
+            m_nextScene = now + 1s;
+            std::string scene;
+            if (!m_options.scenePath.empty())
+            {
+                HANDLE file = CreateFileW(m_options.scenePath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
+                if (file != INVALID_HANDLE_VALUE)
+                {
+                    char buffer[4096];
+                    DWORD got = 0;
+                    if (ReadFile(file, buffer, sizeof(buffer), &got, nullptr) && got > 0 && got < sizeof(buffer))
+                        if (const auto doc = json::Parse(std::string_view(buffer, got), json::Limits{4096, 4, 1024, 64}))
+                            scene = doc->Str("scenario", MaxPoseScene).value_or("");
+                    CloseHandle(file);
+                }
+            }
+            std::lock_guard lock(m_ghostMutex);
+            if (scene != m_scene) m_log("ghost demo: local scenario is \"" + scene + "\"");
+            m_scene = scene;
+        }
+        if (!m_lobby || now < m_nextPose) return;
+        m_nextPose = now + 33ms; // 30 Hz
+        std::optional<Pose> local;
+        std::string scene;
+        {
+            std::lock_guard lock(m_ghostMutex);
+            local = m_localPose;
+            scene = m_scene;
+            // Drop samples nobody refreshed for 3 s.
+            const double cutoff = Now() - 3.0;
+            for (auto it = m_ghosts.begin(); it != m_ghosts.end();)
+            {
+                if (it->second.samples.empty() || it->second.samples.back().time < cutoff) it = m_ghosts.erase(it);
+                else ++it;
+            }
+        }
+        if (!local) return;
+        WireMessage m{WireType::Pose};
+        m.pose = *local;
+        m.pose.origin = m_self;
+        m.pose.seq = ++m_poseSeq;
+        m.pose.scene = scene;
+        for (auto& [peer, conn] : m_conns)
+            if (conn.state == ConnState::Ready) SendWire(conn, m, false);
+    }
+
+    void Bridge::OnPose(Conn& conn, const Pose& pose)
+    {
+        if (pose.origin == m_self || !IsIndividualId(pose.origin) || !IsMember(pose.origin)) return;
+        if (!conn.outgoing && pose.origin != conn.peer) return; // a client only speaks for itself
+        if (conn.outgoing && conn.peer != m_owner) return;      // clients only take relays from the host
+        if (IsHost())
+        {
+            // Star topology: forward a client's pose to the other clients.
+            WireMessage relay{WireType::Pose};
+            relay.pose = pose;
+            for (auto& [peer, other] : m_conns)
+                if (peer != conn.peer && other.state == ConnState::Ready) SendWire(other, relay, false);
+        }
+        std::lock_guard lock(m_ghostMutex);
+        GhostPeer& g = m_ghosts[pose.origin];
+        g.peer = pose.origin;
+        if (!g.samples.empty())
+        {
+            const auto last = g.samples.back().pose.seq;
+            if (pose.seq == last || static_cast<std::int32_t>(pose.seq - last) < 0) return; // duplicate or out of order
+        }
+        g.samples.push_back({Now(), pose});
+        if (g.samples.size() > 16) g.samples.erase(g.samples.begin());
+        if (m_ghostSeen.insert(pose.origin).second) m_log("ghost demo: receiving poses from " + Redact(pose.origin) + " on \"" + pose.scene + "\"");
+    }} // namespace bridge

@@ -1,0 +1,5 @@
+# AimModSteam settings (Mods\AimModSteam\config.txt).
+# ghost_demo=1: accept Steam invites automatically when no AimMod service is
+# connected to the bridge, stream your position to lobby members at 30 Hz and
+# show theirs as simple shapes on the same scenario.
+ghost_demo=1

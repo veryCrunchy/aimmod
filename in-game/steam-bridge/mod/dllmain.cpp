@@ -4,6 +4,7 @@
 // session keys and never initialises, pumps or shuts down Steam.
 // See in-game/docs/multiplayer.md.
 #include "Bridge.hpp"
+#include "Ghosts.hpp"
 
 #include <DynamicOutput/DynamicOutput.hpp>
 #include <Mod/CppUserModBase.hpp>
@@ -16,6 +17,8 @@
 #include <chrono>
 #include <condition_variable>
 #include <deque>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -34,6 +37,42 @@ namespace
     }
 
     void Log(const std::string& line) { RC::Output::send<RC::LogLevel::Default>(STR("[AimModSteam] {}\n"), Widen(line)); }
+
+    // Mods\AimModSteam\dlls\main.dll -> Mods\AimModSteam
+    std::filesystem::path ModDirectory()
+    {
+        HMODULE self = nullptr;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, reinterpret_cast<LPCWSTR>(&ModDirectory),
+                           &self);
+        wchar_t path[MAX_PATH * 4]{};
+        const DWORD length = GetModuleFileNameW(self, path, static_cast<DWORD>(std::size(path)));
+        if (length == 0 || length >= std::size(path)) return {};
+        return std::filesystem::path(path).parent_path().parent_path();
+    }
+
+    // config.txt: key=value lines. Only ghost_demo is read for now.
+    bool GhostDemoEnabled()
+    {
+        std::ifstream in(ModDirectory() / L"config.txt");
+        for (std::string line; std::getline(in, line);)
+        {
+            line.erase(0, line.find_first_not_of(" \t"));
+            if (line.rfind("ghost_demo", 0) != 0) continue;
+            const auto eq = line.find('=');
+            if (eq == std::string::npos) continue;
+            const auto value = line.substr(eq + 1);
+            return value.find('1') == value.find_first_not_of(" \t") && value.find('1') != std::string::npos;
+        }
+        return false;
+    }
+
+    std::wstring ScenePath()
+    {
+        wchar_t local[MAX_PATH * 2]{};
+        const DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", local, static_cast<DWORD>(std::size(local)));
+        if (n == 0 || n >= std::size(local)) return {};
+        return (std::filesystem::path(local) / L"AimMod" / L"KovaaksNative" / L"core-scene.json").wstring();
+    }
 } // namespace
 
 class AimModSteam final : public RC::CppUserModBase
@@ -50,17 +89,26 @@ public:
     ~AimModSteam() override
     {
         m_stop = true;
-        if (m_starter.joinable()) m_starter.join();
-        if (m_bridge) m_bridge->Stop(); // leaves the lobby; game-thread jobs fall back inline
+        const bool onGameThread = GetCurrentThreadId() == m_gameThread.load();
+        // Ghost actors die with the world at shutdown; only clean up here when on the game thread.
+        if (m_ghosts && onGameThread) m_ghosts->Shutdown();
         if (m_tickId != 0) RC::Unreal::Hook::UnregisterCallback(m_tickId);
+        {
+            std::lock_guard lock(m_jobMutex);
+            m_tickId = 0; // game-thread jobs now run inline
+        }
         m_jobDone.notify_all();
+        m_ghosts.reset();
+        m_ready = nullptr;
+        if (m_starter.joinable()) m_starter.join();
+        if (m_bridge) m_bridge->Stop(); // leaves the lobby
     }
-
     auto on_unreal_init() -> void override
     {
         // Read once: Steam passes "+connect_lobby <id>" or our connect string
         // here when an invite launched the game.
         m_commandLine = GetCommandLineW();
+        m_ghostDemo = GhostDemoEnabled();
 
         using namespace RC::Unreal::Hook;
         FCallbackOptions tick{};
@@ -71,6 +119,10 @@ public:
             [this](TCallbackIterationData<void>&, RC::Unreal::UEngine*, float, bool) {
                 if (m_gameThread.load(std::memory_order_relaxed) == 0) m_gameThread = GetCurrentThreadId();
                 DrainGameThreadJobs();
+                if (m_stop.load(std::memory_order_relaxed)) return;
+                if (!m_ghosts && m_ghostDemo)
+                    if (auto* b = m_ready.load()) m_ghosts = std::make_unique<aimmod::GhostDemo>(*b, Log);
+                if (m_ghosts) m_ghosts->Tick();
             },
             tick);
         if (m_tickId == ERROR_ID) m_tickId = 0;
@@ -105,8 +157,11 @@ private:
             return;
         }
         auto bridge = std::make_unique<bridge::Bridge>(Log, [this](const std::function<void()>& fn) { RunOnGameThread(fn); });
+        bridge->SetOptions({m_ghostDemo, ScenePath()});
         if (!bridge->Start(module, m_commandLine)) return;
         m_bridge = std::move(bridge);
+        m_ready = m_bridge.get();
+        if (m_ghostDemo) Log("ghost demo enabled (config ghost_demo=1): Steam invites auto-join when no service is connected");
         Log(std::string("bridge ") + bridge::BridgeVersion + " listening on \\\\.\\pipe\\aimmod-steam-v1 (contract v" + std::to_string(bridge::ContractVersion) + ")");
     }
 
@@ -151,6 +206,9 @@ private:
 
     std::wstring m_commandLine;
     std::unique_ptr<bridge::Bridge> m_bridge;
+    std::atomic<bridge::Bridge*> m_ready{nullptr};
+    std::unique_ptr<aimmod::GhostDemo> m_ghosts;
+    bool m_ghostDemo = false;
     std::thread m_starter;
     std::atomic<bool> m_stop{false};
     std::atomic<DWORD> m_gameThread{0};

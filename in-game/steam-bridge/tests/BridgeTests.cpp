@@ -5,6 +5,7 @@
 #include "Json.hpp"
 
 #include <cstdio>
+#include <limits>
 #include <string>
 
 namespace
@@ -146,6 +147,37 @@ int main()
         auto h = Encode(huge);
         Check(!Decode(h.data(), h.size()), "rejects oversized data");
         Check(!Decode(nullptr, 0) && !Decode(bytes.data(), 4), "rejects short frames");
+
+        // Ghost demo pose
+        WireMessage pose{WireType::Pose};
+        pose.pose.origin = Person;
+        pose.pose.seq = 42;
+        pose.pose.x = 123.5f;
+        pose.pose.y = -9876.25f;
+        pose.pose.z = 50.f;
+        pose.pose.yaw = 271.f;
+        pose.pose.pitch = -12.5f;
+        pose.pose.vx = 250.f;
+        pose.pose.flags = 1;
+        pose.pose.scene = "AimMod - aim_map (CSS) - CS Movement";
+        auto pe = Encode(pose);
+        Check(pe.size() == WireHeader + 46 + pose.pose.scene.size(), "pose size");
+        auto pd = Decode(pe.data(), pe.size());
+        Check(pd && pd->type == WireType::Pose && pd->pose.origin == Person && pd->pose.seq == 42 && pd->pose.x == 123.5f && pd->pose.y == -9876.25f &&
+                  pd->pose.yaw == 271.f && pd->pose.pitch == -12.5f && pd->pose.vx == 250.f && pd->pose.flags == 1 && pd->pose.scene == pose.pose.scene,
+              "pose round-trips");
+        auto trunc = pe;
+        trunc.pop_back();
+        Check(!Decode(trunc.data(), trunc.size()), "rejects a truncated pose");
+        WireMessage nan = pose;
+        nan.pose.z = std::numeric_limits<float>::quiet_NaN();
+        auto ne = Encode(nan);
+        Check(!Decode(ne.data(), ne.size()), "rejects non-finite poses");
+        WireMessage longScene = pose;
+        longScene.pose.scene.assign(200, 'a');
+        auto le = Encode(longScene);
+        auto ld = Decode(le.data(), le.size());
+        Check(ld && ld->pose.scene.size() == MaxPoseScene, "truncates long scene names");
     }
 
     std::printf("%d/%d checks passed\n", checks - failures, checks);

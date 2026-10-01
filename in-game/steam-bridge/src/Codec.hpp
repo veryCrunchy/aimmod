@@ -64,6 +64,7 @@ namespace bridge
         Pong = 6,    // u32 seq, i64 echoed time
         Kick = 7,    // u64 lobby
         Bye = 8,     // no body
+        Pose = 9,    // ghost demo: u64 origin, u32 seq, 8 x f32 (x y z yaw pitch vx vy vz), u8 flags, u8 n, n bytes scene
     };
     enum class RejectCode : std::uint16_t
     {
@@ -75,6 +76,16 @@ namespace bridge
     };
     constexpr std::size_t WireHeader = 8;
 
+    constexpr std::size_t MaxPoseScene = 96;
+    struct Pose
+    {
+        std::uint64_t origin = 0;
+        std::uint32_t seq = 0;
+        float x = 0, y = 0, z = 0, yaw = 0, pitch = 0, vx = 0, vy = 0, vz = 0;
+        std::uint8_t flags = 0;
+        std::string scene; // scenario name (<= MaxPoseScene bytes)
+    };
+
     struct WireMessage
     {
         WireType type{};
@@ -84,6 +95,7 @@ namespace bridge
         std::uint32_t seq = 0;
         std::int64_t time = 0;
         std::vector<std::uint8_t> payload;
+        Pose pose;
     };
     std::vector<std::uint8_t> Encode(const WireMessage& message);
     // Strict: exact sizes per type, version match, payload bounds.
