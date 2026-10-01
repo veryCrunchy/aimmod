@@ -26,6 +26,7 @@ namespace bridge
         constexpr const char* KeyVersion = "aimmod.v";
         constexpr const char* KeyToken = "aimmod.token";
         constexpr const char* KeyBridge = "aimmod.bridge";
+        constexpr const char* KeyBanned = "aimmod.banned"; // kicked members (host-owned)
 
         std::string Id(std::uint64_t id) { return std::to_string(id); }
 
@@ -532,7 +533,7 @@ namespace bridge
                 }
                 for (const auto& [k, value] : data->object)
                 {
-                    if (!ValidLobbyKey(k) || k == KeyVersion || k == KeyToken || k == KeyBridge || value.type != json::Value::Type::String ||
+                    if (!ValidLobbyKey(k) || k == KeyVersion || k == KeyToken || k == KeyBridge || k == KeyBanned || value.type != json::Value::Type::String ||
                         value.string.size() > MaxLobbyValue)
                     {
                         Result(*id, false, "invalid", "Bad lobby data key or value: " + k.substr(0, 48));
@@ -587,7 +588,7 @@ namespace bridge
                 return;
             }
             for (const auto& [k, value] : data->object)
-                if (!ValidLobbyKey(k) || k == KeyVersion || k == KeyToken || k == KeyBridge ||
+                if (!ValidLobbyKey(k) || k == KeyVersion || k == KeyToken || k == KeyBridge || k == KeyBanned ||
                     !(value.type == json::Value::Type::Null || (value.type == json::Value::Type::String && value.string.size() <= MaxLobbyValue)))
                 {
                     Result(*id, false, "invalid", "Bad lobby data key or value: " + k.substr(0, 48));
@@ -656,6 +657,8 @@ namespace bridge
                 return;
             }
             m_banned.insert(*peer);
+            // In lobby data too: a new host keeps refusing the kicked member.
+            m_steam.MM_SetLobbyData(m_steam.mm, m_lobby, KeyBanned, FormatBanList({m_banned.begin(), m_banned.end()}).c_str());
             if (Conn* conn = FindConn(*peer))
             {
                 WireMessage kick{WireType::Kick};
@@ -1361,6 +1364,10 @@ namespace bridge
                 m_steam.MM_SetLobbyData(m_steam.mm, m_lobby, KeyToken, Hex(m_token).c_str());
             }
             OpenListen();
+            // Members the previous host kicked stay refused.
+            if (const auto it = m_data.find(KeyBanned); it != m_data.end())
+                for (const auto banned : ParseBanList(it->second))
+                    if (banned != m_self) m_banned.insert(banned);
             // Our own lobby spectate now routes through this host.
             if (m_watching && !m_watchingDirect && m_watchRate > 0)
             {
