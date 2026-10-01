@@ -33,7 +33,7 @@ static class MultiplayerChecks
         Follow();
         Marker();
         var root = Path.Combine(Path.GetTempPath(), "aimmod-mp-test-" + Guid.NewGuid().ToString("N"));
-        try { Content(root); Generator(root); Service(root); Transfers(root); Replays(root); Maps(root); }
+        try { Content(root); Generator(root); Blocked(root); Service(root); Transfers(root); Replays(root); Maps(root); }
         finally { try { Directory.Delete(root, true); } catch (IOException) { } }
         Console.WriteLine($"{count} multiplayer checks passed.");
     }
@@ -865,6 +865,38 @@ static class MultiplayerChecks
         Check(MultiplayerService.LeaderOf(Match(L("a", 4000), L("b", 6000, "left")), members, "me") == "a" && MultiplayerService.LeaderOf(Match(L("a", null)), members, "me") is null, "Players who left or have no score yet aren't followed");
     }
 
+    // A player still inside a challenge run: the round waits (never "start it yourself") and loads once it ends.
+    static void Blocked(string root)
+    {
+        long now = 4_000_000;
+        var control = new FakeGame("load", "start");
+        var service = new MultiplayerService(new OfflineTransport(), new ContentLibrary(Path.Combine(root, "game")), control, () => new LocalRun(false, null, null, null, null, 0, 0, 0, null), () => [], () => null, null, simulation: true, () => now, autoTick: false, seed: 5);
+        JsonElement Round() => JsonSerializer.SerializeToElement(service.View(), Protocol.Json).GetProperty("lobby").GetProperty("round");
+        string Phase() => JsonSerializer.SerializeToElement(service.View(), Protocol.Json).GetProperty("lobby").GetProperty("match").GetProperty("phase").GetString()!;
+        void Run(int ms) { for (var t = 0; t < ms; t += 100) { now += 100; service.Tick(); } }
+        service.Act("create", J(new { mode = "score-race", scenario = "Synthetic A" }));
+        service.Act("sim", J(new { op = "add" }));
+        Run(9000);
+        control.ChallengeRunning = true;
+        Check(service.Act("start", default).Ok, "The host starts while still in a challenge run");
+        Run(500);
+        Check(Round().GetProperty("state").GetString() == "blocked" && Round().GetProperty("message").GetString()!.Contains("Finish or quit your current run") && !control.Calls.Any(c => c.StartsWith("load", StringComparison.Ordinal)), "A running challenge holds the load with a finish-or-quit message, not start-it-yourself");
+        Run(3000);
+        Check(Phase() == MatchPhases.Loading, "The warm-up counts a player still in a run as not loaded yet");
+        control.ChallengeRunning = false;
+        Run(300);
+        Check(control.Calls.Count(c => c == "load Synthetic A") == 1 && Round().GetProperty("state").GetString() is "loading" or "ready", "Once the challenge ends the scenario loads by itself");
+        service.Act("end", default); Run(6000);
+        // A challenge that starts between the check and the load: AimModCore answers challenge-active.
+        control.RefuseNextLoad();
+        Check(service.Act("start", default).Ok, "The next match starts"); Run(500);
+        Check(Round().GetProperty("state").GetString() == "blocked", "challenge-active from AimModCore holds the round too");
+        Check(control.Calls.Count(c => c == "load Synthetic A") == 2, "Retries wait a moment instead of hammering the game");
+        control.Accept(); Run(2500);
+        Check(control.Calls.Count(c => c == "load Synthetic A") == 3 && Round().GetProperty("state").GetString() is "loading" or "ready", "The load is retried once the game is free");
+        service.Dispose();
+    }
+
     static void Marker()
     {
         const long now = 1_790_000_000;
@@ -1171,8 +1203,15 @@ static class MultiplayerChecks
         public long? Load(string scenario) { Calls.Add("load " + scenario); return lastLoad = Calls.Count; }
         public long? Start(string scenario, string mode) { Calls.Add("start " + mode + " " + scenario); return lastStart = Calls.Count; }
         public long? Refresh() { Calls.Add("refresh"); return Calls.Count; }
+        // A challenge still running in KovaaK's (core-scene.json); while true, loads answer challenge-active.
+        public bool? ChallengeRunning { get; set; }
+        bool refusedLoad;
         // Answers like AimModCore: the latest load is done, then the latest start.
-        public GameCommandResult? Result => lastStart > lastLoad ? new GameCommandResult(lastStart, "done", "started", "") : lastLoad > 0 ? new GameCommandResult(lastLoad, "done", "loaded", "") : null;
+        public GameCommandResult? Result => lastStart > lastLoad ? new GameCommandResult(lastStart, "done", "started", "")
+            : lastLoad > 0 ? (refusedLoad ? new GameCommandResult(lastLoad, "error", "challenge-active", "") : new GameCommandResult(lastLoad, "done", "loaded", "")) : null;
+        // The next load is refused as if a challenge started right after the check.
+        public void RefuseNextLoad() => refusedLoad = true;
+        public void Accept() => refusedLoad = false;
     }
 
     static void Service(string root)

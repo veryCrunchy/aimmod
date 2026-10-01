@@ -1499,6 +1499,9 @@ sealed partial class MultiplayerService : IDisposable
         if (scenarios.Clean(wanted) > 0) game.Refresh();
     }
 
+    long blockedRetryAt;
+    const string FinishRunFirst = "Finish or quit your current run (Esc, then Quit). The match loads by itself after that.";
+
     static string FindIt(string scenario, bool generated) =>
         "In KovaaK’s, open Play > Scenarios, search for “" + scenario + "”" + (generated ? " (it’s one of your local scenarios) and play it in Freeplay." : " and start it.") +
         (generated ? " If it’s not listed yet, restart KovaaK’s once; AimMod saved it to your Scenarios folder." : "");
@@ -1527,11 +1530,21 @@ sealed partial class MultiplayerService : IDisposable
             }
             RecordRecent(s.Scenario?.Name);
             if (problem is not null) plan = new RoundPlan(key, scenario, mode, generated, "error", problem + " " + FindIt(s.Scenario?.Name ?? scenario, false));
+            // Still in a challenge run (a previous round, or a run of their own): wait for it to end.
+            else if (caps.Contains("load") && game.ChallengeRunning == true) plan = new RoundPlan(key, scenario, mode, generated, "blocked", FinishRunFirst);
             else if (caps.Contains("load") && game.Load(scenario) is long load)
                 plan = new RoundPlan(key, scenario, mode, generated, "loading", "Loading “" + scenario + "” in KovaaK’s…", LoadSequence: load);
             else plan = new RoundPlan(key, scenario, mode, generated, "manual", FindIt(scenario, generated) + " Start when the countdown ends.");
         }
         if (plan is null || plan.Key != key) return;
+        // The challenge that blocked the load is over: load now, or start if the round already runs.
+        if (plan.State == "blocked" && game.ChallengeRunning != true && clock() >= blockedRetryAt)
+        {
+            if (match.Phase == MatchPhases.Live && caps.Contains("start") && game.Start(plan.Scenario, MatchScenario.SafeMode(plan.Scenario, plan.Mode)) is long late)
+                plan = plan with { State = "starting", Message = "Starting your run…", StartSequence = late, LoadSequence = null };
+            else if (match.Phase != MatchPhases.Live && game.Load(plan.Scenario) is long again)
+                plan = plan with { State = "loading", Message = "Loading “" + plan.Scenario + "” in KovaaK’s…", LoadSequence = again, StartSequence = null };
+        }
         // Tell the host once this machine has the scenario loaded (or will start it by hand).
         if (match.Phase == MatchPhases.Loading && loadedSent != key && plan.State is "ready" or "manual" or "error" or "started")
         { loadedSent = key; Command("loaded", JsonSerializer.SerializeToElement(new { match = match.Id, round = match.Round })); }
@@ -1539,6 +1552,13 @@ sealed partial class MultiplayerService : IDisposable
         {
             if (caps.Contains("start") && game.Start(plan.Scenario, MatchScenario.SafeMode(plan.Scenario, plan.Mode)) is long start) plan = plan with { State = "starting", Message = "Starting your run…", StartSequence = start };
             else plan = plan with { State = "manual", Message = "Go! " + FindIt(plan.Scenario, plan.Generated) };
+        }
+        if (game.Result is { } refused && (refused.Sequence == plan.LoadSequence || refused.Sequence == plan.StartSequence) && refused.Code == "challenge-active")
+        {
+            // Never "start it yourself" here: the round stays pending until the challenge ends.
+            plan = plan with { State = "blocked", Message = FinishRunFirst, LoadSequence = null, StartSequence = null };
+            blockedRetryAt = clock() + 2000;
+            return;
         }
         if (game.Result is { } result && (result.Sequence == plan.LoadSequence || result.Sequence == plan.StartSequence))
         {
@@ -1642,6 +1662,8 @@ sealed partial class MultiplayerService : IDisposable
             knownRuns = completedRuns().Take(50).Select(r => r.Id).ToHashSet(StringComparer.Ordinal);
             Simulation?.ResetSelf();
         }
+        // Still in an earlier challenge: its result belongs to that run, not to this round.
+        if (plan is { State: "blocked" } && plan.Key == roundKey) { knownRuns.UnionWith(completedRuns().Take(10).Select(r => r.Id)); return; }
         var line = match.Live.FirstOrDefault(l => l.MemberId == SelfId);
         if (line is null || line.Status is LineStates.Finished or LineStates.Left or LineStates.Dnf || match.Phase != MatchPhases.Live) return;
         var now = clock();

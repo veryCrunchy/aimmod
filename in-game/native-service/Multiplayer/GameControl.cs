@@ -11,6 +11,8 @@ interface IGameControl
     // Re-index local scenarios after AimMod wrote one ("refresh" capability).
     long? Refresh();
     GameCommandResult? Result { get; }
+    // True while KovaaK's runs a challenge (core-scene.json); null when unknown.
+    bool? ChallengeRunning => null;
 }
 
 sealed class CoreGameControl(string output) : IGameControl
@@ -24,6 +26,7 @@ sealed class CoreGameControl(string output) : IGameControl
     // AimModCore accepts refresh-scenarios wherever it can load scenarios ("load"; "refresh" if advertised).
     public long? Refresh() => Capabilities.Contains("refresh") || Capabilities.Contains("load") ? commands.Send(new("refresh-scenarios", null, null, null, null, null, null, null)).Sequence : null;
     public GameCommandResult? Result => commands.Result();
+    public bool? ChallengeRunning => GameScene.Read(output) is { Available: true } scene ? scene.InChallenge : null;
 }
 
 sealed class NoGameControl : IGameControl

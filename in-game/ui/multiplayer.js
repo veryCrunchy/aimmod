@@ -940,8 +940,8 @@
   }
   function planBox(lobby){
     var r=lobby.round;if(!r)return null;
-    var box=node('div','mp-plan '+(r.state==='error'?'warn':r.state==='manual'?'manual':'ok'));
-    add(box,node('strong','',r.state==='manual'?'Start it yourself':r.state==='error'?'Start it yourself':r.mode==='freeplay'?'Match scenario, freeplay':'Normal KovaaK’s run'),node('span','',safe(r.message,'')));
+    var box=node('div','mp-plan '+(r.state==='error'?'warn':r.state==='manual'||r.state==='blocked'?'manual':'ok'));
+    add(box,node('strong','',r.state==='blocked'?'Finish your current run':r.state==='manual'?'Start it yourself':r.state==='error'?'Start it yourself':r.mode==='freeplay'?'Match scenario, freeplay':'Normal KovaaK’s run'),node('span','',safe(r.message,'')));
     return box;
   }
   function countdown(page,lobby,match){
