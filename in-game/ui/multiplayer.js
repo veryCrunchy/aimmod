@@ -247,6 +247,8 @@
   }
   function lobbyRoom(page,lobby){
     connectionBanners(page,lobby);
+    var mine=member(lobby.self);
+    if(lobby.readyCheck&&!lobby.isHost&&mine&&mine.role==='player'&&!mine.ready)page.appendChild(banner('warn',safe(nameOf(lobby.hostId))+' is starting. Ready up below'+(view.hotkey?', or press '+view.hotkey+' in game':'')+'.'));
     page.appendChild(lobbyHead(lobby));
     var row=node('div','mp-row');page.appendChild(row);
     var main=node('div','mp-col mp-main'),side=node('div','mp-col mp-side');row.appendChild(main);row.appendChild(side);
@@ -302,7 +304,11 @@
       add(text,node('strong','',blockers.length?'Not ready to start':'Everyone’s ready'),blockers.length?blockerList(blockers):node('span','subtle','Starts a '+F.number(lobby.settings.countdown,0)+'-second countdown for everyone.'));
       bar.appendChild(text);
       var start=button('Start match',function(){act('start');},'primary mp-big');if(blockers.length)start.disabled=true;
-      bar.appendChild(actions(start));
+      // Only readiness missing: ping everyone, in game too (they can press the hotkey).
+      var onlyReady=blockers.length>0&&blockers.every(function(b){return b.code==='ready';});
+      var ask=onlyReady?button(lobby.readyCheck?'Asked to ready up':'Ask everyone to ready up',function(){act('ready-check',null,function(ok){if(ok)toast('Everyone who isn’t ready got a notice.');});},'mp-big'):null;
+      if(ask&&lobby.readyCheck)ask.disabled=true;
+      bar.appendChild(actions(ask,start));
     }else if(me.role==='spectator'){
       add(text,node('strong','','You’re watching'),node('span','subtle','Spectators see live scores and results.'));bar.appendChild(text);
       if(lobby.settings.spectators)bar.appendChild(actions(button('Play instead',function(){act('role',{spectator:false});},'compact')));

@@ -168,6 +168,12 @@ sealed class SteamTransport : IMultiplayerTransport
                     if (!isHost && owner is not null) events.Enqueue(new TransportEvent(owner, TransportEvent.Disconnected, Reason: reason));
                     lobby = null; owner = null; isHost = false; members.Clear(); rtt.Clear(); lastData = null; lastJoinable = null;
                     break;
+                case "invite.received":
+                    // Proposed bridge event (LobbyInvite_t, 503): an invite the player hasn't accepted yet.
+                    if (Str(e, "lobby") is not { } invited) break;
+                    events.Enqueue(new TransportEvent(Str(e, "from") ?? "", TransportEvent.InviteReceived, Invite: new IncomingInvite("inv-" + invited[^Math.Min(6, invited.Length)..],
+                        Str(e, "fromName") ?? "A friend", "incoming", invited, null, clock(), !e.TryGetProperty("compatible", out var cv) || cv.ValueKind != JsonValueKind.False)));
+                    break;
                 case "join.requested":
                     if (Str(e, "lobby") is not { } target) break;
                     var source = Str(e, "source") ?? "steam-invite";

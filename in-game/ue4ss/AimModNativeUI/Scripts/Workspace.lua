@@ -43,6 +43,28 @@ function M.update(visible)
         deliveries=deliveries+1
     end
 end
+-- The service asks to show a page (e.g. Multiplayer after a Steam join).
+-- Returns the page name; the request stays until the caller consumes it.
+function M.openRequest()
+    local file=io.open(base .. 'open-workspace.request','rb')
+    if not file then return nil end
+    local value=file:read(64); file:close()
+    if value and value:match('^%a+$') then return value end
+    os.remove(base .. 'open-workspace.request')
+end
+function M.consumeOpenRequest() os.remove(base .. 'open-workspace.request') end
+local pendingPage, pageDeliveries
+function M.openPage(page) pendingPage=page; pageDeliveries=0 end
+-- Delivered a few times, like visibility, until the page is ready for bindings.
+local function deliverPage()
+    if not pendingPage or not cohtml or not cohtml:IsValid() or not cohtml:IsReadyForBindings() then return end
+    local event=cohtml:CreateJSEvent()
+    event:AddString(pendingPage)
+    cohtml:TriggerJSEvent('AimModOpenPage',event)
+    pageDeliveries=pageDeliveries+1
+    if pageDeliveries>=3 then pendingPage=nil end
+end
+M.deliverPage=deliverPage
 function M.closeRequested()
     local path=base .. 'close.request'
     local file=io.open(path,'rb')

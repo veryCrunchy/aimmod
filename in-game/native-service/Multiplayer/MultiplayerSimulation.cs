@@ -69,7 +69,7 @@ sealed class MultiplayerSimulation(Func<long> clock, ContentLibrary library, Fun
         {
             var from = Names[random.Next(Names.Length)];
             var summary = new LobbySummary(op == "request" ? LobbyModes.Race : LobbyModes.Duel, library.Scenarios.FirstOrDefault()?.Name, 1, op == "request" ? 4 : 2);
-            invites.Add(new IncomingInvite("inv-" + Guid.NewGuid().ToString("N")[..8], from, op, "sim-" + LobbyCore.NewCode(), summary, clock()));
+            invites.Add(new IncomingInvite("inv-" + Guid.NewGuid().ToString("N")[..8], from, op == "invite" ? "incoming" : op, "sim-" + LobbyCore.NewCode(), summary, clock()));
             return LobbyResult.Success;
         }
         if (core is null) return LobbyResult.Fail("no-lobby", "Create or join a lobby first.");
