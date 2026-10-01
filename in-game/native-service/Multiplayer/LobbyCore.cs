@@ -754,10 +754,13 @@ sealed class LobbyCore
             return new Standing(id, m.Names.GetValueOrDefault(id, "Player"), 0, mine.Count(x => x.Round.WinnerId == id), mine.Sum(x => x.P.Points),
                 scores.Length > 0 ? scores.Max() : null, scores.Sum(), mine.Length);
         }).ToList();
+        var placed = m.Rounds.SelectMany(r => r.Results).Where(p => p.Place > 0).GroupBy(p => p.MemberId).ToDictionary(g => g.Key, g => g.Min(p => p.Place));
         Func<Standing, (double, double)> key = mode switch
         {
             LobbyModes.Duel => s => (s.Wins, s.Total),
             LobbyModes.Tracking => s => (s.Wins, s.Total),
+            // Combat: the match placement (frags, then fewer deaths, or the team); players who left come last.
+            var cm when LobbyModes.Combat(cm) => s => (-(double)placed.GetValueOrDefault(s.MemberId, 1000), m.Settings.Mode == LobbyModes.TeamDeathmatch ? 0 : s.Points),
             var cm when LobbyModes.Shooting(cm) => s => (s.Points, s.Total),
             LobbyModes.Rounds => s => (s.Points, s.Total),
             _ => s => (s.Best ?? double.MinValue, s.Total),

@@ -570,6 +570,8 @@ static partial class MultiplayerChecks
         var leftPlaces = left.Rounds[0].Results;
         Check(left.Phase == MatchPhases.Final && leftPlaces.First(p => p.MemberId == "p3").Place == 1 && leftPlaces.First(p => p.MemberId == "host").Place == 2 && leftPlaces.First(p => p.MemberId == "p2").Place == 0,
             "A leader who left doesn't push the remaining players down: equal frags, fewer deaths places first");
+        Check(left.WinnerId == "p3" && left.Standings.First(s => s.MemberId == "p3").Place == 1 && left.Standings.First(s => s.MemberId == "host").Place == 2,
+            "The final standings follow the match placement: the player who left doesn't win, fewer deaths breaks a frag tie");
 
         // Arenas: the player can be hurt and carries the mode weapon; nothing natively heals or scores.
         var arena = MatchScenario.Generate(new(BaseScenario, LobbyRules.Apply(start, J(new { mode = "instagib" }), 2, content).Settings! with { Scenario = new ScenarioChoice("Synthetic A", ContentLibrary.TextHash(BaseScenario), "synthetic_map", ContentLibrary.TextHash("m"), 60) }));
