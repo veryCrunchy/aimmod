@@ -653,6 +653,28 @@ static void EndRunChecks()
               std::holds_alternative<CommandError>(parse("action\tload-scenario\nscenario\tX\nthen\treset\n")) &&
               std::holds_alternative<CommandError>(parse("action\tend-run\n")),
           "end-run fields validated");
+    auto ensure = parse("action\tensure-map\nscenario\tAimMod Match - Synthetic - 0a1b2c3d\n");
+    CHECK(std::holds_alternative<GameCommand>(ensure) && std::get<GameCommand>(ensure).action == GameCommand::Action::EnsureMap &&
+              std::string(ActionName(GameCommand::Action::EnsureMap)) == "ensure-map",
+          "ensure-map parses for a match scenario");
+    CHECK(std::holds_alternative<GameCommand>(parse("action\tensure-map\nscenario\tAimMod - aim_synthetic (CSS) - CS Movement\n")) &&
+              std::holds_alternative<GameCommand>(parse("action\tensure-map\nscenario\tAimMod Probe 03 - Synthetic\n")),
+          "ensure-map parses for AimMod's map ports and probes");
+    {
+        auto other = parse("action\tensure-map\nscenario\tVT Pasu\n");
+        CHECK(std::holds_alternative<CommandError>(other) && std::get<CommandError>(other).code == "not-a-match", "ensure-map refuses other scenarios");
+    }
+    CHECK(std::holds_alternative<CommandError>(parse("action\tensure-map\n")) &&
+              std::holds_alternative<CommandError>(parse("action\tensure-map\nscenario\tAimMod Match - X\nmode\tchallenge\n")) &&
+              std::holds_alternative<CommandError>(parse("action\tensure-map\nscenario\tAimMod Match - X\nmapScale\t2\n")) &&
+              std::holds_alternative<CommandError>(parse("action\tensure-map\nscenario\tAimMod Match - ..\\x\n")),
+          "ensure-map refuses a missing name, modes, overrides and path characters");
+    CHECK(MapFixAllowed("AimMod Match - A - 0a1b2c3d") && !MapFixAllowed("VT Pasu") && !MapFixAllowed("aimmod match - a") && !MapFixAllowed("AimMod Match - a/b"),
+          "only AimMod's own scenario names allow a map rebuild");
+    CHECK(SameMapLoaded("AIMMOD_aim_map_css.json", 4.0, "aimmod_aim_map_css.json", 4.0) && !SameMapLoaded("defaultscenario.map", 4.0, "aimmod_aim_map_css.json", 4.0) &&
+              !SameMapLoaded("aimmod_aim_map_css.json", 1.0, "aimmod_aim_map_css.json", 4.0) && !SameMapLoaded("", 1.0, "", 1.0) &&
+              SameMapLoaded("x.map", 3.80001, "x.map", 3.8),
+          "the same-map test ignores case and needs the same scale");
     auto quit = parse("action\tquit-run\n");
     CHECK(std::holds_alternative<GameCommand>(quit) && std::get<GameCommand>(quit).action == GameCommand::Action::QuitRun &&
               std::string(ActionName(GameCommand::Action::QuitRun)) == "quit-run",

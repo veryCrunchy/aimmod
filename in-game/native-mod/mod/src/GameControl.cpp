@@ -97,6 +97,42 @@ namespace aimmod
         m_cameraComponent.Bind(m_cameraClass, STR("CameraComponent"));
         m_fullyLoaded.Bind(FindClass(STR("/Script/GameSkillsTrainer.MetaGameState")), STR("bFullyLoaded"));
         m_mapLoading.Bind(FindClass(STR("/Script/GameSkillsTrainer.MetaGameState")), STR("bMapLoading"));
+        // KovaaK's map pipeline (3.9.11): a scenario's map reaches the world
+        // through MetaGameState's own apply step, CurrentMapName then
+        // SetMapData(lines, scale), which rebuilds the map synchronously in the
+        // KovaakMapCreatorRepository. ensure-map runs those same two calls with
+        // the map the game parsed from the current scenario
+        // (Scenario:GetChallengeProfile MapName/MapScale/MapData).
+        m_challengeProfile.BindPath(STR("/Script/GameSkillsTrainer.Scenario:GetChallengeProfile"), Shape::Command);
+        m_setMapName.BindPath(STR("/Script/GameSkillsTrainer.MetaGameState:SetCurrentMapName"), Shape::Command);
+        m_setMapData.BindPath(STR("/Script/GameSkillsTrainer.MetaGameState:SetMapData"), Shape::Command);
+        m_respawn.BindPath(STR("/Script/GameSkillsTrainer.MetaGameState:RespawnPlayerAndDestroyProjectiles"), Shape::Command);
+        m_inBenchmark.BindPath(STR("/Script/GameSkillsTrainer.ScenarioManager:IsCurrentlyInBenchmark"), Shape::Bool);
+        m_inEditor.BindPath(STR("/Script/GameSkillsTrainer.ScenarioManager:IsInScenarioEditor"), Shape::Bool);
+        {
+            const Param* profile = nullptr;
+            for (const Param& p : m_challengeProfile.params())
+                if (p.ret && p.structType) profile = &p;
+            if (profile)
+            {
+                m_profileMapName.Bind(profile->structType, "MapName");
+                m_profileMapScale.Bind(profile->structType, "MapScale");
+                m_profileMapData.Bind(profile->structType, "MapData");
+            }
+            const Param* data = nullptr;
+            for (const Param& p : m_setMapData.params())
+                if (!p.ret && p.structType) data = &p;
+            if (data)
+            {
+                m_dataLines.Bind(data->structType, "MapFileLines");
+                m_dataScale.Bind(data->structType, "MapScale");
+            }
+            m_repoMapName.Bind(FindClass(STR("/Script/GameSkillsTrainer.KovaakMapCreatorRepository")), "CurrentMapName");
+            m_canMap = profile && m_challengeProfile.OwnsReturnedStructs() && m_profileMapName.kind() == Kind::String && IsNumeric(m_profileMapScale.kind()) &&
+                       m_profileMapData.kind() == Kind::Array && data && m_dataLines.kind() == Kind::Array && m_dataScale.kind() == Kind::Float && m_setMapName.ok() &&
+                       m_repoMapName.kind() == Kind::String && m_b.mapName.ok() && m_b.mapScale.ok() && m_b.currentScenario.ok() && m_b.scenarioName.ok() &&
+                       m_mapLoading.ok() && m_inBenchmark.ok() && m_inEditor.ok();
+        }
         m_canLoad = m_start.ok() && m_activate.ok() && m_startDefault && m_localHash.ok() && m_b.lifecycleReady();
         m_canStart = m_canLoad && m_persistentPlayType.ok() && m_cancel.ok();
         m_canCapture = m_canStart && m_exec.ok() && m_kismet && m_spawnBegin.ok() && m_spawnFinish.ok() && m_setViewTarget.ok() && m_getViewTarget.ok() &&
@@ -114,7 +150,9 @@ namespace aimmod
             " GetLocalScenarioHash=" + st(m_localHash) + " CancelChallenge=" + st(m_cancel) + " timeScale=" + st(m_timeDilation) +
             " mapScale=" + st(m_mapScale) + " adaptive=" + st(m_adaptiveOverride) + " weapon=" + st(m_weapon) + " refresh=" + st(m_refreshLocal) +
             " reloadProfiles=" + st(m_reloadProfiles) + " capture=" + (m_canCapture ? "ok" : "unavailable") + " console=" + st(m_exec) +
-            " spawn=" + st(m_spawnBegin) + " viewTarget=" + st(m_setViewTarget));
+            " spawn=" + st(m_spawnBegin) + " viewTarget=" + st(m_setViewTarget) + " map=" + (m_canMap ? "ok" : "unavailable") +
+            " GetChallengeProfile=" + st(m_challengeProfile) + " SetMapData=" + st(m_setMapData) + " SetCurrentMapName=" + st(m_setMapName) +
+            " respawn=" + st(m_respawn));
     }
 
     void GameControl::Answer(std::uint64_t sequence, const char* state, const std::string& code, const std::string& message)
@@ -271,6 +309,122 @@ namespace aimmod
                 });
         Log(std::string("game control: overrides reset (") + why + ")");
         m_overrides = {};
+    }
+
+    GameControl::MapOutcome GameControl::EnsureMap(const std::string& scenario, bool inChallenge, const char* why)
+    {
+        auto refuse = [&](const char* code, std::string message) {
+            Warn(std::string("map: ") + why + ": " + code + " (" + message + ")");
+            return MapOutcome{"error", code, std::move(message)};
+        };
+        if (!m_canMap) return refuse("unsupported", "Loading the map directly is unavailable in this game version.");
+        // Only AimMod's own scenarios, and never anything ranked: no challenge
+        // (running or queued), benchmark or scenario editor.
+        if (!MapFixAllowed(scenario)) return refuse("not-a-match", "Only AimMod's own scenarios are fixed this way.");
+        if (inChallenge) return refuse("challenge-active", "A challenge is running. Finish or quit it first.");
+        UObject* manager = m_scene.Manager();
+        UObject* state = m_scene.GameState();
+        if (!manager || !state) return refuse("game-unavailable", "KovaaK's is not ready yet.");
+        if (m_b.isInChallenge.Bool(manager).value_or(true) || m_b.queueRemaining.Number(manager).value_or(0) > 0)
+            return refuse("challenge-active", "A challenge is running. Finish or quit it first.");
+        if (m_inBenchmark.Bool(manager).value_or(true)) return refuse("benchmark", "A benchmark is running.");
+        if (m_inEditor.Bool(manager).value_or(true)) return refuse("editor", "The scenario editor is open.");
+        if (m_b.isScenarioLoading.Bool(manager).value_or(true) || m_mapLoading.Bool(state).value_or(true))
+            return refuse("busy", "A scenario or map is loading. Try again in a moment.");
+        if (m_overrides.mapScaleBefore) return refuse("overrides-active", "A map scale override is active.");
+        UObject* current = m_b.currentScenario.Object(manager);
+        std::string currentName;
+        if (!current || !m_b.scenarioName.String(current, currentName) || currentName != scenario)
+            return refuse("not-current", "\"" + scenario + "\" is not the scenario being played.");
+        if (m_b.scenarioInChallenge.ok() && m_b.scenarioInChallenge.Bool(current).value_or(true))
+            return refuse("challenge-active", "A challenge is running. Finish or quit it first.");
+
+        auto repositories = [] {
+            std::vector<UObject*> all, live;
+            RC::Unreal::UObjectGlobals::FindAllOf(STR("KovaakMapCreatorRepository"), all);
+            for (UObject* r : all)
+                if (IsLiveInstance(r)) live.push_back(r);
+            return live;
+        };
+        auto built = [&](const std::string& name, double scale) {
+            // The map builder took the map: some live repository carries its name.
+            for (UObject* r : repositories())
+            {
+                std::string shown;
+                if (m_repoMapName.String(r, shown) && SameMapLoaded(shown, scale, name, scale)) return true;
+            }
+            return false;
+        };
+        MapOutcome out{"error", "map-unavailable", "\"" + scenario + "\" has no map data."};
+        const bool called = m_challengeProfile.CallReturningStructs(
+            current, [](std::uint8_t*, const Param&) {},
+            [&](const std::uint8_t* buffer, const std::vector<Param>& params) {
+                const std::uint8_t* profile = nullptr;
+                for (const Param& p : params)
+                    if (p.ret) profile = buffer + p.offset;
+                std::string name;
+                const auto scale = profile ? ReadNumber(m_profileMapScale.At(profile), m_profileMapScale.kind()) : std::nullopt;
+                ArrayView lines{};
+                if (profile) std::memcpy(&lines, m_profileMapData.At(profile), sizeof(lines));
+                if (!profile || !m_profileMapName.String(profile, name) || name.empty() || !scale || !(*scale > 0) || !IsUsableNumber(*scale) ||
+                    lines.num <= 0 || lines.num > lines.max || !lines.data)
+                    return;
+                std::string shown;
+                m_b.mapName.String(state, shown);
+                const double shownScale = m_b.mapScale.Number(state).value_or(0);
+                if (SameMapLoaded(shown, shownScale, name, *scale) && built(name, *scale))
+                {
+                    out = {"done", "map-ok", name};
+                    return;
+                }
+                Log(std::string("map: ") + why + ": \"" + scenario + "\" wants " + name + " at " + FormatNumber(*scale, 3) + "; the game shows \"" + shown +
+                    "\" at " + FormatNumber(shownScale, 3) + ". Loading it through MetaGameState (" + std::to_string(lines.num) + " map lines)");
+                const ULONGLONG started = GetTickCount64();
+                // KovaaK's own apply step, in its order: the name (OnMapNameChange), then the data.
+                const bool named = m_setMapName.Call(state, [&](std::uint8_t* value, const Param& p) {
+                    if (p.kind == Kind::String) WriteString(value, name);
+                });
+                // The array is lent to the call (SetMapData copies it); it stays owned by the profile.
+                const bool loaded = named && m_setMapData.Call(state, [&](std::uint8_t* value, const Param& p) {
+                    if (!p.structType) return;
+                    std::memcpy(const_cast<std::uint8_t*>(m_dataLines.At(value)), &lines, sizeof(lines));
+                    const float f = static_cast<float>(*scale);
+                    std::memcpy(const_cast<std::uint8_t*>(m_dataScale.At(value)), &f, sizeof(f));
+                });
+                std::string after;
+                m_b.mapName.String(state, after);
+                const double afterScale = m_b.mapScale.Number(state).value_or(0);
+                const bool settled = !m_mapLoading.Bool(state).value_or(true);
+                const bool builder = built(name, *scale);
+                const std::string took = std::to_string(GetTickCount64() - started) + " ms";
+                if (!named || !loaded)
+                {
+                    out = {"error", "map-load-failed", "KovaaK's did not accept the map " + name + "."};
+                    return;
+                }
+                if (!SameMapLoaded(after, afterScale, name, *scale) || !settled || !builder)
+                {
+                    out = {"error", "map-load-failed",
+                           "KovaaK's shows \"" + after + "\" at " + FormatNumber(afterScale, 3) + (settled ? "" : ", still loading") + (builder ? "" : ", map builder not updated") +
+                               " after loading " + name + "."};
+                    return;
+                }
+                // Out of the previous map's geometry: the game's own respawn (freeplay only here).
+                const bool respawned = m_respawn.ok() && m_respawn.Call(state, [](std::uint8_t*, const Param&) {});
+                Log("map: loaded " + name + " at " + FormatNumber(*scale, 3) + " in " + took + (respawned ? "; player respawned" : ""));
+                out = {"done", "map-loaded", name};
+            });
+        if (!called) return refuse("map-unavailable", "The game did not return the scenario's map.");
+        if (std::string(out.state) == "error") Warn(std::string("map: ") + why + ": " + out.code + " (" + out.message + ")");
+        else if (out.code == "map-ok") Log(std::string("map: ") + why + ": " + out.message + " is already loaded");
+        return out;
+    }
+
+    std::string GameControl::AutoMap(const std::string& scenario, bool inChallenge)
+    {
+        if (!m_canMap || inChallenge || !MapFixAllowed(scenario)) return {};
+        const MapOutcome r = EnsureMap(scenario, inChallenge, "after load");
+        return r.code + (r.message.empty() ? "" : ": " + r.message);
     }
 
     std::vector<std::wstring> GameControl::Screenshots() const
@@ -625,6 +779,13 @@ namespace aimmod
         // Never interrupt a challenge: leaving it would cancel a ranked attempt.
         if (inChallenge) return Answer(c.sequence, "error", "challenge-active", "A challenge is running. Finish or quit it first.");
         if (loading || m_pending) return Answer(c.sequence, "error", "busy", "A scenario is loading. Try again in a moment.");
+        if (c.action == GameCommand::Action::EnsureMap)
+        {
+            if (m_capture || m_refreshing || m_quitting) return Answer(c.sequence, "error", "busy", "Another game command is running. Try again in a moment.");
+            if (current != c.scenario) return Answer(c.sequence, "error", "not-current", "\"" + c.scenario + "\" is not the scenario being played.");
+            const MapOutcome r = EnsureMap(c.scenario, inChallenge, "requested");
+            return Answer(c.sequence, r.state, r.code, r.message);
+        }
         const bool load = c.action == GameCommand::Action::LoadScenario;
         if (c.action != GameCommand::Action::CaptureThumbnail && (load ? !m_canLoad : !m_canStart))
             return Answer(c.sequence, "error", "unsupported", "Load \"" + c.scenario + "\" in KovaaK's; automatic loading is unavailable in this game version.");
@@ -654,7 +815,7 @@ namespace aimmod
             m_pending->started = true;
             return Answer(c.sequence, "accepted", "ending", "");
         }
-        if (load && current == c.scenario) return Answer(c.sequence, "done", "already-loaded", "");
+        if (load && current == c.scenario) return Answer(c.sequence, "done", "already-loaded", AutoMap(c.scenario, inChallenge));
         if (m_refreshing) return Answer(c.sequence, "error", "busy", "Scenarios are being refreshed. Try again in a moment.");
         if (!ScenarioKnown(manager, c.scenario))
         {
@@ -764,15 +925,18 @@ namespace aimmod
         const auto seq = c.sequence;
         if (c.action == GameCommand::Action::LoadScenario)
         {
+            const std::string scenario = c.scenario;
             m_pending.reset();
-            return Answer(seq, "done", "loaded", "");
+            // KovaaK's skips the map of a scenario without IsChallenge on load; AimMod's own scenarios get theirs here.
+            return Answer(seq, "done", "loaded", AutoMap(scenario, inChallenge));
         }
         if (c.action == GameCommand::Action::EndRun)
         {
             const bool reset = c.reset;
+            const std::string scenario = c.scenario;
             m_pending.reset();
             if (inChallenge) return Answer(seq, "error", "mode-mismatch", "The game started a challenge instead of freeplay.");
-            return Answer(seq, "done", reset ? "reset" : "stopped", "");
+            return Answer(seq, "done", reset ? "reset" : "stopped", AutoMap(scenario, inChallenge));
         }
         if (c.mode == GameCommand::Mode::Challenge)
         {
@@ -804,6 +968,9 @@ namespace aimmod
             m_pending.reset();
             return Answer(seq, "error", "mode-mismatch", "The game started a challenge instead of freeplay; no overrides were applied.");
         }
+        // The scenario's own map first; a map scale override then rescales it.
+        const std::string mapNote = AutoMap(c.scenario, inChallenge);
+        if (!mapNote.empty()) Log("game command " + std::to_string(seq) + ": " + mapNote);
         const bool ok = !c.HasOverrides() || ApplyOverrides(c);
         if (c.seed)
         {

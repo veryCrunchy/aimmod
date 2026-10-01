@@ -170,6 +170,7 @@ namespace aimmod::game
         out.offset = p->GetOffset_Internal();
         out.size = p->GetSize();
         out.kind = KindOf(p, out.size);
+        out.property = p;
         out.ret = p->HasAnyPropertyFlags(CPF_ReturnParm);
         out.out = !out.ret && p->HasAnyPropertyFlags(CPF_OutParm) && !p->HasAnyPropertyFlags(CPF_ConstParm);
         out.worldContext = out.kind == Kind::Object && out.name.find("WorldContext") != std::string::npos;
@@ -534,6 +535,27 @@ namespace aimmod::game
     bool Getter::Call(UObject* self, const std::function<void(std::uint8_t*, const Param&)>& fill,
                       const std::function<void(const std::uint8_t*, const std::vector<Param>&)>& read) const
     {
+        return CallImpl(self, fill, read, false);
+    }
+
+    bool Getter::OwnsReturnedStructs() const
+    {
+        if (!ok()) return false;
+        for (const Param& p : m_params)
+            if ((p.ret || p.out) && p.structType && !Releasable(p.property)) return false;
+        return true;
+    }
+
+    bool Getter::CallReturningStructs(UObject* self, const std::function<void(std::uint8_t*, const Param&)>& fill,
+                                      const std::function<void(const std::uint8_t*, const std::vector<Param>&)>& read) const
+    {
+        if (!OwnsReturnedStructs()) return false;
+        return CallImpl(self, fill, read, true);
+    }
+
+    bool Getter::CallImpl(UObject* self, const std::function<void(std::uint8_t*, const Param&)>& fill,
+                          const std::function<void(const std::uint8_t*, const std::vector<Param>&)>& read, bool releaseStructs) const
+    {
         alignas(16) std::uint8_t buffer[MaxParms];
         if (!ok() || !self || m_shape != Shape::Command) return false;
         if (m_owner && !self->IsA(m_owner)) return false;
@@ -552,7 +574,66 @@ namespace aimmod::game
             if (raw.data) FMemory::Free(raw.data);
         }
         if (ok) Release(buffer);
+        // Returned structs: their strings and arrays were allocated by the
+        // engine's copy into this frame. A faulted call leaves them alone.
+        if (ok && releaseStructs)
+            for (const Param& p : m_params)
+                if ((p.ret || p.out) && p.structType && p.property) ReleaseValue(p.property, buffer + p.offset);
         return ok;
+    }
+
+    bool Releasable(FProperty* p)
+    {
+        if (!p) return false;
+        if (CastField<FSoftObjectProperty>(p) || CastField<FLazyObjectProperty>(p)) return false; // own strings inside
+        if (CastField<FNumericProperty>(p) || CastField<FBoolProperty>(p) || CastField<FEnumProperty>(p) || CastField<FNameProperty>(p) ||
+            CastField<FObjectPropertyBase>(p) || CastField<FStrProperty>(p))
+            return true;
+        if (auto* array = CastField<FArrayProperty>(p)) return Releasable(array->GetInner());
+        if (auto* s = CastField<FStructProperty>(p))
+        {
+            UScriptStruct* type = s->GetStruct();
+            if (!type) return false;
+            for (FProperty* member : type->ForEachPropertyInChain())
+                if (!Releasable(member)) return false;
+            return true;
+        }
+        return false;
+    }
+
+    void ReleaseValue(FProperty* p, std::uint8_t* value)
+    {
+        if (!p || !value) return;
+        if (CastField<FStrProperty>(p))
+        {
+            ArrayView raw;
+            std::memcpy(&raw, value, sizeof(raw));
+            if (raw.data) FMemory::Free(raw.data);
+            std::memset(value, 0, sizeof(raw));
+            return;
+        }
+        if (auto* array = CastField<FArrayProperty>(p))
+        {
+            ArrayView raw;
+            std::memcpy(&raw, value, sizeof(raw));
+            FProperty* inner = array->GetInner();
+            if (raw.data && inner && raw.num > 0 && (CastField<FStrProperty>(inner) || CastField<FArrayProperty>(inner) || CastField<FStructProperty>(inner)))
+            {
+                const std::int32_t size = inner->GetElementSize();
+                for (std::int32_t i = 0; i < raw.num; ++i) ReleaseValue(inner, static_cast<std::uint8_t*>(raw.data) + static_cast<std::size_t>(i) * size);
+            }
+            if (raw.data) FMemory::Free(raw.data);
+            std::memset(value, 0, sizeof(raw));
+            return;
+        }
+        if (auto* s = CastField<FStructProperty>(p))
+        {
+            UScriptStruct* type = s->GetStruct();
+            if (!type) return;
+            for (FProperty* member : type->ForEachPropertyInChain())
+                for (std::int32_t i = 0; i < member->GetArrayDim(); ++i)
+                    ReleaseValue(member, value + member->GetOffset_Internal() + static_cast<std::size_t>(i) * member->GetElementSize());
+        }
     }
 
     void WriteString(std::uint8_t* value, const std::string& utf8)

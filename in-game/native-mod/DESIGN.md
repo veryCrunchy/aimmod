@@ -333,8 +333,8 @@ Capabilities come from `core-active.tsv`: `load` (scenario load) and `start`
 ```
 AIMMOD_CORE_COMMAND_1
 seq	<increasing integer; a request left from an earlier session is ignored>
-action	load-scenario | start-scenario | reset-overrides
-scenario	<exact scenario name>             (load/start)
+action	load-scenario | start-scenario | reset-overrides | ensure-map
+scenario	<exact scenario name>             (load/start/ensure-map)
 mode	freeplay | challenge                   (start; default freeplay)
 timeScale	<0.1..4>                          (start, freeplay only)
 targetSize	<0.1..10>                        (start, freeplay only)
@@ -355,6 +355,21 @@ browser path, without playing (`stop`) or playing again in freeplay
 (`reset`). Answered `accepted ending`, then `done stopped|reset` once the
 reload finished, or `end-failed` when no reload began within 5 s. Refused
 during a challenge and for any other scenario (`not-a-match`, `not-current`).
+
+`ensure-map` (capability `map`; `scenario` must be the current scenario and
+one AimMod generates: `AimMod Match - `, `AimMod - `, `AimMod Probe `; no
+other fields): loads that scenario's own map through KovaaK's map pipeline
+(see "Map loading") when the game shows another map or scale. Answered once:
+`done map-ok` (already loaded, nothing changed), `done map-loaded` (loaded
+now; the message is the map name), or an error: `unsupported`,
+`not-a-match`, `not-current`, `challenge-active` (running or queued),
+`benchmark`, `editor`, `busy` (a scenario or map is loading),
+`overrides-active` (a map scale override), `map-unavailable` (the scenario
+has no parsed map), `map-load-failed` (the game did not end up on the map;
+the message says what it shows). AimModCore does the same after every
+`load-scenario`, `start-scenario` (freeplay) and `end-run` of such a
+scenario outside a challenge, and adds the outcome to that command's
+message.
 
 `quit-run` (no fields; capability `quit`; any scenario): what the player does
 to leave a run. In a challenge it calls `ScenarioManager:CancelChallenge`
@@ -424,6 +439,57 @@ Rules:
 - Every request and outcome is logged (`game command <seq>: ...`).
 - Target size/speed and time scale semantics (adaptive override profile,
   global time dilation) are the first live-verified items of test #4.
+
+## Map loading
+
+KovaaK's 3.9.11 map pipeline, read from the game binary (the exec thunks
+listed in the UE4SS object dump, followed into the native code):
+
+- A scenario file's `MapName`, `MapScale` and `[Map Data]` are parsed into
+  `FScenarioProfileNative.ChallengeProfile` (`FChallengeProfileNative`
+  `MapName`, `MapScale`, `MapData`). `Scenario:GetChallengeProfile` returns
+  a copy.
+- `AMetaGameState` binds native handlers to `UScenarioBroadcastReceiver`
+  events. Each one ends in the same apply step:
+  `CurrentMapName = MapName`, `OnMapNameChange`, then
+  `SetMapData({MapData, MapScale})`.
+  - Initialize(bNewScenario): applies only when `bNewScenario` **and** the
+    profile's `IsChallenge` are true.
+  - PlayTypeChanged: for local scenarios (`EScenarioType::Local`) only if
+    `CurrentMapName` differs (ignoring case) or the scale differs; for
+    online and trainer scenarios always.
+  - EnterEditor / ExitEditor: only if the name or scale differs.
+- `SetMapData` stores the data and scale, sets `bMapLoading`, has the
+  `KovaakMapCreatorRepository` reset and rebuild the map from the lines
+  (`LoadMapFromLines`, synchronous), copies `CurrentMapName` to the
+  repository, clears `bMapLoading` and broadcasts `OnMapNameChange`.
+  `LoadMapByName` (and `Repository:LoadMap`) read a map file from the Maps
+  folder instead, so they don't fit scenarios with inline map data.
+
+Why a load kept the previous map: AimMod's arenas and map ports set
+`IsChallenge=false`, so Initialize never applies their map. Only a
+play-type change did, which is why switching freeplay, challenge, freeplay
+"fixed" it.
+
+ensure-map runs the same apply step with the game's own parsed data:
+`Scenario:GetChallengeProfile` on the current scenario (the returned struct
+is released member by member; it's made only of numbers, strings and arrays),
+then `MetaGameState:SetCurrentMapName(MapName)` and
+`MetaGameState:SetMapData({MapData, MapScale})`. The profile's array is
+lent to that call, which copies it. It checks the result:
+`GetCurrentMapName` and `GetMapScale` match, `bMapLoading` is clear, and a
+live repository's `CurrentMapName` matches. Then it calls
+`RespawnPlayerAndDestroyProjectiles` so the player isn't left in the old
+geometry. It never runs in a challenge (running or queued), a benchmark or
+the editor, and only for AimMod's generated scenarios. It only ever loads the
+current scenario's own map, which is what KovaaK's would have done. A map
+that is already right is left alone, so repeated calls are harmless.
+
+Live check (game running with this AimModCore):
+`AimMod.InGame.exe --check-map-load "<AimMod scenario>" [--game <root>]
+[--no-load]` loads the scenario, sends ensure-map, and prints
+`core-scene.json`'s `mapName`/`mapScale` after each step against the
+scenario file's header. It exits 0 when the map matches.
 
 ## Match play (damage modes)
 

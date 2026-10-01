@@ -2,6 +2,8 @@
 // Game actions AimModCore performs on request (DESIGN.md "Game commands"):
 // load a scenario (replay viewing), start a scenario in freeplay or challenge
 // mode, optionally with freeplay-only overrides, and reset those overrides.
+// ensure-map rebuilds the current AimMod scenario's own map through KovaaK's
+// map pipeline when the game kept the previous one (DESIGN.md "Map loading").
 // Game thread only. Every request is validated, refused while a challenge
 // runs, logged, and answered in core-command-result.tsv. Overrides can never
 // reach a ranked run: they are freeplay-only, reset on any scenario change,
@@ -36,6 +38,9 @@ namespace aimmod
         bool canLoad() const { return m_canLoad; }
         bool canStart() const { return m_canStart; }
         bool canCapture() const { return m_canCapture; }
+        // "map": ensure-map (KovaaK's SetCurrentMapName + SetMapData with the
+        // scenario's own parsed map).
+        bool canMap() const { return m_canMap; }
         // "quit": leave the current run the way pause -> Quit does (abandoned, never submitted).
         bool canQuit() const { return m_cancel.ok(); }
         // The scenario of a challenge quit-run just left (once), for the
@@ -67,6 +72,20 @@ namespace aimmod
         bool Refresh(const char* why);
         void Proceed(const GameCommand& command, double now, game::UObject* manager);
         void Answer(std::uint64_t sequence, const char* state, const std::string& code, const std::string& message);
+
+        // Direct map load (ensure-map, and after loads of AimMod scenarios).
+        struct MapOutcome
+        {
+            const char* state{"error"};
+            std::string code, message;
+        };
+        MapOutcome EnsureMap(const std::string& scenario, bool inChallenge, const char* why);
+        // After a load/start/end-run of an AimMod scenario outside a challenge:
+        // the outcome as a note for the result message ("" when not applicable).
+        std::string AutoMap(const std::string& scenario, bool inChallenge);
+        game::Getter m_challengeProfile, m_setMapName, m_setMapData, m_respawn, m_inBenchmark, m_inEditor;
+        game::Path m_profileMapName, m_profileMapScale, m_profileMapData, m_dataLines, m_dataScale, m_repoMapName;
+        bool m_canMap{};
 
         game::Bindings& m_b;
         game::Scene& m_scene;

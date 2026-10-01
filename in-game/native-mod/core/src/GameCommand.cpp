@@ -35,6 +35,7 @@ namespace aimmod
         case GameCommand::Action::CaptureThumbnail: return "capture-thumbnail";
         case GameCommand::Action::EndRun: return "end-run";
         case GameCommand::Action::QuitRun: return "quit-run";
+        case GameCommand::Action::EnsureMap: return "ensure-map";
         default: return "reset-overrides";
         }
     }
@@ -93,9 +94,10 @@ namespace aimmod
         else if (*action == "capture-thumbnail") c.action = GameCommand::Action::CaptureThumbnail;
         else if (*action == "end-run") c.action = GameCommand::Action::EndRun;
         else if (*action == "quit-run") c.action = GameCommand::Action::QuitRun;
+        else if (*action == "ensure-map") c.action = GameCommand::Action::EnsureMap;
         else return fail("invalid-command", "Unknown action.");
         if (c.action == GameCommand::Action::LoadScenario || c.action == GameCommand::Action::StartScenario ||
-            c.action == GameCommand::Action::CaptureThumbnail || c.action == GameCommand::Action::EndRun)
+            c.action == GameCommand::Action::CaptureThumbnail || c.action == GameCommand::Action::EndRun || c.action == GameCommand::Action::EnsureMap)
         {
             const std::string* scenario = get("scenario");
             if (!scenario || !SafeName(*scenario)) return fail("invalid-scenario", "Missing or invalid scenario name.");
@@ -110,6 +112,8 @@ namespace aimmod
         if (c.action == GameCommand::Action::QuitRun && get("scenario")) return fail("invalid-command", "quit-run takes no scenario.");
         if (c.action == GameCommand::Action::EndRun && !std::string_view(c.scenario).starts_with(MatchScenarioPrefix))
             return fail("not-a-match", "end-run applies to AimMod match scenarios only.");
+        if (c.action == GameCommand::Action::EnsureMap && !MapFixAllowed(c.scenario))
+            return fail("not-a-match", "ensure-map applies to AimMod's generated scenarios only.");
         if (const std::string* mode = get("mode"))
         {
             if (*mode == "freeplay") c.mode = GameCommand::Mode::FreePlay;
@@ -213,6 +217,22 @@ namespace aimmod
     }
 
     bool SeedAllowed(std::string_view scenario, bool inChallenge) { return !inChallenge || scenario.starts_with(MatchScenarioPrefix); }
+
+    bool MapFixAllowed(std::string_view scenario)
+    {
+        return IsScenarioFileName(scenario) && (scenario.starts_with(MatchScenarioPrefix) || scenario.starts_with("AimMod Probe ") || scenario.starts_with("AimMod - "));
+    }
+
+    bool SameMapLoaded(std::string_view currentName, double currentScale, std::string_view wantedName, double wantedScale)
+    {
+        if (wantedName.empty() || currentName.size() != wantedName.size()) return false;
+        for (std::size_t i = 0; i < wantedName.size(); ++i)
+        {
+            auto lower = [](char ch) { return ch >= 'A' && ch <= 'Z' ? static_cast<char>(ch - 'A' + 'a') : ch; };
+            if (lower(currentName[i]) != lower(wantedName[i])) return false;
+        }
+        return IsUsableNumber(currentScale) && IsUsableNumber(wantedScale) && std::fabs(currentScale - wantedScale) <= 1e-4 * std::fmax(1.0, std::fabs(wantedScale));
+    }
 
     std::uint32_t SeedFor(std::uint32_t matchSeed, std::uint32_t index)
     {
