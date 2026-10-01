@@ -1361,10 +1361,19 @@ namespace bridge
                 m_steam.MM_SetLobbyData(m_steam.mm, m_lobby, KeyToken, Hex(m_token).c_str());
             }
             OpenListen();
+            // Our own lobby spectate now routes through this host.
+            if (m_watching && !m_watchingDirect && m_watchRate > 0)
+            {
+                m_spectators[m_watching][m_self] = m_watchRate;
+                UpdateSpectateRoute(m_watching);
+            }
             m_log("this machine is the lobby host");
         }
         else
         {
+            // Routes kept as host are void now; the new host asks for our camera itself.
+            m_spectators.clear();
+            m_cameraRate = 0;
             CloseAllConns("host changed");
             EnsureListen(); // still listening when spectating is allowed
             m_nextConnect = Clock::now();
@@ -1600,6 +1609,8 @@ namespace bridge
                     again->lanes = m_steam.sockets->ConfigureConnectionLanes(again->handle, 2, priorities, weights) == 1;
                 }
                 again->nextPing = Clock::now();
+                // Someone already watches this member (host changed): ask for its camera.
+                if (m_spectators.count(peer)) UpdateSpectateRoute(peer);
                 Emit(json::Object().Int("v", ContractVersion).Str("ev", "p2p.connected").Str("peer", Id(peer)).Bool("host", false).Done());
                 EmitLobby();
                 return;
@@ -1623,6 +1634,14 @@ namespace bridge
                 conn.lanes = m_steam.sockets->ConfigureConnectionLanes(conn.handle, 2, priorities, weights) == 1;
             }
             m_log("p2p connected: " + Redact(peer) + " (lobby host)");
+            // A lobby spectate outlives a host link drop: subscribe again on the new link.
+            if (m_watching && !m_watchingDirect && m_watchRate > 0)
+            {
+                WireMessage sub{WireType::SpectateSub};
+                sub.lobby = m_watching;
+                sub.rate = static_cast<std::uint8_t>(m_watchRate);
+                SendWire(conn, sub, true);
+            }
             Emit(json::Object().Int("v", ContractVersion).Str("ev", "p2p.connected").Str("peer", Id(peer)).Bool("host", conn.outgoing).Done());
             EmitLobby();
             return;
