@@ -89,7 +89,12 @@ test('accessories are built from curated game meshes, fitted to a slot within th
   assert.ok(accessories.length >= 3, 'a first set of accessories (few, but each one looks intentional)');
   const roles = new Set();
   for (const item of accessories) {
-    assert.match(item.mesh, /^(\/Engine\/BasicShapes\/|\/Game\/Art\/StaticMeshes\/KMC\/Brushes\/)[A-Za-z0-9_.-]+$/, `${item.id}: curated mesh`);
+    // A curated game mesh, or an AimMod runtime mesh shipped next to the catalog.
+    if (item.shape) {
+      assert.match(item.shape, /^[a-z0-9][a-z0-9-]*\.amsh$/, `${item.id}: mesh file name`);
+      assert.ok(fs.existsSync(path.join(__dirname, 'meshes', item.shape)), `${item.id}: ships ${item.shape}`);
+      assert.ok(!item.mesh, `${item.id}: a shape or a game mesh, not both`);
+    } else assert.match(item.mesh, /^(\/Engine\/BasicShapes\/|\/Game\/Art\/StaticMeshes\/KMC\/Brushes\/)[A-Za-z0-9_.-]+$/, `${item.id}: curated mesh`);
     assert.match(item.material, /^\/Game\/Materials\/Instances\/Characters\/S_(Meso|Endo)\/Base\/MI_PaintedMetal_[A-Za-z0-9_.-]+$/, `${item.id}: curated material`);
     const { role, fit } = item.attach;
     assert.ok(['head', 'neck', 'spine'].includes(role), `${item.id}: slot`);
@@ -102,6 +107,19 @@ test('accessories are built from curated game meshes, fitted to a slot within th
     assert.deepStrictEqual(item.models, ['Meso', 'Endo']);
   }
   assert.ok(roles.has('head') && roles.has('neck'), 'head and neck pieces');
+});
+
+test('every shipped runtime mesh is a valid .amsh the catalog uses', () => {
+  const files = fs.readdirSync(path.join(__dirname, 'meshes'));
+  const used = new Set(catalog.items.map(i => i.shape).filter(Boolean));
+  assert.deepStrictEqual(files.sort(), [...used].sort(), 'no unused or missing mesh files');
+  for (const name of files) {
+    const b = fs.readFileSync(path.join(__dirname, 'meshes', name));
+    assert.strictEqual(b.toString('latin1', 0, 4), 'AMSH', name);
+    const vertices = b.readUInt32LE(8), indices = b.readUInt32LE(12);
+    assert.strictEqual(b.length, 16 + vertices * 36 + indices * 4, `${name}: size`);
+    assert.ok(indices % 3 === 0 && vertices <= 65536, name);
+  }
 });
 
 test('pak items stay drafts until their pak ships', () => {

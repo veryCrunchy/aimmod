@@ -51,6 +51,7 @@ sealed partial class CosmeticsCatalog
     // (AimModCore's IsGameAccessoryAsset): one asset directly in these folders.
     [GeneratedRegex("^(/Engine/BasicShapes/|/Game/Art/StaticMeshes/KMC/Brushes/)[A-Za-z0-9_.-]{1,96}$")] private static partial Regex GameMesh();
     [GeneratedRegex("^/Game/Materials/Instances/Characters/S_(Meso|Endo)/Base/MI_PaintedMetal_[A-Za-z0-9_.-]{1,96}$")] private static partial Regex GameMaterial();
+    [GeneratedRegex("^[a-z0-9][a-z0-9-]{0,42}\\.amsh$")] private static partial Regex MeshName();
     static bool GameAsset(string? path, Regex rule) => path is { Length: <= 200 } && !path.Contains("..") && rule.IsMatch(path);
     public static bool ValidId(string? id) => id is not null && IdPattern().IsMatch(id);
 
@@ -149,7 +150,11 @@ sealed partial class CosmeticsCatalog
         }
         if (kind == "accessory" && role is not ("head" or "neck" or "spine")) return null;
         // Accessories fitted from the game's own meshes need no pak.
-        var gameAccessory = kind == "accessory" && pak is null && fitted && GameAsset(Text("mesh"), GameMesh()) && GameAsset(Text("material"), GameMaterial());
+        // Or an AimMod runtime mesh (.amsh) shipped next to the catalog and pinned by its manifest.
+        var shape = Text("shape");
+        var shaped = shape is not null && Text("mesh") is null && MeshName().IsMatch(shape);
+        if (shape is not null && (!shaped || kind != "accessory")) return null;
+        var gameAccessory = kind == "accessory" && pak is null && fitted && (GameAsset(Text("mesh"), GameMesh()) || shaped) && GameAsset(Text("material"), GameMaterial());
         if (rules.NeedsPak && pak is null && !gameAccessory) return null;
         if (!rules.NeedsPak && !hasParameters) return null;
         if (kind != "accessory") role = null;

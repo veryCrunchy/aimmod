@@ -3,6 +3,7 @@
 // over small immutable jobs (never blocks on disk).
 #include <aimmod/Overlay.hpp>
 #include <aimmod/Cosmetics.hpp>
+#include <aimmod/Mesh.hpp>
 #include <aimmod/GameCommand.hpp>
 #include <aimmod/GameStats.hpp>
 #include <aimmod/MatchPlay.hpp>
@@ -13,6 +14,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <map>
 #include <memory>
 #include <filesystem>
 #include <mutex>
@@ -82,6 +84,9 @@ namespace aimmod
         {
             cosmetics::Index index;
             std::set<std::string> verifiedPaks;
+            // AimMod runtime meshes (.amsh next to catalog.json) whose bytes matched the manifest.
+            std::map<std::string, std::shared_ptr<const mesh::Mesh>> meshes;
+            std::set<std::string> verifiedMeshes;
             std::string status;
         };
         struct CosmeticsInputs

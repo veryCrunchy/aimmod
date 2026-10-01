@@ -108,7 +108,7 @@ namespace cosmetics_checks
         // pak items stay drafts until the pak ships.
         std::string error;
         auto shipped = ParseCatalog(ReadText(std::filesystem::path(AIMMOD_SOURCE_DIR) / "cosmetics" / "catalog.json"), &error);
-        CHECK(shipped && shipped->errors.empty() && shipped->version == 4, "shipped catalog parses");
+        CHECK(shipped && shipped->errors.empty() && shipped->version == 5, "shipped catalog parses");
         std::vector<std::string> errors;
         Index byId = BuildIndex(shipped ? shipped->items : std::vector<Item>{}, errors);
         CHECK(errors.empty() && byId.size() == 16 && shipped && byId.size() == shipped->items.size(), "shipped catalog validates");
@@ -129,9 +129,12 @@ namespace cosmetics_checks
         CHECK(!Resolve(byId, "meso-pattern-stripes", drafted), "draft pak item needs a verified pak");
         CHECK(!Resolve(byId, "meso-pattern-stripes", none), "draft hidden by default");
         CHECK(Resolve(byId, "meso-pattern-stripes", paks) != nullptr, "pak item with a verified pak");
-        Plan dressed = PlanAvatar(byId, {{"accessory-halo", 2}, {"accessory-collar", 2}, {"accessory-headband", 2}}, none, "Endo");
+        ResolveOptions meshes;
+        meshes.verifiedMeshes = {"halo.amsh", "visor.amsh", "collar.amsh"};
+        Plan dressed = PlanAvatar(byId, {{"accessory-halo", 3}, {"accessory-collar", 3}, {"accessory-visor", 2}}, meshes, "Endo");
         CHECK(dressed.head && dressed.head->id == "accessory-halo" && dressed.neck && dressed.skipped.size() == 1,
               "shipped accessories: one per head and neck");
+        CHECK(!PlanAvatar(byId, {{"accessory-halo", 3}}, none, "Endo").head, "a runtime-mesh accessory without its verified mesh is not worn");
         Plan meso = PlanAvatar(byId, {{"tint-gold", 1}}, none, "Meso"), endo = PlanAvatar(byId, {{"tint-gold", 1}}, none, "Endo");
         CHECK(meso.body && meso.body->id == "tint-gold" && endo.body && endo.body->id == "tint-gold", "tints fit both free models");
         Plan own = PlanLocal(byId, {{"finish-ice", 1}}, none, "Rifle");
@@ -341,6 +344,26 @@ namespace cosmetics_checks
         CHECK(catalog && index.size() == 2 && index.contains("ring") && index.contains("collar") && errors.size() == 3,
               "game accessories validate; missing fit, props outside the brush folder and oversize fits are dropped");
         CHECK(index.contains("ring") && !index.at("ring").NeedsPak() && Resolve(index, "ring", ResolveOptions{}), "game accessories resolve without a pak");
+        // An AimMod runtime mesh: an accessory's own shape, usable only when its file matched the manifest.
+        auto shaped = ParseCatalog(R"({"version":1,"items":[
+            {"id":"visor","version":1,"kind":"accessory","models":["Meso"],"parts":["body"],"shape":"visor.amsh",
+             "material":"/Game/Materials/Instances/Characters/S_Meso/Base/MI_PaintedMetal_Meso_TS1.MI_PaintedMetal_Meso_TS1",
+             "attach":{"role":"head","fit":{"bone":"Head","anchor":"crown","size":[13,26,5],"keepAxes":true}}},
+            {"id":"bad-shape","version":1,"kind":"accessory","models":["Meso"],"parts":["body"],"shape":"../x.amsh",
+             "material":"/Game/Materials/Instances/Characters/S_Meso/Base/MI_PaintedMetal_Meso_TS1.MI_PaintedMetal_Meso_TS1","attach":{"role":"head","fit":{"bone":"Head","size":[10,10,10]}}},
+            {"id":"tint-shape","version":1,"kind":"avatar_tint","models":["Meso"],"parts":["body"],"shape":"halo.amsh","vector":{"MetalPaint":{"R":1,"G":1,"B":1,"A":1}}}]})");
+        std::vector<std::string> shapeErrors;
+        Index shapes = BuildIndex(shaped ? shaped->items : std::vector<Item>{}, shapeErrors);
+        CHECK(shapes.size() == 1 && shapes.contains("visor") && shapes.at("visor").fit->keepAxes && !shapes.at("visor").NeedsPak() && shapeErrors.size() == 2,
+              "runtime-mesh accessories validate; bad names and shapes on other kinds are dropped");
+        ResolveOptions withMesh;
+        withMesh.verifiedMeshes = {"visor.amsh"};
+        CHECK(!Resolve(shapes, "visor", ResolveOptions{}) && Resolve(shapes, "visor", withMesh), "a runtime mesh needs its verified file");
+        const double boxMin[3] = {0, -13, -2.5}, boxMax[3] = {13, 13, 2.5}, at[3] = {0, 0, 160}, sideways[3] = {0, 1, 0};
+        auto kept = PlaceAccessory(shapes.at("visor").fit.value(), boxMin, boxMax, at, sideways);
+        double kx[3], ky[3], kz[3];
+        if (kept) RotatorAxes(kept->rotation, kx, ky, kz);
+        CHECK(kept && Near(kx[1], 1, 1e-6) && Near(kz[2], 1, 1e-6) && Near(kept->scale[0], 1) && Near(kept->scale[1], 1), "keepAxes: the mesh's X follows the character's forward, never turned");
         Plan plan = PlanAvatar(index, {{"ring", 1}, {"collar", 1}}, ResolveOptions{}, "Meso");
         CHECK(plan.head && plan.head->id == "ring" && plan.neck && plan.neck->id == "collar" && plan.skipped.empty(), "one head and one neck accessory");
     }

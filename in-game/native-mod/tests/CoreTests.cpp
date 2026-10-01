@@ -1,6 +1,7 @@
 // Engine-independent checks for AimModCore. Synthetic data only.
 // Usage: aimmod_core_tests [--write-samples <dir>]
 #include <aimmod/CosmeticsPreview.hpp>
+#include <aimmod/Mesh.hpp>
 #include <aimmod/Formats.hpp>
 #include <aimmod/GameCommand.hpp>
 #include <aimmod/GameStats.hpp>
@@ -837,8 +838,45 @@ static void PreviewComposeChecks()
 }
 
 // Cosmetics page preview: request validation and where it may run.
+// Runtime meshes: the .amsh format, the generators and the shipped files.
+static void MeshChecks()
+{
+    using namespace aimmod::mesh;
+    const Mesh ring = Ring(11, 0.75f, 0.5f, 96, 16, 200, 150, 40);
+    double mn[3], mx[3];
+    ring.Bounds(mn, mx);
+    CHECK(ring.Valid() && ring.positions.size() == 96u * 16u && ring.indices.size() == 96u * 16u * 6u, "ring: a closed grid");
+    CHECK(std::abs(mx[0] - 11.75) < 1e-3 && std::abs(mn[0] + 11.75) < 1e-3 && std::abs(mx[2] - 0.5) < 1e-3 && std::abs(mn[2] + 0.5) < 1e-3, "ring: outer radius and tube height");
+    bool unit = true;
+    for (const Vec3& n : ring.normals) unit &= std::abs(std::sqrt(n.x * n.x + n.y * n.y + n.z * n.z) - 1) < 1e-4;
+    CHECK(unit, "ring normals are unit length");
+    const Mesh visor = Visor(11.5f, 4.5f, 0.9f, 150, 64, 255, 255, 255);
+    visor.Bounds(mn, mx);
+    CHECK(visor.Valid() && mx[0] > 11.5 && mn[0] > 0 && std::abs(mx[2] - 2.25) < 0.02 && std::abs(mx[1] + mn[1]) < 1e-3, "visor: a band in front of the head, centred");
+    const std::string bytes = Serialize(ring);
+    auto back = Parse(bytes);
+    CHECK(back && back->positions.size() == ring.positions.size() && back->indices == ring.indices && Serialize(*back) == bytes, "amsh round trip");
+    std::string error;
+    CHECK(!Parse(bytes.substr(0, bytes.size() - 1), &error) && error == "wrong size", "a truncated mesh is rejected");
+    std::string bad = bytes;
+    const std::uint32_t outOfRange = 1u << 20;
+    std::memcpy(&bad[bad.size() - 4], &outOfRange, 4);
+    CHECK(!Parse(bad, &error) && error == "bad values", "an index out of range is rejected");
+    CHECK(!Parse("AMSH") && !Parse(std::string("GLTF") + bytes.substr(4)), "not a mesh");
+    CHECK(IsMeshName("halo.amsh") && IsMeshName("visor-2.amsh") && !IsMeshName("Halo.amsh") && !IsMeshName("../halo.amsh") && !IsMeshName("halo.glb") && !IsMeshName(".amsh"),
+          "mesh file names");
+    // The shipped files are exactly what the generators make.
+    for (const auto& [name, m] : Shipped())
+    {
+        std::ifstream in(std::filesystem::path(AIMMOD_SOURCE_DIR) / ".." / "cosmetics" / "meshes" / name, std::ios::binary);
+        const std::string file((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        CHECK(m.Valid() && file == Serialize(m), ("shipped mesh " + name + " is up to date (aimmod_core_tests --write-meshes in-game/cosmetics/meshes)").c_str());
+    }
+}
+
 static void PreviewChecks()
 {
+    MeshChecks();
     const std::int64_t now = 1790000000;
     const std::string good = "v=1\r\nexpires=1790000005\nseq=7\nmodel=Meso\nskin=McCree\nyaw=-35.5\n"
                              "vector=PrimaryColor:0.85,0.22,0.05,1\nscalar=Roughness:0.6\nfuture=ignored\n";
@@ -972,6 +1010,16 @@ int main(int argc, char** argv)
     if (argc == 3 && std::strcmp(argv[1], "--write-samples") == 0)
     {
         WriteSamples(argv[2]);
+        return 0;
+    }
+    if (argc == 3 && std::strcmp(argv[1], "--write-meshes") == 0)
+    {
+        std::filesystem::create_directories(argv[2]);
+        for (const auto& [name, m] : aimmod::mesh::Shipped())
+        {
+            const std::string bytes = aimmod::mesh::Serialize(m);
+            std::ofstream(std::filesystem::path(argv[2]) / name, std::ios::binary).write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        }
         return 0;
     }
     Formats();

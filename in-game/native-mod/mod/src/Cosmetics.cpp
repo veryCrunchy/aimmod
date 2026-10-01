@@ -360,7 +360,11 @@ namespace aimmod
         {
             // From the game's and engine's own meshes, fitted to this rig.
             std::string why;
-            UObject* component = AttachFitAccessory(want.actor, want.mesh, item, why);
+            const auto inputs = m_output.cosmetics();
+            const mesh::Mesh* shape = nullptr;
+            if (!item.shape.empty() && inputs.library)
+                if (auto it = inputs.library->meshes.find(item.shape); it != inputs.library->meshes.end()) shape = it->second.get();
+            UObject* component = AttachFitAccessory(want.actor, want.mesh, item, shape, why);
             if (!component)
             {
                 m_failedAssets.insert(key);
@@ -609,6 +613,7 @@ namespace aimmod
         cosmetics::ResolveOptions options;
         options.allowDrafts = inputs.allowDrafts;
         options.verifiedPaks = inputs.library->verifiedPaks;
+        options.verifiedMeshes = inputs.library->verifiedMeshes;
         std::vector<Want> wants;
         std::vector<WantAccessory> accessories;
         if (d.avatars) Avatars(*inputs.looks, options, inputs.library->index, local, wants, accessories);

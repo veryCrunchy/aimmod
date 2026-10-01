@@ -83,6 +83,7 @@ namespace aimmod::cosmetics
         std::string bone;          // e.g. "Head", "Neck", "Chest"
         std::string anchor{"bone"}; // "bone", "top" (the character's top, above the bone) or "crown" (halfway from the bone to the top)
         double offset[3]{}, size[3]{};
+        bool keepAxes{}; // the mesh is authored in the character's frame (X forward, Z up): never turned
     };
     struct Item
     {
@@ -99,6 +100,7 @@ namespace aimmod::cosmetics
         std::string mesh, material;                       // accessory assets (pak)
         std::string attachRole;                           // accessory: "head", "neck" or "spine"
         std::optional<Fit> fit;                           // accessory from game/engine meshes (no pak)
+        std::string shape;                                // accessory from an AimMod runtime mesh ("<name>.amsh", manifest-pinned)
         std::vector<std::pair<std::string, Attachment>> attach; // per base model
         bool draft{};
 
@@ -172,6 +174,7 @@ namespace aimmod::cosmetics
     {
         bool allowDrafts{};
         std::set<std::string> verifiedPaks;
+        std::set<std::string> verifiedMeshes; // .amsh files that matched the manifest
     };
     // Unknown ids, drafts (unless allowed) and pak items without a verified
     // pak resolve to null; `reason` says why.

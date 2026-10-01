@@ -320,23 +320,76 @@ catalog.
 
 ## Accessories
 
-### First set: game meshes (shipped)
+### Runtime meshes (shipped)
 
-The first accessories need no pak. They use the game's own map-editor brushes
-(`/Game/Art/StaticMeshes/KMC/Brushes/`, plus `/Engine/BasicShapes/`) and the
-free Meso material `MI_PaintedMetal_Meso_TS1`, tinted through its probed
-parameters. Every region colour is set to the accessory's colour.
-AimModCore, the service, the manifest script and the Lua testbed share one
-allow-list (`IsGameAccessoryAsset`): one asset directly in those folders, and
-nothing else without a pak.
+AimModCore builds rigid accessories at runtime as a `ProceduralMeshComponent`
+(`CreateMeshSection_LinearColor`, present in KovaaK's 3.9.11), so original
+shapes need no UE editor and no pak.
 
-| id | slot | mesh | look |
-|---|---|---|---|
-| `accessory-halo` | head | torus | gold ring floating 14 cm above the head |
-| `accessory-headband` | head | torus | mint band halfway between head bone and crown |
-| `accessory-crown` | head | tube | gold band on top of the head |
-| `accessory-collar` | neck | torus | carbon ring around the neck |
-| `accessory-back-ring` | back | torus | mint ring standing behind the chest |
+- **Files:** `.amsh` (format in `core/include/aimmod/Mesh.hpp`: positions,
+  normals, UVs, vertex colours and triangles, in UE's frame and cm).
+  - The source copies are in `in-game/cosmetics/meshes/`.
+  - The package ships them next to `catalog.json` in
+    `AimModCore\service\cosmetics\`.
+  - `New-CosmeticsManifest.ps1` copies the files a catalog item names and pins
+    their size and SHA-256 in `catalog-manifest.json`.
+- **Loading:** AimModCore reads each file once, checks its size and hash from
+  the same bytes, and parses it. A missing or mismatched file leaves its item
+  unresolvable ("needs its mesh file matching the manifest").
+- **Catalog:** an accessory names its file with `"shape": "<name>.amsh"`
+  instead of `mesh`. `fit.keepAxes` keeps the authored orientation (X
+  forward, Z up).
+- **Rendering:** each triangle is added in both windings, so a piece shows from
+  any side whatever the material's culling. It has no collision and no shadow,
+  is tinted like the other accessories, and follows the same lifetime rules
+  (pooled, never destroyed at runtime).
+- **First shapes:** generated in code (`mesh::Shipped()`, reproducible with
+  `aimmod_core_tests --write-meshes in-game/cosmetics/meshes`; a test keeps
+  the files equal to the generators).
+
+| id | slot | shape |
+|---|---|---|
+| `accessory-halo` | head | a smooth, thin full-bright gold ring, 3 cm above the head |
+| `accessory-visor` | head | a curved band across the eyes, 150 degrees, rounded edges |
+| `accessory-collar` | neck | a ring with a tall, rounded profile |
+
+**From Blender:** see [Blender pipeline](#blender-pipeline). The torus
+headband, crown band and back ring from the game's brushes are gone.
+
+### Blender pipeline
+
+`in-game/cosmetics/tools/glb_to_amsh.py` converts a Blender glTF binary to
+`.amsh`. It handles glTF's Y-up metres to UE's Z-up centimetres, and the
+winding flip.
+
+**Export (Blender, File > Export > glTF 2.0):**
+
+- Format glTF Binary (`.glb`), +Y Up (the default).
+- Apply Modifiers, Normals, UVs; vertex colours optional.
+- One mesh, triangulated, no armature, no animation.
+
+**Modelling conventions:**
+
+- Units: metres (1 Blender unit = 1 m = 100 cm in game).
+- The piece's attach point at the origin.
+- Its front along Blender's -Y (this becomes UE +X, the character's forward).
+- Up along +Z.
+
+**Sizes:**
+
+- Model for a 25 cm head: AimModCore scales each piece to the model's head
+  (head bone to the top of the model).
+- Head pieces within 35 × 35 × 30 cm. Budget about 5,000 triangles per piece.
+
+**Reference:**
+
+- The bone names come from the probe (`Rig_Head`, `Rig_Neck`, `Rig_Chest`,
+  `Rig_Arm_L_*`, `Rig_Arm_R_*` on Endo and Meso).
+- An exported skeleton or a reference head mesh (FModel, internal reference
+  only, never shipped) helps place pieces.
+- Without it, model against a 25 cm head with the head bone at the base of the
+  skull. The catalog's fit then sets the anchor (`bone`, `top` or `crown`) and
+  the offset.
 
 **Fit.** Each item's `attach.fit` gives:
 
