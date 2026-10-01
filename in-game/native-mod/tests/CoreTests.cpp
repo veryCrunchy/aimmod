@@ -273,6 +273,25 @@ static void CommandChecks()
     CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t9\naction\treset-overrides\nextra\t1\n") == "invalid-command", "unknown fields rejected");
     CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t9\naction\treset-overrides\n") == "accepted", "reset accepted");
     CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t9\naction\trefresh-scenarios\n") == "accepted", "refresh accepted");
+    const char* thumb = "AIMMOD_CORE_COMMAND_1\nseq\t10\naction\tcapture-thumbnail\nscenario\tAimMod - Dust2 (CSGO) - CS Movement\nwidth\t1920\nheight\t1080\n"
+                        "out\tdust2 thumb.png\nview1\t100,-20.5,300,-10,45,90\nview2\t0,0,0,0,180,70\n";
+    auto t = parse(thumb);
+    CHECK(std::holds_alternative<GameCommand>(t) && std::get<GameCommand>(t).views.size() == 2 && std::get<GameCommand>(t).views[0].y == -20.5 &&
+              std::get<GameCommand>(t).width == 1920 && ThumbnailFileName("dust2 thumb.png", 1, 2) == "dust2 thumb-2.png",
+          "thumbnail capture parsed");
+    auto thumbCode = [&](const char* replace, const char* with) {
+        std::string text = thumb;
+        text.replace(text.find(replace), std::strlen(replace), with);
+        return code(text.c_str());
+    };
+    CHECK(thumbCode("out\tdust2 thumb.png", "out\t..\\x.png") == "invalid-thumbnail" && thumbCode("dust2 thumb.png", "thumb.jpg") == "invalid-thumbnail",
+          "thumbnail output must be a plain .png name");
+    CHECK(thumbCode("width\t1920", "width\t7680") == "invalid-thumbnail" && thumbCode("height\t1080", "height\t10.5") == "invalid-thumbnail",
+          "thumbnail resolution bounded");
+    CHECK(thumbCode("view2\t0,0,0,0,180,70", "view3\t0,0,0,0,180,70") == "invalid-thumbnail" && thumbCode("-10,45,90", "-10,45") == "invalid-thumbnail" &&
+              thumbCode("-10,45,90", "-95,45,90") == "invalid-thumbnail",
+          "views validated");
+    CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t9\naction\tload-scenario\nscenario\tX\nout\tx.png\n") == "invalid-command", "thumbnail fields only for captures");
     CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t9\naction\trefresh-scenarios\nscenario\tX\n") == "accepted", "refresh ignores a scenario");
     CHECK(IsScenarioFileName("AimMod Match - Cata IC Long Strafes - Timed - ab93b242") && IsScenarioFileName("Track + Slowed (2)"),
           "match scenario names are file names");

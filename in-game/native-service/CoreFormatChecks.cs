@@ -79,6 +79,15 @@ static class CoreFormatChecks
             var written = File.ReadAllText(Path.Combine(root, "core-command.tsv"));
             Check(sent.Sequence is > 0 && written.StartsWith("AIMMOD_CORE_COMMAND_1\nseq\t" + sent.Sequence + "\naction\tstart-scenario\nscenario\tSynthetic target test\nmode\tfreeplay\ntimeScale\t0.5\ntargetSize\t1.5\nweapon\tTrack Master 100\n"),
                 "start command written in the native format");
+            var thumbnail = commands.Send(new("capture-thumbnail", "Synthetic target test", null, null, null, null, null, null, 1920, 1080, "synthetic thumb.png",
+                [new(100, -20.5, 300, -10, 45, 90), new(0, 0, 0, 0, 180, 70)]));
+            var thumbnailText = File.ReadAllText(Path.Combine(root, "core-command.tsv"));
+            Check(thumbnail.Sequence is > 0 && thumbnailText.Contains("action\tcapture-thumbnail\nscenario\tSynthetic target test\nwidth\t1920\nheight\t1080\nout\tsynthetic thumb.png\nview1\t100,-20.5,300,-10,45,90\nview2\t0,0,0,0,180,70\n"),
+                "thumbnail command written in the native format");
+            Check(commands.Send(new("capture-thumbnail", "S", null, null, null, null, null, null, 1920, 1080, "../x.png", [new(0, 0, 0, 0, 0, 90)])).Error == "invalid-thumbnail"
+                && commands.Send(new("capture-thumbnail", "S", null, null, null, null, null, null, 9000, 1080, "x.png", [new(0, 0, 0, 0, 0, 90)])).Error == "invalid-thumbnail"
+                && commands.Send(new("capture-thumbnail", "S", null, null, null, null, null, null, 1920, 1080, "x.png", [])).Error == "invalid-thumbnail",
+                "thumbnail requests validated");
             var second = commands.Send(new("reset-overrides", null, null, null, null, null, null, null));
             Check(second.Sequence > sent.Sequence && !File.ReadAllText(Path.Combine(root, "core-command.tsv")).Contains("scenario"), "sequences increase; reset carries no scenario");
             Check(commands.Send(new("delete", "x", null, null, null, null, null, null)).Error == "invalid-command" && commands.Send(new("load-scenario", "a\u0001b", null, null, null, null, null, null)).Error == "invalid-scenario",

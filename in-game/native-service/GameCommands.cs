@@ -4,7 +4,11 @@ using System.Text;
 namespace AimMod.InGame;
 
 /// <summary>A game command request (see in-game/native-mod/DESIGN.md "Game commands").</summary>
-sealed record GameCommandRequest(string? Action, string? Scenario, string? Mode, double? TimeScale, double? TargetSize, double? TargetSpeed, double? MapScale, string? Weapon);
+sealed record GameCommandRequest(string? Action, string? Scenario, string? Mode, double? TimeScale, double? TargetSize, double? TargetSpeed, double? MapScale, string? Weapon,
+    int? Width = null, int? Height = null, string? Out = null, ThumbnailView[]? Views = null);
+
+/// <summary>One thumbnail camera: location (cm), pitch/yaw (degrees), horizontal FOV.</summary>
+sealed record ThumbnailView(double X, double Y, double Z, double Pitch, double Yaw, double Fov);
 
 /// <summary>AimModCore's answer to one request (core-command-result.tsv).</summary>
 sealed record GameCommandResult(long Sequence, string State, string Code, string Message);
@@ -41,8 +45,17 @@ sealed class GameCommands(string output)
     /// <summary>Writes the request; returns its sequence, or null with a reason.</summary>
     public (long? Sequence, string? Error) Send(GameCommandRequest request)
     {
-        if (request.Action is not ("load-scenario" or "start-scenario" or "reset-overrides" or "refresh-scenarios")) return (null, "invalid-command");
-        var named = request.Action is "load-scenario" or "start-scenario";
+        if (request.Action is not ("load-scenario" or "start-scenario" or "reset-overrides" or "refresh-scenarios" or "capture-thumbnail")) return (null, "invalid-command");
+        var named = request.Action is "load-scenario" or "start-scenario" or "capture-thumbnail";
+        if (request.Action == "capture-thumbnail")
+        {
+            if (request.Width is not (>= 64 and <= 3840) || request.Height is not (>= 64 and <= 2160)) return (null, "invalid-thumbnail");
+            if (request.Out is not { Length: >= 5 and <= 128 } outName || !outName.EndsWith(".png", StringComparison.Ordinal) || outName.StartsWith('.') || outName.Contains("..")
+                || !outName.All(c => char.IsAsciiLetterOrDigit(c) || c is ' ' or '-' or '_' or '.' or '(' or ')')) return (null, "invalid-thumbnail");
+            if (request.Views is not { Length: >= 1 and <= 4 } views || views.Any(v => !double.IsFinite(v.X) || !double.IsFinite(v.Y) || !double.IsFinite(v.Z)
+                || Math.Abs(v.X) > 1e7 || Math.Abs(v.Y) > 1e7 || Math.Abs(v.Z) > 1e7 || v.Pitch is < -90 or > 90 || !double.IsFinite(v.Yaw) || Math.Abs(v.Yaw) > 3600 || v.Fov is < 5 or > 170))
+                return (null, "invalid-thumbnail");
+        }
         if (named && !SafeName(request.Scenario)) return (null, "invalid-scenario");
         if (request.Weapon is not null && !SafeName(request.Weapon)) return (null, "invalid-override");
         if (request.Mode is not (null or "freeplay" or "challenge")) return (null, "invalid-mode");
@@ -54,6 +67,17 @@ sealed class GameCommands(string output)
         Field("seq", sequence.ToString(CultureInfo.InvariantCulture));
         Field("action", request.Action);
         if (named) Field("scenario", request.Scenario);
+        if (request.Action == "capture-thumbnail")
+        {
+            Field("width", request.Width!.Value.ToString(CultureInfo.InvariantCulture));
+            Field("height", request.Height!.Value.ToString(CultureInfo.InvariantCulture));
+            Field("out", request.Out);
+            for (int i = 0; i < request.Views!.Length; i++)
+            {
+                var v = request.Views[i];
+                Field("view" + (i + 1), string.Join(',', new[] { v.X, v.Y, v.Z, v.Pitch, v.Yaw, v.Fov }.Select(n => n.ToString("R", CultureInfo.InvariantCulture))));
+            }
+        }
         if (request.Action == "start-scenario")
         {
             Field("mode", request.Mode ?? "freeplay");

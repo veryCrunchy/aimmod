@@ -10,6 +10,7 @@
 
 #include <Windows.h>
 
+#include <algorithm>
 #include <cstring>
 #include <vector>
 
@@ -79,14 +80,38 @@ namespace aimmod
             if (length > 0 && length < std::size(exe))
                 m_scenarioFolder = std::filesystem::path(exe).parent_path().parent_path().parent_path() / L"Saved" / L"SaveGames" / L"Scenarios";
         }
+        m_exec.BindPath(STR("/Script/Engine.KismetSystemLibrary:ExecuteConsoleCommand"), Shape::Command);
+        m_kismet = RC::Unreal::UObjectGlobals::StaticFindObject<UObject*>(nullptr, nullptr, STR("/Script/Engine.Default__KismetSystemLibrary"));
+        m_spawnBegin.BindPath(STR("/Script/Engine.GameplayStatics:BeginDeferredActorSpawnFromClass"), Shape::Command);
+        m_spawnFinish.BindPath(STR("/Script/Engine.GameplayStatics:FinishSpawningActor"), Shape::Command);
+        m_setViewTarget.BindPath(STR("/Script/Engine.PlayerController:SetViewTargetWithBlend"), Shape::Command);
+        m_getViewTarget.BindPath(STR("/Script/Engine.Controller:GetViewTarget"), Shape::Object);
+        m_destroy.BindPath(STR("/Script/Engine.Actor:K2_DestroyActor"), Shape::Command);
+        m_hide.BindPath(STR("/Script/Engine.Actor:SetActorHiddenInGame"), Shape::Command);
+        m_place.BindPath(STR("/Script/Engine.Actor:K2_SetActorLocationAndRotation"), Shape::Command);
+        m_fov.BindPath(STR("/Script/Engine.CameraComponent:SetFieldOfView"), Shape::Command);
+        m_cameraClass = FindClass(STR("/Script/Engine.CameraActor"));
+        m_cameraComponent.Bind(m_cameraClass, STR("CameraComponent"));
+        m_fullyLoaded.Bind(FindClass(STR("/Script/GameSkillsTrainer.MetaGameState")), STR("bFullyLoaded"));
+        m_mapLoading.Bind(FindClass(STR("/Script/GameSkillsTrainer.MetaGameState")), STR("bMapLoading"));
         m_canLoad = m_start.ok() && m_activate.ok() && m_startDefault && m_localHash.ok() && m_b.lifecycleReady();
         m_canStart = m_canLoad && m_persistentPlayType.ok() && m_cancel.ok();
+        m_canCapture = m_canStart && m_exec.ok() && m_kismet && m_spawnBegin.ok() && m_spawnFinish.ok() && m_setViewTarget.ok() && m_getViewTarget.ok() &&
+                       m_destroy.ok() && m_place.ok() && m_fov.ok() && m_cameraClass && m_cameraComponent.ok();
+        {
+            wchar_t exe[MAX_PATH * 4]{};
+            const DWORD length = GetModuleFileNameW(nullptr, exe, static_cast<DWORD>(std::size(exe)));
+            if (length > 0 && length < std::size(exe))
+                m_screenshots = std::filesystem::path(exe).parent_path().parent_path().parent_path() / L"Saved" / L"Screenshots" / L"WindowsNoEditor";
+            m_thumbnails = m_output.root() / L"thumbnails";
+        }
         auto st = [](const Getter& g) { return g.ok() ? std::string("ok") : g.error(); };
         Log("game control: load=" + std::string(m_canLoad ? "ok" : "unavailable") + " start=" + (m_canStart ? "ok" : "unavailable") +
             " Start_Scenario=" + st(m_start) + " Activate=" + st(m_activate) + " SetPersistentPlayType=" + st(m_persistentPlayType) +
             " GetLocalScenarioHash=" + st(m_localHash) + " CancelChallenge=" + st(m_cancel) + " timeScale=" + st(m_timeDilation) +
             " mapScale=" + st(m_mapScale) + " adaptive=" + st(m_adaptiveOverride) + " weapon=" + st(m_weapon) + " refresh=" + st(m_refreshLocal) +
-            " reloadProfiles=" + st(m_reloadProfiles));
+            " reloadProfiles=" + st(m_reloadProfiles) + " capture=" + (m_canCapture ? "ok" : "unavailable") + " console=" + st(m_exec) +
+            " spawn=" + st(m_spawnBegin) + " viewTarget=" + st(m_setViewTarget));
     }
 
     void GameControl::Answer(std::uint64_t sequence, const char* state, const std::string& code, const std::string& message)
@@ -234,6 +259,214 @@ namespace aimmod
         m_overrides = {};
     }
 
+    std::vector<std::wstring> GameControl::Screenshots() const
+    {
+        std::vector<std::wstring> names;
+        std::error_code error;
+        for (const auto& entry : std::filesystem::directory_iterator(m_screenshots, error))
+            if (entry.path().extension() == L".png") names.push_back(entry.path().filename().wstring());
+        return names;
+    }
+
+    void GameControl::BeginCapture(const GameCommand& c, double now, const std::string& current, UObject* manager)
+    {
+        ResetOverrides("thumbnail capture");
+        m_capture = Capture{c};
+        m_capture->deadline = now + 60.0 + 15.0 * static_cast<double>(c.views.size());
+        if (current != c.scenario)
+        {
+            // Freeplay: nothing is recorded or submitted.
+            if (!SetPlayType(manager, GameCommand::Mode::FreePlay) || !(m_pending = Pending{c, m_capture->deadline}, StartScenario(c.scenario, true)))
+            {
+                m_pending.reset();
+                m_capture.reset();
+                return Answer(c.sequence, "error", "start-failed", "The game did not start loading \"" + c.scenario + "\".");
+            }
+            m_pending.reset(); // the capture owns the wait
+        }
+        Answer(c.sequence, "accepted", "capturing", "");
+    }
+
+    void GameControl::EndCapture(const char* state, const std::string& code, const std::string& message)
+    {
+        if (!m_capture) return;
+        Capture& k = *m_capture;
+        UObject* player = m_scene.Player();
+        if (UObject* previous = k.previousTarget.Get(); previous && player)
+            m_setViewTarget.Call(player, [&](std::uint8_t* value, const Param& p) {
+                if (p.kind == Kind::Object) std::memcpy(value, &previous, sizeof(previous));
+            });
+        if (UObject* pawn = k.pawn.Get())
+            m_hide.Call(pawn, [](std::uint8_t* value, const Param& p) { WriteBool(value, p, false); });
+        if (UObject* camera = k.camera.Get()) m_destroy.Call(camera, [](std::uint8_t*, const Param&) {});
+        std::string body = message;
+        if (std::string(state) == "done")
+        {
+            body = "{\"files\":[";
+            for (std::size_t i = 0; i < k.files.size(); ++i)
+            {
+                if (i) body += ',';
+                AppendJsonString(body, k.files[i]);
+            }
+            body += "]}";
+        }
+        const auto seq = k.command.sequence;
+        m_capture.reset();
+        Answer(seq, state, code, body);
+    }
+
+    void GameControl::TickCapture(double now, const std::string& current, bool inChallenge, bool loading)
+    {
+        Capture& k = *m_capture;
+        if (inChallenge) return EndCapture("error", "challenge-active", "A challenge started; the capture stopped.");
+        if (now > k.deadline) return EndCapture("error", "timeout", "The thumbnail capture did not finish.");
+        UObject* player = m_scene.Player();
+        if (!player) return;
+        switch (k.phase)
+        {
+        case Capture::Phase::Loading:
+        {
+            UObject* state = m_scene.GameState();
+            const bool ready = current == k.command.scenario && !loading && state && m_fullyLoaded.Bool(state).value_or(true) &&
+                               !m_mapLoading.Bool(state).value_or(false);
+            if (!ready)
+            {
+                k.loadedAt = -1;
+                return;
+            }
+            if (k.loadedAt < 0) k.loadedAt = now;
+            if (now - k.loadedAt < 2.0) return; // let streaming settle
+            // An inert camera of our own; the pawn (and its first-person weapon) hidden.
+            UClass* cls = m_cameraClass;
+            UObject* camera = nullptr;
+            alignas(16) std::uint8_t identity[48]{};
+            const float transform[12] = {0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 1, 0};
+            std::memcpy(identity, transform, sizeof(transform));
+            auto fillTransform = [&](std::uint8_t* value, const Param& p) {
+                if (p.kind == Kind::Other && p.size == 48) std::memcpy(value, identity, 48);
+            };
+            m_spawnBegin.Call(
+                m_b.statics,
+                [&](std::uint8_t* value, const Param& p) {
+                    if (p.kind == Kind::Object && p.worldContext) std::memcpy(value, &player, sizeof(player));
+                    else if (p.kind == Kind::Object && p.name == "ActorClass") std::memcpy(value, &cls, sizeof(cls));
+                    else if (p.kind == Kind::UInt8) *value = 1; // AlwaysSpawn
+                    else fillTransform(value, p);
+                },
+                [&](const std::uint8_t* buffer, const std::vector<Param>& params) {
+                    for (const Param& p : params)
+                        if (p.ret) camera = ReadObject(buffer, p);
+                });
+            if (!camera) return EndCapture("error", "capture-failed", "Could not create the capture camera.");
+            m_spawnFinish.Call(m_b.statics, [&](std::uint8_t* value, const Param& p) {
+                if (p.kind == Kind::Object && p.name == "Actor") std::memcpy(value, &camera, sizeof(camera));
+                else fillTransform(value, p);
+            });
+            k.camera = camera;
+            k.previousTarget = m_getViewTarget.Object(player);
+            if (UObject* pawn = m_b.myCharacter.Object(player))
+            {
+                k.pawn = pawn;
+                m_hide.Call(pawn, [](std::uint8_t* value, const Param& p) { WriteBool(value, p, true); });
+            }
+            m_setViewTarget.Call(player, [&](std::uint8_t* value, const Param& p) {
+                if (p.kind == Kind::Object) std::memcpy(value, &camera, sizeof(camera));
+            });
+            k.phase = Capture::Phase::Place;
+            Log("thumbnail capture: world ready, " + std::to_string(k.command.views.size()) + " view(s)");
+            return;
+        }
+        case Capture::Phase::Place:
+        {
+            UObject* camera = k.camera.Get();
+            UObject* component = camera ? m_cameraComponent.Object(camera) : nullptr;
+            if (!component) return EndCapture("error", "capture-failed", "The capture camera disappeared.");
+            const auto& v = k.command.views[k.view];
+            const double location[3] = {v.x, v.y, v.z}, rotation[3] = {v.pitch, v.yaw, 0};
+            m_place.Call(camera, [&](std::uint8_t* value, const Param& p) {
+                if (p.kind == Kind::Vector && p.size == 12)
+                {
+                    const float f[3] = {static_cast<float>(location[0]), static_cast<float>(location[1]), static_cast<float>(location[2])};
+                    std::memcpy(value, f, 12);
+                }
+                else if (p.kind == Kind::Rotator && p.size == 12)
+                {
+                    const float f[3] = {static_cast<float>(rotation[0]), static_cast<float>(rotation[1]), static_cast<float>(rotation[2])};
+                    std::memcpy(value, f, 12);
+                }
+                else if (p.kind == Kind::Bool) WriteBool(value, p, p.name == "bTeleport");
+            });
+            m_fov.Call(component, [&](std::uint8_t* value, const Param& p) {
+                if (p.kind == Kind::Float) WriteFloat(value, v.fov);
+            });
+            k.until = now + 0.75; // textures and LODs stream in for the new view
+            k.phase = Capture::Phase::Shoot;
+            return;
+        }
+        case Capture::Phase::Shoot:
+        {
+            if (now < k.until) return;
+            k.before = Screenshots();
+            const std::string command = k.fallbackShot ? std::string("shot")
+                                                       : "HighResShot " + std::to_string(k.command.width) + "x" + std::to_string(k.command.height);
+            const bool sent = m_exec.Call(m_kismet, [&](std::uint8_t* value, const Param& p) {
+                if (p.kind == Kind::Object && p.worldContext) std::memcpy(value, &player, sizeof(player));
+                else if (p.kind == Kind::Object) std::memcpy(value, &player, sizeof(player)); // SpecificPlayer
+                else if (p.kind == Kind::String) WriteString(value, command);
+            });
+            if (!sent) return EndCapture("error", "capture-failed", "The screenshot command was not accepted.");
+            Log("thumbnail capture: view " + std::to_string(k.view + 1) + " -> " + command);
+            k.until = now + (k.fallbackShot ? 6.0 : 4.0);
+            k.candidate.clear();
+            k.nextCheck = now + 0.25;
+            k.phase = Capture::Phase::Wait;
+            return;
+        }
+        case Capture::Phase::Wait:
+        {
+            if (now < k.nextCheck) return;
+            k.nextCheck = now + 0.25;
+            std::error_code error;
+            for (const std::wstring& name : Screenshots())
+            {
+                if (std::find(k.before.begin(), k.before.end(), name) != k.before.end()) continue;
+                const auto size = std::filesystem::file_size(m_screenshots / name, error);
+                if (error || size == 0) continue;
+                if (k.candidate != name || k.candidateSize != size)
+                {
+                    k.candidate = name; // wait one more check for the writer to finish
+                    k.candidateSize = size;
+                    return;
+                }
+                std::filesystem::create_directories(m_thumbnails, error);
+                const std::string file = ThumbnailFileName(k.command.out, k.view, k.command.views.size());
+                const auto target = m_thumbnails / std::filesystem::path(Widen(file));
+                if (!MoveFileExW((m_screenshots / name).c_str(), target.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED))
+                    return EndCapture("error", "capture-failed", "Could not move the screenshot.");
+                k.files.push_back(file);
+                Log("thumbnail capture: saved " + file + (k.fallbackShot ? " (window resolution)" : ""));
+                if (++k.view >= k.command.views.size()) return EndCapture("done", "captured", "");
+                k.phase = Capture::Phase::Place;
+                return;
+            }
+            if (now >= k.until)
+            {
+                // HighResShot unavailable in this build: fall back to a window-size shot once.
+                if (!k.fallbackShot && !k.triedFallback)
+                {
+                    k.fallbackShot = k.triedFallback = true;
+                    Warn("thumbnail capture: HighResShot produced no file; trying a window-size screenshot");
+                    k.phase = Capture::Phase::Shoot;
+                    k.until = now;
+                    return;
+                }
+                return EndCapture("error", "screenshot-unavailable", "The game did not write a screenshot.");
+            }
+            return;
+        }
+        }
+    }
+
     bool GameControl::Refresh(const char* why)
     {
         bool any = false;
@@ -245,6 +478,7 @@ namespace aimmod
 
     void GameControl::Proceed(const GameCommand& c, double now, UObject* manager)
     {
+        if (c.action == GameCommand::Action::CaptureThumbnail) return BeginCapture(c, now, m_lastScenario, manager);
         const bool load = c.action == GameCommand::Action::LoadScenario;
         ResetOverrides("scenario-change");
         m_pending = Pending{c, now + (load ? 30.0 : 45.0)};
@@ -285,8 +519,11 @@ namespace aimmod
         if (inChallenge) return Answer(c.sequence, "error", "challenge-active", "A challenge is running. Finish or quit it first.");
         if (loading || m_pending) return Answer(c.sequence, "error", "busy", "A scenario is loading. Try again in a moment.");
         const bool load = c.action == GameCommand::Action::LoadScenario;
-        if (load ? !m_canLoad : !m_canStart)
+        if (c.action != GameCommand::Action::CaptureThumbnail && (load ? !m_canLoad : !m_canStart))
             return Answer(c.sequence, "error", "unsupported", "Load \"" + c.scenario + "\" in KovaaK's; automatic loading is unavailable in this game version.");
+        if (c.action == GameCommand::Action::CaptureThumbnail && !m_canCapture)
+            return Answer(c.sequence, "error", "unsupported", "Thumbnail capture is unavailable in this game version.");
+        if (m_capture) return Answer(c.sequence, "error", "busy", "A thumbnail capture is running.");
         if (load && current == c.scenario) return Answer(c.sequence, "done", "already-loaded", "");
         if (m_refreshing) return Answer(c.sequence, "error", "busy", "Scenarios are being refreshed. Try again in a moment.");
         if (!ScenarioKnown(manager, c.scenario))
@@ -361,6 +598,7 @@ namespace aimmod
             }
             return;
         }
+        if (m_capture) return TickCapture(now, current, inChallenge, loading);
         if (!m_pending) return;
         Pending& p = *m_pending;
         const GameCommand& c = p.command;

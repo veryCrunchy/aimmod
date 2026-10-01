@@ -7,12 +7,13 @@
 #include <string>
 #include <string_view>
 #include <variant>
+#include <vector>
 
 namespace aimmod
 {
     struct GameCommand
     {
-        enum class Action { LoadScenario, StartScenario, ResetOverrides, RefreshScenarios };
+        enum class Action { LoadScenario, StartScenario, ResetOverrides, RefreshScenarios, CaptureThumbnail };
         enum class Mode { FreePlay, Challenge };
         std::uint64_t sequence{};
         Action action{};
@@ -20,6 +21,14 @@ namespace aimmod
         Mode mode{Mode::FreePlay};
         std::optional<double> timeScale, targetSize, targetSpeed, mapScale;
         std::string weapon;
+        // capture-thumbnail: 1-4 camera views, PNG size, output file name.
+        struct View
+        {
+            double x{}, y{}, z{}, pitch{}, yaw{}, fov{90};
+        };
+        std::vector<View> views;
+        int width{}, height{};
+        std::string out;
         bool HasOverrides() const { return timeScale || targetSize || targetSpeed || mapScale || !weapon.empty(); }
     };
 
@@ -44,4 +53,8 @@ namespace aimmod
     // A scenario name usable as "<Scenarios>\\<name>.sce": no path separators,
     // reserved characters, dot segments or trailing dots/spaces.
     bool IsScenarioFileName(std::string_view name);
+    // Plain "<name>.png": letters, digits, space, - _ . ( ), up to 128 bytes.
+    bool IsThumbnailFileName(std::string_view name);
+    // "<stem>-<n>.png" for view n of several (the name itself for one view).
+    std::string ThumbnailFileName(const std::string& out, std::size_t index, std::size_t count);
 } // namespace aimmod
