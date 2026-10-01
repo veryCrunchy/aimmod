@@ -65,6 +65,7 @@ sealed class MultiplayerSimulation(Func<long> clock, ContentLibrary library, Fun
 
     public LobbyResult Control(LobbyCore? core, string op, string? member)
     {
+        if (op == "friend-online") { FriendOnline = !FriendOnline; return LobbyResult.Success; }
         if (op is "invite" or "request" or "launch")
         {
             var from = Names[random.Next(Names.Length)];
@@ -99,6 +100,8 @@ sealed class MultiplayerSimulation(Func<long> clock, ContentLibrary library, Fun
         }
     }
 
+    // Dev control: Vesper starts AimMod (or quits it again), for the friend-online toast.
+    public bool FriendOnline;
     public IReadOnlyList<FriendEntry> Friends(long now)
     {
         var scenario = library.Scenarios.Count > 1 ? library.Scenarios[1].Name : "a scenario";
@@ -107,7 +110,7 @@ sealed class MultiplayerSimulation(Func<long> clock, ContentLibrary library, Fun
             new("sim-f1", "Juniper", "aimmod-lobby", "In a lobby · Duel", "JUNPER", true),
             new("sim-f2", "Kestrel", "aimmod", "Playing " + scenario, null, false),
             new("sim-f3", "Talon", "kovaaks", "In KovaaK’s, no AimMod", null, false),
-            new("sim-f4", "Vesper", "online", "Online", null, false),
+            FriendOnline ? new("sim-f4", "Vesper", "aimmod", "Playing " + scenario, null, false, Spectatable: true) : new("sim-f4", "Vesper", "online", "Online", null, false),
         ];
     }
 

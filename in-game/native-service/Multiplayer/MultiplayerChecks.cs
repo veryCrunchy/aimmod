@@ -863,6 +863,16 @@ static class MultiplayerChecks
             () => "Synthetic Player", output, simulation: true, () => now, autoTick: false, seed: 7);
         JsonElement View() => JsonSerializer.SerializeToElement(service.View(), Protocol.Json);
         Check(View().GetProperty("lobby").ValueKind == JsonValueKind.Null && View().GetProperty("friends").GetProperty("source").GetString() == "simulation", "Home view without a lobby; simulated friends are labelled");
+        // A friend starting AimMod: one in-game toast with Watch, never for friends online at start.
+        service.Tick();
+        Check(!JsonDocument.Parse(service.NoticeText()).RootElement.GetProperty("active").GetBoolean(), "Friends already online at start don't toast");
+        service.Act("sim", J(new { op = "friend-online" })); now += 1500; service.Tick();
+        var toast = JsonDocument.Parse(service.NoticeText()).RootElement;
+        Check(toast.GetProperty("active").GetBoolean() && toast.GetProperty("title").GetString() == "Vesper is on AimMod" && toast.GetProperty("actions").EnumerateArray().Any(a => a.GetProperty("action").GetString() == "friend-watch" && a.GetProperty("id").GetString() == "sim-f4"), "A friend starting AimMod gets a toast with Watch");
+        Check(service.Act("friend-dismiss", J(new { id = "sim-f4" })).Ok && !JsonDocument.Parse(service.NoticeText()).RootElement.GetProperty("active").GetBoolean(), "The toast can be dismissed");
+        service.Act("sim", J(new { op = "friend-online" })); now += 1500; service.Tick(); service.Act("sim", J(new { op = "friend-online" })); now += 30_000; service.Tick();
+        Check(!JsonDocument.Parse(service.NoticeText()).RootElement.GetProperty("active").GetBoolean(), "The same friend doesn't toast again within half an hour");
+        service.Act("sim", J(new { op = "friend-online" }));
         Check(!service.Act("join", J(new { code = "bad" })).Ok, "Bad room codes are refused");
         Check(service.Act("create", J(new { mode = "score-race", scenario = "Synthetic A" })).Ok && !service.Act("create", default).Ok, "One lobby at a time");
         service.Act("sim", J(new { op = "add" })); service.Act("sim", J(new { op = "add-missing" }));
