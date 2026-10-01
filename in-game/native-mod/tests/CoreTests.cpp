@@ -230,6 +230,10 @@ static void GameStatsChecks()
     CHECK(s && s->challengeStartSeconds && std::fabs(*s->challengeStartSeconds - (3600 + 11 * 60 + 40.178)) < 1e-6, "challenge start parsed");
     CHECK(!ParseGameStats("Scenario:,x\n") && !ParseGameStats("Score:,nan\nScenario:,x\n"), "incomplete stats rejected");
     CHECK(IsChallengeStatsFile("Synthetic - Challenge - 2026.10.01-01.12.40 Stats.csv") && !IsChallengeStatsFile("notes.csv"), "stats file name");
+    // Scenario names outside the ANSI code page (stars, CJK) in the stats folder.
+    CHECK(IsChallengeStatsFile(std::wstring_view(L"Synthetic ★ 練習 - Challenge - 2026.10.01-01.12.40 Stats.csv")) &&
+              !IsChallengeStatsFile(std::wstring_view(L"★ notes.csv")),
+          "wide stats file names");
 }
 
 static void PlaybackChecks()

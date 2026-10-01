@@ -406,8 +406,8 @@ namespace aimmod
             if (m_consumed.contains(name) || !entry.is_regular_file(itemError)) continue;
             const auto written = std::chrono::clock_cast<std::chrono::system_clock>(entry.last_write_time(itemError));
             if (itemError || written < since) continue;
-            const std::string narrow = entry.path().filename().string();
-            if (!IsChallengeStatsFile(narrow)) continue;
+            // Never path::string(): it throws for names outside the ANSI code page.
+            if (!IsChallengeStatsFile(std::wstring_view(name))) continue;
             std::string text;
             if (!ReadSmall(entry.path(), text, 256 * 1024)) continue;
             auto stats = ParseGameStats(text);
