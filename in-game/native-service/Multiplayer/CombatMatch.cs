@@ -1,0 +1,321 @@
+using System.Globalization;
+using System.Text;
+using System.Text.Json;
+
+namespace AimMod.InGame.Multiplayer;
+
+// Phase 2 combat modes (in-game/docs/game-modes.md 6.2, 6.4, 6.5): deathmatch,
+// vampiric 1v1 and instagib. The host owns health, deaths, frags and respawns.
+// Clients only claim hits; the host validates every claim against the
+// shooter's and the victim's own pose tracks with a 200 ms rewind cap
+// (the same model as the tracking duel) and computes the damage itself.
+
+// The weapon each mode plays with. The generated arena ships exactly this
+// profile, so the host knows the fire rate and damage without trusting a client.
+sealed record CombatWeapon(string Name, double Damage, double HeadMultiplier, double TimeBetweenShots, bool FullyAuto, double KnockbackVertical = 0);
+
+static class CombatRules
+{
+    public static readonly CombatWeapon Rifle = new("AimMod Combat Rifle", 20, 2, 0.1, true);
+    public static readonly CombatWeapon Railgun = new("AimMod Railgun", 1000, 1, 1.2, false, 0);
+    public static CombatWeapon Weapon(string mode) => mode == LobbyModes.Instagib ? Railgun : Rifle;
+    public const double MaxHealth = 100, VampiricOverheal = 0, VampiricDecayPerSecond = 2, VampiricHealthOnKill = 25;
+    public static long RespawnMs(string mode) => mode == LobbyModes.Instagib ? 1000 : 2000;
+    public const long SpawnProtectionMs = 1500, ClaimWindowMs = 1000;
+    public static int DefaultFragLimit(string mode) => mode switch { LobbyModes.Vampiric => 10, LobbyModes.Instagib => 25, _ => 20 };
+    public const int DefaultMatchSeconds = 300;
+}
+
+// A hit the shooter's game registered: host-clock time, the shot's camera ray,
+// whether the game counted a headshot, and where the game drew the target it hit.
+sealed record HitClaim(string MatchId, int Round, long Seq, long T, double X, double Y, double Z, double Pitch, double Yaw, bool Head,
+    double? TargetX, double? TargetY, double? TargetZ, double? TargetRadius, double? TargetHalfHeight)
+{
+    public object Body() => new
+    {
+        match = MatchId, round = Round, seq = Seq, t = T, o = new[] { R(X), R(Y), R(Z) }, r = new[] { R(Pitch), R(Yaw) }, head = Head,
+        target = TargetX is null ? null : new[] { R(TargetX.Value), R(TargetY!.Value), R(TargetZ!.Value), R(TargetRadius!.Value), R(TargetHalfHeight!.Value) },
+    };
+    static double R(double v) => Math.Round(v, 2);
+
+    public static HitClaim? Read(JsonElement b)
+    {
+        try
+        {
+            var match = b.GetProperty("match").GetString(); var round = b.GetProperty("round").GetInt32();
+            var seq = b.GetProperty("seq").GetInt64(); var t = b.GetProperty("t").GetInt64();
+            if (match is not { Length: > 0 and <= 40 } || round is < 1 or > 100 || seq < 0) return null;
+            static double[]? Nums(JsonElement e, int n)
+            {
+                if (e.ValueKind != JsonValueKind.Array || e.GetArrayLength() != n) return null;
+                var r = new double[n]; var i = 0;
+                foreach (var x in e.EnumerateArray()) { if (x.ValueKind != JsonValueKind.Number || !x.TryGetDouble(out r[i]) || !double.IsFinite(r[i]) || Math.Abs(r[i]) > 1e7) return null; i++; }
+                return r;
+            }
+            var o = Nums(b.GetProperty("o"), 3); var r = Nums(b.GetProperty("r"), 2);
+            if (o is null || r is null || Math.Abs(r[0]) > 90.5 || Math.Abs(r[1]) > 720) return null;
+            var head = b.TryGetProperty("head", out var h) && h.ValueKind == JsonValueKind.True;
+            double[]? target = null;
+            if (b.TryGetProperty("target", out var tg) && tg.ValueKind != JsonValueKind.Null)
+            {
+                target = Nums(tg, 5);
+                if (target is null || target[3] is <= 0 or > 1000 || target[4] < target[3] || target[4] > 2000) return null;
+            }
+            return new HitClaim(match, round, seq, t, o[0], o[1], o[2], r[0], r[1], head, target?[0], target?[1], target?[2], target?[3], target?[4]);
+        }
+        catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or FormatException) { return null; }
+    }
+}
+
+// What clients mirror: each player's health, life and score, and the recent events.
+sealed record CombatPlayerView(string Member, double Health, bool Alive, int Frags, int Deaths, long? RespawnAt, long? ProtectedUntil, int Claims, int Rejected);
+sealed record CombatEvent(long Id, string Kind, long T, string Member, string? Attacker, double Amount, bool Head, double Health, double? AttackerHealth);
+sealed record CombatView(int FragLimit, IReadOnlyList<CombatPlayerView> Players, IReadOnlyList<CombatEvent> Events);
+
+sealed class CombatMatch
+{
+    sealed class Player
+    {
+        public required string Id;
+        public double Health = CombatRules.MaxHealth; public bool Alive = true; public int Frags, Deaths, Claims, Rejected;
+        public long? RespawnAt; public long ProtectedUntil; public long LastShot = long.MinValue, LastSeq = -1; public long DecayAt;
+        public readonly List<TrackSample> Track = [];
+    }
+    readonly Dictionary<string, Player> players = new();
+    readonly List<CombatEvent> events = [];
+    long eventId;
+    public string Mode { get; }
+    public int FragLimit { get; }
+    public long Start { get; }
+    public long End { get; }
+    public CombatWeapon Weapon { get; }
+    public double Lifesteal { get; }
+    public CombatMatch(string mode, IEnumerable<string> ids, int fragLimit, double lifestealPercent, long start, long end)
+    {
+        Mode = mode; FragLimit = fragLimit; Start = start; End = end; Weapon = CombatRules.Weapon(mode);
+        Lifesteal = mode == LobbyModes.Vampiric ? Math.Clamp(lifestealPercent, 0, 200) / 100.0 : 0;
+        foreach (var id in ids) players[id] = new Player { Id = id, ProtectedUntil = start + CombatRules.SpawnProtectionMs, DecayAt = start };
+    }
+
+    public IReadOnlyList<CombatEvent> EventsSince(long id) => events.Where(e => e.Id > id).ToArray();
+    public string? Leader => players.Values.OrderByDescending(p => p.Frags).ThenBy(p => p.Deaths).FirstOrDefault(p => p.Frags >= FragLimit)?.Id;
+    public CombatView View() => new(FragLimit, players.Values.Select(p => new CombatPlayerView(p.Id, Math.Round(p.Health, 1), p.Alive, p.Frags, p.Deaths, p.RespawnAt,
+        p.ProtectedUntil, p.Claims, p.Rejected)).ToArray(), events.TakeLast(16).ToArray());
+    public (int Frags, int Deaths, int Claims, int Rejected)? Score(string id) => players.TryGetValue(id, out var p) ? (p.Frags, p.Deaths, p.Claims, p.Rejected) : null;
+
+    // Every player's own camera track (same batches as the tracking duel).
+    public void Track(string from, TrackBatch batch)
+    {
+        if (!players.TryGetValue(from, out var p)) return;
+        foreach (var s in batch.Samples)
+        {
+            if (s.T < Start - 1000 || s.T > End + 1000) continue;
+            if (p.Track.Count > 0 && s.T <= p.Track[^1].T) continue;
+            p.Track.Add(s);
+        }
+        // Only the last 10 s are needed for rewinds and checks (claims are at most 1 s old).
+        var cut = p.Track.FindIndex(x => x.T >= p.Track[^1].T - 10_000);
+        if (cut > 0) p.Track.RemoveRange(0, cut);
+    }
+
+    static TrackSample? At(List<TrackSample> track, double t)
+    {
+        if (track.Count == 0 || t < track[0].T - TrackingRound.GapMs || t > track[^1].T + TrackingRound.GapMs) return null;
+        int lo = 0, hi = track.Count - 1, i = -1;
+        while (lo <= hi) { var mid = (lo + hi) / 2; if (track[mid].T <= t) { i = mid; lo = mid + 1; } else hi = mid - 1; }
+        if (i < 0) return track[0];
+        if (i == track.Count - 1) return track[i];
+        var a = track[i]; var b = track[i + 1];
+        if (b.T - a.T > 250) return t - a.T <= TrackingRound.GapMs ? a : null;
+        var u = (t - a.T) / (b.T - a.T);
+        return new TrackSample((long)t, a.X + (b.X - a.X) * u, a.Y + (b.Y - a.Y) * u, a.Z + (b.Z - a.Z) * u, a.Pitch + (b.Pitch - a.Pitch) * u, a.Yaw + ((b.Yaw - a.Yaw + 540) % 360 - 180) * u);
+    }
+
+    void Emit(string kind, long t, string member, string? attacker, double amount, bool head, double health, double? attackerHealth) =>
+        events.Add(new CombatEvent(++eventId, kind, t, member, attacker, Math.Round(amount, 1), head, Math.Round(health, 1), attackerHealth is { } a ? Math.Round(a, 1) : null));
+
+    // Why a claim was refused (null: accepted). The host decides who was hit, where
+    // and how hard; the claim only says when the shooter fired and along which ray.
+    public string? Claim(string from, HitClaim c, long now, int? shooterRtt)
+    {
+        if (!players.TryGetValue(from, out var shooter)) return "not-playing";
+        shooter.Claims++;
+        string? Reject(string why) { shooter.Rejected++; return why; }
+        if (c.Seq <= shooter.LastSeq) return Reject("repeated");
+        shooter.LastSeq = c.Seq;
+        if (c.T < Start || c.T > End || c.T > now + 100 || c.T < now - CombatRules.ClaimWindowMs) return Reject("time");
+        if (!shooter.Alive) return Reject("shooter-dead");
+        if (shooter.LastShot != long.MinValue && c.T - shooter.LastShot < Weapon.TimeBetweenShots * 1000 * 0.9) return Reject("fire-rate");
+        // The ray must start where the shooter's own track had its camera, looking the same way.
+        if (At(shooter.Track, c.T) is not { } eye) return Reject("no-shooter-track");
+        var dx0 = c.X - eye.X; var dy0 = c.Y - eye.Y; var dz0 = c.Z - eye.Z;
+        if (dx0 * dx0 + dy0 * dy0 + dz0 * dz0 > 32 * 32) return Reject("origin");
+        var yawError = Math.Abs(((c.Yaw - eye.Yaw) % 360 + 540) % 360 - 180);
+        if (Math.Abs(c.Pitch - eye.Pitch) > 3 || yawError > 3) return Reject("aim");
+        var (dx, dy, dz) = TrackGeometry.Direction(c.Pitch, c.Yaw);
+        // Who was hit: the alive opponent whose own track matches the drawn target (favour the
+        // shooter, at most 200 ms in the past), else whoever the ray hits after a capped rewind.
+        Player? victim = null; double cx = 0, cy = 0, cz = 0, radius = TrackingRound.DefaultRadius, half = TrackingRound.DefaultHalfHeight;
+        foreach (var p in players.Values)
+        {
+            if (p == shooter || !p.Alive) continue;
+            if (c.TargetX is { } tx)
+            {
+                for (long lag = 0; lag <= TrackingRound.RewindCapMs && victim is null; lag += 5)
+                    if (At(p.Track, c.T - lag) is { } d && Math.Sqrt((d.X - tx) * (d.X - tx) + (d.Y - c.TargetY!.Value) * (d.Y - c.TargetY.Value)) <= TrackingRound.MatchToleranceCm)
+                    { victim = p; cx = tx; cy = c.TargetY.Value; cz = c.TargetZ!.Value; radius = c.TargetRadius!.Value; half = c.TargetHalfHeight!.Value; }
+            }
+            else
+            {
+                var lag = Math.Clamp(100 + (shooterRtt ?? 0) / 2.0, 0, TrackingRound.RewindCapMs);
+                if (At(p.Track, c.T - lag) is { } d && TrackGeometry.HitsCapsule(c.X, c.Y, c.Z, dx, dy, dz, TrackingRound.RayLengthCm, d.X, d.Y, d.Z - TrackingRound.DefaultEyeAboveCentre, radius, half))
+                { victim = p; cx = d.X; cy = d.Y; cz = d.Z - TrackingRound.DefaultEyeAboveCentre; }
+            }
+            if (victim is not null) break;
+        }
+        if (victim is null) return Reject(c.TargetX is null ? "miss" : "target-mismatch");
+        if (!TrackGeometry.HitsCapsule(c.X, c.Y, c.Z, dx, dy, dz, TrackingRound.RayLengthCm, cx, cy, cz, radius, half)) return Reject("ray-miss");
+        if (c.T < victim.ProtectedUntil) return Reject("spawn-protected");
+        shooter.LastShot = c.T;
+        shooter.ProtectedUntil = Math.Min(shooter.ProtectedUntil, c.T); // firing ends your own spawn protection
+        // Headshot: the ray passes through the top sphere of the hull (radius 25 cm).
+        var headR = Math.Min(25, radius);
+        var head = TrackGeometry.HitsCapsule(c.X, c.Y, c.Z, dx, dy, dz, TrackingRound.RayLengthCm, cx, cy, cz + half - headR, headR, headR);
+        var damage = Math.Min(victim.Health, Weapon.Damage * (head ? Weapon.HeadMultiplier : 1));
+        victim.Health -= damage;
+        double? healed = null;
+        if (Lifesteal > 0)
+        {
+            var cap = CombatRules.MaxHealth + CombatRules.VampiricOverheal;
+            shooter.Health = Math.Min(cap, shooter.Health + damage * Lifesteal);
+            healed = shooter.Health;
+        }
+        Emit("damage", c.T, victim.Id, shooter.Id, damage, head, victim.Health, healed);
+        if (victim.Health <= 0.0001)
+        {
+            victim.Health = 0; victim.Alive = false; victim.Deaths++; victim.RespawnAt = now + CombatRules.RespawnMs(Mode);
+            shooter.Frags++;
+            if (Mode == LobbyModes.Vampiric) shooter.Health = Math.Min(CombatRules.MaxHealth, shooter.Health + CombatRules.VampiricHealthOnKill);
+            Emit("death", c.T, victim.Id, shooter.Id, damage, head, 0, shooter.Health);
+        }
+        return null;
+    }
+
+    // Respawns, and vampiric decay (never below 1 hp: decay doesn't kill).
+    public void Tick(long now)
+    {
+        foreach (var p in players.Values)
+        {
+            if (!p.Alive && p.RespawnAt is { } at && now >= at)
+            {
+                p.Alive = true; p.Health = CombatRules.MaxHealth; p.RespawnAt = null; p.ProtectedUntil = now + CombatRules.SpawnProtectionMs; p.DecayAt = now;
+                Emit("respawn", now, p.Id, null, 0, false, p.Health, null);
+            }
+            if (Mode == LobbyModes.Vampiric && p.Alive && now > p.DecayAt)
+            {
+                p.Health = Math.Max(Math.Min(p.Health, 1), p.Health - CombatRules.VampiricDecayPerSecond * (now - p.DecayAt) / 1000.0);
+                p.DecayAt = now;
+            }
+        }
+    }
+
+    public void Leave(string id) { if (players.TryGetValue(id, out var p)) { p.Alive = false; p.RespawnAt = null; } }
+
+    // Host migration: carry over the last published scores and lives.
+    public void Restore(CombatView view)
+    {
+        foreach (var v in view.Players)
+            if (players.TryGetValue(v.Member, out var p))
+            {
+                p.Frags = Math.Max(0, v.Frags); p.Deaths = Math.Max(0, v.Deaths); p.Claims = Math.Max(0, v.Claims); p.Rejected = Math.Clamp(v.Rejected, 0, p.Claims);
+                p.Health = Math.Clamp(v.Health, 0, CombatRules.MaxHealth); p.Alive = v.Alive; p.RespawnAt = v.Alive ? null : v.RespawnAt;
+            }
+        eventId = view.Events.Count > 0 ? view.Events.Max(e => e.Id) : 0;
+    }
+}
+
+// Client side: the local player's shots from AimModCore's self-shots.tsv
+// (AIMMOD_SHOTS_1, contract in game-modes.md 6.2.1), turned into hit claims on
+// the host clock. Misses are not claimed; the host only needs hits.
+sealed class ShotFeed(string outputFolder)
+{
+    readonly string path = Path.Combine(outputFolder, "self-shots.tsv");
+    long lastSequence = -1, lastShot = -1;
+    public void Reset() { lastSequence = -1; lastShot = -1; }
+
+    public sealed record Shot(long UnixMs, long Seq, double X, double Y, double Z, double Pitch, double Yaw, int Weapon, int Target, bool Head);
+
+    public static (long Sequence, IReadOnlyList<Shot> Shots)? Parse(string text)
+    {
+        var lines = text.Replace("\r\n", "\n").Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        if (lines.Length < 1 || text.Length > 65536) return null;
+        var head = lines[0].Split('\t');
+        if (head.Length != 2 || head[0] != "AIMMOD_SHOTS_1" || !long.TryParse(head[1], NumberStyles.None, CultureInfo.InvariantCulture, out var sequence)) return null;
+        var shots = new List<Shot>();
+        static bool Num(string s, out double v) => double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out v) && double.IsFinite(v) && Math.Abs(v) < 1e9;
+        foreach (var line in lines.Skip(1))
+        {
+            var c = line.Split('\t');
+            if (c.Length != 11 || c[0] != "shot" || shots.Count >= 64) return null;
+            if (!long.TryParse(c[1], NumberStyles.None, CultureInfo.InvariantCulture, out var ms) || !long.TryParse(c[2], NumberStyles.None, CultureInfo.InvariantCulture, out var seq)) return null;
+            var v = new double[5];
+            for (var i = 0; i < 5; i++) if (!Num(c[i + 3], out v[i])) return null;
+            if (!int.TryParse(c[8], NumberStyles.None, CultureInfo.InvariantCulture, out var weapon) || weapon > 7 || !int.TryParse(c[9], NumberStyles.None, CultureInfo.InvariantCulture, out var target) || c[10] is not ("0" or "1")) return null;
+            if (shots.Count > 0 && seq <= shots[^1].Seq) return null;
+            shots.Add(new Shot(ms, seq, v[0], v[1], v[2], v[3], v[4], weapon, target, c[10] == "1"));
+        }
+        return (sequence, shots);
+    }
+
+    // New hits since the last call. targets: the drawn targets by id (latest self-pose frame).
+    public IReadOnlyList<HitClaim> Poll(string matchId, int round, long offsetMs, IReadOnlyDictionary<int, TrackSeen> targets)
+    {
+        string text;
+        try
+        {
+            var file = new FileInfo(path);
+            if (!file.Exists || file.Length > 65536 || DateTime.UtcNow - file.LastWriteTimeUtc > TimeSpan.FromSeconds(3)) return [];
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream, Encoding.UTF8);
+            text = reader.ReadToEnd();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return []; }
+        return Take(Parse(text), matchId, round, offsetMs, targets);
+    }
+
+    public IReadOnlyList<HitClaim> Take((long Sequence, IReadOnlyList<Shot> Shots)? parsed, string matchId, int round, long offsetMs, IReadOnlyDictionary<int, TrackSeen> targets)
+    {
+        if (parsed is not { } p || p.Sequence == lastSequence) return [];
+        lastSequence = p.Sequence;
+        var claims = new List<HitClaim>();
+        foreach (var s in p.Shots)
+        {
+            if (s.Seq <= lastShot) continue;
+            lastShot = s.Seq;
+            if (s.Target == 0) continue;
+            targets.TryGetValue(s.Target, out var t);
+            claims.Add(new HitClaim(matchId, round, s.Seq, s.UnixMs + offsetMs, s.X, s.Y, s.Z, s.Pitch, s.Yaw, s.Head, t?.X, t?.Y, t?.Z, t?.Radius, t?.HalfHeight));
+        }
+        return claims;
+    }
+}
+
+// Client side: the state AimModCore applies to the local player (play-state.tsv,
+// AIMMOD_PLAY_1, contract in game-modes.md 6.2.1). Absolute and idempotent: the
+// host's health for this player, alive or not, when it respawns, spawn
+// protection, and the last damage taken (for the native hit effect).
+static class PlayState
+{
+    public static string Format(long sequence, string matchId, CombatPlayerView self, CombatEvent? lastHit, string? attackerHint)
+    {
+        static string N(double v) => v.ToString("0.#", CultureInfo.InvariantCulture);
+        var text = new StringBuilder();
+        text.Append("AIMMOD_PLAY_1\t").Append(sequence).Append('\n');
+        text.Append("match\t").Append(Uri.EscapeDataString(matchId)).Append('\n');
+        text.Append("self\t").Append(self.Alive ? 1 : 0).Append('\t').Append(N(self.Health)).Append('\t').Append(N(CombatRules.MaxHealth)).Append('\t')
+            .Append(self.RespawnAt ?? 0).Append('\t').Append(self.ProtectedUntil ?? 0).Append('\n');
+        if (lastHit is not null)
+            text.Append("hit\t").Append(lastHit.Id).Append('\t').Append(N(lastHit.Amount)).Append('\t').Append(lastHit.Head ? 1 : 0).Append('\t').Append(attackerHint ?? "0").Append('\n');
+        return text.ToString();
+    }
+}

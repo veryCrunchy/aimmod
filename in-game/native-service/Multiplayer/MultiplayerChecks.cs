@@ -26,6 +26,7 @@ static class MultiplayerChecks
         Authority();
         Matches();
         TrackingDuel();
+        CombatModes();
         ProtocolFrames();
         Peers();
         SteamPipe();
@@ -396,6 +397,113 @@ static class MultiplayerChecks
         Check(arena == MatchScenario.Generate(new(BaseScenario, duel with { Scenario = new ScenarioChoice("Synthetic A", ContentLibrary.TextHash(BaseScenario), "synthetic_map", ContentLibrary.TextHash("m"), 60) })), "The arena is deterministic");
     }
 
+    // Phase 2 combat modes: rules, host-validated hit claims, health, deaths, respawns, lifesteal and instagib.
+    static void CombatModes()
+    {
+        var content = new FakeContent();
+        var start = new LobbySettings(Scenario: content.Scenario("Synthetic A"));
+        var dm = LobbyRules.Apply(start, J(new { mode = "deathmatch", weapon = "cs", targetSize = 2 }), 3, content).Settings!;
+        Check(dm.Rounds == 1 && dm.TimeLimit == 300 && dm.EffectiveFragLimit == 20 && dm.WeaponProfile.Preset == "default" && dm.TargetSize == 1 && dm.MaxPlayers >= 3 && MatchScenario.Needed(dm),
+            "Deathmatch: one 5-minute round, frag limit 20, the mode's own weapon, any number of players");
+        Check(LobbyRules.Apply(start, J(new { mode = "vampiric" }), 3, content).Result.Code == "duel-players" && LobbyRules.Apply(start, J(new { mode = "vampiric" }), 2, content).Settings!.EffectiveFragLimit == 10, "Vampiric is one against one, first to 10");
+        var vamp = LobbyRules.Apply(start, J(new { mode = "vampiric", lifesteal = 87, fragLimit = 400, timeLimit = 20 }), 2, content).Settings!;
+        Check(vamp.Lifesteal == 85 && vamp.FragLimit == 100 && vamp.TimeLimit == 60 && LobbyRules.Plausible(vamp) && !LobbyRules.Plausible(vamp with { Lifesteal = 500 }), "Lifesteal snaps to 5 %, frag limit and match length are clamped");
+        Check(LobbyRules.Apply(start, J(new { mode = "instagib" }), 2, content).Settings!.EffectiveFragLimit == 25 && CombatRules.Weapon(LobbyModes.Instagib).Damage >= CombatRules.MaxHealth, "Instagib: first to 25, every hit kills");
+
+        // Two players 10 m apart on a level floor, eyes 64 cm above their capsule centres.
+        const long t0 = 5_000_000;
+        TrackSample Eye(long t, double x, double yaw, double pitch = 0) => new(t, x, 0, 164, pitch, yaw);
+        CombatMatch Arena(string mode, double lifesteal = 50)
+        {
+            var c = new CombatMatch(mode, ["a", "b"], CombatRules.DefaultFragLimit(mode), lifesteal, t0, t0 + 60_000);
+            var a = new List<TrackSample>(); var b = new List<TrackSample>();
+            for (long t = t0 - 500; t < t0 + 9_000; t += 17) { a.Add(Eye(t, 0, 0)); b.Add(Eye(t, 1000, 180)); }
+            for (var i = 0; i < a.Count; i += 60) { c.Track("a", new TrackBatch("m", 1, a.Skip(i).Take(60).ToList(), [])); c.Track("b", new TrackBatch("m", 1, b.Skip(i).Take(60).ToList(), [])); }
+            return c;
+        }
+        long seq = 0;
+        HitClaim Shot(long t, double yaw = 0, double pitch = 0, double ox = 0, double targetY = 0, bool drawn = true, double fromX = 0) =>
+            new("m", 1, ++seq, t, fromX + ox, 0, 164, pitch, yaw, false, drawn ? 1000 - fromX : null, drawn ? targetY : null, drawn ? 100 : null, drawn ? 45 : null, drawn ? 115 : null);
+        var c1 = Arena(LobbyModes.Deathmatch);
+        var at = t0 + 2000;
+        Check(c1.Claim("a", Shot(at), at + 50, 40) is null && c1.View().Players.First(p => p.Member == "b").Health == 80, "A body hit on the drawn, matching hull does the weapon's damage");
+        Check(c1.Claim("a", Shot(at + 50), at + 100, 40) == "fire-rate", "Claims faster than the weapon fires are refused");
+        Check(c1.Claim("a", Shot(at + 200, ox: 100), at + 250, 40) == "origin", "The ray must start at the shooter's own camera");
+        Check(c1.Claim("a", Shot(at + 300, yaw: 10), at + 350, 40) == "aim", "The ray must look where the shooter's own track looked");
+        Check(c1.Claim("a", Shot(at + 400, targetY: 300), at + 450, 40) == "target-mismatch", "A drawn target nobody was at in the last 200 ms is refused");
+        Check(c1.Claim("a", Shot(at + 500, yaw: 2.9), at + 550, 40) == "ray-miss", "A ray beside the hull is refused");
+        Check(c1.Claim("a", Shot(at + 600) with { Seq = 1 }, at + 650, 40) == "repeated" && c1.Claim("a", Shot(at - 5000), at + 700, 40) == "time", "Repeated and stale claims are refused");
+        var headPitch = Math.Atan2(195 - 164, 1000) * 180 / Math.PI;
+        Check(c1.Claim("a", Shot(at + 800, pitch: headPitch), at + 850, 40) is null && c1.View().Events[^1] is { Kind: "damage", Head: true, Amount: 40 }, "The host decides headshots from the ray (the top of the hull) and doubles the damage");
+        for (var k = 0; k < 2; k++) c1.Claim("a", Shot(at + 1000 + k * 120), at + 1050 + k * 120, 40);
+        var dead = c1.View().Players.First(p => p.Member == "b");
+        Check(!dead.Alive && dead.Deaths == 1 && c1.View().Players.First(p => p.Member == "a").Frags == 1 && c1.View().Events.Any(e => e.Kind == "death" && e.Member == "b" && e.Attacker == "a"), "Health reaching zero is a death and a frag");
+        Check(c1.Claim("a", Shot(at + 1500), at + 1550, 40) == "target-mismatch", "A dead player can't be hit");
+        c1.Tick(at + 1240 + CombatRules.RespawnMs(LobbyModes.Deathmatch) + 10);
+        var back = c1.View().Players.First(p => p.Member == "b");
+        Check(back.Alive && back.Health == 100 && c1.View().Events[^1].Kind == "respawn", "Respawn after the delay with full health");
+        var resp = at + 1240 + CombatRules.RespawnMs(LobbyModes.Deathmatch) + 100;
+        Check(c1.Claim("a", Shot(resp), resp + 20, 40) == "spawn-protected", "Spawn protection holds for 1.5 s");
+        Check(c1.Claim("a", Shot(resp + 1600, drawn: false), resp + 1620, 0) is null, "Without a drawn hull the host rewinds the victim's own track (estimated lag) and checks the ray");
+
+        // Vampiric: damage dealt heals the dealer; decay wears both down, never to death.
+        var v = Arena(LobbyModes.Vampiric, 50);
+        var vt = t0 + 2000;
+        HitClaim Back(long t) => new("m", 1, ++seq, t, 1000, 0, 164, 0, 180, false, 0, 0, 100, 45, 115);
+        v.Claim("b", Back(vt), vt + 10, 40); v.Claim("b", Back(vt + 150), vt + 160, 40);
+        Check(v.View().Players.First(p => p.Member == "a").Health == 60, "Vampiric: the other player's hits land first");
+        v.Claim("a", Shot(vt + 300), vt + 310, 40);
+        Check(v.View().Players.First(p => p.Member == "a").Health == 70 && v.View().Events[^1].AttackerHealth == 70, "Lifesteal 50 %: a 20 damage hit heals 10");
+        var decay = Arena(LobbyModes.Vampiric);
+        decay.Tick(t0 + 1000); decay.Tick(t0 + 11_000);
+        Check(decay.View().Players.All(p => Math.Abs(p.Health - 78) < 0.01) && decay.View().Players.All(p => p.Alive), "Vampiric decay is 2 hp/s (11 s: 22 hp) and never kills");
+        var inst = Arena(LobbyModes.Instagib);
+        Check(inst.Claim("a", Shot(vt), vt + 10, 40) is null && !inst.View().Players.First(p => p.Member == "b").Alive, "Instagib: one hit kills");
+        Check(inst.Claim("b", Back(vt + 500), vt + 510, 40) == "shooter-dead" && inst.Claim("a", Shot(vt + 600), vt + 610, 40) == "fire-rate", "Dead players can't shoot; the railgun fires every 1.2 s");
+
+        // Wire formats.
+        var claim = Shot(t0, pitch: 1.234);
+        var read = HitClaim.Read(J(claim.Body()));
+        Check(read is { MatchId: "m", Pitch: 1.23, TargetX: 1000, TargetHalfHeight: 115 } && read.Seq == claim.Seq, "Hit claims round-trip");
+        Check(HitClaim.Read(J(new { match = "m", round = 1, seq = 1, t = 1, o = new[] { 0, 0, 0 }, r = new[] { 95, 0 } })) is null && HitClaim.Read(J(new { match = "m", round = 1, seq = 1, t = 1, o = new[] { 0, 0 }, r = new[] { 0, 0 } })) is null, "Impossible claims are refused");
+        var feed = new ShotFeed(Path.GetTempPath());
+        var shots = ShotFeed.Parse("AIMMOD_SHOTS_1\t3\nshot\t1000\t7\t1\t2\t3\t-4\t90\t0\t0\t0\nshot\t1100\t8\t1\t2\t3\t-4\t91\t0\t9\t1\n");
+        var seen = new Dictionary<int, TrackSeen> { [9] = new TrackSeen(1090, 9, 500, 600, 100, 45, 115) };
+        var claims = feed.Take(shots, "m", 1, 250, seen);
+        Check(claims.Count == 1 && claims[0] is { Seq: 8, T: 1350, Head: true, TargetX: 500, Yaw: 91 } && feed.Take(shots, "m", 1, 250, seen).Count == 0, "Shot rows become hit claims on the host clock; misses and repeats are skipped");
+        Check(ShotFeed.Parse("AIMMOD_SHOTS_1\t1\nshot\t1\t5\t0\t0\t0\t0\t0\t0\t0\t0\nshot\t2\t4\t0\t0\t0\t0\t0\t0\t0\t0\n") is null && ShotFeed.Parse("AIMMOD_SHOTS_1\t1\nshot\t1\t5\t0\t0\t0\t0\t0\t9\t0\t0\n") is null, "Shot sequences must increase and weapon slots are 0-7");
+        var state = PlayState.Format(4, "m 1", new CombatPlayerView("me", 42.5, true, 3, 1, null, 900, 10, 0), new CombatEvent(7, "damage", 800, "me", "them", 20, true, 42.5, null), "them");
+        Check(state == "AIMMOD_PLAY_1\t4\nmatch\tm%201\nself\t1\t42.5\t100\t0\t900\nhit\t7\t20\t1\tthem\n", "Play state: absolute health, life, respawn and protection, plus the last hit taken");
+
+        // A deathmatch on the host: frag limit ends it, native score frames are refused.
+        var (core, clock, advance) = Lobby();
+        core.Join("p2", "Two");
+        core.Apply("host", "settings", Patch(new { mode = "deathmatch", fragLimit = 1, countdown = 3 }), content);
+        ReadyAll(core);
+        Check(core.Apply("host", "start", default, content).Ok, "Deathmatch starts");
+        advance(3000); core.Tick();
+        var m = core.Snapshot().Match!;
+        Check(m.Phase == MatchPhases.Live && m.Combat is { FragLimit: 1 } && core.Score("host", new ScoreFrame(m.Id, 1, 1, 1, 1, 1, 0, 9)).Code == "combat", "Combat matches are scored by the host only");
+        var begin = clock();
+        for (long t = 0; t < 2000; t += 100)
+        {
+            var eyesA = new List<TrackSample>(); var eyesB = new List<TrackSample>();
+            for (long k = 0; k < 100; k += 17) { eyesA.Add(Eye(begin + t + k, 0, 0)); eyesB.Add(Eye(begin + t + k, 1000, 180)); }
+            core.Track("host", new TrackBatch(m.Id, 1, eyesA, [])); core.Track("p2", new TrackBatch(m.Id, 1, eyesB, []));
+            advance(100); core.Tick();
+        }
+        var now = clock();
+        for (var k = 0; k < 5; k++) { core.Claim("host", new HitClaim(m.Id, 1, 100 + k, now - 480 + k * 100, 0, 0, 164, 0, 0, false, 1000, 0, 100, 45, 115)); }
+        var final = core.Snapshot().Match!;
+        Check(final.Phase == MatchPhases.Final && final.WinnerId == "host" && final.Rounds[0].Results[0] is { MemberId: "host", Score: 1, Place: 1 }, "Reaching the frag limit ends the match with the winner");
+
+        // Arenas: the player can be hurt and carries the mode weapon; nothing natively heals or scores.
+        var arena = MatchScenario.Generate(new(BaseScenario, LobbyRules.Apply(start, J(new { mode = "instagib" }), 2, content).Settings! with { Scenario = new ScenarioChoice("Synthetic A", ContentLibrary.TextHash(BaseScenario), "synthetic_map", ContentLibrary.TextHash("m"), 60) }));
+        Check(arena.Contains("InvinciblePlayer=false\n") && arena.Contains("AddedBots=AimMod Hidden Bot.bot\n") && arena.Contains("WeaponProfileNames=AimMod Railgun;;;;;;;\n") && arena.Contains("Name=AimMod Railgun\nType=Hitscan\nShotsPerClick=1\nDamagePerShot=1000.0\n")
+            && arena.Contains("TimeBetweenShots=1.2\n") && arena.Contains("LifeStealPercent=0.0\n") && arena.Contains("ScorePerKill=0.0\n") && arena.Contains("MinRespawnDelay=1.0\n") && arena.Contains("Timelimit=330.0\n"), "Instagib arena: vulnerable player with the railgun, helper bot, no native heals or score");
+        Check(MatchScenario.Name(dm).Contains(" - Deathmatch - ", StringComparison.Ordinal) && MatchScenario.Key(dm) != MatchScenario.Key(dm with { Mode = LobbyModes.Instagib }), "Each combat mode has its own arena");
+    }
+
     static void ProtocolFrames()
     {
         var frame = Protocol.Encode(Protocol.Create("command", "l-1", "peer-a", 7, 123, new { id = 1, action = "ready", args = new { ready = true } }));
@@ -406,7 +514,7 @@ static class MultiplayerChecks
         foreach (var bad in new[] { Swap("aimmod.mp", "other"), Swap("\"v\":1", "\"v\":2"), Swap("\"command\"", "\"teleport\""), Swap("\"seq\":7", "\"seq\":-1"), "[]", "{", Swap("\"body\":{", "\"body\":[{").Replace("}}}", "}}]}") })
             Check(Protocol.Decode(Encoding.UTF8.GetBytes(bad)) is null, "Rejected frame: " + bad[..Math.Min(40, bad.Length)]);
         Check(Protocol.Decode(new byte[Protocol.MaxBytes + 1]) is null, "Oversized frames are rejected");
-        Check(!Protocol.Reliable("score") && Protocol.Reliable("snapshot") && Protocol.Reliable("track") && Protocol.Types.Length == 19, "Score frames are unreliable; state and tracking samples are reliable");
+        Check(!Protocol.Reliable("score") && Protocol.Reliable("snapshot") && Protocol.Reliable("track") && Protocol.Reliable("hit") && Protocol.Types.Length == 20, "Score frames are unreliable; state and tracking samples are reliable");
         var sync = new ClockSync();
         sync.Add(0, 1050, 200); sync.Add(1000, 2010, 1020); sync.Add(2000, 3100, 2300);
         Check(sync.Rtt == 20 && sync.Offset == 1000, "Clock sync uses the minimum round-trip sample");

@@ -1290,6 +1290,9 @@ sealed partial class MultiplayerService : IDisposable
             case "track":
                 if (TrackBatch.Read(m.Body) is { } batch) core!.Track(peer, batch);
                 break;
+            case "hit":
+                if (HitClaim.Read(m.Body) is { } claim) core!.Claim(peer, claim);
+                break;
             case "content.request":
                 if (server.Manifest(core!.Settings) is { } manifest) Send(peer, "content.manifest", new { key = manifest.Key, files = manifest.Files, workshop = manifest.Workshop });
                 else Send(peer, "content.error", new { hash = "", code = "none" });
@@ -1587,10 +1590,43 @@ sealed partial class MultiplayerService : IDisposable
         }
     }
 
+    // Combat modes: the same camera stream, plus hit claims from AimModCore's shot
+    // feed, and the host's verdict for this player written back for AimModCore.
+    ShotFeed? shotFeed; string? shotKey;
+    long playSequence; string? lastPlayState;
+    void StreamCombat(MatchSnapshot match)
+    {
+        if (outputFolder is null) return;
+        StreamTracking(match);
+        shotFeed ??= new ShotFeed(outputFolder);
+        if (shotKey != match.Id + "#" + match.Round) { shotKey = match.Id + "#" + match.Round; shotFeed.Reset(); }
+        if (match.Phase == MatchPhases.Live && poseTracker is not null)
+        {
+            var offset = core is not null || hostPeer is null ? 0 : clocks.GetValueOrDefault(hostPeer)?.Offset ?? 0;
+            foreach (var claim in shotFeed.Poll(match.Id, match.Round, offset, poseTracker.LastSeen))
+            {
+                if (core is not null) core.Claim(SelfId, claim);
+                else if (hostPeer is not null) Send(hostPeer, "hit", claim.Body());
+            }
+        }
+        if (match.Combat?.Players.FirstOrDefault(p => p.Member == SelfId) is { } self)
+        {
+            var lastHit = match.Combat.Events.LastOrDefault(e => e.Member == SelfId && e.Kind is "damage");
+            var body = PlayState.Format(0, match.Id, self, lastHit, lastHit?.Attacker);
+            if (body != lastPlayState)
+            {
+                lastPlayState = body;
+                try { AtomicFile.WriteText(Path.Combine(outputFolder, "play-state.tsv"), PlayState.Format(++playSequence, match.Id, self, lastHit, lastHit?.Attacker)); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            }
+        }
+    }
+
     void TrackLocalRun()
     {
         if (Current is not { Match: { } match } || !match.Players.Contains(SelfId)) { trackedRound = null; return; }
         if (match.Mode == LobbyModes.Tracking) { StreamTracking(match); return; }
+        if (LobbyModes.Combat(match.Mode)) { StreamCombat(match); return; }
         var roundKey = match.Id + "#" + match.Round;
         if (trackedRound != roundKey)
         {

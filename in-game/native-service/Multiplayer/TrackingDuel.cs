@@ -250,8 +250,11 @@ sealed class SelfPoseTracker(string outputFolder)
     long lastPose = long.MinValue, lastSequence = -1, requestedAt;
     readonly List<TrackSample> samples = [];
     readonly List<TrackSeen> seenRows = [];
+    readonly Dictionary<int, TrackSeen> lastSeen = new();
+    // The latest drawn targets by AimModCore id (combat claims name the target they hit).
+    public IReadOnlyDictionary<int, TrackSeen> LastSeen => lastSeen;
 
-    public void Reset() { lastPose = long.MinValue; lastSequence = -1; samples.Clear(); seenRows.Clear(); }
+    public void Reset() { lastPose = long.MinValue; lastSequence = -1; samples.Clear(); seenRows.Clear(); lastSeen.Clear(); }
 
     // Keep AimModCore publishing (it stops 5 s after the last request).
     public void Request(long nowMs)
@@ -277,7 +280,8 @@ sealed class SelfPoseTracker(string outputFolder)
         }
         // Target rows are the latest drawn positions, so they belong to the newest pose.
         var at = frame.Poses[^1].UnixMs + offsetMs;
-        foreach (var t in frame.Targets) seenRows.Add(new TrackSeen(at, (int)t[0], t[1], t[2], t[3], t[4], t[5]));
+        lastSeen.Clear();
+        foreach (var t in frame.Targets) { var row = new TrackSeen(at, (int)t[0], t[1], t[2], t[3], t[4], t[5]); seenRows.Add(row); lastSeen[row.Id] = row; }
         if (samples.Count > 4 * TrackBatch.MaxSamples) samples.RemoveRange(0, samples.Count - 4 * TrackBatch.MaxSamples);
         if (seenRows.Count > 4 * TrackBatch.MaxSeen) seenRows.RemoveRange(0, seenRows.Count - 4 * TrackBatch.MaxSeen);
     }

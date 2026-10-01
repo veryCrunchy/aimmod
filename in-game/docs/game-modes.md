@@ -603,6 +603,114 @@ Score: +1 per kill, −1 per suicide. Spawns come from the `SpawnSelector`,
 which picks the spawn farthest from enemies' current host positions, weighted
 by `Weight`.
 
+#### 6.2.1 What's built: deathmatch, vampiric 1v1, instagib (phase 2, service side)
+
+These use the same host-validated claim model as the tracking duel.
+`CombatMatch` on the host owns health, deaths, frags, respawns, spawn
+protection and lifesteal. Clients only claim hits.
+
+**Modes:**
+
+| Mode | Players | Frag limit | Match length | Respawn | Rules |
+| --- | --- | --- | --- | --- | --- |
+| `deathmatch` | 2–8 | 20 | 5 min (1–10 min) | 2 s | — |
+| `vampiric` | exactly 2 | 10 | 5 min | 2 s | lifesteal 50% (0–200%, steps of 5); +25 hp per kill; 2 hp/s decay that never kills; no overheal |
+| `instagib` | 2–8 | 25 | 5 min | 1 s | — |
+
+- **Weapons.** Deathmatch and vampiric use the AimMod Combat Rifle (hitscan,
+  20 damage, ×2 headshot, 10 shots/s). Instagib uses the AimMod Railgun
+  (1000 damage, 1.2 s between shots). Lobby weapon presets don't apply: the
+  host validates against the mode's own weapon.
+- **Spawn protection** lasts 1.5 s and ends early when you fire.
+- **Scoring.** Placement is by frags, then fewer deaths. A player with more
+  than 20% of claims rejected (at least 10 claims) is marked disputed.
+- **Arena (generated):** a vulnerable player (`InvinciblePlayer=false`) with
+  exactly the mode weapon, no native lifesteal, regen or health on kill,
+  native respawn delays equal to the mode's, no native score, and the same
+  invisible helper bot.
+
+**Claim validation** (`CombatMatch.Claim`; reasons are counted per player):
+
+1. Order and time:
+   - sequence numbers increase (`repeated`);
+   - the shot time is inside the match and at most 1 s old (`time`);
+   - the shooter is alive (`shooter-dead`);
+   - fire rate is at most 1 / `TimeBetweenShots`, with 10% tolerance
+     (`fire-rate`).
+2. Shooter checks:
+   - the ray starts within 32 cm of the shooter's own camera track
+     (`origin`);
+   - it looks within 3° of that track's pitch and yaw (`aim`).
+3. Victim:
+   - the alive opponent whose own track matches the drawn target the game hit
+     (25 cm, 0–200 ms back: the rewind cap) (`target-mismatch`);
+   - without a drawn target, whoever the ray hits after the capped estimated
+     rewind (`miss`).
+4. Geometry:
+   - the ray must hit that hull (`ray-miss`);
+   - the victim must not be spawn-protected (`spawn-protected`).
+5. Damage is computed by the host:
+   - a headshot is the ray through the top 25 cm sphere of the hull;
+   - damage is clamped to the victim's remaining health, so overkill doesn't
+     heal;
+   - then lifesteal, death, frag, and the respawn timer.
+
+**Data path:**
+
+- Every player streams `track` batches, as in the duel.
+- Hits come from a new AimModCore feed. Each becomes a `hit` message (on the
+  host clock), including the drawn position of the target the game hit,
+  taken from the latest `self-pose.tsv` target rows.
+- Health, life and events reach clients in the match snapshot's `combat`
+  view (≤ 4 per second; the last 16 events).
+- Each client writes its own state for AimModCore to apply.
+
+**Contracts for AimModCore** (requested through the coordinator; until they
+exist the mode runs but can't hurt anyone in game):
+
+```
+self-shots.tsv   (written while self-pose.request is fresh; latest 64 shots; temp file + rename)
+AIMMOD_SHOTS_1\t<file sequence>
+shot\t<unix ms>\t<shot seq, increasing>\t<x>\t<y>\t<z>\t<pitch>\t<yaw>\t<weapon slot 0-7>\t<hit target id from self-pose target rows, 0 = miss>\t<headshot 0/1>
+```
+
+`self-shots.tsv` comes from polling the local weapon's `ShotsFiredThisSession`
+and `ShotsHitThisSession`, plus `CharactersHit` and `bAnyHeadshots`, at frame
+rate (the shot hooks don't fire, 9.1). The ray is the camera at that frame.
+
+```
+play-state.tsv   (written by the service on change; absolute and idempotent)
+AIMMOD_PLAY_1\t<sequence>
+match\t<%-escaped match id>
+self\t<alive 0/1>\t<health>\t<max health>\t<respawn at unix ms, 0 = none>\t<spawn protected until unix ms>
+hit\t<event id>\t<amount>\t<headshot 0/1>\t<attacker member id>      (last damage taken, for the native hit effect)
+```
+
+How AimModCore applies `play-state.tsv`:
+
+- Only while armed: an AimMod match scenario in freeplay, never a challenge.
+- It reconciles the local character to the file:
+  - each new `hit` event: `HandleDamage(amount, attacker avatar)`, for the
+    native knockback, aim punch and death camera, then `SetHealth(health)`;
+  - `alive=0`: let the native death run, or call `Death`;
+  - `alive` back to 1: `Respawn`, then `SetHealth(max)`.
+
+  The host stays the authority: any drift is corrected to the file's
+  values.
+
+**Checks:** 32 self-tests cover the rules, every rejection reason, headshots,
+death, frag, respawn, spawn protection, the host-rewind fallback, lifesteal,
+decay, instagib, the wire formats, a deathmatch ending at its frag limit, and
+the arena.
+
+**Not done yet:**
+
+- A combat HUD strip (health, frags, kill feed).
+- Immediate event push (events now ride the 250 ms snapshot).
+- Native kill effects on avatars (gib/death animation when the host announces
+  a death; avatars are only hidden or stay up today).
+- Team deathmatch.
+
 ### 6.3 Tracking duel
 
 The duel that fits KovaaK's best. Two variants, chosen in the lobby:
@@ -1209,7 +1317,7 @@ build.
 | --- | --- | --- | --- |
 | 0 | Run the probe; offline avatar spike (replay path → bot); Play module skeleton with arming, undo and the shared-memory channel | AimModCore, dumps | **Probe run once (9.1). Spike built (9.3), live run pending.** Play module not started |
 | 1 | Score race (exists) and practice together; pose channel (binary fast frames over AimModNet); interpolation; tracking duel (alternating, then simultaneous) with host TOT recompute | phase 0, Steam bridge stage 3 | **Pose channel, interpolation and avatars done in AimModSteam. Tracking duel (alternating) done in the service (6.3.1)**; needs the bridge items 6.3.1/1–3 and a two-player test |
-| 2 | Deathmatch FFA and 1v1, vampiric 1v1, instagib: hit claims, lag compensation, `damage`/`death`/`respawn`, spawn selection, lifesteal rule, instagib profile; post-match replay verification on the Hub | phase 1 | combat modes |
+| 2 | Deathmatch FFA and 1v1, vampiric 1v1, instagib: hit claims, lag compensation, `damage`/`death`/`respawn`, spawn selection, lifesteal rule, instagib profile; post-match replay verification on the Hub | phase 1 | **Service side built (6.2.1).** Needs AimModCore's `self-shots.tsv` and `play-state.tsv` applier, then a combat HUD and a two-player test. Spawn selection and Hub verification not started |
 | 3 | CS rounds: teams, `RoundController`, freeze and buy time, economy, shop and buy menu, armour model, bomb plant and defuse, map-port objective metadata, halftime, 5v5 lobby | phase 2, map-port metadata | CS competitive |
 | 4 | CTF (flags, carrier markers, captures), weapon drops, arena pickups (metadata from Source items and later Reflex import), AimMod grapple, gun game and the other compositions | phase 3 | Quake/Xonotic-style arena pack |
 
