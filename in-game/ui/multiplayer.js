@@ -42,6 +42,12 @@
       heart(cx-22*u,h/2,16*u,hot);heart(cx+30*u,h/2+2*u,9*u,soft);x.strokeStyle=ink;x.lineWidth=2*u;line([[cx+18*u,h/2+2*u],[cx-2*u,h/2+2*u]]);line([[cx+4*u,h/2-3*u],[cx-2*u,h/2+2*u],[cx+4*u,h/2+7*u]]);}
     else if(id==='instagib'){x.strokeStyle=alt;x.lineWidth=3*u;line([[cx-54*u,h/2+8*u],[cx+54*u,h/2-8*u]]);x.strokeStyle=ink;x.lineWidth=1.2*u;line([[cx-54*u,h/2+8*u],[cx+54*u,h/2-8*u]]);
       x.fillStyle=ink;x.beginPath();x.moveTo(cx-4*u,6*u);x.lineTo(cx-12*u,h/2+2*u);x.lineTo(cx-2*u,h/2+2*u);x.lineTo(cx-8*u,h-6*u);x.lineTo(cx+10*u,h/2-6*u);x.lineTo(cx,h/2-6*u);x.lineTo(cx+6*u,6*u);x.closePath();x.fill();}
+    else if(id==='cs'){
+      // Two teams around a bomb on its plant site.
+      function body(px,py,col){x.fillStyle=col;circle(px,py-7*u,3.5,col);x.fillRect(px-3.5*u,py-3*u,7*u,11*u);}
+      body(cx-44*u,h/2+2*u,ink);body(cx-32*u,h/2+6*u,ink);body(cx+32*u,h/2+6*u,hot);body(cx+44*u,h/2+2*u,hot);
+      x.strokeStyle=soft;x.lineWidth=1.6*u;x.strokeRect(cx-15*u,h/2-12*u,30*u,24*u);
+      x.fillStyle=alt;x.fillRect(cx-9*u,h/2-4*u,18*u,10*u);x.fillStyle=bg;x.fillRect(cx-6*u,h/2-1*u,12*u,2*u);x.fillStyle=hot;circle(cx+6*u,h/2-6*u,2,hot);}
     else if(id==='team-deathmatch'){[[-44,-10],[-36,10],[-24,-2]].forEach(function(d){circle(cx+d[0]*u,h/2+d[1]*u,5,ink);});[[44,-10],[36,10],[24,-2]].forEach(function(d){circle(cx+d[0]*u,h/2+d[1]*u,5,hot);});x.fillStyle=soft;x.fillRect(cx-1*u,8*u,2*u,h-16*u);}
     return c;
   }
@@ -393,6 +399,7 @@
     flag('quietDuringRanked','Quiet during ranked runs','No popups or hotkey while you play a scenario of your own.');
     flag('sounds','Sounds','Uses KovaaK’s own menu sounds.');
     flag('hideScenario','Hide my scenario from friends','Friends see you’re in AimMod, not what you play.');
+    flag('leaveRun','Leave my run automatically when a match starts','A 5 second notice first: stay in your run, or press the lobby key to leave now.');
     flag('friendToasts','Tell me when friends start AimMod','A short note in game with Join or Watch. Never during a run.');
     body.appendChild(settingRow('Who can spectate me','Friends watch from their own game, osu!-style.',segmented([{id:'friends',label:'Friends'},{id:'ask',label:'Ask me'},{id:'off',label:'Nobody'}],pr.spectatePrivacy||'friends',function(id){pref('spectatePrivacy',id);},false,'spectate privacy')));
     flag('showWatchers','Show who’s watching while I play','A small line at the top of the screen.');
