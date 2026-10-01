@@ -33,6 +33,7 @@ sealed class NativeReplayPlayback : IAsyncDisposable
     }
     double Time => replay is null ? 0 : live is not null ? 0 : Math.Clamp(position + (playing ? Stopwatch.GetElapsedTime(anchor).TotalSeconds * speed : 0), 0, replay.Frames[^1].T);
     public bool Visible { get { lock (gate) return visible && replay is not null; } }
+    public string? VisibleScenario { get { lock (gate) return visible && replay is not null ? replay.Scenario : null; } }
     public object Status { get { lock (gate) return new { id = replay?.Id, time = Time, duration = replay?.Frames.LastOrDefault()?.T ?? 0, playing, speed, visible,
         mode = live is not null ? "live" : compare is not null ? "compare" : "replay", compareId = compare?.Id }; } }
     internal (long Session, string? Id, long Revision) KeyboardState { get { lock (gate) return visible && replay is not null ? (keyboardSession, replay.Id, keyboardRevision) : (0, null, 0); } }

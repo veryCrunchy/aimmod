@@ -36,6 +36,7 @@ add_library(aimmod_core STATIC
     core/src/MatchPlay.cpp
     core/src/Json.cpp
     core/src/Cosmetics.cpp
+    core/src/CosmeticsPreview.cpp
 )
 target_include_directories(aimmod_core PUBLIC core/include)
 if(MSVC)
@@ -67,6 +68,7 @@ if(AIMMOD_BUILD_MOD)
         mod/src/ServiceHost.cpp
         mod/src/MatchPlay.cpp
         mod/src/Cosmetics.cpp
+        mod/src/CosmeticsPreview.cpp
     )
     target_include_directories(AimModCore PRIVATE mod/src)
     target_link_libraries(AimModCore PRIVATE aimmod_core)

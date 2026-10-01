@@ -31,6 +31,13 @@ sealed class WorkspaceHost : IAsyncDisposable
         Volatile.Write(ref overlayRuns, runs);
     }
     Run? PersonalBest(string scenario) => Volatile.Read(ref personalBests).GetValueOrDefault(scenario);
+    // Discord presence reads the same live snapshot without sharing the overlay
+    // feed's transient-gap memory.
+    public LiveOverlaySnapshot ReadLive() => LiveOverlayState.Read(outputFolder, PersonalBest, playback.Visible);
+    public bool ReplayVisible => playback.Visible;
+    public string? ReplayScenario => playback.VisibleScenario;
+    // Page of the AimMod panel while it is shown, as reported by the UI.
+    public readonly DiscordWorkspaceView View = new();
     object OverlayState() => new { live = opponents.Apply(liveFeed.Accept(LiveOverlayState.Read(outputFolder, PersonalBest, playback.Visible), DateTime.UtcNow)), settings = overlaySettings.Current with { Layouts = [] } };
     object ObsState() => overlaySettings.Current.ObsEnabled ? OverlayState() : new { live = new { available = false, active = false }, settings = overlaySettings.Current with { Layouts = [] } };
     internal static int ReadRendererProtocol(string path) => new RendererAcknowledgement(path).Read().Protocol;
@@ -42,7 +49,9 @@ sealed class WorkspaceHost : IAsyncDisposable
     string data = "{}";
     public string Url { get; private set; } = "";
     public void Update(string json) => Volatile.Write(ref data, json);
-    public WorkspaceHost(Hub hub, string output, string? historyPath = null, NativeSettings? settings = null, CsvHistory? csvHistory = null)
+    readonly Multiplayer.MultiplayerService multiplayer;
+    public Multiplayer.MultiplayerService MultiplayerLobby => multiplayer;
+    public WorkspaceHost(Hub hub, string output, string? historyPath = null, NativeSettings? settings = null, CsvHistory? csvHistory = null, DiscordSettings? discordSettings = null, Func<object>? discordStatus = null, string[]? args = null, Lifecycle? lifecycle = null)
     {
         outputFolder = output;
         gameCommands = new GameCommands(output);
@@ -59,7 +68,27 @@ sealed class WorkspaceHost : IAsyncDisposable
         LoopbackServer.UseGuards(app, capability);
         (settings ?? new NativeSettings(output)).MapEndpoints(app, prefix);
         overlaySettings.MapEndpoints(app, prefix);
+        lifecycle?.MapEndpoints(app, prefix);
+        discordSettings?.MapEndpoints(app, prefix, discordStatus);
+        app.MapPost(prefix + "/workspace-view", async (HttpContext context) => {
+            if (context.Request.Headers["X-AimMod-UI"] != "1" || context.Request.ContentLength is null or > 256) return Results.StatusCode(403);
+            if (!context.Request.HasJsonContentType()) return Results.StatusCode(415);
+            try {
+                using var doc = await System.Text.Json.JsonDocument.ParseAsync(context.Request.Body, cancellationToken: context.RequestAborted);
+                var root = doc.RootElement;
+                if (root.ValueKind != System.Text.Json.JsonValueKind.Object || !root.TryGetProperty("page", out var page) || page.ValueKind != System.Text.Json.JsonValueKind.String
+                    || !root.TryGetProperty("visible", out var shown) || shown.ValueKind is not (System.Text.Json.JsonValueKind.True or System.Text.Json.JsonValueKind.False)) return Results.BadRequest();
+                var key = page.GetString();
+                if (!DiscordWorkspaceView.ValidPage(key)) return Results.BadRequest();
+                View.Report(key!, shown.GetBoolean(), DateTimeOffset.UtcNow);
+                return Results.Json(new { ok = true });
+            } catch (Exception ex) when (ex is System.Text.Json.JsonException or BadHttpRequestException) { return Results.BadRequest(); }
+        });
+        app.MapGet(prefix + "/discord-settings.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.DiscordSettingsScript")!, "application/javascript"));
         new CoachingFeedback(output).MapEndpoints(app, prefix);
+        multiplayer = Multiplayer.MultiplayerHosting.Create(hub, output, args, () => liveFeed.Read(outputFolder, Volatile.Read(ref overlayRuns)), () => Volatile.Read(ref overlayRuns));
+        multiplayer.MapEndpoints(app, prefix);
+        Multiplayer.MultiplayerHosting.MapAssets(app, prefix);
         var importedHistory = csvHistory ?? new CsvHistory(output);
         app.MapGet(prefix + "/history-import.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.HistoryImport")!, "application/javascript"));
         app.MapPost(prefix + "/history-import", async (HttpContext context) => {
@@ -321,6 +350,7 @@ sealed class WorkspaceHost : IAsyncDisposable
         // Stop accepting requests first, then publish a closed replay frame and
         // retract this process's overlay URL so the game never loads a dead port.
         startLoop.Cancel();
+        multiplayer.Dispose();
         await keyboard.DisposeAsync();
         try { await app.StopAsync(); } catch (Exception ex) when (ex is OperationCanceledException or InvalidOperationException) { }
         await playback.DisposeAsync(); await obs.DisposeAsync(); await app.DisposeAsync();

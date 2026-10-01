@@ -1,0 +1,24 @@
+# AimModSteamProbe settings. Copy next to dlls\ as Mods\AimModSteamProbe\config.txt.
+
+# Stage 1 is always read-only.
+# 1 = call InitRelayNetworkAccess so the Steam client fetches the relay (SDR)
+# config and pings Valve relays. Sends nothing to any player.
+relay_warmup=0
+relay_wait_seconds=20
+
+# Passive callback listeners to see which thread dispatches Steam callbacks.
+observe_callbacks=1
+observe_seconds=30
+
+# Stage 2 writes (private, unlisted single-slot lobby + local loopback). Only honoured
+# by a build configured with -DAIMMOD_PROBE_STAGE2=ON. Keep 0 unless asked.
+stage2_loopback=0
+
+# Stage 3: two-account relay-only P2P test on AimMod's virtual port. Only
+# honoured by a build configured with -DAIMMOD_PROBE_STAGE3=ON. Leave empty
+# unless running the test; stage3_peer is the other account's SteamID64 and
+# belongs only in a local config, never in the repository.
+stage3_role=
+stage3_peer=
+stage3_match=
+stage3_seconds=120

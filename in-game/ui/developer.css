@@ -1,0 +1,29 @@
+/* Developer page. Gameface-safe: flex with margins, explicit widths, solid AimMod palette. */
+#developer{position:relative}
+.dev-page{display:block}
+.dev-row{display:flex;flex-direction:row;align-items:flex-start;margin:0 -10px}
+.dev-col{min-width:0;padding:0 10px}.dev-main{width:62%}.dev-side{width:38%}
+.dev-card{margin-bottom:20px}
+.dev-card h2{font-size:17px;font-weight:600}
+.dev-body{padding:4px 20px 14px}
+.dev-line{display:flex;flex-direction:row;align-items:center;margin-bottom:12px}
+.dev-label{display:block;width:150px;flex-shrink:0;font-size:12px;font-weight:600;color:#a7bab0}
+.dev-body>.dev-label{width:auto;margin:12px 0 6px}
+.dev-body .actions{display:flex;flex-direction:row;flex-wrap:wrap;margin-top:4px}
+.dev-body .actions>.button{margin:0 8px 8px 0}
+.dev-note{margin-top:12px;padding:10px 12px;background:#101916;border:1px solid #22302a;border-radius:6px;font-size:12px;color:#dcebe3}
+.dev-status{display:flex;flex-direction:row;align-items:flex-start;padding:9px 0;border-top:1px solid #22302a}
+.dev-status:first-child{border-top:0}
+.dev-value{flex:1;min-width:0;font-size:13px;color:#dcebe3;line-height:1.45}.dev-value.ok{color:#27e4a1}.dev-value.warn{color:#f0b45a}
+.dev-toast{display:none;position:absolute;right:0;top:0;max-width:420px;padding:11px 16px;background:#1d2b26;border:1px solid #2c6b52;border-radius:8px;color:#eef5f1;font-size:13px;z-index:40}
+.dev-field{display:block;min-width:0}.dev-wide{flex:1;margin-right:8px}
+.dev-field input,.dev-input{height:32px}
+.dev-line .actions{margin-top:0}.dev-line .actions>.button{margin:0}
+.dev-replay{display:flex;flex-direction:row;align-items:center;padding:8px 0;border-top:1px solid #22302a}
+.dev-replay:first-child{border-top:0}.dev-replay.on .dev-replay-text strong{color:#27e4a1}
+.dev-replay-text{flex:1;min-width:0;margin-right:10px}
+.dev-replay-text strong{display:block;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dev-replay-text span{display:block;font-size:12px;color:#a7bab0}
+.dev-replay .actions{margin-top:0}.dev-replay .actions>.button{margin:0 0 0 6px}
+.dev-log{max-height:260px;overflow:hidden;padding:8px 10px;background:#0b1210;border:1px solid #22302a;border-radius:6px}
+.dev-log-line{font-family:Consolas,monospace;font-size:11px;line-height:1.5;color:#a7bab0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

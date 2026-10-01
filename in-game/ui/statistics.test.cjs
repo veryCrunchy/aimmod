@@ -8,7 +8,7 @@ function surface(){
   const ctx=new Proxy({}, {get(_,key){return function(...args){drawing++;for(const value of args)if(typeof value==='number')assert.ok(Number.isFinite(value),`finite canvas ${key}`)}},set(){return true}});
   function element(tag){let text='';return {tag,children:[],style:{},value:'',offsetWidth:600,appendChild(child){this.children.push(child);return child},setAttribute(){},getContext(){return ctx},get textContent(){return text},set textContent(value){text=String(value);this.children=[]}}}
   const context=vm.createContext({window:{devicePixelRatio:1},document:{createElement:element},setTimeout:callback=>callback()});
-  vm.runInContext("Date.prototype.toLocaleString=function(){throw Error('Intl unavailable')}",context);
+  require('./test-format.cjs').loadFormat(context);
   vm.runInContext(fs.readFileSync(path.join(__dirname,'statistics.js'),'utf8'),context);
   const root=element('div');
   function all(e=root){return [e,...e.children.flatMap(c=>all(c))]}
@@ -49,22 +49,22 @@ test('empty period stays usable without plotting invalid coordinates',()=>{
 });
 test('supplementary timing and movement preserve units, zero, missing samples, and independent series',()=>{
  const s=surface();const data=fixture();const selected=data.Periods[0].Selected;
- selected.Measurements=[{Key:'AverageTimeToKillMs',Average:800,Samples:1},{Key:'AverageFireToHitMs',Average:45,Samples:1},{Key:'Overshoot',Average:0,Samples:1},{Key:'DirectionalBias',Average:null,Samples:0}];
+ selected.Measurements=[{Key:'AverageTimeToKillMs',Average:800,Samples:1},{Key:'AverageFireToHitMs',Average:45,Samples:1},{Key:'Overshoot',Average:0,Samples:1},{Key:'CorrectiveShotRatio',Average:0,Samples:1},{Key:'KillsPerSecond',Average:0.04,Samples:2},{Key:'ClickTimingVariation',Average:0.004,Samples:2},{Key:'DirectionalBias',Average:null,Samples:0}];
  selected.Points[0].Measurements={AverageTimeToKillMs:800,AverageFireToHitMs:45,Overshoot:0};
  s.api.render(s.root,data);
  s.all().find(e=>e.tag==='button'&&e.textContent==='Movement & timing').onclick();
  assert.ok(s.all().some(e=>e.textContent==='800 ms'));
  assert.ok(s.all().some(e=>e.textContent==='45 ms'));
  assert.ok(s.all().some(e=>e.textContent==='0%'));
- assert.ok(!s.all().some(e=>e.textContent==='Directional bias'));
+ assert.ok(!s.all().some(e=>e.textContent==='Directional bias'));assert.ok(!s.all().some(e=>e.textContent==='Overshoot'&&e.className==='metric-label'));assert.ok(s.all().some(e=>e.textContent==='2.4 per min'));assert.ok(s.all().some(e=>e.textContent==='<0.01 CV'));
  s.all().find(e=>e.tag==='button'&&e.textContent==='Average shot-to-hit interval').onclick();
  assert.ok(s.all().some(e=>e.textContent.includes('Average shot-to-hit interval (ms)')));
  assert.ok(s.drawing()>0);
 });
 test('Gameface layout assigns explicit pixel columns and full width chart surfaces',()=>{
  const s=surface(),data=fixture();s.api.render(s.root,data);
- s.all().find(e=>e.tag==='button'&&e.textContent==='Score spread').onclick();
- const canvases=s.all().filter(e=>e.tag==='canvas');assert.equal(canvases[0].style.width,'556px');assert.equal(canvases[1].style.width,'556px');
+ // Trend and spread are both visible by default; narrow roots stack them full width.
+ const canvases=s.all().filter(e=>e.tag==='canvas');assert.equal(canvases[0].style.width,'560px');assert.equal(canvases[1].style.width,'560px');
  const mount={children:[],style:{},clientWidth:1200,appendChild(e){this.children.push(e)}};
  s.api.renderMeasurements(mount,[{Key:'AverageTimeToKillMs',Average:20340,Samples:8},{Key:'AverageFireToHitMs',Average:18440,Samples:8}]);
  const nodes=s.all(mount);assert.ok(nodes.some(e=>e.textContent==='20.3 s'));assert.ok(nodes.some(e=>e.textContent==='18.4 s'));
@@ -78,13 +78,13 @@ test('unavailable movement charts are excluded and stale selected metric falls b
 });
 test('secondary trend information is revealed one section at a time and resize preserves the selection',()=>{
  const s=surface();s.api.render(s.root,fixture());
- assert.equal(s.all().filter(e=>e.tag==='canvas').length,1);
+ assert.equal(s.all().filter(e=>e.tag==='canvas').length,2);
  assert.ok(!s.all().some(e=>e.tag==='h2'&&['Score distribution','Movement and timing','Practice days','Scenario comparison','Practice blocks'].includes(e.textContent)));
  const click=text=>s.all().find(e=>e.tag==='button'&&e.textContent===text).onclick();
- click('Score spread');assert.equal(s.all().filter(e=>e.tag==='canvas').length,2);
- click('Practice pattern');assert.equal(s.all().filter(e=>e.tag==='canvas').length,1);assert.ok(s.all().some(e=>e.textContent==='Practice days'));assert.ok(s.all().some(e=>e.textContent==='Practice blocks'));
+ assert.ok(s.all().some(e=>e.textContent==='Score spread'));
+ click('Practice pattern');assert.equal(s.all().filter(e=>e.tag==='canvas').length,2);assert.ok(s.all().some(e=>e.textContent==='Practice days'));assert.ok(s.all().some(e=>e.textContent==='Practice blocks'));
  s.api.resize();assert.ok(s.all().some(e=>e.textContent==='Practice blocks'));
  click('Compare scenarios');assert.ok(s.all().some(e=>e.className==='stats-table'));assert.ok(!s.all().some(e=>e.textContent==='Practice blocks'));
- click('Compare scenarios');assert.ok(!s.all().some(e=>e.className==='stats-table'));assert.ok(s.all().some(e=>e.textContent==='Progression'));
+ click('Compare scenarios');assert.ok(!s.all().some(e=>e.className==='stats-table'));assert.ok(s.all().some(e=>e.textContent==='Score trend'));
 });
 test('warm-up filter switches scenario analysis without changing total practice',()=>{const s=surface(),data=fixture();for(const p of data.Periods){p.Warmup={...p.Selected,Runs:2,Best:60,Average:50,Median:50,Points:[{Score:50,RunNumber:1}],Distribution:[{From:50,To:50,Count:2}]};p.Settled={...p.Selected,Runs:4,Best:100};}s.api.render(s.root,data,()=>{});s.all().find(e=>e.tag==='button'&&e.textContent==='Warm-up (2)').onclick();assert.ok(s.all().some(e=>e.textContent==='60'));assert.ok(s.all().some(e=>e.textContent.includes('This filter applies')));s.api.resize();assert.ok(s.all().find(e=>e.tag==='button'&&e.textContent==='Warm-up (2)').className.includes('primary'));s.all().find(e=>e.tag==='button'&&e.textContent==='All runs').onclick();assert.ok(!s.all().some(e=>e.textContent==='60'));});

@@ -102,7 +102,8 @@ namespace aimmod
         : m_output(output), m_version(std::move(version)),
           m_lifecycle(std::to_string(static_cast<long long>(std::time(nullptr))) + "-" + std::to_string(GetCurrentProcessId())),
           m_sampler(m_b, m_scene, output), m_presenter(m_b, m_scene, output), m_control(m_b, m_scene, output),
-          m_match(m_b, m_scene, output), m_cosmetics(m_b, m_scene, output)
+          m_match(m_b, m_scene, output), m_cosmetics(m_b, m_scene, output),
+          m_preview(m_scene, output.root())
     {
     }
 
@@ -364,6 +365,7 @@ namespace aimmod
         for (std::uint64_t id : m_callbacks) RC::Unreal::Hook::UnregisterCallback(id);
         m_callbacks.clear();
         m_presenter.Stop();
+        m_preview.Shutdown();
         for (auto& [function, ids] : m_hooks) UObjectGlobals::UnregisterHook(function, ids);
         m_hooks.clear();
         for (auto& hook : m_inputHooks) UObjectGlobals::UnregisterHook(hook->function, hook->ids);
@@ -610,6 +612,7 @@ namespace aimmod
             if (wasAvailable != m_match.available()) m_output.SetCapabilities(Capabilities());
         }
         m_cosmetics.Tick(now);
+        m_preview.Tick(now, m_inChallenge, m_loading);
         PollClipKey();
         if (m_output.poseRequested() && now >= m_nextPose)
         {

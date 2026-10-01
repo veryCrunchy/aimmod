@@ -1,5 +1,6 @@
 // Engine-independent checks for AimModCore. Synthetic data only.
 // Usage: aimmod_core_tests [--write-samples <dir>]
+#include <aimmod/CosmeticsPreview.hpp>
 #include <aimmod/Formats.hpp>
 #include <aimmod/GameCommand.hpp>
 #include <aimmod/GameStats.hpp>
@@ -715,6 +716,57 @@ static void MatchPlayChecks()
     CHECK(FormatShot(shot) == "shot\t1790000000123\t4\t1\t2\t3\t1\t0\t0\t1\t9\t1\t0\n", "shot row layout");
 }
 
+// Cosmetics page preview: request validation and where it may run.
+static void PreviewChecks()
+{
+    const std::int64_t now = 1790000000;
+    const std::string good = "v=1\r\nexpires=1790000005\nseq=7\nmodel=Meso\nskin=McCree\nyaw=-35.5\n"
+                             "vector=PrimaryColor:0.85,0.22,0.05,1\nscalar=Roughness:0.6\nfuture=ignored\n";
+    auto r = ParsePreviewRequest(good, now);
+    CHECK(r && r->seq == 7 && r->model == "Meso" && r->skin == "McCree" && r->yaw == -35.5, "preview request parses");
+    CHECK(r && r->vectors.size() == 1 && r->vectors[0].name == "PrimaryColor" && r->vectors[0].value[1] == 0.22 && r->scalars.size() == 1, "preview parameters parse");
+    auto same = ParsePreviewRequest("v=1\nexpires=1790000005\nseq=8\nmodel=Meso\nskin=McCree\nyaw=90\nvector=PrimaryColor:0.85,0.22,0.05,1\nscalar=Roughness:0.6\n", now);
+    CHECK(r && same && r->LookKey() == same->LookKey(), "rotation alone does not change the look");
+    auto other = ParsePreviewRequest("v=1\nexpires=1790000005\nseq=9\nmodel=Endo\n", now);
+    CHECK(other && r && other->LookKey() != r->LookKey() && other->skin.empty() && other->yaw == 0, "model change changes the look; skin and yaw optional");
+
+    const char* bad[] = {
+        "v=2\nexpires=1790000005\nseq=1\nmodel=Meso\n",                         // version
+        "v=1\nexpires=1790000000\nseq=1\nmodel=Meso\n",                         // expired
+        "v=1\nexpires=1790000016\nseq=1\nmodel=Meso\n",                         // too far ahead
+        "v=1\nexpires=1790000005\nmodel=Meso\n",                                // no seq
+        "v=1\nexpires=1790000005\nseq=1\n",                                     // no model
+        "v=1\nexpires=1790000005\nseq=1\nmodel=../Meso\n",                      // path-like model
+        "v=1\nexpires=1790000005\nseq=1\nmodel=C:/skins/me.png\n",              // file, not a model
+        "v=1\nexpires=1790000005\nseq=1\nmodel=Meso\nyaw=200\n",                // yaw range
+        "v=1\nexpires=1790000005\nseq=1\nmodel=Meso\nyaw=nan\n",                // not finite
+        "v=1\nexpires=1790000005\nseq=1\nmodel=Meso\nvector=Tint:2,0,0,1\n",    // colour range
+        "v=1\nexpires=1790000005\nseq=1\nmodel=Meso\nvector=Tint:1,0,0\n",      // three channels
+        "v=1\nexpires=1790000005\nseq=1\nmodel=Meso\nscalar=Rough:11\n",        // scalar range
+        "v=1\nexpires=1790000005\nseq=1\nmodel=Meso\nmodel=Endo\n",             // duplicate key
+        "v=1\nexpires=1790000005\nseq=-1\nmodel=Meso\n",                        // negative seq
+        "v=1\nexpires=1790000005\nseq=1\nmodel=Meso\nnoequals\n",               // malformed line
+        "",                                                                    // empty
+    };
+    for (const char* text : bad) CHECK(!ParsePreviewRequest(text, now), text);
+    std::string many = "v=1\nexpires=1790000005\nseq=1\nmodel=Meso\n";
+    for (int i = 0; i < 9; ++i) many += "scalar=S" + std::to_string(i) + ":1\n";
+    CHECK(!ParsePreviewRequest(many, now), "at most 8 scalars");
+    CHECK(!ParsePreviewRequest(std::string(MaxPreviewRequestBytes + 1, 'x'), now), "oversized request");
+
+    // Never in challenges (ranked), benchmarks, the editor or while loading; unknown counts as no.
+    const PreviewGameState menu{false, false, false, false};
+    CHECK(DecidePreview(r, menu).run, "preview runs in freeplay or menus with the page open");
+    CHECK(!DecidePreview(std::nullopt, menu).run, "no request: no preview");
+    CHECK(!DecidePreview(r, {true, false, false, false}).run, "never in a challenge");
+    CHECK(!DecidePreview(r, {false, true, false, false}).run, "never in a benchmark");
+    CHECK(!DecidePreview(r, {false, false, true, false}).run, "never in the scenario editor");
+    CHECK(!DecidePreview(r, {false, false, false, true}).run, "never while loading");
+    CHECK(!DecidePreview(r, {std::nullopt, false, false, false}).run, "unknown challenge state counts as a challenge");
+    CHECK(!DecidePreview(r, {false, std::nullopt, false, false}).run, "unknown benchmark state counts as a benchmark");
+    CHECK(FormatPreviewFrame(3, "preview-1.png", 384, 384) == "v=1\nseq=3\nfile=preview-1.png\nwidth=384\nheight=384\n", "frame record format");
+}
+
 int main(int argc, char** argv)
 {
     if (argc == 3 && std::strcmp(argv[1], "--write-samples") == 0)
@@ -735,6 +787,7 @@ int main(int argc, char** argv)
     MatchPlayChecks();
     EndRunChecks();
     cosmetics_checks::Run();
+    PreviewChecks();
     std::printf("%d AimModCore checks, %d failed.\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

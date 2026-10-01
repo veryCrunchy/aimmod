@@ -1,0 +1,287 @@
+name: AimMod in-game Release
+
+# Builds the AimMod in-game package for KovaaK's (UE4SS + AimModCore with its
+# service + AimModNativeUI + AimModSteam) and publishes:
+#   aimmod-ingame-v<version>   AimMod-InGame-<version>.zip, .manifest.json, .sha256
+#   aimmod-ingame-<channel>    aimmod-ingame-<channel>.json, read by the service updater
+# The feed pins the zip's and the manifest's SHA-256; the manifest pins every
+# file. See in-game/docs/install-lifecycle.md. Nothing is published unless
+# `publish` is true. No secrets are needed beyond UE4SS_GITHUB_TOKEN.
+
+on:
+  push:
+    tags:
+      - "aimmod-ingame-v[0-9]+.[0-9]+.[0-9]+"
+      - "aimmod-ingame-v[0-9]+.[0-9]+.[0-9]+-*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: SemVer version without the aimmod-ingame-v prefix
+        required: true
+        type: string
+      channel:
+        description: Update channel
+        required: true
+        default: beta
+        type: choice
+        options:
+          - stable
+          - beta
+      publish:
+        description: Sign and publish the release and update the channel feed
+        required: true
+        default: false
+        type: boolean
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      channel:
+        required: true
+        type: string
+      publish:
+        required: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aimmod-ingame-release-${{ inputs.version || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  metadata:
+    runs-on: ubuntu-latest
+    outputs:
+      channel: ${{ steps.release.outputs.channel }}
+      publish: ${{ steps.release.outputs.publish }}
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - name: Resolve and validate release metadata
+        id: release
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_CHANNEL: ${{ inputs.channel }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          # Called workflows see the caller's event, so explicit inputs take precedence over the ref.
+          if [[ -z "$INPUT_VERSION" && "$EVENT_NAME" == "push" ]]; then
+            version=${REF_NAME#aimmod-ingame-v}
+            publish=true
+            if [[ "$version" == *-* ]]; then channel=beta; else channel=stable; fi
+          else
+            version="$INPUT_VERSION"
+            channel="$INPUT_CHANNEL"
+            publish="$INPUT_PUBLISH"
+          fi
+          semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+          if [[ ! "$version" =~ $semver ]]; then echo "Invalid version: $version" >&2; exit 2; fi
+          if [[ "$channel" != "stable" && "$channel" != "beta" ]]; then echo "Invalid channel: $channel" >&2; exit 2; fi
+          if [[ "$channel" == "stable" && "$version" == *-* ]]; then echo "Stable releases cannot use a prerelease version." >&2; exit 2; fi
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "tag=aimmod-ingame-v$version" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: metadata
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.metadata.outputs.version }}
+      CHANNEL: ${{ needs.metadata.outputs.channel }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the in-game sources
+        shell: pwsh
+        run: |
+          # The release packages AimModCore (in-game/native-mod) and AimModSteam (in-game/steam-bridge).
+          foreach ($path in 'in-game/native-mod/install/Build-AimModPackage.ps1', 'in-game/steam-bridge/CMakeLists.txt', 'in-game/native-service/AimMod.InGame.csproj') {
+            if (-not (Test-Path $path)) { throw "Missing $path: the in-game release needs AimModCore (in-game/native-mod) and AimModSteam (in-game/steam-bridge) merged." }
+          }
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Test the service and the workspace UI
+        shell: pwsh
+        run: |
+          dotnet run --project in-game/native-service -c Release -- --self-test-lifecycle
+          if ($LASTEXITCODE) { throw 'Lifecycle checks failed.' }
+          node --test (Get-ChildItem in-game/ui, in-game/replay -Filter *.test.cjs).FullName
+          if ($LASTEXITCODE) { throw 'UI tests failed.' }
+
+      - name: Fetch RE-UE4SS (game's UE4SS, e3ba1016)
+        shell: pwsh
+        env:
+          UE4SS_GITHUB_TOKEN: ${{ secrets.UE4SS_GITHUB_TOKEN }}
+        run: |
+          # UEPseudo needs an Epic-linked GitHub account (same token as the desktop release).
+          if (-not $env:UE4SS_GITHUB_TOKEN) { throw 'UE4SS_GITHUB_TOKEN is required to fetch UEPseudo.' }
+          $auth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("x-access-token:$env:UE4SS_GITHUB_TOKEN"))
+          git clone --filter=blob:none https://github.com/UE4SS-RE/RE-UE4SS external/RE-UE4SS
+          git -C external/RE-UE4SS checkout e3ba1016
+          git -C external/RE-UE4SS -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" submodule update --init --recursive
+          if ($LASTEXITCODE) { throw 'RE-UE4SS submodules could not be fetched.' }
+
+      - name: Fetch the verified UE4SS release zip
+        shell: pwsh
+        env:
+          UE4SS_ZIP_URL: ${{ vars.AIMMOD_UE4SS_ZIP_URL }}
+        run: |
+          # Any HTTPS mirror works: the zip is accepted only by its SHA-256.
+          if (-not $env:UE4SS_ZIP_URL) { throw 'Set the AIMMOD_UE4SS_ZIP_URL repository variable to a copy of UE4SS_v3.0.1-1152-ge3ba1016.zip.' }
+          if (-not $env:UE4SS_ZIP_URL.StartsWith('https://')) { throw 'AIMMOD_UE4SS_ZIP_URL must use HTTPS.' }
+          New-Item -ItemType Directory -Force external/ue4ss-runtime | Out-Null
+          Invoke-WebRequest $env:UE4SS_ZIP_URL -OutFile external/ue4ss-runtime/UE4SS_v3.0.1-1152-ge3ba1016.zip
+          $hash = (Get-FileHash external/ue4ss-runtime/UE4SS_v3.0.1-1152-ge3ba1016.zip -Algorithm SHA256).Hash
+          if ($hash -ne 'AF8EA9D8975E8EFF7967423F43B8B50875E66A29A0F434CFFCE6E0867EA17252') { throw "UE4SS zip rejected: SHA-256 $hash." }
+
+      - name: Build AimModCore, the service and the Lua UI
+        shell: pwsh
+        env:
+          AimModVersion: ${{ needs.metadata.outputs.version }}
+        run: ./in-game/native-mod/install/Build-AimModPackage.ps1
+
+      - name: Build AimModSteam
+        shell: pwsh
+        run: |
+          cmake -S in-game/steam-bridge -B in-game/steam-bridge/build-mod -G 'Visual Studio 17 2022' -A x64 -DAIMMOD_STEAM_BUILD_MOD=ON
+          if ($LASTEXITCODE) { throw 'AimModSteam configure failed.' }
+          cmake --build in-game/steam-bridge/build-mod --config Game__Shipping__Win64 --target AimModSteam aimmod_steam_tests
+          if ($LASTEXITCODE) { throw 'AimModSteam build failed.' }
+          $tests = Get-ChildItem in-game/steam-bridge/build-mod -Recurse -Filter aimmod_steam_tests.exe | Select-Object -First 1
+          & $tests.FullName
+          if ($LASTEXITCODE) { throw 'AimModSteam tests failed.' }
+
+      - name: Stage the release
+        shell: pwsh
+        env:
+          TESTED_BUILDS: ${{ vars.AIMMOD_TESTED_BUILDS || '3.9.11=25635011' }}
+          MINIMUM_BUILD: ${{ vars.AIMMOD_MINIMUM_STEAM_BUILD || '0' }}
+        run: |
+          $steamDll = Get-ChildItem in-game/steam-bridge/build-mod -Recurse -Filter main.dll | Where-Object FullName -like '*Game__Shipping__Win64*' | Select-Object -First 1
+          if (-not $steamDll) { throw 'AimModSteam main.dll was not built.' }
+          ./in-game/install/New-AimModInGameRelease.ps1 -Step Stage -Version $env:VERSION -Channel $env:CHANNEL `
+            -Package in-game/native-mod/out/package -SteamDll $steamDll.FullName `
+            -Ue4ssZip external/ue4ss-runtime/UE4SS_v3.0.1-1152-ge3ba1016.zip `
+            -TestedBuild ($env:TESTED_BUILDS -split ',') -MinimumSteamBuildId ([long]$env:MINIMUM_BUILD) `
+            -Commit $env:GITHUB_SHA -Output out/release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aimmod-ingame-${{ needs.metadata.outputs.version }}-staged
+          path: out/release/AimMod-InGame-${{ needs.metadata.outputs.version }}
+          if-no-files-found: error
+
+  publish:
+    needs: [metadata, build]
+    if: needs.metadata.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      attestations: write
+      contents: write
+      id-token: write
+    env:
+      CHANNEL: ${{ needs.metadata.outputs.channel }}
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.metadata.outputs.tag }}
+      VERSION: ${{ needs.metadata.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: aimmod-ingame-${{ needs.metadata.outputs.version }}-staged
+          path: out/release/AimMod-InGame-${{ needs.metadata.outputs.version }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Prepare the release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          # release-please creates the version release with the changelog as its body.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release view "$TAG" --json body --jq .body > notes.md
+          else
+            echo "AimMod for KovaaK's (in-game) ${VERSION}." > notes.md
+          fi
+
+      - name: Zip and write the update feed
+        shell: pwsh
+        run: |
+          # A stable release also becomes the newest beta unless a newer beta exists.
+          $beta = @{}
+          if ($env:CHANNEL -eq 'stable') {
+            gh release download aimmod-ingame-beta -p aimmod-ingame-beta.json -D beta-feed 2>$null
+            $beta.WriteBetaFeed = $true
+            if (Test-Path beta-feed/aimmod-ingame-beta.json) { $beta.ExistingBetaFeed = 'beta-feed/aimmod-ingame-beta.json' }
+          }
+          ./in-game/install/New-AimModInGameRelease.ps1 -Step Finish -Version $env:VERSION -Channel $env:CHANNEL `
+            -Output out/release -NotesFile notes.md `
+            -DownloadBaseUrl "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/download/$env:TAG" @beta
+
+      - name: Verify the release the way the updater will
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet build in-game/native-service -c Release -v q -nologo
+          verify() { dotnet in-game/native-service/bin/Release/net8.0/AimMod.InGame.dll --verify-release "$1" --zip "out/release/AimMod-InGame-${VERSION}.zip"; }
+          verify "out/release/aimmod-ingame-${CHANNEL}.json"
+          if [ "$CHANNEL" = stable ] && [ -f out/release/aimmod-ingame-beta.json ]; then verify out/release/aimmod-ingame-beta.json; fi
+
+      - name: Attest release artifacts
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            out/release/AimMod-InGame-${{ needs.metadata.outputs.version }}.zip
+            out/release/AimMod-InGame-${{ needs.metadata.outputs.version }}.manifest.json
+
+      - name: Publish the version and channel releases
+        shell: bash
+        run: |
+          set -euo pipefail
+          prerelease=()
+          if [ "$CHANNEL" = beta ]; then prerelease=(--prerelease); fi
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "AimMod in-game ${VERSION}" \
+              --notes-file notes.md --latest=false "${prerelease[@]}"
+          else
+            # The repository-wide latest release stays the rolling aimmod-latest downloads.
+            gh release edit "$TAG" --title "AimMod in-game ${VERSION}" --latest=false
+          fi
+          gh release upload "$TAG" --clobber \
+            "out/release/AimMod-InGame-${VERSION}.zip" \
+            "out/release/AimMod-InGame-${VERSION}.manifest.json" \
+            "out/release/AimMod-InGame-${VERSION}.sha256"
+
+          # The package is uploaded first, so a feed never points at a missing zip.
+          publish_feed() {
+            local channel=$1
+            local channel_tag="aimmod-ingame-${channel}"
+            if ! gh release view "$channel_tag" >/dev/null 2>&1; then
+              gh release create "$channel_tag" --target "$GITHUB_SHA" --title "AimMod in-game ${channel} channel" \
+                --notes "Machine-readable update feed for the AimMod in-game ${channel} channel." --latest=false --prerelease
+            fi
+            gh release upload "$channel_tag" --clobber "out/release/aimmod-ingame-${channel}.json"
+          }
+          publish_feed "$CHANNEL"
+          if [ "$CHANNEL" = stable ] && [ -f out/release/aimmod-ingame-beta.json ]; then publish_feed beta; fi

@@ -5,7 +5,7 @@
     ".": {
       "release-type": "simple",
       "include-component-in-tag": false,
-      "exclude-paths": ["osu-native"],
+      "exclude-paths": ["osu-native", "in-game"],
       "extra-files": [
         {
           "type": "json",
@@ -27,6 +27,23 @@
       "changelog-path": "CHANGELOG.md",
       "bump-minor-pre-major": true,
       "pull-request-title-pattern": "chore(osu): release AimMod for osu! ${version}",
+      "changelog-sections": [
+        { "type": "feat", "section": "Features" },
+        { "type": "fix", "section": "Fixes" },
+        { "type": "perf", "section": "Performance" },
+        { "type": "refactor", "section": "Internal", "hidden": true },
+        { "type": "test", "section": "Tests", "hidden": true },
+        { "type": "chore", "section": "Maintenance", "hidden": true }
+      ]
+    },
+    "in-game": {
+      "release-type": "simple",
+      "component": "aimmod-ingame",
+      "include-component-in-tag": true,
+      "package-name": "AimMod for KovaaK's (in-game)",
+      "changelog-path": "CHANGELOG.md",
+      "bump-minor-pre-major": true,
+      "pull-request-title-pattern": "chore(in-game): release AimMod in-game ${version}",
       "changelog-sections": [
         { "type": "feat", "section": "Features" },
         { "type": "fix", "section": "Fixes" },
