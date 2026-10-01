@@ -200,7 +200,7 @@ sealed partial class MultiplayerService
             buyOpen, buyWindow && me.Alive, buyLeft, menu, banner, notice, feed,
             CsRules.Find(me.Primary)?.Label, CsRules.Find(me.Secondary)?.Label, CsBuyKey, CsUseKey, CsKeyClashes(KeyBinds.GameKeys(library.Root)),
             me.Alive ? me.Site : null, me.Alive ? me.Callout : null, SiteMarkers(cs, me.Side == CsRules.T || b.State == "planted" ? b.Position : null),
-            b.Carrier == SelfId, me.Side == CsRules.T && b.Carrier is { } bc ? Name(bc) : null, refused,
+            b.Carrier == SelfId, me.Side == CsRules.T && b.Carrier is { } bc ? Name(bc) : null, refused, CsDropKey,
             cs.Players.Count(p => p.Side == CsRules.T && p.Alive), cs.Players.Count(p => p.Side == CsRules.CT && p.Alive));
     }
 
