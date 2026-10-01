@@ -88,6 +88,11 @@ static class CoreFormatChecks
                 && commands.Send(new("capture-thumbnail", "S", null, null, null, null, null, null, 9000, 1080, "x.png", [new(0, 0, 0, 0, 0, 90)])).Error == "invalid-thumbnail"
                 && commands.Send(new("capture-thumbnail", "S", null, null, null, null, null, null, 1920, 1080, "x.png", [])).Error == "invalid-thumbnail",
                 "thumbnail requests validated");
+            var seeded = commands.Send(new("start-scenario", "AimMod Match - Synthetic - 1", "freeplay", null, null, null, null, null, Seed: 4294967295));
+            Check(seeded.Sequence is > 0 && File.ReadAllText(Path.Combine(root, "core-command.tsv")).EndsWith("mode\tfreeplay\nseed\t4294967295\n"), "seed written");
+            Check(commands.Send(new("start-scenario", "VT PGT", "challenge", null, null, null, null, null, Seed: 1)).Error == "seed-not-allowed"
+                && commands.Send(new("start-scenario", "X", null, null, null, null, null, null, Seed: -1)).Error == "invalid-seed", "seeds kept out of ranked play");
+            Check(ReplayCompare.Spawns(compact).Count == 2, "spawn events: first appearance and the respawn after the gap");
             var second = commands.Send(new("reset-overrides", null, null, null, null, null, null, null));
             Check(second.Sequence > sent.Sequence && !File.ReadAllText(Path.Combine(root, "core-command.tsv")).Contains("scenario"), "sequences increase; reset carries no scenario");
             Check(commands.Send(new("delete", "x", null, null, null, null, null, null)).Error == "invalid-command" && commands.Send(new("load-scenario", "a\u0001b", null, null, null, null, null, null)).Error == "invalid-scenario",

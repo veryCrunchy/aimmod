@@ -273,6 +273,15 @@ static void CommandChecks()
     CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t9\naction\treset-overrides\nextra\t1\n") == "invalid-command", "unknown fields rejected");
     CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t9\naction\treset-overrides\n") == "accepted", "reset accepted");
     CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t9\naction\trefresh-scenarios\n") == "accepted", "refresh accepted");
+    auto seeded = parse("AIMMOD_CORE_COMMAND_1\nseq\t11\naction\tstart-scenario\nscenario\tX\nmode\tfreeplay\nseed\t4294967295\n");
+    CHECK(std::holds_alternative<GameCommand>(seeded) && std::get<GameCommand>(seeded).seed == 4294967295u, "freeplay seed parsed");
+    CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t11\naction\tstart-scenario\nscenario\tX\nmode\tchallenge\nseed\t1\n") == "seed-not-allowed", "no seeds in ranked challenges");
+    CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t11\naction\tstart-scenario\nscenario\tAimMod Match - Cata - ab93\nmode\tchallenge\nseed\t1\n") == "accepted",
+          "generated match scenarios may be seeded as challenges");
+    CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t11\naction\tstart-scenario\nscenario\tX\nseed\t4294967296\n") == "invalid-seed" &&
+              code("AIMMOD_CORE_COMMAND_1\nseq\t11\naction\tload-scenario\nscenario\tX\nseed\t5\n") == "invalid-seed",
+          "seed range and action checked");
+    CHECK(SeedFor(7, 0) == SeedFor(7, 0) && SeedFor(7, 0) != SeedFor(7, 1) && SeedFor(7, 1) != SeedFor(8, 1), "per-event seeds reproducible and distinct");
     const char* thumb = "AIMMOD_CORE_COMMAND_1\nseq\t10\naction\tcapture-thumbnail\nscenario\tAimMod - Dust2 (CSGO) - CS Movement\nwidth\t1920\nheight\t1080\n"
                         "out\tdust2 thumb.png\nview1\t100,-20.5,300,-10,45,90\nview2\t0,0,0,0,180,70\n";
     auto t = parse(thumb);

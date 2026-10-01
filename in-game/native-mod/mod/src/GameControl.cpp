@@ -11,6 +11,7 @@
 #include <Windows.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -467,6 +468,29 @@ namespace aimmod
         }
     }
 
+    void GameControl::Reseed(std::uint32_t index, const char* why)
+    {
+        const std::uint32_t value = SeedFor(m_seeding->seed, index);
+        std::srand(value);
+        if (index < 4 || index % 25 == 0) Log("match seed: event " + std::to_string(index) + " (" + why + ")");
+    }
+
+    void GameControl::OnAttemptStarted(const std::string& scenario)
+    {
+        if (!m_seeding || !m_seeding->active || scenario != m_seeding->scenario) return;
+        m_seeding->events = 0;
+        Reseed(0, "attempt start");
+    }
+
+    void GameControl::OnSpawnEvent()
+    {
+        if (!m_seeding || !m_seeding->active || m_lastScenario != m_seeding->scenario) return;
+        // Kill credit and character death can both fire for one death: one event per frame.
+        if (m_seeding->lastEventTick == m_tick) return;
+        m_seeding->lastEventTick = m_tick;
+        Reseed(++m_seeding->events, "spawn event");
+    }
+
     bool GameControl::Refresh(const char* why)
     {
         bool any = false;
@@ -481,6 +505,8 @@ namespace aimmod
         if (c.action == GameCommand::Action::CaptureThumbnail) return BeginCapture(c, now, m_lastScenario, manager);
         const bool load = c.action == GameCommand::Action::LoadScenario;
         ResetOverrides("scenario-change");
+        if (m_seeding) Log("match seed: off (new scenario request)");
+        m_seeding.reset();
         m_pending = Pending{c, now + (load ? 30.0 : 45.0)};
         // Replays view the scenario without starting it; starts use the
         // requested play type (freeplay for any override).
@@ -546,6 +572,12 @@ namespace aimmod
 
     void GameControl::Tick(double now, const std::string& current, bool inChallenge, bool loading)
     {
+        ++m_tick;
+        if (m_seeding && m_seeding->active && current != m_seeding->scenario)
+        {
+            Log("match seed: off (scenario changed)");
+            m_seeding.reset();
+        }
         if (auto request = m_output.TakeCommand())
         {
             if (auto* error = std::get_if<CommandError>(&*request)) Answer(error->sequence, "error", error->code, error->message);
@@ -625,6 +657,12 @@ namespace aimmod
         {
             if (inChallenge)
             {
+                if (c.seed)
+                {
+                    m_seeding = Seeding{*c.seed, c.scenario};
+                    m_seeding->active = true;
+                    Reseed(0, "challenge start");
+                }
                 m_pending.reset();
                 return Answer(seq, "done", "started", "");
             }
@@ -646,6 +684,12 @@ namespace aimmod
             return Answer(seq, "error", "mode-mismatch", "The game started a challenge instead of freeplay; no overrides were applied.");
         }
         const bool ok = !c.HasOverrides() || ApplyOverrides(c);
+        if (c.seed)
+        {
+            m_seeding = Seeding{*c.seed, c.scenario};
+            m_seeding->active = true;
+            Reseed(0, "scenario start");
+        }
         m_pending.reset();
         Answer(seq, ok ? "done" : "error", ok ? "started" : "override-failed", ok ? "" : "Some overrides could not be applied on this game version.");
     }

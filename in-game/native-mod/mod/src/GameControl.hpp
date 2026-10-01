@@ -37,6 +37,12 @@ namespace aimmod
         bool canStart() const { return m_canStart; }
         bool canCapture() const { return m_canCapture; }
         bool overridesActive() const { return m_overrides.active; }
+        // Shared match randomness: the game draws from the CRT rand() state of
+        // its game thread (it imports rand/srand from the UCRT, like this
+        // module). Seeded when the seeded scenario starts or a challenge
+        // attempt in it starts, and before each target death/kill (respawn).
+        void OnAttemptStarted(const std::string& scenario);
+        void OnSpawnEvent();
         // Called every engine frame on the game thread.
         void Tick(double now, const std::string& currentScenario, bool inChallenge, bool loading);
 
@@ -112,5 +118,16 @@ namespace aimmod
             std::string scenario;
         } m_overrides;
         std::string m_lastScenario;
+        struct Seeding
+        {
+            std::uint32_t seed{};
+            std::string scenario;
+            std::uint32_t events{};
+            std::uint64_t lastEventTick{~0ull};
+            bool active{};
+        };
+        std::optional<Seeding> m_seeding;
+        std::uint64_t m_tick{};
+        void Reseed(std::uint32_t index, const char* why);
     };
 } // namespace aimmod

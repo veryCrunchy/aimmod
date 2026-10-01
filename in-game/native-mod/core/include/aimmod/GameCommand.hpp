@@ -21,6 +21,9 @@ namespace aimmod
         Mode mode{Mode::FreePlay};
         std::optional<double> timeScale, targetSize, targetSpeed, mapScale;
         std::string weapon;
+        // start-scenario: shared randomness for match players (freeplay, or
+        // challenge only for generated "AimMod Match - " scenarios).
+        std::optional<std::uint32_t> seed;
         // capture-thumbnail: 1-4 camera views, PNG size, output file name.
         struct View
         {
@@ -50,6 +53,9 @@ namespace aimmod
     std::string FormatCommandResult(std::uint64_t sequence, std::string_view state, std::string_view code, std::string_view message);
 
     const char* ActionName(GameCommand::Action action);
+    // The seed for spawn event `index` (0 = scenario start) of a match.
+    std::uint32_t SeedFor(std::uint32_t matchSeed, std::uint32_t index);
+    inline constexpr std::string_view MatchScenarioPrefix = "AimMod Match - ";
     // A scenario name usable as "<Scenarios>\\<name>.sce": no path separators,
     // reserved characters, dot segments or trailing dots/spaces.
     bool IsScenarioFileName(std::string_view name);

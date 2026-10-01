@@ -79,7 +79,7 @@ namespace aimmod
         error.sequence = c.sequence;
         for (const auto& [key, value] : fields)
             if (key != "seq" && key != "action" && key != "scenario" && key != "mode" && key != "timeScale" && key != "targetSize" && key != "targetSpeed" &&
-                key != "mapScale" && key != "weapon" && key != "width" && key != "height" && key != "out" && key != "view1" && key != "view2" &&
+                key != "mapScale" && key != "weapon" && key != "seed" && key != "width" && key != "height" && key != "out" && key != "view1" && key != "view2" &&
                 key != "view3" && key != "view4")
                 return fail("invalid-command", "Unknown field: " + key + ".");
         const std::string* action = get("action");
@@ -119,6 +119,17 @@ namespace aimmod
         {
             if (!SafeName(*weapon)) return fail("invalid-override", "Invalid weapon profile name.");
             c.weapon = *weapon;
+        }
+        if (const std::string* seed = get("seed"))
+        {
+            std::uint64_t value{};
+            auto r = std::from_chars(seed->data(), seed->data() + seed->size(), value);
+            if (c.action != GameCommand::Action::StartScenario || seed->empty() || r.ec != std::errc() || r.ptr != seed->data() + seed->size() || value > 0xFFFFFFFFull)
+                return fail("invalid-seed", "A seed is a whole number from 0 to 4294967295 on start-scenario.");
+            // Never in ranked play: freeplay, or AimMod's own generated match scenarios.
+            if (c.mode == GameCommand::Mode::Challenge && !std::string_view(c.scenario).starts_with(MatchScenarioPrefix))
+                return fail("seed-not-allowed", "Seeds apply to freeplay or AimMod match scenarios only.");
+            c.seed = static_cast<std::uint32_t>(value);
         }
         if (c.action == GameCommand::Action::CaptureThumbnail)
         {
@@ -175,6 +186,15 @@ namespace aimmod
         for (char c : name)
             if (c == '\\' || c == '/' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|') return false;
         return true;
+    }
+
+    std::uint32_t SeedFor(std::uint32_t matchSeed, std::uint32_t index)
+    {
+        // splitmix64 of (seed, index): independent, reproducible per event.
+        std::uint64_t z = (static_cast<std::uint64_t>(matchSeed) << 32 | index) + 0x9E3779B97F4A7C15ull;
+        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+        z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+        return static_cast<std::uint32_t>(z ^ (z >> 31));
     }
 
     bool IsThumbnailFileName(std::string_view name)

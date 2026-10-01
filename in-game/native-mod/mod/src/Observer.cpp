@@ -215,10 +215,26 @@ namespace aimmod
         if (UFunction* kill = game::FindFunction(STR("/Script/GameSkillsTrainer.ScenarioManager:NotifyPlayerKillCredit")))
         {
             auto ids = UObjectGlobals::RegisterHook(
-                kill, [](UnrealScriptFunctionCallableContext&, void*) {},
+                kill,
+                [](UnrealScriptFunctionCallableContext&, void* data) {
+                    // Before the game handles the kill (and respawns): match seeding.
+                    auto* self = static_cast<Observer*>(data);
+                    if (self->OnGameThread()) self->m_control.OnSpawnEvent();
+                },
                 [](UnrealScriptFunctionCallableContext&, void* data) { static_cast<Observer*>(data)->m_killCredits.fetch_add(1, std::memory_order_relaxed); },
                 this);
             m_hooks.emplace_back(kill, ids);
+        }
+        if (UFunction* death = game::FindFunction(STR("/Script/GameSkillsTrainer.ScenarioManager:NotifyCharacterDeath")))
+        {
+            auto ids = UObjectGlobals::RegisterHook(
+                death,
+                [](UnrealScriptFunctionCallableContext&, void* data) {
+                    auto* self = static_cast<Observer*>(data);
+                    if (self->OnGameThread()) self->m_control.OnSpawnEvent();
+                },
+                [](UnrealScriptFunctionCallableContext&, void*) {}, this);
+            m_hooks.emplace_back(death, ids);
         }
 
         // Replay target markers: shooter and recipient of a registered hit.
@@ -909,6 +925,7 @@ namespace aimmod
             {
             case LifecycleEvent::Kind::Started:
             {
+                m_control.OnAttemptStarted(e.scenario);
                 ++m_attempts;
                 m_stats = {};
                 m_gameStats.reset();
