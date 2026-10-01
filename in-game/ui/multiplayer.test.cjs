@@ -184,6 +184,30 @@ test('map cards show a thumbnail, the game badge and movement; filters narrow by
   s.button('My scenarios').onclick();assert.deepEqual(cardNames(s),['Synthetic Scenario']);
   s.button('All').onclick();s.button('CS:S').onclick();assert.deepEqual(cardNames(s),['Aim Map']);
 });
+test('a port shows its 16:9 Workshop thumbnail when it has one',()=>{
+  const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view({lobby:lobby(),picks:{favourites:[],recent:[]}}));
+  s.button('Edit').onclick();
+  s.requests.find(r=>r.url==='/private/multiplayer?part=library').finish(200,{available:true,presets:[],maps:[],weapons:[],characters:[],scenarios:[
+    {name:'AimMod - Dust2 (CSGO) - CS Movement',map:'aimmod_de_dust2',mapSource:'ported',timeLimit:600,ported:true}]});
+  s.all().find(e=>e.tag==='button'&&e.className==='mp-pick').onclick();
+  s.requests.find(r=>r.url==='/private/multiplayer?part=maps').finish(200,{available:true,canInstall:true,canLoad:true,ports:[
+    {key:'aaaaaaaaaaaa',scenario:'AimMod - Dust2 (CSGO) - CS Movement',display:'Dust2',game:'CSGO',variant:'CS Movement',bytes:71000000,shift:'walk',mapScale:4,workshop:true,installed:true,preview:true,thumb:true}]});
+  s.api.resize();
+  assert.ok(cardOf(s,'Dust2').getElementsByTagName('img')[0].src.endsWith('/multiplayer?part=thumb&key=aaaaaaaaaaaa'),'the thumbnail wins over the top-down preview');
+});
+test('the library verdict per mode greys maps that cannot host CS',()=>{
+  const l=Object.assign(lobby(),{settings:Object.assign({},lobby().settings,{mode:'cs'})});
+  const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view({lobby:l,picks:{favourites:[],recent:[]}}));
+  s.button('Edit').onclick();
+  s.requests.find(r=>r.url==='/private/multiplayer?part=library').finish(200,{available:true,presets:[],maps:[],weapons:[],characters:[],scenarios:[
+    {name:'Synthetic Scenario',map:'synthetic_map',mapSource:'game',timeLimit:60,modes:{cs:{ok:false,reason:'No CS map data'}}},
+    {name:'AimMod - Dust2 (CSGO) - CS Movement',map:'aimmod_de_dust2',mapSource:'ported',timeLimit:600,ported:true,modes:{cs:{ok:true,reason:null}}}]});
+  s.all().find(e=>e.tag==='button'&&e.className==='mp-pick').onclick();
+  s.requests.find(r=>r.url==='/private/multiplayer?part=maps').finish(200,{available:true,canInstall:true,canLoad:true,ports:[]});
+  s.api.resize();
+  assert.ok(!cardNames(s).includes('Synthetic Scenario')&&s.text().includes('1 map doesn’t fit'),'hidden by Fits CS');
+  s.button('Show them').onclick();assert.ok(s.text().includes('No CS map data'),'with the library reason');
+});
 test('maps that do not fit the mode are hidden by default, or greyed with the reason',()=>{
   const s=openSelect({eligibility:{'AimMod - Aim Map (CSS) - CS Movement':{ok:false,reason:'Needs spawns for 6'},'Synthetic Scenario':{ok:false,reason:'No bomb sites'},'AimMod - Dust2 (CSGO) - CS Movement':{ok:true,players:'2 to 10 players'}}});
   assert.ok(!cardNames(s).includes('Aim Map')&&!cardNames(s).includes('Synthetic Scenario'),'hidden while Fits is on');

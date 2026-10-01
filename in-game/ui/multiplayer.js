@@ -1253,9 +1253,16 @@
   function gameLabel(g){return GAME_LABELS[g]||safe(g,'');}
   function openMapSelect(){picker='scenario';pickerQuery='';drafts.mapsel='';focused='mapsel';mapSel.focus=0;mapSel.key=null;loadLibrary();loadMaps();render();}
   function closeMapSelect(){picker=null;focused=null;render();}
-  // Per-mode fit for each scenario, from the lobby view (lobby.eligibility[name] = {ok, reason,
-  // players}); until the service sends it every map fits.
-  function mapFit(lobby,name){var e=lobby&&lobby.eligibility,r=e&&e[name];if(!r)return {ok:true,reason:null,players:null};return {ok:r.ok!==false,reason:r.ok===false?safe(r.reason,'Doesn’t fit this mode'):null,players:r.players?safe(r.players,''):null};}
+  // Per-mode fit for each scenario: the library's own verdict (scenarios[].modes[mode] = {ok, reason},
+  // fetched once), else the lobby's (lobby.eligibility[name] = {ok, reason, players}, CS only).
+  // A mode or scenario with neither fits.
+  function mapFit(lobby,name){
+    var mode=lobby&&lobby.settings&&lobby.settings.mode,own=null,list=(library&&library.scenarios)||[];
+    for(var i=0;i<list.length;i++)if(list[i].name===name){own=list[i].modes&&list[i].modes[mode];break;}
+    var e=lobby&&lobby.eligibility,r=e&&e[name],v=own||r;
+    if(!v)return {ok:true,reason:null,players:r&&r.players?safe(r.players,''):null};
+    return {ok:v.ok!==false,reason:v.ok===false?safe(v.reason,'Doesn’t fit this mode'):null,players:r&&r.players?safe(r.players,''):null};
+  }
   function mapEntries(){
     var ports=(maps&&maps.ports)||[],byScenario={},seen={},out=[];
     ports.forEach(function(p){byScenario[p.scenario]=p;});
@@ -1269,7 +1276,8 @@
   function mapMovement(x){return x.port&&x.port.variant?safe(x.port.variant,''):'KovaaK’s movement';}
   function mapThumb(x,big){
     var box=node('div','mp-ms-thumb'+(big?' big':''));
-    if(x.port&&x.port.preview){var img=node('img','mp-ms-img');img.setAttribute('alt','');img.draggable=false;img.src=path()+'/multiplayer?part=preview&key='+encodeURIComponent(x.port.key);box.appendChild(img);return box;}
+    // The port's 16:9 Workshop thumbnail, else its top-down preview, both cover-cropped to fill the card.
+    if(x.port&&(x.port.thumb||x.port.preview)){var img=node('img','mp-ms-img');img.setAttribute('alt','');img.draggable=false;img.src=path()+'/multiplayer?part='+(x.port.thumb?'thumb':'preview')+'&key='+encodeURIComponent(x.port.key);box.appendChild(img);return box;}
     // No picture: a tile in a colour of its own, with the map's initials.
     var tones=[['#173b2f','#27e4a1'],['#11252f','#66ccff'],['#2a2114','#f0b45a'],['#2a1820','#ff8fa3'],['#1f1c33','#a99cff'],['#1c2a14','#b4e36a']];
     var h=0,t=mapTitle(x);for(var i=0;i<t.length;i++)h=(h*31+t.charCodeAt(i))%9973;var tone=tones[h%tones.length];

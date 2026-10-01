@@ -433,9 +433,9 @@
 .mp-ms-card.selected{border-color:#27e4a1;background:#173b2f}
 .mp-ms-card.unfit,.mp-ms-card.missing{opacity:.6}
 .mp-ms-card.unfit .mp-ms-why{color:#f0b45a}
-.mp-ms-thumb{display:block;height:96px;background:#101916;overflow:hidden}
-.mp-ms-thumb.big{height:170px}
-.mp-ms-img,.mp-ms-gen{display:block;width:100%;height:100%;object-fit:cover}
+/* 16:9, the shape of the map port's Workshop thumbnail, so it shows whole (its name included). */
+.mp-ms-thumb{display:block;position:relative;height:0;padding-top:56.25%;background:#101916;overflow:hidden}
+.mp-ms-img,.mp-ms-gen{display:block;position:absolute;left:0;top:0;width:100%;height:100%;object-fit:cover}
 .mp-ms-info{padding:8px 10px 9px}
 .mp-ms-name{display:flex;flex-direction:row;align-items:center}
 .mp-ms-name strong{flex:1;min-width:0;font-size:14px;font-weight:600;color:#eef5f1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -456,5 +456,5 @@
 .mp-ms-fact{width:50%;padding:0 8px 8px 0}.mp-ms-fact span{display:block;font-size:11px;color:#7f968a}.mp-ms-fact strong{display:block;font-size:13px;font-weight:600;color:#dcebe3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mp-ms-warn{margin:6px 0 0;font-size:12px;line-height:1.45;color:#f0b45a}.mp-ms-ok{margin:6px 0 0;font-size:12px;color:#27e4a1}.mp-ms-note{margin:6px 0 0;font-size:12px;line-height:1.45;color:#a7bab0}
 .mp-ms-dbody .actions{margin-top:12px}
-@media(max-width:1500px){.mp-ms-cell{width:33.333%}.mp-ms-details{width:300px}.mp-ms-thumb{height:84px}.mp-ms-thumb.big{height:150px}}
-@media(max-height:760px){.mp-ms-thumb{height:72px}.mp-ms-thumb.big{height:130px}.mp-ms-info{padding:6px 8px 7px}}
+@media(max-width:1500px){.mp-ms-cell{width:33.333%}.mp-ms-details{width:300px}}
+@media(max-height:760px){.mp-ms-info{padding:6px 8px 7px}}
