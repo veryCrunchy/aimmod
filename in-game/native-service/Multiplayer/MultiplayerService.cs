@@ -2080,6 +2080,7 @@ sealed partial class MultiplayerService : IDisposable
             "maps" => Results.Json(MapsView(), Protocol.Json),
             "history" => Results.Json(HistoryView(), Protocol.Json),
             "cosmetics" => Results.Json(CosmeticsView(), Protocol.Json),
+            "looks" => Results.Json(LooksView(), Protocol.Json),
             "board" => Results.Json(new { version = 1, board = BoardView() }, Protocol.Json),
             "preview" => MapPreview(key) is { } image ? Results.File(image, MapPorts.ContentType(image)) : Results.NotFound(),
             _ => Results.Json(View(), Protocol.Json),
