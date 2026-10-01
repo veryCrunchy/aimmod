@@ -816,7 +816,7 @@ sealed partial class MultiplayerService : IDisposable
         // Someone asks to watch you (privacy "ask").
         if (watchAsks.FirstOrDefault(a => now - a.At < 60_000) is { Peer: not null } ask)
             return new GameNotice("ask-" + ask.Peer + "-" + ask.At, "invite", ask.Name + " wants to watch you", "They would see your view from their game.", null, null, quiet ? "none" : "popup")
-                { Actions = [new("Allow", "spectate-allow", ask.Peer), new("Deny", "spectate-deny", ask.Peer)] };
+                { Eyebrow = "AimMod · Spectate", Actions = [new("Allow", "spectate-allow", ask.Peer), new("Deny", "spectate-deny", ask.Peer)] };
         // Tournament calls (match ready, check-in, your ban, confirm the result), unless a game is running.
         if (!quiet && Current is null or { Match: null or { Phase: MatchPhases.Final } } && Tournaments?.Notice() is { } tournamentNotice) return tournamentNotice;
         if (Current is not { } lobby) return flash is { } f && now < f.Until ? f.Notice : null;
@@ -834,7 +834,7 @@ sealed partial class MultiplayerService : IDisposable
                 var host = lobby.HostId == SelfId;
                 return new GameNotice("lf-" + loading.Id + "-" + loading.LoadAttempt, "invite", "Couldn’t load the match (" + ready + "/" + present.Length + ")",
                     why + (host ? "" : " Waiting for the host to retry or end the match."), null, null, quiet ? "none" : "popup")
-                    { Actions = host ? [new("Retry", "retry-load", loading.Id), new("Abort", "end", loading.Id)] : null };
+                    { Eyebrow = "AimMod · Match", Actions = host ? [new("Retry", "retry-load", loading.Id), new("Abort", "end", loading.Id)] : null };
             }
             var mine = plan is { } mp && mp.Key == PlanKey(loading) ? mp.Message : "Loading…";
             return new GameNotice("ld-" + loading.Id + "-" + loading.LoadAttempt, "countdown", "Waiting for everyone to load (" + ready + "/" + present.Length + ")",
