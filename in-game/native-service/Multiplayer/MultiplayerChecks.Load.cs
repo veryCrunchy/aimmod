@@ -57,10 +57,10 @@ static partial class MultiplayerChecks
         GameScene Scene(string scenario = sc, string map = "aim_map", double? scale = 3.8, bool loading = false) => new(true, scenario, map, scale, false, false, loading, false);
         Check(MatchScenario.SameMap("aim_map", "aim_map.map") && MatchScenario.SameMap("AIM_MAP.map", "aim_map.map") && !MatchScenario.SameMap("kovaim1.map", "aim_map.map") && !MatchScenario.SameMap("", "aim_map.map"),
             "Map names match with or without the extension, ignoring case");
-        Check(MultiplayerService.SceneProblem(Scene(), sc, expected) is null && MultiplayerService.SceneProblem(Scene(loading: true), sc, expected) == "loading"
-            && MultiplayerService.SceneProblem(null, sc, expected) is not null && MultiplayerService.SceneProblem(Scene(scenario: "Other"), sc, expected) is not null,
+        Check(ScenarioLoader.SceneProblem(Scene(), sc, expected) is null && ScenarioLoader.SceneProblem(Scene(loading: true), sc, expected) == "loading"
+            && ScenarioLoader.SceneProblem(null, sc, expected) is not null && ScenarioLoader.SceneProblem(Scene(scenario: "Other"), sc, expected) is not null,
             "The scene counts only when it shows the round's scenario, not loading");
-        Check(MultiplayerService.SceneProblem(Scene(map: "kovaim1.map"), sc, expected)!.Contains("kovaim1.map", StringComparison.Ordinal) && MultiplayerService.SceneProblem(Scene(scale: 1), sc, expected)!.Contains("scale", StringComparison.Ordinal),
+        Check(ScenarioLoader.SceneProblem(Scene(map: "kovaim1.map"), sc, expected)!.Contains("kovaim1.map", StringComparison.Ordinal) && ScenarioLoader.SceneProblem(Scene(scale: 1), sc, expected)!.Contains("scale", StringComparison.Ordinal),
             "The live bug's state (right scenario, the previous map) is a load problem, and so is the wrong scale");
 
         // Host: no start until everyone is loaded; a failure waits for retry or abort.

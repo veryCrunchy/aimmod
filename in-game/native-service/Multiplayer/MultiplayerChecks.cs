@@ -1161,6 +1161,12 @@ static partial class MultiplayerChecks
         Check(view.GetProperty("source").GetString() == "simulation" && dust.GetProperty("preview").GetBoolean() && !dust.ToString().Contains(root, StringComparison.OrdinalIgnoreCase), "The Map Library view never shows local paths");
         Check(service.MapPreview(dust.GetProperty("key").GetString())!.EndsWith(".preview.png", StringComparison.Ordinal) && service.MapPreview("../../x") is null && service.MapPreview("000000000000") is null, "Only previews the library found are served");
         Check(service.Act("map-load", J(new { key = dust.GetProperty("key").GetString() })).Ok, "Installed ports load through AimModCore");
+        // A replay of a port this machine lacks: the same Workshop install, found by the scenario name.
+        const string inferno = "AimMod - Inferno (CSGO) - CS Movement";
+        Check(service.SourceOf(inferno) is { Installed: false, Downloadable: true, Download: null } && service.SourceOf("Synthetic Missing") is { Installed: false, Downloadable: false },
+            "A missing scenario can be downloaded when a Workshop map port provides it");
+        Check(service.DownloadScenario(inferno).Ok && service.SourceOf(inferno).Download == "queued" && !service.DownloadScenario("Synthetic Missing").Ok,
+            "Downloading a replay's scenario is the Map Library's Workshop install");
         var mirage = Maps().GetProperty("ports").EnumerateArray().First(p => p.GetProperty("display").GetString() == "Mirage");
         Check(!mirage.GetProperty("installed").GetBoolean() && service.Act("map-install", J(new { key = mirage.GetProperty("key").GetString() })).Ok, "A simulated Workshop install starts");
         for (var i = 0; i < 10; i++) { now += 100; service.Tick(); }

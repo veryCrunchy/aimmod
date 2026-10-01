@@ -218,9 +218,20 @@ the world it was recorded in, from the pause menu; a start that cannot be
 honoured yet stays pending with a reason and message
 (`GET /native-replay` -> `start`) and begins by itself once the game is
 ready (cancel with `{"action":"cancel"}`; 10 minute limit). When the
-reason is another scenario and AimModCore advertises `load`, the service
-asks it to load the replay's scenario (game command below) and shows the
-progress, or the refusal, in the same message.
+reason is another scenario (or the replay's on another map) and AimModCore
+advertises `load`, the service loads the replay's scenario itself through
+`ScenarioLoader`, the same load path as the multiplayer load gate:
+`load-scenario` (never a start, so never a challenge run; stock and Workshop
+scenarios rely on KovaaK's normal load), its answer, then `core-scene.json`
+showing the scenario with the scenario file's `MapName` at its `MapScale`
+(the replay's recorded map when the file isn't in the library), with
+ensure-map for AimMod's scenarios, one reload and a 30 s limit. The message
+is short (`Loading "<scenario>"…`). Failures are typed: not installed
+(`scenario-missing`; `start.download` `{"workshop":true,"state","percent"}`
+when a Workshop map port provides it, and `{"action":"download"}` starts the
+Map Library's install; the load runs again once it's installed), a running
+challenge (`challenge-active`; loads once it ends), and `load-failed` with the
+reason. Each play or Retry is a new attempt.
 
 Measured on live test #1 (60 s tracking run, 378 fps, 43821 inputs):
 format 1 4.04 MB/min, format 2 54.6 KB/min (74x smaller; XPRESS 61.5,

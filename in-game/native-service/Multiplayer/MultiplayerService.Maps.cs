@@ -2,6 +2,10 @@ using System.Text.Json;
 
 namespace AimMod.InGame.Multiplayer;
 
+// Where a scenario this machine may lack comes from: Installed (in the library now),
+// Downloadable (a Workshop map port provides it), and that download's state and percent.
+sealed record ScenarioSource(bool Installed, bool Downloadable, string? Download, int? Percent);
+
 // Map Library: AimMod map ports this machine has, plus the ones the Steam
 // Workshop lists, with install and update through the bridge (ugc.download).
 // Nothing here writes to the game folder; Steam installs Workshop items itself.
@@ -23,13 +27,18 @@ sealed partial class MultiplayerService
     IReadOnlyList<WorkshopItem> Catalog() => transport.Available ? transport.WorkshopItems : Simulation is not null ? SimulatedCatalog : [];
     IReadOnlyList<MapPort> Ports() => library.Available || Catalog().Count > 0 ? MapPorts.List(library, Catalog()) : [];
 
+    // Search by title (KovaaK's uploads carry no tags); retry sooner while nothing came back.
+    void QueryPorts()
+    {
+        var now = clock();
+        if (transport.Available && now - mapsQueriedAt > (transport.WorkshopItems.Count == 0 ? 30_000 : 300_000) && transport.QueryWorkshop(MapPorts.TitlePrefix)) mapsQueriedAt = now;
+    }
+
     public object MapsView()
     {
         lock (gate)
         {
-            var now = clock();
-            // Search by title (KovaaK's uploads carry no tags); retry sooner while nothing came back.
-            if (transport.Available && now - mapsQueriedAt > (transport.WorkshopItems.Count == 0 ? 30_000 : 300_000) && transport.QueryWorkshop(MapPorts.TitlePrefix)) mapsQueriedAt = now;
+            QueryPorts();
             var lobby = Current;
             return new
             {
@@ -81,6 +90,30 @@ sealed partial class MultiplayerService
                 return game.Load(port.Scenario) is null ? LobbyResult.Fail("game", "AimMod can’t load scenarios in this game build. Open “" + port.Scenario + "” from KovaaK’s scenario list.") : LobbyResult.Success;
             default:
                 return LobbyResult.Fail("invalid", "Unknown map action.");
+        }
+    }
+
+    // A scenario someone else played (a replay's): whether this machine has it, and the
+    // Workshop map port that provides it, with its download, when the Workshop lists one.
+    public ScenarioSource SourceOf(string scenario)
+    {
+        lock (gate)
+        {
+            QueryPorts();
+            var installed = library.PathOf("scenario", scenario) is not null;
+            var port = Ports().FirstOrDefault(p => p.WorkshopId is not null && string.Equals(p.Scenario, scenario, StringComparison.OrdinalIgnoreCase));
+            var download = port?.WorkshopId is { } item && mapDownloads.TryGetValue(item, out var d) ? d : null;
+            return new(installed, port is not null && (!port.Installed || port.NeedsUpdate), download?.State, download is { Total: > 0 } p ? (int)Math.Min(100, p.Done * 100 / p.Total) : null);
+        }
+    }
+
+    // Download that scenario's map port from the Workshop: the Map Library's own install.
+    public LobbyResult DownloadScenario(string scenario)
+    {
+        lock (gate)
+        {
+            var port = Ports().FirstOrDefault(p => p.WorkshopId is not null && string.Equals(p.Scenario, scenario, StringComparison.OrdinalIgnoreCase));
+            return port is null ? LobbyResult.Fail("invalid", "“" + scenario + "” isn’t on the Steam Workshop as an AimMod map.") : MapAction("map-install", port.Key);
         }
     }
 
