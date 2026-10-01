@@ -19,7 +19,7 @@ sealed record TMatch(string Id, string Label, string Side, int Round, int Positi
 sealed record TPool(string Name, int TimeLimit);
 sealed record TRuleset(string GameMode, int BestOf, IReadOnlyList<TPool> Pool, int Countdown, bool Spectators, bool RequireReplays);
 sealed record MyMatch(string TournamentId, string TournamentName, TMatch Match, TEntrant Self, TEntrant Opponent, TRuleset Ruleset,
-    bool Host, string OpponentSteamId, string LobbyToken, bool Scheduled);
+    bool Host, string OpponentSteamId, string LobbyToken, bool Scheduled, string MatchToken = "");
 sealed record CheckInDue(string TournamentId, string Name, string ClosesAt);
 sealed record TournamentFeed(IReadOnlyList<MyMatch> Matches, IReadOnlyList<CheckInDue> CheckIn);
 sealed record TournamentSummary(string Id, string Slug, string Name, string Status, string Format, int Entrants, int MaxEntrants, string StartsAt, bool Entered);
@@ -102,7 +102,7 @@ static class TournamentJson
             var self = Entrant(Obj(m, "self")); var opp = Entrant(Obj(m, "opponent"));
             if (self is null || opp is null || Text(m, "tournamentId").Length == 0) continue;
             matches.Add(new MyMatch(Text(m, "tournamentId"), Text(m, "tournamentName"), Match(Obj(m, "match")), self, opp, Ruleset(Obj(m, "ruleset")),
-                Flag(m, "host"), Text(m, "opponentSteamId"), Text(m, "lobbyToken"), Text(m, "scheduling") == "SCHEDULING_MODE_SCHEDULED"));
+                Flag(m, "host"), Text(m, "opponentSteamId"), Text(m, "lobbyToken"), Text(m, "scheduling") == "SCHEDULING_MODE_SCHEDULED", Text(m, "matchToken")));
         }
         var due = Arr(root, "checkIn").Select(c => Obj(c, "tournament")).Where(t => Text(t, "id").Length > 0)
             .Select(t => new CheckInDue(Text(t, "id"), Text(t, "name"), Text(t, "checkInClosesAt"))).ToArray();

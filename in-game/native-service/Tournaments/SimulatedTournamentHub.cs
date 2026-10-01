@@ -130,7 +130,7 @@ sealed class SimulatedTournamentHub : ITournamentHub
             {
                 var opp = m.A == Self ? m.B : m.A;
                 list.Add(new MyMatch(Id, "Simulated Cup", View(m), Ent(Self), Ent(opp), Ruleset, m.Host == "" ? Ent(Self).Seed < Ent(opp).Seed : m.Host == Self,
-                    "sim-" + Ent(opp).Name.ToLowerInvariant(), "", false));
+                    "sim-" + Ent(opp).Name.ToLowerInvariant(), "", false, "sim-token-" + m.Id));
             }
             var due = CheckInOpen && !matches[0].CheckedIn ? new[] { new CheckInDue(Id, "Simulated Cup", "") } : [];
             return Task.FromResult(new TournamentFeed(list, due));

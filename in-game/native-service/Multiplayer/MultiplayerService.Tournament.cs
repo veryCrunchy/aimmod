@@ -6,8 +6,9 @@ namespace AimMod.InGame.Multiplayer;
 // moves on) a locked lobby for the game; the other player's client joins it.
 // The tournament service (Tournaments/) talks to AimMod Hub; this side only
 // runs the lobby.
+// JoinToken: the Hub's per-match secret; OpponentPeer: the opponent's SteamID64.
 sealed record TournamentGameSpec(string TournamentId, string MatchId, string Label, int Game, string Scenario, int TimeLimit, long Seed,
-    int Countdown, bool Spectators, string OpponentPeer, string OpponentName, string? TournamentName = null);
+    int Countdown, bool Spectators, string OpponentPeer, string OpponentName, string? TournamentName = null, string? JoinToken = null);
 
 // One player of the tournament lobby, for live state and the host overview.
 sealed record TournamentLobbyPlayer(string MemberId, string Name, bool Self, double? Score, double? Accuracy, double? Remaining,
@@ -46,6 +47,13 @@ sealed partial class MultiplayerService
                 TimeLimit: spec.TimeLimit is >= 10 and <= 600 ? spec.TimeLimit : null, Privacy: LobbyPrivacy.Invite, Countdown: Math.Clamp(spec.Countdown, 3, 10),
                 AutoStart: true, Voting: false,
                 Tournament: new TournamentLock(spec.TournamentId, spec.MatchId, LobbyRules.CleanName(spec.Label, "Tournament match"), spec.Game, spec.Seed, players, spec.TournamentName));
+            var simulatedOpponent = Simulation is not null && (spec.OpponentPeer.StartsWith("sim-", StringComparison.Ordinal) || !transport.Available);
+            if (core is null && !simulatedOpponent && transport.Available)
+            {
+                if (!IMultiplayerTransport.ValidTournamentToken(spec.JoinToken)) return LobbyResult.Fail("token", "AimMod Hub didn’t send this match’s lobby token. Refresh and try again.");
+                if (spec.OpponentPeer.Length is 0 or > 20 || !spec.OpponentPeer.All(char.IsAsciiDigit)) return LobbyResult.Fail("steam", LobbyRules.CleanName(spec.OpponentName, "Your opponent") + " hasn’t linked Steam on AimMod Hub, so they can’t join a lobby yet.");
+                transport.PrepareTournament(spec.JoinToken, spec.OpponentPeer);
+            }
             if (core is null)
             {
                 selfName = LocalName();
@@ -54,7 +62,7 @@ sealed partial class MultiplayerService
                 Reset();
                 ReportContent(force: true);
                 transport.Advertise(core.Snapshot());
-                notice = ("info", "Tournament lobby ready. " + LobbyRules.CleanName(spec.OpponentName, "Your opponent") + " is invited.", clock());
+                notice = ("info", "Tournament lobby ready. " + LobbyRules.CleanName(spec.OpponentName, "Your opponent") + " joins automatically.", clock());
                 InviteOpponent(spec);
                 return LobbyResult.Success;
             }
@@ -64,7 +72,8 @@ sealed partial class MultiplayerService
         }
     }
 
-    // Steam invite when they are friends; the Hub hands everyone else the lobby token.
+    // No Steam invite: the opponent's client joins the invisible tournament lobby by
+    // the id the Hub relays, with the match token (friends or not).
     // In the developer simulation a simulated opponent joins instead.
     void InviteOpponent(TournamentGameSpec spec)
     {
@@ -80,13 +89,11 @@ sealed partial class MultiplayerService
                 core.LockTournament(core.Settings with { Tournament = t with { Players = [SelfId, bot.Id] } });
             if (bot is not null && core.Members.FirstOrDefault(m => m.Id == bot.Id) is { Role: MemberRoles.Spectator })
                 core.Apply(bot.Id, "role", JsonSerializer.SerializeToElement(new { spectator = false }), library);
-            return;
         }
-        if (Friends().Any(f => f.Id == spec.OpponentPeer)) transport.InviteFriend(spec.OpponentPeer, snapshot);
     }
 
-    // Opponent: join the host's lobby from the token the Hub shared.
-    public LobbyResult JoinTournamentLobby(string token, string matchId)
+    // Opponent: join the host's tournament lobby by the id the Hub relayed, with the match token.
+    public LobbyResult JoinTournamentLobby(string lobbyId, string matchId, string? joinToken = null)
     {
         lock (gate)
         {
@@ -94,7 +101,10 @@ sealed partial class MultiplayerService
             if (joinPendingSince is not null || (hostPeer is not null && mirror is null)) return LobbyResult.Success;
             if (Current is { Match: { Phase: not MatchPhases.Final } }) return LobbyResult.Fail("in-match", "Finish your current match first.");
             if (Current is not null) Leave("left");
-            return JoinBy(token, invite: true);
+            selfName = LocalName();
+            if (joinToken is not null && transport.BeginTournamentJoin(lobbyId, joinToken)) { joinPendingSince = clock(); notice = null; return LobbyResult.Success; }
+            if (!transport.Available && Simulation is not null) return JoinBy(lobbyId, invite: true);
+            return LobbyResult.Fail("join", "Couldn’t join the tournament lobby. AimMod’s Steam connection may not be ready.");
         }
     }
 
