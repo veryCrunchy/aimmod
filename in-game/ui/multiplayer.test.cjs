@@ -121,7 +121,7 @@ test('typing in a lobby search keeps focus and text when the view updates (keys 
   const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view({lobby:lobby()}));
   s.button('Edit').onclick();s.requests.find(r=>r.url==='/private/multiplayer?part=library').finish(200,{available:true,scenarios:[{name:'Synthetic Scenario',map:'synthetic_map',mapSource:'game',timeLimit:60},{name:'Other Scenario',map:'m',mapSource:'game',timeLimit:60}],maps:[],weapons:[],characters:[],presets:[]});
   s.all().find(e=>e.tag==='button'&&e.className==='mp-pick').onclick();
-  let search=s.all().find(e=>e.tag==='input'&&e.attrs['data-draft']==='picker');assert.ok(search,'picker search is a tracked input');
+  let search=s.all().find(e=>e.tag==='input'&&e.attrs['data-draft']==='mapsel');assert.ok(search,'map search is a tracked input');
   search.onfocus();search.value='wasd';search.selectionStart=4;search.oninput();
 
   // A ping update re-renders the page: deferred while typing, then focus and text come back.
@@ -129,7 +129,7 @@ test('typing in a lobby search keeps focus and text when the view updates (keys 
 
   const before=s.requests.length;
   s.api.resize();
-  const again=s.all().find(e=>e.tag==='input'&&e.attrs['data-draft']==='picker');
+  const again=s.all().find(e=>e.tag==='input'&&e.attrs['data-draft']==='mapsel');
   assert.ok(again,'the search survives a re-render');assert.equal(again.value,'wasd','typed text is kept');assert.equal(s.focused(),again,'focus returns to the rebuilt input');assert.equal(again.caret,4,'and the caret too');
   assert.ok(s.text().includes('Other Scenario')===false,'the list stays filtered by the typed text');
   assert.equal(before,s.requests.length);
@@ -145,14 +145,72 @@ test('spectating a friend shows their stats with stop and switch; being watched 
   s.button('Remove').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'spectator-remove',id:'w1'});
   s.button('Stop spectating').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'watch-stop'});
 });
-test('scenario pickers put favourites and recent scenarios first, with a favourite toggle',()=>{
+test('the map select puts favourites and recently played first, with a favourite toggle in the details',()=>{
   const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view({lobby:lobby(),picks:{favourites:['Other Scenario'],recent:['Synthetic Scenario','Gone Scenario']}}));
   s.button('Edit').onclick();s.requests.find(r=>r.url==='/private/multiplayer?part=library').finish(200,{available:true,scenarios:[{name:'Synthetic Scenario',map:'synthetic_map',mapSource:'game',timeLimit:60},{name:'Other Scenario',map:'m',mapSource:'game',timeLimit:60}],maps:[],weapons:[],characters:[],presets:[]});
   s.all().find(e=>e.tag==='button'&&e.className==='mp-pick').onclick();
-  const groups=s.all().filter(e=>e.className==='mp-pick-group').map(e=>e.textContent);assert.deepEqual(groups,['Favourites','Recent','All scenarios']);
-  const names=s.all().filter(e=>e.className==='mp-pick-info').map(e=>e.children[0].textContent);assert.deepEqual(names.slice(0,2),['Other Scenario','Synthetic Scenario'],'favourite, then recent; missing names are skipped');
-  const stars=s.all().filter(e=>e.tag==='button'&&e.className.indexOf('mp-fav')>=0);assert.ok(stars.every(b=>b.parentNode.className==='actions'));
-  stars[0].onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'favourite',scenario:'Other Scenario',on:false});
+  const groups=s.all().filter(e=>e.className==='mp-ms-group').map(e=>e.textContent);assert.deepEqual(groups,['Favourites','Recently played','All maps']);
+  const names=cardNames(s);assert.deepEqual(names.slice(0,2),['Other Scenario','Synthetic Scenario'],'favourite, then recent; missing names are skipped');
+  const star=s.all().find(e=>e.tag==='button'&&e.className.indexOf('mp-fav')>=0);assert.equal(star.parentNode.className,'actions');
+  star.onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'favourite',scenario:'Other Scenario',on:false});
+});
+// Map select with ports and per-mode fit (lobby.eligibility). Synthetic data only.
+const cardNames=s=>s.all().filter(e=>e.tag==='button'&&/^mp-ms-card/.test(e.className)).map(e=>e.children[1].children[0].children[0].textContent);
+const cardOf=(s,name)=>s.all().find(e=>e.tag==='button'&&/^mp-ms-card/.test(e.className)&&e.children[1].children[0].children[0].textContent===name);
+function openSelect(extraLobby){
+  const l=Object.assign(lobby(),extraLobby||{});
+  const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view({lobby:l,picks:{favourites:[],recent:[]}}));
+  s.button('Edit').onclick();
+  s.requests.find(r=>r.url==='/private/multiplayer?part=library').finish(200,{available:true,presets:[],maps:[],weapons:[],characters:[],scenarios:[
+    {name:'Synthetic Scenario',map:'synthetic_map',mapSource:'game',timeLimit:60},
+    {name:'AimMod - Dust2 (CSGO) - CS Movement',map:'aimmod_de_dust2',mapSource:'ported',timeLimit:600,ported:true},
+    {name:'AimMod - Aim Map (CSS) - CS Movement',map:'aimmod_aim_map',mapSource:'ported',timeLimit:600,ported:true}]});
+  s.all().find(e=>e.tag==='button'&&e.className==='mp-pick').onclick();
+  s.requests.find(r=>r.url==='/private/multiplayer?part=maps').finish(200,{available:true,canInstall:true,canLoad:true,ports:[
+    {key:'aaaaaaaaaaaa',scenario:'AimMod - Dust2 (CSGO) - CS Movement',display:'Dust2',game:'CSGO',variant:'CS Movement',bytes:71000000,shift:'walk',mapScale:4,workshop:true,installed:true,preview:true},
+    {key:'bbbbbbbbbbbb',scenario:'AimMod - Aim Map (CSS) - CS Movement',display:'Aim Map',game:'CSS',variant:'CS Movement',bytes:9000000,shift:'walk',mapScale:4,workshop:false,installed:true,preview:false},
+    {key:'cccccccccccc',scenario:'AimMod - Mirage (CSGO) - CS Movement',display:'Mirage',game:'CSGO',variant:'CS Movement',bytes:61000000,shift:'walk',mapScale:4,workshop:true,installed:false,preview:false}]});
+  s.api.resize();
+  return s;
+}
+test('map cards show a thumbnail, the game badge and movement; filters narrow by source and game',()=>{
+  const s=openSelect();
+  assert.deepEqual(cardNames(s),['Synthetic Scenario','Dust2','Aim Map','Mirage']);
+  assert.ok(cardOf(s,'Dust2').getElementsByTagName('img')[0].src.endsWith('/multiplayer?part=preview&key=aaaaaaaaaaaa'),'port preview by key');
+  assert.equal(cardOf(s,'Aim Map').getElementsByTagName('canvas').length,1,'a generated tile without a preview');
+  assert.ok(s.text().includes('CS:GO')&&s.text().includes('CS:S')&&s.text().includes('CS Movement')&&s.text().includes('Not installed'));
+  s.button('AimMod ports').onclick();assert.deepEqual(cardNames(s),['Dust2','Aim Map','Mirage']);
+  s.button('Workshop').onclick();assert.deepEqual(cardNames(s),['Dust2','Mirage']);
+  s.button('My scenarios').onclick();assert.deepEqual(cardNames(s),['Synthetic Scenario']);
+  s.button('All').onclick();s.button('CS:S').onclick();assert.deepEqual(cardNames(s),['Aim Map']);
+});
+test('maps that do not fit the mode are hidden by default, or greyed with the reason',()=>{
+  const s=openSelect({eligibility:{'AimMod - Aim Map (CSS) - CS Movement':{ok:false,reason:'Needs spawns for 6'},'Synthetic Scenario':{ok:false,reason:'No bomb sites'},'AimMod - Dust2 (CSGO) - CS Movement':{ok:true,players:'2 to 10 players'}}});
+  assert.ok(!cardNames(s).includes('Aim Map')&&!cardNames(s).includes('Synthetic Scenario'),'hidden while Fits is on');
+  assert.ok(s.text().includes('2 maps don’t fit'));
+  s.button('Show them').onclick();
+  const unfit=cardOf(s,'Aim Map');assert.ok(/unfit/.test(unfit.className)&&s.text().includes('Needs spawns for 6')&&s.text().includes('No bomb sites'),'greyed with the reason');
+  assert.ok(s.text().includes('2 to 10 players'),'player-count fit on the card');
+  unfit.onclick();assert.ok(s.all().find(e=>e.tag==='button'&&e.textContent==='Use this map').disabled,'an unfit map cannot be picked');
+});
+test('keyboard: typing searches, arrows move, Enter picks, Escape closes; details pick and download',()=>{
+  const s=openSelect();
+  const search=()=>s.all().find(e=>e.tag==='input'&&e.attrs['data-draft']==='mapsel');
+  assert.equal(s.focused(),search(),'the search has focus, so typing goes straight to it');
+  for(const ch of 'wasd dust'){search().value+=ch;search().oninput();}
+  assert.deepEqual(cardNames(s),[],'every key reaches the search, WASD included');
+  search().value='dust';search().oninput();assert.deepEqual(cardNames(s),['Dust2']);
+  search().value='aim';search().oninput();assert.deepEqual(cardNames(s),['Aim Map'],'the AimMod port prefix never matches');
+  search().value='';search().oninput();
+  const key=k=>search().onkeydown({keyCode:k,preventDefault(){}});
+  key(39);assert.ok(/focus/.test(cardOf(s,'Dust2').className),'right arrow moves to the next card');
+  assert.ok(s.text().includes('71 MB')&&s.text().includes('Scale 4'),'details show size and scale');
+  key(13);assert.deepEqual(JSON.parse(s.last().body),{action:'settings',settings:{scenario:'AimMod - Dust2 (CSGO) - CS Movement'}},'Enter picks it');
+  const t=openSelect();
+  cardOf(t,'Mirage').onclick();t.button('Download').onclick();assert.deepEqual(JSON.parse(t.last().body),{action:'map-install',key:'cccccccccccc'},'download a missing Workshop port');
+  cardOf(t,'Aim Map').onclick();t.button('Use this map').onclick();assert.deepEqual(JSON.parse(t.last().body),{action:'settings',settings:{scenario:'AimMod - Aim Map (CSS) - CS Movement'}});
+  const u=openSelect();u.all().find(e=>e.tag==='input'&&e.attrs['data-draft']==='mapsel').onkeydown({keyCode:27,preventDefault(){}});
+  assert.ok(!u.all().some(e=>/^mp-ms-card/.test(e.className)),'Escape closes the map select');
 });
 test('match history shows opponents, scores and replay links, and rivals filter it',()=>{
   const st=(name,place,self,key)=>({name,place,best:900-place*100,wins:0,points:0,self,key,total:900-place*100});
