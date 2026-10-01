@@ -301,7 +301,7 @@ buildNav();if(el('nav-developer'))el('nav-developer').style.display='none';if(wi
 (function(){var h=el('history-search'),parent=h.parentNode,next=h.nextSibling,box=F.field(h,'Search scenarios','history-field');parent.insertBefore(box,next);var sc=el('scenario-search'),pp=sc.parentNode,nn=sc.nextSibling;pp.insertBefore(F.field(sc,'Find a scenario'),nn)})();
 // Settings scrolls its import card into view when it was opened from an "Import past runs" action.
 function openImport(){if(window.AimModSettings)AimModSettings.wantImport=true;change('settings')}
-window.AimModWorkspace={open:function(page){if(titles[page])change(page)},openRun:function(r){openRun(r)},openImport:openImport};
+window.AimModWorkspace={open:function(page){if(titles[page])change(page)},openRun:function(r){openRun(r)},openImport:openImport,openReplay:function(id){if(window.AimModReplayBrowser&&AimModReplayBrowser.openWhenLoaded)AimModReplayBrowser.openWhenLoaded(id);change('replays')},openScenario:function(name){if(typeof name!=='string'||!name)return;command('scenario\t'+escape(name));el('selector').textContent=name;change('trends')}};
 el('run-notes-toggle').onclick=function(){var c=el('coaching-cards'),open=c.style.display==='none';c.style.display=open?'block':'none';this.setAttribute('aria-expanded',String(open));this.textContent=(open?'Hide':'Show')+' notes on your latest run'};
 el('back-history').onclick=function(){change('history')};
 function openRun(r){change('run-details');AimModRunDetails.open(el('run-details-content'),r.Id,request,r)}

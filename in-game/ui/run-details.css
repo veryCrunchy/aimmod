@@ -35,3 +35,4 @@
 .run-pager{margin-top:6px}
 @media(max-width:1250px){.run-kpis>.metric{flex-basis:28%}}
 @media(max-width:1000px){.run-cell{padding:6px 8px;font-size:12px}.run-moments>.run-moment{width:98%}}
+.run-links{margin-top:10px}.run-links>.button{margin-bottom:0}

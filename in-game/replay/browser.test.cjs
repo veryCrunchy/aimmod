@@ -114,3 +114,29 @@ test('a replay still waiting to start is shown with its instructions and can be 
   assert.ok(s.all().some(n=>n.textContent==='Waiting to start: Synthetic run'));assert.ok(s.all().some(n=>/pause menu \(Esc\)/.test(n.textContent)));
   s.all().find(n=>n.tag==='button'&&n.textContent==='Show').onclick();assert.equal(s.native.length,1);assert.equal(s.native[0].id,'synthetic');
 });
+test('import lists files from the two known folders and imports one by name',()=>{
+  const s=setup();s.browser.enter();s.requests[0].finish(200,[]);
+  s.all().find(n=>n.tag==='button'&&n.textContent==='Import replays').onclick();assert.equal(s.requests[1].url,'/capability/replays/importable');
+  s.requests[1].finish(200,[{source:'downloads',name:'from a friend.amreplay',supported:true,inLibrary:false,id:'r1',scenario:'Synthetic scenario',recordedAt:'2026-01-01T12:00:00Z'},
+    {source:'exports',name:'mine.amreplay',supported:true,inLibrary:true,id:'r2',scenario:'Mine'},{source:'downloads',name:'old.amreplay',supported:false,inLibrary:false}]);
+  assert.ok(s.all().some(n=>n.textContent==='In your library'));assert.ok(s.all().some(n=>n.textContent==='Not a supported replay'));
+  assert.ok(s.all().some(n=>/^from a friend\.amreplay · Downloads/.test(n.textContent)));
+  const imports=s.all().filter(n=>n.tag==='button'&&n.textContent==='Import');assert.equal(imports.length,1);imports[0].onclick();
+  assert.equal(s.requests[2].method,'POST');assert.equal(s.requests[2].url,'/capability/replays/import-file');assert.deepEqual(JSON.parse(s.requests[2].body),{source:'downloads',name:'from a friend.amreplay'});
+  s.requests[2].finish(200,{id:'r1',scenario:'Synthetic scenario'});assert.equal(s.requests[3].url,'/capability/replays');
+  s.requests[3].finish(200,[{...row,id:'r1'}]);assert.ok(s.all().some(n=>n.textContent==='Imported Synthetic scenario. It is in your library now.'));
+});
+test('a failed import explains why and stays on the import list',()=>{
+  const s=setup();s.browser.enter();s.requests[0].finish(200,[row]);
+  s.all().find(n=>n.tag==='button'&&n.textContent==='Import replays').onclick();s.requests[1].finish(200,[{source:'downloads',name:'x.amreplay',supported:true,inLibrary:false,id:'x'}]);
+  s.all().find(n=>n.tag==='button'&&n.textContent==='Import').onclick();s.requests[2].finish(422,{error:'replay-exists'});
+  assert.equal(s.requests[3].url,'/capability/replays/importable');s.requests[3].finish(200,[]);
+  assert.ok(s.all().some(n=>n.textContent==='A different replay with the same id is already in your library.'));assert.ok(s.all().some(n=>n.textContent==='No replay files found'));
+});
+test('run analysis can open one replay once the library loads',()=>{
+  const s=setup();s.browser.openWhenLoaded('synthetic');s.browser.enter();s.requests[0].finish(200,[row]);
+  assert.equal(s.native.length,1);assert.equal(s.native[0].id,'synthetic');
+  const t=setup();t.browser.openWhenLoaded('gone');t.browser.enter();t.requests[0].finish(200,[row]);
+  assert.equal(t.native.length,0);assert.ok(t.all().some(n=>n.textContent==='That replay is no longer in your library.'));
+  const u=setup();u.browser.openWhenLoaded('../private');u.browser.enter();u.requests[0].finish(200,[row]);assert.equal(u.native.length,0);
+});

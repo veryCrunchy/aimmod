@@ -66,6 +66,11 @@
       add(item,node('p',F().percent(w.Accuracy)+' accuracy · '+n(w.Hits,0)+' of '+n(w.Fired,0)+' shots · '+n(w.ScorePerMinute,0)+' pace','run-moment-stats'))})}
   function render(){host.textContent='';var run=data.Run;var head=add(host,node('div',undefined,'run-header'));var identity=add(head,node('div',undefined,'run-identity'));add(identity,node('h2',run.Scenario||'Unknown scenario'));
     add(identity,node('p',[F().dateTime(run.Timestamp),F().known(run.Duration)?F().duration(run.Duration)+' run':''].filter(function(v){return v&&v!=='—'}).join(' · '),'run-muted'));
+    // Ways out: this run's replay, when it was recorded, and the scenario's statistics.
+    var W=global.AimModWorkspace,links=node('div',undefined,'actions run-links'),linkCount=0;
+    if(W&&W.openReplay&&typeof data.ReplayId==='string'&&data.ReplayId){add(links,button('Watch replay',function(){W.openReplay(data.ReplayId)},true));linkCount++}
+    if(W&&W.openScenario&&run.Scenario){add(links,button('Scenario statistics',function(){W.openScenario(run.Scenario)}));linkCount++}
+    if(linkCount)add(identity,links);
     var score=add(head,node('div',undefined,'run-score'));add(score,node('span','Score','metric-label'));add(score,node('strong',n(run.Score)));
     if(data.MissingTelemetry)add(host,node('p','This score is saved in your history. Detailed telemetry was not recorded for this run.','notice run-notice'));
     var tabs=add(host,node('div',undefined,'segmented run-tabbar'));tabs.setAttribute('role','tablist');[['summary','Summary'],['responses','Target responses'],['shots','Shots']].forEach(function(item){var b=add(tabs,button(item[1],function(){tab=item[0];render()},tab===item[0]));b.setAttribute('role','tab');b.setAttribute('aria-selected',String(tab===item[0]))});

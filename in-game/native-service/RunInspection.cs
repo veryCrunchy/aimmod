@@ -13,7 +13,11 @@ record AnalysisWindow(string Kind,string Label,string Phase,double StartMs,doubl
 record ShotTarget(string Label,double? Distance,double? YawErrorDegrees,double? PitchErrorDegrees,bool Nearest);
 record InspectedShot(int Sequence,string Kind,double TimestampMs,double? Count,double? Total,List<ShotTarget> Targets);
 record InspectionResult(InspectedRun? Run,RunDetails Details,ResponseSummary? Response,ResponseEpisode[] Episodes,int EpisodeCount,
-    AnalysisWindow[] Windows,int WindowCount,InspectedShot[] Shots,int ShotCount,int ShotPage,int ShotPages,double? FirstShotTimestampMs,string[] UnavailableTables);
+    AnalysisWindow[] Windows,int WindowCount,InspectedShot[] Shots,int ShotCount,int ShotPage,int ShotPages,double? FirstShotTimestampMs,string[] UnavailableTables)
+{
+    // The saved replay of this run, when there is one.
+    public string? ReplayId { get; init; }
+}
 
 // Analysis-only reader. No replay frames, tick streams, positions or payloads.
 // Every selected ID is bound. Lists are bounded and shot detail is paginated.
