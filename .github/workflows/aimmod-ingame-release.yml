@@ -135,7 +135,8 @@ jobs:
           $auth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("x-access-token:$env:UE4SS_GITHUB_TOKEN"))
           git clone --filter=blob:none https://github.com/UE4SS-RE/RE-UE4SS external/RE-UE4SS
           git -C external/RE-UE4SS checkout e3ba1016
-          git -C external/RE-UE4SS -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" submodule update --init --recursive
+          # The submodules are listed with SSH URLs; CI fetches them over HTTPS with the token.
+          git -C external/RE-UE4SS -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" -c "url.https://github.com/.insteadOf=git@github.com:" submodule update --init --recursive
           if ($LASTEXITCODE) { throw 'RE-UE4SS submodules could not be fetched.' }
 
       - name: Fetch the verified UE4SS release zip
