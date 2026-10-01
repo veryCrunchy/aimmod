@@ -30,6 +30,8 @@
     <EmbeddedResource Include="../ui/overlay.css" LogicalName="AimMod.OverlayStyle" />
     <EmbeddedResource Include="../ui/overlay-editor.js" LogicalName="AimMod.OverlayEditor" />
     <EmbeddedResource Include="../ui/overlay-editor.css" LogicalName="AimMod.OverlayEditorStyle" />
+    <EmbeddedResource Include="../ui/overlay-model.js" LogicalName="AimMod.OverlayModel" />
+    <EmbeddedResource Include="../ui/overlay-widgets.js" LogicalName="AimMod.OverlayWidgets" />
     <EmbeddedResource Include="../ue4ss/AimModNativeUI/Assets/aimmod-horizontal.png" LogicalName="AimMod.Logo" />
     <EmbeddedResource Include="../replay/browser.js" LogicalName="AimMod.ReplayBrowser" />
     <EmbeddedResource Include="../replay/native-browser.js" LogicalName="AimMod.NativeReplayBrowser" />

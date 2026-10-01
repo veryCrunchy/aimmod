@@ -69,7 +69,7 @@ test('workspace sources never build markup from strings',()=>{
   assert.doesNotMatch(fs.readFileSync(path.join(dir,'coaching.js'),'utf8'),/\.innerHTML\s*=|insertAdjacentHTML/);
 });
 test('workspace code avoids Intl-dependent formatting',()=>{
-  for(const file of ['statistics.js','run-details.js','benchmarks.js','leaderboard.js','mechanics.js','overlay-editor.js','overlay.js','history-import.js','settings.js','hub-sharing.js','../replay/browser.js']){
+  for(const file of ['statistics.js','run-details.js','benchmarks.js','leaderboard.js','mechanics.js','overlay-editor.js','overlay.js','overlay-model.js','overlay-widgets.js','history-import.js','settings.js','hub-sharing.js','../replay/browser.js']){
     assert.doesNotMatch(fs.readFileSync(path.join(__dirname,file),'utf8'),/toLocale(String|DateString|TimeString)\(|Intl\./,file);
   }
 });

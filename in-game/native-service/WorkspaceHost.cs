@@ -19,6 +19,8 @@ sealed class WorkspaceHost : IAsyncDisposable
     readonly OverlaySettings overlaySettings;
     readonly OpponentData opponents;
     readonly ObsOverlayHost obs;
+    readonly OverlayService overlays;
+    readonly OverlayHistory overlayHistory = new();
     Tournaments.TournamentService? tournaments;
     public Tournaments.TournamentService? TournamentsService => tournaments;
     readonly string outputFolder;
@@ -32,6 +34,7 @@ sealed class WorkspaceHost : IAsyncDisposable
     {
         Volatile.Write(ref personalBests, LiveOverlayState.PersonalBests(runs));
         Volatile.Write(ref overlayRuns, runs);
+        overlayHistory.Update(runs);
     }
     Run? PersonalBest(string scenario) => Volatile.Read(ref personalBests).GetValueOrDefault(scenario);
     // Discord presence reads the same live snapshot without sharing the overlay
@@ -41,6 +44,9 @@ sealed class WorkspaceHost : IAsyncDisposable
     public string? ReplayScenario => playback.VisibleScenario;
     // Page of the AimMod panel while it is shown, as reported by the UI.
     public readonly DiscordWorkspaceView View = new();
+    // The live run for overlay widgets: the same feed and VS opponent as the live HUD.
+    object LiveForOverlays() => opponents.Apply(liveFeed.Accept(LiveOverlayState.Read(outputFolder, PersonalBest, playback.Visible), DateTime.UtcNow));
+    string? ReadLiveScenario() { var l = LiveOverlayState.Read(outputFolder, PersonalBest, playback.Visible); return l.Active ? l.Scenario : null; }
     object OverlayState() => new { live = opponents.Apply(liveFeed.Accept(LiveOverlayState.Read(outputFolder, PersonalBest, playback.Visible), DateTime.UtcNow)), settings = overlaySettings.Current with { Layouts = [] } };
     object ObsState() => overlaySettings.Current.ObsEnabled ? OverlayState() : new { live = new { available = false, active = false }, settings = overlaySettings.Current with { Layouts = [] } };
     internal static int ReadRendererProtocol(string path) => new RendererAcknowledgement(path).Read().Protocol;
@@ -54,13 +60,15 @@ sealed class WorkspaceHost : IAsyncDisposable
     public void Update(string json) => Volatile.Write(ref data, json);
     readonly Multiplayer.MultiplayerService multiplayer;
     public Multiplayer.MultiplayerService MultiplayerLobby => multiplayer;
-    public WorkspaceHost(Hub hub, string output, string? historyPath = null, NativeSettings? settings = null, CsvHistory? csvHistory = null, DiscordSettings? discordSettings = null, Func<object>? discordStatus = null, string[]? args = null, Lifecycle? lifecycle = null, HubSharingSettings? hubSharing = null, Func<object>? hubSharingStatus = null)
+    public WorkspaceHost(Hub hub, string output, string? historyPath = null, NativeSettings? settings = null, CsvHistory? csvHistory = null, DiscordSettings? discordSettings = null, Func<object>? discordStatus = null, string[]? args = null, Lifecycle? lifecycle = null, HubSharingSettings? hubSharing = null, Func<object>? hubSharingStatus = null, string? gameFolder = null)
     {
         outputFolder = output;
         gameCommands = new GameCommands(output);
         overlaySettings = new OverlaySettings(output);
         opponents = new OpponentData(output);
-        obs = new ObsOverlayHost(output, ObsState, () => tournaments?.ObsView() ?? new { v = 1 }, () => multiplayer?.BoardView());
+        overlays = new OverlayService(overlaySettings, new OverlayScenes(output, overlaySettings.Current), LiveForOverlays, () => ReadLiveScenario(), () => multiplayer?.BoardView(), () => tournaments?.ObsView(),
+            hub, new KovaaksSettings(gameFolder), overlayHistory, new OverlayMotion(output));
+        obs = new ObsOverlayHost(output, ObsState, () => tournaments?.ObsView() ?? new { v = 1 }, () => multiplayer?.BoardView(), (application, root) => overlays.MapObs(application, root));
         renderer = new RendererAcknowledgement(Path.Combine(output, "native-replay-renderer.json"));
         playback = new NativeReplayPlayback(output, () => RendererReady, () => renderer.Read().Protocol);
         keyboard = new ReplayKeyboard(playback, output);
@@ -71,6 +79,7 @@ sealed class WorkspaceHost : IAsyncDisposable
         LoopbackServer.UseGuards(app, capability);
         (settings ?? new NativeSettings(output)).MapEndpoints(app, prefix);
         overlaySettings.MapEndpoints(app, prefix);
+        overlays.MapWorkspace(app, prefix);
         lifecycle?.MapEndpoints(app, prefix);
         discordSettings?.MapEndpoints(app, prefix, discordStatus);
         hubSharing?.MapEndpoints(app, prefix, hubSharingStatus);
@@ -134,7 +143,7 @@ sealed class WorkspaceHost : IAsyncDisposable
         });
         ObsOverlayHost.MapAssets(app, prefix);
         app.MapGet(prefix + "/overlay-state", () => Results.Json(OverlayState()));
-        app.MapGet(prefix + "/overlay-setup", () => Results.Json(new { obsAvailable = obs.Available, obsUrl = obs.Url, boardUrl = obs.BoardUrl, width = 1920, height = 1080 }));
+        app.MapGet(prefix + "/overlay-setup", () => Results.Json(new { obsAvailable = obs.Available, obsUrl = obs.Url, obsBase = obs.ObsBase, boardUrl = obs.BoardUrl, tournamentUrl = obs.TournamentUrl, width = 1920, height = 1080 }));
         app.MapGet(prefix + "/overlay-editor.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.OverlayEditor")!, "application/javascript"));
         app.MapGet(prefix + "/overlay-editor.css", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.OverlayEditorStyle")!, "text/css"));
         using var stream = typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.UI")!;
