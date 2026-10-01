@@ -76,8 +76,15 @@ in Windows file names are rejected.
 - Water brushes become map-creator **Water** volumes: Source `CONTENTS_WATER` brushes, GoldSrc
   water leaves and `func_water`, and Quake 3 water shaders.
 - Lava and slime become **Hurt** volumes (lava kills, slime does 10 damage a second).
-- Both are centred on the liquid and scaled to it, assuming map-creator volumes are 100 units
-  across at scale 1.
+- Each object covers its liquid box exactly. The sizes and pivots come from the game's own meshes
+  (3.9.11): Water is a 200-unit cube centred on the actor, so the surface is the brush's top face.
+  Hurt, JumpPad and Teleporter are 100-unit cubes with the pivot on the minimum corner. The object
+  scale is multiplied by MapScale like the locations.
+- Water uses the game's default colours and no wave height.
+- KovaaK's Water is only a translucent mesh: no swimming. In AimMod scenarios AimModCore makes every
+  Water object swimmable (no collision, an engine water volume with CS or Quake swimming, an
+  underwater tint; see `in-game/native-mod/DESIGN.md`, "Water"). The volumes come from the map
+  data itself, so generated `AimMod Match - …` arenas and every lobby peer get the same water.
 
 Quake 3 stock textures are not in the map files, so Q3 slots use each category's typical colour
 (`colour` in `materials.json`). Ladders (`func_ladder`, ladder contents) cannot be climbed in
@@ -165,7 +172,8 @@ Outlaws, Pixel, Christmas, N0ted, Timmy). The Anime pack is DLC.
     covers model stairs with an invisible clip ramp.
 - A wide ground plane sits 32 units under the lowest geometry, so any remaining hole shows ground
   instead of the void.
-- Triggers, hint/skip/areaportal/occluder, ladders and water are dropped. Buy zones, bomb sites
+- Hint/skip/areaportal/occluder brushes and most triggers are dropped (liquids, `trigger_hurt`,
+  `trigger_push` and teleporters become game objects, ladders jump pads). Buy zones, bomb sites
   and other objective volumes are not rendered; they go to the metadata file.
 - Displacements are turned into convex slabs. Planar patches of the grid are merged greedily, and
   non-planar cells are split into two triangular prisms.
@@ -292,7 +300,7 @@ JackOLantern and Pumpkin. Meso skins are Genji, McCree, Pharah and Tracer. Chang
 
 - Stock models that are not packed in the map, and exact model shapes (packed models become hulls).
 - Lighting and lightmaps: the game lights maps with its own sky.
-- Decals, overlays, water and ladders.
+- Decals, overlays and climbable ladders.
 - Texture-accurate UVs. KovaaK's `MI_WA_*` materials are world-aligned, so `uv0` is only a hint.
 
 ## Tests
