@@ -46,3 +46,10 @@ test('lobby: Ready / Start come before the player list, chat sits in the main co
   assert.match(side.children[side.children.length-1].className,/mp-look/,'your look is the last side panel');
   assert.ok(!s.button('Spectate'),'the lobby invite list never offers Spectate');assert.ok(s.button('Invite'));
 });
+test('toasts and the invite card follow the scroll position, so they are never off screen',()=>{
+  const s=setup();s.scroller.scrollTop=640;s.open(view());
+  s.all().filter(e=>e.tag==='button'&&e.textContent==='Join')[0].onclick();
+  const t=s.find('mp-toast');assert.equal(t.style.display,'block');assert.equal(t.textContent,'Room codes are six letters and numbers.');assert.equal(t.style.top,'640px');
+  const s2=setup();s2.scroller.scrollTop=500;s2.open(view({invites:[{id:'i1',fromName:'Synthetic Host',kind:'invite',summary:null,at:900,compatible:true}]}));
+  assert.equal(s2.find('mp-modal').style.paddingTop,'570px');
+});

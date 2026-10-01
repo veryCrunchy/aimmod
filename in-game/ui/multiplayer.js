@@ -75,7 +75,10 @@
     // While the player types, fold view changes (pings, chat) into one re-render every few seconds.
     if(key!==lastKey){lastKey=key;var since=Date.now()-lastRender;if(focused&&!force&&since<3000){clearTimeout(deferred);deferred=setTimeout(function(){deferred=null;render();},3000-since);}else render();}
   }
-  function toast(text){if(!toastNode)return;toastNode.textContent=text;toastNode.style.display='block';clearTimeout(toastTimer);toastTimer=setTimeout(function(){if(toastNode)toastNode.style.display='none';},3500);}
+  // The page scrolls inside the workspace, and absolute layers sit at the top of the
+  // content. Toasts and the invite card move down by the scroll so they're always seen.
+  function scrolled(){var el=container&&container.parentNode;while(el){if(el.scrollTop>0)return el.scrollTop;el=el.parentNode;}return 0;}
+  function toast(text){if(!toastNode)return;toastNode.textContent=text;toastNode.style.top=scrolled()+'px';toastNode.style.display='block';clearTimeout(toastTimer);toastTimer=setTimeout(function(){if(toastNode)toastNode.style.display='none';},3500);}
 
   // ---- shared controls -------------------------------------------------
   function segmented(options,value,pick,disabled,label){
@@ -503,6 +506,7 @@
   }
   function inviteModal(inv){
     var shade=node('div','mp-modal');var card=node('div','mp-modal-card');card.setAttribute('role','dialog');card.setAttribute('aria-label','Invite');shade.appendChild(card);
+    shade.style.paddingTop=(scrolled()+70)+'px';
     var who=safe(inv.fromName,'A friend');
     var title=inv.kind==='launch'?'Join from Steam':inv.kind==='request'?who+' wants to join':who+' invited you';
     var line=inv.kind==='launch'?'KovaaK’s was started from a Steam invite. Join that lobby now?':inv.kind==='request'?'Let them into your lobby?':'Join their AimMod lobby?';
