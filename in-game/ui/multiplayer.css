@@ -286,3 +286,4 @@
 .mp-lock{margin:14px 22px 0;padding:9px 12px;font-size:12px;line-height:1.5;color:#dcebe3;background:#101916;border:1px solid #22302a;border-left:3px solid #66ccff;border-radius:6px}
 /* Home: preferences fold to a summary line */
 .mp-prefs.folded{padding-bottom:16px}.mp-prefs .panel-head .actions>.button{margin:0}.mp-prefs-warn{margin:10px 20px 0}
+.mp-rejoin .actions>.button+.button,.mp-watch .actions>.button+.button{margin-left:8px}.mp-error h2{margin-bottom:8px}

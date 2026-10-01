@@ -88,3 +88,16 @@ test('wording: no bridge or hash jargon, and small files read in KB',()=>{
   const g=setup().open(view({lobby:lobby({self:'p2',isHost:false,content:{scenario:'missing',map:'missing',profiles:'none'},download:{view:{state:'ready',source:'host',total:5040000,packed:1200000,done:0,speed:0,files},conflicts:[]}})}));
   assert.ok(g.text().includes('39 KB'),'not 0 MB');assert.doesNotMatch(g.text(),/hashes|#0123456/,'no hashes in the lobby');
 });
+test('states: the service error says what to do and retries on demand; the rejoin offer can be put away',()=>{
+  const s=setup();s.api.enter(s.container);assert.ok(s.find('mp-spinner'),'loading shows a spinner');
+  s.requests[0].finish(500,null);assert.ok(s.text().includes('restart KovaaK’s'));const before=s.requests.length;s.button('Try again').onclick();assert.equal(s.requests.length,before+1);assert.equal(s.last().url,'/private/multiplayer');
+  const r=setup().open(view({rejoin:{hostName:'Synthetic Host',minutes:3}}));assert.ok(r.text().includes('Rejoin Synthetic Host’s lobby?'));
+  r.button('Not now').onclick();assert.ok(!r.text().includes('Rejoin Synthetic Host’s lobby?'));
+});
+test('match: ending a match looks destructive, and spectate buttons keep long names short',()=>{
+  const ids=['p1','p2'],res=[{memberId:'p2',name:'Synthetic Two',place:1,score:900,accuracy:80,points:1,status:'finished',disputed:false}];
+  const m={id:'m1',phase:'round',mode:'ffa-rounds',scenario:'Synthetic Scenario',timeLimit:60,round:1,totalRounds:3,startsAt:0,nextAt:5000,players:ids,live:[],rounds:[{round:1,results:res,winnerId:'p2'}],standings:[],winnerId:null,rematch:[]};
+  const s=setup().open(view({lobby:lobby({match:m})}));assert.match(s.button('End match').className,/danger/);
+  const w=setup().open(view({watch:{peer:'f9',name:'Synthetic Friend',scenario:'Synthetic A',state:'watching',message:'',score:null,others:[{id:'f1',name:'Synthetic Friend With A Very Long Name'}]}}));
+  assert.ok(w.button('Switch to Synthetic Friend Wi…'),'clipped to 20 characters');
+});
