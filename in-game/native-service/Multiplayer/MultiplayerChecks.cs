@@ -35,7 +35,7 @@ static partial class MultiplayerChecks
         Follow();
         Marker();
         var root = Path.Combine(Path.GetTempPath(), "aimmod-mp-test-" + Guid.NewGuid().ToString("N"));
-        try { Content(root); Generator(root); Blocked(root); Service(root); Transfers(root); Replays(root); Maps(root); Tournaments(root); }
+        try { Content(root); Generator(root); Blocked(root); AutoLeave(root); Service(root); Transfers(root); Replays(root); Maps(root); Tournaments(root); }
         finally { try { Directory.Delete(root, true); } catch (IOException) { } }
         Console.WriteLine($"{count} multiplayer checks passed.");
     }
@@ -1082,6 +1082,53 @@ static partial class MultiplayerChecks
     }
 
     // A player still inside a challenge run: the round waits (never "start it yourself") and loads once it ends.
+    // Leaving the run for the match: 5 s notice with Stay, the lobby key leaves now, then quit-run and load.
+    static void AutoLeave(string root)
+    {
+        long now = 4_500_000;
+        var control = new FakeGame("load", "start", "quit");
+        var service = new MultiplayerService(new OfflineTransport(), new ContentLibrary(Path.Combine(root, "game")), control, () => new LocalRun(false, null, null, null, null, 0, 0, 0, null), () => [], () => null, null, simulation: true, () => now, autoTick: false, seed: 6);
+        JsonElement Round() => JsonSerializer.SerializeToElement(service.View(), Protocol.Json).GetProperty("lobby").GetProperty("round");
+        JsonElement Notice() => JsonDocument.Parse(service.NoticeText()).RootElement;
+        void Run(int ms) { for (var t = 0; t < ms; t += 100) { now += 100; service.Tick(); } }
+        service.Act("create", J(new { mode = "score-race", scenario = "Synthetic A" }));
+        service.Act("sim", J(new { op = "add" }));
+        Run(9000);
+        control.ChallengeRunning = true;
+        service.Act("start", default); Run(300);
+        var n = Notice();
+        Check(n.GetProperty("title").GetString()!.StartsWith("Leaving your run for the match in ", StringComparison.Ordinal) && n.GetProperty("countdown").GetInt32() is > 0 and <= 5
+            && n.GetProperty("actions").EnumerateArray().Any(x => x.GetProperty("action").GetString() == "leave-run-cancel"), "A run in progress gets a 5 s leave notice with Stay");
+        Check(!control.Calls.Contains("quit"), "Nothing is quit before the countdown ends");
+        Run(5000);
+        Check(control.Calls.Count(c => c == "quit") == 1 && Round().GetProperty("message").GetString()!.StartsWith("Leaving your run", StringComparison.Ordinal), "After 5 s the run is left with quit-run");
+        control.ChallengeRunning = false; Run(300);
+        Check(control.Calls.Last() == "load Synthetic A", "Then the match scenario loads");
+        service.Act("end", default); Run(6000);
+        // Stay: cancel keeps the run and falls back to the manual message.
+        control.ChallengeRunning = true;
+        service.Act("start", default); Run(300);
+        Check(service.Act("leave-run-cancel", J(new { id = "x" })).Ok, "Stay is accepted");
+        Run(6000);
+        Check(control.Calls.Count(c => c == "quit") == 1 && Round().GetProperty("message").GetString()!.Contains("Finish or quit your current run"), "Staying never quits; the manual message returns");
+        control.ChallengeRunning = false; Run(300);
+        service.Act("end", default); Run(6000);
+        // The lobby key leaves at once.
+        control.ChallengeRunning = true;
+        service.Act("start", default); Run(300);
+        service.Hotkey(); Run(100);
+        Check(control.Calls.Count(c => c == "quit") == 2, "The lobby key leaves the run at once");
+        control.ChallengeRunning = false; Run(300);
+        service.Act("end", default); Run(6000);
+        // Preference off, or no quit capability: the manual message, no quit.
+        service.Act("prefs", J(new { prefs = new { leaveRun = false } }));
+        control.ChallengeRunning = true;
+        service.Act("start", default); Run(6000);
+        var off = Notice();
+        Check(control.Calls.Count(c => c == "quit") == 2 && !(off.GetProperty("active").GetBoolean() && off.GetProperty("title").GetString()!.StartsWith("Leaving", StringComparison.Ordinal)), "With the preference off nothing is left automatically");
+        service.Dispose();
+    }
+
     static void Blocked(string root)
     {
         long now = 4_000_000;
@@ -1494,6 +1541,7 @@ static partial class MultiplayerChecks
             : lastLoad > 0 ? (refusedLoad ? new GameCommandResult(lastLoad, "error", "challenge-active", "") : new GameCommandResult(lastLoad, "done", "loaded", "")) : null;
         // The next load is refused as if a challenge started right after the check.
         public void RefuseNextLoad() => refusedLoad = true;
+        public long? QuitRun() { if (!Capabilities.Contains("quit")) return null; Calls.Add("quit"); return lastLoad = Calls.Count; }
         public void Accept() => refusedLoad = false;
     }
 

@@ -14,6 +14,8 @@ interface IGameControl
     GameCommandResult? Result { get; }
     // True while KovaaK's runs a challenge (core-scene.json); null when unknown.
     bool? ChallengeRunning => null;
+    // Leave the current run the way pause > Quit does, never submitting it ("quit" capability).
+    long? QuitRun() => null;
 }
 
 sealed class CoreGameControl(string output) : IGameControl
@@ -28,6 +30,7 @@ sealed class CoreGameControl(string output) : IGameControl
     public long? Refresh() => Capabilities.Contains("refresh") || Capabilities.Contains("load") ? commands.Send(new("refresh-scenarios", null, null, null, null, null, null, null)).Sequence : null;
     public GameCommandResult? Result => commands.Result();
     public bool? ChallengeRunning => GameScene.Read(output) is { Available: true } scene ? scene.InChallenge : null;
+    public long? QuitRun() => Capabilities.Contains("quit") ? commands.Send(new("quit-run", null, null, null, null, null, null, null)).Sequence : null;
 }
 
 sealed class NoGameControl : IGameControl
