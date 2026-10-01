@@ -236,3 +236,23 @@
 .mp-watch .actions{margin-top:10px}
 .mp-quick{display:flex;flex-direction:row;flex-wrap:wrap;padding:0 16px 12px}.mp-quick .button{margin:0 4px 4px 0;height:26px;line-height:24px;font-size:12px}
 .mp-ready.away{background:#272040;color:#b9a3ff}.mp-stage-player.ok{border-color:#2c6b52}.mp-setups{max-width:none}.mp-setups-body{padding:0 20px 8px}.mp-setups .mp-chat-row{padding:8px 0 4px;border-top:0}
+/* Map library */
+.mp-hero-link{margin-top:18px;padding-top:14px;border-top:1px solid #22302a;font-size:12px;color:#a7bab0;line-height:1.5}
+.mp-hero-link .actions{margin-top:8px}.mp-hero-link .actions>.button{margin:0}
+.mp-maps-bar{display:flex;flex-direction:row;align-items:center;margin-bottom:14px}
+.mp-maps-search{width:320px;margin-right:14px}
+.mp-ports{display:flex;flex-direction:row;flex-wrap:wrap;margin:0 -8px}
+.mp-ports>.mp-empty{width:100%;margin:0 8px}
+.mp-port-cell{width:33.333%;padding:0 8px 16px}
+.mp-port{padding:0;overflow:hidden}
+.mp-port-preview{display:block;height:150px;overflow:hidden;background:#101916;text-align:center}
+.mp-port-preview img{display:block;width:100%;height:150px;object-fit:cover}
+.mp-port-initials{display:block;height:150px;line-height:150px;font-size:42px;font-weight:700;letter-spacing:2px}
+.mp-port-preview.mint{background:#122a22;color:#27e4a1}.mp-port-preview.cyan{background:#11252f;color:#66ccff}.mp-port-preview.amber{background:#2a2114;color:#f0b45a}.mp-port-preview.violet{background:#1d1830;color:#b9a3ff}.mp-port-preview.rose{background:#2a161c;color:#ff8fa3}
+.mp-port-info{padding:14px 16px 4px}
+.mp-port-title{display:flex;flex-direction:row;align-items:center}
+.mp-port-title strong{flex:1;min-width:0;font-size:16px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mp-port-variant{display:block;margin-top:2px;font-size:13px;color:#dcebe3}
+.mp-port-facts{display:block;margin-top:4px;font-size:12px;color:#a7bab0}
+.mp-port-state{margin-top:8px;font-size:12px;font-weight:600;color:#a7bab0}.mp-port-state.ok{color:#27e4a1}.mp-port-state.warn{color:#f0b45a}
+.mp-port .actions{padding:6px 16px 14px}.mp-port .actions>.button{margin:0 8px 0 0}

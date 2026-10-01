@@ -31,7 +31,7 @@ sealed class SteamTransport : IMultiplayerTransport
     int nextId = 1, createId = -1, joinId = -1;
     readonly Dictionary<int, string> workshopIds = new();
     readonly Dictionary<(string Peer, int Transfer), int> outstanding = new();
-    bool ugc; int bulkBytes, bulkWindow = 4;
+    bool ugc, ugcQuery; IReadOnlyList<WorkshopItem> workshopItems = []; int bulkBytes, bulkWindow = 4;
     string? bridgeVersion; RejoinPoint? lastLobby;
     HashSet<string> lastCharKeys = new();
     readonly Dictionary<string, string> spectators = new();
@@ -142,6 +142,7 @@ sealed class SteamTransport : IMultiplayerTransport
                     // Contract additions: feature list, bulk chunk size and send window.
                     var features = e.TryGetProperty("features", out var fl) && fl.ValueKind == JsonValueKind.Array ? fl.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!).ToHashSet() : [];
                     ugc = features.Contains("ugc");
+                    ugcQuery = ugc && features.Contains("ugc-query");
                     bridgeVersion = Str(e, "bridge");
                     lastLobby = e.TryGetProperty("lastLobby", out var ll) && ll.ValueKind == JsonValueKind.Object && Str(ll, "lobby") is { } lastId
                         ? new RejoinPoint(lastId, Str(ll, "hostName") ?? "your host", ll.TryGetProperty("ageSeconds", out var age) && age.TryGetInt64(out var ag) ? ag : 0) : null;
@@ -254,6 +255,13 @@ sealed class SteamTransport : IMultiplayerTransport
                         events.Enqueue(new TransportEvent("", TransportEvent.WorkshopUpdate, Reason: Str(e, "message"), Workshop: new WorkshopProgress(item, ugcState,
                             e.TryGetProperty("downloaded", out var d) && d.TryGetInt64(out var dn) ? dn : 0, e.TryGetProperty("total", out var t) && t.TryGetInt64(out var tn) ? tn : 0)));
                     }
+                    break;
+                // Contract addition: ugc.items {tag, items: [{item, title, bytes, updated, subscribed, installed, needsUpdate}]}.
+                case "ugc.items":
+                    if (e.TryGetProperty("items", out var ugcList) && ugcList.ValueKind == JsonValueKind.Array)
+                        workshopItems = ugcList.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.Object && Str(x, "item") is { } i && Steam(i) && Str(x, "title") is { Length: > 0 and <= 128 })
+                            .Take(500).Select(x => new WorkshopItem(Str(x, "item")!, Str(x, "title")!, x.TryGetProperty("bytes", out var b) && b.TryGetInt64(out var bn) ? Math.Max(0, bn) : 0,
+                                x.TryGetProperty("updated", out var u) && u.TryGetInt64(out var un) ? un : 0, Bool(x, "subscribed"), Bool(x, "installed"), Bool(x, "needsUpdate"))).ToArray();
                     break;
                 // Spectating a friend without a lobby (contract §6, "spectating a friend without a lobby").
                 case "spectate.asked":
@@ -418,6 +426,12 @@ sealed class SteamTransport : IMultiplayerTransport
         lock (gate) { if (id >= 0) workshopIds[id] = item; }
         return id >= 0;
     }
+    public bool QueryWorkshop(string tag)
+    {
+        bool can; lock (gate) can = ready && ugcQuery;
+        return can && tag.Length is > 0 and <= 32 && Command("ugc.query", new JsonObject { ["tag"] = tag }) >= 0;
+    }
+    public IReadOnlyList<WorkshopItem> WorkshopItems { get { lock (gate) return workshopItems; } }
     public void Kick(string peer) { if (Steam(peer)) Command("lobby.kick", new JsonObject { ["peer"] = peer }); }
     public void Transfer(string peer) { if (Steam(peer)) Command("lobby.transfer", new JsonObject { ["peer"] = peer }); }
     static bool Steam(string peer) => peer.Length is > 0 and <= 20 && peer.All(char.IsAsciiDigit);

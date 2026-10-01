@@ -135,6 +135,10 @@ interface IMultiplayerTransport : IDisposable
     // Download a Steam Workshop item through the bridge (ugc.*). Progress arrives as
     // Workshop events. False when the bridge can't, so the host transfer is used instead.
     bool WorkshopDownload(string item);
+    // Ask the bridge for Workshop items with a tag (ugc.query); the answer replaces WorkshopItems.
+    // False when the bridge can't list items ("ugc-query" feature).
+    bool QueryWorkshop(string tag) => false;
+    IReadOnlyList<WorkshopItem> WorkshopItems => [];
     // Bulk file lane (bridge xfer.*): low-priority, in-order chunks of BulkChunkBytes, with a
     // small send window. BulkChunkBytes is 0 when the lane is missing; content then uses frames.
     int BulkChunkBytes { get; }

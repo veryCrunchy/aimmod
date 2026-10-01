@@ -29,7 +29,7 @@ static class MultiplayerChecks
         Peers();
         SteamPipe();
         var root = Path.Combine(Path.GetTempPath(), "aimmod-mp-test-" + Guid.NewGuid().ToString("N"));
-        try { Content(root); Generator(root); Service(root); Transfers(root); Replays(root); }
+        try { Content(root); Generator(root); Service(root); Transfers(root); Replays(root); Maps(root); }
         finally { try { Directory.Delete(root, true); } catch (IOException) { } }
         Console.WriteLine($"{count} multiplayer checks passed.");
     }
@@ -538,6 +538,11 @@ static class MultiplayerChecks
         Check(Until(() => steam.Drain().Any(e => e.Kind == TransportEvent.Left && e.Peer == friend)), "member.left means the member is gone");
         Write(new { v = 1, ev = "error", code = "rejected", message = "banned" });
         Check(Until(() => steam.Drain().Any(e => e.Kind == TransportEvent.Error && e.Reason!.Contains("refused"))), "Bridge errors are reported");
+        Check(!steam.QueryWorkshop(MapPorts.WorkshopTag), "Without the ugc-query feature the Workshop isn't listed");
+        Write(new { v = 1, ev = "ugc.items", tag = MapPorts.WorkshopTag, items = new object[] {
+            new { item = "3333000001", title = "AimMod - Dust2 (CSGO) - CS Movement", bytes = 71_000_000L, updated = 1_790_000_000L, subscribed = true, installed = true, needsUpdate = true },
+            new { item = "../bad", title = "AimMod - Bad (CSS) - CS Movement" } } });
+        Check(Until(() => steam.WorkshopItems.Count == 1) && steam.WorkshopItems[0].NeedsUpdate && steam.WorkshopItems[0].Bytes == 71_000_000L, "Workshop listings keep valid items and Steam's update state");
         server.Disconnect();
         Check(Until(() => !steam.Available), "A dropped pipe makes the transport unavailable");
     }
@@ -565,6 +570,40 @@ static class MultiplayerChecks
         Check(library.Check(settings with { MapOverride = new MapChoice("synthetic_port", ContentLibrary.TextHash("x"), "ported") }).Map == ContentStates.Mismatch, "A different map version is detected");
         Check(library.Check(settings with { Weapon = new ProfileChoice("custom", "Nope", ContentLibrary.TextHash("x")) }).Profiles == ContentStates.Missing, "A missing custom profile is detected");
         Check(library.PathOf("scenario", "Synthetic A")!.EndsWith("Synthetic A.sce", StringComparison.Ordinal) && ContentLibrary.Locate(game) == Path.GetFullPath(game), "Local paths stay internal and an explicit game folder is used");
+    }
+
+    static void Maps(string root)
+    {
+        var game = Path.Combine(root, "maps-game");
+        var scenarios = Path.Combine(game, "Saved", "SaveGames", "Scenarios");
+        WriteText(Path.Combine(scenarios, "AimMod - Dust2 (CSGO) - CS Movement.sce"), "Name=AimMod - Dust2 (CSGO) - CS Movement\nMapName=aimmod_de_dust2_csgo.json\nMapScale=4.0\nTimelimit=600\nDescription=Ported Source map with Counter-Strike movement.\n\n[Character Profile]\nName=Player\nAbilityProfileNames=CS Walk\n\n[Map Data]\n{}\n");
+        WriteText(Path.Combine(scenarios, "Synthetic Plain.sce"), "Name=Synthetic Plain\nMapName=synthetic_map.map\nTimelimit=60\n\n[Map Data]\n");
+        WriteText(Path.Combine(game, "maps", "aimmod_de_dust2_csgo.json"), new string('x', 2048));
+        File.WriteAllBytes(Path.Combine(game, "maps", "aimmod_de_dust2_csgo.preview.png"), [0x89, 0x50, 0x4E, 0x47, 1, 2, 3]);
+        Check(MapPorts.Parse("AimMod - Office (CSS) - Sprint") == ("Office", "CSS", "Sprint") && MapPorts.Parse("AimMod - Office (Quake) - Sprint") is null && MapPorts.Parse("Synthetic Plain") is null, "Port names follow naming.py");
+        var library = new ContentLibrary(game);
+        var catalog = new[] { new WorkshopItem("3333000002", "AimMod - Mirage (CSGO) - CS Movement", 61_000_000, 0, false, false, false), new WorkshopItem("3333000003", "Not a port", 1, 0, false, false, false) };
+        var ports = MapPorts.List(library, catalog);
+        Check(ports.Count == 2 && ports[0].Installed && ports[0].Display == "Dust2" && ports[0].Game == "CSGO" && ports[0].Shift == "walk" && ports[0].Bytes > 2048 && ports[0].Preview is not null && ports[0].MapScale == 4, "Installed ports show map, game, size, Shift and preview");
+        Check(!ports[1].Installed && ports[1].WorkshopId == "3333000002" && ports[1].Bytes == 61_000_000, "Workshop ports this machine lacks are listed for install; other items are not");
+        long now = 5_000_000;
+        var service = new MultiplayerService(new OfflineTransport(), library, new FakeGame("load"), () => new LocalRun(false, null, null, null, null, 0, 0, 0, null), () => [], () => null, null, simulation: true, () => now, autoTick: false);
+        JsonElement Maps() => JsonSerializer.SerializeToElement(service.MapsView(), Protocol.Json);
+        var view = Maps();
+        var dust = view.GetProperty("ports").EnumerateArray().First(p => p.GetProperty("display").GetString() == "Dust2");
+        Check(view.GetProperty("source").GetString() == "simulation" && dust.GetProperty("preview").GetBoolean() && !dust.ToString().Contains(root, StringComparison.OrdinalIgnoreCase), "The Map Library view never shows local paths");
+        Check(service.MapPreview(dust.GetProperty("key").GetString())!.EndsWith(".preview.png", StringComparison.Ordinal) && service.MapPreview("../../x") is null && service.MapPreview("000000000000") is null, "Only previews the library found are served");
+        Check(service.Act("map-load", J(new { key = dust.GetProperty("key").GetString() })).Ok, "Installed ports load through AimModCore");
+        var mirage = Maps().GetProperty("ports").EnumerateArray().First(p => p.GetProperty("display").GetString() == "Mirage");
+        Check(!mirage.GetProperty("installed").GetBoolean() && service.Act("map-install", J(new { key = mirage.GetProperty("key").GetString() })).Ok, "A simulated Workshop install starts");
+        for (var i = 0; i < 10; i++) { now += 100; service.Tick(); }
+        var progress = Maps().GetProperty("ports").EnumerateArray().First(p => p.GetProperty("display").GetString() == "Mirage").GetProperty("download");
+        Check(progress.GetProperty("state").GetString() == "downloading" && progress.GetProperty("done").GetInt64() > 0, "Install progress is shown");
+        for (var i = 0; i < 60; i++) { now += 100; service.Tick(); }
+        mirage = Maps().GetProperty("ports").EnumerateArray().First(p => p.GetProperty("display").GetString() == "Mirage");
+        Check(mirage.GetProperty("installed").GetBoolean() && mirage.GetProperty("simulated").GetBoolean() && mirage.GetProperty("download").ValueKind == JsonValueKind.Null && !Directory.EnumerateFiles(scenarios).Any(f => f.Contains("Mirage")), "Simulated installs finish without writing to the game");
+        Check(!service.Act("map-load", J(new { key = mirage.GetProperty("key").GetString() })).Ok && !service.Act("map-install", J(new { key = "nope" })).Ok, "Simulated installs can't be loaded and unknown maps are refused");
+        service.Dispose();
     }
 
     static void Generator(string root)
