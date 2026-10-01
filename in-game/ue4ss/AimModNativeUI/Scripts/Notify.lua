@@ -19,6 +19,10 @@ local function warn(what,reason)
     if warned[what] then return end
     warned[what]=true;print('[AimModNotify] '..what..' failed: '..tostring(reason)..'\n')
 end
+-- One line per step of taking or giving back input, so a live log shows which step ran.
+local function note(text)print('[AimModNotify] '..text..'\n')end
+local function nameOf(o)local ok,n=pcall(function()return o:GetFullName()end);return ok and tostring(n) or 'unknown' end
+local focusPending=false
 local base=(os.getenv('LOCALAPPDATA') or '')..'/AimMod/KovaaksNative/'
 local Width,Height=620,340
 -- Two sizes: the toast (top centre, 620 x 340, room for a card with buttons) for notices, and the whole screen for
@@ -73,6 +77,8 @@ local function setInteractive(on)
     -- 4: self hit-test invisible (children can be clicked); 3: nothing can be clicked.
     host:SetVisibility(on and 4 or 3);view:SetVisibility(on and 0 or 3);renderer:SetVisibility(on and 0 or 3)
     renderer.bReceiveInput=on
+    local v=function(w)local ok,x=pcall(function()return w:GetVisibility()end);return ok and tostring(x) or '?' end
+    note('layer '..(on and 'takes clicks' or 'is click-through')..': host '..v(host)..', view '..v(view)..', renderer '..v(renderer)..' '..nameOf(renderer)..', bReceiveInput '..tostring(renderer.bReceiveInput)..', layout '..tostring(layout))
 end
 -- The CS buy menu wants a cursor in game: show it (game and UI input, so movement keys still
 -- work) and hand input back to the game once it closes. Only a cursor this layer took is given
@@ -84,14 +90,27 @@ local function showCursor(player,on)
     if not ok then warn('K2_SetShowMouseCursor',reason) end
     pcall(function()player.bShowMouseCursor=on end)
 end
+-- The buy menu takes input UI-only with the Gameface widget focused: the game viewport then
+-- ignores the mouse and keys (a click can never fire the weapon, and KovaaK's own Escape binding
+-- doesn't run), and Gameface gets the clicks. The service still reads B, the number keys and
+-- Escape itself. Movement and look pause while the menu is open; closing it gives them back.
 local function applyInput(player,lib,cursor)
     showCursor(player,cursor)
-    -- Game and UI: the view under the cursor gets clicks (mouse capture is released) while the
-    -- movement keys still reach the game. No widget takes keyboard focus.
     local ok,reason
-    if cursor then ok,reason=pcall(function()lib:SetInputMode_GameAndUIEx(player,nil,0,false)end)
-    else ok,reason=pcall(function()lib:SetInputMode_GameOnly(player)end) end
-    if not ok then warn(cursor and 'SetInputMode_GameAndUIEx' or 'SetInputMode_GameOnly',reason) end
+    if cursor then
+        local target=valid(renderer) and renderer or nil
+        focusPending=target==nil
+        ok,reason=pcall(function()lib:SetInputMode_UIOnlyEx(player,target,0)end)
+        if ok then
+            local shown='?';pcall(function()shown=tostring(player.bShowMouseCursor)end)
+            note('buy menu input: cursor on (bShowMouseCursor '..shown..'), mode UIOnly, focus '..(target and nameOf(target) or 'pending (view not created yet)')..', controller '..nameOf(player))
+        end
+    else
+        focusPending=false
+        ok,reason=pcall(function()lib:SetInputMode_GameOnly(player)end)
+        if ok then note('buy menu input: back to the game (GameOnly, cursor off), controller '..nameOf(player)) end
+    end
+    if not ok then warn(cursor and 'SetInputMode_UIOnlyEx' or 'SetInputMode_GameOnly',reason) end
 end
 local function cursorFor(want,blocked)
     lastBlocked=blocked
@@ -101,8 +120,9 @@ local function cursorFor(want,blocked)
     local lib=StaticFindObject('/Script/UMG.Default__WidgetBlueprintLibrary')
     if not valid(player) or not valid(lib) then return end
     if want==tookCursor then
-        -- Holding the cursor: put it back if the game hid it.
-        if want then local shown=true;pcall(function()shown=player.bShowMouseCursor==true end);if not shown then showCursor(player,true) end end
+        -- Holding the cursor: if the game hid it, it probably reset the input mode too; take both back.
+        if want then local shown=true;pcall(function()shown=player.bShowMouseCursor==true end)
+            if not shown then note('the game hid the cursor during the buy menu; taking input again');applyInput(player,lib,true) end end
         return
     end
     tookCursor=want
@@ -207,6 +227,10 @@ function M.update(panelOpen,replayActive,menuVisible)
     if not cursor then pcall(function()cursor=owner:GetOwningPlayer().bShowMouseCursor==true end) end
     local wantInput=text:find('"interactive":true',1,true)~=nil and cursor
     if wantInput~=interactive then setInteractive(wantInput) end
+    if tookCursor and focusPending and valid(renderer) then
+        local player=owner:GetOwningPlayer();local lib=StaticFindObject('/Script/UMG.Default__WidgetBlueprintLibrary')
+        if valid(player) and valid(lib) then applyInput(player,lib,true) end
+    end
     if id~=lastId then
         lastId=id;lastCount=nil
         if sound=='popup' then play('popupCue') elseif sound=='click' then play('clickCue') end

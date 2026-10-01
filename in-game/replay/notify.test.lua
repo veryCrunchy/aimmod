@@ -100,13 +100,14 @@ check(slots[1].Anchors.Maximum.X==0.5 and slots[1].Offsets.Bottom>=320,'back to 
 check(#widgets==2,'one host and one view, reused')
 -- The CS buy menu in game: the layer shows the cursor (game and UI input) and gives input back after.
 local modes={}
-lib.SetInputMode_GameAndUIEx=function(_,p,widget,lock,hide)check(p==player and widget==nil and hide==false,'game and UI input, cursor kept during capture');modes[#modes+1]='gameui' end
+lib.SetInputMode_GameAndUIEx=function()error('the buy menu must not leave the game viewport in charge of clicks')end
+lib.SetInputMode_UIOnlyEx=function(_,p,widget,lock)check(p==player and widget==renderers[1] and lock==0,'UI-only input with the Gameface widget focused, mouse not locked');modes[#modes+1]='gameui' end
 lib.SetInputMode_GameOnly=function(_,p)check(p==player,'owning player');modes[#modes+1]='game' end
 local buying='{"version":1,"active":false,"layout":"full","interactive":true,"cursor":true,"cs":{"phase":"freeze","buyOpen":true},"volume":0}'
 local closed='{"version":1,"active":false,"layout":"full","interactive":false,"cs":{"phase":"freeze","buyOpen":false},"volume":0}'
 player.bShowMouseCursor=false
 notice=buying;Notify.update(false,false,false)
-check(modes[1]=='gameui' and player.bShowMouseCursor==true,'buy menu open: the cursor shows')
+check(modes[1]=='gameui' and player.bShowMouseCursor==true,'buy menu open: the cursor shows, the game ignores the mouse (no firing) and Gameface takes the clicks')
 check(clickable(),'and the buy menu takes clicks with it')
 Notify.update(false,false,false);check(#modes==1,'the cursor is taken once')
 notice=closed;Notify.update(false,false,false)
