@@ -150,9 +150,9 @@ sealed partial class MultiplayerService
                 case "ask":
                     watchAsks.RemoveAll(a => a.Peer == "dev-asker"); watchAsks.Add(("dev-asker", "Kestrel", now)); return LobbyResult.Success;
                 case "update":
-                    flash = (new GameNotice("dev-up-" + now, "info", "AimMod update ready", "Restart KovaaK’s to finish updating.", null, null, "click"), now + 6000); return LobbyResult.Success;
+                    flash = (new GameNotice("dev-up-" + now, "info", "AimMod update ready", "It applies when you close KovaaK’s.", null, null, "click") { Eyebrow = "AimMod · Update" }, now + 6000); return LobbyResult.Success;
                 case "repair":
-                    flash = (new GameNotice("dev-fix-" + now, "ready", "AimMod needs a repair", "Open AimMod > Settings and choose Repair.", null, null, "popup"), now + 6000); return LobbyResult.Success;
+                    flash = (new GameNotice("dev-fix-" + now, "ready", "AimMod needs a repair", "Open AimMod > Settings and choose Repair.", null, null, "popup") { Eyebrow = "AimMod · Repair" }, now + 6000); return LobbyResult.Success;
                 default:
                     return LobbyResult.Fail("invalid", "Unknown notice.");
             }

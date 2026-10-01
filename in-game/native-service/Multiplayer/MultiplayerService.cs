@@ -810,7 +810,7 @@ sealed partial class MultiplayerService : IDisposable
             if (invite.Kind == "request")
                 return new GameNotice("inv-" + invite.Id, "invite", from + " wants to join", "Press " + key + " to open AimMod and let them in.", key, null, "popup");
             var what = invite.Summary is { } s ? " to " + (LobbyModes.All.Contains(s.Mode) ? ModeLabel(s.Mode) : "a match") + (s.Scenario is { Length: > 0 } sc ? " on " + LobbyRules.CleanName(sc, "a scenario") : "") : "";
-            return new GameNotice("inv-" + invite.Id, "invite", from + " invited you" + what, "Join, or press " + key + " to join.", key, null, "popup")
+            return new GameNotice("inv-" + invite.Id, "invite", from + " invited you" + what, "Click Join, or press " + key + ".", key, null, "popup")
                 { Invite = invite.Id, Actions = [new("Join", "accept-invite", invite.Id), new("Dismiss", "decline-invite", invite.Id)] };
         }
         // Someone asks to watch you (privacy "ask").
@@ -963,7 +963,7 @@ sealed partial class MultiplayerService : IDisposable
             if (notice is null && badge is null && duel is null && combat is null && cs is null && board is null && boardFull is null) return "{\"version\":1,\"active\":false}";
             return JsonSerializer.Serialize(new
             {
-                version = 1, active = notice is not null, badge, notice?.Id, notice?.Kind, notice?.Title, notice?.Body, notice?.Key, notice?.Countdown, notice?.Sound, notice?.Invite,
+                version = 1, active = notice is not null, badge, notice?.Id, notice?.Kind, notice?.Eyebrow, notice?.Title, notice?.Body, notice?.Key, notice?.Countdown, notice?.Sound, notice?.Invite,
                 actions = notice?.Actions, interactive = notice?.Actions is { Count: > 0 } || cs?.BuyOpen == true, volume = prefs.Sounds ? prefs.Volume : 0, duel, combat, cs, board, boardFull,
             }, Protocol.Json);
         }
