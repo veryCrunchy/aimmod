@@ -68,7 +68,8 @@ test('downloaded update without auto-install offers an explicit install and note
 });
 test('developer installs hide update controls and unknown builds warn',()=>{
   const t=setup(),box=new t.El('div'),banner=new t.El('div');t.api.start({banner});
-  t.requests[0].finish(200,snapshot({update:{state:'unmanaged',message:'This install was made with the developer installer; updates are off.'},game:{tested:false,warning:'KovaaK’s was updated (Steam build 1).'}}));
+  t.requests[0].finish(200,snapshot({installed:{managed:false,version:null},repair:{needed:true,problems:['An AimMod file was replaced or changed: main.dll']},update:{state:'unmanaged',message:'This install was made with the developer installer; updates are off.'},game:{tested:false,warning:'KovaaK’s was updated (Steam build 1).'}}));
+  assert.doesNotMatch(banner.text(),/needs a repair/,'developer rebuilds do not raise the repair banner');
   t.api.renderSettings(box);t.requests.at(-1).finish(200,snapshot({update:{state:'unmanaged',message:'developer installer'},game:{tested:false,warning:'KovaaK’s was updated (Steam build 1).'}}));
   assert.equal(t.buttons(box).find(b=>b.attrs['aria-label']==='Automatic updates'),undefined);
   assert.match(banner.text(),/KovaaK’s was updated/);

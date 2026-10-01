@@ -54,8 +54,9 @@
     var s=state,line=null;
     function add(text,css){line=node('div','lifecycle-banner '+(css||''));line.appendChild(node('span','',text));el.appendChild(line);el.style.display='block';return line;}
     if(s.last){var r=add(s.last.message,s.last.ok?'':'warn');r.appendChild(button('OK',false,function(){act('dismiss');}));}
+    // Developer installs (Install-AimModCore.ps1) change files on purpose: Settings only.
     if(s.repair.interrupted)add('An AimMod install was interrupted. It is undone when you close KovaaK’s.','warn');
-    else if(s.repair.needed){
+    else if(s.repair.needed&&s.installed.managed){
       var p=add(s.repair.requested?'Repair scheduled: AimMod repairs itself when you close KovaaK’s.':'AimMod needs a repair. '+(s.repair.problems[0]||''),'warn');
       if(!s.repair.requested&&s.repair.available)p.appendChild(button('Repair when I close KovaaK’s',true,function(){act('repair');}));
     }
