@@ -538,11 +538,15 @@ static class MultiplayerChecks
         Check(Until(() => steam.Drain().Any(e => e.Kind == TransportEvent.Left && e.Peer == friend)), "member.left means the member is gone");
         Write(new { v = 1, ev = "error", code = "rejected", message = "banned" });
         Check(Until(() => steam.Drain().Any(e => e.Kind == TransportEvent.Error && e.Reason!.Contains("refused"))), "Bridge errors are reported");
-        Check(!steam.QueryWorkshop(MapPorts.WorkshopTag), "Without the ugc-query feature the Workshop isn't listed");
+        Check(!steam.QueryWorkshop(MapPorts.TitlePrefix), "Without the ugc-query feature the Workshop isn't listed");
         Write(new { v = 1, ev = "ugc.items", tag = MapPorts.WorkshopTag, items = new object[] {
             new { item = "3333000001", title = "AimMod - Dust2 (CSGO) - CS Movement", bytes = 71_000_000L, updated = 1_790_000_000L, subscribed = true, installed = true, needsUpdate = true },
             new { item = "../bad", title = "AimMod - Bad (CSS) - CS Movement" } } });
         Check(Until(() => steam.WorkshopItems.Count == 1) && steam.WorkshopItems[0].NeedsUpdate && steam.WorkshopItems[0].Bytes == 71_000_000L, "Workshop listings keep valid items and Steam's update state");
+        Write(new { v = 1, ev = "ready", contract = 1, wire = 1, bridge = "test", steam = true, appId = 824270, self = new { peer = self, name = "Synthetic Host", initials = "SH" }, relay = "Current", features = new[] { "lobby", "p2p", "ugc", "ugc-query", "xfer" }, maxChunk = 32768, xferWindow = 4 });
+        Check(Until(() => steam.QueryWorkshop(MapPorts.TitlePrefix)), "With ugc-query the Workshop is searched");
+        var query = Expect("ugc.query");
+        Check(query.GetProperty("text").GetString() == "AimMod - " && !query.TryGetProperty("tag", out _) && !steam.QueryWorkshop(null), "Ports are found by title text (KovaaK's uploads carry no tags); empty queries never go out");
         server.Disconnect();
         Check(Until(() => !steam.Available), "A dropped pipe makes the transport unavailable");
     }
