@@ -6,8 +6,17 @@
   var box=root.document.getElementById('notice'),last='',timer=null;
   function node(tag,css,text){var el=root.document.createElement(tag);if(css)el.className=css;if(text!==undefined&&text!==null)el.textContent=text;return el;}
   function base(){var p=root.location.pathname;return p.slice(0,p.lastIndexOf('/'));}
+  // Standings: the compact corner panel during a match, the full scoreboard while its key is held.
+  var corner=root.document.getElementById('board-corner'),full=root.document.getElementById('board-full'),lastBoards='';
+  function boards(n){
+    var key=n?JSON.stringify([n.board,n.boardFull]):'';if(key===lastBoards||!root.AimModStandings||!corner||!full)return;lastBoards=key;
+    root.AimModStandings.render(corner,n&&!n.boardFull?n.board:null,'corner');corner.className=n&&n.board&&!n.boardFull?'show':'';
+    root.AimModStandings.render(full,n&&n.boardFull,'full');full.className=n&&n.boardFull?'show':'';
+  }
   function render(n){
-    var key=n?JSON.stringify(n):'';if(key===last)return;last=key;
+    boards(n);
+    // The standings change every frame; the toast only re-renders for its own fields.
+    var key=n?JSON.stringify(n,function(k,v){return k==='board'||k==='boardFull'?undefined:v;}):'';if(key===last)return;last=key;
     while(box.firstChild)box.removeChild(box.firstChild);
     if(!n||(!n.active&&!n.badge&&!n.duel&&!n.combat&&!n.cs)){box.className='';return;}
     var extra=n.duel||n.combat||n.cs?' duel-on':'';
