@@ -41,26 +41,26 @@ static class MatchPresets
 // KovaaK's ranked leaderboards.
 static class MatchScenario
 {
-    public const int GeneratorVersion = 2;
+    public const int GeneratorVersion = 3;
     public const string Prefix = "AimMod Match - ";
     static readonly CultureInfo Invariant = CultureInfo.InvariantCulture;
 
     // Anything that changes what is played means a generated scenario.
     public static bool Needed(LobbySettings s) =>
-        s.MapOverride is not null || s.TimeLimit is not null || s.TargetSpeed != 1 || s.TargetSize != 1
+        s.Mode == LobbyModes.Tracking || s.MapOverride is not null || s.TimeLimit is not null || s.TargetSpeed != 1 || s.TargetSize != 1
         || s.WeaponProfile.Preset != ProfilePresets.Default || s.MovementProfile.Preset != ProfilePresets.Default || s.CharacterProfile.Preset != ProfilePresets.Default;
 
     // A pure function of the lobby settings, which carry every input's content hash.
     public static string Key(LobbySettings s)
     {
-        var parts = new object?[] { GeneratorVersion, s.Scenario?.Hash, s.Scenario?.MapHash, s.MapOverride?.Hash, s.TimeLimit,
+        var parts = new object?[] { GeneratorVersion, s.Mode == LobbyModes.Tracking ? s.Mode : null, s.Scenario?.Hash, s.Scenario?.MapHash, s.MapOverride?.Hash, s.TimeLimit,
             Num(s.TargetSpeed), Num(s.TargetSize), s.WeaponProfile.Preset, s.WeaponProfile.Hash, s.MovementProfile.Preset, s.CharacterProfile.Preset, s.CharacterProfile.Hash };
         return ContentLibrary.TextHash(JsonSerializer.Serialize(parts));
     }
 
     public static string Name(LobbySettings s)
     {
-        var label = MatchPresets.Movement.FirstOrDefault(m => m.Id == s.MovementProfile.Preset)?.Label
+        var label = s.Mode == LobbyModes.Tracking ? "Tracking duel" : MatchPresets.Movement.FirstOrDefault(m => m.Id == s.MovementProfile.Preset)?.Label
             ?? MatchPresets.Weapons.FirstOrDefault(w => w.Id == s.WeaponProfile.Preset)?.Label
             ?? (s.CharacterProfile.Preset == ProfilePresets.Custom || s.WeaponProfile.Preset == ProfilePresets.Custom ? "Custom"
             : s.MapOverride is not null ? "Map" : s.TargetSpeed != 1 || s.TargetSize != 1 ? "Targets" : "Timed");
@@ -190,6 +190,7 @@ static class MatchScenario
         foreach (var look in AvatarProfiles.All)
             if (!sections.Any(x => x.Title == "[Character Profile]" && x.Get("Name") == look.ProfileName))
                 sections.Add(new Section { Title = "[Character Profile]", Lines = AvatarProfiles.Lines(look).ToList() });
+        if (s.Mode == LobbyModes.Tracking) TrackingDuelScenario(header, sections, s);
         // Canonical layout: header, then each section after one blank line.
         var output = new StringBuilder();
         foreach (var line in header.Lines.Where(l => l.Trim().Length > 0)) output.Append(line).Append(nl);
@@ -203,6 +204,41 @@ static class MatchScenario
     }
 
     public static string Hash(string text) => ContentLibrary.TextHash(text);
+
+    // Tracking duel arena: no targets of its own, nobody can be hurt, nothing scores
+    // natively (AimMod scores time on target). One invisible, inert helper bot stays,
+    // because AimModSteam spawns each opponent's avatar from a bot the scenario has
+    // (the avatar then loads the player's look, aimmod.char.<id>). The KovaaK's run
+    // outlasts the round; the host ends the round.
+    public const string HiddenBot = "AimMod Hidden Bot", HiddenBody = "AimMod Hidden";
+    static void TrackingDuelScenario(Section header, List<Section> sections, LobbySettings s)
+    {
+        header.Set("Timelimit", Num(s.EffectiveTimeLimit + 10));
+        header.Set("IsChallenge", "false");
+        header.Set("BotCharacters", HiddenBot + ".bot"); header.Set("AddedBots", HiddenBot + ".bot");
+        header.Set("BotMaxLives", "0"); header.Set("BotTeams", "2");
+        if (header.Get("PlayerTeam") is null) header.Set("PlayerTeam", "1");
+        header.Set("InvinciblePlayer", "true"); header.Set("InvincibleBots", "true");
+        header.Set("ScorePerHit", "0.0"); header.Set("ScorePerDamage", "0.0"); header.Set("ScorePerKill", "0.0");
+        header.Set("TimeRefilledByKill", "0.0");
+        sections.RemoveAll(x => (x.Title == "[Bot Profile]" && x.Get("Name") == HiddenBot) || (x.Title == "[Character Profile]" && x.Get("Name") == HiddenBody) || (x.Title is "[Dodge Profile]" or "[Aim Profile]" && x.Get("Name") == HiddenBot));
+        sections.Add(new Section { Title = "[Bot Profile]", Lines =
+        [
+            "Name=" + HiddenBot, "DodgeProfileNames=" + HiddenBot, "DodgeProfileWeights=1.0", "DodgeProfileMaxChangeTime=5.0", "DodgeProfileMinChangeTime=1.0",
+            "WeaponsProfileNames=;;;;;;;", "WeaponProfileWeights=1.0;1.0;1.0;1.0;1.0;1.0;1.0;1.0", "AimingProfileNames=" + string.Join(';', Enumerable.Repeat(HiddenBot, 8)),
+            "WeaponSwitchTime=3.0", "UseWeapons=false", "CharacterProfile=" + HiddenBody, "SeeThroughWalls=false", "NoDodging=true", "StandStillUntilHurt=true",
+            "NoAiming=true", "SpawnGroup=0", "UseMinimumRespawnTime=true", "DisableScoring=true",
+        ] });
+        sections.Add(new Section { Title = "[Aim Profile]", Lines = ["Name=" + HiddenBot, "MinReactionTime=0.3", "MaxReactionTime=0.4", "AimingStyle=Simple"] });
+        sections.Add(new Section { Title = "[Dodge Profile]", Lines =
+        [
+            "Name=" + HiddenBot, "MaxTargetDistance=0.0", "MinTargetDistance=0.0", "ToggleLeftRight=false", "ToggleForwardBack=false", "JumpFrequency=0.0",
+            "CrouchInAirFrequency=0.0", "CrouchOnGroundFrequency=0.0",
+        ] });
+        var body = AvatarProfiles.Lines(AvatarProfiles.All[0]).Where(l => !l.StartsWith("Name=", StringComparison.Ordinal) && !l.StartsWith("CharacterModel=", StringComparison.Ordinal) && !l.StartsWith("CharacterSkin=", StringComparison.Ordinal) && !l.StartsWith("MainBBHide=", StringComparison.Ordinal) && !l.StartsWith("ProjBBHide=", StringComparison.Ordinal)).ToList();
+        body.InsertRange(0, ["Name=" + HiddenBody, "CharacterModel=None", "CharacterSkin=Default", "MainBBHide=true", "ProjBBHide=true"]);
+        sections.Add(new Section { Title = "[Character Profile]", Lines = body });
+    }
 }
 
 // Writes match scenarios into the game's Scenarios folder. Only files AimMod

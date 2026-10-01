@@ -7,8 +7,10 @@ namespace AimMod.InGame.Multiplayer;
 // Records are immutable snapshots; LobbyCore owns the mutable state.
 static class LobbyModes
 {
-    public const string Race = "score-race", Duel = "duel", Rounds = "ffa-rounds", Practice = "practice";
-    public static readonly string[] All = [Race, Duel, Rounds, Practice];
+    public const string Race = "score-race", Duel = "duel", Rounds = "ffa-rounds", Practice = "practice", Tracking = "tracking-duel";
+    public static readonly string[] All = [Race, Duel, Rounds, Practice, Tracking];
+    // One against one: duel and tracking duel.
+    public static bool TwoPlayers(string mode) => mode is Duel or Tracking;
     // Score race plays the scenario exactly as published so scores compare with each player's history.
     public static bool AllowsOverrides(string mode) => mode != Race;
     public static bool AllowsLateJoin(string mode) => mode is Rounds or Practice;
@@ -70,8 +72,9 @@ sealed record LobbySettings(
     [JsonIgnore] public ProfileChoice WeaponProfile => Weapon ?? ProfileChoice.Default;
     [JsonIgnore] public ProfileChoice MovementProfile => Movement ?? ProfileChoice.Default;
     [JsonIgnore] public ProfileChoice CharacterProfile => Character ?? ProfileChoice.Default;
-    [JsonIgnore] public double EffectiveTimeLimit => TimeLimit ?? Scenario?.TimeLimit ?? 60;
-    [JsonIgnore] public int? TotalRounds => Mode switch { LobbyModes.Race or LobbyModes.Rounds => Rounds, _ => null };
+    [JsonIgnore] public double EffectiveTimeLimit => Mode == LobbyModes.Tracking ? TimeLimit ?? TrackingDefaults.RoundSeconds : TimeLimit ?? Scenario?.TimeLimit ?? 60;
+    // Tracking duel: Rounds is the number of rounds each player tracks; roles alternate.
+    [JsonIgnore] public int? TotalRounds => Mode switch { LobbyModes.Race or LobbyModes.Rounds => Rounds, LobbyModes.Tracking => Rounds * 2, _ => null };
     // Values that change what people play. Changing any of them clears ready states.
     [JsonIgnore] public string PlayKey => string.Join('|', Mode, Scenario?.Hash, MapOverride?.Hash, Rounds, FirstTo, TimeLimit,
         WeaponProfile, MovementProfile, CharacterProfile, TargetSpeed, TargetSize);
@@ -81,7 +84,9 @@ static class MemberRoles { public const string Player = "player", Spectator = "s
 static class ContentStates { public const string Ok = "ok", Missing = "missing", Mismatch = "mismatch", Unknown = "unknown", None = "none"; }
 static class Connections { public const string Connected = "connected", Reconnecting = "reconnecting"; }
 static class MatchPhases { public const string Loading = "loading", Countdown = "countdown", Live = "live", Round = "round", Final = "final"; }
-static class LineStates { public const string Waiting = "waiting", Playing = "playing", Finished = "finished", Dnf = "dnf", Left = "left"; }
+static class LineStates { public const string Waiting = "waiting", Playing = "playing", Finished = "finished", Dnf = "dnf", Left = "left", Dodger = "dodger"; }
+// Tracking duel defaults (game-modes.md 6.3): short rounds, three attacks each.
+static class TrackingDefaults { public const int RoundSeconds = 10, MaxRoundSeconds = 60, RoundsEach = 3, MaxRoundsEach = 5; }
 
 // Connection: connected or reconnecting. Link: local (this machine), relay,
 // direct or simulated. Profiles: whether custom weapon/character profiles are present.
@@ -97,7 +102,10 @@ sealed record Standing(string MemberId, string Name, int Place, int Wins, int Po
 
 sealed record MatchSnapshot(string Id, string Phase, string Mode, string Scenario, double TimeLimit, int Round, int? TotalRounds,
     int? FirstTo, long? StartsAt, long? EndsAt, long? NextAt, IReadOnlyList<string> Players, IReadOnlyList<ScoreLine> Live,
-    IReadOnlyList<RoundResult> Rounds, IReadOnlyList<Standing> Standings, string? WinnerId, IReadOnlyList<string> Rematch, long? RematchDeadline = null, IReadOnlyList<string>? Loaded = null);
+    IReadOnlyList<RoundResult> Rounds, IReadOnlyList<Standing> Standings, string? WinnerId, IReadOnlyList<string> Rematch, long? RematchDeadline = null, IReadOnlyList<string>? Loaded = null,
+    string? Attacker = null, TrackView? Tracking = null);
+// Live tracking-duel state for the HUD: the attacker's time on target so far (host score).
+sealed record TrackView(string Attacker, string Dodger, double Percent, double Seconds, double Coverage, double LagMs, bool Disputed, string? Reason);
 
 // Clip: a shared clip replay id (everyone in the lobby received the file).
 sealed record ChatLine(long Id, string? From, string Name, string Text, long At, bool System, string? Clip = null);
@@ -164,7 +172,7 @@ static class LobbyRules
             {
                 case "mode":
                     if (Text() is not { } mode || !LobbyModes.All.Contains(mode)) return (null, Bad("Unknown mode."));
-                    if (mode == LobbyModes.Duel && players > 2) return (null, LobbyResult.Fail("duel-players", "A duel is one against one. Move extra players to spectators first."));
+                    if (LobbyModes.TwoPlayers(mode) && players > 2) return (null, LobbyResult.Fail("duel-players", "A duel is one against one. Move extra players to spectators first."));
                     next = next with { Mode = mode }; break;
                 case "scenario":
                     if (Text() is not { } scenarioName || !ValidContentName(scenarioName)) return (null, Bad("Choose a scenario from your library."));
@@ -227,13 +235,15 @@ static class LobbyRules
     // Mode rules applied after every change, so combinations stay coherent.
     public static LobbySettings Normalize(LobbySettings s, int players)
     {
-        if (s.Mode == LobbyModes.Duel) s = s with { MaxPlayers = 2 };
+        if (LobbyModes.TwoPlayers(s.Mode)) s = s with { MaxPlayers = 2 };
         if (!LobbyModes.AllowsOverrides(s.Mode))
             s = s with { MapOverride = null, TimeLimit = null, Weapon = ProfileChoice.Default, Movement = ProfileChoice.Default, Character = ProfileChoice.Default, TargetSpeed = 1, TargetSize = 1 };
         if (!LobbyModes.AllowsLateJoin(s.Mode)) s = s with { LateJoin = false };
         // Picking the scenario's own length is no override, so no match scenario is generated for it.
-        if (s.TimeLimit is { } limit && s.Scenario is { } scenario && Math.Abs(limit - scenario.TimeLimit) < 0.5) s = s with { TimeLimit = null };
+        if (s.Mode != LobbyModes.Tracking && s.TimeLimit is { } limit && s.Scenario is { } scenario && Math.Abs(limit - scenario.TimeLimit) < 0.5) s = s with { TimeLimit = null };
         if (s.Mode == LobbyModes.Race) s = s with { Rounds = Math.Clamp(s.Rounds, 1, 5) };
+        // Tracking duel: short rounds of its own length (never the scenario's), up to five attacks each.
+        if (s.Mode == LobbyModes.Tracking) s = s with { Rounds = Math.Clamp(s.Rounds, 1, TrackingDefaults.MaxRoundsEach), TimeLimit = Math.Clamp(s.TimeLimit ?? TrackingDefaults.RoundSeconds, 10, TrackingDefaults.MaxRoundSeconds) };
         if (s.MaxPlayers < Math.Max(LobbySettings.MinPlayers, players)) s = s with { MaxPlayers = Math.Min(LobbySettings.MaxPlayerLimit, Math.Max(LobbySettings.MinPlayers, players)) };
         return s with { Weapon = s.WeaponProfile, Movement = s.MovementProfile, Character = s.CharacterProfile };
     }
@@ -255,7 +265,7 @@ static class LobbyRules
         var players = lobby.Members.Where(m => m.Role == MemberRoles.Player && !m.Away).ToArray();
         if (lobby.Match is { Phase: not MatchPhases.Final }) { list.Add(new("in-match", "A match is already running.")); return list; }
         if (s.Scenario is null) list.Add(new("scenario", "Choose a scenario."));
-        if (s.Mode == LobbyModes.Duel && players.Length != 2) list.Add(new("duel-players", "A duel needs exactly two players."));
+        if (LobbyModes.TwoPlayers(s.Mode) && players.Length != 2) list.Add(new("duel-players", "A duel needs exactly two players."));
         else if (players.Length < LobbySettings.MinPlayers) list.Add(new("players", "Waiting for at least one more player."));
         foreach (var m in players.Where(m => m.Connection != Connections.Connected)) list.Add(new("reconnecting", m.Name + " is reconnecting."));
         // Different AimMod builds can't see each other in the world (the pose format changed).

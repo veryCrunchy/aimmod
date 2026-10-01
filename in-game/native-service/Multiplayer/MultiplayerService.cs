@@ -809,7 +809,7 @@ sealed partial class MultiplayerService : IDisposable
         }
     }
 
-    static string ModeLabel(string mode) => mode switch { LobbyModes.Race => "a score race", LobbyModes.Duel => "a duel", LobbyModes.Rounds => "free-for-all", _ => "practice" };
+    static string ModeLabel(string mode) => mode switch { LobbyModes.Race => "a score race", LobbyModes.Duel => "a duel", LobbyModes.Rounds => "free-for-all", LobbyModes.Tracking => "a tracking duel", _ => "practice" };
 
     // Ask AimModNativeUI to open the AimMod panel on the Multiplayer page. It waits for
     // the main menu, and never interrupts a running scenario: the request stays until then.
@@ -1243,6 +1243,9 @@ sealed partial class MultiplayerService : IDisposable
             case "finish":
                 if (ReadFinish(m.Body) is { } run) core!.Finish(peer, run);
                 break;
+            case "track":
+                if (TrackBatch.Read(m.Body) is { } batch) core!.Track(peer, batch);
+                break;
             case "content.request":
                 if (server.Manifest(core!.Settings) is { } manifest) Send(peer, "content.manifest", new { key = manifest.Key, files = manifest.Files, workshop = manifest.Workshop });
                 else Send(peer, "content.error", new { hash = "", code = "none" });
@@ -1503,9 +1506,33 @@ sealed partial class MultiplayerService : IDisposable
 
     // The local player's score comes from AimModCore's live feed, and the final
     // result from the run journal, exactly as the rest of AimMod records runs.
+    // Tracking duel: stream this machine's camera samples and drawn avatars to the
+    // host (both roles; the host knows who attacks). The host does the scoring.
+    SelfPoseTracker? poseTracker;
+    string? trackKey;
+    void StreamTracking(MatchSnapshot match)
+    {
+        if (outputFolder is null) return;
+        poseTracker ??= new SelfPoseTracker(outputFolder);
+        var key = match.Id + "#" + match.Round;
+        if (trackKey != key) { trackKey = key; poseTracker.Reset(); }
+        var now = clock();
+        poseTracker.Request(now);
+        if (match.Phase is not (MatchPhases.Countdown or MatchPhases.Live)) return;
+        // Samples travel on the host clock: offset = host - local.
+        var offset = core is not null || hostPeer is null ? 0 : clocks.GetValueOrDefault(hostPeer)?.Offset ?? 0;
+        poseTracker.Poll(offset);
+        foreach (var batch in poseTracker.Drain(match.Id, match.Round))
+        {
+            if (core is not null) core.Track(SelfId, batch);
+            else if (hostPeer is not null) Send(hostPeer, "track", batch.Body());
+        }
+    }
+
     void TrackLocalRun()
     {
         if (Current is not { Match: { } match } || !match.Players.Contains(SelfId)) { trackedRound = null; return; }
+        if (match.Mode == LobbyModes.Tracking) { StreamTracking(match); return; }
         var roundKey = match.Id + "#" + match.Round;
         if (trackedRound != roundKey)
         {

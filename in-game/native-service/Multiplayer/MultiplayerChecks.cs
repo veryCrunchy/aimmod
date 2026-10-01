@@ -25,6 +25,7 @@ static class MultiplayerChecks
         Rules();
         Authority();
         Matches();
+        TrackingDuel();
         ProtocolFrames();
         Peers();
         SteamPipe();
@@ -262,6 +263,132 @@ static class MultiplayerChecks
         Check(core.Snapshot().Match is { Phase: MatchPhases.Countdown } again && again.Players.Count == 2 && !again.Players.Contains("p3") && core.Members.First(m => m.Id == "p3").Role == MemberRoles.Spectator, "Players who don't confirm in time sit the rematch out");
     }
 
+    // Tracking duel (game-modes.md 6.3): geometry, host scoring with the rewind cap, rounds and the arena scenario.
+    static void TrackingDuel()
+    {
+        var content = new FakeContent();
+        // Geometry: a level ray through a capsule 10 m ahead, above it, behind the eye.
+        var (fx, fy, fz) = TrackGeometry.Direction(0, 0);
+        Check(TrackGeometry.HitsCapsule(0, 0, 100, fx, fy, fz, 100_000, 1000, 0, 100, 45, 115), "A ray through the capsule hits");
+        Check(!TrackGeometry.HitsCapsule(0, 0, 300, fx, fy, fz, 100_000, 1000, 0, 100, 45, 115), "A ray over the head misses");
+        Check(!TrackGeometry.HitsCapsule(0, 0, 100, fx, fy, fz, 100_000, -1000, 0, 100, 45, 115), "A target behind the camera is never hit");
+        var (ux, uy, uz) = TrackGeometry.Direction(30, 90);
+        Check(Math.Abs(ux) < 1e-9 && Math.Abs(uy - Math.Cos(Math.PI / 6)) < 1e-9 && Math.Abs(uz - 0.5) < 1e-9, "Pitch and yaw follow Unreal (yaw 90 = +Y, pitch up = +Z)");
+        Check(TrackGeometry.HitsCapsule(0, 0, 100, 0, 0.6, 0.8, 100_000, 0, 600, 900, 45, 115) && !TrackGeometry.HitsCapsule(0, 0, 100, 0, 0.6, 0.8, 100_000, 0, 600, 1100, 45, 115), "Capsule ends are rounded");
+
+        // Settings: one against one, short rounds, attacks each.
+        var start = new LobbySettings(Scenario: content.Scenario("Synthetic A"));
+        Check(LobbyRules.Apply(start, J(new { mode = "tracking-duel" }), 3, content).Result.Code == "duel-players", "Tracking duel with three players is refused");
+        var duel = LobbyRules.Apply(start, J(new { mode = "tracking-duel", maxPlayers = 6, rounds = 9 }), 2, content).Settings!;
+        Check(duel.MaxPlayers == 2 && duel.Rounds == 5 && duel.TimeLimit == 10 && duel.EffectiveTimeLimit == 10 && duel.TotalRounds == 10, "Tracking duel: two players, 10 s rounds by default, up to five attacks each");
+        Check(LobbyRules.Apply(duel, J(new { timeLimit = 60 }), 2, content).Settings!.TimeLimit == 60 && LobbyRules.Apply(duel, J(new { timeLimit = 300 }), 2, content).Settings!.TimeLimit == 60, "Round length is its own (even the scenario's 60 s) and at most a minute");
+        Check(MatchScenario.Needed(duel) && MatchScenario.Name(duel).Contains(" - Tracking duel - ", StringComparison.Ordinal) && MatchScenario.Key(duel) != MatchScenario.Key(duel with { Mode = LobbyModes.Practice }), "A tracking duel always plays its own generated arena");
+
+        // Scoring. The dodger strafes 10 m in front of the attacker (eye 64 cm above the
+        // capsule centre); the attacker's game draws it 120 ms late, and the attacker
+        // aims exactly at what it sees.
+        const long t0 = 2_000_000; const long length = 10_000;
+        static (double X, double Y, double Z) Body(long t) => (1000, 300 * Math.Sin((t - t0) / 1000.0 * 2 * Math.PI), 100);
+        TrackSample Eye(long t) { var b = Body(t); return new TrackSample(t, b.X, b.Y, b.Z + 64, 0, 0); }
+        TrackSample Aim(long t, (double X, double Y, double Z) at) => new(t, 0, 0, 164, Math.Atan2(at.Z - 164, Math.Sqrt(at.X * at.X + at.Y * at.Y)) * 180 / Math.PI, Math.Atan2(at.Y, at.X) * 180 / Math.PI);
+        TrackingRound Play(long seenLag, long aimLag, Func<long, (double, double, double)>? claimed = null, bool evidence = true, long attackUntil = length)
+        {
+            var round = new TrackingRound("a", "d", t0, t0 + length);
+            for (long t = t0; t < t0 + length; t += 17)
+            {
+                var dodge = new List<TrackSample> { Eye(t) };
+                var aim = t < t0 + attackUntil ? new List<TrackSample> { Aim(t, Body(t - aimLag)) } : [];
+                var seen = new List<TrackSeen>();
+                if (evidence && (t - t0) % 34 == 0) { var c = (claimed ?? (x => Body(x - seenLag)))(t); seen.Add(new TrackSeen(t, 7, c.Item1, c.Item2, c.Item3, 45, 115)); seen.Add(new TrackSeen(t, 3, -500, -500, 100, 45, 115)); }
+                round.Add("d", new TrackBatch("m", 1, dodge, []));
+                round.Add("a", new TrackBatch("m", 1, aim, seen));
+            }
+            return round;
+        }
+        var fair = Play(120, 120).Compute(t0 + length, 40, 60);
+        Check(fair.Percent > 97 && !fair.Disputed && Math.Abs(fair.LagMs - 120) <= 10 && fair.SeenRejected < fair.SeenRows / 10, "Tracking what the game drew 120 ms late scores fully, and the lag is measured");
+        var blind = Play(0, 100, evidence: false).Compute(t0 + length, 0, 0);
+        Check(blind.Percent > 97 && blind.SeenRows == 0 && blind.LagMs == 100, "Without drawn hulls the host rewinds the dodger by the estimated lag (100 ms + half the round trips)");
+        var lie = Play(0, 0, claimed: t => { var b = Body(t); return (b.X + 250, b.Y, b.Z); }).Compute(t0 + length, 40, 40);
+        Check(lie.Disputed && lie.Reason == "seen-mismatch", "Drawn hulls that don't match the dodger's own track are rejected and dispute the round");
+        var late = Play(350, 350).Compute(t0 + length, 40, 40);
+        Check(late.Disputed && late.LagMs == TrackingRound.RewindCapMs && late.Percent < 60, "The rewind is capped at 200 ms: aiming at a target older than that doesn't count");
+        var partial = Play(120, 120, attackUntil: length / 2).Compute(t0 + length, 40, 40);
+        Check(partial.Disputed && partial.Reason == "coverage" && partial.Percent is > 45 and < 55, "A stream covering half the round scores half and is disputed");
+        var midway = Play(120, 120).Compute(t0 + length / 2, 40, 40);
+        Check(midway.Percent is > 45 and < 55 && !midway.Disputed && midway.Coverage > 0.95, "Live scores cover the round so far");
+
+        // Wire format.
+        var batch = new TrackBatch("m-1", 2, [new TrackSample(t0, 1.234, 2, 3, -10, 370)], [new TrackSeen(t0, 5, 4, 5, 6, 40, 90)]);
+        var read = TrackBatch.Read(J(batch.Body()));
+        Check(read is { MatchId: "m-1", Round: 2 } && read.Samples[0].X == 1.23 && read.Samples[0].Yaw == 370 && read.Seen[0].Id == 5 && read.Seen[0].HalfHeight == 90, "Track batches round-trip");
+        Check(TrackBatch.Read(J(new { match = "m", round = 1, s = new[] { new double[] { 1, 0, 0, 0, 95, 0 } } })) is null && TrackBatch.Read(J(new { match = "m", round = 1, s = new[] { new double[] { 1, 0, 0 } } })) is null
+            && TrackBatch.Read(J(new { match = "m", round = 1, s = Array.Empty<double[]>(), v = new[] { new double[] { 1, 0, 0, 0, 0, 40, 90 } } })) is null, "Impossible pitch, short rows and bad target ids are refused");
+
+        // Client side: self-pose.tsv rows become samples on the host clock; target rows belong to the newest pose.
+        var tracker = new SelfPoseTracker(Path.GetTempPath());
+        tracker.Take(LivePoseFrame.Parse("AIMMOD_POSE_1\t4\nmeta\tx\ty\t1\npose\t1000\t1\t2\t3\t-5\t90\t0\t100\npose\t1016\t1\t2\t3\t-5\t91\t0\t100\ntarget\t9\t50\t60\t70\t40\t90\n"), 500);
+        tracker.Take(LivePoseFrame.Parse("AIMMOD_POSE_1\t4\npose\t1032\t0\t0\t0\t0\t0\t0\t100\n"), 500);
+        var drained = tracker.Drain("m", 1).ToArray();
+        Check(drained.Length == 1 && drained[0].Samples.Count == 2 && drained[0].Samples[0].T == 1500 && drained[0].Samples[1].Yaw == 91 && drained[0].Seen.Single() is { T: 1516, Id: 9, Radius: 40 }, "Self-pose rows become host-clock samples, a repeated file sequence is skipped");
+
+        // Rounds: roles alternate, the host scores, native score frames are refused.
+        var (core, clock, advance) = Lobby();
+        core.Join("p2", "Two");
+        core.Apply("host", "settings", Patch(new { mode = "tracking-duel", rounds = 1, countdown = 3 }), content);
+        ReadyAll(core);
+        Check(core.Apply("host", "start", default, content).Ok, "Tracking duel starts with two ready players");
+        void Attack(string attacker, string dodger, double aimOffset)
+        {
+            var m = core.Snapshot().Match!;
+            Check(m.Attacker == attacker && m.Live.First(l => l.MemberId == dodger).Status == LineStates.Dodger, "Round " + m.Round + ": " + attacker + " tracks, " + dodger + " dodges");
+            advance(3000); core.Tick();
+            m = core.Snapshot().Match!;
+            Check(m.Phase == MatchPhases.Live && core.Score(attacker, new ScoreFrame(m.Id, m.Round, 1, 1, 1, 1, 0, 9)).Code == "tracking", "Round goes live and KovaaK's own score isn't used");
+            var begin = clock();
+            for (long t = 0; t < 10_000; t += 100)
+            {
+                var samples = new List<TrackSample>(); var eyes = new List<TrackSample>();
+                for (long k = 0; k < 100; k += 17) { var at = begin + t + k; eyes.Add(new TrackSample(at, 1000, 0, 164, 0, 0)); samples.Add(new TrackSample(at, 0, aimOffset, 164, 0, 0)); }
+                core.Track(dodger, new TrackBatch(m.Id, m.Round, eyes, []));
+                core.Track(attacker, new TrackBatch(m.Id, m.Round, samples, []));
+                if (t == 0) Check(core.Track("nobody", new TrackBatch(m.Id, m.Round, samples, [])).Code == "not-playing", "Only the round's players stream");
+                advance(100); core.Tick();
+            }
+            Check(core.Snapshot().Match!.Tracking is { } live && live.Attacker == attacker && (aimOffset > 0 || live.Percent > 90), "The HUD gets the live time on target");
+            advance(LobbyCore.TrackGraceMs); core.Tick();
+            m = core.Snapshot().Match!;
+            Check(m.Phase is MatchPhases.Round or MatchPhases.Final && m.Rounds[^1].Results.First(r => r.MemberId == dodger).Status == LineStates.Dodger, "The round closes at its end; the dodger has no score");
+        }
+        Attack("host", "p2", 0);
+        var first = core.Snapshot().Match!.Rounds[0].Results.First(r => r.MemberId == "host");
+        Check(first.Place == 1 && first.Score > 95, "A perfect track scores close to 100 %");
+        advance(LobbyCore.ResultsMs); core.Tick();
+        Attack("p2", "host", 60);
+        advance(LobbyCore.ResultsMs); core.Tick();
+        var final = core.Snapshot().Match!;
+        Check(final.Phase == MatchPhases.Final && final.WinnerId == "host" && final.Standings[0].MemberId == "host" && final.Standings.First(s => s.MemberId == "p2").Total < 5, "The higher total time on target wins the duel");
+
+        // A dodger leaving ends the round.
+        (core, clock, advance) = Lobby();
+        core.Join("p2", "Two");
+        core.Apply("host", "settings", Patch(new { mode = "tracking-duel", countdown = 3 }), content);
+        ReadyAll(core); core.Apply("host", "start", default, content);
+        advance(3000); core.Tick(); advance(2000); core.Tick();
+        core.Leave("p2");
+        Check(core.Snapshot().Match!.Phase == MatchPhases.Round, "A player leaving ends the round");
+        advance(LobbyCore.ResultsMs); core.Tick();
+        var gone = core.Snapshot().Match!;
+        Check(gone.Phase == MatchPhases.Final && gone.Rounds[0].Results.First(r => r.MemberId == "host").Score is null, "A player leaving ends the round unscored and the duel");
+
+        // Arena scenario: no targets, nobody hurt, nothing scored natively, one hidden helper bot.
+        var arena = MatchScenario.Generate(new(BaseScenario, duel with { Scenario = new ScenarioChoice("Synthetic A", ContentLibrary.TextHash(BaseScenario), "synthetic_map", ContentLibrary.TextHash("m"), 60) }));
+        Check(arena.Contains("AddedBots=AimMod Hidden Bot.bot\n") && arena.Contains("BotCharacters=AimMod Hidden Bot.bot\n") && arena.Contains("InvinciblePlayer=true\n") && arena.Contains("ScorePerDamage=0.0\n") && arena.Contains("Timelimit=20.0\n"), "Tracking arena: hidden helper bot only, invincible, no native scoring, the run outlasts the round");
+        var hidden = arena[arena.IndexOf("[Character Profile]\nName=AimMod Hidden\n", StringComparison.Ordinal)..];
+        Check(hidden.Contains("CharacterModel=None\n") && hidden.Contains("MainBBHide=true\n") && hidden.Contains("DisableCharacterCollision=true\n") && arena.Contains("[Bot Profile]\nName=AimMod Hidden Bot\n") && arena.Contains("NoAiming=true\n"), "The helper bot is invisible, passable and inert");
+        Check(arena == MatchScenario.Generate(new(BaseScenario, duel with { Scenario = new ScenarioChoice("Synthetic A", ContentLibrary.TextHash(BaseScenario), "synthetic_map", ContentLibrary.TextHash("m"), 60) })), "The arena is deterministic");
+    }
+
     static void ProtocolFrames()
     {
         var frame = Protocol.Encode(Protocol.Create("command", "l-1", "peer-a", 7, 123, new { id = 1, action = "ready", args = new { ready = true } }));
@@ -272,7 +399,7 @@ static class MultiplayerChecks
         foreach (var bad in new[] { Swap("aimmod.mp", "other"), Swap("\"v\":1", "\"v\":2"), Swap("\"command\"", "\"teleport\""), Swap("\"seq\":7", "\"seq\":-1"), "[]", "{", Swap("\"body\":{", "\"body\":[{").Replace("}}}", "}}]}") })
             Check(Protocol.Decode(Encoding.UTF8.GetBytes(bad)) is null, "Rejected frame: " + bad[..Math.Min(40, bad.Length)]);
         Check(Protocol.Decode(new byte[Protocol.MaxBytes + 1]) is null, "Oversized frames are rejected");
-        Check(!Protocol.Reliable("score") && Protocol.Reliable("snapshot") && Protocol.Types.Length == 18, "Score frames are unreliable, state is reliable");
+        Check(!Protocol.Reliable("score") && Protocol.Reliable("snapshot") && Protocol.Reliable("track") && Protocol.Types.Length == 19, "Score frames are unreliable; state and tracking samples are reliable");
         var sync = new ClockSync();
         sync.Add(0, 1050, 200); sync.Add(1000, 2010, 1020); sync.Add(2000, 3100, 2300);
         Check(sync.Rtt == 20 && sync.Offset == 1000, "Clock sync uses the minimum round-trip sample");
