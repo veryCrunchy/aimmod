@@ -891,7 +891,7 @@ sealed partial class MultiplayerService : IDisposable
         string? Leader, int? LeaderFrags, int? Team, int? TeamFrags, int? OtherFrags, int? Left, string Phase, IReadOnlyList<FeedLine> Feed);
     internal CombatHudView? CombatHud()
     {
-        if (Current is not { Match: { Phase: MatchPhases.Countdown or MatchPhases.Live } m } lobby || !LobbyModes.Combat(m.Mode) || !m.Players.Contains(SelfId) || LiveCombat(m) is not { } view) return null;
+        if (Current is not { Match: { Phase: MatchPhases.Countdown or MatchPhases.Live } m } lobby || !LobbyModes.Shooting(m.Mode) || m.Cs is not null || !m.Players.Contains(SelfId) || LiveCombat(m) is not { } view) return null;
         if (view.Players.FirstOrDefault(p => p.Member == SelfId) is not { } me) return null;
         var hostNow = clock() + (core is null && hostPeer is not null ? clocks.GetValueOrDefault(hostPeer)?.Offset ?? 0 : 0);
         string Name(string id) => id == SelfId ? "You" : LobbyRules.CleanName(lobby.Members.FirstOrDefault(x => x.Id == id)?.Name ?? m.Standings.FirstOrDefault(s => s.MemberId == id)?.Name, "Player");
@@ -939,11 +939,12 @@ sealed partial class MultiplayerService : IDisposable
             var badge = Badge();
             var duel = DuelHud();
             var combat = CombatHud();
-            if (notice is null && badge is null && duel is null && combat is null) return "{\"version\":1,\"active\":false}";
+            var cs = CsHud();
+            if (notice is null && badge is null && duel is null && combat is null && cs is null) return "{\"version\":1,\"active\":false}";
             return JsonSerializer.Serialize(new
             {
                 version = 1, active = notice is not null, badge, notice?.Id, notice?.Kind, notice?.Title, notice?.Body, notice?.Key, notice?.Countdown, notice?.Sound, notice?.Invite,
-                actions = notice?.Actions, interactive = notice?.Actions is { Count: > 0 }, volume = prefs.Sounds ? prefs.Volume : 0, duel, combat,
+                actions = notice?.Actions, interactive = notice?.Actions is { Count: > 0 }, volume = prefs.Sounds ? prefs.Volume : 0, duel, combat, cs,
             }, Protocol.Json);
         }
     }
@@ -1651,6 +1652,7 @@ sealed partial class MultiplayerService : IDisposable
             if (s.CharacterProfile is { Preset: ProfilePresets.Custom, Custom: { } character }) characterText = library.PathOf("character", character) is { } c ? File.ReadAllText(c) : null;
             var text = MatchScenario.Generate(new MatchScenario.Inputs(File.ReadAllText(basePath), s, mapFile, mapText, weaponText, characterText));
             if (LobbyModes.Combat(s.Mode)) { arenaSpawns = MatchScenario.Spawns(text); core?.SetCombatSpawns(arenaSpawns); }
+            if (s.Mode == LobbyModes.Cs) { csObjectives = LoadObjectives(text); core?.SetCsObjectives(csObjectives); }
             var (ok, error) = scenarios.Write(name, text, clock());
             return ok ? null : error == "name-taken" ? "A scenario of yours already uses the match name. Rename it to play." : "Couldn’t save the match scenario.";
         }
@@ -1706,11 +1708,14 @@ sealed partial class MultiplayerService : IDisposable
         {
             var lastHit = view.Events.LastOrDefault(e => e.Member == SelfId && e.Kind is "damage");
             var lastSpawn = view.Events.LastOrDefault(e => e.Member == SelfId && e.Kind is "respawn");
-            var body = PlayState.Format(0, match.Id, self, lastHit, lastHit?.Attacker, lastSpawn);
+            var extra = CsPlayLines(match);
+            if (match.Cs is { } csv && csv.Spawns?.GetValueOrDefault(SelfId) is { Length: 4 } rs)
+                lastSpawn = new CombatEvent(1_000_000 + csv.Round, "respawn", 0, SelfId, null, 0, false, 100, null, rs); // one teleport per CS round
+            var body = PlayState.Format(0, match.Id, self, lastHit, lastHit?.Attacker, lastSpawn, extra);
             if (body != lastPlayState)
             {
                 lastPlayState = body;
-                try { AtomicFile.WriteText(Path.Combine(outputFolder, "play-state.tsv"), PlayState.Format(++playSequence, match.Id, self, lastHit, lastHit?.Attacker, lastSpawn)); }
+                try { AtomicFile.WriteText(Path.Combine(outputFolder, "play-state.tsv"), PlayState.Format(++playSequence, match.Id, self, lastHit, lastHit?.Attacker, lastSpawn, extra)); }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             }
             WriteAvatarState(match, view, self);
@@ -1780,7 +1785,7 @@ sealed partial class MultiplayerService : IDisposable
     {
         if (Current is not { Match: { } match } || !match.Players.Contains(SelfId)) { trackedRound = null; return; }
         if (match.Mode == LobbyModes.Tracking) { StreamTracking(match); return; }
-        if (LobbyModes.Combat(match.Mode)) { StreamCombat(match); return; }
+        if (LobbyModes.Shooting(match.Mode)) { StreamCombat(match); if (match.Cs is not null) CsInput(match); return; }
         var roundKey = match.Id + "#" + match.Round;
         if (trackedRound != roundKey)
         {

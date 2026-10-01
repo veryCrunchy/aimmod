@@ -28,6 +28,7 @@ static class MultiplayerChecks
         TrackingDuel();
         CombatModes();
         TeamsAndSpawns();
+        CsMode();
         ProtocolFrames();
         Peers();
         SteamPipe();
@@ -590,6 +591,118 @@ static class MultiplayerChecks
         Check(fromReflex.Count == 2 && fromReflex[0] == new SpawnPoint(12, 4, 8, 45, 1) && fromReflex[1] == new SpawnPoint(28, 20, 24, 0, 3), "Reflex spawn points: (a, b, c) loads as (c, a, b) times MapScale, teamB 0 keeps team 1 only");
         var state = PlayState.Format(1, "m", new CombatPlayerView("me", 100, true, 0, 1, null, 0, 0, 0), null, null, new CombatEvent(9, "respawn", 5, "me", null, 0, false, 100, null, [1, 2, 3, 90]));
         Check(state.EndsWith("spawn\t9\t1\t2\t3\t90\n", StringComparison.Ordinal), "Play state carries the host's spawn for AimModCore's teleport");
+    }
+
+    // Phase 3: CS rules, economy, armour, buying, plant and defuse, halves, and the lobby side.
+    static void CsMode()
+    {
+        var content = new FakeContent();
+        // CS2 armour: AK-47 (77.5 % penetration) 36 body damage on full kevlar: 27.9 to health, 4.05 armour.
+        var (health, armor) = CsRules.Armor(36, false, 100, false, 0.775);
+        Check(Math.Abs(health - 27.9) < 1e-9 && Math.Abs(armor - 4.05) < 1e-9, "Armour: penetration share reaches health, the rest costs 0.5 armour per point");
+        Check(CsRules.Armor(144, true, 100, false, 0.775) == (144, 0) && CsRules.Armor(144, true, 100, true, 0.775).Health < 144, "A headshot is reduced only with a helmet");
+        var (h2, a2) = CsRules.Armor(100, false, 5, false, 0.5);
+        Check(Math.Abs(h2 - 90) < 1e-9 && a2 == 5, "Thin armour absorbs what it can and the rest is health damage");
+        Check(CsRules.LossBonus(0) == 1400 && CsRules.LossBonus(1) == 1900 && CsRules.LossBonus(4) == 3400 && CsRules.LossBonus(9) == 3400, "CS2 loss bonus: 1400 up to 3400 in 500 steps");
+        Check(CsRules.Find("ak47") is { Price: 2700, Side: "T", KillReward: 300 } && CsRules.Find("awp") is { Price: 4750, KillReward: 100 } && CsRules.Find("mp9") is { KillReward: 600, Side: "CT" }, "CS2 prices, sides and kill rewards per class");
+
+        // Lobby: 3v3, 4v4 or 5v5 only, up to 10 players, halves of 6-15 rounds.
+        var start = new LobbySettings(Scenario: content.Scenario("Synthetic A"));
+        var cs = LobbyRules.Apply(start, J(new { mode = "cs", maxPlayers = 7, halfRounds = 30 }), 2, content).Settings!;
+        Check(cs.MaxPlayers == 8 && cs.HalfRounds == 15 && cs.Overtime && cs.TotalRounds == 30 && LobbyRules.Apply(cs, J(new { maxPlayers = 12 }), 2, content).Settings!.MaxPlayers == 10, "CS: even team sizes up to 5v5, halves capped at 15 rounds");
+        Check(LobbyRules.Apply(start, J(new { mode = "deathmatch", maxPlayers = 10 }), 2, content).Settings!.MaxPlayers == 8, "Other modes stay at 8 players");
+        Check(MatchScenario.Name(cs).Contains(" - CS competitive - ", StringComparison.Ordinal) && MatchScenario.Needed(cs), "CS plays its own arena");
+        var arena = MatchScenario.Generate(new(BaseScenario, cs with { Scenario = new ScenarioChoice("Synthetic A", ContentLibrary.TextHash(BaseScenario), "synthetic_map", ContentLibrary.TextHash("m"), 60) }));
+        Check(CsRules.Weapons.All(w => arena.Contains("Name=" + w.Combat.Name + "\nType=Hitscan\n")) && arena.Contains("WeaponProfileNames=AimMod CS USP-S;AimMod CS Glock-18;;;;;;\n") && arena.Contains("InvinciblePlayer=false\n") && arena.Contains("MinRespawnDelay=600.0\n"),
+            "CS arena: every buyable weapon, the pistols in the first slots, no native respawn");
+        Check(MultiplayerService.CsKeyClashes(new HashSet<string> { "E", "F" }).Single().Contains("E (use", StringComparison.Ordinal) && MultiplayerService.CsKeyClashes(new HashSet<string>()).Count == 0, "B and E are checked against KovaaK's binds");
+
+        // Map-port metadata: zones and spawns times map_scale.
+        var json = "{\"format\":\"aimmod.map-objectives\",\"version\":1,\"map_scale\":1,\"zones\":["
+            + "{\"type\":\"buy_zone\",\"team\":\"terrorist\",\"name\":\"\",\"aabb\":{\"min\":[-100,-100,0],\"max\":[100,100,200]}},"
+            + "{\"type\":\"buy_zone\",\"team\":\"counter_terrorist\",\"name\":\"\",\"aabb\":{\"min\":[900,-100,0],\"max\":[1100,100,200]}},"
+            + "{\"type\":\"bomb_site\",\"team\":\"any\",\"name\":\"\",\"aabb\":{\"min\":[450,-50,0],\"max\":[550,50,200]}}],"
+            + "\"spawns\":[{\"team\":\"terrorist\",\"origin\":[0,0,10],\"yaw\":0},{\"team\":\"counter_terrorist\",\"origin\":[1000,0,10],\"yaw\":180}]}";
+        var objectives = MapObjectives.Parse(json)!;
+        Check(objectives.BombSites.Single().Name == "A" && objectives.BuyZones(CsRules.T).Count == 1 && objectives.SpawnsFor(CsRules.CT).Single().Yaw == 180
+            && MapObjectives.Parse(json.Replace("aimmod.map-objectives", "other")) is null && MapObjectives.Parse(json.Replace("\"map_scale\":1", "\"map_scale\":4"))!.BombSites[0].Min[0] == 1800, "Objective metadata: sites named A, B.. in order, zones scaled by map_scale");
+        Check(MapObjectives.FileFor("aimmod_de_dust2_csgo.json") == "aimmod_de_dust2_csgo.aimmod.json", "Metadata sits next to the map as <map>.aimmod.json");
+
+        // A 3v3: a, c, e start T (team 1); b, d, f start CT (team 2).
+        const long t0 = 9_000_000;
+        var ids = new[] { "a", "b", "c", "d", "e", "f" };
+        var match = new CsMatch(ids, t0, 6, true, objectives);
+        void Place(string id, double x, long from, long to) { var list = new List<TrackSample>(); for (var t = from; t < to; t += 17) list.Add(new TrackSample(t, x, 0, 164, 0, x < 500 ? 0 : 180)); for (var i = 0; i < list.Count; i += 60) match.Combat.Track(id, new TrackBatch("m", 1, list.Skip(i).Take(60).ToList(), [])); }
+        foreach (var id in ids) Place(id, match.SideOf(id) == CsRules.T ? 0 : 1000, t0 - 200, t0 + 2000);
+        Check(match.SideOf("a") == CsRules.T && match.SideOf("b") == CsRules.CT && match.View().Bomb.Carrier == "a" && match.View().Spawns!["b"][0] == 1000, "Teams by join order, a Terrorist carries the bomb, side spawns from the metadata");
+        Check(match.Buy("a", "ak47", t0 + 1000) == "money" && match.Buy("a", "kevlar", t0 + 1000) is null && match.View().Players.First(p => p.Member == "a") is { Money: 150, Armor: 100 }, "Buying in freeze time: not enough money is refused, kevlar is bought");
+        Check(match.Buy("b", "ak47", t0 + 1000) == "side" && match.Buy("b", "usp", t0 + 1000) == "owned" && match.Buy("b", "defuse-kit", t0 + 1000) is null, "Side rules: CT can't buy the AK; the starting pistol is owned; CT buy a kit");
+        Place("d", 0, t0 + 2000, t0 + 3000);
+        Check(match.Buy("d", "kevlar", t0 + 2500) == "buy-zone", "Buying outside your buy zone is refused");
+        match.Tick(t0 + CsRules.FreezeMs);
+        Check(match.Phase == "live" && match.Buy("c", "kevlar", t0 + CsRules.FreezeMs + CsRules.BuyMs + 10) == "buy-time", "After the freeze the round is live; buy time ends 20 s later");
+
+        // Plant: the carrier holds E in the site for 3.2 s; then the CT defuses with a kit (5 s).
+        var live = t0 + CsRules.FreezeMs;
+        foreach (var id in ids) Place(id, id == "a" || id == "b" ? 500 : match.SideOf(id) == CsRules.T ? 0 : 1000, live, live + 30_000);
+        Check(match.Use("c", true, live + 1000) == "nothing-to-use" && match.Use("a", true, live + 1000) is null, "Only the carrier plants, in a bomb site");
+        match.Tick(live + 1000 + CsRules.PlantMs + 10);
+        Check(match.Phase == "planted" && match.View().Bomb is { State: "planted", Site: "A" } && match.View().Players.First(p => p.Member == "a").Money == 450, "Planted after 3.2 s; the planter gets $300");
+        Check(match.Use("b", true, live + 5000) is null, "The CT at the bomb starts defusing");
+        match.Tick(live + 5000 + CsRules.KitDefuseMs + 10);
+        var v = match.View();
+        Check(match.Phase == "end" && v.LastWinner == 2 && v.LastReason == "defuse" && v.Score[1] == 1, "A kit defuses in 5 s: the CT take the round");
+        Check(v.Players.First(p => p.Member == "b").Money == 800 - CsRules.KitPrice + CsRules.DefuseReward + CsRules.WinDefuse && v.Players.First(p => p.Member == "c").Money == 800 + 1400 + 800,
+            "CS2 rewards: $3500 defuse win (+$300 defuser); Terrorists get the loss bonus plus $800 for the plant");
+
+        // Round 2: elimination. Dead players lose their gear; the loss bonus grows.
+        match.Tick(match.View().PhaseEndsAt + 1);
+        Check(match.Phase == "freeze" && match.Round == 2 && match.View().Bomb.Carrier == "c", "The next round starts frozen; the bomb goes to the next Terrorist");
+        match.Tick(match.View().PhaseEndsAt + 1);
+        var t2 = match.View().LiveAt!.Value;
+        foreach (var id in new[] { "a", "c", "e" }) match.Combat.Kill(id, t2 + 100);
+        match.Tick(t2 + 200);
+        Check(match.View() is { LastWinner: 2, LastReason: "elimination" } && match.View().Players.First(p => p.Member == "e").Money == 800 + 2200 + 1900, "All Terrorists down: CT win by elimination; the second loss pays $1900");
+
+        // Rounds 3-6 the same way; then halftime: sides switch, money and gear reset.
+        for (var r = 3; r <= 6; r++)
+        {
+            match.Tick(match.View().PhaseEndsAt + 1); match.Tick(match.View().PhaseEndsAt + 1);
+            var at = match.View().LiveAt!.Value;
+            foreach (var id in new[] { "a", "c", "e" }) match.Combat.Kill(id, at + 100);
+            match.Tick(at + 200);
+        }
+        Check(match.View().Score[1] == 6, "Six CT rounds");
+        match.Tick(match.View().PhaseEndsAt + 1);
+        v = match.View();
+        Check(v.Round == 7 && match.SideOf("a") == CsRules.CT && v.Team1Side == CsRules.CT && v.Players.All(p => p.Money == CsRules.StartMoney) && v.Players.All(p => p.Primary is null && p.Armor == 0), "Halftime: sides switch, money resets to $800, gear is gone");
+        // Team 2 (now T) wins once more: first to 7 takes the match.
+        match.Tick(v.PhaseEndsAt + 1);
+        var t7 = match.View().LiveAt!.Value;
+        foreach (var id in new[] { "a", "c", "e" }) match.Combat.Kill(id, t7 + 100);
+        match.Tick(t7 + 200); match.Tick(match.View().PhaseEndsAt + 1);
+        Check(match.Over && match.WinnerTeam == 2 && match.View().Events.Last().Kind == "match-end", "First to 7 (half of 6 + 1) wins the match");
+
+        // Time runs out: CT win; Terrorists who survived get no loss bonus.
+        var timeout = new CsMatch(ids, t0, 6, true, objectives);
+        timeout.Tick(t0 + CsRules.FreezeMs);
+        timeout.Tick(t0 + CsRules.FreezeMs + CsRules.RoundMs + 1);
+        Check(timeout.View() is { LastWinner: 2, LastReason: "time" } && timeout.View().Players.Where(p => p.Side == CsRules.T).All(p => p.Money == 800), "Time out: CT win; surviving Terrorists get nothing");
+
+        // On the host: 6 players start, freeze refuses hits, buys go through lobby commands.
+        var (core, clock, advance) = Lobby();
+        core.Apply("host", "settings", Patch(new { mode = "cs", maxPlayers = 6, countdown = 3 }), content);
+        foreach (var id in new[] { "p2", "p3", "p4", "p5" }) core.Join(id, id);
+        ReadyAll(core);
+        Check(core.Apply("host", "start", default, content).Code == "blocked" && LobbyRules.StartBlockers(core.Snapshot()).Any(b => b.Code == "cs-teams"), "CS with five players is blocked: it needs 6, 8 or 10");
+        core.Join("p6", "p6"); ReadyAll(core);
+        core.SetCsObjectives(null);
+        Check(core.Apply("host", "start", default, content).Ok, "CS starts with 3v3");
+        advance(3000); core.Tick();
+        var m = core.Snapshot().Match!;
+        Check(m.Cs is { Phase: "freeze", Round: 1 } && core.Claim("host", new HitClaim(m.Id, 1, 1, clock(), 0, 0, 164, 0, 0, false, null, null, null, null, null, 1)).Code == "round-phase", "Freeze time: no shooting");
+        Check(core.Apply("host", "buy", J(new { item = "kevlar" }), content).Ok && core.Apply("host", "buy", J(new { item = "kevlar" }), content).Code == "owned"
+            && core.Snapshot().Match!.Cs!.Players.First(p => p.Member == "host").Money == 150, "Buys are lobby commands the host validates (no map metadata: buy anywhere)");
     }
 
     static void ProtocolFrames()

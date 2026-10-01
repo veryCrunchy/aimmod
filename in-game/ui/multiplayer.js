@@ -16,7 +16,8 @@
     {id:'deathmatch',label:'Deathmatch',short:'DM',text:'Everyone against everyone, first to the frag limit.'},
     {id:'vampiric',label:'Vampiric 1v1',short:'Vampiric',text:'One on one. Damage heals you, health drains.'},
     {id:'instagib',label:'Instagib',short:'Instagib',text:'Every hit kills. First to the frag limit.'},
-    {id:'team-deathmatch',label:'Team deathmatch',short:'TDM',text:'Two teams. First team to the frag limit. No friendly fire.'}
+    {id:'team-deathmatch',label:'Team deathmatch',short:'TDM',text:'Two teams. First team to the frag limit. No friendly fire.'},
+    {id:'cs',label:'CS competitive',short:'CS',text:'3v3 to 5v5. Buy, plant and defuse; halves and sides like CS2.'}
   ];
   function combat(m){return m==='deathmatch'||m==='vampiric'||m==='instagib'||m==='team-deathmatch';}
   var PRIVACY={friends:'Friends only',invite:'Invite only',public:'Public (room code)'};
@@ -890,8 +891,13 @@
     // lifesteal, rounds each, match or round length) are basics; the rest is More options.
     var pl=section('Players and rounds');
     var oneOnOne=s.mode==='duel'||s.mode==='tracking-duel'||s.mode==='vampiric';
-    pl.appendChild(settingRow('Max players',oneOnOne?'Always one against one in this mode.':'Including you.',stepper(s.maxPlayers,2,8,1,function(v){return F.number(v,0);},function(v){setting('maxPlayers',v);},oneOnOne,'max players')));
+    if(s.mode==='cs')pl.appendChild(settingRow('Team size','CS is 3v3, 4v4 or 5v5.',segmented([{id:'6',label:'3v3'},{id:'8',label:'4v4'},{id:'10',label:'5v5'}],String(s.maxPlayers),function(id){setting('maxPlayers',Number(id));},false,'team size')));
+    else pl.appendChild(settingRow('Max players',oneOnOne?'Always one against one in this mode.':'Including you.',stepper(s.maxPlayers,2,8,1,function(v){return F.number(v,0);},function(v){setting('maxPlayers',v);},oneOnOne,'max players')));
     if(s.mode==='duel')pl.appendChild(settingRow('First to','Round wins needed to take the duel.',stepper(s.firstTo,1,7,1,function(v){return F.number(v,0)+(v===1?' win':' wins');},function(v){setting('firstTo',v);},false,'first to')));
+    else if(s.mode==='cs'){
+      pl.appendChild(settingRow('Rounds per half','Sides switch after this many rounds; first to one more than that wins (CS2: 12).',stepper(s.halfRounds||12,6,15,1,function(v){return F.number(v,0);},function(v){setting('halfRounds',v);},false,'rounds per half')));
+      pl.appendChild(settingRow('Overtime','A tie goes to overtime halves of 3 rounds with $12,500.',toggleSwitch(s.overtime!==false,'Overtime',function(){setting('overtime',s.overtime===false);})));
+    }
     else if(combat(s.mode)){
       var fragDefault=s.mode==='vampiric'?10:s.mode==='instagib'?25:s.mode==='team-deathmatch'?50:20;
       pl.appendChild(settingRow('Frag limit','First to this many kills wins.',stepper(s.fragLimit||fragDefault,1,100,1,function(v){return F.number(v,0);},function(v){setting('fragLimit',v);},false,'frag limit')));

@@ -9,11 +9,12 @@
   function render(n){
     var key=n?JSON.stringify(n):'';if(key===last)return;last=key;
     while(box.firstChild)box.removeChild(box.firstChild);
-    if(!n||(!n.active&&!n.badge&&!n.duel&&!n.combat)){box.className='';return;}
-    var extra=n.duel||n.combat?' duel-on':'';
+    if(!n||(!n.active&&!n.badge&&!n.duel&&!n.combat&&!n.cs)){box.className='';return;}
+    var extra=n.duel||n.combat||n.cs?' duel-on':'';
     box.className='show'+extra;
     if(n.duel)box.appendChild(duel(n.duel));
     if(n.combat)box.appendChild(combat(n.combat));
+    if(n.cs)box.appendChild(csHud(n.cs));
     if(n.badge){var b=node('div','badge');b.appendChild(node('span','eye'));b.appendChild(node('span','',n.badge));box.appendChild(b);}
     if(!n.active)return;
     box.className='show '+(n.kind||'info')+extra;
@@ -63,6 +64,31 @@
     strip.appendChild(node('div','duel-time',typeof c.left==='number'?Math.floor(c.left/60)+':'+(c.left%60<10?'0':'')+(c.left%60):''));
     wrap.appendChild(strip);
     (c.feed||[]).forEach(function(f){var line=node('div','feed'+(f.you?' '+f.you:''),f.killer+' fragged '+f.victim+(f.head?' · headshot':''));wrap.appendChild(line);});
+    return wrap;
+  }
+  // CS strip: health and armour (or down), money, score, round clock and phase, bomb state
+  // with plant/defuse progress, and the buy menu (digits buy) while it's open.
+  function csHud(c){
+    var wrap=node('div','combat');
+    var strip=node('div','duel combat-strip'+(c.alive?'':' down'));
+    var hp=node('div','hp');
+    if(c.alive){hp.appendChild(node('div','hp-num',Math.round(c.health)+(c.armor>0?' · '+Math.round(c.armor)+(c.helmet?'H':'A'):'')));var bar=node('div','hp-bar');var fill=node('div','hp-fill'+(c.health<30?' low':''));fill.style.width=Math.max(0,Math.min(100,c.health))+'%';bar.appendChild(fill);hp.appendChild(bar);}
+    else hp.appendChild(node('div','hp-num down','Down'));
+    strip.appendChild(hp);
+    var mid=node('div','duel-mid');
+    var phase=c.phase==='freeze'?'FREEZE':c.phase==='planted'?'BOMB '+(c.site||''):c.phase==='end'?(c.lastRound||'Round over'):'LIVE';
+    mid.appendChild(node('div','duel-line',c.side+' '+c.score[0]+' – '+c.score[1]+' · Round '+c.round+' · '+phase));
+    var sub='$'+c.money+(c.kit?' · kit':'');
+    if(typeof c.plantProgress==='number')sub+=' · planting '+Math.round(c.plantProgress*100)+'%';
+    if(typeof c.defuseProgress==='number')sub+=' · defusing '+Math.round(c.defuseProgress*100)+'%';
+    if(c.phase==='freeze'||c.buyOpen)sub+=' · '+c.buyKey+' buy';
+    if(c.side==='T'&&c.phase==='live'||c.phase==='planted')sub+=' · hold '+c.useKey;
+    mid.appendChild(node('div','duel-sub',sub));
+    strip.appendChild(mid);
+    strip.appendChild(node('div','duel-time',typeof c.bombIn==='number'?c.bombIn+' s':typeof c.left==='number'?Math.floor(c.left/60)+':'+(c.left%60<10?'0':'')+(c.left%60):''));
+    wrap.appendChild(strip);
+    if(c.buy)c.buy.forEach(function(b){wrap.appendChild(node('div','feed'+(b.affordable?'':' victim'),b.key+'  '+b.label+'  $'+b.price));});
+    (c.keyClashes||[]).forEach(function(t){wrap.appendChild(node('div','feed victim',t));});
     return wrap;
   }
   function button(label,css,action){var b=node('button','button'+(css?' '+css:''),label);b.type='button';b.onclick=action;return b;}
