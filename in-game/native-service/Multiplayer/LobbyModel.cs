@@ -8,12 +8,12 @@ namespace AimMod.InGame.Multiplayer;
 static class LobbyModes
 {
     public const string Race = "score-race", Duel = "duel", Rounds = "ffa-rounds", Practice = "practice", Tracking = "tracking-duel",
-        Deathmatch = "deathmatch", Vampiric = "vampiric", Instagib = "instagib";
-    public static readonly string[] All = [Race, Duel, Rounds, Practice, Tracking, Deathmatch, Vampiric, Instagib];
+        Deathmatch = "deathmatch", Vampiric = "vampiric", Instagib = "instagib", TeamDeathmatch = "team-deathmatch";
+    public static readonly string[] All = [Race, Duel, Rounds, Practice, Tracking, Deathmatch, Vampiric, Instagib, TeamDeathmatch];
     // One against one: duel, tracking duel and vampiric 1v1.
     public static bool TwoPlayers(string mode) => mode is Duel or Tracking or Vampiric;
     // Players shoot each other; the host owns health, frags and respawns (CombatMatch).
-    public static bool Combat(string mode) => mode is Deathmatch or Vampiric or Instagib;
+    public static bool Combat(string mode) => mode is Deathmatch or Vampiric or Instagib or TeamDeathmatch;
     // Score race plays the scenario exactly as published so scores compare with each player's history.
     public static bool AllowsOverrides(string mode) => mode != Race;
     public static bool AllowsLateJoin(string mode) => mode is Rounds or Practice;
@@ -81,7 +81,7 @@ sealed record LobbySettings(
         : LobbyModes.Combat(Mode) ? TimeLimit ?? CombatRules.DefaultMatchSeconds : TimeLimit ?? Scenario?.TimeLimit ?? 60;
     [JsonIgnore] public int EffectiveFragLimit => FragLimit ?? CombatRules.DefaultFragLimit(Mode);
     // Tracking duel: Rounds is the number of rounds each player tracks; roles alternate.
-    [JsonIgnore] public int? TotalRounds => Mode switch { LobbyModes.Race or LobbyModes.Rounds => Rounds, LobbyModes.Tracking => Rounds * 2, LobbyModes.Deathmatch or LobbyModes.Vampiric or LobbyModes.Instagib => 1, _ => null };
+    [JsonIgnore] public int? TotalRounds => Mode switch { LobbyModes.Race or LobbyModes.Rounds => Rounds, LobbyModes.Tracking => Rounds * 2, LobbyModes.Deathmatch or LobbyModes.Vampiric or LobbyModes.Instagib or LobbyModes.TeamDeathmatch => 1, _ => null };
     // Values that change what people play. Changing any of them clears ready states.
     [JsonIgnore] public string PlayKey => string.Join('|', Mode, Scenario?.Hash, MapOverride?.Hash, Rounds, FirstTo, TimeLimit,
         WeaponProfile, MovementProfile, CharacterProfile, TargetSpeed, TargetSize, FragLimit, Lifesteal);

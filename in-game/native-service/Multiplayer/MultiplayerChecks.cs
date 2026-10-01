@@ -27,6 +27,7 @@ static class MultiplayerChecks
         Matches();
         TrackingDuel();
         CombatModes();
+        TeamsAndSpawns();
         ProtocolFrames();
         Peers();
         SteamPipe();
@@ -505,6 +506,80 @@ static class MultiplayerChecks
         Check(MatchScenario.Name(dm).Contains(" - Deathmatch - ", StringComparison.Ordinal) && MatchScenario.Key(dm) != MatchScenario.Key(dm with { Mode = LobbyModes.Instagib }), "Each combat mode has its own arena");
     }
 
+    // Team deathmatch, host-chosen spawns, pushed events and arena spawn points.
+    static void TeamsAndSpawns()
+    {
+        var content = new FakeContent();
+        var start = new LobbySettings(Scenario: content.Scenario("Synthetic A"));
+        var tdm = LobbyRules.Apply(start, J(new { mode = "team-deathmatch" }), 4, content).Settings!;
+        Check(tdm.EffectiveFragLimit == 50 && tdm.MaxPlayers >= 4 && LobbyModes.Combat(tdm.Mode) && CombatRules.Teams(["a", "b", "c", "d", "e"]).Values.SequenceEqual([1, 2, 1, 2, 1]), "Team deathmatch: first team to 50, teams alternate by join order");
+
+        const long t0 = 7_000_000;
+        // a (team 1) and c (team 1) at x=0 and x=0/y=300; b (team 2) at x=1000.
+        var c = new CombatMatch(LobbyModes.TeamDeathmatch, ["a", "b", "c"], 2, 0, t0, t0 + 60_000);
+        Check(c.TeamOf("a") == 1 && c.TeamOf("b") == 2 && c.TeamOf("c") == 1, "Teams are assigned at the start");
+        void Feed(string id, double x, double y, double yaw)
+        {
+            var list = new List<TrackSample>();
+            for (long t = t0 - 500; t < t0 + 9000; t += 17) list.Add(new TrackSample(t, x, y, 164, 0, yaw));
+            for (var i = 0; i < list.Count; i += 60) c.Track(id, new TrackBatch("m", 1, list.Skip(i).Take(60).ToList(), []));
+        }
+        Feed("a", 0, 0, 0); Feed("b", 1000, 0, 180); Feed("c", 500, 0, 0);
+        long seq = 0;
+        HitClaim At(long t, double tx) => new("m", 1, ++seq, t, 0, 0, 164, 0, 0, false, tx, 0, 100, 45, 115);
+        var at = t0 + 2000;
+        Check(c.Claim("a", At(at, 500), at + 10, 40) == "teammate" && c.View().Players.First(p => p.Member == "c").Health == 100, "Friendly fire is off: a hit on a teammate is refused");
+        for (var k = 0; k < 5; k++) c.Claim("a", At(at + 200 + k * 120, 1000), at + 210 + k * 120, 40);
+        Check(c.View().TeamFrags!.SequenceEqual([1, 0]) && c.WinnerTeam is null && c.Leader is null, "Team frags add up");
+        c.Spawns = [new SpawnPoint(0, 0, 100, 0, 2), new SpawnPoint(5000, 0, 100, 90, 2), new SpawnPoint(9000, 0, 100, 0, 1)];
+        c.Tick(at + 210 + 4 * 120 + CombatRules.RespawnMs(LobbyModes.TeamDeathmatch) + 10);
+        var respawn = c.View().Events[^1];
+        Check(respawn is { Kind: "respawn", Member: "b" } && respawn.Spawn is { } sp && sp[0] == 5000 && sp[3] == 90, "Respawn picks the team's spawn farthest from the nearest living opponent");
+        var t2 = at + 5000;
+        for (var k = 0; k < 5; k++) c.Claim("a", At(t2 + k * 120, 1000), t2 + 10 + k * 120, 40);
+        Check(c.WinnerTeam == 1 && c.Leader == "a", "The first team to the frag limit wins");
+
+        // On the host: placements by team, no single winner, the combat view names the team.
+        var (core, clock, advance) = Lobby();
+        core.Join("p2", "Two"); core.Join("p3", "Three"); core.Join("p4", "Four");
+        core.Apply("host", "settings", Patch(new { mode = "team-deathmatch", fragLimit = 1, countdown = 3 }), content);
+        ReadyAll(core);
+        core.SetCombatSpawns([new SpawnPoint(1, 2, 3, 0, 3)]);
+        Check(core.Apply("host", "start", default, content).Ok, "Team deathmatch starts");
+        advance(3000); core.Tick();
+        var m = core.Snapshot().Match!;
+        Check(m.Combat!.Players.First(p => p.Member == "host").Team == 1 && m.Combat.Players.First(p => p.Member == "p2").Team == 2 && m.Combat.TeamFrags!.Count == 2, "The snapshot carries teams and team frags");
+        var begin = clock();
+        for (long t = 0; t < 2000; t += 100)
+        {
+            var a = new List<TrackSample>(); var b = new List<TrackSample>();
+            for (long k = 0; k < 100; k += 17) { a.Add(new TrackSample(begin + t + k, 0, 0, 164, 0, 0)); b.Add(new TrackSample(begin + t + k, 1000, 0, 164, 0, 180)); }
+            core.Track("host", new TrackBatch(m.Id, 1, a, [])); core.Track("p2", new TrackBatch(m.Id, 1, b, []));
+            advance(100); core.Tick();
+        }
+        var now = clock();
+        for (var k = 0; k < 5; k++) core.Claim("host", new HitClaim(m.Id, 1, 100 + k, now - 480 + k * 100, 0, 0, 164, 0, 0, false, 1000, 0, 100, 45, 115));
+        var final = core.Snapshot().Match!;
+        var places = final.Rounds[0].Results.ToDictionary(r => r.MemberId, r => r.Place);
+        Check(final.Phase == MatchPhases.Final && final.WinnerId is null && final.Combat!.WinnerTeam == 1 && places["host"] == 1 && places["p3"] == 1 && places["p2"] == 2 && places["p4"] == 2, "Team deathmatch places the winning team first, with no single winner");
+
+        // Pushed events on top of the last snapshot.
+        var view = new CombatView(20, [new("me", 100, true, 0, 0, null, null, 0, 0), new("them", 100, true, 0, 0, null, null, 0, 0)], [new(3, "respawn", 1, "me", null, 0, false, 100, null)]);
+        var pushed = new[] { new CombatEvent(2, "damage", 1, "me", "them", 50, false, 10, null), new CombatEvent(4, "damage", 2, "me", "them", 40, false, 60, 100), new CombatEvent(5, "death", 3, "them", "me", 60, true, 0, 80) };
+        var live = CombatOverlay.Apply(view, pushed);
+        Check(live.Players[0] is { Health: 80, Frags: 1, Alive: true } && live.Players[1] is { Alive: false, Deaths: 1, Health: 0 } && live.Events.Count == 3, "Pushed events newer than the snapshot apply at once; older ones are already in it");
+
+        // Spawn points from the arena's map: map-creator JSON and legacy Reflex.
+        var json = "Name=x\nMapScale=2.0\n\n[Map Data]\n{\"objects\":[{\"location\":\"10, 20, 30\",\"name\":\"SpawnPoint\",\"properties\":[{\"name\":\"TeamMask\",\"value\":2}],\"rotation\":\"0, 0, -90\",\"type\":\"gameObject\"},{\"name\":\"Cube\",\"location\":\"1, 1, 1\"}],\"version\":\"1.0.0\"}\n";
+        var fromJson = MatchScenario.Spawns(json);
+        Check(fromJson.Count == 1 && fromJson[0] == new SpawnPoint(20, 40, 60, -90, 2), "JSON spawn points: location times MapScale, yaw from the rotation, team mask");
+        var reflex = "Name=x\nMapScale=4.0\n\n[Map Data]\nreflex map version 8\nglobal\n\tentity\n\t\ttype WorldSpawn\n\tentity\n\t\ttype PlayerSpawn\n\t\tVector3 position 1.0 2.0 3.0\n\t\tVector3 angles 45.0 0.0 0.0\n\t\tBool8 teamB 0\n\tentity\n\t\ttype PlayerSpawn\n\t\tVector3 position 5 6 7\n";
+        var fromReflex = MatchScenario.Spawns(reflex);
+        Check(fromReflex.Count == 2 && fromReflex[0] == new SpawnPoint(12, 4, 8, 45, 1) && fromReflex[1] == new SpawnPoint(28, 20, 24, 0, 3), "Reflex spawn points: (a, b, c) loads as (c, a, b) times MapScale, teamB 0 keeps team 1 only");
+        var state = PlayState.Format(1, "m", new CombatPlayerView("me", 100, true, 0, 1, null, 0, 0, 0), null, null, new CombatEvent(9, "respawn", 5, "me", null, 0, false, 100, null, [1, 2, 3, 90]));
+        Check(state.EndsWith("spawn\t9\t1\t2\t3\t90\n", StringComparison.Ordinal), "Play state carries the host's spawn for AimModCore's teleport");
+    }
+
     static void ProtocolFrames()
     {
         var frame = Protocol.Encode(Protocol.Create("command", "l-1", "peer-a", 7, 123, new { id = 1, action = "ready", args = new { ready = true } }));
@@ -515,7 +590,7 @@ static class MultiplayerChecks
         foreach (var bad in new[] { Swap("aimmod.mp", "other"), Swap("\"v\":1", "\"v\":2"), Swap("\"command\"", "\"teleport\""), Swap("\"seq\":7", "\"seq\":-1"), "[]", "{", Swap("\"body\":{", "\"body\":[{").Replace("}}}", "}}]}") })
             Check(Protocol.Decode(Encoding.UTF8.GetBytes(bad)) is null, "Rejected frame: " + bad[..Math.Min(40, bad.Length)]);
         Check(Protocol.Decode(new byte[Protocol.MaxBytes + 1]) is null, "Oversized frames are rejected");
-        Check(!Protocol.Reliable("score") && Protocol.Reliable("snapshot") && Protocol.Reliable("track") && Protocol.Reliable("hit") && Protocol.Types.Length == 20, "Score frames are unreliable; state and tracking samples are reliable");
+        Check(!Protocol.Reliable("score") && Protocol.Reliable("snapshot") && Protocol.Reliable("track") && Protocol.Reliable("hit") && Protocol.Reliable("combat") && Protocol.Types.Length == 21, "Score frames are unreliable; state and tracking samples are reliable");
         var sync = new ClockSync();
         sync.Add(0, 1050, 200); sync.Add(1000, 2010, 1020); sync.Add(2000, 3100, 2300);
         Check(sync.Rtt == 20 && sync.Offset == 1000, "Clock sync uses the minimum round-trip sample");
@@ -1310,6 +1385,22 @@ static class MultiplayerChecks
         Check(live.GetProperty("phase").GetString() == MatchPhases.Live && live.GetProperty("left").GetInt32() is > 0 and <= 10 && live.GetProperty("percent").ValueKind == JsonValueKind.Number && live.GetProperty("rounds").GetInt32() == 6,
             "Live: the duel HUD has the score so far, seconds left and the round count");
         Check(View().GetProperty("lobby").GetProperty("match").GetProperty("attacker").GetString() == service.SelfId, "The match snapshot names the attacker");
+        service.Act("end", default);
+        // Deathmatch: the combat HUD and the avatar state for AimModSteam.
+        service.Act("leave", default);
+        Check(service.Act("create", J(new { mode = "deathmatch", scenario = "Synthetic A" })).Ok, "A deathmatch lobby opens");
+        service.Act("sim", J(new { op = "add" }));
+        Run(12_000);
+        Check(service.Act("start", default).Ok, "The deathmatch starts with a simulated opponent");
+        static bool CombatLive(string notice) => JsonDocument.Parse(notice).RootElement.TryGetProperty("combat", out var cb) && cb.ValueKind == JsonValueKind.Object && cb.GetProperty("phase").GetString() == MatchPhases.Live;
+        for (var i = 0; i < 400 && !CombatLive(service.NoticeText()); i++) Run(100);
+        Run(500);
+        var hud = JsonDocument.Parse(service.NoticeText()).RootElement.GetProperty("combat");
+        Check(hud.GetProperty("health").GetDouble() == 100 && hud.GetProperty("alive").GetBoolean() && hud.GetProperty("fragLimit").GetInt32() == 20 && hud.GetProperty("left").GetInt32() is > 290 and <= 300 && hud.GetProperty("protected").GetBoolean(),
+            "Combat HUD: full health, spawn protection, frags against the limit and time left");
+        var avatars = File.ReadAllText(Path.Combine(output, "avatar-state.tsv"));
+        Check(avatars.StartsWith("AIMMOD_AVATARS_1\t", StringComparison.Ordinal) && avatars.Contains("\t1\tenemy\t100\t0\t0\n", StringComparison.Ordinal) && !avatars.Contains("peer\t" + service.SelfId, StringComparison.Ordinal),
+            "avatar-state.tsv lists the other players' avatars (alive, enemy, health) for AimModSteam");
         service.Act("end", default);
         // Host leaving a simulated lobby hands it over; invites and launch joins.
         service.Act("leave", default);

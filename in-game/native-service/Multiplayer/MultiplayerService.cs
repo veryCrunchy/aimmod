@@ -882,6 +882,28 @@ sealed partial class MultiplayerService : IDisposable
     // Tracking duel HUD for the notice layer (top edge, away from the crosshair):
     // this player's role, the opponent, the attacker's host score so far, the
     // share of the elapsed round on target, and the seconds left. Countdown and live only.
+    // Combat HUD for the notice layer (top edge): health or the respawn wait, frags
+    // against the limit, the leader or team scores, time left, and a short kill feed.
+    internal sealed record FeedLine(long Id, string Killer, string Victim, bool Head, string? You);
+    internal sealed record CombatHudView(double Health, double Max, bool Alive, int? RespawnIn, bool Protected, int Frags, int Deaths, int FragLimit,
+        string? Leader, int? LeaderFrags, int? Team, int? TeamFrags, int? OtherFrags, int? Left, string Phase, IReadOnlyList<FeedLine> Feed);
+    internal CombatHudView? CombatHud()
+    {
+        if (Current is not { Match: { Phase: MatchPhases.Countdown or MatchPhases.Live } m } lobby || !LobbyModes.Combat(m.Mode) || !m.Players.Contains(SelfId) || LiveCombat(m) is not { } view) return null;
+        if (view.Players.FirstOrDefault(p => p.Member == SelfId) is not { } me) return null;
+        var hostNow = clock() + (core is null && hostPeer is not null ? clocks.GetValueOrDefault(hostPeer)?.Offset ?? 0 : 0);
+        string Name(string id) => id == SelfId ? "You" : LobbyRules.CleanName(lobby.Members.FirstOrDefault(x => x.Id == id)?.Name ?? m.Standings.FirstOrDefault(s => s.MemberId == id)?.Name, "Player");
+        var best = view.Players.Where(p => p.Member != SelfId).OrderByDescending(p => p.Frags).FirstOrDefault();
+        int? left = m.Phase == MatchPhases.Live && m.StartsAt is { } start ? (int)Math.Max(0, Math.Ceiling((start + m.TimeLimit * 1000 - hostNow) / 1000.0)) : null;
+        var feed = view.Events.Where(e => e.Kind == "death" && hostNow - e.T < 6000).TakeLast(3)
+            .Select(e => new FeedLine(e.Id, e.Attacker is { } a ? Name(a) : "?", Name(e.Member), e.Head, e.Attacker == SelfId ? "killer" : e.Member == SelfId ? "victim" : null)).ToArray();
+        var team = me.Team is 1 or 2 ? me.Team : (int?)null;
+        return new CombatHudView(me.Health, CombatRules.MaxHealth, me.Alive, me.RespawnAt is { } r && !me.Alive ? (int)Math.Max(0, Math.Ceiling((r - hostNow) / 1000.0)) : null,
+            me.Alive && me.ProtectedUntil is { } pu && pu > hostNow, me.Frags, me.Deaths, view.FragLimit,
+            team is null && best is not null ? Name(best.Member) : null, team is null ? best?.Frags : null,
+            team, team is { } t && view.TeamFrags is { } tf ? tf[t - 1] : null, team is { } t2 && view.TeamFrags is { } tf2 ? tf2[2 - t2] : null, left, m.Phase, feed);
+    }
+
     internal sealed record DuelView(string Role, string Opponent, double? Percent, double? OnTarget, int? Left, int Round, int Rounds, string Phase, bool Disputed);
     internal DuelView? DuelHud()
     {
@@ -907,11 +929,12 @@ sealed partial class MultiplayerService : IDisposable
             notice ??= ComputeNotice(clock());
             var badge = Badge();
             var duel = DuelHud();
-            if (notice is null && badge is null && duel is null) return "{\"version\":1,\"active\":false}";
+            var combat = CombatHud();
+            if (notice is null && badge is null && duel is null && combat is null) return "{\"version\":1,\"active\":false}";
             return JsonSerializer.Serialize(new
             {
                 version = 1, active = notice is not null, badge, notice?.Id, notice?.Kind, notice?.Title, notice?.Body, notice?.Key, notice?.Countdown, notice?.Sound, notice?.Invite,
-                actions = notice?.Actions, interactive = notice?.Actions is { Count: > 0 }, volume = prefs.Sounds ? prefs.Volume : 0, duel,
+                actions = notice?.Actions, interactive = notice?.Actions is { Count: > 0 }, volume = prefs.Sounds ? prefs.Volume : 0, duel, combat,
             }, Protocol.Json);
         }
     }
@@ -1154,6 +1177,7 @@ sealed partial class MultiplayerService : IDisposable
                     core = null; mirror = snapshot; Connect(heir.Id);
                     return;
                 }
+                PushCombat();
                 Broadcast(snapshot, force: false);
                 if (now - lastPing > 2000)
                 {
@@ -1319,7 +1343,7 @@ sealed partial class MultiplayerService : IDisposable
                 if (TrackBatch.Read(m.Body) is { } batch) core!.Track(peer, batch);
                 break;
             case "hit":
-                if (HitClaim.Read(m.Body) is { } claim) core!.Claim(peer, claim);
+                if (HitClaim.Read(m.Body) is { } claim) { core!.Claim(peer, claim); PushCombat(); }
                 break;
             case "content.request":
                 if (server.Manifest(core!.Settings) is { } manifest) Send(peer, "content.manifest", new { key = manifest.Key, files = manifest.Files, workshop = manifest.Workshop });
@@ -1382,6 +1406,9 @@ sealed partial class MultiplayerService : IDisposable
             case "result":
                 if (m.Body.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.False && m.Body.TryGetProperty("message", out var text) && text.ValueKind == JsonValueKind.String)
                     notice = ("error", text.GetString() ?? "The host refused that.", clock());
+                break;
+            case "combat":
+                ReceiveCombat(m.Body);
                 break;
             case "replay.chunk":
                 if (ReadReplayChunk(m.Body) is { } fromHost && swap.Chunk(fromHost.Match, fromHost.Round, fromHost.Owner, fromHost.Id, fromHost.Kind, fromHost.Label, fromHost.Size, fromHost.Hash, fromHost.Offset, fromHost.Data) is { } got) swap.Import(got.Bytes, got.Info);
@@ -1609,6 +1636,7 @@ sealed partial class MultiplayerService : IDisposable
             if (s.WeaponProfile is { Preset: ProfilePresets.Custom, Custom: { } weapon }) weaponText = library.PathOf("weapon", weapon) is { } w ? File.ReadAllText(w) : null;
             if (s.CharacterProfile is { Preset: ProfilePresets.Custom, Custom: { } character }) characterText = library.PathOf("character", character) is { } c ? File.ReadAllText(c) : null;
             var text = MatchScenario.Generate(new MatchScenario.Inputs(File.ReadAllText(basePath), s, mapFile, mapText, weaponText, characterText));
+            if (LobbyModes.Combat(s.Mode)) { arenaSpawns = MatchScenario.Spawns(text); core?.SetCombatSpawns(arenaSpawns); }
             var (ok, error) = scenarios.Write(name, text, clock());
             return ok ? null : error == "name-taken" ? "A scenario of yours already uses the match name. Rename it to play." : "Couldn’t save the match scenario.";
         }
@@ -1659,17 +1687,79 @@ sealed partial class MultiplayerService : IDisposable
                 else if (hostPeer is not null) Send(hostPeer, "hit", claim.Body());
             }
         }
-        if (match.Combat?.Players.FirstOrDefault(p => p.Member == SelfId) is { } self)
+        var view = LiveCombat(match);
+        if (view?.Players.FirstOrDefault(p => p.Member == SelfId) is { } self)
         {
-            var lastHit = match.Combat.Events.LastOrDefault(e => e.Member == SelfId && e.Kind is "damage");
-            var body = PlayState.Format(0, match.Id, self, lastHit, lastHit?.Attacker);
+            var lastHit = view.Events.LastOrDefault(e => e.Member == SelfId && e.Kind is "damage");
+            var lastSpawn = view.Events.LastOrDefault(e => e.Member == SelfId && e.Kind is "respawn");
+            var body = PlayState.Format(0, match.Id, self, lastHit, lastHit?.Attacker, lastSpawn);
             if (body != lastPlayState)
             {
                 lastPlayState = body;
-                try { AtomicFile.WriteText(Path.Combine(outputFolder, "play-state.tsv"), PlayState.Format(++playSequence, match.Id, self, lastHit, lastHit?.Attacker)); }
+                try { AtomicFile.WriteText(Path.Combine(outputFolder, "play-state.tsv"), PlayState.Format(++playSequence, match.Id, self, lastHit, lastHit?.Attacker, lastSpawn)); }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             }
+            WriteAvatarState(match, view, self);
         }
+    }
+
+    // ---- combat events: pushed by the host as they happen ------------------
+    IReadOnlyList<SpawnPoint> arenaSpawns = [];
+    long pushedCombat; string? pushedMatch;
+    readonly List<CombatEvent> receivedCombat = [];
+    string? receivedMatch;
+    // Host: every new event goes to every peer at once (the snapshot follows within 250 ms).
+    void PushCombat()
+    {
+        if (core is null || core.Snapshot() is not { Match: { Combat: { } view } m } lobby) return;
+        var key = m.Id + "#" + m.Round;
+        if (pushedMatch != key) { pushedMatch = key; pushedCombat = 0; }
+        var fresh = view.Events.Where(e => e.Id > pushedCombat).ToArray();
+        if (fresh.Length == 0) return;
+        pushedCombat = fresh[^1].Id;
+        foreach (var peer in RemotePeers(lobby)) Send(peer, "combat", new { match = m.Id, round = m.Round, events = fresh });
+    }
+    void ReceiveCombat(JsonElement body)
+    {
+        try
+        {
+            var match = body.GetProperty("match").GetString(); var round = body.GetProperty("round").GetInt32();
+            var key = match + "#" + round;
+            if (receivedMatch != key) { receivedMatch = key; receivedCombat.Clear(); }
+            var events = body.GetProperty("events").Deserialize<CombatEvent[]>(Protocol.Json) ?? [];
+            foreach (var e in events.Take(32))
+                if (e.Kind is "damage" or "death" or "respawn" && receivedCombat.All(x => x.Id != e.Id) && double.IsFinite(e.Health) && e.Health is >= 0 and <= 1000)
+                    receivedCombat.Add(e);
+            if (receivedCombat.Count > 64) receivedCombat.RemoveRange(0, receivedCombat.Count - 64);
+        }
+        catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or JsonException or FormatException) { }
+    }
+    // The snapshot's combat view plus any newer events the host already pushed.
+    CombatView? LiveCombat(MatchSnapshot match)
+    {
+        if (match.Combat is not { } view) return null;
+        if (receivedMatch != match.Id + "#" + match.Round) return view;
+        return CombatOverlay.Apply(view, receivedCombat);
+    }
+
+    // For AimModSteam: how each other player's avatar should look (alive or down, friend
+    // or foe, health), so a death plays on the avatar and team colours are right.
+    string? lastAvatarState; long avatarSequence;
+    void WriteAvatarState(MatchSnapshot match, CombatView view, CombatPlayerView self)
+    {
+        if (outputFolder is null) return;
+        var rows = view.Players.Where(p => p.Member != SelfId).Select(p =>
+        {
+            var died = view.Events.LastOrDefault(e => e.Member == p.Member && e.Kind == "death");
+            var friend = self.Team != 0 && p.Team == self.Team;
+            return "peer\t" + p.Member + "\t" + (p.Alive ? 1 : 0) + "\t" + (friend ? "friend" : "enemy") + "\t" + Math.Round(p.Health).ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + "\t" + (p.Alive ? 0 : died?.T ?? 0) + "\t" + (p.Alive ? 0 : p.RespawnAt ?? 0);
+        });
+        var body = "match\t" + Uri.EscapeDataString(match.Id) + "\n" + string.Join("\n", rows) + "\n";
+        if (body == lastAvatarState) return;
+        lastAvatarState = body;
+        try { AtomicFile.WriteText(Path.Combine(outputFolder, "avatar-state.tsv"), "AIMMOD_AVATARS_1\t" + ++avatarSequence + "\n" + body); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
 
     void TrackLocalRun()

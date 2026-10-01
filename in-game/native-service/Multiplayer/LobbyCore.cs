@@ -35,6 +35,13 @@ sealed class LobbyCore
         public CombatMatch? Combat; public long CombatEvents = -1;
     }
     bool Combat => match is not null && LobbyModes.Combat(match.Settings.Mode);
+    // The arena's spawn points for host-chosen respawns (set by the service from the generated scenario).
+    IReadOnlyList<SpawnPoint> combatSpawns = [];
+    public void SetCombatSpawns(IReadOnlyList<SpawnPoint> spawns)
+    {
+        combatSpawns = spawns;
+        if (match?.Combat is { } c) c.Spawns = spawns;
+    }
     // Tracking duel: samples may still arrive this long after the round's end.
     public const long TrackGraceMs = 1_000;
     bool Tracking => match?.Settings.Mode == LobbyModes.Tracking;
@@ -374,7 +381,7 @@ sealed class LobbyCore
         m.Tracking = null; m.TrackLast = null; m.Combat = null; m.CombatEvents = -1;
         if (LobbyModes.Combat(m.Settings.Mode))
             m.Combat = new CombatMatch(m.Settings.Mode, m.Players.Where(id => Find(id) is not null), m.Settings.EffectiveFragLimit, m.Settings.Lifesteal,
-                m.StartsAt.Value, m.StartsAt.Value + (long)(m.Settings.EffectiveTimeLimit * 1000));
+                m.StartsAt.Value, m.StartsAt.Value + (long)(m.Settings.EffectiveTimeLimit * 1000)) { Spawns = combatSpawns };
         if (m.Settings.Mode == LobbyModes.Tracking && m.Players.Count >= 2)
         {
             // Roles alternate: the first player tracks in odd rounds, the second in even rounds.
@@ -474,19 +481,22 @@ sealed class LobbyCore
     void CloseCombatRound(Match m, CombatMatch combat)
     {
         var view = combat.View();
-        var rows = view.Players.OrderByDescending(p => p.Frags).ThenBy(p => p.Deaths).ToArray();
+        // Team deathmatch: the team with more frags places first (a tie places everyone first).
+        int TeamPlace(int team) => view.TeamFrags is { } tf && team is 1 or 2 ? (tf[team - 1] >= tf[2 - team] ? 1 : 2) : 0;
+        var rows = view.Players.OrderBy(p => combat.Teams ? TeamPlace(p.Team) : 0).ThenByDescending(p => p.Frags).ThenBy(p => p.Deaths).ToArray();
         var results = new List<Placement>();
         foreach (var p in rows)
         {
             var present = Find(p.Member) is not null;
             if (m.Live.TryGetValue(p.Member, out var line) && line.Status is LineStates.Waiting or LineStates.Playing) line.Status = present ? LineStates.Finished : LineStates.Left;
-            var place = present ? 1 + rows.Count(o => o.Frags > p.Frags || (o.Frags == p.Frags && o.Deaths < p.Deaths)) : 0;
+            var place = !present ? 0 : combat.Teams ? TeamPlace(p.Team) : 1 + rows.Count(o => o.Frags > p.Frags || (o.Frags == p.Frags && o.Deaths < p.Deaths));
             double? accuracy = p.Claims > 0 ? Math.Round((p.Claims - p.Rejected) * 100.0 / p.Claims, 1) : null;
             results.Add(new Placement(p.Member, m.Names.GetValueOrDefault(p.Member, "Player"), place, p.Frags, accuracy, p.Frags, present ? LineStates.Finished : LineStates.Left,
                 p.Claims >= 10 && p.Rejected > p.Claims * 0.2));
         }
         var top = results.Where(r => r.Place == 1).ToArray();
-        m.Rounds.Add(new RoundResult(m.Round, results, top.Length == 1 ? top[0].MemberId : null));
+        // A team win has no single winner; the combat view names the winning team.
+        m.Rounds.Add(new RoundResult(m.Round, results, !combat.Teams && top.Length == 1 ? top[0].MemberId : null));
         m.Over = true;
         FinishMatch();
     }
@@ -628,7 +638,7 @@ sealed class LobbyCore
     {
         var m = match!;
         var standings = Standings(m);
-        m.WinnerId = LobbyModes.Scored(m.Settings.Mode) && standings.Count(x => x.Place == 1) == 1 ? standings.First(x => x.Place == 1).MemberId : null;
+        m.WinnerId = LobbyModes.Scored(m.Settings.Mode) && m.Combat is not { Teams: true } && standings.Count(x => x.Place == 1) == 1 ? standings.First(x => x.Place == 1).MemberId : null;
         m.Phase = MatchPhases.Final; m.NextAt = null; m.StartsAt = null; m.EndsAt = null; m.Rematch.Clear();
         foreach (var member in members) member.Ready = false;
         Changed();
@@ -694,7 +704,8 @@ sealed class LobbyCore
             // A combat match carries on from the scores the old host last published.
             if (LobbyModes.Combat(snapshot.Settings.Mode) && ms.StartsAt is { } combatStart && ms.Phase is MatchPhases.Countdown or MatchPhases.Live)
             {
-                match.Combat = new CombatMatch(snapshot.Settings.Mode, ms.Players, snapshot.Settings.EffectiveFragLimit, snapshot.Settings.Lifesteal, combatStart, combatStart + (long)(snapshot.Settings.EffectiveTimeLimit * 1000));
+                match.Combat = new CombatMatch(snapshot.Settings.Mode, ms.Players, snapshot.Settings.EffectiveFragLimit, snapshot.Settings.Lifesteal, combatStart, combatStart + (long)(snapshot.Settings.EffectiveTimeLimit * 1000),
+                    ms.Combat?.Players.Where(p => p.Team is 1 or 2).ToDictionary(p => p.Member, p => p.Team));
                 if (ms.Combat is { } cv) match.Combat.Restore(cv);
             }
             // A tracking round in progress restarts its scoring on the new host (the old host's samples are gone); the short coverage marks it disputed.

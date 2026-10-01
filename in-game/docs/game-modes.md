@@ -616,6 +616,7 @@ protection and lifesteal. Clients only claim hits.
 | `deathmatch` | 2–8 | 20 | 5 min (1–10 min) | 2 s | — |
 | `vampiric` | exactly 2 | 10 | 5 min | 2 s | lifesteal 50% (0–200%, steps of 5); +25 hp per kill; 2 hp/s decay that never kills; no overheal |
 | `instagib` | 2–8 | 25 | 5 min | 1 s | — |
+| `team-deathmatch` | 2–8 | 50 (team total) | 5 min | 2 s | teams 1/2 by join order, alternating; no friendly fire (`teammate`) |
 
 - **Weapons.** Deathmatch and vampiric use the AimMod Combat Rifle (hitscan,
   20 damage, ×2 headshot, 10 shots/s). Instagib uses the AimMod Railgun
@@ -684,6 +685,7 @@ AIMMOD_PLAY_1\t<sequence>
 match\t<%-escaped match id>
 self\t<alive 0/1>\t<health>\t<max health>\t<respawn at unix ms, 0 = none>\t<spawn protected until unix ms>
 hit\t<event id>\t<amount>\t<headshot 0/1>\t<attacker member id>      (last damage taken, for the native hit effect)
+spawn\t<event id>\t<x>\t<y>\t<z>\t<yaw>      (where the host respawned this player; teleport once per event id)
 ```
 
 How AimModCore applies `play-state.tsv`:
@@ -703,13 +705,57 @@ death, frag, respawn, spawn protection, the host-rewind fallback, lifesteal,
 decay, instagib, the wire formats, a deathmatch ending at its frag limit, and
 the arena.
 
-**Not done yet:**
+**Since then (phase 2, second part):**
 
-- A combat HUD strip (health, frags, kill feed).
-- Immediate event push (events now ride the 250 ms snapshot).
-- Native kill effects on avatars (gib/death animation when the host announces
-  a death; avatars are only hidden or stay up today).
-- Team deathmatch.
+- **Immediate events.** The host pushes every new damage, death and respawn
+  to every peer in a reliable `combat` message the moment it decides them.
+  Clients apply pushed events on top of the last snapshot
+  (`CombatOverlay`), so health, deaths and frags show without waiting for
+  the 250 ms snapshot. The snapshot still corrects any gap.
+- **Combat HUD.** In the notice layer, on the same top-edge strip as the duel:
+  - health (a bar that turns red under 30) or "Back in N";
+  - "protected" while spawn protection lasts;
+  - frags against the limit;
+  - the best opponent, or both team scores in team deathmatch;
+  - time left (m:ss);
+  - up to three kills from the last 6 s underneath (your kills green, your
+    deaths red).
+  It comes from `combat` in `multiplayer-notify.json`, takes no input, and
+  stays out of the crosshair area.
+- **Team deathmatch** (`team-deathmatch`): see the table above. A team win
+  places all of its members first and has no single winner, and the combat
+  view names `winnerTeam`.
+- **Spawn selection.** The host reads the arena's spawn points from the
+  generated scenario (`MatchScenario.Spawns`):
+  - map-creator JSON `SpawnPoint` objects: location × MapScale, yaw from the
+    rotation, TeamMask;
+  - Reflex `PlayerSpawn` entities: (a, b, c) → (c, a, b) × MapScale, with
+    teamA/teamB flags.
+
+  On respawn it picks the team-allowed spawn farthest from the nearest living
+  opponent. The respawn event carries it, and `play-state.tsv` gets a `spawn`
+  line that AimModCore teleports to once per event id. Without spawn points,
+  the game's own respawn stands. The coordinate conversion follows map-port's
+  calibration and needs a live check.
+- **Death effects and team colours on avatars** (AimModSteam, requested through
+  the coordinator). The service writes `avatar-state.tsv` during combat
+  matches:
+
+  ```
+  AIMMOD_AVATARS_1\t<sequence>
+  match\t<%-escaped match id>
+  peer\t<member id = SteamID64>\t<alive 0/1>\t<friend|enemy>\t<health>\t<died at unix ms, 0>\t<respawn at unix ms, 0>
+  ```
+
+  When `alive` drops to 0, the bridge plays the death on that avatar (native
+  `Death`/gib if it stays inert, otherwise hide it with
+  `SetActorHiddenInGame`). It shows the avatar again on respawn. `friend`
+  avatars go on the local player's team (`SetTeam`), so team colours and the
+  game's team checks are right. `health` can drive the avatar's health bar
+  (`SetHealth` on the invulnerable avatar).
+
+**Still open:** Hub verification of results (8.4); kill effects need the
+bridge change above.
 
 ### 6.3 Tracking duel
 
@@ -1117,6 +1163,28 @@ functions (9.1).
   so map-port only needs to leave out target bots on request.
 - The report lists dropped and kept objective entities.
 
+### 8.4 Hub results (waiting for the tournaments API)
+
+Hub verification waits for the Hub tournament API (`feat/kovaaks-tournaments`
+in this repository, `feat/tournaments` in aimmod-hub). At the time of writing,
+neither branch had tournament or result code. So this is a proposal to align
+with, not a format the Hub accepts yet. Each finished match would produce
+one record, built from the host's state and the clients' replay hashes:
+
+```json
+{"format": 1, "match": "m-…", "mode": "deathmatch", "settingsKey": "<MatchScenario.Key>", "scenarioHash": "…",
+ "startedAt": 0, "endedAt": 0, "host": "<player key>", "players": [
+  {"key": "<hashed member id>", "team": 0, "place": 1, "score": 20, "frags": 20, "deaths": 7,
+   "claims": 130, "rejected": 2, "trackPercent": null, "disputed": false, "replay": "<replay hash>"}],
+ "winner": "<player key>|null", "winnerTeam": null, "rounds": [ … per-round placements … ]}
+```
+
+Players are identified by the same hashed key as the local history
+(`PlayerKey`). The Hub re-runs the hit validation from the uploaded replays
+and pose streams with the same rules (`CombatMatch`, `TrackingRound`) before
+it counts a result. The field names and the transport will follow the
+tournaments agent's API once it exists.
+
 ### 8.3 AimModCore (`in-game/native-mod`)
 
 - The new `Play` module (section 4.3), the shared-memory Play channel,
@@ -1317,7 +1385,7 @@ build.
 | --- | --- | --- | --- |
 | 0 | Run the probe; offline avatar spike (replay path → bot); Play module skeleton with arming, undo and the shared-memory channel | AimModCore, dumps | **Probe run once (9.1). Spike built (9.3), live run pending.** Play module not started |
 | 1 | Score race (exists) and practice together; pose channel (binary fast frames over AimModNet); interpolation; tracking duel (alternating, then simultaneous) with host TOT recompute | phase 0, Steam bridge stage 3 | **Pose channel, interpolation and avatars done in AimModSteam. Tracking duel (alternating) done in the service (6.3.1)**; needs the bridge items 6.3.1/1–3 and a two-player test |
-| 2 | Deathmatch FFA and 1v1, vampiric 1v1, instagib: hit claims, lag compensation, `damage`/`death`/`respawn`, spawn selection, lifesteal rule, instagib profile; post-match replay verification on the Hub | phase 1 | **Service side built (6.2.1).** Needs AimModCore's `self-shots.tsv` and `play-state.tsv` applier, then a combat HUD and a two-player test. Spawn selection and Hub verification not started |
+| 2 | Deathmatch FFA and 1v1, vampiric 1v1, instagib: hit claims, lag compensation, `damage`/`death`/`respawn`, spawn selection, lifesteal rule, instagib profile; post-match replay verification on the Hub | phase 1 | **Service side built (6.2.1), plus team deathmatch, spawn selection, pushed events and the combat HUD.** Needs AimModCore's `self-shots.tsv` and `play-state.tsv` (with `spawn`), AimModSteam's `avatar-state.tsv` reader, and a two-player test. Hub verification waits for the tournaments API (8.4) |
 | 3 | CS rounds: teams, `RoundController`, freeze and buy time, economy, shop and buy menu, armour model, bomb plant and defuse, map-port objective metadata, halftime, 5v5 lobby | phase 2, map-port metadata | CS competitive |
 | 4 | CTF (flags, carrier markers, captures), weapon drops, arena pickups (metadata from Source items and later Reflex import), AimMod grapple, gun game and the other compositions | phase 3 | Quake/Xonotic-style arena pack |
 

@@ -218,6 +218,72 @@ static partial class MatchScenario
 
     public static string Hash(string text) => ContentLibrary.TextHash(text);
 
+    // Spawn points of a scenario's embedded map, in world units, for host-chosen respawns.
+    //  - Map-creator JSON: "SpawnPoint" game objects; location "x, y, z" times MapScale,
+    //    rotation "roll, pitch, yaw", property TeamMask (bit 1 = team 1, bit 2 = team 2).
+    //  - Legacy Reflex: PlayerSpawn entities; position (a, b, c) loads as (c, a, b), times
+    //    MapScale; angles' first value is the yaw; "teamA 0" / "teamB 0" clear a team.
+    // Both follow the map-port tool's calibration (in-game/tools/map-port README); confirm live.
+    public static IReadOnlyList<SpawnPoint> Spawns(string scenarioText)
+    {
+        var (header, _, mapData, _) = Parse(scenarioText);
+        var scale = double.TryParse(header.Get("MapScale"), NumberStyles.Float, Invariant, out var ms) && ms > 0 && ms < 100 ? ms : 1;
+        var list = new List<SpawnPoint>();
+        if (string.IsNullOrWhiteSpace(mapData)) return list;
+        static double[]? Triple(string? text)
+        {
+            var parts = text?.Split(',', StringSplitOptions.TrimEntries);
+            if (parts is not { Length: 3 }) return null;
+            var v = new double[3];
+            for (var i = 0; i < 3; i++) if (!double.TryParse(parts[i], NumberStyles.Float, Invariant, out v[i]) || !double.IsFinite(v[i])) return null;
+            return v;
+        }
+        var trimmed = mapData.TrimStart();
+        if (trimmed.StartsWith('{'))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(trimmed, new JsonDocumentOptions { MaxDepth = 32 });
+                if (!doc.RootElement.TryGetProperty("objects", out var objects) || objects.ValueKind != JsonValueKind.Array) return list;
+                foreach (var o in objects.EnumerateArray())
+                {
+                    if (list.Count >= 256 || o.ValueKind != JsonValueKind.Object || !o.TryGetProperty("name", out var n) || n.GetString() != "SpawnPoint") continue;
+                    var loc = Triple(o.TryGetProperty("location", out var l) ? l.GetString() : null);
+                    if (loc is null) continue;
+                    var rot = Triple(o.TryGetProperty("rotation", out var r) ? r.GetString() : null);
+                    var mask = 3;
+                    if (o.TryGetProperty("properties", out var props) && props.ValueKind == JsonValueKind.Array)
+                        foreach (var p in props.EnumerateArray())
+                            if (p.TryGetProperty("name", out var pn) && pn.GetString() == "TeamMask" && p.TryGetProperty("value", out var pv) && pv.TryGetInt32(out var m)) mask = m & 3;
+                    list.Add(new SpawnPoint(loc[0] * scale, loc[1] * scale, loc[2] * scale, rot?[2] ?? 0, mask));
+                }
+            }
+            catch (JsonException) { }
+            return list;
+        }
+        // Reflex text: entity blocks; a PlayerSpawn's lines follow its "type" line.
+        string[]? position = null; double yaw = 0; var team = 3; var inSpawn = false;
+        void Flush()
+        {
+            if (inSpawn && position is { Length: 3 } && list.Count < 256
+                && double.TryParse(position[0], NumberStyles.Float, Invariant, out var a) && double.TryParse(position[1], NumberStyles.Float, Invariant, out var b) && double.TryParse(position[2], NumberStyles.Float, Invariant, out var c))
+                list.Add(new SpawnPoint(c * scale, a * scale, b * scale, yaw, team));
+            position = null; yaw = 0; team = 3; inSpawn = false;
+        }
+        foreach (var raw in mapData.Replace("\r\n", "\n").Split('\n'))
+        {
+            var line = raw.Trim();
+            if (line == "entity") { Flush(); continue; }
+            var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 2 && parts[0] == "type") inSpawn = parts[1] == "PlayerSpawn";
+            else if (parts.Length == 5 && parts[0] == "Vector3" && parts[1] == "position") position = parts[2..5];
+            else if (parts.Length == 5 && parts[0] == "Vector3" && parts[1] == "angles" && double.TryParse(parts[2], NumberStyles.Float, Invariant, out var y)) yaw = y;
+            else if (parts.Length == 3 && parts[0] == "Bool8" && parts[2] == "0" && parts[1] is "teamA" or "teamB") team &= parts[1] == "teamA" ? ~1 : ~2;
+        }
+        Flush();
+        return list;
+    }
+
     // Tracking duel arena: no targets of its own, nobody can be hurt, nothing scores
     // natively (AimMod scores time on target). One invisible, inert helper bot stays,
     // because AimModSteam spawns each opponent's avatar from a bot the scenario has

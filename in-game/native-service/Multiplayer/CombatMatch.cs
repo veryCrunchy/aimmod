@@ -22,7 +22,9 @@ static class CombatRules
     public const double MaxHealth = 100, VampiricOverheal = 0, VampiricDecayPerSecond = 2, VampiricHealthOnKill = 25;
     public static long RespawnMs(string mode) => mode == LobbyModes.Instagib ? 1000 : 2000;
     public const long SpawnProtectionMs = 1500, ClaimWindowMs = 1000;
-    public static int DefaultFragLimit(string mode) => mode switch { LobbyModes.Vampiric => 10, LobbyModes.Instagib => 25, _ => 20 };
+    public static int DefaultFragLimit(string mode) => mode switch { LobbyModes.Vampiric => 10, LobbyModes.Instagib => 25, LobbyModes.TeamDeathmatch => 50, _ => 20 };
+    // Team deathmatch: teams by join order, alternating (1, 2, 1, 2 ...), so sizes differ by at most one.
+    public static Dictionary<string, int> Teams(IEnumerable<string> players) => players.Select((id, i) => (id, i)).ToDictionary(x => x.id, x => x.i % 2 + 1);
     public const int DefaultMatchSeconds = 300;
 }
 
@@ -68,16 +70,20 @@ sealed record HitClaim(string MatchId, int Round, long Seq, long T, double X, do
 }
 
 // What clients mirror: each player's health, life and score, and the recent events.
-sealed record CombatPlayerView(string Member, double Health, bool Alive, int Frags, int Deaths, long? RespawnAt, long? ProtectedUntil, int Claims, int Rejected);
-sealed record CombatEvent(long Id, string Kind, long T, string Member, string? Attacker, double Amount, bool Head, double Health, double? AttackerHealth);
-sealed record CombatView(int FragLimit, IReadOnlyList<CombatPlayerView> Players, IReadOnlyList<CombatEvent> Events);
+// Team: 0 in free-for-all modes, 1 or 2 in team deathmatch. Spawn on a respawn event: [x, y, z, yaw]
+// the host chose (null: the game's own spawn). TeamFrags: team 1 and team 2 totals.
+sealed record CombatPlayerView(string Member, double Health, bool Alive, int Frags, int Deaths, long? RespawnAt, long? ProtectedUntil, int Claims, int Rejected, int Team = 0);
+sealed record CombatEvent(long Id, string Kind, long T, string Member, string? Attacker, double Amount, bool Head, double Health, double? AttackerHealth, double[]? Spawn = null);
+sealed record CombatView(int FragLimit, IReadOnlyList<CombatPlayerView> Players, IReadOnlyList<CombatEvent> Events, IReadOnlyList<int>? TeamFrags = null, int? WinnerTeam = null);
+// A spawn point of the arena (world units). TeamMask: bit 1 = team 1, bit 2 = team 2.
+sealed record SpawnPoint(double X, double Y, double Z, double Yaw, int TeamMask);
 
 sealed class CombatMatch
 {
     sealed class Player
     {
         public required string Id;
-        public double Health = CombatRules.MaxHealth; public bool Alive = true; public int Frags, Deaths, Claims, Rejected;
+        public double Health = CombatRules.MaxHealth; public bool Alive = true; public int Frags, Deaths, Claims, Rejected, Team;
         public long? RespawnAt; public long ProtectedUntil; public long LastShot = long.MinValue, LastSeq = -1; public long DecayAt;
         public readonly List<TrackSample> Track = [];
     }
@@ -90,17 +96,30 @@ sealed class CombatMatch
     public long End { get; }
     public CombatWeapon Weapon { get; }
     public double Lifesteal { get; }
-    public CombatMatch(string mode, IEnumerable<string> ids, int fragLimit, double lifestealPercent, long start, long end)
+    // The arena's spawn points (parsed from the generated scenario's map); empty: the game's own spawns.
+    public IReadOnlyList<SpawnPoint> Spawns { get; set; } = [];
+    public bool Teams { get; }
+    public CombatMatch(string mode, IEnumerable<string> ids, int fragLimit, double lifestealPercent, long start, long end, IReadOnlyDictionary<string, int>? teams = null)
     {
         Mode = mode; FragLimit = fragLimit; Start = start; End = end; Weapon = CombatRules.Weapon(mode);
         Lifesteal = mode == LobbyModes.Vampiric ? Math.Clamp(lifestealPercent, 0, 200) / 100.0 : 0;
-        foreach (var id in ids) players[id] = new Player { Id = id, ProtectedUntil = start + CombatRules.SpawnProtectionMs, DecayAt = start };
+        Teams = mode == LobbyModes.TeamDeathmatch;
+        var list = ids.ToList();
+        var assigned = Teams ? teams ?? CombatRules.Teams(list) : null;
+        foreach (var id in list) players[id] = new Player { Id = id, ProtectedUntil = start + CombatRules.SpawnProtectionMs, DecayAt = start, Team = assigned?.GetValueOrDefault(id, 1) ?? 0 };
     }
 
     public IReadOnlyList<CombatEvent> EventsSince(long id) => events.Where(e => e.Id > id).ToArray();
-    public string? Leader => players.Values.OrderByDescending(p => p.Frags).ThenBy(p => p.Deaths).FirstOrDefault(p => p.Frags >= FragLimit)?.Id;
+    public long LatestEvent => events.Count > 0 ? events[^1].Id : 0;
+    int TeamFrags(int team) => players.Values.Where(p => p.Team == team).Sum(p => p.Frags);
+    public int? WinnerTeam => !Teams ? null : TeamFrags(1) >= FragLimit ? 1 : TeamFrags(2) >= FragLimit ? 2 : null;
+    // The player (FFA) or the top player of the team (TDM) that reached the frag limit.
+    public string? Leader => Teams
+        ? WinnerTeam is { } team ? players.Values.Where(p => p.Team == team).OrderByDescending(p => p.Frags).First().Id : null
+        : players.Values.OrderByDescending(p => p.Frags).ThenBy(p => p.Deaths).FirstOrDefault(p => p.Frags >= FragLimit)?.Id;
     public CombatView View() => new(FragLimit, players.Values.Select(p => new CombatPlayerView(p.Id, Math.Round(p.Health, 1), p.Alive, p.Frags, p.Deaths, p.RespawnAt,
-        p.ProtectedUntil, p.Claims, p.Rejected)).ToArray(), events.TakeLast(16).ToArray());
+        p.ProtectedUntil, p.Claims, p.Rejected, p.Team)).ToArray(), events.TakeLast(16).ToArray(), Teams ? [TeamFrags(1), TeamFrags(2)] : null, WinnerTeam);
+    public int TeamOf(string id) => players.TryGetValue(id, out var p) ? p.Team : 0;
     public (int Frags, int Deaths, int Claims, int Rejected)? Score(string id) => players.TryGetValue(id, out var p) ? (p.Frags, p.Deaths, p.Claims, p.Rejected) : null;
 
     // Every player's own camera track (same batches as the tracking duel).
@@ -131,8 +150,21 @@ sealed class CombatMatch
         return new TrackSample((long)t, a.X + (b.X - a.X) * u, a.Y + (b.Y - a.Y) * u, a.Z + (b.Z - a.Z) * u, a.Pitch + (b.Pitch - a.Pitch) * u, a.Yaw + ((b.Yaw - a.Yaw + 540) % 360 - 180) * u);
     }
 
-    void Emit(string kind, long t, string member, string? attacker, double amount, bool head, double health, double? attackerHealth) =>
-        events.Add(new CombatEvent(++eventId, kind, t, member, attacker, Math.Round(amount, 1), head, Math.Round(health, 1), attackerHealth is { } a ? Math.Round(a, 1) : null));
+    void Emit(string kind, long t, string member, string? attacker, double amount, bool head, double health, double? attackerHealth, double[]? spawn = null) =>
+        events.Add(new CombatEvent(++eventId, kind, t, member, attacker, Math.Round(amount, 1), head, Math.Round(health, 1), attackerHealth is { } a ? Math.Round(a, 1) : null, spawn));
+
+    // The spawn for a respawning player: allowed for its team, farthest from the
+    // nearest living opponent (ties: the first listed). Null when the arena has none.
+    public SpawnPoint? ChooseSpawn(string id)
+    {
+        if (!players.TryGetValue(id, out var me)) return null;
+        var allowed = Spawns.Where(s => me.Team == 0 || (s.TeamMask & me.Team) != 0 || s.TeamMask == 0).ToList();
+        if (allowed.Count == 0) allowed = Spawns.ToList();
+        if (allowed.Count == 0) return null;
+        var enemies = players.Values.Where(p => p != me && p.Alive && (me.Team == 0 || p.Team != me.Team) && p.Track.Count > 0).Select(p => p.Track[^1]).ToList();
+        if (enemies.Count == 0) return allowed[0];
+        return allowed.OrderByDescending(s => enemies.Min(e => Math.Sqrt((e.X - s.X) * (e.X - s.X) + (e.Y - s.Y) * (e.Y - s.Y) + (e.Z - s.Z) * (e.Z - s.Z)))).First();
+    }
 
     // Why a claim was refused (null: accepted). The host decides who was hit, where
     // and how hard; the claim only says when the shooter fired and along which ray.
@@ -159,6 +191,8 @@ sealed class CombatMatch
         foreach (var p in players.Values)
         {
             if (p == shooter || !p.Alive) continue;
+            var teammate = shooter.Team != 0 && p.Team == shooter.Team;
+            if (teammate && c.TargetX is null) continue; // friendly fire is off
             if (c.TargetX is { } tx)
             {
                 for (long lag = 0; lag <= TrackingRound.RewindCapMs && victim is null; lag += 5)
@@ -174,6 +208,7 @@ sealed class CombatMatch
             if (victim is not null) break;
         }
         if (victim is null) return Reject(c.TargetX is null ? "miss" : "target-mismatch");
+        if (shooter.Team != 0 && victim.Team == shooter.Team) return Reject("teammate");
         if (!TrackGeometry.HitsCapsule(c.X, c.Y, c.Z, dx, dy, dz, TrackingRound.RayLengthCm, cx, cy, cz, radius, half)) return Reject("ray-miss");
         if (c.T < victim.ProtectedUntil) return Reject("spawn-protected");
         shooter.LastShot = c.T;
@@ -209,7 +244,8 @@ sealed class CombatMatch
             if (!p.Alive && p.RespawnAt is { } at && now >= at)
             {
                 p.Alive = true; p.Health = CombatRules.MaxHealth; p.RespawnAt = null; p.ProtectedUntil = now + CombatRules.SpawnProtectionMs; p.DecayAt = now;
-                Emit("respawn", now, p.Id, null, 0, false, p.Health, null);
+                var spawn = ChooseSpawn(p.Id);
+                Emit("respawn", now, p.Id, null, 0, false, p.Health, null, spawn is null ? null : [spawn.X, spawn.Y, spawn.Z, spawn.Yaw]);
             }
             if (Mode == LobbyModes.Vampiric && p.Alive && now > p.DecayAt)
             {
@@ -231,6 +267,39 @@ sealed class CombatMatch
                 p.Health = Math.Clamp(v.Health, 0, CombatRules.MaxHealth); p.Alive = v.Alive; p.RespawnAt = v.Alive ? null : v.RespawnAt;
             }
         eventId = view.Events.Count > 0 ? view.Events.Max(e => e.Id) : 0;
+    }
+}
+
+// Client side: newer pushed events applied on top of the last snapshot, so health,
+// deaths and frags show the moment the host decides them.
+static class CombatOverlay
+{
+    public static CombatView Apply(CombatView view, IEnumerable<CombatEvent> pushed)
+    {
+        var latest = view.Events.Count > 0 ? view.Events.Max(e => e.Id) : 0;
+        var newer = pushed.Where(e => e.Id > latest).OrderBy(e => e.Id).ToArray();
+        if (newer.Length == 0) return view;
+        var players = view.Players.ToDictionary(p => p.Member);
+        foreach (var e in newer)
+        {
+            if (players.TryGetValue(e.Member, out var p))
+                players[e.Member] = e.Kind switch
+                {
+                    "damage" => p with { Health = e.Health },
+                    "death" => p with { Health = 0, Alive = false, Deaths = p.Deaths + 1 },
+                    "respawn" => p with { Health = e.Health, Alive = true, RespawnAt = null },
+                    _ => p,
+                };
+            if (e.Attacker is { } a && players.TryGetValue(a, out var shooter))
+            {
+                if (e.AttackerHealth is { } h) shooter = shooter with { Health = h };
+                if (e.Kind == "death") shooter = shooter with { Frags = shooter.Frags + 1 };
+                players[a] = shooter;
+            }
+        }
+        var list = view.Players.Select(p => players[p.Member]).ToArray();
+        var teams = view.TeamFrags is null ? null : new[] { list.Where(p => p.Team == 1).Sum(p => p.Frags), list.Where(p => p.Team == 2).Sum(p => p.Frags) };
+        return view with { Players = list, Events = view.Events.Concat(newer).TakeLast(16).ToArray(), TeamFrags = teams };
     }
 }
 
@@ -306,7 +375,7 @@ sealed class ShotFeed(string outputFolder)
 // protection, and the last damage taken (for the native hit effect).
 static class PlayState
 {
-    public static string Format(long sequence, string matchId, CombatPlayerView self, CombatEvent? lastHit, string? attackerHint)
+    public static string Format(long sequence, string matchId, CombatPlayerView self, CombatEvent? lastHit, string? attackerHint, CombatEvent? lastSpawn = null)
     {
         static string N(double v) => v.ToString("0.#", CultureInfo.InvariantCulture);
         var text = new StringBuilder();
@@ -316,6 +385,9 @@ static class PlayState
             .Append(self.RespawnAt ?? 0).Append('\t').Append(self.ProtectedUntil ?? 0).Append('\n');
         if (lastHit is not null)
             text.Append("hit\t").Append(lastHit.Id).Append('\t').Append(N(lastHit.Amount)).Append('\t').Append(lastHit.Head ? 1 : 0).Append('\t').Append(attackerHint ?? "0").Append('\n');
+        // Where the host respawned this player (AimModCore teleports there once per event id).
+        if (lastSpawn?.Spawn is { Length: 4 } at)
+            text.Append("spawn\t").Append(lastSpawn.Id).Append('\t').Append(N(at[0])).Append('\t').Append(N(at[1])).Append('\t').Append(N(at[2])).Append('\t').Append(N(at[3])).Append('\n');
         return text.ToString();
     }
 }
