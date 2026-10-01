@@ -85,7 +85,7 @@ static class LineStates { public const string Waiting = "waiting", Playing = "pl
 // Connection: connected or reconnecting. Link: local (this machine), relay,
 // direct or simulated. Profiles: whether custom weapon/character profiles are present.
 sealed record LobbyMember(string Id, string Name, string Role, bool Ready, int? Ping, string Scenario, string Map, string Profiles,
-    string Connection, string Link, long JoinedAt, bool Simulated);
+    string Connection, string Link, long JoinedAt, bool Simulated, string Avatar = AvatarProfiles.Default, string? Version = null);
 
 sealed record ScoreLine(string MemberId, double? Score, double? Seconds, double? Remaining, int Shots, int Hits, int Kills,
     string Status, bool Disputed);
@@ -251,6 +251,10 @@ static class LobbyRules
         if (s.Mode == LobbyModes.Duel && players.Length != 2) list.Add(new("duel-players", "A duel needs exactly two players."));
         else if (players.Length < LobbySettings.MinPlayers) list.Add(new("players", "Waiting for at least one more player."));
         foreach (var m in players.Where(m => m.Connection != Connections.Connected)) list.Add(new("reconnecting", m.Name + " is reconnecting."));
+        // Different AimMod builds can't see each other in the world (the pose format changed).
+        var hostVersion = lobby.Members.FirstOrDefault(m => m.Id == lobby.HostId)?.Version;
+        foreach (var m in lobby.Members.Where(m => m.Version is not null && hostVersion is not null && m.Version != hostVersion))
+            list.Add(new("version", m.Name + " is on a different AimMod version. Everyone needs the latest AimMod."));
         var notReady = players.Where(m => m.Id != lobby.HostId && !m.Ready && m.Connection == Connections.Connected).ToArray();
         if (notReady.Length == 1) list.Add(new("ready", notReady[0].Name + " isn’t ready."));
         else if (notReady.Length > 1) list.Add(new("ready", notReady.Length + " players aren’t ready."));

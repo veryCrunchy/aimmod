@@ -4,7 +4,7 @@ using System.Text.RegularExpressions;
 
 namespace AimMod.InGame.Multiplayer;
 
-sealed record ScenarioInfo(string Name, string Hash, string Map, string MapHash, string MapSource, double TimeLimit, string? DefaultWeapon, string? DefaultCharacter, bool Ported, string? WorkshopId = null);
+sealed record ScenarioInfo(string Name, string Hash, string Map, string MapHash, string MapSource, double TimeLimit, string? DefaultWeapon, string? DefaultCharacter, bool Ported, string? WorkshopId = null, double MapScale = 1);
 sealed record MapInfo(string Name, string Hash, string Source);
 
 // Read-only view of the player's KovaaK's library, used to pick lobby content
@@ -149,7 +149,8 @@ sealed partial class ContentLibrary : IContentResolver
                     var limit = double.TryParse(header.GetValueOrDefault("Timelimit"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var t) && t is > 0 and <= 3600 ? t : 60;
                     var ported = (header.GetValueOrDefault("Description") ?? "").StartsWith("Ported Source map", StringComparison.OrdinalIgnoreCase);
                     if (ported && mapName.Length > 0) portedMaps.Add(Path.GetFileNameWithoutExtension(mapName));
-                    found.Add((new ScenarioInfo(name, hash, Path.GetFileNameWithoutExtension(mapName), "", "game", limit, header.GetValueOrDefault("~weapon"), header.GetValueOrDefault("PlayerProfile"), ported, workshop), file));
+                    found.Add((new ScenarioInfo(name, hash, Path.GetFileNameWithoutExtension(mapName), "", "game", limit, header.GetValueOrDefault("~weapon"), header.GetValueOrDefault("PlayerProfile"), ported, workshop,
+                        double.TryParse(header.GetValueOrDefault("MapScale"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var scale) && scale is > 0 and < 100 ? scale : 1), file));
                 }
                 var mapList = new List<MapInfo>();
                 foreach (var file in Files(mapFolder, "*.map").Concat(Files(mapFolder, "*.json")))

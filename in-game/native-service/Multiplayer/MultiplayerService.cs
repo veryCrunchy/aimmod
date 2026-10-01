@@ -127,6 +127,20 @@ sealed class MultiplayerService : IDisposable
                     return LobbyResult.Success;
                 case "prefs":
                     return SetPrefs(args);
+                case "avatar":
+                    // Your look is a personal preference, applied to whichever lobby you're in.
+                    if (AvatarProfiles.Find(Text("avatar")) is not { } look) return LobbyResult.Fail("invalid", "Unknown look.");
+                    SetPrefs(JsonSerializer.SerializeToElement(new { prefs = new { avatar = look.Id } }));
+                    return Current is null ? LobbyResult.Success : Command("avatar", args);
+                case "rejoin":
+                    if (transport.LastLobby is not { } last) return LobbyResult.Fail("none", "There’s no lobby to rejoin.");
+                    if (Current is not null || hostPeer is not null || joinPendingSince is not null) return LobbyResult.Fail("in-lobby", "Leave your current lobby first.");
+                    return JoinBy(last.Token, invite: true);
+                case "spectate":
+                    return Spectate(args);
+                case "spectate-stop":
+                    if (spectating is not null) { transport.StopSpectate(); spectating = null; }
+                    return LobbyResult.Success;
                 case "dismiss":
                     notice = null; return LobbyResult.Success;
                 case "invite":
@@ -278,9 +292,53 @@ sealed class MultiplayerService : IDisposable
     }
     void TryRejoin()
     {
+        if (rejoin is null && !rejoinTried && transport.LastLobby is { AgeSeconds: <= 900 } recent) rejoin = (recent.Token, clock());
         if (rejoin is not { } r || rejoinTried || !transport.Available || Current is not null || hostPeer is not null || joinPendingSince is not null) return;
         rejoinTried = true; rejoin = null;
         if (JoinBy(r.Token, invite: true).Ok) notice = ("info", "Rejoining your lobby after the restart…", clock());
+    }
+
+    string myAvatar => prefs.Avatar;
+    bool? sentHideScenario; string? sentVersionTo;
+
+    // Keep this machine's look, build and presence privacy in step with its preferences.
+    void SyncSelf()
+    {
+        if (transport.Available && sentHideScenario != prefs.HideScenario) { transport.SetPresencePrivacy(prefs.HideScenario); sentHideScenario = prefs.HideScenario; }
+        if (Current is not { } lobby || lobby.Members.FirstOrDefault(m => m.Id == SelfId) is not { } me) return;
+        if (core is not null) core.SetVersion(SelfId, transport.BridgeVersion);
+        if (me.Avatar != myAvatar && sentVersionTo != lobby.Id + "|" + myAvatar)
+        {
+            sentVersionTo = lobby.Id + "|" + myAvatar;
+            Command("avatar", JsonSerializer.SerializeToElement(new { avatar = myAvatar }));
+        }
+    }
+
+    // Steam remembers the lobby a crash or shutdown left behind (up to 3 h). Recent ones
+    // are rejoined automatically; older ones are offered on the home screen.
+    object? RejoinOffer() => Current is null && hostPeer is null && joinPendingSince is null && transport.LastLobby is { } last
+        ? new { hostName = LobbyRules.CleanName(last.HostName, "your host"), minutes = last.AgeSeconds / 60 } : null;
+
+    string? spectating;
+    LobbyResult Spectate(JsonElement args)
+    {
+        if (Current is not { } lobby) return LobbyResult.Fail("no-lobby", "Join a lobby first.");
+        var target = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("member", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString() : null;
+        var member = lobby.Members.FirstOrDefault(m => m.Id == target && m.Id != SelfId);
+        if (member is null) return LobbyResult.Fail("invalid", "Choose another player.");
+        if (member.Simulated) return LobbyResult.Fail("simulated", "Simulated players have no camera to follow.");
+        if (!transport.StartSpectate(member.Id, 60)) return LobbyResult.Fail("unavailable", "Spectating needs the Steam bridge.");
+        spectating = member.Id;
+        return LobbyResult.Success;
+    }
+    // What AimModCore's spectator view needs, for the UI to start it (native-replay spectate).
+    object? SpectateView(LobbySnapshot lobby)
+    {
+        if (spectating is null || lobby.Members.FirstOrDefault(m => m.Id == spectating) is not { } target) { spectating = null; return null; }
+        var s = lobby.Settings;
+        var scenario = MatchScenario.Needed(s) ? MatchScenario.Name(s) : s.Scenario?.Name;
+        var info = s.Scenario is null ? null : library.Scenarios.FirstOrDefault(x => x.Hash == s.Scenario.Hash);
+        return new { member = target.Id, name = target.Name, scenario, mapName = s.MapOverride?.Name ?? s.Scenario?.Map, mapScale = info?.MapScale ?? 1, label = target.Name };
     }
 
     public object PrefsView() => prefs;
@@ -516,6 +574,7 @@ sealed class MultiplayerService : IDisposable
         if (core is not null)
             foreach (var peer in RemotePeers(core.Snapshot())) { Send(peer, "bye", new { reason }); transport.Close(peer); }
         else if (hostPeer is not null) { Send(hostPeer, "bye", new { reason }); transport.Close(hostPeer); }
+        if (spectating is not null) { transport.StopSpectate(); spectating = null; }
         transport.Withdraw();
         core = null; mirror = null; hostPeer = null; pendingHeir = null; joinPendingSince = null; clocks.Clear();
         // Leaving on purpose (not a crash) forgets the rejoin point.
@@ -531,7 +590,7 @@ sealed class MultiplayerService : IDisposable
         hostPeer = peer; mirrorAt = clock(); joinPendingSince = null;
         Hello();
     }
-    void Hello() { if (hostPeer is null) return; helloAt = clock(); Send(hostPeer, "hello", new { name = selfName, proto = Protocol.Version, app = "aimmod-kovaaks" }); }
+    void Hello() { if (hostPeer is null) return; helloAt = clock(); Send(hostPeer, "hello", new { name = selfName, proto = Protocol.Version, app = "aimmod-kovaaks", bridge = transport.BridgeVersion, avatar = myAvatar }); }
 
     void Send(string peer, string type, object body)
     {
@@ -620,6 +679,7 @@ sealed class MultiplayerService : IDisposable
             AutoReady();
             SaveSession();
             TryRejoin();
+            SyncSelf();
             PlanRound();
             TrackLocalRun();
             Remember();
@@ -702,7 +762,9 @@ sealed class MultiplayerService : IDisposable
                 var proto = m.Body.TryGetProperty("proto", out var p) && p.TryGetInt32(out var pv) ? pv : 0;
                 if (proto != Protocol.Version) { Send(peer, "reject", new { code = "version", message = "Update AimMod to join this lobby." }); return; }
                 if (core!.Settings.Privacy == LobbyPrivacy.Invite && !transport.Invited(peer) && core.Members.All(x => x.Id != peer)) { Send(peer, "reject", new { code = "invite", message = "This lobby is invite only." }); return; }
-                var joined = core.Join(peer, name ?? "Player");
+                var version = m.Body.TryGetProperty("bridge", out var bv) && bv.ValueKind == JsonValueKind.String ? bv.GetString() : null;
+                var joined = core.Join(peer, name ?? "Player", version: version is { Length: <= 40 } ? version : null);
+                if (joined.Ok && m.Body.TryGetProperty("avatar", out var av) && av.ValueKind == JsonValueKind.String) core.Apply(peer, "avatar", JsonSerializer.SerializeToElement(new { avatar = av.GetString() }), library);
                 if (!joined.Ok) { Send(peer, "reject", new { code = joined.Code, message = joined.Message }); transport.Close(peer); return; }
                 core.SetLink(peer, transport.Link(peer)?.Route ?? "relay", transport.Link(peer)?.Ping);
                 Send(peer, "welcome", new { member = peer, snapshot = core.Snapshot() });
@@ -1070,6 +1132,7 @@ sealed class MultiplayerService : IDisposable
                     generated = generated ? new { name = MatchScenario.Name(lobby.Settings), key = MatchScenario.Key(lobby.Settings)[..12], mode = "freeplay", saved = preparedName == MatchScenario.Name(lobby.Settings) && preparedProblem is null, problem = preparedName == MatchScenario.Name(lobby.Settings) ? preparedProblem : null } : null,
                     round = plan is { } p && lobby.Match is { } mt && p.Key == mt.Id + "#" + mt.Round ? new { p.Scenario, p.Mode, p.Generated, p.State, p.Message } : null,
                     download = DownloadView(lobby),
+                    spectate = SpectateView(lobby),
                 };
             }
             var friendsSource = Simulation is not null && !transport.Available ? "simulation" : transport.Available ? "steam" : "unavailable";
@@ -1081,6 +1144,8 @@ sealed class MultiplayerService : IDisposable
                 simulation = Simulation is not null,
                 hotkey = HotkeyName,
                 prefs,
+                rejoin = RejoinOffer(),
+                avatars = AvatarProfiles.All.Select(a => new { a.Id, a.Label }),
                 capabilities = new { invite = transport.Available, friends = friendsSource != "unavailable", gameLoad = caps.Contains("load"), gameStart = caps.Contains("start") },
                 self = new { id = SelfId, name = LocalName() },
                 joining = (hostPeer is not null && mirror is null) || joinPendingSince is not null ? new { since = joinPendingSince ?? connectAt, stage = hostPeer is null ? "lobby" : "host" } : null,

@@ -14,9 +14,9 @@ sealed class LobbyCore
     {
         public required string Id; public required string Name; public string Role = MemberRoles.Player;
         public bool Ready; public int? Ping; public string Scenario = ContentStates.Unknown, Map = ContentStates.Unknown, Profiles = ContentStates.None;
-        public string Connection = Connections.Connected, Link = "local"; public long JoinedAt; public long? LostAt; public bool Simulated;
+        public string Connection = Connections.Connected, Link = "local"; public long JoinedAt; public long? LostAt; public bool Simulated; public string Avatar = AvatarProfiles.Default; public string? Version;
         public readonly Queue<long> ChatTimes = new();
-        public LobbyMember View() => new(Id, Name, Role, Ready, Ping, Scenario, Map, Profiles, Connection, Link, JoinedAt, Simulated);
+        public LobbyMember View() => new(Id, Name, Role, Ready, Ping, Scenario, Map, Profiles, Connection, Link, JoinedAt, Simulated, Avatar, Version);
     }
     sealed class Line
     {
@@ -83,12 +83,13 @@ sealed class LobbyCore
     long? readyCheck, autoStartAt;
     public LobbySnapshot Snapshot() => new(Protocol.Version, Id, Code, Revision, HostId, Settings, Members, MatchView(), chat.ToArray(), clock(), readyCheck, autoStartAt);
 
-    public LobbyResult Join(string id, string name, bool simulated = false)
+    public LobbyResult Join(string id, string name, bool simulated = false, string? version = null)
     {
         if (Closed) return LobbyResult.Fail("closed", "This lobby has closed.");
         if (banned.Contains(id)) return LobbyResult.Fail("kicked", "The host removed you from this lobby.");
         if (Find(id) is { } existing)
         {
+            if (version is not null && existing.Version != version) { existing.Version = version; Changed(); }
             if (existing.Connection != Connections.Connected) { existing.Connection = Connections.Connected; existing.LostAt = null; System(existing.Name + " reconnected."); }
             return LobbyResult.Success;
         }
@@ -99,7 +100,7 @@ sealed class LobbyCore
         if (!returning && (PlayerCount >= Settings.MaxPlayers || (inMatch && !Settings.LateJoin))) role = MemberRoles.Spectator;
         if (role == MemberRoles.Spectator && (!Settings.Spectators || members.Count(m => m.Role == MemberRoles.Spectator) >= LobbySettings.MaxSpectators))
             return LobbyResult.Fail(inMatch ? "in-match" : "full", inMatch ? "A match is in progress and late join is off." : "This lobby is full.");
-        var member = new Member { Id = id, Name = UniqueName(LobbyRules.CleanName(name, "Player")), Role = role, JoinedAt = clock(), Simulated = simulated, Link = simulated ? "simulated" : "relay" };
+        var member = new Member { Id = id, Name = UniqueName(LobbyRules.CleanName(name, "Player")), Role = role, JoinedAt = clock(), Simulated = simulated, Link = simulated ? "simulated" : "relay", Version = version };
         members.Add(member);
         if (match is not null) match.Names[id] = member.Name;
         if (returning && match!.Live.TryGetValue(id, out var line) && line.Status == LineStates.Left && match.Phase is MatchPhases.Countdown or MatchPhases.Live)
@@ -145,6 +146,7 @@ sealed class LobbyCore
         System(m.Name + (IsHost(id) ? " (host) lost connection." : " lost connection."));
     }
 
+    public void SetVersion(string id, string? version) { if (Find(id) is { } m && version is not null && m.Version != version) { m.Version = version; Changed(); } }
     public void SetLink(string id, string? route, int? ping)
     {
         if (Find(id) is not { } m) return;
@@ -226,6 +228,11 @@ sealed class LobbyCore
                 if (!spectate && member.Role == MemberRoles.Spectator && PlayerCount >= Settings.MaxPlayers) return LobbyResult.Fail("full", "All player slots are taken.");
                 var role = spectate ? MemberRoles.Spectator : MemberRoles.Player;
                 if (member.Role != role) { member.Role = role; member.Ready = false; Changed(); }
+                return LobbyResult.Success;
+            case "avatar":
+                // How this member looks in other players' games (any member, any time).
+                if (AvatarProfiles.Find(Text("avatar")) is not { } look) return LobbyResult.Fail("invalid", "Unknown look.");
+                if (member.Avatar != look.Id) { member.Avatar = look.Id; Changed(); }
                 return LobbyResult.Success;
             case "ready-check":
                 // The host wants to start: ping everyone who isn't ready (shown outside the AimMod panel too).
@@ -466,7 +473,7 @@ sealed class LobbyCore
             core.members.Add(new Member { Id = m.Id, Name = m.Name, Role = m.Role, Ready = m.Ready, Ping = m.Id == newHostId ? null : m.Ping, Scenario = m.Scenario, Map = m.Map, Profiles = m.Profiles,
                 // Everyone else must reconnect to the new host, so they start as reconnecting.
                 Connection = m.Id == newHostId ? Connections.Connected : Connections.Reconnecting, Link = m.Id == newHostId ? "local" : m.Link,
-                JoinedAt = m.JoinedAt, Simulated = m.Simulated, LostAt = m.Id == newHostId ? null : clock() });
+                JoinedAt = m.JoinedAt, Simulated = m.Simulated, LostAt = m.Id == newHostId ? null : clock(), Avatar = AvatarProfiles.Find(m.Avatar)?.Id ?? AvatarProfiles.Default, Version = m.Version });
         core.chat.AddRange(snapshot.Chat); core.chatId = snapshot.Chat.Count > 0 ? snapshot.Chat.Max(c => c.Id) : 0; core.readyCheck = snapshot.ReadyCheck;
         if (snapshot.Match is { } ms)
         {

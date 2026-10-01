@@ -226,3 +226,5 @@
 .mp-progress-text{font-size:12px;color:#a7bab0;margin-bottom:8px}
 .mp-download .actions{margin-top:4px}.mp-download .actions>.button{margin-bottom:4px}
 .mp-prefs-body{padding:0 20px 12px}.mp-prefs .mp-setting{min-height:44px}
+.mp-look-body{padding:0 20px 16px}.mp-look-body .segmented{flex-wrap:wrap}
+.mp-rejoin{display:flex;flex-direction:row;align-items:center;padding:14px 20px;border-color:#2c6b52}.mp-rejoin-text{flex:1;min-width:0}.mp-rejoin-text strong{display:block;font-size:15px}.mp-rejoin-text span{display:block;font-size:13px;color:#a7bab0}.mp-rejoin .actions>.button{margin:0}

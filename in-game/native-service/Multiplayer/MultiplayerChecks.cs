@@ -199,6 +199,16 @@ static class MultiplayerChecks
         Check(heir.Members.First(m => m.Id == "p3").Connection == Connections.Reconnecting && heir.Join("p3", "").Ok && heir.Members.First(m => m.Id == "p3").Connection == Connections.Connected, "Other members reconnect to the new host");
         Check(heir.Snapshot().Match!.Live.First(l => l.MemberId == "host").Status == LineStates.Left, "The departed host's run is marked left");
 
+        // Looks and builds.
+        (core, clock, advance) = Lobby();
+        core.Join("p2", "Two", version: "bridge-2");
+        core.SetVersion("host", "bridge-1");
+        Check(core.Apply("p2", "avatar", J(new { avatar = "endo" }), content).Ok && core.Members.First(m => m.Id == "p2").Avatar == "endo" && !core.Apply("p2", "avatar", J(new { avatar = "../x" }), content).Ok, "Members pick a look from the offered ones");
+        Check(LobbyRules.StartBlockers(core.Snapshot()).Any(b => b.Code == "version" && b.Text.Contains("Two")), "A different AimMod build blocks the start with a clear reason");
+        core.SetVersion("p2", "bridge-1");
+        core.Join("p2", "Two", version: "bridge-1");
+        Check(LobbyRules.StartBlockers(core.Snapshot()).All(b => b.Code != "version"), "Same builds play together");
+
         // Auto start once nothing blocks for a moment.
         (core, clock, advance) = Lobby();
         core.Join("p2", "Two");
@@ -269,6 +279,11 @@ static class MultiplayerChecks
         public string? HostHint => null;
         string? joinedCode;
         public string? LobbyToken => network.Codes.FirstOrDefault(kv => kv.Value == id).Key ?? joinedCode;
+        public string? BridgeVersion { get; set; }
+        public RejoinPoint? LastLobby => null;
+        public void SetPresencePrivacy(bool hideScenario) { }
+        public bool StartSpectate(string peer, int rate) => false;
+        public void StopSpectate() { }
         public bool WorkshopDownload(string item) => false;
         // Bulk lane stand-in: chunks arrive in order; DropAfter cuts a transfer short like a lost link.
         public int BulkChunkBytes { get; set; }
@@ -437,6 +452,18 @@ static class MultiplayerChecks
         Check(Until(() => { bulkEvents.AddRange(steam.Drain()); return bulkEvents.Any(e => e.Kind == TransportEvent.BulkEnd); }) && bulkEvents.Any(e => e.Kind == TransportEvent.BulkData && e.Transfer == 9 && e.Frame!.Length == 100) && bulkEvents.First(e => e.Kind == TransportEvent.BulkEnd).Reason == "disconnected", "Incoming bulk chunks and transfer ends map to events");
         steam.BulkCancel(friend, 7, "complete");
         Check(Expect("xfer.cancel").GetProperty("reason").GetString() == "complete", "Finished transfers are closed as complete");
+        // Rich-presence friend status and the bridge build.
+        Check(steam.BridgeVersion == "test", "The bridge build comes from ready");
+        Write(new { v = 1, ev = "friends", friends = new object[] {
+            new { peer = "76561190000000005", name = "Lobby Friend", initials = "LF", state = "online", playing = true, aimmod = true, aimmodState = "lobby", lobbySize = 2, lobbyMax = 4, lobbyJoinable = true, lobby = "109775240000000005" },
+            new { peer = "76561190000000006", name = "Busy Friend", initials = "BF", state = "online", playing = true, aimmod = true, aimmodState = "playing", scenario = "Synthetic A" },
+            new { peer = "76561190000000007", name = "Idle Friend", initials = "IF", state = "online", playing = true, aimmod = true, aimmodState = "idle" } } });
+        Check(Until(() => steam.Friends().Count == 3) && steam.Friends()[0].Detail == "In AimMod lobby (2/4)" && steam.Friends()[0].Joinable && steam.Friends().Any(f => f.Detail == "Playing Synthetic A") && steam.Friends().Any(f => f.Detail == "Idle"), "Friends show In AimMod lobby, Playing <scenario> and Idle");
+        var (avatarCore, _, _) = Lobby();
+        avatarCore.Join(friend, "Synthetic Friend");
+        avatarCore.Apply(friend, "avatar", J(new { avatar = "meso-tracer" }), new FakeContent());
+        steam.Advertise(avatarCore.Snapshot());
+        Check(Expect("lobby.setData").GetProperty("data").GetProperty("aimmod.char." + friend).GetString() == "AimMod Meso Tracer", "The host publishes each player's look as aimmod.char.<id>");
         Write(new { v = 1, ev = "member.left", peer = friend });
         Check(Until(() => steam.Drain().Any(e => e.Kind == TransportEvent.Left && e.Peer == friend)), "member.left means the member is gone");
         Write(new { v = 1, ev = "error", code = "rejected", message = "banned" });
@@ -488,6 +515,10 @@ static class MultiplayerChecks
         var bot = one[one.IndexOf("Name=target\nMaxSpeed", StringComparison.Ordinal)..];
         Check(bot.Contains("MaxSpeed=400.0\n") && bot.Contains("MainBBHeight=300.0\n") && bot.Contains("MainBBRadius=60.0\n") && player.Contains("MainBBHeight=230.0\n"), "Target speed and size change bots only");
         Check(one.EndsWith("[Map Data]\nreflex map version 8\nglobal\n", StringComparison.Ordinal), "The embedded map is kept");
+        Check(AvatarProfiles.All.All(a => one.Contains("[Character Profile]\nName=" + a.ProfileName + "\n") ) && one.Contains("CharacterModel=Meso\nCharacterSkin=McCree\n"), "Match scenarios ship a body profile for every offered look");
+        var chars = Path.Combine(root, "avatars");
+        WriteText(Path.Combine(chars, "AimMod Endo.chr"), "Name=AimMod Endo\nmy own tweaks\n");
+        Check(AvatarFiles.Install(chars) == AvatarProfiles.All.Length - 1 && File.ReadAllText(Path.Combine(chars, "AimMod Endo.chr")) == "Name=AimMod Endo\nmy own tweaks\n" && AvatarFiles.Install(chars) == 0, "Avatar profiles are installed once and a user's same-named profile is left alone");
         var weapon = MatchScenario.Generate(new(BaseScenario, s with { Weapon = new ProfileChoice("valorant") }));
         Check(weapon.Contains("WeaponProfileNames=AimMod Valorant Weapon;;;;;;;\n") && weapon.Contains("Name=AimMod Valorant Weapon\nType=Hitscan\nTimeBetweenShots=0.1026\nCategory=FullyAuto\n") && weapon.Contains("Name=Synthetic Gun\n"), "Weapon presets clone the scenario weapon with the preset fire rate");
         var custom = MatchScenario.Generate(new(BaseScenario, s with { Weapon = new ProfileChoice("custom", "Synthetic Rifle", "h"), MapOverride = new MapChoice("synthetic_port", "h", "ported") }, "synthetic_port.json", "{\"materialSets\":[]}\n", "Name=Other\nTimeBetweenShots=0.08\n"));
