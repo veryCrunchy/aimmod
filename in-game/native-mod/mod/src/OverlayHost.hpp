@@ -51,7 +51,7 @@ namespace aimmod
 
         game::Scene& m_scene;
         Output& m_output;
-        bool m_bound{}, m_ready{}, m_warned{};
+        bool m_bound{}, m_ready{}, m_warned{}, m_luaSeen{};
         game::Getter m_getPauseMenu, m_isVisible, m_isInViewport;
         game::Field m_showCursor, m_blockingAttack;
         RC::Unreal::FWeakObjectPtr m_view, m_widget, m_player, m_character;

@@ -108,6 +108,14 @@ namespace aimmod
                 m_url = in.url;
                 Log("overlay: the notify page moved; reloaded it");
             }
+        // Notify.lua must stand down while this layer is up (it reads "overlay" in core-active.tsv).
+        const bool lua = m_ready && in.luaLayer;
+        if (lua != m_luaSeen)
+        {
+            m_luaSeen = lua;
+            if (lua) Warn("overlay: AimModNativeUI's Lua notice layer is on screen too (lua-notice.tsv is fresh); two layers will show and fight over input");
+            else Log("overlay: the Lua notice layer is off; only AimModCore's shows");
+        }
         overlay::Frame frame;
         frame.notice = in.notice;
         frame.panelOpen = in.panelOpen;

@@ -39,6 +39,10 @@ namespace aimmod::overlay
     //   AIMMOD_PANEL_1\t<0|1>\t<unix seconds>\n   (stale after 3 s: closed)
     bool PanelOpen(std::string_view text, std::int64_t nowUnix);
 
+    // lua-notice.tsv, written by Notify.lua once a second while its own notice layer is on
+    // screen: AIMMOD_LUANOTICE_1\t<unix seconds>\n (stale after 3 s). Two layers at once is a bug.
+    bool LuaLayerActive(std::string_view text, std::int64_t nowUnix);
+
     enum class Visibility : std::uint8_t { Visible = 0, Collapsed = 1, Hidden = 2, HitTestInvisible = 3, SelfHitTestInvisible = 4 };
 
     // What the host sees this frame.
