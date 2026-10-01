@@ -36,7 +36,9 @@ sealed class MultiplayerService : IDisposable
     LobbyCore? core;                 // authority, when it lives on this machine
     LobbySnapshot? mirror;           // last snapshot from a remote host
     string? hostPeer;                // remote host we are connected or connecting to
-    long mirrorAt, helloAt, lastBroadcast = -1, broadcastAt, lastPing, seq;
+    long mirrorAt, helloAt, connectAt, lastBroadcast = -1, broadcastAt, lastPing, seq;
+    long? joinPendingSince;          // waiting for the transport to join a Steam lobby
+    long? reconnectSince;            // the relay to a still-present host dropped
     string? pendingHeir;
     string selfName = "You";
     (string Kind, string Text, long At)? notice;
@@ -90,7 +92,7 @@ sealed class MultiplayerService : IDisposable
             switch (action)
             {
                 case "create":
-                    if (Current is not null || hostPeer is not null) return LobbyResult.Fail("in-lobby", "Leave your current lobby first.");
+                    if (Current is not null || hostPeer is not null || joinPendingSince is not null) return LobbyResult.Fail("in-lobby", "Leave your current lobby first.");
                     selfName = LocalName();
                     var mode = Text("mode");
                     var settings = new LobbySettings(Mode: mode is not null && LobbyModes.All.Contains(mode) ? mode : LobbyModes.Race);
@@ -103,7 +105,7 @@ sealed class MultiplayerService : IDisposable
                     notice = null;
                     return LobbyResult.Success;
                 case "join":
-                    if (Current is not null || hostPeer is not null) return LobbyResult.Fail("in-lobby", "Leave your current lobby first.");
+                    if (Current is not null || hostPeer is not null || joinPendingSince is not null) return LobbyResult.Fail("in-lobby", "Leave your current lobby first.");
                     var code = (Text("code") ?? "").Trim().ToUpperInvariant().Replace("-", "").Replace(" ", "");
                     if (!LobbyCore.ValidCode(code)) return LobbyResult.Fail("code", "Room codes are six letters and numbers.");
                     return JoinBy(code);
@@ -126,15 +128,23 @@ sealed class MultiplayerService : IDisposable
                     var invite = invites.FirstOrDefault(i => i.Id == Text("id"));
                     if (invite is null) return LobbyResult.Fail("invalid", "That invite has expired.");
                     invites.Remove(invite);
-                    if (action == "decline-invite") return LobbyResult.Success;
+                    if (action == "decline-invite") { transport.DismissJoin(); return LobbyResult.Success; }
+                    if (!invite.Compatible) { transport.DismissJoin(); return LobbyResult.Fail("version", invite.FromName + " is on a different AimMod version. Both of you need the latest AimMod."); }
                     if (invite.Kind == "request")
                     {
                         if (core is null) return LobbyResult.Fail("no-lobby", "You’re not hosting a lobby.");
                         if (Simulation is not null && invite.Token.StartsWith("sim", StringComparison.Ordinal)) { Simulation.Add(core); return LobbyResult.Success; }
                         return transport.InviteFriend(invite.Token, core.Snapshot()) ? LobbyResult.Success : LobbyResult.Fail("invite-unavailable", "Couldn’t let them in.");
                     }
-                    if (Current is not null || hostPeer is not null) Leave("left");
-                    return JoinBy(invite.Token);
+                    if (Current is not null || hostPeer is not null || joinPendingSince is not null) Leave("left");
+                    return JoinBy(invite.Token, invite: true);
+                case "join-friend":
+                    var target = Friends().FirstOrDefault(f => f.Id == Text("friend"));
+                    if (target is null || !target.Joinable || target.Code is null) return LobbyResult.Fail("invalid", "That friend isn’t in a lobby you can join.");
+                    if (Current is not null || hostPeer is not null || joinPendingSince is not null) return LobbyResult.Fail("in-lobby", "Leave your current lobby first.");
+                    return JoinBy(target.Code, invite: true);
+                case "cancel-join":
+                    Leave("left"); return LobbyResult.Success;
                 case "copy-code":
                     if (Current is not { } room) return LobbyResult.Fail("no-lobby", "Create a lobby first.");
                     return WindowsClipboard.SetText(room.Code) ? LobbyResult.Success : LobbyResult.Fail("clipboard", "Couldn’t copy. The room code is " + room.Code + ".");
@@ -152,10 +162,12 @@ sealed class MultiplayerService : IDisposable
         }
     }
 
-    LobbyResult JoinBy(string codeOrToken)
+    LobbyResult JoinBy(string codeOrToken, bool invite = false)
     {
         selfName = LocalName();
-        if (transport.Resolve(codeOrToken) is { } peer) { Connect(peer); notice = null; return LobbyResult.Success; }
+        // Steam invites and friends' lobbies join asynchronously; the host arrives as a Connected event.
+        if (invite && transport.BeginJoin(codeOrToken)) { joinPendingSince = clock(); notice = null; return LobbyResult.Success; }
+        if (!invite && transport.Resolve(codeOrToken) is { } peer) { Connect(peer); notice = null; return LobbyResult.Success; }
         if (Simulation is not null)
         {
             core = Simulation.HostedLobby(LobbyCore.ValidCode(codeOrToken) ? codeOrToken : LobbyCore.NewCode(), SelfId, selfName);
@@ -164,7 +176,8 @@ sealed class MultiplayerService : IDisposable
             notice = null;
             return LobbyResult.Success;
         }
-        return LobbyResult.Fail("not-found", transport.Available ? "No room with that code. Check it with the host." : "Joining needs AimMod’s Steam bridge, which isn’t connected yet.");
+        if (invite) return LobbyResult.Fail("not-found", "Couldn’t join that lobby. The Steam bridge isn’t connected.");
+        return LobbyResult.Fail("not-found", transport.Available ? "Room codes work once AimMod Hub rooms are live. Join through a Steam invite or a friend’s lobby for now." : "Joining needs AimMod’s Steam bridge, which isn’t connected yet.");
     }
 
     IReadOnlyList<FriendEntry> Friends() => Simulation is not null && !transport.Available ? Simulation.Friends(clock()) : transport.Friends();
@@ -173,7 +186,16 @@ sealed class MultiplayerService : IDisposable
 
     LobbyResult Command(string action, JsonElement args)
     {
-        if (core is not null) return core.Apply(SelfId, action, args, library);
+        if (core is not null)
+        {
+            var target = action is "kick" or "transfer" && args.ValueKind == JsonValueKind.Object && args.TryGetProperty("member", out var m) && m.ValueKind == JsonValueKind.String ? m.GetString() : null;
+            var remote = target is not null && core.Members.Any(x => x.Id == target && !x.Simulated);
+            var result = core.Apply(SelfId, action, args, library);
+            // Keep Steam lobby membership and ownership in step with the lobby.
+            if (result.Ok && remote && action == "kick") { Send(target!, "bye", new { reason = "kicked" }); transport.Kick(target!); transport.Close(target!); }
+            if (result.Ok && remote && action == "transfer") transport.Transfer(target!);
+            return result;
+        }
         if (mirror is null || hostPeer is null) return LobbyResult.Fail("no-lobby", "You’re not in a lobby.");
         Send(hostPeer, "command", new { id = ++seq, action, args });
         return LobbyResult.Success;
@@ -182,12 +204,10 @@ sealed class MultiplayerService : IDisposable
     void Leave(string reason)
     {
         if (core is not null)
-        {
             foreach (var peer in RemotePeers(core.Snapshot())) { Send(peer, "bye", new { reason }); transport.Close(peer); }
-            transport.Withdraw();
-        }
         else if (hostPeer is not null) { Send(hostPeer, "bye", new { reason }); transport.Close(hostPeer); }
-        core = null; mirror = null; hostPeer = null; pendingHeir = null; clocks.Clear();
+        transport.Withdraw();
+        core = null; mirror = null; hostPeer = null; pendingHeir = null; joinPendingSince = null; clocks.Clear();
         Reset();
     }
 
@@ -195,9 +215,11 @@ sealed class MultiplayerService : IDisposable
 
     void Connect(string peer)
     {
-        hostPeer = peer; helloAt = clock(); mirrorAt = clock();
-        Send(peer, "hello", new { name = selfName, proto = Protocol.Version, app = "aimmod-kovaaks" });
+        if (hostPeer != peer) connectAt = clock();
+        hostPeer = peer; mirrorAt = clock(); joinPendingSince = null;
+        Hello();
     }
+    void Hello() { if (hostPeer is null) return; helloAt = clock(); Send(hostPeer, "hello", new { name = selfName, proto = Protocol.Version, app = "aimmod-kovaaks" }); }
 
     void Send(string peer, string type, object body)
     {
@@ -257,9 +279,15 @@ sealed class MultiplayerService : IDisposable
                 // No word from the host for 10 s: treat it as gone and migrate.
                 if (now - mirrorAt > 10_000) HostLost();
             }
-            else if (hostPeer is not null && now - helloAt > 8000)
+            else if (hostPeer is not null)
             {
-                hostPeer = null; notice = ("error", "Couldn’t reach the host. Check the room code and try again.", now);
+                // Waiting for welcome: the relay connection can take a few seconds.
+                if (now - connectAt > 20_000) { Leave("timeout"); notice = ("error", "Couldn’t reach the host. Ask them to invite you again.", now); }
+                else if (now - helloAt > 2000) Hello();
+            }
+            else if (joinPendingSince is { } since && now - since > 30_000)
+            {
+                Leave("timeout"); notice = ("error", "Joining the Steam lobby took too long. Try the invite again.", now);
             }
             ReportContent(force: false);
             PlanRound();
@@ -279,9 +307,30 @@ sealed class MultiplayerService : IDisposable
 
     void Handle(TransportEvent e)
     {
-        if (e.Kind is TransportEvent.InviteReceived or TransportEvent.LaunchJoin) { if (e.Invite is not null) AddInvite(e.Invite); return; }
+        if (e.Kind == TransportEvent.InviteReceived) { if (e.Invite is not null) AddInvite(e.Invite); return; }
+        if (e.Kind == TransportEvent.Error)
+        {
+            if (joinPendingSince is not null) joinPendingSince = null;
+            notice = ("error", e.Reason ?? "Steam reported a problem.", clock());
+            return;
+        }
+        if (e.Kind == TransportEvent.Connected)
+        {
+            // The relay connection to our host (after joining, or to a new host) is up: say hello.
+            if (core is null && e.Host && (joinPendingSince is not null || hostPeer == e.Peer || pendingHeir == e.Peer || mirror is not null)) Connect(e.Peer);
+            return;
+        }
+        if (e.Kind == TransportEvent.Left)
+        {
+            // Left the Steam lobby for good.
+            if (core is not null) { if (core.Members.Any(m => m.Id == e.Peer)) core.Leave(e.Peer); }
+            else if (e.Peer == hostPeer) HostLost();
+            return;
+        }
         if (e.Kind == TransportEvent.Disconnected)
         {
+            if (e.Reason is "kicked" && core is null) { Leave("kicked"); notice = ("error", "The host removed you from the lobby.", clock()); return; }
+            if (e.Reason is "closed" && core is null) { Leave("closed"); notice = ("error", "The lobby closed.", clock()); return; }
             if (core is not null) core.Disconnected(e.Peer);
             else if (e.Peer == hostPeer) HostLost();
             return;
@@ -349,7 +398,7 @@ sealed class MultiplayerService : IDisposable
                 try { snapshot = body.Deserialize<LobbySnapshot>(Protocol.Json); } catch (JsonException) { return; }
                 if (snapshot is null || !LobbyRules.Plausible(snapshot.Settings) || snapshot.Members.Count > LobbySettings.MaxPlayerLimit + LobbySettings.MaxSpectators) return;
                 if (snapshot.Members.All(x => x.Id != SelfId)) { Leave("removed"); notice = ("error", "The host removed you from the lobby.", clock()); return; }
-                mirror = snapshot; mirrorAt = clock(); pendingHeir = null;
+                mirror = snapshot; mirrorAt = clock(); pendingHeir = null; reconnectSince = null;
                 if (snapshot.HostId == SelfId)
                 {
                     // The host handed the lobby to us.
@@ -368,7 +417,9 @@ sealed class MultiplayerService : IDisposable
                     notice = ("error", text.GetString() ?? "The host refused that.", clock());
                 break;
             case "bye":
-                HostLost();
+                var why = m.Body.TryGetProperty("reason", out var r) && r.ValueKind == JsonValueKind.String ? r.GetString() : null;
+                if (why == "kicked") { Leave("kicked"); notice = ("error", "The host removed you from the lobby.", clock()); }
+                else HostLost();
                 break;
         }
     }
@@ -378,8 +429,20 @@ sealed class MultiplayerService : IDisposable
     void HostLost()
     {
         if (mirror is not { } last) { hostPeer = null; return; }
-        var heir = last.Members.Where(m => m.Id != last.HostId && m.Connection == Connections.Connected)
-            .OrderBy(m => m.Role == MemberRoles.Player ? 0 : 1).ThenBy(m => m.JoinedAt).FirstOrDefault();
+        // Steam picks the new lobby owner and every bridge follows it, so its choice wins.
+        var hint = transport.HostHint;
+        if (hint is not null && hint == last.HostId && hostPeer == last.HostId)
+        {
+            // Steam still lists the host as owner: the relay dropped, so reconnect instead of migrating.
+            reconnectSince ??= clock();
+            if (clock() - reconnectSince > 30_000) { Leave("timeout"); notice = ("error", "Lost the connection to the host.", clock()); return; }
+            mirrorAt = clock(); notice = ("info", "Connection to the host dropped. Reconnecting…", clock());
+            Hello();
+            return;
+        }
+        var heir = (hint is not null && hint != last.HostId ? last.Members.FirstOrDefault(m => m.Id == hint) : null)
+            ?? last.Members.Where(m => m.Id != last.HostId && m.Connection == Connections.Connected)
+                .OrderBy(m => m.Role == MemberRoles.Player ? 0 : 1).ThenBy(m => m.JoinedAt).FirstOrDefault();
         if (hostPeer is not null) transport.Close(hostPeer);
         var oldName = last.Members.FirstOrDefault(m => m.Id == last.HostId)?.Name ?? "The host";
         if (heir is null) { Leave("closed"); notice = ("error", oldName + " left and the lobby closed.", clock()); return; }
@@ -616,7 +679,7 @@ sealed class MultiplayerService : IDisposable
                 simulation = Simulation is not null,
                 capabilities = new { invite = transport.Available, friends = friendsSource != "unavailable", gameLoad = caps.Contains("load"), gameStart = caps.Contains("start") },
                 self = new { id = SelfId, name = LocalName() },
-                joining = hostPeer is not null && mirror is null ? new { since = helloAt } : null,
+                joining = (hostPeer is not null && mirror is null) || joinPendingSince is not null ? new { since = joinPendingSince ?? connectAt, stage = hostPeer is null ? "lobby" : "host" } : null,
                 friends = new { source = friendsSource, items = Friends() },
                 invites = invites.Where(i => now - i.At < 120_000).ToArray(),
                 recent,

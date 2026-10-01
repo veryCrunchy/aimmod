@@ -9,15 +9,18 @@ namespace AimMod.InGame.Multiplayer;
 // AimModCore's live feed and run journal, the KovaaK's library and game commands.
 static class MultiplayerHosting
 {
-    public static MultiplayerService Create(Hub hub, string output, string[] args, Func<LiveOverlaySnapshot> live, Func<IReadOnlyList<Run>> runs)
+    // args is null for hosts built by self-tests: those never touch Steam or the game folder.
+    public static MultiplayerService Create(Hub hub, string output, string[]? args, Func<LiveOverlaySnapshot> live, Func<IReadOnlyList<Run>> runs)
     {
         string? gameRoot = null;
-        for (var i = 0; i + 1 < args.Length; i++) if (args[i] == "--game") gameRoot = args[i + 1];
-        var library = new ContentLibrary(ContentLibrary.Locate(gameRoot));
-        // Until the AimModSteam bridge transport lands, lobbies stay on this machine.
-        IMultiplayerTransport transport = new OfflineTransport();
-        return new MultiplayerService(transport, library, new CoreGameControl(output), () => FromLive(live()), runs, () => AccountLabel(hub), output,
-            MultiplayerService.SimulationRequested(args, output));
+        var list = args ?? [];
+        for (var i = 0; i + 1 < list.Length; i++) if (list[i] == "--game") gameRoot = list[i + 1];
+        var library = new ContentLibrary(args is null ? null : ContentLibrary.Locate(gameRoot));
+        // The AimModSteam bridge is used as soon as it answers on its pipe; until then
+        // (or without the bridge) lobbies stay on this machine.
+        IMultiplayerTransport transport = args is null || list.Contains("--no-steam") ? new OfflineTransport() : new SteamTransport();
+        return new MultiplayerService(transport, library, args is null ? new NoGameControl() : new CoreGameControl(output), () => FromLive(live()), runs, () => AccountLabel(hub), output,
+            MultiplayerService.SimulationRequested(list, output));
     }
 
     internal static LocalRun FromLive(LiveOverlaySnapshot s)

@@ -51,7 +51,7 @@ sealed class WorkspaceHost : IAsyncDisposable
         (settings ?? new NativeSettings(output)).MapEndpoints(app, prefix);
         overlaySettings.MapEndpoints(app, prefix);
         new CoachingFeedback(output).MapEndpoints(app, prefix);
-        multiplayer = Multiplayer.MultiplayerHosting.Create(hub, output, args ?? [], () => liveFeed.Read(outputFolder, Volatile.Read(ref overlayRuns)), () => Volatile.Read(ref overlayRuns));
+        multiplayer = Multiplayer.MultiplayerHosting.Create(hub, output, args, () => liveFeed.Read(outputFolder, Volatile.Read(ref overlayRuns)), () => Volatile.Read(ref overlayRuns));
         multiplayer.MapEndpoints(app, prefix);
         Multiplayer.MultiplayerHosting.MapAssets(app, prefix);
         var importedHistory = csvHistory ?? new CsvHistory(output);

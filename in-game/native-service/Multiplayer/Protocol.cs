@@ -85,7 +85,17 @@ interface IMultiplayerTransport : IDisposable
     void Advertise(LobbySnapshot lobby);
     void Withdraw();
     // Client: find the host peer for a room code or an accepted invite token.
-    string? Resolve(string codeOrToken);
+    string? Resolve(string code);
+    // Client: start joining from an invite, a launch join or a friend's lobby. The
+    // host peer then arrives as a Connected event with Host = true.
+    bool BeginJoin(string token);
+    // Drop a pending invite or launch join that the player declined.
+    void DismissJoin();
+    // Host: mirror LobbyCore's kick and host transfer so Steam membership agrees.
+    void Kick(string peer);
+    void Transfer(string peer);
+    // Who the transport considers the host (the Steam lobby owner), when it knows.
+    string? HostHint { get; }
     void Send(string peer, byte[] frame, bool reliable);
     void Close(string peer);
     // Events since the last call: connected, disconnected, a frame, an incoming
@@ -101,14 +111,16 @@ interface IMultiplayerTransport : IDisposable
     // Route and ping for a peer, as the relay network reports them.
     PeerLink? Link(string peer);
 }
-sealed record TransportEvent(string Peer, string Kind, byte[]? Frame = null, IncomingInvite? Invite = null)
+// Host is true on Connected when that peer is our host. Reason explains a
+// Disconnected (for the lobby itself: left, kicked, closed or shutdown) or an Error.
+sealed record TransportEvent(string Peer, string Kind, byte[]? Frame = null, IncomingInvite? Invite = null, bool Host = false, string? Reason = null)
 {
-    public const string Connected = "connected", Disconnected = "disconnected", Message = "message", InviteReceived = "invite", LaunchJoin = "launch-join";
+    public const string Connected = "connected", Disconnected = "disconnected", Left = "left", Message = "message", InviteReceived = "invite", Error = "error";
 }
 // An invite or join request from Steam. Token is opaque (the connect string
 // payload); Summary is what the host advertised, shown before accepting.
 // Kind is invite (they invite you), request (they ask to join yours) or launch.
-sealed record IncomingInvite(string Id, string FromName, string Kind, string Token, LobbySummary? Summary, long At);
+sealed record IncomingInvite(string Id, string FromName, string Kind, string Token, LobbySummary? Summary, long At, bool Compatible = true);
 sealed record LobbySummary(string Mode, string? Scenario, int Players, int MaxPlayers);
 // State is connecting or connected; Route is relay, direct or local.
 sealed record PeerLink(string State, string Route, int? Ping);
@@ -122,7 +134,12 @@ sealed class OfflineTransport : IMultiplayerTransport
     public string? LocalName => null;
     public void Advertise(LobbySnapshot lobby) { }
     public void Withdraw() { }
-    public string? Resolve(string codeOrToken) => null;
+    public string? Resolve(string code) => null;
+    public bool BeginJoin(string token) => false;
+    public void DismissJoin() { }
+    public void Kick(string peer) { }
+    public void Transfer(string peer) { }
+    public string? HostHint => null;
     public void Send(string peer, byte[] frame, bool reliable) { }
     public void Close(string peer) { }
     public IReadOnlyList<TransportEvent> Drain() => [];

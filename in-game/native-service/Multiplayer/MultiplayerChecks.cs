@@ -7,7 +7,7 @@ namespace AimMod.InGame.Multiplayer;
 static class MultiplayerChecks
 {
     static int count;
-    static void Check(bool value, string name) { count++; if (!value) throw new Exception("Multiplayer check failed: " + name); }
+    static void Check(bool value, string name) { count++; if (Environment.GetEnvironmentVariable("AIMMOD_CHECK_TRACE") == "1") Console.Error.WriteLine(name); if (!value) throw new Exception("Multiplayer check failed: " + name); }
     static JsonElement J(object value) => JsonSerializer.SerializeToElement(value, Protocol.Json);
     static JsonElement Patch(object settings) => J(new { settings });
 
@@ -27,6 +27,7 @@ static class MultiplayerChecks
         Matches();
         ProtocolFrames();
         Peers();
+        SteamPipe();
         var root = Path.Combine(Path.GetTempPath(), "aimmod-mp-test-" + Guid.NewGuid().ToString("N"));
         try { Content(root); Generator(root); Service(root); }
         finally { try { Directory.Delete(root, true); } catch (IOException) { } }
@@ -227,6 +228,12 @@ static class MultiplayerChecks
         public void Advertise(LobbySnapshot lobby) => network.Codes[lobby.Code] = id;
         public void Withdraw() { foreach (var k in network.Codes.Where(kv => kv.Value == id).Select(kv => kv.Key).ToArray()) network.Codes.Remove(k); }
         public string? Resolve(string code) => network.Codes.GetValueOrDefault(code);
+        public bool BeginJoin(string token) { if (network.Codes.GetValueOrDefault(token) is not { } host) return false; Inbox.Enqueue(new TransportEvent(host, TransportEvent.Connected, Host: true)); return true; }
+        public void DismissJoin() { }
+        public readonly List<string> HostActions = [];
+        public void Kick(string peer) => HostActions.Add("kick " + peer);
+        public void Transfer(string peer) => HostActions.Add("transfer " + peer);
+        public string? HostHint => null;
         public void Send(string peer, byte[] frame, bool reliable) { if (network.Peers.TryGetValue(peer, out var to)) to.Inbox.Enqueue(new TransportEvent(id, TransportEvent.Message, frame)); }
         public void Close(string peer) { }
         public IReadOnlyList<TransportEvent> Drain() { var list = Inbox.ToArray(); Inbox.Clear(); return list; }
@@ -242,13 +249,15 @@ static class MultiplayerChecks
     {
         long now = 5_000_000;
         var net = new MemoryNetwork();
+        var all = new List<MultiplayerService>();
         MultiplayerService Make(string id)
         {
             var t = new MemoryTransport(net, id); net.Peers[id] = t;
-            return new MultiplayerService(t, new ContentLibrary(null), new NoGameControl(), () => new LocalRun(false, null, null, null, null, 0, 0, 0, null), () => [], () => null, null, false, () => now, autoTick: false);
+            var service = new MultiplayerService(t, new ContentLibrary(null), new NoGameControl(), () => new LocalRun(false, null, null, null, null, 0, 0, 0, null), () => [], () => null, null, false, () => now, autoTick: false);
+            all.Add(service); return service;
         }
         var a = Make("peer-a"); var b = Make("peer-b"); var c = Make("peer-c");
-        void Pump() { for (var i = 0; i < 6; i++) { now += 50; a.Tick(); b.Tick(); c.Tick(); } }
+        void Pump() { for (var i = 0; i < 6; i++) { now += 50; foreach (var s in all) s.Tick(); } }
         Check(a.Act("create", J(new { mode = "practice" })).Ok, "Host creates a lobby");
         var code = net.Codes.Single().Key;
         Check(b.Act("join", J(new { code })).Ok && c.Act("join", J(new { code = code[..3] + "-" + code[3..] })).Ok, "Clients join by room code, with or without a dash");
@@ -278,6 +287,86 @@ static class MultiplayerChecks
         Pump();
         Check(View(c).GetProperty("invites").GetArrayLength() == 1 && c.Act("decline-invite", J(new { id = "i1" })).Ok && View(c).GetProperty("invites").GetArrayLength() == 0, "Invites can be declined");
         Check(View(b).GetProperty("friends").GetProperty("items").GetArrayLength() == 1 && b.Act("invite-friend", J(new { friend = "f1" })).Ok && !b.Act("invite-friend", J(new { friend = "steam:123" })).Ok, "Friends come from the transport; unknown ids are refused");
+        // Accepting a Steam invite joins asynchronously: the host arrives as a Connected event.
+        var d = Make("peer-d");
+        net.Peers["peer-d"].Inbox.Enqueue(new TransportEvent("peer-b", TransportEvent.InviteReceived, Invite: new IncomingInvite("i2", "Synthetic Host", "invite", net.Codes.Single().Key, null, now)));
+        Pump();
+        Check(d.Act("accept-invite", J(new { id = "i2" })).Ok && View(d).GetProperty("joining").ValueKind == JsonValueKind.Object, "Accepting an invite shows the joining state");
+        Pump();
+        Check(View(d).GetProperty("lobby").GetProperty("members").GetArrayLength() == 3 && View(d).GetProperty("joining").ValueKind == JsonValueKind.Null, "The invited player lands in the host's lobby");
+        Check(b.Act("kick", J(new { member = "peer-d" })).Ok && ((MemoryTransport)net.Peers["peer-b"]).HostActions.Contains("kick peer-d"), "Kicks are mirrored to the Steam lobby");
+        Pump();
+        Check(View(d).GetProperty("lobby").ValueKind == JsonValueKind.Null && View(d).GetProperty("notice").GetProperty("text").GetString()!.Contains("removed"), "A kicked player is told and leaves");
+        net.Peers["peer-b"].Inbox.Enqueue(new TransportEvent("", TransportEvent.Error, Reason: "Synthetic bridge error"));
+        Pump();
+        Check(View(b).GetProperty("notice").GetProperty("text").GetString() == "Synthetic bridge error", "Bridge errors surface as a notice");
+    }
+
+    // A fake AimModSteam on a private pipe name checks the v1 contract both ways.
+    static void SteamPipe()
+    {
+        var name = "aimmod-steam-test-" + Guid.NewGuid().ToString("N")[..10];
+        using var server = new System.IO.Pipes.NamedPipeServerStream(name, System.IO.Pipes.PipeDirection.InOut, 1, System.IO.Pipes.PipeTransmissionMode.Byte, System.IO.Pipes.PipeOptions.Asynchronous, 1 << 17, 1 << 17);
+        using var steam = new SteamTransport(name);
+        Check(server.WaitForConnectionAsync().Wait(5000), "The transport connects to the bridge pipe");
+        JsonElement Read()
+        {
+            var header = new byte[4];
+            if (!server.ReadExactlyAsync(header).AsTask().Wait(5000)) throw new Exception("Multiplayer check failed: bridge read timed out");
+            var body = new byte[BitConverter.ToUInt32(header)];
+            server.ReadExactlyAsync(body).AsTask().Wait(5000);
+            return JsonDocument.Parse(body).RootElement.Clone();
+        }
+        JsonElement Expect(string cmd) { for (var i = 0; i < 6; i++) { var c = Read(); if (c.GetProperty("cmd").GetString() == cmd) return c; } throw new Exception("Multiplayer check failed: expected " + cmd); }
+        void Write(object ev) { var bytes = JsonSerializer.SerializeToUtf8Bytes(ev); server.Write(BitConverter.GetBytes((uint)bytes.Length)); server.Write(bytes); server.Flush(); }
+        bool Until(Func<bool> condition) { for (var i = 0; i < 100; i++) { if (condition()) return true; Thread.Sleep(20); } return false; }
+        var hello = Expect("hello");
+        Check(hello.GetProperty("v").GetInt32() == 1 && hello.TryGetProperty("id", out _), "hello opens the contract");
+        const string self = "76561190000000001", friend = "76561190000000002", lobbyId = "109775240000000001";
+        Write(new { v = 1, ev = "ready", contract = 1, wire = 1, bridge = "test", steam = true, appId = 824270, self = new { peer = self, name = "Synthetic Host", initials = "SH" }, relay = "Current" });
+        Check(Until(() => steam.Available) && steam.LocalPeer == self && steam.LocalName == "Synthetic Host", "ready gives the local peer and persona name");
+        var (core, _, _) = Lobby();
+        steam.Advertise(core.Snapshot());
+        var create = Expect("lobby.create");
+        Check(create.GetProperty("privacy").GetString() == "friends" && create.GetProperty("maxMembers").GetInt32() == 4 && create.GetProperty("data").GetProperty("aimmod.code").GetString() == "ABCDEF", "Advertise creates a friends lobby with aimmod.* data");
+        Write(new { v = 1, ev = "lobby.updated", lobby = lobbyId, owner = self, isHost = true, privacy = "friends", joinable = true, maxMembers = 4, members = new[] { new { peer = self, name = "Synthetic Host", initials = "SH", host = true, self = true, connected = true } }, data = new { } });
+        Check(Until(() => steam.HostHint == self), "lobby.updated names the owner");
+        steam.Advertise(core.Snapshot());
+        Check(Expect("lobby.setData").GetProperty("data").GetProperty("aimmod.players").GetString() == "1/4" && Expect("lobby.setJoinable").GetProperty("joinable").GetBoolean() && Expect("presence.set").GetProperty("status").GetString()!.StartsWith("In an AimMod lobby", StringComparison.Ordinal), "Later adverts update data, joinability and rich presence");
+        var frame = Protocol.Encode(Protocol.Create("ping", "l", self, 1, 2, new { t0 = 2 }));
+        steam.Send(friend, frame, reliable: false);
+        var send = Expect("p2p.send");
+        Check(send.GetProperty("peer").GetString() == friend && !send.GetProperty("reliable").GetBoolean() && Convert.FromBase64String(send.GetProperty("data").GetString()!).SequenceEqual(frame) && !send.TryGetProperty("id", out _), "Frames go out as base64 p2p.send without an id");
+        steam.InviteOverlay(core.Snapshot());
+        Check(!Expect("lobby.invite").TryGetProperty("friend", out _), "Invite friends opens the overlay");
+        Write(new { v = 1, ev = "member.joined", member = new { peer = friend, name = "Synthetic Friend", initials = "SF", host = false, self = false, connected = false } });
+        Write(new { v = 1, ev = "p2p.connected", peer = friend, host = false });
+        Write(new { v = 1, ev = "p2p.message", peer = friend, reliable = true, data = Convert.ToBase64String(frame) });
+        Write(new { v = 1, ev = "p2p.ping", peer = friend, rtt = 37 });
+        Write(new { v = 1, ev = "friends", friends = new object[] {
+            new { peer = "76561190000000003", name = "Offline Friend", initials = "OF", state = "offline", playing = false, aimmod = false },
+            new { peer = "76561190000000004", name = "Plain Friend", initials = "PF", state = "online", playing = false, aimmod = false },
+            new { peer = friend, name = "Synthetic Friend", initials = "SF", state = "online", playing = true, aimmod = true, lobby = "109775240000000002" } } });
+        Write(new { v = 1, ev = "join.requested", source = "launch-aimmodjoin", lobby = "109775240000000003", compatible = true, from = (string?)null });
+        var events = new List<TransportEvent>();
+        Check(Until(() => { events.AddRange(steam.Drain()); return events.Count >= 3; }), "Bridge events arrive");
+        Check(events.Any(e => e.Kind == TransportEvent.Connected && e.Peer == friend && !e.Host) && events.Any(e => e.Kind == TransportEvent.Message && e.Frame!.SequenceEqual(frame)), "p2p.connected and p2p.message map to transport events");
+        var launch = events.First(e => e.Kind == TransportEvent.InviteReceived).Invite!;
+        Check(launch.Kind == "launch" && launch.Token == "109775240000000003" && launch.FromName == "A friend", "A launch join becomes an invite to confirm");
+        Check(Until(() => steam.Link(friend)?.Ping == 37) && steam.Link(friend)!.State == "connected" && steam.Link(friend)!.Route == "relay", "Members carry relay state and ping");
+        Check(Until(() => steam.Friends().Count == 2) && steam.Friends()[0].Status == "aimmod-lobby" && steam.Friends()[0].Joinable && steam.Friends()[1].Status == "online", "Online friends, AimMod players first; offline ones are hidden");
+        Check(steam.Invited(friend) && !steam.Invited("76561190000000009"), "Lobby membership gates invite-only joins");
+        steam.Kick(friend);
+        Check(Expect("lobby.kick").GetProperty("peer").GetString() == friend, "Kicks reach the bridge");
+        steam.Transfer("not-a-steam-id");
+        steam.Transfer(friend);
+        Check(Expect("lobby.transfer").GetProperty("peer").GetString() == friend, "Host transfer reaches the bridge, and malformed ids never do");
+        Write(new { v = 1, ev = "member.left", peer = friend });
+        Check(Until(() => steam.Drain().Any(e => e.Kind == TransportEvent.Left && e.Peer == friend)), "member.left means the member is gone");
+        Write(new { v = 1, ev = "error", code = "rejected", message = "banned" });
+        Check(Until(() => steam.Drain().Any(e => e.Kind == TransportEvent.Error && e.Reason!.Contains("refused"))), "Bridge errors are reported");
+        server.Disconnect();
+        Check(Until(() => !steam.Available), "A dropped pipe makes the transport unavailable");
     }
 
     static void WriteText(string path, string text) { Directory.CreateDirectory(Path.GetDirectoryName(path)!); File.WriteAllText(path, text); }
