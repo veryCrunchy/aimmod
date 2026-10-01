@@ -69,7 +69,8 @@ namespace bridge
         ChunkAck = 11, // bulk: u32 transfer, u32 index
         Cancel = 12, // bulk: u32 transfer, u16 reason
         SpectateSub = 13, // spectate: u64 target, u8 rate Hz (0 = stop)
-        Camera = 14,      // spectate: u64 origin, u32 seq, 7 x f32 (x y z pitch yaw roll fov), u8 flags
+        Camera = 14,      // spectate: u64 origin, u32 seq, i64 unix ms (sender clock), 7 x f32 (x y z pitch yaw roll fov), u8 flags
+        CameraMeta = 15,  // spectate: u64 origin, f32 map scale, u8 n, scenario, u8 m, map name
     };
 
     constexpr int MaxSpectateRate = 60;
@@ -77,6 +78,7 @@ namespace bridge
     {
         std::uint64_t origin = 0;
         std::uint32_t seq = 0;
+        std::int64_t ms = 0; // unix ms on the sender's clock
         float x = 0, y = 0, z = 0, pitch = 0, yaw = 0, roll = 0, fov = 90;
         std::uint8_t flags = 0; // bit 0: fired since the last frame
     };
@@ -121,6 +123,7 @@ namespace bridge
         std::uint32_t transfer = 0, index = 0; // Chunk / ChunkAck / Cancel (code = reason)
         Pose pose;
         CameraFrame camera;
+        std::string scenario, map; // CameraMeta (<= MaxPoseScene each); origin in lobby, scale in camera.fov
         std::uint8_t rate = 0; // SpectateSub (lobby/target reuse: lobby = target)
     };
     std::vector<std::uint8_t> Encode(const WireMessage& message);

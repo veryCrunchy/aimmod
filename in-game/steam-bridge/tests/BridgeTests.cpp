@@ -4,6 +4,7 @@
 #include "Codec.hpp"
 #include "GhostMath.hpp"
 #include "Json.hpp"
+#include "PoseFile.hpp"
 
 #include <cstdio>
 #include <cmath>
@@ -219,10 +220,21 @@ int main()
         cam.camera.yaw = 90;
         cam.camera.fov = 103;
         cam.camera.flags = 1;
+        cam.camera.ms = 1759300000123;
         auto ce2 = Encode(cam);
-        Check(ce2.size() == WireHeader + 41, "camera frame is 49 bytes");
+        Check(ce2.size() == WireHeader + 49, "camera frame is 57 bytes");
         auto cd2 = Decode(ce2.data(), ce2.size());
-        Check(cd2 && cd2->camera.origin == Person && cd2->camera.yaw == 90 && cd2->camera.fov == 103 && cd2->camera.flags == 1, "camera frame round-trips");
+        Check(cd2 && cd2->camera.origin == Person && cd2->camera.yaw == 90 && cd2->camera.fov == 103 && cd2->camera.flags == 1 && cd2->camera.ms == 1759300000123, "camera frame round-trips with the sender time");
+        WireMessage meta{WireType::CameraMeta};
+        meta.lobby = Person;
+        meta.camera.fov = 4.f;
+        meta.scenario = "AimMod - aim_map (CSS) - CS Movement";
+        meta.map = "aimmod_aim_map_css.map";
+        auto me = Encode(meta);
+        auto md = Decode(me.data(), me.size());
+        Check(md && md->lobby == Person && md->camera.fov == 4.f && md->scenario == meta.scenario && md->map == meta.map, "camera meta round-trips");
+        me.push_back(0);
+        Check(!Decode(me.data(), me.size()), "rejects camera meta with trailing bytes");
         WireMessage badFov = cam;
         badFov.camera.fov = 0;
         auto bf = Encode(badFov);
@@ -300,6 +312,33 @@ int main()
         wrap[0].pose.yaw = 170;
         wrap[1].pose.yaw = -170;
         Check(std::fabs(WrapAngle(Sample(wrap, 1.15).yaw - 180)) < 1e-6, "yaw interpolates across +-180 the short way");
+    }
+    // AimModCore pose format 1
+    {
+        using namespace bridge::posefile;
+        Check(Escape("AimMod - aim_map (CSS) - CS Movement") == "AimMod%20-%20aim_map%20%28CSS%29%20-%20CS%20Movement", "escapes like AimModCore");
+        Check(Unescape("a%20b%2Fc") == "a b/c" && !Unescape("a%2") && !Unescape("%zz"), "unescapes strictly");
+        const std::string sample = "AIMMOD_POSE_1\t42\nmeta\tAimMod%20-%20aim_map%20%28CSS%29%20-%20CS%20Movement\taimmod_aim_map_css.map\t4\n"
+                                   "pose\t1759300000100\t1.5\t-2\t160\t-10\t90\t0\t103\n"
+                                   "pose\t1759300000116\t1.6\t-2\t161\t-10\t91\t0\t103\n"
+                                   "target\t7\t500\t0\t90\t34\t88\n";
+        auto parsed = Parse(sample);
+        Check(parsed && parsed->sequence == 42 && parsed->scenario == "AimMod - aim_map (CSS) - CS Movement" && parsed->map == "aimmod_aim_map_css.map" &&
+                  parsed->scale == 4 && parsed->rows.size() == 2 && parsed->rows[1].ms == 1759300000116 && parsed->rows[1].v[4] == 91 &&
+                  parsed->targets.size() == 1 && parsed->targets[0].v[4] == 88,
+              "parses AimModCore's self-pose.tsv");
+        auto again = parsed ? Parse(Format(*parsed)) : std::nullopt;
+        Check(again && again->rows.size() == 2 && again->rows[0].v[2] == 160 && again->scenario == parsed->scenario && again->targets.size() == 1,
+              "pose files round-trip");
+        Check(!Parse("AIMMOD_POSE_2\t1\nmeta\ta\tb\t1\npose\t1\t0\t0\t0\t0\t0\t0\t90\n"), "rejects another format version");
+        Check(!Parse("AIMMOD_POSE_1\t1\nmeta\ta\tb\t1\npose\t5\t0\t0\t0\t0\t0\t0\t90\npose\t5\t0\t0\t0\t0\t0\t0\t90\n"), "rejects non-increasing times");
+        Check(!Parse("AIMMOD_POSE_1\t1\nmeta\ta\tb\t1\npose\t5\t0\t0\t0\t0\t0\t0\t0\n"), "rejects an impossible field of view");
+        Check(!Parse("AIMMOD_POSE_1\t1\nmeta\ta\tb\t1\n"), "rejects a file without poses");
+        File many;
+        many.sequence = 1;
+        for (int i = 0; i < 100; ++i) many.rows.push_back(Row{1000 + i, {0, 0, 0, 0, 0, 0, 90}});
+        auto capped = Parse(Format(many));
+        Check(capped && capped->rows.size() == MaxRows && capped->rows.back().ms == 1099, "writes at most the newest 64 rows");
     }
     std::printf("%d/%d checks passed\n", checks - failures, checks);
     return failures == 0 ? 0 : 1;

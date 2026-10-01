@@ -10,6 +10,7 @@
 #include "Codec.hpp"
 #include "Json.hpp"
 #include "Pipe.hpp"
+#include "PoseFile.hpp"
 #include "Steam.hpp"
 
 #include <atomic>
@@ -209,6 +210,9 @@ namespace bridge
         void ForgetSpectate(std::uint64_t peer);
         void SendCamera();
         void EmitCamera(const CameraFrame& c);
+        void OnSpectateFrame(const CameraFrame& c);
+        void WriteSpectatePose(bool force);
+        void ResetSpectator();
 
         // Ghost demo
         void GhostTick();
@@ -278,6 +282,16 @@ namespace bridge
         std::uint32_t m_cameraSeq = 0;
         Clock::time_point m_nextCamera{};
         std::optional<CameraFrame> m_localCamera; // guarded by m_ghostMutex
+        // AimModCore pose files (pose format 1)
+        Clock::time_point m_nextRequestTouch{};
+        Clock::time_point m_nextMetaSend{};
+        std::int64_t m_lastSelfMs = 0;
+        std::string m_selfScenario, m_selfMap;
+        float m_selfScale = 0;
+        posefile::File m_spectate;            // spectator: rows for spectate-pose.tsv
+        std::optional<std::int64_t> m_spectateOffset; // local ms - sender ms
+        bool m_spectateDirty = false;
+        Clock::time_point m_nextSpectateWrite{};
 
         Options m_options;
         std::mutex m_ghostMutex; // guards the four members below

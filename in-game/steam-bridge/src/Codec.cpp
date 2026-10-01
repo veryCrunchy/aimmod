@@ -180,6 +180,7 @@ namespace bridge
             const CameraFrame& c = m.camera;
             Put(out, c.origin, 8);
             Put(out, c.seq, 4);
+            Put(out, static_cast<std::uint64_t>(c.ms), 8);
             for (const float f : {c.x, c.y, c.z, c.pitch, c.yaw, c.roll, c.fov})
             {
                 std::uint32_t bits = 0;
@@ -187,6 +188,20 @@ namespace bridge
                 Put(out, bits, 4);
             }
             out.push_back(c.flags);
+            break;
+        }
+        case WireType::CameraMeta:
+        {
+            Put(out, m.lobby, 8);
+            std::uint32_t bits = 0;
+            std::memcpy(&bits, &m.camera.fov, 4); // map scale
+            Put(out, bits, 4);
+            for (const std::string* s : {&m.scenario, &m.map})
+            {
+                const std::size_t n = std::min(s->size(), MaxPoseScene);
+                out.push_back(static_cast<std::uint8_t>(n));
+                out.insert(out.end(), s->begin(), s->begin() + static_cast<std::ptrdiff_t>(n));
+            }
             break;
         }
         case WireType::Pose:
@@ -276,19 +291,41 @@ namespace bridge
             break;
         case WireType::Camera:
         {
-            if (n != 8 + 4 + 7 * 4 + 1) return std::nullopt;
+            if (n != 8 + 4 + 8 + 7 * 4 + 1) return std::nullopt;
             CameraFrame& c = m.camera;
             c.origin = Get(body, 8);
             c.seq = static_cast<std::uint32_t>(Get(body + 8, 4));
+            c.ms = static_cast<std::int64_t>(Get(body + 12, 8));
             float* fields[] = {&c.x, &c.y, &c.z, &c.pitch, &c.yaw, &c.roll, &c.fov};
             for (int i = 0; i < 7; ++i)
             {
-                const auto bits = static_cast<std::uint32_t>(Get(body + 12 + 4 * i, 4));
+                const auto bits = static_cast<std::uint32_t>(Get(body + 20 + 4 * i, 4));
                 std::memcpy(fields[i], &bits, 4);
                 if (!std::isfinite(*fields[i]) || std::fabs(*fields[i]) > 1e7f) return std::nullopt;
             }
             if (c.fov <= 1 || c.fov >= 179) return std::nullopt;
-            c.flags = body[40];
+            c.flags = body[48];
+            break;
+        }
+        case WireType::CameraMeta:
+        {
+            if (n < 8 + 4 + 2) return std::nullopt;
+            m.lobby = Get(body, 8);
+            const auto bits = static_cast<std::uint32_t>(Get(body + 8, 4));
+            std::memcpy(&m.camera.fov, &bits, 4);
+            if (!std::isfinite(m.camera.fov) || m.camera.fov < 0 || m.camera.fov > 1000) return std::nullopt;
+            std::size_t at = 12;
+            for (std::string* s : {&m.scenario, &m.map})
+            {
+                if (at >= n) return std::nullopt;
+                const std::size_t len = body[at++];
+                if (len > MaxPoseScene || at + len > n) return std::nullopt;
+                s->assign(reinterpret_cast<const char*>(body + at), len);
+                for (const char ch : *s)
+                    if (static_cast<unsigned char>(ch) < 0x20) return std::nullopt;
+                at += len;
+            }
+            if (at != n) return std::nullopt;
             break;
         }
         case WireType::Pose:

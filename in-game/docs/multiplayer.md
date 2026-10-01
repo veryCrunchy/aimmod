@@ -1009,16 +1009,31 @@ accounts (for P2P).
 - **Routing (star topology).** A client spectator sends `SpectateSub(target,
   rate)` to the host. The host keeps per-target subscribers and asks the
   target for the highest requested rate. The target sends 49-byte `Camera`
-  frames, unreliable, only while subscribed. The host relays them only to
+  frames (57 bytes: origin, seq, sender unix ms, camera, flags), unreliable, only while subscribed. The host relays them only to
   that target's subscribers, or emits them itself when the host is the
   spectator.
 - **Bandwidth:** at most 60 × 49 B ≈ 3 KB/s per watched player, one stream
   per target whatever the number of spectators. The target sends no camera
   frames at all when nobody watches.
-- **Not done yet:** `fired` is always false, because the shot counters live in
-  AimModCore. The frame format will follow AimModCore's presenter input for
-  the follow camera once that's defined.
-
+- **AimModCore pose files (pose format 1, `native-mod/DESIGN.md` "Spectating").**
+  - **Watched player:** while a spectator subscribes, the bridge rewrites
+    `%LOCALAPPDATA%\AimMod\KovaaksNative\self-pose.request` every 2 s, so
+    AimModCore keeps publishing `self-pose.tsv`. It reads that file (only
+    when it's less than 1.5 s old) and sends each new `pose` row as a
+    `Camera` frame with the row's unix ms. It also sends a reliable
+    `CameraMeta` (scenario, map, scale) every second. Without an AimModCore
+    feed, it falls back to its own camera sample.
+  - **Spectator:** the bridge maps the sender's times onto local time, using
+    the lowest observed latency, and keeps the newest 64 rows. It writes
+    `spectate-pose.tsv` in pose format 1 at up to 60 Hz, as a temp file plus
+    an atomic rename. The `meta` line comes from `CameraMeta`. AimModCore's
+    presenter shows it 120 ms behind the newest row and stops after 2 s
+    without one.
+  - `src/PoseFile.{hpp,cpp}` parses and writes the format strictly: the
+    escaping matches AimModCore's, times must increase, fov must be valid,
+    and at most 64 rows. It's unit tested against an AimModCore-style sample.
+  - `target` rows aren't forwarded. `fired` stays false until AimModCore adds
+    it to the format.
 **Pose frame: remote crouch and height.**
 
 - `Pose` now carries the sender's crouch flag (bit 0) and capsule half-height

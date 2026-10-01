@@ -286,6 +286,7 @@ namespace bridge
             UpdateStatusPresence();
         }
         SendCamera();
+        if (m_watching) WriteSpectatePose(false);
         // Avatars that were still loading.
         const auto now = Clock::now();
         auto avatars = std::move(m_avatars);
@@ -844,6 +845,7 @@ namespace bridge
                 sub.rate = static_cast<std::uint8_t>(rate);
                 SendWire(*host, sub, true);
             }
+            if (target != m_watching || !rate) ResetSpectator();
             m_watching = rate ? target : 0;
             m_watchRate = rate;
             m_log(rate ? "spectating " + Redact(target) + " at " + std::to_string(rate) + " Hz" : std::string("spectating stopped"));
@@ -1439,12 +1441,32 @@ namespace bridge
                 if (it == m_spectators.end()) break;
                 for (const auto& [spectator, _] : it->second)
                 {
-                    if (spectator == m_self) EmitCamera(m.camera);
+                    if (spectator == m_self) OnSpectateFrame(m.camera);
                     else if (Conn* s = FindConn(spectator); s && s->state == ConnState::Ready) SendWire(*s, m, false);
                 }
             }
             else if (conn.outgoing && peer == m_owner && m.camera.origin == m_watching)
-                EmitCamera(m.camera);
+                OnSpectateFrame(m.camera);
+            break;
+        case WireType::CameraMeta:
+            if (!conn.outgoing && IsHost())
+            {
+                if (m.lobby != peer) break;
+                const auto it = m_spectators.find(peer);
+                if (it == m_spectators.end()) break;
+                for (const auto& [spectator, _] : it->second)
+                {
+                    if (spectator == m_self)
+                    {
+                        m_spectate.scenario = m.scenario, m_spectate.map = m.map, m_spectate.scale = m.camera.fov;
+                    }
+                    else if (Conn* s = FindConn(spectator); s && s->state == ConnState::Ready) SendWire(*s, m, true);
+                }
+            }
+            else if (conn.outgoing && peer == m_owner && m.lobby == m_watching)
+            {
+                m_spectate.scenario = m.scenario, m_spectate.map = m.map, m_spectate.scale = m.camera.fov;
+            }
             break;
         case WireType::Chunk:
         {
@@ -2052,33 +2074,159 @@ namespace bridge
         for (const auto target : targets) UpdateSpectateRoute(target);
     }
 
+    namespace
+    {
+        std::int64_t UnixMs()
+        {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+        }
+
+        bool WriteAtomic(const std::filesystem::path& file, const std::string& text)
+        {
+            const std::wstring temp = file.wstring() + L".tmp";
+            {
+                std::ofstream out(temp, std::ios::binary | std::ios::trunc);
+                if (!out) return false;
+                out << text;
+                if (!out) return false;
+            }
+            return MoveFileExW(temp.c_str(), file.c_str(), MOVEFILE_REPLACE_EXISTING) != FALSE;
+        }
+
+        // AimModCore rewrites self-pose.tsv at 30 Hz; anything older than 1.5 s is stale.
+        std::optional<std::string> ReadFresh(const std::filesystem::path& file)
+        {
+            WIN32_FILE_ATTRIBUTE_DATA info{};
+            if (!GetFileAttributesExW(file.c_str(), GetFileExInfoStandard, &info)) return std::nullopt;
+            FILETIME nowFt{};
+            GetSystemTimeAsFileTime(&nowFt);
+            const auto toU64 = [](FILETIME ft) { return (static_cast<std::uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime; };
+            if (toU64(nowFt) - toU64(info.ftLastWriteTime) > 15'000'000ull) return std::nullopt; // 100 ns units
+            HANDLE h = CreateFileW(file.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
+            if (h == INVALID_HANDLE_VALUE) return std::nullopt;
+            std::string text(64 * 1024, '\0');
+            DWORD got = 0;
+            const bool ok = ReadFile(h, text.data(), static_cast<DWORD>(text.size()), &got, nullptr) && got > 0 && got < text.size();
+            CloseHandle(h);
+            if (!ok) return std::nullopt;
+            text.resize(got);
+            return text;
+        }
+    } // namespace
+
     void Bridge::SendCamera()
     {
         const int rate = m_cameraRate.load();
         const auto now = Clock::now();
-        if (!m_lobby || rate <= 0 || now < m_nextCamera) return;
-        m_nextCamera = now + std::chrono::microseconds(1'000'000 / rate);
-        std::optional<CameraFrame> local;
+        if (!m_lobby || rate <= 0) return;
+        const std::filesystem::path dir = m_options.stateDir;
+        // Keep AimModCore publishing self-pose.tsv while someone watches us.
+        if (!m_options.stateDir.empty() && now >= m_nextRequestTouch)
         {
-            std::lock_guard lock(m_ghostMutex);
-            local = m_localCamera;
+            m_nextRequestTouch = now + 2s;
+            WriteAtomic(dir / L"self-pose.request", std::to_string(UnixMs()) + "\n");
         }
-        if (!local) return;
-        WireMessage m{WireType::Camera};
-        m.camera = *local;
-        m.camera.origin = m_self;
-        m.camera.seq = ++m_cameraSeq;
+        if (now < m_nextCamera) return;
+        m_nextCamera = now + std::chrono::microseconds(1'000'000 / rate);
+
+        std::vector<CameraFrame> frames;
+        if (!m_options.stateDir.empty())
+            if (const auto text = ReadFresh(dir / L"self-pose.tsv"))
+                if (const auto file = posefile::Parse(*text))
+                {
+                    m_selfScenario = file->scenario;
+                    m_selfMap = file->map;
+                    m_selfScale = static_cast<float>(file->scale);
+                    for (const auto& row : file->rows)
+                    {
+                        if (row.ms <= m_lastSelfMs) continue;
+                        m_lastSelfMs = row.ms;
+                        CameraFrame c;
+                        c.ms = row.ms;
+                        c.x = static_cast<float>(row.v[0]), c.y = static_cast<float>(row.v[1]), c.z = static_cast<float>(row.v[2]);
+                        c.pitch = static_cast<float>(row.v[3]), c.yaw = static_cast<float>(row.v[4]), c.roll = static_cast<float>(row.v[5]);
+                        c.fov = static_cast<float>(row.v[6]);
+                        frames.push_back(c);
+                    }
+                }
+        if (frames.empty() && m_lastSelfMs == 0)
+        {
+            // No AimModCore feed (older AimModCore): use our own camera sample.
+            std::optional<CameraFrame> local;
+            {
+                std::lock_guard lock(m_ghostMutex);
+                local = m_localCamera;
+                m_selfScenario = m_scene;
+            }
+            if (local)
+            {
+                local->ms = UnixMs();
+                frames.push_back(*local);
+            }
+        }
+        std::vector<Conn*> targets;
         if (IsHost())
         {
-            const auto it = m_spectators.find(m_self);
-            if (it == m_spectators.end()) return;
-            for (const auto& [spectator, _] : it->second)
-                if (Conn* s = FindConn(spectator); s && s->state == ConnState::Ready) SendWire(*s, m, false);
+            if (const auto it = m_spectators.find(m_self); it != m_spectators.end())
+                for (const auto& [spectator, _] : it->second)
+                    if (Conn* s = FindConn(spectator); s && s->state == ConnState::Ready) targets.push_back(s);
         }
         else if (Conn* host = FindConn(m_owner); host && host->state == ConnState::Ready)
-            SendWire(*host, m, false);
+            targets.push_back(host);
+        if (targets.empty()) return;
+        if (now >= m_nextMetaSend)
+        {
+            m_nextMetaSend = now + 1s;
+            WireMessage meta{WireType::CameraMeta};
+            meta.lobby = m_self;
+            meta.camera.fov = m_selfScale;
+            meta.scenario = m_selfScenario;
+            meta.map = m_selfMap;
+            for (Conn* c : targets) SendWire(*c, meta, true);
+        }
+        for (auto& frame : frames)
+        {
+            WireMessage m{WireType::Camera};
+            m.camera = frame;
+            m.camera.origin = m_self;
+            m.camera.seq = ++m_cameraSeq;
+            for (Conn* c : targets) SendWire(*c, m, false);
+        }
     }
 
+    void Bridge::ResetSpectator()
+    {
+        m_spectate = posefile::File{};
+        m_spectateOffset.reset();
+        m_spectateDirty = false;
+    }
+
+    void Bridge::OnSpectateFrame(const CameraFrame& c)
+    {
+        EmitCamera(c);
+        if (m_options.stateDir.empty()) return;
+        // Map the sender's clock onto ours with the lowest observed latency.
+        const std::int64_t local = UnixMs();
+        const std::int64_t offset = local - c.ms;
+        if (!m_spectateOffset || offset < *m_spectateOffset || offset - *m_spectateOffset > 5000) m_spectateOffset = offset;
+        posefile::Row row;
+        row.ms = c.ms + *m_spectateOffset;
+        if (!m_spectate.rows.empty() && row.ms <= m_spectate.rows.back().ms) row.ms = m_spectate.rows.back().ms + 1;
+        row.v = {c.x, c.y, c.z, c.pitch, c.yaw, c.roll, c.fov};
+        m_spectate.rows.push_back(row);
+        if (m_spectate.rows.size() > posefile::MaxRows) m_spectate.rows.erase(m_spectate.rows.begin());
+        m_spectateDirty = true;
+        WriteSpectatePose(false);
+    }
+
+    void Bridge::WriteSpectatePose(bool force)
+    {
+        const auto now = Clock::now();
+        if (!m_spectateDirty || m_spectate.rows.empty() || (!force && now < m_nextSpectateWrite)) return;
+        m_nextSpectateWrite = now + 16ms; // <= 60 Hz
+        ++m_spectate.sequence;
+        if (WriteAtomic(std::filesystem::path(m_options.stateDir) / L"spectate-pose.tsv", posefile::Format(m_spectate))) m_spectateDirty = false;
+    }
     void Bridge::EmitCamera(const CameraFrame& c)
     {
         Emit(json::Object()
