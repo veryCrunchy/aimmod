@@ -1337,6 +1337,9 @@ sealed partial class MultiplayerService : IDisposable
 
     void HandleAsHost(string peer, Envelope m)
     {
+        // Only members talk to the lobby: a friend's spectate link or a refused join gets no content,
+        // no relayed replays and no say. Joining starts with hello.
+        if (m.T != "hello" && core!.Members.All(x => x.Id != peer)) return;
         switch (m.T)
         {
             case "hello":

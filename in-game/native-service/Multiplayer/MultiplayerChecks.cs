@@ -889,6 +889,13 @@ static partial class MultiplayerChecks
         b.Act("chat", J(new { text = "synthetic hello" }));
         Pump();
         Check(View(c).GetProperty("lobby").GetProperty("chat").EnumerateArray().Any(l => l.GetProperty("text").GetString() == "synthetic hello"), "Chat travels through the host");
+        // A peer outside the lobby (a friend's spectate link, a rejected join) gets nothing from the host.
+        var outsider = new MemoryTransport(net, "peer-x"); net.Peers["peer-x"] = outsider;
+        foreach (var (type, body) in new (string, object)[] { ("content.request", new { }), ("content.get", new { hash = new string('a', 64), offset = 0, length = 8192 }) })
+            net.Peers["peer-a"].Inbox.Enqueue(new TransportEvent("peer-x", TransportEvent.Message, Protocol.Encode(Protocol.Create(type, "x", "peer-x", 1, now, body))));
+        Pump();
+        Check(outsider.Inbox.Count == 0, "The host answers lobby traffic only from its members");
+        net.Peers.Remove("peer-x");
         // A forged frame claiming to be the host is dropped.
         net.Peers["peer-b"].Inbox.Enqueue(new TransportEvent("peer-c", TransportEvent.Message, Protocol.Encode(Protocol.Create("snapshot", "x", "peer-a", 1, now, new { snapshot = new { } }))));
         Pump();
