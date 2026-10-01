@@ -99,17 +99,28 @@ static class KeyBinds
     }
     static IReadOnlySet<string> ReadGameKeys(string? root)
     {
+        // KovaaK's keeps its binds in the UE user config (LocalApplicationData\FPSAimTrainer\
+        // Saved\Config\WindowsNoEditor\Input.ini); the game folder's Saved\Config is the fallback.
         var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var candidates = new List<string>();
+        var candidates = new List<string>
+        {
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FPSAimTrainer", "Saved", "Config", "WindowsNoEditor", "Input.ini"),
+        };
         if (root is not null) candidates.Add(Path.Combine(root, "Saved", "Config", "WindowsNoEditor", "Input.ini"));
-        var local = Environment.GetEnvironmentVariable("LOCALAPPDATA");
-        if (local is not null) candidates.Add(Path.Combine(local, "FPSAimTrainer", "Saved", "Config", "WindowsNoEditor", "Input.ini"));
         foreach (var path in candidates)
         {
             try
             {
                 if (!File.Exists(path) || new FileInfo(path).Length > 1 << 20) continue;
-                foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(File.ReadAllText(path), @"Key=([A-Za-z0-9_]+)")) keys.Add(m.Groups[1].Value);
+                foreach (var line in File.ReadLines(path))
+                {
+                    var key = System.Text.RegularExpressions.Regex.Match(line, @"[(,]Key=([A-Za-z0-9_]+)");
+                    if (!key.Success || !(line.Contains("ActionMappings=", StringComparison.Ordinal) || line.Contains("AxisMappings=", StringComparison.Ordinal))) continue;
+                    // AimMod's keys only act with no modifier held, so only bare binds clash; record modified ones as such.
+                    var modifiers = new[] { "bShift", "bCtrl", "bAlt", "bCmd" }.Where(m => line.Contains(m + "=True", StringComparison.Ordinal)).Select(m => m[1..]).ToArray();
+                    keys.Add(modifiers.Length == 0 ? key.Groups[1].Value : string.Join('+', modifiers) + "+" + key.Groups[1].Value);
+                }
+                break; // the first config found is the one the game uses
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         }

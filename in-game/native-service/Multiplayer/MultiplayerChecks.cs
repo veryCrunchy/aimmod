@@ -209,6 +209,29 @@ static class MultiplayerChecks
         core.Join("p2", "Two", version: "bridge-1");
         Check(LobbyRules.StartBlockers(core.Snapshot()).All(b => b.Code != "version"), "Same builds play together");
 
+        // Away players don't block; suggestions and votes; a warm-up until everyone has loaded.
+        (core, clock, advance) = Lobby();
+        core.Join("p2", "Two"); core.Join("p3", "Three");
+        ReadyAll(core);
+        core.Apply("p3", "ready", J(new { ready = false }), content);
+        Check(LobbyRules.StartBlockers(core.Snapshot()).Any(b => b.Code == "ready"), "An unready player blocks");
+        Check(core.Apply("p2", "skip", J(new { member = "p3" }), content).Code == "not-host" && core.Apply("host", "skip", J(new { member = "p3" }), content).Ok && LobbyRules.StartBlockers(core.Snapshot()).Count == 0, "The host can mark a player away, who then doesn't block");
+        core.Apply("p3", "suggest", J(new { scenario = "Synthetic B" }), content);
+        core.Apply("p2", "vote", J(new { scenario = "Synthetic B" }), content);
+        Check(core.Snapshot().Suggestions!.Single().Votes.Count == 2, "Members suggest scenarios and vote");
+        Check(core.Apply("host", "pick", J(new { scenario = "Synthetic B" }), content).Ok && core.Settings.Scenario!.Name == "Synthetic B" && core.Snapshot().Suggestions!.Count == 0, "The host picks a suggestion");
+        core.Apply("host", "settings", Patch(new { voting = false }), content);
+        Check(core.Apply("p2", "suggest", J(new { scenario = "Synthetic C" }), content).Code == "voting-off", "The host can turn suggestions off");
+        ReadyAll(core); core.Apply("host", "skip", J(new { member = "p3" }), content);
+        core.RequireLoading = true;
+        core.Apply("host", "start", default, content);
+        var lm = core.Snapshot().Match!;
+        Check(lm.Phase == MatchPhases.Loading && !lm.Players.Contains("p3"), "The match waits for loading, without the away player");
+        core.Apply("host", "loaded", J(new { }), content); core.Tick();
+        Check(core.Snapshot().Match!.Phase == MatchPhases.Loading && core.Snapshot().Match!.Loaded!.Count == 1, "Loading waits for everyone");
+        core.Apply("p2", "loaded", J(new { }), content); core.Tick();
+        Check(core.Snapshot().Match!.Phase == MatchPhases.Countdown, "The countdown starts when everyone has loaded");
+
         // Auto start once nothing blocks for a moment.
         (core, clock, advance) = Lobby();
         core.Join("p2", "Two");
@@ -738,10 +761,12 @@ static class MultiplayerChecks
     {
         public readonly List<string> Calls = [];
         public IReadOnlySet<string> Capabilities { get; } = caps.ToHashSet();
-        public long? Load(string scenario) { Calls.Add("load " + scenario); return Calls.Count; }
-        public long? Start(string scenario, string mode) { Calls.Add("start " + mode + " " + scenario); return Calls.Count; }
+        long lastLoad, lastStart;
+        public long? Load(string scenario) { Calls.Add("load " + scenario); return lastLoad = Calls.Count; }
+        public long? Start(string scenario, string mode) { Calls.Add("start " + mode + " " + scenario); return lastStart = Calls.Count; }
         public long? Refresh() { Calls.Add("refresh"); return Calls.Count; }
-        public GameCommandResult? Result => null;
+        // Answers like AimModCore: the latest load is done, then the latest start.
+        public GameCommandResult? Result => lastStart > lastLoad ? new GameCommandResult(lastStart, "done", "started", "") : lastLoad > 0 ? new GameCommandResult(lastLoad, "done", "loaded", "") : null;
     }
 
     static void Service(string root)
@@ -776,6 +801,9 @@ static class MultiplayerChecks
         var match = View().GetProperty("lobby").GetProperty("match");
         Check(match.GetProperty("phase").GetString() == MatchPhases.Final && match.GetProperty("standings").GetArrayLength() == 3, "The simulated race reaches its final results");
         Check(View().GetProperty("recent").GetArrayLength() == 1 && File.Exists(Path.Combine(output, "multiplayer-matches.json")), "Finished matches are kept locally, apart from KovaaK's leaderboards");
+        // Setups: save one, and the next lobby starts from the last setup.
+        Check(service.Act("preset-save", J(new { name = "Synthetic setup" })).Ok && View().GetProperty("presets").EnumerateArray().Any(p => p.GetString() == "Synthetic setup"), "The host saves a setup");
+        Check(service.Act("preset-load", J(new { name = "Synthetic setup" })).Ok && !service.Act("preset-load", J(new { name = "Nope" })).Ok, "Saved setups load; missing ones are refused");
         // Overrides build a match scenario and run it in freeplay.
         service.Act("end", default);
         service.Act("settings", Patch(new { mode = "ffa-rounds", rounds = 1, movement = "cs", targetSize = 1.5 }));
