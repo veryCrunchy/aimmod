@@ -983,6 +983,7 @@ sealed partial class MultiplayerService : IDisposable
     // attempt began (the start, the invite join, or Retry), so a menu opened after it is left alone.
     (string Key, long Since)? playFlow;
     internal sealed record PlayView(string Id, long Since);
+    bool InMatch() => Current?.Match is { Phase: MatchPhases.Countdown or MatchPhases.Live or MatchPhases.Round } m && m.Players.Contains(SelfId);
     internal PlayView? PlayRequest(long now)
     {
         if (Current?.Match is not { } m || !m.Players.Contains(SelfId)) return null;
@@ -1002,12 +1003,15 @@ sealed partial class MultiplayerService : IDisposable
             var cs = CsHud();
             var (board, boardFull) = NoticeBoards();
             var play = PlayRequest(clock());
-            if (notice is null && badge is null && duel is null && combat is null && cs is null && board is null && boardFull is null && play is null) return "{\"version\":1,\"active\":false}";
+            if (notice is null && badge is null && duel is null && combat is null && cs is null && board is null && boardFull is null && play is null && !CsSwallowMenu(clock())) return "{\"version\":1,\"active\":false}";
             return JsonSerializer.Serialize(new
             {
                 version = 1, active = notice is not null, badge, notice?.Id, notice?.Kind, notice?.Eyebrow, notice?.Title, notice?.Body, notice?.Key, notice?.Countdown, notice?.Sound, notice?.Invite, notice?.Note,
                 // full: the notice layer covers the screen (the HUDs sit at its edges); toast: top centre only.
-                layout = cs is not null || board is not null || boardFull is not null ? "full" : "toast",
+                // A running match keeps it full, so holding the scoreboard key never resizes the view.
+                layout = cs is not null || board is not null || boardFull is not null || InMatch() ? "full" : "toast",
+                // The buy menu just closed with Escape: AimModNativeUI closes KovaaK's pause menu again.
+                swallowMenu = CsSwallowMenu(clock()) ? true : (bool?)null,
                 actions = notice?.Actions, interactive = notice?.Actions is { Count: > 0 } || cs?.BuyOpen == true,
                 // cursor: the CS buy menu is open, so AimModNativeUI shows the cursor in game (and hands input back after).
                 cursor = cs?.BuyOpen == true, play, volume = prefs.Sounds ? prefs.Volume : 0, duel, combat, cs, board, boardFull,
