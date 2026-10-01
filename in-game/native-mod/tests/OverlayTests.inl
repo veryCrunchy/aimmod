@@ -35,6 +35,35 @@ namespace overlay_checks
         CHECK(LuaLayerActive("AIMMOD_LUANOTICE_1\t1000\n", 1002) && !LuaLayerActive("AIMMOD_LUANOTICE_1\t1000\n", 1005) &&
                   !LuaLayerActive("AIMMOD_LUANOTICE_1\tx\n", 1000) && !LuaLayerActive("", 1000),
               "a Lua notice layer is seen while its heartbeat is fresh");
+        // The HUD: its own switch, URL and setting, and when it shows.
+        CHECK(ParseUiHost("AIMMOD_UIHOST_1\nhud\tlua\n", "hud") == Host::Lua && ParseUiHost("AIMMOD_UIHOST_1\nhud\tlua\n") == Host::Native &&
+                  ParseUiHost("AIMMOD_UIHOST_1\nnotice\tlua\n", "hud") == Host::Native && ParseUiHost("", "hud") == Host::Native,
+              "hud and notice switch separately");
+        CHECK(HudUrl("http://127.0.0.1:54321/abc123/overlay?surface=game\n") == std::optional<std::string>("http://127.0.0.1:54321/abc123/overlay?surface=game") &&
+                  !HudUrl("http://127.0.0.1:1/abc/overlay?surface=obs") && !HudUrl("http://example.com:1/abc/overlay?surface=game"),
+              "the in-game HUD page only");
+        CHECK(GameEnabled(R"({"gameEnabled":true,"obsEnabled":false,"scenes":[]})") && !GameEnabled(R"({"gameEnabled":false})") && !GameEnabled("") && !GameEnabled("{"),
+              "the HUD follows gameEnabled and fails closed");
+        HudFrame hud;
+        hud.enabled = true;
+        CHECK(HudVisible(hud), "shown in menus and scenarios");
+        hud.pauseMenuVisible = true;
+        CHECK(HudVisible(hud), "KovaaK's menus (not paused, no challenge): still shown");
+        hud.paused = true;
+        CHECK(!HudVisible(hud), "the pause menu over a paused game: hidden");
+        hud.paused = false;
+        hud.inChallenge = true;
+        CHECK(!HudVisible(hud), "the pause menu over a challenge: hidden");
+        hud.pauseMenuVisible = false;
+        CHECK(HudVisible(hud), "the challenge itself: shown");
+        hud.panelOpen = true;
+        CHECK(!HudVisible(hud), "the AimMod panel: hidden");
+        hud.panelOpen = false;
+        hud.replay = true;
+        CHECK(!HudVisible(hud), "replays: hidden");
+        hud.replay = false;
+        hud.enabled = false;
+        CHECK(!HudVisible(hud), "off in the overlay settings: hidden");
 
         // The input state machine.
         aimmod::overlay::Machine m;

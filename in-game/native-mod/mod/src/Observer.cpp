@@ -104,7 +104,7 @@ namespace aimmod
           m_sampler(m_b, m_scene, output), m_presenter(m_b, m_scene, output), m_control(m_b, m_scene, output),
           m_match(m_b, m_scene, output), m_cosmetics(m_b, m_scene, output),
           m_water(m_b, m_scene),
-          m_preview(m_scene, output), m_overlay(m_scene, output), m_tags(output)
+          m_preview(m_scene, output), m_overlay(m_scene, output), m_hud(m_scene, output), m_tags(output)
     {
     }
 
@@ -132,6 +132,8 @@ namespace aimmod
         if (m_cosmetics.ready()) caps += ",cosmetics";
         // The notice layer is AimModCore's: AimModNativeUI's Notify.lua stands down.
         if (m_overlay.ready()) caps += caps.empty() ? "overlay" : ",overlay";
+        // The in-game HUD view is AimModCore's: AimModNativeUI's LiveHUD.lua stands down.
+        if (m_hud.ready()) caps += caps.empty() ? "hud" : ",hud";
         return caps;
     }
 
@@ -373,6 +375,7 @@ namespace aimmod
         m_presenter.Stop();
         m_preview.Shutdown();
         m_overlay.Shutdown();
+        m_hud.Shutdown();
         m_water.Shutdown();
         for (auto& [function, ids] : m_hooks) UObjectGlobals::UnregisterHook(function, ids);
         m_hooks.clear();
@@ -624,8 +627,10 @@ namespace aimmod
         m_preview.Tick(now, m_inChallenge, m_loading);
         {
             const bool wasReady = m_overlay.ready();
+            const bool wasHud = m_hud.ready();
             m_overlay.Tick(now, m_output.playbackActive());
-            if (wasReady != m_overlay.ready()) m_output.SetCapabilities(Capabilities());
+            m_hud.Tick(now, m_output.playbackActive(), m_inChallenge);
+            if (wasReady != m_overlay.ready() || wasHud != m_hud.ready()) m_output.SetCapabilities(Capabilities());
         }
         TickTags(now);
         PollClipKey();

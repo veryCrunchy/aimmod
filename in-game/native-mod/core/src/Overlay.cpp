@@ -84,7 +84,33 @@ namespace aimmod::overlay
         return std::string(url.substr(0, url.size() - Suffix.size())) + "/notify";
     }
 
-    Host ParseUiHost(std::string_view text)
+    std::optional<std::string> HudUrl(std::string_view file)
+    {
+        std::string_view url = Trim(file);
+        constexpr std::string_view Prefix = "http://127.0.0.1:", Suffix = "/overlay?surface=game";
+        if (url.size() > 512 || url.substr(0, Prefix.size()) != Prefix || url.size() < Prefix.size() + Suffix.size() ||
+            url.substr(url.size() - Suffix.size()) != Suffix)
+            return std::nullopt;
+        std::string_view middle = url.substr(Prefix.size(), url.size() - Prefix.size() - Suffix.size());
+        const auto slash = middle.find('/');
+        if (slash == std::string_view::npos || !Digits(middle.substr(0, slash)) || !Hex(middle.substr(slash + 1))) return std::nullopt;
+        return std::string(url);
+    }
+
+    bool GameEnabled(std::string_view text)
+    {
+        if (text.empty() || text.size() > (64u << 10)) return false;
+        auto root = json::Parse(text, nullptr, 64u << 10);
+        return root && root->isObject() && True(*root, "gameEnabled");
+    }
+
+    bool HudVisible(const HudFrame& f)
+    {
+        if (!f.enabled || f.replay || f.panelOpen) return false;
+        return !(f.pauseMenuVisible && (f.paused || f.inChallenge));
+    }
+
+    Host ParseUiHost(std::string_view text, std::string_view component)
     {
         constexpr std::string_view Header = "AIMMOD_UIHOST_1";
         if (text.substr(0, Header.size()) != Header) return Host::Native;
@@ -94,7 +120,8 @@ namespace aimmod::overlay
             std::size_t end = text.find('\n', at);
             std::string_view line = Trim(text.substr(at, end == std::string_view::npos ? std::string_view::npos : end - at));
             at = end == std::string_view::npos ? text.size() : end + 1;
-            if (line == "notice\tlua") return Host::Lua;
+            if (line.size() == component.size() + 4 && line.substr(0, component.size()) == component && line.substr(component.size()) == "\tlua")
+                return Host::Lua;
         }
         return Host::Native;
     }

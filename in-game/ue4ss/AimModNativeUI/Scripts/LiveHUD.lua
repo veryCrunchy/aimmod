@@ -92,8 +92,19 @@ local function create(url)
     host:SetVisibility(1);view:SetVisibility(3);renderer:SetVisibility(3);renderer.bReceiveInput=false
     renderer:Load(url);loadedUrl=url;deliveries=0;nextDelivery=0
 end
-function M.update(menuVisible,replayActive,snapshot)
+-- native: AimModCore hosts the in-game HUD view (core-active.tsv lists "hud"). This view then
+-- stands down: removed from the screen, nothing created. Logged when the decision changes.
+local hostDecision
+function M.update(menuVisible,replayActive,snapshot,native)
     if not valid(owner) then M.close();owner=nil;return end
+    if (native==true)~=hostDecision then
+        hostDecision=native==true
+        print('[AimModLiveHUD] '..(hostDecision and 'standing down: AimModCore hosts the in-game HUD (core-active.tsv lists hud)' or 'hosting the in-game HUD here (AimModCore does not list hud)')..'\n')
+    end
+    if native==true then
+        if valid(host) then M.close() end
+        return
+    end
     local now=os.time()
     local url=loadedUrl
     if now>=nextRead then

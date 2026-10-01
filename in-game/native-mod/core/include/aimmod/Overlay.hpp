@@ -29,11 +29,31 @@ namespace aimmod::overlay
     // The notify page URL from live-overlay-url.txt ("http://127.0.0.1:<port>/<cap>/overlay?surface=game").
     std::optional<std::string> NoticeUrl(std::string_view overlayUrlFile);
 
-    // ui-host.tsv: who hosts the notice layer. "native" (default, also when the file is absent)
-    // or "lua" (AimModNativeUI's Notify.lua, the fallback).
-    //   AIMMOD_UIHOST_1\nnotice\tnative\n
+    // ui-host.tsv: who hosts each in-game view. "native" (default, also when the file is absent)
+    // or "lua" (AimModNativeUI's script, the fallback), per component: notice (Notify.lua) and
+    // hud (LiveHUD.lua).
+    //   AIMMOD_UIHOST_1\nnotice\tnative\nhud\tlua\n
     enum class Host { Native, Lua };
-    Host ParseUiHost(std::string_view text);
+    Host ParseUiHost(std::string_view text, std::string_view component = "notice");
+
+    // The in-game HUD page (the service's overlay scenes) from live-overlay-url.txt, as written.
+    std::optional<std::string> HudUrl(std::string_view overlayUrlFile);
+    // overlay-settings.json: the HUD is on in game ("gameEnabled": true). Anything else is off.
+    bool GameEnabled(std::string_view settingsJson);
+
+    // The in-game HUD view (DESIGN.md "Overlay host"): never takes input. Shown in menus and in
+    // scenarios (the page decides per widget); hidden during replays, while the AimMod panel is
+    // on screen, and while KovaaK's pause menu is up over a paused game or a challenge.
+    struct HudFrame
+    {
+        bool enabled{};          // gameEnabled and a HUD URL
+        bool replay{};
+        bool panelOpen{};
+        bool pauseMenuVisible{};
+        bool paused{};           // the game is paused
+        bool inChallenge{};
+    };
+    bool HudVisible(const HudFrame& f);
 
     // aimmod-panel.tsv, written by AimModNativeUI's Menu.lua: the AimMod panel is on screen.
     //   AIMMOD_PANEL_1\t<0|1>\t<unix seconds>\n   (stale after 3 s: closed)

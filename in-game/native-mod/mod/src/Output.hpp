@@ -112,6 +112,10 @@ namespace aimmod
             bool panelOpen{};
             bool native{true};
             bool luaLayer{}; // Notify.lua's own layer is on screen (lua-notice.tsv)
+            // The in-game HUD view: its page, the overlay setting and its ui-host.tsv switch.
+            std::string hudUrl;
+            bool gameEnabled{};
+            bool hudNative{true};
             std::uint64_t version{};
         };
         OverlayInputs overlay() const;

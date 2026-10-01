@@ -885,6 +885,29 @@ only change to OverlayHost is `Gameface()`, which exposes its widget.
 - `ui/worldtags.js` keeps one node per tag and moves it: the name in its team
   colour (T orange, CT blue), the distance for teammates, grey when down.
 
+### In-game HUD view (phase 2)
+
+`HudHost` hosts the service's overlay scenes page
+(`<workspace>/overlay?surface=game`) in place of AimModNativeUI's
+`LiveHUD.lua`, built the same way: our own host widget with a canvas root,
+the Gameface view in a full-screen canvas slot, at z-order 5000 (below the
+notice layer). It never takes input: host, canvas, view and Gameface widget
+are hit-test invisible, nothing is focusable and `bReceiveInput` stays off.
+
+- Shown in menus and scenarios (the page decides per widget); hidden during
+  replays, while the AimMod panel is on screen (`aimmod-panel.tsv`), while
+  KovaaK's pause menu is up over a paused game or a challenge, and when
+  `overlay-settings.json` doesn't say `"gameEnabled": true`.
+- On every change it sends `AimModVisibility(visible)` to the page (up to four
+  times, a second apart, once the view takes bindings), so a hidden page
+  stops polling.
+- `self-pose.request` / `self-pose.tsv` are unchanged.
+- Switch: `hud<TAB>lua` in `ui-host.tsv` keeps `LiveHUD.lua`. While the view
+  exists AimModCore lists `hud` in `core-active.tsv` and `LiveHUD.lua`
+  removes its own view.
+- Log lines (`[AimModCore] hud: ...`): view created, shown or hidden with the
+  reason, the page reloaded, view removed and why.
+
 ## Native service
 
 `Mods\AimModCore\service\AimMod.InGame.exe` is started with

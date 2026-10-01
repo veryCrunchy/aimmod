@@ -131,5 +131,13 @@ for _=1,10 do update()end
 check(#renderer.events==count,'unchanged rapid updates do not spam events')
 hud.close();check(host.removed and host.visibility==1,'close removes owned viewport view')
 tick();update();check(#widgets==4,'can recreate owned view after closure')
-owner.invalid=true;update();check(widgets[3].removed,'world owner invalidation removes surface')
+-- AimModCore hosts the HUD (core-active.tsv lists "hud"): this view comes off the screen and none is made.
+local hostBefore=widgets[3]
+tick();hud.update(false,false,active,true)
+check(hostBefore.removed,'native HUD: the Lua view is removed')
+local count=#widgets
+tick();hud.update(false,false,active,true);tick();hud.update(false,false,active,true)
+check(#widgets==count,'native HUD: no Lua view is created while it stands down')
+tick();update();check(#widgets==count+2,'the Lua view comes back when AimModCore stops listing hud')
+owner.invalid=true;update();check(widgets[#widgets-1].removed,'world owner invalidation removes surface')
 print('live HUD '..checks..' checks passed')
