@@ -1,2 +1,4 @@
 # The cosmetics catalog is hash-pinned (catalog-manifest.json): identical bytes on every checkout.
 in-game/cosmetics/catalog.json text eol=lf
+# AimMod runtime meshes are hash-pinned binaries: never converted.
+*.amsh binary

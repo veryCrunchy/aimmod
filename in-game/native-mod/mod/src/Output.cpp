@@ -421,10 +421,26 @@ namespace aimmod
                 cosmetics::ApplyManifestItems(*manifest, *catalog, problems);
                 library->index = cosmetics::BuildIndex(catalog->items, problems);
                 library->verifiedPaks = std::move(check.verifiedPaks);
+                // Runtime meshes: read once, hashed and parsed from the same bytes.
+                for (const cosmetics::ManifestFile& f : manifest->files)
+                {
+                    if (!mesh::IsMeshName(f.name)) continue;
+                    std::string bytes, why;
+                    if (!ReadSmall(m_catalogDir / std::filesystem::path(f.name), bytes, mesh::MaxFileBytes + 1)) why = "missing";
+                    else if (bytes.size() != f.size) why = "wrong size";
+                    else if (cosmetics::Sha256Hex(bytes) != f.sha256) why = "wrong hash";
+                    else if (auto parsed = mesh::Parse(bytes, &why))
+                    {
+                        library->meshes[f.name] = std::make_shared<const mesh::Mesh>(std::move(*parsed));
+                        library->verifiedMeshes.insert(f.name);
+                        continue;
+                    }
+                    problems.push_back("mesh " + f.name + ": " + why);
+                }
                 for (const std::string& problem : problems) Log("cosmetics: catalog: " + problem);
                 library->status = "catalog " + std::to_string(static_cast<long long>(catalog->version)) + ", " + std::to_string(library->index.size()) +
                                   " item(s), " + std::to_string(cosmetics::Pickable(library->index).size()) + " released, " +
-                                  std::to_string(library->verifiedPaks.size()) + " verified pak(s)";
+                                  std::to_string(library->verifiedPaks.size()) + " verified pak(s), " + std::to_string(library->verifiedMeshes.size()) + " verified mesh(es)";
             }
             else library->status = error;
         }

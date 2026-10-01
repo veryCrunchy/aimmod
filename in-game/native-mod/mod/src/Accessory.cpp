@@ -3,6 +3,7 @@
 #include "Log.hpp"
 #include "Reflect.hpp"
 
+#include <Unreal/Core/HAL/UnrealMemory.hpp>
 #include <Unreal/FProperty.hpp>
 #include <Unreal/NameTypes.hpp>
 #include <Unreal/Property/FStructProperty.hpp>
@@ -76,17 +77,66 @@ namespace aimmod
                  });
             return ok;
         }
+        struct RawArray
+        {
+            void* data;
+            std::int32_t num, max;
+        };
+        // A TArray parameter filled from `bytes` (engine allocator); freed by the caller.
+        void* WriteArray(std::uint8_t* value, const void* bytes, std::size_t count, std::size_t elementSize)
+        {
+            if (count == 0) return nullptr;
+            void* data = RC::Unreal::FMemory::Malloc(count * elementSize);
+            if (!data) return nullptr;
+            std::memcpy(data, bytes, count * elementSize);
+            RawArray raw{data, static_cast<std::int32_t>(count), static_cast<std::int32_t>(count)};
+            std::memcpy(value, &raw, sizeof(raw));
+            return data;
+        }
+
+        // One mesh section on a ProceduralMeshComponent, no collision. Each
+        // triangle is added in both windings, so the piece shows from any side
+        // whatever the material's culling.
+        bool BuildSection(UObject* component, const mesh::Mesh& m)
+        {
+            std::vector<std::int32_t> triangles;
+            triangles.reserve(m.indices.size() * 2);
+            for (std::size_t i = 0; i + 2 < m.indices.size(); i += 3)
+            {
+                const auto a = static_cast<std::int32_t>(m.indices[i]), b = static_cast<std::int32_t>(m.indices[i + 1]), c = static_cast<std::int32_t>(m.indices[i + 2]);
+                triangles.insert(triangles.end(), {a, b, c, a, c, b});
+            }
+            std::vector<float> colours;
+            colours.reserve(m.colours.size());
+            for (std::uint8_t c : m.colours) colours.push_back(c / 255.0f);
+            std::vector<void*> owned;
+            const bool ok = Call(component, STR("/Script/ProceduralMeshComponent.ProceduralMeshComponent:CreateMeshSection_LinearColor"),
+                                 [&](const std::wstring& n, FProperty* p, std::uint8_t* v) {
+                                     void* data = nullptr;
+                                     if (n == STR("Vertices")) data = WriteArray(v, m.positions.data(), m.positions.size(), 12);
+                                     else if (n == STR("Triangles")) data = WriteArray(v, triangles.data(), triangles.size(), 4);
+                                     else if (n == STR("Normals")) data = WriteArray(v, m.normals.data(), m.normals.size(), 12);
+                                     else if (n == STR("UV0")) data = WriteArray(v, m.uvs.data(), m.uvs.size() / 2, 8);
+                                     else if (n == STR("VertexColors")) data = WriteArray(v, colours.data(), colours.size() / 4, 16);
+                                     else if (n == STR("bCreateCollision")) WriteBoolParam(v, p, false);
+                                     if (data) owned.push_back(data);
+                                 });
+            for (void* data : owned) RC::Unreal::FMemory::Free(data);
+            return ok;
+        }
     } // namespace
 
-    UObject* AttachFitAccessory(UObject* actor, UObject* skeletalMesh, const cosmetics::Item& item, std::string& why)
+    UObject* AttachFitAccessory(UObject* actor, UObject* skeletalMesh, const cosmetics::Item& item, const mesh::Mesh* shape, std::string& why)
     {
         if (!item.fit) return (why = "not a fit accessory", nullptr);
         if (!Alive(actor) || !Alive(skeletalMesh)) return (why = "the character is not valid", nullptr);
-        if (!cosmetics::IsGameAccessoryAsset(item.mesh, false) || !cosmetics::IsGameAccessoryAsset(item.material, true)) return (why = "asset not allowed", nullptr);
+        const bool runtime = !item.shape.empty();
+        if (runtime && (!shape || !shape->Valid())) return (why = "its mesh file is missing or did not match the manifest", nullptr);
+        if ((!runtime && !cosmetics::IsGameAccessoryAsset(item.mesh, false)) || !cosmetics::IsGameAccessoryAsset(item.material, true)) return (why = "asset not allowed", nullptr);
         cosmetics::Fit fit = *item.fit;
-        UObject* meshAsset = LoadGameAsset(Widen(item.mesh));
+        UObject* meshAsset = runtime ? nullptr : LoadGameAsset(Widen(item.mesh));
         UObject* material = LoadGameAsset(Widen(item.material));
-        if (!meshAsset || !material) return (why = "mesh or material not found", nullptr);
+        if ((!runtime && !Alive(meshAsset)) || !Alive(material)) return (why = "mesh or material not found", nullptr);
 
         // Anchor and the character's own frame.
         const auto bone = FindBone(skeletalMesh, fit.bone);
@@ -113,7 +163,8 @@ namespace aimmod
         double forward[3] = {1, 0, 0};
         CharacterForward(skeletalMesh, forward);
 
-        UClass* meshClass = RC::Unreal::UObjectGlobals::StaticFindObject<UClass*>(nullptr, nullptr, STR("/Script/Engine.StaticMeshComponent"));
+        UClass* meshClass = RC::Unreal::UObjectGlobals::StaticFindObject<UClass*>(
+            nullptr, nullptr, runtime ? STR("/Script/ProceduralMeshComponent.ProceduralMeshComponent") : STR("/Script/Engine.StaticMeshComponent"));
         UObject* component = nullptr;
         Call(actor, STR("/Script/Engine.Actor:AddComponentByClass"), [&](const std::wstring& n, FProperty* p, std::uint8_t* v) {
             if (n == STR("Class")) WriteObject(v, meshClass);
@@ -126,14 +177,24 @@ namespace aimmod
         // Never part of any trace, never a shadow.
         Call(component, STR("/Script/Engine.PrimitiveComponent:SetCollisionEnabled"), [](const std::wstring&, FProperty*, std::uint8_t* v) { *v = NoCollision; });
         Call(component, STR("/Script/Engine.PrimitiveComponent:SetCastShadow"), [](const std::wstring&, FProperty* p, std::uint8_t* v) { WriteBoolParam(v, p, false); });
-        Call(component, STR("/Script/Engine.StaticMeshComponent:SetStaticMesh"), [&](const std::wstring& n, FProperty*, std::uint8_t* v) {
-            if (n == STR("NewMesh")) WriteObject(v, meshAsset);
-        });
         float localMin[3]{}, localMax[3]{};
-        Call(component, STR("/Script/Engine.StaticMeshComponent:GetLocalBounds"), {}, nullptr, [&](const std::wstring& n, FProperty* p, const std::uint8_t* v) {
-            if (n == STR("Min")) ReadFloats(v, p, localMin, 3);
-            else if (n == STR("Max")) ReadFloats(v, p, localMax, 3);
-        });
+        if (runtime)
+        {
+            if (!BuildSection(component, *shape)) return SetAccessoryVisible(component, false), (why = "the mesh section could not be built", nullptr);
+            double mn[3], mx[3];
+            shape->Bounds(mn, mx);
+            for (int k = 0; k < 3; ++k) localMin[k] = static_cast<float>(mn[k]), localMax[k] = static_cast<float>(mx[k]);
+        }
+        else
+        {
+            Call(component, STR("/Script/Engine.StaticMeshComponent:SetStaticMesh"), [&](const std::wstring& n, FProperty*, std::uint8_t* v) {
+                if (n == STR("NewMesh")) WriteObject(v, meshAsset);
+            });
+            Call(component, STR("/Script/Engine.StaticMeshComponent:GetLocalBounds"), {}, nullptr, [&](const std::wstring& n, FProperty* p, const std::uint8_t* v) {
+                if (n == STR("Min")) ReadFloats(v, p, localMin, 3);
+                else if (n == STR("Max")) ReadFloats(v, p, localMax, 3);
+            });
+        }
 
         // The item's colours on a dynamic instance of the curated material, on every slot.
         UObject* mid = nullptr;

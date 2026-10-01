@@ -58,6 +58,9 @@ $items = @(if (Has $doc 'items') { $doc.items })
 if ($items.Count -eq 0) { $problems.Add('catalog has no items') }
 $ids = @{}
 $referenced = @{}
+# AimMod runtime meshes (.amsh) live next to the catalog source and ship next to the installed catalog.
+$meshesDir = Join-Path (Split-Path -Parent (Resolve-Path -LiteralPath $Catalog).Path) 'meshes'
+$shapes = @{}
 foreach ($item in $items) {
     $id = if (Has $item 'id') { [string]$item.id } else { '' }
     $where = if ($id) { $id } else { '(item without id)' }
@@ -91,8 +94,14 @@ foreach ($item in $items) {
     $material = if (Has $item 'material') { [string]$item.material } else { '' }
     $role = if ((Has $item 'attach') -and $item.attach -is [string]) { $item.attach } elseif ((Has $item 'attach') -and (Has $item.attach 'role')) { [string]$item.attach.role } else { '' }
     $fitted = (Has $item 'attach') -and $item.attach -isnot [string] -and (Has $item.attach 'fit')
+    $shape = if (Has $item 'shape') { [string]$item.shape } else { '' }
+    if ($shape) {
+        if ($kind -ne 'accessory' -or $shape -cnotmatch '^[a-z0-9][a-z0-9-]{0,42}\.amsh$' -or $mesh) { $problems.Add("${id}: a runtime mesh is an accessory's own shape") }
+        elseif (-not (Test-Path -LiteralPath (Join-Path $meshesDir $shape))) { $problems.Add("${id}: mesh file $shape is missing from $meshesDir") }
+        else { $shapes[$shape] = $true }
+    }
     $gameAccessory = $kind -eq 'accessory' -and -not $pak -and $fitted -and -not $mesh.Contains('..') -and -not $material.Contains('..') -and
-        $mesh -cmatch '^(/Engine/BasicShapes/|/Game/Art/StaticMeshes/KMC/Brushes/)[A-Za-z0-9_.-]{1,96}$' -and
+        ($mesh -cmatch '^(/Engine/BasicShapes/|/Game/Art/StaticMeshes/KMC/Brushes/)[A-Za-z0-9_.-]{1,96}$' -or (-not $mesh -and $shape)) -and
         $material -cmatch '^/Game/Materials/Instances/Characters/S_(Meso|Endo)/Base/MI_PaintedMetal_[A-Za-z0-9_.-]{1,96}$'
     if ($kind -eq 'accessory' -and $role -notin @('head', 'neck', 'spine')) { $problems.Add("${id}: accessories attach to head, neck or spine") }
     if ($rule.pak -and -not $pak -and -not $gameAccessory) { $problems.Add("${id}: $kind needs a pak") }
@@ -127,9 +136,14 @@ function Entry([string]$Path) {
     $i = Get-Item -LiteralPath $Path
     [ordered]@{ name = $i.Name; size = $i.Length; sha256 = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 }
-$files = @(Entry $catalogOut) + @(foreach ($f in $pakFiles | Sort-Object Name) { Entry $f.FullName })
+$meshFiles = @(foreach ($name in $shapes.Keys | Sort-Object) {
+    $target = Join-Path $Output $name
+    [IO.File]::WriteAllBytes($target, [IO.File]::ReadAllBytes((Join-Path $meshesDir $name)))
+    $target
+})
+$files = @(Entry $catalogOut) + @(foreach ($m in $meshFiles) { Entry $m }) + @(foreach ($f in $pakFiles | Sort-Object Name) { Entry $f.FullName })
 $manifest = [ordered]@{ version = [int]$doc.version; files = $files }
 $json = ($manifest | ConvertTo-Json -Depth 4) -replace "`r`n", "`n"
 [IO.File]::WriteAllText((Join-Path $Output 'catalog-manifest.json'), $json + "`n", [Text.UTF8Encoding]::new($false))
 $pickable = @($items | Where-Object { -not ((Has $_ 'draft') -and $_.draft -eq $true) }).Count
-Write-Host "Cosmetics catalog v$($doc.version): $($items.Count) items ($pickable pickable), $($pakFiles.Count) pak(s); manifest in $Output."
+Write-Host "Cosmetics catalog v$($doc.version): $($items.Count) items ($pickable pickable), $($meshFiles.Count) mesh(es), $($pakFiles.Count) pak(s); manifest in $Output."

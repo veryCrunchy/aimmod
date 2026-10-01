@@ -863,6 +863,7 @@ namespace aimmod
         cosmetics::ResolveOptions options;
         options.allowDrafts = inputs.allowDrafts;
         options.verifiedPaks = inputs.library->verifiedPaks;
+        options.verifiedMeshes = inputs.library->verifiedMeshes;
         for (const std::string& id : request.accessories)
         {
             const std::string key = id + "|" + request.model;
@@ -884,7 +885,9 @@ namespace aimmod
                 Log("cosmetics preview: accessory " + id + " not shown (too many parts on the stage)");
                 continue;
             }
-            UObject* worn = AttachFitAccessory(stage, mesh, *item, why);
+            const mesh::Mesh* shape = nullptr;
+            if (auto it = inputs.library->meshes.find(item->shape); !item->shape.empty() && it != inputs.library->meshes.end()) shape = it->second.get();
+            UObject* worn = AttachFitAccessory(stage, mesh, *item, shape, why);
             if (!Alive(worn))
             {
                 Log("cosmetics preview: accessory " + id + " not shown (" + why + ")");

@@ -37,6 +37,7 @@ add_library(aimmod_core STATIC
     core/src/Json.cpp
     core/src/Cosmetics.cpp
     core/src/CosmeticsPreview.cpp
+    core/src/Mesh.cpp
     core/src/Water.cpp
     core/src/Overlay.cpp
 )

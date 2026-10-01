@@ -9,6 +9,7 @@
 #include "GameBindings.hpp"
 
 #include <aimmod/Cosmetics.hpp>
+#include <aimmod/Mesh.hpp>
 
 #include <string>
 
@@ -17,7 +18,9 @@ namespace aimmod
     // Returns the new component, or null with `why`. Accessories are never
     // destroyed at runtime: hide them (SetAccessoryVisible) and reuse them;
     // their owner's level cleans them up.
-    game::UObject* AttachFitAccessory(game::UObject* actor, game::UObject* skeletalMesh, const cosmetics::Item& item, std::string& why);
+    // `shape`: the verified runtime mesh of an item with a "shape" (built as a
+    // ProceduralMeshComponent); null for items made from a game mesh.
+    game::UObject* AttachFitAccessory(game::UObject* actor, game::UObject* skeletalMesh, const cosmetics::Item& item, const mesh::Mesh* shape, std::string& why);
     void SetAccessoryVisible(game::UObject* component, bool visible);
     // The character's forward (world, horizontal) from its shoulder bones:
     // right = left to right shoulder, forward = right x up. False if the rig has none.

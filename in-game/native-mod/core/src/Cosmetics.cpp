@@ -2,6 +2,7 @@
 
 #include <span>
 #include <aimmod/Json.hpp>
+#include <aimmod/Mesh.hpp>
 
 #include <Windows.h>
 #include <bcrypt.h>
@@ -250,7 +251,8 @@ namespace aimmod::cosmetics
     {
         const KindInfo* k = FindKind(kind);
         if (!k || !k->needsPak) return false;
-        const bool game = kind == "accessory" && !pak && fit && IsGameAccessoryAsset(mesh, false) && IsGameAccessoryAsset(material, true);
+        const bool game = kind == "accessory" && !pak && fit && IsGameAccessoryAsset(material, true) &&
+                          (IsGameAccessoryAsset(mesh, false) || (mesh.empty() && mesh::IsMeshName(shape)));
         return !game;
     }
 
@@ -328,6 +330,8 @@ namespace aimmod::cosmetics
             if (!std::isfinite(extent[i]) || !std::isfinite(anchor[i]) || !std::isfinite(forward[i])) return std::nullopt;
         }
         if (std::max({extent[0], extent[1], extent[2]}) < 0.01) return std::nullopt;
+        // An extent of zero (a flat mesh) scales freely on that axis.
+        for (double& e : extent) e = std::max(e, 0.01);
         // The character's frame: forward on the ground, right, up.
         const double flat = std::hypot(forward[0], forward[1]);
         if (flat < 1e-6) return std::nullopt;
@@ -338,7 +342,7 @@ namespace aimmod::cosmetics
         const double wantMax = std::max({fit.size[0], fit.size[1], fit.size[2]}), haveMax = std::max({extent[0], extent[1], extent[2]});
         int best = 0;
         double bestCost = 1e300;
-        for (int p = 0; p < 6; ++p)
+        for (int p = 0; p < (fit.keepAxes ? 1 : 6); ++p)
         {
             double cost = 0;
             for (int c = 0; c < 3; ++c)
@@ -417,6 +421,8 @@ namespace aimmod::cosmetics
             if (!IsPlainName(model)) return id + ": bad model name";
         if (item.kind == "accessory" && item.attachRole != "head" && item.attachRole != "neck" && item.attachRole != "spine")
             return id + ": accessories attach to head, neck or spine";
+        if (!item.shape.empty() && (item.kind != "accessory" || !mesh::IsMeshName(item.shape) || !item.mesh.empty() || !item.fit))
+            return id + ": a runtime mesh is an accessory's own shape, with a fit";
         if (item.fit)
         {
             const Fit& f = *item.fit;
@@ -469,7 +475,7 @@ namespace aimmod::cosmetics
                 return std::nullopt;
             };
             static const std::set<std::string_view> known = {"id", "version", "kind", "name", "models", "weapons", "parts", "vector", "scalar",
-                                                              "textures", "pak", "mesh", "material", "attach", "draft"};
+                                                              "textures", "pak", "mesh", "shape", "material", "attach", "draft"};
             for (const auto& [key, value] : v.members)
             {
                 if (!known.contains(key)) return bad("unknown field " + key);
@@ -527,6 +533,7 @@ namespace aimmod::cosmetics
                     else return bad("needs a pak");
                 }
                 else if (key == "mesh") { if (!value.isString()) return bad("bad asset path"); item.mesh = value.string; }
+                else if (key == "shape") { if (!value.isString()) return bad("bad shape"); item.shape = value.string; }
                 else if (key == "material") { if (!value.isString()) return bad("bad asset path"); item.material = value.string; }
                 else if (key == "attach")
                 {
@@ -543,7 +550,12 @@ namespace aimmod::cosmetics
                                 const json::Value* anchor = x.find("anchor");
                                 if (!bone || !bone->isString() || (anchor && !anchor->isString())) return bad("bad fit");
                                 for (const auto& [fk, fv] : x.members)
-                                    if (fk != "bone" && fk != "anchor" && fk != "offset" && fk != "size") return bad("bad fit");
+                                    if (fk != "bone" && fk != "anchor" && fk != "offset" && fk != "size" && fk != "keepAxes") return bad("bad fit");
+                                if (const json::Value* keep = x.find("keepAxes"))
+                                {
+                                    if (!keep->isBool()) return bad("bad fit");
+                                    f.keepAxes = keep->boolean;
+                                }
                                 f.bone = bone->string;
                                 if (anchor) f.anchor = anchor->string;
                                 if (!Triple(x.find("offset"), f.offset) || !x.find("size") || !Triple(x.find("size"), f.size)) return bad("bad fit");
@@ -634,6 +646,7 @@ namespace aimmod::cosmetics
         if (it == index.end()) return fail("not in the catalog: " + std::string(id));
         const Item& item = it->second;
         if (item.draft && !options.allowDrafts) return fail(std::string(id) + " is a draft");
+        if (!item.shape.empty() && !options.verifiedMeshes.contains(item.shape)) return fail(std::string(id) + " needs its mesh file matching the manifest");
         if (item.NeedsPak() && !(item.pak && options.verifiedPaks.contains(*item.pak)))
             return fail(std::string(id) + " needs an AimMod pak matching the manifest");
         return &item;
@@ -673,7 +686,7 @@ namespace aimmod::cosmetics
             const json::Value* size = f.isObject() ? f.find("size") : nullptr;
             const json::Value* sha = f.isObject() ? f.find("sha256") : nullptr;
             if (!name || !name->isString() || !size || !size->isNumber() || !sha || !sha->isString()) return fail("bad file entry");
-            if (name->string != "catalog.json" && !IsPakName(name->string)) return fail("bad file name " + name->string);
+            if (name->string != "catalog.json" && !IsPakName(name->string) && !mesh::IsMeshName(name->string)) return fail("bad file name " + name->string);
             if (!Finite(size->number, 0, 1099511627776.0) || size->number != std::floor(size->number)) return fail("bad size for " + name->string);
             std::string hash = sha->string;
             std::transform(hash.begin(), hash.end(), hash.begin(), [](char c) { return c >= 'A' && c <= 'F' ? static_cast<char>(c - 'A' + 'a') : c; });
@@ -732,6 +745,7 @@ namespace aimmod::cosmetics
         std::set<std::string> listed;
         for (const ManifestFile& f : manifest.files)
         {
+            if (mesh::IsMeshName(f.name)) continue; // runtime meshes: read, hashed and parsed together by the loader
             const bool catalog = f.name == "catalog.json";
             if (!catalog) listed.insert(f.name);
             const auto path = (catalog ? catalogDir : paksDir) / f.name; // ASCII names only (IsPakName)
@@ -953,7 +967,7 @@ namespace aimmod::cosmetics
                 Take(plan.body, item, plan, "body item");
             else if (item->kind == "accessory")
             {
-                if (item->mesh.empty() || (!item->fit && !item->AttachmentFor(model)))
+                if ((item->mesh.empty() && item->shape.empty()) || (!item->fit && !item->AttachmentFor(model)))
                 {
                     plan.skipped.push_back(item->id + ": no mesh or attachment for " + std::string(model));
                     continue;
