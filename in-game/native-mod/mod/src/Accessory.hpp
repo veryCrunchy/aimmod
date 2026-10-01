@@ -19,4 +19,7 @@ namespace aimmod
     // their owner's level cleans them up.
     game::UObject* AttachFitAccessory(game::UObject* actor, game::UObject* skeletalMesh, const cosmetics::Item& item, std::string& why);
     void SetAccessoryVisible(game::UObject* component, bool visible);
+    // The character's forward (world, horizontal) from its shoulder bones:
+    // right = left to right shoulder, forward = right x up. False if the rig has none.
+    bool CharacterForward(game::UObject* skeletalMesh, double forward[3]);
 } // namespace aimmod

@@ -128,6 +128,8 @@ namespace aimmod
         bool recordingEnabled() const { return m_recording.load(std::memory_order_relaxed); }
         bool playbackActive() const { return m_playback.load(std::memory_order_relaxed); }
         const std::filesystem::path& root() const { return m_root; }
+        // Mods\AimModCore (its config.txt), from the cosmetics catalog folder (Mods\AimModCore\service\cosmetics).
+        std::filesystem::path modDirectory() const { return m_catalogDir.empty() ? std::filesystem::path{} : m_catalogDir.parent_path().parent_path(); }
 
     private:
         struct Job

@@ -603,6 +603,9 @@ scalar=<Param>:v         up to 8, -10..10
 - **Capture:** its capture writes to an **AimMod render target** (never the game's shared one) and renders only the stage's own components (`PRM_UseShowOnlyList`).
 - **Lighting:** the stage's directional light is switched off, so it can't light the map. The rig's point lights reach 900 cm, far short of the 5 km down to the map, and nothing on the stage casts a shadow.
 - **Looks:** only names from the free Default packs are applied, even here. A DLC look is never shown.
+- **Own stage:** AimModCore no longer uses the game's character-menu blueprint, whose components turned out to be unstable (two crashes). The stage is a plain actor; AimModCore creates and holds every part of it (root, turntable, skeletal mesh, scene capture, three point lights), and checks each of them before every use.
+- **Validation:** every pointer read from game memory goes through one helper (`reflect::InObjectArray`, `Alive`, `Valid`). The pointer must be plausible and held by GUObjectArray at its own index (read under an SEH guard), not pending kill or unreachable, of the expected class, and owned by our stage. Garbage pointers are rejected before they are dereferenced.
+- **Kill switch:** `cosmetics_preview=0` in `Mods\AimModCore\config.txt` turns the preview off. Any failed validation turns it off for the rest of the session, with the reason in the log; the page then shows its 2D swatches.
 - **Lifetime:** AimModCore destroys nothing at runtime. Destroying the stage while a challenge start or a load was tearing the level down crashed the game.
   - **One stage per world:** spawned once and reused.
   - **Parking:** 10 s after the last request (so a flapping page heartbeat doesn't count as a close), the stage is hidden and stops capturing.

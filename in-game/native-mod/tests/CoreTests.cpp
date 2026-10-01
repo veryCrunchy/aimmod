@@ -894,6 +894,13 @@ static void PreviewChecks()
     CHECK(!DecidePreview(r, {false, false, false, true}).run, "never while loading");
     CHECK(!DecidePreview(r, {std::nullopt, false, false, false}).run, "unknown challenge state counts as a challenge");
     CHECK(!DecidePreview(r, {false, std::nullopt, false, false}).run, "unknown benchmark state counts as a benchmark");
+    CHECK(!PreviewEnabledByConfig("cosmetics_preview=0\n") && !PreviewEnabledByConfig("# AimModCore\r\n  Cosmetics_Preview = Off \r\n") &&
+              PreviewEnabledByConfig("") && PreviewEnabledByConfig("cosmetics_preview=1\n") && PreviewEnabledByConfig("# cosmetics_preview=0\n") &&
+              PreviewEnabledByConfig("other=0\n"),
+          "config.txt kill switch for the preview");
+    CHECK(PlausibleObjectAddress(0x00000245a1b2c3d0ull) && !PlausibleObjectAddress(0) && !PlausibleObjectAddress(0xffffffffffffffffull) &&
+              !PlausibleObjectAddress(0x00007ef000280011ull) && !PlausibleObjectAddress(0x1000) && !PlausibleObjectAddress(0x0000800000000000ull),
+          "pointer plausibility: the crash addresses (-1, unaligned) are rejected before any read");
     CHECK(!PreviewParkDue(100, 95) && !PreviewParkDue(100, 90) && PreviewParkDue(100.5, 90) && PreviewParkDue(100, -1e9),
           "the stage parks only 10 s after the last request (a flapping heartbeat never parks it)");
     CHECK(FormatPreviewFrame(3, "preview-1.png", 384, 384) == "v=1\nseq=3\nfile=preview-1.png\nwidth=384\nheight=384\n", "frame record format");

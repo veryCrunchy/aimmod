@@ -50,6 +50,9 @@ namespace aimmod
         std::optional<PreviewRequest> ReadRequest();
         PreviewGameState GameState(bool inChallenge, bool loading) const;
         bool EnsureStage(UObject* world);
+        UObject* AddPart(UObject* stage, const wchar_t* classPath, UObject* attachTo);
+        bool StageValid();
+        void Disable(const std::string& why);
         // Lifetime: one stage per world, spawned once and reused. Nothing
         // AimModCore adds to it is ever destroyed at runtime: closing the page
         // parks the stage (hidden, no capture), worn parts are hidden and kept
@@ -88,9 +91,9 @@ namespace aimmod
         bool m_bound{}, m_available{};
         std::string m_unavailable;
         game::Getter m_isBenchmark, m_isEditor, m_isInChallenge;
-        UClass* m_stageClass{};
 
-        RC::Unreal::FWeakObjectPtr m_stage, m_target, m_capture, m_meshes, m_mesh;
+        RC::Unreal::FWeakObjectPtr m_stage, m_target, m_capture, m_meshes, m_mesh; // m_meshes: the turntable
+        std::vector<RC::Unreal::FWeakObjectPtr> m_parts; // the stage and the parts it was built with
         std::vector<RC::Unreal::FWeakObjectPtr> m_lights;      // key, fill, rim
         // Parts AimModCore added to the stage, kept for reuse (never destroyed).
         struct Part
@@ -105,9 +108,10 @@ namespace aimmod
         MaterialParams m_params;
         UObject* m_world{};          // identity only, never called into
         bool m_parked{};
+        int m_rebuilds{};
         double m_lastRequest{-1e9};
         double m_baseYaw{};
-        float m_cameraHome[3]{}; // the stage camera's own position: its front view
+        float m_viewDir[2]{-1, 0}; // the camera's view direction at turntable yaw 0 (towards the character's front)
         bool m_logPacks{true}, m_logFrame{};
         std::string m_lookKey;
         double m_yaw{1e9};
