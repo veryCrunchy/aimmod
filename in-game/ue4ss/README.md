@@ -87,6 +87,24 @@ without the game, run the worker with `--discord-test` (optionally
 `--discord-test-seconds N`): it publishes a sample activity, prints Discord's
 replies with the user redacted, then clears it.
 
+In a multiplayer lobby the presence shows "In lobby · 2/4 · <mode>" with a
+Discord party (`party.size`), and in a match the mode, scenario, round and the
+lead over the best other player ("Round 2/4 · Leading by 1,200"). `party.id` is
+a hash of AimMod's random lobby id. While the lobby has room, isn't invite only
+and isn't mid-match (unless late join is on), the presence carries
+`secrets.join`, so Discord offers Join / Ask to Join; Discord does not allow
+buttons alongside a secret, so the Hub button is left out then. The secret is a
+one-way hash of the Steam lobby token. A player who joins from Discord receives
+it as `ACTIVITY_JOIN` on their own AimMod's Discord connection, which matches it
+against the joinable AimMod lobbies of their Steam friends and joins through
+Steam, so Discord joins reach the same people as Steam's "Join Game" and the
+lobby's privacy still applies. Ask-to-join requests (`ACTIVITY_JOIN_REQUEST`)
+are accepted while a join is offered and declined otherwise; the asking user is
+never logged. A `steam://joinlobby` button was not used because it would publish
+the Steam lobby and host ids. Joining from Discord needs the joining player's
+AimMod running with its Discord presence on. Settings > Discord can hide the
+lobby and match details and turn the join off.
+
 ## Replays and limits
 
 Replays reconstruct recorded state, not screen recordings. See

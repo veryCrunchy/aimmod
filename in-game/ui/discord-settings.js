@@ -3,7 +3,7 @@
   // Discord presence card on the Settings page. Self-contained: settings.js only
   // calls render/leave. Uses the page's existing settings classes.
   var target=null,request=null,epoch=0,value=null,status=null;
-  var keys=['discordPresenceEnabled','discordShowScore','discordShowPersonalBest','discordShowHubButton'];
+  var keys=['discordPresenceEnabled','discordShowScore','discordShowPersonalBest','discordShowHubButton','discordShowLobby','discordShowJoin'];
   var states={
     showing:'Showing on Discord.',
     waiting:'Waiting for KovaaK’s to hand over its Discord status.',
@@ -44,6 +44,8 @@
     toggle('discordShowScore','Score and accuracy','Your live score and accuracy, and your last score after each run.');
     toggle('discordShowPersonalBest','Personal best','Your PB for the scenario, your pace against it and a note when you beat it.');
     toggle('discordShowHubButton','Hub profile button','A button to your AimMod Hub profile, shown while your account is linked.');
+    toggle('discordShowLobby','Lobby and match','Your lobby size and mode, and in a match the round and whether you’re leading.');
+    toggle('discordShowJoin','Join from Discord','Lets your Steam friends join your lobby from Discord. Shown while the lobby has room and isn’t invite only.');
   }
   function load(panel){send(null,function(ok,data){if(ok)accept(data);draw(panel,ok?'':'Could not load your Discord settings. Please try again.');});}
   function render(container){
