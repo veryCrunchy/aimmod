@@ -70,7 +70,15 @@ namespace aimmod::replay2
         std::vector<HitEvent> hits;
         std::string reason;
         std::optional<double> score;
+        std::vector<std::uint32_t> marks; // frames the player marked (clip hotkey)
+        std::string clipOf;               // clips: source replay id
+        double clipStart{};               // clips: start within the source (s)
     };
+
+    // A clip: the slice [from, to] seconds of `source` as its own capture
+    // (times re-based to 0, frame numbers remapped), id `id`. Empty frames
+    // when the slice holds fewer than two camera samples.
+    Capture Slice(const Capture& source, double from, double to, const std::string& id);
 
     struct EncodeOptions
     {

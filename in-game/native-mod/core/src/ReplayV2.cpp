@@ -608,6 +608,22 @@ namespace aimmod::replay2
         header += ",\"frames\":" + std::to_string(c.camera.size()) + ",\"inputEvents\":" + std::to_string(inputs.size());
         if (c.reason == "completed" && c.score && IsUsableNumber(*c.score)) Append(header, "score", *c.score);
         Append(header, "duration", report.duration, 9);
+        if (!c.clipOf.empty() && IsValidAttemptId(c.clipOf))
+        {
+            header += ",\"clipOf\":";
+            AppendJsonString(header, c.clipOf);
+            Append(header, "clipStart", c.clipStart, 9);
+        }
+        if (!c.marks.empty())
+        {
+            header += ",\"marks\":[";
+            for (std::size_t i = 0; i < c.marks.size(); ++i)
+            {
+                if (i) header += ',';
+                AppendNumber(header, c.marks[i] < frames ? c.frameTimes[c.marks[i]] : 0.0, 6);
+            }
+            header += ']';
+        }
         header += ",\"encoding\":{\"keyframes\":" + std::to_string(keys.size());
         Append(header, "quantum", quantum);
         Append(header, "yawPerUnit", yawPerUnit, 9);
@@ -629,6 +645,59 @@ namespace aimmod::replay2
         report.fileBytes = file.size();
         if (reportOut) *reportOut = report;
         return file;
+    }
+
+    Capture Slice(const Capture& s, double from, double to, const std::string& id)
+    {
+        Capture c;
+        c.header = s.header;
+        c.header.id = id;
+        c.reason = s.reason;
+        c.clipOf = s.header.id;
+        c.profiles = s.profiles;
+        const std::size_t n = s.frameTimes.size();
+        std::uint32_t first = 0, last = 0;
+        bool any = false;
+        for (std::uint32_t f = 0; f < n; ++f)
+        {
+            const double t = s.frameTimes[f];
+            if (t < from || t > to) continue;
+            if (!any) first = f;
+            last = f;
+            any = true;
+        }
+        if (!any) return c;
+        c.clipStart = s.frameTimes[first];
+        for (std::uint32_t f = first; f <= last; ++f) c.frameTimes.push_back(s.frameTimes[f] - c.clipStart);
+        auto inside = [&](std::uint32_t f) { return f >= first && f <= last; };
+        for (const InputEvent& e : s.inputs)
+            if (inside(e.frame)) c.inputs.push_back({e.frame - first, e.action, e.value});
+        for (const CameraSample& e : s.camera)
+            if (inside(e.frame))
+            {
+                CameraSample x = e;
+                x.frame -= first;
+                c.camera.push_back(x);
+            }
+        for (const ActorSample& e : s.actors)
+            if (inside(e.frame))
+            {
+                ActorSample x = e;
+                x.frame -= first;
+                c.actors.push_back(x);
+            }
+        for (const StatsSample& e : s.stats)
+            if (inside(e.frame))
+            {
+                StatsSample x = e;
+                x.frame -= first;
+                c.stats.push_back(x);
+            }
+        for (const HitEvent& e : s.hits)
+            if (inside(e.frame)) c.hits.push_back({e.frame - first, e.target});
+        // The clip shows the run's final score only when it reaches the end.
+        if (last + 1 == n) c.score = s.score;
+        return c;
     }
 
     std::optional<Decoded> Decode(const std::uint8_t* data, std::size_t size)

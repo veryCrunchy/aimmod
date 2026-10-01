@@ -182,6 +182,19 @@ namespace aimmod
         if (m_commands.size() < 8) m_commands.push_back(std::move(parsed));
     }
 
+    void Output::PublishSelfPose(std::string body)
+    {
+        std::lock_guard lock(m_mutex);
+        m_selfPose = std::move(body);
+        m_selfPoseDirty = true;
+    }
+
+    ClipSettings Output::clipSettings() const
+    {
+        std::lock_guard lock(const_cast<std::mutex&>(m_mutex));
+        return m_clips;
+    }
+
     void Output::PublishScene(std::string body)
     {
         std::lock_guard lock(m_mutex);
@@ -354,6 +367,31 @@ namespace aimmod
                 Warn("replay not saved: write failed (id=" + c.header.id + ")");
                 return true;
             }
+            // Clips the player marked during the run: short slices, own files.
+            const ClipSettings clips = clipSettings();
+            int index = 0;
+            double lastMark = -1e9;
+            for (std::uint32_t mark : c.marks)
+            {
+                if (mark >= c.frameTimes.size()) continue;
+                const double at = c.frameTimes[mark];
+                if (at - lastMark < 1.0) continue; // one clip per press
+                lastMark = at;
+                const std::string clipId = c.header.id + "-clip" + std::to_string(++index);
+                replay2::Capture clip = replay2::Slice(c, at - clips.before, at + clips.after, clipId);
+                clip.reason = "completed";
+                replay2::EncodeReport clipReport;
+                const auto clipBytes = replay2::Encode(clip, {}, &clipReport);
+                if (clipBytes.empty()) continue;
+                const auto clipPath = replays / std::filesystem::path(clipId + ".amreplay");
+                const auto clipPartial = replays / std::filesystem::path(clipId + ".partial");
+                HANDLE clipFile = CreateFileW(clipPartial.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+                if (clipFile == INVALID_HANDLE_VALUE) continue;
+                const bool written = WriteAll(clipFile, std::string(clipBytes.begin(), clipBytes.end()));
+                CloseHandle(clipFile);
+                if (!written || !MoveFileExW(clipPartial.c_str(), clipPath.c_str(), 0)) DeleteFileW(clipPartial.c_str());
+                else Log("clip saved id=" + clipId + " bytes=" + std::to_string(clipBytes.size()) + " from " + FormatNumber(clip.clipStart, 4) + " s");
+            }
             char line[512];
             std::snprintf(line, sizeof(line),
                           "replay saved id=%s bytes=%zu (%.1f KB/min, body %zu) frames=%u inputs=%u samples=%u keyframes=%u targets %u->%u points "
@@ -432,6 +470,38 @@ namespace aimmod
             }
         }
         ScanGameStats(now);
+        if (force || now - m_lastPoseCheck >= 500)
+        {
+            m_lastPoseCheck = now;
+            std::error_code error;
+            const auto request = m_root / L"self-pose.request";
+            bool requested = false;
+            if (std::filesystem::exists(request, error))
+            {
+                const auto written = std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(request, error));
+                requested = !error && std::chrono::system_clock::now() - written < std::chrono::seconds(5);
+            }
+            if (m_poseRequested.exchange(requested) && !requested) DeleteFileW((m_root / L"self-pose.tsv").c_str());
+        }
+        {
+            std::string pose;
+            {
+                std::lock_guard lock(m_mutex);
+                if (m_selfPoseDirty) pose.swap(m_selfPose);
+                m_selfPoseDirty = false;
+            }
+            if (!pose.empty() && m_poseRequested.load()) WriteAtomic(m_root / L"self-pose.tsv", pose);
+        }
+        if (force || now - m_lastClipCheck >= 2000)
+        {
+            m_lastClipCheck = now;
+            std::string text;
+            ClipSettings clips;
+            if (ReadSmall(m_root / L"clip-settings.tsv", text, 1024))
+                if (auto parsed = ParseClipSettings(text)) clips = *parsed;
+            std::lock_guard lock(m_mutex);
+            m_clips = clips;
+        }
         if (!m_commandPrimed && now - m_lastCommandCheck >= 100 && !std::filesystem::exists(m_root / L"core-command.tsv")) m_commandPrimed = true;
         ReadCommand(now);
         {

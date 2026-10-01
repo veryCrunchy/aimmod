@@ -23,6 +23,67 @@ namespace aimmod
         return NativeSettings{capture == '1', history == '1'};
     }
 
+    int VirtualKeyFromName(std::string_view n)
+    {
+        if (n.size() >= 2 && n.size() <= 3 && n[0] == 'F')
+        {
+            int k = 0;
+            for (char c : n.substr(1))
+            {
+                if (c < '0' || c > '9') return 0;
+                k = k * 10 + (c - '0');
+            }
+            return k >= 1 && k <= 12 ? 0x70 + (k - 1) : 0;
+        }
+        if (n == "Insert") return 0x2D;
+        if (n == "Home") return 0x24;
+        if (n == "End") return 0x23;
+        if (n == "PageUp") return 0x21;
+        if (n == "PageDown") return 0x22;
+        if (n == "Pause") return 0x13;
+        if (n == "ScrollLock") return 0x91;
+        return 0;
+    }
+
+    std::optional<ClipSettings> ParseClipSettings(std::string_view text)
+    {
+        ClipSettings out;
+        bool first = true;
+        while (!text.empty())
+        {
+            auto end = text.find('\n');
+            std::string_view line = text.substr(0, end);
+            text = end == std::string_view::npos ? std::string_view{} : text.substr(end + 1);
+            if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+            if (first)
+            {
+                first = false;
+                if (line != "AIMMOD_CLIPS_1") return std::nullopt;
+                continue;
+            }
+            if (line.empty()) continue;
+            auto tab = line.find('\t');
+            if (tab == std::string_view::npos) return std::nullopt;
+            std::string_view key = line.substr(0, tab), value = line.substr(tab + 1);
+            if (key == "key")
+            {
+                out.virtualKey = VirtualKeyFromName(value);
+                if (!out.virtualKey) return std::nullopt;
+                out.key = std::string(value);
+            }
+            else if (key == "before" || key == "after")
+            {
+                double v{};
+                try { v = std::stod(std::string(value)); } catch (...) { return std::nullopt; }
+                if (!(v >= 0 && v <= 60)) return std::nullopt;
+                (key == "before" ? out.before : out.after) = v;
+            }
+            else return std::nullopt;
+        }
+        if (first || out.before + out.after < 1) return std::nullopt;
+        return out;
+    }
+
     std::string FormatCoreActive(std::string_view version, std::time_t now, std::string_view capabilities)
     {
         std::string out(CoreActiveHeader);

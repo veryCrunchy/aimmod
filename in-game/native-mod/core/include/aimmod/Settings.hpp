@@ -16,6 +16,18 @@ namespace aimmod
     // readable but malformed file (callers fail closed: recording disabled).
     std::optional<NativeSettings> ParseNativeSettings(std::string_view text);
 
+    // clip-settings.tsv (optional): the clip hotkey and the clip window.
+    //   AIMMOD_CLIPS_1 / key\tF8 / before\t8 / after\t2
+    struct ClipSettings
+    {
+        std::string key = "F8";
+        int virtualKey = 0x77;
+        double before = 8.0, after = 2.0;
+    };
+    std::optional<ClipSettings> ParseClipSettings(std::string_view text);
+    // F1-F12, Insert, Home, End, PageUp, PageDown, Pause, ScrollLock; 0 otherwise.
+    int VirtualKeyFromName(std::string_view name);
+
     // core-active.tsv handshake read by the Lua mod.
     inline constexpr std::string_view CoreActiveHeader = "AIMMOD_CORE_1";
     std::string FormatCoreActive(std::string_view version, std::time_t now, std::string_view capabilities);

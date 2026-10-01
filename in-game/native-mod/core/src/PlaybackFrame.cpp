@@ -85,6 +85,15 @@ namespace aimmod
                 if (s.camera[6] <= 1 || s.camera[6] >= 179) return std::nullopt;
                 f.motion.push_back(s);
             }
+            else if (c[0] == "ghostmotion")
+            {
+                PlaybackFrame::Sample s;
+                if (c.size() != 9 || !Num(c[1], s.t) || f.ghostMotion.size() >= 64) return std::nullopt;
+                for (int i = 0; i < 7; ++i)
+                    if (!Num(c[static_cast<std::size_t>(i) + 2], s.camera[i])) return std::nullopt;
+                if (!f.ghostMotion.empty() && s.t < f.ghostMotion.back().t) return std::nullopt;
+                f.ghostMotion.push_back(s);
+            }
             else if (c[0] == "actor" || c[0] == "velocity")
             {
                 std::uint32_t id{};
@@ -114,6 +123,15 @@ namespace aimmod
         return f;
     }
 
+    void AimPoint(const double c[7], double distance, double out[3])
+    {
+        constexpr double rad = 3.14159265358979323846 / 180.0;
+        const double p = c[3] * rad, y = c[4] * rad;
+        out[0] = c[0] + distance * std::cos(p) * std::cos(y);
+        out[1] = c[1] + distance * std::cos(p) * std::sin(y);
+        out[2] = c[2] + distance * std::sin(p);
+    }
+
     double PlaybackTime(const PlaybackFrame& f, std::int64_t nowUnixMs)
     {
         double t = f.time;
@@ -128,13 +146,15 @@ namespace aimmod
         return std::min(t, f.duration);
     }
 
-    bool CameraAt(const PlaybackFrame& f, double t, double out[7])
+    bool CameraAt(const PlaybackFrame& f, double t, double out[7]) { return CameraAt(f.motion, t, out); }
+
+    bool CameraAt(const std::vector<PlaybackFrame::Sample>& motion, double t, double out[7])
     {
-        if (f.motion.empty()) return false;
+        if (motion.empty()) return false;
         std::size_t i = 0;
-        while (i + 1 < f.motion.size() && f.motion[i + 1].t < t) ++i;
-        const auto& a = f.motion[i];
-        const auto& b = f.motion[std::min(i + 1, f.motion.size() - 1)];
+        while (i + 1 < motion.size() && motion[i + 1].t < t) ++i;
+        const auto& a = motion[i];
+        const auto& b = motion[std::min(i + 1, motion.size() - 1)];
         const double u = b.t > a.t ? std::clamp((t - a.t) / (b.t - a.t), 0.0, 1.0) : 0.0;
         for (int k = 0; k < 7; ++k) out[k] = (k == 4 || k == 5) ? Angle(a.camera[k], b.camera[k], u) : a.camera[k] + (b.camera[k] - a.camera[k]) * u;
         return true;

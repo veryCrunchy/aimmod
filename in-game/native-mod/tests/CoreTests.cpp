@@ -282,6 +282,38 @@ static void CommandChecks()
     CHECK(FormatCommandResult(7, "error", "challenge-active", "Finish\tit") == "AIMMOD_CORE_RESULT_1\t7\terror\tchallenge-active\tFinish%09it\n", "result line");
 }
 
+static void ClipChecks()
+{
+    using namespace replay2;
+    Capture c = SyntheticCapture();
+    c.marks = {800};
+    Capture clip = Slice(c, c.frameTimes[800] - 0.5, c.frameTimes[800] + 0.25, "1790000000-42-2-clip1");
+    CHECK(clip.frameTimes.size() > 250 && clip.frameTimes.front() == 0 && clip.clipOf == "1790000000-42-2" &&
+              std::fabs(clip.clipStart - (c.frameTimes[800] - 0.5)) < 0.003 && !clip.score,
+          "clip slices and re-bases the run");
+    EncodeReport full, small;
+    auto fullBytes = Encode(c, {}, &full);
+    auto clipBytes = Encode(clip, {}, &small);
+    auto decoded = Decode(clipBytes.data(), clipBytes.size());
+    CHECK(!clipBytes.empty() && clipBytes.size() < fullBytes.size() && decoded && decoded->headerJson.find("\"clipOf\":\"1790000000-42-2\"") != std::string::npos,
+          "clip encodes on its own");
+    if (decoded)
+    {
+        double r[3];
+        decoded->Rotation(0, r);
+        const CameraSample* source = nullptr;
+        for (const CameraSample& s : c.camera)
+            if (s.frame >= 600) { source = &s; break; }
+        CHECK(source != nullptr, "source sample");
+    }
+    auto marked = Decode(fullBytes.data(), fullBytes.size());
+    CHECK(marked && marked->headerJson.find("\"marks\":[") != std::string::npos, "marks in the replay header");
+    auto settings = ParseClipSettings("AIMMOD_CLIPS_1\nkey\tF9\nbefore\t5\nafter\t1\n");
+    CHECK(settings && settings->virtualKey == 0x78 && settings->before == 5 && settings->after == 1, "clip settings parsed");
+    CHECK(!ParseClipSettings("AIMMOD_CLIPS_1\nkey\tW\n") && !ParseClipSettings("AIMMOD_CLIPS_1\nbefore\t99\n") && VirtualKeyFromName("F8") == 0x77,
+          "gameplay keys and long clips rejected");
+}
+
 static void Settings()
 {
     auto s = ParseNativeSettings("AIMMOD_SETTINGS_1\nreplayRecordingEnabled\t0\nhubHistoryEnabled\t1\n");
@@ -579,6 +611,7 @@ int main(int argc, char** argv)
     GameStatsChecks();
     PlaybackChecks();
     CommandChecks();
+    ClipChecks();
     Settings();
     Backoff();
     LifecycleChecks();

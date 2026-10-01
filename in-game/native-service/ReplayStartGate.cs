@@ -41,6 +41,10 @@ sealed class ReplayStartGate
     DateTime pendingSince;
     ReplayStartBlock? block;
     long? loadSequence;
+    string? pendingCompare, startedCompare;
+
+    /// <summary>The comparison replay of the start that Poll just released.</summary>
+    public string? TakeCompare() { lock (gate) { var id = startedCompare; startedCompare = null; return id; } }
 
     /// <summary>The scenario-load request issued for the pending start, if any.</summary>
     public long? LoadSequence { get { lock (gate) return loadSequence; } }
@@ -83,10 +87,11 @@ sealed class ReplayStartGate
         }
     }
 
-    public void Wait(string id, string scenario, ReplayStartBlock reason)
+    public void Wait(string id, string scenario, ReplayStartBlock reason, string? compareId = null)
     {
         lock (gate)
         {
+            pendingCompare = compareId;
             if (pendingId != id) { pendingSince = DateTime.UtcNow; loadSequence = null; }
             pendingId = id; pendingScenario = scenario; block = reason;
         }
@@ -117,7 +122,7 @@ sealed class ReplayStartGate
             if (pendingId != id) return null;
             // While an automatic load is in flight its progress message stays.
             if (reason is not null) { if (loadSequence is null || reason.Reason != "scenario-mismatch") block = reason; return null; }
-            pendingId = null; block = null; loadSequence = null;
+            pendingId = null; block = null; loadSequence = null; startedCompare = pendingCompare; pendingCompare = null;
         }
         return replay;
     }

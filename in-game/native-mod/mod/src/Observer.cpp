@@ -575,6 +575,12 @@ namespace aimmod
             Poll(now);
         }
         m_control.Tick(now, m_scenarioName, m_inChallenge, m_loading);
+        PollClipKey();
+        if (m_output.poseRequested() && now >= m_nextPose)
+        {
+            m_nextPose = now + 1.0 / 60.0;
+            PublishSelfPose(now);
+        }
         if (m_sampler.recording())
         {
             // Every engine frame: its game time and the inputs it consumed.
@@ -585,6 +591,80 @@ namespace aimmod
             else m_sampler.Tick(m_stats, sample);
         }
         m_inTick = false;
+    }
+
+    // Clip hotkey (default F8): read-only key state, only while KovaaK's has focus.
+    void Observer::PollClipKey()
+    {
+        static const DWORD self = GetCurrentProcessId();
+        const ClipSettings clips = m_output.clipSettings();
+        const bool down = (GetAsyncKeyState(clips.virtualKey) & 0x8000) != 0;
+        const bool edge = down && !m_clipKeyDown;
+        m_clipKeyDown = down;
+        if (!edge) return;
+        DWORD owner = 0;
+        GetWindowThreadProcessId(GetForegroundWindow(), &owner);
+        if (owner != self) return;
+        if (m_sampler.Mark()) Log("clip marked (" + clips.key + "); saved when the run completes");
+        else Log("clip key pressed outside a recorded run; nothing marked");
+    }
+
+    // Local view for spectators (60 Hz samples, published 30 Hz): pose format 1.
+    void Observer::PublishSelfPose(double now)
+    {
+        UObject* player = m_scene.Player();
+        UObject* camera = player ? m_b.cameraManager.Object(player) : nullptr;
+        if (!camera) return;
+        double location[3], rotation[3];
+        auto fov = m_b.cameraFov.Number(camera);
+        if (!m_b.cameraLocation.Vector(camera, location) || !m_b.cameraRotation.Vector(camera, rotation) || !fov) return;
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+        if (!m_poses.empty() && ms <= m_poses.back().first) return;
+        m_poses.push_back({ms, {location[0], location[1], location[2], rotation[0], rotation[1], rotation[2], *fov}});
+        if (m_poses.size() > 6) m_poses.erase(m_poses.begin());
+        if (++m_poseSequence % 2) return; // publish every second sample
+        std::string body = "AIMMOD_POSE_1\t" + std::to_string(m_poseSequence) + "\nmeta\t";
+        auto escape = [](const std::string& s) {
+            std::string out;
+            for (unsigned char ch : s)
+            {
+                if (std::isalnum(ch) || ch == '-' || ch == '_' || ch == '.' || ch == '~') out += static_cast<char>(ch);
+                else
+                {
+                    char hex[4];
+                    std::snprintf(hex, sizeof(hex), "%%%02X", ch);
+                    out += hex;
+                }
+            }
+            return out;
+        };
+        body += escape(m_scenarioName) + "\t" + escape(m_mapName) + "\t" + (m_mapScale ? FormatNumber(*m_mapScale, 9) : std::string("0")) + "\n";
+        for (const auto& [stamp, c] : m_poses)
+        {
+            body += "pose\t" + std::to_string(stamp);
+            for (double v : c) body += "\t" + FormatNumber(v, 7);
+            body += '\n';
+        }
+        UObject* character = m_b.myCharacter.Object(player);
+        std::vector<UObject*> actors;
+        if (UObject* state = m_scene.GameState(); state && m_b.characters.Objects(state, actors, 33))
+            for (UObject* actor : actors)
+            {
+                if (actor == character) continue;
+                if (auto hidden = m_b.hidden.Bool(actor); hidden && *hidden) continue;
+                UObject* capsule = m_b.capsule.Object(actor);
+                auto radius = capsule ? m_b.capsuleRadius.Number(capsule) : std::nullopt;
+                auto half = capsule ? m_b.capsuleHalfHeight.Number(capsule) : std::nullopt;
+                double p[3];
+                if (!radius || !half || *radius <= 0 || *half < *radius || !m_b.actorLocation.Vector(actor, p)) continue;
+                const auto key = reinterpret_cast<std::uint64_t>(actor) ^ (static_cast<std::uint64_t>(actor->GetInternalIndex()) << 47);
+                auto it = m_poseIds.find(key);
+                if (it == m_poseIds.end()) it = m_poseIds.emplace(key, ++m_nextPoseId).first;
+                body += "target\t" + std::to_string(it->second) + "\t" + FormatNumber(p[0], 7) + "\t" + FormatNumber(p[1], 7) + "\t" + FormatNumber(p[2], 7) +
+                        "\t" + FormatNumber(*radius, 7) + "\t" + FormatNumber(*half, 7) + "\n";
+            }
+        m_output.PublishSelfPose(std::move(body));
+        (void)now;
     }
 
     void Observer::UpdateMeasurements(bool running, double elapsed, double remaining, const Getter::ValueElseResult& score)
@@ -694,6 +774,14 @@ namespace aimmod
         }
         m_running = s.available && s.running;
         m_paused = s.paused;
+        // Diagnostic for the freeplay PB ghost: which clocks advance in freeplay.
+        if (s.available && !m_inChallenge && scenario && m_freeplayProbes < 3 && now >= m_nextFreeplayProbe && m_b.scenarioActive.ok() &&
+            m_b.scenarioActive.Bool(scenario).value_or(false))
+        {
+            m_nextFreeplayProbe = now + 5.0;
+            ++m_freeplayProbes;
+            Log("freeplay timer probe: elapsed=" + FormatNumber(s.elapsed, 6) + " remaining=" + FormatNumber(s.remaining, 6) + " running=" + (s.running ? "1" : "0"));
+        }
         // Values are read every poll while an attempt is open, and before the
         // lifecycle step: a completion in this poll must journal the final
         // counters, not the previous poll's (shots keep landing until the end).

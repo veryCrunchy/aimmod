@@ -224,6 +224,58 @@ target at 363 of 431 hit samples in both the recording and the
 reconstruction (100% agreement). `aimmod_replay_tool convert` and the
 service's `--compare-replays` reproduce these numbers.
 
+## Replay sharing, run vs run, clips, spectating
+
+All of these use the replay viewer (paused world, Lua scene, native
+presenter); none touch a running challenge.
+
+- Received replays: `POST <prefix>/replays/import` (header `X-AimMod-UI: 1`,
+  body = the format 2 file, up to 8 MB) decodes the file completely, then adds
+  it as `replays/<id>.amreplay` (`{"id","scenario"}`; 422 `{"error"}` for
+  `unsupported-format`, `invalid-replay`, `replay-exists`). Format 1 is not
+  accepted from other players.
+- Run vs run: `POST <prefix>/native-replay`
+  `{"action":"load","id":"<run>","compareId":"<other run>"}` (same scenario;
+  422 otherwise). Protocol 6 frames then carry `ghost\t<x y z pitch yaw roll fov>`
+  (the other run's camera at the same timeline second) and, while playing,
+  `ghostmotion\t<t>\t<7 values>` rows. The Lua scene places a small inert
+  sphere where the other run aims (800 cm along its view); the presenter
+  moves it every engine frame. Status reports `mode:"compare"` and
+  `compareId`. Pending starts keep the comparison.
+- Clips: the clip key (default F8; `clip-settings.tsv`:
+  `AIMMOD_CLIPS_1` / `key\tF9` / `before\t8` / `after\t2`; F1-F12, Insert,
+  Home, End, PageUp, PageDown, Pause, ScrollLock; 0-60 s) marks a moment of a
+  recorded run, read-only and only while KovaaK's has focus. When the run
+  completes each mark becomes its own format 2 replay
+  `<id>-clipN.amreplay` (the slice, re-based to 0, header `clipOf`,
+  `clipStart`); marks are listed in the full replay's header (`marks`).
+  Clips are ordinary library entries: shareable with the import above.
+  Video export is not implemented (needs an in-game capture path).
+- Spectating: the bridge writes the watched player's view to
+  `spectate-pose.tsv` in pose format 1 and the workspace starts
+  `{"action":"spectate","scenario","mapName","mapScale","label"}` (409 with
+  `error`/`message` when the stream is missing or the start gate refuses:
+  the spectator must be in the same scenario, in the pause menu). The view is
+  shown 120 ms behind the newest pose; it ends when the stream stops for 2 s.
+  AimModCore writes the local player's view in the same format to
+  `self-pose.tsv` (60 Hz samples, rewritten at 30 Hz) only while
+  `self-pose.request` was touched within the last 5 s.
+
+Pose format 1 (UTF-8, LF):
+
+```
+AIMMOD_POSE_1\t<sequence>
+meta\t<%-escaped scenario>\t<%-escaped map name>\t<map scale>
+pose\t<unix ms>\t<x>\t<y>\t<z>\t<pitch>\t<yaw>\t<roll>\t<fov>     (1-64 rows, increasing ms)
+target\t<id>\t<x>\t<y>\t<z>\t<capsule radius>\t<capsule half height> (optional, latest positions)
+```
+
+PB ghost while practising is not implemented yet: freeplay exposes no
+attempt clock the ghost could follow, and the mod would need to place
+visuals in a live (unpaused) world. Startup now logs which timers advance in
+freeplay (`freeplay timer probe`) to pick a sync source; until then run vs
+run against the best replay covers the comparison.
+
 ## Game commands
 
 The user approved AimMod changing game state where a feature needs it

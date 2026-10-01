@@ -11,7 +11,9 @@
 #include <aimmod/GameStats.hpp>
 #include <aimmod/Lifecycle.hpp>
 
+#include <array>
 #include <atomic>
+#include <unordered_map>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -82,6 +84,16 @@ namespace aimmod
         Presenter m_presenter;
         GameControl m_control;
         bool m_inChallenge{}, m_loading{};
+        // Clip hotkey edge detection; self-pose stream; freeplay timer probe.
+        bool m_clipKeyDown{};
+        double m_nextPose{}, m_nextFreeplayProbe{};
+        int m_freeplayProbes{};
+        std::uint64_t m_poseSequence{};
+        std::unordered_map<std::uint64_t, std::uint32_t> m_poseIds;
+        std::uint32_t m_nextPoseId{};
+        std::vector<std::pair<std::int64_t, std::array<double, 7>>> m_poses;
+        void PollClipKey();
+        void PublishSelfPose(double now);
 
         // Callback registrations.
         std::vector<std::uint64_t> m_callbacks;
