@@ -438,6 +438,10 @@ int main()
         Check(!AvatarPath::Parse("AIMMOD_AVATAR_PATH_1\np\t0\t0\t0\t0\t0\t0\n"), "needs at least two rows");
         Check(!AvatarPath::Parse("AIMMOD_AVATAR_PATH_1\np\t0\tnan\t0\t0\t0\t0\np\t5\t0\t0\t0\t0\t0\n"), "refuses non-finite numbers");
     }
+    // Remote players never become game bots outside AimMod match scenarios.
+    Check(ghost::AvatarBotsAllowed("AimMod Match - Synthetic Arena - ab12cd34") && !ghost::AvatarBotsAllowed("Synthetic Tracking") &&
+              !ghost::AvatarBotsAllowed("") && !ghost::AvatarBotsAllowed("AimMod - Synthetic Map - CS Movement"),
+          "avatar bots only in match scenarios");
     // avatar-state.tsv from the service
     {
         const std::string id = std::to_string(Person);

@@ -471,6 +471,13 @@ namespace aimmod
 
     void GhostDemo::Show(std::uint64_t peer, Ghost& ghost, const Sample& s, UObject* world, UObject* character)
     {
+        if (!m_botsAllowed)
+        {
+            // Never a game bot outside AimMod match scenarios: shapes only.
+            RemoveAvatar(ghost);
+            if (EnsureShapes(ghost, world)) PlaceShapes(ghost, s);
+            return;
+        }
         if (EnsureAvatar(peer, ghost, character))
         {
             DestroyShapes(ghost);
@@ -580,6 +587,8 @@ namespace aimmod
             {
                 if (!m_lastScene.empty() && !m_ghosts.empty()) m_log("avatars: scenario changed; re-applying looks and AI-off");
                 m_lastScene = scene;
+                m_botsAllowed = bridge::ghost::AvatarBotsAllowed(scene);
+                if (!m_ghosts.empty() && !m_botsAllowed) m_log("avatars: not an AimMod match scenario; remote players drawn as shapes");
                 m_avatarMapDirty = true;
                 for (auto& [_, g] : m_ghosts)
                 {

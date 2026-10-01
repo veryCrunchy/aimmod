@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <string_view>
 #include <vector>
 
 namespace bridge::ghost
@@ -15,6 +16,12 @@ namespace bridge::ghost
     constexpr double MaxExtrapolation = 0.1;
     constexpr float DefaultHalfHeight = 88.f;  // UE default capsule, used when a sender doesn't report one
     constexpr float DefaultRadius = 34.f;
+
+    // Remote players become game bots (collidable, on a team) only in
+    // AimMod's generated match scenarios. Anywhere else, ranked and normal
+    // scenarios included, the scenario's own bots stay untouched and remote
+    // players are drawn as collision-free shapes.
+    inline bool AvatarBotsAllowed(std::string_view localScenario) { return localScenario.starts_with("AimMod Match - "); }
 
     struct TimedPose
     {

@@ -115,6 +115,7 @@ namespace aimmod
         void ReadAvatarState();
         void ApplyCombatState(Ghost& ghost, RC::Unreal::UObject* localCharacter);
         std::string m_lastScene; // re-apply looks and AI-off when the scenario changes
+        bool m_botsAllowed = false; // bridge::ghost::AvatarBotsAllowed(local scenario)
         bool m_avatarMapDirty = true;
         void WriteAvatarMap();
         game::Field m_movementComponent;
