@@ -40,6 +40,13 @@ namespace aimmod
         void Tick(double now, game::UObject* player, game::UObject* character, game::UObject* handler, const RoundState& round);
         // Leaving the match scenario (or the round state): models hidden, the world bomb removed.
         void Release(game::UObject* player, const char* why);
+        // A right-mouse stab to claim (once): MatchPlay sends it as a shot in slot cs::StabSlot.
+        bool TakeStab()
+        {
+            const bool stab = m_stabRequested;
+            m_stabRequested = false;
+            return stab;
+        }
 
     private:
         bool Bind(game::UObject* player);
@@ -48,6 +55,7 @@ namespace aimmod
         bool KeyPressed(game::UObject* player, const char* key) const;
         game::UObject* BuildModel(game::UObject* owner, game::UObject* parent, const std::vector<cs::Part>& parts, std::vector<RC::Unreal::FWeakObjectPtr>* lights);
         void HandModels(game::UObject* character, int slot);
+        void KnifeAttacks(double now, game::UObject* player, game::UObject* character, int hand);
         void WorldBomb(double now, game::UObject* player, game::UObject* character, const std::optional<RoundState::Bomb>& bomb);
 
         game::Bindings& m_b;
@@ -69,6 +77,11 @@ namespace aimmod
         RC::Unreal::FWeakObjectPtr m_handOwner, m_knife, m_handBomb;
         bool m_handBuilt{}, m_handFailed{};
         int m_shownSlot{-2};
+        // Knife attacks: the move playing, when it started, the last slash, and the knife's shot counter.
+        cs::KnifeMove m_move{cs::KnifeMove::None}, m_lastSlash{cs::KnifeMove::None};
+        double m_moveAt{}, m_lastAttack{-10};
+        std::optional<double> m_knifeShots;
+        bool m_stabRequested{}, m_posed{};
 
         // The bomb in the world.
         RC::Unreal::FWeakObjectPtr m_bombActor;

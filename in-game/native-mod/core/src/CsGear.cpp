@@ -123,4 +123,29 @@ namespace aimmod::cs
         if (slot == BombSlot) return {{34, 9, -22}, {-25, 8, 0}};
         return {{30, 15, -14}, {12, -12, -20}};
     }
+    double KnifeMoveSeconds(KnifeMove move) { return move == KnifeMove::Stab ? 0.38 : move == KnifeMove::None ? 0.0 : 0.25; }
+
+    KnifeMove NextSlash(KnifeMove previous) { return previous == KnifeMove::SlashRight ? KnifeMove::SlashLeft : KnifeMove::SlashRight; }
+
+    Hold KnifePose(KnifeMove move, double t)
+    {
+        Hold pose{};
+        const double length = KnifeMoveSeconds(move);
+        if (move == KnifeMove::None || t <= 0 || t >= length) return pose;
+        constexpr double Pi = 3.14159265358979323846;
+        const double u = t / length;
+        // Out fast (ease out), then back to rest (ease in and out).
+        const double peak = move == KnifeMove::Stab ? 0.3 : 0.35;
+        const double a = u < peak ? std::sin(u / peak * Pi / 2) : 0.5 + 0.5 * std::cos((u - peak) / (1 - peak) * Pi);
+        if (move == KnifeMove::Stab)
+        {
+            pose.offset[0] = 24 * a, pose.offset[1] = -3 * a, pose.offset[2] = 3 * a;
+            pose.rotation[0] = -8 * a;
+            return pose;
+        }
+        const double side = move == KnifeMove::SlashRight ? 1.0 : -1.0;
+        pose.offset[0] = 8 * a, pose.offset[1] = -14 * side * a, pose.offset[2] = 4 * a;
+        pose.rotation[0] = -15 * a, pose.rotation[1] = -55 * side * a, pose.rotation[2] = 35 * side * a;
+        return pose;
+    }
 } // namespace aimmod::cs

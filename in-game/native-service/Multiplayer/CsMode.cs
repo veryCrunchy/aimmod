@@ -30,10 +30,12 @@ static class CsRules
 {
     // Weapon slots, as KovaaK's Weapon1..Weapon8 keys number them from 0 (key 1 = slot 0).
     public const int PrimarySlot = 0, PistolSlot = 1, KnifeSlot = 2, BombSlot = 3;
+    // The knife's right-mouse stab: no weapon slot of its own, AimModCore claims it as slot 4.
+    public const int StabSlot = 4;
     // KovaaK's viewmodel with no weapon mesh (AimModCore draws the knife and the bomb).
     public const string BlankModel = "Blank";
-    // CS2 knife reach (48 Source units) at the CS ports' 4.4 cm per unit.
-    public const double KnifeRangeCm = 210;
+    // CS2 knife reach (slash 48, stab 32 Source units) at the CS ports' 4.4 cm per unit.
+    public const double KnifeRangeCm = 210, StabRangeCm = 140;
     // CS2 competitive timers (ms).
     public const long FreezeMs = 15_000, BuyMs = 20_000, RoundMs = 115_000, BombMs = 40_000, PlantMs = 3_200, DefuseMs = 10_000, KitDefuseMs = 5_000, RoundEndMs = 7_000;
     // CS2 economy.
@@ -64,15 +66,17 @@ static class CsRules
     ];
     // Everyone's knife (slot 2): CS2's slash, 40 damage every 0.4 s within reach, the knife's kill
     // reward. The bomb (slot 3) is only the carrier's, and does no damage: E (or fire) plants it.
+    // Slashes in quick succession (within 0.6 s of the last hit) do 25. The stab (right mouse) does 65 once a second.
     public static readonly CsWeapon Knife = new("knife", "Knife", 0, "any", KnifeSlot, "knife", 1500, 0.85,
-        new CombatWeapon("AimMod CS Knife", 40, 1, 0.4, true, 0, KnifeRangeCm), new(BlankModel, "-", 0, 0, 0.6, 0.4));
+        new CombatWeapon("AimMod CS Knife", 40, 1, 0.4, true, 0, KnifeRangeCm, FollowUpDamage: 25, FollowUpMs: 600), new(BlankModel, "-", 0, 0, 0.6, 0.4));
+    public static readonly CombatWeapon Stab = new("AimMod CS Knife Stab", 65, 1, 1.0, false, 0, StabRangeCm);
     public static readonly CsWeapon Bomb = new("c4", "C4", 0, T, BombSlot, "bomb", 0, 0,
         new CombatWeapon("AimMod CS C4", 0, 1, 1, false, 0, 1), new(BlankModel, "-", 0, 0, 0, 0));
     // Every profile the CS arena carries.
     public static IEnumerable<CsWeapon> Profiles => Weapons.Append(Knife).Append(Bomb);
     public static CsWeapon? Find(string? id) => Weapons.FirstOrDefault(w => w.Id == id);
     public static CsWeapon? FindAny(string? id) => Profiles.FirstOrDefault(w => w.Id == id);
-    public static CsWeapon? ByProfile(string name) => Profiles.FirstOrDefault(w => w.Combat.Name == name);
+    public static CsWeapon? ByProfile(string name) => name == Stab.Name ? Knife : Profiles.FirstOrDefault(w => w.Combat.Name == name);
     // The item a slot holds for a player: what they bought, the knife, or the bomb if they carry it.
     public static CsWeapon? InSlot(int slot, string? primary, string? secondary, bool carrier) => slot switch
     {
@@ -250,7 +254,8 @@ sealed class CsMatch
         {
             Respawns = false,
             // The bomb slot never hits: it plants.
-            WeaponFor = (id, slot) => players.TryGetValue(id, out var p) && slot != CsRules.BombSlot ? CsRules.InSlot(slot, p.Primary?.Id, p.Secondary?.Id, false)?.Combat : null,
+            WeaponFor = (id, slot) => !players.TryGetValue(id, out var p) || slot == CsRules.BombSlot ? null
+                : slot == CsRules.StabSlot ? CsRules.Stab : CsRules.InSlot(slot, p.Primary?.Id, p.Secondary?.Id, false)?.Combat,
             DamageModel = Damage,
             OnKill = Killed,
         };

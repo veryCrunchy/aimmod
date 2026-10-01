@@ -342,7 +342,7 @@ sealed partial class MultiplayerService : IDisposable
         weapon = new { preset = s.WeaponProfile.Preset, custom = s.WeaponProfile.Custom }, movement = s.MovementProfile.Preset,
         character = new { preset = s.CharacterProfile.Preset, custom = s.CharacterProfile.Custom },
         targetSpeed = s.TargetSpeed, targetSize = s.TargetSize, privacy = s.Privacy, countdown = s.Countdown, lateJoin = s.LateJoin, autoStart = s.AutoStart, voting = s.Voting,
-        fragLimit = s.FragLimit, lifesteal = s.Lifesteal, requireFire = s.RequireFire, halfRounds = s.HalfRounds, overtime = s.Overtime,
+        fragLimit = s.FragLimit, lifesteal = s.Lifesteal, requireFire = s.RequireFire, halfRounds = s.HalfRounds, overtime = s.Overtime, adsZoom = s.AdsZoom, adsSensitivity = s.AdsSensitivity,
     };
     PresetStore LoadPresets()
     {
@@ -1885,6 +1885,8 @@ sealed partial class MultiplayerService : IDisposable
                 if (core is not null) core.Claim(SelfId, claim);
                 else if (hostPeer is not null) Send(hostPeer, "hit", claim.Body());
             }
+            if (match.Cs is not null) KnifeSounds(shotFeed.Fresh, (id, t) => tracker.SeenAt(id, t) ?? (tracker.LastSeen.TryGetValue(id, out var last) ? last : null), offset);
+            shotFeed.Fresh.Clear(); // each shot sounds once
         }
         var view = LiveCombat(match);
         if (view?.Players.FirstOrDefault(p => p.Member == SelfId) is { } self)

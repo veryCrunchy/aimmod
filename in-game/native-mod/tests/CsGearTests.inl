@@ -94,8 +94,25 @@ namespace csgear_checks
         CHECK(InHand(BombSlot).offset[0] > 0 && InHand(KnifeSlot).offset[1] > 0, "both are held in front, the knife to the right");
     }
 
+    inline void Knife()
+    {
+        CHECK(NextSlash(KnifeMove::None) == KnifeMove::SlashRight && NextSlash(KnifeMove::SlashRight) == KnifeMove::SlashLeft && NextSlash(KnifeMove::SlashLeft) == KnifeMove::SlashRight &&
+                  NextSlash(KnifeMove::Stab) == KnifeMove::SlashRight,
+              "slashes alternate right and left");
+        CHECK(KnifeMoveSeconds(KnifeMove::SlashRight) == 0.25 && KnifeMoveSeconds(KnifeMove::Stab) > KnifeMoveSeconds(KnifeMove::SlashLeft) && StabInterval == 1.0, "a slash takes 0.25 s, the heavier stab longer");
+        const Hold rest = KnifePose(KnifeMove::SlashRight, 0), done = KnifePose(KnifeMove::SlashRight, 0.25), none = KnifePose(KnifeMove::None, 0.1);
+        CHECK(rest.offset[0] == 0 && done.rotation[1] == 0 && none.offset[0] == 0, "the knife is at rest before and after a move");
+        const Hold right = KnifePose(KnifeMove::SlashRight, 0.25 * 0.35), left = KnifePose(KnifeMove::SlashLeft, 0.25 * 0.35);
+        CHECK(std::fabs(right.rotation[1] + 55) < 1e-6 && std::fabs(left.rotation[1] - 55) < 1e-6 && right.offset[1] < 0 && left.offset[1] > 0, "the slash swings fully at its peak, mirrored for the other side");
+        const Hold late = KnifePose(KnifeMove::SlashRight, 0.24);
+        CHECK(std::fabs(late.rotation[1]) < 2, "and is nearly back at the end");
+        const Hold thrust = KnifePose(KnifeMove::Stab, 0.38 * 0.3);
+        CHECK(std::fabs(thrust.offset[0] - 24) < 1e-6 && thrust.rotation[1] == 0, "the stab thrusts straight ahead");
+    }
+
     inline void Run()
     {
+        Knife();
         RoundLines();
         Switching();
         Loadouts();

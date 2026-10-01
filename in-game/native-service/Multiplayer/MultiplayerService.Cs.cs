@@ -149,6 +149,24 @@ sealed partial class MultiplayerService
         roundAudio.Update(volume, bomb, listener);
     }
 
+    // The knife's own sounds for this player's slashes and stabs (KovaaK's gunshot is off for it): a
+    // swish for a miss, a thud when the ray meets a drawn player within reach.
+    void KnifeSounds(IEnumerable<ShotFeed.Shot> shots, Func<int, long, TrackSeen?> targetAt, long offset)
+    {
+        foreach (var s in shots)
+        {
+            if (s.Weapon is not (CsRules.KnifeSlot or CsRules.StabSlot)) continue;
+            var stab = s.Weapon == CsRules.StabSlot;
+            roundAudio.Play(new RoundCue(KnifeSound(s, stab, s.Target == 0 ? null : targetAt(s.Target, s.UnixMs + offset))), null);
+        }
+    }
+    internal static string KnifeSound(ShotFeed.Shot s, bool stab, TrackSeen? target)
+    {
+        var reach = (stab ? CsRules.StabRangeCm : CsRules.KnifeRangeCm) + CombatWeapon.RangeToleranceCm;
+        var hit = target is { } t && Math.Sqrt((t.X - s.X) * (t.X - s.X) + (t.Y - s.Y) * (t.Y - s.Y)) - t.Radius <= reach;
+        return hit ? (stab ? "knife-stab" : "knife-hit") : stab ? "knife-stab-swish" : "knife-swish";
+    }
+
     // Which weapon slot this player holds, for the item the others see in their hands: sent when
     // it changes (and again each round, which starts the host's view from scratch).
     string? csHoldSent;

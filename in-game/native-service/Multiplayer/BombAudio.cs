@@ -165,6 +165,38 @@ static class BombSounds
         for (var k = 0; k < 3; k++) Tone(s, k * 0.15, 0.17, notes[k], 1, 0.006, 0.08, 0.35);
         return Normalize(s, 0.6);
     }
+    // The knife: a swish of air (noise swept through a resonant band) for a slash or stab that meets
+    // nothing, and a short dull thud with a scrape when it lands.
+    static float[] Swish(double seconds, double from, double to, uint seed, double peak)
+    {
+        var s = Buffer(seconds); var noise = new Noise(seed); double low = 0, band = 0;
+        for (var i = 0; i < s.Length; i++)
+        {
+            var t = i / (double)Rate; var u = t / seconds;
+            var f = from * Math.Pow(to / from, u);
+            var a = 1 - Math.Exp(-2 * Math.PI * f / Rate);
+            low += a * (noise.Next() - low); band += a * (low - band);
+            s[i] = (float)((low - band) * Math.Sin(Math.PI * Math.Min(1, u * 1.15)) * (1 - 0.3 * u));
+        }
+        return Normalize(s, peak);
+    }
+    public static float[] KnifeSwish() => Swish(0.2, 900, 3800, 59, 0.5);
+    public static float[] StabSwish() => Swish(0.28, 600, 2400, 61, 0.55);
+    static float[] Thud(double freq, double seconds, uint seed, double peak)
+    {
+        var s = Buffer(seconds); double phase = 0;
+        for (var i = 0; i < s.Length; i++)
+        {
+            var t = i / (double)Rate;
+            phase += 2 * Math.PI * freq * (1 + Math.Exp(-30 * t)) / Rate;
+            s[i] = (float)(Math.Sin(phase) * Math.Exp(-18 * t) * Math.Min(1, t / 0.002));
+        }
+        Burst(s, 0, 0.06, 0.7, 3000, seed, 45);
+        return Normalize(s, peak);
+    }
+    public static float[] KnifeHit() { var s = Thud(140, 0.18, 67, 0.75); return s; }
+    public static float[] StabHit() => Thud(95, 0.28, 71, 0.85);
+
     public static float[] Tick(double freq) { var s = Buffer(0.04); Tone(s, 0, 0.03, freq, 1, 0.001, 0.02, 0.1); return Normalize(s, 0.4); }
 
     public static readonly IReadOnlyDictionary<string, Func<float[]>> All = new Dictionary<string, Func<float[]>>
@@ -172,6 +204,7 @@ static class BombSounds
         ["beep"] = Beep, ["final"] = FinalTone, ["plant-start"] = PlantStart, ["plant-done"] = PlantDone, ["defuse-start"] = DefuseStart,
         ["defuse-done"] = DefuseDone, ["kit"] = KitPickup, ["explosion"] = Explosion, ["planted-alert"] = PlantedAlert,
         ["dropped"] = () => Tick(1400), ["picked"] = () => Tick(2600),
+        ["knife-swish"] = KnifeSwish, ["knife-stab-swish"] = StabSwish, ["knife-hit"] = KnifeHit, ["knife-stab"] = StabHit,
     };
 
     // 16-bit mono PCM WAV.

@@ -66,7 +66,8 @@ static partial class MatchScenario
     public static string Key(LobbySettings s)
     {
         var parts = new object?[] { GeneratorVersion, s.Mode == LobbyModes.Tracking || LobbyModes.Shooting(s.Mode) ? s.Mode : null, s.Scenario?.Hash, s.Scenario?.MapHash, s.MapOverride?.Hash, s.TimeLimit,
-            Num(s.TargetSpeed), Num(s.TargetSize), s.WeaponProfile.Preset, s.WeaponProfile.Hash, s.MovementProfile.Preset, s.CharacterProfile.Preset, s.CharacterProfile.Hash };
+            Num(s.TargetSpeed), Num(s.TargetSize), s.WeaponProfile.Preset, s.WeaponProfile.Hash, s.MovementProfile.Preset, s.CharacterProfile.Preset, s.CharacterProfile.Hash,
+            s.Mode == LobbyModes.Cs ? s.AdsZoom + "@" + Num(s.AdsSensitivity) : null };
         return ContentLibrary.TextHash(JsonSerializer.Serialize(parts));
     }
 
@@ -206,7 +207,7 @@ static partial class MatchScenario
                 sections.Add(new Section { Title = "[Character Profile]", Lines = AvatarProfiles.Lines(look).ToList() });
         if (s.Mode == LobbyModes.Tracking) TrackingDuelScenario(header, sections, s);
         else if (LobbyModes.Combat(s.Mode)) CombatArena(header, sections, s, player);
-        else if (s.Mode == LobbyModes.Cs) CsArena(header, sections, player);
+        else if (s.Mode == LobbyModes.Cs) CsArena(header, sections, player, s);
         // Canonical layout: header, then the sections grouped by type in the order KovaaK's
         // itself saves them (all character profiles together, and so on), each after one
         // blank line, then the map exactly as the base had it.
@@ -407,7 +408,7 @@ static partial class MatchScenario
     // CS arena: every CS profile is in the scenario (the buyable weapons, the knife and the bomb),
     // so AimModCore can fill the slots the CS way each round from the host's loadout: 0 primary,
     // 1 pistol, 2 knife, 3 bomb (the carrier's). KovaaK's own Weapon1..Weapon4 keys switch them.
-    static void CsArena(Section header, List<Section> sections, Section? player)
+    static void CsArena(Section header, List<Section> sections, Section? player, LobbySettings s)
     {
         header.Set("Timelimit", Num(3 * 3600));
         header.Set("InvinciblePlayer", "false");
@@ -416,7 +417,7 @@ static partial class MatchScenario
         foreach (var w in CsRules.Profiles)
         {
             sections.RemoveAll(x => x.Title == "[Weapon Profile]" && x.Get("Name") == w.Combat.Name);
-            sections.Add(new Section { Title = "[Weapon Profile]", Lines = CsWeaponLines(w) });
+            sections.Add(new Section { Title = "[Weapon Profile]", Lines = CsWeaponLines(w, s.AdsZoom, s.AdsSensitivity) });
         }
         if (player is null) return;
         // Until AimModCore applies the round's loadout: a pistol in each of the first two slots, the knife, the bomb.
@@ -442,12 +443,21 @@ static partial class MatchScenario
     public const string CombatRifleModel = "KovaaKs Rifle", RailgunModel = "Heal Rifle";
     static List<string> WeaponLines(CombatWeapon w) => WeaponLines(w, w == CombatRules.Railgun ? new CsLook(RailgunModel, "Bolt Action Sniper", 0, 0, 0, 0) : new CsLook(CombatRifleModel, "AK47", 0, 0, 0, 0));
 
-    static List<string> CsWeaponLines(CsWeapon w) => WeaponLines(w.Combat, w.Look);
+    // The right-mouse zoom of a CS item in a lobby's ADS setting (FOV in degrees, null: no zoom): the
+    // AWP's scope unless ADS is off; with "all weapons" a mild zoom on rifles, SMGs and pistols too.
+    public static double? AdsFov(CsWeapon w, string zoom) => zoom switch
+    {
+        AdsZooms.Off => null,
+        _ when w.Look.Scope => 40,
+        AdsZooms.All => w.Class switch { "rifle" => 70, "smg" => 75, "pistol" => 80, _ => null },
+        _ => null,
+    };
+    static List<string> CsWeaponLines(CsWeapon w, string zoom = AdsZooms.Cs, double sensitivity = 1) => WeaponLines(w.Combat, w.Look, AdsFov(w, zoom), sensitivity);
 
     // One hitscan profile: the host's damage and fire rate, the look's viewmodel, magazine and
     // reload, and a view kick (the camera climbs while firing and settles back; the claim is the
     // camera ray, so the kick moves hits as it moves the crosshair). No spread.
-    static List<string> WeaponLines(CombatWeapon w, CsLook look)
+    static List<string> WeaponLines(CombatWeapon w, CsLook look, double? adsFov = null, double adsSensitivity = 1)
     {
         var range = w.Range > 0 ? w.Range : 1000000.0;
         var lines = new List<string>
@@ -466,9 +476,14 @@ static partial class MatchScenario
             "WeaponModel=" + look.Model, "WeaponAnimation=Primary", "WeaponSkin=Default", "3rdPersonWeaponModel=" + (look.ThirdPerson == "-" ? "None" : look.ThirdPerson), "3rdPersonWeaponSkin=Default",
             "QuickSwitchTime=0.25", "FullyAutomatic=" + (w.FullyAuto ? "true" : "false"),
         };
-        // The sniper scopes in on the right mouse button (KovaaK's own scope).
-        if (look.Scope) lines.AddRange(["CanAimDownSight=true", "ADSScope=No Scope", "ADSZoomSensFactor=0.444", "ADSMoveFactor=0.52", "ADSFOVOverride=40.0", "ADSAllowUserOverrideFOV=false", "ADSZoomInDuration=0.08", "ADSZoomOutDuration=0.05"]);
+        // Right mouse zooms (KovaaK's own ADS): the FOV, the zoomed sensitivity ratio, and the sniper's
+        // slower walk while scoped. The knife and the bomb never zoom (right mouse stabs or does nothing).
+        if (adsFov is { } fov)
+            lines.AddRange(["CanAimDownSight=true", "ADSScope=No Scope", "ADSZoomSensFactor=" + Num(adsSensitivity), "ADSMoveFactor=" + (look.Scope ? "0.52" : "0.8"),
+                "ADSFOVOverride=" + Num(fov), "ADSAllowUserOverrideFOV=false", "ADSZoomInDuration=" + (look.Scope ? "0.08" : "0.12"), "ADSZoomOutDuration=0.05", "ADSBlocksShooting=false", "ShootingBlocksADS=false"]);
         else lines.Add("CanAimDownSight=false");
+        // The knife and the bomb make no gunshot (AimMod plays the knife's own swish and thud).
+        if (look.Model == CsRules.BlankModel) lines.AddRange(["ShootSound=None", "ShootSoundCooldown=0.0", "ParticleMuzzleFlash=None", "ParticleHitscanTrace=None"]);
         return lines;
     }
 

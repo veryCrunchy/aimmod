@@ -1341,7 +1341,7 @@ preset):
   | MAC-10, MP9 | Machine Pistol | SMG | 30 | 2.6 / 2.1 s |
   | AK-47 | KovaaKs Rifle | AK47 | 30 | 2.43 s |
   | M4A1-S | Heavy Surge Rifle | M4 | 20 | 3.07 s |
-  | AWP (scopes on RMB) | Spider | Bolt Action Sniper | 5 | 3.67 s |
+  | AWP (scopes on RMB unless ADS is off) | Spider | Bolt Action Sniper | 5 | 3.67 s |
   | Knife | Blank + AimMod knife | none | - | - |
   | C4 | Blank + AimMod bomb | none | - | - |
 
@@ -1356,6 +1356,23 @@ preset):
 - **Knife:** 40 damage every 0.4 s within 2.1 m (48 Source units at 4.4 cm),
   through the same host-validated claims (slot 2); the host refuses a stab
   beyond `KnifeRangeCm` + 60 cm (`range`). Kill reward $1,500.
+- **Knife moves.** KovaaK's has no melee animation for the first-person
+  arms (only gun fire, reload and scope montages), so AimModCore moves its
+  own knife model: left-mouse slashes alternate right-to-left and
+  left-to-right (0.25 s with a quick return); right mouse stabs forward
+  (0.38 s). Slashes do 40, 25 for a follow-up within 0.6 s; the stab does
+  65 within 1.4 m, once a second, claimed as slot 4 on the camera ray.
+- **Knife sounds.** The knife and bomb profiles have no gunshot
+  (`ShootSound=None`), and AimModCore empties the user's shot sound names for
+  those two weapons in memory. The service plays the knife's own sounds for
+  your attacks: a swish for a miss, a thud when the ray meets a player
+  within reach (synthesised like the bomb sounds, at the "Bomb and round
+  sounds" volume).
+- **ADS zoom** (lobby setting `adsZoom`, CS): `off`, `cs` (default: only the
+  AWP scopes, as in CS2, FOV 40) or `all` (also rifles FOV 70, SMGs 75,
+  pistols 80). KovaaK's own ADS fields (`CanAimDownSight`, `ADSFOVOverride`,
+  `ADSZoomSensFactor`) do the zoom; `adsSensitivity` (0.2-2, default 1.0) is
+  the zoomed sensitivity ratio. The knife and bomb never zoom.
 - **Bomb:** slot 4 holds AimMod's C4 model while you carry it; E or fire with
   it in hand plants. It never hits (the client drops its claims, the host
   refuses slot 3). The dropped or planted bomb is drawn in the world from the

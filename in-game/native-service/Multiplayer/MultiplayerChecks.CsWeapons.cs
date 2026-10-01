@@ -45,6 +45,22 @@ static partial class MultiplayerChecks
         Check(awp.Contains("\nCanAimDownSight=true\n") && awp.Contains("\nMagazineMax=5\n") && awp.Contains("\nFullyAutomatic=false\n"), "The AWP scopes on the right mouse button");
         Check(knife.Contains("\nMaxHitscanRange=210.0\n") && knife.Contains("\nDamagePerShot=40.0\n") && knife.Contains("\nMagazineMax=0\n") && bomb.Contains("\nDamagePerShot=0.0\n") && bomb.Contains("\nMaxHitscanRange=1.0\n"),
             "The knife reaches 2.1 m; the bomb can't hurt anyone");
+        Check(knife.Contains("\nShootSound=None\n") && bomb.Contains("\nShootSound=None\n") && !ak.Contains("ShootSound=None"), "The knife and bomb make no gunshot");
+        // ADS zoom: CS-style (the AWP scopes), off, or all weapons; the zoomed sensitivity ratio.
+        string Arena(object patch)
+        {
+            var settings = LobbyRules.Apply(cs, J(patch), 2, content).Settings!;
+            return MatchScenario.Generate(new(BaseScenario, settings with { Scenario = new ScenarioChoice("Synthetic A", ContentLibrary.TextHash(BaseScenario), "synthetic_map", ContentLibrary.TextHash("m"), 60) }));
+        }
+        string Section(string text, string name) { var at = text.IndexOf("[Weapon Profile]\nName=" + name + "\n", StringComparison.Ordinal); var end = text.IndexOf("\n\n", at, StringComparison.Ordinal); return text[at..(end < 0 ? text.Length : end + 1)]; }
+        Check(cs.AdsZoom == AdsZooms.Cs && cs.AdsSensitivity == 1 && awp.Contains("\nADSFOVOverride=40.0\n") && awp.Contains("\nADSZoomSensFactor=1.0\n"), "By default only the AWP zooms, at the hip-fire sensitivity");
+        var all = Arena(new { adsZoom = "all", adsSensitivity = 0.8 });
+        Check(Section(all, "AimMod CS AK-47").Contains("\nCanAimDownSight=true\n") && Section(all, "AimMod CS AK-47").Contains("\nADSFOVOverride=70.0\n") && Section(all, "AimMod CS Glock-18").Contains("\nADSFOVOverride=80.0\n")
+            && Section(all, "AimMod CS AK-47").Contains("\nADSZoomSensFactor=0.8\n") && Section(all, "AimMod CS Knife").Contains("\nCanAimDownSight=false\n"), "All weapons: a mild zoom on guns, never on the knife");
+        var off = Arena(new { adsZoom = "off" });
+        Check(Section(off, "AimMod CS AWP").Contains("\nCanAimDownSight=false\n") && MatchScenario.Name(LobbyRules.Apply(cs, J(new { adsZoom = "off" }), 2, content).Settings!) != MatchScenario.Name(cs), "ADS off: nothing zooms; a different setting builds a different arena");
+        Check(!LobbyRules.Apply(cs, J(new { adsZoom = "max" }), 2, content).Result.Ok && LobbyRules.Apply(cs, J(new { adsSensitivity = 9 }), 2, content).Settings!.AdsSensitivity == 2
+            && LobbyRules.Plausible(cs) && !LobbyRules.Plausible(cs with { AdsZoom = "x" }), "ADS settings are checked and clamped");
         var dm = LobbyRules.Apply(new LobbySettings(Scenario: content.Scenario("Synthetic A")), J(new { mode = "deathmatch" }), 2, content).Settings!;
         var dmArena = MatchScenario.Generate(new(BaseScenario, dm with { Scenario = new ScenarioChoice("Synthetic A", ContentLibrary.TextHash(BaseScenario), "synthetic_map", ContentLibrary.TextHash("m"), 60) }));
         Check(dmArena.Contains("\nWeaponModel=" + MatchScenario.CombatRifleModel + "\n", StringComparison.Ordinal) && MatchScenario.ViewModels.Contains(MatchScenario.CombatRifleModel) && MatchScenario.ViewModels.Contains(MatchScenario.RailgunModel),
@@ -79,6 +95,20 @@ static partial class MultiplayerChecks
         Check(far.Combat.Claim("a", Stab(live, CsRules.KnifeSlot, 600), live + 50, 40) == "range" && far.Combat.Claim("a", Stab(live + 500, CsRules.PistolSlot, 600), live + 550, 40) is null,
             "Beyond the knife's reach the stab is refused; the pistol still hits");
 
+        // Slashes in quick succession do 25; the right-mouse stab (slot 4) does 65 within its shorter reach, once a second.
+        var quick = new CsMatch(["a", "b"], t0, 6, true, null);
+        match = quick; Place("a", 0, 0); Place("b", 150, 180); quick.Tick(t0 + CsRules.FreezeMs);
+        Check(quick.Combat.Claim("a", Stab(live, CsRules.KnifeSlot), live + 10, 40) is null && quick.Combat.Claim("a", Stab(live + 450, CsRules.KnifeSlot), live + 460, 40) is null
+            && quick.View().Players.First(p => p.Member == "b").Health == 35, "A first slash does 40, a quick follow-up 25");
+        var stabbed = new CsMatch(["a", "b"], t0, 6, true, null);
+        match = stabbed; Place("a", 0, 0); Place("b", 120, 180); stabbed.Tick(t0 + CsRules.FreezeMs);
+        Check(stabbed.Combat.Claim("a", Stab(live, CsRules.StabSlot, 120), live + 10, 40) is null && stabbed.View().Players.First(p => p.Member == "b").Health == 35
+            && stabbed.Combat.Claim("a", Stab(live + 500, CsRules.StabSlot, 120), live + 510, 40) == "fire-rate", "The stab does 65, once a second");
+        var shot = new ShotFeed.Shot(0, 1, 0, 0, 164, 0, 0, CsRules.KnifeSlot, 3, false);
+        Check(MultiplayerService.KnifeSound(shot, false, new TrackSeen(0, 3, 150, 0, 100, 45, 115)) == "knife-hit" && MultiplayerService.KnifeSound(shot, false, new TrackSeen(0, 3, 900, 0, 100, 45, 115)) == "knife-swish"
+            && MultiplayerService.KnifeSound(shot, true, null) == "knife-stab-swish" && MultiplayerService.KnifeSound(shot, true, new TrackSeen(0, 3, 120, 0, 100, 45, 115)) == "knife-stab",
+            "The knife sounds: a thud within reach, a swish otherwise");
+
         // What others see in a player's hands: the slot they hold, if they have something there.
         var view = (Func<string, CsPlayerView>)(id => far.View().Players.First(p => p.Member == id));
         Check(view("a").Holding == "glock" && far.Hold("a", CsRules.KnifeSlot) is null && view("a").Holding == "knife" && far.Hold("a", CsRules.PrimarySlot) is null && view("a").Holding == "glock"
@@ -99,7 +129,7 @@ static partial class MultiplayerChecks
     static void RoundSounds()
     {
         // The beep: once a second at 40 s left, faster as it runs out, about 7 a second at the end.
-        Check(Math.Abs(BombSounds.BeepInterval(40) - 1) < 1e-9 && BombSounds.BeepInterval(10) is > 0.25 and < 0.35 && BombSounds.BeepInterval(2) == BombSounds.FastestBeep && 1 / BombSounds.FastestBeep is > 4 and < 8,
+        Check(Math.Abs(BombSounds.BeepInterval(40) - 1) < 1e-9 && BombSounds.BeepInterval(10) is > 0.25 and < 0.35 && BombSounds.BeepInterval(2) == BombSounds.FastestBeep && 1 / BombSounds.BeepInterval(0) is > 4 and < 8,
             "Beeps speed up from 1 a second to about 7 a second");
         var intervals = Enumerable.Range(0, 41).Select(s => BombSounds.BeepInterval(40 - s)).ToArray();
         Check(intervals.Zip(intervals.Skip(1)).All(p => p.Second <= p.First), "The beep never slows down");

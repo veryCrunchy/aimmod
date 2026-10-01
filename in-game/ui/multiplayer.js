@@ -1087,6 +1087,7 @@
       kv('Round','1:55 · freeze 15 s · buy 20 s · bomb 40 s');
       kv('Economy','$800 start · CS2 rewards and loss bonus');
       kv('Overtime',s.overtime===false?'Off':'On · halves of 3 with $12,500');
+      kv('ADS zoom',{off:'Off',all:'All weapons'}[s.adsZoom]||'CS-style (AWP scope)');
       if(s.scenario&&s.scenario.csProblem)kv('CS map','Not a CS map: '+safe(s.scenario.csProblem,'')).children[1].className+=' mp-warn-line';
     }
     else if(combat(s.mode)){kv('Frag limit',F.number(s.fragLimit||(s.mode==='vampiric'?10:s.mode==='instagib'?25:s.mode==='team-deathmatch'?50:20),0)+' kills');if(s.mode==='vampiric')kv('Lifesteal',F.number(typeof s.lifesteal==='number'?s.lifesteal:50,0)+' %');}
@@ -1166,6 +1167,8 @@
     else if(s.mode==='cs'){
       pl.appendChild(settingRow('Rounds per half','Sides switch after this many (CS2: 12).',stepper(s.halfRounds||12,6,15,1,function(v){return F.number(v,0);},function(v){setting('halfRounds',v);},false,'rounds per half')));
       pl.appendChild(settingRow('Overtime','A tie goes to overtime halves of 3 rounds with $12,500.',toggleSwitch(s.overtime!==false,'Overtime',function(){setting('overtime',s.overtime===false);})));
+      pl.appendChild(settingRow('ADS zoom','Right mouse zoom. CS-style: only the AWP scopes, as in CS2.',segmented([{id:'off',label:'Off'},{id:'cs',label:'CS-style'},{id:'all',label:'All weapons'}],s.adsZoom||'cs',function(id){setting('adsZoom',id);},false,'ADS zoom')));
+      if((s.adsZoom||'cs')!=='off')pl.appendChild(settingRow('Zoom sensitivity','Sensitivity while zoomed, against hip fire (1.0 keeps it).',stepper(typeof s.adsSensitivity==='number'?s.adsSensitivity:1,0.2,2,0.05,function(v){return F.number(v,2)+'x';},function(v){setting('adsSensitivity',v);},false,'zoom sensitivity')));
     }
     else if(combat(s.mode)){
       var fragDefault=s.mode==='vampiric'?10:s.mode==='instagib'?25:s.mode==='team-deathmatch'?50:20;
