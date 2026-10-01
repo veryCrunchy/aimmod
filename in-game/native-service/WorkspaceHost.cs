@@ -383,7 +383,12 @@ sealed class RendererAcknowledgement(string path, Func<DateTime>? clock = null)
                 if (!file.Exists) return Transient();
                 var stamp = file.LastWriteTimeUtc;
                 if (file.Length > 4096 || now - stamp > TimeSpan.FromSeconds(3) || stamp - now > TimeSpan.FromSeconds(1)) return Invalidate();
-                using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+                // Share read, write and delete: the publisher (Lua os.remove + os.rename, or an
+                // atomic move) must never be blocked by this 30 Hz reader.
+                string text;
+                using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                using (var reader = new StreamReader(stream)) text = reader.ReadToEnd();
+                using var doc = System.Text.Json.JsonDocument.Parse(text);
                 var root = doc.RootElement;
                 if (!root.TryGetProperty("state", out var state) || state.GetString() != "ready"
                     || !root.TryGetProperty("mode", out var mode) || mode.GetString() != "main") {

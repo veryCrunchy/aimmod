@@ -40,6 +40,8 @@ static class DiscordPresenceChecks
         {
             while (!stop.IsCancellationRequested)
             {
+                // Unbuffered on purpose: a write completes only once the other end reads, the
+                // worst case for a client that reads and writes on the same pipe.
                 var pipe = new NamedPipeServerStream(Prefix + "0", PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
                 listening.TrySetResult();
                 try
@@ -281,9 +283,11 @@ static class DiscordPresenceChecks
             await using var client = new DiscordIpcClient(DiscordPresenceHost.ClientId, new DiscordNamedPipe(fake.Prefix, 2), TimeSpan.FromSeconds(3));
             Check(await client.Connect(CancellationToken.None), "Handshake completes on READY");
             Check(fake.ClientId == DiscordPresenceHost.ClientId, "Handshake sends the AimMod application id");
-            Check(await client.SetActivity(4242, playing.ToJson(), CancellationToken.None) == DiscordSendResult.Ok, "SET_ACTIVITY acknowledged by nonce");
-            Check(fake.Pongs == 1, "Ping answered with pong");
+            var acknowledged = await client.SetActivity(4242, playing.ToJson(), CancellationToken.None);
+            Check(acknowledged == DiscordSendResult.Ok, "SET_ACTIVITY acknowledged by nonce (" + acknowledged + ": " + client.LastError + ")");
             Check(await client.SetActivity(4242, null, CancellationToken.None) == DiscordSendResult.Ok && fake.Activities[^1] is null, "Null activity clears the presence");
+            // The pong went out before this second command (same write queue), so the fake has read it by now.
+            Check(fake.Pongs == 1, "Ping answered with pong");
             fake.Drop();
             await Task.Delay(200);
             Check(!client.Connected, "Dropped pipe is noticed");

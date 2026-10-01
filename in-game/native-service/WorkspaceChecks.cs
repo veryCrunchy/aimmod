@@ -280,8 +280,10 @@ static class WorkspaceChecks
                     Check(started.Elapsed.TotalSeconds > 1 && state.RootElement.GetProperty("playing").GetBoolean()
                         && state.RootElement.GetProperty("time").GetDouble() > 1, "actual pump plays beyond one second across repeated publication gaps");
                 // Replace atomically: the pump reads this file 30 times a second.
+                Check(!player.Closed.IsCompleted, "publication gaps never closed playback");
                 File.WriteAllText(pumpAckPath + ".next", "{\"state\":\"error\",\"mode\":\"main\"}"); File.Move(pumpAckPath + ".next", pumpAckPath, true);
-                await Task.Delay(200);
+                // The pump closes on its next frame after reading the error; wait for that decision.
+                Check(await Task.WhenAny(player.Closed, Task.Delay(TimeSpan.FromSeconds(30))) == player.Closed, "actual pump reacts to the renderer error");
                 using (var state = JsonDocument.Parse(JsonSerializer.Serialize(player.Status)))
                     Check(!state.RootElement.GetProperty("visible").GetBoolean() && !state.RootElement.GetProperty("playing").GetBoolean(), "actual pump closes on explicit renderer error");
             }
