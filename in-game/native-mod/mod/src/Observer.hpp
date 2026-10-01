@@ -8,6 +8,7 @@
 #include "MatchPlay.hpp"
 #include "Presenter.hpp"
 #include "ReplaySampler.hpp"
+#include "Water.hpp"
 #include "World.hpp"
 
 #include <aimmod/Formats.hpp>
@@ -125,6 +126,7 @@ namespace aimmod
         void AuditQuit(double now);
         MatchPlay m_match;
         Cosmetics m_cosmetics;
+        Water m_water;
 
         // Callback registrations.
         std::vector<std::uint64_t> m_callbacks;

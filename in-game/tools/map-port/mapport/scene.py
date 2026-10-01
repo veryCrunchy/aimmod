@@ -88,3 +88,21 @@ def add_ladder(sc: "Scene", points) -> None:
                            "size": (max(32.0, hi[0] - lo[0]), max(32.0, hi[1] - lo[1]), 16.0),
                            "name": f"ladder_pad{n}", "target": name, "yaw": 0.0})
     sc.bump("ladders_as_jump_pads")
+
+
+def add_liquid(sc: "Scene", liquid: str, points, damage: Optional[float] = None) -> None:
+    """Water becomes a KovaaK's Water volume; lava, slime and trigger_hurt become a Hurt volume
+    (lava, and hurt triggers doing 100+ damage, kill)."""
+    if not points:
+        return
+    lo = [min(p[k] for p in points) for k in range(3)]
+    hi = [max(p[k] for p in points) for k in range(3)]
+    if min(hi[k] - lo[k] for k in range(3)) < 1.0:
+        return
+    centre = tuple((lo[k] + hi[k]) / 2 for k in range(3))
+    size = tuple(hi[k] - lo[k] for k in range(3))
+    n = sum(1 for go in sc.gameobjects if go["kind"] in ("water", "hurt"))
+    sc.gameobjects.append({"kind": "water" if liquid == "water" else "hurt", "origin": centre, "size": size,
+                           "name": f"{liquid}{n}", "target": "", "yaw": 0.0, "liquid": liquid,
+                           "damage": damage})
+    sc.bump(f"{liquid}_volumes")

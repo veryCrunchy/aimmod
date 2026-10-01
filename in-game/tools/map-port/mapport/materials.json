@@ -7,7 +7,10 @@
   "the texture colours, or give an RRGGBB hex. 'fallback' lists categories to merge into when the map",
   "has more categories than KovaaK's material slots (2 groups x 4 surfaces = 8).",
   "'stand_in' paints all-nodraw hulls, which usually sit behind models the converter cannot port.",
-  "'colour' (RRGGBB) is used as the tint basis when a format gives no texture colour (Quake 3 stock textures, VMF)."
+  "'colour' (RRGGBB) is used as the tint basis when a format gives no texture colour (Quake 3 stock textures, VMF).",
+  "'fullbright' (0..1) is written as the slot's FullBright property (lamps, light panels).",
+  "Clusters whose colour is strongly saturated use MI_WA_PureColor with that colour, so painted and team-coloured surfaces keep their colour instead of a tinted stone/concrete look.",
+  "'basename_only': match the rule against the texture file name only, never the folder (map folders such as aim_redline/ would otherwise match)."
  ],
  "reflex": {
   "_comment": "Reflex material path per category for the legacy .map writer.",
@@ -26,6 +29,107 @@
   "default": "structural/dev/dev_grey128"
  },
  "rules": [
+  {
+   "category": "light",
+   "keywords": [
+    "light",
+    "lamp",
+    "glow",
+    "flare",
+    "neon",
+    "lite"
+   ],
+   "material": "MI_WA_PureColor",
+   "tint": "auto",
+   "scale": 1.0,
+   "fullbright": 1.0,
+   "colour": "fff2d0",
+   "fallback": [
+    "plaster",
+    "concrete"
+   ]
+  },
+  {
+   "category": "tech",
+   "keywords": [
+    "base_wall",
+    "base_trim",
+    "base_support",
+    "tech",
+    "scifi",
+    "computer",
+    "panel",
+    "mtl",
+    "machine",
+    "comp"
+   ],
+   "material": "MI_WA_SciFiPanelC",
+   "tint": "auto",
+   "scale": 1.0,
+   "roughness": 0.5,
+   "metallic": 0.6,
+   "colour": "8a96a6",
+   "fallback": [
+    "metal",
+    "concrete"
+   ]
+  },
+  {
+   "category": "tech_floor",
+   "keywords": [
+    "base_floor",
+    "grate",
+    "diamond",
+    "tread",
+    "mesh"
+   ],
+   "material": "MI_WA_SciFiFloorC",
+   "tint": "auto",
+   "scale": 1.0,
+   "roughness": 0.5,
+   "metallic": 0.6,
+   "colour": "7a828c",
+   "fallback": [
+    "metal",
+    "tech"
+   ]
+  },
+  {
+   "category": "team_red",
+   "keywords": [
+    "_red",
+    "red_",
+    "redteam",
+    "team_red"
+   ],
+   "material": "MI_WA_PureColor",
+   "tint": "auto",
+   "scale": 1.0,
+   "colour": "b03a32",
+   "fallback": [
+    "fabric",
+    "brick"
+   ],
+   "basename_only": true
+  },
+  {
+   "category": "team_blue",
+   "keywords": [
+    "_blue",
+    "blue_",
+    "blueteam",
+    "team_blue"
+   ],
+   "material": "MI_WA_PureColor",
+   "tint": "auto",
+   "scale": 1.0,
+   "colour": "3456b0",
+   "fallback": [
+    "fabric",
+    "metal"
+   ],
+   "basename_only": true
+  },
   {
    "category": "dev",
    "keywords": [
@@ -50,7 +154,8 @@
     "lawn",
     "leaves",
     "foliage",
-    "hedge"
+    "hedge",
+    "grs"
    ],
    "material": "MI_WA_GroundGrass",
    "tint": "none",
@@ -65,7 +170,11 @@
     "sand",
     "dusandw",
     "desert",
-    "dune"
+    "dune",
+    "snd",
+    "artsand",
+    "dune",
+    "dust"
    ],
    "material": "MI_WA_RockSandstone",
    "tint": "auto",
@@ -88,7 +197,11 @@
     "blend",
     "road",
     "asphalt",
-    "rubble"
+    "rubble",
+    "drt",
+    "earth",
+    "mud",
+    "terrain"
    ],
    "material": "MI_WA_GroundGravel",
    "tint": "auto",
@@ -111,7 +224,14 @@
     "shutter",
     "fence_wood",
     "barrel",
-    "pallet"
+    "pallet",
+    "crt",
+    "box",
+    "wd_",
+    "wdn",
+    "palette",
+    "bark",
+    "log"
    ],
    "material": "MI_WA_WoodPlank",
    "tint": "auto",
@@ -140,7 +260,10 @@
     "base_",
     "tech",
     "steel",
-    "goldsrc/metal"
+    "goldsrc/metal",
+    "metl",
+    "met_",
+    "mtl"
    ],
    "material": "MI_WA_MetalSheet",
    "tint": "auto",
@@ -155,7 +278,9 @@
   {
    "category": "brick",
    "keywords": [
-    "brick"
+    "brick",
+    "brk",
+    "bric"
    ],
    "material": "MI_WA_BrickClayOld",
    "tint": "auto",
@@ -172,7 +297,9 @@
     "tile",
     "marble",
     "ceramic",
-    "mosaic"
+    "mosaic",
+    "tl_",
+    "ceramic"
    ],
    "material": "MI_WA_ConcreteTiles",
    "tint": "auto",
@@ -201,9 +328,14 @@
     "gothic",
     "castle",
     "temple",
-    "ruin"
+    "ruin",
+    "stn",
+    "rck",
+    "gothic_block",
+    "gothic_wall",
+    "gothic_trim"
    ],
-   "material": "MI_WA_StoneGranite",
+   "material": "MI_WA_BrickCutStone",
    "tint": "auto",
    "scale": 1.0,
    "fallback": [
@@ -241,7 +373,12 @@
     "pavement",
     "curb",
     "base",
-    "block"
+    "block",
+    "crete",
+    "ccrete",
+    "cmnt",
+    "flr",
+    "gothic_floor"
    ],
    "material": "MI_WA_ConcretePoured",
    "tint": "auto",

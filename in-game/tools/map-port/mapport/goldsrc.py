@@ -16,6 +16,7 @@ from . import classify, geometry as g, objectives, scene
 from .bsp import BspError, parse_entities
 
 CONTENTS_EMPTY, CONTENTS_SOLID, CONTENTS_WATER, CONTENTS_SLIME, CONTENTS_LAVA, CONTENTS_SKY = -1, -2, -3, -4, -5, -6
+LIQUIDS = {CONTENTS_WATER: "water", CONTENTS_SLIME: "slime", CONTENTS_LAVA: "lava"}
 FEET_OFFSET = 36.0  # HL hull is -36..36 around the origin
 MARGIN = 16.0
 
@@ -152,7 +153,7 @@ def _cells(q: GoldSrcBsp, head: int, box: Tuple[Vec, Vec]):
         if node < 0:
             leaf = -1 - node
             contents = q.leafs[leaf][0] if leaf < len(q.leafs) else CONTENTS_SOLID
-            if contents in (CONTENTS_SOLID, CONTENTS_SKY):
+            if contents in (CONTENTS_SOLID, CONTENTS_SKY, CONTENTS_WATER, CONTENTS_SLIME, CONTENTS_LAVA):
                 yield contents, bounds + path
             continue
         pn, c0, c1 = q.nodes[node][0], q.nodes[node][1], q.nodes[node][2]
@@ -233,6 +234,19 @@ def load(data: bytes, name: str, folder: str = "") -> scene.Scene:
                 if any(org) and not all(box[0][k] - 1 <= org[k] <= box[1][k] + 1 for k in range(3)):
                     faces = [scene.Face(polygon=[g.add(p, org) for p in f.polygon], normal=f.normal,
                                         texture=f.texture, reflectivity=f.reflectivity) for f in faces]
+            if contents in LIQUIDS:
+                scene.add_liquid(sc, LIQUIDS[contents], [p for f in faces for p in f.polygon])
+                continue
+            if cls.lower() == "trigger_hurt":
+                try:
+                    dmg = float(ent.get("dmg", "10") or 10)
+                except ValueError:
+                    dmg = 10.0
+                scene.add_liquid(sc, "hurt", [p for f in faces for p in f.polygon], damage=dmg)
+                continue
+            if cls.lower() == "func_water":
+                scene.add_liquid(sc, "water", [p for f in faces for p in f.polygon])
+                continue
             if cls.lower().startswith("func_ladder"):
                 ladder_pts.setdefault(mi, []).extend(p for f in faces for p in f.polygon)
             if cls.lower() in objectives.VOLUME_CLASSES:

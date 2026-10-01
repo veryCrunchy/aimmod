@@ -66,10 +66,12 @@ def convert_file(path: str, out: str, args) -> dict:
     display = args.display_name or naming.display_name(mapid)
     sce_name = naming.scenario_name(display, game, variant)
     base = naming.file_id(mapid, game)
-    spawns.configure(mv.hull_radius, mv.hull_height)
+    spawns.configure(mv.hull_radius, mv.hull_height, mv.crouch_height)
     if not args.keep_skybox:
         cleanup.remove_3d_skybox(sc)
         cleanup.remove_detached(sc)
+    if args.kill_below is not None:
+        cleanup.add_kill_below(sc, args.kill_below)
     if not args.no_ground:
         cleanup.add_ground_plane(sc)
     spawns.fix_spawns(sc)
@@ -122,7 +124,9 @@ def convert_file(path: str, out: str, args) -> dict:
             fh.write(preview.render(sc, slots, tex_slot))
         report["files"]["preview_check"] = os.path.relpath(pp, out)
         report["files"].setdefault("preview", report["files"]["preview_check"])
-    result = checks.run(sc, slots, tex_slot, jump_up=mv.jump_height * 0.95)
+    # strafe-jumping presets cover longer gaps than CS's capped air speed
+    result = checks.run(sc, slots, tex_slot, jump_up=mv.jump_height * 0.95,
+                        gap_cells=checks.GAP_CELLS if mv.clamp_air_speed else checks.GAP_CELLS + 3)
     reached = result.pop("_reached")
     report["checks"] = result
     if not args.no_thumbnail:
@@ -173,7 +177,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="movement preset from movement_presets.json (default: quake for Q3/QL maps, else cs)")
     ap.add_argument("--bots", type=int, default=5, help="target bots in the scenario")
     ap.add_argument("--disp-step", type=int, default=2, help="displacement grid step (1 = full detail)")
-    ap.add_argument("--disp-thickness", type=float, default=8.0, help="displacement slab thickness (units)")
+    ap.add_argument("--disp-thickness", type=float, default=16.0, help="displacement slab thickness (units)")
     ap.add_argument("--materials", help="alternative material mapping table (JSON)")
     ap.add_argument("--keep-skybox", action="store_true", help="keep the 3D skybox room and detached areas")
     ap.add_argument("--no-scenario", action="store_true")
@@ -185,6 +189,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--allow-check-fail", action="store_true",
                     help="write outputs and exit 0 even when the hard checks fail")
     ap.add_argument("--no-props", action="store_true", help="skip prop hulls from models packed in the BSP")
+    ap.add_argument("--kill-below", type=float, metavar="Z",
+                    help="add a kill volume under the map up to this height (Source units), for maps where "
+                         "falling off should mean death")
     ap.add_argument("--no-ground", action="store_true", help="skip the backdrop ground plane under the map")
     ap.add_argument("--no-preview", action="store_true",
                     help="skip the preview check PNG (top-down + side view with the player hull at every spawn)")
