@@ -72,6 +72,13 @@ in Windows file names are rejected.
 | GoldSrc BSP v30 (CS 1.6) | no brushes are stored: every path from a model's head node to a solid (or sky) leaf of the BSP tree is a convex cell, which is the map's solid volume. Cell faces take the texture of the rendered face on the same plane; embedded miptex (or `.wad` files next to the map) give the average colour. Sky leaves become clips; player-clip hulls are not used. In CS 1.6, `info_player_deathmatch` is T and `info_player_start` is CT. |
 | Quake 3 IBSP v46 / Quake Live v47 | brushes and shaders directly (`common/caulk` -> nodraw, `common/clip` -> clip, …); bezier patches are tessellated and turned into slabs that follow the vertex normals. `trigger_push` + `target_position` becomes a KovaaK's **JumpPad** aimed at a **Waypoint**; `trigger_teleport` + `misc_teleporter_dest` becomes a **Teleporter** with its Waypoint. Spawns: `info_player_deathmatch` (both teams). |
 
+**Liquids:**
+- Water brushes become map-creator **Water** volumes: Source `CONTENTS_WATER` brushes, GoldSrc
+  water leaves and `func_water`, and Quake 3 water shaders.
+- Lava and slime become **Hurt** volumes (lava kills, slime does 10 damage a second).
+- Both are centred on the liquid and scaled to it, assuming map-creator volumes are 100 units
+  across at scale 1.
+
 Quake 3 stock textures are not in the map files, so Q3 slots use each category's typical colour
 (`colour` in `materials.json`). Ladders (`func_ladder`, ladder contents) cannot be climbed in
 KovaaK's; each becomes a jump pad at its foot aimed just above its top.
@@ -206,6 +213,11 @@ speeds are Source values x `MapScale`. Gravity is a scale on Unreal's 980 cm/s²
 The character's collision capsule follows the main bounding box, so the hull fits Source doorways.
 KovaaK's bundled "Counter-Striker" profile uses roughly the same scale (MaxSpeed 1100, step 75).
 
+- **Movement model.** CS presets (`model: "ue"`) use Unreal character movement like KovaaK's own
+  Counter-Striker profile: MaxSpeed, Acceleration (accelerate x run speed), Friction, and a constant
+  BrakingDeceleration (friction x stopspeed). KovaaK's Quake/Source movement mode ignores the sprint
+  multiplier, so it would make Shift do nothing. The `quake` preset keeps that mode for strafe
+  jumping; its Shift walk is written but may have no effect.
 - **No air speed gain.** `ClampVelocityToInputSpeed=true` caps horizontal speed at the input speed
   (run, walk or crouch). With it off, `ScaledAirAcceleration` (a multiple of MaxSpeed) piled speed
   on in the air and jumps outran walking. `AirControl` is 0.3.
@@ -222,11 +234,22 @@ KovaaK's bundled "Counter-Striker" profile uses roughly the same scale (MaxSpeed
 Every conversion runs these checks; a failure makes `map-port` exit with code 3 (use
 `--allow-check-fail` to accept the output anyway). The results are in the report under `checks`.
 
-- **Walk graph:** player-hull-sized samples every 32 units on walkable faces. Edges use the
-  preset's step and jump height, drops of up to 300 units, and jump pads / teleporters. Every spawn
-  must be able to walk to at least half of its own team; walled-off teams (awp maps) are allowed and
-  reported as `teams_connected`.
+- **Walk graph:**
+  - Samples every 32 units on walkable faces, each with room for a crouched player hull. The
+    outside of the skybox shell is not walkable.
+  - Edges use the preset's step and jump height and drops of up to 300 units. A vertical sweep at
+    the lower spot stops drops through floors and jumps through ceilings.
+  - Running jumps reach up to 128 units (224 for strafe-jumping presets) over a clear arc.
+  - Jump pads and teleporters also add edges.
+- **Spawns:** every spawn must walk to at least half of its own team. Walled-off teams (awp maps)
+  are allowed and reported as `teams_connected`. One cut-off spawn is reported (the walk graph can
+  miss a precise jump); two or more fail the run.
+- **Hurt volumes:** `trigger_hurt` (Source, GoldSrc, Quake 3) becomes a Hurt volume; 100+ damage
+  kills.
 - **Spawns** need ground under them.
+- **Stuck spots:** walk-graph spots you can reach but never leave again (no way back to any spawn),
+  outside water. They fail the run when there are more than 8, or more than 2 % of the reachable
+  area; examples are listed.
 - **No near-black faces** in the playable area.
 - **Props and stand-ins must be supported.** Anything without map geometry within 48 units below is
   removed before the check. Stand-in boxes are snapped onto the floor, or skipped when there is none.

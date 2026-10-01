@@ -42,6 +42,7 @@ class Movement:
     variant: str = "CS Movement"   # scenario name variant
     clamp_air_speed: bool = True   # False lets strafe jumping gain speed (Quake)
     air_control: float = 0.3
+    model: str = "ue"              # "ue" (Unreal movement, Shift multiplier works) or "quake"
 
     @property
     def jump_velocity(self) -> float:
@@ -125,7 +126,9 @@ def character_profile(name: str, mv: Movement, s: float, weapon: str, bot: bool 
         ("ForwardSpeedBias", "1.0"), ("HealthRegainedonkill", "0.0"), ("HealthRegenPerSec", "0.0"),
         ("HealthRegenDelay", "0.0"), ("JumpSpeedPenaltyDuration", "0.0"), ("JumpSpeedPenaltyPercent", "0.0"),
         ("ThirdPersonCamera", "false"), ("TPSArmLength", "300.0"), ("TPSOffset", _v(0, 150, 150)),
-        ("BrakingDeceleration", "0.0"), ("TerminalVelocity", f"{mv.max_velocity * s:.1f}"),
+        # Constant braking ~ Source's stopspeed term (friction x stopspeed), scaled.
+        ("BrakingDeceleration", f"{(mv.friction * mv.stop_speed * s) if mv.model == 'ue' else 0.0:.1f}"),
+        ("TerminalVelocity", f"{mv.max_velocity * s:.1f}"),
         # Bots use the humanoid "Meso" skeletal model (184 cm mesh fitted to the hull) with a real skin;
         # per-mesh hit detection gives them a head and body like a CS player model.
         ("CharacterModel", BOT_MODEL if bot else "None"), ("CharacterSkin", BOT_SKIN if bot else "Default"),
@@ -144,7 +147,8 @@ def character_profile(name: str, mv: Movement, s: float, weapon: str, bot: bool 
         # Clamp horizontal speed to the input (run/walk/crouch) speed: a jump never gains speed. With
         # this off, ScaledAirAcceleration (a multiple of MaxSpeed) piles speed on in the air.
         ("ClampVelocityToInputSpeed", _b(mv.clamp_air_speed)),
-        ("JumpSkipsFriction", "false"), ("EnableQuakeMovement", "true"), ("EnableQuakeJump", "false"),
+        ("JumpSkipsFriction", "false"), ("EnableQuakeMovement", _b(mv.model == "quake")),
+        ("EnableQuakeJump", "false"),
         ("KtJump", "0.0"), ("MovementPhysicsTickInterval", "0.0"), ("MovementPhysicsTickEnabled", "false"),
         ("TeamGlowUpHead", "0.0"), ("TeamGlowUpBody", "0.0"), ("EnemyGlowUpHead", "0.0"),
         ("EnemyGlowUpBody", "0.0"), ("EnemyGlowUpHeadOnHit", "0.0"), ("EnemyGlowUpBodyOnHit", "0.0"),

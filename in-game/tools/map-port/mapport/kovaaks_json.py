@@ -47,13 +47,14 @@ def _f(v: Sequence[float], digits: int = 4) -> str:
 
 
 def _material_sets(slots: List[Slot], groups: int) -> List[dict]:
-    def entry(material: str, pack: str, tint: str, scale: float, rough: float, metal: float) -> dict:
+    def entry(material: str, pack: str, tint: str, scale: float, rough: float, metal: float,
+              bright: float = 0.0) -> dict:
         return {"material": material, "pack": pack, "properties": [
             {"name": "Tint", "value": tint},
             {"name": "Scale", "value": scale},
             {"name": "Roughness", "value": rough},
             {"name": "Metallic", "value": metal},
-            {"name": "FullBright", "value": 0.0},
+            {"name": "FullBright", "value": bright},
         ]}
 
     sets = []
@@ -62,7 +63,7 @@ def _material_sets(slots: List[Slot], groups: int) -> List[dict]:
         for s in SURFACES:
             sl = next((x for x in slots if x.group == gi and x.surface == s), None)
             if sl:
-                grp[s] = entry(sl.material, "Default", sl.tint, sl.scale, sl.roughness, sl.metallic)
+                grp[s] = entry(sl.material, "Default", sl.tint, sl.scale, sl.roughness, sl.metallic, sl.fullbright)
             else:
                 grp[s] = entry("MI_WA_ConcretePoured", "Default", "bfbfbfff", 1.0, 0.8, 0.0)
         sets.append(dict(sorted(grp.items())))
@@ -165,10 +166,37 @@ def spawn_object(sp: scene.Spawn, idx: int, unit: float, map_scale: float, playe
         "rotation": _f((0.0, 0.0, -sp.yaw), 6), "scale": _f((inv, inv, inv), 6), "type": "gameObject"}
 
 
+WATER_COLOURS = {
+    "BaseColor": "2f6f86ff", "DepthFadeColor": "0d2d3dff", "HighlightColor1": "8fd4e6ff",
+    "HighlightColor2": "5fb3c9ff", "RippleShadowColor": "1d4b5cff", "RippleHighlightColor": "c8eef6ff",
+    "MurkColor": "17394aff"}
+
+
+def _volume_object(go: dict, unit: float) -> dict:
+    """Water (swimmable) or Hurt (damage/kill) volume, centred on the liquid brush and scaled to it.
+    Map-creator volumes are 100 units across at scale 1."""
+    sx, sy, sz = (max(1.0, abs(v)) / 100.0 for v in go["size"])
+    if go["kind"] == "water":
+        props = [{"name": k, "value": v} for k, v in WATER_COLOURS.items()]
+        props += [{"name": "WaveSpeed", "value": 1.0}, {"name": "WaveHeight", "value": 1.0}]
+        name = "Water"
+    else:
+        dmg = go.get("damage")
+        kill = go.get("liquid") == "lava" or (dmg is not None and dmg >= 100)
+        props = [{"name": "Kill", "value": kill},
+                 {"name": "Damage", "value": float(dmg if dmg is not None else (100.0 if kill else 10.0))},
+                 {"name": "Cooldown", "value": 1.0}]
+        name = "Hurt"
+    return {"location": _f(to_ue(go["origin"], unit), 3), "name": name, "properties": props,
+            "rotation": "0, 0, 0", "scale": _f((sx, sy, sz), 4), "type": "gameObject"}
+
+
 def game_object(go: dict, unit: float, map_scale: float) -> dict:
     """JumpPad / Teleporter (scaled to the trigger) and their target Waypoints (native size)."""
     kind = go["kind"]
     inv = 1.0 / map_scale
+    if kind in ("water", "hurt"):
+        return _volume_object(go, unit)
     if kind == "waypoint":
         return {"location": _f(to_ue(go["origin"], unit), 3), "name": "Waypoint", "properties": [
             {"name": "Name", "value": go["name"]}, {"name": "BotPauseTimeMin", "value": 0.0},
