@@ -90,7 +90,7 @@ decided (check-in opening, no-shows, accepted results).
 Hub: match opens -> both "ready" -> host chosen -> veto -> game 1 (seed s1) ...
          ^                                            |
    in-game notice                         host client: locked lobby (scenario, length, s1)
-   "Your tournament match is ready"       opponent client: joins (Steam invite or Hub token)
+   "Your tournament match is ready"       opponent client: joins by lobby id + match token
                                           both: freeplay start with seed s1, scores live
                                           host: validates, reports game 1 (result record)
                                           both: upload own replay
@@ -111,11 +111,17 @@ Hub: match opens -> both "ready" -> host chosen -> veto -> game 1 (seed s1) ...
    ruleset's countdown and spectators, auto-start, and a **tournament lock**
    (`LobbySettings.Tournament`: tournament, match, label, game, seed, the two
    players).
-5. **The opponent joins automatically**: a Steam invite when they are
-   friends, and in every case the host reports its Steam lobby to the Hub
-   (`LiveMatch.lobby_token`, only given to the match's players and staff), so
-   the opponent's client joins it directly. Non-friends need the bridge to
-   allow joining an invisible lobby by id (see section 10).
+5. **The opponent joins automatically**, friends or not, through the
+   bridge's tournament lobbies (`multiplayer.md`, "tournament lobbies"): the
+   host creates the Steam lobby with `privacy:"tournament"`, the Hub's
+   per-match **join token** and the opponent's SteamID64 as the only entrant.
+   It's an Invisible lobby (joinable by id, not shown to friends). The host
+   reports the lobby id to the Hub (`LiveMatch.lobby_token`), and the
+   opponent's client joins by that id with the token
+   (`lobby.join {lobby, token}`). The token never goes into lobby data; the
+   bridge checks it in the P2P handshake and locks the lobby once the
+   entrant is in. The Hub gives the token and the lobby id only to the
+   match's two players. No Steam invite is involved.
 6. **Settings are locked**: `LobbyRules.Apply` refuses every change, also from
    the host; anyone who isn't one of the two players joins as a spectator.
    Between games only the tournament moves the lobby on (`LockTournament`:
@@ -296,8 +302,8 @@ simulated series through the real lobby service) and
    page with bracket, host overview, Hub pages, replay header checks, OBS
    overlay, developer simulation.
 2. **Hardening**: the Windows replay verifier worker (spawn sequence against
-   the seed, plausibility); bridge support for joining an invisible Steam
-   lobby by id for non-friends; Discord and email calls for check-in and
+   the seed, plausibility); a two-account test of joining a tournament lobby
+   by id; Discord and email calls for check-in and
    matches; per-match scheduling by organisers.
 3. **Casting**: small live views per player (scene captures, section 6), a
    caster's multi-match dashboard, OBS scenes per match.

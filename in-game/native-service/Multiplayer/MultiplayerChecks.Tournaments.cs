@@ -28,6 +28,44 @@ static partial class MultiplayerChecks
         TournamentHubClient(root);
         TournamentSeedCommand(root);
         TournamentSimulation(root);
+        TournamentBridge();
+    }
+
+    // The bridge's tournament lobbies (multiplayer.md): the host creates an invisible
+    // lobby for one entrant and the match token; the opponent joins by id with it.
+    static void TournamentBridge()
+    {
+        var name = "aimmod-steam-test-" + Guid.NewGuid().ToString("N")[..10];
+        using var server = new System.IO.Pipes.NamedPipeServerStream(name, System.IO.Pipes.PipeDirection.InOut, 1, System.IO.Pipes.PipeTransmissionMode.Byte, System.IO.Pipes.PipeOptions.Asynchronous, 1 << 17, 1 << 17);
+        using var steam = new SteamTransport(name);
+        Check(server.WaitForConnectionAsync().Wait(5000), "The transport connects to the bridge pipe (tournament)");
+        JsonElement Read()
+        {
+            var header = new byte[4];
+            if (!server.ReadExactlyAsync(header).AsTask().Wait(5000)) throw new Exception("Multiplayer check failed: bridge read timed out");
+            var body = new byte[BitConverter.ToUInt32(header)];
+            server.ReadExactlyAsync(body).AsTask().Wait(5000);
+            return JsonDocument.Parse(body).RootElement.Clone();
+        }
+        JsonElement Expect(string cmd) { for (var i = 0; i < 6; i++) { var c = Read(); if (c.GetProperty("cmd").GetString() == cmd) return c; } throw new Exception("Multiplayer check failed: expected " + cmd); }
+        void Write(object ev) { var bytes = JsonSerializer.SerializeToUtf8Bytes(ev); server.Write(BitConverter.GetBytes((uint)bytes.Length)); server.Write(bytes); server.Flush(); }
+        bool Until(Func<bool> condition) { for (var i = 0; i < 100; i++) { if (condition()) return true; Thread.Sleep(20); } return false; }
+        Expect("hello");
+        const string self = "76561190000000001", opponent = "76561190000000002", token = "synthetic-match-token_01";
+        Write(new { v = 1, ev = "ready", contract = 1, wire = 1, bridge = "test", steam = true, appId = 824270, self = new { peer = self, name = "Synthetic Host", initials = "SH" }, relay = "Current", features = new[] { "lobby", "p2p", "ugc", "xfer" }, maxChunk = 32768, xferWindow = 4 });
+        Check(Until(() => steam.Available), "The bridge is ready");
+        Check(!((IMultiplayerTransport)steam).BeginTournamentJoin("109775240000000001", "short") && !((IMultiplayerTransport)steam).BeginTournamentJoin("not-a-lobby", token), "Malformed lobby ids and tokens are refused locally");
+        ((IMultiplayerTransport)steam).PrepareTournament(token, opponent);
+        long now = 1_000_000;
+        var content = new FakeContent();
+        var locked = new LobbySettings(Scenario: content.Scenario("Synthetic A"), MaxPlayers: 2, Tournament: new TournamentLock("t_synthetic", "W1-1", "Final", 0, 7, [self, opponent]));
+        steam.Advertise(new LobbyCore(self, "Synthetic Host", locked, () => now).Snapshot());
+        var create = Expect("lobby.create");
+        Check(create.GetProperty("privacy").GetString() == "tournament" && create.GetProperty("token").GetString() == token && create.GetProperty("entrant").GetString() == opponent
+            && !create.GetProperty("data").ToString().Contains(token), "The host creates a tournament lobby for the opponent and the match token, never in lobby data");
+        Check(((IMultiplayerTransport)steam).BeginTournamentJoin("109775240000000001", token), "The opponent joins by id with the token");
+        var join = Expect("lobby.join");
+        Check(join.GetProperty("lobby").GetString() == "109775240000000001" && join.GetProperty("token").GetString() == token, "lobby.join carries the lobby id and the token");
     }
 
     static void TournamentRules()

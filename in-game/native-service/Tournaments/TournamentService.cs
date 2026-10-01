@@ -11,7 +11,7 @@ namespace AimMod.InGame.Tournaments;
 interface ITournamentLobby
 {
     LobbyResult HostTournamentGame(TournamentGameSpec spec);
-    LobbyResult JoinTournamentLobby(string token, string matchId);
+    LobbyResult JoinTournamentLobby(string lobbyId, string matchId, string? joinToken);
     TournamentLobbyState? TournamentLobby();
     string? TournamentPlayedScenario();
     byte[]? TournamentReplay(string lobbyMatch);
@@ -21,7 +21,7 @@ interface ITournamentLobby
 sealed class MultiplayerTournamentLobby(MultiplayerService service) : ITournamentLobby
 {
     public LobbyResult HostTournamentGame(TournamentGameSpec spec) => service.HostTournamentGame(spec);
-    public LobbyResult JoinTournamentLobby(string token, string matchId) => service.JoinTournamentLobby(token, matchId);
+    public LobbyResult JoinTournamentLobby(string lobbyId, string matchId, string? joinToken) => service.JoinTournamentLobby(lobbyId, matchId, joinToken);
     public TournamentLobbyState? TournamentLobby() => service.TournamentLobby();
     public string? TournamentPlayedScenario() => service.TournamentPlayedScenario();
     public byte[]? TournamentReplay(string lobbyMatch) => service.TournamentReplay(lobbyMatch);
@@ -148,7 +148,7 @@ sealed class TournamentService : IDisposable
                         var pool = active.Ruleset.Pool.FirstOrDefault(p => p.Name.Equals(game.Scenario, StringComparison.OrdinalIgnoreCase));
                         var spec = new TournamentGameSpec(active.TournamentId, m.Id, m.Label, game.Index, game.Scenario, game.TimeLimit > 0 ? game.TimeLimit : pool?.TimeLimit ?? 0,
                             long.TryParse(game.Seed, NumberStyles.None, CultureInfo.InvariantCulture, out var seed) && seed is >= 0 and <= uint.MaxValue ? seed : 0,
-                            active.Ruleset.Countdown, active.Ruleset.Spectators, active.OpponentSteamId, active.Opponent.Name, active.TournamentName);
+                            active.Ruleset.Countdown, active.Ruleset.Spectators, active.OpponentSteamId, active.Opponent.Name, active.TournamentName, active.MatchToken);
                         var result = lobby.HostTournamentGame(spec);
                         lock (gate) { var text = result.Ok ? "" : result.Message ?? ""; if (text != status) { status = text; Revision++; } }
                     }
@@ -156,7 +156,7 @@ sealed class TournamentService : IDisposable
                 }
                 else if (!inLobby && active.LobbyToken.Length > 0)
                 {
-                    var result = lobby.JoinTournamentLobby(active.LobbyToken, m.Id);
+                    var result = lobby.JoinTournamentLobby(active.LobbyToken, m.Id, active.MatchToken);
                     lock (gate) if (!result.Ok && result.Message != status) { status = result.Message ?? ""; Revision++; }
                 }
             }

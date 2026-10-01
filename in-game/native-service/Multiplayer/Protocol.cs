@@ -145,6 +145,13 @@ interface IMultiplayerTransport : IDisposable
     // Ask the bridge for Workshop items by title text and/or tag (ugc.query); the answer replaces
     // WorkshopItems. False when the bridge can't list items ("ugc-query" feature).
     bool QueryWorkshop(string? text, string? tag = null) => false;
+    // Tournament lobbies (multiplayer.md, "tournament lobbies"): the next lobby this
+    // host creates is an invisible Steam lobby that lets in only `entrant` (SteamID64)
+    // presenting `token`, the Hub's match token. Null clears it.
+    void PrepareTournament(string? token, string? entrant) { }
+    // Opponent: join a tournament lobby by id with the match token.
+    bool BeginTournamentJoin(string lobby, string token) => false;
+    static bool ValidTournamentToken(string? token) => token is { Length: >= 8 and <= 64 } && token.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-');
     IReadOnlyList<WorkshopItem> WorkshopItems => [];
     // Developer: AimModSteam's test avatar on or off, circling you or following
     // avatar-test-path.tsv (dev.avatar). False when the bridge can't ("dev-avatar" feature).
