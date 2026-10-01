@@ -438,6 +438,22 @@ int main()
         Check(!AvatarPath::Parse("AIMMOD_AVATAR_PATH_1\np\t0\t0\t0\t0\t0\t0\n"), "needs at least two rows");
         Check(!AvatarPath::Parse("AIMMOD_AVATAR_PATH_1\np\t0\tnan\t0\t0\t0\t0\np\t5\t0\t0\t0\t0\t0\n"), "refuses non-finite numbers");
     }
+    // Kick list in lobby data
+    {
+        const std::uint64_t other = Person + 1;
+        const auto text = FormatBanList({Person, Lobby, other});
+        Check(text == std::to_string(Person) + "," + std::to_string(other), "ban list keeps individual accounts");
+        const auto back = ParseBanList(text + ",x,," + std::to_string(Person));
+        Check(back.size() == 2 && back[0] == Person && back[1] == other, "ban list round-trips and ignores junk and duplicates");
+        std::vector<std::uint64_t> many;
+        for (std::uint64_t i = 0; i < 40; ++i) many.push_back(Person + i);
+        Check(FormatBanList(many).size() <= MaxLobbyValue && ParseBanList(FormatBanList(many)).size() >= 10, "ban list fits one lobby value");
+        Check(ParseBanList(std::string(MaxLobbyValue + 1, '1')).empty(), "oversized ban list rejected");
+    }
+    // Remote players never become game bots outside AimMod match scenarios.
+    Check(ghost::AvatarBotsAllowed("AimMod Match - Synthetic Arena - ab12cd34") && !ghost::AvatarBotsAllowed("Synthetic Tracking") &&
+              !ghost::AvatarBotsAllowed("") && !ghost::AvatarBotsAllowed("AimMod - Synthetic Map - CS Movement"),
+          "avatar bots only in match scenarios");
     // avatar-state.tsv from the service
     {
         const std::string id = std::to_string(Person);
@@ -449,6 +465,7 @@ int main()
         Check(!bridge::avatarstate::Parse("AIMMOD_AVATARS_1\t1\npeer\t" + id + "\t1\tally\t0\t0\t0\n"), "rejects an unknown side");
         Check(!bridge::avatarstate::Parse("AIMMOD_AVATARS_1\t1\npeer\t" + std::to_string(Lobby) + "\t1\tenemy\t100\t0\t0\n"), "rejects a non-player id");
         Check(!bridge::avatarstate::Parse("peer\t" + id + "\t1\tenemy\t100\t0\t0\n"), "requires the header");
+        Check(!bridge::avatarstate::Parse("AIMMOD_AVATARS_1\t9999999999999999999\n"), "rejects a sequence past INT64_MAX");
         auto empty = bridge::avatarstate::Parse("AIMMOD_AVATARS_1\t2\n");
         Check(empty && empty->peers.empty(), "an empty state file is valid");
     }

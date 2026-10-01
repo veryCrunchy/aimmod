@@ -2,6 +2,7 @@
 
 #include "Json.hpp"
 
+#include <charconv>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -36,13 +37,11 @@ namespace bridge::posefile
 
         std::optional<std::int64_t> Integer(std::string_view text)
         {
-            if (text.empty() || text.size() > 19) return std::nullopt;
+            if (text.empty() || text.size() > 19 || text.front() < '0' || text.front() > '9') return std::nullopt;
+            // from_chars refuses values past INT64_MAX (19 digits can overflow).
             std::int64_t v = 0;
-            for (const char c : text)
-            {
-                if (c < '0' || c > '9') return std::nullopt;
-                v = v * 10 + (c - '0');
-            }
+            const auto r = std::from_chars(text.data(), text.data() + text.size(), v);
+            if (r.ec != std::errc() || r.ptr != text.data() + text.size()) return std::nullopt;
             return v;
         }
 

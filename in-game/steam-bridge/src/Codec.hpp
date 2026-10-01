@@ -37,6 +37,12 @@ namespace bridge
     constexpr std::size_t MaxLobbyValue = 256;
     constexpr std::size_t MaxServiceLobbyKeys = 24;
 
+    // Kicked members in host-owned lobby data, so a new host (transfer or
+    // migration) keeps refusing them: comma-separated SteamID64s, as many as
+    // fit in one lobby value. Parsing keeps only individual accounts.
+    std::string FormatBanList(const std::vector<std::uint64_t>& ids);
+    std::vector<std::uint64_t> ParseBanList(std::string_view text);
+
     // Join strings: rich presence connect / launch switch value
     // "aimmod:<version>:<lobby id>".
     std::string JoinString(std::uint64_t lobby);        // "aimmod:1:<id>"

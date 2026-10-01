@@ -105,6 +105,10 @@ static class CoreFormatChecks
                 "malformed commands rejected before the game sees them");
             File.WriteAllText(Path.Combine(root, "core-command-result.tsv"), "AIMMOD_CORE_RESULT_1\t42\terror\tchallenge-active\tFinish%09it\n");
             Check(commands.Result() == new GameCommandResult(42, "error", "challenge-active", "Finish\tit"), "native result parsed");
+            File.WriteAllText(Path.Combine(root, "core-command-result.tsv"),
+                "AIMMOD_CORE_RESULT_1\t43\taccepted\tquitting\t\nAIMMOD_CORE_RESULT_1\t44\tdone\tstarted\t\nAIMMOD_CORE_RESULT_1\t43\tdone\tquit\t\n");
+            Check(commands.Results().Count == 3 && commands.Result()!.Code == "quit" && commands.ResultFor(44)!.Code == "started"
+                && commands.ResultFor(43)!.State == "done" && commands.ResultFor(45) is null, "several results in one write are all kept");
             File.WriteAllText(Path.Combine(root, "core-active.tsv"), $"AIMMOD_CORE_1\t0.1.0\t{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}\ttelemetry,replay,load,start\n");
             Check(GameCommands.Capabilities(root).Contains("load") && GameCommands.Capabilities(root).Contains("start"), "capabilities from the heartbeat");
 

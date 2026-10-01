@@ -205,7 +205,7 @@ sealed class WorkspaceHost : IAsyncDisposable
         });
         // Game control (multiplayer lobby, replay scenario load). AimModCore
         // validates again and refuses while a challenge runs.
-        app.MapGet(prefix + "/game-command", () => Results.Json(new { capabilities = GameCommands.Capabilities(outputFolder), result = gameCommands.Result() }));
+        app.MapGet(prefix + "/game-command", () => Results.Json(new { capabilities = GameCommands.Capabilities(outputFolder), result = gameCommands.Result(), results = gameCommands.Results() }));
         app.MapPost(prefix + "/game-command", async (HttpContext context) => {
             if (context.Request.Headers["X-AimMod-UI"] != "1" || context.Request.ContentLength is null or > 2048) return Results.StatusCode(403);
             if (!context.Request.HasJsonContentType()) return Results.StatusCode(415);
@@ -348,8 +348,8 @@ sealed class WorkspaceHost : IAsyncDisposable
             }
             return;
         }
-        var result = gameCommands.Result();
-        if (result is null || result.Sequence != sequence) return;
+        var result = gameCommands.ResultFor(sequence);
+        if (result is null) return;
         if (result.State == "error")
             startGate.Report(id, new(result.Code == "challenge-active" ? "challenge-active" : "scenario-mismatch",
                 result.Code == "challenge-active" ? "A challenge is running. Finish or quit it; then load the replay's scenario."

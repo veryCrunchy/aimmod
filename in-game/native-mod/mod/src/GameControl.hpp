@@ -51,6 +51,7 @@ namespace aimmod
         // its game thread (it imports rand/srand from the UCRT, like this
         // module). Seeded when the seeded scenario starts or a challenge
         // attempt in it starts, and before each target death/kill (respawn).
+        // A challenge outside "AimMod Match - " scenarios ends seeding.
         void OnAttemptStarted(const std::string& scenario);
         void OnSpawnEvent();
         // Called every engine frame on the game thread.
@@ -71,7 +72,7 @@ namespace aimmod
         game::Scene& m_scene;
         Output& m_output;
         game::Getter m_start, m_activate, m_persistentPlayType, m_playCurrent, m_localHash, m_onlineHash, m_cancel;
-        game::Getter m_timeDilation, m_mapScale, m_adaptiveOverride, m_adaptiveReset, m_weapon;
+        game::Getter m_timeDilation, m_mapScale, m_adaptiveOverride, m_adaptiveReset, m_weapon, m_loadWeapons;
         game::Getter m_refreshLocal, m_reloadProfiles;
         // quit-run: ScenarioManager:CancelChallenge (the game's cancel path,
         // which broadcasts ChallengeCanceled, not ChallengeComplete) and the
@@ -140,7 +141,7 @@ namespace aimmod
         struct Overrides
         {
             bool active{};
-            bool timeDilation{}, adaptive{};
+            bool timeDilation{}, adaptive{}, weapon{};
             std::optional<double> mapScaleBefore;
             std::string scenario;
         } m_overrides;
@@ -155,6 +156,8 @@ namespace aimmod
         };
         std::optional<Seeding> m_seeding;
         std::uint64_t m_tick{};
+        bool m_inChallenge{};
         void Reseed(std::uint32_t index, const char* why);
+        void StopSeeding(const char* why);
     };
 } // namespace aimmod

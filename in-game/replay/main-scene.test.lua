@@ -72,6 +72,9 @@ paused=true;s=M.create(owner);s.bind(meta);s.close();check(paused,'preexisting p
 s=M.create(owner);s.bind(meta);challenge=true;check(not pcall(s.frame,frame) and s.closed and paused and pc.target==target,'challenge transition aborts and never unpauses');challenge=false;paused=false
 s=M.create(owner);s.bind(meta);activeWorld=obj();check(not pcall(s.frame,frame) and s.closed and paused,'world transition aborts without unpausing new world');activeWorld=world
 pc.target=target;move=2;look=0
+s=M.create(owner);s.bind(meta);owner.dead=true;s.close();owner.dead=false
+check(move==2 and look==0 and pc.target==target,'input and camera handed back when the pause widget was destroyed mid-world');paused=false
+pc.target=target;move=2;look=0
 challenge=true;scenarioActive=true;paused=true
 local priorPauses=pauses
 check(M.verify(owner,meta).mapName==meta.mapName and pauses==priorPauses,'paused active challenge preflight does not cancel or change pause')
