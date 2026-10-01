@@ -13,13 +13,17 @@ sealed class ObsOverlayHost : IAsyncDisposable
     readonly Func<object> snapshot;
     readonly Func<object>? tournament;
     readonly Func<object?>? board;
+    readonly Action<WebApplication, string>? routes;
     WebApplication? app;
     public string? Url { get; private set; }
     // The multiplayer standings browser source (board.html), when a board source was given.
     public string? BoardUrl { get; private set; }
     public bool Available => Url is not null;
-    public ObsOverlayHost(string output, Func<object> snapshot, Func<object>? tournament = null, Func<object?>? board = null)
-    { config = Path.Combine(output, "obs-binding.json"); this.snapshot = snapshot; this.tournament = tournament; this.board = board; }
+    // routes: the overlay scenes' read-only routes (OverlayService.MapObs), on this listener's prefix.
+    public ObsOverlayHost(string output, Func<object> snapshot, Func<object>? tournament = null, Func<object?>? board = null, Action<WebApplication, string>? routes = null)
+    { config = Path.Combine(output, "obs-binding.json"); this.snapshot = snapshot; this.tournament = tournament; this.board = board; this.routes = routes; }
+    // The OBS listener's capability root: scene sources are <ObsBase>/scene?id=<scene>[&widget=<id>].
+    public string? ObsBase => Url is null ? null : Url[..Url.IndexOf("/overlay?", StringComparison.Ordinal)];
     // The tournament overlay for casters: bracket, the current match and its live scores.
     public string? TournamentUrl => Url is null ? null : Url[..Url.IndexOf("/overlay?", StringComparison.Ordinal)] + "/tournament";
     public async Task Start(CancellationToken token)
@@ -34,6 +38,7 @@ sealed class ObsOverlayHost : IAsyncDisposable
         LoopbackServer.UseGuards(app, binding.Token, context => HttpMethods.IsGet(context.Request.Method));
         MapAssets(app, prefix);
         app.MapGet(prefix + "/overlay-state", () => Results.Json(snapshot()));
+        routes?.Invoke(app, prefix);
         if (tournament is not null) app.MapGet(prefix + "/tournament-state", () => Results.Json(tournament()));
         if (board is not null)
         {
@@ -55,6 +60,10 @@ sealed class ObsOverlayHost : IAsyncDisposable
     internal static void MapAssets(WebApplication application, string prefix)
     {
         application.MapGet(prefix + "/overlay", () => Asset("AimMod.OverlayHtml", "text/html"));
+        // Scene and widget sources share the overlay page; it reads ?id= and ?widget=.
+        application.MapGet(prefix + "/scene", () => Asset("AimMod.OverlayHtml", "text/html"));
+        application.MapGet(prefix + "/overlay-model.js", () => Asset("AimMod.OverlayModel", "application/javascript"));
+        application.MapGet(prefix + "/overlay-widgets.js", () => Asset("AimMod.OverlayWidgets", "application/javascript"));
         application.MapGet(prefix + "/overlay.js", () => Asset("AimMod.OverlayScript", "application/javascript"));
         application.MapGet(prefix + "/overlay.css", () => Asset("AimMod.OverlayStyle", "text/css"));
         application.MapGet(prefix + "/tournament", () => Asset("AimMod.TournamentOverlayHtml", "text/html"));

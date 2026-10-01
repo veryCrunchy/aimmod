@@ -1,5 +1,73 @@
-*{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;padding:0;background:transparent!important;overflow:hidden;pointer-events:none;user-select:none;font-family:Roboto,Arial,sans-serif;color:#eef5f1}#hud{display:none;width:100%;height:100%;background:transparent}
-.hud-card{position:absolute;display:none;background:rgba(11,17,16,.88);border:1px solid rgba(62,90,77,.7);border-top:2px solid #27e4a1;border-radius:8px;padding:10px 14px;overflow:hidden}
-.hud-heading{display:flex;align-items:center;height:18px;margin-bottom:5px}.hud-brand{font-size:11px;font-weight:bold;color:#27e4a1;letter-spacing:1.2px;line-height:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.hud-brand span{font-size:10px;letter-spacing:.5px;color:#a7bab0;margin-left:7px}.hud-scenario{flex:1;min-width:0;font-size:11px;line-height:17px;color:#a7bab0;margin-left:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#stats-values,#vs-values{display:flex;flex-wrap:wrap;width:100%}.hud-value{display:block;flex-shrink:0;min-width:0;width:25%;height:37px;padding:2px 9px 2px 0}.hud-value span{display:block;color:#a7bab0;font-size:10px;line-height:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.hud-value strong{display:block;font-size:15px;line-height:18px;font-weight:500;white-space:nowrap}.hud-value.major strong{font-size:20px;font-weight:600;color:#eef5f1}.hud-narrow .hud-value{width:50%}
-#versus .hud-brand{margin-bottom:4px}#vs-values .hud-value{width:50%;height:35px}#vs-values .hud-value.major strong{font-size:18px}.hud-note{font-size:10px;line-height:13px;color:#a7bab0;margin-top:5px}.hud-track{height:3px;background:#30433a;border-radius:2px;overflow:hidden;margin-top:5px}#vs-progress{height:3px;background:#27e4a1;width:0}.hud-value.ahead strong{color:#27e4a1}.hud-value.behind strong{color:#f0b45a}
+/* AimMod overlay widgets (overlay-widgets.js). Shared by the in-game HUD view,
+   the OBS browser sources and the editor preview. Sizes are em: a widget's
+   font scale sets its root font size (16px at 1.0). Colours come from the
+   scene theme as inline styles. Gameface-safe: flex, no grid, gap or calc. */
+*{box-sizing:border-box}
+html,body{width:100%;height:100%;margin:0;padding:0;overflow:hidden}
+body.am-scene-page{background:transparent!important;pointer-events:none;user-select:none;font-family:Roboto,Arial,sans-serif;color:#eef5f1}
+#scene{position:absolute;left:0;top:0;width:1920px;height:1080px;transform-origin:0 0;overflow:hidden}
+#scene.hidden{display:none}
+.amw{position:absolute;display:block;overflow:hidden;font-family:Roboto,Arial,sans-serif;line-height:1.2;white-space:nowrap;transition:opacity .25s}
+.amw-head{display:flex;flex-direction:row;align-items:center;height:1.25em;margin-bottom:.5em}
+.amw-eyebrow{flex-shrink:0;font-size:.75em;font-weight:700;letter-spacing:.14em;text-transform:uppercase;line-height:1.6em}
+.amw-eyebrow-side{flex:1;min-width:0;margin-left:.9em;font-size:.8125em;font-weight:500;line-height:1.5em;text-align:right;overflow:hidden;text-overflow:ellipsis}
+.amw-label{font-size:.75em;font-weight:500;line-height:1.35em;margin-bottom:.2em;overflow:hidden;text-overflow:ellipsis}
+.amw-value{display:flex;flex-direction:row;align-items:baseline;font-size:1.75em;font-weight:600;line-height:1.15em;letter-spacing:-.01em;overflow:hidden}
+.amw-value.big{font-size:2.25em}
+.amw-num{display:block;overflow:hidden;text-overflow:ellipsis}
+.amw-unit{display:block;flex-shrink:0;font-size:.5em;font-weight:500;letter-spacing:0;margin-left:.3em}
+.amw-tiles{display:flex;flex-direction:row;align-items:stretch;width:100%}
+.amw-tile{display:block;flex:1 1 auto;min-width:0;padding:0 .9em}
+.amw-tile:first-child{padding-left:0}.amw-tile:last-child{padding-right:0}
+.amw-tiles.many .amw-value{font-size:1.5em}
+.amw-rows{display:flex;flex-direction:column;width:100%;margin-top:.55em}
+.amw-tiles+.amw-rows{margin-top:.8em}
+.amw-row{display:flex;flex-direction:row;align-items:center;min-height:2.1em;padding:.3em 0}
+.amw-row-label{flex-shrink:0;width:38%;font-size:.8125em;font-weight:500;overflow:hidden;text-overflow:ellipsis}
+.amw-row-value{display:flex;flex-direction:row;align-items:center;justify-content:flex-end;flex:1;min-width:0;font-size:.9375em;font-weight:600;text-align:right;overflow:hidden}
+.amw-row-value span{display:block;overflow:hidden;text-overflow:ellipsis}
+.amw-swatch{flex-shrink:0;width:.7em;height:.7em;border-radius:.35em;margin-right:.5em;border:1px solid #000000}
+.amw-bar{position:relative;height:.375em;border-radius:.2em;margin:.75em 0 .6em;overflow:hidden}
+.amw-bar-fill{position:absolute;left:0;top:0;height:100%;border-radius:.2em;transition:width .3s}
+.amw-bar-mark{position:absolute;top:0;width:2px;height:100%;margin-left:-1px;transition:left .3s}
+.amw-pill{display:block;flex-shrink:0;margin-left:.6em;padding:0 .55em;height:1.5em;line-height:1.5em;border-radius:.75em;font-size:.75em;font-weight:700;letter-spacing:.02em}
+.amw-pace{display:block}.amw-pace-main{display:flex;flex-direction:row;align-items:center}
+.amw-split{display:flex;flex-direction:row;width:100%}.amw-split-cell{flex:1;min-width:0}.amw-split-cell.right{text-align:right}
+.amw-mid{font-size:1.125em;font-weight:600;overflow:hidden;text-overflow:ellipsis}
+.amw-note{font-size:.8125em;line-height:1.4em;margin-top:.45em;white-space:normal}
+.amw-empty{font-size:.875em;line-height:1.45em;white-space:normal;padding:.2em 0}
+.amw-title{font-size:1.25em;font-weight:600;line-height:1.3em;margin-bottom:.5em;overflow:hidden;text-overflow:ellipsis}
+.amw-title.big{font-size:1.625em;margin-bottom:0}
+.amw-canvas{display:block}
+.amw-center{display:flex;justify-content:center}
+.amw-caption{font-size:.8125em;font-weight:500;text-align:center;margin-top:.5em;overflow:hidden;text-overflow:ellipsis}
+.amw-gear{font-size:1em;font-weight:600;white-space:normal;line-height:1.25em}
+.amw-keys{display:flex;flex-direction:column;align-items:center}
+.amw-keyrow{display:flex;flex-direction:row;justify-content:center;margin-bottom:.4em}
+.amw-key{width:2.5em;height:2.5em;line-height:2.35em;margin:0 .18em;border:1px solid #30433a;border-radius:.45em;font-size:1em;font-weight:700;text-align:center;transition:background .06s}
+.amw-key.wide{width:4.1em;font-size:.8125em;height:2.9em;line-height:2.75em}
+.amw-run{display:flex;flex-direction:row;align-items:center;min-height:2.1em;padding:.3em 0}
+.amw-run-name{flex:1;min-width:0;font-size:.875em;font-weight:500;overflow:hidden;text-overflow:ellipsis}
+.amw-run-time{flex-shrink:0;width:4.6em;font-size:.75em;text-align:right;margin-right:.6em}
+.amw-run-score{flex-shrink:0;width:4.4em;font-size:1em;font-weight:600;text-align:right}
+.amw-delta{display:block;flex-shrink:0;width:4em;font-size:.8125em;font-weight:600;text-align:right}
+.amw-run .amw-pill{width:3.4em;margin-left:.6em;text-align:center}
+.amw-ticker{display:flex;flex-direction:row;align-items:center}
+.amw-ticker-name{flex:1;min-width:0;font-size:1.125em;font-weight:500;overflow:hidden;text-overflow:ellipsis}
+.amw-ticker-score{flex-shrink:0;font-size:1.5em;font-weight:600;margin-left:.6em}
+.amw-versus{display:flex;flex-direction:row;align-items:center;margin-bottom:.4em}
+.amw-versus-name{flex:1;min-width:0;font-size:1.375em;font-weight:600;overflow:hidden;text-overflow:ellipsis}.amw-versus-name.right{text-align:right}
+.amw-versus-score{flex-shrink:0;font-size:2em;font-weight:700;margin:0 .6em}
+.amw-profile{display:flex;flex-direction:row;align-items:center}
+.amw-avatar{flex-shrink:0;width:2.75em;height:2.75em;line-height:2.75em;border-radius:1.375em;font-size:1.125em;font-weight:700;text-align:center;margin-right:.75em}
+.amw-profile-text{flex:1;min-width:0}
+.amw-profile-name{font-size:1.25em;font-weight:600;overflow:hidden;text-overflow:ellipsis}
+.amw-profile-sub{font-size:.8125em;font-weight:500;margin-top:.15em;overflow:hidden;text-overflow:ellipsis}
+.amw-text{font-size:1.75em;font-weight:600;line-height:1.25em;white-space:normal}
+.amw-image{width:100%;background-repeat:no-repeat;background-position:center center}
+.amw.vertical .amw-row-label{width:50%}
+.amw.compact .amw-head{margin-bottom:.35em}
+.amw.compact .amw-value{font-size:1.5em}.amw.compact .amw-value.big{font-size:1.875em}
+.amw.compact .amw-row{min-height:1.8em;padding:.2em 0}
+.amw.compact .amw-rows{margin-top:.35em}
+.amw-standings{font-size:.875em;white-space:normal}.amw-standings .sb{width:100%}
