@@ -34,7 +34,7 @@
 .mp-mode-pick{display:flex;flex-direction:row;flex-wrap:wrap;margin:0 -5px 10px}
 .mp-mode{display:block;width:25%;padding:0 5px 10px;text-align:left;background:none;border:0}
 .mp-mode strong{display:block;padding:12px 14px 0;font-size:14px;font-weight:600;color:#eef5f1;background:#1d2b26;border:1px solid #30433a;border-bottom:0;border-radius:8px 8px 0 0}
-.mp-mode span{display:block;height:58px;padding:4px 14px 12px;font-size:12px;line-height:1.45;color:#a7bab0;background:#1d2b26;border:1px solid #30433a;border-top:0;border-radius:0 0 8px 8px;overflow:hidden}
+.mp-mode span{display:block;height:66px;padding:4px 14px 12px;font-size:12px;line-height:1.45;color:#a7bab0;background:#1d2b26;border:1px solid #30433a;border-top:0;border-radius:0 0 8px 8px;overflow:hidden}
 .mp-mode:hover strong,.mp-mode:hover span{background:#263a32}
 .mp-mode.on strong,.mp-mode.on span{background:#173b2f;border-color:#2c6b52}.mp-mode.on strong{color:#27e4a1}
 .mp-mode-pick.compact .mp-mode{width:50%}.mp-mode-pick.compact .mp-mode span{height:40px}
@@ -212,7 +212,7 @@
 .mp-round-score{display:block;flex-shrink:0;font-weight:700;color:#eef5f1}
 @media(max-width:1250px){.mp-mode{width:50%}.mp-hero-side{width:300px}.mp-main{width:58%}.mp-side{width:42%}}
 @media(max-width:1100px){.mp-row{display:block;margin:0}.mp-col,.mp-main,.mp-side,.mp-half{width:100%;padding:0}.mp-hero{display:block}.mp-hero-side{width:auto;border-left:0;border-top:1px solid #22302a}.mp-lobby-head{display:block}.mp-room{margin-top:14px}}
-@media(max-height:760px){.mp-hero-main{padding-top:20px}.mp-hero-main h2{font-size:22px;line-height:28px}.mp-mode span{height:48px}.mp-count{width:140px;height:140px;margin:12px 0}.mp-count-num{font-size:72px;line-height:80px}.mp-chat-log{height:160px}}
+@media(max-height:760px){.mp-hero-main{padding-top:20px}.mp-hero-main h2{font-size:22px;line-height:28px}.mp-mode span{height:62px}.mp-count{width:140px;height:140px;margin:12px 0}.mp-count-num{font-size:72px;line-height:80px}.mp-chat-log{height:160px}}
 /* Content download */
 .mp-download{padding:16px 20px 12px;border-color:#2c6b52}.mp-download.warn{border-color:#5a4524}.mp-download.ok{border-color:#2c6b52;background:#132520}
 .mp-download-head{display:flex;flex-direction:row;align-items:flex-start;margin-bottom:8px}
@@ -273,7 +273,7 @@
 /* Cosmetics */
 .mp-cos-setting{padding:6px 20px;margin-bottom:16px}
 .mp-cos-group{font-size:14px;font-weight:600;margin:6px 0 10px}
-.mp-cos-cell{width:25%}
+.mp-port-cell.mp-cos-cell{width:25%}
 .mp-cos-art{display:block;height:120px;background:#101916;text-align:center}
 .mp-cos-preview{display:block;width:160px;height:120px;margin:0 auto}
 .mp-cos.on{border-color:#2c6b52}

@@ -33,8 +33,9 @@ sealed class MultiplayerSimulation(Func<long> clock, ContentLibrary library, Fun
         var scenario = library.Scenarios.Count > 0 ? library.Scenarios[random.Next(Math.Min(library.Scenarios.Count, 8))] : null;
         var settings = new LobbySettings(Mode: LobbyModes.Rounds, Rounds: 3, MaxPlayers: 6, Spectators: true, Privacy: LobbyPrivacy.Public,
             Scenario: scenario is null ? null : library.Scenario(scenario.Name));
-        var hostId = NextId();
-        var core = new LobbyCore(hostId, NextName(), settings, clock, code: code, hostSimulated: true);
+        var hostName = NextName();
+        var hostId = "sim-" + hostName.ToLowerInvariant();
+        var core = new LobbyCore(hostId, hostName, settings, clock, code: code, hostSimulated: true);
         bots[hostId] = NewBot(hostId);
         Add(core);
         core.Join(selfId, selfName);
@@ -46,13 +47,18 @@ sealed class MultiplayerSimulation(Func<long> clock, ContentLibrary library, Fun
 
     public string? Add(LobbyCore core, bool missingMap = false, string? name = null)
     {
-        var id = NextId();
-        if (!core.Join(id, name ?? NextName(), simulated: true).Ok) return null;
+        // Stable ids by name, so simulated players show up as rivals across matches.
+        var who = name ?? NextName();
+        var id = core.Members.Any(m => m.Id == "sim-" + who.ToLowerInvariant()) ? NextId() : "sim-" + who.ToLowerInvariant();
+        if (!core.Join(id, who, simulated: true).Ok) return null;
         var bot = NewBot(id); bot.MissingMap = missingMap;
         bots[id] = bot;
         core.SetLink(id, "simulated", bot.Ping);
         return id;
     }
+
+    // Each new lobby meets the same simulated players again (Nova, Kestrel, ...), so they become rivals.
+    public void NewLobby() => nameIndex = 0;
 
     public IReadOnlyList<IncomingInvite> TakeInvites() { var list = invites.ToArray(); invites.Clear(); return list; }
 
