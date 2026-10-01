@@ -959,6 +959,18 @@ namespace bridge
                     Result(*id, false, "invalid", "peer must be another member and rate 1..60.");
                     return;
                 }
+                // From a direct (friend) stream: close it, or the next spectate.stop
+                // would only look for the direct link and leave both running.
+                if (m_watchingDirect)
+                {
+                    CloseDirect(m_watching, "switched");
+                    if (m_watchingDirect) // the link was already gone
+                    {
+                        m_watching = 0;
+                        m_watchingDirect = false;
+                        ResetSpectator();
+                    }
+                }
                 if (m_watching && m_watching != *peer)
                 {
                     // Switch: stop the old stream first.
