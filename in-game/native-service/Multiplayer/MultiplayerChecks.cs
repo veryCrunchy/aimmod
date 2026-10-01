@@ -487,8 +487,15 @@ static class MultiplayerChecks
         var claims = feed.Take(shots, "m", 1, 250, seen);
         Check(claims.Count == 1 && claims[0] is { Seq: 8, T: 1350, Head: true, TargetX: 500, Yaw: 91 } && feed.Take(shots, "m", 1, 250, seen).Count == 0, "Shot rows become hit claims on the host clock; misses and repeats are skipped");
         Check(ShotFeed.Parse("AIMMOD_SHOTS_1\t1\nshot\t1\t5\t0\t0\t0\t0\t0\t0\t0\t0\nshot\t2\t4\t0\t0\t0\t0\t0\t0\t0\t0\n") is null && ShotFeed.Parse("AIMMOD_SHOTS_1\t1\nshot\t1\t5\t0\t0\t0\t0\t0\t9\t0\t0\n") is null, "Shot sequences must increase and weapon slots are 0-7");
-        var state = PlayState.Format(4, "m 1", new CombatPlayerView("me", 42.5, true, 3, 1, null, 900, 10, 0), new CombatEvent(7, "damage", 800, "me", "them", 20, true, 42.5, null), "them");
-        Check(state == "AIMMOD_PLAY_1\t4\nmatch\tm%201\nself\t1\t42.5\t100\t0\t900\nhit\t7\t20\t1\tthem\n", "Play state: absolute health, life, respawn and protection, plus the last hit taken");
+        var state = PlayState.Format(4, "AimMod Match - X", new CombatPlayerView("me", 42.5, true, 3, 1, null, 900, 10, 0), new CombatEvent(7, "damage", 800, "me", "76561198000000001", 20, true, 42.5, null, null, [0.6, 0.8, 0]), 800, 0);
+        Check(state == "AIMMOD_PLAYSTATE_1\t4\nmatch\tAimMod Match - X\nhealth\t42.5\t100\nalive\t1\nrespawnAt\t0\nprotected\t1\nhit\t7\t76561198000000001\t20\t1\t0.6\t0.8\t0\n", "Play state in AimModCore's format: exact scenario, health, life, respawn, protection and the last hit with its direction");
+        var down = PlayState.Format(5, "AimMod Match - X", new CombatPlayerView("me", 0, false, 3, 2, 5000, 900, 10, 0), null, 4000, 250);
+        Check(down.Contains("alive\t0\n") && down.Contains("respawnAt\t4750\n") && down.Contains("protected\t0\n") && !down.Contains("hit\t"), "A dead player's respawn time is converted to the local clock");
+        // AimModCore's shot rows: origin, unit direction, slot, target, headshot, gameHit; a session header; tag rows.
+        var core2 = ShotFeed.Parse("AIMMOD_SHOTS_1\t9\tsess-1\nshot\t2000\t3\t0\t0\t164\t0\t1\t0\t1\t9\t0\t1\ntag\t9\ts-0011223344556677\n");
+        Check(core2 is { Session: "sess-1" } c2 && c2.Shots.Single() is { Seq: 3, Weapon: 1, Target: 9 } sh && Math.Abs(sh.Yaw - 90) < 1e-9 && Math.Abs(sh.Pitch) < 1e-9, "AimModCore's shot rows (direction vectors) read as pitch and yaw");
+        var feed2 = new ShotFeed(Path.GetTempPath());
+        Check(feed2.Take(core2, "m", 1, 0, seen).Count == 1 && feed2.Take(ShotFeed.Parse("AIMMOD_SHOTS_1\t10\tsess-2\nshot\t2100\t1\t0\t0\t164\t1\t0\t0\t0\t9\t0\t1\n"), "m", 1, 0, seen).Count == 1, "A new AimModCore session restarts the shot sequence");
 
         // A deathmatch on the host: frag limit ends it, native score frames are refused.
         var (core, clock, advance) = Lobby();
@@ -589,8 +596,8 @@ static class MultiplayerChecks
         var reflex = "Name=x\nMapScale=4.0\n\n[Map Data]\nreflex map version 8\nglobal\n\tentity\n\t\ttype WorldSpawn\n\tentity\n\t\ttype PlayerSpawn\n\t\tVector3 position 1.0 2.0 3.0\n\t\tVector3 angles 45.0 0.0 0.0\n\t\tBool8 teamB 0\n\tentity\n\t\ttype PlayerSpawn\n\t\tVector3 position 5 6 7\n";
         var fromReflex = MatchScenario.Spawns(reflex);
         Check(fromReflex.Count == 2 && fromReflex[0] == new SpawnPoint(12, 4, 8, 45, 1) && fromReflex[1] == new SpawnPoint(28, 20, 24, 0, 3), "Reflex spawn points: (a, b, c) loads as (c, a, b) times MapScale, teamB 0 keeps team 1 only");
-        var state = PlayState.Format(1, "m", new CombatPlayerView("me", 100, true, 0, 1, null, 0, 0, 0), null, null, new CombatEvent(9, "respawn", 5, "me", null, 0, false, 100, null, [1, 2, 3, 90]));
-        Check(state.EndsWith("spawn\t9\t1\t2\t3\t90\n", StringComparison.Ordinal), "Play state carries the host's spawn for AimModCore's teleport");
+        var state = PlayState.Round(1, "AimMod Match - X", new CombatEvent(9, "respawn", 5, "me", null, 0, false, 100, null, [1, 2, 3, 90]), ["phase\tlive\t0\t1\t123"]);
+        Check(state == "AIMMOD_ROUND_1\t1\nmatch\tAimMod Match - X\nspawn\t9\t1\t2\t3\t90\nphase\tlive\t0\t1\t123\n", "round-state.tsv carries the host's spawn (and the CS round) for AimModCore");
     }
 
     // Phase 3: CS rules, economy, armour, buying, plant and defuse, halves, and the lobby side.

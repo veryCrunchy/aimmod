@@ -666,39 +666,53 @@ protection and lifesteal. Clients only claim hits.
   view (≤ 4 per second; the last 16 events).
 - Each client writes its own state for AimModCore to apply.
 
-**Contracts for AimModCore** (requested through the coordinator; until they
-exist the mode runs but can't hurt anyone in game):
+**Contracts with AimModCore.** AimModCore implemented the first two; their
+exact shapes are in `native-mod/DESIGN.md` ("Match play"), and the service
+follows them:
 
-```
-self-shots.tsv   (written while self-pose.request is fresh; latest 64 shots; temp file + rename)
-AIMMOD_SHOTS_1\t<file sequence>
-shot\t<unix ms>\t<shot seq, increasing>\t<x>\t<y>\t<z>\t<pitch>\t<yaw>\t<weapon slot 0-7>\t<hit target id from self-pose target rows, 0 = miss>\t<headshot 0/1>
-```
+- `self-shots.tsv`: the shots AimModCore publishes while
+  `self-shots.request` is fresh; the service touches that file every 2 s
+  during a match.
+  - Header `AIMMOD_SHOTS_1\t<publish seq>\t<session>`. A new session restarts
+    the shot sequence.
+  - Rows `shot\t<ms>\t<seq>\t<origin x y z>\t<unit direction x y z>\t<slot>\t<target>\t<headshot>\t<gameHit>`.
+    The service turns the direction into pitch and yaw and claims every shot
+    with a target.
+  - `tag` rows are allowed.
+  - The earlier pitch/yaw row shape still reads.
+- `play-state.tsv`: written by the service on change and at least every
+  second, because AimModCore drops it after 5 s. Unknown rows reject the
+  whole file, so it holds only:
 
-`self-shots.tsv` comes from polling the local weapon's `ShotsFiredThisSession`
-and `ShotsHitThisSession`, plus `CharactersHit` and `bAnyHeadshots`, at frame
-rate (the shot hooks don't fire, 9.1). The ray is the camera at that frame.
+  ```
+  AIMMOD_PLAYSTATE_1\t<seq>
+  match\t<the match scenario's exact name>
+  health\t<current>\t<max>
+  alive\t<0/1>
+  respawnAt\t<local unix ms, 0 = none>
+  protected\t<0/1>
+  hit\t<event id>\t<attacker member id>\t<damage>\t<headshot 0/1>\t<dx>\t<dy>\t<dz>   (the shot's direction, from the host)
+  ```
 
-```
-play-state.tsv   (written by the service on change; absolute and idempotent)
-AIMMOD_PLAY_1\t<sequence>
-match\t<%-escaped match id>
-self\t<alive 0/1>\t<health>\t<max health>\t<respawn at unix ms, 0 = none>\t<spawn protected until unix ms>
-hit\t<event id>\t<amount>\t<headshot 0/1>\t<attacker member id>      (last damage taken, for the native hit effect)
-spawn\t<event id>\t<x>\t<y>\t<z>\t<yaw>      (where the host respawned this player; teleport once per event id)
-```
+  AimModCore applies it only in that scenario, in freeplay:
+  - `protected`: invulnerability;
+  - a new hit: `HandleDamage`, for the native effect, never lethal by itself;
+  - `alive` 1 → 0: `OnCharacterKilled`, and `SetRespawnTimer` to
+    `respawnAt`;
+  - `alive` 0 → 1: `Respawn`;
+  - health follows `SetHealth`.
+- **New, requested from AimModCore:** `round-state.tsv`, so `play-state.tsv`
+  stays as AimModCore parses it. It carries what doesn't fit there:
 
-How AimModCore applies `play-state.tsv`:
+  ```
+  AIMMOD_ROUND_1\t<seq>
+  match\t<scenario>
+  spawn\t<id>\t<x>\t<y>\t<z>\t<yaw>                                  (teleport once per id: host-chosen respawns, CS round starts)
+  phase\t<freeze|live|planted|end|over>\t<frozen 0/1>\t<buy window 0/1>\t<phase ends, local unix ms>   (CS)
+  loadout\t<primary profile or ->\t<pistol profile or ->\t<armour>\t<helmet 0/1>\t<kit 0/1>          (CS)
+  ```
 
-- Only while armed: an AimMod match scenario in freeplay, never a challenge.
-- It reconciles the local character to the file:
-  - each new `hit` event: `HandleDamage(amount, attacker avatar)`, for the
-    native knockback, aim punch and death camera, then `SetHealth(health)`;
-  - `alive=0`: let the native death run, or call `Death`;
-  - `alive` back to 1: `Respawn`, then `SetHealth(max)`.
-
-  The host stays the authority: any drift is corrected to the file's
-  values.
+  It's rewritten on change and every second.
 
 **Checks:** 32 self-tests cover the rules, every rejection reason, headshots,
 death, frag, respawn, spawn protection, the host-rewind fallback, lifesteal,
@@ -733,7 +747,7 @@ the arena.
     teamA/teamB flags.
 
   On respawn it picks the team-allowed spawn farthest from the nearest living
-  opponent. The respawn event carries it, and `play-state.tsv` gets a `spawn`
+  opponent. The respawn event carries it, and `round-state.tsv` gets a `spawn`
   line that AimModCore teleports to once per event id. Without spawn points,
   the game's own respawn stands. The coordinate conversion follows map-port's
   calibration and needs a live check.
@@ -1106,13 +1120,9 @@ preset):
   - the bomb timer or round clock;
   - the numbered buy menu while open;
   - any key clashes.
-- **Contract additions to `play-state.tsv` for AimModCore:**
-
-  ```
-  round\t<freeze|live|planted|end|over>\t<frozen 0/1>\t<buy window 0/1>\t<phase ends, local unix ms>
-  loadout\t<primary profile or ->\t<pistol profile or ->\t<armour>\t<helmet 0/1>\t<kit 0/1>
-  spawn\t<id>\t<x>\t<y>\t<z>\t<yaw>          (one per CS round: teleport at the round start)
-  ```
+- **For AimModCore:** CS uses the `phase`, `loadout` and per-round `spawn`
+  lines of `round-state.tsv` (6.2.1). Health, life and hits stay in
+  `play-state.tsv`.
 
   While frozen: `SetIgnoreMoveInput(true)`, with looking allowed. The loadout
   goes to slots 0 and 1 (`SetWeaponProfileByString`, "-" empties a slot). At

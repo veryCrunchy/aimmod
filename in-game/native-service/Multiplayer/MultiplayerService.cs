@@ -1687,13 +1687,14 @@ sealed partial class MultiplayerService : IDisposable
 
     // Combat modes: the same camera stream, plus hit claims from AimModCore's shot
     // feed, and the host's verdict for this player written back for AimModCore.
-    ShotFeed? shotFeed; string? shotKey;
+    ShotFeed? shotFeed; string? shotKey; long playWrittenAt, roundWrittenAt, roundSequence; string? lastRoundState;
     long playSequence; string? lastPlayState;
     void StreamCombat(MatchSnapshot match)
     {
         if (outputFolder is null) return;
         StreamTracking(match);
         shotFeed ??= new ShotFeed(outputFolder);
+        shotFeed.Request(clock());
         if (shotKey != match.Id + "#" + match.Round) { shotKey = match.Id + "#" + match.Round; shotFeed.Reset(); }
         if (match.Phase == MatchPhases.Live && poseTracker is not null)
         {
@@ -1709,14 +1710,26 @@ sealed partial class MultiplayerService : IDisposable
         {
             var lastHit = view.Events.LastOrDefault(e => e.Member == SelfId && e.Kind is "damage");
             var lastSpawn = view.Events.LastOrDefault(e => e.Member == SelfId && e.Kind is "respawn");
-            var extra = CsPlayLines(match);
+            var extra = CsPlayLines(match).ToList();
             if (match.Cs is { } csv && csv.Spawns?.GetValueOrDefault(SelfId) is { Length: 4 } rs)
                 lastSpawn = new CombatEvent(1_000_000 + csv.Round, "respawn", 0, SelfId, null, 0, false, 100, null, rs); // one teleport per CS round
-            var body = PlayState.Format(0, match.Id, self, lastHit, lastHit?.Attacker, lastSpawn, extra);
-            if (body != lastPlayState)
+            // The match scenario's exact name: AimModCore applies play state only there.
+            var scenario = plan is { } pl && pl.Key == match.Id + "#" + match.Round ? pl.Scenario : Current is { } cur ? MatchScenario.Name(cur.Settings) : match.Scenario;
+            var hostNow = clock() + HostOffset();
+            var now = clock();
+            var body = PlayState.Format(0, scenario, self, lastHit, hostNow, HostOffset());
+            // AimModCore drops a play state not rewritten for 5 s: rewrite on change and every second.
+            if (body != lastPlayState || now - playWrittenAt >= 1000)
             {
-                lastPlayState = body;
-                try { AtomicFile.WriteText(Path.Combine(outputFolder, "play-state.tsv"), PlayState.Format(++playSequence, match.Id, self, lastHit, lastHit?.Attacker, lastSpawn, extra)); }
+                lastPlayState = body; playWrittenAt = now;
+                try { AtomicFile.WriteText(Path.Combine(outputFolder, "play-state.tsv"), PlayState.Format(++playSequence, scenario, self, lastHit, hostNow, HostOffset())); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            }
+            var round = PlayState.Round(0, scenario, lastSpawn, extra);
+            if (round != lastRoundState || now - roundWrittenAt >= 1000)
+            {
+                lastRoundState = round; roundWrittenAt = now;
+                try { AtomicFile.WriteText(Path.Combine(outputFolder, "round-state.tsv"), PlayState.Round(++roundSequence, scenario, lastSpawn, extra)); }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             }
             WriteAvatarState(match, view, self);

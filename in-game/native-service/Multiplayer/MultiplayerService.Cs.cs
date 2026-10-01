@@ -35,15 +35,15 @@ sealed partial class MultiplayerService
 
     long HostOffset() => core is null && hostPeer is not null ? clocks.GetValueOrDefault(hostPeer)?.Offset ?? 0 : 0;
 
-    // play-state.tsv lines for CS (contract in game-modes.md 6.6.1):
-    //   round\t<phase>\t<frozen 0/1>\t<buy open 0/1>\t<phase ends, local unix ms>
+    // round-state.tsv lines for CS (contract in game-modes.md 6.6.1):
+    //   phase\t<phase>\t<frozen 0/1>\t<buy open 0/1>\t<phase ends, local unix ms>
     //   loadout\t<primary profile or ->\t<pistol profile or ->\t<armour>\t<helmet 0/1>\t<kit 0/1>
     IEnumerable<string> CsPlayLines(MatchSnapshot match)
     {
         if (match.Cs is not { } cs || cs.Players.FirstOrDefault(p => p.Member == SelfId) is not { } me) yield break;
         var hostNow = clock() + HostOffset();
         var buyWindow = cs.Phase == "freeze" || (cs.Phase == "live" && cs.LiveAt is { } live && hostNow < live + CsRules.BuyMs);
-        yield return "round\t" + cs.Phase + "\t" + (cs.Phase == "freeze" ? 1 : 0) + "\t" + (buyWindow ? 1 : 0) + "\t" + (cs.PhaseEndsAt - HostOffset());
+        yield return "phase\t" + cs.Phase + "\t" + (cs.Phase == "freeze" ? 1 : 0) + "\t" + (buyWindow ? 1 : 0) + "\t" + (cs.PhaseEndsAt - HostOffset());
         string Profile(string? id) => CsRules.Find(id)?.Combat.Name ?? "-";
         yield return "loadout\t" + Profile(me.Primary) + "\t" + Profile(me.Secondary) + "\t" + Math.Round(me.Armor).ToString(CultureInfo.InvariantCulture) + "\t" + (me.Helmet ? 1 : 0) + "\t" + (me.Kit ? 1 : 0);
     }

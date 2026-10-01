@@ -155,6 +155,9 @@ static class LobbyRules
     static readonly HashSet<string> Keys = ["mode", "scenario", "mapOverride", "maxPlayers", "spectators", "rounds", "firstTo",
         "timeLimit", "weapon", "movement", "character", "targetSpeed", "targetSize", "privacy", "countdown", "lateJoin", "autoStart", "voting", "fragLimit", "lifesteal", "requireFire", "halfRounds", "overtime"];
 
+    // A member id AimModCore accepts in play-state.tsv: [A-Za-z0-9_-]{1,64}.
+    public static bool IsStreamSafe(string? id) => id is { Length: > 0 and <= 64 } && id.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_');
+
     public static string CleanName(string? name, string fallback)
     {
         var text = new string((name ?? "").Where(c => !char.IsControl(c)).ToArray()).Trim();
