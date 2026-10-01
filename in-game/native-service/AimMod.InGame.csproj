@@ -31,5 +31,5 @@
     <EmbeddedResource Include="../replay/native-browser.js" LogicalName="AimMod.NativeReplayBrowser" />
   </ItemGroup>
   <ItemGroup><EmbeddedResource Include="../ui/history-import.js" LogicalName="AimMod.HistoryImport" /></ItemGroup>
-  <ItemGroup><EmbeddedResource Include="../ui/multiplayer.js" LogicalName="AimMod.MultiplayerScript" /><EmbeddedResource Include="../ui/multiplayer.css" LogicalName="AimMod.MultiplayerStyle" /></ItemGroup>
+  <ItemGroup><EmbeddedResource Include="../ui/multiplayer.js" LogicalName="AimMod.MultiplayerScript" /><EmbeddedResource Include="../ui/multiplayer.css" LogicalName="AimMod.MultiplayerStyle" /><EmbeddedResource Include="../ui/notify.html" LogicalName="AimMod.NotifyPage" /><EmbeddedResource Include="../ui/notify.js" LogicalName="AimMod.NotifyScript" /><EmbeddedResource Include="../ui/notify.css" LogicalName="AimMod.NotifyStyle" /></ItemGroup>
 </Project>

@@ -99,8 +99,9 @@ sealed record MatchSnapshot(string Id, string Phase, string Mode, string Scenari
 
 sealed record ChatLine(long Id, string? From, string Name, string Text, long At, bool System);
 
+// ReadyCheck: when the host last asked everyone to ready up (host clock), while it is open.
 sealed record LobbySnapshot(int V, string Id, string Code, long Revision, string HostId, LobbySettings Settings,
-    IReadOnlyList<LobbyMember> Members, MatchSnapshot? Match, IReadOnlyList<ChatLine> Chat, long Now);
+    IReadOnlyList<LobbyMember> Members, MatchSnapshot? Match, IReadOnlyList<ChatLine> Chat, long Now, long? ReadyCheck = null);
 
 sealed record StartBlocker(string Code, string Text);
 

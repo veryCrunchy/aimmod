@@ -27,7 +27,7 @@ sealed class MultiplayerService : IDisposable
     readonly Func<LocalRun> liveRun;
     readonly Func<IReadOnlyList<Run>> completedRuns;
     readonly Func<string?> accountName;
-    readonly string? historyPath;
+    readonly string? historyPath, outputFolder;
     readonly MatchScenarioStore? scenarios;
     readonly Dictionary<string, ClockSync> clocks = new();
     readonly List<RecentMatch> recent = [];
@@ -58,6 +58,7 @@ sealed class MultiplayerService : IDisposable
     {
         this.transport = transport; this.library = library; this.game = game; this.liveRun = liveRun; this.completedRuns = completedRuns; this.accountName = accountName;
         this.clock = clock ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        outputFolder = output;
         historyPath = output is null ? null : Path.Combine(output, "multiplayer-matches.json");
         if (output is not null && library.ScenarioFolder is { } folder) scenarios = new MatchScenarioStore(folder, Path.Combine(output, "multiplayer-scenarios.json"));
         LoadHistory();
@@ -146,7 +147,9 @@ sealed class MultiplayerService : IDisposable
                         return transport.InviteFriend(invite.Token, core.Snapshot()) ? LobbyResult.Success : LobbyResult.Fail("invite-unavailable", "Couldn’t let them in.");
                     }
                     if (Current is not null || hostPeer is not null || joinPendingSince is not null) Leave("left");
-                    return JoinBy(invite.Token, invite: true);
+                    var accepted = JoinBy(invite.Token, invite: true);
+                    if (accepted.Ok) RequestPanel();
+                    return accepted;
                 case "join-friend":
                     var target = Friends().FirstOrDefault(f => f.Id == Text("friend"));
                     if (target is null || !target.Joinable || target.Code is null) return LobbyResult.Fail("invalid", "That friend isn’t in a lobby you can join.");
@@ -199,6 +202,89 @@ sealed class MultiplayerService : IDisposable
     }
 
     IReadOnlyList<FriendEntry> Friends() => Simulation is not null && !transport.Available ? Simulation.Friends(clock()) : transport.Friends();
+
+    // ---- notifications outside the AimMod panel ----------------------------
+
+    public string HotkeyName { get; set; } = "F7";
+    (GameNotice Notice, long Until)? flash;
+    string? lastNoticeJson;
+    public bool HotkeyArmed { get { lock (gate) return Current is not null || invites.Count > 0; } }
+    public GameNotice? Notice() { lock (gate) return ComputeNotice(clock()); }
+
+    GameNotice? ComputeNotice(long now)
+    {
+        var key = HotkeyName;
+        if (invites.FirstOrDefault(i => now - i.At < 120_000) is { } invite)
+        {
+            var from = LobbyRules.CleanName(invite.FromName, "A friend");
+            if (invite.Kind == "request")
+                return new GameNotice("inv-" + invite.Id, "invite", from + " wants to join", "Press " + key + " to open AimMod and let them in.", key, null, "popup");
+            var what = invite.Summary is { } s ? " to " + (LobbyModes.All.Contains(s.Mode) ? ModeLabel(s.Mode) : "a match") + (s.Scenario is { Length: > 0 } sc ? " on " + LobbyRules.CleanName(sc, "a scenario") : "") : "";
+            return new GameNotice("inv-" + invite.Id, "invite", from + " invited you" + what, "Join, or press " + key + " to join.", key, null, "popup") { Invite = invite.Id };
+        }
+        if (Current is not { } lobby) return flash is { } f && now < f.Until ? f.Notice : null;
+        var me = lobby.Members.FirstOrDefault(m => m.Id == SelfId);
+        if (lobby.Match is { } match && match.Players.Contains(SelfId) && match.Phase is MatchPhases.Countdown && match.StartsAt is { } at)
+        {
+            var seconds = (int)Math.Max(0, Math.Ceiling((at - now) / 1000.0));
+            var round = match.Round > 1 ? "Round " + match.Round + " starting" : "Match starting";
+            var how = plan is { } p && p.Key == match.Id + "#" + match.Round ? p.Message : "Get ready.";
+            return new GameNotice("cd-" + match.Id + "-" + match.Round, "countdown", round + " in " + seconds, LobbyRules.CleanName(match.Scenario, "Scenario") + " · " + how, null, seconds, "countdown");
+        }
+        if (lobby.ReadyCheck is { } asked && now - asked < LobbyCore.ReadyCheckMs && me is { Role: MemberRoles.Player, Ready: false } && lobby.HostId != SelfId)
+        {
+            var host = lobby.Members.FirstOrDefault(m => m.Id == lobby.HostId)?.Name ?? "The host";
+            var (scenario, map, profiles) = LocalContent(lobby.Settings);
+            var ok = scenario is ContentStates.Ok or ContentStates.None && map is ContentStates.Ok or ContentStates.None && profiles is not (ContentStates.Missing or ContentStates.Mismatch);
+            return new GameNotice("rc-" + asked, "ready", host + " is starting", ok ? "Press " + key + " to ready up." : "You’re missing the content. Press " + key + " to open the lobby.", key, null, "popup");
+        }
+        return flash is { } fl && now < fl.Until ? fl.Notice : null;
+    }
+
+    // F7: ready up when the host is waiting on you, otherwise open the lobby in AimMod.
+    public void Hotkey()
+    {
+        lock (gate)
+        {
+            var now = clock();
+            var notice = ComputeNotice(now);
+            if (notice?.Kind == "ready" && notice.Body.Contains("ready up", StringComparison.Ordinal) && Command("ready", JsonSerializer.SerializeToElement(new { ready = true })).Ok)
+            {
+                flash = (new GameNotice("ok-" + now, "info", "You’re ready", "The host can start now.", null, null, "click"), now + 3000);
+                return;
+            }
+            if (notice?.Invite is { } id && invites.Any(i => i.Id == id))
+            {
+                var accept = Act("accept-invite", JsonSerializer.SerializeToElement(new { id }));
+                if (!accept.Ok) flash = (new GameNotice("err-" + now, "info", "Couldn’t join", accept.Message ?? "Try the invite again.", null, null, "click"), now + 4000);
+                return;
+            }
+            RequestPanel();
+        }
+    }
+
+    static string ModeLabel(string mode) => mode switch { LobbyModes.Race => "a score race", LobbyModes.Duel => "a duel", LobbyModes.Rounds => "free-for-all", _ => "practice" };
+
+    // Ask AimModNativeUI to open the AimMod panel on the Multiplayer page. It waits for
+    // the main menu, and never interrupts a running scenario: the request stays until then.
+    void RequestPanel()
+    {
+        if (outputFolder is null) return;
+        try { AtomicFile.WriteText(Path.Combine(outputFolder, "open-workspace.request"), "multiplayer"); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        flash = (new GameNotice("open-" + clock(), "info", "Opening the lobby", "AimMod opens when you’re in the menu. Press Esc to get there.", null, null, "click"), clock() + 4000);
+    }
+
+    // The notice file AimModNativeUI polls; rewritten only when it changes.
+    void PublishNotice()
+    {
+        if (outputFolder is null) return;
+        var notice = ComputeNotice(clock());
+        var json = notice is null ? "{\"version\":1,\"active\":false}" : JsonSerializer.Serialize(new { version = 1, active = true, notice.Id, notice.Kind, notice.Title, notice.Body, notice.Key, notice.Countdown, notice.Sound, notice.Invite, interactive = notice.Invite is not null }, Protocol.Json);
+        if (json == lastNoticeJson) return;
+        try { AtomicFile.WriteText(Path.Combine(outputFolder, "multiplayer-notify.json"), json); lastNoticeJson = json; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
 
     // ---- content download ------------------------------------------------
 
@@ -365,8 +451,20 @@ sealed class MultiplayerService : IDisposable
         if (Simulation is null) return;
         foreach (var invite in Simulation.TakeInvites()) AddInvite(invite);
     }
+    // A join the player chose in Steam ("Join Game", an accepted invite, or a launch
+    // from one) happens right away; only invites that arrive unasked wait in a popup.
     void AddInvite(IncomingInvite invite)
     {
+        if (invite.Kind is "invite" or "launch")
+        {
+            transport.DismissJoin();
+            if (!invite.Compatible) { notice = ("error", LobbyRules.CleanName(invite.FromName, "Your friend") + " is on a different AimMod version. Both of you need the latest AimMod.", clock()); return; }
+            if (Current is not null || hostPeer is not null || joinPendingSince is not null) Leave("left");
+            var joined = JoinBy(invite.Token, invite: true);
+            if (joined.Ok) RequestPanel();
+            else notice = ("error", joined.Message ?? "Couldn’t join that lobby.", clock());
+            return;
+        }
         invites.RemoveAll(i => i.Id == invite.Id || clock() - i.At > 120_000);
         invites.Add(invite);
         if (invites.Count > 5) invites.RemoveAt(0);
@@ -424,6 +522,7 @@ sealed class MultiplayerService : IDisposable
             ReportContent(force: false);
             PumpContent();
             PrepareMatchScenario();
+            PublishNotice();
             PlanRound();
             TrackLocalRun();
             Remember();
@@ -867,7 +966,7 @@ sealed class MultiplayerService : IDisposable
                 var generated = MatchScenario.Needed(lobby.Settings) && lobby.Settings.Scenario is not null;
                 lobbyView = new
                 {
-                    lobby.Id, lobby.Code, lobby.Revision, lobby.HostId, lobby.Settings, lobby.Members, lobby.Match, lobby.Chat,
+                    lobby.Id, lobby.Code, lobby.Revision, lobby.HostId, lobby.Settings, lobby.Members, lobby.Match, lobby.Chat, lobby.ReadyCheck,
                     self = SelfId, isHost = lobby.HostId == SelfId, authority = core is not null ? "local" : "remote",
                     blockers = LobbyRules.StartBlockers(lobby), content = new { scenario, map, profiles },
                     simulated = lobby.Members.Any(m => m.Simulated),
@@ -883,6 +982,7 @@ sealed class MultiplayerService : IDisposable
                 now = now + offset,
                 transport = new { kind = transport.Kind, online = transport.Available },
                 simulation = Simulation is not null,
+                hotkey = HotkeyName,
                 capabilities = new { invite = transport.Available, friends = friendsSource != "unavailable", gameLoad = caps.Contains("load"), gameStart = caps.Contains("start") },
                 self = new { id = SelfId, name = LocalName() },
                 joining = (hostPeer is not null && mirror is null) || joinPendingSince is not null ? new { since = joinPendingSince ?? connectAt, stage = hostPeer is null ? "lobby" : "host" } : null,
@@ -911,6 +1011,10 @@ sealed class MultiplayerService : IDisposable
     {
         routes.MapGet(prefix + "/multiplayer", (string? part) =>
             part == "library" ? Results.Json(LibraryView(), Protocol.Json) : Results.Json(View(), Protocol.Json));
+        // Read-only notice for the always-on in-game layer (notify.html).
+        routes.MapGet(prefix + "/multiplayer-notify", () => Notice() is { } n
+            ? Results.Json(new { active = true, n.Id, n.Kind, n.Title, n.Body, n.Key, n.Countdown, n.Sound, n.Invite }, Protocol.Json)
+            : Results.Json(new { active = false }, Protocol.Json));
         routes.MapPost(prefix + "/multiplayer", async (HttpRequest request, CancellationToken token) =>
         {
             if (request.Headers["X-AimMod-UI"] != "1") return Results.StatusCode(403);
@@ -930,7 +1034,9 @@ sealed class MultiplayerService : IDisposable
         });
     }
 
-    public void Dispose() { timer?.Dispose(); lock (gate) Leave("closed"); transport.Dispose(); }
+    // Disposed with the service (the hotkey reader).
+    public IDisposable? Companion { get; set; }
+    public void Dispose() { timer?.Dispose(); Companion?.Dispose(); lock (gate) Leave("closed"); transport.Dispose(); }
 }
 
 static class WindowsClipboard

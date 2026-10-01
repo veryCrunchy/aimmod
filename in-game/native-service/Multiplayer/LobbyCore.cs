@@ -79,7 +79,9 @@ sealed class LobbyCore
     }
 
     public IReadOnlyList<LobbyMember> Members => members.Select(m => m.View()).ToArray();
-    public LobbySnapshot Snapshot() => new(Protocol.Version, Id, Code, Revision, HostId, Settings, Members, MatchView(), chat.ToArray(), clock());
+    public const long ReadyCheckMs = 30_000;
+    long? readyCheck;
+    public LobbySnapshot Snapshot() => new(Protocol.Version, Id, Code, Revision, HostId, Settings, Members, MatchView(), chat.ToArray(), clock(), readyCheck);
 
     public LobbyResult Join(string id, string name, bool simulated = false)
     {
@@ -221,6 +223,14 @@ sealed class LobbyCore
                 var role = spectate ? MemberRoles.Spectator : MemberRoles.Player;
                 if (member.Role != role) { member.Role = role; member.Ready = false; Changed(); }
                 return LobbyResult.Success;
+            case "ready-check":
+                // The host wants to start: ping everyone who isn't ready (shown outside the AimMod panel too).
+                if (!IsHost(from)) return HostOnly();
+                if (match is { Phase: not MatchPhases.Final }) return LobbyResult.Fail("in-match", "A match is already running.");
+                if (members.All(m => m.Id == HostId || m.Role != MemberRoles.Player || m.Ready)) return LobbyResult.Fail("ready", "Everyone is already ready.");
+                readyCheck = clock();
+                System(member.Name + " wants to start. Ready up!");
+                return LobbyResult.Success;
             case "start":
                 if (!IsHost(from)) return HostOnly();
                 var blockers = LobbyRules.StartBlockers(Snapshot());
@@ -316,6 +326,8 @@ sealed class LobbyCore
         var now = clock();
         foreach (var m in members.Where(m => m.LostAt is not null).ToArray())
             if (now - m.LostAt!.Value >= (IsHost(m.Id) ? HostGraceMs : MemberGraceMs)) Leave(m.Id, "timeout");
+        // A ready check closes once everyone is ready, after 30 s, or when the match starts.
+        if (readyCheck is { } asked && (now - asked > ReadyCheckMs || match is { Phase: not MatchPhases.Final } || members.All(m => m.Id == HostId || m.Role != MemberRoles.Player || m.Ready))) { readyCheck = null; Changed(); }
         if (match is null) return;
         if (match.Phase == MatchPhases.Countdown && now >= match.StartsAt)
         {
@@ -429,7 +441,7 @@ sealed class LobbyCore
                 // Everyone else must reconnect to the new host, so they start as reconnecting.
                 Connection = m.Id == newHostId ? Connections.Connected : Connections.Reconnecting, Link = m.Id == newHostId ? "local" : m.Link,
                 JoinedAt = m.JoinedAt, Simulated = m.Simulated, LostAt = m.Id == newHostId ? null : clock() });
-        core.chat.AddRange(snapshot.Chat); core.chatId = snapshot.Chat.Count > 0 ? snapshot.Chat.Max(c => c.Id) : 0;
+        core.chat.AddRange(snapshot.Chat); core.chatId = snapshot.Chat.Count > 0 ? snapshot.Chat.Max(c => c.Id) : 0; core.readyCheck = snapshot.ReadyCheck;
         if (snapshot.Match is { } ms)
         {
             var match = new Match { Id = ms.Id, Settings = snapshot.Settings, Phase = ms.Phase, Round = ms.Round, StartsAt = ms.StartsAt, EndsAt = ms.EndsAt, NextAt = ms.NextAt,

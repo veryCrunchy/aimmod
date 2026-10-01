@@ -83,6 +83,9 @@ static class MultiplayerChecks
         Check(core.Apply("p2", "settings", Patch(new { mode = "practice" }), content).Code == "not-host", "Only the host changes settings");
         Check(core.Apply("p2", "kick", J(new { member = "p3" }), content).Code == "not-host" && core.Apply("p2", "start", default, content).Code == "not-host", "Only the host kicks and starts");
         Check(core.Apply("p2", "ready", J(new { ready = true }), content).Code == "content", "Ready needs the content first");
+        Check(core.Apply("p2", "ready-check", default, content).Code == "not-host" && core.Apply("host", "ready-check", default, content).Ok && core.Snapshot().ReadyCheck is not null, "Only the host asks everyone to ready up");
+        advance(LobbyCore.ReadyCheckMs + 1); core.Tick();
+        Check(core.Snapshot().ReadyCheck is null, "A ready check expires");
         ReadyAll(core);
         Check(core.Members.Where(m => m.Id != "host").All(m => m.Ready), "Members ready up once their content is checked");
         core.Apply("host", "settings", Patch(new { privacy = "public" }), content);
@@ -307,15 +310,15 @@ static class MultiplayerChecks
         Check(bAfter.GetProperty("isHost").GetBoolean() && cAfter.GetProperty("hostId").GetString() == "peer-b", "Host migration over the transport");
         Check(cAfter.GetProperty("members").EnumerateArray().First(m => m.GetProperty("id").GetString() == "peer-c").GetProperty("connection").GetString() == Connections.Connected, "The remaining member reconnects to the new host");
         // Incoming invites are shown and can be declined.
-        net.Peers["peer-c"].Inbox.Enqueue(new TransportEvent("steam", TransportEvent.InviteReceived, Invite: new IncomingInvite("i1", "Synthetic Host", "invite", "token", new LobbySummary(LobbyModes.Duel, "Synthetic A", 1, 2), now)));
+        net.Peers["peer-c"].Inbox.Enqueue(new TransportEvent("steam", TransportEvent.InviteReceived, Invite: new IncomingInvite("i1", "Synthetic Host", "incoming", "token", new LobbySummary(LobbyModes.Duel, "Synthetic A", 1, 2), now)));
         Pump();
         Check(View(c).GetProperty("invites").GetArrayLength() == 1 && c.Act("decline-invite", J(new { id = "i1" })).Ok && View(c).GetProperty("invites").GetArrayLength() == 0, "Invites can be declined");
         Check(View(b).GetProperty("friends").GetProperty("items").GetArrayLength() == 1 && b.Act("invite-friend", J(new { friend = "f1" })).Ok && !b.Act("invite-friend", J(new { friend = "steam:123" })).Ok, "Friends come from the transport; unknown ids are refused");
-        // Accepting a Steam invite joins asynchronously: the host arrives as a Connected event.
+        // A Steam join (invite accepted in Steam) joins asynchronously: the host arrives as a Connected event.
         var d = Make("peer-d");
         net.Peers["peer-d"].Inbox.Enqueue(new TransportEvent("peer-b", TransportEvent.InviteReceived, Invite: new IncomingInvite("i2", "Synthetic Host", "invite", net.Codes.Single().Key, null, now)));
         Pump();
-        Check(d.Act("accept-invite", J(new { id = "i2" })).Ok && View(d).GetProperty("joining").ValueKind == JsonValueKind.Object, "Accepting an invite shows the joining state");
+        Check(View(d).GetProperty("lobby").ValueKind == JsonValueKind.Object && View(d).GetProperty("invites").GetArrayLength() == 0, "A join the player chose in Steam happens without another prompt");
         Pump();
         Check(View(d).GetProperty("lobby").GetProperty("members").GetArrayLength() == 3 && View(d).GetProperty("joining").ValueKind == JsonValueKind.Null, "The invited player lands in the host's lobby");
         Check(b.Act("kick", J(new { member = "peer-d" })).Ok && ((MemoryTransport)net.Peers["peer-b"]).HostActions.Contains("kick peer-d"), "Kicks are mirrored to the Steam lobby");
@@ -619,10 +622,25 @@ static class MultiplayerChecks
         service.Act("sim", J(new { op = "host-leave" }));
         Run(200);
         Check(View().GetProperty("lobby").GetProperty("hostId").GetString() != null && View().GetProperty("lobby").GetProperty("chat").EnumerateArray().Any(c => c.GetProperty("text").GetString()!.Contains("now the host")), "The simulated host leaving migrates the lobby");
+        // Launched from a Steam invite: join straight away and ask for the panel.
+        service.Act("leave", default);
         service.Act("sim", J(new { op = "launch" }));
+        Run(200);
+        Check(View().GetProperty("lobby").ValueKind == JsonValueKind.Object && View().GetProperty("invites").GetArrayLength() == 0 && File.ReadAllText(Path.Combine(output, "open-workspace.request")) == "multiplayer", "A Steam launch join is automatic and opens the Multiplayer page");
+        // An unasked invite waits in a popup; F7 joins it.
+        service.Act("leave", default);
+        service.Act("sim", J(new { op = "invite" }));
+        Run(200);
         var invite = View().GetProperty("invites")[0];
-        Check(invite.GetProperty("kind").GetString() == "launch" && invite.GetProperty("summary").GetProperty("mode").GetString() == LobbyModes.Duel, "A launch-from-invite join is offered with a lobby summary");
-        Check(service.Act("accept-invite", J(new { id = invite.GetProperty("id").GetString() })).Ok && View().GetProperty("lobby").ValueKind == JsonValueKind.Object, "Accepting an invite joins that lobby");
+        Check(invite.GetProperty("kind").GetString() == "incoming" && service.Notice() is { Kind: "invite", Invite: not null } n && n.Title.Contains("invited you to a duel"), "An incoming invite shows a popup naming the mode and scenario");
+        Check(File.ReadAllText(Path.Combine(output, "multiplayer-notify.json")).Contains("\"interactive\":true"), "The notice file tells the game layer the popup is clickable");
+        service.Hotkey();
+        Run(200);
+        Check(View().GetProperty("lobby").ValueKind == JsonValueKind.Object && View().GetProperty("invites").GetArrayLength() == 0, "The hotkey joins the invite");
+        // The host asks everyone to ready up; members see it outside the panel and F7 readies them.
+        service.Act("sim", J(new { op = "add" }));
+        Run(300);
+        Check(MultiplayerHotkey.Parse("F9") == (0x78, "F9") && MultiplayerHotkey.Parse("Q") == (0x76, "F7") && MultiplayerHotkey.Parse("F13") == (0x76, "F7"), "The hotkey is F1 to F12, F7 by default");
         Check(MultiplayerService.SimulationRequested(["--multiplayer-sim"], output), "The simulation can be requested explicitly");
         File.WriteAllText(Path.Combine(output, "multiplayer-dev.json"), "{\"simulation\":true}");
         Check(MultiplayerService.SimulationRequested([], output), "The developer setting turns the simulation on");

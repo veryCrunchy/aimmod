@@ -19,8 +19,15 @@ static class MultiplayerHosting
         // The AimModSteam bridge is used as soon as it answers on its pipe; until then
         // (or without the bridge) lobbies stay on this machine.
         IMultiplayerTransport transport = args is null || list.Contains("--no-steam") ? new OfflineTransport() : new SteamTransport();
-        return new MultiplayerService(transport, library, args is null ? new NoGameControl() : new CoreGameControl(output), () => FromLive(live()), runs, () => AccountLabel(hub), output,
+        var service = new MultiplayerService(transport, library, args is null ? new NoGameControl() : new CoreGameControl(output), () => FromLive(live()), runs, () => AccountLabel(hub), output,
             MultiplayerService.SimulationRequested(list, output));
+        if (args is not null && !list.Contains("--no-hotkey"))
+        {
+            var hotkey = new MultiplayerHotkey(output, () => service.HotkeyArmed, service.Hotkey);
+            service.HotkeyName = hotkey.KeyName; service.Companion = hotkey;
+            hotkey.Start();
+        }
+        return service;
     }
 
     internal static LocalRun FromLive(LiveOverlaySnapshot s)
@@ -43,5 +50,9 @@ static class MultiplayerHosting
     {
         routes.MapGet(prefix + "/multiplayer.js", () => Results.Stream(typeof(MultiplayerHosting).Assembly.GetManifestResourceStream("AimMod.MultiplayerScript")!, "application/javascript"));
         routes.MapGet(prefix + "/multiplayer.css", () => Results.Stream(typeof(MultiplayerHosting).Assembly.GetManifestResourceStream("AimMod.MultiplayerStyle")!, "text/css"));
+        // The always-on notice layer AimModNativeUI shows outside the AimMod panel.
+        routes.MapGet(prefix + "/notify", () => Results.Stream(typeof(MultiplayerHosting).Assembly.GetManifestResourceStream("AimMod.NotifyPage")!, "text/html"));
+        routes.MapGet(prefix + "/notify.js", () => Results.Stream(typeof(MultiplayerHosting).Assembly.GetManifestResourceStream("AimMod.NotifyScript")!, "application/javascript"));
+        routes.MapGet(prefix + "/notify.css", () => Results.Stream(typeof(MultiplayerHosting).Assembly.GetManifestResourceStream("AimMod.NotifyStyle")!, "text/css"));
     }
 }
