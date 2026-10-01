@@ -11,8 +11,13 @@
     {id:'score-race',label:'Score race',short:'Race',text:'Same scenario, best score wins.'},
     {id:'duel',label:'Duel',short:'Duel',text:'One on one, first to the set round wins.'},
     {id:'ffa-rounds',label:'Free-for-all',short:'FFA',text:'Several rounds, points for placing.'},
-    {id:'practice',label:'Practice together',short:'Practice',text:'Side by side, live scores, no ranking.'}
+    {id:'practice',label:'Practice together',short:'Practice',text:'Side by side, live scores, no ranking.'},
+    {id:'tracking-duel',label:'Tracking duel',short:'Tracking',text:'Take turns tracking. Most time on target wins.'},
+    {id:'deathmatch',label:'Deathmatch',short:'DM',text:'Everyone against everyone, first to the frag limit.'},
+    {id:'vampiric',label:'Vampiric 1v1',short:'Vampiric',text:'One on one. Damage heals you, health drains.'},
+    {id:'instagib',label:'Instagib',short:'Instagib',text:'Every hit kills. First to the frag limit.'}
   ];
+  function combat(m){return m==='deathmatch'||m==='vampiric'||m==='instagib';}
   var PRIVACY={friends:'Friends only',invite:'Invite only',public:'Public (room code)'};
   var PRESETS=[{id:'default',label:'Scenario default'},{id:'cs',label:'Counter-Strike-like'},{id:'valorant',label:'Valorant-like'},{id:'apex',label:'Apex-like'},{id:'quake',label:'Quake-like'},{id:'custom',label:'Custom'}];
   var AVATAR=['mint','cyan','amber','violet','rose'];
@@ -771,8 +776,9 @@
     kv('Mode',mode(s.mode).label);
     kv('Scenario',s.scenario?safe(s.scenario.name,'Scenario'):'Not chosen');
     kv('Map',s.mapOverride?safe(s.mapOverride.name,'Map')+(s.mapOverride.source==='ported'?' (ported)':''):'Scenario map');
-    kv(s.mode==='duel'?'First to':s.mode==='score-race'?'Attempts':'Rounds',s.mode==='duel'?F.number(s.firstTo,0)+' wins':s.mode==='practice'?'As many as you like':F.number(s.rounds,0));
-    kv('Time limit',s.timeLimit?F.duration(s.timeLimit):'Scenario ('+F.duration(s.scenario?s.scenario.timeLimit:60)+')');
+    if(combat(s.mode)){kv('Frag limit',F.number(s.fragLimit||(s.mode==='vampiric'?10:s.mode==='instagib'?25:20),0)+' kills');if(s.mode==='vampiric')kv('Lifesteal',F.number(typeof s.lifesteal==='number'?s.lifesteal:50,0)+' %');}
+    else kv(s.mode==='duel'?'First to':s.mode==='score-race'?'Attempts':s.mode==='tracking-duel'?'Rounds each':'Rounds',s.mode==='duel'?F.number(s.firstTo,0)+' wins':s.mode==='practice'?'As many as you like':F.number(s.rounds,0));
+    kv(combat(s.mode)?'Match length':s.mode==='tracking-duel'?'Round length':'Time limit',s.timeLimit?F.duration(s.timeLimit):'Scenario ('+F.duration(s.scenario?s.scenario.timeLimit:60)+')');
     kv('Loadout',profileText(s.weapon,'weapon')+' · '+profileText(s.movement,'movement'));
     if(s.character&&s.character.preset!=='default')kv('Character',profileText(s.character,'character'));
     if(s.targetSpeed!==1||s.targetSize!==1)kv('Targets','Speed '+multiplier(s.targetSpeed)+' · size '+multiplier(s.targetSize));
@@ -835,14 +841,24 @@
     if(picker==='scenario')sc.appendChild(pickerList('scenario',s));
     sc.appendChild(contentTable(lobby));
     left.appendChild(sc);
-    // Players, rounds and time
+    // Players, rounds and time. The settings that define the chosen mode (frag limit,
+    // lifesteal, rounds each, match or round length) are basics; the rest is More options.
     var pl=section('Players and rounds');
-    pl.appendChild(settingRow('Max players',s.mode==='duel'?'A duel is always one against one.':'Including you.',stepper(s.maxPlayers,2,8,1,function(v){return F.number(v,0);},function(v){setting('maxPlayers',v);},s.mode==='duel','max players')));
+    var oneOnOne=s.mode==='duel'||s.mode==='tracking-duel'||s.mode==='vampiric';
+    pl.appendChild(settingRow('Max players',oneOnOne?'Always one against one in this mode.':'Including you.',stepper(s.maxPlayers,2,8,1,function(v){return F.number(v,0);},function(v){setting('maxPlayers',v);},oneOnOne,'max players')));
     if(s.mode==='duel')pl.appendChild(settingRow('First to','Round wins needed to take the duel.',stepper(s.firstTo,1,7,1,function(v){return F.number(v,0)+(v===1?' win':' wins');},function(v){setting('firstTo',v);},false,'first to')));
+    else if(combat(s.mode)){
+      var fragDefault=s.mode==='vampiric'?10:s.mode==='instagib'?25:20;
+      pl.appendChild(settingRow('Frag limit','First to this many kills wins.',stepper(s.fragLimit||fragDefault,1,100,1,function(v){return F.number(v,0);},function(v){setting('fragLimit',v);},false,'frag limit')));
+      if(s.mode==='vampiric')pl.appendChild(settingRow('Lifesteal','How much of the damage you deal heals you.',stepper(typeof s.lifesteal==='number'?s.lifesteal:50,0,200,5,function(v){return F.number(v,0)+' %';},function(v){setting('lifesteal',v);},false,'lifesteal')));
+    }
+    else if(s.mode==='tracking-duel')pl.appendChild(settingRow('Rounds each','How many times each player tracks. Roles swap every round.',stepper(s.rounds,1,5,1,function(v){return F.number(v,0);},function(v){setting('rounds',v);},false,'rounds')));
     else if(s.mode==='practice')pl.appendChild(settingRow('Rounds','Practice runs until you end it.',node('span','mp-muted','Unlimited')));
     else pl.appendChild(settingRow(s.mode==='score-race'?'Attempts':'Rounds',s.mode==='score-race'?'Each player’s best attempt counts.':'Each round gives points by placing.',stepper(s.rounds,1,s.mode==='score-race'?5:10,1,function(v){return F.number(v,0);},function(v){setting('rounds',v);},false,'rounds')));
     var limits=[{id:'default',label:'Scenario'},{id:'30',label:'30 s'},{id:'60',label:'60 s'},{id:'90',label:'90 s'},{id:'120',label:'2 min'}];
-    pl.appendChild(settingRow('Time limit',overrides?'The scenario’s own is '+F.duration(s.scenario?s.scenario.timeLimit:60)+'.':locked,segmented(limits,s.timeLimit?String(s.timeLimit):'default',function(id){setting('timeLimit',id==='default'?null:Number(id));},!overrides,'time limit')));
+    if(combat(s.mode))pl.appendChild(settingRow('Match length','Ends here if nobody reaches the frag limit.',segmented([{id:'180',label:'3 min'},{id:'300',label:'5 min'},{id:'600',label:'10 min'}],String(s.timeLimit||300),function(id){setting('timeLimit',Number(id));},false,'match length')));
+    else if(s.mode==='tracking-duel')pl.appendChild(settingRow('Round length','Seconds of tracking per round.',segmented([{id:'10',label:'10 s'},{id:'15',label:'15 s'},{id:'20',label:'20 s'},{id:'30',label:'30 s'}],String(s.timeLimit||10),function(id){setting('timeLimit',Number(id));},false,'round length')));
+    else pl.appendChild(settingRow('Time limit',overrides?'The scenario’s own is '+F.duration(s.scenario?s.scenario.timeLimit:60)+'.':locked,segmented(limits,s.timeLimit?String(s.timeLimit):'default',function(id){setting('timeLimit',id==='default'?null:Number(id));},!overrides,'time limit')));
     right.appendChild(pl);
     // Privacy
     var pv=section('Who can join');
@@ -964,7 +980,7 @@
   }
 
   // Match screens ------------------------------------------------------------
-  function roundLabel(match){return match.mode==='duel'?'Round '+match.round+' · first to '+match.firstTo:match.totalRounds?'Round '+match.round+' of '+match.totalRounds:'Run '+match.round;}
+  function roundLabel(match){if(match.mode==='tracking-duel')return 'Round '+match.round+' of '+match.totalRounds+(match.attacker?' · '+(match.attacker===(view&&view.lobby&&view.lobby.self)?'you track':nameOf(match.attacker)+' tracks'):'');return match.mode==='duel'?'Round '+match.round+' · first to '+match.firstTo:match.totalRounds?'Round '+match.round+' of '+match.totalRounds:'Run '+match.round;}
   function matchScreen(page,lobby){
     if(lobby.spectate)page.appendChild(add(banner('info','Spectating '+safe(lobby.spectate.name)+' · '+statLine(lobby.spectate.score)+'. Their view plays in the pause menu.'),actions(button('Stop',function(){act('spectate-stop');},'compact quiet'))));
     var match=lobby.match;
@@ -976,8 +992,8 @@
   }
   function planBox(lobby){
     var r=lobby.round;if(!r)return null;
-    var box=node('div','mp-plan '+(r.state==='error'?'warn':r.state==='manual'?'manual':'ok'));
-    add(box,node('strong','',r.state==='manual'?'Start it yourself':r.state==='error'?'Start it yourself':r.mode==='freeplay'?'Match scenario, freeplay':'Normal KovaaK’s run'),node('span','',safe(r.message,'')));
+    var box=node('div','mp-plan '+(r.state==='error'?'warn':r.state==='manual'||r.state==='blocked'?'manual':'ok'));
+    add(box,node('strong','',r.state==='blocked'?'Finish your current run':r.state==='manual'?'Start it yourself':r.state==='error'?'Start it yourself':r.mode==='freeplay'?'Match scenario, freeplay':'Normal KovaaK’s run'),node('span','',safe(r.message,'')));
     return box;
   }
   function countdown(page,lobby,match){
@@ -1045,7 +1061,8 @@
   function roundResults(page,lobby,match){
     var last=match.rounds[match.rounds.length-1];if(!last)return;
     var hero=node('div','panel mp-result-hero');var winner=last.winnerId;
-    add(hero,node('div','eyebrow',mode(match.mode).label+' · '+roundLabel(match)),node('h2','',match.mode==='practice'?'Run '+match.round+' done':winner?(winner===lobby.self?'You take the round':nameOf(winner)+' takes the round'):'Round drawn'));
+    var tracked=match.mode==='tracking-duel'&&last.results[0]?last.results[0]:null;
+    add(hero,node('div','eyebrow',mode(match.mode).label+' · '+roundLabel(match)),node('h2','',tracked?(tracked.memberId===lobby.self?'You':nameOf(tracked.memberId))+' tracked '+(tracked.score===null?'—':F.number(tracked.score,1)+' %'):match.mode==='practice'?'Run '+match.round+' done':winner?(winner===lobby.self?'You take the round':nameOf(winner)+' takes the round'):'Round drawn'));
     var next=node('p','subtle','');countNodes.push({node:next,at:match.nextAt,format:function(ms){return 'Next round in '+seconds(ms)+' s';}});hero.appendChild(next);
     if(lobby.isHost)hero.appendChild(actions(button('Next round now',function(){act('next');},'compact primary'),button(match.mode==='practice'?'End session':'End match',function(){act('end');},'compact quiet danger')));
     page.appendChild(hero);
