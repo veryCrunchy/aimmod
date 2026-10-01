@@ -459,6 +459,47 @@ If `HandleDamage`, `SetHealth`, `Respawn`, `OnCharacterKilled`,
 the character class, match play is disabled for the session and the missing
 names are logged.
 
+## Cosmetics
+
+Policy and plan: `in-game/docs/cosmetics.md`. Core (`core/Cosmetics`, tested
+with the Lua testbed's vectors): `IsMatchScenario`, `ParseMarker`, `Decide`
+(exact port of `CosmeticsScope.lua`), `IsFreeLook`, the catalog
+(`ParseCatalog`, `Validate`, `BuildIndex`, `Resolve`, `Pickable`; schema of
+`CosmeticsCatalog.lua` plus `textures`, `mesh`, `material` under
+`/Game/AimModCosmetics/` and `attach {role, models {<model>: {bone, location,
+rotation, scale}}}`), the manifest (`ParseManifest`, `VerifyManifest`: size
+then SHA-256 via BCrypt), `ParseLooks` and `PlanAvatar`/`PlanLocal`.
+
+Inputs:
+- `Mods\AimModCore\service\cosmetics\catalog.json` and `catalog-manifest.json`
+  (`{"version": <catalog version>, "files": [{name, size, sha256}], "items"?}`),
+  verified once by the writer thread. Paks: `<game>\FPSAimTrainer\Content\Paks\~AimMod\`;
+  unlisted or mismatched paks are logged and never referenced. A catalog that
+  does not match its manifest disables cosmetics.
+- `aimmod-session.txt` (service marker) and `cosmetic-looks.txt`
+  (`v=1`, `peer=<SteamID64> items=<id>@<v>,...`, at most one `self=<id>@<v>,...`,
+  at most 8 items per line; validated whole), re-read every second.
+- `cosmetics-dev.txt` with `allow_drafts=1`: local team tests of draft items
+  (affects only what this viewer sees).
+
+Applier (game thread, every second): the gate needs the marker, the
+ScenarioManager state (`IsInChallenge` on manager and scenario, benchmark,
+editor, loading) and the marker's match scenario. `match` dresses avatars and
+the own weapon/arms; `spectate` avatars only; anything else restores.
+- Avatars are characters with exactly one `AimMod.Peer.<SteamID64>` actor tag
+  whose `mCharacterProfileNative` model/skin are in the Default packs.
+- Parameter items: a new dynamic instance parented on each fitting slot's
+  material (`CreateDynamicMaterialInstance`, vector/scalar/texture
+  parameters), only when the material has every parameter. Restored to the
+  original when the gate closes or the look changes; a slot the game keeps
+  resetting is left to the game after 5 rounds.
+- Accessories: AimMod's own `StaticMeshComponent` (`AddComponentByClass`,
+  collision off before `SetStaticMesh`), snapped to the bone on `Mesh`, then the
+  catalog's relative transform; destroyed when the gate closes. Assets load
+  only from `/Game/AimModCosmetics/` of a verified pak.
+- Never touched: the game's meshes, collision, `ShotOrigin`, scenario bots,
+  paid looks. Capability `cosmetics` when the bindings resolve.
+
 ## Match seeds (shared randomness)
 
 Findings (3.9.11 dumps and imports):

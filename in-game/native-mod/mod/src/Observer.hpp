@@ -2,6 +2,7 @@
 // Game-thread observer: drives the lifecycle machine from polls (and optional
 // broadcast observations), publishes live telemetry, writes the journal and
 // runs the replay sampler. Read-only with respect to the game.
+#include "Cosmetics.hpp"
 #include "GameControl.hpp"
 #include "MatchPlay.hpp"
 #include "Presenter.hpp"
@@ -100,6 +101,7 @@ namespace aimmod
         void PublishSelfPose(double now);
         std::uint32_t PoseId(UObject* actor);
         MatchPlay m_match;
+        Cosmetics m_cosmetics;
 
         // Callback registrations.
         std::vector<std::uint64_t> m_callbacks;

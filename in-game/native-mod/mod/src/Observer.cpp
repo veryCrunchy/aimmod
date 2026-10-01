@@ -102,7 +102,7 @@ namespace aimmod
         : m_output(output), m_version(std::move(version)),
           m_lifecycle(std::to_string(static_cast<long long>(std::time(nullptr))) + "-" + std::to_string(GetCurrentProcessId())),
           m_sampler(m_b, m_scene, output), m_presenter(m_b, m_scene, output), m_control(m_b, m_scene, output),
-          m_match(m_b, m_scene, output)
+          m_match(m_b, m_scene, output), m_cosmetics(m_b, m_scene, output)
     {
     }
 
@@ -125,6 +125,7 @@ namespace aimmod
         if (m_control.canCapture()) caps += caps.empty() ? "capture" : ",capture";
         if (m_b.replayReady()) caps += ",shots";
         if (m_b.replayReady() && m_match.available()) caps += ",match-play";
+        if (m_cosmetics.ready()) caps += ",cosmetics";
         return caps;
     }
 
@@ -329,6 +330,7 @@ namespace aimmod
         BindFunctions();
         m_presenter.Bind();
         m_control.Bind();
+        m_cosmetics.Bind();
         RegisterCallbacks();
         m_presenter.Start();
         m_output.SetCapabilities(Capabilities());
@@ -601,6 +603,7 @@ namespace aimmod
             m_match.Tick(now, m_scenarioName, m_inChallenge, m_loading, [this](UObject* actor) { return PoseId(actor); }, m_poseNames);
             if (wasAvailable != m_match.available()) m_output.SetCapabilities(Capabilities());
         }
+        m_cosmetics.Tick(now);
         PollClipKey();
         if (m_output.poseRequested() && now >= m_nextPose)
         {

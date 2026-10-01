@@ -627,6 +627,8 @@ static void WriteSamples(const std::filesystem::path& dir)
     std::ofstream(dir / "replays" / "1790000000-42-2.amreplay", std::ios::binary).write(reinterpret_cast<const char*>(compact.data()), static_cast<std::streamsize>(compact.size()));
 }
 
+#include "CosmeticsTests.inl"
+
 static void MatchPlayChecks()
 {
     const std::string good = "AIMMOD_PLAYSTATE_1\t7\nmatch\tAimMod Match - Synthetic - 1\nhealth\t62.5\t100\nalive\t1\nrespawnAt\t0\nprotected\t0\n"
@@ -689,6 +691,7 @@ int main(int argc, char** argv)
     Backoff();
     LifecycleChecks();
     MatchPlayChecks();
+    cosmetics_checks::Run();
     std::printf("%d AimModCore checks, %d failed.\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }
