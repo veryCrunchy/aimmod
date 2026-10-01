@@ -131,6 +131,15 @@ test('spectating a friend shows their stats with stop and switch; being watched 
   s.button('Remove').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'spectator-remove',id:'w1'});
   s.button('Stop spectating').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'watch-stop'});
 });
+test('scenario pickers put favourites and recent scenarios first, with a favourite toggle',()=>{
+  const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view({lobby:lobby(),picks:{favourites:['Other Scenario'],recent:['Synthetic Scenario','Gone Scenario']}}));
+  s.button('Edit').onclick();s.requests.find(r=>r.url==='/private/multiplayer?part=library').finish(200,{available:true,scenarios:[{name:'Synthetic Scenario',map:'synthetic_map',mapSource:'game',timeLimit:60},{name:'Other Scenario',map:'m',mapSource:'game',timeLimit:60}],maps:[],weapons:[],characters:[],presets:[]});
+  s.all().find(e=>e.tag==='button'&&e.className==='mp-pick').onclick();
+  const groups=s.all().filter(e=>e.className==='mp-pick-group').map(e=>e.textContent);assert.deepEqual(groups,['Favourites','Recent','All scenarios']);
+  const names=s.all().filter(e=>e.className==='mp-pick-info').map(e=>e.children[0].textContent);assert.deepEqual(names.slice(0,2),['Other Scenario','Synthetic Scenario'],'favourite, then recent; missing names are skipped');
+  const stars=s.all().filter(e=>e.tag==='button'&&e.className.indexOf('mp-fav')>=0);assert.ok(stars.every(b=>b.parentNode.className==='actions'));
+  stars[0].onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'favourite',scenario:'Other Scenario',on:false});
+});
 test('the map library lists ports with size, Shift and Workshop state, and installs or hosts them',()=>{
   const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view());
   s.button('Map library').onclick();const ask=s.requests.find(r=>r.url==='/private/multiplayer?part=maps');assert.ok(ask,'the library asks for ports');
