@@ -384,6 +384,18 @@ def spread(points: Sequence[Vec], count: int, avoid: Sequence[Vec] = ()) -> List
 Vec = g.Vec
 
 
+def _playable(sc: scene.Scene, reached):
+    """Reached spots within the spawns' height band and outside liquids: where players actually play."""
+    if not sc.spawns:
+        return reached
+    zs = [s.origin[2] for s in sc.spawns]
+    lo, hi = min(zs) - 96.0, max(zs) + 192.0
+    hazards = [go for go in sc.gameobjects if go["kind"] in ("water", "hurt")]
+    out = [p for p in reached if lo <= p[2] <= hi and
+           not any(all(abs(p[k] - go["origin"][k]) <= go["size"][k] / 2 for k in range(3)) for go in hazards)]
+    return out or reached
+
+
 def run(sc: scene.Scene, slots: List[Slot], tex_slot: Dict[str, int], jump_up: float = JUMP_UP,
         gap_cells: int = GAP_CELLS) -> dict:
     floating = sum(1 for b in sc.brushes if b.source == "prop")  # props remaining after remove_floating
@@ -407,4 +419,4 @@ def run(sc: scene.Scene, slots: List[Slot], tex_slot: Dict[str, int], jump_up: f
                         f"spawn), e.g. {reach.get('trapped_examples')}")
     return {"pass": not problems, "problems": problems, "reachability": reach, "dark_faces": dark,
             "_reached": reached,
-            "props_kept": floating, "view_spots": [list(map(lambda v: round(v, 1), p)) for p in spread(reached, 8, [s.origin for s in sc.spawns[:1]])]}
+            "props_kept": floating, "view_spots": [list(map(lambda v: round(v, 1), p)) for p in spread(_playable(sc, reached), 8, [s.origin for s in sc.spawns[:1]])]}

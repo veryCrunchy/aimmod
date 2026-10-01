@@ -70,6 +70,8 @@ def convert_file(path: str, out: str, args) -> dict:
     if not args.keep_skybox:
         cleanup.remove_3d_skybox(sc)
         cleanup.remove_detached(sc)
+    if args.kill_below is not None:
+        cleanup.add_kill_below(sc, args.kill_below)
     if not args.no_ground:
         cleanup.add_ground_plane(sc)
     spawns.fix_spawns(sc)
@@ -187,6 +189,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--allow-check-fail", action="store_true",
                     help="write outputs and exit 0 even when the hard checks fail")
     ap.add_argument("--no-props", action="store_true", help="skip prop hulls from models packed in the BSP")
+    ap.add_argument("--kill-below", type=float, metavar="Z",
+                    help="add a kill volume under the map up to this height (Source units), for maps where "
+                         "falling off should mean death")
     ap.add_argument("--no-ground", action="store_true", help="skip the backdrop ground plane under the map")
     ap.add_argument("--no-preview", action="store_true",
                     help="skip the preview check PNG (top-down + side view with the player hull at every spawn)")

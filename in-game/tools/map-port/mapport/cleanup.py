@@ -132,3 +132,15 @@ def add_ground_plane(sc: scene.Scene, margin: float = 16384.0, drop: float = 32.
              for pl, poly in zip(planes, brush_faces(planes)) if poly]
     sc.brushes.append(scene.Brush(faces=faces, kind=scene.SOLID, source="backdrop"))
     sc.bump("added_ground_plane")
+
+
+def add_kill_below(sc: scene.Scene, z: float, margin: float = 1024.0) -> None:
+    """A kill volume under the whole map up to height z (Source units): falling off kills."""
+    pts = [p for b in sc.brushes if b.source != "backdrop" for f in b.faces for p in f.polygon]
+    if not pts:
+        return
+    lo = [min(p[k] for p in pts) - margin for k in range(2)] + [min(p[2] for p in pts) - 256.0]
+    hi = [max(p[k] for p in pts) + margin for k in range(2)] + [z]
+    corners = [(x, y, zz) for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for zz in (lo[2], hi[2])]
+    scene.add_liquid(sc, "hurt", corners, damage=1000.0)
+    sc.bump("kill_volumes")
