@@ -630,6 +630,74 @@ class ThumbnailTests(unittest.TestCase):
             self.assertTrue(-90 <= v["pitch"] <= 90 and 5 <= v["fov"] <= 170)
 
 
+try:
+    import PIL  # noqa: F401
+    HAVE_PIL = True
+except ImportError:
+    HAVE_PIL = False
+
+
+@unittest.skipUnless(HAVE_PIL, "needs Pillow")
+class CardArtTests(unittest.TestCase):
+    def _port(self, root, name, display, game, branded=True, unbranded=False):
+        from PIL import Image
+        d = os.path.join(root, name)
+        os.makedirs(d)
+        with open(os.path.join(d, name + ".report.json"), "w", encoding="utf-8") as fh:
+            json.dump({"name": name, "display_name": display, "game": game, "variant": "CS Movement"}, fh)
+        if branded:
+            img = Image.new("RGB", (1920, 1080), (200, 30, 30))  # template strips in red
+            img.paste((30, 160, 60), (0, 100, 1920, 800))         # the view in green
+            img.save(os.path.join(d, name + ".workshop-thumb-16x9.jpg"))
+        if unbranded:
+            Image.new("RGB", (1600, 900), (20, 40, 220)).save(os.path.join(d, name + ".card-art.jpg"))
+        return d
+
+    def test_export_writes_small_jpegs_and_a_manifest(self):
+        from PIL import Image
+        from mapport import cardart
+        with tempfile.TemporaryDirectory() as root:
+            a = self._port(root, "aimmod_de_d2_remake_css", "de_d2_remake", "CSS")
+            b = self._port(root, "aimmod_ztn3dm1_q3", "Blood Run", "Q3", unbranded=True)
+            out = os.path.join(root, "out")
+            done = cardart.export([a, b], out)
+            self.assertEqual([d["source"] for d in done], ["workshop-thumb", "render"])
+            with open(os.path.join(out, "maps.json"), encoding="utf-8") as fh:
+                manifest = json.load(fh)
+            self.assertEqual(manifest, [{"key": "aimmod_de_d2_remake_css", "name": "Dust2 Remake", "game": "CS:S"},
+                                        {"key": "aimmod_ztn3dm1_q3", "name": "Blood Run", "game": "Quake 3"}])
+            for key in ("aimmod_de_d2_remake_css", "aimmod_ztn3dm1_q3"):
+                path = os.path.join(out, key + ".jpg")
+                self.assertLessEqual(os.path.getsize(path), cardart.MAX_BYTES)
+                with Image.open(path) as img:
+                    self.assertEqual((img.format, img.size), ("JPEG", (1280, 720)))
+                    self.assertNotIn("exif", img.info)
+            # The Workshop template's logo and title strips are cropped away.
+            with Image.open(os.path.join(out, "aimmod_de_d2_remake_css.jpg")) as img:
+                for xy in ((5, 5), (640, 360), (1275, 715)):
+                    r, g_, _b = img.convert("RGB").getpixel(xy)
+                    self.assertGreater(g_, r, xy)
+            # Re-running adds to the manifest instead of replacing it.
+            c = self._port(root, "aimmod_aim_map_css", "aim_map", "CSS")
+            cardart.export([c], out)
+            with open(os.path.join(out, "maps.json"), encoding="utf-8") as fh:
+                self.assertEqual(len(json.load(fh)), 3)
+
+    def test_names_and_errors(self):
+        from mapport import cardart
+        self.assertEqual(cardart.pretty_name("de_dust2"), "Dust2")
+        self.assertEqual(cardart.pretty_name("Blood Run Tourney"), "Blood Run Tourney")
+        self.assertEqual(cardart.pretty_name("aim_unknown_map"), "aim_unknown_map")
+        self.assertEqual([cardart.game_label(t) for t in ("CSS", "CSGO", "CS16", "Q3")], ["CS:S", "CS:GO", "CS 1.6", "Quake 3"])
+        with tempfile.TemporaryDirectory() as root:
+            empty = self._port(root, "aimmod_x_css", "x", "CSS", branded=False)
+            with self.assertRaises(FileNotFoundError):
+                cardart.export([empty], os.path.join(root, "out"))
+            odd = self._port(root, "Not A Key", "x", "CSS")
+            with self.assertRaises(ValueError):
+                cardart.export([odd], os.path.join(root, "out"))
+
+
 class ReflexTests(unittest.TestCase):
     def test_axes_match_json(self):
         # KovaaK's loads Reflex (a, b, c) as Unreal (c, a, b); both writers must agree.

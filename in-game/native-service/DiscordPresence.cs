@@ -40,7 +40,37 @@ sealed record DiscordPresenceInput(LiveOverlaySnapshot Live, bool Replay, Discor
 // in-match, no-steam-lobby), null while joinable.
 sealed record DiscordLobbyInfo(string PartyId, int Players, int MaxPlayers, string Mode, string? Scenario, string State,
     int? Round, int? TotalRounds, int? FirstTo, double? Lead, int? Place, bool? Won, string? JoinSecret,
-    string? ModeKey = null, string? Map = null, string? WorkshopId = null, bool Host = false, string? Closed = null);
+    string? ModeKey = null, string? Map = null, string? WorkshopId = null, bool Host = false, string? Closed = null, string? MapKey = null);
+
+// Pretty names for AimMod map ports (tools/map-port naming.py): "aimmod_de_d2_remake_css" and
+// "AimMod - de_d2_remake (CSS) - CS Movement" both read "Dust2 Remake" with the game "CS:S".
+// Keep Pretty in step with PRETTY_NAMES in tools/map-port/mapport/cardart.py.
+static class DiscordMapNames
+{
+    static readonly Dictionary<string, string> Pretty = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["de_d2_remake"] = "Dust2 Remake", ["de_d2_beta"] = "Dust2 Beta", ["de_dust2"] = "Dust2", ["de_dust"] = "Dust",
+        ["aim_redline"] = "Redline", ["aim_ag_texture2"] = "AG Texture 2", ["aim_deagle7k_2067"] = "Deagle 7k",
+        ["awp_lego"] = "AWP Lego", ["fy_pool_day"] = "Pool Day",
+        ["ztn3tourney1"] = "Blood Run Tourney", ["ztn3dm1"] = "Blood Run", ["hub3aeroq3"] = "Aerowalk", ["pro_q3tourney7"] = "Almost Lost",
+        ["de_mirage"] = "Mirage", ["de_inferno"] = "Inferno", ["de_nuke"] = "Nuke", ["de_overpass"] = "Overpass", ["de_train"] = "Train",
+        ["de_vertigo"] = "Vertigo", ["de_ancient"] = "Ancient", ["de_anubis"] = "Anubis", ["de_cache"] = "Cache", ["de_cbble"] = "Cobblestone",
+    };
+    // Game tag (lower case, as in map file names) -> label.
+    public static readonly IReadOnlyDictionary<string, string> Games = new Dictionary<string, string>
+    {
+        ["css"] = "CS:S", ["csgo"] = "CS:GO", ["cs2"] = "CS2", ["cs16"] = "CS 1.6", ["gmod"] = "GMod", ["q3"] = "Quake 3", ["ql"] = "Quake Live",
+    };
+    static readonly System.Text.RegularExpressions.Regex File = new(@"^(aimmod_([a-z0-9_]{1,64})_(css|csgo|cs2|cs16|gmod|q3|ql))(?:\.json|\.map)?$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    static readonly System.Text.RegularExpressions.Regex Scenario = new(@"^AimMod - (.{1,64}) \((CSGO|CSS|CS2|CS16|GMod|Q3|QL)\) - .{1,64}$");
+    public static string Name(string display) => Pretty.TryGetValue(display, out var name) ? name : display;
+    // A port's map file: its key (the Hub's map art), pretty name and game tag.
+    public static (string Key, string Name, string Game)? FromMapFile(string? file) =>
+        file is not null && File.Match(file.Trim()) is { Success: true } m ? (m.Groups[1].Value.ToLowerInvariant(), Name(m.Groups[2].Value), m.Groups[3].Value.ToLowerInvariant()) : null;
+    // A port's scenario name: pretty name and game tag.
+    public static (string Name, string Game)? FromScenario(string? scenario) =>
+        scenario is not null && Scenario.Match(scenario) is { Success: true } m ? (Name(m.Groups[1].Value), m.Groups[2].Value.ToLowerInvariant()) : null;
+}
 
 // Lobby art (AimMod Hub's invite card): Large is the square card shown as the
 // presence image, Cover the wide card Discord shows as a game invite's banner
@@ -188,12 +218,17 @@ static class DiscordActivityBuilder
     internal static bool HubHandle(string? handle) =>
         handle is { Length: > 0 and <= 32 } h && !h.StartsWith('-') && !h.EndsWith('-') && !h.Contains("--", StringComparison.Ordinal)
         && h.All(c => c == '-' || char.IsAsciiDigit(c) || char.IsAsciiLetterLower(c));
-    internal static string InviteCard(string layout, string modeKey, string? map, int players, int max, string state, string? host, string? workshop)
+    internal static string InviteCard(string layout, string modeKey, string? map, int players, int max, string state, string? host, string? workshop,
+        string? game = null, string? mapKey = null)
     {
+        game = game is not null && DiscordMapNames.Games.ContainsKey(game) ? game : null;
+        mapKey = mapKey is { Length: <= 88 } k && System.Text.RegularExpressions.Regex.IsMatch(k, "^aimmod_[a-z0-9_]{1,80}$") ? k : null;
         string Url(string? name, string? ws)
         {
             var query = new StringBuilder("?v=1&layout=").Append(layout).Append("&mode=").Append(Uri.EscapeDataString(modeKey));
             if (!string.IsNullOrEmpty(name)) query.Append("&map=").Append(Uri.EscapeDataString(name));
+            if (game is not null) query.Append("&game=").Append(game);
+            if (mapKey is not null) query.Append("&art=").Append(mapKey);
             query.Append("&n=").Append(players).Append("&max=").Append(max).Append("&state=").Append(state);
             if (host is not null) query.Append("&host=").Append(host);
             if (ws is not null) query.Append("&ws=").Append(ws);
@@ -213,17 +248,20 @@ static class DiscordActivityBuilder
         return url.Length <= AssetLimit ? url : Url(null, null);
     }
     static readonly HashSet<string> CardModes = ["score-race", "duel", "ffa-rounds", "practice", "tracking-duel", "deathmatch", "vampiric", "instagib", "team-deathmatch", "cs"];
-    static DiscordArt? LobbyArt(DiscordLobbyInfo lobby, DiscordParty party, string? place, string? hubHandle, DiscordSettingsValue settings)
+    internal const string SmallText = "AimMod for KovaaK's · aimmod.app";
+    internal const string Required = "AimMod required";
+    internal const string Download = "https://aimmod.app";
+    static DiscordArt? LobbyArt(DiscordLobbyInfo lobby, DiscordParty party, string? place, string? game, string? hubHandle, DiscordSettingsValue settings)
     {
         if (lobby.ModeKey is not { } mode || !CardModes.Contains(mode)) return null;
         var players = Math.Clamp(party.Size, 1, 10); var max = Math.Clamp(party.Max, Math.Max(2, players), 10);
         var host = lobby.Host && settings.ShowHubButton && HubHandle(hubHandle) ? hubHandle : null;
         var state = lobby.State is "match" or "results" ? lobby.State : "lobby";
-        return new(InviteCard("square", mode, place, players, max, state, host, lobby.WorkshopId),
-            InviteCard("banner", mode, place, players, max, state, host, lobby.WorkshopId),
-            DiscordActivity.LargeImage, DiscordActivity.DefaultLargeText);
+        return new(InviteCard("square", mode, place, players, max, state, host, lobby.WorkshopId, game, lobby.MapKey),
+            InviteCard("banner", mode, place, players, max, state, host, lobby.WorkshopId, game, lobby.MapKey),
+            DiscordActivity.LargeImage, SmallText);
     }
-    static string LobbyState(DiscordLobbyInfo lobby, string? secret) => secret is not null ? "In lobby · Open to join" : lobby.Closed switch
+    static string LobbyState(DiscordLobbyInfo lobby, string? secret) => secret is not null ? "Open to join · " + Required : lobby.Closed switch
     {
         "full" => "In lobby · Full",
         "invite-only" => "In lobby · Invite only",
@@ -237,11 +275,17 @@ static class DiscordActivityBuilder
         var players = Math.Clamp(lobby.Players, 1, Math.Max(1, lobby.MaxPlayers));
         var party = new DiscordParty(lobby.PartyId, players, Math.Max(players, lobby.MaxPlayers));
         var scenario = string.IsNullOrWhiteSpace(lobby.Scenario) ? null : lobby.Scenario;
-        // Where the lobby plays: the CS map, otherwise the scenario.
-        var place = string.IsNullOrWhiteSpace(lobby.Map) ? scenario : lobby.Map;
+        // Where the lobby plays: the CS map, otherwise the scenario, with ports' pretty names.
+        var mapFile = DiscordMapNames.FromMapFile(lobby.Map) ?? DiscordMapNames.FromMapFile(lobby.MapKey);
+        var scenarioPort = DiscordMapNames.FromScenario(scenario);
+        string? place, game;
+        if (!string.IsNullOrWhiteSpace(lobby.Map)) { place = mapFile?.Name ?? lobby.Map; game = mapFile?.Game; }
+        else { place = scenarioPort?.Name ?? scenario; game = scenarioPort?.Game ?? mapFile?.Game; }
         var secret = settings.ShowJoin && lobby.JoinSecret is { Length: > 0 and <= 128 } s ? s : null;
         string phase, details, state;
-        var largeText = Clean(lobby.Mode + (place is null ? "" : " · " + place) + $" · {players}/{party.Max} players", DiscordActivity.DefaultLargeText);
+        var gameLabel = game is not null && DiscordMapNames.Games.TryGetValue(game, out var label) ? " (" + label + ")" : "";
+        // The important part first: Clean shortens from the end.
+        var largeText = Clean(lobby.Mode + (place is null ? "" : " · " + place + gameLabel) + $" · {players}/{party.Max} players · " + Required, DiscordActivity.DefaultLargeText);
         long? start = null, end = null;
         if (lobby.State == "match")
         {
@@ -269,11 +313,12 @@ static class DiscordActivityBuilder
             state = LobbyState(lobby, secret);
             start = input.Session.Started.ToUnixTimeSeconds();
         }
-        var buttons = new List<DiscordButton>();
+        // Buttons only show without a join secret (DiscordActivity.ToJson).
+        var buttons = new List<DiscordButton> { new("Get AimMod", Download) };
         if (settings.ShowHubButton && !string.IsNullOrWhiteSpace(input.HubHandle) && input.HubHandle.Length <= 64)
             buttons.Add(new("AimMod Hub profile", HubProfile(input.HubHandle)));
         return new(phase, Clean(details, "In a lobby"), Clean(state, "In a lobby"), start, end, buttons, null, largeText, party, secret,
-            LobbyArt(lobby, party, place, input.HubHandle, settings));
+            LobbyArt(lobby, party, place, game, input.HubHandle, settings));
     }
 
     public static DiscordActivity Build(DiscordPresenceInput input, DiscordSettingsValue settings)
@@ -339,7 +384,10 @@ static class DiscordActivityBuilder
             phase = "menu"; details = "In the menus"; state = "Choosing a scenario";
             start = session.Started.ToUnixTimeSeconds();
         }
+        // Two buttons at most (ToJson): the scenario link and Get AimMod, or
+        // Get AimMod and the Hub profile; a rejected game link lets the profile in.
         if (scenario is not null && scenario.Length <= 256) buttons.Add(new("Play this scenario", PlayScenario(scenario)));
+        buttons.Add(new("Get AimMod", Download));
         if (settings.ShowHubButton && !string.IsNullOrWhiteSpace(input.HubHandle) && input.HubHandle.Length <= 64)
             buttons.Add(new("AimMod Hub profile", HubProfile(input.HubHandle)));
         return new(phase, Clean(details, "KovaaK's"), Clean(state, "Training"), start, end, buttons, scenario, largeText);

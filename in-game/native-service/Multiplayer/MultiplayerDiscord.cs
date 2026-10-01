@@ -82,6 +82,7 @@ static class MultiplayerDiscord
         var map = s.Mode == LobbyModes.Cs ? s.MapOverride?.Name ?? (s.Scenario?.Map is { Length: > 0 } scenarioMap ? scenarioMap : null) : null;
         return new DiscordLobbyInfo(PartyId(lobby.Id), players, s.MaxPlayers, ModeLabel(s.Mode), scenario, state,
             match?.Round, match?.TotalRounds, match?.FirstTo, lead, place, won, closed is null ? JoinSecret(joinToken!) : null,
-            s.Mode, map, s.Scenario?.WorkshopId, lobby.HostId == selfId, closed);
+            s.Mode, map, s.Scenario?.WorkshopId, lobby.HostId == selfId, closed,
+            DiscordMapNames.FromMapFile(s.MapOverride?.Name ?? s.Scenario?.Map)?.Key);
     }
 }

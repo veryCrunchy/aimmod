@@ -342,6 +342,21 @@ The first-person check views (`--views`) use 8 well-spread spots from the walk g
 - The report's `files.preview` points at the 1024² thumbnail, which the Workshop bundle helper uses.
   The top-down check image is `files.preview_check`.
 
+## Discord invite card art
+
+AimMod Hub draws a lobby's Discord invite card over a picture of its map (`/og/maps/<map>.jpg`).
+`<map>.card-art.jpg` is the thumbnail view without the template (1280 x 720). To publish ports:
+
+    python -m mapport.cardart <port-dir> [<port-dir> ...] --out <dir>
+
+writes `<dir>/<map>.jpg` (1280 x 720 JPEG, quality 80, at most 200 KB, no metadata) and adds each
+map's pretty name and game label to `<dir>/maps.json`. Copy both into the Hub's
+`api/internal/http/og_maps/`. Older ports without `card-art.jpg` use the middle of their 16:9
+Workshop thumbnail, between the logo and the title; `--capture shot.png` uses an in-game capture
+instead. Only add ports that are published. Pretty names for ports that keep their original map id
+(`de_d2_remake` → "Dust2 Remake") are in `PRETTY_NAMES` in `mapport/cardart.py`, mirrored by
+`DiscordMapNames` in the native service.
+
 ## Preview check
 
 `<map>.preview.png` has a top-down view in radar orientation (+X east, +Y north) with a 256-unit
