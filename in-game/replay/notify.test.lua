@@ -143,6 +143,16 @@ check(#modes==before and player.bShowMouseCursor==false and clickThrough(),'and 
 Notify.update(false,false,true);check(Notify.keepGameFocus()==false and focus==1,'not while KovaaK\'s menus are up')
 notice='{"version":1,"active":false,"layout":"full","volume":0}';Notify.update(false,false,false)
 check(Notify.keepGameFocus()==false and focus==1,'not once the key is released')
+-- AimModCore hosts the notice layer (core-active lists "overlay"): this layer stands down.
+notice=buying;Notify.update(false,false,false)
+check(widgets[1].visibility~=1,'shown before the native host takes over')
+before=#modes
+notice='{"version":1,"active":false,"layout":"full","interactive":true,"cursor":true,"cs":{"phase":"freeze","buyOpen":true},"play":{"id":"play-m-x-0","since":1700000000000},"volume":0}'
+Notify.update(false,false,false,true)
+check(widgets[1].visibility==1 and renderers[1].bReceiveInput==false,'native host: the Lua layer hides')
+check(#modes==before and Notify.swallowMenu()==false and Notify.keepGameFocus()==false,'and never touches input, the pause menu or focus')
+check(Notify.playRequest()=='play-m-x-0','the play request still reaches Menu.lua')
+Notify.update(false,false,false,true);check(#modes==before,'stays down')
 -- The play request is read from the notice file.
 notice='{"version":1,"active":false,"play":{"id":"play-m-abc-0","since":1700000000123},"volume":0}'
 Notify.update(false,false,false)

@@ -35,6 +35,7 @@ core/     engine-independent library (unit tested, no UE4SS headers)
   Settings       native-settings.tsv parser, core-active handshake line
   Supervisor     service restart back-off policy
   Water          water gate, swim tuning per movement style, swim input
+  Overlay        notice parsing, ui-host switch, overlay input state machine
 mod/      UE4SS glue (built against a local RE-UE4SS checkout)
   GameBindings   name resolution, signature checks, typed getter calls
   Observer       game-thread scheduler, hooks, lifecycle driver, live values
@@ -43,6 +44,7 @@ mod/      UE4SS glue (built against a local RE-UE4SS checkout)
                  shared-memory live channel
   ServiceHost    launches and supervises AimMod.InGame.exe
   Water          swimmable water volumes over the map's Water objects
+  OverlayHost    AimMod's own Gameface view for the notice layer and its input
 ```
 
 ### Threads
@@ -771,6 +773,50 @@ scenario editor:
 Log lines: `water: N swimmable volume(s) (cs: swim 800 cm/s, sink 192 cm/s,
 friction 4/s)`, `water: swimming` (first time per scenario), `water: off
 (<reason>)`.
+
+## Overlay host
+
+AimModCore hosts the multiplayer notice layer (notices, mode HUDs, standings,
+the CS buy menu): the page is the service's `ui/notify.html`, unchanged; only
+the hosting moved from AimModNativeUI's `Notify.lua` (phase 1 of moving the
+in-game UI to C++).
+
+- One view: `WidgetBlueprintLibrary:Create` of KovaaK's `MetaGraphWidget_C`
+  (the Gameface host the AimMod panel uses too) for the local
+  `MetaPlayerController`, its `GetCohtmlWidget`, both held as weak pointers.
+  Added with `AddToViewport` at z-order 20000, above KovaaK's UI. Toast
+  (620 x 340, top centre) or full screen through the viewport anchors. A new
+  controller (level change) gets a new view.
+- Inputs, read by the writer thread: `multiplayer-notify.json` (parsed when it
+  changes), `live-overlay-url.txt` (the notify URL), `aimmod-panel.tsv`
+  (Menu.lua: the AimMod panel is on screen, so the layer hides), `ui-host.tsv`
+  (the switch) and replay playback.
+- `core/Overlay` decides every frame: visibility, layout, hit-testing (the
+  view `SelfHitTestInvisible`, the Gameface widget `Visible` with
+  `bReceiveInput` only while something takes clicks), and input:
+  - CS buy menu open (`"cursor":true`): `SetInputMode_UIOnlyEx` focused on our
+    Gameface widget (the game ignores mouse and keys), the cursor on
+    (`K2_SetShowMouseCursor` and `bShowMouseCursor`) and fire blocked
+    (`MetaCharacter.bAbilityBlockingAttack`, restored afterwards). Re-asserted
+    every frame (cursor, fire block) and every 250 ms or at once when the game
+    hid the cursor (input mode). Closing it: game-only, cursor off.
+  - KovaaK's pause menu opened by the Escape over (or just after) the buy menu
+    (`"swallowMenu":true`) is collapsed again and the game unpaused; a
+    deliberate Escape later is left alone.
+  - Held scoreboard: display only; `SetFocusToGameViewport` at 30 Hz while it
+    shows in game, so Tab focus navigation can't take focus off the game.
+  - In KovaaK's menus a notice with buttons takes clicks; input is untouched.
+- Switch: `ui-host.tsv` in the output folder, `AIMMOD_UIHOST_1` then
+  `notice<TAB>lua` for the Lua fallback; absent or `notice<TAB>native` means
+  AimModCore hosts it. While its view exists AimModCore lists `overlay` in
+  `core-active.tsv`, and `Notify.lua` stands down (hidden, no input changes;
+  it still reads the play request for Menu.lua's match-start hand-back). A
+  stale heartbeat or the Lua switch hands the layer back.
+- Log lines (`[AimModCore] overlay: ...`): bindings, view created (names,
+  z-order, controller), every plan change (shown/hidden, layout, takes clicks
+  or click-through with the visibilities, buy menu input taken with each step's
+  result, input back to the game, pause menu hidden, scoreboard focus), cursor
+  resets during the buy menu, view removed and why.
 
 ## Native service
 

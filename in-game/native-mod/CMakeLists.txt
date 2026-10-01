@@ -38,6 +38,7 @@ add_library(aimmod_core STATIC
     core/src/Cosmetics.cpp
     core/src/CosmeticsPreview.cpp
     core/src/Water.cpp
+    core/src/Overlay.cpp
 )
 target_include_directories(aimmod_core PUBLIC core/include)
 if(MSVC)
@@ -74,6 +75,7 @@ if(AIMMOD_BUILD_MOD)
         mod/src/Accessory.cpp
         mod/src/MaterialParams.cpp
         mod/src/Water.cpp
+        mod/src/OverlayHost.cpp
     )
     target_include_directories(AimModCore PRIVATE mod/src)
     target_link_libraries(AimModCore PRIVATE aimmod_core windowscodecs ole32)

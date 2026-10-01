@@ -33,6 +33,18 @@ end
 -- give input to the game (game-only input, no cursor, viewport focus with mouse capture), so the
 -- player can move and look without clicking in first. A KovaaK's menu the player opened after the
 -- start, join or Retry (Escape while loading) is theirs and stays. One hand-back per request id.
+-- aimmod-panel.tsv for AimModCore's overlay host: written when the panel opens or closes
+-- and once a second while it is open (stale after three seconds: closed).
+local panelWritten,panelAt
+local function panelState(open)
+    local now=os.time()
+    if panelWritten==open and (not open or panelAt==now) then return end
+    panelWritten=open;panelAt=now
+    local file=io.open((os.getenv('LOCALAPPDATA') or '')..'/AimMod/KovaaksNative/aimmod-panel.tsv','wb')
+    if not file then return end
+    pcall(function()file:write('AIMMOD_PANEL_1\t'..(open and '1' or '0')..'\t'..tostring(now)..'\n')end)
+    file:close()
+end
 local handled,menuShownAt,menuSeen,menuWasUp
 local show -- defined below; handBack closes the AimMod panel through it
 local function trackMenu()
@@ -214,7 +226,11 @@ function M.start()
         local noticeOk=pcall(function()
             swallowPauseMenu();trackMenu()
             local menuUp=valid(menu) and menu:IsVisible()
-            Notify.update(opened and menuUp,ReplayMainBridge.active(),menuUp)
+            -- AimModCore hosts the notice layer when it says so; it learns from aimmod-panel.tsv
+            -- whether this panel is on screen (it shows the same things then).
+            local native=Telemetry.coreActive~=nil and Telemetry.coreActive('overlay')
+            if native then panelState(opened and menuUp) end
+            Notify.update(opened and menuUp,ReplayMainBridge.active(),menuUp,native)
             local id,since=Notify.playRequest()
             if id and id~=handled and not ReplayMainBridge.active() then
                 handled=id;local okPlay,result=pcall(handBack,since)
