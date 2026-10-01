@@ -58,7 +58,9 @@ def convert_file(path: str, out: str, args) -> dict:
     elif data[:4] == b"\x1e\x00\x00\x00":
         sc = goldsrc.load(data, mapid, os.path.dirname(path))
     else:
-        sc = bsp.load(data, mapid, args.disp_step, args.disp_thickness, with_props=not args.no_props)
+        from . import vpk
+        stock = None if args.no_props else vpk.StockModels.discover(args.stock_models)
+        sc = bsp.load(data, mapid, args.disp_step, args.disp_thickness, with_props=not args.no_props, stock=stock)
     game = naming.game_tag(args.game) if args.game else naming.guess_game(sc.version)
     movement = args.movement or ("quake" if game in ("Q3", "QL") else "cs")
     mv = scenario.PRESETS[movement]
@@ -93,6 +95,7 @@ def convert_file(path: str, out: str, args) -> dict:
     text_for_capture = None
     if args.format in ("json", "both"):
         doc = kovaaks_json.build(sc, slots, tex_slot, args.groups, 1.0, args.map_scale)
+        report["stats"] = dict(sorted(sc.stats.items()))  # with the face culling counts
         text = kovaaks_json.dumps(doc)
         text_for_capture = text
         mp = os.path.join(out, "maps", base + ".json")
@@ -201,6 +204,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--allow-check-fail", action="store_true",
                     help="write outputs and exit 0 even when the hard checks fail")
     ap.add_argument("--no-props", action="store_true", help="skip prop hulls from models packed in the BSP")
+    ap.add_argument("--stock-models", default="auto", metavar="auto|none|DIR",
+                    help="read stock prop models the map does not pack from installed Source games' VPKs: "
+                         "auto (Steam libraries, default), none, or a game/content folder")
     ap.add_argument("--kill-below", type=float, metavar="Z",
                     help="add a kill volume under the map up to this height (Source units), for maps where "
                          "falling off should mean death")

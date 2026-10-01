@@ -188,7 +188,8 @@ def _vec(s: str, default=(0.0, 0.0, 0.0)) -> Vec:
 
 
 def load(data: bytes, name: str, disp_step: int = 1, disp_thickness: float = 8.0,
-         with_props: bool = True) -> scene.Scene:
+         with_props: bool = True, stock=None) -> scene.Scene:
+    """stock: a vpk.StockModels for props whose models the map does not pack."""
     bsp = Bsp(data)
     bsp.read()
     sc = scene.Scene(name=name, entities=bsp.entities)
@@ -273,6 +274,9 @@ def load(data: bytes, name: str, disp_step: int = 1, disp_thickness: float = 8.0
             continue
         if mi:
             faces = _place_entity_faces(faces, ent)
+            if cls.lower() in DOORS:
+                faces, kind = open_door(faces, ent, kind)
+                sc.bump("doors_opened")
         sc.brushes.append(scene.Brush(faces=faces, kind=kind, source=cls if mi else "world"))
         sc.bump(f"kept_{kind}")
 
@@ -311,7 +315,12 @@ def load(data: bytes, name: str, disp_step: int = 1, disp_thickness: float = 8.0
         found += props.entity_props(bsp.entities)
         sc.stats["props_in_map"] = len(found)
         sc.stats["prop_phy_files_packed"] = len(phys)
-        props.add_props(sc, found, phys)
+        from . import vpk
+        props.add_props(sc, found, vpk.ChainFiles(phys, stock))
+        if stock is not None and stock.used:
+            sc.stats["props_from_stock_models"] = len(stock.used)
+            sources = sorted(set(stock.used.values()))
+            sc.notes.append(f"{len(stock.used)} stock prop models read from installed game content ({', '.join(sources)})")
 
     _spawns(sc)
     return sc
@@ -326,6 +335,47 @@ def _reason(cls: str, texes, contents: int) -> str:
     if contents & (classify.CONTENTS_WATER | classify.CONTENTS_SLIME):
         return "water"
     return "nonsolid_contents"
+
+
+DOORS = ("func_door", "func_door_rotating")
+
+
+def _float(ent: Dict[str, str], key: str, default: float) -> float:
+    try:
+        return float(ent.get(key, default) or default)
+    except ValueError:
+        return default
+
+
+def open_door(faces: List[scene.Face], ent: Dict[str, str], kind: str) -> Tuple[List[scene.Face], str]:
+    """KovaaK's has no moving brushes, so doors are placed open, the way players leave them in CS.
+    func_door_rotating swings `distance` degrees about its origin (Z, or X/Y with spawnflags 64/128;
+    spawnflag 2 reverses) and stops colliding, so the swept area never traps anyone. func_door
+    slides along `movedir` by its size minus `lip` and stays solid (it moves into a wall or ceiling).
+    Doors that spawn open (spawnpos 1) stay where they are."""
+    cls = ent.get("classname", "").lower()
+    flags = int(_float(ent, "spawnflags", 0))
+    if cls == "func_door_rotating":
+        if ent.get("spawnpos", "0") == "1":
+            return faces, scene.NONSOLID
+        org = _vec(ent.get("origin", ""))
+        deg = _float(ent, "distance", 90.0) * (-1.0 if flags & 2 else 1.0)
+        ang = (deg, 0.0, 0.0) if flags & 128 else (0.0, 0.0, deg) if flags & 64 else (0.0, deg, 0.0)
+        out = []
+        for f in faces:
+            poly = [geometry.add(geometry.rotate_zyx(geometry.sub(p, org), *ang), org) for p in f.polygon]
+            out.append(scene.Face(polygon=poly, normal=geometry.rotate_zyx(f.normal, *ang), texture=f.texture,
+                                  reflectivity=f.reflectivity, uv_axes=f.uv_axes, tex_size=f.tex_size))
+        return out, scene.NONSOLID if kind == scene.SOLID else kind
+    md = _vec(ent.get("movedir", "") or ent.get("angles", ""))
+    d = geometry.rotate_zyx((1.0, 0.0, 0.0), md[0], md[1], md[2])
+    pts = [p for f in faces for p in f.polygon]
+    extent = max(geometry.dot(p, d) for p in pts) - min(geometry.dot(p, d) for p in pts)
+    move = geometry.mul(d, max(0.0, extent - _float(ent, "lip", 0.0)))
+    if ent.get("spawnpos", "0") == "1" or flags & 1:
+        return faces, kind
+    return [scene.Face(polygon=[geometry.add(p, move) for p in f.polygon], normal=f.normal, texture=f.texture,
+                       reflectivity=f.reflectivity, uv_axes=f.uv_axes, tex_size=f.tex_size) for f in faces], kind
 
 
 def _place_entity_faces(faces: List[scene.Face], ent: Dict[str, str]) -> List[scene.Face]:

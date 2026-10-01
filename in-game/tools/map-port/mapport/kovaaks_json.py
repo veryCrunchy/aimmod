@@ -13,7 +13,7 @@ location + scale * vertex * MapScale, in map units). The editor therefore stores
 from __future__ import annotations
 
 import json
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from . import classify, geometry as g, scene
 from .materials import NODRAW, SURFACES, Slot
@@ -97,10 +97,10 @@ def _tangent(face: scene.Face, n_ue) -> Tuple[float, float, float]:
 
 
 def brush_object(b: scene.Brush, unit: float, tex_slot: Dict[str, int], slots: List[Slot],
-                 map_scale: float = 1.0) -> dict:
+                 map_scale: float = 1.0, faces: Optional[List[scene.Face]] = None) -> dict:
+    """faces: the faces to export (cull.visible_faces); the brush's own faces when None."""
     visible = b.kind not in (scene.CLIP,)
-    world = [[to_ue(p, unit) for p in f.polygon] for f in b.faces]
-    lo = tuple(min(p[k] for poly in world for p in poly) for k in range(3))
+    faces = b.faces if faces is None or not visible else faces
     # Default slot for tool faces on visible brushes: the brush's largest real texture.
     best_slot, best_area = 0, -1.0
     for f in b.faces:
@@ -112,10 +112,12 @@ def brush_object(b: scene.Brush, unit: float, tex_slot: Dict[str, int], slots: L
     # Sky faces of visible brushes would be painted with the brush material and hide the sky; KovaaK's
     # has no invisible-face material, so those sections are left out (the other faces keep the shape).
     sky = SKY_TEXTURE
-    keep = [i for i, f in enumerate(b.faces) if not (visible and f.texture == sky)]
-    if len(keep) < 3:
-        keep = list(range(len(b.faces)))
-    pairs = [(b.faces[i], world[i]) for i in keep]
+    keep = [f for f in faces if not (visible and f.texture == sky)]
+    if not keep or (faces is b.faces and len(keep) < 3):
+        keep = list(b.faces)
+    world = [[to_ue(p, unit) for p in f.polygon] for f in keep]
+    lo = tuple(min(p[k] for poly in world for p in poly) for k in range(3))
+    pairs = list(zip(keep, world))
     for f, poly in pairs:
         n = (f.normal[0], -f.normal[1], f.normal[2])
         local = [g.mul(g.sub(p, lo), 1.0 / map_scale) for p in poly]
@@ -246,8 +248,15 @@ def game_object(go: dict, unit: float, map_scale: float) -> dict:
 
 
 def build(sc: scene.Scene, slots: List[Slot], tex_slot: Dict[str, int], groups: int, unit: float,
-          map_scale: float, player_profile: str = "") -> dict:
-    objects = [brush_object(b, unit, tex_slot, slots, map_scale) for b in sc.brushes]
+          map_scale: float, player_profile: str = "", cull_hidden: bool = True) -> dict:
+    """cull_hidden: leave out hidden and doubled faces (cull.visible_faces)."""
+    faces: Dict[int, List[scene.Face]] = {}
+    if cull_hidden:
+        from . import cull
+        faces, counts = cull.visible_faces(sc)
+        for k, v in counts.items():
+            sc.stats[k] = v
+    objects = [brush_object(b, unit, tex_slot, slots, map_scale, faces.get(id(b))) for b in sc.brushes]
     objects += [spawn_object(sp, i, unit, map_scale, player_profile) for i, sp in enumerate(sc.spawns)]
     objects += [game_object(go, unit, map_scale) for go in sc.gameobjects]
     return {"materialSets": _material_sets(slots, groups), "objects": objects, "version": "1.0.0"}

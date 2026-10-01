@@ -81,6 +81,7 @@ The description names the map, the source game and the movement, and stays withi
 | `--views` | off | render first-person check views (spawns plus spread-out floor spots) and report holes |
 | `--view X,Y,Z,YAW` | | extra check view (Source feet position), repeatable |
 | `--no-props` | off | skip model hulls |
+| `--stock-models auto\|none\|DIR` | `auto` | read stock prop models the map does not pack from installed Source games (see Models) |
 | `--no-ground` | off | skip the backdrop ground plane |
 | `--keep-skybox` | off | keep the 3D skybox and areas detached from the spawns |
 | `--pick text` | | convert only archive members whose name contains `text` |
@@ -173,6 +174,10 @@ Outlaws, Pixel, Christmas, N0ted, Timmy). The Anime pack is DLC.
 
 - Brushes are world brushes, `func_detail` and solid brush entities (doors, `func_brush`, …).
   Brush-entity origins and angles are applied.
+- **Doors are placed open**, the way CS players leave them (KovaaK's has no moving brushes):
+  `func_door_rotating` swings by its `distance` about its origin and stops colliding, so the swept
+  area never traps anyone; `func_door` slides along `movedir` by its size minus `lip` and stays
+  solid. Doors that spawn open keep their place. The report counts `doors_opened`.
 - Player clip, `toolsclip*`, invisible and skybox brushes become `Clip`. Windows, grates and
   `func_breakable_surf` become `FullClip`. `toolsblockbullets` becomes `WeaponClip`.
   `func_illusionary` becomes `DefaultNoCollision`.
@@ -186,8 +191,14 @@ Outlaws, Pixel, Christmas, N0ted, Timmy). The Anime pack is DLC.
     beams; the map's own clip brushes provide their collision.
     Box-like parts use their model-space box (6 faces); others use an 18-sided hull. Parts smaller
     than 12 units are skipped, and at most 40 parts are kept per model.
-  - Stock models that ship with the game rather than the map can't be read. Where the model name
-    carries a size (`dust_crate_37x37x74`, `dust_door_80x128`), a non-colliding box stands in. The
+  - **Stock models** (the game's own, not packed in the map) are read from installed Source games
+    with `--stock-models auto` (the default): the `*_dir.vpk` content of Steam library games
+    (`cstrike`, `hl2`, `episodic`, `portal`, `garrysmod`, …; Portal and Half-Life 2 carry the HL2
+    props: oil drums, cars, containers, fences, lamp posts). Solid ones with a `.phy` get their exact
+    collision like packed models. Nothing is copied into the port except hull geometry, and the
+    report names the content folders used (never a path). CS-only props (`props/de_*`,
+    `props/cs_*`) need Counter-Strike: Source installed. `none` turns this off.
+  - Stock models that are not installed can't be read. Where the model name carries a size (`dust_crate_37x37x74`, `dust_door_80x128`), a non-colliding box stands in. The
     pivot (floor, centre or hinge) is chosen per model as the one that leaves the box least buried
     in the map's solids. Everything else is listed in the report.
   - Sloped clip brushes next to an unported stairs model are made visible (stone), because CS:GO
@@ -197,6 +208,15 @@ Outlaws, Pixel, Christmas, N0ted, Timmy). The Anime pack is DLC.
 - Hint/skip/areaportal/occluder brushes and most triggers are dropped (liquids, `trigger_hurt`,
   `trigger_push` and teleporters become game objects, ladders jump pads). Buy zones, bomb sites
   and other objective volumes are not rendered; they go to the metadata file.
+- **Hidden and doubled faces are left out** at export (`mapport/cull.py`), as vbsp/q3map's CSG
+  does: faces pressed against opaque brushes (touching walls, floors under boxes, slab sides) and
+  the covered part of faces that overlap another face on the same plane (z-fighting between
+  overlapping brushes, a brush face under a displacement; the displacement or the larger face
+  wins). Every brush keeps all its corners on some exported face, so outlines and collision are
+  unchanged; the check renders are identical. This removes 30 to 50 % of the triangles
+  (de_d2_remake 17.4k -> 11.6k, aim_map 6.3k -> 2.6k). The report counts `faces_hidden`,
+  `faces_trimmed` and `faces_doubled`.
+- The backdrop ground plane uses the main floor's material slot instead of one of its own.
 - Displacements are turned into convex slabs. Planar patches of the grid are merged greedily, and
   non-planar cells are split into two triangular prisms.
 - The 3D skybox (the component around `sky_camera`) and areas detached from the spawn areas are
@@ -376,9 +396,13 @@ JackOLantern and Pumpkin. Meso skins are Genji, McCree, Pharah and Tracer. Chang
 
 ## Not converted yet
 
-- Stock models that are not packed in the map, and exact model shapes (packed models become hulls).
-- Lighting and lightmaps: the game lights maps with its own sky.
-- Decals, overlays and climbable ladders.
+- Stock models of games that are not installed, and exact model shapes (models become hulls).
+- Lighting, lightmaps and the sky: KovaaK's lights every map with the player's own theme (sky
+  preset, clouds, sun, sky colour live in the theme, not in a scenario or map), so a port cannot
+  set them.
+- Decals, overlays (`infodecal`, `info_overlay`) and climbable ladders: the map-creator format has
+  no decal object.
+- More than 8 materials per map (2 slot groups of the Default pack x 4 surfaces).
 - Texture-accurate UVs. KovaaK's `MI_WA_*` materials are world-aligned, so `uv0` is only a hint.
 
 ## Tests
