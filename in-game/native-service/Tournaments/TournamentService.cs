@@ -229,7 +229,7 @@ sealed class TournamentService : IDisposable
             {
                 var id = "tci-" + c.TournamentId;
                 if (!dismissed.Contains(id))
-                    return new GameNotice(id, "ready", "Check in for " + Clean(c.Name), "Your tournament is about to start. Check in to keep your place.", null, null, "popup")
+                    return new GameNotice(id, "ready", "Check in for " + Clean(c.Name), "Check in to keep your place.", null, null, "popup")
                     { Actions = [new("Check in", "tournament-checkin", c.TournamentId), new("Later", "tournament-dismiss", id)] };
             }
             if (Active() is not { } a) return null;
