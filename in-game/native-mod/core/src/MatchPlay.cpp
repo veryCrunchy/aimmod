@@ -143,15 +143,30 @@ namespace aimmod
                 p.name = std::string(c[1]);
                 r.phase = p;
             }
-            else if (c[0] == "loadout" && c.size() == 6 && !r.loadout)
+            else if (c[0] == "loadout" && (c.size() == 6 || c.size() == 8) && !r.loadout)
             {
                 RoundState::Loadout l;
                 if (!profile(c[1]) || !profile(c[2]) || !Num(c[3], l.armour) || l.armour < 0 || l.armour > 1000 || !Flag(c[4], l.helmet) ||
                     !Flag(c[5], l.kit))
                     return std::nullopt;
+                if (c.size() == 8 && (!profile(c[6]) || !profile(c[7]))) return std::nullopt;
                 l.primary = std::string(c[1]);
                 l.pistol = std::string(c[2]);
+                if (c.size() == 8)
+                {
+                    l.knife = std::string(c[6]);
+                    l.bomb = std::string(c[7]);
+                }
                 r.loadout = l;
+            }
+            else if (c[0] == "bomb" && c.size() == 7 && !r.bomb)
+            {
+                RoundState::Bomb b;
+                if (c[1] != "dropped" && c[1] != "planted" && c[1] != "defused") return std::nullopt;
+                if (!Num(c[2], b.x) || !Num(c[3], b.y) || !Num(c[4], b.z) || !Int(c[5], b.explodesMs) || b.explodesMs < 0 || !Flag(c[6], b.defusing)) return std::nullopt;
+                if (std::fabs(b.x) > 1e7 || std::fabs(b.y) > 1e7 || std::fabs(b.z) > 1e7) return std::nullopt;
+                b.state = std::string(c[1]);
+                r.bomb = b;
             }
             else return std::nullopt;
         }

@@ -1881,6 +1881,7 @@ sealed partial class MultiplayerService : IDisposable
             var tracker = poseTracker;
             foreach (var claim in shotFeed.Poll(match.Id, match.Round, offset, (id, t) => tracker.SeenAt(id, t) ?? (tracker.LastSeen.TryGetValue(id, out var last) ? last : null)))
             {
+                if (match.Cs is not null && claim.Slot == CsRules.BombSlot) continue; // the bomb plants, it never hits
                 if (core is not null) core.Claim(SelfId, claim);
                 else if (hostPeer is not null) Send(hostPeer, "hit", claim.Body());
             }
@@ -1961,7 +1962,8 @@ sealed partial class MultiplayerService : IDisposable
     }
 
     // For AimModSteam: how each other player's avatar should look (alive or down, friend
-    // or foe, health), so a death plays on the avatar and team colours are right.
+    // or foe, health, and in CS the weapon in their hands), so a death plays on the avatar and
+    // team colours are right.
     string? lastAvatarState; long avatarSequence;
     void WriteAvatarState(MatchSnapshot match, CombatView view, CombatPlayerView self)
     {
@@ -1971,7 +1973,8 @@ sealed partial class MultiplayerService : IDisposable
             var died = view.Events.LastOrDefault(e => e.Member == p.Member && e.Kind == "death");
             var friend = self.Team != 0 && p.Team == self.Team;
             return "peer\t" + AvatarPeer(p.Member) + "\t" + (p.Alive ? 1 : 0) + "\t" + (friend ? "friend" : "enemy") + "\t" + Math.Round(p.Health).ToString(System.Globalization.CultureInfo.InvariantCulture)
-                + "\t" + (p.Alive ? 0 : died?.T ?? 0) + "\t" + (p.Alive ? 0 : p.RespawnAt ?? 0);
+                + "\t" + (p.Alive ? 0 : died?.T ?? 0) + "\t" + (p.Alive ? 0 : p.RespawnAt ?? 0)
+                + (match.Cs is { } cs ? "\t" + AvatarWeapon(cs, p.Member) : "");
         });
         var body = "match\t" + Uri.EscapeDataString(match.Id) + "\n" + string.Join("\n", rows) + "\n";
         if (body == lastAvatarState) return;
@@ -1980,8 +1983,16 @@ sealed partial class MultiplayerService : IDisposable
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
 
+    // CS: the third-person model of what a player holds (KovaaK's WeaponMeshViewModels name), "-" for
+    // nothing to show (the knife, the bomb, down).
+    internal static string AvatarWeapon(CsView cs, string member) =>
+        cs.Players.FirstOrDefault(x => x.Member == member) is { Alive: true } p && CsRules.FindAny(p.Holding) is { } w && w.Look.ThirdPerson != "-" ? w.Look.ThirdPerson : "-";
+
+    bool PlayingCs() => Current?.Match is { Cs: not null } m && m.Players.Contains(SelfId);
+
     void TrackLocalRun()
     {
+        if (!PlayingCs()) roundAudio.Update(prefs.RoundVolume, null, null); // no bomb to beep
         if (Current is not { Match: { } match } || !match.Players.Contains(SelfId)) { trackedRound = null; return; }
         var restarted = DetectRestart(match);
         ReadLockPresses();
@@ -2201,7 +2212,7 @@ sealed partial class MultiplayerService : IDisposable
     public IDisposable? Companion { get; set; }
     // The developer tools the endpoints use (their timer runs every 50 ms).
     internal Developer.DeveloperTools? DevTools { get; private set; }
-    public void Dispose() { timer?.Dispose(); DevTools?.Dispose(); Companion?.Dispose(); lock (gate) { Leave("closed"); DeleteSessionMarker(); DeletePreviewRequest(); } transport.Dispose(); }
+    public void Dispose() { timer?.Dispose(); DevTools?.Dispose(); Companion?.Dispose(); lock (gate) { Leave("closed"); DeleteSessionMarker(); DeletePreviewRequest(); } transport.Dispose(); roundAudio.Dispose(); }
 }
 
 static class WindowsClipboard

@@ -876,8 +876,11 @@ the arena.
   ```
   AIMMOD_AVATARS_1\t<sequence>
   match\t<%-escaped match id>
-  peer\t<member id = SteamID64>\t<alive 0/1>\t<friend|enemy>\t<health>\t<died at unix ms, 0>\t<respawn at unix ms, 0>
+  peer\t<member id = SteamID64>\t<alive 0/1>\t<friend|enemy>\t<health>\t<died at unix ms, 0>\t<respawn at unix ms, 0>[\t<weapon>]
   ```
+
+  In CS the optional `weapon` column is the third-person model of what that
+  player holds (6.6.2), or `-`.
 
   When `alive` drops to 0, the bridge plays the death on that avatar (native
   `Death`/gib if it stays inert, otherwise hide it with
@@ -1120,7 +1123,7 @@ preset):
 | 1 (0), primary | SMG | $1200–1500 | fully auto, 0.075 s, falloff |
 | 1 (0) | Rifle (T) / Rifle (CT) | $2700 / $2900 | 36 / 33 damage, 0.1 s, spread and recoil per lobby preset |
 | 1 (0) | Sniper | $4750 | 115 damage, ADS (`CanAimDownSight`, `ADSFOVScale`), one-shot body |
-| 3 | Knife | free | melee ability (native `FMeleeAbilityNative`), not a weapon slot |
+| 3 (2) | Knife | free | short-range hitscan in weapon slot 3 (6.6.2) |
 | armour | Kevlar / Kevlar + helmet | $650 / $1000 | AimMod armour (below) |
 | kit | Defuse kit (CT) | $400 | AimMod flag (defuse 5 s) |
 
@@ -1190,8 +1193,8 @@ preset):
   - It drops where the carrier dies.
   - A refused plant, defuse or drop says why on the HUD ("Not in a bomb
     site", "You don't have the bomb", ...).
-  - Not built: a world mesh for a dropped bomb (the compass marks it) and
-    a planted-bomb beep.
+  - The dropped and planted bomb is drawn in the world, and the planted
+    bomb beeps (6.6.2, 6.6.3).
 - **The pose feed was dropped.** AimModCore writes its `self` and `fire`
   rows with a real Unix-millisecond time (about 1.8e12). The service's pose
   reader capped numbers at 1e12, so it threw away every self-pose frame
@@ -1275,7 +1278,7 @@ preset):
 - **Buy validation (host):** buy window, alive, inside your side's buy zone
   (when the map has them), side, money, already owned. Buys are lobby
   commands (`buy {item}`).
-- **Damage.** The claim names the weapon slot (`w`: 0 primary, 1 pistol). The
+- **Damage.** The claim names the weapon slot (`w`: 0 primary, 1 pistol, 2 knife). The
   host uses the bought weapon (damage, ×4 headshot, fire rate) and applies
   armour the CS2 way:
   - the weapon's armour-penetration share goes to health;
@@ -1333,6 +1336,78 @@ preset):
 - host migration mid-match (a CS match on a new host restarts its round
   state);
 - the native round-start respawn and freeze in AimModCore.
+
+#### 6.6.2 Weapons in the hand, slots, knife and bomb (built)
+
+- **Why no weapon showed.** Every generated profile said `WeaponModel=Rifle`,
+  which isn't one of KovaaK's viewmodel names, so the first-person view had no
+  weapon mesh. The names are the game's own list (`MatchScenario.ViewModels`:
+  `KovaaKs Rifle`, `Heavy Surge Rifle`, `Spider`, `Machine Pistol`,
+  `Law Bringer`, `Stud Gun`, `Spike`, ..., and `Blank` for none). Third-person
+  models are `WeaponDeveloperSettings`' `WeaponMeshViewModels` (`AK47`, `M4`,
+  `SMG`, `Pistol`, `Six Shooter`, `Bolt Action Sniper`, ...). The CS player
+  profile sets `HideWeapon=false`; avatars keep `HideWeapon=true`.
+- **Profiles** (`CsRules`, `CsLook`): every CS item is a hitscan profile with
+  the host's damage and fire rate, a viewmodel by class, the CS2 magazine and
+  reload, and a view kick (`MaxRecoilUp`/`Horiz`, auto reset). Spread stays 0
+  because the host validates hits on the camera ray; a kick moves the camera,
+  so it moves hits as it moves the crosshair.
+
+  | Item | Viewmodel | Third person | Mag | Reload |
+  | --- | --- | --- | --- | --- |
+  | Glock-18 | Stud Gun | Pistol | 20 | 2.27 s |
+  | USP-S | Spike | Pistol | 12 | 2.17 s |
+  | Desert Eagle | Law Bringer | Six Shooter | 7 | 2.2 s |
+  | MAC-10, MP9 | Machine Pistol | SMG | 30 | 2.6 / 2.1 s |
+  | AK-47 | KovaaKs Rifle | AK47 | 30 | 2.43 s |
+  | M4A1-S | Heavy Surge Rifle | M4 | 20 | 3.07 s |
+  | AWP (scopes on RMB) | Spider | Bolt Action Sniper | 5 | 3.67 s |
+  | Knife | Blank + AimMod knife | none | - | - |
+  | C4 | Blank + AimMod bomb | none | - | - |
+
+  The combat modes' rifle shows `KovaaKs Rifle`, the railgun `Heal Rifle`.
+- **Slots** (CS): 1 primary, 2 pistol, 3 knife, 4 bomb (the carrier's only).
+  The arena's player profile has `USP-S;Glock-18;Knife;C4` until the round's
+  loadout fills the slots (`loadout` line, 8 columns). KovaaK's own Weapon1
+  to Weapon4 keys switch natively. AimModCore adds the mouse wheel and Q (the
+  last weapon), and draws a bought weapon; dropping or planting the bomb from
+  the hand draws the best weapon. Buying a primary replaces the old one (no
+  drops yet).
+- **Knife:** 40 damage every 0.4 s within 2.1 m (48 Source units at 4.4 cm),
+  through the same host-validated claims (slot 2); the host refuses a stab
+  beyond `KnifeRangeCm` + 60 cm (`range`). Kill reward $1,500.
+- **Bomb:** slot 4 holds AimMod's C4 model while you carry it; E or fire with
+  it in hand plants. It never hits (the client drops its claims, the host
+  refuses slot 3). The dropped or planted bomb is drawn in the world from the
+  `bomb` line (everyone sees it), with a light that flashes with the beep.
+- **Others' hands:** AimModCore's self-pose `weapon` row names the slot in
+  hand; the service sends `hold {slot}` to the host on change; `CsPlayerView`
+  has `Holding`; `avatar-state.tsv` carries its third-person model, which
+  AimModSteam puts on the avatar's own third-person weapon mesh
+  (`GetThirdPersonWeaponMeshComponent_Primary`, KovaaK's `FN_*` meshes).
+- **Not yet:** the bomb on a remote carrier's back, the knife on avatars,
+  weapon drops between players, per-weapon damage falloff.
+
+#### 6.6.3 Bomb and round sounds (built)
+
+- AimMod's own sounds, synthesised by the service (`BombSounds`: sine tones,
+  noise and envelopes; nothing recorded or taken from a game);
+  `--write-bomb-sounds <folder>` writes them as WAV files.
+- The planted bomb beeps at fixed times before the explosion: at 40 s left,
+  then every `BeepInterval` (1 s at 40 s, 0.29 s at 10 s, about 7 a second at
+  the end), and a rising tone in the last second. Every machine beeps in step,
+  and the bomb's light flashes with it.
+- The beep comes from the bomb: volume falls with distance (full within 3 m,
+  half at about 18 m, never below 6 %) and it pans with the bomb's bearing from
+  where you look. The explosion and others' plant and defuse sounds are
+  positional too; your own actions, the "bomb planted" alert (three rising
+  notes, everyone), defused, the kit click and the Terrorists' bomb drop and
+  pickup ticks are 2D.
+- Played through Windows audio (winmm, 44.1 kHz stereo, mixed by AimMod), at
+  the "Bomb and round sounds" volume in the multiplayer settings (default
+  70 %, 0 is off). UE can't play a runtime-built sound without engine code
+  AimMod doesn't call (`USoundWaveProcedural`'s queue isn't reflected), so
+  KovaaK's master volume doesn't apply.
 
 ### 6.7 Capture the flag
 

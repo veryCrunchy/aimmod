@@ -10,12 +10,30 @@ namespace AimMod.InGame.Multiplayer;
 // of it; hits are the same host-validated claims as the combat modes
 // (CombatMatch), with the shooter's bought weapon and the victim's armour.
 
-// A buyable weapon. Slot 0 primary, 1 secondary (pistol). ArmorPenetration: the share
-// of damage that reaches health through armour (CS2 "armor penetration").
-sealed record CsWeapon(string Id, string Label, int Price, string Side, int Slot, string Class, int KillReward, double ArmorPenetration, CombatWeapon Combat);
+// How a CS item looks and handles in KovaaK's (in-game/docs/game-modes.md 6.6.2):
+//  - Model: the first-person WeaponModel, one of the viewmodel names KovaaK's 3.9.11 ships
+//    (FPSPlayer_WeaponComponent's WeaponMeshLookup; "Blank" shows no weapon mesh, and
+//    AimModCore then draws AimMod's own knife or bomb in the hand).
+//  - ThirdPerson: the 3rdPersonWeaponModel (WeaponDeveloperSettings' WeaponMeshViewModels),
+//    which other players' avatars show while this item is held; "-" for none.
+//  - Magazine and reload (s), view kick per shot (degrees up, sideways), and whether
+//    right mouse scopes in. Spread stays 0: the host validates hits on the camera ray, so
+//    a spread bullet would hit where the crosshair isn't.
+sealed record CsLook(string Model, string ThirdPerson, int Magazine, double Reload, double KickUp, double KickSide, bool Scope = false);
+
+// A CS item that goes in a weapon slot: 0 primary, 1 secondary (pistol), 2 knife, 3 bomb.
+// ArmorPenetration: the share of damage that reaches health through armour (CS2
+// "armor penetration").
+sealed record CsWeapon(string Id, string Label, int Price, string Side, int Slot, string Class, int KillReward, double ArmorPenetration, CombatWeapon Combat, CsLook Look);
 
 static class CsRules
 {
+    // Weapon slots, as KovaaK's Weapon1..Weapon8 keys number them from 0 (key 1 = slot 0).
+    public const int PrimarySlot = 0, PistolSlot = 1, KnifeSlot = 2, BombSlot = 3;
+    // KovaaK's viewmodel with no weapon mesh (AimModCore draws the knife and the bomb).
+    public const string BlankModel = "Blank";
+    // CS2 knife reach (48 Source units) at the CS ports' 4.4 cm per unit.
+    public const double KnifeRangeCm = 210;
     // CS2 competitive timers (ms).
     public const long FreezeMs = 15_000, BuyMs = 20_000, RoundMs = 115_000, BombMs = 40_000, PlantMs = 3_200, DefuseMs = 10_000, KitDefuseMs = 5_000, RoundEndMs = 7_000;
     // CS2 economy.
@@ -30,20 +48,36 @@ static class CsRules
     public const string T = "T", CT = "CT";
 
     static CombatWeapon W(string label, double damage, double tbs, bool auto) => new("AimMod CS " + label, damage, 4, tbs, auto);
-    // CS2 reference weapons: price, side, slot, class, kill reward, armour penetration, damage, fire interval.
+    // CS2 reference weapons: price, side, slot, class, kill reward, armour penetration, damage, fire interval,
+    // and their look: KovaaK's viewmodel by class (pistols, the revolver-like heavy pistol, the SMG, the
+    // two rifles, the scoped sniper), CS2 magazine and reload times, and a view kick within KovaaK's recoil.
     public static readonly CsWeapon[] Weapons =
     [
-        new("glock", "Glock-18", 200, T, 1, "pistol", 300, 0.47, W("Glock-18", 30, 0.15, false)),
-        new("usp", "USP-S", 200, CT, 1, "pistol", 300, 0.505, W("USP-S", 35, 0.17, false)),
-        new("deagle", "Desert Eagle", 700, "any", 1, "pistol", 300, 0.932, W("Desert Eagle", 53, 0.225, false)),
-        new("mac10", "MAC-10", 1050, T, 0, "smg", 600, 0.575, W("MAC-10", 29, 0.075, true)),
-        new("mp9", "MP9", 1250, CT, 0, "smg", 600, 0.6, W("MP9", 26, 0.07, true)),
-        new("ak47", "AK-47", 2700, T, 0, "rifle", 300, 0.775, W("AK-47", 36, 0.1, true)),
-        new("m4a1s", "M4A1-S", 2900, CT, 0, "rifle", 300, 0.7, W("M4A1-S", 38, 0.1, true)),
-        new("awp", "AWP", 4750, "any", 0, "sniper", 100, 0.975, W("AWP", 115, 1.46, false)),
+        new("glock", "Glock-18", 200, T, PistolSlot, "pistol", 300, 0.47, W("Glock-18", 30, 0.15, false), new("Stud Gun", "Pistol", 20, 2.27, 0.9, 0.25)),
+        new("usp", "USP-S", 200, CT, PistolSlot, "pistol", 300, 0.505, W("USP-S", 35, 0.17, false), new("Spike", "Pistol", 12, 2.17, 0.8, 0.2)),
+        new("deagle", "Desert Eagle", 700, "any", PistolSlot, "pistol", 300, 0.932, W("Desert Eagle", 53, 0.225, false), new("Law Bringer", "Six Shooter", 7, 2.2, 2.6, 0.6)),
+        new("mac10", "MAC-10", 1050, T, PrimarySlot, "smg", 600, 0.575, W("MAC-10", 29, 0.075, true), new("Machine Pistol", "SMG", 30, 2.6, 0.3, 0.3)),
+        new("mp9", "MP9", 1250, CT, PrimarySlot, "smg", 600, 0.6, W("MP9", 26, 0.07, true), new("Machine Pistol", "SMG", 30, 2.1, 0.28, 0.25)),
+        new("ak47", "AK-47", 2700, T, PrimarySlot, "rifle", 300, 0.775, W("AK-47", 36, 0.1, true), new("KovaaKs Rifle", "AK47", 30, 2.43, 0.42, 0.3)),
+        new("m4a1s", "M4A1-S", 2900, CT, PrimarySlot, "rifle", 300, 0.7, W("M4A1-S", 38, 0.1, true), new("Heavy Surge Rifle", "M4", 20, 3.07, 0.33, 0.22)),
+        new("awp", "AWP", 4750, "any", PrimarySlot, "sniper", 100, 0.975, W("AWP", 115, 1.46, false), new("Spider", "Bolt Action Sniper", 5, 3.67, 3, 0.4, Scope: true)),
     ];
+    // Everyone's knife (slot 2): CS2's slash, 40 damage every 0.4 s within reach, the knife's kill
+    // reward. The bomb (slot 3) is only the carrier's, and does no damage: E (or fire) plants it.
+    public static readonly CsWeapon Knife = new("knife", "Knife", 0, "any", KnifeSlot, "knife", 1500, 0.85,
+        new CombatWeapon("AimMod CS Knife", 40, 1, 0.4, true, 0, KnifeRangeCm), new(BlankModel, "-", 0, 0, 0.6, 0.4));
+    public static readonly CsWeapon Bomb = new("c4", "C4", 0, T, BombSlot, "bomb", 0, 0,
+        new CombatWeapon("AimMod CS C4", 0, 1, 1, false, 0, 1), new(BlankModel, "-", 0, 0, 0, 0));
+    // Every profile the CS arena carries.
+    public static IEnumerable<CsWeapon> Profiles => Weapons.Append(Knife).Append(Bomb);
     public static CsWeapon? Find(string? id) => Weapons.FirstOrDefault(w => w.Id == id);
-    public static CsWeapon? ByProfile(string name) => Weapons.FirstOrDefault(w => w.Combat.Name == name);
+    public static CsWeapon? FindAny(string? id) => Profiles.FirstOrDefault(w => w.Id == id);
+    public static CsWeapon? ByProfile(string name) => Profiles.FirstOrDefault(w => w.Combat.Name == name);
+    // The item a slot holds for a player: what they bought, the knife, or the bomb if they carry it.
+    public static CsWeapon? InSlot(int slot, string? primary, string? secondary, bool carrier) => slot switch
+    {
+        PrimarySlot => Find(primary), PistolSlot => Find(secondary), KnifeSlot => Knife, BombSlot => carrier ? Bomb : null, _ => null,
+    };
     public static CsWeapon DefaultPistol(string side) => side == T ? Weapons[0] : Weapons[1];
     public static readonly string[] Equipment = ["kevlar", "kevlar-helmet", "defuse-kit"];
 
@@ -162,7 +196,7 @@ sealed record MapObjectives(IReadOnlyList<ObjectiveZone> Zones, IReadOnlyList<Ob
 // What clients mirror and the HUD shows.
 // InBuyZone: inside one of the side's buy zones now (null when the map has none, so buying works anywhere).
 sealed record CsPlayerView(string Member, int Team, string Side, int Money, bool Alive, double Health, double Armor, bool Helmet, bool Kit, string? Primary, string? Secondary, int Kills, int Deaths,
-    bool? InBuyZone = null, string? Site = null, string? Callout = null);
+    bool? InBuyZone = null, string? Site = null, string? Callout = null, string? Holding = null);
 // A bomb site's centre (world units), for the HUD's site markers.
 sealed record CsSiteView(string Name, double X, double Y, double Z);
 sealed record CsBombView(string State, string? Carrier, string? Site, double[]? Position, long? ExplodesAt, string? Planter, long? PlantDoneAt, string? Defuser, long? DefuseDoneAt);
@@ -177,6 +211,7 @@ sealed class CsMatch
     {
         public required string Id; public int Team; public int Money = CsRules.StartMoney;
         public CsWeapon? Primary, Secondary; public double Armor; public bool Helmet, Kit; public int Kills, Deaths;
+        public int Held = -1; // the weapon slot the player says they hold (-1: not told yet)
     }
     readonly Dictionary<string, P> players = new();
     readonly MapObjectives? map;
@@ -214,7 +249,8 @@ sealed class CsMatch
         Combat = new CombatMatch(LobbyModes.Cs, ids, int.MaxValue, 0, start, start + 6 * 3_600_000L, teams)
         {
             Respawns = false,
-            WeaponFor = (id, slot) => players.TryGetValue(id, out var p) ? (slot == 0 ? p.Primary : slot == 1 ? p.Secondary : null)?.Combat : null,
+            // The bomb slot never hits: it plants.
+            WeaponFor = (id, slot) => players.TryGetValue(id, out var p) && slot != CsRules.BombSlot ? CsRules.InSlot(slot, p.Primary?.Id, p.Secondary?.Id, false)?.Combat : null,
             DamageModel = Damage,
             OnKill = Killed,
         };
@@ -396,6 +432,19 @@ sealed class CsMatch
         }
     }
 
+    // The weapon slot a player switched to (their own client says so), for the item other players see in
+    // their hands. Only what the player has: an empty slot or another player's bomb falls back.
+    public string? Hold(string id, int slot)
+    {
+        if (!players.TryGetValue(id, out var p)) return "not-playing";
+        if (slot is < 0 or > 7) return "invalid";
+        p.Held = slot;
+        return null;
+    }
+    // What a player holds: the slot they said, if it has an item for them, else their best weapon.
+    CsWeapon Holding(P p) =>
+        (p.Held >= 0 ? CsRules.InSlot(p.Held, p.Primary?.Id, p.Secondary?.Id, carrier == p.Id) : null) ?? p.Primary ?? p.Secondary ?? CsRules.Knife;
+
     public void Leave(string id, long now) { Combat.Kill(id, now); if (carrier == id) DropBomb(id); if (planter == id) planter = null; if (defuser == id) defuser = null; }
 
     public void Tick(long now)
@@ -517,7 +566,7 @@ sealed class CsMatch
 
     public CsView View() => new(Round, Phase, PhaseEndsAt, LiveAt, [score[0], score[1]], SideOf(1), HalfRounds, Overtime,
         players.Values.Select(p => new CsPlayerView(p.Id, p.Team, SideOf(p.Team), p.Money, Combat.Alive(p.Id), Math.Round(Combat.Health(p.Id), 1), Math.Round(p.Armor, 1), p.Helmet, p.Kit,
-            p.Primary?.Id, p.Secondary?.Id, p.Kills, p.Deaths, InBuyZone(p), SiteOf(p), CalloutOf(p))).ToArray(),
+            p.Primary?.Id, p.Secondary?.Id, p.Kills, p.Deaths, InBuyZone(p), SiteOf(p), CalloutOf(p), Holding(p).Id)).ToArray(),
         new CsBombView(bombState, carrier, site, bombAt, explodesAt, planter, plantDoneAt, defuser, defuseDoneAt), lastWinner, lastReason, WinnerTeam, events.TakeLast(16).ToArray(),
         roundSpawns.Count > 0 ? new Dictionary<string, double[]>(roundSpawns) : null,
         map?.BombSites.Select(z => new CsSiteView(z.Name, Math.Round((z.Min[0] + z.Max[0]) / 2), Math.Round((z.Min[1] + z.Max[1]) / 2), Math.Round((z.Min[2] + z.Max[2]) / 2))).ToArray());

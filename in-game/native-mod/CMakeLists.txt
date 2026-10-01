@@ -40,6 +40,7 @@ add_library(aimmod_core STATIC
     core/src/Water.cpp
     core/src/Overlay.cpp
     core/src/WorldTags.cpp
+    core/src/CsGear.cpp
 )
 target_include_directories(aimmod_core PUBLIC core/include)
 if(MSVC)
@@ -70,6 +71,7 @@ if(AIMMOD_BUILD_MOD)
         mod/src/Output.cpp
         mod/src/ServiceHost.cpp
         mod/src/MatchPlay.cpp
+        mod/src/CsGear.cpp
         mod/src/Cosmetics.cpp
         mod/src/CosmeticsPreview.cpp
         mod/src/Reflect.cpp

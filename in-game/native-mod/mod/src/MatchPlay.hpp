@@ -8,6 +8,7 @@
 //    game's own functions, only in generated "AimMod Match - " scenarios in
 //    freeplay. Missing bindings disable it (logged); leaving the gate
 //    releases spawn protection.
+#include "CsGear.hpp"
 #include "GameBindings.hpp"
 
 #include <Unreal/FWeakObjectPtr.hpp>
@@ -36,7 +37,7 @@ namespace aimmod
     {
     public:
         using PoseId = std::function<std::uint32_t(game::UObject* actor)>;
-        MatchPlay(game::Bindings& bindings, game::Scene& scene, Output& output) : m_b(bindings), m_scene(scene), m_output(output) {}
+        MatchPlay(game::Bindings& bindings, game::Scene& scene, Output& output) : m_b(bindings), m_scene(scene), m_output(output), m_gear(bindings, scene) {}
         // "match-play" capability: the character bindings resolved (known after
         // the first match character was seen; true until proven otherwise).
         bool available() const { return !m_disabled; }
@@ -103,6 +104,9 @@ namespace aimmod
         game::UObject* m_loadoutHandler{};
         std::vector<std::pair<int, bool>> m_selectableBefore; // slot -> original SelectableWeapon
         bool m_loadoutChanged{};
+        // CS: the slots as last applied (to draw what changed), and the weapons in the hand and the bomb in the world.
+        std::optional<cs::Loadout> m_csLoadout;
+        CsGear m_gear;
         struct PendingSpawn
         {
             RoundState::Spawn spawn;

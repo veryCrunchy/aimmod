@@ -115,6 +115,7 @@ namespace aimmod
         std::unordered_map<std::uint32_t, std::string> m_poseNames; // target id -> actor name
         std::optional<double> m_poseShots;
         game::Field m_crouched;
+        game::Getter m_currentWeapon; // WeaponHandler.GetCurrentWeaponNum: the slot in hand (self-pose weapon row)
         std::uint32_t m_nextPoseId{};
         std::vector<std::pair<std::int64_t, std::array<double, 7>>> m_poses;
         void PollClipKey();
