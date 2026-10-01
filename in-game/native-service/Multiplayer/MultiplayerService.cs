@@ -195,6 +195,13 @@ sealed partial class MultiplayerService : IDisposable
                     return LobbyResult.Success;
                 case "dismiss":
                     notice = null; return LobbyResult.Success;
+                case "pointer-debug":
+                    // The notify page's mouse event counts while the buy menu is open: Gameface's own
+                    // events and AimModCore's pointer fallback (diagnosing clicks that don't arrive).
+                    if (args.ValueKind == JsonValueKind.Object && args.TryGetProperty("counts", out var counts) && counts.ValueKind == JsonValueKind.String
+                        && counts.GetString() is { Length: > 0 and <= 200 } line && line.All(c => c is >= ' ' and <= '~'))
+                        Console.Error.WriteLine("[notify] pointer events: " + line);
+                    return LobbyResult.Success;
                 case "invite":
                     if (Current is not { } lobby) return LobbyResult.Fail("no-lobby", "Create a lobby first.");
                     return transport.InviteOverlay(lobby) ? LobbyResult.Success : LobbyResult.Fail("invite-unavailable", "Steam invites need the Steam bridge. Share the room code " + lobby.Code + " for now.");
