@@ -1,0 +1,22 @@
+# AimModSteam settings (Mods\AimModSteam\config.txt).
+# ghost_demo=1: accept Steam invites automatically when no AimMod service is
+# connected to the bridge, stream your position to lobby members at 30 Hz and
+# show them in your world on the same scenario.
+ghost_demo=1
+
+# Show other players as real KovaaK's characters (a bot with its AI off,
+# invulnerable). 0 = simple shapes only. Shapes are also the automatic
+# fallback when a bot can't be spawned.
+avatars=1
+
+# Optional tuning for the avatar experiment:
+# avatar_profile=<bot profile name>   (default: the scenario's own bot profile)
+# avatar_drive=update|teleport        (UpdateClientLocAndRot or SetActorLocationAndRotation)
+# avatar_move_mode=flying|walking|none|falling
+# avatar_test=1                       (offline check: one avatar circles you, no network)
+
+# Spectating without a lobby: friends (default) = friends may watch you,
+# ask = you confirm each request in the AimMod UI, off = nobody.
+spectate_privacy=friends
+# show_spectating=1 publishes whom you are watching in rich presence.
+# hide_scenario=1 keeps your current scenario out of rich presence.
