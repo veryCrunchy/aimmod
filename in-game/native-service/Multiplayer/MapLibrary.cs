@@ -9,7 +9,7 @@ sealed record WorkshopItem(string Item, string Title, long Bytes, long Updated, 
 // One map port: installed in the library, listed on the Workshop, or both.
 // Shift is walk, sprint or none (the held Ability 1 profile the port embeds).
 sealed record MapPort(string Key, string Scenario, string Display, string Game, string Variant, string? MapFile, long Bytes,
-    string Shift, double MapScale, string? WorkshopId, bool Installed, bool NeedsUpdate, string? Preview);
+    string Shift, double MapScale, string? WorkshopId, bool Installed, bool NeedsUpdate, string? Preview, string? Thumb = null);
 
 // Map ports from tools/map-port. Their names are fixed by mapport/naming.py
 // ("AimMod - <Map> (<Game>) - <Variant>", map file aimmod_<mapid>_<game>.json),
@@ -42,7 +42,7 @@ static partial class MapPorts
             var item = s.WorkshopId is { } w && byItem.TryGetValue(w, out var listed) ? listed : null;
             list.Add(new MapPort(KeyOf(s.Name), s.Name, display, game, variant, mapPath is null ? null : Path.GetFileName(mapPath), bytes,
                 scenarioPath is null ? "none" : Shift(ContentLibrary.AbilityNames(scenarioPath)), s.MapScale, s.WorkshopId, true, item?.NeedsUpdate == true,
-                PreviewFor(scenarioPath, mapPath, s.WorkshopId is not null)));
+                PreviewFor(scenarioPath, mapPath, s.WorkshopId is not null), ThumbFor(scenarioPath, mapPath)));
         }
         var have = list.Select(p => p.Scenario).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var haveItems = list.Where(p => p.WorkshopId is not null).Select(p => p.WorkshopId!).ToHashSet();
@@ -88,6 +88,28 @@ static partial class MapPorts
             if (workshop && scenarioPath is not null && Path.GetDirectoryName(scenarioPath) is { } folder)
                 foreach (var file in Directory.EnumerateFiles(folder).Take(64))
                     if (Image(file)) return file;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        return null;
+    }
+    // The map port's 16:9 Workshop thumbnail (<map>.workshop-thumb-16x9.jpg or .png): next to the
+    // installed map, or in the scenario's folder (a Workshop item ships it with the scenario).
+    // The map select shows it on the map's card; the top-down preview is the fallback.
+    const string ThumbSuffix = ".workshop-thumb-16x9";
+    static string? ThumbFor(string? scenarioPath, string? mapPath)
+    {
+        try
+        {
+            if (mapPath is not null)
+            {
+                var stem = Path.Combine(Path.GetDirectoryName(mapPath)!, Path.GetFileNameWithoutExtension(mapPath));
+                foreach (var candidate in new[] { stem + ThumbSuffix + ".jpg", stem + ThumbSuffix + ".png" })
+                    if (Image(candidate)) return candidate;
+            }
+            if (scenarioPath is not null && Path.GetDirectoryName(scenarioPath) is { } folder)
+                foreach (var file in Directory.EnumerateFiles(folder).Take(64))
+                    if (Path.GetFileNameWithoutExtension(file).EndsWith(ThumbSuffix, StringComparison.OrdinalIgnoreCase) && Image(file))
+                        return file;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         return null;

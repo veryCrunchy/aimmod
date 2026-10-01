@@ -122,6 +122,19 @@ class WorkshopTests(unittest.TestCase):
         self.assertIn('"visibility"\t\t"2"', vdf)
         self.assertIn("Never rename the scenario", text(os.path.join(b, "PUBLISH.txt")))
 
+    def test_thumbnail_ships_with_the_scenario(self):
+        port_folder(self.port)
+        base = "aimmod_de_dust2_csgo"
+        with open(os.path.join(self.port, base + ".workshop-thumb-16x9.jpg"), "wb") as fh:
+            fh.write(bytes([0xFF, 0xD8, 0xFF]) + b" synthetic")
+        report_path = os.path.join(self.port, base + ".report.json")
+        report = load(report_path)
+        report["files"]["workshop_thumb_16x9_jpg"] = base + ".workshop-thumb-16x9.jpg"
+        with open(report_path, "w") as fh:
+            json.dump(report, fh)
+        b = bundle.prepare(self.port, self.out, source=bundle.Source("Synthetic Author", "https://example.invalid/dust2", "Ported with permission", []))[0]
+        self.assertEqual(sorted(os.listdir(os.path.join(b, "content"))), sorted([TITLE + ".sce", base + ".workshop-thumb-16x9.jpg"]))
+
     def test_large_preview_is_scaled(self):
         port_folder(self.port, preview=(1400, 2100))
         b = bundle.prepare(self.port, self.out)[0]
