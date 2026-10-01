@@ -14,7 +14,8 @@ sealed record RecentMatch(string Id, long EndedAt, string Mode, string Scenario,
 sealed record RecentPlayer(string Name, int Place, double? Best, int Wins, int Points, bool Self, string? Key = null, double Total = 0);
 sealed record LocalRun(bool Active, string? Scenario, double? Score, double? Seconds, double? Remaining, int Shots, int Hits, int Kills, string? Attempt);
 // How this machine starts its run for the current round.
-sealed record RoundPlan(string Key, string Scenario, string Mode, bool Generated, string State, string Message, long? LoadSequence = null, long? StartSequence = null);
+// Map: the load gate's check of this machine's map (null, checking, ok, wrong, failed).
+sealed record RoundPlan(string Key, string Scenario, string Mode, bool Generated, string State, string Message, long? LoadSequence = null, long? StartSequence = null, string? Map = null);
 
 // Owns this machine's view of multiplayer. When this machine is the host (or
 // every other member is simulated) it runs the LobbyCore authority; otherwise
@@ -1720,8 +1721,8 @@ sealed partial class MultiplayerService : IDisposable
             var state = result.State == "error" ? "error" : result.Code is "loaded" or "already-loaded" ? "ready" : result.Code == "started" ? "started" : plan.State;
             var text = result.State == "error"
                 ? (result.Code == "unknown-scenario" ? "KovaaK’s hasn’t picked up “" + plan.Scenario + "” yet. " : "KovaaK’s couldn’t " + (result.Sequence == plan.StartSequence ? "start" : "load") + " the scenario (" + result.Code + "). ") + FindIt(plan.Scenario, plan.Generated)
-                : state == "ready" ? "Loaded. Your run starts when the countdown ends." : state == "started" ? "Your run has started." : plan.Message;
-            plan = plan with { State = state, Message = text };
+                : state == "ready" ? (match.Phase == MatchPhases.Loading ? "Scenario loaded. Checking the map…" : "Loaded. Your run starts when the countdown ends.") : state == "started" ? "Your run has started." : plan.Message;
+            plan = plan with { State = state, Message = text, Map = state == "ready" && match.Phase == MatchPhases.Loading ? "checking" : plan.Map };
         }
     }
 
@@ -2003,7 +2004,7 @@ sealed partial class MultiplayerService : IDisposable
                     blockers = LobbyRules.StartBlockers(lobby), content = new { scenario, map, profiles },
                     simulated = lobby.Members.Any(m => m.Simulated),
                     generated = generated ? new { name = MatchScenario.Name(lobby.Settings), key = MatchScenario.Key(lobby.Settings)[..12], mode = "freeplay", saved = preparedName == MatchScenario.Name(lobby.Settings) && preparedProblem is null, problem = preparedName == MatchScenario.Name(lobby.Settings) ? preparedProblem : null } : null,
-                    round = plan is { } p && lobby.Match is { } mt && p.Key == PlanKey(mt) ? new { p.Scenario, p.Mode, p.Generated, p.State, p.Message } : null,
+                    round = plan is { } p && lobby.Match is { } mt && p.Key == PlanKey(mt) ? new { p.Scenario, p.Mode, p.Generated, p.State, p.Message, p.Map } : null,
                     download = DownloadView(lobby),
                     spectate = SpectateView(lobby),
                     replays = ReplaysView(lobby.Match),

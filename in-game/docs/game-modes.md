@@ -414,19 +414,43 @@ interface IGameMode
 A live CS match once ran its rounds while KovaaK's still showed the previous
 map. `core-scene.json` had the match scenario's name, but its `mapName` was
 `kovaim1.map`. Rebuilding that arena offline from the same map port
-(`--generate-arena <base.sce> <mode> <out.sce>`) showed the cause:
+(`--generate-arena <base.sce> <mode> <out.sce>`) showed:
 
 - The `[Map Data]` bytes, `MapName` and `MapScale` were identical to the base.
 - The generator had appended its Character, Bot, Aim, Dodge and Weapon
   profiles after the base's last Weapon Profile, so they were out of the
   grouped order KovaaK's saves scenarios in.
-- KovaaK's loaded the profiles but kept the old map.
 
-Fixes:
+Grouping the sections did **not** fix it. The next live run, with a grouped
+deathmatch arena, kept `defaultscenario.map`. KovaaK's own map switch is
+known to be unreliable, so AimModCore will load the map directly with an
+ensure-map command (`feat/kovaaks-direct-map-load`). The service calls it
+from one place, `FixWrongMap` in `MultiplayerService.Load.cs`, which today
+loads the scenario again.
+
+To find which part of an arena KovaaK's trips on:
+
+- `--bisect-arena <base.sce> <mode> <folder>` writes nine "AimMod Probe NN"
+  variants and a `variants.tsv` list. Each variant keeps the map untouched:
+  - 00: the base file with only its Name changed;
+  - 01: the base rewritten by AimMod's writer;
+  - 02: the base with a generated-length name;
+  - 03: the base plus the header changes;
+  - 04: the base plus the unused avatar character profiles;
+  - 05: the base plus the hidden bot (its profiles and the bot list);
+  - 06: the base plus the weapons and changed profiles;
+  - 07: everything but the avatars;
+  - 08: the whole arena.
+- `--install-probe-variants <folder> [--game <root>]` copies them into
+  KovaaK's Scenarios folder and asks AimModCore to refresh the list.
+  `--remove` deletes every "AimMod Probe" file from there again.
+
+Changes:
 
 - **Section order.** The generator (version 4) groups sections in KovaaK's
   order: Aim, Bot, Bot Rotation, Character, Dodge, the ability profiles,
-  Weapon. The map comes last, exactly as the base had it.
+  Weapon. The map comes last, exactly as the base had it. This is kept for
+  tidiness; it wasn't the cause.
 - **Validation.** `MatchScenario.Validate(base, generated)` reports:
   - a changed `[Map Data]` (byte for byte), `MapName` or `MapScale`;
   - sections out of order, and duplicate profiles;
@@ -457,6 +481,11 @@ Fixes:
   run." as their reason, but only the time limit fails the load. Once the run
   ends, their map loads and the match starts by itself, even after a failed
   wait.
+- **What players see.** The round box shows the map check ("Checking the
+  map", "Your map didn't load" with the reason, "Your map loaded"), never
+  "Loaded" while the map is wrong. The loading screen counts who is ready,
+  lists each player's reason, and offers the host Retry or End match once the
+  load fails. It never says the match will start anyway.
 - **Debug copies.** A match scenario stays in the game's Scenarios folder
   while its lobby needs it. One that failed to load is copied to
   `<output>/match-debug/` before cleanup removes it. Only the last three are

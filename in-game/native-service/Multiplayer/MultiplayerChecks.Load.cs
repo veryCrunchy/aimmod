@@ -40,6 +40,16 @@ static partial class MultiplayerChecks
             "A changed map section, MapName or MapScale is reported");
         Check(MatchScenario.Validate(PortBase, PortBase.Replace("WeaponProfileNames=Synthetic Gun", "WeaponProfileNames=Missing Gun")).Any(p => p.Contains("Missing Gun", StringComparison.Ordinal)), "A weapon the file doesn't define is reported");
         Check(MatchScenario.MapOf(PortBase) == ("synthetic_port.map", 3.8), "The expected map comes from the scenario header");
+        // Bisect variants: the base plus one part of the arena each, map untouched.
+        var dm = LobbyRules.Apply(new LobbySettings(Scenario: choice), J(new { mode = "deathmatch" }), 2, content).Settings! with { Scenario = choice };
+        var full = MatchScenario.Generate(new(PortBase, dm));
+        var variants = MatchScenario.Bisect(PortBase, full);
+        Check(variants.Count == 9 && variants.All(v => v.Name.StartsWith(MatchScenario.ProbePrefix, StringComparison.Ordinal) && v.Text.Contains("Name=" + v.Name, StringComparison.Ordinal) && MatchScenario.MapSectionOf(v.Text) == MatchScenario.MapSectionOf(PortBase))
+            && variants.Select(v => v.Name).Distinct().Count() == 9, "Bisect variants are named AimMod Probe (never cleaned as match scenarios) and keep the map");
+        Check(variants[0].Text == PortBase.Replace("Name=Synthetic Port", "Name=" + variants[0].Name), "Variant 00 is the base byte for byte apart from its name");
+        Check(variants.All(v => MatchScenario.Validate(PortBase, v.Text).Count == 0)
+            && variants[8].Text.Split('\n').Where(l => !l.StartsWith("Name=", StringComparison.Ordinal)).Order().SequenceEqual(full.Split('\n').Where(l => !l.StartsWith("Name=", StringComparison.Ordinal)).Order()),
+            "Every variant validates, and the last one has everything the arena has");
 
         // What this machine's game shows against the round.
         const string sc = "AimMod Match - Synthetic";
@@ -102,6 +112,7 @@ static partial class MultiplayerChecks
         var service = new MultiplayerService(new OfflineTransport(), new ContentLibrary(game), control, () => new LocalRun(false, null, null, null, null, 0, 0, 0, null), () => [], () => null, output, simulation: true, () => now, autoTick: false, seed: 9);
         JsonElement Notice() => JsonDocument.Parse(service.NoticeText()).RootElement;
         string Phase() => JsonSerializer.SerializeToElement(service.View(), Protocol.Json).GetProperty("lobby").GetProperty("match").GetProperty("phase").GetString()!;
+        JsonElement Round() => JsonSerializer.SerializeToElement(service.View(), Protocol.Json).GetProperty("lobby").GetProperty("round");
         void Run(int ms) { for (var t = 0; t < ms; t += 100) { now += 100; service.Tick(); } }
         service.Act("create", J(new { mode = "deathmatch", scenario = "Synthetic A" }));
         service.Act("sim", J(new { op = "add" }));
@@ -111,17 +122,22 @@ static partial class MultiplayerChecks
         var name = control.Calls.Last(c => c.StartsWith("load ", StringComparison.Ordinal))[5..];
         Check(name.StartsWith(MatchScenario.Prefix, StringComparison.Ordinal) && Notice().GetProperty("title").GetString() == "Waiting for everyone to load (1/2)",
             "While a map loads, the toast counts who is ready (the simulated opponent is)");
-        Run(16_000);
+        Run(2000);
+        Check(Round().GetProperty("map").GetString() == "wrong" && Round().GetProperty("message").GetString()!.Contains("kovaim1.map", StringComparison.Ordinal) && !Round().GetProperty("message").GetString()!.Contains("Loaded", StringComparison.Ordinal),
+            "The round box shows the map check (wrong map), never \"Loaded\" while the map is wrong");
+        Run(14_000);
         Check(control.Calls.Count(c => c == "load " + name) == 2 && Phase() == MatchPhases.Loading, "After 15 s on the wrong map the client loads the scenario again");
         Run(16_000);
         var failed = Notice();
         Check(Phase() == MatchPhases.Loading && failed.GetProperty("title").GetString() == "Couldn’t load the match (1/2)" && failed.GetProperty("body").GetString()!.Contains("kovaim1.map", StringComparison.Ordinal)
             && failed.GetProperty("actions").EnumerateArray().Select(a => a.GetProperty("action").GetString()).SequenceEqual(["retry-load", "end"]),
             "Still the wrong map: the host sees why, with Retry and Abort, and the match hasn't started");
+        Check(Round().GetProperty("map").GetString() == "failed", "The round box says the map failed");
         Check(File.Exists(Path.Combine(game, "Saved", "SaveGames", "Scenarios", name + ".sce")), "A failed match scenario stays on disk while the match is open");
         control.StuckMap = null;
         Check(service.Act("retry-load", J(new { id = failed.GetProperty("actions")[0].GetProperty("id").GetString() })).Ok, "The host retries the load");
         Run(1500);
+        Check(Round().GetProperty("map").GetString() == "ok", "After the retry the map check passes");
         Check(control.Calls.Count(c => c == "load " + name) == 3 && Phase() is MatchPhases.Countdown or MatchPhases.Live, "With the map there, the retried load starts the match");
         service.Act("leave", default);
         Run(300);
