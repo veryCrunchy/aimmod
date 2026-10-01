@@ -564,7 +564,7 @@
     if(!list.length){p.appendChild(node('div','mp-empty','Play someone twice in a scored match and they show up here.'));return p;}
     list.forEach(function(r){
       var row=node('div','mp-friend'+(rivalFilter===r.key?' on':''));
-      var info=node('div','mp-friend-info');add(info,node('strong','',safe(r.name)),node('span','',r.played+' matches · last '+F.relative(r.lastAt)));
+      var info=node('div','mp-friend-info');add(info,node('strong','',safe(r.name)),node('span','',r.played+' matches · '+F.relative(r.lastAt)));
       var score=node('div','mp-h2h');add(score,node('span','won',String(r.won)),node('span','sep','-'),node('span','lost',String(r.lost)));
       add(row,avatar(r.name,true),info,score,actions(button(rivalFilter===r.key?'All':'Matches',function(){rivalFilter=rivalFilter===r.key?null:r.key;openMatch=null;render();},'compact quiet')));
       p.appendChild(row);
