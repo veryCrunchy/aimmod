@@ -61,6 +61,7 @@ namespace aimmod
             std::string characterProfile; // applied character profile (appearance)
             std::string botProfile;       // bot profile the game reports for it now
             std::string spawnedFrom;      // bot profile we asked for
+            std::uint64_t peer = 0;       // remote player (actor tag AimMod.Peer.<id>)
             std::string hiddenScene;      // non-empty while hidden because of a scenario mismatch
         };
         using Sample = bridge::ghost::RemoteTransform; // remote values only

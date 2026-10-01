@@ -3,6 +3,7 @@
 #include "PoseFile.hpp"
 
 #include <Unreal/AActor.hpp>
+#include <Unreal/Core/Containers/Array.hpp>
 #include <Unreal/FAssetData.hpp>
 #include <Unreal/FHitResult.hpp>
 #include <Unreal/GameplayStatics.hpp>
@@ -272,6 +273,7 @@ namespace aimmod
         ghost.characterProfile.clear();
         ghost.botProfile = profile;
         ghost.spawnedFrom = profile;
+        ghost.peer = peer;
         m_avatarMapDirty = true;
         ghost.nextInert = 0;
         m_ownControllers.insert(controller);
@@ -294,6 +296,13 @@ namespace aimmod
             m_log("avatars: the game re-profiled an avatar to \"" + current + "\"; re-applying");
             ghost.botProfile = current;
             ghost.characterProfile.clear();
+        }
+        // Actor tag AimMod.Peer.<SteamID64>: AimModCore finds avatars by it. In-process only, re-applied
+        // every refresh so a re-acquired or re-profiled bot keeps it.
+        if (auto* tags = pawn->GetValuePtrByPropertyNameInChain<TArray<FName>>(STR("Tags")))
+        {
+            const FName tag((STR("AimMod.Peer.") + std::to_wstring(ghost.peer)).c_str(), FNAME_Add);
+            if (!tags->Contains(tag)) tags->Add(tag);
         }
         // Shown even when spawned from an invisible helper profile.
         static_cast<AActor*>(pawn)->SetActorHiddenInGame(false);

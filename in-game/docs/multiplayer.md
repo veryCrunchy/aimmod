@@ -1386,6 +1386,8 @@ controller's `MyProfileName` changes, the avatar re-applies:
 - visibility;
 - its character profile.
 
+**Actor tag.** Each avatar actor carries the tag `AimMod.Peer.<SteamID64>` in `Actor.Tags`, which AimModCore uses to find avatars (for example for cosmetics). It's re-applied on every refresh, so re-acquired or re-profiled bots keep it. It stays in-process: it's never logged or written to a file.
+
 **`avatars.tsv` for AimModCore** (ef6b259). The file lives in
 `%LOCALAPPDATA%\AimMod\KovaaksNative\` and is written atomically:
 
