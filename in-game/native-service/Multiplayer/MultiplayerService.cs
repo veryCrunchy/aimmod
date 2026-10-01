@@ -146,6 +146,7 @@ sealed partial class MultiplayerService : IDisposable
                     if (Current is not null || hostPeer is not null || joinPendingSince is not null) return LobbyResult.Fail("in-lobby", "Leave your current lobby first.");
                     return JoinBy(last.Token, invite: true);
                 case "spectate":
+                    followLeader = false;
                     return Spectate(args);
                 case "watch":
                     return Watch(Text("friend"));
@@ -175,7 +176,10 @@ sealed partial class MultiplayerService : IDisposable
                     var presetResult = PresetAction(action, Text("name")); presetNames = LoadPresets().Presets.Select(p => p.Name).ToArray(); return presetResult;
                 case "share-clip":
                     return ShareClip(Text("id"), Text("label"));
+                case "spectate-follow":
+                    return SpectateFollow(!(args.TryGetProperty("on", out var followOn) && followOn.ValueKind == JsonValueKind.False));
                 case "spectate-stop":
+                    followLeader = false;
                     if (spectating is not null) { transport.StopSpectate(); spectating = null; }
                     return LobbyResult.Success;
                 case "dismiss":
@@ -712,7 +716,7 @@ sealed partial class MultiplayerService : IDisposable
         var s = lobby.Settings;
         var scenario = MatchScenario.Needed(s) ? MatchScenario.Name(s) : s.Scenario?.Name;
         var info = s.Scenario is null ? null : library.Scenarios.FirstOrDefault(x => x.Hash == s.Scenario.Hash);
-        return new { member = target.Id, name = target.Name, scenario, mapName = s.MapOverride?.Name ?? s.Scenario?.Map, mapScale = info?.MapScale ?? 1, label = target.Name, score = watchScore };
+        return new { member = target.Id, name = target.Name, scenario, mapName = s.MapOverride?.Name ?? s.Scenario?.Map, mapScale = info?.MapScale ?? 1, label = target.Name, score = watchScore, follow = followLeader };
     }
 
     public object PrefsView() => prefs;
@@ -835,6 +839,7 @@ sealed partial class MultiplayerService : IDisposable
             if (Num("remaining") is { } left) parts.Add(Math.Ceiling(left) + " s left");
             return string.Join(" · ", parts);
         }
+        if (LobbySpectateBadge() is { } following) return following;
         if (watchers.Count == 0 || !prefs.ShowWatchers) return null;
         var names = string.Join(", ", watchers.Take(3).Select(w => w.Name)) + (watchers.Count > 3 ? " +" + (watchers.Count - 3) : "");
         return watchers.Count + " watching: " + names;
@@ -1014,6 +1019,7 @@ sealed partial class MultiplayerService : IDisposable
         if (core is not null)
             foreach (var peer in RemotePeers(core.Snapshot())) { Send(peer, "bye", new { reason }); transport.Close(peer); }
         else if (hostPeer is not null) { Send(hostPeer, "bye", new { reason }); transport.Close(hostPeer); }
+        followLeader = false;
         if (spectating is not null) { transport.StopSpectate(); spectating = null; }
         transport.Withdraw();
         core = null; mirror = null; hostPeer = null; pendingHeir = null; joinPendingSince = null; clocks.Clear();
@@ -1074,6 +1080,7 @@ sealed partial class MultiplayerService : IDisposable
             MapTick();
             var now = clock();
             WatchFriends(now);
+            FollowLeader(now);
             if (core is not null)
             {
                 core.RequireLoading = game.Capabilities.Contains("load");
