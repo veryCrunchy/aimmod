@@ -8,6 +8,8 @@
 #include <Unreal/UObject.hpp>
 #include <Unreal/UObjectGlobals.hpp>
 
+#include <Windows.h>
+
 #include <cstring>
 #include <vector>
 
@@ -67,13 +69,24 @@ namespace aimmod
         m_adaptiveOverride.BindPath(STR("/Script/GameSkillsTrainer.AdaptiveDifficultySystem:Import_OverrideProfile"), Shape::Command);
         m_adaptiveReset.BindPath(STR("/Script/GameSkillsTrainer.AdaptiveDifficultySystem:Reset_Profile"), Shape::Command);
         m_weapon.BindPath(STR("/Script/GameSkillsTrainer.WeaponHandler:SetWeaponProfileByString"), Shape::Command);
+        // The game indexes local scenarios at startup; these rescan them (the
+        // second is what the pause menu's Reload Profiles button reloads).
+        m_refreshLocal.BindPath(STR("/Script/GameSkillsTrainer.ScenarioManager:RefreshLocalScenarios"), Shape::Command);
+        m_reloadProfiles.BindPath(STR("/Script/GameSkillsTrainer.MetaGameState:ReloadAllProfiles"), Shape::Command);
+        {
+            wchar_t exe[MAX_PATH * 4]{};
+            const DWORD length = GetModuleFileNameW(nullptr, exe, static_cast<DWORD>(std::size(exe)));
+            if (length > 0 && length < std::size(exe))
+                m_scenarioFolder = std::filesystem::path(exe).parent_path().parent_path().parent_path() / L"Saved" / L"SaveGames" / L"Scenarios";
+        }
         m_canLoad = m_start.ok() && m_activate.ok() && m_startDefault && m_localHash.ok() && m_b.lifecycleReady();
         m_canStart = m_canLoad && m_persistentPlayType.ok() && m_cancel.ok();
         auto st = [](const Getter& g) { return g.ok() ? std::string("ok") : g.error(); };
         Log("game control: load=" + std::string(m_canLoad ? "ok" : "unavailable") + " start=" + (m_canStart ? "ok" : "unavailable") +
             " Start_Scenario=" + st(m_start) + " Activate=" + st(m_activate) + " SetPersistentPlayType=" + st(m_persistentPlayType) +
             " GetLocalScenarioHash=" + st(m_localHash) + " CancelChallenge=" + st(m_cancel) + " timeScale=" + st(m_timeDilation) +
-            " mapScale=" + st(m_mapScale) + " adaptive=" + st(m_adaptiveOverride) + " weapon=" + st(m_weapon));
+            " mapScale=" + st(m_mapScale) + " adaptive=" + st(m_adaptiveOverride) + " weapon=" + st(m_weapon) + " refresh=" + st(m_refreshLocal) +
+            " reloadProfiles=" + st(m_reloadProfiles));
     }
 
     void GameControl::Answer(std::uint64_t sequence, const char* state, const std::string& code, const std::string& message)
@@ -221,24 +234,18 @@ namespace aimmod
         m_overrides = {};
     }
 
-    void GameControl::Begin(const GameCommand& c, double now, const std::string& current, bool inChallenge, bool loading)
+    bool GameControl::Refresh(const char* why)
     {
-        Log("game command " + std::to_string(c.sequence) + ": " + Describe(c));
-        UObject* manager = m_scene.Manager();
-        if (c.action == GameCommand::Action::ResetOverrides)
-        {
-            ResetOverrides("requested");
-            return Answer(c.sequence, "done", "reset", "");
-        }
-        if (!manager || !m_scene.Player()) return Answer(c.sequence, "error", "game-unavailable", "KovaaK's is not ready yet.");
-        // Never interrupt a challenge: leaving it would cancel a ranked attempt.
-        if (inChallenge) return Answer(c.sequence, "error", "challenge-active", "A challenge is running. Finish or quit it first.");
-        if (loading || m_pending) return Answer(c.sequence, "error", "busy", "A scenario is loading. Try again in a moment.");
+        bool any = false;
+        if (UObject* manager = m_scene.Manager(); manager && m_refreshLocal.ok())
+            any |= m_refreshLocal.Call(manager, [](std::uint8_t*, const Param&) {});
+        Log(std::string("game control: local scenarios refreshed (") + why + ")" + (any ? "" : " - unavailable"));
+        return any;
+    }
+
+    void GameControl::Proceed(const GameCommand& c, double now, UObject* manager)
+    {
         const bool load = c.action == GameCommand::Action::LoadScenario;
-        if (load ? !m_canLoad : !m_canStart)
-            return Answer(c.sequence, "error", "unsupported", "Load \"" + c.scenario + "\" in KovaaK's; automatic loading is unavailable in this game version.");
-        if (load && current == c.scenario) return Answer(c.sequence, "done", "already-loaded", "");
-        if (!ScenarioKnown(manager, c.scenario)) return Answer(c.sequence, "error", "unknown-scenario", "\"" + c.scenario + "\" is not installed.");
         ResetOverrides("scenario-change");
         m_pending = Pending{c, now + (load ? 30.0 : 45.0)};
         // Replays view the scenario without starting it; starts use the
@@ -255,6 +262,49 @@ namespace aimmod
         }
         m_pending->started = true;
         Answer(c.sequence, "accepted", load ? "loading" : "starting", "");
+    }
+
+    void GameControl::Begin(const GameCommand& c, double now, const std::string& current, bool inChallenge, bool loading)
+    {
+        Log("game command " + std::to_string(c.sequence) + ": " + Describe(c));
+        UObject* manager = m_scene.Manager();
+        if (c.action == GameCommand::Action::ResetOverrides)
+        {
+            ResetOverrides("requested");
+            return Answer(c.sequence, "done", "reset", "");
+        }
+        if (c.action == GameCommand::Action::RefreshScenarios)
+        {
+            if (inChallenge) return Answer(c.sequence, "error", "challenge-active", "A challenge is running. Finish or quit it first.");
+            if (!m_refreshLocal.ok()) return Answer(c.sequence, "error", "unsupported", "Rescanning scenarios is unavailable in this game version.");
+            const bool ok = Refresh("requested");
+            return Answer(c.sequence, ok ? "done" : "error", ok ? "refreshed" : "refresh-failed", "");
+        }
+        if (!manager || !m_scene.Player()) return Answer(c.sequence, "error", "game-unavailable", "KovaaK's is not ready yet.");
+        // Never interrupt a challenge: leaving it would cancel a ranked attempt.
+        if (inChallenge) return Answer(c.sequence, "error", "challenge-active", "A challenge is running. Finish or quit it first.");
+        if (loading || m_pending) return Answer(c.sequence, "error", "busy", "A scenario is loading. Try again in a moment.");
+        const bool load = c.action == GameCommand::Action::LoadScenario;
+        if (load ? !m_canLoad : !m_canStart)
+            return Answer(c.sequence, "error", "unsupported", "Load \"" + c.scenario + "\" in KovaaK's; automatic loading is unavailable in this game version.");
+        if (load && current == c.scenario) return Answer(c.sequence, "done", "already-loaded", "");
+        if (m_refreshing) return Answer(c.sequence, "error", "busy", "Scenarios are being refreshed. Try again in a moment.");
+        if (!ScenarioKnown(manager, c.scenario))
+        {
+            // A scenario written after the game indexed its folder (for
+            // example a multiplayer match): rescan once if its file exists.
+            std::error_code error;
+            const bool onDisk = IsScenarioFileName(c.scenario) && !m_scenarioFolder.empty() &&
+                                std::filesystem::is_regular_file(m_scenarioFolder / std::filesystem::path(Widen(c.scenario + ".sce")), error);
+            if (!onDisk || !m_refreshLocal.ok()) return Answer(c.sequence, "error", "unknown-scenario", "\"" + c.scenario + "\" is not installed.");
+            Refresh("new scenario file");
+            if (!ScenarioKnown(manager, c.scenario))
+            {
+                m_refreshing = Refreshing{c, now + 5.0, now + 0.25};
+                return Answer(c.sequence, "accepted", "refreshing", "");
+            }
+        }
+        Proceed(c, now, manager);
     }
 
     void GameControl::Tick(double now, const std::string& current, bool inChallenge, bool loading)
@@ -276,6 +326,40 @@ namespace aimmod
         {
             if (m_overrides.active && current != m_overrides.scenario && !m_pending) ResetOverrides("scenario changed");
             m_lastScenario = current;
+        }
+        if (m_refreshing && now >= m_refreshing->nextCheck)
+        {
+            Refreshing& r = *m_refreshing;
+            r.nextCheck = now + 0.25;
+            UObject* manager = m_scene.Manager();
+            if (inChallenge || !manager)
+            {
+                const auto seq = r.command.sequence;
+                m_refreshing.reset();
+                return Answer(seq, "error", inChallenge ? "challenge-active" : "game-unavailable", "");
+            }
+            if (ScenarioKnown(manager, r.command.scenario))
+            {
+                GameCommand command = r.command;
+                m_refreshing.reset();
+                Proceed(command, now, manager);
+                return;
+            }
+            if (!r.reloaded && m_reloadProfiles.ok())
+            {
+                // Second, broader rescan: the Reload Profiles path.
+                r.reloaded = true;
+                if (UObject* state = m_scene.GameState()) m_reloadProfiles.Call(state, [](std::uint8_t*, const Param&) {});
+                Log("game control: profiles reloaded (new scenario file)");
+            }
+            if (now > r.deadline)
+            {
+                const GameCommand command = r.command;
+                m_refreshing.reset();
+                return Answer(command.sequence, "error", "unknown-scenario",
+                              "\"" + command.scenario + "\" exists on disk but the game did not index it. Use Reload Profiles in KovaaK's, then try again.");
+            }
+            return;
         }
         if (!m_pending) return;
         Pending& p = *m_pending;

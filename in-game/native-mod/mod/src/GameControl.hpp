@@ -13,6 +13,7 @@
 
 #include <Unreal/FWeakObjectPtr.hpp>
 
+#include <filesystem>
 #include <optional>
 #include <string>
 
@@ -44,6 +45,8 @@ namespace aimmod
         bool SetPlayType(game::UObject* manager, GameCommand::Mode mode);
         bool ApplyOverrides(const GameCommand& command);
         void ResetOverrides(const char* why);
+        bool Refresh(const char* why);
+        void Proceed(const GameCommand& command, double now, game::UObject* manager);
         void Answer(std::uint64_t sequence, const char* state, const std::string& code, const std::string& message);
 
         game::Bindings& m_b;
@@ -51,6 +54,8 @@ namespace aimmod
         Output& m_output;
         game::Getter m_start, m_activate, m_persistentPlayType, m_playCurrent, m_localHash, m_onlineHash, m_cancel;
         game::Getter m_timeDilation, m_mapScale, m_adaptiveOverride, m_adaptiveReset, m_weapon;
+        game::Getter m_refreshLocal, m_reloadProfiles;
+        std::filesystem::path m_scenarioFolder;
         game::UObject* m_startDefault{};
         bool m_canLoad{}, m_canStart{};
 
@@ -63,6 +68,15 @@ namespace aimmod
             RC::Unreal::FWeakObjectPtr action;
         };
         std::optional<Pending> m_pending;
+        // A load/start waiting for the game to index a newly written scenario.
+        struct Refreshing
+        {
+            GameCommand command;
+            double deadline{};
+            double nextCheck{};
+            bool reloaded{};
+        };
+        std::optional<Refreshing> m_refreshing;
         struct Overrides
         {
             bool active{};
