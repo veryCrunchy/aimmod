@@ -62,17 +62,37 @@ sealed partial class MultiplayerService
         if (plan.State is not ("ready" or "started")) return;
         if (verifyKey != key) { verifyKey = key; verifySince = clock(); verifyRetriedAt = 0; verifyGood = 0; }
         var problem = SceneProblem(game.Scene, plan.Scenario, ExpectedMap(plan.Scenario));
-        if (problem is null) { if (++verifyGood >= 2) Report(true, null); return; }
-        verifyGood = 0;
-        var waited = clock() - verifySince;
-        if (waited >= MapMismatchRetryMs && verifyRetriedAt == 0 && problem != "loading" && game.Load(plan.Scenario) is long again)
+        if (problem is null)
         {
-            verifyRetriedAt = clock();
-            plan = plan with { State = "loading", Message = "The map didn’t load. Loading “" + plan.Scenario + "” again…", LoadSequence = again };
-            verifySince = clock() - MapMismatchRetryMs; // the second wait ends at the fail limit
+            if (++verifyGood < 2) { plan = plan with { Map = "checking", Message = "Checking the map…" }; return; }
+            plan = plan with { Map = "ok", Message = "Your map loaded. The countdown starts when everyone has loaded." };
+            Report(true, null);
             return;
         }
-        if (waited >= MapMismatchFailMs) Report(false, problem == "loading" ? "KovaaK’s is still loading the map." : problem);
+        verifyGood = 0;
+        plan = problem == "loading" ? plan with { Map = "checking", Message = "KovaaK’s is loading the map…" } : plan with { Map = "wrong", Message = problem };
+        var waited = clock() - verifySince;
+        if (problem != "loading" && waited >= MapMismatchRetryMs && verifyRetriedAt == 0)
+        {
+            verifyRetriedAt = clock();
+            // The second wait ends at the fail limit.
+            if (FixWrongMap(problem)) { verifySince = clock() - MapMismatchRetryMs; return; }
+        }
+        if (waited >= MapMismatchFailMs)
+        {
+            var reason = problem == "loading" ? "KovaaK’s is still loading the map." : problem;
+            plan = plan with { Map = "failed", Message = reason + " The host can retry or end the match." };
+            Report(false, reason);
+        }
+    }
+
+    // The one place a wrong map is handled: once per load attempt, after 15 s on the wrong map.
+    // Today it loads the scenario again; true while a fix is under way (the check restarts).
+    bool FixWrongMap(string problem)
+    {
+        if (plan is null || game.Load(plan.Scenario) is not long again) return false;
+        plan = plan with { State = "loading", Map = "checking", Message = "The map didn’t load (" + problem.TrimEnd('.') + "). Loading “" + plan.Scenario + "” again…", LoadSequence = again };
+        return true;
     }
 
     // Keep a failed match scenario for debugging when the game folder copy goes (last 3).

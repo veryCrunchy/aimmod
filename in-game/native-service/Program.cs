@@ -15,6 +15,16 @@ if (args.Length == 5 && args[0] == "--compare-spawns") { Environment.ExitCode = 
 if (args.Length == 4 && args[0] == "--compare-replays") { Environment.ExitCode = ReplayCompare.Run(args[1], args[2], args[3]); return; }
 // Diagnostic: --generate-arena <base .sce> <mode> <out .sce> writes the match scenario a lobby in that mode would build.
 if (args.Length == 4 && args[0] == "--generate-arena") { Environment.ExitCode = AimMod.InGame.Multiplayer.MatchScenario.GenerateFile(args[1], args[2], args[3]); return; }
+// Diagnostic: --bisect-arena <base .sce> <mode> <out folder> writes "AimMod Probe" variants that each add one part of the arena.
+if (args.Length == 4 && args[0] == "--bisect-arena") { Environment.ExitCode = AimMod.InGame.Multiplayer.MatchScenario.BisectFile(args[1], args[2], args[3]); return; }
+// --install-probe-variants <folder> [--game <root>] [--remove] copies them into KovaaK's Scenarios folder (or removes them).
+if (args.Length >= 2 && args[0] == "--install-probe-variants")
+{
+    var gameIndex = Array.IndexOf(args, "--game");
+    Environment.ExitCode = AimMod.InGame.Multiplayer.MatchScenario.InstallProbes(args[1], gameIndex > 0 && gameIndex + 1 < args.Length ? args[gameIndex + 1] : null, args.Contains("--remove"),
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AimMod", "KovaaksNative"));
+    return;
+}
 // Offline avatar spike: --export-avatar-path <replay id> [--output <folder>] writes avatar-test-path.tsv.
 if (args.Length is 2 or 4 && args[0] == "--export-avatar-path")
 {

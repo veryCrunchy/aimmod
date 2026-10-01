@@ -263,16 +263,27 @@
       panel.appendChild(box);
     });
   }
-  // Warm-up: everyone loads the scenario before the countdown.
+  // Warm-up: everyone's map must load (the service checks KovaaK's scene) before the countdown.
+  // It never starts without someone: a failed load waits for the host to retry or end the match.
   function loadingStage(page,lobby,match){
     var stage=node('div','mp-stage');page.appendChild(stage);
-    var loaded=match.loaded||[];
-    add(stage,node('div','eyebrow',mode(match.mode).label+' · getting ready'),node('div','mp-spinner'),node('h2','','Loading '+safe(match.scenario,'the scenario')),node('p','subtle',loaded.length+' of '+match.players.length+' ready. The countdown starts when everyone has loaded.'));
+    var loaded=match.loaded||[],issues=match.loadIssues||{},failed=match.loadFailed===true;
+    var present=match.players.filter(function(id){return !!member(id);});
+    var ready=present.filter(function(id){return loaded.indexOf(id)>=0;}).length;
+    add(stage,node('div','eyebrow',mode(match.mode).label+' · getting ready'),failed?null:node('div','mp-spinner'),
+      node('h2','',failed?'Couldn’t load the match ('+ready+'/'+present.length+')':'Waiting for everyone to load ('+ready+'/'+present.length+')'),
+      node('p','subtle',failed?(lobby.isHost?'Retry the load, or end the match.':'Waiting for the host to retry or end the match.'):'Loading '+safe(match.scenario,'the scenario')+'. The countdown starts once every player’s map has loaded.'));
     var plan=planBox(lobby);if(plan)stage.appendChild(plan);
-    var who=node('div','mp-stage-players');match.players.forEach(function(id){add(who,add(node('div','mp-stage-player'+(loaded.indexOf(id)>=0?' ok':'')),avatar(nameOf(id),true),node('span','',nameOf(id)),chip(loaded.indexOf(id)>=0?'Ready':'Loading…',loaded.indexOf(id)>=0?'mint':'')));});
+    var who=node('div','mp-stage-players');match.players.forEach(function(id){
+      var ok=loaded.indexOf(id)>=0,issue=typeof issues[id]==='string'?issues[id]:null;
+      var row=add(node('div','mp-stage-player'+(ok?' ok':'')),avatar(nameOf(id),true),node('span','',nameOf(id)),chip(ok?'Ready':issue?'Not loaded':'Loading…',ok?'mint':issue?'amber':''));
+      if(!ok&&issue)row.title=issue;
+      add(who,row);
+      if(!ok&&issue)add(who,node('p','mp-note',nameOf(id)+': '+issue));
+    });
     stage.appendChild(who);
-    var left=node('p','mp-note','');countNodes.push({node:left,at:match.nextAt,format:function(ms){return 'Starting anyway in '+seconds(ms)+' s.';}});stage.appendChild(left);
-    if(lobby.isHost)stage.appendChild(actions(button('Cancel match',function(){act('end');},'compact quiet danger')));
+    if(!failed){var left=node('p','mp-note','');countNodes.push({node:left,at:match.nextAt,format:function(ms){return 'If not everyone has loaded in '+seconds(ms)+' s, the host can retry or end the match.';}});stage.appendChild(left);}
+    if(lobby.isHost)stage.appendChild(actions(failed?button('Retry',function(){act('retry-load');},'compact primary'):null,button(failed?'End match':'Cancel match',function(){act('end');},'compact quiet danger')));
   }
   // Scenario suggestions and votes; the host picks.
   var suggesting=false;
@@ -1155,10 +1166,12 @@
     else if(match.phase==='live')live(page,lobby,match);
     else roundResults(page,lobby,match);
   }
+  // The round on this machine. map is the load gate's check: checking, ok, wrong or failed.
   function planBox(lobby){
     var r=lobby.round;if(!r)return null;
-    var box=node('div','mp-plan '+(r.state==='error'?'warn':r.state==='manual'||r.state==='blocked'?'manual':'ok'));
-    add(box,node('strong','',r.state==='blocked'?'Finish your current run':r.state==='manual'?'Start it yourself':r.state==='error'?'Start it yourself':r.mode==='freeplay'?'Match scenario, freeplay':'Normal KovaaK’s run'),node('span','',safe(r.message,'')));
+    var bad=r.map==='wrong'||r.map==='failed',checking=r.map==='checking'||r.state==='loading';
+    var box=node('div','mp-plan '+(r.state==='error'||bad?'warn':r.state==='manual'||r.state==='blocked'||checking?'manual':'ok'));
+    add(box,node('strong','',bad?'Your map didn’t load':r.state==='blocked'?'Finish your current run':r.state==='manual'?'Start it yourself':r.state==='error'?'Start it yourself':checking?'Loading your map':r.mode==='freeplay'?'Match scenario, freeplay':'Normal KovaaK’s run'),node('span','',safe(r.message,'')));
     return box;
   }
   function countdown(page,lobby,match){

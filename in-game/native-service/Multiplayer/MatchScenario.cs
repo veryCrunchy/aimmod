@@ -208,6 +208,11 @@ static partial class MatchScenario
         // Canonical layout: header, then the sections grouped by type in the order KovaaK's
         // itself saves them (all character profiles together, and so on), each after one
         // blank line, then the map exactly as the base had it.
+        return Write(header, sections, mapData, nl);
+    }
+
+    static string Write(Section header, List<Section> sections, string? mapData, string nl)
+    {
         sections = sections.Select((x, i) => (x, i)).OrderBy(p => SectionRank(p.x.Title)).ThenBy(p => p.i).Select(p => p.x).ToList();
         var output = new StringBuilder();
         foreach (var line in header.Lines.Where(l => l.Trim().Length > 0)) output.Append(line).Append(nl);

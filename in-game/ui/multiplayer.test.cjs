@@ -78,6 +78,20 @@ test('host settings editor sends validated keys, and score race locks overrides'
   assert.deepEqual(JSON.parse(s.last().body),{action:'settings',settings:{mode:'ffa-rounds'}});
   s.button('Done').onclick();assert.ok(s.button('Edit'));
 });
+test('loading waits for every map, shows why one failed and gives the host retry or end',()=>{
+  const s=setup();s.api.enter(s.container);
+  const loading={id:'m1',phase:'loading',mode:'deathmatch',scenario:'Synthetic Scenario',timeLimit:60,round:1,totalRounds:1,startsAt:null,nextAt:46000,players:['p1','p2'],loaded:['p2'],live:[],rounds:[],standings:[],winnerId:null,rematch:[],loadAttempt:0};
+  const wrong={scenario:'AimMod Match - Synthetic',mode:'freeplay',generated:true,state:'ready',message:'KovaaK’s kept the map “old.map” instead of “synthetic_map.map”.',map:'wrong'};
+  s.requests[0].finish(200,view({lobby:lobby({match:loading,round:wrong})}));
+  let t=s.text();
+  assert.ok(t.includes('Waiting for everyone to load (1/2)'));assert.ok(!t.includes('Starting anyway'),'the gate never starts without everyone');
+  assert.ok(t.includes('Your map didn’t load')&&!t.includes('Loaded. Your run starts'),'the box shows the map check, not the scenario load');
+  const failed=Object.assign({},loading,{loadFailed:true,loadIssues:{p1:'KovaaK’s kept the map “old.map” instead of “synthetic_map.map”.'}});
+  s.api.leave();s.api.enter(s.container);s.requests[s.requests.length-1].finish(200,view({lobby:lobby({match:failed,round:Object.assign({},wrong,{map:'failed'})})}));
+  t=s.text();assert.ok(t.includes('Couldn’t load the match (1/2)'));assert.ok(t.includes('Synthetic One: KovaaK’s kept the map “old.map”'));
+  s.button('Retry').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'retry-load'});
+  s.button('End match').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'end'});
+});
 test('countdown, live scoreboard and final results render from the match',()=>{
   const s=setup();s.api.enter(s.container);
   const live=lobby({match:{id:'m1',phase:'live',mode:'ffa-rounds',scenario:'Synthetic Scenario',timeLimit:60,round:1,totalRounds:3,firstTo:null,startsAt:0,endsAt:70000,nextAt:null,players:['p1','p2'],
