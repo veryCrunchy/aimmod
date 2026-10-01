@@ -13,7 +13,7 @@ namespace aimmod
 {
     struct GameCommand
     {
-        enum class Action { LoadScenario, StartScenario, ResetOverrides, RefreshScenarios, CaptureThumbnail, EndRun, QuitRun };
+        enum class Action { LoadScenario, StartScenario, ResetOverrides, RefreshScenarios, CaptureThumbnail, EndRun, QuitRun, EnsureMap };
         enum class Mode { FreePlay, Challenge };
         std::uint64_t sequence{};
         Action action{};
@@ -73,6 +73,13 @@ namespace aimmod
     // but a challenge only in AimMod's generated match scenarios. A seed set
     // for a freeplay run never carries into a ranked challenge.
     bool SeedAllowed(std::string_view scenario, bool inChallenge);
+    // Scenarios AimMod generates (match arenas, map ports, bisect probes): the
+    // only ones whose map AimModCore may rebuild itself (ensure-map), and only
+    // outside a challenge, benchmark or the scenario editor.
+    bool MapFixAllowed(std::string_view scenario);
+    // KovaaK's own "same map" test (MetaGameState, 3.9.11): the current map
+    // name equals the scenario's MapName ignoring case, at the same MapScale.
+    bool SameMapLoaded(std::string_view currentName, double currentScale, std::string_view wantedName, double wantedScale);
     // A scenario name usable as "<Scenarios>\\<name>.sce": no path separators,
     // reserved characters, dot segments or trailing dots/spaces.
     bool IsScenarioFileName(std::string_view name);

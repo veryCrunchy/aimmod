@@ -61,6 +61,7 @@ namespace aimmod::game
         RC::Unreal::FBoolProperty* boolProperty{};
         Kind inner{Kind::Other}; // Array element kind
         RC::Unreal::UStruct* structType{}; // plain structs (command inputs)
+        RC::Unreal::FProperty* property{};
         std::string name;        // ASCII
     };
 
@@ -120,10 +121,20 @@ namespace aimmod::game
         // Command shape: `fill` writes each input parameter (by name/kind).
         bool Call(UObject* self, const std::function<void(std::uint8_t* value, const Param& param)>& fill,
                   const std::function<void(const std::uint8_t* buffer, const std::vector<Param>& params)>& read = nullptr) const;
+        // Call for functions that return structs holding strings or arrays
+        // (for example a whole profile by value): `read` runs while the
+        // returned values are alive, then every returned struct is released
+        // member by member. Refused (false) unless OwnsReturnedStructs().
+        bool CallReturningStructs(UObject* self, const std::function<void(std::uint8_t* value, const Param& param)>& fill,
+                                  const std::function<void(const std::uint8_t* buffer, const std::vector<Param>& params)>& read) const;
+        // Every returned/out struct is made only of members ReleaseValue can free.
+        bool OwnsReturnedStructs() const;
 
     private:
         bool Invoke(UObject* self, std::uint8_t* buffer, UObject* context) const;
         void Release(std::uint8_t* buffer) const;
+        bool CallImpl(UObject* self, const std::function<void(std::uint8_t* value, const Param& param)>& fill,
+                      const std::function<void(const std::uint8_t* buffer, const std::vector<Param>& params)>& read, bool releaseStructs) const;
 
         UFunction* m_function{};
         UClass* m_owner{};
@@ -165,6 +176,19 @@ namespace aimmod::game
     bool SetStructPath(std::uint8_t* value, RC::Unreal::UStruct* type, const std::string& path, double number);
     bool SetStructField(std::uint8_t* value, RC::Unreal::UStruct* type, const char* field, double number);
     UObject* ReadObject(const std::uint8_t* buffer, const Param& param);
+    // Engine-allocated values in reflected memory: whether every member of a
+    // property is a number, bool, enum, name, object pointer, string, array or
+    // struct of those (nothing else is ever freed), and freeing it (strings and
+    // array buffers with the engine allocator; the value is left empty).
+    bool Releasable(RC::Unreal::FProperty* property);
+    void ReleaseValue(RC::Unreal::FProperty* property, std::uint8_t* value);
+    // A TArray/FString header: data pointer, count, capacity.
+    struct ArrayView
+    {
+        void* data;
+        std::int32_t num;
+        std::int32_t max;
+    };
 
     // A reflected member reached through struct members and static array
     // elements ("mCharacterProfileNative.CharacterModel", "RuntimeEntries[1]"),

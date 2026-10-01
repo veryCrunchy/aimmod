@@ -422,11 +422,27 @@ map. `core-scene.json` had the match scenario's name, but its `mapName` was
   grouped order KovaaK's saves scenarios in.
 
 Grouping the sections did **not** fix it. The next live run, with a grouped
-deathmatch arena, kept `defaultscenario.map`. KovaaK's own map switch is
-known to be unreliable, so AimModCore will load the map directly with an
-ensure-map command (`feat/kovaaks-direct-map-load`). The service calls it
-from one place, `FixWrongMap` in `MultiplayerService.Load.cs`, which today
-loads the scenario again.
+deathmatch arena, kept `defaultscenario.map`.
+
+The cause is in KovaaK's map pipeline (3.9.11, read from the game binary;
+details in `native-mod/DESIGN.md`, "Map loading"). `AMetaGameState` applies
+a scenario's map from three scenario events:
+
+- Initialize: only for a new scenario **with `IsChallenge=true`**;
+- play-type change (freeplay/challenge): local scenarios only if the map
+  name or scale differs, online and trainer scenarios always;
+- leaving or entering the editor: only if the name or scale differs.
+
+Every AimMod arena and map port has `IsChallenge=false`. So loading one
+never applies its map; only a later play-type change does. That is why
+switching freeplay to challenge and back "fixed" it.
+
+AimModCore now loads the map itself with KovaaK's own apply step. After
+every load, start or end-run of an AimMod scenario outside a challenge, and
+on an explicit `ensure-map` command, it reads the map the game parsed from
+the scenario and calls `SetCurrentMapName` and `SetMapData`. The service
+calls ensure-map from one place, `FixWrongMap` in
+`MultiplayerService.Load.cs`.
 
 To find which part of an arena KovaaK's trips on:
 
@@ -466,9 +482,13 @@ Changes:
   polls in a row. The countdown, and CS freeze and buy time, start only once
   every present player is loaded. Until then, everyone sees "Waiting for
   everyone to load (n/m)".
-- **Retry and abort.** If a player's map is still wrong after 15 s, that
-  client loads the scenario again. After another 15 s it reports
-  `loaded {ok:false, reason, attempt}`.
+- **Retry and abort.** If KovaaK's shows the round's scenario with the wrong
+  map or scale, the client sends `ensure-map` right away (AimModCore's `map`
+  capability). Without that capability, or when AimModCore answers
+  `unsupported`, it loads the scenario again instead; any other wrong scene is
+  retried that way after 15 s. If the map is still wrong 15 s after the fix,
+  the client reports `loaded {ok:false, reason, attempt}`, with the
+  ensure-map error in the reason.
 
   A reported problem, or 45 s without everyone loaded, fails the load. The
   match never starts on its own after that. Everyone sees "Couldn't load the
