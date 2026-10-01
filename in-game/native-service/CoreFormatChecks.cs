@@ -92,6 +92,10 @@ static class CoreFormatChecks
             Check(seeded.Sequence is > 0 && File.ReadAllText(Path.Combine(root, "core-command.tsv")).EndsWith("mode\tfreeplay\nseed\t4294967295\n"), "seed written");
             Check(commands.Send(new("start-scenario", "VT PGT", "challenge", null, null, null, null, null, Seed: 1)).Error == "seed-not-allowed"
                 && commands.Send(new("start-scenario", "X", null, null, null, null, null, null, Seed: -1)).Error == "invalid-seed", "seeds kept out of ranked play");
+            Check(new GameCommandRequest[] { new("start-scenario", "VT PGT", "challenge", 0.5, null, null, null, null), new("start-scenario", "VT PGT", "challenge", null, 2, null, null, null),
+                    new("start-scenario", "VT PGT", "challenge", null, null, 1.5, null, null), new("start-scenario", "VT PGT", "challenge", null, null, null, 2, null),
+                    new("start-scenario", "VT PGT", "challenge", null, null, null, null, "Track Master 100") }.All(r => commands.Send(r).Error == "overrides-freeplay-only")
+                && commands.Send(new("start-scenario", "VT PGT", "challenge", null, null, null, null, null)).Sequence is > 0, "overrides kept out of ranked play: a challenge starts only as published");
             Check(ReplayCompare.Spawns(compact).Count == 2, "spawn events: first appearance and the respawn after the gap");
             var ended = commands.Send(new("end-run", "AimMod Match - Synthetic - 0a1b2c3d", null, null, null, null, null, null, Then: "reset"));
             Check(ended.Sequence is > 0 && File.ReadAllText(Path.Combine(root, "core-command.tsv")).EndsWith("action\tend-run\nscenario\tAimMod Match - Synthetic - 0a1b2c3d\nthen\treset\n"), "end-run written");

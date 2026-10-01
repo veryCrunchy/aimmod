@@ -405,9 +405,10 @@ sealed partial class MultiplayerService : IDisposable
         var friend = Friends().FirstOrDefault(f => f.Id == friendId);
         if (friend is null) return LobbyResult.Fail("invalid", "Choose a friend from the list.");
         if (!friend.Spectatable) return LobbyResult.Fail("private", friend.Name + " isn’t open to spectators right now.");
+        // The bridge replaces the stream being watched (spectate.request ends it as "switched"); stopping
+        // here would close the stream just requested.
         if (!transport.RequestSpectate(friend.Id)) return LobbyResult.Fail("unavailable", "Spectating needs the Steam bridge.");
-        if (watch is not null && watch.Peer != friend.Id) transport.StopSpectate();
-        watch = new WatchState(friend.Id, friend.Name, friend.Scenario, "requesting", "Asking " + friend.Name + "…", clock());
+        watch =new WatchState(friend.Id, friend.Name, friend.Scenario, "requesting", "Asking " + friend.Name + "…", clock());
         return LobbyResult.Success;
     }
 
@@ -1337,6 +1338,9 @@ sealed partial class MultiplayerService : IDisposable
 
     void HandleAsHost(string peer, Envelope m)
     {
+        // Only members talk to the lobby: a friend's spectate link or a refused join gets no content,
+        // no relayed replays and no say. Joining starts with hello.
+        if (m.T != "hello" && core!.Members.All(x => x.Id != peer)) return;
         switch (m.T)
         {
             case "hello":

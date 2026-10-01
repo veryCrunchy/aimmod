@@ -63,7 +63,9 @@ sealed class GameCommands(string output)
         if (request.Then is not null && (request.Action != "end-run" || request.Then is not ("stop" or "reset"))) return (null, "invalid-command");
         if (request.Action == "end-run" && request.Scenario?.StartsWith("AimMod Match - ", StringComparison.Ordinal) != true) return (null, "not-a-match");
         if (request.Seed is not null && (request.Action != "start-scenario" || request.Seed is < 0 or > uint.MaxValue)) return (null, "invalid-seed");
-        // Never in ranked play (AimModCore enforces the same rule).
+        // Never in ranked play (AimModCore enforces the same rules): a challenge runs exactly as published.
+        if (request.Mode == "challenge" && (request.TimeScale is not null || request.TargetSize is not null || request.TargetSpeed is not null || request.MapScale is not null || request.Weapon is not null))
+            return (null, "overrides-freeplay-only");
         if (request.Seed is not null && request.Mode == "challenge" && request.Scenario?.StartsWith("AimMod Match - ", StringComparison.Ordinal) != true) return (null, "seed-not-allowed");
         var text = new StringBuilder("AIMMOD_CORE_COMMAND_1\n");
         long sequence;

@@ -472,7 +472,9 @@ sealed class LobbyCore
         var limit = m.Settings.EffectiveTimeLimit;
         // Mutual checks from the design: the final score matches the stream and the run length matches the limit.
         var disputed = run.Seconds > limit + 5 || run.Seconds < limit - 5
-            || (line.Score is { } last && line.Remaining is < 2 && Math.Abs(run.Score - last) > Math.Max(5, Math.Abs(last) * 0.1));
+            || (line.Score is { } last && line.Remaining is < 2 && Math.Abs(run.Score - last) > Math.Max(5, Math.Abs(last) * 0.1))
+            // The run can't be longer than the round has been live on the host clock.
+            || (m.StartsAt is { } started && clock() - started < (run.Seconds - 5) * 1000);
         line.Score = run.Score; line.Seconds = run.Seconds; line.Remaining = 0; line.Shots = run.Shots; line.Hits = run.Hits; line.Kills = run.Kills;
         line.Status = LineStates.Finished; line.Disputed = disputed;
         Changed();
@@ -529,11 +531,12 @@ sealed class LobbyCore
         int TeamPlace(int team) => view.TeamFrags is { } tf && team is 1 or 2 ? (tf[team - 1] >= tf[2 - team] ? 1 : 2) : 0;
         var rows = view.Players.OrderBy(p => combat.Teams ? TeamPlace(p.Team) : 0).ThenByDescending(p => p.Frags).ThenBy(p => p.Deaths).ToArray();
         var results = new List<Placement>();
+        // Places are among the players still here: someone who left neither places nor pushes others down.
         foreach (var p in rows)
         {
             var present = Find(p.Member) is not null;
             if (m.Live.TryGetValue(p.Member, out var line) && line.Status is LineStates.Waiting or LineStates.Playing) line.Status = present ? LineStates.Finished : LineStates.Left;
-            var place = !present ? 0 : combat.Teams ? TeamPlace(p.Team) : 1 + rows.Count(o => o.Frags > p.Frags || (o.Frags == p.Frags && o.Deaths < p.Deaths));
+            var place = !present ? 0 : combat.Teams ? TeamPlace(p.Team) : 1 + rows.Count(o => Find(o.Member) is not null && (o.Frags > p.Frags || (o.Frags == p.Frags && o.Deaths < p.Deaths)));
             double? accuracy = p.Claims > 0 ? Math.Round((p.Claims - p.Rejected) * 100.0 / p.Claims, 1) : null;
             results.Add(new Placement(p.Member, m.Names.GetValueOrDefault(p.Member, "Player"), place, p.Frags, accuracy, p.Frags, present ? LineStates.Finished : LineStates.Left,
                 p.Claims >= 10 && p.Rejected > p.Claims * 0.2));
@@ -710,19 +713,26 @@ sealed class LobbyCore
         }
         if (finished.Length > 0 && finished.Count(f => f.Line.Score == finished[0].Line.Score) == 1) winner = finished[0].Id;
         m.Rounds.Add(new RoundResult(m.Round, results, LobbyModes.Scored(s.Mode) ? winner : null));
-        var standings = Standings(m);
-        m.Over = s.Mode switch
-        {
-            LobbyModes.Race or LobbyModes.Rounds => m.Round >= s.Rounds,
-            LobbyModes.Duel => standings.Any(x => x.Wins >= s.FirstTo) || m.Round >= s.FirstTo * 2 + 2 || m.Players.Count(id => Find(id) is not null) < 2,
-            LobbyModes.Tracking => m.Round >= s.Rounds || m.Players.Count(id => Find(id) is not null) < 2,
-            _ => false,
-        };
-        if (m.Players.Count(id => Find(id) is not null) == 0) m.Over = true;
+        m.Over = Decided(m);
         // A single deciding round goes straight to the final screen.
         if (m.Over && m.Rounds.Count == 1) { FinishMatch(); return; }
         m.Phase = MatchPhases.Round; m.NextAt = clock() + ResultsMs;
         Changed();
+    }
+
+    // Whether the rounds played so far decide the match (no further round).
+    bool Decided(Match m)
+    {
+        var s = m.Settings;
+        var present = m.Players.Count(id => Find(id) is not null);
+        if (present == 0 || LobbyModes.Shooting(s.Mode)) return true;
+        return s.Mode switch
+        {
+            LobbyModes.Race or LobbyModes.Rounds => m.Round >= s.Rounds,
+            LobbyModes.Duel => Standings(m).Any(x => x.Wins >= s.FirstTo) || m.Round >= s.FirstTo * 2 + 2 || present < 2,
+            LobbyModes.Tracking => m.Round >= s.Rounds || present < 2,
+            _ => false,
+        };
     }
 
     void FinishMatch()
@@ -746,10 +756,13 @@ sealed class LobbyCore
             return new Standing(id, m.Names.GetValueOrDefault(id, "Player"), 0, mine.Count(x => x.Round.WinnerId == id), mine.Sum(x => x.P.Points),
                 scores.Length > 0 ? scores.Max() : null, scores.Sum(), mine.Length);
         }).ToList();
+        var placed = m.Rounds.SelectMany(r => r.Results).Where(p => p.Place > 0).GroupBy(p => p.MemberId).ToDictionary(g => g.Key, g => g.Min(p => p.Place));
         Func<Standing, (double, double)> key = mode switch
         {
             LobbyModes.Duel => s => (s.Wins, s.Total),
             LobbyModes.Tracking => s => (s.Wins, s.Total),
+            // Combat: the match placement (frags, then fewer deaths, or the team); players who left come last.
+            var cm when LobbyModes.Combat(cm) => s => (-(double)placed.GetValueOrDefault(s.MemberId, 1000), m.Settings.Mode == LobbyModes.TeamDeathmatch ? 0 : s.Points),
             var cm when LobbyModes.Shooting(cm) => s => (s.Points, s.Total),
             LobbyModes.Rounds => s => (s.Points, s.Total),
             _ => s => (s.Best ?? double.MinValue, s.Total),
@@ -803,6 +816,8 @@ sealed class LobbyCore
             if (snapshot.Settings.Mode == LobbyModes.Tracking && ms.StartsAt is { } startsAt && ms.Phase is MatchPhases.Countdown or MatchPhases.Live && ms.Players.Count >= 2)
                 match.Tracking = new TrackingRound(ms.Players[0], ms.Players[1], startsAt, startsAt + (long)(snapshot.Settings.EffectiveTimeLimit * 1000), snapshot.Settings.RequireFire);
             core.match = match;
+            // Over is not in the snapshot: between rounds, decide again so the last results end the match.
+            if (ms.Phase == MatchPhases.Round) match.Over = core.Decided(match);
         }
         if (snapshot.HostId != newHostId) core.System(snapshot.Members.FirstOrDefault(m => m.Id == snapshot.HostId)?.Name + " (host) left. " + self.Name + " is now the host.");
         return core;

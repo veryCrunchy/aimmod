@@ -180,6 +180,20 @@ static partial class MultiplayerChecks
         Check(placements.First(p => p.MemberId == "p3").Disputed && placements.First(p => p.MemberId == "p3").Points == 1 && placements.First(p => p.MemberId == "host").Points == 0, "Placement points, and a result that disagrees with its live stream is disputed");
         Check(placements.First(p => p.MemberId == "p2").Status == LineStates.Left, "A player who left is marked");
 
+        // A finished run longer than the time the round has been live can't have been played in it.
+        (core, clock, advance) = Lobby();
+        core.Join("p2", "Two");
+        core.Apply("host", "settings", Patch(new { countdown = 3 }), content);
+        ReadyAll(core); core.Apply("host", "start", default, content);
+        advance(3001); core.Tick();
+        var early = core.Snapshot().Match!;
+        advance(2000);
+        core.Finish("p2", new RunFinish(early.Id, 1, 99_000, 60, 10, 5, 5, null));
+        advance(58_000);
+        core.Finish("host", new RunFinish(early.Id, 1, 800, 60, 10, 5, 5, null));
+        var earlyResults = core.Snapshot().Match!.Rounds[0].Results;
+        Check(earlyResults.First(x => x.MemberId == "p2").Disputed && !earlyResults.First(x => x.MemberId == "host").Disputed, "A 60 s result two seconds into the round is disputed; one at the end is not");
+
         // Missing players time out; practice has no ranking.
         (core, clock, advance) = Lobby();
         core.Join("p2", "Two");
@@ -205,6 +219,25 @@ static partial class MultiplayerChecks
         Check(heir.HostId == "p2" && heir.Members.All(m => m.Id != "host") && heir.Snapshot().Match?.Id == snapshot.Match!.Id, "Host migration keeps the lobby and the running match");
         Check(heir.Members.First(m => m.Id == "p3").Connection == Connections.Reconnecting && heir.Join("p3", "").Ok && heir.Members.First(m => m.Id == "p3").Connection == Connections.Connected, "Other members reconnect to the new host");
         Check(heir.Snapshot().Match!.Live.First(l => l.MemberId == "host").Status == LineStates.Left, "The departed host's run is marked left");
+        // Host migration while the last round's results show: the match is decided, no extra round.
+        (core, clock, advance) = Lobby();
+        core.Join("p2", "Two"); core.Join("p3", "Three");
+        core.Apply("host", "settings", Patch(new { mode = "score-race", rounds = 2, countdown = 3 }), content);
+        ReadyAll(core); core.Apply("host", "start", default, content);
+        for (var rn = 1; rn <= 2; rn++)
+        {
+            if (rn > 1) { advance(LobbyCore.ResultsMs); core.Tick(); }
+            advance(3001); core.Tick();
+            var rm = core.Snapshot().Match!;
+            advance(60_000);
+            foreach (var id in new[] { "host", "p2", "p3" }) core.Finish(id, new RunFinish(rm.Id, rn, 900 - rn, 60, 10, 5, 5, null));
+        }
+        var decided = core.Snapshot();
+        Check(decided.Match is { Phase: MatchPhases.Round, Round: 2 }, "The deciding round shows its results");
+        var successor = LobbyCore.Restore(decided, "p2", clock);
+        successor.Join("p3", "Three");
+        advance(LobbyCore.ResultsMs); successor.Tick();
+        Check(successor.Snapshot().Match is { Phase: MatchPhases.Final, Round: 2 }, "A host who takes over during the last results ends the match instead of starting an extra round");
 
         // Looks and builds.
         (core, clock, advance) = Lobby();
@@ -298,15 +331,16 @@ static partial class MultiplayerChecks
         static (double X, double Y, double Z) Body(long t) => (1000, 300 * Math.Sin((t - t0) / 1000.0 * 2 * Math.PI), 100);
         TrackSample Eye(long t) { var b = Body(t); return new TrackSample(t, b.X, b.Y, b.Z + 64, 0, 0); }
         TrackSample Aim(long t, (double X, double Y, double Z) at, bool fire = false) => new(t, 0, 0, 164, Math.Atan2(at.Z - 164, Math.Sqrt(at.X * at.X + at.Y * at.Y)) * 180 / Math.PI, Math.Atan2(at.Y, at.X) * 180 / Math.PI, fire);
-        TrackingRound Play(long seenLag, long aimLag, Func<long, (double, double, double)>? claimed = null, bool evidence = true, long attackUntil = length, bool requireFire = false, string? tag = null)
+        TrackingRound Play(long seenLag, long aimLag, Func<long, (double, double, double)>? claimed = null, bool evidence = true, long attackUntil = length, bool requireFire = false, string? tag = null,
+            double aimOffset = 0, double seenRadius = 45, double seenHalf = 115)
         {
             var round = new TrackingRound("a", "d", t0, t0 + length, requireFire);
             for (long t = t0; t < t0 + length; t += 17)
             {
                 var dodge = new List<TrackSample> { Eye(t) };
-                var aim = t < t0 + attackUntil ? new List<TrackSample> { Aim(t, Body(t - aimLag), fire: (t - t0) % 1000 < 500) } : [];
+                var aim = t < t0 + attackUntil ? new List<TrackSample> { Aim(t, Body(t - aimLag) is var at ? (at.X, at.Y + aimOffset, at.Z) : default, fire: (t - t0) % 1000 < 500) } : [];
                 var seen = new List<TrackSeen>();
-                if (evidence && (t - t0) % 34 == 0) { var c = (claimed ?? (x => Body(x - seenLag)))(t); seen.Add(new TrackSeen(t, 7, c.Item1, c.Item2, c.Item3, 45, 115, tag)); seen.Add(new TrackSeen(t, 3, -500, -500, 100, 45, 115)); }
+                if (evidence && (t - t0) % 34 == 0) { var c = (claimed ?? (x => Body(x - seenLag)))(t); seen.Add(new TrackSeen(t, 7, c.Item1, c.Item2, c.Item3, seenRadius, seenHalf, tag)); seen.Add(new TrackSeen(t, 3, -500, -500, 100, 45, 115)); }
                 round.Add("d", new TrackBatch("m", 1, dodge, []));
                 round.Add("a", new TrackBatch("m", 1, aim, seen));
             }
@@ -322,6 +356,8 @@ static partial class MultiplayerChecks
         var lie = Play(0, 0, claimed: t => { var b = Body(t); return (b.X + 250, b.Y, b.Z); }).ScoreFor("a", t0 + length, 40, 40);
         Check(lie.Disputed && lie.Reason == "seen-mismatch", "Drawn hulls that don't match the target's own track are rejected and dispute the round");
         var late = Play(350, 350).ScoreFor("a", t0 + length, 40, 40);
+        var huge = Play(120, 120, aimOffset: 300, seenRadius: 1000, seenHalf: 2000).ScoreFor("a", t0 + length, 40, 60);
+        Check(huge.Percent < 5, "Drawn hulls far larger than the avatar's don't count aim 3 m beside the target as on target");
         Check(late.Disputed && late.LagMs == TrackingRound.RewindCapMs && late.Percent < 60, "The rewind is capped at 200 ms: aiming at a target older than that doesn't count");
         var partial = Play(120, 120, attackUntil: length / 2).ScoreFor("a", t0 + length, 40, 40);
         Check(partial.Disputed && partial.Reason == "coverage" && partial.Percent is > 45 and < 55, "A stream covering half the round scores half and is disputed");
@@ -456,6 +492,11 @@ static partial class MultiplayerChecks
         Check(c1.Claim("a", Shot(at + 300, yaw: 10), at + 350, 40) == "aim", "The ray must look where the shooter's own track looked");
         Check(c1.Claim("a", Shot(at + 400, targetY: 300), at + 450, 40) == "target-mismatch", "A drawn target nobody was at in the last 200 ms is refused");
         Check(c1.Claim("a", Shot(at + 500, yaw: 2.9), at + 550, 40) == "ray-miss", "A ray beside the hull is refused");
+        // The drawn hull is the shooter's evidence of where the victim was, not of how big it is.
+        Check(c1.Claim("a", new HitClaim("m", 1, ++seq, at + 520, 0, 30, 164, 0, 2.9, false, 1000, 0, 100, 1000, 2000), at + 560, 40) == "ray-miss",
+            "A claimed hull far larger than the avatar's can't turn a miss into a hit");
+        Check(Arena(LobbyModes.Deathmatch).Claim("a", new HitClaim("m", 1, ++seq, at + 540, 0, 0, 195, 2.9, 0, false, 1000, 0, 155.7, 45, 115), at + 570, 40) == "target-mismatch",
+            "A claimed hull raised above the victim's own track can't turn a shot over the head into a headshot");
         Check(c1.Claim("a", Shot(at + 600) with { Seq = 1 }, at + 650, 40) == "repeated" && c1.Claim("a", Shot(at - 5000), at + 700, 40) == "time", "Repeated and stale claims are refused");
         var headPitch = Math.Atan2(195 - 164, 1000) * 180 / Math.PI;
         Check(c1.Claim("a", Shot(at + 800, pitch: headPitch), at + 850, 40) is null && c1.View().Events[^1] is { Kind: "damage", Head: true, Amount: 40 }, "The host decides headshots from the ray (the top of the hull) and doubles the damage");
@@ -527,6 +568,32 @@ static partial class MultiplayerChecks
         for (var k = 0; k < 5; k++) { core.Claim("host", new HitClaim(m.Id, 1, 100 + k, now - 480 + k * 100, 0, 0, 164, 0, 0, false, 1000, 0, 100, 45, 115)); }
         var final = core.Snapshot().Match!;
         Check(final.Phase == MatchPhases.Final && final.WinnerId == "host" && final.Rounds[0].Results[0] is { MemberId: "host", Score: 1, Place: 1 }, "Reaching the frag limit ends the match with the winner");
+
+        // A three-player deathmatch whose leader leaves: the players still there are placed among themselves.
+        (core, clock, advance) = Lobby();
+        core.Join("p2", "Two"); core.Join("p3", "Three");
+        core.Apply("host", "settings", Patch(new { mode = "deathmatch", fragLimit = 5, countdown = 3, timeLimit = 60 }), content);
+        ReadyAll(core); core.Apply("host", "start", default, content);
+        advance(3000); core.Tick();
+        var three = core.Snapshot().Match!;
+        var t3 = clock();
+        for (long t = 0; t < 3000; t += 100)
+        {
+            List<TrackSample> Eyes(double x, double y, double yaw) { var l = new List<TrackSample>(); for (long k = 0; k < 100; k += 17) l.Add(new TrackSample(t3 + t + k, x, y, 164, 0, yaw)); return l; }
+            core.Track("host", new TrackBatch(three.Id, 1, Eyes(0, 0, 0), [])); core.Track("p2", new TrackBatch(three.Id, 1, Eyes(1000, 0, 180), [])); core.Track("p3", new TrackBatch(three.Id, 1, Eyes(0, 3000, 0), []));
+            advance(100); core.Tick();
+        }
+        var shotAt = clock();
+        for (var k = 0; k < 5; k++) core.Claim("p2", new HitClaim(three.Id, 1, 200 + k, shotAt - 600 + k * 110, 1000, 0, 164, 0, 180, false, 0, 0, 100, 45, 115));
+        Check(core.Snapshot().Match!.Combat!.Players.First(p => p.Member == "p2").Frags == 1, "The leader has a frag");
+        core.Leave("p2");
+        advance(60_000 + LobbyCore.RoundGraceMs); core.Tick();
+        var left = core.Snapshot().Match!;
+        var leftPlaces = left.Rounds[0].Results;
+        Check(left.Phase == MatchPhases.Final && leftPlaces.First(p => p.MemberId == "p3").Place == 1 && leftPlaces.First(p => p.MemberId == "host").Place == 2 && leftPlaces.First(p => p.MemberId == "p2").Place == 0,
+            "A leader who left doesn't push the remaining players down: equal frags, fewer deaths places first");
+        Check(left.WinnerId == "p3" && left.Standings.First(s => s.MemberId == "p3").Place == 1 && left.Standings.First(s => s.MemberId == "host").Place == 2,
+            "The final standings follow the match placement: the player who left doesn't win, fewer deaths breaks a frag tie");
 
         // Arenas: the player can be hurt and carries the mode weapon; nothing natively heals or scores.
         var arena = MatchScenario.Generate(new(BaseScenario, LobbyRules.Apply(start, J(new { mode = "instagib" }), 2, content).Settings! with { Scenario = new ScenarioChoice("Synthetic A", ContentLibrary.TextHash(BaseScenario), "synthetic_map", ContentLibrary.TextHash("m"), 60) }));
@@ -765,7 +832,7 @@ static partial class MultiplayerChecks
         public RejoinPoint? LastLobby => null;
         public void SetPresencePrivacy(bool hideScenario) { }
         public bool StartSpectate(string peer, int rate) => false;
-        public void StopSpectate() { }
+        public void StopSpectate() => SpectateLog.Add("stop");
         public bool AllowSpectate;
         public readonly List<string> SpectateLog = [];
         public bool RequestSpectate(string peer) { SpectateLog.Add("request " + peer); return AllowSpectate; }
@@ -836,6 +903,13 @@ static partial class MultiplayerChecks
         b.Act("chat", J(new { text = "synthetic hello" }));
         Pump();
         Check(View(c).GetProperty("lobby").GetProperty("chat").EnumerateArray().Any(l => l.GetProperty("text").GetString() == "synthetic hello"), "Chat travels through the host");
+        // A peer outside the lobby (a friend's spectate link, a rejected join) gets nothing from the host.
+        var outsider = new MemoryTransport(net, "peer-x"); net.Peers["peer-x"] = outsider;
+        foreach (var (type, body) in new (string, object)[] { ("content.request", new { }), ("content.get", new { hash = new string('a', 64), offset = 0, length = 8192 }) })
+            net.Peers["peer-a"].Inbox.Enqueue(new TransportEvent("peer-x", TransportEvent.Message, Protocol.Encode(Protocol.Create(type, "x", "peer-x", 1, now, body))));
+        Pump();
+        Check(outsider.Inbox.Count == 0, "The host answers lobby traffic only from its members");
+        net.Peers.Remove("peer-x");
         // A forged frame claiming to be the host is dropped.
         net.Peers["peer-b"].Inbox.Enqueue(new TransportEvent("peer-c", TransportEvent.Message, Protocol.Encode(Protocol.Create("snapshot", "x", "peer-a", 1, now, new { snapshot = new { } }))));
         Pump();
@@ -867,6 +941,12 @@ static partial class MultiplayerChecks
         Pump();
         Check(View(b).GetProperty("watch").GetProperty("message").GetString()!.Contains("said no"), "An end reason is explained");
         b.Act("watch-stop", default);
+        // Switching to another friend: the bridge replaces the stream; nothing may stop the new one.
+        bt.FriendList = [new("f2", "Watchable Friend", "aimmod", null, null, false, Spectatable: true, Scenario: "Synthetic A"), new("f3", "Other Friend", "aimmod", null, null, false, Spectatable: true, Scenario: "Synthetic A")];
+        b.Act("watch", J(new { friend = "f2" })); bt.SpectateLog.Clear();
+        Check(b.Act("watch", J(new { friend = "f3" })).Ok && bt.SpectateLog.SequenceEqual(["request f3"]) && View(b).GetProperty("watch").GetProperty("peer").GetString() == "f3",
+            "Switching friends asks for the new stream without stopping it right after");
+        b.Act("watch-stop", default); bt.FriendList = null;
         var ct = (MemoryTransport)net.Peers["peer-c"];
         ct.Inbox.Enqueue(new TransportEvent("f9", TransportEvent.SpectatorJoined, Reason: "Synthetic Watcher"));
         ct.Inbox.Enqueue(new TransportEvent("f8", TransportEvent.SpectatorJoined, Reason: "Quiet Sync", Host: true));
@@ -1433,6 +1513,12 @@ static partial class MultiplayerChecks
         var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant();
         Check(receiver.Chunk("m1", 2, "peer-a", "1790000000-42-9", "round", null, tampered.Length, hash, 0, tampered.Take(ReplaySwap.ChunkBytes).ToArray()) is null || tampered.Length > ReplaySwap.ChunkBytes, "A replay whose bytes don't match its hash is dropped");
         Check(receiver.Chunk("m1", 1, "peer-a", "../evil", "round", null, 100, hash, 0, new byte[10]) is null && receiver.Chunk("m1", 1, "peer-a", "x", "script", null, 100, hash, 0, new byte[10]) is null, "Bad ids and kinds are refused");
+        // A member opening many large replays at once can't make the host hold them all.
+        var flood = new ReplaySwap(Out("c"), () => now);
+        for (var i = 0; i < 40; i++) flood.Chunk("m1", 1, "peer-x", "flood-" + i, "round", null, ReplaySwap.MaxBytes, hash, 0, new byte[ReplaySwap.ChunkBytes]);
+        Check(flood.Assembling <= 2, "One member assembles at most two replays at a time");
+        for (var i = 0; i < 40; i++) flood.Chunk("m1", 1, "peer-" + i, "flood", "round", null, ReplaySwap.MaxBytes, hash, 0, new byte[ReplaySwap.ChunkBytes]);
+        Check(flood.Assembling <= 8, "At most eight replays are assembled at a time");
     }
 
     static void Transfers(string root)
