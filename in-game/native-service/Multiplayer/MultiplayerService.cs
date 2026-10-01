@@ -971,6 +971,20 @@ sealed partial class MultiplayerService : IDisposable
             m.Rounds.Count(r => r.WinnerId == SelfId), m.Rounds.Count(r => r.WinnerId == opponentId), left, m.Round, m.TotalRounds ?? m.Round, m.Phase,
             mine?.Disputed == true || theirs?.Disputed == true, lobby.Settings.RequireFire);
     }
+    // The match is starting for this player: AimModNativeUI closes the AimMod panel (and KovaaK's
+    // menu, unless the player opened it during loading) and gives input back to the game. One id per
+    // load attempt, sent through the round 1 countdown and the start of play; "since" is when the
+    // attempt began (the start, the invite join, or Retry), so a menu opened after it is left alone.
+    (string Key, long Since)? playFlow;
+    internal sealed record PlayView(string Id, long Since);
+    internal PlayView? PlayRequest(long now)
+    {
+        if (Current?.Match is not { } m || !m.Players.Contains(SelfId)) return null;
+        var key = m.Id + "-" + m.LoadAttempt;
+        if (playFlow?.Key != key) playFlow = (key, now);
+        if (m.Phase is not (MatchPhases.Countdown or MatchPhases.Live) || m.Round > 1) return null;
+        return new PlayView("play-" + key, playFlow.Value.Since);
+    }
     string NoticeJson(GameNotice? notice = null)
     {
         lock (gate)
@@ -981,13 +995,16 @@ sealed partial class MultiplayerService : IDisposable
             var combat = CombatHud();
             var cs = CsHud();
             var (board, boardFull) = NoticeBoards();
-            if (notice is null && badge is null && duel is null && combat is null && cs is null && board is null && boardFull is null) return "{\"version\":1,\"active\":false}";
+            var play = PlayRequest(clock());
+            if (notice is null && badge is null && duel is null && combat is null && cs is null && board is null && boardFull is null && play is null) return "{\"version\":1,\"active\":false}";
             return JsonSerializer.Serialize(new
             {
                 version = 1, active = notice is not null, badge, notice?.Id, notice?.Kind, notice?.Eyebrow, notice?.Title, notice?.Body, notice?.Key, notice?.Countdown, notice?.Sound, notice?.Invite,
                 // full: the notice layer covers the screen (the HUDs sit at its edges); toast: top centre only.
                 layout = cs is not null || board is not null || boardFull is not null ? "full" : "toast",
-                actions = notice?.Actions, interactive = notice?.Actions is { Count: > 0 } || cs?.BuyOpen == true, volume = prefs.Sounds ? prefs.Volume : 0, duel, combat, cs, board, boardFull,
+                actions = notice?.Actions, interactive = notice?.Actions is { Count: > 0 } || cs?.BuyOpen == true,
+                // cursor: the CS buy menu is open, so AimModNativeUI shows the cursor in game (and hands input back after).
+                cursor = cs?.BuyOpen == true, play, volume = prefs.Sounds ? prefs.Volume : 0, duel, combat, cs, board, boardFull,
             }, Protocol.Json);
         }
     }
