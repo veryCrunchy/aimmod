@@ -40,9 +40,6 @@ namespace aimmod
 
     namespace
     {
-        // The game's own character preview stage (character profile menu).
-        constexpr const wchar_t* StageClass =
-            L"/Game/FirstPersonBP/Blueprints/UI/CharacterStuff/CharcterSkinPreview/CharacterSkinPreviewActorUserInterfaceBP.CharacterSkinPreviewActorUserInterfaceBP_C";
         constexpr const wchar_t* ModelPack = L"/Game/FirstPersonBP/Blueprints/Bodies/Characters/CharacterModelPacks/Default_CharacterModelPack.Default_CharacterModelPack";
         constexpr const wchar_t* SkinPack = L"/Game/FirstPersonBP/Blueprints/Bodies/Characters/CharacterSkinPacks/Default_CharacterSkinPack.Default_CharacterSkinPack";
         // Far above any map: nothing in the scenario can see it, and its point
@@ -73,11 +70,6 @@ namespace aimmod
             {-240, 220, 10, {0.78f, 0.88f, 1.00f}, 11},   // fill: camera right, low
             {200, 130, 170, {0.70f, 1.00f, 0.86f}, 26},   // rim: behind, mint
         };
-        // Stage parts that are not the character: never rendered by the preview.
-        constexpr const wchar_t* HiddenParts[] = {STR("StaticMeshes"), STR("Cylinder"),     STR("Cube"),           STR("Sphere"),      STR("SphereBody"),
-                                                  STR("SphereHead"),   STR("CubeBody"),     STR("CubeHead"),       STR("CylinderBody"), STR("CylinderBottom"),
-                                                  STR("CylinderTop"),  STR("CylinderHead"), STR("Weapon1"),        STR("Weapon2"),     STR("Wall"),
-                                                  STR("Floor")};
 
         // Members of the capture's PostProcessSettings struct, by name.
         struct PostProcess
@@ -217,6 +209,15 @@ namespace aimmod
         for (const wchar_t* path : required)
             if (!game::FindFunction(path)) m_unavailable = "missing " + game::Narrow(path);
         if (!m_isBenchmark.ok() || !m_isEditor.ok() || !m_isInChallenge.ok()) m_unavailable = "scenario state getters unavailable";
+        // Kill switch: "cosmetics_preview=0" in Mods\AimModCore\config.txt.
+        if (const auto dir = m_output.modDirectory(); !dir.empty())
+        {
+            std::ifstream in(dir / L"config.txt", std::ios::binary);
+            std::string config(4096, '\0');
+            if (in) in.read(config.data(), static_cast<std::streamsize>(config.size()));
+            config.resize(in ? config.size() : static_cast<std::size_t>(in.gcount()));
+            if (!PreviewEnabledByConfig(config)) m_unavailable = "turned off in config.txt (cosmetics_preview=0)";
+        }
         m_available = m_unavailable.empty();
         m_params.Bind();
         // A frame from an earlier session is never shown.
@@ -291,6 +292,7 @@ namespace aimmod
         }
         m_lastRequest = now;
         if (!EnsureStage(world)) return;
+        if (!StageValid()) return Disable("the stage failed validation right after it was built");
         if (m_parked) Unpark();
 
         const std::string key = request->LookKey();
@@ -318,19 +320,40 @@ namespace aimmod
         }
     }
 
+    // AimModCore's own stage: a plain actor whose every component AimModCore
+    // creates and holds (root, turntable, character mesh, capture, three
+    // lights). Nothing depends on the game's character-menu blueprint.
+    UObject* CosmeticsPreview::AddPart(UObject* stage, const wchar_t* classPath, UObject* attachTo)
+    {
+        UClass* type = UObjectGlobals::StaticFindObject<UClass*>(nullptr, nullptr, classPath);
+        if (!InObjectArray(type)) return nullptr;
+        UObject* part = nullptr;
+        Call(stage, STR("/Script/Engine.Actor:AddComponentByClass"), [&](const std::wstring& n, FProperty* p, std::uint8_t* v) {
+            if (n == STR("Class")) WriteObject(v, type);
+            else if (n == STR("bManualAttachment")) WriteBoolParam(v, p, attachTo != nullptr);
+            else if (n == STR("RelativeTransform"))
+                if (auto* s = CastField<FStructProperty>(p))
+                    for (const char* field : {"Rotation.W", "Scale3D.X", "Scale3D.Y", "Scale3D.Z"}) game::SetStructPath(v, s->GetStruct(), field, 1);
+        }, &part);
+        if (!Valid(part, type, stage)) return nullptr;
+        if (attachTo)
+            Call(part, STR("/Script/Engine.SceneComponent:K2_AttachToComponent"), [&](const std::wstring& n, FProperty*, std::uint8_t* v) {
+                if (n == STR("Parent")) WriteObject(v, attachTo);
+                // KeepRelative (0) for location, rotation and scale.
+            });
+        return part;
+    }
+
     bool CosmeticsPreview::EnsureStage(UObject* world)
     {
-        // The world's one stage, reused while it and its parts are alive.
-        if (m_world == world && Alive(m_stage.Get()) && Alive(m_capture.Get()) && Alive(m_mesh.Get()) && Alive(m_meshes.Get()) && Alive(m_target.Get())) return true;
-        if (m_stage.Get() || m_world) Forget(m_world == world ? "stage no longer usable" : "world changed");
-        // Found again for every spawn, never cached: the class can be unloaded with the menu.
-        m_stageClass = UObjectGlobals::StaticFindObject<UClass*>(nullptr, nullptr, StageClass);
-        if (!m_stageClass) m_stageClass = static_cast<UClass*>(LoadGameAsset(StageClass));
-        if (!Alive(m_stageClass))
+        // The world's one stage, reused while every part of it is valid.
+        if (m_world == world && StageValid()) return true;
+        if (m_stage.Get() || m_world)
         {
-            m_stageClass = nullptr;
-            Log("cosmetics preview: the game's preview stage class is not loaded");
-            return false;
+            // A stage that stops validating in its own world is not rebuilt forever.
+            if (m_world == world && ++m_rebuilds > 3) return Disable("the stage kept failing validation"), false;
+            if (m_world != world) m_rebuilds = 0;
+            Forget(m_world == world ? "stage no longer usable" : "world changed");
         }
 
         UObject* rendering = Default(STR("/Script/Engine.Default__KismetRenderingLibrary"));
@@ -341,32 +364,37 @@ namespace aimmod
             else if (n == STR("Format")) *v = 2; // RTF_RGBA8: exported as PNG
             else if (n == STR("ClearColor")) WriteFloats(v, p, {0, 0, 0, 1});
         }, &target);
-        if (!target) { Log("cosmetics preview: render target unavailable"); return false; }
+        if (!Alive(target)) return Disable("render target unavailable"), false;
 
+        UClass* actorClass = UObjectGlobals::StaticFindObject<UClass*>(nullptr, nullptr, STR("/Script/Engine.Actor"));
+        if (!InObjectArray(actorClass)) return Disable("Actor class not found"), false;
         const FTransform transform{FQuat(FRotator(0, 0, 0)), FVector(0, 0, StageHeight), FVector(1, 1, 1)};
-        AActor* stage = UGameplayStatics::BeginDeferredActorSpawnFromClass(world, m_stageClass, transform, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
-        if (!stage) { Log("cosmetics preview: the preview stage could not be spawned"); return false; }
+        AActor* stage = UGameplayStatics::BeginDeferredActorSpawnFromClass(world, actorClass, transform, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+        if (!Valid(stage, actorClass)) return Disable("the stage could not be spawned"), false;
         UGameplayStatics::FinishSpawningActor(stage, transform);
+        if (!Valid(stage, actorClass)) return Disable("the stage did not survive spawning"), false;
         stage->SetActorEnableCollision(false);
+
+        // The first scene component becomes the root; the rest hang off it.
+        UObject* root = AddPart(stage, STR("/Script/Engine.SceneComponent"), nullptr);
+        UObject* turntable = root ? AddPart(stage, STR("/Script/Engine.SceneComponent"), root) : nullptr;
+        UObject* mesh = turntable ? AddPart(stage, STR("/Script/Engine.SkeletalMeshComponent"), turntable) : nullptr;
+        UObject* capture = root ? AddPart(stage, STR("/Script/Engine.SceneCaptureComponent2D"), root) : nullptr;
+        if (!root || !turntable || !mesh || !capture) return Disable("the stage's parts could not be created"), false;
+        if (UObject* r = GetObject(stage, STR("RootComponent")); r != root) return Disable("the stage's root is not its first part"), false;
+        std::vector<UObject*> lights;
+        for (int i = 0; i < 3; ++i)
+            if (UObject* light = AddPart(stage, STR("/Script/Engine.PointLightComponent"), root)) lights.push_back(light);
 
         m_stage = FWeakObjectPtr(stage);
         m_target = FWeakObjectPtr(target);
         m_world = world;
-        UObject* capture = GetObject(stage, STR("SceneCaptureComponent2D"));
-        UObject* meshes = GetObject(stage, STR("Meshes"));
-        UObject* mesh = GetObject(stage, STR("SkeletalMesh"));
         m_capture = FWeakObjectPtr(capture);
-        m_meshes = FWeakObjectPtr(meshes);
+        m_meshes = FWeakObjectPtr(turntable);
         m_mesh = FWeakObjectPtr(mesh);
-        if (!capture || !meshes || !mesh)
-        {
-            Forget("preview stage layout changed");
-            return false;
-        }
+        for (UObject* part : {static_cast<UObject*>(stage), root, turntable, mesh, capture}) m_parts.push_back(FWeakObjectPtr(part));
 
-        // Our render target, never the game's shared one; capture on demand only;
-        // render the stage and nothing else. Pixels nothing rendered count as
-        // empty (alpha 1) in the scene-colour mask capture.
+        // Our render target; capture on demand only; render the stage and nothing else.
         SetObject(capture, STR("TextureTarget"), target);
         SetBool(capture, STR("bCaptureEveryFrame"), false);
         SetBool(capture, STR("bCaptureOnMovement"), false);
@@ -375,98 +403,67 @@ namespace aimmod
         SetByte(capture, STR("CaptureSource"), SourceFinalColor);
         SetFloat(capture, STR("FOVAngle"), Fov);
         SetFloat(capture, STR("PostProcessBlendWeight"), 1.0f);
-        Call(capture, STR("/Script/Engine.SceneCaptureComponent:ShowOnlyActorComponents"), [&](const std::wstring& n, FProperty*, std::uint8_t* v) {
-            if (n == STR("InActor")) WriteObject(v, stage);
-        });
+        ShowInCapture(mesh);
         // Fixed exposure: a scene capture keeps no eye-adaptation history, so
         // auto exposure starts from nothing. Min = max brightness pins it. The
         // unit is luminance, or EV100 when the project extends the luminance
         // range (then the defaults are negative).
         const PostProcess post(capture);
         const bool ev100 = post.Get("AutoExposureMinBrightness").value_or(0) < 0;
-        const double brightness = ev100 ? 3.0 : 1.0; // average luminance 1 (EV100 3 = 0.125 * 2^3)
+        const double brightness = ev100 ? 3.0 : 1.0;
         const bool exposure = post.Override("AutoExposureMethod", ExposureBasic) && post.Override("AutoExposureMinBrightness", brightness) &&
                               post.Override("AutoExposureMaxBrightness", brightness) && post.Override("AutoExposureBias", 0);
-        // No lens effects on a product shot; a little bloom only.
         post.Override("BloomIntensity", 0.2);
         post.Override("VignetteIntensity", 0);
         post.Override("MotionBlurAmount", 0);
         post.Override("LensFlareIntensity", 0);
         post.Override("GrainIntensity", 0);
 
-        // The stage's directional light would light the whole map: switch it
-        // off. The preview has its own short-range rig instead (Frame()).
-        if (UObject* sun = GetObject(stage, STR("DirectionalLight")))
-            if (!SetVisible(sun, false, false))
-            {
-                // Never leave a second sun over the map: park the stage (hidden) and give up.
-                Park("the stage light could not be switched off");
-                Forget("the stage light could not be switched off");
-                return false;
-            }
+        // The light rig: short reach (far from the map 5 km below), no shadows.
         m_lights.clear();
-        std::vector<UObject*> lights;
-        for (const wchar_t* name : {STR("PointLight"), STR("PointLight1")})
-            if (UObject* light = GetObject(stage, name)) lights.push_back(light);
-        if (UClass* pointLight = UObjectGlobals::StaticFindObject<UClass*>(nullptr, nullptr, STR("/Script/Engine.PointLightComponent")); pointLight && lights.size() < 3)
-        {
-            UObject* added = nullptr;
-            Call(stage, STR("/Script/Engine.Actor:AddComponentByClass"), [&](const std::wstring& n, FProperty* p, std::uint8_t* v) {
-                if (n == STR("Class")) WriteObject(v, pointLight);
-                else if (n == STR("RelativeTransform"))
-                    if (auto* s = CastField<FStructProperty>(p))
-                        for (const char* field : {"Rotation.W", "Scale3D.X", "Scale3D.Y", "Scale3D.Z"}) game::SetStructPath(v, s->GetStruct(), field, 1);
-            }, &added);
-            if (added && added->IsA(pointLight)) lights.push_back(added);
-        }
         for (UObject* light : lights)
         {
-            Call(light, STR("/Script/Engine.SceneComponent:SetMobility"), [](const std::wstring&, FProperty*, std::uint8_t* v) { *v = Movable; });
             Call(light, STR("/Script/Engine.LocalLightComponent:SetAttenuationRadius"), [](const std::wstring& n, FProperty* p, std::uint8_t* v) {
                 if (n == STR("NewRadius")) WriteFloats(v, p, {LightReach});
             });
             Call(light, STR("/Script/Engine.LightComponentBase:SetCastShadows"), [](const std::wstring&, FProperty* p, std::uint8_t* v) { WriteBoolParam(v, p, false); });
-            // Never a light that could reach the map: if the reach did not take, it stays off.
             if (GetFloat(light, STR("AttenuationRadius")).value_or(1e9f) > LightReach + 1)
             {
-                SetVisible(light, false, false);
+                SetVisible(light, false, false); // never a light that could reach the map
                 continue;
             }
             m_lights.push_back(FWeakObjectPtr(light));
         }
-
-        // Only the character is rendered: the shape models, weapons, wall and
-        // floor are hidden (the backdrop is composed after capture). No part
-        // of the stage casts a shadow onto the map.
-        for (const wchar_t* name : HiddenParts)
-            if (UObject* part = GetObject(stage, name))
-            {
-                SetVisible(part, false, true);
-                Call(part, STR("/Script/Engine.PrimitiveComponent:SetCastShadow"), [](const std::wstring&, FProperty* p, std::uint8_t* v) { WriteBoolParam(v, p, false); });
-            }
         Call(mesh, STR("/Script/Engine.PrimitiveComponent:SetCastShadow"), [](const std::wstring&, FProperty* p, std::uint8_t* v) { WriteBoolParam(v, p, false); });
-
+        Call(mesh, STR("/Script/Engine.ActorComponent:SetTickableWhenPaused"), [](const std::wstring&, FProperty* p, std::uint8_t* v) { WriteBoolParam(v, p, true); });
         m_baseYaw = 0;
-        if (FProperty* p = PropertyOf(meshes->GetClassPrivate(), STR("RelativeRotation")); p && p->GetSize() == 12)
-        {
-            float rotation[3];
-            std::memcpy(rotation, At(meshes, p), sizeof(rotation));
-            m_baseYaw = rotation[1];
-        }
-        // The stage camera's own position marks the front of the character.
-        if (!Location(capture, m_cameraHome))
-        {
-            m_cameraHome[0] = m_cameraHome[1] = 0;
-            m_cameraHome[2] = static_cast<float>(StageHeight);
-        }
         m_lookKey.clear();
         m_yaw = 1e9;
         m_parked = false;
         std::error_code error;
         std::filesystem::create_directories(m_frames, error);
-        Log("cosmetics preview stage spawned (" + std::to_string(m_lights.size()) + " rig lights" + (exposure ? ", fixed exposure" : ", exposure not pinned") +
+        Log("cosmetics preview stage spawned (AimMod's own stage, " + std::to_string(m_lights.size()) + " rig lights" + (exposure ? ", fixed exposure" : ", exposure not pinned") +
             (ev100 ? ", EV100" : "") + ")");
         return true;
+    }
+
+    bool CosmeticsPreview::StageValid()
+    {
+        UObject* stage = m_stage.Get();
+        if (!Valid(stage)) return false;
+        for (FWeakObjectPtr& part : m_parts)
+            if (UObject* o = part.Get(); o != stage && !Valid(o, nullptr, stage)) return false;
+        return Alive(m_target.Get());
+    }
+
+    // Any failed check ends the preview for this session: no stage, no frames
+    // (the page shows its 2D swatches). A cosmetics bug must never take the game down.
+    void CosmeticsPreview::Disable(const std::string& why)
+    {
+        if (!m_available) return;
+        m_available = false;
+        Log("cosmetics preview disabled for this session: " + why);
+        Forget(why.c_str());
     }
 
     std::optional<CosmeticsPreview::Look> CosmeticsPreview::FreeLook(const std::string& model, const std::string& skin)
@@ -926,10 +923,21 @@ namespace aimmod
             extent[0] = extent[1] = 40, extent[2] = 95;
         }
         const float centre[3] = {pivot[0], pivot[1], origin[2]};
-        float dir[2] = {centre[0] - m_cameraHome[0], centre[1] - m_cameraHome[1]};
-        const float length = std::hypot(dir[0], dir[1]);
-        if (length < 1.0f) dir[0] = 1, dir[1] = 0;
-        else dir[0] /= length, dir[1] /= length;
+        // Facing the character's front: its forward from the shoulders, turned
+        // back by the turntable's current yaw (the camera stays put as it turns).
+        if (mesh == m_mesh.Get())
+        {
+            double forward[3];
+            if (CharacterForward(mesh, forward))
+            {
+                const double yaw = (m_baseYaw + (std::abs(m_yaw) <= 360 ? m_yaw : 0)) * Pi / 180.0;
+                const double fx = forward[0] * std::cos(-yaw) - forward[1] * std::sin(-yaw), fy = forward[0] * std::sin(-yaw) + forward[1] * std::cos(-yaw);
+                const double l = std::hypot(fx, fy);
+                if (l > 1e-6) m_viewDir[0] = static_cast<float>(-fx / l), m_viewDir[1] = static_cast<float>(-fy / l);
+            }
+            else Log("cosmetics preview: no shoulder bones; the camera keeps its default front");
+        }
+        float dir[2] = {m_viewDir[0], m_viewDir[1]};
         const float right[2] = {-dir[1], dir[0]};
         const double halfHeight = extent[2];
         const double halfWidth = std::hypot(extent[0], extent[1]) + std::hypot(origin[0] - pivot[0], origin[1] - pivot[1]);
@@ -1065,6 +1073,7 @@ namespace aimmod
     {
         const bool had = m_stage.Get() || m_world;
         m_stage = m_target = m_capture = m_meshes = m_mesh = FWeakObjectPtr{};
+        m_parts.clear();
         m_lights.clear();
         m_accessories.clear();
         m_weapons.clear();
@@ -1084,6 +1093,7 @@ namespace aimmod
     void CosmeticsPreview::Shutdown()
     {
         m_stage = m_target = m_capture = m_meshes = m_mesh = FWeakObjectPtr{};
+        m_parts.clear();
         m_lights.clear();
         m_accessories.clear();
         m_weapons.clear();

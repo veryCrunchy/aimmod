@@ -1,5 +1,7 @@
 #include "MaterialParams.hpp"
 
+#include "Reflect.hpp"
+
 #include <Unreal/UClass.hpp>
 #include <Unreal/UObject.hpp>
 
@@ -34,7 +36,7 @@ namespace aimmod
     {
         std::set<std::string>* sets[3] = {&scalars, &vectors, &textures};
         UObject* current = material;
-        for (int depth = 0; depth < 8 && current && m_ok; ++depth)
+        for (int depth = 0; depth < 8 && m_ok && reflect::Alive(current); ++depth)
         {
             if (current->IsA(m_materialInstance))
             {
@@ -62,7 +64,7 @@ namespace aimmod
 
     bool MaterialParams::Has(UObject* material, const std::set<std::string>& vectors, const std::set<std::string>& scalars) const
     {
-        if (!material) return false;
+        if (!reflect::Alive(material)) return false;
         std::set<std::string> v, s, t;
         Names(material, v, s, t);
         for (const std::string& n : vectors)
@@ -74,7 +76,7 @@ namespace aimmod
 
     std::string MaterialParams::Describe(UObject* material) const
     {
-        if (!material) return "none";
+        if (!reflect::Alive(material)) return "none";
         std::set<std::string> v, s, t;
         Names(material, v, s, t);
         std::string out = ObjectName(material) + " (vectors";
@@ -86,10 +88,11 @@ namespace aimmod
 
     UObject* MaterialParams::MeshDefault(UObject* meshComponent, int slot) const
     {
-        if (!meshComponent || !m_skinnedMesh || !meshComponent->IsA(m_skinnedMesh) || !m_meshAsset.ok() || !m_meshMaterials.ok() || !m_slotMaterial.ok()) return nullptr;
+        if (!reflect::Alive(meshComponent) || !m_skinnedMesh || !meshComponent->IsA(m_skinnedMesh) || !m_meshAsset.ok() || !m_meshMaterials.ok() || !m_slotMaterial.ok()) return nullptr;
         UObject* mesh = m_meshAsset.Object(meshComponent);
         std::vector<const std::uint8_t*> slots;
-        if (!mesh || !m_meshMaterials.Elements(mesh, slots, 32) || slot < 0 || slot >= static_cast<int>(slots.size())) return nullptr;
-        return m_slotMaterial.Object(slots[static_cast<std::size_t>(slot)]);
+        if (!reflect::Alive(mesh) || !m_meshMaterials.Elements(mesh, slots, 32) || slot < 0 || slot >= static_cast<int>(slots.size())) return nullptr;
+        UObject* material = m_slotMaterial.Object(slots[static_cast<std::size_t>(slot)]);
+        return reflect::Alive(material) ? material : nullptr;
     }
 } // namespace aimmod

@@ -52,7 +52,8 @@ namespace aimmod
                 if (p.ret) return ReadObject(buffer, p);
             return nullptr;
         }
-        bool Live(UObject* o) { return o && IsLiveInstance(o); }
+        // Every object read from game memory goes through the one validation helper.
+        bool Live(UObject* o) { return reflect::Alive(o); }
     } // namespace
 
     void Cosmetics::Bind()
@@ -231,12 +232,13 @@ namespace aimmod
     {
         UObject* component = want.component;
         const cosmetics::Item& item = *want.item;
+        if (!Live(component) || !Live(want.owner)) return;
         if (m_redress[component] > MaxRedress) return;
         const int count = static_cast<int>(std::min<double>(m_numMaterials.Number(component).value_or(0), MaxSlots));
         for (int index = 0; index < count; ++index)
         {
             UObject* material = Material(component, index);
-            if (!material || m_ours.contains(material)) continue;
+            if (!Live(material) || m_ours.contains(material)) continue;
             // The game replaced our instance on this slot (its own colour logic):
             // forget it, dress again, and stop after a few rounds.
             auto previous = std::find_if(m_dressed.begin(), m_dressed.end(), [&](const Dressed& d) { return d.key == component && d.index == index; });

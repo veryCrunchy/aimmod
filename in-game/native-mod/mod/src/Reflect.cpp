@@ -13,7 +13,9 @@
 #include <Unreal/UClass.hpp>
 #include <Unreal/UFunction.hpp>
 #include <Unreal/UObject.hpp>
+#include <Unreal/UObjectArray.hpp>
 #include <Unreal/UObjectGlobals.hpp>
+#include <aimmod/CosmeticsPreview.hpp>
 
 #include <Windows.h>
 
@@ -70,49 +72,49 @@ namespace aimmod::reflect
 
     UObject* GetObject(UObject* object, const wchar_t* name)
     {
-        FProperty* p = object ? PropertyOf(object->GetClassPrivate(), name) : nullptr;
+        FProperty* p = InObjectArray(object) ? PropertyOf(object->GetClassPrivate(), name) : nullptr;
         if (!p || !CastField<FObjectPropertyBase>(p)) return nullptr;
         UObject* value;
         std::memcpy(&value, At(object, p), sizeof(value));
-        return value;
+        return InObjectArray(value) ? value : nullptr;
     }
     bool SetObject(UObject* object, const wchar_t* name, UObject* value)
     {
-        FProperty* p = object ? PropertyOf(object->GetClassPrivate(), name) : nullptr;
+        FProperty* p = InObjectArray(object) ? PropertyOf(object->GetClassPrivate(), name) : nullptr;
         if (!p || !CastField<FObjectPropertyBase>(p)) return false;
         std::memcpy(At(object, p), &value, sizeof(value));
         return true;
     }
     bool SetBool(UObject* object, const wchar_t* name, bool value)
     {
-        auto* p = object ? CastField<FBoolProperty>(PropertyOf(object->GetClassPrivate(), name)) : nullptr;
+        auto* p = InObjectArray(object) ? CastField<FBoolProperty>(PropertyOf(object->GetClassPrivate(), name)) : nullptr;
         if (!p) return false;
         p->SetPropertyValueInContainer(object, value);
         return true;
     }
     bool SetByte(UObject* object, const wchar_t* name, std::uint8_t value)
     {
-        FProperty* p = object ? PropertyOf(object->GetClassPrivate(), name) : nullptr;
+        FProperty* p = InObjectArray(object) ? PropertyOf(object->GetClassPrivate(), name) : nullptr;
         if (!p || p->GetSize() != 1) return false;
         *At(object, p) = value;
         return true;
     }
     std::optional<std::uint8_t> GetByte(UObject* object, const wchar_t* name)
     {
-        FProperty* p = object ? PropertyOf(object->GetClassPrivate(), name) : nullptr;
+        FProperty* p = InObjectArray(object) ? PropertyOf(object->GetClassPrivate(), name) : nullptr;
         if (!p || p->GetSize() != 1) return std::nullopt;
         return *At(object, p);
     }
     bool SetFloat(UObject* object, const wchar_t* name, float value)
     {
-        FProperty* p = object ? PropertyOf(object->GetClassPrivate(), name) : nullptr;
+        FProperty* p = InObjectArray(object) ? PropertyOf(object->GetClassPrivate(), name) : nullptr;
         if (!p || p->GetSize() != 4) return false;
         std::memcpy(At(object, p), &value, 4);
         return true;
     }
     std::optional<float> GetFloat(UObject* object, const wchar_t* name)
     {
-        FProperty* p = object ? PropertyOf(object->GetClassPrivate(), name) : nullptr;
+        FProperty* p = InObjectArray(object) ? PropertyOf(object->GetClassPrivate(), name) : nullptr;
         if (!p || p->GetSize() != 4) return std::nullopt;
         float value;
         std::memcpy(&value, At(object, p), 4);
@@ -121,17 +123,18 @@ namespace aimmod::reflect
     std::vector<UObject*> GetObjects(UObject* object, const wchar_t* name, std::size_t limit)
     {
         std::vector<UObject*> out;
-        auto* p = object ? CastField<FArrayProperty>(PropertyOf(object->GetClassPrivate(), name)) : nullptr;
+        auto* p = InObjectArray(object) ? CastField<FArrayProperty>(PropertyOf(object->GetClassPrivate(), name)) : nullptr;
         if (!p || !CastField<FObjectPropertyBase>(p->GetInner())) return out;
         RawArray raw;
         std::memcpy(&raw, At(object, p), sizeof(raw));
         if (!raw.data || raw.num < 0) return out;
-        for (std::int32_t i = 0; i < raw.num && out.size() < limit; ++i) out.push_back(static_cast<UObject**>(raw.data)[i]);
+        for (std::int32_t i = 0; i < raw.num && i < 4096 && out.size() < limit; ++i)
+            if (UObject* o = static_cast<UObject**>(raw.data)[i]; InObjectArray(o)) out.push_back(o);
         return out;
     }
     std::wstring GetName(UObject* object, const wchar_t* name)
     {
-        FProperty* p = object ? PropertyOf(object->GetClassPrivate(), name) : nullptr;
+        FProperty* p = InObjectArray(object) ? PropertyOf(object->GetClassPrivate(), name) : nullptr;
         if (!p || !CastField<FNameProperty>(p)) return {};
         FName value;
         std::memcpy(&value, At(object, p), sizeof(value));
@@ -140,14 +143,14 @@ namespace aimmod::reflect
 
     std::wstring SoftPath(UObject* object, const wchar_t* name)
     {
-        FProperty* p = object ? PropertyOf(object->GetClassPrivate(), name) : nullptr;
+        FProperty* p = InObjectArray(object) ? PropertyOf(object->GetClassPrivate(), name) : nullptr;
         if (!p || p->GetSize() != SoftPtrSize) return {};
         return SoftPathAt(At(object, p));
     }
     std::vector<std::wstring> SoftPaths(UObject* object, const wchar_t* name, std::size_t limit)
     {
         std::vector<std::wstring> out;
-        auto* p = object ? CastField<FArrayProperty>(PropertyOf(object->GetClassPrivate(), name)) : nullptr;
+        auto* p = InObjectArray(object) ? CastField<FArrayProperty>(PropertyOf(object->GetClassPrivate(), name)) : nullptr;
         if (!p || p->GetInner()->GetSize() != SoftPtrSize) return out;
         RawArray raw;
         std::memcpy(&raw, At(object, p), sizeof(raw));
@@ -163,7 +166,7 @@ namespace aimmod::reflect
 
     bool Call(UObject* self, const wchar_t* path, const Fill& fill, UObject** returned, const Read& read)
     {
-        auto* fn = self ? UObjectGlobals::StaticFindObject<UFunction*>(nullptr, nullptr, path) : nullptr;
+        auto* fn = InObjectArray(self) ? UObjectGlobals::StaticFindObject<UFunction*>(nullptr, nullptr, path) : nullptr;
         if (!fn || fn->GetParmsSize() > 1024) return false;
         alignas(16) std::uint8_t buffer[1024];
         std::memset(buffer, 0, fn->GetParmsSize());
@@ -187,7 +190,11 @@ namespace aimmod::reflect
             std::memcpy(&raw, s, sizeof(raw));
             if (raw.data) FMemory::Free(raw.data);
         }
-        if (ok && returned && ret && CastField<FObjectPropertyBase>(ret)) std::memcpy(returned, buffer + ret->GetOffset_Internal(), sizeof(UObject*));
+        if (ok && returned && ret && CastField<FObjectPropertyBase>(ret))
+        {
+            std::memcpy(returned, buffer + ret->GetOffset_Internal(), sizeof(UObject*));
+            if (!InObjectArray(*returned)) *returned = nullptr;
+        }
         return ok;
     }
     UObject* Default(const wchar_t* path) { return UObjectGlobals::StaticFindObject<UObject*>(nullptr, nullptr, path); }
@@ -292,9 +299,40 @@ namespace aimmod::reflect
         return o && e;
     }
 
+    namespace
+    {
+        bool ArrayHolds(UObject* object)
+        {
+            __try
+            {
+                const std::int32_t index = object->GetInternalIndex();
+                if (index < 0 || index >= FUObjectArray::GetNumElements()) return false;
+                FUObjectItem* item = FUObjectArray::IndexToObject(index);
+                return item && item->GetUObject() == object;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                return false;
+            }
+        }
+    } // namespace
+
+    bool InObjectArray(UObject* object)
+    {
+        return object && aimmod::PlausibleObjectAddress(reinterpret_cast<std::uintptr_t>(object)) && ArrayHolds(object);
+    }
+
+    bool Valid(UObject* object, UClass* type, UObject* owner)
+    {
+        if (!Alive(object)) return false;
+        if (type && (!InObjectArray(type) || !object->IsA(type))) return false;
+        if (owner && object->GetOuterPrivate() != owner) return false;
+        return true;
+    }
+
     bool Alive(UObject* object)
     {
-        if (!object || !game::IsLiveInstance(object)) return false;
+        if (!InObjectArray(object) || !game::IsLiveInstance(object)) return false;
         if (object->HasAnyFlags(static_cast<EObjectFlags>(RF_BeginDestroyed | RF_FinishDestroyed))) return false;
         if (object->HasAnyInternalFlags(static_cast<EInternalObjectFlags>(static_cast<std::int32_t>(EInternalObjectFlags::PendingKill) |
                                                                           static_cast<std::int32_t>(EInternalObjectFlags::Unreachable))))

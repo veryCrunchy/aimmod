@@ -80,7 +80,8 @@ namespace aimmod
 
     UObject* AttachFitAccessory(UObject* actor, UObject* skeletalMesh, const cosmetics::Item& item, std::string& why)
     {
-        if (!item.fit || !actor || !skeletalMesh) return (why = "not a fit accessory", nullptr);
+        if (!item.fit) return (why = "not a fit accessory", nullptr);
+        if (!Alive(actor) || !Alive(skeletalMesh)) return (why = "the character is not valid", nullptr);
         if (!cosmetics::IsGameAccessoryAsset(item.mesh, false) || !cosmetics::IsGameAccessoryAsset(item.material, true)) return (why = "asset not allowed", nullptr);
         cosmetics::Fit fit = *item.fit;
         UObject* meshAsset = LoadGameAsset(Widen(item.mesh));
@@ -110,13 +111,7 @@ namespace aimmod
         if (fit.anchor != "bone") anchor[2] = fit.anchor == "top" ? top : (anchor[2] + top) / 2;
         // Forward from the shoulders: right = left to right shoulder, forward = right x up.
         double forward[3] = {1, 0, 0};
-        double left[3], right[3];
-        const auto l = FindBone(skeletalMesh, "Arm_L"), r = FindBone(skeletalMesh, "Arm_R");
-        if (l && r && SocketLocation(skeletalMesh, *l, left) && SocketLocation(skeletalMesh, *r, right))
-        {
-            const double rx = right[0] - left[0], ry = right[1] - left[1];
-            if (std::hypot(rx, ry) > 1) forward[0] = ry, forward[1] = -rx;
-        }
+        CharacterForward(skeletalMesh, forward);
 
         UClass* meshClass = RC::Unreal::UObjectGlobals::StaticFindObject<UClass*>(nullptr, nullptr, STR("/Script/Engine.StaticMeshComponent"));
         UObject* component = nullptr;
@@ -127,7 +122,7 @@ namespace aimmod
                 if (auto* s = RC::Unreal::CastField<RC::Unreal::FStructProperty>(p))
                     for (const char* field : {"Rotation.W", "Scale3D.X", "Scale3D.Y", "Scale3D.Z"}) game::SetStructPath(v, s->GetStruct(), field, 1);
         }, &component);
-        if (!component || !meshClass || !component->IsA(meshClass)) return (why = "could not add the component", nullptr);
+        if (!InObjectArray(meshClass) || !Valid(component, meshClass, actor)) return (why = "could not add the component", nullptr);
         // Never part of any trace, never a shadow.
         Call(component, STR("/Script/Engine.PrimitiveComponent:SetCollisionEnabled"), [](const std::wstring&, FProperty*, std::uint8_t* v) { *v = NoCollision; });
         Call(component, STR("/Script/Engine.PrimitiveComponent:SetCastShadow"), [](const std::wstring&, FProperty* p, std::uint8_t* v) { WriteBoolParam(v, p, false); });
@@ -194,6 +189,17 @@ namespace aimmod
         });
         SetVisible(component, true, false);
         return component;
+    }
+
+    bool CharacterForward(UObject* skeletalMesh, double forward[3])
+    {
+        double left[3], right[3];
+        const auto l = FindBone(skeletalMesh, "Arm_L"), r = FindBone(skeletalMesh, "Arm_R");
+        if (!l || !r || !SocketLocation(skeletalMesh, *l, left) || !SocketLocation(skeletalMesh, *r, right)) return false;
+        const double rx = right[0] - left[0], ry = right[1] - left[1];
+        if (std::hypot(rx, ry) <= 1) return false;
+        forward[0] = ry, forward[1] = -rx, forward[2] = 0;
+        return true;
     }
 
     void SetAccessoryVisible(UObject* component, bool visible)

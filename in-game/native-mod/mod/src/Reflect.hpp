@@ -69,9 +69,17 @@ namespace aimmod::reflect
     // World bounds of a primitive: origin and box extent.
     bool Bounds(UObject* component, float origin[3], float extent[3]);
 
-    // A live object that is safe to call into: not a template, not being
-    // destroyed, not pending kill or unreachable, with a class.
+    // The one validation helper. A pointer is an object only if it is
+    // plausible (cosmetics::PlausibleObjectAddress) and GUObjectArray holds
+    // exactly it at its own index; read under an SEH guard, so a garbage
+    // pointer is rejected instead of faulting. Every helper here checks its
+    // object argument with it, and every object it returns has passed it.
+    bool InObjectArray(UObject* object);
+    // A live object that is safe to call into: in GUObjectArray, not a
+    // template, not being destroyed, not pending kill or unreachable, with a class.
     bool Alive(UObject* object);
+    // Alive, of `type` (if given) and owned by `owner` (if given: its outer).
+    bool Valid(UObject* object, UClass* type = nullptr, UObject* owner = nullptr);
 
     // The game's material data defaults (opacity, colours) on a mesh
     // component: without them its materials read zeros and dither away.

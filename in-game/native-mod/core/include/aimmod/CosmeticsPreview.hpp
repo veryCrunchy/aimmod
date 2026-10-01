@@ -72,6 +72,15 @@ namespace aimmod
     inline constexpr double PreviewParkDelay = 10.0;
     bool PreviewParkDue(double now, double lastRequest);
 
+    // AimModCore's config.txt (next to dlls\): "cosmetics_preview=0" (or
+    // false/off/no) turns the preview off for good. Anything else leaves it on.
+    bool PreviewEnabledByConfig(std::string_view configText);
+
+    // A pointer read from game memory can be an object only if it lies in the
+    // user-mode address range and is pointer-aligned. The engine-side check
+    // (reflect::InObjectArray) then confirms it in GUObjectArray.
+    bool PlausibleObjectAddress(std::uintptr_t address);
+
     // cosmetics-preview-frame.txt: "v=1\nseq=<n>\nfile=<name>\nwidth=<w>\nheight=<h>\n".
     std::string FormatPreviewFrame(std::uint64_t seq, std::string_view file, int width, int height);
 

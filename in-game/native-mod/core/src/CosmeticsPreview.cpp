@@ -4,6 +4,7 @@
 #include <charconv>
 #include <cmath>
 #include <cstdio>
+#include <cctype>
 #include <cstdlib>
 
 namespace aimmod
@@ -176,6 +177,36 @@ namespace aimmod
     }
 
     bool PreviewParkDue(double now, double lastRequest) { return now - lastRequest > PreviewParkDelay; }
+
+    bool PreviewEnabledByConfig(std::string_view text)
+    {
+        while (!text.empty())
+        {
+            const auto nl = text.find('\n');
+            std::string_view line = text.substr(0, nl);
+            text = nl == std::string_view::npos ? std::string_view{} : text.substr(nl + 1);
+            while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t')) line.remove_suffix(1);
+            while (!line.empty() && (line.front() == ' ' || line.front() == '\t')) line.remove_prefix(1);
+            if (line.empty() || line[0] == '#' || line[0] == ';') continue;
+            const auto eq = line.find('=');
+            if (eq == std::string_view::npos) continue;
+            std::string key(line.substr(0, eq)), value(line.substr(eq + 1));
+            auto trim = [](std::string& v) {
+                while (!v.empty() && (v.back() == ' ' || v.back() == '\t')) v.pop_back();
+                while (!v.empty() && (v.front() == ' ' || v.front() == '\t')) v.erase(v.begin());
+                for (char& c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            };
+            trim(key);
+            trim(value);
+            if (key == "cosmetics_preview" && (value == "0" || value == "false" || value == "off" || value == "no")) return false;
+        }
+        return true;
+    }
+
+    bool PlausibleObjectAddress(std::uintptr_t address)
+    {
+        return address >= 0x10000 && address <= 0x00007FFFFFFFFFF0ull && address % alignof(void*) == 0;
+    }
 
     std::string FormatPreviewFrame(std::uint64_t seq, std::string_view file, int width, int height)
     {
