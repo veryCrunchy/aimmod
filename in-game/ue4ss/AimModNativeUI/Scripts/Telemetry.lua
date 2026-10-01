@@ -13,6 +13,39 @@ local STATE_KEYS={'score','shots','hits','kills','damage'}
 local OUTPUT_KEYS={'score','seconds','shots','hits','kills','damage','remainingSeconds','lastTimeToKillSeconds'}
 -- The worker treats live-overlay.json older than two seconds as stale. Rewrite
 -- unchanged content at most once per wall-clock second instead of every poll.
+-- AimModCore (the native C++ mod) handshake. While its heartbeat is at most
+-- three seconds old it owns the capabilities it lists ("telemetry",
+-- "replay"): this module then writes no journal or live file and mirrors the
+-- native live snapshot for the HUD. A stale heartbeat (crash, uninstall)
+-- hands everything back automatically. Read at most once per second.
+local coreCheckedAt,coreCapabilities=nil,''
+function M.coreActive(capability)
+    local now=os.time()
+    if coreCheckedAt~=now then
+        coreCheckedAt=now;coreCapabilities=''
+        local file=io.open((os.getenv('LOCALAPPDATA')or'')..'/AimMod/KovaaksNative/core-active.tsv','rb')
+        if file then
+            local ok,line=pcall(function()return file:read('*l')end);file:close()
+            local stamp,caps
+            if ok and type(line)=='string' then stamp,caps=line:match('^AIMMOD_CORE_1\t[^\t]*\t(%d+)\t([%w,]*)\r?$') end
+            if stamp and math.abs(now-tonumber(stamp))<=3 then coreCapabilities=caps end
+        end
+    end
+    return (','..coreCapabilities..','):find(','..capability..',',1,true)~=nil
+end
+-- The HUD needs only the run identity and visibility flags.
+local function coreLive()
+    local snapshot={version=1,active=false,paused=false}
+    local file=io.open((os.getenv('LOCALAPPDATA')or'')..'/AimMod/KovaaksNative/live-overlay.json','rb')
+    if not file then return snapshot end
+    local ok,body=pcall(function()return file:read(8192)end);file:close()
+    if not ok or type(body)~='string' or not body:match('^{"version":1,') then return snapshot end
+    snapshot.active=body:find('"active":true',1,true)~=nil
+    snapshot.paused=body:find('"paused":true',1,true)~=nil
+    if body:find('"transient":true',1,true) then snapshot.transient=true end
+    snapshot.id=body:match('"id":"([%w_%-]+)"')
+    return snapshot
+end
 local lastPublished,lastPublishedAt
 local function pollLive()
     local next={version=1,active=false,paused=false}
@@ -155,6 +188,7 @@ local function nativeScenario()
     if type(name)=='string' and #name>0 and #name<=512 then return name,manager,scenario end
 end
 local function beginIntent(source, name)
+    if M.coreActive('telemetry') then return end
     assert(type(name)=='string' and #name>0,'scenario name unavailable')
     if state.active and state.scenario==name then
         state.lastStartEvent=source
@@ -182,6 +216,7 @@ local function quit()
 end
 local function complete(name, finalScore, source)
     if not state.active or name~=state.scenario then return end
+    if M.coreActive('telemetry') then state.active=false;state.completing=nil;return end
     state.active=false;state.completing=nil
     local score=finite(finalScore) and finalScore or nil
     local event={scenario=name,id=state.id,score=score,source=source}
@@ -333,6 +368,7 @@ function M.start()
     observe('cancel', BROADCAST .. 'Send_PlayTypeChanged', broadcastTransition)
     local useFallback=#lifecycle.start==0
     if type(LoopInGameThreadWithDelay)=='function'then LoopInGameThreadWithDelay(100,function()
+        if M.coreActive('telemetry') then state.completing=nil;live=coreLive();return end
         local c=state.completing
         if c then c.polls=c.polls+1;if c.polls>=COMPLETION_POLLS then pcall(finalize,'broadcast-timeout') end end
         if useFallback then pcall(nativeFallback) end

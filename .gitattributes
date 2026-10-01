@@ -1,0 +1,2 @@
+# The cosmetics catalog is hash-pinned (catalog-manifest.json): identical bytes on every checkout.
+in-game/cosmetics/catalog.json text eol=lf

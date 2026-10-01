@@ -1,0 +1,297 @@
+{
+ "_comment": [
+  "Source texture -> KovaaK's material mapping. Edit freely.",
+  "Rules are checked top to bottom; the first rule with a keyword found in the texture file name wins,",
+  "then the same rules are tried against the folder path. 'material' must be a KovaaK's Default-pack",
+  "material (MI_WA_*). 'tint': 'auto' derives a tint from the Source reflectivity colour, 'none' keeps",
+  "the texture colours, or give an RRGGBB hex. 'fallback' lists categories to merge into when the map",
+  "has more categories than KovaaK's material slots (2 groups x 4 surfaces = 8).",
+  "'stand_in' paints all-nodraw hulls, which usually sit behind models the converter cannot port.",
+  "'colour' (RRGGBB) is used as the tint basis when a format gives no texture colour (Quake 3 stock textures, VMF)."
+ ],
+ "reflex": {
+  "_comment": "Reflex material path per category for the legacy .map writer.",
+  "sand": "common/materials/stone/stone",
+  "stone": "common/materials/stone/stone",
+  "brick": "common/materials/stone/brick",
+  "wood": "common/materials/wood/wood_painted",
+  "metal": "common/materials/metal/aluminum",
+  "concrete": "common/materials/stone/stone",
+  "plaster": "common/materials/synthetic/plastic",
+  "tile": "egyptian/tiles/egyptian_tiles_64",
+  "ground": "common/materials/ground/mud",
+  "grass": "environment/veg/grass/grass_128",
+  "fabric": "common/materials/fabric/cotton",
+  "dev": "structural/dev/dev_grey128",
+  "default": "structural/dev/dev_grey128"
+ },
+ "rules": [
+  {
+   "category": "dev",
+   "keywords": [
+    "dev_",
+    "devtex",
+    "measuregeneric",
+    "orange",
+    "reflectivity_"
+   ],
+   "material": "MI_WA_grid",
+   "tint": "auto",
+   "scale": 1.0,
+   "fallback": [
+    "concrete"
+   ]
+  },
+  {
+   "category": "grass",
+   "keywords": [
+    "grass",
+    "moss",
+    "lawn",
+    "leaves",
+    "foliage",
+    "hedge"
+   ],
+   "material": "MI_WA_GroundGrass",
+   "tint": "none",
+   "scale": 1.0,
+   "fallback": [
+    "ground"
+   ]
+  },
+  {
+   "category": "sand",
+   "keywords": [
+    "sand",
+    "dusandw",
+    "desert",
+    "dune"
+   ],
+   "material": "MI_WA_RockSandstone",
+   "tint": "auto",
+   "scale": 1.0,
+   "fallback": [
+    "plaster",
+    "stone",
+    "ground"
+   ],
+   "colour": "d9c39a"
+  },
+  {
+   "category": "ground",
+   "keywords": [
+    "dirt",
+    "mud",
+    "ground",
+    "gravel",
+    "soil",
+    "blend",
+    "road",
+    "asphalt",
+    "rubble"
+   ],
+   "material": "MI_WA_GroundGravel",
+   "tint": "auto",
+   "scale": 1.0,
+   "fallback": [
+    "sand",
+    "concrete"
+   ],
+   "colour": "9c8a6e"
+  },
+  {
+   "category": "wood",
+   "keywords": [
+    "wood",
+    "crate",
+    "door",
+    "plank",
+    "board",
+    "beam",
+    "shutter",
+    "fence_wood",
+    "barrel",
+    "pallet"
+   ],
+   "material": "MI_WA_WoodPlank",
+   "tint": "auto",
+   "scale": 1.0,
+   "fallback": [
+    "metal",
+    "concrete"
+   ],
+   "colour": "8a6a48"
+  },
+  {
+   "category": "metal",
+   "keywords": [
+    "metal",
+    "steel",
+    "iron",
+    "rust",
+    "pipe",
+    "vent",
+    "grate",
+    "chrome",
+    "alum",
+    "sheet",
+    "girder",
+    "railing",
+    "base_",
+    "tech",
+    "steel",
+    "goldsrc/metal"
+   ],
+   "material": "MI_WA_MetalSheet",
+   "tint": "auto",
+   "scale": 1.0,
+   "roughness": 0.45,
+   "metallic": 0.8,
+   "fallback": [
+    "concrete"
+   ],
+   "colour": "9aa0a6"
+  },
+  {
+   "category": "brick",
+   "keywords": [
+    "brick"
+   ],
+   "material": "MI_WA_BrickClayOld",
+   "tint": "auto",
+   "scale": 1.0,
+   "fallback": [
+    "stone",
+    "plaster"
+   ],
+   "colour": "a0644a"
+  },
+  {
+   "category": "tile",
+   "keywords": [
+    "tile",
+    "marble",
+    "ceramic",
+    "mosaic"
+   ],
+   "material": "MI_WA_ConcreteTiles",
+   "tint": "auto",
+   "scale": 1.0,
+   "fallback": [
+    "concrete",
+    "stone"
+   ],
+   "colour": "c8c0b0"
+  },
+  {
+   "category": "stone",
+   "keywords": [
+    "stone",
+    "rock",
+    "cobble",
+    "cliff",
+    "granite",
+    "trim",
+    "arch",
+    "pillar",
+    "column",
+    "stair",
+    "step",
+    "ledge",
+    "gothic",
+    "castle",
+    "temple",
+    "ruin"
+   ],
+   "material": "MI_WA_StoneGranite",
+   "tint": "auto",
+   "scale": 1.0,
+   "fallback": [
+    "concrete",
+    "sand"
+   ],
+   "colour": "a89a88"
+  },
+  {
+   "category": "plaster",
+   "keywords": [
+    "plaster",
+    "stucco",
+    "wall",
+    "paint",
+    "drywall",
+    "adobe"
+   ],
+   "material": "MI_WA_PlasterFresh",
+   "tint": "auto",
+   "scale": 1.0,
+   "fallback": [
+    "concrete",
+    "sand"
+   ],
+   "colour": "e0d6c4"
+  },
+  {
+   "category": "concrete",
+   "keywords": [
+    "concrete",
+    "cement",
+    "floor",
+    "cinder",
+    "pavement",
+    "curb",
+    "base",
+    "block"
+   ],
+   "material": "MI_WA_ConcretePoured",
+   "tint": "auto",
+   "scale": 1.0,
+   "fallback": [
+    "stone"
+   ],
+   "colour": "b8b4ac"
+  },
+  {
+   "category": "fabric",
+   "keywords": [
+    "cloth",
+    "fabric",
+    "carpet",
+    "canvas",
+    "tarp",
+    "curtain",
+    "awning",
+    "rug"
+   ],
+   "material": "MI_WA_PureColor",
+   "tint": "auto",
+   "scale": 1.0,
+   "fallback": [
+    "plaster",
+    "wood"
+   ],
+   "colour": "a05050"
+  }
+ ],
+ "stand_in": {
+  "category": "stand_in",
+  "material": "MI_WA_ConcretePoured",
+  "tint": "d9cdb6",
+  "scale": 1.0,
+  "fallback": [
+   "sand",
+   "plaster",
+   "concrete"
+  ]
+ },
+ "default": {
+  "category": "concrete",
+  "material": "MI_WA_ConcretePoured",
+  "tint": "auto",
+  "scale": 1.0,
+  "fallback": [
+   "stone"
+  ],
+  "colour": "b8b4ac"
+ }
+}

@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "items": [
+    {"id": "meso-tint-ember", "version": 1, "kind": "avatar_tint", "name": "Ember", "models": ["Meso"], "parts": ["body"],
+     "vector": {"PrimaryColor": {"R": 0.85, "G": 0.22, "B": 0.05, "A": 1}}, "draft": true},
+    {"id": "meso-tint-glacier", "version": 1, "kind": "avatar_tint", "name": "Glacier", "models": ["Meso"], "parts": ["body"],
+     "vector": {"PrimaryColor": {"R": 0.55, "G": 0.80, "B": 0.95, "A": 1}}, "draft": true},
+    {"id": "meso-tint-graphite", "version": 1, "kind": "avatar_tint", "name": "Graphite", "models": ["Meso"], "parts": ["body"],
+     "vector": {"PrimaryColor": {"R": 0.12, "G": 0.12, "B": 0.13, "A": 1}}, "scalar": {"Roughness": 0.6}, "draft": true},
+    {"id": "endo-tint-verdant", "version": 1, "kind": "avatar_tint", "name": "Verdant", "models": ["Endo"], "parts": ["body"],
+     "vector": {"PrimaryColor": {"R": 0.20, "G": 0.65, "B": 0.30, "A": 1}}, "draft": true},
+    {"id": "meso-pattern-stripes", "version": 1, "kind": "avatar_pattern", "name": "Racing stripes", "models": ["Meso"], "parts": ["body"],
+     "pak": {"file": "AimModCosmetics-1.pak"}, "draft": true},
+    {"id": "weapon-finish-gunmetal", "version": 1, "kind": "weapon_finish", "name": "Gunmetal", "parts": ["weapon"],
+     "vector": {"PrimaryColor": {"R": 0.30, "G": 0.32, "B": 0.35, "A": 1}}, "scalar": {"Metallic": 1.0}, "draft": true},
+    {"id": "weapon-finish-sand", "version": 1, "kind": "weapon_finish", "name": "Sand", "parts": ["weapon"],
+     "vector": {"PrimaryColor": {"R": 0.76, "G": 0.66, "B": 0.48, "A": 1}}, "draft": true},
+    {"id": "weapon-finish-aimmod", "version": 1, "kind": "weapon_finish", "name": "AimMod colours", "parts": ["weapon", "arms"],
+     "vector": {"PrimaryColor": {"R": 0.98, "G": 0.45, "B": 0.10, "A": 1}}, "draft": true},
+    {"id": "accessory-halo", "version": 1, "kind": "accessory", "name": "Halo", "models": ["Meso", "Endo"], "parts": ["body"],
+     "attach": "head", "pak": {"file": "AimModCosmetics-1.pak"}, "draft": true},
+    {"id": "accessory-visor", "version": 1, "kind": "accessory", "name": "Visor", "models": ["Meso", "Endo"], "parts": ["body"],
+     "attach": "head", "pak": {"file": "AimModCosmetics-1.pak"}, "draft": true},
+    {"id": "accessory-headband", "version": 1, "kind": "accessory", "name": "Headband", "models": ["Meso", "Endo"], "parts": ["body"],
+     "attach": "head", "pak": {"file": "AimModCosmetics-1.pak"}, "draft": true}
+  ]
+}

@@ -47,5 +47,8 @@ namespace bridge
         std::thread m_thread;
         std::mutex m_writeMutex;
         std::atomic<bool> m_connected{false};
+        // A write timed out or was cut short: the stream may hold a partial
+        // frame, so nothing more is written and the client is dropped.
+        std::atomic<bool> m_broken{false};
     };
 } // namespace bridge

@@ -56,6 +56,8 @@ sealed partial class Hub : IDisposable
     public bool MatchesHistory(Run run) => (SelectedScenario.Length == 0 || run.Scenario.Equals(SelectedScenario, StringComparison.OrdinalIgnoreCase))
         && (HistorySearch.Length == 0 || run.Scenario.Contains(HistorySearch, StringComparison.OrdinalIgnoreCase));
     public string ExternalId => account?.ExternalId ?? "";
+    // Public Hub handle of the linked account, for the Discord profile button.
+    public string? LinkedHandle => account?.Handle;
     public IReadOnlyCollection<Run> Runs => downloaded.Values;
 
     readonly Func<bool> historyEnabled;

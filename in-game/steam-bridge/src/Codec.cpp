@@ -95,6 +95,34 @@ namespace bridge
         return "..." + (digits.size() > 4 ? digits.substr(digits.size() - 4) : digits);
     }
 
+    std::string FormatBanList(const std::vector<std::uint64_t>& ids)
+    {
+        std::string out;
+        for (const std::uint64_t id : ids)
+        {
+            if (!IsIndividualId(id)) continue;
+            const std::string digits = std::to_string(id);
+            if (out.size() + digits.size() + (out.empty() ? 0 : 1) > MaxLobbyValue) break;
+            if (!out.empty()) out += ',';
+            out += digits;
+        }
+        return out;
+    }
+
+    std::vector<std::uint64_t> ParseBanList(std::string_view text)
+    {
+        std::vector<std::uint64_t> ids;
+        if (text.size() > MaxLobbyValue) return ids;
+        while (!text.empty())
+        {
+            const auto comma = text.find(',');
+            if (const auto id = ParseId(text.substr(0, comma)); id && IsIndividualId(*id) && std::find(ids.begin(), ids.end(), *id) == ids.end())
+                ids.push_back(*id);
+            text = comma == std::string_view::npos ? std::string_view{} : text.substr(comma + 1);
+        }
+        return ids;
+    }
+
     bool ValidLobbyKey(std::string_view key)
     {
         constexpr std::string_view prefix = "aimmod.";

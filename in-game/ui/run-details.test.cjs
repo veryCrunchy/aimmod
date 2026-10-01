@@ -2,7 +2,7 @@ const{test}=require('node:test');const assert=require('node:assert/strict');cons
 function setup(){
   const ctx=new Proxy({},{get(){return(...args)=>{for(const a of args)if(typeof a==='number')assert.ok(Number.isFinite(a))}},set(){return true}});
   function element(tag){let text='';return{tag,children:[],style:{},offsetWidth:600,appendChild(e){this.children.push(e);return e},setAttribute(){},getContext(){return ctx},get textContent(){return text},set textContent(v){text=String(v);this.children=[]}}}
-  const c=vm.createContext({window:{},document:{createElement:element},setTimeout:fn=>fn()});vm.runInContext(fs.readFileSync(path.join(__dirname,'run-details.js'),'utf8'),c);
+  const c=vm.createContext({window:{},document:{createElement:element},setTimeout:fn=>fn()});require('./test-format.cjs').loadFormat(c);vm.runInContext(fs.readFileSync(path.join(__dirname,'run-details.js'),'utf8'),c);
   const root=element('div');function all(e=root){return[e,...e.children.flatMap(all)]}return{root,all,api:c.window.AimModRunDetails};
 }
 function fixture(){return{Run:{Id:'a',Scenario:'<script>synthetic</script>',Score:0,Accuracy:0,Duration:60},Details:{Summary:null,Timeline:[]},Response:null,Episodes:[],EpisodeCount:0,Windows:[],WindowCount:0,
@@ -23,4 +23,15 @@ test('leaving invalidates late requests and failures retain a useful explanation
   const s=setup();let callback;s.api.open(s.root,'a',(u,m,b,done)=>callback=done);s.api.leave();callback(true,JSON.stringify(fixture()));
   assert.ok(!s.all().some(e=>e.textContent==='Summary'));
   s.api.open(s.root,'a',(u,m,b,done)=>done(false,''));assert.ok(s.all().some(e=>e.textContent.includes('Detailed telemetry is unavailable')));
+});
+test('summary labels shot-to-hit as an interval, not latency, and unknown units stay blank',()=>{
+  const s=setup();const data=fixture();data.Run.Duration=null;data.Details.Summary={ShotsFired:10,ShotsHit:4,AverageFireToHitMs:null,CorrectiveShotRatio:0};
+  s.api.open(s.root,'a',(u,m,b,done)=>done(true,JSON.stringify(data)));
+  assert.ok(s.all().some(e=>e.textContent==='Shot-to-hit interval'));assert.ok(!s.all().some(e=>/latency/i.test(e.textContent)&&!/not input latency/.test(e.textContent)));
+  assert.ok(!s.all().some(e=>/—(s|ms|°|%)$/.test(e.textContent)));assert.ok(s.all().some(e=>e.textContent==='4 hits of 10 shots'));
+  s.all().find(e=>e.tag==='button'&&e.textContent==='Shots').onclick();assert.ok(!s.all().some(e=>/—°/.test(e.textContent)));
+});
+test('failure without a history preview offers retry',()=>{
+  const s=setup();let calls=0;s.api.open(s.root,'a',(u,m,b,done)=>{calls++;done(false,'')},null);
+  s.all().find(e=>e.tag==='button'&&e.textContent==='Try again').onclick();assert.equal(calls,2);
 });

@@ -17,6 +17,8 @@ jobs:
       tag_name: ${{ steps.release.outputs.tag_name }}
       osu_release_created: ${{ steps.release.outputs['osu-native--release_created'] }}
       osu_version: ${{ steps.release.outputs['osu-native--version'] }}
+      ingame_release_created: ${{ steps.release.outputs['in-game--release_created'] }}
+      ingame_version: ${{ steps.release.outputs['in-game--version'] }}
     steps:
       - uses: googleapis/release-please-action@v4
         id: release
@@ -31,6 +33,7 @@ jobs:
         run: |
           echo "KovaaK's: ${{ steps.release.outputs.tag_name }}"
           echo "osu!: ${{ steps.release.outputs['osu-native--tag_name'] }}"
+          echo "KovaaK's in-game: ${{ steps.release.outputs['in-game--tag_name'] }}"
 
       # The repository-wide latest release is the rolling "aimmod-latest" download release, which the
       # KovaaK's updater reads. release-please marks every new release as latest, so hand it back
@@ -114,9 +117,26 @@ jobs:
       contents: write
       id-token: write
 
-  # Refresh the rolling "aimmod-latest" release with the newest downloads of both apps.
+  # Build and publish the in-game package and its update feed. Off until the repository
+  # variable AIMMOD_INGAME_RELEASES is "true" (UE4SS zip mirror configured; see
+  # in-game/docs/install-lifecycle.md); the release itself is still created by release-please.
+  ingame-build:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.ingame_release_created == 'true' && vars.AIMMOD_INGAME_RELEASES == 'true' }}
+    uses: ./.github/workflows/aimmod-ingame-release.yml
+    with:
+      version: ${{ needs.release-please.outputs.ingame_version }}
+      channel: ${{ contains(needs.release-please.outputs.ingame_version, '-') && 'beta' || 'stable' }}
+      publish: true
+    secrets: inherit
+    permissions:
+      attestations: write
+      contents: write
+      id-token: write
+
+  # Refresh the rolling "aimmod-latest" release with the newest downloads of every app.
   latest-downloads:
-    needs: [release-please, build, osu-build]
+    needs: [release-please, build, osu-build, ingame-build]
     if: ${{ always() && needs.release-please.outputs.releases_created == 'true' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
     uses: ./.github/workflows/latest-downloads.yml
     permissions:

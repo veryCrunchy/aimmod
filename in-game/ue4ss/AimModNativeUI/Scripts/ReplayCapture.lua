@@ -101,7 +101,12 @@ local function challengeAdvancing(p)
     if reset then p.rewind=nil end
     return advancing,true,reset,uncertain
 end
+-- AimModCore owns capture (and replay-status.json) while its heartbeat lists it.
+local function coreOwnsReplay()
+    return metricsSource~=nil and type(metricsSource.coreActive)=='function' and metricsSource.coreActive('replay')
+end
 local function publishStatus()
+    if coreOwnsReplay() then return end
     local s=M.status()
     local line='{"state":'..quote(s.state)..',"frames":'..s.frames..',"inputEvents":'..s.inputEvents..',"reason":'..quote(s.reason)..'}\n'
     if line==publishedStatus then return end
@@ -481,6 +486,10 @@ function M.start(telemetry)
     end
     LoopInGameThreadWithDelay(16,function()
         if disabled then return end
+        if coreOwnsReplay() then
+            if active then pcall(finish,'interrupted','native-core') end
+            pending=nil;completed=false;return
+        end
         local ok,err=pcall(function()
             local state=telemetry.state()
             local wasEnabled=recordingEnabled

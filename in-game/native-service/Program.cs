@@ -4,8 +4,24 @@ using System.Text.Json;
 using AimMod.InGame;
 
 CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
-if (args.Contains("--self-test")) { Checks.Run(); HistoryCompletenessChecks.Run(); CsvHistoryChecks.Run(); await HubChecks.Run(); HubPaginationChecks.Run(); await HubLeaderboardChecks.Run(); Coaching.SelfTest(); CoachingFeedbackChecks.Run(); StatsChecks.Run(); WarmupChecks.Run(); RunInspectionChecks.Run(); NativeSettingsChecks.Run(); LiveOverlayChecks.Run(); LiveOverlayFeedChecks.Run(); OverlaySettingsChecks.Run(); await ObsOverlayChecks.Run(); BenchmarkChecks.Run(); ReplayLibraryChecks.Run(); await WorkspaceChecks.Run(); ReplayChecks.Run(); ReplayKeyboardChecks.Run(); await NativeReplayPlaybackChecks.Run(); await HardeningChecks.Run(); return; }
+// Install, repair, update hand-off and uninstall (Install/Repair-AimMod.cmd).
+if (args.Contains("--verify-release")) { Environment.ExitCode = Lifecycle.VerifyRelease(args); return; }
+if (Lifecycle.Commands.Any(args.Contains)) { Environment.ExitCode = Lifecycle.RunCommand(args); return; }
+if (args.Contains("--self-test-lifecycle")) { await LifecycleChecks.Run(); return; }
+if (args.Contains("--self-test-multiplayer")) { AimMod.InGame.Multiplayer.MultiplayerChecks.Run(); return; }
+if (args.Contains("--discord-test")) { Environment.ExitCode = await DiscordDiagnostics.Run(args); return; }
+if (args.Contains("--self-test")) { Checks.Run(); HistoryCompletenessChecks.Run(); CsvHistoryChecks.Run(); await HubChecks.Run(); HubPaginationChecks.Run(); await HubLeaderboardChecks.Run(); Coaching.SelfTest(); CoachingFeedbackChecks.Run(); StatsChecks.Run(); WarmupChecks.Run(); RunInspectionChecks.Run(); NativeSettingsChecks.Run(); LiveOverlayChecks.Run(); LiveOverlayFeedChecks.Run(); OverlaySettingsChecks.Run(); await ObsOverlayChecks.Run(); BenchmarkChecks.Run(); ReplayLibraryChecks.Run(); await WorkspaceChecks.Run(); ReplayChecks.Run(); ReplayKeyboardChecks.Run(); await NativeReplayPlaybackChecks.Run(); await HardeningChecks.Run(); CoreFormatChecks.Run(); await DiscordPresenceChecks.Run(); AimMod.InGame.Multiplayer.MultiplayerChecks.Run(); await LifecycleChecks.Run(); return; }
+if (args.Length == 5 && args[0] == "--compare-spawns") { Environment.ExitCode = ReplayCompare.Spawns(args[1], args[2], args[3], args[4]); return; }
+if (args.Length == 4 && args[0] == "--compare-replays") { Environment.ExitCode = ReplayCompare.Run(args[1], args[2], args[3]); return; }
+// Offline avatar spike: --export-avatar-path <replay id> [--output <folder>] writes avatar-test-path.tsv.
+if (args.Length is 2 or 4 && args[0] == "--export-avatar-path")
+{
+    var folder = args.Length == 4 && args[2] == "--output" ? Path.GetFullPath(args[3]) : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AimMod", "KovaaksNative");
+    Environment.ExitCode = AvatarPathExport.Run(folder, args[1]);
+    return;
+}
 var output = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AimMod", "KovaaksNative");
+string instance = "";
 var database = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "com.verycrunchy.kovaaks", "stats.sqlite3");
 var exitWithGame = false;
 for (int i = 0; i < args.Length; i++)
@@ -13,9 +29,11 @@ for (int i = 0; i < args.Length; i++)
     if (args[i] == "--output" && i + 1 < args.Length) output = Path.GetFullPath(args[++i]);
     else if (args[i] == "--history" && i + 1 < args.Length) database = Path.GetFullPath(args[++i]);
     else if (args[i] == "--exit-with-game") exitWithGame = true;
+    // Development previews run a second, separate instance next to the game's own service.
+    else if (args[i] == "--instance" && i + 1 < args.Length) instance = new string(args[++i].Where(char.IsAsciiLetterOrDigit).Take(32).ToArray());
 }
 Directory.CreateDirectory(output);
-using var singleton = new Mutex(true, "Local\\AimMod.KovaaksNative.History", out var ownsMutex);
+using var singleton = new Mutex(true, "Local\\AimMod.KovaaksNative.History" + (instance.Length > 0 ? "." + instance : ""), out var ownsMutex);
 if (!ownsMutex) { Console.Error.WriteLine("Another AimMod worker is already running for this user."); return; }
 using var cancellation = new CancellationTokenSource();
 using var stopped = new ManualResetEventSlim(false);
@@ -41,11 +59,23 @@ string? detailsFingerprint = null;
 var settings = new NativeSettings(output);
 using var hub = new Hub(output, historyEnabled: () => settings.Current.HubHistoryEnabled);
 var csvHistory = new CsvHistory(output);
+var discordSettings = new DiscordSettings(output);
+DiscordPresenceHost? discord = null;
 var failures = 0;
+var gameExited = false;
+// Development preview instances never update or repair the game install.
+await using var lifecycle = new Lifecycle(output, instance.Length > 0 ? null : InstallLayout.FindWin64FromService(AppContext.BaseDirectory));
+lifecycle.Start();
 try
 {
-await using var workspace = new WorkspaceHost(hub, output, database, settings, csvHistory);
+await using var workspace = new WorkspaceHost(hub, output, database, settings, csvHistory, discordSettings, () => discord?.StatusInfo ?? new { state = "starting" }, args, lifecycle);
 await workspace.Start(cancellation.Token);
+// Declared after the workspace so it is disposed first: the presence is
+// cleared and KovaaK's own presence handed back before the UI closes.
+await using var discordHost = discord = new DiscordPresenceHost(output, discordSettings, workspace.ReadLive, () => workspace.ReplayVisible, () => hub.LinkedHandle,
+    replayScenario: () => workspace.ReplayScenario, page: () => workspace.View.Current(DateTimeOffset.UtcNow),
+    lobby: workspace.MultiplayerLobby.DiscordLobby, join: secret => { var r = workspace.MultiplayerLobby.JoinFromDiscord(secret); return (r.Ok, r.Message ?? r.Code ?? ""); });
+discord.Start(cancellation.Token);
 var workspaceUrlPath = Path.Combine(output, "workspace-url.txt");
 AtomicFile.WriteText(workspaceUrlPath, workspace.Url);
 try
@@ -74,6 +104,7 @@ try
                 if (nextDetails != detailsFingerprint)
                 { details = selectedRun is null ? null : RunMetrics.Read(database, selectedRun.Id); detailsFingerprint = nextDetails; }
                 workspace.UpdateHistory(runs);
+                discord.UpdateHistory(runs);
                 workspace.Update(WorkspaceData.Build(runs, hub, details,measurements));
                 var content = Views.Encode(Views.Build(runs, hub.HistoryPage, hub.SelectedScenario).Concat(hub.Rows()));
                 AtomicFile.WriteText(Path.Combine(output, "views.tsv"), content);
@@ -100,7 +131,7 @@ try
             Console.Error.WriteLine($"History refresh failed unexpectedly ({ex.GetType().Name}).");
         }
         if (args.Contains("--once")) break;
-        if (gameWatch?.Exited() == true) { Console.WriteLine("KovaaK's exited; stopping."); break; }
+        if (gameWatch?.Exited() == true) { Console.WriteLine("KovaaK's exited; stopping."); gameExited = true; break; }
         await Task.Delay(TimeSpan.FromSeconds(1 + failures), cancellation.Token);
     }
 }
@@ -108,6 +139,8 @@ catch (OperationCanceledException) { }
 finally { AtomicFile.DeleteIfContent(workspaceUrlPath, workspace.Url); }
 }
 finally { stopped.Set(); }
+// Staged updates and requested repairs are applied only now that the game is closed.
+if (gameExited) lifecycle.HandOffAfterGameExit();
 
 namespace AimMod.InGame
 {

@@ -1,0 +1,3 @@
+# cmd.exe needs CRLF; the release scripts copy these files into the package as they are.
+*.cmd text eol=crlf
+package/README.txt text eol=crlf

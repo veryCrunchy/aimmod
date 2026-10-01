@@ -23,7 +23,7 @@ function setup(){
     AimModNativeReplayBrowser:{enter:(element,row)=>native.push(row),leave:()=>nativeClosed++}};
   vm.runInNewContext(fs.readFileSync(require('node:path').join(__dirname,'browser.js'),'utf8'),{window});
   function all(el=container){return [el,...el.children.flatMap(c=>all(c))];}
-  return {browser:window.AimModReplayBrowser,container,requests,renders,native,all,destroyed:()=>destroyed,nativeClosed:()=>nativeClosed};
+  return {window,browser:window.AimModReplayBrowser,container,requests,renders,native,all,destroyed:()=>destroyed,nativeClosed:()=>nativeClosed};
 }
 const row={id:'synthetic',scenario:'Synthetic run',recordedAt:'2026-01-01T12:00:00Z',reason:'completed'};
 test('enter requests capability-prefixed replay library and renders empty state',()=>{
@@ -66,7 +66,20 @@ test('delete requires explicit inline choice and only removes row after success'
 
 test('favorite filter reports no match without claiming library is empty',()=>{
   const s=setup();s.browser.enter();s.requests[0].finish(200,[row]);
-  s.all().find(n=>n.textContent==='Favorites').onclick();assert.ok(s.all().some(n=>n.textContent==='No replays match your filters.'));
+  s.all().find(n=>n.textContent==='Favorites').onclick();assert.ok(s.all().some(n=>n.textContent==='No favorite replays yet. Mark a replay as a favorite to keep it here.'));
+  assert.ok(!s.all().some(n=>n.textContent==='No replays saved yet'));
+  s.all().find(n=>n.textContent==='Clear filters').onclick();assert.ok(s.all().some(n=>n.textContent==='Synthetic run'));
+});
+test('search keeps its field while filtering and names stay literal text',()=>{
+  const s=setup();s.browser.enter();s.requests[0].finish(200,[row,{...row,id:'second',scenario:'<img src=x onerror=alert(1)>'}]);
+  const input=s.all().find(n=>n.tag==='input');input.value='img';input.onchange();
+  assert.equal(s.all().find(n=>n.tag==='input'),input);assert.ok(s.all().some(n=>n.textContent==='<img src=x onerror=alert(1)>'));assert.ok(!s.all().some(n=>n.tag==='img'));
+  assert.ok(!s.all().some(n=>n.textContent==='Synthetic run'));
+  input.value='nothing';input.onchange();assert.ok(s.all().some(n=>n.textContent==='No replays match your filters.'));
+});
+test('libraries above the display cap say how many are shown',()=>{
+  const s=setup();s.browser.enter();s.requests[0].finish(200,Array.from({length:260},(_,i)=>({...row,id:'r'+i})));
+  assert.ok(s.all().some(n=>n.textContent==='250 of 260 in-game replays'));
 });
 
 
@@ -94,4 +107,10 @@ test('leaving a mutation discards its response and reentry reads authoritative l
   s.requests[2].finish(200,[{...row,favorite:true}]);
   assert.ok(s.all().some(n=>n.textContent==='Remove favorite'));
   assert.equal(s.requests.filter(r=>r.method==='POST').length,1);
+});
+test('a replay still waiting to start is shown with its instructions and can be reopened',()=>{
+  const s=setup();let answer;s.window.AimModNativeReplayBrowser.pendingStart=cb=>answer=cb;
+  s.browser.enter();s.requests[0].finish(200,[row]);answer({pending:'synthetic',scenario:'Synthetic run',reason:'challenge-active',message:'Open the pause menu (Esc) to watch the replay; it starts there.',waitingSeconds:12});
+  assert.ok(s.all().some(n=>n.textContent==='Waiting to start: Synthetic run'));assert.ok(s.all().some(n=>/pause menu \(Esc\)/.test(n.textContent)));
+  s.all().find(n=>n.tag==='button'&&n.textContent==='Show').onclick();assert.equal(s.native.length,1);assert.equal(s.native[0].id,'synthetic');
 });
