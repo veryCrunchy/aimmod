@@ -390,23 +390,48 @@ namespace aimmod
         UObject* pawn = ghost.pawn.Get();
         if (!pawn) return;
         KeepInert(ghost);
-        // Feet on the floor: the sample's floor is its centre minus its own half-height (a remote
-        // player's capsule, or the walker's); the avatar stands on it by its measured feet.
+        // Feet on the floor: the avatar's own capsule on the sample's floor (GhostMath AvatarActorZ).
         Sample s = input;
         const double floorZ = input.z - input.halfHeight;
         MeasureFeet(ghost, floorZ);
-        if (ghost.feetToActor > 0) s.z = floorZ + ghost.feetToActor;
+        double avatarHalf = -1;
+        if (UObject* capsule = m_capsule.ok() ? m_capsule.Object(pawn) : nullptr)
+            if (auto h = m_capsuleHalfHeight.Number(capsule); h && *h > 20 && *h < 400) avatarHalf = *h;
+        s.z = bridge::ghost::AvatarActorZ(input, avatarHalf, ghost.feetToActor);
+        if (!ghost.placementLogged && (avatarHalf > 0 || ghost.feetToActor > 0))
+        {
+            ghost.placementLogged = true;
+            char line[200];
+            std::snprintf(line, sizeof(line), "avatars: %s stands on its capsule (half-height %.0f; mesh bounds say %.0f), floor z=%.0f",
+                          bridge::Redact(ghost.peer).c_str(), avatarHalf, ghost.feetToActor, floorZ);
+            m_log(line);
+        }
+        auto* actor = static_cast<AActor*>(pawn);
         if (m_options.driveWithUpdate && m_updateClientLocAndRot.ok())
             m_updateClientLocAndRot.Call(pawn, [&](std::uint8_t* value, const Param& p) {
                 if (p.kind == Kind::Vector) WriteFloats(value, p, s.x, s.y, s.z);
                 else if (p.kind == Kind::Rotator) WriteFloats(value, p, 0, s.yaw, 0); // body yaw only
                 else if (p.kind == Kind::Bool) *value = 1;                             // bPlayAnim
             });
-        else
+        // The drive sweeps: anything in the way (or a round's spawn across the map) leaves the body
+        // short of its position. The body always ends where the sample says (GhostMath PlaceAfterDrive).
+        double actual[3]{};
+        const bool known = m_actorLocation.Vector(pawn, actual);
+        const auto placement = !known ? bridge::ghost::Placement::Teleport : bridge::ghost::PlaceAfterDrive(actual, s.x, s.y, s.z);
+        if (placement != bridge::ghost::Placement::Driven || !(m_options.driveWithUpdate && m_updateClientLocAndRot.ok()))
         {
             FHitResult hit{};
-            static_cast<AActor*>(pawn)->K2_SetActorLocationAndRotation(FVector(s.x, s.y, s.z), FRotator(0, s.yaw, 0), false, hit, true);
+            actor->K2_SetActorLocationAndRotation(FVector(s.x, s.y, s.z), FRotator(0, s.yaw, 0), false, hit, placement == bridge::ghost::Placement::Teleport);
+            if (known && placement != bridge::ghost::Placement::Driven && m_options.driveWithUpdate && ++ghost.corrections == 1)
+            {
+                char line[200];
+                std::snprintf(line, sizeof(line), "avatars: %s was %.0f cm from its position after the drive (blocked); placed directly from now on",
+                              bridge::Redact(ghost.peer).c_str(), std::hypot(std::hypot(actual[0] - s.x, actual[1] - s.y), actual[2] - s.z));
+                m_log(line);
+            }
         }
+        ghost.shown = s;
+        ghost.shownValid = true;
         // Velocity drives the run/walk/jump blend in the animation blueprint.
         if (m_movementComponent.ok())
             if (UObject* movement = m_movementComponent.Object(pawn))
@@ -648,12 +673,18 @@ namespace aimmod
                 m_nextOrdersRead = now + 0.1;
                 ReadBotOrders();
             }
+            if (now >= m_nextMovementRead)
+            {
+                m_nextMovementRead = now + 1.0;
+                ReadLocalMovement(character);
+            }
             m_botReports.clear();
             // Scenario changed in the same world: the game may have reset or re-profiled our bots.
             if (const std::string scene = m_bridge.LocalScene(); scene != m_lastScene)
             {
                 if (!m_lastScene.empty() && !m_ghosts.empty()) m_log("avatars: scenario changed; re-applying looks and AI-off");
                 m_lastScene = scene;
+                m_linkCache.reset(); // another map: which walks are clear is learnt again
                 m_botsAllowed = bridge::ghost::AvatarBotsAllowed(scene);
                 m_parkedHelpers.clear();
                 m_nextHelperPark = 0;
@@ -730,6 +761,22 @@ namespace aimmod
                             walk.walker.seed ^= static_cast<std::uint32_t>(w.peer * 2654435761u);
                             walk.at = -1;
                             m_log("avatars: simulated player " + std::to_string(w.peer) + " walks between " + std::to_string(w.spawns.size()) + " spawns");
+                        }
+                        // One map, one record of which straight walks are clear (Walker LinkCache).
+                        if (!m_linkCache) m_linkCache = std::make_shared<bridge::ghost::LinkCache>();
+                        walk.walker.links = m_linkCache;
+                        // Move like the local player does on this map (a ported map is scaled up).
+                        if (m_runSpeed != walk.tunedSpeed || m_stepHeight != walk.tunedStep)
+                        {
+                            walk.tunedSpeed = m_runSpeed;
+                            walk.tunedStep = m_stepHeight;
+                            walk.walker.Tune(m_runSpeed, m_stepHeight);
+                            if (!walk.tuneLogged && m_runSpeed > 0)
+                            {
+                                walk.tuneLogged = true;
+                                m_log("avatars: bot " + std::to_string(w.peer) + " walks at " + std::to_string(static_cast<int>(walk.walker.speed)) + " cm/s, steps up " +
+                                      std::to_string(static_cast<int>(walk.walker.stepUp)) + " cm (the local player runs " + std::to_string(static_cast<int>(m_runSpeed)) + ")");
+                            }
                         }
                         UObject* pawn = m_ghosts[w.peer].pawn.Get();
                         const auto floor = [&](double fx, double fy, double fz) -> std::optional<double> {
@@ -913,6 +960,14 @@ namespace aimmod
                 Show(peer.peer, ghost, bridge::ghost::Sample(samples, now), world, character);
             }
 
+            // Dead in a CS round: the camera follows a living player's avatar (spectate-view.tsv).
+            if (now >= m_nextViewRead)
+            {
+                m_nextViewRead = now + 0.2;
+                ReadSpectateView();
+            }
+            TickSpectateView(controller, character);
+
             // Peers that left, disconnected or went quiet.
             for (auto it = m_ghosts.begin(); it != m_ghosts.end();)
             {
@@ -984,6 +1039,126 @@ namespace aimmod
             out << bridge::bots::Format(unixMs, reports);
         }
         MoveFileExW(temp.c_str(), file.c_str(), MOVEFILE_REPLACE_EXISTING);
+    }
+
+    // The local player's run speed and step height (CharacterMovement), so bots move like a player
+    // on this map: a ported map is scaled up and the walker's defaults would crawl.
+    void GhostDemo::ReadLocalMovement(UObject* character)
+    {
+        if (!BindAvatars() || !m_movementComponent.ok()) return;
+        UObject* movement = m_movementComponent.Object(character);
+        if (!movement) return;
+        const auto* walk = movement->GetValuePtrByPropertyNameInChain<float>(STR("MaxWalkSpeed"));
+        const auto* step = movement->GetValuePtrByPropertyNameInChain<float>(STR("MaxStepHeight"));
+        m_runSpeed = walk && std::isfinite(*walk) && *walk > 50 && *walk < 5000 ? *walk : -1;
+        m_stepHeight = step && std::isfinite(*step) && *step > 5 && *step < 300 ? *step : -1;
+    }
+
+    // spectate-view.tsv (service -> AimModSteam, BotOrders.hpp bridge::view): the peer to watch.
+    void GhostDemo::ReadSpectateView()
+    {
+        m_viewWanted.reset();
+        if (m_options.stateDir.empty()) return;
+        const std::filesystem::path file = std::filesystem::path(m_options.stateDir) / L"spectate-view.tsv";
+        WIN32_FILE_ATTRIBUTE_DATA info{};
+        if (!GetFileAttributesExW(file.c_str(), GetFileExInfoStandard, &info) || info.nFileSizeLow > 4096 || info.nFileSizeHigh != 0) return;
+        std::ifstream in(file, std::ios::binary);
+        std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        FILETIME ft{};
+        GetSystemTimeAsFileTime(&ft);
+        const std::uint64_t ticks = (static_cast<std::uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
+        const auto unixMs = static_cast<std::int64_t>((ticks - 116444736000000000ull) / 10000ull);
+        m_viewWanted = bridge::view::Parse(text, unixMs);
+    }
+
+    void GhostDemo::StopSpectateView(UObject* controller, UObject* character)
+    {
+        if (m_viewing && controller && character && m_setViewTarget.ok())
+            m_setViewTarget.Call(controller, [&](std::uint8_t* value, const Param& p) {
+                if (p.kind == Kind::Object) std::memcpy(value, &character, sizeof(character));
+            });
+        if (m_viewing) m_log("avatars: spectator camera off; the view is yours again");
+        m_viewing = false;
+        m_spectatePeer = 0;
+        if (UObject* camera = m_spectateCamera.Get()) static_cast<AActor*>(camera)->K2_DestroyActor();
+        m_spectateCamera = FWeakObjectPtr{};
+    }
+
+    // A chase camera behind the watched avatar, at its eye height, pulled in where a wall is closer.
+    // It follows the avatar as drawn here, so bots and players alike are watched without a pose
+    // stream from their machine.
+    void GhostDemo::TickSpectateView(UObject* controller, UObject* character)
+    {
+        const auto it = m_viewWanted ? m_ghosts.find(*m_viewWanted) : m_ghosts.end();
+        UObject* pawn = it != m_ghosts.end() ? it->second.pawn.Get() : nullptr;
+        if (!controller || !character || !pawn || !it->second.shownValid || it->second.dead)
+        {
+            StopSpectateView(controller, character);
+            return;
+        }
+        if (!m_viewBound)
+        {
+            m_viewBound = true;
+            m_setViewTarget.BindPath(STR("/Script/Engine.PlayerController:SetViewTargetWithBlend"), Shape::Command);
+            m_cameraSetFov.BindPath(STR("/Script/Engine.CameraComponent:SetFieldOfView"), Shape::Command);
+            m_cameraActorClass = game::FindClass(STR("/Script/Engine.CameraActor"));
+            if (m_cameraActorClass) m_cameraComponent.Bind(m_cameraActorClass, STR("CameraComponent"));
+            if (!m_setViewTarget.ok() || !m_cameraActorClass) m_log("avatars: spectator camera unavailable (" + m_setViewTarget.error() + ")");
+        }
+        if (!m_setViewTarget.ok() || !m_cameraActorClass) return;
+        const Ghost& ghost = it->second;
+        double half = ghost.shown.halfHeight;
+        if (UObject* capsule = m_capsule.ok() ? m_capsule.Object(pawn) : nullptr)
+            if (auto h = m_capsuleHalfHeight.Number(capsule); h && *h > 20 && *h < 400) half = *h;
+        const auto view = bridge::ghost::ChaseCamera(ghost.shown, half);
+        // Pulled in to the first wall between the eye and the camera.
+        double camera[3]{view.camera[0], view.camera[1], view.camera[2]};
+        if (const auto hit = Trace(character, view.eye.data(), camera, pawn, character))
+        {
+            const double dx = view.eye[0] - (*hit)[0], dy = view.eye[1] - (*hit)[1], dz = view.eye[2] - (*hit)[2];
+            const double d = std::max(1.0, std::hypot(std::hypot(dx, dy), dz));
+            const double back = std::min(20.0, d);
+            camera[0] = (*hit)[0] + dx / d * back;
+            camera[1] = (*hit)[1] + dy / d * back;
+            camera[2] = (*hit)[2] + dz / d * back;
+        }
+        UObject* actor = m_spectateCamera.Get();
+        if (!actor)
+        {
+            UObject* world = static_cast<AActor*>(character)->GetWorld();
+            const FTransform transform{FQuat(FRotator(0, 0, 0)), FVector(camera[0], camera[1], camera[2]), FVector(1, 1, 1)};
+            AActor* spawned = world ? UGameplayStatics::BeginDeferredActorSpawnFromClass(world, m_cameraActorClass, transform, ESpawnActorCollisionHandlingMethod::AlwaysSpawn) : nullptr;
+            if (!spawned) return;
+            UGameplayStatics::FinishSpawningActor(spawned, transform);
+            spawned->SetActorEnableCollision(false);
+            m_spectateCamera = spawned;
+            actor = spawned;
+            m_viewing = false;
+            if (m_cameraSetFov.ok() && m_cameraComponent.ok())
+                if (UObject* component = m_cameraComponent.Object(actor))
+                    if (UObject* manager = m_cameraManager.Object(controller))
+                    {
+                        const auto fov = m_cameraFov.ok() ? m_cameraFov.Number(manager) : std::nullopt;
+                        const float value = fov && *fov > 1 && *fov < 179 ? static_cast<float>(*fov) : 90.f;
+                        m_cameraSetFov.Call(component, [value](std::uint8_t* v, const Param& p) {
+                            if (p.kind == Kind::Float) std::memcpy(v, &value, sizeof(value));
+                        });
+                    }
+        }
+        FHitResult hit{};
+        static_cast<AActor*>(actor)->K2_SetActorLocationAndRotation(FVector(camera[0], camera[1], camera[2]), FRotator(view.pitch, view.yaw, 0), false, hit, true);
+        // Switched to (or the game took the view back, e.g. its own death camera): view through it.
+        const double now = bridge::Bridge::Now();
+        if (!m_viewing || m_spectatePeer != *m_viewWanted || now >= m_nextViewApply)
+        {
+            m_nextViewApply = now + 1.0;
+            m_setViewTarget.Call(controller, [&](std::uint8_t* value, const Param& p) {
+                if (p.kind == Kind::Object) std::memcpy(value, &actor, sizeof(actor));
+            });
+            if (m_spectatePeer != *m_viewWanted) m_log("avatars: spectating " + bridge::Redact(*m_viewWanted));
+            m_viewing = true;
+            m_spectatePeer = *m_viewWanted;
+        }
     }
 
     // The look of a developer stand-in: its walker's profile, else the test avatar's.

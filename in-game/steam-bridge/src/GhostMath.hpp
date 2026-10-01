@@ -6,6 +6,7 @@
 #include "Codec.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <string_view>
 #include <vector>
@@ -96,6 +97,53 @@ namespace bridge::ghost
         r.vz = a.vz + (b.vz - a.vz) * k;
         r.halfHeight = a.halfHeight + (b.halfHeight - a.halfHeight) * k;
         return r;
+    }
+
+    // Where an avatar's actor (its capsule centre) goes so its feet stand on the sample's floor.
+    // The sample's floor is its centre minus its own half-height (a remote player's capsule, or a
+    // walker's). The game stands its own characters on their capsule, with the mesh fitted to it, so
+    // the avatar's own capsule half-height above that floor is where its feet touch it. The mesh
+    // bounds are only the fallback: they are padded below the soles (the live test measured them
+    // 15 cm under a 145 cm capsule), which lifted every avatar off the ground.
+    inline double AvatarActorZ(const RemoteTransform& s, double avatarHalfHeight, double boundsFeetToActor = -1)
+    {
+        const double floor = s.z - s.halfHeight;
+        if (avatarHalfHeight > 20 && avatarHalfHeight < 400) return floor + avatarHalfHeight;
+        if (boundsFeetToActor > 0 && boundsFeetToActor < 1000) return floor + boundsFeetToActor;
+        return s.z;
+    }
+
+    // After the drive: how far the actor is from where it was sent. The game's drive moves the body
+    // with a sweep, so a wall, a ceiling or a jump across the map (a round's spawn) left it stuck
+    // short of its position: every bot stood in the local spawn, floating, while the logic had it
+    // elsewhere. Anything off by more than PlaceTolerance is placed directly (no sweep); a jump over
+    // TeleportDistance is a teleport.
+    constexpr double PlaceTolerance = 2.0, TeleportDistance = 300.0;
+    enum class Placement { Driven, Correct, Teleport };
+    inline Placement PlaceAfterDrive(const double actual[3], double x, double y, double z)
+    {
+        const double d = std::hypot(std::hypot(actual[0] - x, actual[1] - y), actual[2] - z);
+        return d <= PlaceTolerance ? Placement::Driven : d > TeleportDistance ? Placement::Teleport : Placement::Correct;
+    }
+
+    // Spectating (CS, while dead): a chase camera behind a drawn avatar. `s` is the actor as placed
+    // (capsule centre) and `half` its capsule half-height: the eye is three quarters up, the camera
+    // about two body heights behind it along the body's yaw, a little above, looking slightly down.
+    struct ChaseView
+    {
+        std::array<double, 3> eye{}, camera{};
+        double yaw = 0, pitch = 0;
+    };
+    inline ChaseView ChaseCamera(const RemoteTransform& s, double half)
+    {
+        half = half > 20 && half < 400 ? half : DefaultHalfHeight;
+        ChaseView v;
+        v.eye = {s.x, s.y, s.z + half * 0.75};
+        const double rad = s.yaw * 3.14159265358979 / 180.0, back = std::max(200.0, half * 1.9), lift = half * 0.3;
+        v.camera = {v.eye[0] - std::cos(rad) * back, v.eye[1] - std::sin(rad) * back, v.eye[2] + lift};
+        v.yaw = s.yaw;
+        v.pitch = -std::atan2(lift, back) * 180.0 / 3.14159265358979;
+        return v;
     }
 
     // Engine basic-shape fallback layout (shapes are 100 units). Everything

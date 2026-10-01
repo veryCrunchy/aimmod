@@ -142,7 +142,8 @@ sealed class LobbyCore
         {
             var id = "bot-" + Convert.ToHexString(RandomNumberGenerator.GetBytes(4)).ToLowerInvariant();
             var name = UniqueName("BOT " + BotNames[botNameIndex++ % BotNames.Length]);
-            members.Add(new Member { Id = id, Name = name, Role = MemberRoles.Player, JoinedAt = clock(), Link = "bot", Bot = skill, Team = team, Ready = true, Scenario = ContentStates.Ok, Map = ContentStates.Ok });
+            var look = AvatarProfiles.ForBot(id, members.Where(m => m.Bot is not null).Select(m => m.Avatar)).Id;
+            members.Add(new Member { Id = id, Name = name, Role = MemberRoles.Player, JoinedAt = clock(), Link = "bot", Bot = skill, Team = team, Ready = true, Scenario = ContentStates.Ok, Map = ContentStates.Ok, Avatar = look });
             System(name + " joined (" + BotSkills.Label(skill) + " bot).");
         }
         Changed();

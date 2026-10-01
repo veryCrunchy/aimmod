@@ -1454,6 +1454,32 @@ changes to one without shooting.
   of the waypoints), hold, face a point, and stand at the round's spawn.
   The host sends their positions to everyone 10 times a second (`bots`), and
   each client's walkers follow them.
+  - A goal no straight walk reaches is reached by a route over the
+    waypoints (A*). Which straight walks are clear is checked a few at a
+    time and remembered for the map, shared by every walker on it.
+  - Walkers move like the local player: run speed and step height from its
+    `CharacterMovement` (a ported map is scaled up, CS runs at 1100 cm/s
+    with 79 cm steps).
+  - Every tick the avatar ends exactly where its walker is. The game's drive
+    sweeps, so a wall or a jump across the map (a round's spawn) used to
+    leave it short: bots stood floating in the local spawn while the logic
+    had them elsewhere. Anything off by more than 2 cm is placed directly.
+  - Feet on the floor: the avatar's own capsule half-height above the
+    walker's floor (the mesh bounds sit below the soles and lifted it).
+  - `avatar-state.tsv` names bots by their stand-in peer; AimModSteam
+    accepts peers 1 to 16 there (their rows used to void the whole file, so
+    no avatar showed deaths, teams or weapons).
+- **Looks.** Each bot gets one of the humanoid avatars (Meso skins, Meso,
+  Endo, Ecto) from its id, skipping looks other bots already wear while one
+  is free, so it's stable for the match and the lobby isn't one bot copied.
+- **Spectating while dead (CS).** Down until the round ends, the camera
+  follows a living teammate (anyone alive when no teammate is), bots
+  included. Click or Space watches the next one, right click the previous;
+  the HUD says who. The service writes `spectate-view.tsv`
+  (`AIMMOD_VIEW_1\t<unix ms>`, then `view\t<peer>`, rewritten every second);
+  AimModSteam puts a chase camera behind the avatar it draws for that peer
+  and gives the view back when the file goes or is older than 3 s. No pose
+  stream from another machine is involved.
 - **Sight.** The host asks its game to trace from each bot's eye to the
   nearest enemies; AimModSteam answers in `bot-sight.tsv`. A bot only targets
   a player its trace says is in sight.

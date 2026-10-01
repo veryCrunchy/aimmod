@@ -77,6 +77,10 @@ namespace aimmod
             double feetToActor = -1;
             double nextFeetMeasure = 0;
             bool feetLogged = false;
+            bool placementLogged = false;
+            int corrections = 0;          // drives that left the body short of its position (placed directly)
+            bridge::ghost::RemoteTransform shown{}; // where it was last drawn (actor location), for the spectator camera
+            bool shownValid = false;
             std::string weapon;           // CS: the third-person weapon model shown in its hands ("" none)
             double nextWeapon = 0;        // when to re-apply it (the game may hide it again)
         };
@@ -167,7 +171,26 @@ namespace aimmod
             std::optional<bridge::ghost::RemoteTransform> shown;
             double shownAt = -1;
             bool poseLogged = false;
+            double tunedSpeed = -1, tunedStep = -1;
+            bool tuneLogged = false;
         };
+        std::shared_ptr<bridge::ghost::LinkCache> m_linkCache; // reset with the scenario
+        double m_runSpeed = -1, m_stepHeight = -1;              // the local player's movement (CharacterMovement)
+        double m_nextMovementRead = 0;
+        void ReadLocalMovement(RC::Unreal::UObject* character);
+        // Spectating while dead (CS): the camera follows another player's avatar. spectate-view.tsv
+        // from the service names the peer; nothing (or a stale file) gives the view back.
+        RC::Unreal::FWeakObjectPtr m_spectateCamera;
+        std::uint64_t m_spectatePeer = 0;
+        double m_nextViewRead = 0, m_nextViewApply = 0;
+        std::optional<std::uint64_t> m_viewWanted;
+        bool m_viewBound = false, m_viewing = false;
+        game::Getter m_setViewTarget, m_cameraSetFov;
+        game::Field m_cameraComponent;
+        RC::Unreal::UClass* m_cameraActorClass = nullptr;
+        void ReadSpectateView();
+        void TickSpectateView(RC::Unreal::UObject* controller, RC::Unreal::UObject* character);
+        void StopSpectateView(RC::Unreal::UObject* controller, RC::Unreal::UObject* character);
         std::map<std::uint64_t, DevWalk> m_walkers;
         // bot-orders.tsv from the service (bots), and what the bot avatars report back (bot-sight.tsv).
         std::optional<bridge::bots::Orders> m_botOrders;

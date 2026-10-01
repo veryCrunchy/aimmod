@@ -715,6 +715,89 @@ int main()
         Check(ownOnly, "a bot is placed only on its own spawns, never on a waypoint");
         b.PlaceAt(300, 400, 150, 45, half, flat);
         Check(b.x == 300 && b.y == 400 && b.z == half && b.grounded && b.yaw == 45, "a bot stands at its round's spawn, on the floor below it");
+
+        // A goal only reachable by first walking away from it (around a long wall): a route over the
+        // waypoints, worked out a few checks at a time and shared by the walkers on the map.
+        auto big = [](double x, double y, double) -> std::optional<double> { return std::fabs(x) < 3000 && std::fabs(y) < 3000 ? std::optional<double>(0.0) : std::nullopt; };
+        auto longWall = [](double ax, double ay, double, double bx, double by, double) {
+            if ((ax < 0) == (bx < 0)) return true;
+            const double t = (0 - ax) / (bx - ax);
+            return ay + (by - ay) * t > 1500; // the wall x = 0 runs up to y = 1500
+        };
+        const auto cache = std::make_shared<ghost::LinkCache>();
+        ghost::Walker r;
+        r.links = cache;
+        r.spawns = {{-1000, 0, 0}, {-1000, -1500, 0}, {-1000, 2000, 0}, {1000, 2000, 0}, {1600, -1500, 0}};
+        r.own = 2;
+        r.Tune(1100, 79);
+        Check(r.speed > 2.5 * ghost::Walker::Speed && r.stepUp == 79 && r.arrive > ghost::Walker::Arrive, "bots move like the player on a scaled map (run speed, stairs)");
+        r.Place(0, half, big);
+        r.goal = std::array<double, 3>{1000, 0, 0};
+        bool there = false, crossedWall = false;
+        double rx = r.x, ry = r.y, at = -1;
+        for (int i = 0; i < 60 * 30 && !there; ++i)
+        {
+            const auto s = r.Step(i / 60.0, 1 / 60.0, half, big, longWall);
+            crossedWall |= !longWall(rx, ry, 0, s.x, s.y, 0);
+            rx = s.x; ry = s.y;
+            if (std::hypot(s.x - 1000, s.y) < r.arrive + 10) { there = true; at = i / 60.0; }
+        }
+        Check(there && !crossedWall && r.plansFound >= 1 && r.plansPending >= 1, "a bot plans a route around a long wall over its waypoints, a few checks at a time");
+        Check(at > 0 && at < 12, "and walks it at its tuned speed");
+        // A second bot on the same map reuses what the first learnt.
+        ghost::Walker r2;
+        r2.links = cache;
+        r2.spawns = r.spawns;
+        r2.Tune(1100, 79);
+        r2.Place(0, half, big);
+        r2.goal = std::array<double, 3>{1000, 0, 0};
+        int traces = 0;
+        auto countingWall = [&](double ax, double ay, double az, double bx, double by, double bz) { ++traces; return longWall(ax, ay, az, bx, by, bz); };
+        for (int i = 0; i < 3; ++i) r2.Step(i / 60.0, 1 / 60.0, half, big, countingWall);
+        Check(r2.plansFound == 1 && r2.plansPending == 0 && !r2.route.empty(), "the route is found at once from the shared link cache");
+        // The goal moves (a chase): the route is planned again for the new goal.
+        r2.goal = std::array<double, 3>{-1000, -1500, 0};
+        for (int i = 3; i < 60 * 10; ++i) r2.Step(i / 60.0, 1 / 60.0, half, big, longWall);
+        Check(std::hypot(r2.x + 1000, r2.y + 1500) < r2.arrive + 10, "a moved goal is walked to");
+        // The goal is cleared mid-walk: no stale goal target.
+        r2.goal = std::array<double, 3>{1000, 0, 0};
+        for (int i = 0; i < 30; ++i) r2.Step(20 + i / 60.0, 1 / 60.0, half, big, longWall);
+        r2.goal.reset();
+        r2.Step(21, 1 / 60.0, half, big, longWall);
+        Check(r2.target != ghost::Walker::GoalTarget && r2.route.empty(), "without a goal the bot drops its route");
+    }
+    // Avatar placement: the actor follows the simulated position every tick.
+    {
+        ghost::RemoteTransform s;
+        s.x = 1792; s.y = -9536; s.z = 657; s.halfHeight = 145; // a bot walker on a floor at z = 512
+        Check(std::fabs(ghost::AvatarActorZ(s, 145, 160) - 657) < 0.01, "an avatar stands on its own capsule, not the padded mesh bounds");
+        s.halfHeight = 168; s.z = 682; // a CS player (capsule 168) on a floor at z = 514
+        Check(std::fabs(ghost::AvatarActorZ(s, 145) - (514 + 145)) < 0.01, "a remote player's floor carries over to the avatar's own capsule");
+        Check(std::fabs(ghost::AvatarActorZ(s, -1, 150) - (514 + 150)) < 0.01 && std::fabs(ghost::AvatarActorZ(s, -1, -1) - 682) < 0.01, "mesh bounds, then the sample, as fallbacks");
+        // Where the live test found the bots: near the local spawn, floating, while their walkers were at the other spawn.
+        const double stuck[3]{-2364.6, 2798.3, 977.9}, close[3]{1792.5, -9536, 657}, exact[3]{1792, -9536, 657};
+        Check(ghost::PlaceAfterDrive(stuck, 1792, -9536, 657) == ghost::Placement::Teleport, "a body the drive left across the map is teleported to its position");
+        Check(ghost::PlaceAfterDrive(close, 1792, -9536, 657) == ghost::Placement::Driven && ghost::PlaceAfterDrive(exact, 1792, -9536, 657) == ghost::Placement::Driven,
+              "a body where it was sent is left to the drive (its animation)");
+        const double short_[3]{1792, -9436, 657};
+        Check(ghost::PlaceAfterDrive(short_, 1792, -9536, 657) == ghost::Placement::Correct, "a body a wall stopped short is placed directly");
+    }
+    // spectate-view.tsv: who to watch while dead, and the chase camera behind them.
+    {
+        const std::int64_t now = 1790891335653;
+        const auto bot = bridge::view::Parse("AIMMOD_VIEW_1\t1790891335000\nview\t3\n", now);
+        const auto player = bridge::view::Parse("AIMMOD_VIEW_1\t1790891335000\r\nview\t" + std::to_string(Person) + "\r\n", now);
+        Check(bot && *bot == 3 && player && *player == Person, "parses the avatar to watch (a bot stand-in or a player)");
+        Check(!bridge::view::Parse("AIMMOD_VIEW_1\t1790891300000\nview\t3\n", now) && !bridge::view::Parse("AIMMOD_VIEW_1\t1790891335000\n", now) &&
+                  !bridge::view::Parse("AIMMOD_VIEW_1\t1790891335000\nview\t0\n", now) && !bridge::view::Parse("AIMMOD_VIEW_1\t1790891335000\nview\tx1\n", now) &&
+                  !bridge::view::Parse("AIMMOD_POSE_1\t1790891335000\nview\t3\n", now),
+              "a stale file, no view row, a bad peer or another file: the view is the player's own");
+        ghost::RemoteTransform s;
+        s.x = 100; s.y = 200; s.z = 657; s.yaw = 90;
+        const auto v = ghost::ChaseCamera(s, 145);
+        Check(std::fabs(v.eye[2] - (657 + 145 * 0.75)) < 0.01 && std::fabs(v.camera[0] - 100) < 0.01 && v.camera[1] < 200 - 250 && v.camera[2] > v.eye[2] &&
+                  v.yaw == 90 && v.pitch < 0 && v.pitch > -20,
+              "the spectator camera sits behind the watched avatar at eye height, looking slightly down its way");
     }
     // bot-orders.tsv and bot-sight.tsv
     {
@@ -755,6 +838,13 @@ int main()
         Check(!bridge::avatarstate::Parse("AIMMOD_AVATARS_1\t1\npeer\t" + id + "\t1\tally\t0\t0\t0\n"), "rejects an unknown side");
         Check(!bridge::avatarstate::Parse("AIMMOD_AVATARS_1\t1\npeer\t" + std::to_string(Lobby) + "\t1\tenemy\t100\t0\t0\n"), "rejects a non-player id");
         Check(!bridge::avatarstate::Parse("peer\t" + id + "\t1\tenemy\t100\t0\t0\n"), "requires the header");
+        // Bots and simulated players are the bridge's stand-in avatars 1..16: their rows must not
+        // void the whole file (that left every avatar alive, on the enemy team and unarmed).
+        auto bots = bridge::avatarstate::Parse("AIMMOD_AVATARS_1\t21\nmatch\tm-1\npeer\t1\t0\tenemy\t0\t1759300000000\t0\tPistol\npeer\t2\t1\tfriend\t100\t0\t0\tAK47\npeer\t" + id + "\t1\tenemy\t100\t0\t0\n");
+        Check(bots && bots->peers.size() == 3 && !bots->peers[1].alive && bots->peers[2].friendly && bots->peers[2].weapon == "AK47" && bots->peers.count(Person),
+              "parses stand-in avatar rows (bots) next to players");
+        Check(!bridge::avatarstate::Parse("AIMMOD_AVATARS_1\t1\npeer\t17\t1\tenemy\t100\t0\t0\n") && !bridge::avatarstate::Parse("AIMMOD_AVATARS_1\t1\npeer\t0\t1\tenemy\t100\t0\t0\n"),
+              "stand-ins are peers 1 to 16 only");
         Check(!bridge::avatarstate::Parse("AIMMOD_AVATARS_1\t9999999999999999999\n"), "rejects a sequence past INT64_MAX");
         auto empty = bridge::avatarstate::Parse("AIMMOD_AVATARS_1\t2\n");
         Check(empty && empty->peers.empty(), "an empty state file is valid");

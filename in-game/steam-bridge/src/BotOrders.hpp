@@ -188,3 +188,46 @@ namespace bridge::bots
         return text;
     }
 } // namespace bridge::bots
+
+// spectate-view.tsv (service -> AimModSteam), while the local player is dead in a CS round:
+//   AIMMOD_VIEW_1\t<unix ms>
+//   view\t<peer>          the avatar to watch: a SteamID64, or a stand-in (bot) peer 1..16
+// The camera follows that avatar as this game draws it (no pose stream from another machine);
+// no file, a stale one (over 3 s) or no view row gives the view back.
+namespace bridge::view
+{
+    constexpr std::int64_t MaxAgeMs = 3000;
+    inline std::optional<std::uint64_t> Parse(std::string_view text, std::int64_t nowMs)
+    {
+        if (text.size() > 4096) return std::nullopt;
+        const auto nl = text.find('\n');
+        std::string_view head = text.substr(0, nl);
+        if (!head.empty() && head.back() == '\r') head.remove_suffix(1);
+        const auto h = bots::detail::Split(head);
+        if (h.size() != 2 || h[0] != "AIMMOD_VIEW_1") return std::nullopt;
+        // Digits only, at most 20, no overflow.
+        const auto unsignedNumber = [](std::string_view s) -> std::optional<std::uint64_t> {
+            if (s.empty() || s.size() > 20) return std::nullopt;
+            std::uint64_t v = 0;
+            for (const char c : s)
+            {
+                if (c < '0' || c > '9') return std::nullopt;
+                const auto digit = static_cast<std::uint64_t>(c - '0');
+                if (v > (UINT64_MAX - digit) / 10) return std::nullopt;
+                v = v * 10 + digit;
+            }
+            return v;
+        };
+        const auto at = unsignedNumber(h[1]);
+        if (!at || *at > static_cast<std::uint64_t>(INT64_MAX) || std::llabs(static_cast<std::int64_t>(*at) - nowMs) > MaxAgeMs) return std::nullopt;
+        if (nl == std::string_view::npos) return std::nullopt;
+        std::string_view line = text.substr(nl + 1);
+        if (const auto end = line.find('\n'); end != std::string_view::npos) line = line.substr(0, end);
+        if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+        const auto p = bots::detail::Split(line);
+        if (p.size() != 2 || p[0] != "view") return std::nullopt;
+        const auto peer = unsignedNumber(p[1]);
+        if (!peer || *peer == 0) return std::nullopt;
+        return peer;
+    }
+} // namespace bridge::view

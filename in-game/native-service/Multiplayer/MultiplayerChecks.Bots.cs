@@ -12,7 +12,58 @@ static partial class MultiplayerChecks
         BotLobby();
         BotAim();
         BotCs();
+        BotLooks();
+        DeadSpectate();
         BotService(root);
+    }
+
+    // Each bot wears its own look, picked from its id: stable for the match, varied in a lobby.
+    static void BotLooks()
+    {
+        Check(AvatarProfiles.ForBot("bot-1a2b3c4d").Id == AvatarProfiles.ForBot("bot-1a2b3c4d").Id, "A bot's look follows from its id");
+        var ids = Enumerable.Range(0, 40).Select(i => "bot-" + i.ToString("x8", System.Globalization.CultureInfo.InvariantCulture)).ToArray();
+        Check(ids.Select(id => AvatarProfiles.ForBot(id).Id).Distinct().Count() >= 4, "Bot looks spread over the humanoid avatars");
+        Check(AvatarProfiles.ForBot("bot-x", AvatarProfiles.All.Skip(1).Select(a => a.Id)).Id == AvatarProfiles.All[0].Id
+            && AvatarProfiles.All.Any(a => a.Id == AvatarProfiles.ForBot("bot-x", AvatarProfiles.All.Select(x => x.Id)).Id), "A look other bots wear is skipped while another is free");
+        long now = 21_000_000;
+        var content = new FakeContent();
+        var core = new LobbyCore("host", "Host", new LobbySettings(Mode: LobbyModes.Deathmatch, Scenario: content.Scenario("Synthetic A")), () => now, code: "ABCDEF");
+        core.Apply("host", "add-bot", J(new { skill = "normal", fill = true }), content);
+        var bots = core.Snapshot().Members.Where(m => m.Bot is not null).ToArray();
+        Check(bots.Length >= 3 && bots.Select(b => b.Avatar).Distinct().Count() == Math.Min(bots.Length, AvatarProfiles.All.Length) && bots.All(b => AvatarProfiles.Find(b.Avatar) is not null),
+            "Fill with bots: every bot looks different while looks last");
+        var restored = LobbyCore.Restore(core.Snapshot(), "host", () => now);
+        Check(bots.All(b => restored.Snapshot().Members.First(m => m.Id == b.Id).Avatar == b.Avatar), "A bot keeps its look through a host handover");
+        // A downed bot stays put (hidden) instead of walking off invisibly.
+        var brain = new BotBrain(seed: 4);
+        brain.Reset("m#1");
+        var down = brain.Step(new BotWorld(1_000_000, LobbyModes.Deathmatch, [("bot", BotSkills.Normal)], [new("bot", 0, 0, 0, 164, 0, false, 0)], new Dictionary<string, BotSight>(), null, null, []));
+        Check(down.Orders[0].Mode == "hold", "A downed bot holds still");
+    }
+
+    // CS: down until the round is over, the camera follows living teammates (then anyone alive).
+    static void DeadSpectate()
+    {
+        ObjectiveZone Box(string type, string team, string name, double x, double y) => new(type, team, name, [x - 300, y - 300, 0], [x + 300, y + 300, 300]);
+        var zones = new[] { Box("bomb_site", "any", "A", 3000, 0), Box("bomb_site", "any", "B", -3000, 0), Box("buy_zone", "terrorist", "", 0, -3000), Box("buy_zone", "counter_terrorist", "", 0, 3000) };
+        var spawns = Enumerable.Range(0, 5).Select(i => new ObjectiveSpawn("terrorist", i * 100, -3000, 40, 90))
+            .Concat(Enumerable.Range(0, 5).Select(i => new ObjectiveSpawn("counter_terrorist", i * 100, 3000, 40, -90))).ToArray();
+        var map = new MapObjectives(zones, spawns, MapObjectives.CsProblemOf(zones, spawns));
+        string[] order = ["me", "mate1", "foe1", "mate2", "foe2"];
+        var cs = new CsMatch(order, 30_000_000, 12, true, map, new Dictionary<string, int> { ["me"] = 1, ["mate1"] = 1, ["mate2"] = 1, ["foe1"] = 2, ["foe2"] = 2 });
+        var view = cs.View();
+        CsView With(params string[] dead) => view with { Players = view.Players.Select(p => dead.Contains(p.Member) ? p with { Alive = false } : p).ToArray() };
+        var mates = MultiplayerService.DeadWatchCandidates(With("me"), order, "me");
+        Check(mates.SequenceEqual(["mate1", "mate2"]), "A downed player watches living teammates, in match order");
+        Check(MultiplayerService.DeadWatchCandidates(With("me", "mate1", "mate2"), order, "me").SequenceEqual(["foe1", "foe2"]), "With no teammate alive, anyone alive");
+        Check(MultiplayerService.DeadWatchCandidates(With("me", "mate1", "mate2", "foe1", "foe2"), order, "me").Count == 0, "Nobody alive: nothing to watch");
+        Check(MultiplayerService.NextDeadWatch(mates, null, 0) == "mate1" && MultiplayerService.NextDeadWatch(mates, "mate1", 0) == "mate1", "The first teammate, then the same one");
+        Check(MultiplayerService.NextDeadWatch(mates, "mate1", 1) == "mate2" && MultiplayerService.NextDeadWatch(mates, "mate2", 1) == "mate1" && MultiplayerService.NextDeadWatch(mates, "mate1", -1) == "mate2",
+            "Click or Space for the next player, right click for the previous one (wrapping)");
+        var left = MultiplayerService.DeadWatchCandidates(With("me", "mate1"), order, "me");
+        Check(MultiplayerService.NextDeadWatch(left, "mate1", 0) == "mate2", "The watched teammate goes down: the camera moves to the next one");
+        var file = MultiplayerService.FormatSpectateView("3", 1_790_891_335_000);
+        Check(file == "AIMMOD_VIEW_1\t1790891335000\nview\t3\n", "spectate-view.tsv names the avatar to follow (AimModSteam bridge::view)");
     }
 
     static void BotLobby()
@@ -167,5 +218,9 @@ static partial class MultiplayerChecks
             "A bot is a stand-in on the host's game, steered by bot-orders.tsv");
         var notice = service.NoticeText();
         _ = notice;
+        // avatar-state.tsv names the bot by its stand-in peer, which AimModSteam reads (its rows used
+        // to void the whole file: no deaths, teams or weapons on any avatar).
+        var state = File.Exists(Path.Combine(output, "avatar-state.tsv")) ? File.ReadAllText(Path.Combine(output, "avatar-state.tsv")) : "";
+        Check(state.Contains("\npeer\t1\t1\t", StringComparison.Ordinal), "avatar-state.tsv has the bot's row by its stand-in peer");
     }
 }

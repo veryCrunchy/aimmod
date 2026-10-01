@@ -93,7 +93,8 @@ namespace bridge::avatarstate
             {
                 if ((f.size() != 7 && f.size() != 8) || file.peers.size() >= 64) return std::nullopt;
                 const auto peer = ParseId(f[1]);
-                if (!peer || !IsIndividualId(*peer)) return std::nullopt;
+                // A Steam account, or one of the bridge's own stand-in avatars (bots and simulated players).
+                if (!peer || !(IsIndividualId(*peer) || IsStandInPeer(*peer))) return std::nullopt;
                 if (f[2] != "0" && f[2] != "1") return std::nullopt;
                 if (f[3] != "friend" && f[3] != "enemy") return std::nullopt;
                 const auto health = Number(f[4]);

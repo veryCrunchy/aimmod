@@ -29,6 +29,20 @@ static class AvatarProfiles
     ];
     public static AvatarProfile? Find(string? id) => All.FirstOrDefault(a => a.Id == id);
 
+    // A bot's look, from its id (FNV-1a), so it is the same for the whole match and on every
+    // machine. Looks other bots in the lobby already wear are skipped while unused ones remain, so
+    // a lobby of bots doesn't look like one bot copied.
+    public static AvatarProfile ForBot(string id, IEnumerable<string>? taken = null)
+    {
+        var hash = 2166136261u;
+        foreach (var c in id) { hash ^= c; hash *= 16777619u; }
+        var start = (int)(hash % (uint)All.Length);
+        var used = taken?.ToHashSet() ?? [];
+        for (var i = 0; i < All.Length; i++)
+            if (!used.Contains(All[(start + i) % All.Length].Id)) return All[(start + i) % All.Length];
+        return All[start];
+    }
+
     // A plain, invulnerable body that never scores: the bridge drives it from the
     // player's pose stream, so movement values only need to be sane.
     public static IReadOnlyList<string> Lines(AvatarProfile a) =>

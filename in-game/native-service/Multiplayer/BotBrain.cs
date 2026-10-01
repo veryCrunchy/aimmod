@@ -77,8 +77,9 @@ sealed class BotBrain(int seed = 0)
             var csSelf = w.Cs?.Players.FirstOrDefault(p => p.Member == member);
             if (self is null || !self.Alive || eye is null)
             {
+                // Down: it stays where it fell (hidden) until it respawns or the next round places it.
                 st.Target = null; st.Using = false;
-                orders.Add(new BotOrder(member, "roam", null, null, [], placeToken, placeAt));
+                orders.Add(new BotOrder(member, self is { Alive: false } ? "hold" : "roam", null, null, [], placeToken, placeAt));
                 continue;
             }
             var team = self.Team;

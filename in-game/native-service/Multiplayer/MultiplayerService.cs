@@ -2018,7 +2018,11 @@ sealed partial class MultiplayerService : IDisposable
 
     void TrackLocalRun()
     {
-        if (!PlayingCs()) roundAudio.Update(prefs.RoundVolume, null, null); // no bomb to beep
+        if (!PlayingCs())
+        {
+            roundAudio.Update(prefs.RoundVolume, null, null); // no bomb to beep
+            deadWatch = null; deadWatchFor = null; WriteSpectateView(null); // no CS round: the view is yours
+        }
         if (Current is not { Match: { } match } || !match.Players.Contains(SelfId)) { trackedRound = null; return; }
         var restarted = DetectRestart(match);
         ReadLockPresses();

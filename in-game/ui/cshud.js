@@ -81,6 +81,8 @@
     // Banners: round end with the reason, halftime side switch.
     if(c.banner){var bn=node('div','cs-banner team'+c.banner.team+(c.banner.won?' won':' lost'));bn.appendChild(node('strong','',c.banner.title));bn.appendChild(node('span','',c.banner.reason));target.appendChild(bn);}
     if(c.notice)target.appendChild(node('div','cs-notice',c.notice));
+    // Down until the round is over: who the camera follows, and how to switch.
+    if(c.watching){var watch=node('div','cs-watch');watch.appendChild(node('span','cs-watch-label','Spectating'));watch.appendChild(node('strong','',c.watching));if(c.watchHint)watch.appendChild(node('span','cs-watch-hint',c.watchHint));target.appendChild(watch);}
     // Kill feed, top right.
     if(c.feed&&c.feed.length){var feed=node('div','cs-feed');c.feed.forEach(function(f){var l=node('div','cs-kill'+(f.you?' '+f.you:''));l.appendChild(node('span','cs-k team'+f.killerTeam,f.killer));l.appendChild(node('span','cs-w',(f.teamKill?'TK · ':'')+(f.weapon||'')+(f.head?' · headshot':'')));l.appendChild(node('span','cs-v',f.victim));feed.appendChild(l);});target.appendChild(feed);}
     // Where damage came from: red marks on a ring around the crosshair, fading over 1.5 s.

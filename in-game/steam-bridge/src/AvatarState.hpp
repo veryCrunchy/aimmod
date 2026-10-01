@@ -4,7 +4,7 @@
 //
 //   AIMMOD_AVATARS_1\t<sequence>
 //   match\t<%-escaped match id>
-//   peer\t<SteamID64>\t<alive 0/1>\t<friend|enemy>\t<health>\t<died at unix ms, 0>\t<respawn at unix ms, 0>[\t<weapon>]
+//   peer\t<SteamID64, or a stand-in avatar 1..16>\t<alive 0/1>\t<friend|enemy>\t<health>\t<died at unix ms, 0>\t<respawn at unix ms, 0>[\t<weapon>]
 //
 // The optional weapon (CS, game-modes.md 6.6.2) is the third-person model of what that player
 // holds, by KovaaK's WeaponMeshViewModels name ("AK47", "Pistol", ...), or "-" for none.
@@ -31,6 +31,11 @@ namespace bridge::avatarstate
         std::string match;
         std::map<std::uint64_t, PeerState> peers;
     };
+
+    // The bridge's stand-in avatars (bots, simulated players) are synthetic peers 1..16
+    // (Ghosts.cpp, MultiplayerService.StandIn.cs); the service names them so in this file too.
+    constexpr std::uint64_t MaxStandInPeer = 16;
+    inline bool IsStandInPeer(std::uint64_t peer) { return peer >= 1 && peer <= MaxStandInPeer; }
 
     // Strict: header first, at most 64 peers, valid ids, flags and numbers.
     std::optional<File> Parse(std::string_view text);

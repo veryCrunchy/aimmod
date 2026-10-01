@@ -116,7 +116,9 @@ sealed partial class MultiplayerService
         var hostNow = clock() + HostOffset();
         var buyWindow = cs.Phase == "freeze" || (cs.Phase == "live" && cs.LiveAt is { } live && hostNow < live + CsRules.BuyMs);
         if (!buyWindow || me.InBuyZone == false || !me.Alive) buyOpen = false;
-        if (!csKeys.Foreground()) { if (useHeld) { useHeld = false; Command("use", JsonSerializer.SerializeToElement(new { held = false })); } return; }
+        var foreground = csKeys.Foreground();
+        DeadSpectate(match, cs, me, foreground);
+        if (!foreground) { if (useHeld) { useHeld = false; Command("use", JsonSerializer.SerializeToElement(new { held = false })); } return; }
         if (csKeys.Pressed('B') && buyWindow && me.Alive && me.InBuyZone != false) buyOpen = !buyOpen;
         // Escape closes the buy menu. KovaaK's also opens its pause menu on Escape; AimModNativeUI
         // closes that again while the notice file says so (swallowMenu, for a moment after).
@@ -193,7 +195,7 @@ sealed partial class MultiplayerService
         string? Primary, string? Secondary, string BuyKey, string UseKey, IReadOnlyList<string> KeyClashes,
         string? InSite = null, string? Callout = null, IReadOnlyList<CsMarker>? Sites = null,
         bool HasBomb = false, string? BombCarrier = null, string? Refused = null, string DropKey = CsDropKey, int TAlive = 0, int CtAlive = 0,
-        IReadOnlyList<CsHurt>? Hurt = null, string? HitMarker = null);
+        IReadOnlyList<CsHurt>? Hurt = null, string? HitMarker = null, string? Watching = null, string? WatchHint = null);
     // Where damage came from, around the crosshair: bearing in degrees from where you look (negative
     // left), the damage, and how old the hit is (ms) so the marker fades.
     internal sealed record CsHurt(long Id, int Bearing, int Damage, int Age);
@@ -272,7 +274,9 @@ sealed partial class MultiplayerService
             me.Alive ? me.Site : null, me.Alive ? me.Callout : null, SiteMarkers(cs, me.Side == CsRules.T || b.State == "planted" ? b.Position : null),
             b.Carrier == SelfId, me.Side == CsRules.T && b.Carrier is { } bc ? Name(bc) : null, refused, CsDropKey,
             cs.Players.Count(p => p.Side == CsRules.T && p.Alive), cs.Players.Count(p => p.Side == CsRules.CT && p.Alive),
-            HurtMarkers(m, hostNow), HitMarker(m, hostNow));
+            HurtMarkers(m, hostNow), HitMarker(m, hostNow),
+            !me.Alive && deadWatch is { } watched ? Name(watched) : null,
+            !me.Alive && deadWatch is not null ? (DeadWatchCandidates(cs, m.Players, SelfId).Count > 1 ? "Click or Space: next player · Right click: previous" : "The only player left") : null);
     }
 
     // The last hits you took (1.5 s), as bearings from where you look: the hit came from the

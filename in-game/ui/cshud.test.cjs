@@ -85,3 +85,11 @@ test('the buy menu is centred on both axes, never under the strip, and scaled to
   // Not on the page yet (no size): left alone.
   assert.equal(place({offsetWidth:0,offsetHeight:0,style:{}},strip(76),{innerWidth:1920,innerHeight:1080}),null);
 });
+test('down in a round: the HUD names who the camera follows and how to switch',()=>{
+  const s=setup();
+  s.hud.render(s.root,Object.assign({},base,{buyOpen:false,phase:'live',alive:false,watching:'BOT Echo',watchHint:'Click or Space: next player · Right click: previous'}),()=>{});
+  const t=s.text(s.root);
+  assert.ok(t.includes('Spectating')&&t.includes('BOT Echo')&&t.includes('Click or Space: next player')&&t.includes('Down'));
+  s.hud.render(s.root,Object.assign({},base,{buyOpen:false,phase:'live'}),()=>{});
+  assert.ok(!s.walk(s.root).some(e=>e.className==='cs-watch'),'alive: no spectator line');
+});
