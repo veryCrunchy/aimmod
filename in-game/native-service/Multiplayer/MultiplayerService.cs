@@ -240,6 +240,8 @@ sealed partial class MultiplayerService : IDisposable
                     return Simulation.Control(core, op, Text("member"));
                 case "friend-join" or "friend-invite" or "friend-watch" or "friend-dismiss":
                     return FriendNotice(action, Text("id"));
+                case "cosmetic-equip" or "cosmetic-remove" or "cosmetic-view":
+                    return CosmeticAction(action, args);
                 case "favourite":
                     return Favourite(Text("scenario"), !(args.TryGetProperty("on", out var favOn) && favOn.ValueKind == JsonValueKind.False));
                 case "settings" when core is not null && args.ValueKind == JsonValueKind.Object && args.TryGetProperty("settings", out var pickedSettings) && pickedSettings.ValueKind == JsonValueKind.Object
@@ -1161,6 +1163,8 @@ sealed partial class MultiplayerService : IDisposable
             var now = clock();
             WatchFriends(now);
             UpdateSessionMarker();
+            AnnounceLook();
+            WriteLooks();
             CleanMatchScenarios();
             FollowLeader(now);
             if (core is not null)
@@ -1359,6 +1363,9 @@ sealed partial class MultiplayerService : IDisposable
                     if (problem is not null) Send(peer, "content.error", new { hash, code = problem });
                 }
                 catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or FormatException) { }
+                break;
+            case "cosmetic.look":
+                TakeLook(peer, m.Body);
                 break;
             case "replay.chunk":
                 // A member's own replay or clip: import it here, then pass it on to everyone else.
@@ -1926,6 +1933,7 @@ sealed partial class MultiplayerService : IDisposable
             "library" => Results.Json(LibraryView(), Protocol.Json),
             "maps" => Results.Json(MapsView(), Protocol.Json),
             "history" => Results.Json(HistoryView(), Protocol.Json),
+            "cosmetics" => Results.Json(CosmeticsView(), Protocol.Json),
             "preview" => MapPreview(key) is { } image ? Results.File(image, MapPorts.ContentType(image)) : Results.NotFound(),
             _ => Results.Json(View(), Protocol.Json),
         });

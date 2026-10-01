@@ -48,6 +48,7 @@ sealed partial class MultiplayerService
     void DeleteSessionMarker()
     {
         markerKey = null;
+        DeleteLooks();
         if (MarkerPath is not { } path) return;
         try { if (File.Exists(path)) File.Delete(path); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }

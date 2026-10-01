@@ -140,6 +140,7 @@
     if(view.joining&&!l)page.appendChild(joining());
     else if(mapsOpen)mapLibrary(page);
     else if(historyOpen)historyPage(page);
+    else if(cosmeticsOpen)cosmeticsPage(page);
     else if(!l)home(page);
     else if(l.match&&l.match.phase!=='final'&&!editing)matchScreen(page,l);
     else if(l.match&&l.match.phase==='final')finalScreen(page,l);
@@ -180,7 +181,7 @@
     var codeRow=node('div','mp-code-row');add(codeRow,field(input,'Room code','mp-code-field'),actions(button('Join',joinCode)));
     right.appendChild(codeRow);
     right.appendChild(steamState());
-    right.appendChild(add(node('div','mp-hero-link'),node('span','','Counter-Strike maps, ported for KovaaK’s.'),actions(button('Map library',openMaps,'compact'))));
+    right.appendChild(add(node('div','mp-hero-link'),node('span','','Counter-Strike maps, ported for KovaaK’s.'),actions(button('Map library',openMaps,'compact'),button('Cosmetics',openCosmetics,'compact quiet'))));
     hero.appendChild(left);hero.appendChild(right);
     var row=node('div','mp-row');page.appendChild(row);
     var main=node('div','mp-col mp-main'),side=node('div','mp-col mp-side');row.appendChild(main);row.appendChild(side);
@@ -463,9 +464,52 @@
     });
     return p;
   }
+  // Cosmetics: curated catalog items, shown only in AimMod matches ------------
+  var cosmeticsOpen=false,cosmeticsData=null;
+  var COSMETIC_GROUPS=[['Tints and patterns',['avatar_tint','avatar_pattern','player_model']],['Weapon finishes',['weapon_finish','weapon_pattern','weapon_model','reload_animation']],['Accessories',['accessory']]];
+  function openCosmetics(){cosmeticsOpen=true;mapsOpen=false;historyOpen=false;loadCosmetics();render();}
+  function loadCosmetics(){xhr('GET','/multiplayer?part=cosmetics',null,function(ok,data){if(ok&&data){cosmeticsData=data;if(cosmeticsOpen)render();}});}
+  function cosmeticAct(action,extra){act(action,extra,function(ok){if(ok)loadCosmetics();});}
+  function swatch(item){
+    // 2D preview: the item's colour on a body or weapon silhouette, or a ring for accessories.
+    var c=node('canvas','mp-cos-preview');c.width=160;c.height=120;var x=c.getContext&&c.getContext('2d');
+    if(x){x.scale(2,2);x.fillStyle='#101916';x.fillRect(0,0,80,60);
+      var col=item.color?'#'+item.color.map(function(v){var h=Math.round(Math.max(0,Math.min(1,v))*255).toString(16);return h.length<2?'0'+h:h;}).join(''):'#27e4a1';
+      if(item.kind.indexOf('weapon')===0||item.kind==='reload_animation'){x.fillStyle=col;x.fillRect(14,24,44,10);x.fillRect(46,30,8,16);x.fillRect(56,26,12,5);}
+      else if(item.kind==='accessory'){x.strokeStyle=col;x.lineWidth=3;x.beginPath();x.arc(40,30,9,0,Math.PI*2);x.stroke();x.fillStyle='#30433a';x.beginPath();x.arc(40,30,5,0,Math.PI*2);x.fill();}
+      else{x.fillStyle=col;x.beginPath();x.arc(40,15,7,0,Math.PI*2);x.fill();x.fillRect(31,24,18,22);x.fillRect(32,46,6,10);x.fillRect(42,46,6,10);}
+    }
+    c.setAttribute('aria-hidden','true');return c;
+  }
+  function cosmeticsPage(page){
+    var head=node('div','mp-editor-top');var t=node('div','mp-editor-title');
+    add(t,node('div','eyebrow','Multiplayer'),node('h2','','Cosmetics'),node('p','subtle','Tints, finishes and accessories made by the AimMod team. Others see the ids you pick, never files.'));
+    add(head,t,actions(button('Back',function(){cosmeticsOpen=false;render();},'primary')));page.appendChild(head);
+    page.appendChild(banner('info','Cosmetics only show in AimMod matches and while spectating them. Normal scenarios, challenges, benchmarks and ranked runs always look like the base game.'));
+    var d=cosmeticsData;
+    if(!d){page.appendChild(add(node('div','panel mp-card'),node('p','subtle','Loading the catalog…')));return;}
+    var setting=node('div','panel mp-card mp-cos-setting');
+    setting.appendChild(settingRow('Show others’ cosmetics','Only applies inside AimMod matches.',segmented([{id:'all',label:'All'},{id:'friends',label:'Friends'},{id:'off',label:'Off'}],d.show||'all',function(id){cosmeticAct('cosmetic-view',{show:id});},false,'show others')));
+    page.appendChild(setting);
+    if(!d.available){page.appendChild(add(node('div','panel mp-empty'),node('span','','The cosmetics catalog isn’t installed yet. It ships with AimMod updates.')));return;}
+    COSMETIC_GROUPS.forEach(function(g){
+      var list=(d.items||[]).filter(function(i){return g[1].indexOf(i.kind)>=0;});if(!list.length)return;
+      page.appendChild(node('h3','mp-cos-group',g[0]));
+      var grid=node('div','mp-ports');page.appendChild(grid);
+      list.forEach(function(i){
+        var cell=node('div','mp-port-cell mp-cos-cell');var card=node('div','panel mp-port mp-cos'+(i.equipped?' on':''));cell.appendChild(card);
+        card.appendChild(add(node('div','mp-cos-art'),swatch(i)));
+        var info=node('div','mp-port-info');add(info,add(node('div','mp-port-title'),node('strong','',safe(i.name,i.id)),i.equipped?chip('Equipped','mint'):null),node('span','mp-port-facts',(i.models&&i.models.length?i.models.join(', ')+' · ':'')+'Version '+i.version));
+        card.appendChild(info);
+        card.appendChild(actions(i.equipped?button('Remove',function(){cosmeticAct('cosmetic-remove',{id:i.id});},'compact quiet'):button('Equip',function(){cosmeticAct('cosmetic-equip',{id:i.id});},'compact primary')));
+        grid.appendChild(cell);
+      });
+    });
+    if(d.unavailable)page.appendChild(node('p','mp-note',d.unavailable+' more need a newer AimMod. Update to see them.'));
+  }
   // Match history and rivals --------------------------------------------------
   var historyOpen=false,history=null,openMatch=null,rivalFilter=null;
-  function openHistory(){historyOpen=true;mapsOpen=false;rivalFilter=null;openMatch=null;history=null;render();xhr('GET','/multiplayer?part=history',null,function(ok,data){if(ok&&data){history=data;if(historyOpen)render();}});}
+  function openHistory(){historyOpen=true;mapsOpen=false;cosmeticsOpen=false;rivalFilter=null;openMatch=null;history=null;render();xhr('GET','/multiplayer?part=history',null,function(ok,data){if(ok&&data){history=data;if(historyOpen)render();}});}
   function resultText(r){return r.mode==='practice'?'Practice':r.won?'Won':r.place?ordinal(r.place)+' of '+r.players:r.winner?safe(r.winner)+' won':'Draw';}
   function historyPage(page){
     var head=node('div','mp-editor-top');var t=node('div','mp-editor-title');
@@ -529,7 +573,7 @@
   }
   // Map Library: AimMod map ports here and on the Steam Workshop --------------
   var mapsOpen=false,maps=null,mapsBusy=false,mapsFilter='all';
-  function openMaps(){mapsOpen=true;historyOpen=false;picker=null;drafts.maps='';loadMaps();render();}
+  function openMaps(){mapsOpen=true;historyOpen=false;cosmeticsOpen=false;picker=null;drafts.maps='';loadMaps();render();}
   function loadMaps(){if(mapsBusy)return;mapsBusy=true;xhr('GET','/multiplayer?part=maps',null,function(ok,data){mapsBusy=false;if(!ok||!data)return;var changed=JSON.stringify(data)!==JSON.stringify(maps);maps=data;if(mapsOpen&&changed&&!focused)render();});}
   function shiftText(p){return p.shift==='walk'?'Shift walks':p.shift==='sprint'?'Shift sprints':'No Shift ability';}
   function portState(p){
