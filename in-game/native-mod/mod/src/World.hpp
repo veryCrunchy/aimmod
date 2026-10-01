@@ -84,6 +84,16 @@ namespace aimmod::game
         std::optional<double> shots, hits, kills, damage, lastTimeToKill;
     };
     LocalCounters ReadLocalCounters(UObject* character);
+
+    // Per-weapon session counters (slot = index in GetWeapons, duplicates
+    // skipped). False when any counter is unavailable.
+    struct WeaponCount
+    {
+        UObject* weapon{};
+        int slot{};
+        double shots{}, hits{};
+    };
+    bool ReadWeaponCounters(UObject* character, std::vector<WeaponCount>& out);
 } // namespace aimmod::game
 
 namespace aimmod

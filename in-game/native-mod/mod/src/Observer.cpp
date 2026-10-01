@@ -101,7 +101,8 @@ namespace aimmod
     Observer::Observer(Output& output, std::string version)
         : m_output(output), m_version(std::move(version)),
           m_lifecycle(std::to_string(static_cast<long long>(std::time(nullptr))) + "-" + std::to_string(GetCurrentProcessId())),
-          m_sampler(m_b, m_scene, output), m_presenter(m_b, m_scene, output), m_control(m_b, m_scene, output)
+          m_sampler(m_b, m_scene, output), m_presenter(m_b, m_scene, output), m_control(m_b, m_scene, output),
+          m_match(m_b, m_scene, output)
     {
     }
 
@@ -122,6 +123,8 @@ namespace aimmod
         if (m_control.canLoad()) caps += caps.empty() ? "load" : ",load";
         if (m_control.canStart()) caps += caps.empty() ? "start" : ",start";
         if (m_control.canCapture()) caps += caps.empty() ? "capture" : ",capture";
+        if (m_b.replayReady()) caps += ",shots";
+        if (m_b.replayReady() && m_match.available()) caps += ",match-play";
         return caps;
     }
 
@@ -593,6 +596,11 @@ namespace aimmod
             Poll(now);
         }
         m_control.Tick(now, m_scenarioName, m_inChallenge, m_loading);
+        {
+            const bool wasAvailable = m_match.available();
+            m_match.Tick(now, m_scenarioName, m_inChallenge, m_loading, [this](UObject* actor) { return PoseId(actor); }, m_poseNames);
+            if (wasAvailable != m_match.available()) m_output.SetCapabilities(Capabilities());
+        }
         PollClipKey();
         if (m_output.poseRequested() && now >= m_nextPose)
         {
@@ -625,6 +633,24 @@ namespace aimmod
         if (owner != self) return;
         if (m_sampler.Mark()) Log("clip marked (" + clips.key + "); saved when the run completes");
         else Log("clip key pressed outside a recorded run; nothing marked");
+    }
+
+    // Stable per-session target id of an actor (self-pose and self-shots).
+    std::uint32_t Observer::PoseId(UObject* actor)
+    {
+        const auto key = reinterpret_cast<std::uint64_t>(actor) ^ (static_cast<std::uint64_t>(actor->GetInternalIndex()) << 47);
+        auto it = m_poseIds.find(key);
+        if (it == m_poseIds.end())
+        {
+            if (m_poseIds.size() >= 4096) // bounded: ids restart, stale names dropped
+            {
+                m_poseIds.clear();
+                m_poseNames.clear();
+            }
+            it = m_poseIds.emplace(key, ++m_nextPoseId).first;
+            m_poseNames[it->second] = game::ObjectName(actor);
+        }
+        return it->second;
     }
 
     // Local view for spectators (60 Hz samples, published 30 Hz): pose format 1.
@@ -696,17 +722,11 @@ namespace aimmod
                 auto half = capsule ? m_b.capsuleHalfHeight.Number(capsule) : std::nullopt;
                 double p[3];
                 if (!radius || !half || *radius <= 0 || *half < *radius || !m_b.actorLocation.Vector(actor, p)) continue;
-                const auto key = reinterpret_cast<std::uint64_t>(actor) ^ (static_cast<std::uint64_t>(actor->GetInternalIndex()) << 47);
-                auto it = m_poseIds.find(key);
-                if (it == m_poseIds.end())
-                {
-                    it = m_poseIds.emplace(key, ++m_nextPoseId).first;
-                    m_poseNames[it->second] = game::ObjectName(actor);
-                }
+                const std::uint32_t id = PoseId(actor);
                 if (!avatars->empty())
-                    if (auto tag = avatars->find(m_poseNames[it->second]); tag != avatars->end())
-                        tags += "tag\t" + std::to_string(it->second) + "\t" + tag->second + "\n";
-                body += "target\t" + std::to_string(it->second) + "\t" + FormatNumber(p[0], 7) + "\t" + FormatNumber(p[1], 7) + "\t" + FormatNumber(p[2], 7) +
+                    if (auto tag = avatars->find(m_poseNames[id]); tag != avatars->end())
+                        tags += "tag\t" + std::to_string(id) + "\t" + tag->second + "\n";
+                body += "target\t" + std::to_string(id) + "\t" + FormatNumber(p[0], 7) + "\t" + FormatNumber(p[1], 7) + "\t" + FormatNumber(p[2], 7) +
                         "\t" + FormatNumber(*radius, 7) + "\t" + FormatNumber(*half, 7) + "\n";
             }
         m_output.PublishSelfPose(std::move(body) + tags);

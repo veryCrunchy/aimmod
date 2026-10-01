@@ -76,4 +76,31 @@ namespace aimmod::game
         }
         return out;
     }
+
+    bool ReadWeaponCounters(UObject* character, std::vector<WeaponCount>& out)
+    {
+        out.clear();
+        if (!character) return false;
+        UObject* handler = Describe(character).weaponHandler.Object(character);
+        if (!handler) return false;
+        std::vector<UObject*> weapons;
+        if (!Describe(handler).weapons.Objects(handler, weapons, 32)) return false;
+        for (std::size_t i = 0; i < weapons.size(); ++i)
+        {
+            UObject* weapon = weapons[i];
+            bool duplicate = false;
+            for (const WeaponCount& c : out) duplicate |= c.weapon == weapon;
+            if (duplicate || !weapon) continue;
+            const ClassInfo& w = Describe(weapon);
+            auto fired = w.shotsFired.Number(weapon);
+            auto hit = w.shotsHit.Number(weapon);
+            if (!fired || !hit || *fired < 0 || *hit < 0)
+            {
+                out.clear();
+                return false;
+            }
+            out.push_back({weapon, static_cast<int>(i), *fired, *hit});
+        }
+        return !out.empty();
+    }
 } // namespace aimmod::game

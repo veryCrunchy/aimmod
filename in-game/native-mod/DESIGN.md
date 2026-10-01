@@ -390,6 +390,75 @@ Rules:
 - Target size/speed and time scale semantics (adaptive override profile,
   global time dilation) are the first live-verified items of test #4.
 
+## Match play (damage modes)
+
+Deathmatch, vampiric 1v1 and instagib are host-authoritative: each player
+reports their shots, the host decides hits, damage and deaths, and every
+player's AimModCore applies the host's verdict to its own character.
+Capabilities `shots` and `match-play` (the latter drops when the character
+bindings are missing).
+
+`self-shots.tsv` (written while `self-shots.request` was touched within the
+last 5 s; deleted when the request lapses; atomic replace on every new shot):
+
+```
+AIMMOD_SHOTS_1	<publish seq>	<session>
+shot	<unix ms>	<shot seq>	<ox>	<oy>	<oz>	<dx>	<dy>	<dz>	<slot>	<target>	<headshot 0/1>	<gameHit 0/1>
+tag	<target id>	<stream id>
+```
+
+- Shots are detected by polling every weapon's `ShotsFiredThisSession` each
+  frame (up to 8 per weapon per frame); `slot` is the weapon's index in
+  `WeaponHandler:GetWeapons`. A new character or weapon set only resets the
+  baseline. `gameHit` is set for as many shots as `ShotsHitThisSession`
+  advanced in the same frame (the game's own verdict, for cross-checks).
+- The ray is the camera at the frame the counter advanced (origin in cm,
+  unit direction from pitch/yaw). `target` is the nearest visible
+  character capsule the ray meets, by self-pose target id (the same ids as
+  `self-pose.tsv`), 0 for none; `headshot` = the hit point is in the top
+  fifth of the capsule. No world occlusion test: the host checks line of
+  sight if the mode needs it. `tag` rows map hit avatars to stream ids
+  (`avatars.tsv`).
+- The window holds the last 32 shots, at most 3 s old. `shot seq` is
+  monotonic within `session` (a new session restarts it); readers dedupe by
+  it.
+
+`play-state.tsv` (written by the service, atomic replace; AimModCore polls it
+every 15 ms while in use and treats a file not rewritten for 5 s as gone, so
+the service rewrites it at least every 2 s):
+
+```
+AIMMOD_PLAYSTATE_1	<state seq>
+match	<scenario name>
+health	<current>	<max>
+alive	<0/1>
+respawnAt	<unix ms, 0 = none>
+protected	<0/1>
+hit	<hit seq>	<attacker member id>	<damage>	<headshot 0/1>	<dx>	<dy>	<dz>
+```
+
+Any malformed or unknown row rejects the whole file. Applied only when the
+current scenario starts with `AimMod Match - `, equals `match`, the game is
+in freeplay and not loading; never in a challenge or any other scenario
+(leaving the gate releases spawn protection and logs the reason). On each new
+`state seq`, through the character's own functions (`MetaCharacter`):
+
+- `protected` -> `OverrideInvulnerable` (`ResetInvulnerable` on release).
+- A new `hit seq` -> `HandleDamage(amount, null attacker, origin, 0)` for the
+  game's hit effect, with `origin` 1 m back along the hit direction, no
+  knockback, and the amount capped below the current health so it is never
+  lethal by itself. A hit already present when the gate opens is not replayed.
+- `alive` 1 -> 0 -> `OnCharacterKilled`, and `SetRespawnTimer` to
+  `respawnAt` when bound; 0 -> 1 -> `Respawn(true)` unless the native timer
+  already brought the character back. Where it respawns is the game's choice.
+- While alive, health follows `health` (`SetHealth`, checked every 250 ms, so
+  local regeneration or damage is undone).
+
+If `HandleDamage`, `SetHealth`, `Respawn`, `OnCharacterKilled`,
+`OverrideInvulnerable`, `ResetInvulnerable` or `GetCurrentHealth` is missing on
+the character class, match play is disabled for the session and the missing
+names are logged.
+
 ## Match seeds (shared randomness)
 
 Findings (3.9.11 dumps and imports):
