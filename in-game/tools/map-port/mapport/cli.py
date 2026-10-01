@@ -9,7 +9,7 @@ import sys
 from typing import List, Optional
 
 from . import (archive, bsp, checks, cleanup, csmap, goldsrc, kovaaks_json, materials, naming, objectives, preview, quake3,
-               reflex, scenario, spawns, thumbnail, views, vmf)
+               reflex, scenario, spawns, tags, thumbnail, views, vmf)
 
 
 def _safe_name(name: str) -> str:
@@ -98,9 +98,13 @@ def convert_file(path: str, out: str, args) -> dict:
             fh.write(text)
         report["files"]["map_json"] = os.path.relpath(mp, out)
         if not args.no_scenario:
-            sce = scenario.build(sce_name, base + ".json", text, args.map_scale, mv, args.bots,
-                                 f"Port of {os.path.basename(path)}. Movement: {mv.label}. "
-                                 f"Shift: {mv.shift}, Ctrl: crouch.")
+            features = tags.feature_tags(sc.gameobjects)
+            classnames = [e.get("classname", "") for e in sc.entities] + [e.get("classname", "") for e, _ in sc.volumes]
+            search = tags.search_tags(mapid, game, mv.model, mv.clamp_air_speed, variant, sc.gameobjects, classnames)
+            desc = tags.description(display, game, mv.label, mv.shift, features, os.path.basename(path))
+            sce = scenario.build(sce_name, base + ".json", text, args.map_scale, mv, args.bots, desc, search)
+            report["tags"] = search
+            report["description"] = desc
             sp = os.path.join(out, "Scenarios", sce_name + ".sce")
             os.makedirs(os.path.dirname(sp), exist_ok=True)
             with open(sp, "w", encoding="utf-8", newline="") as fh:

@@ -47,6 +47,9 @@ static partial class MatchScenario
     // Written into every generated scenario; cleanup removes only files that carry it.
     public const string Marker = "AimMod multiplayer match generated from ";
     public const string Tag = "AimMod Match";
+    // SearchTags of generated arenas: AimMod's own tags only, so they stay out of the
+    // player's usual game and map-type filters (the base port carries those).
+    public const string Tags = "AimMod, " + Tag;
     [GeneratedRegex(@"^AimMod Match - .{1,80} - [0-9a-f]{8}\.sce$")] private static partial Regex FilePattern();
     public static bool IsGeneratedName(string fileName) => FilePattern().IsMatch(fileName);
 
@@ -131,8 +134,7 @@ static partial class MatchScenario
         var name = Name(s);
         header.Set("Name", name);
         header.Set("Description", Marker + (s.Scenario?.Name ?? "a scenario") + ". Temporary: AimMod removes it after the match. Played in freeplay; not a published scenario.");
-        // Only our own tag, so match scenarios stay out of the player's usual tag filters.
-        header.Set("SearchTags", Tag);
+        header.Set("SearchTags", Tags);
         if (s.TimeLimit is { } limit) header.Set("Timelimit", Num(limit));
         var playerName = header.Get("PlayerProfile");
         var characters = sections.Where(x => x.Title == "[Character Profile]").ToList();

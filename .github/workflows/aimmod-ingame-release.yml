@@ -92,7 +92,7 @@ jobs:
 
   build:
     needs: metadata
-    runs-on: windows-latest
+    runs-on: windows-2022 # the build uses the Visual Studio 2022 generator
     env:
       VERSION: ${{ needs.metadata.outputs.version }}
       CHANNEL: ${{ needs.metadata.outputs.channel }}

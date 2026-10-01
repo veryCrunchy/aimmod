@@ -35,6 +35,7 @@ static partial class MultiplayerChecks
         SteamPipe();
         Follow();
         DevAvatarChecks();
+        AvatarChecks();
         Boards();
         CsTeams();
         Marker();
@@ -849,6 +850,8 @@ static partial class MultiplayerChecks
         public bool WorkshopDownload(string item) => false;
         public readonly List<string> DevAvatars = [];
         public bool DevAvatar(bool on, string mode, string? profile = null) { DevAvatars.Add((on ? "on " : "off ") + mode + (profile is null ? "" : " " + profile)); return true; }
+        public readonly List<(string Peer, string? Have)> AvatarAsks = [];
+        public bool RequestAvatar(string peer, string? have) { AvatarAsks.Add((peer, have)); return true; }
         // Bulk lane stand-in: chunks arrive in order; DropAfter cuts a transfer short like a lost link.
         public int BulkChunkBytes { get; set; }
         public int DropAfter = -1, BulkSent;
@@ -1617,7 +1620,12 @@ static partial class MultiplayerChecks
         for (var i = 0; i < 3; i++) store.Write(MatchScenario.Prefix + "Synthetic A - CS - 1111111" + i, "g" + i, 10 + i);
         Check(store.Files().Count == 2 && !File.Exists(Path.Combine(folder, MatchScenario.Name(cs) + ".sce")) && File.Exists(Path.Combine(folder, taken + ".sce")), "Old match scenarios are cleaned up, user files kept");
         // Temporary and marked: own tag, marker description; cleanup removes only marked, generated names.
-        Check(one.Contains("SearchTags=" + MatchScenario.Tag + "\n") && one.Contains("Description=" + MatchScenario.Marker + "Synthetic A.") && !BaseScenario.Contains("SearchTags"), "Match scenarios carry only the AimMod Match tag and the generated marker");
+        Check(one.Contains("SearchTags=AimMod, AimMod Match\n") && one.Contains("Description=" + MatchScenario.Marker + "Synthetic A.") && !BaseScenario.Contains("SearchTags"), "Match scenarios carry only the AimMod and AimMod Match tags and the generated marker");
+        Check(ContentLibrary.IsMapPort("AimMod - Aerowalk (Q3) - Quake Movement", new Dictionary<string, string> { ["Description"] = "Aerowalk from Quake 3, ported to KovaaK's by AimMod." })
+              && ContentLibrary.IsMapPort("Old", new Dictionary<string, string> { ["Description"] = "Ported Source map with Counter-Strike movement." })
+              && ContentLibrary.IsMapPort("Renamed", new Dictionary<string, string> { ["SearchTags"] = "AimMod, Map port, Quake 3" })
+              && !ContentLibrary.IsMapPort("1wall6targets TE", new Dictionary<string, string> { ["SearchTags"] = "Clicking, Map ported" })
+              && !ContentLibrary.IsMapPort(MatchScenario.Prefix + "x - 0a1b2c3d", new Dictionary<string, string> { ["SearchTags"] = MatchScenario.Tags }), "map ports are recognised by name, tag or the old description");
         var marked = MatchScenario.Prefix + "Old Base - Timed - ab93b242";
         WriteText(Path.Combine(folder, marked + ".sce"), "Name=" + marked + "\nDescription=" + MatchScenario.Marker + "Old Base. Played in freeplay; not a published scenario.\nSearchTags=KovaaK, Reflex\n\n[Map Data]\n");
         var lookalike = MatchScenario.Prefix + "Mine - Timed - 12345678";

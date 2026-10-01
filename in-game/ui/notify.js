@@ -43,11 +43,28 @@
       if(n.cs&&!root.AimModCsHud)strips.appendChild(csHud(n.cs));
       if(n.badge){var b=node('div','badge');b.appendChild(node('span','eye'));b.appendChild(node('span','',n.badge));strips.appendChild(b);}
     }
-    var tk=n.active?JSON.stringify([n.id,n.kind,n.eyebrow,n.title,n.body,n.note,n.key,n.countdown,n.actions]):'';
-    if(tk===toastKey)return;
-    toastKey=tk;clear(card);
+    var tk=n.active?JSON.stringify([n.id,n.kind,n.eyebrow,n.title,n.body,n.note,n.key,n.countdown,n.actions,n.person?n.person.name:null]):'';
+    // A picture that arrives later goes into the circle already there, without rebuilding the buttons.
+    if(tk===toastKey){if(n.active)picture(n.person&&n.person.avatar);return;}
+    toastKey=tk;clear(card);who=whoImg=whoUrl=null;
     if(!n.active)return;
     card.appendChild(toast(n));
+  }
+  // Who the notice is about: initials in a circle, covered by their Steam picture once it loads.
+  var who=null,whoImg=null,whoUrl=null,pictures={},TONES=['mint','cyan','amber','violet','rose'];
+  function initials(name){var clean=String(name||'?'),parts=clean.replace(/[_.()\[\]-]+/g,' ').trim().split(/\s+/);if(!parts[0])return clean.replace(/\s+/g,'').slice(0,2)||'?';var a=(parts[0]||'?').charAt(0),b=parts.length>1?parts[parts.length-1].charAt(0):(parts[0]||'').charAt(1);return (a+(b||'')).toUpperCase();}
+  function tone(name){var h=0,s=String(name||'');for(var i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))%9973;return TONES[h%TONES.length];}
+  function person(p){var a=node('div','who '+tone(p.name),initials(p.name));a.setAttribute('aria-hidden','true');return a;}
+  function picture(url){
+    if(!who)return;if(typeof url!=='string'||!/^\/avatar\/[0-9]{16,20}\.png(\?v=[0-9a-f]{8})?$/.test(url)||pictures[url]===false)url=null;
+    if(url===whoUrl)return;whoUrl=url;
+    var circle=who,cls=circle.className.replace(' pic','');circle.className=cls;
+    if(whoImg)circle.removeChild(whoImg);whoImg=null;
+    if(!url)return;
+    var img=whoImg=node('img','who-img');img.setAttribute('alt','');img.draggable=false;if(pictures[url])circle.className=cls+' pic';
+    img.onload=function(){pictures[url]=true;if(whoImg===img)circle.className=cls+' pic';};
+    img.onerror=function(){pictures[url]=false;if(whoImg!==img)return;whoImg=null;whoUrl=null;circle.className=cls;circle.removeChild(img);};
+    img.src=base()+url;circle.appendChild(img);
   }
   function toast(n){
     var card=node('div','toast'+(n.actions&&n.actions.length?' has-actions':''));
@@ -56,6 +73,7 @@
     var top=node('div','brand',n.eyebrow?String(n.eyebrow).toUpperCase():(/^(t(ci|m[a-z])|fr|dev)-/.test(String(n.id||''))?brand(n):brands[n.kind]||brand(n)));card.appendChild(top);
     var row=node('div','row');
     if(typeof n.countdown==='number')row.appendChild(node('div','count',String(n.countdown)));
+    else if(n.person&&n.person.name){who=row.appendChild(person(n.person));whoUrl=null;picture(n.person.avatar);}
     var text=node('div','text');text.appendChild(node('div','title',n.title||''));text.appendChild(node('div','body',n.body||''));if(n.note)text.appendChild(node('div','note',n.note));row.appendChild(text);
     if(n.key)row.appendChild(node('div','key',n.key));
     card.appendChild(row);

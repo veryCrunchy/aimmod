@@ -18,6 +18,10 @@ sealed record GameNotice(string Id, string Kind, string Title, string Body, stri
     // The small label above the title; the notice layer picks one by kind when it's empty.
     public string? Eyebrow { get; init; }
     public IReadOnlyList<NoticeAction>? Actions { get; init; }
+    // Who the notice is about (invites, watch requests, friends): the notice layer shows their
+    // Steam picture, or their initials until it arrives. Peer is never sent to the UI as such.
+    public string? Peer { get; init; }
+    public string? PeerName { get; init; }
     // A short extra line under the body, such as a keybind that differs from KovaaK's default.
     public string? Note { get; init; }
 }

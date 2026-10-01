@@ -28,12 +28,15 @@ APP_ID = 824270
 TITLE_MAX = 128          # k_cchPublishedDocumentTitleMax
 DESCRIPTION_MAX = 8000   # k_cchPublishedDocumentDescriptionMax
 CHANGE_NOTE_MAX = 8000   # k_cchPublishedDocumentChangeDescriptionMax
-TAG_MAX = 255            # k_cchTagListMax per tag
+TAG_MAX = 255            # longest single tag ISteamUGC::SetItemTags takes
+TAG_LIST_MAX = 1024      # k_cchTagListMax (1024 + 5): all tags with separators
+TAG_COUNT_MAX = 16       # the map-port's own cap (mapport/tags.py)
 PREVIEW_MAX_BYTES = 1024 * 1024
 VISIBILITY = {"public": 0, "friends": 1, "private": 2, "unlisted": 3}
 GAMES = {"CSGO": ("CS:GO", "Counter-Strike: Global Offensive"), "CSS": ("CS:S", "Counter-Strike: Source"),
-         "CS2": ("CS2", "Counter-Strike 2"), "GMod": ("GMod", "Garry's Mod")}
-NAME = re.compile(r"^AimMod - (?P<map>.+) \((?P<game>CSGO|CSS|CS2|GMod)\) - (?P<variant>.+)$")
+         "CS2": ("CS2", "Counter-Strike 2"), "CS16": ("CS 1.6", "Counter-Strike 1.6"), "GMod": ("GMod", "Garry's Mod"),
+         "Q3": ("Q3", "Quake 3"), "QL": ("QL", "Quake Live")}
+NAME = re.compile(r"^AimMod - (?P<map>.+) \((?P<game>CSGO|CSS|CS2|CS16|GMod|Q3|QL)\) - (?P<variant>.+)$")
 
 
 class BundleError(ValueError):
@@ -67,19 +70,30 @@ def _split(value: str) -> List[str]:
 
 
 def tags_for(sce: Dict[str, str], game: str) -> List[str]:
-    """Suggested tags from the scenario's own tag fields. The in-game uploader may set its own."""
+    """Suggested tags: the scenario's SearchTags (map-port puts AimMod, Map port and the game first),
+    then its aim type tags and the short game tag. The in-game uploader may set its own."""
     tags: List[str] = []
-    for value in [sce.get("AimTypeTag", ""), sce.get("AimSubTypeTag", ""), *_split(sce.get("SearchTags", "")),
-                  "AimMod", "Map Port", GAMES.get(game, (game,))[0]]:
+    total = 0
+    for value in ["AimMod", "Map port", *_split(sce.get("SearchTags", "")), sce.get("AimTypeTag", ""),
+                  sce.get("AimSubTypeTag", ""), GAMES.get(game, (game,))[0]]:
         value = value.strip()
-        if value and len(value) <= TAG_MAX and value.lower() not in {t.lower() for t in tags}:
-            tags.append(value)
-    return tags[:10]
+        if not value or len(value) > TAG_MAX or value.lower() in {t.lower() for t in tags}:
+            continue
+        if len(tags) >= TAG_COUNT_MAX or total + len(value) + 1 > TAG_LIST_MAX:
+            break
+        tags.append(value)
+        total += len(value) + 1
+    return tags
 
 
 def description_for(title: str, map_id: str, game: str, variant: str, source: Source, report: dict) -> str:
     short, full = GAMES.get(game, (game, game))
-    movement = "Counter-Strike movement (Shift walks, Ctrl crouches)" if "CS" in variant else variant
+    if variant.startswith("Quake"):
+        movement = "Quake movement (strafe jumping, Ctrl crouches)"
+    elif variant.startswith("CS"):
+        movement = "Counter-Strike movement (Shift walks, Ctrl crouches)"
+    else:
+        movement = variant
     lines = [
         f"[h1]{title}[/h1]",
         f"A KovaaK's port of [b]{map_id}[/b] from {full} with {movement}.",

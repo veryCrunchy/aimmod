@@ -169,7 +169,7 @@ sealed partial class ContentLibrary : IContentResolver
                     var name = header.GetValueOrDefault("Name") is { Length: > 0 and <= 128 } n ? n : Path.GetFileNameWithoutExtension(file);
                     var mapName = header.GetValueOrDefault("MapName") ?? "";
                     var limit = double.TryParse(header.GetValueOrDefault("Timelimit"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var t) && t is > 0 and <= 3600 ? t : 60;
-                    var ported = (header.GetValueOrDefault("Description") ?? "").StartsWith("Ported Source map", StringComparison.OrdinalIgnoreCase);
+                    var ported = IsMapPort(name, header);
                     if (ported && mapName.Length > 0) portedMaps.Add(Path.GetFileNameWithoutExtension(mapName));
                     found.Add((new ScenarioInfo(name, hash, Path.GetFileNameWithoutExtension(mapName), "", "game", limit, header.GetValueOrDefault("~weapon"), header.GetValueOrDefault("PlayerProfile"), ported, workshop,
                         double.TryParse(header.GetValueOrDefault("MapScale"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var scale) && scale is > 0 and < 100 ? scale : 1), file));
@@ -215,6 +215,17 @@ sealed partial class ContentLibrary : IContentResolver
 
     static IEnumerable<string> Files(string folder, string pattern) =>
         Directory.Exists(folder) ? Directory.EnumerateFiles(folder, pattern, SearchOption.TopDirectoryOnly).Take(MaxItems) : [];
+
+    // A map-port scenario: its fixed name ("AimMod - <Map> (<Game>) - <Variant>", mapport/naming.py),
+    // the "Map port" search tag, or the description older ports were written with.
+    internal static bool IsMapPort(string name, IReadOnlyDictionary<string, string> header)
+    {
+        if (name.StartsWith(MatchScenario.Prefix, StringComparison.OrdinalIgnoreCase)) return false;
+        if (name.StartsWith("AimMod - ", StringComparison.Ordinal)) return true;
+        var tags = (header.GetValueOrDefault("SearchTags") ?? "").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (tags.Any(t => t.Equals("Map port", StringComparison.OrdinalIgnoreCase))) return true;
+        return (header.GetValueOrDefault("Description") ?? "").StartsWith("Ported Source map", StringComparison.OrdinalIgnoreCase);
+    }
 
     // Header keys come before the first [Section]. The player's default weapon
     // is the first weapon of the [Character Profile] named by PlayerProfile.
