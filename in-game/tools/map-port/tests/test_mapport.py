@@ -286,7 +286,8 @@ class Quake3Tests(unittest.TestCase):
                 self.assertEqual(kinds, [scene.CLIP, scene.SOLID])
                 self.assertGreaterEqual(sc.stats.get("kept_patch_slabs", 0), 2)
                 top = max(p[2] for b in sc.brushes if b.source == "patch" for f in b.faces for p in f.polygon)
-                self.assertAlmostEqual(top, 64.0, delta=6.0)  # bezier peak of a 128-high control point
+                # bezier peak of a 128-high control point is 64; the slab grows away from the visible (lower) side
+                self.assertTrue(58.0 <= top <= 64.0 + quake3.PATCH_THICKNESS + 6.0, top)
                 self.assertEqual([s.origin[2] for s in sc.spawns], [0.0, 0.0])  # 24 above the feet
                 kinds = sorted(go["kind"] for go in sc.gameobjects)
                 self.assertEqual(kinds, ["jumppad", "waypoint"])
@@ -331,6 +332,93 @@ class GoldSrcTests(unittest.TestCase):
         self.assertEqual(materials.rule_for(top.texture, materials.load_table())["category"], "sand")
         teams = sorted((s.team, s.origin[2]) for s in sc.spawns)
         self.assertEqual(teams, [(1, 0.0), (2, 0.0)])
+
+
+def _vec(text: str):
+    return tuple(float(v) for v in text.split(","))
+
+
+def _object_box(o: dict):
+    """World box (Unreal axes, map units) a map-creator object covers, from the game's own meshes:
+    Water is a centred 200-unit cube, Hurt / JumpPad / Teleporter a 100-unit cube on its min corner."""
+    loc, scale = _vec(o["location"]), _vec(o["scale"])
+    if o["name"] == "Water":
+        half = [s * kovaaks_json.WATER_MESH / 2 for s in scale]
+        return tuple(loc[k] - half[k] for k in range(3)), tuple(loc[k] + half[k] for k in range(3))
+    size = [s * kovaaks_json.VOLUME_MESH for s in scale]
+    return loc, tuple(loc[k] + size[k] for k in range(3))
+
+
+def _ue_box(lo, hi):
+    """Source AABB -> Unreal AABB (Y mirrored)."""
+    return (lo[0], -hi[1], lo[2]), (hi[0], -lo[1], hi[2])
+
+
+class LiquidTests(unittest.TestCase):
+    POOL = ((-48.0, 0.0, 4.0), (40.0, 64.0, 14.0))  # a pool on the fixture floor (top at z=16)
+
+    def assertBox(self, got, want):
+        for a, b in zip(got[0] + got[1], want[0] + want[1]):
+            self.assertAlmostEqual(a, b, places=2)
+
+    def test_water_covers_the_brush_exactly(self):
+        sc = scene.Scene(name="w")
+        scene.add_liquid(sc, "water", [(0.0, 0.0, -96.0), (200.0, 100.0, -40.0)])
+        doc = kovaaks_json.build(sc, [], {}, 2, 1.0, 4.0)
+        water = next(o for o in doc["objects"] if o.get("name") == "Water")
+        self.assertEqual(water["location"], "100, -50, -68")
+        self.assertEqual(water["scale"], "1, 0.5, 0.28")
+        self.assertEqual(water["rotation"], "0, 0, 0")
+        box = _object_box(water)
+        self.assertBox(box, _ue_box((0.0, 0.0, -96.0), (200.0, 100.0, -40.0)))
+        self.assertAlmostEqual(box[1][2], -40.0, places=3)  # the surface is the brush's top face
+        props = {p["name"]: p["value"] for p in water["properties"]}
+        self.assertEqual(props["WaveHeight"], 0.0)  # no waves lifting the surface above the brush
+        for name in ("BaseColor", "DepthFadeColor", "HighlightColor1", "HighlightColor2",
+                     "RippleShadowColor", "RippleHighlightColor", "MurkColor"):
+            self.assertRegex(props[name], r"^[0-9a-f]{8}$")
+
+    def test_hurt_and_pads_use_corner_pivots(self):
+        sc = scene.Scene(name="h")
+        lava = [(0.0, 0.0, 0.0), (200.0, 100.0, 50.0)]
+        scene.add_liquid(sc, "lava", lava)
+        scene.add_liquid(sc, "hurt", lava, damage=5.0)
+        sc.gameobjects.append({"kind": "jumppad", "origin": (10.0, 20.0, 8.0), "size": (64.0, 32.0, 16.0),
+                               "name": "pad", "target": "t", "yaw": 0.0})
+        sc.gameobjects.append({"kind": "teleporter", "origin": (0.0, 0.0, 64.0), "size": (32.0, 32.0, 128.0),
+                               "name": "tp", "target": "t", "yaw": 0.0})
+        doc = kovaaks_json.build(sc, [], {}, 2, 1.0, 4.0)
+        hurts = [o for o in doc["objects"] if o.get("name") == "Hurt"]
+        self.assertEqual(len(hurts), 2)
+        for h in hurts:
+            self.assertBox(_object_box(h), _ue_box(*lava))
+        kill = {p["name"]: p["value"] for p in hurts[0]["properties"]}
+        self.assertTrue(kill["Kill"])
+        hurt = {p["name"]: p["value"] for p in hurts[1]["properties"]}
+        self.assertFalse(hurt["Kill"])
+        self.assertEqual(hurt["Damage"], 5.0)
+        pad = next(o for o in doc["objects"] if o.get("name") == "JumpPad")
+        self.assertBox(_object_box(pad), _ue_box((-22.0, 4.0, -4.5), (42.0, 36.0, 20.5)))  # 25 thick
+        tp = next(o for o in doc["objects"] if o.get("name") == "Teleporter")
+        self.assertBox(_object_box(tp), _ue_box((-16.0, -16.0, 0.0), (16.0, 16.0, 128.0)))
+
+    def test_source_water_brush_becomes_water(self):
+        sc = bsp.load(synthetic.build_bsp(with_displacement=False, water=self.POOL), "pool")
+        waters = [go for go in sc.gameobjects if go["kind"] == "water"]
+        self.assertEqual(len(waters), 1)
+        self.assertEqual(sc.stats.get("water_volumes"), 1)
+        self.assertFalse(any(b.kind == scene.SOLID and b.bounds()[1][2] == 14.0 for b in sc.brushes))  # not a solid
+        doc = kovaaks_json.build(sc, [], {}, 2, 1.0, 4.0)
+        water = next(o for o in doc["objects"] if o.get("name") == "Water")
+        self.assertBox(_object_box(water), _ue_box(*self.POOL))
+        # Map scale: the scenario's MapScale multiplies the locations and the object scale alike.
+        doc4 = kovaaks_json.build(sc, [], {}, 2, 1.0, 5.0)
+        self.assertEqual(next(o for o in doc4["objects"] if o.get("name") == "Water")["scale"], water["scale"])
+
+    def test_goldsrc_fixture_has_no_water(self):
+        from mapport import goldsrc
+        sc = goldsrc.load(synthetic.build_goldsrc(), "g")
+        self.assertFalse(any(go["kind"] == "water" for go in sc.gameobjects))
 
 
 class CheckTests(unittest.TestCase):
@@ -449,7 +537,11 @@ class ScenarioTests(unittest.TestCase):
         self.assertEqual(kv["MapScale"], "4.0")
         self.assertEqual(kv["MaxSpeed"], "1000.0")
         self.assertEqual(kv["StepUpHeight"], "72.0")
-        self.assertEqual(kv["EnableQuakeMovement"], "true")
+        # CS presets use Unreal movement so the Shift (Ability 1) walk multiplier applies
+        self.assertEqual(kv["EnableQuakeMovement"], "false")
+        self.assertEqual(kv["BrakingDeceleration"], "1200.0")
+        quake = scenario.build("Q", "q.json", "{}", 4.0, scenario.PRESETS["quake"])
+        self.assertIn("EnableQuakeMovement=true", quake)
         self.assertEqual(kv["ScaledGroundAcceleration"], "5.20")
         self.assertEqual(kv["ContinuousGroundFriction"], "4.00")
         jump = float(kv["JumpVelocityMax"])

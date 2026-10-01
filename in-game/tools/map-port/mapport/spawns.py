@@ -9,11 +9,12 @@ from . import scene
 
 FLOOR_GAP = 4.0   # the hull is tested from this far above the spawn origin (feet)
 # Player hull used by every check; set from the movement preset (CS 32 x 72, Quake 30 x 56).
-HULL = {"half": 16.0, "height": 72.0}
+HULL = {"half": 16.0, "height": 72.0, "crouch": 54.0}
 
 
-def configure(radius: float, height: float) -> None:
+def configure(radius: float, height: float, crouch: float = 0.0) -> None:
     HULL["half"], HULL["height"] = float(radius), float(height)
+    HULL["crouch"] = float(crouch or height)
 BLOCKING = (scene.SOLID, scene.CLIP, scene.GLASS)
 
 
@@ -29,9 +30,9 @@ def _solids(sc: scene.Scene) -> List[_Solid]:
     return [_Solid(b) for b in sc.brushes if b.kind in BLOCKING]
 
 
-def hull_box(feet, gap: float = FLOOR_GAP) -> Tuple[tuple, tuple]:
+def hull_box(feet, gap: float = FLOOR_GAP, crouched: bool = False) -> Tuple[tuple, tuple]:
     x, y, z = feet
-    h, r = HULL["height"], HULL["half"]
+    h, r = HULL["crouch" if crouched else "height"], HULL["half"]
     return ((x - r, y - r, z + gap), (x + r, y + r, z + gap + h))
 
 
