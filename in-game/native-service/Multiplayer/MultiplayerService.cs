@@ -243,6 +243,8 @@ sealed partial class MultiplayerService : IDisposable
                     return FriendNotice(action, Text("id"));
                 case "cosmetic-equip" or "cosmetic-remove" or "cosmetic-view":
                     return CosmeticAction(action, args);
+                case "leave-run-cancel" or "leave-run-now":
+                    return LeaveRunAction(action);
                 case "favourite":
                     return Favourite(Text("scenario"), !(args.TryGetProperty("on", out var favOn) && favOn.ValueKind == JsonValueKind.False));
                 case "settings" when core is not null && args.ValueKind == JsonValueKind.Object && args.TryGetProperty("settings", out var pickedSettings) && pickedSettings.ValueKind == JsonValueKind.Object
@@ -786,6 +788,7 @@ sealed partial class MultiplayerService : IDisposable
     GameNotice? ComputeNotice(long now)
     {
         if (DevNoticeNow(now) is { } dev) return dev;
+        if (LeaveNotice(now) is { } leaving) return leaving;
         var key = HotkeyName;
         // Quiet while the player runs a ranked scenario of their own: no invite or ready popups.
         var quiet = OwnRankedRun();
@@ -834,6 +837,7 @@ sealed partial class MultiplayerService : IDisposable
         {
             var now = clock();
             var notice = ComputeNotice(now);
+            if (notice?.Id.StartsWith("leave-", StringComparison.Ordinal) == true) { LeaveRunAction("leave-run-now"); return; }
             if (notice?.Kind == "ready" && notice.Body.Contains("ready up", StringComparison.Ordinal) && Command("ready", JsonSerializer.SerializeToElement(new { ready = true })).Ok)
             {
                 flash = (new GameNotice("ok-" + now, "info", "You’re ready", "The host can start now.", null, null, "click"), now + 3000);
@@ -1565,6 +1569,39 @@ sealed partial class MultiplayerService : IDisposable
     }
 
     long blockedRetryAt;
+    // Leaving a run for the match: a 5 s notice (Cancel stays, F7 leaves now), then quit-run.
+    string? leaveKey, leaveCancelled; long leaveAt; long? quitSequence;
+    const long LeaveDelayMs = 5000;
+    void AutoLeave(string key)
+    {
+        if (!prefs.LeaveRun || !game.Capabilities.Contains("quit") || leaveCancelled == key || game.ChallengeRunning != true) return;
+        var now = clock();
+        if (leaveKey != key) { leaveKey = key; leaveAt = now + LeaveDelayMs; quitSequence = null; }
+        if (quitSequence is null && now >= leaveAt)
+        {
+            quitSequence = game.QuitRun();
+            plan = plan! with { Message = quitSequence is null ? FinishRunFirst : "Leaving your run for the match…" };
+            if (quitSequence is null) leaveCancelled = key;
+        }
+        else if (quitSequence is null) plan = plan! with { Message = "Leaving your run for the match in " + Math.Max(1, (int)Math.Ceiling((leaveAt - now) / 1000.0)) + " s. Cancel in the notice to stay." };
+        // AimModCore refused (or the run can't be left): fall back to doing it yourself.
+        if (quitSequence is { } q && game.Result is { Sequence: var seq, State: "error" } r && seq == q)
+        { leaveCancelled = key; plan = plan! with { Message = FinishRunFirst + " (" + r.Code + ")" }; }
+    }
+    LobbyResult LeaveRunAction(string action)
+    {
+        if (plan is not { State: "blocked" } || leaveKey != plan.Key) return LobbyResult.Fail("none", "No run is waiting to be left.");
+        if (action == "leave-run-cancel") { leaveCancelled = leaveKey; plan = plan with { Message = FinishRunFirst }; }
+        else if (quitSequence is null) leaveAt = clock();
+        return LobbyResult.Success;
+    }
+    GameNotice? LeaveNotice(long now)
+    {
+        if (plan is not { State: "blocked" } p || leaveKey != p.Key || leaveCancelled == p.Key || quitSequence is not null) return null;
+        var seconds = Math.Max(1, (int)Math.Ceiling((leaveAt - now) / 1000.0));
+        return new GameNotice("leave-" + p.Key, "countdown", "Leaving your run for the match in " + seconds + "…", "Press " + HotkeyName + " to leave now.", HotkeyName, seconds, "countdown")
+            { Actions = [new("Stay in my run", "leave-run-cancel", p.Key)] };
+    }
     const string FinishRunFirst = "Finish or quit your current run (Esc, then Quit). The match loads by itself after that.";
 
     static string FindIt(string scenario, bool generated) =>
@@ -1602,6 +1639,7 @@ sealed partial class MultiplayerService : IDisposable
             else plan = new RoundPlan(key, scenario, mode, generated, "manual", FindIt(scenario, generated) + " Start when the countdown ends.");
         }
         if (plan is null || plan.Key != key) return;
+        if (plan.State == "blocked") AutoLeave(key);
         // The challenge that blocked the load is over: load now, or start if the round already runs.
         if (plan.State == "blocked" && game.ChallengeRunning != true && clock() >= blockedRetryAt)
         {

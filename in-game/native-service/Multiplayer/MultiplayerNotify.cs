@@ -22,7 +22,7 @@ sealed record GameNotice(string Id, string Kind, string Title, string Body, stri
 // AutoReady: ready up on joining, when the content arrives, and after each match.
 sealed record MultiplayerPrefs(string Hotkey = "F7", bool ReadyOnJoin = false, bool ReadyOnContent = true, bool ReadyAfterMatch = false,
     bool QuietDuringRanked = true, bool Sounds = true, double Volume = 0.8, string Avatar = AvatarProfiles.Default, bool HideScenario = false,
-    string SpectatePrivacy = "friends", bool ShowWatchers = true, bool Onboarded = false, bool FriendToasts = true)
+    string SpectatePrivacy = "friends", bool ShowWatchers = true, bool Onboarded = false, bool FriendToasts = true, bool LeaveRun = true)
 {
     public static MultiplayerPrefs Load(string? path)
     {
@@ -48,6 +48,7 @@ sealed record MultiplayerPrefs(string Hotkey = "F7", bool ReadyOnJoin = false, b
         if (Flag("showWatchers") is { } sw) p = p with { ShowWatchers = sw };
         if (Flag("onboarded") is { } ob) p = p with { Onboarded = ob };
         if (Flag("friendToasts") is { } ft) p = p with { FriendToasts = ft };
+        if (Flag("leaveRun") is { } lr) p = p with { LeaveRun = lr };
         if (e.TryGetProperty("spectatePrivacy", out var sp) && sp.GetString() is "friends" or "ask" or "off") p = p with { SpectatePrivacy = sp.GetString()! };
         if (e.TryGetProperty("avatar", out var av) && av.ValueKind == JsonValueKind.String && AvatarProfiles.Find(av.GetString()) is { } look) p = p with { Avatar = look.Id };
         if (e.TryGetProperty("volume", out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetDouble(out var vol) && double.IsFinite(vol)) p = p with { Volume = Math.Round(Math.Clamp(vol, 0, 1), 2) };
