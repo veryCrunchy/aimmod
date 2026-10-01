@@ -849,7 +849,7 @@ sealed partial class MultiplayerService : IDisposable
         }
     }
 
-    static string ModeLabel(string mode) => mode switch { LobbyModes.Race => "a score race", LobbyModes.Duel => "a duel", LobbyModes.Rounds => "free-for-all", LobbyModes.Tracking => "a tracking duel", _ => "practice" };
+    static string ModeLabel(string mode) => mode switch { LobbyModes.Race => "a score race", LobbyModes.Duel => "a score duel", LobbyModes.Rounds => "free-for-all", LobbyModes.Tracking => "a tracking duel", _ => "practice" };
 
     // Ask AimModNativeUI to open the AimMod panel on the Multiplayer page. It waits for
     // the main menu, and never interrupts a running scenario: the request stays until then.

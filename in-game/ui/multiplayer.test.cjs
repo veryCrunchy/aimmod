@@ -34,7 +34,7 @@ function view(extra){return Object.assign({},base,extra||{});}
 test('home offers create and join, and Steam friends with join for joinable lobbies',()=>{
   const s=setup();s.api.enter(s.container);assert.equal(s.requests[0].url,'/private/multiplayer');s.requests[0].finish(200,view());
   const create=s.button('Create lobby');assert.ok(create&&create.parentNode.className==='actions','stand-alone buttons sit in an actions row');
-  s.button('Duel')||s.all().find(e=>e.className&&e.className.indexOf('mp-mode')===0&&e.children[0].textContent==='Duel').onclick();
+  s.all().find(e=>e.tag==='button'&&/^mp-mode( |$)/.test(e.className)&&e.children.some(c=>c.tag==='strong'&&c.textContent==='Score duel')).onclick();
   s.button('Create lobby').onclick();const post=s.last();assert.equal(post.method,'POST');assert.equal(post.headers['X-AimMod-UI'],'1');assert.deepEqual(JSON.parse(post.body),{action:'create',mode:'duel'});
   const join=s.buttons().filter(b=>b.textContent==='Join');assert.equal(join.length,2,'code join plus the joinable friend');join[1].onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'join-friend',friend:'f2'});
   assert.ok(!s.text().includes('765611'),'no Steam ids are shown');
@@ -62,7 +62,7 @@ test('a member sees read-only settings and readies up; missing content blocks re
 test('incoming Steam invites ask before joining',()=>{
   const s=setup();s.api.enter(s.container);
   s.requests[0].finish(200,view({invites:[{id:'join-1',fromName:'Synthetic Host',kind:'invite',summary:{mode:'duel',scenario:'Synthetic Scenario',players:1,maxPlayers:2},at:900,compatible:true}]}));
-  assert.ok(s.text().includes('Synthetic Host invited you'));assert.ok(s.text().includes('Duel'));
+  assert.ok(s.text().includes('Synthetic Host invited you'));assert.ok(s.text().includes('Score duel'));
   s.button('Accept').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'accept-invite',id:'join-1'});
   s.button('Decline').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'decline-invite',id:'join-1'});
   const launch=setup();launch.api.enter(launch.container);launch.requests[0].finish(200,view({invites:[{id:'join-2',fromName:'A friend',kind:'launch',summary:null,at:900,compatible:true}]}));
@@ -74,7 +74,7 @@ test('host settings editor sends validated keys, and score race locks overrides'
   lib.finish(200,{available:true,scenarios:[{name:'Synthetic Scenario',map:'synthetic_map',mapSource:'game',timeLimit:60}],maps:[{name:'synthetic_port',source:'ported',hash:'abc'}],weapons:['Synthetic Rifle'],characters:[],presets:[]});
   s.button('Show').onclick();assert.ok(s.all().some(e=>e.tag==='button'&&e.className.indexOf('mp-pick')===0&&e.disabled),'map override is locked in score race');
   s.button('60 s').onclick&&assert.ok(s.button('60 s').disabled,'time limit is locked in score race');
-  s.all().find(e=>e.className&&e.className.indexOf('mp-mode')===0&&e.children[0]&&e.children[0].textContent==='Free-for-all').onclick();
+  s.all().find(e=>e.tag==='button'&&/^mp-mode( |$)/.test(e.className)&&e.children.some(c=>c.tag==='strong'&&c.textContent==='Free-for-all')).onclick();
   assert.deepEqual(JSON.parse(s.last().body),{action:'settings',settings:{mode:'ffa-rounds'}});
   s.button('Done').onclick();assert.ok(s.button('Edit'));
 });

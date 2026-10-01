@@ -401,6 +401,14 @@ static class MultiplayerChecks
         // Arena scenario: no targets, nobody hurt, nothing scored natively, one hidden helper bot.
         var arena = MatchScenario.Generate(new(BaseScenario, duel with { Scenario = new ScenarioChoice("Synthetic A", ContentLibrary.TextHash(BaseScenario), "synthetic_map", ContentLibrary.TextHash("m"), 60) }));
         Check(arena.Contains("AddedBots=AimMod Hidden Bot.bot\n") && arena.Contains("BotCharacters=AimMod Hidden Bot.bot\n") && arena.Contains("InvinciblePlayer=true\n") && arena.Contains("ScorePerDamage=0.0\n") && arena.Contains("Timelimit=20.0\n"), "Tracking arena: hidden helper bot only, invincible, no native scoring, the run outlasts the round");
+        // Every PvP arena: the scenario's own targets never spawn, only the hidden helper (avatars come from it).
+        foreach (var pvp in new[] { LobbyModes.Tracking, LobbyModes.Deathmatch, LobbyModes.Vampiric, LobbyModes.Instagib, LobbyModes.TeamDeathmatch })
+        {
+            var text = MatchScenario.Generate(new(BaseScenario, new LobbySettings(Mode: pvp, Scenario: new ScenarioChoice("Synthetic A", ContentLibrary.TextHash(BaseScenario), "synthetic_map", ContentLibrary.TextHash("m"), 60))));
+            var header = text[..text.IndexOf("\n[", StringComparison.Ordinal)];
+            var spawns = header.Split('\n').Where(l => l.StartsWith("BotCharacters=", StringComparison.Ordinal) || l.StartsWith("AddedBots=", StringComparison.Ordinal)).ToArray();
+            Check(spawns.Length == 2 && spawns.All(l => l.EndsWith("=AimMod Hidden Bot.bot", StringComparison.Ordinal)) && !header.Contains("target.bot"), pvp + " arena spawns no scenario targets, only the hidden helper bot");
+        }
         var hidden = arena[arena.IndexOf("[Character Profile]\nName=AimMod Hidden\n", StringComparison.Ordinal)..];
         Check(hidden.Contains("CharacterModel=None\n") && hidden.Contains("MainBBHide=true\n") && hidden.Contains("DisableCharacterCollision=true\n") && arena.Contains("[Bot Profile]\nName=AimMod Hidden Bot\n") && arena.Contains("NoAiming=true\n"), "The helper bot is invisible, passable and inert");
         // Offline avatar spike: a replay's camera becomes a 30 Hz path for AimModSteam's avatar test.
@@ -1620,7 +1628,7 @@ static class MultiplayerChecks
         service.Act("sim", J(new { op = "invite" }));
         Run(200);
         var invite = View().GetProperty("invites")[0];
-        Check(invite.GetProperty("kind").GetString() == "incoming" && service.Notice() is { Kind: "invite", Invite: not null } n && n.Title.Contains("invited you to a duel"), "An incoming invite shows a popup naming the mode and scenario");
+        Check(invite.GetProperty("kind").GetString() == "incoming" && service.Notice() is { Kind: "invite", Invite: not null } n && n.Title.Contains("invited you to a score duel"), "An incoming invite shows a popup naming the mode and scenario");
         Check(File.ReadAllText(Path.Combine(output, "multiplayer-notify.json")).Contains("\"interactive\":true"), "The notice file tells the game layer the popup is clickable");
         service.Hotkey();
         Run(200);
