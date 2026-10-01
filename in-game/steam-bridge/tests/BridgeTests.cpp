@@ -624,7 +624,7 @@ int main()
         for (int i = 0; i < 60 * 40; ++i)
         {
             const auto s = w.Step(i / 60.0, 1 / 60.0, half, flat, open);
-            grounded &= s.z >= half - 0.01 && s.z <= half + ghost::Walker::JumpHeight + 0.01;
+            grounded &= s.z - s.halfHeight >= -0.01 && s.z - s.halfHeight <= ghost::Walker::JumpHeight + 0.01; // feet on the floor, crouched or not
             inside &= std::fabs(s.x) < 2000 && std::fabs(s.y) < 2000;
             moved |= std::hypot(s.x - 1000, s.y) > 500;
             crouched |= s.crouch;

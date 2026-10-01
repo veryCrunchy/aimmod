@@ -449,10 +449,11 @@ sealed class LobbyCore
             var csPlayers = m.Players.Where(id => Find(id) is not null).ToList();
             m.Cs = new CsMatch(csPlayers, m.StartsAt.Value, m.Settings.HalfRounds, m.Settings.Overtime, csObjectives, LobbyRules.ResolveTeams(csPlayers.Select(id => (id, Find(id)!.Team)).ToList()));
             m.Combat = m.Cs.Combat;
+            m.Combat.TeamDamage = m.Settings.EffectiveFriendlyFire ? CombatMatch.CsTeamDamage : 0;
         }
         if (LobbyModes.Combat(m.Settings.Mode))
             m.Combat = new CombatMatch(m.Settings.Mode, m.Players.Where(id => Find(id) is not null), m.Settings.EffectiveFragLimit, m.Settings.Lifesteal,
-                m.StartsAt.Value, m.StartsAt.Value + (long)(m.Settings.EffectiveTimeLimit * 1000)) { Spawns = combatSpawns };
+                m.StartsAt.Value, m.StartsAt.Value + (long)(m.Settings.EffectiveTimeLimit * 1000)) { Spawns = combatSpawns, TeamDamage = m.Settings.EffectiveFriendlyFire ? CombatMatch.CsTeamDamage : 0 };
         if (LobbyModes.Combat(m.Settings.Mode)) m.Combat!.PlaceAll(clock());
         // Both players track each other at once, every round.
         if (m.Settings.Mode == LobbyModes.Tracking && m.Players.Count >= 2)

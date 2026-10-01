@@ -82,7 +82,14 @@
     if(c.banner){var bn=node('div','cs-banner team'+c.banner.team+(c.banner.won?' won':' lost'));bn.appendChild(node('strong','',c.banner.title));bn.appendChild(node('span','',c.banner.reason));target.appendChild(bn);}
     if(c.notice)target.appendChild(node('div','cs-notice',c.notice));
     // Kill feed, top right.
-    if(c.feed&&c.feed.length){var feed=node('div','cs-feed');c.feed.forEach(function(f){var l=node('div','cs-kill'+(f.you?' '+f.you:''));l.appendChild(node('span','cs-k team'+f.killerTeam,f.killer));l.appendChild(node('span','cs-w',(f.weapon||'')+(f.head?' · headshot':'')));l.appendChild(node('span','cs-v',f.victim));feed.appendChild(l);});target.appendChild(feed);}
+    if(c.feed&&c.feed.length){var feed=node('div','cs-feed');c.feed.forEach(function(f){var l=node('div','cs-kill'+(f.you?' '+f.you:''));l.appendChild(node('span','cs-k team'+f.killerTeam,f.killer));l.appendChild(node('span','cs-w',(f.teamKill?'TK · ':'')+(f.weapon||'')+(f.head?' · headshot':'')));l.appendChild(node('span','cs-v',f.victim));feed.appendChild(l);});target.appendChild(feed);}
+    // Where damage came from: red marks on a ring around the crosshair, fading over 1.5 s.
+    if(c.hurt&&c.hurt.length){var ring=node('div','cs-hurt-ring');c.hurt.forEach(function(h){
+      var a=h.bearing*Math.PI/180,r=110;var m=node('div','cs-hurt');
+      m.style.left=Math.round(Math.sin(a)*r)+'px';m.style.top=Math.round(-Math.cos(a)*r)+'px';m.style.opacity=String(Math.max(0.2,1-h.age/1500));ring.appendChild(m);});
+      target.appendChild(ring);}
+    // Your hit landing: a marker on the crosshair (headshot and kill stronger).
+    if(c.hitMarker)target.appendChild(node('div','cs-hitmark '+c.hitMarker,'X'));
     // Plant or defuse: a hint and the progress bar, low in the middle.
     var progress=typeof c.plantProgress==='number'?c.plantProgress:typeof c.defuseProgress==='number'?c.defuseProgress:null;
     // Why the last plant, defuse or drop didn't happen ("Not in a bomb site", "You don't have the bomb").

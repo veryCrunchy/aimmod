@@ -109,6 +109,9 @@ sealed class CombatMatch
     public Func<string, int, CombatWeapon?>? WeaponFor { get; set; }
     public Func<string, double, bool, CombatWeapon, double>? DamageModel { get; set; }
     public Action<string, string, CombatWeapon, bool>? OnKill { get; set; }
+    // Team damage as a share of the normal damage (0: off). CS2 bullets: 33 %.
+    public double TeamDamage { get; set; }
+    public const double CsTeamDamage = 0.33;
     public bool Alive(string id) => players.TryGetValue(id, out var p) && p.Alive;
     public double Health(string id) => players.TryGetValue(id, out var p) ? p.Health : 0;
     // The latest camera sample of a player (round modes: zone and bomb checks).
@@ -228,7 +231,7 @@ sealed class CombatMatch
         {
             if (p == shooter || !p.Alive) continue;
             var teammate = shooter.Team != 0 && p.Team == shooter.Team;
-            if (teammate && c.TargetX is null) continue; // friendly fire is off
+            if (teammate && c.TargetX is null) continue; // only a drawn teammate can be hit (and only with team damage on)
             if (c.TargetX is { } tx)
             {
                 // The drawn hull must also sit at the victim's own height, and its size is the avatar's
@@ -247,7 +250,8 @@ sealed class CombatMatch
             if (victim is not null) break;
         }
         if (victim is null) return Reject(c.TargetX is null ? "miss" : "target-mismatch");
-        if (shooter.Team != 0 && victim.Team == shooter.Team) return Reject("teammate");
+        var teamHit = shooter.Team != 0 && victim.Team == shooter.Team;
+        if (teamHit && TeamDamage <= 0) return Reject("teammate");
         if (!TrackGeometry.HitsCapsule(c.X, c.Y, c.Z, dx, dy, dz, TrackingRound.RayLengthCm, cx, cy, cz, radius, half)) return Reject("ray-miss");
         // A knife reaches only so far.
         if (weapon.Range > 0 && !TrackGeometry.HitsCapsule(c.X, c.Y, c.Z, dx, dy, dz, weapon.RayLength, cx, cy, cz, radius, half)) return Reject("range");
@@ -258,7 +262,7 @@ sealed class CombatMatch
         var headR = Math.Min(25, radius);
         var head = TrackGeometry.HitsCapsule(c.X, c.Y, c.Z, dx, dy, dz, TrackingRound.RayLengthCm, cx, cy, cz + half - headR, headR, headR);
         var raw = weapon.Damage * (head ? weapon.HeadMultiplier : 1);
-        var damage = Math.Min(victim.Health, DamageModel is null ? raw : DamageModel(victim.Id, raw, head, weapon));
+        var damage = Math.Min(victim.Health, (DamageModel is null ? raw : DamageModel(victim.Id, raw, head, weapon)) * (teamHit ? TeamDamage : 1));
         victim.Health -= damage;
         double? healed = null;
         if (Lifesteal > 0)
@@ -271,7 +275,8 @@ sealed class CombatMatch
         if (victim.Health <= 0.0001)
         {
             victim.Health = 0; victim.Alive = false; victim.Deaths++; victim.RespawnAt = Respawns ? now + CombatRules.RespawnMs(Mode) : null;
-            shooter.Frags++;
+            // A team kill scores nothing (CS takes a kill away); the kill hook decides the rest.
+            if (teamHit) shooter.Frags = Math.Max(0, shooter.Frags - 1); else shooter.Frags++;
             OnKill?.Invoke(victim.Id, shooter.Id, weapon, head);
             if (Mode == LobbyModes.Vampiric) shooter.Health = Math.Min(CombatRules.MaxHealth, shooter.Health + CombatRules.VampiricHealthOnKill);
             Emit("death", c.T, victim.Id, shooter.Id, damage, head, 0, shooter.Health);

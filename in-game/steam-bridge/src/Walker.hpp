@@ -200,7 +200,8 @@ namespace bridge::ghost
             s.halfHeight = s.crouch ? halfHeight * 0.6 : halfHeight;
             s.x = x;
             s.y = y;
-            s.z = z + hop;
+            // A crouched body is a shorter capsule standing on the same floor: its centre is lower.
+            s.z = z + hop - (s.crouch ? halfHeight - s.halfHeight : 0);
             s.vx = vx;
             s.vy = vy;
             s.vz = vz;

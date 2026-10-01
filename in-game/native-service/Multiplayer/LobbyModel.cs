@@ -81,8 +81,11 @@ sealed record LobbySettings(
     bool RequireFire = false,
     int HalfRounds = 12,
     bool Overtime = true,
-    TournamentLock? Tournament = null)
+    TournamentLock? Tournament = null,
+    bool? FriendlyFire = null)
 {
+    // Team damage: on by default in CS competitive (CS2 rules), off elsewhere unless the host turns it on.
+    [JsonIgnore] public bool EffectiveFriendlyFire => FriendlyFire ?? Mode == LobbyModes.Cs;
     public const int MinPlayers = 2, MaxPlayerLimit = 10, MaxSpectators = 4;
     [JsonIgnore] public ProfileChoice WeaponProfile => Weapon ?? ProfileChoice.Default;
     [JsonIgnore] public ProfileChoice MovementProfile => Movement ?? ProfileChoice.Default;
@@ -163,7 +166,7 @@ static class LobbyRules
 {
     public const int MaxName = 32, MaxChat = 200, MaxContentName = 128;
     static readonly HashSet<string> Keys = ["mode", "scenario", "mapOverride", "maxPlayers", "spectators", "rounds", "firstTo",
-        "timeLimit", "weapon", "movement", "character", "targetSpeed", "targetSize", "privacy", "countdown", "lateJoin", "autoStart", "voting", "fragLimit", "lifesteal", "requireFire", "halfRounds", "overtime"];
+        "timeLimit", "weapon", "movement", "character", "targetSpeed", "targetSize", "privacy", "countdown", "lateJoin", "autoStart", "voting", "fragLimit", "lifesteal", "requireFire", "halfRounds", "overtime", "friendlyFire"];
 
     // A member id AimModCore accepts in play-state.tsv: [A-Za-z0-9_-]{1,64}.
     public static bool IsStreamSafe(string? id) => id is { Length: > 0 and <= 64 } && id.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_');
@@ -254,6 +257,7 @@ static class LobbyRules
                     if (Number() is not { } frags) return (null, Bad("Frag limit must be a number.")); next = next with { FragLimit = (int)Clamp(frags, 1, 100, 1) }; break;
                 case "halfRounds": if (Number() is not { } half) return (null, Bad("Rounds per half must be a number.")); next = next with { HalfRounds = (int)Clamp(half, 6, 15, 1) }; break;
                 case "overtime": if (Flag() is not { } ot) return (null, Bad("Overtime must be on or off.")); next = next with { Overtime = ot }; break;
+                case "friendlyFire": if (Flag() is not { } ff) return (null, Bad("Friendly fire must be on or off.")); next = next with { FriendlyFire = ff }; break;
                 case "requireFire": if (Flag() is not { } fire) return (null, Bad("Require fire must be on or off.")); next = next with { RequireFire = fire }; break;
                 case "lifesteal": if (Number() is not { } steal) return (null, Bad("Lifesteal must be a percentage.")); next = next with { Lifesteal = (int)Clamp(steal, 0, 200, 5) }; break;
             }

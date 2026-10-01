@@ -71,6 +71,11 @@ namespace aimmod
             double health = -1;           // last health applied to the bar
             std::string hiddenScene;      // non-empty while hidden because of a scenario mismatch
             bool respawned = false;       // came back from a death since the last look (walker re-places)
+            // Measured: the actor origin's height above the mesh's lowest point (its feet). The body is
+            // placed so the feet touch the floor (sample centre minus the sample's half-height).
+            double feetToActor = -1;
+            double nextFeetMeasure = 0;
+            bool feetLogged = false;
             std::string weapon;           // CS: the third-person weapon model shown in its hands ("" none)
             double nextWeapon = 0;        // when to re-apply it (the game may hide it again)
         };
@@ -166,6 +171,10 @@ namespace aimmod
         int m_floorTraces = 0, m_floorHits = 0, m_wallTraces = 0, m_wallHits = 0; // walker diagnostics
         double m_nextTraceLog = 0;
         game::Getter m_lineTraceChannel; // Visibility channel fallback when the object trace finds nothing
+        game::Getter m_componentBounds;   // KismetSystemLibrary:GetComponentBounds (the avatar mesh's world box)
+        game::Field m_characterMesh;      // Character.Mesh
+        bool m_feetBound = false;
+        void MeasureFeet(Ghost& ghost, double floorZ);
         // Line trace on Visibility from a to b, ignoring both bodies; the impact point, or nullopt.
         std::optional<std::array<double, 3>> Trace(RC::Unreal::UObject* context, const double a[3], const double b[3], RC::Unreal::UObject* ignore1, RC::Unreal::UObject* ignore2);
         bool LoadTestPath();

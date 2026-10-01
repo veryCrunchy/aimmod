@@ -166,7 +166,7 @@ sealed partial class MultiplayerService
     // the kill feed top right, round-end and halftime banners, and the clickable buy menu on
     // the left while it's open (B in buy time; number keys still buy).
     internal sealed record CsBuyItem(int? Key, string Id, string Label, string Category, int Price, bool Owned, bool Affordable, string? Disabled, string? Profile);
-    internal sealed record CsFeedLine(long Id, string Killer, string Victim, string Weapon, bool Head, string? You, int KillerTeam);
+    internal sealed record CsFeedLine(long Id, string Killer, string Victim, string Weapon, bool Head, string? You, int KillerTeam, bool TeamKill = false);
     internal sealed record CsBanner(string Title, string Reason, bool Won, int Team);
     internal sealed record CsHudView(string Phase, int? Left, int Round, int Rounds, int TScore, int CtScore, string Side, int Team,
         int Money, int? MoneyDelta, bool Alive, double Health, double Armor, bool Helmet, bool Kit,
@@ -174,7 +174,11 @@ sealed partial class MultiplayerService
         bool BuyOpen, bool BuyWindow, int? BuyLeft, IReadOnlyList<CsBuyItem>? Buy, CsBanner? Banner, string? Notice, IReadOnlyList<CsFeedLine> Feed,
         string? Primary, string? Secondary, string BuyKey, string UseKey, IReadOnlyList<string> KeyClashes,
         string? InSite = null, string? Callout = null, IReadOnlyList<CsMarker>? Sites = null,
-        bool HasBomb = false, string? BombCarrier = null, string? Refused = null, string DropKey = CsDropKey, int TAlive = 0, int CtAlive = 0);
+        bool HasBomb = false, string? BombCarrier = null, string? Refused = null, string DropKey = CsDropKey, int TAlive = 0, int CtAlive = 0,
+        IReadOnlyList<CsHurt>? Hurt = null, string? HitMarker = null);
+    // Where damage came from, around the crosshair: bearing in degrees from where you look (negative
+    // left), the damage, and how old the hit is (ms) so the marker fades.
+    internal sealed record CsHurt(long Id, int Bearing, int Damage, int Age);
     // A bomb site on the HUD compass: its bearing from where you look (degrees, negative left) and distance.
     internal sealed record CsMarker(string Name, int Bearing, int Meters);
     static readonly string[] BuyCategories = ["pistol", "smg", "rifle", "heavy", "gear"];
@@ -233,7 +237,7 @@ sealed partial class MultiplayerService
             var killer = parts.Length > 0 ? parts[0] : null;
             var weapon = parts.Length > 1 ? CsRules.FindAny(parts[1])?.Label ?? "" : "";
             return new CsFeedLine(e.Id, Name(killer), Name(e.Member), weapon, parts.Length > 2 && parts[2] == "1", killer == SelfId ? "killer" : e.Member == SelfId ? "victim" : null,
-                cs.Players.FirstOrDefault(p => p.Member == killer)?.Team ?? 0);
+                cs.Players.FirstOrDefault(p => p.Member == killer)?.Team ?? 0, parts.Length > 3 && parts[3] == "TK");
         }).ToArray();
         string? hint = !me.Alive ? null
             : me.Side == CsRules.T && b.Carrier == SelfId && cs.Phase == "live" ? (me.Site is { } inSite ? "Hold " + CsUseKey + " to plant at " + inSite : "You have the bomb: plant it at a site (" + CsDropKey + " drops it)")
@@ -249,7 +253,32 @@ sealed partial class MultiplayerService
             CsRules.Find(me.Primary)?.Label, CsRules.Find(me.Secondary)?.Label, CsBuyKey, CsUseKey, CsKeyClashes(KeyBinds.GameKeys(library.Root)),
             me.Alive ? me.Site : null, me.Alive ? me.Callout : null, SiteMarkers(cs, me.Side == CsRules.T || b.State == "planted" ? b.Position : null),
             b.Carrier == SelfId, me.Side == CsRules.T && b.Carrier is { } bc ? Name(bc) : null, refused, CsDropKey,
-            cs.Players.Count(p => p.Side == CsRules.T && p.Alive), cs.Players.Count(p => p.Side == CsRules.CT && p.Alive));
+            cs.Players.Count(p => p.Side == CsRules.T && p.Alive), cs.Players.Count(p => p.Side == CsRules.CT && p.Alive),
+            HurtMarkers(m, hostNow), HitMarker(m, hostNow));
+    }
+
+    // The last hits you took (1.5 s), as bearings from where you look: the hit came from the
+    // opposite of its ray (the event's dir points from the shooter to you).
+    IReadOnlyList<CsHurt>? HurtMarkers(MatchSnapshot match, long hostNow)
+    {
+        if (LiveCombat(match) is not { } combat || ownRecent.Count == 0) return null;
+        var yaw = ownRecent[^1].Yaw;
+        var list = combat.Events.Where(e => e.Kind == "damage" && e.Member == SelfId && e.Dir is { Length: 3 } && hostNow - e.T is >= 0 and < 1500).TakeLast(4)
+            .Select(e =>
+            {
+                var bearing = Math.Atan2(-e.Dir![1], -e.Dir[0]) * 180 / Math.PI - yaw;
+                bearing = ((bearing % 360) + 540) % 360 - 180;
+                return new CsHurt(e.Id, (int)Math.Round(bearing), (int)Math.Round(e.Amount), (int)(hostNow - e.T));
+            }).ToArray();
+        return list.Length > 0 ? list : null;
+    }
+
+    // Your own hit landing (400 ms): "hit", "head" or "kill", for the crosshair hit marker.
+    string? HitMarker(MatchSnapshot match, long hostNow)
+    {
+        if (LiveCombat(match) is not { } combat) return null;
+        var mine = combat.Events.LastOrDefault(e => e.Attacker == SelfId && e.Kind is "damage" or "death" && hostNow - e.T is >= 0 and < 400);
+        return mine is null ? null : mine.Kind == "death" ? "kill" : mine.Head ? "head" : "hit";
     }
 
     // The sites relative to this player's own last camera sample (no pose feed: no markers).

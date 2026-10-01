@@ -43,6 +43,7 @@ static class CsRules
     public const int PlantReward = 300, DefuseReward = 300, PlantedLossBonus = 800;
     public const int KevlarPrice = 650, KevlarHelmetPrice = 1_000, HelmetUpgradePrice = 350, KitPrice = 400;
     public const double ArmorBonus = 0.5; // armour lost per point of damage it absorbs
+    public const int TeamKillPenalty = 300;
     public const double PlantRadiusCm = 0, DefuseRadiusCm = 100, BombPickupCm = 80, PlantMoveCm = 40;
     public const double MaxHealth = 100, MaxArmor = 100;
     public const string T = "T", CT = "CT";
@@ -284,10 +285,13 @@ sealed class CsMatch
             k.Kills++;
             var cs = CsRules.ByProfile(weapon.Name);
             if (players.TryGetValue(victim, out var v0) && v0.Team != k.Team) Pay(k, cs?.KillReward ?? 300, now, "kill");
+            // CS2: a team kill costs $300 and isn't a kill.
+            else if (v0 is not null && v0.Team == k.Team && victim != killer) { k.Kills = Math.Max(0, k.Kills - 1); k.Money = Math.Max(0, k.Money - CsRules.TeamKillPenalty); Event("money", now, killer, "team-kill", -CsRules.TeamKillPenalty); }
         }
         if (players.TryGetValue(victim, out var v)) { v.Deaths++; v.Primary = null; v.Secondary = null; v.Armor = 0; v.Helmet = false; v.Kit = false; }
         // Text: killer, the weapon's id and whether it was a headshot (tab-separated).
-        Event("kill", now, victim, killer + "\t" + (CsRules.ByProfile(weapon.Name)?.Id ?? "") + "\t" + (head ? "1" : "0"));
+        var teamKill = players.TryGetValue(victim, out var vt) && players.TryGetValue(killer, out var kt) && vt.Team == kt.Team && victim != killer;
+        Event("kill", now, victim, killer + "\t" + (CsRules.ByProfile(weapon.Name)?.Id ?? "") + "\t" + (head ? "1" : "0") + (teamKill ? "\tTK" : ""));
         if (carrier == victim) DropBomb(victim);
         if (planter == victim) { planter = null; plantDoneAt = null; }
         if (defuser == victim) { defuser = null; defuseDoneAt = null; }

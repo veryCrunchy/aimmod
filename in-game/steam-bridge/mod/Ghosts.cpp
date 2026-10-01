@@ -338,11 +338,64 @@ namespace aimmod
                 });
     }
 
-    void GhostDemo::DriveAvatar(Ghost& ghost, const Sample& s)
+    // The avatar mesh's lowest point against the actor origin, measured from the mesh's world bounds,
+    // so the feet (not a capsule of another size, or a mesh offset inside it) stand on the floor.
+    void GhostDemo::MeasureFeet(Ghost& ghost, double floorZ)
+    {
+        const double now = bridge::Bridge::Now();
+        if (now < ghost.nextFeetMeasure) return;
+        ghost.nextFeetMeasure = now + 2.0;
+        if (!m_feetBound)
+        {
+            m_feetBound = true;
+            m_componentBounds.BindPath(STR("/Script/Engine.KismetSystemLibrary:GetComponentBounds"), Shape::Command);
+            m_characterMesh.Bind(game::FindClass(STR("/Script/Engine.Character")), STR("Mesh"));
+            if (!m_kismetDefault) m_kismetDefault = UObjectGlobals::StaticFindObject<UObject*>(nullptr, nullptr, STR("/Script/Engine.Default__KismetSystemLibrary"));
+        }
+        UObject* pawn = ghost.pawn.Get();
+        UObject* mesh = pawn && m_characterMesh.ok() ? m_characterMesh.Object(pawn) : nullptr;
+        double actor[3]{};
+        if (!mesh || !m_componentBounds.ok() || !m_kismetDefault || !m_actorLocation.Vector(pawn, actor)) return;
+        double origin[3]{}, extent[3]{};
+        int vectors = 0;
+        m_componentBounds.Call(
+            m_kismetDefault, [&](std::uint8_t* value, const Param& p) { if (p.kind == Kind::Object) std::memcpy(value, &mesh, sizeof(mesh)); },
+            [&](const std::uint8_t* buffer, const std::vector<Param>& params) {
+                for (const Param& p : params)
+                    if (p.out && p.kind == Kind::Vector && vectors < 2)
+                    {
+                        float f[3];
+                        std::memcpy(f, buffer + p.offset, sizeof(f));
+                        double* v = vectors++ == 0 ? origin : extent;
+                        v[0] = f[0]; v[1] = f[1]; v[2] = f[2];
+                    }
+            });
+        if (vectors < 2 || extent[2] <= 10 || extent[2] > 1000) return;
+        const double feet = origin[2] - extent[2];
+        const double above = actor[2] - feet;
+        if (above <= 0 || above > 1000) return;
+        ghost.feetToActor = above;
+        if (!ghost.feetLogged)
+        {
+            ghost.feetLogged = true;
+            char line[200];
+            std::snprintf(line, sizeof(line), "avatars: %s feet at z=%.0f, floor z=%.0f, offset %.0f (origin %.0f above the feet)",
+                          bridge::Redact(ghost.peer).c_str(), feet, floorZ, feet - floorZ, above);
+            m_log(line);
+        }
+    }
+
+    void GhostDemo::DriveAvatar(Ghost& ghost, const Sample& input)
     {
         UObject* pawn = ghost.pawn.Get();
         if (!pawn) return;
         KeepInert(ghost);
+        // Feet on the floor: the sample's floor is its centre minus its own half-height (a remote
+        // player's capsule, or the walker's); the avatar stands on it by its measured feet.
+        Sample s = input;
+        const double floorZ = input.z - input.halfHeight;
+        MeasureFeet(ghost, floorZ);
+        if (ghost.feetToActor > 0) s.z = floorZ + ghost.feetToActor;
         if (m_options.driveWithUpdate && m_updateClientLocAndRot.ok())
             m_updateClientLocAndRot.Call(pawn, [&](std::uint8_t* value, const Param& p) {
                 if (p.kind == Kind::Vector) WriteFloats(value, p, s.x, s.y, s.z);
