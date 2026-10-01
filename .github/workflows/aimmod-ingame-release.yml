@@ -112,10 +112,45 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('in-game/native-service/*.csproj') }}
+          restore-keys: nuget-${{ runner.os }}-
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
+
+      # UE4SS (with the private UEPseudo source) and its compiled build trees are
+      # cached, but never saved from main: fork pull requests can read the default
+      # branch's caches, and UEPseudo must not be redistributed.
+      - name: Restore the RE-UE4SS checkout
+        id: ue4ss-src
+        uses: actions/cache/restore@v4
+        with:
+          path: external/RE-UE4SS
+          key: re-ue4ss-src-e3ba1016-v1
+
+      - name: Restore the AimModCore build tree
+        uses: actions/cache/restore@v4
+        with:
+          path: in-game/native-mod/build
+          key: aimmod-core-build-e3ba1016-${{ hashFiles('in-game/native-mod/CMakeLists.txt') }}-${{ github.sha }}
+          restore-keys: |
+            aimmod-core-build-e3ba1016-${{ hashFiles('in-game/native-mod/CMakeLists.txt') }}-
+            aimmod-core-build-e3ba1016-
+
+      - name: Restore the AimModSteam build tree
+        uses: actions/cache/restore@v4
+        with:
+          path: in-game/steam-bridge/build-mod
+          key: aimmod-steam-build-e3ba1016-${{ hashFiles('in-game/steam-bridge/CMakeLists.txt') }}-${{ github.sha }}
+          restore-keys: |
+            aimmod-steam-build-e3ba1016-${{ hashFiles('in-game/steam-bridge/CMakeLists.txt') }}-
+            aimmod-steam-build-e3ba1016-
 
       - name: Test the service and the workspace UI
         shell: pwsh
@@ -126,6 +161,7 @@ jobs:
           if ($LASTEXITCODE) { throw 'UI tests failed.' }
 
       - name: Fetch RE-UE4SS (game's UE4SS, e3ba1016)
+        if: steps.ue4ss-src.outputs.cache-hit != 'true'
         shell: pwsh
         env:
           UE4SS_GITHUB_TOKEN: ${{ secrets.UE4SS_GITHUB_TOKEN }}
@@ -138,6 +174,13 @@ jobs:
           # The submodules are listed with SSH URLs; CI fetches them over HTTPS with the token.
           git -C external/RE-UE4SS -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" -c "url.https://github.com/.insteadOf=git@github.com:" submodule update --init --recursive
           if ($LASTEXITCODE) { throw 'RE-UE4SS submodules could not be fetched.' }
+
+      - name: Save the RE-UE4SS checkout
+        if: steps.ue4ss-src.outputs.cache-hit != 'true' && github.ref != 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: external/RE-UE4SS
+          key: re-ue4ss-src-e3ba1016-v1
 
       - name: Fetch the verified UE4SS release zip
         shell: pwsh
@@ -153,12 +196,22 @@ jobs:
           if ($hash -ne 'AF8EA9D8975E8EFF7967423F43B8B50875E66A29A0F434CFFCE6E0867EA17252') { throw "UE4SS zip rejected: SHA-256 $hash." }
 
       - name: Build AimModCore, the service and the Lua UI
+        id: core-build
         shell: pwsh
         env:
           AimModVersion: ${{ needs.metadata.outputs.version }}
         run: ./in-game/native-mod/install/Build-AimModPackage.ps1
 
+      # Saved even when a later step fails, so the next run starts warm.
+      - name: Save the AimModCore build tree
+        if: always() && steps.core-build.outcome != 'skipped' && github.ref != 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: in-game/native-mod/build
+          key: aimmod-core-build-e3ba1016-${{ hashFiles('in-game/native-mod/CMakeLists.txt') }}-${{ github.sha }}
+
       - name: Build AimModSteam
+        id: steam-build
         shell: pwsh
         run: |
           cmake -S in-game/steam-bridge -B in-game/steam-bridge/build-mod -G 'Visual Studio 17 2022' -A x64 -DAIMMOD_STEAM_BUILD_MOD=ON
@@ -168,6 +221,13 @@ jobs:
           $tests = Get-ChildItem in-game/steam-bridge/build-mod -Recurse -Filter aimmod_steam_tests.exe | Select-Object -First 1
           & $tests.FullName
           if ($LASTEXITCODE) { throw 'AimModSteam tests failed.' }
+
+      - name: Save the AimModSteam build tree
+        if: always() && steps.steam-build.outcome != 'skipped' && github.ref != 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: in-game/steam-bridge/build-mod
+          key: aimmod-steam-build-e3ba1016-${{ hashFiles('in-game/steam-bridge/CMakeLists.txt') }}-${{ github.sha }}
 
       - name: Stage the release
         shell: pwsh

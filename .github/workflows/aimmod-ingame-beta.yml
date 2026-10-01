@@ -14,7 +14,8 @@ on:
 
 concurrency:
   group: aimmod-ingame-beta
-  cancel-in-progress: true
+  # A running build finishes; only the newest waiting push is kept.
+  cancel-in-progress: false
 
 permissions:
   contents: read
