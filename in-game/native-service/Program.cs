@@ -4,7 +4,7 @@ using System.Text.Json;
 using AimMod.InGame;
 
 CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
-if (args.Contains("--self-test")) { Checks.Run(); HistoryCompletenessChecks.Run(); CsvHistoryChecks.Run(); await HubChecks.Run(); HubPaginationChecks.Run(); await HubLeaderboardChecks.Run(); Coaching.SelfTest(); CoachingFeedbackChecks.Run(); StatsChecks.Run(); WarmupChecks.Run(); RunInspectionChecks.Run(); NativeSettingsChecks.Run(); LiveOverlayChecks.Run(); LiveOverlayFeedChecks.Run(); OverlaySettingsChecks.Run(); await ObsOverlayChecks.Run(); BenchmarkChecks.Run(); ReplayLibraryChecks.Run(); await WorkspaceChecks.Run(); ReplayChecks.Run(); ReplayKeyboardChecks.Run(); await NativeReplayPlaybackChecks.Run(); return; }
+if (args.Contains("--self-test")) { Checks.Run(); HistoryCompletenessChecks.Run(); CsvHistoryChecks.Run(); await HubChecks.Run(); HubPaginationChecks.Run(); await HubLeaderboardChecks.Run(); Coaching.SelfTest(); CoachingFeedbackChecks.Run(); StatsChecks.Run(); WarmupChecks.Run(); RunInspectionChecks.Run(); NativeSettingsChecks.Run(); LiveOverlayChecks.Run(); LiveOverlayFeedChecks.Run(); OverlaySettingsChecks.Run(); await ObsOverlayChecks.Run(); BenchmarkChecks.Run(); ReplayLibraryChecks.Run(); await WorkspaceChecks.Run(); ReplayChecks.Run(); ReplayKeyboardChecks.Run(); await NativeReplayPlaybackChecks.Run(); AimMod.InGame.Multiplayer.MultiplayerChecks.Run(); return; }
 var output = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AimMod", "KovaaksNative");
 var database = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "com.verycrunchy.kovaaks", "stats.sqlite3");
 for (int i = 0; i < args.Length; i++)
@@ -26,7 +26,7 @@ string? detailsFingerprint = null;
 var settings = new NativeSettings(output);
 using var hub = new Hub(output, historyEnabled: () => settings.Current.HubHistoryEnabled);
 var csvHistory = new CsvHistory(output);
-await using var workspace = new WorkspaceHost(hub, output, database, settings, csvHistory);
+await using var workspace = new WorkspaceHost(hub, output, database, settings, csvHistory, args);
 await workspace.Start(cancellation.Token);
 File.WriteAllText(Path.Combine(output, "workspace-url.txt"), workspace.Url);
 try

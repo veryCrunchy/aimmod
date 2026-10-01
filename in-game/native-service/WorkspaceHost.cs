@@ -32,7 +32,8 @@ sealed class WorkspaceHost : IAsyncDisposable
     string data = "{}";
     public string Url { get; private set; } = "";
     public void Update(string json) => Volatile.Write(ref data, json);
-    public WorkspaceHost(Hub hub, string output, string? historyPath = null, NativeSettings? settings = null, CsvHistory? csvHistory = null)
+    readonly Multiplayer.MultiplayerService multiplayer;
+    public WorkspaceHost(Hub hub, string output, string? historyPath = null, NativeSettings? settings = null, CsvHistory? csvHistory = null, string[]? args = null)
     {
         outputFolder = output;
         overlaySettings = new OverlaySettings(output);
@@ -50,6 +51,9 @@ sealed class WorkspaceHost : IAsyncDisposable
         (settings ?? new NativeSettings(output)).MapEndpoints(app, prefix);
         overlaySettings.MapEndpoints(app, prefix);
         new CoachingFeedback(output).MapEndpoints(app, prefix);
+        multiplayer = Multiplayer.MultiplayerHosting.Create(hub, output, args ?? [], () => liveFeed.Read(outputFolder, Volatile.Read(ref overlayRuns)), () => Volatile.Read(ref overlayRuns));
+        multiplayer.MapEndpoints(app, prefix);
+        Multiplayer.MultiplayerHosting.MapAssets(app, prefix);
         var importedHistory = csvHistory ?? new CsvHistory(output);
         app.MapGet(prefix + "/history-import.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.HistoryImport")!, "application/javascript"));
         app.MapPost(prefix + "/history-import", async (HttpContext context) => {
@@ -211,7 +215,7 @@ sealed class WorkspaceHost : IAsyncDisposable
             await obs.DisposeAsync(); Console.Error.WriteLine("OBS browser source could not start (" + ex.GetType().Name + ").");
         }
     }
-    public async ValueTask DisposeAsync() { await keyboard.DisposeAsync(); await app.StopAsync(); await playback.DisposeAsync(); await obs.DisposeAsync(); await app.DisposeAsync(); }
+    public async ValueTask DisposeAsync() { multiplayer.Dispose(); await keyboard.DisposeAsync(); await app.StopAsync(); await playback.DisposeAsync(); await obs.DisposeAsync(); await app.DisposeAsync(); }
     sealed record PlaybackCommand(string? Action, string? Id, double? Value, double[]? Area);
     sealed record LibraryCommand(string? Action, string? Id, bool? Favorite);
 }
