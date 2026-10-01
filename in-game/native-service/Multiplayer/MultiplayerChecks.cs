@@ -1201,6 +1201,18 @@ static partial class MultiplayerChecks
         Check(loaded.Filter([new("meso-tint-ember", 1), new("unknown-item", 1), new("weapon-finish-sand", 1), new("accessory-halo", 1)]).Select(r => r.Id).SequenceEqual(["meso-tint-ember"]), "Shared looks resolve only to the same id and version in the viewer's own catalog");
         Check(CosmeticLooks.Format([new("meso-tint-ember", 1)], [("76561190000000001", [new CosmeticRef("weapon-finish-sand", 2)]), ("sim-bot", [new CosmeticRef("meso-tint-ember", 1)])])
             == "v=1\npeer=76561190000000001 items=weapon-finish-sand@2\nself=meso-tint-ember@1\n", "cosmetic-looks.txt has v=1, Steam peers only, and a self line");
+        // Character preview request (AimModCore's ParsePreviewRequest reads it).
+        var tint = loaded.Pickable.First(i => i.Id == "meso-tint-ember");
+        var previewBody = CosmeticPreviewFormat.Body("Meso", "McCree", -35.5, [tint]);
+        Check(previewBody is not null && previewBody.StartsWith("model=Meso\nskin=McCree\nyaw=-35.5\nvector=", StringComparison.Ordinal), "Preview request carries the look, the rotation and the item's parameters");
+        Check(CosmeticPreviewFormat.Body("Endo", "Default", 0, []) == "model=Endo\nyaw=0\n", "A model's default skin is not sent");
+        Check(CosmeticPreviewFormat.Body("../Meso", null, 0, []) is null && CosmeticPreviewFormat.Body("Meso", "C:/me.png", 0, []) is null, "Preview names are look names, never paths");
+        Check(CosmeticPreviewFormat.Body("Meso", null, 999, [])!.Contains("yaw=180\n"), "Preview rotation is clamped");
+        var bad = tint with { Vectors = new Dictionary<string, double[]> { ["Bad Name"] = [1, 0, 0, 1], ["Hot"] = [5, 0, 0, 1] } };
+        Check(!CosmeticPreviewFormat.Body("Meso", null, 0, [bad])!.Contains("vector="), "Preview drops parameters with bad names or values");
+        Check(CosmeticPreviewFormat.Request("model=Meso\nyaw=0\n", 3, 100) == "v=1\nexpires=105\nseq=3\nmodel=Meso\nyaw=0\n", "Preview request expires within seconds");
+        Check(CosmeticPreviewFormat.Frame("v=1\nseq=4\nfile=preview-1.png\nwidth=384\nheight=384\n") == (4, "preview-1.png"), "Preview frame record parses");
+        Check(CosmeticPreviewFormat.Frame("v=1\nseq=4\nfile=../secret.png\n") is null && CosmeticPreviewFormat.Frame(null) is null, "Preview frame only names AimMod's own PNGs");
         // Service: equip, view, the looks file with the session marker.
         long now = 8_000_000;
         var output = Path.Combine(root, "cos-output"); Directory.CreateDirectory(output);

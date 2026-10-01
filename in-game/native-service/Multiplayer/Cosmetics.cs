@@ -10,7 +10,8 @@ sealed record CosmeticRef(string Id, int Version);
 
 // One curated catalog item (in-game/docs/cosmetics.md, CosmeticsCatalog.lua).
 // Color is the item's PrimaryColor (0..1 RGB) for the 2D preview, when it has one.
-sealed record CosmeticItem(string Id, int Version, string Kind, string Name, IReadOnlyList<string> Models, IReadOnlyList<string> Parts, double[]? Color, string? Pak, bool Draft);
+sealed record CosmeticItem(string Id, int Version, string Kind, string Name, IReadOnlyList<string> Models, IReadOnlyList<string> Parts, double[]? Color, string? Pak, bool Draft,
+    IReadOnlyDictionary<string, double[]>? Vectors = null, IReadOnlyDictionary<string, double>? Scalars = null);
 
 // The curated cosmetics catalog AimMod ships (catalog.json), used only when it
 // matches its manifest (catalog-manifest.json: file sizes and SHA-256). Players
@@ -101,21 +102,22 @@ sealed partial class CosmeticsCatalog
         var models = Strings(e, "models");
         if (rules.Parts.Contains("body") && !rules.Parts.Contains("weapon") && models.Length == 0) return null;
         var hasParameters = false; double[]? color = null;
+        var vectors = new Dictionary<string, double[]>(StringComparer.Ordinal); var scalars = new Dictionary<string, double>(StringComparer.Ordinal);
         if (e.TryGetProperty("vector", out var vector) && vector.ValueKind == JsonValueKind.Object)
             foreach (var p in vector.EnumerateObject())
             {
                 if (p.Value.ValueKind != JsonValueKind.Object) return null;
                 var c = new double[4];
                 for (var i = 0; i < 4; i++) { if (!p.Value.TryGetProperty("RGBA"[i].ToString(), out var x) || !InRange(x, 0, 1)) return null; c[i] = x.GetDouble(); }
-                hasParameters = true; if (p.Name == "PrimaryColor") color = c[..3];
+                hasParameters = true; vectors[p.Name] = c; if (p.Name == "PrimaryColor") color = c[..3];
             }
         if (e.TryGetProperty("scalar", out var scalar) && scalar.ValueKind == JsonValueKind.Object)
-            foreach (var p in scalar.EnumerateObject()) { if (!InRange(p.Value, -10, 10)) return null; hasParameters = true; }
+            foreach (var p in scalar.EnumerateObject()) { if (!InRange(p.Value, -10, 10)) return null; hasParameters = true; scalars[p.Name] = p.Value.GetDouble(); }
         string? pak = e.TryGetProperty("pak", out var pk) && pk.ValueKind == JsonValueKind.Object && pk.TryGetProperty("file", out var file) && file.ValueKind == JsonValueKind.String ? file.GetString() : null;
         if (rules.NeedsPak && pak is null) return null;
         if (!rules.NeedsPak && !hasParameters) return null;
         var name = Text("name") is { Length: > 0 and <= 40 } n && !n.Any(char.IsControl) ? n : id!;
-        return new CosmeticItem(id!, version, kind, name, models, parts, color, pak, e.TryGetProperty("draft", out var d) && d.ValueKind == JsonValueKind.True);
+        return new CosmeticItem(id!, version, kind, name, models, parts, color, pak, e.TryGetProperty("draft", out var d) && d.ValueKind == JsonValueKind.True, vectors, scalars);
     }
 
     // Items players can pick: valid, not drafts, and (for pak items) with a matching pak.
