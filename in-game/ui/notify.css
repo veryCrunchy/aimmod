@@ -27,7 +27,8 @@ html,body{width:100%;height:100%;margin:0;padding:0;background:transparent!impor
 .duel-bar{height:5px;margin-top:3px;border-radius:3px;background:#1d2b26;overflow:hidden}
 .duel-fill{height:5px;background:#27e4a1}
 .duel.dodge .duel-fill{background:#f0b45a}
-.duel-time{display:block;flex-shrink:0;width:52px;text-align:right;font-size:16px;font-weight:700;color:#eef5f1}
+.duel-time{display:block;flex-shrink:0;min-width:52px;margin-left:8px;text-align:right;font-size:16px;font-weight:700;color:#eef5f1;white-space:nowrap}
+.duel-who{display:flex;flex-direction:row}.duel-name{display:block;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.duel-stat{display:block;flex-shrink:0;margin-left:3px;white-space:nowrap}
 /* Combat strip: same frame as the duel strip, plus health and a short kill feed. */
 .combat{display:flex;flex-direction:column;align-items:center;margin-bottom:12px}
 .combat .duel{margin-bottom:4px}
@@ -38,7 +39,7 @@ html,body{width:100%;height:100%;margin:0;padding:0;background:transparent!impor
 .hp-fill{height:5px;background:#27e4a1}
 .hp-fill.low{background:#ef6b6b}
 .duel-sub{font-size:11px;line-height:14px;color:#9fb5aa;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.feed{width:400px;font-size:12px;line-height:16px;text-align:right;color:#c9d8d0}
+.feed{display:flex;flex-direction:row;justify-content:flex-end;width:400px;margin-top:2px;font-size:12px;line-height:16px;color:#c9d8d0}.feed-text{display:block;padding:1px 8px;border-radius:4px;background:rgba(11,17,16,.72);white-space:nowrap}
 .feed.killer{color:#27e4a1}.feed.victim{color:#ef6b6b}
 /* Watcher badge: a drawn eye (no glyph) and a short line, top centre above the card. */
 .badge{display:flex;flex-direction:row;align-items:center;height:26px;padding:0 12px;margin-bottom:8px;border-radius:13px;background:rgba(11,17,16,.85);border:1px solid #2c4a3d;font-size:12px;color:#dcebe3}

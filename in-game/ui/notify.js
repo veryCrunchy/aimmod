@@ -34,12 +34,14 @@
     var strip=node('div','duel'+(tracking?' track':' dodge'));
     strip.appendChild(node('div','role',tracking?'YOU TRACK':'YOU DODGE'));
     var mid=node('div','duel-mid');
-    var line=node('div','duel-line',(tracking?'On '+d.opponent:d.opponent+' on you')+(typeof d.percent==='number'?' · '+d.percent.toFixed(1)+' %':'')+(d.disputed?' · disputed':''));
+    // The name truncates on its own so the on-target share and "disputed" stay readable.
+    var line=node('div','duel-line duel-who');line.appendChild(node('span','duel-name',tracking?'On '+d.opponent:d.opponent+' on you'));
+    var stat=(typeof d.percent==='number'?' · '+d.percent.toFixed(1)+'%':'')+(d.disputed?' · disputed':'');if(stat)line.appendChild(node('span','duel-stat',stat));
     mid.appendChild(line);
     var bar=node('div','duel-bar');var fill=node('div','duel-fill');
     var share=typeof d.onTarget==='number'?Math.max(0,Math.min(100,d.onTarget)):0;fill.style.width=share+'%';
     bar.appendChild(fill);mid.appendChild(bar);strip.appendChild(mid);
-    strip.appendChild(node('div','duel-time',typeof d.left==='number'?d.left+' s':'R'+d.round+'/'+d.rounds));
+    strip.appendChild(node('div','duel-time',typeof d.left==='number'?d.left+' s':'Round '+d.round+'/'+d.rounds));
     return strip;
   }
   // Combat strip on the top edge: health (or the respawn wait), frags against the limit with
@@ -51,16 +53,17 @@
     if(c.alive){
       hp.appendChild(node('div','hp-num',String(Math.max(0,Math.round(c.health)))));
       var bar=node('div','hp-bar');var fill=node('div','hp-fill'+(c.health<30?' low':''));fill.style.width=Math.max(0,Math.min(100,c.health*100/(c.max||100)))+'%';bar.appendChild(fill);hp.appendChild(bar);
-    }else hp.appendChild(node('div','hp-num down',typeof c.respawnIn==='number'?'Back in '+c.respawnIn:'Down'));
+    }else hp.appendChild(node('div','hp-num down',typeof c.respawnIn==='number'?'Back in '+c.respawnIn+' s':'Down'));
     strip.appendChild(hp);
     var mid=node('div','duel-mid');
     mid.appendChild(node('div','duel-line',c.frags+' / '+c.fragLimit+' frags'+(c.protected?' · protected':'')));
-    var other=typeof c.team==='number'?'Team '+c.team+' '+c.teamFrags+' · '+c.otherFrags+' them':(c.leader?'Best: '+c.leader+' '+c.leaderFrags:'');
+    var other=typeof c.team==='number'?'Your team '+c.teamFrags+' · Other team '+c.otherFrags:(c.leader?'Best: '+c.leader+' '+c.leaderFrags:'');
     if(other)mid.appendChild(node('div','duel-sub',other));
     strip.appendChild(mid);
     strip.appendChild(node('div','duel-time',typeof c.left==='number'?Math.floor(c.left/60)+':'+(c.left%60<10?'0':'')+(c.left%60):''));
     wrap.appendChild(strip);
-    (c.feed||[]).forEach(function(f){var line=node('div','feed'+(f.you?' '+f.you:''),f.killer+' fragged '+f.victim+(f.head?' · headshot':''));wrap.appendChild(line);});
+    // Kill feed lines sit on a dark backing so they stay readable over bright maps.
+    (c.feed||[]).forEach(function(f){var line=node('div','feed'+(f.you?' '+f.you:''));line.appendChild(node('span','feed-text',f.killer+' fragged '+(f.you==='victim'&&f.victim==='You'?'you':f.victim)+(f.head?' · headshot':'')));wrap.appendChild(line);});
     return wrap;
   }
   function button(label,css,action){var b=node('button','button'+(css?' '+css:''),label);b.type='button';b.onclick=action;return b;}
