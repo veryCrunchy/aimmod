@@ -17,6 +17,8 @@ sealed record MapPort(string Key, string Scenario, string Display, string Game, 
 static partial class MapPorts
 {
     public const string WorkshopTag = "aimmod-port";
+    // Every port title starts with this (naming.py); the Workshop search uses it.
+    public const string TitlePrefix = "AimMod - ";
     const long MaxPreviewBytes = 4L << 20;
     [GeneratedRegex(@"^AimMod - (.{1,64}) \((CSGO|CSS|CS2|GMod)\) - (.{1,64})$")] private static partial Regex PortName();
 

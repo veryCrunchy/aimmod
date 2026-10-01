@@ -140,6 +140,18 @@ test('scenario pickers put favourites and recent scenarios first, with a favouri
   const stars=s.all().filter(e=>e.tag==='button'&&e.className.indexOf('mp-fav')>=0);assert.ok(stars.every(b=>b.parentNode.className==='actions'));
   stars[0].onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'favourite',scenario:'Other Scenario',on:false});
 });
+test('match history shows opponents, scores and replay links, and rivals filter it',()=>{
+  const st=(name,place,self,key)=>({name,place,best:900-place*100,wins:0,points:0,self,key,total:900-place*100});
+  const m1={id:'m1',endedAt:900,mode:'score-race',scenario:'Synthetic Scenario',place:1,players:2,winner:'Synthetic One',won:true,simulated:false,rounds:1,standings:[st('Synthetic One',1,true,'k0'),st('Synthetic Rival',2,false,'k1')],replays:[{round:1,mine:'run-1',others:[{key:'k1',name:'Synthetic Rival',id:'run-2'}]}]};
+  const m2={id:'m2',endedAt:800,mode:'score-race',scenario:'Other Scenario',place:2,players:2,winner:'Someone Else',won:false,simulated:false,rounds:1,standings:[st('Someone Else',1,false,'k2'),st('Synthetic One',2,true,'k0')],replays:null};
+  const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view({recent:[m1,m2]}));
+  s.button('All matches').onclick();s.requests.find(r=>r.url==='/private/multiplayer?part=history').finish(200,{matches:[m1,m2],rivals:[{key:'k1',name:'Synthetic Rival',played:3,won:2,lost:1,drawn:0,lastAt:900,lastScenario:'Synthetic Scenario'}]});
+  assert.ok(s.text().includes('vs Synthetic Rival')&&s.text().includes('Rivals'));
+  s.buttons().filter(b=>b.textContent==='Details')[0].onclick();
+  assert.ok(s.text().includes('Synthetic One (you)'),'standings table');
+  s.button('Me vs Synthetic Rival').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'load',id:'run-1',compareId:'run-2'});assert.equal(s.last().url,'/private/native-replay');
+  s.button('Matches').onclick();assert.ok(s.text().includes('Matches with Synthetic Rival')&&!s.text().includes('Other Scenario'),'rival filter');
+});
 test('the map library lists ports with size, Shift and Workshop state, and installs or hosts them',()=>{
   const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view());
   s.button('Map library').onclick();const ask=s.requests.find(r=>r.url==='/private/multiplayer?part=maps');assert.ok(ask,'the library asks for ports');

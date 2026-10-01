@@ -8,8 +8,10 @@ namespace AimMod.InGame.Multiplayer;
 // Status: aimmod-lobby (in an AimMod lobby), aimmod (AimMod running), kovaaks (game without AimMod), online.
 // Spectatable: they allow watching right now; Watchers: how many already watch.
 sealed record FriendEntry(string Id, string Name, string Status, string? Detail, string? Code, bool Joinable, bool Spectatable = false, int Watchers = 0, string? Scenario = null, string? Workshop = null);
-sealed record RecentMatch(string Id, long EndedAt, string Mode, string Scenario, int? Place, int Players, string? Winner, bool Won, bool Simulated, IReadOnlyList<RecentPlayer> Standings);
-sealed record RecentPlayer(string Name, int Place, double? Best, int Wins, int Points, bool Self);
+sealed record RecentMatch(string Id, long EndedAt, string Mode, string Scenario, int? Place, int Players, string? Winner, bool Won, bool Simulated, IReadOnlyList<RecentPlayer> Standings,
+    int Rounds = 1, IReadOnlyList<RecentReplay>? Replays = null);
+// Key: a hash of the member id (MultiplayerService.PlayerKey), never the id itself.
+sealed record RecentPlayer(string Name, int Place, double? Best, int Wins, int Points, bool Self, string? Key = null, double Total = 0);
 sealed record LocalRun(bool Active, string? Scenario, double? Score, double? Seconds, double? Remaining, int Shots, int Hits, int Kills, string? Attempt);
 // How this machine starts its run for the current round.
 sealed record RoundPlan(string Key, string Scenario, string Mode, bool Generated, string State, string Message, long? LoadSequence = null, long? StartSequence = null);
@@ -19,7 +21,7 @@ sealed record RoundPlan(string Key, string Scenario, string Mode, bool Generated
 // it mirrors the host's snapshots and sends commands over the transport.
 sealed partial class MultiplayerService : IDisposable
 {
-    public const int HistoryLimit = 20;
+    public const int HistoryLimit = 200;
     readonly object gate = new();
     readonly Func<long> clock;
     readonly IMultiplayerTransport transport;
@@ -1579,8 +1581,9 @@ sealed partial class MultiplayerService : IDisposable
         if (recent.Any(r => r.Id == match.Id)) return;
         var self = match.Standings.FirstOrDefault(s => s.MemberId == SelfId);
         var winner = match.WinnerId is { } w ? match.Standings.FirstOrDefault(s => s.MemberId == w)?.Name : null;
+        var players = match.Standings.Select(s => new RecentPlayer(s.Name, s.Place, s.Best, s.Wins, s.Points, s.MemberId == SelfId, PlayerKey(s.MemberId), s.Total)).ToArray();
         recent.Insert(0, new RecentMatch(match.Id, clock(), match.Mode, match.Scenario, LobbyModes.Scored(match.Mode) ? self?.Place : null, match.Players.Count, winner,
-            match.WinnerId == SelfId, lobby.Members.Any(m => m.Simulated), match.Standings.Select(s => new RecentPlayer(s.Name, s.Place, s.Best, s.Wins, s.Points, s.MemberId == SelfId)).ToArray()));
+            match.WinnerId == SelfId, lobby.Members.Any(m => m.Simulated), players, match.Round, MatchReplays(match.Id, match.Round, players)));
         if (recent.Count > HistoryLimit) recent.RemoveRange(HistoryLimit, recent.Count - HistoryLimit);
         SaveHistory();
     }
@@ -1653,7 +1656,7 @@ sealed partial class MultiplayerService : IDisposable
                 // Steam ids and lobby tokens stay in the service; the UI acts on opaque ids only.
                 friends = new { source = friendsSource, items = Friends().Select(f => new { f.Id, f.Name, f.Status, f.Detail, f.Joinable, f.Spectatable, f.Watchers }) },
                 invites = invites.Where(i => now - i.At < 120_000).Select(i => new { i.Id, i.FromName, i.Kind, i.Summary, i.At, i.Compatible }),
-                recent,
+                recent = recent.Take(RecentInView),
                 library = new { available = library.Available, scenarios = library.Available ? library.Scenarios.Count : 0 },
                 notice = notice is { } n && now - n.At < 15_000 ? new { kind = n.Kind, text = n.Text } : null,
                 lobby = lobbyView,
@@ -1677,6 +1680,7 @@ sealed partial class MultiplayerService : IDisposable
         {
             "library" => Results.Json(LibraryView(), Protocol.Json),
             "maps" => Results.Json(MapsView(), Protocol.Json),
+            "history" => Results.Json(HistoryView(), Protocol.Json),
             "preview" => MapPreview(key) is { } image ? Results.File(image, MapPorts.ContentType(image)) : Results.NotFound(),
             _ => Results.Json(View(), Protocol.Json),
         });

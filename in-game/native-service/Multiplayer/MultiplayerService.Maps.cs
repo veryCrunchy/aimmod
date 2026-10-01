@@ -28,7 +28,8 @@ sealed partial class MultiplayerService
         lock (gate)
         {
             var now = clock();
-            if (transport.Available && now - mapsQueriedAt > 300_000 && transport.QueryWorkshop(MapPorts.WorkshopTag)) mapsQueriedAt = now;
+            // Search by title (KovaaK's uploads carry no tags); retry sooner while nothing came back.
+            if (transport.Available && now - mapsQueriedAt > (transport.WorkshopItems.Count == 0 ? 30_000 : 300_000) && transport.QueryWorkshop(MapPorts.TitlePrefix)) mapsQueriedAt = now;
             var lobby = Current;
             return new
             {

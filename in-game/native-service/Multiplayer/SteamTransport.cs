@@ -427,10 +427,17 @@ sealed class SteamTransport : IMultiplayerTransport
         lock (gate) { if (id >= 0) workshopIds[id] = item; }
         return id >= 0;
     }
-    public bool QueryWorkshop(string tag)
+    // Contract addition: ugc.query {text?, tag?} (at least one), answered by ugc.items then a
+    // result; a query while one runs gets busy. KovaaK's uploader sets no tags, so ports are
+    // found by title text and filtered by name.
+    public bool QueryWorkshop(string? text, string? tag = null)
     {
         bool can; lock (gate) can = ready && ugcQuery;
-        return can && tag.Length is > 0 and <= 32 && Command("ugc.query", new JsonObject { ["tag"] = tag }) >= 0;
+        if (!can || (text is not { Length: > 0 and <= 64 } && tag is not { Length: > 0 and <= 32 })) return false;
+        var fields = new JsonObject();
+        if (text is { Length: > 0 and <= 64 }) fields["text"] = text;
+        if (tag is { Length: > 0 and <= 32 }) fields["tag"] = tag;
+        return Command("ugc.query", fields, withId: true) >= 0;
     }
     public IReadOnlyList<WorkshopItem> WorkshopItems { get { lock (gate) return workshopItems; } }
     public void Kick(string peer) { if (Steam(peer)) Command("lobby.kick", new JsonObject { ["peer"] = peer }); }
