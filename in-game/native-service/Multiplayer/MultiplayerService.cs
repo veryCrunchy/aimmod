@@ -36,6 +36,9 @@ sealed partial class MultiplayerService : IDisposable
     readonly Dictionary<string, ClockSync> clocks = new();
     readonly List<RecentMatch> recent = [];
     readonly List<IncomingInvite> invites = [];
+    // Steam profile pictures of the people on screen (SteamAvatars.cs).
+    readonly SteamAvatars steamAvatars;
+    long avatarsSyncedAt;
     readonly Timer? timer;
     LobbyCore? core;                 // authority, when it lives on this machine
     LobbySnapshot? mirror;           // last snapshot from a remote host
@@ -70,6 +73,7 @@ sealed partial class MultiplayerService : IDisposable
         historyPath = output is null ? null : Path.Combine(output, "multiplayer-matches.json");
         if (output is not null && library.ScenarioFolder is { } folder) scenarios = new MatchScenarioStore(folder, Path.Combine(output, "multiplayer-scenarios.json"));
         LoadHistory();
+        steamAvatars = new SteamAvatars(output is null ? null : Path.Combine(output, "steam-avatars"), this.clock);
         server = new ContentServer(library, this.clock);
         swap = new ReplaySwap(output, this.clock);
         watchServer = new ContentServer(library, this.clock);
@@ -559,11 +563,11 @@ sealed partial class MultiplayerService : IDisposable
         if (watch is not { } w) return null;
         var info = w.Scenario is null ? null : library.Scenarios.FirstOrDefault(s => s.Name.Equals(w.Scenario, StringComparison.OrdinalIgnoreCase));
         var meta = poseMeta is { } m && string.Equals(m.Scenario, w.Scenario, StringComparison.OrdinalIgnoreCase) ? m : ((string, string, double)?)null;
-        return new { peer = w.Peer, name = w.Name, scenario = w.Scenario, state = w.State, message = w.Message,
+        return new { peer = w.Peer, name = w.Name, avatar = AvatarUrl(w.Peer), scenario = w.Scenario, state = w.State, message = w.Message,
             mapName = meta?.Item2 ?? info?.Map, mapScale = meta?.Item3 ?? info?.MapScale ?? 1, score = watchScore, stream = spectateStreams.GetValueOrDefault(w.Peer),
             workshop = Friends().FirstOrDefault(f => f.Id == w.Peer)?.Workshop is not null,
             download = watchDownload is { State: not "idle" } d && w.State is "downloading" or "missing" ? d.View() : null,
-            others = Friends().Where(f => f.Spectatable && f.Id != w.Peer).Take(5).Select(f => new { f.Id, f.Name }) };
+            others = Friends().Where(f => f.Spectatable && f.Id != w.Peer).Take(5).Select(f => new { f.Id, f.Name, avatar = AvatarUrl(f.Id) }) };
     }
     static string EndedReason(string name, string? reason) => reason switch
     {
@@ -809,15 +813,15 @@ sealed partial class MultiplayerService : IDisposable
         {
             var from = LobbyRules.CleanName(invite.FromName, "A friend");
             if (invite.Kind == "request")
-                return new GameNotice("inv-" + invite.Id, "invite", from + " wants to join", "Press " + key + " to open AimMod and let them in.", key, null, "popup");
+                return new GameNotice("inv-" + invite.Id, "invite", from + " wants to join", "Press " + key + " to open AimMod and let them in.", key, null, "popup") { Peer = invite.From, PeerName = from };
             var what = invite.Summary is { } s ? " to " + (LobbyModes.All.Contains(s.Mode) ? ModeLabel(s.Mode) : "a match") + (s.Scenario is { Length: > 0 } sc ? " on " + LobbyRules.CleanName(sc, "a scenario") : "") : "";
             return new GameNotice("inv-" + invite.Id, "invite", from + " invited you" + what, "Click Join, or press " + key + ".", key, null, "popup")
-                { Invite = invite.Id, Actions = [new("Join", "accept-invite", invite.Id), new("Dismiss", "decline-invite", invite.Id)] };
+                { Invite = invite.Id, Peer = invite.From, PeerName = from, Actions = [new("Join", "accept-invite", invite.Id), new("Dismiss", "decline-invite", invite.Id)] };
         }
         // Someone asks to watch you (privacy "ask").
         if (watchAsks.FirstOrDefault(a => now - a.At < 60_000) is { Peer: not null } ask)
             return new GameNotice("ask-" + ask.Peer + "-" + ask.At, "invite", ask.Name + " wants to watch you", "They’d see your view from their game.", null, null, quiet ? "none" : "popup")
-                { Eyebrow = "AimMod · Spectate", Actions = [new("Allow", "spectate-allow", ask.Peer), new("Deny", "spectate-deny", ask.Peer)] };
+                { Eyebrow = "AimMod · Spectate", Peer = ask.Peer, PeerName = ask.Name, Actions = [new("Allow", "spectate-allow", ask.Peer), new("Deny", "spectate-deny", ask.Peer)] };
         // Tournament calls (match ready, check-in, your ban, confirm the result), unless a game is running.
         if (!quiet && Current is null or { Match: null or { Phase: MatchPhases.Final } } && Tournaments?.Notice() is { } tournamentNotice) return tournamentNotice;
         if (Current is not { } lobby) return flash is { } f && now < f.Until ? f.Notice : null;
@@ -985,6 +989,8 @@ sealed partial class MultiplayerService : IDisposable
             return JsonSerializer.Serialize(new
             {
                 version = 1, active = notice is not null, badge, notice?.Id, notice?.Kind, notice?.Eyebrow, notice?.Title, notice?.Body, notice?.Key, notice?.Countdown, notice?.Sound, notice?.Invite,
+                // Whoever the notice is about (invites, watch requests, friends): name for the initials, and their Steam picture.
+                person = notice?.Peer is { } who ? new { name = LobbyRules.CleanName(notice.PeerName, "Player"), avatar = AvatarUrl(who) } : null,
                 // full: the notice layer covers the screen (the HUDs sit at its edges); toast: top centre only.
                 layout = cs is not null || board is not null || boardFull is not null ? "full" : "toast",
                 actions = notice?.Actions, interactive = notice?.Actions is { Count: > 0 } || cs?.BuyOpen == true, volume = prefs.Sounds ? prefs.Volume : 0, duel, combat, cs, board, boardFull,
@@ -1213,6 +1219,7 @@ sealed partial class MultiplayerService : IDisposable
             MapTick();
             var now = clock();
             WatchFriends(now);
+            SyncAvatars(now);
             UpdateSessionMarker();
             AnnounceLook();
             WriteLooks();
@@ -1281,6 +1288,35 @@ sealed partial class MultiplayerService : IDisposable
         }
     }
 
+    // Everyone the UI can show gets their Steam picture: lobby members (Steam sends pictures of
+    // non-friends in a shared lobby, so each machine asks its own Steam), friends, spectators,
+    // whoever asks to watch and whoever invites us. Simulated players keep their initials.
+    void SyncAvatars(long now)
+    {
+        if (now - avatarsSyncedAt < 1000) return;
+        avatarsSyncedAt = now;
+        var ids = new List<string>();
+        if (Current is { } lobby)
+        {
+            ids.AddRange(lobby.Members.Where(m => !m.Simulated).Select(m => m.Id));
+            if (lobby.Match is { } match) ids.AddRange(match.Players);
+        }
+        ids.AddRange(Friends().Select(f => f.Id));
+        ids.AddRange(watchers.Select(w => w.Peer));
+        ids.AddRange(watchAsks.Select(a => a.Peer));
+        ids.AddRange(invites.Where(i => i.From is not null).Select(i => i.From!));
+        if (watch is { } w) ids.Add(w.Peer);
+        foreach (var id in ids.Distinct().Take(256)) steamAvatars.Seen(id);
+        foreach (var (id, have) in steamAvatars.Due()) transport.RequestAvatar(id, have);
+    }
+    string? AvatarUrl(string? id) => steamAvatars.Url(id);
+    Dictionary<string, string> AvatarMap(IEnumerable<string> ids)
+    {
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var id in ids) if (!map.ContainsKey(id) && AvatarUrl(id) is { } url) map[id] = url;
+        return map;
+    }
+
     void Broadcast(LobbySnapshot snapshot, bool force)
     {
         var now = clock();
@@ -1293,6 +1329,8 @@ sealed partial class MultiplayerService : IDisposable
     void Handle(TransportEvent e)
     {
         if (e.Kind == TransportEvent.InviteReceived) { if (e.Invite is not null) AddInvite(e.Invite); return; }
+        if (e.Kind == TransportEvent.Avatar) { steamAvatars.Received(e.Peer, e.Picture?.Hash, e.Picture?.Png, e.Picture?.Unchanged == true); return; }
+        if (e.Kind == TransportEvent.Persona) { if (e.Host) steamAvatars.Changed(e.Peer); return; }
         if (e.Kind == TransportEvent.WorkshopUpdate) { WorkshopUpdate(e.Workshop); return; }
         if (e.Kind == TransportEvent.SpectateStarted)
         {
@@ -2008,6 +2046,8 @@ sealed partial class MultiplayerService : IDisposable
                     download = DownloadView(lobby),
                     spectate = SpectateView(lobby),
                     replays = ReplaysView(lobby.Match),
+                    // Member id -> Steam picture link, for members whose picture has arrived.
+                    avatars = AvatarMap(lobby.Members.Select(m => m.Id).Concat(lobby.Match?.Players ?? [])),
                 };
             }
             var friendsSource = Simulation is not null && !transport.Available ? "simulation" : transport.Available ? "steam" : "unavailable";
@@ -2024,15 +2064,15 @@ sealed partial class MultiplayerService : IDisposable
                 picks = PicksView(),
                 presets = presetNames ??= LoadPresets().Presets.Select(p => p.Name).ToArray(),
                 watch = WatchView(),
-                watchers = watchers.Select(w => new { peer = w.Peer, name = w.Name }),
-                watchAsks = watchAsks.Select(a => new { peer = a.Peer, name = a.Name }),
+                watchers = watchers.Select(w => new { peer = w.Peer, name = w.Name, avatar = AvatarUrl(w.Peer) }),
+                watchAsks = watchAsks.Select(a => new { peer = a.Peer, name = a.Name, avatar = AvatarUrl(a.Peer) }),
                 avatars = AvatarProfiles.All.Select(a => new { a.Id, a.Label }),
                 capabilities = new { invite = transport.Available, friends = friendsSource != "unavailable", gameLoad = caps.Contains("load"), gameStart = caps.Contains("start") },
-                self = new { id = SelfId, name = LocalName() },
+                self = new { id = SelfId, name = LocalName(), avatar = AvatarUrl(SelfId) },
                 joining = (hostPeer is not null && mirror is null) || joinPendingSince is not null ? new { since = joinPendingSince ?? connectAt, stage = hostPeer is null ? "lobby" : "host" } : null,
                 // Steam ids and lobby tokens stay in the service; the UI acts on opaque ids only.
-                friends = new { source = friendsSource, items = Friends().Select(f => new { f.Id, f.Name, f.Status, f.Detail, f.Joinable, f.Spectatable, f.Watchers }) },
-                invites = invites.Where(i => now - i.At < 120_000).Select(i => new { i.Id, i.FromName, i.Kind, i.Summary, i.At, i.Compatible }),
+                friends = new { source = friendsSource, items = Friends().Select(f => new { f.Id, f.Name, f.Status, f.Detail, f.Joinable, f.Spectatable, f.Watchers, avatar = AvatarUrl(f.Id) }) },
+                invites = invites.Where(i => now - i.At < 120_000).Select(i => new { i.Id, i.FromName, i.Kind, i.Summary, i.At, i.Compatible, avatar = AvatarUrl(i.From) }),
                 recent = recent.Take(RecentInView),
                 library = new { available = library.Available, scenarios = library.Available ? library.Scenarios.Count : 0 },
                 notice = notice is { } n && now - n.At < 15_000 ? new { kind = n.Kind, text = n.Text } : null,
@@ -2064,6 +2104,8 @@ sealed partial class MultiplayerService : IDisposable
             _ => Results.Json(View(), Protocol.Json),
         });
         MapPreviewEndpoints(routes, prefix);
+        // Steam pictures, only for people this session has shown (SteamAvatars.cs).
+        SteamAvatars.Map(routes, prefix, steamAvatars);
         // Developer mode and its tools (off by default; local UI only).
         DevTools = outputFolder is null ? null : new Developer.DeveloperTools(outputFolder, library, this);
         Developer.DeveloperEndpoints.Map(routes, prefix, new Developer.DeveloperMode(outputFolder), this, DevTools);

@@ -164,6 +164,15 @@ namespace bridge
             std::uint64_t peer;
             Clock::time_point deadline;
         };
+        // avatar.get {format:"png"} (feature "avatar"): a 64x64 picture as PNG.
+        struct AvatarWant
+        {
+            std::uint64_t peer = 0;
+            std::string have;          // hash the service already holds ("unchanged" when it matches)
+            Clock::time_point deadline{};
+            Clock::time_point next{};  // next look at the handle while Steam loads it
+            bool asked = false;        // RequestUserInformation sent
+        };
 
         struct PendingJoin
         {
@@ -207,6 +216,9 @@ namespace bridge
         void EmitLobby();
         void EmitFriends();
         void EmitAvatar(std::uint64_t peer, bool final);
+        void PollAvatars(const std::set<std::uint64_t>& loaded);
+        void EmitPngAvatar(const AvatarWant& want);
+        void FlushPersona(const std::map<std::uint64_t, int>& changed);
         void EmitJoinRequest(const PendingJoin& join);
         std::string Name(std::uint64_t peer) const;
         static std::string Initials(const std::string& name);
@@ -285,6 +297,10 @@ namespace bridge
         std::deque<std::string> m_commands;
         std::deque<RawCallback> m_callbacks;
         std::deque<bool> m_pipeStates;
+        // Friends callbacks fire for every friend's status change, so they are folded
+        // per SteamID here instead of crowding the callback queue.
+        std::map<std::uint64_t, int> m_personaChanged; // PersonaStateChange_t: OR of change flags
+        std::set<std::uint64_t> m_avatarsLoaded;       // AvatarImageLoaded_t
 
         // Worker-owned state.
         std::uint64_t m_self = 0;
@@ -300,6 +316,10 @@ namespace bridge
         std::vector<PendingCall> m_lateCalls; // timed out; undone if they complete late
         void PollLateCalls();
         std::vector<Avatar> m_avatars;
+        std::vector<AvatarWant> m_pngAvatars;
+        double m_avatarBudget = 8; // PNG avatar events, refilled at 8 per second
+        Clock::time_point m_avatarBudgetAt{};
+        std::map<std::uint64_t, Clock::time_point> m_infoRequested; // RequestUserInformation for unnamed friends
         std::optional<PendingJoin> m_pendingJoin;
         std::map<std::uint64_t, Conn> m_conns;
         steamabi::HSteamListenSocket m_listen = 0;

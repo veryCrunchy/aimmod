@@ -31,7 +31,7 @@ sealed class SteamTransport : IMultiplayerTransport
     int nextId = 1, createId = -1, joinId = -1;
     readonly Dictionary<int, string> workshopIds = new();
     readonly Dictionary<(string Peer, int Transfer), int> outstanding = new();
-    bool ugc, ugcQuery, devAvatar; IReadOnlyList<WorkshopItem> workshopItems = []; int bulkBytes, bulkWindow = 4;
+    bool ugc, ugcQuery, devAvatar, avatars; IReadOnlyList<WorkshopItem> workshopItems = []; int bulkBytes, bulkWindow = 4;
     string? bridgeVersion; RejoinPoint? lastLobby;
     HashSet<string> lastCharKeys = new();
     readonly Dictionary<string, string> spectators = new();
@@ -148,6 +148,7 @@ sealed class SteamTransport : IMultiplayerTransport
                     ugc = features.Contains("ugc");
                     ugcQuery = ugc && features.Contains("ugc-query");
                     devAvatar = features.Contains("dev-avatar");
+                    avatars = features.Contains("avatar");
                     bridgeVersion = Str(e, "bridge");
                     lastLobby = e.TryGetProperty("lastLobby", out var ll) && ll.ValueKind == JsonValueKind.Object && Str(ll, "lobby") is { } lastId
                         ? new RejoinPoint(lastId, Str(ll, "hostName") ?? "your host", ll.TryGetProperty("ageSeconds", out var age) && age.TryGetInt64(out var ag) ? ag : 0) : null;
@@ -187,14 +188,14 @@ sealed class SteamTransport : IMultiplayerTransport
                     // Proposed bridge event (LobbyInvite_t, 503): an invite the player hasn't accepted yet.
                     if (Str(e, "lobby") is not { } invited) break;
                     events.Enqueue(new TransportEvent(Str(e, "from") ?? "", TransportEvent.InviteReceived, Invite: new IncomingInvite("inv-" + invited[^Math.Min(6, invited.Length)..],
-                        Str(e, "fromName") ?? "A friend", "incoming", invited, null, clock(), !e.TryGetProperty("compatible", out var cv) || cv.ValueKind != JsonValueKind.False)));
+                        Str(e, "fromName") ?? "A friend", "incoming", invited, null, clock(), !e.TryGetProperty("compatible", out var cv) || cv.ValueKind != JsonValueKind.False, Str(e, "from") is { } inviter && Steam(inviter) ? inviter : null)));
                     break;
                 case "join.requested":
                     if (Str(e, "lobby") is not { } target) break;
                     var source = Str(e, "source") ?? "steam-invite";
                     var from = Str(e, "fromName");
                     events.Enqueue(new TransportEvent(Str(e, "from") ?? "", TransportEvent.InviteReceived, Invite: new IncomingInvite("join-" + target[^Math.Min(6, target.Length)..],
-                        from ?? "A friend", source.StartsWith("launch", StringComparison.Ordinal) ? "launch" : "invite", target, null, clock(), Bool(e, "compatible"))));
+                        from ?? "A friend", source.StartsWith("launch", StringComparison.Ordinal) ? "launch" : "invite", target, null, clock(), Bool(e, "compatible"), Str(e, "from") is { } requester && Steam(requester) ? requester : null)));
                     break;
                 case "p2p.connected":
                     if (Str(e, "peer") is { } connected)
@@ -253,6 +254,22 @@ sealed class SteamTransport : IMultiplayerTransport
                         }
                     // AimMod players first, then KovaaK's players, then everyone else online.
                     friends = items.OrderBy(f => f.Status switch { "aimmod-lobby" => 0, "aimmod" => 1, "kovaaks" => 2, "online" => 3, _ => 4 }).ThenBy(f => f.Name, StringComparer.OrdinalIgnoreCase).Take(200).ToArray();
+                    break;
+                // Contract addition (feature "avatar"): avatar {peer, format:"png", w, h, hash, png} |
+                // {peer, format, hash, unchanged:true} | {peer, format, missing:true, reason}.
+                case "avatar" when Str(e, "format") == "png" && Str(e, "peer") is { } pictured && Steam(pictured):
+                    var hash = Str(e, "hash");
+                    if (hash is { Length: 16 } && Bool(e, "unchanged")) { events.Enqueue(new TransportEvent(pictured, TransportEvent.Avatar, Picture: new AvatarPicture(hash, null, true))); break; }
+                    byte[]? png = null;
+                    if (hash is { Length: 16 } && Str(e, "png") is { Length: > 0 and <= SteamAvatars.MaxPng * 4 / 3 + 4 } encoded)
+                        try { png = Convert.FromBase64String(encoded); } catch (FormatException) { }
+                    events.Enqueue(new TransportEvent(pictured, TransportEvent.Avatar, Picture: png is null ? null : new AvatarPicture(hash!, png, false)));
+                    break;
+                // Contract addition: persona {peer, name, initials, avatar}: a friend's or member's name or picture arrived or changed.
+                case "persona" when Str(e, "peer") is { } person && Steam(person):
+                    if (Str(e, "name") is { } renamed && !string.IsNullOrWhiteSpace(renamed))
+                        friends = friends.Select(f => f.Id == person ? f with { Name = LobbyRules.CleanName(renamed, "Friend") } : f).ToArray();
+                    events.Enqueue(new TransportEvent(person, TransportEvent.Persona, Host: Bool(e, "avatar"), Reason: Str(e, "name")));
                     break;
                 case "ugc.progress" or "ugc.state" or "ugc.installed" or "ugc.error":
                     if (Str(e, "item") is { } item)
@@ -480,6 +497,14 @@ sealed class SteamTransport : IMultiplayerTransport
         var fields = new JsonObject { ["on"] = on, ["mode"] = mode };
         if (on && profile is { Length: > 0 and <= 64 } && profile.All(c => char.IsAsciiLetterOrDigit(c) || c == ' ')) fields["profile"] = profile;
         return Command("dev.avatar", fields, withId: true) >= 0;
+    }
+    public bool RequestAvatar(string peer, string? have)
+    {
+        bool can; lock (gate) can = ready && avatars;
+        if (!can || !Steam(peer)) return false;
+        var fields = new JsonObject { ["peer"] = peer, ["format"] = "png" };
+        if (have is { Length: 16 } && have.All(c => char.IsAsciiDigit(c) || c is >= 'a' and <= 'f')) fields["have"] = have;
+        return Command("avatar.get", fields, withId: true) >= 0;
     }
     public void Kick(string peer) { if (Steam(peer)) Command("lobby.kick", new JsonObject { ["peer"] = peer }); }
     public void Transfer(string peer) { if (Steam(peer)) Command("lobby.transfer", new JsonObject { ["peer"] = peer }); }

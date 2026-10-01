@@ -9,6 +9,11 @@ html,body{width:100%;height:100%;margin:0;padding:0;background:transparent!impor
 .row{display:flex;flex-direction:row;align-items:center}
 .count{display:block;flex-shrink:0;width:52px;height:52px;line-height:46px;margin-right:14px;border-radius:26px;border:3px solid #27e4a1;text-align:center;font-size:28px;font-weight:700;color:#eef5f1}
 .text{flex:1;min-width:0}
+/* Who an invite or request is from: initials, then their Steam picture in the same round box with a 1px ring. */
+.who{display:block;position:relative;flex-shrink:0;width:44px;height:44px;line-height:44px;margin-right:14px;border-radius:22px;overflow:hidden;text-align:center;font-size:15px;font-weight:700;letter-spacing:.3px}
+.who.mint{background:#173b2f;color:#27e4a1}.who.cyan{background:#15303d;color:#66ccff}.who.amber{background:#3a2c17;color:#f0b45a}.who.violet{background:#272040;color:#b9a3ff}.who.rose{background:#3a1d25;color:#ff8fa3}
+.who-img{position:absolute;left:0;top:0;width:44px;height:44px;border-radius:22px;border:1px solid rgba(238,245,241,.18);opacity:0}
+.who.pic{background:#0d1512;color:#0d1512}.who.pic .who-img{opacity:1}
 .title{font-size:18px;font-weight:700;line-height:24px;max-height:48px;overflow:hidden}
 .body{font-size:13px;line-height:18px;color:#c9d8d0;margin-top:2px}
 .key{display:block;flex-shrink:0;margin-left:14px;padding:0 10px;height:34px;line-height:32px;border:1px solid #f0b45a;border-bottom-width:3px;border-radius:6px;background:#2b2316;color:#f6dfb8;font-size:15px;font-weight:700}

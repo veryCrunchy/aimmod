@@ -283,3 +283,47 @@ test('mode cards show the line icon in a panel, mint when selected, and every mo
 test('leaving stops polling and ignores late answers',()=>{
   const s=setup();s.api.enter(s.container);s.api.leave();s.requests[0].finish(200,view());assert.equal(s.buttons().length,0);
 });
+test('Steam pictures cover the initials once loaded, at the same size, and fall back on errors or bad links',()=>{
+  // Synthetic ids and links only.
+  const B='/avatar/76561190000000102.png?v=89abcdef',F='/avatar/76561190000000103.png?v=00ff00ff';
+  const s=setup();s.api.enter(s.container);
+  const friends={source:'steam',items:[{id:'76561190000000103',name:'Synthetic Friend',status:'aimmod',detail:'Playing',joinable:false,avatar:F},
+    {id:'f4',name:'Plain Friend',status:'online',detail:'Online',joinable:false,avatar:null},{id:'f5',name:'Odd Friend',status:'online',detail:'Online',joinable:false,avatar:'https://example.invalid/x.png'},
+    {id:'f6',name:'Climber Friend',status:'online',detail:'Online',joinable:false,avatar:'/avatar/../secret.png'}]};
+  const again=()=>{s.api.leave();s.api.enter(s.container);s.requests[s.requests.length-1].finish(200,view({friends,lobby:lobby({avatars:{p2:B}})}));};
+  s.requests[0].finish(200,view({friends,lobby:lobby({avatars:{p2:B}})}));
+  const circles=()=>s.all().filter(e=>/^mp-avatar\b/.test(e.className)&&e.className.indexOf('empty')<0);
+  const img=url=>s.all().find(e=>e.tag==='img'&&e.src==='/private'+url);
+  const two=img(B);assert.ok(two,'the member row asks the service for the picture');
+  const circle=two.parentNode;assert.equal(circle.children.length,1);assert.match(circle.className,/^mp-avatar (mint|cyan|amber|violet|rose)$/,'initials circle until it loads');
+  assert.equal(circle.textContent,'ST','initials stay underneath');assert.equal(two.attrs.alt,'');assert.equal(two.draggable,false);
+  two.onload();assert.match(circle.className,/ pic$/,'loaded: the picture covers the initials');
+  assert.ok(img(F),'friends show their picture too');
+  assert.ok(!s.all().some(e=>e.tag==='img'&&/example\.invalid|\.\.\//.test(e.src||'')),'only the service’s own picture links are used');
+  const plain=circles().find(e=>e.textContent==='PF');assert.ok(plain&&!plain.children.length,'no picture: initials only');
+  const one=circles().find(e=>e.textContent==='SO');assert.ok(one&&!one.children.length,'members without a picture keep initials');
+  // A re-render shows a picture seen before at once (no flash of initials).
+  again();assert.match(img(B).parentNode.className,/ pic$/);
+  // A picture that fails goes away and isn't asked for again.
+  const failing=img(F),holder=failing.parentNode;failing.onerror();
+  assert.ok(!/ pic/.test(holder.className)&&!holder.children.includes(failing),'a failed picture is removed');
+  again();assert.ok(!img(F),'and not retried');
+  // Same box either way: the picture is exactly the circle's size, round, with a 1px ring.
+  const css=fs.readFileSync(path.join(__dirname,'multiplayer.css'),'utf8');
+  assert.match(css,/\.mp-avatar\{[^}]*position:relative[^}]*width:40px;height:40px[^}]*border-radius:20px[^}]*overflow:hidden/);
+  assert.match(css,/\.mp-avatar-img\{position:absolute;left:0;top:0;width:40px;height:40px;border-radius:20px;border:1px solid rgba\([^)]*\);box-sizing:border-box;opacity:0\}/);
+  assert.match(css,/\.mp-avatar\.small \.mp-avatar-img\{width:28px;height:28px;border-radius:14px\}/);
+  assert.match(css,/\.mp-avatar\.small\{width:28px;height:28px/);
+});
+test('pictures reach standings, spectate lists and invites; names the font can’t draw keep what it can',()=>{
+  const B='/avatar/76561190000000102.png?v=89abcdef';
+  const s=setup();s.api.enter(s.container);
+  s.requests[0].finish(200,view({watchAsks:[{peer:'76561190000000104',name:'Asking Friend',avatar:'/avatar/76561190000000104.png?v=11112222'}],
+    invites:[{id:'i1',fromName:'Inviting Friend',kind:'incoming',summary:null,at:1000,compatible:true,avatar:'/avatar/76561190000000105.png?v=33334444'}],
+    friends:{source:'steam',items:[{id:'f7',name:'ツ Kestrel ツ',status:'online',detail:'Online',joinable:false},{id:'f8',name:'小明',status:'online',detail:'Online',joinable:false}]}}));
+  const srcs=s.all().filter(e=>e.tag==='img').map(e=>e.src);
+  assert.ok(srcs.includes('/private/avatar/76561190000000104.png?v=11112222'),'watch requests');
+  assert.ok(srcs.includes('/private/avatar/76561190000000105.png?v=33334444'),'invites');
+  const t=s.text();assert.ok(t.includes('|Kestrel|')&&!t.includes('ツ'),'a name with symbols the font lacks keeps its readable part');
+  assert.ok(t.includes('|Friend|'),'a name with nothing drawable falls back');
+});

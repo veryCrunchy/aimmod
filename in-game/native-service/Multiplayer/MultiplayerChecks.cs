@@ -35,6 +35,7 @@ static partial class MultiplayerChecks
         SteamPipe();
         Follow();
         DevAvatarChecks();
+        AvatarChecks();
         Boards();
         CsTeams();
         Marker();
@@ -849,6 +850,8 @@ static partial class MultiplayerChecks
         public bool WorkshopDownload(string item) => false;
         public readonly List<string> DevAvatars = [];
         public bool DevAvatar(bool on, string mode, string? profile = null) { DevAvatars.Add((on ? "on " : "off ") + mode + (profile is null ? "" : " " + profile)); return true; }
+        public readonly List<(string Peer, string? Have)> AvatarAsks = [];
+        public bool RequestAvatar(string peer, string? have) { AvatarAsks.Add((peer, have)); return true; }
         // Bulk lane stand-in: chunks arrive in order; DropAfter cuts a transfer short like a lost link.
         public int BulkChunkBytes { get; set; }
         public int DropAfter = -1, BulkSent;
