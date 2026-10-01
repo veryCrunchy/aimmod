@@ -16,7 +16,13 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from . import geometry as g
 from . import scene
 from .materials import Slot
-from .spawns import _solids, blocked, hull_box
+from .spawns import HULL, _solids, blocked, hull_box
+
+FLOOR_GAP_CHECK = 4.0
+
+
+def HULL_H() -> float:
+    return HULL["height"]
 
 SUPPORT_GAP = 48.0
 CELL = 128.0
@@ -193,8 +199,17 @@ def reachability(sc: scene.Scene, jump_up: float = JUMP_UP):
 
     movers: Dict[int, List[int]] = defaultdict(list)
 
+    cache: Dict[int, List[int]] = {}
+
     def neighbours(i: int):
-        yield from movers.get(i, ())
+        if i in cache:
+            return cache[i]
+        out = list(movers.get(i, ()))
+        out += list(_walk(i))
+        cache[i] = out
+        return out
+
+    def _walk(i: int):
         p = nodes[i]
         cx, cy = int(p[0] // SPACING), int(p[1] // SPACING)
         for dx in (-1, 0, 1):
@@ -210,6 +225,15 @@ def reachability(sc: scene.Scene, jump_up: float = JUMP_UP):
                     hb = hull_box(mid, gap=STEP_UP + 1)
                     if blocked(hb, index.near(hb[0], hb[1])):
                         continue
+                    if abs(dz) > STEP_UP:
+                        # falling or jumping: the whole vertical sweep at the lower spot must be clear,
+                        # otherwise the "drop" would go through a floor (or the jump through a ceiling)
+                        low = q if dz < 0 else p
+                        top = max(p[2], q[2]) + HULL_H()
+                        lo_box, hi_box = hull_box(low, gap=FLOOR_GAP_CHECK)
+                        sweep = (lo_box, (hi_box[0], hi_box[1], top))
+                        if blocked(sweep, index.near(sweep[0], sweep[1])):
+                            continue
                     yield j
 
     def nearest(p):
@@ -282,9 +306,31 @@ def reachability(sc: scene.Scene, jump_up: float = JUMP_UP):
         if not all(o in reach for o in valid):
             cross = False
     reached = [nodes[i] for i in sorted(union)]
+
+    # Collision sanity: places you can walk or fall into but never leave (no way back to any spawn).
+    # Water is excluded (you swim out of pools).
+    rev: Dict[int, List[int]] = defaultdict(list)
+    for i in union:
+        for j in neighbours(i):
+            rev[j].append(i)
+    back = set(valid)
+    dq = deque(valid)
+    while dq:
+        j = dq.popleft()
+        for i in rev.get(j, ()):
+            if i not in back:
+                back.add(i)
+                dq.append(i)
+    liquids = [go for go in sc.gameobjects if go["kind"] in ("water", "hurt")]
+
+    def in_liquid(p) -> bool:
+        return any(all(abs(p[k] - go["origin"][k]) <= go["size"][k] / 2 + 24 for k in range(3)) for go in liquids)
+
+    traps = [nodes[i] for i in union if i not in back and not in_liquid(nodes[i])]
     return {"nodes": len(nodes), "reached": len(reached), "spawns_connected": stuck == 0 and bool(valid),
             "teams_connected": cross, "isolated_spawns": isolated,
-            "spawns_that_cannot_reach_their_team": stuck}, reached
+            "spawns_that_cannot_reach_their_team": stuck, "trapped_spots": len(traps),
+            "trapped_examples": [[round(v) for v in p] for p in spread(traps, 6)]}, reached
 
 
 def spread(points: Sequence[Vec], count: int, avoid: Sequence[Vec] = ()) -> List[Vec]:
@@ -316,6 +362,9 @@ def run(sc: scene.Scene, slots: List[Slot], tex_slot: Dict[str, int], jump_up: f
         problems.append("some spawns cannot walk to the rest of their team")
     if dark:
         problems.append(f"{dark} near-black faces in the playable area")
+    if reach.get("trapped_spots", 0) > max(8, 0.02 * max(1, reach.get("reached", 0))):
+        problems.append(f"{reach['trapped_spots']} spots where a player gets stuck (cannot walk back to a "
+                        f"spawn), e.g. {reach.get('trapped_examples')}")
     return {"pass": not problems, "problems": problems, "reachability": reach, "dark_faces": dark,
             "_reached": reached,
             "props_kept": floating, "view_spots": [list(map(lambda v: round(v, 1), p)) for p in spread(reached, 8, [s.origin for s in sc.spawns[:1]])]}

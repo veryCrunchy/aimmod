@@ -27,8 +27,10 @@ def rule_for(texture: str, table: dict) -> dict:
     if t == NODRAW:
         return table.get("stand_in", table["default"])
     base = t.rsplit("/", 1)[-1]
-    for target in (base, t):
+    for pass_no, target in enumerate((base, t)):
         for rule in table["rules"]:
+            if pass_no == 1 and rule.get("basename_only"):
+                continue
             if any(k in target for k in rule["keywords"]):
                 return rule
     return table["default"]
@@ -50,8 +52,8 @@ def auto_tint(refl: Colour, pure: bool) -> Colour:
     if m < 1e-3:
         return (0.4, 0.4, 0.4)
     hue = tuple(x / m for x in s)
-    strength = 0.65
-    bright = max(0.55, min(1.0, 0.45 + 0.7 * m))
+    strength = 0.9  # follow the source colour closely; textured materials keep their detail
+    bright = max(0.45, min(1.0, 0.3 + 0.85 * m))
     return tuple((1 - strength * (1 - h)) * bright for h in hue)  # type: ignore[return-value]
 
 
@@ -87,6 +89,12 @@ class Slot:
     metallic: float
     category: str
     textures: List[str]
+    fullbright: float = 0.0
+
+
+def _saturation(c) -> float:
+    hi, lo = max(c), min(c)
+    return 0.0 if hi < 1e-6 else (hi - lo) / hi
 
 
 def _orientation(normal) -> str:
@@ -142,7 +150,7 @@ def allocate(sc: scene.Scene, table: dict, groups: int = 2) -> Tuple[List[Slot],
 
     # Spend spare slots on splitting the most colour-diverse categories.
     while len(items) < capacity:
-        cand = [c for c in items if len(c.textures) > 1 and c.spread() > 0.0015]
+        cand = [c for c in items if len(c.textures) > 1 and c.spread() > 0.0008]
         if not cand:
             break
         big = max(cand, key=lambda c: c.area * c.spread())
@@ -220,6 +228,9 @@ def _assign_surfaces(items: Sequence[Cluster], table: dict, groups: int) -> List
             # No texture colour in the source format: start from the category's typical colour.
             hx = rule["colour"]
             mean = tuple((int(hx[i:i + 2], 16) / 255.0) ** 2.2 for i in (0, 2, 4))
+        sat = _saturation(srgb(mean))
+        if tint == "auto" and sat > 0.38 and mat != "MI_WA_PureColor" and c.category not in ("grass", "wood"):
+            mat = "MI_WA_PureColor"  # strongly coloured paint: keep the colour itself
         if tint == "auto":
             hexv = tint_hex(auto_tint(mean, mat == "MI_WA_PureColor"))
         elif tint == "none":
@@ -228,5 +239,6 @@ def _assign_surfaces(items: Sequence[Cluster], table: dict, groups: int) -> List
             hexv = tint.lower().lstrip("#")[:6] + "ff"
         slots.append(Slot(group=g, surface=s, material=mat, tint=hexv, scale=float(rule.get("scale", 1.0)),
                           roughness=float(rule.get("roughness", 0.8)), metallic=float(rule.get("metallic", 0.0)),
-                          category=c.category, textures=sorted(c.textures)))
+                          category=c.category, textures=sorted(c.textures),
+                          fullbright=float(rule.get("fullbright", 0.0))))
     return slots

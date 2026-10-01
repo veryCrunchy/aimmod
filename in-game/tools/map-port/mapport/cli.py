@@ -173,7 +173,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="movement preset from movement_presets.json (default: quake for Q3/QL maps, else cs)")
     ap.add_argument("--bots", type=int, default=5, help="target bots in the scenario")
     ap.add_argument("--disp-step", type=int, default=2, help="displacement grid step (1 = full detail)")
-    ap.add_argument("--disp-thickness", type=float, default=8.0, help="displacement slab thickness (units)")
+    ap.add_argument("--disp-thickness", type=float, default=16.0, help="displacement slab thickness (units)")
     ap.add_argument("--materials", help="alternative material mapping table (JSON)")
     ap.add_argument("--keep-skybox", action="store_true", help="keep the 3D skybox room and detached areas")
     ap.add_argument("--no-scenario", action="store_true")

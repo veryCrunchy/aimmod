@@ -21,7 +21,7 @@ SURF_SKY, SURF_NODRAW = 0x4, 0x80
 MST_PATCH = 2
 
 FEET_OFFSET = 24.0      # Q3 player origin sits 24 units above the feet (bbox -24..32)
-PATCH_THICKNESS = 4.0
+PATCH_THICKNESS = 12.0
 
 TOOL_MAP = {
     "common/caulk": "tools/toolsnodraw", "common/caulkshadow": "tools/toolsnodraw",
@@ -181,6 +181,10 @@ def load(data: bytes, name: str, patch_thickness: float = PATCH_THICKNESS) -> sc
             pts_all += [p for poly in polys if poly for p in poly]
             if cls.lower() in objectives.VOLUME_CLASSES:
                 sc.volumes.append((ent, [p for poly in polys if poly for p in poly]))
+            if bcont & (C_WATER | C_SLIME | C_LAVA) and not bcont & C_SOLID:
+                liquid = "lava" if bcont & C_LAVA else "slime" if bcont & C_SLIME else "water"
+                scene.add_liquid(sc, liquid, [p for poly in polys if poly for p in poly])
+                continue
             kind = classify.classify(texes, cls, source_contents(bcont))
             if kind is None:
                 sc.bump("dropped_" + (cls.lower() if cls != "worldspawn" else "nonsolid_or_tool"))

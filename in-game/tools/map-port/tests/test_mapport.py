@@ -286,7 +286,8 @@ class Quake3Tests(unittest.TestCase):
                 self.assertEqual(kinds, [scene.CLIP, scene.SOLID])
                 self.assertGreaterEqual(sc.stats.get("kept_patch_slabs", 0), 2)
                 top = max(p[2] for b in sc.brushes if b.source == "patch" for f in b.faces for p in f.polygon)
-                self.assertAlmostEqual(top, 64.0, delta=6.0)  # bezier peak of a 128-high control point
+                # bezier peak of a 128-high control point is 64; the slab grows away from the visible (lower) side
+                self.assertTrue(58.0 <= top <= 64.0 + quake3.PATCH_THICKNESS + 6.0, top)
                 self.assertEqual([s.origin[2] for s in sc.spawns], [0.0, 0.0])  # 24 above the feet
                 kinds = sorted(go["kind"] for go in sc.gameobjects)
                 self.assertEqual(kinds, ["jumppad", "waypoint"])
@@ -331,6 +332,25 @@ class GoldSrcTests(unittest.TestCase):
         self.assertEqual(materials.rule_for(top.texture, materials.load_table())["category"], "sand")
         teams = sorted((s.team, s.origin[2]) for s in sc.spawns)
         self.assertEqual(teams, [(1, 0.0), (2, 0.0)])
+
+
+class LiquidTests(unittest.TestCase):
+    def test_water_and_lava_objects(self):
+        sc = scene.Scene(name="w")
+        cube = [(0.0, 0.0, 0.0), (200.0, 100.0, 50.0)]
+        scene.add_liquid(sc, "water", cube)
+        scene.add_liquid(sc, "lava", cube)
+        doc = kovaaks_json.build(sc, [], {}, 2, 1.0, 4.0)
+        water = next(o for o in doc["objects"] if o.get("name") == "Water")
+        hurt = next(o for o in doc["objects"] if o.get("name") == "Hurt")
+        self.assertEqual(water["scale"], "2, 1, 0.5")
+        self.assertEqual(water["location"], "100, -50, 25")
+        self.assertTrue(next(p["value"] for p in hurt["properties"] if p["name"] == "Kill"))
+
+    def test_source_water_brush_becomes_volume(self):
+        from mapport import goldsrc
+        sc = goldsrc.load(synthetic.build_goldsrc(), "g")
+        self.assertFalse(any(go["kind"] == "water" for go in sc.gameobjects))  # no water in the fixture
 
 
 class CheckTests(unittest.TestCase):
@@ -449,7 +469,11 @@ class ScenarioTests(unittest.TestCase):
         self.assertEqual(kv["MapScale"], "4.0")
         self.assertEqual(kv["MaxSpeed"], "1000.0")
         self.assertEqual(kv["StepUpHeight"], "72.0")
-        self.assertEqual(kv["EnableQuakeMovement"], "true")
+        # CS presets use Unreal movement so the Shift (Ability 1) walk multiplier applies
+        self.assertEqual(kv["EnableQuakeMovement"], "false")
+        self.assertEqual(kv["BrakingDeceleration"], "1200.0")
+        quake = scenario.build("Q", "q.json", "{}", 4.0, scenario.PRESETS["quake"])
+        self.assertIn("EnableQuakeMovement=true", quake)
         self.assertEqual(kv["ScaledGroundAcceleration"], "5.20")
         self.assertEqual(kv["ContinuousGroundFriction"], "4.00")
         jump = float(kv["JumpVelocityMax"])
