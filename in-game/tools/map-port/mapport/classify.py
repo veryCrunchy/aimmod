@@ -27,7 +27,7 @@ SKIP_ENTITIES = (
     "trigger_", "func_buyzone", "func_bomb_target", "func_hostage_rescue", "func_areaportal",
     "func_occluder", "func_precipitation", "func_smokevolume", "func_dustmotes", "func_dustcloud",
     "func_nav_", "func_ladder", "func_water_analog", "func_viscluster", "func_clip_vphysics",
-    "func_no_defuse", "func_cheapwater", "env_", "info_", "func_fish_pool",
+    "func_no_defuse", "func_cheapwater", "env_", "info_", "func_fish_pool", "func_water", "func_vehiclecontrols",
 )
 NONSOLID_ENTITIES = ("func_illusionary",)
 GLASS_ENTITIES = ("func_breakable_surf",)

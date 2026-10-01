@@ -11,6 +11,7 @@ from .geometry import polygon_area
 
 SURFACES = ("ground", "wall", "ceiling", "ramp")
 NODRAW = "tools/toolsnodraw"
+UNKNOWN = (0.5, 0.5, 0.5)  # Face.reflectivity default: the source format gave no texture colour
 DEFAULT_TABLE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "materials.json")
 
 Colour = Tuple[float, float, float]
@@ -214,8 +215,13 @@ def _assign_surfaces(items: Sequence[Cluster], table: dict, groups: int) -> List
         rule = c.rule
         mat = rule["material"]
         tint = rule.get("tint", "auto")
+        mean = c.mean()
+        if all(col == UNKNOWN for _a, col in c.textures.values()) and rule.get("colour"):
+            # No texture colour in the source format: start from the category's typical colour.
+            hx = rule["colour"]
+            mean = tuple((int(hx[i:i + 2], 16) / 255.0) ** 2.2 for i in (0, 2, 4))
         if tint == "auto":
-            hexv = tint_hex(auto_tint(c.mean(), mat == "MI_WA_PureColor"))
+            hexv = tint_hex(auto_tint(mean, mat == "MI_WA_PureColor"))
         elif tint == "none":
             hexv = "ffffffff"
         else:

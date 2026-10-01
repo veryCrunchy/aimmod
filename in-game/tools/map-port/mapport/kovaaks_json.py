@@ -25,7 +25,8 @@ BRUSH_TYPE = {
     scene.WEAPON_CLIP: "WeaponClip",
     scene.GLASS: "FullClip",
 }
-SPAWN_LIFT = 40.0  # Source units above the spawn origin (hull is 72 tall; feet at origin)
+SKY_TEXTURE = "tools/toolsskybox"
+SPAWN_GAP = 4.0  # spawn points sit at hull centre + this, above the feet (origin is the feet)
 
 
 def to_ue(p, unit: float) -> Tuple[float, float, float]:
@@ -107,7 +108,14 @@ def brush_object(b: scene.Brush, unit: float, tex_slot: Dict[str, int], slots: L
             if a > best_area:
                 best_slot, best_area = tex_slot[f.texture], a
     sections, msets = [], []
-    for f, poly in zip(b.faces, world):
+    # Sky faces of visible brushes would be painted with the brush material and hide the sky; KovaaK's
+    # has no invisible-face material, so those sections are left out (the other faces keep the shape).
+    sky = SKY_TEXTURE
+    keep = [i for i, f in enumerate(b.faces) if not (visible and f.texture == sky)]
+    if len(keep) < 3:
+        keep = list(range(len(b.faces)))
+    pairs = [(b.faces[i], world[i]) for i in keep]
+    for f, poly in pairs:
         n = (f.normal[0], -f.normal[1], f.normal[2])
         local = [g.mul(g.sub(p, lo), 1.0 / map_scale) for p in poly]
         tris = g.triangulate_fan(len(local))
@@ -143,7 +151,8 @@ def brush_object(b: scene.Brush, unit: float, tex_slot: Dict[str, int], slots: L
 
 
 def spawn_object(sp: scene.Spawn, idx: int, unit: float, map_scale: float, player_profile: str) -> dict:
-    loc = to_ue((sp.origin[0], sp.origin[1], sp.origin[2] + SPAWN_LIFT), unit)
+    from .spawns import HULL
+    loc = to_ue((sp.origin[0], sp.origin[1], sp.origin[2] + HULL["height"] / 2 + SPAWN_GAP), unit)
     mask = {1: 1, 2: 2}.get(sp.team, 3)
     inv = 1.0 / map_scale
     return {"location": _f(loc, 6), "name": "SpawnPoint", "properties": [
@@ -156,10 +165,30 @@ def spawn_object(sp: scene.Spawn, idx: int, unit: float, map_scale: float, playe
         "rotation": _f((0.0, 0.0, -sp.yaw), 6), "scale": _f((inv, inv, inv), 6), "type": "gameObject"}
 
 
+def game_object(go: dict, unit: float, map_scale: float) -> dict:
+    """JumpPad / Teleporter (scaled to the trigger) and their target Waypoints (native size)."""
+    kind = go["kind"]
+    inv = 1.0 / map_scale
+    if kind == "waypoint":
+        return {"location": _f(to_ue(go["origin"], unit), 3), "name": "Waypoint", "properties": [
+            {"name": "Name", "value": go["name"]}, {"name": "BotPauseTimeMin", "value": 0.0},
+            {"name": "BotPauseTimeMax", "value": 0.0}],
+            "rotation": _f((0.0, 0.0, -go.get("yaw", 0.0)), 3), "scale": _f((inv, inv, inv), 6), "type": "gameObject"}
+    sx, sy, sz = (max(1.0, abs(v)) for v in go["size"])
+    props = [{"name": "Target", "value": go["target"]}]
+    if kind == "teleporter":
+        props.append({"name": "TeleportDelay", "value": 0.0})
+    # Map-creator objects are 100 units across at scale 1; size them to the Quake trigger.
+    scale = (sx / 100.0, sy / 100.0, max(0.25, sz / 100.0) if kind == "teleporter" else 0.25)
+    return {"location": _f(to_ue(go["origin"], unit), 3), "name": "JumpPad" if kind == "jumppad" else "Teleporter",
+            "properties": props, "rotation": "0, 0, 0", "scale": _f(scale, 4), "type": "gameObject"}
+
+
 def build(sc: scene.Scene, slots: List[Slot], tex_slot: Dict[str, int], groups: int, unit: float,
           map_scale: float, player_profile: str = "") -> dict:
     objects = [brush_object(b, unit, tex_slot, slots, map_scale) for b in sc.brushes]
     objects += [spawn_object(sp, i, unit, map_scale, player_profile) for i, sp in enumerate(sc.spawns)]
+    objects += [game_object(go, unit, map_scale) for go in sc.gameobjects]
     return {"materialSets": _material_sets(slots, groups), "objects": objects, "version": "1.0.0"}
 
 

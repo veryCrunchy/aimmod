@@ -54,6 +54,8 @@ def render_view(sc: scene.Scene, slots: List[Slot], tex_slot: Dict[str, int], fe
         if any(lo[k] > eye[k] + max_dist or hi[k] < eye[k] - max_dist for k in range(3)):
             continue
         for face in b.faces:
+            if face.texture == "tools/toolsskybox":
+                continue  # left out of the exported mesh too
             if g.dot(face.normal, g.sub(face.polygon[0], eye)) >= 0:
                 continue  # back face: the game culls it too
             cam = []
@@ -157,9 +159,10 @@ def viewpoints(sc: scene.Scene, extra: Sequence[Tuple[str, Tuple[float, float, f
         c = min(grp, key=lambda s: (s.origin[0] - mid[0]) ** 2 + (s.origin[1] - mid[1]) ** 2)
         for yaw in (0, 90, 180, 270):
             out.append((f"team{team}_yaw{yaw}", c.origin, float(yaw)))
-    for i, p in enumerate(floor_points(sc, samples)):
-        for yaw in (0, 90, 180, 270):
-            out.append((f"spot{i}_{int(p[0])}_{int(p[1])}_{int(p[2])}_yaw{yaw}", p, float(yaw)))
+    if not extra:
+        for i, p in enumerate(floor_points(sc, samples)):
+            for yaw in (0, 90, 180, 270):
+                out.append((f"spot{i}_{int(p[0])}_{int(p[1])}_{int(p[2])}_yaw{yaw}", p, float(yaw)))
     return out + list(extra)
 
 

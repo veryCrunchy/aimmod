@@ -30,7 +30,7 @@ POINT_CLASSES = {
     "ctf_flag": "flag",
     "info_ctf_flag_spawn": "flag",
 }
-ITEM_PREFIXES = ("weapon_", "item_", "game_weapon_", "info_weapon_")
+ITEM_PREFIXES = ("weapon_", "item_", "game_weapon_", "info_weapon_", "ammo_", "holdable_")
 
 TEAM_NAMES = {0: "any", 1: "terrorist", 2: "counter_terrorist"}
 
@@ -85,6 +85,9 @@ def build(sc: scene.Scene, map_name: str, map_scale: float) -> dict:
                           "yaw": round(-_vec(ent.get("angles", ""))[1], 2), "name": ent.get("targetname", "")})
     spawns = [{"team": TEAM_NAMES.get(s.team, "any"), "classname": s.classname, "origin": _ue(s.origin),
                "yaw": round(-s.yaw, 2)} for s in sc.spawns]
+    movers = [{"type": go["kind"], "name": go["name"], "target": go["target"], "origin": _ue(go["origin"]),
+               "size": [round(v, 3) for v in go["size"]], "yaw": round(-go.get("yaw", 0.0), 2)}
+              for go in sc.gameobjects]
     return {"format": FORMAT, "version": VERSION, "map": map_name, "units": "kovaaks_map_units",
             "map_scale": map_scale, "axes": "unreal: x forward, y right, z up (source y mirrored)",
-            "zones": zone_list, "points": points, "items": items, "spawns": spawns}
+            "zones": zone_list, "points": points, "items": items, "spawns": spawns, "movers": movers}

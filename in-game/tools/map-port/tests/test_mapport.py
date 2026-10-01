@@ -276,6 +276,98 @@ class ViewTests(unittest.TestCase):
         self.assertGreater(off_floor, 0.9)
 
 
+class Quake3Tests(unittest.TestCase):
+    def test_ibsp(self):
+        from mapport import quake3, objectives
+        for version in (46, 47):
+            with self.subTest(version=version):
+                sc = quake3.load(synthetic.build_ibsp(version), "q")
+                kinds = sorted(b.kind for b in sc.brushes if b.source == "world")
+                self.assertEqual(kinds, [scene.CLIP, scene.SOLID])
+                self.assertGreaterEqual(sc.stats.get("kept_patch_slabs", 0), 2)
+                top = max(p[2] for b in sc.brushes if b.source == "patch" for f in b.faces for p in f.polygon)
+                self.assertAlmostEqual(top, 64.0, delta=6.0)  # bezier peak of a 128-high control point
+                self.assertEqual([s.origin[2] for s in sc.spawns], [0.0, 0.0])  # 24 above the feet
+                kinds = sorted(go["kind"] for go in sc.gameobjects)
+                self.assertEqual(kinds, ["jumppad", "waypoint"])
+                doc = objectives.build(sc, "q", 4.0)
+                self.assertEqual(doc["items"][0]["classname"], "weapon_railgun")
+                self.assertEqual(len(doc["movers"]), 2)
+
+    def test_jump_pad_objects(self):
+        from mapport import quake3
+        sc = quake3.load(synthetic.build_ibsp(), "q")
+        doc = kovaaks_json.build(sc, [], {}, 2, 1.0, 4.0)
+        pad = next(o for o in doc["objects"] if o.get("name") == "JumpPad")
+        wp = next(o for o in doc["objects"] if o.get("name") == "Waypoint")
+        target = next(p["value"] for p in pad["properties"] if p["name"] == "Target")
+        self.assertEqual(target, next(p["value"] for p in wp["properties"] if p["name"] == "Name"))
+
+    def test_quake_names_and_preset(self):
+        from mapport import naming
+        self.assertEqual(naming.guess_game(46), "Q3")
+        self.assertEqual(naming.guess_game(47), "QL")
+        self.assertEqual(naming.guess_game(30), "CS16")
+        self.assertEqual(naming.scenario_name("Blood Run", "Q3", scenario.PRESETS["quake"].variant),
+                         "AimMod - Blood Run (Q3) - Quake Movement")
+        q = scenario.PRESETS["quake"]
+        self.assertFalse(q.clamp_air_speed)
+        text = scenario.build("T", "t.json", "{}", 4.0, q)
+        self.assertIn("ClampVelocityToInputSpeed=false", text)
+        self.assertIn("MaxSpeed=1280.0", text)
+
+
+class GoldSrcTests(unittest.TestCase):
+    def test_cells_textures_spawns(self):
+        from mapport import goldsrc, materials
+        sc = goldsrc.load(synthetic.build_goldsrc(), "g")
+        self.assertEqual(len(sc.brushes), 1)
+        b = sc.brushes[0]
+        lo, hi = b.bounds()
+        self.assertAlmostEqual(hi[2], 0.0, places=3)
+        top = next(f for f in b.faces if f.normal[2] > 0.9)
+        self.assertEqual(top.texture, "goldsrc/sandwall01")
+        self.assertGreater(top.reflectivity[0], top.reflectivity[2])  # embedded miptex colour (sandy)
+        self.assertEqual(materials.rule_for(top.texture, materials.load_table())["category"], "sand")
+        teams = sorted((s.team, s.origin[2]) for s in sc.spawns)
+        self.assertEqual(teams, [(1, 0.0), (2, 0.0)])
+
+
+class CheckTests(unittest.TestCase):
+    def test_reachability_and_floating(self):
+        from mapport import checks
+        sc = bsp.load(synthetic.build_bsp(with_displacement=False), "c")
+        res, reached = checks.reachability(sc)
+        self.assertTrue(res["spawns_connected"])
+        sq = [(0.0, 0.0, 500.0), (10.0, 0.0, 500.0), (10.0, 10.0, 500.0), (0.0, 10.0, 500.0)]
+        floater = scene.Brush(faces=[scene.Face(polygon=sq, normal=(0, 0, 1), texture="prop:x")] * 4,
+                              kind=scene.NONSOLID, source="prop")
+        sc.brushes.append(floater)
+        self.assertEqual(checks.remove_floating(sc), 1)
+        self.assertNotIn(floater, sc.brushes)
+
+
+class ThumbnailTests(unittest.TestCase):
+    def test_views_in_game_space(self):
+        from mapport import thumbnail
+        v = {"x": 10.0, "y": 20.0, "z": 30.0, "yaw": 90.0, "pitch": -10.0, "fov": 90.0}
+        self.assertEqual(thumbnail.to_game(v, 4.0), {"x": 40.0, "y": -80.0, "z": 120.0, "pitch": -10.0,
+                                                     "yaw": -90.0, "fov": 90.0})
+        doc = thumbnail.views_document("AimMod Capture - x", "x", [v], 4.0)
+        self.assertEqual(doc["request"]["action"], "capture-thumbnail")
+        self.assertTrue(doc["request"]["out"].endswith(".png"))
+        self.assertLessEqual(len(doc["request"]["views"]), 4)
+
+    def test_choose_views(self):
+        from mapport import checks, thumbnail
+        sc = bsp.load(synthetic.build_bsp(with_displacement=False), "c")
+        _res, reached = checks.reachability(sc)
+        views = thumbnail.choose_views(sc, reached)
+        self.assertTrue(1 <= len(views) <= 3)
+        for v in views:
+            self.assertTrue(-90 <= v["pitch"] <= 90 and 5 <= v["fov"] <= 170)
+
+
 class ReflexTests(unittest.TestCase):
     def test_axes_match_json(self):
         # KovaaK's loads Reflex (a, b, c) as Unreal (c, a, b); both writers must agree.

@@ -11,7 +11,7 @@ from typing import Dict, List, Tuple
 
 from . import scene
 from .materials import Slot
-from .spawns import FLOOR_GAP, HULL_HALF_WIDTH, HULL_HEIGHT
+from .spawns import FLOOR_GAP, HULL
 
 BG = (24, 24, 24)
 TEAM_COL = {1: (235, 60, 40), 2: (60, 120, 245), 0: (240, 230, 60)}
@@ -86,11 +86,14 @@ def _view(sc, slots, tex_slot, axis_u, axis_v, depth, facing, flip_v, scale, lo,
         return (u, v, depth(p))
 
     for b in sc.brushes:
-        if b.kind == scene.CLIP:
+        if b.kind == scene.CLIP or b.source == "backdrop":
             continue
+        stand_in = all(f.texture.startswith("tools/") for f in b.faces)
         for f in b.faces:
             if not facing(f.normal) or (keep and not keep(f.polygon)):
                 continue
+            if f.texture.startswith("tools/") and not stand_in:
+                continue  # hidden faces (outer shells, caulk) would cover the map from above
             col = _colour(b, f, slots, tex_slot)
             pts = [proj(p) for p in f.polygon]
             for i in range(1, len(pts) - 1):
@@ -99,7 +102,8 @@ def _view(sc, slots, tex_slot, axis_u, axis_v, depth, facing, flip_v, scale, lo,
 
 
 def render(sc: scene.Scene, slots: List[Slot], tex_slot: Dict[str, int], size: int = 1400) -> bytes:
-    pts = [p for b in sc.brushes if b.kind != scene.CLIP for f in b.faces for p in f.polygon]
+    pts = [p for b in sc.brushes if b.kind != scene.CLIP and b.source != "backdrop"
+           for f in b.faces for p in f.polygon]
     pts += [s.origin for s in sc.spawns]
     if not pts:
         return _png(1, 1, [bytearray(bytes(BG))])
@@ -112,7 +116,7 @@ def render(sc: scene.Scene, slots: List[Slot], tex_slot: Dict[str, int], size: i
     for sp in sc.spawns:
         col = TEAM_COL.get(sp.team, TEAM_COL[0])
         x, y, _z = sp.origin
-        r = HULL_HALF_WIDTH
+        r = HULL["half"]
         a, b = tproj((x - r, y - r, 0)), tproj((x + r, y + r, 0))
         top.rect(a[0] - 1, a[1] + 1, b[0] + 1, b[1] - 1, col, fill=True)
     # 256-unit scale bar (white) in the top view's corner
@@ -141,13 +145,13 @@ def render(sc: scene.Scene, slots: List[Slot], tex_slot: Dict[str, int], size: i
         col = TEAM_COL.get(team, TEAM_COL[0])
         for s in group:
             x, _y, z = s.origin
-            r = HULL_HALF_WIDTH
+            r = HULL["half"]
             a = sproj((x - r, 0, z + FLOOR_GAP))
-            b = sproj((x + r, 0, z + FLOOR_GAP + HULL_HEIGHT))
+            b = sproj((x + r, 0, z + FLOOR_GAP + HULL["height"]))
             side.rect(a[0], a[1], b[0], b[1], col)
             side.rect(a[0] + 1, a[1] - 1, b[0] - 1, b[1] + 1, col)
         # white bar = one CS player height (72 units)
-        bh = HULL_HEIGHT * sscale
+        bh = HULL["height"] * sscale
         side.rect(6, side.h - 6 - bh, 10, side.h - 6, (255, 255, 255), fill=True)
         views.append(side)
     w = max(v.w for v in views)

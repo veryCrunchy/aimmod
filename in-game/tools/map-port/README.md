@@ -1,10 +1,11 @@
 # map-port
 
-Converts Source-engine maps (CS:S, CS:GO, GMod) into KovaaK's map-creator maps and generates a
-scenario with Counter-Strike movement. Pure Python 3.9+, standard library only.
+Converts Source (CS:S, CS:GO, GMod), GoldSrc (CS 1.6, Half-Life) and Quake 3 / Quake Live maps into
+KovaaK's map-creator maps, and generates a scenario with Counter-Strike or Quake movement. Pure
+Python 3.9+, standard library only; the Workshop thumbnails additionally need Pillow.
 
 ```
-map-port <input.bsp|.vmf|.gma|.zip|.rar|.7z> --out <dir> [options]
+map-port <input.bsp|.vmf|.gma|.zip|.pk3|.rar|.7z> --out <dir> [options]
 python -m mapport ...            # same thing, from this folder
 ```
 
@@ -14,7 +15,10 @@ Output in `<dir>`:
 | --- | --- |
 | `maps/aimmod_<mapid>_<game>.json` | `FPSAimTrainer/maps/` |
 | `Scenarios/AimMod - <Map> (<Game>) - <Variant>.sce` | `FPSAimTrainer/Saved/SaveGames/Scenarios/` |
-| `Abilities/CS Walk.abilsprint` (or `Sprint.abilsprint`) | `FPSAimTrainer/Saved/SaveGames/Abilities/` |
+| `Abilities/CS Walk.abilsprint` (or `Quake Walk` / `Sprint`) | `FPSAimTrainer/Saved/SaveGames/Abilities/` |
+| `aimmod_<mapid>_<game>.workshop-thumb.png/.jpg` (1024²), `-16x9` (1920 x 1080) | not installed: Workshop thumbnails |
+| `aimmod_<mapid>_<game>.thumb-views.json` | not installed: camera views for AimModCore's `capture-thumbnail` |
+| `Capture/AimMod Capture - <file id>.sce` | install only to capture a thumbnail: the same map with no bots |
 | `aimmod_<mapid>_<game>.aimmod.json` | not installed: game-mode metadata for AimMod (see below) |
 | `aimmod_<mapid>_<game>.report.json` | not installed: brush counts, drop reasons, material slots |
 | `aimmod_<mapid>_<game>.preview.png` | not installed: preview check (see below); `--no-preview` skips it |
@@ -58,6 +62,19 @@ in Windows file names are rejected.
 | `--no-ground` | off | skip the backdrop ground plane |
 | `--keep-skybox` | off | keep the 3D skybox and areas detached from the spawns |
 | `--pick text` | | convert only archive members whose name contains `text` |
+
+## Input formats
+
+| Format | How the geometry is rebuilt |
+| --- | --- |
+| Source BSP v19-21 (`VBSP`) | brushes from the brush lump, displacements as slabs, packed models as hulls |
+| Hammer `.vmf` | brushes and displacements from the editor file |
+| GoldSrc BSP v30 (CS 1.6) | no brushes are stored: every path from a model's head node to a solid (or sky) leaf of the BSP tree is a convex cell, which is the map's solid volume. Cell faces take the texture of the rendered face on the same plane; embedded miptex (or `.wad` files next to the map) give the average colour. Sky leaves become clips; player-clip hulls are not used. In CS 1.6, `info_player_deathmatch` is T and `info_player_start` is CT. |
+| Quake 3 IBSP v46 / Quake Live v47 | brushes and shaders directly (`common/caulk` -> nodraw, `common/clip` -> clip, …); bezier patches are tessellated and turned into slabs that follow the vertex normals. `trigger_push` + `target_position` becomes a KovaaK's **JumpPad** aimed at a **Waypoint**; `trigger_teleport` + `misc_teleporter_dest` becomes a **Teleporter** with its Waypoint. Spawns: `info_player_deathmatch` (both teams). |
+
+Quake 3 stock textures are not in the map files, so Q3 slots use each category's typical colour
+(`colour` in `materials.json`). Ladders (`func_ladder`, ladder contents) cannot be climbed in
+KovaaK's; each becomes a jump pad at its foot aimed just above its top.
 
 ## Map formats in KovaaK's 3.9.x
 
@@ -199,6 +216,37 @@ KovaaK's bundled "Counter-Striker" profile uses roughly the same scale (MaxSpeed
 - `mapport/movesim.py` is a reference Source movement model. The tests use it to check a preset:
   a jump reaches 57 units with 0.755 s air time and never gains speed, and one strafe jump gains
   only a little. KovaaK's own implementation isn't public, so the in-game feel still needs testing.
+
+## Hard checks
+
+Every conversion runs these checks; a failure makes `map-port` exit with code 3 (use
+`--allow-check-fail` to accept the output anyway). The results are in the report under `checks`.
+
+- **Walk graph:** player-hull-sized samples every 32 units on walkable faces. Edges use the
+  preset's step and jump height, drops of up to 300 units, and jump pads / teleporters. Every spawn
+  must be able to walk to at least half of its own team; walled-off teams (awp maps) are allowed and
+  reported as `teams_connected`.
+- **Spawns** need ground under them.
+- **No near-black faces** in the playable area.
+- **Props and stand-ins must be supported.** Anything without map geometry within 48 units below is
+  removed before the check. Stand-in boxes are snapped onto the floor, or skipped when there is none.
+
+The first-person check views (`--views`) use 8 well-spread spots from the walk graph.
+
+## Workshop thumbnails
+
+- `thumb-views.json` holds 1-3 camera views, in KovaaK's world coordinates (Unreal cm:
+  `x = source_x * MapScale`, `y = -source_y * MapScale`, `z = source_z * MapScale`,
+  `yaw = -source_yaw`, pitch positive up). It also holds the ready-to-POST `capture-thumbnail`
+  request for the bot-free `Capture/` scenario. The first view is the most open high vantage,
+  looking across the main area.
+- Until a capture exists, the first view is software-rendered (material colours, sun, sky gradient
+  and haze). The AimMod template goes on top: logo, map name, source-game text chip and the
+  movement variant. The source game is text only; no game logos are used.
+- `python -m mapport.thumbnail <port-dir> --capture shot.png` re-composites the thumbnails from an
+  in-game capture.
+- The report's `files.preview` points at the 1024² thumbnail, which the Workshop bundle helper uses.
+  The top-down check image is `files.preview_check`.
 
 ## Preview check
 

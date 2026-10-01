@@ -9,6 +9,107 @@ BOX_MIN = (-64.0, -32.0, 0.0)
 BOX_MAX = (64.0, 96.0, 16.0)
 
 
+def _box_planes(lo, hi):
+    out = []
+    for axis in range(3):
+        n = [0.0, 0.0, 0.0]
+        n[axis] = 1.0
+        out.append((n[0], n[1], n[2], hi[axis]))
+        out.append((-n[0], -n[1], -n[2], -lo[axis]))
+    return out
+
+
+def build_ibsp(version: int = 46) -> bytes:
+    """Quake 3 IBSP: a floor brush, a player-clip brush, one 3x3 patch arch, a jump pad trigger."""
+    shaders = [("textures/base_floor/concrete", 0, 1), ("textures/common/clip", 0x80, 0x10000),
+               ("textures/gothic_trim/arch", 0, 1), ("textures/common/trigger", 0x80, 0x40000000)]
+    lumps: Dict[int, bytes] = {}
+    lumps[1] = b"".join(struct.pack("<64sii", n.encode(), s, c) for n, s, c in shaders)
+    planes, sides, brushes = [], [], []
+
+    def brush(lo, hi, shader):
+        first = len(sides)
+        for pl in _box_planes(lo, hi):
+            planes.append(pl)
+            sides.append((len(planes) - 1, shader))
+        brushes.append((first, 6, shader))
+
+    brush((-256, -256, -16), (256, 256, 0), 0)     # floor
+    brush((100, 100, 0), (140, 140, 64), 1)         # clip
+    brush((-200, -32, 0), (-150, 32, 8), 3)         # trigger_push (model 1)
+    lumps[2] = b"".join(struct.pack("<ffff", *p) for p in planes)
+    lumps[8] = b"".join(struct.pack("<iii", *b) for b in brushes)
+    lumps[9] = b"".join(struct.pack("<ii", *s) for s in sides)
+    # 3x3 patch: an arch from x=-64 to x=64 over y in [-32, 32], peak z=96, normals pointing down
+    verts = []
+    for r, y in enumerate((-32.0, 0.0, 32.0)):
+        for c, (x, z) in enumerate(((-64.0, 0.0), (0.0, 128.0), (64.0, 0.0))):
+            verts.append(struct.pack("<3f2f2f3f4B", x, y, z, 0, 0, 0, 0, 0.0, 0.0, -1.0, 255, 255, 255, 255))
+    lumps[10] = b"".join(verts)
+    surf = struct.pack("<12i3f9f2i", 2, -1, 2, 0, 9, 0, 0, -1, 0, 0, 0, 0, *([0.0] * 12), 3, 3)
+    lumps[13] = surf
+    lumps[7] = (struct.pack("<6fiiii", -256, -256, -16, 256, 256, 128, 0, 1, 0, 2)
+                + struct.pack("<6fiiii", -200, -32, 0, -150, 32, 8, 1, 0, 2, 1))
+    ents = ('{\n"classname" "worldspawn"\n}\n'
+            '{\n"classname" "info_player_deathmatch"\n"origin" "0 -128 24"\n"angle" "90"\n}\n'
+            '{\n"classname" "info_player_deathmatch"\n"origin" "0 128 24"\n"angle" "270"\n}\n'
+            '{\n"classname" "trigger_push"\n"model" "*1"\n"target" "pad1"\n}\n'
+            '{\n"classname" "target_position"\n"targetname" "pad1"\n"origin" "0 0 200"\n}\n'
+            '{\n"classname" "weapon_railgun"\n"origin" "32 32 16"\n}\n')
+    lumps[0] = ents.encode() + b"\0"
+    head_size = 8 + 17 * 8
+    body = b""
+    dirs = []
+    for i in range(17):
+        raw = lumps.get(i, b"")
+        dirs.append((head_size + len(body), len(raw)))
+        body += raw + b"\0" * (-len(raw) % 4)
+    head = b"IBSP" + struct.pack("<i", version) + b"".join(struct.pack("<ii", o, n) for o, n in dirs)
+    return head + body
+
+
+def build_goldsrc() -> bytes:
+    """GoldSrc v30: one node (plane z=0) with solid below and empty above, and a textured floor face."""
+    lumps: Dict[int, bytes] = {}
+    lumps[1] = struct.pack("<ffffi", 0.0, 0.0, 1.0, 0.0, 2)
+    # miptex lump with one embedded 16x16 texture, all pixels palette index 1 (a sandy colour)
+    w = h = 16
+    mip = struct.pack("<16sII", b"sandwall01", w, h)
+    o0 = 16 + 8 + 16
+    sizes = [w * h, (w // 2) * (h // 2), (w // 4) * (h // 4), (w // 8) * (h // 8)]
+    offs, cur = [], o0
+    for s in sizes:
+        offs.append(cur)
+        cur += s
+    mip += struct.pack("<4I", *offs) + b"".join(bytes([1]) * s for s in sizes)
+    pal = bytearray(768)
+    pal[3:6] = bytes((200, 170, 110))
+    mip += struct.pack("<H", 256) + bytes(pal)
+    lumps[2] = struct.pack("<ii", 1, 8) + mip
+    verts = [(-64, -64, 0), (64, -64, 0), (64, 64, 0), (-64, 64, 0)]
+    lumps[3] = b"".join(struct.pack("<fff", *v) for v in verts)
+    lumps[5] = struct.pack("<ihh6hHH", 0, -2, -1, -64, -64, -64, 64, 64, 64, 0, 1)  # front: leaf 1, back: leaf 0
+    lumps[6] = struct.pack("<8fii", 1, 0, 0, 0, 0, 1, 0, 0, 0, 0)
+    lumps[7] = struct.pack("<HHiHH4Bi", 0, 0, 0, 4, 0, 0, 0, 0, 0, -1)
+    lumps[10] = (struct.pack("<ii6hHH4B", -2, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+                 + struct.pack("<ii6hHH4B", -1, -1, -64, -64, 0, 64, 64, 64, 0, 0, 0, 0, 0, 0))
+    lumps[12] = struct.pack("<HH", 0, 0) + b"".join(struct.pack("<HH", i, (i + 1) % 4) for i in range(4))
+    lumps[13] = b"".join(struct.pack("<i", i) for i in (1, 2, 3, 4))
+    lumps[14] = struct.pack("<9f4iiii", -64, -64, -64, 64, 64, 64, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1)
+    ents = ('{\n"classname" "worldspawn"\n}\n'
+            '{\n"classname" "info_player_start"\n"origin" "0 0 36"\n"angles" "0 90 0"\n}\n'
+            '{\n"classname" "info_player_deathmatch"\n"origin" "32 32 36"\n}\n')
+    lumps[0] = ents.encode() + b"\0"
+    head_size = 4 + 15 * 8
+    body = b""
+    dirs = []
+    for i in range(15):
+        raw = lumps.get(i, b"")
+        dirs.append((head_size + len(body), len(raw)))
+        body += raw + b"\0" * (-len(raw) % 4)
+    return struct.pack("<i", 30) + b"".join(struct.pack("<ii", o, n) for o, n in dirs) + body
+
+
 def _lzma_lump(raw: bytes) -> bytes:
     enc = lzma.LZMACompressor(format=lzma.FORMAT_ALONE, filters=[{"id": lzma.FILTER_LZMA1, "dict_size": 1 << 16}])
     alone = enc.compress(raw) + enc.flush()

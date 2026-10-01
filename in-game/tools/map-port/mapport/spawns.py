@@ -7,9 +7,13 @@ from typing import List, Optional, Tuple
 from . import geometry as g
 from . import scene
 
-HULL_HALF_WIDTH = 16.0
-HULL_HEIGHT = 72.0
 FLOOR_GAP = 4.0   # the hull is tested from this far above the spawn origin (feet)
+# Player hull used by every check; set from the movement preset (CS 32 x 72, Quake 30 x 56).
+HULL = {"half": 16.0, "height": 72.0}
+
+
+def configure(radius: float, height: float) -> None:
+    HULL["half"], HULL["height"] = float(radius), float(height)
 BLOCKING = (scene.SOLID, scene.CLIP, scene.GLASS)
 
 
@@ -27,8 +31,8 @@ def _solids(sc: scene.Scene) -> List[_Solid]:
 
 def hull_box(feet, gap: float = FLOOR_GAP) -> Tuple[tuple, tuple]:
     x, y, z = feet
-    return ((x - HULL_HALF_WIDTH, y - HULL_HALF_WIDTH, z + gap),
-            (x + HULL_HALF_WIDTH, y + HULL_HALF_WIDTH, z + gap + HULL_HEIGHT))
+    h, r = HULL["height"], HULL["half"]
+    return ((x - r, y - r, z + gap), (x + r, y + r, z + gap + h))
 
 
 def blocked(box, solids: List[_Solid], eps: float = 0.05) -> Optional[_Solid]:

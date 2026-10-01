@@ -39,6 +39,9 @@ class Movement:
     max_velocity: float = 3500.0   # sv_maxvelocity
     shift: str = "walk"            # what Left Shift (KovaaK's Ability 1) does: walk or sprint
     shift_speed_mult: float = 0.52
+    variant: str = "CS Movement"   # scenario name variant
+    clamp_air_speed: bool = True   # False lets strafe jumping gain speed (Quake)
+    air_control: float = 0.3
 
     @property
     def jump_velocity(self) -> float:
@@ -60,7 +63,7 @@ PRESETS = load_presets()
 
 def shift_ability(mv: Movement) -> List[Tuple[str, str]]:
     """Held Ability 1 (Left Shift by default) scales speed: CS walk (< 1) or sprint (> 1)."""
-    name = "CS Walk" if mv.shift == "walk" else "Sprint"
+    name = ("Quake Walk" if mv.variant.startswith("Quake") else "CS Walk") if mv.shift == "walk" else "Sprint"
     return [
         ("Name", name), ("MaxCharges", "1.0"), ("ChargeTimer", "0.001"), ("ChargesRefundedOnKill", "0.0"),
         ("DelayAfterUse", "0.0"), ("FullyAuto", "false"), ("AbilityDuration", "0.0"),
@@ -95,7 +98,7 @@ def character_profile(name: str, mv: Movement, s: float, weapon: str, bot: bool 
         ("CrouchingAcceleration", f"{mv.accelerate * mv.run_speed * s:.1f}"),
         ("Friction", f"{mv.friction:.2f}"), ("BrakingFrictionFactor", "1.0"),
         ("JumpVelocityMin", f"{jump_v * s:.1f}"), ("JumpVelocityMax", f"{jump_v * s:.1f}"),
-        ("Gravity", f"{mv.gravity * s / UE_GRAVITY:.4f}"), ("AirControl", "0.3"),
+        ("Gravity", f"{mv.gravity * s / UE_GRAVITY:.4f}"), ("AirControl", f"{mv.air_control:.2f}"),
         ("CanCrouch", "true"), ("CanPogoJump", "false"), ("CanCrouchInAir", "true"),
         ("CrouchInAirRaisesFeet", "true"), ("CanJumpFromCrouch", "true"),
         ("EnemyBodyColor", _v(0.771, 0.1, 0.1)), ("EnemyBodyColorOnHit", _v(1, 1, 1)),
@@ -140,7 +143,7 @@ def character_profile(name: str, mv: Movement, s: float, weapon: str, bot: bool 
         ("StopSpeedThreshold", f"{mv.stop_speed * s:.1f}"),
         # Clamp horizontal speed to the input (run/walk/crouch) speed: a jump never gains speed. With
         # this off, ScaledAirAcceleration (a multiple of MaxSpeed) piles speed on in the air.
-        ("ClampVelocityToInputSpeed", "true"),
+        ("ClampVelocityToInputSpeed", _b(mv.clamp_air_speed)),
         ("JumpSkipsFriction", "false"), ("EnableQuakeMovement", "true"), ("EnableQuakeJump", "false"),
         ("KtJump", "0.0"), ("MovementPhysicsTickInterval", "0.0"), ("MovementPhysicsTickEnabled", "false"),
         ("TeamGlowUpHead", "0.0"), ("TeamGlowUpBody", "0.0"), ("EnemyGlowUpHead", "0.0"),

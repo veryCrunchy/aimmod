@@ -221,6 +221,12 @@ def load(data: bytes, name: str, disp_step: int = 1, disp_thickness: float = 8.0
         if not planes:
             sc.bump("dropped_empty")
             continue
+        if cls.lower().startswith("func_ladder") or contents & scene.CONTENTS_LADDER:
+            pts = [q for poly in geometry.brush_faces(planes) if poly for q in poly]
+            if mi:
+                org = _vec(ent.get("origin", ""))
+                pts = [geometry.add(q, org) for q in pts]
+            scene.add_ladder(sc, pts)
         if cls.lower() in objectives.VOLUME_CLASSES:
             pts = [q for poly in geometry.brush_faces(planes) if poly for q in poly]
             if pts:

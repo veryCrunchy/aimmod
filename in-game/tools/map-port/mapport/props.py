@@ -223,9 +223,10 @@ def connected_parts(verts: Sequence[Vec], tris: Sequence[Tuple[int, int, int]]) 
         groups.setdefault(find(weld[i]), []).append(verts[i])
     sized = []
     for gp in groups.values():
-        ext = max(max(q[k] for q in gp) - min(q[k] for q in gp) for k in range(3))
-        if ext >= MIN_PART_SIZE:
-            sized.append((ext, gp))
+        exts = sorted(max(q[k] for q in gp) - min(q[k] for q in gp) for k in range(3))
+        # skip specks, and wires/cables (thin in two directions) that would read as floating beams
+        if exts[2] >= MIN_PART_SIZE and exts[1] >= 4.0:
+            sized.append((exts[2], gp))
     sized.sort(key=lambda e: -e[0])
     return [_extremes(gp) for _ext, gp in sized[:MAX_PARTS]]
 
@@ -535,6 +536,10 @@ def add_name_standins(sc: scene.Scene, props: List[dict]) -> set:
         return set()
     solids = [(b.bounds()[0], b.bounds()[1], [(f.normal, g.dot(f.normal, f.polygon[0])) for f in b.faces])
               for b in sc.brushes if b.kind == scene.SOLID and b.source in ("world", "displacement")]
+    from .checks import _Index
+    from .spawns import _Solid
+    floor_index = _Index([_Solid(b) for b in sc.brushes
+                          if b.kind in (scene.SOLID, scene.CLIP) and b.source in ("world", "displacement")])
     done = set()
     for model, insts in by_model.items():
         dims = name_dims(model)
@@ -555,12 +560,32 @@ def add_name_standins(sc: scene.Scene, props: List[dict]) -> set:
         lo, hi = PIVOTS[best](dims)
         for pr in insts:
             world = [_transform(p, pr["origin"], pr["angles"], pr["scale"]) for p in _box_points(lo, hi)]
+            world = _snap_to_floor(world, floor_index)
+            if world is None:
+                sc.bump("props_standins_skipped_no_floor")
+                continue
             b = _brush(kdop_planes(world, pad=0.0), model, scene.NONSOLID)
             if b:
                 sc.brushes.append(b)
                 sc.bump("props_name_standins")
         done.add(model)
     return done
+
+
+SNAP_UP, SNAP_DOWN = 16.0, 48.0
+
+
+def _snap_to_floor(world: List[Vec], index) -> Optional[List[Vec]]:
+    """Rest a stand-in box on the floor under its base centre; None if there is no floor nearby."""
+    from .checks import floor_below
+    lo_z = min(p[2] for p in world)
+    cx = sum(p[0] for p in world) / len(world)
+    cy = sum(p[1] for p in world) / len(world)
+    z = floor_below((cx, cy, lo_z + SNAP_UP), index, SNAP_UP + SNAP_DOWN)
+    if z is None:
+        return None
+    dz = z - lo_z
+    return [(p[0], p[1], p[2] + dz) for p in world]
 
 
 def show_stair_ramps(sc: scene.Scene, unported: List[dict]) -> None:

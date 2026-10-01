@@ -105,16 +105,37 @@ def prism(top: List[Vec], up: Vec, thickness: float, texture: str, refl, uv_axes
 
 
 def slabs(grid: Sequence[Vec], n: int, up: Vec, texture: str, refl, thickness: float = 8.0,
-          step: int = 1, uv_axes=None, tex_size=(512, 512)) -> List[scene.Brush]:
-    """Greedy-merge planar cells of the displacement grid and emit one prism per patch."""
-    step = max(1, min(step, n - 1))
-    idx = list(range(0, n, step))
-    if idx[-1] != n - 1:
-        idx.append(n - 1)
-    m = len(idx) - 1  # cells per side
+          step: int = 1, uv_axes=None, tex_size=(512, 512), cols: Optional[int] = None,
+          normals: Optional[Sequence[Vec]] = None) -> List[scene.Brush]:
+    """Greedy-merge planar cells of a row-major grid (n rows x cols) and emit one prism per patch.
 
-    def p(ci: int, cj: int) -> Vec:
-        return grid[idx[ci] * n + idx[cj]]
+    `up` is the side the surface faces. With per-point `normals` (curved Quake 3 patches) each cell
+    uses its own average normal instead, and merging stops where the normals diverge."""
+    cols = cols or n
+    step = max(1, step)
+
+    def axis(count: int) -> List[int]:
+        st = max(1, min(step, count - 1))
+        ix = list(range(0, count, st))
+        if ix[-1] != count - 1:
+            ix.append(count - 1)
+        return ix
+
+    ri, ci = axis(n), axis(cols)
+    mr, mc = len(ri) - 1, len(ci) - 1
+
+    def p(r: int, c: int) -> Vec:
+        return grid[ri[r] * cols + ci[c]]
+
+    def hint(r0: int, c0: int, r1: int, c1: int) -> Vec:
+        if normals is None:
+            return up
+        acc = (0.0, 0.0, 0.0)
+        for r in (r0, r1):
+            for c in (c0, c1):
+                acc = g.add(acc, normals[ri[r] * cols + ci[c]])
+        h = g.normalize(acc)
+        return h if h != (0.0, 0.0, 0.0) else up
 
     def boundary(i0: int, j0: int, i1: int, j1: int) -> List[Vec]:
         pts = [p(i0, j) for j in range(j0, j1 + 1)]
@@ -126,7 +147,7 @@ def slabs(grid: Sequence[Vec], n: int, up: Vec, texture: str, refl, thickness: f
     def patch_ok(i0: int, j0: int, i1: int, j1: int) -> Optional[List[Vec]]:
         inner = [p(i, j) for i in range(i0, i1 + 1) for j in range(j0, j1 + 1)]
         poly = boundary(i0, j0, i1, j1)
-        pl = _plane_of(poly, up)
+        pl = _plane_of(poly, hint(i0, j0, i1, j1))
         if pl is None or not _is_planar(inner, pl):
             return None
         poly = _drop_collinear(g.dedupe(poly))
@@ -134,29 +155,30 @@ def slabs(grid: Sequence[Vec], n: int, up: Vec, texture: str, refl, thickness: f
             return None
         return poly
 
-    used = [[False] * m for _ in range(m)]
+    used = [[False] * mc for _ in range(mr)]
     out: List[scene.Brush] = []
-    for i in range(m):
-        for j in range(m):
+    for i in range(mr):
+        for j in range(mc):
             if used[i][j]:
                 continue
             poly = patch_ok(i, j, i + 1, j + 1)
             if poly is None:
                 # Non-planar cell: split into two triangles.
+                h = hint(i, j, i + 1, j + 1)
                 for tri in ((p(i, j), p(i, j + 1), p(i + 1, j + 1)), (p(i, j), p(i + 1, j + 1), p(i + 1, j))):
-                    b = prism(list(tri), up, thickness, texture, refl, uv_axes, tex_size)
+                    b = prism(list(tri), h, thickness, texture, refl, uv_axes, tex_size)
                     if b:
                         out.append(b)
                 used[i][j] = True
                 continue
             j1 = j + 1
-            while j1 < m and not used[i][j1]:
+            while j1 < mc and not used[i][j1]:
                 cand = patch_ok(i, j, i + 1, j1 + 1)
                 if cand is None:
                     break
                 poly, j1 = cand, j1 + 1
             i1 = i + 1
-            while i1 < m and not any(used[i1][jj] for jj in range(j, j1)):
+            while i1 < mr and not any(used[i1][jj] for jj in range(j, j1)):
                 cand = patch_ok(i, j, i1 + 1, j1)
                 if cand is None:
                     break
@@ -164,7 +186,7 @@ def slabs(grid: Sequence[Vec], n: int, up: Vec, texture: str, refl, thickness: f
             for ii in range(i, i1):
                 for jj in range(j, j1):
                     used[ii][jj] = True
-            b = prism(poly, up, thickness, texture, refl, uv_axes, tex_size)
+            b = prism(poly, hint(i, j, i1, j1), thickness, texture, refl, uv_axes, tex_size)
             if b:
                 out.append(b)
     return out

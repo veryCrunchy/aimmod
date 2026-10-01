@@ -97,7 +97,7 @@ def extract(path: str, dst: str) -> List[str]:
                 os.makedirs(os.path.dirname(p), exist_ok=True)
                 with open(p, "wb") as out:
                     out.write(blob)
-    elif zipfile.is_zipfile(path):
+    elif zipfile.is_zipfile(path):  # also .pk3 (Quake 3)
         with zipfile.ZipFile(path) as z:
             for info in z.infolist():
                 if info.is_dir():
@@ -114,6 +114,6 @@ def extract(path: str, dst: str) -> List[str]:
             full = os.path.join(root, f)
             if f.lower().endswith(MAP_EXTS):
                 found.append(full)
-            elif f.lower().endswith((".zip", ".rar", ".7z", ".gma")) and full != path:
+            elif f.lower().endswith((".zip", ".rar", ".7z", ".gma", ".pk3")) and full != path:
                 found += extract(full, full + "_x")
     return sorted(set(found))

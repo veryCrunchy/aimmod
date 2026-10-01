@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import re
 
-GAME_TAGS = ("CSGO", "CSS", "CS2", "GMod")
+GAME_TAGS = ("CSGO", "CSS", "CS2", "CS16", "GMod", "Q3", "QL")
 ILLEGAL = set('<>:"/\\|?*')
 
 DISPLAY_NAMES = {
+    "ztn3tourney1": "Blood Run Tourney", "ztn3dm1": "Blood Run", "hub3aeroq3": "Aerowalk",
+    "pro-q3tourney7": "Almost Lost", "pro_q3tourney7": "Almost Lost",
     "de_dust2": "Dust2", "de_dust": "Dust", "de_mirage": "Mirage", "de_inferno": "Inferno",
     "de_nuke": "Nuke", "de_overpass": "Overpass", "de_train": "Train", "de_vertigo": "Vertigo",
     "de_ancient": "Ancient", "de_anubis": "Anubis", "de_cache": "Cache", "de_cbble": "Cobblestone",
@@ -48,7 +50,8 @@ def game_tag(tag: str) -> str:
 
 
 def guess_game(bsp_version: int) -> str:
-    return "CSGO" if bsp_version >= 21 else "CSS"
+    """BSP version -> game tag: 30 GoldSrc (CS 1.6), 46 Quake 3, 47 Quake Live, 21 CS:GO, else CS:S."""
+    return {30: "CS16", 46: "Q3", 47: "QL"}.get(bsp_version, "CSGO" if bsp_version == 21 else "CSS")
 
 
 def scenario_name(display: str, game: str, variant: str) -> str:

@@ -59,6 +59,32 @@ class Scene:
     notes: List[str] = field(default_factory=list)
     # Objective brush volumes (bomb sites, buy zones, ...): classname -> list of (entity, points)
     volumes: List[Tuple[Dict[str, str], List[Vec]]] = field(default_factory=list)
+    # KovaaK's map-creator game objects (jump pads, teleporters and their target waypoints):
+    # {"kind": "jumppad"|"teleporter"|"waypoint", "origin": Vec, "size": Vec, "name": str,
+    #  "target": str, "yaw": float}. Origins and sizes are Source-style map coordinates.
+    gameobjects: List[Dict] = field(default_factory=list)
 
     def bump(self, key: str, n: int = 1) -> None:
         self.stats[key] = self.stats.get(key, 0) + n
+
+
+CONTENTS_LADDER = 0x20000000
+
+
+def add_ladder(sc: "Scene", points) -> None:
+    """KovaaK's cannot climb: a ladder becomes a jump pad at its foot aimed just above its top."""
+    if not points:
+        return
+    lo = [min(p[k] for p in points) for k in range(3)]
+    hi = [max(p[k] for p in points) for k in range(3)]
+    if hi[2] - lo[2] < 48:
+        return
+    n = sum(1 for go in sc.gameobjects if go["kind"] == "waypoint" and go["name"].startswith("ladder"))
+    cx, cy = (lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2
+    name = f"ladder{n}"
+    sc.gameobjects.append({"kind": "waypoint", "origin": (cx, cy, hi[2] + 40.0), "size": (0, 0, 0),
+                           "name": name, "target": "", "yaw": 0.0})
+    sc.gameobjects.append({"kind": "jumppad", "origin": (cx, cy, lo[2]),
+                           "size": (max(32.0, hi[0] - lo[0]), max(32.0, hi[1] - lo[1]), 16.0),
+                           "name": f"ladder_pad{n}", "target": name, "yaw": 0.0})
+    sc.bump("ladders_as_jump_pads")
