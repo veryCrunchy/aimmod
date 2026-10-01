@@ -9,15 +9,20 @@ namespace AimMod.InGame.Multiplayer;
 // it in an always-on, non-interactive Gameface layer (Notify.lua + notify page)
 // and plays the game's own UI sound. Kind: invite, ready, countdown or info.
 // Invite is set for an incoming invite the popup can join or dismiss.
+// Actions are clickable buttons (the layer takes clicks only then); Badge is a small
+// always-visible line such as "2 watching: Catfish, X".
+sealed record NoticeAction(string Label, string Action, string Id);
 sealed record GameNotice(string Id, string Kind, string Title, string Body, string? Key, int? Countdown, string Sound)
 {
     public string? Invite { get; init; }
+    public IReadOnlyList<NoticeAction>? Actions { get; init; }
 }
 
 // Per-player multiplayer preferences in multiplayer-settings.json (local only).
 // AutoReady: ready up on joining, when the content arrives, and after each match.
 sealed record MultiplayerPrefs(string Hotkey = "F7", bool ReadyOnJoin = false, bool ReadyOnContent = true, bool ReadyAfterMatch = false,
-    bool QuietDuringRanked = true, bool Sounds = true, double Volume = 0.8, string Avatar = AvatarProfiles.Default, bool HideScenario = false)
+    bool QuietDuringRanked = true, bool Sounds = true, double Volume = 0.8, string Avatar = AvatarProfiles.Default, bool HideScenario = false,
+    string SpectatePrivacy = "friends", bool ShowWatchers = true)
 {
     public static MultiplayerPrefs Load(string? path)
     {
@@ -40,6 +45,8 @@ sealed record MultiplayerPrefs(string Hotkey = "F7", bool ReadyOnJoin = false, b
         if (Flag("quietDuringRanked") is { } d) p = p with { QuietDuringRanked = d };
         if (Flag("sounds") is { } s) p = p with { Sounds = s };
         if (Flag("hideScenario") is { } hide) p = p with { HideScenario = hide };
+        if (Flag("showWatchers") is { } sw) p = p with { ShowWatchers = sw };
+        if (e.TryGetProperty("spectatePrivacy", out var sp) && sp.GetString() is "friends" or "ask" or "off") p = p with { SpectatePrivacy = sp.GetString()! };
         if (e.TryGetProperty("avatar", out var av) && av.ValueKind == JsonValueKind.String && AvatarProfiles.Find(av.GetString()) is { } look) p = p with { Avatar = look.Id };
         if (e.TryGetProperty("volume", out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetDouble(out var vol) && double.IsFinite(vol)) p = p with { Volume = Math.Round(Math.Clamp(vol, 0, 1), 2) };
         return p;

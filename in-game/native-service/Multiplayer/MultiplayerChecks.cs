@@ -29,7 +29,7 @@ static class MultiplayerChecks
         Peers();
         SteamPipe();
         var root = Path.Combine(Path.GetTempPath(), "aimmod-mp-test-" + Guid.NewGuid().ToString("N"));
-        try { Content(root); Generator(root); Service(root); Transfers(root); }
+        try { Content(root); Generator(root); Service(root); Transfers(root); Replays(root); }
         finally { try { Directory.Delete(root, true); } catch (IOException) { } }
         Console.WriteLine($"{count} multiplayer checks passed.");
     }
@@ -249,7 +249,7 @@ static class MultiplayerChecks
         foreach (var bad in new[] { Swap("aimmod.mp", "other"), Swap("\"v\":1", "\"v\":2"), Swap("\"command\"", "\"teleport\""), Swap("\"seq\":7", "\"seq\":-1"), "[]", "{", Swap("\"body\":{", "\"body\":[{").Replace("}}}", "}}]}") })
             Check(Protocol.Decode(Encoding.UTF8.GetBytes(bad)) is null, "Rejected frame: " + bad[..Math.Min(40, bad.Length)]);
         Check(Protocol.Decode(new byte[Protocol.MaxBytes + 1]) is null, "Oversized frames are rejected");
-        Check(!Protocol.Reliable("score") && Protocol.Reliable("snapshot") && Protocol.Types.Length == 17, "Score frames are unreliable, state is reliable");
+        Check(!Protocol.Reliable("score") && Protocol.Reliable("snapshot") && Protocol.Types.Length == 18, "Score frames are unreliable, state is reliable");
         var sync = new ClockSync();
         sync.Add(0, 1050, 200); sync.Add(1000, 2010, 1020); sync.Add(2000, 3100, 2300);
         Check(sync.Rtt == 20 && sync.Offset == 1000, "Clock sync uses the minimum round-trip sample");
@@ -284,6 +284,12 @@ static class MultiplayerChecks
         public void SetPresencePrivacy(bool hideScenario) { }
         public bool StartSpectate(string peer, int rate) => false;
         public void StopSpectate() { }
+        public bool AllowSpectate;
+        public readonly List<string> SpectateLog = [];
+        public bool RequestSpectate(string peer) { SpectateLog.Add("request " + peer); return AllowSpectate; }
+        public void AnswerSpectate(string peer, bool allow) => SpectateLog.Add((allow ? "allow " : "deny ") + peer);
+        public void SetSpectatePrivacy(string mode) { }
+        public void RemoveSpectator(string peer) { }
         public bool WorkshopDownload(string item) => false;
         // Bulk lane stand-in: chunks arrive in order; DropAfter cuts a transfer short like a lost link.
         public int BulkChunkBytes { get; set; }
@@ -313,7 +319,7 @@ static class MultiplayerChecks
         public bool InviteOverlay(LobbySnapshot lobby) => true;
         public bool InviteFriend(string friendId, LobbySnapshot lobby) => true;
         public bool Invited(string peer) => peer == "invited";
-        public IReadOnlyList<FriendEntry> Friends() => [new("f1", "Synthetic Friend", "aimmod", null, null, false)];
+        public IReadOnlyList<FriendEntry> Friends() => [new("f1", "Synthetic Friend", "aimmod", null, null, false), new("f2", "Watchable Friend", "aimmod", "Playing Synthetic A", null, false, Spectatable: true, Watchers: 1, Scenario: "Synthetic A")];
         public PeerLink? Link(string peer) => new("connected", "relay", 42);
         public void Dispose() { }
     }
@@ -359,7 +365,31 @@ static class MultiplayerChecks
         net.Peers["peer-c"].Inbox.Enqueue(new TransportEvent("steam", TransportEvent.InviteReceived, Invite: new IncomingInvite("i1", "Synthetic Host", "incoming", "token", new LobbySummary(LobbyModes.Duel, "Synthetic A", 1, 2), now)));
         Pump();
         Check(View(c).GetProperty("invites").GetArrayLength() == 1 && c.Act("decline-invite", J(new { id = "i1" })).Ok && View(c).GetProperty("invites").GetArrayLength() == 0, "Invites can be declined");
-        Check(View(b).GetProperty("friends").GetProperty("items").GetArrayLength() == 1 && b.Act("invite-friend", J(new { friend = "f1" })).Ok && !b.Act("invite-friend", J(new { friend = "steam:123" })).Ok, "Friends come from the transport; unknown ids are refused");
+        Check(View(b).GetProperty("friends").GetProperty("items").GetArrayLength() == 2 && b.Act("invite-friend", J(new { friend = "f1" })).Ok && !b.Act("invite-friend", J(new { friend = "steam:123" })).Ok, "Friends come from the transport; unknown ids are refused");
+        // Spectating a friend without a lobby, and being watched.
+        var bt = (MemoryTransport)net.Peers["peer-b"];
+        Check(!b.Act("watch", J(new { friend = "f1" })).Ok, "Friends who don't allow spectators can't be watched");
+        bt.AllowSpectate = true;
+        Check(b.Act("watch", J(new { friend = "f2" })).Ok && View(b).GetProperty("watch").GetProperty("state").GetString() == "requesting", "Asking to watch a friend");
+        bt.Inbox.Enqueue(new TransportEvent("f2", TransportEvent.SpectateStarted, Reason: "Watchable Friend"));
+        bt.Inbox.Enqueue(new TransportEvent("f2", TransportEvent.SpectateScore, Frame: Encoding.UTF8.GetBytes("{\"active\":true,\"score\":1234,\"accuracy\":85.5,\"remaining\":20}")));
+        Pump();
+        var watching = View(b).GetProperty("watch");
+        Check(watching.GetProperty("scenario").GetString() == "Synthetic A" && watching.GetProperty("state").GetString() == "missing" && watching.GetProperty("message").GetString()!.Contains("don’t have"), "The friend's scenario is known, and missing content is explained");
+        b.Act("watch-started", default);
+        Check(JsonDocument.Parse(b.NoticeText()).RootElement.GetProperty("badge").GetString() == "Watching Watchable Friend · 1,234 · 85.5% · 20 s left", "The spectator sees the friend's live stats over their view");
+        bt.Inbox.Enqueue(new TransportEvent("f2", TransportEvent.SpectateEnded, Reason: "declined"));
+        Pump();
+        Check(View(b).GetProperty("watch").GetProperty("message").GetString()!.Contains("said no"), "An end reason is explained");
+        b.Act("watch-stop", default);
+        var ct = (MemoryTransport)net.Peers["peer-c"];
+        ct.Inbox.Enqueue(new TransportEvent("f9", TransportEvent.SpectatorJoined, Reason: "Synthetic Watcher"));
+        ct.Inbox.Enqueue(new TransportEvent("f8", TransportEvent.SpectatorJoined, Reason: "Quiet Sync", Host: true));
+        ct.Inbox.Enqueue(new TransportEvent("f7", TransportEvent.SpectateAsked, Reason: "Synthetic Asker"));
+        Pump();
+        var cn = JsonDocument.Parse(c.NoticeText()).RootElement.GetRawText(); var cnBadge = JsonDocument.Parse(c.NoticeText()).RootElement.GetProperty("badge").GetString() ?? ""; var cnTitle = JsonDocument.Parse(c.NoticeText()).RootElement.GetProperty("title").GetString() ?? "";
+        Check(cnBadge == "2 watching: Synthetic Watcher, Quiet Sync" && cnTitle == "Synthetic Asker wants to watch you" && cn.Contains("spectate-allow"), "The watched player sees who watches and can allow a request");
+        Check(c.Act("spectate-allow", J(new { id = "f7" })).Ok && ct.SpectateLog.Contains("allow f7") && !c.NoticeText().Contains("wants to watch"), "Allowing answers the bridge and clears the popup");
         // A Steam join (invite accepted in Steam) joins asynchronously: the host arrives as a Connected event.
         var d = Make("peer-d");
         net.Peers["peer-d"].Inbox.Enqueue(new TransportEvent("peer-b", TransportEvent.InviteReceived, Invite: new IncomingInvite("i2", "Synthetic Host", "invite", net.Codes.Single().Key, null, now)));
@@ -452,6 +482,22 @@ static class MultiplayerChecks
         Check(Until(() => { bulkEvents.AddRange(steam.Drain()); return bulkEvents.Any(e => e.Kind == TransportEvent.BulkEnd); }) && bulkEvents.Any(e => e.Kind == TransportEvent.BulkData && e.Transfer == 9 && e.Frame!.Length == 100) && bulkEvents.First(e => e.Kind == TransportEvent.BulkEnd).Reason == "disconnected", "Incoming bulk chunks and transfer ends map to events");
         steam.BulkCancel(friend, 7, "complete");
         Check(Expect("xfer.cancel").GetProperty("reason").GetString() == "complete", "Finished transfers are closed as complete");
+        // Spectating without a lobby (contract §6).
+        Check(steam.RequestSpectate(friend) && Expect("spectate.request").GetProperty("rate").GetInt32() == 60, "Spectate requests go to the bridge");
+        Write(new { v = 1, ev = "spectate.started", peer = friend, name = "Synthetic Friend", direct = true });
+        Write(new { v = 1, ev = "spectate.score", active = true, paused = false, score = 10, seconds = 5, remaining = 55, shots = 4, hits = 3, kills = 2, accuracy = 75 });
+        Write(new { v = 1, ev = "spectate.asked", from = "76561190000000008", fromName = "Synthetic Asker" });
+        Write(new { v = 1, ev = "spectator.joined", peer = "76561190000000009", name = "Synthetic Viewer" });
+        Write(new { v = 1, ev = "spectators", list = new[] { new { peer = "76561190000000009", name = "Synthetic Viewer" }, new { peer = "76561190000000010", name = "Already Watching" } } });
+        Write(new { v = 1, ev = "spectator.left", peer = "76561190000000009", reason = "stopped" });
+        Write(new { v = 1, ev = "spectate.ended", peer = friend, reason = "stopped" });
+        var spectateEvents = new List<TransportEvent>();
+        Check(Until(() => { spectateEvents.AddRange(steam.Drain()); return spectateEvents.Any(e => e.Kind == TransportEvent.SpectateEnded); }), "Spectate events arrive");
+        Check(spectateEvents.Any(e => e.Kind == TransportEvent.SpectateStarted && e.Reason == "Synthetic Friend" && e.Host) && spectateEvents.Any(e => e.Kind == TransportEvent.SpectateScore)
+            && spectateEvents.Any(e => e.Kind == TransportEvent.SpectateAsked && e.Peer == "76561190000000008" && e.Reason == "Synthetic Asker")
+            && spectateEvents.Any(e => e.Kind == TransportEvent.SpectatorJoined && e.Peer == "76561190000000010" && e.Host) && spectateEvents.Any(e => e.Kind == TransportEvent.SpectatorLeft), "started, score, asked, joined, the quiet list sync and left all map");
+        steam.AnswerSpectate("76561190000000008", true); steam.SetSpectatePrivacy("ask"); steam.RemoveSpectator("76561190000000010");
+        Check(Expect("spectate.answer").GetProperty("allow").GetBoolean() && Expect("spectate.privacy").GetProperty("mode").GetString() == "ask" && Expect("spectate.remove").GetProperty("peer").GetString() == "76561190000000010", "Answers, privacy and removal reach the bridge");
         // Rich-presence friend status and the bridge build.
         Check(steam.BridgeVersion == "test", "The bridge build comes from ready");
         Write(new { v = 1, ev = "friends", friends = new object[] {
@@ -534,6 +580,36 @@ static class MultiplayerChecks
         Check(!store.Write("My Scenario", "x", 4).Ok, "Only reserved names are written");
         for (var i = 0; i < 3; i++) store.Write(MatchScenario.Prefix + "Synthetic A - CS - 1111111" + i, "g" + i, 10 + i);
         Check(store.Files().Count == 2 && !File.Exists(Path.Combine(folder, MatchScenario.Name(cs) + ".sce")) && File.Exists(Path.Combine(folder, taken + ".sce")), "Old match scenarios are cleaned up, user files kept");
+    }
+
+    // Synthetic format 2 replay (same fixture as CoreFormatChecks).
+    const string SyntheticReplay = "QU1SUExBWTICAAAAzQEAAHsia2luZCI6ImhlYWRlciIsInZlcnNpb24iOjIsImlkIjoiMTc5MDAwMDAwMC00Mi0yIiwic2NlbmFyaW8iOiJTeW50aGV0aWMgdGFyZ2V0IHRlc3QiLCJyZWNvcmRlZEF0IjoiMjAyNi0wMS0wMVQwMDowMDowMFoiLCJjb29yZGluYXRlcyI6InVucmVhbC1jZW50aW1ldGVycyIsIm5vbWluYWxIeiI6NjAsIm1hcE5hbWUiOiJNYXBfQSIsIm1hcFNjYWxlIjoxLCJzdGFydEV2ZW50IjoibmF0aXZlIiwicmVhc29uIjoiY29tcGxldGVkIiwiZnJhbWVzIjoxNzIsImlucHV0RXZlbnRzIjoyMDUyLCJzY29yZSI6MzIxLjUsImR1cmF0aW9uIjoyLjk5ODUsImVuY29kaW5nIjp7ImtleWZyYW1lcyI6NiwicXVhbnR1bSI6MC4wNywieWF3UGVyVW5pdCI6MC4xMTQ1ODU5OTksInBpdGNoUGVyVW5pdCI6LTAuMTE0NTg2LCJrZXlmcmFtZUVycm9yTWF4Ijo3LjM3NGUtMTAsImtleWZyYW1lRXJyb3JSbXMiOjUuMTI3ZS0xMH19BQAAAM0gAAAKUeXAGADoBc0gAAAAAAAAzSAAAAAAAABMAQAAC0qy1doDBybVsUyvB3hxLFGmoQSQ1H8ePNlBXUa5KZq7gkedYSami6iPAAAAmhhwZs9VAKYP7E/AOjgQqHIDBzbYAQeYDeAHIIDV0mENsYgH4gAWRascnCQCYDoW9EMfUF/4BJAhB0oxhojIB+IBjNAygC7wTo/WkAEEdG9CAwEB187A88LHwNvXDW7ZAAaqTu9h9s8irjSBB8QvTMAqYBmAgdJTABjA4NfqSVBeRf30Vgk+CDBv63vSJAgQMKgGEAgKrCsDrgSBAIOAgwECBIECgQCFAcs2ASugwcABgQBCQYDAgAKBlRAQMGBAcCCAEFBQESgIDBAEJFj9DAQOAhAGCggEBBQGAggGEuyZ4dUk2GfS3PCJBBNuUrYAxZsGru0Z4tXUZ9LEdhaPBOhtXsKNwxcQoPUEMKsKAACAIPyJXS8EqQAGODIUCbA=";
+    static void Replays(string root)
+    {
+        long now = 30_000_000;
+        var bytes = Convert.FromBase64String(SyntheticReplay);
+        string Out(string name) { var o = Path.Combine(root, "swap", name); Directory.CreateDirectory(o); return o; }
+        var sender = new ReplaySwap(Out("a"), () => now); var receiver = new ReplaySwap(Out("b"), () => now);
+        File.WriteAllBytes(Path.Combine(Out("a"), "replays.tmp"), []);
+        Directory.CreateDirectory(Path.Combine(Out("a"), "replays"));
+        File.WriteAllBytes(Path.Combine(Out("a"), "replays", "1790000000-42-2.amreplay"), bytes);
+        File.WriteAllBytes(Path.Combine(Out("a"), "replays", "1790000000-42-3.amreplay.partial"), bytes);
+        Check(sender.ReadOwn("1790000000-42-2")!.SequenceEqual(bytes) && sender.ReadOwn("1790000000-42-3") is null && sender.ReadOwn("../x") is null, "Only finished replays are read, by safe id");
+        sender.Offer("peer-b", "m1", 1, "peer-a", "1790000000-42-2", "round", bytes);
+        (byte[] Bytes, ReplaySwap.Shared Info)? done = null;
+        for (var i = 0; i < 10 && done is null; i++)
+            sender.Pump(false, (_, body) =>
+            {
+                var b = JsonSerializer.SerializeToElement(body, Protocol.Json);
+                done ??= receiver.Chunk(b.GetProperty("match").GetString()!, b.GetProperty("round").GetInt32(), b.GetProperty("owner").GetString()!, b.GetProperty("id").GetString()!, b.GetProperty("kind").GetString()!, null,
+                    b.GetProperty("size").GetInt32(), b.GetProperty("hash").GetString()!, b.GetProperty("offset").GetInt32(), Convert.FromBase64String(b.GetProperty("data").GetString()!));
+            });
+        Check(done is not null && receiver.Import(done.Value.Bytes, done.Value.Info) == "1790000000-42-2" && File.Exists(Path.Combine(Out("b"), "replays", "1790000000-42-2.amreplay")), "A round replay arrives, is verified and imported");
+        Check(receiver.Received.Single().Owner == "peer-a" && receiver.Received.Single().Round == 1, "The import is remembered for run vs run");
+        var tampered = (byte[])bytes.Clone(); tampered[^1] ^= 0xFF;
+        var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant();
+        Check(receiver.Chunk("m1", 2, "peer-a", "1790000000-42-9", "round", null, tampered.Length, hash, 0, tampered.Take(ReplaySwap.ChunkBytes).ToArray()) is null || tampered.Length > ReplaySwap.ChunkBytes, "A replay whose bytes don't match its hash is dropped");
+        Check(receiver.Chunk("m1", 1, "peer-a", "../evil", "round", null, 100, hash, 0, new byte[10]) is null && receiver.Chunk("m1", 1, "peer-a", "x", "script", null, 100, hash, 0, new byte[10]) is null, "Bad ids and kinds are refused");
     }
 
     static void Transfers(string root)

@@ -6,7 +6,8 @@ using Microsoft.AspNetCore.Routing;
 namespace AimMod.InGame.Multiplayer;
 
 // Status: aimmod-lobby (in an AimMod lobby), aimmod (AimMod running), kovaaks (game without AimMod), online.
-sealed record FriendEntry(string Id, string Name, string Status, string? Detail, string? Code, bool Joinable);
+// Spectatable: they allow watching right now; Watchers: how many already watch.
+sealed record FriendEntry(string Id, string Name, string Status, string? Detail, string? Code, bool Joinable, bool Spectatable = false, int Watchers = 0, string? Scenario = null);
 sealed record RecentMatch(string Id, long EndedAt, string Mode, string Scenario, int? Place, int Players, string? Winner, bool Won, bool Simulated, IReadOnlyList<RecentPlayer> Standings);
 sealed record RecentPlayer(string Name, int Place, double? Best, int Wins, int Points, bool Self);
 sealed record LocalRun(bool Active, string? Scenario, double? Score, double? Seconds, double? Remaining, int Shots, int Hits, int Kills, string? Attempt);
@@ -66,6 +67,7 @@ sealed class MultiplayerService : IDisposable
         if (output is not null && library.ScenarioFolder is { } folder) scenarios = new MatchScenarioStore(folder, Path.Combine(output, "multiplayer-scenarios.json"));
         LoadHistory();
         server = new ContentServer(library, this.clock);
+        swap = new ReplaySwap(output, this.clock);
         if (output is not null && library.Root is { } root) download = new ContentDownload(root, Path.Combine(output, "downloads"), this.clock);
         if (simulation) Simulation = new MultiplayerSimulation(this.clock, library, completedRuns, seed);
         // A failure in one tick must never take the whole service down: log it and keep going.
@@ -138,6 +140,25 @@ sealed class MultiplayerService : IDisposable
                     return JoinBy(last.Token, invite: true);
                 case "spectate":
                     return Spectate(args);
+                case "watch":
+                    return Watch(Text("friend"));
+                case "watch-stop":
+                    if (watch is not null) { transport.StopSpectate(); watch = null; }
+                    return LobbyResult.Success;
+                case "watch-started":
+                    if (watch is not null) watch = watch with { State = "watching", Message = "Watching " + watch.Name + "." };
+                    return LobbyResult.Success;
+                case "spectate-allow" or "spectate-deny":
+                    var asker = watchAsks.FirstOrDefault(a => a.Peer == Text("id"));
+                    if (asker.Peer is null) return LobbyResult.Fail("invalid", "That request has expired.");
+                    watchAsks.RemoveAll(a => a.Peer == asker.Peer);
+                    transport.AnswerSpectate(asker.Peer, action == "spectate-allow");
+                    return LobbyResult.Success;
+                case "spectator-remove":
+                    if (watchers.All(w => w.Peer != Text("id"))) return LobbyResult.Fail("invalid", "They aren’t watching.");
+                    transport.RemoveSpectator(Text("id")!); watchers.RemoveAll(w => w.Peer == Text("id")); return LobbyResult.Success;
+                case "share-clip":
+                    return ShareClip(Text("id"), Text("label"));
                 case "spectate-stop":
                     if (spectating is not null) { transport.StopSpectate(); spectating = null; }
                     return LobbyResult.Success;
@@ -244,6 +265,151 @@ sealed class MultiplayerService : IDisposable
 
     IReadOnlyList<FriendEntry> Friends() => Simulation is not null && !transport.Available ? Simulation.Friends(clock()) : transport.Friends();
 
+    // ---- watching friends without a lobby (osu!-style) ----------------------
+
+    sealed record WatchState(string Peer, string Name, string? Scenario, string State, string Message, long Since);
+    WatchState? watch;
+    readonly List<(string Peer, string Name, long Since)> watchers = [];
+    readonly List<(string Peer, string Name, long At)> watchAsks = [];
+    string? sentSpectatePrivacy;
+
+    LobbyResult Watch(string? friendId)
+    {
+        var friend = Friends().FirstOrDefault(f => f.Id == friendId);
+        if (friend is null) return LobbyResult.Fail("invalid", "Choose a friend from the list.");
+        if (!friend.Spectatable) return LobbyResult.Fail("private", friend.Name + " isn’t open to spectators right now.");
+        if (!transport.RequestSpectate(friend.Id)) return LobbyResult.Fail("unavailable", "Spectating needs the Steam bridge.");
+        if (watch is not null && watch.Peer != friend.Id) transport.StopSpectate();
+        watch = new WatchState(friend.Id, friend.Name, friend.Scenario, "requesting", "Asking " + friend.Name + "…", clock());
+        return LobbyResult.Success;
+    }
+
+    // The stream started (or the friend changed scenario): load that scenario so the
+    // spectator view can start in the same world.
+    void WatchStarted(string peer, string? name, string? scenario)
+    {
+        if (watch is null || watch.Peer != peer) watch = new WatchState(peer, LobbyRules.CleanName(name, "Friend"), scenario, "requesting", "", clock());
+        var who = watch.Name;
+        scenario ??= watch.Scenario;
+        if (scenario is null) { watch = watch with { State = "waiting", Message = who + " isn’t in a scenario yet.", Scenario = null }; return; }
+        var info = library.Scenarios.FirstOrDefault(s => s.Name.Equals(scenario, StringComparison.OrdinalIgnoreCase));
+        if (info is null) { watch = watch with { Scenario = scenario, State = "missing", Message = "You don’t have “" + scenario + "”. Get it from the Workshop, then watch again." }; return; }
+        var loading = game.Capabilities.Contains("load") && game.Load(info.Name) is not null;
+        watch = watch with { Scenario = info.Name, State = loading ? "loading" : "manual", Message = loading ? "Loading “" + info.Name + "”…" : "Open “" + info.Name + "” in KovaaK’s and pause to watch." };
+    }
+
+    // The bridge writes the watched player's view to spectate-pose.tsv (pose format 1);
+    // its meta line names their scenario, map and scale.
+    long poseCheckedAt; (string Scenario, string Map, double Scale)? poseMeta;
+    (string Scenario, string Map, double Scale)? PoseMeta()
+    {
+        if (outputFolder is null) return null;
+        try
+        {
+            var path = Path.Combine(outputFolder, "spectate-pose.tsv");
+            if (!File.Exists(path) || new FileInfo(path).Length > 65536) return null;
+            using var reader = new StreamReader(path);
+            if (reader.ReadLine() is not { } first || !first.StartsWith("AIMMOD_POSE_1\t", StringComparison.Ordinal)) return null;
+            var meta = reader.ReadLine()?.Split('\t');
+            if (meta is not { Length: 4 } || meta[0] != "meta") return null;
+            var scale = double.TryParse(meta[3], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var s) && s is > 0 and < 100 ? s : 1;
+            var scenario = NativeRuns.Decode(meta[1]); var map = NativeRuns.Decode(meta[2]);
+            return scenario.Length is > 0 and <= 256 ? (scenario, map, scale) : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
+    }
+    // Follow the friend into a new scenario: reload, and the UI restarts the view.
+    void FollowWatch()
+    {
+        if (watch is not { State: not ("ended" or "missing") } w || clock() - poseCheckedAt < 1000) return;
+        poseCheckedAt = clock();
+        poseMeta = PoseMeta();
+        if (poseMeta is { } meta && !string.Equals(meta.Scenario, w.Scenario, StringComparison.OrdinalIgnoreCase)) WatchStarted(w.Peer, w.Name, meta.Scenario);
+    }
+    JsonElement? watchScore;
+
+    object? WatchView()
+    {
+        if (watch is not { } w) return null;
+        var info = w.Scenario is null ? null : library.Scenarios.FirstOrDefault(s => s.Name.Equals(w.Scenario, StringComparison.OrdinalIgnoreCase));
+        var meta = poseMeta is { } m && string.Equals(m.Scenario, w.Scenario, StringComparison.OrdinalIgnoreCase) ? m : ((string, string, double)?)null;
+        return new { peer = w.Peer, name = w.Name, scenario = w.Scenario, state = w.State, message = w.Message,
+            mapName = meta?.Item2 ?? info?.Map, mapScale = meta?.Item3 ?? info?.MapScale ?? 1, score = watchScore,
+            others = Friends().Where(f => f.Spectatable && f.Id != w.Peer).Take(5).Select(f => new { f.Id, f.Name }) };
+    }
+    static string EndedReason(string name, string? reason) => reason switch
+    {
+        "off" => name + " doesn’t allow spectators.",
+        "not-friend" => "You can only spectate Steam friends.",
+        "full" => name + " already has 8 spectators.",
+        "declined" => name + " said no this time.",
+        "no-answer" => name + " didn’t answer.",
+        "timeout" or "unreachable" => "Couldn’t reach " + name + ".",
+        "switched" => "Switched to another player.",
+        "stopped" => "You stopped spectating.",
+        _ => name + " stopped streaming.",
+    };
+
+    // ---- replay swap and clips ---------------------------------------------
+
+    ReplaySwap swap = null!;
+    readonly List<(string Match, int Round, string Id, long Since)> pendingReplays = [];
+    sealed record ReplayChunkBody(string Match, int Round, string Owner, string Id, string Kind, string? Label, int Size, string Hash, int Offset, byte[] Data);
+    static ReplayChunkBody? ReadReplayChunk(JsonElement b)
+    {
+        try
+        {
+            return new ReplayChunkBody(b.GetProperty("match").GetString() ?? "", b.GetProperty("round").GetInt32(), b.GetProperty("owner").GetString() ?? "", b.GetProperty("id").GetString() ?? "",
+                b.GetProperty("kind").GetString() ?? "", b.TryGetProperty("label", out var l) && l.ValueKind == JsonValueKind.String ? l.GetString() : null,
+                b.GetProperty("size").GetInt32(), b.GetProperty("hash").GetString() ?? "", b.GetProperty("offset").GetInt32(), Convert.FromBase64String(b.GetProperty("data").GetString() ?? ""));
+        }
+        catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or FormatException) { return null; }
+    }
+
+    // Send this player's round replays once AimModCore has saved them (never a .partial).
+    void PumpReplays()
+    {
+        var now = clock();
+        foreach (var p in pendingReplays.ToArray())
+        {
+            var bytes = swap.ReadOwn(p.Id);
+            if (bytes is null) { if (now - p.Since > 60_000) pendingReplays.Remove(p); continue; }
+            pendingReplays.Remove(p);
+            Distribute(p.Match, p.Round, p.Id, "round", bytes, null);
+        }
+        swap.Pump(Current?.Match is { Phase: MatchPhases.Live or MatchPhases.Countdown }, (peer, body) => Send(peer, "replay.chunk", body));
+    }
+    void Distribute(string match, int round, string id, string kind, byte[] bytes, string? label)
+    {
+        if (core is not null) foreach (var peer in RemotePeers(core.Snapshot())) swap.Offer(peer, match, round, SelfId, id, kind, bytes, label);
+        else if (hostPeer is not null) swap.Offer(hostPeer, match, round, SelfId, id, kind, bytes, label);
+    }
+
+    LobbyResult ShareClip(string? id, string? label)
+    {
+        if (Current is not { } lobby) return LobbyResult.Fail("no-lobby", "Join a lobby to share clips.");
+        if (!ReplaySwap.ValidId(id) || !System.Text.RegularExpressions.Regex.IsMatch(id!, "-clip[0-9]{1,3}$")) return LobbyResult.Fail("invalid", "Choose one of your clips.");
+        if (swap.ReadOwn(id!) is not { } bytes) return LobbyResult.Fail("missing", "That clip isn’t in your replays yet.");
+        Distribute(lobby.Match?.Id ?? lobby.Id, lobby.Match?.Round ?? 0, id!, "clip", bytes, label);
+        // The host announces its own clip right away; members' clips are announced when they arrive.
+        if (core is not null) core.ShareClip(SelfId, id!, label);
+        notice = ("info", "Sharing your clip with the lobby…", clock());
+        return LobbyResult.Success;
+    }
+
+    // Round replays this machine has for a match: its own and the others', for run vs run.
+    object? ReplaysView(MatchSnapshot? match)
+    {
+        if (match is null) return null;
+        var rounds = Enumerable.Range(1, match.Round).Select(r => new
+        {
+            round = r, mine = swap.MineFor(match.Id, r),
+            others = swap.Received.Where(x => x.Match == match.Id && x.Round == r && x.Kind == "round" && x.Owner != SelfId)
+                .Select(x => new { owner = x.Owner, name = match.Standings.FirstOrDefault(s => s.MemberId == x.Owner)?.Name ?? "Player", id = x.Id }).ToArray(),
+        }).Where(r => r.mine is not null || r.others.Length > 0).ToArray();
+        return rounds.Length == 0 ? null : rounds;
+    }
+
     // ---- preferences, auto-ready and rejoin -------------------------------
 
     MultiplayerPrefs prefs = new();
@@ -327,6 +493,7 @@ sealed class MultiplayerService : IDisposable
     void SyncSelf()
     {
         if (transport.Available && sentHideScenario != prefs.HideScenario) { transport.SetPresencePrivacy(prefs.HideScenario); sentHideScenario = prefs.HideScenario; }
+        if (transport.Available && sentSpectatePrivacy != prefs.SpectatePrivacy) { transport.SetSpectatePrivacy(prefs.SpectatePrivacy); sentSpectatePrivacy = prefs.SpectatePrivacy; }
         if (Current is not { } lobby || lobby.Members.FirstOrDefault(m => m.Id == SelfId) is not { } me) return;
         if (core is not null) core.SetVersion(SelfId, transport.BridgeVersion);
         if (me.Avatar != myAvatar && sentVersionTo != lobby.Id + "|" + myAvatar)
@@ -360,7 +527,7 @@ sealed class MultiplayerService : IDisposable
         var s = lobby.Settings;
         var scenario = MatchScenario.Needed(s) ? MatchScenario.Name(s) : s.Scenario?.Name;
         var info = s.Scenario is null ? null : library.Scenarios.FirstOrDefault(x => x.Hash == s.Scenario.Hash);
-        return new { member = target.Id, name = target.Name, scenario, mapName = s.MapOverride?.Name ?? s.Scenario?.Map, mapScale = info?.MapScale ?? 1, label = target.Name };
+        return new { member = target.Id, name = target.Name, scenario, mapName = s.MapOverride?.Name ?? s.Scenario?.Map, mapScale = info?.MapScale ?? 1, label = target.Name, score = watchScore };
     }
 
     public object PrefsView() => prefs;
@@ -392,8 +559,13 @@ sealed class MultiplayerService : IDisposable
             if (invite.Kind == "request")
                 return new GameNotice("inv-" + invite.Id, "invite", from + " wants to join", "Press " + key + " to open AimMod and let them in.", key, null, "popup");
             var what = invite.Summary is { } s ? " to " + (LobbyModes.All.Contains(s.Mode) ? ModeLabel(s.Mode) : "a match") + (s.Scenario is { Length: > 0 } sc ? " on " + LobbyRules.CleanName(sc, "a scenario") : "") : "";
-            return new GameNotice("inv-" + invite.Id, "invite", from + " invited you" + what, "Join, or press " + key + " to join.", key, null, "popup") { Invite = invite.Id };
+            return new GameNotice("inv-" + invite.Id, "invite", from + " invited you" + what, "Join, or press " + key + " to join.", key, null, "popup")
+                { Invite = invite.Id, Actions = [new("Join", "accept-invite", invite.Id), new("Dismiss", "decline-invite", invite.Id)] };
         }
+        // Someone asks to watch you (privacy "ask").
+        if (watchAsks.FirstOrDefault(a => now - a.At < 60_000) is { Peer: not null } ask)
+            return new GameNotice("ask-" + ask.Peer + "-" + ask.At, "invite", ask.Name + " wants to watch you", "They would see your view from their game.", null, null, quiet ? "none" : "popup")
+                { Actions = [new("Allow", "spectate-allow", ask.Peer), new("Deny", "spectate-deny", ask.Peer)] };
         if (Current is not { } lobby) return flash is { } f && now < f.Until ? f.Notice : null;
         var me = lobby.Members.FirstOrDefault(m => m.Id == SelfId);
         if (lobby.Match is { } match && match.Players.Contains(SelfId) && match.Phase is MatchPhases.Countdown && match.StartsAt is { } at)
@@ -447,12 +619,46 @@ sealed class MultiplayerService : IDisposable
         flash = (new GameNotice("open-" + clock(), "info", "Opening the lobby", "AimMod opens when you’re in the menu. Press Esc to get there.", null, null, "click"), clock() + 4000);
     }
 
+    // "2 watching: Catfish, X" while people watch this player (if they want to see it).
+    string? Badge()
+    {
+        // While spectating: the friend's live stats over their view.
+        if (watch is { State: "watching" } w)
+        {
+            var sc = watchScore;
+            double? Num(string k) => sc is { } e && e.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetDouble(out var d) && double.IsFinite(d) ? d : null;
+            var parts = new List<string> { "Watching " + w.Name };
+            if (Num("score") is { } score) parts.Add(score.ToString("N0", System.Globalization.CultureInfo.InvariantCulture));
+            if (Num("accuracy") is { } acc) parts.Add(acc.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture) + "%");
+            if (Num("remaining") is { } left) parts.Add(Math.Ceiling(left) + " s left");
+            return string.Join(" · ", parts);
+        }
+        if (watchers.Count == 0 || !prefs.ShowWatchers) return null;
+        var names = string.Join(", ", watchers.Take(3).Select(w => w.Name)) + (watchers.Count > 3 ? " +" + (watchers.Count - 3) : "");
+        return watchers.Count + " watching: " + names;
+    }
+    public string NoticeText() => NoticeJson();
+    string NoticeJson(GameNotice? notice = null)
+    {
+        lock (gate)
+        {
+            notice ??= ComputeNotice(clock());
+            var badge = Badge();
+            if (notice is null && badge is null) return "{\"version\":1,\"active\":false}";
+            return JsonSerializer.Serialize(new
+            {
+                version = 1, active = notice is not null, badge, notice?.Id, notice?.Kind, notice?.Title, notice?.Body, notice?.Key, notice?.Countdown, notice?.Sound, notice?.Invite,
+                actions = notice?.Actions, interactive = notice?.Actions is { Count: > 0 }, volume = prefs.Sounds ? prefs.Volume : 0,
+            }, Protocol.Json);
+        }
+    }
+
     // The notice file AimModNativeUI polls; rewritten only when it changes.
     void PublishNotice()
     {
         if (outputFolder is null) return;
         var notice = ComputeNotice(clock());
-        var json = notice is null ? "{\"version\":1,\"active\":false}" : JsonSerializer.Serialize(new { version = 1, active = true, notice.Id, notice.Kind, notice.Title, notice.Body, notice.Key, notice.Countdown, notice.Sound, notice.Invite, interactive = notice.Invite is not null, volume = prefs.Sounds ? prefs.Volume : 0 }, Protocol.Json);
+        var json = NoticeJson(notice);
         if (json == lastNoticeJson) return;
         try { AtomicFile.WriteText(Path.Combine(outputFolder, "multiplayer-notify.json"), json); lastNoticeJson = json; }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
@@ -696,12 +902,14 @@ sealed class MultiplayerService : IDisposable
             }
             ReportContent(force: false);
             PumpContent();
+            PumpReplays();
             PrepareMatchScenario();
             PublishNotice();
             AutoReady();
             SaveSession();
             TryRejoin();
             SyncSelf();
+            FollowWatch();
             PlanRound();
             TrackLocalRun();
             Remember();
@@ -721,6 +929,18 @@ sealed class MultiplayerService : IDisposable
     {
         if (e.Kind == TransportEvent.InviteReceived) { if (e.Invite is not null) AddInvite(e.Invite); return; }
         if (e.Kind == TransportEvent.WorkshopUpdate) { WorkshopUpdate(e.Workshop); return; }
+        if (e.Kind == TransportEvent.SpectateStarted) { WatchStarted(e.Peer, e.Reason, PoseMeta()?.Scenario ?? Friends().FirstOrDefault(f => f.Id == e.Peer)?.Scenario); return; }
+        if (e.Kind == TransportEvent.SpectateScore && e.Frame is not null) { try { using var doc = JsonDocument.Parse(e.Frame); watchScore = doc.RootElement.Clone(); } catch (JsonException) { } return; }
+        if (e.Kind == TransportEvent.SpectateEnded) { if (watch?.Peer == e.Peer && e.Reason != "switched") { watch = watch with { State = "ended", Message = EndedReason(watch.Name, e.Reason) }; watchScore = null; } return; }
+        if (e.Kind == TransportEvent.SpectatorJoined)
+        {
+            var who = LobbyRules.CleanName(e.Reason, "A friend");
+            watchers.RemoveAll(w => w.Peer == e.Peer); watchers.Add((e.Peer, who, clock()));
+            if (!e.Host && !OwnRankedRun()) flash = (new GameNotice("watch-" + e.Peer + "-" + clock(), "info", who + " is watching you", "They see your view from their game.", null, null, "popup"), clock() + 4000);
+            return;
+        }
+        if (e.Kind == TransportEvent.SpectatorLeft) { watchers.RemoveAll(w => w.Peer == e.Peer); return; }
+        if (e.Kind == TransportEvent.SpectateAsked) { watchAsks.RemoveAll(a => a.Peer == e.Peer); watchAsks.Add((e.Peer, LobbyRules.CleanName(e.Reason, "A friend"), clock())); return; }
         if (e.Kind == TransportEvent.BulkData) { if (core is null && e.Peer == hostPeer && e.Frame is not null) download?.Bulk(e.Transfer, e.Index, e.Frame); return; }
         if (e.Kind == TransportEvent.BulkAck) return;
         if (e.Kind == TransportEvent.BulkEnd)
@@ -819,6 +1039,14 @@ sealed class MultiplayerService : IDisposable
                 }
                 catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or FormatException) { }
                 break;
+            case "replay.chunk":
+                // A member's own replay or clip: import it here, then pass it on to everyone else.
+                if (ReadReplayChunk(m.Body) is { } c && c.Owner == peer && swap.Chunk(c.Match, c.Round, c.Owner, c.Id, c.Kind, c.Label, c.Size, c.Hash, c.Offset, c.Data) is { } whole && swap.Import(whole.Bytes, whole.Info) is { } stored)
+                {
+                    foreach (var other in RemotePeers(core!.Snapshot()).Where(p => p != peer)) swap.Offer(other, c.Match, c.Round, c.Owner, stored, c.Kind, whole.Bytes, c.Label);
+                    if (c.Kind == "clip") core!.ShareClip(peer, stored, c.Label);
+                }
+                break;
             case "content.done":
                 if (m.Body.TryGetProperty("transfer", out var dt) && dt.TryGetInt32(out var done)) { server.Ended(peer, done); transport.BulkCancel(peer, done, "complete"); }
                 break;
@@ -857,6 +1085,9 @@ sealed class MultiplayerService : IDisposable
             case "result":
                 if (m.Body.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.False && m.Body.TryGetProperty("message", out var text) && text.ValueKind == JsonValueKind.String)
                     notice = ("error", text.GetString() ?? "The host refused that.", clock());
+                break;
+            case "replay.chunk":
+                if (ReadReplayChunk(m.Body) is { } fromHost && swap.Chunk(fromHost.Match, fromHost.Round, fromHost.Owner, fromHost.Id, fromHost.Kind, fromHost.Label, fromHost.Size, fromHost.Hash, fromHost.Offset, fromHost.Data) is { } got) swap.Import(got.Bytes, got.Info);
                 break;
             case "content.manifest":
                 if (download is not null && ContentDownload.ReadManifest(m.Body) is { } offered) { download.Offer(offered); if (download.State == "ready" && autoDownload) StartDownload(); }
@@ -1074,6 +1305,7 @@ sealed class MultiplayerService : IDisposable
             knownRuns.Add(finished.Id);
             var shots = Math.Max(line.Shots, 0); var hits = finished.Accuracy is { } acc && shots > 0 ? (int)Math.Round(shots * acc / 100) : line.Hits;
             SendFinish(new RunFinish(match.Id, match.Round, finished.Score, finished.Duration, shots, Math.Min(hits, shots), (int)Math.Max(0, finished.Kills), null));
+            swap.Mine(match.Id, match.Round, finished.Id); pendingReplays.Add((match.Id, match.Round, finished.Id, clock()));
             return;
         }
         // Freeplay (generated) and simulated runs end at the lobby's time limit, scored by AimMod.
@@ -1155,6 +1387,7 @@ sealed class MultiplayerService : IDisposable
                     round = plan is { } p && lobby.Match is { } mt && p.Key == mt.Id + "#" + mt.Round ? new { p.Scenario, p.Mode, p.Generated, p.State, p.Message } : null,
                     download = DownloadView(lobby),
                     spectate = SpectateView(lobby),
+                    replays = ReplaysView(lobby.Match),
                 };
             }
             var friendsSource = Simulation is not null && !transport.Available ? "simulation" : transport.Available ? "steam" : "unavailable";
@@ -1167,12 +1400,15 @@ sealed class MultiplayerService : IDisposable
                 hotkey = HotkeyName,
                 prefs,
                 rejoin = RejoinOffer(),
+                watch = WatchView(),
+                watchers = watchers.Select(w => new { peer = w.Peer, name = w.Name }),
+                watchAsks = watchAsks.Select(a => new { peer = a.Peer, name = a.Name }),
                 avatars = AvatarProfiles.All.Select(a => new { a.Id, a.Label }),
                 capabilities = new { invite = transport.Available, friends = friendsSource != "unavailable", gameLoad = caps.Contains("load"), gameStart = caps.Contains("start") },
                 self = new { id = SelfId, name = LocalName() },
                 joining = (hostPeer is not null && mirror is null) || joinPendingSince is not null ? new { since = joinPendingSince ?? connectAt, stage = hostPeer is null ? "lobby" : "host" } : null,
                 // Steam ids and lobby tokens stay in the service; the UI acts on opaque ids only.
-                friends = new { source = friendsSource, items = Friends().Select(f => new { f.Id, f.Name, f.Status, f.Detail, f.Joinable }) },
+                friends = new { source = friendsSource, items = Friends().Select(f => new { f.Id, f.Name, f.Status, f.Detail, f.Joinable, f.Spectatable, f.Watchers }) },
                 invites = invites.Where(i => now - i.At < 120_000).Select(i => new { i.Id, i.FromName, i.Kind, i.Summary, i.At, i.Compatible }),
                 recent,
                 library = new { available = library.Available, scenarios = library.Available ? library.Scenarios.Count : 0 },
@@ -1197,9 +1433,7 @@ sealed class MultiplayerService : IDisposable
         routes.MapGet(prefix + "/multiplayer", (string? part) =>
             part == "library" ? Results.Json(LibraryView(), Protocol.Json) : Results.Json(View(), Protocol.Json));
         // Read-only notice for the always-on in-game layer (notify.html).
-        routes.MapGet(prefix + "/multiplayer-notify", () => Notice() is { } n
-            ? Results.Json(new { active = true, n.Id, n.Kind, n.Title, n.Body, n.Key, n.Countdown, n.Sound, n.Invite }, Protocol.Json)
-            : Results.Json(new { active = false }, Protocol.Json));
+        routes.MapGet(prefix + "/multiplayer-notify", () => Results.Content(NoticeJson(), "application/json"));
         routes.MapPost(prefix + "/multiplayer", async (HttpRequest request, CancellationToken token) =>
         {
             if (request.Headers["X-AimMod-UI"] != "1") return Results.StatusCode(403);

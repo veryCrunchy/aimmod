@@ -21,7 +21,7 @@ static class MultiplayerHosting
         // The AimModSteam bridge is used as soon as it answers on its pipe; until then
         // (or without the bridge) lobbies stay on this machine.
         IMultiplayerTransport transport = args is null || list.Contains("--no-steam") ? new OfflineTransport() : new SteamTransport();
-        var service = new MultiplayerService(transport, library, args is null ? new NoGameControl() : new CoreGameControl(output), () => FromLive(live()), runs, () => AccountLabel(hub), output,
+        var service = new MultiplayerService(transport, library, args is null ? new NoGameControl() : new CoreGameControl(output), () => FromLive(live()), runs, () => AccountLabel(hub), args is null ? null : output,
             MultiplayerService.SimulationRequested(list, output));
         if (args is not null && !list.Contains("--no-hotkey"))
         {
