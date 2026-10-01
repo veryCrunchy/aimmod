@@ -97,12 +97,15 @@ sealed record DiscordActivity(string Phase, string Details, string State, long? 
     public JsonObject ToJson(bool scenarioButton = true, ArtLevel art = ArtLevel.Full)
     {
         var assets = new JsonObject { ["large_image"] = LargeImage, ["large_text"] = LargeText };
-        if (Art is { } lobbyArt && art > ArtLevel.Logo)
+        // With the invite banner the square image stays the AimMod logo; only without it
+        // does the square lobby card stand in (with the logo as the small image).
+        if (Art is { } lobbyArt && art == ArtLevel.Full)
+            assets["invite_cover_image"] = lobbyArt.Cover;
+        else if (Art is { } card && art == ArtLevel.NoCover)
         {
-            assets["large_image"] = lobbyArt.Large;
-            assets["small_image"] = lobbyArt.Small;
-            assets["small_text"] = lobbyArt.SmallText;
-            if (art == ArtLevel.Full) assets["invite_cover_image"] = lobbyArt.Cover;
+            assets["large_image"] = card.Large;
+            assets["small_image"] = card.Small;
+            assets["small_text"] = card.SmallText;
         }
         var activity = new JsonObject
         {

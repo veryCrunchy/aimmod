@@ -218,9 +218,11 @@ static class DiscordPresenceChecks
         var csJson = csActivity.ToJson();
         var csAssets = csJson["assets"]!;
         const string cardQuery = "mode=cs&map=synthetic_dust&n=2&max=6&state=lobby&host=synthetic-player&ws=3000000001";
-        Check(csAssets["large_image"]!.GetValue<string>() == "https://aimmod.app/og/invite.png?v=1&layout=square&" + cardQuery, "Large image is the square lobby card");
+        Check(csAssets["large_image"]!.GetValue<string>() == DiscordActivity.LargeImage && csAssets["small_image"] is null, "With the banner the square image stays the AimMod logo");
         Check(csAssets["invite_cover_image"]!.GetValue<string>() == "https://aimmod.app/og/invite.png?v=1&layout=banner&" + cardQuery, "Invite banner is the wide lobby card");
-        Check(csAssets["small_image"]!.GetValue<string>() == DiscordActivity.LargeImage && csAssets["small_text"]!.GetValue<string>() == "AimMod for KovaaK's · aimmod.app", "Small image is the AimMod logo with a tooltip");
+        var squareCard = csActivity.ToJson(art: DiscordActivity.ArtLevel.NoCover)["assets"]!;
+        Check(squareCard["large_image"]!.GetValue<string>() == "https://aimmod.app/og/invite.png?v=1&layout=square&" + cardQuery
+            && squareCard["small_image"]!.GetValue<string>() == DiscordActivity.LargeImage && squareCard["small_text"]!.GetValue<string>() == "AimMod for KovaaK's · aimmod.app", "Without the banner the square lobby card stands in, with the logo small");
         Check(csAssets.AsObject().Where(a => a.Key.EndsWith("_image")).All(a => a.Value!.GetValue<string>().Length <= DiscordActivityBuilder.AssetLimit), "Image strings fit Discord's limit");
         Check(csJson["secrets"]!["join"] is not null && csJson["party"]!["size"]!.AsArray().Select(n => n!.GetValue<int>()).SequenceEqual([2, 6]), "Lobby with art keeps party and join secret");
         var noCover = csActivity.ToJson(art: DiscordActivity.ArtLevel.NoCover)["assets"]!;
