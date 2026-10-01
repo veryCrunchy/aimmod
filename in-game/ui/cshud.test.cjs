@@ -63,3 +63,25 @@ test('sites on the compass, the site letter, the bomb carrier and why an action 
   s.hud.render(s.root,Object.assign({},base,{buyOpen:false,phase:'live',bombCarrier:'Nova'}),()=>{});
   assert.ok(s.text(s.root).includes('Bomb: Nova'),'teammates see who has the bomb');
 });
+test('the buy menu is centred on both axes, never under the strip, and scaled to fit a short view',()=>{
+  const s=setup();const place=s.hud.place;
+  const menu=(w,h)=>({offsetWidth:w,offsetHeight:h,style:{}});
+  const strip=bottom=>({getBoundingClientRect:()=>({bottom})});
+  // 1920x1080: centred.
+  let m=menu(640,520),r=place(m,strip(76),{innerWidth:1920,innerHeight:1080});
+  assert.deepEqual([r.left,r.top,r.scale],[640,280,1]);assert.equal(m.style.top,'280px');assert.equal(m.style.transform,'scale(1.000)');
+  // 1280x720: the strip pushes it down; it still fits at full size.
+  r=place(menu(600,520),strip(76),{innerWidth:1280,innerHeight:720});
+  assert.equal(r.scale,1);assert.ok(r.top>=88&&r.top+520<=720,'below the strip and on screen');
+  // A menu taller than the room left: scaled down to fit between the strip and the bottom.
+  r=place(menu(640,700),strip(76),{innerWidth:1280,innerHeight:720});
+  assert.equal(r.top,88);assert.ok(r.scale<1&&88+700*r.scale<=708.5,'scaled to fit');
+  // 2560x1440: larger, centred, below the scaled strip.
+  r=place(menu(640,520),strip(101),{innerWidth:2560,innerHeight:1440});
+  assert.equal(r.scale,1.33);assert.equal(r.left,Math.round((2560-640*1.33)/2));assert.ok(r.top>=113&&r.top+520*1.33<=1440);
+  // Narrow view: never wider than the screen.
+  r=place(menu(640,400),strip(70),{innerWidth:600,innerHeight:720});
+  assert.ok(640*r.scale<=576.5&&r.left>=12);
+  // Not on the page yet (no size): left alone.
+  assert.equal(place({offsetWidth:0,offsetHeight:0,style:{}},strip(76),{innerWidth:1920,innerHeight:1080}),null);
+});
