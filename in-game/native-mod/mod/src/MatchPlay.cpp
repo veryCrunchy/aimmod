@@ -8,6 +8,8 @@
 #include <aimmod/GameCommand.hpp>
 
 #include <Unreal/CoreUObject/UObject/UnrealType.hpp>
+#include <Unreal/NameTypes.hpp>
+#include <Unreal/UObjectGlobals.hpp>
 #include <Unreal/UClass.hpp>
 #include <Unreal/UObject.hpp>
 
@@ -15,10 +17,17 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <fstream>
+
+#include <Windows.h>
 
 namespace aimmod
 {
     using namespace game;
+    using RC::Unreal::FName;
+    using RC::Unreal::FWeakObjectPtr;
+    namespace UObjectGlobals = RC::Unreal::UObjectGlobals;
+    using RC::Unreal::FNAME_Add;
 
     namespace
     {
@@ -48,6 +57,204 @@ namespace aimmod
         TickShots(now, poseId, poseNames);
         TickPlayState(now, scenario, inChallenge, loading);
         TickRound(now, scenario, inChallenge, loading);
+    }
+
+    // ------------------------------------------------------------ restart lock
+
+    namespace
+    {
+        constexpr const char* RestartAction = "ResetSession";            // KovaaK's restart (F3 / middle mouse by default)
+        constexpr const wchar_t* RestartLocked = STR("AimModRestartOff"); // its name while a match runs
+    } // namespace
+
+    bool MatchPlay::BindLock()
+    {
+        if (m_lockBound) return !m_lockDisabled;
+        m_lockBound = true;
+        m_inputSettings = UObjectGlobals::StaticFindObject<UObject*>(nullptr, nullptr, STR("/Script/Engine.Default__InputSettings"));
+        m_actionMappings.Bind(FindClass(STR("/Script/Engine.InputSettings")), "ActionMappings");
+        if (m_actionMappings.ok() && m_actionMappings.elementStruct())
+        {
+            m_actionName.Bind(m_actionMappings.elementStruct(), "ActionName");
+            m_actionKey.Bind(m_actionMappings.elementStruct(), "Key");
+        }
+        m_rebuildKeymaps.BindPath(STR("/Script/Engine.InputSettings:ForceRebuildKeymaps"), Shape::Command);
+        m_saveKeyMappings.BindPath(STR("/Script/Engine.InputSettings:SaveKeyMappings"), Shape::Command);
+        m_keyJustPressed.BindPath(STR("/Script/Engine.PlayerController:WasInputKeyJustPressed"), Shape::Command);
+        m_setVisibility.BindPath(STR("/Script/UMG.Widget:SetVisibility"), Shape::Command);
+        m_getVisibility.BindPath(STR("/Script/UMG.Widget:GetVisibility"), Shape::Number);
+        m_resetButton.Bind(FindClass(STR("/Script/GameSkillsTrainer.PauseBoxWidget")), STR("ResetChallengeButton"));
+        if (!m_inputSettings || !m_actionName.ok() || m_actionName.kind() != Kind::Name || !m_rebuildKeymaps.ok())
+        {
+            m_lockDisabled = true;
+            Log("match play: restart lock disabled (input settings bindings missing)");
+            return false;
+        }
+        // A lock left behind (the game closed mid-match and the binds were saved since): undo it.
+        if (RenameActions(Narrow(RestartLocked), STR("ResetSession"), false) > 0)
+        {
+            m_rebuildKeymaps.Call(m_inputSettings, [](std::uint8_t*, const Param&) {});
+            if (m_saveKeyMappings.ok()) m_saveKeyMappings.Call(m_inputSettings, [](std::uint8_t*, const Param&) {});
+            Log("match play: restored a restart bind a previous match had switched off");
+        }
+        Log(std::string("match play: restart lock ready") + (m_resetButton.ok() && m_setVisibility.ok() ? "" : " (pause menu button unsupported)"));
+        return true;
+    }
+
+    int MatchPlay::RenameActions(const std::string& from, const wchar_t* to, bool keepKeys)
+    {
+        std::vector<const std::uint8_t*> elements;
+        if (!m_actionMappings.Elements(m_inputSettings, elements, 512)) return 0;
+        int renamed = 0;
+        for (const std::uint8_t* element : elements)
+        {
+            std::string name;
+            if (!m_actionName.Name(element, name) || name != from) continue;
+            *reinterpret_cast<FName*>(const_cast<std::uint8_t*>(m_actionName.At(element))) = FName(to, FNAME_Add);
+            if (keepKeys && m_actionKey.ok() && m_actionKey.size() > 0 && m_actionKey.size() <= 64)
+            {
+                const std::uint8_t* key = m_actionKey.At(element);
+                m_lockedKeys.emplace_back(key, key + m_actionKey.size());
+            }
+            ++renamed;
+        }
+        return renamed;
+    }
+
+    void MatchPlay::ShowRestartButtons(bool hidden)
+    {
+        if (!m_resetButton.ok() || !m_setVisibility.ok()) return;
+        auto set = [&](UObject* button, std::uint8_t visibility) {
+            m_setVisibility.Call(button, [&](std::uint8_t* value, const Param& p) { if (p.kind == Kind::UInt8) *value = visibility; });
+        };
+        if (!hidden)
+        {
+            for (auto& [weak, before] : m_hiddenButtons)
+                if (UObject* button = weak.Get(); button && IsLiveInstance(button)) set(button, before);
+            m_hiddenButtons.clear();
+            return;
+        }
+        std::vector<UObject*> boxes;
+        UObjectGlobals::FindAllOf(STR("PauseBox_C"), boxes);
+        for (UObject* box : boxes)
+        {
+            if (!IsLiveInstance(box)) continue;
+            UObject* button = m_resetButton.Object(box);
+            if (!button || !IsLiveInstance(button)) continue;
+            const auto known = std::find_if(m_hiddenButtons.begin(), m_hiddenButtons.end(), [&](auto& entry) { return entry.first.Get() == button; });
+            const double shown = m_getVisibility.ok() ? m_getVisibility.Number(button).value_or(0) : 0;
+            if (known == m_hiddenButtons.end()) m_hiddenButtons.emplace_back(FWeakObjectPtr(button), static_cast<std::uint8_t>(std::clamp(shown, 0.0, 4.0)));
+            else if (shown == 1) continue;
+            set(button, 1); // Collapsed
+        }
+    }
+
+    void MatchPlay::TickRestartLock(double now, bool wanted)
+    {
+        if (wanted == m_locked)
+        {
+            if (!m_locked) return;
+            // The pause menu is rebuilt with each opening: collapse its restart button again.
+            if (now >= m_nextButtonScan)
+            {
+                m_nextButtonScan = now + 0.25;
+                ShowRestartButtons(true);
+            }
+            // A press of a switched-off restart key: tell the service, which says why nothing happened.
+            UObject* player = m_scene.Player();
+            if (player && m_keyJustPressed.ok())
+                for (const auto& key : m_lockedKeys)
+                {
+                    bool pressed = false;
+                    m_keyJustPressed.Call(
+                        player,
+                        [&](std::uint8_t* value, const Param& p) {
+                            if (p.kind == Kind::Other && p.structType && p.size == static_cast<std::int32_t>(key.size())) std::memcpy(value, key.data(), key.size());
+                        },
+                        [&](const std::uint8_t* buffer, const std::vector<Param>& params) {
+                            for (const Param& p : params)
+                                if (p.ret && p.boolProperty) pressed = p.boolProperty->GetPropertyValue(const_cast<std::uint8_t*>(buffer) + p.offset);
+                        });
+                    if (!pressed) continue;
+                    ++m_blockedPresses;
+                    const auto file = m_output.root() / L"match-lock.tsv", temp = m_output.root() / L"match-lock.tsv.tmp";
+                    {
+                        std::ofstream out(temp, std::ios::binary | std::ios::trunc);
+                        out << "AIMMOD_LOCK_1\t" << m_blockedPresses << "\t" << UnixMs() << "\n";
+                    }
+                    MoveFileExW(temp.c_str(), file.c_str(), MOVEFILE_REPLACE_EXISTING);
+                    break;
+                }
+            return;
+        }
+        if (!BindLock()) return;
+        if (wanted)
+        {
+            m_lockedKeys.clear();
+            const int count = RenameActions(RestartAction, RestartLocked, true);
+            m_rebuildKeymaps.Call(m_inputSettings, [](std::uint8_t*, const Param&) {});
+            m_locked = true;
+            m_nextButtonScan = 0;
+            Log("match play: restart off for the match (" + std::to_string(count) + " bind" + (count == 1 ? "" : "s") + ")");
+        }
+        else
+        {
+            RenameActions(Narrow(RestartLocked), STR("ResetSession"), false);
+            m_rebuildKeymaps.Call(m_inputSettings, [](std::uint8_t*, const Param&) {});
+            ShowRestartButtons(false);
+            m_lockedKeys.clear();
+            m_locked = false;
+            Log("match play: restart back on");
+        }
+    }
+
+    // Frozen: jumping off (JumpMaxCount 0) and the movement component stopped (MOVE_None), so
+    // nobody moves or jumps before go-live; looking stays. Restored exactly at unfreeze.
+    void MatchPlay::FreezeBody(UObject* character, bool frozen)
+    {
+        if (!m_freezeBound)
+        {
+            m_freezeBound = true;
+            m_characterMovement.Bind(FindClass(STR("/Script/Engine.Character")), STR("CharacterMovement"));
+            m_setMovementMode.BindPath(STR("/Script/Engine.CharacterMovementComponent:SetMovementMode"), Shape::Command);
+        }
+        if (!frozen && !m_frozenBody.Get() && !m_jumpBefore && !m_movementOff) return;
+        auto mode = [&](UObject* body, std::uint8_t movementMode) {
+            if (UObject* movement = m_characterMovement.ok() ? m_characterMovement.Object(body) : nullptr)
+                m_setMovementMode.Call(movement, [&](std::uint8_t* value, const Param& p) {
+                    if (p.kind == Kind::UInt8) *value = p.name == "NewMovementMode" ? movementMode : 0;
+                });
+        };
+        UObject* previous = m_frozenBody.Get();
+        if (previous && previous != character && IsLiveInstance(previous)) FreezeBody(previous, false); // a respawn: the old body first
+        if (frozen && character)
+        {
+            if (previous != character)
+            {
+                auto* jumps = character->GetValuePtrByPropertyNameInChain<std::int32_t>(STR("JumpMaxCount"));
+                m_jumpBefore = jumps ? std::optional<std::int32_t>(*jumps) : std::nullopt;
+                if (jumps) *jumps = 0;
+                m_frozenBody = FWeakObjectPtr(character);
+                m_movementOff = false;
+            }
+            // Movement stops once the character stands at its spawn (no teleport pending).
+            if (!m_movementOff && !m_pendingSpawn)
+            {
+                mode(character, 0); // MOVE_None
+                m_movementOff = true;
+            }
+            return;
+        }
+        UObject* body = m_frozenBody.Get();
+        if (body && IsLiveInstance(body))
+        {
+            if (m_jumpBefore)
+                if (auto* jumps = body->GetValuePtrByPropertyNameInChain<std::int32_t>(STR("JumpMaxCount"))) *jumps = *m_jumpBefore;
+            if (m_movementOff) mode(body, 1); // MOVE_Walking; the component falls if there is no floor
+        }
+        m_frozenBody = FWeakObjectPtr();
+        m_jumpBefore.reset();
+        m_movementOff = false;
     }
 
     // ---------------------------------------------------------------- shots
@@ -428,6 +635,7 @@ namespace aimmod
         UObject* player = m_scene.Player();
         UObject* character = player ? m_b.myCharacter.Object(player) : nullptr;
         if (m_frozen && player) m_ignoreMove.Call(player, [](std::uint8_t* value, const Param& p) { if (p.boolProperty) p.boolProperty->SetPropertyValue(value, false); });
+        FreezeBody(character, false);
         if (m_loadoutChanged && character)
         {
             UObject* handler = Describe(character).weaponHandler.Object(character);
@@ -458,6 +666,8 @@ namespace aimmod
             m_round = snapshot.state;
         }
         const RoundState* r = m_round.get();
+        // Restart lock: any match whose fresh round state names the scenario on screen.
+        TickRestartLock(now, r && !loading && r->scenario == scenario);
         const char* closed = nullptr;
         if (!r) closed = "no round state";
         else if (inChallenge) closed = "challenge";
@@ -545,9 +755,10 @@ namespace aimmod
         {
             setIgnore(wantFrozen);
             m_frozen = wantFrozen;
-            Log(wantFrozen ? "match play: frozen (movement off)" : "match play: unfrozen");
+            Log(wantFrozen ? "match play: frozen (movement and jump off)" : "match play: unfrozen");
         }
         else if (m_frozen && m_moveIgnored.ok() && !m_moveIgnored.Bool(player).value_or(true)) setIgnore(true);
+        FreezeBody(character, m_frozen);
         if (r->loadout) ApplyLoadout(character, *r->loadout);
     }
 } // namespace aimmod

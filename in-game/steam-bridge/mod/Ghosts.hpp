@@ -14,6 +14,7 @@
 #include "GameBindings.hpp"
 #include "GhostMath.hpp"
 #include "AvatarState.hpp"
+#include "Walker.hpp"
 
 #include <Unreal/FWeakObjectPtr.hpp>
 
@@ -69,6 +70,7 @@ namespace aimmod
             bool dead = false;            // from avatar-state.tsv
             double health = -1;           // last health applied to the bar
             std::string hiddenScene;      // non-empty while hidden because of a scenario mismatch
+            bool respawned = false;       // came back from a death since the last look (walker re-places)
         };
         using Sample = bridge::ghost::RemoteTransform; // remote values only
 
@@ -136,6 +138,15 @@ namespace aimmod
         std::string m_testPathScene; // the scenario last reported as not matching the path
         double m_eyeAboveCentre = 64; // local camera height above the capsule centre, measured live
         double m_testPathStart = -1;
+        // Developer mode's simulated player walking the arena (dev.avatar mode walk).
+        bridge::ghost::Walker m_walker;
+        double m_walkAt = -1;
+        game::Getter m_lineTrace;
+        RC::Unreal::UObject* m_kismetDefault = nullptr;
+        std::int32_t m_hitImpactOffset = -1;
+        bool m_traceBound = false;
+        // Line trace on Visibility from a to b, ignoring both bodies; the impact point, or nullopt.
+        std::optional<std::array<double, 3>> Trace(RC::Unreal::UObject* context, const double a[3], const double b[3], RC::Unreal::UObject* ignore1, RC::Unreal::UObject* ignore2);
         bool LoadTestPath();
     };
 } // namespace aimmod

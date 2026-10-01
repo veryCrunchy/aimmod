@@ -585,7 +585,11 @@ loadout	<primary profile or ->	<pistol profile or ->	<armour>	<helmet 0/1>	<kit 
   (CS round start) a dead player is respawned first (`Respawn`).
 - `frozen`: `Controller:SetIgnoreMoveInput(true)` (looking stays free),
   re-applied if a respawn clears it, released when the phase ends or the gate
-  closes.
+  closes. Jumping is off too (`JumpMaxCount` 0), and once no spawn teleport is
+  pending the movement component stops (`SetMovementMode(MOVE_None)`). Both
+  come back exactly at unfreeze (`MOVE_Walking`; the component falls if there
+  is no floor). The service sends `phase freeze` in every mode while the
+  match loads and counts down, and `phase live` at go-live.
 - `loadout`: `WeaponHandler:SetWeaponProfileByString` on slots 0 and 1; `-`
   empties a slot by clearing its `SelectableWeapon` entry (and selects the
   other slot). Re-applied for a new weapon handler. When the gate closes the
@@ -593,6 +597,28 @@ loadout	<primary profile or ->	<pistol profile or ->	<armour>	<helmet 0/1>	<kit 
   scenario's loadout. Armour, helmet and kit are the service's (HUD) concern.
 - Missing `K2_TeleportTo`, `SetControlRotation`, `SetIgnoreMoveInput`,
   `SetWeaponProfileByString` or `LoadWeapons` disables round state (logged).
+
+**Restart lock.** While a fresh `round-state.tsv` names the scenario on
+screen (any match, AimMod arena or not; not while loading), KovaaK's restart
+is off:
+
+- every `ResetSession` action mapping in the input settings (F3 and middle
+  mouse by default) is renamed `AimModRestartOff`, then
+  `InputSettings:ForceRebuildKeymaps`. The settings are never saved, so
+  nothing reaches Input.ini. A lock left behind (the game closed mid-match
+  and the binds were saved since) is undone at the next start, and only then
+  `SaveKeyMappings` writes the restored bind back;
+- the pause menu's restart button (`PauseBoxWidget.ResetChallengeButton`) is
+  collapsed, every 0.25 s while the lock holds, and given back its own
+  visibility after;
+- a press of a switched-off key (`PlayerController:WasInputKeyJustPressed`
+  with its `FKey`) bumps `match-lock.tsv` (`AIMMOD_LOCK_1\t<presses>\t<unix
+  ms>`), and the service shows "Restart is off during a match".
+
+Quit and the AimMod lobby's Leave still work; they count as leaving. A
+restart that still gets through is the service's to absorb (the run timer
+jumps back): combat scores are the host's anyway, a score run keeps the
+score it had, and the player is put back where they were (`spawn` row).
 
 ## Cosmetics
 

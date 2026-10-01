@@ -1432,8 +1432,15 @@ widget. The character's `Infobar` widget shows the profile's display name.
   own instance of `AimMod Hidden Bot` is parked every second in AimMod arenas:
   hidden, no collision, AI off, invulnerable, `MOVE_None`, far outside the map.
 - **Developer mode.** In a simulated lobby's match, the first simulated player
-  is shown as the test avatar (peer 1, `dev.avatar` circle, switched on and
-  off by the service unless the developer menu already has it on). Its
+  is shown as the test avatar (peer 1, switched on and off by the service
+  unless the developer menu already has it on). With the bridge's
+  `dev-avatar-walk` feature it walks like a simple bot (`dev.avatar` mode
+  `walk` with the arena's spawn points): between spawns in clear sight,
+  strafing, crouching now and then and jumping rarely, its feet on the floor
+  found by line traces (`KismetSystemLibrary:LineTraceSingle` on Visibility),
+  never through a wall, up a step over 45 cm or off a ledge over 70 cm. It
+  starts, and restarts after each respawn, on a random spawn. Arenas without
+  spawns, or older bridges, circle the player instead. Its
   stream maps back to that member; the host uses its drawn hull as the
   member's track, so hits on it validate; `avatar-state.tsv` lists it as
   peer 1.

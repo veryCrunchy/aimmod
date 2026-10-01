@@ -3,6 +3,7 @@
 #include "PoseFile.hpp"
 
 #include <Unreal/AActor.hpp>
+#include <Unreal/CoreUObject/UObject/UnrealType.hpp>
 #include <Unreal/Core/Containers/Array.hpp>
 #include <Unreal/FAssetData.hpp>
 #include <Unreal/FHitResult.hpp>
@@ -20,6 +21,7 @@
 #include <Windows.h>
 
 #include <algorithm>
+#include <utility>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -647,7 +649,32 @@ namespace aimmod
                     m_log("avatars: recorded path is for \"" + m_testPath->scenario + "\", not this scenario; circling instead");
                 }
                 Sample s;
-                if (pathHere)
+                if (dev.walk && !dev.spawns.empty())
+                {
+                    // A simulated lobby player: walks between the arena's spawns, feet on the floor.
+                    if (m_walker.spawns != dev.spawns)
+                    {
+                        m_walker = bridge::ghost::Walker{};
+                        m_walker.spawns = dev.spawns;
+                        m_walkAt = -1;
+                        m_log("avatars: simulated player walks between " + std::to_string(dev.spawns.size()) + " spawns");
+                    }
+                    UObject* pawn = m_ghosts[TestPeer].pawn.Get();
+                    const auto floor = [&](double fx, double fy, double fz) -> std::optional<double> {
+                        const double a[3]{fx, fy, fz}, b[3]{fx, fy, fz - 3000};
+                        const auto hit = Trace(character, a, b, pawn, character);
+                        return hit ? std::optional<double>((*hit)[2]) : std::nullopt;
+                    };
+                    const auto clear = [&](double ax, double ay, double az, double bx, double by, double bz) {
+                        const double a[3]{ax, ay, az}, b[3]{bx, by, bz};
+                        return !Trace(character, a, b, pawn, character).has_value();
+                    };
+                    if (std::exchange(m_ghosts[TestPeer].respawned, false)) m_walker.PlaceRandom(bridge::ghost::DefaultHalfHeight, floor);
+                    const double dt = m_walkAt < 0 ? 0 : now - m_walkAt;
+                    m_walkAt = now;
+                    s = m_walker.Step(now, dt, bridge::ghost::DefaultHalfHeight, floor, clear);
+                }
+                else if (pathHere)
                 {
                     if (m_testPathStart < 0)
                     {
@@ -714,6 +741,57 @@ namespace aimmod
             m_log(std::string("ghost demo: disabled after an error: ") + e.what());
         }
         if (m_avatarMapDirty) WriteAvatarMap();
+    }
+
+    std::optional<std::array<double, 3>> GhostDemo::Trace(UObject* context, const double a[3], const double b[3], UObject* ignore1, UObject* ignore2)
+    {
+        if (!m_traceBound)
+        {
+            m_traceBound = true;
+            m_lineTrace.BindPath(STR("/Script/Engine.KismetSystemLibrary:LineTraceSingle"), Shape::Command);
+            m_kismetDefault = UObjectGlobals::StaticFindObject<UObject*>(nullptr, nullptr, STR("/Script/Engine.Default__KismetSystemLibrary"));
+            for (const Param& p : m_lineTrace.params())
+                if (p.out && p.structType && p.name == "OutHit")
+                    for (FProperty* member : p.structType->ForEachProperty())
+                        if (member->GetName() == STR("ImpactPoint")) m_hitImpactOffset = member->GetOffset_Internal();
+            m_log(m_lineTrace.ok() && m_kismetDefault && m_hitImpactOffset >= 0 ? "avatars: line traces ready (simulated player walks on the floor)"
+                                                                               : "avatars: line traces unavailable (" + m_lineTrace.error() + "); the simulated player stays on its spawn height");
+        }
+        if (!m_lineTrace.ok() || !m_kismetDefault || m_hitImpactOffset < 0 || !context) return std::nullopt;
+        TArray<AActor*> ignore;
+        if (ignore1) ignore.Add(static_cast<AActor*>(ignore1));
+        if (ignore2) ignore.Add(static_cast<AActor*>(ignore2));
+        bool hit = false;
+        std::array<double, 3> point{};
+        int vectors = 0;
+        m_lineTrace.Call(
+            m_kismetDefault,
+            [&](std::uint8_t* value, const Param& p) {
+                if (p.worldContext) std::memcpy(value, &context, sizeof(context));
+                else if (p.kind == Kind::Vector && vectors < 2)
+                {
+                    const double* v = vectors++ == 0 ? a : b;
+                    WriteFloats(value, p, v[0], v[1], v[2]);
+                }
+                else if (p.kind == Kind::Array && p.name == "ActorsToIgnore") std::memcpy(value, &ignore, sizeof(ignore));
+                else if (p.kind == Kind::Bool && p.boolProperty) p.boolProperty->SetPropertyValue(value, p.name == "bIgnoreSelf");
+                // TraceChannel 0 = Visibility, DrawDebugType 0 = none, colours and DrawTime zero.
+            },
+            [&](const std::uint8_t* buffer, const std::vector<Param>& params) {
+                for (const Param& p : params)
+                {
+                    if (p.ret && p.boolProperty) hit = p.boolProperty->GetPropertyValue(const_cast<std::uint8_t*>(buffer) + p.offset);
+                    else if (p.out && p.name == "OutHit")
+                    {
+                        float f[3];
+                        std::memcpy(f, buffer + p.offset + m_hitImpactOffset, sizeof(f));
+                        point = {f[0], f[1], f[2]};
+                    }
+                }
+            });
+        // The parameter copy of the ignore list is plain memory; `ignore` frees its buffer.
+        if (!hit) return std::nullopt;
+        return point;
     }
 
     // The scenario's own instance of the helper bot (not one of our avatars): hidden, no
@@ -800,6 +878,7 @@ namespace aimmod
                 });
             actor->SetActorHiddenInGame(false);
             actor->SetActorEnableCollision(true);
+            ghost.respawned = true;
             ghost.nextInert = 0; // re-apply AI-off and invulnerability straight away
             m_log("avatars: " + bridge::Redact(ghost.peer) + " respawned");
         }

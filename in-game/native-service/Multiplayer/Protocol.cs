@@ -160,6 +160,8 @@ interface IMultiplayerTransport : IDisposable
     // avatar-test-path.tsv (dev.avatar). False when the bridge can't ("dev-avatar" feature).
     // profile: the AimMod look the test avatar wears (an AvatarProfiles character profile name).
     bool DevAvatar(bool on, string mode, string? profile = null) => false;
+    // mode walk: the test avatar walks between these spawn points (x, y, z; at most 32).
+    bool DevAvatar(bool on, string mode, string? profile, IReadOnlyList<double[]>? spawns) => spawns is null && DevAvatar(on, mode, profile);
     // Bulk file lane (bridge xfer.*): low-priority, in-order chunks of BulkChunkBytes, with a
     // small send window. BulkChunkBytes is 0 when the lane is missing; content then uses frames.
     int BulkChunkBytes { get; }

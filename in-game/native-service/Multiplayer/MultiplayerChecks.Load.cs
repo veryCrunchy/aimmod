@@ -114,6 +114,69 @@ static partial class MultiplayerChecks
         Check(tracker.LastSeen[7].Member is null, "Without a stand-in, peer 1's stream is nobody");
     }
 
+    // Hit claims pair the shot's ray with the target as drawn when it was fired; start spawns.
+    static void ClaimTiming(string root)
+    {
+        var tracker = new SelfPoseTracker(Path.Combine(root, "claims"));
+        LivePoseFrame Frame(long seq, long t, double x) => new(seq, "", "AimMod Match - Synthetic", "synthetic_map", 1, [new LivePose(t, [0, 0, 0, 0, 0])], [[7, x, 0, 0, 45, 115]]);
+        tracker.Take(Frame(1, 1000, 100), 0); tracker.Take(Frame(2, 1100, 200), 0); tracker.Take(Frame(3, 1200, 300), 0);
+        Check(tracker.SeenAt(7, 1050) is { X: 150 } && tracker.SeenAt(7, 1200) is { X: 300 } && tracker.SeenAt(7, 1290) is { X: 300 } && tracker.SeenAt(7, 1400) is null && tracker.SeenAt(8, 1100) is null,
+            "Drawn targets are kept briefly and interpolated to any moment");
+        var feed = new ShotFeed(Path.Combine(root, "claims"));
+        var shots = ShotFeed.Parse("AIMMOD_SHOTS_1\t1\ts\nshot\t1050\t1\t0\t0\t164\t1\t0\t0\t0\t7\t0\t1\n");
+        var claims = feed.Take(shots, "m", 1, 0, (id, t) => tracker.SeenAt(id, t));
+        Check(claims.Count == 1 && claims[0].TargetX == 150 && claims[0].T == 1050, "A claim carries the target where it was drawn at the shot, not where it is now (300)");
+        var combat = new CombatMatch(LobbyModes.TeamDeathmatch, ["a", "b", "c", "d"], 20, 0, 0, 60_000)
+            { Spawns = [new(0, 0, 0, 0, 1), new(100, 0, 0, 0, 1), new(0, 900, 0, 180, 2), new(100, 900, 0, 180, 2)] };
+        combat.PlaceAll(0);
+        var starts = combat.EventsSince(0).Where(e => e.Kind == "respawn").ToList();
+        Check(starts.Count == 4 && starts.Select(e => (e.Spawn![0], e.Spawn[1])).Distinct().Count() == 4
+            && starts.All(e => (e.Spawn![1] < 450) == (combat.View().Players.First(p => p.Member == e.Member).Team == 1)),
+            "Every player starts on a spawn of its own, on its team's side");
+    }
+
+    // A restart that gets past the lock (KovaaK's run timer jumps back): the match carries on with the
+    // score the player had, and the player is told restart is off.
+    static void RestartDuringMatch(string root)
+    {
+        long now = 8_000_000;
+        var game = Path.Combine(root, "game");
+        var output = Path.Combine(root, "restart-output");
+        Directory.CreateDirectory(output);
+        var control = new FakeGame("load", "start") { Root = game };
+        string? scenario = null; long? startedAt = null; double offsetSeconds = 0;
+        LocalRun Live() => scenario is null || startedAt is null || now < startedAt ? new LocalRun(false, null, null, null, null, 0, 0, 0, null)
+            : new LocalRun(true, scenario, Math.Round(((now - startedAt.Value) / 1000.0 - offsetSeconds) * 100), (now - startedAt.Value) / 1000.0 - offsetSeconds, null, 10, 5, 0, null);
+        var service = new MultiplayerService(new OfflineTransport(), new ContentLibrary(game), control, Live, () => [], () => null, output, simulation: true, () => now, autoTick: false, seed: 13);
+        JsonElement Match() => JsonSerializer.SerializeToElement(service.View(), Protocol.Json).GetProperty("lobby").GetProperty("match");
+        void Run(int ms) { for (var t = 0; t < ms; t += 100) { now += 100; service.Tick(); } }
+        service.Act("create", J(new { mode = "ffa-rounds", scenario = "Synthetic A" }));
+        service.Act("settings", Patch(new { rounds = 1, movement = "cs" }));
+        service.Act("sim", J(new { op = "add" }));
+        Run(12_000);
+        Check(service.Act("start", default).Ok, "A generated freeplay round starts");
+        for (var i = 0; i < 200 && Match().GetProperty("phase").GetString() != MatchPhases.Live; i++) Run(100);
+        scenario = control.Calls.Last(c => c.StartsWith("load ", StringComparison.Ordinal))[5..];
+        startedAt = now;
+        Run(5000);
+        double Mine() => Match().GetProperty("live").EnumerateArray().First(l => l.GetProperty("memberId").GetString() == service.SelfId).GetProperty("score").GetDouble();
+        var before = Mine();
+        Check(before >= 400, "Live score frames arrive from the freeplay run");
+        offsetSeconds = (now - startedAt.Value) / 1000.0 - 0.2; // KovaaK's restarted the run
+        Run(300);
+        Check(JsonDocument.Parse(service.NoticeText()).RootElement.GetProperty("title").GetString() == "Restart is off during a match", "A restart that got through is noticed and explained");
+        Run(3000);
+        Check(Mine() >= before, "The restarted run never lowers the match score: the score before the restart stands");
+        // AimModCore switched the restart key off; pressing it anyway gets the same explanation.
+        File.WriteAllText(Path.Combine(output, "match-lock.tsv"), "AIMMOD_LOCK_1\t0\t1\n");
+        Run(2000);
+        Check(!JsonDocument.Parse(service.NoticeText()).RootElement.GetProperty("title").ToString().Contains("Restart", StringComparison.Ordinal), "No restart notice before a press");
+        File.WriteAllText(Path.Combine(output, "match-lock.tsv"), "AIMMOD_LOCK_1\t1\t2\n");
+        Run(200);
+        Check(JsonDocument.Parse(service.NoticeText()).RootElement.GetProperty("title").GetString() == "Restart is off during a match", "A press of the switched-off restart key is explained");
+        service.Dispose();
+    }
+
     // A client whose KovaaK's keeps the previous map (the live CS bug): it loads again once,
     // then reports the problem; the host sees Retry and Abort; the scenario is kept for debugging.
     static void LoadGateService(string root)
