@@ -25,7 +25,8 @@ sealed partial class MultiplayerService
     (Board? Compact, Board? Full) NoticeBoards()
     {
         if (BoardView() is not { } board) return (null, null);
-        var corner = prefs.ShowBoard && board.Phase is MatchPhases.Countdown or MatchPhases.Live or MatchPhases.Round ? Standings.Compact(board) : null;
+        // CS has its own score strip, so the corner panel would only repeat it.
+        var corner = prefs.ShowBoard && board.Mode != LobbyModes.Cs && board.Phase is MatchPhases.Countdown or MatchPhases.Live or MatchPhases.Round ? Standings.Compact(board) : null;
         return (corner, boardHeld ? board : null);
     }
 }

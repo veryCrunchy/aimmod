@@ -113,7 +113,7 @@ static class TrackingDefaults { public const int RoundSeconds = 10, MaxRoundSeco
 // direct or simulated. Profiles: whether custom weapon/character profiles are present.
 sealed record LobbyMember(string Id, string Name, string Role, bool Ready, int? Ping, string Scenario, string Map, string Profiles,
     string Connection, string Link, long JoinedAt, bool Simulated, string Avatar = AvatarProfiles.Default, string? Version = null, bool Away = false,
-    IReadOnlyList<CosmeticRef>? Cosmetics = null);
+    IReadOnlyList<CosmeticRef>? Cosmetics = null, int Team = 0);
 
 sealed record ScoreLine(string MemberId, double? Score, double? Seconds, double? Remaining, int Shots, int Hits, int Kills,
     string Status, bool Disputed);
@@ -165,6 +165,15 @@ static class LobbyRules
     // A member id AimModCore accepts in play-state.tsv: [A-Za-z0-9_-]{1,64}.
     public static bool IsStreamSafe(string? id) => id is { Length: > 0 and <= 64 } && id.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_');
 
+    // CS teams at the start: everyone keeps their pick (1 = T, 2 = CT); players on "either"
+    // fill the smaller team, in join order.
+    public static Dictionary<string, int> ResolveTeams(IReadOnlyList<(string Id, int Team)> players)
+    {
+        var teams = players.Where(p => p.Team is 1 or 2).ToDictionary(p => p.Id, p => p.Team);
+        foreach (var (id, _) in players.Where(p => p.Team is not (1 or 2)))
+            teams[id] = teams.Values.Count(t => t == 1) <= teams.Values.Count(t => t == 2) ? 1 : 2;
+        return teams;
+    }
     public static string CleanName(string? name, string fallback)
     {
         var text = new string((name ?? "").Where(c => !char.IsControl(c)).ToArray()).Trim();
@@ -326,6 +335,8 @@ static class LobbyRules
         if (s.Scenario is null) list.Add(new("scenario", "Choose a scenario."));
         if (LobbyModes.TwoPlayers(s.Mode) && players.Length != 2) list.Add(new("duel-players", "A duel needs exactly two players."));
         else if (s.Mode == LobbyModes.Cs && players.Length is not (6 or 8 or 10)) list.Add(new("cs-teams", "CS is 3v3, 4v4 or 5v5: it needs 6, 8 or 10 players (now " + players.Length + ")."));
+        else if (s.Mode == LobbyModes.Cs && ResolveTeams(players.Select(p => (p.Id, p.Team)).ToList()) is { } resolved && resolved.Values.Count(t => t == 1) != resolved.Values.Count(t => t == 2))
+            list.Add(new("cs-balance", "The teams are uneven: " + resolved.Values.Count(t => t == 1) + " T and " + resolved.Values.Count(t => t == 2) + " CT. Move someone or press Balance."));
         else if (players.Length < LobbySettings.MinPlayers) list.Add(new("players", "Waiting for at least one more player."));
         foreach (var m in players.Where(m => m.Connection != Connections.Connected)) list.Add(new("reconnecting", m.Name + " is reconnecting."));
         // Different AimMod builds can't see each other in the world (the pose format changed).

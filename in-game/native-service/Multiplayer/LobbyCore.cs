@@ -14,9 +14,9 @@ sealed class LobbyCore
     {
         public required string Id; public required string Name; public string Role = MemberRoles.Player;
         public bool Ready; public int? Ping; public string Scenario = ContentStates.Unknown, Map = ContentStates.Unknown, Profiles = ContentStates.None;
-        public string Connection = Connections.Connected, Link = "local"; public long JoinedAt; public long? LostAt; public bool Simulated; public string Avatar = AvatarProfiles.Default; public string? Version; public bool Away; public IReadOnlyList<CosmeticRef> Cosmetics = [];
+        public string Connection = Connections.Connected, Link = "local"; public long JoinedAt; public long? LostAt; public bool Simulated; public string Avatar = AvatarProfiles.Default; public string? Version; public bool Away; public IReadOnlyList<CosmeticRef> Cosmetics = []; public int Team;
         public readonly Queue<long> ChatTimes = new();
-        public LobbyMember View() => new(Id, Name, Role, Ready, Ping, Scenario, Map, Profiles, Connection, Link, JoinedAt, Simulated, Avatar, Version, Away, Cosmetics);
+        public LobbyMember View() => new(Id, Name, Role, Ready, Ping, Scenario, Map, Profiles, Connection, Link, JoinedAt, Simulated, Avatar, Version, Away, Cosmetics, Team);
     }
     sealed class Line
     {
@@ -327,6 +327,22 @@ sealed class LobbyCore
                 if (AvatarProfiles.Find(Text("avatar")) is not { } look) return LobbyResult.Fail("invalid", "Unknown look.");
                 if (member.Avatar != look.Id) { member.Avatar = look.Id; Changed(); }
                 return LobbyResult.Success;
+            // CS teams: the host places anyone, a member themselves; 0 is "either team".
+            case "team":
+                var who = Text("member") ?? from;
+                if (who != from && from != HostId) return LobbyResult.Fail("host", "Only the host places other players.");
+                if (Find(who) is not { } placed) return LobbyResult.Fail("invalid", "That player isn’t here.");
+                if (match is { Phase: not MatchPhases.Final }) return LobbyResult.Fail("in-match", "Teams are locked during a match.");
+                if (!args.TryGetProperty("team", out var tv) || !tv.TryGetInt32(out var team) || team is < 0 or > 2) return LobbyResult.Fail("invalid", "Pick T, CT or either.");
+                if (placed.Team != team) { placed.Team = team; Changed(); }
+                return LobbyResult.Success;
+            case "balance":
+                if (from != HostId) return LobbyResult.Fail("host", "Only the host balances the teams.");
+                // Alternate in join order, so both teams get early and late joiners.
+                var squad = members.Where(x => x.Role == MemberRoles.Player).OrderBy(x => x.JoinedAt).ToList();
+                for (var i = 0; i < squad.Count; i++) squad[i].Team = i % 2 + 1;
+                Changed();
+                return LobbyResult.Success;
             case "ready-check":
                 // The host wants to start: ping everyone who isn't ready (shown outside the AimMod panel too).
                 if (!IsHost(from)) return HostOnly();
@@ -400,7 +416,8 @@ sealed class LobbyCore
         m.Tracking = null; m.TrackLast = null; m.Combat = null; m.CombatEvents = -1; m.Cs = null; m.CsKey = null;
         if (m.Settings.Mode == LobbyModes.Cs)
         {
-            m.Cs = new CsMatch(m.Players.Where(id => Find(id) is not null).ToList(), m.StartsAt.Value, m.Settings.HalfRounds, m.Settings.Overtime, csObjectives);
+            var csPlayers = m.Players.Where(id => Find(id) is not null).ToList();
+            m.Cs = new CsMatch(csPlayers, m.StartsAt.Value, m.Settings.HalfRounds, m.Settings.Overtime, csObjectives, LobbyRules.ResolveTeams(csPlayers.Select(id => (id, Find(id)!.Team)).ToList()));
             m.Combat = m.Cs.Combat;
         }
         if (LobbyModes.Combat(m.Settings.Mode))
@@ -793,7 +810,7 @@ sealed class LobbyCore
             core.members.Add(new Member { Id = m.Id, Name = m.Name, Role = m.Role, Ready = m.Ready, Ping = m.Id == newHostId ? null : m.Ping, Scenario = m.Scenario, Map = m.Map, Profiles = m.Profiles,
                 // Everyone else must reconnect to the new host, so they start as reconnecting.
                 Connection = m.Id == newHostId ? Connections.Connected : Connections.Reconnecting, Link = m.Id == newHostId ? "local" : m.Link,
-                JoinedAt = m.JoinedAt, Simulated = m.Simulated, LostAt = m.Id == newHostId ? null : clock(), Avatar = AvatarProfiles.Find(m.Avatar)?.Id ?? AvatarProfiles.Default, Version = m.Version, Away = m.Away, Cosmetics = (m.Cosmetics ?? []).Take(CosmeticsCatalog.MaxEquipped).ToArray() });
+                JoinedAt = m.JoinedAt, Simulated = m.Simulated, LostAt = m.Id == newHostId ? null : clock(), Avatar = AvatarProfiles.Find(m.Avatar)?.Id ?? AvatarProfiles.Default, Version = m.Version, Away = m.Away, Cosmetics = (m.Cosmetics ?? []).Take(CosmeticsCatalog.MaxEquipped).ToArray(), Team = m.Team is 1 or 2 ? m.Team : 0 });
         core.chat.AddRange(snapshot.Chat); core.chatId = snapshot.Chat.Count > 0 ? snapshot.Chat.Max(c => c.Id) : 0; core.readyCheck = snapshot.ReadyCheck;
         foreach (var s in snapshot.Suggestions ?? []) core.suggestions.Add((s.Scenario, s.By, s.Votes.ToHashSet()));
         if (snapshot.Match is { } ms)

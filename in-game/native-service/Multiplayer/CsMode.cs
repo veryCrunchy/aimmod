@@ -113,7 +113,9 @@ sealed record MapObjectives(IReadOnlyList<ObjectiveZone> Zones, IReadOnlyList<Ob
 }
 
 // What clients mirror and the HUD shows.
-sealed record CsPlayerView(string Member, int Team, string Side, int Money, bool Alive, double Health, double Armor, bool Helmet, bool Kit, string? Primary, string? Secondary, int Kills, int Deaths);
+// InBuyZone: inside one of the side's buy zones now (null when the map has none, so buying works anywhere).
+sealed record CsPlayerView(string Member, int Team, string Side, int Money, bool Alive, double Health, double Armor, bool Helmet, bool Kit, string? Primary, string? Secondary, int Kills, int Deaths,
+    bool? InBuyZone = null);
 sealed record CsBombView(string State, string? Carrier, string? Site, double[]? Position, long? ExplodesAt, string? Planter, long? PlantDoneAt, string? Defuser, long? DefuseDoneAt);
 sealed record CsEvent(long Id, string Kind, long T, string? Member, string? Text, int Amount = 0);
 sealed record CsView(int Round, string Phase, long PhaseEndsAt, long? LiveAt, int[] Score, string Team1Side, int HalfRounds, bool Overtime, IReadOnlyList<CsPlayerView> Players,
@@ -148,10 +150,11 @@ sealed class CsMatch
     bool plantedThisRound;
     readonly Dictionary<string, double[]> roundSpawns = new();
 
-    public CsMatch(IReadOnlyList<string> ids, long start, int halfRounds, bool overtime, MapObjectives? objectives)
+    // teams: the lobby's team picks (1 = starts as T, 2 = starts as CT); anyone missing alternates.
+    public CsMatch(IReadOnlyList<string> ids, long start, int halfRounds, bool overtime, MapObjectives? objectives, IReadOnlyDictionary<string, int>? teams = null)
     {
         HalfRounds = Math.Clamp(halfRounds, 6, 15); Overtime = overtime; map = objectives;
-        var teams = CombatRules.Teams(ids);
+        teams = teams is not null && ids.All(id => teams.TryGetValue(id, out var t) && t is 1 or 2) ? teams : CombatRules.Teams(ids);
         foreach (var id in ids) players[id] = new P { Id = id, Team = teams[id] };
         // Hit validation over the whole match; teams are the friendly-fire groups.
         Combat = new CombatMatch(LobbyModes.Cs, ids, int.MaxValue, 0, start, start + 6 * 3_600_000L, teams)
@@ -190,7 +193,8 @@ sealed class CsMatch
             if (players.TryGetValue(victim, out var v0) && v0.Team != k.Team) Pay(k, cs?.KillReward ?? 300, now, "kill");
         }
         if (players.TryGetValue(victim, out var v)) { v.Deaths++; v.Primary = null; v.Secondary = null; v.Armor = 0; v.Helmet = false; v.Kit = false; }
-        Event("kill", now, victim, killer + (head ? " headshot" : ""));
+        // Text: killer, the weapon's id and whether it was a headshot (tab-separated).
+        Event("kill", now, victim, killer + "\t" + (CsRules.ByProfile(weapon.Name)?.Id ?? "") + "\t" + (head ? "1" : "0"));
         if (carrier == victim) DropBomb(victim);
         if (planter == victim) { planter = null; plantDoneAt = null; }
         if (defuser == victim) { defuser = null; defuseDoneAt = null; }
@@ -413,11 +417,18 @@ sealed class CsMatch
         StartRound(now);
     }
 
+    bool? InBuyZone(P p)
+    {
+        var zones = map?.BuyZones(SideOf(p.Team)) ?? [];
+        if (zones.Count == 0) return null;
+        return Combat.Position(p.Id) is { } at && zones.Any(z => z.Contains(at.X, at.Y, at.Z, 50));
+    }
+
     void Finish(long now, int? winner) { Phase = "over"; WinnerTeam = winner; PhaseEndsAt = now; Event("match-end", now, null, null, winner ?? 0); }
 
     public CsView View() => new(Round, Phase, PhaseEndsAt, LiveAt, [score[0], score[1]], SideOf(1), HalfRounds, Overtime,
         players.Values.Select(p => new CsPlayerView(p.Id, p.Team, SideOf(p.Team), p.Money, Combat.Alive(p.Id), Math.Round(Combat.Health(p.Id), 1), Math.Round(p.Armor, 1), p.Helmet, p.Kit,
-            p.Primary?.Id, p.Secondary?.Id, p.Kills, p.Deaths)).ToArray(),
+            p.Primary?.Id, p.Secondary?.Id, p.Kills, p.Deaths, InBuyZone(p))).ToArray(),
         new CsBombView(bombState, carrier, site, bombAt, explodesAt, planter, plantDoneAt, defuser, defuseDoneAt), lastWinner, lastReason, WinnerTeam, events.TakeLast(16).ToArray(),
         roundSpawns.Count > 0 ? new Dictionary<string, double[]>(roundSpawns) : null);
 }

@@ -35,6 +35,7 @@ static partial class MultiplayerChecks
         Follow();
         DevAvatarChecks();
         Boards();
+        CsTeams();
         Marker();
         var root = Path.Combine(Path.GetTempPath(), "aimmod-mp-test-" + Guid.NewGuid().ToString("N"));
         try { Content(root); Generator(root); Blocked(root); AutoLeave(root); Service(root); Transfers(root); Replays(root); Maps(root); Tournaments(root); }
@@ -723,6 +724,7 @@ static partial class MultiplayerChecks
         Check(match.Buy("b", "ak47", t0 + 1000) == "side" && match.Buy("b", "usp", t0 + 1000) == "owned" && match.Buy("b", "defuse-kit", t0 + 1000) is null, "Side rules: CT can't buy the AK; the starting pistol is owned; CT buy a kit");
         Place("d", 0, t0 + 2000, t0 + 3000);
         Check(match.Buy("d", "kevlar", t0 + 2500) == "buy-zone", "Buying outside your buy zone is refused");
+        Check(match.View().Players.First(p => p.Member == "d").InBuyZone == false && match.View().Players.First(p => p.Member == "a").InBuyZone == true, "The view says who stands in their buy zone");
         match.Tick(t0 + CsRules.FreezeMs);
         Check(match.Phase == "live" && match.Buy("c", "kevlar", t0 + CsRules.FreezeMs + CsRules.BuyMs + 10) == "buy-time", "After the freeze the round is live; buy time ends 20 s later");
 
@@ -1422,6 +1424,25 @@ static partial class MultiplayerChecks
         var tdm = B(Match(LobbyModes.TeamDeathmatch, combat: new CombatView(30, [P("a", 4, 1, 100, 1), P("b", 2, 2, 100, 2), P("c", 1, 3, 100, 1), P("d", 6, 0, 100, 2)], [], [5, 8])));
         Check(tdm.Kind == "team" && tdm.Teams!.Single(t => t.Team == 2).Total == 8 && tdm.Teams!.Single(t => t.Team == 2).Self && tdm.Rows.Select(r => r.Team).SequenceEqual([1, 1, 2, 2]), "Team deathmatch: team totals and players by team");
         Check(!JsonSerializer.Serialize(tdm, Protocol.Json).Contains("\"a\"", StringComparison.Ordinal), "Boards carry names, never member ids");
+    }
+
+    // CS lobby teams: picks, either, balance, uneven blocker, and the match keeps the picks.
+    static void CsTeams()
+    {
+        var resolved = LobbyRules.ResolveTeams([("a", 1), ("b", 1), ("c", 0), ("d", 2), ("e", 0), ("f", 0)]);
+        Check(resolved["a"] == 1 && resolved["d"] == 2 && resolved.Values.Count(t => t == 1) == 3 && resolved.Values.Count(t => t == 2) == 3, "Players on either team fill the smaller team");
+        var picked = new CsMatch(["a", "b", "c", "d", "e", "f"], 1_000, 6, false, null, new Dictionary<string, int> { ["a"] = 2, ["b"] = 2, ["c"] = 2, ["d"] = 1, ["e"] = 1, ["f"] = 1 });
+        Check(picked.SideOf("a") == CsRules.CT && picked.SideOf("d") == CsRules.T, "The match keeps the lobby's team picks (team 1 starts T)");
+        long now = 1_000_000;
+        var core = new LobbyCore("h", "Host", new LobbySettings(Mode: LobbyModes.Cs, MaxPlayers: 6), () => now, code: "ABCDEF");
+        foreach (var id in new[] { "m1", "m2", "m3", "m4", "m5" }) core.Join(id, "Player " + id);
+        Check(core.Apply("m1", "team", J(new { team = 2 }), new FakeContent()).Ok && !core.Apply("m1", "team", J(new { member = "m2", team = 1 }), new FakeContent()).Ok, "Members pick their own team; only the host places others");
+        foreach (var id in new[] { "h", "m2", "m3" }) core.Apply("h", "team", J(new { member = id, team = 1 }), new FakeContent());
+        core.Apply("h", "team", J(new { member = "m4", team = 1 }), new FakeContent());
+        Check(LobbyRules.StartBlockers(core.Snapshot()).Any(b => b.Code == "cs-balance"), "Uneven teams block the start, with the counts");
+        Check(core.Apply("h", "balance", default, new FakeContent()).Ok && core.Snapshot().Members.Count(m => m.Team == 1) == 3 && core.Snapshot().Members.Count(m => m.Team == 2) == 3
+            && !LobbyRules.StartBlockers(core.Snapshot()).Any(b => b.Code == "cs-balance"), "Balance splits the players evenly");
+        Check(!core.Apply("m2", "balance", default, new FakeContent()).Ok, "Only the host balances");
     }
 
     static void Picks(string root, ContentLibrary library)

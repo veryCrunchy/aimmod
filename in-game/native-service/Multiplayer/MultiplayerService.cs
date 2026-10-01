@@ -247,6 +247,8 @@ sealed partial class MultiplayerService : IDisposable
                     return FriendNotice(action, Text("id"));
                 case "cosmetic-equip" or "cosmetic-remove" or "cosmetic-view":
                     return CosmeticAction(action, args);
+                case "cs-buy" or "cs-buy-menu":
+                    return CsAction(action, Text("id") ?? Text("item"));
                 case "leave-run-cancel" or "leave-run-now":
                     return LeaveRunAction(action);
                 case "favourite":
@@ -961,7 +963,7 @@ sealed partial class MultiplayerService : IDisposable
             return JsonSerializer.Serialize(new
             {
                 version = 1, active = notice is not null, badge, notice?.Id, notice?.Kind, notice?.Title, notice?.Body, notice?.Key, notice?.Countdown, notice?.Sound, notice?.Invite,
-                actions = notice?.Actions, interactive = notice?.Actions is { Count: > 0 }, volume = prefs.Sounds ? prefs.Volume : 0, duel, combat, cs, board, boardFull,
+                actions = notice?.Actions, interactive = notice?.Actions is { Count: > 0 } || cs?.BuyOpen == true, volume = prefs.Sounds ? prefs.Volume : 0, duel, combat, cs, board, boardFull,
             }, Protocol.Json);
         }
     }
