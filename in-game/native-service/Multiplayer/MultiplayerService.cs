@@ -680,8 +680,9 @@ sealed class MultiplayerService : IDisposable
                 capabilities = new { invite = transport.Available, friends = friendsSource != "unavailable", gameLoad = caps.Contains("load"), gameStart = caps.Contains("start") },
                 self = new { id = SelfId, name = LocalName() },
                 joining = (hostPeer is not null && mirror is null) || joinPendingSince is not null ? new { since = joinPendingSince ?? connectAt, stage = hostPeer is null ? "lobby" : "host" } : null,
-                friends = new { source = friendsSource, items = Friends() },
-                invites = invites.Where(i => now - i.At < 120_000).ToArray(),
+                // Steam ids and lobby tokens stay in the service; the UI acts on opaque ids only.
+                friends = new { source = friendsSource, items = Friends().Select(f => new { f.Id, f.Name, f.Status, f.Detail, f.Joinable }) },
+                invites = invites.Where(i => now - i.At < 120_000).Select(i => new { i.Id, i.FromName, i.Kind, i.Summary, i.At, i.Compatible }),
                 recent,
                 library = new { available = library.Available, scenarios = library.Available ? library.Scenarios.Count : 0 },
                 notice = notice is { } n && now - n.At < 15_000 ? new { kind = n.Kind, text = n.Text } : null,
