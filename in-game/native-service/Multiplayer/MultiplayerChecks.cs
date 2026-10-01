@@ -1232,9 +1232,14 @@ static partial class MultiplayerChecks
         Check(Round().GetProperty("state").GetString() == "blocked" && Round().GetProperty("message").GetString()!.Contains("Finish or quit your current run") && !control.Calls.Any(c => c.StartsWith("load", StringComparison.Ordinal)), "A running challenge holds the load with a finish-or-quit message, not start-it-yourself");
         Run(3000);
         Check(Phase() == MatchPhases.Loading, "The warm-up counts a player still in a run as not loaded yet");
-        control.ChallengeRunning = false;
+        control.SceneLoading = true; control.ChallengeRunning = false;
         Run(300);
         Check(control.Calls.Count(c => c == "load Synthetic A") == 1 && Round().GetProperty("state").GetString() is "loading" or "ready", "Once the challenge ends the scenario loads by itself");
+        // KovaaK's still shows its loading screen: not loaded yet, so the countdown (and CS freeze time) waits.
+        Run(1000);
+        Check(Phase() == MatchPhases.Loading, "A scenario still on KovaaK's loading screen doesn't count as loaded");
+        control.SceneLoading = false; Run(1500);
+        Check(Phase() is MatchPhases.Countdown or MatchPhases.Live, "Once the loading screen is gone the countdown starts");
         service.Act("end", default); Run(6000);
         // A challenge that starts between the check and the load: AimModCore answers challenge-active.
         control.RefuseNextLoad();
@@ -1702,6 +1707,7 @@ static partial class MultiplayerChecks
         public long? Refresh() { Calls.Add("refresh"); return Calls.Count; }
         // A challenge still running in KovaaK's (core-scene.json); while true, loads answer challenge-active.
         public bool? ChallengeRunning { get; set; }
+        public bool? SceneLoading { get; set; }
         bool refusedLoad;
         // Answers like AimModCore: the latest load is done, then the latest start.
         public GameCommandResult? Result => lastStart > lastLoad ? new GameCommandResult(lastStart, "done", "started", "")
