@@ -669,6 +669,18 @@ int main()
         Check(!bridge::avatarstate::Parse("AIMMOD_AVATARS_1\t9999999999999999999\n"), "rejects a sequence past INT64_MAX");
         auto empty = bridge::avatarstate::Parse("AIMMOD_AVATARS_1\t2\n");
         Check(empty && empty->peers.empty(), "an empty state file is valid");
+        // CS: the weapon in their hands, by KovaaK's third-person model name.
+        auto armed = bridge::avatarstate::Parse("AIMMOD_AVATARS_1\t3\npeer\t" + id + "\t1\tenemy\t100\t0\t0\tSix Shooter\n");
+        Check(armed && armed->peers[Person].weapon == "Six Shooter" && st->peers[Person].weapon.empty(), "parses the held weapon (none without the column)");
+        auto bare = bridge::avatarstate::Parse("AIMMOD_AVATARS_1\t3\npeer\t" + id + "\t1\tenemy\t100\t0\t0\t-\n");
+        Check(bare && bare->peers[Person].weapon.empty(), "\"-\": nothing in their hands to show");
+        Check(!bridge::avatarstate::Parse("AIMMOD_AVATARS_1\t3\npeer\t" + id + "\t1\tenemy\t100\t0\t0\t/Game/Other\n") &&
+                  !bridge::avatarstate::Parse("AIMMOD_AVATARS_1\t3\npeer\t" + id + "\t1\tenemy\t100\t0\t0\tAK47\textra\n"),
+              "only KovaaK's own weapon models, and no further columns");
+        Check(bridge::avatarstate::ThirdPersonMesh("AK47") == L"/Game/SourceArt/Weapons/FN_AK47/FN_AK47.FN_AK47" &&
+                  bridge::avatarstate::ThirdPersonMesh("Bolt Action Sniper") == L"/Game/SourceArt/Weapons/FN_Sniper_BoltAction/FN_Sniper_BoltAction.FN_Sniper_BoltAction" &&
+                  bridge::avatarstate::ThirdPersonMesh("Knife").empty(),
+              "third-person models map to KovaaK's FN_ weapon meshes");
     }
     // Tournament lobbies
     {

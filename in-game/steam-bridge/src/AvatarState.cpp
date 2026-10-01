@@ -4,6 +4,7 @@
 #include "PoseFile.hpp"
 
 #include <charconv>
+#include <utility>
 #include <cmath>
 #include <cstdlib>
 #include <vector>
@@ -45,6 +46,21 @@ namespace bridge::avatarstate
         }
     } // namespace
 
+    std::wstring ThirdPersonMesh(std::string_view model)
+    {
+        // Name -> the FN_ static mesh folder under /Game/SourceArt/Weapons.
+        static constexpr std::pair<std::string_view, const wchar_t*> Models[] = {
+            {"AK47", L"FN_AK47"},           {"Dual Pistols", L"FN_DualPistols"}, {"Famas", L"FN_Famas"},
+            {"Heavy Shotgun", L"FN_HeavyShotgun"}, {"M4", L"FN_M4"},          {"Minigun", L"FN_Minigun"},
+            {"Pistol", L"FN_Pistol"},       {"Pump Shotgun", L"FN_PumpShotgun"}, {"SCAR", L"FN_SCAR"},
+            {"Six Shooter", L"FN_SixShooter"}, {"SMG", L"FN_SMG"},            {"Bolt Action Sniper", L"FN_Sniper_BoltAction"},
+            {"Heavy Sniper", L"FN_Sniper_HeavySniper"}, {"Hunting Rifle", L"FN_Sniper_HuntingRifle"}, {"Tactical Shotgun", L"FN_TacticalShotgun"},
+        };
+        for (const auto& [name, asset] : Models)
+            if (name == model) return std::wstring(L"/Game/SourceArt/Weapons/") + asset + L"/" + asset + L"." + asset;
+        return {};
+    }
+
     std::optional<File> Parse(std::string_view text)
     {
         if (text.size() > 64 * 1024) return std::nullopt;
@@ -75,7 +91,7 @@ namespace bridge::avatarstate
             }
             else if (f[0] == "peer")
             {
-                if (f.size() != 7 || file.peers.size() >= 64) return std::nullopt;
+                if ((f.size() != 7 && f.size() != 8) || file.peers.size() >= 64) return std::nullopt;
                 const auto peer = ParseId(f[1]);
                 if (!peer || !IsIndividualId(*peer)) return std::nullopt;
                 if (f[2] != "0" && f[2] != "1") return std::nullopt;
@@ -89,6 +105,11 @@ namespace bridge::avatarstate
                 s.health = *health;
                 s.diedAt = *died;
                 s.respawnAt = *respawn;
+                if (f.size() == 8 && f[7] != "-")
+                {
+                    if (ThirdPersonMesh(f[7]).empty()) return std::nullopt; // only KovaaK's own models
+                    s.weapon = std::string(f[7]);
+                }
                 file.peers[*peer] = s;
             }
             else return std::nullopt;

@@ -915,6 +915,46 @@ namespace aimmod
                 });
             }
         }
+
+        // CS: what they hold (avatar-state.tsv's weapon column); nothing while down or outside CS.
+        ApplyWeapon(ghost, pawn, state && alive ? state->weapon : std::string());
+    }
+
+    void GhostDemo::ApplyWeapon(Ghost& ghost, UObject* pawn, const std::string& model)
+    {
+        const double now = static_cast<double>(GetTickCount64()) / 1000.0;
+        if (model == ghost.weapon && (model.empty() || now < ghost.nextWeapon)) return;
+        ghost.nextWeapon = now + 1.0;
+        UClass* cls = pawn->GetClassPrivate();
+        if (cls != m_weaponClass)
+        {
+            m_weaponClass = cls;
+            m_thirdPersonPrimary.Reset();
+            m_thirdPersonPrimary.BindName(cls, STR("GetThirdPersonWeaponMeshComponent_Primary"), Shape::Object);
+            m_setVisibility.BindPath(STR("/Script/Engine.SceneComponent:SetVisibility"), Shape::Command);
+            m_setHiddenInGame.BindPath(STR("/Script/Engine.SceneComponent:SetHiddenInGame"), Shape::Command);
+            if (!m_thirdPersonPrimary.ok()) m_log("avatars: no third-person weapon on " + game::ClassName(pawn) + "; held weapons not shown");
+        }
+        UObject* component = m_thirdPersonPrimary.ok() ? m_thirdPersonPrimary.Object(pawn) : nullptr;
+        const bool changed = model != ghost.weapon;
+        ghost.weapon = model;
+        if (!component || !game::IsLiveInstance(component)) return;
+        if (!model.empty() && m_setStaticMesh.ok())
+        {
+            const std::wstring path = bridge::avatarstate::ThirdPersonMesh(model);
+            if (UObject* mesh = path.empty() ? nullptr : LoadMesh(path.c_str()))
+                m_setStaticMesh.Call(component, [mesh](std::uint8_t* value, const Param& p) {
+                    if (p.kind == Kind::Object) std::memcpy(value, &mesh, sizeof(mesh));
+                });
+        }
+        const bool show = !model.empty();
+        m_setVisibility.Call(component, [show](std::uint8_t* value, const Param& p) {
+            if (p.kind == Kind::Bool && p.boolProperty) p.boolProperty->SetPropertyValue(value, p.name == "bNewVisibility" ? show : false);
+        });
+        m_setHiddenInGame.Call(component, [show](std::uint8_t* value, const Param& p) {
+            if (p.kind == Kind::Bool && p.boolProperty) p.boolProperty->SetPropertyValue(value, p.name == "NewHidden" ? !show : false);
+        });
+        if (changed) m_log("avatars: " + bridge::Redact(ghost.peer) + (show ? " holds " + model : " holds nothing to show"));
     }
     // avatars.tsv for AimModCore: which actor is which remote player's stream.
     void GhostDemo::WriteAvatarMap()

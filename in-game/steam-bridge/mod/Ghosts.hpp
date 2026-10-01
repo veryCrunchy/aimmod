@@ -71,6 +71,8 @@ namespace aimmod
             double health = -1;           // last health applied to the bar
             std::string hiddenScene;      // non-empty while hidden because of a scenario mismatch
             bool respawned = false;       // came back from a death since the last look (walker re-places)
+            std::string weapon;           // CS: the third-person weapon model shown in its hands ("" none)
+            double nextWeapon = 0;        // when to re-apply it (the game may hide it again)
         };
         using Sample = bridge::ghost::RemoteTransform; // remote values only
 
@@ -118,6 +120,10 @@ namespace aimmod
         void ParkHelperBots();
         void ReadAvatarState();
         void ApplyCombatState(Ghost& ghost, RC::Unreal::UObject* localCharacter);
+        // CS: the weapon the remote player holds, on the avatar's own third-person weapon mesh.
+        void ApplyWeapon(Ghost& ghost, RC::Unreal::UObject* pawn, const std::string& model);
+        RC::Unreal::UClass* m_weaponClass = nullptr;
+        game::Getter m_thirdPersonPrimary, m_setVisibility, m_setHiddenInGame;
         std::string m_lastScene; // re-apply looks and AI-off when the scenario changes
         bool m_botsAllowed = false; // bridge::ghost::AvatarBotsAllowed(local scenario)
         bool m_avatarMapDirty = true;
