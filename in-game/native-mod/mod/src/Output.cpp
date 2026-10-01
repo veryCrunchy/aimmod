@@ -218,8 +218,9 @@ namespace aimmod
         {
             std::error_code itemError;
             if (!entry.is_regular_file(itemError) || entry.last_write_time(itemError) < audit->since || itemError) continue;
-            const std::string name = entry.path().filename().string();
-            if (IsChallengeStatsFile(name) && name.rfind(audit->scenario + " - Challenge - ", 0) == 0) audit->found = true;
+            // Wide names only: path::string() throws outside the ANSI code page.
+            const std::wstring name = entry.path().filename().wstring();
+            if (IsChallengeStatsFile(std::wstring_view(name)) && name.rfind(Widen(audit->scenario) + L" - Challenge - ", 0) == 0) audit->found = true;
         }
         if (!audit->found && now < audit->until)
         {
@@ -782,7 +783,20 @@ namespace aimmod
                 std::lock_guard lock(m_mutex);
                 results.swap(m_results);
             }
-            for (const std::string& r : results) WriteAtomic(m_root / L"core-command-result.tsv", r);
+            // The file keeps the last 8 results, oldest first, so two answers in
+            // one pass (accepted + done, or two commands) are never lost.
+            if (!results.empty())
+            {
+                for (std::string& r : results)
+                {
+                    if (!r.empty() && r.back() != '\n') r += '\n';
+                    m_resultHistory.push_back(std::move(r));
+                    while (m_resultHistory.size() > 8) m_resultHistory.pop_front();
+                }
+                std::string body;
+                for (const std::string& r : m_resultHistory) body += r;
+                WriteAtomic(m_root / L"core-command-result.tsv", body);
+            }
         }
         if (force || now - m_lastPlaybackCheck >= 500)
         {

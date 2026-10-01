@@ -96,16 +96,28 @@ sealed class GameCommands(string output)
         return (sequence, null);
     }
 
-    public GameCommandResult? Result()
+    /// <summary>The newest answer AimModCore wrote.</summary>
+    public GameCommandResult? Result() => Results() is { Count: > 0 } all ? all[^1] : null;
+
+    /// <summary>The newest answer to one request, if it is still among the recent ones.</summary>
+    public GameCommandResult? ResultFor(long sequence) => Results().LastOrDefault(r => r.Sequence == sequence);
+
+    /// <summary>The recent answers (AimModCore keeps the last 8, oldest first, one per line).</summary>
+    public IReadOnlyList<GameCommandResult> Results()
     {
         try
         {
             var path = Path.Combine(output, "core-command-result.tsv");
-            if (!File.Exists(path) || new FileInfo(path).Length > 4096) return null;
-            var cells = File.ReadAllText(path).TrimEnd('\r', '\n').Split('\t');
-            if (cells.Length != 5 || cells[0] != "AIMMOD_CORE_RESULT_1" || !long.TryParse(cells[1], out var sequence)) return null;
-            return new(sequence, cells[2], cells[3], NativeRuns.Decode(cells[4]));
+            if (!File.Exists(path) || new FileInfo(path).Length > 32768) return [];
+            var list = new List<GameCommandResult>();
+            foreach (var line in File.ReadAllText(path).Split('\n'))
+            {
+                var cells = line.TrimEnd('\r').Split('\t');
+                if (cells.Length != 5 || cells[0] != "AIMMOD_CORE_RESULT_1" || !long.TryParse(cells[1], out var sequence)) continue;
+                list.Add(new(sequence, cells[2], cells[3], NativeRuns.Decode(cells[4])));
+            }
+            return list;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return []; }
     }
 }

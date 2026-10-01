@@ -148,7 +148,7 @@ namespace aimmod
         std::string m_commandText;
         std::uint64_t m_commandSequence{}, m_lastCommandCheck{};
         bool m_commandPrimed{};
-        std::deque<std::string> m_results;
+        std::deque<std::string> m_results, m_resultHistory;
         void ReadCommand(std::uint64_t now);
         std::string m_version;
         std::thread m_thread;
