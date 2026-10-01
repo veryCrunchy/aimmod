@@ -13,6 +13,13 @@ html,body{width:100%;height:100%;margin:0;padding:0;background:transparent!impor
 .body{font-size:13px;line-height:18px;color:#c9d8d0;margin-top:2px}
 .key{display:block;flex-shrink:0;margin-left:14px;padding:0 10px;height:34px;line-height:32px;border:1px solid #f0b45a;border-bottom-width:3px;border-radius:6px;background:#2b2316;color:#f6dfb8;font-size:15px;font-weight:700}
 .actions{display:flex;flex-direction:row;justify-content:flex-end;margin-top:10px;pointer-events:auto}
+/* Clicks: the layer is click-through (pointer-events none, and Notify.lua keeps it hit-test
+   invisible) until a notice asks for input. Then the toast-sized layer takes clicks as a whole
+   (html.input, body.input), so its buttons never depend on an auto element under a none parent.
+   In the full-screen layout only the answerable parts (the card, its actions, the buy menu) do. */
+html.input,body.input,body.input #notice,.toast.has-actions{pointer-events:auto}
+.strips{display:flex;flex-direction:column;align-items:center}
+#notice.cs-on.cs-buying .strips{align-items:flex-end}
 .button{display:flex;align-items:center;justify-content:center;height:32px;padding:0 16px;margin-left:8px;border:1px solid #30433a;border-radius:6px;background:#1d2b26;color:#eef5f1;font-family:Roboto,Arial,sans-serif;font-size:13px;font-weight:600;cursor:pointer}
 .button.primary{background:#27e4a1;border-color:#27e4a1;color:#06231a}
 .button:hover{background:#263a32}.button.primary:hover{background:#5bedb9}
