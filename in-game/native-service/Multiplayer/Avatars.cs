@@ -23,14 +23,9 @@ static class AvatarProfiles
         new("meso-pharah", "Meso · Pharah", "Meso", "Pharah"),
         new("meso", "Meso", "Meso", "Default"),
         new("endo", "Endo", "Endo", "Default"),
-        // The other models of the game's free Default pack (their default skins).
+        // Humanoid models only: Diver, Medusa, Pill, Pigeon, Pumpkin and JackOLantern are
+        // target shapes for spheres and pills, not player bodies.
         new("ecto", "Ecto", "Ecto", "Default"),
-        new("diver", "Diver", "Diver", "Default"),
-        new("medusa", "Medusa", "Medusa", "Default"),
-        new("pill", "Pill", "Pill", "Default"),
-        new("pigeon", "Pigeon", "Pigeon", "Default"),
-        new("pumpkin", "Pumpkin", "Pumpkin", "Default"),
-        new("jack-o-lantern", "Jack-o-lantern", "JackOLantern", "Default"),
     ];
     public static AvatarProfile? Find(string? id) => All.FirstOrDefault(a => a.Id == id);
 

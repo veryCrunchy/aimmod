@@ -452,7 +452,7 @@ must never be enabled on the same install as the AimModCore applier.
 
 The avatar looks the service offers (and the preview renders) are the free
 Default pack only: Meso in its Default, McCree, Tracer, Genji and Pharah
-skins, Endo, Ecto, Diver, Medusa, Pill, Pigeon, Pumpkin and JackOLantern, each
+skins, Endo and Ecto (humanoid models only; the shape models stay for targets), each
 in its default skin. The view lists each look's model and skin for the
 picker. Tints and accessories fit Meso and Endo.
 
