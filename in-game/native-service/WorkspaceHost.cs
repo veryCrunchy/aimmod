@@ -18,6 +18,8 @@ sealed class WorkspaceHost : IAsyncDisposable
     readonly OverlaySettings overlaySettings;
     readonly OpponentData opponents;
     readonly ObsOverlayHost obs;
+    Tournaments.TournamentService? tournaments;
+    public Tournaments.TournamentService? TournamentsService => tournaments;
     readonly string outputFolder;
     readonly LiveOverlayFeed liveFeed = new();
     Run[] overlayRuns = [];
@@ -57,7 +59,7 @@ sealed class WorkspaceHost : IAsyncDisposable
         gameCommands = new GameCommands(output);
         overlaySettings = new OverlaySettings(output);
         opponents = new OpponentData(output);
-        obs = new ObsOverlayHost(output, ObsState);
+        obs = new ObsOverlayHost(output, ObsState, () => tournaments?.ObsView() ?? new { v = 1 });
         renderer = new RendererAcknowledgement(Path.Combine(output, "native-replay-renderer.json"));
         playback = new NativeReplayPlayback(output, () => RendererReady, () => renderer.Read().Protocol);
         keyboard = new ReplayKeyboard(playback, output);
@@ -89,6 +91,14 @@ sealed class WorkspaceHost : IAsyncDisposable
         multiplayer = Multiplayer.MultiplayerHosting.Create(hub, output, args, () => liveFeed.Read(outputFolder, Volatile.Read(ref overlayRuns)), () => Volatile.Read(ref overlayRuns));
         multiplayer.MapEndpoints(app, prefix);
         Multiplayer.MultiplayerHosting.MapAssets(app, prefix);
+        // Tournaments come from AimMod Hub as the linked account; developer mode can simulate one.
+        var live = multiplayer;
+        tournaments = new Tournaments.TournamentService(new HubTournamentSource(hub), new Tournaments.MultiplayerTournamentLobby(live), () => live.SimulationOn,
+            live.LibraryScenarioNames, () => live.SelfName, args is null ? null : output, autoTick: args is not null);
+        multiplayer.Tournaments = tournaments;
+        tournaments.MapEndpoints(app, prefix);
+        app.MapGet(prefix + "/tournaments.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.TournamentsScript")!, "application/javascript"));
+        app.MapGet(prefix + "/tournaments.css", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.TournamentsStyle")!, "text/css"));
         var importedHistory = csvHistory ?? new CsvHistory(output);
         app.MapGet(prefix + "/history-import.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.HistoryImport")!, "application/javascript"));
         app.MapPost(prefix + "/history-import", async (HttpContext context) => {
@@ -350,6 +360,7 @@ sealed class WorkspaceHost : IAsyncDisposable
         // Stop accepting requests first, then publish a closed replay frame and
         // retract this process's overlay URL so the game never loads a dead port.
         startLoop.Cancel();
+        tournaments?.Dispose();
         multiplayer.Dispose();
         await keyboard.DisposeAsync();
         try { await app.StopAsync(); } catch (Exception ex) when (ex is OperationCanceledException or InvalidOperationException) { }

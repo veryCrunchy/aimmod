@@ -74,6 +74,7 @@ static class DeveloperEndpoints
         tools = mode.Enabled ? tools?.View() : null,
         camera = mode.Enabled ? tools?.Camera() : null,
         workshop = mode.Enabled ? multiplayer.DevWorkshopItems() : null,
+        tournament = mode.Enabled ? multiplayer.Tournaments?.DevView() : null,
     };
 
     internal static LobbyResult Act(DeveloperMode mode, MultiplayerService multiplayer, JsonElement root, DeveloperTools? tools = null)
@@ -104,6 +105,12 @@ static class DeveloperEndpoints
                 return multiplayer.DevAvatar(root.TryGetProperty("on", out var av) && av.ValueKind == JsonValueKind.True, Text("mode"));
             case "workshop":
                 return multiplayer.DevWorkshop(Text("text"));
+            case "tournament":
+                // Simulated Hub: a whole event against simulated players (op: simulate, sim-advance, sim-opponent-reports, sim-stop).
+                if (multiplayer.Tournaments is not { } tournaments) return LobbyResult.Fail("unavailable", "Tournaments aren’t available here.");
+                var op = Text("op") ?? "simulate";
+                if (op is not ("simulate" or "sim-advance" or "sim-opponent-reports" or "sim-stop")) return LobbyResult.Fail("invalid", "Unknown tournament simulation.");
+                return tournaments.Act(JsonSerializer.SerializeToElement(new { action = op, op = Text("variant") }), CancellationToken.None).GetAwaiter().GetResult();
             case "avatar-path" or "loopback" or "content" or "import" when tools is null:
                 return LobbyResult.Fail("unavailable", "This tool needs the AimMod output folder.");
             case "avatar-path":

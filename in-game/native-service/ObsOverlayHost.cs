@@ -11,11 +11,14 @@ sealed class ObsOverlayHost : IAsyncDisposable
     sealed record Binding(int Port, string Token);
     readonly string config;
     readonly Func<object> snapshot;
+    readonly Func<object>? tournament;
     WebApplication? app;
     public string? Url { get; private set; }
     public bool Available => Url is not null;
-    public ObsOverlayHost(string output, Func<object> snapshot)
-    { config = Path.Combine(output, "obs-binding.json"); this.snapshot = snapshot; }
+    public ObsOverlayHost(string output, Func<object> snapshot, Func<object>? tournament = null)
+    { config = Path.Combine(output, "obs-binding.json"); this.snapshot = snapshot; this.tournament = tournament; }
+    // The tournament overlay for casters: bracket, the current match and its live scores.
+    public string? TournamentUrl => Url is null ? null : Url[..Url.IndexOf("/overlay?", StringComparison.Ordinal)] + "/tournament";
     public async Task Start(CancellationToken token)
     {
         Binding binding;
@@ -28,6 +31,7 @@ sealed class ObsOverlayHost : IAsyncDisposable
         LoopbackServer.UseGuards(app, binding.Token, context => HttpMethods.IsGet(context.Request.Method));
         MapAssets(app, prefix);
         app.MapGet(prefix + "/overlay-state", () => Results.Json(snapshot()));
+        if (tournament is not null) app.MapGet(prefix + "/tournament-state", () => Results.Json(tournament()));
         await app.StartAsync(token);
         var address = LoopbackServer.VerifiedAddress(app);
         if (binding.Port == 0) {
@@ -41,6 +45,8 @@ sealed class ObsOverlayHost : IAsyncDisposable
         application.MapGet(prefix + "/overlay", () => Asset("AimMod.OverlayHtml", "text/html"));
         application.MapGet(prefix + "/overlay.js", () => Asset("AimMod.OverlayScript", "application/javascript"));
         application.MapGet(prefix + "/overlay.css", () => Asset("AimMod.OverlayStyle", "text/css"));
+        application.MapGet(prefix + "/tournament", () => Asset("AimMod.TournamentOverlayHtml", "text/html"));
+        application.MapGet(prefix + "/tournament-overlay.js", () => Asset("AimMod.TournamentOverlayScript", "application/javascript"));
     }
     static IResult Asset(string name, string type) => Results.Stream(typeof(ObsOverlayHost).Assembly.GetManifestResourceStream(name)!, type);
     public async ValueTask DisposeAsync()

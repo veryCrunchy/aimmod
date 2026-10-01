@@ -75,6 +75,10 @@
       sim.body.appendChild(actions([button('Open the lobby',openMultiplayer,'compact primary'),button('Leave the lobby',function(){act({action:'leave'});},'compact quiet danger')]));
     }
     // Notifications
+    var tr=section('Simulated tournament','A pretend AimMod Hub with an 8-player bracket and simulated opponents. Play it on the Tournaments page; nothing is sent to the Hub.');left.appendChild(tr.panel);
+    var tsim=state.tournament&&state.tournament.simulating;
+    tr.body.appendChild(actions(tsim?[button('Advance the bracket',function(){act({action:'tournament',op:'sim-advance'});},'compact'),button('Opponent reports',function(){act({action:'tournament',op:'sim-opponent-reports'});},'compact'),button('End simulation',function(){act({action:'tournament',op:'sim-stop'});},'compact')]
+      :[button('Simulate a tournament',function(){act({action:'tournament',op:'simulate'},function(ok){if(ok)toast('Open Tournaments to play your first match.');});},'compact')]));
     var nt=section('In-game notices','Shows each notice in game, outside the AimMod panel, exactly like the real one.');left.appendChild(nt.panel);
     nt.body.appendChild(actions((state.notices||[]).map(function(k){return button(NOTICES[k]||k,function(){act({action:'notice',kind:k},function(ok){if(ok)toast('Sent. Close the AimMod panel to see it.');});},'compact');})));
     var tools=state.tools||{},replays=tools.replays||[],cam=state.camera;
