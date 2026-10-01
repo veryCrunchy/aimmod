@@ -290,6 +290,8 @@ sealed partial class MultiplayerService : IDisposable
     // ---- Discord presence ---------------------------------------------------
 
     // Display summary of the current lobby or match, without Steam ids.
+    /// <summary>The AimModSteam bridge: connected or not; null when this transport is not Steam.</summary>
+    public bool? SteamBridge => transport.Kind == "steam" ? transport.Available : null;
     public DiscordLobbyInfo? DiscordLobby() { lock (gate) return Current is { } lobby ? MultiplayerDiscord.Summarize(lobby, SelfId, transport.JoinToken) : null; }
     // Join from Discord (ACTIVITY_JOIN): the secret names one of the player's
     // Steam friends' joinable lobbies, or nothing.

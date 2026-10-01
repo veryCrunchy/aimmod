@@ -59,6 +59,8 @@ sealed partial class Hub : IDisposable
     // Public Hub handle of the linked account, for the Discord profile button.
     public string? LinkedHandle => account?.Handle;
     public IReadOnlyCollection<Run> Runs => downloaded.Values;
+    /// <summary>Runs before an unlink, while the account can still act (removes its live activity).</summary>
+    public Func<Task>? Unlinking { get; set; }
 
     readonly Func<bool> historyEnabled;
     bool? previousHistoryEnabled;
@@ -132,6 +134,12 @@ sealed partial class Hub : IDisposable
                         break;
                     case "cancel-link": ClearPending(); status = account is null ? "Account linking cancelled." : "Account linked."; Revision++; break;
                     case "unlink":
+                        // Live activity is removed while the credential still exists.
+                        if (Unlinking is { } unlinking && account is not null)
+                        {
+                            try { await unlinking(); }
+                            catch (Exception ex) when (ex is HttpRequestException or IOException or OperationCanceledException) { }
+                        }
                         // Forget the credential in memory first, so a locked file can never
                         // leave the account usable for the rest of this session.
                         account = null;
