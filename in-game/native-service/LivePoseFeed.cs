@@ -10,14 +10,17 @@ sealed record LivePose(long UnixMs, double[] Camera);
 /// the local player's view) and the multiplayer bridge (spectate-pose.tsv, the
 /// view being watched). See in-game/native-mod/DESIGN.md "Spectating".
 /// </summary>
-sealed record LivePoseFrame(long Sequence, string Scenario, string MapName, double? MapScale, IReadOnlyList<LivePose> Poses, IReadOnlyList<double[]> Targets)
+sealed record LivePoseFrame(long Sequence, string Stream, string Scenario, string MapName, double? MapScale, IReadOnlyList<LivePose> Poses, IReadOnlyList<double[]> Targets)
 {
     public static LivePoseFrame? Parse(string text)
     {
         var lines = text.Replace("\r\n", "\n").Split('\n', StringSplitOptions.RemoveEmptyEntries);
         if (lines.Length < 2 || text.Length > 65536) return null;
         var head = lines[0].Split('\t');
-        if (head.Length != 2 || head[0] != "AIMMOD_POSE_1" || !long.TryParse(head[1], NumberStyles.None, CultureInfo.InvariantCulture, out var sequence)) return null;
+        // Optional third cell: the stream (watched player) identity.
+        if (head.Length is not (2 or 3) || head[0] != "AIMMOD_POSE_1" || !long.TryParse(head[1], NumberStyles.None, CultureInfo.InvariantCulture, out var sequence)) return null;
+        var stream = head.Length == 3 ? head[2] : "";
+        if (!IsStreamId(stream)) return null;
         string scenario = "", map = ""; double? scale = null;
         var poses = new List<LivePose>(); var targets = new List<double[]>();
         static bool Num(string s, out double v) => double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out v) && double.IsFinite(v) && Math.Abs(v) < 1e12;
@@ -47,8 +50,11 @@ sealed record LivePoseFrame(long Sequence, string Scenario, string MapName, doub
                 default: return null;
             }
         }
-        return poses.Count == 0 ? null : new(sequence, scenario, map, scale, poses, targets);
+        return poses.Count == 0 ? null : new(sequence, stream, scenario, map, scale, poses, targets);
     }
+
+    /// <summary>Empty (unnamed stream) or [A-Za-z0-9_-]{1,64}.</summary>
+    public static bool IsStreamId(string? id) => id is not null && id.Length <= 64 && id.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_');
 
     public static LivePoseFrame? Read(string path, TimeSpan maxAge)
     {
@@ -69,11 +75,17 @@ sealed record LivePoseFrame(long Sequence, string Scenario, string MapName, doub
 /// presenter shows them about 120 ms behind the newest pose so network jitter
 /// never empties the motion window.
 /// </summary>
-sealed class LivePoseFeed(string path)
+sealed class LivePoseFeed(string path, string? stream = null)
 {
+    string? stream = stream;
+    /// <summary>Follow another stream in place (no stop/start, no new 2 s window).</summary>
+    public void Follow(string? next) => stream = next;
     public const double Delay = 0.12;
     readonly List<LivePose> buffer = [];
     long startMs = -1;
+    string? current;
+    /// <summary>Stream switches seen (the view jumps, it never blends across streams).</summary>
+    public int Switches { get; private set; }
     public IReadOnlyList<double[]> Targets { get; private set; } = [];
     public DateTime LastUpdate { get; private set; }
 
@@ -81,7 +93,14 @@ sealed class LivePoseFeed(string path)
     public bool Update()
     {
         var frame = LivePoseFrame.Read(path, TimeSpan.FromSeconds(2));
-        if (frame is null) return DateTime.UtcNow - LastUpdate < TimeSpan.FromSeconds(2);
+        // A stream other than the one asked for (still the previous player) is
+        // not shown, and does not end the view before the 2 s quiet limit.
+        if (frame is null || (stream is { Length: > 0 } && frame.Stream != stream)) return DateTime.UtcNow - LastUpdate < TimeSpan.FromSeconds(2);
+        // A new stream (or a clock that jumped back: another machine) starts
+        // a fresh buffer, so the view cuts to it.
+        var jumped = buffer.Count > 0 && frame.Poses[^1].UnixMs < buffer[^1].UnixMs - 1000;
+        if (current is not null && (frame.Stream != current || jumped)) { buffer.Clear(); startMs = -1; Switches++; }
+        current = frame.Stream;
         foreach (var pose in frame.Poses)
             if (buffer.Count == 0 || pose.UnixMs > buffer[^1].UnixMs) buffer.Add(pose);
         if (startMs < 0 && buffer.Count > 0) startMs = buffer[0].UnixMs;
