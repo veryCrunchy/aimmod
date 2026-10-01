@@ -189,6 +189,16 @@ namespace aimmod
         m_selfPoseDirty = true;
     }
 
+    void Output::PublishPointer(std::string body)
+    {
+        {
+            std::lock_guard lock(m_mutex);
+            m_pointer = std::move(body);
+            m_pointerDirty = true;
+        }
+        m_wake.notify_one();
+    }
+
     void Output::PublishSelfShots(std::string body)
     {
         {
@@ -831,6 +841,15 @@ namespace aimmod
                 m_selfPoseDirty = false;
             }
             if (!pose.empty() && m_poseRequested.load()) WriteAtomic(m_root / L"self-pose.tsv", pose);
+        }
+        {
+            std::string pointer;
+            {
+                std::lock_guard lock(m_mutex);
+                if (m_pointerDirty) pointer.swap(m_pointer);
+                m_pointerDirty = false;
+            }
+            if (!pointer.empty()) WriteAtomic(m_root / L"overlay-pointer.tsv", pointer);
         }
         {
             std::string shots;

@@ -166,7 +166,11 @@ namespace aimmod::overlay
         {
             // KovaaK's menu or the AimMod panel took over: leave their input alone. Focus loss: let
             // go without touching input (KovaaK's may open its menu now); settled when focus returns.
-            if (pause || blocked) p.forgetMenuInput = true;
+            if (pause || blocked)
+            {
+                p.forgetMenuInput = true;
+                m_handed = true;
+            }
             else if (!f.focused)
             {
                 p.forgetMenuInput = true;
@@ -183,6 +187,14 @@ namespace aimmod::overlay
             m_suspended = false;
         }
         if (pause || blocked) m_suspended = false; // KovaaK's menu or the panel owns input now
+        // KovaaK's menu (or the panel) closed after taking over from the buy menu, and the buy menu is
+        // closed too: game-only input and no cursor, so the game is never left in UI-only.
+        if (m_handed && !menu && !pause && !blocked && f.focused)
+        {
+            p.releaseMenuInput = true;
+            m_handed = false;
+        }
+        if (menu) m_handed = false;
         m_holding = menu;
         p.clickable = p.visible && f.haveView && n.interactive && (pause || menu || f.gameCursor);
         // The scoreboard is display-only: when Tab moved keyboard focus off the game, it goes back.
