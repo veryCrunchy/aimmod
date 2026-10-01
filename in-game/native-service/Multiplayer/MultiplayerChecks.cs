@@ -1486,6 +1486,12 @@ static partial class MultiplayerChecks
         var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant();
         Check(receiver.Chunk("m1", 2, "peer-a", "1790000000-42-9", "round", null, tampered.Length, hash, 0, tampered.Take(ReplaySwap.ChunkBytes).ToArray()) is null || tampered.Length > ReplaySwap.ChunkBytes, "A replay whose bytes don't match its hash is dropped");
         Check(receiver.Chunk("m1", 1, "peer-a", "../evil", "round", null, 100, hash, 0, new byte[10]) is null && receiver.Chunk("m1", 1, "peer-a", "x", "script", null, 100, hash, 0, new byte[10]) is null, "Bad ids and kinds are refused");
+        // A member opening many large replays at once can't make the host hold them all.
+        var flood = new ReplaySwap(Out("c"), () => now);
+        for (var i = 0; i < 40; i++) flood.Chunk("m1", 1, "peer-x", "flood-" + i, "round", null, ReplaySwap.MaxBytes, hash, 0, new byte[ReplaySwap.ChunkBytes]);
+        Check(flood.Assembling <= 2, "One member assembles at most two replays at a time");
+        for (var i = 0; i < 40; i++) flood.Chunk("m1", 1, "peer-" + i, "flood", "round", null, ReplaySwap.MaxBytes, hash, 0, new byte[ReplaySwap.ChunkBytes]);
+        Check(flood.Assembling <= 8, "At most eight replays are assembled at a time");
     }
 
     static void Transfers(string root)
