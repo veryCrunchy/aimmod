@@ -483,7 +483,37 @@ int main()
         auto be = Encode(bad);
         Check(!Decode(be.data(), be.size()), "rejects an invalid match token");
         Check(ValidMatchToken("abcdEFGH_1-2") && !ValidMatchToken("abc") && !ValidMatchToken("has space!") && !ValidMatchToken(std::string(65, 'a')), "validates match tokens");
+        Check(ValidProfileName("AimMod Meso Tracer") && ValidProfileName("CS Player (v2)") && !ValidProfileName(" lead") && !ValidProfileName("a/b") &&
+                  !ValidProfileName("x\ny") && !ValidProfileName(std::string(65, 'a')),
+              "validates character profile names");
         Check(SameToken("abcdefgh", "abcdefgh") && !SameToken("abcdefgh", "abcdefgx") && !SameToken("abcdefgh", "abcdefg"), "compares tokens");
+        Check(be.empty(), "encoder refuses an invalid match token");
+    }
+    {
+        // The encoder only produces what the decoder accepts.
+        WireMessage data{WireType::Data};
+        data.lobby = Lobby;
+        Check(Encode(data).empty(), "encoder refuses an empty data payload");
+        data.payload.assign(MaxPayload + 1, 1);
+        Check(Encode(data).empty(), "encoder refuses an oversized data payload");
+        WireMessage chunk{WireType::Chunk};
+        chunk.payload.assign(MaxChunk + 1, 1);
+        Check(Encode(chunk).empty(), "encoder refuses an oversized chunk");
+        WireMessage hello{WireType::SpectateHello};
+        hello.rate = 0;
+        Check(Encode(hello).empty(), "encoder refuses a zero spectate rate");
+        hello.rate = MaxSpectateRate + 1;
+        Check(Encode(hello).empty(), "encoder refuses an excessive spectate rate");
+        WireMessage pose{WireType::Pose};
+        pose.pose.x = std::numeric_limits<float>::quiet_NaN();
+        Check(Encode(pose).empty(), "encoder refuses a non-finite pose");
+        WireMessage cam{WireType::Camera};
+        cam.camera.fov = 90;
+        cam.camera.yaw = std::numeric_limits<float>::infinity();
+        Check(Encode(cam).empty(), "encoder refuses a non-finite camera");
+        cam.camera.yaw = 10;
+        const auto ce = Encode(cam);
+        Check(!ce.empty() && Decode(ce.data(), ce.size()), "a valid camera frame still round-trips");
     }
     std::printf("%d/%d checks passed\n", checks - failures, checks);
     return failures == 0 ? 0 : 1;

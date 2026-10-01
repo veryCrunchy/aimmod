@@ -494,8 +494,8 @@ namespace aimmod
                 RemoveAvatar(ghost);
                 return;
             }
-            std::string wanted = m_bridge.LobbyValue("aimmod.char." + std::to_string(peer));
-            if (wanted.empty()) wanted = m_bridge.LobbyValue("aimmod.avatar_char");
+            std::string wanted = peer == TestPeer ? m_bridge.DevAvatarState().profile : m_bridge.LobbyValue("aimmod.char." + std::to_string(peer));
+            if (wanted.empty() && peer != TestPeer) wanted = m_bridge.LobbyValue("aimmod.avatar_char");
             if (!wanted.empty() && wanted != ghost.characterProfile && m_loadCharacterProfile.ok())
             {
                 ghost.characterProfile = wanted;

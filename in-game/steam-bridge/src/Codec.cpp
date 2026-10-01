@@ -140,6 +140,16 @@ namespace bridge
         return true;
     }
 
+    bool ValidProfileName(std::string_view name)
+    {
+        if (name.empty() || name.size() > 64 || name.front() == ' ' || name.back() == ' ') return false;
+        for (const char c : name)
+            if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == ' ' || c == '_' || c == '-' || c == '.' || c == '(' ||
+                  c == ')' || c == '\''))
+                return false;
+        return true;
+    }
+
     bool SameToken(std::string_view a, std::string_view b)
     {
         if (a.size() != b.size()) return false;
@@ -267,8 +277,60 @@ namespace bridge
         return {privacy == SpectatePrivacy::Ask ? K::Ask : K::Accept, RejectCode::Declined};
     }
 
+    bool Encodable(const WireMessage& m)
+    {
+        auto finite = [](std::initializer_list<float> values, float limit) {
+            for (const float v : values)
+                if (!std::isfinite(v) || std::fabs(v) > limit) return false;
+            return true;
+        };
+        switch (m.type)
+        {
+        case WireType::Hello:
+        case WireType::Welcome:
+        case WireType::Reject:
+        case WireType::Ping:
+        case WireType::Pong:
+        case WireType::Kick:
+        case WireType::Bye:
+        case WireType::ChunkAck:
+        case WireType::Cancel:
+        case WireType::SpectateAccept: return true;
+        case WireType::Data: return !m.payload.empty() && m.payload.size() <= MaxPayload;
+        case WireType::Chunk: return !m.payload.empty() && m.payload.size() <= MaxChunk;
+        case WireType::SpectateSub: return m.rate <= MaxSpectateRate;
+        case WireType::SpectateHello: return m.rate >= 1 && m.rate <= MaxSpectateRate;
+        case WireType::TournamentHello: return ValidMatchToken(m.matchToken);
+        case WireType::Pose:
+        {
+            const Pose& p = m.pose;
+            if (!finite({p.x, p.y, p.z, p.yaw, p.pitch, p.vx, p.vy, p.vz}, 1e7f)) return false;
+            if ((p.flags & PoseFlagHalfHeight) && (!std::isfinite(p.halfHeight) || p.halfHeight < 0 || p.halfHeight > 10000)) return false;
+            for (const char c : p.scene.substr(0, MaxPoseScene))
+                if (static_cast<unsigned char>(c) < 0x20) return false;
+            return true;
+        }
+        case WireType::Camera:
+        {
+            const CameraFrame& c = m.camera;
+            return finite({c.x, c.y, c.z, c.pitch, c.yaw, c.roll, c.fov}, 1e7f) && c.fov > 1 && c.fov < 179;
+        }
+        case WireType::CameraMeta:
+        {
+            if (!std::isfinite(m.camera.fov) || m.camera.fov < 0 || m.camera.fov > 1000) return false;
+            for (const std::string* s : {&m.scenario, &m.map})
+                for (const char c : s->substr(0, MaxPoseScene))
+                    if (static_cast<unsigned char>(c) < 0x20) return false;
+            return true;
+        }
+        case WireType::Score: return finite({m.score.score, m.score.seconds, m.score.remaining}, 1e9f);
+        }
+        return false;
+    }
+
     std::vector<std::uint8_t> Encode(const WireMessage& m)
     {
+        if (!Encodable(m)) return {};
         std::vector<std::uint8_t> out = {'A', 'M', 'P', '1', WireVersion, static_cast<std::uint8_t>(m.type), 0, 0};
         switch (m.type)
         {

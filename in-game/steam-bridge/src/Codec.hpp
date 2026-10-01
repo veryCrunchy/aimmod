@@ -33,6 +33,8 @@ namespace bridge
     bool ValidLobbyKey(std::string_view key);
     // Tournament match tokens from the Hub: [A-Za-z0-9_-]{8,64}.
     bool ValidMatchToken(std::string_view token);
+    // KovaaK's character profile names (dev.avatar): letters, digits, space and _ - . ( ) ', 1..64, no edge spaces.
+    bool ValidProfileName(std::string_view name);
     bool SameToken(std::string_view a, std::string_view b); // constant time for equal lengths
     constexpr std::size_t MaxLobbyValue = 256;
     constexpr std::size_t MaxServiceLobbyKeys = 24;
@@ -155,6 +157,9 @@ namespace bridge
         std::string scenario, map; // CameraMeta (<= MaxPoseScene each); origin in lobby, scale in camera.fov
         std::uint8_t rate = 0; // SpectateSub (lobby/target reuse: lobby = target)
     };
+    // True when Decode would accept what Encode produces for message.
+    bool Encodable(const WireMessage& message);
+    // Empty when the message isn't Encodable: the sender never emits what a receiver must reject.
     std::vector<std::uint8_t> Encode(const WireMessage& message);
     // Strict: exact sizes per type, version match, payload bounds.
     std::optional<WireMessage> Decode(const std::uint8_t* data, std::size_t size);
