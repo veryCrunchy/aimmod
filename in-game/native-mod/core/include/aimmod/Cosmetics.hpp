@@ -81,7 +81,7 @@ namespace aimmod::cosmetics
     struct Fit
     {
         std::string bone;          // e.g. "Head", "Neck", "Chest"
-        std::string anchor{"bone"}; // "bone", "top" (the character's top, above the bone) or "crown" (halfway from the bone to the top)
+        std::string anchor{"bone"}; // "bone"; or from the model's head: "top" (top of the head), "crown" (its centre), "chin" (its bottom)
         double offset[3]{}, size[3]{};
         bool keepAxes{}; // the mesh is authored in the character's frame (X forward, Z up): never turned
     };
@@ -125,6 +125,17 @@ namespace aimmod::cosmetics
     std::optional<Placement> PlaceAccessory(const Fit& fit, const double localMin[3], const double localMax[3], const double anchor[3], const double forward[3]);
     // Unit X, Y and Z axes of an UE rotator (pitch, yaw, roll in degrees).
     void RotatorAxes(const double rotation[3], double x[3], double y[3], double z[3]);
+
+    // The head of a model from its own data (UMetaSkeletalCharacterModel:
+    // MeshFullHeight, MeshHeadDiameter) and its feet (the mesh's origin):
+    // where "top", "crown" and "chin" anchors sit, and the scale for pieces
+    // made for a 22 cm head (clamped 0.6 to 1.6). Invalid on implausible data.
+    struct HeadPoints
+    {
+        bool valid{};
+        double top{}, centre{}, chin{}, scale{1};
+    };
+    HeadPoints HeadGeometry(double feetZ, double fullHeight, double headDiameter);
 
     // ------------------------------------------------------- colour mapping
     //

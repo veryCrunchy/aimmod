@@ -204,11 +204,11 @@ namespace aimmod::mesh
     }
     std::vector<std::pair<std::string, Mesh>> Shipped()
     {
-        // Sizes in cm for a 25 cm head (AimModCore scales them to each model's head).
+        // Sizes in cm for a 22 cm head (AimModCore scales them to each model's head).
         return {
             {"halo.amsh", Ring(11.0f, 0.75f, 0.5f, 96, 16, 255, 255, 255)},     // a thin, flat ring
             {"collar.amsh", Ring(10.5f, 1.3f, 2.2f, 96, 20, 255, 255, 255)},    // a tall, rounded neck ring
-            {"visor.amsh", Visor(11.5f, 4.5f, 0.9f, 150.0f, 64, 255, 255, 255)}, // a curved band across the eyes
+            {"visor.amsh", Visor(12.5f, 4.5f, 0.9f, 150.0f, 64, 255, 255, 255)}, // a curved band across the eyes
         };
     }
 } // namespace aimmod::mesh

@@ -20,7 +20,11 @@ namespace aimmod
     // their owner's level cleans them up.
     // `shape`: the verified runtime mesh of an item with a "shape" (built as a
     // ProceduralMeshComponent); null for items made from a game mesh.
-    game::UObject* AttachFitAccessory(game::UObject* actor, game::UObject* skeletalMesh, const cosmetics::Item& item, const mesh::Mesh* shape, std::string& why);
+    // `model`: the character's Default-pack model name, for its head size and height.
+    game::UObject* AttachFitAccessory(game::UObject* actor, game::UObject* skeletalMesh, const cosmetics::Item& item, const mesh::Mesh* shape, const std::string& model,
+                                      std::string& why);
+    // A model's head from its own data (Default pack), anchored at the mesh's feet.
+    cosmetics::HeadPoints ModelHead(game::UObject* skeletalMesh, const std::string& model);
     void SetAccessoryVisible(game::UObject* component, bool visible);
     // The character's forward (world, horizontal) from its shoulder bones:
     // right = left to right shoulder, forward = right x up. False if the rig has none.

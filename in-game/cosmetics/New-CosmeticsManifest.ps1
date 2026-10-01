@@ -102,7 +102,9 @@ foreach ($item in $items) {
     }
     $gameAccessory = $kind -eq 'accessory' -and -not $pak -and $fitted -and -not $mesh.Contains('..') -and -not $material.Contains('..') -and
         ($mesh -cmatch '^(/Engine/BasicShapes/|/Game/Art/StaticMeshes/KMC/Brushes/)[A-Za-z0-9_.-]{1,96}$' -or (-not $mesh -and $shape)) -and
-        $material -cmatch '^/Game/Materials/Instances/Characters/S_(Meso|Endo)/Base/MI_PaintedMetal_[A-Za-z0-9_.-]{1,96}$'
+        ($material -cmatch '^/Game/Materials/Instances/Characters/S_(Meso|Endo)/Base/MI_PaintedMetal_[A-Za-z0-9_.-]{1,96}$' -or
+         $material -cin @('/MapCreator/Materials/MM_G_Basic.MM_G_Basic', '/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial',
+                          '/Game/Materials/Masters/Environment/MM_Glow.MM_Glow', '/MapCreator/Materials/DefaultManipulationMaterial.DefaultManipulationMaterial'))
     if ($kind -eq 'accessory' -and $role -notin @('head', 'neck', 'spine')) { $problems.Add("${id}: accessories attach to head, neck or spine") }
     if ($rule.pak -and -not $pak -and -not $gameAccessory) { $problems.Add("${id}: $kind needs a pak") }
     if (-not $rule.pak -and -not $hasParams) { $problems.Add("${id}: no parameters") }

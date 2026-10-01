@@ -242,6 +242,14 @@ namespace aimmod::cosmetics
         static constexpr std::string_view materials[] = {"/Game/Materials/Instances/Characters/S_Meso/Base/MI_PaintedMetal_",
                                                          "/Game/Materials/Instances/Characters/S_Endo/Base/MI_PaintedMetal_"};
         if (!IsAssetPathText(path)) return false;
+        // Flat, per-primitive-data-free materials for AimMod runtime meshes (the
+        // character masters dither away on a component without the game's data).
+        static constexpr std::string_view flat[] = {"/MapCreator/Materials/MM_G_Basic.MM_G_Basic", "/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial",
+                                                    "/Game/Materials/Masters/Environment/MM_Glow.MM_Glow",
+                                                    "/MapCreator/Materials/DefaultManipulationMaterial.DefaultManipulationMaterial"};
+        if (material)
+            for (std::string_view f : flat)
+                if (path == f) return true;
         for (std::string_view root : material ? std::span<const std::string_view>(materials) : std::span<const std::string_view>(meshes))
             if (path.size() > root.size() && path.substr(0, root.size()) == root && path.find('/', root.size()) == std::string_view::npos) return true;
         return false;
@@ -265,6 +273,20 @@ namespace aimmod::cosmetics
         x[0] = cp * cy, x[1] = cp * sy, x[2] = sp;
         y[0] = sr * sp * cy - cr * sy, y[1] = sr * sp * sy + cr * cy, y[2] = -sr * cp;
         z[0] = -(cr * sp * cy + sr * sy), z[1] = cy * sr - cr * sp * sy, z[2] = cr * cp;
+    }
+
+    HeadPoints HeadGeometry(double feetZ, double fullHeight, double headDiameter)
+    {
+        HeadPoints h;
+        if (!std::isfinite(feetZ) || !std::isfinite(fullHeight) || !std::isfinite(headDiameter) || fullHeight < 30 || fullHeight > 600 || headDiameter < 5 ||
+            headDiameter > 80)
+            return h;
+        h.valid = true;
+        h.top = feetZ + fullHeight;
+        h.centre = h.top - headDiameter / 2;
+        h.chin = h.top - headDiameter;
+        h.scale = std::clamp(headDiameter / 22.0, 0.6, 1.6);
+        return h;
     }
 
     Colours ItemColours(const Item& item)
@@ -426,7 +448,7 @@ namespace aimmod::cosmetics
         if (item.fit)
         {
             const Fit& f = *item.fit;
-            if (!IsPlainName(f.bone) || (f.anchor != "bone" && f.anchor != "top" && f.anchor != "crown")) return id + ": bad fit";
+            if (!IsPlainName(f.bone) || (f.anchor != "bone" && f.anchor != "top" && f.anchor != "crown" && f.anchor != "chin")) return id + ": bad fit";
             for (int i = 0; i < 3; ++i)
                 if (!Finite(f.offset[i], -60, 60) || !Finite(f.size[i], 1, 60)) return id + ": fit out of range";
         }
