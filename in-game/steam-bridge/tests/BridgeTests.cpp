@@ -466,6 +466,9 @@ int main()
         auto be = Encode(bad);
         Check(!Decode(be.data(), be.size()), "rejects an invalid match token");
         Check(ValidMatchToken("abcdEFGH_1-2") && !ValidMatchToken("abc") && !ValidMatchToken("has space!") && !ValidMatchToken(std::string(65, 'a')), "validates match tokens");
+        Check(ValidProfileName("AimMod Meso Tracer") && ValidProfileName("CS Player (v2)") && !ValidProfileName(" lead") && !ValidProfileName("a/b") &&
+                  !ValidProfileName("x\ny") && !ValidProfileName(std::string(65, 'a')),
+              "validates character profile names");
         Check(SameToken("abcdefgh", "abcdefgh") && !SameToken("abcdefgh", "abcdefgx") && !SameToken("abcdefgh", "abcdefg"), "compares tokens");
     }
     std::printf("%d/%d checks passed\n", checks - failures, checks);

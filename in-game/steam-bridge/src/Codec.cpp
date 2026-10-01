@@ -112,6 +112,16 @@ namespace bridge
         return true;
     }
 
+    bool ValidProfileName(std::string_view name)
+    {
+        if (name.empty() || name.size() > 64 || name.front() == ' ' || name.back() == ' ') return false;
+        for (const char c : name)
+            if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == ' ' || c == '_' || c == '-' || c == '.' || c == '(' ||
+                  c == ')' || c == '\''))
+                return false;
+        return true;
+    }
+
     bool SameToken(std::string_view a, std::string_view b)
     {
         if (a.size() != b.size()) return false;

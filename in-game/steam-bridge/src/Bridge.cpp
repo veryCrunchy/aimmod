@@ -109,7 +109,7 @@ namespace bridge
             {"spectate.privacy", {"mode"}},
             {"spectate.remove", {"peer"}},
             {"ugc.query", {"tag", "text"}},
-            {"dev.avatar", {"on", "mode"}},
+            {"dev.avatar", {"on", "mode", "profile"}},
         };
 
         constexpr std::uint64_t UgcQueryInvalid = 0xffffffffffffffffull;
@@ -1048,10 +1048,17 @@ namespace bridge
                 Result(*id, false, "invalid", "on must be true or false and mode circle or path.");
                 return;
             }
+            const std::string profile = c.Str("profile", 64).value_or("");
+            if (c.Get("profile") && !profile.empty() && !ValidProfileName(profile))
+            {
+                Result(*id, false, "invalid", "profile must be a plain character profile name.");
+                return;
+            }
             {
                 std::lock_guard lock(m_ghostMutex);
                 m_devAvatar.on = *on;
                 m_devAvatar.path = mode == "path";
+                if (c.Get("profile")) m_devAvatar.profile = profile;
                 ++m_devAvatar.generation;
             }
             m_log(*on ? "developer test avatar on (" + mode + ")" : std::string("developer test avatar off"));

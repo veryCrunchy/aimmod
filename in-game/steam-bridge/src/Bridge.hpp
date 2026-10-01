@@ -88,6 +88,7 @@ namespace bridge
             bool on = false;
             bool path = false;     // follow avatar-test-path.tsv
             int generation = 0;    // bumps on every command (reload the path)
+            std::string profile;   // character profile for the test avatar's look (empty = scenario default)
         };
         DevAvatar DevAvatarState();
         static double Now();

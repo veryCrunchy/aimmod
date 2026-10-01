@@ -1435,6 +1435,7 @@ controller's `MyProfileName` changes, the avatar re-applies:
     because the service writes it before sending. On other scenarios it
     circles.
   - `on:false` despawns the test avatar.
+  - `profile` (optional, for example `AimMod Meso Tracer`) is a plain character profile name: letters, digits, spaces and `_ - . ( ) '`, at most 64. It's applied with `LoadCharacterProfile`, like `aimmod.char.<id>` for real avatars. A new profile on a running test avatar re-skins it in place, without a respawn.
 - It works even with `lobby_avatars=0`. It's accepted only on the local pipe
   (the service sends it only with developer mode on). No P2P frame maps to
   it, so a peer can't trigger it.
