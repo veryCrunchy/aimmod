@@ -34,29 +34,51 @@ sealed record DiscordPresenceInput(LiveOverlaySnapshot Live, bool Replay, Discor
 // Multiplayer lobby as the presence sees it (Multiplayer/MultiplayerDiscord.cs).
 // State: lobby, match or results. Lead: this player's score or total minus the
 // best other player's. JoinSecret: an opaque hash, null when not joinable.
+// ModeKey: the lobby mode id (LobbyModes). Map: the CS map, when the mode is
+// played on a map. WorkshopId: the scenario's public Workshop item. Host: this
+// player hosts the lobby. Closed: why no join is offered (invite-only, full,
+// in-match, no-steam-lobby), null while joinable.
 sealed record DiscordLobbyInfo(string PartyId, int Players, int MaxPlayers, string Mode, string? Scenario, string State,
-    int? Round, int? TotalRounds, int? FirstTo, double? Lead, int? Place, bool? Won, string? JoinSecret);
+    int? Round, int? TotalRounds, int? FirstTo, double? Lead, int? Place, bool? Won, string? JoinSecret,
+    string? ModeKey = null, string? Map = null, string? WorkshopId = null, bool Host = false, string? Closed = null);
+
+// Lobby art (AimMod Hub's invite card): Large is the square card shown as the
+// presence image, Cover the wide card Discord shows as a game invite's banner
+// (assets.invite_cover_image), Small the AimMod logo badge.
+sealed record DiscordArt(string Large, string Cover, string Small, string SmallText);
 
 sealed record DiscordParty(string Id, int Size, int Max);
 
 sealed record DiscordButton(string Label, string Url);
 
 sealed record DiscordActivity(string Phase, string Details, string State, long? Start, long? End, IReadOnlyList<DiscordButton> Buttons, string? Scenario, string LargeText = DiscordActivity.DefaultLargeText,
-    DiscordParty? Party = null, string? JoinSecret = null)
+    DiscordParty? Party = null, string? JoinSecret = null, DiscordArt? Art = null)
 {
     public const string DefaultLargeText = "AimMod for KovaaK's";
     // The AimMod application has no uploaded art assets, so images are direct
-    // URLs. No small image: the previous app-icon URL no longer resolves and
-    // Discord draws a missing small image as a "?" badge.
+    // URLs (Discord fetches them through its media proxy). Outside a lobby there
+    // is no small image: Discord draws a missing small image as a "?" badge.
     public const string LargeImage = "https://s.crun.zip/aimmod.png";
     public const string SteamAppId = "824270";
-    public JsonObject ToJson(bool scenarioButton = true)
+    // Full sends the lobby card and the invite banner, NoCover leaves out the
+    // banner, Logo sends only the AimMod logo: each a fallback for when Discord
+    // rejects the richer one.
+    public enum ArtLevel { Logo, NoCover, Full }
+    public JsonObject ToJson(bool scenarioButton = true, ArtLevel art = ArtLevel.Full)
     {
+        var assets = new JsonObject { ["large_image"] = LargeImage, ["large_text"] = LargeText };
+        if (Art is { } lobbyArt && art > ArtLevel.Logo)
+        {
+            assets["large_image"] = lobbyArt.Large;
+            assets["small_image"] = lobbyArt.Small;
+            assets["small_text"] = lobbyArt.SmallText;
+            if (art == ArtLevel.Full) assets["invite_cover_image"] = lobbyArt.Cover;
+        }
         var activity = new JsonObject
         {
             ["details"] = Details,
             ["state"] = State,
-            ["assets"] = new JsonObject { ["large_image"] = LargeImage, ["large_text"] = LargeText },
+            ["assets"] = assets,
         };
         if (Start is not null || End is not null)
         {
@@ -79,7 +101,7 @@ sealed record DiscordActivity(string Phase, string Details, string State, long? 
     // is sent promptly; a changed state line alone waits for the refresh interval.
     public bool Structural(DiscordActivity? previous) =>
         previous is null || previous.Phase != Phase || previous.Details != Details || !previous.Buttons.SequenceEqual(Buttons)
-        || Moved(previous.Start, Start) || Moved(previous.End, End) || previous.Party != Party || previous.JoinSecret != JoinSecret;
+        || Moved(previous.Start, Start) || Moved(previous.End, End) || previous.Party != Party || previous.JoinSecret != JoinSecret || previous.Art != Art;
     static bool Moved(long? a, long? b) => a.HasValue != b.HasValue || (a is long x && b is long y && Math.Abs(x - y) > 3);
     public bool SameContent(DiscordActivity? previous) => previous is not null && !Structural(previous) && previous.State == State && previous.LargeText == LargeText;
 }
@@ -156,6 +178,58 @@ static class DiscordActivityBuilder
         return string.Join(" · ", parts);
     }
 
+    // AimMod Hub's invite card for a lobby. Only what this presence shows: the
+    // mode, the map or scenario, the player count, the lobby state, the host's
+    // public Hub handle (only on the host's own presence, and only when the Hub
+    // button is on) and the scenario's public Workshop item for its preview.
+    internal const string InviteCardBase = "https://aimmod.app/og/invite.png";
+    // Discord limits asset strings; a long map name is shortened to fit.
+    internal const int AssetLimit = 256;
+    internal static bool HubHandle(string? handle) =>
+        handle is { Length: > 0 and <= 32 } h && !h.StartsWith('-') && !h.EndsWith('-') && !h.Contains("--", StringComparison.Ordinal)
+        && h.All(c => c == '-' || char.IsAsciiDigit(c) || char.IsAsciiLetterLower(c));
+    internal static string InviteCard(string layout, string modeKey, string? map, int players, int max, string state, string? host, string? workshop)
+    {
+        string Url(string? name, string? ws)
+        {
+            var query = new StringBuilder("?v=1&layout=").Append(layout).Append("&mode=").Append(Uri.EscapeDataString(modeKey));
+            if (!string.IsNullOrEmpty(name)) query.Append("&map=").Append(Uri.EscapeDataString(name));
+            query.Append("&n=").Append(players).Append("&max=").Append(max).Append("&state=").Append(state);
+            if (host is not null) query.Append("&host=").Append(host);
+            if (ws is not null) query.Append("&ws=").Append(ws);
+            return InviteCardBase + query;
+        }
+        var name = map is null ? null : Clean(map, "");
+        if (name is { Length: > 96 }) name = name[..(char.IsHighSurrogate(name[95]) ? 95 : 96)];
+        var ws = workshop is { Length: > 0 and <= 20 } w && w.All(char.IsAsciiDigit) && w[0] != '0' ? w : null;
+        var url = Url(name, ws);
+        while (url.Length > AssetLimit && !string.IsNullOrEmpty(name))
+        {
+            var cut = name.Length - 1;
+            if (cut > 0 && char.IsHighSurrogate(name[cut - 1])) cut--;
+            name = name[..cut].TrimEnd();
+            url = Url(name, ws);
+        }
+        return url.Length <= AssetLimit ? url : Url(null, null);
+    }
+    static readonly HashSet<string> CardModes = ["score-race", "duel", "ffa-rounds", "practice", "tracking-duel", "deathmatch", "vampiric", "instagib", "team-deathmatch", "cs"];
+    static DiscordArt? LobbyArt(DiscordLobbyInfo lobby, DiscordParty party, string? place, string? hubHandle, DiscordSettingsValue settings)
+    {
+        if (lobby.ModeKey is not { } mode || !CardModes.Contains(mode)) return null;
+        var players = Math.Clamp(party.Size, 1, 10); var max = Math.Clamp(party.Max, Math.Max(2, players), 10);
+        var host = lobby.Host && settings.ShowHubButton && HubHandle(hubHandle) ? hubHandle : null;
+        var state = lobby.State is "match" or "results" ? lobby.State : "lobby";
+        return new(InviteCard("square", mode, place, players, max, state, host, lobby.WorkshopId),
+            InviteCard("banner", mode, place, players, max, state, host, lobby.WorkshopId),
+            DiscordActivity.LargeImage, DiscordActivity.DefaultLargeText);
+    }
+    static string LobbyState(DiscordLobbyInfo lobby, string? secret) => secret is not null ? "In lobby · Open to join" : lobby.Closed switch
+    {
+        "full" => "In lobby · Full",
+        "invite-only" => "In lobby · Invite only",
+        _ => "In lobby",
+    };
+
     static string Ordinal(int n) => n + (n % 100 is 11 or 12 or 13 ? "th" : (n % 10) switch { 1 => "st", 2 => "nd", 3 => "rd", _ => "th" });
     static DiscordActivity BuildLobby(DiscordPresenceInput input, DiscordSettingsValue settings, DiscordLobbyInfo lobby)
     {
@@ -163,11 +237,16 @@ static class DiscordActivityBuilder
         var players = Math.Clamp(lobby.Players, 1, Math.Max(1, lobby.MaxPlayers));
         var party = new DiscordParty(lobby.PartyId, players, Math.Max(players, lobby.MaxPlayers));
         var scenario = string.IsNullOrWhiteSpace(lobby.Scenario) ? null : lobby.Scenario;
-        string phase, details, state, largeText = DiscordActivity.DefaultLargeText; long? start = null, end = null;
+        // Where the lobby plays: the CS map, otherwise the scenario.
+        var place = string.IsNullOrWhiteSpace(lobby.Map) ? scenario : lobby.Map;
+        var secret = settings.ShowJoin && lobby.JoinSecret is { Length: > 0 and <= 128 } s ? s : null;
+        string phase, details, state;
+        var largeText = Clean(lobby.Mode + (place is null ? "" : " · " + place) + $" · {players}/{party.Max} players", DiscordActivity.DefaultLargeText);
+        long? start = null, end = null;
         if (lobby.State == "match")
         {
             phase = "match:" + lobby.Round;
-            details = lobby.Mode + (scenario is null ? "" : " · " + scenario);
+            details = lobby.Mode + (place is null ? "" : " · " + place);
             var parts = new List<string>();
             if (lobby.Round is int round) parts.Add(lobby.TotalRounds is int total ? $"Round {round}/{total}" : lobby.FirstTo is int to ? $"Round {round} · First to {to}" : $"Round {round}");
             if (lobby.Lead is double lead) parts.Add(Math.Abs(lead) < 0.05 ? "Tied" : (lead > 0 ? "Leading by " : "Trailing by ") + Number(Math.Abs(lead)));
@@ -178,22 +257,23 @@ static class DiscordActivityBuilder
         else if (lobby.State == "results")
         {
             phase = "results-match";
-            details = lobby.Mode + (scenario is null ? "" : " · " + scenario);
-            state = lobby.Won == true ? "Won the match" : lobby.Place is int place ? $"Finished {Ordinal(place)} of {players}" : "Match over";
+            details = lobby.Mode + (place is null ? "" : " · " + place);
+            state = lobby.Won == true ? "Won the match" : lobby.Place is int finished ? $"Finished {Ordinal(finished)} of {players}" : "Match over";
             start = input.Session.Started.ToUnixTimeSeconds();
         }
         else
         {
             phase = "lobby";
-            details = $"In lobby · {players}/{party.Max} · {lobby.Mode}";
-            state = scenario ?? "Choosing a scenario";
+            // Discord adds the party size to the state line ("… (2 of 6)").
+            details = lobby.Mode + " · " + (place ?? (lobby.ModeKey == "cs" ? "Choosing a map" : "Choosing a scenario"));
+            state = LobbyState(lobby, secret);
             start = input.Session.Started.ToUnixTimeSeconds();
         }
         var buttons = new List<DiscordButton>();
         if (settings.ShowHubButton && !string.IsNullOrWhiteSpace(input.HubHandle) && input.HubHandle.Length <= 64)
             buttons.Add(new("AimMod Hub profile", HubProfile(input.HubHandle)));
-        var secret = settings.ShowJoin && lobby.JoinSecret is { Length: > 0 and <= 128 } s ? s : null;
-        return new(phase, Clean(details, "In a lobby"), Clean(state, "In a lobby"), start, end, buttons, null, largeText, party, secret);
+        return new(phase, Clean(details, "In a lobby"), Clean(state, "In a lobby"), start, end, buttons, null, largeText, party, secret,
+            LobbyArt(lobby, party, place, input.HubHandle, settings));
     }
 
     public static DiscordActivity Build(DiscordPresenceInput input, DiscordSettingsValue settings)
@@ -349,6 +429,7 @@ sealed class DiscordPresenceHost : IAsyncDisposable
     // requested starts true so a disabled first step also clears a request
     // file left behind by a previous worker that did not shut down cleanly.
     bool requested = true, scenarioButton = true;
+    DiscordActivity.ArtLevel art = DiscordActivity.ArtLevel.Full;
     string? loggedStatus;
     volatile string status = "starting";
     CancellationTokenSource? stop;
@@ -460,9 +541,18 @@ sealed class DiscordPresenceHost : IAsyncDisposable
         if (activity.SameContent(sent)) return;
         var due = activity.Structural(sent) ? now - sentAt >= MinimumSpacing : now - sentAt >= StateRefresh;
         if (!due || !rate.TryTake(now.UtcDateTime)) return;
-        var result = await client.SetActivity(pid(), activity.ToJson(scenarioButton), token);
-        var summary = $"SET_ACTIVITY {activity.Phase} details={Quote(activity.Details)} state={Quote(activity.State)} " + (activity.JoinSecret is not null ? "join=on" : $"buttons={activity.Buttons.Count(b => scenarioButton || !b.Url.StartsWith("steam:", StringComparison.Ordinal))}") + (activity.Party is { } p ? $" party={p.Size}/{p.Max}" : "");
+        var result = await client.SetActivity(pid(), activity.ToJson(scenarioButton, art), token);
+        var summary = $"SET_ACTIVITY {activity.Phase} details={Quote(activity.Details)} state={Quote(activity.State)} " + (activity.JoinSecret is not null ? "join=on" : $"buttons={activity.Buttons.Count(b => scenarioButton || !b.Url.StartsWith("steam:", StringComparison.Ordinal))}") + (activity.Party is { } p ? $" party={p.Size}/{p.Max}" : "")
+            + (activity.Party is not null && activity.JoinSecret is null ? " join=off(" + (!preferences.ShowJoin ? "turned-off" : party?.Closed ?? "none") + ")" : "")
+            + (activity.Art is not null ? " art=" + art.ToString().ToLowerInvariant() : "");
         if (result == DiscordSendResult.Ok) { log(summary + ": ok"); sent = activity; sentAt = now; return; }
+        if (result == DiscordSendResult.Rejected && activity.Art is not null && art > DiscordActivity.ArtLevel.Logo)
+        {
+            // An older Discord may not take the invite banner, or the card URLs.
+            art--;
+            log(summary + ": rejected (" + client.LastError + "); retrying with " + (art == DiscordActivity.ArtLevel.NoCover ? "no invite banner" : "the logo only"));
+            return; // Retried next step with less art.
+        }
         if (result == DiscordSendResult.Rejected && scenarioButton && activity.Buttons.Any(b => b.Url.StartsWith("steam:", StringComparison.Ordinal)))
         {
             log(summary + ": rejected (" + client.LastError + "); dropping the play-this-scenario button");

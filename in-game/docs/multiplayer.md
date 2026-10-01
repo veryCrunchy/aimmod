@@ -362,6 +362,27 @@ leaderboards, and never touch KovaaK's ranked submission.
    `feat/kovaaks-discord-rpc` work can carry. The service resolves it through
    the Hub and then continues as in 2.
 
+### Discord invites (as built)
+
+The service's Discord presence (`DiscordPresence.cs`, `Multiplayer/MultiplayerDiscord.cs`)
+shows a lobby as `<mode> · <map or scenario>` with the state
+`In lobby · Open to join` / `Full` / `Invite only`; Discord adds the party size
+("(2 of 6)"). `party` is always set in a lobby; `secrets.join` only while the
+lobby can be joined (not invite-only, not full, not mid-match without late join,
+with a Steam lobby). Discord draws an invite whose sender no longer offers a join
+secret as ended, so an invite sent before a match starts, the lobby fills or the
+host leaves shows "Game has ended". The service log's `SET_ACTIVITY` line names
+the reason (`join=off(in-match)`).
+
+Lobby art comes from AimMod Hub's `/og/invite.png` card: the square card is
+`assets.large_image`, the wide card `assets.invite_cover_image` (the invite
+banner), the AimMod logo `small_image`. The card carries the mode key, the map or
+scenario, the player count, the lobby state, the scenario's Workshop item (for
+its public preview) and, on the host's own presence with the Hub button on, the
+host's Hub handle. If Discord rejects the activity, the service retries without
+the banner, then with the logo only. Without `invite_cover_image` Discord uses
+the application's "Rich Presence Invite Image" from the Developer Portal.
+
 ### Steam invites
 
 The KovaaK's developer confirmed that the game uses Steamworks only for the
