@@ -2,7 +2,7 @@
   'use strict';
   var container=null,request=null,generation=0,value=null;
   function node(tag,css,text){var el=root.document.createElement(tag);el.className=css||'';if(text!==undefined)el.textContent=text;return el;}
-  function leave(){if(root.AimModHistoryImport)root.AimModHistoryImport.leave();if(root.AimModDiscordSettings)root.AimModDiscordSettings.leave();generation++;if(request){request.abort();request=null;}container=null;}
+  function leave(){if(root.AimModHistoryImport)root.AimModHistoryImport.leave();if(root.AimModDiscordSettings)root.AimModDiscordSettings.leave();if(root.AimModLifecycle)root.AimModLifecycle.leaveSettings();generation++;if(request){request.abort();request=null;}container=null;}
   function send(patch,done){
     var ticket=++generation,xhr=new root.XMLHttpRequest();request=xhr;
     var path=root.location.pathname;path=path.slice(0,path.lastIndexOf('/'));
@@ -31,6 +31,7 @@
     // Two columns at wide sizes: preferences and library on the left, import on the right.
     var columns=node('div','settings-columns'),left=node('div','settings-col'),right=node('div','settings-col');columns.appendChild(left);columns.appendChild(right);container.appendChild(columns);
     left.appendChild(panel);
+    if(root.AimModLifecycle)root.AimModLifecycle.renderSettings(left);
     if(root.AimModHistoryImport)root.AimModHistoryImport.render(right,typeof value.statsFolder==='string'?value.statsFolder:'');
     var storage=node('div','panel settings-card');storage.appendChild(node('h2','','Replay library'));storage.appendChild(node('p','subtle','Favorite, export or delete replays from Replays. Exports are saved in Documents / AimMod / Replays.'));if(root.AimModWorkspace){var openRow=node('div','actions');var open=node('button','button','Open replays');open.type='button';open.onclick=function(){root.AimModWorkspace.open('replays');};openRow.appendChild(open);storage.appendChild(openRow);}left.appendChild(storage);
     if(root.AimModDiscordSettings)root.AimModDiscordSettings.render(left);

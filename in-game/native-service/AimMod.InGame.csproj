@@ -4,6 +4,8 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- Release builds pass the version (CI: AimModVersion=<semver>). -->
+    <Version Condition="'$(AimModVersion)' != ''">$(AimModVersion)</Version>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
@@ -32,6 +34,9 @@
     <EmbeddedResource Include="../replay/native-browser.js" LogicalName="AimMod.NativeReplayBrowser" />
   </ItemGroup>
   <ItemGroup><EmbeddedResource Include="../ui/history-import.js" LogicalName="AimMod.HistoryImport" /></ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="../ui/lifecycle.js" LogicalName="AimMod.LifecycleScript" />
+  </ItemGroup>
   <ItemGroup><EmbeddedResource Include="../ui/discord-settings.js" LogicalName="AimMod.DiscordSettingsScript" /></ItemGroup>
   <ItemGroup><EmbeddedResource Include="../ui/multiplayer.js" LogicalName="AimMod.MultiplayerScript" /><EmbeddedResource Include="../ui/multiplayer.css" LogicalName="AimMod.MultiplayerStyle" /><EmbeddedResource Include="../ui/notify.html" LogicalName="AimMod.NotifyPage" /><EmbeddedResource Include="../ui/notify.js" LogicalName="AimMod.NotifyScript" /><EmbeddedResource Include="../ui/notify.css" LogicalName="AimMod.NotifyStyle" /><EmbeddedResource Include="../ui/developer.js" LogicalName="AimMod.DeveloperScript" /><EmbeddedResource Include="../ui/developer.css" LogicalName="AimMod.DeveloperStyle" /></ItemGroup>
 </Project>

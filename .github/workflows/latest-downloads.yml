@@ -38,7 +38,10 @@ jobs:
           osu=$(jq -r '[.[] | select(.draft | not) | select(.prerelease | not)
             | select(.tag_name | test("^aimmod-osu-v[0-9]+\\.[0-9]+\\.[0-9]+$"))
             | select(any(.assets[]; .name | endswith("-Setup.exe")))] | sort_by(.published_at) | last | .tag_name // empty' releases.json)
-          if [ -z "$kovaaks" ] && [ -z "$osu" ]; then
+          ingame=$(jq -r '[.[] | select(.draft | not) | select(.prerelease | not)
+            | select(.tag_name | test("^aimmod-ingame-v[0-9]+\\.[0-9]+\\.[0-9]+$"))
+            | select(any(.assets[]; .name | test("^AimMod-InGame-.*\\.zip$")))] | sort_by(.published_at) | last | .tag_name // empty' releases.json)
+          if [ -z "$kovaaks" ] && [ -z "$osu" ] && [ -z "$ingame" ]; then
             echo "No published downloads found." >&2
             exit 1
           fi
@@ -53,15 +56,21 @@ jobs:
               -p "aimmod-osu-*-win-x64.zip*" -p "aimmod-osu-*-linux-x64.tar.gz*" \
               -p "aimmod-osu-*-checksums.sha256"
           fi
+          if [ -n "$ingame" ]; then
+            gh release download "$ingame" -R "$REPO" -D assets \
+              -p "AimMod-InGame-*.zip" -p "AimMod-InGame-*.manifest.json" -p "AimMod-InGame-*.sha256"
+          fi
           ls -la assets
           echo "kovaaks=$kovaaks" >> "$GITHUB_OUTPUT"
           echo "osu=$osu" >> "$GITHUB_OUTPUT"
+          echo "ingame=$ingame" >> "$GITHUB_OUTPUT"
 
       - name: Publish the rolling release
         shell: bash
         env:
           KOVAAKS: ${{ steps.collect.outputs.kovaaks }}
           OSU: ${{ steps.collect.outputs.osu }}
+          INGAME: ${{ steps.collect.outputs.ingame }}
         run: |
           set -euo pipefail
           server="${GITHUB_SERVER_URL}/${REPO}"
@@ -73,6 +82,9 @@ jobs:
             fi
             if [ -n "$OSU" ]; then
               echo "- **AimMod for osu! ${OSU#aimmod-osu-v}** · Windows and Linux · [release notes](${server}/releases/tag/${OSU})"
+            fi
+            if [ -n "$INGAME" ]; then
+              echo "- **AimMod in-game for KovaaK's ${INGAME#aimmod-ingame-v}** · Windows · unzip and run Install-AimMod.cmd · [release notes](${server}/releases/tag/${INGAME})"
             fi
             echo
             echo "Installed apps update themselves. Older versions are available from their own releases."
