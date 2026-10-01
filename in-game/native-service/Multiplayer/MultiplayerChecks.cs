@@ -547,6 +547,30 @@ static partial class MultiplayerChecks
         var final = core.Snapshot().Match!;
         Check(final.Phase == MatchPhases.Final && final.WinnerId == "host" && final.Rounds[0].Results[0] is { MemberId: "host", Score: 1, Place: 1 }, "Reaching the frag limit ends the match with the winner");
 
+        // A three-player deathmatch whose leader leaves: the players still there are placed among themselves.
+        (core, clock, advance) = Lobby();
+        core.Join("p2", "Two"); core.Join("p3", "Three");
+        core.Apply("host", "settings", Patch(new { mode = "deathmatch", fragLimit = 5, countdown = 3, timeLimit = 60 }), content);
+        ReadyAll(core); core.Apply("host", "start", default, content);
+        advance(3000); core.Tick();
+        var three = core.Snapshot().Match!;
+        var t3 = clock();
+        for (long t = 0; t < 3000; t += 100)
+        {
+            List<TrackSample> Eyes(double x, double y, double yaw) { var l = new List<TrackSample>(); for (long k = 0; k < 100; k += 17) l.Add(new TrackSample(t3 + t + k, x, y, 164, 0, yaw)); return l; }
+            core.Track("host", new TrackBatch(three.Id, 1, Eyes(0, 0, 0), [])); core.Track("p2", new TrackBatch(three.Id, 1, Eyes(1000, 0, 180), [])); core.Track("p3", new TrackBatch(three.Id, 1, Eyes(0, 3000, 0), []));
+            advance(100); core.Tick();
+        }
+        var shotAt = clock();
+        for (var k = 0; k < 5; k++) core.Claim("p2", new HitClaim(three.Id, 1, 200 + k, shotAt - 600 + k * 110, 1000, 0, 164, 0, 180, false, 0, 0, 100, 45, 115));
+        Check(core.Snapshot().Match!.Combat!.Players.First(p => p.Member == "p2").Frags == 1, "The leader has a frag");
+        core.Leave("p2");
+        advance(60_000 + LobbyCore.RoundGraceMs); core.Tick();
+        var left = core.Snapshot().Match!;
+        var leftPlaces = left.Rounds[0].Results;
+        Check(left.Phase == MatchPhases.Final && leftPlaces.First(p => p.MemberId == "p3").Place == 1 && leftPlaces.First(p => p.MemberId == "host").Place == 2 && leftPlaces.First(p => p.MemberId == "p2").Place == 0,
+            "A leader who left doesn't push the remaining players down: equal frags, fewer deaths places first");
+
         // Arenas: the player can be hurt and carries the mode weapon; nothing natively heals or scores.
         var arena = MatchScenario.Generate(new(BaseScenario, LobbyRules.Apply(start, J(new { mode = "instagib" }), 2, content).Settings! with { Scenario = new ScenarioChoice("Synthetic A", ContentLibrary.TextHash(BaseScenario), "synthetic_map", ContentLibrary.TextHash("m"), 60) }));
         Check(arena.Contains("InvinciblePlayer=false\n") && arena.Contains("AddedBots=AimMod Hidden Bot.bot\n") && arena.Contains("WeaponProfileNames=AimMod Railgun;;;;;;;\n") && arena.Contains("Name=AimMod Railgun\nType=Hitscan\nShotsPerClick=1\nDamagePerShot=1000.0\n")
