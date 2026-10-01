@@ -34,6 +34,7 @@ core/     engine-independent library (unit tested, no UE4SS headers)
   ReplayV2       replay format 2 encoder/decoder (ReplayWriter: format 1)
   Settings       native-settings.tsv parser, core-active handshake line
   Supervisor     service restart back-off policy
+  Water          water gate, swim tuning per movement style, swim input
 mod/      UE4SS glue (built against a local RE-UE4SS checkout)
   GameBindings   name resolution, signature checks, typed getter calls
   Observer       game-thread scheduler, hooks, lifecycle driver, live values
@@ -41,6 +42,7 @@ mod/      UE4SS glue (built against a local RE-UE4SS checkout)
   Output         writer thread: journal append, atomic JSON files, heartbeat,
                  shared-memory live channel
   ServiceHost    launches and supervises AimMod.InGame.exe
+  Water          swimmable water volumes over the map's Water objects
 ```
 
 ### Threads
@@ -671,6 +673,67 @@ lists both runs' target appearances (new target, reappearance after an
 absence, or a jump over 150 cm in one frame) and reports how many match
 within 5 cm and where they first differ. If spawns match but movement
 does not, the next step is (c): drive spawns from a pre-generated sequence.
+
+## Water
+
+Findings (3.9.11 dumps and cooked assets):
+- The map creator's Water object (`AMapCreatorWater`, Blueprint
+  `MapCreatorWaterInstance_C`) is an actor with one `EditorMesh`
+  (`/KovaaKMapAssets/Water/water_cube`, a 200-unit cube centred on the actor)
+  and three dynamic materials (`MM_Liquid_Top2` on top, `MM_Liquid_Sides`
+  elsewhere, both translucent), coloured by the object's properties. It has no
+  physics volume: nothing in the game swims, and the mesh can block.
+- The engine is complete: `APhysicsVolume` (`bWaterVolume`, `FluidFriction`,
+  `TerminalVelocity`, `Priority`), `MOVE_Swimming`, and on the character
+  movement `MaxSwimSpeed`, `Buoyancy`, `OutofWaterZ`, `JumpOutOfWaterPitch`
+  and `NavAgentProps.bCanSwim`. The game's `UMetaCharacterMovementComponent`
+  adds no swimming members of its own; the `water: swimming` log line confirms
+  live that the engine mode runs.
+
+What AimModCore does (`mod/src/Water`, `core/Water`), only where
+`water::Allowed`: an `AimMod - `, `AimMod Match - ` or `AimMod Probe `
+scenario in freeplay, not loading, never in a challenge, benchmark or the
+scenario editor:
+- Every `MapCreatorWaterInstance_C` of the current world (searched each second
+  for 15 s after a load, then every 5 s; a rebuilt map drops and re-adds them)
+  gets its `EditorMesh` collision off (the previous value is kept) and an
+  `APhysicsVolume` over the mesh's world box: `bWaterVolume`, priority 1, a
+  query-only `BoxComponent` (overlap on every channel, no overlap events) as
+  its root, because a runtime volume has no brush and the engine finds water
+  through the root primitive's bounds, overlap and distance test. The
+  character's own `UpdatePhysicsVolume` then starts and ends swimming: the
+  capsule centre inside the box swims.
+- A `PostProcessComponent` on the box (not unbound, blend radius 1) tints the
+  view while the camera is under water (`SceneColorTint`).
+- The local character's movement gets the style's tuning (`TuningFor`; Quake
+  when `bEnableQuakeMovement` is on, else CS). Lengths are source units x
+  MapScale:
+
+  | | CS (Source) | Quake 3 |
+  | --- | --- | --- |
+  | swim speed | 0.8 x run | 0.5 x run |
+  | water friction (`FluidFriction` / 2) | 4 /s | 3 /s (1 x waterlevel 3) |
+  | gravity under water (`Buoyancy` 1) | none | none |
+  | sink with no input | 48 u/s | 60 u/s |
+  | climb out at an edge (`OutofWaterZ`) | 256 u/s | 350 u/s |
+  | entry speed kept (`TerminalVelocity`) | 1.5 x swim | 2 x swim |
+
+  `JumpOutOfWaterPitch` -90: climbing out needs jump held while moving into a
+  ledge, not a raised view. Swimming never lands, so there is no fall damage.
+- The game binds no swim-up input. While swimming, AimModCore adds a vertical
+  movement input each frame (`Pawn:AddMovementInput`): +1 with a Jump key held
+  (the `Jump` action keys from `%LOCALAPPDATA%\FPSAimTrainer\Saved\Config\WindowsNoEditor\Input.ini`,
+  read once per scenario, checked with `PlayerController:IsInputKeyDown`), a
+  slow sink with no movement input, nothing otherwise.
+- Leaving the gate destroys the volumes and restores the mesh collision and
+  the movement values (a swimming character is set falling).
+- Multiplayer: the volumes come from the Water objects in the map data, which
+  generated match arenas copy byte for byte from the base port (the lobby
+  compares map keys), so every peer swims in the same water. Nothing is sent.
+
+Log lines: `water: N swimmable volume(s) (cs: swim 800 cm/s, sink 192 cm/s,
+friction 4/s)`, `water: swimming` (first time per scenario), `water: off
+(<reason>)`.
 
 ## Native service
 

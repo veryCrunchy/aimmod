@@ -103,6 +103,7 @@ namespace aimmod
           m_lifecycle(std::to_string(static_cast<long long>(std::time(nullptr))) + "-" + std::to_string(GetCurrentProcessId())),
           m_sampler(m_b, m_scene, output), m_presenter(m_b, m_scene, output), m_control(m_b, m_scene, output),
           m_match(m_b, m_scene, output), m_cosmetics(m_b, m_scene, output),
+          m_water(m_b, m_scene),
           m_preview(m_scene, output)
     {
     }
@@ -334,6 +335,7 @@ namespace aimmod
         m_presenter.Bind();
         m_control.Bind();
         m_cosmetics.Bind();
+        m_water.Bind();
         RegisterCallbacks();
         m_presenter.Start();
         m_output.SetCapabilities(Capabilities());
@@ -367,6 +369,7 @@ namespace aimmod
         m_callbacks.clear();
         m_presenter.Stop();
         m_preview.Shutdown();
+        m_water.Shutdown();
         for (auto& [function, ids] : m_hooks) UObjectGlobals::UnregisterHook(function, ids);
         m_hooks.clear();
         for (auto& hook : m_inputHooks) UObjectGlobals::UnregisterHook(hook->function, hook->ids);
@@ -613,6 +616,7 @@ namespace aimmod
             if (wasAvailable != m_match.available()) m_output.SetCapabilities(Capabilities());
         }
         m_cosmetics.Tick(now);
+        m_water.Tick(now, m_scenarioName, m_inChallenge, m_loading);
         m_preview.Tick(now, m_inChallenge, m_loading);
         PollClipKey();
         if (m_output.poseRequested() && now >= m_nextPose)

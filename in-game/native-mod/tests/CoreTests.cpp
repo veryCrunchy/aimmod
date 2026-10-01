@@ -11,6 +11,7 @@
 #include <aimmod/ReplayWriter.hpp>
 #include <aimmod/Settings.hpp>
 #include <aimmod/Supervisor.hpp>
+#include <aimmod/Water.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -892,6 +893,62 @@ static void PreviewChecks()
     PreviewComposeChecks();
 }
 
+static void WaterChecks()
+{
+    using namespace aimmod::water;
+    // Gate: AimMod's own scenarios in freeplay only.
+    CHECK(Allowed("AimMod - fy_pool_day (CSS) - CS Movement", false, false, false, false), "water in an AimMod port");
+    CHECK(Allowed("AimMod Match - fy_pool_day - 0a1b2c3d", false, false, false, false), "water in a generated match arena");
+    CHECK(!Allowed("AimMod - fy_pool_day (CSS) - CS Movement", true, false, false, false), "never in a challenge");
+    CHECK(!Allowed("AimMod - fy_pool_day (CSS) - CS Movement", false, true, false, false), "never in a benchmark");
+    CHECK(!Allowed("AimMod - fy_pool_day (CSS) - CS Movement", false, false, true, false), "never in the scenario editor");
+    CHECK(!Allowed("AimMod - fy_pool_day (CSS) - CS Movement", false, false, false, true), "not while loading");
+    CHECK(!Allowed("1wall6targets TE", false, false, false, false), "never in other scenarios");
+    CHECK(!Allowed("My AimMod - copy", false, false, false, false), "prefix only");
+    CHECK(!Allowed("", false, false, false, false), "no scenario, no water");
+
+    // CS: 250 u/s run at MapScale 4 -> 200 u/s swim, friction 4/s (engine 0.5 x 8), sink 48 u/s.
+    const Tuning cs = TuningFor(Style::CounterStrike, 1000.0, 4.0);
+    CHECK(std::fabs(cs.maxSwimSpeed - 800.0) < 1e-9, "CS swims at 0.8 x run speed");
+    CHECK(std::fabs(0.5 * cs.fluidFriction - 4.0) < 1e-9, "CS water friction is sv_friction");
+    CHECK(std::fabs(cs.sinkSpeed - 192.0) < 1e-9, "CS sinks at 48 u/s");
+    CHECK(std::fabs(cs.outOfWaterZ - 1024.0) < 1e-9, "CS water jump is 256 u/s");
+    CHECK(cs.buoyancy == 1.0, "no gravity under water");
+    CHECK(cs.terminalVelocity > cs.maxSwimSpeed, "a dive keeps some speed");
+    CHECK(cs.jumpOutOfWaterPitch <= -90.0, "climbing out needs no view pitch");
+    // Quake 3: 320 u/s run -> 160 u/s swim, friction 1 x waterlevel 3, sink 60 u/s.
+    const Tuning q3 = TuningFor(Style::Quake, 1280.0, 4.0);
+    CHECK(std::fabs(q3.maxSwimSpeed - 640.0) < 1e-9, "Quake swims at half the run speed");
+    CHECK(std::fabs(0.5 * q3.fluidFriction - 3.0) < 1e-9, "Quake water friction");
+    CHECK(std::fabs(q3.sinkSpeed - 240.0) < 1e-9, "Quake sinks at 60 u/s");
+    CHECK(std::fabs(q3.outOfWaterZ - 1400.0) < 1e-9, "Quake water jump is 350 u/s");
+    CHECK(std::string(StyleName(Style::Quake)) == "quake" && std::string(StyleName(Style::CounterStrike)) == "cs", "style names");
+    // Scale follows MapScale; bad inputs fall back.
+    const Tuning half = TuningFor(Style::CounterStrike, 500.0, 2.0);
+    CHECK(std::fabs(half.sinkSpeed - 96.0) < 1e-9 && std::fabs(half.maxSwimSpeed - 400.0) < 1e-9, "tuning follows MapScale");
+    const Tuning bad = TuningFor(Style::CounterStrike, std::nan(""), -1.0);
+    CHECK(std::isfinite(bad.maxSwimSpeed) && bad.maxSwimSpeed > 0 && std::isfinite(bad.sinkSpeed), "bad inputs give sane tuning");
+
+    // Swim input: jump up at full speed, idle sinks at sinkSpeed, moving holds depth.
+    CHECK(VerticalInput(cs, true, 0.0) == 1.0 && VerticalInput(cs, true, 1.0) == 1.0, "jump swims up");
+    CHECK(std::fabs(VerticalInput(cs, false, 0.0) + 0.24) < 1e-9, "idle sinks (60/250 of max, like CS)");
+    CHECK(VerticalInput(cs, false, 1.0) == 0.0, "moving holds the depth");
+    CHECK(VerticalInput(Tuning{}, false, 0.0) == 0.0, "no tuning, no input");
+
+    // Jump keys from Input.ini.
+    const auto keys = JumpKeys("[/Script/Engine.InputSettings]\r\n"
+                               "ActionMappings=(ActionName=\"Fire\",bShift=False,bCtrl=False,bAlt=False,bCmd=False,Key=LeftMouseButton)\r\n"
+                               "ActionMappings=(ActionName=\"Jump\",bShift=False,bCtrl=False,bAlt=False,bCmd=False,Key=SpaceBar)\r\n"
+                               "+ActionMappings=(ActionName=\"Jump\",bShift=False,bCtrl=False,bAlt=False,bCmd=False,Key=MouseScrollDown)\r\n"
+                               "ActionMappings=(ActionName=\"Jump\",Key=SpaceBar)\r\n"
+                               "ActionMappings=(ActionName=\"Jump\",Key=Bad Key)\r\n");
+    CHECK(keys.size() == 2 && keys[0] == "SpaceBar" && keys[1] == "MouseScrollDown", "jump keys, deduplicated, odd names skipped");
+    CHECK(JumpKeys("") == std::vector<std::string>{"SpaceBar"}, "default jump key");
+    CHECK(JumpKeys("ActionMappings=(ActionName=\"JumpPad\",Key=J)") == std::vector<std::string>{"SpaceBar"}, "other actions ignored");
+    const Tint tint = UnderwaterTint();
+    CHECK(tint.b > tint.r && tint.r > 0 && tint.b <= 1, "underwater tint is a light blue");
+}
+
 int main(int argc, char** argv)
 {
     if (argc == 3 && std::strcmp(argv[1], "--write-samples") == 0)
@@ -913,6 +970,7 @@ int main(int argc, char** argv)
     EndRunChecks();
     cosmetics_checks::Run();
     PreviewChecks();
+    WaterChecks();
     std::printf("%d AimModCore checks, %d failed.\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

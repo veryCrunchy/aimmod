@@ -37,6 +37,7 @@ add_library(aimmod_core STATIC
     core/src/Json.cpp
     core/src/Cosmetics.cpp
     core/src/CosmeticsPreview.cpp
+    core/src/Water.cpp
 )
 target_include_directories(aimmod_core PUBLIC core/include)
 if(MSVC)
@@ -71,6 +72,7 @@ if(AIMMOD_BUILD_MOD)
         mod/src/CosmeticsPreview.cpp
         mod/src/Reflect.cpp
         mod/src/Accessory.cpp
+        mod/src/Water.cpp
     )
     target_include_directories(AimModCore PRIVATE mod/src)
     target_link_libraries(AimModCore PRIVATE aimmod_core windowscodecs ole32)
