@@ -34,6 +34,7 @@ static class MultiplayerChecks
         SteamPipe();
         Follow();
         DevAvatarChecks();
+        Boards();
         Marker();
         var root = Path.Combine(Path.GetTempPath(), "aimmod-mp-test-" + Guid.NewGuid().ToString("N"));
         try { Content(root); Generator(root); Blocked(root); AutoLeave(root); Service(root); Transfers(root); Replays(root); Maps(root); }
@@ -1304,6 +1305,33 @@ static class MultiplayerChecks
         service.Dispose();
     }
 
+    static void Boards()
+    {
+        LobbyMember M(string id, string name) => new(id, name, MemberRoles.Player, true, null, ContentStates.Ok, ContentStates.Ok, ContentStates.None, Connections.Connected, "relay", 1, false);
+        var members = new[] { M("a", "Alpha"), M("b", "Bravo"), M("c", "Charlie"), M("d", "Delta") };
+        MatchSnapshot Match(string mode, IReadOnlyList<ScoreLine>? live = null, CombatView? combat = null, IReadOnlyList<TrackView>? tracking = null, IReadOnlyList<RoundResult>? rounds = null) =>
+            new("m", MatchPhases.Live, mode, "Synthetic A", 60, 2, 3, 2, 1_000, null, null, members.Select(x => x.Id).ToArray(), live ?? [], rounds ?? [], [], null, [], Tracking: tracking, Combat: combat);
+        LobbySnapshot Lobby(MatchSnapshot m) => new(1, "l", "ABCDEF", 1, "a", new LobbySettings(Mode: m.Mode), members, m, [], 0);
+        ScoreLine L(string id, double score) => new(id, score, 10, 50, 10, 5, 5, LineStates.Playing, false);
+        Board B(MatchSnapshot m, string self = "b") => Standings.Build(Lobby(m), m, self, 31_000, m.Combat)!;
+        var race = B(Match(LobbyModes.Race, [L("a", 500), L("b", 800), L("c", 650), L("d", 100)]));
+        Check(race.Kind == "score" && race.Rows[0].Name == "Bravo" && race.Rows[0].Self && race.Rows[1].Gap == -150 && race.Left == 30, "Score race: rank, score, gap to the leader and time left");
+        Check(Standings.Compact(B(Match(LobbyModes.Race, [L("a", 900), L("b", 100), L("c", 800), L("d", 700)]))).Rows.Select(r => r.Name).SequenceEqual(["Alpha", "Charlie", "Delta", "Bravo"]), "The corner panel keeps the top three and you");
+        var rounds = new[] { new RoundResult(1, [], "a") };
+        var duel = B(Match(LobbyModes.Duel, [L("a", 300), L("b", 400)], rounds: rounds));
+        Check(duel.Kind == "duel" && duel.Rows[0].Name == "Alpha" && duel.Rows[0].Wins == 1 && duel.Rows[1].Score == 400, "Score duel: round wins first, then the round's score");
+        var track = B(Match(LobbyModes.Tracking, tracking: [new TrackView("a", 41.5, 10, 1, 20, false, null), new TrackView("b", 55.25, 12, 1, 20, false, null)], rounds: rounds));
+        Check(track.Kind == "tracking" && track.Rows.First(r => r.Name == "Bravo").Percent == 55.3 && track.Rows[0].Wins == 1, "Tracking duel: time on target and round wins");
+        CombatPlayerView P(string id, int frags, int deaths, double health, int team = 0) => new(id, health, health > 0, frags, deaths, null, null, 0, 0, team);
+        var vamp = B(Match(LobbyModes.Vampiric, combat: new CombatView(10, [P("a", 3, 1, 60), P("b", 5, 3, 0)], [])));
+        Check(vamp.Kind == "combat" && vamp.Rows[0].Name == "Bravo" && vamp.Rows[0].Kd == 1.67 && vamp.Rows[0].Health == 0 && vamp.Rows[0].Status == "down" && vamp.FragLimit == 10, "Vampiric: frags, deaths, K/D and health");
+        var dm = B(Match(LobbyModes.Deathmatch, combat: new CombatView(20, [P("a", 3, 0, 100), P("b", 2, 2, 100)], [])));
+        Check(dm.Rows[0].Kd == 3 && dm.Rows[0].Health is null, "Deathmatch: K/D without deaths is the frag count; no health column");
+        var tdm = B(Match(LobbyModes.TeamDeathmatch, combat: new CombatView(30, [P("a", 4, 1, 100, 1), P("b", 2, 2, 100, 2), P("c", 1, 3, 100, 1), P("d", 6, 0, 100, 2)], [], [5, 8])));
+        Check(tdm.Kind == "team" && tdm.Teams!.Single(t => t.Team == 2).Total == 8 && tdm.Teams!.Single(t => t.Team == 2).Self && tdm.Rows.Select(r => r.Team).SequenceEqual([1, 1, 2, 2]), "Team deathmatch: team totals and players by team");
+        Check(!JsonSerializer.Serialize(tdm, Protocol.Json).Contains("\"a\"", StringComparison.Ordinal), "Boards carry names, never member ids");
+    }
+
     static void Picks(string root, ContentLibrary library)
     {
         long now = 6_000_000;
@@ -1610,6 +1638,12 @@ static class MultiplayerChecks
         Check(control.Calls.Contains("start challenge Synthetic A"), "The run starts at zero through AimModCore");
         Check(!File.Exists(Path.Combine(output, SessionMarker.FileName)), "No marker while a normal scenario plays");
         Check(View().GetProperty("lobby").GetProperty("match").GetProperty("live").EnumerateArray().Count(l => l.GetProperty("status").GetString() == "playing") >= 2, "Live score frames arrive");
+        var boardNotice = JsonDocument.Parse(service.NoticeText()).RootElement;
+        Check(boardNotice.GetProperty("board").GetProperty("kind").GetString() == "score" && boardNotice.GetProperty("board").GetProperty("rows").EnumerateArray().Any(r => r.GetProperty("self").GetBoolean())
+            && boardNotice.GetProperty("boardFull").ValueKind == JsonValueKind.Null, "The corner standings panel shows during a match, with you in it");
+        service.ScoreboardHeld(true);
+        Check(JsonDocument.Parse(service.NoticeText()).RootElement.GetProperty("boardFull").GetProperty("rows").GetArrayLength() == 3, "Holding the scoreboard key shows everyone");
+        service.ScoreboardHeld(false);
         Run(62_000);
         var match = View().GetProperty("lobby").GetProperty("match");
         Check(match.GetProperty("phase").GetString() == MatchPhases.Final && match.GetProperty("standings").GetArrayLength() == 3, "The simulated race reaches its final results");

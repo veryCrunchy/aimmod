@@ -409,6 +409,8 @@
     body.appendChild(settingRow('Hotkey','Ready up or open the lobby from in game.',segmented(keys,pr.hotkey||'F7',function(id){pref('hotkey',id);},false,'hotkey')));
     var ks=view.keys||{};var clipOptions=['F6','F8','F9','F10','F11','Insert','Home','PageUp'].map(function(k){return {id:k,label:keyLabel(k)};});
     body.appendChild(settingRow('Clip key','Marks a moment of a recorded run as a clip.',segmented(clipOptions,ks.clip||'F8',function(id){pref('clipKey',id);},false,'clip key')));
+    flag('showBoard','Standings panel in matches','A small leaderboard in the top right corner while a match runs.');
+    body.appendChild(settingRow('Scoreboard key','Hold it during a match to see the full standings.',segmented((ks.scoreboardKeys||['Tab','CapsLock','Tilde']).map(function(k){return {id:k,label:keyLabel(k)};}),ks.scoreboard||'Tab',function(id){pref('scoreboardKey',id);},false,'scoreboard key')));
     (ks.conflicts||[]).forEach(function(c){body.appendChild(node('p','mp-warn-text',safe(c,'')));});
     body.appendChild(actions(button('Show the tour again',function(){touring=true;tourStep=0;render();},'compact quiet')));
     return p;

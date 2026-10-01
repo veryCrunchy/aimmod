@@ -57,7 +57,7 @@ sealed class WorkspaceHost : IAsyncDisposable
         gameCommands = new GameCommands(output);
         overlaySettings = new OverlaySettings(output);
         opponents = new OpponentData(output);
-        obs = new ObsOverlayHost(output, ObsState);
+        obs = new ObsOverlayHost(output, ObsState, () => multiplayer?.BoardView());
         renderer = new RendererAcknowledgement(Path.Combine(output, "native-replay-renderer.json"));
         playback = new NativeReplayPlayback(output, () => RendererReady, () => renderer.Read().Protocol);
         keyboard = new ReplayKeyboard(playback, output);
@@ -118,7 +118,7 @@ sealed class WorkspaceHost : IAsyncDisposable
         });
         ObsOverlayHost.MapAssets(app, prefix);
         app.MapGet(prefix + "/overlay-state", () => Results.Json(OverlayState()));
-        app.MapGet(prefix + "/overlay-setup", () => Results.Json(new { obsAvailable = obs.Available, obsUrl = obs.Url, width = 1920, height = 1080 }));
+        app.MapGet(prefix + "/overlay-setup", () => Results.Json(new { obsAvailable = obs.Available, obsUrl = obs.Url, boardUrl = obs.BoardUrl, width = 1920, height = 1080 }));
         app.MapGet(prefix + "/overlay-editor.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.OverlayEditor")!, "application/javascript"));
         app.MapGet(prefix + "/overlay-editor.css", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.OverlayEditorStyle")!, "text/css"));
         using var stream = typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.UI")!;

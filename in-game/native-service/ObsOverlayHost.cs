@@ -11,11 +11,14 @@ sealed class ObsOverlayHost : IAsyncDisposable
     sealed record Binding(int Port, string Token);
     readonly string config;
     readonly Func<object> snapshot;
+    readonly Func<object?>? board;
     WebApplication? app;
     public string? Url { get; private set; }
+    // The multiplayer standings browser source (board.html), when a board source was given.
+    public string? BoardUrl { get; private set; }
     public bool Available => Url is not null;
-    public ObsOverlayHost(string output, Func<object> snapshot)
-    { config = Path.Combine(output, "obs-binding.json"); this.snapshot = snapshot; }
+    public ObsOverlayHost(string output, Func<object> snapshot, Func<object?>? board = null)
+    { config = Path.Combine(output, "obs-binding.json"); this.snapshot = snapshot; this.board = board; }
     public async Task Start(CancellationToken token)
     {
         Binding binding;
@@ -28,6 +31,14 @@ sealed class ObsOverlayHost : IAsyncDisposable
         LoopbackServer.UseGuards(app, binding.Token, context => HttpMethods.IsGet(context.Request.Method));
         MapAssets(app, prefix);
         app.MapGet(prefix + "/overlay-state", () => Results.Json(snapshot()));
+        if (board is not null)
+        {
+            app.MapGet(prefix + "/board", () => Asset("AimMod.BoardHtml", "text/html"));
+            app.MapGet(prefix + "/board.js", () => Asset("AimMod.BoardScript", "application/javascript"));
+            app.MapGet(prefix + "/standings.js", () => Asset("AimMod.StandingsScript", "application/javascript"));
+            app.MapGet(prefix + "/standings.css", () => Asset("AimMod.StandingsStyle", "text/css"));
+            app.MapGet(prefix + "/board-state", () => Results.Json(new { version = 1, board = board() }, Multiplayer.Protocol.Json));
+        }
         await app.StartAsync(token);
         var address = LoopbackServer.VerifiedAddress(app);
         if (binding.Port == 0) {
@@ -35,6 +46,7 @@ sealed class ObsOverlayHost : IAsyncDisposable
             AtomicFile.WriteText(config, JsonSerializer.Serialize(binding));
         }
         Url = address + prefix + "/overlay?surface=obs";
+        if (board is not null) BoardUrl = address + prefix + "/board";
     }
     internal static void MapAssets(WebApplication application, string prefix)
     {
@@ -45,7 +57,7 @@ sealed class ObsOverlayHost : IAsyncDisposable
     static IResult Asset(string name, string type) => Results.Stream(typeof(ObsOverlayHost).Assembly.GetManifestResourceStream(name)!, type);
     public async ValueTask DisposeAsync()
     {
-        Url = null;
+        Url = null; BoardUrl = null;
         if (app is not null) { await app.StopAsync(); await app.DisposeAsync(); app = null; }
     }
 }

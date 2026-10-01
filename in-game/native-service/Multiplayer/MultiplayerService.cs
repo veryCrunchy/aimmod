@@ -757,7 +757,9 @@ sealed partial class MultiplayerService : IDisposable
     {
         var clip = KeyBinds.ReadClipKey(outputFolder);
         var game = KeyBinds.GameKeys(library.Root);
-        return new { hotkey = prefs.Hotkey, clip, clipKeys = KeyBinds.ClipKeys, taken = KeyBinds.ClipKeys.Where(game.Contains), conflicts = KeyBinds.Conflicts(prefs.Hotkey, clip, game) };
+        var conflicts = KeyBinds.Conflicts(prefs.Hotkey, clip, game).ToList();
+        if (game.Contains(prefs.ScoreboardKey)) conflicts.Add("KovaaK’s already uses " + prefs.ScoreboardKey + "; the scoreboard shows while it’s held, so pick another scoreboard key if that clashes.");
+        return new { hotkey = prefs.Hotkey, clip, clipKeys = KeyBinds.ClipKeys, taken = KeyBinds.ClipKeys.Concat(ScoreboardKeys).Where(game.Contains), conflicts, scoreboard = prefs.ScoreboardKey, scoreboardKeys = ScoreboardKeys };
     }
     LobbyResult SetPrefs(JsonElement args)
     {
@@ -947,11 +949,12 @@ sealed partial class MultiplayerService : IDisposable
             var duel = DuelHud();
             var combat = CombatHud();
             var cs = CsHud();
-            if (notice is null && badge is null && duel is null && combat is null && cs is null) return "{\"version\":1,\"active\":false}";
+            var (board, boardFull) = NoticeBoards();
+            if (notice is null && badge is null && duel is null && combat is null && cs is null && board is null && boardFull is null) return "{\"version\":1,\"active\":false}";
             return JsonSerializer.Serialize(new
             {
                 version = 1, active = notice is not null, badge, notice?.Id, notice?.Kind, notice?.Title, notice?.Body, notice?.Key, notice?.Countdown, notice?.Sound, notice?.Invite,
-                actions = notice?.Actions, interactive = notice?.Actions is { Count: > 0 }, volume = prefs.Sounds ? prefs.Volume : 0, duel, combat, cs,
+                actions = notice?.Actions, interactive = notice?.Actions is { Count: > 0 }, volume = prefs.Sounds ? prefs.Volume : 0, duel, combat, cs, board, boardFull,
             }, Protocol.Json);
         }
     }
@@ -2000,6 +2003,7 @@ sealed partial class MultiplayerService : IDisposable
             "maps" => Results.Json(MapsView(), Protocol.Json),
             "history" => Results.Json(HistoryView(), Protocol.Json),
             "cosmetics" => Results.Json(CosmeticsView(), Protocol.Json),
+            "board" => Results.Json(new { version = 1, board = BoardView() }, Protocol.Json),
             "preview" => MapPreview(key) is { } image ? Results.File(image, MapPorts.ContentType(image)) : Results.NotFound(),
             _ => Results.Json(View(), Protocol.Json),
         });
