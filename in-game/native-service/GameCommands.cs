@@ -41,8 +41,9 @@ sealed class GameCommands(string output)
     /// <summary>Writes the request; returns its sequence, or null with a reason.</summary>
     public (long? Sequence, string? Error) Send(GameCommandRequest request)
     {
-        if (request.Action is not ("load-scenario" or "start-scenario" or "reset-overrides")) return (null, "invalid-command");
-        if (request.Action != "reset-overrides" && !SafeName(request.Scenario)) return (null, "invalid-scenario");
+        if (request.Action is not ("load-scenario" or "start-scenario" or "reset-overrides" or "refresh-scenarios")) return (null, "invalid-command");
+        var named = request.Action is "load-scenario" or "start-scenario";
+        if (named && !SafeName(request.Scenario)) return (null, "invalid-scenario");
         if (request.Weapon is not null && !SafeName(request.Weapon)) return (null, "invalid-override");
         if (request.Mode is not (null or "freeplay" or "challenge")) return (null, "invalid-mode");
         var text = new StringBuilder("AIMMOD_CORE_COMMAND_1\n");
@@ -52,7 +53,7 @@ sealed class GameCommands(string output)
         void Number(string key, double? value) { if (value is double v) Field(key, v.ToString("R", CultureInfo.InvariantCulture)); }
         Field("seq", sequence.ToString(CultureInfo.InvariantCulture));
         Field("action", request.Action);
-        if (request.Action != "reset-overrides") Field("scenario", request.Scenario);
+        if (named) Field("scenario", request.Scenario);
         if (request.Action == "start-scenario")
         {
             Field("mode", request.Mode ?? "freeplay");

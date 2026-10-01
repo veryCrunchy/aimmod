@@ -12,7 +12,7 @@ namespace aimmod
 {
     struct GameCommand
     {
-        enum class Action { LoadScenario, StartScenario, ResetOverrides };
+        enum class Action { LoadScenario, StartScenario, ResetOverrides, RefreshScenarios };
         enum class Mode { FreePlay, Challenge };
         std::uint64_t sequence{};
         Action action{};
@@ -41,4 +41,7 @@ namespace aimmod
     std::string FormatCommandResult(std::uint64_t sequence, std::string_view state, std::string_view code, std::string_view message);
 
     const char* ActionName(GameCommand::Action action);
+    // A scenario name usable as "<Scenarios>\\<name>.sce": no path separators,
+    // reserved characters, dot segments or trailing dots/spaces.
+    bool IsScenarioFileName(std::string_view name);
 } // namespace aimmod

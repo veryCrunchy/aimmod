@@ -30,6 +30,7 @@ namespace aimmod
         {
         case GameCommand::Action::LoadScenario: return "load-scenario";
         case GameCommand::Action::StartScenario: return "start-scenario";
+        case GameCommand::Action::RefreshScenarios: return "refresh-scenarios";
         default: return "reset-overrides";
         }
     }
@@ -83,8 +84,9 @@ namespace aimmod
         if (*action == "load-scenario") c.action = GameCommand::Action::LoadScenario;
         else if (*action == "start-scenario") c.action = GameCommand::Action::StartScenario;
         else if (*action == "reset-overrides") c.action = GameCommand::Action::ResetOverrides;
+        else if (*action == "refresh-scenarios") c.action = GameCommand::Action::RefreshScenarios;
         else return fail("invalid-command", "Unknown action.");
-        if (c.action != GameCommand::Action::ResetOverrides)
+        if (c.action == GameCommand::Action::LoadScenario || c.action == GameCommand::Action::StartScenario)
         {
             const std::string* scenario = get("scenario");
             if (!scenario || !SafeName(*scenario)) return fail("invalid-scenario", "Missing or invalid scenario name.");
@@ -119,6 +121,14 @@ namespace aimmod
         if (c.mode == GameCommand::Mode::Challenge && c.HasOverrides())
             return fail("overrides-freeplay-only", "Overrides are only allowed in freeplay; challenge runs stay unmodified.");
         return c;
+    }
+
+    bool IsScenarioFileName(std::string_view name)
+    {
+        if (!SafeName(name) || name.back() == '.' || name.back() == ' ' || name == "." || name == "..") return false;
+        for (char c : name)
+            if (c == '\\' || c == '/' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|') return false;
+        return true;
     }
 
     std::string FormatCommandResult(std::uint64_t sequence, std::string_view state, std::string_view code, std::string_view message)

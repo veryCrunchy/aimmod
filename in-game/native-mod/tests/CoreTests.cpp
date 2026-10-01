@@ -272,6 +272,13 @@ static void CommandChecks()
     CHECK(code("AIMMOD_CORE_COMMAND_1\naction\treset-overrides\n") == "invalid-command", "sequence required");
     CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t9\naction\treset-overrides\nextra\t1\n") == "invalid-command", "unknown fields rejected");
     CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t9\naction\treset-overrides\n") == "accepted", "reset accepted");
+    CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t9\naction\trefresh-scenarios\n") == "accepted", "refresh accepted");
+    CHECK(code("AIMMOD_CORE_COMMAND_1\nseq\t9\naction\trefresh-scenarios\nscenario\tX\n") == "accepted", "refresh ignores a scenario");
+    CHECK(IsScenarioFileName("AimMod Match - Cata IC Long Strafes - Timed - ab93b242") && IsScenarioFileName("Track + Slowed (2)"),
+          "match scenario names are file names");
+    CHECK(!IsScenarioFileName("..\\..\\Win64\\x") && !IsScenarioFileName("a/b") && !IsScenarioFileName("C:x") && !IsScenarioFileName("x.") &&
+              !IsScenarioFileName("..") && !IsScenarioFileName("a\"b"),
+          "paths and reserved names never reach the file system");
     CHECK(FormatCommandResult(7, "error", "challenge-active", "Finish\tit") == "AIMMOD_CORE_RESULT_1\t7\terror\tchallenge-active\tFinish%09it\n", "result line");
 }
 

@@ -192,7 +192,7 @@ sealed class WorkspaceHost : IAsyncDisposable
                 var request = await context.Request.ReadFromJsonAsync<GameCommandRequest>(context.RequestAborted);
                 if (request is null) return Results.BadRequest();
                 var capabilities = GameCommands.Capabilities(outputFolder);
-                var needed = request.Action == "load-scenario" ? "load" : "start";
+                var needed = request.Action is "load-scenario" or "refresh-scenarios" ? "load" : "start";
                 if (!capabilities.Contains(needed)) return Results.Json(new { error = "unsupported" }, statusCode: 409);
                 var (sequence, error) = gameCommands.Send(request);
                 return sequence is null ? Results.Json(new { error }, statusCode: 400) : Results.Json(new { sequence });
