@@ -1153,6 +1153,7 @@ static partial class MultiplayerChecks
         WriteText(Path.Combine(scenarios, "Synthetic Plain.sce"), "Name=Synthetic Plain\nMapName=synthetic_map.map\nTimelimit=60\n\n[Map Data]\n");
         WriteText(Path.Combine(game, "maps", "aimmod_de_dust2_csgo.json"), new string('x', 2048));
         File.WriteAllBytes(Path.Combine(game, "maps", "aimmod_de_dust2_csgo.preview.png"), [0x89, 0x50, 0x4E, 0x47, 1, 2, 3]);
+        File.WriteAllBytes(Path.Combine(game, "maps", "aimmod_de_dust2_csgo.workshop-thumb-16x9.jpg"), [0xFF, 0xD8, 0xFF, 1, 2, 3]);
         Check(MapPorts.Parse("AimMod - Office (CSS) - Sprint") == ("Office", "CSS", "Sprint") && MapPorts.Parse("AimMod - Office (Quake) - Sprint") is null && MapPorts.Parse("Synthetic Plain") is null, "Port names follow naming.py");
         var library = new ContentLibrary(game);
         var catalog = new[] { new WorkshopItem("3333000002", "AimMod - Mirage (CSGO) - CS Movement", 61_000_000, 0, false, false, false), new WorkshopItem("3333000003", "Not a port", 1, 0, false, false, false) };
@@ -1166,6 +1167,8 @@ static partial class MultiplayerChecks
         var dust = view.GetProperty("ports").EnumerateArray().First(p => p.GetProperty("display").GetString() == "Dust2");
         Check(view.GetProperty("source").GetString() == "simulation" && dust.GetProperty("preview").GetBoolean() && !dust.ToString().Contains(root, StringComparison.OrdinalIgnoreCase), "The Map Library view never shows local paths");
         Check(service.MapPreview(dust.GetProperty("key").GetString())!.EndsWith(".preview.png", StringComparison.Ordinal) && service.MapPreview("../../x") is null && service.MapPreview("000000000000") is null, "Only previews the library found are served");
+        Check(dust.GetProperty("thumb").GetBoolean() && service.MapThumb(dust.GetProperty("key").GetString())!.EndsWith(".workshop-thumb-16x9.jpg", StringComparison.Ordinal) && service.MapThumb("../../x") is null,
+            "The 16:9 Workshop thumbnail next to the map is served for the map select, by key only");
         Check(service.Act("map-load", J(new { key = dust.GetProperty("key").GetString() })).Ok, "Installed ports load through AimModCore");
         // A replay of a port this machine lacks: the same Workshop install, found by the scenario name.
         const string inferno = "AimMod - Inferno (CSGO) - CS Movement";

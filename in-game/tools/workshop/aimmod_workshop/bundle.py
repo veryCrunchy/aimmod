@@ -5,6 +5,9 @@ A bundle is a folder the user reviews and publishes; nothing here talks to Steam
     <out>/<scenario name>/
         content/<scenario>.sce      the Workshop item content (KovaaK's items hold one .sce;
                                     the map and the Shift ability are embedded in it)
+        content/<map>.workshop-thumb-16x9.jpg
+                                    the map's 16:9 thumbnail, when map-port made one: AimMod's
+                                    map select shows it on the map's card (KovaaK's ignores it)
         extras/maps/<map>.json      map-creator map and ability, for manual installs
         extras/Abilities/*.abilsprint
         preview.png                 Workshop preview, at most 1024 px and under 1 MB
@@ -185,6 +188,9 @@ def prepare(port_dir: str, out_dir: str, scenario: Optional[str] = None, source:
             shutil.rmtree(bundle)
         os.makedirs(os.path.join(bundle, "content"))
         shutil.copy2(sce_path, os.path.join(bundle, "content", os.path.basename(sce_path)))
+        thumb = files.get("workshop_thumb_16x9_jpg")
+        if thumb and os.path.exists(os.path.join(port_dir, thumb)):
+            shutil.copy2(os.path.join(port_dir, thumb), os.path.join(bundle, "content", os.path.basename(thumb)))
         for key, folder in (("map_json", "maps"), ("ability", "Abilities")):
             if key in files:
                 target = os.path.join(bundle, "content" if include_map_files else "extras", folder)

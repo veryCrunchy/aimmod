@@ -16,7 +16,7 @@ Output in `<dir>`:
 | `maps/aimmod_<mapid>_<game>.json` | `FPSAimTrainer/maps/` |
 | `Scenarios/AimMod - <Map> (<Game>) - <Variant>.sce` | `FPSAimTrainer/Saved/SaveGames/Scenarios/` |
 | `Abilities/CS Walk.abilsprint` (or `Quake Walk` / `Sprint`) | `FPSAimTrainer/Saved/SaveGames/Abilities/` |
-| `aimmod_<mapid>_<game>.workshop-thumb.png/.jpg` (1024²), `-16x9` (1920 x 1080) | not installed: Workshop thumbnails |
+| `aimmod_<mapid>_<game>.workshop-thumb.png/.jpg` (1024²), `-16x9` (1920 x 1080) | Workshop thumbnails; the `-16x9.jpg` ships in the Workshop item (aimmod-workshop) and AimMod's map select shows it, also when copied next to the map in `FPSAimTrainer/maps/` |
 | `aimmod_<mapid>_<game>.thumb-views.json` | not installed: camera views for AimModCore's `capture-thumbnail` |
 | `Capture/AimMod Capture - <file id>.sce` | install only to capture a thumbnail: the same map with no bots |
 | `aimmod_<mapid>_<game>.aimmod.json` | not installed: game-mode metadata for AimMod (see below) |
