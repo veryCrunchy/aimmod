@@ -158,6 +158,33 @@ namespace bridge
         return std::nullopt;
     }
 
+    std::optional<SpectatePrivacy> ParseSpectatePrivacy(std::string_view text)
+    {
+        if (text == "off") return SpectatePrivacy::Off;
+        if (text == "friends") return SpectatePrivacy::Friends;
+        if (text == "ask") return SpectatePrivacy::Ask;
+        return std::nullopt;
+    }
+
+    const char* SpectatePrivacyName(SpectatePrivacy p)
+    {
+        switch (p)
+        {
+        case SpectatePrivacy::Off: return "off";
+        case SpectatePrivacy::Ask: return "ask";
+        default: return "friends";
+        }
+    }
+
+    SpectateDecision DecideSpectate(SpectatePrivacy privacy, bool isFriend, std::size_t current)
+    {
+        using K = SpectateDecision::Kind;
+        if (privacy == SpectatePrivacy::Off) return {K::Reject, RejectCode::SpectateOff};
+        if (!isFriend) return {K::Reject, RejectCode::NotFriend};
+        if (current >= MaxDirectSpectators) return {K::Reject, RejectCode::SpectateFull};
+        return {privacy == SpectatePrivacy::Ask ? K::Ask : K::Accept, RejectCode::Declined};
+    }
+
     std::vector<std::uint8_t> Encode(const WireMessage& m)
     {
         std::vector<std::uint8_t> out = {'A', 'M', 'P', '1', WireVersion, static_cast<std::uint8_t>(m.type), 0, 0};
@@ -188,6 +215,24 @@ namespace bridge
                 Put(out, bits, 4);
             }
             out.push_back(c.flags);
+            break;
+        }
+        case WireType::SpectateHello: out.push_back(m.rate); break;
+        case WireType::SpectateAccept: break;
+        case WireType::Score:
+        {
+            const ScoreFrame& s = m.score;
+            Put(out, s.origin, 8);
+            out.push_back(s.flags);
+            for (const float f : {s.score, s.seconds, s.remaining})
+            {
+                std::uint32_t bits = 0;
+                std::memcpy(&bits, &f, 4);
+                Put(out, bits, 4);
+            }
+            Put(out, s.shots, 4);
+            Put(out, s.hits, 4);
+            Put(out, s.kills, 4);
             break;
         }
         case WireType::CameraMeta:
@@ -305,6 +350,31 @@ namespace bridge
             }
             if (c.fov <= 1 || c.fov >= 179) return std::nullopt;
             c.flags = body[48];
+            break;
+        }
+        case WireType::SpectateHello:
+            if (n != 1 || body[0] < 1 || body[0] > MaxSpectateRate) return std::nullopt;
+            m.rate = body[0];
+            break;
+        case WireType::SpectateAccept:
+            if (n != 0) return std::nullopt;
+            break;
+        case WireType::Score:
+        {
+            if (n != 8 + 1 + 12 + 12) return std::nullopt;
+            ScoreFrame& s = m.score;
+            s.origin = Get(body, 8);
+            s.flags = body[8];
+            float* fields[] = {&s.score, &s.seconds, &s.remaining};
+            for (int i = 0; i < 3; ++i)
+            {
+                const auto bits = static_cast<std::uint32_t>(Get(body + 9 + 4 * i, 4));
+                std::memcpy(fields[i], &bits, 4);
+                if (!std::isfinite(*fields[i]) || std::fabs(*fields[i]) > 1e9f) return std::nullopt;
+            }
+            s.shots = static_cast<std::uint32_t>(Get(body + 21, 4));
+            s.hits = static_cast<std::uint32_t>(Get(body + 25, 4));
+            s.kills = static_cast<std::uint32_t>(Get(body + 29, 4));
             break;
         }
         case WireType::CameraMeta:

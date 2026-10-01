@@ -1,5 +1,7 @@
 #include "PoseFile.hpp"
 
+#include "Json.hpp"
+
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -180,5 +182,26 @@ namespace bridge::posefile
             out += '\n';
         }
         return out;
+    }
+    std::optional<ScoreFrame> ScoreFromLiveOverlay(std::string_view text)
+    {
+        const auto doc = json::Parse(text, json::Limits{8192, 3, 512, 64});
+        if (!doc || !doc->IsObject() || doc->Int("version") != 1) return std::nullopt;
+        ScoreFrame s;
+        if (doc->Bool("active").value_or(false)) s.flags |= 1;
+        if (doc->Bool("paused").value_or(false)) s.flags |= 2;
+        auto num = [&](const char* key, float& out) {
+            if (const auto v = doc->Num(key); v && std::isfinite(*v) && std::fabs(*v) < 1e9) out = static_cast<float>(*v);
+        };
+        auto count = [&](const char* key, std::uint32_t& out) {
+            if (const auto v = doc->Num(key); v && *v >= 0 && *v < 4e9) out = static_cast<std::uint32_t>(*v);
+        };
+        num("score", s.score);
+        num("seconds", s.seconds);
+        num("remainingSeconds", s.remaining);
+        count("shots", s.shots);
+        count("hits", s.hits);
+        count("kills", s.kills);
+        return s;
     }
 } // namespace bridge::posefile

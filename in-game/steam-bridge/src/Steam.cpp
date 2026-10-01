@@ -66,6 +66,7 @@ namespace bridge
         Bind(module, F_GetFriendRichPresence, "SteamAPI_ISteamFriends_GetFriendRichPresence", missing);
         Bind(module, F_RequestFriendRichPresence, "SteamAPI_ISteamFriends_RequestFriendRichPresence", missing);
         Bind(module, F_ActivateGameOverlayInviteDialog, "SteamAPI_ISteamFriends_ActivateGameOverlayInviteDialog", missing);
+        Bind(module, F_GetFriendRelationship, "SteamAPI_ISteamFriends_GetFriendRelationship", missing);
         Bind(module, UGC_SubscribeItem, "SteamAPI_ISteamUGC_SubscribeItem", missing);
         Bind(module, UGC_GetItemState, "SteamAPI_ISteamUGC_GetItemState", missing);
         Bind(module, UGC_GetItemInstallInfo, "SteamAPI_ISteamUGC_GetItemInstallInfo", missing);

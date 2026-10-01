@@ -240,6 +240,39 @@ int main()
         auto bf = Encode(badFov);
         Check(!Decode(bf.data(), bf.size()), "rejects an impossible field of view");
 
+        // Lobby-less spectating
+        WireMessage hello2{WireType::SpectateHello};
+        hello2.rate = 60;
+        auto h2 = Encode(hello2);
+        auto h2d = Decode(h2.data(), h2.size());
+        Check(h2d && h2d->type == WireType::SpectateHello && h2d->rate == 60 && h2.size() == WireHeader + 1, "spectate hello round-trips");
+        h2.back() = 0;
+        Check(!Decode(h2.data(), h2.size()), "rejects a spectate hello with rate 0");
+        WireMessage accept{WireType::SpectateAccept};
+        auto ac = Encode(accept);
+        Check(Decode(ac.data(), ac.size()).has_value() && ac.size() == WireHeader, "spectate accept round-trips");
+        WireMessage refuse{WireType::Reject};
+        refuse.code = static_cast<std::uint16_t>(RejectCode::NotFriend);
+        auto rf = Encode(refuse);
+        auto rfd = Decode(rf.data(), rf.size());
+        Check(rfd && rfd->code == 8, "spectate refusals use the reject codes");
+        WireMessage score{WireType::Score};
+        score.score.origin = Person;
+        score.score.flags = 1;
+        score.score.score = 1234.5f;
+        score.score.seconds = 30;
+        score.score.remaining = 30;
+        score.score.shots = 100;
+        score.score.hits = 87;
+        auto sc = Encode(score);
+        auto scd = Decode(sc.data(), sc.size());
+        Check(scd && scd->score.origin == Person && scd->score.score == 1234.5f && scd->score.hits == 87 && scd->score.kills == 0xFFFFFFFFu,
+              "score frame round-trips (unknown kills stay unknown)");
+        WireMessage nanScore = score;
+        nanScore.score.score = std::numeric_limits<float>::infinity();
+        auto ns = Encode(nanScore);
+        Check(!Decode(ns.data(), ns.size()), "rejects non-finite scores");
+
         // Ghost demo pose
         WireMessage pose{WireType::Pose};
         pose.pose.origin = Person;
@@ -334,11 +367,30 @@ int main()
         Check(!Parse("AIMMOD_POSE_1\t1\nmeta\ta\tb\t1\npose\t5\t0\t0\t0\t0\t0\t0\t90\npose\t5\t0\t0\t0\t0\t0\t0\t90\n"), "rejects non-increasing times");
         Check(!Parse("AIMMOD_POSE_1\t1\nmeta\ta\tb\t1\npose\t5\t0\t0\t0\t0\t0\t0\t0\n"), "rejects an impossible field of view");
         Check(!Parse("AIMMOD_POSE_1\t1\nmeta\ta\tb\t1\n"), "rejects a file without poses");
+        auto live = ScoreFromLiveOverlay(R"({"version":1,"active":true,"paused":false,"scenario":"x","score":512.5,"seconds":12,"shots":40,"hits":30,"remainingSeconds":48})");
+        Check(live && (live->flags & 1) && live->score == 512.5f && live->hits == 30 && live->remaining == 48 && live->kills == 0xFFFFFFFFu,
+              "reads live-overlay.json into a score frame");
+        auto idle = ScoreFromLiveOverlay(R"({"version":1,"active":false,"paused":true})");
+        Check(idle && idle->flags == 2 && idle->score == -1, "an idle overlay has no score");
+        Check(!ScoreFromLiveOverlay(R"({"version":2})") && !ScoreFromLiveOverlay("nope"), "rejects other overlay versions");
         File many;
         many.sequence = 1;
         for (int i = 0; i < 100; ++i) many.rows.push_back(Row{1000 + i, {0, 0, 0, 0, 0, 0, 90}});
         auto capped = Parse(Format(many));
         Check(capped && capped->rows.size() == MaxRows && capped->rows.back().ms == 1099, "writes at most the newest 64 rows");
+    }
+    // Lobby-less spectate decisions
+    {
+        using K = SpectateDecision::Kind;
+        Check(DecideSpectate(SpectatePrivacy::Friends, true, 0).kind == K::Accept, "friends mode accepts a friend");
+        Check(DecideSpectate(SpectatePrivacy::Ask, true, 0).kind == K::Ask, "ask mode asks");
+        auto off = DecideSpectate(SpectatePrivacy::Off, true, 0);
+        Check(off.kind == K::Reject && off.reason == RejectCode::SpectateOff, "off refuses");
+        auto stranger = DecideSpectate(SpectatePrivacy::Friends, false, 0);
+        Check(stranger.kind == K::Reject && stranger.reason == RejectCode::NotFriend, "non-friends are refused");
+        auto full = DecideSpectate(SpectatePrivacy::Friends, true, MaxDirectSpectators);
+        Check(full.kind == K::Reject && full.reason == RejectCode::SpectateFull, "the spectator cap holds");
+        Check(ParseSpectatePrivacy("ask") == SpectatePrivacy::Ask && !ParseSpectatePrivacy("public"), "parses the privacy setting");
     }
     std::printf("%d/%d checks passed\n", checks - failures, checks);
     return failures == 0 ? 0 : 1;

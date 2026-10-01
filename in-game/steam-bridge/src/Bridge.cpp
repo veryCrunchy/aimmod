@@ -104,7 +104,23 @@ namespace bridge
             {"presence.privacy", {"hideScenario"}},
             {"spectate.start", {"peer", "rate"}},
             {"spectate.stop", {}},
+            {"spectate.request", {"peer", "rate"}},
+            {"spectate.answer", {"peer", "allow"}},
+            {"spectate.privacy", {"mode"}},
+            {"spectate.remove", {"peer"}},
         };
+
+        const char* RejectReason(std::uint16_t code)
+        {
+            switch (static_cast<RejectCode>(code))
+            {
+            case RejectCode::SpectateOff: return "off";
+            case RejectCode::SpectateFull: return "full";
+            case RejectCode::NotFriend: return "not-friend";
+            case RejectCode::Declined: return "declined";
+            default: return "refused";
+            }
+        }
 
         const char* XferReason(std::uint16_t code)
         {
@@ -184,6 +200,7 @@ namespace bridge
 
         m_steam.F_SetRichPresence(m_steam.friends, "aimmod", std::to_string(ContractVersion).c_str());
         m_hideScenario = m_options.hideScenario;
+        m_spectatePrivacy = m_options.spectatePrivacy;
         LoadLast();
 
         m_pipe = std::make_unique<PipeServer>(
@@ -247,6 +264,11 @@ namespace bridge
             return;
         }
         if (m_lobby) LeaveLobby("shutdown");
+        {
+            std::vector<std::uint64_t> direct;
+            for (const auto& [peer, _] : m_direct) direct.push_back(peer);
+            for (const auto peer : direct) CloseDirect(peer, "shutdown");
+        }
         CloseListen();
         m_steam.F_ClearRichPresence(m_steam.friends);
         m_log("stopped; lobby left and rich presence cleared");
@@ -272,12 +294,12 @@ namespace bridge
         PollUgc();
         if (m_options.ghostDemo && m_pendingJoin && !m_lobby && m_calls.empty() && !(m_pipe && m_pipe->Connected()))
             AutoJoin(m_pendingJoin->lobby, m_pendingJoin->source.c_str());
-        if (m_lobby)
-        {
-            PollLobby(false);
-            PollConnections();
-            ReceiveAll();
-        }
+        if (m_lobby) PollLobby(false);
+        PollConnections(); // also times out lobby-less handshakes
+        ReceiveAll();
+        EnsureListen();
+        PollDirect();
+        ReceiveDirect();
         if (m_options.ghostDemo) GhostTick();
         if (Clock::now() >= m_nextScene)
         {
@@ -375,7 +397,11 @@ namespace bridge
             // Incoming connection on our listen socket.
             if (m_listen && e.m_info.m_hListenSocket == m_listen && e.m_info.m_eState == steamabi::k_EConnState_Connecting && !FindConnByHandle(e.m_hConn))
             {
-                if (!IsHost() || !IsIndividualId(remote) || m_banned.count(remote) || FindConn(remote))
+                std::size_t pending = 0;
+                for (const auto& [_, c] : m_conns)
+                    if (c.state != ConnState::Ready) ++pending;
+                // Lobby joiners (host only) and lobby-less spectators both arrive here; the first frame decides.
+                if (!IsIndividualId(remote) || m_banned.count(remote) || FindConn(remote) || m_direct.count(remote) || pending >= 16)
                 {
                     m_steam.sockets->CloseConnection(e.m_hConn, 5001, "aimmod: refused", false);
                     return;
@@ -392,7 +418,17 @@ namespace bridge
             }
             // Our own connections closing.
             if (e.m_info.m_eState == steamabi::k_EConnState_ClosedByPeer || e.m_info.m_eState == steamabi::k_EConnState_ProblemDetectedLocally)
+            {
                 if (Conn* conn = FindConnByHandle(e.m_hConn)) CloseConn(conn->peer, false, "closed");
+                else
+                    for (auto& [p, c] : m_direct)
+                        if (c.handle == e.m_hConn)
+                        {
+                            const std::uint64_t who = p;
+                            CloseDirect(who, "closed");
+                            break;
+                        }
+            }
         }
     }
 
@@ -788,6 +824,119 @@ namespace bridge
             UpdateStatusPresence();
             Result(*id, true);
         }
+        else if (name == "spectate.stop" && m_watchingDirect)
+        {
+            CloseDirect(m_watching, "stopped");
+            Result(*id, true);
+        }
+        else if (name == "spectate.request")
+        {
+            const auto peer = peerArg("peer");
+            const auto r = c.Int("rate").value_or(MaxSpectateRate);
+            if (!peer || *peer == m_self || r < 1 || r > MaxSpectateRate)
+            {
+                Result(*id, false, "invalid", "peer must be a friend's SteamID64 and rate 1..60.");
+                return;
+            }
+            if (m_watchingDirect && m_watching == *peer)
+            {
+                Result(*id, true);
+                return;
+            }
+            if (m_watchingDirect) CloseDirect(m_watching, "switched");
+            else if (m_watching && m_lobby)
+            {
+                // Stop a lobby spectate first.
+                if (IsHost())
+                {
+                    m_spectators[m_watching].erase(m_self);
+                    UpdateSpectateRoute(m_watching);
+                }
+                else if (Conn* host = FindConn(m_owner); host && host->state == ConnState::Ready)
+                {
+                    WireMessage stop{WireType::SpectateSub};
+                    stop.lobby = m_watching;
+                    SendWire(*host, stop, true);
+                }
+            }
+            if (m_direct.count(*peer)) CloseDirect(*peer, "replaced");
+            steamabi::SteamNetworkingIdentity identity{};
+            identity.m_eType = 16;
+            identity.m_cbSize = sizeof(std::uint64_t);
+            identity.m_steamID64 = *peer;
+            const auto relayOnly = RelayOnly();
+            const HSteamNetConnection handle = m_steam.sockets->ConnectP2P(identity, AimModVirtualPort, 1, &relayOnly);
+            if (!handle)
+            {
+                Result(*id, false, "steam", "Steam could not open a connection.");
+                return;
+            }
+            Conn conn;
+            conn.peer = *peer;
+            conn.handle = handle;
+            conn.outgoing = true;
+            conn.role = Conn::Role::Watched;
+            conn.rate = static_cast<int>(r);
+            conn.state = ConnState::Connecting;
+            conn.deadline = Clock::now() + 45s; // covers an ask on the other side
+            m_direct[*peer] = conn;
+            ResetSpectator();
+            m_watching = *peer;
+            m_watchingDirect = true;
+            m_watchRate = static_cast<int>(r);
+            m_log("spectate request sent to " + Redact(*peer));
+            Result(*id, true);
+        }
+        else if (name == "spectate.answer")
+        {
+            const auto peer = peerArg("peer");
+            const auto allow = c.Bool("allow");
+            const auto it = peer ? m_direct.find(*peer) : m_direct.end();
+            if (!allow || it == m_direct.end() || !it->second.asked)
+            {
+                Result(*id, false, "invalid", "No pending spectate request from that peer.");
+                return;
+            }
+            std::size_t watchers = 0;
+            for (const auto& [_, w] : m_direct)
+                if (w.role == Conn::Role::Watcher && w.state == ConnState::Ready) ++watchers;
+            if (*allow && watchers < MaxDirectSpectators) AcceptWatcher(*peer);
+            else RefuseWatcher(*peer, *allow ? RejectCode::SpectateFull : RejectCode::Declined);
+            Result(*id, true);
+        }
+        else if (name == "spectate.privacy")
+        {
+            const auto mode = ParseSpectatePrivacy(c.Str("mode", 16).value_or(""));
+            if (!mode)
+            {
+                Result(*id, false, "invalid", "mode must be friends, ask or off.");
+                return;
+            }
+            m_spectatePrivacy = *mode;
+            if (*mode == SpectatePrivacy::Off)
+            {
+                std::vector<std::uint64_t> watchers;
+                for (const auto& [p, w] : m_direct)
+                    if (w.role == Conn::Role::Watcher) watchers.push_back(p);
+                for (const auto p : watchers) CloseDirect(p, "privacy");
+            }
+            EnsureListen();
+            UpdateStatusPresence();
+            m_log(std::string("spectate privacy: ") + SpectatePrivacyName(*mode));
+            Result(*id, true);
+        }
+        else if (name == "spectate.remove")
+        {
+            const auto peer = peerArg("peer");
+            const auto it = peer ? m_direct.find(*peer) : m_direct.end();
+            if (it == m_direct.end() || it->second.role != Conn::Role::Watcher)
+            {
+                Result(*id, false, "invalid", "That peer isn't spectating you.");
+                return;
+            }
+            CloseDirect(*peer, "removed");
+            Result(*id, true);
+        }
         else if (name == "spectate.start" || name == "spectate.stop")
         {
             if (!requireLobby()) return;
@@ -1025,15 +1174,15 @@ namespace bridge
     {
         if (!m_lobby) return;
         CloseAllConns("left");
-        CloseListen();
         m_steam.MM_LeaveLobby(m_steam.mm, m_lobby);
         const std::uint64_t left = m_lobby;
         const std::string why = reason;
         if (why == "left" || why == "kicked" || why == "switching lobby") ClearLast(); // closed/shutdown keep it for lobby.rejoin
         m_spectators.clear();
         m_cameraRate = 0;
-        m_watching = 0;
+        if (!m_watchingDirect) m_watching = 0;
         m_lobby = m_owner = m_token = 0;
+        EnsureListen();
         m_members.clear();
         m_data.clear();
         m_banned.clear();
@@ -1142,8 +1291,8 @@ namespace bridge
         }
         else
         {
-            CloseListen();
             CloseAllConns("host changed");
+            EnsureListen(); // still listening when spectating is allowed
             m_nextConnect = Clock::now();
         }
     }
@@ -1319,7 +1468,38 @@ namespace bridge
             if (!conn.outgoing)
             {
                 // Host side: Hello bound to this lobby, its token and membership.
+                if (m.type == WireType::SpectateHello)
+                {
+                    // Lobby-less spectator: move the link to m_direct (the handle stays open).
+                    Conn moved = conn;
+                    m_conns.erase(peer);
+                    moved.role = Conn::Role::Watcher;
+                    moved.rate = m.rate;
+                    moved.deadline = Clock::now() + 30s;
+                    m_direct[peer] = moved;
+                    const bool isFriend = m_steam.F_GetFriendRelationship(m_steam.friends, peer) == 3;
+                    std::size_t watchers = 0;
+                    for (const auto& [_, c] : m_direct)
+                        if (c.role == Conn::Role::Watcher && c.state == ConnState::Ready) ++watchers;
+                    const auto decision = DecideSpectate(m_spectatePrivacy, isFriend, watchers);
+                    if (decision.kind == SpectateDecision::Kind::Accept) AcceptWatcher(peer);
+                    else if (decision.kind == SpectateDecision::Kind::Ask)
+                    {
+                        m_direct[peer].asked = true;
+                        m_log("spectate request from " + Redact(peer) + "; asking");
+                        Emit(json::Object().Int("v", ContractVersion).Str("ev", "spectate.asked").Str("from", Id(peer)).Str("fromName", Name(peer)).Done());
+                    }
+                    else RefuseWatcher(peer, decision.reason);
+                    return;
+                }
                 if (m.type != WireType::Hello) return CloseConn(peer, false, "no hello");
+                if (!IsHost())
+                {
+                    WireMessage notHost{WireType::Reject};
+                    notHost.code = static_cast<std::uint16_t>(RejectCode::NotHost);
+                    SendWire(conn, notHost, true);
+                    return CloseConn(peer, false, "not host", true);
+                }
                 WireMessage reply{WireType::Reject};
                 if (m.lobby != m_lobby || m.token != m_token) reply.code = static_cast<std::uint16_t>(RejectCode::BadToken);
                 else if (m_banned.count(peer)) reply.code = static_cast<std::uint16_t>(RejectCode::Banned);
@@ -1447,6 +1627,21 @@ namespace bridge
             }
             else if (conn.outgoing && peer == m_owner && m.camera.origin == m_watching)
                 OnSpectateFrame(m.camera);
+            break;
+        case WireType::Score:
+            if (!conn.outgoing && IsHost())
+            {
+                if (m.score.origin != peer) break;
+                const auto it = m_spectators.find(peer);
+                if (it == m_spectators.end()) break;
+                for (const auto& [spectator, _] : it->second)
+                {
+                    if (spectator == m_self) EmitScore(m.score);
+                    else if (Conn* s = FindConn(spectator); s && s->state == ConnState::Ready) SendWire(*s, m, false);
+                }
+            }
+            else if (conn.outgoing && peer == m_owner && m.score.origin == m_watching)
+                EmitScore(m.score);
             break;
         case WireType::CameraMeta:
             if (!conn.outgoing && IsHost())
@@ -1648,6 +1843,7 @@ namespace bridge
             .Raw("features", R"(["lobby","p2p","ugc","xfer"])")
             .Int("maxChunk", static_cast<std::int64_t>(MaxChunk))
             .Int("xferWindow", static_cast<std::int64_t>(XferWindow));
+        o.Str("spectatePrivacy", SpectatePrivacyName(m_spectatePrivacy));
         if (m_last && !m_lobby)
         {
             const std::int64_t age = static_cast<std::int64_t>(std::time(nullptr)) - m_last->at;
@@ -1740,6 +1936,10 @@ namespace bridge
                 };
                 const std::string state = rp("aimmod_state");
                 if (!state.empty()) o.Str("aimmodState", state);
+                const std::string spectatable = rp("aimmod_spectatable");
+                o.Bool("spectatable", spectatable == "friends" || spectatable == "ask");
+                if (spectatable == "ask") o.Bool("spectateAsks", true);
+                o.Int("spectators", std::atoi(rp("aimmod_spectators").c_str()));
                 if (const std::string scenario = rp("aimmod_scenario"); !scenario.empty()) o.Str("scenario", scenario);
                 // aimmod_lobby = "<members>/<max>/<j|-">
                 const std::string lobby = rp("aimmod_lobby");
@@ -2025,6 +2225,18 @@ namespace bridge
         m_rpState = state;
         m_rpScenario = scenario;
         m_rpLobby = lobby;
+        std::size_t watchers = 0;
+        for (const auto& [_, c] : m_direct)
+            if (c.role == Conn::Role::Watcher && c.state == ConnState::Ready) ++watchers;
+        const std::string spectatable = m_spectatePrivacy != SpectatePrivacy::Off ? SpectatePrivacyName(m_spectatePrivacy) : "";
+        const std::string spectators = watchers ? std::to_string(watchers) : std::string();
+        const std::string spectating = m_options.showSpectating && m_watching ? Id(m_watching) : std::string();
+        if (spectatable != m_rpSpectatable) m_steam.F_SetRichPresence(m_steam.friends, "aimmod_spectatable", spectatable.c_str());
+        if (spectators != m_rpSpectators) m_steam.F_SetRichPresence(m_steam.friends, "aimmod_spectators", spectators.c_str());
+        if (spectating != m_rpSpectating) m_steam.F_SetRichPresence(m_steam.friends, "aimmod_spectating", spectating.c_str());
+        m_rpSpectatable = spectatable;
+        m_rpSpectators = spectators;
+        m_rpSpectating = spectating;
     }
 
     // --- spectate ---------------------------------------------------------
@@ -2116,9 +2328,11 @@ namespace bridge
 
     void Bridge::SendCamera()
     {
-        const int rate = m_cameraRate.load();
+        int rate = m_lobby ? m_cameraRate.load() : 0;
+        for (const auto& [_, c] : m_direct)
+            if (c.role == Conn::Role::Watcher && c.state == ConnState::Ready) rate = std::max(rate, c.rate);
         const auto now = Clock::now();
-        if (!m_lobby || rate <= 0) return;
+        if (rate <= 0) return;
         const std::filesystem::path dir = m_options.stateDir;
         // Keep AimModCore publishing self-pose.tsv while someone watches us.
         if (!m_options.stateDir.empty() && now >= m_nextRequestTouch)
@@ -2164,16 +2378,13 @@ namespace bridge
                 frames.push_back(*local);
             }
         }
-        std::vector<Conn*> targets;
-        if (IsHost())
-        {
-            if (const auto it = m_spectators.find(m_self); it != m_spectators.end())
-                for (const auto& [spectator, _] : it->second)
-                    if (Conn* s = FindConn(spectator); s && s->state == ConnState::Ready) targets.push_back(s);
-        }
-        else if (Conn* host = FindConn(m_owner); host && host->state == ConnState::Ready)
-            targets.push_back(host);
+        const std::vector<Conn*> targets = CameraTargets();
         if (targets.empty()) return;
+        if (now >= m_nextScore)
+        {
+            m_nextScore = now + 250ms;
+            SendScore(targets);
+        }
         if (now >= m_nextMetaSend)
         {
             m_nextMetaSend = now + 1s;
@@ -2244,6 +2455,246 @@ namespace bridge
                  .Num("fov", c.fov)
                  .Bool("fired", (c.flags & 1) != 0)
                  .Done());
+    }
+    // --- lobby-less spectating --------------------------------------------
+
+    void Bridge::EnsureListen()
+    {
+        const bool want = IsHost() || m_spectatePrivacy != SpectatePrivacy::Off;
+        if (!want)
+        {
+            CloseListen();
+            return;
+        }
+        if (m_listen || Clock::now() < m_nextListenTry) return;
+        m_nextListenTry = Clock::now() + 5s;
+        OpenListen();
+    }
+
+    std::vector<Bridge::Conn*> Bridge::CameraTargets()
+    {
+        std::vector<Conn*> out;
+        if (m_lobby && m_cameraRate.load() > 0)
+        {
+            if (IsHost())
+            {
+                if (const auto it = m_spectators.find(m_self); it != m_spectators.end())
+                    for (const auto& [spectator, _] : it->second)
+                        if (Conn* s = FindConn(spectator); s && s->state == ConnState::Ready) out.push_back(s);
+            }
+            else if (Conn* host = FindConn(m_owner); host && host->state == ConnState::Ready)
+                out.push_back(host);
+        }
+        for (auto& [_, c] : m_direct)
+            if (c.role == Conn::Role::Watcher && c.state == ConnState::Ready) out.push_back(&c);
+        return out;
+    }
+
+    void Bridge::SendScore(const std::vector<Conn*>& targets)
+    {
+        if (m_options.stateDir.empty()) return;
+        const auto text = ReadFresh(std::filesystem::path(m_options.stateDir) / L"live-overlay.json");
+        const auto score = text ? posefile::ScoreFromLiveOverlay(*text) : std::nullopt;
+        if (!score) return;
+        WireMessage m{WireType::Score};
+        m.score = *score;
+        m.score.origin = m_self;
+        for (Conn* c : targets) SendWire(*c, m, false);
+    }
+
+    void Bridge::EmitScore(const ScoreFrame& s)
+    {
+        json::Object o;
+        o.Int("v", ContractVersion).Str("ev", "spectate.score").Str("peer", Id(s.origin)).Bool("active", (s.flags & 1) != 0).Bool("paused", (s.flags & 2) != 0);
+        if (s.score >= -1e8f && s.score != -1) o.Num("score", s.score);
+        if (s.seconds >= 0) o.Num("seconds", s.seconds);
+        if (s.remaining >= 0) o.Num("remainingSeconds", s.remaining);
+        if (s.shots != 0xFFFFFFFFu) o.Int("shots", s.shots);
+        if (s.hits != 0xFFFFFFFFu) o.Int("hits", s.hits);
+        if (s.kills != 0xFFFFFFFFu) o.Int("kills", s.kills);
+        if (s.shots != 0xFFFFFFFFu && s.hits != 0xFFFFFFFFu && s.shots > 0) o.Num("accuracy", static_cast<double>(s.hits) / s.shots);
+        Emit(o.Done());
+    }
+
+    void Bridge::EmitSpectators()
+    {
+        std::vector<std::string> list;
+        int count = 0;
+        for (const auto& [peer, c] : m_direct)
+            if (c.role == Conn::Role::Watcher && c.state == ConnState::Ready)
+            {
+                ++count;
+                const std::string name = Name(peer);
+                list.push_back(json::Object().Str("peer", Id(peer)).Str("name", name).Str("initials", Initials(name)).Done());
+            }
+        m_directWatchers = count;
+        Emit(json::Object().Int("v", ContractVersion).Str("ev", "spectators").Raw("spectators", json::Array(list)).Done());
+        UpdateStatusPresence();
+    }
+
+    void Bridge::AcceptWatcher(std::uint64_t peer)
+    {
+        auto it = m_direct.find(peer);
+        if (it == m_direct.end()) return;
+        Conn& c = it->second;
+        SendWire(c, WireMessage{WireType::SpectateAccept}, true);
+        c.state = ConnState::Ready;
+        c.asked = false;
+        const int priorities[2] = {0, 1};
+        const std::uint16_t weights[2] = {1, 1};
+        c.lanes = m_steam.sockets->ConfigureConnectionLanes(c.handle, 2, priorities, weights) == 1;
+        m_nextMetaSend = Clock::now(); // send the scenario/map line right away
+        m_log("spectator joined: " + Redact(peer));
+        Emit(json::Object().Int("v", ContractVersion).Str("ev", "spectator.joined").Str("peer", Id(peer)).Str("name", Name(peer)).Done());
+        EmitSpectators();
+    }
+
+    void Bridge::RefuseWatcher(std::uint64_t peer, RejectCode code)
+    {
+        auto it = m_direct.find(peer);
+        if (it == m_direct.end()) return;
+        WireMessage reject{WireType::Reject};
+        reject.code = static_cast<std::uint16_t>(code);
+        SendWire(it->second, reject, true);
+        m_steam.sockets->CloseConnection(it->second.handle, 0, "aimmod spectate refused", true);
+        m_direct.erase(it);
+        m_log("spectate request from " + Redact(peer) + " refused (" + RejectReason(static_cast<std::uint16_t>(code)) + ")");
+    }
+
+    void Bridge::CloseDirect(std::uint64_t peer, const char* reason)
+    {
+        const auto it = m_direct.find(peer);
+        if (it == m_direct.end()) return;
+        const Conn c = it->second;
+        m_direct.erase(it);
+        if (c.state == ConnState::Ready) SendWire(const_cast<Conn&>(c), WireMessage{WireType::Bye}, true);
+        m_steam.sockets->CloseConnection(c.handle, 0, "aimmod spectate", true);
+        if (c.role == Conn::Role::Watcher && c.state == ConnState::Ready)
+        {
+            m_log("spectator left: " + Redact(peer) + " (" + reason + ")");
+            Emit(json::Object().Int("v", ContractVersion).Str("ev", "spectator.left").Str("peer", Id(peer)).Str("reason", reason).Done());
+            EmitSpectators();
+        }
+        else if (c.role == Conn::Role::Watched)
+        {
+            if (m_watchingDirect && m_watching == peer)
+            {
+                m_watching = 0;
+                m_watchingDirect = false;
+                ResetSpectator();
+            }
+            m_log("spectating " + Redact(peer) + " ended (" + reason + ")");
+            Emit(json::Object().Int("v", ContractVersion).Str("ev", "spectate.ended").Str("peer", Id(peer)).Str("reason", reason).Done());
+            UpdateStatusPresence();
+        }
+    }
+
+    void Bridge::PollDirect()
+    {
+        const auto now = Clock::now();
+        std::vector<std::pair<std::uint64_t, const char*>> close;
+        std::vector<std::uint64_t> declined;
+        for (auto& [peer, c] : m_direct)
+        {
+            if (c.state != ConnState::Ready && now >= c.deadline)
+            {
+                if (c.role == Conn::Role::Watcher && c.asked) declined.push_back(peer);
+                else close.emplace_back(peer, c.role == Conn::Role::Watched && c.state == ConnState::Handshaking ? "no-answer" : "timeout");
+                continue;
+            }
+            if (c.role == Conn::Role::Watched && c.state == ConnState::Connecting)
+            {
+                steamabi::SteamNetConnectionInfo_t info{};
+                if (!m_steam.sockets->GetConnectionInfo(c.handle, &info))
+                {
+                    close.emplace_back(peer, "unreachable");
+                    continue;
+                }
+                if (info.m_eState == steamabi::k_EConnState_Connected)
+                {
+                    const bool authenticated = (info.m_nFlags & (steamabi::k_nConnFlags_Unauthenticated | steamabi::k_nConnFlags_Unencrypted)) == 0;
+                    if (!authenticated || info.m_identityRemote.m_steamID64 != peer)
+                    {
+                        close.emplace_back(peer, "identity");
+                        continue;
+                    }
+                    WireMessage hello{WireType::SpectateHello};
+                    hello.rate = static_cast<std::uint8_t>(c.rate);
+                    SendWire(c, hello, true);
+                    c.state = ConnState::Handshaking;
+                }
+                else if (info.m_eState == steamabi::k_EConnState_ClosedByPeer || info.m_eState == steamabi::k_EConnState_ProblemDetectedLocally)
+                    close.emplace_back(peer, "unreachable");
+            }
+        }
+        for (const auto peer : declined) RefuseWatcher(peer, RejectCode::Declined);
+        for (const auto& [peer, reason] : close) CloseDirect(peer, reason);
+    }
+
+    void Bridge::ReceiveDirect()
+    {
+        std::vector<std::uint64_t> peers;
+        for (const auto& [peer, _] : m_direct) peers.push_back(peer);
+        for (const auto peer : peers)
+        {
+            for (int batch = 0; batch < 4; ++batch)
+            {
+                const auto it = m_direct.find(peer);
+                if (it == m_direct.end()) break;
+                steamabi::SteamNetworkingMessage_t* messages[16]{};
+                const int n = m_steam.sockets->ReceiveMessagesOnConnection(it->second.handle, messages, 16);
+                if (n <= 0) break;
+                for (int i = 0; i < n; ++i)
+                {
+                    auto* msg = messages[i];
+                    if (m_direct.count(peer) && msg->m_cbSize > 0)
+                    {
+                        const auto decoded = Decode(static_cast<const std::uint8_t*>(msg->m_pData), static_cast<std::size_t>(msg->m_cbSize));
+                        if (decoded) OnDirectWire(peer, *decoded);
+                        else CloseDirect(peer, "invalid frame");
+                    }
+                    msg->m_pfnRelease(msg);
+                }
+                if (n < 16) break;
+            }
+        }
+    }
+
+    void Bridge::OnDirectWire(std::uint64_t peer, const WireMessage& m)
+    {
+        const auto it = m_direct.find(peer);
+        if (it == m_direct.end()) return;
+        Conn& c = it->second;
+        if (m.type == WireType::Bye) return CloseDirect(peer, c.role == Conn::Role::Watcher ? "left" : "ended");
+        if (c.role == Conn::Role::Watcher) return; // spectators only listen
+        // We are the spectator.
+        if (c.state == ConnState::Handshaking)
+        {
+            if (m.type == WireType::SpectateAccept)
+            {
+                c.state = ConnState::Ready;
+                m_log("spectating " + Redact(peer));
+                Emit(json::Object().Int("v", ContractVersion).Str("ev", "spectate.started").Str("peer", Id(peer)).Str("name", Name(peer)).Bool("direct", true).Done());
+                UpdateStatusPresence();
+            }
+            else if (m.type == WireType::Reject)
+                CloseDirect(peer, RejectReason(m.code));
+            return;
+        }
+        if (c.state != ConnState::Ready || !m_watchingDirect || m_watching != peer) return;
+        switch (m.type)
+        {
+        case WireType::Camera:
+            if (m.camera.origin == peer) OnSpectateFrame(m.camera);
+            break;
+        case WireType::CameraMeta:
+            if (m.lobby == peer) m_spectate.scenario = m.scenario, m_spectate.map = m.map, m_spectate.scale = m.camera.fov;
+            break;
+        case WireType::Score:
+            if (m.score.origin == peer) EmitScore(m.score);
+            break;
+        default: break;
+        }
     }
     // --- ghost demo -------------------------------------------------------
 

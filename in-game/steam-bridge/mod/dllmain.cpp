@@ -123,6 +123,9 @@ public:
         const auto config = ReadConfig();
         m_ghostDemo = Flag(config, "ghost_demo", false);
         m_hideScenario = Flag(config, "hide_scenario", false);
+        m_showSpectating = Flag(config, "show_spectating", false);
+        if (auto it = config.find("spectate_privacy"); it != config.end())
+            if (auto p = bridge::ParseSpectatePrivacy(it->second)) m_spectatePrivacy = *p;
         m_ghostOptions.avatars = Flag(config, "avatars", true);
         m_ghostOptions.showRemote = m_ghostDemo;
         m_ghostOptions.avatarTest = Flag(config, "avatar_test", false);
@@ -183,6 +186,8 @@ private:
         options.scenePath = ScenePath();
         options.stateDir = std::filesystem::path(ScenePath()).parent_path().wstring();
         options.hideScenario = m_hideScenario;
+        options.spectatePrivacy = m_spectatePrivacy;
+        options.showSpectating = m_showSpectating;
         bridge->SetOptions(options);
         if (!bridge->Start(module, m_commandLine)) return;
         m_bridge = std::move(bridge);
@@ -236,6 +241,8 @@ private:
     std::unique_ptr<aimmod::GhostDemo> m_ghosts;
     bool m_ghostDemo = false;
     bool m_hideScenario = false;
+    bool m_showSpectating = false;
+    bridge::SpectatePrivacy m_spectatePrivacy = bridge::SpectatePrivacy::Friends;
     aimmod::GhostOptions m_ghostOptions;
     std::thread m_starter;
     std::atomic<bool> m_stop{false};

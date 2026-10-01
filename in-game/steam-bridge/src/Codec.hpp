@@ -71,7 +71,19 @@ namespace bridge
         SpectateSub = 13, // spectate: u64 target, u8 rate Hz (0 = stop)
         Camera = 14,      // spectate: u64 origin, u32 seq, i64 unix ms (sender clock), 7 x f32 (x y z pitch yaw roll fov), u8 flags
         CameraMeta = 15,  // spectate: u64 origin, f32 map scale, u8 n, scenario, u8 m, map name
+        SpectateHello = 16,  // lobby-less spectate request: u8 rate Hz (1..60)
+        SpectateAccept = 17, // no body
+        Score = 18,          // live score: u64 origin, u8 flags (1 active, 2 paused), 3 x f32 (score seconds remaining), 3 x u32 (shots hits kills); -1 / 0xFFFFFFFF = unknown
     };
+
+    struct ScoreFrame
+    {
+        std::uint64_t origin = 0;
+        std::uint8_t flags = 0;
+        float score = -1, seconds = -1, remaining = -1;
+        std::uint32_t shots = 0xFFFFFFFFu, hits = 0xFFFFFFFFu, kills = 0xFFFFFFFFu;
+    };
+    constexpr std::size_t MaxDirectSpectators = 8;
 
     constexpr int MaxSpectateRate = 60;
     struct CameraFrame
@@ -95,6 +107,10 @@ namespace bridge
         Banned = 3,
         Version = 4,
         NotHost = 5,
+        SpectateOff = 6,  // the target doesn't allow spectating
+        SpectateFull = 7, // too many spectators
+        NotFriend = 8,    // only Steam friends may spectate
+        Declined = 9,     // the target said no (or didn't answer)
     };
     constexpr std::size_t WireHeader = 8;
 
@@ -123,10 +139,21 @@ namespace bridge
         std::uint32_t transfer = 0, index = 0; // Chunk / ChunkAck / Cancel (code = reason)
         Pose pose;
         CameraFrame camera;
+        ScoreFrame score;
         std::string scenario, map; // CameraMeta (<= MaxPoseScene each); origin in lobby, scale in camera.fov
         std::uint8_t rate = 0; // SpectateSub (lobby/target reuse: lobby = target)
     };
     std::vector<std::uint8_t> Encode(const WireMessage& message);
     // Strict: exact sizes per type, version match, payload bounds.
     std::optional<WireMessage> Decode(const std::uint8_t* data, std::size_t size);
+    // Lobby-less spectating: what the watched player's bridge does with a request.
+    enum class SpectatePrivacy { Off, Friends, Ask };
+    std::optional<SpectatePrivacy> ParseSpectatePrivacy(std::string_view text); // off | friends | ask
+    const char* SpectatePrivacyName(SpectatePrivacy p);
+    struct SpectateDecision
+    {
+        enum class Kind { Accept, Ask, Reject } kind;
+        RejectCode reason = RejectCode::Declined;
+    };
+    SpectateDecision DecideSpectate(SpectatePrivacy privacy, bool isFriend, std::size_t current);
 } // namespace bridge

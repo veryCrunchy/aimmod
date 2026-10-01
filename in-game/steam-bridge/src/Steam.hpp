@@ -146,6 +146,7 @@ namespace bridge
         const char* (*F_GetFriendRichPresence)(std::intptr_t, std::uint64_t, const char*) = nullptr;
         void (*F_RequestFriendRichPresence)(std::intptr_t, std::uint64_t) = nullptr;
         void (*F_ActivateGameOverlayInviteDialog)(std::intptr_t, std::uint64_t) = nullptr;
+        int (*F_GetFriendRelationship)(std::intptr_t, std::uint64_t) = nullptr;
 
         // ISteamUGC (STEAMUGC_INTERFACE_VERSION014, the version the 1.47 flat exports wrap). Read and download only.
         steamabi::SteamAPICall_t (*UGC_SubscribeItem)(std::intptr_t, std::uint64_t) = nullptr;

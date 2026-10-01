@@ -1044,6 +1044,71 @@ accounts (for P2P).
   tests check that.
 - The sender reads the possessed pawn (`Controller.K2_GetPawn`, falling back
   to `MyCharacter`). It sends the actor location with Z, plus velocity.
+### Contract additions: spectating a friend without a lobby (still version 1)
+
+This is osu!-style spectating. Any friend running AimMod can be watched while
+they simply play KovaaK's, and the watched player sees who is watching.
+
+**Connection.**
+
+- The spectator's bridge opens a relay-only `ConnectP2P` (ICE off) to the
+  friend on the AimMod port and sends AMP1 `SpectateHello(rate)`. There's no
+  lobby or token.
+- The watched bridge listens whenever spectating is allowed or it hosts a
+  lobby. A link's first frame decides its kind: `Hello` (lobby join, host
+  only, otherwise `Reject NotHost`) or `SpectateHello`.
+- Pending handshakes are capped at 16 and time out after 10 s.
+
+**Decision on the watched side** (`DecideSpectate`, unit tested):
+
+- `Reject(SpectateOff)` when privacy is `off`.
+- `Reject(NotFriend)` unless `GetFriendRelationship == friend`.
+- `Reject(SpectateFull)` at 8 spectators.
+- Otherwise `friends` accepts (`SpectateAccept`). `ask` emits
+  `spectate.asked {from, fromName}` and waits up to 30 s for
+  `spectate.answer {peer, allow}`; no answer is `Declined`.
+
+**Streaming.**
+
+- One camera stream comes from AimModCore's `self-pose.tsv`, sent at the
+  highest rate any spectator asked for (≤ 60 Hz). It's fanned out to every
+  spectator and to lobby spectators.
+- Each spectator also gets `CameraMeta` (scenario, map, scale) every second.
+- A `Score` frame goes out every 250 ms from AimModCore's `live-overlay.json`:
+  active, paused, score, seconds, remaining, shots, hits, kills. It's sent
+  only while the file is fresh.
+- Bandwidth is about 3.4 KB/s per spectator at 60 Hz, at most 8 spectators.
+- The spectator writes `spectate-pose.tsv` exactly as in the lobby path.
+
+**Commands.**
+
+| Command | Fields | Notes |
+| --- | --- | --- |
+| `spectate.request` | `peer`, `rate` (1–60, default 60) | Watch a friend; replaces any current spectate (lobby or direct) |
+| `spectate.stop` | — | Ends the current spectate, direct or lobby |
+| `spectate.answer` | `peer`, `allow` | Answer for `ask` mode |
+| `spectate.privacy` | `mode` `friends`\|`ask`\|`off` | `off` also drops current spectators; default from `spectate_privacy` in `config.txt` |
+| `spectate.remove` | `peer` | Drop one spectator |
+
+**Events.**
+
+| Event | Fields |
+| --- | --- |
+| `spectate.started` | `peer`, `name`, `direct` (spectator side) |
+| `spectate.ended` | `peer`, `reason`: `off`, `not-friend`, `full`, `declined`, `refused`, `no-answer`, `timeout`, `unreachable`, `ended`, `stopped`, `switched`, `left`, `closed` or `shutdown` |
+| `spectate.score` | `peer`, `active`, `paused`, `score`?, `seconds`?, `remainingSeconds`?, `shots`?, `hits`?, `kills`?, `accuracy`? |
+| `spectate.asked` | `from`, `fromName` (watched side, `ask` mode) |
+| `spectator.joined` / `spectator.left` | `peer`, `name` / `peer`, `reason` |
+| `spectators` | `spectators` [{peer, name, initials}], sent on every change |
+
+**Presence.**
+
+- Rich presence `aimmod_spectatable` is `friends` or `ask`, and empty when
+  off.
+- `aimmod_spectators` is the current count.
+- `aimmod_spectating=<peer>` is only set with `show_spectating=1`.
+- `friends` entries carry `spectatable`, `spectateAsks` and `spectators`.
+- `ready` carries `spectatePrivacy`.
 ### Mapping to the service's `IMultiplayerTransport`
 
 This is the lobby UI agent's model on `feat/kovaaks-multiplayer-ui`

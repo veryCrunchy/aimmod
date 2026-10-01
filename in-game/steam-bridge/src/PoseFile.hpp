@@ -9,6 +9,8 @@
 // AimModCore writes self-pose.tsv (the local view) while self-pose.request
 // is fresh; the bridge writes spectate-pose.tsv (the watched player's view).
 
+#include "Codec.hpp"
+
 #include <array>
 #include <cstdint>
 #include <optional>
@@ -43,4 +45,7 @@ namespace bridge::posefile
     std::optional<std::string> Unescape(std::string_view text);  // strict %XX
     std::optional<File> Parse(std::string_view text);            // strict; rejects anything off-format
     std::string Format(const File& file);                        // LF-terminated lines
+
+    // AimModCore's live-overlay.json -> a Score frame (unknown fields stay unknown).
+    std::optional<ScoreFrame> ScoreFromLiveOverlay(std::string_view json);
 } // namespace bridge::posefile

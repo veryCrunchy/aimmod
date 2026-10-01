@@ -59,6 +59,8 @@ namespace bridge
             std::wstring scenePath; // AimModCore's core-scene.json
             std::wstring stateDir;  // where steam-last-lobby.json lives (KovaaksNative)
             bool hideScenario = false; // keep the scenario out of rich presence
+            SpectatePrivacy spectatePrivacy = SpectatePrivacy::Friends; // lobby-less spectating
+            bool showSpectating = false; // publish whom we spectate in rich presence
         };
         void SetOptions(Options options) { m_options = std::move(options); } // before Start
         struct GhostSample
@@ -74,7 +76,7 @@ namespace bridge
         // Thread-safe; called from the game thread.
         void SubmitLocalPose(const Pose& pose);
         void SubmitLocalCamera(const CameraFrame& camera);
-        bool CameraWanted() const { return m_cameraRate.load() > 0; }
+        bool CameraWanted() const { return m_cameraRate.load() > 0 || m_directWatchers.load() > 0; }
         std::vector<GhostPeer> Ghosts();
         std::string LocalScene();
         std::string LobbyValue(const std::string& key); // current lobby data, empty if unset
@@ -102,6 +104,10 @@ namespace bridge
             std::uint32_t pingSeq = 0;
             std::optional<int> rtt;
             bool lanes = false; // bulk chunks on a lower-priority lane
+            // Lobby-less spectating (kept in m_direct): Watcher = they watch us, Watched = we watch them.
+            enum class Role { Lobby, Watcher, Watched } role = Role::Lobby;
+            bool asked = false; // waiting for spectate.answer
+            int rate = 0;
         };
 
         struct Xfer
@@ -214,6 +220,20 @@ namespace bridge
         void WriteSpectatePose(bool force);
         void ResetSpectator();
 
+        // Lobby-less spectating
+        void EnsureListen();
+        void PollDirect();
+        void ReceiveDirect();
+        void OnDirectWire(std::uint64_t peer, const WireMessage& m);
+        void CloseDirect(std::uint64_t peer, const char* reason);
+        void AcceptWatcher(std::uint64_t peer);
+        void RefuseWatcher(std::uint64_t peer, RejectCode code);
+        void EmitSpectators();
+        void SendScore(const std::vector<Conn*>& targets);
+        void EmitScore(const ScoreFrame& s);
+        Clock::time_point m_nextListenTry{};
+        std::vector<Conn*> CameraTargets();
+
         // Ghost demo
         void GhostTick();
         void OnPose(Conn& conn, const Pose& pose);
@@ -292,6 +312,13 @@ namespace bridge
         std::optional<std::int64_t> m_spectateOffset; // local ms - sender ms
         bool m_spectateDirty = false;
         Clock::time_point m_nextSpectateWrite{};
+
+        std::map<std::uint64_t, Conn> m_direct; // lobby-less spectate links
+        SpectatePrivacy m_spectatePrivacy = SpectatePrivacy::Friends;
+        std::atomic<int> m_directWatchers{0};
+        bool m_watchingDirect = false;
+        Clock::time_point m_nextScore{};
+        std::string m_rpSpectatable, m_rpSpectators, m_rpSpectating;
 
         Options m_options;
         std::mutex m_ghostMutex; // guards the four members below
