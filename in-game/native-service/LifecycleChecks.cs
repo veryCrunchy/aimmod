@@ -318,6 +318,9 @@ static class LifecycleChecks
             Directory.CreateDirectory(settingsDir);
             var settings = new UpdateSettings(settingsDir);
             Check(settings.Current == new UpdatePreferences() && settings.FeedUrl(settings.Current).StartsWith("https://github.com/verycrunchy/aimmod/releases/download/aimmod-ingame-stable/aimmod-ingame-stable.json"), "defaults: on, stable, GitHub feed");
+            var freshDir = Path.Combine(temp, "settings-fresh");
+            Directory.CreateDirectory(freshDir);
+            Check(new UpdateSettings(freshDir, "beta").Current.Channel == "beta" && new UpdateSettings(freshDir, "stable").Current.Channel == "stable", "without saved settings the channel follows the installed package");
             Check(settings.ApplyJson("{\"channel\":\"beta\"}"u8.ToArray()) == new UpdatePreferences(true, "beta") && new UpdateSettings(settingsDir).Current.Channel == "beta", "channel saved");
             Check(settings.FeedUrl(settings.Current).EndsWith("aimmod-ingame-beta.json"), "beta feed");
             foreach (var bad in new[] { "{}", "[]", "{\"channel\":\"nightly\"}", "{\"autoUpdate\":1}", "{\"feedUrl\":\"https://x\"}", "{\"autoUpdate\":true,\"autoUpdate\":false}" })
@@ -325,6 +328,7 @@ static class LifecycleChecks
             File.WriteAllText(Path.Combine(settingsDir, "update-settings.json"), "{\"autoUpdate\":true,\"channel\":\"stable\",\"feedUrl\":\"http://insecure.invalid/{channel}.json\"}");
             Check(!new UpdateSettings(settingsDir).Current.AutoUpdate, "insecure feed override disables updates");
             File.WriteAllText(Path.Combine(settingsDir, "update-settings.json"), "{\"autoUpdate\":true,\"channel\":\"beta\",\"feedUrl\":\"https://hub.invalid/feeds/{channel}.json\"}");
+            Check(new UpdateSettings(settingsDir, "stable").Current.Channel == "beta", "a saved channel wins over the installed package");
             var hubSettings = new UpdateSettings(settingsDir);
             Check(hubSettings.FeedUrl(hubSettings.Current) == "https://hub.invalid/feeds/beta.json", "feed location is configurable");
 

@@ -45,7 +45,7 @@ sealed class Lifecycle : IAsyncDisposable
         this.gameRunning = gameRunning ?? InstallLayout.GameRunning;
         updatesRoot = Path.Combine(output, "updates");
         Directory.CreateDirectory(updatesRoot);
-        settings = new UpdateSettings(output);
+        settings = new UpdateSettings(output, CachedRelease()?.Channel);
         updater = new Updater(updatesRoot, handler);
         applier = new PackageApplier(updatesRoot, this.gameRunning);
     }
@@ -448,7 +448,7 @@ sealed class Lifecycle : IAsyncDisposable
         var applier = new PackageApplier(updatesRoot, running);
         if (applier.RecoverInterrupted()) log.Line("An interrupted install was undone.");
         var updater = new Updater(updatesRoot);
-        var prefs = new UpdateSettings(output).Current;
+        var prefs = new UpdateSettings(output, CachedRelease(output)?.Channel).Current;
         var requests = ReadJson<LifecycleRequests>(RequestsPath(updatesRoot)) ?? new();
         var staged = updater.Staged();
         if (staged is not null && (prefs.AutoUpdate || requests.Install) && requests.SkipVersion != staged.Version)
