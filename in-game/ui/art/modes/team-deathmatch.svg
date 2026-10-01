@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <g transform="rotate(-8 13.5 24)"><path d="M13.5 9L22.5 12.5V22C22.5 29.5 18.5 34.5 13.5 38C8.5 34.5 4.5 29.5 4.5 22V12.5Z"/><path class="soft" d="M13.5 16V30"/></g>
+  <g class="team" transform="rotate(8 34.5 24)"><path d="M34.5 9L43.5 12.5V22C43.5 29.5 39.5 34.5 34.5 38C29.5 34.5 25.5 29.5 25.5 22V12.5Z"/><path class="soft" d="M34.5 16V30"/></g>
+</svg>
