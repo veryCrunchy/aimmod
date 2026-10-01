@@ -72,7 +72,6 @@ namespace aimmod
         m_attach.BindPath(STR("/Script/Engine.SceneComponent:K2_AttachToComponent"), Shape::Command);
         m_relative.BindPath(STR("/Script/Engine.SceneComponent:K2_SetRelativeLocationAndRotation"), Shape::Command);
         m_scale.BindPath(STR("/Script/Engine.SceneComponent:SetRelativeScale3D"), Shape::Command);
-        m_destroyComponent.BindPath(STR("/Script/Engine.ActorComponent:K2_DestroyComponent"), Shape::Command);
         m_weaponMesh.BindPath(STR("/Script/GameSkillsTrainer.FPSPlayer_WeaponComponentActor:GetSelectWeaponMesh"), Shape::Object);
         m_armsMesh.BindPath(STR("/Script/GameSkillsTrainer.FPSPlayer_WeaponComponentActor:GetFPSPlayerSkeletalMeshComponent"), Shape::Object);
         m_weaponModel.BindPath(STR("/Script/GameSkillsTrainer.FPSPlayer_WeaponComponentActor:GetSelectedWeaponModelName"), Shape::Name);
@@ -128,7 +127,7 @@ namespace aimmod
         m_params.Bind();
         m_ready = missing.empty();
         m_accessories = m_ready && m_addComponent.ok() && m_setStaticMesh.ok() && m_setCollision.ok() && m_attach.ok() && m_relative.ok() && m_scale.ok() &&
-                        m_destroyComponent.ok() && m_staticMeshComponent;
+                        m_staticMeshComponent;
         if (!m_ready) Log("cosmetics: disabled; missing " + missing);
         else
             Log(std::string("cosmetics: bindings ready") + (m_accessories ? "" : " (no accessories)") +
@@ -430,20 +429,21 @@ namespace aimmod
         Once("worn|" + item.id, "attached " + item.id + (attached ? "" : " (attachment not confirmed)"));
     }
 
-    void Cosmetics::RemoveAccessories(const std::vector<WantAccessory>* keep)
+    void Cosmetics::HideAccessories(const std::vector<WantAccessory>* keep)
     {
         std::vector<Worn> kept;
         for (Worn& w : m_worn)
         {
             const bool wanted = keep && std::any_of(keep->begin(), keep->end(), [&](const WantAccessory& a) { return a.actor == w.key && a.item->id == w.item; });
-            if (wanted && w.component.Get())
-            {
-                kept.push_back(std::move(w));
-                continue;
-            }
             UObject* component = w.component.Get();
-            if (reflect::Alive(component) && reflect::Alive(w.actor.Get()) && reflect::Alive(component->GetOuterPrivate()))
-                m_destroyComponent.Call(component, [&](std::uint8_t* value, const Param& p) { if (p.kind == Kind::Object) WriteObject(value, component); });
+            if (!reflect::Alive(component) || !reflect::Alive(w.actor.Get())) continue; // gone with its avatar
+            // Not worn any more: hidden and kept (never destroyed at runtime); the level cleans it up.
+            if (!wanted && !w.hidden)
+            {
+                SetAccessoryVisible(component, false);
+                w.hidden = true;
+            }
+            kept.push_back(std::move(w));
         }
         m_worn = std::move(kept);
     }
@@ -558,7 +558,7 @@ namespace aimmod
         if (!d.avatars)
         {
             Restore(nullptr, Scope::Avatar);
-            RemoveAccessories(nullptr);
+            HideAccessories(nullptr);
         }
         if (!d.localPlayer) Restore(nullptr, Scope::Local);
         if (!d.avatars && !d.localPlayer)
@@ -605,9 +605,17 @@ namespace aimmod
         if (d.avatars) Avatars(*inputs.looks, options, inputs.library->index, local, wants, accessories);
         if (d.localPlayer) Local(*inputs.looks, options, inputs.library->index, local, wants);
         Restore(&wants, std::nullopt);
-        RemoveAccessories(&accessories);
+        HideAccessories(&accessories);
         for (const Want& want : wants) Dress(want);
         for (const WantAccessory& a : accessories)
-            if (std::none_of(m_worn.begin(), m_worn.end(), [&](const Worn& w) { return w.key == a.actor && w.item == a.item->id; })) Attach(a);
+        {
+            auto worn = std::find_if(m_worn.begin(), m_worn.end(), [&](const Worn& w) { return w.key == a.actor && w.item == a.item->id; });
+            if (worn == m_worn.end()) Attach(a);
+            else if (worn->hidden)
+            {
+                SetAccessoryVisible(worn->component.Get(), true); // reused
+                worn->hidden = false;
+            }
+        }
     }
 } // namespace aimmod

@@ -267,8 +267,9 @@ namespace aimmod
                 m_lastReason = reason;
                 Log(std::string("cosmetics preview: off (") + reason + ")");
             }
-            // A challenge or load usually changes the level: never destroy then.
-            return Teardown(reason, false);
+            // A challenge or load may be changing the level: no engine call at all.
+            // The references stay; the next settled tick checks them.
+            return;
         }
         const auto request = ReadRequest();
         const PreviewDecision decision = DecidePreview(request, state);
@@ -280,10 +281,17 @@ namespace aimmod
         UObject* player = m_scene.Player();
         UObject* world = Alive(player) ? static_cast<AActor*>(player)->GetWorld() : nullptr;
         if (!Alive(world)) world = nullptr;
-        if (!world) return Teardown("no world", false);
-        // Hotfix: runtime teardown crashed (access violations in K2_DestroyActor); stages are left to the level.
-        if (!decision.run) return Teardown(decision.reason, false);
+        if (!world) return;
+        if (m_world && m_world != world) Forget("world changed");
+        if (!decision.run)
+        {
+            // Debounced: the page's heartbeat can flap; park only after 10 s without a request.
+            if (!m_parked && m_stage.Get() && PreviewParkDue(now, m_lastRequest)) Park(decision.reason);
+            return;
+        }
+        m_lastRequest = now;
         if (!EnsureStage(world)) return;
+        if (m_parked) Unpark();
 
         const std::string key = request->LookKey();
         if (key != m_lookKey)
@@ -312,12 +320,18 @@ namespace aimmod
 
     bool CosmeticsPreview::EnsureStage(UObject* world)
     {
-        if (m_stage.Get() && m_world == world && Alive(m_stage.Get())) return true;
-        if (m_stage.Get() || m_target.Get() || m_world) Teardown(m_world == world ? "stage gone" : "world changed", m_world == world);
+        // The world's one stage, reused while it and its parts are alive.
+        if (m_world == world && Alive(m_stage.Get()) && Alive(m_capture.Get()) && Alive(m_mesh.Get()) && Alive(m_meshes.Get()) && Alive(m_target.Get())) return true;
+        if (m_stage.Get() || m_world) Forget(m_world == world ? "stage no longer usable" : "world changed");
         // Found again for every spawn, never cached: the class can be unloaded with the menu.
         m_stageClass = UObjectGlobals::StaticFindObject<UClass*>(nullptr, nullptr, StageClass);
         if (!m_stageClass) m_stageClass = static_cast<UClass*>(LoadGameAsset(StageClass));
-        if (!Alive(m_stageClass)) { m_stageClass = nullptr; Teardown("the game's preview stage class is not loaded", false); return false; }
+        if (!Alive(m_stageClass))
+        {
+            m_stageClass = nullptr;
+            Log("cosmetics preview: the game's preview stage class is not loaded");
+            return false;
+        }
 
         UObject* rendering = Default(STR("/Script/Engine.Default__KismetRenderingLibrary"));
         UObject* target = nullptr;
@@ -327,11 +341,11 @@ namespace aimmod
             else if (n == STR("Format")) *v = 2; // RTF_RGBA8: exported as PNG
             else if (n == STR("ClearColor")) WriteFloats(v, p, {0, 0, 0, 1});
         }, &target);
-        if (!target) { Teardown("render target unavailable"); return false; }
+        if (!target) { Log("cosmetics preview: render target unavailable"); return false; }
 
         const FTransform transform{FQuat(FRotator(0, 0, 0)), FVector(0, 0, StageHeight), FVector(1, 1, 1)};
         AActor* stage = UGameplayStatics::BeginDeferredActorSpawnFromClass(world, m_stageClass, transform, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
-        if (!stage) { Teardown("preview stage could not be spawned"); return false; }
+        if (!stage) { Log("cosmetics preview: the preview stage could not be spawned"); return false; }
         UGameplayStatics::FinishSpawningActor(stage, transform);
         stage->SetActorEnableCollision(false);
 
@@ -344,7 +358,11 @@ namespace aimmod
         m_capture = FWeakObjectPtr(capture);
         m_meshes = FWeakObjectPtr(meshes);
         m_mesh = FWeakObjectPtr(mesh);
-        if (!capture || !meshes || !mesh) { Teardown("preview stage layout changed"); return false; }
+        if (!capture || !meshes || !mesh)
+        {
+            Forget("preview stage layout changed");
+            return false;
+        }
 
         // Our render target, never the game's shared one; capture on demand only;
         // render the stage and nothing else. Pixels nothing rendered count as
@@ -381,8 +399,9 @@ namespace aimmod
         if (UObject* sun = GetObject(stage, STR("DirectionalLight")))
             if (!SetVisible(sun, false, false))
             {
-                // Never leave a second sun over the map.
-                Teardown("the stage light could not be switched off");
+                // Never leave a second sun over the map: park the stage (hidden) and give up.
+                Park("the stage light could not be switched off");
+                Forget("the stage light could not be switched off");
                 return false;
             }
         m_lights.clear();
@@ -442,6 +461,7 @@ namespace aimmod
         }
         m_lookKey.clear();
         m_yaw = 1e9;
+        m_parked = false;
         std::error_code error;
         std::filesystem::create_directories(m_frames, error);
         Log("cosmetics preview stage spawned (" + std::to_string(m_lights.size()) + " rig lights" + (exposure ? ", fixed exposure" : ", exposure not pinned") +
@@ -508,7 +528,8 @@ namespace aimmod
         AActor* stage = static_cast<AActor*>(m_stage.Get());
         UObject* mesh = m_mesh.Get();
         if (!stage || !mesh) return;
-        RemoveAccessories();
+        if (!Alive(stage) || !Alive(mesh)) return;
+        HideAccessories();
         // The requested model and skin go straight onto the stage's skeletal
         // mesh: mesh, animation (one evaluation gives a standing pose, even
         // paused) and the skin's materials.
@@ -558,7 +579,7 @@ namespace aimmod
         if (!request.vectors.empty() || !request.scalars.empty())
         {
             UObject* materials = Default(STR("/Script/Engine.Default__KismetMaterialLibrary"));
-            UObject* world = m_world;
+            UObject* world = stage; // a live world context
             std::set<std::string> vectorNames, scalarNames;
             for (const PreviewParam& param : request.vectors) vectorNames.insert(param.name);
             for (const PreviewParam& param : request.scalars) scalarNames.insert(param.name);
@@ -614,53 +635,97 @@ namespace aimmod
             Log("cosmetics preview: a new part could not join the capture (it stays invisible)");
     }
 
-    // A weapon mesh with the requested finish: the player's selected viewmodel
-    // weapon (weapon view), else the game's own third-person pistol (the one
-    // KovaaK's characters hold on HoldRight).
+    CosmeticsPreview::Part* CosmeticsPreview::FindPart(std::vector<Part>& parts, const std::string& key)
+    {
+        for (Part& part : parts)
+            if (part.key == key && Alive(part.component.Get())) return &part;
+        return nullptr;
+    }
+
+    // A weapon mesh: the player's selected viewmodel weapon (weapon view), else
+    // the game's own third-person pistol (what KovaaK's characters hold on
+    // HoldRight). Made once per weapon and kept; the finish is set on each use.
     UObject* CosmeticsPreview::MakeWeapon(const PreviewRequest& request, bool selectedWeapon)
     {
         UObject* stage = m_stage.Get();
-        if (!stage) return nullptr;
+        if (!Alive(stage)) return nullptr;
         UObject* selected = nullptr;
         if (selectedWeapon)
-            if (UObject* character = GetObject(m_scene.Player(), STR("MyCharacter")))
-                if (UObject* view = GetObject(character, STR("ViewModel_Native")))
+            if (UObject* character = Alive(m_scene.Player()) ? GetObject(m_scene.Player(), STR("MyCharacter")) : nullptr; Alive(character))
+                if (UObject* view = GetObject(character, STR("ViewModel_Native")); Alive(view))
                     Call(view, STR("/Script/GameSkillsTrainer.FPSPlayer_WeaponComponentActor:GetSelectWeaponMesh"), {}, &selected);
         if (!Alive(selected)) selected = nullptr;
         UObject* skeletal = selected ? GetObject(selected, STR("SkeletalMesh")) : nullptr;
         UObject* fixed = selected && !skeletal ? GetObject(selected, STR("StaticMesh")) : nullptr;
-        if (!skeletal && !fixed) fixed = LoadGameAsset(FallbackWeapon), selected = nullptr;
-        if (!skeletal && !fixed)
+        if (!Alive(skeletal) && !Alive(fixed)) skeletal = nullptr, fixed = LoadGameAsset(FallbackWeapon), selected = nullptr;
+        if (!Alive(skeletal) && !Alive(fixed))
         {
             Log("cosmetics preview: no weapon mesh found (neither the selected weapon nor the game's pistol)");
             return nullptr;
         }
-        UClass* type = UObjectGlobals::StaticFindObject<UClass*>(nullptr, nullptr, skeletal ? STR("/Script/Engine.SkeletalMeshComponent") : STR("/Script/Engine.StaticMeshComponent"));
-        UObject* weapon = nullptr;
-        Call(stage, STR("/Script/Engine.Actor:AddComponentByClass"), [&](const std::wstring& n, FProperty* p, std::uint8_t* v) {
-            if (n == STR("Class")) WriteObject(v, type);
-            else if (n == STR("bManualAttachment")) WriteBoolParam(v, p, true);
-            else if (n == STR("RelativeTransform"))
-                if (auto* s = CastField<FStructProperty>(p))
-                    for (const char* field : {"Rotation.W", "Scale3D.X", "Scale3D.Y", "Scale3D.Z"}) game::SetStructPath(v, s->GetStruct(), field, 1);
-        }, &weapon);
-        if (!weapon || !type || !weapon->IsA(type))
+        const std::string key = selectedWeapon ? "view|" + game::ObjectName(skeletal ? skeletal : fixed) : "held";
+        Part* part = FindPart(m_weapons, key);
+        if (!part)
         {
-            Log("cosmetics preview: the weapon component could not be added");
-            return nullptr;
+            UClass* type = UObjectGlobals::StaticFindObject<UClass*>(nullptr, nullptr, skeletal ? STR("/Script/Engine.SkeletalMeshComponent") : STR("/Script/Engine.StaticMeshComponent"));
+            UObject* weapon = nullptr;
+            Call(stage, STR("/Script/Engine.Actor:AddComponentByClass"), [&](const std::wstring& n, FProperty* p, std::uint8_t* v) {
+                if (n == STR("Class")) WriteObject(v, type);
+                else if (n == STR("bManualAttachment")) WriteBoolParam(v, p, true);
+                else if (n == STR("RelativeTransform"))
+                    if (auto* s = CastField<FStructProperty>(p))
+                        for (const char* field : {"Rotation.W", "Scale3D.X", "Scale3D.Y", "Scale3D.Z"}) game::SetStructPath(v, s->GetStruct(), field, 1);
+            }, &weapon);
+            if (!Alive(weapon) || !type || !weapon->IsA(type))
+            {
+                Log("cosmetics preview: the weapon component could not be added");
+                return nullptr;
+            }
+            Call(weapon, STR("/Script/Engine.PrimitiveComponent:SetCollisionEnabled"), [](const std::wstring&, FProperty*, std::uint8_t* v) { *v = 0; });
+            Call(weapon, STR("/Script/Engine.PrimitiveComponent:SetCastShadow"), [](const std::wstring&, FProperty* p, std::uint8_t* v) { WriteBoolParam(v, p, false); });
+            if (skeletal)
+                Call(weapon, STR("/Script/Engine.SkinnedMeshComponent:SetSkeletalMesh"), [&](const std::wstring& n, FProperty* p, std::uint8_t* v) {
+                    if (n == STR("NewMesh")) WriteObject(v, skeletal);
+                    else if (n == STR("bReinitPose")) WriteBoolParam(v, p, true);
+                });
+            else
+                Call(weapon, STR("/Script/Engine.StaticMeshComponent:SetStaticMesh"), [&](const std::wstring& n, FProperty*, std::uint8_t* v) {
+                    if (n == STR("NewMesh")) WriteObject(v, fixed);
+                });
+            Part made;
+            made.key = key;
+            made.component = FWeakObjectPtr(weapon);
+            // The weapon's own materials (its skin): the selected weapon's, else the mesh's.
+            std::int32_t slots = 0;
+            Call(weapon, STR("/Script/Engine.PrimitiveComponent:GetNumMaterials"), {}, nullptr, [&](const std::wstring& n, FProperty* p, const std::uint8_t* v) {
+                if (n == STR("ReturnValue") && p->GetSize() == 4) std::memcpy(&slots, v, 4);
+            });
+            for (std::int32_t slot = 0; slot < std::clamp(slots, 0, 8); ++slot)
+            {
+                UObject* material = nullptr;
+                Call(selected && skeletal ? selected : weapon, STR("/Script/Engine.PrimitiveComponent:GetMaterial"), [&](const std::wstring& n, FProperty*, std::uint8_t* v) {
+                    if (n == STR("ElementIndex")) std::memcpy(v, &slot, sizeof(slot));
+                }, &material);
+                made.materials.push_back(FWeakObjectPtr(Alive(material) ? material : nullptr));
+            }
+            ApplyMaterialDataDefaults(weapon);
+            ShowInCapture(weapon);
+            m_weapons.push_back(std::move(made));
+            part = &m_weapons.back();
+            Log(std::string("cosmetics preview: weapon made (") + (selected ? "selected weapon" : "the game's pistol") + ")");
         }
-        Call(weapon, STR("/Script/Engine.PrimitiveComponent:SetCollisionEnabled"), [](const std::wstring&, FProperty*, std::uint8_t* v) { *v = 0; });
-        Call(weapon, STR("/Script/Engine.PrimitiveComponent:SetCastShadow"), [](const std::wstring&, FProperty* p, std::uint8_t* v) { WriteBoolParam(v, p, false); });
-        if (skeletal)
-            Call(weapon, STR("/Script/Engine.SkinnedMeshComponent:SetSkeletalMesh"), [&](const std::wstring& n, FProperty* p, std::uint8_t* v) {
-                if (n == STR("NewMesh")) WriteObject(v, skeletal);
-                else if (n == STR("bReinitPose")) WriteBoolParam(v, p, true);
-            });
-        else
-            Call(weapon, STR("/Script/Engine.StaticMeshComponent:SetStaticMesh"), [&](const std::wstring& n, FProperty*, std::uint8_t* v) {
-                if (n == STR("NewMesh")) WriteObject(v, fixed);
-            });
-        // The weapon's own materials (its skin), then the finish on top.
+        ApplyFinish(*part, request);
+        UObject* weapon = part->component.Get();
+        SetVisible(weapon, true, false);
+        return weapon;
+    }
+
+    // The weapon's own materials, with the requested finish on dynamic instances.
+    void CosmeticsPreview::ApplyFinish(Part& part, const PreviewRequest& request)
+    {
+        UObject* weapon = part.component.Get();
+        UObject* stage = m_stage.Get();
+        if (!Alive(weapon) || !Alive(stage)) return;
         const cosmetics::Item* finish = nullptr;
         if (!request.finish.empty())
         {
@@ -672,17 +737,10 @@ namespace aimmod
             if (finish && finish->kind != "weapon_finish") why = "not a weapon finish", finish = nullptr;
             if (!finish) Log("cosmetics preview: finish " + request.finish + " not shown (" + why + ")");
         }
-        std::int32_t slots = 0;
-        Call(weapon, STR("/Script/Engine.PrimitiveComponent:GetNumMaterials"), {}, nullptr, [&](const std::wstring& n, FProperty* p, const std::uint8_t* v) {
-            if (n == STR("ReturnValue") && p->GetSize() == 4) std::memcpy(&slots, v, 4);
-        });
-        for (std::int32_t slot = 0; slot < std::clamp(slots, 0, 8); ++slot)
+        for (std::int32_t slot = 0; slot < static_cast<std::int32_t>(part.materials.size()); ++slot)
         {
-            UObject* material = nullptr;
-            Call(selected && skeletal ? selected : weapon, STR("/Script/Engine.PrimitiveComponent:GetMaterial"), [&](const std::wstring& n, FProperty*, std::uint8_t* v) {
-                if (n == STR("ElementIndex")) std::memcpy(v, &slot, sizeof(slot));
-            }, &material);
-            if (!material) continue;
+            UObject* material = part.materials[static_cast<std::size_t>(slot)].Get();
+            if (!Alive(material)) continue;
             if (finish)
             {
                 UObject* mid = nullptr;
@@ -692,7 +750,7 @@ namespace aimmod
                          else if (n == STR("Parent")) WriteObject(v, material);
                      },
                      &mid);
-                if (mid)
+                if (Alive(mid))
                 {
                     for (const auto& [name, c] : finish->vector)
                         Call(mid, STR("/Script/Engine.MaterialInstanceDynamic:SetVectorParameterValue"), [&](const std::wstring& n, FProperty* p, std::uint8_t* v) {
@@ -707,36 +765,35 @@ namespace aimmod
                 else if (n == STR("Material")) WriteObject(v, material);
             });
         }
-        ApplyMaterialDataDefaults(weapon);
-        SetVisible(weapon, true, false);
-        ShowInCapture(weapon);
-        m_weapon = FWeakObjectPtr(weapon);
-        Log(std::string("cosmetics preview: weapon ") + (selected ? "(selected weapon)" : "(the game's pistol)") + (finish ? " with " + finish->id : std::string(" without a finish")));
-        return weapon;
+        if (finish) Log("cosmetics preview: finish " + finish->id + " on the weapon");
     }
 
     // The weapon view: the weapon alone on the stage's turntable.
     void CosmeticsPreview::ShowWeapon(const PreviewRequest& request)
     {
-        RemoveWeapon();
+        HideWeapons();
         UObject* mesh = m_mesh.Get();
         UObject* meshes = m_meshes.Get();
-        if (!mesh || !meshes) return;
+        if (!Alive(mesh) || !Alive(meshes)) return;
+        const bool fresh = !std::any_of(m_weapons.begin(), m_weapons.end(), [](const Part& p) { return p.key.rfind("view|", 0) == 0 && Alive(p.component.Get()); });
         UObject* weapon = MakeWeapon(request, true);
         if (!weapon) return;
-        // On the turntable, its bounds centred over the pivot, a metre up.
-        Call(weapon, STR("/Script/Engine.SceneComponent:K2_AttachToComponent"), [&](const std::wstring& n, FProperty*, std::uint8_t* v) {
-            if (n == STR("Parent")) WriteObject(v, meshes);
-            // KeepRelative (0) for location, rotation and scale.
-        });
         float pivot[3], origin[3], extent[3], at[3];
-        if (Location(meshes, pivot) && Bounds(weapon, origin, extent) && Location(weapon, at))
+        if (fresh || !Alive(GetObject(weapon, STR("AttachParent"))))
         {
-            const float to[3] = {at[0] + pivot[0] - origin[0], at[1] + pivot[1] - origin[1], at[2] + pivot[2] + 100 - origin[2]};
-            SetWorldLocation(weapon, to);
+            // On the turntable, its bounds centred over the pivot, a metre up (set once).
+            Call(weapon, STR("/Script/Engine.SceneComponent:K2_AttachToComponent"), [&](const std::wstring& n, FProperty*, std::uint8_t* v) {
+                if (n == STR("Parent")) WriteObject(v, meshes);
+                // KeepRelative (0) for location, rotation and scale.
+            });
+            if (Location(meshes, pivot) && Bounds(weapon, origin, extent) && Location(weapon, at))
+            {
+                const float to[3] = {at[0] + pivot[0] - origin[0], at[1] + pivot[1] - origin[1], at[2] + pivot[2] + 100 - origin[2]};
+                SetWorldLocation(weapon, to);
+            }
         }
         SetVisible(mesh, false, false);
-        for (FWeakObjectPtr& worn : m_accessories) SetVisible(worn.Get(), false, false);
+        HideAccessories();
         Frame(weapon);
         Log("cosmetics preview: weapon view");
     }
@@ -745,9 +802,9 @@ namespace aimmod
     // characters hold it, with the finish.
     void CosmeticsPreview::HoldWeapon(const PreviewRequest& request)
     {
-        RemoveWeapon();
+        HideWeapons();
         UObject* mesh = m_mesh.Get();
-        if (!mesh) return;
+        if (!Alive(mesh)) return;
         bool socket = false;
         Call(mesh, STR("/Script/Engine.SceneComponent:DoesSocketExist"),
              [&](const std::wstring& n, FProperty* p, std::uint8_t* v) {
@@ -764,6 +821,7 @@ namespace aimmod
         }
         UObject* weapon = MakeWeapon(request, false);
         if (!weapon) return;
+        // Snapped to the hand on every use (the model may have changed).
         Call(weapon, STR("/Script/Engine.SceneComponent:K2_AttachToComponent"), [&](const std::wstring& n, FProperty* p, std::uint8_t* v) {
             if (n == STR("Parent")) WriteObject(v, mesh);
             else if (n == STR("SocketName")) WriteFName(v, p, STR("HoldRight"));
@@ -771,21 +829,22 @@ namespace aimmod
         });
     }
 
-    void CosmeticsPreview::RemoveWeapon()
+    void CosmeticsPreview::HideWeapons()
     {
-        if (UObject* weapon = m_weapon.Get()) RemoveAccessory(weapon);
-        m_weapon = FWeakObjectPtr{};
+        for (Part& part : m_weapons)
+            if (UObject* weapon = part.component.Get(); Alive(weapon)) SetVisible(weapon, false, false);
     }
 
     // Accessories from the installed catalog, by id: only released fit
-    // accessories (game meshes, curated). Attached in the pose the camera sees.
+    // accessories (game meshes, curated). Made once per item and model, attached
+    // in the pose the camera sees, then hidden and shown as the look changes.
     void CosmeticsPreview::WearAccessories(const PreviewRequest& request)
     {
         if (request.accessories.empty()) return;
         const Output::CosmeticsInputs inputs = m_output.cosmetics();
         UObject* stage = m_stage.Get();
         UObject* mesh = m_mesh.Get();
-        if (!inputs.library || !stage || !mesh)
+        if (!inputs.library || !Alive(stage) || !Alive(mesh))
         {
             Log(std::string("cosmetics preview: accessories not shown (") + (!inputs.library ? "no verified catalog" : "no stage") + ")");
             return;
@@ -795,6 +854,13 @@ namespace aimmod
         options.verifiedPaks = inputs.library->verifiedPaks;
         for (const std::string& id : request.accessories)
         {
+            const std::string key = id + "|" + request.model;
+            if (Part* part = FindPart(m_accessories, key))
+            {
+                SetVisible(part->component.Get(), true, false);
+                Log("cosmetics preview: wearing " + id + " (kept)");
+                continue;
+            }
             std::string why;
             const cosmetics::Item* item = cosmetics::Resolve(inputs.library->index, id, options, &why);
             if (!item || item->kind != "accessory" || !item->fit)
@@ -802,24 +868,31 @@ namespace aimmod
                 Log("cosmetics preview: accessory " + id + " not shown (" + (item ? std::string("not a game-mesh accessory") : why) + ")");
                 continue;
             }
-            if (UObject* worn = AttachFitAccessory(stage, mesh, *item, why))
+            if (m_accessories.size() >= 32)
             {
-                ShowInCapture(worn);
-                m_accessories.push_back(FWeakObjectPtr(worn));
-                float origin[3]{}, extent[3]{};
-                Bounds(worn, origin, extent);
-                char size[96];
-                std::snprintf(size, sizeof size, " (%.0f x %.0f x %.0f cm)", extent[0] * 2, extent[1] * 2, extent[2] * 2);
-                Log("cosmetics preview: wearing " + id + size);
+                Log("cosmetics preview: accessory " + id + " not shown (too many parts on the stage)");
+                continue;
             }
-            else Log("cosmetics preview: accessory " + id + " not shown (" + why + ")");
+            UObject* worn = AttachFitAccessory(stage, mesh, *item, why);
+            if (!Alive(worn))
+            {
+                Log("cosmetics preview: accessory " + id + " not shown (" + why + ")");
+                continue;
+            }
+            ShowInCapture(worn);
+            m_accessories.push_back({key, FWeakObjectPtr(worn), {}});
+            float origin[3]{}, extent[3]{};
+            Bounds(worn, origin, extent);
+            char size[96];
+            std::snprintf(size, sizeof size, " (%.0f x %.0f x %.0f cm)", extent[0] * 2, extent[1] * 2, extent[2] * 2);
+            Log("cosmetics preview: wearing " + id + size);
         }
     }
 
-    void CosmeticsPreview::RemoveAccessories()
+    void CosmeticsPreview::HideAccessories()
     {
-        for (FWeakObjectPtr& weak : m_accessories) RemoveAccessory(weak.Get());
-        m_accessories.clear();
+        for (Part& part : m_accessories)
+            if (UObject* worn = part.component.Get(); Alive(worn)) SetVisible(worn, false, false);
     }
 
     // Camera and lights on the character: the camera keeps the stage's own
@@ -830,7 +903,7 @@ namespace aimmod
     {
         UObject* meshes = m_meshes.Get();
         UObject* capture = m_capture.Get();
-        if (!mesh || !meshes || !capture) return;
+        if (!Alive(mesh) || !Alive(meshes) || !Alive(capture)) return;
         float origin[3]{}, extent[3]{}, pivot[3]{};
         const bool bounds = Bounds(mesh, origin, extent);
         if (!Location(meshes, pivot)) Location(mesh, pivot);
@@ -862,7 +935,7 @@ namespace aimmod
         for (std::size_t i = 0; i < m_lights.size() && i < std::size(Rig); ++i)
         {
             UObject* light = m_lights[i].Get();
-            if (!light) continue;
+            if (!Alive(light)) continue;
             const RigLight& r = Rig[i];
             const float at[3] = {centre[0] + dir[0] * r.forward + right[0] * r.right, centre[1] + dir[1] * r.forward + right[1] * r.right, centre[2] + r.up};
             SetWorldLocation(light, at);
@@ -884,7 +957,7 @@ namespace aimmod
     void CosmeticsPreview::ApplyRotation(double yaw)
     {
         UObject* meshes = m_meshes.Get();
-        if (!meshes) return;
+        if (!Alive(meshes)) return;
         Call(meshes, STR("/Script/Engine.SceneComponent:K2_SetRelativeRotation"), [&](const std::wstring& n, FProperty* p, std::uint8_t* v) {
             if (n == STR("NewRotation")) WriteFloats(v, p, {0.0f, static_cast<float>(m_baseYaw + yaw), 0.0f});
             else if (n == STR("bTeleport")) *v = 1;
@@ -895,8 +968,8 @@ namespace aimmod
     {
         UObject* capture = m_capture.Get();
         UObject* target = m_target.Get();
-        UObject* world = m_world;
-        if (!capture || !target || !world || !SetByte(capture, STR("CaptureSource"), source)) return false;
+        UObject* world = m_stage.Get();
+        if (!Alive(capture) || !Alive(target) || !Alive(world) || !SetByte(capture, STR("CaptureSource"), source)) return false;
         if (!Call(capture, STR("/Script/Engine.SceneCaptureComponent2D:CaptureScene"))) return false;
         const std::wstring folder = m_frames.wstring();
         std::error_code error;
@@ -926,7 +999,7 @@ namespace aimmod
             frame = ComposePreview(color, mask, PreviewMask::Background, Size);
             used = "normals";
         }
-        SetByte(m_capture.Get(), STR("CaptureSource"), SourceFinalColor);
+        if (UObject* c = m_capture.Get(); Alive(c)) SetByte(c, STR("CaptureSource"), SourceFinalColor);
         if (!ok) return false;
         if (m_logFrame)
         {
@@ -946,80 +1019,63 @@ namespace aimmod
         return true;
     }
 
-    void CosmeticsPreview::Teardown(const char* why, bool destroy)
+    // The page closed (debounced): hide the stage, stop capturing, keep it.
+    void CosmeticsPreview::Park(const char* why)
     {
         UObject* stage = m_stage.Get();
-        UObject* target = m_target.Get();
-        const bool had = stage || target;
-        if (had)
-        {
-            // Hotfix: runtime destruction crashed the game; until it is safe, every stage is left to the level.
-            constexpr bool DestroyAtRuntime = false;
-            if (DestroyAtRuntime && destroy && SafeToDestroy(stage, m_world))
-            {
-                // Our own components first, then the stage (it was spawned by AimModCore).
-                RemoveAccessories();
-                RemoveWeapon();
-                static_cast<AActor*>(stage)->K2_DestroyActor();
-                if (Alive(target))
-                    Call(Default(STR("/Script/Engine.Default__KismetRenderingLibrary")), STR("/Script/Engine.KismetRenderingLibrary:ReleaseRenderTarget2D"),
-                         [&](const std::wstring& n, FProperty*, std::uint8_t* v) {
-                             if (n == STR("TextureRenderTarget")) WriteObject(v, target);
-                         });
-            }
-            else if (m_orphans.size() < 16)
-                m_orphans.push_back({m_stage, m_target, m_world}); // destroyed later in a safe tick, or by the level
-        }
+        if (Alive(stage))
+            Call(stage, STR("/Script/Engine.Actor:SetActorHiddenInGame"), [](const std::wstring& n, FProperty* p, std::uint8_t* v) {
+                if (n == STR("bNewHidden")) WriteBoolParam(v, p, true);
+            });
+        m_parked = true;
+        m_lookKey.clear(); // reapplied on the next open
+        m_yaw = 1e9;
+        m_followUps.clear();
+        m_dirty = false;
+        std::error_code error;
+        std::filesystem::remove(m_framePath, error);
+        for (const wchar_t* file : {L"capture-color.png", L"capture-mask.png", L"capture-normal.png"}) std::filesystem::remove(m_frames / file, error);
+        Log(std::string("cosmetics preview stage parked (") + why + ")");
+    }
+
+    void CosmeticsPreview::Unpark()
+    {
+        if (UObject* stage = m_stage.Get(); Alive(stage))
+            Call(stage, STR("/Script/Engine.Actor:SetActorHiddenInGame"), [](const std::wstring& n, FProperty* p, std::uint8_t* v) {
+                if (n == STR("bNewHidden")) WriteBoolParam(v, p, false);
+            });
+        m_parked = false;
+        m_dirty = true;
+        Log("cosmetics preview stage reused");
+    }
+
+    // No engine call: the stage and its parts belong to their level now.
+    void CosmeticsPreview::Forget(const char* why)
+    {
+        const bool had = m_stage.Get() || m_world;
         m_stage = m_target = m_capture = m_meshes = m_mesh = FWeakObjectPtr{};
         m_lights.clear();
         m_accessories.clear();
-        m_weapon = FWeakObjectPtr{};
+        m_weapons.clear();
         m_world = nullptr;
+        m_parked = false;
         m_lookKey.clear();
+        m_yaw = 1e9;
         m_followUps.clear();
         m_dirty = false;
-        if (had)
-        {
-            std::error_code error;
-            std::filesystem::remove(m_framePath, error);
-            for (const wchar_t* file : {L"capture-color.png", L"capture-mask.png", L"capture-normal.png"}) std::filesystem::remove(m_frames / file, error);
-            Log(std::string("cosmetics preview stage ") + (destroy ? "removed" : "left to the level") + " (" + why + ")");
-        }
-    }
-
-    // Stages forgotten during a transition: destroyed once the same world is
-    // current and safe again; dropped when their world is gone (the level took them).
-    void CosmeticsPreview::DestroyOrphans(UObject* world)
-    {
-        std::vector<Orphan> keep;
-        for (Orphan& o : m_orphans)
-        {
-            UObject* stage = o.stage.Get();
-            if (!stage || !world || o.world != world || !Alive(stage)) continue;
-            if (!SafeToDestroy(stage, world))
-            {
-                keep.push_back(o);
-                continue;
-            }
-            static_cast<AActor*>(stage)->K2_DestroyActor();
-            if (UObject* target = o.target.Get(); Alive(target))
-                Call(Default(STR("/Script/Engine.Default__KismetRenderingLibrary")), STR("/Script/Engine.KismetRenderingLibrary:ReleaseRenderTarget2D"),
-                     [&](const std::wstring& n, FProperty*, std::uint8_t* v) {
-                         if (n == STR("TextureRenderTarget")) WriteObject(v, target);
-                     });
-            Log("cosmetics preview: an earlier stage was removed");
-        }
-        m_orphans = std::move(keep);
+        std::error_code error;
+        std::filesystem::remove(m_framePath, error);
+        if (had) Log(std::string("cosmetics preview stage left to the level (") + why + ")");
     }
 
     // May run off the game thread (mod unload): no engine calls. The stage is
     // inert without the tick (capture on demand only) and goes with the level.
     void CosmeticsPreview::Shutdown()
     {
-        m_orphans.clear();
         m_stage = m_target = m_capture = m_meshes = m_mesh = FWeakObjectPtr{};
         m_lights.clear();
         m_accessories.clear();
+        m_weapons.clear();
         m_world = nullptr;
         std::error_code error;
         std::filesystem::remove(m_framePath, error);
