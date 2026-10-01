@@ -125,7 +125,8 @@ sealed record Standing(string MemberId, string Name, int Place, int Wins, int Po
 sealed record MatchSnapshot(string Id, string Phase, string Mode, string Scenario, double TimeLimit, int Round, int? TotalRounds,
     int? FirstTo, long? StartsAt, long? EndsAt, long? NextAt, IReadOnlyList<string> Players, IReadOnlyList<ScoreLine> Live,
     IReadOnlyList<RoundResult> Rounds, IReadOnlyList<Standing> Standings, string? WinnerId, IReadOnlyList<string> Rematch, long? RematchDeadline = null, IReadOnlyList<string>? Loaded = null,
-    string? Attacker = null, IReadOnlyList<TrackView>? Tracking = null, CombatView? Combat = null, CsView? Cs = null);
+    string? Attacker = null, IReadOnlyList<TrackView>? Tracking = null, CombatView? Combat = null, CsView? Cs = null,
+    IReadOnlyDictionary<string, string>? LoadIssues = null, bool LoadFailed = false, int LoadAttempt = 0);
 // Live tracking-duel state for the HUD: each player's time on target so far (host score).
 sealed record TrackView(string Member, double Percent, double Seconds, double Coverage, double LagMs, bool Disputed, string? Reason)
 {

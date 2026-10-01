@@ -42,7 +42,7 @@ static class MatchPresets
 // KovaaK's ranked leaderboards.
 static partial class MatchScenario
 {
-    public const int GeneratorVersion = 3;
+    public const int GeneratorVersion = 4;
     public const string Prefix = "AimMod Match - ";
     // Written into every generated scenario; cleanup removes only files that carry it.
     public const string Marker = "AimMod multiplayer match generated from ";
@@ -205,7 +205,10 @@ static partial class MatchScenario
         if (s.Mode == LobbyModes.Tracking) TrackingDuelScenario(header, sections, s);
         else if (LobbyModes.Combat(s.Mode)) CombatArena(header, sections, s, player);
         else if (s.Mode == LobbyModes.Cs) CsArena(header, sections, player);
-        // Canonical layout: header, then each section after one blank line.
+        // Canonical layout: header, then the sections grouped by type in the order KovaaK's
+        // itself saves them (all character profiles together, and so on), each after one
+        // blank line, then the map exactly as the base had it.
+        sections = sections.Select((x, i) => (x, i)).OrderBy(p => SectionRank(p.x.Title)).ThenBy(p => p.i).Select(p => p.x).ToList();
         var output = new StringBuilder();
         foreach (var line in header.Lines.Where(l => l.Trim().Length > 0)) output.Append(line).Append(nl);
         foreach (var section in sections)
@@ -218,6 +221,77 @@ static partial class MatchScenario
     }
 
     public static string Hash(string text) => ContentLibrary.TextHash(text);
+
+    // The section order of scenarios KovaaK's saves. Unknown sections keep their place after these.
+    static readonly string[] SectionOrder = ["[Aim Profile]", "[Bot Profile]", "[Bot Rotation Profile]", "[Character Profile]", "[Dodge Profile]",
+        "[Melee Ability Profile]", "[Movement Ability Profile]", "[Recall Ability Profile]", "[Sprint Ability Profile]", "[Weapon Ability Profile]", "[Weapon Profile]"];
+    static int SectionRank(string title) { var i = Array.IndexOf(SectionOrder, title); return i < 0 ? SectionOrder.Length : i; }
+
+    // Problems that would stop KovaaK's from loading a generated scenario as its base loads:
+    // the map (MapName, MapScale and [Map Data], byte for byte), section grouping, duplicate
+    // profiles, and references to profiles the file doesn't have.
+    public static IReadOnlyList<string> Validate(string baseText, string generated)
+    {
+        var problems = new List<string>();
+        static string? MapBytes(string text) { var i = text.IndexOf("\n[Map Data]", StringComparison.Ordinal); return i < 0 ? null : text[(i + 1)..]; }
+        var (bh, _, _, _) = Parse(baseText);
+        var (gh, sections, _, _) = Parse(generated);
+        if (MapBytes(baseText) != MapBytes(generated)) problems.Add("the [Map Data] section differs from the base scenario");
+        if (gh.Get("MapName") != bh.Get("MapName")) problems.Add("MapName changed (" + bh.Get("MapName") + " -> " + gh.Get("MapName") + ")");
+        if (gh.Get("MapScale") != bh.Get("MapScale")) problems.Add("MapScale changed (" + bh.Get("MapScale") + " -> " + gh.Get("MapScale") + ")");
+        var ranks = sections.Select(x => SectionRank(x.Title)).ToList();
+        for (var i = 1; i < ranks.Count; i++) if (ranks[i] < ranks[i - 1]) { problems.Add("section " + sections[i].Title + " comes after a later section type"); break; }
+        foreach (var group in sections.GroupBy(x => x.Title))
+            foreach (var dup in group.GroupBy(x => x.Get("Name")).Where(g => g.Count() > 1)) problems.Add("two " + group.Key + " sections named " + dup.Key);
+        HashSet<string> Names(string title) => sections.Where(x => x.Title == title).Select(x => x.Get("Name") ?? "").ToHashSet(StringComparer.Ordinal);
+        var characters = Names("[Character Profile]"); var bots = Names("[Bot Profile]"); var weapons = Names("[Weapon Profile]");
+        if (gh.Get("PlayerProfile") is { Length: > 0 } pp && !characters.Contains(pp)) problems.Add("PlayerProfile " + pp + " has no character profile");
+        foreach (var added in (gh.Get("AddedBots") ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries))
+            if (!bots.Contains(added.EndsWith(".bot", StringComparison.Ordinal) ? added[..^4] : added)) problems.Add("AddedBots names " + added + " without a bot profile");
+        foreach (var bot in sections.Where(x => x.Title == "[Bot Profile]"))
+            if (bot.Get("CharacterProfile") is { Length: > 0 } cp && !characters.Contains(cp)) problems.Add("bot " + bot.Get("Name") + " uses missing character " + cp);
+        if (sections.FirstOrDefault(x => x.Title == "[Character Profile]" && x.Get("Name") == gh.Get("PlayerProfile")) is { } player)
+            foreach (var w in (player.Get("WeaponProfileNames") ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries))
+                if (!weapons.Contains(w)) problems.Add("the player's weapon " + w + " has no weapon profile");
+        return problems;
+    }
+
+    // The map a scenario file loads: its header MapName and MapScale.
+    public static (string? MapName, double? MapScale) MapOf(string scenarioText)
+    {
+        var (header, _, _, _) = Parse(scenarioText);
+        return (header.Get("MapName")?.Trim(), double.TryParse(header.Get("MapScale"), NumberStyles.Float, Invariant, out var v) && v > 0 ? v : null);
+    }
+    // core-scene.json's mapName against a scenario's MapName: case-insensitive, with or without the extension.
+    public static bool SameMap(string? shown, string? expected)
+    {
+        if (string.IsNullOrWhiteSpace(shown) || string.IsNullOrWhiteSpace(expected)) return false;
+        static string Bare(string s) => Path.GetFileNameWithoutExtension(s.Trim()).ToLowerInvariant();
+        return string.Equals(shown.Trim(), expected.Trim(), StringComparison.OrdinalIgnoreCase) || Bare(shown) == Bare(expected);
+    }
+
+    // Diagnostic (--generate-arena): the match scenario a lobby in `mode` builds from a base file.
+    public static int GenerateFile(string basePath, string mode, string outPath)
+    {
+        if (!LobbyModes.All.Contains(mode)) { Console.Error.WriteLine("Unknown mode."); return 1; }
+        var text = File.ReadAllText(basePath);
+        var name = Path.GetFileNameWithoutExtension(basePath);
+        var settings = LobbyRules.Normalize(new LobbySettings(Mode: mode, Scenario: new ScenarioChoice(name, ContentLibrary.TextHash(text), "", "", 60)), 2);
+        var generated = Generate(new Inputs(text, settings));
+        File.WriteAllText(outPath, generated);
+        Console.WriteLine(Name(settings) + ": " + generated.Length + " characters; map section " + (MapSectionOf(text) == MapSectionOf(generated) ? "identical" : "DIFFERENT"));
+        var problems = Validate(text, generated).Except(Validate(text, text)).ToList();
+        Console.WriteLine(problems.Count == 0 ? "valid" : "problems: " + string.Join("; ", problems));
+        if (Validate(text, text) is { Count: > 0 } inBase) Console.WriteLine("already in the base: " + string.Join("; ", inBase));
+        return 0;
+    }
+
+    // The header map fields and the [Map Data] section, which a match scenario must keep as is.
+    public static string? MapSectionOf(string scenarioText)
+    {
+        var (header, _, map, _) = Parse(scenarioText);
+        return "MapName=" + header.Get("MapName") + "|MapScale=" + header.Get("MapScale") + "|" + map?.Replace("\r\n", "\n", StringComparison.Ordinal);
+    }
 
     // Spawn points of a scenario's embedded map, in world units, for host-chosen respawns.
     //  - Map-creator JSON: "SpawnPoint" game objects; location "x, y, z" times MapScale,

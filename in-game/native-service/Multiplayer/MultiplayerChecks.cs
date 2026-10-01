@@ -29,6 +29,7 @@ static partial class MultiplayerChecks
         CombatModes();
         TeamsAndSpawns();
         CsMode();
+        LoadGate();
         ProtocolFrames();
         Peers();
         SteamPipe();
@@ -38,7 +39,7 @@ static partial class MultiplayerChecks
         CsTeams();
         Marker();
         var root = Path.Combine(Path.GetTempPath(), "aimmod-mp-test-" + Guid.NewGuid().ToString("N"));
-        try { Content(root); Generator(root); Blocked(root); AutoLeave(root); Service(root); Transfers(root); Replays(root); Maps(root); Tournaments(root); }
+        try { Content(root); Generator(root); Blocked(root); AutoLeave(root); LoadGateService(root); Service(root); Transfers(root); Replays(root); Maps(root); Tournaments(root); }
         finally { try { Directory.Delete(root, true); } catch (IOException) { } }
         Console.WriteLine($"{count} multiplayer checks passed.");
     }
@@ -1190,7 +1191,7 @@ static partial class MultiplayerChecks
     static void AutoLeave(string root)
     {
         long now = 4_500_000;
-        var control = new FakeGame("load", "start", "quit");
+        var control = new FakeGame("load", "start", "quit") { Root = Path.Combine(root, "game") };
         var service = new MultiplayerService(new OfflineTransport(), new ContentLibrary(Path.Combine(root, "game")), control, () => new LocalRun(false, null, null, null, null, 0, 0, 0, null), () => [], () => null, null, simulation: true, () => now, autoTick: false, seed: 6);
         JsonElement Round() => JsonSerializer.SerializeToElement(service.View(), Protocol.Json).GetProperty("lobby").GetProperty("round");
         JsonElement Notice() => JsonDocument.Parse(service.NoticeText()).RootElement;
@@ -1236,7 +1237,7 @@ static partial class MultiplayerChecks
     static void Blocked(string root)
     {
         long now = 4_000_000;
-        var control = new FakeGame("load", "start");
+        var control = new FakeGame("load", "start") { Root = Path.Combine(root, "game") };
         var service = new MultiplayerService(new OfflineTransport(), new ContentLibrary(Path.Combine(root, "game")), control, () => new LocalRun(false, null, null, null, null, 0, 0, 0, null), () => [], () => null, null, simulation: true, () => now, autoTick: false, seed: 5);
         JsonElement Round() => JsonSerializer.SerializeToElement(service.View(), Protocol.Json).GetProperty("lobby").GetProperty("round");
         string Phase() => JsonSerializer.SerializeToElement(service.View(), Protocol.Json).GetProperty("lobby").GetProperty("match").GetProperty("phase").GetString()!;
@@ -1250,9 +1251,14 @@ static partial class MultiplayerChecks
         Check(Round().GetProperty("state").GetString() == "blocked" && Round().GetProperty("message").GetString()!.Contains("Finish or quit your current run") && !control.Calls.Any(c => c.StartsWith("load", StringComparison.Ordinal)), "A running challenge holds the load with a finish-or-quit message, not start-it-yourself");
         Run(3000);
         Check(Phase() == MatchPhases.Loading, "The warm-up counts a player still in a run as not loaded yet");
-        control.ChallengeRunning = false;
+        control.SceneLoading = true; control.ChallengeRunning = false;
         Run(300);
         Check(control.Calls.Count(c => c == "load Synthetic A") == 1 && Round().GetProperty("state").GetString() is "loading" or "ready", "Once the challenge ends the scenario loads by itself");
+        // KovaaK's still shows its loading screen: not loaded yet, so the countdown (and CS freeze time) waits.
+        Run(1000);
+        Check(Phase() == MatchPhases.Loading, "A scenario still on KovaaK's loading screen doesn't count as loaded");
+        control.SceneLoading = false; Run(1500);
+        Check(Phase() is MatchPhases.Countdown or MatchPhases.Live, "Once the loading screen is gone the countdown starts");
         service.Act("end", default); Run(6000);
         // A challenge that starts between the check and the load: AimModCore answers challenge-active.
         control.RefuseNextLoad();
@@ -1743,11 +1749,25 @@ static partial class MultiplayerChecks
         public readonly List<string> Calls = [];
         public IReadOnlySet<string> Capabilities { get; } = caps.ToHashSet();
         long lastLoad, lastStart;
-        public long? Load(string scenario) { Calls.Add("load " + scenario); return lastLoad = Calls.Count; }
+        public long? Load(string scenario) { Calls.Add("load " + scenario); loadedScenario = scenario; return lastLoad = Calls.Count; }
+        // core-scene.json as AimModCore would publish it: the loaded scenario and the map its file names
+        // (read from the test game folder); StuckMap keeps an old map, like the live CS bug.
+        public string? Root; public string? StuckMap; string? loadedScenario;
+        public GameScene? Scene
+        {
+            get
+            {
+                if (loadedScenario is null || Root is null) return null;
+                var path = Path.Combine(Root, "Saved", "SaveGames", "Scenarios", loadedScenario + ".sce");
+                var (map, scale) = File.Exists(path) ? MatchScenario.MapOf(File.ReadAllText(path)) : (null, null);
+                return new GameScene(true, loadedScenario, StuckMap ?? map ?? "", StuckMap is null ? scale : 1, false, false, SceneLoading == true, false);
+            }
+        }
         public long? Start(string scenario, string mode, long? seed = null) { Calls.Add("start " + mode + " " + scenario + (seed is long s ? " seed " + s : "")); return lastStart = Calls.Count; }
         public long? Refresh() { Calls.Add("refresh"); return Calls.Count; }
         // A challenge still running in KovaaK's (core-scene.json); while true, loads answer challenge-active.
         public bool? ChallengeRunning { get; set; }
+        public bool? SceneLoading { get; set; }
         bool refusedLoad;
         // Answers like AimModCore: the latest load is done, then the latest start.
         public GameCommandResult? Result => lastStart > lastLoad ? new GameCommandResult(lastStart, "done", "started", "")
@@ -1764,7 +1784,7 @@ static partial class MultiplayerChecks
         var game = Path.Combine(root, "game");
         var output = Path.Combine(root, "output");
         Directory.CreateDirectory(output);
-        var control = new FakeGame("load", "start");
+        var control = new FakeGame("load", "start") { Root = game };
         var runs = new List<Run>();
         var service = new MultiplayerService(new OfflineTransport(), new ContentLibrary(game), control, () => new LocalRun(false, null, null, null, null, 0, 0, 0, null), () => runs,
             () => "Synthetic Player", output, simulation: true, () => now, autoTick: false, seed: 7);
@@ -1858,6 +1878,10 @@ static partial class MultiplayerChecks
         Run(12_000);
         Check(service.Act("start", default).Ok, "The duel starts with a simulated opponent");
         Run(300);
+        var waitingLoad = JsonDocument.Parse(service.NoticeText()).RootElement;
+        Check(waitingLoad.GetProperty("title").GetString()!.StartsWith("Waiting for everyone to load (", StringComparison.Ordinal), "Loading: the toast waits for everyone's map, counting who is ready");
+        static bool HasDuel(string notice) => JsonDocument.Parse(notice).RootElement.TryGetProperty("duel", out var d) && d.ValueKind == JsonValueKind.Object;
+        for (var i = 0; i < 100 && !HasDuel(service.NoticeText()); i++) Run(100);
         var countdown = JsonDocument.Parse(service.NoticeText()).RootElement;
         Check(countdown.GetProperty("duel").GetProperty("you").ValueKind == JsonValueKind.Null && countdown.GetProperty("duel").GetProperty("left").ValueKind == JsonValueKind.Null
             && countdown.GetProperty("body").GetString()!.Contains("dodge their aim", StringComparison.Ordinal), "Countdown: the toast says both players track and dodge");

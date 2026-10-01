@@ -164,7 +164,7 @@ static partial class MultiplayerChecks
         var game = Path.Combine(root, "game");
         var output = Path.Combine(root, "tournament-output");
         Directory.CreateDirectory(output);
-        var control = new FakeGame("load", "start");
+        var control = new FakeGame("load", "start") { Root = game };
         var service = new MultiplayerService(new OfflineTransport(), new ContentLibrary(game), control, () => new LocalRun(false, null, null, null, null, 0, 0, 0, null), () => [],
             () => "Synthetic Player", output, simulation: true, () => now, autoTick: false, seed: 11);
         using var hub = new Hub(Path.Combine(root, "hub-unlinked"), new TournamentFixture());

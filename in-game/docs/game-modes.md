@@ -409,6 +409,53 @@ interface IGameMode
   checkpoint and the round in progress is replayed from its start (or
   declared void, by mode setting).
 
+#### 4.2.1 Generated arenas and the load gate (built)
+
+A live CS match once ran its rounds while KovaaK's still showed the previous
+map. `core-scene.json` had the match scenario's name, but its `mapName` was
+`kovaim1.map`. Rebuilding that arena offline from the same map port
+(`--generate-arena <base.sce> <mode> <out.sce>`) showed the cause:
+
+- The `[Map Data]` bytes, `MapName` and `MapScale` were identical to the base.
+- The generator had appended its Character, Bot, Aim, Dodge and Weapon
+  profiles after the base's last Weapon Profile, so they were out of the
+  grouped order KovaaK's saves scenarios in.
+- KovaaK's loaded the profiles but kept the old map.
+
+Fixes:
+
+- **Section order.** The generator (version 4) groups sections in KovaaK's
+  order: Aim, Bot, Bot Rotation, Character, Dodge, the ability profiles,
+  Weapon. The map comes last, exactly as the base had it.
+- **Validation.** `MatchScenario.Validate(base, generated)` reports:
+  - a changed `[Map Data]` (byte for byte), `MapName` or `MapScale`;
+  - sections out of order, and duplicate profiles;
+  - a player profile, added bot, bot character or player weapon that the file
+    doesn't define.
+
+  The service refuses to write a match scenario with a problem that its base
+  doesn't already have. The self-tests generate every mode's arena from a
+  CRLF port with a multi-line JSON map and expect no problems.
+- **Load gate, all modes.** A player counts as loaded only after
+  `core-scene.json` shows the round's scenario, with its `MapName` (with or
+  without the extension, any case) at its `MapScale`, `loading:false`, on two
+  polls in a row. The countdown, and CS freeze and buy time, start only once
+  every present player is loaded. Until then, everyone sees "Waiting for
+  everyone to load (n/m)".
+- **Retry and abort.** If a player's map is still wrong after 15 s, that
+  client loads the scenario again. After another 15 s it reports
+  `loaded {ok:false, reason, attempt}`.
+
+  A reported problem, or 45 s without everyone loaded, fails the load. The
+  match never starts on its own after that. Everyone sees "Couldn't load the
+  match (n/m)" with each player's reason, and the host gets Retry
+  (`retry-load`, a new `LoadAttempt` with nobody loaded) and Abort (`end`).
+  Reports from an earlier attempt don't count.
+- **Debug copies.** A match scenario stays in the game's Scenarios folder
+  while its lobby needs it. One that failed to load is copied to
+  `<output>/match-debug/` before cleanup removes it. Only the last three are
+  kept.
+
 ### 4.3 What AimModCore's Play module needs
 
 Every entry point is resolved by name and signature-checked like today's

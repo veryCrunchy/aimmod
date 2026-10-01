@@ -29,6 +29,8 @@ sealed class LobbyCore
         public int Round = 1; public long? StartsAt, EndsAt, NextAt; public List<string> Players = [];
         public Dictionary<string, Line> Live = new(); public List<RoundResult> Rounds = []; public HashSet<string> Rematch = [];
         public Dictionary<string, string> Names = new(); public string? WinnerId; public bool Over; public long? RematchDeadline; public HashSet<string> Loaded = [];
+        // Load gate: why a player's map isn't there, whether the wait timed out, and the retry count.
+        public Dictionary<string, string> LoadIssues = new(); public bool LoadFailed; public int LoadAttempt;
         // Tracking duel: the current round's samples, and the last host scores (first, second player).
         public TrackingRound? Tracking; public (TrackResult First, TrackResult Second)? TrackLast; public long TrackComputedAt;
         // Combat modes: the host's health, frags and respawns for the whole match.
@@ -110,7 +112,9 @@ sealed class LobbyCore
     public LobbySnapshot Snapshot() => new(Protocol.Version, Id, Code, Revision, HostId, Settings, Members, MatchView(), chat.ToArray(), clock(), readyCheck, autoStartAt, suggestions.Select(s => new Suggestion(s.Scenario, s.By, s.Votes.ToArray())).ToArray());
     // Wait for everyone to load the scenario before the countdown (set when AimMod can load scenarios).
     public bool RequireLoading { get; set; }
-    public const long LoadingMs = 20_000;
+    // How long everyone has to load before the host is asked to retry or abort. Clients
+    // retry a wrong map themselves at 15 s and report it at 30 s.
+    public const long LoadingMs = 45_000;
     readonly List<(string Scenario, string By, HashSet<string> Votes)> suggestions = [];
 
     public LobbyResult Join(string id, string name, bool simulated = false, string? version = null)
@@ -320,7 +324,26 @@ sealed class LobbyCore
                 suggestions.Clear(); Changed();
                 return LobbyResult.Success;
             case "loaded":
-                if (match is { Phase: MatchPhases.Loading } lm && lm.Players.Contains(from) && lm.Loaded.Add(from)) Changed();
+            {
+                // ok (default true): the player's game shows the scenario and its map; false with a reason.
+                if (match is not { Phase: MatchPhases.Loading } lm || !lm.Players.Contains(from)) return LobbyResult.Success;
+                if (args.ValueKind == JsonValueKind.Object && args.TryGetProperty("attempt", out var at) && at.TryGetInt32(out var attempt) && attempt != lm.LoadAttempt) return LobbyResult.Success;
+                var ok = !(args.ValueKind == JsonValueKind.Object && args.TryGetProperty("ok", out var okv) && okv.ValueKind == JsonValueKind.False);
+                if (ok) { lm.LoadIssues.Remove(from); if (lm.Loaded.Add(from)) Changed(); }
+                else
+                {
+                    var reason = LobbyRules.CleanChat(Text("reason")) ?? "The map didn’t load.";
+                    lm.Loaded.Remove(from);
+                    if (lm.LoadIssues.GetValueOrDefault(from) != reason) { lm.LoadIssues[from] = reason; Changed(); }
+                }
+                return LobbyResult.Success;
+            }
+            case "retry-load":
+                // The host asks everyone to load again after a failed or stuck load.
+                if (!IsHost(from)) return HostOnly();
+                if (match is not { Phase: MatchPhases.Loading } rm) return LobbyResult.Fail("invalid", "Nothing is loading.");
+                rm.Loaded.Clear(); rm.LoadIssues.Clear(); rm.LoadFailed = false; rm.LoadAttempt++; rm.NextAt = clock() + LoadingMs;
+                System("Loading again.");
                 return LobbyResult.Success;
             case "buy" or "use":
                 return CsAction(member, action, args);
@@ -662,7 +685,19 @@ sealed class LobbyCore
         if (match is { Phase: MatchPhases.Final, RematchDeadline: { } deadline } && now >= deadline) TryRematch(timedOut: true);
         if (match is null) return;
         // Warm-up: the countdown begins once everyone has the scenario loaded, or after 20 s.
-        if (match.Phase == MatchPhases.Loading && (now >= match.NextAt || match.Players.All(id => match.Loaded.Contains(id) || Find(id) is null))) StartRound();
+        // Load gate: the match starts only once every present player's map has loaded. A timeout
+        // or a reported problem waits for the host to retry or abort; it never starts anyway.
+        if (match.Phase == MatchPhases.Loading)
+        {
+            var present = match.Players.Where(id => Find(id) is not null).ToArray();
+            if (present.Length > 0 && present.All(match.Loaded.Contains)) StartRound();
+            else if (!match.LoadFailed && (now >= match.NextAt || present.Any(match.LoadIssues.ContainsKey)))
+            {
+                match.LoadFailed = true;
+                var waiting = present.Where(id => !match.Loaded.Contains(id)).Select(id => match.Names.GetValueOrDefault(id, "Player")).ToArray();
+                System("Couldn’t load the match for " + string.Join(", ", waiting) + ". The host can retry or end the match.");
+            }
+        }
         if (match.Phase == MatchPhases.Countdown && now >= match.StartsAt)
         {
             match.Phase = MatchPhases.Live;
@@ -799,7 +834,7 @@ sealed class LobbyCore
             s.Mode == LobbyModes.Duel ? s.FirstTo : null, m.StartsAt, m.EndsAt, m.NextAt, m.Players.ToArray(),
             m.Live.Select(kv => kv.Value.View(kv.Key)).ToArray(), m.Rounds.ToArray(), Standings(m), m.WinnerId, m.Rematch.ToArray(), m.RematchDeadline, m.Loaded.ToArray(),
             null, m.Tracking is { } t && m.TrackLast is { } r ? [TrackView.Of(t.First, r.First), TrackView.Of(t.Second, r.Second)] : null,
-            m.Combat?.View(), m.Cs?.View());
+            m.Combat?.View(), m.Cs?.View(), m.LoadIssues.Count > 0 ? new Dictionary<string, string>(m.LoadIssues) : null, m.LoadFailed, m.LoadAttempt);
     }
 
     // A client that becomes host rebuilds the authority from the last snapshot it mirrored.
@@ -818,7 +853,8 @@ sealed class LobbyCore
         if (snapshot.Match is { } ms)
         {
             var match = new Match { Id = ms.Id, Settings = snapshot.Settings, Phase = ms.Phase, Round = ms.Round, StartsAt = ms.StartsAt, EndsAt = ms.EndsAt, NextAt = ms.NextAt,
-                Players = ms.Players.ToList(), Rounds = ms.Rounds.ToList(), WinnerId = ms.WinnerId, Loaded = ms.Loaded?.ToHashSet() ?? [], RematchDeadline = ms.RematchDeadline };
+                Players = ms.Players.ToList(), Rounds = ms.Rounds.ToList(), WinnerId = ms.WinnerId, Loaded = ms.Loaded?.ToHashSet() ?? [], RematchDeadline = ms.RematchDeadline,
+                LoadIssues = ms.LoadIssues?.ToDictionary(kv => kv.Key, kv => kv.Value) ?? [], LoadFailed = ms.LoadFailed, LoadAttempt = ms.LoadAttempt };
             foreach (var l in ms.Live) match.Live[l.MemberId] = new Line { Score = l.Score, Seconds = l.Seconds, Remaining = l.Remaining, Shots = l.Shots, Hits = l.Hits, Kills = l.Kills, Status = l.Status, Disputed = l.Disputed };
             foreach (var st in ms.Standings) match.Names[st.MemberId] = st.Name;
             foreach (var r in ms.Rematch) match.Rematch.Add(r);

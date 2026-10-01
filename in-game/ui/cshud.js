@@ -21,7 +21,7 @@
   function buyMenu(c,act){
     var box=node('div','cs-buy');box.setAttribute('role','dialog');box.setAttribute('aria-label','Buy menu');
     var head=node('div','cs-buy-head');head.appendChild(node('strong','','Buy'));head.appendChild(node('span','cs-buy-money',money(c.money)));
-    head.appendChild(node('span','cs-buy-left',typeof c.buyLeft==='number'?clock(c.buyLeft)+' left':'Buy time over'));
+    head.appendChild(node('span','cs-buy-left',typeof c.buyLeft==='number'?'Buy time '+clock(c.buyLeft):'Buy time over'));
     var close=node('button','cs-buy-close',c.buyKey+' closes');close.type='button';close.onclick=function(){act('cs-buy-menu','');};head.appendChild(close);
     box.appendChild(head);
     // Two columns so the whole menu fits at 720p: pistols, SMGs and heavy; rifles and gear.
@@ -33,11 +33,11 @@
       items.forEach(function(i){
         var b=node('button','cs-item'+(i.owned?' owned':i.disabled?' off':i.affordable?' ok':''));b.type='button';
         if(i.disabled&&!i.owned)b.disabled=true;
-        b.appendChild(node('span','cs-item-key',typeof i.key==='number'?String(i.key):''));
-        var t=node('span','cs-item-text');t.appendChild(node('span','cs-item-name',i.label));t.appendChild(node('span','cs-item-why',i.owned?'Owned':i.disabled||''));b.appendChild(t);
+        b.appendChild(node('div','cs-item-key',typeof i.key==='number'?String(i.key):''));
+        var t=node('div','cs-item-text');t.appendChild(node('div','cs-item-name',i.label));var why=i.owned?'Owned':i.disabled||'';if(why)t.appendChild(node('div','cs-item-why',why));b.appendChild(t);
         // The KovaaK's weapon profile the item maps to, for players who know them.
         if(i.profile)b.title=i.profile;
-        b.appendChild(node('span','cs-item-price',money(i.price)));
+        b.appendChild(node('div','cs-item-price',money(i.price)));
         b.onclick=function(){if(!b.disabled&&!i.owned)act('cs-buy',i.id);};
         group.appendChild(b);
       });
@@ -53,7 +53,8 @@
     var top=node('div','cs-top');
     var t=node('div','cs-score t'+(c.side==='T'?' mine':''));t.appendChild(node('span','cs-team','T'));t.appendChild(node('span','cs-points',c.tScore));
     var mid=node('div','cs-clock'+(c.phase==='planted'?' bomb':''));
-    var label=c.phase==='freeze'?'Buy time':c.phase==='planted'?'Bomb planted'+(c.site?' · '+c.site:''):c.phase==='end'?'Round over':'Round '+c.round;
+    // Freeze time here; the buy menu counts the buy window (freeze plus buy time) and says so.
+    var label=c.phase==='freeze'?'Freeze time':c.phase==='planted'?'Bomb planted'+(c.site?' · '+c.site:''):c.phase==='end'?'Round over':'Round '+c.round;
     mid.appendChild(node('span','cs-clock-label',label));
     mid.appendChild(node('span','cs-clock-time',c.phase==='planted'&&typeof c.bombIn==='number'?clock(c.bombIn):clock(c.left)));
     mid.appendChild(node('span','cs-clock-round','Round '+c.round+' of '+c.rounds));
