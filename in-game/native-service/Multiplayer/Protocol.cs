@@ -102,6 +102,8 @@ interface IMultiplayerTransport : IDisposable
     void Transfer(string peer);
     // Who the transport considers the host (the Steam lobby owner), when it knows.
     string? HostHint { get; }
+    // The current Steam lobby, kept so a crashed or restarted client can rejoin it.
+    string? LobbyToken { get; }
     void Send(string peer, byte[] frame, bool reliable);
     void Close(string peer);
     // Events since the last call: connected, disconnected, a frame, an incoming
@@ -159,6 +161,7 @@ sealed class OfflineTransport : IMultiplayerTransport
     public void Kick(string peer) { }
     public void Transfer(string peer) { }
     public string? HostHint => null;
+    public string? LobbyToken => null;
     public void Send(string peer, byte[] frame, bool reliable) { }
     public void Close(string peer) { }
     public IReadOnlyList<TransportEvent> Drain() => [];

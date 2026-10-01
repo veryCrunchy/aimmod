@@ -26,7 +26,9 @@ local function noticeUrl()
 end
 -- The game's own UI sounds; missing assets are simply skipped.
 local sounds={}
+local volume=0.8
 local function play(name)
+    if volume<=0 then return true end
     local ok=pcall(function()
         local path='/Game/Audio/UI/SFX/'..name..'.'..name
         local sound=sounds[name]
@@ -36,7 +38,7 @@ local function play(name)
             sounds[name]=sound
         end
         if valid(sound) and valid(owner) then
-            StaticFindObject('/Script/Engine.Default__GameplayStatics'):PlaySound2D(owner,sound,1.0,1.0,0.0,nil,nil,true)
+            StaticFindObject('/Script/Engine.Default__GameplayStatics'):PlaySound2D(owner,sound,volume,1.0,0.0,nil,nil,true)
         end
     end)
     return ok
@@ -95,6 +97,7 @@ function M.update(panelOpen,replayActive)
     local id=text:match('"id":"([^"]+)"')
     local sound=text:match('"sound":"(%a+)"')
     local count=tonumber(text:match('"countdown":(%d+)') or '')
+    volume=math.max(0,math.min(1,tonumber(text:match('"volume":([%d%.]+)') or '') or 0.8))
     local url=noticeUrl()
     if not url then M.hide();return end
     if not valid(host) or not valid(view) or not valid(renderer) then

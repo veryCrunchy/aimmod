@@ -59,6 +59,9 @@ sealed class MultiplayerService : IDisposable
         this.transport = transport; this.library = library; this.game = game; this.liveRun = liveRun; this.completedRuns = completedRuns; this.accountName = accountName;
         this.clock = clock ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         outputFolder = output;
+        if (output is not null) { prefsPath = Path.Combine(output, "multiplayer-settings.json"); sessionPath = Path.Combine(output, "multiplayer-session.json"); }
+        prefs = MultiplayerPrefs.Load(prefsPath); HotkeyName = prefs.Hotkey;
+        LoadSession();
         historyPath = output is null ? null : Path.Combine(output, "multiplayer-matches.json");
         if (output is not null && library.ScenarioFolder is { } folder) scenarios = new MatchScenarioStore(folder, Path.Combine(output, "multiplayer-scenarios.json"));
         LoadHistory();
@@ -122,6 +125,8 @@ sealed class MultiplayerService : IDisposable
                 case "leave":
                     Leave("left");
                     return LobbyResult.Success;
+                case "prefs":
+                    return SetPrefs(args);
                 case "dismiss":
                     notice = null; return LobbyResult.Success;
                 case "invite":
@@ -203,18 +208,105 @@ sealed class MultiplayerService : IDisposable
 
     IReadOnlyList<FriendEntry> Friends() => Simulation is not null && !transport.Available ? Simulation.Friends(clock()) : transport.Friends();
 
+    // ---- preferences, auto-ready and rejoin -------------------------------
+
+    MultiplayerPrefs prefs = new();
+    string? prefsPath, sessionPath;
+    string? autoLobby; bool autoContentOk, autoInMatch, autoJoinedDone;
+    (string Token, long At)? rejoin;
+    bool rejoinTried;
+    string? lastSessionJson;
+
+    // A ranked (challenge) run of the player's own, outside any match round.
+    bool OwnRankedRun()
+    {
+        if (!prefs.QuietDuringRanked) return false;
+        var live = liveRun();
+        return live.Active && Current?.Match is not { Phase: MatchPhases.Countdown or MatchPhases.Live };
+    }
+
+    // Ready up on the player's chosen moments only; after they unready, nothing re-readies until the next moment.
+    void AutoReady()
+    {
+        if (Current is not { } lobby || lobby.HostId == SelfId) { autoLobby = null; return; }
+        var me = lobby.Members.FirstOrDefault(m => m.Id == SelfId);
+        if (me is null || me.Role != MemberRoles.Player) return;
+        var (scenario, map, profiles) = LocalContent(lobby.Settings);
+        var contentOk = lobby.Settings.Scenario is not null && scenario == ContentStates.Ok && map == ContentStates.Ok && profiles is not (ContentStates.Missing or ContentStates.Mismatch);
+        var inMatch = lobby.Match is not null;
+        var fresh = autoLobby != lobby.Id;
+        if (fresh) { autoLobby = lobby.Id; autoJoinedDone = false; autoContentOk = contentOk; autoInMatch = inMatch; }
+        var want = false;
+        if (!autoJoinedDone && contentOk && !inMatch) { autoJoinedDone = true; want |= prefs.ReadyOnJoin; }
+        if (!fresh && contentOk && !autoContentOk) want |= prefs.ReadyOnContent;
+        if (!fresh && autoInMatch && !inMatch && contentOk) want |= prefs.ReadyAfterMatch;
+        autoContentOk = contentOk; autoInMatch = inMatch;
+        if (want && !me.Ready && !inMatch) Command("ready", JsonSerializer.SerializeToElement(new { ready = true }));
+    }
+
+    // Where this machine is, so a crash or restart can rejoin the same lobby and round.
+    void SaveSession()
+    {
+        if (sessionPath is null) return;
+        try
+        {
+            if (Current is { } lobby && transport.LobbyToken is { } token && lobby.HostId != SelfId)
+            {
+                // Refreshed about once a minute so a stale file from long ago is never rejoined.
+                var key = token + "|" + lobby.Id + "|" + clock() / 60_000;
+                if (key == lastSessionJson) return;
+                lastSessionJson = key;
+                AtomicFile.WriteText(sessionPath, JsonSerializer.Serialize(new { token, lobby = lobby.Id, at = clock() }, Protocol.Json));
+            }
+            else if (Current is null && hostPeer is null && joinPendingSince is null && rejoin is null && File.Exists(sessionPath)) File.Delete(sessionPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
+    void LoadSession()
+    {
+        if (sessionPath is null || !File.Exists(sessionPath)) return;
+        try
+        {
+            if (new FileInfo(sessionPath).Length > 1024) return;
+            using var doc = JsonDocument.Parse(File.ReadAllText(sessionPath));
+            var root = doc.RootElement;
+            if (root.TryGetProperty("token", out var t) && t.ValueKind == JsonValueKind.String && t.GetString() is { Length: > 0 and <= 64 } token
+                && root.TryGetProperty("at", out var a) && a.TryGetInt64(out var at) && clock() - at is >= 0 and < 15 * 60_000)
+                rejoin = (token, at);
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException) { }
+    }
+    void TryRejoin()
+    {
+        if (rejoin is not { } r || rejoinTried || !transport.Available || Current is not null || hostPeer is not null || joinPendingSince is not null) return;
+        rejoinTried = true; rejoin = null;
+        if (JoinBy(r.Token, invite: true).Ok) notice = ("info", "Rejoining your lobby after the restart…", clock());
+    }
+
+    public object PrefsView() => prefs;
+    LobbyResult SetPrefs(JsonElement args)
+    {
+        if (!args.TryGetProperty("prefs", out var patch) || MultiplayerPrefs.Apply(prefs, patch) is not { } next) return LobbyResult.Fail("invalid", "Unknown preferences.");
+        prefs = next; HotkeyName = next.Hotkey;
+        try { if (prefsPath is not null) prefs.Save(prefsPath); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return LobbyResult.Fail("save", "Couldn’t save your preferences."); }
+        return LobbyResult.Success;
+    }
+
     // ---- notifications outside the AimMod panel ----------------------------
 
     public string HotkeyName { get; set; } = "F7";
     (GameNotice Notice, long Until)? flash;
     string? lastNoticeJson;
-    public bool HotkeyArmed { get { lock (gate) return Current is not null || invites.Count > 0; } }
+    public bool HotkeyArmed { get { lock (gate) return (Current is not null || invites.Count > 0) && !OwnRankedRun(); } }
     public GameNotice? Notice() { lock (gate) return ComputeNotice(clock()); }
 
     GameNotice? ComputeNotice(long now)
     {
         var key = HotkeyName;
-        if (invites.FirstOrDefault(i => now - i.At < 120_000) is { } invite)
+        // Quiet while the player runs a ranked scenario of their own: no invite or ready popups.
+        var quiet = OwnRankedRun();
+        if (!quiet && invites.FirstOrDefault(i => now - i.At < 120_000) is { } invite)
         {
             var from = LobbyRules.CleanName(invite.FromName, "A friend");
             if (invite.Kind == "request")
@@ -231,7 +323,7 @@ sealed class MultiplayerService : IDisposable
             var how = plan is { } p && p.Key == match.Id + "#" + match.Round ? p.Message : "Get ready.";
             return new GameNotice("cd-" + match.Id + "-" + match.Round, "countdown", round + " in " + seconds, LobbyRules.CleanName(match.Scenario, "Scenario") + " · " + how, null, seconds, "countdown");
         }
-        if (lobby.ReadyCheck is { } asked && now - asked < LobbyCore.ReadyCheckMs && me is { Role: MemberRoles.Player, Ready: false } && lobby.HostId != SelfId)
+        if (!quiet && lobby.ReadyCheck is { } asked && now - asked < LobbyCore.ReadyCheckMs && me is { Role: MemberRoles.Player, Ready: false } && lobby.HostId != SelfId)
         {
             var host = lobby.Members.FirstOrDefault(m => m.Id == lobby.HostId)?.Name ?? "The host";
             var (scenario, map, profiles) = LocalContent(lobby.Settings);
@@ -280,7 +372,7 @@ sealed class MultiplayerService : IDisposable
     {
         if (outputFolder is null) return;
         var notice = ComputeNotice(clock());
-        var json = notice is null ? "{\"version\":1,\"active\":false}" : JsonSerializer.Serialize(new { version = 1, active = true, notice.Id, notice.Kind, notice.Title, notice.Body, notice.Key, notice.Countdown, notice.Sound, notice.Invite, interactive = notice.Invite is not null }, Protocol.Json);
+        var json = notice is null ? "{\"version\":1,\"active\":false}" : JsonSerializer.Serialize(new { version = 1, active = true, notice.Id, notice.Kind, notice.Title, notice.Body, notice.Key, notice.Countdown, notice.Sound, notice.Invite, interactive = notice.Invite is not null, volume = prefs.Sounds ? prefs.Volume : 0 }, Protocol.Json);
         if (json == lastNoticeJson) return;
         try { AtomicFile.WriteText(Path.Combine(outputFolder, "multiplayer-notify.json"), json); lastNoticeJson = json; }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
@@ -426,6 +518,8 @@ sealed class MultiplayerService : IDisposable
         else if (hostPeer is not null) { Send(hostPeer, "bye", new { reason }); transport.Close(hostPeer); }
         transport.Withdraw();
         core = null; mirror = null; hostPeer = null; pendingHeir = null; joinPendingSince = null; clocks.Clear();
+        // Leaving on purpose (not a crash) forgets the rejoin point.
+        if (reason is "left" or "kicked" or "closed") { rejoin = null; lastSessionJson = null; try { if (sessionPath is not null && File.Exists(sessionPath)) File.Delete(sessionPath); } catch (IOException) { } }
         Reset();
     }
 
@@ -523,6 +617,9 @@ sealed class MultiplayerService : IDisposable
             PumpContent();
             PrepareMatchScenario();
             PublishNotice();
+            AutoReady();
+            SaveSession();
+            TryRejoin();
             PlanRound();
             TrackLocalRun();
             Remember();
@@ -983,6 +1080,7 @@ sealed class MultiplayerService : IDisposable
                 transport = new { kind = transport.Kind, online = transport.Available },
                 simulation = Simulation is not null,
                 hotkey = HotkeyName,
+                prefs,
                 capabilities = new { invite = transport.Available, friends = friendsSource != "unavailable", gameLoad = caps.Contains("load"), gameStart = caps.Contains("start") },
                 self = new { id = SelfId, name = LocalName() },
                 joining = (hostPeer is not null && mirror is null) || joinPendingSince is not null ? new { since = joinPendingSince ?? connectAt, stage = hostPeer is null ? "lobby" : "host" } : null,

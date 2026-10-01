@@ -164,7 +164,25 @@
     var main=node('div','mp-col mp-main'),side=node('div','mp-col mp-side');row.appendChild(main);row.appendChild(side);
     main.appendChild(friendsPanel(false));
     side.appendChild(recentPanel());
+    side.appendChild(prefsPanel());
     if(view.simulation)page.appendChild(devPanel(false));
+  }
+  // This player's own multiplayer preferences (saved on this PC).
+  function prefsPanel(){
+    var pr=view.prefs||{};var p=node('div','panel mp-prefs');var head=node('div','panel-head');var text=node('div','head-text');
+    add(text,node('h2','','Your multiplayer settings'),node('p','','Saved on this PC.'));head.appendChild(text);p.appendChild(head);
+    var body=node('div','mp-prefs-body');p.appendChild(body);
+    function pref(key,value){var o={};o[key]=value;act('prefs',{prefs:o});}
+    function flag(key,title,note){body.appendChild(settingRow(title,note,toggleSwitch(!!pr[key],title,function(){pref(key,!pr[key]);})));}
+    flag('readyOnJoin','Ready when I join','Once you have the content.');
+    flag('readyOnContent','Ready after downloading','When missing content finishes installing.');
+    flag('readyAfterMatch','Ready again after a match','Back in the lobby after the results.');
+    flag('quietDuringRanked','Quiet during ranked runs','No popups or hotkey while you play a scenario of your own.');
+    flag('sounds','Sounds','Uses KovaaK’s own menu sounds.');
+    if(pr.sounds)body.appendChild(settingRow('Volume','',stepper(typeof pr.volume==='number'?pr.volume:0.8,0,1,0.1,function(v){return F.number(v*100,0)+'%';},function(v){pref('volume',v);},false,'volume')));
+    var keys=[];for(var i=5;i<=10;i++)keys.push({id:'F'+i,label:'F'+i});
+    body.appendChild(settingRow('Hotkey','Ready up or open the lobby from in game.',segmented(keys,pr.hotkey||'F7',function(id){pref('hotkey',id);},false,'hotkey')));
+    return p;
   }
   function joinCode(){var code=(drafts.code||'').toUpperCase().replace(/[^A-Z0-9]/g,'');if(code.length!==6){toast('Room codes are six letters and numbers.');return;}act('join',{code:code},function(ok){if(ok)drafts.code='';});}
   function steamState(){
@@ -268,6 +286,7 @@
   function lobbyRoom(page,lobby){
     connectionBanners(page,lobby);
     var mine=member(lobby.self);
+    if(lobby.autoStartAt){var auto=banner('info','Everyone’s ready. Starting in 3 s…');page.appendChild(auto);countNodes.push({node:auto.children[1],at:lobby.autoStartAt,format:function(ms){return 'Everyone’s ready. Starting in '+Math.max(1,seconds(ms))+' s…';}});}
     if(lobby.readyCheck&&!lobby.isHost&&mine&&mine.role==='player'&&!mine.ready)page.appendChild(banner('warn',safe(nameOf(lobby.hostId))+' is starting. Ready up below'+(view.hotkey?', or press '+view.hotkey+' in game':'')+'.'));
     page.appendChild(lobbyHead(lobby));
     var row=node('div','mp-row');page.appendChild(row);
@@ -385,7 +404,7 @@
     if(s.character&&s.character.preset!=='default')kv('Character',profileText(s.character,'character'));
     if(s.targetSpeed!==1||s.targetSize!==1)kv('Targets','Speed '+multiplier(s.targetSpeed)+' · size '+multiplier(s.targetSize));
     kv('Players','Up to '+s.maxPlayers+(s.spectators?' + spectators':''));
-    kv('Countdown',F.number(s.countdown,0)+' s'+(s.lateJoin?' · late join on':''));
+    kv('Countdown',F.number(s.countdown,0)+' s'+(s.lateJoin?' · late join on':'')+(s.autoStart?' · auto start':''));
     if(lobby.generated){var g=node('div','mp-generated');add(g,node('strong','',lobby.generated.problem?'Match scenario problem':lobby.generated.saved?'Match scenario saved to your scenarios':'A custom scenario will be generated'),lobby.generated.problem?node('span','mp-warn-line',safe(lobby.generated.problem,'')):null,node('span','',safe(lobby.generated.name,'Match scenario')),node('span','mp-muted','Played in freeplay and scored by AimMod, so KovaaK’s leaderboards stay untouched.'));p.appendChild(g);}
     else if(s.scenario)p.appendChild(node('div','mp-generated plain','Played as the published scenario. Each player’s run is a normal KovaaK’s run.'));
     return p;
@@ -445,6 +464,7 @@
     rd.appendChild(settingRow('Countdown','Seconds before everyone starts.',stepper(s.countdown,3,10,1,function(v){return F.number(v,0)+' s';},function(v){setting('countdown',v);},false,'countdown')));
     var lateOk=s.mode==='ffa-rounds'||s.mode==='practice';
     rd.appendChild(settingRow('Late join',lateOk?'Players who join mid-match play from the next round.':'Only free-for-all and practice allow late join.',toggleSwitch(s.lateJoin,'Late join',function(){setting('lateJoin',!s.lateJoin);},!lateOk)));
+    rd.appendChild(settingRow('Auto start','Starts by itself a few seconds after everyone is ready.',toggleSwitch(!!s.autoStart,'Auto start',function(){setting('autoStart',!s.autoStart);})));
     right.appendChild(rd);
     // Loadout
     var lo=section('Loadout',overrides?'Presets build a match scenario from the base scenario, so everyone gets the same feel.':lockNote);
@@ -605,7 +625,8 @@
     var voted=match.rematch.indexOf(lobby.self)>=0,isPlayer=match.players.indexOf(lobby.self)>=0;
     var rematch=button(voted?'Waiting for others…':'Rematch',function(){act('rematch');},'primary mp-big');if(voted||!isPlayer)rematch.disabled=true;
     hero.appendChild(actions(rematch,lobby.isHost?button('Back to lobby',function(){act('end');}):null,button('Leave',function(){act('leave');},'quiet danger')));
-    hero.appendChild(node('p','mp-note',votes?votes+' of '+needed+' want a rematch.':'Rematch starts when every player asks for one.'));
+    var closes=node('p','mp-note',votes?votes+' of '+needed+' want a rematch.':'Rematch starts when every player asks for one. Players who don’t answer in 20 seconds sit it out.');hero.appendChild(closes);
+    if(match.rematchDeadline)countNodes.push({node:closes,at:match.rematchDeadline,format:function(ms){return votes+' of '+needed+' want a rematch · starts in '+seconds(ms)+' s with whoever confirmed.';}});
     page.appendChild(hero);
     var row=node('div','mp-row');page.appendChild(row);var main=node('div','mp-col mp-main'),side=node('div','mp-col mp-side');row.appendChild(main);row.appendChild(side);
     var st=node('div','panel');var sh=node('div','panel-head');var shText=node('div','head-text');add(shText,node('h2','','Final standings'),node('p','','Kept in AimMod only. KovaaK’s leaderboards are never changed.'));sh.appendChild(shText);st.appendChild(sh);var sb=node('div','panel-body');sb.appendChild(standingsTable(match));st.appendChild(sb);main.appendChild(st);

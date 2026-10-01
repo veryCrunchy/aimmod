@@ -198,6 +198,35 @@ static class MultiplayerChecks
         Check(heir.HostId == "p2" && heir.Members.All(m => m.Id != "host") && heir.Snapshot().Match?.Id == snapshot.Match!.Id, "Host migration keeps the lobby and the running match");
         Check(heir.Members.First(m => m.Id == "p3").Connection == Connections.Reconnecting && heir.Join("p3", "").Ok && heir.Members.First(m => m.Id == "p3").Connection == Connections.Connected, "Other members reconnect to the new host");
         Check(heir.Snapshot().Match!.Live.First(l => l.MemberId == "host").Status == LineStates.Left, "The departed host's run is marked left");
+
+        // Auto start once nothing blocks for a moment.
+        (core, clock, advance) = Lobby();
+        core.Join("p2", "Two");
+        core.Apply("host", "settings", Patch(new { mode = "practice", autoStart = true }), content);
+        ReadyAll(core); core.Tick();
+        Check(core.Snapshot().AutoStartAt is not null && core.Snapshot().Match is null, "Auto start waits a moment once everyone is ready");
+        core.Apply("p2", "ready", J(new { ready = false }), content); core.Tick();
+        Check(core.Snapshot().AutoStartAt is null, "Unreadying cancels the auto start");
+        core.Apply("p2", "ready", J(new { ready = true }), content); core.Tick();
+        advance(LobbyCore.AutoStartMs + 1); core.Tick();
+        Check(core.Snapshot().Match?.Phase == MatchPhases.Countdown, "The lobby starts itself");
+
+        // Play again: confirmers rematch; whoever doesn't answer in time sits out.
+        (core, clock, advance) = Lobby();
+        core.Join("p2", "Two"); core.Join("p3", "Three");
+        core.Apply("host", "settings", Patch(new { mode = "practice", countdown = 3 }), content);
+        ReadyAll(core); core.Apply("host", "start", default, content);
+        advance(3001); core.Tick();
+        var pm = core.Snapshot().Match!;
+        core.Leave("p3"); core.Join("p3", "Three");
+        Check(core.Members.First(m => m.Id == "p3").Role == MemberRoles.Player && core.Snapshot().Match!.Live.First(l => l.MemberId == "p3").Status == LineStates.Waiting, "A player who drops out of a running match rejoins it as a player");
+        foreach (var id in new[] { "host", "p2", "p3" }) core.Finish(id, new RunFinish(pm.Id, 1, 500, 60, 10, 5, 5, null));
+        core.Apply("host", "end", default, content);
+        Check(core.Snapshot().Match!.Phase == MatchPhases.Final, "Practice ends on request");
+        core.Apply("host", "rematch", default, content); core.Apply("p2", "rematch", default, content);
+        Check(core.Snapshot().Match!.RematchDeadline is not null && core.Snapshot().Match!.Phase == MatchPhases.Final, "The first vote opens a rematch window");
+        advance(LobbyCore.RematchMs + 1); core.Tick();
+        Check(core.Snapshot().Match is { Phase: MatchPhases.Countdown } again && again.Players.Count == 2 && !again.Players.Contains("p3") && core.Members.First(m => m.Id == "p3").Role == MemberRoles.Spectator, "Players who don't confirm in time sit the rematch out");
     }
 
     static void ProtocolFrames()
@@ -231,13 +260,15 @@ static class MultiplayerChecks
         public string? LocalName => "Synthetic " + id;
         public void Advertise(LobbySnapshot lobby) => network.Codes[lobby.Code] = id;
         public void Withdraw() { foreach (var k in network.Codes.Where(kv => kv.Value == id).Select(kv => kv.Key).ToArray()) network.Codes.Remove(k); }
-        public string? Resolve(string code) => network.Codes.GetValueOrDefault(code);
-        public bool BeginJoin(string token) { if (network.Codes.GetValueOrDefault(token) is not { } host) return false; Inbox.Enqueue(new TransportEvent(host, TransportEvent.Connected, Host: true)); return true; }
+        public string? Resolve(string code) { if (network.Codes.ContainsKey(code)) joinedCode = code; return network.Codes.GetValueOrDefault(code); }
+        public bool BeginJoin(string token) { if (network.Codes.GetValueOrDefault(token) is not { } host) return false; joinedCode = token; Inbox.Enqueue(new TransportEvent(host, TransportEvent.Connected, Host: true)); return true; }
         public void DismissJoin() { }
         public readonly List<string> HostActions = [];
         public void Kick(string peer) => HostActions.Add("kick " + peer);
         public void Transfer(string peer) => HostActions.Add("transfer " + peer);
         public string? HostHint => null;
+        string? joinedCode;
+        public string? LobbyToken => network.Codes.FirstOrDefault(kv => kv.Value == id).Key ?? joinedCode;
         public bool WorkshopDownload(string item) => false;
         // Bulk lane stand-in: chunks arrive in order; DropAfter cuts a transfer short like a lost link.
         public int BulkChunkBytes { get; set; }
@@ -530,6 +561,17 @@ static class MultiplayerChecks
         Check(partial > 0 && hostLink.BulkSent < offer.GetProperty("packed").GetInt64() * 2, "Resuming doesn't start over");
         Check(hostLink.Cancelled.Any(c => c.Reason == "complete"), "Completed transfers are closed as complete");
         Check(View(joiner).GetProperty("lobby").GetProperty("content").GetProperty("scenario").GetString() == "ok" && View(host).GetProperty("lobby").GetProperty("members").EnumerateArray().First(m => m.GetProperty("id").GetString() == "xfer-join").GetProperty("map").GetString() == "ok", "The member's state flips to has content");
+        Pump(5);
+        Check(View(host).GetProperty("lobby").GetProperty("members").EnumerateArray().First(m => m.GetProperty("id").GetString() == "xfer-join").GetProperty("ready").GetBoolean(), "The joiner readies up once the content is there (default preference)");
+        // Preferences are checked and saved.
+        Check(joiner.Act("prefs", J(new { prefs = new { volume = 5, hotkey = "f9", readyOnJoin = true, unknown = 1 } })).Ok && View(joiner).GetProperty("prefs").GetProperty("volume").GetDouble() == 1 && View(joiner).GetProperty("hotkey").GetString() == "F9", "Preferences are clamped and applied");
+        Check(MultiplayerPrefs.Load(Path.Combine(root, "xfer", "xfer-join", "out", "multiplayer-settings.json")).ReadyOnJoin, "Preferences persist");
+        // A crashed or restarted client rejoins its lobby.
+        Check(File.Exists(Path.Combine(root, "xfer", "xfer-join", "out", "multiplayer-session.json")), "The client remembers its lobby");
+        all.Remove(joiner);
+        var reborn = Make("xfer-join", Game("join"), out _);
+        Pump(5);
+        Check(View(reborn).GetProperty("lobby").ValueKind == JsonValueKind.Object && View(host).GetProperty("lobby").GetProperty("members").GetArrayLength() == 2, "After a restart the client rejoins the same lobby");
         // The host only serves current lobby content.
         var server = new ContentServer(new ContentLibrary(hostGame), () => now);
         var settings = new LobbySettings(Scenario: new ContentLibrary(hostGame).Scenario("Synthetic Port"));

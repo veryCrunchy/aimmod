@@ -62,7 +62,8 @@ sealed record LobbySettings(
     double TargetSize = 1,
     string Privacy = LobbyPrivacy.Friends,
     int Countdown = 5,
-    bool LateJoin = false)
+    bool LateJoin = false,
+    bool AutoStart = false)
 {
     public const int MinPlayers = 2, MaxPlayerLimit = 8, MaxSpectators = 4;
     [JsonIgnore] public ProfileChoice WeaponProfile => Weapon ?? ProfileChoice.Default;
@@ -95,13 +96,13 @@ sealed record Standing(string MemberId, string Name, int Place, int Wins, int Po
 
 sealed record MatchSnapshot(string Id, string Phase, string Mode, string Scenario, double TimeLimit, int Round, int? TotalRounds,
     int? FirstTo, long? StartsAt, long? EndsAt, long? NextAt, IReadOnlyList<string> Players, IReadOnlyList<ScoreLine> Live,
-    IReadOnlyList<RoundResult> Rounds, IReadOnlyList<Standing> Standings, string? WinnerId, IReadOnlyList<string> Rematch);
+    IReadOnlyList<RoundResult> Rounds, IReadOnlyList<Standing> Standings, string? WinnerId, IReadOnlyList<string> Rematch, long? RematchDeadline = null);
 
 sealed record ChatLine(long Id, string? From, string Name, string Text, long At, bool System);
 
 // ReadyCheck: when the host last asked everyone to ready up (host clock), while it is open.
 sealed record LobbySnapshot(int V, string Id, string Code, long Revision, string HostId, LobbySettings Settings,
-    IReadOnlyList<LobbyMember> Members, MatchSnapshot? Match, IReadOnlyList<ChatLine> Chat, long Now, long? ReadyCheck = null);
+    IReadOnlyList<LobbyMember> Members, MatchSnapshot? Match, IReadOnlyList<ChatLine> Chat, long Now, long? ReadyCheck = null, long? AutoStartAt = null);
 
 sealed record StartBlocker(string Code, string Text);
 
@@ -121,7 +122,7 @@ static class LobbyRules
 {
     public const int MaxName = 32, MaxChat = 200, MaxContentName = 128;
     static readonly HashSet<string> Keys = ["mode", "scenario", "mapOverride", "maxPlayers", "spectators", "rounds", "firstTo",
-        "timeLimit", "weapon", "movement", "character", "targetSpeed", "targetSize", "privacy", "countdown", "lateJoin"];
+        "timeLimit", "weapon", "movement", "character", "targetSpeed", "targetSize", "privacy", "countdown", "lateJoin", "autoStart"];
 
     public static string CleanName(string? name, string fallback)
     {
@@ -189,6 +190,7 @@ static class LobbyRules
                 case "privacy": if (Text() is not { } privacy || !LobbyPrivacy.All.Contains(privacy)) return (null, Bad("Unknown privacy option.")); next = next with { Privacy = privacy }; break;
                 case "countdown": if (Number() is not { } countdown) return (null, Bad("Countdown must be a number.")); next = next with { Countdown = (int)Clamp(countdown, 3, 10, 1) }; break;
                 case "lateJoin": if (Flag() is not { } late) return (null, Bad("Late join must be on or off.")); next = next with { LateJoin = late }; break;
+                case "autoStart": if (Flag() is not { } auto) return (null, Bad("Auto start must be on or off.")); next = next with { AutoStart = auto }; break;
             }
         }
         if (seen.Count == 0) return (null, LobbyResult.Fail("invalid", "No settings supplied."));

@@ -49,6 +49,7 @@ sealed class SteamTransport : IMultiplayerTransport
     public string LocalPeer { get { lock (gate) return self ?? fallbackPeer; } }
     public string? LocalName { get { lock (gate) return selfName; } }
     public string? HostHint { get { lock (gate) return lobby is null ? null : owner; } }
+    public string? LobbyToken { get { lock (gate) return lobby; } }
 
     // ---- pipe ------------------------------------------------------------
 
