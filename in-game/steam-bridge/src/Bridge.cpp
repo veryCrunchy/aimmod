@@ -109,6 +109,7 @@ namespace bridge
             {"spectate.privacy", {"mode"}},
             {"spectate.remove", {"peer"}},
             {"ugc.query", {"tag", "text"}},
+            {"dev.avatar", {"on", "mode"}},
         };
 
         constexpr std::uint64_t UgcQueryInvalid = 0xffffffffffffffffull;
@@ -1012,6 +1013,25 @@ namespace bridge
             m_log(rate ? "spectating " + Redact(target) + " at " + std::to_string(rate) + " Hz" : std::string("spectating stopped"));
             Result(*id, true);
         }
+        else if (name == "dev.avatar")
+        {
+            // Pipe-only (the local service sends it with developer mode on); no wire frame can reach this.
+            const auto on = c.Bool("on");
+            const auto mode = c.Str("mode", 16).value_or("circle");
+            if (!on || (mode != "circle" && mode != "path"))
+            {
+                Result(*id, false, "invalid", "on must be true or false and mode circle or path.");
+                return;
+            }
+            {
+                std::lock_guard lock(m_ghostMutex);
+                m_devAvatar.on = *on;
+                m_devAvatar.path = mode == "path";
+                ++m_devAvatar.generation;
+            }
+            m_log(*on ? "developer test avatar on (" + mode + ")" : std::string("developer test avatar off"));
+            Result(*id, true);
+        }
         else if (name == "ugc.query")
         {
             const auto tag = c.Str("tag", 64).value_or("");
@@ -1824,7 +1844,7 @@ namespace bridge
             .Int("appId", KovaaksAppId)
             .Raw("self", json::Object().Str("peer", Id(m_self)).Str("name", name).Str("initials", Initials(name)).Done())
             .Str("relay", steamabi::AvailabilityName(avail))
-            .Raw("features", R"(["lobby","p2p","ugc","xfer","ugc-query","spectate-direct"])")
+            .Raw("features", R"(["lobby","p2p","ugc","xfer","ugc-query","spectate-direct","dev-avatar"])")
             .Int("maxChunk", static_cast<std::int64_t>(MaxChunk))
             .Int("xferWindow", static_cast<std::int64_t>(XferWindow));
         o.Str("spectatePrivacy", SpectatePrivacyName(m_spectatePrivacy));
@@ -2947,6 +2967,12 @@ namespace bridge
         std::lock_guard lock(m_ghostMutex);
         const auto it = m_dataSnapshot.find(key);
         return it == m_dataSnapshot.end() ? std::string() : it->second;
+    }
+
+    Bridge::DevAvatar Bridge::DevAvatarState()
+    {
+        std::lock_guard lock(m_ghostMutex);
+        return m_devAvatar;
     }
 
     std::string Bridge::LocalScene()

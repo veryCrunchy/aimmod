@@ -568,7 +568,8 @@ namespace aimmod
                     }
                 }
             }
-            if (!m_options.showRemote) return;
+            const auto dev = m_bridge.DevAvatarState();
+            if (!m_options.showRemote && !dev.on) return;
             if (now >= m_nextStateRead)
             {
                 m_nextStateRead = now + 0.2;
@@ -593,14 +594,25 @@ namespace aimmod
 
             // Offline check: one avatar circling 4 m around the player, or following a
             // recorded path (avatar-test-path.tsv) on the scenario it was recorded in.
-            if (m_options.avatarTest)
+            if (m_options.avatarTest || dev.on)
             {
+                if (dev.generation != m_devGeneration)
+                {
+                    // A new developer-menu command: restart and re-read the path the service just wrote.
+                    m_devGeneration = dev.generation;
+                    m_testPathTried = false;
+                    m_testPath.reset();
+                    m_testPathStart = -1;
+                    m_testStart = -1;
+                }
                 if (m_testStart < 0)
                 {
                     m_testStart = now;
-                    m_log("avatars: offline test active (avatar_test=1)");
+                    m_log(dev.on ? "avatars: developer test avatar active" : "avatars: offline test active (avatar_test=1)");
                 }
-                if (!m_testPathTried) LoadTestPath();
+                const bool wantPath = dev.on ? dev.path : true;
+                if (wantPath && !m_testPathTried) LoadTestPath();
+                if (!wantPath) m_testPath.reset();
                 // Eye height above the capsule centre, so the recorded camera becomes a standing body.
                 double eye[3]{};
                 if (camera && m_cameraLocation.Vector(camera, eye) && eye[2] - location[2] > 0 && eye[2] - location[2] < 300) m_eyeAboveCentre = eye[2] - location[2];

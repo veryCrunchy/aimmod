@@ -82,6 +82,14 @@ namespace bridge
         std::vector<GhostPeer> Ghosts();
         std::string LocalScene();
         std::string LobbyValue(const std::string& key); // current lobby data, empty if unset
+        // Developer menu test avatar (dev.avatar from the local service only).
+        struct DevAvatar
+        {
+            bool on = false;
+            bool path = false;     // follow avatar-test-path.tsv
+            int generation = 0;    // bumps on every command (reload the path)
+        };
+        DevAvatar DevAvatarState();
         static double Now();
 
     private:
@@ -356,6 +364,7 @@ namespace bridge
         std::map<std::uint64_t, GhostPeer> m_ghosts;
         std::string m_scene;
         std::map<std::string, std::string> m_dataSnapshot;
+        DevAvatar m_devAvatar; // guarded by m_ghostMutex
         std::set<std::uint64_t> m_ghostSeen;
         std::uint32_t m_poseSeq = 0;
         Clock::time_point m_nextPose{};

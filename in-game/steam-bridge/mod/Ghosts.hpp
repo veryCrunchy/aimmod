@@ -126,6 +126,7 @@ namespace aimmod
         double m_nextDiagnostic = 0;
         std::map<std::uint64_t, Ghost> m_ghosts;
         double m_testStart = -1;
+        int m_devGeneration = 0;
         // Offline avatar spike (recorded path).
         std::optional<bridge::ghost::AvatarPath> m_testPath;
         bool m_testPathTried = false;

@@ -1386,6 +1386,19 @@ controller's `MyProfileName` changes, the avatar re-applies:
 - visibility;
 - its character profile.
 
+**Developer menu test avatar (`dev.avatar`, feature `dev-avatar`).**
+
+- Command: `{"v":1,"cmd":"dev.avatar","id":n,"on":true|false,"mode":"circle"|"path"}`,
+  answered with a `result`.
+- It behaves like `avatar_test=1`, toggled at runtime:
+  - `circle`: the 4 m circle.
+  - `path`: follows `avatar-test-path.tsv`, re-read on every command,
+    because the service writes it before sending. On other scenarios it
+    circles.
+  - `on:false` despawns the test avatar.
+- It works even with `lobby_avatars=0`. It's accepted only on the local pipe
+  (the service sends it only with developer mode on). No P2P frame maps to
+  it, so a peer can't trigger it.
 **Combat state from the service (`avatar-state.tsv`).** During combat
 matches the service writes `%LOCALAPPDATA%\AimMod\KovaaksNative\avatar-state.tsv`
 (format in `game-modes.md`, ce64a31). AimModSteam reads it 5 times a second
