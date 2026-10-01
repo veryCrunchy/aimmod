@@ -271,6 +271,22 @@ sealed class CombatMatch
         return null;
     }
 
+    // The start positions: every player gets a spawn of its own (its team's where the map says),
+    // as a respawn event, so each client teleports there during the countdown, frozen until go-live.
+    public void PlaceAll(long now)
+    {
+        if (Spawns.Count == 0) return;
+        var used = new HashSet<SpawnPoint>();
+        foreach (var p in players.Values)
+        {
+            var allowed = Spawns.Where(s => p.Team == 0 || s.TeamMask == 0 || (s.TeamMask & p.Team) != 0).ToList();
+            if (allowed.Count == 0) allowed = Spawns.ToList();
+            var spawn = allowed.FirstOrDefault(s => !used.Contains(s)) ?? allowed[used.Count % allowed.Count];
+            used.Add(spawn);
+            Emit("respawn", now, p.Id, null, 0, false, p.Health, null, [spawn.X, spawn.Y, spawn.Z, spawn.Yaw]);
+        }
+    }
+
     // Respawns, and vampiric decay (never below 1 hp: decay doesn't kill).
     public void Tick(long now)
     {
@@ -415,7 +431,27 @@ sealed class ShotFeed(string outputFolder)
         return Take(Parse(text), matchId, round, offsetMs, targets);
     }
 
-    public IReadOnlyList<HitClaim> Take((long Sequence, string Session, IReadOnlyList<Shot> Shots)? parsed, string matchId, int round, long offsetMs, IReadOnlyDictionary<int, TrackSeen> targets)
+    public IReadOnlyList<HitClaim> Take((long Sequence, string Session, IReadOnlyList<Shot> Shots)? parsed, string matchId, int round, long offsetMs, IReadOnlyDictionary<int, TrackSeen> targets) =>
+        Take(parsed, matchId, round, offsetMs, (id, _) => targets.TryGetValue(id, out var t) ? t : null);
+
+    // targetAt: where a drawn target was at a host time (SelfPoseTracker.SeenAt), so the claim pairs
+    // the shot's ray with the hull as drawn when it was fired.
+    public IReadOnlyList<HitClaim> Poll(string matchId, int round, long offsetMs, Func<int, long, TrackSeen?> targetAt)
+    {
+        string text;
+        try
+        {
+            var file = new FileInfo(path);
+            if (!file.Exists || file.Length > 65536 || DateTime.UtcNow - file.LastWriteTimeUtc > TimeSpan.FromSeconds(3)) return [];
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream, Encoding.UTF8);
+            text = reader.ReadToEnd();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return []; }
+        return Take(Parse(text), matchId, round, offsetMs, targetAt);
+    }
+
+    public IReadOnlyList<HitClaim> Take((long Sequence, string Session, IReadOnlyList<Shot> Shots)? parsed, string matchId, int round, long offsetMs, Func<int, long, TrackSeen?> targetAt)
     {
         if (parsed is not { } p) return [];
         // A new AimModCore session restarts its shot sequence.
@@ -428,7 +464,7 @@ sealed class ShotFeed(string outputFolder)
             if (s.Seq <= lastShot) continue;
             lastShot = s.Seq;
             if (s.Target == 0) continue;
-            targets.TryGetValue(s.Target, out var t);
+            var t = targetAt(s.Target, s.UnixMs + offsetMs);
             claims.Add(new HitClaim(matchId, round, s.Seq, s.UnixMs + offsetMs, s.X, s.Y, s.Z, s.Pitch, s.Yaw, s.Head, t?.X, t?.Y, t?.Z, t?.Radius, t?.HalfHeight, s.Weapon));
         }
         return claims;

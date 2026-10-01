@@ -509,6 +509,19 @@ Changes:
   "Loaded" while the map is wrong. The loading screen counts who is ready,
   lists each player's reason, and offers the host Retry or End match once the
   load fails. It never says the match will start anyway.
+- **Frozen until go-live (all modes).** While the match loads and counts
+  down, `round-state.tsv` says `phase freeze`. AimModCore then ignores move
+  input, switches jumping off and stops the movement component, while
+  looking stays free; claims before go-live are already refused. Combat
+  modes place every player on a spawn of their own (their team's side where
+  the map says) during the countdown, so everyone starts at an assigned
+  spawn. CS keeps its own freeze time.
+- **Restart lock (all modes).** While a match runs, KovaaK's restart bind and
+  the pause menu's restart button are off (AimModCore, native-mod/DESIGN.md
+  "Restart lock"). A press shows "Restart is off during a match". If a
+  restart still gets through, the match carries on: host scores stand, a
+  score run keeps the score from before the restart, and the player is put
+  back where they were.
 - **Debug copies.** A match scenario stays in the game's Scenarios folder
   while its lobby needs it. One that failed to load is copied to
   `<output>/match-debug/` before cleanup removes it. Only the last three are

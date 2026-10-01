@@ -301,10 +301,28 @@ sealed class SelfPoseTracker(string outputFolder)
     readonly List<TrackSample> samples = [];
     readonly List<TrackSeen> seenRows = [];
     readonly Dictionary<int, TrackSeen> lastSeen = new();
+    // The last 2 s of each drawn target, so a hit claim carries where the target was drawn when
+    // the shot was fired, not where it is when the shot feed is read (up to a frame or more later).
+    readonly Dictionary<int, List<TrackSeen>> seenHistory = new();
+    public const long SeenHistoryMs = 2000;
     // The latest drawn targets by AimModCore id (combat claims name the target they hit).
     public IReadOnlyDictionary<int, TrackSeen> LastSeen => lastSeen;
 
-    public void Reset() { lastPose = long.MinValue; lastSequence = -1; samples.Clear(); seenRows.Clear(); lastSeen.Clear(); }
+    public void Reset() { lastPose = long.MinValue; lastSequence = -1; samples.Clear(); seenRows.Clear(); lastSeen.Clear(); seenHistory.Clear(); }
+
+    // Where target `id` was drawn at host time t: interpolated between the frames around t;
+    // the nearest frame within 100 ms past either end; null without one.
+    public TrackSeen? SeenAt(int id, long t)
+    {
+        if (!seenHistory.TryGetValue(id, out var rows) || rows.Count == 0) return null;
+        if (t <= rows[0].T) return rows[0].T - t <= 100 ? rows[0] with { T = t } : null;
+        if (t >= rows[^1].T) return t - rows[^1].T <= 100 ? rows[^1] with { T = t } : null;
+        var i = rows.FindLastIndex(r => r.T <= t);
+        var a = rows[i]; var b = rows[i + 1];
+        if (b.T - a.T > 250) return t - a.T <= b.T - t ? a with { T = t } : b with { T = t };
+        var u = (double)(t - a.T) / Math.Max(1, b.T - a.T);
+        return a with { T = t, X = a.X + (b.X - a.X) * u, Y = a.Y + (b.Y - a.Y) * u, Z = a.Z + (b.Z - a.Z) * u, Radius = b.Radius, HalfHeight = b.HalfHeight };
+    }
 
     // Keep AimModCore publishing (it stops 5 s after the last request).
     public void Request(long nowMs)
@@ -342,6 +360,10 @@ sealed class SelfPoseTracker(string outputFolder)
             var id = (int)t[0];
             var member = frame.Tags.TryGetValue(id, out var stream) && byStream.TryGetValue(stream, out var m) ? m : null;
             var row = new TrackSeen(at, id, t[1], t[2], t[3], t[4], t[5], member); seenRows.Add(row); lastSeen[row.Id] = row;
+            if (!seenHistory.TryGetValue(id, out var history)) seenHistory[id] = history = [];
+            if (history.Count == 0 || history[^1].T < at) history.Add(row);
+            var cut = history.FindIndex(r => r.T >= at - SeenHistoryMs);
+            if (cut > 0) history.RemoveRange(0, cut);
         }
         if (samples.Count > 4 * TrackBatch.MaxSamples) samples.RemoveRange(0, samples.Count - 4 * TrackBatch.MaxSamples);
         if (seenRows.Count > 4 * TrackBatch.MaxSeen) seenRows.RemoveRange(0, seenRows.Count - 4 * TrackBatch.MaxSeen);

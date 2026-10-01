@@ -110,7 +110,7 @@ namespace bridge
             {"spectate.privacy", {"mode"}},
             {"spectate.remove", {"peer"}},
             {"ugc.query", {"tag", "text"}},
-            {"dev.avatar", {"on", "mode", "profile"}},
+            {"dev.avatar", {"on", "mode", "profile", "spawns"}},
         };
 
         constexpr std::uint64_t UgcQueryInvalid = 0xffffffffffffffffull;
@@ -1097,10 +1097,34 @@ namespace bridge
             // Pipe-only (the local service sends it with developer mode on); no wire frame can reach this.
             const auto on = c.Bool("on");
             const auto mode = c.Str("mode", 16).value_or("circle");
-            if (!on || (mode != "circle" && mode != "path"))
+            if (!on || (mode != "circle" && mode != "path" && mode != "walk"))
             {
-                Result(*id, false, "invalid", "on must be true or false and mode circle or path.");
+                Result(*id, false, "invalid", "on must be true or false and mode circle, path or walk.");
                 return;
+            }
+            // walk: the arena's spawn points, [[x, y, z], ...] in world units.
+            std::vector<std::array<double, 3>> spawns;
+            if (const auto* list = c.Get("spawns"))
+            {
+                bool ok = list->type == json::Value::Type::Array && list->array.size() <= 32;
+                for (const auto& point : ok ? list->array : std::vector<json::Value>{})
+                {
+                    if (point.type != json::Value::Type::Array || point.array.size() != 3) { ok = false; break; }
+                    std::array<double, 3> xyz{};
+                    for (std::size_t i = 0; i < 3; ++i)
+                    {
+                        const auto& v = point.array[i];
+                        if (v.type != json::Value::Type::Number || !std::isfinite(v.number) || std::fabs(v.number) > 1e7) ok = false;
+                        xyz[i] = v.number;
+                    }
+                    if (!ok) break;
+                    spawns.push_back(xyz);
+                }
+                if (!ok)
+                {
+                    Result(*id, false, "invalid", "spawns must be at most 32 [x, y, z] points.");
+                    return;
+                }
             }
             const std::string profile = c.Str("profile", 64).value_or("");
             if (c.Get("profile") && !profile.empty() && !ValidProfileName(profile))
@@ -1112,6 +1136,8 @@ namespace bridge
                 std::lock_guard lock(m_ghostMutex);
                 m_devAvatar.on = *on;
                 m_devAvatar.path = mode == "path";
+                m_devAvatar.walk = mode == "walk" && !spawns.empty();
+                m_devAvatar.spawns = std::move(spawns);
                 if (c.Get("profile")) m_devAvatar.profile = profile;
                 ++m_devAvatar.generation;
             }
@@ -2054,7 +2080,7 @@ namespace bridge
             .Int("appId", KovaaksAppId)
             .Raw("self", json::Object().Str("peer", Id(m_self)).Str("name", name).Str("initials", Initials(name)).Done())
             .Str("relay", steamabi::AvailabilityName(avail))
-            .Raw("features", R"(["lobby","p2p","ugc","xfer","ugc-query","spectate-direct","dev-avatar"])")
+            .Raw("features", R"(["lobby","p2p","ugc","xfer","ugc-query","spectate-direct","dev-avatar","dev-avatar-walk"])")
             .Int("maxChunk", static_cast<std::int64_t>(MaxChunk))
             .Int("xferWindow", static_cast<std::int64_t>(XferWindow));
         o.Str("spectatePrivacy", SpectatePrivacyName(m_spectatePrivacy));

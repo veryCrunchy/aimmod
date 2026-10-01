@@ -7,6 +7,7 @@
 #include "GhostMath.hpp"
 #include "Json.hpp"
 #include "PoseFile.hpp"
+#include "Walker.hpp"
 
 #include <cstdio>
 #include <cmath>
@@ -451,6 +452,43 @@ int main()
         Check(ParseBanList(std::string(MaxLobbyValue + 1, '1')).empty(), "oversized ban list rejected");
     }
     // Remote players never become game bots outside AimMod match scenarios.
+    {
+        // The simulated player walks on the floor between spawns, never through a wall or off a ledge.
+        const double half = ghost::DefaultHalfHeight;
+        auto flat = [](double x, double y, double) -> std::optional<double> { return std::fabs(x) < 2000 && std::fabs(y) < 2000 ? std::optional<double>(0.0) : std::nullopt; };
+        auto open = [](double, double, double, double, double, double) { return true; };
+        ghost::Walker w;
+        w.spawns = {{-1000, 0, 120}, {1000, 0, 120}, {0, 1000, 120}};
+        Check(w.Place(1, half, flat) && w.x == 1000 && w.z == half, "a placed walker stands on the floor below its spawn");
+        bool grounded = true, inside = true, moved = false, crouched = false, jumped = false;
+        for (int i = 0; i < 60 * 40; ++i)
+        {
+            const auto s = w.Step(i / 60.0, 1 / 60.0, half, flat, open);
+            grounded &= s.z >= half - 0.01 && s.z <= half + ghost::Walker::JumpHeight + 0.01;
+            inside &= std::fabs(s.x) < 2000 && std::fabs(s.y) < 2000;
+            moved |= std::hypot(s.x - 1000, s.y) > 500;
+            crouched |= s.crouch;
+            jumped |= s.z > half + 1;
+        }
+        Check(grounded && inside && moved, "the walker walks between spawns with its feet on the floor");
+        Check(crouched && jumped, "it crouches now and then and jumps rarely");
+        // A wall at x = 0: spawns on both sides, it never crosses.
+        auto wall = [](double ax, double, double, double bx, double, double) { return (ax < 0) == (bx < 0); };
+        ghost::Walker v;
+        v.spawns = {{-1000, 0, 0}, {-1000, 800, 0}, {1000, 0, 0}};
+        v.Place(0, half, flat);
+        bool crossed = false;
+        for (int i = 0; i < 60 * 40; ++i) crossed |= v.Step(i / 60.0, 1 / 60.0, half, flat, wall).x >= 0;
+        Check(!crossed, "the walker never walks through a wall");
+        // Floor only where x < 300: a ledge it never steps off.
+        auto ledge = [](double x, double, double) -> std::optional<double> { return x < 300 ? std::optional<double>(0.0) : std::nullopt; };
+        ghost::Walker l;
+        l.spawns = {{-800, 0, 0}, {900, 0, 0}, {-800, 600, 0}};
+        l.Place(0, half, ledge);
+        bool fell = false;
+        for (int i = 0; i < 60 * 30; ++i) fell |= l.Step(i / 60.0, 1 / 60.0, half, ledge, open).x >= 300;
+        Check(!fell, "the walker never steps off a ledge");
+    }
     Check(ghost::IsHelperBot("AimMod Hidden Bot") && !ghost::IsHelperBot("AimMod Hidden") && !ghost::IsHelperBot("target") &&
               std::hypot(ghost::HelperParkX, ghost::HelperParkY) > 100000 && std::hypot(ghost::HelperParkX, ghost::HelperParkY) < 1048576,
           "the arena's helper bot is recognised by its bot profile and parked far outside any map, inside the world");

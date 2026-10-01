@@ -25,7 +25,9 @@ sealed partial class MultiplayerService
         {
             standInTriedAt = clock();
             var look = AvatarProfiles.Find(Current!.Members.First(m => m.Id == member).Avatar)?.ProfileName;
-            if (transport.DevAvatar(true, "circle", look)) standInAuto = true;
+            // Walks between the arena's spawns (feet on the floor); circles you when the arena has none.
+            var spawns = arenaSpawns.Select(p => new[] { p.X, p.Y, p.Z }).ToArray();
+            if (spawns.Length > 0 ? transport.DevAvatar(true, "walk", look, spawns) : transport.DevAvatar(true, "circle", look)) standInAuto = true;
         }
         else if (member is null && standInAuto)
         {
