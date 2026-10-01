@@ -14,8 +14,11 @@
 --   vector / scalar  material parameter values set on a dynamic instance
 --            parented on the slot's existing material
 --   pak      {file=..., sha256=...} for items whose assets ship in an AimMod
---            pak (textures, meshes, animations). Disabled until the signed
---            pak verifier exists (phase 2).
+--            pak (textures, meshes, animations). Usable only when the pak's
+--            size and SHA-256 match the catalog manifest shipped with the
+--            install (AimModCore, phase 2).
+--   attach   accessories: bone or socket role; per-model names and offsets
+--            are filled in from the probe.
 --   draft    true until the parameter names are confirmed with the probe.
 --            Drafts never appear in the picker and apply only for team tests
 --            with allow_drafts=1.
@@ -54,8 +57,13 @@ M.items = {
         vector={PrimaryColor={R=0.76, G=0.66, B=0.48, A=1}}, draft=true},
     {id='weapon-finish-aimmod', version=1, kind='weapon_finish', name='AimMod colours', parts={'weapon', 'arms'},
         vector={PrimaryColor={R=0.98, G=0.45, B=0.10, A=1}}, draft=true},
-    {id='accessory-visor', version=1, kind='accessory', name='Visor', models={'Meso'}, parts={'body'},
-        pak={file='AimModCosmetics-1.pak', sha256=''}, draft=true},
+    -- Proof accessories: rigid head items, no cloth or physics.
+    {id='accessory-halo', version=1, kind='accessory', name='Halo', models={'Meso', 'Endo'}, parts={'body'},
+        attach='head', pak={file='AimModCosmetics-1.pak', sha256=''}, draft=true},
+    {id='accessory-visor', version=1, kind='accessory', name='Visor', models={'Meso', 'Endo'}, parts={'body'},
+        attach='head', pak={file='AimModCosmetics-1.pak', sha256=''}, draft=true},
+    {id='accessory-headband', version=1, kind='accessory', name='Headband', models={'Meso', 'Endo'}, parts={'body'},
+        attach='head', pak={file='AimModCosmetics-1.pak', sha256=''}, draft=true},
 }
 
 local function finite(n, lo, hi) return type(n) == 'number' and n == n and n >= lo and n <= hi end
@@ -103,7 +111,8 @@ function M.index(items)
 end
 
 -- Resolve an id a player picked or a lobby sent. Unknown ids, drafts (unless
--- team testing) and pak items without a verified pak resolve to nil, and the
+-- team testing) and pak items whose pak does not match the manifest resolve
+-- to nil, and the
 -- caller falls back to the base look.
 function M.resolve(byId, id, options)
     options = options or {}
@@ -112,7 +121,7 @@ function M.resolve(byId, id, options)
     if not item then return nil, 'not in the catalog: ' .. id end
     if item.draft and not options.allowDrafts then return nil, id .. ' is a draft' end
     if M.kinds[item.kind].needsPak and not (options.verifiedPaks and options.verifiedPaks[item.pak.file]) then
-        return nil, id .. ' needs a verified AimMod pak'
+        return nil, id .. ' needs an AimMod pak matching the manifest'
     end
     return item
 end

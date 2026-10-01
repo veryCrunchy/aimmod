@@ -11,7 +11,8 @@
 -- parented on the slot's current material (team colours and the game's
 -- parameters are inherited). It never calls mesh, visibility, collision or
 -- physics functions, never touches hitboxes, the capsule or ShotOrigin, and
--- loads no asset: pak items stay disabled until the signed pak verifier exists.
+-- loads no asset: pak items stay disabled until AimModCore's manifest hash
+-- check exists.
 local Util = require('CosmeticsUtil')
 local R = require('CosmeticsReflect')
 local Scope = require('CosmeticsScope')
@@ -49,7 +50,7 @@ function M.new(config, log, deps)
 
     local byId, errors = Catalog.index(deps.items)
     for _, e in ipairs(errors) do log('catalog: ' .. e) end
-    -- No pak is verified yet: pak items resolve to nil.
+    -- No pak has been matched against the manifest yet: pak items resolve to nil.
     local options = {allowDrafts = config.allow_drafts, verifiedPaks = {}}
     local function pick(id, part)
         if id == '' then return nil end
