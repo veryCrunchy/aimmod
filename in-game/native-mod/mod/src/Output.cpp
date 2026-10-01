@@ -189,6 +189,58 @@ namespace aimmod
         m_selfPoseDirty = true;
     }
 
+    void Output::PublishSelfShots(std::string body)
+    {
+        {
+            std::lock_guard lock(m_mutex);
+            m_selfShots = std::move(body);
+            m_selfShotsDirty = true;
+        }
+        m_wake.notify_one();
+    }
+
+    Output::PlayStateSnapshot Output::playState() const
+    {
+        std::lock_guard lock(const_cast<std::mutex&>(m_mutex));
+        return {m_playState, m_playStateVersion};
+    }
+
+    // Polled every writer pass (<= 20 ms while match files are in use): a
+    // changed file is parsed; a file not rewritten for 5 s counts as gone.
+    void Output::ReadPlayState(std::uint64_t now)
+    {
+        WIN32_FILE_ATTRIBUTE_DATA data{};
+        const auto path = m_root / L"play-state.tsv";
+        std::uint64_t stamp = 0;
+        if (GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &data))
+            stamp = (static_cast<std::uint64_t>(data.ftLastWriteTime.dwHighDateTime) << 32) | data.ftLastWriteTime.dwLowDateTime;
+        FILETIME nowFile{};
+        GetSystemTimeAsFileTime(&nowFile);
+        const std::uint64_t nowStamp = (static_cast<std::uint64_t>(nowFile.dwHighDateTime) << 32) | nowFile.dwLowDateTime;
+        const bool fresh = stamp != 0 && nowStamp - stamp < 5ull * 10000000ull;
+        if (!fresh)
+        {
+            std::lock_guard lock(m_mutex);
+            if (m_playState)
+            {
+                m_playState.reset();
+                ++m_playStateVersion;
+            }
+            m_playStateStamp = stamp;
+            return;
+        }
+        m_playStateSeenAt = now;
+        if (stamp == m_playStateStamp) return;
+        std::string text;
+        if (!ReadSmall(path, text, 4097)) return; // locked mid-replace: retry next pass
+        auto parsed = ParsePlayState(text);
+        std::lock_guard lock(m_mutex);
+        m_playStateStamp = stamp;
+        if (parsed) m_playState = std::make_shared<const PlayState>(std::move(*parsed));
+        else m_playState.reset();
+        ++m_playStateVersion;
+    }
+
     std::shared_ptr<const std::unordered_map<std::string, std::string>> Output::avatars() const
     {
         std::lock_guard lock(const_cast<std::mutex&>(m_mutex));
@@ -488,9 +540,17 @@ namespace aimmod
                 requested = !error && std::chrono::system_clock::now() - written < std::chrono::seconds(5);
             }
             if (m_poseRequested.exchange(requested) && !requested) DeleteFileW((m_root / L"self-pose.tsv").c_str());
+            const auto shotsRequest = m_root / L"self-shots.request";
+            bool shots = false;
+            if (std::filesystem::exists(shotsRequest, error))
+            {
+                const auto written = std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(shotsRequest, error));
+                shots = !error && std::chrono::system_clock::now() - written < std::chrono::seconds(5);
+            }
+            if (m_shotsRequested.exchange(shots) && !shots) DeleteFileW((m_root / L"self-shots.tsv").c_str());
             // AIMMOD_AVATARS_1 / <actor name>\t<stream id>: which drawn hull is which player.
             std::string text;
-            if (requested && ReadSmall(m_root / L"avatars.tsv", text, 16384) && text != m_avatarText)
+            if ((requested || shots) && ReadSmall(m_root / L"avatars.tsv", text, 16384) && text != m_avatarText)
             {
                 m_avatarText = text;
                 auto map = std::make_shared<std::unordered_map<std::string, std::string>>();
@@ -527,6 +587,20 @@ namespace aimmod
                 m_selfPoseDirty = false;
             }
             if (!pose.empty() && m_poseRequested.load()) WriteAtomic(m_root / L"self-pose.tsv", pose);
+        }
+        {
+            std::string shots;
+            {
+                std::lock_guard lock(m_mutex);
+                if (m_selfShotsDirty) shots.swap(m_selfShots);
+                m_selfShotsDirty = false;
+            }
+            if (!shots.empty() && m_shotsRequested.load()) WriteAtomic(m_root / L"self-shots.tsv", shots);
+        }
+        if (force || now - m_lastPlayStateCheck >= 15)
+        {
+            m_lastPlayStateCheck = now;
+            ReadPlayState(now);
         }
         if (force || now - m_lastClipCheck >= 2000)
         {
@@ -570,7 +644,10 @@ namespace aimmod
             bool stop;
             {
                 std::unique_lock lock(m_mutex);
-                m_wake.wait_for(lock, std::chrono::milliseconds(100), [this] { return m_stop || !m_jobs.empty() || m_statusDirty || !m_results.empty(); });
+                // Match files (shots out, play state in) need low latency.
+                const bool fast = m_shotsRequested.load(std::memory_order_relaxed) || NowMs() - m_playStateSeenAt < 10000;
+                m_wake.wait_for(lock, std::chrono::milliseconds(fast ? 15 : 100),
+                                [this] { return m_stop || !m_jobs.empty() || m_statusDirty || !m_results.empty() || m_selfShotsDirty; });
                 jobs.swap(m_jobs);
                 stop = m_stop;
             }

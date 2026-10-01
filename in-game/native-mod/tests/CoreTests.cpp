@@ -5,6 +5,7 @@
 #include <aimmod/GameStats.hpp>
 #include <aimmod/PlaybackFrame.hpp>
 #include <aimmod/Lifecycle.hpp>
+#include <aimmod/MatchPlay.hpp>
 #include <aimmod/ReplayV2.hpp>
 #include <aimmod/ReplayWriter.hpp>
 #include <aimmod/Settings.hpp>
@@ -626,6 +627,50 @@ static void WriteSamples(const std::filesystem::path& dir)
     std::ofstream(dir / "replays" / "1790000000-42-2.amreplay", std::ios::binary).write(reinterpret_cast<const char*>(compact.data()), static_cast<std::streamsize>(compact.size()));
 }
 
+static void MatchPlayChecks()
+{
+    const std::string good = "AIMMOD_PLAYSTATE_1\t7\nmatch\tAimMod Match - Synthetic - 1\nhealth\t62.5\t100\nalive\t1\nrespawnAt\t0\nprotected\t0\n"
+                             "hit\t3\tmember-2\t37.5\t1\t0\t-1\t0\n";
+    auto s = ParsePlayState(good);
+    CHECK(s && s->sequence == 7 && s->scenario == "AimMod Match - Synthetic - 1" && s->health == 62.5 && s->maxHealth == 100 && s->alive &&
+              !s->spawnProtected && s->lastHit && s->lastHit->sequence == 3 && s->lastHit->attacker == "member-2" && s->lastHit->damage == 37.5 &&
+              s->lastHit->headshot && s->lastHit->direction[1] == -1,
+          "play state parses");
+    auto dead = ParsePlayState("AIMMOD_PLAYSTATE_1\t8\r\nmatch\tAimMod Match - X\r\nhealth\t0\t100\r\nalive\t0\r\nrespawnAt\t1790000003000\r\nprotected\t1\r\n");
+    CHECK(dead && !dead->alive && dead->respawnAtMs == 1790000003000 && dead->spawnProtected && !dead->lastHit, "dead state with CRLF, no hit");
+    CHECK(!ParsePlayState(""), "empty play state");
+    CHECK(!ParsePlayState("AIMMOD_PLAYSTATE_2\t1\nmatch\tA\nhealth\t1\t1\n"), "unknown version");
+    CHECK(!ParsePlayState("AIMMOD_PLAYSTATE_1\t1\nhealth\t1\t1\n"), "match name required");
+    CHECK(!ParsePlayState("AIMMOD_PLAYSTATE_1\t1\nmatch\tA\n"), "health required");
+    CHECK(!ParsePlayState("AIMMOD_PLAYSTATE_1\t1\nmatch\tA\nhealth\t120\t100\n"), "health above max");
+    CHECK(!ParsePlayState("AIMMOD_PLAYSTATE_1\t1\nmatch\tA\nhealth\tnan\t100\n"), "non-numeric health");
+    CHECK(!ParsePlayState("AIMMOD_PLAYSTATE_1\t1\nmatch\tA\nhealth\t1\t1\nalive\tyes\n"), "flags are 0/1");
+    CHECK(!ParsePlayState("AIMMOD_PLAYSTATE_1\t1\nmatch\tA\nhealth\t1\t1\nhit\t1\tbad id!\t5\t0\t0\t0\t1\n"), "member ids are plain");
+    CHECK(!ParsePlayState("AIMMOD_PLAYSTATE_1\t1\nmatch\tA\nhealth\t1\t1\nteleport\t0\t0\t0\n"), "unknown rows reject the file");
+
+    // Capsule at the origin, radius 30, half height 90 (segment +-60).
+    const double c[3] = {0, 0, 0};
+    const double o[3] = {-500, 0, 0}, d[3] = {1, 0, 0};
+    auto t = RayCapsule(o, d, c, 30, 90);
+    CHECK(t && std::fabs(*t - 470) < 1e-9, "ray meets the cylinder");
+    const double high[3] = {-500, 0, 80};
+    auto top = RayCapsule(high, d, c, 30, 90);
+    const double hitPoint[3] = {-500 + *top, 0, 80};
+    CHECK(top && *top > 470 && IsHeadHit(hitPoint, c, 90), "ray meets the top sphere as a head hit");
+    const double miss[3] = {-500, 0, 100};
+    CHECK(!RayCapsule(miss, d, c, 30, 90), "ray above the capsule misses");
+    const double back[3] = {-1, 0, 0};
+    CHECK(!RayCapsule(o, back, c, 30, 90), "ray pointing away misses");
+    const double down[3] = {0, 0, -1}, above[3] = {0, 0, 500};
+    auto vertical = RayCapsule(above, down, c, 30, 90);
+    CHECK(vertical && std::fabs(*vertical - 410) < 1e-9, "vertical ray meets the cap");
+    const double body[3] = {0, 0, 0};
+    CHECK(!IsHeadHit(body, c, 90), "centre is a body hit");
+
+    ShotRecord shot{1790000000123, 4, {1, 2, 3}, {1, 0, 0}, 1, 9, true, false};
+    CHECK(FormatShot(shot) == "shot\t1790000000123\t4\t1\t2\t3\t1\t0\t0\t1\t9\t1\t0\n", "shot row layout");
+}
+
 int main(int argc, char** argv)
 {
     if (argc == 3 && std::strcmp(argv[1], "--write-samples") == 0)
@@ -643,6 +688,7 @@ int main(int argc, char** argv)
     Settings();
     Backoff();
     LifecycleChecks();
+    MatchPlayChecks();
     std::printf("%d AimModCore checks, %d failed.\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

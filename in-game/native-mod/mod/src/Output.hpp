@@ -3,6 +3,7 @@
 // over small immutable jobs (never blocks on disk).
 #include <aimmod/GameCommand.hpp>
 #include <aimmod/GameStats.hpp>
+#include <aimmod/MatchPlay.hpp>
 #include <aimmod/ReplayV2.hpp>
 #include <aimmod/Settings.hpp>
 
@@ -51,6 +52,19 @@ namespace aimmod
         // when absent.
         std::shared_ptr<const std::unordered_map<std::string, std::string>> avatars() const;
         void PublishSelfPose(std::string body);
+        // self-shots.tsv: the local player's shots for match modes, only while
+        // requested (self-shots.request touched within the last 5 s).
+        bool shotsRequested() const { return m_shotsRequested.load(std::memory_order_relaxed); }
+        void PublishSelfShots(std::string body);
+        // play-state.tsv (host verdict on this player). `state` is null while
+        // the file is absent, malformed or not rewritten for 5 s; `version`
+        // changes whenever a new state (or its loss) is read.
+        struct PlayStateSnapshot
+        {
+            std::shared_ptr<const PlayState> state;
+            std::uint64_t version{};
+        };
+        PlayStateSnapshot playState() const;
         // Clip hotkey and window (clip-settings.tsv, defaults F8 / 8 s / 2 s).
         ClipSettings clipSettings() const;
         void PublishReplayStatus(std::string body);
@@ -116,6 +130,12 @@ namespace aimmod
         std::atomic<bool> m_recording{true};
         std::atomic<bool> m_playback{false};
         std::atomic<bool> m_poseRequested{false};
+        std::atomic<bool> m_shotsRequested{false};
+        std::string m_selfShots;
+        bool m_selfShotsDirty{};
+        std::shared_ptr<const PlayState> m_playState;
+        std::uint64_t m_playStateVersion{}, m_playStateStamp{}, m_lastPlayStateCheck{}, m_playStateSeenAt{};
+        void ReadPlayState(std::uint64_t now);
         ClipSettings m_clips;
         std::string m_selfPose;
         bool m_selfPoseDirty{};

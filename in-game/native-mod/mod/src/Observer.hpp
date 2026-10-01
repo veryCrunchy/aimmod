@@ -3,6 +3,7 @@
 // broadcast observations), publishes live telemetry, writes the journal and
 // runs the replay sampler. Read-only with respect to the game.
 #include "GameControl.hpp"
+#include "MatchPlay.hpp"
 #include "Presenter.hpp"
 #include "ReplaySampler.hpp"
 #include "World.hpp"
@@ -97,6 +98,8 @@ namespace aimmod
         std::vector<std::pair<std::int64_t, std::array<double, 7>>> m_poses;
         void PollClipKey();
         void PublishSelfPose(double now);
+        std::uint32_t PoseId(UObject* actor);
+        MatchPlay m_match;
 
         // Callback registrations.
         std::vector<std::uint64_t> m_callbacks;
