@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from typing import Dict, List, Optional, Tuple
 
-from . import bsp, classify, displacement, geometry as g, scene
+from . import bsp, classify, displacement, geometry as g, objectives, scene
 
 _TOKEN = re.compile(r'"((?:[^"\\]|\\.)*)"|([{}])|([^\s{}"]+)')
 
@@ -62,7 +62,8 @@ def _axis(s: str):
     return (x / scale, y / scale, z / scale, off)
 
 
-def _solid(solid: Node, cls: str, sc: scene.Scene, disp_step: int, disp_thickness: float) -> None:
+def _solid(solid: Node, cls: str, sc: scene.Scene, disp_step: int, disp_thickness: float,
+           ent_kv: Optional[Dict[str, str]] = None) -> None:
     sides = solid.all("side")
     planes, texes, disps = [], [], []
     for s in sides:
@@ -92,6 +93,10 @@ def _solid(solid: Node, cls: str, sc: scene.Scene, disp_step: int, disp_thicknes
                 continue
             _displacement(d, poly, pl[:3], tex, axes, sc, disp_step, disp_thickness)
         return
+    if cls.lower() in objectives.VOLUME_CLASSES:
+        pts = [q for poly in polys if poly for q in poly]
+        if pts:
+            sc.volumes.append((ent_kv or {"classname": cls}, pts))
     kind = classify.classify([t for t, _ in texes], cls)
     if kind is None:
         sc.bump("dropped_" + (cls if cls != "worldspawn" else "tool"))
@@ -155,6 +160,6 @@ def load(text: str, name: str, disp_step: int = 1, disp_thickness: float = 8.0) 
         if ent.get("hidden") == "1":
             continue
         for solid in ent.all("solid"):
-            _solid(solid, cls, sc, disp_step, disp_thickness)
+            _solid(solid, cls, sc, disp_step, disp_thickness, kv)
     bsp._spawns(sc)
     return sc

@@ -151,6 +151,131 @@ class SpawnTests(unittest.TestCase):
         self.assertEqual([s.origin for s in sc.spawns], before)
 
 
+class PropTests(unittest.TestCase):
+    def test_phy_box(self):
+        from mapport import props
+        solids = props.parse_phy(synthetic.build_phy_box(16.0))
+        self.assertEqual(len(solids), 1)
+        pts = [p for tri in solids[0][0] for p in tri]
+        for k in range(3):
+            self.assertAlmostEqual(min(p[k] for p in pts), -16.0, places=3)
+            self.assertAlmostEqual(max(p[k] for p in pts), 16.0, places=3)
+        self.assertEqual(len(props.piece_planes(solids[0][0])), 6)
+
+    def test_add_props(self):
+        from mapport import props
+        sc = scene.Scene(name="p")
+        trim = [(x, 0, 0) for x in range(0, 65, 4)] + [(64, 8, 8), (500, 0, 0), (510, 10, 10)]
+        files = {"models/crate.phy": synthetic.build_phy_box(16.0), "models/trim.vvd": synthetic.build_vvd(trim)}
+        found = [{"model": "models/crate.mdl", "origin": (100.0, 0.0, 0.0), "angles": (0.0, 90.0, 0.0),
+                  "solid": 6, "scale": 1.0},
+                 {"model": "models/trim.mdl", "origin": (0.0, 0.0, 0.0), "angles": (0.0, 0.0, 0.0),
+                  "solid": 0, "scale": 1.0},
+                 {"model": "models/stock.mdl", "origin": (0.0, 0.0, 0.0), "angles": (0.0, 0.0, 0.0),
+                  "solid": 6, "scale": 1.0}]
+        props.add_props(sc, found, files)
+        kinds = sorted(b.kind for b in sc.brushes)
+        self.assertEqual(kinds, [scene.NONSOLID, scene.SOLID])
+        trim = next(b for b in sc.brushes if b.kind == scene.NONSOLID)
+        self.assertGreaterEqual(len(trim.faces), 12)  # two separate parts in one non-colliding object
+        crate = next(b for b in sc.brushes if b.kind == scene.SOLID)
+        lo, _hi = crate.bounds()
+        self.assertAlmostEqual(lo[0], 84.0, places=2)
+        self.assertEqual(sc.stats.get("props_not_packed"), 1)
+
+    def test_name_standins_and_stair_ramps(self):
+        from mapport import props
+        self.assertEqual(props.name_dims("models/x/dust_crate_style_01_37x37x74.mdl"), (37.0, 37.0, 74.0))
+        self.assertEqual(props.name_dims("models/x/dust_door_80x128_05.mdl"), (props.THIN, 80.0, 128.0))
+        self.assertIsNone(props.name_dims("models/x/dust_stairs001_128.mdl"))
+        sc = bsp.load(synthetic.build_bsp(with_displacement=False), "s")  # floor top at z=16
+        crate = {"model": "models/x/crate_32x32x32.mdl", "origin": (0.0, 0.0, 16.0), "angles": (0.0, 0.0, 0.0),
+                 "solid": 6, "scale": 1.0}
+        stairs = {"model": "models/x/dust_stairs001_128.mdl", "origin": (16.0, 16.0, 16.0),
+                  "angles": (0.0, 0.0, 0.0), "solid": 6, "scale": 1.0}
+        clip = next(b for b in sc.brushes if b.kind == scene.CLIP)
+        clip.faces[0].normal = (0.0, 0.7071, 0.7071)  # pretend the clip is a ramp
+        props.add_props(sc, [crate, stairs], {})
+        box = next(b for b in sc.brushes if b.source == "prop")
+        lo, _hi = box.bounds()
+        self.assertAlmostEqual(lo[2], 16.0, places=2)  # sits on the floor, not half buried
+        self.assertEqual(sc.stats.get("stair_ramps_shown"), 1)
+        self.assertEqual(clip.kind, scene.SOLID)
+
+    def test_connected_parts(self):
+        from mapport import props
+        verts = [(0, 0, 0), (64, 0, 0), (0, 64, 0), (200, 0, 0), (264, 0, 0), (200, 64, 0), (300, 0, 0),
+                 (301, 0, 0), (300, 1, 0)]
+        parts = props.connected_parts(verts, [(0, 1, 2), (3, 4, 5), (6, 7, 8)])
+        self.assertEqual(len(parts), 2)  # the 1-unit speck is dropped
+
+
+class ObjectiveTests(unittest.TestCase):
+    def test_zones_points_items(self):
+        from mapport import objectives
+        sc = scene.Scene(name="o")
+        site = {"classname": "func_bomb_target", "targetname": "bombsite_a"}
+        sc.volumes.append((site, [(0.0, 0.0, 0.0), (128.0, 64.0, 32.0)]))
+        sc.entities = [{"classname": "info_bomb_target", "origin": "10 20 0"},
+                       {"classname": "weapon_ak47", "origin": "1 2 3", "angles": "0 90 0"},
+                       {"classname": "item_teamflag", "origin": "0 0 0", "teamnum": "2"}]
+        sc.spawns = [scene.Spawn(origin=(5.0, 6.0, 0.0), yaw=90.0, team=2, classname="info_player_counterterrorist")]
+        doc = objectives.build(sc, "o", 4.0)
+        self.assertEqual(doc["format"], objectives.FORMAT)
+        self.assertEqual(doc["version"], 1)
+        z = doc["zones"][0]
+        self.assertEqual((z["type"], z["name"]), ("bomb_site", "bombsite_a"))
+        self.assertEqual(z["aabb"], {"min": [0.0, -64.0, 0.0], "max": [128.0, 0.0, 32.0]})  # Y mirrored
+        self.assertEqual({p["type"] for p in doc["points"]}, {"bomb_target", "flag"})
+        self.assertEqual(doc["items"][0]["classname"], "weapon_ak47")
+        self.assertEqual(doc["spawns"][0]["team"], "counter_terrorist")
+
+
+class MovementTests(unittest.TestCase):
+    def test_presets_have_shift_modes(self):
+        for name, mv in scenario.PRESETS.items():
+            self.assertIn(mv.shift, ("walk", "sprint"), name)
+        self.assertEqual(scenario.PRESETS["cs"].shift, "walk")
+        self.assertLess(scenario.PRESETS["cs"].shift_speed_mult, 1.0)
+        self.assertGreater(scenario.PRESETS["sprint"].shift_speed_mult, 1.0)
+
+    def test_source_reference_model(self):
+        from mapport import movesim
+        mv = scenario.PRESETS["cs"]
+        run = movesim.run_up(mv)
+        self.assertAlmostEqual(run, 250.0, delta=5.0)
+        t, apex, land = movesim.jump(mv, run)
+        self.assertAlmostEqual(apex, 57.0, delta=1.0)
+        self.assertAlmostEqual(t, 0.755, delta=0.03)
+        self.assertLessEqual(land, run + 1e-6, "a straight jump never gains speed")
+        _t, _a, strafed = movesim.jump(mv, run, strafe_turn_deg_per_s=180.0)
+        self.assertLess(strafed - run, 60.0, "one strafe jump only gains a little")
+
+    def test_profile_and_shift_ability(self):
+        text = scenario.build("T", "t.json", "{}", 4.0, scenario.PRESETS["cs"])
+        self.assertIn("ClampVelocityToInputSpeed=true", text)
+        self.assertIn("AbilityProfileNames=CS Walk.abilsprint;;;", text)
+        self.assertIn("[Sprint Ability Profile]", text)
+        self.assertIn("SpeedModifier=0.52", text)
+        self.assertIn("MaxCrouchSpeed=340.0", text)
+        self.assertIn("CharacterModel=Meso", text)
+        sprint = scenario.build("T", "t.json", "{}", 4.0, scenario.PRESETS["sprint"])
+        self.assertIn("AbilityProfileNames=Sprint.abilsprint;;;", sprint)
+        self.assertIn("SpeedModifier=1.30", sprint)
+
+
+class ViewTests(unittest.TestCase):
+    def test_view_holes(self):
+        from mapport import cleanup, views
+        sc = bsp.load(synthetic.build_bsp(with_displacement=False), "v")
+        cleanup.add_ground_plane(sc)
+        png, on_floor = views.render_view(sc, [], {}, (0.0, 32.0, 16.0), 90.0, pitch=-89.0, fov=60.0, w=80, h=45)
+        _png, off_floor = views.render_view(sc, [], {}, (1000.0, 0.0, 16.0), 0.0, pitch=-70.0, w=80, h=45)
+        self.assertTrue(png.startswith(b"\x89PNG"))
+        self.assertLess(on_floor, 0.05)
+        self.assertGreater(off_floor, 0.9)
+
+
 class ReflexTests(unittest.TestCase):
     def test_axes_match_json(self):
         # KovaaK's loads Reflex (a, b, c) as Unreal (c, a, b); both writers must agree.
@@ -250,9 +375,39 @@ class CliTests(unittest.TestCase):
                 fh.write(synthetic.build_bsp())
             out = os.path.join(tmp, "out")
             self.assertEqual(cli.main([src, "--out", out, "--format", "both"]), 0)
-            for rel in ("maps/aim_test.json", "maps/aim_test.map", "Scenarios/aim_test CS Movement.sce",
-                        "aim_test.preview.png", "aim_test.report.json"):
+            for rel in ("maps/aimmod_aim_test_css.json", "maps/aimmod_aim_test_css.map",
+                        "Scenarios/AimMod - aim_test (CSS) - CS Movement.sce", "Abilities/CS Walk.abilsprint",
+                        "aimmod_aim_test_css.aimmod.json", "aimmod_aim_test_css.preview.png",
+                        "aimmod_aim_test_css.report.json"):
                 self.assertTrue(os.path.isfile(os.path.join(out, rel)), rel)
+            with open(os.path.join(out, "Scenarios/AimMod - aim_test (CSS) - CS Movement.sce"), encoding="utf-8", newline="") as fh:
+                text = fh.read()
+            self.assertTrue(text.startswith("Name=AimMod - aim_test (CSS) - CS Movement\r\n"))
+            self.assertIn("MapName=aimmod_aim_test_css.json\r\n", text)
+
+
+class NamingTests(unittest.TestCase):
+    def test_exact_names(self):
+        from mapport import naming
+        self.assertEqual(naming.scenario_name(naming.display_name("de_dust2"), "CSGO", "CS Movement"),
+                         "AimMod - Dust2 (CSGO) - CS Movement")
+        self.assertEqual(naming.scenario_name(naming.display_name("aim_map"), "CSS", "CS Movement"),
+                         "AimMod - aim_map (CSS) - CS Movement")
+        self.assertEqual(naming.file_id("de_dust2", "CSGO"), "aimmod_de_dust2_csgo")
+        self.assertEqual(naming.file_id("aim_map", "css"), "aimmod_aim_map_css")
+        self.assertEqual(naming.game_tag("CS:GO"), "CSGO")
+        self.assertEqual(naming.game_tag("gmod"), "GMod")
+
+    def test_illegal_characters(self):
+        from mapport import naming
+        for bad in ("AimMod - A:B (CSGO) - X", 'q"uote', "a/b", "a\\b", "a|b", "a?b", "a*b", "a<b", "tab\there",
+                    "trailing.", " lead"):
+            with self.assertRaises(naming.PortNameError, msg=bad):
+                naming.check(bad)
+        with self.assertRaises(naming.PortNameError):
+            naming.scenario_name("Dust2", "CS:GO", "Bad: Variant")
+        with self.assertRaises(naming.PortNameError):
+            naming.game_tag("Quake")
 
 
 if __name__ == "__main__":

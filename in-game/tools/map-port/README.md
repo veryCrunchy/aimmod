@@ -12,13 +12,32 @@ Output in `<dir>`:
 
 | File | Install to (KovaaK's `FPSAimTrainer` folder) |
 | --- | --- |
-| `maps/<map>.json` | `FPSAimTrainer/maps/` |
-| `Scenarios/<map> CS Movement.sce` | `FPSAimTrainer/Saved/SaveGames/Scenarios/` |
-| `<map>.report.json` | not installed: brush counts, drop reasons, material slots |
-| `<map>.preview.png` | not installed: preview check (see below); `--no-preview` skips it |
+| `maps/aimmod_<mapid>_<game>.json` | `FPSAimTrainer/maps/` |
+| `Scenarios/AimMod - <Map> (<Game>) - <Variant>.sce` | `FPSAimTrainer/Saved/SaveGames/Scenarios/` |
+| `Abilities/CS Walk.abilsprint` (or `Sprint.abilsprint`) | `FPSAimTrainer/Saved/SaveGames/Abilities/` |
+| `aimmod_<mapid>_<game>.aimmod.json` | not installed: game-mode metadata for AimMod (see below) |
+| `aimmod_<mapid>_<game>.report.json` | not installed: brush counts, drop reasons, material slots |
+| `aimmod_<mapid>_<game>.preview.png` | not installed: preview check (see below); `--no-preview` skips it |
+| `aimmod_<mapid>_<game>.views/` (`--views`) | not installed: first-person check renders |
 
-The scenario embeds the map (`[Map Data]`), like the scenarios the game saves, and also names the
-map file in `MapName`.
+The scenario embeds the map (`[Map Data]`) and the Shift ability, like the scenarios the game
+saves. It also names the map file in `MapName`.
+
+## Names
+
+Ported scenarios are published to the Workshop, and the scenario name is the leaderboard key, so
+names are fixed by `mapport/naming.py` and must never change:
+
+- **Scenario** (internal name, `.sce` file name and Workshop title): `AimMod - <Map> (<Game>) - <Variant>`,
+  e.g. `AimMod - Dust2 (CSGO) - CS Movement` or `AimMod - aim_map (CSS) - CS Movement`.
+- **Map file:** `aimmod_<mapid>_<game>.json`, e.g. `aimmod_de_dust2_csgo.json`.
+- **Game tags:** `CSGO`, `CSS`, `CS2`, `GMod`. There is no colon, because `:` is illegal in Windows
+  file names; descriptions may write "CS:GO".
+- **Map names:** well-known maps use their display name (Dust2, Mirage, Inferno, …); others keep
+  their id (aim_map).
+
+`--display-name`, `--game` and `--variant` override the parts. Names containing characters illegal
+in Windows file names are rejected.
 
 ## Options
 
@@ -26,13 +45,17 @@ map file in `MapName`.
 | --- | --- | --- |
 | `--format json\|reflex\|both` | `json` | `reflex` also writes the legacy `.map` (untextured, see below) |
 | `--map-scale` | `4.0` | Unreal units per Source unit. The map is written in Source units; the scenario's `MapScale` scales it |
-| `--movement cs\|css\|csgo` | `cs` | `cs`: 250 u/s, accelerate 5.2, friction 4. `css` and `csgo` use those games' defaults |
+| `--movement` | `cs` | preset from `mapport/movement_presets.json`: `cs`, `css`, `csgo`, `cs2` (Shift walks) or `sprint` (Shift sprints) |
 | `--groups` | `2` | material slot groups. The Default pack has 2 (x 4 surfaces = 8 materials per map) |
 | `--disp-step` | `2` | displacement sampling step (1 = every vertex) |
 | `--disp-thickness` | `8` | thickness of displacement slabs, Source units |
 | `--materials file.json` | built-in | alternative mapping table |
 | `--bots` | `5` | harmless strafing target bots on the counter-terrorist spawns |
 | `--no-preview` | off | skip the preview check PNG |
+| `--views` | off | render first-person check views (spawns plus spread-out floor spots) and report holes |
+| `--view X,Y,Z,YAW` | | extra check view (Source feet position), repeatable |
+| `--no-props` | off | skip model hulls |
+| `--no-ground` | off | skip the backdrop ground plane |
 | `--keep-skybox` | off | keep the 3D skybox and areas detached from the spawns |
 | `--pick text` | | convert only archive members whose name contains `text` |
 
@@ -100,9 +123,26 @@ Outlaws, Pixel, Christmas, N0ted, Timmy). The Anime pack is DLC.
 - Player clip, `toolsclip*`, invisible and skybox brushes become `Clip`. Windows, grates and
   `func_breakable_surf` become `FullClip`. `toolsblockbullets` becomes `WeaponClip`.
   `func_illusionary` becomes `DefaultNoCollision`.
-- All-nodraw detail brushes are shown as stand-in geometry, because they usually sit behind models
-  that cannot be ported.
-- Triggers, hint/skip/areaportal/occluder, buy zones, bomb sites, ladders and water are dropped.
+- All-nodraw solid brushes (world and detail) are shown as stand-in geometry. In Source, models
+  cover them; without the models they would be invisible walls with holes into the void.
+- **Models** (`prop_static` from the `sprp` game lump, and prop entities) are rebuilt from the model
+  files packed in the BSP:
+  - A solid prop with a packed `.phy` becomes its exact convex collision pieces (visible and solid).
+  - Any other packed model (`.mdl` + `.dx90.vtx` + `.vvd`) is split into triangle-connected parts.
+    Each part becomes a non-colliding 26-sided hull, which brings back stairs, trims, frames and
+    beams; the map's own clip brushes provide their collision.
+    Box-like parts use their model-space box (6 faces); others use an 18-sided hull. Parts smaller
+    than 12 units are skipped, and at most 40 parts are kept per model.
+  - Stock models that ship with the game rather than the map can't be read. Where the model name
+    carries a size (`dust_crate_37x37x74`, `dust_door_80x128`), a non-colliding box stands in. The
+    pivot (floor, centre or hinge) is chosen per model as the one that leaves the box least buried
+    in the map's solids. Everything else is listed in the report.
+  - Sloped clip brushes next to an unported stairs model are made visible (stone), because CS:GO
+    covers model stairs with an invisible clip ramp.
+- A wide ground plane sits 32 units under the lowest geometry, so any remaining hole shows ground
+  instead of the void.
+- Triggers, hint/skip/areaportal/occluder, ladders and water are dropped. Buy zones, bomb sites
+  and other objective volumes are not rendered; they go to the metadata file.
 - Displacements are turned into convex slabs. Planar patches of the grid are merged greedily, and
   non-planar cells are split into two triangular prisms.
 - The 3D skybox (the component around `sky_camera`) and areas detached from the spawn areas are
@@ -116,10 +156,23 @@ Outlaws, Pixel, Christmas, N0ted, Timmy). The Anime pack is DLC.
   Also `.vmf`, GMod `.gma` (including LZMA-wrapped workshop downloads), `.zip`, and `.rar`/`.7z`
   through `7z` or the system `tar` (bsdtar).
 
+## Game-mode metadata
+
+`aimmod_<mapid>_<game>.aimmod.json` (`"format": "aimmod.map-objectives"`, `"version": 1`) holds the
+following, in KovaaK's map units and axes (Unreal X/Y/Z with Source Y mirrored; multiply by
+`map_scale` for centimetres):
+
+- `zones`: bomb sites, buy zones, hostage rescue and capture areas, each with its AABB, hull
+  points, team and name.
+- `points`: `info_bomb_target`, hostage spawns and CTF flags.
+- `items`: `weapon_*` and `item_*` spawns, with class, origin and yaw.
+- `spawns`: team spawns with their team.
+
 ## Movement profile
 
-Lengths and speeds are Source values x `MapScale`. Gravity is a scale on Unreal's 980 cm/s².
-With the default `--map-scale 4`:
+Presets live in `mapport/movement_presets.json`, which other AimMod services reuse. Lengths and
+speeds are Source values x `MapScale`. Gravity is a scale on Unreal's 980 cm/s². With the default
+`--map-scale 4`:
 
 | Source | KovaaK's field | Value |
 | --- | --- | --- |
@@ -135,6 +188,17 @@ With the default `--map-scale 4`:
 
 The character's collision capsule follows the main bounding box, so the hull fits Source doorways.
 KovaaK's bundled "Counter-Striker" profile uses roughly the same scale (MaxSpeed 1100, step 75).
+
+- **No air speed gain.** `ClampVelocityToInputSpeed=true` caps horizontal speed at the input speed
+  (run, walk or crouch). With it off, `ScaledAirAcceleration` (a multiple of MaxSpeed) piled speed
+  on in the air and jumps outran walking. `AirControl` is 0.3.
+- **Shift is Ability 1** (Left Shift by default). The preset puts a held sprint ability there with
+  `SpeedModifier = shift_speed_mult`: 0.52 walks like CS (130 u/s) and 1.3 sprints. It works in
+  every direction.
+- **Ctrl crouches:** `MaxCrouchSpeed` = 34 % of run speed, and the hull goes to 54 / 72.
+- `mapport/movesim.py` is a reference Source movement model. The tests use it to check a preset:
+  a jump reaches 57 units with 0.755 s air time and never gains speed, and one strafe jump gains
+  only a little. KovaaK's own implementation isn't public, so the in-game feel still needs testing.
 
 ## Preview check
 
@@ -155,7 +219,7 @@ JackOLantern and Pumpkin. Meso skins are Genji, McCree, Pharah and Tracer. Chang
 
 ## Not converted yet
 
-- Models (`prop_static` and others). Nodraw stand-ins approximate some of them.
+- Stock models that are not packed in the map, and exact model shapes (packed models become hulls).
 - Lighting and lightmaps: the game lights maps with its own sky.
 - Decals, overlays, water and ladders.
 - Texture-accurate UVs. KovaaK's `MI_WA_*` materials are world-aligned, so `uv0` is only a hint.
@@ -166,4 +230,4 @@ JackOLantern and Pumpkin. Meso skins are Genji, McCree, Pharah and Tracer. Chang
 python -m unittest discover -s tests
 ```
 
-The tests build synthetic BSP (v19, v20, v21 and LZMA), GMA, zip and VMF fixtures in code.
+The tests build synthetic BSP (v19, v20, v21 and LZMA), GMA, zip, VMF, .phy and .vvd fixtures in code.

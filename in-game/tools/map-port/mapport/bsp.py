@@ -6,7 +6,7 @@ import re
 import struct
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from . import classify, displacement, geometry, scene
+from . import classify, displacement, geometry, objectives, props, scene
 from .geometry import Plane, Vec
 
 LUMP_ENTITIES, LUMP_PLANES, LUMP_TEXDATA, LUMP_VERTEXES = 0, 1, 2, 3
@@ -14,6 +14,7 @@ LUMP_NODES, LUMP_TEXINFO, LUMP_FACES = 5, 6, 7
 LUMP_LEAFS, LUMP_EDGES, LUMP_SURFEDGES, LUMP_MODELS = 10, 12, 13, 14
 LUMP_LEAFBRUSHES, LUMP_BRUSHES, LUMP_BRUSHSIDES = 17, 18, 19
 LUMP_DISPINFO, LUMP_DISP_VERTS = 26, 33
+LUMP_GAME_LUMP, LUMP_PAKFILE = 35, 40
 LUMP_TEXDATA_STRING_DATA, LUMP_TEXDATA_STRING_TABLE = 43, 44
 
 SURF_SKY2D, SURF_SKY, SURF_NODRAW = 0x2, 0x4, 0x80
@@ -186,10 +187,12 @@ def _vec(s: str, default=(0.0, 0.0, 0.0)) -> Vec:
         return default
 
 
-def load(data: bytes, name: str, disp_step: int = 1, disp_thickness: float = 8.0) -> scene.Scene:
+def load(data: bytes, name: str, disp_step: int = 1, disp_thickness: float = 8.0,
+         with_props: bool = True) -> scene.Scene:
     bsp = Bsp(data)
     bsp.read()
     sc = scene.Scene(name=name, entities=bsp.entities)
+    sc.version = bsp.version
     sc.notes.append(f"BSP version {bsp.version}")
 
     model_ent: Dict[int, Dict[str, str]] = {}
@@ -218,6 +221,14 @@ def load(data: bytes, name: str, disp_step: int = 1, disp_thickness: float = 8.0
         if not planes:
             sc.bump("dropped_empty")
             continue
+        if cls.lower() in objectives.VOLUME_CLASSES:
+            pts = [q for poly in geometry.brush_faces(planes) if poly for q in poly]
+            if pts:
+                if mi:
+                    org = _vec(ent.get("origin", ""))
+                    ang = _vec(ent.get("angles", ""))
+                    pts = [geometry.add(geometry.rotate_zyx(q, *ang), org) for q in pts]
+                sc.volumes.append((ent, pts))
         kind = classify.classify([t[0] for t in texes], cls, contents)
         if kind is None:
             sc.bump(f"dropped_{_reason(cls, texes, contents)}")
@@ -263,6 +274,19 @@ def load(data: bytes, name: str, disp_step: int = 1, disp_thickness: float = 8.0
             sc.brushes.append(b)
             sc.bump("kept_displacement_slab")
         sc.bump("displacements")
+
+    if with_props:
+        try:
+            phys = props.read_pakfile(bsp.lump(LUMP_PAKFILE))
+            found = props.read_static_props(bsp.lump(LUMP_GAME_LUMP), bsp.data, bsp.lumps[LUMP_GAME_LUMP][0],
+                                            decompress_lump)
+        except (struct.error, BspError, lzma.LZMAError) as exc:
+            sc.notes.append(f"static props unreadable: {exc}")
+            phys, found = {}, []
+        found += props.entity_props(bsp.entities)
+        sc.stats["props_in_map"] = len(found)
+        sc.stats["prop_phy_files_packed"] = len(phys)
+        props.add_props(sc, found, phys)
 
     _spawns(sc)
     return sc

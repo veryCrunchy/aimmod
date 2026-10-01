@@ -107,3 +107,28 @@ def remove_3d_skybox(sc: scene.Scene) -> int:
     sc.brushes = [b for i, b in enumerate(sc.brushes) if i not in drop]
     sc.bump("dropped_3d_skybox", len(drop))
     return len(drop)
+
+
+GROUND_TEXTURE = "backdrop/ground_sand"
+
+
+def add_ground_plane(sc: scene.Scene, margin: float = 16384.0, drop: float = 32.0, thickness: float = 16.0) -> None:
+    """A wide floor under the whole map: holes in the port show ground instead of the void."""
+    from .geometry import brush_faces  # local import keeps module load light
+    pts = [p for b in sc.brushes if b.kind != scene.CLIP for f in b.faces for p in f.polygon]
+    if not pts:
+        return
+    lo = [min(p[k] for p in pts) for k in range(3)]
+    hi = [max(p[k] for p in pts) for k in range(3)]
+    top = lo[2] - drop
+    box = ((lo[0] - margin, lo[1] - margin, top - thickness), (hi[0] + margin, hi[1] + margin, top))
+    planes = []
+    for k in range(3):
+        n = [0.0, 0.0, 0.0]
+        n[k] = 1.0
+        planes.append((n[0], n[1], n[2], box[1][k]))
+        planes.append((-n[0], -n[1], -n[2], -box[0][k]))
+    faces = [scene.Face(polygon=poly, normal=pl[:3], texture=GROUND_TEXTURE, reflectivity=(0.45, 0.38, 0.28))
+             for pl, poly in zip(planes, brush_faces(planes)) if poly]
+    sc.brushes.append(scene.Brush(faces=faces, kind=scene.SOLID, source="backdrop"))
+    sc.bump("added_ground_plane")

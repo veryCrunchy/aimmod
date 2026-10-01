@@ -93,14 +93,14 @@ def prism(top: List[Vec], up: Vec, thickness: float, texture: str, refl, uv_axes
     faces = [scene.Face(polygon=list(top), normal=n_top, texture=texture, reflectivity=refl,
                         uv_axes=uv_axes, tex_size=tex_size)]
     faces.append(scene.Face(polygon=list(reversed(bottom)), normal=g.mul(n_top, -1), texture=texture,
-                            reflectivity=refl, uv_axes=uv_axes, tex_size=tex_size))
+                            reflectivity=refl, uv_axes=uv_axes, tex_size=tex_size, hidden=True))
     k = len(top)
     for i in range(k):
         a, b = top[i], top[(i + 1) % k]
         quad = [b, a, bottom[i], bottom[(i + 1) % k]]
         nrm = g.normalize(g.cross(g.sub(quad[1], quad[0]), g.sub(quad[2], quad[0])))
         faces.append(scene.Face(polygon=quad, normal=nrm, texture=texture, reflectivity=refl,
-                                uv_axes=uv_axes, tex_size=tex_size))
+                                uv_axes=uv_axes, tex_size=tex_size, hidden=True))
     return scene.Brush(faces=faces, kind=scene.SOLID, source="displacement")
 
 

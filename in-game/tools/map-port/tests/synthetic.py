@@ -114,6 +114,34 @@ def build_gma(files: List[Tuple[str, bytes]]) -> bytes:
     return out + struct.pack("<I", 0)
 
 
+def build_phy_box(half_inches: float = 16.0) -> bytes:
+    """A .phy with one convex box ledge (IVP layout: metres, IVP axes)."""
+    h = half_inches * 0.0254
+    # Source (x, y, z) = (ivp_x, ivp_z, -ivp_y) / 0.0254  =>  ivp = (x, -z, y) * 0.0254
+    corners = [(sx * h, sy * h, sz * h) for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)]
+    ivp = [(x, -z, y) for x, y, z in corners]
+    quads = [(0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1), (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)]
+    tris = []
+    for a, b, c, d in quads:
+        tris += [(a, b, c), (a, c, d)]
+    ledge_size = 16 + 16 * len(tris)
+    ledge = struct.pack("<iiIhh", ledge_size, 0, (ledge_size // 16) << 8, len(tris), 0)
+    for i, (a, b, c) in enumerate(tris):
+        ledge += struct.pack("<I", i) + b"".join(struct.pack("<I", v) for v in (a, b, c))
+    points = b"".join(struct.pack("<ffff", *p, 0.0) for p in ivp)
+    surface = struct.pack("<3f3ffIi3i", 0, 0, 0, 0, 0, 0, 1.0, 0, 48 + len(ledge) + len(points), 0, 0, 0)
+    body = b"VPHY" + struct.pack("<hhi3fi", 0x100, 0, 0, 0, 0, 0, 0) + surface + ledge + points
+    return struct.pack("<iiii", 16, 0, 1, 0) + struct.pack("<i", len(body)) + body
+
+
+def build_vvd(points) -> bytes:
+    head = b"IDSV" + struct.pack("<iii", 4, 0, 1) + struct.pack("<8i", len(points), 0, 0, 0, 0, 0, 0, 0)
+    head += struct.pack("<iiii", 0, 0, 64, 0)
+    verts = b"".join(bytes(16) + struct.pack("<fff", *p) + struct.pack("<fff", 0, 0, 1) + struct.pack("<ff", 0, 0)
+                     for p in points)
+    return head + verts
+
+
 VMF_BOX = """
 versioninfo { "editorversion" "400" }
 world

@@ -22,6 +22,7 @@ class Face:
     reflectivity: Tuple[float, float, float] = (0.5, 0.5, 0.5)
     uv_axes: Optional[Tuple[Tuple[float, float, float, float], Tuple[float, float, float, float]]] = None
     tex_size: Tuple[int, int] = (512, 512)
+    hidden: bool = False          # never seen (e.g. the underside of a displacement slab)
 
 
 @dataclass
@@ -50,11 +51,14 @@ class Spawn:
 @dataclass
 class Scene:
     name: str
+    version: int = 0  # BSP version (0 for VMF)
     brushes: List[Brush] = field(default_factory=list)
     spawns: List[Spawn] = field(default_factory=list)
     entities: List[Dict[str, str]] = field(default_factory=list)
     stats: Dict[str, int] = field(default_factory=dict)
     notes: List[str] = field(default_factory=list)
+    # Objective brush volumes (bomb sites, buy zones, ...): classname -> list of (entity, points)
+    volumes: List[Tuple[Dict[str, str], List[Vec]]] = field(default_factory=list)
 
     def bump(self, key: str, n: int = 1) -> None:
         self.stats[key] = self.stats.get(key, 0) + n

@@ -7,9 +7,11 @@ map_scale, so the player moves exactly like CS relative to the ported geometry. 
 """
 from __future__ import annotations
 
+import json
 import math
+import os
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 UE_GRAVITY = 980.0  # Unreal default world gravity, cm/s^2; the profile's Gravity is a scale on it
 # Default character-model pack: Meso (skins Genji, McCree, Pharah, Tracer), Endo, Ecto, ...
@@ -19,6 +21,8 @@ BOT_SKIN = "McCree"
 
 @dataclass
 class Movement:
+    """One movement preset in Source units (see movement_presets.json)."""
+    label: str = ""
     run_speed: float = 250.0       # knife run speed, u/s
     accelerate: float = 5.2        # sv_accelerate
     friction: float = 4.0          # sv_friction
@@ -33,13 +37,40 @@ class Movement:
     crouch_height: float = 54.0
     crouch_speed_mult: float = 0.34
     max_velocity: float = 3500.0   # sv_maxvelocity
+    shift: str = "walk"            # what Left Shift (KovaaK's Ability 1) does: walk or sprint
+    shift_speed_mult: float = 0.52
+
+    @property
+    def jump_velocity(self) -> float:
+        return math.sqrt(2 * self.gravity * self.jump_height)
 
 
-PRESETS = {
-    "cs": Movement(),
-    "css": Movement(accelerate=5.0, friction=4.0, stop_speed=75.0, air_accelerate=10.0),
-    "csgo": Movement(accelerate=5.5, friction=5.2, stop_speed=80.0, air_accelerate=12.0),
-}
+PRESETS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "movement_presets.json")
+
+
+def load_presets(path: str = PRESETS_FILE) -> Dict[str, Movement]:
+    with open(path, encoding="utf-8") as fh:
+        raw = json.load(fh)["presets"]
+    fields = set(Movement.__dataclass_fields__)
+    return {k: Movement(**{f: v for f, v in d.items() if f in fields}) for k, d in raw.items()}
+
+
+PRESETS = load_presets()
+
+
+def shift_ability(mv: Movement) -> List[Tuple[str, str]]:
+    """Held Ability 1 (Left Shift by default) scales speed: CS walk (< 1) or sprint (> 1)."""
+    name = "CS Walk" if mv.shift == "walk" else "Sprint"
+    return [
+        ("Name", name), ("MaxCharges", "1.0"), ("ChargeTimer", "0.001"), ("ChargesRefundedOnKill", "0.0"),
+        ("DelayAfterUse", "0.0"), ("FullyAuto", "false"), ("AbilityDuration", "0.0"),
+        ("BlockAttackWhileSprinting", "false" if mv.shift == "walk" else "true"),
+        ("AbilityBlockedWhenAttacking", "false"), ("SpeedModifier", f"{mv.shift_speed_mult:.2f}"),
+        ("45DegreeSprint", "true"), ("90DegreeSprint", "true"), ("135DegreeSprint", "true"),
+        ("180DegreeSprint", "true"), ("TapToSprint", "false"), ("Block45DegreesWhenSprinting", "false"),
+        ("AIUseInCombat", "false"), ("AIUseOutOfCombat", "false"), ("AIUseOnGround", "false"),
+        ("AIUseInAir", "false"),
+    ]
 
 
 def _b(v: bool) -> str:
@@ -50,8 +81,9 @@ def _v(x: float, y: float, z: float) -> str:
     return f"X={x:.3f} Y={y:.3f} Z={z:.3f}"
 
 
-def character_profile(name: str, mv: Movement, s: float, weapon: str, bot: bool = False) -> List[Tuple[str, str]]:
-    jump_v = math.sqrt(2 * mv.gravity * mv.jump_height)
+def character_profile(name: str, mv: Movement, s: float, weapon: str, bot: bool = False,
+                      abilities: str = ";;;") -> List[Tuple[str, str]]:
+    jump_v = mv.jump_velocity
     return [
         ("Name", name), ("MaxHealth", "100.0"), ("WeaponProfileNames", f"{weapon};;;;;;;"),
         ("MinRespawnDelay", "1.0"), ("MaxRespawnDelay", "1.0"),
@@ -63,7 +95,7 @@ def character_profile(name: str, mv: Movement, s: float, weapon: str, bot: bool 
         ("CrouchingAcceleration", f"{mv.accelerate * mv.run_speed * s:.1f}"),
         ("Friction", f"{mv.friction:.2f}"), ("BrakingFrictionFactor", "1.0"),
         ("JumpVelocityMin", f"{jump_v * s:.1f}"), ("JumpVelocityMax", f"{jump_v * s:.1f}"),
-        ("Gravity", f"{mv.gravity * s / UE_GRAVITY:.4f}"), ("AirControl", "1.0"),
+        ("Gravity", f"{mv.gravity * s / UE_GRAVITY:.4f}"), ("AirControl", "0.3"),
         ("CanCrouch", "true"), ("CanPogoJump", "false"), ("CanCrouchInAir", "true"),
         ("CrouchInAirRaisesFeet", "true"), ("CanJumpFromCrouch", "true"),
         ("EnemyBodyColor", _v(0.771, 0.1, 0.1)), ("EnemyBodyColorOnHit", _v(1, 1, 1)),
@@ -80,7 +112,7 @@ def character_profile(name: str, mv: Movement, s: float, weapon: str, bot: bool 
         ("BlockTeamDamage", "true"), ("HasJetpack", "false"), ("JetpackActivationDelay", "0.2"),
         ("JetpackFullFuelTime", "4.0"), ("JetpackFuelIncPerSec", "1.0"), ("JetpackFuelRegensInAir", "false"),
         ("JetpackThrust", "6000.0"), ("JetpackMaxZVelocity", "400.0"), ("JetpackAirControlWithThrust", "0.25"),
-        ("AirJumpCount", "0"), ("AirJumpVelocity", "0.0"), ("AbilityProfileNames", ";;;"),
+        ("AirJumpCount", "0"), ("AirJumpVelocity", "0.0"), ("AbilityProfileNames", abilities),
         ("HideWeapon", _b(bot)), ("AerialFriction", "0.0"), ("AerialVerticalTurningFriction", "100000.0"),
         ("AerialVerticalBreakingFriction", "0.0"), ("UseAerialVerticalFriction", "false"),
         ("StrafeSpeedMult", "1.0"), ("BackSpeedMult", "1.0"), ("RespawnInvulnTime", "0.0"),
@@ -105,7 +137,10 @@ def character_profile(name: str, mv: Movement, s: float, weapon: str, bot: bool 
         ("ContinuousGroundFriction", f"{mv.friction:.2f}"), ("ContinuousAirFriction", "0.0"),
         ("ScaledGroundAcceleration", f"{mv.accelerate:.2f}"), ("ScaledAirAcceleration", f"{mv.air_accelerate:.2f}"),
         ("MaxAirSpeed", f"{mv.air_speed_cap * s:.1f}"), ("StopSpeed", f"{mv.stop_speed * s:.1f}"),
-        ("StopSpeedThreshold", f"{mv.stop_speed * s:.1f}"), ("ClampVelocityToInputSpeed", "false"),
+        ("StopSpeedThreshold", f"{mv.stop_speed * s:.1f}"),
+        # Clamp horizontal speed to the input (run/walk/crouch) speed: a jump never gains speed. With
+        # this off, ScaledAirAcceleration (a multiple of MaxSpeed) piles speed on in the air.
+        ("ClampVelocityToInputSpeed", "true"),
         ("JumpSkipsFriction", "false"), ("EnableQuakeMovement", "true"), ("EnableQuakeJump", "false"),
         ("KtJump", "0.0"), ("MovementPhysicsTickInterval", "0.0"), ("MovementPhysicsTickEnabled", "false"),
         ("TeamGlowUpHead", "0.0"), ("TeamGlowUpBody", "0.0"), ("EnemyGlowUpHead", "0.0"),
@@ -140,6 +175,8 @@ def build(name: str, map_json_name: str, map_text: str, map_scale: float, mv: Mo
           bots: int = 5, description: str = "") -> str:
     s = map_scale
     player, bot_char, weapon = "CS Player", "CS Target", "CS Rifle"
+    shift = shift_ability(mv)
+    shift_name = shift[0][1]
     header = [
         ("Name", name), ("PlayerCharacters", player), ("BotCharacters", "CS Target Bot.bot"),
         ("IsChallenge", "false"), ("Timelimit", "600.0"), ("PlayerProfile", player),
@@ -175,9 +212,11 @@ def build(name: str, map_json_name: str, map_text: str, map_scale: float, mv: Mo
         ("BlockedMovementReactionMax", "0.2"),
     ]
     sections = [("", header), ("[Aim Profile]", aim), ("[Bot Profile]", bot),
-                ("[Character Profile]", character_profile(player, mv, s, weapon)),
+                ("[Character Profile]", character_profile(player, mv, s, weapon,
+                                                          abilities=shift_name + ".abilsprint;;;")),
                 ("[Character Profile]", character_profile(bot_char, mv, s, "", bot=True)),
-                ("[Dodge Profile]", dodge), ("[Weapon Profile]", weapon_profile(weapon, s))]
+                ("[Dodge Profile]", dodge), ("[Sprint Ability Profile]", shift),
+                ("[Weapon Profile]", weapon_profile(weapon, s))]
     out: List[str] = []
     for title, rows in sections:
         if title:

@@ -69,9 +69,10 @@ def classify(textures: Iterable[str], classname: str = "worldspawn",
     if tex and all(t.startswith(HARD_CLIP_TOOLS) or t.startswith(SKIP_TOOLS) for t in tex):
         return scene.CLIP
     if tex and all(is_tool(t) for t in tex):
-        # Detail nodraw hulls sit behind models (props) we cannot port; show them as stand-in geometry.
-        detail = cls.startswith("func_detail") or (contents is not None and contents & CONTENTS_DETAIL)
-        if detail and any("toolsnodraw" in t for t in tex) and not any(t.startswith(HARD_CLIP_TOOLS) for t in tex):
+        # Solid nodraw brushes are only invisible in Source because models (props) cover them. Without
+        # those models they would be invisible walls with holes into the void, so show them as
+        # stand-in geometry. That covers world brushes as well as detail ones.
+        if any("toolsnodraw" in t for t in tex) and not any(t.startswith(HARD_CLIP_TOOLS) for t in tex):
             return scene.SOLID
         return scene.CLIP
     if cls.startswith(NONSOLID_ENTITIES):

@@ -33,8 +33,16 @@ def to_ue(p, unit: float) -> Tuple[float, float, float]:
     return (p[0] * unit, -p[1] * unit, p[2] * unit)
 
 
+def _num(x: float, digits: int) -> str:
+    s = f"{x:.{digits}f}"
+    if "." in s:
+        s = s.rstrip("0").rstrip(".")
+    return "0" if s in ("-0", "") else s
+
+
 def _f(v: Sequence[float], digits: int = 4) -> str:
-    return ", ".join(f"{x:.{digits}f}" for x in v)
+    """Compact "x, y, z" (trailing zeros trimmed; the loader parses each part with stof)."""
+    return ", ".join(_num(x, digits) for x in v)
 
 
 def _material_sets(slots: List[Slot], groups: int) -> List[dict]:
@@ -112,13 +120,14 @@ def brush_object(b: scene.Brush, unit: float, tex_slot: Dict[str, int], slots: L
             f_poly = f.polygon
         indices = [i for tri in tris for i in tri]
         verts = []
-        if visible:
+        if visible and not f.hidden:
             tan = _tangent(f, n)
+            ns, ts = _f(n, 3), _f(tan, 3) + ", false"
             for p_local, p_src in zip(local, f_poly):
-                verts.append({"location": _f(p_local, 4), "normal": _f(n), "tangent": _f(tan) + ", false",
-                              "uv0": _f(_uv(p_src, f))})
+                verts.append({"location": _f(p_local, 3), "normal": ns, "tangent": ts, "uv0": _f(_uv(p_src, f), 3)})
         else:
-            verts = [{"location": _f(p, 4), "normal": _f(n)} for p in local]
+            ns = _f(n, 3)
+            verts = [{"location": _f(p, 3), "normal": ns} for p in local]
         sections.append({"indices": indices, "vertices": verts})
         if visible:
             if best_area < 0:
@@ -160,6 +169,6 @@ def dumps(doc: dict) -> str:
              '    "objects": [']
     objs = doc["objects"]
     for i, o in enumerate(objs):
-        parts.append("        " + json.dumps(o, separators=(", ", ": ")) + ("," if i + 1 < len(objs) else ""))
+        parts.append("        " + json.dumps(o, separators=(",", ":")) + ("," if i + 1 < len(objs) else ""))
     parts += ["    ],", f'    "version": {json.dumps(doc["version"])}', "}"]
     return "\n".join(parts) + "\n"
