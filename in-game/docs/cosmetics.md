@@ -603,7 +603,13 @@ scalar=<Param>:v         up to 8, -10..10
 - **Capture:** its capture writes to an **AimMod render target** (never the game's shared one) and renders only the stage's own components (`PRM_UseShowOnlyList`).
 - **Lighting:** the stage's directional light is switched off, so it can't light the map. The rig's point lights reach 900 cm, far short of the 5 km down to the map, and nothing on the stage casts a shadow.
 - **Looks:** only names from the free Default packs are applied, even here. A DLC look is never shown.
-- **Teardown:** the stage and render target are destroyed as soon as the request is stale or the gate closes. Unknown game state counts as "no".
+- **Lifetime:** AimModCore destroys nothing at runtime. Destroying the stage while a challenge start or a load was tearing the level down crashed the game.
+  - **One stage per world:** spawned once and reused.
+  - **Parking:** 10 s after the last request (so a flapping page heartbeat doesn't count as a close), the stage is hidden and stops capturing.
+  - **Parts:** accessories and weapons are hidden and kept for reuse.
+  - **Transitions:** during a challenge or a load, no engine call is made at all.
+  - **Cleanup:** the level's unload removes everything. Every kept object is a weak reference, checked (`reflect::Alive`) before each use.
+  - **Matches:** the match applier also hides accessories it no longer needs and reuses them, instead of destroying them.
 
 **Cost.**
 

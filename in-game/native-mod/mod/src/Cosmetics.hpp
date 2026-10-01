@@ -54,6 +54,7 @@ namespace aimmod
         };
         struct Worn
         {
+            bool hidden{}; // hidden, kept for reuse (never destroyed at runtime)
             RC::Unreal::FWeakObjectPtr actor, component;
             game::UObject* key{}; // actor identity
             std::string item;
@@ -74,7 +75,7 @@ namespace aimmod
         };
 
         void Restore(const std::vector<Want>* keep, std::optional<Scope> scope);
-        void RemoveAccessories(const std::vector<WantAccessory>* keep);
+        void HideAccessories(const std::vector<WantAccessory>* keep);
         void Dress(const Want& want);
         void Attach(const WantAccessory& want);
         bool Fits(game::UObject* material, const cosmetics::Item& item);
@@ -101,7 +102,7 @@ namespace aimmod
         // Game state and looks.
         game::Getter m_benchmark, m_editor;
         game::Getter m_numMaterials, m_getMaterial, m_setMaterial, m_createMid, m_setVector, m_setScalar, m_setTexture;
-        game::Getter m_addComponent, m_setStaticMesh, m_setCollision, m_attach, m_relative, m_scale, m_destroyComponent;
+        game::Getter m_addComponent, m_setStaticMesh, m_setCollision, m_attach, m_relative, m_scale;
         game::Getter m_weaponMesh, m_armsMesh, m_weaponModel, m_shotOrigin;
         game::Path m_tags, m_mesh, m_profileModel, m_profileSkin, m_viewModel;
         // Parameter names: instance overrides [scalar, vector, texture] and the

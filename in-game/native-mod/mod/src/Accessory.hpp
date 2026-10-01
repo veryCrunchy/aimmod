@@ -14,7 +14,9 @@
 
 namespace aimmod
 {
-    // Returns the new component (destroy it with RemoveAccessory), or null with `why`.
+    // Returns the new component, or null with `why`. Accessories are never
+    // destroyed at runtime: hide them (SetAccessoryVisible) and reuse them;
+    // their owner's level cleans them up.
     game::UObject* AttachFitAccessory(game::UObject* actor, game::UObject* skeletalMesh, const cosmetics::Item& item, std::string& why);
-    void RemoveAccessory(game::UObject* component);
+    void SetAccessoryVisible(game::UObject* component, bool visible);
 } // namespace aimmod

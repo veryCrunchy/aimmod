@@ -124,6 +124,32 @@ namespace aimmod::cosmetics
     // Unit X, Y and Z axes of an UE rotator (pitch, yaw, roll in degrees).
     void RotatorAxes(const double rotation[3], double x[3], double y[3], double z[3]);
 
+    // ------------------------------------------------------- colour mapping
+    //
+    // A tint or finish keeps the skin's identity: it recolours only the
+    // parameters a material uses for paint and accents, and leaves neutral
+    // ones (black, white, grey and brown metal, silicone, raw metal) alone.
+    // Rules by parameter name, so they work on any master:
+    //   - the base paint material (MetalPaint and TriangularPaint): the
+    //     item's own parameters as they are (it is a full paint scheme);
+    //   - skin masters: accent paints (Metal<colour> other than the
+    //     neutrals, MetalPattern, *Paint, LeatherColor) take the item's main
+    //     colour, then its trim colour, alternating in name order; accent
+    //     glows (*EmissiveColor other than EmissiveColor itself) take the main
+    //     colour dimmed to at most the item's glow limit;
+    //   - weapon masters: AccentColor and Emissive (and any *Accent*) take
+    //     the finish's accent and glow.
+    // An empty result means the material has nothing to recolour.
+    struct Colours
+    {
+        Color main{}, trim{}, metal{}, glow{};
+        bool hasTrim{}, hasMetal{}, hasGlow{};
+    };
+    // The item's colours: main = MetalPaint or AccentColor, trim = TriangularPaint,
+    // metal = RawMetal, glow = Emissive (or main).
+    Colours ItemColours(const Item& item);
+    std::vector<std::pair<std::string, Color>> MapColours(const Item& item, const std::set<std::string>& materialVectors);
+
     // Structural check (CosmeticsCatalog.validate): nullopt = valid, else the reason.
     std::optional<std::string> Validate(const Item& item);
 

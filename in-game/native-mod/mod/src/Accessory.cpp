@@ -82,7 +82,7 @@ namespace aimmod
     {
         if (!item.fit || !actor || !skeletalMesh) return (why = "not a fit accessory", nullptr);
         if (!cosmetics::IsGameAccessoryAsset(item.mesh, false) || !cosmetics::IsGameAccessoryAsset(item.material, true)) return (why = "asset not allowed", nullptr);
-        const cosmetics::Fit& fit = *item.fit;
+        cosmetics::Fit fit = *item.fit;
         UObject* meshAsset = LoadGameAsset(Widen(item.mesh));
         UObject* material = LoadGameAsset(Widen(item.material));
         if (!meshAsset || !material) return (why = "mesh or material not found", nullptr);
@@ -93,12 +93,21 @@ namespace aimmod
         double anchor[3];
         if (!SocketLocation(skeletalMesh, *bone, anchor)) return (why = "bone position unavailable", nullptr);
         float origin[3], extent[3];
-        if (fit.anchor != "bone")
+        if (!Bounds(skeletalMesh, origin, extent)) return (why = "character bounds unavailable", nullptr);
+        const double top = origin[2] + extent[2];
+        // Sized to this model's head: the head bone to the top of the model, against
+        // the 25 cm the catalog sizes assume (Meso and Endo); clamped so no model
+        // gets a tiny or huge piece.
+        if (const auto head = FindBone(skeletalMesh, "Head"))
         {
-            if (!Bounds(skeletalMesh, origin, extent)) return (why = "character bounds unavailable", nullptr);
-            const double top = origin[2] + extent[2];
-            anchor[2] = fit.anchor == "top" ? top : (anchor[2] + top) / 2;
+            double at[3];
+            if (SocketLocation(skeletalMesh, *head, at))
+            {
+                const double scale = std::clamp((top - at[2]) / 25.0, 0.6, 1.6);
+                for (int i = 0; i < 3; ++i) fit.size[i] *= scale, fit.offset[i] *= scale;
+            }
         }
+        if (fit.anchor != "bone") anchor[2] = fit.anchor == "top" ? top : (anchor[2] + top) / 2;
         // Forward from the shoulders: right = left to right shoulder, forward = right x up.
         double forward[3] = {1, 0, 0};
         double left[3], right[3];
@@ -141,10 +150,16 @@ namespace aimmod
              &mid);
         if (mid)
         {
-            for (const auto& [name, c] : item.vector)
+            // Every colour slot of the material takes the piece's colour: the
+            // brush's UVs land on arbitrary mask regions of the character material.
+            std::vector<std::pair<std::string, cosmetics::Color>> colours(item.vector.begin(), item.vector.end());
+            const cosmetics::Colours c = cosmetics::ItemColours(item);
+            for (const char* name : {"Color", "BodyColor", "HeadColor", "AccentColor"})
+                if (std::none_of(colours.begin(), colours.end(), [&](const auto& v) { return v.first == name; })) colours.push_back({name, c.main});
+            for (const auto& [name, col] : colours)
                 Call(mid, STR("/Script/Engine.MaterialInstanceDynamic:SetVectorParameterValue"), [&](const std::wstring& n, FProperty* p, std::uint8_t* v) {
                     if (n == STR("ParameterName")) WriteFName(v, p, Widen(name));
-                    else if (n == STR("Value")) WriteFloats(v, p, {static_cast<float>(c.r), static_cast<float>(c.g), static_cast<float>(c.b), static_cast<float>(c.a)});
+                    else if (n == STR("Value")) WriteFloats(v, p, {static_cast<float>(col.r), static_cast<float>(col.g), static_cast<float>(col.b), static_cast<float>(col.a)});
                 });
             for (const auto& [name, x] : item.scalar)
                 Call(mid, STR("/Script/Engine.MaterialInstanceDynamic:SetScalarParameterValue"), [&](const std::wstring& n, FProperty* p, std::uint8_t* v) {
@@ -167,7 +182,7 @@ namespace aimmod
         const auto placement = cosmetics::PlaceAccessory(fit, minD, maxD, anchor, forward);
         if (!placement)
         {
-            RemoveAccessory(component);
+            SetAccessoryVisible(component, false); // never destroyed at runtime
             return (why = "mesh has no bounds", nullptr);
         }
         SetWorldTransform(component, placement->location, placement->rotation, placement->scale);
@@ -181,12 +196,10 @@ namespace aimmod
         return component;
     }
 
-    void RemoveAccessory(UObject* component)
+    void SetAccessoryVisible(UObject* component, bool visible)
     {
-        // Only a live component of a live owner; during a level transition the level destroys it.
+        // Only a live component of a live owner.
         if (!Alive(component) || !Alive(component->GetOuterPrivate())) return;
-        Call(component, STR("/Script/Engine.ActorComponent:K2_DestroyComponent"), [&](const std::wstring& n, FProperty*, std::uint8_t* v) {
-            if (n == STR("Object")) WriteObject(v, component);
-        });
+        SetVisible(component, visible, false);
     }
 } // namespace aimmod

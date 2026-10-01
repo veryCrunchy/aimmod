@@ -894,9 +894,8 @@ static void PreviewChecks()
     CHECK(!DecidePreview(r, {false, false, false, true}).run, "never while loading");
     CHECK(!DecidePreview(r, {std::nullopt, false, false, false}).run, "unknown challenge state counts as a challenge");
     CHECK(!DecidePreview(r, {false, std::nullopt, false, false}).run, "unknown benchmark state counts as a benchmark");
-    CHECK(PreviewMayDestroy(menu) && !PreviewMayDestroy({true, false, false, false}) && !PreviewMayDestroy({false, false, false, true}) &&
-              !PreviewMayDestroy({std::nullopt, false, false, false}) && !PreviewMayDestroy({false, false, false, std::nullopt}),
-          "the stage is destroyed only in a settled state, never at a challenge start or during a load");
+    CHECK(!PreviewParkDue(100, 95) && !PreviewParkDue(100, 90) && PreviewParkDue(100.5, 90) && PreviewParkDue(100, -1e9),
+          "the stage parks only 10 s after the last request (a flapping heartbeat never parks it)");
     CHECK(FormatPreviewFrame(3, "preview-1.png", 384, 384) == "v=1\nseq=3\nfile=preview-1.png\nwidth=384\nheight=384\n", "frame record format");
     PreviewComposeChecks();
 }

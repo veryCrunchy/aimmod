@@ -50,11 +50,14 @@ namespace aimmod
         std::optional<PreviewRequest> ReadRequest();
         PreviewGameState GameState(bool inChallenge, bool loading) const;
         bool EnsureStage(UObject* world);
-        // Ends the preview. With `destroy`, the stage is destroyed now if that is
-        // safe (reflect::SafeToDestroy); otherwise it is only forgotten here and
-        // destroyed later in a safe tick, or left to the level when the world goes.
-        void Teardown(const char* why, bool destroy = true);
-        void DestroyOrphans(UObject* world);
+        // Lifetime: one stage per world, spawned once and reused. Nothing
+        // AimModCore adds to it is ever destroyed at runtime: closing the page
+        // parks the stage (hidden, no capture), worn parts are hidden and kept
+        // for reuse, and the level's unload cleans everything up.
+        void Park(const char* why);
+        void Unpark();
+        // Drops every reference without an engine call (world gone, unload).
+        void Forget(const char* why);
         void ApplyLook(const PreviewRequest& request);
         void ApplyRotation(double yaw);
         void Frame(UObject* target);
@@ -64,11 +67,11 @@ namespace aimmod
         // New components join the capture's show-only list (it holds the
         // components the stage had when it spawned).
         void ShowInCapture(UObject* component);
-        void RemoveWeapon();
+        void HideWeapons();
         bool Capture();
         bool CaptureTo(std::uint8_t source, const std::wstring& file);
         void WearAccessories(const PreviewRequest& request);
-        void RemoveAccessories();
+        void HideAccessories();
 
         // The requested look, from the game's free Default packs only.
         struct Look
@@ -89,16 +92,20 @@ namespace aimmod
 
         RC::Unreal::FWeakObjectPtr m_stage, m_target, m_capture, m_meshes, m_mesh;
         std::vector<RC::Unreal::FWeakObjectPtr> m_lights;      // key, fill, rim
-        std::vector<RC::Unreal::FWeakObjectPtr> m_accessories; // worn on the stage
-        RC::Unreal::FWeakObjectPtr m_weapon;                   // the weapon view's mesh
-        struct Orphan
+        // Parts AimModCore added to the stage, kept for reuse (never destroyed).
+        struct Part
         {
-            RC::Unreal::FWeakObjectPtr stage, target;
-            UObject* world{};
+            std::string key; // accessory: "<id>|<model>"; weapon: "held" or "view|<asset>"
+            RC::Unreal::FWeakObjectPtr component;
+            std::vector<RC::Unreal::FWeakObjectPtr> materials; // a weapon's own materials, before a finish
         };
-        std::vector<Orphan> m_orphans; // stages left alive during a transition
+        std::vector<Part> m_accessories, m_weapons;
+        Part* FindPart(std::vector<Part>& parts, const std::string& key);
+        void ApplyFinish(Part& weapon, const PreviewRequest& request);
         MaterialParams m_params;
-        UObject* m_world{};
+        UObject* m_world{};          // identity only, never called into
+        bool m_parked{};
+        double m_lastRequest{-1e9};
         double m_baseYaw{};
         float m_cameraHome[3]{}; // the stage camera's own position: its front view
         bool m_logPacks{true}, m_logFrame{};
