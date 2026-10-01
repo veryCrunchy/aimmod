@@ -98,4 +98,29 @@ notice=failed
 Notify.update(false,false,true)
 check(slots[1].Anchors.Maximum.X==0.5 and slots[1].Offsets.Bottom>=320,'back to the toast for a plain notice')
 check(#widgets==2,'one host and one view, reused')
+-- The CS buy menu in game: the layer shows the cursor (game and UI input) and gives input back after.
+local modes={}
+lib.SetInputMode_GameAndUIEx=function(_,p,widget,lock,hide)check(p==player and widget==nil and hide==false,'game and UI input, cursor kept during capture');modes[#modes+1]='gameui' end
+lib.SetInputMode_GameOnly=function(_,p)check(p==player,'owning player');modes[#modes+1]='game' end
+local buying='{"version":1,"active":false,"layout":"full","interactive":true,"cursor":true,"cs":{"phase":"freeze","buyOpen":true},"volume":0}'
+local closed='{"version":1,"active":false,"layout":"full","interactive":false,"cs":{"phase":"freeze","buyOpen":false},"volume":0}'
+player.bShowMouseCursor=false
+notice=buying;Notify.update(false,false,false)
+check(modes[1]=='gameui' and player.bShowMouseCursor==true,'buy menu open: the cursor shows')
+check(clickable(),'and the buy menu takes clicks with it')
+Notify.update(false,false,false);check(#modes==1,'the cursor is taken once')
+notice=closed;Notify.update(false,false,false)
+check(modes[2]=='game' and player.bShowMouseCursor==false,'buy menu closed: game-only input and no cursor again')
+Notify.update(false,false,false);check(#modes==2,'input is handed back once')
+-- KovaaK's menus own input: the layer neither takes nor gives back the cursor there.
+notice=buying;Notify.update(false,false,true)
+check(#modes==2,'no input changes while KovaaK\'s menus are up')
+notice=closed;Notify.update(false,false,false);check(#modes==2,'nothing to give back that the layer did not take')
+-- The play request is read from the notice file.
+notice='{"version":1,"active":false,"play":{"id":"play-m-abc-0","since":1700000000123},"volume":0}'
+Notify.update(false,false,false)
+local playId,since=Notify.playRequest()
+check(playId=='play-m-abc-0' and since==1700000000123,'play request parsed')
+notice='{"version":1,"active":false}';Notify.update(false,false,false)
+check(Notify.playRequest()==nil,'no request once the service stops sending it')
 print(('notify: %d checks passed'):format(checks))

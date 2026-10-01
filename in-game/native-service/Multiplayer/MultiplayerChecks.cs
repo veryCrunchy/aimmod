@@ -40,7 +40,7 @@ static partial class MultiplayerChecks
         CsTeams();
         Marker();
         var root = Path.Combine(Path.GetTempPath(), "aimmod-mp-test-" + Guid.NewGuid().ToString("N"));
-        try { Content(root); Generator(root); Blocked(root); AutoLeave(root); LoadGateService(root); LoadGateEnsureMap(root); Service(root); Transfers(root); Replays(root); Maps(root); Tournaments(root); }
+        try { Content(root); Generator(root); Blocked(root); AutoLeave(root); LoadGateService(root); StandInStream(root); LoadGateEnsureMap(root); Binds(root); Service(root); Transfers(root); Replays(root); Maps(root); Tournaments(root); }
         finally { try { Directory.Delete(root, true); } catch (IOException) { } }
         Console.WriteLine($"{count} multiplayer checks passed.");
     }
@@ -1330,7 +1330,11 @@ static partial class MultiplayerChecks
               {"id":"twice","version":1,"kind":"weapon_finish","parts":["weapon"],"vector":{"PrimaryColor":{"R":1,"G":1,"B":1,"A":1}}},
               {"id":"twice","version":1,"kind":"weapon_finish","parts":["weapon"],"vector":{"PrimaryColor":{"R":0,"G":0,"B":0,"A":1}}},
               {"id":"meso-tint-hot","version":1,"kind":"avatar_tint","parts":["body"],"models":["Meso"],"vector":{"PrimaryColor":{"R":2,"G":0,"B":0,"A":1}}},
-              {"id":"tint-mint","version":1,"kind":"avatar_tint","name":"AimMod Mint","models":["Meso","Endo"],"parts":["body"],"vector":{"MetalPaint":{"R":0.02,"G":0.6,"B":0.3,"A":1},"TriangularPaint":{"R":0.86,"G":0.9,"B":0.88,"A":1},"RawMetal":{"R":0.3,"G":0.34,"B":0.32,"A":1}},"scalar":{"Roughness":0.35,"Metallic":0.1}}]}
+              {"id":"tint-mint","version":1,"kind":"avatar_tint","name":"AimMod Mint","models":["Meso","Endo"],"parts":["body"],"vector":{"MetalPaint":{"R":0.02,"G":0.6,"B":0.3,"A":1},"TriangularPaint":{"R":0.86,"G":0.9,"B":0.88,"A":1},"RawMetal":{"R":0.3,"G":0.34,"B":0.32,"A":1}},"scalar":{"Roughness":0.35,"Metallic":0.1}},
+              {"id":"ring-halo","version":1,"kind":"accessory","name":"Halo","models":["Meso","Endo"],"parts":["body"],"mesh":"/Game/Art/StaticMeshes/KMC/Brushes/SM_Torus.SM_Torus","material":"/Game/Materials/Instances/Characters/S_Meso/Base/MI_PaintedMetal_Meso_TS1.MI_PaintedMetal_Meso_TS1","vector":{"MetalPaint":{"R":0.9,"G":0.7,"B":0.2,"A":1}},"attach":{"role":"head","fit":{"bone":"Head","anchor":"top","offset":[0,0,14],"size":[28,28,3]}}},
+              {"id":"ring-crown","version":1,"kind":"accessory","name":"Crown","models":["Meso","Endo"],"parts":["body"],"mesh":"/Game/Art/StaticMeshes/KMC/Brushes/SM_Tube.SM_Tube","material":"/Game/Materials/Instances/Characters/S_Meso/Base/MI_PaintedMetal_Meso_TS1.MI_PaintedMetal_Meso_TS1","vector":{"MetalPaint":{"R":0.9,"G":0.6,"B":0.2,"A":1}},"attach":{"role":"head","fit":{"bone":"Head","size":[20,20,8]}}},
+              {"id":"ring-collar","version":1,"kind":"accessory","name":"Collar","models":["Meso","Endo"],"parts":["body"],"mesh":"/Game/Art/StaticMeshes/KMC/Brushes/SM_Torus.SM_Torus","material":"/Game/Materials/Instances/Characters/S_Meso/Base/MI_PaintedMetal_Meso_TS1.MI_PaintedMetal_Meso_TS1","vector":{"MetalPaint":{"R":0.1,"G":0.1,"B":0.1,"A":1}},"attach":{"role":"neck","fit":{"bone":"Neck","size":[26,26,6]}}},
+              {"id":"ring-prop","version":1,"kind":"accessory","name":"Prop","models":["Meso"],"parts":["body"],"mesh":"/Game/Art/StaticMeshes/KMC/Props/Anime/SM_Bell.SM_Bell","material":"/Game/Materials/Instances/Characters/S_Meso/Base/MI_PaintedMetal_Meso_TS1.MI_PaintedMetal_Meso_TS1","vector":{"MetalPaint":{"R":1,"G":1,"B":1,"A":1}},"attach":{"role":"head","fit":{"bone":"Head","size":[20,20,20]}}}]}
             """;
         File.WriteAllText(Path.Combine(folder, CosmeticsCatalog.CatalogFile), catalog);
         void Manifest(string sha) => File.WriteAllText(Path.Combine(folder, CosmeticsCatalog.ManifestFile), JsonSerializer.Serialize(new { version = 1, files = new[] { new { name = CosmeticsCatalog.CatalogFile, size = new FileInfo(Path.Combine(folder, CosmeticsCatalog.CatalogFile)).Length, sha256 = sha } } }));
@@ -1338,7 +1342,7 @@ static partial class MultiplayerChecks
         Check(!CosmeticsCatalog.Load(folder, null).Available && CosmeticsCatalog.Load(folder, null).Problem == "manifest-mismatch", "A catalog that doesn't match its manifest is not used");
         Manifest(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(Path.Combine(folder, CosmeticsCatalog.CatalogFile)))));
         var loaded = CosmeticsCatalog.Load(folder, null);
-        Check(loaded.Available && loaded.Pickable.Select(i => i.Id).OrderBy(x => x).SequenceEqual(["meso-tint-ember", "tint-mint", "weapon-finish-sand"]), "Only valid, non-draft items with their paks are pickable; bad kinds, ids, ranges and duplicates are dropped");
+        Check(loaded.Available && loaded.Pickable.Select(i => i.Id).OrderBy(x => x).SequenceEqual(["meso-tint-ember", "ring-collar", "ring-crown", "ring-halo", "tint-mint", "weapon-finish-sand"]), "Only valid, non-draft items with their paks are pickable; bad kinds, ids, ranges and duplicates are dropped");
         Check(loaded.Filter([new("meso-tint-ember", 1), new("unknown-item", 1), new("weapon-finish-sand", 1), new("accessory-halo", 1)]).Select(r => r.Id).SequenceEqual(["meso-tint-ember"]), "Shared looks resolve only to the same id and version in the viewer's own catalog");
         Check(CosmeticLooks.Format([new("meso-tint-ember", 1)], [("76561190000000001", [new CosmeticRef("weapon-finish-sand", 2)]), ("sim-bot", [new CosmeticRef("meso-tint-ember", 1)])])
             == "v=1\npeer=76561190000000001 items=weapon-finish-sand@2\nself=meso-tint-ember@1\n", "cosmetic-looks.txt has v=1, Steam peers only, and a self line");
@@ -1350,6 +1354,17 @@ static partial class MultiplayerChecks
         var mint = loaded.Pickable.First(i => i.Id == "tint-mint");
         Check(CosmeticPreviewFormat.Body("Endo", null, 0, [mint]) is { } mintBody && mintBody.Contains("vector=MetalPaint:0.02,0.6,0.3,1\n") && mintBody.Contains("scalar=Metallic:0.1\n"), "Preview carries a tint's probed material parameters");
         Check(mint.Swatch.SequenceEqual(["#27cb95", "#eff3f1", "#959e99"]) && Math.Abs(mint.Shine - 0.1) < 1e-9 && mint.Color is [0.02, 0.6, 0.3], "Card swatch: body paint, panels and metal as sRGB, with the finish's shine");
+        var halo = loaded.Pickable.First(i => i.Id == "ring-halo");
+        Check(halo.Role == "head" && halo.Slot == "accessory/head" && loaded.Pickable.First(i => i.Id == "ring-collar").Slot == "accessory/neck" && !loaded.Items.Any(i => i.Id == "ring-prop"),
+            "Game-mesh accessories need no pak, only from the curated folders, with a head, neck or back slot");
+        Check(CosmeticPreviewFormat.Body("Meso", "McCree", 0, [mint, halo]) is { } worn && worn.Contains("accessory=ring-halo\n") && worn.Contains("vector=MetalPaint:0.02,0.6,0.3,1\n") && !worn.Contains("0.9,0.7,0.2"),
+            "Preview wears accessories by id; their colours never mix into the tint");
+        var sand = loaded.Pickable.First(i => i.Id == "weapon-finish-sand");
+        Check(CosmeticPreviewFormat.Body("Meso", null, 0, [mint, sand], weaponView: true) is { } gun && gun.Contains("finish=weapon-finish-sand\n") && gun.EndsWith("view=weapon\n", StringComparison.Ordinal) && !gun.Contains("0.76,0.66"),
+            "The weapon view carries the finish by id");
+        Check(AvatarProfiles.All.Select(a => a.Id).Distinct().Count() == AvatarProfiles.All.Length && AvatarProfiles.All.All(a => CosmeticPreviewFormat.Body(a.Model, a.Skin, 0, []) is not null)
+              && AvatarProfiles.All.Any(a => a.Model == "Meso" && a.Skin == "Default") && AvatarProfiles.All.Count(a => a.Model == "Meso") == 5,
+            "Every offered look is a Default-pack model and skin the preview can render");
         Check(loaded.Pickable.First(i => i.Id == "weapon-finish-sand").Swatch.Count == 1 && loaded.Pickable.First(i => i.Id == "meso-tint-ember").Swatch.Count == 1, "Single-colour items get one swatch colour");
         Check(CosmeticPreviewFormat.Body("../Meso", null, 0, []) is null && CosmeticPreviewFormat.Body("Meso", "C:/me.png", 0, []) is null, "Preview names are look names, never paths");
         Check(CosmeticPreviewFormat.Body("Meso", null, 999, [])!.Contains("yaw=180\n"), "Preview rotation is clamped");
@@ -1366,6 +1381,10 @@ static partial class MultiplayerChecks
         var view = JsonSerializer.SerializeToElement(service.CosmeticsView(), Protocol.Json);
         Check(view.GetProperty("items").EnumerateArray().Single(i => i.GetProperty("id").GetString() == "meso-tint-ember").GetProperty("equipped").GetBoolean() && view.GetProperty("show").GetString() == "all", "The Cosmetics page shows what's equipped; others' cosmetics default to all");
         Check(view.GetProperty("items").EnumerateArray().Single(i => i.GetProperty("id").GetString() == "tint-mint").GetProperty("swatch").GetArrayLength() == 3, "The Cosmetics page gets each item's swatch");
+        Check(service.Act("cosmetic-equip", J(new { id = "ring-halo" })).Ok && service.Act("cosmetic-equip", J(new { id = "ring-collar" })).Ok && service.Act("cosmetic-equip", J(new { id = "ring-crown" })).Ok, "Accessories equip");
+        var wearing = JsonSerializer.SerializeToElement(service.CosmeticsView(), Protocol.Json).GetProperty("items").EnumerateArray().Where(i => i.GetProperty("equipped").GetBoolean()).Select(i => i.GetProperty("id").GetString()).OrderBy(x => x).ToArray();
+        Check(wearing.SequenceEqual(["meso-tint-ember", "ring-collar", "ring-crown"]), "One accessory per slot: a second head item replaces the first, the collar stays");
+        service.Act("cosmetic-remove", J(new { id = "ring-collar" })); service.Act("cosmetic-remove", J(new { id = "ring-crown" }));
         var looksFile = Path.Combine(output, CosmeticLooks.FileName);
         Check(!File.Exists(looksFile), "No looks file outside an AimMod session");
         service.Act("create", J(new { mode = "practice", scenario = "Synthetic Plain" }));
@@ -1459,6 +1478,15 @@ static partial class MultiplayerChecks
         Check(service.DevAvatar(true, "circle").Ok && service.DevAvatar(true, "circle").Ok && service.DevAvatar(true, "circle").Ok && t.DevAvatars.SequenceEqual(["on circle AimMod Meso Tracer"]), "Repeated spawn clicks send one dev.avatar, wearing the chosen look");
         service.Act("avatar", J(new { avatar = "meso-genji" }));
         Check(t.DevAvatars.Last() == "on circle AimMod Meso Genji", "Changing the look re-dresses the running test avatar");
+        // The Look tab's models and skins: AimMod's own free profiles, grouped by model, with the saved choice.
+        var looks = JsonSerializer.SerializeToElement(service.LooksView(), Protocol.Json);
+        var models = looks.GetProperty("models").EnumerateArray().ToArray();
+        Check(looks.GetProperty("selected").GetString() == "meso-genji" && looks.GetProperty("model").GetString() == "Meso" && looks.GetProperty("default").GetString() == AvatarProfiles.Default
+            && models.Select(m => m.GetProperty("id").GetString()).SequenceEqual(AvatarProfiles.All.Select(a => a.Model).Distinct())
+            && models.SelectMany(m => m.GetProperty("skins").EnumerateArray().Select(k => k.GetProperty("id").GetString())).SequenceEqual(AvatarProfiles.All.Select(a => a.Id)),
+            "The Look tab lists every offered profile once, by model, and shows the saved one");
+        Check(!service.Act("avatar", J(new { avatar = "meso-locked-skin" })).Ok && JsonSerializer.SerializeToElement(service.LooksView(), Protocol.Json).GetProperty("selected").GetString() == "meso-genji",
+            "A look outside the offered profiles is refused and the saved one stays");
         Check(service.DevAvatar(false, "circle").Ok && service.DevAvatar(false, "circle").Ok && t.DevAvatars.Count(x => x.StartsWith("off", StringComparison.Ordinal)) == 1, "Repeated despawn clicks send one off");
         now += 4000;
         Check(service.DevAvatar(false, "circle").Ok && t.DevAvatars.Count(x => x.StartsWith("off", StringComparison.Ordinal)) == 2, "A later request goes out again, in case the game lost track");
@@ -1941,6 +1969,8 @@ static partial class MultiplayerChecks
         var avatars = File.ReadAllText(Path.Combine(output, "avatar-state.tsv"));
         Check(avatars.StartsWith("AIMMOD_AVATARS_1\t", StringComparison.Ordinal) && avatars.Contains("\t1\tenemy\t100\t0\t0\n", StringComparison.Ordinal) && !avatars.Contains("peer\t" + service.SelfId, StringComparison.Ordinal),
             "avatar-state.tsv lists the other players' avatars (alive, enemy, health) for AimModSteam");
+        Check(avatars.Contains("peer	" + MultiplayerService.StandInPeer + "	1	enemy", StringComparison.Ordinal) && service.StandInMember is { } standIn && !avatars.Contains("peer	" + standIn + "	", StringComparison.Ordinal),
+            "Developer mode: the simulated opponent is AimModSteam's test avatar (peer 1), so it is drawn and its team and deaths apply");
         service.Act("end", default);
         // Host leaving a simulated lobby hands it over; invites and launch joins.
         service.Act("leave", default);

@@ -107,3 +107,9 @@ test('invite notices show who it is from: initials first, their Steam picture on
   assert.match(css,/\.who\{[^}]*width:44px;height:44px[^}]*border-radius:22px;overflow:hidden/);
   assert.match(css,/\.who-img\{position:absolute;left:0;top:0;width:44px;height:44px;border-radius:22px;border:1px solid/);
 });
+test('a notice can carry a short extra line, such as a keybind that differs',()=>{
+  const n=setup();n.render({version:1,active:true,id:'ld-m1-0',kind:'countdown',title:'Waiting for everyone to load (1/2)',body:'Loading…',note:'Walk is on Q here (usually Shift)'});
+  assert.ok(n.box.all().some(e=>e.className==='note'&&e.textContent==='Walk is on Q here (usually Shift)'));
+  const k=setup();k.render({version:1,active:true,id:'keys-m1',kind:'info',eyebrow:'AimMod · Keybinds',title:'Walk is on Q here (usually Shift)',body:'',key:'F7'});
+  assert.equal(k.box.all().find(e=>e.className==='brand').textContent,'AIMMOD · KEYBINDS');assert.ok(!k.box.all().some(e=>e.className==='note'));
+});

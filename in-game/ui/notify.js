@@ -43,7 +43,7 @@
       if(n.cs&&!root.AimModCsHud)strips.appendChild(csHud(n.cs));
       if(n.badge){var b=node('div','badge');b.appendChild(node('span','eye'));b.appendChild(node('span','',n.badge));strips.appendChild(b);}
     }
-    var tk=n.active?JSON.stringify([n.id,n.kind,n.eyebrow,n.title,n.body,n.key,n.countdown,n.actions,n.person?n.person.name:null]):'';
+    var tk=n.active?JSON.stringify([n.id,n.kind,n.eyebrow,n.title,n.body,n.note,n.key,n.countdown,n.actions,n.person?n.person.name:null]):'';
     // A picture that arrives later goes into the circle already there, without rebuilding the buttons.
     if(tk===toastKey){if(n.active)picture(n.person&&n.person.avatar);return;}
     toastKey=tk;clear(card);who=whoImg=whoUrl=null;
@@ -74,7 +74,7 @@
     var row=node('div','row');
     if(typeof n.countdown==='number')row.appendChild(node('div','count',String(n.countdown)));
     else if(n.person&&n.person.name){who=row.appendChild(person(n.person));whoUrl=null;picture(n.person.avatar);}
-    var text=node('div','text');text.appendChild(node('div','title',n.title||''));text.appendChild(node('div','body',n.body||''));row.appendChild(text);
+    var text=node('div','text');text.appendChild(node('div','title',n.title||''));text.appendChild(node('div','body',n.body||''));if(n.note)text.appendChild(node('div','note',n.note));row.appendChild(text);
     if(n.key)row.appendChild(node('div','key',n.key));
     card.appendChild(row);
     // Answerable notices (invite, ready, load failure) carry their buttons; the layer takes clicks only for these.

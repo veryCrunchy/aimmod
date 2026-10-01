@@ -316,9 +316,10 @@ sealed class SelfPoseTracker(string outputFolder)
     }
 
     // offsetMs: host clock minus local clock. members: the lobby's players, to resolve avatar tags.
-    public void Poll(long offsetMs, IEnumerable<string>? members = null) => Take(LivePoseFrame.Read(posePath, TimeSpan.FromSeconds(1.5)), offsetMs, members);
+    // alias: one more stream that stands for a member (developer mode's test avatar for a simulated player).
+    public void Poll(long offsetMs, IEnumerable<string>? members = null, (string Stream, string Member)? alias = null) => Take(LivePoseFrame.Read(posePath, TimeSpan.FromSeconds(1.5)), offsetMs, members, alias);
 
-    public void Take(LivePoseFrame? frame, long offsetMs, IEnumerable<string>? members = null)
+    public void Take(LivePoseFrame? frame, long offsetMs, IEnumerable<string>? members = null, (string Stream, string Member)? alias = null)
     {
         if (frame is null || frame.Sequence == lastSequence) return;
         lastSequence = frame.Sequence;
@@ -332,6 +333,7 @@ sealed class SelfPoseTracker(string outputFolder)
         }
         // AimModCore's tag rows name each avatar's stream; map streams back to members.
         var byStream = (members ?? []).ToDictionary(StreamIds.For, m => m);
+        if (alias is { } a) byStream[a.Stream] = a.Member;
         // Target rows are the latest drawn positions, so they belong to the newest pose.
         var at = frame.Poses[^1].UnixMs + offsetMs;
         lastSeen.Clear();

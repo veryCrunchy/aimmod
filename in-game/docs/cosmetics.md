@@ -320,7 +320,52 @@ catalog.
 
 ## Accessories
 
-All accessories are rigid static meshes on the avatar's `CharacterMesh0`:
+### First set: game meshes (shipped)
+
+The first accessories need no pak. They use the game's own map-editor brushes
+(`/Game/Art/StaticMeshes/KMC/Brushes/`, plus `/Engine/BasicShapes/`) and the
+free Meso material `MI_PaintedMetal_Meso_TS1`, tinted through its probed
+parameters. Every region colour is set to the accessory's colour.
+AimModCore, the service, the manifest script and the Lua testbed share one
+allow-list (`IsGameAccessoryAsset`): one asset directly in those folders, and
+nothing else without a pak.
+
+| id | slot | mesh | look |
+|---|---|---|---|
+| `accessory-halo` | head | torus | gold ring floating 14 cm above the head |
+| `accessory-headband` | head | torus | mint band halfway between head bone and crown |
+| `accessory-crown` | head | tube | gold band on top of the head |
+| `accessory-collar` | neck | torus | carbon ring around the neck |
+| `accessory-back-ring` | back | torus | mint ring standing behind the chest |
+
+**Fit.** Each item's `attach.fit` gives:
+
+- a bone name part (`Head`, `Neck`, `Chest`), matched case-insensitively
+  against the rig's bones, so Meso and Endo both work;
+- an anchor: the bone, the character's top above it (`top`), or halfway
+  between them (`crown`);
+- an offset and a size in cm, in the character's frame (forward, right, up).
+  Forward comes from the shoulder bones.
+
+`PlaceAccessory` (core, unit-tested) picks the mesh orientation whose
+proportions match the size, scales the mesh's local bounds to it, and centres
+it on the anchor plus the offset. The component is placed in world space and
+then attached to the bone, keeping that placement, so it follows the
+animation.
+
+**Rules.**
+
+- AimMod's own `StaticMeshComponent`, with no collision and no shadow.
+- One accessory per slot: head, neck and back (spine). Equipping replaces the
+  item in the same slot.
+- Sizes within the budget below: head items within 35 × 35 × 30 cm.
+- Shared like tints: `cosmetic.look` ids, resolved by every viewer in their
+  own catalog, and only in AimMod matches.
+
+### Pak accessories (later)
+
+Accessories with our own meshes are rigid static meshes on the avatar's
+`CharacterMesh0`:
 
 - attached with `K2_AttachToComponent` to a bone or socket, with a per-model offset transform from the catalog;
 - `NoCollision`, with no physics, cloth or skinning;
@@ -331,31 +376,13 @@ All accessories are rigid static meshes on the avatar's `CharacterMesh0`:
 They exist only while the scope gate is open, and are destroyed when it
 closes.
 
-**Sockets.** The Meso and Endo skeletons' bone and socket names come from the
-probe's `sockets/bones` lines. The names below are the expected roles; the
-catalog stores the confirmed names per model.
-
-| Candidate | Attach to | Triangles (LOD0) | Texture | Fit work | Notes |
-|---|---|---|---|---|---|
-| **Halo** | head bone, offset above the head | ≤ 300 | none (colour and emissive parameters) or 128² | lowest: floats, so it never clips any skin; one offset per model | emissive capped (scalar ≤ 2) so it is no beacon; doubles as a tournament reward later |
-| **Visor** | head bone | ≤ 800 | 256² base colour + 256² packed ORM | low: one rigid plate per model | must not reach below the chin or past the head bounds |
-| **Headband** | head bone | ≤ 400 | 256² | low: a ring around a near-cylindrical head | |
-| Cat ears | head bone | ≤ 600 (pair) | 256² | medium: fitted to each head's top shape | |
-| Sunglasses | head bone | ≤ 600 | 256² | medium: fitted to each face | lenses opaque or masked, not translucent |
-| Crown | head bone | ≤ 1,000 | 512² | medium: sits on the head, so clipping checks per model | tournament reward |
-| Small backpack | upper spine bone | ≤ 1,500 | 512² | higher: clipping against arms in animations | larger silhouette, so a bounds review |
-| Jetpack | upper spine bone | ≤ 2,500 | 512² (+ optional emissive mask) | highest: as backpack, plus flame or emissive review | |
-
-**Proofs: halo, visor, headband.** These three need no per-skin fitting
-beyond one transform per model, and can't clip in animation because the head
-moves rigidly. They cover the three patterns we need:
-
-- floating (halo);
-- surface-fitted (visor);
-- wrapped (headband).
-
-Cat ears, sunglasses and the crown come next. The backpack and jetpack wait
-until the head items are proven.
+| Candidate | Attach to | Triangles (LOD0) | Texture | Notes |
+|---|---|---|---|---|
+| **Visor** | head bone | ≤ 800 | 256² base colour + 256² packed ORM | must not reach below the chin or past the head bounds |
+| Cat ears | head bone | ≤ 600 (pair) | 256² | fitted to each head's top shape |
+| Sunglasses | head bone | ≤ 600 | 256² | lenses opaque or masked, not translucent |
+| Small backpack | upper spine bone | ≤ 1,500 | 512² | clipping against arms in animations, so a bounds review |
+| Jetpack | upper spine bone | ≤ 2,500 | 512² (+ optional emissive mask) | as backpack, plus flame or emissive review |
 
 **Shared budgets:**
 
@@ -366,7 +393,7 @@ until the head items are proven.
 | Head items | inside a 35 × 35 × 30 cm box around the head bone |
 | Spine items | inside 45 × 30 × 50 cm |
 | Any item | no more than 10 cm beyond the capsule radius |
-| Per avatar | at most one head item and one spine item |
+| Per avatar | at most one head, one neck and one spine item |
 
 ## Feasibility (revised)
 
@@ -420,6 +447,17 @@ must never be enabled on the same install as the AimModCore applier.
   - "Hide this player's cosmetics", per SteamID;
   - a host toggle per AimMod mode.
 - Each viewer resolves ids against their own installed catalog. Unknown ids, newer versions or pak items without a matching pak fall back to the base look ("update AimMod to see this").
+
+## Looks offered
+
+The avatar looks the service offers (and the preview renders) are the free
+Default pack only: Meso in its Default, McCree, Tracer, Genji and Pharah
+skins, Endo, Ecto, Diver, Medusa, Pill, Pigeon, Pumpkin and JackOLantern, each
+in its default skin. The view lists each look's model and skin for the
+picker. Tints and accessories fit Meso and Endo.
+
+Outfits (clothing on a follower mesh, from an AimMod pak) are planned in
+[outfits.md](outfits.md).
 
 ## UI
 
@@ -476,7 +514,7 @@ The Cosmetics page shows your own character, live, while you customise it. Dragg
 | 1 | Cosmetics page (`multiplayer.js`) | While the page is open and the workspace visible, it POSTs `/cosmetic-preview {open, yaw, item?}`: every second, every 250 ms for 2 s after an interaction, and at most every 100 ms while dragging. It sends `{open:false}` when the page closes or the workspace hides. |
 | 2 | Service (`MultiplayerService.CosmeticPreview.cs`) | It writes `cosmetics-preview.txt`. The look comes from your chosen avatar profile. Parameters come from equipped or tried-on **catalog** body items without paks, resolved by id. The request expires in 5 s, and `seq` bumps on every change. |
 | 3 | AimModCore (`CosmeticsPreview.cpp`) | It reads the request every 0.2 s on the game thread. If `DecidePreview` allows it (not in a challenge, benchmark or the editor, and not loading), it spawns the game's preview stage and dresses its skeletal mesh with the requested look (below). It turns `Meshes` and captures on change only. |
-| 4 | AimModCore | It captures a 768×768 RGBA8 render target twice, as final colour and as world normals. `ComposePreview` (core, unit-tested) builds the 384×384 frame from the two. AimModCore writes it through WIC as `cosmetics-preview/preview-0.png` or `preview-1.png` (alternating), then atomically writes `cosmetics-preview-frame.txt` (`v=1, seq, file, width, height`). |
+| 4 | AimModCore | It captures a 768×768 RGBA8 render target twice: as final colour, and as scene colour, whose alpha is inverse opacity (the mask). If that alpha is unusable, world normals are the mask instead. `ComposePreview` (core, unit-tested) builds the 384×384 frame from the two. AimModCore writes it through WIC as `cosmetics-preview/preview-0.png` or `preview-1.png` (alternating), then atomically writes `cosmetics-preview-frame.txt` (`v=1, seq, file, width, height`). It logs the mask used, the character's share of the frame and its brightness once per look. |
 | 5 | Service | It serves the newest PNG at `/cosmetic-preview.png`, and the POST answer carries its frame number, so the page swaps `<img src>` only on a new frame. |
 
 **Dressing the stage.**
@@ -490,8 +528,25 @@ The Cosmetics page shows your own character, live, while you customise it. Dragg
   the game is paused.
 - **Hidden:** the shape models (cylinder, sphere, cube), the weapons, the wall
   and the floor.
-- **Catalog parameters:** set on fresh dynamic instances of the look's own
-  materials.
+- **Material data:** the game's character materials read opacity and colours
+  from the component's custom primitive data. A fresh component holds zeros,
+  so the model dithered away to scattered pixels (the "ghost" in the first
+  live test). AimModCore applies the game's own defaults
+  (`SkinFunctionLibrary:ApplyAllCustomPrimitiveDataDefaultsBatch`) and sets
+  full opacity, on the character and on every accessory.
+- **Catalog parameters (tints):** a paint job. The Meso skins' own materials
+  don't all use `MM_BaseDummy`'s parameters, so a tint is set on a fresh
+  dynamic instance of the mesh's own base material for each slot (the
+  skeletal mesh asset's default, `MM_BaseDummy`). It falls back to the
+  skin's material only if the base lacks the parameters. The match applier
+  does the same on avatars. The preview logs each slot's material and
+  parameter names once per look.
+- **Weapon view (`view=weapon`, `finish=<id>`):** the player's selected
+  viewmodel weapon (else the game's third-person pistol), alone on the
+  turntable, with the requested weapon finish. The service sends it when a
+  weapon finish is tried on, or on `{view: "weapon"}`.
+- **Accessories:** worn by id (`accessory=` lines), resolved in AimModCore's
+  own catalog, and attached exactly as in matches.
 
 **Light and exposure.** The first prototype's frame was almost black. It had
 the stage's only key light (its directional light) switched off, and a scene
@@ -505,9 +560,8 @@ Now:
 - **Own rig:** three point lights, in candela converted to each light's unit.
   The key light sits camera-left and above, the fill camera-right and low, and
   a mint rim light behind. They reach 900 cm and cast no shadows. A light
-  whose reach can't be set is switched off. When every rig light accepts it,
-  rig and character move to lighting channel 1, so the map's lights don't
-  change the character.
+  whose reach can't be set is switched off. Lighting channels stay at the
+  default, so the character is never left without light.
 
 **Framing.** The camera keeps the stage camera's front view at a 30 degree
 field of view. It moves back until the character's bounds fit with room to
@@ -515,14 +569,15 @@ turn (`PreviewCameraDistance`).
 
 **Composition (`ComposePreview`).**
 
-1. **Cut-out:** with only the stage rendered, every pixel whose normal matches
-   the corners' is background. The mask doesn't depend on the map's sky, fog
-   or bloom.
+1. **Cut-out:** the scene-colour capture's alpha marks the character (inverse
+   opacity, with unrendered pixels counted as empty). The fallback is the
+   normals capture, where every pixel matching the corners is background. A
+   mask covering almost nothing or almost everything counts as no character.
 2. **Backdrop:** the page's dark green-grey (`#202d28` centre to `#121a17`
    edge), with a soft floor shadow under the feet.
-3. **Brightness:** levelled so that the 97th percentile of the character's
-   luminance sits near 0.8. The gain is bounded to 0.7 to 5, so dark finishes
-   stay dark.
+3. **Brightness:** evened out mildly towards a 97th-percentile luminance of
+   0.8, with the gain bounded to 0.75 to 2. The light rig does the real work,
+   and dark finishes stay dark.
 4. **Framing:** centred on the silhouette and scaled on its height with a
    margin, so turning doesn't zoom.
 5. **Downsample:** 2×2 supersampled to 384×384, which anti-aliases the edges.
@@ -554,7 +609,7 @@ scalar=<Param>:v         up to 8, -10..10
 
 - **Idle:** with the page open but no changes, nothing is captured or exported.
 - **Per change:**
-  - two scene captures and two synchronous read-backs at 768²;
+  - two scene captures (three if the alpha mask fails) and their synchronous read-backs at 768²;
   - two PNG decodes, the composition, and one PNG encode at 384².
 
   Rotation is capped at about 6 frames a second. A look change triggers
@@ -632,7 +687,7 @@ The mod (`in-game/native-mod/mod/src`) gains:
 
 - Pak path rules and hash pinning in the release build.
 - Pak hash check in AimModCore.
-- Accessories: halo, visor, headband.
+- Pak accessories (visor and the later set); the first accessories ship from game meshes.
 - Mask-texture patterns.
 - Weapon models.
 - In-game 3D preview.
@@ -679,12 +734,12 @@ Still drafts:
 | id | kind | needs |
 |---|---|---|
 | `meso-pattern-stripes` | avatar pattern | an AimMod pak with a Meso mask texture, plus the mask parameter name |
-| `accessory-halo`, `accessory-visor`, `accessory-headband` | accessory | an AimMod pak with the mesh and our material, plus the Meso and Endo head bone names and per-model offsets |
 
-For the pattern and accessories:
+The accessories are listed in [Accessories](#accessories).
 
-- the 4.26 project, internal UV reference, mask texture, and the halo, visor
-  and headband meshes within budget;
+For the pattern and pak accessories:
+
+- the 4.26 project, internal UV reference, mask texture and meshes within budget;
 - the release build's manifest generation, which fills in the `sha256` values;
 - the AimModCore pak check.
 

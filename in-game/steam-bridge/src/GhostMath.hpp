@@ -23,6 +23,13 @@ namespace bridge::ghost
     // players are drawn as collision-free shapes.
     inline bool AvatarBotsAllowed(std::string_view localScenario) { return localScenario.starts_with("AimMod Match - "); }
 
+    // The invisible helper bot AimMod's arenas ship (MatchScenario.HiddenBot): avatars are
+    // spawned from its profile, but the scenario's own instance must never be seen, hit or
+    // counted. It is parked far outside the map, hidden, without collision, frozen.
+    constexpr std::string_view HelperBotProfile = "AimMod Hidden Bot";
+    inline bool IsHelperBot(std::string_view botProfile) { return botProfile == HelperBotProfile; }
+    constexpr double HelperParkX = 500000.0, HelperParkY = 500000.0, HelperParkZ = 50000.0; // cm, inside UE4's world bounds
+
     struct TimedPose
     {
         double time; // local receive time (seconds)

@@ -843,7 +843,7 @@ sealed partial class MultiplayerService : IDisposable
             }
             var mine = plan is { } mp && mp.Key == PlanKey(loading) ? mp.Message : "Loading…";
             return new GameNotice("ld-" + loading.Id + "-" + loading.LoadAttempt, "countdown", "Waiting for everyone to load (" + ready + "/" + present.Length + ")",
-                loading.Loaded?.Contains(SelfId) == true ? "Your map is ready." : mine, null, null, "none");
+                loading.Loaded?.Contains(SelfId) == true ? "Your map is ready." : mine, null, null, "none") { Note = BindNote(lobby.Settings) };
         }
         // CS shows its own freeze clock, so the generic match countdown stays away.
         if (lobby.Match is { } match && match.Players.Contains(SelfId) && match.Phase is MatchPhases.Countdown && match.Cs is null && match.StartsAt is { } at)
@@ -857,8 +857,10 @@ sealed partial class MultiplayerService : IDisposable
                 var other = lobby.Members.FirstOrDefault(x => x.Id != SelfId && match.Players.Contains(x.Id))?.Name ?? "your opponent";
                 how = "Track " + other + " and dodge their aim" + (lobby.Settings.RequireFire ? " (hold fire to score)." : ".");
             }
-            return new GameNotice("cd-" + match.Id + "-" + match.Round, "countdown", round + " in " + seconds, LobbyRules.CleanName(match.Scenario, "Scenario") + " · " + how, null, seconds, "countdown");
+            return new GameNotice("cd-" + match.Id + "-" + match.Round, "countdown", round + " in " + seconds, LobbyRules.CleanName(match.Scenario, "Scenario") + " · " + how, null, seconds, "countdown")
+                { Note = match.Round == 1 ? BindNote(lobby.Settings) : null };
         }
+        if (BindsNotice(lobby, now) is { } binds) return binds;
         if (!quiet && lobby.ReadyCheck is { } asked && now - asked < LobbyCore.ReadyCheckMs && me is { Role: MemberRoles.Player, Ready: false } && lobby.HostId != SelfId)
         {
             var host = lobby.Members.FirstOrDefault(m => m.Id == lobby.HostId)?.Name ?? "The host";
@@ -877,6 +879,7 @@ sealed partial class MultiplayerService : IDisposable
             var now = clock();
             var notice = ComputeNotice(now);
             if (notice?.Id.StartsWith("leave-", StringComparison.Ordinal) == true) { LeaveRunAction("leave-run-now"); return; }
+            if (notice?.Id.StartsWith("keys-", StringComparison.Ordinal) == true) { bindsDismissed = notice.Id[5..]; return; }
             if (notice?.Kind == "ready" && notice.Body.Contains("ready up", StringComparison.Ordinal) && Command("ready", JsonSerializer.SerializeToElement(new { ready = true })).Ok)
             {
                 flash = (new GameNotice("ok-" + now, "info", "You’re ready", "The host can start now.", null, null, "click"), now + 3000);
@@ -975,6 +978,20 @@ sealed partial class MultiplayerService : IDisposable
             m.Rounds.Count(r => r.WinnerId == SelfId), m.Rounds.Count(r => r.WinnerId == opponentId), left, m.Round, m.TotalRounds ?? m.Round, m.Phase,
             mine?.Disputed == true || theirs?.Disputed == true, lobby.Settings.RequireFire);
     }
+    // The match is starting for this player: AimModNativeUI closes the AimMod panel (and KovaaK's
+    // menu, unless the player opened it during loading) and gives input back to the game. One id per
+    // load attempt, sent through the round 1 countdown and the start of play; "since" is when the
+    // attempt began (the start, the invite join, or Retry), so a menu opened after it is left alone.
+    (string Key, long Since)? playFlow;
+    internal sealed record PlayView(string Id, long Since);
+    internal PlayView? PlayRequest(long now)
+    {
+        if (Current?.Match is not { } m || !m.Players.Contains(SelfId)) return null;
+        var key = m.Id + "-" + m.LoadAttempt;
+        if (playFlow?.Key != key) playFlow = (key, now);
+        if (m.Phase is not (MatchPhases.Countdown or MatchPhases.Live) || m.Round > 1) return null;
+        return new PlayView("play-" + key, playFlow.Value.Since);
+    }
     string NoticeJson(GameNotice? notice = null)
     {
         lock (gate)
@@ -985,15 +1002,18 @@ sealed partial class MultiplayerService : IDisposable
             var combat = CombatHud();
             var cs = CsHud();
             var (board, boardFull) = NoticeBoards();
-            if (notice is null && badge is null && duel is null && combat is null && cs is null && board is null && boardFull is null) return "{\"version\":1,\"active\":false}";
+            var play = PlayRequest(clock());
+            if (notice is null && badge is null && duel is null && combat is null && cs is null && board is null && boardFull is null && play is null) return "{\"version\":1,\"active\":false}";
             return JsonSerializer.Serialize(new
             {
-                version = 1, active = notice is not null, badge, notice?.Id, notice?.Kind, notice?.Eyebrow, notice?.Title, notice?.Body, notice?.Key, notice?.Countdown, notice?.Sound, notice?.Invite,
+                version = 1, active = notice is not null, badge, notice?.Id, notice?.Kind, notice?.Eyebrow, notice?.Title, notice?.Body, notice?.Key, notice?.Countdown, notice?.Sound, notice?.Invite, notice?.Note,
                 // Whoever the notice is about (invites, watch requests, friends): name for the initials, and their Steam picture.
                 person = notice?.Peer is { } who ? new { name = LobbyRules.CleanName(notice.PeerName, "Player"), avatar = AvatarUrl(who) } : null,
                 // full: the notice layer covers the screen (the HUDs sit at its edges); toast: top centre only.
                 layout = cs is not null || board is not null || boardFull is not null ? "full" : "toast",
-                actions = notice?.Actions, interactive = notice?.Actions is { Count: > 0 } || cs?.BuyOpen == true, volume = prefs.Sounds ? prefs.Volume : 0, duel, combat, cs, board, boardFull,
+                actions = notice?.Actions, interactive = notice?.Actions is { Count: > 0 } || cs?.BuyOpen == true,
+                // cursor: the CS buy menu is open, so AimModNativeUI shows the cursor in game (and hands input back after).
+                cursor = cs?.BuyOpen == true, play, volume = prefs.Sounds ? prefs.Volume : 0, duel, combat, cs, board, boardFull,
             }, Protocol.Json);
         }
     }
@@ -1283,6 +1303,7 @@ sealed partial class MultiplayerService : IDisposable
             PumpWatchContent();
             RememberSettings();
             PlanRound();
+            UpdateStandIn();
             TrackLocalRun();
             Remember();
         }
@@ -1814,9 +1835,10 @@ sealed partial class MultiplayerService : IDisposable
         if (match.Phase is not (MatchPhases.Countdown or MatchPhases.Live)) return;
         // Samples travel on the host clock: offset = host - local.
         var offset = core is not null || hostPeer is null ? 0 : clocks.GetValueOrDefault(hostPeer)?.Offset ?? 0;
-        poseTracker.Poll(offset, match.Players);
+        poseTracker.Poll(offset, match.Players, standInMember is { } standIn ? (StreamIds.For(StandInPeer), standIn) : null);
         foreach (var batch in poseTracker.Drain(match.Id, match.Round))
         {
+            FeedStandIn(batch);
             if (core is not null) core.Track(SelfId, batch);
             else if (hostPeer is not null) Send(hostPeer, "track", batch.Body());
         }
@@ -1922,7 +1944,7 @@ sealed partial class MultiplayerService : IDisposable
         {
             var died = view.Events.LastOrDefault(e => e.Member == p.Member && e.Kind == "death");
             var friend = self.Team != 0 && p.Team == self.Team;
-            return "peer\t" + p.Member + "\t" + (p.Alive ? 1 : 0) + "\t" + (friend ? "friend" : "enemy") + "\t" + Math.Round(p.Health).ToString(System.Globalization.CultureInfo.InvariantCulture)
+            return "peer\t" + AvatarPeer(p.Member) + "\t" + (p.Alive ? 1 : 0) + "\t" + (friend ? "friend" : "enemy") + "\t" + Math.Round(p.Health).ToString(System.Globalization.CultureInfo.InvariantCulture)
                 + "\t" + (p.Alive ? 0 : died?.T ?? 0) + "\t" + (p.Alive ? 0 : p.RespawnAt ?? 0);
         });
         var body = "match\t" + Uri.EscapeDataString(match.Id) + "\n" + string.Join("\n", rows) + "\n";
@@ -2048,6 +2070,7 @@ sealed partial class MultiplayerService : IDisposable
                     replays = ReplaysView(lobby.Match),
                     // Member id -> Steam picture link, for members whose picture has arrived.
                     avatars = AvatarMap(lobby.Members.Select(m => m.Id).Concat(lobby.Match?.Players ?? [])),
+                    binds = BindsView(lobby.Settings),
                 };
             }
             var friendsSource = Simulation is not null && !transport.Available ? "simulation" : transport.Available ? "steam" : "unavailable";
@@ -2066,7 +2089,7 @@ sealed partial class MultiplayerService : IDisposable
                 watch = WatchView(),
                 watchers = watchers.Select(w => new { peer = w.Peer, name = w.Name, avatar = AvatarUrl(w.Peer) }),
                 watchAsks = watchAsks.Select(a => new { peer = a.Peer, name = a.Name, avatar = AvatarUrl(a.Peer) }),
-                avatars = AvatarProfiles.All.Select(a => new { a.Id, a.Label }),
+                avatars = AvatarProfiles.All.Select(a => new { a.Id, a.Label, a.Model, a.Skin }),
                 capabilities = new { invite = transport.Available, friends = friendsSource != "unavailable", gameLoad = caps.Contains("load"), gameStart = caps.Contains("start") },
                 self = new { id = SelfId, name = LocalName(), avatar = AvatarUrl(SelfId) },
                 joining = (hostPeer is not null && mirror is null) || joinPendingSince is not null ? new { since = joinPendingSince ?? connectAt, stage = hostPeer is null ? "lobby" : "host" } : null,
@@ -2099,6 +2122,7 @@ sealed partial class MultiplayerService : IDisposable
             "maps" => Results.Json(MapsView(), Protocol.Json),
             "history" => Results.Json(HistoryView(), Protocol.Json),
             "cosmetics" => Results.Json(CosmeticsView(), Protocol.Json),
+            "looks" => Results.Json(LooksView(), Protocol.Json),
             "board" => Results.Json(new { version = 1, board = BoardView() }, Protocol.Json),
             "preview" => MapPreview(key) is { } image ? Results.File(image, MapPorts.ContentType(image)) : Results.NotFound(),
             _ => Results.Json(View(), Protocol.Json),

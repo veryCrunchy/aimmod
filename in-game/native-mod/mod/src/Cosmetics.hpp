@@ -13,6 +13,7 @@
 // It never changes the game's meshes, collision, ShotOrigin, scenario bots
 // or paid (DLC) looks, and loads assets only from verified AimMod paks.
 #include "GameBindings.hpp"
+#include "MaterialParams.hpp"
 
 #include <aimmod/Cosmetics.hpp>
 
@@ -106,6 +107,7 @@ namespace aimmod
         // Parameter names: instance overrides [scalar, vector, texture] and the
         // base material's cached runtime entries (same order).
         game::Path m_miParent, m_miArrays[3], m_miNames[3], m_materialEntries[3], m_infoName;
+        MaterialParams m_params;
         game::Path m_packModels, m_packSkins, m_modelAsset, m_skinAsset, m_modelName, m_skinName;
         game::UClass *m_materialInstance{}, *m_material{}, *m_skeletalMesh{}, *m_staticMeshComponent{};
         game::UClass *m_modelAssetClass{}, *m_skinAssetClass{}, *m_modelClass{}, *m_skinClass{}, *m_metaCharacter{};

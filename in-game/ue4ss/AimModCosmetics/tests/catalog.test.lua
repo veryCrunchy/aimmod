@@ -35,8 +35,14 @@ assert(Cat.resolve(byId, 'tint-mint').id == 'tint-mint', 'a shipped parameter it
 local drafts = Cat.index({{id='d-1', version=1, kind='avatar_tint', models={'Meso'}, parts={'body'}, vector={MetalPaint={R=1, G=0, B=0, A=1}}, draft=true}})
 assert(Cat.resolve(drafts, 'd-1') == nil, 'draft hidden by default')
 assert(Cat.resolve(drafts, 'd-1', {allowDrafts=true}).id == 'd-1')
-assert(Cat.resolve(byId, 'accessory-visor', {allowDrafts=true}) == nil, 'pak item needs a verified pak')
-assert(Cat.resolve(byId, 'accessory-visor', {allowDrafts=true, verifiedPaks={['AimModCosmetics-1.pak']=true}}).id == 'accessory-visor')
+assert(Cat.resolve(byId, 'meso-pattern-stripes', {allowDrafts=true}) == nil, 'pak item needs a verified pak')
+assert(Cat.resolve(byId, 'meso-pattern-stripes', {allowDrafts=true, verifiedPaks={['AimModCosmetics-1.pak']=true}}).id == 'meso-pattern-stripes')
+-- Accessories fitted from the game's own meshes need no pak; anything outside the curated folders does.
+assert(Cat.resolve(byId, 'accessory-halo').id == 'accessory-halo' and not Cat.needsPak(byId['accessory-halo']))
+local prop = {id='p-1', version=1, kind='accessory', models={'Meso'}, parts={'body'}, mesh='/Game/Art/StaticMeshes/KMC/Props/Anime/SM_Bell.SM_Bell',
+    material='/Game/Materials/Instances/Characters/S_Meso/Base/MI_PaintedMetal_Meso_TS1.MI_PaintedMetal_Meso_TS1', vector={MetalPaint={R=1, G=0, B=0, A=1}},
+    attach={role='head', fit={bone='Head', size={10, 10, 10}}}}
+assert(Cat.needsPak(prop) and not Cat.validate(prop), 'a prop outside the brush folder needs a pak')
 
 -- Validation.
 local good = {id='t-1', version=1, kind='avatar_tint', models={'Meso'}, parts={'body'}, vector={Tint={R=1, G=0, B=0, A=1}}}
