@@ -796,6 +796,7 @@
     var download=downloadPanel(lobby);if(download)main.appendChild(download);
     main.appendChild(startBar(lobby));
     main.appendChild(playersPanel(lobby));
+    if(lobby.settings.mode==='cs')main.appendChild(teamsPanel(lobby));
     main.appendChild(chatPanel(lobby));
     if(view.simulation)main.appendChild(devPanel(true));
     // Side column: who's watching, then the match, then extras. While the host is alone,
@@ -811,6 +812,28 @@
   }
   function connectionBanners(page,lobby){
     lobby.members.forEach(function(m){if(m.connection!=='reconnecting')return;page.appendChild(banner('warn',m.id===lobby.hostId?safe(m.name)+' (host) lost connection. If they aren’t back in 10 seconds, the next player becomes host.':safe(m.name)+' lost connection. Waiting up to 30 seconds for them to come back.'));});
+  }
+  // CS teams: T and CT columns plus "Either" (fills the smaller team at the start). Click a
+  // player's T or CT; the host moves anyone, members move themselves. Balance alternates by join order.
+  function teamsPanel(lobby){
+    var players=lobby.members.filter(function(m){return m.role==='player';}),host=lobby.isHost;
+    var p=node('div','panel mp-teams');var head=node('div','panel-head');var text=node('div','head-text');
+    var t=players.filter(function(m){return m.team===1;}).length,ct=players.filter(function(m){return m.team===2;}).length,either=players.length-t-ct;
+    add(text,node('h2','','Teams'),node('p','','3v3, 4v4 or 5v5. '+t+' T · '+ct+' CT'+(either?' · '+either+' either (fills the smaller team)':'')));head.appendChild(text);
+    if(host)head.appendChild(actions(button('Balance',function(){act('balance');},'compact')));
+    p.appendChild(head);
+    var cols=node('div','mp-team-cols');p.appendChild(cols);
+    [[1,'Terrorists','t'],[0,'Either team','either'],[2,'Counter-Terrorists','ct']].forEach(function(col){
+      var c=node('div','mp-team-col '+col[2]);c.appendChild(node('div','mp-team-title',col[1]));
+      players.filter(function(m){return (m.team||0)===col[0];}).forEach(function(m){
+        var row=node('div','mp-team-row'+(m.id===lobby.self?' self':''));row.appendChild(node('span','mp-team-name',safe(m.name)));row.title=safe(m.name);
+        if(host||m.id===lobby.self){var moves=[];[[1,'T'],[0,'Either'],[2,'CT']].forEach(function(o){if(o[0]!==(m.team||0))moves.push(button(o[1],function(){act('team',{member:m.id,team:o[0]});},'compact quiet'));});row.appendChild(actions.apply(null,moves));}
+        c.appendChild(row);
+      });
+      if(!players.some(function(m){return (m.team||0)===col[0];}))c.appendChild(node('div','mp-team-empty',col[0]===0?'Nobody':'No players yet'));
+      cols.appendChild(c);
+    });
+    return p;
   }
   function playersPanel(lobby){
     var s=lobby.settings,players=0,spectators=0;lobby.members.forEach(function(m){if(m.role==='player')players++;else spectators++;});

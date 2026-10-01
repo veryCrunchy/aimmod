@@ -337,3 +337,15 @@
 .mp-cos-soon{display:flex;flex-direction:row;align-items:center;padding:18px 22px}
 .mp-cos-soon-art{display:flex;flex-direction:row;flex-shrink:0;margin-right:20px}.mp-cos-soon-art .mp-cos-preview{width:120px;height:90px;margin:0 6px 0 0;border-radius:8px}
 .mp-cos-soon-text{flex:1;min-width:0}.mp-cos-soon-text strong{display:block;font-size:17px;font-weight:600;color:#27e4a1;margin-bottom:4px}.mp-cos-soon-text span{display:block;font-size:13px;line-height:1.5;color:#dcebe3}
+/* CS teams */
+.mp-team-cols{display:flex;flex-direction:row;padding:0 12px 12px}
+.mp-team-col{width:33.333%;padding:0 6px}
+.mp-team-title{padding:6px 2px;font-size:11px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:#a7bab0}
+.mp-team-col.t .mp-team-title{color:#f0b45a}.mp-team-col.ct .mp-team-title{color:#66ccff}
+.mp-team-row{display:flex;flex-direction:row;align-items:center;min-height:34px;margin-bottom:4px;padding:0 8px;background:#16211d;border:1px solid #22302a;border-radius:6px}
+.mp-team-col.t .mp-team-row{border-left:3px solid #f0b45a}.mp-team-col.ct .mp-team-row{border-left:3px solid #66ccff}
+.mp-team-row.self{background:#173b2f}
+.mp-team-name{flex:1;min-width:0;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mp-team-row .actions>.button{margin:0 0 0 4px;height:24px;line-height:22px;padding:0 7px;font-size:11px}
+.mp-team-empty{padding:8px 4px;font-size:12px;color:#5f7369}
+.mp-teams .panel-head .actions>.button{margin:0}

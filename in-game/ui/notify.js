@@ -13,17 +13,21 @@
     root.AimModStandings.render(corner,n&&!n.boardFull?n.board:null,'corner');corner.className=n&&n.board&&!n.boardFull?'show':'';
     root.AimModStandings.render(full,n&&n.boardFull,'full');full.className=n&&n.boardFull?'show':'';
   }
+  // CS: its own full-screen HUD layer (edges only), drawn whenever its state changes.
+  var csRoot=root.document.getElementById('cs-hud'),lastCs='';
+  function cs(n){var c=n&&n.cs||null;var key=c?JSON.stringify(c):'';if(key===lastCs||!root.AimModCsHud||!csRoot)return;lastCs=key;root.AimModCsHud.render(csRoot,c,answer);}
   function render(n){
-    boards(n);
+    boards(n);cs(n);
     // The standings change every frame; the toast only re-renders for its own fields.
     var key=n?JSON.stringify(n,function(k,v){return k==='board'||k==='boardFull'?undefined:v;}):'';if(key===last)return;last=key;
     while(box.firstChild)box.removeChild(box.firstChild);
     if(!n||(!n.active&&!n.badge&&!n.duel&&!n.combat&&!n.cs)){box.className='';return;}
-    var extra=n.duel||n.combat||n.cs?' duel-on':'';
+    // CS draws its own strip at the top, so notices move below it.
+    var extra=n.cs&&root.AimModCsHud?' cs-on':n.duel||n.combat||n.cs?' duel-on':'';
     box.className='show'+extra;
     if(n.duel)box.appendChild(duel(n.duel));
     if(n.combat)box.appendChild(combat(n.combat));
-    if(n.cs)box.appendChild(csHud(n.cs));
+    if(n.cs&&!root.AimModCsHud)box.appendChild(csHud(n.cs));
     if(n.badge){var b=node('div','badge');b.appendChild(node('span','eye'));b.appendChild(node('span','',n.badge));box.appendChild(b);}
     if(!n.active)return;
     box.className='show '+(n.kind||'info')+extra;
