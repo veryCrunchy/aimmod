@@ -68,7 +68,7 @@ test('settings editor: title and Done come first, advanced settings fold away un
   assert.ok(s.text().includes('Scenario map · Scenario loadout · Countdown 5 s · No spectators'),'the folded panel says what it holds');
   s.button('Show').onclick();assert.ok(s.text().includes('Target speed'));
   const locks=s.all().filter(e=>e.className==='mp-lock');assert.equal(locks.length,1,'the score race reason is said once');
-  assert.equal(s.all().filter(e=>e.textContent==='Fixed in score race.').length,4,'locked rows get a short note');
+  assert.equal(s.all().filter(e=>e.textContent==='Fixed in score race.').length,1,'only the basics row repeats the lock; the sections rely on the one reason');
   s.button('Hide').onclick();assert.ok(!s.text().includes('Target speed'));
   // A changed advanced setting is never hidden.
   const ffa=Object.assign({},settings,{mode:'ffa-rounds',targetSpeed:1.5});

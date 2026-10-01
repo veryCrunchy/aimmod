@@ -61,13 +61,13 @@
     c.appendChild(head);
     if(m.state==='ready'){
       var ready=m.ready.indexOf(me)>=0;
-      c.appendChild(node('p','subtle',ready?'Waiting for '+safe(a.opponent.name)+'. The lobby is created as soon as you’re both ready.':'Ready up when you can play. '+(a.host?'Your AimMod creates the lobby and invites your opponent.':'You join your opponent’s lobby automatically.')));
-      if(!view.canHost&&a.host)c.appendChild(node('p','tn-warn','AimMod’s Steam connection isn’t ready on this PC, so your opponent may host instead.'));
+      c.appendChild(node('p','subtle',ready?'Waiting for '+safe(a.opponent.name)+'.':'Ready up when you can play.'));
+      if(!view.canHost&&a.host)c.appendChild(node('p','tn-warn','Steam isn’t connected on this PC, so your opponent may host instead.'));
       c.appendChild(actions(ready?button('Not ready',function(){act({action:'unready',tournament:a.tournament,match:m.id});}):button('I’m ready',function(){act({action:'ready',tournament:a.tournament,match:m.id});},'primary')));
     }
     if(m.state==='veto'||m.veto.length)c.appendChild(vetoBlock(a));
     if(m.games.length)c.appendChild(gamesBlock(a));
-    if(m.state==='live'&&m.currentGame>=0){var g=m.games[m.currentGame];c.appendChild(node('p','subtle','Game '+(g.index+1)+' on '+safe(g.scenario,'the scenario')+'. You and your opponent get the same targets: the game’s seed is shared. It runs in freeplay, so nothing touches KovaaK’s ranked leaderboards.'));}
+    if(m.state==='live'&&m.currentGame>=0){var g=m.games[m.currentGame];c.appendChild(node('p','subtle','Game '+(g.index+1)+' on '+safe(g.scenario,'the scenario')+'. You both get the same targets.'));}
     if(view.lobby&&view.lobby.matchId===m.id)c.appendChild(overview(view.lobby));
     if(m.state==='awaiting_confirmation'){
       if(m.reportedBy===me)c.appendChild(node('p','subtle',safe(a.opponent.name)+' confirms the result, or it’s accepted when the confirmation window ends.'));
@@ -182,19 +182,19 @@
     if(!container||!view)return;
     container.textContent='';
     var top=node('div','tn-top');
-    add(top,node('p','subtle','Tournament matches from AimMod Hub. Results are verified with replays and never count toward KovaaK’s ranked leaderboards.'),
+    add(top,node('p','subtle','Results are verified with replays and never count toward KovaaK’s leaderboards.'),
       actions(button('Refresh',function(){act({action:'refresh'});},'compact quiet'),view.developer&&!view.simulated?button('Simulate a tournament',function(){act({action:'simulate'});},'compact quiet'):null,
         view.simulated?button('Advance the bracket',function(){act({action:'sim-advance'});},'compact quiet'):null,view.simulated?button('Opponent reports',function(){act({action:'sim-opponent-reports'});},'compact quiet'):null,
         view.simulated?button('End simulation',function(){act({action:'sim-stop'});},'compact quiet'):null));
     container.appendChild(top);
-    if(view.simulated)container.appendChild(node('p','tn-warn','Developer simulation: a pretend Hub with simulated opponents. Nothing is sent to AimMod Hub.'));
-    if(view.status)container.appendChild(node('p','tn-warn',view.status));
-    if(!view.linked){var l=card('Link your AimMod Hub account','Tournaments');l.appendChild(node('p','subtle','Tournaments are run on AimMod Hub. Link this device on the Account page, then enter a tournament at aimmod.app/tournaments.'));l.appendChild(actions(button('Open Account',function(){if(root.AimModWorkspace)root.AimModWorkspace.open('account');})));container.appendChild(l);}
-    for(var i=0;i<view.checkIn.length;i++)(function(ci){var c=card('Check in for '+safe(ci.name,'your tournament'),'Check-in');c.appendChild(node('p','subtle','Check in to keep your place in the bracket.'));c.appendChild(actions(button('Check in',function(){act({action:'check-in',tournament:ci.tournament});},'primary')));container.appendChild(c);})(view.checkIn[i]);
+    if(view.simulated)container.appendChild(node('p','tn-warn','Developer simulation. Nothing is sent to AimMod Hub.'));
+    if(view.status&&view.linked)container.appendChild(node('p','tn-warn',view.status));
+    if(!view.linked){var l=card('Link your AimMod Hub account','Tournaments');l.appendChild(node('p','subtle','Link this device, then enter a tournament at aimmod.app/tournaments.'));l.appendChild(actions(button('Open Account',function(){if(root.AimModWorkspace)root.AimModWorkspace.open('account');})));container.appendChild(l);}
+    for(var i=0;i<view.checkIn.length;i++)(function(ci){var c=card('Check in for '+safe(ci.name,'your tournament'),'Check-in');c.appendChild(node('p','subtle','Keeps your place in the bracket.'));c.appendChild(actions(button('Check in',function(){act({action:'check-in',tournament:ci.tournament});},'primary')));container.appendChild(c);})(view.checkIn[i]);
     var a=active();if(a)container.appendChild(matchCard(a));
     var others=view.matches.filter(function(m){return !m.active;});
     if(others.length){var o=card('Also open','Your matches');for(var j=0;j<others.length;j++)o.appendChild(node('p','',others[j].match.label+' vs '+safe(others[j].opponent.name)+' · '+safe(others[j].tournamentName,'Tournament')+' · '+(STATE[others[j].match.state]||'')));container.appendChild(o);}
-    if(!a&&view.linked&&!view.checkIn.length){var e=card('No matches right now','Your matches');e.appendChild(node('p','subtle','When a match of yours is ready, AimMod tells you, even outside this panel.'));container.appendChild(e);}
+    if(!a&&view.linked&&!view.checkIn.length){var e=card('No matches right now','Your matches');e.appendChild(node('p','subtle','AimMod tells you when one is ready.'));container.appendChild(e);}
     if(view.open)container.appendChild(tournamentCard(view.open));
     if(view.mine&&view.mine.length){
       var list=card('Your tournaments','');

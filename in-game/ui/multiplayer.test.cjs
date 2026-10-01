@@ -53,7 +53,7 @@ test('a member sees read-only settings and readies up; missing content blocks re
   const s=setup();s.api.enter(s.container);
   const guest=lobby({self:'p2',isHost:false,hostId:'p1',content:{scenario:'ok',map:'missing',profiles:'none'}});
   s.requests[0].finish(200,view({lobby:guest}));
-  assert.ok(!s.button('Edit'),'only the host edits settings');assert.ok(s.text().includes('Set by Synthetic One (host).'));
+  assert.ok(!s.button('Edit'),'only the host edits settings');assert.ok(s.text().includes('Hosted by Synthetic One'));
   assert.ok(s.button('Ready').disabled,'cannot ready without the map');assert.ok(s.text().includes('You need the map'));
   const ok=lobby({self:'p2',isHost:false,content:{scenario:'ok',map:'ok',profiles:'none'}});ok.members[1].map='ok';
   s.api.leave();s.api.enter(s.container);s.requests[s.requests.length-1].finish(200,view({lobby:ok}));

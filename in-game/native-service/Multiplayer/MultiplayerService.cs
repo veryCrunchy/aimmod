@@ -816,7 +816,7 @@ sealed partial class MultiplayerService : IDisposable
         }
         // Someone asks to watch you (privacy "ask").
         if (watchAsks.FirstOrDefault(a => now - a.At < 60_000) is { Peer: not null } ask)
-            return new GameNotice("ask-" + ask.Peer + "-" + ask.At, "invite", ask.Name + " wants to watch you", "They would see your view from their game.", null, null, quiet ? "none" : "popup")
+            return new GameNotice("ask-" + ask.Peer + "-" + ask.At, "invite", ask.Name + " wants to watch you", "They’d see your view from their game.", null, null, quiet ? "none" : "popup")
                 { Eyebrow = "AimMod · Spectate", Actions = [new("Allow", "spectate-allow", ask.Peer), new("Deny", "spectate-deny", ask.Peer)] };
         // Tournament calls (match ready, check-in, your ban, confirm the result), unless a game is running.
         if (!quiet && Current is null or { Match: null or { Phase: MatchPhases.Final } } && Tournaments?.Notice() is { } tournamentNotice) return tournamentNotice;
@@ -1307,7 +1307,7 @@ sealed partial class MultiplayerService : IDisposable
         {
             var who = LobbyRules.CleanName(e.Reason, "A friend");
             watchers.RemoveAll(w => w.Peer == e.Peer); watchers.Add((e.Peer, who, clock()));
-            if (!e.Host && !OwnRankedRun()) flash = (new GameNotice("watch-" + e.Peer + "-" + clock(), "info", who + " is watching you", "They see your view from their game.", null, null, "popup"), clock() + 4000);
+            if (!e.Host && !OwnRankedRun()) flash = (new GameNotice("watch-" + e.Peer + "-" + clock(), "info", who + " is watching you", "They see your view.", null, null, "popup"), clock() + 4000);
             return;
         }
         if (e.Kind == TransportEvent.SpectatorLeft) { watchers.RemoveAll(w => w.Peer == e.Peer); return; }
@@ -1653,8 +1653,8 @@ sealed partial class MultiplayerService : IDisposable
     const string FinishRunFirst = "Finish or quit your current run (Esc, then Quit). The match loads by itself after that.";
 
     static string FindIt(string scenario, bool generated) =>
-        "In KovaaK’s, open Play > Scenarios, search for “" + scenario + "”" + (generated ? " (it’s one of your local scenarios) and play it in Freeplay." : " and start it.") +
-        (generated ? " If it’s not listed yet, restart KovaaK’s once; AimMod saved it to your Scenarios folder." : "");
+        "In KovaaK’s, open Play > Scenarios, search for “" + scenario + "”" + (generated ? " and play it in Freeplay." : " and start it.") +
+        (generated ? " If it’s not listed, restart KovaaK’s once." : "");
 
     // Load the round's scenario during the countdown and start it at zero
     // through AimModCore. Unmodified scenarios run as normal challenges (the
