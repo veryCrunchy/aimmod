@@ -1,0 +1,39 @@
+// Layout and flow regressions found in the multiplayer UX pass. Synthetic identities only.
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
+function setup(){
+  class El{constructor(tag){this.tag=tag;this.style={};this.children=[];this.attrs={};this.value='';this.className='';this.scrollTop=0;}
+    appendChild(c){c.parentNode=this;this.children.push(c);return c;}removeChild(c){this.children.splice(this.children.indexOf(c),1);}get firstChild(){return this.children[0];}
+    setAttribute(k,v){this.attrs[k]=String(v);}getAttribute(k){return this.attrs[k];}addEventListener(){}
+    getElementsByTagName(t){return walk(this).filter(e=>e!==this&&e.tag===t);}getContext(){return null;}focus(){}setSelectionRange(){}}
+  function walk(e){return [e,...e.children.flatMap(walk)];}
+  const requests=[],scroller=new El('div'),container=scroller.appendChild(new El('section'));
+  class Xhr{constructor(){requests.push(this);this.headers={};}open(method,url){this.method=method;this.url=url;}setRequestHeader(k,v){this.headers[k]=v;}send(body){this.body=body;}
+    finish(status,data){this.status=status;this.responseText=JSON.stringify(data);this.readyState=4;this.onreadystatechange();}}
+  const window={document:{createElement:t=>new El(t)},XMLHttpRequest:Xhr,location:{pathname:'/private/ui'}};
+  const context=vm.createContext({window,setTimeout:()=>1,clearTimeout:()=>{},Date});
+  require('./test-format.cjs').loadFormat(context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'multiplayer.js'),'utf8'),context);
+  const all=()=>walk(container);
+  return {api:window.AimModMultiplayer,container,scroller,requests,all,text:()=>all().map(e=>e.textContent||'').join('|'),
+    button:label=>all().find(e=>e.tag==='button'&&e.textContent===label),find:css=>all().find(e=>(' '+e.className+' ').indexOf(' '+css+' ')>=0),
+    last:()=>requests[requests.length-1],open(v){this.api.enter(this.container);this.requests[this.requests.length-1].finish(200,v);return this;}};
+}
+const base={v:1,now:1000,transport:{kind:'steam',online:true},simulation:false,self:{id:'p1',name:'Synthetic One'},joining:null,prefs:{hotkey:'F7',sounds:false},
+  friends:{source:'steam',items:[{id:'f1',name:'Synthetic Friend',status:'aimmod',detail:'Playing',joinable:false,spectatable:true}]},invites:[],recent:[],library:{available:true,scenarios:3},notice:null,lobby:null};
+const settings={mode:'score-race',scenario:{name:'Synthetic Scenario',hash:'0123456789abcdef',map:'synthetic_map',timeLimit:60},mapOverride:null,maxPlayers:4,spectators:false,rounds:1,firstTo:3,timeLimit:null,
+  weapon:{preset:'default'},movement:{preset:'default'},character:{preset:'default'},targetSpeed:1,targetSize:1,privacy:'friends',countdown:5,lateJoin:false,autoStart:false,voting:true};
+function member(id,name,extra){return Object.assign({id,name,role:'player',ready:false,ping:40,scenario:'ok',map:'ok',profiles:'none',connection:'connected',link:'relay',joinedAt:1,simulated:false},extra||{});}
+function lobby(extra){return Object.assign({id:'l1',code:'ABCDEF',hostId:'p1',settings,members:[member('p1','Synthetic One',{link:'local'}),member('p2','Synthetic Two')],match:null,chat:[],
+  self:'p1',isHost:true,blockers:[{code:'ready',text:'Synthetic Two isn’t ready.'}],content:{scenario:'ok',map:'ok',profiles:'none'},simulated:false,generated:null,round:null},extra||{});}
+function view(extra){return Object.assign({},base,extra||{});}
+function order(s,classes){const all=s.all();return classes.map(c=>all.findIndex(e=>(' '+e.className+' ').indexOf(' '+c+' ')>=0));}
+
+test('layout: the open-slot circle resets the shared .empty padding, mode text is never clipped, key pickers wrap',()=>{
+  const css=fs.readFileSync(path.join(__dirname,'multiplayer.css'),'utf8');
+  const rule=sel=>{const i=css.indexOf(sel+'{');assert.ok(i>=0,sel);return css.slice(i,css.indexOf('}',i));};
+  assert.match(rule('.mp-avatar.empty'),/padding:0/,'index.html styles .empty with 40px padding');
+  assert.doesNotMatch(css,/\.mp-mode span\{[^}]*(;|\{)height:/,'mode descriptions grow instead of being cut');
+  assert.match(rule('.mp-setting'),/flex-wrap:wrap/);assert.match(rule('.mp-setting>.segmented'),/flex-wrap:wrap/);
+});
