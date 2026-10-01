@@ -72,6 +72,7 @@ namespace bridge
         void SubmitLocalPose(const Pose& pose);
         std::vector<GhostPeer> Ghosts();
         std::string LocalScene();
+        std::string LobbyValue(const std::string& key); // current lobby data, empty if unset
         static double Now();
 
     private:
@@ -246,6 +247,7 @@ namespace bridge
         std::optional<Pose> m_localPose;
         std::map<std::uint64_t, GhostPeer> m_ghosts;
         std::string m_scene;
+        std::map<std::string, std::string> m_dataSnapshot;
         std::set<std::uint64_t> m_ghostSeen;
         std::uint32_t m_poseSeq = 0;
         Clock::time_point m_nextPose{};

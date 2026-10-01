@@ -19,6 +19,7 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -50,22 +51,33 @@ namespace
         return std::filesystem::path(path).parent_path().parent_path();
     }
 
-    // config.txt: key=value lines. Only ghost_demo is read for now.
-    bool GhostDemoEnabled()
+    // config.txt: key=value lines (# comments).
+    std::map<std::string, std::string> ReadConfig()
     {
+        std::map<std::string, std::string> out;
         std::ifstream in(ModDirectory() / L"config.txt");
+        auto trim = [](std::string s) {
+            const auto a = s.find_first_not_of(" \t\r\n");
+            if (a == std::string::npos) return std::string();
+            return s.substr(a, s.find_last_not_of(" \t\r\n") - a + 1);
+        };
         for (std::string line; std::getline(in, line);)
         {
-            line.erase(0, line.find_first_not_of(" \t"));
-            if (line.rfind("ghost_demo", 0) != 0) continue;
+            line = trim(line);
+            if (line.empty() || line[0] == '#' || line[0] == ';') continue;
             const auto eq = line.find('=');
             if (eq == std::string::npos) continue;
-            const auto value = line.substr(eq + 1);
-            return value.find('1') == value.find_first_not_of(" \t") && value.find('1') != std::string::npos;
+            out[trim(line.substr(0, eq))] = trim(line.substr(eq + 1));
         }
-        return false;
+        return out;
     }
 
+    bool Flag(const std::map<std::string, std::string>& config, const char* key, bool fallback)
+    {
+        const auto it = config.find(key);
+        if (it == config.end()) return fallback;
+        return it->second == "1" || it->second == "true" || it->second == "yes" || it->second == "on";
+    }
     std::wstring ScenePath()
     {
         wchar_t local[MAX_PATH * 2]{};
@@ -108,7 +120,14 @@ public:
         // Read once: Steam passes "+connect_lobby <id>" or our connect string
         // here when an invite launched the game.
         m_commandLine = GetCommandLineW();
-        m_ghostDemo = GhostDemoEnabled();
+        const auto config = ReadConfig();
+        m_ghostDemo = Flag(config, "ghost_demo", false);
+        m_ghostOptions.avatars = Flag(config, "avatars", true);
+        m_ghostOptions.avatarTest = Flag(config, "avatar_test", false);
+        if (auto it = config.find("avatar_profile"); it != config.end()) m_ghostOptions.avatarProfile = it->second;
+        if (auto it = config.find("avatar_drive"); it != config.end()) m_ghostOptions.driveWithUpdate = it->second != "teleport";
+        if (auto it = config.find("avatar_move_mode"); it != config.end())
+            m_ghostOptions.moveMode = it->second == "walking" ? 1 : it->second == "none" ? 0 : it->second == "falling" ? 3 : 5;
 
         using namespace RC::Unreal::Hook;
         FCallbackOptions tick{};
@@ -121,7 +140,7 @@ public:
                 DrainGameThreadJobs();
                 if (m_stop.load(std::memory_order_relaxed)) return;
                 if (!m_ghosts && m_ghostDemo)
-                    if (auto* b = m_ready.load()) m_ghosts = std::make_unique<aimmod::GhostDemo>(*b, Log);
+                    if (auto* b = m_ready.load()) m_ghosts = std::make_unique<aimmod::GhostDemo>(*b, Log, m_ghostOptions);
                 if (m_ghosts) m_ghosts->Tick();
             },
             tick);
@@ -209,6 +228,7 @@ private:
     std::atomic<bridge::Bridge*> m_ready{nullptr};
     std::unique_ptr<aimmod::GhostDemo> m_ghosts;
     bool m_ghostDemo = false;
+    aimmod::GhostOptions m_ghostOptions;
     std::thread m_starter;
     std::atomic<bool> m_stop{false};
     std::atomic<DWORD> m_gameThread{0};

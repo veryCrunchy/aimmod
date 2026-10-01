@@ -167,6 +167,7 @@ namespace bridge
         m_listeners = {new Listener(*this, CbGameLobbyJoinRequested, sizeof(GameLobbyJoinRequested_t)),
                        new Listener(*this, CbGameRichPresenceJoinRequested, sizeof(GameRichPresenceJoinRequested_t)),
                        new Listener(*this, CbConnectionStatusChanged, sizeof(steamabi::SteamNetConnectionStatusChangedCallback_t)),
+                       new Listener(*this, CbLobbyInvite, sizeof(LobbyInvite_t)),
                        new Listener(*this, CbItemInstalled, sizeof(ItemInstalled_t)),
                        new Listener(*this, CbDownloadItemResult, sizeof(DownloadItemResult_t))};
         m_onGameThread([this] {
@@ -308,6 +309,22 @@ namespace bridge
             m_log("join request (Join Game) for lobby " + Redact(target->lobby));
             EmitJoinRequest(*m_pendingJoin);
             if (m_options.ghostDemo && !(m_pipe && m_pipe->Connected())) AutoJoin(target->lobby, "Join Game");
+        }
+        else if (cb.id == CbLobbyInvite && cb.bytes.size() == sizeof(LobbyInvite_t))
+        {
+            // An invite arrived in Steam chat; the user has NOT accepted it yet.
+            LobbyInvite_t e{};
+            std::memcpy(&e, cb.bytes.data(), sizeof(e));
+            const bool kovaaks = (e.m_ulGameID & 0xFFFFFFull) == KovaaksAppId && ((e.m_ulGameID >> 24) & 0xFF) == 0;
+            if (!kovaaks || !IsLobbyId(e.m_ulSteamIDLobby) || !IsIndividualId(e.m_ulSteamIDUser) || e.m_ulSteamIDLobby == m_lobby) return;
+            m_log("invite received for lobby " + Redact(e.m_ulSteamIDLobby) + " from " + Redact(e.m_ulSteamIDUser));
+            Emit(json::Object()
+                     .Int("v", ContractVersion)
+                     .Str("ev", "invite.received")
+                     .Str("from", Id(e.m_ulSteamIDUser))
+                     .Str("fromName", Name(e.m_ulSteamIDUser))
+                     .Str("lobby", Id(e.m_ulSteamIDLobby))
+                     .Done());
         }
         else if (cb.id == CbItemInstalled && cb.bytes.size() == sizeof(ItemInstalled_t))
         {
@@ -900,6 +917,7 @@ namespace bridge
             std::lock_guard lock(m_ghostMutex);
             m_ghosts.clear();
             m_ghostSeen.clear();
+            m_dataSnapshot.clear();
         }
         UpdatePresence();
         m_log(std::string("left lobby ") + Redact(left) + " (" + reason + ")");
@@ -959,6 +977,11 @@ namespace bridge
         const bool ownerChanged = owner != m_owner;
         if (ownerChanged || data != m_data) changed = true;
         m_members = std::move(members);
+        if (data != m_data)
+        {
+            std::lock_guard lock(m_ghostMutex);
+            m_dataSnapshot = data;
+        }
         m_data = std::move(data);
         m_owner = owner;
         if (ownerChanged) UpdateRole();
@@ -1720,6 +1743,13 @@ namespace bridge
         out.reserve(m_ghosts.size());
         for (const auto& [_, g] : m_ghosts) out.push_back(g);
         return out;
+    }
+
+    std::string Bridge::LobbyValue(const std::string& key)
+    {
+        std::lock_guard lock(m_ghostMutex);
+        const auto it = m_dataSnapshot.find(key);
+        return it == m_dataSnapshot.end() ? std::string() : it->second;
     }
 
     std::string Bridge::LocalScene()

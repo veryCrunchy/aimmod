@@ -22,6 +22,7 @@ namespace bridge
     // Callback ids handled by the bridge.
     constexpr int CbGameLobbyJoinRequested = 333;
     constexpr int CbGameRichPresenceJoinRequested = 337;
+    constexpr int CbLobbyInvite = 503;
     constexpr int CbLobbyCreated = 513;
     constexpr int CbLobbyEnter = 504;
     constexpr int CbConnectionStatusChanged = 1221;
@@ -53,6 +54,12 @@ namespace bridge
         std::uint64_t m_steamIDLobby;
         std::uint64_t m_steamIDFriend;
     };
+    struct LobbyInvite_t
+    {
+        std::uint64_t m_ulSteamIDUser;  // inviter
+        std::uint64_t m_ulSteamIDLobby;
+        std::uint64_t m_ulGameID;
+    };
     struct ItemInstalled_t
     {
         std::uint32_t m_unAppID;
@@ -80,6 +87,7 @@ namespace bridge
     static_assert(sizeof(GameLobbyJoinRequested_t) == 16);
     static_assert(sizeof(GameRichPresenceJoinRequested_t) == 264);
     static_assert(sizeof(ItemInstalled_t) == 16);
+    static_assert(sizeof(LobbyInvite_t) == 24);
     static_assert(sizeof(DownloadItemResult_t) == 24);
     static_assert(sizeof(RemoteStorageSubscribePublishedFileResult_t) == 16);
 

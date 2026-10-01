@@ -869,6 +869,7 @@ be merged into it later. The stage-3 kit remains the fallback test tool.
 | `member.joined` / `member.left` | `member` {…as above} / `peer` |
 | `lobby.left` | `lobby`, `reason`: `left`, `kicked`, `closed` or `shutdown` |
 | `join.requested` | `source`: `steam-invite`, `rich-presence`, `launch-aimmodjoin` or `launch-connect-lobby`; plus `lobby`, `compatible`, `from`, `fromName` (`from` is null for launches) |
+| `invite.received` | `from`, `fromName`, `lobby`: a Steam lobby invite for KovaaK's arrived (`LobbyInvite_t` 503) and the user has **not** accepted it in Steam. Show an in-game prompt; on yes send `lobby.join {lobby}`. |
 | `p2p.connected` / `p2p.disconnected` | `peer`, `host` (true when that peer is our host) / `peer`, `reason` |
 | `p2p.message` | `peer`, `reliable`, `data` base64 (one service frame) |
 | `p2p.ping` | `peer`, `rtt` ms |
@@ -948,6 +949,28 @@ messages: no second pipe frame type, so the pipe stays one simple framing.
 size bounds, and a chunk's base64 fitting in a pipe frame. The Workshop
 commands and a live transfer still need the game (for UGC) and two
 accounts (for P2P).
+### Invites: received vs accepted
+
+- **`invite.received`** means "someone invited you". It comes from
+  `LobbyInvite_t` (503), which fires when a friend sends a KovaaK's lobby
+  invite (`InviteUserToLobby` or the overlay dialog). It's filtered to
+  KovaaK's game ids and to lobbies other than the current one. The user hasn't
+  accepted anything in Steam yet, so the UI asks before joining.
+- There is no receive-side notification for `InviteUserToGame`
+  (rich-presence game invites). Steam only reports those when the user
+  accepts, as 337. AimModSteam invites with `InviteUserToLobby`, so an
+  in-game prompt is always possible.
+- **`join.requested`** is always user-initiated in Steam, so the UI may join
+  without asking again. Its sources:
+  - `steam-invite` (333): the user clicked Join or Accept on a lobby invite in
+    Steam, or "Join Game" on a friend in a lobby.
+  - `rich-presence` (337): the user clicked "Join Game" or accepted a game
+    invite.
+  - `launch-connect-lobby` / `launch-aimmodjoin`: Steam launched the game
+    because the user accepted one of those while it was closed.
+
+  The only thing to check first is `compatible: true`, which means the same
+  join-string version.
 ### Mapping to the service's `IMultiplayerTransport`
 
 This is the lobby UI agent's model on `feat/kovaaks-multiplayer-ui`
@@ -1094,6 +1117,78 @@ UI. Turn it on with `ghost_demo=1` in `Mods\AimModSteam\config.txt`
   `setData` + `lobby.updated`, and leave.
 - Two-instance P2P can't run on one account (same SteamID), so the friend
   test is the P2P test.
+### Player avatars (real characters in place of the shapes)
+
+With `avatars=1`, the default in `config.ghost-demo.txt`, each remote player
+on the same scenario becomes a real KovaaK's character. That gives the skin,
+hitboxes, team colours and health bar. This is what the game-modes research
+recommends (`in-game/docs/game-modes.md` §3.1).
+
+**Spawning.**
+
+- `ATheMetaAIController::Spawn(WorldContext, Profile, Team, Lives=0)` is
+  called on the class default object.
+- The bot profile is `avatar_profile` from config if set. Otherwise it's the
+  profile of a bot the scenario already has (`TheMetaAIController.MyProfileName`),
+  on that bot's team.
+- Our own controllers are remembered, so they're never used as a template.
+
+**Kept inert, re-applied every second** (the game may reset bots at challenge
+start):
+
+- `SetUseWeapons(false)` and `StopAiming()`.
+- The controller's actor tick is turned off, so there are no AI decisions,
+  aiming or movement input.
+- `OverrideInvulnerable(true)`, so it never dies and never scores kills.
+- The `CharacterMovement` mode is set from `avatar_move_mode` (default
+  Flying, so gravity and AI input don't fight the pose).
+
+**Driving, every frame from the interpolated pose stream:**
+
+- `UpdateClientLocAndRot(location, yaw-only rotation, bPlayAnim=true)`, or
+  `K2_SetActorLocationAndRotation` with `avatar_drive=teleport`.
+- The movement component's `Velocity` is set from the stream, so the
+  animation blueprint can blend run, walk and jump.
+- `StartCrouching`/`StartUncrouch` follow the crouch flag, which is pose
+  flags bit 0, read from the sender's `MetaCharacter.IsCrouching`.
+- Pitch isn't applied: the body only yaws. Head or aim pitch needs an
+  aim-offset input that the dump doesn't expose. The pitch is still in the
+  pose for later.
+
+**Appearance.**
+
+- The default is whatever character profile the bot profile names. In the
+  map-port scenarios that's Meso/McCree.
+- Per-player choices: if lobby data holds `aimmod.char.<peer SteamID>` = a
+  character profile name, the avatar calls `LoadCharacterProfile(name)`.
+  Generated match scenarios need to ship one character profile per offered
+  model and skin, for example `AimMod Meso McCree`. The host sets these keys.
+
+**Name tags.** Not done: there's no text-render path we can drive without a
+widget. The character's `Infobar` widget shows the profile's display name.
+
+**Lifecycle.**
+
+- A bot is spawned when the peer is on the same scenario, and removed with
+  `RemoveSelf()` on leave, scenario mismatch or timeout.
+- A world change or scenario reset destroys it; it's respawned within 2 s.
+- After 3 failed spawns for a peer, that peer falls back to the shapes. So
+  do all peers when the spawn bindings are missing.
+
+**Offline check.** `avatar_test=1` spawns one avatar that circles the local
+player at 4 m and crouches 3 s out of every 10, with no network. Use it to
+check spawning, the inert AI, movement and the animations before a session
+with a friend. Watch for the `avatars:` lines in `UE4SS.log`.
+
+**Not yet confirmed in game:**
+
+- whether `UpdateClientLocAndRot` plus `Velocity` animates, or whether
+  `avatar_drive=teleport` or another `avatar_move_mode` works better;
+- whether spawned bots count toward the scenario's own bot logic.
+
+The scenario is freeplay. The avatar is invulnerable, and scenarios with
+`ScorePerHit`/`ScorePerDamage` above 0 would still score hits on it, so
+generated match scenarios keep those at 0.
 ## 7. Next steps
 
 1. Wire `SteamTransport` in the service to the pipe contract, in place of the
