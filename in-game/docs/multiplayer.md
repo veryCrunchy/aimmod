@@ -728,11 +728,246 @@ aimmod-steam-test.exe --invite-test receive --stage3-peer <sender's SteamID64> -
 aimmod-steam-test.exe --invite-test send --invite-variant rp|lobby --stage3-peer <receiver's SteamID64> --stage3-match <code>
 ```
 
-## 6. Next steps
+## 6. AimModSteam: the production Steam bridge (`in-game/steam-bridge`)
 
-1. Run the kit's tests 1–3 with a friend and record the results here.
-2. Pick the invite variant from the results. Implement launch-argument and
-   337/333 handling in AimModCore as described in "Steam invites".
-3. Build `AimModNet`, the service match engine and the Hub room and relay
-   endpoints behind a feature flag. AimMod PvP results must stay separate
-   from KovaaK's ranked leaderboards.
+`AimModSteam` grew out of the probe. It's a separate UE4SS C++ mod that gives
+the native service Steam lobbies, invites, friends and relay-only P2P, so
+players never exchange SteamIDs. It lives outside AimModCore for now and will
+be merged into it later. The stage-3 kit remains the fallback test tool.
+
+### What it does
+
+- **Lobbies.**
+  - Privacy is `friends` (Steam friends-only) or `invite` (Steam private).
+    There are no Public lobbies: public matchmaking goes through the Hub.
+  - Lobby data uses only `aimmod.*` keys. The bridge owns `aimmod.v` (`1`),
+    `aimmod.bridge`, `aimmod.token` and `aimmod.privacy`. The service may set
+    up to 24 other `aimmod.*` keys, such as mode, room code or scenario hash,
+    with values up to 256 bytes.
+  - The bridge never sets UE session keys (`OWNINGID`, `SESSIONFLAGS`,
+    `P2PADDR`, `BUILDID`).
+  - It joins only lobbies with `aimmod.v=1`, and leaves any other lobby
+    straight away.
+- **Members.** Lobby members, owner and data are polled every 250 ms, with no
+  lobby callbacks. Each member carries:
+  - a persona name and initials;
+  - avatars on request (32×32 RGBA from `GetSmallFriendAvatar` and
+    `GetImageRGBA`);
+  - P2P connected state and RTT.
+- **Host actions.**
+  - **Kick:** an AMP1 `Kick` frame to that member. Their bridge leaves the
+    lobby, and the host refuses their reconnects for the life of the lobby.
+  - **Host transfer:** `SetLobbyOwner`. If the host leaves, Steam promotes
+    another member. Every bridge follows the new owner: the host listens and
+    clients reconnect.
+- **Invites without IDs.**
+  - "Invite friends" opens `ActivateGameOverlayInviteDialog(lobby)`.
+  - A per-friend Invite uses `InviteUserToLobby`. The friends list includes
+    persona state, "playing KovaaK's" (`GetFriendGamePlayed`, AppID 824270),
+    "has AimMod" (rich presence `aimmod=1`, which every AimModSteam sets), and
+    the friend's joinable AimMod lobby when there is one.
+- **Join requests.** These four sources each become a `join.requested`
+  event. The UI confirms, then the service sends `lobby.join`:
+  - `GameLobbyJoinRequested_t` (333), when a Steam invite is accepted while
+    the game runs;
+  - `GameRichPresenceJoinRequested_t` (337), from "Join Game" or an
+    `aimmod:` connect string;
+  - `+connect_lobby <id>` on the command line;
+  - `-aimmodjoin=aimmod:1:<id>` on the command line.
+
+  The command line is read once at start-up. A pending launch join is
+  re-sent with every `ready` until it's joined or dismissed.
+- **Rich presence.**
+  - `aimmod=1` is set always.
+  - `status` is set by the service.
+  - In a joinable friends lobby, the bridge sets
+    `connect=-aimmodjoin=aimmod:1:<lobby>` and
+    `steam_player_group`/`_size`, so friends get "Join Game" in the Steam
+    friends list.
+  - The keys are cleared on leave, and everything on shutdown.
+- **Transport.**
+  - `ISteamNetworkingSockets` P2P on virtual port `0x414D`, with ICE disabled,
+    so traffic is relay-only (SDR) and no IPs are shared.
+  - Star topology: the lobby owner listens, and every client connects to the
+    owner. Only Steam-authenticated, encrypted connections whose identity
+    matches are used.
+  - **Handshake:** the client sends `Hello(lobby, token)`. The host checks
+    the lobby, the `aimmod.token`, that the sender is a lobby member, and that
+    it isn't banned. It then sends `Welcome` or `Reject(code)`.
+  - **After the handshake:** `Data` frames carry the service's opaque frames
+    (1–16 KiB) as reliable or unreliable no-delay messages. `Ping`/`Pong`
+    every 2 s produce `p2p.ping` RTT events. `Bye` and `Kick` close the
+    connection.
+- **Safety.**
+  - Every pipe command is size-limited (64 KiB) and strictly parsed: depth 6,
+    no duplicate keys, unknown fields rejected. Every P2P frame is strictly
+    decoded (exact sizes, version byte, payload ≤ 16 KiB).
+  - Logs redact SteamIDs and lobby IDs to their last 4 digits, and contain no
+    names or IPs.
+  - The bridge leaves the lobby, closes sockets and clears rich presence on
+    shutdown. If the game already shut Steam down, it skips the cleanup.
+  - It never touches gameplay, ranked or leaderboard code.
+
+### Threads
+
+- One bridge worker thread makes every Steam call and owns all bridge state.
+  The Steam calls the bridge uses are thread-safe, so it doesn't need the game
+  thread.
+- The game thread is used only to register and unregister the three passive
+  callbacks: 333, 337 and 1221 (`SteamNetConnectionStatusChangedCallback_t`).
+  The engine-tick job queue does this, as in the probe.
+- Callback handlers and the pipe thread only enqueue work and wake the worker.
+
+### The pipe contract (version 1)
+
+**Transport.**
+
+- Named pipe `\\.\pipe\aimmod-steam-v1`. AimModSteam is the server; the
+  native service is the only client.
+- Access is the current user (and SYSTEM) only, and remote clients are
+  rejected.
+- Each frame is a `uint32` little-endian length, then that many bytes of UTF-8
+  JSON (1–65536).
+- The service reconnects whenever the pipe drops. After connecting, it sends
+  `hello` and rebuilds its state from `ready` and `lobby.updated`.
+
+**Common fields.**
+
+- Every command is `{"v":1,"cmd":"<name>","id":<int, optional>, ...}`.
+- Every event is `{"v":1,"ev":"<name>", ...}`.
+- Peer ids and lobby ids are SteamID64s as decimal **strings**. The service
+  uses a peer id as the member id (`IMultiplayerTransport.LocalPeer` is
+  `ready.self.peer`).
+- A command with an `id` always gets exactly one
+  `{"ev":"result","id":n,"ok":bool,"code"?,"message"?}`. For `lobby.create`
+  and `lobby.join`, that result arrives once Steam finishes.
+- A command without an `id` only reports failures, with `"id":null`. Use
+  this for high-rate `p2p.send`.
+
+| Command | Fields | Notes |
+| --- | --- | --- |
+| `hello` | — | Replies `ready`, plus `lobby.updated` if in a lobby, plus any pending `join.requested`. |
+| `lobby.create` | `privacy` `friends`\|`invite`, `maxMembers` 2–16, `data` {aimmod.*: string} | Fails `busy` if already in a lobby. |
+| `lobby.join` | `lobby` | Fails `not-aimmod` for foreign lobbies, and `steam` with the enter response code. |
+| `lobby.leave` | — | Always ok. |
+| `lobby.setData` | `data` {aimmod.*: string\|null} | Host only. `null` deletes the key. The bridge's own keys are read-only. |
+| `lobby.setJoinable` | `joinable` bool | Host only. It also removes or restores the friends-list "Join Game". |
+| `lobby.invite` | `friend`? | With `friend`, calls `InviteUserToLobby`. Without it, opens the Steam overlay invite dialog. |
+| `lobby.kick` | `peer` | Host only. |
+| `lobby.transfer` | `peer` | Host only; calls `SetLobbyOwner`. |
+| `join.dismiss` | — | Drops the pending join request. |
+| `friends.list` | — | Replies `friends`. |
+| `avatar.get` | `peer` | Replies `avatar`, after up to 5 s while Steam loads it. |
+| `presence.set` | `status` ≤ 64 bytes | The rich presence `status` key. |
+| `p2p.send` | `peer`, `reliable` (default true), `data` base64 (1–16384 bytes) | Fails `not-connected` without a ready connection. A client can only reach the host. |
+| `p2p.close` | `peer` | Graceful close (Bye). |
+
+| Event | Fields |
+| --- | --- |
+| `ready` | `contract` 1, `wire` 1, `bridge`, `steam` true, `appId`, `self` {peer, name, initials}, `relay` (`Current`, `Attempting`, …) |
+| `lobby.updated` | `lobby`, `owner`, `isHost`, `privacy`, `joinable`, `maxMembers`, `members` [{peer, name, initials, host, self, connected, rtt?}], `data` {aimmod.* except the token} |
+| `member.joined` / `member.left` | `member` {…as above} / `peer` |
+| `lobby.left` | `lobby`, `reason`: `left`, `kicked`, `closed` or `shutdown` |
+| `join.requested` | `source`: `steam-invite`, `rich-presence`, `launch-aimmodjoin` or `launch-connect-lobby`; plus `lobby`, `compatible`, `from`, `fromName` (`from` is null for launches) |
+| `p2p.connected` / `p2p.disconnected` | `peer`, `host` (true when that peer is our host) / `peer`, `reason` |
+| `p2p.message` | `peer`, `reliable`, `data` base64 (one service frame) |
+| `p2p.ping` | `peer`, `rtt` ms |
+| `friends` | `friends` [{peer, name, initials, state, playing, aimmod, lobby?}] |
+| `avatar` | `peer`, then either `w`, `h`, `rgba` (base64, w·h·4 bytes) or `missing` true |
+| `error` | `code`, `message`: for example `rejected` (a host refused us) or `p2p` |
+
+### Mapping to the service's `IMultiplayerTransport`
+
+This is the lobby UI agent's model on `feat/kovaaks-multiplayer-ui`
+(`native-service/Multiplayer/Protocol.cs`). A `SteamTransport` implements it
+over the pipe:
+
+| `IMultiplayerTransport` | Bridge |
+| --- | --- |
+| `Kind` / `Available` | `"steam"` / `ready.steam` and a connected pipe |
+| `LocalPeer` | `ready.self.peer` |
+| `Advertise(lobby)` | `lobby.create` the first time (privacy `friends` or `invite`; `public` stays on the Hub, which is also the only place codes resolve). After that, `lobby.setData` with `aimmod.code`, `aimmod.mode`, `aimmod.scenario`, `aimmod.scenario_hash`, `aimmod.players`, … and `lobby.setJoinable(false)` while a match runs without late join. |
+| `Withdraw()` | `lobby.leave` |
+| `Resolve(code)` | Not available over Steam: codes resolve through the Hub. Steam joins come from `join.requested` or a friend's `lobby`. |
+| `Send(peer, frame, reliable)` | `p2p.send` with `data` = base64(frame). One service envelope (≤ 16 KiB) per message. |
+| `Close(peer)` | `p2p.close` |
+| `Drain()` | `p2p.connected` → `connected`, `p2p.disconnected` → `disconnected`, `p2p.message` → `message`. Also map `member.left` and `lobby.left` to disconnects. |
+| `Invite(lobby)` | `lobby.invite` (overlay). The friends list uses `lobby.invite {friend}`. |
+
+The host's LobbyCore stays the authority. Steam lobby membership only gates who
+may connect. The service's `hello`/`welcome` protocol runs inside `Data`
+frames on top of the AMP1 handshake. `lobby.kick` and `lobby.transfer` should
+follow LobbyCore's `kick` and `transfer` so that Steam and the service agree.
+
+### Build
+
+```
+cmake -S in-game/steam-bridge -B in-game/steam-bridge/build-core -G "Visual Studio 17 2022" -A x64
+cmake --build in-game/steam-bridge/build-core --config Release && in-game/steam-bridge/build-core/Release/aimmod_steam_tests.exe
+cmake -S in-game/steam-bridge -B in-game/steam-bridge/build-mod -G "Visual Studio 17 2022" -A x64 -DAIMMOD_STEAM_BUILD_MOD=ON
+cmake --build in-game/steam-bridge/build-mod --config Game__Shipping__Win64 --target AimModSteam
+```
+
+Output: `build-mod/Game__Shipping__Win64/main.dll`. Like AimModCore, it links
+`UE4SS.dll` and needs the RE-UE4SS checkout at `external/RE-UE4SS`, pinned to
+`e3ba1016`.
+
+### Install
+
+**Now:** `in-game/steam-bridge/install/Install-AimModSteam.ps1 -Dll <main.dll>`
+adds `ue4ss\Mods\AimModSteam\dlls\main.dll` to an existing AimMod install and
+enables it in `mods.txt` and `mods.json`. `-Remove` reverses that. The game
+must be closed.
+
+**For a friend:** `in-game/steam-bridge/install/New-AimModFriendBundle.ps1`
+builds one zip from four inputs:
+
+- the AimModCore package (`Build-AimModPackage.ps1` output)
+- `native-mod/install`
+- the verified UE4SS zip
+- AimModSteam's `main.dll`
+
+The zip contains `Install-AimMod.cmd`. That runs `Install-AimModCore.ps1` and
+then `Install-AimModSteam.ps1`, so the friend gets UE4SS, AimModCore with its
+service, AimModNativeUI and AimModSteam with one double-click, with KovaaK's
+closed.
+
+**To merge into AimModCore's installer** (`in-game/native-mod/install/`):
+
+- `Build-AimModPackage.ps1`: after the AimModCore build, build
+  `in-game/steam-bridge` (`-DAIMMOD_STEAM_BUILD_MOD=ON`, target `AimModSteam`
+  plus `aimmod_steam_tests`). Run the tests, then copy its `main.dll` to
+  `$Output\AimModSteam\dlls\main.dll`.
+- `Install-AimModCore.ps1`:
+  - After the AimModCore `Add-Tree`, add:
+
+    ```
+    $steam = Test-Path -LiteralPath (Join-Path $Package 'AimModSteam\dlls\main.dll')
+    if ($steam) { Add-Tree (Join-Path $Package 'AimModSteam') 'ue4ss\Mods\AimModSteam' }
+    ```
+  - Add `if ($steam) { $ours += 'AimModSteam' }` next to the `$ours` list.
+  - Record `steam = $steam` in the manifest.
+  - The uninstaller already removes every file the manifest lists.
+
+### Manual check
+
+`in-game/steam-bridge/tools/Test-AimModSteamPipe.ps1` connects to the pipe
+while the service isn't using it. It sends `hello` and `friends.list`, and
+prints every event with ids redacted.
+
+- `-Create` makes a friends-only lobby and opens the invite overlay.
+- `-Join <lobby>` joins a lobby.
+
+## 7. Next steps
+
+1. Wire `SteamTransport` in the service to the pipe contract, in place of the
+   lobby simulation (lobby UI agent).
+2. Two-player test with AimModSteam on both machines:
+   - an invite through the overlay;
+   - "Join Game" from the friends list;
+   - an invite with the game closed (the `+connect_lobby` launch);
+   - kick, host transfer, and host leave and migration;
+   - live score frames.
+3. Run the kit's test 3 to confirm that the game's leftover OSS handlers stay
+   inert for lobby invites. AimModSteam doesn't depend on them.
+4. Merge AimModSteam into AimModCore and its installer.

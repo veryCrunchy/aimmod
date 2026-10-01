@@ -1,0 +1,91 @@
+#pragma once
+// Pure helpers shared by the bridge and its tests: base64, the AMP1 P2P wire
+// format between AimModSteam instances, join-string parsing and validation.
+
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace bridge
+{
+    // Versions. The pipe contract and the P2P wire format move independently.
+    constexpr int ContractVersion = 1;
+    constexpr std::uint8_t WireVersion = 1;
+    constexpr int JoinStringVersion = 1;
+
+    constexpr std::size_t MaxPipeFrame = 64 * 1024; // one JSON message on the pipe
+    constexpr std::size_t MaxPayload = 16 * 1024;   // one service frame over P2P (matches the service's Protocol.MaxBytes)
+    constexpr int AimModVirtualPort = 0x414D;
+
+    std::string Base64Encode(const std::uint8_t* data, std::size_t size);
+    std::optional<std::vector<std::uint8_t>> Base64Decode(std::string_view text, std::size_t maxBytes);
+
+    // SteamID64 / lobby id as decimal string <-> uint64. Rejects anything that
+    // is not 1..20 digits or does not fit.
+    std::optional<std::uint64_t> ParseId(std::string_view text);
+    bool IsIndividualId(std::uint64_t id); // public universe, individual account
+    bool IsLobbyId(std::uint64_t id);      // public universe, chat/lobby account
+    std::string Redact(std::uint64_t id);  // "...1234"
+
+    // Lobby data keys the service may set: "aimmod." + [a-z0-9._-]{1,32}.
+    bool ValidLobbyKey(std::string_view key);
+    constexpr std::size_t MaxLobbyValue = 256;
+    constexpr std::size_t MaxServiceLobbyKeys = 24;
+
+    // Join strings: rich presence connect / launch switch value
+    // "aimmod:<version>:<lobby id>".
+    std::string JoinString(std::uint64_t lobby);        // "aimmod:1:<id>"
+    std::string ConnectString(std::uint64_t lobby);     // "-aimmodjoin=aimmod:1:<id>"
+    struct JoinTarget
+    {
+        std::uint64_t lobby = 0;
+        int version = 0;
+    };
+    std::optional<JoinTarget> ParseJoinString(std::string_view value); // "aimmod:<v>:<id>" or with "-aimmodjoin=" prefix
+    // Scans a process command line for "-aimmodjoin=<join string>" or
+    // "+connect_lobby <id>". Returns the first valid target.
+    struct LaunchJoin
+    {
+        JoinTarget target;
+        std::string source; // "launch-aimmodjoin" or "launch-connect-lobby"
+    };
+    std::optional<LaunchJoin> ParseLaunchCommandLine(std::wstring_view commandLine);
+
+    // AMP1 wire format. Header: 'A' 'M' 'P' '1', version, type, 2 reserved bytes.
+    enum class WireType : std::uint8_t
+    {
+        Hello = 1,   // u64 lobby, u64 token
+        Welcome = 2, // u64 lobby
+        Reject = 3,  // u16 code
+        Data = 4,    // payload (1..MaxPayload bytes, opaque service frame)
+        Ping = 5,    // u32 seq, i64 local time (us)
+        Pong = 6,    // u32 seq, i64 echoed time
+        Kick = 7,    // u64 lobby
+        Bye = 8,     // no body
+    };
+    enum class RejectCode : std::uint16_t
+    {
+        NotMember = 1,
+        BadToken = 2,
+        Banned = 3,
+        Version = 4,
+        NotHost = 5,
+    };
+    constexpr std::size_t WireHeader = 8;
+
+    struct WireMessage
+    {
+        WireType type{};
+        std::uint64_t lobby = 0;
+        std::uint64_t token = 0;
+        std::uint16_t code = 0;
+        std::uint32_t seq = 0;
+        std::int64_t time = 0;
+        std::vector<std::uint8_t> payload;
+    };
+    std::vector<std::uint8_t> Encode(const WireMessage& message);
+    // Strict: exact sizes per type, version match, payload bounds.
+    std::optional<WireMessage> Decode(const std::uint8_t* data, std::size_t size);
+} // namespace bridge
