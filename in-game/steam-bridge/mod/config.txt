@@ -1,0 +1,11 @@
+# AimModSteam settings (Mods\AimModSteam\config.txt).
+# ghost_demo=1 enables the two-player ghost demo (see config.ghost-demo.txt).
+ghost_demo=0
+
+# Spectating without a lobby: friends (default) = friends may watch you,
+# ask = you confirm each request in the AimMod UI, off = nobody.
+spectate_privacy=friends
+# show_spectating=1 publishes whom you are watching in rich presence.
+# hide_scenario=1 keeps your current scenario out of rich presence.
+# lobby_avatars=0 stops streaming poses and showing other players in lobbies.
+lobby_avatars=1
