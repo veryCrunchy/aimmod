@@ -29,11 +29,20 @@ sealed record DiscordSession(DateTimeOffset Started, int Runs, Run? Last, bool L
 
 // Page: the AimMod workspace page while the panel is open (null when closed).
 // ReplayScenario: scenario of the replay being watched, when known.
-sealed record DiscordPresenceInput(LiveOverlaySnapshot Live, bool Replay, DiscordSession Session, string? HubHandle, DateTimeOffset Now, string? ReplayScenario = null, string? Page = null);
+sealed record DiscordPresenceInput(LiveOverlaySnapshot Live, bool Replay, DiscordSession Session, string? HubHandle, DateTimeOffset Now, string? ReplayScenario = null, string? Page = null, DiscordLobbyInfo? Lobby = null);
+
+// Multiplayer lobby as the presence sees it (Multiplayer/MultiplayerDiscord.cs).
+// State: lobby, match or results. Lead: this player's score or total minus the
+// best other player's. JoinSecret: an opaque hash, null when not joinable.
+sealed record DiscordLobbyInfo(string PartyId, int Players, int MaxPlayers, string Mode, string? Scenario, string State,
+    int? Round, int? TotalRounds, int? FirstTo, double? Lead, int? Place, bool? Won, string? JoinSecret);
+
+sealed record DiscordParty(string Id, int Size, int Max);
 
 sealed record DiscordButton(string Label, string Url);
 
-sealed record DiscordActivity(string Phase, string Details, string State, long? Start, long? End, IReadOnlyList<DiscordButton> Buttons, string? Scenario, string LargeText = DiscordActivity.DefaultLargeText)
+sealed record DiscordActivity(string Phase, string Details, string State, long? Start, long? End, IReadOnlyList<DiscordButton> Buttons, string? Scenario, string LargeText = DiscordActivity.DefaultLargeText,
+    DiscordParty? Party = null, string? JoinSecret = null)
 {
     public const string DefaultLargeText = "AimMod for KovaaK's";
     // The AimMod application has no uploaded art assets, so images are direct
@@ -56,6 +65,10 @@ sealed record DiscordActivity(string Phase, string Details, string State, long? 
             if (End is long end) timestamps["end"] = end;
             activity["timestamps"] = timestamps;
         }
+        if (Party is { } party) activity["party"] = new JsonObject { ["id"] = party.Id, ["size"] = new JsonArray(party.Size, party.Max) };
+        // Discord does not accept buttons together with secrets: a joinable
+        // lobby shows Discord's own Join / Ask to Join instead.
+        if (JoinSecret is not null) { activity["secrets"] = new JsonObject { ["join"] = JoinSecret }; activity["instance"] = false; return activity; }
         var buttons = new JsonArray();
         foreach (var button in Buttons.Where(b => scenarioButton || !b.Url.StartsWith("steam:", StringComparison.Ordinal)).Take(2))
             buttons.Add(new JsonObject { ["label"] = button.Label, ["url"] = button.Url });
@@ -66,7 +79,7 @@ sealed record DiscordActivity(string Phase, string Details, string State, long? 
     // is sent promptly; a changed state line alone waits for the refresh interval.
     public bool Structural(DiscordActivity? previous) =>
         previous is null || previous.Phase != Phase || previous.Details != Details || !previous.Buttons.SequenceEqual(Buttons)
-        || Moved(previous.Start, Start) || Moved(previous.End, End);
+        || Moved(previous.Start, Start) || Moved(previous.End, End) || previous.Party != Party || previous.JoinSecret != JoinSecret;
     static bool Moved(long? a, long? b) => a.HasValue != b.HasValue || (a is long x && b is long y && Math.Abs(x - y) > 3);
     public bool SameContent(DiscordActivity? previous) => previous is not null && !Structural(previous) && previous.State == State && previous.LargeText == LargeText;
 }
@@ -143,8 +156,50 @@ static class DiscordActivityBuilder
         return string.Join(" · ", parts);
     }
 
+    static string Ordinal(int n) => n + (n % 100 is 11 or 12 or 13 ? "th" : (n % 10) switch { 1 => "st", 2 => "nd", 3 => "rd", _ => "th" });
+    static DiscordActivity BuildLobby(DiscordPresenceInput input, DiscordSettingsValue settings, DiscordLobbyInfo lobby)
+    {
+        var live = input.Live; var now = input.Now.ToUnixTimeSeconds();
+        var players = Math.Clamp(lobby.Players, 1, Math.Max(1, lobby.MaxPlayers));
+        var party = new DiscordParty(lobby.PartyId, players, Math.Max(players, lobby.MaxPlayers));
+        var scenario = string.IsNullOrWhiteSpace(lobby.Scenario) ? null : lobby.Scenario;
+        string phase, details, state, largeText = DiscordActivity.DefaultLargeText; long? start = null, end = null;
+        if (lobby.State == "match")
+        {
+            phase = "match:" + lobby.Round;
+            details = lobby.Mode + (scenario is null ? "" : " · " + scenario);
+            var parts = new List<string>();
+            if (lobby.Round is int round) parts.Add(lobby.TotalRounds is int total ? $"Round {round}/{total}" : lobby.FirstTo is int to ? $"Round {round} · First to {to}" : $"Round {round}");
+            if (lobby.Lead is double lead) parts.Add(Math.Abs(lead) < 0.05 ? "Tied" : (lead > 0 ? "Leading by " : "Trailing by ") + Number(Math.Abs(lead)));
+            else if (settings.ShowScore && live.Active && live.Score is double score) parts.Add("Score " + Number(score));
+            state = parts.Count == 0 ? "In a match" : string.Join(" · ", parts);
+            if (live.Active && !live.Paused) { largeText = RunDetail(live, settings); if (live.RemainingSeconds is double remaining && remaining > 0) end = now + (long)Math.Round(remaining); }
+        }
+        else if (lobby.State == "results")
+        {
+            phase = "results-match";
+            details = lobby.Mode + (scenario is null ? "" : " · " + scenario);
+            state = lobby.Won == true ? "Won the match" : lobby.Place is int place ? $"Finished {Ordinal(place)} of {players}" : "Match over";
+            start = input.Session.Started.ToUnixTimeSeconds();
+        }
+        else
+        {
+            phase = "lobby";
+            details = $"In lobby · {players}/{party.Max} · {lobby.Mode}";
+            state = scenario ?? "Choosing a scenario";
+            start = input.Session.Started.ToUnixTimeSeconds();
+        }
+        var buttons = new List<DiscordButton>();
+        if (settings.ShowHubButton && !string.IsNullOrWhiteSpace(input.HubHandle) && input.HubHandle.Length <= 64)
+            buttons.Add(new("AimMod Hub profile", HubProfile(input.HubHandle)));
+        var secret = settings.ShowJoin && lobby.JoinSecret is { Length: > 0 and <= 128 } s ? s : null;
+        return new(phase, Clean(details, "In a lobby"), Clean(state, "In a lobby"), start, end, buttons, null, largeText, party, secret);
+    }
+
     public static DiscordActivity Build(DiscordPresenceInput input, DiscordSettingsValue settings)
     {
+        // A lobby or match outranks everything but watching a replay.
+        if (settings.ShowLobby && input.Lobby is { } lobby && !input.Replay) return BuildLobby(input, settings, lobby);
         var live = input.Live; var session = input.Session;
         var now = input.Now.ToUnixTimeSeconds();
         var buttons = new List<DiscordButton>();
@@ -274,6 +329,10 @@ sealed class DiscordPresenceHost : IAsyncDisposable
     readonly Func<LiveOverlaySnapshot> live;
     readonly Func<bool> replay;
     readonly Func<string?> replayScenario, page;
+    readonly Func<DiscordLobbyInfo?> lobby;
+    readonly Func<string, (bool Ok, string Message)>? join;
+    // Discord events arrive on the reader thread and are handled in Step.
+    readonly System.Collections.Concurrent.ConcurrentQueue<(string Kind, string Value)> events = new();
     readonly Func<string?> hubHandle;
     readonly Func<DateTimeOffset> clock;
     readonly Func<int> pid;
@@ -296,13 +355,16 @@ sealed class DiscordPresenceHost : IAsyncDisposable
     Task? loop;
     public DiscordPresenceHost(string output, DiscordSettings settings, Func<LiveOverlaySnapshot> live, Func<bool> replay, Func<string?> hubHandle,
         IDiscordPipe? pipe = null, Func<DateTimeOffset>? clock = null, Func<int>? pid = null, TimeSpan? tick = null,
-        Func<string?>? replayScenario = null, Func<string?>? page = null, Action<string>? log = null)
+        Func<string?>? replayScenario = null, Func<string?>? page = null, Action<string>? log = null,
+        Func<DiscordLobbyInfo?>? lobby = null, Func<string, (bool Ok, string Message)>? join = null)
     {
         this.output = output; this.settings = settings; this.live = live; this.replay = replay; this.hubHandle = hubHandle;
         this.clock = clock ?? (() => DateTimeOffset.UtcNow); this.pid = pid ?? GamePid; this.tick = tick ?? TimeSpan.FromSeconds(1);
         this.replayScenario = replayScenario ?? (() => null); this.page = page ?? (() => null);
         this.log = log ?? (line => Console.WriteLine("[Discord] " + line));
+        this.lobby = lobby ?? (() => null); this.join = join;
         client = new DiscordIpcClient(ClientId, pipe ?? new DiscordNamedPipe());
+        client.Dispatch = OnDispatch;
         started = this.clock();
     }
     public string Status => status;
@@ -385,14 +447,21 @@ sealed class DiscordPresenceHost : IAsyncDisposable
             }
             log("connected: handshake READY (user redacted)");
             failures = 0; sent = null; rate.Reset();
+            foreach (var evt in new[] { "ACTIVITY_JOIN", "ACTIVITY_JOIN_REQUEST" })
+            {
+                var subscribed = await client.Subscribe(evt, token);
+                log("SUBSCRIBE " + evt + ": " + subscribed + (subscribed == DiscordSendResult.Ok ? "" : " (" + client.LastError + ")"));
+            }
         }
-        var activity = DiscordActivityBuilder.Build(new(live(), replay(), DiscordSession.Summarize(Volatile.Read(ref runs), started), hubHandle(), now, replayScenario(), page()), preferences);
+        var party = lobby();
+        await HandleEvents(preferences, party, token);
+        var activity = DiscordActivityBuilder.Build(new(live(), replay(), DiscordSession.Summarize(Volatile.Read(ref runs), started), hubHandle(), now, replayScenario(), page(), party), preferences);
         SetStatus("showing");
         if (activity.SameContent(sent)) return;
         var due = activity.Structural(sent) ? now - sentAt >= MinimumSpacing : now - sentAt >= StateRefresh;
         if (!due || !rate.TryTake(now.UtcDateTime)) return;
         var result = await client.SetActivity(pid(), activity.ToJson(scenarioButton), token);
-        var summary = $"SET_ACTIVITY {activity.Phase} details={Quote(activity.Details)} state={Quote(activity.State)} buttons={activity.Buttons.Count(b => scenarioButton || !b.Url.StartsWith("steam:", StringComparison.Ordinal))}";
+        var summary = $"SET_ACTIVITY {activity.Phase} details={Quote(activity.Details)} state={Quote(activity.State)} " + (activity.JoinSecret is not null ? "join=on" : $"buttons={activity.Buttons.Count(b => scenarioButton || !b.Url.StartsWith("steam:", StringComparison.Ordinal))}") + (activity.Party is { } p ? $" party={p.Size}/{p.Max}" : "");
         if (result == DiscordSendResult.Ok) { log(summary + ": ok"); sent = activity; sentAt = now; return; }
         if (result == DiscordSendResult.Rejected && scenarioButton && activity.Buttons.Any(b => b.Url.StartsWith("steam:", StringComparison.Ordinal)))
         {
@@ -403,6 +472,38 @@ sealed class DiscordPresenceHost : IAsyncDisposable
         failures++; var retry = DiscordBackoff.Delay(failures); nextConnect = now + retry;
         log(summary + ": failed (" + client.LastError + "); reconnect in " + retry.TotalSeconds.ToString("0", CultureInfo.InvariantCulture) + " s");
         SetStatus("discord-unavailable", client.LastError);
+    }
+    // ACTIVITY_JOIN carries the join secret the player accepted in Discord.
+    // ACTIVITY_JOIN_REQUEST carries the asking Discord user; only the id is kept,
+    // to answer the request, and it is never logged.
+    void OnDispatch(string evt, System.Text.Json.JsonElement data)
+    {
+        if (data.ValueKind != System.Text.Json.JsonValueKind.Object) return;
+        if (evt == "ACTIVITY_JOIN" && data.TryGetProperty("secret", out var secret) && secret.ValueKind == System.Text.Json.JsonValueKind.String && secret.GetString() is { Length: > 0 and <= 128 } value)
+            events.Enqueue(("join", value));
+        else if (evt == "ACTIVITY_JOIN_REQUEST" && data.TryGetProperty("user", out var user) && user.ValueKind == System.Text.Json.JsonValueKind.Object
+            && user.TryGetProperty("id", out var id) && id.ValueKind == System.Text.Json.JsonValueKind.String && id.GetString() is { Length: > 0 and <= 24 } userId && userId.All(char.IsAsciiDigit))
+            events.Enqueue(("request", userId));
+        if (events.Count > 16) events.TryDequeue(out _);
+    }
+    async Task HandleEvents(DiscordSettingsValue preferences, DiscordLobbyInfo? current, CancellationToken token)
+    {
+        while (events.TryDequeue(out var e))
+        {
+            if (e.Kind == "join")
+            {
+                if (join is null || !preferences.ShowJoin) { log("join from Discord ignored (joins are off)"); continue; }
+                var (ok, message) = join(e.Value);
+                log("join from Discord: " + (ok ? "joining" : "not joined (" + message + ")"));
+            }
+            else
+            {
+                // Ask to Join: accept while this lobby offers a join, otherwise decline.
+                var accept = preferences.ShowJoin && preferences.ShowLobby && current?.JoinSecret is not null;
+                var result = await client.Command(accept ? "SEND_ACTIVITY_JOIN_INVITE" : "CLOSE_ACTIVITY_REQUEST", new JsonObject { ["user_id"] = e.Value }, null, token);
+                log("ask-to-join request (user redacted): " + (accept ? "accepted" : "declined") + ", " + result + (client.LastError is string error ? " (" + error + ")" : ""));
+            }
+        }
     }
     public object StatusInfo => new { state = status };
     public async ValueTask DisposeAsync()

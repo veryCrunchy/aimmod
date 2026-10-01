@@ -102,6 +102,9 @@ interface IMultiplayerTransport : IDisposable
     void Transfer(string peer);
     // Who the transport considers the host (the Steam lobby owner), when it knows.
     string? HostHint { get; }
+    // The current Steam lobby token, for the hashed Discord join secret. It never
+    // leaves the service as text. Null when the transport has no such lobby.
+    string? JoinToken => null;
     void Send(string peer, byte[] frame, bool reliable);
     void Close(string peer);
     // Events since the last call: connected, disconnected, a frame, an incoming

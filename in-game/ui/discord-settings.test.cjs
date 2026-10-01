@@ -10,13 +10,13 @@ function setup(){
   vm.runInNewContext(source,{window});
   return {api:window.AimModDiscordSettings,container,requests,buttons:()=>container.querySelectorAll('button')};
 }
-const all={discordPresenceEnabled:true,discordShowScore:true,discordShowPersonalBest:true,discordShowHubButton:false};
+const all={discordPresenceEnabled:true,discordShowScore:true,discordShowPersonalBest:true,discordShowHubButton:false,discordShowLobby:true,discordShowJoin:true};
 test('shows each option and the handoff status',()=>{
   const s=setup();s.api.render(s.container);
   assert.equal(s.requests[0].method,'GET');assert.equal(s.requests[0].url,'/private/discord-settings');
   s.requests[0].finish(200,{settings:all,status:{state:'showing'}});
   const labels=s.buttons().map(b=>b.attrs['aria-label']);
-  assert.deepEqual(labels,['Show AimMod on Discord','Score and accuracy','Personal best','Hub profile button']);
+  assert.deepEqual(labels,['Show AimMod on Discord','Score and accuracy','Personal best','Hub profile button','Lobby and match','Join from Discord']);
   assert.equal(s.buttons()[3].attrs['aria-checked'],'false');
   assert.match(s.container.text(),/Showing on Discord/);
 });

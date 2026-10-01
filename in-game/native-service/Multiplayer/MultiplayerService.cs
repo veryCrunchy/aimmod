@@ -201,6 +201,28 @@ sealed class MultiplayerService : IDisposable
         return LobbyResult.Fail("not-found", transport.Available ? "Room codes work once AimMod Hub rooms are live. Join through a Steam invite or a friend’s lobby for now." : "Joining needs AimMod’s Steam bridge, which isn’t connected yet.");
     }
 
+    // ---- Discord presence ---------------------------------------------------
+
+    // Display summary of the current lobby or match, without Steam ids.
+    public DiscordLobbyInfo? DiscordLobby() { lock (gate) return Current is { } lobby ? MultiplayerDiscord.Summarize(lobby, SelfId, transport.JoinToken) : null; }
+    // Join from Discord (ACTIVITY_JOIN): the secret names one of the player's
+    // Steam friends' joinable lobbies, or nothing.
+    public LobbyResult JoinFromDiscord(string secret)
+    {
+        lock (gate)
+        {
+            if (Current is not null || hostPeer is not null || joinPendingSince is not null) return LobbyResult.Fail("in-lobby", "Leave your current lobby first.");
+            if (MultiplayerDiscord.Resolve(secret, Friends()) is not { } token)
+            {
+                notice = ("error", "Couldn’t find that lobby. Discord joins work for lobbies of your Steam friends.", clock());
+                return LobbyResult.Fail("not-found", "No Steam friend's lobby matches the Discord join.");
+            }
+            var joined = JoinBy(token, invite: true);
+            if (joined.Ok) RequestPanel(); else notice = ("error", joined.Message ?? "Couldn’t join that lobby.", clock());
+            return joined;
+        }
+    }
+
     IReadOnlyList<FriendEntry> Friends() => Simulation is not null && !transport.Available ? Simulation.Friends(clock()) : transport.Friends();
 
     // ---- notifications outside the AimMod panel ----------------------------

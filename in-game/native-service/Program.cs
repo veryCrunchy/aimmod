@@ -56,7 +56,8 @@ await workspace.Start(cancellation.Token);
 // Declared after the workspace so it is disposed first: the presence is
 // cleared and KovaaK's own presence handed back before the UI closes.
 await using var discordHost = discord = new DiscordPresenceHost(output, discordSettings, workspace.ReadLive, () => workspace.ReplayVisible, () => hub.LinkedHandle,
-    replayScenario: () => workspace.ReplayScenario, page: () => workspace.View.Current(DateTimeOffset.UtcNow));
+    replayScenario: () => workspace.ReplayScenario, page: () => workspace.View.Current(DateTimeOffset.UtcNow),
+    lobby: workspace.MultiplayerLobby.DiscordLobby, join: secret => { var r = workspace.MultiplayerLobby.JoinFromDiscord(secret); return (r.Ok, r.Message ?? r.Code ?? ""); });
 discord.Start(cancellation.Token);
 var workspaceUrlPath = Path.Combine(output, "workspace-url.txt");
 AtomicFile.WriteText(workspaceUrlPath, workspace.Url);

@@ -101,6 +101,9 @@ sealed class DiscordIpcClient : IAsyncDisposable
     public string? LastError => lastError;
     // Every received frame, for diagnostics (--discord-test). Called on the reader.
     public Action<int, string>? Received { get; set; }
+    // DISPATCH events other than READY (ACTIVITY_JOIN, ACTIVITY_JOIN_REQUEST, ...)
+    // with a copy of their data. Called on the reader.
+    public Action<string, JsonElement>? Dispatch { get; set; }
     static string ErrorText(JsonElement data)
     {
         var code = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("code", out var c) && c.ValueKind == JsonValueKind.Number ? c.GetRawText() : "?";
@@ -129,7 +132,11 @@ sealed class DiscordIpcClient : IAsyncDisposable
     }
 
     // activity null clears this application's presence.
-    public async Task<DiscordSendResult> SetActivity(int pid, JsonObject? activity, CancellationToken token)
+    public Task<DiscordSendResult> SetActivity(int pid, JsonObject? activity, CancellationToken token) =>
+        Command("SET_ACTIVITY", new JsonObject { ["pid"] = pid, ["activity"] = activity?.DeepClone() }, null, token);
+    public Task<DiscordSendResult> Subscribe(string evt, CancellationToken token) => Command("SUBSCRIBE", null, evt, token);
+    // Any RPC command; the reply is matched by nonce.
+    public async Task<DiscordSendResult> Command(string cmd, JsonObject? args, string? evt, CancellationToken token)
     {
         Stream? current; lock (gate) current = stream;
         if (current is null) { lastError = "not connected"; return DiscordSendResult.Failed; }
@@ -139,12 +146,9 @@ sealed class DiscordIpcClient : IAsyncDisposable
         lock (gate) pending[id] = response;
         try
         {
-            var payload = new JsonObject
-            {
-                ["cmd"] = "SET_ACTIVITY",
-                ["args"] = new JsonObject { ["pid"] = pid, ["activity"] = activity?.DeepClone() },
-                ["nonce"] = id,
-            }.ToJsonString();
+            var message = new JsonObject { ["cmd"] = cmd, ["args"] = args ?? new JsonObject(), ["nonce"] = id };
+            if (evt is not null) message["evt"] = evt;
+            var payload = message.ToJsonString();
             if (!await Write(current, DiscordFrames.Frame, payload, token)) { lastError = "write failed"; await Disconnect(false); return DiscordSendResult.Failed; }
             var finished = await Task.WhenAny(response.Task, Task.Delay(timeout, token));
             if (finished != response.Task) { lastError = "no reply within timeout"; await Disconnect(false); return DiscordSendResult.Failed; }
@@ -186,6 +190,12 @@ sealed class DiscordIpcClient : IAsyncDisposable
                 var cmd = root.TryGetProperty("cmd", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString() : null;
                 var evt = root.TryGetProperty("evt", out var e) && e.ValueKind == JsonValueKind.String ? e.GetString() : null;
                 if (cmd == "DISPATCH" && evt == "READY") { lock (gate) ready?.TrySetResult(true); continue; }
+                if (cmd == "DISPATCH" && evt is not null)
+                {
+                    var data = root.TryGetProperty("data", out var d) ? d.Clone() : default;
+                    try { Dispatch?.Invoke(evt, data); } catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or KeyNotFoundException) { }
+                    continue;
+                }
                 if (root.TryGetProperty("nonce", out var n) && n.ValueKind == JsonValueKind.String)
                 {
                     TaskCompletionSource<bool>? waiter;

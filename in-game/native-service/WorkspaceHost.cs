@@ -50,6 +50,7 @@ sealed class WorkspaceHost : IAsyncDisposable
     public string Url { get; private set; } = "";
     public void Update(string json) => Volatile.Write(ref data, json);
     readonly Multiplayer.MultiplayerService multiplayer;
+    public Multiplayer.MultiplayerService MultiplayerLobby => multiplayer;
     public WorkspaceHost(Hub hub, string output, string? historyPath = null, NativeSettings? settings = null, CsvHistory? csvHistory = null, DiscordSettings? discordSettings = null, Func<object>? discordStatus = null, string[]? args = null)
     {
         outputFolder = output;

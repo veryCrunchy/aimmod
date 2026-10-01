@@ -2,6 +2,7 @@ using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using AimMod.InGame.Multiplayer;
 
 namespace AimMod.InGame;
 
@@ -18,6 +19,14 @@ static class DiscordPresenceChecks
         public readonly string Prefix = "aimmod-check-" + Guid.NewGuid().ToString("N") + "-";
         public readonly List<JsonObject?> Activities = [];
         public readonly List<int> Pids = [];
+        public readonly List<string> Commands = [];
+        static readonly SemaphoreSlim writing = new(1, 1);
+        // Sends a DISPATCH event to the connected client, as Discord does.
+        public async Task Push(string evt, string data)
+        {
+            var s = current ?? throw new InvalidOperationException("No client connected.");
+            await Send(s, DiscordFrames.Frame, "{\"cmd\":\"DISPATCH\",\"evt\":\"" + evt + "\",\"data\":" + data + "}");
+        }
         public string? ClientId;
         public int Connections, Closes, Pongs;
         public bool RejectSteamButtons, PingFirst, RejectHandshake;
@@ -43,7 +52,7 @@ static class DiscordPresenceChecks
                 finally { current = null; await pipe.DisposeAsync(); }
             }
         }
-        static async Task Send(Stream s, int op, string json) { await s.WriteAsync(DiscordFrames.Encode(op, json)); await s.FlushAsync(); }
+        static async Task Send(Stream s, int op, string json) { await writing.WaitAsync(); try { await s.WriteAsync(DiscordFrames.Encode(op, json)); await s.FlushAsync(); } finally { writing.Release(); } }
         async Task Session(Stream s)
         {
             var hello = await DiscordFrames.Read(s, stop.Token);
@@ -60,6 +69,12 @@ static class DiscordPresenceChecks
                 if (frame.Value.Opcode == DiscordFrames.Close) { lock (Activities) Closes++; return; }
                 var message = JsonNode.Parse(frame.Value.Json)!.AsObject();
                 var nonce = message["nonce"]!.GetValue<string>();
+                if (message["cmd"]?.GetValue<string>() is { } cmd && cmd != "SET_ACTIVITY")
+                {
+                    lock (Activities) Commands.Add(cmd + (message["evt"] is { } e ? " " + e.GetValue<string>() : "") + (message["args"]?["user_id"] is { } u ? " " + u.GetValue<string>() : ""));
+                    await Send(s, DiscordFrames.Frame, "{\"cmd\":\"" + cmd + "\",\"data\":{},\"evt\":null,\"nonce\":\"" + nonce + "\"}");
+                    continue;
+                }
                 var activity = message["args"]!["activity"] as JsonObject;
                 var rejected = RejectSteamButtons && activity?["buttons"]?.AsArray().Any(b => b!["url"]!.GetValue<string>().StartsWith("steam:")) == true;
                 if (!rejected) lock (Activities) { Activities.Add(activity?.DeepClone().AsObject()); Pids.Add(message["args"]!["pid"]!.GetValue<int>()); }
@@ -181,6 +196,50 @@ static class DiscordPresenceChecks
         Check(DiscordActivityBuilder.Build(new(Live(), false, emptySession, "synthetic-player", now.AddSeconds(2)), defaults) with { State = playing.State } is var drift && drift.SameContent(playing), "Timer drift within three seconds is not a change");
         Check(paused.Structural(playing), "Pause is a structural change");
 
+        // Multiplayer: lobby, match and results.
+        var lobbyInfo = new DiscordLobbyInfo("aimmod-0123456789abcdef01234567", 2, 4, "Score race", "Synthetic Track", "lobby", null, null, null, null, null, null, "aimmod1:" + new string('a', 40));
+        var inLobby = DiscordActivityBuilder.Build(new(Live(active: false), false, emptySession, "synthetic-player", now, Lobby: lobbyInfo), defaults);
+        Check(inLobby.Details == "In lobby · 2/4 · Score race" && inLobby.State == "Synthetic Track" && inLobby.Party == new DiscordParty(lobbyInfo.PartyId, 2, 4), "Lobby shows size, mode and scenario with a party");
+        var lobbyJson = inLobby.ToJson();
+        Check(lobbyJson["party"]!["size"]!.AsArray().Select(n => n!.GetValue<int>()).SequenceEqual([2, 4]) && lobbyJson["secrets"]!["join"]!.GetValue<string>() == lobbyInfo.JoinSecret, "Party size and join secret are sent");
+        Check(lobbyJson["buttons"] is null, "No buttons alongside a join secret");
+        var noJoin = DiscordActivityBuilder.Build(new(Live(active: false), false, emptySession, "synthetic-player", now, Lobby: lobbyInfo), defaults with { ShowJoin = false }).ToJson();
+        Check(noJoin["secrets"] is null && noJoin["buttons"]!.AsArray().Count == 1 && noJoin["party"] is not null, "Join can be turned off; the Hub button returns");
+        Check(DiscordActivityBuilder.Build(new(Live(), false, emptySession, null, now, Lobby: lobbyInfo), defaults with { ShowLobby = false }) is { Phase: "playing", Party: null, JoinSecret: null }, "Lobby details can be hidden");
+        var leading = DiscordActivityBuilder.Build(new(Live(), false, emptySession, null, now, Lobby: lobbyInfo with { State = "match", Round = 2, TotalRounds = 4, Lead = 1200, JoinSecret = null }), defaults);
+        Check(leading.Phase == "match:2" && leading.Details == "Score race · Synthetic Track" && leading.State == "Round 2/4 · Leading by 1,200" && leading.End == now.ToUnixTimeSeconds() + 42, "Match: round, lead, mode and scenario with the round timer");
+        Check(DiscordActivityBuilder.Build(new(Live(), false, emptySession, null, now, Lobby: lobbyInfo with { State = "match", Round = 2, TotalRounds = 4, Lead = -300 }), defaults).State == "Round 2/4 · Trailing by 300", "Trailing");
+        Check(DiscordActivityBuilder.Build(new(Live(), false, emptySession, null, now, Lobby: lobbyInfo with { State = "match", Round = 1, TotalRounds = 1, Lead = 0 }), defaults).State == "Round 1/1 · Tied", "Tied");
+        Check(DiscordActivityBuilder.Build(new(Live(), false, emptySession, null, now, Lobby: lobbyInfo with { Mode = "Duel", State = "match", Round = 3, FirstTo = 3 }), defaults).State == "Round 3 · First to 3 · Score 812.5", "Duel rounds without a lead show the score");
+        Check(DiscordActivityBuilder.Build(new(Live(), false, emptySession, null, now, Lobby: lobbyInfo with { State = "match", Round = 3, TotalRounds = 4 }), defaults).Structural(leading), "A new round is sent promptly");
+        Check(DiscordActivityBuilder.Build(new(Menu, false, emptySession, null, now, Lobby: lobbyInfo with { State = "results", Won = true }), defaults).State == "Won the match", "Match won");
+        Check(DiscordActivityBuilder.Build(new(Menu, false, emptySession, null, now, Lobby: lobbyInfo with { State = "results", Won = false, Place = 2 }), defaults).State == "Finished 2nd of 2", "Match placing");
+        Check(DiscordActivityBuilder.Build(new(Menu, true, emptySession, null, now, Lobby: lobbyInfo), defaults).Phase == "replay", "Watching a replay outranks the lobby");
+        // Summary from a lobby lobbySnap, and secret resolution.
+        const string steamLobby = "109775240000000001", hostPeer = "76561198000000001", guest = "76561198000000002";
+        LobbyMember Member(string id, string name) => new(id, name, MemberRoles.Player, true, 20, ContentStates.Ok, ContentStates.Ok, ContentStates.None, Connections.Connected, "relay", 0, false);
+        var settingsMp = new LobbySettings(Scenario: new ScenarioChoice("Synthetic Track", "0123456789abcdef", "Map", "0123456789abcdef", 60), MaxPlayers: 4);
+        var lobbySnap = new LobbySnapshot(1, "l-00112233aabbccdd", "ABC234", 1, hostPeer, settingsMp, [Member(hostPeer, "Host"), Member(guest, "Guest")], null, [], 0);
+        var summarized = MultiplayerDiscord.Summarize(lobbySnap, guest, steamLobby);
+        Check(summarized is { Players: 2, MaxPlayers: 4, Mode: "Score race", State: "lobby", Scenario: "Synthetic Track" } && summarized.JoinSecret is not null, "Lobby summary");
+        var exposed = string.Join("|", summarized.PartyId, summarized.JoinSecret);
+        Check(!exposed.Contains(steamLobby) && !exposed.Contains(hostPeer) && !exposed.Contains(guest) && !exposed.Contains("00112233aabbccdd") && !exposed.Contains("ABC234"), "Party id and secret carry no Steam id, lobby id or room code");
+        Check(summarized.PartyId == MultiplayerDiscord.Summarize(lobbySnap, hostPeer, steamLobby).PartyId && summarized.PartyId.Length <= 128, "Party id is stable for every member");
+        Check(MultiplayerDiscord.Summarize(lobbySnap with { Settings = settingsMp with { Privacy = LobbyPrivacy.Invite } }, guest, steamLobby).JoinSecret is null, "Invite-only lobbies offer no join");
+        Check(MultiplayerDiscord.Summarize(lobbySnap with { Settings = settingsMp with { MaxPlayers = 2 } }, guest, steamLobby).JoinSecret is null, "Full lobbies offer no join");
+        Check(MultiplayerDiscord.Summarize(lobbySnap, guest, null).JoinSecret is null, "No Steam lobby, no join");
+        var friends = new[] { new FriendEntry("f1", "Friend", "aimmod-lobby", null, "109775240000000999", true), new FriendEntry("f2", "Friend 2", "aimmod-lobby", null, steamLobby, true) };
+        Check(MultiplayerDiscord.Resolve(summarized.JoinSecret!, friends) == steamLobby, "Join secret resolves to the friend's Steam lobby");
+        Check(MultiplayerDiscord.Resolve(summarized.JoinSecret!, [friends[0], friends[1] with { Joinable = false }]) is null, "Only joinable friend lobbies resolve");
+        Check(MultiplayerDiscord.Resolve("aimmod1:zz", friends) is null && MultiplayerDiscord.Resolve(steamLobby, friends) is null, "Malformed secrets never resolve");
+        var live2 = new MatchSnapshot("m-1", MatchPhases.Live, LobbyModes.Race, "Synthetic Track", 60, 2, 3, null, null, null, null, [hostPeer, guest],
+            [new ScoreLine(hostPeer, 1000, 30, 30, 10, 9, 3, LineStates.Playing, false), new ScoreLine(guest, 2200, 30, 30, 10, 9, 3, LineStates.Playing, false)], [], [], null, []);
+        var inMatch = MultiplayerDiscord.Summarize(lobbySnap with { Match = live2 }, guest, steamLobby);
+        Check(inMatch is { State: "match", Round: 2, TotalRounds: 3, Lead: 1200 } && inMatch.JoinSecret is null, "Live round lead against the best other player; no join mid-match");
+        Check(MultiplayerDiscord.Summarize(lobbySnap with { Match = live2 }, hostPeer, steamLobby).Lead == -1200, "The other side trails");
+        var final = live2 with { Phase = MatchPhases.Final, WinnerId = guest, Standings = [new Standing(guest, "Guest", 1, 2, 6, 2200, 4000, 3), new Standing(hostPeer, "Host", 2, 1, 3, 1500, 3000, 3)] };
+        Check(MultiplayerDiscord.Summarize(lobbySnap with { Match = final }, guest, steamLobby) is { State: "results", Won: true, Place: 1 }, "Final standing");
+
         // Settings store.
         var folder = Path.Combine(Path.GetTempPath(), "aimmod-discord-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(folder);
@@ -189,9 +248,12 @@ static class DiscordPresenceChecks
             var store = new DiscordSettings(folder);
             DiscordSettingsValue Apply(string text) => store.ApplyJson(Encoding.UTF8.GetBytes(text));
             Check(store.Current == new DiscordSettingsValue(), "Presence is on with every detail by default");
+            Check(DiscordSettings.Decode("AIMMOD_DISCORD_1\ndiscordPresenceEnabled\t1\ndiscordShowScore\t0\ndiscordShowPersonalBest\t1\ndiscordShowHubButton\t1\n") == new DiscordSettingsValue(true, false, true, true, true, true), "Version 1 settings still load, with lobby and join on");
+            Check(DiscordSettings.Encode(new DiscordSettingsValue(ShowJoin: false)).StartsWith("AIMMOD_DISCORD_2\n") && DiscordSettings.Decode(DiscordSettings.Encode(new DiscordSettingsValue(ShowJoin: false))).ShowJoin == false, "Version 2 round trip");
             Check(DiscordSettings.Decode(File.ReadAllText(Path.Combine(folder, "discord-settings.tsv"))) == store.Current, "Saved file matches the API");
             Check(!File.Exists(Path.Combine(folder, "native-settings.tsv")), "Native settings file format is left untouched");
             Check(Apply("{\"discordShowScore\":false}") == new DiscordSettingsValue(true, false, true, true), "Patch changes one option");
+            Check(Apply("{\"discordShowLobby\":false,\"discordShowJoin\":false}") == new DiscordSettingsValue(true, false, true, true, false, false) && Apply("{\"discordShowLobby\":true,\"discordShowJoin\":true}").ShowJoin, "Lobby and join options patch");
             Check(new DiscordSettings(folder).Current == store.Current, "Options survive restart");
             foreach (var invalid in new[] { "{}", "[]", "{\"discordShowScore\":1}", "{\"discordPresenceEnabled\":true,\"discordPresenceEnabled\":false}", "{\"replayRecordingEnabled\":false}", "{\"DiscordShowScore\":true}" })
             {
@@ -287,6 +349,40 @@ static class DiscordPresenceChecks
             Check(logged.Any(l => l.StartsWith("disconnected from Discord (game reports Game)")) && logged.Contains("handoff request withdrawn"), "Log records hand-back");
         }
         finally { Directory.Delete(output, true); }
+
+        // Host: lobby presence, Discord joins and ask-to-join requests.
+        var mpOutput = Path.Combine(Path.GetTempPath(), "aimmod-discord-mp-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(mpOutput);
+        try
+        {
+            await using var fake = new FakeDiscord();
+            var mpClock = now; var joins = new List<string>(); var lines = new List<string>();
+            var current = new DiscordLobbyInfo("aimmod-0123456789abcdef01234567", 2, 4, "Score race", "Synthetic Track", "lobby", null, null, null, null, null, null, "aimmod1:" + new string('b', 40));
+            await using var host = new DiscordPresenceHost(mpOutput, new DiscordSettings(mpOutput), () => Menu, () => false, () => null,
+                new DiscordNamedPipe(fake.Prefix, 1), () => mpClock, () => 4242, TimeSpan.FromHours(1), log: l => { lock (lines) lines.Add(l); },
+                lobby: () => current, join: secret => { joins.Add(secret); return (true, ""); });
+            File.WriteAllText(Path.Combine(mpOutput, DiscordHandoff.GameFile), $"AIMMOD_DISCORD_GAME_1\treleased\t{mpClock.ToUnixTimeSeconds()}\n");
+            await host.Step(CancellationToken.None);
+            Check(fake.Commands.Contains("SUBSCRIBE ACTIVITY_JOIN") && fake.Commands.Contains("SUBSCRIBE ACTIVITY_JOIN_REQUEST"), "Subscribes to Discord join events");
+            Check(fake.Activities.Count == 1 && fake.Activities[0]!["secrets"]!["join"]!.GetValue<string>() == current.JoinSecret && fake.Activities[0]!["party"] is not null, "Lobby presence published with party and join secret");
+            await fake.Push("ACTIVITY_JOIN", "{\"secret\":\"aimmod1:" + new string('c', 40) + "\"}");
+            await fake.Push("ACTIVITY_JOIN_REQUEST", "{\"user\":{\"id\":\"123456789012345678\",\"username\":\"synthetic\"}}");
+            await Task.Delay(200);
+            mpClock = mpClock.AddSeconds(1);
+            File.WriteAllText(Path.Combine(mpOutput, DiscordHandoff.GameFile), $"AIMMOD_DISCORD_GAME_1\treleased\t{mpClock.ToUnixTimeSeconds()}\n");
+            await host.Step(CancellationToken.None);
+            Check(joins.SequenceEqual(["aimmod1:" + new string('c', 40)]), "ACTIVITY_JOIN hands the secret to the lobby service");
+            Check(fake.Commands.Contains("SEND_ACTIVITY_JOIN_INVITE 123456789012345678"), "Ask to Join is accepted while the lobby is joinable");
+            current = current with { JoinSecret = null };
+            await fake.Push("ACTIVITY_JOIN_REQUEST", "{\"user\":{\"id\":\"123456789012345678\"}}");
+            await Task.Delay(200);
+            mpClock = mpClock.AddSeconds(1);
+            File.WriteAllText(Path.Combine(mpOutput, DiscordHandoff.GameFile), $"AIMMOD_DISCORD_GAME_1\treleased\t{mpClock.ToUnixTimeSeconds()}\n");
+            await host.Step(CancellationToken.None);
+            Check(fake.Commands.Contains("CLOSE_ACTIVITY_REQUEST 123456789012345678"), "Ask to Join is declined when the lobby is not joinable");
+            lock (lines) Check(!lines.Any(l => l.Contains("123456789012345678") || l.Contains("synthetic")) && lines.Any(l => l.StartsWith("ask-to-join request (user redacted)")), "Join requests are logged without the Discord user");
+        }
+        finally { Directory.Delete(mpOutput, true); }
 
         // Workspace endpoints.
         var web = Path.Combine(Path.GetTempPath(), "aimmod-discord-web-" + Guid.NewGuid().ToString("N"));

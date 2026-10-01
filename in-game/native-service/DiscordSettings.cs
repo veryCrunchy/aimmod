@@ -11,7 +11,9 @@ sealed record DiscordSettingsValue(
     [property: JsonPropertyName("discordPresenceEnabled")] bool Enabled = true,
     [property: JsonPropertyName("discordShowScore")] bool ShowScore = true,
     [property: JsonPropertyName("discordShowPersonalBest")] bool ShowPersonalBest = true,
-    [property: JsonPropertyName("discordShowHubButton")] bool ShowHubButton = true);
+    [property: JsonPropertyName("discordShowHubButton")] bool ShowHubButton = true,
+    [property: JsonPropertyName("discordShowLobby")] bool ShowLobby = true,
+    [property: JsonPropertyName("discordShowJoin")] bool ShowJoin = true);
 
 // Stored next to native-settings.tsv in its own file: that file's exact
 // four-line format is also parsed by the Lua mod and AimModCore, so it is left
@@ -20,8 +22,10 @@ sealed record DiscordSettingsValue(
 sealed class DiscordSettings
 {
     const int Limit = 1024;
-    const string Header = "AIMMOD_DISCORD_1";
-    static readonly string[] Keys = ["discordPresenceEnabled", "discordShowScore", "discordShowPersonalBest", "discordShowHubButton"];
+    // Version 2 adds the lobby/match and join options; version 1 files still load.
+    const string Header = "AIMMOD_DISCORD_2", HeaderV1 = "AIMMOD_DISCORD_1";
+    static readonly string[] Keys = ["discordPresenceEnabled", "discordShowScore", "discordShowPersonalBest", "discordShowHubButton", "discordShowLobby", "discordShowJoin"];
+    const int KeysV1 = 4;
     readonly object gate = new();
     readonly string path;
     DiscordSettingsValue current;
@@ -39,9 +43,10 @@ sealed class DiscordSettings
             current = Decode(File.ReadAllText(path, new UTF8Encoding(false, true)));
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or DecoderFallbackException)
-        { current = new(false, false, false, false); ReadFailed = true; }
+        { current = new(false, false, false, false, false, false); ReadFailed = true; }
     }
-    static bool[] Flags(DiscordSettingsValue v) => [v.Enabled, v.ShowScore, v.ShowPersonalBest, v.ShowHubButton];
+    static bool[] Flags(DiscordSettingsValue v) => [v.Enabled, v.ShowScore, v.ShowPersonalBest, v.ShowHubButton, v.ShowLobby, v.ShowJoin];
+    static DiscordSettingsValue From(bool[] f) => new(f[0], f[1], f[2], f[3], f[4], f[5]);
     internal static string Encode(DiscordSettingsValue value)
     {
         var flags = Flags(value);
@@ -52,11 +57,12 @@ sealed class DiscordSettings
     internal static DiscordSettingsValue Decode(string text)
     {
         var rows = text.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
-        if (rows.Length != Keys.Length + 2 || rows[0] != Header || rows[^1] != "") throw new InvalidDataException("Invalid Discord settings format.");
-        var flags = new bool[Keys.Length];
-        for (var i = 0; i < Keys.Length; i++)
+        var count = rows.Length > 0 && rows[0] == HeaderV1 ? KeysV1 : Keys.Length;
+        if (rows.Length != count + 2 || rows[0] != (count == KeysV1 ? HeaderV1 : Header) || rows[^1] != "") throw new InvalidDataException("Invalid Discord settings format.");
+        var flags = Flags(new DiscordSettingsValue());
+        for (var i = 0; i < count; i++)
             flags[i] = rows[i + 1] == Keys[i] + "\t1" ? true : rows[i + 1] == Keys[i] + "\t0" ? false : throw new InvalidDataException("Invalid Discord settings value.");
-        return new(flags[0], flags[1], flags[2], flags[3]);
+        return From(flags);
     }
     public DiscordSettingsValue ApplyJson(ReadOnlyMemory<byte> json)
     {
@@ -76,7 +82,7 @@ sealed class DiscordSettings
         {
             var flags = Flags(current);
             for (var i = 0; i < flags.Length; i++) flags[i] = patch[i] ?? flags[i];
-            var next = new DiscordSettingsValue(flags[0], flags[1], flags[2], flags[3]);
+            var next = From(flags);
             if (next != current || ReadFailed) Write(next);
             current = next; ReadFailed = false;
             return next;
