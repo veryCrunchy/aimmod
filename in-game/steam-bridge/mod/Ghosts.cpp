@@ -653,6 +653,12 @@ namespace aimmod
                 if (dev.walk && !dev.walkers.empty())
                 {
                     // Several simulated lobby players: each walks between its side's spawns, feet on the floor.
+                    if (now >= m_nextTraceLog && m_floorTraces > 0)
+                    {
+                        m_nextTraceLog = now + 30.0;
+                        m_log("avatars: walker traces: floor " + std::to_string(m_floorHits) + "/" + std::to_string(m_floorTraces) + " found, walls " +
+                              std::to_string(m_wallHits) + "/" + std::to_string(m_wallTraces) + " blocked");
+                    }
                     for (const auto& w : dev.walkers)
                     {
                         DevWalk& walk = m_walkers[w.peer];
@@ -668,16 +674,29 @@ namespace aimmod
                         const auto floor = [&](double fx, double fy, double fz) -> std::optional<double> {
                             const double a[3]{fx, fy, fz}, b[3]{fx, fy, fz - 3000};
                             const auto hit = Trace(character, a, b, pawn, character);
+                            ++m_floorTraces;
+                            if (hit) ++m_floorHits;
                             return hit ? std::optional<double>((*hit)[2]) : std::nullopt;
                         };
                         const auto clear = [&](double ax, double ay, double az, double bx, double by, double bz) {
                             const double a[3]{ax, ay, az}, b[3]{bx, by, bz};
-                            return !Trace(character, a, b, pawn, character).has_value();
+                            const bool blocked = Trace(character, a, b, pawn, character).has_value();
+                            ++m_wallTraces;
+                            if (blocked) ++m_wallHits;
+                            return !blocked;
                         };
-                        if (std::exchange(m_ghosts[w.peer].respawned, false)) walk.walker.PlaceRandom(bridge::ghost::DefaultHalfHeight, floor);
+                        const bool wasPlaced = walk.walker.placed;
+                        // The avatar's own capsule half-height, so its feet (not a default body) touch the floor.
+                        double half = bridge::ghost::DefaultHalfHeight;
+                        if (UObject* capsule = pawn && m_capsule.ok() ? m_capsule.Object(pawn) : nullptr)
+                            if (auto h = m_capsuleHalfHeight.Number(capsule); h && *h > 20 && *h < 400) half = *h;
+                        if (std::exchange(m_ghosts[w.peer].respawned, false)) walk.walker.PlaceRandom(half, floor);
                         const double dt = walk.at < 0 ? 0 : now - walk.at;
                         walk.at = now;
-                        const Sample ws = walk.walker.Step(now, dt, bridge::ghost::DefaultHalfHeight, floor, clear);
+                        const Sample ws = walk.walker.Step(now, dt, half, floor, clear);
+                        if (!wasPlaced && walk.walker.placed)
+                            m_log("avatars: simulated player " + std::to_string(w.peer) + " placed at spawn " + std::to_string(walk.walker.at) + " z=" +
+                                  std::to_string(static_cast<int>(walk.walker.z)) + (walk.walker.grounded ? " on the traced floor" : " (no floor found yet: waiting there)"));
                         seen[w.peer] = true;
                         Show(w.peer, m_ghosts[w.peer], ws, world, character);
                     }
@@ -796,7 +815,8 @@ namespace aimmod
             // By object type (the map's static and dynamic geometry), whatever their Visibility response:
             // map-creator pieces don't all block the Visibility channel. The channel trace is the fallback.
             m_traceForObjects = m_lineTrace.BindPath(STR("/Script/Engine.KismetSystemLibrary:LineTraceSingleForObjects"), Shape::Command);
-            if (!m_traceForObjects) m_lineTrace.BindPath(STR("/Script/Engine.KismetSystemLibrary:LineTraceSingle"), Shape::Command);
+            m_lineTraceChannel.BindPath(STR("/Script/Engine.KismetSystemLibrary:LineTraceSingle"), Shape::Command);
+            if (!m_traceForObjects) m_lineTrace = m_lineTraceChannel;
             m_kismetDefault = UObjectGlobals::StaticFindObject<UObject*>(nullptr, nullptr, STR("/Script/Engine.Default__KismetSystemLibrary"));
             for (const Param& p : m_lineTrace.params())
                 if (p.out && p.structType && p.name == "OutHit")
@@ -812,48 +832,53 @@ namespace aimmod
         TArray<AActor*> ignore;
         if (ignore1) ignore.Add(static_cast<AActor*>(ignore1));
         if (ignore2) ignore.Add(static_cast<AActor*>(ignore2));
-        TArray<std::uint8_t> objectTypes; // EObjectTypeQuery: 0 WorldStatic, 1 WorldDynamic
-        objectTypes.Add(0);
-        objectTypes.Add(1);
-        bool hit = false;
-        std::array<double, 3> point{};
-        bool startedInside = false;
-        int vectors = 0;
-        m_lineTrace.Call(
-            m_kismetDefault,
-            [&](std::uint8_t* value, const Param& p) {
-                if (p.worldContext) std::memcpy(value, &context, sizeof(context));
-                else if (p.kind == Kind::Vector && vectors < 2)
-                {
-                    const double* v = vectors++ == 0 ? a : b;
-                    WriteFloats(value, p, v[0], v[1], v[2]);
-                }
-                else if (p.kind == Kind::Array && p.name == "ActorsToIgnore") std::memcpy(value, &ignore, sizeof(ignore));
-                else if (p.kind == Kind::Array && p.name == "ObjectTypes") std::memcpy(value, &objectTypes, sizeof(objectTypes));
-                else if (p.kind == Kind::Bool && p.boolProperty) p.boolProperty->SetPropertyValue(value, p.name == "bIgnoreSelf");
-                // TraceChannel 0 = Visibility, DrawDebugType 0 = none, colours and DrawTime zero.
-            },
-            [&](const std::uint8_t* buffer, const std::vector<Param>& params) {
-                for (const Param& p : params)
-                {
-                    if (p.ret && p.boolProperty) hit = p.boolProperty->GetPropertyValue(const_cast<std::uint8_t*>(buffer) + p.offset);
-                    else if (p.out && p.name == "OutHit")
+        // Every object type but pawns (2): KovaaK's map pieces may use a custom object channel.
+        TArray<std::uint8_t> objectTypes;
+        for (std::uint8_t t = 0; t < 32; ++t)
+            if (t != 2) objectTypes.Add(t);
+        // One trace with `fn`; nullopt without a hit or when it starts inside geometry.
+        const auto run = [&](const game::Getter& fn) -> std::optional<std::array<double, 3>> {
+            bool hit = false, startedInside = false;
+            std::array<double, 3> point{};
+            int vectors = 0;
+            fn.Call(
+                m_kismetDefault,
+                [&](std::uint8_t* value, const Param& p) {
+                    if (p.worldContext) std::memcpy(value, &context, sizeof(context));
+                    else if (p.kind == Kind::Vector && vectors < 2)
                     {
-                        float f[3];
-                        std::memcpy(f, buffer + p.offset + m_hitImpactOffset, sizeof(f));
-                        point = {f[0], f[1], f[2]};
-                        if (m_hitStartPenetrating && m_hitStartPenetrating->GetPropertyValue(const_cast<std::uint8_t*>(buffer) + p.offset + m_hitStartPenetrating->GetOffset_Internal()))
-                            startedInside = true;
+                        const double* v = vectors++ == 0 ? a : b;
+                        WriteFloats(value, p, v[0], v[1], v[2]);
                     }
-                }
-            });
+                    else if (p.kind == Kind::Array && p.name == "ActorsToIgnore") std::memcpy(value, &ignore, sizeof(ignore));
+                    else if (p.kind == Kind::Array && p.name == "ObjectTypes") std::memcpy(value, &objectTypes, sizeof(objectTypes));
+                    else if (p.kind == Kind::Bool && p.boolProperty) p.boolProperty->SetPropertyValue(value, p.name == "bIgnoreSelf");
+                    // TraceChannel 0 = Visibility, DrawDebugType 0 = none, colours and DrawTime zero.
+                },
+                [&](const std::uint8_t* buffer, const std::vector<Param>& params) {
+                    for (const Param& p : params)
+                    {
+                        if (p.ret && p.boolProperty) hit = p.boolProperty->GetPropertyValue(const_cast<std::uint8_t*>(buffer) + p.offset);
+                        else if (p.out && p.name == "OutHit")
+                        {
+                            float f[3];
+                            std::memcpy(f, buffer + p.offset + m_hitImpactOffset, sizeof(f));
+                            point = {f[0], f[1], f[2]};
+                            if (m_hitStartPenetrating && m_hitStartPenetrating->GetPropertyValue(const_cast<std::uint8_t*>(buffer) + p.offset + m_hitStartPenetrating->GetOffset_Internal()))
+                                startedInside = true;
+                        }
+                    }
+                });
+            if (!hit || startedInside) return std::nullopt;
+            return point;
+        };
+        // By object type first; what that misses, the Visibility channel may still see.
+        auto found = run(m_lineTrace);
+        if (!found && m_traceForObjects && m_lineTraceChannel.ok()) found = run(m_lineTraceChannel);
         // The parameter copies of the lists are plain memory; `ignore` and `objectTypes` free their buffers.
         ++m_traceCount;
-        if (hit) ++m_traceHits;
-        if (m_traceCount == 60)
-            m_log("avatars: line traces: " + std::to_string(m_traceHits) + " of 60 hit something" + (m_traceHits == 0 ? " (the walker can't see the floor)" : ""));
-        if (!hit || startedInside) return std::nullopt;
-        return point;
+        if (found) ++m_traceHits;
+        return found;
     }
 
     // The scenario's own instance of the helper bot (not one of our avatars): hidden, no

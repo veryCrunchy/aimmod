@@ -33,6 +33,7 @@ namespace bridge::ghost
         double x = 0, y = 0, z = 0, yaw = 0;
         bool placed = false;
         bool grounded = false; // the current z came from a floor trace (never shown floating once true)
+        double nextChoose = 0;
         int target = -1, at = -1, blocked = 0;
         double walkedFor = 0, nextCrouch = 6, crouchUntil = -1, nextJump = 14, jumpStart = -1;
         std::uint32_t seed = 0x2468ace1u;
@@ -69,21 +70,41 @@ namespace bridge::ghost
             return !spawns.empty() && Place(static_cast<int>(Next() % spawns.size()), halfHeight, floor);
         }
 
-        // The next spawn to walk to: a random other one in clear sight (waist height), else any other.
-        void Choose(const Clear& clear)
+        static constexpr double SegmentProbe = 100; // cm between floor probes along a walk segment
+        static constexpr double FootAbove = 30;     // the foot-height line checked for walls, above the floor
+
+        // A straight walk from here to (gx, gy): floor under every probe, no step up over StepUp or down
+        // over StepDown between probes, and nothing solid across the line at foot height.
+        bool Walkable(double gx, double gy, double halfHeight, const Floor& floor, const Clear& clear) const
+        {
+            const double d = std::hypot(gx - x, gy - y);
+            const int n = std::max(1, static_cast<int>(std::ceil(d / SegmentProbe)));
+            double px = x, py = y, feet = z - halfHeight;
+            for (int k = 1; k <= n; ++k)
+            {
+                const double u = static_cast<double>(k) / n, qx = x + (gx - x) * u, qy = y + (gy - y) * u;
+                const auto f = floor(qx, qy, feet + halfHeight + StepUp);
+                if (!f || *f > feet + StepUp || *f < feet - StepDown) return false;
+                if (!clear(px, py, feet + FootAbove, qx, qy, *f + FootAbove)) return false;
+                px = qx; py = qy; feet = *f;
+            }
+            return true;
+        }
+
+        // The next spawn to walk to: a random other one reachable in a straight walkable line; none
+        // reachable: stay (and try again later).
+        void Choose(const Clear& clear, const Floor& floor, double halfHeight)
         {
             const int n = static_cast<int>(spawns.size());
-            if (n < 2) { target = -1; return; }
-            int fallback = -1;
-            for (int tries = 0; tries < 2 * n; ++tries)
+            target = -1;
+            if (n < 2 || !grounded) return;
+            for (int tries = 0; tries < std::min(2 * n, 24); ++tries)
             {
                 const int i = static_cast<int>(Next() % static_cast<std::uint32_t>(n));
                 if (i == at) continue;
-                if (fallback < 0) fallback = i;
                 const auto& s = spawns[static_cast<std::size_t>(i)];
-                if (clear(x, y, z + WaistAbove, s[0], s[1], s[2] + WaistAbove)) { target = i; return; }
+                if (Walkable(s[0], s[1], halfHeight, floor, clear)) { target = i; return; }
             }
-            target = fallback;
         }
 
         // One step of `dt` seconds at time `now` (seconds). Never moves through a wall, off a
@@ -103,7 +124,11 @@ namespace bridge::ghost
                     grounded = true;
                 }
             }
-            if (target < 0) Choose(clear);
+            if (target < 0 && now >= nextChoose)
+            {
+                Choose(clear, floor, halfHeight);
+                if (target < 0) nextChoose = now + 1.0; // nothing reachable from here: look again in a second
+            }
             double vx = 0, vy = 0;
             if (target >= 0 && grounded)
             {
