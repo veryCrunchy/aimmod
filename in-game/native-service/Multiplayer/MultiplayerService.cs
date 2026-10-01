@@ -521,7 +521,7 @@ sealed partial class MultiplayerService : IDisposable
         var info = w.Scenario is null ? null : library.Scenarios.FirstOrDefault(s => s.Name.Equals(w.Scenario, StringComparison.OrdinalIgnoreCase));
         var meta = poseMeta is { } m && string.Equals(m.Scenario, w.Scenario, StringComparison.OrdinalIgnoreCase) ? m : ((string, string, double)?)null;
         return new { peer = w.Peer, name = w.Name, scenario = w.Scenario, state = w.State, message = w.Message,
-            mapName = meta?.Item2 ?? info?.Map, mapScale = meta?.Item3 ?? info?.MapScale ?? 1, score = watchScore,
+            mapName = meta?.Item2 ?? info?.Map, mapScale = meta?.Item3 ?? info?.MapScale ?? 1, score = watchScore, stream = spectateStreams.GetValueOrDefault(w.Peer),
             workshop = Friends().FirstOrDefault(f => f.Id == w.Peer)?.Workshop is not null,
             download = watchDownload is { State: not "idle" } d && w.State is "downloading" or "missing" ? d.View() : null,
             others = Friends().Where(f => f.Spectatable && f.Id != w.Peer).Take(5).Select(f => new { f.Id, f.Name }) };
@@ -706,7 +706,7 @@ sealed partial class MultiplayerService : IDisposable
         if (member is null) return LobbyResult.Fail("invalid", "Choose another player.");
         if (member.Simulated) return LobbyResult.Fail("simulated", "Simulated players have no camera to follow.");
         if (!transport.StartSpectate(member.Id, 60)) return LobbyResult.Fail("unavailable", "Spectating needs the Steam bridge.");
-        spectating = member.Id;
+        spectating = member.Id; spectateStartedFor = null;
         return LobbyResult.Success;
     }
     // What AimModCore's spectator view needs, for the UI to start it (native-replay spectate).
@@ -716,7 +716,8 @@ sealed partial class MultiplayerService : IDisposable
         var s = lobby.Settings;
         var scenario = MatchScenario.Needed(s) ? MatchScenario.Name(s) : s.Scenario?.Name;
         var info = s.Scenario is null ? null : library.Scenarios.FirstOrDefault(x => x.Hash == s.Scenario.Hash);
-        return new { member = target.Id, name = target.Name, scenario, mapName = s.MapOverride?.Name ?? s.Scenario?.Map, mapScale = info?.MapScale ?? 1, label = target.Name, score = watchScore, follow = followLeader };
+        return new { member = target.Id, name = target.Name, scenario, mapName = s.MapOverride?.Name ?? s.Scenario?.Map, mapScale = info?.MapScale ?? 1, label = target.Name, score = watchScore, follow = followLeader,
+            stream = spectateStreams.GetValueOrDefault(target.Id), started = spectateStartedFor == target.Id };
     }
 
     public object PrefsView() => prefs;
@@ -1154,7 +1155,13 @@ sealed partial class MultiplayerService : IDisposable
     {
         if (e.Kind == TransportEvent.InviteReceived) { if (e.Invite is not null) AddInvite(e.Invite); return; }
         if (e.Kind == TransportEvent.WorkshopUpdate) { WorkshopUpdate(e.Workshop); return; }
-        if (e.Kind == TransportEvent.SpectateStarted) { WatchStarted(e.Peer, e.Reason, PoseMeta()?.Scenario ?? Friends().FirstOrDefault(f => f.Id == e.Peer)?.Scenario); return; }
+        if (e.Kind == TransportEvent.SpectateStarted)
+        {
+            if (e.Stream is not null) spectateStreams[e.Peer] = e.Stream;
+            // A lobby member's stream (follow or Spectate in a match): no lobby-less watch.
+            if (spectating == e.Peer) { spectateStartedFor = e.Peer; return; }
+            WatchStarted(e.Peer, e.Reason, PoseMeta()?.Scenario ?? Friends().FirstOrDefault(f => f.Id == e.Peer)?.Scenario); return;
+        }
         if (e.Kind == TransportEvent.SpectateScore && e.Frame is not null) { try { using var doc = JsonDocument.Parse(e.Frame); watchScore = doc.RootElement.Clone(); } catch (JsonException) { } return; }
         if (e.Kind == TransportEvent.SpectateEnded) { if (watch?.Peer == e.Peer && e.Reason != "switched") { watch = watch with { State = "ended", Message = EndedReason(watch.Name, e.Reason) }; watchScore = null; } return; }
         if (e.Kind == TransportEvent.SpectatorJoined)
