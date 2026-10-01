@@ -59,6 +59,10 @@ namespace aimmod
     // The seed for spawn event `index` (0 = scenario start) of a match.
     std::uint32_t SeedFor(std::uint32_t matchSeed, std::uint32_t index);
     inline constexpr std::string_view MatchScenarioPrefix = "AimMod Match - ";
+    // Whether a match seed may drive the game's randomness: any freeplay run,
+    // but a challenge only in AimMod's generated match scenarios. A seed set
+    // for a freeplay run never carries into a ranked challenge.
+    bool SeedAllowed(std::string_view scenario, bool inChallenge);
     // A scenario name usable as "<Scenarios>\\<name>.sce": no path separators,
     // reserved characters, dot segments or trailing dots/spaces.
     bool IsScenarioFileName(std::string_view name);

@@ -140,7 +140,7 @@ namespace aimmod
             if (c.action != GameCommand::Action::StartScenario || seed->empty() || r.ec != std::errc() || r.ptr != seed->data() + seed->size() || value > 0xFFFFFFFFull)
                 return fail("invalid-seed", "A seed is a whole number from 0 to 4294967295 on start-scenario.");
             // Never in ranked play: freeplay, or AimMod's own generated match scenarios.
-            if (c.mode == GameCommand::Mode::Challenge && !std::string_view(c.scenario).starts_with(MatchScenarioPrefix))
+            if (!SeedAllowed(c.scenario, c.mode == GameCommand::Mode::Challenge))
                 return fail("seed-not-allowed", "Seeds apply to freeplay or AimMod match scenarios only.");
             c.seed = static_cast<std::uint32_t>(value);
         }
@@ -200,6 +200,8 @@ namespace aimmod
             if (c == '\\' || c == '/' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|') return false;
         return true;
     }
+
+    bool SeedAllowed(std::string_view scenario, bool inChallenge) { return !inChallenge || scenario.starts_with(MatchScenarioPrefix); }
 
     std::uint32_t SeedFor(std::uint32_t matchSeed, std::uint32_t index)
     {

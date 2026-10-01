@@ -43,6 +43,7 @@ namespace aimmod
         // its game thread (it imports rand/srand from the UCRT, like this
         // module). Seeded when the seeded scenario starts or a challenge
         // attempt in it starts, and before each target death/kill (respawn).
+        // A challenge outside "AimMod Match - " scenarios ends seeding.
         void OnAttemptStarted(const std::string& scenario);
         void OnSpawnEvent();
         // Called every engine frame on the game thread.
@@ -146,6 +147,8 @@ namespace aimmod
         };
         std::optional<Seeding> m_seeding;
         std::uint64_t m_tick{};
+        bool m_inChallenge{};
         void Reseed(std::uint32_t index, const char* why);
+        void StopSeeding(const char* why);
     };
 } // namespace aimmod
