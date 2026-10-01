@@ -51,6 +51,17 @@
     return box;
   }
   function section(title,note){var p=node('div','panel dev-card');var head=node('div','panel-head');var t=node('div','head-text');add(t,node('h2','',title),note?node('p','',note):null);head.appendChild(t);p.appendChild(head);var body=node('div','dev-body');p.appendChild(body);return {panel:p,body:body};}
+  // A click runs once until it's answered: no repeats from impatient double clicks.
+  var busy={};
+  function once(key,run){if(busy[key])return;busy[key]=true;run(function(){busy[key]=false;});}
+  function spawnAvatar(mode){
+    once('avatar-on',function(done){
+      function on(){act({action:'avatar',on:true,mode:mode},function(ok){done();if(ok)toast('Test avatar on. It wears your look.');});}
+      // Spawn on an AimMod map when AimModCore can load one; otherwise in whatever is loaded.
+      var caps=(game&&game.capabilities)||[];
+      if(drafts.scenario&&caps.indexOf('load')>=0)other('POST','/game-command',{action:'load-scenario',scenario:drafts.scenario},function(){on();});else on();
+    });
+  }
   function refreshSoon(){setTimeout(function(){if(container)poll();},300);}
   function openMultiplayer(){var b=root.document.getElementById('nav-multiplayer');if(b&&b.click)b.click();}
 
@@ -67,7 +78,7 @@
     add(sim.body,add(node('div','dev-line'),node('span','dev-label','Simulated players'),segmented(counts,members,function(n){members=n;render();},'simulated players')));
     add(sim.body,add(node('div','dev-line'),node('span','dev-label','Mode'),segmented(MODES,mode,function(id){mode=id;render();},'mode')));
     sim.body.appendChild(actions([button('Host it here',function(){act({action:'lobby',members:members,mode:mode},function(ok){if(ok)openMultiplayer();});},'primary'),button('Join a simulated host',function(){act({action:'lobby',members:members,simulatedHost:true},function(ok){if(ok)openMultiplayer();});}),
-      button('Tracking duel solo',function(){act({action:'lobby',members:1,mode:'tracking-duel'},function(ok){if(ok){toast('Duel lobby ready. Spawn the avatar on a run’s path to track it.');openMultiplayer();}});})]));
+      button('Tracking duel solo',function(){act({action:'lobby',members:1,mode:'tracking-duel',scenario:drafts.scenario||((state.tools&&state.tools.ports)||[])[0]||null},function(ok){if(ok){toast('Duel lobby ready. Spawn the avatar on a run’s path to track it.');openMultiplayer();}});})]));
     if(lobby){
       sim.body.appendChild(node('p','dev-note','Room '+lobby.code+' · '+lobby.members+' members ('+lobby.simulated+' simulated) · '+(lobby.isHost?'you host':'a simulated player hosts')+' · '+(lobby.phase==='lobby'?'in the lobby':lobby.phase)));
       sim.body.appendChild(node('div','dev-label','Make them…'));
@@ -80,7 +91,10 @@
     var tools=state.tools||{},replays=tools.replays||[],cam=state.camera;
     // Avatars
     var av=section('Avatars','The bridge’s test avatar: circling you, or walking a recorded run’s path. Shoot it to test hits.');left.appendChild(av.panel);
-    av.body.appendChild(actions([button('Spawn circling avatar',function(){act({action:'avatar',on:true,mode:'circle'});},'compact'),button('Despawn',function(){act({action:'avatar',on:false,mode:'circle'});},'compact quiet')]));
+    // One request per click: the button waits for the answer, and the service drops repeats.
+    var av0=st.avatar;
+    av.body.appendChild(node('p','dev-note',av0&&av0.on?'Test avatar on, '+(av0.mode==='path'?'walking a run’s path':'circling you')+(av0.look?', wearing '+av0.look:'')+'.':'Test avatar off.'+(drafts.scenario?' It spawns in '+drafts.scenario+'.':'')));
+    av.body.appendChild(actions([button('Spawn circling avatar',function(){spawnAvatar('circle');},'compact'+(av0&&av0.on&&av0.mode==='circle'?' primary':'')),button('Despawn',function(){once('avatar-off',function(done){act({action:'avatar',on:false,mode:'circle'},function(ok){done();if(ok)toast('Test avatar despawned.');});});},'compact quiet')]));
     if(tools.avatarPath)av.body.appendChild(node('p','dev-note','Path ready from a run of '+tools.avatarPath+'. Load that scenario in freeplay to see the avatar walk it.'));
     if(st.looks)add(av.body,add(node('div','dev-line'),node('span','dev-label','Your look'),segmented(st.looks.map(function(l){return {id:l.id,label:l.label};}),st.look,function(id){other('POST','/multiplayer',{action:'avatar',avatar:id},function(ok){if(ok)refreshSoon();});},'look')));
     // Replays: pick runs for the tools below.
@@ -89,7 +103,7 @@
     replays.slice(0,8).forEach(function(r){var line=node('div','dev-replay'+(r.id===replayA||r.id===replayB?' on':''));
       add(line,add(node('div','dev-replay-text'),node('strong','',r.scenario),node('span','',(F?F.relative(r.recordedAt):r.recordedAt)+' · '+r.seconds+' s')),
         actions([button(r.id===replayA?'A':'Use as A',function(){replayA=r.id;render();},'compact'+(r.id===replayA?' primary':'')),button(r.id===replayB?'B':'Use as B',function(){replayB=r.id;render();},'compact'+(r.id===replayB?' primary':'')),
-          button('Avatar walks this',function(){act({action:'avatar-path',replay:r.id},function(ok){if(ok)act({action:'avatar',on:true,mode:'path'});});},'compact quiet')]));rp.body.appendChild(line);});
+          button('Avatar walks this',function(){once('avatar-path',function(done){act({action:'avatar-path',replay:r.id},function(ok){if(!ok){done();return;}act({action:'avatar',on:true,mode:'path'},function(ok2){done();if(ok2)toast('The avatar walks that run in '+r.scenario+'. Load it in freeplay to see it.');});});});},'compact quiet')]));rp.body.appendChild(line);});
     var rr=[];
     if(replayA)rr.push(button('Watch A',function(){nativeReplay({action:'load',id:replayA},'Replay loaded. Open the pause menu to watch.');},'compact'));
     if(replayA&&replayB)rr.push(button('A vs B',function(){nativeReplay({action:'load',id:replayA,compareId:replayB},'Run vs run loaded. Open the pause menu to watch.');},'compact primary'));
@@ -100,12 +114,14 @@
     add(lp.body,add(node('div','dev-line'),node('span','dev-label','Delay'),segmented([{id:1,label:'1 s'},{id:2,label:'2 s'},{id:3,label:'3 s'}],delay,function(d){delay=d;render();},'delay')));
     var lb=[button('Spectate yourself',function(){act({action:'loopback',source:'self',delay:delay});},'compact')];
     if(replayA)lb.push(button('Replay A as live',function(){act({action:'loopback',source:'replay',replay:replayA,delay:delay});},'compact'));
-    if(tools.loopback){var l=tools.loopback;lb.push(button('Open the spectator view',function(){nativeReplay({action:'spectate',scenario:l.scenario,mapName:l.mapName,mapScale:l.mapScale,label:'Loopback'},'Spectating the loopback. Pause to see it.');},'compact primary'));lb.push(button('Stop',function(){act({action:'loopback',source:'off'});},'compact quiet danger'));
+    if(tools.loopback){var l=tools.loopback;lb.push(button('Open the spectator view',function(){if(!l.scenario||!l.mapName){toast('Waiting for your view: load a scenario first.');return;}nativeReplay({action:'spectate',scenario:l.scenario,mapName:l.mapName,mapScale:l.mapScale,label:'Loopback'},'Spectating the loopback. Pause to see it.');},'compact primary'));lb.push(button('Stop',function(){act({action:'loopback',source:'off'});},'compact quiet danger'));
       lp.body.appendChild(node('p','dev-note','Streaming '+(l.source==='self'?'your view':'a replay')+(l.scenario?' in '+l.scenario:'')+(l.source==='self'?' · '+l.delay+' s behind':'')+'.'));}
     lp.body.appendChild(actions(lb));
     // Game commands
     var gc=section('Game commands','Through AimModCore. Freeplay only; refused during a challenge.');left.appendChild(gc.panel);
+    var ports=tools.ports||[];if(!drafts.scenario&&ports.length)drafts.scenario=ports[0];if(!drafts.contentScenario&&ports.length)drafts.contentScenario=ports[0];
     add(gc.body,add(node('div','dev-line'),input('scenario','Scenario name','dev-field dev-wide')));
+    if(ports.length)gc.body.appendChild(add(node('div','dev-ports'),node('span','dev-label','AimMod maps'),actions(ports.slice(0,6).map(function(n){return button(n.replace(/^AimMod - /,''),function(){drafts.scenario=n;drafts.contentScenario=n;render();},'compact'+(drafts.scenario===n?' primary':''));}))));
     [['timeScale','Time scale',[0.5,1,1.5]],['targetSize','Target size',[0.5,1,2]],['targetSpeed','Target speed',[0.5,1,2]]].forEach(function(o){add(gc.body,add(node('div','dev-line'),node('span','dev-label',o[1]),segmented(o[2].map(function(v){return {id:v,label:v+'×'};}),overrides[o[0]],function(v){overrides[o[0]]=v;render();},o[1])));});
     function startBody(){var b={action:'start-scenario',scenario:drafts.scenario,mode:'freeplay'};if(overrides.timeScale!==1)b.timeScale=overrides.timeScale;if(overrides.targetSize!==1)b.targetSize=overrides.targetSize;if(overrides.targetSpeed!==1)b.targetSpeed=overrides.targetSpeed;return b;}
     gc.body.appendChild(actions([button('Load',function(){gameCommand({action:'load-scenario',scenario:drafts.scenario},'Load');},'compact'),button('Start in freeplay',function(){gameCommand(startBody(),'Start');},'compact primary'),

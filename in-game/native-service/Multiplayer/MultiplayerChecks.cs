@@ -33,6 +33,7 @@ static class MultiplayerChecks
         Peers();
         SteamPipe();
         Follow();
+        DevAvatarChecks();
         Marker();
         var root = Path.Combine(Path.GetTempPath(), "aimmod-mp-test-" + Guid.NewGuid().ToString("N"));
         try { Content(root); Generator(root); Blocked(root); AutoLeave(root); Service(root); Transfers(root); Replays(root); Maps(root); }
@@ -772,6 +773,8 @@ static class MultiplayerChecks
         public void SetSpectatePrivacy(string mode) { }
         public void RemoveSpectator(string peer) { }
         public bool WorkshopDownload(string item) => false;
+        public readonly List<string> DevAvatars = [];
+        public bool DevAvatar(bool on, string mode, string? profile = null) { DevAvatars.Add((on ? "on " : "off ") + mode + (profile is null ? "" : " " + profile)); return true; }
         // Bulk lane stand-in: chunks arrive in order; DropAfter cuts a transfer short like a lost link.
         public int BulkChunkBytes { get; set; }
         public int DropAfter = -1, BulkSent;
@@ -1235,6 +1238,7 @@ static class MultiplayerChecks
         Check(Dev(new { action = "lobby", members = 5, mode = LobbyModes.Rounds }).Ok, "A simulated lobby of any size is created");
         var lobby = JsonSerializer.SerializeToElement(service.View(), Protocol.Json).GetProperty("lobby");
         Check(lobby.GetProperty("members").EnumerateArray().Count(m => m.GetProperty("simulated").GetBoolean()) == 5 && lobby.GetProperty("settings").GetProperty("maxPlayers").GetInt32() >= 6 && lobby.GetProperty("isHost").GetBoolean(), "Five simulated players join your lobby, with room for everyone");
+        Check(lobby.GetProperty("settings").GetProperty("scenario").GetProperty("name").GetString() == "AimMod - Dust2 (CSGO) - CS Movement", "Developer lobbies default to an installed AimMod map");
         for (var i = 0; i < 40; i++) { now += 100; service.Tick(); }
         Check(Dev(new { action = "sim", op = "chat" }).Ok && Dev(new { action = "sim", op = "away" }).Ok && Dev(new { action = "sim", op = "suggest" }).Ok, "Simulated players chat, go away and suggest on demand");
         lobby = JsonSerializer.SerializeToElement(service.View(), Protocol.Json).GetProperty("lobby");
@@ -1282,6 +1286,22 @@ static class MultiplayerChecks
                 s.Act(last.GetProperty("action").GetString()!, JsonSerializer.SerializeToElement(new { id = last.GetProperty("id").GetString() }));
             }
         }
+    }
+
+    static void DevAvatarChecks()
+    {
+        long now = 3_000_000;
+        var net = new MemoryNetwork(); var t = new MemoryTransport(net, "dev-a"); net.Peers["dev-a"] = t;
+        var service = new MultiplayerService(t, new ContentLibrary(null), new NoGameControl(), () => new LocalRun(false, null, null, null, null, 0, 0, 0, null), () => [], () => null, null, false, () => now, autoTick: false);
+        service.SetSimulation(true);
+        service.Act("avatar", J(new { avatar = "meso-tracer" }));
+        Check(service.DevAvatar(true, "circle").Ok && service.DevAvatar(true, "circle").Ok && service.DevAvatar(true, "circle").Ok && t.DevAvatars.SequenceEqual(["on circle AimMod Meso Tracer"]), "Repeated spawn clicks send one dev.avatar, wearing the chosen look");
+        service.Act("avatar", J(new { avatar = "meso-genji" }));
+        Check(t.DevAvatars.Last() == "on circle AimMod Meso Genji", "Changing the look re-dresses the running test avatar");
+        Check(service.DevAvatar(false, "circle").Ok && service.DevAvatar(false, "circle").Ok && t.DevAvatars.Count(x => x.StartsWith("off", StringComparison.Ordinal)) == 1, "Repeated despawn clicks send one off");
+        now += 4000;
+        Check(service.DevAvatar(false, "circle").Ok && t.DevAvatars.Count(x => x.StartsWith("off", StringComparison.Ordinal)) == 2, "A later request goes out again, in case the game lost track");
+        service.Dispose();
     }
 
     static void Picks(string root, ContentLibrary library)
