@@ -472,7 +472,9 @@ sealed class LobbyCore
         var limit = m.Settings.EffectiveTimeLimit;
         // Mutual checks from the design: the final score matches the stream and the run length matches the limit.
         var disputed = run.Seconds > limit + 5 || run.Seconds < limit - 5
-            || (line.Score is { } last && line.Remaining is < 2 && Math.Abs(run.Score - last) > Math.Max(5, Math.Abs(last) * 0.1));
+            || (line.Score is { } last && line.Remaining is < 2 && Math.Abs(run.Score - last) > Math.Max(5, Math.Abs(last) * 0.1))
+            // The run can't be longer than the round has been live on the host clock.
+            || (m.StartsAt is { } started && clock() - started < (run.Seconds - 5) * 1000);
         line.Score = run.Score; line.Seconds = run.Seconds; line.Remaining = 0; line.Shots = run.Shots; line.Hits = run.Hits; line.Kills = run.Kills;
         line.Status = LineStates.Finished; line.Disputed = disputed;
         Changed();

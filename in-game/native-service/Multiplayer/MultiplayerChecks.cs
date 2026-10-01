@@ -180,6 +180,20 @@ static partial class MultiplayerChecks
         Check(placements.First(p => p.MemberId == "p3").Disputed && placements.First(p => p.MemberId == "p3").Points == 1 && placements.First(p => p.MemberId == "host").Points == 0, "Placement points, and a result that disagrees with its live stream is disputed");
         Check(placements.First(p => p.MemberId == "p2").Status == LineStates.Left, "A player who left is marked");
 
+        // A finished run longer than the time the round has been live can't have been played in it.
+        (core, clock, advance) = Lobby();
+        core.Join("p2", "Two");
+        core.Apply("host", "settings", Patch(new { countdown = 3 }), content);
+        ReadyAll(core); core.Apply("host", "start", default, content);
+        advance(3001); core.Tick();
+        var early = core.Snapshot().Match!;
+        advance(2000);
+        core.Finish("p2", new RunFinish(early.Id, 1, 99_000, 60, 10, 5, 5, null));
+        advance(58_000);
+        core.Finish("host", new RunFinish(early.Id, 1, 800, 60, 10, 5, 5, null));
+        var earlyResults = core.Snapshot().Match!.Rounds[0].Results;
+        Check(earlyResults.First(x => x.MemberId == "p2").Disputed && !earlyResults.First(x => x.MemberId == "host").Disputed, "A 60 s result two seconds into the round is disputed; one at the end is not");
+
         // Missing players time out; practice has no ranking.
         (core, clock, advance) = Lobby();
         core.Join("p2", "Two");
