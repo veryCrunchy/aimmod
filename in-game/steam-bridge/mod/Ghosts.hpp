@@ -102,9 +102,8 @@ namespace aimmod
         game::Getter m_setStaticMesh, m_setMobility, m_setCollision, m_setCastShadow;
         game::Field m_cameraManager, m_myCharacter, m_meshComponent, m_capsule;
         RC::Unreal::UClass* m_meshActorClass = nullptr;
-        RC::Unreal::UObject* m_cylinder = nullptr;
-        RC::Unreal::UObject* m_sphere = nullptr;
-        RC::Unreal::UObject* m_cube = nullptr;
+        // Weak: nothing of ours roots the meshes, so they may be collected.
+        RC::Unreal::FWeakObjectPtr m_cylinder, m_sphere, m_cube;
 
         // Avatars
         game::Getter m_spawnBot, m_getMetaCharacter, m_setUseWeapons, m_stopAiming, m_removeSelf;

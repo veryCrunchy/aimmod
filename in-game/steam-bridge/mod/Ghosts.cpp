@@ -417,19 +417,24 @@ namespace aimmod
         if (m_shapesFailed) return false;
         if (ghost.world == world && ghost.body.Get() && ghost.head.Get() && ghost.visor.Get()) return true;
         DestroyShapes(ghost);
-        if (!m_cylinder) m_cylinder = LoadMesh(STR("/Engine/BasicShapes/Cylinder.Cylinder"));
-        if (!m_sphere) m_sphere = LoadMesh(STR("/Engine/BasicShapes/Sphere.Sphere"));
-        if (!m_cube) m_cube = LoadMesh(STR("/Engine/BasicShapes/Cube.Cube"));
-        if (!m_cylinder || !m_sphere || !m_cube)
+        auto mesh = [&](FWeakObjectPtr& cached, const wchar_t* path) {
+            UObject* object = cached.Get();
+            if (!object && (object = LoadMesh(path))) cached = object;
+            return object;
+        };
+        UObject* cylinder = mesh(m_cylinder, STR("/Engine/BasicShapes/Cylinder.Cylinder"));
+        UObject* sphere = mesh(m_sphere, STR("/Engine/BasicShapes/Sphere.Sphere"));
+        UObject* cube = mesh(m_cube, STR("/Engine/BasicShapes/Cube.Cube"));
+        if (!cylinder || !sphere || !cube)
         {
             m_log("ghost demo: engine basic shapes not found; shapes disabled");
             m_shapesFailed = true;
             return false;
         }
         const auto l = bridge::ghost::Layout(Sample{}); // sizes are reset from the remote pose every frame
-        ghost.body = SpawnShape(world, m_cylinder, l.body.sx, l.body.sy, l.body.sz);
-        ghost.head = SpawnShape(world, m_sphere, l.head.sx, l.head.sy, l.head.sz);
-        ghost.visor = SpawnShape(world, m_cube, l.visor.sx, l.visor.sy, l.visor.sz);
+        ghost.body = SpawnShape(world, cylinder, l.body.sx, l.body.sy, l.body.sz);
+        ghost.head = SpawnShape(world, sphere, l.head.sx, l.head.sy, l.head.sz);
+        ghost.visor = SpawnShape(world, cube, l.visor.sx, l.visor.sy, l.visor.sz);
         ghost.world = world;
         return ghost.body.Get() && ghost.head.Get() && ghost.visor.Get();
     }
