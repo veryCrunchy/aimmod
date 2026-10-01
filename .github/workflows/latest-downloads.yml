@@ -84,7 +84,7 @@ jobs:
               echo "- **AimMod for osu! ${OSU#aimmod-osu-v}** · Windows and Linux · [release notes](${server}/releases/tag/${OSU})"
             fi
             if [ -n "$INGAME" ]; then
-              echo "- **AimMod in-game for KovaaK's ${INGAME#aimmod-ingame-v}** · Windows · unzip and run Install-AimMod.cmd · [release notes](${server}/releases/tag/${INGAME})"
+              echo "- **AimMod in-game for KovaaK's ${INGAME#aimmod-ingame-v}** · Windows · run [AimMod-Setup.exe](${server}/releases/download/aimmod-ingame-stable/AimMod-Setup.exe) (or unzip and run Install-AimMod.cmd) · [release notes](${server}/releases/tag/${INGAME})"
             fi
             echo
             echo "Installed apps update themselves. Older versions are available from their own releases."

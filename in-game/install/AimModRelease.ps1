@@ -4,6 +4,14 @@ Set-StrictMode -Version Latest
 $script:Ue4ssVersion = 'v3.0.1-1152-ge3ba1016'
 $script:Ue4ssZipSha256 = 'af8ea9d8975e8eff7967423f43b8b50875e66a29a0f434cffce6e0867ea17252'
 
+# The oldest AimMod-Setup.exe (in-game/installer, version in in-game/installer/version.txt)
+# that can install a release built by these scripts. Raise it, together with the
+# installer version, when a package needs something older installers cannot do;
+# older installers then show "A new installer is required" instead of installing.
+$script:DefaultMinimumInstallerVersion = '1.0.0'
+# The permanent installer link: every channel release carries the newest AimMod-Setup.exe.
+$script:DefaultInstallerUrl = 'https://github.com/verycrunchy/aimmod/releases/download/aimmod-ingame-{channel}/AimMod-Setup.exe'
+
 # SemVer 2 precedence: -1, 0 or 1 (same rules as the service's SemanticVersion).
 function Compare-SemVer([string]$A, [string]$B) {
     function Split([string]$v) {
