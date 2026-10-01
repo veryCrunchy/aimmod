@@ -49,7 +49,8 @@ sealed class WorkspaceHost : IAsyncDisposable
     string data = "{}";
     public string Url { get; private set; } = "";
     public void Update(string json) => Volatile.Write(ref data, json);
-    public WorkspaceHost(Hub hub, string output, string? historyPath = null, NativeSettings? settings = null, CsvHistory? csvHistory = null, DiscordSettings? discordSettings = null, Func<object>? discordStatus = null)
+    readonly Multiplayer.MultiplayerService multiplayer;
+    public WorkspaceHost(Hub hub, string output, string? historyPath = null, NativeSettings? settings = null, CsvHistory? csvHistory = null, DiscordSettings? discordSettings = null, Func<object>? discordStatus = null, string[]? args = null)
     {
         outputFolder = output;
         gameCommands = new GameCommands(output);
@@ -83,6 +84,9 @@ sealed class WorkspaceHost : IAsyncDisposable
         });
         app.MapGet(prefix + "/discord-settings.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.DiscordSettingsScript")!, "application/javascript"));
         new CoachingFeedback(output).MapEndpoints(app, prefix);
+        multiplayer = Multiplayer.MultiplayerHosting.Create(hub, output, args, () => liveFeed.Read(outputFolder, Volatile.Read(ref overlayRuns)), () => Volatile.Read(ref overlayRuns));
+        multiplayer.MapEndpoints(app, prefix);
+        Multiplayer.MultiplayerHosting.MapAssets(app, prefix);
         var importedHistory = csvHistory ?? new CsvHistory(output);
         app.MapGet(prefix + "/history-import.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.HistoryImport")!, "application/javascript"));
         app.MapPost(prefix + "/history-import", async (HttpContext context) => {
@@ -307,6 +311,7 @@ sealed class WorkspaceHost : IAsyncDisposable
         // Stop accepting requests first, then publish a closed replay frame and
         // retract this process's overlay URL so the game never loads a dead port.
         startLoop.Cancel();
+        multiplayer.Dispose();
         await keyboard.DisposeAsync();
         try { await app.StopAsync(); } catch (Exception ex) when (ex is OperationCanceledException or InvalidOperationException) { }
         await playback.DisposeAsync(); await obs.DisposeAsync(); await app.DisposeAsync();

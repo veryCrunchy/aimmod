@@ -33,4 +33,5 @@
   </ItemGroup>
   <ItemGroup><EmbeddedResource Include="../ui/history-import.js" LogicalName="AimMod.HistoryImport" /></ItemGroup>
   <ItemGroup><EmbeddedResource Include="../ui/discord-settings.js" LogicalName="AimMod.DiscordSettingsScript" /></ItemGroup>
+  <ItemGroup><EmbeddedResource Include="../ui/multiplayer.js" LogicalName="AimMod.MultiplayerScript" /><EmbeddedResource Include="../ui/multiplayer.css" LogicalName="AimMod.MultiplayerStyle" /></ItemGroup>
 </Project>

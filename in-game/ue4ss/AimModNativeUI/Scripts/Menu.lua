@@ -63,7 +63,7 @@ end
 attachControls=function(root)
     local slot=root:AddChildToCanvas(frame)
     slot:SetAnchors({Minimum={X=0,Y=0},Maximum={X=1,Y=1}})
-    slot:SetOffsets({Left=35,Top=106,Right=35,Bottom=24})
+    slot:SetOffsets({Left=35,Top=60,Right=35,Bottom=24})
     slot:SetZOrder(9000)
     local lib=StaticFindObject('/Script/UMG.Default__WidgetBlueprintLibrary')
     local class=StaticFindObject('/Game/FirstPersonBP/Blueprints/UI/Palette/PalettedBoxButtonWidget.PalettedBoxButtonWidget_C')
