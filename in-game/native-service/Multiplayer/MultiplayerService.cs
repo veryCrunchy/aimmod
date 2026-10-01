@@ -1850,7 +1850,7 @@ sealed partial class MultiplayerService : IDisposable
         if (match.Phase is not (MatchPhases.Countdown or MatchPhases.Live)) return;
         // Samples travel on the host clock: offset = host - local.
         var offset = core is not null || hostPeer is null ? 0 : clocks.GetValueOrDefault(hostPeer)?.Offset ?? 0;
-        poseTracker.Poll(offset, match.Players, standInMember is { } standIn ? (StreamIds.For(StandInPeer), standIn) : null);
+        poseTracker.Poll(offset, match.Players, StandInStreams());
         foreach (var batch in poseTracker.Drain(match.Id, match.Round))
         {
             FeedStandIn(batch);

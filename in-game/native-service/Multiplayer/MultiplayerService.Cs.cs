@@ -119,7 +119,7 @@ sealed partial class MultiplayerService
         bool BuyOpen, bool BuyWindow, int? BuyLeft, IReadOnlyList<CsBuyItem>? Buy, CsBanner? Banner, string? Notice, IReadOnlyList<CsFeedLine> Feed,
         string? Primary, string? Secondary, string BuyKey, string UseKey, IReadOnlyList<string> KeyClashes,
         string? InSite = null, string? Callout = null, IReadOnlyList<CsMarker>? Sites = null,
-        bool HasBomb = false, string? BombCarrier = null, string? Refused = null, string DropKey = CsDropKey);
+        bool HasBomb = false, string? BombCarrier = null, string? Refused = null, string DropKey = CsDropKey, int TAlive = 0, int CtAlive = 0);
     // A bomb site on the HUD compass: its bearing from where you look (degrees, negative left) and distance.
     internal sealed record CsMarker(string Name, int Bearing, int Meters);
     static readonly string[] BuyCategories = ["pistol", "smg", "rifle", "heavy", "gear"];
@@ -193,7 +193,8 @@ sealed partial class MultiplayerService
             buyOpen, buyWindow && me.Alive, buyLeft, menu, banner, notice, feed,
             CsRules.Find(me.Primary)?.Label, CsRules.Find(me.Secondary)?.Label, CsBuyKey, CsUseKey, CsKeyClashes(KeyBinds.GameKeys(library.Root)),
             me.Alive ? me.Site : null, me.Alive ? me.Callout : null, SiteMarkers(cs, me.Side == CsRules.T || b.State == "planted" ? b.Position : null),
-            b.Carrier == SelfId, me.Side == CsRules.T && b.Carrier is { } bc ? Name(bc) : null, refused);
+            b.Carrier == SelfId, me.Side == CsRules.T && b.Carrier is { } bc ? Name(bc) : null, refused,
+            cs.Players.Count(p => p.Side == CsRules.T && p.Alive), cs.Players.Count(p => p.Side == CsRules.CT && p.Alive));
     }
 
     // The sites relative to this player's own last camera sample (no pose feed: no markers).

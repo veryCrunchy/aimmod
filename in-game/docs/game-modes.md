@@ -1205,6 +1205,22 @@ preset):
   the map's spawns and CS data. That meant buying and planting anywhere and
   no team spawns. The service now hands the arena's spawns and CS map data
   to the lobby core every tick.
+- **Simulated players.** In developer mode every simulated player is a
+  stand-in of its own: AimModSteam's synthetic peers 1 to 16, feature
+  `dev-avatar-walkers`.
+  - Each walks between its own side's spawns: its CS side, or its TDM team.
+  - Each has its own stream, track, team, health, deaths and respawns,
+    validated on the host.
+  - Floor traces now go by object type (world static and dynamic) rather
+    than the Visibility channel. They start at the spawn point itself, and a
+    trace that starts inside geometry counts as no floor, so nobody stands
+    on a roof.
+  - The HUD strip shows how many players are alive on each side.
+- **Leftover bots.** KovaaK's re-uses bots across scenario loads, and a
+  direct map load left the previous scenario's bots in AimMod arenas. They
+  were alive and took shots, which counted for KovaaK's accuracy. In an
+  arena AimModSteam now parks every bot that isn't the helper bot, and
+  spawns avatars from the helper profile only.
 - **Buy menu.** It is kept as one element while the HUD redraws, so a click
   is never lost between press and release. Escape closes it as well as B.
   The compass hides while it is open so the two don't overlap.

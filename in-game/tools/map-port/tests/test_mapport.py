@@ -255,6 +255,25 @@ class CsMapTests(unittest.TestCase):
         self.assertTrue(csmap.wanted("de_x", {}) and not csmap.wanted("aim_map", {"zones": [], "points": []}))
 
 
+class BuriedLiquidTests(unittest.TestCase):
+    def test_water_under_a_floor_is_dropped_pools_stay(self):
+        from mapport import cleanup
+        sc = scene.Scene(name="w")
+        def slab(lo, hi):
+            sc.brushes.append(scene.Brush(faces=[scene.Face(polygon=[lo, hi], normal=(0.0, 0.0, 1.0), texture="floor")]))
+        # Buried: 400x400 water, top at 0; a floor slab from 0 to 16 over all of it.
+        scene.add_liquid(sc, "water", [(-200.0, -200.0, -100.0), (200.0, 200.0, 0.0)])
+        slab((-210.0, -210.0, 0.0), (210.0, 210.0, 16.0))
+        # A pool far away, open to the air (walls around, nothing on top).
+        scene.add_liquid(sc, "water", [(1000.0, 1000.0, -100.0), (1200.0, 1200.0, 0.0)])
+        slab((990.0, 990.0, -100.0), (1000.0, 1210.0, 64.0))
+        # A kill volume under everything is never touched.
+        scene.add_liquid(sc, "hurt", [(-5000.0, -5000.0, -3000.0), (5000.0, 5000.0, -2000.0)], damage=1000.0)
+        self.assertEqual(cleanup.remove_buried_liquids(sc), 1)
+        kept = sorted((go["kind"], round(go["origin"][0])) for go in sc.gameobjects)
+        self.assertEqual(kept, [("hurt", 0), ("water", 1100)])
+
+
 class ObjectiveTests(unittest.TestCase):
     def test_zones_points_items(self):
         from mapport import objectives

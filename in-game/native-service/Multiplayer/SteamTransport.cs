@@ -31,7 +31,7 @@ sealed class SteamTransport : IMultiplayerTransport
     int nextId = 1, createId = -1, joinId = -1;
     readonly Dictionary<int, string> workshopIds = new();
     readonly Dictionary<(string Peer, int Transfer), int> outstanding = new();
-    bool ugc, ugcQuery, devAvatar, devAvatarWalk, avatars; IReadOnlyList<WorkshopItem> workshopItems = []; int bulkBytes, bulkWindow = 4;
+    bool ugc, ugcQuery, devAvatar, devAvatarWalk, devAvatarWalkers, avatars; IReadOnlyList<WorkshopItem> workshopItems = []; int bulkBytes, bulkWindow = 4;
     string? bridgeVersion; RejoinPoint? lastLobby;
     HashSet<string> lastCharKeys = new();
     readonly Dictionary<string, string> spectators = new();
@@ -152,6 +152,7 @@ sealed class SteamTransport : IMultiplayerTransport
                     devAvatar = features.Contains("dev-avatar");
                     avatars = features.Contains("avatar");
                     devAvatarWalk = features.Contains("dev-avatar-walk");
+                    devAvatarWalkers = features.Contains("dev-avatar-walkers");
                     bridgeVersion = Str(e, "bridge");
                     lastLobby = e.TryGetProperty("lastLobby", out var ll) && ll.ValueKind == JsonValueKind.Object && Str(ll, "lobby") is { } lastId
                         ? new RejoinPoint(lastId, Str(ll, "hostName") ?? "your host", ll.TryGetProperty("ageSeconds", out var age) && age.TryGetInt64(out var ag) ? ag : 0) : null;
@@ -505,6 +506,22 @@ sealed class SteamTransport : IMultiplayerTransport
     public IReadOnlyList<WorkshopItem> WorkshopItems { get { lock (gate) return workshopItems; } }
     // Contract addition: dev.avatar {on, mode: circle|path, profile?}, answered by a result.
     public bool DevAvatar(bool on, string mode, string? profile = null) => DevAvatar(on, mode, profile, null);
+    public bool DevWalkers(IReadOnlyList<(string Peer, string? Look, IReadOnlyList<double[]> Spawns)> walkers)
+    {
+        bool can; lock (gate) can = ready && devAvatarWalkers;
+        if (!can || walkers.Count is 0 or > 16) return false;
+        static JsonNode Points(IReadOnlyList<double[]> spawns) => new JsonArray(spawns.Take(32).Where(p => p.Length == 3 && p.All(v => double.IsFinite(v) && Math.Abs(v) < 1e7))
+            .Select(p => (JsonNode)new JsonArray(p.Select(v => (JsonNode)JsonValue.Create(Math.Round(v, 1))!).ToArray())).ToArray());
+        var list = new JsonArray();
+        foreach (var w in walkers)
+        {
+            if (!int.TryParse(w.Peer, out var peer) || peer is < 1 or > 16) return false;
+            var item = new JsonObject { ["peer"] = peer, ["spawns"] = Points(w.Spawns) };
+            if (w.Look is { Length: > 0 and <= 64 } look && look.All(c => char.IsAsciiLetterOrDigit(c) || c == ' ')) item["profile"] = look;
+            list.Add(item);
+        }
+        return Command("dev.avatar", new JsonObject { ["on"] = true, ["mode"] = "walk", ["walkers"] = list }, withId: true) >= 0;
+    }
     public bool DevAvatar(bool on, string mode, string? profile, IReadOnlyList<double[]>? spawns)
     {
         bool can, walk; lock (gate) { can = ready && devAvatar; walk = devAvatarWalk; }

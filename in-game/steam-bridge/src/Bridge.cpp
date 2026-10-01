@@ -113,7 +113,7 @@ namespace bridge
             {"spectate.privacy", {"mode"}},
             {"spectate.remove", {"peer"}},
             {"ugc.query", {"tag", "text"}},
-            {"dev.avatar", {"on", "mode", "profile", "spawns"}},
+            {"dev.avatar", {"on", "mode", "profile", "spawns", "walkers"}},
         };
 
         constexpr std::uint64_t UgcQueryInvalid = 0xffffffffffffffffull;
@@ -1160,6 +1160,44 @@ namespace bridge
                 return;
             }
             // walk: the arena's spawn points, [[x, y, z], ...] in world units.
+            const auto points = [](const json::Value* list, std::vector<std::array<double, 3>>& out) {
+                if (!list) return true;
+                if (list->type != json::Value::Type::Array || list->array.size() > 32) return false;
+                for (const auto& point : list->array)
+                {
+                    if (point.type != json::Value::Type::Array || point.array.size() != 3) return false;
+                    std::array<double, 3> xyz{};
+                    for (std::size_t i = 0; i < 3; ++i)
+                    {
+                        const auto& v = point.array[i];
+                        if (v.type != json::Value::Type::Number || !std::isfinite(v.number) || std::fabs(v.number) > 1e7) return false;
+                        xyz[i] = v.number;
+                    }
+                    out.push_back(xyz);
+                }
+                return true;
+            };
+            // walkers: [{peer 1..16, profile?, spawns}] for several simulated players at once.
+            std::vector<DevAvatar::Walker> walkers;
+            if (const auto* list = c.Get("walkers"))
+            {
+                bool ok = list->type == json::Value::Type::Array && list->array.size() <= 16;
+                for (const auto& w : ok ? list->array : std::vector<json::Value>{})
+                {
+                    DevAvatar::Walker walker;
+                    const auto peer = w.IsObject() ? w.Int("peer") : std::nullopt;
+                    const std::string look = w.IsObject() ? w.Str("profile", 64).value_or("") : "";
+                    if (!peer || *peer < 1 || *peer > 16 || (!look.empty() && !ValidProfileName(look)) || !points(w.Get("spawns"), walker.spawns)) { ok = false; break; }
+                    walker.peer = static_cast<std::uint64_t>(*peer);
+                    walker.profile = look;
+                    walkers.push_back(std::move(walker));
+                }
+                if (!ok)
+                {
+                    Result(*id, false, "invalid", "walkers must be at most 16 {peer 1..16, profile, spawns}.");
+                    return;
+                }
+            }
             std::vector<std::array<double, 3>> spawns;
             if (const auto* list = c.Get("spawns"))
             {
@@ -1193,8 +1231,9 @@ namespace bridge
                 std::lock_guard lock(m_ghostMutex);
                 m_devAvatar.on = *on;
                 m_devAvatar.path = mode == "path";
-                m_devAvatar.walk = mode == "walk" && !spawns.empty();
+                m_devAvatar.walk = mode == "walk" && (!spawns.empty() || !walkers.empty());
                 m_devAvatar.spawns = std::move(spawns);
+                m_devAvatar.walkers = std::move(walkers);
                 if (c.Get("profile")) m_devAvatar.profile = profile;
                 ++m_devAvatar.generation;
             }
@@ -2147,7 +2186,7 @@ namespace bridge
             .Int("appId", KovaaksAppId)
             .Raw("self", json::Object().Str("peer", Id(m_self)).Str("name", name).Str("initials", Initials(name)).Done())
             .Str("relay", steamabi::AvailabilityName(avail))
-            .Raw("features", R"(["lobby","p2p","ugc","xfer","ugc-query","spectate-direct","dev-avatar","dev-avatar-walk","avatar"])")
+            .Raw("features", R"(["lobby","p2p","ugc","xfer","ugc-query","spectate-direct","dev-avatar","dev-avatar-walk","dev-avatar-walkers","avatar"])")
             .Int("maxChunk", static_cast<std::int64_t>(MaxChunk))
             .Int("xferWindow", static_cast<std::int64_t>(XferWindow));
         o.Str("spectatePrivacy", SpectatePrivacyName(m_spectatePrivacy));
