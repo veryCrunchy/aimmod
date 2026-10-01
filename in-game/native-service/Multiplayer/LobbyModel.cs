@@ -173,7 +173,8 @@ static class LobbyRules
                 case "mode":
                     if (Text() is not { } mode || !LobbyModes.All.Contains(mode)) return (null, Bad("Unknown mode."));
                     if (LobbyModes.TwoPlayers(mode) && players > 2) return (null, LobbyResult.Fail("duel-players", "A duel is one against one. Move extra players to spectators first."));
-                    next = next with { Mode = mode }; break;
+                    // Switching mode starts from that mode's defaults, unless the same patch sets them.
+                    next = ModeDefaults(next, mode, keepRounds: patch.TryGetProperty("rounds", out _)); break;
                 case "scenario":
                     if (Text() is not { } scenarioName || !ValidContentName(scenarioName)) return (null, Bad("Choose a scenario from your library."));
                     if (resolve.Scenario(scenarioName) is not { } scenario) return (null, LobbyResult.Fail("scenario-missing", "That scenario isn’t in your library."));
@@ -230,6 +231,15 @@ static class LobbyRules
         if (!ValidContentName(custom)) return (null, "Choose a profile from your library.");
         var found = kind == "weapon" ? resolve.Weapon(custom!) : resolve.Character(custom!);
         return found is null ? (null, "That profile isn’t in your library.") : (new ProfileChoice(ProfilePresets.Custom, found.Name, found.Hash), "");
+    }
+
+    // A mode's own defaults when a lobby switches to it (tracking duel: three attacks each).
+    public static LobbySettings ModeDefaults(LobbySettings s, string mode, bool keepRounds = false)
+    {
+        if (mode == s.Mode) return s;
+        var next = s with { Mode = mode };
+        if (mode == LobbyModes.Tracking && !keepRounds) next = next with { Rounds = TrackingDefaults.RoundsEach };
+        return next;
     }
 
     // Mode rules applied after every change, so combinations stay coherent.

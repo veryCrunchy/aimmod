@@ -1072,6 +1072,24 @@ static class MultiplayerChecks
         Check(control.Calls.Last() == "start freeplay " + name, "Generated scenarios run in freeplay");
         Run(200);
         Check(File.Exists(Path.Combine(game, "Saved", "SaveGames", "Scenarios", name + ".sce")), "The lobby's match scenario stays while the lobby needs it (play again, rematch)");
+        // Tracking duel: the notice layer gets the duel HUD; this machine streams its self-pose feed.
+        service.Act("leave", default);
+        Check(service.Act("create", J(new { mode = "tracking-duel", scenario = "Synthetic A" })).Ok, "A tracking duel lobby opens");
+        service.Act("sim", J(new { op = "add" }));
+        Run(12_000);
+        Check(service.Act("start", default).Ok, "The duel starts with a simulated opponent");
+        Run(300);
+        var countdown = JsonDocument.Parse(service.NoticeText()).RootElement;
+        Check(countdown.GetProperty("duel").GetProperty("role").GetString() == "track" && countdown.GetProperty("duel").GetProperty("left").ValueKind == JsonValueKind.Null
+            && countdown.GetProperty("body").GetString()!.Contains("You track", StringComparison.Ordinal), "Countdown: the host tracks first and the toast says so");
+        Check(File.Exists(Path.Combine(output, "self-pose.request")), "The duel asks AimModCore for the self-pose feed");
+        for (var i = 0; i < 300 && JsonDocument.Parse(service.NoticeText()).RootElement.GetProperty("duel") is { ValueKind: JsonValueKind.Object } d && d.GetProperty("phase").GetString() != MatchPhases.Live; i++) Run(100);
+        Run(2000);
+        var live = JsonDocument.Parse(service.NoticeText()).RootElement.GetProperty("duel");
+        Check(live.GetProperty("phase").GetString() == MatchPhases.Live && live.GetProperty("left").GetInt32() is > 0 and <= 10 && live.GetProperty("percent").ValueKind == JsonValueKind.Number && live.GetProperty("rounds").GetInt32() == 6,
+            "Live: the duel HUD has the score so far, seconds left and the round count");
+        Check(View().GetProperty("lobby").GetProperty("match").GetProperty("attacker").GetString() == service.SelfId, "The match snapshot names the attacker");
+        service.Act("end", default);
         // Host leaving a simulated lobby hands it over; invites and launch joins.
         service.Act("leave", default);
         var refreshes = control.Calls.Count(c => c == "refresh");

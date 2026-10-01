@@ -724,9 +724,16 @@ host-checked hits with a 200 ms rewind cap.
 5. **AimModCore: optional extra fields.** A `self` row with the actor
    location and capsule removes the eye-height estimate. A `fired` flag per
    pose row enables "fire to score" and spray statistics.
-6. **HUD:** a Gameface overlay element for the tracking bar (`match.tracking`:
-   attacker, %, lag, disputed) and the "you track / you dodge" banner. The
-   lobby panel shows roles and results already.
+6. **HUD (done).** The out-of-panel notice layer shows a slim strip on the
+   top edge, away from the crosshair, during the countdown and the live round:
+   - `YOU TRACK` (green) or `YOU DODGE` (amber), and the opponent;
+   - the host's round score so far;
+   - a bar of the share of the elapsed round on target;
+   - the seconds left.
+
+   It comes from `duel` in `multiplayer-notify.json` (`DuelHud`), takes no
+   input, and pushes nothing into the crosshair area. The countdown toast says
+   who tracks. The lobby panel shows roles and results.
 
 ### 6.4 Vampiric 1v1
 
