@@ -12,7 +12,7 @@
     {id:'duel',label:'Duel',short:'Duel',text:'One on one, first to the set round wins.'},
     {id:'ffa-rounds',label:'Free-for-all',short:'FFA',text:'Several rounds, points for placing.'},
     {id:'practice',label:'Practice together',short:'Practice',text:'Side by side, live scores, no ranking.'},
-    {id:'tracking-duel',label:'Tracking duel',short:'Tracking',text:'Take turns tracking. Most time on target wins.'},
+    {id:'tracking-duel',label:'Tracking duel',short:'Tracking',text:'Track each other while dodging their aim. More time on target takes the round.'},
     {id:'deathmatch',label:'Deathmatch',short:'DM',text:'Everyone against everyone, first to the frag limit.'},
     {id:'vampiric',label:'Vampiric 1v1',short:'Vampiric',text:'One on one. Damage heals you, health drains.'},
     {id:'instagib',label:'Instagib',short:'Instagib',text:'Every hit kills. First to the frag limit.'},
@@ -822,7 +822,7 @@
     kv('Scenario',s.scenario?safe(s.scenario.name,'Scenario'):'Not chosen');
     kv('Map',s.mapOverride?safe(s.mapOverride.name,'Map')+(s.mapOverride.source==='ported'?' (ported)':''):'Scenario map');
     if(combat(s.mode)){kv('Frag limit',F.number(s.fragLimit||(s.mode==='vampiric'?10:s.mode==='instagib'?25:s.mode==='team-deathmatch'?50:20),0)+' kills');if(s.mode==='vampiric')kv('Lifesteal',F.number(typeof s.lifesteal==='number'?s.lifesteal:50,0)+' %');}
-    else kv(s.mode==='duel'?'First to':s.mode==='score-race'?'Attempts':s.mode==='tracking-duel'?'Rounds each':'Rounds',s.mode==='duel'?F.number(s.firstTo,0)+' wins':s.mode==='practice'?'As many as you like':F.number(s.rounds,0));
+    else kv(s.mode==='duel'?'First to':s.mode==='score-race'?'Attempts':'Rounds',s.mode==='duel'?F.number(s.firstTo,0)+' wins':s.mode==='practice'?'As many as you like':F.number(s.rounds,0));
     kv(combat(s.mode)?'Match length':s.mode==='tracking-duel'?'Round length':'Time limit',s.timeLimit?F.duration(s.timeLimit):'Scenario ('+F.duration(s.scenario?s.scenario.timeLimit:60)+')');
     kv('Loadout',profileText(s.weapon,'weapon')+' · '+profileText(s.movement,'movement'));
     if(s.character&&s.character.preset!=='default')kv('Character',profileText(s.character,'character'));
@@ -897,7 +897,10 @@
       pl.appendChild(settingRow('Frag limit','First to this many kills wins.',stepper(s.fragLimit||fragDefault,1,100,1,function(v){return F.number(v,0);},function(v){setting('fragLimit',v);},false,'frag limit')));
       if(s.mode==='vampiric')pl.appendChild(settingRow('Lifesteal','How much of the damage you deal heals you.',stepper(typeof s.lifesteal==='number'?s.lifesteal:50,0,200,5,function(v){return F.number(v,0)+' %';},function(v){setting('lifesteal',v);},false,'lifesteal')));
     }
-    else if(s.mode==='tracking-duel')pl.appendChild(settingRow('Rounds each','How many times each player tracks. Roles swap every round.',stepper(s.rounds,1,5,1,function(v){return F.number(v,0);},function(v){setting('rounds',v);},false,'rounds')));
+    else if(s.mode==='tracking-duel'){
+      pl.appendChild(settingRow('Rounds','Both players track each other every round; more time on target takes it.',stepper(s.rounds,1,9,1,function(v){return F.number(v,0);},function(v){setting('rounds',v);},false,'rounds')));
+      pl.appendChild(settingRow('Require fire','Count time on target only while the fire button is held.',toggleSwitch(!!s.requireFire,'Require fire',function(){setting('requireFire',!s.requireFire);})));
+    }
     else if(s.mode==='practice')pl.appendChild(settingRow('Rounds','Practice runs until you end it.',node('span','mp-muted','Unlimited')));
     else pl.appendChild(settingRow(s.mode==='score-race'?'Attempts':'Rounds',s.mode==='score-race'?'Each player’s best attempt counts.':'Each round gives points by placing.',stepper(s.rounds,1,s.mode==='score-race'?5:10,1,function(v){return F.number(v,0);},function(v){setting('rounds',v);},false,'rounds')));
     var limits=[{id:'default',label:'Scenario'},{id:'30',label:'30 s'},{id:'60',label:'60 s'},{id:'90',label:'90 s'},{id:'120',label:'2 min'}];
@@ -1025,7 +1028,7 @@
   }
 
   // Match screens ------------------------------------------------------------
-  function roundLabel(match){if(match.mode==='tracking-duel')return 'Round '+match.round+' of '+match.totalRounds+(match.attacker?' · '+(match.attacker===(view&&view.lobby&&view.lobby.self)?'you track':nameOf(match.attacker)+' tracks'):'');return match.mode==='duel'?'Round '+match.round+' · first to '+match.firstTo:match.totalRounds?'Round '+match.round+' of '+match.totalRounds:'Run '+match.round;}
+  function roundLabel(match){if(match.mode==='tracking-duel')return 'Round '+match.round+' of '+match.totalRounds;return match.mode==='duel'?'Round '+match.round+' · first to '+match.firstTo:match.totalRounds?'Round '+match.round+' of '+match.totalRounds:'Run '+match.round;}
   function matchScreen(page,lobby){
     if(lobby.spectate)page.appendChild(add(banner('info','Spectating '+safe(lobby.spectate.name)+' · '+statLine(lobby.spectate.score)+'. Their view plays in the pause menu.'),actions(button('Stop',function(){act('spectate-stop');},'compact quiet'))));
     var match=lobby.match;
@@ -1106,8 +1109,7 @@
   function roundResults(page,lobby,match){
     var last=match.rounds[match.rounds.length-1];if(!last)return;
     var hero=node('div','panel mp-result-hero');var winner=last.winnerId;
-    var tracked=match.mode==='tracking-duel'&&last.results[0]?last.results[0]:null;
-    add(hero,node('div','eyebrow',mode(match.mode).label+' · '+roundLabel(match)),node('h2','',tracked?(tracked.memberId===lobby.self?'You':nameOf(tracked.memberId))+' tracked '+(tracked.score===null?'—':F.number(tracked.score,1)+' %'):match.mode==='practice'?'Run '+match.round+' done':winner?(winner===lobby.self?'You take the round':nameOf(winner)+' takes the round'):'Round drawn'));
+    add(hero,node('div','eyebrow',mode(match.mode).label+' · '+roundLabel(match)),node('h2','',match.mode==='practice'?'Run '+match.round+' done':winner?(winner===lobby.self?'You take the round':nameOf(winner)+' takes the round'):'Round drawn'));
     var next=node('p','subtle','');countNodes.push({node:next,at:match.nextAt,format:function(ms){return 'Next round in '+seconds(ms)+' s';}});hero.appendChild(next);
     if(lobby.isHost)hero.appendChild(actions(button('Next round now',function(){act('next');},'compact primary'),button(match.mode==='practice'?'End session':'End match',function(){act('end');},'compact quiet danger')));
     page.appendChild(hero);

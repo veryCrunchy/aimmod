@@ -71,7 +71,8 @@ sealed record LobbySettings(
     bool AutoStart = false,
     bool Voting = true,
     int? FragLimit = null,
-    int Lifesteal = 50)
+    int Lifesteal = 50,
+    bool RequireFire = false)
 {
     public const int MinPlayers = 2, MaxPlayerLimit = 8, MaxSpectators = 4;
     [JsonIgnore] public ProfileChoice WeaponProfile => Weapon ?? ProfileChoice.Default;
@@ -80,11 +81,11 @@ sealed record LobbySettings(
     [JsonIgnore] public double EffectiveTimeLimit => Mode == LobbyModes.Tracking ? TimeLimit ?? TrackingDefaults.RoundSeconds
         : LobbyModes.Combat(Mode) ? TimeLimit ?? CombatRules.DefaultMatchSeconds : TimeLimit ?? Scenario?.TimeLimit ?? 60;
     [JsonIgnore] public int EffectiveFragLimit => FragLimit ?? CombatRules.DefaultFragLimit(Mode);
-    // Tracking duel: Rounds is the number of rounds each player tracks; roles alternate.
-    [JsonIgnore] public int? TotalRounds => Mode switch { LobbyModes.Race or LobbyModes.Rounds => Rounds, LobbyModes.Tracking => Rounds * 2, LobbyModes.Deathmatch or LobbyModes.Vampiric or LobbyModes.Instagib or LobbyModes.TeamDeathmatch => 1, _ => null };
+    // Tracking duel: Rounds is the number of rounds (both players track in each).
+    [JsonIgnore] public int? TotalRounds => Mode switch { LobbyModes.Race or LobbyModes.Rounds or LobbyModes.Tracking => Rounds, LobbyModes.Deathmatch or LobbyModes.Vampiric or LobbyModes.Instagib or LobbyModes.TeamDeathmatch => 1, _ => null };
     // Values that change what people play. Changing any of them clears ready states.
     [JsonIgnore] public string PlayKey => string.Join('|', Mode, Scenario?.Hash, MapOverride?.Hash, Rounds, FirstTo, TimeLimit,
-        WeaponProfile, MovementProfile, CharacterProfile, TargetSpeed, TargetSize, FragLimit, Lifesteal);
+        WeaponProfile, MovementProfile, CharacterProfile, TargetSpeed, TargetSize, FragLimit, Lifesteal, RequireFire);
 }
 
 static class MemberRoles { public const string Player = "player", Spectator = "spectator"; }
@@ -92,8 +93,8 @@ static class ContentStates { public const string Ok = "ok", Missing = "missing",
 static class Connections { public const string Connected = "connected", Reconnecting = "reconnecting"; }
 static class MatchPhases { public const string Loading = "loading", Countdown = "countdown", Live = "live", Round = "round", Final = "final"; }
 static class LineStates { public const string Waiting = "waiting", Playing = "playing", Finished = "finished", Dnf = "dnf", Left = "left", Dodger = "dodger"; }
-// Tracking duel defaults (game-modes.md 6.3): short rounds, three attacks each.
-static class TrackingDefaults { public const int RoundSeconds = 10, MaxRoundSeconds = 60, RoundsEach = 3, MaxRoundsEach = 5; }
+// Tracking duel defaults (game-modes.md 6.3): short simultaneous rounds, best of three.
+static class TrackingDefaults { public const int RoundSeconds = 10, MaxRoundSeconds = 60, Rounds = 3, MaxRounds = 9; }
 
 // Connection: connected or reconnecting. Link: local (this machine), relay,
 // direct or simulated. Profiles: whether custom weapon/character profiles are present.
@@ -111,9 +112,12 @@ sealed record Standing(string MemberId, string Name, int Place, int Wins, int Po
 sealed record MatchSnapshot(string Id, string Phase, string Mode, string Scenario, double TimeLimit, int Round, int? TotalRounds,
     int? FirstTo, long? StartsAt, long? EndsAt, long? NextAt, IReadOnlyList<string> Players, IReadOnlyList<ScoreLine> Live,
     IReadOnlyList<RoundResult> Rounds, IReadOnlyList<Standing> Standings, string? WinnerId, IReadOnlyList<string> Rematch, long? RematchDeadline = null, IReadOnlyList<string>? Loaded = null,
-    string? Attacker = null, TrackView? Tracking = null, CombatView? Combat = null);
-// Live tracking-duel state for the HUD: the attacker's time on target so far (host score).
-sealed record TrackView(string Attacker, string Dodger, double Percent, double Seconds, double Coverage, double LagMs, bool Disputed, string? Reason);
+    string? Attacker = null, IReadOnlyList<TrackView>? Tracking = null, CombatView? Combat = null);
+// Live tracking-duel state for the HUD: each player's time on target so far (host score).
+sealed record TrackView(string Member, double Percent, double Seconds, double Coverage, double LagMs, bool Disputed, string? Reason)
+{
+    public static TrackView Of(string member, TrackResult r) => new(member, r.Percent, r.OnTargetSeconds, r.Coverage, r.LagMs, r.Disputed, r.Reason);
+}
 
 // Clip: a shared clip replay id (everyone in the lobby received the file).
 sealed record ChatLine(long Id, string? From, string Name, string Text, long At, bool System, string? Clip = null);
@@ -143,7 +147,7 @@ static class LobbyRules
 {
     public const int MaxName = 32, MaxChat = 200, MaxContentName = 128;
     static readonly HashSet<string> Keys = ["mode", "scenario", "mapOverride", "maxPlayers", "spectators", "rounds", "firstTo",
-        "timeLimit", "weapon", "movement", "character", "targetSpeed", "targetSize", "privacy", "countdown", "lateJoin", "autoStart", "voting", "fragLimit", "lifesteal"];
+        "timeLimit", "weapon", "movement", "character", "targetSpeed", "targetSize", "privacy", "countdown", "lateJoin", "autoStart", "voting", "fragLimit", "lifesteal", "requireFire"];
 
     public static string CleanName(string? name, string fallback)
     {
@@ -217,6 +221,7 @@ static class LobbyRules
                 case "fragLimit":
                     if (value.ValueKind == JsonValueKind.Null) { next = next with { FragLimit = null }; break; }
                     if (Number() is not { } frags) return (null, Bad("Frag limit must be a number.")); next = next with { FragLimit = (int)Clamp(frags, 1, 100, 1) }; break;
+                case "requireFire": if (Flag() is not { } fire) return (null, Bad("Require fire must be on or off.")); next = next with { RequireFire = fire }; break;
                 case "lifesteal": if (Number() is not { } steal) return (null, Bad("Lifesteal must be a percentage.")); next = next with { Lifesteal = (int)Clamp(steal, 0, 200, 5) }; break;
             }
         }
@@ -250,7 +255,7 @@ static class LobbyRules
     {
         if (mode == s.Mode) return s;
         var next = s with { Mode = mode };
-        if (mode == LobbyModes.Tracking && !keepRounds) next = next with { Rounds = TrackingDefaults.RoundsEach };
+        if (mode == LobbyModes.Tracking && !keepRounds) next = next with { Rounds = TrackingDefaults.Rounds };
         return next;
     }
 
@@ -267,7 +272,8 @@ static class LobbyRules
         // Combat modes: one match-long round of their own length (default 5 min), the mode's weapon, no target changes.
         if (LobbyModes.Combat(s.Mode)) s = s with { Rounds = 1, TimeLimit = Math.Clamp(s.TimeLimit ?? CombatRules.DefaultMatchSeconds, 60, 600), Weapon = ProfileChoice.Default, TargetSpeed = 1, TargetSize = 1 };
         // Tracking duel: short rounds of its own length (never the scenario's), up to five attacks each.
-        if (s.Mode == LobbyModes.Tracking) s = s with { Rounds = Math.Clamp(s.Rounds, 1, TrackingDefaults.MaxRoundsEach), TimeLimit = Math.Clamp(s.TimeLimit ?? TrackingDefaults.RoundSeconds, 10, TrackingDefaults.MaxRoundSeconds) };
+        if (s.Mode != LobbyModes.Tracking) s = s with { RequireFire = false };
+        if (s.Mode == LobbyModes.Tracking) s = s with { Rounds = Math.Clamp(s.Rounds, 1, TrackingDefaults.MaxRounds), TimeLimit = Math.Clamp(s.TimeLimit ?? TrackingDefaults.RoundSeconds, 10, TrackingDefaults.MaxRoundSeconds) };
         if (s.MaxPlayers < Math.Max(LobbySettings.MinPlayers, players)) s = s with { MaxPlayers = Math.Min(LobbySettings.MaxPlayerLimit, Math.Max(LobbySettings.MinPlayers, players)) };
         return s with { Weapon = s.WeaponProfile, Movement = s.MovementProfile, Character = s.CharacterProfile };
     }

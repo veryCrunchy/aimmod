@@ -809,10 +809,10 @@ sealed partial class MultiplayerService : IDisposable
             var round = match.Round > 1 ? "Round " + match.Round + " starting" : "Match starting";
             var how = plan is { } p && p.Key == match.Id + "#" + match.Round ? p.Message : "Get ready.";
             // Tracking duel: the countdown says who tracks (the duel HUD repeats it during the round).
-            if (match.Mode == LobbyModes.Tracking && match.Attacker is { } attacker)
+            if (match.Mode == LobbyModes.Tracking)
             {
                 var other = lobby.Members.FirstOrDefault(x => x.Id != SelfId && match.Players.Contains(x.Id))?.Name ?? "your opponent";
-                how = attacker == SelfId ? "You track " + other + ". Keep your crosshair on them." : "You dodge. " + other + " tracks you.";
+                how = "Track " + other + " and dodge their aim" + (lobby.Settings.RequireFire ? " (hold fire to score)." : ".");
             }
             return new GameNotice("cd-" + match.Id + "-" + match.Round, "countdown", round + " in " + seconds, LobbyRules.CleanName(match.Scenario, "Scenario") + " · " + how, null, seconds, "countdown");
         }
@@ -906,23 +906,30 @@ sealed partial class MultiplayerService : IDisposable
             team, team is { } t && view.TeamFrags is { } tf ? tf[t - 1] : null, team is { } t2 && view.TeamFrags is { } tf2 ? tf2[2 - t2] : null, left, m.Phase, feed);
     }
 
-    internal sealed record DuelView(string Role, string Opponent, double? Percent, double? OnTarget, int? Left, int Round, int Rounds, string Phase, bool Disputed);
+    // Simultaneous duel: both players' scores so far (your %, their %), each player's share of
+    // the elapsed round on target for the bars, round wins, seconds left and round count.
+    internal sealed record DuelView(string Opponent, double? You, double? Them, double? YouShare, double? ThemShare, int Wins, int TheirWins, int? Left, int Round, int Rounds,
+        string Phase, bool Disputed, bool RequireFire);
     internal DuelView? DuelHud()
     {
-        if (Current is not { Match: { Mode: LobbyModes.Tracking, Phase: MatchPhases.Countdown or MatchPhases.Live, Attacker: { } attacker } m } lobby || !m.Players.Contains(SelfId)) return null;
-        var opponent = lobby.Members.FirstOrDefault(x => x.Id != SelfId && m.Players.Contains(x.Id))?.Name ?? "Opponent";
+        if (Current is not { Match: { Mode: LobbyModes.Tracking, Phase: MatchPhases.Countdown or MatchPhases.Live } m } lobby || !m.Players.Contains(SelfId)) return null;
+        var opponentId = m.Players.FirstOrDefault(p => p != SelfId);
+        var opponent = lobby.Members.FirstOrDefault(x => x.Id == opponentId)?.Name ?? "Opponent";
         // Match times are on the host clock.
         var hostNow = clock() + (core is null && hostPeer is not null ? clocks.GetValueOrDefault(hostPeer)?.Offset ?? 0 : 0);
-        int? left = null; double? share = null;
+        int? left = null; double elapsed = 0;
         if (m.Phase == MatchPhases.Live && m.StartsAt is { } start)
         {
             var end = start + (long)(m.TimeLimit * 1000);
             left = (int)Math.Max(0, Math.Ceiling((end - hostNow) / 1000.0));
-            var elapsed = Math.Clamp(hostNow - start, 0, end - start) / 1000.0;
-            if (m.Tracking is { } t && elapsed > 0.5) share = Math.Round(Math.Min(100, t.Seconds * 100 / elapsed), 1);
+            elapsed = Math.Clamp(hostNow - start, 0, end - start) / 1000.0;
         }
-        return new DuelView(attacker == SelfId ? "track" : "dodge", LobbyRules.CleanName(opponent, "Opponent"), m.Phase == MatchPhases.Live ? m.Tracking?.Percent ?? 0 : null, share,
-            left, m.Round, m.TotalRounds ?? m.Round, m.Phase, m.Tracking?.Disputed == true);
+        var mine = m.Tracking?.FirstOrDefault(t => t.Member == SelfId); var theirs = m.Tracking?.FirstOrDefault(t => t.Member == opponentId);
+        double? Share(TrackView? t) => t is not null && elapsed > 0.5 ? Math.Round(Math.Min(100, t.Seconds * 100 / elapsed), 1) : null;
+        var live = m.Phase == MatchPhases.Live;
+        return new DuelView(LobbyRules.CleanName(opponent, "Opponent"), live ? mine?.Percent ?? 0 : null, live ? theirs?.Percent ?? 0 : null, Share(mine), Share(theirs),
+            m.Rounds.Count(r => r.WinnerId == SelfId), m.Rounds.Count(r => r.WinnerId == opponentId), left, m.Round, m.TotalRounds ?? m.Round, m.Phase,
+            mine?.Disputed == true || theirs?.Disputed == true, lobby.Settings.RequireFire);
     }
     string NoticeJson(GameNotice? notice = null)
     {
@@ -1667,7 +1674,7 @@ sealed partial class MultiplayerService : IDisposable
         if (match.Phase is not (MatchPhases.Countdown or MatchPhases.Live)) return;
         // Samples travel on the host clock: offset = host - local.
         var offset = core is not null || hostPeer is null ? 0 : clocks.GetValueOrDefault(hostPeer)?.Offset ?? 0;
-        poseTracker.Poll(offset);
+        poseTracker.Poll(offset, match.Players);
         foreach (var batch in poseTracker.Drain(match.Id, match.Round))
         {
             if (core is not null) core.Track(SelfId, batch);
