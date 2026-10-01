@@ -101,3 +101,10 @@ test('match: ending a match looks destructive, and spectate buttons keep long na
   const w=setup().open(view({watch:{peer:'f9',name:'Synthetic Friend',scenario:'Synthetic A',state:'watching',message:'',score:null,others:[{id:'f1',name:'Synthetic Friend With A Very Long Name'}]}}));
   assert.ok(w.button('Switch to Synthetic Friend Wi…'),'clipped to 20 characters');
 });
+test('live: the round label shows once and the host ends the match from the scores panel',()=>{
+  const m={id:'m1',phase:'live',mode:'ffa-rounds',scenario:'Synthetic Scenario',timeLimit:60,round:2,totalRounds:3,startsAt:0,players:['p1','p2'],
+    live:[{memberId:'p1',score:900,seconds:20,status:'playing'},{memberId:'p2',score:800,seconds:20,status:'playing'}],rounds:[],standings:[],winnerId:null,rematch:[]};
+  const s=setup().open(view({lobby:lobby({match:m})}));
+  assert.equal(s.all().filter(e=>e.textContent==='Round 2 of 3').length,1);
+  const end=s.button('End match');let el=end;while(el&&!/mp-live/.test(el.className))el=el.parentNode;assert.ok(el,'End match sits in the live panel');
+});

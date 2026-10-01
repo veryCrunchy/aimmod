@@ -287,3 +287,4 @@
 /* Home: preferences fold to a summary line */
 .mp-prefs.folded{padding-bottom:16px}.mp-prefs .panel-head .actions>.button{margin:0}.mp-prefs-warn{margin:10px 20px 0}
 .mp-rejoin .actions>.button+.button,.mp-watch .actions>.button+.button{margin-left:8px}.mp-error h2{margin-bottom:8px}
+.mp-live .panel-head .actions>.button{margin:0}

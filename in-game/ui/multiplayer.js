@@ -926,7 +926,9 @@
   }
   function live(page,lobby,match){
     var row=node('div','mp-row');page.appendChild(row);var main=node('div','mp-col mp-main'),side=node('div','mp-col mp-side');row.appendChild(main);row.appendChild(side);
-    var p=node('div','panel mp-live');var head=node('div','panel-head');var text=node('div','head-text');add(text,node('h2','','Live scores'),node('p','',safe(match.scenario,'Scenario')+' · '+roundLabel(match)));head.appendChild(text);p.appendChild(head);
+    var p=node('div','panel mp-live');var head=node('div','panel-head');var text=node('div','head-text');add(text,node('h2','','Live scores'),node('p','',safe(match.scenario,'Scenario')));head.appendChild(text);
+    // The host's End match lives with the scores, not under a long spectate list.
+    if(lobby.isHost)head.appendChild(actions(button('End match',function(){act('end');},'compact quiet danger')));p.appendChild(head);
     var body=node('div','mp-live-body');body.appendChild(hud(lobby,match));p.appendChild(body);main.appendChild(p);
     var you=node('div','panel mp-card');add(you,node('h2','','Your run'));var plan=planBox(lobby);if(plan)you.appendChild(plan);else you.appendChild(node('p','subtle','Play the round in KovaaK’s. Your score streams to the lobby as you play.'));
     you.appendChild(node('p','mp-note','Each score comes from that player’s own run in their game.'));
@@ -936,7 +938,6 @@
       others.forEach(function(id){var row=node('div','mp-friend');add(row,avatar(nameOf(id),true),add(node('div','mp-friend-info'),node('strong','',nameOf(id))));row.appendChild(actions(button(lobby.spectate&&lobby.spectate.member===id?'Watching':'Spectate',function(){spectate(id);},'compact')));sp.appendChild(row);});
       side.appendChild(sp);}
     if(match.rounds.length&&match.mode!=='practice'){var st=node('div','panel');var sh=node('div','panel-head');add(sh,node('h2','','Standings so far'));st.appendChild(sh);var sb=node('div','panel-body');sb.appendChild(standingsTable(match));st.appendChild(sb);side.appendChild(st);}
-    if(lobby.isHost)side.appendChild(actions(button('End match',function(){act('end');},'compact quiet danger')));
   }
   function placementTable(results,mode,showPoints){
     var t=node('div','mp-table');var head=node('div','mp-tr head');add(head,node('span','mp-td place',''),node('span','mp-td name','Player'),node('span','mp-td num','Score'),node('span','mp-td num','Accuracy'),showPoints?node('span','mp-td num',mode==='duel'?'Win':'Points'):null);t.appendChild(head);
