@@ -1269,19 +1269,29 @@ static partial class MultiplayerChecks
         Check(control.Calls.Count(c => c == "load Synthetic A") == 3 && Round().GetProperty("state").GetString() is "loading" or "ready", "The load is retried once the game is free");
         service.Dispose();
 
-        // A game that can load scenarios but not start them: a challenge that ends after the round
-        // went live leaves the player to start it by hand, instead of holding the round forever.
-        var loadOnly = new FakeGame("load");
+        // A game that can load scenarios but not start them, still in a challenge run: the match never
+        // goes live without this player (load gate); the wait says why, times out into retry or abort,
+        // and once the challenge ends the map loads, the match starts and the player starts by hand.
+        var loadOnly = new FakeGame("load") { Root = Path.Combine(root, "game") };
         service = new MultiplayerService(new OfflineTransport(), new ContentLibrary(Path.Combine(root, "game")), loadOnly, () => new LocalRun(false, null, null, null, null, 0, 0, 0, null), () => [], () => null, null, simulation: true, () => now, autoTick: false, seed: 5);
         service.Act("create", J(new { mode = "score-race", scenario = "Synthetic A" }));
         service.Act("sim", J(new { op = "add" }));
         Run(9000);
         loadOnly.ChallengeRunning = true;
         Check(service.Act("start", default).Ok, "The host starts while still in a challenge run (load only)");
-        Run(30_000);
-        Check(Phase() == MatchPhases.Live && Round().GetProperty("state").GetString() == "blocked", "The round goes live while the challenge still runs");
+        Run(10_000);
+        var held = JsonDocument.Parse(service.NoticeText()).RootElement;
+        Check(Phase() == MatchPhases.Loading && Round().GetProperty("state").GetString() == "blocked" && held.GetProperty("title").GetString()!.StartsWith("Waiting for everyone to load", StringComparison.Ordinal),
+            "A player still in a challenge holds the load; the match doesn't start without them");
+        Run((int)LobbyCore.LoadingMs);
+        held = JsonDocument.Parse(service.NoticeText()).RootElement;
+        Check(Phase() == MatchPhases.Loading && held.GetProperty("title").GetString()!.StartsWith("Couldn’t load the match", StringComparison.Ordinal) && held.GetProperty("body").GetString()!.Contains("Still in a challenge run", StringComparison.Ordinal),
+            "Past the time limit the host sees that the player is still in a challenge run, with retry or abort; still not live");
         loadOnly.ChallengeRunning = false;
         Run(2500);
+        Check(Phase() is MatchPhases.Countdown or MatchPhases.Live, "Once the challenge ends the map loads and the match starts by itself");
+        for (var i = 0; i < 100 && Phase() != MatchPhases.Live; i++) Run(100);
+        Run(300);
         Check(Round().GetProperty("state").GetString() == "manual" && Round().GetProperty("message").GetString()!.StartsWith("Go!", StringComparison.Ordinal),
             "Once the challenge ends a game without start asks the player to start the round");
         service.Dispose();

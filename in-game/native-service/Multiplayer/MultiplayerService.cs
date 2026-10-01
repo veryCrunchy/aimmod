@@ -1714,7 +1714,8 @@ sealed partial class MultiplayerService : IDisposable
             blockedRetryAt = clock() + 2000;
             return;
         }
-        if (game.Result is { } result && (result.Sequence == plan.LoadSequence || result.Sequence == plan.StartSequence))
+        // A command result applies once, while that command is pending: later ticks keep the state it led to (manual, started).
+        if (game.Result is { } result && ((result.Sequence == plan.LoadSequence && plan.State == "loading") || (result.Sequence == plan.StartSequence && plan.State == "starting")))
         {
             var state = result.State == "error" ? "error" : result.Code is "loaded" or "already-loaded" ? "ready" : result.Code == "started" ? "started" : plan.State;
             var text = result.State == "error"

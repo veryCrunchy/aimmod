@@ -451,6 +451,12 @@ Fixes:
   match (n/m)" with each player's reason, and the host gets Retry
   (`retry-load`, a new `LoadAttempt` with nobody loaded) and Abort (`end`).
   Reports from an earlier attempt don't count.
+
+  A player still in a challenge run reports
+  `loaded {ok:false, pending:true}`. Everyone sees "Still in a challenge
+  run." as their reason, but only the time limit fails the load. Once the run
+  ends, their map loads and the match starts by itself, even after a failed
+  wait.
 - **Debug copies.** A match scenario stays in the game's Scenarios folder
   while its lobby needs it. One that failed to load is copied to
   `<output>/match-debug/` before cleanup removes it. Only the last three are

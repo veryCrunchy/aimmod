@@ -31,6 +31,8 @@ sealed class LobbyCore
         public Dictionary<string, string> Names = new(); public string? WinnerId; public bool Over; public long? RematchDeadline; public HashSet<string> Loaded = [];
         // Load gate: why a player's map isn't there, whether the wait timed out, and the retry count.
         public Dictionary<string, string> LoadIssues = new(); public bool LoadFailed; public int LoadAttempt;
+        // Players whose issue is only a wait (still in a challenge run): shown, but it doesn't fail the load early.
+        public HashSet<string> LoadWaiting = [];
         // Tracking duel: the current round's samples, and the last host scores (first, second player).
         public TrackingRound? Tracking; public (TrackResult First, TrackResult Second)? TrackLast; public long TrackComputedAt;
         // Combat modes: the host's health, frags and respawns for the whole match.
@@ -326,14 +328,17 @@ sealed class LobbyCore
             case "loaded":
             {
                 // ok (default true): the player's game shows the scenario and its map; false with a reason.
+                // pending: not loaded yet for a reason that may clear by itself (a challenge run); the
+                // reason is shown but only the time limit fails the load.
                 if (match is not { Phase: MatchPhases.Loading } lm || !lm.Players.Contains(from)) return LobbyResult.Success;
                 if (args.ValueKind == JsonValueKind.Object && args.TryGetProperty("attempt", out var at) && at.TryGetInt32(out var attempt) && attempt != lm.LoadAttempt) return LobbyResult.Success;
                 var ok = !(args.ValueKind == JsonValueKind.Object && args.TryGetProperty("ok", out var okv) && okv.ValueKind == JsonValueKind.False);
-                if (ok) { lm.LoadIssues.Remove(from); if (lm.Loaded.Add(from)) Changed(); }
+                if (ok) { lm.LoadIssues.Remove(from); lm.LoadWaiting.Remove(from); if (lm.Loaded.Add(from)) Changed(); }
                 else
                 {
                     var reason = LobbyRules.CleanChat(Text("reason")) ?? "The map didn’t load.";
                     lm.Loaded.Remove(from);
+                    if (args.TryGetProperty("pending", out var pv) && pv.ValueKind == JsonValueKind.True) lm.LoadWaiting.Add(from); else lm.LoadWaiting.Remove(from);
                     if (lm.LoadIssues.GetValueOrDefault(from) != reason) { lm.LoadIssues[from] = reason; Changed(); }
                 }
                 return LobbyResult.Success;
@@ -342,7 +347,7 @@ sealed class LobbyCore
                 // The host asks everyone to load again after a failed or stuck load.
                 if (!IsHost(from)) return HostOnly();
                 if (match is not { Phase: MatchPhases.Loading } rm) return LobbyResult.Fail("invalid", "Nothing is loading.");
-                rm.Loaded.Clear(); rm.LoadIssues.Clear(); rm.LoadFailed = false; rm.LoadAttempt++; rm.NextAt = clock() + LoadingMs;
+                rm.Loaded.Clear(); rm.LoadIssues.Clear(); rm.LoadWaiting.Clear(); rm.LoadFailed = false; rm.LoadAttempt++; rm.NextAt = clock() + LoadingMs;
                 System("Loading again.");
                 return LobbyResult.Success;
             case "buy" or "use":
@@ -691,7 +696,7 @@ sealed class LobbyCore
         {
             var present = match.Players.Where(id => Find(id) is not null).ToArray();
             if (present.Length > 0 && present.All(match.Loaded.Contains)) StartRound();
-            else if (!match.LoadFailed && (now >= match.NextAt || present.Any(match.LoadIssues.ContainsKey)))
+            else if (!match.LoadFailed && (now >= match.NextAt || present.Any(id => match.LoadIssues.ContainsKey(id) && !match.LoadWaiting.Contains(id))))
             {
                 match.LoadFailed = true;
                 var waiting = present.Where(id => !match.Loaded.Contains(id)).Select(id => match.Names.GetValueOrDefault(id, "Player")).ToArray();

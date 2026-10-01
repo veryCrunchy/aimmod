@@ -10,7 +10,7 @@ sealed partial class MultiplayerService
 {
     readonly Dictionary<string, (string? MapName, double? MapScale)> expectedMaps = new(StringComparer.Ordinal);
     public const long MapMismatchRetryMs = 15_000, MapMismatchFailMs = 30_000;
-    string? verifyKey; long verifySince, verifyRetriedAt; int verifyGood; string? failedScenario;
+    string? verifyKey, waitSent; long verifySince, verifyRetriedAt; int verifyGood; string? failedScenario;
 
     // The map a round's scenario loads: from the match scenario AimMod built, else the base file.
     (string? MapName, double? MapScale) ExpectedMap(string scenario)
@@ -49,6 +49,16 @@ sealed partial class MultiplayerService
         if (plan.State == "error") { Report(false, plan.Message); return; }
         // Without AimModCore's game commands the player loads by hand; nothing to verify.
         if (plan.State == "manual") { Report(true, null); return; }
+        // Held by a challenge run: say so (everyone sees why the match waits), without failing the load.
+        if (plan.State == "blocked")
+        {
+            if (waitSent != key)
+            {
+                waitSent = key;
+                Command("loaded", JsonSerializer.SerializeToElement(new { match = match.Id, round = match.Round, attempt = match.LoadAttempt, ok = false, pending = true, reason = "Still in a challenge run." }));
+            }
+            return;
+        }
         if (plan.State is not ("ready" or "started")) return;
         if (verifyKey != key) { verifyKey = key; verifySince = clock(); verifyRetriedAt = 0; verifyGood = 0; }
         var problem = SceneProblem(game.Scene, plan.Scenario, ExpectedMap(plan.Scenario));
