@@ -75,7 +75,9 @@ def convert_file(path: str, out: str, args) -> dict:
     if not args.no_ground:
         cleanup.add_ground_plane(sc)
     cleanup.remove_buried_liquids(sc)
+    spawns.snap_to_floor(sc)
     spawns.fix_spawns(sc)
+    spawns.snap_to_floor(sc)  # a spawn lifted out of a brush stands on what it was lifted onto
     checks.remove_floating(sc)
     table = materials.load_table(args.materials)
     slots, tex_slot = materials.allocate(sc, table, args.groups)

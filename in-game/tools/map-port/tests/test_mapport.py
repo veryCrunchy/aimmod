@@ -255,6 +255,26 @@ class CsMapTests(unittest.TestCase):
         self.assertTrue(csmap.wanted("de_x", {}) and not csmap.wanted("aim_map", {"zones": [], "points": []}))
 
 
+class SpawnFloorTests(unittest.TestCase):
+    def test_spawns_stand_on_the_floor(self):
+        from mapport import spawns
+        sc = scene.Scene(name="s")
+        # A floor slab with its top at z = 0 (a real convex box, so the downward ray finds it).
+        lo, hi = (-512.0, -512.0, -32.0), (512.0, 512.0, 0.0)
+        faces = []
+        for axis in range(3):
+            for sign, v in ((-1.0, lo[axis]), (1.0, hi[axis])):
+                n = [0.0, 0.0, 0.0]; n[axis] = sign
+                corner = list(lo if sign < 0 else hi)
+                faces.append(scene.Face(polygon=[tuple(corner)] * 3, normal=tuple(n), texture="floor"))
+        sc.brushes.append(scene.Brush(faces=faces))
+        sc.spawns = [scene.Spawn(origin=(0.0, 0.0, 48.0), yaw=0.0, team=1), scene.Spawn(origin=(100.0, 0.0, 17.0), yaw=0.0, team=2)]
+        self.assertEqual(spawns.floating_spawns(sc), 2, "origins 48 and 17 units up float")
+        self.assertEqual(spawns.snap_to_floor(sc), 2)
+        self.assertEqual([round(s.origin[2], 1) for s in sc.spawns], [0.5, 0.5])
+        self.assertEqual(spawns.floating_spawns(sc), 0)
+
+
 class BuriedLiquidTests(unittest.TestCase):
     def test_water_under_a_floor_is_dropped_pools_stay(self):
         from mapport import cleanup
@@ -575,7 +595,9 @@ class TagTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             src = os.path.join(tmp, "fy_pool_test.bsp")
             with open(src, "wb") as fh:
-                fh.write(synthetic.build_bsp(with_displacement=False, water=LiquidTests.POOL))
+                # Standing on the fixture floor (top at z=16), open to the air: LiquidTests.POOL sits inside
+                # the floor slab, which the port now drops as water sealed under the floor.
+                fh.write(synthetic.build_bsp(with_displacement=False, water=((-48.0, 0.0, 16.0), (40.0, 64.0, 40.0))))
             out = os.path.join(tmp, "out")
             cli.main([src, "--out", out, "--no-preview", "--no-thumbnail", "--allow-check-fail"])
             sce = os.path.join(out, "Scenarios", "AimMod - fy_pool_test (CSS) - CS Movement.sce")

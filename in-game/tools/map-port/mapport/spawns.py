@@ -53,6 +53,47 @@ def blocked(box, solids: List[_Solid], eps: float = 0.05) -> Optional[_Solid]:
     return None
 
 
+FLOOR_SEARCH = 512.0  # how far below a spawn origin the floor is looked for
+FLOAT_LIMIT = 8.0     # feet more than this above the floor count as floating (checks)
+
+
+def feet_above_floor(origin, index) -> Optional[float]:
+    """Height of a spawn's feet above the floor right below it (None: no floor within FLOOR_SEARCH)."""
+    from .checks import floor_below
+    f = floor_below((origin[0], origin[1], origin[2] + 2.0), index, FLOOR_SEARCH)
+    return None if f is None else origin[2] - f
+
+
+def snap_to_floor(sc: scene.Scene) -> int:
+    """Put every spawn's feet on the floor below it. Mappers place info_player_* origins well above
+    the floor (Source maps often 40-48 units, GoldSrc at the hull centre); KovaaK's then drops the
+    player from up there and AimMod's own spawns float."""
+    from .checks import _Index
+    index = _Index(_solids(sc))
+    moved = 0
+    for sp in sc.spawns:
+        gap = feet_above_floor(sp.origin, index)
+        if gap is None or abs(gap - 0.5) <= 0.5:
+            continue
+        sp.origin = (sp.origin[0], sp.origin[1], sp.origin[2] - gap + 0.5)
+        moved += 1
+    if moved:
+        sc.bump("spawns_dropped_to_floor", moved)
+    return moved
+
+
+def floating_spawns(sc: scene.Scene) -> int:
+    """Spawns whose feet are more than FLOAT_LIMIT above the floor (or with no floor below)."""
+    from .checks import _Index
+    index = _Index(_solids(sc))
+    count = 0
+    for sp in sc.spawns:
+        gap = feet_above_floor(sp.origin, index)
+        if gap is None or gap > FLOAT_LIMIT:
+            count += 1
+    return count
+
+
 def fix_spawns(sc: scene.Scene) -> None:
     """Nudge spawns whose hull overlaps a brush: first upwards, then sideways in growing rings."""
     solids = _solids(sc)

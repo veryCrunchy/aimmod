@@ -32,6 +32,7 @@ namespace bridge::ghost
         std::vector<std::array<double, 3>> spawns;   // capsule centres (or feet) of the arena's spawns
         double x = 0, y = 0, z = 0, yaw = 0;
         bool placed = false;
+        bool grounded = false; // the current z came from a floor trace (never shown floating once true)
         int target = -1, at = -1, blocked = 0;
         double walkedFor = 0, nextCrouch = 6, crouchUntil = -1, nextJump = 14, jumpStart = -1;
         std::uint32_t seed = 0x2468ace1u;
@@ -56,6 +57,7 @@ namespace bridge::ghost
             x = s[0];
             y = s[1];
             z = ground ? *ground + halfHeight : s[2];
+            grounded = ground.has_value();
             at = index;
             target = -1;
             blocked = 0;
@@ -92,9 +94,18 @@ namespace bridge::ghost
             s.halfHeight = halfHeight;
             if (!placed && !PlaceRandom(halfHeight, floor)) return s;
             dt = std::clamp(dt, 0.0, 0.1);
+            // Not on a traced floor yet (placed without one): look again where it stands, and stand still until found.
+            if (!grounded)
+            {
+                if (const auto ground = floor(x, y, z + StepUp); ground)
+                {
+                    z = *ground + halfHeight;
+                    grounded = true;
+                }
+            }
             if (target < 0) Choose(clear);
             double vx = 0, vy = 0;
-            if (target >= 0)
+            if (target >= 0 && grounded)
             {
                 const auto& goal = spawns[static_cast<std::size_t>(target)];
                 const double dx = goal[0] - x, dy = goal[1] - y, d = std::hypot(dx, dy);

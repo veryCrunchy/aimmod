@@ -648,6 +648,22 @@ int main()
         bool fell = false;
         for (int i = 0; i < 60 * 30; ++i) fell |= l.Step(i / 60.0, 1 / 60.0, half, ledge, open).x >= 300;
         Check(!fell, "the walker never steps off a ledge");
+        // Placed while no trace finds the floor (spawn height 500): it stands still, then snaps down
+        // as soon as one does, and is never shown walking in the air.
+        int calls = 0;
+        auto late = [&](double, double, double) -> std::optional<double> { return ++calls > 5 ? std::optional<double>(0.0) : std::nullopt; };
+        ghost::Walker f;
+        f.spawns = {{0, 0, 500}, {1000, 0, 500}};
+        f.Place(0, half, late);
+        bool airWalk = false;
+        double lastZ = 0;
+        for (int i = 0; i < 60 * 5; ++i)
+        {
+            const auto s = f.Step(i / 60.0, 1 / 60.0, half, late, open);
+            airWalk |= s.z > 400 && (std::fabs(s.x) > 0.01 || std::fabs(s.y) > 0.01);
+            lastZ = s.z;
+        }
+        Check(!airWalk && lastZ <= half + ghost::Walker::JumpHeight + 0.01, "without a floor yet the walker waits at its spawn, then stands on the floor");
     }
     Check(ghost::IsHelperBot("AimMod Hidden Bot") && !ghost::IsHelperBot("AimMod Hidden") && !ghost::IsHelperBot("target") &&
               std::hypot(ghost::HelperParkX, ghost::HelperParkY) > 100000 && std::hypot(ghost::HelperParkX, ghost::HelperParkY) < 1048576,
