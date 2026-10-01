@@ -35,6 +35,7 @@ static class Protocol
         new("content.chunk", true, "host>client", "{hash, offset, total, data}: up to 8 KiB of a Brotli-packed file, base64"),
         new("content.error", true, "host>client", "{hash, code}: not-offered, unavailable, invalid or none"),
         new("content.done", true, "client>host", "{transfer}: the receiver has the whole file; the host ends the bulk transfer as complete"),
+        new("replay.chunk", true, "any", "{match, round, owner, id, kind:round|clip, label, size, hash, offset, data}: a run replay or clip, relayed by the host to everyone"),
     ];
     public static bool Reliable(string type) => Types.First(t => t.Type == type).Reliable;
     public static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, DefaultIgnoreCondition = JsonIgnoreCondition.Never, MaxDepth = 16 };

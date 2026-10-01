@@ -29,7 +29,7 @@ static class MultiplayerChecks
         Peers();
         SteamPipe();
         var root = Path.Combine(Path.GetTempPath(), "aimmod-mp-test-" + Guid.NewGuid().ToString("N"));
-        try { Content(root); Generator(root); Service(root); Transfers(root); }
+        try { Content(root); Generator(root); Service(root); Transfers(root); Replays(root); }
         finally { try { Directory.Delete(root, true); } catch (IOException) { } }
         Console.WriteLine($"{count} multiplayer checks passed.");
     }
@@ -249,7 +249,7 @@ static class MultiplayerChecks
         foreach (var bad in new[] { Swap("aimmod.mp", "other"), Swap("\"v\":1", "\"v\":2"), Swap("\"command\"", "\"teleport\""), Swap("\"seq\":7", "\"seq\":-1"), "[]", "{", Swap("\"body\":{", "\"body\":[{").Replace("}}}", "}}]}") })
             Check(Protocol.Decode(Encoding.UTF8.GetBytes(bad)) is null, "Rejected frame: " + bad[..Math.Min(40, bad.Length)]);
         Check(Protocol.Decode(new byte[Protocol.MaxBytes + 1]) is null, "Oversized frames are rejected");
-        Check(!Protocol.Reliable("score") && Protocol.Reliable("snapshot") && Protocol.Types.Length == 17, "Score frames are unreliable, state is reliable");
+        Check(!Protocol.Reliable("score") && Protocol.Reliable("snapshot") && Protocol.Types.Length == 18, "Score frames are unreliable, state is reliable");
         var sync = new ClockSync();
         sync.Add(0, 1050, 200); sync.Add(1000, 2010, 1020); sync.Add(2000, 3100, 2300);
         Check(sync.Rtt == 20 && sync.Offset == 1000, "Clock sync uses the minimum round-trip sample");
@@ -534,6 +534,36 @@ static class MultiplayerChecks
         Check(!store.Write("My Scenario", "x", 4).Ok, "Only reserved names are written");
         for (var i = 0; i < 3; i++) store.Write(MatchScenario.Prefix + "Synthetic A - CS - 1111111" + i, "g" + i, 10 + i);
         Check(store.Files().Count == 2 && !File.Exists(Path.Combine(folder, MatchScenario.Name(cs) + ".sce")) && File.Exists(Path.Combine(folder, taken + ".sce")), "Old match scenarios are cleaned up, user files kept");
+    }
+
+    // Synthetic format 2 replay (same fixture as CoreFormatChecks).
+    const string SyntheticReplay = "QU1SUExBWTICAAAAzQEAAHsia2luZCI6ImhlYWRlciIsInZlcnNpb24iOjIsImlkIjoiMTc5MDAwMDAwMC00Mi0yIiwic2NlbmFyaW8iOiJTeW50aGV0aWMgdGFyZ2V0IHRlc3QiLCJyZWNvcmRlZEF0IjoiMjAyNi0wMS0wMVQwMDowMDowMFoiLCJjb29yZGluYXRlcyI6InVucmVhbC1jZW50aW1ldGVycyIsIm5vbWluYWxIeiI6NjAsIm1hcE5hbWUiOiJNYXBfQSIsIm1hcFNjYWxlIjoxLCJzdGFydEV2ZW50IjoibmF0aXZlIiwicmVhc29uIjoiY29tcGxldGVkIiwiZnJhbWVzIjoxNzIsImlucHV0RXZlbnRzIjoyMDUyLCJzY29yZSI6MzIxLjUsImR1cmF0aW9uIjoyLjk5ODUsImVuY29kaW5nIjp7ImtleWZyYW1lcyI6NiwicXVhbnR1bSI6MC4wNywieWF3UGVyVW5pdCI6MC4xMTQ1ODU5OTksInBpdGNoUGVyVW5pdCI6LTAuMTE0NTg2LCJrZXlmcmFtZUVycm9yTWF4Ijo3LjM3NGUtMTAsImtleWZyYW1lRXJyb3JSbXMiOjUuMTI3ZS0xMH19BQAAAM0gAAAKUeXAGADoBc0gAAAAAAAAzSAAAAAAAABMAQAAC0qy1doDBybVsUyvB3hxLFGmoQSQ1H8ePNlBXUa5KZq7gkedYSami6iPAAAAmhhwZs9VAKYP7E/AOjgQqHIDBzbYAQeYDeAHIIDV0mENsYgH4gAWRascnCQCYDoW9EMfUF/4BJAhB0oxhojIB+IBjNAygC7wTo/WkAEEdG9CAwEB187A88LHwNvXDW7ZAAaqTu9h9s8irjSBB8QvTMAqYBmAgdJTABjA4NfqSVBeRf30Vgk+CDBv63vSJAgQMKgGEAgKrCsDrgSBAIOAgwECBIECgQCFAcs2ASugwcABgQBCQYDAgAKBlRAQMGBAcCCAEFBQESgIDBAEJFj9DAQOAhAGCggEBBQGAggGEuyZ4dUk2GfS3PCJBBNuUrYAxZsGru0Z4tXUZ9LEdhaPBOhtXsKNwxcQoPUEMKsKAACAIPyJXS8EqQAGODIUCbA=";
+    static void Replays(string root)
+    {
+        long now = 30_000_000;
+        var bytes = Convert.FromBase64String(SyntheticReplay);
+        string Out(string name) { var o = Path.Combine(root, "swap", name); Directory.CreateDirectory(o); return o; }
+        var sender = new ReplaySwap(Out("a"), () => now); var receiver = new ReplaySwap(Out("b"), () => now);
+        File.WriteAllBytes(Path.Combine(Out("a"), "replays.tmp"), []);
+        Directory.CreateDirectory(Path.Combine(Out("a"), "replays"));
+        File.WriteAllBytes(Path.Combine(Out("a"), "replays", "1790000000-42-2.amreplay"), bytes);
+        File.WriteAllBytes(Path.Combine(Out("a"), "replays", "1790000000-42-3.amreplay.partial"), bytes);
+        Check(sender.ReadOwn("1790000000-42-2")!.SequenceEqual(bytes) && sender.ReadOwn("1790000000-42-3") is null && sender.ReadOwn("../x") is null, "Only finished replays are read, by safe id");
+        sender.Offer("peer-b", "m1", 1, "peer-a", "1790000000-42-2", "round", bytes);
+        (byte[] Bytes, ReplaySwap.Shared Info)? done = null;
+        for (var i = 0; i < 10 && done is null; i++)
+            sender.Pump(false, (_, body) =>
+            {
+                var b = JsonSerializer.SerializeToElement(body, Protocol.Json);
+                done ??= receiver.Chunk(b.GetProperty("match").GetString()!, b.GetProperty("round").GetInt32(), b.GetProperty("owner").GetString()!, b.GetProperty("id").GetString()!, b.GetProperty("kind").GetString()!, null,
+                    b.GetProperty("size").GetInt32(), b.GetProperty("hash").GetString()!, b.GetProperty("offset").GetInt32(), Convert.FromBase64String(b.GetProperty("data").GetString()!));
+            });
+        Check(done is not null && receiver.Import(done.Value.Bytes, done.Value.Info) == "1790000000-42-2" && File.Exists(Path.Combine(Out("b"), "replays", "1790000000-42-2.amreplay")), "A round replay arrives, is verified and imported");
+        Check(receiver.Received.Single().Owner == "peer-a" && receiver.Received.Single().Round == 1, "The import is remembered for run vs run");
+        var tampered = (byte[])bytes.Clone(); tampered[^1] ^= 0xFF;
+        var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant();
+        Check(receiver.Chunk("m1", 2, "peer-a", "1790000000-42-9", "round", null, tampered.Length, hash, 0, tampered.Take(ReplaySwap.ChunkBytes).ToArray()) is null || tampered.Length > ReplaySwap.ChunkBytes, "A replay whose bytes don't match its hash is dropped");
+        Check(receiver.Chunk("m1", 1, "peer-a", "../evil", "round", null, 100, hash, 0, new byte[10]) is null && receiver.Chunk("m1", 1, "peer-a", "x", "script", null, 100, hash, 0, new byte[10]) is null, "Bad ids and kinds are refused");
     }
 
     static void Transfers(string root)

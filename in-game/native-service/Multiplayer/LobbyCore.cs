@@ -71,11 +71,17 @@ sealed class LobbyCore
     int PlayerCount => members.Count(m => m.Role == MemberRoles.Player);
     void Changed() => Revision++;
     void System(string text) { AddChat(null, "", text, true); }
-    void AddChat(string? from, string name, string text, bool system)
+    void AddChat(string? from, string name, string text, bool system, string? clip = null)
     {
-        chat.Add(new ChatLine(++chatId, from, name, text, clock(), system));
+        chat.Add(new ChatLine(++chatId, from, name, text, clock(), system, clip));
         if (chat.Count > ChatLimit) chat.RemoveRange(0, chat.Count - ChatLimit);
         Changed();
+    }
+    // A clip a member shared, once its file has reached the host.
+    public void ShareClip(string from, string clip, string? label)
+    {
+        if (Find(from) is not { } m || !ReplaySwap.ValidId(clip)) return;
+        AddChat(m.Id, m.Name, "shared a clip" + (LobbyRules.CleanChat(label) is { } l ? ": " + l : "."), false, clip);
     }
 
     public IReadOnlyList<LobbyMember> Members => members.Select(m => m.View()).ToArray();

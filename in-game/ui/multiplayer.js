@@ -168,6 +168,32 @@
     side.appendChild(prefsPanel());
     if(view.simulation)page.appendChild(devPanel(false));
   }
+  // Replays: watch a run (or a clip), or your run against another player's (same scenario).
+  function watch(id,compareId){
+    var body={action:'load',id:id};if(compareId)body.compareId=compareId;
+    xhr('POST','/native-replay',body,function(ok,data,status){
+      if(ok)toast(compareId?'Run vs run loaded. Open the pause menu to watch.':'Replay loaded. Open the pause menu to watch.');
+      else toast(status===422?'Those runs are from different scenarios.':status===409?'Open the pause menu (not during a run) to watch replays.':'That replay isn’t here yet. Try again in a moment.');
+    });
+  }
+  function runVsRun(lobby,round){
+    var list=(lobby.replays||[]).filter(function(r){return (!round||r.round===round)&&r.mine&&r.others.length;});
+    if(!list.length)return null;
+    var p=node('div','panel mp-runs');var head=node('div','panel-head');var text=node('div','head-text');add(text,node('h2','','Watch run vs run'),node('p','','Your run against theirs, side by side in the replay viewer.'));head.appendChild(text);p.appendChild(head);
+    list.forEach(function(r){r.others.forEach(function(o){var row=node('div','mp-friend');add(row,avatar(o.name,true),add(node('div','mp-friend-info'),node('strong','',safe(o.name)),node('span','','Round '+r.round)));row.appendChild(actions(button('You vs '+safe(o.name),function(){watch(r.mine,o.id);},'compact')));p.appendChild(row);});});
+    return p;
+  }
+  // Share one of your clips (F8 marks) with the lobby.
+  function clipPicker(panel){
+    xhr('GET','/replays',null,function(ok,data){
+      var clips=(ok&&data&&(data.items||data.replays||data)||[]);if(!clips.filter)clips=[];
+      clips=clips.filter(function(r){return r&&typeof r.id==='string'&&/-clip[0-9]+$/.test(r.id);}).slice(0,8);
+      var box=node('div','mp-clip-picker');
+      if(!clips.length)box.appendChild(node('div','mp-muted','No clips yet. Press F8 during a recorded run to mark a moment.'));
+      clips.forEach(function(c){var row=node('div','mp-clip-row');add(row,node('span','mp-clip-name',safe(c.scenario,'Clip')+' · '+F.relative(c.recordedAt)));row.appendChild(actions(button('Share',function(){act('share-clip',{id:c.id,label:safe(c.scenario,'')},function(done){if(done&&box.parentNode)box.parentNode.removeChild(box);});},'compact')));box.appendChild(row);});
+      panel.appendChild(box);
+    });
+  }
   // How you appear in the other players' games.
   function lookPanel(lobby){
     var me=member(lobby.self)||{};var p=node('div','panel mp-look');var head=node('div','panel-head');var text=node('div','head-text');
@@ -436,11 +462,11 @@
     var log=node('div','mp-chat-log');p.appendChild(log);
     var lines=(lobby.chat||[]).slice(-40);
     if(!lines.length)log.appendChild(node('div','mp-muted','Say hi.'));
-    lines.forEach(function(c){var line=node('div','mp-line'+(c.system?' system':''));if(c.system)line.textContent=safe(c.text,'');else add(line,node('span','mp-line-name',safe(c.name)),node('span','',F.safeText(c.text,'(message in an unsupported script)')));log.appendChild(line);});
+    lines.forEach(function(c){var line=node('div','mp-line'+(c.system?' system':'')+(c.clip?' clip':''));if(c.clip){var w=button('Watch',function(){watch(c.clip,null);},'compact quiet mp-clip-watch');line.appendChild(w);}if(c.system)line.textContent=safe(c.text,'');else add(line,node('span','mp-line-name',safe(c.name)),node('span','',F.safeText(c.text,'(message in an unsupported script)')));log.appendChild(line);});
     var input=trackInput(node('input','mp-chat-input'),'chat');input.setAttribute('data-draft','chat');input.setAttribute('maxlength','200');input.setAttribute('autocomplete','off');
     function send(){var text=(drafts.chat||'').trim();if(!text)return;act('chat',{text:text},function(ok){if(ok){drafts.chat='';render();}});}
     input.onkeydown=function(e){if((e||root.event).keyCode===13)send();};
-    var row=node('div','mp-chat-row');add(row,field(input,'Message the lobby','mp-chat-field'),actions(button('Send',send,'compact')));
+    var row=node('div','mp-chat-row');add(row,field(input,'Message the lobby','mp-chat-field'),actions(button('Send',send,'compact'),button('Share a clip',function(){clipPicker(p);},'compact quiet')));
     p.appendChild(row);
     setTimeout(function(){log.scrollTop=log.scrollHeight||0;},0);
     return p;
@@ -638,6 +664,7 @@
     page.appendChild(hero);
     var row=node('div','mp-row');page.appendChild(row);var main=node('div','mp-col mp-main'),side=node('div','mp-col mp-side');row.appendChild(main);row.appendChild(side);
     var p=node('div','panel');var h=node('div','panel-head');add(h,node('h2','','Round '+last.round));p.appendChild(h);var body=node('div','panel-body');body.appendChild(placementTable(last.results,match.mode,match.mode!=='practice'&&match.mode!=='score-race'));p.appendChild(body);main.appendChild(p);
+    var rr=runVsRun(lobby,last.round);if(rr)main.appendChild(rr);
     var st=node('div','panel');var sh=node('div','panel-head');add(sh,node('h2','',match.mode==='practice'?'Best so far':'Standings'));st.appendChild(sh);var sb=node('div','panel-body');sb.appendChild(standingsTable(match));st.appendChild(sb);side.appendChild(st);
   }
   function finalScreen(page,lobby){
@@ -661,6 +688,7 @@
     match.rounds.forEach(function(r){var best=r.results[0];var line=node('div','mp-round-line');
       add(line,node('span','mp-round-no','R'+r.round),avatar(best?best.name:'?',true),node('span','mp-round-win',r.winnerId?nameOf(r.winnerId):practice&&best?safe(best.name)+' (best run)':'Draw'),node('span','mp-round-score',best&&best.score!==null?F.number(best.score,0):'—'));list.appendChild(line);});
     rounds.appendChild(list);side.appendChild(rounds);
+    var rv=runVsRun(lobby);if(rv)side.appendChild(rv);
     if(top&&!top.name)return;
   }
 

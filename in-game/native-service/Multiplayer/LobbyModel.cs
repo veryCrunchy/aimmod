@@ -98,7 +98,8 @@ sealed record MatchSnapshot(string Id, string Phase, string Mode, string Scenari
     int? FirstTo, long? StartsAt, long? EndsAt, long? NextAt, IReadOnlyList<string> Players, IReadOnlyList<ScoreLine> Live,
     IReadOnlyList<RoundResult> Rounds, IReadOnlyList<Standing> Standings, string? WinnerId, IReadOnlyList<string> Rematch, long? RematchDeadline = null);
 
-sealed record ChatLine(long Id, string? From, string Name, string Text, long At, bool System);
+// Clip: a shared clip replay id (everyone in the lobby received the file).
+sealed record ChatLine(long Id, string? From, string Name, string Text, long At, bool System, string? Clip = null);
 
 // ReadyCheck: when the host last asked everyone to ready up (host clock), while it is open.
 sealed record LobbySnapshot(int V, string Id, string Code, long Revision, string HostId, LobbySettings Settings,

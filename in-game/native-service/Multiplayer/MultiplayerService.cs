@@ -66,6 +66,7 @@ sealed class MultiplayerService : IDisposable
         if (output is not null && library.ScenarioFolder is { } folder) scenarios = new MatchScenarioStore(folder, Path.Combine(output, "multiplayer-scenarios.json"));
         LoadHistory();
         server = new ContentServer(library, this.clock);
+        swap = new ReplaySwap(output, this.clock);
         if (output is not null && library.Root is { } root) download = new ContentDownload(root, Path.Combine(output, "downloads"), this.clock);
         if (simulation) Simulation = new MultiplayerSimulation(this.clock, library, completedRuns, seed);
         // A failure in one tick must never take the whole service down: log it and keep going.
@@ -138,6 +139,8 @@ sealed class MultiplayerService : IDisposable
                     return JoinBy(last.Token, invite: true);
                 case "spectate":
                     return Spectate(args);
+                case "share-clip":
+                    return ShareClip(Text("id"), Text("label"));
                 case "spectate-stop":
                     if (spectating is not null) { transport.StopSpectate(); spectating = null; }
                     return LobbyResult.Success;
@@ -221,6 +224,66 @@ sealed class MultiplayerService : IDisposable
     }
 
     IReadOnlyList<FriendEntry> Friends() => Simulation is not null && !transport.Available ? Simulation.Friends(clock()) : transport.Friends();
+
+    // ---- replay swap and clips ---------------------------------------------
+
+    ReplaySwap swap = null!;
+    readonly List<(string Match, int Round, string Id, long Since)> pendingReplays = [];
+    sealed record ReplayChunkBody(string Match, int Round, string Owner, string Id, string Kind, string? Label, int Size, string Hash, int Offset, byte[] Data);
+    static ReplayChunkBody? ReadReplayChunk(JsonElement b)
+    {
+        try
+        {
+            return new ReplayChunkBody(b.GetProperty("match").GetString() ?? "", b.GetProperty("round").GetInt32(), b.GetProperty("owner").GetString() ?? "", b.GetProperty("id").GetString() ?? "",
+                b.GetProperty("kind").GetString() ?? "", b.TryGetProperty("label", out var l) && l.ValueKind == JsonValueKind.String ? l.GetString() : null,
+                b.GetProperty("size").GetInt32(), b.GetProperty("hash").GetString() ?? "", b.GetProperty("offset").GetInt32(), Convert.FromBase64String(b.GetProperty("data").GetString() ?? ""));
+        }
+        catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or FormatException) { return null; }
+    }
+
+    // Send this player's round replays once AimModCore has saved them (never a .partial).
+    void PumpReplays()
+    {
+        var now = clock();
+        foreach (var p in pendingReplays.ToArray())
+        {
+            var bytes = swap.ReadOwn(p.Id);
+            if (bytes is null) { if (now - p.Since > 60_000) pendingReplays.Remove(p); continue; }
+            pendingReplays.Remove(p);
+            Distribute(p.Match, p.Round, p.Id, "round", bytes, null);
+        }
+        swap.Pump(Current?.Match is { Phase: MatchPhases.Live or MatchPhases.Countdown }, (peer, body) => Send(peer, "replay.chunk", body));
+    }
+    void Distribute(string match, int round, string id, string kind, byte[] bytes, string? label)
+    {
+        if (core is not null) foreach (var peer in RemotePeers(core.Snapshot())) swap.Offer(peer, match, round, SelfId, id, kind, bytes, label);
+        else if (hostPeer is not null) swap.Offer(hostPeer, match, round, SelfId, id, kind, bytes, label);
+    }
+
+    LobbyResult ShareClip(string? id, string? label)
+    {
+        if (Current is not { } lobby) return LobbyResult.Fail("no-lobby", "Join a lobby to share clips.");
+        if (!ReplaySwap.ValidId(id) || !System.Text.RegularExpressions.Regex.IsMatch(id!, "-clip[0-9]{1,3}$")) return LobbyResult.Fail("invalid", "Choose one of your clips.");
+        if (swap.ReadOwn(id!) is not { } bytes) return LobbyResult.Fail("missing", "That clip isn’t in your replays yet.");
+        Distribute(lobby.Match?.Id ?? lobby.Id, lobby.Match?.Round ?? 0, id!, "clip", bytes, label);
+        // The host announces its own clip right away; members' clips are announced when they arrive.
+        if (core is not null) core.ShareClip(SelfId, id!, label);
+        notice = ("info", "Sharing your clip with the lobby…", clock());
+        return LobbyResult.Success;
+    }
+
+    // Round replays this machine has for a match: its own and the others', for run vs run.
+    object? ReplaysView(MatchSnapshot? match)
+    {
+        if (match is null) return null;
+        var rounds = Enumerable.Range(1, match.Round).Select(r => new
+        {
+            round = r, mine = swap.MineFor(match.Id, r),
+            others = swap.Received.Where(x => x.Match == match.Id && x.Round == r && x.Kind == "round" && x.Owner != SelfId)
+                .Select(x => new { owner = x.Owner, name = match.Standings.FirstOrDefault(s => s.MemberId == x.Owner)?.Name ?? "Player", id = x.Id }).ToArray(),
+        }).Where(r => r.mine is not null || r.others.Length > 0).ToArray();
+        return rounds.Length == 0 ? null : rounds;
+    }
 
     // ---- preferences, auto-ready and rejoin -------------------------------
 
@@ -674,6 +737,7 @@ sealed class MultiplayerService : IDisposable
             }
             ReportContent(force: false);
             PumpContent();
+            PumpReplays();
             PrepareMatchScenario();
             PublishNotice();
             AutoReady();
@@ -797,6 +861,14 @@ sealed class MultiplayerService : IDisposable
                 }
                 catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or FormatException) { }
                 break;
+            case "replay.chunk":
+                // A member's own replay or clip: import it here, then pass it on to everyone else.
+                if (ReadReplayChunk(m.Body) is { } c && c.Owner == peer && swap.Chunk(c.Match, c.Round, c.Owner, c.Id, c.Kind, c.Label, c.Size, c.Hash, c.Offset, c.Data) is { } whole && swap.Import(whole.Bytes, whole.Info) is { } stored)
+                {
+                    foreach (var other in RemotePeers(core!.Snapshot()).Where(p => p != peer)) swap.Offer(other, c.Match, c.Round, c.Owner, stored, c.Kind, whole.Bytes, c.Label);
+                    if (c.Kind == "clip") core!.ShareClip(peer, stored, c.Label);
+                }
+                break;
             case "content.done":
                 if (m.Body.TryGetProperty("transfer", out var dt) && dt.TryGetInt32(out var done)) { server.Ended(peer, done); transport.BulkCancel(peer, done, "complete"); }
                 break;
@@ -835,6 +907,9 @@ sealed class MultiplayerService : IDisposable
             case "result":
                 if (m.Body.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.False && m.Body.TryGetProperty("message", out var text) && text.ValueKind == JsonValueKind.String)
                     notice = ("error", text.GetString() ?? "The host refused that.", clock());
+                break;
+            case "replay.chunk":
+                if (ReadReplayChunk(m.Body) is { } fromHost && swap.Chunk(fromHost.Match, fromHost.Round, fromHost.Owner, fromHost.Id, fromHost.Kind, fromHost.Label, fromHost.Size, fromHost.Hash, fromHost.Offset, fromHost.Data) is { } got) swap.Import(got.Bytes, got.Info);
                 break;
             case "content.manifest":
                 if (download is not null && ContentDownload.ReadManifest(m.Body) is { } offered) { download.Offer(offered); if (download.State == "ready" && autoDownload) StartDownload(); }
@@ -1052,6 +1127,7 @@ sealed class MultiplayerService : IDisposable
             knownRuns.Add(finished.Id);
             var shots = Math.Max(line.Shots, 0); var hits = finished.Accuracy is { } acc && shots > 0 ? (int)Math.Round(shots * acc / 100) : line.Hits;
             SendFinish(new RunFinish(match.Id, match.Round, finished.Score, finished.Duration, shots, Math.Min(hits, shots), (int)Math.Max(0, finished.Kills), null));
+            swap.Mine(match.Id, match.Round, finished.Id); pendingReplays.Add((match.Id, match.Round, finished.Id, clock()));
             return;
         }
         // Freeplay (generated) and simulated runs end at the lobby's time limit, scored by AimMod.
@@ -1133,6 +1209,7 @@ sealed class MultiplayerService : IDisposable
                     round = plan is { } p && lobby.Match is { } mt && p.Key == mt.Id + "#" + mt.Round ? new { p.Scenario, p.Mode, p.Generated, p.State, p.Message } : null,
                     download = DownloadView(lobby),
                     spectate = SpectateView(lobby),
+                    replays = ReplaysView(lobby.Match),
                 };
             }
             var friendsSource = Simulation is not null && !transport.Available ? "simulation" : transport.Available ? "steam" : "unavailable";
