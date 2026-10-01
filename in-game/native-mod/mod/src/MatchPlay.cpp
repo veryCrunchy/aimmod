@@ -2,13 +2,17 @@
 
 #include "Log.hpp"
 #include "Output.hpp"
+#include "Reflect.hpp"
 #include "World.hpp"
 
 #include <aimmod/Formats.hpp>
 #include <aimmod/GameCommand.hpp>
 
 #include <Unreal/CoreUObject/UObject/UnrealType.hpp>
+#include <Unreal/FProperty.hpp>
 #include <Unreal/NameTypes.hpp>
+#include <Unreal/Property/FBoolProperty.hpp>
+#include <Unreal/Property/FStructProperty.hpp>
 #include <Unreal/UObjectGlobals.hpp>
 #include <Unreal/UClass.hpp>
 #include <Unreal/UObject.hpp>
@@ -643,6 +647,49 @@ namespace aimmod
         }
     }
 
+    // KovaaK's "Show Weapon" setting (weaponsettings.ini WeaponHidden=true) hides the whole first-person
+    // view model: arms and weapon. In an AimMod match the weapon in hand is part of the game, so each of
+    // the player's weapons gets bWeaponHidden cleared in memory (WeaponSettingsNative and the ADS copy)
+    // and the view model is refreshed. Nothing is saved: the setting stays as it is outside matches,
+    // where the scenario's weapons are loaded again with it.
+    void MatchPlay::ShowWeapons(double now, UObject* character)
+    {
+        if (now < m_nextShowCheck) return;
+        m_nextShowCheck = now + 0.5;
+        UObject* handler = Describe(character).weaponHandler.Object(character);
+        std::vector<UObject*> weapons;
+        if (!handler || !Describe(handler).weapons.Objects(handler, weapons, 8)) return;
+        int cleared = 0;
+        for (UObject* weapon : weapons)
+        {
+            if (!weapon || !reflect::Alive(weapon)) continue;
+            for (const wchar_t* field : {STR("WeaponSettingsNative"), STR("ADSWeaponSettingsNative")})
+            {
+                auto* settings = RC::Unreal::CastField<RC::Unreal::FStructProperty>(reflect::PropertyOf(weapon->GetClassPrivate(), field));
+                auto* hidden = settings ? RC::Unreal::CastField<RC::Unreal::FBoolProperty>(reflect::PropertyOf(settings->GetStruct(), STR("bWeaponHidden"))) : nullptr;
+                if (!hidden) continue;
+                std::uint8_t* at = reflect::At(weapon, settings) + hidden->GetOffset_Internal();
+                if (!hidden->GetPropertyValue(at)) continue;
+                hidden->SetPropertyValue(at, false);
+                ++cleared;
+            }
+        }
+        if (cleared == 0) return;
+        // Show the arms and the weapon in hand again (the game hid them with the old setting).
+        UObject* view = reflect::GetObject(character, STR("ViewModel_Native"));
+        UObject* current = nullptr;
+        reflect::Call(handler, STR("/Script/GameSkillsTrainer.WeaponHandler:GetCurrentWeapon"), {}, &current);
+        const bool refreshed = view && current && reflect::Call(view, STR("/Script/GameSkillsTrainer.FPSPlayer_WeaponComponentActor:UpdateViewModel"),
+                                                               [&](const std::wstring& n, RC::Unreal::FProperty* p, std::uint8_t* v) {
+                                                                   if (n == STR("bHideWeapon")) reflect::WriteBoolParam(v, p, false);
+                                                                   else if (n == STR("Weapon")) reflect::WriteObject(v, current);
+                                                               });
+        if (!m_weaponShownLogged || !refreshed)
+            Log("match play: weapon shown in first person for the match (KovaaK's Show Weapon is off; " + std::to_string(cleared) + " setting(s) cleared in memory, view " +
+                (refreshed ? "refreshed" : "not refreshed") + ")");
+        m_weaponShownLogged = true;
+    }
+
     void MatchPlay::ReleaseRound(const char* why)
     {
         if (!m_roundEngaged) return;
@@ -776,6 +823,7 @@ namespace aimmod
         else if (m_frozen && m_moveIgnored.ok() && !m_moveIgnored.Bool(player).value_or(true)) setIgnore(true);
         FreezeBody(character, m_frozen);
         if (r->loadout) ApplyLoadout(character, *r->loadout);
+        ShowWeapons(now, character);
         // CS: switching (wheel, Q, purchases), the knife and bomb in the hand, the bomb in the world.
         if (r->loadout && !r->loadout->knife.empty()) m_gear.Tick(now, player, character, Describe(character).weaponHandler.Object(character), *r);
     }

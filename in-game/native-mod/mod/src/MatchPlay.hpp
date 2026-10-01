@@ -59,6 +59,10 @@ namespace aimmod
         void ApplyLoadout(game::UObject* character, const RoundState::Loadout& loadout);
         // Frozen before go-live: no jump and no movement (MOVE_None) on top of ignored move input.
         void FreezeBody(game::UObject* character, bool frozen);
+        // In AimMod matches the weapon is shown in first person even with KovaaK's Show Weapon off.
+        void ShowWeapons(double now, game::UObject* character);
+        double m_nextShowCheck{};
+        bool m_weaponShownLogged{};
         // Restart lock: while a fresh round state names the scenario on screen (any match, not
         // only AimMod arenas), KovaaK's restart bind (ResetSession) is renamed in the input
         // settings and the pause menu's restart button is collapsed; both come back after.
