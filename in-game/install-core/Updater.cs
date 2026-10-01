@@ -152,8 +152,7 @@ sealed class Updater(string stateRoot, HttpMessageHandler? handler = null)
     {
         if (installed is null || !installed.Managed) return new(UpdateState.Unmanaged, Message: "This install was not made from an AimMod release.");
         var current = SemanticVersion.Parse(installed.Version);
-        var feedBytes = await Fetch(feedUrl, UpdateFeed.MaximumBytes, token);
-        var feed = UpdateFeed.Parse(feedBytes);
+        var feed = UpdateFeed.Parse(await FetchFeed(feedUrl, token));
         if (feed.Channel != preferences.Channel) throw new ReleaseFormatException("The update feed is for another channel.");
         var version = feed.SemVer;
         if (version <= current) { ClearStaged(); return new(UpdateState.UpToDate, current.ToString()); }
@@ -165,22 +164,37 @@ sealed class Updater(string stateRoot, HttpMessageHandler? handler = null)
         return new(UpdateState.Ready, feed.Version, feed.Notes);
     }
 
+    // The raw feed (HTTPS only, at most UpdateFeed.MaximumBytes).
+    public Task<byte[]> FetchFeed(string feedUrl, CancellationToken token) => Fetch(feedUrl, UpdateFeed.MaximumBytes, token);
+
     async Task Download(UpdateFeed feed, CancellationToken token)
     {
         var stagingRoot = Path.Combine(stateRoot, "staged");
         Directory.CreateDirectory(stagingRoot);
         var name = feed.Version + "-" + Convert.ToHexString(RandomNumberGenerator.GetBytes(4)).ToLowerInvariant();
         var folder = Path.Combine(stagingRoot, name);
-        var zip = Path.Combine(stateRoot, name + ".zip.part");
+        var package = await DownloadPackage(feed, folder, Path.Combine(stateRoot, name + ".zip.part"), null, token);
+        var staged = new StagedUpdate(feed.Version, feed.Channel, name, package.ManifestSha256, feed.Notes, DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"));
+        AtomicFile.WriteBytes(StagedPointer, JsonSerializer.SerializeToUtf8Bytes(staged), durable: true);
+        CleanStaging(keep: name);
+    }
+
+    // Downloads the feed's package to zipPath (size-capped, SHA-256 compared
+    // with the feed before anything is extracted), extracts the files its
+    // hash-pinned manifest lists into folder and verifies every one. The zip is
+    // always deleted; the folder is deleted on any failure. progress gets the
+    // bytes downloaded so far.
+    public async Task<VerifiedPackage> DownloadPackage(UpdateFeed feed, string folder, string zipPath, IProgress<long>? progress, CancellationToken token)
+    {
+        if (!UpdateFeed.IsHttps(feed.Package.Url)) throw new ReleaseFormatException("Updates are only downloaded over HTTPS.");
         try
         {
-            // Download with a size cap and hash it before anything is extracted.
             using (var response = await http.GetAsync(feed.Package.Url, HttpCompletionOption.ResponseHeadersRead, token))
             {
                 if (response.RequestMessage?.RequestUri?.Scheme != Uri.UriSchemeHttps) throw new ReleaseFormatException("The update server redirected away from HTTPS.");
                 response.EnsureSuccessStatusCode();
                 await using var source = await response.Content.ReadAsStreamAsync(token);
-                await using var target = new FileStream(zip, FileMode.Create, FileAccess.Write, FileShare.None);
+                await using var target = new FileStream(zipPath, FileMode.Create, FileAccess.Write, FileShare.None);
                 using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
                 var chunk = new byte[1 << 16]; long total = 0; int read;
                 while ((read = await source.ReadAsync(chunk, token)) > 0)
@@ -189,25 +203,24 @@ sealed class Updater(string stateRoot, HttpMessageHandler? handler = null)
                     if (total > feed.Package.Size) throw new ReleaseFormatException("The update package is larger than announced.");
                     sha.AppendData(chunk, 0, read);
                     await target.WriteAsync(chunk.AsMemory(0, read), token);
+                    progress?.Report(total);
                 }
                 if (total != feed.Package.Size || !Sha256Hex.Same(Convert.ToHexString(sha.GetHashAndReset()), feed.Package.Sha256))
                     throw new ReleaseFormatException("The update package does not match the update feed.");
             }
-            ExtractVerified(zip, folder, feed.ManifestSha256);
+            ExtractVerified(zipPath, folder, feed.ManifestSha256);
             // The manifest hash and every file are checked again here.
             var package = VerifiedPackage.Open(folder, feed.ManifestSha256);
             // The beta feed also carries stable releases.
             if (package.Manifest.Version != feed.Version || (package.Manifest.Channel != feed.Channel && package.Manifest.Channel != "stable")) throw new ReleaseFormatException("The package version does not match the feed.");
-            var staged = new StagedUpdate(feed.Version, feed.Channel, name, package.ManifestSha256, feed.Notes, DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"));
-            AtomicFile.WriteBytes(StagedPointer, JsonSerializer.SerializeToUtf8Bytes(staged), durable: true);
-            CleanStaging(keep: name);
+            return package;
         }
         catch
         {
             try { if (Directory.Exists(folder)) Directory.Delete(folder, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             throw;
         }
-        finally { try { File.Delete(zip); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { } }
+        finally { try { File.Delete(zipPath); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { } }
     }
 
     // Extracts only the release manifest, the helper scripts and the files

@@ -6,9 +6,11 @@ Steam Workshop.
 
 ## How a friend gets AimMod and its updates
 
-1. **Once:** download `AimMod-InGame-<version>.zip` (the version release, or the rolling
-   `aimmod-latest` release), unzip it, close KovaaK's and run `Install-AimMod.cmd`. The folder can be
-   deleted afterwards.
+1. **Once:** download and run `AimMod-Setup.exe` from the channel release
+   (`https://github.com/verycrunchy/aimmod/releases/download/aimmod-ingame-stable/AimMod-Setup.exe`, or
+   `aimmod-ingame-beta` for Beta). It finds KovaaK's, downloads the newest release of the chosen
+   channel, verifies it and installs it (see [The installer](#the-installer-aimmod-setupexe)). Manual
+   alternative: unzip `AimMod-InGame-<version>.zip`, close KovaaK's and run `Install-AimMod.cmd`.
 2. **From then on, automatically:** the service checks the update feed when the game starts
    and every four hours, downloads a newer release in the background, verifies it and stages it.
    The workspace shows *"Update ready: AimMod x.y.z applies when you close KovaaK's"* with the
@@ -28,7 +30,9 @@ Settings > **Updates & repair** has automatic updates on/off and the channel (St
 | --- | --- |
 | Release scripts | `in-game/install/` (`New-AimModInGameRelease.ps1`, `AimModRelease.ps1`) |
 | Package helper scripts | `in-game/install/package/` (`Install-AimMod.cmd`, `Repair-AimMod.cmd`, `Uninstall-AimMod.cmd`, `README.txt`) |
-| Service code | `in-game/native-service/`: `ReleaseFormat.cs`, `Updater.cs`, `PackageApplier.cs`, `InstallHealth.cs`, `InstallLayout.cs`, `Lifecycle.cs` |
+| Shared install code | `in-game/install-core/` (`AimMod.Install`): `ReleaseFormat.cs`, `Updater.cs`, `PackageApplier.cs`, `InstallHealth.cs`, `InstallLayout.cs`, `InstallOperations.cs`, `AtomicFile.cs`; used by the service and the installer |
+| Service code | `in-game/native-service/Lifecycle.cs` (update checks, hand-off, command line) |
+| Installer | `in-game/installer/app/` (`AimMod-Setup.exe`, WPF), checks in `in-game/installer/checks/`, version in `in-game/installer/version.txt` |
 | Workspace UI | `in-game/ui/lifecycle.js` (toast, banner, Settings section) |
 | Workflow | `.github/workflows/aimmod-ingame-release.yml` |
 | Workshop helper | `in-game/tools/workshop/` |
@@ -54,14 +58,16 @@ repair, rollback or uninstall.
 
 ## Release format
 
-A release is three files on the `aimmod-ingame-v<version>` GitHub release plus a feed on the
-channel release:
+A release is four files on the `aimmod-ingame-v<version>` GitHub release plus the feed and the
+installer on the channel release:
 
-- `AimMod-InGame-<version>.zip`: the package.
+- `AimMod-Setup.exe`: the installer.
+- `AimMod-InGame-<version>.zip`: the package (for manual installs; the installer and the
+  service download it through the feed).
 - `AimMod-InGame-<version>.manifest.json`: copy of the manifest inside the zip.
-- `AimMod-InGame-<version>.sha256`: SHA-256 of the zip and the manifest.
-- `aimmod-ingame-<channel>.json` on the `aimmod-ingame-stable` / `aimmod-ingame-beta`
-  release: the update feed.
+- `AimMod-InGame-<version>.sha256`: SHA-256 of the zip, the manifest and the installer.
+- `aimmod-ingame-<channel>.json` and `AimMod-Setup.exe` on the `aimmod-ingame-stable` /
+  `aimmod-ingame-beta` release: the update feed and the newest installer under a permanent link.
 
 Package layout (zip root):
 
@@ -121,9 +127,17 @@ file. See [cosmetics](cosmetics.md) for the catalog and its hash-pinned manifest
   "minimumSteamBuildId": 0,
   "manifestSha256": "<SHA-256 of aimmod-release.json>",
   "package": { "url": "https://github.com/verycrunchy/aimmod/releases/download/aimmod-ingame-v0.2.0/AimMod-InGame-0.2.0.zip",
-               "sha256": "<SHA-256 of the zip>", "size": 76543210 }
+               "sha256": "<SHA-256 of the zip>", "size": 76543210 },
+  "minimumInstallerVersion": "1.0.0",
+  "installerUrl": "https://github.com/verycrunchy/aimmod/releases/download/aimmod-ingame-stable/AimMod-Setup.exe"
 }
 ```
+
+`minimumInstallerVersion` and `installerUrl` are optional (feeds from before the installer have
+neither) and only read by the installer; the service ignores them. When present they must be a
+SemVer version and an HTTPS URL. The release script writes `$DefaultMinimumInstallerVersion` from
+`AimModRelease.ps1` (override with `-MinimumInstallerVersion`); raise it together with
+`in-game/installer/version.txt` when a package needs something older installers cannot do.
 
 Integrity is hash pinning, without signatures: the feed is fetched over HTTPS from the configured
 release host and pins the zip (SHA-256 and size) and the manifest (SHA-256); the manifest pins every
@@ -168,10 +182,14 @@ feed, checked by a client that knows the public key.
    `af8ea9d8...17252`); `in-game/native-mod/install/Build-AimModPackage.ps1` with
    `AimModVersion` set; AimModSteam (`in-game/steam-bridge`, `Game__Shipping__Win64`) and its tests;
    `New-AimModInGameRelease.ps1 -Step Stage`. Uploads the staged folder as an artifact.
+   The same job runs the installer checks and builds `AimMod-Setup.exe` (`dotnet publish
+   in-game/installer/app -c Release -r win-x64`: one self-contained file, no .NET install needed),
+   uploaded as a second artifact.
 3. **publish** (only with `publish: true`, no secrets): takes the release body as
-   notes, `-Step Finish` (zip and write the feed), checks the feed and zip with
-   `--verify-release` as the updater would, attests the zip and manifest, then uploads to the version release
-   and the channel feed release. Releases are created with `--latest=false`; the repository-wide
+   notes, `-Step Finish` (zip and write the feed with the installer fields), checks the feed and zip with
+   `--verify-release` as the updater would, attests the zip, the manifest and the installer, then uploads
+   the installer, zip, manifest and checksums to the version release, and the installer and the feed to
+   the channel release (installer first, so the feed's link always works). Releases are created with `--latest=false`; the repository-wide
    latest release stays the rolling `aimmod-latest` downloads. The package is uploaded before the
    feed, so a feed never points at a missing file.
 
@@ -208,6 +226,59 @@ pwsh in-game/install/New-AimModInGameRelease.ps1 -Version 0.2.0 -Channel stable 
 ```
 
 `in-game/out/` is a build output; do not commit it.
+
+## The installer (AimMod-Setup.exe)
+
+A small WPF window (`in-game/installer/app`) for installing, updating, repairing and removing AimMod
+with the game closed. It uses the service's own code from `in-game/install-core` for everything that
+touches files, so the installer and the service cannot disagree about the format or the rules.
+
+- **Finding the game:** `--game-dir`, else the folder remembered in the Apps & features entry, else
+  the Steam library scan (`InstallLayout.FindWin64FromSteam`); *Change...* picks a folder (the
+  `FPSAimTrainer` folder, its game folder or `Binaries\Win64`).
+- **What it shows:** the installed version and channel (`ue4ss\aimmod-install.json`), the health
+  check (`InstallHealth`), the latest version of the chosen channel, a short change log from the
+  feed's notes, and Install / Update / Repair / Uninstall / Open AimMod folder. The Stable/Beta toggle
+  reads the other channel's feed; installing from it saves the channel in `update-settings.json`, so
+  the service keeps updating on that channel. Going from a newer Beta to an older Stable is shown as
+  a switch and only happens when clicked. Until a Stable release exists, a first run with no saved
+  channel shows Beta.
+- **Always the newest package:** the installer carries no package. It reads the channel feed
+  (`UpdateSettings.FeedUrl`, so a `feedUrl` override applies too) and downloads the release it names,
+  so an old `AimMod-Setup.exe` still installs the newest AimMod.
+- **Verification and apply:** `Updater.DownloadPackage` (HTTPS only, size cap, zip SHA-256 against the
+  feed before extracting, manifest SHA-256 against the feed, every file against the manifest), then
+  `InstallOperations.Apply` (the `PackageApplier` transaction with backups and rollback, the package
+  copy for repairs, `Repair-AimMod.cmd`, dropping an older staged update). It holds the same mutex as
+  the service's command line and post-exit applier. Repairs use `package\current` (offline) or, when
+  that copy is missing, the feed if it offers the installed version.
+- **Game running:** every action checks `InstallLayout.GameRunning` first and again inside the lock.
+  While KovaaK's runs the window says *Close KovaaK's to continue*; a clicked action waits and runs
+  by itself once the game has closed (polled every 1.5 s, or *Retry*).
+- **Installer versions:** the installer has its own SemVer (`in-game/installer/version.txt`). If the
+  feed's `minimumInstallerVersion` is newer, or the feed's `schema` is a later
+  `aimmod.ingame.feed/<n>`, it shows *A new installer is required* with a button that opens
+  `installerUrl` (default: the channel release's `AimMod-Setup.exe`) and installs nothing from that
+  feed. A package whose manifest has an unknown schema is refused the same way. Repair from the saved
+  copy and uninstall keep working.
+- **Uninstall:** `InstallOperations.Uninstall` (what the install manifest lists, backups restored,
+  package copies and staged updates removed, `Repair-AimMod.cmd` removed). History, replays and
+  settings stay unless *Also remove my AimMod data* is ticked, which deletes
+  `%LOCALAPPDATA%\AimMod\KovaaksNative`.
+- **Apps & features:** after an install the installer copies itself to
+  `%LOCALAPPDATA%\AimMod\Setup\AimMod-Setup.exe` (never replacing a newer copy) and writes
+  `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\AimMod.KovaaKs` (per-user, no admin), with
+  `UninstallString` `"<copy>" --uninstall`. Uninstall removes both; a copy that is running is deleted by
+  a hidden `cmd.exe` a few seconds after it exits. Nothing else (no shortcuts) is created.
+- **Rights:** `asInvoker`. Only when the game folder is not writable does it offer *Continue as
+  administrator*, which restarts it elevated with `--game-dir`, `--channel` and `--action`.
+- **Signing:** none (hash pinning, as for the service). SmartScreen may warn about the unsigned exe;
+  the package README explains *More info* > *Run anyway*.
+
+Command line: `--uninstall` (open on the uninstall question), `--game-dir <folder>`,
+`--channel stable|beta`, `--action install|update|repair|uninstall [--remove-data]`, and for design
+review `--preview install|update|outdated|uninstall|running|progress` (sample data, changes nothing)
+with `--capture <png>` (saves the window and exits, never runs an action).
 
 ## Updates in the service
 
@@ -401,6 +472,13 @@ publishing items the game does not recognise, so the design is:
   re-verification, malformed feed, zip files not matching their manifest, hash and size mismatch, HTTP, wrong channel, downgrade, newer game
   needed, developer installs, zip entries outside the manifest), update preferences and the
   command-line hand-off.
+- `dotnet run --project in-game/installer/checks -c Release`: the installer's decisions with synthetic
+  feeds (version order, required installer and later feed formats, channel switch both ways, game
+  running blocks every action, offline and unpublished channels, newer game builds, developer
+  installs), the release-notes summary, and the whole flow against a fake HTTPS host and a synthetic
+  game: install, rejected tampered downloads and later package formats, update, offline repair,
+  channel switch saved for the service, an older staged update dropped, the Apps & features entry (a
+  throwaway key), uninstall keeping or removing the data.
 - `node --test in-game/ui/lifecycle.test.cjs`: toast, banner, repair request, settings patches,
   explicit install, developer installs, malformed responses.
 - `python -m unittest discover -s in-game/tools/workshop/tests`: PNG handling, bundle contents,

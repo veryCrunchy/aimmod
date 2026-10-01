@@ -1,0 +1,193 @@
+<Window x:Class="AimMod.Setup.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="AimMod Setup" Width="880" Height="600" ResizeMode="CanMinimize"
+        WindowStartupLocation="CenterScreen" Background="{StaticResource Window}"
+        FontFamily="{StaticResource UiFont}" Foreground="{StaticResource Text}"
+        Icon="pack://application:,,,/Assets/aimmod-icon.png"
+        UseLayoutRounding="True" TextOptions.TextFormattingMode="Ideal">
+  <WindowChrome.WindowChrome>
+    <WindowChrome CaptionHeight="64" ResizeBorderThickness="0" GlassFrameThickness="0" CornerRadius="0" UseAeroCaptionButtons="False" />
+  </WindowChrome.WindowChrome>
+  <Border x:Name="Root" Background="{StaticResource Window}" BorderBrush="{StaticResource Line}" BorderThickness="1">
+    <Grid>
+      <Grid.RowDefinitions>
+        <RowDefinition Height="64" />
+        <RowDefinition Height="Auto" />
+        <RowDefinition Height="*" />
+        <RowDefinition Height="Auto" />
+      </Grid.RowDefinitions>
+
+      <!-- Title bar -->
+      <Grid Grid.Row="0" Margin="28,0,10,0">
+        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+          <Image Source="pack://application:,,,/Assets/aimmod-horizontal.png" Height="46" Margin="-6,0,0,0" RenderOptions.BitmapScalingMode="HighQuality" />
+          <Border Margin="6,2,0,0" Padding="9,3" CornerRadius="6" Background="{StaticResource MintSoft}" VerticalAlignment="Center">
+            <TextBlock Text="Setup for KovaaK's" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource Chalk}" />
+          </Border>
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+          <Button x:Name="MinimizeButton" Style="{StaticResource TitleButton}" WindowChrome.IsHitTestVisibleInChrome="True" Click="Minimize_Click" ToolTip="Minimize" AutomationProperties.Name="Minimize">
+            <Path Data="M 0,0.5 L 10,0.5" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.2" />
+          </Button>
+          <Button x:Name="CloseButton" Style="{StaticResource CloseButton}" WindowChrome.IsHitTestVisibleInChrome="True" Click="Close_Click" ToolTip="Close" AutomationProperties.Name="Close" Margin="4,0,0,0">
+            <Path Data="M 0,0 L 10,10 M 10,0 L 0,10" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.2" />
+          </Button>
+        </StackPanel>
+      </Grid>
+
+      <!-- KovaaK's is running -->
+      <Border x:Name="RunningBanner" Grid.Row="1" Background="{StaticResource AmberSoft}" BorderBrush="{StaticResource AmberLine}" BorderThickness="0,1" Padding="28,10" Visibility="Collapsed">
+        <DockPanel LastChildFill="True">
+          <Button x:Name="RetryButton" DockPanel.Dock="Right" Style="{StaticResource GhostButton}" Padding="14,6" Margin="0" FontSize="13" Click="Retry_Click" Content="Retry" />
+          <Ellipse Width="9" Height="9" Fill="{StaticResource Amber}" VerticalAlignment="Center" Margin="0,0,12,0">
+            <Ellipse.Triggers>
+              <EventTrigger RoutedEvent="Loaded">
+                <BeginStoryboard>
+                  <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                    <DoubleAnimation Storyboard.TargetProperty="Opacity" From="1" To="0.25" Duration="0:0:0.9" />
+                  </Storyboard>
+                </BeginStoryboard>
+              </EventTrigger>
+            </Ellipse.Triggers>
+          </Ellipse>
+          <TextBlock VerticalAlignment="Center" TextWrapping="Wrap" FontSize="13.5">
+            <Run x:Name="RunningTitle" Text="Close KovaaK's to continue" FontWeight="SemiBold" Foreground="{StaticResource Amber}" />
+            <Run x:Name="RunningDetail" Text="  Setup never changes files while the game runs." Foreground="#E7D3A4" />
+          </TextBlock>
+        </DockPanel>
+      </Border>
+
+      <!-- Main content -->
+      <Grid Grid.Row="2" Margin="28,14,28,0">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="1.22*" />
+          <ColumnDefinition Width="24" />
+          <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <StackPanel Grid.Column="0">
+          <TextBlock x:Name="EyebrowText" Style="{StaticResource Eyebrow}" Text="CHECKING" />
+          <TextBlock x:Name="TitleText" Margin="0,6,0,0" FontFamily="{StaticResource DisplayFont}" FontSize="27" FontWeight="SemiBold" TextWrapping="Wrap" Text="AimMod Setup" />
+          <TextBlock x:Name="DetailText" Margin="0,8,0,0" FontSize="13.5" LineHeight="20" Foreground="{StaticResource Muted}" TextWrapping="Wrap" Text="" />
+
+          <!-- Installer outdated -->
+          <Border x:Name="OutdatedCard" Margin="0,18,0,0" Padding="18,16" CornerRadius="12" Background="{StaticResource AmberSoft}" BorderBrush="{StaticResource AmberLine}" BorderThickness="1" Visibility="Collapsed">
+            <StackPanel>
+              <TextBlock x:Name="OutdatedVersions" FontSize="13.5" FontWeight="SemiBold" Foreground="{StaticResource Amber}" Text="" TextWrapping="Wrap" />
+              <TextBlock Margin="0,6,0,0" FontSize="13" Foreground="#E7D3A4" TextWrapping="Wrap"
+                         Text="The latest AimMod uses a release format this installer does not know, so it will not install it. The new AimMod-Setup.exe is on the release page." />
+            </StackPanel>
+          </Border>
+
+          <!-- Versions, channel, game folder -->
+          <Border x:Name="InfoCard" Margin="0,18,0,0" Padding="18,4" CornerRadius="12" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1">
+            <Grid>
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="96" />
+                <ColumnDefinition Width="*" />
+              </Grid.ColumnDefinitions>
+              <Grid.RowDefinitions>
+                <RowDefinition Height="44" />
+                <RowDefinition Height="1" />
+                <RowDefinition Height="44" />
+                <RowDefinition Height="1" />
+                <RowDefinition Height="48" />
+                <RowDefinition Height="1" />
+                <RowDefinition Height="46" />
+              </Grid.RowDefinitions>
+              <TextBlock Grid.Row="0" Style="{StaticResource Label}" Text="Installed" />
+              <TextBlock x:Name="InstalledText" Grid.Row="0" Grid.Column="1" Style="{StaticResource Value}" Text="—" />
+              <Rectangle Grid.Row="1" Grid.ColumnSpan="2" Fill="{StaticResource Line}" />
+              <TextBlock Grid.Row="2" Style="{StaticResource Label}" Text="Latest" />
+              <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                <TextBlock x:Name="LatestText" Style="{StaticResource Value}" Text="—" />
+                <Border x:Name="NewPill" Margin="10,0,0,0" Padding="7,1" CornerRadius="5" Background="{StaticResource MintSoft}" Visibility="Collapsed" VerticalAlignment="Center">
+                  <TextBlock Text="New" FontSize="11.5" FontWeight="SemiBold" Foreground="{StaticResource Mint}" />
+                </Border>
+              </StackPanel>
+              <Rectangle Grid.Row="3" Grid.ColumnSpan="2" Fill="{StaticResource Line}" />
+              <TextBlock Grid.Row="4" Style="{StaticResource Label}" Text="Channel" />
+              <StackPanel Grid.Row="4" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                <Border Padding="3" CornerRadius="9" Background="{StaticResource Ink}" BorderBrush="{StaticResource Line}" BorderThickness="1">
+                  <StackPanel Orientation="Horizontal">
+                    <RadioButton x:Name="StableChannel" Style="{StaticResource Segment}" GroupName="Channel" Content="Stable" IsChecked="True" Checked="Channel_Checked" />
+                    <RadioButton x:Name="BetaChannel" Style="{StaticResource Segment}" GroupName="Channel" Content="Beta" Checked="Channel_Checked" />
+                  </StackPanel>
+                </Border>
+                <TextBlock x:Name="ChannelHint" Margin="12,0,0,0" FontSize="12.5" Foreground="{StaticResource Faint}" VerticalAlignment="Center" Text="Tested releases" />
+              </StackPanel>
+              <Rectangle Grid.Row="5" Grid.ColumnSpan="2" Fill="{StaticResource Line}" />
+              <TextBlock Grid.Row="6" Style="{StaticResource Label}" Text="KovaaK's" />
+              <DockPanel Grid.Row="6" Grid.Column="1" VerticalAlignment="Center" LastChildFill="True">
+                <Button x:Name="ChangeFolderButton" DockPanel.Dock="Right" Style="{StaticResource LinkButton}" Content="Change…" Click="ChangeFolder_Click" Margin="8,0,0,0" />
+                <TextBlock x:Name="GameText" Style="{StaticResource Value}" FontWeight="Normal" FontSize="13" Foreground="{StaticResource Chalk}" Text="Looking for KovaaK's…" />
+              </DockPanel>
+            </Grid>
+          </Border>
+
+          <!-- Actions -->
+          <WrapPanel Margin="0,20,0,0">
+            <Button x:Name="PrimaryButton" Style="{StaticResource PrimaryButton}" Content="Install AimMod" Click="Primary_Click" Margin="0,0,12,10" />
+            <Button x:Name="RepairButton" Style="{StaticResource GhostButton}" Content="Repair" Click="Repair_Click" Margin="0,0,8,10" />
+            <Button x:Name="UninstallButton" Style="{StaticResource GhostButton}" Content="Uninstall" Click="Uninstall_Click" Margin="0,0,8,10" />
+          </WrapPanel>
+        </StackPanel>
+
+        <!-- Release notes -->
+        <Border Grid.Column="2" Padding="20,18,8,18" CornerRadius="12" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1" Margin="0,0,0,10">
+          <DockPanel>
+            <StackPanel DockPanel.Dock="Top" Margin="0,0,12,10">
+              <TextBlock Style="{StaticResource Eyebrow}" Text="WHAT'S NEW" />
+              <TextBlock x:Name="NotesTitle" Margin="0,4,0,0" FontFamily="{StaticResource DisplayFont}" FontSize="17" FontWeight="SemiBold" Text="Release notes" />
+            </StackPanel>
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
+              <StackPanel x:Name="NotesPanel" Margin="0,0,12,0" />
+            </ScrollViewer>
+          </DockPanel>
+        </Border>
+      </Grid>
+
+      <!-- Progress and status -->
+      <Grid Grid.Row="3" Margin="28,6,28,18">
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <ProgressBar x:Name="Progress" Grid.Row="0" Minimum="0" Maximum="1" Value="0" Margin="0,0,0,10" Visibility="Hidden" />
+        <DockPanel Grid.Row="1">
+          <TextBlock x:Name="SetupVersionText" DockPanel.Dock="Right" FontSize="12" Foreground="{StaticResource Faint}" Text="Setup 1.0.0" VerticalAlignment="Center" />
+          <Button x:Name="OpenFolderButton" DockPanel.Dock="Right" Style="{StaticResource LinkButton}" Content="Open AimMod folder" Click="OpenFolder_Click" Margin="0,0,14,0" FontSize="12.5" />
+          <TextBlock x:Name="StatusText" FontSize="13" Foreground="{StaticResource Muted}" TextTrimming="CharacterEllipsis" Text="" VerticalAlignment="Center" />
+        </DockPanel>
+      </Grid>
+
+      <!-- Dialogs (uninstall, administrator rights) -->
+      <Grid x:Name="Overlay" Grid.Row="1" Grid.RowSpan="3" Background="#D9020805" Visibility="Collapsed">
+        <Border Width="470" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="28,24" CornerRadius="14"
+                Background="{StaticResource Panel}" BorderBrush="{StaticResource LineStrong}" BorderThickness="1">
+          <Border.Effect>
+            <DropShadowEffect BlurRadius="40" ShadowDepth="0" Opacity="0.6" Color="Black" />
+          </Border.Effect>
+          <StackPanel>
+            <TextBlock x:Name="DialogEyebrow" Style="{StaticResource Eyebrow}" Text="UNINSTALL" Foreground="{StaticResource Danger}" />
+            <TextBlock x:Name="DialogTitle" Margin="0,6,0,0" FontFamily="{StaticResource DisplayFont}" FontSize="22" FontWeight="SemiBold" Text="Uninstall AimMod?" TextWrapping="Wrap" />
+            <TextBlock x:Name="DialogText" Margin="0,10,0,0" FontSize="13.5" LineHeight="20" Foreground="{StaticResource Muted}" TextWrapping="Wrap"
+                       Text="Removes UE4SS and the AimMod mods from KovaaK's and puts back the files AimMod replaced. KovaaK's itself is not changed." />
+            <Border x:Name="RemoveDataBox" Margin="0,18,0,0" Padding="14,12" CornerRadius="10" Background="{StaticResource Ink}" BorderBrush="{StaticResource Line}" BorderThickness="1">
+              <StackPanel>
+                <CheckBox x:Name="RemoveDataCheck" Content="Also remove my AimMod data" FontWeight="SemiBold" />
+                <TextBlock Margin="30,4,0,0" FontSize="12.5" LineHeight="18" Foreground="{StaticResource Faint}" TextWrapping="Wrap"
+                           Text="Deletes your run history, replays and settings (the AimMod data folder in your user profile). Leave this off to keep them for a later install." />
+              </StackPanel>
+            </Border>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,22,0,0">
+              <Button x:Name="DialogCancel" Style="{StaticResource GhostButton}" Content="Cancel" Click="DialogCancel_Click" IsCancel="True" />
+              <Button x:Name="DialogConfirm" Style="{StaticResource DangerButton}" Content="Uninstall" Click="DialogConfirm_Click" Margin="0" />
+            </StackPanel>
+          </StackPanel>
+        </Border>
+      </Grid>
+    </Grid>
+  </Border>
+</Window>

@@ -1,9 +1,10 @@
 name: AimMod in-game Release
 
 # Builds the AimMod in-game package for KovaaK's (UE4SS + AimModCore with its
-# service + AimModNativeUI + AimModSteam) and publishes:
-#   aimmod-ingame-v<version>   AimMod-InGame-<version>.zip, .manifest.json, .sha256
-#   aimmod-ingame-<channel>    aimmod-ingame-<channel>.json, read by the service updater
+# service + AimModNativeUI + AimModSteam) and the installer, and publishes:
+#   aimmod-ingame-v<version>   AimMod-Setup.exe, AimMod-InGame-<version>.zip, .manifest.json, .sha256
+#   aimmod-ingame-<channel>    AimMod-Setup.exe (permanent link) and aimmod-ingame-<channel>.json,
+#                              read by the service updater and the installer
 # The feed pins the zip's and the manifest's SHA-256; the manifest pins every
 # file. See in-game/docs/install-lifecycle.md. Nothing is published unless
 # `publish` is true. No secrets are needed beyond UE4SS_GITHUB_TOKEN.
@@ -103,7 +104,7 @@ jobs:
         shell: pwsh
         run: |
           # The release packages AimModCore (in-game/native-mod) and AimModSteam (in-game/steam-bridge).
-          foreach ($path in 'in-game/native-mod/install/Build-AimModPackage.ps1', 'in-game/steam-bridge/CMakeLists.txt', 'in-game/native-service/AimMod.InGame.csproj') {
+          foreach ($path in 'in-game/native-mod/install/Build-AimModPackage.ps1', 'in-game/steam-bridge/CMakeLists.txt', 'in-game/native-service/AimMod.InGame.csproj', 'in-game/installer/app/AimMod.Setup.csproj') {
             if (-not (Test-Path $path)) { throw "Missing ${path}: the in-game release needs AimModCore (in-game/native-mod) and AimModSteam (in-game/steam-bridge) merged." }
           }
 
@@ -116,7 +117,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.nuget/packages
-          key: nuget-${{ runner.os }}-${{ hashFiles('in-game/native-service/*.csproj') }}
+          key: nuget-${{ runner.os }}-${{ hashFiles('in-game/native-service/*.csproj', 'in-game/install-core/*.csproj', 'in-game/installer/**/*.csproj') }}
           restore-keys: nuget-${{ runner.os }}-
 
       - name: Setup Node.js
@@ -159,6 +160,23 @@ jobs:
           if ($LASTEXITCODE) { throw 'Lifecycle checks failed.' }
           node --test (Get-ChildItem in-game/ui, in-game/replay -Filter *.test.cjs).FullName
           if ($LASTEXITCODE) { throw 'UI tests failed.' }
+
+      # One self-contained file (no .NET install needed), versioned by in-game/installer/version.txt.
+      - name: Check and build AimMod-Setup.exe
+        shell: pwsh
+        run: |
+          dotnet run --project in-game/installer/checks -c Release
+          if ($LASTEXITCODE) { throw 'Setup checks failed.' }
+          dotnet publish in-game/installer/app -c Release -r win-x64 -o out/setup -nologo
+          if ($LASTEXITCODE) { throw 'Setup build failed.' }
+          $exe = Get-Item out/setup/AimMod-Setup.exe
+          Write-Host ("AimMod-Setup.exe {0:N1} MB, SHA-256 {1}" -f ($exe.Length / 1MB), (Get-FileHash $exe -Algorithm SHA256).Hash)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aimmod-ingame-${{ needs.metadata.outputs.version }}-setup
+          path: out/setup/AimMod-Setup.exe
+          if-no-files-found: error
 
       - name: Fetch RE-UE4SS (game's UE4SS, e3ba1016)
         if: steps.ue4ss-src.outputs.cache-hit != 'true'
@@ -270,6 +288,11 @@ jobs:
           name: aimmod-ingame-${{ needs.metadata.outputs.version }}-staged
           path: out/release/AimMod-InGame-${{ needs.metadata.outputs.version }}
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: aimmod-ingame-${{ needs.metadata.outputs.version }}-setup
+          path: out/release
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
@@ -297,8 +320,9 @@ jobs:
             if (Test-Path beta-feed/aimmod-ingame-beta.json) { $beta.ExistingBetaFeed = 'beta-feed/aimmod-ingame-beta.json' }
           }
           ./in-game/install/New-AimModInGameRelease.ps1 -Step Finish -Version $env:VERSION -Channel $env:CHANNEL `
-            -Output out/release -NotesFile notes.md `
-            -DownloadBaseUrl "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/download/$env:TAG" @beta
+            -Output out/release -NotesFile notes.md -SetupExe out/release/AimMod-Setup.exe `
+            -DownloadBaseUrl "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/download/$env:TAG" `
+            -InstallerUrl "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/download/aimmod-ingame-{channel}/AimMod-Setup.exe" @beta
 
       - name: Verify the release the way the updater will
         shell: bash
@@ -315,6 +339,7 @@ jobs:
           subject-path: |
             out/release/AimMod-InGame-${{ needs.metadata.outputs.version }}.zip
             out/release/AimMod-InGame-${{ needs.metadata.outputs.version }}.manifest.json
+            out/release/AimMod-Setup.exe
 
       - name: Publish the version and channel releases
         shell: bash
@@ -330,11 +355,13 @@ jobs:
             gh release edit "$TAG" --title "AimMod in-game ${VERSION}" --latest=false
           fi
           gh release upload "$TAG" --clobber \
+            out/release/AimMod-Setup.exe \
             "out/release/AimMod-InGame-${VERSION}.zip" \
             "out/release/AimMod-InGame-${VERSION}.manifest.json" \
             "out/release/AimMod-InGame-${VERSION}.sha256"
 
-          # The package is uploaded first, so a feed never points at a missing zip.
+          # The package and the installer are uploaded first, so a feed never points at a
+          # missing file. AimMod-Setup.exe keeps its name, so the channel link is permanent.
           publish_feed() {
             local channel=$1
             local channel_tag="aimmod-ingame-${channel}"
@@ -342,6 +369,7 @@ jobs:
               gh release create "$channel_tag" --target "$GITHUB_SHA" --title "AimMod in-game ${channel} channel" \
                 --notes "Machine-readable update feed for the AimMod in-game ${channel} channel." --latest=false --prerelease
             fi
+            gh release upload "$channel_tag" --clobber out/release/AimMod-Setup.exe
             gh release upload "$channel_tag" --clobber "out/release/aimmod-ingame-${channel}.json"
           }
           publish_feed "$CHANNEL"

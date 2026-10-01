@@ -9,6 +9,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="../install-core/AimMod.Install.csproj" />
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <EmbeddedResource Include="../ui/index.html" LogicalName="AimMod.UI" />
     <EmbeddedResource Include="../ui/statistics.js" LogicalName="AimMod.StatisticsScript" />
