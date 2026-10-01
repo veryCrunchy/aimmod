@@ -16,7 +16,7 @@ Output in `<dir>`:
 | `maps/aimmod_<mapid>_<game>.json` | `FPSAimTrainer/maps/` |
 | `Scenarios/AimMod - <Map> (<Game>) - <Variant>.sce` | `FPSAimTrainer/Saved/SaveGames/Scenarios/` |
 | `Abilities/CS Walk.abilsprint` (or `Quake Walk` / `Sprint`) | `FPSAimTrainer/Saved/SaveGames/Abilities/` |
-| `aimmod_<mapid>_<game>.workshop-thumb.png/.jpg` (1024²), `-16x9` (1920 x 1080) | not installed: Workshop thumbnails |
+| `aimmod_<mapid>_<game>.workshop-thumb.png/.jpg` (1024²), `-16x9` (1920 x 1080) | Workshop thumbnails; the `-16x9.jpg` ships in the Workshop item (aimmod-workshop) and AimMod's map select shows it, also when copied next to the map in `FPSAimTrainer/maps/` |
 | `aimmod_<mapid>_<game>.thumb-views.json` | not installed: camera views for AimModCore's `capture-thumbnail` |
 | `Capture/AimMod Capture - <file id>.sce` | install only to capture a thumbnail: the same map with no bots |
 | `aimmod_<mapid>_<game>.aimmod.json` | not installed: game-mode metadata for AimMod (see below) |
@@ -221,6 +221,15 @@ following, in KovaaK's map units and axes (Unreal X/Y/Z with Source Y mirrored; 
 - `points`: `info_bomb_target`, hostage spawns and CTF flags.
 - `items`: `weapon_*` and `item_*` spawns, with class, origin and yaw.
 - `spawns`: team spawns with their team.
+
+### Liquids under the floor
+
+Water, slime and lava brushes sealed under solid ground are dropped
+(`cleanup.remove_buried_liquids`). A brush is sealed when solid geometry
+covers 80 % of its top, starting at the water line or up to 96 units above
+it. Source hides such brushes under the floor, but KovaaK's draws its Water
+through the floor. Hurt triggers and kill volumes are never dropped. The
+report counts `buried_water_removed`.
 
 ### CS map spec (`cs` block)
 

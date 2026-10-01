@@ -141,10 +141,22 @@ namespace aimmod
         // Developer mode's simulated player walking the arena (dev.avatar mode walk).
         bridge::ghost::Walker m_walker;
         double m_walkAt = -1;
+        // Several simulated players (dev.avatar walkers): one walker per synthetic peer.
+        struct DevWalk
+        {
+            bridge::ghost::Walker walker;
+            double at = -1;
+        };
+        std::map<std::uint64_t, DevWalk> m_walkers;
+        std::string DevLook(std::uint64_t peer);
+        bool IsDevPeer(std::uint64_t peer) const { return peer >= 1 && peer <= 16; }
         game::Getter m_lineTrace;
         RC::Unreal::UObject* m_kismetDefault = nullptr;
         std::int32_t m_hitImpactOffset = -1;
+        RC::Unreal::FBoolProperty* m_hitStartPenetrating = nullptr; // a trace that starts inside geometry: no floor
         bool m_traceBound = false;
+        bool m_traceForObjects = false; // LineTraceSingleForObjects (WorldStatic + WorldDynamic) rather than the Visibility channel
+        int m_traceCount = 0, m_traceHits = 0;
         // Line trace on Visibility from a to b, ignoring both bodies; the impact point, or nullopt.
         std::optional<std::array<double, 3>> Trace(RC::Unreal::UObject* context, const double a[3], const double b[3], RC::Unreal::UObject* ignore1, RC::Unreal::UObject* ignore2);
         bool LoadTestPath();

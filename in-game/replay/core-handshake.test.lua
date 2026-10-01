@@ -50,6 +50,10 @@ check(M.state().active,'Lua attempts resume')
 files[base..'core-active.tsv']='AIMMOD_CORE_1\t0.1.0\t'..now..'\treplay'
 now=now+1
 check(M.coreActive('replay') and not M.coreActive('telemetry'),'capabilities are independent')
+-- The capability list AimModCore writes today (hyphenated names included) parses whole.
+files[base..'core-active.tsv']='AIMMOD_CORE_1\t0.1.0\t'..now..'\ttelemetry,replay,presenter,load,start,capture,quit,map,shots,match-play,cosmetics,overlay'
+now=now+1
+check(M.coreActive('telemetry') and M.coreActive('match-play') and M.coreActive('overlay') and not M.coreActive('match'),'hyphenated capabilities do not break the list')
 files[base..'core-active.tsv']='garbage'
 now=now+1
 check(not M.coreActive('replay'),'malformed heartbeat is ignored')

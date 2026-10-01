@@ -1854,7 +1854,7 @@ sealed partial class MultiplayerService : IDisposable
         if (match.Phase is not (MatchPhases.Countdown or MatchPhases.Live)) return;
         // Samples travel on the host clock: offset = host - local.
         var offset = core is not null || hostPeer is null ? 0 : clocks.GetValueOrDefault(hostPeer)?.Offset ?? 0;
-        poseTracker.Poll(offset, match.Players, standInMember is { } standIn ? (StreamIds.For(StandInPeer), standIn) : null);
+        poseTracker.Poll(offset, match.Players, StandInStreams());
         foreach (var batch in poseTracker.Drain(match.Id, match.Round))
         {
             FeedStandIn(batch);
@@ -1907,6 +1907,7 @@ sealed partial class MultiplayerService : IDisposable
             }
             WriteRoundState(match, lastSpawn, extra);
             WriteAvatarState(match, view, self);
+            WriteWorldTags(match, view, self);
         }
         else WriteRoundState(match, null, PhaseLines(match));
     }
@@ -2166,6 +2167,7 @@ sealed partial class MultiplayerService : IDisposable
             "looks" => Results.Json(LooksView(), Protocol.Json),
             "board" => Results.Json(new { version = 1, board = BoardView() }, Protocol.Json),
             "preview" => MapPreview(key) is { } image ? Results.File(image, MapPorts.ContentType(image)) : Results.NotFound(),
+            "thumb" => MapThumb(key) is { } thumb ? Results.File(thumb, MapPorts.ContentType(thumb)) : Results.NotFound(),
             _ => Results.Json(View(), Protocol.Json),
         });
         MapPreviewEndpoints(routes, prefix);

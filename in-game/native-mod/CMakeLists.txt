@@ -40,6 +40,7 @@ add_library(aimmod_core STATIC
     core/src/Mesh.cpp
     core/src/Water.cpp
     core/src/Overlay.cpp
+    core/src/WorldTags.cpp
 )
 target_include_directories(aimmod_core PUBLIC core/include)
 if(MSVC)
@@ -77,6 +78,7 @@ if(AIMMOD_BUILD_MOD)
         mod/src/MaterialParams.cpp
         mod/src/Water.cpp
         mod/src/OverlayHost.cpp
+        mod/src/WorldTags.cpp
     )
     target_include_directories(AimModCore PRIVATE mod/src)
     target_link_libraries(AimModCore PRIVATE aimmod_core windowscodecs ole32)

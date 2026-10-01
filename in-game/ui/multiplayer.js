@@ -603,7 +603,7 @@
   var tab='play';
   function openTab(id){
     if(id===tab)return;tab=id;
-    if(tab==='look'){mapsOpen=false;historyOpen=false;loadCosmetics();loadLooks();render();previewTick();}
+    if(tab==='look'){mapsOpen=false;historyOpen=false;preview.openedAt=Date.now();loadCosmetics();loadLooks();render();previewTick();}
     else{previewStop();render();}
   }
   function tabStrip(){
@@ -697,7 +697,11 @@
     var shot=node('div','mp-look-view'+(preview.close?' zoomed':''));
     var img=node('img','mp-look-img');img.setAttribute('alt','Your character');img.draggable=false;img.title='Drag to turn';
     img.onmousedown=function(e){preview.drag={x:e.clientX,yaw:preview.yaw};if(e.preventDefault)e.preventDefault();};
-    var note=node('div','mp-look-wait');add(note,node('strong','','Preview paused'),node('span','','It shows in KovaaK’s menus, not during challenges, benchmarks or the editor.'));
+    // No frame yet: AimModCore is starting the preview, or it is off (it logs why). The page can't
+    // tell those apart, so it never claims a reason; it only says the look still saves.
+    var waiting=Date.now()-(preview.openedAt||0)<6000;
+    var note=node('div','mp-look-wait');add(note,node('strong','',waiting?'Loading the preview…':'Preview unavailable'),
+      node('span','',waiting?'':'Your look still saves. The preview is drawn by AimModCore in KovaaK’s menus and never runs in challenges, benchmarks or the editor.'));
     preview.img=img;preview.note=note;previewShow();
     add(shot,img,note);stage.appendChild(shot);
     var turn=function(by){preview.yaw=((preview.yaw+by+180)%360+360)%360-180;preview.fastUntil=Date.now()+2000;previewSend();};
@@ -807,7 +811,7 @@
   // Map Library: AimMod map ports here and on the Steam Workshop --------------
   var mapsOpen=false,maps=null,mapsBusy=false,mapsFilter='all';
   function openMaps(){mapsOpen=true;historyOpen=false;tab='play';picker=null;drafts.maps='';loadMaps();render();}
-  function loadMaps(){if(mapsBusy)return;mapsBusy=true;xhr('GET','/multiplayer?part=maps',null,function(ok,data){mapsBusy=false;if(!ok||!data)return;var changed=JSON.stringify(data)!==JSON.stringify(maps);maps=data;if(mapsOpen&&changed&&!focused)render();});}
+  function loadMaps(){if(mapsBusy)return;mapsBusy=true;xhr('GET','/multiplayer?part=maps',null,function(ok,data){mapsBusy=false;if(!ok||!data)return;var changed=JSON.stringify(data)!==JSON.stringify(maps);maps=data;if(changed&&(mapsOpen&&!focused||picker==='scenario'))render();});}
   function shiftText(p){return p.shift==='walk'?'Shift walks':p.shift==='sprint'?'Shift sprints':'No Shift ability';}
   function portState(p){
     if(p.download)return p.download.state==='queued'?'Queued…':'Downloading '+(p.download.total>0?Math.floor(p.download.done*100/p.download.total)+'%':'…');
@@ -1141,7 +1145,9 @@
   function settingsEditor(page,lobby){
     var s=lobby.settings,overrides=s.mode!=='score-race',locked='Fixed in score race.';
     var top=node('div','mp-editor-top');var t=node('div','mp-editor-title');add(t,node('div','eyebrow','Lobby settings'),node('h2','','Set up the match'),node('p','subtle','Changes apply right away and clear everyone’s ready.'));
-    add(top,t,actions(button('Done',function(){editing=false;picker=null;advancedOpen=null;render();},'primary')));page.appendChild(top);
+    add(top,t,actions(button('Done',function(){editing=false;picker=null;advancedOpen=null;render();},'primary')));
+    if(picker==='scenario'){mapSelect(page,lobby);return;}
+    page.appendChild(top);
     var cols=node('div','mp-row');page.appendChild(cols);var a=node('div','mp-col mp-half'),b=node('div','mp-col mp-half');cols.appendChild(a);cols.appendChild(b);
     var left=node('div','panel mp-editor');a.appendChild(left);var right=node('div','panel mp-editor');b.appendChild(right);
     // Mode (right column first, so Scenario stays above the fold at 720p)
@@ -1150,8 +1156,7 @@
     // Scenario
     var sc=section('Scenario');
     var current=node('button','mp-pick');current.type='button';add(current,node('strong','',s.scenario?safe(s.scenario.name,'Scenario'):'Choose a scenario'),node('span','',s.scenario?'Map '+safe(s.scenario.map,'')+' · '+F.duration(s.scenario.timeLimit)+' · Change':'From your KovaaK’s library'));
-    current.onclick=function(){picker=picker==='scenario'?null:'scenario';pickerQuery='';loadLibrary();render();};sc.appendChild(current);
-    if(picker==='scenario')sc.appendChild(pickerList('scenario',s));
+    current.onclick=function(){openMapSelect();};sc.appendChild(current);
     sc.appendChild(contentTable(lobby));
     left.appendChild(sc);
     // Players, rounds and time. The settings that define the chosen mode (frag limit,
@@ -1242,6 +1247,170 @@
     if(v.preset==='custom')return 'From your library: '+safe(v.custom,'custom');
     if(library&&library.presets)for(var i=0;i<library.presets.length;i++)if(library.presets[i].id===v.preset)return key==='weapon'?library.presets[i].weapon:key==='movement'?library.presets[i].movement:'The scenario’s own character';
     return v.preset==='default'?'As the scenario defines it':preset(v.preset).label;
+  }
+  // Map select: the host picks the match's scenario from a searchable grid of map cards.
+  // Filters (source, game, fits the mode), favourites and recent first, keyboard (type to
+  // search, arrows, Enter, Escape) and a details panel. The grid redraws itself in place, so
+  // the search box keeps focus and every key reaches it.
+  var mapSel={source:'all',game:'all',fits:true,focus:0,key:null};
+  var GAME_LABELS={CSGO:'CS:GO',CS2:'CS2',CSS:'CS:S',CS16:'CS 1.6','CS1.6':'CS 1.6',CSCZ:'CS:CZ',Q3:'Q3',QL:'Quake Live',UT:'UT',TF2:'TF2',HL2:'HL2'};
+  function gameLabel(g){return GAME_LABELS[g]||safe(g,'');}
+  function openMapSelect(){picker='scenario';pickerQuery='';drafts.mapsel='';focused='mapsel';mapSel.focus=0;mapSel.key=null;loadLibrary();loadMaps();render();}
+  function closeMapSelect(){picker=null;focused=null;render();}
+  // Per-mode fit for each scenario: the library's own verdict (scenarios[].modes[mode] = {ok, reason},
+  // fetched once), else the lobby's (lobby.eligibility[name] = {ok, reason, players}, CS only).
+  // A mode or scenario with neither fits.
+  function mapFit(lobby,name){
+    var mode=lobby&&lobby.settings&&lobby.settings.mode,own=null,list=(library&&library.scenarios)||[];
+    for(var i=0;i<list.length;i++)if(list[i].name===name){own=list[i].modes&&list[i].modes[mode];break;}
+    var e=lobby&&lobby.eligibility,r=e&&e[name],v=own||r;
+    if(!v)return {ok:true,reason:null,players:r&&r.players?safe(r.players,''):null};
+    return {ok:v.ok!==false,reason:v.ok===false?safe(v.reason,'Doesn’t fit this mode'):null,players:r&&r.players?safe(r.players,''):null};
+  }
+  function mapEntries(){
+    var ports=(maps&&maps.ports)||[],byScenario={},seen={},out=[];
+    ports.forEach(function(p){byScenario[p.scenario]=p;});
+    ((library&&library.scenarios)||[]).forEach(function(x){seen[x.name]=true;out.push({name:x.name,scen:x,port:byScenario[x.name]||null,installed:true});});
+    ports.forEach(function(p){if(!seen[p.scenario])out.push({name:p.scenario,scen:null,port:p,installed:!!p.installed});});
+    return out;
+  }
+  function mapTitle(x){if(x.port&&x.port.display)return safe(x.port.display,x.name);return safe(String(x.name).replace(/^AimMod - /,''),'Scenario');}
+  function mapSource(x){return x.port?(x.port.workshop?'workshop':'ports'):'mine';}
+  function mapSourceLabel(x){return x.port?(x.port.workshop?'Workshop port':'AimMod port'):x.scen&&x.scen.mapSource==='custom'?'Custom map':'KovaaK’s map';}
+  function mapMovement(x){return x.port&&x.port.variant?safe(x.port.variant,''):'KovaaK’s movement';}
+  function mapThumb(x,big){
+    var box=node('div','mp-ms-thumb'+(big?' big':''));
+    // The port's 16:9 Workshop thumbnail, else its top-down preview, both cover-cropped to fill the card.
+    if(x.port&&(x.port.thumb||x.port.preview)){var img=node('img','mp-ms-img');img.setAttribute('alt','');img.draggable=false;img.src=path()+'/multiplayer?part='+(x.port.thumb?'thumb':'preview')+'&key='+encodeURIComponent(x.port.key);box.appendChild(img);return box;}
+    // No picture: a tile in a colour of its own, with the map's initials.
+    var tones=[['#173b2f','#27e4a1'],['#11252f','#66ccff'],['#2a2114','#f0b45a'],['#2a1820','#ff8fa3'],['#1f1c33','#a99cff'],['#1c2a14','#b4e36a']];
+    var h=0,t=mapTitle(x);for(var i=0;i<t.length;i++)h=(h*31+t.charCodeAt(i))%9973;var tone=tones[h%tones.length];
+    var c=node('canvas','mp-ms-gen');c.width=320;c.height=180;c.setAttribute('aria-hidden','true');var g=c.getContext&&c.getContext('2d');
+    if(g){g.fillStyle=tone[0];g.fillRect(0,0,320,180);g.strokeStyle=tone[1];g.lineWidth=2;
+      for(var k=-180;k<320;k+=36){g.beginPath();g.moveTo(k,180);g.lineTo(k+180,0);g.stroke();}
+      g.fillStyle=tone[0];g.fillRect(96,52,128,76);g.fillStyle=tone[1];g.font='bold 40px Roboto';g.textAlign='center';g.textBaseline='middle';
+      var words=t.split(/[\s_-]+/).filter(function(w){return w;}),ini=(words[0]||'?').charAt(0)+(words[1]?words[1].charAt(0):(words[0]||'').charAt(1)||'');g.fillText(ini.toUpperCase(),160,92);}
+    box.appendChild(c);return box;
+  }
+  function mapSelect(page,lobby){
+    var s=lobby.settings,picks=(view&&view.picks)||{favourites:[],recent:[]},modeName=mode(s.mode).label;
+    var top=node('div','mp-ms-top');var t=node('div','mp-editor-title');
+    add(t,node('div','eyebrow','Match settings'),node('h2','','Choose a map'));
+    var input=trackInput(node('input','mp-ms-search'),'mapsel');input.setAttribute('autocomplete','off');input.setAttribute('aria-label','Search maps');
+    add(top,t,field(input,'Search maps and scenarios','mp-ms-field'),actions(button('Close',closeMapSelect,'quiet')));
+    page.appendChild(top);
+    if(!library||!maps&&!library){page.appendChild(add(node('div','panel mp-card'),node('p','subtle','Loading your library…')));return;}
+    if(!library.available){page.appendChild(add(node('div','panel mp-card'),node('p','subtle','AimMod couldn’t find your KovaaK’s folder.')));return;}
+    var all=mapEntries(),games={};all.forEach(function(x){if(x.port&&x.port.game)games[x.port.game]=true;});
+    var bar=node('div','mp-ms-filters');page.appendChild(bar);
+    var body=node('div','mp-ms');page.appendChild(body);
+    var gridBox=node('div','mp-ms-grid-box');var details=node('div','panel mp-ms-details');add(body,gridBox,details);
+    var visible=[];
+    function fav(name){return (picks.favourites||[]).indexOf(name)>=0;}
+    function filters(){
+      while(bar.firstChild)bar.removeChild(bar.firstChild);
+      bar.appendChild(segmented([{id:'all',label:'All'},{id:'ports',label:'AimMod ports'},{id:'mine',label:'My scenarios'},{id:'workshop',label:'Workshop'}],mapSel.source,function(id){mapSel.source=id;mapSel.focus=0;filters();fill();},false,'source'));
+      var gl=[{id:'all',label:'All games'}];Object.keys(games).sort().forEach(function(g){gl.push({id:g,label:gameLabel(g)});});
+      if(gl.length>1)bar.appendChild(segmented(gl,mapSel.game,function(id){mapSel.game=id;mapSel.focus=0;filters();fill();},false,'game'));
+      var fit=node('button','mp-ms-fit'+(mapSel.fits?' on':''));fit.type='button';fit.setAttribute('role','switch');fit.setAttribute('aria-checked',String(mapSel.fits));
+      add(fit,node('span','mp-ms-box'),node('span','','Fits '+modeName));fit.onclick=function(){mapSel.fits=!mapSel.fits;mapSel.focus=0;filters();fill();};
+      bar.appendChild(fit);
+    }
+    function matches(x,q){
+      if(mapSel.source!=='all'&&!(mapSel.source==='ports'?!!x.port:mapSel.source==='workshop'?!!(x.port&&x.port.workshop):!x.port))return false;
+      if(mapSel.game!=='all'&&!(x.port&&x.port.game===mapSel.game))return false;
+      if(mapSel.fits&&!mapFit(lobby,x.name).ok)return false;
+      if(!q)return true;
+      // Searched by its own words: the AimMod port prefix would match every port for "aim".
+      var hay=(String(x.name).replace(/^AimMod - /,'')+' '+mapTitle(x)+' '+(x.port?gameLabel(x.port.game)+' '+(x.port.variant||''):'')+' '+(x.scen?String(x.scen.map).replace(/^aimmod_/i,''):'')).toLowerCase();
+      return q.split(/\s+/).every(function(w){return !w||hay.indexOf(w)>=0;});
+    }
+    function card(x,index){
+      var f=mapFit(lobby,x.name),selected=s.scenario&&s.scenario.name===x.name;
+      var b=node('button','mp-ms-card'+(selected?' selected':'')+(index===mapSel.focus?' focus':'')+(f.ok?'':' unfit')+(x.installed?'':' missing'));b.type='button';b.title=x.name;
+      b.appendChild(mapThumb(x,false));
+      var info=node('div','mp-ms-info');
+      var head=node('div','mp-ms-name');add(head,node('strong','',mapTitle(x)),fav(x.name)?node('span','mp-ms-star'):null);info.appendChild(head);
+      var badges=node('div','mp-ms-badges');
+      if(x.port&&x.port.game)badges.appendChild(chip(gameLabel(x.port.game),'mint'));
+      badges.appendChild(chip(mapMovement(x)));
+      if(!x.installed)badges.appendChild(chip('Not installed','amber'));
+      info.appendChild(badges);
+      info.appendChild(node('div','mp-ms-why',!f.ok?f.reason:f.players?f.players:mapSourceLabel(x)));
+      b.appendChild(info);
+      if(selected)b.appendChild(node('span','mp-ms-selected','Selected'));
+      b.onclick=function(){mapSel.focus=index;mapSel.key=x.name;fill();};
+      b.ondblclick=function(){choose(x);};
+      return b;
+    }
+    function choose(x){if(!x.installed||!mapFit(lobby,x.name).ok)return;picker=null;focused=null;setting('scenario',x.name);}
+    function fill(){
+      while(gridBox.firstChild)gridBox.removeChild(gridBox.firstChild);
+      var q=(drafts.mapsel||'').toLowerCase().replace(/^\s+|\s+$/g,''),byName={},hidden=0;visible=[];
+      all.forEach(function(x){byName[x.name]=x;});
+      function section(title,list,limit){
+        var shown=list.filter(function(x){return matches(x,q);});if(!shown.length)return;
+        gridBox.appendChild(node('div','mp-ms-group',title));var grid=node('div','mp-ms-grid');gridBox.appendChild(grid);
+        shown.slice(0,limit).forEach(function(x){var cell=node('div','mp-ms-cell');cell.appendChild(card(x,visible.length));visible.push(x);grid.appendChild(cell);});
+        if(shown.length>limit)gridBox.appendChild(node('div','mp-muted','Showing '+limit+' of '+F.number(shown.length,0)+'. Type to narrow the list.'));
+      }
+      if(!q){
+        section('Favourites',(picks.favourites||[]).map(function(n){return byName[n];}).filter(Boolean),12);
+        section('Recently played',(picks.recent||[]).map(function(n){return byName[n];}).filter(function(x){return x&&!fav(x.name);}).slice(0,8),8);
+      }
+      section(q?'Results':'All maps',all,q?60:48);
+      if(mapSel.fits)hidden=all.filter(function(x){return !mapFit(lobby,x.name).ok;}).length;
+      if(!visible.length)gridBox.appendChild(add(node('div','mp-ms-empty'),node('strong','','Nothing matches'),node('span','',q?'Try a shorter search or another filter.':'No maps in this filter yet.')));
+      if(hidden)gridBox.appendChild(add(node('div','mp-ms-hidden'),node('span','',hidden+(hidden===1?' map doesn’t':' maps don’t')+' fit '+modeName+'. '),actions(button('Show them',function(){mapSel.fits=false;filters();fill();},'compact quiet'))));
+      if(mapSel.key){for(var i=0;i<visible.length;i++)if(visible[i].name===mapSel.key){mapSel.focus=i;break;}}
+      if(mapSel.focus>=visible.length)mapSel.focus=Math.max(0,visible.length-1);
+      showDetails(visible[mapSel.focus]||null);
+    }
+    function showDetails(x){
+      while(details.firstChild)details.removeChild(details.firstChild);
+      if(!x){details.appendChild(node('p','subtle','Pick a map to see its details.'));return;}
+      mapSel.key=x.name;
+      var f=mapFit(lobby,x.name),selected=s.scenario&&s.scenario.name===x.name;
+      details.appendChild(mapThumb(x,true));
+      var d=node('div','mp-ms-dbody');details.appendChild(d);
+      var head=node('div','mp-ms-dhead');add(head,add(node('div','mp-ms-dtitle'),node('strong','',mapTitle(x)),node('span','',safe(x.name,''))),actions((function(){
+        var on=fav(x.name),star=button('',function(){act('favourite',{scenario:x.name,on:!on},function(ok){if(ok){picks=view.picks||picks;fill();}});},'compact quiet mp-fav'+(on?' on':''));
+        star.appendChild(starIcon(on));star.setAttribute('aria-label',on?'Remove from favourites':'Add to favourites');star.setAttribute('aria-pressed',String(on));return star;})()));
+      d.appendChild(head);
+      var tags=node('div','mp-ms-badges');if(x.port&&x.port.game)tags.appendChild(chip(gameLabel(x.port.game),'mint'));tags.appendChild(chip(mapMovement(x)));tags.appendChild(chip(mapSourceLabel(x)));if(f.players)tags.appendChild(chip(f.players));d.appendChild(tags);
+      if(x.port&&x.port.description||x.scen&&x.scen.description)d.appendChild(node('p','mp-ms-desc',safe((x.port&&x.port.description)||x.scen.description,'')));
+      var facts=node('div','mp-ms-facts');
+      function fact(k,v){if(!v)return;add(facts,add(node('div','mp-ms-fact'),node('span','',k),node('strong','',v)));}
+      fact('Map',x.scen?safe(x.scen.map,''):x.port?safe(x.port.mapFile,''):'');
+      fact('Time limit',x.scen&&x.scen.timeLimit?F.duration(x.scen.timeLimit):'');
+      fact('Weapon',x.scen&&x.scen.defaultWeapon?safe(x.scen.defaultWeapon,''):'');
+      fact('Map size',x.port&&x.port.mapScale?'Scale '+x.port.mapScale:'');
+      fact('Download',x.port&&x.port.bytes?Math.max(1,Math.round(x.port.bytes/1e6))+' MB':'');
+      fact('Shift',x.port?shiftText(x.port):'');
+      d.appendChild(facts);
+      if(!f.ok)d.appendChild(node('p','mp-ms-warn',f.reason+'. Pick another map, or change the mode.'));
+      // Who still needs it: known for the lobby's current scenario; others get it from you once picked.
+      if(selected){var missing=lobby.members.filter(function(m){return m.role==='player'&&contentState(m,lobby).kind;});
+        d.appendChild(node('p',missing.length?'mp-ms-warn':'mp-ms-ok',missing.length?'Missing for '+missing.map(function(m){return safe(m.name);}).join(', ')+'. They get it from you before the match.':'Everyone has it.'));}
+      else if(x.installed)d.appendChild(node('p','mp-ms-note','Players who don’t have it get it from you when the match loads.'));
+      var row=[];
+      if(!x.installed&&x.port&&x.port.workshop&&maps&&maps.canInstall)row.push(button(x.port.download?'Downloading…':'Download',function(){act('map-install',{key:x.port.key},function(){loadMaps();});},'primary'));
+      else if(!x.installed)row.push(node('span','mp-ms-note','Install it from the map library first.'));
+      if(x.installed)row.push(selected?button('Selected',function(){},'quiet'):button('Use this map',function(){choose(x);},'primary'));
+      if(selected&&row.length)row[row.length-1].disabled=true;
+      if(x.installed&&!f.ok)row[row.length-1].disabled=true;
+      d.appendChild(actions.apply(null,row));
+    }
+    // Keys: letters type into the search; arrows move between cards; Enter picks; Escape closes.
+    input.onchanged=function(){mapSel.focus=0;mapSel.key=null;fill();};
+    input.onkeydown=function(e){
+      e=e||root.event;var k=e.keyCode,cols=(root.innerWidth||1920)>=1500?4:3,n=visible.length;
+      var move=k===37?-1:k===39?1:k===38?-cols:k===40?cols:0;
+      if(move&&n){mapSel.focus=Math.max(0,Math.min(n-1,mapSel.focus+move));mapSel.key=visible[mapSel.focus].name;fill();if(e.preventDefault)e.preventDefault();return false;}
+      if(k===13&&visible[mapSel.focus]){choose(visible[mapSel.focus]);if(e.preventDefault)e.preventDefault();return false;}
+      if(k===27){closeMapSelect();if(e.preventDefault)e.preventDefault();return false;}
+    };
+    filters();fill();
   }
   function pickerList(kind,s){
     var box=node('div','mp-picker');

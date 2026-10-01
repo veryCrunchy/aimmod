@@ -50,7 +50,9 @@ namespace bridge::ghost
         {
             if (index < 0 || index >= static_cast<int>(spawns.size())) return false;
             const auto& s = spawns[static_cast<std::size_t>(index)];
-            const auto ground = floor(s[0], s[1], s[2] + halfHeight + 50);
+            // From the spawn point itself (inside the room, a little above the floor): a trace started
+            // higher can begin inside a low ceiling, and a start-penetrating hit puts the body on the roof.
+            const auto ground = floor(s[0], s[1], s[2] + 10);
             x = s[0];
             y = s[1];
             z = ground ? *ground + halfHeight : s[2];

@@ -52,7 +52,7 @@ sealed partial class MultiplayerService
                     p.Key, p.Scenario, p.Display, p.Game, p.Variant, p.MapFile, p.Bytes, p.Shift, p.MapScale,
                     workshop = p.WorkshopId is not null, installed = p.Installed || (p.WorkshopId is { } s && simulatedInstalls.Contains(s)),
                     simulated = p.WorkshopId is { } sim && simulatedInstalls.Contains(sim),
-                    p.NeedsUpdate, preview = p.Preview is not null,
+                    p.NeedsUpdate, preview = p.Preview is not null, thumb = p.Thumb is not null,
                     download = p.WorkshopId is { } w && mapDownloads.TryGetValue(w, out var d) ? new { d.State, d.Done, d.Total } : null,
                 }),
             };
@@ -60,6 +60,12 @@ sealed partial class MultiplayerService
     }
 
     // The preview image of a port, by its key. Only files the library found are served.
+    public string? MapThumb(string? key)
+    {
+        if (key is not { Length: 12 }) return null;
+        lock (gate) return Ports().FirstOrDefault(p => p.Key == key)?.Thumb;
+    }
+
     public string? MapPreview(string? key)
     {
         if (key is not { Length: 12 }) return null;

@@ -116,6 +116,23 @@ namespace aimmod::overlay
         return text[0] == '1' && age >= -3 && age <= 3;
     }
 
+    bool LuaLayerActive(std::string_view text, std::int64_t nowUnix)
+    {
+        constexpr std::string_view Header = "AIMMOD_LUANOTICE_1\t";
+        text = Trim(text);
+        if (text.substr(0, Header.size()) != Header) return false;
+        text.remove_prefix(Header.size());
+        if (text.empty() || text.size() > 12) return false;
+        std::int64_t stamp = 0;
+        for (char c : text)
+        {
+            if (c < '0' || c > '9') return false;
+            stamp = stamp * 10 + (c - '0');
+        }
+        const std::int64_t age = nowUnix - stamp;
+        return age >= -3 && age <= 3;
+    }
+
     Plan Machine::Next(const Frame& f)
     {
         Plan p;

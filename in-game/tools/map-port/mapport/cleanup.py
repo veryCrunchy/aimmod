@@ -144,3 +144,40 @@ def add_kill_below(sc: scene.Scene, z: float, margin: float = 1024.0) -> None:
     corners = [(x, y, zz) for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for zz in (lo[2], hi[2])]
     scene.add_liquid(sc, "hurt", corners, damage=1000.0)
     sc.bump("kill_volumes")
+
+
+def remove_buried_liquids(sc: scene.Scene, cover: float = 0.8) -> int:
+    """Drops liquid volumes (water, slime, lava) sealed under solid ground: liquid brushes a mapper left
+    under a floor. In Source the floor hides them; KovaaK's draws its water through the floor. A volume
+    is buried when solid geometry covers `cover` of its top, laid at or just above the water line.
+    Pools and puddles open to the air stay; hurt triggers and kill volumes are never touched."""
+    keep, removed = [], 0
+    for go in sc.gameobjects:
+        if go.get("liquid") not in ("water", "slime", "lava"):
+            keep.append(go)
+            continue
+        o, s = go["origin"], go["size"]
+        lo, hi, top = (o[0] - s[0] / 2, o[1] - s[1] / 2), (o[0] + s[0] / 2, o[1] + s[1] / 2), o[2] + s[2] / 2
+        area = max(1.0, s[0] * s[1])
+        covered = 0.0
+        for b in sc.brushes:
+            if b.kind != scene.SOLID:
+                continue
+            (bx0, by0, bz0), (bx1, by1, bz1) = b.bounds()
+            # A lid: solid starting at the water line (or just under it) and above. A floor around or
+            # under a pool also has its top near the water line, but it isn't over the water.
+            if not -8.0 <= bz0 - top <= 96.0:
+                continue
+            ix = min(hi[0], bx1) - max(lo[0], bx0)
+            iy = min(hi[1], by1) - max(lo[1], by0)
+            if ix > 0 and iy > 0:
+                covered += ix * iy / area
+        if covered >= cover:
+            removed += 1
+            sc.bump(f"buried_{go['liquid']}_removed")
+        else:
+            keep.append(go)
+    if removed:
+        sc.gameobjects[:] = keep
+        sc.notes.append(f"dropped {removed} liquid volume(s) sealed under the floor")
+    return removed
