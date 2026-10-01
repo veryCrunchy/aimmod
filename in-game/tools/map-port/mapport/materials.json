@@ -30,6 +30,32 @@
  },
  "rules": [
   {
+   "category": "metal",
+   "keywords": [
+    "oildrum",
+    "lamppost",
+    "car00",
+    "vehicle",
+    "trailer",
+    "container",
+    "locker",
+    "forklift",
+    "acunit",
+    "signalbox",
+    "props_c17/fence",
+    "prison_pipe"
+   ],
+   "material": "MI_WA_MetalSheet",
+   "tint": "auto",
+   "scale": 1.0,
+   "roughness": 0.45,
+   "metallic": 0.8,
+   "fallback": [
+    "concrete"
+   ],
+   "colour": "9aa0a6"
+  },
+  {
    "category": "light",
    "keywords": [
     "light",

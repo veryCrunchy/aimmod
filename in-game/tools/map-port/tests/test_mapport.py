@@ -609,6 +609,133 @@ class TagTests(unittest.TestCase):
             self.assertIn("water", h["Description"])
 
 
+def _box(lo, hi, texture="concrete/floor01", kind=scene.SOLID, source="world"):
+    planes = []
+    for axis in range(3):
+        n = [0.0, 0.0, 0.0]
+        n[axis] = 1.0
+        planes.append((n[0], n[1], n[2], hi[axis]))
+        planes.append((-n[0], -n[1], -n[2], -lo[axis]))
+    faces = [scene.Face(polygon=p, normal=pl[:3], texture=texture) for pl, p in zip(planes, g.brush_faces(planes))]
+    return scene.Brush(faces=faces, kind=kind, source=source)
+
+
+def _area(faces):
+    return sum(g.polygon_area(f.polygon) for f in faces)
+
+
+class CullTests(unittest.TestCase):
+    def test_subtract_pieces_cover_the_rest(self):
+        from mapport import cull
+        sq = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
+        hole = [(2.0, 2.0), (4.0, 2.0), (4.0, 4.0), (2.0, 4.0)]
+        pieces = cull.subtract(sq, hole)
+        self.assertAlmostEqual(sum(abs(cull._area2(p)) for p in pieces), 96.0, places=6)
+        self.assertEqual(cull.subtract(hole, sq), [])  # fully covered
+        far = [(20.0, 20.0), (30.0, 20.0), (30.0, 30.0)]
+        self.assertAlmostEqual(sum(abs(cull._area2(p)) for p in cull.subtract(sq, far)), 100.0, places=6)
+
+    def test_touching_boxes_lose_their_shared_faces(self):
+        from mapport import cull
+        a = _box((0, 0, 0), (64, 64, 64))
+        b = _box((64, 0, 0), (128, 64, 64))   # shares the x=64 face exactly
+        c = _box((0, 0, 64), (32, 32, 96))    # sits on a's top, covering a quarter of it
+        sc = scene.Scene(name="t", brushes=[a, b, c])
+        faces, stats = cull.visible_faces(sc)
+        fa = faces[id(a)]
+        self.assertFalse(any(f.normal == (1.0, 0.0, 0.0) and abs(f.polygon[0][0] - 64) < 1e-6 for f in fa))
+        top = [f for f in fa if f.normal == (0.0, 0.0, 1.0)]
+        self.assertAlmostEqual(_area(top), 64 * 64 - 32 * 32, places=3)
+        self.assertNotIn((0.0, 0.0, -1.0), [f.normal for f in faces[id(c)]])  # c's bottom is on a
+        # Every corner of every brush is still on an exported face.
+        for brush in (a, b, c):
+            kept = {tuple(round(x, 3) for x in p) for f in faces.get(id(brush), brush.faces) for p in f.polygon}
+            for p in brush.points():
+                self.assertIn(tuple(round(x, 3) for x in p), kept)
+        self.assertGreaterEqual(stats["faces_hidden"], 3)
+
+    def test_doubled_faces_keep_the_displacement(self):
+        from mapport import cull
+        floor = _box((0, 0, -16), (128, 128, 0), "concrete/floor01")
+        disp = _box((0, 0, -8), (64, 64, 0), "nature/blendgrass", source="displacement")
+        sc = scene.Scene(name="t", brushes=[floor, disp])
+        faces, stats = cull.visible_faces(sc)
+        floor_top = [f for f in faces[id(floor)] if f.normal == (0.0, 0.0, 1.0)]
+        self.assertAlmostEqual(_area(floor_top), 128 * 128 - 64 * 64, places=3)
+        self.assertIn((0.0, 0.0, 1.0), [f.normal for f in faces.get(id(disp), disp.faces)])
+        self.assertGreaterEqual(stats["faces_doubled"], 1)  # the top, and the sides on x=0 and y=0
+
+    def test_clip_and_glass_do_not_hide_faces(self):
+        from mapport import cull
+        wall = _box((0, 0, 0), (16, 64, 64))
+        clip = _box((16, 0, 0), (32, 64, 64), "tools/toolsplayerclip", kind=scene.CLIP)
+        glass = _box((-8, 0, 0), (0, 64, 64), "glass/window01", kind=scene.GLASS)
+        faces, _ = cull.visible_faces(scene.Scene(name="t", brushes=[wall, clip, glass]))
+        self.assertNotIn(id(wall), faces)  # nothing opaque touches it
+
+    def test_export_leaves_hidden_faces_out(self):
+        a, b = _box((0, 0, 0), (64, 64, 64)), _box((64, 0, 0), (128, 64, 64))
+        sc = scene.Scene(name="t", brushes=[a, b])
+        doc = kovaaks_json.build(sc, [], {}, 2, 1.0, 4.0)
+        self.assertEqual([len(o["procedural"]) for o in doc["objects"]], [5, 5])
+        self.assertEqual(len(kovaaks_json.build(sc, [], {}, 2, 1.0, 4.0, cull_hidden=False)["objects"][0]["procedural"]), 6)
+
+
+class DoorTests(unittest.TestCase):
+    def test_rotating_door_swings_open_and_stops_colliding(self):
+        faces = _box((0, 0, 0), (4, 48, 96), "wood/door").faces
+        ent = {"classname": "func_door_rotating", "origin": "0 0 0", "distance": "90"}
+        out, kind = bsp.open_door(faces, ent, scene.SOLID)
+        self.assertEqual(kind, scene.NONSOLID)
+        pts = [p for f in out for p in f.polygon]
+        self.assertAlmostEqual(min(p[0] for p in pts), -48.0, places=3)  # swung 90 degrees about Z
+        self.assertAlmostEqual(max(abs(p[1]) for p in pts), 4.0, places=3)
+        out, kind = bsp.open_door(faces, dict(ent, spawnpos="1"), scene.SOLID)
+        self.assertEqual(out, faces)
+
+    def test_sliding_door_moves_by_its_size_minus_lip(self):
+        faces = _box((0, 0, 0), (8, 64, 96), "metal/door").faces
+        out, kind = bsp.open_door(faces, {"classname": "func_door", "movedir": "-90 0 0", "lip": "8"}, scene.SOLID)
+        self.assertEqual(kind, scene.SOLID)
+        self.assertAlmostEqual(min(p[2] for f in out for p in f.polygon), 88.0, places=3)  # up by 96 - 8
+
+
+class StockModelTests(unittest.TestCase):
+    def test_vpk_directory_and_chain(self):
+        from mapport import vpk
+        import struct
+        with tempfile.TemporaryDirectory() as tmp:
+            game = os.path.join(tmp, "steamapps", "common", "SomeSourceGame", "hl2")
+            os.makedirs(game)
+            payload = b"MDLDATA"
+            tree = b"mdl\0models/props_x\0barrel\0" + struct.pack("<IHHIIH", 0, 2, 0, 0, len(payload) - 2, 0xFFFF) \
+                + payload[:2] + b"\0\0\0"
+            with open(os.path.join(game, "hl2_misc_dir.vpk"), "wb") as fh:
+                fh.write(struct.pack("<III", 0x55AA1234, 1, len(tree)) + tree)
+            with open(os.path.join(game, "hl2_misc_000.vpk"), "wb") as fh:
+                fh.write(payload[2:])
+            stock = vpk.StockModels.discover(tmp)
+            self.assertIsNotNone(stock)
+            self.assertEqual(stock.get("models/props_x/barrel.mdl"), payload)
+            self.assertIsNone(stock.get("models/props_x/missing.mdl"))
+            self.assertIsNone(stock.get("materials/x.vtf"))  # models only
+            self.assertEqual(stock.used, {"models/props_x/barrel.mdl": "SomeSourceGame/hl2"})
+            chain = vpk.ChainFiles({"models/props_x/barrel.mdl": b"PACKED"}, stock)
+            self.assertEqual(chain.get("models/props_x/barrel.mdl"), b"PACKED")
+            self.assertIsNone(vpk.StockModels.discover("none"))
+
+
+class BackdropSlotTests(unittest.TestCase):
+    def test_ground_plane_shares_the_floor_slot(self):
+        from mapport import cleanup
+        sc = scene.Scene(name="t", brushes=[_box((0, 0, -16), (512, 512, 0), "concrete/floor01"),
+                                           _box((0, 0, 0), (16, 512, 128), "brick/brickwall01")])
+        cleanup.add_ground_plane(sc)
+        slots, tex_slot = materials.allocate(sc, materials.load_table(), 2)
+        self.assertNotIn(cleanup.GROUND_TEXTURE, [t for s in slots for t in s.textures])
+        self.assertEqual(tex_slot[cleanup.GROUND_TEXTURE], tex_slot["concrete/floor01"])
+
+
 class ThumbnailTests(unittest.TestCase):
     def test_views_in_game_space(self):
         from mapport import thumbnail

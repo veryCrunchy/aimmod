@@ -111,8 +111,13 @@ def _orientation(normal) -> str:
 def allocate(sc: scene.Scene, table: dict, groups: int = 2) -> Tuple[List[Slot], Dict[str, int]]:
     """Cluster the visible textures into at most groups*4 slots. Returns slots and texture->slot index."""
     clusters: Dict[str, Cluster] = {}
+    backdrop = set()
     for b in sc.brushes:
         if b.kind in (scene.CLIP, scene.GLASS):
+            continue
+        if b.source == "backdrop":
+            # The ground plane under the map borrows the main floor's slot instead of using one up.
+            backdrop |= {f.texture for f in b.faces}
             continue
         stand_in = all(classify.is_tool(f.texture) for f in b.faces)
         for f in b.faces:
@@ -165,6 +170,10 @@ def allocate(sc: scene.Scene, table: dict, groups: int = 2) -> Tuple[List[Slot],
     for i, sl in enumerate(slots):
         for t in sl.textures:
             tex_slot[t] = i
+    if backdrop and slots:
+        floor = max(range(len(items)), key=lambda i: (items[i].orient["ground"], items[i].area))
+        for t in backdrop:
+            tex_slot.setdefault(t, floor)
     return slots, tex_slot
 
 
