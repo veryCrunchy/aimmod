@@ -197,6 +197,10 @@ sealed class CsMatch
     int? lastWinner; string? lastReason;
     // Bomb.
     string bombState = "carried"; string? carrier, site, planter, defuser; double[]? bombAt; long? explodesAt, plantDoneAt, defuseDoneAt; double[]? plantFrom;
+    // Who dropped the bomb on purpose, and until when they can't pick it straight back up.
+    string? dropper; long dropperBlockedUntil;
+    public const long DropBlockMs = 1500;
+    public const double DropAheadCm = 70;
     bool plantedThisRound;
     readonly Dictionary<string, double[]> roundSpawns = new();
 
@@ -277,9 +281,11 @@ sealed class CsMatch
                 roundSpawns[p.Id] = [s.X, s.Y, s.Z, s.Yaw];
             }
         }
-        // The bomb: a Terrorist in turn carries it.
+        // The bomb: the last carrier keeps it if they're still a Terrorist, else a random Terrorist.
         var ts = Side(CsRules.T).ToList();
-        carrier = ts.Count > 0 ? ts[(Round - 1) % ts.Count].Id : null;
+        carrier = carrier is { } last && ts.Any(t => t.Id == last) ? last
+            : ts.Count > 0 ? ts[new Random(unchecked((int)(Combat.Start ^ Round * 7919L))).Next(ts.Count)].Id : null;
+        dropper = null; dropperBlockedUntil = 0;
         bombState = carrier is null ? "none" : "carried"; site = null; planter = null; defuser = null; bombAt = null; explodesAt = null; plantDoneAt = null; defuseDoneAt = null; plantedThisRound = false;
         Event("round", now, null, "Round " + Round);
     }
@@ -326,6 +332,22 @@ sealed class CsMatch
         return null;
     }
 
+    // The drop key (G): the carrier puts the bomb down in front of them, for a teammate to pick up.
+    public string? Drop(string id, long now)
+    {
+        if (!players.TryGetValue(id, out _) || !Combat.Alive(id)) return "dead";
+        if (carrier != id) return "no-bomb";
+        if (Phase is not ("freeze" or "live")) return "not-now";
+        if (Combat.Position(id) is not { } at) return "no-track";
+        var yaw = at.Yaw * Math.PI / 180;
+        carrier = null; bombState = "dropped";
+        bombAt = [Math.Round(at.X + Math.Cos(yaw) * DropAheadCm, 1), Math.Round(at.Y + Math.Sin(yaw) * DropAheadCm, 1), Math.Round(at.Z - 64, 1)];
+        dropper = id; dropperBlockedUntil = now + DropBlockMs;
+        if (planter == id) { planter = null; plantDoneAt = null; }
+        Event("bomb-dropped", now, id, null);
+        return null;
+    }
+
     // The use key (E): held to plant (carrier in a bomb site) or to defuse (CT at the bomb).
     public string? Use(string id, bool held, long now)
     {
@@ -338,6 +360,8 @@ sealed class CsMatch
         }
         var side = SideOf(p.Team);
         if (Combat.Position(id) is not { } at) return "no-track";
+        if (side == CsRules.T && Phase == "live" && carrier != id && bombState is "carried" or "dropped") return "no-bomb";
+        if (side == CsRules.T && Phase == "freeze") return "freeze";
         if (side == CsRules.T && Phase == "live" && carrier == id)
         {
             var inSite = map?.BombSites.FirstOrDefault(z => z.Contains(at.X, at.Y, at.Z));
@@ -358,12 +382,27 @@ sealed class CsMatch
         return "nothing-to-use";
     }
 
+    // A dropped bomb is picked up by an alive Terrorist walking over it (not by the one who just
+    // dropped it, for a moment); Counter-Terrorists walk over it.
+    void PickUp(long now)
+    {
+        if (bombState != "dropped" || bombAt is not { } drop) return;
+        foreach (var t in Side(CsRules.T))
+        {
+            if (t.Id == dropper && now < dropperBlockedUntil) continue;
+            if (Combat.Alive(t.Id) && Combat.Position(t.Id) is { } at && Math.Sqrt((at.X - drop[0]) * (at.X - drop[0]) + (at.Y - drop[1]) * (at.Y - drop[1])) <= CsRules.BombPickupCm
+                && Math.Abs(at.Z - 64 - drop[2]) <= 120)
+            { carrier = t.Id; bombState = "carried"; bombAt = null; dropper = null; Event("bomb-picked", now, t.Id, null); return; }
+        }
+    }
+
     public void Leave(string id, long now) { Combat.Kill(id, now); if (carrier == id) DropBomb(id); if (planter == id) planter = null; if (defuser == id) defuser = null; }
 
     public void Tick(long now)
     {
         if (Over) return;
         if (Phase == "freeze" && now >= PhaseEndsAt) { Phase = "live"; LiveAt = now; PhaseEndsAt = now + CsRules.RoundMs; Event("live", now, null, null); }
+        if (Phase == "freeze") PickUp(now);
         if (Phase is "live" or "planted")
         {
             // Plant and defuse progress: the holder must stay alive and in place.
@@ -391,11 +430,7 @@ sealed class CsMatch
                     return;
                 }
             }
-            // A dropped bomb is picked up by a Terrorist walking over it.
-            if (bombState == "dropped" && bombAt is { } drop)
-                foreach (var t in Side(CsRules.T))
-                    if (Combat.Alive(t.Id) && Combat.Position(t.Id) is { } at && Math.Sqrt((at.X - drop[0]) * (at.X - drop[0]) + (at.Y - drop[1]) * (at.Y - drop[1])) <= CsRules.BombPickupCm)
-                    { carrier = t.Id; bombState = "carried"; bombAt = null; Event("bomb-picked", now, t.Id, null); break; }
+            PickUp(now);
             var tAlive = Side(CsRules.T).Count(p => Combat.Alive(p.Id)); var ctAlive = Side(CsRules.CT).Count(p => Combat.Alive(p.Id));
             if (Phase == "planted")
             {

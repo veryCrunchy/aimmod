@@ -36,3 +36,30 @@ test('the HUD shows score, clocks, money change, banners, feed and plant progres
   assert.ok(s.text(s.root).includes('Bomb planted')&&s.text(s.root).includes('0:28')&&s.text(s.root).includes('Defusing'));
   s.hud.render(s.root,null,()=>{});assert.equal(s.root.className,'');
 });
+test('the open buy menu stays the same element while the clock ticks, so clicks are never lost to a redraw',()=>{
+  const s=setup();const calls=[];
+  s.hud.render(s.root,base,(a,id)=>calls.push([a,id]));
+  const find=()=>s.walk(s.root).find(e=>e.tag==='button'&&/cs-item/.test(e.className)&&e.children[1].children[0].textContent==='MAC-10');
+  const before=find();
+  s.hud.render(s.root,Object.assign({},base,{buyLeft:31,left:11}),(a,id)=>calls.push([a,id]));
+  assert.equal(find(),before,'same button after a clock-only change');
+  assert.ok(s.text(s.root).includes('Buy time 0:31'),'the buy clock still counts down');
+  before.onclick();assert.deepEqual(calls,[['cs-buy','mac10']]);
+  s.hud.render(s.root,Object.assign({},base,{money:200}),()=>{});
+  assert.notEqual(find(),before,'a money change rebuilds the menu');
+  s.hud.render(s.root,Object.assign({},base,{buyOpen:false}),()=>{});
+  assert.ok(!find(),'closing removes it');
+});
+test('sites on the compass, the site letter, the bomb carrier and why an action was refused',()=>{
+  const s=setup();
+  s.hud.render(s.root,Object.assign({},base,{buyOpen:false,phase:'live',inSite:'A',callout:'Long A',hasBomb:true,dropKey:'G',refused:'Not in a bomb site.',
+    sites:[{name:'A',bearing:-30,meters:12},{name:'B',bearing:150,meters:60},{name:'Bomb',bearing:0,meters:2}]}),()=>{});
+  const t=s.text(s.root);
+  assert.ok(t.includes('Bomb site A')&&t.includes('Long A')&&t.includes('You have the bomb · G drops it')&&t.includes('Not in a bomb site.'));
+  const marks=s.walk(s.root).filter(e=>/cs-mark( |$)/.test(e.className));
+  assert.equal(marks.length,3);
+  assert.ok(/behind/.test(marks[1].className)&&marks[1].style.left==='100%','a site behind you clamps to the edge');
+  assert.ok(/here/.test(marks[0].className),'the site you stand in is marked');
+  s.hud.render(s.root,Object.assign({},base,{buyOpen:false,phase:'live',bombCarrier:'Nova'}),()=>{});
+  assert.ok(s.text(s.root).includes('Bomb: Nova'),'teammates see who has the bomb');
+});

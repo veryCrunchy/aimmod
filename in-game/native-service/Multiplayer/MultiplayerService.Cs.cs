@@ -14,7 +14,15 @@ sealed partial class MultiplayerService
     MapObjectives? csObjectives;
     bool buyOpen, useHeld; string? csRoundKey;
     readonly CsKeyReader csKeys = new();
-    public const string CsBuyKey = "B", CsUseKey = "E";
+    public const string CsBuyKey = "B", CsUseKey = "E", CsDropKey = "G";
+    // Why the last use or drop was refused, shown on the HUD for a moment.
+    string? csRefusal; long csRefusalUntil;
+    void CsCommand(string action, object args)
+    {
+        var result = Command(action, JsonSerializer.SerializeToElement(args));
+        if (!result.Ok && result.Message is { } why && !(action == "use" && args.ToString()!.Contains("False", StringComparison.Ordinal)))
+        { csRefusal = why; csRefusalUntil = clock() + 2500; }
+    }
 
     // aimmod_<map>_<game>.aimmod.json next to the arena's map (KovaaK's maps folder), or in
     // AimMod's own maps folder.
@@ -31,6 +39,23 @@ sealed partial class MultiplayerService
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         }
         return null;
+    }
+
+    // lobby.eligibility for the map selector: scenario name -> { ok, reason?, players }, for modes
+    // that need map data of their own (CS); null for the others (every scenario fits). Rebuilt when
+    // the library changes.
+    public sealed record ScenarioFit(bool Ok, string? Reason, string? Players);
+    (int Count, string Mode, long At, IReadOnlyDictionary<string, ScenarioFit>? Map)? eligibilityCache;
+    IReadOnlyDictionary<string, ScenarioFit>? Eligibility(string mode)
+    {
+        if (mode != LobbyModes.Cs) return null;
+        var scenarios = library.Scenarios;
+        if (eligibilityCache is { } c && c.Mode == mode && c.Count == scenarios.Count && clock() - c.At < 30_000) return c.Map;
+        var map = new Dictionary<string, ScenarioFit>(StringComparer.Ordinal);
+        foreach (var s in scenarios)
+            map.TryAdd(s.Name, library.CsMapProblem(s.Map) is { } problem ? new ScenarioFit(false, problem, "6, 8 or 10 players") : new ScenarioFit(true, null, "6, 8 or 10 players"));
+        eligibilityCache = (scenarios.Count, mode, clock(), map);
+        return map;
     }
 
     long HostOffset() => core is null && hostPeer is not null ? clocks.GetValueOrDefault(hostPeer)?.Offset ?? 0 : 0;
@@ -66,9 +91,10 @@ sealed partial class MultiplayerService
         if (key != csRoundKey) { csRoundKey = key; buyOpen = false; }
         var hostNow = clock() + HostOffset();
         var buyWindow = cs.Phase == "freeze" || (cs.Phase == "live" && cs.LiveAt is { } live && hostNow < live + CsRules.BuyMs);
-        if (!buyWindow) buyOpen = false;
+        if (!buyWindow || me.InBuyZone == false || !me.Alive) buyOpen = false;
         if (!csKeys.Foreground()) { if (useHeld) { useHeld = false; Command("use", JsonSerializer.SerializeToElement(new { held = false })); } return; }
-        if (csKeys.Pressed('B') && buyWindow && me.Alive) buyOpen = !buyOpen;
+        if (csKeys.Pressed('B') && buyWindow && me.Alive && me.InBuyZone != false) buyOpen = !buyOpen;
+        if (buyOpen && csKeys.Pressed('\u001b')) buyOpen = false; // Escape closes it too
         if (buyOpen)
         {
             var menu = BuyMenu(me.Side, me);
@@ -76,7 +102,8 @@ sealed partial class MultiplayerService
                 if (csKeys.Pressed((char)('1' + i))) Command("buy", JsonSerializer.SerializeToElement(new { item = menu[i].Item }));
         }
         var held = csKeys.Down('E') && me.Alive && cs.Phase is "live" or "planted";
-        if (held != useHeld) { useHeld = held; Command("use", JsonSerializer.SerializeToElement(new { held })); }
+        if (held != useHeld) { useHeld = held; CsCommand("use", new { held }); }
+        if (csKeys.Pressed('G') && me.Alive && !buyOpen) CsCommand("drop", new { });
     }
 
     // CS HUD for the notice layer, kept clear of the crosshair: the score strip and clocks at
@@ -90,7 +117,11 @@ sealed partial class MultiplayerService
         int Money, int? MoneyDelta, bool Alive, double Health, double Armor, bool Helmet, bool Kit,
         string Bomb, string? Site, int? BombIn, double? PlantProgress, double? DefuseProgress, string? UseHint,
         bool BuyOpen, bool BuyWindow, int? BuyLeft, IReadOnlyList<CsBuyItem>? Buy, CsBanner? Banner, string? Notice, IReadOnlyList<CsFeedLine> Feed,
-        string? Primary, string? Secondary, string BuyKey, string UseKey, IReadOnlyList<string> KeyClashes);
+        string? Primary, string? Secondary, string BuyKey, string UseKey, IReadOnlyList<string> KeyClashes,
+        string? InSite = null, string? Callout = null, IReadOnlyList<CsMarker>? Sites = null,
+        bool HasBomb = false, string? BombCarrier = null, string? Refused = null, string DropKey = CsDropKey);
+    // A bomb site on the HUD compass: its bearing from where you look (degrees, negative left) and distance.
+    internal sealed record CsMarker(string Name, int Bearing, int Meters);
     static readonly string[] BuyCategories = ["pistol", "smg", "rifle", "heavy", "gear"];
     internal CsHudView? CsHud()
     {
@@ -150,15 +181,35 @@ sealed partial class MultiplayerService
                 cs.Players.FirstOrDefault(p => p.Member == killer)?.Team ?? 0);
         }).ToArray();
         string? hint = !me.Alive ? null
-            : me.Side == CsRules.T && b.Carrier == SelfId && cs.Phase == "live" ? "Hold " + CsUseKey + " in a bomb site to plant"
+            : me.Side == CsRules.T && b.Carrier == SelfId && cs.Phase == "live" ? (me.Site is { } inSite ? "Hold " + CsUseKey + " to plant at " + inSite : "You have the bomb: plant it at a site (" + CsDropKey + " drops it)")
+            : me.Side == CsRules.T && b.State == "dropped" ? "The bomb is down: walk over it to pick it up"
             : me.Side == CsRules.CT && b.State == "planted" ? "Hold " + CsUseKey + " at the bomb to defuse" : null;
+        var refused = clock() < csRefusalUntil ? csRefusal : null;
         var planting = b.Planter == SelfId ? Progress(b.PlantDoneAt, CsRules.PlantMs) : null;
         var defusing = b.Defuser == SelfId ? Progress(b.DefuseDoneAt, me.Kit ? CsRules.KitDefuseMs : CsRules.DefuseMs) : null;
         return new CsHudView(cs.Phase, Secs(cs.PhaseEndsAt), cs.Round, cs.HalfRounds * 2, cs.Score[tTeam - 1], cs.Score[2 - tTeam], me.Side, me.Team,
             me.Money, delta, me.Alive, me.Health, me.Armor, me.Helmet, me.Kit,
             b.State, b.Site, b.State == "planted" ? Secs(b.ExplodesAt) : null, planting, defusing, hint,
             buyOpen, buyWindow && me.Alive, buyLeft, menu, banner, notice, feed,
-            CsRules.Find(me.Primary)?.Label, CsRules.Find(me.Secondary)?.Label, CsBuyKey, CsUseKey, CsKeyClashes(KeyBinds.GameKeys(library.Root)));
+            CsRules.Find(me.Primary)?.Label, CsRules.Find(me.Secondary)?.Label, CsBuyKey, CsUseKey, CsKeyClashes(KeyBinds.GameKeys(library.Root)),
+            me.Alive ? me.Site : null, me.Alive ? me.Callout : null, SiteMarkers(cs, me.Side == CsRules.T || b.State == "planted" ? b.Position : null),
+            b.Carrier == SelfId, me.Side == CsRules.T && b.Carrier is { } bc ? Name(bc) : null, refused);
+    }
+
+    // The sites relative to this player's own last camera sample (no pose feed: no markers).
+    IReadOnlyList<CsMarker>? SiteMarkers(CsView cs, double[]? bomb)
+    {
+        if (cs.Sites is not { Count: > 0 } sites || ownRecent.Count == 0) return null;
+        var me = ownRecent[^1];
+        // A dropped bomb (for Terrorists) or the planted bomb (for everyone) is a marker too.
+        var points = sites.ToList();
+        if (bomb is { Length: 3 }) points.Add(new CsSiteView("Bomb", bomb[0], bomb[1], bomb[2]));
+        return points.Select(s =>
+        {
+            var bearing = Math.Atan2(s.Y - me.Y, s.X - me.X) * 180 / Math.PI - me.Yaw;
+            bearing = ((bearing % 360) + 540) % 360 - 180;
+            return new CsMarker(s.Name, (int)Math.Round(bearing), (int)Math.Round(Math.Sqrt((s.X - me.X) * (s.X - me.X) + (s.Y - me.Y) * (s.Y - me.Y)) / 100));
+        }).ToArray();
     }
 
     // From the clickable buy menu (notice layer): open or close it, or buy one item.
@@ -169,7 +220,7 @@ sealed partial class MultiplayerService
         var buyWindow = cs.Phase == "freeze" || (cs.Phase == "live" && cs.LiveAt is { } live && hostNow < live + CsRules.BuyMs);
         // Same round key as the B key, so the next input pass doesn't treat this as a new round and close it.
         csRoundKey = m.Id + "#" + cs.Round;
-        if (action == "cs-buy-menu") { buyOpen = !buyOpen && buyWindow && me.Alive; return LobbyResult.Success; }
+        if (action == "cs-buy-menu") { buyOpen = !buyOpen && buyWindow && me.Alive && me.InBuyZone != false; return LobbyResult.Success; }
         if (item is null || (CsRules.Find(item) is null && !CsRules.Equipment.Contains(item))) return LobbyResult.Fail("invalid", "Unknown item.");
         return Command("buy", JsonSerializer.SerializeToElement(new { item }));
     }
@@ -180,6 +231,7 @@ sealed partial class MultiplayerService
         var list = new List<string>();
         if (gameKeys.Contains(CsBuyKey)) list.Add("KovaaK’s also uses " + CsBuyKey + " (buy).");
         if (gameKeys.Contains(CsUseKey)) list.Add("KovaaK’s also uses " + CsUseKey + " (use, plant, defuse).");
+        if (gameKeys.Contains(CsDropKey)) list.Add("KovaaK’s also uses " + CsDropKey + " (drop the bomb).");
         return list;
     }
 }

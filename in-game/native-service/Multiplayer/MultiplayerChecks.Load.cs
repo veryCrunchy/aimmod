@@ -209,6 +209,21 @@ static partial class MultiplayerChecks
         Check(!refused.Result.Ok && refused.Result.Code == "cs-map" && refused.Result.Message!.Contains(MapObjectives.NoCsData, StringComparison.Ordinal), "In CS the host refuses a scenario whose map isn't a CS map, saying why");
         var (core, _, _) = Lobby(LobbyRules.Apply(new LobbySettings(Scenario: library.Scenario("Synthetic Aim")), J(new { mode = "cs" }), 6, library).Settings);
         Check(LobbyRules.StartBlockers(core.Snapshot()).Any(b => b.Code == "cs-map"), "Switching to CS with a non-CS map blocks the start until a CS map is picked");
+        // The host switching to CS with an aim map gets the first CS map instead; the library says which are CS maps.
+        long now = 7_000_000;
+        var service = new MultiplayerService(new OfflineTransport(), library, new FakeGame("load"), () => new LocalRun(false, null, null, null, null, 0, 0, 0, null), () => [], () => null, null, simulation: true, () => now, autoTick: false);
+        service.Act("create", J(new { mode = "score-race", scenario = "Synthetic Aim" }));
+        var switched = service.Act("settings", Patch(new { mode = "cs" })).Ok;
+        var csSettings = JsonSerializer.SerializeToElement(service.View(), Protocol.Json).GetProperty("lobby").GetProperty("settings");
+        Check(switched && csSettings.GetProperty("mode").GetString() == LobbyModes.Cs && csSettings.GetProperty("scenario").GetProperty("name").GetString() == "Synthetic Dust", "Switching to CS with an aim map picks the first CS map");
+        var eligibility = JsonSerializer.SerializeToElement(service.View(), Protocol.Json).GetProperty("lobby").GetProperty("eligibility");
+        Check(eligibility.GetProperty("Synthetic Dust").GetProperty("ok").GetBoolean() && eligibility.GetProperty("Synthetic Aim") is var aimFit
+            && !aimFit.GetProperty("ok").GetBoolean() && aimFit.GetProperty("reason").GetString() == MapObjectives.NoCsData && aimFit.GetProperty("players").GetString() == "6, 8 or 10 players",
+            "lobby.eligibility: scenario name -> { ok, reason, players } for the current mode (CS)");
+        var libraryView = JsonSerializer.SerializeToElement(service.LibraryView(), Protocol.Json).GetProperty("scenarios").EnumerateArray().ToDictionary(x => x.GetProperty("name").GetString()!, x => x.GetProperty("modes").GetProperty("cs"));
+        Check(libraryView["Synthetic Dust"].GetProperty("ok").GetBoolean() && libraryView["Synthetic Aim"] is var aim && !aim.GetProperty("ok").GetBoolean() && aim.GetProperty("reason").GetString() == MapObjectives.NoCsData,
+            "The library view says per scenario whether it can host CS, and why not (modes.cs.ok / reason)");
+        service.Dispose();
         // Runtime: plant only in a site, buy only in your zone, the site letter and callout on the HUD.
         long t = 0;
         var ids = new[] { "t1", "t2", "t3", "c1", "c2", "c3" };
@@ -228,6 +243,23 @@ static partial class MultiplayerChecks
         var view = match.View();
         Check(view.Players.First(p => p.Member == carrier) is { Site: "A", Callout: "Long A" } && view.Sites!.Select(s => s.Name).SequenceEqual(["A", "B"]), "Inside a site the HUD gets its letter (and the callout)");
         Check(match.Use(carrier, true, t) is null && match.View().Bomb.Site == "A", "Inside site A, holding E plants at A");
+        // Drop (G) and pick up: in front of the carrier; not straight back by the dropper; any alive T over it; never a CT.
+        t = 0;
+        var round = new CsMatch(ids, 0, 6, true, spec, ids.ToDictionary(id => id, id => id.StartsWith('t') ? 1 : 2));
+        void At(string id, double x, double y, double yaw) => round.Combat.Track(id, new TrackBatch("m", 1, [new TrackSample(t, x, y, 224, 0, yaw), new TrackSample(t + 50, x, y, 224, 0, yaw)], []));
+        t = CsRules.FreezeMs + 10; round.Tick(t);
+        var holder = round.View().Bomb.Carrier!;
+        var mate = ids.First(id => id.StartsWith('t') && id != holder);
+        Check(round.Drop(mate, t) == "no-bomb" && round.Drop("c1", t) == "no-bomb", "Only the carrier can drop the bomb");
+        At(holder, 0, 0, 0);
+        Check(round.Drop(holder, t + 60) is null && round.View().Bomb is { State: "dropped", Carrier: null, Position: [70, 0, 160] }, "The carrier drops the bomb 70 cm in front of them");
+        t += 200; At(holder, 70, 0, 0); round.Tick(t + 60);
+        Check(round.View().Bomb.State == "dropped", "The dropper doesn't pick it straight back up");
+        At("c1", 70, 0, 0); round.Tick(t + 100);
+        Check(round.View().Bomb.State == "dropped", "Counter-Terrorists walk over the bomb");
+        At(holder, 900, 900, 0); At(mate, 75, 5, 0); round.Tick(t + 120);
+        Check(round.View().Bomb is { State: "carried" } b2 && b2.Carrier == mate, "A teammate walking over it picks it up");
+        Check(round.Use(holder, true, t + 130) == "no-bomb", "Without the bomb, E says so");
     }
 
     // A client whose KovaaK's keeps the previous map (the live CS bug): it loads again once,
