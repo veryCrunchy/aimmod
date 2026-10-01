@@ -65,8 +65,19 @@ static class ReleasePaths
         "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
         "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9", "CONIN$", "CONOUT$" };
     static readonly char[] Invalid = Path.GetInvalidFileNameChars().Concat(new[] { ':', '*', '?', '"', '<', '>', '|' }).Distinct().ToArray();
+    // AimMod cosmetics paks: paks/~AimMod/<name>.pak, placed in the game's
+    // Content\Paks\~AimMod (InstallLayout.Resolve). One folder, no
+    // subfolders, never a patch pak (_P), which could override game files.
+    public const string PakFolder = "paks/~AimMod";
+    static readonly Regex PakName = new(@"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\.pak$", RegexOptions.CultureInvariant);
+    public static bool IsPakName(string? name) =>
+        name is not null && PakName.IsMatch(name) && !name.Contains("..") && !name.EndsWith("_P.pak", StringComparison.OrdinalIgnoreCase);
+    public static bool IsPak(string? path) =>
+        path is not null && path.StartsWith(PakFolder + "/", StringComparison.Ordinal) && IsPakName(path[(PakFolder.Length + 1)..]);
+
     // Release paths are relative to FPSAimTrainer\Binaries\Win64, written with
-    // '/', and may only name the UE4SS proxy or something under ue4ss/.
+    // '/', and may only name the UE4SS proxy, something under ue4ss/, or an
+    // AimMod cosmetics pak (paks/~AimMod/<name>.pak).
     public static bool IsAllowed(string? path)
     {
         if (string.IsNullOrEmpty(path) || path.Length > 240 || path.Contains('\\')) return false;
@@ -78,6 +89,7 @@ static class ReleasePaths
             if (Reserved.Contains(part.Split('.')[0])) return false;
         }
         if (parts.Length == 1) return path.Equals("dwmapi.dll", StringComparison.OrdinalIgnoreCase);
+        if (parts[0].Equals("paks", StringComparison.OrdinalIgnoreCase)) return IsPak(path);
         return parts[0].Equals("ue4ss", StringComparison.OrdinalIgnoreCase);
     }
     public static string ToWindows(string path) => path.Replace('/', '\\');

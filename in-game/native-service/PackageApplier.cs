@@ -61,6 +61,8 @@ sealed class PackageApplier(string stateRoot, Func<string, bool>? gameRunning = 
 
     static string Now() => DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
     static string Win(string releasePath) => ReleasePaths.ToWindows(releasePath);
+    // A path in the game: Win64-relative, or an AimMod pak record (paks\~AimMod\...).
+    static string Game(string win64, string relative) => InstallLayout.Resolve(win64, relative);
     static string Under(string root, string relative)
     {
         var full = Path.GetFullPath(Path.Combine(root, relative));
@@ -92,14 +94,14 @@ sealed class PackageApplier(string stateRoot, Func<string, bool>? gameRunning = 
         foreach (var file in manifest.Files)
         {
             var relative = Win(file.Path);
-            var dest = Under(win64, relative);
+            var dest = Game(win64, relative);
             if (File.Exists(dest) && Sha256Hex.Same(Sha256Hex.OfFile(dest), file.Sha256)) continue;
             // Keep anything AimMod did not place before replacing it (restored by uninstall).
             if (File.Exists(dest) && !owned.ContainsKey(relative) && !backups.ContainsKey(relative)) foreignBackups.Add(relative);
             placements.Add((relative, package.FilePath(file), file.Sha256));
         }
         var shipped = new HashSet<string>(manifest.Files.Select(f => Win(f.Path)), StringComparer.OrdinalIgnoreCase);
-        var obsolete = owned.Where(kv => !shipped.Contains(kv.Key) && File.Exists(Under(win64, kv.Key)) && Sha256Hex.Same(Sha256Hex.OfFile(Under(win64, kv.Key)), kv.Value)).Select(kv => kv.Key).ToList();
+        var obsolete = owned.Where(kv => !shipped.Contains(kv.Key) && File.Exists(Game(win64, kv.Key)) && Sha256Hex.Same(Sha256Hex.OfFile(Game(win64, kv.Key)), kv.Value)).Select(kv => kv.Key).ToList();
         var modLists = new[] { @"ue4ss\Mods\mods.txt", @"ue4ss\Mods\mods.json" };
         var touched = placements.Select(p => p.Relative).Concat(foreignBackups.Select(f => f + ".aimmod-backup")).Concat(obsolete)
             .Concat(modLists).Concat(previous is null ? modLists.Select(l => l + ".aimmod-backup") : []).Append(@"ue4ss\" + InstallLayout.ManifestName).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
@@ -111,7 +113,7 @@ sealed class PackageApplier(string stateRoot, Func<string, bool>? gameRunning = 
         var entries = new List<JournalEntry>();
         foreach (var relative in touched)
         {
-            var dest = Under(win64, relative);
+            var dest = Game(win64, relative);
             var existed = File.Exists(dest);
             if (existed)
             {
@@ -128,11 +130,11 @@ sealed class PackageApplier(string stateRoot, Func<string, bool>? gameRunning = 
         {
             RequireGameClosed(win64);
             foreach (var relative in foreignBackups)
-                File.Copy(Under(win64, relative), Under(win64, relative + ".aimmod-backup"), true);
+                File.Copy(Game(win64, relative), Game(win64, relative + ".aimmod-backup"), true);
             foreach (var relative in foreignBackups) backups[relative] = relative + ".aimmod-backup";
             foreach (var (relative, source, sha) in placements)
             {
-                var dest = Under(win64, relative);
+                var dest = Game(win64, relative);
                 EnsureDirectory(win64, Path.GetDirectoryName(dest)!, createdDirs);
                 WriteJournal(backupFolder, journal with { CreatedDirectories = createdDirs.ToArray() });
                 var temporary = dest + ".aimmod-new";
@@ -140,14 +142,14 @@ sealed class PackageApplier(string stateRoot, Func<string, bool>? gameRunning = 
                 File.Move(temporary, dest, true);
                 AfterFile?.Invoke(relative);
             }
-            foreach (var relative in obsolete) File.Delete(Under(win64, relative));
+            foreach (var relative in obsolete) File.Delete(Game(win64, relative));
 
             var modsDir = Path.Combine(win64, "ue4ss", "Mods");
             var createdLists = previous?.CreatedModLists.ToList() ?? [];
             if (previous is null)
                 foreach (var list in modLists)
                 {
-                    var dest = Under(win64, list);
+                    var dest = Game(win64, list);
                     if (File.Exists(dest)) { File.Copy(dest, dest + ".aimmod-backup", true); backups[list] = list + ".aimmod-backup"; }
                     else createdLists.Add(list);
                 }
@@ -167,7 +169,7 @@ sealed class PackageApplier(string stateRoot, Func<string, bool>? gameRunning = 
             AtomicFile.WriteText(InstallLayout.ManifestPath(win64), record.ToJson());
 
             foreach (var file in manifest.Files)
-                if (!Sha256Hex.Same(Sha256Hex.OfFile(Under(win64, Win(file.Path))), file.Sha256))
+                if (!Sha256Hex.Same(Sha256Hex.OfFile(Game(win64, Win(file.Path))), file.Sha256))
                     throw new InstallException($"{file.Path} did not install correctly.");
             WriteJournal(backupFolder, journal with { State = "applied", CreatedDirectories = createdDirs.ToArray() });
         }
@@ -191,7 +193,7 @@ sealed class PackageApplier(string stateRoot, Func<string, bool>? gameRunning = 
         {
             var dir = missing.Pop();
             Directory.CreateDirectory(dir);
-            created.Add(Path.GetRelativePath(win64, dir));
+            created.Add(InstallLayout.Record(win64, dir));
         }
     }
     static void WriteJournal(string backupFolder, Journal journal) =>
@@ -206,7 +208,7 @@ sealed class PackageApplier(string stateRoot, Func<string, bool>? gameRunning = 
     {
         foreach (var entry in journal.Entries.Reverse())
         {
-            var dest = Under(journal.Win64, entry.Path);
+            var dest = Game(journal.Win64, entry.Path);
             if (entry.Existed)
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
@@ -218,7 +220,7 @@ sealed class PackageApplier(string stateRoot, Func<string, bool>? gameRunning = 
         }
         foreach (var dir in journal.CreatedDirectories.OrderByDescending(d => d.Length))
         {
-            var full = Under(journal.Win64, dir);
+            var full = Game(journal.Win64, dir);
             if (Directory.Exists(full) && !Directory.EnumerateFileSystemEntries(full).Any()) Directory.Delete(full);
         }
         WriteJournal(backupFolder, journal with { State = finalState });
@@ -285,7 +287,7 @@ sealed class PackageApplier(string stateRoot, Func<string, bool>? gameRunning = 
         var kept = 0;
         foreach (var (path, sha) in manifest.Files)
         {
-            var full = Under(win64, path);
+            var full = Game(win64, path);
             if (!File.Exists(full)) continue;
             if (!force && !Sha256Hex.Same(Sha256Hex.OfFile(full), sha)) { kept++; continue; }
             File.Delete(full);
@@ -293,18 +295,18 @@ sealed class PackageApplier(string stateRoot, Func<string, bool>? gameRunning = 
         var restored = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var (target, backup) in manifest.Backups)
         {
-            var source = Under(win64, backup);
-            if (File.Exists(source)) { File.Move(source, Under(win64, target), true); restored.Add(target); }
+            var source = Game(win64, backup);
+            if (File.Exists(source)) { File.Move(source, Game(win64, target), true); restored.Add(target); }
         }
         foreach (var list in manifest.CreatedModLists)
-            if (!restored.Contains(list)) { var full = Under(win64, list); if (File.Exists(full)) File.Delete(full); }
+            if (!restored.Contains(list)) { var full = Game(win64, list); if (File.Exists(full)) File.Delete(full); }
         File.Delete(InstallLayout.ManifestPath(win64));
         if (manifest.CreatedDirectories.Contains("ue4ss", StringComparer.OrdinalIgnoreCase) && Directory.Exists(Path.Combine(win64, "ue4ss")))
             foreach (var file in Directory.GetFiles(Path.Combine(win64, "ue4ss")))
                 if (Path.GetFileName(file).Equals("UE4SS.log", StringComparison.OrdinalIgnoreCase) || file.EndsWith(".dmp", StringComparison.OrdinalIgnoreCase)) File.Delete(file);
         foreach (var dir in manifest.CreatedDirectories.OrderByDescending(d => d.Length))
         {
-            var full = Under(win64, dir);
+            var full = Game(win64, dir);
             if (Directory.Exists(full) && !Directory.EnumerateFileSystemEntries(full).Any()) Directory.Delete(full);
         }
         return kept;
