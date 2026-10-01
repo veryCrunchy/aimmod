@@ -145,6 +145,13 @@ sealed class TrackingRound(string first, string second, long start, long end, bo
     // camera 64 cm above the capsule centre (UE's default eye height).
     public const double DefaultRadius = 45, DefaultHalfHeight = 115, DefaultEyeAboveCentre = 64;
     public const int MaxSamplesPerPlayer = 8000;
+    // A drawn hull is evidence of where the avatar was, not of its size: AimMod's avatar
+    // profile fixes the hull, so a claimed one is at most that plus 8 cm (game-modes.md 5.3),
+    // and its centre sits at a plausible height below the avatar's own camera.
+    public const double HullToleranceCm = 8, HeightToleranceCm = 2 * MatchToleranceCm;
+    public static double HullRadius(double claimed) => Math.Min(claimed, DefaultRadius + HullToleranceCm);
+    public static double HullHalfHeight(double claimed) => Math.Min(claimed, DefaultHalfHeight + HullToleranceCm);
+    public static bool PlausibleHeight(double eyeAboveCentre) => Math.Abs(eyeAboveCentre - DefaultEyeAboveCentre) <= HeightToleranceCm;
 
     public string First { get; } = first;
     public string Second { get; } = second;

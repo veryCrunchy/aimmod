@@ -475,6 +475,11 @@ static partial class MultiplayerChecks
         Check(c1.Claim("a", Shot(at + 300, yaw: 10), at + 350, 40) == "aim", "The ray must look where the shooter's own track looked");
         Check(c1.Claim("a", Shot(at + 400, targetY: 300), at + 450, 40) == "target-mismatch", "A drawn target nobody was at in the last 200 ms is refused");
         Check(c1.Claim("a", Shot(at + 500, yaw: 2.9), at + 550, 40) == "ray-miss", "A ray beside the hull is refused");
+        // The drawn hull is the shooter's evidence of where the victim was, not of how big it is.
+        Check(c1.Claim("a", new HitClaim("m", 1, ++seq, at + 520, 0, 30, 164, 0, 2.9, false, 1000, 0, 100, 1000, 2000), at + 560, 40) == "ray-miss",
+            "A claimed hull far larger than the avatar's can't turn a miss into a hit");
+        Check(Arena(LobbyModes.Deathmatch).Claim("a", new HitClaim("m", 1, ++seq, at + 540, 0, 0, 195, 2.9, 0, false, 1000, 0, 155.7, 45, 115), at + 570, 40) == "target-mismatch",
+            "A claimed hull raised above the victim's own track can't turn a shot over the head into a headshot");
         Check(c1.Claim("a", Shot(at + 600) with { Seq = 1 }, at + 650, 40) == "repeated" && c1.Claim("a", Shot(at - 5000), at + 700, 40) == "time", "Repeated and stale claims are refused");
         var headPitch = Math.Atan2(195 - 164, 1000) * 180 / Math.PI;
         Check(c1.Claim("a", Shot(at + 800, pitch: headPitch), at + 850, 40) is null && c1.View().Events[^1] is { Kind: "damage", Head: true, Amount: 40 }, "The host decides headshots from the ray (the top of the hull) and doubles the damage");
