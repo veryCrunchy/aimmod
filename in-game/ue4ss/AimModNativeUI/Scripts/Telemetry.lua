@@ -27,7 +27,7 @@ function M.coreActive(capability)
         if file then
             local ok,line=pcall(function()return file:read('*l')end);file:close()
             local stamp,caps
-            if ok and type(line)=='string' then stamp,caps=line:match('^AIMMOD_CORE_1\t[^\t]*\t(%d+)\t([%w,]*)\r?$') end
+            if ok and type(line)=='string' then stamp,caps=line:match('^AIMMOD_CORE_1\t[^\t]*\t(%d+)\t([%w,%-]*)\r?$') end
             if stamp and math.abs(now-tonumber(stamp))<=3 then coreCapabilities=caps end
         end
     end
