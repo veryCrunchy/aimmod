@@ -256,13 +256,26 @@ namespace bridge
 
     void Bridge::Run()
     {
+        std::string lastError;
         while (!m_stop.load())
         {
             {
                 std::unique_lock lock(m_mutex);
                 m_wake.wait_for(lock, 5ms, [this] { return m_stop.load() || !m_commands.empty() || !m_callbacks.empty() || !m_pipeStates.empty(); });
             }
-            Tick();
+            // An exception must never leave this thread: it would terminate the game.
+            try
+            {
+                Tick();
+            }
+            catch (const std::exception& e)
+            {
+                if (lastError != e.what()) m_log(std::string("worker: tick failed: ") + e.what());
+                lastError = e.what();
+            }
+            catch (...)
+            {
+            }
         }
         // Shutdown: leave cleanly, clear what we set (skip if the game already shut Steam down).
         if (!m_steam.Initialised())
