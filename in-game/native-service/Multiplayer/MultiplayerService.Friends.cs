@@ -37,6 +37,11 @@ sealed partial class MultiplayerService
         friendsPrimed = true;
         if (arrived is null || !prefs.FriendToasts || OwnRankedRun() || liveRun().Active || now - lastFriendToast < FriendToastGap) return;
         if (flash is { } f0 && now < f0.Until) return;
+        FriendToast(arrived, now);
+    }
+
+    void FriendToast(FriendEntry arrived, long now)
+    {
         friendToasted[arrived.Id] = now; lastFriendToast = now;
         var name = LobbyRules.CleanName(arrived.Name, "A friend");
         var actions = new List<NoticeAction>();
