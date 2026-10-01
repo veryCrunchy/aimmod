@@ -13,7 +13,9 @@ avatars=1
 # avatar_profile=<bot profile name>   (default: the scenario's own bot profile)
 # avatar_drive=update|teleport        (UpdateClientLocAndRot or SetActorLocationAndRotation)
 # avatar_move_mode=flying|walking|none|falling
-# avatar_test=1                       (offline check: one avatar circles you, no network)
+# avatar_test=1                       (offline check: one avatar circles you, no network; with
+#                                      avatar-test-path.tsv from the service's --export-avatar-path,
+#                                      it follows a recorded run on that run's scenario instead)
 
 # Spectating without a lobby: friends (default) = friends may watch you,
 # ask = you confirm each request in the AimMod UI, off = nobody.
