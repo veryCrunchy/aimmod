@@ -45,6 +45,7 @@ namespace aimmod::game
         Rotator,  // FRotator (3 x float on UE4)
         Timespan, // FTimespan (int64 ticks)
         Array,
+        Name,     // FName
     };
     const char* KindName(Kind kind);
     bool IsNumeric(Kind kind);
@@ -75,6 +76,7 @@ namespace aimmod::game
         ObjectArray, // TArray<UObject*> return value
         ValueElse,   // OutValue (numeric) + Result (enum/byte) out parameters
         Observe,     // hook target only; never called
+        Name,        // FName return value
         Command,     // explicit actions: plain value inputs (vector, rotator,
                      // numbers, bool, enum byte, string, object, plain struct)
                      // filled by the caller
@@ -104,6 +106,7 @@ namespace aimmod::game
         std::optional<bool> Bool(UObject* self, UObject* context = nullptr) const;
         UObject* Object(UObject* self, UObject* context = nullptr) const;
         bool String(UObject* self, std::string& utf8, UObject* context = nullptr) const;
+        bool Name(UObject* self, std::string& text, UObject* context = nullptr) const;
         bool Vector(UObject* self, double out[3], UObject* context = nullptr) const;
         std::optional<double> TimespanSeconds(UObject* self, UObject* context = nullptr) const;
         bool Objects(UObject* self, std::vector<UObject*>& out, std::size_t limit, UObject* context = nullptr) const;
@@ -156,8 +159,42 @@ namespace aimmod::game
     // Command input helpers. Strings are allocated with the engine allocator
     // and released by Getter::Call after the call.
     void WriteString(std::uint8_t* value, const std::string& utf8);
+    // FName input (added to the name table when new).
+    bool WriteName(std::uint8_t* value, const Param& param, const std::string& text);
+    // Nested numeric struct member: "Rotation.W", "Scale3D.X".
+    bool SetStructPath(std::uint8_t* value, RC::Unreal::UStruct* type, const std::string& path, double number);
     bool SetStructField(std::uint8_t* value, RC::Unreal::UStruct* type, const char* field, double number);
     UObject* ReadObject(const std::uint8_t* buffer, const Param& param);
+
+    // A reflected member reached through struct members and static array
+    // elements ("mCharacterProfileNative.CharacterModel", "RuntimeEntries[1]"),
+    // resolved once per owning type. Read-only accessors.
+    class Path
+    {
+    public:
+        bool Bind(RC::Unreal::UStruct* type, const std::string& path);
+        bool ok() const { return m_offset >= 0; }
+        Kind kind() const { return m_leaf.kind; }
+        // Element struct of a TArray<struct> member (to bind element paths).
+        RC::Unreal::UStruct* elementStruct() const { return m_elementStruct; }
+        std::int32_t elementSize() const { return m_elementSize; }
+        const std::uint8_t* At(const void* base) const { return static_cast<const std::uint8_t*>(base) + m_offset; }
+        bool String(const void* base, std::string& out) const;  // FString
+        bool Name(const void* base, std::string& out) const;    // FName
+        UObject* Object(const void* base) const;
+        bool Objects(const void* base, std::vector<UObject*>& out, std::size_t limit) const; // TArray<UObject*>
+        bool Names(const void* base, std::vector<std::string>& out, std::size_t limit) const; // TArray<FName>
+        // TArray<struct>: element pointers, at most `limit`.
+        bool Elements(const void* base, std::vector<const std::uint8_t*>& out, std::size_t limit) const;
+
+    private:
+        std::int32_t m_offset{-1};
+        Param m_leaf;
+        Kind m_elementKind{Kind::Other};
+        RC::Unreal::UStruct* m_elementStruct{};
+        std::int32_t m_elementSize{};
+    };
+    std::string NameText(const void* fname);
 
     // Describe a parameter/property.
     Param Describe(RC::Unreal::FProperty* property);

@@ -36,6 +36,16 @@ namespace aimmod
         bool canLoad() const { return m_canLoad; }
         bool canStart() const { return m_canStart; }
         bool canCapture() const { return m_canCapture; }
+        // "quit": leave the current run the way pause -> Quit does (abandoned, never submitted).
+        bool canQuit() const { return m_cancel.ok(); }
+        // The scenario of a challenge quit-run just left (once), for the
+        // post-quit audit (no completion, upload or stats CSV expected).
+        std::optional<std::string> TakeQuitDone()
+        {
+            auto out = std::move(m_quitDone);
+            m_quitDone.reset();
+            return out;
+        }
         bool overridesActive() const { return m_overrides.active; }
         // Shared match randomness: the game draws from the CRT rand() state of
         // its game thread (it imports rand/srand from the UCRT, like this
@@ -63,6 +73,21 @@ namespace aimmod
         game::Getter m_start, m_activate, m_persistentPlayType, m_playCurrent, m_localHash, m_onlineHash, m_cancel;
         game::Getter m_timeDilation, m_mapScale, m_adaptiveOverride, m_adaptiveReset, m_weapon;
         game::Getter m_refreshLocal, m_reloadProfiles;
+        // quit-run: ScenarioManager:CancelChallenge (the game's cancel path,
+        // which broadcasts ChallengeCanceled, not ChallengeComplete) and the
+        // freeplay session reset.
+        game::Getter m_resetFreeplay;
+        struct Quitting
+        {
+            std::uint64_t sequence{};
+            double deadline{}, retryAt{};
+            bool retried{};
+            std::string scenario;
+        };
+        std::optional<Quitting> m_quitting;
+        std::optional<std::string> m_quitDone;
+        void BeginQuit(const GameCommand& command, double now, bool inChallenge, const std::string& current);
+        void TickQuit(double now, bool inChallenge);
         // Thumbnail capture (camera actor + HighResShot).
         game::Getter m_exec, m_spawnBegin, m_spawnFinish, m_setViewTarget, m_getViewTarget, m_destroy, m_hide, m_place, m_fov;
         game::Field m_cameraComponent, m_fullyLoaded, m_mapLoading;
@@ -98,6 +123,8 @@ namespace aimmod
             double deadline{};
             double loadedAt{-1};
             bool started{};
+            bool sawLoading{}; // end-run: the reload began
+            double issued{};
             RC::Unreal::FWeakObjectPtr action;
         };
         std::optional<Pending> m_pending;

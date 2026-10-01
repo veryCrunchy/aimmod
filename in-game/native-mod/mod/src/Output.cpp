@@ -189,6 +189,172 @@ namespace aimmod
         m_selfPoseDirty = true;
     }
 
+    void Output::PublishSelfShots(std::string body)
+    {
+        {
+            std::lock_guard lock(m_mutex);
+            m_selfShots = std::move(body);
+            m_selfShotsDirty = true;
+        }
+        m_wake.notify_one();
+    }
+
+    void Output::AuditQuitStats(std::string scenario)
+    {
+        std::lock_guard lock(m_mutex);
+        m_quitStats = QuitStats{std::move(scenario), std::filesystem::file_time_type::clock::now() - std::chrono::seconds(2), NowMs() + 15000, false};
+    }
+
+    void Output::CheckQuitStats(std::uint64_t now)
+    {
+        std::optional<QuitStats> audit;
+        {
+            std::lock_guard lock(m_mutex);
+            audit = m_quitStats;
+        }
+        if (!audit || m_stats.empty()) return;
+        std::error_code error;
+        for (const auto& entry : std::filesystem::directory_iterator(m_stats, error))
+        {
+            std::error_code itemError;
+            if (!entry.is_regular_file(itemError) || entry.last_write_time(itemError) < audit->since || itemError) continue;
+            const std::string name = entry.path().filename().string();
+            if (IsChallengeStatsFile(name) && name.rfind(audit->scenario + " - Challenge - ", 0) == 0) audit->found = true;
+        }
+        if (!audit->found && now < audit->until)
+        {
+            std::lock_guard lock(m_mutex);
+            if (m_quitStats) m_quitStats->found = false;
+            return;
+        }
+        Log(audit->found ? "quit-run audit: the game wrote a challenge stats CSV after the quit - UNEXPECTED, please report"
+                         : "quit-run audit: no challenge stats CSV written (as expected)");
+        std::lock_guard lock(m_mutex);
+        m_quitStats.reset();
+    }
+
+    Output::PlayStateSnapshot Output::playState() const
+    {
+        std::lock_guard lock(const_cast<std::mutex&>(m_mutex));
+        return {m_playState, m_playStateVersion};
+    }
+
+    // Polled every writer pass (<= 20 ms while match files are in use): a
+    // changed file is parsed; a file not rewritten for 5 s counts as gone.
+    void Output::ReadPlayState(std::uint64_t now)
+    {
+        WIN32_FILE_ATTRIBUTE_DATA data{};
+        const auto path = m_root / L"play-state.tsv";
+        std::uint64_t stamp = 0;
+        if (GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &data))
+            stamp = (static_cast<std::uint64_t>(data.ftLastWriteTime.dwHighDateTime) << 32) | data.ftLastWriteTime.dwLowDateTime;
+        FILETIME nowFile{};
+        GetSystemTimeAsFileTime(&nowFile);
+        const std::uint64_t nowStamp = (static_cast<std::uint64_t>(nowFile.dwHighDateTime) << 32) | nowFile.dwLowDateTime;
+        const bool fresh = stamp != 0 && nowStamp - stamp < 5ull * 10000000ull;
+        if (!fresh)
+        {
+            std::lock_guard lock(m_mutex);
+            if (m_playState)
+            {
+                m_playState.reset();
+                ++m_playStateVersion;
+            }
+            m_playStateStamp = stamp;
+            return;
+        }
+        m_playStateSeenAt = now;
+        if (stamp == m_playStateStamp) return;
+        std::string text;
+        if (!ReadSmall(path, text, 4097)) return; // locked mid-replace: retry next pass
+        auto parsed = ParsePlayState(text);
+        std::lock_guard lock(m_mutex);
+        m_playStateStamp = stamp;
+        if (parsed) m_playState = std::make_shared<const PlayState>(std::move(*parsed));
+        else m_playState.reset();
+        ++m_playStateVersion;
+    }
+
+    void Output::SetCosmeticsSources(std::filesystem::path catalogDir, std::filesystem::path paksDir)
+    {
+        m_catalogDir = std::move(catalogDir);
+        m_paksDir = std::move(paksDir);
+    }
+
+    Output::CosmeticsInputs Output::cosmetics() const
+    {
+        std::lock_guard lock(const_cast<std::mutex&>(m_mutex));
+        return m_cosmetics;
+    }
+
+    // Writer thread, once: catalog.json counts only when it matches the
+    // manifest; pak items only when their pak does.
+    void Output::LoadCosmeticsLibrary()
+    {
+        m_libraryLoaded = true;
+        auto library = std::make_shared<CosmeticsLibrary>();
+        std::string manifestText, catalogText;
+        if (m_catalogDir.empty() || !ReadSmall(m_catalogDir / L"catalog-manifest.json", manifestText, (1u << 20) + 1) ||
+            !ReadSmall(m_catalogDir / L"catalog.json", catalogText, (4u << 20) + 1))
+        {
+            library->status = "not installed";
+            Log("cosmetics: catalog not installed");
+        }
+        else if (std::string error; auto manifest = cosmetics::ParseManifest(manifestText, &error))
+        {
+            auto check = cosmetics::VerifyManifest(*manifest, m_catalogDir, m_paksDir);
+            for (const std::string& problem : check.problems) Log("cosmetics: " + problem);
+            if (!check.catalogVerified) library->status = "catalog does not match its manifest";
+            else if (auto catalog = cosmetics::ParseCatalog(catalogText, &error))
+            {
+                std::vector<std::string> problems = catalog->errors;
+                cosmetics::ApplyManifestItems(*manifest, *catalog, problems);
+                library->index = cosmetics::BuildIndex(catalog->items, problems);
+                library->verifiedPaks = std::move(check.verifiedPaks);
+                for (const std::string& problem : problems) Log("cosmetics: catalog: " + problem);
+                library->status = "catalog " + std::to_string(static_cast<long long>(catalog->version)) + ", " + std::to_string(library->index.size()) +
+                                  " item(s), " + std::to_string(cosmetics::Pickable(library->index).size()) + " released, " +
+                                  std::to_string(library->verifiedPaks.size()) + " verified pak(s)";
+            }
+            else library->status = error;
+        }
+        else library->status = error;
+        Log("cosmetics: " + library->status);
+        std::lock_guard lock(m_mutex);
+        m_cosmetics.library = std::move(library);
+    }
+
+    void Output::ReadCosmeticsInputs()
+    {
+        std::string marker, looks, dev;
+        if (!ReadSmall(m_root / L"aimmod-session.txt", marker, 1025)) marker.clear();
+        if (!ReadSmall(m_root / L"cosmetic-looks.txt", looks, 65537)) looks.clear();
+        const bool drafts = ReadSmall(m_root / L"cosmetics-dev.txt", dev, 256) && dev.find("allow_drafts=1") != std::string::npos;
+        std::optional<cosmetics::Marker> parsedMarker;
+        std::shared_ptr<const cosmetics::Looks> parsedLooks;
+        const bool markerChanged = marker != m_markerText, looksChanged = looks != m_looksText;
+        if (!markerChanged && !looksChanged)
+        {
+            std::lock_guard lock(m_mutex);
+            m_cosmetics.allowDrafts = drafts;
+            return;
+        }
+        std::string reason;
+        if (!marker.empty()) parsedMarker = cosmetics::ParseMarker(marker, &reason);
+        if (markerChanged && !marker.empty() && !parsedMarker) Log("cosmetics: session marker ignored (" + reason + ")");
+        if (!looks.empty())
+        {
+            if (auto parsed = cosmetics::ParseLooks(looks, &reason)) parsedLooks = std::make_shared<const cosmetics::Looks>(std::move(*parsed));
+            else if (looksChanged) Log("cosmetics: looks ignored (" + reason + ")");
+        }
+        m_markerText = std::move(marker);
+        m_looksText = std::move(looks);
+        std::lock_guard lock(m_mutex);
+        m_cosmetics.marker = std::move(parsedMarker);
+        m_cosmetics.looks = std::move(parsedLooks);
+        m_cosmetics.allowDrafts = drafts;
+    }
+
     std::shared_ptr<const std::unordered_map<std::string, std::string>> Output::avatars() const
     {
         std::lock_guard lock(const_cast<std::mutex&>(m_mutex));
@@ -488,9 +654,17 @@ namespace aimmod
                 requested = !error && std::chrono::system_clock::now() - written < std::chrono::seconds(5);
             }
             if (m_poseRequested.exchange(requested) && !requested) DeleteFileW((m_root / L"self-pose.tsv").c_str());
+            const auto shotsRequest = m_root / L"self-shots.request";
+            bool shots = false;
+            if (std::filesystem::exists(shotsRequest, error))
+            {
+                const auto written = std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(shotsRequest, error));
+                shots = !error && std::chrono::system_clock::now() - written < std::chrono::seconds(5);
+            }
+            if (m_shotsRequested.exchange(shots) && !shots) DeleteFileW((m_root / L"self-shots.tsv").c_str());
             // AIMMOD_AVATARS_1 / <actor name>\t<stream id>: which drawn hull is which player.
             std::string text;
-            if (requested && ReadSmall(m_root / L"avatars.tsv", text, 16384) && text != m_avatarText)
+            if ((requested || shots) && ReadSmall(m_root / L"avatars.tsv", text, 16384) && text != m_avatarText)
             {
                 m_avatarText = text;
                 auto map = std::make_shared<std::unordered_map<std::string, std::string>>();
@@ -527,6 +701,27 @@ namespace aimmod
                 m_selfPoseDirty = false;
             }
             if (!pose.empty() && m_poseRequested.load()) WriteAtomic(m_root / L"self-pose.tsv", pose);
+        }
+        {
+            std::string shots;
+            {
+                std::lock_guard lock(m_mutex);
+                if (m_selfShotsDirty) shots.swap(m_selfShots);
+                m_selfShotsDirty = false;
+            }
+            if (!shots.empty() && m_shotsRequested.load()) WriteAtomic(m_root / L"self-shots.tsv", shots);
+        }
+        if (!force && !m_libraryLoaded) LoadCosmeticsLibrary(); // first writer pass, off the game thread
+        if (force || now - m_lastCosmeticsCheck >= 1000)
+        {
+            m_lastCosmeticsCheck = now;
+            ReadCosmeticsInputs();
+            CheckQuitStats(now);
+        }
+        if (force || now - m_lastPlayStateCheck >= 15)
+        {
+            m_lastPlayStateCheck = now;
+            ReadPlayState(now);
         }
         if (force || now - m_lastClipCheck >= 2000)
         {
@@ -570,7 +765,10 @@ namespace aimmod
             bool stop;
             {
                 std::unique_lock lock(m_mutex);
-                m_wake.wait_for(lock, std::chrono::milliseconds(100), [this] { return m_stop || !m_jobs.empty() || m_statusDirty || !m_results.empty(); });
+                // Match files (shots out, play state in) need low latency.
+                const bool fast = m_shotsRequested.load(std::memory_order_relaxed) || NowMs() - m_playStateSeenAt < 10000;
+                m_wake.wait_for(lock, std::chrono::milliseconds(fast ? 15 : 100),
+                                [this] { return m_stop || !m_jobs.empty() || m_statusDirty || !m_results.empty() || m_selfShotsDirty; });
                 jobs.swap(m_jobs);
                 stop = m_stop;
             }

@@ -74,6 +74,8 @@ files\ue4ss\Mods\shared\...
 files\ue4ss\Mods\AimModCore\dlls\main.dll
 files\ue4ss\Mods\AimModCore\service\AimMod.InGame.exe
 files\ue4ss\Mods\AimModNativeUI\...
+files\ue4ss\Mods\AimModCore\service\cosmetics\catalog.json   and catalog-manifest.json
+files\paks\~AimMod\<name>.pak  installed into FPSAimTrainer\Content\Paks\~AimMod
 files\ue4ss\Mods\AimModSteam\dlls\main.dll
 Install-AimMod.cmd  Repair-AimMod.cmd  Uninstall-AimMod.cmd  README.txt
 ```
@@ -97,8 +99,15 @@ Install-AimMod.cmd  Repair-AimMod.cmd  Uninstall-AimMod.cmd  README.txt
 ```
 
 Rules the service enforces: SemVer version; channel `stable` or `beta`; app id 824270; at most 4096
-files; each path uses `/`, is either `dwmapi.dll` or under `ue4ss/`, and has no `..`, drive,
-stream, reserved device name or trailing dot/space; paths are unique; every listed mod has files.
+files; each path uses `/`, is either `dwmapi.dll`, under `ue4ss/`, or an AimMod cosmetics pak
+`paks/~AimMod/<name>.pak` (flat, never a `_P` patch pak), and has no `..`, drive, stream, reserved
+device name or trailing dot/space; paths are unique; every listed mod has files.
+
+Cosmetics paks are the only files placed outside `Binaries\Win64`. The install manifest records
+them as `paks\~AimMod\<name>.pak`, and the applier resolves that to the game's own
+`Content\Paks\~AimMod`. It refuses the install if `Content\Paks\FPSAimTrainer-WindowsNoEditor.pak`
+is not there. Install, repair, update, rollback and uninstall therefore cover paks like every other
+file. See [cosmetics](cosmetics.md) for the catalog and its hash-pinned manifest.
 
 `aimmod-ingame-<channel>.json` (`schema` `aimmod.ingame.feed/1`):
 
@@ -137,7 +146,7 @@ There is no signing key (a deliberate decision). What protects friends:
   swapped download, a truncated file, or a zip whose content differs from its manifest is rejected
   and nothing is installed.
 - **Policy checks:** no downgrades, the feed must be for the selected channel, size limits, game build
-  requirements, and only files the manifest lists (under `dwmapi.dll` or `ue4ss/`) are extracted.
+  requirements, and only files the manifest lists (`dwmapi.dll`, under `ue4ss/`, or `paks/~AimMod/*.pak`) are extracted.
 - **Nothing downloaded is executed before it is applied:** the applier is a copy of the
   already-installed service; the new files only run when the game next starts.
 - The publish job runs the service's own check (`--verify-release`) on the built feed and zip before

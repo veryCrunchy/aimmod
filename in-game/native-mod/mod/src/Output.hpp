@@ -1,8 +1,10 @@
 #pragma once
 // Writer thread: owns every file the mod writes. The game thread only hands
 // over small immutable jobs (never blocks on disk).
+#include <aimmod/Cosmetics.hpp>
 #include <aimmod/GameCommand.hpp>
 #include <aimmod/GameStats.hpp>
+#include <aimmod/MatchPlay.hpp>
 #include <aimmod/ReplayV2.hpp>
 #include <aimmod/Settings.hpp>
 
@@ -51,6 +53,39 @@ namespace aimmod
         // when absent.
         std::shared_ptr<const std::unordered_map<std::string, std::string>> avatars() const;
         void PublishSelfPose(std::string body);
+        // self-shots.tsv: the local player's shots for match modes, only while
+        // requested (self-shots.request touched within the last 5 s).
+        bool shotsRequested() const { return m_shotsRequested.load(std::memory_order_relaxed); }
+        void PublishSelfShots(std::string body);
+        // play-state.tsv (host verdict on this player). `state` is null while
+        // the file is absent, malformed or not rewritten for 5 s; `version`
+        // changes whenever a new state (or its loss) is read.
+        struct PlayStateSnapshot
+        {
+            std::shared_ptr<const PlayState> state;
+            std::uint64_t version{};
+        };
+        PlayStateSnapshot playState() const;
+
+        // Cosmetics inputs (DESIGN.md "Cosmetics"): the installed catalog,
+        // verified once against its manifest by the writer thread, and the
+        // session marker and looks the service writes, re-read every second.
+        struct CosmeticsLibrary
+        {
+            cosmetics::Index index;
+            std::set<std::string> verifiedPaks;
+            std::string status;
+        };
+        struct CosmeticsInputs
+        {
+            std::shared_ptr<const CosmeticsLibrary> library; // null until loaded
+            std::optional<cosmetics::Marker> marker;
+            std::shared_ptr<const cosmetics::Looks> looks;   // null: absent or malformed
+            bool allowDrafts{};                              // cosmetics-dev.txt (local team tests)
+        };
+        // Before Start: Mods\AimModCore\service\cosmetics and <game>\Content\Paks\~AimMod.
+        void SetCosmeticsSources(std::filesystem::path catalogDir, std::filesystem::path paksDir);
+        CosmeticsInputs cosmetics() const;
         // Clip hotkey and window (clip-settings.tsv, defaults F8 / 8 s / 2 s).
         ClipSettings clipSettings() const;
         void PublishReplayStatus(std::string body);
@@ -63,6 +98,9 @@ namespace aimmod
         // 5 s of `localStartSeconds` when known). Polled by the writer thread.
         void WatchGameStats(std::string scenario, std::int64_t sinceUnixMs, std::optional<double> localStartSeconds);
         void StopGameStats();
+        // Logs whether the game wrote a challenge stats CSV for `scenario`
+        // within 15 s (quit-run audit; a quit must not write one).
+        void AuditQuitStats(std::string scenario);
         std::optional<GameStats> TakeGameStats();
         const std::filesystem::path& statsFolder() const { return m_stats; }
 
@@ -116,6 +154,28 @@ namespace aimmod
         std::atomic<bool> m_recording{true};
         std::atomic<bool> m_playback{false};
         std::atomic<bool> m_poseRequested{false};
+        std::atomic<bool> m_shotsRequested{false};
+        std::string m_selfShots;
+        bool m_selfShotsDirty{};
+        std::shared_ptr<const PlayState> m_playState;
+        std::uint64_t m_playStateVersion{}, m_playStateStamp{}, m_lastPlayStateCheck{}, m_playStateSeenAt{};
+        void ReadPlayState(std::uint64_t now);
+        struct QuitStats
+        {
+            std::string scenario;
+            std::filesystem::file_time_type since;
+            std::uint64_t until{};
+            bool found{};
+        };
+        std::optional<QuitStats> m_quitStats;
+        void CheckQuitStats(std::uint64_t now);
+        std::filesystem::path m_catalogDir, m_paksDir;
+        bool m_libraryLoaded{};
+        CosmeticsInputs m_cosmetics;
+        std::string m_markerText, m_looksText;
+        std::uint64_t m_lastCosmeticsCheck{};
+        void LoadCosmeticsLibrary();
+        void ReadCosmeticsInputs();
         ClipSettings m_clips;
         std::string m_selfPose;
         bool m_selfPoseDirty{};

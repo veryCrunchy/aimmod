@@ -75,6 +75,7 @@ namespace aimmod
         // second is what the pause menu's Reload Profiles button reloads).
         m_refreshLocal.BindPath(STR("/Script/GameSkillsTrainer.ScenarioManager:RefreshLocalScenarios"), Shape::Command);
         m_reloadProfiles.BindPath(STR("/Script/GameSkillsTrainer.MetaGameState:ReloadAllProfiles"), Shape::Command);
+        m_resetFreeplay.BindPath(STR("/Script/GameSkillsTrainer.ScenarioManager:Reset_FreeplaySession"), Shape::Command);
         {
             wchar_t exe[MAX_PATH * 4]{};
             const DWORD length = GetModuleFileNameW(nullptr, exe, static_cast<DWORD>(std::size(exe)));
@@ -491,6 +492,57 @@ namespace aimmod
         Reseed(++m_seeding->events, "spawn event");
     }
 
+    // Leaving a run without completing it. In a challenge this is
+    // ScenarioManager:CancelChallenge, the game's cancel path (it ends in the
+    // ChallengeCanceled broadcast; ChallengeComplete, the stats CSV and
+    // leaderboard uploads belong to completion). AimModCore already uses it
+    // to cancel a challenge started with overrides. Outside a challenge only
+    // the freeplay session is reset.
+    void GameControl::BeginQuit(const GameCommand& c, double now, bool inChallenge, const std::string& current)
+    {
+        UObject* manager = m_scene.Manager();
+        ResetOverrides("run quit");
+        if (m_seeding) Log("match seed: off (run quit)");
+        m_seeding.reset();
+        if (!inChallenge)
+        {
+            const bool reset = m_resetFreeplay.ok() && m_resetFreeplay.Call(manager, [](std::uint8_t*, const Param&) {});
+            Log(std::string("game control: quit-run: no challenge running; freeplay session ") + (reset ? "reset" : "left as is"));
+            return Answer(c.sequence, "done", "quit", reset ? "" : "No run to quit.");
+        }
+        if (!m_cancel.ok()) return Answer(c.sequence, "error", "unsupported", "Quitting a run is unavailable in this game version.");
+        if (!m_cancel.Call(manager, [](std::uint8_t*, const Param&) {}))
+            return Answer(c.sequence, "error", "quit-failed", "The game did not accept the cancel. Press Esc and leave the run.");
+        Log("game control: quit-run: CancelChallenge in \"" + current + "\" (abandoned, no score submitted)");
+        m_quitting = Quitting{c.sequence, now + 6.0, now + 2.5, false, current};
+        Answer(c.sequence, "accepted", "quitting", "");
+    }
+
+    void GameControl::TickQuit(double now, bool inChallenge)
+    {
+        Quitting& q = *m_quitting;
+        if (!inChallenge)
+        {
+            const auto seq = q.sequence;
+            Log("game control: quit-run: challenge left" + std::string(q.retried ? " (after a second CancelChallenge)" : ""));
+            m_quitDone = q.scenario;
+            m_quitting.reset();
+            return Answer(seq, "done", "quit", "");
+        }
+        if (!q.retried && now >= q.retryAt)
+        {
+            if (UObject* manager = m_scene.Manager()) m_cancel.Call(manager, [](std::uint8_t*, const Param&) {});
+            q.retried = true;
+            Log("game control: quit-run: still in the challenge; CancelChallenge again");
+        }
+        if (now > q.deadline)
+        {
+            const auto seq = q.sequence;
+            m_quitting.reset();
+            Answer(seq, "error", "quit-failed", "The game did not leave the challenge. Press Esc and leave the run.");
+        }
+    }
+
     bool GameControl::Refresh(const char* why)
     {
         bool any = false;
@@ -541,6 +593,11 @@ namespace aimmod
             return Answer(c.sequence, ok ? "done" : "error", ok ? "refreshed" : "refresh-failed", "");
         }
         if (!manager || !m_scene.Player()) return Answer(c.sequence, "error", "game-unavailable", "KovaaK's is not ready yet.");
+        if (c.action == GameCommand::Action::QuitRun)
+        {
+            if (m_pending || m_capture || m_refreshing || m_quitting) return Answer(c.sequence, "error", "busy", "Another game command is running. Try again in a moment.");
+            return BeginQuit(c, now, inChallenge, current);
+        }
         // Never interrupt a challenge: leaving it would cancel a ranked attempt.
         if (inChallenge) return Answer(c.sequence, "error", "challenge-active", "A challenge is running. Finish or quit it first.");
         if (loading || m_pending) return Answer(c.sequence, "error", "busy", "A scenario is loading. Try again in a moment.");
@@ -550,6 +607,30 @@ namespace aimmod
         if (c.action == GameCommand::Action::CaptureThumbnail && !m_canCapture)
             return Answer(c.sequence, "error", "unsupported", "Thumbnail capture is unavailable in this game version.");
         if (m_capture) return Answer(c.sequence, "error", "busy", "A thumbnail capture is running.");
+        if (c.action == GameCommand::Action::EndRun)
+        {
+            // Lobby time limit: end the freeplay match run cleanly by reloading
+            // the scenario (stop: without playing; reset: playing again).
+            if (!m_canLoad) return Answer(c.sequence, "error", "unsupported", "Ending a run is unavailable in this game version.");
+            if (current != c.scenario) return Answer(c.sequence, "error", "not-current", "\"" + c.scenario + "\" is not the scenario being played.");
+            ResetOverrides("run ended");
+            if (m_seeding) Log("match seed: off (run ended)");
+            m_seeding.reset();
+            m_pending = Pending{c, now + 30.0};
+            m_pending->issued = now;
+            if (c.reset && !SetPlayType(manager, GameCommand::Mode::FreePlay))
+            {
+                m_pending.reset();
+                return Answer(c.sequence, "error", "end-failed", "The game did not accept the play type.");
+            }
+            if (!StartScenario(c.scenario, c.reset))
+            {
+                m_pending.reset();
+                return Answer(c.sequence, "error", "end-failed", "The game did not reload \"" + c.scenario + "\".");
+            }
+            m_pending->started = true;
+            return Answer(c.sequence, "accepted", "ending", "");
+        }
         if (load && current == c.scenario) return Answer(c.sequence, "done", "already-loaded", "");
         if (m_refreshing) return Answer(c.sequence, "error", "busy", "Scenarios are being refreshed. Try again in a moment.");
         if (!ScenarioKnown(manager, c.scenario))
@@ -630,6 +711,7 @@ namespace aimmod
             }
             return;
         }
+        if (m_quitting) return TickQuit(now, inChallenge);
         if (m_capture) return TickCapture(now, current, inChallenge, loading);
         if (!m_pending) return;
         Pending& p = *m_pending;
@@ -639,6 +721,17 @@ namespace aimmod
             const auto seq = c.sequence;
             m_pending.reset();
             return Answer(seq, "error", "timeout", "\"" + c.scenario + "\" did not finish loading.");
+        }
+        if (c.action == GameCommand::Action::EndRun && !p.sawLoading)
+        {
+            if (loading || current != c.scenario) p.sawLoading = true;
+            else if (now - p.issued > 5.0)
+            {
+                const auto seq = c.sequence;
+                m_pending.reset();
+                return Answer(seq, "error", "end-failed", "The game did not reload the scenario.");
+            }
+            return;
         }
         if (current != c.scenario || loading)
         {
@@ -652,6 +745,13 @@ namespace aimmod
         {
             m_pending.reset();
             return Answer(seq, "done", "loaded", "");
+        }
+        if (c.action == GameCommand::Action::EndRun)
+        {
+            const bool reset = c.reset;
+            m_pending.reset();
+            if (inChallenge) return Answer(seq, "error", "mode-mismatch", "The game started a challenge instead of freeplay.");
+            return Answer(seq, "done", reset ? "reset" : "stopped", "");
         }
         if (c.mode == GameCommand::Mode::Challenge)
         {

@@ -121,6 +121,7 @@ sealed partial class MultiplayerService : IDisposable
                     var settings = LobbyRules.ModeDefaults(new LobbySettings(), mode is not null && LobbyModes.All.Contains(mode) ? mode : LobbyModes.Race);
                     if (Text("scenario") is { } wanted && library.Scenario(wanted) is { } picked) settings = settings with { Scenario = picked };
                     else if (library.Scenarios.FirstOrDefault() is { } first) settings = settings with { Scenario = library.Scenario(first.Name) };
+                    Simulation?.NewLobby();
                     core = new LobbyCore(SelfId, selfName, settings, clock);
                     // Start from the host's last setup, then the mode and scenario picked now.
                     if (Text("scenario") is null && LoadPresets().Last is { } lastSetup) { ApplySaved(lastSetup); notice = null; if (mode is not null && LobbyModes.All.Contains(mode)) core.Apply(SelfId, "settings", JsonSerializer.SerializeToElement(new { settings = new { mode } }), library); }

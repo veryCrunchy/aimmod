@@ -5,7 +5,7 @@ namespace AimMod.InGame;
 
 /// <summary>A game command request (see in-game/native-mod/DESIGN.md "Game commands").</summary>
 sealed record GameCommandRequest(string? Action, string? Scenario, string? Mode, double? TimeScale, double? TargetSize, double? TargetSpeed, double? MapScale, string? Weapon,
-    int? Width = null, int? Height = null, string? Out = null, ThumbnailView[]? Views = null, long? Seed = null);
+    int? Width = null, int? Height = null, string? Out = null, ThumbnailView[]? Views = null, long? Seed = null, string? Then = null);
 
 /// <summary>One thumbnail camera: location (cm), pitch/yaw (degrees), horizontal FOV.</summary>
 sealed record ThumbnailView(double X, double Y, double Z, double Pitch, double Yaw, double Fov);
@@ -45,8 +45,8 @@ sealed class GameCommands(string output)
     /// <summary>Writes the request; returns its sequence, or null with a reason.</summary>
     public (long? Sequence, string? Error) Send(GameCommandRequest request)
     {
-        if (request.Action is not ("load-scenario" or "start-scenario" or "reset-overrides" or "refresh-scenarios" or "capture-thumbnail")) return (null, "invalid-command");
-        var named = request.Action is "load-scenario" or "start-scenario" or "capture-thumbnail";
+        if (request.Action is not ("load-scenario" or "start-scenario" or "reset-overrides" or "refresh-scenarios" or "capture-thumbnail" or "end-run" or "quit-run")) return (null, "invalid-command");
+        var named = request.Action is "load-scenario" or "start-scenario" or "capture-thumbnail" or "end-run";
         if (request.Action == "capture-thumbnail")
         {
             if (request.Width is not (>= 64 and <= 3840) || request.Height is not (>= 64 and <= 2160)) return (null, "invalid-thumbnail");
@@ -59,6 +59,9 @@ sealed class GameCommands(string output)
         if (named && !SafeName(request.Scenario)) return (null, "invalid-scenario");
         if (request.Weapon is not null && !SafeName(request.Weapon)) return (null, "invalid-override");
         if (request.Mode is not (null or "freeplay" or "challenge")) return (null, "invalid-mode");
+        // end-run: freeplay AimMod match scenarios only; then = stop (default) or reset.
+        if (request.Then is not null && (request.Action != "end-run" || request.Then is not ("stop" or "reset"))) return (null, "invalid-command");
+        if (request.Action == "end-run" && request.Scenario?.StartsWith("AimMod Match - ", StringComparison.Ordinal) != true) return (null, "not-a-match");
         if (request.Seed is not null && (request.Action != "start-scenario" || request.Seed is < 0 or > uint.MaxValue)) return (null, "invalid-seed");
         // Never in ranked play (AimModCore enforces the same rule).
         if (request.Seed is not null && request.Mode == "challenge" && request.Scenario?.StartsWith("AimMod Match - ", StringComparison.Ordinal) != true) return (null, "seed-not-allowed");
@@ -81,6 +84,7 @@ sealed class GameCommands(string output)
                 Field("view" + (i + 1), string.Join(',', new[] { v.X, v.Y, v.Z, v.Pitch, v.Yaw, v.Fov }.Select(n => n.ToString("R", CultureInfo.InvariantCulture))));
             }
         }
+        if (request.Action == "end-run") Field("then", request.Then);
         if (request.Action == "start-scenario")
         {
             Field("mode", request.Mode ?? "freeplay");

@@ -22,9 +22,10 @@ static class InstallHealth
         foreach (var (path, sha) in manifest.Files)
         {
             string full;
-            try { full = Path.GetFullPath(Path.Combine(win64, path)); }
-            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { problems.Add(new("invalid-entry", path, "The install record is damaged.")); continue; }
+            try { full = InstallLayout.Resolve(win64, path); }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException or InstallException) { problems.Add(new("invalid-entry", path, "The install record is damaged.")); continue; }
             var kind = path.Equals("dwmapi.dll", StringComparison.OrdinalIgnoreCase) ? "the UE4SS loader (dwmapi.dll)"
+                : InstallLayout.IsPakRecord(path) ? "an AimMod cosmetics pak"
                 : path.Equals(@"ue4ss\UE4SS-settings.ini", StringComparison.OrdinalIgnoreCase) ? "the UE4SS settings"
                 : path.StartsWith(@"ue4ss\Mods\", StringComparison.OrdinalIgnoreCase) ? "an AimMod file" : "a UE4SS file";
             if (!File.Exists(full)) { problems.Add(new("missing", path, $"{Capital(kind)} is missing: {path}")); continue; }

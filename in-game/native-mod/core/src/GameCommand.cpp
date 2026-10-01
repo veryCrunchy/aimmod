@@ -33,6 +33,8 @@ namespace aimmod
         case GameCommand::Action::StartScenario: return "start-scenario";
         case GameCommand::Action::RefreshScenarios: return "refresh-scenarios";
         case GameCommand::Action::CaptureThumbnail: return "capture-thumbnail";
+        case GameCommand::Action::EndRun: return "end-run";
+        case GameCommand::Action::QuitRun: return "quit-run";
         default: return "reset-overrides";
         }
     }
@@ -80,7 +82,7 @@ namespace aimmod
         for (const auto& [key, value] : fields)
             if (key != "seq" && key != "action" && key != "scenario" && key != "mode" && key != "timeScale" && key != "targetSize" && key != "targetSpeed" &&
                 key != "mapScale" && key != "weapon" && key != "seed" && key != "width" && key != "height" && key != "out" && key != "view1" && key != "view2" &&
-                key != "view3" && key != "view4")
+                key != "view3" && key != "view4" && key != "then")
                 return fail("invalid-command", "Unknown field: " + key + ".");
         const std::string* action = get("action");
         if (!action) return fail("invalid-command", "Missing action.");
@@ -89,14 +91,25 @@ namespace aimmod
         else if (*action == "reset-overrides") c.action = GameCommand::Action::ResetOverrides;
         else if (*action == "refresh-scenarios") c.action = GameCommand::Action::RefreshScenarios;
         else if (*action == "capture-thumbnail") c.action = GameCommand::Action::CaptureThumbnail;
+        else if (*action == "end-run") c.action = GameCommand::Action::EndRun;
+        else if (*action == "quit-run") c.action = GameCommand::Action::QuitRun;
         else return fail("invalid-command", "Unknown action.");
         if (c.action == GameCommand::Action::LoadScenario || c.action == GameCommand::Action::StartScenario ||
-            c.action == GameCommand::Action::CaptureThumbnail)
+            c.action == GameCommand::Action::CaptureThumbnail || c.action == GameCommand::Action::EndRun)
         {
             const std::string* scenario = get("scenario");
             if (!scenario || !SafeName(*scenario)) return fail("invalid-scenario", "Missing or invalid scenario name.");
             c.scenario = *scenario;
         }
+        if (const std::string* then = get("then"))
+        {
+            if (c.action != GameCommand::Action::EndRun) return fail("invalid-command", "\"then\" applies to end-run only.");
+            if (*then != "stop" && *then != "reset") return fail("invalid-command", "end-run then must be stop or reset.");
+            c.reset = *then == "reset";
+        }
+        if (c.action == GameCommand::Action::QuitRun && get("scenario")) return fail("invalid-command", "quit-run takes no scenario.");
+        if (c.action == GameCommand::Action::EndRun && !std::string_view(c.scenario).starts_with(MatchScenarioPrefix))
+            return fail("not-a-match", "end-run applies to AimMod match scenarios only.");
         if (const std::string* mode = get("mode"))
         {
             if (*mode == "freeplay") c.mode = GameCommand::Mode::FreePlay;

@@ -92,6 +92,7 @@ namespace aimmod::game
         case Kind::Rotator: return "rotator";
         case Kind::Timespan: return "timespan";
         case Kind::Array: return "array";
+        case Kind::Name: return "name";
         default: return "other";
         }
     }
@@ -145,6 +146,7 @@ namespace aimmod::game
         if (CastField<FEnumProperty>(p)) return size == 1 ? Kind::UInt8 : size == 2 ? Kind::UInt16 : size == 4 ? Kind::UInt32 : Kind::UInt64;
         if (CastField<FObjectPropertyBase>(p)) return Kind::Object;
         if (CastField<FStrProperty>(p)) return Kind::String;
+        if (CastField<FNameProperty>(p)) return Kind::Name;
         if (CastField<FArrayProperty>(p)) return Kind::Array;
         if (auto* s = CastField<FStructProperty>(p))
         {
@@ -284,7 +286,7 @@ namespace aimmod::game
                 if (p.worldContext || p.kind == Kind::Int32) continue;
                 if (shape == Shape::Command &&
                     (p.kind == Kind::Vector || p.kind == Kind::Rotator || p.kind == Kind::Float || p.kind == Kind::Bool || p.kind == Kind::UInt8 ||
-                     p.kind == Kind::String || p.kind == Kind::Object || (p.kind == Kind::Other && p.structType)))
+                     p.kind == Kind::String || p.kind == Kind::Object || p.kind == Kind::Name || (p.kind == Kind::Other && p.structType)))
                     continue;
                 m_error = "unsupported input " + p.name + ":" + KindName(p.kind);
                 m_params.clear();
@@ -303,6 +305,7 @@ namespace aimmod::game
             case Shape::Object: ok = returns(r && r->kind == Kind::Object && r->size == sizeof(void*)); break;
             case Shape::String: ok = returns(r && r->kind == Kind::String && r->size == sizeof(RawArray)); break;
             case Shape::Vector: ok = returns(r && (r->kind == Kind::Vector || r->kind == Kind::Rotator) && (r->size == 12 || r->size == 24)); break;
+            case Shape::Name: ok = returns(r && r->kind == Kind::Name && r->size >= 8); break;
             case Shape::Timespan: ok = returns(r && r->kind == Kind::Timespan && r->size == 8); break;
             case Shape::ObjectArray: ok = returns(r && r->kind == Kind::Array && r->inner == Kind::Object && r->size == sizeof(RawArray)); break;
             case Shape::ValueElse:
@@ -436,6 +439,15 @@ namespace aimmod::game
         return ok;
     }
 
+    bool Getter::Name(UObject* self, std::string& text, UObject* context) const
+    {
+        alignas(16) std::uint8_t buffer[MaxParms];
+        if (m_shape != Shape::Name || !Invoke(self, buffer, context)) return false;
+        text = NameText(buffer + m_params[static_cast<std::size_t>(m_return)].offset);
+        Release(buffer);
+        return true;
+    }
+
     bool Getter::Vector(UObject* self, double out[3], UObject* context) const
     {
         alignas(16) std::uint8_t buffer[MaxParms];
@@ -537,6 +549,147 @@ namespace aimmod::game
             raw = {chars, length + 1, length + 1};
         }
         std::memcpy(value, &raw, sizeof(raw));
+    }
+
+    std::string NameText(const void* fname)
+    {
+        FName name;
+        std::memcpy(static_cast<void*>(&name), fname, sizeof(FName) < 8 ? sizeof(FName) : 8);
+        return Narrow(name.ToString());
+    }
+
+    bool WriteName(std::uint8_t* value, const Param& param, const std::string& text)
+    {
+        if (param.kind != Kind::Name || param.size < 8 || static_cast<std::size_t>(param.size) < sizeof(FName)) return false;
+        const std::wstring wide(text.begin(), text.end()); // ASCII names only
+        FName name(wide.c_str(), FNAME_Add);
+        std::memcpy(value, static_cast<const void*>(&name), sizeof(FName));
+        return true;
+    }
+
+    bool SetStructPath(std::uint8_t* value, UStruct* type, const std::string& path, double number)
+    {
+        const auto dot = path.find('.');
+        if (dot == std::string::npos) return SetStructField(value, type, path.c_str(), number);
+        if (!type) return false;
+        const std::string head = path.substr(0, dot);
+        for (FProperty* p : type->ForEachProperty())
+        {
+            if (Narrow(p->GetName()) != head) continue;
+            auto* s = CastField<FStructProperty>(p);
+            if (!s) return false;
+            return SetStructPath(value + p->GetOffset_Internal(), s->GetStruct(), path.substr(dot + 1), number);
+        }
+        return false;
+    }
+
+    bool Path::Bind(UStruct* type, const std::string& path)
+    {
+        *this = Path{};
+        std::int32_t offset = 0;
+        std::size_t at = 0;
+        FProperty* property = nullptr;
+        while (type && at <= path.size())
+        {
+            auto dot = path.find('.', at);
+            std::string segment = path.substr(at, dot == std::string::npos ? std::string::npos : dot - at);
+            int index = 0;
+            if (auto bracket = segment.find('['); bracket != std::string::npos)
+            {
+                index = std::atoi(segment.c_str() + bracket + 1);
+                segment.resize(bracket);
+            }
+            property = nullptr;
+            for (FProperty* p : type->ForEachPropertyInChain())
+                if (Narrow(p->GetName()) == segment)
+                {
+                    property = p;
+                    break;
+                }
+            if (!property || index < 0 || index >= property->GetArrayDim()) return false;
+            offset += property->GetOffset_Internal() + index * property->GetElementSize();
+            if (dot == std::string::npos) break;
+            auto* s = CastField<FStructProperty>(property);
+            if (!s) return false;
+            type = s->GetStruct();
+            at = dot + 1;
+        }
+        if (!property) return false;
+        m_leaf = Describe(property);
+        if (auto* array = CastField<FArrayProperty>(property); array && array->GetInner())
+        {
+            FProperty* inner = array->GetInner();
+            m_elementKind = KindOf(inner, inner->GetSize());
+            m_elementSize = inner->GetSize();
+            if (auto* s = CastField<FStructProperty>(inner)) m_elementStruct = s->GetStruct();
+        }
+        m_offset = offset;
+        return true;
+    }
+
+    bool Path::String(const void* base, std::string& out) const
+    {
+        if (!base || !ok() || m_leaf.kind != Kind::String) return false;
+        RawArray raw;
+        std::memcpy(&raw, At(base), sizeof(raw));
+        out.clear();
+        if (raw.num == 0) return true;
+        if (!raw.data || raw.num < 0 || raw.num > 4096) return false;
+        const auto* chars = static_cast<const wchar_t*>(raw.data);
+        std::size_t length = static_cast<std::size_t>(raw.num);
+        while (length > 0 && chars[length - 1] == 0) --length;
+        out = Narrow(std::wstring(chars, length));
+        return true;
+    }
+
+    bool Path::Name(const void* base, std::string& out) const
+    {
+        if (!base || !ok() || m_leaf.kind != Kind::Name) return false;
+        out = NameText(At(base));
+        return true;
+    }
+
+    UObject* Path::Object(const void* base) const
+    {
+        if (!base || !ok() || m_leaf.kind != Kind::Object || m_leaf.size != sizeof(void*)) return nullptr;
+        UObject* value;
+        std::memcpy(&value, At(base), sizeof(value));
+        return value;
+    }
+
+    bool Path::Elements(const void* base, std::vector<const std::uint8_t*>& out, std::size_t limit) const
+    {
+        out.clear();
+        if (!base || !ok() || m_leaf.kind != Kind::Array || m_elementSize <= 0) return false;
+        RawArray raw;
+        std::memcpy(&raw, At(base), sizeof(raw));
+        if (raw.num < 0 || raw.num > raw.max || (raw.num > 0 && !raw.data)) return false;
+        const std::size_t count = std::min<std::size_t>(static_cast<std::size_t>(raw.num), limit);
+        for (std::size_t i = 0; i < count; ++i) out.push_back(static_cast<const std::uint8_t*>(raw.data) + i * static_cast<std::size_t>(m_elementSize));
+        return true;
+    }
+
+    bool Path::Objects(const void* base, std::vector<UObject*>& out, std::size_t limit) const
+    {
+        out.clear();
+        std::vector<const std::uint8_t*> elements;
+        if (m_elementKind != Kind::Object || m_elementSize != sizeof(void*) || !Elements(base, elements, limit)) return false;
+        for (const std::uint8_t* e : elements)
+        {
+            UObject* value;
+            std::memcpy(&value, e, sizeof(value));
+            out.push_back(value);
+        }
+        return true;
+    }
+
+    bool Path::Names(const void* base, std::vector<std::string>& out, std::size_t limit) const
+    {
+        out.clear();
+        std::vector<const std::uint8_t*> elements;
+        if (m_elementKind != Kind::Name || m_elementSize < 8 || !Elements(base, elements, limit)) return false;
+        for (const std::uint8_t* e : elements) out.push_back(NameText(e));
+        return true;
     }
 
     bool SetStructField(std::uint8_t* value, UStruct* type, const char* field, double number)

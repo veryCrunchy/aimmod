@@ -16,6 +16,44 @@ static class InstallLayout
     public const string PackageManifest = "aimmod-release.json";
 
     public static string ManifestPath(string win64) => Path.Combine(win64, "ue4ss", ManifestName);
+
+    // Install-record paths are relative to Binaries\Win64, except AimMod
+    // cosmetics paks: recorded as paks\~AimMod\<name> and placed in the game's
+    // own FPSAimTrainer\Content\Paks\~AimMod. Nothing else outside Win64.
+    public const string GamePak = "FPSAimTrainer-WindowsNoEditor.pak";
+    const string PakRecord = @"paks\", PakDir = "~AimMod";
+    public static string ContentPaks(string win64) => Path.GetFullPath(Path.Combine(win64, "..", "..", "Content", "Paks"));
+    public static bool IsPakRecord(string relative) => relative.StartsWith(PakRecord, StringComparison.OrdinalIgnoreCase);
+    static string Inside(string root, string relative, bool allowRoot)
+    {
+        var full = Path.GetFullPath(Path.Combine(root, relative));
+        var prefix = Path.GetFullPath(root).TrimEnd('\\');
+        if (allowRoot && full.Equals(prefix, StringComparison.OrdinalIgnoreCase)) return full;
+        if (!full.StartsWith(prefix + "\\", StringComparison.OrdinalIgnoreCase)) throw new InstallException("Path escapes the game folder.");
+        return full;
+    }
+    public static string Resolve(string win64, string relative)
+    {
+        if (!IsPakRecord(relative)) return Inside(win64, relative, false);
+        var rest = relative[PakRecord.Length..];
+        string sub;
+        if (rest.Equals(PakDir, StringComparison.OrdinalIgnoreCase)) sub = "";
+        else if (rest.StartsWith(PakDir + "\\", StringComparison.OrdinalIgnoreCase)) sub = rest[(PakDir.Length + 1)..];
+        else throw new InstallException("Path outside the AimMod pak folder.");
+        var paks = ContentPaks(win64);
+        // The game's own pak must be there: this is the right game folder.
+        if (!File.Exists(Path.Combine(paks, GamePak))) throw new InstallException(@"The game's Content\Paks folder was not found next to Binaries\Win64.");
+        return Inside(Path.Combine(paks, PakDir), sub, true);
+    }
+    // The install-record path for a full path that Resolve maps back to it.
+    public static string Record(string win64, string full)
+    {
+        var aimmod = Path.Combine(ContentPaks(win64), PakDir);
+        full = Path.GetFullPath(full);
+        if (full.Equals(aimmod, StringComparison.OrdinalIgnoreCase)) return PakRecord + PakDir;
+        if (full.StartsWith(aimmod + "\\", StringComparison.OrdinalIgnoreCase)) return PakRecord + PakDir + "\\" + full[(aimmod.Length + 1)..];
+        return Path.GetRelativePath(win64, full);
+    }
     public static bool IsWin64(string? folder) => folder is not null && File.Exists(Path.Combine(folder, GameExe + ".exe"));
 
     // The service ships as <Win64>\ue4ss\Mods\AimModCore\service\AimMod.InGame.exe.
