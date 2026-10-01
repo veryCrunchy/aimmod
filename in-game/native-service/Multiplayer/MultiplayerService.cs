@@ -1907,6 +1907,7 @@ sealed partial class MultiplayerService : IDisposable
             }
             WriteRoundState(match, lastSpawn, extra);
             WriteAvatarState(match, view, self);
+            WriteWorldTags(match, view, self);
         }
         else WriteRoundState(match, null, PhaseLines(match));
     }

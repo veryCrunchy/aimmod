@@ -29,6 +29,8 @@ namespace aimmod
         void Shutdown();
         // The host runs (switch native) and its view exists: AimModNativeUI's Notify.lua stands down.
         bool ready() const { return m_ready; }
+        // The notice layer's Gameface widget while the host runs (world tags draw into it); else null.
+        UObject* Gameface() const { return m_ready ? m_widget.Get() : nullptr; }
 
     private:
         using UObject = game::UObject;

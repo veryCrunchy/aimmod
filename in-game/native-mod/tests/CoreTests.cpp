@@ -964,6 +964,7 @@ static void WaterChecks()
 }
 
 #include "OverlayTests.inl"
+#include "WorldTagsTests.inl"
 
 int main(int argc, char** argv)
 {
@@ -986,6 +987,7 @@ int main(int argc, char** argv)
     EndRunChecks();
     cosmetics_checks::Run();
     overlay_checks::Run();
+    worldtags_checks::Run();
     PreviewChecks();
     WaterChecks();
     std::printf("%d AimModCore checks, %d failed.\n", g_checks, g_failures);

@@ -133,6 +133,11 @@ static partial class MultiplayerChecks
         var avatars = File.ReadAllText(Path.Combine(output, "avatar-state.tsv"));
         Check(service.StandIns.Count == 3 && service.StandIns.Values.Order().SequenceEqual(["1", "2", "3"]) && new[] { "1", "2", "3" }.All(p => avatars.Contains("peer\t" + p + "\t", StringComparison.Ordinal)),
             "Each simulated player is a stand-in with its own synthetic peer, listed in avatar-state.tsv");
+        var tags = File.ReadAllText(Path.Combine(output, "world-tags.tsv"));
+        Check(tags.StartsWith("AIMMOD_TAGS_1\t", StringComparison.Ordinal) && service.StandIns.Values.All(p => tags.Contains("tag\t" + StreamIds.For(p) + "\tenemy\t0\t1\t", StringComparison.Ordinal)),
+            "world-tags.tsv names each avatar's stream for AimModCore's tags; in a free-for-all everyone is an enemy");
+        Check(MultiplayerService.WorldTagsBody([("s-0011223344556677", true, "CT", false, "Nova Prime")]) == "tag\ts-0011223344556677\tfriend\tCT\t0\tNova%20Prime\n",
+            "A teammate's row: friend, team, down, escaped name");
         var tracker = new SelfPoseTracker(Path.Combine(root, "standins-pose"));
         var ids = service.StandIns.ToDictionary(p => p.Value, p => p.Key);
         var frame = new LivePoseFrame(1, "", "x", "m", 1, [new LivePose(5000, [0, 0, 0, 0, 0])], [[4, 100, 0, 0, 45, 115], [5, 200, 0, 0, 45, 115]])

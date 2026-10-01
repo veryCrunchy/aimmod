@@ -5,6 +5,7 @@
 #include "Cosmetics.hpp"
 #include "CosmeticsPreview.hpp"
 #include "OverlayHost.hpp"
+#include "WorldTags.hpp"
 #include "GameControl.hpp"
 #include "MatchPlay.hpp"
 #include "Presenter.hpp"
@@ -103,6 +104,7 @@ namespace aimmod
         GameControl m_control;
         CosmeticsPreview m_preview;
         OverlayHost m_overlay;
+        WorldTags m_tags;
         bool m_inChallenge{}, m_loading{};
         // Clip hotkey edge detection; self-pose stream; freeplay timer probe.
         bool m_clipKeyDown{};
@@ -117,6 +119,7 @@ namespace aimmod
         std::vector<std::pair<std::int64_t, std::array<double, 7>>> m_poses;
         void PollClipKey();
         void PublishSelfPose(double now);
+        void TickTags(double now);
         std::uint32_t PoseId(UObject* actor);
         struct QuitAudit
         {

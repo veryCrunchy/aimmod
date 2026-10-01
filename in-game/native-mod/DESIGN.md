@@ -818,6 +818,30 @@ in-game UI to C++).
   result, input back to the game, pause menu hidden, scoreboard focus), cursor
   resets during the buy menu, view removed and why.
 
+## World tags
+
+Name tags over other players in AimMod matches (`mod/src/WorldTags`,
+`core/WorldTags`). They are drawn into the overlay host's Gameface view; the
+only change to OverlayHost is `Gameface()`, which exposes its widget.
+
+- Inputs:
+  - `world-tags.tsv` from the service, checked every 250 ms and stale after
+    5 s: `AIMMOD_TAGS_1	<seq>`, then `tag	<stream>	<friend|enemy>	<T|CT|1|2|0>	<alive>	<escaped name>`;
+  - `avatars.tsv` from AimModSteam: actor name to stream id.
+- At 60 Hz, each avatar in the game state's character list is checked:
+  - Teammates are always tagged, through walls, as in CS.
+  - An enemy is tagged only while the camera ray meets its capsule (up to
+    100 m) and `Controller:LineOfSightTo` sees it.
+- The head (capsule top + 24 cm) is projected with
+  `PlayerController:ProjectWorldLocationToScreen`, then divided by
+  `GetViewportSize`.
+- The result goes to the page as one JS event, `AimModTags`
+  (`CohtmlWidget:CreateJSEvent`, `AddString`, `TriggerJSEvent`), carrying
+  `{"tags":[{n,t,f,a,c,x,y,d}]}`. An empty list is sent once when the tags
+  go away.
+- `ui/worldtags.js` keeps one node per tag and moves it: the name in its team
+  colour (T orange, CT blue), the distance for teammates, grey when down.
+
 ## Native service
 
 `Mods\AimModCore\service\AimMod.InGame.exe` is started with
