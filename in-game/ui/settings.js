@@ -2,7 +2,7 @@
   'use strict';
   var container=null,request=null,generation=0,value=null;
   function node(tag,css,text){var el=root.document.createElement(tag);el.className=css||'';if(text!==undefined)el.textContent=text;return el;}
-  function leave(){if(root.AimModHistoryImport)root.AimModHistoryImport.leave();if(root.AimModDiscordSettings)root.AimModDiscordSettings.leave();if(root.AimModLifecycle)root.AimModLifecycle.leaveSettings();generation++;if(request){request.abort();request=null;}container=null;}
+  function leave(){if(root.AimModHistoryImport)root.AimModHistoryImport.leave();if(root.AimModDiscordSettings)root.AimModDiscordSettings.leave();if(root.AimModHubSharing)root.AimModHubSharing.leave();if(root.AimModLifecycle)root.AimModLifecycle.leaveSettings();generation++;if(request){request.abort();request=null;}container=null;}
   function send(patch,done){
     var ticket=++generation,xhr=new root.XMLHttpRequest();request=xhr;
     var path=root.location.pathname;path=path.slice(0,path.lastIndexOf('/'));
@@ -28,7 +28,7 @@
     toggle('hubHistoryEnabled','Download Hub history','Keeps your linked account’s history up to date.');
     if(message)panel.appendChild(node('p',ok?'saved-note':'notice warn',message));
     // Two columns at wide sizes: capture and updates on the left; import, replays,
-    // Discord and developer mode on the right. Narrow sizes stack them in that order.
+    // AimMod Hub, Discord and developer mode on the right. Narrow sizes stack them in that order.
     var columns=node('div','settings-columns'),left=node('div','settings-col'),right=node('div','settings-col');columns.appendChild(left);columns.appendChild(right);container.appendChild(columns);
     left.appendChild(panel);
     if(root.AimModLifecycle)root.AimModLifecycle.renderSettings(left);
@@ -36,6 +36,7 @@
     if(root.AimModHistoryImport)root.AimModHistoryImport.render(right,typeof value.statsFolder==='string'?value.statsFolder:'');
     var importCard=right.children&&right.children[importStart];
     var storage=node('div','panel settings-card');storage.appendChild(node('h2','','Replay library'));storage.appendChild(node('p','subtle','Exports are saved in Documents / AimMod / Replays.'));if(root.AimModWorkspace){var openRow=node('div','actions');var open=node('button','button','Open replays');open.type='button';open.onclick=function(){root.AimModWorkspace.open('replays');};openRow.appendChild(open);storage.appendChild(openRow);}right.appendChild(storage);
+    if(root.AimModHubSharing)root.AimModHubSharing.render(right);
     if(root.AimModDiscordSettings)root.AimModDiscordSettings.render(right);
     if(root.AimModDeveloper)root.AimModDeveloper.renderSettings(right);
     if(api.wantImport&&importCard){api.wantImport=false;reveal(importCard);}

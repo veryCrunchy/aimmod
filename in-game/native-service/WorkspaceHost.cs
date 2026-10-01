@@ -53,7 +53,7 @@ sealed class WorkspaceHost : IAsyncDisposable
     public void Update(string json) => Volatile.Write(ref data, json);
     readonly Multiplayer.MultiplayerService multiplayer;
     public Multiplayer.MultiplayerService MultiplayerLobby => multiplayer;
-    public WorkspaceHost(Hub hub, string output, string? historyPath = null, NativeSettings? settings = null, CsvHistory? csvHistory = null, DiscordSettings? discordSettings = null, Func<object>? discordStatus = null, string[]? args = null, Lifecycle? lifecycle = null)
+    public WorkspaceHost(Hub hub, string output, string? historyPath = null, NativeSettings? settings = null, CsvHistory? csvHistory = null, DiscordSettings? discordSettings = null, Func<object>? discordStatus = null, string[]? args = null, Lifecycle? lifecycle = null, HubSharingSettings? hubSharing = null, Func<object>? hubSharingStatus = null)
     {
         outputFolder = output;
         gameCommands = new GameCommands(output);
@@ -72,6 +72,8 @@ sealed class WorkspaceHost : IAsyncDisposable
         overlaySettings.MapEndpoints(app, prefix);
         lifecycle?.MapEndpoints(app, prefix);
         discordSettings?.MapEndpoints(app, prefix, discordStatus);
+        hubSharing?.MapEndpoints(app, prefix, hubSharingStatus);
+        app.MapGet(prefix + "/hub-sharing.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.HubSharingScript")!, "application/javascript"));
         app.MapPost(prefix + "/workspace-view", async (HttpContext context) => {
             if (context.Request.Headers["X-AimMod-UI"] != "1" || context.Request.ContentLength is null or > 256) return Results.StatusCode(403);
             if (!context.Request.HasJsonContentType()) return Results.StatusCode(415);
