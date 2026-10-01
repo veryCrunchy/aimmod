@@ -443,11 +443,14 @@ sealed class SteamTransport : IMultiplayerTransport
         return Command("ugc.query", fields, withId: true) >= 0;
     }
     public IReadOnlyList<WorkshopItem> WorkshopItems { get { lock (gate) return workshopItems; } }
-    // Contract addition: dev.avatar {on, mode: circle|path}, answered by a result.
-    public bool DevAvatar(bool on, string mode)
+    // Contract addition: dev.avatar {on, mode: circle|path, profile?}, answered by a result.
+    public bool DevAvatar(bool on, string mode, string? profile = null)
     {
         bool can; lock (gate) can = ready && devAvatar;
-        return can && mode is "circle" or "path" && Command("dev.avatar", new JsonObject { ["on"] = on, ["mode"] = mode }, withId: true) >= 0;
+        if (!can || mode is not ("circle" or "path")) return false;
+        var fields = new JsonObject { ["on"] = on, ["mode"] = mode };
+        if (on && profile is { Length: > 0 and <= 64 } && profile.All(c => char.IsAsciiLetterOrDigit(c) || c == ' ')) fields["profile"] = profile;
+        return Command("dev.avatar", fields, withId: true) >= 0;
     }
     public void Kick(string peer) { if (Steam(peer)) Command("lobby.kick", new JsonObject { ["peer"] = peer }); }
     public void Transfer(string peer) { if (Steam(peer)) Command("lobby.transfer", new JsonObject { ["peer"] = peer }); }

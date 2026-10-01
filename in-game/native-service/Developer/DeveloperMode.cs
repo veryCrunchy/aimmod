@@ -94,7 +94,7 @@ static class DeveloperEndpoints
         {
             case "lobby":
                 var members = root.TryGetProperty("members", out var m) && m.TryGetInt32(out var n) ? n : 3;
-                return multiplayer.DevLobby(members, Text("mode"), root.TryGetProperty("simulatedHost", out var h) && h.ValueKind == JsonValueKind.True);
+                return multiplayer.DevLobby(members, Text("mode"), root.TryGetProperty("simulatedHost", out var h) && h.ValueKind == JsonValueKind.True, Text("scenario"));
             case "sim":
                 return multiplayer.Act("sim", JsonSerializer.SerializeToElement(new { op = Text("op"), member = Text("member") }));
             case "notice":

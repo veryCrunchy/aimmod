@@ -77,6 +77,7 @@ sealed partial class DeveloperTools : IDisposable
             if (source == "replay")
             {
                 if (replayId is null || new ReplayCatalog(output).Read(replayId) is not { Frames.Count: >= 2 } replay) return LobbyResult.Fail("missing", "That replay isn’t readable.");
+                if (string.IsNullOrWhiteSpace(replay.MapName)) return LobbyResult.Fail("no-map", "That run was recorded without its map, so the spectator view can’t follow it.");
                 loopReplay = replay; loopStart = Now();
                 loopScenario = replay.Scenario; loopMap = replay.MapName ?? ""; loopScale = replay.MapScale is > 0 ? replay.MapScale.Value : 1;
             }
@@ -237,7 +238,9 @@ sealed partial class DeveloperTools : IDisposable
                 avatarPath = pathScenario,
                 loopback = LoopbackView(),
                 content = ContentView(),
-                scenarios = library.Available ? library.Scenarios.Take(200).Select(s => s.Name).ToArray() : [],
+                // AimMod map ports first, then the rest of the library.
+                ports = multiplayer.DevPorts(),
+                scenarios = library.Available ? multiplayer.DevPorts().Concat(library.Scenarios.Select(s => s.Name)).Distinct().Take(200).ToArray() : [],
                 maps = library.Available ? library.Maps.Take(100).Select(m => m.Name).ToArray() : [],
                 logs = new { service = Tail(Path.Combine(output, "service.log"), 40), game = Tail(ue4ss, 40, l => l.Contains("AimMod", StringComparison.Ordinal)) },
             };

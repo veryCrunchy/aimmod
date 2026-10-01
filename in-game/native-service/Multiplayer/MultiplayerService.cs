@@ -144,6 +144,8 @@ sealed partial class MultiplayerService : IDisposable
                     // Your look is a personal preference, applied to whichever lobby you're in.
                     if (AvatarProfiles.Find(Text("avatar")) is not { } look) return LobbyResult.Fail("invalid", "Unknown look.");
                     SetPrefs(JsonSerializer.SerializeToElement(new { prefs = new { avatar = look.Id } }));
+                    // A running test avatar changes into the new look too.
+                    if (devAvatarState is { On: true } testAvatar) DevAvatar(true, testAvatar.Mode);
                     return Current is null ? LobbyResult.Success : Command("avatar", args);
                 case "rejoin":
                     if (transport.LastLobby is not { } last) return LobbyResult.Fail("none", "There’s no lobby to rejoin.");
