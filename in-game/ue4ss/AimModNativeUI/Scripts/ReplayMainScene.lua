@@ -130,13 +130,17 @@ function M.create(owner)
         templates[profile]={profile=profile,rotation={rotation.Pitch,rotation.Yaw,rotation.Roll},parts=parts,health=health,radius=radius,half=half,scale={X=scale.X,Y=scale.Y,Z=scale.Z}}
     end
     local function originalWorld()return c and valid(owner) and same(owner:GetWorld(),c.world) and valid(c.controller) and same(c.controller:GetWorld(),c.world)end
+    -- The controller's own state (input, camera) is handed back whenever the
+    -- controller is still in the replay's world, even if the pause widget that
+    -- owned the replay was destroyed meanwhile.
+    local function controllerWorld()return c and valid(c.controller) and same(c.controller:GetWorld(),c.world)end
     local function destroy(actor)
         if valid(actor) and c and same(actor:GetWorld(),c.world) then actor:K2_DestroyActor() end
     end
     function s.close()
         if s.closed then return end;s.ready=false;s.closed=true
         local function attempt(fn) pcall(fn) end
-        if saved and originalWorld() then
+        if saved and controllerWorld() then
             attempt(function()if valid(saved.target) and same(saved.target:GetWorld(),c.world) then c.controller:SetViewTargetWithBlend(saved.target,0,0,0,false)end end)
             attempt(function()c.controller.bAutoManageActiveCameraTarget=saved.auto end)
             attempt(function()c.controller.bShouldPerformFullTickWhenPaused=saved.tick end)
