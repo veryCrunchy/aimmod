@@ -173,6 +173,11 @@ sealed class WorkspaceHost : IAsyncDisposable
             } catch (IOException) { return Results.StatusCode(503); }
         });
         app.MapGet(prefix + "/logo.png", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.Logo")!, "image/png"));
+        // Mode card icons, embedded from ui/art/modes/png; only the generated names resolve.
+        app.MapGet(prefix + "/art/modes/{file}", (string file) =>
+            System.Text.RegularExpressions.Regex.IsMatch(file, @"^[a-z-]{2,24}(-on)?@[23]x\.png$")
+            && typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.ModeIcon." + file) is { } icon
+                ? Results.Stream(icon, "image/png") : Results.NotFound());
         app.MapGet(prefix + "/browser.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.ReplayBrowser")!, "application/javascript"));
         app.MapGet(prefix + "/native-browser.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.NativeReplayBrowser")!, "application/javascript"));
         app.MapGet(prefix + "/replays", () => {

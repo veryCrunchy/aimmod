@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path class="soft" d="M12 19A12 12 0 0 1 36 19"/>
+  <path class="team" d="M12 19A12 12 0 0 1 29.5 8.3"/>
+  <path d="M8 30V25A3 3 0 0 1 11 22H13A3 3 0 0 1 16 25V30M8 36V39A3 3 0 0 0 11 42H13A3 3 0 0 0 16 39V36M20 30V25A3 3 0 0 1 23 22H25A3 3 0 0 1 28 25V30M20 36V39A3 3 0 0 0 23 42H25A3 3 0 0 0 28 39V36M32 30V25A3 3 0 0 1 35 22H37A3 3 0 0 1 40 25V30M32 36V39A3 3 0 0 0 35 42H37A3 3 0 0 0 40 39V36"/>
+  <rect x="6" y="30" width="36" height="6" rx="1.5"/>
+</svg>
