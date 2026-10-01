@@ -396,11 +396,11 @@ static class MultiplayerChecks
         Check(!b.Act("watch", J(new { friend = "f1" })).Ok, "Friends who don't allow spectators can't be watched");
         bt.AllowSpectate = true;
         Check(b.Act("watch", J(new { friend = "f2" })).Ok && View(b).GetProperty("watch").GetProperty("state").GetString() == "requesting", "Asking to watch a friend");
-        bt.Inbox.Enqueue(new TransportEvent("f2", TransportEvent.SpectateStarted, Reason: "Watchable Friend"));
+        bt.Inbox.Enqueue(new TransportEvent("f2", TransportEvent.SpectateStarted, Reason: "Watchable Friend", Stream: "pose-f2"));
         bt.Inbox.Enqueue(new TransportEvent("f2", TransportEvent.SpectateScore, Frame: Encoding.UTF8.GetBytes("{\"active\":true,\"score\":1234,\"accuracy\":85.5,\"remaining\":20}")));
         Pump();
         var watching = View(b).GetProperty("watch");
-        Check(watching.GetProperty("scenario").GetString() == "Synthetic A" && watching.GetProperty("state").GetString() == "missing" && watching.GetProperty("message").GetString()!.Contains("don’t have"), "The friend's scenario is known, and missing content is explained");
+        Check(watching.GetProperty("scenario").GetString() == "Synthetic A" && watching.GetProperty("state").GetString() == "missing" && watching.GetProperty("stream").GetString() == "pose-f2" && watching.GetProperty("message").GetString()!.Contains("don’t have"), "The friend's scenario is known, and missing content is explained");
         b.Act("watch-started", default);
         Check(JsonDocument.Parse(b.NoticeText()).RootElement.GetProperty("badge").GetString() == "Watching Watchable Friend · 1,234 · 85.5% · 20 s left", "The spectator sees the friend's live stats over their view");
         bt.Inbox.Enqueue(new TransportEvent("f2", TransportEvent.SpectateEnded, Reason: "declined"));
@@ -509,7 +509,7 @@ static class MultiplayerChecks
         Check(Expect("xfer.cancel").GetProperty("reason").GetString() == "complete", "Finished transfers are closed as complete");
         // Spectating without a lobby (contract §6).
         Check(steam.RequestSpectate(friend) && Expect("spectate.request").GetProperty("rate").GetInt32() == 60, "Spectate requests go to the bridge");
-        Write(new { v = 1, ev = "spectate.started", peer = friend, name = "Synthetic Friend", direct = true });
+        Write(new { v = 1, ev = "spectate.started", peer = friend, name = "Synthetic Friend", direct = true, stream = "pose-7" });
         Write(new { v = 1, ev = "spectate.score", active = true, paused = false, score = 10, seconds = 5, remaining = 55, shots = 4, hits = 3, kills = 2, accuracy = 75 });
         Write(new { v = 1, ev = "spectate.asked", from = "76561190000000008", fromName = "Synthetic Asker" });
         Write(new { v = 1, ev = "spectator.joined", peer = "76561190000000009", name = "Synthetic Viewer" });
@@ -518,7 +518,7 @@ static class MultiplayerChecks
         Write(new { v = 1, ev = "spectate.ended", peer = friend, reason = "stopped" });
         var spectateEvents = new List<TransportEvent>();
         Check(Until(() => { spectateEvents.AddRange(steam.Drain()); return spectateEvents.Any(e => e.Kind == TransportEvent.SpectateEnded); }), "Spectate events arrive");
-        Check(spectateEvents.Any(e => e.Kind == TransportEvent.SpectateStarted && e.Reason == "Synthetic Friend" && e.Host) && spectateEvents.Any(e => e.Kind == TransportEvent.SpectateScore)
+        Check(spectateEvents.Any(e => e.Kind == TransportEvent.SpectateStarted && e.Reason == "Synthetic Friend" && e.Host && e.Stream == "pose-7") && spectateEvents.Any(e => e.Kind == TransportEvent.SpectateScore)
             && spectateEvents.Any(e => e.Kind == TransportEvent.SpectateAsked && e.Peer == "76561190000000008" && e.Reason == "Synthetic Asker")
             && spectateEvents.Any(e => e.Kind == TransportEvent.SpectatorJoined && e.Peer == "76561190000000010" && e.Host) && spectateEvents.Any(e => e.Kind == TransportEvent.SpectatorLeft), "started, score, asked, joined, the quiet list sync and left all map");
         steam.AnswerSpectate("76561190000000008", true); steam.SetSpectatePrivacy("ask"); steam.RemoveSpectator("76561190000000010");

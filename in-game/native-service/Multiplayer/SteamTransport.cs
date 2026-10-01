@@ -269,7 +269,9 @@ sealed class SteamTransport : IMultiplayerTransport
                     if (Str(e, "from") is { } asker) events.Enqueue(new TransportEvent(asker, TransportEvent.SpectateAsked, Reason: Str(e, "fromName")));
                     break;
                 case "spectate.started":
-                    if (Str(e, "peer") is { } watched) events.Enqueue(new TransportEvent(watched, TransportEvent.SpectateStarted, Reason: Str(e, "name"), Host: Bool(e, "direct")));
+                    // Contract addition: stream, the pose stream id AimModCore's spectator view follows.
+                    if (Str(e, "peer") is { } watched) events.Enqueue(new TransportEvent(watched, TransportEvent.SpectateStarted, Reason: Str(e, "name"), Host: Bool(e, "direct"),
+                        Stream: Str(e, "stream") is { Length: > 0 and <= 64 } stream && stream.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.' or ':') ? stream : null));
                     break;
                 case "spectate.ended" when Str(e, "peer") is { } endedPeer:
                     events.Enqueue(new TransportEvent(endedPeer, TransportEvent.SpectateEnded, Reason: Str(e, "reason")));

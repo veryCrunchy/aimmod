@@ -239,8 +239,9 @@
   var watchTried=0,watchStartedFor='';
   function startWatchView(w){
     // Retried every few seconds until AimModCore's spectator view accepts (same scenario, pause menu).
-    var key=w.peer+'|'+w.scenario;if(watchStartedFor===key||Date.now()-watchTried<3000||!w.scenario)return;watchTried=Date.now();
-    xhr('POST','/native-replay',{action:'spectate',scenario:w.scenario,mapName:w.mapName||'',mapScale:w.mapScale||1,label:w.name},function(ok,data){
+    var key=w.peer+'|'+w.scenario+'|'+(w.stream||'');if(watchStartedFor===key||Date.now()-watchTried<3000||!w.scenario)return;watchTried=Date.now();
+    var body={action:'spectate',scenario:w.scenario,mapName:w.mapName||'',mapScale:w.mapScale||1,label:w.name};if(w.stream)body.stream=w.stream;
+    xhr('POST','/native-replay',body,function(ok,data){
       if(ok){watchStartedFor=key;act('watch-started');}
       else if(data&&data.message)lastWatchReason=String(data.message);
     });
@@ -283,20 +284,32 @@
     p.appendChild(body);return p;
   }
   // Follow a player's camera in AimModCore's spectator view (pause menu, same scenario).
-  var spectateShown='';
-  function spectate(id){act('spectate',{member:id},function(ok){if(ok)startSpectateView(true);});}
-  function followLeader(on){act('spectate-follow',{on:on},function(ok){if(ok&&on)startSpectateView(true);});}
-  function stopSpectate(){spectateShown='';act('spectate-stop');}
+  // AimModCore follows the bridge's pose stream (stream id from spectate.started). Switching
+  // players resends the same call with only stream and label changed; the view cuts in place.
+  var spectateShown='',spectateWanted=false,spectateLoud=false,spectateAskedAt=0;
+  function want(loud){spectateWanted=true;spectateLoud=loud;spectateAskedAt=Date.now();if(view&&view.lobby)keepSpectateView(view.lobby);}
+  function spectate(id){act('spectate',{member:id},function(ok){if(ok)want(true);});}
+  function followLeader(on){act('spectate-follow',{on:on},function(ok){if(ok&&on)want(true);});}
+  function stopSpectate(){spectateShown='';spectateWanted=false;act('spectate-stop');}
   function startSpectateView(loud){
-    var s=view&&view.lobby&&view.lobby.spectate;if(!s)return;spectateShown=s.member;
-    xhr('POST','/native-replay',{action:'spectate',scenario:s.scenario,mapName:s.mapName,mapScale:s.mapScale,label:s.label},function(started,data,status){
+    var s=view&&view.lobby&&view.lobby.spectate;if(!s)return;spectateShown=s.member+'|'+(s.stream||'');
+    var body={action:'spectate',scenario:s.scenario,mapName:s.mapName,mapScale:s.mapScale,label:s.label};if(s.stream)body.stream=s.stream;
+    xhr('POST','/native-replay',body,function(started,data,status){
       if(!loud)return;
       if(started)toast((s.follow?'Following the leader, now ':'Watching ')+safe(s.name)+'. Return to the pause menu to see their view.');
       else toast(data&&(data.reason||data.error)?'Can’t spectate yet: '+safe(String(data.reason||data.error),'')+'.':status===409?'Open the pause menu in the same scenario to spectate.':'Spectating isn’t available in this build.');
     });
   }
   // Follow the leader moves the camera in the service; the spectator view takes the new name quietly.
-  function keepSpectateView(lobby){var s=lobby.spectate;if(s&&s.follow&&spectateShown&&s.member!==spectateShown)startSpectateView(false);if(!s)spectateShown='';}
+  function keepSpectateView(lobby){
+    var s=lobby.spectate;if(!s){spectateShown='';spectateWanted=false;return;}
+    if(s.follow&&spectateShown)spectateWanted=true;
+    var key=s.member+'|'+(s.stream||'');if(!spectateWanted||key===spectateShown)return;
+    // Wait for the bridge's stream id (a few seconds at most; older bridges don't send one).
+    if(!s.stream&&!s.started&&Date.now()-spectateAskedAt<3000){clearTimeout(streamTimer);streamTimer=setTimeout(function(){if(view&&view.lobby)keepSpectateView(view.lobby);},3100);return;}
+    var loud=spectateLoud;spectateLoud=false;startSpectateView(loud);
+  }
+  var streamTimer=null;
   function spectatePanel(lobby,match,others){
     var s=lobby.spectate,watching=!!s,me=match.players.indexOf(lobby.self)<0;
     var sp=node('div','panel mp-spectate');var sh=node('div','panel-head');var st=node('div','head-text');

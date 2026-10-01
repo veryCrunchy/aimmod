@@ -9,6 +9,9 @@ sealed partial class MultiplayerService
 {
     const long FollowSwitchMs = 8000;
     bool followLeader;
+    // Pose stream ids the bridge reported per watched peer (spectate.started {stream}).
+    readonly Dictionary<string, string> spectateStreams = new();
+    string? spectateStartedFor;
     long followSwitchedAt = long.MinValue / 2;
 
     LobbyResult SpectateFollow(bool on)
@@ -34,7 +37,7 @@ sealed partial class MultiplayerService
         if (Current is not { Match: { Phase: MatchPhases.Live or MatchPhases.Round } } lobby) return;
         if (Leader(lobby) is not { } leader || leader == spectating || now - followSwitchedAt < FollowSwitchMs) return;
         if (!transport.StartSpectate(leader, 60)) return;
-        spectating = leader; followSwitchedAt = now; watchScore = null;
+        spectating = leader; spectateStartedFor = null; followSwitchedAt = now; watchScore = null;
     }
 
     // "Watching Juniper · 12,400 · 18 s left" over the spectator view, from the lobby's live line.
