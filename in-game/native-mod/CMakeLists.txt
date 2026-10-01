@@ -33,6 +33,7 @@ add_library(aimmod_core STATIC
     core/src/GameCommand.cpp
     core/src/Supervisor.cpp
     core/src/Settings.cpp
+    core/src/CosmeticsPreview.cpp
 )
 target_include_directories(aimmod_core PUBLIC core/include)
 if(MSVC)
@@ -61,6 +62,7 @@ if(AIMMOD_BUILD_MOD)
         mod/src/GameControl.cpp
         mod/src/Output.cpp
         mod/src/ServiceHost.cpp
+        mod/src/CosmeticsPreview.cpp
     )
     target_include_directories(AimModCore PRIVATE mod/src)
     target_link_libraries(AimModCore PRIVATE aimmod_core)

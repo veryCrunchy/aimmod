@@ -2,6 +2,7 @@
 // Game-thread observer: drives the lifecycle machine from polls (and optional
 // broadcast observations), publishes live telemetry, writes the journal and
 // runs the replay sampler. Read-only with respect to the game.
+#include "CosmeticsPreview.hpp"
 #include "GameControl.hpp"
 #include "Presenter.hpp"
 #include "ReplaySampler.hpp"
@@ -83,6 +84,7 @@ namespace aimmod
         ReplaySampler m_sampler;
         Presenter m_presenter;
         GameControl m_control;
+        CosmeticsPreview m_preview;
         bool m_inChallenge{}, m_loading{};
         // Clip hotkey edge detection; self-pose stream; freeplay timer probe.
         bool m_clipKeyDown{};
