@@ -67,7 +67,8 @@ local inventory = {
         '/Script/GameSkillsTrainer.MapCreatorTextLabel', '/Script/GameSkillsTrainer.MapCreatorWater',
         '/Script/GameSkillsTrainer.KovaakMapCreatorRepository', '/Script/GameSkillsTrainer.Duels',
         '/Script/GameSkillsTrainer.TargetMarker', '/Script/CableComponent.CableActor',
-        '/Script/Engine.StaticMeshActor', '/Game/FirstPersonBP/Blueprints/Bodies/FPSCharacter.FPSCharacter_C',
+        -- The FPSCharacter_C blueprint class loads with the first scenario, so it's checked per world.
+        '/Script/Engine.StaticMeshActor',
     },
     functions = {
         -- remote avatars
@@ -250,7 +251,7 @@ local function worldReport(pc, gs)
             log('  abilities: ' .. describeAbilities(c))
         end
     end)
-    log('characters: ' .. count)
+    log('characters: ' .. count .. ' (FPSCharacter_C class ' .. (valid(try(StaticFindObject, '/Game/FirstPersonBP/Blueprints/Bodies/FPSCharacter.FPSCharacter_C')) and 'loaded' or 'not found') .. ')')
     for _, name in ipairs({'MapCreatorSpawnPoint', 'MapCreatorJumpPad', 'MapCreatorTeleporter', 'MapCreatorHurtKill',
                            'MapCreatorWaypoint', 'MapCreatorTextLabel', 'MapCreatorWater', 'TheMetaTrainerTarget',
                            'TargetMarker', 'MetaProjectile', 'TriggerBox'}) do
@@ -274,7 +275,8 @@ local function worldReport(pc, gs)
             local rows = {}
             local ok = pcall(function() tables:GetDataTableRowNames(dt, rows) end)
             local names = {}
-            for i, r in ipairs(rows) do if i <= 200 then names[#names + 1] = str(r) end end
+            -- Out-parameter elements arrive wrapped (RemoteUnrealParam): unwrap before ToString.
+            for i, r in ipairs(rows) do if i <= 200 then names[#names + 1] = str(try(function() return r:get() end) or r) end end
             log('data table ' .. short(dt) .. ': ' .. (ok and (#rows .. ' rows: ' .. table.concat(names, ',')) or 'unreadable'))
         else
             log('data table not loaded: ' .. path)

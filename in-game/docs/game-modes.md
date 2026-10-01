@@ -1,7 +1,9 @@
 # Multiplayer game modes for AimMod on KovaaK's
 
-Status: design and feasibility study, plus a read-only runtime probe
-(`in-game/probes/modes-probe`). Nothing here ships yet.
+Status: design and feasibility study, a read-only runtime probe
+(`in-game/probes/modes-probe`, first live run in section 9.1), and the first
+mode under construction: the tracking duel (section 6.3.1). The offline avatar
+spike is built (section 9.3). Nothing here is released.
 
 Target: KovaaK's 3.9.11 (UE 4.26, UE4SS `e3ba1016`). Evidence comes from the
 reflection dumps of this exact build (UHT and C++ header dumps, the object dump
@@ -24,10 +26,26 @@ Builds on:
   writes complete `.sce` files with character, weapon, bot and movement
   profiles.
 
+### Since the first draft
+
+- **AimModSteam** (`in-game/steam-bridge`, see multiplayer.md §6) now shows
+  remote players as real characters, as recommended in 3.1:
+  - `ATheMetaAIController::Spawn` bots, AI off, invulnerable;
+  - driven from a 30 Hz pose stream with about 100 ms of interpolation;
+  - the look comes from `aimmod.char.<id>` (`LoadCharacterProfile`);
+  - plus lobbies, P2P, spectating, file transfer and the Workshop.
+- **The lobby service** has score race, duel, FFA rounds and practice, generated
+  match scenarios, content transfer, replays, history, auto-ready, rematch and
+  reconnect. The tracking duel is now a lobby mode there.
+- **AimModCore** has game commands (load, start with freeplay overrides,
+  refresh scenarios), the replay presenter, and the `self-pose.tsv` feed
+  (pose format 1: the local camera at 60 Hz plus drawn target capsules). The
+  tracking duel builds on that feed.
+
 Evidence tags used below: **[dump]** found in the 3.9.11 reflection dumps,
 **[exe]** found in executable strings, **[live]** already verified in game by
-earlier AimMod work, **[probe]** still to be confirmed by the probe in
-section 9.
+earlier AimMod work or the probe's first run (9.1), **[probe]** still to be
+confirmed by the probe's full test script or a spike.
 
 ## 1. Summary
 
@@ -601,9 +619,10 @@ by frame time, from what the attacker sees:
 
 - `onTarget(t)` is true when the camera ray (at the frame's final view
   rotation) intersects the opponent avatar's hull at its rendered pose. The
-  hull is the avatar profile's bounding body (capsule) and head (sphere). If
-  the mode setting "fire to score" is on (default **on**, KovaaK's-like), the
-  fire button must also be held (`FireHeld`).
+  hull is the avatar profile's bounding body (capsule) and head (sphere). A
+  later "fire to score" option would also require the fire button to be held
+  (`FireHeld`). The default is **off**, so aiming alone scores, and the first
+  build has no option.
 - **Time-on-target:** `TOT = Σ onTarget(t) · dt`. Round score = `TOT /
   roundDuration` in %, shown with one decimal.
 - **Head bonus** (optional, default off): a ray through the head sphere counts
@@ -629,6 +648,85 @@ by frame time, from what the attacker sees:
   hit hull), and the arena is symmetric with mirrored spawns.
 - An anti-camping option (default off) is a dodger speed floor: below
   `minSpeed` for more than 1 s, the attacker's TOT accrues at 1.25×.
+
+#### 6.3.1 What's built (lobby service, `feat/kovaaks-game-modes`)
+
+The defaults are under user review: alternating rounds, aim-only scoring, and
+host-checked hits with a 200 ms rewind cap.
+
+- **Mode `tracking-duel`** (`LobbyModes.Tracking`):
+  - exactly two players;
+  - `rounds` = attacks each (default 3, max 5), so 6 rounds by default;
+  - `timeLimit` = round length (default 10 s, range 10–60 s; never the
+    scenario's own length);
+  - roles alternate: the first player attacks in odd rounds;
+  - the dodger's line shows `dodger`;
+  - the match is won on the total time-on-target %, then the best round.
+- **Arena scenario.** `MatchScenario` always generates one:
+  - invincible players and bots;
+  - `ScorePerHit/Damage/Kill=0`, so nothing scores natively;
+  - the base scenario's target bots are removed;
+  - one invisible, passable, inert helper bot (`AimMod Hidden Bot` with body
+    `AimMod Hidden`) is added, because AimModSteam spawns avatars from a bot
+    profile the scenario already has;
+  - the KovaaK's run lasts 10 s longer than the round, so the host, not the
+    game, ends the round.
+- **Data path.**
+  - During a round, every player's service keeps AimModCore's
+    `self-pose.request` fresh.
+  - It reads `self-pose.tsv` and sends `track` batches to the host every
+    100 ms (reliable).
+  - The batches hold camera samples (`t, x, y, z, pitch, yaw`) and "seen"
+    rows: the target capsules the game drew, stamped with the newest pose's
+    time.
+  - All times are on the host clock (`ClockSync`).
+  - KovaaK's own score frames are refused in this mode.
+- **Host scoring** (`TrackingRound.Compute`):
+  - The dodger is the drawn target whose rows best match the dodger's own
+    track, so other drawn targets (the helper bot) are ignored.
+  - A drawn row counts when it matches the dodger's track within 25 cm at a
+    lag of 0–200 ms (the **rewind cap**). The attacker's ray is then scored
+    against that drawn capsule: favour the shooter.
+  - Other samples use the dodger's own track, rewound by the measured median
+    lag, capped at 200 ms. Without drawn rows, the lag is estimated as
+    100 ms + half of both round trips.
+  - Eye height and capsule size come from the drawn rows when present.
+    Otherwise the defaults are a 64 cm eye above the centre and the avatar
+    profile's 45 cm × 115 cm bounding box.
+  - Gaps over 50 ms count as off target.
+  - A round is **disputed** when coverage is under 80%, when more than 10% of
+    drawn rows don't match, or when there's no dodger track.
+  - The live percentage feeds the match snapshot (`tracking`) a few times a
+    second for the HUD.
+- **Checks:** 36 self-tests, including geometry, fair tracking at 120 ms lag
+  (> 97%, lag measured), blind host rewind, fabricated drawn hulls (disputed),
+  a 350 ms lag beyond the cap (capped and disputed), half coverage, alternating
+  rounds with a winner on total, a player leaving, and the arena generator.
+
+**Needs from other components** (requested through the coordinator):
+
+1. **AimModSteam: show avatars in service lobbies.** Avatars are drawn only
+   with `ghost_demo=1` today (`showRemote = ghost_demo`). The duel needs them
+   whenever a lobby match runs on the same scenario.
+2. **AimModSteam: spawn from a named bot profile.** It should spawn from the
+   profile the service names (for example a lobby key
+   `aimmod.avatar_bot=AimMod Hidden Bot`), and work when the scenario's only
+   bot is that helper.
+3. **AimModSteam: re-apply looks and inert flags on every scenario load.**
+   The probe showed that KovaaK's re-profiles surviving bots in place on a
+   scenario change, in the same world (9.1). So `LoadCharacterProfile` and
+   the inert flags must be re-applied when the scenario changes, not only
+   when the world changes.
+4. **AimModCore: identify avatars in the `target` rows.** Add `avatar	<peer
+   hash>` (or a flag) to the rows for AimModSteam's avatars, so the host
+   doesn't have to infer the dodger by matching. The matching stays as the
+   check.
+5. **AimModCore: optional extra fields.** A `self` row with the actor
+   location and capsule removes the eye-height estimate. A `fired` flag per
+   pose row enables "fire to score" and spray statistics.
+6. **HUD:** a Gameface overlay element for the tracking bar (`match.tracking`:
+   attacker, %, lag, disputed) and the "you track / you dodge" banner. The
+   lobby panel shows roles and results already.
 
 ### 6.4 Vampiric 1v1
 
@@ -814,12 +912,12 @@ blocked.
 | Mode | Avatars | Damage and health | Rules | Map needs | Verdict | Key evidence |
 | --- | --- | --- | --- | --- | --- | --- |
 | Score race | not needed | not needed | A (exists) | none | **ready** | lobby service; AimModCore score journal |
-| Practice together | A: bot avatars (P: pose and animation) | none (invincible) | A | none | **feasible** | `FPSCharacter_C` bots, `ATheMetaAIController::Spawn`, `K2_SetActorLocationAndRotation` |
-| Tracking duel | A | none | A: TOT sampling (AimMod ray), host recompute | symmetric arena | **feasible, first PvP mode** | `LineTraceSingle`, avatar hull from the bounding-box profile; native `CharactersHit` and beam counters as evidence (P on invincible bots) |
-| Deathmatch / 1v1 | A | A via N: `HandleDamage`, native death and respawn (P) | A: claims, lag comp | spawn points (N) | **feasible** | `HandleDamage`, `Death`, `Respawn`, `GetSpawnPointsForTeam` |
+| Practice together | A: **built** in AimModSteam (spawn, AI off, invulnerable, pose, look); animation P | none (invincible) | A (lobby mode exists) | none | **feasible, avatars built; live check pending** | `ATheMetaAIController::Spawn`, `UpdateClientLocAndRot`/`K2_SetActorLocationAndRotation`, `LoadCharacterProfile` |
+| Tracking duel | A (bridge avatars) | none | A: **built**, host TOT with 200 ms rewind cap (6.3.1) | arena generated (helper bot, no targets) | **in progress: service done; bridge items 6.3.1/1–3 needed** | `self-pose.tsv` camera + target capsules; `TrackingRound` checks |
+| Deathmatch / 1v1 | A | A via N: `HandleDamage`, native death and respawn (P); stock players are invulnerable (9.1), so the generated scenario sets `InvinciblePlayer=false` | A: claims (polled counters), lag comp | spawn points (N, `SpawnableSpawnPoint_C` with TeamMask live) | **feasible** | `HandleDamage`, `Death`, `Respawn`, `GetSpawnPointsForTeam` |
 | Vampiric 1v1 | A | A: host lifesteal + `HandleHeal`/`SetHealth`; N field exists but unused | A | spawns | **feasible** | `HandleLifesteal`, `HandleHeal`, `LifeStealPercent` |
-| Instagib | A | N weapon profile + A authority | A | arena map | **feasible** | `FWeaponProfileNative.DamagePerShot`, flat knockback fields |
-| CS competitive | A | A + A armour | A: rounds, economy, bomb | **A metadata** (buy zones, sites) via map-port; N spawns with TeamMask | **feasible, largest** | `SetWeaponProfileByString(slot)`, 8 weapon slots, `SetIgnoreMoveInput`, `IsInputKeyDown`, `SetTeam`; freeze attack block (P) |
+| Instagib | A | N weapon profile + A authority | A | arena map | **feasible** | `FWeaponProfileNative.DamagePerShot`; stock Quake-style profiles (`Railgun`, `Rocket Launcher`, `LG`) seen live on bots (9.1) |
+| CS competitive | A | A + A armour | A: rounds, economy, bomb | **A metadata** (buy zones, sites) via map-port; N spawns with TeamMask | **feasible, largest** | `SetWeaponProfileByString(slot)`, 8 weapon slots (live: always 8 allocated), `SetIgnoreMoveInput`, `IsInputKeyDown`, `SetTeam`; the CS walk key is a native Sprint ability (live); freeze attack block (P) |
 | CTF | A | A | A: flags | A metadata (flag stands) | **feasible** | `StaticMeshActor` markers (live), position checks |
 | Weapon drops | A | n/a | A | none | **feasible** | `SetWeaponProfileByString`, markers |
 | Pickups (Reflex-style) | n/a | A grants | A | A metadata; Reflex `Pickup` not loaded natively (**B natively**) | **feasible as AimMod** | `EMapCreatorLegacyMapEntityType` has no pickup |
@@ -829,8 +927,10 @@ blocked.
 
 Nothing is blocked outright. The two native gaps (pickups and grapple) are
 filled by AimMod logic. The real risks are in the P items: avatar animation
-when the pose is set externally, native death and respawn after injected
-damage, and a clean attack block for freeze time.
+when the pose is set externally (the offline spike in 9.3 checks it), native
+death and respawn after injected damage, and a clean attack block for freeze
+time. Hit registration polls weapon counters rather than hooking shot
+functions (9.1).
 
 ## 8. Changes needed elsewhere
 
@@ -943,6 +1043,75 @@ What it logs:
 4. **Deltas:** every change of health, damage taken or done, kills, deaths,
    lives, team or hidden state per character, every 0.5 s.
 
+### 9.1 First live run (KovaaK's 3.9.11, during normal play)
+
+The probe ran through two scenario loads: a stock scenario on `kovaim1.map`,
+then a Quake-style freeplay scenario on `boxerhalflimited.map` (map scale
+3.8). That gave 54 log lines. The full test script (shooting, taking damage,
+dying) hasn't been run yet.
+
+**What the log shows:**
+
+- **Inventory: 97 of 98 present.** Every class and function the framework
+  plans to call exists at runtime. The one miss,
+  `/Game/.../FPSCharacter.FPSCharacter_C`, was looked up on the main menu,
+  before any scenario had loaded the blueprint. It's in the dump of a running
+  scenario. The probe now checks it once per world.
+- **Hooks: 43 of 43 bound.** Only `MetaCharacter:SetHealth` fired (3 calls,
+  around the scenario load). Every other count stayed at 0. In this window,
+  though, nobody fired a shot (`fired=0` on every weapon), took damage or died
+  (no delta lines). So the zero counts for shot, damage, death and kill hooks
+  **are expected either way and don't by themselves prove native calls**.
+  - Together with AimModCore's earlier finding that shot and score functions
+    are called natively on 3.9.11, the design keeps polling: weapon counters,
+    `CharactersHit`, character health and damage fields, and AimMod's own
+    ray.
+  - Probe steps 3–6 still have to settle `Send_ShotHit`, `DamageEnemy`,
+    `HandleDamage` and `Death`. Even if they fire, polling stays the primary
+    source.
+  - `SetHealth` reaching a hook means at least some character setters go
+    through reflection. A health override from AimMod can therefore be
+    observed, and is a real UFunction call.
+- **Characters are one class [live].** The player and every bot are
+  `FPSCharacter_C`. Bots carry `botProfile` (their `TheMetaAIController`).
+  Meso/McCree bots report `meshHits=true`; model-`None` bots use bounding
+  boxes.
+- **Bots survive scenario changes.** The same bot object was reused across
+  the two scenarios: same name; health 0 → 100; invulnerable false → true;
+  re-profiled in place. The world (KovaaK's sandbox) didn't change, only the
+  map. So anything AimMod sets on a bot must be re-applied on every scenario
+  change, not just on world change (see 6.3.1/3).
+- **Teams.**
+  - On `kovaim1` the player is team 0 and marked enemy, and so is the bot.
+  - In the Quake scenario the player is team 1 (`enemy=false`) and the bots
+    are team 0 (`enemy=true`).
+  - So team 0 behaves as "no team" (everyone hostile), suitable for FFA, and
+    `bOnEnemyTeam` is the per-character "hostile to the local player" flag
+    the colours use.
+- **Players are invulnerable in stock scenarios** (`invuln=true` in both).
+  Damage modes must set `InvinciblePlayer=false` in their generated scenarios,
+  as planned.
+- **Weapons.**
+  - `NativeWeapons` always has 8 entries [live], whether a slot is configured
+    or not, and `GetWeaponCount` counts the configured ones.
+  - Stock profiles already carry multi-weapon loadouts: a bot with `Railgun`,
+    `Rocket Launcher` and `LG`, and a player profile with `LG` in slot 3.
+    These are useful bases for instagib and arena modes.
+- **Abilities.** 4 ability slots are always allocated. The CS player profile's
+  walk key is a native Sprint ability (`CS Walk`, type 3).
+- **Map objects.**
+  - Spawn points are the blueprint `SpawnableSpawnPoint_C` (an
+    `AMapCreatorSpawnPoint`), with `TeamMask` 1 and 2 on the Quake map
+    [live].
+  - Waypoints are present.
+  - One `TriggerBox`: the map repository's fall-out respawner.
+  - No jump pads or teleporters on these maps.
+- **Data tables.** The prop table has 154 rows and the game-object table 8.
+  The names printed as `RemoteUnrealParam` because the probe didn't unwrap the
+  out-parameter. That's fixed, so the next run lists them.
+- **Character models.** All 11 skeletal models are loaded once a scenario
+  with skeletal bots is up. None were loaded in the first scenario's snapshot.
+
 ### Deploy (manual, game closed; don't use the live install for anything else)
 
 1. Copy `in-game/probes/modes-probe/AimModModesProbe` to
@@ -976,29 +1145,63 @@ No build step is needed.
 7. Open a map-creator map with jump pads or teleporters if available (map
    object counts).
 
-### Questions the probe and the first spike settle
+### 9.2 Questions: answered and open
 
-| Question | Settled by |
+| Question | Status |
 | --- | --- |
-| Do `Send_ShotHit`, `DamageEnemy`, `HandleDamage` fire as hooks on 3.9.11? | hook counts in steps 3 and 5 |
-| Do weapon counters and `CharactersHit` advance on invincible bots? | step 6 deltas (weapons line) |
-| Does an AI-off bot accept an external pose and animate? `UpdateClientLocAndRot` vs `K2_SetActorLocationAndRotation` + `Velocity` | spike: drive one bot from a recorded replay camera path offline (no network), in a test build of the Play module |
-| Does `HandleDamage` on the player kill and natively respawn it? | spike in a test scenario with `InvinciblePlayer=false` |
-| Clean attack block for freeze time? | spike: `bAbilityBlockingAttack`, `StunMe`, `bWantsFire` |
-| `SetWeaponProfileByString` for slots 1–7 and `ChangeWeapon` | spike, building on AimModCore's existing slot-0 binding |
-| Is `MetaSpeedMultiplier` honoured (haste)? | spike |
+| Do the framework's classes and functions exist at runtime? | **Answered:** 97/98; the miss is a not-yet-loaded blueprint (9.1) |
+| Are bots and the player the same class, with mesh hits on Meso? | **Answered:** yes (9.1) |
+| Do shot and damage functions fire as hooks? | **Open but moot:** no shots in the first run. The design polls regardless. Steps 3 and 5 settle it |
+| Do weapon counters and `CharactersHit` advance on invincible bots? | **Open:** step 6. The tracking duel doesn't depend on it (ray scoring) |
+| Weapon slots | **Answered:** 8 always allocated; stock multi-weapon loadouts exist |
+| Team semantics | **Answered:** team 0 = no team (all hostile); 1/2 teams; `bOnEnemyTeam` drives colours |
+| Spawn points with team masks at runtime | **Answered:** `SpawnableSpawnPoint_C`, masks 1 and 2 |
+| Do bots persist across scenario changes? | **Answered:** yes, re-profiled in place (new requirement 6.3.1/3) |
+| Can an AI-off bot be driven and spawned at runtime? | **Built** in AimModSteam (`Spawn`, inert, pose stream). Animation and look are a live check: the offline spike (9.3) |
+| Does `HandleDamage` on the player kill and natively respawn it? | **Open:** step 5 and a phase 2 spike |
+| Clean attack block for freeze time? | **Open:** phase 3 spike (`bAbilityBlockingAttack`, `StunMe`, `bWantsFire`) |
+| `SetWeaponProfileByString` for slots 1–7 and `ChangeWeapon` | **Open:** phase 2 spike |
+| Is `MetaSpeedMultiplier` honoured (haste)? | **Open:** phase 4 |
 
-The offline avatar spike is worth doing before any network code. AimModCore
-already has replays: play a recorded run's camera path onto a bot in a
-generated scenario and shoot it. That settles avatars, animation, hit feedback
-and the local hit test with zero networking.
+### 9.3 Offline avatar spike (built on `avatar_test=1`)
+
+This needs no second player and no network.
+
+1. Record a freeplay run on any map with AimMod: it's a normal replay.
+2. Run `AimMod.InGame.exe --export-avatar-path <replay id>` (optional:
+   `--output <AimMod folder>`). It writes `avatar-test-path.tsv`, the run's
+   camera at 30 Hz with its scenario, map and scale, next to AimMod's other
+   runtime files.
+3. Install AimModSteam's `config.ghost-demo.txt` with `avatar_test=1` (the
+   avatar test runs only in ghost-demo mode), and load **the same scenario**
+   in freeplay.
+4. The test avatar now follows the recorded path, looping. It's a real
+   `ATheMetaAIController::Spawn` bot with AI off, invulnerable, driven every
+   frame with `UpdateClientLocAndRot` and velocity (or
+   `avatar_drive=teleport`).
+   - The camera path is lowered by the local player's own eye height,
+     measured live, so the bot walks where the recorded player walked.
+   - On any other scenario it circles, as before, and the log says why.
+5. Check:
+   - the walk, run, jump and crouch animations;
+   - that the body faces its direction of travel;
+   - that bullets register on the Meso mesh, with hit markers and sounds;
+   - the `avatars:` lines in `UE4SS.log`.
+
+   For the tracking duel, also check that AimModCore's `self-pose.tsv` lists
+   the avatar in its `target` rows.
+
+The path parser and sampler (`steam-bridge/src/AvatarPath.*`) are unit
+tested: 131 core checks pass. The mod-side change compiles only against the
+private RE-UE4SS checkout, which wasn't available here, so it still needs a
+build.
 
 ## 10. Phased plan
 
 | Phase | Scope | Depends on | Outcome |
 | --- | --- | --- | --- |
-| 0 | Run the probe; offline avatar spike (replay path → bot); Play module skeleton with arming, undo and the shared-memory channel | AimModCore, dumps | the P items answered; avatar approach locked |
-| 1 | Score race (exists) and practice together; pose channel (binary fast frames over AimModNet); interpolation; tracking duel (alternating, then simultaneous) with host TOT recompute | phase 0, Steam bridge stage 3 | first PvP mode, no damage injection; netcode proven |
+| 0 | Run the probe; offline avatar spike (replay path → bot); Play module skeleton with arming, undo and the shared-memory channel | AimModCore, dumps | **Probe run once (9.1). Spike built (9.3), live run pending.** Play module not started |
+| 1 | Score race (exists) and practice together; pose channel (binary fast frames over AimModNet); interpolation; tracking duel (alternating, then simultaneous) with host TOT recompute | phase 0, Steam bridge stage 3 | **Pose channel, interpolation and avatars done in AimModSteam. Tracking duel (alternating) done in the service (6.3.1)**; needs the bridge items 6.3.1/1–3 and a two-player test |
 | 2 | Deathmatch FFA and 1v1, vampiric 1v1, instagib: hit claims, lag compensation, `damage`/`death`/`respawn`, spawn selection, lifesteal rule, instagib profile; post-match replay verification on the Hub | phase 1 | combat modes |
 | 3 | CS rounds: teams, `RoundController`, freeze and buy time, economy, shop and buy menu, armour model, bomb plant and defuse, map-port objective metadata, halftime, 5v5 lobby | phase 2, map-port metadata | CS competitive |
 | 4 | CTF (flags, carrier markers, captures), weapon drops, arena pickups (metadata from Source items and later Reflex import), AimMod grapple, gun game and the other compositions | phase 3 | Quake/Xonotic-style arena pack |
@@ -1017,8 +1220,10 @@ message types.
 2. **Hit authority:** favour-the-shooter claims with host rewind validation,
    capped at 200 ms (recommended), or host-only ray tests (worse feel at
    higher ping).
-3. **Tracking duel default:** alternating attacker/dodger (recommended) or
-   simultaneous. Also whether "fire to score" is on by default.
+3. **Tracking duel defaults** (built as recommended, awaiting confirmation):
+   alternating attacker/dodger rounds, aim-only time on target (no fire
+   button), host-checked against drawn hulls with a 200 ms rewind cap, 10 s
+   rounds and 3 attacks each.
 4. **CS rules:** CS2 values (as tabled) or a simplified economy; whether to
    model armour (host-side, no native equivalent); team size cap 5v5 (needs
    the lobby limit raised to 10).
