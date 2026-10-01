@@ -29,7 +29,7 @@ static class MultiplayerChecks
         Peers();
         SteamPipe();
         var root = Path.Combine(Path.GetTempPath(), "aimmod-mp-test-" + Guid.NewGuid().ToString("N"));
-        try { Content(root); Generator(root); Service(root); }
+        try { Content(root); Generator(root); Service(root); Transfers(root); }
         finally { try { Directory.Delete(root, true); } catch (IOException) { } }
         Console.WriteLine($"{count} multiplayer checks passed.");
     }
@@ -207,7 +207,7 @@ static class MultiplayerChecks
         foreach (var bad in new[] { Swap("aimmod.mp", "other"), Swap("\"v\":1", "\"v\":2"), Swap("\"command\"", "\"teleport\""), Swap("\"seq\":7", "\"seq\":-1"), "[]", "{", Swap("\"body\":{", "\"body\":[{").Replace("}}}", "}}]}") })
             Check(Protocol.Decode(Encoding.UTF8.GetBytes(bad)) is null, "Rejected frame: " + bad[..Math.Min(40, bad.Length)]);
         Check(Protocol.Decode(new byte[Protocol.MaxBytes + 1]) is null, "Oversized frames are rejected");
-        Check(!Protocol.Reliable("score") && Protocol.Reliable("snapshot") && Protocol.Types.Length == 16, "Score frames are unreliable, state is reliable");
+        Check(!Protocol.Reliable("score") && Protocol.Reliable("snapshot") && Protocol.Types.Length == 17, "Score frames are unreliable, state is reliable");
         var sync = new ClockSync();
         sync.Add(0, 1050, 200); sync.Add(1000, 2010, 1020); sync.Add(2000, 3100, 2300);
         Check(sync.Rtt == 20 && sync.Offset == 1000, "Clock sync uses the minimum round-trip sample");
@@ -236,6 +236,28 @@ static class MultiplayerChecks
         public void Transfer(string peer) => HostActions.Add("transfer " + peer);
         public string? HostHint => null;
         public bool WorkshopDownload(string item) => false;
+        // Bulk lane stand-in: chunks arrive in order; DropAfter cuts a transfer short like a lost link.
+        public int BulkChunkBytes { get; set; }
+        public int DropAfter = -1, BulkSent;
+        public readonly List<(int Transfer, int Index)> BulkLog = [];
+        public readonly List<(string Peer, int Transfer, string Reason)> Cancelled = [];
+        public BulkSend BulkChunk(string peer, int transfer, int index, byte[] data)
+        {
+            if (BulkChunkBytes == 0 || !network.Peers.TryGetValue(peer, out var to)) return BulkSend.Unavailable;
+            BulkLog.Add((transfer, index)); BulkSent += data.Length;
+            if (DropAfter == 0)
+            {
+                // The link drops: both ends hear the transfer ended; this chunk never arrives.
+                DropAfter = -1;
+                to.Inbox.Enqueue(new TransportEvent(id, TransportEvent.BulkEnd, Reason: "disconnected", Transfer: transfer));
+                Inbox.Enqueue(new TransportEvent(peer, TransportEvent.BulkEnd, Reason: "disconnected", Transfer: transfer));
+                return BulkSend.Sent;
+            }
+            if (DropAfter > 0) DropAfter--;
+            to.Inbox.Enqueue(new TransportEvent(id, TransportEvent.BulkData, data, Transfer: transfer, Index: index));
+            return BulkSend.Sent;
+        }
+        public void BulkCancel(string peer, int transfer, string reason) => Cancelled.Add((peer, transfer, reason));
         public void Send(string peer, byte[] frame, bool reliable) { if (network.Peers.TryGetValue(peer, out var to)) to.Inbox.Enqueue(new TransportEvent(id, TransportEvent.Message, frame)); }
         public void Close(string peer) { }
         public IReadOnlyList<TransportEvent> Drain() { var list = Inbox.ToArray(); Inbox.Clear(); return list; }
@@ -325,7 +347,7 @@ static class MultiplayerChecks
         var hello = Expect("hello");
         Check(hello.GetProperty("v").GetInt32() == 1 && hello.TryGetProperty("id", out _), "hello opens the contract");
         const string self = "76561190000000001", friend = "76561190000000002", lobbyId = "109775240000000001";
-        Write(new { v = 1, ev = "ready", contract = 1, wire = 1, bridge = "test", steam = true, appId = 824270, self = new { peer = self, name = "Synthetic Host", initials = "SH" }, relay = "Current" });
+        Write(new { v = 1, ev = "ready", contract = 1, wire = 1, bridge = "test", steam = true, appId = 824270, self = new { peer = self, name = "Synthetic Host", initials = "SH" }, relay = "Current", features = new[] { "lobby", "p2p", "ugc", "xfer" }, maxChunk = 32768, xferWindow = 4 });
         Check(Until(() => steam.Available) && steam.LocalPeer == self && steam.LocalName == "Synthetic Host", "ready gives the local peer and persona name");
         var (core, _, _) = Lobby();
         steam.Advertise(core.Snapshot());
@@ -363,6 +385,24 @@ static class MultiplayerChecks
         steam.Transfer("not-a-steam-id");
         steam.Transfer(friend);
         Check(Expect("lobby.transfer").GetProperty("peer").GetString() == friend, "Host transfer reaches the bridge, and malformed ids never do");
+        // Contract additions: Workshop downloads and the bulk file lane.
+        Check(steam.BulkChunkBytes == 32768, "The bulk lane follows the bridge's maxChunk");
+        Check(steam.WorkshopDownload("3333089221") && Expect("ugc.download").GetProperty("highPriority").GetBoolean() && !steam.WorkshopDownload("../1"), "Workshop downloads go to the bridge with only numeric item ids");
+        Write(new { v = 1, ev = "ugc.progress", item = "3333089221", downloaded = 10, total = 40 });
+        Write(new { v = 1, ev = "ugc.installed", item = "3333089221", folder = "synthetic" });
+        var ugcEvents = new List<TransportEvent>();
+        Check(Until(() => { ugcEvents.AddRange(steam.Drain().Where(e => e.Kind == TransportEvent.WorkshopUpdate)); return ugcEvents.Count >= 2; }) && ugcEvents[0].Workshop!.Done == 10 && ugcEvents[1].Workshop!.State == "installed", "Workshop progress and install arrive as events");
+        var piece = new byte[100];
+        for (var i = 0; i < 4; i++) Check(steam.BulkChunk(friend, 7, i, piece) == BulkSend.Sent && Expect("xfer.chunk").GetProperty("index").GetInt32() == i, "Bulk chunks go out as xfer.chunk");
+        Check(steam.BulkChunk(friend, 7, 4, piece) == BulkSend.WindowFull, "The send window of four is respected");
+        Write(new { v = 1, ev = "xfer.ack", peer = friend, transfer = 7, index = 0, credit = 1 });
+        Check(Until(() => steam.BulkChunk(friend, 7, 4, piece) == BulkSend.Sent) && Expect("xfer.chunk").GetProperty("index").GetInt32() == 4, "An ack frees the window");
+        Write(new { v = 1, ev = "xfer.chunk", peer = friend, transfer = 9, index = 0, data = Convert.ToBase64String(piece) });
+        Write(new { v = 1, ev = "xfer.end", peer = friend, transfer = 9, reason = "disconnected", by = "peer" });
+        var bulkEvents = new List<TransportEvent>();
+        Check(Until(() => { bulkEvents.AddRange(steam.Drain()); return bulkEvents.Any(e => e.Kind == TransportEvent.BulkEnd); }) && bulkEvents.Any(e => e.Kind == TransportEvent.BulkData && e.Transfer == 9 && e.Frame!.Length == 100) && bulkEvents.First(e => e.Kind == TransportEvent.BulkEnd).Reason == "disconnected", "Incoming bulk chunks and transfer ends map to events");
+        steam.BulkCancel(friend, 7, "complete");
+        Check(Expect("xfer.cancel").GetProperty("reason").GetString() == "complete", "Finished transfers are closed as complete");
         Write(new { v = 1, ev = "member.left", peer = friend });
         Check(Until(() => steam.Drain().Any(e => e.Kind == TransportEvent.Left && e.Peer == friend)), "member.left means the member is gone");
         Write(new { v = 1, ev = "error", code = "rejected", message = "banned" });
@@ -429,6 +469,92 @@ static class MultiplayerChecks
         Check(!store.Write("My Scenario", "x", 4).Ok, "Only reserved names are written");
         for (var i = 0; i < 3; i++) store.Write(MatchScenario.Prefix + "Synthetic A - CS - 1111111" + i, "g" + i, 10 + i);
         Check(store.Files().Count == 2 && !File.Exists(Path.Combine(folder, MatchScenario.Name(cs) + ".sce")) && File.Exists(Path.Combine(folder, taken + ".sce")), "Old match scenarios are cleaned up, user files kept");
+    }
+
+    static void Transfers(string root)
+    {
+        // Rules: only bare names with allowed extensions in allowed folders.
+        foreach (var bad in new[] { "../evil.sce", "..\\evil.sce", "sub/evil.sce", "C:evil.sce", "evil.exe", ".sce", "CON.sce", "evil.sce ", "a..b.sce" })
+            Check(!ContentRules.SafeName("scenario", bad), "Unsafe name refused: " + bad);
+        Check(ContentRules.SafeName("scenario", "Synthetic A.sce") && ContentRules.SafeName("ability", "CS Walk.abilsprint") && ContentRules.SafeName("map", "synthetic_port.json") && !ContentRules.SafeName("map", "x.sce"), "Allowed names and extensions per folder");
+        var h = new string('a', 64);
+        Check(!ContentRules.Valid(new ContentManifest("k", [new ContentFile("scenario", "../evil.sce", 10, h, 10)], null)), "A manifest with path traversal is refused");
+        Check(!ContentRules.Valid(new ContentManifest("k", [new ContentFile("scenario", "big.sce", ContentRules.MaxFile + 1, h, 10)], null)), "Oversized files are refused");
+        Check(!ContentRules.Valid(new ContentManifest("k", [new ContentFile("script", "x.lua", 1, h, 1)], null)), "Unknown kinds are refused");
+
+        long now = 20_000_000;
+        var net = new MemoryNetwork();
+        var all = new List<MultiplayerService>();
+        string Game(string name) => Path.Combine(root, "xfer", name, "game");
+        // Host library: a scenario with a ported map and an ability file; the joiner has nothing.
+        var hostGame = Game("host");
+        var big = string.Join("\n", Enumerable.Range(0, 4000).Select(i => "{\"brush\":" + i + ",\"v\":\"" + Convert.ToHexString(BitConverter.GetBytes(i * 2654435761u)) + "\"}"));
+        WriteText(Path.Combine(hostGame, "maps", "synthetic_port.json"), big);
+        WriteText(Path.Combine(hostGame, "Saved", "SaveGames", "Abilities", "Synthetic Walk.abilsprint"), "Name=Synthetic Walk\n");
+        WriteText(Path.Combine(hostGame, "Saved", "SaveGames", "Scenarios", "Synthetic Port.sce"), "Name=Synthetic Port\nMapName=synthetic_port.json\nTimelimit=30\n\n[Character Profile]\nName=Player\nAbilityProfileNames=Synthetic Walk;;;\n\n[Map Data]\n{}\n");
+        Directory.CreateDirectory(Path.Combine(Game("join"), "Saved", "SaveGames"));
+        MultiplayerService Make(string id, string game, out MemoryTransport t)
+        {
+            t = new MemoryTransport(net, id); net.Peers[id] = t;
+            var output = Path.Combine(root, "xfer", id, "out"); Directory.CreateDirectory(output);
+            var service = new MultiplayerService(t, new ContentLibrary(game, () => new DateTime(2026, 1, 1).AddMilliseconds(now)), new NoGameControl(), () => new LocalRun(false, null, null, null, null, 0, 0, 0, null), () => [], () => null, output, false, () => now, autoTick: false);
+            all.Add(service); return service;
+        }
+        void Pump(int rounds = 10) { for (var i = 0; i < rounds; i++) { now += 100; foreach (var s in all) s.Tick(); } }
+        JsonElement View(MultiplayerService s) => JsonSerializer.SerializeToElement(s.View(), Protocol.Json);
+        var host = Make("xfer-host", hostGame, out var hostLink);
+        var joiner = Make("xfer-join", Game("join"), out var joinLink);
+        host.Act("create", J(new { mode = "practice", scenario = "Synthetic Port" }));
+        joiner.Act("join", J(new { code = net.Codes.Single().Key }));
+        Pump();
+        var offer = View(joiner).GetProperty("lobby").GetProperty("download").GetProperty("view");
+        Check(offer.GetProperty("state").GetString() == "ready" && offer.GetProperty("files").GetArrayLength() == 3 && offer.GetProperty("total").GetInt64() > big.Length, "A missing player is offered the scenario, map and ability with sizes");
+        Check(View(joiner).GetProperty("lobby").GetProperty("blockers").EnumerateArray().Any(b => b.GetProperty("text").GetString()!.Contains("scenario")), "Missing content still blocks the start");
+        // Frame path, interrupted by leaving the page alone: cancel, then retry resumes.
+        Check(joiner.Act("download", default).Ok, "Download starts");
+        Pump(2);
+        joiner.Act("download-cancel", default);
+        Pump(3);
+        Check(View(joiner).GetProperty("lobby").GetProperty("download").GetProperty("view").GetProperty("state").GetString() == "cancelled", "Download can be cancelled");
+        var partial = View(joiner).GetProperty("lobby").GetProperty("download").GetProperty("view").GetProperty("done").GetInt64();
+        // Retry over the bulk lane, with the link dropping part-way: it resumes from what is on disk.
+        hostLink.BulkChunkBytes = joinLink.BulkChunkBytes = 1024; hostLink.DropAfter = 2;
+        Check(joiner.Act("download-retry", default).Ok, "Retry continues the download");
+        for (var i = 0; i < 40 && View(joiner).GetProperty("lobby").GetProperty("content").GetProperty("scenario").GetString() != "ok"; i++) Pump(5);
+        var installed = Path.Combine(Game("join"), "maps", "synthetic_port.json");
+        Check(File.Exists(installed) && File.ReadAllText(installed) == big && File.Exists(Path.Combine(Game("join"), "Saved", "SaveGames", "Abilities", "Synthetic Walk.abilsprint")), "Files are verified and installed into the game folders");
+        Check(hostLink.BulkLog.Select(b => b.Transfer).Distinct().Count() >= 2 && hostLink.BulkLog.Count(b => b.Index == 0) >= 2, "A dropped bulk transfer resumes in a new transfer");
+        Check(partial > 0 && hostLink.BulkSent < offer.GetProperty("packed").GetInt64() * 2, "Resuming doesn't start over");
+        Check(hostLink.Cancelled.Any(c => c.Reason == "complete"), "Completed transfers are closed as complete");
+        Check(View(joiner).GetProperty("lobby").GetProperty("content").GetProperty("scenario").GetString() == "ok" && View(host).GetProperty("lobby").GetProperty("members").EnumerateArray().First(m => m.GetProperty("id").GetString() == "xfer-join").GetProperty("map").GetString() == "ok", "The member's state flips to has content");
+        // The host only serves current lobby content.
+        var server = new ContentServer(new ContentLibrary(hostGame), () => now);
+        var settings = new LobbySettings(Scenario: new ContentLibrary(hostGame).Scenario("Synthetic Port"));
+        Check(server.Request("x", settings, new string('b', 64), 0, 100) == "not-offered", "Files outside the lobby content are never served");
+
+        // Receiver checks, against a packed file the host would send.
+        var raw = System.Text.Encoding.UTF8.GetBytes("Name=Synthetic Port\n");
+        var packed = ContentRules.Pack(raw);
+        string Hash(byte[] b) => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(b)).ToLowerInvariant();
+        ContentDownload Fresh(string name) { var g = Path.Combine(root, "xfer", name, "game"); Directory.CreateDirectory(g); return new ContentDownload(g, Path.Combine(root, "xfer", name, "tmp"), () => now); }
+        var wrong = Fresh("mismatch");
+        wrong.Offer(new ContentManifest("k1", [new ContentFile("scenario", "Synthetic Port.sce", raw.Length, new string('c', 64), packed.Length)], null));
+        wrong.Start(); wrong.Chunk(new string('c', 64), 0, packed.Length, packed);
+        Check(wrong.State == "error" && wrong.Code == "hash" && !File.Exists(Path.Combine(root, "xfer", "mismatch", "game", "Saved", "SaveGames", "Scenarios", "Synthetic Port.sce")), "A hash mismatch is discarded, never installed");
+        var traversal = Fresh("traversal");
+        traversal.Offer(new ContentManifest("k2", [new ContentFile("scenario", "..\\..\\evil.sce", raw.Length, Hash(raw), packed.Length)], null));
+        Check(traversal.State == "error" && traversal.Code == "invalid", "Path traversal in a manifest is refused before anything is written");
+        var taken = Fresh("conflict");
+        WriteText(Path.Combine(root, "xfer", "conflict", "game", "Saved", "SaveGames", "Scenarios", "Synthetic Port.sce"), "my own version");
+        taken.Offer(new ContentManifest("k3", [new ContentFile("scenario", "Synthetic Port.sce", raw.Length, Hash(raw), packed.Length)], null));
+        Check(!taken.Start() && taken.Code == "conflict" && File.ReadAllText(Path.Combine(root, "xfer", "conflict", "game", "Saved", "SaveGames", "Scenarios", "Synthetic Port.sce")) == "my own version", "An existing file with different content is never overwritten");
+        var full = Fresh("disk"); full.FreeSpace = () => 10;
+        full.Offer(new ContentManifest("k4", [new ContentFile("scenario", "Synthetic Port.sce", raw.Length, Hash(raw), packed.Length)], null));
+        Check(!full.Start() && full.Code == "disk" && full.Error!.Contains("disk space"), "Not enough disk space is reported");
+        var gone = Fresh("gone");
+        gone.Offer(new ContentManifest("k5", [new ContentFile("scenario", "Synthetic Port.sce", raw.Length, Hash(raw), packed.Length)], null));
+        gone.Start(); gone.HostGone();
+        Check(gone.Code == "host-left" && gone.Error!.Contains("host left"), "The host leaving mid-transfer is explained");
     }
 
     sealed class FakeGame(params string[] caps) : IGameControl

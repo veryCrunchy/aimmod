@@ -191,7 +191,7 @@
     var p=node('div','mp-dev');add(p,node('span','mp-dev-label','Developer simulation'));
     var row=node('div','actions');
     function sim(label,op){return button(label,function(){act('sim',{op:op});},'compact quiet');}
-    if(inLobby){add(row,sim('Add player','add'),sim('Add player without the map','add-missing'),sim('Drop a player','drop'),sim('Reconnect','reconnect'),sim('Remove a player','remove'));if(view.lobby&&!view.lobby.isHost)row.appendChild(sim('Host leaves','host-leave'));}
+    if(inLobby){if(view.lobby&&!view.lobby.isHost)row.appendChild(sim('Pretend I’m missing the map','self-missing'));add(row,sim('Add player','add'),sim('Add player without the map','add-missing'),sim('Drop a player','drop'),sim('Reconnect','reconnect'),sim('Remove a player','remove'));if(view.lobby&&!view.lobby.isHost)row.appendChild(sim('Host leaves','host-leave'));}
     else add(row,sim('Incoming invite','invite'),sim('Launched from an invite','launch'));
     p.appendChild(row);return p;
   }
@@ -250,6 +250,7 @@
     page.appendChild(lobbyHead(lobby));
     var row=node('div','mp-row');page.appendChild(row);
     var main=node('div','mp-col mp-main'),side=node('div','mp-col mp-side');row.appendChild(main);row.appendChild(side);
+    var download=downloadPanel(lobby);if(download)main.appendChild(download);
     main.appendChild(playersPanel(lobby));
     main.appendChild(startBar(lobby));
     if(view.simulation)main.appendChild(devPanel(true));
@@ -313,6 +314,31 @@
       bar.appendChild(actions(lobby.settings.spectators?button('Watch',function(){act('role',{spectator:true});},'compact quiet'):null,ready));
     }
     return bar;
+  }
+  function mb(bytes){return F.number((bytes||0)/1048576,bytes<10485760?1:0)+' MB';}
+  // Download what this player is missing: Workshop first, otherwise from the host.
+  function downloadPanel(lobby){
+    var d=lobby.download;if(!d)return null;var v=d.view||{};var p=node('div','panel mp-download '+(v.state==='error'?'warn':v.state==='done'?'ok':''));
+    var workshop=v.source==='workshop';
+    var head=node('div','mp-download-head');var text=node('div','mp-download-text');
+    var title=v.state==='manifest'?'Checking what you need…':v.state==='done'?'Content installed and verified':v.state==='verifying'?'Verifying files…':v.state==='installing'?'Installing…':v.state==='downloading'?(workshop?'Downloading from the Steam Workshop':'Downloading from the host'):v.state==='error'?'Download stopped':v.state==='cancelled'?'Download paused':'Get the content for this lobby';
+    add(text,node('strong','',title),node('span','',v.state==='error'?safe(v.error,'Something went wrong.'):v.state==='done'?'You can ready up now.':workshop?'Official Workshop copy, verified against the lobby.':'Sent by the host over Steam’s relay and checked against the lobby’s hashes.'));
+    add(head,text,chip(workshop?'Steam Workshop':'From the host',workshop?'cyan':'mint'));p.appendChild(head);
+    if(d.conflicts&&d.conflicts.length)p.appendChild(node('p','mp-warn-text','You already have a different “'+safe(d.conflicts[0],'file')+'”. AimMod won’t replace your file. Rename or move it, then download.'));
+    var files=node('div','mp-download-files');(v.files||[]).forEach(function(f){add(files,add(node('div','mp-download-file'),node('span','mp-download-kind',f.kind==='scenario'?'Scenario':f.kind==='map'?'Map':f.kind==='ability'?'Ability':f.kind==='weapon'?'Weapon':'Character'),node('span','mp-download-name',safe(f.name,'file')),node('span','mp-muted',mb(f.size))));});
+    if((v.files||[]).length&&v.state!=='done')p.appendChild(files);
+    var total=workshop&&d.workshopProgress?d.workshopProgress.total:v.packed,done=workshop&&d.workshopProgress?d.workshopProgress.done:v.done;
+    if(v.state==='downloading'||v.state==='cancelled'||v.state==='error'&&done>0){
+      var bar=node('div','mp-progress');var fill=node('div','mp-progress-fill');fill.style.width=(total?Math.min(100,done/total*100):0)+'%';bar.appendChild(fill);p.appendChild(bar);
+      var left=v.speed>0&&total>done?F.duration((total-done)/v.speed):null;
+      p.appendChild(node('div','mp-progress-text',mb(done)+' of '+mb(total)+(v.speed>0?' · '+mb(v.speed)+'/s':'')+(left?' · '+left+' left':'')));
+    }
+    var row=null;
+    if(v.state==='ready')row=actions(button('Download'+(v.total?' ('+mb(v.total)+')':''),function(){act('download');},'primary'));
+    else if(v.state==='downloading')row=actions(button('Cancel',function(){act('download-cancel');},'compact quiet'));
+    else if(v.state==='error'||v.state==='cancelled')row=actions(button(v.state==='cancelled'?'Resume':'Retry',function(){act('download-retry');},'primary compact'));
+    if(row&&!(d.conflicts&&d.conflicts.length))p.appendChild(row);
+    return p;
   }
   function contentHelp(lobby){var c=lobby.content||{};var s=lobby.settings;if(c.scenario==='missing')return 'You don’t have “'+safe(s.scenario.name,'this scenario')+'”. Get it from the host or the Workshop, then ready up.';if(c.scenario==='mismatch')return 'Your copy of this scenario is a different version than the host’s.';if(c.map==='missing')return 'You need the map “'+safe(s.mapOverride?s.mapOverride.name:s.scenario.map,'')+'” in your maps folder.';if(c.map==='mismatch')return 'Your copy of the map is a different version than the host’s.';return 'Checking your content…';}
   function blockerList(list){var box=node('div','mp-blockers');list.slice(0,4).forEach(function(b){add(box,add(node('div','mp-blocker'),node('span','mp-blocker-mark'),node('span','',b.text)));});if(list.length>4)box.appendChild(node('div','mp-muted','and '+(list.length-4)+' more'));return box;}

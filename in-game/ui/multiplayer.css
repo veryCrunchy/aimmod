@@ -213,3 +213,15 @@
 @media(max-width:1250px){.mp-mode{width:50%}.mp-hero-side{width:300px}.mp-main{width:58%}.mp-side{width:42%}}
 @media(max-width:1100px){.mp-row{display:block;margin:0}.mp-col,.mp-main,.mp-side,.mp-half{width:100%;padding:0}.mp-hero{display:block}.mp-hero-side{width:auto;border-left:0;border-top:1px solid #22302a}.mp-lobby-head{display:block}.mp-room{margin-top:14px}}
 @media(max-height:760px){.mp-hero-main{padding-top:20px}.mp-hero-main h2{font-size:22px;line-height:28px}.mp-mode span{height:48px}.mp-count{width:140px;height:140px;margin:12px 0}.mp-count-num{font-size:72px;line-height:80px}.mp-chat-log{height:160px}}
+/* Content download */
+.mp-download{padding:16px 20px 12px;border-color:#2c6b52}.mp-download.warn{border-color:#5a4524}.mp-download.ok{border-color:#2c6b52;background:#132520}
+.mp-download-head{display:flex;flex-direction:row;align-items:flex-start;margin-bottom:8px}
+.mp-download-text{flex:1;min-width:0;padding-right:12px}.mp-download-text strong{display:block;font-size:15px;font-weight:600}.mp-download-text span{display:block;font-size:13px;line-height:1.5;color:#a7bab0;margin-top:2px}
+.mp-download.warn .mp-download-text span{color:#f6dfb8}
+.mp-download-files{margin:4px 0 10px;padding:6px 10px;background:#101916;border:1px solid #22302a;border-radius:6px}
+.mp-download-file{display:flex;flex-direction:row;align-items:center;height:26px;font-size:12px}
+.mp-download-kind{display:block;flex-shrink:0;width:70px;color:#7f968a;font-weight:600;text-transform:uppercase;font-size:10px;letter-spacing:.6px}
+.mp-download-name{display:block;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#dcebe3}
+.mp-progress{height:8px;border-radius:4px;background:#22302a;overflow:hidden;margin:6px 0 6px}.mp-progress-fill{height:8px;border-radius:4px;background:#27e4a1}
+.mp-progress-text{font-size:12px;color:#a7bab0;margin-bottom:8px}
+.mp-download .actions{margin-top:4px}.mp-download .actions>.button{margin-bottom:4px}
