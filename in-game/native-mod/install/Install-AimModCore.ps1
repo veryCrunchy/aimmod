@@ -78,6 +78,14 @@ try {
     Add-Tree (Join-Path $Package 'AimModCore') 'ue4ss\Mods\AimModCore'
     $luaUi = -not $WithoutLuaUi -and (Test-Path -LiteralPath (Join-Path $Package 'AimModNativeUI\Scripts\main.lua'))
     if ($luaUi) { Add-Tree (Join-Path $Package 'AimModNativeUI') 'ue4ss\Mods\AimModNativeUI' }
+    # AimMod cosmetics paks -> the game's Content\Paks\~AimMod (recorded as paks\~AimMod\<name>).
+    $paks = Join-Path $Package 'Paks\~AimMod'
+    if (Test-Path -LiteralPath $paks) {
+        foreach ($item in Get-ChildItem -LiteralPath $paks -Force) {
+            if ($item.PSIsContainer -or -not (Test-PakName $item.Name)) { throw "Cosmetics pak not allowed: $($item.Name)" }
+            $plan["paks\~AimMod\$($item.Name)"] = $item.FullName
+        }
+    }
 
     $ownedBefore = @{}
     $backups = [ordered]@{}
@@ -89,13 +97,13 @@ try {
     }
     $files = [System.Collections.Generic.List[object]]::new()
     foreach ($relative in $plan.Keys) {
-        $dest = Join-Path $win64 $relative
+        $dest = Resolve-InstallPath $win64 $relative
         $source = $plan[$relative]
         $hash = Get-FileSha256 $source
         $dir = Split-Path -Parent $dest
         $walk = $dir; $missing = @()
         while (-not (Test-Path -LiteralPath $walk)) { $missing += $walk; $walk = Split-Path -Parent $walk }
-        foreach ($m in $missing) { $rel = $m.Substring($win64.Length).TrimStart('\'); if (-not $created.Contains($rel)) { $created.Add($rel) } }
+        foreach ($m in $missing) { $rel = Get-InstallRecord $win64 $m; if (-not $created.Contains($rel)) { $created.Add($rel) } }
         if ($missing) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
         if (Test-Path -LiteralPath $dest) {
             $current = Get-FileSha256 $dest
@@ -111,7 +119,7 @@ try {
     # Files from an earlier AimMod package that the new one no longer ships.
     foreach ($old in $ownedBefore.Keys) {
         if ($plan.Contains($old)) { continue }
-        $dest = Join-Path $win64 $old
+        $dest = Resolve-InstallPath $win64 $old
         if ((Test-Path -LiteralPath $dest) -and (Get-FileSha256 $dest) -eq $ownedBefore[$old]) { Remove-Item -LiteralPath $dest -Force }
     }
 

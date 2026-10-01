@@ -264,13 +264,18 @@ exactly as trusted as the AimMod install that ships it.
 
 **Producing it.**
 
-1. The team builds the paks (cooking needs the UE editor).
-2. The AimMod release build adds the paks and `catalog.json` to the install.
-3. The build checks:
-   - each pak's path rules, by parsing its index (see above);
-   - catalog validation (the same rules as `Catalog.validate`);
-   - unique ids, and version bumps for changed items.
-4. It then writes the manifest with each file's SHA-256 and size.
+1. **Catalog source:** `in-game/cosmetics/catalog.json`. `catalog.test.cjs` keeps it in sync with the Lua testbed copy, and keeps every item a draft until the probe confirms the parameter names.
+2. **Paks:** the team builds them (cooking needs the UE editor). They are not stored in the repository.
+3. **Package build:** `Build-AimModPackage.ps1 [-CosmeticsPaks <folder>]` runs `in-game/cosmetics/New-CosmeticsManifest.ps1`. That script:
+   - validates the catalog (the same rules as `Catalog.validate` and the service's `Cosmetics.cs`);
+   - checks that every pak a non-draft item needs is supplied, and that no supplied pak is unreferenced;
+   - checks the pak names (flat, never `_P`);
+   - copies `catalog.json` byte-for-byte to `AimModCore\service\cosmetics\`;
+   - writes `catalog-manifest.json` there: `{version, files[{name, size, sha256}]}`.
+
+   Paks are copied to `Paks\~AimMod\` in the package.
+4. **Not checked yet:** the pak index path rule (only new packages under `/Game/AimModCosmetics/`). It must land before the first pak ships.
+5. **Release:** `New-AimModInGameRelease.ps1` stages the paks as `files/paks/~AimMod/<name>.pak`.
 
 **Loading in AimModCore.**
 
@@ -278,8 +283,11 @@ exactly as trusted as the AimMod install that ships it.
 - It loads only files whose size and SHA-256 match. Items resolve only when their pak matches.
 - Unknown, extra or mismatched files are ignored and logged. A mismatched pak stays mounted but is never referenced.
 
-**The installer** writes the manifest and the files together, and checks the
-hashes after copying into `Content/Paks/~AimMod/`.
+**Installing and updating.**
+
+- The service's installer and updater (and the developer `Install-AimModCore.ps1`) place paks in the game's `Content\Paks\~AimMod\`.
+- They record each pak in `ue4ss\aimmod-install.json` as `paks\~AimMod\<name>.pak`, so repair, update, rollback and uninstall cover the paks like every other file.
+- The install is refused unless the game's own `Content\Paks\FPSAimTrainer-WindowsNoEditor.pak` is there. See [install lifecycle](install-lifecycle.md).
 
 A player who edits their own local files changes only what they see
 themselves. Every viewer resolves shared ids against their own installed

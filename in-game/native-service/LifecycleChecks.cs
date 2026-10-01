@@ -212,6 +212,41 @@ static class LifecycleChecks
             Check(kept == 0 && File.ReadAllText(Path.Combine(win64, "dwmapi.dll")) == "someone-elses-proxy" && !File.Exists(InstallLayout.ManifestPath(win64)), "uninstall restores the foreign proxy");
             Check(Tree(win64) == original, "uninstall restores the original game folder exactly");
 
+            // ---- AimMod cosmetics paks: Content\Paks\~AimMod, recorded, repaired and removed like every file ----
+            Check(ReleasePaths.IsAllowed("paks/~AimMod/AimModCosmetics-1.pak"), "allowed pak path");
+            foreach (var bad in new[] { "paks/~AimMod/AimModCosmetics-1_P.pak", "paks/x.pak", "paks/~AimMod/sub/x.pak", "paks/~AimMod/x.txt", "paks/~Other/x.pak",
+                "paks/~AimMod/../x.pak", "Paks/~AimMod/x.pak", "paks/~aimmod/x.pak", "paks/~AimMod/.x.pak", "paks/~AimMod/a..pak" })
+                Check(!ReleasePaths.IsAllowed(bad), "rejected pak path " + bad);
+            Throws<InstallException>(() => InstallLayout.Resolve(win64, @"paks\~Other\x.pak"), "pak records stay in ~AimMod");
+            Throws<InstallException>(() => InstallLayout.Resolve(win64, @"paks\~AimMod\..\..\x.pak"), "pak records cannot escape");
+            var pakGame = Game(Path.Combine(temp, "paklib"));
+            var gamePaks = InstallLayout.ContentPaks(pakGame);
+            var withPak = Release("p"); withPak["paks/~AimMod/AimModCosmetics-1.pak"] = "pak-1";
+            var (pakRoot, _) = Package(Path.Combine(temp, "pkg-pak"), "1.2.0", withPak);
+            var pakPackage = VerifiedPackage.Open(pakRoot);
+            var gameRoot = Path.GetFullPath(Path.Combine(pakGame, "..", ".."));
+            var noPaksFolder = Tree(gameRoot);
+            Throws<InstallException>(() => applier.Apply(pakGame, pakPackage, "install"), "pak install refused without the game's Content\\Paks");
+            Check(Tree(gameRoot) == noPaksFolder, "refused pak install changes nothing");
+            Directory.CreateDirectory(gamePaks);
+            File.WriteAllText(Path.Combine(gamePaks, InstallLayout.GamePak), "game-pak");
+            var beforePak = Tree(gameRoot);
+            applier.Apply(pakGame, pakPackage, "install");
+            var pakFile = Path.Combine(gamePaks, "~AimMod", "AimModCosmetics-1.pak");
+            var pakRecord = InstallManifest.Read(pakGame)!;
+            Check(File.ReadAllText(pakFile) == "pak-1", "pak placed in Content\\Paks\\~AimMod");
+            Check(pakRecord.Files.Any(f => f.Path == @"paks\~AimMod\AimModCosmetics-1.pak") && pakRecord.CreatedDirectories.Contains(@"paks\~AimMod"), "pak and its folder recorded in the install manifest");
+            Check(!InstallHealth.Inspect(pakGame, pakRecord, pakPackage.Manifest).NeedsRepair, "pak install healthy");
+            File.WriteAllText(pakFile, "pak-X");
+            Check(InstallHealth.Inspect(pakGame, InstallManifest.Read(pakGame), pakPackage.Manifest).Problems.Any(p => p.Code == "changed" && p.Path == @"paks\~AimMod\AimModCosmetics-1.pak"), "changed pak detected");
+            Check(applier.Apply(pakGame, pakPackage, "repair").Changed == 1 && File.ReadAllText(pakFile) == "pak-1", "repair restores the pak");
+            var (noPakRoot, _) = Package(Path.Combine(temp, "pkg-nopak"), "1.3.0", Release("q"));
+            applier.Apply(pakGame, VerifiedPackage.Open(noPakRoot), "update");
+            Check(!File.Exists(pakFile), "pak dropped from a release is removed");
+            Check(applier.RollbackLast() == "1.2.0" && File.ReadAllText(pakFile) == "pak-1", "rollback restores the pak");
+            Check(applier.Uninstall(pakGame) == 0 && !Directory.Exists(Path.Combine(gamePaks, "~AimMod")) && File.Exists(Path.Combine(gamePaks, InstallLayout.GamePak)), "uninstall removes AimMod paks and their folder, never the game's pak");
+            Check(Tree(gameRoot) == beforePak, "pak uninstall restores the game folder exactly");
+
             // ---- updater: hash-pinned feed, download, verify, stage ----
             var handler = new Files();
             var updatesRoot = Path.Combine(temp, "updater");

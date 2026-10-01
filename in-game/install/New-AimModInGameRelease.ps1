@@ -98,6 +98,16 @@ function Invoke-Stage {
             if ($SteamConfig) { Put $SteamConfig 'ue4ss\Mods\AimModSteam\config.txt' }
             $mods += 'AimModSteam'
         }
+        # AimMod cosmetics paks: release path paks/~AimMod/<name>.pak, installed
+        # into the game's Content\Paks\~AimMod (ReleasePaths.IsPak). Flat, never _P.
+        $paks = Join-Path $Package 'Paks\~AimMod'
+        if (Test-Path -LiteralPath $paks) {
+            foreach ($item in Get-ChildItem -LiteralPath $paks -Force) {
+                $ok = -not $item.PSIsContainer -and $item.Name -cmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\.pak$' -and -not $item.Name.Contains('..') -and -not $item.Name.EndsWith('_P.pak', [StringComparison]::OrdinalIgnoreCase)
+                if (-not $ok) { throw "Cosmetics pak not allowed in a release: $($item.Name)" }
+                Put $item.FullName "paks\~AimMod\$($item.Name)"
+            }
+        }
         if (-not (Test-Path -LiteralPath (Join-Path $files 'dwmapi.dll'))) { throw 'The UE4SS zip has no dwmapi.dll.' }
     } finally { Remove-Item -LiteralPath $extract -Recurse -Force -ErrorAction SilentlyContinue }
 

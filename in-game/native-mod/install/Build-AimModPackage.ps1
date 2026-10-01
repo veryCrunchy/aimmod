@@ -7,12 +7,18 @@ Requires the local RE-UE4SS checkout (see DESIGN.md, Building), Visual Studio
 2022 and the .NET 8 SDK. Produces:
   AimModCore\dlls\main.dll       the UE4SS mod
   AimModCore\service\            the native service (self-contained)
+  AimModCore\service\cosmetics\  the curated cosmetics catalog.json and its
+                                 hash-pinned catalog-manifest.json
   AimModNativeUI\                the Lua UI mod
   UE4SS-settings.ini             the stable settings profile
+  Paks\~AimMod\*.pak             AimMod cosmetics paks (only with -CosmeticsPaks),
+                                 installed into the game's Content\Paks\~AimMod
 #>
 param(
     [string]$Output = (Join-Path $PSScriptRoot '..\out\package'),
-    [switch]$FrameworkDependentService
+    [switch]$FrameworkDependentService,
+    # Folder with the team-built AimMod cosmetics paks (not in the repository).
+    [string]$CosmeticsPaks
 )
 $ErrorActionPreference = 'Stop'
 $native = Resolve-Path (Join-Path $PSScriptRoot '..')
@@ -40,6 +46,17 @@ else { $publish += @('--self-contained', 'true', '-p:PublishSingleFile=true', '-
 dotnet @publish
 if ($LASTEXITCODE) { throw 'Service publish failed.' }
 Get-ChildItem $service -Filter *.pdb | Remove-Item
+
+# Curated cosmetics: catalog.json plus its manifest (size and SHA-256 of the
+# catalog and every pak). The service and AimModCore use only matching files.
+$manifestArgs = @{ Output = (Join-Path $service 'cosmetics') }
+if ($CosmeticsPaks) { $manifestArgs.Paks = (Resolve-Path -LiteralPath $CosmeticsPaks).Path }
+& (Join-Path $inGame 'cosmetics\New-CosmeticsManifest.ps1') @manifestArgs
+if ($CosmeticsPaks) {
+    $paksOut = Join-Path $Output 'Paks\~AimMod'
+    New-Item -ItemType Directory -Force -Path $paksOut | Out-Null
+    Get-ChildItem -LiteralPath $manifestArgs.Paks -File | Copy-Item -Destination $paksOut
+}
 
 Copy-Item (Join-Path $inGame 'ue4ss\AimModNativeUI') (Join-Path $Output 'AimModNativeUI') -Recurse
 Copy-Item (Join-Path $PSScriptRoot 'UE4SS-settings.ini') (Join-Path $Output 'UE4SS-settings.ini')

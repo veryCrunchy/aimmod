@@ -8,6 +8,38 @@ $script:ManifestName = 'aimmod-install.json'
 
 function Get-FileSha256([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash }
 
+# Install-record paths are relative to Binaries\Win64, except AimMod cosmetics
+# paks: recorded as paks\~AimMod\<name> and placed in the game's own
+# Content\Paks\~AimMod. Mirrors InstallLayout.Resolve / Record in the service.
+$script:GamePak = 'FPSAimTrainer-WindowsNoEditor.pak'
+$script:PakNamePattern = '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\.pak$'
+function Test-PakName([string]$Name) { $Name -cmatch $script:PakNamePattern -and -not $Name.Contains('..') -and -not $Name.EndsWith('_P.pak', [StringComparison]::OrdinalIgnoreCase) }
+function Get-ContentPaks([string]$Win64) { [IO.Path]::GetFullPath((Join-Path $Win64 '..\..\Content\Paks')) }
+function Resolve-InstallPath([string]$Win64, [string]$Relative) {
+    $allowRoot = $false
+    if ($Relative.StartsWith('paks\', [StringComparison]::OrdinalIgnoreCase)) {
+        $rest = $Relative.Substring(5)
+        if ($rest -ieq '~AimMod') { $sub = '' }
+        elseif ($rest.StartsWith('~AimMod\', [StringComparison]::OrdinalIgnoreCase)) { $sub = $rest.Substring(8) }
+        else { throw "Path outside the AimMod pak folder: $Relative" }
+        $paks = Get-ContentPaks $Win64
+        if (-not (Test-Path -LiteralPath (Join-Path $paks $script:GamePak))) { throw "The game's Content\Paks folder was not found next to Binaries\Win64." }
+        $root = Join-Path $paks '~AimMod'; $allowRoot = $true
+    } else { $root = $Win64; $sub = $Relative }
+    $full = if ($sub) { [IO.Path]::GetFullPath((Join-Path $root $sub)) } else { [IO.Path]::GetFullPath($root) }
+    $prefix = [IO.Path]::GetFullPath($root).TrimEnd('\')
+    if ($allowRoot -and $full -ieq $prefix) { return $full }
+    if (-not $full.StartsWith($prefix + '\', [StringComparison]::OrdinalIgnoreCase)) { throw "Path escapes the game folder: $Relative" }
+    $full
+}
+function Get-InstallRecord([string]$Win64, [string]$Full) {
+    $aimmod = Join-Path (Get-ContentPaks $Win64) '~AimMod'
+    $Full = [IO.Path]::GetFullPath($Full)
+    if ($Full -ieq $aimmod) { return 'paks\~AimMod' }
+    if ($Full.StartsWith($aimmod + '\', [StringComparison]::OrdinalIgnoreCase)) { return 'paks\~AimMod\' + $Full.Substring($aimmod.Length + 1) }
+    $Full.Substring([IO.Path]::GetFullPath($Win64).TrimEnd('\').Length).TrimStart('\')
+}
+
 function Find-KovaaksBinaries {
     param([string]$GameDir)
     $candidates = @()
