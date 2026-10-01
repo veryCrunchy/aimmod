@@ -84,3 +84,9 @@ test('a missed poll leaves the buttons in place; a run of misses clears the laye
   for(let i=0;i<8;i++)n.reply(0,null);
   assert.equal(n.buttons().length,0);assert.equal(n.box.className,'');
 });
+test('a notice can carry a short extra line, such as a keybind that differs',()=>{
+  const n=setup();n.render({version:1,active:true,id:'ld-m1-0',kind:'countdown',title:'Waiting for everyone to load (1/2)',body:'Loading…',note:'Walk is on Q here (usually Shift)'});
+  assert.ok(n.box.all().some(e=>e.className==='note'&&e.textContent==='Walk is on Q here (usually Shift)'));
+  const k=setup();k.render({version:1,active:true,id:'keys-m1',kind:'info',eyebrow:'AimMod · Keybinds',title:'Walk is on Q here (usually Shift)',body:'',key:'F7'});
+  assert.equal(k.box.all().find(e=>e.className==='brand').textContent,'AIMMOD · KEYBINDS');assert.ok(!k.box.all().some(e=>e.className==='note'));
+});

@@ -253,6 +253,7 @@
       node('h2','',failed?'Couldn’t load the match ('+ready+'/'+present.length+')':'Waiting for everyone to load ('+ready+'/'+present.length+')'),
       node('p','subtle',failed?(lobby.isHost?'Retry the load, or end the match.':'Waiting for the host to retry or end the match.'):'Loading '+safe(match.scenario,'the scenario')+'…'));
     var plan=planBox(lobby);if(plan)stage.appendChild(plan);
+    var keys=match.players.indexOf(lobby.self)>=0?bindsNote(lobby):null;if(keys)stage.appendChild(keys);
     var who=node('div','mp-stage-players');match.players.forEach(function(id){
       var ok=loaded.indexOf(id)>=0,issue=typeof issues[id]==='string'?issues[id]:null;
       var row=add(node('div','mp-stage-player'+(ok?' ok':'')),avatar(nameOf(id),true),node('span','',nameOf(id)),chip(ok?'Ready':issue?'Not loaded':'Loading…',ok?'mint':issue?'amber':''));
@@ -942,13 +943,16 @@
   function contentHelp(lobby){var c=lobby.content||{};var s=lobby.settings;if(c.scenario==='missing')return 'You don’t have “'+safe(s.scenario.name,'this scenario')+'”. Get it from the host or the Workshop, then ready up.';if(c.scenario==='mismatch')return 'Your copy of this scenario is a different version than the host’s.';if(c.map==='missing')return 'You need the map “'+safe(s.mapOverride?s.mapOverride.name:s.scenario.map,'')+'” in your maps folder.';if(c.map==='mismatch')return 'Your copy of the map is a different version than the host’s.';return 'Checking your content…';}
   function blockerList(list){var box=node('div','mp-blockers');list.slice(0,4).forEach(function(b){add(box,add(node('div','mp-blocker'),node('span','mp-blocker-mark'),node('span','',b.text)));});if(list.length>4)box.appendChild(node('div','mp-muted','and '+(list.length-4)+' more'));return box;}
   function profileText(p,kind){if(!p||p.preset==='default')return kind==='weapon'?'Scenario weapon':kind==='movement'?'Scenario movement':'Scenario character';if(p.preset==='custom')return safe(p.custom,'Custom');return preset(p.preset).label;}
+  // KovaaK's keys the match uses (lobby.binds); movement is listed only when it differs.
+  function bindsText(b){return (b&&b.rows||[]).filter(function(r){return !r.move||!r.standard;}).map(function(r){return safe(r.label,'')+' '+(r.keys?safe(r.keys,''):'none');}).join(' · ');}
+  function bindsNote(lobby){var b=lobby.binds;if(!b||!b.issues||!b.issues.length)return null;return node('p','mp-warn-text mp-binds-warn',b.issues.slice(0,3).map(function(t){return safe(t,'');}).join(' · '));}
   function summaryCard(lobby){
     var s=lobby.settings;var p=node('div','panel mp-summary');var head=node('div','panel-head');var text=node('div','head-text');
     add(text,node('h2','','Match settings'));
     head.appendChild(text);if(lobby.isHost)head.appendChild(actions(button('Edit',function(){editing=true;loadLibrary();render();},'compact')));
     p.appendChild(head);
     var rows=node('div','mp-kv');p.appendChild(rows);
-    function kv(k,v,note){var r=node('div','mp-kv-row');add(r,node('span','mp-k',k),node('span','mp-v',v));if(note)r.appendChild(node('span','mp-kv-note',note));rows.appendChild(r);}
+    function kv(k,v,note){var r=node('div','mp-kv-row');add(r,node('span','mp-k',k),node('span','mp-v',v));if(note)r.appendChild(node('span','mp-kv-note',note));rows.appendChild(r);return r;}
     kv('Mode',mode(s.mode).label);
     kv('Scenario',s.scenario?safe(s.scenario.name,'Scenario'):'Not chosen');
     kv('Map',s.mapOverride?safe(s.mapOverride.name,'Map')+(s.mapOverride.source==='ported'?' (ported)':''):'Scenario map');
@@ -960,6 +964,8 @@
     if(s.targetSpeed!==1||s.targetSize!==1)kv('Targets','Speed '+multiplier(s.targetSpeed)+' · size '+multiplier(s.targetSize));
     kv('Players','Up to '+s.maxPlayers+(s.spectators?' + spectators':''));
     kv('Countdown',F.number(s.countdown,0)+' s'+(s.lateJoin?' · late join on':'')+(s.autoStart?' · auto start':''));
+    if(lobby.binds&&lobby.binds.rows&&lobby.binds.rows.length)kv('Keybinds',bindsText(lobby.binds)).children[1].className+=' mp-wrap';
+    var bn=bindsNote(lobby);if(bn)p.appendChild(bn);
     if(lobby.generated){var g=node('div','mp-generated');add(g,node('strong','',lobby.generated.problem?'Match scenario problem':lobby.generated.saved?'Match scenario saved to your scenarios':'A custom scenario will be generated'),lobby.generated.problem?node('span','mp-warn-line',safe(lobby.generated.problem,'')):null,node('span','',safe(lobby.generated.name,'Match scenario')),node('span','mp-muted','Played in freeplay. KovaaK’s leaderboards stay untouched.'));p.appendChild(g);}
     else if(s.scenario)p.appendChild(node('div','mp-generated plain','Played as published. Each run is a normal KovaaK’s run.'));
     return p;
@@ -1187,6 +1193,7 @@
     countNodes.push({node:digits,at:match.startsAt,format:function(ms){return String(Math.max(1,seconds(ms)));}});
     add(stage,node('div','eyebrow',mode(match.mode).label+' · '+roundLabel(match)),ring,node('h2','',safe(match.scenario,'Scenario')),match.players.indexOf(lobby.self)>=0?null:node('p','subtle','You’re spectating this round.'));
     var plan=planBox(lobby);if(plan)stage.appendChild(plan);
+    var keys=match.players.indexOf(lobby.self)>=0?bindsNote(lobby):null;if(keys)stage.appendChild(keys);
     var who=node('div','mp-stage-players');match.players.forEach(function(id){var m=member(id);add(who,add(node('div','mp-stage-player'),avatar(nameOf(id),true),node('span','',nameOf(id)),m&&m.connection==='reconnecting'?chip('Reconnecting','amber'):null));});
     stage.appendChild(who);
     if(lobby.isHost)stage.appendChild(actions(button('Cancel match',function(){act('end');},'compact quiet danger')));

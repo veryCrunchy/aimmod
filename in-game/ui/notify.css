@@ -11,6 +11,7 @@ html,body{width:100%;height:100%;margin:0;padding:0;background:transparent!impor
 .text{flex:1;min-width:0}
 .title{font-size:18px;font-weight:700;line-height:24px;max-height:48px;overflow:hidden}
 .body{font-size:13px;line-height:18px;color:#c9d8d0;margin-top:2px}
+.note{font-size:12px;line-height:16px;color:#f6c46a;margin-top:4px}
 .key{display:block;flex-shrink:0;margin-left:14px;padding:0 10px;height:34px;line-height:32px;border:1px solid #f0b45a;border-bottom-width:3px;border-radius:6px;background:#2b2316;color:#f6dfb8;font-size:15px;font-weight:700}
 .actions{display:flex;flex-direction:row;justify-content:flex-end;margin-top:10px;pointer-events:auto}
 /* Clicks: the layer is click-through (pointer-events none, and Notify.lua keeps it hit-test
