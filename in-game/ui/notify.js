@@ -34,7 +34,9 @@
     var extra=n.cs&&root.AimModCsHud?' cs-on'+(n.cs.buyOpen?' cs-buying':''):n.duel||n.combat||n.cs?' duel-on':'';
     box.className=(n.active?'show '+(n.kind||'info'):'show')+extra;
     // The toast-sized layer takes clicks as a whole while it asks for them (see notify.css).
-    input(!!n.interactive&&n.layout!=='full');
+    // The full-screen layer takes every click while the CS buy menu is open (it holds the cursor then;
+    // clicks elsewhere must not reach the game). Otherwise only the toast layout takes clicks as a whole.
+    input(!!n.interactive&&(n.layout!=='full'||!!(n.cs&&n.cs.buyOpen)));
     var sk=JSON.stringify([n.duel,n.combat,root.AimModCsHud?null:n.cs,n.badge]);
     if(sk!==stripKey){
       stripKey=sk;clear(strips);

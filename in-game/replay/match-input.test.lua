@@ -40,7 +40,9 @@ RegisterHook=function(_,_,post)hook=post end
 LoopInGameThreadWithDelay=function(ms,fn)loops[ms]=fn end
 local request={}
 package.preload.Workspace=function()return {create=function()return perm()end,update=function()end,closeRequested=function()return false end,openRequest=function()return nil end,consumeOpenRequest=function()end,openPage=function()end,deliverPage=function()end}end
-package.preload.Notify=function()return {attach=function()end,update=function()end,hide=function()end,playRequest=function()return request.id,request.since end}end
+local buying,restored,focused=false,0,0
+package.preload.Notify=function()return {attach=function()end,update=function()end,hide=function()end,playRequest=function()return request.id,request.since end,
+    swallowMenu=function()return buying end,restoreInput=function()restored=restored+1 end,keepGameFocus=function()focused=focused+1 end}end
 package.preload.LiveHUD=function()return {attach=function()end,hide=function()end,update=function()end}end
 package.preload.Telemetry=function()return {liveSnapshot=function()return {}end}end
 package.preload.ReplayMainBridge=function()return {attach=function()end,active=function()return false end}end
@@ -76,5 +78,17 @@ check(inputModes[#inputModes]=='game' and player.bShowMouseCursor==false and unp
 -- 6. No request, no input changes.
 count=#inputModes;request={};for _=1,5 do now=now+1;tick() end
 check(#inputModes==count,'without a play request input is untouched')
+-- 7. Escape over the CS buy menu: KovaaK's pause menu opens; the fast loop closes it at once,
+-- unpauses, and the notice layer puts its input back. Without the buy menu Escape works as usual.
+local fastLoop=loops[33];check(type(fastLoop)=='function','a fast loop watches for it')
+menuVisible=false;fastLoop();buying=true;paused=true
+menuVisible=true;fastLoop()
+check(not menuVisible and restored==1 and not paused,'the pause menu opened over the buy menu closes again and input comes back')
+check(focused>=2,'the fast loop also keeps the viewport focused for a held scoreboard')
+buying=false;menuVisible=true;fastLoop();fastLoop()
+check(menuVisible and restored==1,'Escape without the buy menu opens KovaaK\'s menu as usual')
+-- The AimMod panel open: never swallowed.
+menuVisible=false;fastLoop();openPanel();buying=true;menuVisible=true;fastLoop()
+check(menuVisible and restored==1,'with the AimMod panel open the menu stays')
 print=realPrint
 print('PASS '..checks..' match input checks')

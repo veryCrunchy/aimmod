@@ -116,6 +116,32 @@ Notify.update(false,false,false);check(#modes==2,'input is handed back once')
 notice=buying;Notify.update(false,false,true)
 check(#modes==2,'no input changes while KovaaK\'s menus are up')
 notice=closed;Notify.update(false,false,false);check(#modes==2,'nothing to give back that the layer did not take')
+-- KovaaK's own cursor call is used too, and the layer keeps the cursor (and its clicks) when the
+-- game puts bShowMouseCursor back.
+local k2={}
+player.K2_SetShowMouseCursor=function(_,on)k2[#k2+1]=on end
+notice=buying;Notify.update(false,false,false)
+check(k2[#k2]==true and player.bShowMouseCursor==true,'KovaaK\'s cursor call shows the cursor too')
+player.bShowMouseCursor=false;Notify.update(false,false,false)
+check(player.bShowMouseCursor==true and clickable(),'the game hid the cursor: it comes back and the buy menu stays clickable')
+-- Escape: KovaaK's menu opened over the buy menu; Menu.lua closes it and the layer restores its input.
+check(Notify.swallowMenu()==true,'with the buy menu open a pause menu is swallowed')
+local before=#modes;Notify.restoreInput()
+check(modes[#modes]=='gameui' and #modes==before+1 and player.bShowMouseCursor==true,'input for the buy menu comes back')
+notice=closed;Notify.update(false,false,false)
+check(Notify.swallowMenu()==false,'nothing to swallow once it closed normally')
+notice='{"version":1,"active":false,"layout":"full","swallowMenu":true,"volume":0}';Notify.update(false,false,false)
+check(Notify.swallowMenu()==true,'Escape just closed it: the pause menu it opened is swallowed too')
+before=#modes;Notify.restoreInput();check(modes[#modes]=='game' and player.bShowMouseCursor==false,'and the game gets its input back')
+-- The scoreboard: display only. No input mode or cursor changes; focus goes back to the viewport.
+local focus=0;lib.SetFocusToGameViewport=function()focus=focus+1 end
+notice='{"version":1,"active":false,"layout":"full","boardFull":{"rows":[]},"volume":0}'
+before=#modes;Notify.update(false,false,false)
+check(Notify.keepGameFocus()==true and focus==1,'a held scoreboard keeps the game viewport focused')
+check(#modes==before and player.bShowMouseCursor==false and clickThrough(),'and never changes input, the cursor or clicks')
+Notify.update(false,false,true);check(Notify.keepGameFocus()==false and focus==1,'not while KovaaK\'s menus are up')
+notice='{"version":1,"active":false,"layout":"full","volume":0}';Notify.update(false,false,false)
+check(Notify.keepGameFocus()==false and focus==1,'not once the key is released')
 -- The play request is read from the notice file.
 notice='{"version":1,"active":false,"play":{"id":"play-m-abc-0","since":1700000000123},"volume":0}'
 Notify.update(false,false,false)
