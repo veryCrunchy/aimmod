@@ -1224,6 +1224,12 @@ preset):
   - Not built yet: a team-coloured outline or emissive accent on the
     avatars. The bridge already puts avatars on the right team with
     `SetTeam`.
+- **Spawns on the floor.** Ported spawn origins sat 17 to 48 units above the
+  floor, so avatars spawned there floated. The map port now puts every
+  spawn's feet on the floor below it, and the checks fail any spawn more than
+  8 units up. A CS round-start teleport places the capsule centre: the feet
+  plus 40 units, times the map scale. A simulated player that hasn't found
+  the floor by trace yet stays where it is instead of walking in the air.
 - **Leftover bots.** KovaaK's re-uses bots across scenario loads, and a
   direct map load left the previous scenario's bots in AimMod arenas. They
   were alive and took shots, which counted for KovaaK's accuracy. In an

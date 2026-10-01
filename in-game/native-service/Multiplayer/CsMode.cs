@@ -79,6 +79,9 @@ sealed record ObjectiveSpawn(string Team, double X, double Y, double Z, double Y
 sealed record MapObjectives(IReadOnlyList<ObjectiveZone> Zones, IReadOnlyList<ObjectiveSpawn> Spawns, string? CsProblem = MapObjectives.NoCsData)
 {
     public const string NoCsData = "No CS map data";
+    // Spawn origins in the file are the feet (on the floor); a round-start teleport places the capsule
+    // centre, which the map port puts half a CS hull plus 4 units above them (kovaaks_json.spawn_object).
+    public const double SpawnCentreAboveFeet = 40;
     public const int MinCsSpawns = 5;
     public IReadOnlyList<ObjectiveZone> Callouts => Zones.Where(z => z.Type == "callout").ToArray();
     // The same rules as the map port (tools/map-port/mapport/csmap.py problems()).
@@ -119,7 +122,7 @@ sealed record MapObjectives(IReadOnlyList<ObjectiveZone> Zones, IReadOnlyList<Ob
             if (root.TryGetProperty("spawns", out var ss) && ss.ValueKind == JsonValueKind.Array)
                 foreach (var sp in ss.EnumerateArray().Take(128))
                     if (V(sp.GetProperty("origin")) is { } o)
-                        spawns.Add(new ObjectiveSpawn(sp.TryGetProperty("team", out var t) ? t.GetString() ?? "any" : "any", o[0] * scale, o[1] * scale, o[2] * scale,
+                        spawns.Add(new ObjectiveSpawn(sp.TryGetProperty("team", out var t) ? t.GetString() ?? "any" : "any", o[0] * scale, o[1] * scale, (o[2] + SpawnCentreAboveFeet) * scale,
                             sp.TryGetProperty("yaw", out var y) && y.TryGetDouble(out var yaw) ? yaw : 0));
             // The CS map spec replaces the raw zones and spawns for CS.
             if (root.TryGetProperty("cs", out var cs) && cs.ValueKind == JsonValueKind.Object && cs.TryGetProperty("format", out var cf) && cf.GetString() == "aimmod.cs-map"
@@ -142,7 +145,7 @@ sealed record MapObjectives(IReadOnlyList<ObjectiveZone> Zones, IReadOnlyList<Ob
                             if (point.ValueKind == JsonValueKind.Array && point.GetArrayLength() == 4 && point.EnumerateArray().All(x => x.ValueKind == JsonValueKind.Number))
                             {
                                 var v = point.EnumerateArray().Select(x => x.GetDouble()).ToArray();
-                                csSpawns.Add(new ObjectiveSpawn(team, v[0] * scale, v[1] * scale, v[2] * scale, v[3]));
+                                csSpawns.Add(new ObjectiveSpawn(team, v[0] * scale, v[1] * scale, (v[2] + SpawnCentreAboveFeet) * scale, v[3]));
                             }
                 }
                 if (cs.TryGetProperty("callouts", out var calls) && calls.ValueKind == JsonValueKind.Array)

@@ -205,7 +205,12 @@ Outlaws, Pixel, Christmas, N0ted, Timmy). The Anime pack is DLC.
   hull overlaps a brush, the spawn is moved upwards, then sideways in growing rings. The report
   lists `spawns_nudged` and `spawns_stuck`.
 - Spawns come from `info_player_terrorist` (team 1), `info_player_counterterrorist` (team 2) and
-  deathmatch/start spawns (both teams). They are lifted 40 units so the player drops onto the floor.
+  deathmatch/start spawns (both teams).
+- Spawn feet are first put on the floor below the origin. Mappers place the origins well above the
+  floor: 40 to 48 units in de_d2_remake, and at the hull centre in GoldSrc. The KovaaK's
+  SpawnPoint is then the capsule centre: the feet plus half a hull plus 4 units. The `.aimmod.json`
+  spawns are the feet. The report counts `spawns_dropped_to_floor`, and a spawn whose feet are more
+  than 8 units above the floor fails the checks ("spawns float above the floor").
 - Supported inputs: BSP versions 19 to 21, LZMA-compressed lumps and the L4D2-style lump header.
   Also `.vmf`, GMod `.gma` (including LZMA-wrapped workshop downloads), `.zip`, and `.rar`/`.7z`
   through `7z` or the system `tar` (bsdtar).
