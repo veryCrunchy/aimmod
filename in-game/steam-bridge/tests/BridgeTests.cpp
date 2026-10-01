@@ -2,6 +2,7 @@
 // lobby keys, join strings, launch command lines and the AMP1 wire format.
 // Synthetic ids only.
 #include "AvatarPath.hpp"
+#include "AvatarState.hpp"
 #include "Codec.hpp"
 #include "GhostMath.hpp"
 #include "Json.hpp"
@@ -436,6 +437,20 @@ int main()
         Check(!AvatarPath::Parse("AIMMOD_AVATAR_PATH_1\nmeta\tbad%0Aname\tm\t1\np\t0\t0\t0\t0\t0\t0\np\t5\t0\t0\t0\t0\t0\n"), "refuses control characters in meta");
         Check(!AvatarPath::Parse("AIMMOD_AVATAR_PATH_1\np\t0\t0\t0\t0\t0\t0\n"), "needs at least two rows");
         Check(!AvatarPath::Parse("AIMMOD_AVATAR_PATH_1\np\t0\tnan\t0\t0\t0\t0\np\t5\t0\t0\t0\t0\t0\n"), "refuses non-finite numbers");
+    }
+    // avatar-state.tsv from the service
+    {
+        const std::string id = std::to_string(Person);
+        auto st = bridge::avatarstate::Parse("AIMMOD_AVATARS_1\t9\nmatch\tm-1%20a\npeer\t" + id + "\t0\tfriend\t0\t1759300000000\t1759300003000\n");
+        Check(st && st->sequence == 9 && st->match == "m-1 a" && st->peers.count(Person) && !st->peers[Person].alive && st->peers[Person].friendly &&
+                  st->peers[Person].respawnAt == 1759300003000,
+              "parses avatar-state.tsv");
+        Check(!bridge::avatarstate::Parse("AIMMOD_AVATARS_1\t1\npeer\t" + id + "\t2\tfriend\t0\t0\t0\n"), "rejects a bad alive flag");
+        Check(!bridge::avatarstate::Parse("AIMMOD_AVATARS_1\t1\npeer\t" + id + "\t1\tally\t0\t0\t0\n"), "rejects an unknown side");
+        Check(!bridge::avatarstate::Parse("AIMMOD_AVATARS_1\t1\npeer\t" + std::to_string(Lobby) + "\t1\tenemy\t100\t0\t0\n"), "rejects a non-player id");
+        Check(!bridge::avatarstate::Parse("peer\t" + id + "\t1\tenemy\t100\t0\t0\n"), "requires the header");
+        auto empty = bridge::avatarstate::Parse("AIMMOD_AVATARS_1\t2\n");
+        Check(empty && empty->peers.empty(), "an empty state file is valid");
     }
     std::printf("%d/%d checks passed\n", checks - failures, checks);
     return failures == 0 ? 0 : 1;

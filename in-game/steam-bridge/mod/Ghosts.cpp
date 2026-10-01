@@ -19,6 +19,7 @@
 
 #include <Windows.h>
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -134,6 +135,10 @@ namespace aimmod
         m_loadCharacterProfile.BindPath(mc_(STR("LoadCharacterProfile")).c_str(), Shape::Command);
         m_setMovementMode.BindPath(STR("/Script/Engine.CharacterMovementComponent:SetMovementMode"), Shape::Command);
         m_updateVisibility.BindPath(mc_(STR("UpdateVisibility")).c_str(), Shape::Command);
+        m_death.BindPath(mc_(STR("Death")).c_str(), Shape::Command);
+        m_respawn.BindPath(mc_(STR("Respawn")).c_str(), Shape::Command);
+        m_setTeam.BindPath(mc_(STR("SetTeam")).c_str(), Shape::Command);
+        m_setHealth.BindPath(mc_(STR("SetHealth")).c_str(), Shape::Command);
         m_movementComponent.Bind(game::FindClass(STR("/Script/Engine.Character")), STR("CharacterMovement"));
         m_aiControllerDefault = UObjectGlobals::StaticFindObject<UObject*>(nullptr, nullptr, STR("/Script/GameSkillsTrainer.Default__TheMetaAIController"));
         ok &= m_aiControllerDefault != nullptr;
@@ -274,6 +279,10 @@ namespace aimmod
         ghost.botProfile = profile;
         ghost.spawnedFrom = profile;
         ghost.peer = peer;
+        ghost.spawnTeam = team;
+        ghost.team = team;
+        ghost.dead = false;
+        ghost.health = -1;
         m_avatarMapDirty = true;
         ghost.nextInert = 0;
         m_ownControllers.insert(controller);
@@ -304,9 +313,10 @@ namespace aimmod
             const FName tag((STR("AimMod.Peer.") + std::to_wstring(ghost.peer)).c_str(), FNAME_Add);
             if (!tags->Contains(tag)) tags->Add(tag);
         }
-        // Shown even when spawned from an invisible helper profile.
-        static_cast<AActor*>(pawn)->SetActorHiddenInGame(false);
-        if (m_updateVisibility.ok())
+        // Shown even when spawned from an invisible helper profile (unless it is down in a combat match).
+        if (!ghost.dead) static_cast<AActor*>(pawn)->SetActorHiddenInGame(false);
+        ghost.team = -1; // re-applied by ApplyCombatState
+        if (!ghost.dead && m_updateVisibility.ok())
             m_updateVisibility.Call(pawn, [](std::uint8_t* value, const Param& p) {
                 if (p.kind == Kind::Bool) *value = 0;
             });
@@ -483,6 +493,7 @@ namespace aimmod
                     });
                 m_log("avatars: " + bridge::Redact(peer) + " uses character profile \"" + wanted + "\"");
             }
+            ApplyCombatState(ghost, character);
             DriveAvatar(ghost, s);
             return;
         }
@@ -558,6 +569,11 @@ namespace aimmod
                 }
             }
             if (!m_options.showRemote) return;
+            if (now >= m_nextStateRead)
+            {
+                m_nextStateRead = now + 0.2;
+                ReadAvatarState();
+            }
             // Scenario changed in the same world: the game may have reset or re-profiled our bots.
             if (const std::string scene = m_bridge.LocalScene(); scene != m_lastScene)
             {
@@ -665,6 +681,91 @@ namespace aimmod
         if (m_avatarMapDirty) WriteAvatarMap();
     }
 
+    // avatar-state.tsv from the service (combat matches). Stale or missing = everyone alive, enemies.
+    void GhostDemo::ReadAvatarState()
+    {
+        m_avatarState.reset();
+        if (m_options.stateDir.empty()) return;
+        const std::filesystem::path file = std::filesystem::path(m_options.stateDir) / L"avatar-state.tsv";
+        WIN32_FILE_ATTRIBUTE_DATA info{};
+        if (!GetFileAttributesExW(file.c_str(), GetFileExInfoStandard, &info)) return;
+        FILETIME now{};
+        GetSystemTimeAsFileTime(&now);
+        const auto u64 = [](FILETIME ft) { return (static_cast<std::uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime; };
+        if (u64(now) - u64(info.ftLastWriteTime) > 100'000'000ull) return; // older than 10 s: no match running
+        std::ifstream in(file, std::ios::binary);
+        std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        m_avatarState = bridge::avatarstate::Parse(text);
+    }
+
+    void GhostDemo::ApplyCombatState(Ghost& ghost, UObject* localCharacter)
+    {
+        UObject* pawn = ghost.pawn.Get();
+        if (!pawn) return;
+        const bridge::avatarstate::PeerState* state = nullptr;
+        if (m_avatarState)
+            if (const auto it = m_avatarState->peers.find(ghost.peer); it != m_avatarState->peers.end()) state = &it->second;
+        auto* actor = static_cast<AActor*>(pawn);
+
+        // Death and respawn: purely visual on our own inert, invulnerable bot.
+        const bool alive = !state || state->alive;
+        if (!alive && !ghost.dead)
+        {
+            ghost.dead = true;
+            if (m_options.nativeDeath && m_death.ok())
+                m_death.Call(pawn, [](std::uint8_t* value, const Param& p) {
+                    if (p.kind == Kind::Object) std::memset(value, 0, sizeof(void*)); // no killer: no kill credit
+                });
+            actor->SetActorHiddenInGame(true);
+            actor->SetActorEnableCollision(false);
+            m_log("avatars: " + bridge::Redact(ghost.peer) + " is down");
+        }
+        else if (alive && ghost.dead)
+        {
+            ghost.dead = false;
+            if (m_options.nativeDeath && m_respawn.ok())
+                m_respawn.Call(pawn, [](std::uint8_t* value, const Param& p) {
+                    if (p.kind == Kind::Bool) *value = 0;
+                });
+            actor->SetActorHiddenInGame(false);
+            actor->SetActorEnableCollision(true);
+            ghost.nextInert = 0; // re-apply AI-off and invulnerability straight away
+            m_log("avatars: " + bridge::Redact(ghost.peer) + " respawned");
+        }
+
+        // Teams: friends share the local player's team, everyone else is on the other one.
+        if (m_setTeam.ok() && m_getTeam.ok())
+        {
+            const auto local = m_getTeam.Number(localCharacter);
+            const int localTeam = local && *local >= 0 && *local < 16 ? static_cast<int>(*local) : 1;
+            const int enemyTeam = ghost.spawnTeam != localTeam ? ghost.spawnTeam : (localTeam == 1 ? 2 : 1);
+            const int want = state && state->friendly ? localTeam : enemyTeam;
+            if (want != ghost.team)
+            {
+                ghost.team = want;
+                m_setTeam.Call(pawn, [want](std::uint8_t* value, const Param& p) {
+                    if (p.kind == Kind::Int32) std::memcpy(value, &want, sizeof(want));
+                });
+            }
+        }
+
+        // Health bar (the avatar stays invulnerable; never set it to 0 while alive).
+        if (state && alive && state->health >= 0 && m_setHealth.ok())
+        {
+            const double health = std::clamp(state->health, 1.0, 100000.0);
+            if (std::fabs(health - ghost.health) > 0.5)
+            {
+                ghost.health = health;
+                m_setHealth.Call(pawn, [health](std::uint8_t* value, const Param& p) {
+                    if (p.kind == Kind::Float)
+                    {
+                        const float v = static_cast<float>(health);
+                        std::memcpy(value, &v, sizeof(v));
+                    }
+                });
+            }
+        }
+    }
     // avatars.tsv for AimModCore: which actor is which remote player's stream.
     void GhostDemo::WriteAvatarMap()
     {
