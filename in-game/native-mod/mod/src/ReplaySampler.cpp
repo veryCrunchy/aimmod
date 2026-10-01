@@ -241,6 +241,13 @@ namespace aimmod
         m_pendingInputs.push_back({0, static_cast<std::uint8_t>(index), static_cast<float>(axis ? value : 1.0)});
     }
 
+    bool ReplaySampler::Mark()
+    {
+        if (!m_capture || m_capture->frameTimes.empty() || m_capture->marks.size() >= 32) return false;
+        m_capture->marks.push_back(static_cast<std::uint32_t>(m_capture->frameTimes.size() - 1));
+        return true;
+    }
+
     void ReplaySampler::OnShotHit(UObject* shooter, UObject* target)
     {
         if (!m_capture || !shooter || !target || shooter != m_character.Get()) return;

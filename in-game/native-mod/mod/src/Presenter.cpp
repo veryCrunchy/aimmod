@@ -170,6 +170,7 @@ namespace aimmod
     {
         m_resolvedProxies = text;
         m_camera.Reset();
+        m_ghost.Reset();
         m_targets.clear();
         std::istringstream in(text);
         std::string line;
@@ -190,13 +191,14 @@ namespace aimmod
                 rest = rest.substr(second + 1);
                 if (id == 0) continue;
             }
-            else if (kind != "camera") continue;
+            else if (kind != "camera" && kind != "ghost") continue;
             UObject* object = RC::Unreal::UObjectGlobals::StaticFindObject<UObject*>(nullptr, nullptr, Widen(rest));
             if (!object || !IsLiveInstance(object)) continue;
             if (kind == "camera")
             {
                 if (object->IsA(m_cameraActorClass)) m_camera = object;
             }
+            else if (kind == "ghost") m_ghost = object;
             else m_targets[id] = object;
         }
     }
@@ -260,6 +262,17 @@ namespace aimmod
         const double location[3] = {pose[0], pose[1], pose[2]};
         const double rotation[3] = {pose[3], pose[4], pose[5]};
         if (!m_setLocationRotation.Call(camera, Filler(location, rotation, 0)) || !m_setFov.Call(component, Filler(nullptr, nullptr, pose[6]))) return idle("camera update failed");
+        // Comparison run: its aim point on the same timeline.
+        if (UObject* ghost = m_ghost.Get(); ghost && !frame->ghostMotion.empty())
+        {
+            double g[7], aim[3];
+            const double gt = std::clamp(t, frame->ghostMotion.front().t, frame->ghostMotion.back().t);
+            if (CameraAt(frame->ghostMotion, gt, g))
+            {
+                AimPoint(g, 800.0, aim);
+                m_setLocation.Call(ghost, Filler(aim, nullptr, 0));
+            }
+        }
         const double ahead = std::clamp(t - frame->time, 0.0, 0.1);
         for (const auto& target : frame->targets)
         {

@@ -64,7 +64,7 @@ namespace aimmod
 
         // Game thread.
         std::string m_resolvedProxies;
-        RC::Unreal::FWeakObjectPtr m_camera;
+        RC::Unreal::FWeakObjectPtr m_camera, m_ghost;
         std::unordered_map<std::uint32_t, RC::Unreal::FWeakObjectPtr> m_targets;
         std::atomic<bool> m_active{false};
         std::atomic<std::uint64_t> m_applies{0};

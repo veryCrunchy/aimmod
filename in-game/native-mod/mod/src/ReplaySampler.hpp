@@ -35,6 +35,8 @@ namespace aimmod
         bool Tick(const AttemptStats& stats, bool sample);
         void OnInput(UObject* component, const char* action, bool axis, double value);
         void OnShotHit(UObject* shooter, UObject* target);
+        // Clip hotkey: marks the current frame of the recording.
+        bool Mark();
         // Closes the recording. Published only for "completed" with >1 sample.
         void Finish(const std::string& reason, std::optional<double> score);
 

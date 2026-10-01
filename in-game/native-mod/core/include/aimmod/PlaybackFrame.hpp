@@ -24,6 +24,7 @@ namespace aimmod
             double camera[7]{}; // x y z pitch yaw roll fov
         };
         std::vector<Sample> motion;
+        std::vector<Sample> ghostMotion; // comparison run (protocol 6 ghostmotion rows)
         struct Target
         {
             std::uint32_t id{};
@@ -41,4 +42,7 @@ namespace aimmod
     double PlaybackTime(const PlaybackFrame& frame, std::int64_t nowUnixMs);
     // Camera row at playback time `t` (interpolated; yaw/roll wrap-aware).
     bool CameraAt(const PlaybackFrame& frame, double t, double out[7]);
+    bool CameraAt(const std::vector<PlaybackFrame::Sample>& motion, double t, double out[7]);
+    // Where a camera aims, `distance` cm along its view.
+    void AimPoint(const double camera[7], double distance, double out[3]);
 } // namespace aimmod

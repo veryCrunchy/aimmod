@@ -4,6 +4,7 @@
 #include <aimmod/GameCommand.hpp>
 #include <aimmod/GameStats.hpp>
 #include <aimmod/ReplayV2.hpp>
+#include <aimmod/Settings.hpp>
 
 #include <atomic>
 #include <condition_variable>
@@ -42,6 +43,12 @@ namespace aimmod
         // core-command.tsv requests (validated) and their answers.
         std::optional<std::variant<GameCommand, CommandError>> TakeCommand();
         void PublishCommandResult(std::string body);
+        // self-pose.tsv: the local view for spectators, only while requested
+        // (self-pose.request touched within the last 5 s).
+        bool poseRequested() const { return m_poseRequested.load(std::memory_order_relaxed); }
+        void PublishSelfPose(std::string body);
+        // Clip hotkey and window (clip-settings.tsv, defaults F8 / 8 s / 2 s).
+        ClipSettings clipSettings() const;
         void PublishReplayStatus(std::string body);
         // Encodes (format 2) and publishes a completed recording.
         void ReplayWrite(std::unique_ptr<replay2::Capture> capture);
@@ -104,6 +111,11 @@ namespace aimmod
         bool m_stop{};
         std::atomic<bool> m_recording{true};
         std::atomic<bool> m_playback{false};
+        std::atomic<bool> m_poseRequested{false};
+        ClipSettings m_clips;
+        std::string m_selfPose;
+        bool m_selfPoseDirty{};
+        std::uint64_t m_lastPoseCheck{}, m_lastClipCheck{};
 
         // Writer-thread state.
         std::string m_lastLive, m_writtenCaps;
