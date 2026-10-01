@@ -297,7 +297,7 @@ returns `{"sequence":n}` (409 `{"error":"unsupported"}` without the
 capability, 400 `{"error":code}` when malformed); `GET <prefix>/game-command`
 returns `{"capabilities":[...],"result":{sequence,state,code,message}}`.
 Capabilities come from `core-active.tsv`: `load` (scenario load) and `start`
-(start with a play type).
+(start with a play type), `capture` (thumbnails).
 
 ```
 AIMMOD_CORE_COMMAND_1
@@ -310,7 +310,29 @@ targetSize	<0.1..10>                        (start, freeplay only)
 targetSpeed	<0.1..10>                       (start, freeplay only)
 mapScale	<0.1..10>                          (start, freeplay only)
 weapon	<weapon profile name>                (start, freeplay only)
+width	<64..3840> / height	<64..2160>       (capture-thumbnail)
+out	<name>.png                              (capture-thumbnail; plain file name)
+view1..view4	<x>,<y>,<z>,<pitch>,<yaw>,<fov> (capture-thumbnail; 1-4, in order)
 ```
+
+`capture-thumbnail` (capability `capture`, also `refresh-scenarios` and
+`action` list above): refused during a challenge; loads the scenario in
+freeplay if it is not the current one (with the same new-file rescan as
+load/start), waits until the world is loaded plus 2 s for streaming, spawns
+an inert CameraActor of its own, hides the player pawn (its first-person
+weapon), makes the camera the view target, and for each view places the
+camera, waits 0.75 s and runs `HighResShot <w>x<h>` (scene only: no HUD,
+crosshair or UMG/AimMod overlays). The PNG the game writes to
+`Saved\Screenshots\WindowsNoEditor` is moved to
+`%LOCALAPPDATA%\AimMod\KovaaksNative\thumbnails\<out>` (several views:
+`<stem>-1.png`, `<stem>-2.png`, ...). If HighResShot writes nothing in 4 s
+it falls back once to `shot` (window resolution). Afterwards the view
+target, pawn visibility and camera are restored. The final result is
+`done captured {"files":[...]}` (message is that JSON); errors:
+`screenshot-unavailable`, `capture-failed`, `timeout`, `challenge-active`,
+`busy`, `unknown-scenario`, `invalid-thumbnail`. HTTP: `POST game-command`
+with `{"action":"capture-thumbnail","scenario","width","height","out",
+"views":[{"x","y","z","pitch","yaw","fov"}]}`.
 
 Result: `AIMMOD_CORE_RESULT_1	<seq>	<accepted|done|error|notice>	<code>	<%-escaped message>`.
 Codes: `loading`/`starting` (accepted), `loaded`/`already-loaded`/`started`/`reset`

@@ -15,6 +15,7 @@
 
 #include <filesystem>
 #include <optional>
+#include <vector>
 #include <string>
 
 namespace aimmod
@@ -34,6 +35,7 @@ namespace aimmod
         // Capabilities: "load" (scenario load) and "start" (start with play type).
         bool canLoad() const { return m_canLoad; }
         bool canStart() const { return m_canStart; }
+        bool canCapture() const { return m_canCapture; }
         bool overridesActive() const { return m_overrides.active; }
         // Called every engine frame on the game thread.
         void Tick(double now, const std::string& currentScenario, bool inChallenge, bool loading);
@@ -55,6 +57,31 @@ namespace aimmod
         game::Getter m_start, m_activate, m_persistentPlayType, m_playCurrent, m_localHash, m_onlineHash, m_cancel;
         game::Getter m_timeDilation, m_mapScale, m_adaptiveOverride, m_adaptiveReset, m_weapon;
         game::Getter m_refreshLocal, m_reloadProfiles;
+        // Thumbnail capture (camera actor + HighResShot).
+        game::Getter m_exec, m_spawnBegin, m_spawnFinish, m_setViewTarget, m_getViewTarget, m_destroy, m_hide, m_place, m_fov;
+        game::Field m_cameraComponent, m_fullyLoaded, m_mapLoading;
+        game::UObject* m_kismet{};
+        game::UClass* m_cameraClass{};
+        bool m_canCapture{};
+        std::filesystem::path m_screenshots, m_thumbnails;
+        struct Capture
+        {
+            GameCommand command;
+            enum class Phase { Loading, Place, Shoot, Wait } phase{Phase::Loading};
+            double deadline{}, loadedAt{-1}, until{}, nextCheck{};
+            std::size_t view{};
+            bool fallbackShot{}, triedFallback{};
+            std::vector<std::wstring> before;
+            std::wstring candidate;
+            std::uintmax_t candidateSize{};
+            RC::Unreal::FWeakObjectPtr camera, previousTarget, pawn;
+            std::vector<std::string> files;
+        };
+        std::optional<Capture> m_capture;
+        void BeginCapture(const GameCommand& command, double now, const std::string& current, game::UObject* manager);
+        void TickCapture(double now, const std::string& current, bool inChallenge, bool loading);
+        void EndCapture(const char* state, const std::string& code, const std::string& message);
+        std::vector<std::wstring> Screenshots() const;
         std::filesystem::path m_scenarioFolder;
         game::UObject* m_startDefault{};
         bool m_canLoad{}, m_canStart{};

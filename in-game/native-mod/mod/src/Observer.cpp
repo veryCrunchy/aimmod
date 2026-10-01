@@ -121,6 +121,7 @@ namespace aimmod
         if (m_presenter.ready()) caps += caps.empty() ? "presenter" : ",presenter";
         if (m_control.canLoad()) caps += caps.empty() ? "load" : ",load";
         if (m_control.canStart()) caps += caps.empty() ? "start" : ",start";
+        if (m_control.canCapture()) caps += caps.empty() ? "capture" : ",capture";
         return caps;
     }
 

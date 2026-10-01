@@ -2,6 +2,7 @@
 #include <aimmod/GameCommand.hpp>
 
 #include <charconv>
+#include <cmath>
 #include <map>
 
 namespace aimmod
@@ -31,6 +32,7 @@ namespace aimmod
         case GameCommand::Action::LoadScenario: return "load-scenario";
         case GameCommand::Action::StartScenario: return "start-scenario";
         case GameCommand::Action::RefreshScenarios: return "refresh-scenarios";
+        case GameCommand::Action::CaptureThumbnail: return "capture-thumbnail";
         default: return "reset-overrides";
         }
     }
@@ -77,7 +79,8 @@ namespace aimmod
         error.sequence = c.sequence;
         for (const auto& [key, value] : fields)
             if (key != "seq" && key != "action" && key != "scenario" && key != "mode" && key != "timeScale" && key != "targetSize" && key != "targetSpeed" &&
-                key != "mapScale" && key != "weapon")
+                key != "mapScale" && key != "weapon" && key != "width" && key != "height" && key != "out" && key != "view1" && key != "view2" &&
+                key != "view3" && key != "view4")
                 return fail("invalid-command", "Unknown field: " + key + ".");
         const std::string* action = get("action");
         if (!action) return fail("invalid-command", "Missing action.");
@@ -85,8 +88,10 @@ namespace aimmod
         else if (*action == "start-scenario") c.action = GameCommand::Action::StartScenario;
         else if (*action == "reset-overrides") c.action = GameCommand::Action::ResetOverrides;
         else if (*action == "refresh-scenarios") c.action = GameCommand::Action::RefreshScenarios;
+        else if (*action == "capture-thumbnail") c.action = GameCommand::Action::CaptureThumbnail;
         else return fail("invalid-command", "Unknown action.");
-        if (c.action == GameCommand::Action::LoadScenario || c.action == GameCommand::Action::StartScenario)
+        if (c.action == GameCommand::Action::LoadScenario || c.action == GameCommand::Action::StartScenario ||
+            c.action == GameCommand::Action::CaptureThumbnail)
         {
             const std::string* scenario = get("scenario");
             if (!scenario || !SafeName(*scenario)) return fail("invalid-scenario", "Missing or invalid scenario name.");
@@ -115,6 +120,47 @@ namespace aimmod
             if (!SafeName(*weapon)) return fail("invalid-override", "Invalid weapon profile name.");
             c.weapon = *weapon;
         }
+        if (c.action == GameCommand::Action::CaptureThumbnail)
+        {
+            auto integer = [&](const char* key, int lo, int hi, int& target) {
+                const std::string* v = get(key);
+                if (!v) return false;
+                auto n = Number(*v);
+                if (!n || *n != static_cast<int>(*n) || *n < lo || *n > hi) return false;
+                target = static_cast<int>(*n);
+                return true;
+            };
+            if (!integer("width", 64, 3840, c.width) || !integer("height", 64, 2160, c.height))
+                return fail("invalid-thumbnail", "Width must be 64-3840 and height 64-2160 pixels.");
+            const std::string* out = get("out");
+            if (!out || !IsThumbnailFileName(*out)) return fail("invalid-thumbnail", "Output must be a plain .png file name.");
+            c.out = *out;
+            for (int i = 1; i <= 4; ++i)
+            {
+                const std::string* v = get("view" + std::to_string(i));
+                if (!v) break;
+                double n[6];
+                std::string_view rest = *v;
+                for (int k = 0; k < 6; ++k)
+                {
+                    auto comma = rest.find(',');
+                    if ((k < 5) == (comma == std::string_view::npos)) return fail("invalid-thumbnail", "A view is x,y,z,pitch,yaw,fov.");
+                    auto value = Number(rest.substr(0, comma));
+                    if (!value) return fail("invalid-thumbnail", "A view is x,y,z,pitch,yaw,fov.");
+                    n[k] = *value;
+                    rest = comma == std::string_view::npos ? std::string_view{} : rest.substr(comma + 1);
+                }
+                if (std::fabs(n[0]) > 1e7 || std::fabs(n[1]) > 1e7 || std::fabs(n[2]) > 1e7 || n[3] < -90 || n[3] > 90 || std::fabs(n[4]) > 3600 ||
+                    n[5] < 5 || n[5] > 170)
+                    return fail("invalid-thumbnail", "View values out of range.");
+                c.views.push_back({n[0], n[1], n[2], n[3], n[4], n[5]});
+            }
+            if (c.views.empty() || (get("view" + std::to_string(c.views.size() + 1)) != nullptr))
+                return fail("invalid-thumbnail", "One to four views (view1..view4, in order).");
+            for (int i = static_cast<int>(c.views.size()) + 1; i <= 4; ++i)
+                if (get("view" + std::to_string(i))) return fail("invalid-thumbnail", "Views must be numbered in order.");
+        }
+        else if (get("width") || get("height") || get("out") || get("view1")) return fail("invalid-command", "Thumbnail fields apply to capture-thumbnail only.");
         if (c.action != GameCommand::Action::StartScenario && (c.HasOverrides() || get("mode")))
             return fail("invalid-command", "Mode and overrides apply to start-scenario only.");
         // Ranked scores stay untouched: modified runs are freeplay only.
@@ -129,6 +175,22 @@ namespace aimmod
         for (char c : name)
             if (c == '\\' || c == '/' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|') return false;
         return true;
+    }
+
+    bool IsThumbnailFileName(std::string_view name)
+    {
+        if (name.size() < 5 || name.size() > 128 || !name.ends_with(".png") || name.front() == '.' || name.front() == ' ') return false;
+        for (char c : name)
+            if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == ' ' || c == '-' || c == '_' || c == '.' || c == '(' ||
+                  c == ')'))
+                return false;
+        return name.find("..") == std::string_view::npos;
+    }
+
+    std::string ThumbnailFileName(const std::string& out, std::size_t index, std::size_t count)
+    {
+        if (count <= 1) return out;
+        return out.substr(0, out.size() - 4) + "-" + std::to_string(index + 1) + ".png";
     }
 
     std::string FormatCommandResult(std::uint64_t sequence, std::string_view state, std::string_view code, std::string_view message)
