@@ -59,6 +59,11 @@ namespace aimmod
         void ApplyRotation(double yaw);
         void Frame(UObject* target);
         void ShowWeapon(const PreviewRequest& request);
+        void HoldWeapon(const PreviewRequest& request);
+        UObject* MakeWeapon(const PreviewRequest& request, bool selectedWeapon);
+        // New components join the capture's show-only list (it holds the
+        // components the stage had when it spawned).
+        void ShowInCapture(UObject* component);
         void RemoveWeapon();
         bool Capture();
         bool CaptureTo(std::uint8_t source, const std::wstring& file);
