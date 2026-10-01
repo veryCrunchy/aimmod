@@ -233,15 +233,17 @@ test('the curated set shows as finish swatches in its own colours, with no comin
   s.requests.find(r=>r.url==='/private/multiplayer?part=cosmetics').finish(200,{available:true,problem:null,version:2,show:'friends',unavailable:0,items:[
     {id:'tint-mint',version:1,kind:'avatar_tint',name:'AimMod Mint',models:['Meso','Endo'],color:[0.02,0.6,0.3],swatch:['#27cb95','#eff3f1','#959e99'],shine:0.1,equipped:false},
     {id:'tint-gold',version:1,kind:'avatar_tint',name:'Gold',models:['Meso','Endo'],swatch:['#f0c675','red;x','#f9e2aa'],shine:0.9,equipped:true},
-    {id:'finish-ice',version:1,kind:'weapon_finish',name:'Ice',models:[],swatch:['#7ccfff','#6fbcee'],shine:0,equipped:false}]});
+    {id:'finish-ice',version:1,kind:'weapon_finish',name:'Ice',models:[],swatch:['#7ccfff','#6fbcee'],shine:0,equipped:false},
+    {id:'accessory-halo',version:1,kind:'accessory',name:'Halo',models:['Meso','Endo'],role:'head',swatch:['#f9dc8a'],shine:0.9,equipped:false}]});
   const t=s.text();
   assert.ok(!t.includes('coming soon'),'items replace the coming-soon state');
   assert.ok(t.includes('AimMod Mint')&&t.includes('Gold')&&t.includes('Ice')&&t.includes('Tints and patterns')&&t.includes('Weapon finishes'));
-  for(const hex of ['#27cb95','#eff3f1','#959e99','#f0c675','#7ccfff','#6fbcee'])assert.ok(painted.includes(hex),'swatch paints '+hex);
+  assert.ok(t.includes('Accessories')&&t.includes('Halo')&&t.includes('Head · Meso, Endo'),'accessories list with their slot');
+  for(const hex of ['#27cb95','#eff3f1','#959e99','#f0c675','#7ccfff','#6fbcee','#f9dc8a'])assert.ok(painted.includes(hex),'swatch paints '+hex);
   assert.ok(!painted.some(p=>/red|;/.test(p)),'only hex colours reach the canvas');
-  assert.equal(s.all().filter(e=>e.tag==='canvas'&&e.className==='mp-cos-preview').length,3,'one swatch per item');
-  // Try-on is for looks the preview shows (avatar items); weapon finishes are equipped directly.
-  assert.equal(s.all().filter(e=>e.tag==='button'&&e.textContent==='Preview').length,1);
+  assert.equal(s.all().filter(e=>e.tag==='canvas'&&e.className==='mp-cos-preview').length,4,'one swatch per item');
+  // Try-on is for what the preview shows (tints and accessories); weapon finishes are equipped directly.
+  assert.equal(s.all().filter(e=>e.tag==='button'&&e.textContent==='Preview').length,2);
   // Show others' cosmetics stays: the current choice is selected, and changes post.
   s.button('Off').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'cosmetic-view',show:'off'});
   s.button('All').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'cosmetic-view',show:'all'});

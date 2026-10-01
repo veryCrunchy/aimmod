@@ -1,4 +1,6 @@
 #include <aimmod/Cosmetics.hpp>
+
+#include <span>
 #include <aimmod/Json.hpp>
 
 #include <Windows.h>
@@ -51,6 +53,13 @@ namespace aimmod::cosmetics
             constexpr std::string_view root = "/Game/AimModCosmetics/";
             if (path.size() <= root.size() || path.size() > 200 || path.substr(0, root.size()) != root) return false;
             if (path.find("..") != std::string_view::npos || path.find("//") != std::string_view::npos) return false;
+            for (char c : path)
+                if (!IsAlpha(c) && !IsDigit(c) && c != '_' && c != '/' && c != '.' && c != '-') return false;
+            return true;
+        }
+        bool IsAssetPathText(std::string_view path)
+        {
+            if (path.size() > 200 || path.find("..") != std::string_view::npos || path.find("//") != std::string_view::npos) return false;
             for (char c : path)
                 if (!IsAlpha(c) && !IsDigit(c) && c != '_' && c != '/' && c != '.' && c != '-') return false;
             return true;
@@ -225,6 +234,95 @@ namespace aimmod::cosmetics
 
     bool Item::HasPart(std::string_view part) const { return Contains(parts, part); }
 
+    bool IsGameAccessoryAsset(std::string_view path, bool material)
+    {
+        static constexpr std::string_view meshes[] = {"/Engine/BasicShapes/", "/Game/Art/StaticMeshes/KMC/Brushes/"};
+        static constexpr std::string_view materials[] = {"/Game/Materials/Instances/Characters/S_Meso/Base/MI_PaintedMetal_",
+                                                         "/Game/Materials/Instances/Characters/S_Endo/Base/MI_PaintedMetal_"};
+        if (!IsAssetPathText(path)) return false;
+        for (std::string_view root : material ? std::span<const std::string_view>(materials) : std::span<const std::string_view>(meshes))
+            if (path.size() > root.size() && path.substr(0, root.size()) == root && path.find('/', root.size()) == std::string_view::npos) return true;
+        return false;
+    }
+
+    bool Item::NeedsPak() const
+    {
+        const KindInfo* k = FindKind(kind);
+        if (!k || !k->needsPak) return false;
+        const bool game = kind == "accessory" && !pak && fit && IsGameAccessoryAsset(mesh, false) && IsGameAccessoryAsset(material, true);
+        return !game;
+    }
+
+    void RotatorAxes(const double rotation[3], double x[3], double y[3], double z[3])
+    {
+        constexpr double D = 3.14159265358979323846 / 180.0;
+        const double sp = std::sin(rotation[0] * D), cp = std::cos(rotation[0] * D), sy = std::sin(rotation[1] * D), cy = std::cos(rotation[1] * D),
+                     sr = std::sin(rotation[2] * D), cr = std::cos(rotation[2] * D);
+        // FRotationMatrix rows.
+        x[0] = cp * cy, x[1] = cp * sy, x[2] = sp;
+        y[0] = sr * sp * cy - cr * sy, y[1] = sr * sp * sy + cr * cy, y[2] = -sr * cp;
+        z[0] = -(cr * sp * cy + sr * sy), z[1] = cy * sr - cr * sp * sy, z[2] = cr * cp;
+    }
+
+    std::optional<Placement> PlaceAccessory(const Fit& fit, const double localMin[3], const double localMax[3], const double anchor[3], const double forward[3])
+    {
+        double extent[3];
+        for (int i = 0; i < 3; ++i)
+        {
+            extent[i] = localMax[i] - localMin[i];
+            if (!std::isfinite(extent[i]) || !std::isfinite(anchor[i]) || !std::isfinite(forward[i])) return std::nullopt;
+        }
+        if (std::max({extent[0], extent[1], extent[2]}) < 0.01) return std::nullopt;
+        // The character's frame: forward on the ground, right, up.
+        const double flat = std::hypot(forward[0], forward[1]);
+        if (flat < 1e-6) return std::nullopt;
+        const double axes[3][3] = {{forward[0] / flat, forward[1] / flat, 0}, {-forward[1] / flat, forward[0] / flat, 0}, {0, 0, 1}};
+        // Local axis for each character axis: the permutation whose proportions
+        // best match the wanted size (identity first, so ties keep the mesh's own orientation).
+        static constexpr int perms[6][3] = {{0, 1, 2}, {1, 0, 2}, {0, 2, 1}, {2, 1, 0}, {1, 2, 0}, {2, 0, 1}};
+        const double wantMax = std::max({fit.size[0], fit.size[1], fit.size[2]}), haveMax = std::max({extent[0], extent[1], extent[2]});
+        int best = 0;
+        double bestCost = 1e300;
+        for (int p = 0; p < 6; ++p)
+        {
+            double cost = 0;
+            for (int c = 0; c < 3; ++c)
+            {
+                const double d = fit.size[c] / wantMax - extent[perms[p][c]] / haveMax;
+                cost += d * d;
+            }
+            if (cost < bestCost - 1e-9) bestCost = cost, best = p;
+        }
+        // World direction of each local axis; an odd permutation flips one axis to stay a rotation.
+        double local[3][3]{};
+        const bool odd = best == 1 || best == 2 || best == 3;
+        for (int c = 0; c < 3; ++c)
+            for (int k = 0; k < 3; ++k) local[perms[best][c]][k] = axes[c][k] * (odd && c == 2 ? -1 : 1);
+        Placement out;
+        for (int c = 0; c < 3; ++c) out.scale[perms[best][c]] = fit.size[c] / std::max(extent[perms[best][c]], 0.01);
+        // Rotator from the local X, Y, Z world axes (FMatrix::Rotator).
+        constexpr double R = 180.0 / 3.14159265358979323846;
+        const double* X = local[0];
+        out.rotation[0] = std::atan2(X[2], std::hypot(X[0], X[1])) * R;
+        out.rotation[1] = std::atan2(X[1], X[0]) * R;
+        out.rotation[2] = 0;
+        double rx[3], ry[3], rz[3];
+        RotatorAxes(out.rotation, rx, ry, rz);
+        const double* Y = local[1];
+        const double* Z = local[2];
+        out.rotation[2] = std::atan2(Z[0] * ry[0] + Z[1] * ry[1] + Z[2] * ry[2], Y[0] * ry[0] + Y[1] * ry[1] + Y[2] * ry[2]) * R;
+        // The bounds' centre lands on the anchor plus the offset.
+        double target[3];
+        for (int k = 0; k < 3; ++k) target[k] = anchor[k] + axes[0][k] * fit.offset[0] + axes[1][k] * fit.offset[1] + axes[2][k] * fit.offset[2];
+        for (int k = 0; k < 3; ++k)
+        {
+            double centre = 0;
+            for (int a = 0; a < 3; ++a) centre += local[a][k] * out.scale[a] * (localMin[a] + localMax[a]) / 2;
+            out.location[k] = target[k] - centre;
+        }
+        return out;
+    }
+
     const Attachment* Item::AttachmentFor(std::string_view model) const
     {
         for (const auto& [m, a] : attach)
@@ -251,17 +349,26 @@ namespace aimmod::cosmetics
         }
         for (const auto& [name, v] : item.scalar)
             if (!IsPlainName(name) || !Finite(v, -10, 10)) return id + ": bad scalar " + name;
-        if (kind->needsPak && !item.pak) return id + ": needs a pak";
+        if (item.NeedsPak() && !item.pak) return id + ": needs a pak";
         if (!kind->needsPak && item.vector.empty() && item.scalar.empty()) return id + ": no parameters";
         // AimModCore additions: assets only from the item's AimMod pak.
         if (item.pak && !IsPakName(*item.pak)) return id + ": bad pak name";
         for (const auto& [name, path] : item.textures)
             if (!IsPlainName(name) || !IsAimModAsset(path) || !item.pak) return id + ": bad texture " + name;
         for (const std::string* path : {&item.mesh, &item.material})
-            if (!path->empty() && (!IsAimModAsset(*path) || !item.pak)) return id + ": bad asset path";
+            if (!path->empty() && !(IsAimModAsset(*path) && item.pak) && !(item.kind == "accessory" && !item.NeedsPak()))
+                return id + ": bad asset path";
         for (const std::string& model : item.models)
             if (!IsPlainName(model)) return id + ": bad model name";
-        if (item.kind == "accessory" && item.attachRole != "head" && item.attachRole != "spine") return id + ": accessories attach to head or spine";
+        if (item.kind == "accessory" && item.attachRole != "head" && item.attachRole != "neck" && item.attachRole != "spine")
+            return id + ": accessories attach to head, neck or spine";
+        if (item.fit)
+        {
+            const Fit& f = *item.fit;
+            if (!IsPlainName(f.bone) || (f.anchor != "bone" && f.anchor != "top" && f.anchor != "crown")) return id + ": bad fit";
+            for (int i = 0; i < 3; ++i)
+                if (!Finite(f.offset[i], -60, 60) || !Finite(f.size[i], 1, 60)) return id + ": fit out of range";
+        }
         for (const auto& [model, a] : item.attach)
         {
             if (!Contains(item.models, model) || !IsPlainName(a.bone)) return id + ": bad attachment for " + model;
@@ -374,6 +481,19 @@ namespace aimmod::cosmetics
                         for (const auto& [k, x] : value.members)
                         {
                             if (k == "role" && x.isString()) item.attachRole = x.string;
+                            else if (k == "fit" && x.isObject())
+                            {
+                                Fit f;
+                                const json::Value* bone = x.find("bone");
+                                const json::Value* anchor = x.find("anchor");
+                                if (!bone || !bone->isString() || (anchor && !anchor->isString())) return bad("bad fit");
+                                for (const auto& [fk, fv] : x.members)
+                                    if (fk != "bone" && fk != "anchor" && fk != "offset" && fk != "size") return bad("bad fit");
+                                f.bone = bone->string;
+                                if (anchor) f.anchor = anchor->string;
+                                if (!Triple(x.find("offset"), f.offset) || !x.find("size") || !Triple(x.find("size"), f.size)) return bad("bad fit");
+                                item.fit = f;
+                            }
                             else if (k == "models" && x.isObject() && x.members.size() <= 16)
                                 for (const auto& [model, a] : x.members)
                                 {
@@ -459,7 +579,7 @@ namespace aimmod::cosmetics
         if (it == index.end()) return fail("not in the catalog: " + std::string(id));
         const Item& item = it->second;
         if (item.draft && !options.allowDrafts) return fail(std::string(id) + " is a draft");
-        if (FindKind(item.kind)->needsPak && !(item.pak && options.verifiedPaks.contains(*item.pak)))
+        if (item.NeedsPak() && !(item.pak && options.verifiedPaks.contains(*item.pak)))
             return fail(std::string(id) + " needs an AimMod pak matching the manifest");
         return &item;
     }
@@ -778,12 +898,14 @@ namespace aimmod::cosmetics
                 Take(plan.body, item, plan, "body item");
             else if (item->kind == "accessory")
             {
-                if (item->mesh.empty() || !item->AttachmentFor(model))
+                if (item->mesh.empty() || (!item->fit && !item->AttachmentFor(model)))
                 {
                     plan.skipped.push_back(item->id + ": no mesh or attachment for " + std::string(model));
                     continue;
                 }
-                Take(item->attachRole == "head" ? plan.head : plan.spine, item, plan, item->attachRole == "head" ? "head item" : "spine item");
+                if (item->attachRole == "head") Take(plan.head, item, plan, "head item");
+                else if (item->attachRole == "neck") Take(plan.neck, item, plan, "neck item");
+                else Take(plan.spine, item, plan, "spine item");
             }
             else plan.skipped.push_back(item->id + ": " + item->kind + " is not supported yet");
         }

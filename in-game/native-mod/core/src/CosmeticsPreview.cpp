@@ -66,6 +66,7 @@ namespace aimmod
             std::snprintf(buffer, sizeof buffer, "|s:%.4f", s.value[0]);
             key += "|" + s.name + buffer;
         }
+        for (const auto& a : accessories) key += "|a:" + a;
         return key;
     }
 
@@ -128,6 +129,13 @@ namespace aimmod
                 PreviewParam p;
                 if (r.vectors.size() >= MaxPreviewParams || !Param(value, 4, 0.0, 1.0, p)) return bad("vector");
                 r.vectors.push_back(std::move(p));
+            }
+            else if (key == "accessory")
+            {
+                const bool id = !value.empty() && value.size() <= 48 && value[0] != '-' &&
+                                std::all_of(value.begin(), value.end(), [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-'; });
+                if (r.accessories.size() >= MaxPreviewAccessories || !id) return bad("accessory");
+                r.accessories.emplace_back(value);
             }
             else if (key == "scalar")
             {
@@ -199,7 +207,7 @@ namespace aimmod
         return fit / std::tan(fov) + halfWidth;
     }
 
-    PreviewComposition ComposePreview(const PreviewPixels& color, const PreviewPixels& normals, int size)
+    PreviewComposition ComposePreview(const PreviewPixels& color, const PreviewPixels& normals, PreviewMask kind, int size)
     {
         PreviewComposition out;
         size = std::clamp(size, 16, 2048);
@@ -233,7 +241,7 @@ namespace aimmod
                 for (int x = 0; x < w; ++x)
                 {
                     const std::size_t i = static_cast<std::size_t>(y) * w + x;
-                    if (SameColour(&normals.rgba[i * 4], background, 6)) continue;
+                    if (kind == PreviewMask::InverseAlpha ? normals.rgba[i * 4 + 3] >= 128 : SameColour(&normals.rgba[i * 4], background, 6)) continue;
                     mask[i] = true;
                     ++count;
                     out.left = std::min(out.left, x);
@@ -243,9 +251,11 @@ namespace aimmod
                 }
         }
         out.coverage = w && h ? static_cast<double>(count) / (static_cast<double>(w) * h) : 0;
-        out.empty = count < std::max<long long>(16, static_cast<long long>(w) * h / 2000);
+        // Too little (nothing rendered) or nearly everything (a mask that did not work) is no character.
+        out.empty = count < std::max<long long>(16, static_cast<long long>(w) * h / 2000) || count > static_cast<long long>(w) * h * 9 / 10;
 
-        // Levelling: the 97th percentile of the character's luminance goes to ~0.8.
+        // Levelling: the 97th percentile of the character's luminance goes
+        // towards 0.8, within a mild range (the lighting does the real work).
         if (!out.empty)
         {
             std::vector<float> lum;
@@ -258,7 +268,7 @@ namespace aimmod
                 }
             auto at = lum.begin() + static_cast<std::ptrdiff_t>(static_cast<double>(lum.size() - 1) * 0.97);
             std::nth_element(lum.begin(), at, lum.end());
-            out.gain = *at > 1e-4f ? std::clamp(0.8 / *at, 0.7, 5.0) : 5.0;
+            out.gain = *at > 1e-4f ? std::clamp(0.8 / *at, 0.75, 2.0) : 2.0;
         }
 
         // Framing on the silhouette: height-led so turning does not zoom.

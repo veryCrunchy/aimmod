@@ -506,6 +506,7 @@
   }
   // Cosmetics: curated catalog items, shown only in AimMod matches ------------
   var cosmeticsOpen=false,cosmeticsData=null;
+  var COSMETIC_SLOTS={head:'Head',neck:'Neck',spine:'Back'};
   var COSMETIC_GROUPS=[['Tints and patterns',['avatar_tint','avatar_pattern','player_model']],['Weapon finishes',['weapon_finish','weapon_pattern','weapon_model','reload_animation']],['Accessories',['accessory']]];
   function openCosmetics(){cosmeticsOpen=true;mapsOpen=false;historyOpen=false;loadCosmetics();render();previewTick();}
   // Live character preview: while this page is open and visible, a heartbeat asks
@@ -567,7 +568,10 @@
         x.strokeStyle=main;x.lineWidth=5;x.beginPath();x.arc(cx,cy,r-5,0,tau);x.stroke();
         x.fillStyle=second;x.beginPath();x.arc(cx,cy,6,0,tau);x.fill();
       }else if(item.kind==='accessory'){
-        x.strokeStyle=main;x.lineWidth=3;x.beginPath();x.arc(cx,cy,10,0,tau);x.stroke();
+        // Accessory: its colour as a ring on a dark chip, like the piece itself.
+        x.fillStyle='#202a26';x.beginPath();x.arc(cx,cy,r,0,tau);x.fill();
+        x.strokeStyle=main;x.lineWidth=6;x.beginPath();x.arc(cx,cy,r-7,0,tau);x.stroke();
+        x.strokeStyle=shade(main,-0.4);x.lineWidth=1.5;x.beginPath();x.arc(cx,cy,r-3.5,0,tau);x.stroke();
       }else{
         // Body tint: paint chip split between body paint and panel colour, with a metal rim.
         x.fillStyle=main;x.beginPath();x.arc(cx,cy,r,0,tau);x.fill();
@@ -602,9 +606,9 @@
         var cell=node('div','mp-port-cell mp-cos-cell');var card=node('div','panel mp-port mp-cos'+(i.equipped?' on':''));cell.appendChild(card);
         card.appendChild(add(node('div','mp-cos-art'),swatch(i)));
         card.title=safe(i.name,i.id);
-        var info=node('div','mp-port-info');add(info,add(node('div','mp-port-title'),node('strong','',safe(i.name,i.id)),i.equipped?chip('Equipped','mint'):null),node('span','mp-port-facts',(i.models&&i.models.length?i.models.join(', ')+' · ':'')+'Version '+i.version));
+        var info=node('div','mp-port-info');add(info,add(node('div','mp-port-title'),node('strong','',safe(i.name,i.id)),i.equipped?chip('Equipped','mint'):null),node('span','mp-port-facts',(COSMETIC_SLOTS[i.role]?COSMETIC_SLOTS[i.role]+' · ':'')+(i.models&&i.models.length?i.models.join(', ')+' · ':'')+'Version '+i.version));
         card.appendChild(info);
-        var tryOn=!i.equipped&&(i.kind==='avatar_tint'||i.kind==='avatar_pattern'||i.kind==='player_model')?button(preview.item===i.id?'Previewing':'Preview',function(){preview.item=preview.item===i.id?null:i.id;preview.fastUntil=Date.now()+2000;previewSend();render();},'compact quiet'):null;
+        var tryOn=!i.equipped&&(i.kind==='avatar_tint'||i.kind==='avatar_pattern'||i.kind==='player_model'||i.kind==='accessory')?button(preview.item===i.id?'Previewing':'Preview',function(){preview.item=preview.item===i.id?null:i.id;preview.fastUntil=Date.now()+2000;previewSend();render();},'compact quiet'):null;
         card.appendChild(actions(i.equipped?button('Remove',function(){cosmeticAct('cosmetic-remove',{id:i.id});},'compact quiet'):button('Equip',function(){cosmeticAct('cosmetic-equip',{id:i.id});},'compact primary'),tryOn));
         grid.appendChild(cell);
       });

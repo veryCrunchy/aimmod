@@ -86,7 +86,16 @@ foreach ($item in $items) {
     }
     foreach ($field in 'file', 'path', 'url', 'texture') { if (Has $item $field) { $problems.Add("${id}: field '$field' is not allowed (catalog items never name player files)") } }
     $pak = if ((Has $item 'pak') -and (Has $item.pak 'file')) { [string]$item.pak.file } else { $null }
-    if ($rule.pak -and -not $pak) { $problems.Add("${id}: $kind needs a pak") }
+    # Accessories fitted from the game's own meshes need no pak (the same allow-list as AimModCore and the service).
+    $mesh = if (Has $item 'mesh') { [string]$item.mesh } else { '' }
+    $material = if (Has $item 'material') { [string]$item.material } else { '' }
+    $role = if ((Has $item 'attach') -and $item.attach -is [string]) { $item.attach } elseif ((Has $item 'attach') -and (Has $item.attach 'role')) { [string]$item.attach.role } else { '' }
+    $fitted = (Has $item 'attach') -and $item.attach -isnot [string] -and (Has $item.attach 'fit')
+    $gameAccessory = $kind -eq 'accessory' -and -not $pak -and $fitted -and -not $mesh.Contains('..') -and -not $material.Contains('..') -and
+        $mesh -cmatch '^(/Engine/BasicShapes/|/Game/Art/StaticMeshes/KMC/Brushes/)[A-Za-z0-9_.-]{1,96}$' -and
+        $material -cmatch '^/Game/Materials/Instances/Characters/S_(Meso|Endo)/Base/MI_PaintedMetal_[A-Za-z0-9_.-]{1,96}$'
+    if ($kind -eq 'accessory' -and $role -notin @('head', 'neck', 'spine')) { $problems.Add("${id}: accessories attach to head, neck or spine") }
+    if ($rule.pak -and -not $pak -and -not $gameAccessory) { $problems.Add("${id}: $kind needs a pak") }
     if (-not $rule.pak -and -not $hasParams) { $problems.Add("${id}: no parameters") }
     if ($pak) {
         if (-not (Test-PakName $pak)) { $problems.Add("${id}: pak name '$pak' not allowed") }

@@ -74,6 +74,16 @@ namespace aimmod::cosmetics
         std::string bone;                 // bone or socket on the model's CharacterMesh0
         double location[3]{}, rotation[3]{}, scale[3]{1, 1, 1};
     };
+    // Accessory fit for any rig: the first bone whose name contains `bone`
+    // (case-insensitive), an anchor on it, an offset and a size in the
+    // character's own frame (forward, right, up; cm). The mesh is turned so
+    // its proportions match `size` and scaled to it.
+    struct Fit
+    {
+        std::string bone;          // e.g. "Head", "Neck", "Chest"
+        std::string anchor{"bone"}; // "bone", "top" (the character's top, above the bone) or "crown" (halfway from the bone to the top)
+        double offset[3]{}, size[3]{};
+    };
     struct Item
     {
         std::string id;
@@ -87,13 +97,33 @@ namespace aimmod::cosmetics
         std::vector<std::pair<std::string, std::string>> textures; // parameter -> asset path (pak)
         std::optional<std::string> pak;                   // pak file name
         std::string mesh, material;                       // accessory assets (pak)
-        std::string attachRole;                           // accessory: "head" or "spine"
+        std::string attachRole;                           // accessory: "head", "neck" or "spine"
+        std::optional<Fit> fit;                           // accessory from game/engine meshes (no pak)
         std::vector<std::pair<std::string, Attachment>> attach; // per base model
         bool draft{};
 
         bool HasPart(std::string_view part) const;
+        // Pak kinds need a verified pak, except accessories built from the
+        // game's and engine's own meshes (IsGameAccessoryAsset) with a fit.
+        bool NeedsPak() const;
         const Attachment* AttachmentFor(std::string_view model) const;
     };
+    // Curated meshes and materials an accessory may use without a pak: the
+    // engine's basic shapes, the map editor's brushes and the free Meso
+    // material instances (tinted through their probed parameters).
+    bool IsGameAccessoryAsset(std::string_view path, bool material);
+
+    // Where an accessory goes: world location, rotation (pitch, yaw, roll in
+    // degrees, UE convention) and scale per local axis, from the mesh's local
+    // bounds, the anchor point and the character's forward direction.
+    struct Placement
+    {
+        double location[3]{}, rotation[3]{}, scale[3]{1, 1, 1};
+    };
+    std::optional<Placement> PlaceAccessory(const Fit& fit, const double localMin[3], const double localMax[3], const double anchor[3], const double forward[3]);
+    // Unit X, Y and Z axes of an UE rotator (pitch, yaw, roll in degrees).
+    void RotatorAxes(const double rotation[3], double x[3], double y[3], double z[3]);
+
     // Structural check (CosmeticsCatalog.validate): nullopt = valid, else the reason.
     std::optional<std::string> Validate(const Item& item);
 
@@ -187,11 +217,12 @@ namespace aimmod::cosmetics
     std::optional<Looks> ParseLooks(std::string_view text, std::string* error = nullptr);
 
     // What one character wears, after resolution and fit: at most one
-    // parameter item per part and one head and one spine accessory.
+    // parameter item per part and one head, one neck and one spine accessory.
     struct Plan
     {
         const Item* body{};    // tint/pattern on the avatar mesh
         const Item* head{};    // accessory
+        const Item* neck{};    // accessory
         const Item* spine{};   // accessory
         const Item* weapon{};  // finish on the own selected weapon
         const Item* arms{};    // finish on the own arms

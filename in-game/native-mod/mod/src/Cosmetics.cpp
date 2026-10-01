@@ -1,5 +1,7 @@
 #include "Cosmetics.hpp"
 
+#include "Accessory.hpp"
+
 #include "Log.hpp"
 #include "Output.hpp"
 #include "World.hpp"
@@ -354,6 +356,27 @@ namespace aimmod
         const cosmetics::Item& item = *want.item;
         const std::string key = item.id + "|" + std::to_string(reinterpret_cast<std::uintptr_t>(want.actor));
         if (m_failedAssets.contains(key)) return;
+        if (item.fit)
+        {
+            // From the game's and engine's own meshes, fitted to this rig.
+            std::string why;
+            UObject* component = AttachFitAccessory(want.actor, want.mesh, item, why);
+            if (!component)
+            {
+                m_failedAssets.insert(key);
+                Once("fitfail|" + item.id, item.id + " not attached: " + why);
+                return;
+            }
+            Worn w;
+            w.actor = want.actor;
+            w.component = component;
+            w.key = want.actor;
+            w.item = item.id;
+            m_worn.push_back(std::move(w));
+            Once("worn|" + item.id, "attached " + item.id);
+            return;
+        }
+        if (!want.attachment) return;
         UObject* mesh = LoadAsset(item.mesh);
         UObject* material = item.material.empty() ? nullptr : LoadAsset(item.material);
         if (!mesh || (!item.material.empty() && !material))
@@ -472,7 +495,7 @@ namespace aimmod
             for (const std::string& reason : plan.skipped) Once("skip|" + reason, reason);
             if (plan.body) wants.push_back({mesh, actor, plan.body, Scope::Avatar});
             if (m_accessories)
-                for (const cosmetics::Item* item : {plan.head, plan.spine})
+                for (const cosmetics::Item* item : {plan.head, plan.neck, plan.spine})
                     if (item) accessories.push_back({actor, mesh, item, item->AttachmentFor(model)});
         }
     }

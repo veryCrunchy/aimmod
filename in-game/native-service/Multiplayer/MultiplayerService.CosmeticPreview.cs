@@ -17,7 +17,7 @@ namespace AimMod.InGame.Multiplayer;
 static partial class CosmeticPreviewFormat
 {
     public const string RequestFile = "cosmetics-preview.txt", FrameFile = "cosmetics-preview-frame.txt", Folder = "cosmetics-preview";
-    public const int Lifetime = 5, MaxParams = 8;
+    public const int Lifetime = 5, MaxParams = 8, MaxAccessories = 3;
     [GeneratedRegex("^[A-Za-z][A-Za-z0-9_]{0,63}$")] private static partial Regex ParamName();
     [GeneratedRegex("^[A-Za-z][A-Za-z0-9_]{0,31}$")] private static partial Regex LookName();
     [GeneratedRegex("^preview-[01]\\.png$")] private static partial Regex FrameName();
@@ -31,8 +31,15 @@ static partial class CosmeticPreviewFormat
         yaw = Math.Clamp(yaw, -180, 180);
         var vectors = new Dictionary<string, double[]>(StringComparer.Ordinal);
         var scalars = new Dictionary<string, double>(StringComparer.Ordinal);
+        var accessories = new List<string>();
         foreach (var item in items)
         {
+            // Accessories are worn by id (AimModCore resolves them in its own catalog); their colours are their own.
+            if (item.Kind == "accessory")
+            {
+                if (CosmeticsCatalog.ValidId(item.Id) && accessories.Count < MaxAccessories && !accessories.Contains(item.Id)) accessories.Add(item.Id);
+                continue;
+            }
             foreach (var (name, v) in item.Vectors ?? new Dictionary<string, double[]>())
                 if (ParamName().IsMatch(name) && v.Length == 4 && v.All(x => double.IsFinite(x) && x is >= 0 and <= 1)) vectors[name] = v;
             foreach (var (name, v) in item.Scalars ?? new Dictionary<string, double>())
@@ -44,6 +51,7 @@ static partial class CosmeticPreviewFormat
         text.Append("yaw=").Append(N(yaw)).Append('\n');
         foreach (var (name, v) in vectors.Take(MaxParams)) text.Append("vector=").Append(name).Append(':').Append(string.Join(',', v.Select(N))).Append('\n');
         foreach (var (name, v) in scalars.Take(MaxParams)) text.Append("scalar=").Append(name).Append(':').Append(N(v)).Append('\n');
+        foreach (var id in accessories) text.Append("accessory=").Append(id).Append('\n');
         return text.ToString();
     }
     public static string Request(string body, long seq, long now) => $"v=1\nexpires={now + Lifetime}\nseq={seq}\n" + body;

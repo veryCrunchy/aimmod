@@ -84,6 +84,26 @@ test('weapon finishes never glow brighter than the game\'s own accent (no beacon
   }
 });
 
+test('accessories are built from curated game meshes, fitted to a slot within the size budget', () => {
+  const accessories = catalog.items.filter(i => i.kind === 'accessory' && !i.draft);
+  assert.ok(accessories.length >= 4, 'a first set of accessories');
+  const roles = new Set();
+  for (const item of accessories) {
+    assert.match(item.mesh, /^(\/Engine\/BasicShapes\/|\/Game\/Art\/StaticMeshes\/KMC\/Brushes\/)[A-Za-z0-9_.-]+$/, `${item.id}: curated mesh`);
+    assert.match(item.material, /^\/Game\/Materials\/Instances\/Characters\/S_(Meso|Endo)\/Base\/MI_PaintedMetal_[A-Za-z0-9_.-]+$/, `${item.id}: curated material`);
+    const { role, fit } = item.attach;
+    assert.ok(['head', 'neck', 'spine'].includes(role), `${item.id}: slot`);
+    roles.add(role);
+    assert.ok(['bone', 'top', 'crown'].includes(fit.anchor ?? 'bone') && /^[A-Za-z]+$/.test(fit.bone), `${item.id}: anchor`);
+    // Head items inside 35 x 35 x 30 cm, others inside 45 x 30 x 50 cm (docs, Accessories).
+    const [f, r, u] = fit.size, limit = role === 'head' ? [35, 35, 30] : [45, 45, 50];
+    assert.ok(f <= limit[0] && r <= limit[1] && u <= limit[2] && Math.min(f, r, u) >= 1, `${item.id}: size budget`);
+    for (const v of fit.offset) assert.ok(Math.abs(v) <= 30, `${item.id}: stays on the character`);
+    assert.deepStrictEqual(item.models, ['Meso', 'Endo']);
+  }
+  assert.deepStrictEqual([...roles].sort(), ['head', 'neck', 'spine'], 'something for every slot');
+});
+
 test('pak items stay drafts until their pak ships', () => {
   for (const item of catalog.items.filter(i => i.pak)) assert.strictEqual(item.draft, true, `${item.id} must stay a draft`);
 });

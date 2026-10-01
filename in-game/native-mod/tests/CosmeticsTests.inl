@@ -108,10 +108,10 @@ namespace cosmetics_checks
         // pak items stay drafts until the pak ships.
         std::string error;
         auto shipped = ParseCatalog(ReadText(std::filesystem::path(AIMMOD_SOURCE_DIR) / "cosmetics" / "catalog.json"), &error);
-        CHECK(shipped && shipped->errors.empty() && shipped->version == 2, "shipped catalog parses");
+        CHECK(shipped && shipped->errors.empty() && shipped->version == 3, "shipped catalog parses");
         std::vector<std::string> errors;
         Index byId = BuildIndex(shipped ? shipped->items : std::vector<Item>{}, errors);
-        CHECK(errors.empty() && byId.size() == 16 && shipped && byId.size() == shipped->items.size(), "shipped catalog validates");
+        CHECK(errors.empty() && byId.size() == 18 && shipped && byId.size() == shipped->items.size(), "shipped catalog validates");
         bool pakDrafts = true, freeModels = true;
         for (const auto& [id, item] : byId)
         {
@@ -120,16 +120,18 @@ namespace cosmetics_checks
         }
         CHECK(pakDrafts && freeModels, "pak items are drafts; every item is on free base models");
         const auto pickable = Pickable(byId);
-        CHECK(pickable.size() == 12 && std::none_of(pickable.begin(), pickable.end(), [](const Item* i) { return i->draft || i->pak; }),
-              "the parameter tints and finishes are offered in the picker, drafts are not");
+        CHECK(pickable.size() == 17 && std::none_of(pickable.begin(), pickable.end(), [](const Item* i) { return i->draft || i->pak; }),
+              "the tints, finishes and game-mesh accessories are offered in the picker, drafts are not");
 
         ResolveOptions none, drafted{true, {}}, paks{true, {"AimModCosmetics-1.pak"}};
         CHECK(!Resolve(byId, "not-an-item", none) && !Resolve(byId, "", none), "unknown and empty ids fall back");
         CHECK(Resolve(byId, "tint-mint", none) && Resolve(byId, "finish-gold", none), "shipped parameter items resolve");
         CHECK(!Resolve(byId, "meso-pattern-stripes", drafted), "draft pak item needs a verified pak");
-        CHECK(!Resolve(byId, "accessory-visor", none), "draft hidden by default");
-        CHECK(!Resolve(byId, "accessory-visor", drafted), "pak item needs a verified pak");
-        CHECK(Resolve(byId, "accessory-visor", paks) != nullptr, "pak item with a verified pak");
+        CHECK(!Resolve(byId, "meso-pattern-stripes", none), "draft hidden by default");
+        CHECK(Resolve(byId, "meso-pattern-stripes", paks) != nullptr, "pak item with a verified pak");
+        Plan dressed = PlanAvatar(byId, {{"accessory-halo", 1}, {"accessory-collar", 1}, {"accessory-back-ring", 1}, {"accessory-crown", 1}}, none, "Endo");
+        CHECK(dressed.head && dressed.head->id == "accessory-halo" && dressed.neck && dressed.spine && dressed.skipped.size() == 1,
+              "shipped accessories: one per head, neck and back");
         Plan meso = PlanAvatar(byId, {{"tint-gold", 1}}, none, "Meso"), endo = PlanAvatar(byId, {{"tint-gold", 1}}, none, "Endo");
         CHECK(meso.body && meso.body->id == "tint-gold" && endo.body && endo.body->id == "tint-gold", "tints fit both free models");
         Plan own = PlanLocal(byId, {{"finish-ice", 1}}, none, "Rifle");
@@ -274,6 +276,75 @@ namespace cosmetics_checks
         CHECK(pistol.weapon && pistol.weapon->id == "pistol-only" && !pistol.arms, "weapon-specific finish");
     }
 
+    bool Near(double a, double b, double tolerance = 1e-6) { return std::abs(a - b) <= tolerance; }
+
+    void AccessoryChecks()
+    {
+        // A flat torus brush (100 x 100 x 20, centred) as a halo 20 cm above the head.
+        Fit halo{"Head", "top", {0, 0, 20}, {26, 26, 3}};
+        const double flatMin[3] = {-50, -50, -10}, flatMax[3] = {50, 50, 10}, head[3] = {10, 20, 170}, ahead[3] = {1, 0, 0};
+        auto p = PlaceAccessory(halo, flatMin, flatMax, head, ahead);
+        CHECK(p && Near(p->scale[0], 0.26) && Near(p->scale[1], 0.26) && Near(p->scale[2], 0.15) && Near(p->rotation[0], 0) && Near(p->rotation[1], 0) &&
+                  Near(p->rotation[2], 0) && Near(p->location[0], 10) && Near(p->location[1], 20) && Near(p->location[2], 190),
+              "a flat ring is scaled to size and centred over the anchor");
+        // The same torus standing upright (thin along Y) is laid flat: its local Y points up.
+        const double uprightMin[3] = {-50, -10, -50}, uprightMax[3] = {50, 10, 50};
+        p = PlaceAccessory(halo, uprightMin, uprightMax, head, ahead);
+        double x[3], y[3], z[3];
+        if (p) RotatorAxes(p->rotation, x, y, z);
+        CHECK(p && Near(std::abs(y[2]), 1, 1e-6) && Near(p->scale[1], 0.15) && Near(p->scale[0], 0.26) && Near(p->scale[2], 0.26) && Near(p->location[2], 190),
+              "an upright mesh is turned so its thin axis is vertical");
+        // A back disc behind the chest of a character facing +Y, from a mesh with its pivot at the bottom.
+        Fit disc{"Chest", "bone", {-16, 0, 0}, {2, 22, 22}};
+        const double cylMin[3] = {-50, -50, 0}, cylMax[3] = {50, 50, 4}, chest[3] = {0, 0, 120}, facingY[3] = {0, 3, 0};
+        p = PlaceAccessory(disc, cylMin, cylMax, chest, facingY);
+        if (p) RotatorAxes(p->rotation, x, y, z);
+        // The thin local Z axis now points along the character's forward (+Y); the bounds' centre sits 16 cm behind.
+        double centre[3]{};
+        if (p)
+            for (int k = 0; k < 3; ++k) centre[k] = p->location[k] + x[k] * p->scale[0] * 0 + y[k] * p->scale[1] * 0 + z[k] * p->scale[2] * 2;
+        CHECK(p && Near(std::abs(z[1]), 1, 1e-6) && Near(p->scale[2], 0.5) && Near(centre[0], 0, 1e-6) && Near(centre[1], -16, 1e-6) && Near(centre[2], 120, 1e-6),
+              "a disc faces forward behind the anchor, pivot corrected");
+        for (const double r : {0.0, 37.0, -120.0})
+        {
+            const double rot[3] = {r / 3, r, r / 2};
+            RotatorAxes(rot, x, y, z);
+            // Orthonormal and right-handed in UE's sense: X x Y = Z.
+            CHECK(Near(x[0] * y[0] + x[1] * y[1] + x[2] * y[2], 0) && Near(x[0] * z[0] + x[1] * z[1] + x[2] * z[2], 0) &&
+                      Near(x[0] * x[0] + x[1] * x[1] + x[2] * x[2], 1) && Near(x[1] * y[2] - x[2] * y[1], z[0]) && Near(x[2] * y[0] - x[0] * y[2], z[1]),
+                  "rotator axes are orthonormal");
+        }
+        const double zero[3] = {0, 0, 0};
+        CHECK(!PlaceAccessory(halo, flatMin, flatMax, head, zero) && !PlaceAccessory(halo, zero, zero, head, ahead), "no forward or empty bounds: no placement");
+
+        // Game-mesh accessories need no pak, but only from the curated folders and with a fit.
+        CHECK(IsGameAccessoryAsset("/Game/Art/StaticMeshes/KMC/Brushes/SM_Torus.SM_Torus", false) && IsGameAccessoryAsset("/Engine/BasicShapes/Cone.Cone", false) &&
+                  !IsGameAccessoryAsset("/Game/Art/StaticMeshes/KMC/Props/Anime/SM_Bell.SM_Bell", false) &&
+                  !IsGameAccessoryAsset("/Game/Art/StaticMeshes/KMC/Brushes/../Props/X.X", false) &&
+                  IsGameAccessoryAsset("/Game/Materials/Instances/Characters/S_Meso/Base/MI_PaintedMetal_Meso_TS1.MI_PaintedMetal_Meso_TS1", true) &&
+                  !IsGameAccessoryAsset("/Game/Materials/Instances/Characters/S_Meso/Base/MI_PaintedMetal_Meso_TS1.MI_PaintedMetal_Meso_TS1", false),
+              "game accessory asset allow-list");
+        std::vector<std::string> errors;
+        auto catalog = ParseCatalog(R"({"version":1,"items":[
+            {"id":"ring","version":1,"kind":"accessory","models":["Meso"],"parts":["body"],"mesh":"/Game/Art/StaticMeshes/KMC/Brushes/SM_Torus.SM_Torus",
+             "material":"/Game/Materials/Instances/Characters/S_Meso/Base/MI_PaintedMetal_Meso_TS1.MI_PaintedMetal_Meso_TS1",
+             "vector":{"MetalPaint":{"R":1,"G":0.8,"B":0.2,"A":1}},"attach":{"role":"head","fit":{"bone":"Head","anchor":"top","offset":[0,0,20],"size":[26,26,3]}}},
+            {"id":"collar","version":1,"kind":"accessory","models":["Meso"],"parts":["body"],"mesh":"/Engine/BasicShapes/Cylinder.Cylinder",
+             "material":"/Game/Materials/Instances/Characters/S_Meso/Base/MI_PaintedMetal_Meso_TS1.MI_PaintedMetal_Meso_TS1","attach":{"role":"neck","fit":{"bone":"Neck","size":[20,20,4]}}},
+            {"id":"no-fit","version":1,"kind":"accessory","models":["Meso"],"parts":["body"],"mesh":"/Engine/BasicShapes/Cube.Cube",
+             "material":"/Game/Materials/Instances/Characters/S_Meso/Base/MI_PaintedMetal_Meso_TS1.MI_PaintedMetal_Meso_TS1","attach":"head"},
+            {"id":"prop","version":1,"kind":"accessory","models":["Meso"],"parts":["body"],"mesh":"/Game/Art/StaticMeshes/KMC/Props/Anime/SM_Bell.SM_Bell",
+             "material":"/Game/Materials/Instances/Characters/S_Meso/Base/MI_PaintedMetal_Meso_TS1.MI_PaintedMetal_Meso_TS1","attach":{"role":"head","fit":{"bone":"Head","size":[20,20,20]}}},
+            {"id":"huge","version":1,"kind":"accessory","models":["Meso"],"parts":["body"],"mesh":"/Engine/BasicShapes/Cube.Cube",
+             "material":"/Game/Materials/Instances/Characters/S_Meso/Base/MI_PaintedMetal_Meso_TS1.MI_PaintedMetal_Meso_TS1","attach":{"role":"head","fit":{"bone":"Head","size":[200,20,20]}}}]})");
+        Index index = BuildIndex(catalog ? catalog->items : std::vector<Item>{}, errors);
+        CHECK(catalog && index.size() == 2 && index.contains("ring") && index.contains("collar") && errors.size() == 3,
+              "game accessories validate; missing fit, props outside the brush folder and oversize fits are dropped");
+        CHECK(index.contains("ring") && !index.at("ring").NeedsPak() && Resolve(index, "ring", ResolveOptions{}), "game accessories resolve without a pak");
+        Plan plan = PlanAvatar(index, {{"ring", 1}, {"collar", 1}}, ResolveOptions{}, "Meso");
+        CHECK(plan.head && plan.head->id == "ring" && plan.neck && plan.neck->id == "collar" && plan.skipped.empty(), "one head and one neck accessory");
+    }
+
     void Json()
     {
         CHECK(aimmod::json::Parse(R"({"a":[1,-2.5e1,true,null,"\u00e9\ud83d\ude00"]})").has_value(), "json values");
@@ -293,6 +364,7 @@ namespace cosmetics_checks
         CatalogChecks();
         ManifestChecks();
         LooksChecks();
+        AccessoryChecks();
         PlanChecks();
     }
 } // namespace cosmetics_checks
