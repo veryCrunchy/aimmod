@@ -52,6 +52,8 @@ static class MultiplayerHosting
     {
         routes.MapGet(prefix + "/multiplayer.js", () => Results.Stream(typeof(MultiplayerHosting).Assembly.GetManifestResourceStream("AimMod.MultiplayerScript")!, "application/javascript"));
         routes.MapGet(prefix + "/multiplayer.css", () => Results.Stream(typeof(MultiplayerHosting).Assembly.GetManifestResourceStream("AimMod.MultiplayerStyle")!, "text/css"));
+        routes.MapGet(prefix + "/developer.js", () => Results.Stream(typeof(MultiplayerHosting).Assembly.GetManifestResourceStream("AimMod.DeveloperScript")!, "application/javascript"));
+        routes.MapGet(prefix + "/developer.css", () => Results.Stream(typeof(MultiplayerHosting).Assembly.GetManifestResourceStream("AimMod.DeveloperStyle")!, "text/css"));
         // The always-on notice layer AimModNativeUI shows outside the AimMod panel.
         routes.MapGet(prefix + "/notify", () => Results.Stream(typeof(MultiplayerHosting).Assembly.GetManifestResourceStream("AimMod.NotifyPage")!, "text/html"));
         routes.MapGet(prefix + "/notify.js", () => Results.Stream(typeof(MultiplayerHosting).Assembly.GetManifestResourceStream("AimMod.NotifyScript")!, "application/javascript"));

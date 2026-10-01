@@ -54,7 +54,7 @@ sealed partial class MultiplayerService : IDisposable
     bool autoDownload, simulatedMissing;
     long manifestAskedAt;
     string? trackedRound, lastContentKey; HashSet<string> knownRuns = new(StringComparer.Ordinal); double lastFrameSeconds = -1; long lastFrameAt; ScoreFrame? lastFrame;
-    public MultiplayerSimulation? Simulation { get; }
+    public MultiplayerSimulation? Simulation { get; private set; }
     public string SelfId => transport.LocalPeer;
 
     public MultiplayerService(IMultiplayerTransport transport, ContentLibrary library, IGameControl game, Func<LocalRun> liveRun, Func<IReadOnlyList<Run>> completedRuns,
@@ -74,6 +74,7 @@ sealed partial class MultiplayerService : IDisposable
         watchServer = new ContentServer(library, this.clock);
         if (output is not null && library.Root is { } watchRoot) watchDownload = new ContentDownload(watchRoot, Path.Combine(output, "downloads"), this.clock);
         if (output is not null && library.Root is { } root) download = new ContentDownload(root, Path.Combine(output, "downloads"), this.clock);
+        simulationSeed = seed; simulationForced = simulation;
         if (simulation) Simulation = new MultiplayerSimulation(this.clock, library, completedRuns, seed);
         // A failure in one tick must never take the whole service down: log it and keep going.
         if (autoTick) timer = new Timer(_ => { try { Tick(); } catch (Exception ex) { Console.Error.WriteLine("Multiplayer tick failed: " + ex.GetType().Name + ": " + ex.Message); } }, null, 100, 100);
@@ -779,6 +780,7 @@ sealed partial class MultiplayerService : IDisposable
 
     GameNotice? ComputeNotice(long now)
     {
+        if (DevNoticeNow(now) is { } dev) return dev;
         var key = HotkeyName;
         // Quiet while the player runs a ranked scenario of their own: no invite or ready popups.
         var quiet = OwnRankedRun();
@@ -1571,7 +1573,8 @@ sealed partial class MultiplayerService : IDisposable
         var live = liveRun();
         var playing = live.Active && (string.Equals(live.Scenario, expected, StringComparison.OrdinalIgnoreCase) || string.Equals(live.Scenario, match.Scenario, StringComparison.OrdinalIgnoreCase));
         var simulated = false;
-        if (!playing && Simulation is not null) { live = Simulation.SelfRun(match, now); playing = live.Active; simulated = true; }
+        // Only in a simulated lobby: developer mode never stands in for your run with real players.
+        if (!playing && Simulation is not null && Current is { } simLobby && simLobby.Members.Any(m => m.Simulated)) { live = Simulation.SelfRun(match, now); playing = live.Active; simulated = true; }
         // Challenge runs finish through the run journal.
         var finished = completedRuns().Take(10).FirstOrDefault(r => !knownRuns.Contains(r.Id) && (r.Scenario.Equals(match.Scenario, StringComparison.OrdinalIgnoreCase) || r.Scenario.Equals(expected, StringComparison.OrdinalIgnoreCase)));
         if (finished is not null)
@@ -1716,6 +1719,8 @@ sealed partial class MultiplayerService : IDisposable
             "preview" => MapPreview(key) is { } image ? Results.File(image, MapPorts.ContentType(image)) : Results.NotFound(),
             _ => Results.Json(View(), Protocol.Json),
         });
+        // Developer mode and its tools (off by default; local UI only).
+        Developer.DeveloperEndpoints.Map(routes, prefix, new Developer.DeveloperMode(outputFolder), this);
         // Read-only notice for the always-on in-game layer (notify.html).
         routes.MapGet(prefix + "/multiplayer-notify", () => Results.Content(NoticeJson(), "application/json"));
         routes.MapPost(prefix + "/multiplayer", async (HttpRequest request, CancellationToken token) =>

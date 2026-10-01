@@ -610,6 +610,7 @@ static class MultiplayerChecks
         Check(!service.Act("map-load", J(new { key = mirage.GetProperty("key").GetString() })).Ok && !service.Act("map-install", J(new { key = "nope" })).Ok, "Simulated installs can't be loaded and unknown maps are refused");
         service.Dispose();
         Picks(root, library);
+        Developer(root, library);
     }
 
     static void Follow()
@@ -620,6 +621,48 @@ static class MultiplayerChecks
         var members = new[] { M("me"), M("a"), M("b"), M("bot", sim: true) };
         Check(MultiplayerService.LeaderOf(Match(L("me", 9000), L("a", 4000), L("b", 5000), L("bot", 8000)), members, "me") == "b", "Follow the leader skips yourself and simulated players");
         Check(MultiplayerService.LeaderOf(Match(L("a", 4000), L("b", 6000, "left")), members, "me") == "a" && MultiplayerService.LeaderOf(Match(L("a", null)), members, "me") is null, "Players who left or have no score yet aren't followed");
+    }
+
+    static void Developer(string root, ContentLibrary library)
+    {
+        long now = 7_000_000;
+        var output = Path.Combine(root, "dev-output");
+        Directory.CreateDirectory(output);
+        var service = new MultiplayerService(new OfflineTransport(), library, new NoGameControl(), () => new LocalRun(false, null, null, null, null, 0, 0, 0, null), () => [], () => null, output, simulation: false, () => now, autoTick: false, seed: 3);
+        var mode = new AimMod.InGame.Developer.DeveloperMode(output);
+        LobbyResult Dev(object body) => AimMod.InGame.Developer.DeveloperEndpoints.Act(mode, service, JsonSerializer.SerializeToElement(body));
+        Check(!mode.Enabled && !service.SimulationOn && !Dev(new { action = "lobby", members = 3 }).Ok, "Developer mode is off by default and its tools are refused");
+        Check(Dev(new { action = "enable", on = true }).Ok && service.SimulationOn && new AimMod.InGame.Developer.DeveloperMode(output).Enabled, "Turning developer mode on starts the simulation and is saved");
+        Check(Dev(new { action = "lobby", members = 5, mode = LobbyModes.Rounds }).Ok, "A simulated lobby of any size is created");
+        var lobby = JsonSerializer.SerializeToElement(service.View(), Protocol.Json).GetProperty("lobby");
+        Check(lobby.GetProperty("members").EnumerateArray().Count(m => m.GetProperty("simulated").GetBoolean()) == 5 && lobby.GetProperty("settings").GetProperty("maxPlayers").GetInt32() >= 6 && lobby.GetProperty("isHost").GetBoolean(), "Five simulated players join your lobby, with room for everyone");
+        for (var i = 0; i < 40; i++) { now += 100; service.Tick(); }
+        Check(Dev(new { action = "sim", op = "chat" }).Ok && Dev(new { action = "sim", op = "away" }).Ok && Dev(new { action = "sim", op = "suggest" }).Ok, "Simulated players chat, go away and suggest on demand");
+        lobby = JsonSerializer.SerializeToElement(service.View(), Protocol.Json).GetProperty("lobby");
+        Check(lobby.GetProperty("members").EnumerateArray().Any(m => m.GetProperty("away").GetBoolean()) && lobby.GetProperty("suggestions").GetArrayLength() == 1, "Away and suggestions show in the lobby");
+        Check(Dev(new { action = "lobby", members = 2, simulatedHost = true }).Ok && !JsonSerializer.SerializeToElement(service.View(), Protocol.Json).GetProperty("lobby").GetProperty("isHost").GetBoolean(), "A simulated host's lobby can be joined");
+        Dev(new { action = "leave" });
+        foreach (var kind in MultiplayerService.DevNotices)
+        {
+            Check(Dev(new { action = "notice", kind }).Ok, "Notice " + kind + " can be triggered");
+            now += 50; service.Tick();
+            var n = JsonDocument.Parse(service.NoticeText()).RootElement;
+            Check(n.GetProperty("active").GetBoolean() || n.GetProperty("badge").ValueKind == JsonValueKind.String, "Notice " + kind + " shows in game");
+            Act(service, n);
+            now += 21_000; service.Tick();
+        }
+        Check(!Dev(new { action = "notice", kind = "nope" }).Ok, "Unknown notices are refused");
+        Check(Dev(new { action = "enable", on = false }).Ok && !service.SimulationOn && !Dev(new { action = "notice", kind = "ready" }).Ok, "Turning developer mode off stops the simulation and the tools");
+        service.Dispose();
+        static void Act(MultiplayerService s, JsonElement n)
+        {
+            // Clear popups that wait for an answer, as the player would.
+            if (n.TryGetProperty("actions", out var list) && list.ValueKind == JsonValueKind.Array && list.GetArrayLength() > 0)
+            {
+                var last = list[list.GetArrayLength() - 1];
+                s.Act(last.GetProperty("action").GetString()!, JsonSerializer.SerializeToElement(new { id = last.GetProperty("id").GetString() }));
+            }
+        }
     }
 
     static void Picks(string root, ContentLibrary library)

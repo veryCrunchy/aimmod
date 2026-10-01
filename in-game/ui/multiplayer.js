@@ -55,7 +55,8 @@
   }
   function poll(){
     if(!container)return;if(inflight){again=true;return;}inflight=true;
-    if(mapsOpen&&maps&&(maps.ports||[]).some(function(p){return !!p.download;}))loadMaps();
+    // The library refreshes with the main view while it's open (installs and Workshop listings change).
+    if(mapsOpen)loadMaps();
     xhr('GET','/multiplayer',null,function(ok,data){inflight=false;if(ok&&data&&data.v===1)accept(data);else if(!view)renderError();schedule();if(again){again=false;poll();}});
   }
   function fast(){var m=view&&view.lobby&&view.lobby.match;return !!(view&&(view.joining||view.watch||(m&&(m.phase==='countdown'||m.phase==='live'))));}
@@ -490,7 +491,7 @@
     var detail=node('div','mp-history-detail');box.appendChild(detail);
     var table=node('div','mp-table');
     add(table,add(node('div','mp-tr head'),node('span','mp-td place','#'),node('span','mp-td name','Player'),node('span','mp-td num','Best'),node('span','mp-td num',m.mode==='duel'?'Wins':m.mode==='ffa-rounds'?'Points':'Total')));
-    (m.standings||[]).forEach(function(p){add(table,add(node('div','mp-tr'+(p.self?' self':'')),node('span','mp-td place',String(p.place)),node('span','mp-td name',safe(p.name)+(p.self?' (you)':'')),node('span','mp-td num',typeof p.best==='number'?F.number(p.best,0):'-'),node('span','mp-td num',m.mode==='duel'?String(p.wins):m.mode==='ffa-rounds'?String(p.points):F.number(p.total||0,0))));});
+    (m.standings||[]).forEach(function(p){add(table,add(node('div','mp-tr'+(p.self?' self':'')),node('span','mp-td place',String(p.place)),node('span','mp-td name',safe(p.name)+(p.self&&safe(p.name)!=='You'?' (you)':'')),node('span','mp-td num',typeof p.best==='number'?F.number(p.best,0):'-'),node('span','mp-td num',m.mode==='duel'?String(p.wins):m.mode==='ffa-rounds'?String(p.points):F.number(p.total||0,0))));});
     detail.appendChild(table);
     var reps=m.replays||[];
     if(!reps.length){detail.appendChild(node('p','mp-note','No replays from this match on this PC.'));return box;}
@@ -568,7 +569,7 @@
     var info=node('div','mp-port-info');
     var title=node('div','mp-port-title');add(title,node('strong','',safe(p.display,'Map')),p.game?chip(p.game,'cyan'):null);
     add(info,title,node('span','mp-port-variant',safe(p.variant||p.scenario,'')));
-    var facts=[shiftText(p)];if(p.bytes>0)facts.push(mb(p.bytes));if(p.mapScale>0)facts.push('Scale '+F.number(p.mapScale,1));
+    var facts=[shiftText(p)];if(p.bytes>0)facts.push(p.bytes<1048576?Math.max(1,Math.round(p.bytes/1024))+' KB':mb(p.bytes));if(p.mapScale>0)facts.push('Scale '+F.number(p.mapScale,1));
     info.appendChild(node('span','mp-port-facts',facts.join(' · ')));
     info.appendChild(node('div','mp-port-state'+(p.needsUpdate?' warn':p.installed?' ok':''),portState(p)));
     if(p.download&&p.download.total>0){var bar=node('div','mp-progress');var fillBar=node('div','mp-progress-fill');fillBar.style.width=Math.min(100,Math.floor(p.download.done*100/p.download.total))+'%';bar.appendChild(fillBar);info.appendChild(bar);}

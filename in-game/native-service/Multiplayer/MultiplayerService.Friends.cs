@@ -37,6 +37,11 @@ sealed partial class MultiplayerService
         friendsPrimed = true;
         if (arrived is null || !prefs.FriendToasts || OwnRankedRun() || liveRun().Active || now - lastFriendToast < FriendToastGap) return;
         if (flash is { } f0 && now < f0.Until) return;
+        FriendToast(arrived, now);
+    }
+
+    void FriendToast(FriendEntry arrived, long now)
+    {
         friendToasted[arrived.Id] = now; lastFriendToast = now;
         var name = LobbyRules.CleanName(arrived.Name, "A friend");
         var actions = new List<NoticeAction>();
@@ -44,8 +49,15 @@ sealed partial class MultiplayerService
         else if (Current is { } lobby && lobby.HostId == SelfId && lobby.Members.Count < lobby.Settings.MaxPlayers) actions.Add(new("Invite", "friend-invite", arrived.Id));
         if (arrived.Spectatable && watch is null) actions.Add(new("Watch", "friend-watch", arrived.Id));
         actions.Add(new("Dismiss", "friend-dismiss", arrived.Id));
-        var detail = arrived.Status == "aimmod-lobby" ? "In an AimMod lobby" : arrived.Detail is { Length: > 0 } d ? LobbyRules.CleanName(d, "Playing KovaaK’s") : "Playing KovaaK’s with AimMod";
+        var detail = arrived.Status == "aimmod-lobby" ? "In an AimMod lobby" : arrived.Detail is { Length: > 0 } d ? Detail(d) : "Playing KovaaK’s with AimMod";
         flash = (new GameNotice("fr-" + arrived.Id + "-" + now, "friend", name + " is on AimMod", detail, null, null, "click") { Actions = actions }, now + FriendToastMs);
+    }
+
+    // Status lines like "Playing <scenario>" are longer than a name; keep up to 80 characters.
+    static string Detail(string text)
+    {
+        var clean = new string(text.Where(c => !char.IsControl(c)).ToArray()).Trim();
+        return clean.Length > 80 ? clean[..79].TrimEnd() + "…" : clean;
     }
 
     LobbyResult FriendNotice(string action, string? id)
