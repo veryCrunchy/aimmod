@@ -38,7 +38,7 @@ sealed class WorkspaceHost : IAsyncDisposable
     string data = "{}";
     public string Url { get; private set; } = "";
     public void Update(string json) => Volatile.Write(ref data, json);
-    public WorkspaceHost(Hub hub, string output, string? historyPath = null, NativeSettings? settings = null, CsvHistory? csvHistory = null)
+    public WorkspaceHost(Hub hub, string output, string? historyPath = null, NativeSettings? settings = null, CsvHistory? csvHistory = null, Lifecycle? lifecycle = null)
     {
         outputFolder = output;
         overlaySettings = new OverlaySettings(output);
@@ -54,6 +54,7 @@ sealed class WorkspaceHost : IAsyncDisposable
         LoopbackServer.UseGuards(app, capability);
         (settings ?? new NativeSettings(output)).MapEndpoints(app, prefix);
         overlaySettings.MapEndpoints(app, prefix);
+        lifecycle?.MapEndpoints(app, prefix);
         new CoachingFeedback(output).MapEndpoints(app, prefix);
         var importedHistory = csvHistory ?? new CsvHistory(output);
         app.MapGet(prefix + "/history-import.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.HistoryImport")!, "application/javascript"));

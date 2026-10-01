@@ -4,7 +4,11 @@ using System.Text.Json;
 using AimMod.InGame;
 
 CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
-if (args.Contains("--self-test")) { Checks.Run(); HistoryCompletenessChecks.Run(); CsvHistoryChecks.Run(); await HubChecks.Run(); HubPaginationChecks.Run(); await HubLeaderboardChecks.Run(); Coaching.SelfTest(); CoachingFeedbackChecks.Run(); StatsChecks.Run(); WarmupChecks.Run(); RunInspectionChecks.Run(); NativeSettingsChecks.Run(); LiveOverlayChecks.Run(); LiveOverlayFeedChecks.Run(); OverlaySettingsChecks.Run(); await ObsOverlayChecks.Run(); BenchmarkChecks.Run(); ReplayLibraryChecks.Run(); await WorkspaceChecks.Run(); ReplayChecks.Run(); ReplayKeyboardChecks.Run(); await NativeReplayPlaybackChecks.Run(); await HardeningChecks.Run(); return; }
+// Install, repair, update hand-off and uninstall (Install/Repair-AimMod.cmd).
+if (args.Contains("--verify-signature")) { Environment.ExitCode = Lifecycle.VerifySignature(args); return; }
+if (Lifecycle.Commands.Any(args.Contains)) { Environment.ExitCode = Lifecycle.RunCommand(args); return; }
+if (args.Contains("--self-test-lifecycle")) { await LifecycleChecks.Run(); return; }
+if (args.Contains("--self-test")) { Checks.Run(); HistoryCompletenessChecks.Run(); CsvHistoryChecks.Run(); await HubChecks.Run(); HubPaginationChecks.Run(); await HubLeaderboardChecks.Run(); Coaching.SelfTest(); CoachingFeedbackChecks.Run(); StatsChecks.Run(); WarmupChecks.Run(); RunInspectionChecks.Run(); NativeSettingsChecks.Run(); LiveOverlayChecks.Run(); LiveOverlayFeedChecks.Run(); OverlaySettingsChecks.Run(); await ObsOverlayChecks.Run(); BenchmarkChecks.Run(); ReplayLibraryChecks.Run(); await WorkspaceChecks.Run(); ReplayChecks.Run(); ReplayKeyboardChecks.Run(); await NativeReplayPlaybackChecks.Run(); await HardeningChecks.Run(); await LifecycleChecks.Run(); return; }
 var output = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AimMod", "KovaaksNative");
 var database = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "com.verycrunchy.kovaaks", "stats.sqlite3");
 var exitWithGame = false;
@@ -42,9 +46,12 @@ var settings = new NativeSettings(output);
 using var hub = new Hub(output, historyEnabled: () => settings.Current.HubHistoryEnabled);
 var csvHistory = new CsvHistory(output);
 var failures = 0;
+var gameExited = false;
+await using var lifecycle = new Lifecycle(output, InstallLayout.FindWin64FromService(AppContext.BaseDirectory), ReleaseTrust.Embedded());
+lifecycle.Start();
 try
 {
-await using var workspace = new WorkspaceHost(hub, output, database, settings, csvHistory);
+await using var workspace = new WorkspaceHost(hub, output, database, settings, csvHistory, lifecycle);
 await workspace.Start(cancellation.Token);
 var workspaceUrlPath = Path.Combine(output, "workspace-url.txt");
 AtomicFile.WriteText(workspaceUrlPath, workspace.Url);
@@ -100,7 +107,7 @@ try
             Console.Error.WriteLine($"History refresh failed unexpectedly ({ex.GetType().Name}).");
         }
         if (args.Contains("--once")) break;
-        if (gameWatch?.Exited() == true) { Console.WriteLine("KovaaK's exited; stopping."); break; }
+        if (gameWatch?.Exited() == true) { Console.WriteLine("KovaaK's exited; stopping."); gameExited = true; break; }
         await Task.Delay(TimeSpan.FromSeconds(1 + failures), cancellation.Token);
     }
 }
@@ -108,6 +115,8 @@ catch (OperationCanceledException) { }
 finally { AtomicFile.DeleteIfContent(workspaceUrlPath, workspace.Url); }
 }
 finally { stopped.Set(); }
+// Staged updates and requested repairs are applied only now that the game is closed.
+if (gameExited) lifecycle.HandOffAfterGameExit();
 
 namespace AimMod.InGame
 {

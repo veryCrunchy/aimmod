@@ -1,0 +1,10 @@
+# Ed25519 public keys trusted to sign AimMod in-game releases and update feeds.
+# One base64-encoded raw 32-byte public key per line; lines starting with # are
+# ignored. Several keys may be listed while a key is being rotated.
+#
+# No key is configured yet: until one is added here, the service never checks
+# for or downloads updates. Create the key pair with
+#   in-game/install/New-AimModSigningKey.ps1
+# and paste the printed public key below. The private key never goes into the
+# repository; it is stored as the AIMMOD_UPDATE_SIGNING_KEY secret of the
+# "ingame-release" GitHub environment (see in-game/docs/install-lifecycle.md).

@@ -2,7 +2,7 @@
   'use strict';
   var container=null,request=null,generation=0,value=null;
   function node(tag,css,text){var el=root.document.createElement(tag);el.className=css||'';if(text!==undefined)el.textContent=text;return el;}
-  function leave(){if(root.AimModHistoryImport)root.AimModHistoryImport.leave();generation++;if(request){request.abort();request=null;}container=null;}
+  function leave(){if(root.AimModHistoryImport)root.AimModHistoryImport.leave();if(root.AimModLifecycle)root.AimModLifecycle.leaveSettings();generation++;if(request){request.abort();request=null;}container=null;}
   function send(patch,done){
     var ticket=++generation,xhr=new root.XMLHttpRequest();request=xhr;
     var path=root.location.pathname;path=path.slice(0,path.lastIndexOf('/'));
@@ -27,6 +27,7 @@
     toggle('replayRecordingEnabled','Record replays','Save new runs for in-game playback. Turning this off discards an unfinished recording; saved replays are kept.');
     toggle('hubHistoryEnabled','Download Hub history','Keep your linked account’s history up to date. Turning this off pauses downloads; local runs and previously saved Hub history stay available.');
     container.appendChild(panel);
+    if(root.AimModLifecycle)root.AimModLifecycle.renderSettings(container);
     if(root.AimModHistoryImport)root.AimModHistoryImport.render(container);
     var storage=node('div','panel settings-card');storage.appendChild(node('h2','','Your replay library'));storage.appendChild(node('p','subtle','Manage favorites, export a copy, or delete individual replays from Replays. Exports are saved in Documents / AimMod / Replays.'));container.appendChild(storage);
   }

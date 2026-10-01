@@ -4,6 +4,8 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- Release builds pass the version (CI: AimModVersion=<semver>). -->
+    <Version Condition="'$(AimModVersion)' != ''">$(AimModVersion)</Version>
   </PropertyGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
@@ -31,4 +33,8 @@
     <EmbeddedResource Include="../replay/native-browser.js" LogicalName="AimMod.NativeReplayBrowser" />
   </ItemGroup>
   <ItemGroup><EmbeddedResource Include="../ui/history-import.js" LogicalName="AimMod.HistoryImport" /></ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="../ui/lifecycle.js" LogicalName="AimMod.LifecycleScript" />
+    <EmbeddedResource Include="../install/aimmod-update-public-key.txt" LogicalName="AimMod.UpdateKeys" />
+  </ItemGroup>
 </Project>
