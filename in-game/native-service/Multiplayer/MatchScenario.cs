@@ -282,7 +282,7 @@ static partial class MatchScenario
         Console.WriteLine(Name(settings) + ": " + generated.Length + " characters; map section " + (MapSectionOf(text) == MapSectionOf(generated) ? "identical" : "DIFFERENT"));
         var problems = Validate(text, generated).Except(Validate(text, text)).ToList();
         Console.WriteLine(problems.Count == 0 ? "valid" : "problems: " + string.Join("; ", problems));
-        Console.WriteLine("base problems: " + string.Join("; ", Validate(text, text)));
+        if (Validate(text, text) is { Count: > 0 } inBase) Console.WriteLine("already in the base: " + string.Join("; ", inBase));
         return 0;
     }
 

@@ -20,7 +20,7 @@ sealed class MultiplayerSimulation(Func<long> clock, ContentLibrary library, Fun
     readonly Random random = seed == 0 ? new Random() : new Random(seed);
     readonly Dictionary<string, Bot> bots = new();
     readonly List<IncomingInvite> invites = [];
-    string? lastPlayKey, lastPhase, selfRound; long hostStartAt, selfStart; double selfSkill = 1;
+    string? lastPlayKey, lastPhase, selfRound, loadedAttempt; long hostStartAt, selfStart; double selfSkill = 1;
     int nameIndex;
 
     static JsonElement Args(object value) => JsonSerializer.SerializeToElement(value, Protocol.Json);
@@ -186,9 +186,11 @@ sealed class MultiplayerSimulation(Func<long> clock, ContentLibrary library, Fun
             foreach (var b in bots.Values) { b.ContentAt = Jitter(500, 1500); b.ReadyAt = long.MaxValue; }
         }
         var phase = snapshot.Match?.Phase ?? "lobby";
+        // Simulated players load at once, again on every load attempt the host retries.
+        var attempt = snapshot.Match is { Phase: MatchPhases.Loading } loading ? loading.Id + "#" + loading.Round + "#" + loading.LoadAttempt : null;
+        if (attempt is not null && attempt != loadedAttempt) { loadedAttempt = attempt; foreach (var b in bots.Values) core.Apply(b.Id, "loaded", default, library); }
         if (phase != lastPhase)
         {
-            if (phase == MatchPhases.Loading) foreach (var b in bots.Values) core.Apply(b.Id, "loaded", default, library);
             if (phase == MatchPhases.Countdown && random.NextDouble() < 0.6 && bots.Values.FirstOrDefault() is { } talker) core.Apply(talker.Id, "chat", Args(new { text = "glhf" }), library);
             if (phase == MatchPhases.Final) foreach (var b in bots.Values) b.RematchAt = Jitter(2500, 6000);
             if (phase == "lobby") foreach (var b in bots.Values) b.ReadyAt = Jitter(1200, 3500);
