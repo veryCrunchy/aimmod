@@ -10,6 +10,8 @@
 //    releases spawn protection.
 #include "GameBindings.hpp"
 
+#include <Unreal/FWeakObjectPtr.hpp>
+
 #include <aimmod/MatchPlay.hpp>
 
 #include <cstdint>
@@ -54,6 +56,15 @@ namespace aimmod
         bool BindRound();
         void ReleaseRound(const char* why);
         void ApplyLoadout(game::UObject* character, const RoundState::Loadout& loadout);
+        // Frozen before go-live: no jump and no movement (MOVE_None) on top of ignored move input.
+        void FreezeBody(game::UObject* character, bool frozen);
+        // Restart lock: while a fresh round state names the scenario on screen (any match, not
+        // only AimMod arenas), KovaaK's restart bind (ResetSession) is renamed in the input
+        // settings and the pause menu's restart button is collapsed; both come back after.
+        void TickRestartLock(double now, bool wanted);
+        bool BindLock();
+        int RenameActions(const std::string& from, const wchar_t* to, bool keepKeys);
+        void ShowRestartButtons(bool hidden);
 
         game::Bindings& m_b;
         game::Scene& m_scene;
@@ -98,5 +109,21 @@ namespace aimmod
             double notBefore{}, giveUp{};
         };
         std::optional<PendingSpawn> m_pendingSpawn;
+        game::Field m_characterMovement;
+        game::Getter m_setMovementMode;
+        RC::Unreal::FWeakObjectPtr m_frozenBody;
+        std::optional<std::int32_t> m_jumpBefore;
+        bool m_movementOff{}, m_freezeBound{};
+
+        // Restart lock.
+        game::UObject* m_inputSettings{};
+        game::Path m_actionMappings, m_actionName, m_actionKey;
+        game::Getter m_rebuildKeymaps, m_saveKeyMappings, m_keyJustPressed, m_setVisibility, m_getVisibility;
+        game::Field m_resetButton;
+        bool m_lockBound{}, m_lockDisabled{}, m_locked{};
+        std::vector<std::vector<std::uint8_t>> m_lockedKeys; // FKey bytes of the renamed binds
+        std::vector<std::pair<RC::Unreal::FWeakObjectPtr, std::uint8_t>> m_hiddenButtons; // button, visibility before
+        double m_nextButtonScan{};
+        std::uint64_t m_blockedPresses{};
     };
 } // namespace aimmod

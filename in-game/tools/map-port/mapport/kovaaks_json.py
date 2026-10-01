@@ -47,13 +47,14 @@ def _f(v: Sequence[float], digits: int = 4) -> str:
 
 
 def _material_sets(slots: List[Slot], groups: int) -> List[dict]:
-    def entry(material: str, pack: str, tint: str, scale: float, rough: float, metal: float) -> dict:
+    def entry(material: str, pack: str, tint: str, scale: float, rough: float, metal: float,
+              bright: float = 0.0) -> dict:
         return {"material": material, "pack": pack, "properties": [
             {"name": "Tint", "value": tint},
             {"name": "Scale", "value": scale},
             {"name": "Roughness", "value": rough},
             {"name": "Metallic", "value": metal},
-            {"name": "FullBright", "value": 0.0},
+            {"name": "FullBright", "value": bright},
         ]}
 
     sets = []
@@ -62,7 +63,7 @@ def _material_sets(slots: List[Slot], groups: int) -> List[dict]:
         for s in SURFACES:
             sl = next((x for x in slots if x.group == gi and x.surface == s), None)
             if sl:
-                grp[s] = entry(sl.material, "Default", sl.tint, sl.scale, sl.roughness, sl.metallic)
+                grp[s] = entry(sl.material, "Default", sl.tint, sl.scale, sl.roughness, sl.metallic, sl.fullbright)
             else:
                 grp[s] = entry("MI_WA_ConcretePoured", "Default", "bfbfbfff", 1.0, 0.8, 0.0)
         sets.append(dict(sorted(grp.items())))
@@ -165,23 +166,83 @@ def spawn_object(sp: scene.Spawn, idx: int, unit: float, map_scale: float, playe
         "rotation": _f((0.0, 0.0, -sp.yaw), 6), "scale": _f((inv, inv, inv), 6), "type": "gameObject"}
 
 
+# Map-creator game object meshes (measured from the 3.9.11 assets):
+#  - Water: `water_cube`, 200 units across and centred on the actor (-100..100 on every axis).
+#  - Hurt, JumpPad, Teleporter: `SM_Cube_Volumes` (plus a box over it), 100 units across with the
+#    pivot on the minimum corner (0..100).
+# These rows do not keep their native scale: the actor scale is multiplied by MapScale like the
+# locations, so a scale of size / mesh size covers `size` map units.
+WATER_MESH = 200.0
+VOLUME_MESH = 100.0
+
+# The game's own Water defaults (KovaaKMapCreatorGameObjectTable), as RRGGBBAA. The wave height
+# stays 0, so the surface is the flat top face of the liquid brush.
+WATER_COLOURS = {
+    "BaseColor": "008398ff", "DepthFadeColor": "40dfbeff", "HighlightColor1": "3d71dfff",
+    "HighlightColor2": "004ec2ff", "RippleShadowColor": "5ad8fcff", "RippleHighlightColor": "6ecdfaff",
+    "MurkColor": "008398ff"}
+WATER_WAVE_SPEED = 1.0
+WATER_WAVE_HEIGHT = 0.0
+
+
+def _size(go: dict) -> Tuple[float, float, float]:
+    sx, sy, sz = (max(1.0, abs(v)) for v in go["size"])
+    return sx, sy, sz
+
+
+def _corner(go: dict, unit: float, size: Sequence[float]) -> Tuple[float, float, float]:
+    """Unreal location of the minimum corner of a box centred on go["origin"] (corner-pivot meshes)."""
+    c = to_ue(go["origin"], unit)
+    return (c[0] - size[0] * unit / 2, c[1] - size[1] * unit / 2, c[2] - size[2] * unit / 2)
+
+
+def water_object(go: dict, unit: float) -> dict:
+    """KovaaK's Water over a liquid brush. The mesh is centred, so the actor sits on the brush centre
+    and its top face is the brush's top face (the water line). In AimMod scenarios AimModCore makes
+    these swimmable (in-game/native-mod/DESIGN.md, "Water")."""
+    sx, sy, sz = _size(go)
+    props = [{"name": k, "value": v} for k, v in WATER_COLOURS.items()]
+    props += [{"name": "WaveSpeed", "value": WATER_WAVE_SPEED}, {"name": "WaveHeight", "value": WATER_WAVE_HEIGHT}]
+    return {"location": _f(to_ue(go["origin"], unit), 3), "name": "Water", "properties": props,
+            "rotation": "0, 0, 0", "scale": _f((sx / WATER_MESH, sy / WATER_MESH, sz / WATER_MESH), 4),
+            "type": "gameObject"}
+
+
+def hurt_object(go: dict, unit: float) -> dict:
+    """Hurt volume over a liquid or trigger box: damage, or a kill for lava and 100+ damage."""
+    size = _size(go)
+    dmg = go.get("damage")
+    kill = go.get("liquid") == "lava" or (dmg is not None and dmg >= 100)
+    props = [{"name": "Kill", "value": kill},
+             {"name": "Damage", "value": float(dmg if dmg is not None else (100.0 if kill else 10.0))},
+             {"name": "Cooldown", "value": 1.0}]
+    return {"location": _f(_corner(go, unit, size), 3), "name": "Hurt", "properties": props,
+            "rotation": "0, 0, 0", "scale": _f(tuple(v / VOLUME_MESH for v in size), 4), "type": "gameObject"}
+
+
 def game_object(go: dict, unit: float, map_scale: float) -> dict:
-    """JumpPad / Teleporter (scaled to the trigger) and their target Waypoints (native size)."""
+    """Water, Hurt, JumpPad / Teleporter (sized to the trigger) and their target Waypoints (native size)."""
     kind = go["kind"]
     inv = 1.0 / map_scale
+    if kind == "water":
+        return water_object(go, unit)
+    if kind == "hurt":
+        return hurt_object(go, unit)
     if kind == "waypoint":
         return {"location": _f(to_ue(go["origin"], unit), 3), "name": "Waypoint", "properties": [
             {"name": "Name", "value": go["name"]}, {"name": "BotPauseTimeMin", "value": 0.0},
             {"name": "BotPauseTimeMax", "value": 0.0}],
             "rotation": _f((0.0, 0.0, -go.get("yaw", 0.0)), 3), "scale": _f((inv, inv, inv), 6), "type": "gameObject"}
-    sx, sy, sz = (max(1.0, abs(v)) for v in go["size"])
+    sx, sy, sz = _size(go)
     props = [{"name": "Target", "value": go["target"]}]
     if kind == "teleporter":
         props.append({"name": "TeleportDelay", "value": 0.0})
-    # Map-creator objects are 100 units across at scale 1; size them to the Quake trigger.
-    scale = (sx / 100.0, sy / 100.0, max(0.25, sz / 100.0) if kind == "teleporter" else 0.25)
-    return {"location": _f(to_ue(go["origin"], unit), 3), "name": "JumpPad" if kind == "jumppad" else "Teleporter",
-            "properties": props, "rotation": "0, 0, 0", "scale": _f(scale, 4), "type": "gameObject"}
+    # Jump pads are 25 units thick around the trigger's centre; teleporters keep their height.
+    size = (sx, sy, max(25.0, sz) if kind == "teleporter" else 25.0)
+    return {"location": _f(_corner(go, unit, size), 3), "name": "JumpPad" if kind == "jumppad" else "Teleporter",
+            "properties": props, "rotation": "0, 0, 0", "scale": _f(tuple(v / VOLUME_MESH for v in size), 4),
+            "type": "gameObject"}
+
 
 
 def build(sc: scene.Scene, slots: List[Slot], tex_slot: Dict[str, int], groups: int, unit: float,

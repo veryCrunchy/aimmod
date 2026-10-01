@@ -163,6 +163,8 @@ interface IMultiplayerTransport : IDisposable
     // Ask for a Steam profile picture (avatar.get {format:"png"}, feature "avatar"). have: the hash
     // already held, so an unchanged picture isn't sent again. The answer is an Avatar event.
     bool RequestAvatar(string peer, string? have) => false;
+    // mode walk: the test avatar walks between these spawn points (x, y, z; at most 32).
+    bool DevAvatar(bool on, string mode, string? profile, IReadOnlyList<double[]>? spawns) => spawns is null && DevAvatar(on, mode, profile);
     // Bulk file lane (bridge xfer.*): low-priority, in-order chunks of BulkChunkBytes, with a
     // small send window. BulkChunkBytes is 0 when the lane is missing; content then uses frames.
     int BulkChunkBytes { get; }

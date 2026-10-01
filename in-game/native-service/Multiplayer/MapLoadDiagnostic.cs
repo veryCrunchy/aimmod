@@ -36,9 +36,8 @@ static class MapLoadDiagnostic
         var fix = Send(commands, "ensure-map", scenario, TimeSpan.FromSeconds(20));
         Thread.Sleep(1000);
         var scene = Print("after ensure-map");
-        var ok = fix is { State: "done" } && scene is { Loading: false } && scene.Scenario == scenario
-            && (expected.MapName is null || MatchScenario.SameMap(scene.MapName, expected.MapName))
-            && (expected.MapScale is not double want || scene.MapScale is double shown && Math.Abs(shown - want) <= 0.01);
+        // The load gate's own check (ScenarioLoader): scenario, map and scale, not loading.
+        var ok = fix is { State: "done" } && ScenarioLoader.SceneProblem(scene, scenario, expected) is null;
         Console.WriteLine(ok ? "result: map ok" : "result: map NOT loaded");
         return ok ? 0 : 1;
 

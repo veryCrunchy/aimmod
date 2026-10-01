@@ -294,6 +294,8 @@ sealed partial class MultiplayerService : IDisposable
     // ---- Discord presence ---------------------------------------------------
 
     // Display summary of the current lobby or match, without Steam ids.
+    /// <summary>The AimModSteam bridge: connected or not; null when this transport is not Steam.</summary>
+    public bool? SteamBridge => transport.Kind == "steam" ? transport.Available : null;
     public DiscordLobbyInfo? DiscordLobby() { lock (gate) return Current is { } lobby ? MultiplayerDiscord.Summarize(lobby, SelfId, transport.JoinToken) : null; }
     // Join from Discord (ACTIVITY_JOIN): the secret names one of the player's
     // Steam friends' joinable lobbies, or nothing.
@@ -826,6 +828,7 @@ sealed partial class MultiplayerService : IDisposable
         if (!quiet && Current is null or { Match: null or { Phase: MatchPhases.Final } } && Tournaments?.Notice() is { } tournamentNotice) return tournamentNotice;
         if (Current is not { } lobby) return flash is { } f && now < f.Until ? f.Notice : null;
         var me = lobby.Members.FirstOrDefault(m => m.Id == SelfId);
+        if (RestartNotice(now) is { } restartNotice && lobby.Match is { } rm && rm.Players.Contains(SelfId)) return restartNotice;
         // Load gate: waiting for everyone's map, or a failed load the host can retry or abort.
         if (lobby.Match is { Phase: MatchPhases.Loading } loading && loading.Players.Contains(SelfId))
         {
@@ -1809,8 +1812,9 @@ sealed partial class MultiplayerService : IDisposable
                 Console.Error.WriteLine("Match scenario " + name + " refused: " + string.Join("; ", problems));
                 return "AimMod couldn’t build a valid match scenario (" + problems[0] + ").";
             }
-            expectedMaps[name] = MatchScenario.MapOf(text);
-            if (LobbyModes.Combat(s.Mode)) { arenaSpawns = MatchScenario.Spawns(text); core?.SetCombatSpawns(arenaSpawns); }
+            LoadGate.Expect(name, MatchScenario.MapOf(text));
+            arenaSpawns = MatchScenario.Spawns(text);
+            if (LobbyModes.Combat(s.Mode)) core?.SetCombatSpawns(arenaSpawns);
             if (s.Mode == LobbyModes.Cs) { csObjectives = LoadObjectives(text); core?.SetCsObjectives(csObjectives); }
             var (ok, error) = scenarios.Write(name, text, clock());
             return ok ? null : error == "name-taken" ? "A scenario of yours already uses the match name. Rename it to play." : "Couldn’t save the match scenario.";
@@ -1839,6 +1843,7 @@ sealed partial class MultiplayerService : IDisposable
         foreach (var batch in poseTracker.Drain(match.Id, match.Round))
         {
             FeedStandIn(batch);
+            KeepOwnSamples(batch);
             if (core is not null) core.Track(SelfId, batch);
             else if (hostPeer is not null) Send(hostPeer, "track", batch.Body());
         }
@@ -1858,7 +1863,8 @@ sealed partial class MultiplayerService : IDisposable
         if (match.Phase == MatchPhases.Live && poseTracker is not null)
         {
             var offset = core is not null || hostPeer is null ? 0 : clocks.GetValueOrDefault(hostPeer)?.Offset ?? 0;
-            foreach (var claim in shotFeed.Poll(match.Id, match.Round, offset, poseTracker.LastSeen))
+            var tracker = poseTracker;
+            foreach (var claim in shotFeed.Poll(match.Id, match.Round, offset, (id, t) => tracker.SeenAt(id, t) ?? (tracker.LastSeen.TryGetValue(id, out var last) ? last : null)))
             {
                 if (core is not null) core.Claim(SelfId, claim);
                 else if (hostPeer is not null) Send(hostPeer, "hit", claim.Body());
@@ -1869,7 +1875,7 @@ sealed partial class MultiplayerService : IDisposable
         {
             var lastHit = view.Events.LastOrDefault(e => e.Member == SelfId && e.Kind is "damage");
             var lastSpawn = view.Events.LastOrDefault(e => e.Member == SelfId && e.Kind is "respawn");
-            var extra = CsPlayLines(match).ToList();
+            var extra = PhaseLines(match).ToList();
             if (match.Cs is { } csv && csv.Spawns?.GetValueOrDefault(SelfId) is { Length: 4 } rs)
                 lastSpawn = new CombatEvent(1_000_000 + csv.Round, "respawn", 0, SelfId, null, 0, false, 100, null, rs); // one teleport per CS round
             // The match scenario's exact name: AimModCore applies play state only there.
@@ -1884,15 +1890,10 @@ sealed partial class MultiplayerService : IDisposable
                 try { AtomicFile.WriteText(Path.Combine(outputFolder, "play-state.tsv"), PlayState.Format(++playSequence, scenario, self, lastHit, hostNow, HostOffset())); }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             }
-            var round = PlayState.Round(0, scenario, lastSpawn, extra);
-            if (round != lastRoundState || now - roundWrittenAt >= 1000)
-            {
-                lastRoundState = round; roundWrittenAt = now;
-                try { AtomicFile.WriteText(Path.Combine(outputFolder, "round-state.tsv"), PlayState.Round(++roundSequence, scenario, lastSpawn, extra)); }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-            }
+            WriteRoundState(match, lastSpawn, extra);
             WriteAvatarState(match, view, self);
         }
+        else WriteRoundState(match, null, PhaseLines(match));
     }
 
     // ---- combat events: pushed by the host as they happen ------------------
@@ -1957,8 +1958,12 @@ sealed partial class MultiplayerService : IDisposable
     void TrackLocalRun()
     {
         if (Current is not { Match: { } match } || !match.Players.Contains(SelfId)) { trackedRound = null; return; }
-        if (match.Mode == LobbyModes.Tracking) { StreamTracking(match); return; }
+        var restarted = DetectRestart(match);
+        ReadLockPresses();
+        if (match.Mode == LobbyModes.Tracking) { StreamTracking(match); WriteRoundState(match, null, PhaseLines(match)); return; }
         if (LobbyModes.Shooting(match.Mode)) { StreamCombat(match); if (match.Cs is not null) CsInput(match); return; }
+        // Score modes: frozen before go-live in a generated scenario (AimModCore ignores it elsewhere).
+        WriteRoundState(match, null, PhaseLines(match));
         var roundKey = match.Id + "#" + match.Round;
         if (trackedRound != roundKey)
         {
@@ -1994,6 +1999,13 @@ sealed partial class MultiplayerService : IDisposable
             var final = playing && live.Score is { } sc && live.Seconds is { } sec ? new RunFinish(match.Id, match.Round, sc, Math.Min(sec, match.TimeLimit), live.Shots, live.Hits, live.Kills, null)
                 : new RunFinish(match.Id, match.Round, last.Score, last.Seconds, last.Shots, last.Hits, last.Kills, null);
             SendFinish(final);
+            return;
+        }
+        // A restart that got through: the run keeps the score it had; the restarted run doesn't count.
+        if (restarted || restartedRound == match.Id + "#" + match.Round)
+        {
+            if (lastFrame is { } kept && (live.Remaining is <= 0 || now > (match.StartsAt ?? now) + match.TimeLimit * 1000))
+                SendFinish(new RunFinish(match.Id, match.Round, kept.Score, kept.Seconds, kept.Shots, kept.Hits, kept.Kills, null));
             return;
         }
         if (!playing || live.Score is null || live.Seconds is null) return;

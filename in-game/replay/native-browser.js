@@ -33,22 +33,26 @@
     var title=node('h3',row.scenario||row.Scenario||'Replay');
     var note=node('p','Preparing in-game playback…');note.style.cssText='color:#dcebe3;margin-top:12px';
     var retry=node('button','Try again');retry.className='button primary';retry.type='button';retry.style.marginTop='16px';retry.style.display='none';
-    // Pending start: what to do in the game, how long it has waited, Retry/Cancel.
+    // Pending start: the service loads the replay's scenario itself and says how it goes
+    // (short: "Loading “…”…"), how long it has waited, and Download (a missing scenario
+    // a Workshop item provides), Retry now and Cancel.
     var pending=node('div',undefined,'replay-pending');pending.style.display='none';
     var steps=node('p','','replay-pending-message'),elapsed=node('p','','replay-pending-timer'),row2=node('div',undefined,'actions replay-pending-actions');
-    var retryNow=node('button','Retry now','button primary'),cancel=node('button','Cancel','button');retryNow.type=cancel.type='button';
-    row2.appendChild(retryNow);row2.appendChild(cancel);pending.appendChild(steps);pending.appendChild(elapsed);pending.appendChild(row2);
+    var download=node('button','Download from the Workshop','button primary'),retryNow=node('button','Retry now','button'),cancel=node('button','Cancel','button');download.type=retryNow.type=cancel.type='button';download.style.display='none';
+    row2.appendChild(download);row2.appendChild(retryNow);row2.appendChild(cancel);pending.appendChild(steps);pending.appendChild(elapsed);pending.appendChild(row2);
     target.appendChild(title);target.appendChild(note);target.appendChild(retry);target.appendChild(pending);
     var seconds=0;
     function stopTick(){if(tick!==null)root.clearTimeout(tick);tick=null;}
     function countUp(){stopTick();elapsed.textContent='Waiting '+clock(seconds);tick=root.setTimeout(function(){tick=null;if(!active||!waiting)return;seconds++;countUp();},1000);}
-    function fail(message){stopTick();waiting=false;pending.style.display='none';note.textContent=message;retry.style.display='';transferred=false;}
-    function started(){stopTick();waiting=false;pending.style.display='none';transferred=true;note.textContent='Opening replay in the game…';
+    function say(text){note.style.display='';note.textContent=text;}
+    function fail(message){stopTick();waiting=false;pending.style.display='none';say(message);retry.style.display='';transferred=false;}
+    function started(){stopTick();waiting=false;pending.style.display='none';transferred=true;say('Opening replay in the game…');
       // A successful native handoff hides this workspace and cancels the
       // timer through leave(). Visible transport alone is not a scene ack.
       timer=root.setTimeout(function(){timer=null;request('POST',{action:'close'},function(){fail('Replay did not open. Try again.');});},HANDOFF_MS);}
-    function wait(start){waiting=true;retry.style.display='none';pending.style.display='';note.textContent='Waiting for the game to start this replay.';
-      steps.textContent=start.message||'Load the replay’s scenario, then open the pause menu (Esc).';
+    function wait(start){waiting=true;retry.style.display='none';pending.style.display='';note.style.display='none';
+      steps.textContent=start.message||'Loading the replay’s scenario…';
+      var offer=start.download;download.style.display=offer&&offer.workshop&&offer.state!=='queued'&&offer.state!=='downloading'?'':'none';
       if(typeof start.waitingSeconds==='number'&&isFinite(start.waitingSeconds))seconds=start.waitingSeconds;if(tick===null)countUp();else elapsed.textContent='Waiting '+clock(seconds);
       if(poller!==null)root.clearTimeout(poller);poller=root.setTimeout(poll,POLL_MS);}
     // While waiting, the service starts the replay by itself; watch for the outcome.
@@ -67,7 +71,7 @@
       if(status!==200){fail('This replay could not be opened.');return;}
       started();});}
     function open(){
-      retry.style.display='none';pending.style.display='none';note.textContent='Preparing in-game playback…';
+      retry.style.display='none';pending.style.display='none';say('Preparing in-game playback…');
       request('GET',null,function(code,state){
         if(code!==200||!state){fail('Could not connect to in-game playback.');return;}
         var resumed=pendingFor(state,id);if(resumed){wait(resumed);return;}
@@ -77,7 +81,9 @@
       });
     }
     retry.onclick=open;retryNow.onclick=function(){load();};
-    cancel.onclick=function(){stopTick();waiting=false;if(poller!==null)root.clearTimeout(poller);poller=null;request('POST',{action:'cancel'},function(){});pending.style.display='none';note.textContent='Replay start cancelled.';retry.style.display='';};
+    // The Map Library's Workshop install; the scenario loads by itself once it's in.
+    download.onclick=function(){download.style.display='none';request('POST',{action:'download'},function(code,state){if(code!==200&&waiting)steps.textContent=(state&&state.message)||'The download could not start.';});};
+    cancel.onclick=function(){stopTick();waiting=false;if(poller!==null)root.clearTimeout(poller);poller=null;request('POST',{action:'cancel'},function(){});pending.style.display='none';say('Replay start cancelled.');retry.style.display='';};
     open();
   }
   // Reports a pending start (if any) so the library can reopen it after the

@@ -118,7 +118,8 @@ def _lzma_lump(raw: bytes) -> bytes:
 
 
 def build_bsp(version: int = 20, compress: bool = False, with_displacement: bool = True,
-              extra_entities: str = "") -> bytes:
+              extra_entities: str = "", water=None) -> bytes:
+    """water: optional (lo, hi) box added as a CONTENTS_WATER brush (a pool)."""
     lumps: Dict[int, bytes] = {}
     names = [b"concrete/concretefloor001a", b"tools/toolsplayerclip", b"brick/brickwall001a"]
     sdata, table = b"", []
@@ -154,9 +155,16 @@ def build_bsp(version: int = 20, compress: bool = False, with_displacement: bool
         planes.append((-n[0], -n[1], -n[2], -clip_lo[axis]))
         sides.append((len(planes) - 2, 1, 0, 0))
         sides.append((len(planes) - 1, 1, 0, 0))
+    brushes = struct.pack("<iii", 0, 6, 0x1) + struct.pack("<iii", 6, 6, 0x10000)
+    if water:
+        first = len(sides)
+        for pl in _box_planes(*water):
+            planes.append(pl)
+            sides.append((len(planes) - 1, 0, 0, 0))
+        brushes += struct.pack("<iii", first, 6, 0x20)
     lumps[1] = b"".join(struct.pack("<ffffi", *p, 0) for p in planes)
     lumps[19] = b"".join(struct.pack("<Hhhh", *s) for s in sides)
-    lumps[18] = struct.pack("<iii", 0, 6, 0x1) + struct.pack("<iii", 6, 6, 0x10000)
+    lumps[18] = brushes
     lumps[17] = struct.pack("<HH", 0, 1)
     leaf = struct.pack("<ihh6hHHHHh2x", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0)
     if version == 19:

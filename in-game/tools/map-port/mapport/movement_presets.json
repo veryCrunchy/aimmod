@@ -4,7 +4,8 @@
     "shift: 'walk' or 'sprint'. KovaaK's binds Ability 1 to Left Shift by default; the preset puts a",
     "sprint ability there whose SpeedModifier is shift_speed_mult (< 1 walks, > 1 sprints, held, all directions).",
     "Shared with other AimMod services: keep keys stable and add new presets rather than changing meanings.",
-    "clamp_air_speed: true caps horizontal speed at the input speed (CS); false allows strafe-jump gains (Quake). variant: the scenario name's variant part."
+    "clamp_air_speed: true caps horizontal speed at the input speed (CS); false allows strafe-jump gains (Quake). variant: the scenario name's variant part.",
+    "model: 'ue' = Unreal character movement (KovaaK's own Counter-Striker profile style; the Shift walk/sprint multiplier applies), 'quake' = KovaaK's Quake/Source movement (strafe jumping; the sprint multiplier is not applied by that movement mode)."
   ],
   "version": 1,
   "presets": {
@@ -28,7 +29,8 @@
       "shift_speed_mult": 0.52,
       "variant": "CS Movement",
       "clamp_air_speed": true,
-      "air_control": 0.3
+      "air_control": 0.3,
+      "model": "ue"
     },
     "css": {
       "label": "Counter-Strike: Source defaults",
@@ -50,7 +52,8 @@
       "shift_speed_mult": 0.52,
       "variant": "CS Movement",
       "clamp_air_speed": true,
-      "air_control": 0.3
+      "air_control": 0.3,
+      "model": "ue"
     },
     "csgo": {
       "label": "CS:GO defaults",
@@ -72,7 +75,8 @@
       "shift_speed_mult": 0.52,
       "variant": "CS Movement",
       "clamp_air_speed": true,
-      "air_control": 0.3
+      "air_control": 0.3,
+      "model": "ue"
     },
     "cs2": {
       "label": "CS2 (same ground values as CS:GO)",
@@ -94,7 +98,8 @@
       "shift_speed_mult": 0.52,
       "variant": "CS Movement",
       "clamp_air_speed": true,
-      "air_control": 0.3
+      "air_control": 0.3,
+      "model": "ue"
     },
     "sprint": {
       "label": "Generic sprint shooter (CS ground feel, Shift sprints at 1.3x)",
@@ -116,7 +121,8 @@
       "shift_speed_mult": 1.3,
       "variant": "Sprint Movement",
       "clamp_air_speed": true,
-      "air_control": 0.3
+      "air_control": 0.3,
+      "model": "ue"
     },
     "quake": {
       "label": "Quake 3 / Quake Live (320 u/s, strafe jumping)",
@@ -138,7 +144,8 @@
       "shift": "walk",
       "shift_speed_mult": 0.5,
       "clamp_air_speed": false,
-      "air_control": 0.0
+      "air_control": 0.0,
+      "model": "quake"
     }
   }
 }

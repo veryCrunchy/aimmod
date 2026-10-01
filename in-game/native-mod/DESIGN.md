@@ -34,6 +34,7 @@ core/     engine-independent library (unit tested, no UE4SS headers)
   ReplayV2       replay format 2 encoder/decoder (ReplayWriter: format 1)
   Settings       native-settings.tsv parser, core-active handshake line
   Supervisor     service restart back-off policy
+  Water          water gate, swim tuning per movement style, swim input
 mod/      UE4SS glue (built against a local RE-UE4SS checkout)
   GameBindings   name resolution, signature checks, typed getter calls
   Observer       game-thread scheduler, hooks, lifecycle driver, live values
@@ -41,6 +42,7 @@ mod/      UE4SS glue (built against a local RE-UE4SS checkout)
   Output         writer thread: journal append, atomic JSON files, heartbeat,
                  shared-memory live channel
   ServiceHost    launches and supervises AimMod.InGame.exe
+  Water          swimmable water volumes over the map's Water objects
 ```
 
 ### Threads
@@ -218,9 +220,20 @@ the world it was recorded in, from the pause menu; a start that cannot be
 honoured yet stays pending with a reason and message
 (`GET /native-replay` -> `start`) and begins by itself once the game is
 ready (cancel with `{"action":"cancel"}`; 10 minute limit). When the
-reason is another scenario and AimModCore advertises `load`, the service
-asks it to load the replay's scenario (game command below) and shows the
-progress, or the refusal, in the same message.
+reason is another scenario (or the replay's on another map) and AimModCore
+advertises `load`, the service loads the replay's scenario itself through
+`ScenarioLoader`, the same load path as the multiplayer load gate:
+`load-scenario` (never a start, so never a challenge run; stock and Workshop
+scenarios rely on KovaaK's normal load), its answer, then `core-scene.json`
+showing the scenario with the scenario file's `MapName` at its `MapScale`
+(the replay's recorded map when the file isn't in the library), with
+ensure-map for AimMod's scenarios, one reload and a 30 s limit. The message
+is short (`Loading "<scenario>"…`). Failures are typed: not installed
+(`scenario-missing`; `start.download` `{"workshop":true,"state","percent"}`
+when a Workshop map port provides it, and `{"action":"download"}` starts the
+Map Library's install; the load runs again once it's installed), a running
+challenge (`challenge-active`; loads once it ends), and `load-failed` with the
+reason. Each play or Retry is a new attempt.
 
 Measured on live test #1 (60 s tracking run, 378 fps, 43821 inputs):
 format 1 4.04 MB/min, format 2 54.6 KB/min (74x smaller; XPRESS 61.5,
@@ -585,7 +598,11 @@ loadout	<primary profile or ->	<pistol profile or ->	<armour>	<helmet 0/1>	<kit 
   (CS round start) a dead player is respawned first (`Respawn`).
 - `frozen`: `Controller:SetIgnoreMoveInput(true)` (looking stays free),
   re-applied if a respawn clears it, released when the phase ends or the gate
-  closes.
+  closes. Jumping is off too (`JumpMaxCount` 0), and once no spawn teleport is
+  pending the movement component stops (`SetMovementMode(MOVE_None)`). Both
+  come back exactly at unfreeze (`MOVE_Walking`; the component falls if there
+  is no floor). The service sends `phase freeze` in every mode while the
+  match loads and counts down, and `phase live` at go-live.
 - `loadout`: `WeaponHandler:SetWeaponProfileByString` on slots 0 and 1; `-`
   empties a slot by clearing its `SelectableWeapon` entry (and selects the
   other slot). Re-applied for a new weapon handler. When the gate closes the
@@ -593,6 +610,28 @@ loadout	<primary profile or ->	<pistol profile or ->	<armour>	<helmet 0/1>	<kit 
   scenario's loadout. Armour, helmet and kit are the service's (HUD) concern.
 - Missing `K2_TeleportTo`, `SetControlRotation`, `SetIgnoreMoveInput`,
   `SetWeaponProfileByString` or `LoadWeapons` disables round state (logged).
+
+**Restart lock.** While a fresh `round-state.tsv` names the scenario on
+screen (any match, AimMod arena or not; not while loading), KovaaK's restart
+is off:
+
+- every `ResetSession` action mapping in the input settings (F3 and middle
+  mouse by default) is renamed `AimModRestartOff`, then
+  `InputSettings:ForceRebuildKeymaps`. The settings are never saved, so
+  nothing reaches Input.ini. A lock left behind (the game closed mid-match
+  and the binds were saved since) is undone at the next start, and only then
+  `SaveKeyMappings` writes the restored bind back;
+- the pause menu's restart button (`PauseBoxWidget.ResetChallengeButton`) is
+  collapsed, every 0.25 s while the lock holds, and given back its own
+  visibility after;
+- a press of a switched-off key (`PlayerController:WasInputKeyJustPressed`
+  with its `FKey`) bumps `match-lock.tsv` (`AIMMOD_LOCK_1\t<presses>\t<unix
+  ms>`), and the service shows "Restart is off during a match".
+
+Quit and the AimMod lobby's Leave still work; they count as leaving. A
+restart that still gets through is the service's to absorb (the run timer
+jumps back): combat scores are the host's anyway, a score run keeps the
+score it had, and the player is put back where they were (`spawn` row).
 
 ## Cosmetics
 
@@ -671,6 +710,67 @@ lists both runs' target appearances (new target, reappearance after an
 absence, or a jump over 150 cm in one frame) and reports how many match
 within 5 cm and where they first differ. If spawns match but movement
 does not, the next step is (c): drive spawns from a pre-generated sequence.
+
+## Water
+
+Findings (3.9.11 dumps and cooked assets):
+- The map creator's Water object (`AMapCreatorWater`, Blueprint
+  `MapCreatorWaterInstance_C`) is an actor with one `EditorMesh`
+  (`/KovaaKMapAssets/Water/water_cube`, a 200-unit cube centred on the actor)
+  and three dynamic materials (`MM_Liquid_Top2` on top, `MM_Liquid_Sides`
+  elsewhere, both translucent), coloured by the object's properties. It has no
+  physics volume: nothing in the game swims, and the mesh can block.
+- The engine is complete: `APhysicsVolume` (`bWaterVolume`, `FluidFriction`,
+  `TerminalVelocity`, `Priority`), `MOVE_Swimming`, and on the character
+  movement `MaxSwimSpeed`, `Buoyancy`, `OutofWaterZ`, `JumpOutOfWaterPitch`
+  and `NavAgentProps.bCanSwim`. The game's `UMetaCharacterMovementComponent`
+  adds no swimming members of its own; the `water: swimming` log line confirms
+  live that the engine mode runs.
+
+What AimModCore does (`mod/src/Water`, `core/Water`), only where
+`water::Allowed`: an `AimMod - `, `AimMod Match - ` or `AimMod Probe `
+scenario in freeplay, not loading, never in a challenge, benchmark or the
+scenario editor:
+- Every `MapCreatorWaterInstance_C` of the current world (searched each second
+  for 15 s after a load, then every 5 s; a rebuilt map drops and re-adds them)
+  gets its `EditorMesh` collision off (the previous value is kept) and an
+  `APhysicsVolume` over the mesh's world box: `bWaterVolume`, priority 1, a
+  query-only `BoxComponent` (overlap on every channel, no overlap events) as
+  its root, because a runtime volume has no brush and the engine finds water
+  through the root primitive's bounds, overlap and distance test. The
+  character's own `UpdatePhysicsVolume` then starts and ends swimming: the
+  capsule centre inside the box swims.
+- A `PostProcessComponent` on the box (not unbound, blend radius 1) tints the
+  view while the camera is under water (`SceneColorTint`).
+- The local character's movement gets the style's tuning (`TuningFor`; Quake
+  when `bEnableQuakeMovement` is on, else CS). Lengths are source units x
+  MapScale:
+
+  | | CS (Source) | Quake 3 |
+  | --- | --- | --- |
+  | swim speed | 0.8 x run | 0.5 x run |
+  | water friction (`FluidFriction` / 2) | 4 /s | 3 /s (1 x waterlevel 3) |
+  | gravity under water (`Buoyancy` 1) | none | none |
+  | sink with no input | 48 u/s | 60 u/s |
+  | climb out at an edge (`OutofWaterZ`) | 256 u/s | 350 u/s |
+  | entry speed kept (`TerminalVelocity`) | 1.5 x swim | 2 x swim |
+
+  `JumpOutOfWaterPitch` -90: climbing out needs jump held while moving into a
+  ledge, not a raised view. Swimming never lands, so there is no fall damage.
+- The game binds no swim-up input. While swimming, AimModCore adds a vertical
+  movement input each frame (`Pawn:AddMovementInput`): +1 with a Jump key held
+  (the `Jump` action keys from `%LOCALAPPDATA%\FPSAimTrainer\Saved\Config\WindowsNoEditor\Input.ini`,
+  read once per scenario, checked with `PlayerController:IsInputKeyDown`), a
+  slow sink with no movement input, nothing otherwise.
+- Leaving the gate destroys the volumes and restores the mesh collision and
+  the movement values (a swimming character is set falling).
+- Multiplayer: the volumes come from the Water objects in the map data, which
+  generated match arenas copy byte for byte from the base port (the lobby
+  compares map keys), so every peer swims in the same water. Nothing is sent.
+
+Log lines: `water: N swimmable volume(s) (cs: swim 800 cm/s, sink 192 cm/s,
+friction 4/s)`, `water: swimming` (first time per scenario), `water: off
+(<reason>)`.
 
 ## Native service
 

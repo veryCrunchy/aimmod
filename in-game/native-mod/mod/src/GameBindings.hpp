@@ -201,6 +201,7 @@ namespace aimmod::game
         Kind kind() const { return m_leaf.kind; }
         // Element struct of a TArray<struct> member (to bind element paths).
         RC::Unreal::UStruct* elementStruct() const { return m_elementStruct; }
+        std::int32_t size() const { return m_leaf.size; }
         std::int32_t elementSize() const { return m_elementSize; }
         const std::uint8_t* At(const void* base) const { return static_cast<const std::uint8_t*>(base) + m_offset; }
         bool String(const void* base, std::string& out) const;  // FString

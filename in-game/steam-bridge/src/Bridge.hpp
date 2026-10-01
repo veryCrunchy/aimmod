@@ -13,6 +13,7 @@
 #include "PoseFile.hpp"
 #include "Steam.hpp"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -87,6 +88,8 @@ namespace bridge
         {
             bool on = false;
             bool path = false;     // follow avatar-test-path.tsv
+            bool walk = false;     // walk between `spawns` like a bot (simulated lobby players)
+            std::vector<std::array<double, 3>> spawns; // the arena's spawn points (world cm), at most 32
             int generation = 0;    // bumps on every command (reload the path)
             std::string profile;   // character profile for the test avatar's look (empty = scenario default)
         };

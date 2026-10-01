@@ -10,7 +10,7 @@ if (Lifecycle.Commands.Any(args.Contains)) { Environment.ExitCode = Lifecycle.Ru
 if (args.Contains("--self-test-lifecycle")) { await LifecycleChecks.Run(); return; }
 if (args.Contains("--self-test-multiplayer")) { AimMod.InGame.Multiplayer.MultiplayerChecks.Run(); return; }
 if (args.Contains("--discord-test")) { Environment.ExitCode = await DiscordDiagnostics.Run(args); return; }
-if (args.Contains("--self-test")) { Checks.Run(); HistoryCompletenessChecks.Run(); CsvHistoryChecks.Run(); await HubChecks.Run(); HubPaginationChecks.Run(); await HubLeaderboardChecks.Run(); Coaching.SelfTest(); CoachingFeedbackChecks.Run(); StatsChecks.Run(); WarmupChecks.Run(); RunInspectionChecks.Run(); NativeSettingsChecks.Run(); LiveOverlayChecks.Run(); LiveOverlayFeedChecks.Run(); OverlaySettingsChecks.Run(); await ObsOverlayChecks.Run(); BenchmarkChecks.Run(); ReplayLibraryChecks.Run(); await WorkspaceChecks.Run(); ReplayChecks.Run(); ReplayKeyboardChecks.Run(); await NativeReplayPlaybackChecks.Run(); await HardeningChecks.Run(); CoreFormatChecks.Run(); await DiscordPresenceChecks.Run(); AimMod.InGame.Multiplayer.MultiplayerChecks.Run(); await LifecycleChecks.Run(); return; }
+if (args.Contains("--self-test")) { Checks.Run(); HistoryCompletenessChecks.Run(); CsvHistoryChecks.Run(); await HubChecks.Run(); await HubLiveChecks.Run(); HubPaginationChecks.Run(); await HubLeaderboardChecks.Run(); Coaching.SelfTest(); CoachingFeedbackChecks.Run(); StatsChecks.Run(); WarmupChecks.Run(); RunInspectionChecks.Run(); NativeSettingsChecks.Run(); LiveOverlayChecks.Run(); LiveOverlayFeedChecks.Run(); OverlaySettingsChecks.Run(); await ObsOverlayChecks.Run(); BenchmarkChecks.Run(); ReplayLibraryChecks.Run(); await WorkspaceChecks.Run(); ReplayChecks.Run(); ReplayKeyboardChecks.Run(); await NativeReplayPlaybackChecks.Run(); await HardeningChecks.Run(); CoreFormatChecks.Run(); ScenarioLoaderChecks.Run(); await DiscordPresenceChecks.Run(); AimMod.InGame.Multiplayer.MultiplayerChecks.Run(); await LifecycleChecks.Run(); return; }
 if (args.Length == 5 && args[0] == "--compare-spawns") { Environment.ExitCode = ReplayCompare.Spawns(args[1], args[2], args[3], args[4]); return; }
 if (args.Length == 4 && args[0] == "--compare-replays") { Environment.ExitCode = ReplayCompare.Run(args[1], args[2], args[3]); return; }
 // Diagnostic: --generate-arena <base .sce> <mode> <out .sce> writes the match scenario a lobby in that mode would build.
@@ -68,6 +68,8 @@ var gameWatch = exitWithGame ? new GameProcessWatch() : null;
 string? fingerprint = null;
 string? localFingerprint = null;
 IReadOnlyList<Run> localRuns = [];
+IReadOnlyList<Run> journalRuns = [];
+IReadOnlySet<string> companionIds = new HashSet<string>(), hubRunIds = new HashSet<string>();
 IReadOnlyDictionary<string,HistoricalMeasurement> measurements = new Dictionary<string,HistoricalMeasurement>();
 RunDetails? details = null;
 string? detailsFingerprint = null;
@@ -75,6 +77,14 @@ var settings = new NativeSettings(output);
 using var hub = new Hub(output, historyEnabled: () => settings.Current.HubHistoryEnabled);
 var csvHistory = new CsvHistory(output);
 var discordSettings = new DiscordSettings(output);
+var hubSharing = new HubSharingSettings(output);
+// Development preview instances run beside the game's own service: only that
+// service speaks for the account on AimMod Hub.
+var sharesWithHub = instance.Length == 0;
+HubLivePublisher? hubLive = null;
+var statsWin64 = InstallLayout.FindWin64FromService(AppContext.BaseDirectory) ?? (instance.Length == 0 ? InstallLayout.FindWin64FromSteam() : null);
+var statsFolder = statsWin64 is null ? null : Path.GetFullPath(Path.Combine(statsWin64, "..", "..", "stats"));
+var hubUploads = new HubRunUploads(hub, hubSharing, output, () => statsFolder);
 DiscordPresenceHost? discord = null;
 var failures = 0;
 var gameExited = false;
@@ -83,7 +93,8 @@ await using var lifecycle = new Lifecycle(output, instance.Length > 0 ? null : I
 lifecycle.Start();
 try
 {
-await using var workspace = new WorkspaceHost(hub, output, database, settings, csvHistory, discordSettings, () => discord?.StatusInfo ?? new { state = "starting" }, args, lifecycle);
+await using var workspace = new WorkspaceHost(hub, output, database, settings, csvHistory, discordSettings, () => discord?.StatusInfo ?? new { state = "starting" }, args, lifecycle,
+    hubSharing, () => new { linked = hub.Linked, live = sharesWithHub ? hubLive?.StatusInfo ?? new { state = "starting" } : new { state = "preview" }, uploads = sharesWithHub ? hubUploads.StatusInfo : new { state = "preview" } });
 await workspace.Start(cancellation.Token);
 // Declared after the workspace so it is disposed first: the presence is
 // cleared and KovaaK's own presence handed back before the UI closes.
@@ -91,6 +102,11 @@ await using var discordHost = discord = new DiscordPresenceHost(output, discordS
     replayScenario: () => workspace.ReplayScenario, page: () => workspace.View.Current(DateTimeOffset.UtcNow),
     lobby: workspace.MultiplayerLobby.DiscordLobby, join: secret => { var r = workspace.MultiplayerLobby.JoinFromDiscord(secret); return (r.Ok, r.Message ?? r.Code ?? ""); });
 discord.Start(cancellation.Token);
+var gameProcess = new CachedGameProcess();
+// Declared after the workspace so it is disposed first: the heartbeat is removed from the Live page.
+await using var hubLiveHost = hubLive = new HubLivePublisher(hub, hubSharing, () => new HubLiveSnapshot(gameProcess.Running(), GameScene.Read(output), workspace.ReadLive(),
+    workspace.ReplayVisible, workspace.ReplayScenario, workspace.MultiplayerLobby.DiscordLobby(), workspace.MultiplayerLobby.SteamBridge));
+if (sharesWithHub) { hub.Unlinking = hubLive.ClearNow; hubLive.Start(cancellation.Token); }
 var workspaceUrlPath = Path.Combine(output, "workspace-url.txt");
 AtomicFile.WriteText(workspaceUrlPath, workspace.Url);
 try
@@ -107,7 +123,10 @@ try
             {
                 if (files != localFingerprint)
                 {
-                    localRuns = History.Read(database).Concat(NativeRuns.Read(journal)).ToArray();
+                    var companionRuns = History.Read(database);
+                    journalRuns = NativeRuns.Read(journal);
+                    companionIds = companionRuns.Select(r => r.Id).ToHashSet(StringComparer.Ordinal);
+                    localRuns = companionRuns.Concat(journalRuns).ToArray();
                     try { measurements = HistoricalMeasurements.Read(database,localRuns.Select(r=>r.Id).ToHashSet(StringComparer.Ordinal)); }
                     catch (IOException) { measurements = new Dictionary<string,HistoricalMeasurement>(); Console.Error.WriteLine("Historical measurements temporarily unavailable."); }
                     localFingerprint = files;
@@ -120,6 +139,8 @@ try
                 { details = selectedRun is null ? null : RunMetrics.Read(database, selectedRun.Id); detailsFingerprint = nextDetails; }
                 workspace.UpdateHistory(runs);
                 discord.UpdateHistory(runs);
+                hubLive.UpdateHistory(runs);
+                hubRunIds = hub.Runs.Select(r => r.Id).ToHashSet(StringComparer.Ordinal);
                 workspace.Update(WorkspaceData.Build(runs, hub, details,measurements));
                 var content = Views.Encode(Views.Build(runs, hub.HistoryPage, hub.SelectedScenario).Concat(hub.Rows()));
                 AtomicFile.WriteText(Path.Combine(output, "views.tsv"), content);
@@ -134,6 +155,7 @@ try
                 fingerprint = next;
                 Console.WriteLine($"Refreshed {runs.Length} history records.");
             }
+            if (sharesWithHub) await hubUploads.Tick(journalRuns, companionIds, hubRunIds, cancellation.Token);
             failures = 0;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

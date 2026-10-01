@@ -286,7 +286,7 @@ namespace aimmod::game
                 if (p.worldContext || p.kind == Kind::Int32) continue;
                 if (shape == Shape::Command &&
                     (p.kind == Kind::Vector || p.kind == Kind::Rotator || p.kind == Kind::Float || p.kind == Kind::Bool || p.kind == Kind::UInt8 ||
-                     p.kind == Kind::String || p.kind == Kind::Object || (p.kind == Kind::Other && p.structType)))
+                     p.kind == Kind::String || p.kind == Kind::Object || p.kind == Kind::Array || (p.kind == Kind::Other && p.structType)))
                     continue;
                 m_error = "unsupported input " + p.name + ":" + KindName(p.kind);
                 m_params.clear();

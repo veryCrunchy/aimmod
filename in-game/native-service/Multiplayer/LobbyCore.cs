@@ -453,6 +453,7 @@ sealed class LobbyCore
         if (LobbyModes.Combat(m.Settings.Mode))
             m.Combat = new CombatMatch(m.Settings.Mode, m.Players.Where(id => Find(id) is not null), m.Settings.EffectiveFragLimit, m.Settings.Lifesteal,
                 m.StartsAt.Value, m.StartsAt.Value + (long)(m.Settings.EffectiveTimeLimit * 1000)) { Spawns = combatSpawns };
+        if (LobbyModes.Combat(m.Settings.Mode)) m.Combat!.PlaceAll(clock());
         // Both players track each other at once, every round.
         if (m.Settings.Mode == LobbyModes.Tracking && m.Players.Count >= 2)
             m.Tracking = new TrackingRound(m.Players[0], m.Players[1], m.StartsAt.Value, m.StartsAt.Value + (long)(m.Settings.EffectiveTimeLimit * 1000), m.Settings.RequireFire);

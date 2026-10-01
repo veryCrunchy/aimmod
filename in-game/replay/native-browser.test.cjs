@@ -24,13 +24,13 @@ test('a workspace that never hands off cancels the pending replay and offers ret
  assert.equal(f.requests.at(-1).method,'GET');
 });
 function gated(){const f=fixture();f.requests[0].respond(200,{rendererReady:false,start:{pending:null,reason:null,message:null,waitingSeconds:0}});return f;}
-const pendingState=(extra={})=>({rendererReady:false,start:{pending:'synthetic',scenario:'Synthetic',reason:'scenario-mismatch',message:'This replay was recorded in "Synthetic". Load that scenario in KovaaK\'s; the replay starts when it is ready.',waitingSeconds:42,...extra}});
+const pendingState=(extra={})=>({rendererReady:false,start:{pending:'synthetic',scenario:'Synthetic',reason:'scenario-loading',message:'Loading “Synthetic”…',waitingSeconds:42,...extra}});
 const pendingBox=f=>f.target.children[3];
 test('a start-gated service sends load even when the renderer is not ready yet',()=>{const f=gated();assert.equal(f.requests.at(-1).method,'POST');assert.equal(f.requests.at(-1).body.action,'load');});
 test('202 shows the service message, a waiting timer, and Retry/Cancel',()=>{
  const f=gated();f.requests.at(-1).respond(202,pendingState());
- const box=pendingBox(f);assert.equal(box.style.display,'');assert.match(box.children[0].textContent,/Load that scenario/);assert.equal(box.children[1].textContent,'Waiting 0:42');
- assert.deepEqual(box.children[2].children.map(b=>b.textContent),['Retry now','Cancel']);assert.equal(f.target.children[2].style.display,'none');
+ const box=pendingBox(f);assert.equal(box.style.display,'');assert.equal(box.children[0].textContent,'Loading “Synthetic”…');assert.equal(f.target.children[1].style.display,'none');assert.equal(box.children[1].textContent,'Waiting 0:42');
+ assert.deepEqual(box.children[2].children.filter(b=>b.style.display!=='none').map(b=>b.textContent),['Retry now','Cancel']);assert.equal(f.target.children[2].style.display,'none');
  const tick=[...f.timers.entries()].find(([,fn])=>fn.toString().includes('countUp'));assert.ok(tick);
 });
 test('waiting survives the workspace hiding and polls until the replay starts',()=>{
@@ -52,10 +52,25 @@ test('an expired start shows a clear error with Try again',()=>{
  assert.match(f.target.children[1].textContent,/within 10 minutes/);assert.equal(f.target.children[2].style.display,'');assert.equal(pendingBox(f).style.display,'none');
 });
 test('Retry re-sends load and Cancel sends cancel',()=>{
- const f=gated();f.requests.at(-1).respond(202,pendingState());const [retryNow,cancel]=pendingBox(f).children[2].children;
+ const f=gated();f.requests.at(-1).respond(202,pendingState());const [,retryNow,cancel]=pendingBox(f).children[2].children;
  retryNow.onclick();assert.equal(f.requests.at(-1).body.action,'load');f.requests.at(-1).respond(202,pendingState({waitingSeconds:61}));assert.equal(pendingBox(f).children[1].textContent,'Waiting 1:01');
  cancel.onclick();assert.equal(f.requests.at(-1).body.action,'cancel');assert.match(f.target.children[1].textContent,/cancelled/);assert.equal(f.target.children[2].style.display,'');
 });
 test('reopening a replay that is already pending resumes waiting instead of loading again',()=>{
  const f=fixture();f.requests[0].respond(200,pendingState());assert.equal(f.requests.length,1);assert.equal(pendingBox(f).style.display,'');
+});
+test('a missing scenario a Workshop item provides offers Download, which asks the service',()=>{
+ const f=gated();f.requests.at(-1).respond(202,pendingState({reason:'scenario-missing',message:'“Synthetic” isn’t installed. Download it from the Steam Workshop; the replay starts when it’s installed.',download:{workshop:true,state:null,percent:null}}));
+ const [download]=pendingBox(f).children[2].children;assert.equal(download.style.display,'');assert.match(pendingBox(f).children[0].textContent,/Steam Workshop/);
+ download.onclick();assert.equal(f.requests.at(-1).body.action,'download');assert.equal(download.style.display,'none');
+ f.requests.at(-1).respond(409,{error:'workshop',message:'Installing maps needs Steam.'});assert.equal(pendingBox(f).children[0].textContent,'Installing maps needs Steam.');
+});
+test('a download under way hides the button; without an offer there is none',()=>{
+ const f=gated();f.requests.at(-1).respond(202,pendingState({reason:'scenario-missing',message:'Downloading “Synthetic” from the Steam Workshop (40%)…',download:{workshop:true,state:'downloading',percent:40}}));
+ assert.equal(pendingBox(f).children[2].children[0].style.display,'none');
+ const g=gated();g.requests.at(-1).respond(202,pendingState());assert.equal(pendingBox(g).children[2].children[0].style.display,'none');
+});
+test('leaving the wait shows the note again',()=>{
+ const f=gated();f.requests.at(-1).respond(202,pendingState());assert.equal(f.target.children[1].style.display,'none');
+ pendingBox(f).children[2].children[2].onclick();assert.equal(f.target.children[1].style.display,'');assert.match(f.target.children[1].textContent,/cancelled/);
 });

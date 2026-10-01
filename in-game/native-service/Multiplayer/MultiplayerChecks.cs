@@ -40,7 +40,7 @@ static partial class MultiplayerChecks
         CsTeams();
         Marker();
         var root = Path.Combine(Path.GetTempPath(), "aimmod-mp-test-" + Guid.NewGuid().ToString("N"));
-        try { Content(root); Generator(root); Blocked(root); AutoLeave(root); LoadGateService(root); StandInStream(root); LoadGateEnsureMap(root); Binds(root); Service(root); Transfers(root); Replays(root); Maps(root); Tournaments(root); }
+        try { Content(root); Generator(root); Blocked(root); AutoLeave(root); LoadGateService(root); StandInStream(root); ClaimTiming(root); RestartDuringMatch(root); LoadGateEnsureMap(root); Binds(root); Service(root); Transfers(root); Replays(root); Maps(root); Tournaments(root); }
         finally { try { Directory.Delete(root, true); } catch (IOException) { } }
         Console.WriteLine($"{count} multiplayer checks passed.");
     }
@@ -1164,6 +1164,12 @@ static partial class MultiplayerChecks
         Check(view.GetProperty("source").GetString() == "simulation" && dust.GetProperty("preview").GetBoolean() && !dust.ToString().Contains(root, StringComparison.OrdinalIgnoreCase), "The Map Library view never shows local paths");
         Check(service.MapPreview(dust.GetProperty("key").GetString())!.EndsWith(".preview.png", StringComparison.Ordinal) && service.MapPreview("../../x") is null && service.MapPreview("000000000000") is null, "Only previews the library found are served");
         Check(service.Act("map-load", J(new { key = dust.GetProperty("key").GetString() })).Ok, "Installed ports load through AimModCore");
+        // A replay of a port this machine lacks: the same Workshop install, found by the scenario name.
+        const string inferno = "AimMod - Inferno (CSGO) - CS Movement";
+        Check(service.SourceOf(inferno) is { Installed: false, Downloadable: true, Download: null } && service.SourceOf("Synthetic Missing") is { Installed: false, Downloadable: false },
+            "A missing scenario can be downloaded when a Workshop map port provides it");
+        Check(service.DownloadScenario(inferno).Ok && service.SourceOf(inferno).Download == "queued" && !service.DownloadScenario("Synthetic Missing").Ok,
+            "Downloading a replay's scenario is the Map Library's Workshop install");
         var mirage = Maps().GetProperty("ports").EnumerateArray().First(p => p.GetProperty("display").GetString() == "Mirage");
         Check(!mirage.GetProperty("installed").GetBoolean() && service.Act("map-install", J(new { key = mirage.GetProperty("key").GetString() })).Ok, "A simulated Workshop install starts");
         for (var i = 0; i < 10; i++) { now += 100; service.Tick(); }
@@ -1960,10 +1966,15 @@ static partial class MultiplayerChecks
         service.Act("sim", J(new { op = "add" }));
         Run(12_000);
         Check(service.Act("start", default).Ok, "The deathmatch starts with a simulated opponent");
+        Run(1500);
+        var frozen = File.ReadAllText(Path.Combine(output, "round-state.tsv"));
+        Check(frozen.StartsWith("AIMMOD_ROUND_1\t", StringComparison.Ordinal) && frozen.Contains("\nphase\tfreeze\t1\t0\t", StringComparison.Ordinal),
+            "Before go-live everyone is frozen at their spawn (round-state phase freeze)");
         static bool CombatLive(string notice) => JsonDocument.Parse(notice).RootElement.TryGetProperty("combat", out var cb) && cb.ValueKind == JsonValueKind.Object && cb.GetProperty("phase").GetString() == MatchPhases.Live;
         for (var i = 0; i < 400 && !CombatLive(service.NoticeText()); i++) Run(100);
         Run(500);
         var hud = JsonDocument.Parse(service.NoticeText()).RootElement.GetProperty("combat");
+        Check(File.ReadAllText(Path.Combine(output, "round-state.tsv")).Contains("\nphase\tlive\t0\t0\t", StringComparison.Ordinal), "At go-live the freeze lifts");
         Check(hud.GetProperty("health").GetDouble() == 100 && hud.GetProperty("alive").GetBoolean() && hud.GetProperty("fragLimit").GetInt32() == 20 && hud.GetProperty("left").GetInt32() is > 290 and <= 300 && hud.GetProperty("protected").GetBoolean(),
             "Combat HUD: full health, spawn protection, frags against the limit and time left");
         var avatars = File.ReadAllText(Path.Combine(output, "avatar-state.tsv"));
