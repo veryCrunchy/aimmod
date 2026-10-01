@@ -1109,6 +1109,27 @@ they simply play KovaaK's, and the watched player sees who is watching.
 - `aimmod_spectating=<peer>` is only set with `show_spectating=1`.
 - `friends` entries carry `spectatable`, `spectateAsks` and `spectators`.
 - `ready` carries `spectatePrivacy`.
+
+**Getting the friend's content over the spectate link.**
+
+- `p2p.send` and the `xfer.*` commands also work on a spectate link, by
+  `peer`, so the service's ContentTransfer works unchanged.
+- `p2p.message` events from a spectate link carry `link`: `spectator` when a
+  spectator sent it to us, or `spectating` when the player we watch sent it.
+- Direction rules are enforced by the bridge:
+  - On a spectate link only the watched player may send `xfer.chunk`. A
+    spectator calling `xfer.chunk` gets `request-only`, and a chunk arriving
+    from a spectator closes the link.
+  - Content requests and answers travel both ways as `p2p.send`.
+- The watched side's service only serves its current scenario's files.
+- Caps, window, cancel and the low-priority lane are the same as in lobbies.
+  Transfers end with `xfer.end reason=disconnected` when the link closes.
+- Rich presence `aimmod_workshop` is the Workshop item id of the current
+  scenario. It's found by matching `<scenario>.sce` in
+  `steamapps\workshop\content\824270\<id>\`. It's empty for a local scenario
+  (`Saved\SaveGames\Scenarios`), an unknown one, or with `hide_scenario=1`.
+  `friends` entries carry it as `workshop`, so the spectator's UI can try
+  `ugc.download` first.
 ### Mapping to the service's `IMultiplayerTransport`
 
 This is the lobby UI agent's model on `feat/kovaaks-multiplayer-ui`

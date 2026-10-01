@@ -210,6 +210,8 @@ namespace bridge
         // Presence and scene
         void ReadScene();
         void UpdateStatusPresence();
+        std::string WorkshopIdFor(const std::string& scenario);
+        std::string m_workshopId, m_rpWorkshop;
 
         // Spectate
         void UpdateSpectateRoute(std::uint64_t target);
@@ -221,10 +223,12 @@ namespace bridge
         void ResetSpectator();
 
         // Lobby-less spectating
+        void HandleBulk(Conn& conn, const WireMessage& m, bool reliable);
+        Conn* FindLink(std::uint64_t peer); // lobby link, else spectate link
         void EnsureListen();
         void PollDirect();
         void ReceiveDirect();
-        void OnDirectWire(std::uint64_t peer, const WireMessage& m);
+        void OnDirectWire(std::uint64_t peer, const WireMessage& m, bool reliable);
         void CloseDirect(std::uint64_t peer, const char* reason);
         void AcceptWatcher(std::uint64_t peer);
         void RefuseWatcher(std::uint64_t peer, RejectCode code);

@@ -716,7 +716,7 @@ namespace bridge
             const auto peer = peerArg("peer");
             const auto reliable = c.Bool("reliable").value_or(true);
             const auto data = c.Str("data", (MaxPayload + 2) / 3 * 4);
-            Conn* conn = peer ? FindConn(*peer) : nullptr;
+            Conn* conn = peer ? FindLink(*peer) : nullptr; // lobby link or spectate link
             if (!conn || conn->state != ConnState::Ready)
             {
                 Result(*id, false, "not-connected", "No connection to that peer.");
@@ -1005,10 +1005,15 @@ namespace bridge
             const auto peer = peerArg("peer");
             const auto transfer = c.Int("transfer");
             const auto index = c.Int("index");
-            Conn* conn = peer ? FindConn(*peer) : nullptr;
+            Conn* conn = peer ? FindLink(*peer) : nullptr;
             if (!conn || conn->state != ConnState::Ready)
             {
                 Result(*id, false, "not-connected", "No connection to that peer.");
+                return;
+            }
+            if (conn->role == Conn::Role::Watched)
+            {
+                Result(*id, false, "request-only", "Spectators can request files but not send them.");
                 return;
             }
             if (!transfer || *transfer < 1 || *transfer > 0x7fffffff || !index || *index < 0 || *index > 0x7fffffff)
@@ -1064,7 +1069,7 @@ namespace bridge
                 return;
             }
             const auto key = std::make_pair(*peer, static_cast<std::uint32_t>(*transfer));
-            if (Conn* conn = FindConn(*peer); conn && conn->state == ConnState::Ready)
+            if (Conn* conn = FindLink(*peer); conn && conn->state == ConnState::Ready)
             {
                 WireMessage m{WireType::Cancel};
                 m.transfer = key.second;
@@ -1557,13 +1562,10 @@ namespace bridge
         switch (m.type)
         {
         case WireType::Data:
-            Emit(json::Object()
-                     .Int("v", ContractVersion)
-                     .Str("ev", "p2p.message")
-                     .Str("peer", Id(peer))
-                     .Bool("reliable", reliable)
-                     .Str("data", Base64Encode(m.payload.data(), m.payload.size()))
-                     .Done());
+        case WireType::Chunk:
+        case WireType::ChunkAck:
+        case WireType::Cancel:
+            HandleBulk(conn, m, reliable);
             break;
         case WireType::Ping:
         {
@@ -1663,61 +1665,6 @@ namespace bridge
                 m_spectate.scenario = m.scenario, m_spectate.map = m.map, m_spectate.scale = m.camera.fov;
             }
             break;
-        case WireType::Chunk:
-        {
-            const auto key = std::make_pair(peer, m.transfer);
-            if (!m_incoming.count(key))
-            {
-                std::size_t open = 0;
-                for (const auto& k : m_incoming)
-                    if (k.first == peer) ++open;
-                if (open >= MaxTransfersPerPeer) return CloseConn(peer, false, "too many transfers");
-                m_incoming.insert(key);
-            }
-            Emit(json::Object()
-                     .Int("v", ContractVersion)
-                     .Str("ev", "xfer.chunk")
-                     .Str("peer", Id(peer))
-                     .Int("transfer", m.transfer)
-                     .Int("index", m.index)
-                     .Str("data", Base64Encode(m.payload.data(), m.payload.size()))
-                     .Done());
-            // Acknowledge once handed to the service: the sender's window follows the receiver's pace.
-            WireMessage ackMsg{WireType::ChunkAck};
-            ackMsg.transfer = m.transfer;
-            ackMsg.index = m.index;
-            SendWire(conn, ackMsg, true);
-            break;
-        }
-        case WireType::ChunkAck:
-        {
-            const auto it = m_outgoing.find(std::make_pair(peer, m.transfer));
-            if (it == m_outgoing.end() || !it->second.inflight.erase(m.index)) break;
-            Emit(json::Object()
-                     .Int("v", ContractVersion)
-                     .Str("ev", "xfer.ack")
-                     .Str("peer", Id(peer))
-                     .Int("transfer", m.transfer)
-                     .Int("index", m.index)
-                     .Int("credit", static_cast<std::int64_t>(XferWindow - it->second.inflight.size()))
-                     .Done());
-            break;
-        }
-        case WireType::Cancel:
-        {
-            const auto key = std::make_pair(peer, m.transfer);
-            const bool known = m_outgoing.erase(key) + m_incoming.erase(key) > 0;
-            if (known)
-                Emit(json::Object()
-                         .Int("v", ContractVersion)
-                         .Str("ev", "xfer.end")
-                         .Str("peer", Id(peer))
-                         .Int("transfer", m.transfer)
-                         .Str("reason", XferReason(m.code))
-                         .Str("by", "peer")
-                         .Done());
-            break;
-        }
         default: break; // handshake frames after the handshake are ignored
         }
     }
@@ -1941,6 +1888,7 @@ namespace bridge
                 if (spectatable == "ask") o.Bool("spectateAsks", true);
                 o.Int("spectators", std::atoi(rp("aimmod_spectators").c_str()));
                 if (const std::string scenario = rp("aimmod_scenario"); !scenario.empty()) o.Str("scenario", scenario);
+                if (const std::string workshop = rp("aimmod_workshop"); ParseId(workshop)) o.Str("workshop", workshop);
                 // aimmod_lobby = "<members>/<max>/<j|-">
                 const std::string lobby = rp("aimmod_lobby");
                 int members = 0, max = 0;
@@ -2201,9 +2149,43 @@ namespace bridge
             }
         }
         m_sceneRunning = running;
-        std::lock_guard lock(m_ghostMutex);
-        if (scene != m_scene) m_log("local scenario is \"" + scene + "\"");
-        m_scene = scene;
+        bool changed = false;
+        {
+            std::lock_guard lock(m_ghostMutex);
+            changed = scene != m_scene;
+            if (changed) m_log("local scenario is \"" + scene + "\"");
+            m_scene = scene;
+        }
+        if (changed) m_workshopId = WorkshopIdFor(scene);
+    }
+
+    // The Workshop item that provides scenario, or empty when it is a local
+    // scenario (Saved\SaveGames\Scenarios) or unknown. File names match scenario names.
+    std::string Bridge::WorkshopIdFor(const std::string& scenario)
+    {
+        if (scenario.empty() || scenario.find_first_of("\\/:*?\"<>|") != std::string::npos) return {};
+        wchar_t exe[MAX_PATH * 2]{};
+        const DWORD length = GetModuleFileNameW(nullptr, exe, static_cast<DWORD>(std::size(exe)));
+        if (length == 0 || length >= std::size(exe)) return {};
+        std::error_code error;
+        const std::filesystem::path win64 = std::filesystem::path(exe).parent_path();
+        const std::filesystem::path game = win64.parent_path().parent_path();      // ...\FPSAimTrainer\FPSAimTrainer
+        const std::filesystem::path steamapps = game.parent_path().parent_path().parent_path(); // ...\steamapps
+        const int n = MultiByteToWideChar(CP_UTF8, 0, scenario.data(), static_cast<int>(scenario.size()), nullptr, 0);
+        std::wstring wide(static_cast<std::size_t>(n > 0 ? n : 0), L'\0');
+        if (n > 0) MultiByteToWideChar(CP_UTF8, 0, scenario.data(), static_cast<int>(scenario.size()), wide.data(), n);
+        const std::wstring file = wide + L".sce";
+        if (std::filesystem::exists(game / L"Saved" / L"SaveGames" / L"Scenarios" / file, error)) return {};
+        const auto workshop = steamapps / L"workshop" / L"content" / std::to_wstring(KovaaksAppId);
+        int scanned = 0;
+        for (std::filesystem::directory_iterator it(workshop, error), end; !error && it != end && scanned < 5000; it.increment(error), ++scanned)
+        {
+            if (!it->is_directory(error)) continue;
+            const auto name = it->path().filename().string();
+            if (!ParseId(name)) continue;
+            if (std::filesystem::exists(it->path() / file, error)) return name;
+        }
+        return {};
     }
 
     void Bridge::UpdateStatusPresence()
@@ -2234,6 +2216,9 @@ namespace bridge
         if (spectatable != m_rpSpectatable) m_steam.F_SetRichPresence(m_steam.friends, "aimmod_spectatable", spectatable.c_str());
         if (spectators != m_rpSpectators) m_steam.F_SetRichPresence(m_steam.friends, "aimmod_spectators", spectators.c_str());
         if (spectating != m_rpSpectating) m_steam.F_SetRichPresence(m_steam.friends, "aimmod_spectating", spectating.c_str());
+        const std::string workshop = m_hideScenario ? std::string() : m_workshopId;
+        if (workshop != m_rpWorkshop) m_steam.F_SetRichPresence(m_steam.friends, "aimmod_workshop", workshop.c_str());
+        m_rpWorkshop = workshop;
         m_rpSpectatable = spectatable;
         m_rpSpectators = spectators;
         m_rpSpectating = spectating;
@@ -2456,6 +2441,94 @@ namespace bridge
                  .Bool("fired", (c.flags & 1) != 0)
                  .Done());
     }
+    // --- service frames and bulk transfers (lobby links and spectate links) --
+
+    void Bridge::HandleBulk(Conn& conn, const WireMessage& m, bool reliable)
+    {
+        const std::uint64_t peer = conn.peer;
+        const bool direct = conn.role != Conn::Role::Lobby;
+        auto drop = [&](const char* why) {
+            if (direct) CloseDirect(peer, why);
+            else CloseConn(peer, false, why);
+        };
+        switch (m.type)
+        {
+        case WireType::Data:
+        {
+            json::Object o;
+            o.Int("v", ContractVersion).Str("ev", "p2p.message").Str("peer", Id(peer)).Bool("reliable", reliable);
+            if (direct) o.Str("link", conn.role == Conn::Role::Watcher ? "spectator" : "spectating");
+            o.Str("data", Base64Encode(m.payload.data(), m.payload.size()));
+            Emit(o.Done());
+            break;
+        }
+        case WireType::Chunk:
+        {
+            // On a spectate link only the watched player serves files; spectators only request.
+            if (direct && conn.role != Conn::Role::Watched) return drop("chunk from a spectator");
+            const auto key = std::make_pair(peer, m.transfer);
+            if (!m_incoming.count(key))
+            {
+                std::size_t open = 0;
+                for (const auto& k : m_incoming)
+                    if (k.first == peer) ++open;
+                if (open >= MaxTransfersPerPeer) return drop("too many transfers");
+                m_incoming.insert(key);
+            }
+            Emit(json::Object()
+                     .Int("v", ContractVersion)
+                     .Str("ev", "xfer.chunk")
+                     .Str("peer", Id(peer))
+                     .Int("transfer", m.transfer)
+                     .Int("index", m.index)
+                     .Str("data", Base64Encode(m.payload.data(), m.payload.size()))
+                     .Done());
+            // Acknowledge once handed to the service: the sender's window follows the receiver's pace.
+            WireMessage ackMsg{WireType::ChunkAck};
+            ackMsg.transfer = m.transfer;
+            ackMsg.index = m.index;
+            SendWire(conn, ackMsg, true);
+            break;
+        }
+        case WireType::ChunkAck:
+        {
+            const auto it = m_outgoing.find(std::make_pair(peer, m.transfer));
+            if (it == m_outgoing.end() || !it->second.inflight.erase(m.index)) break;
+            Emit(json::Object()
+                     .Int("v", ContractVersion)
+                     .Str("ev", "xfer.ack")
+                     .Str("peer", Id(peer))
+                     .Int("transfer", m.transfer)
+                     .Int("index", m.index)
+                     .Int("credit", static_cast<std::int64_t>(XferWindow - it->second.inflight.size()))
+                     .Done());
+            break;
+        }
+        case WireType::Cancel:
+        {
+            const auto key = std::make_pair(peer, m.transfer);
+            const bool known = m_outgoing.erase(key) + m_incoming.erase(key) > 0;
+            if (known)
+                Emit(json::Object()
+                         .Int("v", ContractVersion)
+                         .Str("ev", "xfer.end")
+                         .Str("peer", Id(peer))
+                         .Int("transfer", m.transfer)
+                         .Str("reason", XferReason(m.code))
+                         .Str("by", "peer")
+                         .Done());
+            break;
+        }
+        default: break;
+        }
+    }
+
+    Bridge::Conn* Bridge::FindLink(std::uint64_t peer)
+    {
+        if (Conn* c = FindConn(peer)) return c;
+        const auto it = m_direct.find(peer);
+        return it == m_direct.end() ? nullptr : &it->second;
+    }
     // --- lobby-less spectating --------------------------------------------
 
     void Bridge::EnsureListen()
@@ -2567,6 +2640,7 @@ namespace bridge
         if (it == m_direct.end()) return;
         const Conn c = it->second;
         m_direct.erase(it);
+        CancelTransfersWith(peer, "disconnected");
         if (c.state == ConnState::Ready) SendWire(const_cast<Conn&>(c), WireMessage{WireType::Bye}, true);
         m_steam.sockets->CloseConnection(c.handle, 0, "aimmod spectate", true);
         if (c.role == Conn::Role::Watcher && c.state == ConnState::Ready)
@@ -2650,7 +2724,7 @@ namespace bridge
                     if (m_direct.count(peer) && msg->m_cbSize > 0)
                     {
                         const auto decoded = Decode(static_cast<const std::uint8_t*>(msg->m_pData), static_cast<std::size_t>(msg->m_cbSize));
-                        if (decoded) OnDirectWire(peer, *decoded);
+                        if (decoded) OnDirectWire(peer, *decoded, (msg->m_nFlags & steamabi::k_nSteamNetworkingSend_Reliable) != 0);
                         else CloseDirect(peer, "invalid frame");
                     }
                     msg->m_pfnRelease(msg);
@@ -2660,13 +2734,17 @@ namespace bridge
         }
     }
 
-    void Bridge::OnDirectWire(std::uint64_t peer, const WireMessage& m)
+    void Bridge::OnDirectWire(std::uint64_t peer, const WireMessage& m, bool reliable)
     {
         const auto it = m_direct.find(peer);
         if (it == m_direct.end()) return;
         Conn& c = it->second;
         if (m.type == WireType::Bye) return CloseDirect(peer, c.role == Conn::Role::Watcher ? "left" : "ended");
-        if (c.role == Conn::Role::Watcher) return; // spectators only listen
+        // Content requests and file transfers on the spectate link (HandleBulk enforces the direction).
+        if (c.state == ConnState::Ready &&
+            (m.type == WireType::Data || m.type == WireType::Chunk || m.type == WireType::ChunkAck || m.type == WireType::Cancel))
+            return HandleBulk(c, m, reliable);
+        if (c.role == Conn::Role::Watcher) return; // spectators otherwise only listen
         // We are the spectator.
         if (c.state == ConnState::Handshaking)
         {
