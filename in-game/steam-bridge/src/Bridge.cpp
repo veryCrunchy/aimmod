@@ -887,6 +887,7 @@ namespace bridge
             conn.deadline = Clock::now() + 45s; // covers an ask on the other side
             m_direct[*peer] = conn;
             ResetSpectator();
+            m_spectate.stream = posefile::StreamIdFor(*peer); // written from the first frame of the new peer
             m_watching = *peer;
             m_watchingDirect = true;
             m_watchRate = static_cast<int>(r);
@@ -1003,6 +1004,11 @@ namespace bridge
             if (target != m_watching || !rate) ResetSpectator();
             m_watching = rate ? target : 0;
             m_watchRate = rate;
+            if (rate)
+            {
+                m_spectate.stream = posefile::StreamIdFor(target);
+                Emit(json::Object().Int("v", ContractVersion).Str("ev", "spectate.started").Str("peer", Id(target)).Str("name", Name(target)).Bool("direct", false).Str("stream", m_spectate.stream).Done());
+            }
             m_log(rate ? "spectating " + Redact(target) + " at " + std::to_string(rate) + " Hz" : std::string("spectating stopped"));
             Result(*id, true);
         }
@@ -2895,7 +2901,7 @@ namespace bridge
             {
                 c.state = ConnState::Ready;
                 m_log("spectating " + Redact(peer));
-                Emit(json::Object().Int("v", ContractVersion).Str("ev", "spectate.started").Str("peer", Id(peer)).Str("name", Name(peer)).Bool("direct", true).Done());
+                Emit(json::Object().Int("v", ContractVersion).Str("ev", "spectate.started").Str("peer", Id(peer)).Str("name", Name(peer)).Bool("direct", true).Str("stream", posefile::StreamIdFor(peer)).Done());
                 UpdateStatusPresence();
             }
             else if (m.type == WireType::Reject)

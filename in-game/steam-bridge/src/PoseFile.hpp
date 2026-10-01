@@ -35,12 +35,16 @@ namespace bridge::posefile
     struct File
     {
         std::int64_t sequence = 0;
+        std::string stream; // optional header field [A-Za-z0-9_-]{1,64}
         std::string scenario, map;
         double scale = 0;
         std::vector<Row> rows;
         std::vector<Target> targets;
     };
 
+    bool ValidStreamId(std::string_view id);
+    // Stable per watched player without exposing the SteamID: "s-" + 16 hex digits.
+    std::string StreamIdFor(std::uint64_t steamId);
     std::string Escape(std::string_view text);                   // RFC 3986 unreserved kept, rest %XX
     std::optional<std::string> Unescape(std::string_view text);  // strict %XX
     std::optional<File> Parse(std::string_view text);            // strict; rejects anything off-format

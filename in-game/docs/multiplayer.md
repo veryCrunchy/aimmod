@@ -1052,7 +1052,16 @@ accounts (for P2P).
   - `src/PoseFile.{hpp,cpp}` parses and writes the format strictly: the
     escaping matches AimModCore's, times must increase, fov must be valid,
     and at most 64 rows. It's unit tested against an AimModCore-style sample.
-  - `target` rows aren't forwarded. `fired` stays false until AimModCore adds
+  - **Stream id.** `spectate-pose.tsv` starts with
+    `AIMMOD_POSE_1\t<seq>\t<streamId>`, as AimModCore asks for since
+    c4864b9. The id is `s-` plus 16 hex digits of a domain-separated FNV-1a
+    hash of the watched player's SteamID: stable per player, without the
+    raw id. `self-pose.tsv` has no stream id; the bridge adds one when it
+    relays.
+  - On a switch to another player, the rows are reset and the new id is
+    written from that player's first frame, well inside the presenter's 2 s
+    timeout. `spectate.started` (lobby and direct) carries `stream`, so the
+    lobby UI can pass it to the workspace.  - `target` rows aren't forwarded. `fired` stays false until AimModCore adds
     it to the format.
 **Pose frame: remote crouch and height.**
 
@@ -1114,7 +1123,7 @@ they simply play KovaaK's, and the watched player sees who is watching.
 
 | Event | Fields |
 | --- | --- |
-| `spectate.started` | `peer`, `name`, `direct` (spectator side) |
+| `spectate.started` | `peer`, `name`, `direct`, `stream` (spectator side; also sent for lobby spectating) |
 | `spectate.ended` | `peer`, `reason`: `off`, `not-friend`, `full`, `declined`, `refused`, `no-answer`, `timeout`, `unreachable`, `ended`, `stopped`, `switched`, `left`, `closed` or `shutdown` |
 | `spectate.score` | `peer`, `active`, `paused`, `score`?, `seconds`?, `remainingSeconds`?, `shots`?, `hits`?, `kills`?, `accuracy`? |
 | `spectate.asked` | `from`, `fromName` (watched side, `ask` mode) |

@@ -54,6 +54,29 @@ namespace bridge::posefile
         }
     } // namespace
 
+    bool ValidStreamId(std::string_view id)
+    {
+        if (id.empty() || id.size() > 64) return false;
+        for (const char c : id)
+            if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-')) return false;
+        return true;
+    }
+
+    std::string StreamIdFor(std::uint64_t steamId)
+    {
+        // FNV-1a 64 over a domain-separated string.
+        const std::string input = "aimmod-spectate:" + std::to_string(steamId);
+        std::uint64_t hash = 1469598103934665603ull;
+        for (const unsigned char c : input)
+        {
+            hash ^= c;
+            hash *= 1099511628211ull;
+        }
+        char out[24];
+        std::snprintf(out, sizeof(out), "s-%016llx", static_cast<unsigned long long>(hash));
+        return out;
+    }
+
     std::string Escape(std::string_view text)
     {
         std::string out;
@@ -113,8 +136,13 @@ namespace bridge::posefile
             const auto f = Split(line, '\t');
             if (!header)
             {
-                const auto seq = f.size() == 2 && f[0] == "AIMMOD_POSE_1" ? Integer(f[1]) : std::nullopt;
+                const auto seq = (f.size() == 2 || f.size() == 3) && f[0] == "AIMMOD_POSE_1" ? Integer(f[1]) : std::nullopt;
                 if (!seq) return std::nullopt;
+                if (f.size() == 3)
+                {
+                    if (!ValidStreamId(f[2])) return std::nullopt;
+                    file.stream = std::string(f[2]);
+                }
                 file.sequence = *seq;
                 header = true;
             }
@@ -166,7 +194,7 @@ namespace bridge::posefile
 
     std::string Format(const File& file)
     {
-        std::string out = "AIMMOD_POSE_1\t" + std::to_string(file.sequence) + "\nmeta\t" + Escape(file.scenario) + "\t" + Escape(file.map) + "\t" +
+        std::string out = "AIMMOD_POSE_1\t" + std::to_string(file.sequence) + (ValidStreamId(file.stream) ? "\t" + file.stream : std::string()) + "\nmeta\t" + Escape(file.scenario) + "\t" + Escape(file.map) + "\t" +
                           Num(file.scale, 9) + "\n";
         const std::size_t first = file.rows.size() > MaxRows ? file.rows.size() - MaxRows : 0;
         for (std::size_t i = first; i < file.rows.size(); ++i)
