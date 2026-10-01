@@ -152,24 +152,31 @@ static partial class MultiplayerChecks
     // reloading the scenario; an AimModCore that answers unsupported falls back to the reload.
     static void LoadGateEnsureMap(string root)
     {
-        foreach (var unsupported in new[] { false, true })
+        foreach (var variant in new[] { "fixed", "unsupported", "stale" })
         {
+            var unsupported = variant == "unsupported";
             long now = 7_000_000;
             var game = Path.Combine(root, "game");
-            var output = Path.Combine(root, unsupported ? "ensure-output-old" : "ensure-output");
+            var output = Path.Combine(root, "ensure-output-" + variant);
             Directory.CreateDirectory(output);
-            var control = new FakeGame("load", "start", "map") { Root = game, StuckMap = "kovaim1.map", EnsureUnsupported = unsupported };
+            var control = new FakeGame("load", "start", "map") { Root = game, StuckMap = "kovaim1.map", EnsureUnsupported = unsupported, EnsureLeavesStaleScene = variant == "stale" };
             var service = new MultiplayerService(new OfflineTransport(), new ContentLibrary(game), control, () => new LocalRun(false, null, null, null, null, 0, 0, 0, null), () => [], () => null, output, simulation: true, () => now, autoTick: false, seed: 11);
             string Phase() => JsonSerializer.SerializeToElement(service.View(), Protocol.Json).GetProperty("lobby").GetProperty("match").GetProperty("phase").GetString()!;
             void Run(int ms) { for (var t = 0; t < ms; t += 100) { now += 100; service.Tick(); } }
             service.Act("create", J(new { mode = "deathmatch", scenario = "Synthetic A" }));
             service.Act("sim", J(new { op = "add" }));
             Run(12_000);
-            Check(service.Act("start", default).Ok, "A deathmatch starts loading its arena (ensure-map" + (unsupported ? ", unsupported)" : ")"));
+            Check(service.Act("start", default).Ok, "A deathmatch starts loading its arena (ensure-map, " + variant + ")");
             Run(500);
             var name = control.Calls.Last(c => c.StartsWith("load ", StringComparison.Ordinal))[5..];
             Run(2500);
-            if (!unsupported)
+            if (variant == "stale")
+            {
+                Run(1500);
+                Check(control.Calls.Count(c => c == "ensure-map " + name) == 1 && control.Calls.Count(c => c == "load " + name) == 1 && Phase() is MatchPhases.Countdown or MatchPhases.Live,
+                    "ensure-map done for the round's scenario counts as the map loaded, even while the scene report still names the previous map");
+            }
+            else if (!unsupported)
             {
                 Check(control.Calls.Count(c => c == "ensure-map " + name) == 1 && control.Calls.Count(c => c == "load " + name) == 1,
                     "The right scenario with the previous map: the client loads the map directly at once, without reloading the scenario");
@@ -192,12 +199,12 @@ static partial class MultiplayerChecks
         Check(GameCommands.MapFixAllowed("AimMod Match - Synthetic - 0a1b2c3d") && GameCommands.MapFixAllowed("AimMod - aim_synthetic (CSS) - CS Movement")
             && !GameCommands.MapFixAllowed("VT Pasu") && !GameCommands.MapFixAllowed("AimMod Match - a\\b") && !GameCommands.MapFixAllowed(null),
             "ensure-map is limited to AimMod's generated scenarios");
-        var commands = new GameCommands(Path.Combine(root, "ensure-output"));
+        var commands = new GameCommands(Path.Combine(root, "ensure-output-fixed"));
         Check(commands.Send(new("ensure-map", "VT Pasu", null, null, null, null, null, null)).Error == "not-a-match"
             && commands.Send(new("ensure-map", "AimMod Match - X", "challenge", null, null, null, null, null)).Error == "invalid-command"
             && commands.Send(new("ensure-map", "AimMod Match - X", null, null, null, null, 2.0, null)).Error == "invalid-command"
             && commands.Send(new("ensure-map", "AimMod Match - X", null, null, null, null, null, null)).Sequence is long
-            && File.ReadAllText(Path.Combine(root, "ensure-output", "core-command.tsv")).Contains("action\tensure-map\nscenario\tAimMod Match - X\n", StringComparison.Ordinal),
+            && File.ReadAllText(Path.Combine(root, "ensure-output-fixed", "core-command.tsv")).Contains("action\tensure-map\nscenario\tAimMod Match - X\n", StringComparison.Ordinal),
             "The service writes ensure-map with just the scenario, and refuses other scenarios, modes and overrides");
     }
 }

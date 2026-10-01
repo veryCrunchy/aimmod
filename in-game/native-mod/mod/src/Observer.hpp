@@ -161,6 +161,8 @@ namespace aimmod
         std::optional<double> m_mapScale;
         UObject* m_mapState{};
         std::uint64_t m_mapScenarioKey{};
+        std::uint64_t m_mapReadAt{}; // GetTickCount64 of the next map re-read
+        std::uint32_t m_mapGeneration{};
 
         // Current attempt measurements (never computed scores).
         AttemptStats m_stats;

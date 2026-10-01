@@ -488,7 +488,9 @@ Changes:
   `unsupported`, it loads the scenario again instead; any other wrong scene is
   retried that way after 15 s. If the map is still wrong 15 s after the fix,
   the client reports `loaded {ok:false, reason, attempt}`, with the
-  ensure-map error in the reason.
+  ensure-map error in the reason. An ensure-map answered `done map-ok` or
+  `done map-loaded` counts as the map loaded while the scene shows the
+  round's scenario, not loading, even if its map name disagrees (logged).
 
   A reported problem, or 45 s without everyone loaded, fails the load. The
   match never starts on its own after that. Everyone sees "Couldn't load the

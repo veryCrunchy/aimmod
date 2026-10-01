@@ -919,10 +919,17 @@ namespace aimmod
     void Observer::PublishScene(const PollSample& s, UObject* manager)
     {
         UObject* state = m_scene.GameState();
-        if (state != m_mapState || s.scenarioKey != m_mapScenarioKey)
+        // The map actually in the world (MetaGameState CurrentMapName and the
+        // applied scale), re-read twice a second and right after AimModCore
+        // loaded a map itself: KovaaK's (or ensure-map) can change the map
+        // without the scenario changing.
+        const std::uint64_t tick = GetTickCount64();
+        if (state != m_mapState || s.scenarioKey != m_mapScenarioKey || tick >= m_mapReadAt || m_control.mapGeneration() != m_mapGeneration)
         {
             m_mapState = state;
             m_mapScenarioKey = s.scenarioKey;
+            m_mapReadAt = tick + 500;
+            m_mapGeneration = m_control.mapGeneration();
             m_mapName.clear();
             m_mapScale.reset();
             if (state && m_b.mapName.String(state, m_mapName)) m_mapScale = m_b.mapScale.Number(state);
