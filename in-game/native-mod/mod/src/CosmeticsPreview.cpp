@@ -601,30 +601,39 @@ namespace aimmod
         Frame(mesh);
         WearAccessories(request);
         if (request.weaponView) ShowWeapon(request);
-        else RemoveWeapon();
+        else HoldWeapon(request);
     }
 
-    // The weapon view: the player's selected weapon (or the game's pistol) on
-    // its own, with the requested finish, turning on the stage's pivot.
-    void CosmeticsPreview::ShowWeapon(const PreviewRequest& request)
+    void CosmeticsPreview::ShowInCapture(UObject* component)
     {
-        RemoveWeapon();
+        UObject* capture = m_capture.Get();
+        if (!Alive(capture) || !Alive(component)) return;
+        if (!Call(capture, STR("/Script/Engine.SceneCaptureComponent:ShowOnlyComponent"), [&](const std::wstring& n, FProperty*, std::uint8_t* v) {
+                if (n == STR("InComponent")) WriteObject(v, component);
+            }))
+            Log("cosmetics preview: a new part could not join the capture (it stays invisible)");
+    }
+
+    // A weapon mesh with the requested finish: the player's selected viewmodel
+    // weapon (weapon view), else the game's own third-person pistol (the one
+    // KovaaK's characters hold on HoldRight).
+    UObject* CosmeticsPreview::MakeWeapon(const PreviewRequest& request, bool selectedWeapon)
+    {
         UObject* stage = m_stage.Get();
-        UObject* mesh = m_mesh.Get();
-        UObject* meshes = m_meshes.Get();
-        if (!stage || !mesh || !meshes) return;
-        // The selected viewmodel weapon's asset and materials.
+        if (!stage) return nullptr;
         UObject* selected = nullptr;
-        if (UObject* character = GetObject(m_scene.Player(), STR("MyCharacter")))
-            if (UObject* view = GetObject(character, STR("ViewModel_Native")))
-                Call(view, STR("/Script/GameSkillsTrainer.FPSPlayer_WeaponComponentActor:GetSelectWeaponMesh"), {}, &selected);
+        if (selectedWeapon)
+            if (UObject* character = GetObject(m_scene.Player(), STR("MyCharacter")))
+                if (UObject* view = GetObject(character, STR("ViewModel_Native")))
+                    Call(view, STR("/Script/GameSkillsTrainer.FPSPlayer_WeaponComponentActor:GetSelectWeaponMesh"), {}, &selected);
+        if (!Alive(selected)) selected = nullptr;
         UObject* skeletal = selected ? GetObject(selected, STR("SkeletalMesh")) : nullptr;
         UObject* fixed = selected && !skeletal ? GetObject(selected, STR("StaticMesh")) : nullptr;
-        if (!skeletal && !fixed) fixed = LoadGameAsset(FallbackWeapon);
+        if (!skeletal && !fixed) fixed = LoadGameAsset(FallbackWeapon), selected = nullptr;
         if (!skeletal && !fixed)
         {
-            Log("cosmetics preview: no weapon to show");
-            return;
+            Log("cosmetics preview: no weapon mesh found (neither the selected weapon nor the game's pistol)");
+            return nullptr;
         }
         UClass* type = UObjectGlobals::StaticFindObject<UClass*>(nullptr, nullptr, skeletal ? STR("/Script/Engine.SkeletalMeshComponent") : STR("/Script/Engine.StaticMeshComponent"));
         UObject* weapon = nullptr;
@@ -635,8 +644,11 @@ namespace aimmod
                 if (auto* s = CastField<FStructProperty>(p))
                     for (const char* field : {"Rotation.W", "Scale3D.X", "Scale3D.Y", "Scale3D.Z"}) game::SetStructPath(v, s->GetStruct(), field, 1);
         }, &weapon);
-        if (!weapon || !type || !weapon->IsA(type)) return;
-        m_weapon = FWeakObjectPtr(weapon);
+        if (!weapon || !type || !weapon->IsA(type))
+        {
+            Log("cosmetics preview: the weapon component could not be added");
+            return nullptr;
+        }
         Call(weapon, STR("/Script/Engine.PrimitiveComponent:SetCollisionEnabled"), [](const std::wstring&, FProperty*, std::uint8_t* v) { *v = 0; });
         Call(weapon, STR("/Script/Engine.PrimitiveComponent:SetCastShadow"), [](const std::wstring&, FProperty* p, std::uint8_t* v) { WriteBoolParam(v, p, false); });
         if (skeletal)
@@ -648,16 +660,18 @@ namespace aimmod
             Call(weapon, STR("/Script/Engine.StaticMeshComponent:SetStaticMesh"), [&](const std::wstring& n, FProperty*, std::uint8_t* v) {
                 if (n == STR("NewMesh")) WriteObject(v, fixed);
             });
-        // The selected weapon's own materials (its skin), then the finish on top.
+        // The weapon's own materials (its skin), then the finish on top.
         const cosmetics::Item* finish = nullptr;
         if (!request.finish.empty())
-            if (const Output::CosmeticsInputs inputs = m_output.cosmetics(); inputs.library)
-            {
-                cosmetics::ResolveOptions options;
-                options.allowDrafts = inputs.allowDrafts;
-                finish = cosmetics::Resolve(inputs.library->index, request.finish, options);
-                if (finish && finish->kind != "weapon_finish") finish = nullptr;
-            }
+        {
+            const Output::CosmeticsInputs inputs = m_output.cosmetics();
+            cosmetics::ResolveOptions options;
+            if (inputs.library) options.allowDrafts = inputs.allowDrafts;
+            std::string why = "no catalog";
+            finish = inputs.library ? cosmetics::Resolve(inputs.library->index, request.finish, options, &why) : nullptr;
+            if (finish && finish->kind != "weapon_finish") why = "not a weapon finish", finish = nullptr;
+            if (!finish) Log("cosmetics preview: finish " + request.finish + " not shown (" + why + ")");
+        }
         std::int32_t slots = 0;
         Call(weapon, STR("/Script/Engine.PrimitiveComponent:GetNumMaterials"), {}, nullptr, [&](const std::wstring& n, FProperty* p, const std::uint8_t* v) {
             if (n == STR("ReturnValue") && p->GetSize() == 4) std::memcpy(&slots, v, 4);
@@ -694,7 +708,23 @@ namespace aimmod
             });
         }
         ApplyMaterialDataDefaults(weapon);
-        // On the stage's turntable, its bounds centred over the pivot, a metre up.
+        SetVisible(weapon, true, false);
+        ShowInCapture(weapon);
+        m_weapon = FWeakObjectPtr(weapon);
+        Log(std::string("cosmetics preview: weapon ") + (selected ? "(selected weapon)" : "(the game's pistol)") + (finish ? " with " + finish->id : std::string(" without a finish")));
+        return weapon;
+    }
+
+    // The weapon view: the weapon alone on the stage's turntable.
+    void CosmeticsPreview::ShowWeapon(const PreviewRequest& request)
+    {
+        RemoveWeapon();
+        UObject* mesh = m_mesh.Get();
+        UObject* meshes = m_meshes.Get();
+        if (!mesh || !meshes) return;
+        UObject* weapon = MakeWeapon(request, true);
+        if (!weapon) return;
+        // On the turntable, its bounds centred over the pivot, a metre up.
         Call(weapon, STR("/Script/Engine.SceneComponent:K2_AttachToComponent"), [&](const std::wstring& n, FProperty*, std::uint8_t* v) {
             if (n == STR("Parent")) WriteObject(v, meshes);
             // KeepRelative (0) for location, rotation and scale.
@@ -705,12 +735,40 @@ namespace aimmod
             const float to[3] = {at[0] + pivot[0] - origin[0], at[1] + pivot[1] - origin[1], at[2] + pivot[2] + 100 - origin[2]};
             SetWorldLocation(weapon, to);
         }
-        // Only the weapon is shown.
         SetVisible(mesh, false, false);
         for (FWeakObjectPtr& worn : m_accessories) SetVisible(worn.Get(), false, false);
-        SetVisible(weapon, true, false);
         Frame(weapon);
-        Log(std::string("cosmetics preview: weapon view (") + (skeletal ? "selected weapon" : selected ? "selected weapon" : "the game's pistol") + (finish ? ", " + finish->id : std::string()) + ")");
+        Log("cosmetics preview: weapon view");
+    }
+
+    // The character view: the game's pistol in the right hand, as KovaaK's
+    // characters hold it, with the finish.
+    void CosmeticsPreview::HoldWeapon(const PreviewRequest& request)
+    {
+        RemoveWeapon();
+        UObject* mesh = m_mesh.Get();
+        if (!mesh) return;
+        bool socket = false;
+        Call(mesh, STR("/Script/Engine.SceneComponent:DoesSocketExist"),
+             [&](const std::wstring& n, FProperty* p, std::uint8_t* v) {
+                 if (n == STR("InSocketName")) WriteFName(v, p, STR("HoldRight"));
+             },
+             nullptr,
+             [&](const std::wstring& n, FProperty* p, const std::uint8_t* v) {
+                 if (n == STR("ReturnValue") && p->GetSize() == 1) socket = *v != 0;
+             });
+        if (!socket)
+        {
+            Log("cosmetics preview: this model has no HoldRight socket; no weapon in hand");
+            return;
+        }
+        UObject* weapon = MakeWeapon(request, false);
+        if (!weapon) return;
+        Call(weapon, STR("/Script/Engine.SceneComponent:K2_AttachToComponent"), [&](const std::wstring& n, FProperty* p, std::uint8_t* v) {
+            if (n == STR("Parent")) WriteObject(v, mesh);
+            else if (n == STR("SocketName")) WriteFName(v, p, STR("HoldRight"));
+            else if (n == STR("LocationRule") || n == STR("RotationRule") || n == STR("ScaleRule")) *v = 2; // SnapToTarget
+        });
     }
 
     void CosmeticsPreview::RemoveWeapon()
@@ -727,7 +785,11 @@ namespace aimmod
         const Output::CosmeticsInputs inputs = m_output.cosmetics();
         UObject* stage = m_stage.Get();
         UObject* mesh = m_mesh.Get();
-        if (!inputs.library || !stage || !mesh) return;
+        if (!inputs.library || !stage || !mesh)
+        {
+            Log(std::string("cosmetics preview: accessories not shown (") + (!inputs.library ? "no verified catalog" : "no stage") + ")");
+            return;
+        }
         cosmetics::ResolveOptions options;
         options.allowDrafts = inputs.allowDrafts;
         options.verifiedPaks = inputs.library->verifiedPaks;
@@ -740,7 +802,16 @@ namespace aimmod
                 Log("cosmetics preview: accessory " + id + " not shown (" + (item ? std::string("not a game-mesh accessory") : why) + ")");
                 continue;
             }
-            if (UObject* worn = AttachFitAccessory(stage, mesh, *item, why)) m_accessories.push_back(FWeakObjectPtr(worn));
+            if (UObject* worn = AttachFitAccessory(stage, mesh, *item, why))
+            {
+                ShowInCapture(worn);
+                m_accessories.push_back(FWeakObjectPtr(worn));
+                float origin[3]{}, extent[3]{};
+                Bounds(worn, origin, extent);
+                char size[96];
+                std::snprintf(size, sizeof size, " (%.0f x %.0f x %.0f cm)", extent[0] * 2, extent[1] * 2, extent[2] * 2);
+                Log("cosmetics preview: wearing " + id + size);
+            }
             else Log("cosmetics preview: accessory " + id + " not shown (" + why + ")");
         }
     }
