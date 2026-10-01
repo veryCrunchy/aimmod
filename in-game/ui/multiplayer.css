@@ -15,7 +15,7 @@
 .mp-avatar{display:block;flex-shrink:0;width:40px;height:40px;line-height:40px;border-radius:20px;text-align:center;font-size:14px;font-weight:700;letter-spacing:.3px;overflow:hidden}
 .mp-avatar.small{width:28px;height:28px;line-height:28px;border-radius:14px;font-size:11px}
 .mp-avatar.mint{background:#173b2f;color:#27e4a1}.mp-avatar.cyan{background:#15303d;color:#66ccff}.mp-avatar.amber{background:#3a2c17;color:#f0b45a}.mp-avatar.violet{background:#272040;color:#b9a3ff}.mp-avatar.rose{background:#3a1d25;color:#ff8fa3}
-.mp-avatar.empty{height:40px;background:#101916;border:1px dashed #30433a;color:#7f968a;font-weight:400;font-size:18px;line-height:38px}
+.mp-avatar.empty{display:block;height:40px;padding:0;background:#101916;border:1px dashed #30433a;color:#7f968a;font-weight:400;font-size:18px;line-height:38px}
 .mp-crown{display:block;flex-shrink:0;width:14px;height:11px;margin-left:8px}
 .mp-dot{display:block;flex-shrink:0;width:8px;height:8px;border-radius:4px;margin-right:8px;background:#7f968a}
 /* Banners and toast */
@@ -32,12 +32,12 @@
 .mp-hero-side{width:340px;flex-shrink:0;padding:26px 26px 22px;background:#101916;border-left:1px solid #22302a}
 .mp-hero-side h3{font-size:16px;font-weight:600;margin-bottom:4px}.mp-hero-side .subtle{font-size:13px;line-height:1.5;margin-bottom:14px}
 .mp-mode-pick{display:flex;flex-direction:row;flex-wrap:wrap;margin:0 -5px 10px}
-.mp-mode{display:block;width:25%;padding:0 5px 10px;text-align:left;background:none;border:0}
+.mp-mode{display:flex;flex-direction:column;align-items:stretch;width:25%;height:auto;padding:0 5px 10px;text-align:left;background:none;border:0;white-space:normal;line-height:1.45}
 .mp-mode strong{display:block;padding:12px 14px 0;font-size:14px;font-weight:600;color:#eef5f1;background:#1d2b26;border:1px solid #30433a;border-bottom:0;border-radius:8px 8px 0 0}
-.mp-mode span{display:block;height:58px;padding:4px 14px 12px;font-size:12px;line-height:1.45;color:#a7bab0;background:#1d2b26;border:1px solid #30433a;border-top:0;border-radius:0 0 8px 8px;overflow:hidden}
+.mp-mode span{display:block;flex:1;min-height:40px;padding:4px 14px 12px;font-size:12px;line-height:1.45;color:#a7bab0;background:#1d2b26;border:1px solid #30433a;border-top:0;border-radius:0 0 8px 8px;white-space:normal}
 .mp-mode:hover strong,.mp-mode:hover span{background:#263a32}
 .mp-mode.on strong,.mp-mode.on span{background:#173b2f;border-color:#2c6b52}.mp-mode.on strong{color:#27e4a1}
-.mp-mode-pick.compact .mp-mode{width:50%}.mp-mode-pick.compact .mp-mode span{height:40px}
+.mp-mode-pick.compact .mp-mode{width:50%}.mp-mode-pick.compact .mp-mode span{min-height:36px}
 .mp-code-row{display:flex;flex-direction:row;align-items:flex-start}
 .mp-code-field{flex:1;min-width:0;margin-right:8px}.mp-code-field input{height:36px;text-transform:uppercase;letter-spacing:2px;font-weight:600}
 .mp-code-row .actions>.button{margin:0}
@@ -48,7 +48,7 @@
 .mp-friend-info{flex:1;min-width:0;padding:0 12px}
 .mp-friend-info strong{display:block;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mp-friend-info span{display:block;font-size:12px;color:#a7bab0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.mp-friend .actions{margin-left:10px}.mp-friend .actions>.button{margin:0}
+.mp-friend .actions{margin-left:10px;flex-wrap:nowrap}.mp-friend .actions>.button{margin:0}.mp-friend .actions>.button+.button,.mp-clip-row .actions>.button+.button{margin-left:8px}
 .mp-recent-row{display:flex;flex-direction:row;align-items:center;min-height:56px;padding:8px 20px;border-top:1px solid #22302a}
 .mp-recent-row:first-child{border-top:0}
 .mp-result{display:block;flex-shrink:0;width:74px;font-size:13px;font-weight:700;color:#a7bab0}.mp-result.won{color:#27e4a1}
@@ -132,8 +132,10 @@
 .mp-section{padding:16px 0 10px;border-top:1px solid #22302a}.mp-section:first-child{border-top:0}
 .mp-section h3{font-size:15px;font-weight:600;margin-bottom:4px}
 .mp-section-note{font-size:12px;line-height:1.5;color:#a7bab0;margin:0 0 10px}
-.mp-setting{display:flex;flex-direction:row;align-items:center;min-height:48px;padding:6px 0}
-.mp-setting-text{flex:1;min-width:0;padding-right:16px}
+.mp-setting{display:flex;flex-direction:row;flex-wrap:wrap;align-items:center;min-height:48px;padding:6px 0}
+.mp-setting-text{flex:1;min-width:200px;padding-right:16px}
+/* Wide controls (key pickers) drop under their label instead of squeezing it to one word per line. */
+.mp-setting>.segmented{flex-wrap:wrap;flex-shrink:1;max-width:100%;margin:4px 0}
 .mp-setting-text strong{display:block;font-size:14px;font-weight:500}
 .mp-setting-text span{display:block;font-size:12px;line-height:1.45;color:#a7bab0}
 .mp-seg .button{padding:0 10px}
@@ -172,7 +174,7 @@
 .mp-plan strong{display:block;font-size:13px;font-weight:600;color:#eef5f1}.mp-plan span{display:block;font-size:13px;line-height:1.5;color:#dcebe3}
 /* Match: live HUD scoreboard */
 .mp-live-body{padding:12px 20px 20px}
-.mp-hud{max-width:460px;padding:10px 14px 8px;background:#0b1110;border:1px solid #2c4a3d;border-top:2px solid #27e4a1;border-radius:8px}
+.mp-hud{padding:10px 14px 8px;background:#0b1110;border:1px solid #2c4a3d;border-top:2px solid #27e4a1;border-radius:8px}
 .mp-hud-head{display:flex;flex-direction:row;align-items:center;height:20px;margin-bottom:6px;font-size:11px}
 .mp-hud-brand{font-weight:700;letter-spacing:1.2px;color:#27e4a1;white-space:nowrap}
 .mp-hud-round{flex:1;min-width:0;margin-left:10px;color:#a7bab0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -212,7 +214,7 @@
 .mp-round-score{display:block;flex-shrink:0;font-weight:700;color:#eef5f1}
 @media(max-width:1250px){.mp-mode{width:50%}.mp-hero-side{width:300px}.mp-main{width:58%}.mp-side{width:42%}}
 @media(max-width:1100px){.mp-row{display:block;margin:0}.mp-col,.mp-main,.mp-side,.mp-half{width:100%;padding:0}.mp-hero{display:block}.mp-hero-side{width:auto;border-left:0;border-top:1px solid #22302a}.mp-lobby-head{display:block}.mp-room{margin-top:14px}}
-@media(max-height:760px){.mp-hero-main{padding-top:20px}.mp-hero-main h2{font-size:22px;line-height:28px}.mp-mode span{height:48px}.mp-count{width:140px;height:140px;margin:12px 0}.mp-count-num{font-size:72px;line-height:80px}.mp-chat-log{height:160px}}
+@media(max-height:760px){.mp-hero-main{padding-top:20px}.mp-hero-main h2{font-size:22px;line-height:28px}.mp-mode span{min-height:36px}.mp-count{width:140px;height:140px;margin:12px 0}.mp-count-num{font-size:72px;line-height:80px}.mp-chat-log{height:160px}}
 /* Content download */
 .mp-download{padding:16px 20px 12px;border-color:#2c6b52}.mp-download.warn{border-color:#5a4524}.mp-download.ok{border-color:#2c6b52;background:#132520}
 .mp-download-head{display:flex;flex-direction:row;align-items:flex-start;margin-bottom:8px}
@@ -290,3 +292,16 @@
 .mp-port-facts{display:block;margin-top:4px;font-size:12px;color:#a7bab0}
 .mp-port-state{margin-top:8px;font-size:12px;font-weight:600;color:#a7bab0}.mp-port-state.ok{color:#27e4a1}.mp-port-state.warn{color:#f0b45a}
 .mp-port .actions{padding:6px 16px 14px}.mp-port .actions>.button{margin:0 8px 0 0}
+/* Settings editor: More options (progressive disclosure) */
+.mp-more{margin-bottom:16px;padding:0}
+.mp-more-head{display:flex;flex-direction:row;align-items:center;padding:14px 22px}
+.mp-more-text{flex:1;min-width:0;padding-right:16px}.mp-more-text strong{display:block;font-size:15px;font-weight:600}
+.mp-more-text span{display:block;margin-top:2px;font-size:12px;color:#a7bab0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mp-more-head .actions>.button{margin:0}
+.mp-more.open .mp-more-head{border-bottom:1px solid #22302a}
+.mp-more>.mp-row{padding:0 22px 8px}.mp-more .mp-col{padding:0 20px}
+.mp-lock{margin:14px 22px 0;padding:9px 12px;font-size:12px;line-height:1.5;color:#dcebe3;background:#101916;border:1px solid #22302a;border-left:3px solid #66ccff;border-radius:6px}
+/* Home: preferences fold to a summary line */
+.mp-prefs.folded{padding-bottom:16px}.mp-prefs .panel-head .actions{margin:0 0 0 12px}.mp-prefs .panel-head .actions>.button{margin:0}.mp-prefs .panel-head p{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mp-prefs-warn{margin:10px 20px 0}
+.mp-rejoin .actions>.button+.button,.mp-watch .actions>.button+.button{margin-left:8px}.mp-error h2{margin-bottom:8px}
+.mp-live .panel-head .actions>.button{margin:0}
