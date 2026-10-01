@@ -1397,7 +1397,13 @@ static partial class MultiplayerChecks
             Check(!Tool(new { action = "import", path = Path.Combine(output, "nope.amreplay") }).Ok && !Tool(new { action = "avatar-path", replay = "missing" }).Ok, "Missing replays are refused");
         }
         Check(Dev(new { action = "enable", on = false }).Ok && !service.SimulationOn && !Dev(new { action = "notice", kind = "ready" }).Ok, "Turning developer mode off stops the simulation and the tools");
+        // The tools the endpoints create (a 50 ms timer) go with the service.
+        var app = LoopbackServer.Build(0);
+        service.MapEndpoints(app, "/synthetic");
+        var mapped = service.DevTools;
         service.Dispose();
+        Check(mapped is { Disposed: true }, "Disposing the service stops the developer tools' timer");
+        ((IDisposable)app).Dispose();
         static void Act(MultiplayerService s, JsonElement n)
         {
             // Clear popups that wait for an answer, as the player would.

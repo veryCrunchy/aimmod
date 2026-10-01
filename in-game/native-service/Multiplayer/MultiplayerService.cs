@@ -2022,7 +2022,8 @@ sealed partial class MultiplayerService : IDisposable
         });
         MapPreviewEndpoints(routes, prefix);
         // Developer mode and its tools (off by default; local UI only).
-        Developer.DeveloperEndpoints.Map(routes, prefix, new Developer.DeveloperMode(outputFolder), this, outputFolder is null ? null : new Developer.DeveloperTools(outputFolder, library, this));
+        DevTools = outputFolder is null ? null : new Developer.DeveloperTools(outputFolder, library, this);
+        Developer.DeveloperEndpoints.Map(routes, prefix, new Developer.DeveloperMode(outputFolder), this, DevTools);
         // Read-only notice for the always-on in-game layer (notify.html).
         routes.MapGet(prefix + "/multiplayer-notify", () => Results.Content(NoticeJson(), "application/json"));
         routes.MapPost(prefix + "/multiplayer", async (HttpRequest request, CancellationToken token) =>
@@ -2046,7 +2047,9 @@ sealed partial class MultiplayerService : IDisposable
 
     // Disposed with the service (the hotkey reader).
     public IDisposable? Companion { get; set; }
-    public void Dispose() { timer?.Dispose(); Companion?.Dispose(); lock (gate) { Leave("closed"); DeleteSessionMarker(); DeletePreviewRequest(); } transport.Dispose(); }
+    // The developer tools the endpoints use (their timer runs every 50 ms).
+    internal Developer.DeveloperTools? DevTools { get; private set; }
+    public void Dispose() { timer?.Dispose(); DevTools?.Dispose(); Companion?.Dispose(); lock (gate) { Leave("closed"); DeleteSessionMarker(); DeletePreviewRequest(); } transport.Dispose(); }
 }
 
 static class WindowsClipboard

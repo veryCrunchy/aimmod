@@ -23,7 +23,8 @@ sealed partial class DeveloperTools : IDisposable
         this.output = output; this.library = library; this.multiplayer = multiplayer;
         timer = new Timer(_ => { try { Tick(); } catch (Exception ex) { Console.Error.WriteLine("Developer tick failed: " + ex.GetType().Name + ": " + ex.Message); } }, null, 50, 50);
     }
-    public void Dispose() { timer.Dispose(); lock (gate) StopLoopback(); }
+    public void Dispose() { timer.Dispose(); lock (gate) { StopLoopback(); Disposed = true; } }
+    internal bool Disposed { get; private set; }
 
     static long Now() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
