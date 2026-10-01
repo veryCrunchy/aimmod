@@ -305,6 +305,7 @@
     flag('quietDuringRanked','Quiet during ranked runs','No popups or hotkey while you play a scenario of your own.');
     flag('sounds','Sounds','Uses KovaaK’s own menu sounds.');
     flag('hideScenario','Hide my scenario from friends','Friends see you’re in AimMod, not what you play.');
+    flag('friendToasts','Tell me when friends start AimMod','A short note in game with Join or Watch. Never during a run.');
     body.appendChild(settingRow('Who can spectate me','Friends watch from their own game, osu!-style.',segmented([{id:'friends',label:'Friends'},{id:'ask',label:'Ask me'},{id:'off',label:'Nobody'}],pr.spectatePrivacy||'friends',function(id){pref('spectatePrivacy',id);},false,'spectate privacy')));
     flag('showWatchers','Show who’s watching while I play','A small line at the top of the screen.');
     if(pr.sounds)body.appendChild(settingRow('Volume','',stepper(typeof pr.volume==='number'?pr.volume:0.8,0,1,0.1,function(v){return F.number(v*100,0)+'%';},function(v){pref('volume',v);},false,'volume')));
@@ -547,7 +548,7 @@
     var row=node('div','actions');
     function sim(label,op){return button(label,function(){act('sim',{op:op});},'compact quiet');}
     if(inLobby){if(view.lobby&&!view.lobby.isHost)row.appendChild(sim('Pretend I’m missing the map','self-missing'));add(row,sim('Add player','add'),sim('Add player without the map','add-missing'),sim('Drop a player','drop'),sim('Reconnect','reconnect'),sim('Remove a player','remove'));if(view.lobby&&!view.lobby.isHost)row.appendChild(sim('Host leaves','host-leave'));}
-    else add(row,sim('Incoming invite','invite'),sim('Launched from an invite','launch'));
+    else add(row,sim('Incoming invite','invite'),sim('Launched from an invite','launch'),sim('A friend starts AimMod','friend-online'));
     p.appendChild(row);return p;
   }
   function joining(){

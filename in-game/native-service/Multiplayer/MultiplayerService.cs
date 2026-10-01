@@ -223,7 +223,7 @@ sealed partial class MultiplayerService : IDisposable
                 case "sim":
                     if (Simulation is null) return LobbyResult.Fail("sim-off", "The simulation is off in this build.");
                     var op = Text("op") ?? "";
-                    if (op is "invite" or "request" or "launch") { var made = Simulation.Control(null, op, null); TakeSimulatedInvites(); return made; }
+                    if (op is "invite" or "request" or "launch" or "friend-online") { var made = Simulation.Control(null, op, null); TakeSimulatedInvites(); return made; }
                     if (core is null) return LobbyResult.Fail("no-lobby", "Create or join a lobby first.");
                     if (op == "self-missing")
                     {
@@ -231,6 +231,8 @@ sealed partial class MultiplayerService : IDisposable
                         simulatedMissing = true; download?.Reset(); ReportContent(force: true); return LobbyResult.Success;
                     }
                     return Simulation.Control(core, op, Text("member"));
+                case "friend-join" or "friend-invite" or "friend-watch" or "friend-dismiss":
+                    return FriendNotice(action, Text("id"));
                 case "favourite":
                     return Favourite(Text("scenario"), !(args.TryGetProperty("on", out var favOn) && favOn.ValueKind == JsonValueKind.False));
                 case "settings" when core is not null && args.ValueKind == JsonValueKind.Object && args.TryGetProperty("settings", out var pickedSettings) && pickedSettings.ValueKind == JsonValueKind.Object
@@ -1093,6 +1095,7 @@ sealed partial class MultiplayerService : IDisposable
             TakeSimulatedInvites();
             MapTick();
             var now = clock();
+            WatchFriends(now);
             if (core is not null)
             {
                 core.RequireLoading = game.Capabilities.Contains("load");
