@@ -349,7 +349,7 @@ namespace aimmod
             }
         }
         std::string url;
-        bool panel = false, native = true, slowRead = false;
+        bool panel = false, native = true, lua = false, slowRead = false;
         if (now - m_lastOverlayCheck >= 500)
         {
             m_lastOverlayCheck = now;
@@ -361,6 +361,8 @@ namespace aimmod
             if (ReadSmall(m_root / L"aimmod-panel.tsv", text, 128)) panel = overlay::PanelOpen(text, static_cast<std::int64_t>(std::time(nullptr)));
             text.clear();
             if (ReadSmall(m_root / L"ui-host.tsv", text, 512)) native = overlay::ParseUiHost(text) == overlay::Host::Native;
+            text.clear();
+            if (ReadSmall(m_root / L"lua-notice.tsv", text, 128)) lua = overlay::LuaLayerActive(text, static_cast<std::int64_t>(std::time(nullptr)));
         }
         std::lock_guard lock(m_mutex);
         if (noticeRead)
@@ -375,8 +377,9 @@ namespace aimmod
                 changed = true;
             }
         }
-        if (slowRead && (url != m_overlay.url || panel != m_overlay.panelOpen || native != m_overlay.native))
+        if (slowRead && (url != m_overlay.url || panel != m_overlay.panelOpen || native != m_overlay.native || lua != m_overlay.luaLayer))
         {
+            m_overlay.luaLayer = lua;
             m_overlay.url = std::move(url);
             m_overlay.panelOpen = panel;
             m_overlay.native = native;

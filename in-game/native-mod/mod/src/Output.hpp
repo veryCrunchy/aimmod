@@ -106,6 +106,7 @@ namespace aimmod
             std::string url;
             bool panelOpen{};
             bool native{true};
+            bool luaLayer{}; // Notify.lua's own layer is on screen (lua-notice.tsv)
             std::uint64_t version{};
         };
         OverlayInputs overlay() const;

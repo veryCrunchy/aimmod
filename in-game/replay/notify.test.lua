@@ -5,7 +5,12 @@ local function check(value,message)assert(value,message);checks=checks+1 end
 local function obj(t)t=t or {};t.IsValid=function(self)return not self.invalid end;return t end
 local notice
 local files={['live-overlay-url.txt']='http://127.0.0.1:12345/abc123/overlay?surface=game'}
+local beats={}
 io.open=function(path,mode)
+    if mode=='wb' then
+        check(path:match('[^/]+$')=='lua-notice.tsv','writes only its own heartbeat')
+        return {write=function(_,v)beats[#beats+1]=v end,close=function()end}
+    end
     check(mode=='rb','only reads local files')
     local name=path:match('[^/]+$')
     local text=name=='multiplayer-notify.json' and notice or files[name];if not text then return nil end
@@ -143,16 +148,18 @@ check(#modes==before and player.bShowMouseCursor==false and clickThrough(),'and 
 Notify.update(false,false,true);check(Notify.keepGameFocus()==false and focus==1,'not while KovaaK\'s menus are up')
 notice='{"version":1,"active":false,"layout":"full","volume":0}';Notify.update(false,false,false)
 check(Notify.keepGameFocus()==false and focus==1,'not once the key is released')
+check(#beats>0 and beats[#beats]:match('^AIMMOD_LUANOTICE_1%s%d+%s$'),'the Lua layer tells AimModCore it is on screen')
 -- AimModCore hosts the notice layer (core-active lists "overlay"): this layer stands down.
 notice=buying;Notify.update(false,false,false)
 check(widgets[1].visibility~=1,'shown before the native host takes over')
 before=#modes
 notice='{"version":1,"active":false,"layout":"full","interactive":true,"cursor":true,"cs":{"phase":"freeze","buyOpen":true},"play":{"id":"play-m-x-0","since":1700000000000},"volume":0}'
 Notify.update(false,false,false,true)
-check(widgets[1].visibility==1 and renderers[1].bReceiveInput==false,'native host: the Lua layer hides')
+check(widgets[1].removed==true and renderers[1].bReceiveInput==false,'native host: the Lua layer comes off the screen')
+local beatsDown=#beats
 check(#modes==before and Notify.swallowMenu()==false and Notify.keepGameFocus()==false,'and never touches input, the pause menu or focus')
 check(Notify.playRequest()=='play-m-x-0','the play request still reaches Menu.lua')
-Notify.update(false,false,false,true);check(#modes==before,'stays down')
+Notify.update(false,false,false,true);check(#modes==before and #beats==beatsDown,'stays down, no heartbeat')
 -- The play request is read from the notice file.
 notice='{"version":1,"active":false,"play":{"id":"play-m-abc-0","since":1700000000123},"volume":0}'
 Notify.update(false,false,false)

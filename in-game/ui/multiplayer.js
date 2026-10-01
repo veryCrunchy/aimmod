@@ -603,7 +603,7 @@
   var tab='play';
   function openTab(id){
     if(id===tab)return;tab=id;
-    if(tab==='look'){mapsOpen=false;historyOpen=false;loadCosmetics();loadLooks();render();previewTick();}
+    if(tab==='look'){mapsOpen=false;historyOpen=false;preview.openedAt=Date.now();loadCosmetics();loadLooks();render();previewTick();}
     else{previewStop();render();}
   }
   function tabStrip(){
@@ -697,7 +697,11 @@
     var shot=node('div','mp-look-view'+(preview.close?' zoomed':''));
     var img=node('img','mp-look-img');img.setAttribute('alt','Your character');img.draggable=false;img.title='Drag to turn';
     img.onmousedown=function(e){preview.drag={x:e.clientX,yaw:preview.yaw};if(e.preventDefault)e.preventDefault();};
-    var note=node('div','mp-look-wait');add(note,node('strong','','Preview paused'),node('span','','It shows in KovaaK’s menus, not during challenges, benchmarks or the editor.'));
+    // No frame yet: AimModCore is starting the preview, or it is off (it logs why). The page can't
+    // tell those apart, so it never claims a reason; it only says the look still saves.
+    var waiting=Date.now()-(preview.openedAt||0)<6000;
+    var note=node('div','mp-look-wait');add(note,node('strong','',waiting?'Loading the preview…':'Preview unavailable'),
+      node('span','',waiting?'':'Your look still saves. The preview is drawn by AimModCore in KovaaK’s menus and never runs in challenges, benchmarks or the editor.'));
     preview.img=img;preview.note=note;previewShow();
     add(shot,img,note);stage.appendChild(shot);
     var turn=function(by){preview.yaw=((preview.yaw+by+180)%360+360)%360-180;preview.fastUntil=Date.now()+2000;previewSend();};

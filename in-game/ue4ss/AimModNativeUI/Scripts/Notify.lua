@@ -19,6 +19,18 @@ local function warn(what,reason)
     if warned[what] then return end
     warned[what]=true;print('[AimModNotify] '..what..' failed: '..tostring(reason)..'\n')
 end
+-- lua-notice.tsv: this layer is on screen (once a second). AimModCore warns when it sees it
+-- while its own notice layer is up, so two layers can't go unnoticed.
+local hostDecision,beatAt
+local function heartbeat()
+    local now=os.time()
+    if beatAt==now then return end
+    beatAt=now
+    local file=io.open((os.getenv('LOCALAPPDATA') or '')..'/AimMod/KovaaksNative/lua-notice.tsv','wb')
+    if not file then return end
+    pcall(function()file:write('AIMMOD_LUANOTICE_1\t'..tostring(now)..'\n')end)
+    file:close()
+end
 -- One line per step of taking or giving back input, so a live log shows which step ran.
 local function note(text)print('[AimModNotify] '..text..'\n')end
 local function nameOf(o)local ok,n=pcall(function()return o:GetFullName()end);return ok and tostring(n) or 'unknown' end
@@ -203,10 +215,14 @@ function M.update(panelOpen,replayActive,menuVisible,native)
         local id,since=text:match('"play":{"id":"([^"]+)","since":(%d+)')
         if id then playId=id;playSince=tonumber(since) end
     end
+    if native~=hostDecision then
+        hostDecision=native
+        note(native and 'standing down: AimModCore hosts the notice layer (core-active.tsv lists overlay)' or 'hosting the notice layer here (AimModCore does not list overlay)')
+    end
     if native then
-        if shown or interactive or tookCursor then note('standing down: AimModCore hosts the notice layer') end
         wantCursor,swallow,boardHeld,tookCursor,focusPending=false,false,false,false,false
-        if shown or interactive then M.hide() end
+        -- Our widget comes off the screen entirely, so only AimModCore's layer is ever seen.
+        if valid(host) then M.close() end
         lastId=nil;lastCount=nil
         return
     end
@@ -230,6 +246,7 @@ function M.update(panelOpen,replayActive,menuVisible,native)
         if not ok then M.close();return end
     elseif url~=loadedUrl then renderer:Load(url);loadedUrl=url end
     if not shown then shown=true;host:SetVisibility(3) end
+    heartbeat()
     local full=text:find('"layout":"full"',1,true)~=nil
     if (full and layout~='full') or (not full and layout~='toast') then pcall(place,full) end
     -- A cursor is on screen: KovaaK's menus are up, this layer showed it (buy menu), or the game did.

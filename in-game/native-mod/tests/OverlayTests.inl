@@ -32,6 +32,9 @@ namespace overlay_checks
         CHECK(PanelOpen("AIMMOD_PANEL_1\t1\t1000\n", 1002) && !PanelOpen("AIMMOD_PANEL_1\t1\t1000\n", 1004) && !PanelOpen("AIMMOD_PANEL_1\t0\t1000\n", 1000) &&
                   !PanelOpen("x\t1\t1000", 1000),
               "panel open while fresh");
+        CHECK(LuaLayerActive("AIMMOD_LUANOTICE_1\t1000\n", 1002) && !LuaLayerActive("AIMMOD_LUANOTICE_1\t1000\n", 1005) &&
+                  !LuaLayerActive("AIMMOD_LUANOTICE_1\tx\n", 1000) && !LuaLayerActive("", 1000),
+              "a Lua notice layer is seen while its heartbeat is fresh");
 
         // The input state machine.
         aimmod::overlay::Machine m;

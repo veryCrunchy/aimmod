@@ -343,6 +343,7 @@ test('the Look preview heartbeats only while the tab is open, turns with the arr
   assert.equal(first.method,'POST');assert.equal(first.headers['X-AimMod-UI'],'1');assert.deepEqual(JSON.parse(first.body),{open:true,yaw:0});
   const img=()=>s.all().find(e=>e.tag==='img'&&e.className==='mp-look-img');
   assert.equal(img().style.display,'none','no frame yet: the note shows instead');
+  assert.ok(s.text().includes('Loading the preview')&&!s.text().includes('Preview paused'),'no frame yet: it says it is loading, never guesses a reason');
   first.finish(200,{frame:3});
   assert.equal(img().src,'/private/cosmetic-preview.png?f=3');assert.equal(img().style.display,'block');
   s.all().find(e=>e.tag==='button'&&e.getAttribute('aria-label')==='Turn right').onclick();
