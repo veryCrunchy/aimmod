@@ -26,8 +26,9 @@ Agreed with the KovaaK's developer ("Should be fine"):
    or load their own files, and no code path loads a player-supplied texture
    or mesh. Lobbies share catalog item ids, never files.
 3. **Shipped and verified.** Catalog content ships with the AimMod install or
-   in AimMod pak files. It is versioned and hash-checked against a manifest
-   signed by AimMod, and only verified content is used.
+   in AimMod pak files. It is versioned and pinned by SHA-256 and size in a
+   catalog manifest that ships with the AimMod install. Only files that match
+   the manifest are used.
 4. **Paks are allowed.** "Anticheat shouldn't care unless you try to poke it."
    AimMod paks use the engine's normal startup mount and nothing else.
 5. **Visuals only.** Cosmetics never change:
@@ -248,45 +249,116 @@ Build rules that keep it that way:
 - Cook with **"Share Material Shader Code" off**, so shaders live inside the AimMod packages and no global shader library is registered.
 - One pak per catalog version. An update means restarting the game (no runtime mount, nothing patched in memory).
 
-### Signing
+### Hash pinning
 
-UE's built-in pak signing needs keys compiled into the game, so it doesn't
-apply. AimMod signs its own content instead.
+There is no signing key. The catalog is pinned by hash, and the manifest is
+exactly as trusted as the AimMod install that ships it.
 
-1. An AimMod release key (ECDSA P-256) signs `catalog-manifest.json`. The manifest lists:
-   - the catalog version;
-   - each pak's file name, size and SHA-256;
-   - the catalog's item ids and versions.
-2. The public key is compiled into AimModCore. At startup, AimModCore verifies the manifest signature (Windows CNG `BCryptVerifySignature`) and the SHA-256 of each pak. Only then does it mark a pak verified.
-3. Pak items resolve only for verified paks (`Catalog.resolve`, `verifiedPaks`). A modified or unknown pak stays mounted but is never referenced.
-4. The installer verifies the same manifest before copying a pak.
+**The manifest.**
 
-A player who edits their own local catalog changes only what they see
-themselves. Every viewer resolves shared ids against their own verified
+- `catalog-manifest.json` ships with the AimMod install or update, next to `catalog.json`.
+- It lists:
+  - the catalog version;
+  - for `catalog.json` and each pak: the file name, size and SHA-256;
+  - each item's id and version.
+
+**Producing it.**
+
+1. The team builds the paks (cooking needs the UE editor).
+2. The AimMod release build adds the paks and `catalog.json` to the install.
+3. The build checks:
+   - each pak's path rules, by parsing its index (see above);
+   - catalog validation (the same rules as `Catalog.validate`);
+   - unique ids, and version bumps for changed items.
+4. It then writes the manifest with each file's SHA-256 and size.
+
+**Loading in AimModCore.**
+
+- At startup it reads the manifest from its own installed copy.
+- It loads only files whose size and SHA-256 match. Items resolve only when their pak matches.
+- Unknown, extra or mismatched files are ignored and logged. A mismatched pak stays mounted but is never referenced.
+
+**The installer** writes the manifest and the files together, and checks the
+hashes after copying into `Content/Paks/~AimMod/`.
+
+A player who edits their own local files changes only what they see
+themselves. Every viewer resolves shared ids against their own installed
 catalog.
 
 ### Creator pipeline (AimMod team)
 
 1. **Project.** A UE **4.26.2** project named `FPSAimTrainer`, so cooked `/Game/` paths resolve. Assets go under `Content/AimModCosmetics/`.
-2. **References to game assets.** Our assets can reference the game's `S_Meso` skeleton, `FPSPlayer` arms skeleton or materials by path. For that, create placeholder assets at the same paths and exclude them from the cook. With the developer's permission, the team may extract skeletons and UV layouts for **internal reference only**. KovaaK's assets are never redistributed, and the pak's paths never include them.
-3. **Player models.**
+2. **References to game assets.** Reference the game's `S_Meso` skeleton, `FPSPlayer` arms skeleton or materials by path. For that, create placeholder assets at the same paths and exclude them from the cook. With the developer's permission, the team may extract skeletons and UV layouts for **internal reference only**. KovaaK's assets are never redistributed, and the pak's paths never include them.
+3. **Accessories.** See [Accessories](#accessories) for sockets and budgets. Each is a rigid static mesh with our own material: no cloth, physics or skinning.
+4. **Player models.**
    - Skin the mesh to a Meso-compatible skeleton, with bone names and hierarchy as printed by the probe (`sockets/bones`).
    - Either retarget to the Meso skeleton itself, or build our own skeleton with the same bone names plus an AimMod animation blueprint using *Copy Pose From Mesh*.
    - At runtime the model is a follower `SkeletalMeshComponent` with `SetMasterPoseComponent(Mesh)` and collision off. The game's `Mesh` gets `SetRenderInMainPass(false)` and keeps its collision, physics asset and animation. **Verify** that the hidden master still ticks its pose; otherwise set `VisibilityBasedAnimTickOption` on avatar meshes only.
    - Review rule: the silhouette stays within the stock model's bounds.
-4. **Reload and other animations.** Author on the `FPSPlayer` arms skeleton, export an `AnimMontage` with the slot the game's montages use (from the probe or the montage list), and keep the length at or below the game's reload duration.
-5. **Weapon models.** Static or skeletal meshes attached to the weapon socket or arms bone. The stock weapon component gets render-off only, and `ShotOrigin` is untouched. Bounds stay close to the stock weapon.
-6. **Textures and patterns.** Masks authored on the internal UV reference, set through the material's existing texture parameter. Accessories use static meshes with our own materials, attached to sockets from the probe.
-7. **Cook and package.**
+5. **Reload and other animations.** Author on the `FPSPlayer` arms skeleton, export an `AnimMontage` with the slot the game's montages use (from the probe or the montage list), and keep the length at or below the game's reload duration.
+6. **Weapon models.** Static or skeletal meshes attached to the weapon socket or arms bone. The stock weapon component gets render-off only, and `ShotOrigin` is untouched. Bounds stay close to the stock weapon.
+7. **Textures and patterns.** Masks authored on the internal UV reference, set through the material's existing texture parameter.
+8. **Cook and package.**
    - Cook for `WindowsNoEditor` with shared shader code off.
    - Run `UnrealPak` (4.26) with a response file listing only `/Game/AimModCosmetics/` packages.
-   - The build script checks the path rules, writes the manifest, and signs it with the release key on the release machine.
-8. **Review checklist:**
-   - no KovaaK's or third-party assets;
-   - no override paths;
-   - bounds checks;
-   - no gameplay-visible change, such as an emissive weapon shape usable as a crosshair, or camouflage;
-   - catalog id and version bumped.
+   - Add the pak to the AimMod release build, which checks it and pins its hash in the manifest.
+9. **Thumbnails.** Render picker thumbnails in an AimMod match with AimModCore's existing `CaptureThumbnail` game command.
+10. **Review checklist:**
+    - no KovaaK's or third-party assets;
+    - no override paths;
+    - budgets and bounds;
+    - no gameplay-visible change, such as an emissive shape usable as a crosshair, a beacon, or camouflage;
+    - catalog id and version bumped.
+
+## Accessories
+
+All accessories are rigid static meshes on the avatar's `CharacterMesh0`:
+
+- attached with `K2_AttachToComponent` to a bone or socket, with a per-model offset transform from the catalog;
+- `NoCollision`, with no physics, cloth or skinning;
+- opaque or masked materials only (no translucency);
+- one material each;
+- one LOD, plus LOD1 at about 50% for items over 1,000 triangles.
+
+They exist only while the scope gate is open, and are destroyed when it
+closes.
+
+**Sockets.** The Meso and Endo skeletons' bone and socket names come from the
+probe's `sockets/bones` lines. The names below are the expected roles; the
+catalog stores the confirmed names per model.
+
+| Candidate | Attach to | Triangles (LOD0) | Texture | Fit work | Notes |
+|---|---|---|---|---|---|
+| **Halo** | head bone, offset above the head | ≤ 300 | none (colour and emissive parameters) or 128² | lowest: floats, so it never clips any skin; one offset per model | emissive capped (scalar ≤ 2) so it is no beacon; doubles as a tournament reward later |
+| **Visor** | head bone | ≤ 800 | 256² base colour + 256² packed ORM | low: one rigid plate per model | must not reach below the chin or past the head bounds |
+| **Headband** | head bone | ≤ 400 | 256² | low: a ring around a near-cylindrical head | |
+| Cat ears | head bone | ≤ 600 (pair) | 256² | medium: fitted to each head's top shape | |
+| Sunglasses | head bone | ≤ 600 | 256² | medium: fitted to each face | lenses opaque or masked, not translucent |
+| Crown | head bone | ≤ 1,000 | 512² | medium: sits on the head, so clipping checks per model | tournament reward |
+| Small backpack | upper spine bone | ≤ 1,500 | 512² | higher: clipping against arms in animations | larger silhouette, so a bounds review |
+| Jetpack | upper spine bone | ≤ 2,500 | 512² (+ optional emissive mask) | highest: as backpack, plus flame or emissive review | |
+
+**Proofs: halo, visor, headband.** These three need no per-skin fitting
+beyond one transform per model, and can't clip in animation because the head
+moves rigidly. They cover the three patterns we need:
+
+- floating (halo);
+- surface-fitted (visor);
+- wrapped (headband).
+
+Cat ears, sunglasses and the crown come next. The backpack and jetpack wait
+until the head items are proven.
+
+**Shared budgets:**
+
+| Limit | Value |
+|---|---|
+| On disk | at most 1 MB per accessory |
+| Texture maps | at most 2 per item, BC1 base colour, BC5 or packed ORM |
+| Head items | inside a 35 × 35 × 30 cm box around the head bone |
+| Spine items | inside 45 × 30 × 50 cm |
+| Any item | no more than 10 cm beyond the capsule radius |
+| Per avatar | at most one head item and one spine item |
 
 ## Feasibility (revised)
 
@@ -294,30 +366,31 @@ catalog.
 |---|---|---|
 | Avatar tints, multi-tone patterns | dynamic instance vector/scalar parameters | **High**: prototype in this branch |
 | Own weapon and arms finishes | the same, on `GetSelectWeaponMesh` and `GetFPSPlayerSkeletalMeshComponent` | **High**: prototype in this branch |
-| Patterns with new shapes | curated mask texture from the AimMod pak, through the existing texture parameter | **High** once the pak verifier exists |
-| Accessories | static mesh from the AimMod pak on a socket, `NoCollision` | **High**: the engine path is standard; the proof item is the visor |
+| Patterns with new shapes | curated mask texture from the AimMod pak, through the existing texture parameter | **High** once the pak hash check exists |
+| Accessories | static mesh from the AimMod pak on a bone or socket, `NoCollision` | **High**: the engine path is standard; proofs are the halo, visor and headband |
 | Weapon models | pak mesh on the arms or weapon socket, stock weapon render-off | **Medium-High**: static models don't animate weapon parts unless skeletal with matching montages |
 | Reload and other animations | pak montage played on the arms after `PlayReloadAnimation`, rate matched to `Duration` | **Medium-High**: needs the game's montage slot name |
 | Player models | pak skeletal mesh, follower with master pose | **Medium**: needs a Meso-compatible skeleton and the hidden-master pose check |
 | Player-supplied files | none | **Out of scope by policy** |
 
-## Prototype in this branch
+## Lua testbed (this branch)
 
 `in-game/ue4ss/AimModCosmetics` is a separate UE4SS Lua mod, off unless
-`config.txt` sets `enabled=1`.
+`config.txt` sets `enabled=1`. It is the **team testbed only**. The shipped
+manifest check and applier live in AimModCore (see [Plan](#plan)). The Lua applier
+must never be enabled on the same install as the AimModCore applier.
 
-- **Probe** (`probe=1`, `CosmeticsProbe.lua`): unchanged and read-only.
+- **Probe** (`probe=1`, `CosmeticsProbe.lua`): read-only.
   - It logs the mesh components, materials and parameter names, looks, sockets and bones, the viewmodel, the Default packs, and skin and model data.
   - It writes to `UE4SS.log` and `%LOCALAPPDATA%/AimMod/KovaaksNative/cosmetics-probe.txt`.
   - It runs in any scenario, because it changes nothing.
-- **Catalog** (`CosmeticsCatalog.lua`): the curated item list, with validation (id format, kinds, parts, value ranges, required pak) and resolution. Unknown ids, drafts (unless `allow_drafts=1` for team tests) and pak items without a verified pak all resolve to "base look".
+- **Catalog** (`CosmeticsCatalog.lua`): the reference implementation of the item schema, validation and resolution. Unknown ids, drafts (unless `allow_drafts=1`) and pak items whose pak doesn't match the manifest resolve to "base look".
 - **Applier** (`cosmetics=1`, `CosmeticsApply.lua`):
-  - Behind the scope gate, it applies the team-test items `avatar_item` (to AimMod avatars with a free look and a matching model) and `weapon_item` (to your own weapon and arms in a match).
-  - It creates a dynamic instance parented on the slot's material, sets only the item's parameters, and assigns it with `SetMaterial`. It restores the original when out of scope.
-  - It skips materials missing any of the item's parameters.
+  - Behind the scope gate, it applies the team-test items `avatar_item` and `weapon_item` as parameters on dynamic instances parented on the game's materials.
+  - It restores the originals when out of scope.
   - It never touches meshes, collision, visibility, `ShotOrigin`, the local character mesh or scenario bots.
-  - There's no file or texture setting at all. Per-player items come in phase 1 via the bridge.
-- **Tests:** `util`, `scope`, `catalog`, `probe` and `apply`, all `*.test.lua`. Run them from `tests/` with Lua 5.3/5.4 or `nvim -l`. They use a synthetic object model.
+  - There's no file or texture setting.
+- **Tests:** `util`, `scope`, `catalog`, `probe` and `apply`, all `*.test.lua`. Run them from `tests/` with Lua 5.3/5.4 or `nvim -l`. They are the reference vectors for the C++ port.
 
 ### Deploy the probe
 
@@ -331,15 +404,14 @@ catalog.
 
 ## Sharing
 
-- Each member's look is a list of `{id, version}` pairs, for example `meso-tint-ember@1`.
+- Each member's look is a list of `{id, version}` pairs, for example `accessory-halo@1`.
 - It travels in a lobby protocol frame, `cosmetic.look {member, items}`, which the host relays like `aimmod.char`. Lobby keys aren't used, because the service may write at most 24 keys and `aimmod.char.*` already uses up to 16.
 - No files are transferred. Content arrives only with AimMod updates.
-- The service passes each peer's items to AimModSteam (new pipe command `cosmetics.set {peer, items}`), which owns the SteamID-to-avatar map.
-- Each viewer resolves ids against their own verified catalog. Unknown ids, newer versions or unverified pak items fall back to the base look ("update AimMod to see this").
-- Viewer settings:
-  - "show others' cosmetics": all / friends / off;
-  - "hide this player's cosmetics";
+- **Viewer settings, applied by the service before it hands looks to AimModCore:**
+  - "Show other players' cosmetics": **all (default)**, friends, or off;
+  - "Hide this player's cosmetics", per SteamID;
   - a host toggle per AimMod mode.
+- Each viewer resolves ids against their own installed catalog. Unknown ids, newer versions or pak items without a matching pak fall back to the base look ("update AimMod to see this").
 
 ## UI
 
@@ -347,7 +419,7 @@ A **Cosmetics** page in the AimMod workspace, listing catalog items only:
 
 - base look (the existing `AvatarProfiles`);
 - avatar tint or pattern;
-- accessory;
+- head accessory and spine accessory;
 - weapon finish or model;
 - reload animation;
 - player model.
@@ -357,38 +429,79 @@ Items that need a newer catalog or a missing pak show as unavailable.
 **Preview:**
 
 - **Phase 1:** team-rendered 2D thumbnails shipped with the catalog.
-- **Phase 2:** an in-game 3D preview. AimMod spawns its own preview actor with a scene capture into a render target, the way the game's `ACharacterSkinPreviewActor` and `UCharacterSkinPreviewSceneCaptureComponent2D` do, and shows it in a UMG image beside the Gameface view.
+- **Phase 2:** an in-game 3D preview by AimModCore. It spawns its own preview actor with a scene capture into a render target, the way the game's `ACharacterSkinPreviewActor` and `UCharacterSkinPreviewSceneCaptureComponent2D` do, and shows it in a UMG image beside the Gameface view. The preview actor is AimMod's own, outside any scenario.
 
 Others only ever see items from the catalog.
 
 ## Plan
 
-**Phase 0 (this branch).**
+**Phase 0 (this branch, done).**
 
 - Read-only probe.
-- Catalog and scope gate, with tests.
-- Parameter-only applier for team tests.
+- Reference catalog, scope gate and applier in Lua, with tests.
+- Session marker spec handed to the multiplayer work.
+
+**Move to AimModCore** (C++; coordinated through the multiplayer coordinator).
+
+The core library (`in-game/native-mod/core`, unit-tested in `tests/CoreTests.cpp`) gains:
+
+1. **`CosmeticsScope`:** an exact port of `CosmeticsScope.lua`, with the `scope.test.lua` vectors as C++ tests.
+2. **`Catalog`:** parses the installed `catalog.json`. The item schema is the Lua one, plus accessory `attach` (per-model bone or socket and transform) and `mesh`/`material` paths under `/Game/AimModCosmetics/`. Validation, resolution and the `catalog.test.lua` vectors are ported too.
+3. **`CatalogManifest`:** parses the installed `catalog-manifest.json`, and checks the size and SHA-256 (BCrypt) of `catalog.json` and each pak. It reports a matched set and logs every unknown, extra or mismatched file. Tests cover a matching manifest, a wrong hash, a wrong size, a missing file, an extra unlisted pak and a malformed manifest.
+4. **`CosmeticLooks`:** parses the looks file the service writes (below). It is validated whole, and never partially accepted.
+
+The mod (`in-game/native-mod/mod/src`) gains:
+
+5. **Game state:** reads `ScenarioManager` (`GetCurrentScenario().GetName()`, `IsInChallenge`, `IsCurrentlyInBenchmark`, `IsInScenarioEditor`, `IsScenarioLoading`) and the session marker every second, on the game thread.
+6. **Applier:**
+   - parameter items, on dynamic instances parented on the game's materials, with a restore when the gate closes;
+   - accessories: AimMod's own `StaticMeshComponent` per item via `AddComponentByClass`, with `SetStaticMesh` on that new component only, `NoCollision`, attached to the bone, and destroyed on gate close;
+   - your own weapon and arms finishes in matches.
+
+   It never touches the game's meshes, collision, `ShotOrigin`, scenario bots or DLC looks.
+7. **Avatar identity:** AimModSteam adds the actor tag `AimMod.Peer.<SteamID64>` to each avatar it spawns (`AActor.Tags`; a bridge change, one line). AimModCore finds avatars by that tag instead of the profile prefix.
+8. **Looks input:**
+   - **File and format:** the service writes `%LOCALAPPDATA%/AimMod/KovaaksNative/cosmetic-looks.txt` atomically, in the same style as `core-command.tsv`: `v=1`, then one line per peer, `peer=<SteamID64> items=<id>@<v>,<id>@<v>`, and one `self=` line for the local player's own items.
+   - **Content:** the file already reflects the viewer settings (all/friends/off, hidden players).
+   - **Lifetime:** it is deleted with the session marker.
+9. **Reload animations (phase 3):** a gated post-hook on `PlayReloadAnimation` that plays the item's montage on the arms, with its rate set from `Duration`.
+
+**Service** (multiplayer branch):
+
+- the session marker (spec handed over);
+- the looks file;
+- the `cosmetic.look` frame;
+- viewer settings;
+- the Cosmetics page.
+
+**Bridge:** the avatar tag.
+
+**Release build:**
+
+- pak index path check;
+- catalog validation;
+- manifest generation with hashes.
 
 **Phase 1: parameter items.**
 
-- Probe; fill in the real parameter names; clear `draft`.
-- The service writes the session marker.
-- AimModSteam ports the gate and applies per-player items after `LoadCharacterProfile`.
-- Local weapon and arms finishes.
-- The `cosmetic.look` frame and viewer settings.
-- Cosmetics page with thumbnails.
+- Run the probe; fill in the real parameter names, bones and sockets; clear `draft` on tints and finishes.
+- Land the AimModCore scope, catalog, manifest check (for `catalog.json` alone at first) and the parameter applier.
+- Session marker, looks file, `cosmetic.look` frame, viewer settings, thumbnail picker.
 
 **Phase 2: AimMod pak.**
 
-- Signed manifest and verifier in AimModCore.
-- Pak build script with the path rules.
-- Mask-texture patterns, the visor accessory, weapon models.
+- Pak path rules and hash pinning in the release build.
+- Pak hash check in AimModCore.
+- Accessories: halo, visor, headband.
+- Mask-texture patterns.
+- Weapon models.
 - In-game 3D preview.
 
 **Phase 3: animation and player models.**
 
-- Reload montages through the gated post-hook.
+- Reload montages.
 - Player models through a follower mesh with master pose.
+- More accessories: cat ears, sunglasses, crown, then the backpack and jetpack.
 
 ## First curated catalog
 
@@ -400,25 +513,27 @@ The draft entries in `CosmeticsCatalog.lua` are:
 | `endo-tint-verdant` | avatar tint | Endo parameter names |
 | `meso-pattern-stripes` | avatar pattern | AimMod pak with a Meso mask texture, plus the mask parameter name |
 | `weapon-finish-gunmetal`, `weapon-finish-sand`, `weapon-finish-aimmod` | weapon finish | weapon and arms material parameter names, for the common weapons |
-| `accessory-visor` | accessory | AimMod pak with the visor mesh and our material, plus the Meso head socket name |
+| `accessory-halo`, `accessory-visor`, `accessory-headband` | accessory | AimMod pak with the mesh and our material, plus the Meso and Endo head bone names and per-model offsets |
 
 To make them real:
 
 1. From the probe:
    - **Character parameters:** vector and scalar parameter names on the Meso and Endo `CharacterMesh0` slots, and which slot is body or head.
    - **Weapon parameters:** weapon and arms parameter names for 2–3 common weapons.
-   - **Sockets and bones:** Meso's socket and bone list (head socket).
+   - **Bones and sockets:** the head and upper spine bones for Meso and Endo.
    - **Skin mesh check:** whether the four Default skins share `S_Meso`.
-2. Replace the placeholder parameter names (`PrimaryColor`, `Roughness`, `Metallic`), check the colours in game in an AimMod match, render thumbnails, and clear `draft`.
-3. For the pattern and the visor:
-   - the 4.26 project, internal UV reference, mask texture and visor mesh;
-   - a pak build and the signing key;
-   - the AimModCore verifier, filling in the `sha256` values.
-4. Service: the session marker writer and the `cosmetic.look` frame. Bridge: `cosmetics.set`.
+2. Replace the placeholder parameter names (`PrimaryColor`, `Roughness`, `Metallic`), check the colours in an AimMod match, render thumbnails, and clear `draft`.
+3. For the pattern and accessories:
+   - the 4.26 project, internal UV reference, mask texture, and the halo, visor and headband meshes within budget;
+   - the release build's manifest generation, which fills in the `sha256` values;
+   - the AimModCore manifest check.
+4. Service: the session marker, the looks file and the `cosmetic.look` frame. Bridge: the avatar tag.
 
-## Open decisions
+## Decisions
 
-1. Which machine holds the release signing key, and who signs catalog releases?
-2. Should AimModCore (C++) host the verifier and the phase 1+ applier, with the Lua prototype kept only as a team testbed?
-3. Default for "show others' cosmetics": all, friends or off.
-4. Should the visor be the proof accessory, or would you prefer another first item?
+Decided:
+
+- The manifest check and the real applier live in AimModCore (C++). The Lua mod is the team testbed only.
+- No signing key. The catalog is hash-pinned by a manifest that ships with the AimMod install.
+- "Show other players' cosmetics" defaults to **all**, with friends and off as options.
+- The proof accessories are the halo, visor and headband. Cat ears, sunglasses and the crown follow, then the backpack and jetpack.
