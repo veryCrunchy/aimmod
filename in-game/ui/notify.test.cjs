@@ -73,6 +73,10 @@ test('the toast layer takes clicks only while a notice asks for them, never in t
   assert.equal(n.body.className,'input');assert.equal(n.html.className,'input');
   assert.ok(n.box.all().some(e=>e.className==='toast has-actions'));
   n.render(Object.assign({},failed,{layout:'full'}));assert.equal(n.body.className,'');
+  // The CS buy menu holds the cursor: the full-screen layer takes every click (none reach the game).
+  n.render({version:1,active:false,layout:'full',interactive:true,cursor:true,cs:{phase:'freeze',buyOpen:true,alive:true,health:100,armor:0,side:'T',score:[0,0],round:1,money:800,buyKey:'B',useKey:'E'}});
+  assert.equal(n.body.className,'input');assert.equal(n.html.className,'input');
+  n.render({version:1,active:false,layout:'full',interactive:false,cs:{phase:'freeze',buyOpen:false,alive:true,health:100,armor:0,side:'T',score:[0,0],round:1,money:800,buyKey:'B',useKey:'E'}});assert.equal(n.body.className,'');
   n.render({version:1,active:true,id:'cd-1',kind:'countdown',title:'Match starting in 3',body:'',countdown:3,layout:'toast'});
   assert.equal(n.body.className,'');assert.equal(n.buttons().length,0);
   const css=fs.readFileSync(path.join(__dirname,'notify.css'),'utf8');

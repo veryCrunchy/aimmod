@@ -226,6 +226,15 @@ static partial class MultiplayerChecks
             "Once the retried load starts the match, the game is asked to take input back (one id per attempt, since the Retry)");
         Run(300);
         Check(PlayId(Notice()) == PlayId(started), "The request keeps its id while it's sent, so it's handled once");
+        // In play the notice layer stays full-screen, so the scoreboard key never resizes it.
+        Check(Notice().GetProperty("layout").GetString() == "full", "During the match the notice layer keeps the full-screen layout");
+        static bool Swallow(JsonElement n) => n.TryGetProperty("swallowMenu", out var w) && w.ValueKind == JsonValueKind.True;
+        Check(!Swallow(Notice()), "No pause menu to swallow before Escape");
+        service.CsEscapeForTest();
+        Check(Swallow(Notice()) && !(Notice().TryGetProperty("cursor", out var cur) && cur.ValueKind == JsonValueKind.True),
+            "Escape closes the buy menu (no cursor) and asks AimModNativeUI to close the pause menu it opened");
+        Run(1600);
+        Check(!Swallow(Notice()), "Only for a moment: a later Escape opens KovaaK's menu as usual");
         service.Act("leave", default);
         Run(300);
         Check(!File.Exists(Path.Combine(game, "Saved", "SaveGames", "Scenarios", name + ".sce")) && File.Exists(Path.Combine(output, "match-debug", name + ".sce")),

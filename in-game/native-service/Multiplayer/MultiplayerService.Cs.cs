@@ -59,6 +59,11 @@ sealed partial class MultiplayerService
     }
 
     // B toggles the buy menu (buy window only), digits buy from it, E held plants or defuses.
+    long csEscapedAt = long.MinValue;
+    internal const int SwallowMenuMs = 1500;
+    internal bool CsSwallowMenu(long now) => now - csEscapedAt is >= 0 and < SwallowMenuMs;
+    // Test hook: Escape closed the buy menu (the key reader only sees the real keyboard).
+    internal void CsEscapeForTest() { buyOpen = false; csEscapedAt = clock(); }
     void CsInput(MatchSnapshot match)
     {
         if (match.Cs is not { } cs || cs.Players.FirstOrDefault(p => p.Member == SelfId) is not { } me) return;
@@ -69,6 +74,9 @@ sealed partial class MultiplayerService
         if (!buyWindow) buyOpen = false;
         if (!csKeys.Foreground()) { if (useHeld) { useHeld = false; Command("use", JsonSerializer.SerializeToElement(new { held = false })); } return; }
         if (csKeys.Pressed('B') && buyWindow && me.Alive) buyOpen = !buyOpen;
+        // Escape closes the buy menu. KovaaK's also opens its pause menu on Escape; AimModNativeUI
+        // closes that again while the notice file says so (swallowMenu, for a moment after).
+        if (csKeys.Pressed((char)0x1B) && buyOpen) { buyOpen = false; csEscapedAt = clock(); }
         if (buyOpen)
         {
             var menu = BuyMenu(me.Side, me);

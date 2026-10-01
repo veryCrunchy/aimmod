@@ -38,10 +38,25 @@ local show -- defined below; handBack closes the AimMod panel through it
 local function trackMenu()
     local up=valid(menu) and menu:IsVisible()
     -- A new menu object (level load) has no known opening time.
-    if menuSeen~=menu then menuSeen=menu;menuWasUp=up;menuShownAt=nil;return end
-    if up and not menuWasUp then menuShownAt=os.time() end
+    if menuSeen~=menu then menuSeen=menu;menuWasUp=up;menuShownAt=nil;return false end
+    local opening=up and not menuWasUp
+    if opening then menuShownAt=os.time() end
     menuWasUp=up
+    return opening
 end
+-- Escape with the CS buy menu open closes the buy menu (the service) and must do nothing else:
+-- KovaaK's pause menu, opened by the same key, closes again at once and the game keeps its input.
+local function swallowPauseMenu()
+    if opened or not valid(menu) or ReplayMainBridge.active() then return false end
+    if not trackMenu() or not Notify.swallowMenu() then return false end
+    menu:SetVisibility(1);menuWasUp=false;menuShownAt=nil
+    local player=menu:GetOwningPlayer()
+    local api=StaticFindObject('/Script/Engine.Default__GameplayStatics')
+    pcall(function()if valid(player) and valid(api) and api:IsGamePaused(player) then api:SetGamePaused(player,false) end end)
+    Notify.restoreInput()
+    return true
+end
+M.swallowPauseMenu=swallowPauseMenu
 local function handBack(since)
     if not valid(menu) then return 'no-menu' end
     local player=menu:GetOwningPlayer()
@@ -181,6 +196,14 @@ function M.start()
     end)
     -- Independent of the workspace and replay recording preference. Native
     -- visibility follows the read-only live snapshot on the game thread.
+    -- Fast and cheap (flags only unless one applies): KovaaK's pause menu opened by Escape over the
+    -- buy menu closes within a frame or two, and a held scoreboard key keeps the viewport focused.
+    LoopInGameThreadWithDelay(33,function()
+        pcall(function()
+            if valid(menu) then swallowPauseMenu() end
+            Notify.keepGameFocus()
+        end)
+    end)
     LoopInGameThreadWithDelay(100,function()
         local ok=pcall(function()
             LiveHUD.update(not valid(menu) or menu:IsVisible() or opened,
@@ -189,7 +212,7 @@ function M.start()
         if not ok then pcall(LiveHUD.hide) end
         -- Multiplayer notices, shown while the AimMod panel itself is not on screen.
         local noticeOk=pcall(function()
-            trackMenu()
+            swallowPauseMenu();trackMenu()
             local menuUp=valid(menu) and menu:IsVisible()
             Notify.update(opened and menuUp,ReplayMainBridge.active(),menuUp)
             local id,since=Notify.playRequest()

@@ -13,6 +13,12 @@ local lastId,lastCount
 local interactive=false
 local playId,playSince
 local tookCursor=false
+local wantCursor,swallow,boardHeld,lastBlocked=false,false,false,false
+local warned={}
+local function warn(what,reason)
+    if warned[what] then return end
+    warned[what]=true;print('[AimModNotify] '..what..' failed: '..tostring(reason)..'\n')
+end
 local base=(os.getenv('LOCALAPPDATA') or '')..'/AimMod/KovaaksNative/'
 local Width,Height=620,340
 -- Two sizes: the toast (top centre, 620 x 340, room for a card with buttons) for notices, and the whole screen for
@@ -71,16 +77,58 @@ end
 -- The CS buy menu wants a cursor in game: show it (game and UI input, so movement keys still
 -- work) and hand input back to the game once it closes. Only a cursor this layer took is given
 -- back; while KovaaK's menus, the AimMod panel or a replay own input, it isn't touched.
+-- KovaaK's controller keeps its own cursor state (AMetaPlayerController::K2_SetShowMouseCursor)
+-- and can put bShowMouseCursor back, so both are set, and re-set while the layer holds the cursor.
+local function showCursor(player,on)
+    local ok,reason=pcall(function()player:K2_SetShowMouseCursor(on)end)
+    if not ok then warn('K2_SetShowMouseCursor',reason) end
+    pcall(function()player.bShowMouseCursor=on end)
+end
+local function applyInput(player,lib,cursor)
+    showCursor(player,cursor)
+    -- Game and UI: the view under the cursor gets clicks (mouse capture is released) while the
+    -- movement keys still reach the game. No widget takes keyboard focus.
+    local ok,reason
+    if cursor then ok,reason=pcall(function()lib:SetInputMode_GameAndUIEx(player,nil,0,false)end)
+    else ok,reason=pcall(function()lib:SetInputMode_GameOnly(player)end) end
+    if not ok then warn(cursor and 'SetInputMode_GameAndUIEx' or 'SetInputMode_GameOnly',reason) end
+end
 local function cursorFor(want,blocked)
+    lastBlocked=blocked
     if blocked then tookCursor=false;return end
-    if want==tookCursor or not valid(owner) then return end
+    if not valid(owner) then return end
     local player=owner:GetOwningPlayer()
     local lib=StaticFindObject('/Script/UMG.Default__WidgetBlueprintLibrary')
     if not valid(player) or not valid(lib) then return end
+    if want==tookCursor then
+        -- Holding the cursor: put it back if the game hid it.
+        if want then local shown=true;pcall(function()shown=player.bShowMouseCursor==true end);if not shown then showCursor(player,true) end end
+        return
+    end
     tookCursor=want
-    pcall(function()player.bShowMouseCursor=want end)
-    if want then pcall(function()lib:SetInputMode_GameAndUIEx(player,nil,0,false)end)
-    else pcall(function()lib:SetInputMode_GameOnly(player)end) end
+    applyInput(player,lib,want)
+end
+-- KovaaK's pause menu opened while the buy menu was up (or Escape just closed it): Menu.lua hides
+-- that menu again; this puts back the input the layer had (cursor for the buy menu, or the game).
+function M.swallowMenu()return wantCursor or swallow or tookCursor end
+function M.restoreInput()
+    if not valid(owner) then return end
+    local player=owner:GetOwningPlayer()
+    local lib=StaticFindObject('/Script/UMG.Default__WidgetBlueprintLibrary')
+    if not valid(player) or not valid(lib) then return end
+    tookCursor=wantCursor
+    applyInput(player,lib,wantCursor)
+end
+-- The scoreboard is display-only. While its key is held, an unbound Tab can make Slate move
+-- keyboard focus off the game viewport (focus navigation), and the game then drops its held keys
+-- and its mouse capture. Focus goes straight back to the viewport; nothing else changes.
+function M.keepGameFocus()
+    if not boardHeld or tookCursor or lastBlocked then return false end
+    local lib=StaticFindObject('/Script/UMG.Default__WidgetBlueprintLibrary')
+    if not valid(lib) then return false end
+    local ok,reason=pcall(function()lib:SetFocusToGameViewport()end)
+    if not ok then warn('SetFocusToGameViewport',reason) end
+    return ok
 end
 -- The service's "match is starting" request: an id per load attempt and when it began (ms).
 function M.playRequest()return playId,playSince end
@@ -132,7 +180,10 @@ function M.update(panelOpen,replayActive,menuVisible)
         local id,since=text:match('"play":{"id":"([^"]+)","since":(%d+)')
         if id then playId=id;playSince=tonumber(since) end
     end
-    cursorFor(text~=nil and text:find('"cursor":true',1,true)~=nil,panelOpen or replayActive or menuVisible==true)
+    wantCursor=text~=nil and text:find('"cursor":true',1,true)~=nil
+    swallow=text~=nil and text:find('"swallowMenu":true',1,true)~=nil
+    boardHeld=text~=nil and text:find('"boardFull":{',1,true)~=nil
+    cursorFor(wantCursor,panelOpen or replayActive or menuVisible==true)
     -- A notice, only the watcher badge ("2 watching: ..."), a mode HUD (tracking duel, combat),
     -- or the match standings (corner panel, or the scoreboard while its key is held).
     local active=text~=nil and #text<=16384 and (text:find('"active":true',1,true)~=nil or text:find('"badge":"',1,true)~=nil or text:find('"duel":{',1,true)~=nil or text:find('"combat":{',1,true)~=nil or text:find('"cs":{',1,true)~=nil or text:find('"board":{',1,true)~=nil or text:find('"boardFull":{',1,true)~=nil)
@@ -151,7 +202,8 @@ function M.update(panelOpen,replayActive,menuVisible)
     if not shown then shown=true;host:SetVisibility(3) end
     local full=text:find('"layout":"full"',1,true)~=nil
     if (full and layout~='full') or (not full and layout~='toast') then pcall(place,full) end
-    local cursor=menuVisible==true
+    -- A cursor is on screen: KovaaK's menus are up, this layer showed it (buy menu), or the game did.
+    local cursor=menuVisible==true or tookCursor
     if not cursor then pcall(function()cursor=owner:GetOwningPlayer().bShowMouseCursor==true end) end
     local wantInput=text:find('"interactive":true',1,true)~=nil and cursor
     if wantInput~=interactive then setInteractive(wantInput) end
