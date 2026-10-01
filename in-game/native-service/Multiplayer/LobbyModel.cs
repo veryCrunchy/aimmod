@@ -81,7 +81,11 @@ sealed record LobbySettings(
     bool RequireFire = false,
     int HalfRounds = 12,
     bool Overtime = true,
-    TournamentLock? Tournament = null)
+    TournamentLock? Tournament = null,
+    // CS: right-mouse zoom (AdsZooms: off, scoped weapons only as in CS2, or every gun) and the zoomed
+    // sensitivity ratio (KovaaK's ADSZoomSensFactor; 1 keeps the hip-fire sensitivity).
+    string AdsZoom = AdsZooms.Cs,
+    double AdsSensitivity = 1)
 {
     public const int MinPlayers = 2, MaxPlayerLimit = 10, MaxSpectators = 4;
     [JsonIgnore] public ProfileChoice WeaponProfile => Weapon ?? ProfileChoice.Default;
@@ -94,7 +98,13 @@ sealed record LobbySettings(
     [JsonIgnore] public int? TotalRounds => Mode switch { LobbyModes.Race or LobbyModes.Rounds or LobbyModes.Tracking => Rounds, LobbyModes.Deathmatch or LobbyModes.Vampiric or LobbyModes.Instagib or LobbyModes.TeamDeathmatch => 1, LobbyModes.Cs => HalfRounds * 2, _ => null };
     // Values that change what people play. Changing any of them clears ready states.
     [JsonIgnore] public string PlayKey => string.Join('|', Mode, Scenario?.Hash, MapOverride?.Hash, Rounds, FirstTo, TimeLimit,
-        WeaponProfile, MovementProfile, CharacterProfile, TargetSpeed, TargetSize, FragLimit, Lifesteal, RequireFire, HalfRounds, Overtime, Tournament?.MatchId, Tournament?.Game, Tournament?.Seed);
+        WeaponProfile, MovementProfile, CharacterProfile, TargetSpeed, TargetSize, FragLimit, Lifesteal, RequireFire, HalfRounds, Overtime, Tournament?.MatchId, Tournament?.Game, Tournament?.Seed, AdsZoom, AdsSensitivity);
+}
+
+static class AdsZooms
+{
+    public const string Off = "off", Cs = "cs", All = "all";
+    public static readonly string[] Values = [Off, Cs, All];
 }
 
 // A lobby created for a tournament match (AimMod Hub). Its settings follow the
@@ -163,7 +173,7 @@ static class LobbyRules
 {
     public const int MaxName = 32, MaxChat = 200, MaxContentName = 128;
     static readonly HashSet<string> Keys = ["mode", "scenario", "mapOverride", "maxPlayers", "spectators", "rounds", "firstTo",
-        "timeLimit", "weapon", "movement", "character", "targetSpeed", "targetSize", "privacy", "countdown", "lateJoin", "autoStart", "voting", "fragLimit", "lifesteal", "requireFire", "halfRounds", "overtime"];
+        "timeLimit", "weapon", "movement", "character", "targetSpeed", "targetSize", "privacy", "countdown", "lateJoin", "autoStart", "voting", "fragLimit", "lifesteal", "requireFire", "halfRounds", "overtime", "adsZoom", "adsSensitivity"];
 
     // A member id AimModCore accepts in play-state.tsv: [A-Za-z0-9_-]{1,64}.
     public static bool IsStreamSafe(string? id) => id is { Length: > 0 and <= 64 } && id.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_');
@@ -254,6 +264,8 @@ static class LobbyRules
                     if (Number() is not { } frags) return (null, Bad("Frag limit must be a number.")); next = next with { FragLimit = (int)Clamp(frags, 1, 100, 1) }; break;
                 case "halfRounds": if (Number() is not { } half) return (null, Bad("Rounds per half must be a number.")); next = next with { HalfRounds = (int)Clamp(half, 6, 15, 1) }; break;
                 case "overtime": if (Flag() is not { } ot) return (null, Bad("Overtime must be on or off.")); next = next with { Overtime = ot }; break;
+                case "adsZoom": if (Text() is not { } zoom || !AdsZooms.Values.Contains(zoom)) return (null, Bad("ADS zoom is off, CS-style or all weapons.")); next = next with { AdsZoom = zoom }; break;
+                case "adsSensitivity": if (Number() is not { } adsSens) return (null, Bad("Zoom sensitivity must be a number.")); next = next with { AdsSensitivity = Clamp(adsSens, 0.2, 2, 0.05) }; break;
                 case "requireFire": if (Flag() is not { } fire) return (null, Bad("Require fire must be on or off.")); next = next with { RequireFire = fire }; break;
                 case "lifesteal": if (Number() is not { } steal) return (null, Bad("Lifesteal must be a percentage.")); next = next with { Lifesteal = (int)Clamp(steal, 0, 200, 5) }; break;
             }
@@ -324,6 +336,7 @@ static class LobbyRules
     public static bool Plausible(LobbySettings s) =>
         LobbyModes.All.Contains(s.Mode) && LobbyPrivacy.All.Contains(s.Privacy)
         && s.MaxPlayers is >= LobbySettings.MinPlayers and <= LobbySettings.MaxPlayerLimit && s.MaxPlayers <= LobbyModes.MaxPlayers(s.Mode) && s.HalfRounds is >= 6 and <= 15
+        && AdsZooms.Values.Contains(s.AdsZoom) && s.AdsSensitivity is >= 0.2 and <= 2
         && s.Rounds is >= 1 and <= 10 && s.FirstTo is >= 1 and <= 7
         && (s.Tournament is null || s.Tournament is { Seed: >= 0 and <= uint.MaxValue, Game: >= 0 and < 64, Players.Count: <= 2 } t && t.MatchId.Length is > 0 and <= 32 && t.TournamentId.Length is > 0 and <= 64)
         && s.TimeLimit is null or (>= 10 and <= 600) && s.FragLimit is null or (>= 1 and <= 100) && s.Lifesteal is >= 0 and <= 200 && s.TargetSpeed is >= 0.25 and <= 3 && s.TargetSize is >= 0.25 and <= 2 && s.Countdown is >= 3 and <= 10

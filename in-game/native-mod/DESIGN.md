@@ -640,6 +640,13 @@ bomb	<dropped|planted|defused>	<x>	<y>	<z>	<explodes at, local unix ms, 0>	<defu
     component, tinted through `BasicShapeMaterial`'s `Color`) are attached to
     the character's `FirstPersonCamera` (`cs::InHand`) and shown while slot 2
     or 3 is in hand. Built once per character, hidden, never destroyed.
+  - Knife: a slash when the knife's own shot counter moves, a stab on
+    `RightMouseButton` (at most once a second, `cs::StabInterval`); the knife
+    model plays `cs::KnifePose` (alternating slashes, a forward stab). A stab
+    is published as a `self-shots.tsv` shot in slot 4 (`cs::StabSlot`) on the
+    camera ray. The knife's and bomb's `ShootSound`/`ShootPressedSound`/
+    `ShootReleasedSound` in the weapon settings are emptied in memory (no
+    gunshot); logged once.
   - In the world: a `StaticMeshActor` with the bomb model (no collision) at
     the `bomb` line's position, on the floor (the local player's eye height
     below the carrier's eye), the same steady yaw on every machine. Planted,

@@ -6,6 +6,7 @@
 #include "World.hpp"
 
 #include <aimmod/Formats.hpp>
+#include <aimmod/CsGear.hpp>
 #include <aimmod/GameCommand.hpp>
 
 #include <Unreal/CoreUObject/UObject/UnrealType.hpp>
@@ -13,6 +14,7 @@
 #include <Unreal/NameTypes.hpp>
 #include <Unreal/Property/FBoolProperty.hpp>
 #include <Unreal/Property/FStructProperty.hpp>
+#include <Unreal/Property/FStrProperty.hpp>
 #include <Unreal/UObjectGlobals.hpp>
 #include <Unreal/UClass.hpp>
 #include <Unreal/UObject.hpp>
@@ -281,6 +283,19 @@ namespace aimmod
         }
         UObject* player = m_scene.Player();
         UObject* character = player ? m_b.myCharacter.Object(player) : nullptr;
+        // CS: the knife's right-mouse stab has no weapon of its own; it is claimed as slot 4 on the camera ray.
+        if (m_gear.TakeStab() && character)
+        {
+            ShotRecord r;
+            if (AimRay(player, character, poseId, r))
+            {
+                r.unixMs = UnixMs();
+                r.sequence = ++m_shotSequence;
+                r.slot = cs::StabSlot;
+                m_shots.push_back(r);
+                PublishShots(poseNames);
+            }
+        }
         std::vector<WeaponCount> counts;
         if (!character || !ReadWeaponCounters(character, counts))
         {
@@ -353,6 +368,41 @@ namespace aimmod
         }
         for (std::size_t i = 0; i < counts.size(); ++i) m_weapons[i] = {counts[i].weapon, counts[i].shots, counts[i].hits};
         if (!view) return;
+        PublishShots(poseNames);
+    }
+
+    bool MatchPlay::AimRay(UObject* player, UObject* character, const PoseId& poseId, ShotRecord& r)
+    {
+        UObject* camera = m_b.cameraManager.Object(player);
+        double rotation[3];
+        if (!camera || !m_b.cameraLocation.Vector(camera, r.origin) || !m_b.cameraRotation.Vector(camera, rotation)) return false;
+        const double pitch = rotation[0] * DegToRad, yaw = rotation[1] * DegToRad;
+        r.direction[0] = std::cos(pitch) * std::cos(yaw), r.direction[1] = std::cos(pitch) * std::sin(yaw), r.direction[2] = std::sin(pitch);
+        double best = 0;
+        std::vector<UObject*> actors;
+        if (UObject* state = m_scene.GameState(); state && m_b.characters.Objects(state, actors, 33))
+            for (UObject* actor : actors)
+            {
+                if (actor == character) continue;
+                if (auto hidden = m_b.hidden.Bool(actor); hidden && *hidden) continue;
+                UObject* capsule = m_b.capsule.Object(actor);
+                auto radius = capsule ? m_b.capsuleRadius.Number(capsule) : std::nullopt;
+                auto half = capsule ? m_b.capsuleHalfHeight.Number(capsule) : std::nullopt;
+                double center[3];
+                if (!radius || !half || *radius <= 0 || *half < *radius || !m_b.actorLocation.Vector(actor, center)) continue;
+                auto t = RayCapsule(r.origin, r.direction, center, *radius, *half);
+                if (!t || (r.target && *t >= best)) continue;
+                best = *t;
+                r.target = poseId(actor);
+                const double point[3] = {r.origin[0] + r.direction[0] * *t, r.origin[1] + r.direction[1] * *t, r.origin[2] + r.direction[2] * *t};
+                r.headshot = IsHeadHit(point, center, *half);
+            }
+        r.headshot = r.target != 0 && r.headshot;
+        return true;
+    }
+
+    void MatchPlay::PublishShots(const std::unordered_map<std::uint32_t, std::string>& poseNames)
+    {
         const std::int64_t cutoff = UnixMs() - ShotWindowMs;
         while (!m_shots.empty() && (m_shots.size() > ShotWindow || m_shots.front().unixMs < cutoff)) m_shots.pop_front();
 
@@ -659,10 +709,27 @@ namespace aimmod
         UObject* handler = Describe(character).weaponHandler.Object(character);
         std::vector<UObject*> weapons;
         if (!handler || !Describe(handler).weapons.Objects(handler, weapons, 8)) return;
-        int cleared = 0;
-        for (UObject* weapon : weapons)
+        int cleared = 0, silenced = 0;
+        for (std::size_t slot = 0; slot < weapons.size(); ++slot)
         {
+            UObject* weapon = weapons[slot];
             if (!weapon || !reflect::Alive(weapon)) continue;
+            // CS: the knife and the bomb make no gunshot (the service plays the knife's own sounds). The
+            // user's shot sounds live in the weapon settings, so their names are emptied in memory.
+            const bool quiet = m_csLoadout && (slot == cs::KnifeSlot || slot == cs::BombSlot);
+            for (const wchar_t* field : {STR("WeaponSettingsNative"), STR("ADSWeaponSettingsNative")})
+            {
+                auto* settings = quiet ? RC::Unreal::CastField<RC::Unreal::FStructProperty>(reflect::PropertyOf(weapon->GetClassPrivate(), field)) : nullptr;
+                for (const wchar_t* sound : {STR("ShootSound"), STR("ShootPressedSound"), STR("ShootReleasedSound")})
+                {
+                    auto* p = settings ? RC::Unreal::CastField<RC::Unreal::FStrProperty>(reflect::PropertyOf(settings->GetStruct(), sound)) : nullptr;
+                    if (!p) continue;
+                    auto* text = reinterpret_cast<game::ArrayView*>(reflect::At(weapon, settings) + p->GetOffset_Internal());
+                    if (text->num <= 1) continue;
+                    text->num = 0; // empty; the buffer stays the engine's
+                    ++silenced;
+                }
+            }
             for (const wchar_t* field : {STR("WeaponSettingsNative"), STR("ADSWeaponSettingsNative")})
             {
                 auto* settings = RC::Unreal::CastField<RC::Unreal::FStructProperty>(reflect::PropertyOf(weapon->GetClassPrivate(), field));
@@ -673,6 +740,11 @@ namespace aimmod
                 hidden->SetPropertyValue(at, false);
                 ++cleared;
             }
+        }
+        if (silenced && !m_knifeQuietLogged)
+        {
+            m_knifeQuietLogged = true;
+            Log("match play: no gunshot for the knife and the bomb (" + std::to_string(silenced) + " shot sound(s) emptied in memory)");
         }
         if (cleared == 0) return;
         // Show the arms and the weapon in hand again (the game hid them with the old setting).

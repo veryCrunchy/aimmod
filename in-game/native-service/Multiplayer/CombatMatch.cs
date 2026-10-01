@@ -13,7 +13,10 @@ namespace AimMod.InGame.Multiplayer;
 // The weapon each mode plays with. The generated arena ships exactly this
 // profile, so the host knows the fire rate and damage without trusting a client.
 // Range: the reach in cm (a knife), 0 for hitscan across the map.
-sealed record CombatWeapon(string Name, double Damage, double HeadMultiplier, double TimeBetweenShots, bool FullyAuto, double KnockbackVertical = 0, double Range = 0)
+// FollowUpDamage: what a hit does within FollowUpMs of the same shooter's last hit with this weapon
+// (the CS knife: 40, then 25 for slashes in quick succession); 0 for none.
+sealed record CombatWeapon(string Name, double Damage, double HeadMultiplier, double TimeBetweenShots, bool FullyAuto, double KnockbackVertical = 0, double Range = 0,
+    double FollowUpDamage = 0, long FollowUpMs = 0)
 {
     // Reach the host allows past Range: the 200 ms rewind at a run.
     public const double RangeToleranceCm = 60;
@@ -93,6 +96,7 @@ sealed class CombatMatch
         public required string Id;
         public double Health = CombatRules.MaxHealth; public bool Alive = true; public int Frags, Deaths, Claims, Rejected, Team;
         public long? RespawnAt; public long ProtectedUntil; public long LastShot = long.MinValue, LastSeq = -1; public long DecayAt;
+        public string? LastWeapon; // the weapon of the last accepted hit (follow-up damage)
         public readonly List<TrackSample> Track = [];
     }
     readonly Dictionary<string, Player> players = new();
@@ -252,12 +256,14 @@ sealed class CombatMatch
         // A knife reaches only so far.
         if (weapon.Range > 0 && !TrackGeometry.HitsCapsule(c.X, c.Y, c.Z, dx, dy, dz, weapon.RayLength, cx, cy, cz, radius, half)) return Reject("range");
         if (c.T < victim.ProtectedUntil) return Reject("spawn-protected");
+        var followUp = weapon.FollowUpDamage > 0 && shooter.LastWeapon == weapon.Name && shooter.LastShot != long.MinValue && c.T - shooter.LastShot <= weapon.FollowUpMs;
         shooter.LastShot = c.T;
+        shooter.LastWeapon = weapon.Name;
         shooter.ProtectedUntil = Math.Min(shooter.ProtectedUntil, c.T); // firing ends your own spawn protection
         // Headshot: the ray passes through the top sphere of the hull (radius 25 cm).
         var headR = Math.Min(25, radius);
         var head = TrackGeometry.HitsCapsule(c.X, c.Y, c.Z, dx, dy, dz, TrackingRound.RayLengthCm, cx, cy, cz + half - headR, headR, headR);
-        var raw = weapon.Damage * (head ? weapon.HeadMultiplier : 1);
+        var raw = (followUp ? weapon.FollowUpDamage : weapon.Damage) * (head ? weapon.HeadMultiplier : 1);
         var damage = Math.Min(victim.Health, DamageModel is null ? raw : DamageModel(victim.Id, raw, head, weapon));
         victim.Health -= damage;
         double? healed = null;
@@ -381,6 +387,8 @@ sealed class ShotFeed(string outputFolder)
     }
 
     public sealed record Shot(long UnixMs, long Seq, double X, double Y, double Z, double Pitch, double Yaw, int Weapon, int Target, bool Head);
+    // Every shot new in the last Take, hits and misses (the knife's sounds).
+    public List<Shot> Fresh { get; } = [];
 
     // AimModCore's self-shots.tsv (native-mod/DESIGN.md "Match play"):
     //   AIMMOD_SHOTS_1\t<publish seq>\t<session>
@@ -461,6 +469,7 @@ sealed class ShotFeed(string outputFolder)
 
     public IReadOnlyList<HitClaim> Take((long Sequence, string Session, IReadOnlyList<Shot> Shots)? parsed, string matchId, int round, long offsetMs, Func<int, long, TrackSeen?> targetAt)
     {
+        Fresh.Clear();
         if (parsed is not { } p) return [];
         // A new AimModCore session restarts its shot sequence.
         if (p.Session != session) { session = p.Session; lastSequence = -1; lastShot = -1; }
@@ -471,6 +480,7 @@ sealed class ShotFeed(string outputFolder)
         {
             if (s.Seq <= lastShot) continue;
             lastShot = s.Seq;
+            Fresh.Add(s);
             if (s.Target == 0) continue;
             var t = targetAt(s.Target, s.UnixMs + offsetMs);
             claims.Add(new HitClaim(matchId, round, s.Seq, s.UnixMs + offsetMs, s.X, s.Y, s.Z, s.Pitch, s.Yaw, s.Head, t?.X, t?.Y, t?.Z, t?.Radius, t?.HalfHeight, s.Weapon));

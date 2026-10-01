@@ -13,6 +13,8 @@ namespace aimmod::cs
 {
     // KovaaK's Weapon1..Weapon4 keys, numbered from 0.
     constexpr int PrimarySlot = 0, PistolSlot = 1, KnifeSlot = 2, BombSlot = 3, Slots = 4;
+    // The knife's right-mouse stab, claimed as this slot (the host knows it as the stab).
+    constexpr int StabSlot = 4;
 
     // The four CS slots' weapon profiles ("" or "-": empty).
     struct Loadout
@@ -78,4 +80,21 @@ namespace aimmod::cs
         double offset[3], rotation[3];
     };
     Hold InHand(int slot);
+
+    // The knife's attacks, drawn by moving AimMod's knife model (KovaaK's has no melee animation for
+    // the first-person arms): slashes alternate right-to-left and left-to-right, about 0.25 s each with a
+    // quick return; the right-mouse stab thrusts forward, about 0.38 s, at most once a second (CS2).
+    enum class KnifeMove
+    {
+        None,
+        SlashRight, // the blade sweeps from the right to the left
+        SlashLeft,
+        Stab,
+    };
+    constexpr double StabInterval = 1.0;
+    double KnifeMoveSeconds(KnifeMove move);
+    // The change from the rest pose `t` seconds into a move (zero before, after and for None).
+    Hold KnifePose(KnifeMove move, double t);
+    // The slash after `previous` (alternating; a stab or nothing starts with a right slash).
+    KnifeMove NextSlash(KnifeMove previous);
 } // namespace aimmod::cs

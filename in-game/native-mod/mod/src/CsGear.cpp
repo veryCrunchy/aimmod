@@ -178,7 +178,46 @@ namespace aimmod
             }
         }
         HandModels(character, hand);
+        KnifeAttacks(now, player, character, hand);
         WorldBomb(now, player, character, round.bomb);
+    }
+
+    // A slash when the knife's own shot counter moves (left mouse, KovaaK's fire), a stab on the right
+    // mouse at most once a second; the knife model plays the move (cs::KnifePose).
+    void CsGear::KnifeAttacks(double now, UObject* player, UObject* character, int hand)
+    {
+        std::vector<game::WeaponCount> counts;
+        std::optional<double> shots;
+        if (game::ReadWeaponCounters(character, counts))
+            for (const auto& c : counts)
+                if (c.slot == cs::KnifeSlot) shots = c.shots;
+        if (hand == cs::KnifeSlot && m_loadout.Has(cs::KnifeSlot))
+        {
+            if (shots && m_knifeShots && *shots > *m_knifeShots)
+            {
+                m_move = m_lastSlash = cs::NextSlash(m_lastSlash);
+                m_moveAt = m_lastAttack = now;
+            }
+            else if (KeyPressed(player, "RightMouseButton") && now - m_lastAttack >= cs::StabInterval)
+            {
+                m_move = cs::KnifeMove::Stab;
+                m_moveAt = m_lastAttack = now;
+                m_lastSlash = cs::KnifeMove::None;
+                m_stabRequested = true;
+            }
+        }
+        m_knifeShots = shots;
+        UObject* knife = m_knife.Get();
+        if (!knife || !Alive(knife)) return;
+        const bool moving = m_move != cs::KnifeMove::None && now - m_moveAt < cs::KnifeMoveSeconds(m_move);
+        if (!moving && !m_posed) return;
+        const cs::Hold rest = cs::InHand(cs::KnifeSlot);
+        const cs::Hold delta = moving ? cs::KnifePose(m_move, now - m_moveAt) : cs::Hold{};
+        double offset[3], rotation[3];
+        for (int i = 0; i < 3; ++i) offset[i] = rest.offset[i] + delta.offset[i], rotation[i] = rest.rotation[i] + delta.rotation[i];
+        Relative(knife, offset, rotation, nullptr);
+        m_posed = moving;
+        if (!moving) m_move = cs::KnifeMove::None;
     }
 
     UObject* CsGear::BuildModel(UObject* owner, UObject* parent, const std::vector<cs::Part>& parts, std::vector<FWeakObjectPtr>* lights)

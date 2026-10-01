@@ -47,6 +47,9 @@ namespace aimmod
 
     private:
         void TickShots(double now, const PoseId& poseId, const std::unordered_map<std::uint32_t, std::string>& poseNames);
+        // The camera ray and the nearest drawn target it meets (origin, direction, target, headshot).
+        bool AimRay(game::UObject* player, game::UObject* character, const PoseId& poseId, ShotRecord& shot);
+        void PublishShots(const std::unordered_map<std::uint32_t, std::string>& poseNames);
         void TickPlayState(double now, const std::string& scenario, bool inChallenge, bool loading);
         bool BindCharacter(game::UObject* character);
         void Release(const char* why);
@@ -62,7 +65,7 @@ namespace aimmod
         // In AimMod matches the weapon is shown in first person even with KovaaK's Show Weapon off.
         void ShowWeapons(double now, game::UObject* character);
         double m_nextShowCheck{};
-        bool m_weaponShownLogged{};
+        bool m_weaponShownLogged{}, m_knifeQuietLogged{};
         // Restart lock: while a fresh round state names the scenario on screen (any match, not
         // only AimMod arenas), KovaaK's restart bind (ResetSession) is renamed in the input
         // settings and the pause menu's restart button is collapsed; both come back after.
