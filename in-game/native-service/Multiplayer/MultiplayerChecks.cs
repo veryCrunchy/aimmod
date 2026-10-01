@@ -1479,7 +1479,7 @@ static partial class MultiplayerChecks
         var looks = JsonSerializer.SerializeToElement(service.LooksView(), Protocol.Json);
         var models = looks.GetProperty("models").EnumerateArray().ToArray();
         Check(looks.GetProperty("selected").GetString() == "meso-genji" && looks.GetProperty("model").GetString() == "Meso" && looks.GetProperty("default").GetString() == AvatarProfiles.Default
-            && models.Select(m => m.GetProperty("id").GetString()).SequenceEqual(["Meso", "Endo"])
+            && models.Select(m => m.GetProperty("id").GetString()).SequenceEqual(AvatarProfiles.All.Select(a => a.Model).Distinct())
             && models.SelectMany(m => m.GetProperty("skins").EnumerateArray().Select(k => k.GetProperty("id").GetString())).SequenceEqual(AvatarProfiles.All.Select(a => a.Id)),
             "The Look tab lists every offered profile once, by model, and shows the saved one");
         Check(!service.Act("avatar", J(new { avatar = "meso-locked-skin" })).Ok && JsonSerializer.SerializeToElement(service.LooksView(), Protocol.Json).GetProperty("selected").GetString() == "meso-genji",
