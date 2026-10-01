@@ -2,6 +2,7 @@ local M = {}
 local Workspace = require('Workspace')
 local ReplayMainBridge = require('ReplayMainBridge')
 local LiveHUD = require('LiveHUD')
+local Notify = require('Notify')
 local Telemetry = require('Telemetry')
 local menu, header, frame, entry, texture
 local opened = false
@@ -38,6 +39,7 @@ function M.attach()
     menu=live('PauseMenu_C'); header=live('PauseBox_C')
     if not valid(menu) or not valid(header) then return false end
     LiveHUD.attach(menu)
+    Notify.attach(menu)
     local root=menu.WidgetTree.RootWidget
     if not root:IsA('/Script/UMG.CanvasPanel') then return false end
     -- Build the replacement before removing any existing owned workspace.
@@ -133,7 +135,17 @@ function M.start()
         else
             local ok,reason=pcall(function()
                 if Workspace.closeRequested() then show(false) end
+                -- Open a page for the service (a Steam join): only in the menu, never
+                -- over a running scenario or replay; the request waits until then.
+                local page=Workspace.openRequest()
+                if page and menu:IsVisible() and not ReplayMainBridge.active() then
+                    local snapshot=Telemetry.liveSnapshot()
+                    if not (type(snapshot)=='table' and snapshot.active==true) then
+                        Workspace.consumeOpenRequest(); show(true); Workspace.openPage(page)
+                    end
+                end
                 Workspace.update(opened and menu:IsVisible())
+                Workspace.deliverPage()
             end)
             if not ok and reason~=lastError then lastError=reason; log(reason) end
         end
@@ -146,6 +158,11 @@ function M.start()
                 ReplayMainBridge.active(),Telemetry.liveSnapshot())
         end)
         if not ok then pcall(LiveHUD.hide) end
+        -- Multiplayer notices, shown while the AimMod panel itself is not on screen.
+        local noticeOk=pcall(function()
+            Notify.update(opened and valid(menu) and menu:IsVisible(),ReplayMainBridge.active())
+        end)
+        if not noticeOk then pcall(Notify.hide) end
     end)
 end
 return M
