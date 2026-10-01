@@ -336,7 +336,8 @@
       var b=null;
       if(inLobby&&f.status!=='aimmod-lobby')b=button('Invite',function(){act('invite-friend',{friend:f.id},function(ok){if(ok)toast('Invite sent to '+safe(f.name,'your friend')+'.');});},'compact');
       else if(!inLobby&&f.joinable)b=button('Join',function(){act('join-friend',{friend:f.id});},'compact primary');
-      if(f.spectatable&&!(view.watch&&view.watch.peer===f.id)){var spec=button('Spectate',function(){act('watch',{friend:f.id},function(ok){if(ok)toast('Asking '+safe(f.name,'your friend')+' to let you watch…');});},'compact quiet');row.appendChild(actions(spec));}
+      // Spectating would leave your own lobby, so the invite list only invites.
+      if(!inLobby&&f.spectatable&&!(view.watch&&view.watch.peer===f.id)){var spec=button('Spectate',function(){act('watch',{friend:f.id},function(ok){if(ok)toast('Asking '+safe(f.name,'your friend')+' to let you watch…');});},'compact quiet');row.appendChild(actions(spec));}
       if(b)row.appendChild(actions(b));
       list.appendChild(row);
     });
@@ -552,20 +553,23 @@
     page.appendChild(lobbyHead(lobby));
     var row=node('div','mp-row');page.appendChild(row);
     var main=node('div','mp-col mp-main'),side=node('div','mp-col mp-side');row.appendChild(main);row.appendChild(side);
+    // Main column: what you act on (download, Ready / Start, players, chat). Ready and
+    // Start sit right under the header so they stay above the fold at 720p.
     var download=downloadPanel(lobby);if(download)main.appendChild(download);
-    main.appendChild(playersPanel(lobby));
     main.appendChild(startBar(lobby));
+    main.appendChild(playersPanel(lobby));
+    main.appendChild(chatPanel(lobby));
     if(view.simulation)main.appendChild(devPanel(true));
+    // Side column: who's watching, then the match, then extras. While the host is alone,
+    // inviting comes first.
     if((view.watchers&&view.watchers.length)||(view.watchAsks&&view.watchAsks.length))side.appendChild(watchersPanel());
-    side.appendChild(lookPanel(lobby));
-    var sug=suggestionsPanel(lobby);if(sug)side.appendChild(sug);
-    side.appendChild(summaryCard(lobby));
-    // While the host is alone, inviting matters more than chat.
     var invite=view.friends.items&&view.friends.items.length?friendsPanel(true):null;
     var alone=lobby.members.length<2;
     if(alone&&invite)side.appendChild(invite);
-    side.appendChild(chatPanel(lobby));
+    side.appendChild(summaryCard(lobby));
+    var sug=suggestionsPanel(lobby);if(sug)side.appendChild(sug);
     if(!alone&&invite)side.appendChild(invite);
+    side.appendChild(lookPanel(lobby));
   }
   function connectionBanners(page,lobby){
     lobby.members.forEach(function(m){if(m.connection!=='reconnecting')return;page.appendChild(banner('warn',m.id===lobby.hostId?safe(m.name)+' (host) lost connection. If they aren’t back in 10 seconds, the next player becomes host.':safe(m.name)+' lost connection. Waiting up to 30 seconds for them to come back.'));});

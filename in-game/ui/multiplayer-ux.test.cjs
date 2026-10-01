@@ -37,3 +37,12 @@ test('layout: the open-slot circle resets the shared .empty padding, mode text i
   assert.doesNotMatch(css,/\.mp-mode span\{[^}]*(;|\{)height:/,'mode descriptions grow instead of being cut');
   assert.match(rule('.mp-setting'),/flex-wrap:wrap/);assert.match(rule('.mp-setting>.segmented'),/flex-wrap:wrap/);
 });
+test('lobby: Ready / Start come before the player list, chat sits in the main column and the look picker last',()=>{
+  const s=setup().open(view({lobby:lobby()}));
+  const [start,players,chat]=order(s,['mp-start','mp-players','mp-chat']);
+  assert.ok(start>=0&&start<players&&players<chat,'start bar, then players, then chat');
+  const main=s.find('mp-main'),side=s.find('mp-side');
+  assert.ok(main.children.some(c=>/mp-chat/.test(c.className)),'chat is in the main column');
+  assert.match(side.children[side.children.length-1].className,/mp-look/,'your look is the last side panel');
+  assert.ok(!s.button('Spectate'),'the lobby invite list never offers Spectate');assert.ok(s.button('Invite'));
+});
