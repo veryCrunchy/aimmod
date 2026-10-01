@@ -93,7 +93,7 @@ function M.update(panelOpen,replayActive)
     -- A few hundred bytes, read on every 100 ms tick so countdowns stay in step.
     text=read('multiplayer-notify.json',4097)
     -- A notice, only the watcher badge ("2 watching: ..."), or a mode HUD (tracking duel, combat).
-    local active=text~=nil and #text<=4096 and (text:find('"active":true',1,true)~=nil or text:find('"badge":"',1,true)~=nil or text:find('"duel":{',1,true)~=nil or text:find('"combat":{',1,true)~=nil)
+    local active=text~=nil and #text<=4096 and (text:find('"active":true',1,true)~=nil or text:find('"badge":"',1,true)~=nil or text:find('"duel":{',1,true)~=nil or text:find('"combat":{',1,true)~=nil or text:find('"cs":{',1,true)~=nil)
     if not active or panelOpen or replayActive then M.hide();lastId=nil;lastCount=nil;return end
     local id=text:match('"id":"([^"]+)"')
     local sound=text:match('"sound":"(%a+)"')

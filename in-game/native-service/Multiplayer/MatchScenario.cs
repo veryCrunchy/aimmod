@@ -56,20 +56,20 @@ static partial class MatchScenario
 
     // Anything that changes what is played means a generated scenario.
     public static bool Needed(LobbySettings s) =>
-        s.Mode == LobbyModes.Tracking || LobbyModes.Combat(s.Mode) || s.MapOverride is not null || s.TimeLimit is not null || s.TargetSpeed != 1 || s.TargetSize != 1
+        s.Mode == LobbyModes.Tracking || LobbyModes.Shooting(s.Mode) || s.MapOverride is not null || s.TimeLimit is not null || s.TargetSpeed != 1 || s.TargetSize != 1
         || s.WeaponProfile.Preset != ProfilePresets.Default || s.MovementProfile.Preset != ProfilePresets.Default || s.CharacterProfile.Preset != ProfilePresets.Default;
 
     // A pure function of the lobby settings, which carry every input's content hash.
     public static string Key(LobbySettings s)
     {
-        var parts = new object?[] { GeneratorVersion, s.Mode == LobbyModes.Tracking || LobbyModes.Combat(s.Mode) ? s.Mode : null, s.Scenario?.Hash, s.Scenario?.MapHash, s.MapOverride?.Hash, s.TimeLimit,
+        var parts = new object?[] { GeneratorVersion, s.Mode == LobbyModes.Tracking || LobbyModes.Shooting(s.Mode) ? s.Mode : null, s.Scenario?.Hash, s.Scenario?.MapHash, s.MapOverride?.Hash, s.TimeLimit,
             Num(s.TargetSpeed), Num(s.TargetSize), s.WeaponProfile.Preset, s.WeaponProfile.Hash, s.MovementProfile.Preset, s.CharacterProfile.Preset, s.CharacterProfile.Hash };
         return ContentLibrary.TextHash(JsonSerializer.Serialize(parts));
     }
 
     public static string Name(LobbySettings s)
     {
-        var label = s.Mode switch { LobbyModes.Tracking => "Tracking duel", LobbyModes.Deathmatch => "Deathmatch", LobbyModes.Vampiric => "Vampiric 1v1", LobbyModes.Instagib => "Instagib", _ => null }
+        var label = s.Mode switch { LobbyModes.Tracking => "Tracking duel", LobbyModes.Deathmatch => "Deathmatch", LobbyModes.Vampiric => "Vampiric 1v1", LobbyModes.Instagib => "Instagib", LobbyModes.TeamDeathmatch => "Team deathmatch", LobbyModes.Cs => "CS competitive", _ => null }
             ?? MatchPresets.Movement.FirstOrDefault(m => m.Id == s.MovementProfile.Preset)?.Label
             ?? MatchPresets.Weapons.FirstOrDefault(w => w.Id == s.WeaponProfile.Preset)?.Label
             ?? (s.CharacterProfile.Preset == ProfilePresets.Custom || s.WeaponProfile.Preset == ProfilePresets.Custom ? "Custom"
@@ -204,6 +204,7 @@ static partial class MatchScenario
                 sections.Add(new Section { Title = "[Character Profile]", Lines = AvatarProfiles.Lines(look).ToList() });
         if (s.Mode == LobbyModes.Tracking) TrackingDuelScenario(header, sections, s);
         else if (LobbyModes.Combat(s.Mode)) CombatArena(header, sections, s, player);
+        else if (s.Mode == LobbyModes.Cs) CsArena(header, sections, player);
         // Canonical layout: header, then each section after one blank line.
         var output = new StringBuilder();
         foreach (var line in header.Lines.Where(l => l.Trim().Length > 0)) output.Append(line).Append(nl);
@@ -320,6 +321,28 @@ static partial class MatchScenario
         player.Set("RespawnInvulnTime", "0.0");
         var respawn = Num(CombatRules.RespawnMs(s.Mode) / 1000.0);
         player.Set("MinRespawnDelay", respawn); player.Set("MaxRespawnDelay", respawn);
+    }
+
+    // CS arena: every buyable weapon profile is in the scenario, so AimModCore can switch
+    // slot 0 (primary) and 1 (pistol) to what the host's loadout says each round.
+    static void CsArena(Section header, List<Section> sections, Section? player)
+    {
+        header.Set("Timelimit", Num(3 * 3600));
+        header.Set("InvinciblePlayer", "false");
+        header.Set("PlayerMaxLives", "0");
+        HelperBot(header, sections);
+        foreach (var w in CsRules.Weapons)
+        {
+            sections.RemoveAll(x => x.Title == "[Weapon Profile]" && x.Get("Name") == w.Combat.Name);
+            sections.Add(new Section { Title = "[Weapon Profile]", Lines = WeaponLines(w.Combat) });
+        }
+        if (player is null) return;
+        player.Set("WeaponProfileNames", CsRules.Weapons[1].Combat.Name + ";" + CsRules.Weapons[0].Combat.Name + ";;;;;;");
+        player.Set("MaxHealth", Num(CsRules.MaxHealth));
+        player.Set("LifeStealPercent", "0.0"); player.Set("HealthRegainedonkill", "0.0"); player.Set("HealthRegenPerSec", "0.0");
+        player.Set("RespawnInvulnTime", "0.0");
+        // Dead until the next round: AimModCore respawns the player when the host starts it.
+        player.Set("MinRespawnDelay", "600.0"); player.Set("MaxRespawnDelay", "600.0");
     }
 
     static List<string> WeaponLines(CombatWeapon w) =>

@@ -2,26 +2,40 @@ using System.Text.Json;
 
 namespace AimMod.InGame.Multiplayer;
 
-// Tracking duel (in-game/docs/game-modes.md 6.3): alternating rounds, one
-// player tracks (attacker) while the other dodges. The score is time on
-// target: the share of the round in which the attacker's camera ray goes
-// through the dodger's avatar hull.
+// Tracking duel (in-game/docs/game-modes.md 6.3): simultaneous rounds. Both
+// players track each other at once while trying not to be tracked. Each
+// player's score is time on target: the share of the round in which their
+// camera ray goes through the other player's avatar hull. The higher share
+// wins the round.
 //
 // Data, all on the host clock (unix ms):
 //  - every player streams its own camera samples (AimModCore self-pose.tsv,
-//    60 Hz): the dodger's give its true position, the attacker's its view;
-//  - the attacker also streams "seen" rows: where its game drew the avatars
-//    (self-pose.tsv target rows), which is what it actually aimed at.
-// The host scores the attacker's rays against the hull it saw, favouring the
-// shooter, but only where that hull matches the dodger's own track at most
-// 200 ms in the past (the rewind cap). Elsewhere it uses the dodger's own
-// track rewound by the measured lag, capped at 200 ms.
+//    60 Hz), which are both its view and its true position;
+//  - and "seen" rows: where its game drew the avatars (self-pose.tsv target
+//    rows, tagged with whose avatar it is), which is what it actually aimed at.
+// The host scores each player's rays against the hull it saw, favouring the
+// shooter, but only where that hull matches the other player's own track at
+// most 200 ms in the past (the rewind cap). Elsewhere it uses that track
+// rewound by the measured lag, capped at 200 ms.
 
-// One camera sample: host-clock time, eye position (cm), pitch and yaw (degrees).
-sealed record TrackSample(long T, double X, double Y, double Z, double Pitch, double Yaw);
-// One drawn avatar in the attacker's game: host-clock time, AimModCore target id,
-// capsule centre, radius and half height.
-sealed record TrackSeen(long T, int Id, double X, double Y, double Z, double Radius, double HalfHeight);
+// One camera sample: host-clock time, eye position (cm), pitch and yaw (degrees), and
+// whether the weapon fired in that publication (AimModCore fire row; "require fire").
+sealed record TrackSample(long T, double X, double Y, double Z, double Pitch, double Yaw, bool Fire = false);
+// One drawn avatar in the shooter's game: host-clock time, AimModCore target id,
+// capsule centre, radius and half height; Member when AimModCore tagged it as that player's avatar.
+sealed record TrackSeen(long T, int Id, double X, double Y, double Z, double Radius, double HalfHeight, string? Member = null);
+
+// The pose stream id the bridge gives each player (posefile::StreamIdFor):
+// "s-" + FNV-1a 64 of "aimmod-spectate:<SteamID64>", 16 hex digits.
+static class StreamIds
+{
+    public static string For(string memberId)
+    {
+        var hash = 1469598103934665603UL;
+        foreach (var c in System.Text.Encoding.UTF8.GetBytes("aimmod-spectate:" + memberId)) { hash ^= c; hash *= 1099511628211UL; }
+        return "s-" + hash.ToString("x16", System.Globalization.CultureInfo.InvariantCulture);
+    }
+}
 sealed record TrackBatch(string MatchId, int Round, IReadOnlyList<TrackSample> Samples, IReadOnlyList<TrackSeen> Seen)
 {
     public const int MaxSamples = 64, MaxSeen = 64;
@@ -29,8 +43,10 @@ sealed record TrackBatch(string MatchId, int Round, IReadOnlyList<TrackSample> S
     public object Body() => new
     {
         match = MatchId, round = Round,
-        s = Samples.Select(x => new double[] { x.T, R(x.X), R(x.Y), R(x.Z), R(x.Pitch), R(x.Yaw) }),
+        s = Samples.Select(x => new double[] { x.T, R(x.X), R(x.Y), R(x.Z), R(x.Pitch), R(x.Yaw), x.Fire ? 1 : 0 }),
         v = Seen.Select(x => new double[] { x.T, x.Id, R(x.X), R(x.Y), R(x.Z), R(x.Radius), R(x.HalfHeight) }),
+        // Target id -> member, for drawn avatars AimModCore tagged.
+        who = Seen.Where(x => x.Member is not null).GroupBy(x => x.Id).ToDictionary(g => g.Key.ToString(System.Globalization.CultureInfo.InvariantCulture), g => g.First().Member),
     };
     static double R(double v) => Math.Round(v, 2);
 
@@ -43,17 +59,19 @@ sealed record TrackBatch(string MatchId, int Round, IReadOnlyList<TrackSample> S
             if (match is not { Length: > 0 and <= 40 } || round is < 1 or > 100) return null;
             var samples = new List<TrackSample>(); var seen = new List<TrackSeen>();
             static bool Num(JsonElement e, out double v) { v = 0; return e.ValueKind == JsonValueKind.Number && e.TryGetDouble(out v) && double.IsFinite(v) && Math.Abs(v) < 1e13; }
-            static double[]? Row(JsonElement e, int n)
+            static double[]? Row(JsonElement e, int n, int? alt = null)
             {
-                if (e.ValueKind != JsonValueKind.Array || e.GetArrayLength() != n) return null;
+                if (e.ValueKind != JsonValueKind.Array || (e.GetArrayLength() != n && e.GetArrayLength() != alt)) return null;
+                n = e.GetArrayLength();
                 var r = new double[n]; var i = 0;
                 foreach (var x in e.EnumerateArray()) { if (!Num(x, out r[i])) return null; i++; }
                 return r;
             }
             foreach (var e in b.GetProperty("s").EnumerateArray())
             {
-                if (samples.Count >= MaxSamples || Row(e, 6) is not { } r || Math.Abs(r[4]) > 90.5 || Math.Abs(r[5]) > 720 || Math.Abs(r[1]) > 1e7 || Math.Abs(r[2]) > 1e7 || Math.Abs(r[3]) > 1e7) return null;
-                samples.Add(new TrackSample((long)r[0], r[1], r[2], r[3], r[4], r[5]));
+                if (samples.Count >= MaxSamples || Row(e, 6, 7) is not { } r || Math.Abs(r[4]) > 90.5 || Math.Abs(r[5]) > 720 || Math.Abs(r[1]) > 1e7 || Math.Abs(r[2]) > 1e7 || Math.Abs(r[3]) > 1e7
+                    || (r.Length == 7 && r[6] is not (0 or 1))) return null;
+                samples.Add(new TrackSample((long)r[0], r[1], r[2], r[3], r[4], r[5], r.Length == 7 && r[6] == 1));
             }
             if (b.TryGetProperty("v", out var v))
                 foreach (var e in v.EnumerateArray())
@@ -61,6 +79,17 @@ sealed record TrackBatch(string MatchId, int Round, IReadOnlyList<TrackSample> S
                     if (seen.Count >= MaxSeen || Row(e, 7) is not { } r || r[1] < 1 || r[1] > int.MaxValue || r[1] != Math.Truncate(r[1]) || r[5] is <= 0 or > 1000 || r[6] < r[5] || r[6] > 2000) return null;
                     seen.Add(new TrackSeen((long)r[0], (int)r[1], r[2], r[3], r[4], r[5], r[6]));
                 }
+            if (b.TryGetProperty("who", out var who) && who.ValueKind == JsonValueKind.Object)
+            {
+                var names = new Dictionary<int, string>();
+                foreach (var w in who.EnumerateObject())
+                {
+                    if (names.Count >= MaxSeen || !int.TryParse(w.Name, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var id)
+                        || w.Value.ValueKind != JsonValueKind.String || w.Value.GetString() is not { Length: > 0 and <= 64 } member || member.Any(char.IsControl)) return null;
+                    names[id] = member;
+                }
+                seen = seen.Select(x => names.TryGetValue(x.Id, out var m) ? x with { Member = m } : x).ToList();
+            }
             return new TrackBatch(match, round, samples, seen);
         }
         catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or FormatException) { return null; }
@@ -103,47 +132,51 @@ static class TrackGeometry
     }
 }
 
-// One round of a tracking duel on the host.
-sealed class TrackingRound(string attacker, string dodger, long start, long end)
+// One round of a simultaneous tracking duel on the host: both players track
+// each other at once while trying not to be tracked. Each player's score is
+// their own time on target against the other's avatar hull, validated the same
+// way in both directions (ScoreFor).
+sealed class TrackingRound(string first, string second, long start, long end, bool requireFire = false)
 {
     public const long RewindCapMs = 200, MatchWindowMs = 400, GapMs = 50;
     public const double MatchToleranceCm = 25, RayLengthCm = 100_000;
-    // Defaults when the attacker's game reported no drawn hull: the avatar body
+    // Defaults when the shooter's game reported no drawn hull: the avatar body
     // profile's bounding box (AvatarProfiles: 230 cm tall, 45 cm radius) and a
     // camera 64 cm above the capsule centre (UE's default eye height).
     public const double DefaultRadius = 45, DefaultHalfHeight = 115, DefaultEyeAboveCentre = 64;
     public const int MaxSamplesPerPlayer = 8000;
 
-    public string Attacker { get; } = attacker;
-    public string Dodger { get; } = dodger;
+    public string First { get; } = first;
+    public string Second { get; } = second;
     public long Start { get; } = start;
     public long End { get; } = end;
-    readonly List<TrackSample> attack = [], dodge = [];
-    readonly List<TrackSeen> seen = [];
+    public bool RequireFire { get; } = requireFire;
+    readonly Dictionary<string, List<TrackSample>> tracks = new() { [first] = [], [second] = [] };
+    readonly Dictionary<string, List<TrackSeen>> seen = new() { [first] = [], [second] = [] };
+    public string Other(string id) => id == First ? Second : First;
 
     public void Add(string from, TrackBatch batch)
     {
-        var list = from == Attacker ? attack : from == Dodger ? dodge : null;
-        if (list is null) return;
+        if (!tracks.TryGetValue(from, out var list)) return;
         foreach (var s in batch.Samples)
         {
             if (s.T < Start - 1000 || s.T > End + 1000 || list.Count >= MaxSamplesPerPlayer) continue;
             if (list.Count > 0 && s.T <= list[^1].T) continue; // late or repeated samples are ignored
             list.Add(s);
         }
-        if (from != Attacker) return;
+        var rows = seen[from];
         foreach (var v in batch.Seen)
         {
-            if (v.T < Start - 1000 || v.T > End + 1000 || seen.Count >= MaxSamplesPerPlayer) continue;
-            if (seen.Count > 0 && v.T < seen[^1].T) continue;
+            if (v.T < Start - 1000 || v.T > End + 1000 || rows.Count >= MaxSamplesPerPlayer) continue;
+            if (rows.Count > 0 && v.T < rows[^1].T) continue;
             var repeated = false;
-            for (var k = seen.Count - 1; k >= 0 && seen[k].T == v.T; k--) if (seen[k].Id == v.Id) { repeated = true; break; }
+            for (var k = rows.Count - 1; k >= 0 && rows[k].T == v.T; k--) if (rows[k].Id == v.Id) { repeated = true; break; }
             if (repeated) continue;
-            seen.Add(v);
+            rows.Add(v);
         }
     }
 
-    static TrackSample? At(List<TrackSample> track, double t)
+    internal static TrackSample? At(List<TrackSample> track, double t)
     {
         if (track.Count == 0 || t < track[0].T - GapMs || t > track[^1].T + GapMs) return null;
         int lo = 0, hi = track.Count - 1, i = -1; // last index with T <= t (tracks are time-ordered)
@@ -153,17 +186,17 @@ sealed class TrackingRound(string attacker, string dodger, long start, long end)
         var a = track[i]; var b = track[i + 1];
         if (b.T - a.T > 250) return t - a.T <= GapMs ? a : null; // a hole in the stream
         var u = (t - a.T) / (b.T - a.T);
-        return new TrackSample((long)t, a.X + (b.X - a.X) * u, a.Y + (b.Y - a.Y) * u, a.Z + (b.Z - a.Z) * u, a.Pitch, a.Yaw);
+        return new TrackSample((long)t, a.X + (b.X - a.X) * u, a.Y + (b.Y - a.Y) * u, a.Z + (b.Z - a.Z) * u, a.Pitch, a.Yaw, a.Fire);
     }
 
-    // Lag between the attacker's drawn hull and the dodger's own track: the
-    // time in the past (0..MatchWindow) where the dodger was closest.
-    (double Distance, long Lag, double EyeDz)? Match(TrackSeen v)
+    // Lag between a drawn hull and the target's own track: the time in the past
+    // (0..MatchWindow) where the target was closest.
+    static (double Distance, long Lag, double EyeDz)? Match(List<TrackSample> target, TrackSeen v)
     {
         (double, long, double)? best = null;
         for (long lag = 0; lag <= MatchWindowMs; lag += 5)
         {
-            if (At(dodge, v.T - lag) is not { } d) continue;
+            if (At(target, v.T - lag) is not { } d) continue;
             var dist = Math.Sqrt((d.X - v.X) * (d.X - v.X) + (d.Y - v.Y) * (d.Y - v.Y));
             if (best is null || dist < best.Value.Item1) best = (dist, lag, d.Z - v.Z);
         }
@@ -172,25 +205,35 @@ sealed class TrackingRound(string attacker, string dodger, long start, long end)
 
     static double Median(List<double> values) { if (values.Count == 0) return double.NaN; values.Sort(); return values[values.Count / 2]; }
 
-    public TrackResult Compute(long now, int? attackerRtt, int? dodgerRtt)
+    // Both players' scores so far. rtt: the host's ping to a player (null for the host).
+    public (TrackResult First, TrackResult Second) Compute(long now, Func<string, int?> rtt) =>
+        (ScoreFor(First, now, rtt(First), rtt(Second)), ScoreFor(Second, now, rtt(Second), rtt(First)));
+
+    // The shooter's time on target against the other player: its rays scored against the
+    // hull its game drew (favour the shooter) where that hull matches the target's own
+    // track at most 200 ms back (the rewind cap); elsewhere the target's own track,
+    // rewound by the measured lag, capped at 200 ms.
+    public TrackResult ScoreFor(string shooter, long now, int? shooterRtt, int? targetRtt)
     {
+        var attack = tracks[shooter]; var dodge = tracks[Other(shooter)];
+        var target = Other(shooter);
         var until = Math.Min(now, End);
         var duration = Math.Max(1, End - Start);
-        // Several targets may be drawn (a hidden helper bot, other bots): the
-        // dodger is the one whose rows match the dodger's own track best.
-        var byId = seen.Where(v => v.T <= until + RewindCapMs).GroupBy(v => v.Id)
-            .Select(g => (Id: g.Key, Rows: g.ToList(), Matches: g.Select(v => (Row: v, M: Match(v))).ToList()))
+        // Several targets may be drawn (a hidden helper bot, other bots): a row the game tagged
+        // as the opponent's avatar counts; untagged, the one whose rows match the opponent's track best.
+        var drawn = seen[shooter].Where(v => v.T <= until + RewindCapMs && (v.Member is null || v.Member == target)).ToList();
+        var tagged = drawn.Where(v => v.Member == target).ToList();
+        var byId = (tagged.Count > 0 ? tagged : drawn).GroupBy(v => v.Id)
+            .Select(g => (Id: g.Key, Matches: g.Select(v => (Row: v, M: Match(dodge, v))).ToList()))
             .OrderByDescending(g => g.Matches.Count(m => m.M is { } x && x.Distance <= MatchToleranceCm)).ToList();
         var rows = byId.Count > 0 ? byId[0].Matches : [];
         var matched = rows.Where(r => r.M is { } x && x.Distance <= MatchToleranceCm).ToList();
-        var lags = matched.Select(r => (double)r.M!.Value.Lag).ToList();
-        var measuredLag = Median(lags);
-        var estimated = double.IsNaN(measuredLag) ? 100 + ((attackerRtt ?? 0) + (dodgerRtt ?? 0)) / 2.0 : measuredLag;
+        var measuredLag = Median(matched.Select(r => (double)r.M!.Value.Lag).ToList());
+        var estimated = double.IsNaN(measuredLag) ? 100 + ((shooterRtt ?? 0) + (targetRtt ?? 0)) / 2.0 : measuredLag;
         var lag = Math.Clamp(estimated, 0, RewindCapMs);
         var eyeAbove = matched.Count > 0 ? Median(matched.Select(r => r.M!.Value.EyeDz).ToList()) : DefaultEyeAboveCentre;
         var radius = rows.Count > 0 ? Median(rows.Select(r => r.Row.Radius).ToList()) : DefaultRadius;
         var halfHeight = rows.Count > 0 ? Median(rows.Select(r => r.Row.HalfHeight).ToList()) : DefaultHalfHeight;
-        // Valid drawn hulls: matched within tolerance and at most the rewind cap old.
         var valid = rows.Where(r => r.M is { } x && x.Distance <= MatchToleranceCm && x.Lag <= RewindCapMs).Select(r => r.Row).ToList();
         var rejected = rows.Count - valid.Count;
 
@@ -203,14 +246,13 @@ sealed class TrackingRound(string attacker, string dodger, long start, long end)
             var dt = Math.Min(Math.Min(next, until) - a.T, GapMs);
             if (dt <= 0) continue;
             samples++; covered += dt;
+            if (RequireFire && !a.Fire) continue; // "require fire": only while the fire button is held
             var (dx, dy, dz) = TrackGeometry.Direction(a.Pitch, a.Yaw);
-            // Host view: the dodger's own track, rewound by the (capped) lag.
             bool hostHit = false;
             if (At(dodge, a.T - lag) is { } d)
                 hostHit = TrackGeometry.HitsCapsule(a.X, a.Y, a.Z, dx, dy, dz, RayLengthCm, d.X, d.Y, d.Z - eyeAbove, radius, halfHeight);
-            // Shooter's view, where it is valid: the hull its game drew near this sample.
-            var drawn = Drawn(valid, a.T);
-            var hit = drawn is { } h ? TrackGeometry.HitsCapsule(a.X, a.Y, a.Z, dx, dy, dz, RayLengthCm, h.X, h.Y, h.Z, h.Radius, h.HalfHeight) : hostHit;
+            var h = Drawn(valid, a.T);
+            var hit = h is not null ? TrackGeometry.HitsCapsule(a.X, a.Y, a.Z, dx, dy, dz, RayLengthCm, h.X, h.Y, h.Z, h.Radius, h.HalfHeight) : hostHit;
             if (hostHit) hostOnly += dt;
             if (hit) { on += dt; onSamples++; }
         }
@@ -219,7 +261,7 @@ sealed class TrackingRound(string attacker, string dodger, long start, long end)
         string? reason = null;
         if (finished && coverage < 0.8) reason = "coverage";
         else if (rows.Count >= 10 && rejected > rows.Count * 0.1) reason = "seen-mismatch";
-        else if (finished && dodge.Count == 0) reason = "no-dodger-track";
+        else if (finished && dodge.Count == 0) reason = "no-target-track";
         return new TrackResult(Math.Round(on / 1000.0, 3), Math.Round(on * 100.0 / duration, 1), samples, onSamples, Math.Round(coverage, 3),
             rows.Count, rejected, Math.Round(lag, 1), Math.Round(hostOnly * 100.0 / duration, 1), reason is not null, reason);
     }
@@ -235,8 +277,7 @@ sealed class TrackingRound(string attacker, string dodger, long start, long end)
             var u = (double)(t - a.T) / Math.Max(1, b.T - a.T);
             return a with { T = t, X = a.X + (b.X - a.X) * u, Y = a.Y + (b.Y - a.Y) * u, Z = a.Z + (b.Z - a.Z) * u };
         }
-        var near = new[] { a, b }.Where(x => x is not null && Math.Abs(x.T - t) <= 100).OrderBy(x => Math.Abs(x!.T - t)).FirstOrDefault();
-        return near;
+        return new[] { a, b }.Where(x => x is not null && Math.Abs(x.T - t) <= 100).OrderBy(x => Math.Abs(x!.T - t)).FirstOrDefault();
     }
 }
 
@@ -265,23 +306,32 @@ sealed class SelfPoseTracker(string outputFolder)
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
 
-    // offsetMs: host clock minus local clock.
-    public void Poll(long offsetMs) => Take(LivePoseFrame.Read(posePath, TimeSpan.FromSeconds(1.5)), offsetMs);
+    // offsetMs: host clock minus local clock. members: the lobby's players, to resolve avatar tags.
+    public void Poll(long offsetMs, IEnumerable<string>? members = null) => Take(LivePoseFrame.Read(posePath, TimeSpan.FromSeconds(1.5)), offsetMs, members);
 
-    public void Take(LivePoseFrame? frame, long offsetMs)
+    public void Take(LivePoseFrame? frame, long offsetMs, IEnumerable<string>? members = null)
     {
         if (frame is null || frame.Sequence == lastSequence) return;
         lastSequence = frame.Sequence;
+        // The fire row covers this publication (about 33 ms): its poses count as firing.
+        var fired = frame.Fire is { } f && f[2] == 1;
         foreach (var p in frame.Poses)
         {
             if (p.UnixMs <= lastPose) continue;
             lastPose = p.UnixMs;
-            samples.Add(new TrackSample(p.UnixMs + offsetMs, p.Camera[0], p.Camera[1], p.Camera[2], p.Camera[3], p.Camera[4]));
+            samples.Add(new TrackSample(p.UnixMs + offsetMs, p.Camera[0], p.Camera[1], p.Camera[2], p.Camera[3], p.Camera[4], fired));
         }
+        // AimModCore's tag rows name each avatar's stream; map streams back to members.
+        var byStream = (members ?? []).ToDictionary(StreamIds.For, m => m);
         // Target rows are the latest drawn positions, so they belong to the newest pose.
         var at = frame.Poses[^1].UnixMs + offsetMs;
         lastSeen.Clear();
-        foreach (var t in frame.Targets) { var row = new TrackSeen(at, (int)t[0], t[1], t[2], t[3], t[4], t[5]); seenRows.Add(row); lastSeen[row.Id] = row; }
+        foreach (var t in frame.Targets)
+        {
+            var id = (int)t[0];
+            var member = frame.Tags.TryGetValue(id, out var stream) && byStream.TryGetValue(stream, out var m) ? m : null;
+            var row = new TrackSeen(at, id, t[1], t[2], t[3], t[4], t[5], member); seenRows.Add(row); lastSeen[row.Id] = row;
+        }
         if (samples.Count > 4 * TrackBatch.MaxSamples) samples.RemoveRange(0, samples.Count - 4 * TrackBatch.MaxSamples);
         if (seenRows.Count > 4 * TrackBatch.MaxSeen) seenRows.RemoveRange(0, seenRows.Count - 4 * TrackBatch.MaxSeen);
     }
