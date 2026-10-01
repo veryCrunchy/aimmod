@@ -35,13 +35,35 @@ names are fixed by `mapport/naming.py` and must never change:
 - **Scenario** (internal name, `.sce` file name and Workshop title): `AimMod - <Map> (<Game>) - <Variant>`,
   e.g. `AimMod - Dust2 (CSGO) - CS Movement` or `AimMod - aim_map (CSS) - CS Movement`.
 - **Map file:** `aimmod_<mapid>_<game>.json`, e.g. `aimmod_de_dust2_csgo.json`.
-- **Game tags:** `CSGO`, `CSS`, `CS2`, `GMod`. There is no colon, because `:` is illegal in Windows
+- **Game tags:** `CSGO`, `CSS`, `CS2`, `CS16`, `GMod`, `Q3`, `QL`. There is no colon, because `:` is illegal in Windows
   file names; descriptions may write "CS:GO".
 - **Map names:** well-known maps use their display name (Dust2, Mirage, Inferno, …); others keep
   their id (aim_map).
 
 `--display-name`, `--game` and `--variant` override the parts. Names containing characters illegal
 in Windows file names are rejected.
+
+## Tags and description
+
+`mapport/tags.py` writes the scenario's `SearchTags`, in this order, deduplicated:
+
+1. `AimMod`, `Map port`
+2. the source game (`Counter-Strike: Source`, `Counter-Strike 1.6`, `Quake 3`, `Quake Live`, …) and its
+   family (`Counter-Strike`, `Quake`)
+3. the movement: `CS movement`, `Sprint movement` or `Quake movement`, plus `Strafe jumping` and
+   `Bunny hop` when air speed is not capped (the Quake preset)
+4. the map type from the map id (`aim_` Aim map, `fy_` Fight yard, `awp_` AWP, `de_` Defuse,
+   `cs_` Hostage, `…dm<n>` Deathmatch, `tourney` or a known duel map: Duel) and from objective entities
+   (bomb targets, hostages, CTF flags)
+5. a weapon the map name implies (`Deagle`, `AWP`, `Scout`, …)
+6. features of the emitted objects: `Water`, `Lava`, `Slime`, `Jump pads`, `Teleporters`, `Ladders`
+   (ladders become jump pads)
+
+KovaaK's sets no tag limit (`SearchTags` is one string), so ports keep to at most 16 tags of up to 32
+characters and 255 characters in all. `AimTypeTag`/`AimSubTypeTag` are `Clicking`/`Dynamic` (values
+the game's scenario editor offers), `DifficultyTag` is 2 for CS movement and 3 for Quake movement.
+The description names the map, the source game and the movement, and stays within the editor's
+352 characters. Generated `AimMod Match - …` arenas carry only `AimMod, AimMod Match`.
 
 ## Options
 

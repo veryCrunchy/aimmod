@@ -11,7 +11,7 @@ import json
 import math
 import os
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 UE_GRAVITY = 980.0  # Unreal default world gravity, cm/s^2; the profile's Gravity is a scale on it
 # Default character-model pack: Meso (skins Genji, McCree, Pharah, Tracer), Endo, Ecto, ...
@@ -179,7 +179,12 @@ def weapon_profile(name: str, s: float) -> List[Tuple[str, str]]:
 
 
 def build(name: str, map_json_name: str, map_text: str, map_scale: float, mv: Movement,
-          bots: int = 5, description: str = "") -> str:
+          bots: int = 5, description: str = "", search_tags: Optional[List[str]] = None) -> str:
+    """search_tags: from mapport.tags.search_tags; without them, the AimMod and movement tags only."""
+    from . import tags as tagging
+    if search_tags is None:
+        search_tags = tagging.clean(["AimMod", "Map port"] + tagging.movement_tags(mv.model, mv.clamp_air_speed, mv.variant))
+    desc = description or f"Ported map with {mv.label} movement, by AimMod."
     s = map_scale
     player, bot_char, weapon = "CS Player", "CS Target", "CS Rifle"
     shift = shift_ability(mv)
@@ -193,10 +198,11 @@ def build(name: str, map_json_name: str, map_text: str, map_scale: float, mv: Mo
         ("MapName", map_json_name), ("MapScale", f"{map_scale}"), ("BlockProjectilePredictors", "true"),
         ("BlockCheats", "false"), ("InvinciblePlayer", "true"), ("InvincibleBots", "false"), ("Timescale", "1.0"),
         ("BlockHealthbars", "false"), ("TimeRefilledByKill", "0.0"), ("LockFOVRange", "false"),
-        ("AimTypeTag", "Clicking"), ("AimSubTypeTag", "Dynamic"), ("AimTypeFlicking", "true"),
-        ("AimTypeProjectile", "false"), ("AimTypePlayerMovement", "true"), ("DifficultyTag", "2"),
-        ("SearchTags", "Map port, Counter-Strike, Movement"),
-        ("Description", description or "Ported Source map with Counter-Strike movement."),
+        ("AimTypeTag", tagging.AIM_TYPE), ("AimSubTypeTag", tagging.AIM_SUBTYPE), ("AimTypeFlicking", "true"),
+        ("AimTypeProjectile", "false"), ("AimTypePlayerMovement", "true"),
+        ("DifficultyTag", str(tagging.difficulty(mv.model, mv.clamp_air_speed))),
+        ("SearchTags", ", ".join(search_tags)),
+        ("Description", " ".join(desc.split())[:tagging.MAX_DESCRIPTION]),
         ("GameVersion", "3.9.11"), ("ScenarioVersion", "Initial"),
     ]
     aim = [("Name", "Default"), ("MinReactionTime", "0.3"), ("MaxReactionTime", "0.4"), ("AimingStyle", "Simple")]
