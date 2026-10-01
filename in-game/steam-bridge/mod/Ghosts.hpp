@@ -14,6 +14,7 @@
 #include "GameBindings.hpp"
 #include "GhostMath.hpp"
 #include "AvatarState.hpp"
+#include "BotOrders.hpp"
 #include "Walker.hpp"
 
 #include <Unreal/FWeakObjectPtr.hpp>
@@ -157,8 +158,24 @@ namespace aimmod
         {
             bridge::ghost::Walker walker;
             double at = -1;
+            // Bots: the last round-start placement done, what its eye last saw, and (a client's copy of
+            // the host's bot) the pose drawn so far.
+            std::string placeToken;
+            bool placedLogged = false;
+            double nextSight = 0;
+            std::vector<std::pair<int, bool>> seen;
+            std::optional<bridge::ghost::RemoteTransform> shown;
+            double shownAt = -1;
+            bool poseLogged = false;
         };
         std::map<std::uint64_t, DevWalk> m_walkers;
+        // bot-orders.tsv from the service (bots), and what the bot avatars report back (bot-sight.tsv).
+        std::optional<bridge::bots::Orders> m_botOrders;
+        double m_nextOrdersRead = 0, m_nextSightWrite = 0;
+        bool m_botOrdersLogged = false;
+        std::vector<bridge::bots::Report> m_botReports;
+        void ReadBotOrders();
+        void WriteBotSight();
         std::string DevLook(std::uint64_t peer);
         bool IsDevPeer(std::uint64_t peer) const { return peer >= 1 && peer <= 16; }
         game::Getter m_lineTrace;

@@ -1257,8 +1257,11 @@ preset):
 **Built** (`CsMode.cs`, `MultiplayerService.Cs.cs`, lobby mode `cs`):
 
 - **Teams.** Teams are assigned by join order (team 1 starts T). The start is
-  blocked unless there are 6, 8 or 10 players (`cs-teams`). Friendly fire is
-  off.
+  blocked unless there are 6, 8 or 10 players (`cs-teams`). Friendly fire
+  (lobby setting `friendlyFire`, on by default in CS, off in team deathmatch):
+  CS2 rules, teammates take 33 % of the damage, a team kill takes the kill
+  away and costs $300, and the kill feed marks it TK. Bots fill empty slots
+  (6.6.4).
 - **Round machine.**
   - Phases: freeze (15 s) → live (1:55; buying in freeze time and the first
     20 s) → planted (40 s bomb) → end (7 s) → next round.
@@ -1418,6 +1421,40 @@ preset):
   70 %, 0 is off). UE can't play a runtime-built sound without engine code
   AimMod doesn't call (`USoundWaveProcedural`'s queue isn't reflected), so
   KovaaK's master volume doesn't apply.
+
+#### 6.6.4 Bots (built)
+
+Host-run players for CS, deathmatch and team deathmatch (not score modes,
+not tournament lobbies). The host adds them in the lobby (**Add bot** at
+Easy, Normal or Hard, or **Fill with bots**); they're named `BOT <name>`,
+always ready, load at once, survive a host change and leave if the mode
+changes to one without shooting.
+
+- **Drawing and moving.** Each bot is one of AimModSteam's walking stand-in
+  avatars (synthetic peers 1 to 16). The host's walkers get waypoints (own
+  spawns first, then bomb sites, callouts and the other side's spawns) and
+  orders through `bot-orders.tsv`: roam, walk to a goal (around walls by way
+  of the waypoints), hold, face a point, and stand at the round's spawn.
+  The host sends their positions to everyone 10 times a second (`bots`), and
+  each client's walkers follow them.
+- **Sight.** The host asks its game to trace from each bot's eye to the
+  nearest enemies; AimModSteam answers in `bot-sight.tsv`. A bot only targets
+  a player its trace says is in sight.
+- **Aim** (`BotBrain`, by difficulty): a reaction time (650 / 380 / 220 ms)
+  before the first shot, a hit chance per shot (28 / 45 / 62 % at close
+  range on a still target, less with distance, a moving target and deeper
+  into a spray), headshot share, bursts and pauses. A landed shot goes
+  through `CombatMatch.BotHit`: alive, fire rate, round phase, spawn
+  protection, friendly fire and armour, like a player's hit.
+- **CS.** Bots buy in freeze time (armour on the pistol round, a rifle and
+  armour when they can, an SMG on a half buy, a kit for CTs), the carrier
+  takes the round's site and plants, a Terrorist fetches a dropped bomb, CTs
+  split between the sites and defuse (Hard bots keep defusing through a
+  fight near the end). A bot that loses sight of an enemy goes where it last
+  saw them.
+- **Never counted.** Bots post no runs and never reach the Hub or KovaaK's
+  leaderboards; recent matches mark them as bots, the scoreboard tags them
+  BOT.
 
 ### 6.7 Capture the flag
 

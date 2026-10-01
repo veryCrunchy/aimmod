@@ -45,6 +45,15 @@ test('standings show unknown values as a dash and spell out the frag limit',()=>
   const text=target.all().map(e=>e.textContent);
   assert.ok(text.includes('First to 20 frags'));assert.ok(text.includes('—'));assert.ok(!text.includes('-'));
 });
+test('standings tag bots once, before the name',()=>{
+  class El{constructor(t){this.children=[];this.className='';this.textContent='';}appendChild(c){this.children.push(c);return c;}removeChild(c){this.children.splice(this.children.indexOf(c),1);}get firstChild(){return this.children[0];}all(){return this.children.flatMap(c=>[c,...c.all()]);}}
+  const window={document:{createElement:t=>new El(t)}};vm.runInNewContext(fs.readFileSync(path.join(__dirname,'standings.js'),'utf8'),{window});
+  const target=new El('div');window.AimModStandings.render(target,{kind:'combat',title:'Deathmatch',fragLimit:20,rows:[{rank:1,name:'BOT Ace',bot:true,frags:3,deaths:1,kd:3},{rank:2,name:'Synthetic One',self:true,frags:1,deaths:3,kd:0.33}]},'full');
+  const tags=target.all().filter(e=>e.className==='sb-bot').map(e=>e.textContent);
+  assert.deepEqual(tags,['BOT']);
+  const names=target.all().filter(e=>e.className==='sb-name').map(e=>e.children.map(c=>c.textContent).join(' '));
+  assert.deepEqual(names.slice(-2),['BOT Ace','Synthetic One (you)']);
+});
 // Answerable notices: the buttons survive HUD ticks and missed polls, and the layer asks for clicks.
 function live(){
   class El{constructor(tag){this.tag=tag;this.children=[];this.style={};this.className='';this.textContent='';}

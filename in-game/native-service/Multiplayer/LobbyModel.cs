@@ -118,7 +118,7 @@ static class TrackingDefaults { public const int RoundSeconds = 10, MaxRoundSeco
 // direct or simulated. Profiles: whether custom weapon/character profiles are present.
 sealed record LobbyMember(string Id, string Name, string Role, bool Ready, int? Ping, string Scenario, string Map, string Profiles,
     string Connection, string Link, long JoinedAt, bool Simulated, string Avatar = AvatarProfiles.Default, string? Version = null, bool Away = false,
-    IReadOnlyList<CosmeticRef>? Cosmetics = null, int Team = 0);
+    IReadOnlyList<CosmeticRef>? Cosmetics = null, int Team = 0, string? Bot = null);
 
 sealed record ScoreLine(string MemberId, double? Score, double? Seconds, double? Remaining, int Shots, int Hits, int Kills,
     string Status, bool Disputed);

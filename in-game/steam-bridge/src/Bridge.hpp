@@ -97,6 +97,7 @@ namespace bridge
                 std::uint64_t peer = 0;
                 std::string profile;
                 std::vector<std::array<double, 3>> spawns;
+                int own = 0; // only the first `own` spawns are places to stand (a bot's other points are waypoints); 0: all
             };
             std::vector<Walker> walkers;
             int generation = 0;    // bumps on every command (reload the path)

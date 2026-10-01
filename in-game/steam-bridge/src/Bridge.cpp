@@ -1177,7 +1177,7 @@ namespace bridge
                 }
                 return true;
             };
-            // walkers: [{peer 1..16, profile?, spawns}] for several simulated players at once.
+            // walkers: [{peer 1..16, profile?, spawns, own?}] for several simulated players (or bots) at once.
             std::vector<DevAvatar::Walker> walkers;
             if (const auto* list = c.Get("walkers"))
             {
@@ -1190,6 +1190,7 @@ namespace bridge
                     if (!peer || *peer < 1 || *peer > 16 || (!look.empty() && !ValidProfileName(look)) || !points(w.Get("spawns"), walker.spawns)) { ok = false; break; }
                     walker.peer = static_cast<std::uint64_t>(*peer);
                     walker.profile = look;
+                    if (const auto own = w.Int("own"); own && *own > 0 && *own <= static_cast<long long>(walker.spawns.size())) walker.own = static_cast<int>(*own);
                     walkers.push_back(std::move(walker));
                 }
                 if (!ok)

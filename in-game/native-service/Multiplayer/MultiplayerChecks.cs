@@ -41,7 +41,7 @@ static partial class MultiplayerChecks
         CsTeams();
         Marker();
         var root = Path.Combine(Path.GetTempPath(), "aimmod-mp-test-" + Guid.NewGuid().ToString("N"));
-        try { Content(root); Generator(root); Blocked(root); AutoLeave(root); LoadGateService(root); StandInStream(root); FriendlyFire(); StandIns(root); ClaimTiming(root); RestartDuringMatch(root); CsMaps(root); LoadGateEnsureMap(root); Binds(root); Service(root); Transfers(root); Replays(root); Maps(root); Tournaments(root); }
+        try { Content(root); Generator(root); Blocked(root); AutoLeave(root); LoadGateService(root); StandInStream(root); FriendlyFire(); StandIns(root); Bots(root); ClaimTiming(root); RestartDuringMatch(root); CsMaps(root); LoadGateEnsureMap(root); Binds(root); Service(root); Transfers(root); Replays(root); Maps(root); Tournaments(root); }
         finally { try { Directory.Delete(root, true); } catch (IOException) { } }
         Console.WriteLine($"{count} multiplayer checks passed.");
     }
@@ -807,7 +807,7 @@ static partial class MultiplayerChecks
         foreach (var bad in new[] { Swap("aimmod.mp", "other"), Swap("\"v\":1", "\"v\":2"), Swap("\"command\"", "\"teleport\""), Swap("\"seq\":7", "\"seq\":-1"), "[]", "{", Swap("\"body\":{", "\"body\":[{").Replace("}}}", "}}]}") })
             Check(Protocol.Decode(Encoding.UTF8.GetBytes(bad)) is null, "Rejected frame: " + bad[..Math.Min(40, bad.Length)]);
         Check(Protocol.Decode(new byte[Protocol.MaxBytes + 1]) is null, "Oversized frames are rejected");
-        Check(!Protocol.Reliable("score") && Protocol.Reliable("snapshot") && Protocol.Reliable("track") && Protocol.Reliable("hit") && Protocol.Reliable("combat") && Protocol.Reliable("cosmetic.look") && Protocol.Types.Length == 22, "Score frames are unreliable; state and tracking samples are reliable");
+        Check(!Protocol.Reliable("score") && Protocol.Reliable("snapshot") && Protocol.Reliable("track") && Protocol.Reliable("hit") && Protocol.Reliable("combat") && Protocol.Reliable("cosmetic.look") && !Protocol.Reliable("bots") && Protocol.Types.Length == 23, "Score frames and bot positions are unreliable; state and tracking samples are reliable");
         var sync = new ClockSync();
         sync.Add(0, 1050, 200); sync.Add(1000, 2010, 1020); sync.Add(2000, 3100, 2300);
         Check(sync.Rtt == 20 && sync.Offset == 1000, "Clock sync uses the minimum round-trip sample");

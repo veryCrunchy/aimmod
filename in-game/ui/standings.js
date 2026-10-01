@@ -24,7 +24,9 @@
   function row(b,r,cols,showRank){
     var tr=node('div','sb-row'+(r.self?' self':'')+(r.status==='down'?' down':'')+(r.team?' team'+r.team:''));
     if(showRank)tr.appendChild(node('span','sb-rank',r.rank));
-    tr.appendChild(node('span','sb-name',r.name+(r.self&&r.name!=='You'?' (you)':'')));
+    // Bots: a BOT tag before the name (their names start with "BOT").
+    var nm=node('span','sb-name');if(r.bot)nm.appendChild(node('span','sb-bot','BOT'));
+    nm.appendChild(node('span','',(r.bot?String(r.name).replace(/^BOT /,''):r.name)+(r.self&&r.name!=='You'?' (you)':'')));tr.appendChild(nm);
     cols.forEach(function(c){tr.appendChild(node('span','sb-num',c[1](r)));});
     return tr;
   }

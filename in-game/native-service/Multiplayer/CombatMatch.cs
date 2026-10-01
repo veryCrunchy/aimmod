@@ -261,6 +261,33 @@ sealed class CombatMatch
         // Headshot: the ray passes through the top sphere of the hull (radius 25 cm).
         var headR = Math.Min(25, radius);
         var head = TrackGeometry.HitsCapsule(c.X, c.Y, c.Z, dx, dy, dz, TrackingRound.RayLengthCm, cx, cy, cz + half - headR, headR, headR);
+        Hit(shooter, victim, weapon, head, teamHit, c.T, now, [Math.Round(dx, 4), Math.Round(dy, 4), Math.Round(dz, 4)]);
+        return null;
+    }
+
+    // A host-run bot's hit (the bot logic decided it lands, after a sight trace): the same rules
+    // as a claim for who can be hit and how hard, without a camera ray to check.
+    public string? BotHit(string from, string target, bool head, long now, int slot, double[]? dir)
+    {
+        if (!players.TryGetValue(from, out var shooter) || !players.TryGetValue(target, out var victim) || shooter == victim) return "not-playing";
+        if (now < Start || now > End) return "time";
+        if (!shooter.Alive) return "shooter-dead";
+        if (!victim.Alive) return "dead";
+        var weapon = WeaponFor is null ? Weapon : WeaponFor(from, slot);
+        if (weapon is null) return "weapon";
+        if (shooter.LastShot != long.MinValue && now - shooter.LastShot < weapon.TimeBetweenShots * 1000 * 0.9) return "fire-rate";
+        var teamHit = shooter.Team != 0 && victim.Team == shooter.Team;
+        if (teamHit && TeamDamage <= 0) return "teammate";
+        if (now < victim.ProtectedUntil) return "spawn-protected";
+        shooter.Claims++;
+        shooter.LastShot = now;
+        shooter.ProtectedUntil = Math.Min(shooter.ProtectedUntil, now);
+        Hit(shooter, victim, weapon, head, teamHit, now, now, dir is { Length: 3 } ? dir.Select(v => Math.Round(v, 4)).ToArray() : null);
+        return null;
+    }
+
+    void Hit(Player shooter, Player victim, CombatWeapon weapon, bool head, bool teamHit, long t, long now, double[]? dir)
+    {
         var raw = weapon.Damage * (head ? weapon.HeadMultiplier : 1);
         var damage = Math.Min(victim.Health, (DamageModel is null ? raw : DamageModel(victim.Id, raw, head, weapon)) * (teamHit ? TeamDamage : 1));
         victim.Health -= damage;
@@ -271,7 +298,7 @@ sealed class CombatMatch
             shooter.Health = Math.Min(cap, shooter.Health + damage * Lifesteal);
             healed = shooter.Health;
         }
-        Emit("damage", c.T, victim.Id, shooter.Id, damage, head, victim.Health, healed, null, [Math.Round(dx, 4), Math.Round(dy, 4), Math.Round(dz, 4)]);
+        Emit("damage", t, victim.Id, shooter.Id, damage, head, victim.Health, healed, null, dir);
         if (victim.Health <= 0.0001)
         {
             victim.Health = 0; victim.Alive = false; victim.Deaths++; victim.RespawnAt = Respawns ? now + CombatRules.RespawnMs(Mode) : null;
@@ -279,9 +306,8 @@ sealed class CombatMatch
             if (teamHit) shooter.Frags = Math.Max(0, shooter.Frags - 1); else shooter.Frags++;
             OnKill?.Invoke(victim.Id, shooter.Id, weapon, head);
             if (Mode == LobbyModes.Vampiric) shooter.Health = Math.Min(CombatRules.MaxHealth, shooter.Health + CombatRules.VampiricHealthOnKill);
-            Emit("death", c.T, victim.Id, shooter.Id, damage, head, 0, shooter.Health);
+            Emit("death", t, victim.Id, shooter.Id, damage, head, 0, shooter.Health);
         }
-        return null;
     }
 
     // The start positions: every player gets a spawn of its own (its team's where the map says),

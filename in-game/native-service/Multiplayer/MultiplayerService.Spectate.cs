@@ -28,7 +28,7 @@ sealed partial class MultiplayerService
     // The highest live score among real players other than this machine.
     string? Leader(LobbySnapshot lobby) => lobby.Match is { } match ? LeaderOf(match, lobby.Members, SelfId) : null;
     internal static string? LeaderOf(MatchSnapshot match, IReadOnlyList<LobbyMember> members, string self) =>
-        match.Live.Where(l => l.MemberId != self && l.Score is not null && l.Status is not ("left" or "dnf") && members.Any(m => m.Id == l.MemberId && !m.Simulated))
+        match.Live.Where(l => l.MemberId != self && l.Score is not null && l.Status is not ("left" or "dnf") && members.Any(m => m.Id == l.MemberId && !m.Simulated && m.Bot is null))
             .OrderByDescending(l => l.Score).Select(l => l.MemberId).FirstOrDefault();
 
     void FollowLeader(long now)

@@ -9,9 +9,9 @@ namespace AimMod.InGame.Multiplayer;
 // Spectatable: they allow watching right now; Watchers: how many already watch.
 sealed record FriendEntry(string Id, string Name, string Status, string? Detail, string? Code, bool Joinable, bool Spectatable = false, int Watchers = 0, string? Scenario = null, string? Workshop = null);
 sealed record RecentMatch(string Id, long EndedAt, string Mode, string Scenario, int? Place, int Players, string? Winner, bool Won, bool Simulated, IReadOnlyList<RecentPlayer> Standings,
-    int Rounds = 1, IReadOnlyList<RecentReplay>? Replays = null);
+    int Rounds = 1, IReadOnlyList<RecentReplay>? Replays = null, bool Bots = false);
 // Key: a hash of the member id (MultiplayerService.PlayerKey), never the id itself.
-sealed record RecentPlayer(string Name, int Place, double? Best, int Wins, int Points, bool Self, string? Key = null, double Total = 0);
+sealed record RecentPlayer(string Name, int Place, double? Best, int Wins, int Points, bool Self, string? Key = null, double Total = 0, bool Bot = false);
 sealed record LocalRun(bool Active, string? Scenario, double? Score, double? Seconds, double? Remaining, int Shots, int Hits, int Kills, string? Attempt);
 // How this machine starts its run for the current round.
 // Map: the load gate's check of this machine's map (null, checking, ok, wrong, failed).
@@ -768,6 +768,7 @@ sealed partial class MultiplayerService : IDisposable
         var member = lobby.Members.FirstOrDefault(m => m.Id == target && m.Id != SelfId);
         if (member is null) return LobbyResult.Fail("invalid", "Choose another player.");
         if (member.Simulated) return LobbyResult.Fail("simulated", "Simulated players have no camera to follow.");
+        if (member.Bot is not null) return LobbyResult.Fail("bot", "Bots have no camera to follow.");
         if (!transport.StartSpectate(member.Id, 60)) return LobbyResult.Fail("unavailable", "Spectating needs the Steam bridge.");
         spectating = member.Id; spectateStartedFor = null;
         return LobbyResult.Success;
@@ -1195,7 +1196,7 @@ sealed partial class MultiplayerService : IDisposable
         if (core is not null)
         {
             var target = action is "kick" or "transfer" && args.ValueKind == JsonValueKind.Object && args.TryGetProperty("member", out var m) && m.ValueKind == JsonValueKind.String ? m.GetString() : null;
-            var remote = target is not null && core.Members.Any(x => x.Id == target && !x.Simulated);
+            var remote = target is not null && core.Members.Any(x => x.Id == target && !Offline(x));
             var result = core.Apply(SelfId, action, args, library);
             // Keep Steam lobby membership and ownership in step with the lobby.
             if (result.Ok && remote && action == "kick") { Send(target!, "bye", new { reason = "kicked" }); transport.Kick(target!); transport.Close(target!); }
@@ -1222,7 +1223,7 @@ sealed partial class MultiplayerService : IDisposable
         Reset();
     }
 
-    IEnumerable<string> RemotePeers(LobbySnapshot s) => s.Members.Where(m => m.Id != SelfId && !m.Simulated).Select(m => m.Id);
+    IEnumerable<string> RemotePeers(LobbySnapshot s) => s.Members.Where(m => m.Id != SelfId && !Offline(m)).Select(m => m.Id);
 
     void Connect(string peer)
     {
@@ -1291,7 +1292,7 @@ sealed partial class MultiplayerService : IDisposable
                 if (core.Closed) { Leave("closed"); return; }
                 var snapshot = core.Snapshot();
                 // Transfer to a real remote member moves the authority to that machine.
-                if (snapshot.HostId != SelfId && snapshot.Members.FirstOrDefault(m => m.Id == snapshot.HostId) is { Simulated: false } heir)
+                if (snapshot.HostId != SelfId && snapshot.Members.FirstOrDefault(m => m.Id == snapshot.HostId) is { Simulated: false, Bot: null } heir)
                 {
                     Broadcast(snapshot, force: true);
                     core = null; mirror = snapshot; Connect(heir.Id);
@@ -1340,6 +1341,7 @@ sealed partial class MultiplayerService : IDisposable
             SyncArena();
             PlanRound();
             UpdateStandIn();
+            StepBots();
             TrackLocalRun();
             Remember();
         }
@@ -1355,7 +1357,7 @@ sealed partial class MultiplayerService : IDisposable
         var ids = new List<string>();
         if (Current is { } lobby)
         {
-            ids.AddRange(lobby.Members.Where(m => !m.Simulated).Select(m => m.Id));
+            ids.AddRange(lobby.Members.Where(m => !Offline(m)).Select(m => m.Id));
             if (lobby.Match is { } match) ids.AddRange(match.Players);
         }
         ids.AddRange(Friends().Select(f => f.Id));
@@ -1568,6 +1570,9 @@ sealed partial class MultiplayerService : IDisposable
                 break;
             case "combat":
                 ReceiveCombat(m.Body);
+                break;
+            case "bots":
+                ReceiveBots(m.Body);
                 break;
             case "replay.chunk":
                 if (ReadReplayChunk(m.Body) is { } fromHost && swap.Chunk(fromHost.Match, fromHost.Round, fromHost.Owner, fromHost.Id, fromHost.Kind, fromHost.Label, fromHost.Size, fromHost.Hash, fromHost.Offset, fromHost.Data) is { } got) swap.Import(got.Bytes, got.Info);
@@ -2085,9 +2090,12 @@ sealed partial class MultiplayerService : IDisposable
         if (recent.Any(r => r.Id == match.Id)) return;
         var self = match.Standings.FirstOrDefault(s => s.MemberId == SelfId);
         var winner = match.WinnerId is { } w ? match.Standings.FirstOrDefault(s => s.MemberId == w)?.Name : null;
-        var players = match.Standings.Select(s => new RecentPlayer(s.Name, s.Place, s.Best, s.Wins, s.Points, s.MemberId == SelfId, PlayerKey(s.MemberId), s.Total)).ToArray();
+        // Bots are listed as bots, with no player key (they're nobody's rival and never reach the Hub).
+        var players = match.Standings.Select(s => lobby.Members.FirstOrDefault(m => m.Id == s.MemberId) is { Bot: not null }
+            ? new RecentPlayer(s.Name, s.Place, s.Best, s.Wins, s.Points, false, null, s.Total, Bot: true)
+            : new RecentPlayer(s.Name, s.Place, s.Best, s.Wins, s.Points, s.MemberId == SelfId, PlayerKey(s.MemberId), s.Total)).ToArray();
         recent.Insert(0, new RecentMatch(match.Id, clock(), match.Mode, match.Scenario, LobbyModes.Scored(match.Mode) ? self?.Place : null, match.Players.Count, winner,
-            match.WinnerId == SelfId, lobby.Members.Any(m => m.Simulated), players, match.Round, MatchReplays(match.Id, match.Round, players)));
+            match.WinnerId == SelfId, lobby.Members.Any(m => m.Simulated), players, match.Round, MatchReplays(match.Id, match.Round, players), lobby.Members.Any(m => m.Bot is not null)));
         if (recent.Count > HistoryLimit) recent.RemoveRange(HistoryLimit, recent.Count - HistoryLimit);
         SaveHistory();
     }

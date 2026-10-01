@@ -506,7 +506,7 @@ sealed class SteamTransport : IMultiplayerTransport
     public IReadOnlyList<WorkshopItem> WorkshopItems { get { lock (gate) return workshopItems; } }
     // Contract addition: dev.avatar {on, mode: circle|path, profile?}, answered by a result.
     public bool DevAvatar(bool on, string mode, string? profile = null) => DevAvatar(on, mode, profile, null);
-    public bool DevWalkers(IReadOnlyList<(string Peer, string? Look, IReadOnlyList<double[]> Spawns)> walkers)
+    public bool DevWalkers(IReadOnlyList<(string Peer, string? Look, IReadOnlyList<double[]> Spawns, int Own)> walkers)
     {
         bool can; lock (gate) can = ready && devAvatarWalkers;
         if (!can || walkers.Count is 0 or > 16) return false;
@@ -517,6 +517,7 @@ sealed class SteamTransport : IMultiplayerTransport
         {
             if (!int.TryParse(w.Peer, out var peer) || peer is < 1 or > 16) return false;
             var item = new JsonObject { ["peer"] = peer, ["spawns"] = Points(w.Spawns) };
+            if (w.Own > 0 && w.Own < w.Spawns.Count) item["own"] = w.Own; // only the first `own` points are spawns to stand on
             if (w.Look is { Length: > 0 and <= 64 } look && look.All(c => char.IsAsciiLetterOrDigit(c) || c == ' ')) item["profile"] = look;
             list.Add(item);
         }

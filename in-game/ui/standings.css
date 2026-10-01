@@ -24,3 +24,4 @@
 .sb-full{width:640px}.sb-full .sb-row{min-height:32px;font-size:14px}.sb-full .sb-num{width:84px}.sb-full .sb-head{padding:12px 16px}.sb-full .sb-title{font-size:14px}
 /* Stream: OBS browser source, larger type. */
 .sb-stream{width:520px}.sb-stream .sb-row{min-height:34px;font-size:16px}.sb-stream .sb-num{width:84px}.sb-stream .sb-title{font-size:15px}
+.sb-bot{margin-right:6px;padding:0 4px;border-radius:3px;background:#2b3a46;color:#9fc3d9;font-size:10px;font-weight:700}
