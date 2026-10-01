@@ -957,6 +957,8 @@ static void WaterChecks()
     CHECK(tint.b > tint.r && tint.r > 0 && tint.b <= 1, "underwater tint is a light blue");
 }
 
+#include "OverlayTests.inl"
+
 int main(int argc, char** argv)
 {
     if (argc == 3 && std::strcmp(argv[1], "--write-samples") == 0)
@@ -977,6 +979,7 @@ int main(int argc, char** argv)
     MatchPlayChecks();
     EndRunChecks();
     cosmetics_checks::Run();
+    overlay_checks::Run();
     PreviewChecks();
     WaterChecks();
     std::printf("%d AimModCore checks, %d failed.\n", g_checks, g_failures);
