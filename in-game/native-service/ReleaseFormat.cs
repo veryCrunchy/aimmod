@@ -96,8 +96,9 @@ static class ReleasePaths
     public static string Combine(string root, string path)
     {
         if (!IsAllowed(path)) throw new ReleaseFormatException("Path not allowed in a release.");
-        var full = Path.GetFullPath(Path.Combine(root, ToWindows(path)));
-        var prefix = Path.GetFullPath(root).TrimEnd('\\') + "\\";
+        // The OS separator, not '\\': CI verifies releases on Linux.
+        var full = Path.GetFullPath(Path.Combine(root, path.Replace('/', Path.DirectorySeparatorChar)));
+        var prefix = Path.GetFullPath(root).TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
         if (!full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) throw new ReleaseFormatException("Path escapes its folder.");
         return full;
     }

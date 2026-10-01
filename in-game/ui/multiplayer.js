@@ -1080,9 +1080,17 @@
     kv('Mode',mode(s.mode).label);
     kv('Scenario',s.scenario?safe(s.scenario.name,'Scenario'):'Not chosen');
     kv('Map',s.mapOverride?safe(s.mapOverride.name,'Map')+(s.mapOverride.source==='ported'?' (ported)':''):'Scenario map');
-    if(combat(s.mode)){kv('Frag limit',F.number(s.fragLimit||(s.mode==='vampiric'?10:s.mode==='instagib'?25:s.mode==='team-deathmatch'?50:20),0)+' kills');if(s.mode==='vampiric')kv('Lifesteal',F.number(typeof s.lifesteal==='number'?s.lifesteal:50,0)+' %');}
+    if(s.mode==='cs'){
+      var half=s.halfRounds||12;
+      kv('Rounds','First to '+(half+1)+' of '+(half*2)+' · sides switch after '+half);
+      kv('Round','1:55 · freeze 15 s · buy 20 s · bomb 40 s');
+      kv('Economy','$800 start · CS2 rewards and loss bonus');
+      kv('Overtime',s.overtime===false?'Off':'On · halves of 3 with $12,500');
+      if(s.scenario&&s.scenario.csProblem)kv('CS map','Not a CS map: '+safe(s.scenario.csProblem,'')).children[1].className+=' mp-warn-line';
+    }
+    else if(combat(s.mode)){kv('Frag limit',F.number(s.fragLimit||(s.mode==='vampiric'?10:s.mode==='instagib'?25:s.mode==='team-deathmatch'?50:20),0)+' kills');if(s.mode==='vampiric')kv('Lifesteal',F.number(typeof s.lifesteal==='number'?s.lifesteal:50,0)+' %');}
     else kv(s.mode==='duel'?'First to':'Rounds',s.mode==='duel'?F.number(s.firstTo,0)+' wins':s.mode==='practice'?'As many as you like':F.number(s.rounds,0));
-    kv(combat(s.mode)?'Match length':s.mode==='tracking-duel'?'Round length':'Time limit',s.timeLimit?F.duration(s.timeLimit):'Scenario ('+F.duration(s.scenario?s.scenario.timeLimit:60)+')');
+    if(s.mode!=='cs')kv(combat(s.mode)?'Match length':s.mode==='tracking-duel'?'Round length':'Time limit',s.timeLimit?F.duration(s.timeLimit):'Scenario ('+F.duration(s.scenario?s.scenario.timeLimit:60)+')');
     kv('Loadout',profileText(s.weapon,'weapon')+' · '+profileText(s.movement,'movement'));
     if(s.character&&s.character.preset!=='default')kv('Character',profileText(s.character,'character'));
     if(s.targetSpeed!==1||s.targetSize!==1)kv('Targets','Speed '+multiplier(s.targetSpeed)+' · size '+multiplier(s.targetSize));
@@ -1171,6 +1179,7 @@
     var limits=[{id:'default',label:'Scenario'},{id:'30',label:'30 s'},{id:'60',label:'60 s'},{id:'90',label:'90 s'},{id:'120',label:'2 min'}];
     if(combat(s.mode))pl.appendChild(settingRow('Match length','Ends here if nobody reaches the frag limit.',segmented([{id:'180',label:'3 min'},{id:'300',label:'5 min'},{id:'600',label:'10 min'}],String(s.timeLimit||300),function(id){setting('timeLimit',Number(id));},false,'match length')));
     else if(s.mode==='tracking-duel')pl.appendChild(settingRow('Round length','',segmented([{id:'10',label:'10 s'},{id:'15',label:'15 s'},{id:'20',label:'20 s'},{id:'30',label:'30 s'}],String(s.timeLimit||10),function(id){setting('timeLimit',Number(id));},false,'round length')));
+    else if(s.mode==='cs')pl.appendChild(settingRow('Round','CS2 rules: 1:55 rounds, 15 s freeze, 20 s buy time, 40 s bomb, $800 start.',node('span','mp-muted','Fixed')));
     else pl.appendChild(settingRow('Time limit',overrides?'The scenario’s own is '+F.duration(s.scenario?s.scenario.timeLimit:60)+'.':locked,segmented(limits,s.timeLimit?String(s.timeLimit):'default',function(id){setting('timeLimit',id==='default'?null:Number(id));},!overrides,'time limit')));
     right.appendChild(pl);
     // Privacy
@@ -1243,7 +1252,14 @@
     input.onchanged=function(){pickerQuery=input.value;fill();};
     box.appendChild(field(input,kind==='scenario'?'Find a scenario':kind==='map'?'Find a map':'Find a profile'));
     var list=node('div','mp-picker-list');box.appendChild(list);
-    function items(){var src=kind==='scenario'||kind==='suggest'?library.scenarios:kind==='map'?library.maps:kind==='weapon'?library.weapons:library.characters;return (src||[]).map(function(x){return typeof x==='string'?{name:x}:x;});}
+    // CS competitive: only maps with the AimMod CS map spec; the others are listed after them, off, with why.
+    var csMode=kind==='scenario'&&view&&view.lobby&&view.lobby.settings&&view.lobby.settings.mode==='cs';
+    // Why a scenario's map can't host CS (null: it can): the library's modes.cs.
+    function csWhy(x){var c=x&&x.modes&&x.modes.cs;return c?(c.ok?null:safe(c.reason,'Not a CS map')):'Not a CS map';}
+    function items(){var src=kind==='scenario'||kind==='suggest'?library.scenarios:kind==='map'?library.maps:kind==='weapon'?library.weapons:library.characters;
+      var list=(src||[]).map(function(x){return typeof x==='string'?{name:x}:x;});
+      if(csMode)list=list.filter(function(x){return !csWhy(x);}).concat(list.filter(function(x){return !!csWhy(x);}));
+      return list;}
     var scen=kind==='scenario'||kind==='suggest',picks=(view&&view.picks)||{favourites:[],recent:[]};
     function isFav(name){return (picks.favourites||[]).indexOf(name)>=0;}
     function fill(){
@@ -1264,11 +1280,14 @@
       else if(all.length>shown&&!q)list.appendChild(node('div','mp-muted','Showing '+shown+' of '+F.number(all.length,0)+'. Type to narrow the list.'));
     }
     function entry(x){
-        var b=node('button','mp-pick-item');b.type='button';
+        var why=csMode?csWhy(x):null;
+        var b=node('button','mp-pick-item'+(why?' off':''));b.type='button';
+        if(why){b.disabled=true;b.title='Not a CS map: '+why;}
         var info=node('span','mp-pick-info');add(info,node('strong','',safe(x.name,'Untitled')));
         if(kind==='scenario'||kind==='suggest')info.appendChild(node('span','','Map '+safe(x.map,'')+' · '+F.duration(x.timeLimit)+(x.defaultWeapon?' · '+safe(x.defaultWeapon,''):'')));
         b.appendChild(info);
-        if(kind==='map'||kind==='scenario'||kind==='suggest'){var src=kind==='map'?x.source:x.mapSource;b.appendChild(chip(src==='ported'?'Ported':src==='custom'?'Custom map':'Built-in',src==='ported'?'mint':''));}
+        if(csMode)b.appendChild(chip(why||'CS map',why?'':'mint'));
+        else if(kind==='map'||kind==='scenario'||kind==='suggest'){var src=kind==='map'?x.source:x.mapSource;b.appendChild(chip(src==='ported'?'Ported':src==='custom'?'Custom map':'Built-in',src==='ported'?'mint':''));}
         b.onclick=function(){picker=null;if(kind==='suggest'){suggesting=false;act('suggest',{scenario:x.name});return;}if(kind==='scenario'||kind==='map')setting(kind==='map'?'mapOverride':'scenario',x.name);else setting(kind,{preset:'custom',custom:x.name});};
         if(!scen)return b;
         var row=node('div','mp-pick-row');row.appendChild(b);

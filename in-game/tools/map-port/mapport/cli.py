@@ -8,7 +8,7 @@ import re
 import sys
 from typing import List, Optional
 
-from . import (archive, bsp, checks, cleanup, goldsrc, kovaaks_json, materials, naming, objectives, preview, quake3,
+from . import (archive, bsp, checks, cleanup, csmap, goldsrc, kovaaks_json, materials, naming, objectives, preview, quake3,
                reflex, scenario, spawns, tags, thumbnail, views, vmf)
 
 
@@ -156,7 +156,12 @@ def convert_file(path: str, out: str, args) -> dict:
             report["views"][name] = round(void, 4)
     op = os.path.join(out, base + ".aimmod.json")
     with open(op, "w", encoding="utf-8", newline="\n") as fh:
-        json.dump(objectives.build(sc, base, args.map_scale), fh, indent=1)
+        doc = objectives.build(sc, base, args.map_scale)
+        # CS competitive: de_ maps (and any map with bomb sites) carry the CS map spec.
+        if csmap.wanted(mapid, doc):
+            doc["cs"] = csmap.build(doc, goldsrc=sc.version == 30)
+            report["cs"] = {"eligible": not doc["cs"]["problems"], "problems": doc["cs"]["problems"], "derived": doc["cs"]["derived"]}
+        json.dump(doc, fh, indent=1)
     report["files"]["objectives"] = os.path.relpath(op, out)
     with open(os.path.join(out, base + ".report.json"), "w", encoding="utf-8") as fh:
         json.dump(report, fh, indent=2)

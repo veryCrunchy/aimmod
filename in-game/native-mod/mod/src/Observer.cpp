@@ -104,7 +104,7 @@ namespace aimmod
           m_sampler(m_b, m_scene, output), m_presenter(m_b, m_scene, output), m_control(m_b, m_scene, output),
           m_match(m_b, m_scene, output), m_cosmetics(m_b, m_scene, output),
           m_water(m_b, m_scene),
-          m_preview(m_scene, output)
+          m_preview(m_scene, output), m_overlay(m_scene, output)
     {
     }
 
@@ -130,6 +130,8 @@ namespace aimmod
         if (m_b.replayReady()) caps += ",shots";
         if (m_b.replayReady() && m_match.available()) caps += ",match-play";
         if (m_cosmetics.ready()) caps += ",cosmetics";
+        // The notice layer is AimModCore's: AimModNativeUI's Notify.lua stands down.
+        if (m_overlay.ready()) caps += caps.empty() ? "overlay" : ",overlay";
         return caps;
     }
 
@@ -369,6 +371,7 @@ namespace aimmod
         m_callbacks.clear();
         m_presenter.Stop();
         m_preview.Shutdown();
+        m_overlay.Shutdown();
         m_water.Shutdown();
         for (auto& [function, ids] : m_hooks) UObjectGlobals::UnregisterHook(function, ids);
         m_hooks.clear();
@@ -618,6 +621,11 @@ namespace aimmod
         m_cosmetics.Tick(now);
         m_water.Tick(now, m_scenarioName, m_inChallenge, m_loading);
         m_preview.Tick(now, m_inChallenge, m_loading);
+        {
+            const bool wasReady = m_overlay.ready();
+            m_overlay.Tick(now, m_output.playbackActive());
+            if (wasReady != m_overlay.ready()) m_output.SetCapabilities(Capabilities());
+        }
         PollClipKey();
         if (m_output.poseRequested() && now >= m_nextPose)
         {

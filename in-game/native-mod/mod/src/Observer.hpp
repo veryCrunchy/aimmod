@@ -4,6 +4,7 @@
 // runs the replay sampler. Read-only with respect to the game.
 #include "Cosmetics.hpp"
 #include "CosmeticsPreview.hpp"
+#include "OverlayHost.hpp"
 #include "GameControl.hpp"
 #include "MatchPlay.hpp"
 #include "Presenter.hpp"
@@ -101,6 +102,7 @@ namespace aimmod
         Presenter m_presenter;
         GameControl m_control;
         CosmeticsPreview m_preview;
+        OverlayHost m_overlay;
         bool m_inChallenge{}, m_loading{};
         // Clip hotkey edge detection; self-pose stream; freeplay timer probe.
         bool m_clipKeyDown{};

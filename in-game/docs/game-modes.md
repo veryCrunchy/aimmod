@@ -1165,6 +1165,50 @@ preset):
   sites have floor decals or text labels ("A", "B"), and the HUD shows bomb
   state and timer.
 
+#### 6.6.0 CS maps, bomb and the pose feed (built)
+
+- **Only CS maps.** A scenario can host CS competitive only if its map's
+  `.aimmod.json` has the AimMod CS map spec (tools/map-port README, "CS map
+  spec"). The spec has bomb sites A and B, at least 5 T and 5 CT spawns,
+  and T and CT buy zones. Being a CS port isn't enough.
+  - `ScenarioChoice.CsProblem` carries the reason. In CS the host refuses
+    other maps and the start is blocked ("cs-map").
+  - Switching to CS with an ineligible map picks the first CS map in the
+    library.
+  - The lobby view has `eligibility` (scenario name to `{ok, reason,
+    players}`) for the current mode. The library view has `modes.cs`
+    (`{ok, reason}`) per scenario.
+- **Rounds on the map.** Each round starts on your side's spawns. You can
+  buy only inside your buy zone during buy time; the menu opens only there
+  and closes when you leave. You can plant only inside a site. The HUD
+  shows the site letter (and callout) you stand in. A compass shows sites A
+  and B, plus the bomb when it is dropped (Ts) or planted (everyone).
+- **Bomb.** It goes to the last carrier if they're still a T, else to a
+  random T. Teammates see who has it.
+  - G drops it 70 cm ahead of you. The dropper can't pick it straight back
+    up. Any alive T walking over it picks it up; CTs walk over it.
+  - It drops where the carrier dies.
+  - A refused plant, defuse or drop says why on the HUD ("Not in a bomb
+    site", "You don't have the bomb", ...).
+  - Not built: a world mesh for a dropped bomb (the compass marks it) and
+    a planted-bomb beep.
+- **The pose feed was dropped.** AimModCore writes its `self` and `fire`
+  rows with a real Unix-millisecond time (about 1.8e12). The service's pose
+  reader capped numbers at 1e12, so it threw away every self-pose frame
+  with those rows. The time is now read as an integer.
+  - Without that feed the host had no track for the local player. That
+    explains hits refused as "no-shooter-track", every buy refused with "Go
+    back to your buy zone", plants refused with "no-track", and no site
+    letters.
+- **Arena data on every lobby core.** A lobby created after the match
+  scenario was built (a second CS lobby, a new host) used to run without
+  the map's spawns and CS data. That meant buying and planting anywhere and
+  no team spawns. The service now hands the arena's spawns and CS map data
+  to the lobby core every tick.
+- **Buy menu.** It is kept as one element while the HUD redraws, so a click
+  is never lost between press and release. Escape closes it as well as B.
+  The compass hides while it is open so the two don't overlap.
+
 #### 6.6.1 Decided and built (service side)
 
 **User decisions:**

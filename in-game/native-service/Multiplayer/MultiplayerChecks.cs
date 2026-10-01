@@ -40,7 +40,7 @@ static partial class MultiplayerChecks
         CsTeams();
         Marker();
         var root = Path.Combine(Path.GetTempPath(), "aimmod-mp-test-" + Guid.NewGuid().ToString("N"));
-        try { Content(root); Generator(root); Blocked(root); AutoLeave(root); LoadGateService(root); StandInStream(root); ClaimTiming(root); RestartDuringMatch(root); LoadGateEnsureMap(root); Binds(root); Service(root); Transfers(root); Replays(root); Maps(root); Tournaments(root); }
+        try { Content(root); Generator(root); Blocked(root); AutoLeave(root); LoadGateService(root); StandInStream(root); ClaimTiming(root); RestartDuringMatch(root); CsMaps(root); LoadGateEnsureMap(root); Binds(root); Service(root); Transfers(root); Replays(root); Maps(root); Tournaments(root); }
         finally { try { Directory.Delete(root, true); } catch (IOException) { } }
         Console.WriteLine($"{count} multiplayer checks passed.");
     }
@@ -721,7 +721,9 @@ static partial class MultiplayerChecks
         var match = new CsMatch(ids, t0, 6, true, objectives);
         void Place(string id, double x, long from, long to) { var list = new List<TrackSample>(); for (var t = from; t < to; t += 17) list.Add(new TrackSample(t, x, 0, 164, 0, x < 500 ? 0 : 180)); for (var i = 0; i < list.Count; i += 60) match.Combat.Track(id, new TrackBatch("m", 1, list.Skip(i).Take(60).ToList(), [])); }
         foreach (var id in ids) Place(id, match.SideOf(id) == CsRules.T ? 0 : 1000, t0 - 200, t0 + 2000);
-        Check(match.SideOf("a") == CsRules.T && match.SideOf("b") == CsRules.CT && match.View().Bomb.Carrier == "a" && match.View().Spawns!["b"][0] == 1000, "Teams by join order, a Terrorist carries the bomb, side spawns from the metadata");
+        var bomber = match.View().Bomb.Carrier!;
+        Check(match.SideOf("a") == CsRules.T && match.SideOf("b") == CsRules.CT && match.SideOf(bomber) == CsRules.T && match.View().Spawns!["b"][0] == 1000, "Teams by join order, one Terrorist carries the bomb, side spawns from the metadata");
+        var other = new[] { "a", "c", "e" }.First(id => id != bomber);
         Check(match.Buy("a", "ak47", t0 + 1000) == "money" && match.Buy("a", "kevlar", t0 + 1000) is null && match.View().Players.First(p => p.Member == "a") is { Money: 150, Armor: 100 }, "Buying in freeze time: not enough money is refused, kevlar is bought");
         Check(match.Buy("b", "ak47", t0 + 1000) == "side" && match.Buy("b", "usp", t0 + 1000) == "owned" && match.Buy("b", "defuse-kit", t0 + 1000) is null, "Side rules: CT can't buy the AK; the starting pistol is owned; CT buy a kit");
         Place("d", 0, t0 + 2000, t0 + 3000);
@@ -732,20 +734,21 @@ static partial class MultiplayerChecks
 
         // Plant: the carrier holds E in the site for 3.2 s; then the CT defuses with a kit (5 s).
         var live = t0 + CsRules.FreezeMs;
-        foreach (var id in ids) Place(id, id == "a" || id == "b" ? 500 : match.SideOf(id) == CsRules.T ? 0 : 1000, live, live + 30_000);
-        Check(match.Use("c", true, live + 1000) == "nothing-to-use" && match.Use("a", true, live + 1000) is null, "Only the carrier plants, in a bomb site");
+        foreach (var id in ids) Place(id, id == bomber || id == "b" ? 500 : match.SideOf(id) == CsRules.T ? 0 : 1000, live, live + 30_000);
+        Check(match.Use(other, true, live + 1000) == "no-bomb" && match.Use(bomber, true, live + 1000) is null, "Only the carrier plants, in a bomb site (others are told they don't have the bomb)");
         match.Tick(live + 1000 + CsRules.PlantMs + 10);
-        Check(match.Phase == "planted" && match.View().Bomb is { State: "planted", Site: "A" } && match.View().Players.First(p => p.Member == "a").Money == 450, "Planted after 3.2 s; the planter gets $300");
+        Check(match.Phase == "planted" && match.View().Bomb is { State: "planted", Site: "A" } && match.View().Players.First(p => p.Member == bomber).Money == (bomber == "a" ? 450 : 1100), "Planted after 3.2 s; the planter gets $300");
         Check(match.Use("b", true, live + 5000) is null, "The CT at the bomb starts defusing");
         match.Tick(live + 5000 + CsRules.KitDefuseMs + 10);
         var v = match.View();
         Check(match.Phase == "end" && v.LastWinner == 2 && v.LastReason == "defuse" && v.Score[1] == 1, "A kit defuses in 5 s: the CT take the round");
-        Check(v.Players.First(p => p.Member == "b").Money == 800 - CsRules.KitPrice + CsRules.DefuseReward + CsRules.WinDefuse && v.Players.First(p => p.Member == "c").Money == 800 + 1400 + 800,
+        var bystander = new[] { "c", "e" }.First(id => id != bomber);
+        Check(v.Players.First(p => p.Member == "b").Money == 800 - CsRules.KitPrice + CsRules.DefuseReward + CsRules.WinDefuse && v.Players.First(p => p.Member == bystander).Money == 800 + 1400 + 800,
             "CS2 rewards: $3500 defuse win (+$300 defuser); Terrorists get the loss bonus plus $800 for the plant");
 
         // Round 2: elimination. Dead players lose their gear; the loss bonus grows.
         match.Tick(match.View().PhaseEndsAt + 1);
-        Check(match.Phase == "freeze" && match.Round == 2 && match.View().Bomb.Carrier == "c", "The next round starts frozen; the bomb goes to the next Terrorist");
+        Check(match.Phase == "freeze" && match.Round == 2 && match.View().Bomb.Carrier is { } next && match.SideOf(next) == CsRules.T, "The next round starts frozen; a Terrorist has the bomb again");
         match.Tick(match.View().PhaseEndsAt + 1);
         var t2 = match.View().LiveAt!.Value;
         foreach (var id in new[] { "a", "c", "e" }) match.Combat.Kill(id, t2 + 100);

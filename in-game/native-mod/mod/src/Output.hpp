@@ -1,6 +1,7 @@
 #pragma once
 // Writer thread: owns every file the mod writes. The game thread only hands
 // over small immutable jobs (never blocks on disk).
+#include <aimmod/Overlay.hpp>
 #include <aimmod/Cosmetics.hpp>
 #include <aimmod/GameCommand.hpp>
 #include <aimmod/GameStats.hpp>
@@ -95,6 +96,19 @@ namespace aimmod
         CosmeticsInputs cosmetics() const;
         // Clip hotkey and window (clip-settings.tsv, defaults F8 / 8 s / 2 s).
         ClipSettings clipSettings() const;
+        // Overlay host inputs (DESIGN.md "Overlay host"), re-read by the writer thread:
+        // multiplayer-notify.json (parsed when it changes), the notify page URL, whether
+        // the AimMod panel is on screen (aimmod-panel.tsv from Menu.lua) and the
+        // ui-host.tsv switch. `version` changes with any of them.
+        struct OverlayInputs
+        {
+            std::optional<overlay::Notice> notice;
+            std::string url;
+            bool panelOpen{};
+            bool native{true};
+            std::uint64_t version{};
+        };
+        OverlayInputs overlay() const;
         void PublishReplayStatus(std::string body);
         // Encodes (format 2) and publishes a completed recording.
         void ReplayWrite(std::unique_ptr<replay2::Capture> capture);
@@ -189,6 +203,10 @@ namespace aimmod
         void LoadCosmeticsLibrary();
         void ReadCosmeticsInputs();
         ClipSettings m_clips;
+        OverlayInputs m_overlay;
+        std::uint64_t m_notifyStamp{}, m_lastOverlayCheck{};
+        std::string m_notifyText;
+        void ReadOverlayInputs(std::uint64_t now);
         std::string m_selfPose;
         bool m_selfPoseDirty{};
         std::uint64_t m_lastPoseCheck{}, m_lastClipCheck{};

@@ -48,7 +48,9 @@ static class ProfilePresets
 }
 
 // WorkshopId is set when the host's copy is a Steam Workshop item, so members can download it there.
-sealed record ScenarioChoice(string Name, string Hash, string Map, string MapHash, double TimeLimit, string? WorkshopId = null);
+// CsProblem: why the scenario's map can't host CS competitive (null: it can), from the host's
+// library (the map's AimMod CS map spec). Only the host's value counts.
+sealed record ScenarioChoice(string Name, string Hash, string Map, string MapHash, double TimeLimit, string? WorkshopId = null, string? CsProblem = null);
 sealed record MapChoice(string Name, string Hash, string Source);
 sealed record ProfileChoice(string Preset, string? Custom = null, string? Hash = null)
 {
@@ -217,6 +219,8 @@ static class LobbyRules
                 case "scenario":
                     if (Text() is not { } scenarioName || !ValidContentName(scenarioName)) return (null, Bad("Choose a scenario from your library."));
                     if (resolve.Scenario(scenarioName) is not { } scenario) return (null, LobbyResult.Fail("scenario-missing", "That scenario isn’t in your library."));
+                    if (next.Mode == LobbyModes.Cs && !patch.TryGetProperty("mode", out _) && scenario.CsProblem is { } csProblem)
+                        return (null, LobbyResult.Fail("cs-map", "That map isn’t set up for CS: " + csProblem + "."));
                     next = next with { Scenario = scenario, MapOverride = null }; break;
                 case "mapOverride":
                     if (value.ValueKind == JsonValueKind.Null) { next = next with { MapOverride = null }; break; }
@@ -307,7 +311,8 @@ static class LobbyRules
         if (s.Mode == LobbyModes.Cs)
         {
             var max = Math.Clamp(s.MaxPlayers + s.MaxPlayers % 2, 6, 10);
-            s = s with { Rounds = 1, TimeLimit = null, Weapon = ProfileChoice.Default, TargetSpeed = 1, TargetSize = 1, MaxPlayers = max, HalfRounds = Math.Clamp(s.HalfRounds, 6, 15) };
+            // CS plays the scenario's own map: its CS map spec is what makes it eligible.
+            s = s with { Rounds = 1, TimeLimit = null, Weapon = ProfileChoice.Default, TargetSpeed = 1, TargetSize = 1, MaxPlayers = max, HalfRounds = Math.Clamp(s.HalfRounds, 6, 15), MapOverride = null };
         }
         else s = s with { MaxPlayers = Math.Min(s.MaxPlayers, LobbyModes.MaxPlayers(s.Mode)) };
         if (s.Mode == LobbyModes.Tracking) s = s with { Rounds = Math.Clamp(s.Rounds, 1, TrackingDefaults.MaxRounds), TimeLimit = Math.Clamp(s.TimeLimit ?? TrackingDefaults.RoundSeconds, 10, TrackingDefaults.MaxRoundSeconds) };
@@ -334,6 +339,7 @@ static class LobbyRules
         var players = lobby.Members.Where(m => m.Role == MemberRoles.Player && !m.Away).ToArray();
         if (lobby.Match is { Phase: not MatchPhases.Final }) { list.Add(new("in-match", "A match is already running.")); return list; }
         if (s.Scenario is null) list.Add(new("scenario", "Choose a scenario."));
+        if (s.Mode == LobbyModes.Cs && s.Scenario?.CsProblem is { } csProblem) list.Add(new("cs-map", "This map isn’t set up for CS (" + csProblem + "). Pick a CS map."));
         if (LobbyModes.TwoPlayers(s.Mode) && players.Length != 2) list.Add(new("duel-players", "A duel needs exactly two players."));
         else if (s.Mode == LobbyModes.Cs && players.Length is not (6 or 8 or 10)) list.Add(new("cs-teams", "CS is 3v3, 4v4 or 5v5: it needs 6, 8 or 10 players (now " + players.Length + ")."));
         else if (s.Mode == LobbyModes.Cs && ResolveTeams(players.Select(p => (p.Id, p.Team)).ToList()) is { } resolved && resolved.Values.Count(t => t == 1) != resolved.Values.Count(t => t == 2))

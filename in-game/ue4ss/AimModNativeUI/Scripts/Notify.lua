@@ -191,7 +191,10 @@ end
 -- panelOpen: the AimMod panel is on screen (it shows the same things itself).
 -- menuVisible: KovaaK's own menus (scenario browser, settings) are on screen, so the
 -- player has a cursor even when the controller's bShowMouseCursor doesn't say so.
-function M.update(panelOpen,replayActive,menuVisible)
+-- native: AimModCore's overlay host shows the notice layer and owns its input (core-active.tsv
+-- lists "overlay"). This layer then stands down: hidden, no cursor or input changes. The play
+-- request is still read, for Menu.lua's match-start hand-back.
+function M.update(panelOpen,replayActive,menuVisible,native)
     if not valid(owner) then M.close();owner=nil;return end
     -- A few hundred bytes, read on every 100 ms tick so countdowns stay in step.
     text=read('multiplayer-notify.json',16385)
@@ -199,6 +202,13 @@ function M.update(panelOpen,replayActive,menuVisible)
     if text and #text<=16384 then
         local id,since=text:match('"play":{"id":"([^"]+)","since":(%d+)')
         if id then playId=id;playSince=tonumber(since) end
+    end
+    if native then
+        if shown or interactive or tookCursor then note('standing down: AimModCore hosts the notice layer') end
+        wantCursor,swallow,boardHeld,tookCursor,focusPending=false,false,false,false,false
+        if shown or interactive then M.hide() end
+        lastId=nil;lastCount=nil
+        return
     end
     wantCursor=text~=nil and text:find('"cursor":true',1,true)~=nil
     swallow=text~=nil and text:find('"swallowMenu":true',1,true)~=nil

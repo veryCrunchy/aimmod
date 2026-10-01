@@ -315,6 +315,76 @@ namespace aimmod
         ++m_playStateVersion;
     }
 
+    Output::OverlayInputs Output::overlay() const
+    {
+        std::lock_guard lock(const_cast<std::mutex&>(m_mutex));
+        return m_overlay;
+    }
+
+    // Every writer pass: the notice file when its write time changes (it changes only
+    // when the service has something new); the URL, the panel state and the switch
+    // twice a second.
+    void Output::ReadOverlayInputs(std::uint64_t now)
+    {
+        WIN32_FILE_ATTRIBUTE_DATA data{};
+        const auto path = m_root / L"multiplayer-notify.json";
+        std::uint64_t stamp = 0;
+        if (GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &data))
+            stamp = (static_cast<std::uint64_t>(data.ftLastWriteTime.dwHighDateTime) << 32) | data.ftLastWriteTime.dwLowDateTime;
+        bool changed = false;
+        std::optional<overlay::Notice> notice;
+        bool noticeRead = false;
+        if (stamp != m_notifyStamp)
+        {
+            std::string text;
+            if (stamp == 0 || ReadSmall(path, text, overlay::MaxNoticeBytes + 1))
+            {
+                m_notifyStamp = stamp;
+                if (text != m_notifyText)
+                {
+                    m_notifyText = std::move(text);
+                    notice = overlay::ParseNotice(m_notifyText);
+                    noticeRead = true;
+                }
+            }
+        }
+        std::string url;
+        bool panel = false, native = true, slowRead = false;
+        if (now - m_lastOverlayCheck >= 500)
+        {
+            m_lastOverlayCheck = now;
+            slowRead = true;
+            std::string text;
+            if (ReadSmall(m_root / L"live-overlay-url.txt", text, 513))
+                if (auto u = overlay::NoticeUrl(text)) url = *u;
+            text.clear();
+            if (ReadSmall(m_root / L"aimmod-panel.tsv", text, 128)) panel = overlay::PanelOpen(text, static_cast<std::int64_t>(std::time(nullptr)));
+            text.clear();
+            if (ReadSmall(m_root / L"ui-host.tsv", text, 512)) native = overlay::ParseUiHost(text) == overlay::Host::Native;
+        }
+        std::lock_guard lock(m_mutex);
+        if (noticeRead)
+        {
+            const bool differs = notice.has_value() != m_overlay.notice.has_value() ||
+                                 (notice && (notice->content != m_overlay.notice->content || notice->full != m_overlay.notice->full ||
+                                             notice->interactive != m_overlay.notice->interactive || notice->cursor != m_overlay.notice->cursor ||
+                                             notice->swallowMenu != m_overlay.notice->swallowMenu || notice->boardHeld != m_overlay.notice->boardHeld));
+            if (differs)
+            {
+                m_overlay.notice = notice;
+                changed = true;
+            }
+        }
+        if (slowRead && (url != m_overlay.url || panel != m_overlay.panelOpen || native != m_overlay.native))
+        {
+            m_overlay.url = std::move(url);
+            m_overlay.panelOpen = panel;
+            m_overlay.native = native;
+            changed = true;
+        }
+        if (changed) ++m_overlay.version;
+    }
+
     void Output::SetCosmeticsSources(std::filesystem::path catalogDir, std::filesystem::path paksDir)
     {
         m_catalogDir = std::move(catalogDir);
@@ -682,6 +752,7 @@ namespace aimmod
             }
         }
         ScanGameStats(now);
+        ReadOverlayInputs(now);
         if (force || now - m_lastPoseCheck >= 500)
         {
             m_lastPoseCheck = now;

@@ -222,6 +222,33 @@ following, in KovaaK's map units and axes (Unreal X/Y/Z with Source Y mirrored; 
 - `items`: `weapon_*` and `item_*` spawns, with class, origin and yaw.
 - `spawns`: team spawns with their team.
 
+### CS map spec (`cs` block)
+
+CS competitive only runs on maps whose `.aimmod.json` has a `cs` block
+(`"format": "aimmod.cs-map"`, `"version": 1`, built by `mapport/csmap.py`):
+
+- `spawns`: `T` and `CT`, each `[x, y, z, yaw]`; at least 5 per side.
+- `bomb_sites`: `A` and `B`, each `{name, min, max}`. They come from
+  `func_bomb_target` volumes, else a box around `info_bomb_target`. Letters
+  come from the targetname (`bombsite_a`, `..B`); otherwise A is the site
+  farther from the T spawns (true on dust2).
+- `buy_zones`: `T` and `CT`, lists of `{min, max}`. They come from
+  `func_buyzone` (Source `TeamNum` 2/3, GoldSrc `team` 1/2), else a box
+  around that side's spawns.
+- `callouts` (optional): `{name, min, max}` areas shown on the HUD.
+- `derived`: what was not in the map and was worked out instead.
+- `problems`: why the map isn't eligible. Empty means eligible.
+
+A port adds the block for `de_` maps and any map with bomb sites. To add it
+to existing ports, run:
+
+```
+python -m mapport cs <.aimmod.json files or folders> [--out <folder>]
+```
+
+Without `--out` the files are edited in place. With it, copies are written
+to `<out>/<map folder>/`.
+
 ## Movement profile
 
 Presets live in `mapport/movement_presets.json`, which other AimMod services reuse. Lengths and

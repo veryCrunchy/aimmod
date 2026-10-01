@@ -258,6 +258,15 @@ sealed partial class MultiplayerService : IDisposable
                     return LeaveRunAction(action);
                 case "favourite":
                     return Favourite(Text("scenario"), !(args.TryGetProperty("on", out var favOn) && favOn.ValueKind == JsonValueKind.False));
+                // Switching to CS with a map that isn't a CS map: the first CS map in the library instead.
+                case "settings" when core is not null && core.HostId == SelfId && args.ValueKind == JsonValueKind.Object && args.TryGetProperty("settings", out var modeSettings)
+                        && modeSettings.ValueKind == JsonValueKind.Object && modeSettings.TryGetProperty("mode", out var pickedMode) && pickedMode.ValueKind == JsonValueKind.String
+                        && pickedMode.GetString() == LobbyModes.Cs && !modeSettings.TryGetProperty("scenario", out _):
+                    var modeResult = Command(action, args);
+                    if (modeResult.Ok && core.Settings is { Mode: LobbyModes.Cs, Scenario: { CsProblem: not null } }
+                        && library.Scenarios.FirstOrDefault(x => library.CsMapProblem(x.Map) is null) is { } csMap)
+                        Command("settings", JsonSerializer.SerializeToElement(new { settings = new { scenario = csMap.Name } }));
+                    return modeResult;
                 case "settings" when core is not null && args.ValueKind == JsonValueKind.Object && args.TryGetProperty("settings", out var pickedSettings) && pickedSettings.ValueKind == JsonValueKind.Object
                         && pickedSettings.TryGetProperty("scenario", out var pickedScenario) && pickedScenario.ValueKind == JsonValueKind.String:
                     var pickResult = Command(action, args);
@@ -1309,6 +1318,7 @@ sealed partial class MultiplayerService : IDisposable
             FollowWatch();
             PumpWatchContent();
             RememberSettings();
+            SyncArena();
             PlanRound();
             UpdateStandIn();
             TrackLocalRun();
@@ -1818,8 +1828,9 @@ sealed partial class MultiplayerService : IDisposable
             }
             LoadGate.Expect(name, MatchScenario.MapOf(text));
             arenaSpawns = MatchScenario.Spawns(text);
-            if (LobbyModes.Combat(s.Mode)) core?.SetCombatSpawns(arenaSpawns);
-            if (s.Mode == LobbyModes.Cs) { csObjectives = LoadObjectives(text); core?.SetCsObjectives(csObjectives); }
+            csObjectives = s.Mode == LobbyModes.Cs ? LoadObjectives(text) : null;
+            arenaFor = name;
+            SyncArena();
             var (ok, error) = scenarios.Write(name, text, clock());
             return ok ? null : error == "name-taken" ? "A scenario of yours already uses the match name. Rename it to play." : "Couldn’t save the match scenario.";
         }
@@ -1902,6 +1913,15 @@ sealed partial class MultiplayerService : IDisposable
 
     // ---- combat events: pushed by the host as they happen ------------------
     IReadOnlyList<SpawnPoint> arenaSpawns = [];
+    string? arenaFor;
+    // The arena's spawns and CS map data reach whichever lobby core plays that scenario, also one
+    // created after the scenario was built (a new lobby with the same settings, a migrated host).
+    void SyncArena()
+    {
+        if (core is null || arenaFor is null || core.Settings is not { } s || !MatchScenario.Needed(s) || MatchScenario.Name(s) != arenaFor) return;
+        core.SetCombatSpawns(LobbyModes.Combat(s.Mode) ? arenaSpawns : []);
+        core.SetCsObjectives(s.Mode == LobbyModes.Cs ? csObjectives : null);
+    }
     long pushedCombat; string? pushedMatch;
     readonly List<CombatEvent> receivedCombat = [];
     string? receivedMatch;
@@ -2087,6 +2107,8 @@ sealed partial class MultiplayerService : IDisposable
                     // Member id -> Steam picture link, for members whose picture has arrived.
                     avatars = AvatarMap(lobby.Members.Select(m => m.Id).Concat(lobby.Match?.Players ?? [])),
                     binds = BindsView(lobby.Settings),
+                    // For the map selector: which library scenarios fit the current mode (missing = fits).
+                    eligibility = Eligibility(lobby.Settings.Mode),
                 };
             }
             var friendsSource = Simulation is not null && !transport.Available ? "simulation" : transport.Available ? "steam" : "unavailable";
@@ -2123,7 +2145,10 @@ sealed partial class MultiplayerService : IDisposable
     public object LibraryView() => new
     {
         available = library.Available,
-        scenarios = library.Scenarios.Select(s => new { s.Name, s.Map, s.MapSource, s.TimeLimit, hash = s.Hash[..12], s.DefaultWeapon, s.DefaultCharacter, s.Ported }),
+        // modes: per mode that needs its own map data, whether this scenario can host it
+        // ({ cs: { ok, reason } }; reason says why not, e.g. "No bomb sites").
+        scenarios = library.Scenarios.Select(s => new { s.Name, s.Map, s.MapSource, s.TimeLimit, hash = s.Hash[..12], s.DefaultWeapon, s.DefaultCharacter, s.Ported,
+            modes = new { cs = library.CsMapProblem(s.Map) is { } csProblem ? new { ok = false, reason = (string?)csProblem } : new { ok = true, reason = (string?)null } } }),
         maps = library.Maps.Select(m => new { m.Name, m.Source, hash = m.Hash[..12] }),
         weapons = library.Weapons.Select(w => w.Name),
         characters = library.Characters.Select(c => c.Name),
