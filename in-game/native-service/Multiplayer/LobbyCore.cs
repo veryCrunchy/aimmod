@@ -710,19 +710,26 @@ sealed class LobbyCore
         }
         if (finished.Length > 0 && finished.Count(f => f.Line.Score == finished[0].Line.Score) == 1) winner = finished[0].Id;
         m.Rounds.Add(new RoundResult(m.Round, results, LobbyModes.Scored(s.Mode) ? winner : null));
-        var standings = Standings(m);
-        m.Over = s.Mode switch
-        {
-            LobbyModes.Race or LobbyModes.Rounds => m.Round >= s.Rounds,
-            LobbyModes.Duel => standings.Any(x => x.Wins >= s.FirstTo) || m.Round >= s.FirstTo * 2 + 2 || m.Players.Count(id => Find(id) is not null) < 2,
-            LobbyModes.Tracking => m.Round >= s.Rounds || m.Players.Count(id => Find(id) is not null) < 2,
-            _ => false,
-        };
-        if (m.Players.Count(id => Find(id) is not null) == 0) m.Over = true;
+        m.Over = Decided(m);
         // A single deciding round goes straight to the final screen.
         if (m.Over && m.Rounds.Count == 1) { FinishMatch(); return; }
         m.Phase = MatchPhases.Round; m.NextAt = clock() + ResultsMs;
         Changed();
+    }
+
+    // Whether the rounds played so far decide the match (no further round).
+    bool Decided(Match m)
+    {
+        var s = m.Settings;
+        var present = m.Players.Count(id => Find(id) is not null);
+        if (present == 0 || LobbyModes.Shooting(s.Mode)) return true;
+        return s.Mode switch
+        {
+            LobbyModes.Race or LobbyModes.Rounds => m.Round >= s.Rounds,
+            LobbyModes.Duel => Standings(m).Any(x => x.Wins >= s.FirstTo) || m.Round >= s.FirstTo * 2 + 2 || present < 2,
+            LobbyModes.Tracking => m.Round >= s.Rounds || present < 2,
+            _ => false,
+        };
     }
 
     void FinishMatch()
@@ -803,6 +810,8 @@ sealed class LobbyCore
             if (snapshot.Settings.Mode == LobbyModes.Tracking && ms.StartsAt is { } startsAt && ms.Phase is MatchPhases.Countdown or MatchPhases.Live && ms.Players.Count >= 2)
                 match.Tracking = new TrackingRound(ms.Players[0], ms.Players[1], startsAt, startsAt + (long)(snapshot.Settings.EffectiveTimeLimit * 1000), snapshot.Settings.RequireFire);
             core.match = match;
+            // Over is not in the snapshot: between rounds, decide again so the last results end the match.
+            if (ms.Phase == MatchPhases.Round) match.Over = core.Decided(match);
         }
         if (snapshot.HostId != newHostId) core.System(snapshot.Members.FirstOrDefault(m => m.Id == snapshot.HostId)?.Name + " (host) left. " + self.Name + " is now the host.");
         return core;

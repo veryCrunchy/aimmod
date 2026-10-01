@@ -205,6 +205,25 @@ static partial class MultiplayerChecks
         Check(heir.HostId == "p2" && heir.Members.All(m => m.Id != "host") && heir.Snapshot().Match?.Id == snapshot.Match!.Id, "Host migration keeps the lobby and the running match");
         Check(heir.Members.First(m => m.Id == "p3").Connection == Connections.Reconnecting && heir.Join("p3", "").Ok && heir.Members.First(m => m.Id == "p3").Connection == Connections.Connected, "Other members reconnect to the new host");
         Check(heir.Snapshot().Match!.Live.First(l => l.MemberId == "host").Status == LineStates.Left, "The departed host's run is marked left");
+        // Host migration while the last round's results show: the match is decided, no extra round.
+        (core, clock, advance) = Lobby();
+        core.Join("p2", "Two"); core.Join("p3", "Three");
+        core.Apply("host", "settings", Patch(new { mode = "score-race", rounds = 2, countdown = 3 }), content);
+        ReadyAll(core); core.Apply("host", "start", default, content);
+        for (var rn = 1; rn <= 2; rn++)
+        {
+            if (rn > 1) { advance(LobbyCore.ResultsMs); core.Tick(); }
+            advance(3001); core.Tick();
+            var rm = core.Snapshot().Match!;
+            advance(60_000);
+            foreach (var id in new[] { "host", "p2", "p3" }) core.Finish(id, new RunFinish(rm.Id, rn, 900 - rn, 60, 10, 5, 5, null));
+        }
+        var decided = core.Snapshot();
+        Check(decided.Match is { Phase: MatchPhases.Round, Round: 2 }, "The deciding round shows its results");
+        var successor = LobbyCore.Restore(decided, "p2", clock);
+        successor.Join("p3", "Three");
+        advance(LobbyCore.ResultsMs); successor.Tick();
+        Check(successor.Snapshot().Match is { Phase: MatchPhases.Final, Round: 2 }, "A host who takes over during the last results ends the match instead of starting an extra round");
 
         // Looks and builds.
         (core, clock, advance) = Lobby();
