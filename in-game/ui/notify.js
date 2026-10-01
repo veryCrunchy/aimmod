@@ -43,7 +43,7 @@
       if(n.cs&&!root.AimModCsHud)strips.appendChild(csHud(n.cs));
       if(n.badge){var b=node('div','badge');b.appendChild(node('span','eye'));b.appendChild(node('span','',n.badge));strips.appendChild(b);}
     }
-    var tk=n.active?JSON.stringify([n.id,n.kind,n.eyebrow,n.title,n.body,n.key,n.countdown,n.actions]):'';
+    var tk=n.active?JSON.stringify([n.id,n.kind,n.eyebrow,n.title,n.body,n.note,n.key,n.countdown,n.actions]):'';
     if(tk===toastKey)return;
     toastKey=tk;clear(card);
     if(!n.active)return;
@@ -56,7 +56,7 @@
     var top=node('div','brand',n.eyebrow?String(n.eyebrow).toUpperCase():(/^(t(ci|m[a-z])|fr|dev)-/.test(String(n.id||''))?brand(n):brands[n.kind]||brand(n)));card.appendChild(top);
     var row=node('div','row');
     if(typeof n.countdown==='number')row.appendChild(node('div','count',String(n.countdown)));
-    var text=node('div','text');text.appendChild(node('div','title',n.title||''));text.appendChild(node('div','body',n.body||''));row.appendChild(text);
+    var text=node('div','text');text.appendChild(node('div','title',n.title||''));text.appendChild(node('div','body',n.body||''));if(n.note)text.appendChild(node('div','note',n.note));row.appendChild(text);
     if(n.key)row.appendChild(node('div','key',n.key));
     card.appendChild(row);
     // Answerable notices (invite, ready, load failure) carry their buttons; the layer takes clicks only for these.

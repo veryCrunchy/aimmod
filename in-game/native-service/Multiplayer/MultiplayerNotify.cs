@@ -18,6 +18,8 @@ sealed record GameNotice(string Id, string Kind, string Title, string Body, stri
     // The small label above the title; the notice layer picks one by kind when it's empty.
     public string? Eyebrow { get; init; }
     public IReadOnlyList<NoticeAction>? Actions { get; init; }
+    // A short extra line under the body, such as a keybind that differs from KovaaK's default.
+    public string? Note { get; init; }
 }
 
 // Per-player multiplayer preferences in multiplayer-settings.json (local only).
@@ -96,8 +98,8 @@ static class KeyBinds
         AtomicFile.WriteText(path, "AIMMOD_CLIPS_1\nkey\t" + key + "\nbefore\t" + before + "\nafter\t" + after + "\n");
     }
 
-    // Keys the game binds, from UE's Input.ini when the install has one (KovaaK's 3.9.11
-    // keeps most binds elsewhere, so this can be empty).
+    // Keys the game binds, from UE's Input.ini (written once the player changes a bind, so it
+    // can be missing; the defaults then apply, see GameBinds).
     static (DateTime At, string? Root, IReadOnlySet<string> Keys) cached = (DateTime.MinValue, null, new HashSet<string>());
     public static IReadOnlySet<string> GameKeys(string? root)
     {
@@ -106,15 +108,8 @@ static class KeyBinds
     }
     static IReadOnlySet<string> ReadGameKeys(string? root)
     {
-        // KovaaK's keeps its binds in the UE user config (LocalApplicationData\FPSAimTrainer\
-        // Saved\Config\WindowsNoEditor\Input.ini); the game folder's Saved\Config is the fallback.
         var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var candidates = new List<string>
-        {
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FPSAimTrainer", "Saved", "Config", "WindowsNoEditor", "Input.ini"),
-        };
-        if (root is not null) candidates.Add(Path.Combine(root, "Saved", "Config", "WindowsNoEditor", "Input.ini"));
-        foreach (var path in candidates)
+        foreach (var path in GameBinds.InputFiles(root))
         {
             try
             {

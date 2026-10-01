@@ -283,3 +283,20 @@ test('mode cards show the line icon in a panel, mint when selected, and every mo
 test('leaving stops polling and ignores late answers',()=>{
   const s=setup();s.api.enter(s.container);s.api.leave();s.requests[0].finish(200,view());assert.equal(s.buttons().length,0);
 });
+test('the lobby lists the match keybinds and names the ones that differ; ready and loading never wait on them',()=>{
+  const s=setup();s.api.enter(s.container);
+  const binds={rows:[{label:'Forward',keys:'W',usual:'W',standard:true,move:true,aimmod:false},{label:'Fire',keys:'Mouse 1',usual:'Mouse 1',standard:true,move:false,aimmod:false},
+    {label:'Walk',keys:'Q',usual:'Shift',standard:false,move:false,aimmod:false},{label:'Reload',keys:'',usual:'R',standard:false,move:false,aimmod:false},{label:'Scoreboard',keys:'Tab',usual:'Tab',standard:true,move:false,aimmod:true}],
+    issues:['Walk is on Q here (usually Shift)','Reload has no key']};
+  const guest=lobby({self:'p2',isHost:false,binds,content:{scenario:'ok',map:'ok',profiles:'none'}});guest.members[1].map='ok';
+  s.requests[0].finish(200,view({lobby:guest}));
+  const t=s.text();
+  assert.ok(t.includes('Keybinds|Fire Mouse 1 · Walk Q · Reload none · Scoreboard Tab'),'movement stays out of the row while it is standard');
+  assert.ok(t.includes('Walk is on Q here (usually Shift) · Reload has no key'));
+  assert.ok(!s.button('Ready').disabled,'a differing bind never blocks ready');
+  const loading={id:'m1',phase:'loading',mode:'deathmatch',scenario:'Synthetic Scenario',timeLimit:60,round:1,totalRounds:1,startsAt:null,nextAt:46000,players:['p1','p2'],loaded:[],live:[],rounds:[],standings:[],winnerId:null,rematch:[],loadAttempt:0};
+  s.api.leave();s.api.enter(s.container);s.requests[s.requests.length-1].finish(200,view({lobby:lobby({match:loading,binds})}));
+  assert.ok(s.text().includes('Walk is on Q here (usually Shift)'),'the load screen repeats it');
+  s.api.leave();s.api.enter(s.container);s.requests[s.requests.length-1].finish(200,view({lobby:lobby({binds:{rows:binds.rows.filter(r=>r.standard),issues:[]}})}));
+  assert.ok(!s.text().includes('usually'),'standard binds: just the row');
+});

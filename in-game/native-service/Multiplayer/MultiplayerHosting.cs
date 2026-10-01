@@ -23,6 +23,7 @@ static class MultiplayerHosting
         IMultiplayerTransport transport = args is null || list.Contains("--no-steam") ? new OfflineTransport() : new SteamTransport();
         var service = new MultiplayerService(transport, library, args is null ? new NoGameControl() : new CoreGameControl(output), () => FromLive(live()), runs, () => AccountLabel(hub), args is null ? null : output,
             MultiplayerService.SimulationRequested(list, output));
+        if (args is not null) service.Binds = () => GameBinds.Current(library.Root);
         if (args is not null && !list.Contains("--no-hotkey"))
         {
             var hotkey = new MultiplayerHotkey(output, () => service.HotkeyArmed, service.Hotkey);

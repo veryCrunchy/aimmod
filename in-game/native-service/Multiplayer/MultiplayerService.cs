@@ -839,7 +839,7 @@ sealed partial class MultiplayerService : IDisposable
             }
             var mine = plan is { } mp && mp.Key == PlanKey(loading) ? mp.Message : "Loading…";
             return new GameNotice("ld-" + loading.Id + "-" + loading.LoadAttempt, "countdown", "Waiting for everyone to load (" + ready + "/" + present.Length + ")",
-                loading.Loaded?.Contains(SelfId) == true ? "Your map is ready." : mine, null, null, "none");
+                loading.Loaded?.Contains(SelfId) == true ? "Your map is ready." : mine, null, null, "none") { Note = BindNote(lobby.Settings) };
         }
         // CS shows its own freeze clock, so the generic match countdown stays away.
         if (lobby.Match is { } match && match.Players.Contains(SelfId) && match.Phase is MatchPhases.Countdown && match.Cs is null && match.StartsAt is { } at)
@@ -853,8 +853,10 @@ sealed partial class MultiplayerService : IDisposable
                 var other = lobby.Members.FirstOrDefault(x => x.Id != SelfId && match.Players.Contains(x.Id))?.Name ?? "your opponent";
                 how = "Track " + other + " and dodge their aim" + (lobby.Settings.RequireFire ? " (hold fire to score)." : ".");
             }
-            return new GameNotice("cd-" + match.Id + "-" + match.Round, "countdown", round + " in " + seconds, LobbyRules.CleanName(match.Scenario, "Scenario") + " · " + how, null, seconds, "countdown");
+            return new GameNotice("cd-" + match.Id + "-" + match.Round, "countdown", round + " in " + seconds, LobbyRules.CleanName(match.Scenario, "Scenario") + " · " + how, null, seconds, "countdown")
+                { Note = match.Round == 1 ? BindNote(lobby.Settings) : null };
         }
+        if (BindsNotice(lobby, now) is { } binds) return binds;
         if (!quiet && lobby.ReadyCheck is { } asked && now - asked < LobbyCore.ReadyCheckMs && me is { Role: MemberRoles.Player, Ready: false } && lobby.HostId != SelfId)
         {
             var host = lobby.Members.FirstOrDefault(m => m.Id == lobby.HostId)?.Name ?? "The host";
@@ -873,6 +875,7 @@ sealed partial class MultiplayerService : IDisposable
             var now = clock();
             var notice = ComputeNotice(now);
             if (notice?.Id.StartsWith("leave-", StringComparison.Ordinal) == true) { LeaveRunAction("leave-run-now"); return; }
+            if (notice?.Id.StartsWith("keys-", StringComparison.Ordinal) == true) { bindsDismissed = notice.Id[5..]; return; }
             if (notice?.Kind == "ready" && notice.Body.Contains("ready up", StringComparison.Ordinal) && Command("ready", JsonSerializer.SerializeToElement(new { ready = true })).Ok)
             {
                 flash = (new GameNotice("ok-" + now, "info", "You’re ready", "The host can start now.", null, null, "click"), now + 3000);
@@ -984,7 +987,7 @@ sealed partial class MultiplayerService : IDisposable
             if (notice is null && badge is null && duel is null && combat is null && cs is null && board is null && boardFull is null) return "{\"version\":1,\"active\":false}";
             return JsonSerializer.Serialize(new
             {
-                version = 1, active = notice is not null, badge, notice?.Id, notice?.Kind, notice?.Eyebrow, notice?.Title, notice?.Body, notice?.Key, notice?.Countdown, notice?.Sound, notice?.Invite,
+                version = 1, active = notice is not null, badge, notice?.Id, notice?.Kind, notice?.Eyebrow, notice?.Title, notice?.Body, notice?.Key, notice?.Countdown, notice?.Sound, notice?.Invite, notice?.Note,
                 // full: the notice layer covers the screen (the HUDs sit at its edges); toast: top centre only.
                 layout = cs is not null || board is not null || boardFull is not null ? "full" : "toast",
                 actions = notice?.Actions, interactive = notice?.Actions is { Count: > 0 } || cs?.BuyOpen == true, volume = prefs.Sounds ? prefs.Volume : 0, duel, combat, cs, board, boardFull,
@@ -2008,6 +2011,7 @@ sealed partial class MultiplayerService : IDisposable
                     download = DownloadView(lobby),
                     spectate = SpectateView(lobby),
                     replays = ReplaysView(lobby.Match),
+                    binds = BindsView(lobby.Settings),
                 };
             }
             var friendsSource = Simulation is not null && !transport.Available ? "simulation" : transport.Available ? "steam" : "unavailable";
