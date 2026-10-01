@@ -36,6 +36,12 @@ static class MultiplayerDiscord
         LobbyModes.Duel => "Score duel",
         LobbyModes.Rounds => "Rounds",
         LobbyModes.Practice => "Practice",
+        LobbyModes.Tracking => "Tracking duel",
+        LobbyModes.Deathmatch => "Deathmatch",
+        LobbyModes.Vampiric => "Vampiric",
+        LobbyModes.Instagib => "Instagib",
+        LobbyModes.TeamDeathmatch => "Team deathmatch",
+        LobbyModes.Cs => "CS competitive",
         _ => "Match",
     };
 
@@ -66,10 +72,16 @@ static class MultiplayerDiscord
                 lead = standing.Total - best;
             }
         }
-        var joinable = state != "match" || s.LateJoin;
-        joinable &= players < s.MaxPlayers && s.Privacy != LobbyPrivacy.Invite && joinToken is not null;
+        // Why a Discord join is not offered (null: it is). Discord shows an
+        // invite without a join secret as ended, so this is also the reason an
+        // invite sent earlier can no longer be used.
+        var closed = s.Privacy == LobbyPrivacy.Invite ? "invite-only" : players >= s.MaxPlayers ? "full"
+            : state == "match" && !s.LateJoin ? "in-match" : joinToken is null ? "no-steam-lobby" : null;
         var scenario = match?.Scenario is { Length: > 0 } name ? name : s.Scenario?.Name;
+        // CS is played on a map; every other mode on a scenario.
+        var map = s.Mode == LobbyModes.Cs ? s.MapOverride?.Name ?? (s.Scenario?.Map is { Length: > 0 } scenarioMap ? scenarioMap : null) : null;
         return new DiscordLobbyInfo(PartyId(lobby.Id), players, s.MaxPlayers, ModeLabel(s.Mode), scenario, state,
-            match?.Round, match?.TotalRounds, match?.FirstTo, lead, place, won, joinable ? JoinSecret(joinToken!) : null);
+            match?.Round, match?.TotalRounds, match?.FirstTo, lead, place, won, closed is null ? JoinSecret(joinToken!) : null,
+            s.Mode, map, s.Scenario?.WorkshopId, lobby.HostId == selfId, closed);
     }
 }
