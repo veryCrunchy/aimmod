@@ -208,6 +208,7 @@ namespace aimmod
         // 2. the config override, 3. any bot the scenario already has.
         std::string named = m_bridge.LobbyValue("aimmod.avatar_bot");
         if (named.empty()) named = m_options.avatarProfile;
+        if (named.empty() && m_botsAllowed) named = std::string(bridge::ghost::HelperBotProfile); // AimMod arenas always ship it
         std::vector<UObject*> found;
         UObjectGlobals::FindAllOf(STR("TheMetaAIController"), found);
         if (!named.empty())
@@ -490,14 +491,14 @@ namespace aimmod
             DestroyShapes(ghost);
             // Appearance: a character profile the host put in lobby data (generated scenarios ship it).
             // A lobby-wide avatar bot change needs a new spawn.
-            if (const std::string bot = m_bridge.LobbyValue("aimmod.avatar_bot"); !bot.empty() && !ghost.spawnedFrom.empty() && bot != ghost.spawnedFrom && peer != TestPeer)
+            if (const std::string bot = m_bridge.LobbyValue("aimmod.avatar_bot"); !bot.empty() && !ghost.spawnedFrom.empty() && bot != ghost.spawnedFrom && !IsDevPeer(peer))
             {
                 m_log("avatars: lobby avatar bot is now \"" + bot + "\"; respawning");
                 RemoveAvatar(ghost);
                 return;
             }
-            std::string wanted = peer == TestPeer ? m_bridge.DevAvatarState().profile : m_bridge.LobbyValue("aimmod.char." + std::to_string(peer));
-            if (wanted.empty() && peer != TestPeer) wanted = m_bridge.LobbyValue("aimmod.avatar_char");
+            std::string wanted = IsDevPeer(peer) ? DevLook(peer) : m_bridge.LobbyValue("aimmod.char." + std::to_string(peer));
+            if (wanted.empty() && !IsDevPeer(peer)) wanted = m_bridge.LobbyValue("aimmod.avatar_char");
             if (!wanted.empty() && wanted != ghost.characterProfile && m_loadCharacterProfile.ok())
             {
                 ghost.characterProfile = wanted;
@@ -649,7 +650,39 @@ namespace aimmod
                     m_log("avatars: recorded path is for \"" + m_testPath->scenario + "\", not this scenario; circling instead");
                 }
                 Sample s;
-                if (dev.walk && !dev.spawns.empty())
+                if (dev.walk && !dev.walkers.empty())
+                {
+                    // Several simulated lobby players: each walks between its side's spawns, feet on the floor.
+                    for (const auto& w : dev.walkers)
+                    {
+                        DevWalk& walk = m_walkers[w.peer];
+                        if (walk.walker.spawns != w.spawns)
+                        {
+                            walk.walker = bridge::ghost::Walker{};
+                            walk.walker.spawns = w.spawns;
+                            walk.walker.seed ^= static_cast<std::uint32_t>(w.peer * 2654435761u);
+                            walk.at = -1;
+                            m_log("avatars: simulated player " + std::to_string(w.peer) + " walks between " + std::to_string(w.spawns.size()) + " spawns");
+                        }
+                        UObject* pawn = m_ghosts[w.peer].pawn.Get();
+                        const auto floor = [&](double fx, double fy, double fz) -> std::optional<double> {
+                            const double a[3]{fx, fy, fz}, b[3]{fx, fy, fz - 3000};
+                            const auto hit = Trace(character, a, b, pawn, character);
+                            return hit ? std::optional<double>((*hit)[2]) : std::nullopt;
+                        };
+                        const auto clear = [&](double ax, double ay, double az, double bx, double by, double bz) {
+                            const double a[3]{ax, ay, az}, b[3]{bx, by, bz};
+                            return !Trace(character, a, b, pawn, character).has_value();
+                        };
+                        if (std::exchange(m_ghosts[w.peer].respawned, false)) walk.walker.PlaceRandom(bridge::ghost::DefaultHalfHeight, floor);
+                        const double dt = walk.at < 0 ? 0 : now - walk.at;
+                        walk.at = now;
+                        const Sample ws = walk.walker.Step(now, dt, bridge::ghost::DefaultHalfHeight, floor, clear);
+                        seen[w.peer] = true;
+                        Show(w.peer, m_ghosts[w.peer], ws, world, character);
+                    }
+                }
+                else if (dev.walk && !dev.spawns.empty())
                 {
                     // A simulated lobby player: walks between the arena's spawns, feet on the floor.
                     if (m_walker.spawns != dev.spawns)
@@ -696,8 +729,11 @@ namespace aimmod
                     s.crouch = std::fmod(t, 10.0) > 7.0;
                     s.halfHeight = s.crouch ? bridge::ghost::DefaultHalfHeight * 0.6 : bridge::ghost::DefaultHalfHeight;
                 }
-                seen[TestPeer] = true;
-                Show(TestPeer, m_ghosts[TestPeer], s, world, character);
+                if (!(dev.walk && !dev.walkers.empty()))
+                {
+                    seen[TestPeer] = true;
+                    Show(TestPeer, m_ghosts[TestPeer], s, world, character);
+                }
             }
 
             // Remote players: everything below comes from their samples only.
@@ -743,26 +779,45 @@ namespace aimmod
         if (m_avatarMapDirty) WriteAvatarMap();
     }
 
+    // The look of a developer stand-in: its walker's profile, else the test avatar's.
+    std::string GhostDemo::DevLook(std::uint64_t peer)
+    {
+        const auto dev = m_bridge.DevAvatarState();
+        for (const auto& w : dev.walkers)
+            if (w.peer == peer && !w.profile.empty()) return w.profile;
+        return dev.profile;
+    }
+
     std::optional<std::array<double, 3>> GhostDemo::Trace(UObject* context, const double a[3], const double b[3], UObject* ignore1, UObject* ignore2)
     {
         if (!m_traceBound)
         {
             m_traceBound = true;
-            m_lineTrace.BindPath(STR("/Script/Engine.KismetSystemLibrary:LineTraceSingle"), Shape::Command);
+            // By object type (the map's static and dynamic geometry), whatever their Visibility response:
+            // map-creator pieces don't all block the Visibility channel. The channel trace is the fallback.
+            m_traceForObjects = m_lineTrace.BindPath(STR("/Script/Engine.KismetSystemLibrary:LineTraceSingleForObjects"), Shape::Command);
+            if (!m_traceForObjects) m_lineTrace.BindPath(STR("/Script/Engine.KismetSystemLibrary:LineTraceSingle"), Shape::Command);
             m_kismetDefault = UObjectGlobals::StaticFindObject<UObject*>(nullptr, nullptr, STR("/Script/Engine.Default__KismetSystemLibrary"));
             for (const Param& p : m_lineTrace.params())
                 if (p.out && p.structType && p.name == "OutHit")
                     for (FProperty* member : p.structType->ForEachProperty())
+                    {
                         if (member->GetName() == STR("ImpactPoint")) m_hitImpactOffset = member->GetOffset_Internal();
-            m_log(m_lineTrace.ok() && m_kismetDefault && m_hitImpactOffset >= 0 ? "avatars: line traces ready (simulated player walks on the floor)"
+                        if (member->GetName() == STR("bStartPenetrating")) m_hitStartPenetrating = CastField<FBoolProperty>(member);
+                    }
+            m_log(m_lineTrace.ok() && m_kismetDefault && m_hitImpactOffset >= 0 ? std::string("avatars: line traces ready (") + (m_traceForObjects ? "world static and dynamic objects" : "visibility channel") + "; simulated player walks on the floor)"
                                                                                : "avatars: line traces unavailable (" + m_lineTrace.error() + "); the simulated player stays on its spawn height");
         }
         if (!m_lineTrace.ok() || !m_kismetDefault || m_hitImpactOffset < 0 || !context) return std::nullopt;
         TArray<AActor*> ignore;
         if (ignore1) ignore.Add(static_cast<AActor*>(ignore1));
         if (ignore2) ignore.Add(static_cast<AActor*>(ignore2));
+        TArray<std::uint8_t> objectTypes; // EObjectTypeQuery: 0 WorldStatic, 1 WorldDynamic
+        objectTypes.Add(0);
+        objectTypes.Add(1);
         bool hit = false;
         std::array<double, 3> point{};
+        bool startedInside = false;
         int vectors = 0;
         m_lineTrace.Call(
             m_kismetDefault,
@@ -774,6 +829,7 @@ namespace aimmod
                     WriteFloats(value, p, v[0], v[1], v[2]);
                 }
                 else if (p.kind == Kind::Array && p.name == "ActorsToIgnore") std::memcpy(value, &ignore, sizeof(ignore));
+                else if (p.kind == Kind::Array && p.name == "ObjectTypes") std::memcpy(value, &objectTypes, sizeof(objectTypes));
                 else if (p.kind == Kind::Bool && p.boolProperty) p.boolProperty->SetPropertyValue(value, p.name == "bIgnoreSelf");
                 // TraceChannel 0 = Visibility, DrawDebugType 0 = none, colours and DrawTime zero.
             },
@@ -786,11 +842,17 @@ namespace aimmod
                         float f[3];
                         std::memcpy(f, buffer + p.offset + m_hitImpactOffset, sizeof(f));
                         point = {f[0], f[1], f[2]};
+                        if (m_hitStartPenetrating && m_hitStartPenetrating->GetPropertyValue(const_cast<std::uint8_t*>(buffer) + p.offset + m_hitStartPenetrating->GetOffset_Internal()))
+                            startedInside = true;
                     }
                 }
             });
-        // The parameter copy of the ignore list is plain memory; `ignore` frees its buffer.
-        if (!hit) return std::nullopt;
+        // The parameter copies of the lists are plain memory; `ignore` and `objectTypes` free their buffers.
+        ++m_traceCount;
+        if (hit) ++m_traceHits;
+        if (m_traceCount == 60)
+            m_log("avatars: line traces: " + std::to_string(m_traceHits) + " of 60 hit something" + (m_traceHits == 0 ? " (the walker can't see the floor)" : ""));
+        if (!hit || startedInside) return std::nullopt;
         return point;
     }
 
@@ -805,7 +867,11 @@ namespace aimmod
         for (UObject* controller : found)
         {
             if (!game::IsLiveInstance(controller) || m_ownControllers.count(controller)) continue;
-            if (!bridge::ghost::IsHelperBot(ReadFString(controller, STR("MyProfileName")))) continue;
+            // In an AimMod arena the helper bot is the only bot of the scenario's own; anything else is left
+            // over from the previous scenario in the same world (bots are re-used across loads) and would
+            // take shots and count for KovaaK's accuracy.
+            const std::string botProfile = ReadFString(controller, STR("MyProfileName"));
+            const bool helper = bridge::ghost::IsHelperBot(botProfile);
             UObject* pawn = m_getMetaCharacter.Object(controller);
             if (!pawn || !game::IsLiveInstance(pawn)) continue;
             auto* actor = static_cast<AActor*>(pawn);
@@ -826,7 +892,9 @@ namespace aimmod
                     });
             FHitResult hit{};
             actor->K2_SetActorLocationAndRotation(FVector(bridge::ghost::HelperParkX, bridge::ghost::HelperParkY, bridge::ghost::HelperParkZ), FRotator(0, 0, 0), false, hit, true);
-            if (m_parkedHelpers.insert(pawn).second) m_log("avatars: parked the arena's helper bot outside the map (hidden, no collision, AI off)");
+            if (m_parkedHelpers.insert(pawn).second)
+                m_log(helper ? std::string("avatars: parked the arena's helper bot outside the map (hidden, no collision, AI off)")
+                             : "avatars: parked a leftover bot \"" + botProfile + "\" from the previous scenario (hidden, no collision, AI off)");
         }
     }
 

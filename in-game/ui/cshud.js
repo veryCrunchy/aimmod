@@ -66,7 +66,7 @@
     var label=c.phase==='freeze'?'Freeze time':c.phase==='planted'?'Bomb planted'+(c.site?' · '+c.site:''):c.phase==='end'?'Round over':'Round '+c.round;
     mid.appendChild(node('span','cs-clock-label',label));
     mid.appendChild(node('span','cs-clock-time',c.phase==='planted'&&typeof c.bombIn==='number'?clock(c.bombIn):clock(c.left)));
-    mid.appendChild(node('span','cs-clock-round','Round '+c.round+' of '+c.rounds));
+    mid.appendChild(node('span','cs-clock-round','Round '+c.round+' of '+c.rounds+(typeof c.tAlive==='number'?' · T '+c.tAlive+' · CT '+c.ctAlive:'')));
     var ct=node('div','cs-score ct'+(c.side==='CT'?' mine':''));ct.appendChild(node('span','cs-points',c.ctScore));ct.appendChild(node('span','cs-team','CT'));
     top.appendChild(t);top.appendChild(mid);top.appendChild(ct);target.appendChild(top);
     // Bomb sites on a compass under the strip (90 degrees either side; behind clamps to an edge), and

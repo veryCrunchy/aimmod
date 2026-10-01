@@ -74,6 +74,7 @@ def convert_file(path: str, out: str, args) -> dict:
         cleanup.add_kill_below(sc, args.kill_below)
     if not args.no_ground:
         cleanup.add_ground_plane(sc)
+    cleanup.remove_buried_liquids(sc)
     spawns.fix_spawns(sc)
     checks.remove_floating(sc)
     table = materials.load_table(args.materials)

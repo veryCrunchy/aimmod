@@ -114,6 +114,34 @@ static partial class MultiplayerChecks
         Check(tracker.LastSeen[7].Member is null, "Without a stand-in, peer 1's stream is nobody");
     }
 
+    // Every simulated player is a stand-in of its own (synthetic peers 1, 2, 3, ...), not just the first.
+    static void StandIns(string root)
+    {
+        long now = 9_500_000;
+        var game = Path.Combine(root, "game");
+        var output = Path.Combine(root, "standins-output");
+        Directory.CreateDirectory(output);
+        var control = new FakeGame("load", "start") { Root = game };
+        var service = new MultiplayerService(new OfflineTransport(), new ContentLibrary(game), control, () => new LocalRun(false, null, null, null, null, 0, 0, 0, null), () => [], () => null, output, simulation: true, () => now, autoTick: false, seed: 21);
+        void Run(int ms) { for (var t = 0; t < ms; t += 100) { now += 100; service.Tick(); } }
+        service.Act("create", J(new { mode = "deathmatch", scenario = "Synthetic A" }));
+        for (var i = 0; i < 3; i++) service.Act("sim", J(new { op = "add" }));
+        Run(12_000);
+        Check(service.Act("start", default).Ok, "A deathmatch with three simulated players starts");
+        for (var i = 0; i < 300 && !File.Exists(Path.Combine(output, "avatar-state.tsv")); i++) Run(100);
+        Run(1000);
+        var avatars = File.ReadAllText(Path.Combine(output, "avatar-state.tsv"));
+        Check(service.StandIns.Count == 3 && service.StandIns.Values.Order().SequenceEqual(["1", "2", "3"]) && new[] { "1", "2", "3" }.All(p => avatars.Contains("peer\t" + p + "\t", StringComparison.Ordinal)),
+            "Each simulated player is a stand-in with its own synthetic peer, listed in avatar-state.tsv");
+        var tracker = new SelfPoseTracker(Path.Combine(root, "standins-pose"));
+        var ids = service.StandIns.ToDictionary(p => p.Value, p => p.Key);
+        var frame = new LivePoseFrame(1, "", "x", "m", 1, [new LivePose(5000, [0, 0, 0, 0, 0])], [[4, 100, 0, 0, 45, 115], [5, 200, 0, 0, 45, 115]])
+            { Tags = new Dictionary<int, string> { [4] = StreamIds.For("2"), [5] = StreamIds.For("3") } };
+        tracker.Take(frame, 0, ids.Values, service.StandIns.Select(p => (StreamIds.For(p.Value), p.Key)));
+        Check(tracker.LastSeen[4].Member == ids["2"] && tracker.LastSeen[5].Member == ids["3"], "Each stand-in's stream maps back to its own member");
+        service.Dispose();
+    }
+
     // Hit claims pair the shot's ray with the target as drawn when it was fired; start spawns.
     static void ClaimTiming(string root)
     {

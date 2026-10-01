@@ -222,6 +222,15 @@ following, in KovaaK's map units and axes (Unreal X/Y/Z with Source Y mirrored; 
 - `items`: `weapon_*` and `item_*` spawns, with class, origin and yaw.
 - `spawns`: team spawns with their team.
 
+### Liquids under the floor
+
+Water, slime and lava brushes sealed under solid ground are dropped
+(`cleanup.remove_buried_liquids`). A brush is sealed when solid geometry
+covers 80 % of its top, starting at the water line or up to 96 units above
+it. Source hides such brushes under the floor, but KovaaK's draws its Water
+through the floor. Hurt triggers and kill volumes are never dropped. The
+report counts `buried_water_removed`.
+
 ### CS map spec (`cs` block)
 
 CS competitive only runs on maps whose `.aimmod.json` has a `cs` block

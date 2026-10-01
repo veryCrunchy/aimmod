@@ -90,6 +90,15 @@ namespace bridge
             bool path = false;     // follow avatar-test-path.tsv
             bool walk = false;     // walk between `spawns` like a bot (simulated lobby players)
             std::vector<std::array<double, 3>> spawns; // the arena's spawn points (world cm), at most 32
+            // walk with several simulated players: one synthetic peer (1..16) each, with its own look and
+            // its side's spawns. Empty: the single test avatar above (peer 1).
+            struct Walker
+            {
+                std::uint64_t peer = 0;
+                std::string profile;
+                std::vector<std::array<double, 3>> spawns;
+            };
+            std::vector<Walker> walkers;
             int generation = 0;    // bumps on every command (reload the path)
             std::string profile;   // character profile for the test avatar's look (empty = scenario default)
         };
