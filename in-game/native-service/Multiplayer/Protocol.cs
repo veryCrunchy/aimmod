@@ -29,6 +29,11 @@ static class Protocol
         new("ping", false, "any", "{t0}: clock sync request"),
         new("pong", false, "any", "{t0, t1}: clock sync reply"),
         new("bye", true, "any", "{reason}: leaving, or the host closing the lobby"),
+        new("content.request", true, "client>host", "{}: ask for the lobby content manifest"),
+        new("content.manifest", true, "host>client", "{key, files:[{kind, name, size, hash, packed}], workshop}: what the host can send"),
+        new("content.get", true, "client>host", "{hash, offset, length}: request part of a packed file (resumable)"),
+        new("content.chunk", true, "host>client", "{hash, offset, total, data}: up to 8 KiB of a Brotli-packed file, base64"),
+        new("content.error", true, "host>client", "{hash, code}: not-offered, unavailable, invalid or none"),
     ];
     public static bool Reliable(string type) => Types.First(t => t.Type == type).Reliable;
     public static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, DefaultIgnoreCondition = JsonIgnoreCondition.Never, MaxDepth = 16 };
@@ -110,13 +115,18 @@ interface IMultiplayerTransport : IDisposable
     IReadOnlyList<FriendEntry> Friends();
     // Route and ping for a peer, as the relay network reports them.
     PeerLink? Link(string peer);
+    // Download a Steam Workshop item through the bridge (ugc.*). Progress arrives as
+    // Workshop events. False when the bridge can't, so the host transfer is used instead.
+    bool WorkshopDownload(string item);
 }
 // Host is true on Connected when that peer is our host. Reason explains a
 // Disconnected (for the lobby itself: left, kicked, closed or shutdown) or an Error.
-sealed record TransportEvent(string Peer, string Kind, byte[]? Frame = null, IncomingInvite? Invite = null, bool Host = false, string? Reason = null)
+sealed record TransportEvent(string Peer, string Kind, byte[]? Frame = null, IncomingInvite? Invite = null, bool Host = false, string? Reason = null, WorkshopProgress? Workshop = null)
 {
-    public const string Connected = "connected", Disconnected = "disconnected", Left = "left", Message = "message", InviteReceived = "invite", Error = "error";
+    public const string Connected = "connected", Disconnected = "disconnected", Left = "left", Message = "message", InviteReceived = "invite", Error = "error", WorkshopUpdate = "workshop";
 }
+// Steam Workshop download state from the bridge: queued, downloading, installed or failed.
+sealed record WorkshopProgress(string Item, string State, long Done, long Total);
 // An invite or join request from Steam. Token is opaque (the connect string
 // payload); Summary is what the host advertised, shown before accepting.
 // Kind is invite (they invite you), request (they ask to join yours) or launch.
@@ -148,6 +158,7 @@ sealed class OfflineTransport : IMultiplayerTransport
     public bool Invited(string peer) => false;
     public IReadOnlyList<FriendEntry> Friends() => [];
     public PeerLink? Link(string peer) => null;
+    public bool WorkshopDownload(string item) => false;
     public void Dispose() { }
 }
 

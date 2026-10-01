@@ -56,6 +56,7 @@ static class MultiplayerChecks
         Check(LobbyRules.Apply(start, J(new { maxPlayers = 2 }), 4, content).Settings!.MaxPlayers == 4, "Max players never drops below the players present");
         Check(LobbyRules.Apply(start, J(new { mode = "practice", targetSpeed = 1.234 }), 2, content).Settings!.TargetSpeed == 1.25, "Multipliers snap to 0.05 steps");
         Check(LobbyRules.Apply(start, J(new { targetSpeed = 2 }), 2, content).Settings!.TargetSpeed == 1, "Score race keeps scenario targets");
+        Check(LobbyRules.Apply(start, J(new { mode = "ffa-rounds", timeLimit = 60 }), 2, content).Settings!.TimeLimit is null && !MatchScenario.Needed(LobbyRules.Apply(start, J(new { mode = "ffa-rounds", timeLimit = 60 }), 2, content).Settings!), "Choosing the scenario's own length needs no generated scenario");
         foreach (var bad in new object[] { new { mode = "battle-royale" }, new { privacy = "everyone" }, new { unknown = 1 }, new { maxPlayers = "8" }, new { weapon = "laser" }, new { character = "cs" }, new { scenario = "Not mine" }, new { mapOverride = "../../x" } })
             Check(!LobbyRules.Apply(start, J(bad), 2, content).Result.Ok, "Invalid setting rejected: " + JsonSerializer.Serialize(bad));
         Check(!LobbyRules.Apply(start, JsonDocument.Parse("{\"mode\":\"duel\",\"mode\":\"practice\"}").RootElement, 2, content).Result.Ok, "Repeated keys rejected");
@@ -206,7 +207,7 @@ static class MultiplayerChecks
         foreach (var bad in new[] { Swap("aimmod.mp", "other"), Swap("\"v\":1", "\"v\":2"), Swap("\"command\"", "\"teleport\""), Swap("\"seq\":7", "\"seq\":-1"), "[]", "{", Swap("\"body\":{", "\"body\":[{").Replace("}}}", "}}]}") })
             Check(Protocol.Decode(Encoding.UTF8.GetBytes(bad)) is null, "Rejected frame: " + bad[..Math.Min(40, bad.Length)]);
         Check(Protocol.Decode(new byte[Protocol.MaxBytes + 1]) is null, "Oversized frames are rejected");
-        Check(!Protocol.Reliable("score") && Protocol.Reliable("snapshot") && Protocol.Types.Length == 11, "Score frames are unreliable, state is reliable");
+        Check(!Protocol.Reliable("score") && Protocol.Reliable("snapshot") && Protocol.Types.Length == 16, "Score frames are unreliable, state is reliable");
         var sync = new ClockSync();
         sync.Add(0, 1050, 200); sync.Add(1000, 2010, 1020); sync.Add(2000, 3100, 2300);
         Check(sync.Rtt == 20 && sync.Offset == 1000, "Clock sync uses the minimum round-trip sample");
@@ -234,6 +235,7 @@ static class MultiplayerChecks
         public void Kick(string peer) => HostActions.Add("kick " + peer);
         public void Transfer(string peer) => HostActions.Add("transfer " + peer);
         public string? HostHint => null;
+        public bool WorkshopDownload(string item) => false;
         public void Send(string peer, byte[] frame, bool reliable) { if (network.Peers.TryGetValue(peer, out var to)) to.Inbox.Enqueue(new TransportEvent(id, TransportEvent.Message, frame)); }
         public void Close(string peer) { }
         public IReadOnlyList<TransportEvent> Drain() { var list = Inbox.ToArray(); Inbox.Clear(); return list; }
@@ -435,6 +437,7 @@ static class MultiplayerChecks
         public IReadOnlySet<string> Capabilities { get; } = caps.ToHashSet();
         public long? Load(string scenario) { Calls.Add("load " + scenario); return Calls.Count; }
         public long? Start(string scenario, string mode) { Calls.Add("start " + mode + " " + scenario); return Calls.Count; }
+        public long? Refresh() { Calls.Add("refresh"); return Calls.Count; }
         public GameCommandResult? Result => null;
     }
 
@@ -476,6 +479,7 @@ static class MultiplayerChecks
         Run(6000);
         var generated = View().GetProperty("lobby").GetProperty("generated");
         Check(generated.GetProperty("name").GetString()!.StartsWith(MatchScenario.Prefix, StringComparison.Ordinal), "The lobby shows the match scenario it will build");
+        Check(File.Exists(Path.Combine(game, "Saved", "SaveGames", "Scenarios", generated.GetProperty("name").GetString()! + ".sce")) && generated.GetProperty("saved").GetBoolean() && control.Calls.Contains("refresh"), "The match scenario is written and refreshed before the match starts");
         Check(service.Act("start", default).Ok, "Start with overrides");
         Run(500);
         var name = generated.GetProperty("name").GetString()!;

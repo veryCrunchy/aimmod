@@ -334,7 +334,7 @@
     if(s.targetSpeed!==1||s.targetSize!==1)kv('Targets','Speed '+multiplier(s.targetSpeed)+' · size '+multiplier(s.targetSize));
     kv('Players','Up to '+s.maxPlayers+(s.spectators?' + spectators':''));
     kv('Countdown',F.number(s.countdown,0)+' s'+(s.lateJoin?' · late join on':''));
-    if(lobby.generated){var g=node('div','mp-generated');add(g,node('strong','','A custom scenario will be generated'),node('span','',safe(lobby.generated.name,'Match scenario')),node('span','mp-muted','Played in freeplay and scored by AimMod, so KovaaK’s leaderboards stay untouched.'));p.appendChild(g);}
+    if(lobby.generated){var g=node('div','mp-generated');add(g,node('strong','',lobby.generated.problem?'Match scenario problem':lobby.generated.saved?'Match scenario saved to your scenarios':'A custom scenario will be generated'),lobby.generated.problem?node('span','mp-warn-line',safe(lobby.generated.problem,'')):null,node('span','',safe(lobby.generated.name,'Match scenario')),node('span','mp-muted','Played in freeplay and scored by AimMod, so KovaaK’s leaderboards stay untouched.'));p.appendChild(g);}
     else if(s.scenario)p.appendChild(node('div','mp-generated plain','Played as the published scenario. Each player’s run is a normal KovaaK’s run.'));
     return p;
   }
