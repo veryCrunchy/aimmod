@@ -11,14 +11,18 @@ namespace AimMod.InGame.Multiplayer;
 sealed partial class ReplaySwap(string? output, Func<long> clock)
 {
     public const int MaxBytes = 8 * 1024 * 1024, ChunkBytes = 8192;
+    // Each replay being assembled holds its whole size: a peer can't open more than a few at once.
+    public const int MaxAssembling = 8, MaxAssemblingPerOwner = 2;
     public sealed record Shared(string Match, int Round, string Owner, string Id, string Kind, string? Label);
     sealed record Outgoing(string Peer, string Match, int Round, string Owner, string Id, string Kind, byte[] Bytes, string Hash, string? Label) { public int Offset; }
-    sealed class Incoming { public required byte[] Bytes; public int Received; public required string Hash; public required string Kind; public string? Label; }
+    sealed class Incoming { public required byte[] Bytes; public int Received; public required string Hash; public required string Kind; public string? Label; public required string Owner; public long Started; }
     readonly List<Outgoing> queue = [];
     readonly Dictionary<string, Incoming> assembling = new();
     readonly List<Shared> received = [];
     readonly Dictionary<string, string> mine = new(); // match#round -> my replay id
     public IReadOnlyList<Shared> Received => received;
+    internal int Assembling => assembling.Count;
+    long started;
 
     [GeneratedRegex(@"^[A-Za-z0-9_-]{1,100}\z")] private static partial Regex IdPattern();
     public static bool ValidId(string? id) => id is not null && IdPattern().IsMatch(id);
@@ -62,7 +66,11 @@ sealed partial class ReplaySwap(string? output, Func<long> clock)
         if (!assembling.TryGetValue(key, out var a) || a.Hash != hash || a.Bytes.Length != size)
         {
             if (offset != 0) return null;
-            assembling[key] = a = new Incoming { Bytes = new byte[size], Hash = hash, Kind = kind, Label = label };
+            assembling.Remove(key);
+            // Make room: the owner's oldest first, then the oldest of anyone's.
+            while (assembling.Values.Count(x => x.Owner == owner) >= MaxAssemblingPerOwner) assembling.Remove(assembling.Where(x => x.Value.Owner == owner).MinBy(x => x.Value.Started).Key);
+            while (assembling.Count >= MaxAssembling) assembling.Remove(assembling.MinBy(x => x.Value.Started).Key);
+            assembling[key] = a = new Incoming { Bytes = new byte[size], Hash = hash, Kind = kind, Label = label, Owner = owner, Started = ++started };
         }
         if (offset != a.Received) return null;
         Buffer.BlockCopy(data, 0, a.Bytes, offset, data.Length);

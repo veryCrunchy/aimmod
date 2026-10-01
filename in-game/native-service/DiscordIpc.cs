@@ -176,7 +176,9 @@ sealed class DiscordIpcClient : IAsyncDisposable
                 if (frame is null) break;
                 var (opcode, json) = frame.Value;
                 Received?.Invoke(opcode, json);
-                if (opcode == DiscordFrames.Ping) { await Write(source, DiscordFrames.Pong, json, token); continue; }
+                // Never block the reader on a write: if both ends write at once (a command
+                // going out while Discord pings), waiting here could stall the reply we need.
+                if (opcode == DiscordFrames.Ping) { _ = Write(source, DiscordFrames.Pong, json, token); continue; }
                 if (opcode == DiscordFrames.Close)
                 {
                     try { using var closing = JsonDocument.Parse(json); lastError = "closed by Discord: " + ErrorText(closing.RootElement); }

@@ -79,26 +79,99 @@ sealed partial class MultiplayerService
         if (held != useHeld) { useHeld = held; Command("use", JsonSerializer.SerializeToElement(new { held })); }
     }
 
-    // CS HUD for the notice layer (top edge): health, armour, money, the round clock, score,
-    // bomb state and progress, the buy menu while it's open, and the keys with any clash.
-    internal sealed record CsBuyItem(int Key, string Label, int Price, bool Affordable);
-    internal sealed record CsHudView(string Phase, int? Left, int Round, int[] Score, string Side, int Money, bool Alive, double Health, double Armor, bool Helmet, bool Kit,
-        string Bomb, string? Site, int? BombIn, double? PlantProgress, double? DefuseProgress, bool BuyOpen, IReadOnlyList<CsBuyItem>? Buy, string? LastRound,
-        string BuyKey, string UseKey, IReadOnlyList<string> KeyClashes);
+    // CS HUD for the notice layer, kept clear of the crosshair: the score strip and clocks at
+    // the top, money, health, armour and kit bottom left, the plant/defuse bar low in the middle,
+    // the kill feed top right, round-end and halftime banners, and the clickable buy menu on
+    // the left while it's open (B in buy time; number keys still buy).
+    internal sealed record CsBuyItem(int? Key, string Id, string Label, string Category, int Price, bool Owned, bool Affordable, string? Disabled, string? Profile);
+    internal sealed record CsFeedLine(long Id, string Killer, string Victim, string Weapon, bool Head, string? You, int KillerTeam);
+    internal sealed record CsBanner(string Title, string Reason, bool Won, int Team);
+    internal sealed record CsHudView(string Phase, int? Left, int Round, int Rounds, int TScore, int CtScore, string Side, int Team,
+        int Money, int? MoneyDelta, bool Alive, double Health, double Armor, bool Helmet, bool Kit,
+        string Bomb, string? Site, int? BombIn, double? PlantProgress, double? DefuseProgress, string? UseHint,
+        bool BuyOpen, bool BuyWindow, int? BuyLeft, IReadOnlyList<CsBuyItem>? Buy, CsBanner? Banner, string? Notice, IReadOnlyList<CsFeedLine> Feed,
+        string? Primary, string? Secondary, string BuyKey, string UseKey, IReadOnlyList<string> KeyClashes);
+    static readonly string[] BuyCategories = ["pistol", "smg", "rifle", "heavy", "gear"];
     internal CsHudView? CsHud()
     {
-        if (Current is not { Match: { Phase: MatchPhases.Countdown or MatchPhases.Live, Cs: { } cs } m } || cs.Players.FirstOrDefault(p => p.Member == SelfId) is not { } me) return null;
+        if (Current is not { Match: { Phase: MatchPhases.Countdown or MatchPhases.Live, Cs: { } cs } m } lobby || cs.Players.FirstOrDefault(p => p.Member == SelfId) is not { } me) return null;
         var hostNow = clock() + HostOffset();
-        var team = me.Team;
         int? Secs(long? at) => at is { } t ? (int)Math.Max(0, Math.Ceiling((t - hostNow) / 1000.0)) : null;
         double? Progress(long? doneAt, long total) => doneAt is { } d ? Math.Round(Math.Clamp(1 - (d - hostNow) / (double)total, 0, 1), 2) : null;
+        string Name(string? id) => id == SelfId ? "You" : LobbyRules.CleanName(lobby.Members.FirstOrDefault(x => x.Id == id)?.Name ?? m.Standings.FirstOrDefault(x => x.MemberId == id)?.Name, "Player");
         var b = cs.Bomb;
-        var menu = buyOpen ? BuyMenu(me.Side, me).Select((x, i) => new CsBuyItem(i + 1, x.Label, x.Price, x.Price <= me.Money)).ToArray() : null;
-        string? last = cs.LastWinner is { } w ? (w == team ? "Round won" : "Round lost") + " · " + cs.LastReason : null;
-        return new CsHudView(cs.Phase, Secs(cs.PhaseEndsAt), cs.Round, [cs.Score[team - 1], cs.Score[2 - team]], me.Side, me.Money, me.Alive, me.Health, me.Armor, me.Helmet, me.Kit,
-            b.State, b.Site, b.State == "planted" ? Secs(b.ExplodesAt) : null, Progress(b.PlantDoneAt, CsRules.PlantMs),
-            Progress(b.DefuseDoneAt, b.Defuser is { } d && cs.Players.FirstOrDefault(p => p.Member == d)?.Kit == true ? CsRules.KitDefuseMs : CsRules.DefuseMs),
-            buyOpen, menu, cs.Phase == "end" ? last : null, CsBuyKey, CsUseKey, CsKeyClashes(KeyBinds.GameKeys(library.Root)));
+        var tTeam = cs.Team1Side == CsRules.T ? 1 : 2;
+        var buyWindow = cs.Phase == "freeze" || (cs.Phase == "live" && cs.LiveAt is { } live && hostNow < live + CsRules.BuyMs);
+        int? buyLeft = cs.Phase == "freeze" ? Secs(cs.PhaseEndsAt) + (int)(CsRules.BuyMs / 1000) : cs.LiveAt is { } l2 && buyWindow ? Secs(l2 + CsRules.BuyMs) : null;
+        // The buy menu: every item with why it can't be bought now; the number keys follow the old list.
+        CsBuyItem[]? menu = null;
+        if (buyOpen)
+        {
+            var keys = BuyMenu(me.Side, me).Select((x, i) => (x.Item, Key: i + 1)).ToDictionary(x => x.Item, x => x.Key);
+            string? Why(string side, int price, bool owned)
+            {
+                if (owned) return "Already yours";
+                if (!me.Alive) return "You’re down until the next round";
+                if (!buyWindow) return "Buy time is over";
+                if (side != "any" && side != me.Side) return side == CsRules.T ? "Terrorists only" : "Counter-Terrorists only";
+                if (me.InBuyZone == false) return "Go back to your buy zone";
+                if (price > me.Money) return "$" + (price - me.Money).ToString("N0", CultureInfo.InvariantCulture) + " short";
+                return null;
+            }
+            var list = CsRules.Weapons.Select(w =>
+            {
+                var owned = (w.Slot == 0 ? me.Primary : me.Secondary) == w.Id;
+                return new CsBuyItem(keys.TryGetValue(w.Id, out var k) ? k : null, w.Id, w.Label, w.Class == "sniper" ? "rifle" : w.Class, w.Price, owned, w.Price <= me.Money, Why(w.Side, w.Price, owned), w.Combat.Name);
+            }).ToList();
+            var helmetPrice = me.Armor >= CsRules.MaxArmor && !me.Helmet ? CsRules.HelmetUpgradePrice : CsRules.KevlarHelmetPrice;
+            list.Add(new(keys.GetValueOrDefault("kevlar"), "kevlar", "Kevlar", "gear", CsRules.KevlarPrice, me.Armor >= CsRules.MaxArmor, CsRules.KevlarPrice <= me.Money, Why("any", CsRules.KevlarPrice, me.Armor >= CsRules.MaxArmor), null));
+            list.Add(new(keys.GetValueOrDefault("kevlar-helmet"), "kevlar-helmet", "Kevlar + helmet", "gear", helmetPrice, me.Helmet && me.Armor >= CsRules.MaxArmor, helmetPrice <= me.Money, Why("any", helmetPrice, me.Helmet && me.Armor >= CsRules.MaxArmor), null));
+            list.Add(new(keys.GetValueOrDefault("defuse-kit"), "defuse-kit", "Defuse kit", "gear", CsRules.KitPrice, me.Kit, CsRules.KitPrice <= me.Money, Why(CsRules.CT, CsRules.KitPrice, me.Kit), null));
+            menu = list.Select(x => x.Key == 0 ? x with { Key = null } : x).OrderBy(x => Array.IndexOf(BuyCategories, x.Category)).ToArray();
+        }
+        // Money from the last round's result (win reward or loss bonus), shown until the next round goes live.
+        int? delta = null;
+        if (cs.Phase is "end" or "freeze" && cs.Events.LastOrDefault(e => e.Kind == "round-end") is { } roundEnd)
+            delta = cs.Events.Where(e => e.Kind == "money" && e.Member == SelfId && e.T == roundEnd.T && e.Text is "round-win" or "round-loss").Sum(e => e.Amount);
+        CsBanner? banner = null;
+        if (cs.Phase == "end" && cs.LastWinner is { } w)
+        {
+            var reason = cs.LastReason switch { "bomb" => "The bomb exploded", "defuse" => "The bomb was defused", "time" => "Time ran out", _ => "All enemies eliminated" };
+            banner = new CsBanner((w == tTeam ? "Terrorists" : "Counter-Terrorists") + " win", reason, w == me.Team, w);
+        }
+        string? notice = cs.Events.LastOrDefault(e => e.Kind is "halftime" or "overtime-half") is { } half && hostNow - half.T < 8000
+            ? (half.Kind == "halftime" ? "Halftime · Switching sides" : "Overtime · Switching sides") : null;
+        var feed = cs.Events.Where(e => e.Kind == "kill" && hostNow - e.T < 7000).TakeLast(5).Select(e =>
+        {
+            var parts = (e.Text ?? "").Split('\t');
+            var killer = parts.Length > 0 ? parts[0] : null;
+            var weapon = parts.Length > 1 ? CsRules.Find(parts[1])?.Label ?? "" : "";
+            return new CsFeedLine(e.Id, Name(killer), Name(e.Member), weapon, parts.Length > 2 && parts[2] == "1", killer == SelfId ? "killer" : e.Member == SelfId ? "victim" : null,
+                cs.Players.FirstOrDefault(p => p.Member == killer)?.Team ?? 0);
+        }).ToArray();
+        string? hint = !me.Alive ? null
+            : me.Side == CsRules.T && b.Carrier == SelfId && cs.Phase == "live" ? "Hold " + CsUseKey + " in a bomb site to plant"
+            : me.Side == CsRules.CT && b.State == "planted" ? "Hold " + CsUseKey + " at the bomb to defuse" : null;
+        var planting = b.Planter == SelfId ? Progress(b.PlantDoneAt, CsRules.PlantMs) : null;
+        var defusing = b.Defuser == SelfId ? Progress(b.DefuseDoneAt, me.Kit ? CsRules.KitDefuseMs : CsRules.DefuseMs) : null;
+        return new CsHudView(cs.Phase, Secs(cs.PhaseEndsAt), cs.Round, cs.HalfRounds * 2, cs.Score[tTeam - 1], cs.Score[2 - tTeam], me.Side, me.Team,
+            me.Money, delta, me.Alive, me.Health, me.Armor, me.Helmet, me.Kit,
+            b.State, b.Site, b.State == "planted" ? Secs(b.ExplodesAt) : null, planting, defusing, hint,
+            buyOpen, buyWindow && me.Alive, buyLeft, menu, banner, notice, feed,
+            CsRules.Find(me.Primary)?.Label, CsRules.Find(me.Secondary)?.Label, CsBuyKey, CsUseKey, CsKeyClashes(KeyBinds.GameKeys(library.Root)));
+    }
+
+    // From the clickable buy menu (notice layer): open or close it, or buy one item.
+    LobbyResult CsAction(string action, string? item)
+    {
+        if (Current is not { Match: { Cs: { } cs } m } || cs.Players.FirstOrDefault(p => p.Member == SelfId) is not { } me) return LobbyResult.Fail("no-match", "No CS round is running.");
+        var hostNow = clock() + HostOffset();
+        var buyWindow = cs.Phase == "freeze" || (cs.Phase == "live" && cs.LiveAt is { } live && hostNow < live + CsRules.BuyMs);
+        // Same round key as the B key, so the next input pass doesn't treat this as a new round and close it.
+        csRoundKey = m.Id + "#" + cs.Round;
+        if (action == "cs-buy-menu") { buyOpen = !buyOpen && buyWindow && me.Alive; return LobbyResult.Success; }
+        if (item is null || (CsRules.Find(item) is null && !CsRules.Equipment.Contains(item))) return LobbyResult.Fail("invalid", "Unknown item.");
+        return Command("buy", JsonSerializer.SerializeToElement(new { item }));
     }
 
     // KovaaK's own binds (Input.ini) that use the CS keys.

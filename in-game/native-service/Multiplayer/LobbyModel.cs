@@ -78,7 +78,8 @@ sealed record LobbySettings(
     int Lifesteal = 50,
     bool RequireFire = false,
     int HalfRounds = 12,
-    bool Overtime = true)
+    bool Overtime = true,
+    TournamentLock? Tournament = null)
 {
     public const int MinPlayers = 2, MaxPlayerLimit = 10, MaxSpectators = 4;
     [JsonIgnore] public ProfileChoice WeaponProfile => Weapon ?? ProfileChoice.Default;
@@ -91,8 +92,14 @@ sealed record LobbySettings(
     [JsonIgnore] public int? TotalRounds => Mode switch { LobbyModes.Race or LobbyModes.Rounds or LobbyModes.Tracking => Rounds, LobbyModes.Deathmatch or LobbyModes.Vampiric or LobbyModes.Instagib or LobbyModes.TeamDeathmatch => 1, LobbyModes.Cs => HalfRounds * 2, _ => null };
     // Values that change what people play. Changing any of them clears ready states.
     [JsonIgnore] public string PlayKey => string.Join('|', Mode, Scenario?.Hash, MapOverride?.Hash, Rounds, FirstTo, TimeLimit,
-        WeaponProfile, MovementProfile, CharacterProfile, TargetSpeed, TargetSize, FragLimit, Lifesteal, RequireFire, HalfRounds, Overtime);
+        WeaponProfile, MovementProfile, CharacterProfile, TargetSpeed, TargetSize, FragLimit, Lifesteal, RequireFire, HalfRounds, Overtime, Tournament?.MatchId, Tournament?.Game, Tournament?.Seed);
 }
+
+// A lobby created for a tournament match (AimMod Hub). Its settings follow the
+// tournament's ruleset and can't be changed in the lobby; only the match's two
+// players play (Players: member ids), everyone else watches. Game is the
+// 0-based game of the series and Seed its shared seed (same targets for both).
+sealed record TournamentLock(string TournamentId, string MatchId, string Label, int Game, long Seed, IReadOnlyList<string> Players, string? Name = null);
 
 static class MemberRoles { public const string Player = "player", Spectator = "spectator"; }
 static class ContentStates { public const string Ok = "ok", Missing = "missing", Mismatch = "mismatch", Unknown = "unknown", None = "none"; }
@@ -106,7 +113,7 @@ static class TrackingDefaults { public const int RoundSeconds = 10, MaxRoundSeco
 // direct or simulated. Profiles: whether custom weapon/character profiles are present.
 sealed record LobbyMember(string Id, string Name, string Role, bool Ready, int? Ping, string Scenario, string Map, string Profiles,
     string Connection, string Link, long JoinedAt, bool Simulated, string Avatar = AvatarProfiles.Default, string? Version = null, bool Away = false,
-    IReadOnlyList<CosmeticRef>? Cosmetics = null);
+    IReadOnlyList<CosmeticRef>? Cosmetics = null, int Team = 0);
 
 sealed record ScoreLine(string MemberId, double? Score, double? Seconds, double? Remaining, int Shots, int Hits, int Kills,
     string Status, bool Disputed);
@@ -159,6 +166,15 @@ static class LobbyRules
     // A member id AimModCore accepts in play-state.tsv: [A-Za-z0-9_-]{1,64}.
     public static bool IsStreamSafe(string? id) => id is { Length: > 0 and <= 64 } && id.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_');
 
+    // CS teams at the start: everyone keeps their pick (1 = T, 2 = CT); players on "either"
+    // fill the smaller team, in join order.
+    public static Dictionary<string, int> ResolveTeams(IReadOnlyList<(string Id, int Team)> players)
+    {
+        var teams = players.Where(p => p.Team is 1 or 2).ToDictionary(p => p.Id, p => p.Team);
+        foreach (var (id, _) in players.Where(p => p.Team is not (1 or 2)))
+            teams[id] = teams.Values.Count(t => t == 1) <= teams.Values.Count(t => t == 2) ? 1 : 2;
+        return teams;
+    }
     public static string CleanName(string? name, string fallback)
     {
         var text = new string((name ?? "").Where(c => !char.IsControl(c)).ToArray()).Trim();
@@ -180,6 +196,7 @@ static class LobbyRules
     public static (LobbySettings? Settings, LobbyResult Result) Apply(LobbySettings current, JsonElement patch, int players, IContentResolver resolve)
     {
         if (patch.ValueKind != JsonValueKind.Object) return (null, LobbyResult.Fail("invalid", "Settings must be an object."));
+        if (current.Tournament is not null) return (null, LobbyResult.Fail("tournament-locked", "This lobby follows the tournament’s ruleset, so its settings can’t change."));
         var next = current;
         var seen = new HashSet<string>();
         foreach (var property in patch.EnumerateObject())
@@ -275,7 +292,8 @@ static class LobbyRules
     public static LobbySettings Normalize(LobbySettings s, int players)
     {
         if (LobbyModes.TwoPlayers(s.Mode)) s = s with { MaxPlayers = 2 };
-        if (!LobbyModes.AllowsOverrides(s.Mode))
+        // A tournament may set the game's length; its games run in freeplay, never ranked.
+        if (!LobbyModes.AllowsOverrides(s.Mode) && s.Tournament is null)
             s = s with { MapOverride = null, TimeLimit = null, Weapon = ProfileChoice.Default, Movement = ProfileChoice.Default, Character = ProfileChoice.Default, TargetSpeed = 1, TargetSize = 1 };
         if (!LobbyModes.AllowsLateJoin(s.Mode)) s = s with { LateJoin = false };
         // Picking the scenario's own length is no override, so no match scenario is generated for it.
@@ -302,6 +320,7 @@ static class LobbyRules
         LobbyModes.All.Contains(s.Mode) && LobbyPrivacy.All.Contains(s.Privacy)
         && s.MaxPlayers is >= LobbySettings.MinPlayers and <= LobbySettings.MaxPlayerLimit && s.MaxPlayers <= LobbyModes.MaxPlayers(s.Mode) && s.HalfRounds is >= 6 and <= 15
         && s.Rounds is >= 1 and <= 10 && s.FirstTo is >= 1 and <= 7
+        && (s.Tournament is null || s.Tournament is { Seed: >= 0 and <= uint.MaxValue, Game: >= 0 and < 64, Players.Count: <= 2 } t && t.MatchId.Length is > 0 and <= 32 && t.TournamentId.Length is > 0 and <= 64)
         && s.TimeLimit is null or (>= 10 and <= 600) && s.FragLimit is null or (>= 1 and <= 100) && s.Lifesteal is >= 0 and <= 200 && s.TargetSpeed is >= 0.25 and <= 3 && s.TargetSize is >= 0.25 and <= 2 && s.Countdown is >= 3 and <= 10
         && (s.Scenario is null || (ValidContentName(s.Scenario.Name) && ValidHash(s.Scenario.Hash) && s.Scenario.TimeLimit is > 0 and <= 3600))
         && (s.MapOverride is null || (ValidContentName(s.MapOverride.Name) && ValidHash(s.MapOverride.Hash)))
@@ -317,6 +336,8 @@ static class LobbyRules
         if (s.Scenario is null) list.Add(new("scenario", "Choose a scenario."));
         if (LobbyModes.TwoPlayers(s.Mode) && players.Length != 2) list.Add(new("duel-players", "A duel needs exactly two players."));
         else if (s.Mode == LobbyModes.Cs && players.Length is not (6 or 8 or 10)) list.Add(new("cs-teams", "CS is 3v3, 4v4 or 5v5: it needs 6, 8 or 10 players (now " + players.Length + ")."));
+        else if (s.Mode == LobbyModes.Cs && ResolveTeams(players.Select(p => (p.Id, p.Team)).ToList()) is { } resolved && resolved.Values.Count(t => t == 1) != resolved.Values.Count(t => t == 2))
+            list.Add(new("cs-balance", "The teams are uneven: " + resolved.Values.Count(t => t == 1) + " T and " + resolved.Values.Count(t => t == 2) + " CT. Move someone or press Balance."));
         else if (players.Length < LobbySettings.MinPlayers) list.Add(new("players", "Waiting for at least one more player."));
         foreach (var m in players.Where(m => m.Connection != Connections.Connected)) list.Add(new("reconnecting", m.Name + " is reconnecting."));
         // Different AimMod builds can't see each other in the world (the pose format changed).

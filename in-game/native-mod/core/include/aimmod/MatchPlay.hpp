@@ -30,6 +30,35 @@ namespace aimmod
     // Validated; nullopt for anything malformed (the whole file is ignored).
     std::optional<PlayState> ParsePlayState(std::string_view text);
 
+    // round-state.tsv (service; game-modes.md 6.2.1): what play-state does not
+    // carry. AIMMOD_ROUND_1\t<seq>, match, and optional spawn / phase / loadout.
+    struct RoundState
+    {
+        std::uint64_t sequence{};
+        std::string scenario;
+        struct Spawn
+        {
+            std::string id;
+            double x{}, y{}, z{}, yaw{};
+        };
+        std::optional<Spawn> spawn;
+        struct Phase
+        {
+            std::string name; // freeze | live | planted | end | over
+            bool frozen{}, buy{};
+            std::int64_t endsMs{};
+        };
+        std::optional<Phase> phase;
+        struct Loadout
+        {
+            std::string primary, pistol; // weapon profile names; "-" = empty slot
+            double armour{};
+            bool helmet{}, kit{};
+        };
+        std::optional<Loadout> loadout;
+    };
+    std::optional<RoundState> ParseRoundState(std::string_view text);
+
     // First intersection of a ray (unit direction) with a vertical capsule
     // centred at `center`. Returns the distance along the ray, or nullopt.
     std::optional<double> RayCapsule(const double origin[3], const double direction[3], const double center[3], double radius, double halfHeight);

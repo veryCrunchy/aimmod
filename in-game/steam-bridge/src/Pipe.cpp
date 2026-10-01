@@ -114,8 +114,10 @@ namespace bridge
         if (m_connected.exchange(false))
         {
             std::lock_guard lock(m_writeMutex);
-            FlushFileBuffers(m_pipe);
+            // A client that stopped reading would block the flush forever.
+            if (!m_broken.load()) FlushFileBuffers(m_pipe);
             DisconnectNamedPipe(m_pipe);
+            m_broken = false;
             m_onState(false);
         }
         else DisconnectNamedPipe(m_pipe);
@@ -154,6 +156,7 @@ namespace bridge
                 }
             }
             if (!connected) continue;
+            m_broken = false;
             m_connected = true;
             m_log("pipe: service connected");
             m_onState(true);
@@ -179,8 +182,9 @@ namespace bridge
 
     bool PipeServer::Send(const std::string& json)
     {
-        if (!m_connected.load() || json.empty() || json.size() > MaxPipeFrame) return false;
+        if (!m_connected.load() || m_broken.load() || json.empty() || json.size() > MaxPipeFrame) return false;
         std::lock_guard lock(m_writeMutex);
+        if (m_broken.load()) return false;
         std::string frame(4, '\0');
         const auto n = static_cast<std::uint32_t>(json.size());
         frame[0] = static_cast<char>(n & 0xFF);
@@ -205,6 +209,14 @@ namespace bridge
             }
         }
         CloseHandle(done);
-        return ok && wrote == frame.size();
+        if (ok && wrote == frame.size()) return true;
+        // A client that stops reading for 2 s is gone: never write after a
+        // partial frame, and end the read so the connection is dropped.
+        if (!m_broken.exchange(true))
+        {
+            m_log("pipe: a write to the service failed or timed out; dropping the client");
+            CancelIoEx(m_pipe, nullptr);
+        }
+        return false;
     }
 } // namespace bridge

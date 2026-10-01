@@ -438,6 +438,22 @@ int main()
         Check(!AvatarPath::Parse("AIMMOD_AVATAR_PATH_1\np\t0\t0\t0\t0\t0\t0\n"), "needs at least two rows");
         Check(!AvatarPath::Parse("AIMMOD_AVATAR_PATH_1\np\t0\tnan\t0\t0\t0\t0\np\t5\t0\t0\t0\t0\t0\n"), "refuses non-finite numbers");
     }
+    // Kick list in lobby data
+    {
+        const std::uint64_t other = Person + 1;
+        const auto text = FormatBanList({Person, Lobby, other});
+        Check(text == std::to_string(Person) + "," + std::to_string(other), "ban list keeps individual accounts");
+        const auto back = ParseBanList(text + ",x,," + std::to_string(Person));
+        Check(back.size() == 2 && back[0] == Person && back[1] == other, "ban list round-trips and ignores junk and duplicates");
+        std::vector<std::uint64_t> many;
+        for (std::uint64_t i = 0; i < 40; ++i) many.push_back(Person + i);
+        Check(FormatBanList(many).size() <= MaxLobbyValue && ParseBanList(FormatBanList(many)).size() >= 10, "ban list fits one lobby value");
+        Check(ParseBanList(std::string(MaxLobbyValue + 1, '1')).empty(), "oversized ban list rejected");
+    }
+    // Remote players never become game bots outside AimMod match scenarios.
+    Check(ghost::AvatarBotsAllowed("AimMod Match - Synthetic Arena - ab12cd34") && !ghost::AvatarBotsAllowed("Synthetic Tracking") &&
+              !ghost::AvatarBotsAllowed("") && !ghost::AvatarBotsAllowed("AimMod - Synthetic Map - CS Movement"),
+          "avatar bots only in match scenarios");
     // avatar-state.tsv from the service
     {
         const std::string id = std::to_string(Person);
@@ -449,8 +465,55 @@ int main()
         Check(!bridge::avatarstate::Parse("AIMMOD_AVATARS_1\t1\npeer\t" + id + "\t1\tally\t0\t0\t0\n"), "rejects an unknown side");
         Check(!bridge::avatarstate::Parse("AIMMOD_AVATARS_1\t1\npeer\t" + std::to_string(Lobby) + "\t1\tenemy\t100\t0\t0\n"), "rejects a non-player id");
         Check(!bridge::avatarstate::Parse("peer\t" + id + "\t1\tenemy\t100\t0\t0\n"), "requires the header");
+        Check(!bridge::avatarstate::Parse("AIMMOD_AVATARS_1\t9999999999999999999\n"), "rejects a sequence past INT64_MAX");
         auto empty = bridge::avatarstate::Parse("AIMMOD_AVATARS_1\t2\n");
         Check(empty && empty->peers.empty(), "an empty state file is valid");
+    }
+    // Tournament lobbies
+    {
+        WireMessage th{WireType::TournamentHello};
+        th.lobby = Lobby;
+        th.token = 0x55aa;
+        th.matchToken = "tm_9fK2-xQ7Lp";
+        auto te = Encode(th);
+        auto td = Decode(te.data(), te.size());
+        Check(td && td->type == WireType::TournamentHello && td->lobby == Lobby && td->token == 0x55aa && td->matchToken == "tm_9fK2-xQ7Lp", "tournament hello round-trips");
+        WireMessage bad = th;
+        bad.matchToken = "short";
+        auto be = Encode(bad);
+        Check(!Decode(be.data(), be.size()), "rejects an invalid match token");
+        Check(ValidMatchToken("abcdEFGH_1-2") && !ValidMatchToken("abc") && !ValidMatchToken("has space!") && !ValidMatchToken(std::string(65, 'a')), "validates match tokens");
+        Check(ValidProfileName("AimMod Meso Tracer") && ValidProfileName("CS Player (v2)") && !ValidProfileName(" lead") && !ValidProfileName("a/b") &&
+                  !ValidProfileName("x\ny") && !ValidProfileName(std::string(65, 'a')),
+              "validates character profile names");
+        Check(SameToken("abcdefgh", "abcdefgh") && !SameToken("abcdefgh", "abcdefgx") && !SameToken("abcdefgh", "abcdefg"), "compares tokens");
+        Check(be.empty(), "encoder refuses an invalid match token");
+    }
+    {
+        // The encoder only produces what the decoder accepts.
+        WireMessage data{WireType::Data};
+        data.lobby = Lobby;
+        Check(Encode(data).empty(), "encoder refuses an empty data payload");
+        data.payload.assign(MaxPayload + 1, 1);
+        Check(Encode(data).empty(), "encoder refuses an oversized data payload");
+        WireMessage chunk{WireType::Chunk};
+        chunk.payload.assign(MaxChunk + 1, 1);
+        Check(Encode(chunk).empty(), "encoder refuses an oversized chunk");
+        WireMessage hello{WireType::SpectateHello};
+        hello.rate = 0;
+        Check(Encode(hello).empty(), "encoder refuses a zero spectate rate");
+        hello.rate = MaxSpectateRate + 1;
+        Check(Encode(hello).empty(), "encoder refuses an excessive spectate rate");
+        WireMessage pose{WireType::Pose};
+        pose.pose.x = std::numeric_limits<float>::quiet_NaN();
+        Check(Encode(pose).empty(), "encoder refuses a non-finite pose");
+        WireMessage cam{WireType::Camera};
+        cam.camera.fov = 90;
+        cam.camera.yaw = std::numeric_limits<float>::infinity();
+        Check(Encode(cam).empty(), "encoder refuses a non-finite camera");
+        cam.camera.yaw = 10;
+        const auto ce = Encode(cam);
+        Check(!ce.empty() && Decode(ce.data(), ce.size()), "a valid camera frame still round-trips");
     }
     std::printf("%d/%d checks passed\n", checks - failures, checks);
     return failures == 0 ? 0 : 1;

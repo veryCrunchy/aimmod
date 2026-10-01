@@ -318,7 +318,10 @@ The user approved AimMod changing game state where a feature needs it
 AimModCore performs these on the game thread, one at a time.
 
 Transport: the service writes `core-command.tsv` (atomically) and AimModCore
-answers in `core-command-result.tsv`. HTTP (workspace capability URL,
+answers in `core-command-result.tsv` (the last 8 results, oldest first, one
+`AIMMOD_CORE_RESULT_1` line each; `GET` also returns them as `results`). Every
+override reset also reloads the scenario's weapons (`LoadWeapons`) when a
+weapon was overridden. HTTP (workspace capability URL,
 header `X-AimMod-UI: 1`): `POST <prefix>/game-command` with JSON
 `{"action","scenario","mode","timeScale","targetSize","targetSpeed","mapScale","weapon"}`
 returns `{"sequence":n}` (409 `{"error":"unsupported"}` without the
@@ -490,6 +493,32 @@ If `HandleDamage`, `SetHealth`, `Respawn`, `OnCharacterKilled`,
 `OverrideInvulnerable`, `ResetInvulnerable` or `GetCurrentHealth` is missing on
 the character class, match play is disabled for the session and the missing
 names are logged.
+
+`round-state.tsv` (service; `in-game/docs/game-modes.md` 6.2.1; same gate,
+freshness and whole-file validation as `play-state.tsv`):
+
+```
+AIMMOD_ROUND_1	<seq>
+match	<scenario name>
+spawn	<id>	<x>	<y>	<z>	<yaw>
+phase	<freeze|live|planted|end|over>	<frozen 0/1>	<buy 0/1>	<ends unix ms>
+loadout	<primary profile or ->	<pistol profile or ->	<armour>	<helmet 0/1>	<kit 0/1>
+```
+
+- `spawn`: `K2_TeleportTo` (and the controller's yaw) once per id, retried
+  for 2 s if the game refuses the spot. A spawn already present when the gate
+  opens is not replayed, except during a `freeze` phase. At a `freeze` phase
+  (CS round start) a dead player is respawned first (`Respawn`).
+- `frozen`: `Controller:SetIgnoreMoveInput(true)` (looking stays free),
+  re-applied if a respawn clears it, released when the phase ends or the gate
+  closes.
+- `loadout`: `WeaponHandler:SetWeaponProfileByString` on slots 0 and 1; `-`
+  empties a slot by clearing its `SelectableWeapon` entry (and selects the
+  other slot). Re-applied for a new weapon handler. When the gate closes the
+  original `SelectableWeapon` values come back and `LoadWeapons` restores the
+  scenario's loadout. Armour, helmet and kit are the service's (HUD) concern.
+- Missing `K2_TeleportTo`, `SetControlRotation`, `SetIgnoreMoveInput`,
+  `SetWeaponProfileByString` or `LoadWeapons` disables round state (logged).
 
 ## Cosmetics
 

@@ -417,19 +417,24 @@ namespace aimmod
         if (m_shapesFailed) return false;
         if (ghost.world == world && ghost.body.Get() && ghost.head.Get() && ghost.visor.Get()) return true;
         DestroyShapes(ghost);
-        if (!m_cylinder) m_cylinder = LoadMesh(STR("/Engine/BasicShapes/Cylinder.Cylinder"));
-        if (!m_sphere) m_sphere = LoadMesh(STR("/Engine/BasicShapes/Sphere.Sphere"));
-        if (!m_cube) m_cube = LoadMesh(STR("/Engine/BasicShapes/Cube.Cube"));
-        if (!m_cylinder || !m_sphere || !m_cube)
+        auto mesh = [&](FWeakObjectPtr& cached, const wchar_t* path) {
+            UObject* object = cached.Get();
+            if (!object && (object = LoadMesh(path))) cached = object;
+            return object;
+        };
+        UObject* cylinder = mesh(m_cylinder, STR("/Engine/BasicShapes/Cylinder.Cylinder"));
+        UObject* sphere = mesh(m_sphere, STR("/Engine/BasicShapes/Sphere.Sphere"));
+        UObject* cube = mesh(m_cube, STR("/Engine/BasicShapes/Cube.Cube"));
+        if (!cylinder || !sphere || !cube)
         {
             m_log("ghost demo: engine basic shapes not found; shapes disabled");
             m_shapesFailed = true;
             return false;
         }
         const auto l = bridge::ghost::Layout(Sample{}); // sizes are reset from the remote pose every frame
-        ghost.body = SpawnShape(world, m_cylinder, l.body.sx, l.body.sy, l.body.sz);
-        ghost.head = SpawnShape(world, m_sphere, l.head.sx, l.head.sy, l.head.sz);
-        ghost.visor = SpawnShape(world, m_cube, l.visor.sx, l.visor.sy, l.visor.sz);
+        ghost.body = SpawnShape(world, cylinder, l.body.sx, l.body.sy, l.body.sz);
+        ghost.head = SpawnShape(world, sphere, l.head.sx, l.head.sy, l.head.sz);
+        ghost.visor = SpawnShape(world, cube, l.visor.sx, l.visor.sy, l.visor.sz);
         ghost.world = world;
         return ghost.body.Get() && ghost.head.Get() && ghost.visor.Get();
     }
@@ -471,6 +476,13 @@ namespace aimmod
 
     void GhostDemo::Show(std::uint64_t peer, Ghost& ghost, const Sample& s, UObject* world, UObject* character)
     {
+        if (!m_botsAllowed)
+        {
+            // Never a game bot outside AimMod match scenarios: shapes only.
+            RemoveAvatar(ghost);
+            if (EnsureShapes(ghost, world)) PlaceShapes(ghost, s);
+            return;
+        }
         if (EnsureAvatar(peer, ghost, character))
         {
             DestroyShapes(ghost);
@@ -482,8 +494,8 @@ namespace aimmod
                 RemoveAvatar(ghost);
                 return;
             }
-            std::string wanted = m_bridge.LobbyValue("aimmod.char." + std::to_string(peer));
-            if (wanted.empty()) wanted = m_bridge.LobbyValue("aimmod.avatar_char");
+            std::string wanted = peer == TestPeer ? m_bridge.DevAvatarState().profile : m_bridge.LobbyValue("aimmod.char." + std::to_string(peer));
+            if (wanted.empty() && peer != TestPeer) wanted = m_bridge.LobbyValue("aimmod.avatar_char");
             if (!wanted.empty() && wanted != ghost.characterProfile && m_loadCharacterProfile.ok())
             {
                 ghost.characterProfile = wanted;
@@ -580,6 +592,8 @@ namespace aimmod
             {
                 if (!m_lastScene.empty() && !m_ghosts.empty()) m_log("avatars: scenario changed; re-applying looks and AI-off");
                 m_lastScene = scene;
+                m_botsAllowed = bridge::ghost::AvatarBotsAllowed(scene);
+                if (!m_ghosts.empty() && !m_botsAllowed) m_log("avatars: not an AimMod match scenario; remote players drawn as shapes");
                 m_avatarMapDirty = true;
                 for (auto& [_, g] : m_ghosts)
                 {

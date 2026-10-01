@@ -26,4 +26,7 @@ namespace aimmod
     std::optional<GameStats> ParseGameStats(std::string_view text);
     // "<scenario> - Challenge - " file name prefix check (Stats.csv suffix).
     bool IsChallengeStatsFile(std::string_view fileName);
+    // The same check on a wide (directory listing) name: scenario names may
+    // hold characters the ANSI code page cannot represent.
+    bool IsChallengeStatsFile(std::wstring_view fileName);
 } // namespace aimmod

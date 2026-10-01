@@ -4,7 +4,7 @@ using System.Text.Json;
 namespace AimMod.InGame.Multiplayer;
 
 // Synthetic identities and content only; everything runs in temporary folders.
-static class MultiplayerChecks
+static partial class MultiplayerChecks
 {
     static int count;
     static void Check(bool value, string name) { count++; if (Environment.GetEnvironmentVariable("AIMMOD_CHECK_TRACE") == "1") Console.Error.WriteLine(name); if (!value) throw new Exception("Multiplayer check failed: " + name); }
@@ -33,9 +33,12 @@ static class MultiplayerChecks
         Peers();
         SteamPipe();
         Follow();
+        DevAvatarChecks();
+        Boards();
+        CsTeams();
         Marker();
         var root = Path.Combine(Path.GetTempPath(), "aimmod-mp-test-" + Guid.NewGuid().ToString("N"));
-        try { Content(root); Generator(root); Blocked(root); Service(root); Transfers(root); Replays(root); Maps(root); }
+        try { Content(root); Generator(root); Blocked(root); AutoLeave(root); Service(root); Transfers(root); Replays(root); Maps(root); Tournaments(root); }
         finally { try { Directory.Delete(root, true); } catch (IOException) { } }
         Console.WriteLine($"{count} multiplayer checks passed.");
     }
@@ -179,6 +182,20 @@ static class MultiplayerChecks
         Check(placements.First(p => p.MemberId == "p3").Disputed && placements.First(p => p.MemberId == "p3").Points == 1 && placements.First(p => p.MemberId == "host").Points == 0, "Placement points, and a result that disagrees with its live stream is disputed");
         Check(placements.First(p => p.MemberId == "p2").Status == LineStates.Left, "A player who left is marked");
 
+        // A finished run longer than the time the round has been live can't have been played in it.
+        (core, clock, advance) = Lobby();
+        core.Join("p2", "Two");
+        core.Apply("host", "settings", Patch(new { countdown = 3 }), content);
+        ReadyAll(core); core.Apply("host", "start", default, content);
+        advance(3001); core.Tick();
+        var early = core.Snapshot().Match!;
+        advance(2000);
+        core.Finish("p2", new RunFinish(early.Id, 1, 99_000, 60, 10, 5, 5, null));
+        advance(58_000);
+        core.Finish("host", new RunFinish(early.Id, 1, 800, 60, 10, 5, 5, null));
+        var earlyResults = core.Snapshot().Match!.Rounds[0].Results;
+        Check(earlyResults.First(x => x.MemberId == "p2").Disputed && !earlyResults.First(x => x.MemberId == "host").Disputed, "A 60 s result two seconds into the round is disputed; one at the end is not");
+
         // Missing players time out; practice has no ranking.
         (core, clock, advance) = Lobby();
         core.Join("p2", "Two");
@@ -204,6 +221,25 @@ static class MultiplayerChecks
         Check(heir.HostId == "p2" && heir.Members.All(m => m.Id != "host") && heir.Snapshot().Match?.Id == snapshot.Match!.Id, "Host migration keeps the lobby and the running match");
         Check(heir.Members.First(m => m.Id == "p3").Connection == Connections.Reconnecting && heir.Join("p3", "").Ok && heir.Members.First(m => m.Id == "p3").Connection == Connections.Connected, "Other members reconnect to the new host");
         Check(heir.Snapshot().Match!.Live.First(l => l.MemberId == "host").Status == LineStates.Left, "The departed host's run is marked left");
+        // Host migration while the last round's results show: the match is decided, no extra round.
+        (core, clock, advance) = Lobby();
+        core.Join("p2", "Two"); core.Join("p3", "Three");
+        core.Apply("host", "settings", Patch(new { mode = "score-race", rounds = 2, countdown = 3 }), content);
+        ReadyAll(core); core.Apply("host", "start", default, content);
+        for (var rn = 1; rn <= 2; rn++)
+        {
+            if (rn > 1) { advance(LobbyCore.ResultsMs); core.Tick(); }
+            advance(3001); core.Tick();
+            var rm = core.Snapshot().Match!;
+            advance(60_000);
+            foreach (var id in new[] { "host", "p2", "p3" }) core.Finish(id, new RunFinish(rm.Id, rn, 900 - rn, 60, 10, 5, 5, null));
+        }
+        var decided = core.Snapshot();
+        Check(decided.Match is { Phase: MatchPhases.Round, Round: 2 }, "The deciding round shows its results");
+        var successor = LobbyCore.Restore(decided, "p2", clock);
+        successor.Join("p3", "Three");
+        advance(LobbyCore.ResultsMs); successor.Tick();
+        Check(successor.Snapshot().Match is { Phase: MatchPhases.Final, Round: 2 }, "A host who takes over during the last results ends the match instead of starting an extra round");
 
         // Looks and builds.
         (core, clock, advance) = Lobby();
@@ -297,15 +333,16 @@ static class MultiplayerChecks
         static (double X, double Y, double Z) Body(long t) => (1000, 300 * Math.Sin((t - t0) / 1000.0 * 2 * Math.PI), 100);
         TrackSample Eye(long t) { var b = Body(t); return new TrackSample(t, b.X, b.Y, b.Z + 64, 0, 0); }
         TrackSample Aim(long t, (double X, double Y, double Z) at, bool fire = false) => new(t, 0, 0, 164, Math.Atan2(at.Z - 164, Math.Sqrt(at.X * at.X + at.Y * at.Y)) * 180 / Math.PI, Math.Atan2(at.Y, at.X) * 180 / Math.PI, fire);
-        TrackingRound Play(long seenLag, long aimLag, Func<long, (double, double, double)>? claimed = null, bool evidence = true, long attackUntil = length, bool requireFire = false, string? tag = null)
+        TrackingRound Play(long seenLag, long aimLag, Func<long, (double, double, double)>? claimed = null, bool evidence = true, long attackUntil = length, bool requireFire = false, string? tag = null,
+            double aimOffset = 0, double seenRadius = 45, double seenHalf = 115)
         {
             var round = new TrackingRound("a", "d", t0, t0 + length, requireFire);
             for (long t = t0; t < t0 + length; t += 17)
             {
                 var dodge = new List<TrackSample> { Eye(t) };
-                var aim = t < t0 + attackUntil ? new List<TrackSample> { Aim(t, Body(t - aimLag), fire: (t - t0) % 1000 < 500) } : [];
+                var aim = t < t0 + attackUntil ? new List<TrackSample> { Aim(t, Body(t - aimLag) is var at ? (at.X, at.Y + aimOffset, at.Z) : default, fire: (t - t0) % 1000 < 500) } : [];
                 var seen = new List<TrackSeen>();
-                if (evidence && (t - t0) % 34 == 0) { var c = (claimed ?? (x => Body(x - seenLag)))(t); seen.Add(new TrackSeen(t, 7, c.Item1, c.Item2, c.Item3, 45, 115, tag)); seen.Add(new TrackSeen(t, 3, -500, -500, 100, 45, 115)); }
+                if (evidence && (t - t0) % 34 == 0) { var c = (claimed ?? (x => Body(x - seenLag)))(t); seen.Add(new TrackSeen(t, 7, c.Item1, c.Item2, c.Item3, seenRadius, seenHalf, tag)); seen.Add(new TrackSeen(t, 3, -500, -500, 100, 45, 115)); }
                 round.Add("d", new TrackBatch("m", 1, dodge, []));
                 round.Add("a", new TrackBatch("m", 1, aim, seen));
             }
@@ -321,6 +358,8 @@ static class MultiplayerChecks
         var lie = Play(0, 0, claimed: t => { var b = Body(t); return (b.X + 250, b.Y, b.Z); }).ScoreFor("a", t0 + length, 40, 40);
         Check(lie.Disputed && lie.Reason == "seen-mismatch", "Drawn hulls that don't match the target's own track are rejected and dispute the round");
         var late = Play(350, 350).ScoreFor("a", t0 + length, 40, 40);
+        var huge = Play(120, 120, aimOffset: 300, seenRadius: 1000, seenHalf: 2000).ScoreFor("a", t0 + length, 40, 60);
+        Check(huge.Percent < 5, "Drawn hulls far larger than the avatar's don't count aim 3 m beside the target as on target");
         Check(late.Disputed && late.LagMs == TrackingRound.RewindCapMs && late.Percent < 60, "The rewind is capped at 200 ms: aiming at a target older than that doesn't count");
         var partial = Play(120, 120, attackUntil: length / 2).ScoreFor("a", t0 + length, 40, 40);
         Check(partial.Disputed && partial.Reason == "coverage" && partial.Percent is > 45 and < 55, "A stream covering half the round scores half and is disputed");
@@ -401,6 +440,14 @@ static class MultiplayerChecks
         // Arena scenario: no targets, nobody hurt, nothing scored natively, one hidden helper bot.
         var arena = MatchScenario.Generate(new(BaseScenario, duel with { Scenario = new ScenarioChoice("Synthetic A", ContentLibrary.TextHash(BaseScenario), "synthetic_map", ContentLibrary.TextHash("m"), 60) }));
         Check(arena.Contains("AddedBots=AimMod Hidden Bot.bot\n") && arena.Contains("BotCharacters=AimMod Hidden Bot.bot\n") && arena.Contains("InvinciblePlayer=true\n") && arena.Contains("ScorePerDamage=0.0\n") && arena.Contains("Timelimit=20.0\n"), "Tracking arena: hidden helper bot only, invincible, no native scoring, the run outlasts the round");
+        // Every PvP arena: the scenario's own targets never spawn, only the hidden helper (avatars come from it).
+        foreach (var pvp in new[] { LobbyModes.Tracking, LobbyModes.Deathmatch, LobbyModes.Vampiric, LobbyModes.Instagib, LobbyModes.TeamDeathmatch })
+        {
+            var text = MatchScenario.Generate(new(BaseScenario, new LobbySettings(Mode: pvp, Scenario: new ScenarioChoice("Synthetic A", ContentLibrary.TextHash(BaseScenario), "synthetic_map", ContentLibrary.TextHash("m"), 60))));
+            var header = text[..text.IndexOf("\n[", StringComparison.Ordinal)];
+            var spawns = header.Split('\n').Where(l => l.StartsWith("BotCharacters=", StringComparison.Ordinal) || l.StartsWith("AddedBots=", StringComparison.Ordinal)).ToArray();
+            Check(spawns.Length == 2 && spawns.All(l => l.EndsWith("=AimMod Hidden Bot.bot", StringComparison.Ordinal)) && !header.Contains("target.bot"), pvp + " arena spawns no scenario targets, only the hidden helper bot");
+        }
         var hidden = arena[arena.IndexOf("[Character Profile]\nName=AimMod Hidden\n", StringComparison.Ordinal)..];
         Check(hidden.Contains("CharacterModel=None\n") && hidden.Contains("MainBBHide=true\n") && hidden.Contains("DisableCharacterCollision=true\n") && arena.Contains("[Bot Profile]\nName=AimMod Hidden Bot\n") && arena.Contains("NoAiming=true\n"), "The helper bot is invisible, passable and inert");
         // Offline avatar spike: a replay's camera becomes a 30 Hz path for AimModSteam's avatar test.
@@ -447,6 +494,11 @@ static class MultiplayerChecks
         Check(c1.Claim("a", Shot(at + 300, yaw: 10), at + 350, 40) == "aim", "The ray must look where the shooter's own track looked");
         Check(c1.Claim("a", Shot(at + 400, targetY: 300), at + 450, 40) == "target-mismatch", "A drawn target nobody was at in the last 200 ms is refused");
         Check(c1.Claim("a", Shot(at + 500, yaw: 2.9), at + 550, 40) == "ray-miss", "A ray beside the hull is refused");
+        // The drawn hull is the shooter's evidence of where the victim was, not of how big it is.
+        Check(c1.Claim("a", new HitClaim("m", 1, ++seq, at + 520, 0, 30, 164, 0, 2.9, false, 1000, 0, 100, 1000, 2000), at + 560, 40) == "ray-miss",
+            "A claimed hull far larger than the avatar's can't turn a miss into a hit");
+        Check(Arena(LobbyModes.Deathmatch).Claim("a", new HitClaim("m", 1, ++seq, at + 540, 0, 0, 195, 2.9, 0, false, 1000, 0, 155.7, 45, 115), at + 570, 40) == "target-mismatch",
+            "A claimed hull raised above the victim's own track can't turn a shot over the head into a headshot");
         Check(c1.Claim("a", Shot(at + 600) with { Seq = 1 }, at + 650, 40) == "repeated" && c1.Claim("a", Shot(at - 5000), at + 700, 40) == "time", "Repeated and stale claims are refused");
         var headPitch = Math.Atan2(195 - 164, 1000) * 180 / Math.PI;
         Check(c1.Claim("a", Shot(at + 800, pitch: headPitch), at + 850, 40) is null && c1.View().Events[^1] is { Kind: "damage", Head: true, Amount: 40 }, "The host decides headshots from the ray (the top of the hull) and doubles the damage");
@@ -518,6 +570,32 @@ static class MultiplayerChecks
         for (var k = 0; k < 5; k++) { core.Claim("host", new HitClaim(m.Id, 1, 100 + k, now - 480 + k * 100, 0, 0, 164, 0, 0, false, 1000, 0, 100, 45, 115)); }
         var final = core.Snapshot().Match!;
         Check(final.Phase == MatchPhases.Final && final.WinnerId == "host" && final.Rounds[0].Results[0] is { MemberId: "host", Score: 1, Place: 1 }, "Reaching the frag limit ends the match with the winner");
+
+        // A three-player deathmatch whose leader leaves: the players still there are placed among themselves.
+        (core, clock, advance) = Lobby();
+        core.Join("p2", "Two"); core.Join("p3", "Three");
+        core.Apply("host", "settings", Patch(new { mode = "deathmatch", fragLimit = 5, countdown = 3, timeLimit = 60 }), content);
+        ReadyAll(core); core.Apply("host", "start", default, content);
+        advance(3000); core.Tick();
+        var three = core.Snapshot().Match!;
+        var t3 = clock();
+        for (long t = 0; t < 3000; t += 100)
+        {
+            List<TrackSample> Eyes(double x, double y, double yaw) { var l = new List<TrackSample>(); for (long k = 0; k < 100; k += 17) l.Add(new TrackSample(t3 + t + k, x, y, 164, 0, yaw)); return l; }
+            core.Track("host", new TrackBatch(three.Id, 1, Eyes(0, 0, 0), [])); core.Track("p2", new TrackBatch(three.Id, 1, Eyes(1000, 0, 180), [])); core.Track("p3", new TrackBatch(three.Id, 1, Eyes(0, 3000, 0), []));
+            advance(100); core.Tick();
+        }
+        var shotAt = clock();
+        for (var k = 0; k < 5; k++) core.Claim("p2", new HitClaim(three.Id, 1, 200 + k, shotAt - 600 + k * 110, 1000, 0, 164, 0, 180, false, 0, 0, 100, 45, 115));
+        Check(core.Snapshot().Match!.Combat!.Players.First(p => p.Member == "p2").Frags == 1, "The leader has a frag");
+        core.Leave("p2");
+        advance(60_000 + LobbyCore.RoundGraceMs); core.Tick();
+        var left = core.Snapshot().Match!;
+        var leftPlaces = left.Rounds[0].Results;
+        Check(left.Phase == MatchPhases.Final && leftPlaces.First(p => p.MemberId == "p3").Place == 1 && leftPlaces.First(p => p.MemberId == "host").Place == 2 && leftPlaces.First(p => p.MemberId == "p2").Place == 0,
+            "A leader who left doesn't push the remaining players down: equal frags, fewer deaths places first");
+        Check(left.WinnerId == "p3" && left.Standings.First(s => s.MemberId == "p3").Place == 1 && left.Standings.First(s => s.MemberId == "host").Place == 2,
+            "The final standings follow the match placement: the player who left doesn't win, fewer deaths breaks a frag tie");
 
         // Arenas: the player can be hurt and carries the mode weapon; nothing natively heals or scores.
         var arena = MatchScenario.Generate(new(BaseScenario, LobbyRules.Apply(start, J(new { mode = "instagib" }), 2, content).Settings! with { Scenario = new ScenarioChoice("Synthetic A", ContentLibrary.TextHash(BaseScenario), "synthetic_map", ContentLibrary.TextHash("m"), 60) }));
@@ -646,6 +724,7 @@ static class MultiplayerChecks
         Check(match.Buy("b", "ak47", t0 + 1000) == "side" && match.Buy("b", "usp", t0 + 1000) == "owned" && match.Buy("b", "defuse-kit", t0 + 1000) is null, "Side rules: CT can't buy the AK; the starting pistol is owned; CT buy a kit");
         Place("d", 0, t0 + 2000, t0 + 3000);
         Check(match.Buy("d", "kevlar", t0 + 2500) == "buy-zone", "Buying outside your buy zone is refused");
+        Check(match.View().Players.First(p => p.Member == "d").InBuyZone == false && match.View().Players.First(p => p.Member == "a").InBuyZone == true, "The view says who stands in their buy zone");
         match.Tick(t0 + CsRules.FreezeMs);
         Check(match.Phase == "live" && match.Buy("c", "kevlar", t0 + CsRules.FreezeMs + CsRules.BuyMs + 10) == "buy-time", "After the freeze the round is live; buy time ends 20 s later");
 
@@ -756,7 +835,7 @@ static class MultiplayerChecks
         public RejoinPoint? LastLobby => null;
         public void SetPresencePrivacy(bool hideScenario) { }
         public bool StartSpectate(string peer, int rate) => false;
-        public void StopSpectate() { }
+        public void StopSpectate() => SpectateLog.Add("stop");
         public bool AllowSpectate;
         public readonly List<string> SpectateLog = [];
         public bool RequestSpectate(string peer) { SpectateLog.Add("request " + peer); return AllowSpectate; }
@@ -764,6 +843,8 @@ static class MultiplayerChecks
         public void SetSpectatePrivacy(string mode) { }
         public void RemoveSpectator(string peer) { }
         public bool WorkshopDownload(string item) => false;
+        public readonly List<string> DevAvatars = [];
+        public bool DevAvatar(bool on, string mode, string? profile = null) { DevAvatars.Add((on ? "on " : "off ") + mode + (profile is null ? "" : " " + profile)); return true; }
         // Bulk lane stand-in: chunks arrive in order; DropAfter cuts a transfer short like a lost link.
         public int BulkChunkBytes { get; set; }
         public int DropAfter = -1, BulkSent;
@@ -825,6 +906,13 @@ static class MultiplayerChecks
         b.Act("chat", J(new { text = "synthetic hello" }));
         Pump();
         Check(View(c).GetProperty("lobby").GetProperty("chat").EnumerateArray().Any(l => l.GetProperty("text").GetString() == "synthetic hello"), "Chat travels through the host");
+        // A peer outside the lobby (a friend's spectate link, a rejected join) gets nothing from the host.
+        var outsider = new MemoryTransport(net, "peer-x"); net.Peers["peer-x"] = outsider;
+        foreach (var (type, body) in new (string, object)[] { ("content.request", new { }), ("content.get", new { hash = new string('a', 64), offset = 0, length = 8192 }) })
+            net.Peers["peer-a"].Inbox.Enqueue(new TransportEvent("peer-x", TransportEvent.Message, Protocol.Encode(Protocol.Create(type, "x", "peer-x", 1, now, body))));
+        Pump();
+        Check(outsider.Inbox.Count == 0, "The host answers lobby traffic only from its members");
+        net.Peers.Remove("peer-x");
         // A forged frame claiming to be the host is dropped.
         net.Peers["peer-b"].Inbox.Enqueue(new TransportEvent("peer-c", TransportEvent.Message, Protocol.Encode(Protocol.Create("snapshot", "x", "peer-a", 1, now, new { snapshot = new { } }))));
         Pump();
@@ -856,6 +944,12 @@ static class MultiplayerChecks
         Pump();
         Check(View(b).GetProperty("watch").GetProperty("message").GetString()!.Contains("said no"), "An end reason is explained");
         b.Act("watch-stop", default);
+        // Switching to another friend: the bridge replaces the stream; nothing may stop the new one.
+        bt.FriendList = [new("f2", "Watchable Friend", "aimmod", null, null, false, Spectatable: true, Scenario: "Synthetic A"), new("f3", "Other Friend", "aimmod", null, null, false, Spectatable: true, Scenario: "Synthetic A")];
+        b.Act("watch", J(new { friend = "f2" })); bt.SpectateLog.Clear();
+        Check(b.Act("watch", J(new { friend = "f3" })).Ok && bt.SpectateLog.SequenceEqual(["request f3"]) && View(b).GetProperty("watch").GetProperty("peer").GetString() == "f3",
+            "Switching friends asks for the new stream without stopping it right after");
+        b.Act("watch-stop", default); bt.FriendList = null;
         var ct = (MemoryTransport)net.Peers["peer-c"];
         ct.Inbox.Enqueue(new TransportEvent("f9", TransportEvent.SpectatorJoined, Reason: "Synthetic Watcher"));
         ct.Inbox.Enqueue(new TransportEvent("f8", TransportEvent.SpectatorJoined, Reason: "Quiet Sync", Host: true));
@@ -1074,6 +1168,53 @@ static class MultiplayerChecks
     }
 
     // A player still inside a challenge run: the round waits (never "start it yourself") and loads once it ends.
+    // Leaving the run for the match: 5 s notice with Stay, the lobby key leaves now, then quit-run and load.
+    static void AutoLeave(string root)
+    {
+        long now = 4_500_000;
+        var control = new FakeGame("load", "start", "quit") { Root = Path.Combine(root, "game") };
+        var service = new MultiplayerService(new OfflineTransport(), new ContentLibrary(Path.Combine(root, "game")), control, () => new LocalRun(false, null, null, null, null, 0, 0, 0, null), () => [], () => null, null, simulation: true, () => now, autoTick: false, seed: 6);
+        JsonElement Round() => JsonSerializer.SerializeToElement(service.View(), Protocol.Json).GetProperty("lobby").GetProperty("round");
+        JsonElement Notice() => JsonDocument.Parse(service.NoticeText()).RootElement;
+        void Run(int ms) { for (var t = 0; t < ms; t += 100) { now += 100; service.Tick(); } }
+        service.Act("create", J(new { mode = "score-race", scenario = "Synthetic A" }));
+        service.Act("sim", J(new { op = "add" }));
+        Run(9000);
+        control.ChallengeRunning = true;
+        service.Act("start", default); Run(300);
+        var n = Notice();
+        Check(n.GetProperty("title").GetString()!.StartsWith("Leaving your run for the match in ", StringComparison.Ordinal) && n.GetProperty("countdown").GetInt32() is > 0 and <= 5
+            && n.GetProperty("actions").EnumerateArray().Any(x => x.GetProperty("action").GetString() == "leave-run-cancel"), "A run in progress gets a 5 s leave notice with Stay");
+        Check(!control.Calls.Contains("quit"), "Nothing is quit before the countdown ends");
+        Run(5000);
+        Check(control.Calls.Count(c => c == "quit") == 1 && Round().GetProperty("message").GetString()!.StartsWith("Leaving your run", StringComparison.Ordinal), "After 5 s the run is left with quit-run");
+        control.ChallengeRunning = false; Run(300);
+        Check(control.Calls.Last() == "load Synthetic A", "Then the match scenario loads");
+        service.Act("end", default); Run(6000);
+        // Stay: cancel keeps the run and falls back to the manual message.
+        control.ChallengeRunning = true;
+        service.Act("start", default); Run(300);
+        Check(service.Act("leave-run-cancel", J(new { id = "x" })).Ok, "Stay is accepted");
+        Run(6000);
+        Check(control.Calls.Count(c => c == "quit") == 1 && Round().GetProperty("message").GetString()!.Contains("Finish or quit your current run"), "Staying never quits; the manual message returns");
+        control.ChallengeRunning = false; Run(300);
+        service.Act("end", default); Run(6000);
+        // The lobby key leaves at once.
+        control.ChallengeRunning = true;
+        service.Act("start", default); Run(300);
+        service.Hotkey(); Run(100);
+        Check(control.Calls.Count(c => c == "quit") == 2, "The lobby key leaves the run at once");
+        control.ChallengeRunning = false; Run(300);
+        service.Act("end", default); Run(6000);
+        // Preference off, or no quit capability: the manual message, no quit.
+        service.Act("prefs", J(new { prefs = new { leaveRun = false } }));
+        control.ChallengeRunning = true;
+        service.Act("start", default); Run(6000);
+        var off = Notice();
+        Check(control.Calls.Count(c => c == "quit") == 2 && !(off.GetProperty("active").GetBoolean() && off.GetProperty("title").GetString()!.StartsWith("Leaving", StringComparison.Ordinal)), "With the preference off nothing is left automatically");
+        service.Dispose();
+    }
+
     static void Blocked(string root)
     {
         long now = 4_000_000;
@@ -1091,9 +1232,14 @@ static class MultiplayerChecks
         Check(Round().GetProperty("state").GetString() == "blocked" && Round().GetProperty("message").GetString()!.Contains("Finish or quit your current run") && !control.Calls.Any(c => c.StartsWith("load", StringComparison.Ordinal)), "A running challenge holds the load with a finish-or-quit message, not start-it-yourself");
         Run(3000);
         Check(Phase() == MatchPhases.Loading, "The warm-up counts a player still in a run as not loaded yet");
-        control.ChallengeRunning = false;
+        control.SceneLoading = true; control.ChallengeRunning = false;
         Run(300);
         Check(control.Calls.Count(c => c == "load Synthetic A") == 1 && Round().GetProperty("state").GetString() is "loading" or "ready", "Once the challenge ends the scenario loads by itself");
+        // KovaaK's still shows its loading screen: not loaded yet, so the countdown (and CS freeze time) waits.
+        Run(1000);
+        Check(Phase() == MatchPhases.Loading, "A scenario still on KovaaK's loading screen doesn't count as loaded");
+        control.SceneLoading = false; Run(1500);
+        Check(Phase() is MatchPhases.Countdown or MatchPhases.Live, "Once the loading screen is gone the countdown starts");
         service.Act("end", default); Run(6000);
         // A challenge that starts between the check and the load: AimModCore answers challenge-active.
         control.RefuseNextLoad();
@@ -1146,6 +1292,18 @@ static class MultiplayerChecks
         Check(loaded.Filter([new("meso-tint-ember", 1), new("unknown-item", 1), new("weapon-finish-sand", 1), new("accessory-halo", 1)]).Select(r => r.Id).SequenceEqual(["meso-tint-ember"]), "Shared looks resolve only to the same id and version in the viewer's own catalog");
         Check(CosmeticLooks.Format([new("meso-tint-ember", 1)], [("76561190000000001", [new CosmeticRef("weapon-finish-sand", 2)]), ("sim-bot", [new CosmeticRef("meso-tint-ember", 1)])])
             == "v=1\npeer=76561190000000001 items=weapon-finish-sand@2\nself=meso-tint-ember@1\n", "cosmetic-looks.txt has v=1, Steam peers only, and a self line");
+        // Character preview request (AimModCore's ParsePreviewRequest reads it).
+        var tint = loaded.Pickable.First(i => i.Id == "meso-tint-ember");
+        var previewBody = CosmeticPreviewFormat.Body("Meso", "McCree", -35.5, [tint]);
+        Check(previewBody is not null && previewBody.StartsWith("model=Meso\nskin=McCree\nyaw=-35.5\nvector=", StringComparison.Ordinal), "Preview request carries the look, the rotation and the item's parameters");
+        Check(CosmeticPreviewFormat.Body("Endo", "Default", 0, []) == "model=Endo\nyaw=0\n", "A model's default skin is not sent");
+        Check(CosmeticPreviewFormat.Body("../Meso", null, 0, []) is null && CosmeticPreviewFormat.Body("Meso", "C:/me.png", 0, []) is null, "Preview names are look names, never paths");
+        Check(CosmeticPreviewFormat.Body("Meso", null, 999, [])!.Contains("yaw=180\n"), "Preview rotation is clamped");
+        var bad = tint with { Vectors = new Dictionary<string, double[]> { ["Bad Name"] = [1, 0, 0, 1], ["Hot"] = [5, 0, 0, 1] } };
+        Check(!CosmeticPreviewFormat.Body("Meso", null, 0, [bad])!.Contains("vector="), "Preview drops parameters with bad names or values");
+        Check(CosmeticPreviewFormat.Request("model=Meso\nyaw=0\n", 3, 100) == "v=1\nexpires=105\nseq=3\nmodel=Meso\nyaw=0\n", "Preview request expires within seconds");
+        Check(CosmeticPreviewFormat.Frame("v=1\nseq=4\nfile=preview-1.png\nwidth=384\nheight=384\n") == (4, "preview-1.png"), "Preview frame record parses");
+        Check(CosmeticPreviewFormat.Frame("v=1\nseq=4\nfile=../secret.png\n") is null && CosmeticPreviewFormat.Frame(null) is null, "Preview frame only names AimMod's own PNGs");
         // Service: equip, view, the looks file with the session marker.
         long now = 8_000_000;
         var output = Path.Combine(root, "cos-output"); Directory.CreateDirectory(output);
@@ -1180,6 +1338,7 @@ static class MultiplayerChecks
         Check(Dev(new { action = "lobby", members = 5, mode = LobbyModes.Rounds }).Ok, "A simulated lobby of any size is created");
         var lobby = JsonSerializer.SerializeToElement(service.View(), Protocol.Json).GetProperty("lobby");
         Check(lobby.GetProperty("members").EnumerateArray().Count(m => m.GetProperty("simulated").GetBoolean()) == 5 && lobby.GetProperty("settings").GetProperty("maxPlayers").GetInt32() >= 6 && lobby.GetProperty("isHost").GetBoolean(), "Five simulated players join your lobby, with room for everyone");
+        Check(lobby.GetProperty("settings").GetProperty("scenario").GetProperty("name").GetString() == "AimMod - Dust2 (CSGO) - CS Movement", "Developer lobbies default to an installed AimMod map");
         for (var i = 0; i < 40; i++) { now += 100; service.Tick(); }
         Check(Dev(new { action = "sim", op = "chat" }).Ok && Dev(new { action = "sim", op = "away" }).Ok && Dev(new { action = "sim", op = "suggest" }).Ok, "Simulated players chat, go away and suggest on demand");
         lobby = JsonSerializer.SerializeToElement(service.View(), Protocol.Json).GetProperty("lobby");
@@ -1227,6 +1386,68 @@ static class MultiplayerChecks
                 s.Act(last.GetProperty("action").GetString()!, JsonSerializer.SerializeToElement(new { id = last.GetProperty("id").GetString() }));
             }
         }
+    }
+
+    static void DevAvatarChecks()
+    {
+        long now = 3_000_000;
+        var net = new MemoryNetwork(); var t = new MemoryTransport(net, "dev-a"); net.Peers["dev-a"] = t;
+        var service = new MultiplayerService(t, new ContentLibrary(null), new NoGameControl(), () => new LocalRun(false, null, null, null, null, 0, 0, 0, null), () => [], () => null, null, false, () => now, autoTick: false);
+        service.SetSimulation(true);
+        service.Act("avatar", J(new { avatar = "meso-tracer" }));
+        Check(service.DevAvatar(true, "circle").Ok && service.DevAvatar(true, "circle").Ok && service.DevAvatar(true, "circle").Ok && t.DevAvatars.SequenceEqual(["on circle AimMod Meso Tracer"]), "Repeated spawn clicks send one dev.avatar, wearing the chosen look");
+        service.Act("avatar", J(new { avatar = "meso-genji" }));
+        Check(t.DevAvatars.Last() == "on circle AimMod Meso Genji", "Changing the look re-dresses the running test avatar");
+        Check(service.DevAvatar(false, "circle").Ok && service.DevAvatar(false, "circle").Ok && t.DevAvatars.Count(x => x.StartsWith("off", StringComparison.Ordinal)) == 1, "Repeated despawn clicks send one off");
+        now += 4000;
+        Check(service.DevAvatar(false, "circle").Ok && t.DevAvatars.Count(x => x.StartsWith("off", StringComparison.Ordinal)) == 2, "A later request goes out again, in case the game lost track");
+        service.Dispose();
+    }
+
+    static void Boards()
+    {
+        LobbyMember M(string id, string name) => new(id, name, MemberRoles.Player, true, null, ContentStates.Ok, ContentStates.Ok, ContentStates.None, Connections.Connected, "relay", 1, false);
+        var members = new[] { M("a", "Alpha"), M("b", "Bravo"), M("c", "Charlie"), M("d", "Delta") };
+        MatchSnapshot Match(string mode, IReadOnlyList<ScoreLine>? live = null, CombatView? combat = null, IReadOnlyList<TrackView>? tracking = null, IReadOnlyList<RoundResult>? rounds = null) =>
+            new("m", MatchPhases.Live, mode, "Synthetic A", 60, 2, 3, 2, 1_000, null, null, members.Select(x => x.Id).ToArray(), live ?? [], rounds ?? [], [], null, [], Tracking: tracking, Combat: combat);
+        LobbySnapshot Lobby(MatchSnapshot m) => new(1, "l", "ABCDEF", 1, "a", new LobbySettings(Mode: m.Mode), members, m, [], 0);
+        ScoreLine L(string id, double score) => new(id, score, 10, 50, 10, 5, 5, LineStates.Playing, false);
+        Board B(MatchSnapshot m, string self = "b") => Standings.Build(Lobby(m), m, self, 31_000, m.Combat)!;
+        var race = B(Match(LobbyModes.Race, [L("a", 500), L("b", 800), L("c", 650), L("d", 100)]));
+        Check(race.Kind == "score" && race.Rows[0].Name == "Bravo" && race.Rows[0].Self && race.Rows[1].Gap == -150 && race.Left == 30, "Score race: rank, score, gap to the leader and time left");
+        Check(Standings.Compact(B(Match(LobbyModes.Race, [L("a", 900), L("b", 100), L("c", 800), L("d", 700)]))).Rows.Select(r => r.Name).SequenceEqual(["Alpha", "Charlie", "Delta", "Bravo"]), "The corner panel keeps the top three and you");
+        var rounds = new[] { new RoundResult(1, [], "a") };
+        var duel = B(Match(LobbyModes.Duel, [L("a", 300), L("b", 400)], rounds: rounds));
+        Check(duel.Kind == "duel" && duel.Rows[0].Name == "Alpha" && duel.Rows[0].Wins == 1 && duel.Rows[1].Score == 400, "Score duel: round wins first, then the round's score");
+        var track = B(Match(LobbyModes.Tracking, tracking: [new TrackView("a", 41.5, 10, 1, 20, false, null), new TrackView("b", 55.25, 12, 1, 20, false, null)], rounds: rounds));
+        Check(track.Kind == "tracking" && track.Rows.First(r => r.Name == "Bravo").Percent == 55.3 && track.Rows[0].Wins == 1, "Tracking duel: time on target and round wins");
+        CombatPlayerView P(string id, int frags, int deaths, double health, int team = 0) => new(id, health, health > 0, frags, deaths, null, null, 0, 0, team);
+        var vamp = B(Match(LobbyModes.Vampiric, combat: new CombatView(10, [P("a", 3, 1, 60), P("b", 5, 3, 0)], [])));
+        Check(vamp.Kind == "combat" && vamp.Rows[0].Name == "Bravo" && vamp.Rows[0].Kd == 1.67 && vamp.Rows[0].Health == 0 && vamp.Rows[0].Status == "down" && vamp.FragLimit == 10, "Vampiric: frags, deaths, K/D and health");
+        var dm = B(Match(LobbyModes.Deathmatch, combat: new CombatView(20, [P("a", 3, 0, 100), P("b", 2, 2, 100)], [])));
+        Check(dm.Rows[0].Kd == 3 && dm.Rows[0].Health is null, "Deathmatch: K/D without deaths is the frag count; no health column");
+        var tdm = B(Match(LobbyModes.TeamDeathmatch, combat: new CombatView(30, [P("a", 4, 1, 100, 1), P("b", 2, 2, 100, 2), P("c", 1, 3, 100, 1), P("d", 6, 0, 100, 2)], [], [5, 8])));
+        Check(tdm.Kind == "team" && tdm.Teams!.Single(t => t.Team == 2).Total == 8 && tdm.Teams!.Single(t => t.Team == 2).Self && tdm.Rows.Select(r => r.Team).SequenceEqual([1, 1, 2, 2]), "Team deathmatch: team totals and players by team");
+        Check(!JsonSerializer.Serialize(tdm, Protocol.Json).Contains("\"a\"", StringComparison.Ordinal), "Boards carry names, never member ids");
+    }
+
+    // CS lobby teams: picks, either, balance, uneven blocker, and the match keeps the picks.
+    static void CsTeams()
+    {
+        var resolved = LobbyRules.ResolveTeams([("a", 1), ("b", 1), ("c", 0), ("d", 2), ("e", 0), ("f", 0)]);
+        Check(resolved["a"] == 1 && resolved["d"] == 2 && resolved.Values.Count(t => t == 1) == 3 && resolved.Values.Count(t => t == 2) == 3, "Players on either team fill the smaller team");
+        var picked = new CsMatch(["a", "b", "c", "d", "e", "f"], 1_000, 6, false, null, new Dictionary<string, int> { ["a"] = 2, ["b"] = 2, ["c"] = 2, ["d"] = 1, ["e"] = 1, ["f"] = 1 });
+        Check(picked.SideOf("a") == CsRules.CT && picked.SideOf("d") == CsRules.T, "The match keeps the lobby's team picks (team 1 starts T)");
+        long now = 1_000_000;
+        var core = new LobbyCore("h", "Host", new LobbySettings(Mode: LobbyModes.Cs, MaxPlayers: 6), () => now, code: "ABCDEF");
+        foreach (var id in new[] { "m1", "m2", "m3", "m4", "m5" }) core.Join(id, "Player " + id);
+        Check(core.Apply("m1", "team", J(new { team = 2 }), new FakeContent()).Ok && !core.Apply("m1", "team", J(new { member = "m2", team = 1 }), new FakeContent()).Ok, "Members pick their own team; only the host places others");
+        foreach (var id in new[] { "h", "m2", "m3" }) core.Apply("h", "team", J(new { member = id, team = 1 }), new FakeContent());
+        core.Apply("h", "team", J(new { member = "m4", team = 1 }), new FakeContent());
+        Check(LobbyRules.StartBlockers(core.Snapshot()).Any(b => b.Code == "cs-balance"), "Uneven teams block the start, with the counts");
+        Check(core.Apply("h", "balance", default, new FakeContent()).Ok && core.Snapshot().Members.Count(m => m.Team == 1) == 3 && core.Snapshot().Members.Count(m => m.Team == 2) == 3
+            && !LobbyRules.StartBlockers(core.Snapshot()).Any(b => b.Code == "cs-balance"), "Balance splits the players evenly");
+        Check(!core.Apply("m2", "balance", default, new FakeContent()).Ok, "Only the host balances");
     }
 
     static void Picks(string root, ContentLibrary library)
@@ -1346,6 +1567,12 @@ static class MultiplayerChecks
         var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant();
         Check(receiver.Chunk("m1", 2, "peer-a", "1790000000-42-9", "round", null, tampered.Length, hash, 0, tampered.Take(ReplaySwap.ChunkBytes).ToArray()) is null || tampered.Length > ReplaySwap.ChunkBytes, "A replay whose bytes don't match its hash is dropped");
         Check(receiver.Chunk("m1", 1, "peer-a", "../evil", "round", null, 100, hash, 0, new byte[10]) is null && receiver.Chunk("m1", 1, "peer-a", "x", "script", null, 100, hash, 0, new byte[10]) is null, "Bad ids and kinds are refused");
+        // A member opening many large replays at once can't make the host hold them all.
+        var flood = new ReplaySwap(Out("c"), () => now);
+        for (var i = 0; i < 40; i++) flood.Chunk("m1", 1, "peer-x", "flood-" + i, "round", null, ReplaySwap.MaxBytes, hash, 0, new byte[ReplaySwap.ChunkBytes]);
+        Check(flood.Assembling <= 2, "One member assembles at most two replays at a time");
+        for (var i = 0; i < 40; i++) flood.Chunk("m1", 1, "peer-" + i, "flood", "round", null, ReplaySwap.MaxBytes, hash, 0, new byte[ReplaySwap.ChunkBytes]);
+        Check(flood.Assembling <= 8, "At most eight replays are assembled at a time");
     }
 
     static void Transfers(string root)
@@ -1486,19 +1713,21 @@ static class MultiplayerChecks
                 if (loadedScenario is null || Root is null) return null;
                 var path = Path.Combine(Root, "Saved", "SaveGames", "Scenarios", loadedScenario + ".sce");
                 var (map, scale) = File.Exists(path) ? MatchScenario.MapOf(File.ReadAllText(path)) : (null, null);
-                return new GameScene(true, loadedScenario, StuckMap ?? map ?? "", StuckMap is null ? scale : 1, false, false, false, false);
+                return new GameScene(true, loadedScenario, StuckMap ?? map ?? "", StuckMap is null ? scale : 1, false, false, SceneLoading == true, false);
             }
         }
-        public long? Start(string scenario, string mode) { Calls.Add("start " + mode + " " + scenario); return lastStart = Calls.Count; }
+        public long? Start(string scenario, string mode, long? seed = null) { Calls.Add("start " + mode + " " + scenario + (seed is long s ? " seed " + s : "")); return lastStart = Calls.Count; }
         public long? Refresh() { Calls.Add("refresh"); return Calls.Count; }
         // A challenge still running in KovaaK's (core-scene.json); while true, loads answer challenge-active.
         public bool? ChallengeRunning { get; set; }
+        public bool? SceneLoading { get; set; }
         bool refusedLoad;
         // Answers like AimModCore: the latest load is done, then the latest start.
         public GameCommandResult? Result => lastStart > lastLoad ? new GameCommandResult(lastStart, "done", "started", "")
             : lastLoad > 0 ? (refusedLoad ? new GameCommandResult(lastLoad, "error", "challenge-active", "") : new GameCommandResult(lastLoad, "done", "loaded", "")) : null;
         // The next load is refused as if a challenge started right after the check.
         public void RefuseNextLoad() => refusedLoad = true;
+        public long? QuitRun() { if (!Capabilities.Contains("quit")) return null; Calls.Add("quit"); return lastLoad = Calls.Count; }
         public void Accept() => refusedLoad = false;
     }
 
@@ -1547,6 +1776,12 @@ static class MultiplayerChecks
         Check(control.Calls.Contains("start challenge Synthetic A"), "The run starts at zero through AimModCore");
         Check(!File.Exists(Path.Combine(output, SessionMarker.FileName)), "No marker while a normal scenario plays");
         Check(View().GetProperty("lobby").GetProperty("match").GetProperty("live").EnumerateArray().Count(l => l.GetProperty("status").GetString() == "playing") >= 2, "Live score frames arrive");
+        var boardNotice = JsonDocument.Parse(service.NoticeText()).RootElement;
+        Check(boardNotice.GetProperty("board").GetProperty("kind").GetString() == "score" && boardNotice.GetProperty("board").GetProperty("rows").EnumerateArray().Any(r => r.GetProperty("self").GetBoolean())
+            && boardNotice.GetProperty("boardFull").ValueKind == JsonValueKind.Null, "The corner standings panel shows during a match, with you in it");
+        service.ScoreboardHeld(true);
+        Check(JsonDocument.Parse(service.NoticeText()).RootElement.GetProperty("boardFull").GetProperty("rows").GetArrayLength() == 3, "Holding the scoreboard key shows everyone");
+        service.ScoreboardHeld(false);
         Run(62_000);
         var match = View().GetProperty("lobby").GetProperty("match");
         Check(match.GetProperty("phase").GetString() == MatchPhases.Final && match.GetProperty("standings").GetArrayLength() == 3, "The simulated race reaches its final results");
@@ -1637,7 +1872,7 @@ static class MultiplayerChecks
         service.Act("sim", J(new { op = "invite" }));
         Run(200);
         var invite = View().GetProperty("invites")[0];
-        Check(invite.GetProperty("kind").GetString() == "incoming" && service.Notice() is { Kind: "invite", Invite: not null } n && n.Title.Contains("invited you to a duel"), "An incoming invite shows a popup naming the mode and scenario");
+        Check(invite.GetProperty("kind").GetString() == "incoming" && service.Notice() is { Kind: "invite", Invite: not null } n && n.Title.Contains("invited you to a score duel"), "An incoming invite shows a popup naming the mode and scenario");
         Check(File.ReadAllText(Path.Combine(output, "multiplayer-notify.json")).Contains("\"interactive\":true"), "The notice file tells the game layer the popup is clickable");
         service.Hotkey();
         Run(200);

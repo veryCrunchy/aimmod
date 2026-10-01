@@ -86,9 +86,14 @@ sealed class MultiplayerSimulation(Func<long> clock, ContentLibrary library, Fun
         switch (op)
         {
             case "add":
+                // Make room when the lobby can grow (the developer menu adds players on demand).
+                if (core.Members.Count(m => m.Role == MemberRoles.Player) >= core.Settings.MaxPlayers && core.Settings.MaxPlayers < LobbySettings.MaxPlayerLimit && core.Settings.Mode != LobbyModes.Duel)
+                    core.Apply(core.HostId, "settings", Args(new { settings = new { maxPlayers = core.Settings.MaxPlayers + 1 } }), library);
                 if (core.Members.Count(m => m.Role == MemberRoles.Player) >= core.Settings.MaxPlayers && !core.Settings.Spectators) return LobbyResult.Fail("full", "The lobby is full.");
                 return Add(core) is null ? LobbyResult.Fail("full", "The lobby is full.") : LobbyResult.Success;
             case "add-missing":
+                if (core.Members.Count(m => m.Role == MemberRoles.Player) >= core.Settings.MaxPlayers && core.Settings.MaxPlayers < LobbySettings.MaxPlayerLimit && core.Settings.Mode != LobbyModes.Duel)
+                    core.Apply(core.HostId, "settings", Args(new { settings = new { maxPlayers = core.Settings.MaxPlayers + 1 } }), library);
                 return Add(core, missingMap: true) is null ? LobbyResult.Fail("full", "The lobby is full.") : LobbyResult.Success;
             case "remove":
                 if (Pick(m => m.Id != core.HostId) is not { } leaver) return LobbyResult.Fail("none", "No simulated member to remove.");

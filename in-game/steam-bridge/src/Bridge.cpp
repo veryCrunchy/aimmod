@@ -26,6 +26,7 @@ namespace bridge
         constexpr const char* KeyVersion = "aimmod.v";
         constexpr const char* KeyToken = "aimmod.token";
         constexpr const char* KeyBridge = "aimmod.bridge";
+        constexpr const char* KeyBanned = "aimmod.banned"; // kicked members (host-owned)
 
         std::string Id(std::uint64_t id) { return std::to_string(id); }
 
@@ -81,8 +82,8 @@ namespace bridge
         // Allowed top-level fields per command (besides v, cmd, id).
         const std::map<std::string, std::set<std::string>, std::less<>> CommandFields = {
             {"hello", {}},
-            {"lobby.create", {"privacy", "maxMembers", "data"}},
-            {"lobby.join", {"lobby"}},
+            {"lobby.create", {"privacy", "maxMembers", "data", "token", "entrant"}},
+            {"lobby.join", {"lobby", "token"}},
             {"lobby.leave", {}},
             {"lobby.setData", {"data"}},
             {"lobby.setJoinable", {"joinable"}},
@@ -109,7 +110,7 @@ namespace bridge
             {"spectate.privacy", {"mode"}},
             {"spectate.remove", {"peer"}},
             {"ugc.query", {"tag", "text"}},
-            {"dev.avatar", {"on", "mode"}},
+            {"dev.avatar", {"on", "mode", "profile"}},
         };
 
         constexpr std::uint64_t UgcQueryInvalid = 0xffffffffffffffffull;
@@ -255,13 +256,26 @@ namespace bridge
 
     void Bridge::Run()
     {
+        std::string lastError;
         while (!m_stop.load())
         {
             {
                 std::unique_lock lock(m_mutex);
                 m_wake.wait_for(lock, 5ms, [this] { return m_stop.load() || !m_commands.empty() || !m_callbacks.empty() || !m_pipeStates.empty(); });
             }
-            Tick();
+            // An exception must never leave this thread: it would terminate the game.
+            try
+            {
+                Tick();
+            }
+            catch (const std::exception& e)
+            {
+                if (lastError != e.what()) m_log(std::string("worker: tick failed: ") + e.what());
+                lastError = e.what();
+            }
+            catch (...)
+            {
+            }
         }
         // Shutdown: leave cleanly, clear what we set (skip if the game already shut Steam down).
         if (!m_steam.Initialised())
@@ -316,6 +330,30 @@ namespace bridge
         }
         SendCamera();
         if (m_watching) WriteSpectatePose(false);
+        // Tell the spectator when the watched player's stream stops (dropped, crashed or left).
+        if (m_watching && Clock::now() - m_lastSpectateFrame > 8s)
+        {
+            const std::uint64_t lost = m_watching;
+            m_log("spectate stream from " + Redact(lost) + " stopped");
+            if (m_watchingDirect) CloseDirect(lost, "lost");
+            else
+            {
+                if (IsHost())
+                {
+                    m_spectators[lost].erase(m_self);
+                    UpdateSpectateRoute(lost);
+                }
+                else if (Conn* host = FindConn(m_owner); host && host->state == ConnState::Ready)
+                {
+                    WireMessage stop{WireType::SpectateSub};
+                    stop.lobby = lost;
+                    SendWire(*host, stop, true);
+                }
+                m_watching = 0;
+                ResetSpectator();
+                Emit(json::Object().Int("v", ContractVersion).Str("ev", "spectate.ended").Str("peer", Id(lost)).Str("reason", "lost").Done());
+            }
+        }
         // Avatars that were still loading.
         const auto now = Clock::now();
         auto avatars = std::move(m_avatars);
@@ -508,10 +546,23 @@ namespace bridge
                 return;
             }
             const auto privacy = c.Str("privacy", 16).value_or("friends");
-            if (privacy != "friends" && privacy != "invite")
+            if (privacy != "friends" && privacy != "invite" && privacy != "tournament")
             {
-                Result(*id, false, "invalid", "privacy must be friends or invite (public lobbies go through the Hub).");
+                Result(*id, false, "invalid", "privacy must be friends, invite or tournament (public lobbies go through the Hub).");
                 return;
+            }
+            std::string matchToken;
+            std::uint64_t entrant = 0;
+            if (privacy == "tournament")
+            {
+                matchToken = c.Str("token", 64).value_or("");
+                const auto e = peerArg("entrant");
+                if (!ValidMatchToken(matchToken) || !e || *e == m_self)
+                {
+                    Result(*id, false, "invalid", "A tournament lobby needs the Hub match token and the entrant's SteamID64.");
+                    return;
+                }
+                entrant = *e;
             }
             const auto max = c.Int("maxMembers").value_or(4);
             if (max < 2 || max > MaxMembersLimit)
@@ -532,7 +583,7 @@ namespace bridge
                 }
                 for (const auto& [k, value] : data->object)
                 {
-                    if (!ValidLobbyKey(k) || k == KeyVersion || k == KeyToken || k == KeyBridge || value.type != json::Value::Type::String ||
+                    if (!ValidLobbyKey(k) || k == KeyVersion || k == KeyToken || k == KeyBridge || k == KeyBanned || value.type != json::Value::Type::String ||
                         value.string.size() > MaxLobbyValue)
                     {
                         Result(*id, false, "invalid", "Bad lobby data key or value: " + k.substr(0, 48));
@@ -541,7 +592,10 @@ namespace bridge
                     call.data[k] = value.string;
                 }
             }
-            call.call = m_steam.MM_CreateLobby(m_steam.mm, privacy == "friends" ? LobbyFriendsOnly : LobbyPrivate, call.maxMembers);
+            call.matchToken = matchToken;
+            call.entrant = entrant;
+            const int type = privacy == "friends" ? LobbyFriendsOnly : privacy == "tournament" ? LobbyInvisible : LobbyPrivate;
+            call.call = m_steam.MM_CreateLobby(m_steam.mm, type, call.maxMembers);
             call.deadline = Clock::now() + CallTimeout;
             m_calls.push_back(std::move(call));
         }
@@ -567,6 +621,15 @@ namespace bridge
             PendingCall call{PendingCall::Kind::Join};
             call.commandId = *id;
             call.lobby = *lobby;
+            if (c.Get("token"))
+            {
+                call.matchToken = c.Str("token", 64).value_or("");
+                if (!ValidMatchToken(call.matchToken))
+                {
+                    Result(*id, false, "invalid", "token must be the Hub match token.");
+                    return;
+                }
+            }
             call.call = m_steam.MM_JoinLobby(m_steam.mm, *lobby);
             call.deadline = Clock::now() + CallTimeout;
             m_calls.push_back(std::move(call));
@@ -587,7 +650,7 @@ namespace bridge
                 return;
             }
             for (const auto& [k, value] : data->object)
-                if (!ValidLobbyKey(k) || k == KeyVersion || k == KeyToken || k == KeyBridge ||
+                if (!ValidLobbyKey(k) || k == KeyVersion || k == KeyToken || k == KeyBridge || k == KeyBanned ||
                     !(value.type == json::Value::Type::Null || (value.type == json::Value::Type::String && value.string.size() <= MaxLobbyValue)))
                 {
                     Result(*id, false, "invalid", "Bad lobby data key or value: " + k.substr(0, 48));
@@ -656,6 +719,8 @@ namespace bridge
                 return;
             }
             m_banned.insert(*peer);
+            // In lobby data too: a new host keeps refusing the kicked member.
+            m_steam.MM_SetLobbyData(m_steam.mm, m_lobby, KeyBanned, FormatBanList({m_banned.begin(), m_banned.end()}).c_str());
             if (Conn* conn = FindConn(*peer))
             {
                 WireMessage kick{WireType::Kick};
@@ -891,6 +956,7 @@ namespace bridge
             m_spectate.stream = posefile::StreamIdFor(*peer); // written from the first frame of the new peer
             m_watching = *peer;
             m_watchingDirect = true;
+            m_lastSpectateFrame = Clock::now();
             m_watchRate = static_cast<int>(r);
             m_log("spectate request sent to " + Redact(*peer));
             Result(*id, true);
@@ -959,6 +1025,18 @@ namespace bridge
                     Result(*id, false, "invalid", "peer must be another member and rate 1..60.");
                     return;
                 }
+                // From a direct (friend) stream: close it, or the next spectate.stop
+                // would only look for the direct link and leave both running.
+                if (m_watchingDirect)
+                {
+                    CloseDirect(m_watching, "switched");
+                    if (m_watchingDirect) // the link was already gone
+                    {
+                        m_watching = 0;
+                        m_watchingDirect = false;
+                        ResetSpectator();
+                    }
+                }
                 if (m_watching && m_watching != *peer)
                 {
                     // Switch: stop the old stream first.
@@ -1004,6 +1082,7 @@ namespace bridge
             }
             if (target != m_watching || !rate) ResetSpectator();
             m_watching = rate ? target : 0;
+        m_lastSpectateFrame = Clock::now();
             m_watchRate = rate;
             if (rate)
             {
@@ -1023,10 +1102,17 @@ namespace bridge
                 Result(*id, false, "invalid", "on must be true or false and mode circle or path.");
                 return;
             }
+            const std::string profile = c.Str("profile", 64).value_or("");
+            if (c.Get("profile") && !profile.empty() && !ValidProfileName(profile))
+            {
+                Result(*id, false, "invalid", "profile must be a plain character profile name.");
+                return;
+            }
             {
                 std::lock_guard lock(m_ghostMutex);
                 m_devAvatar.on = *on;
                 m_devAvatar.path = mode == "path";
+                if (c.Get("profile")) m_devAvatar.profile = profile;
                 ++m_devAvatar.generation;
             }
             m_log(*on ? "developer test avatar on (" + mode + ")" : std::string("developer test avatar off"));
@@ -1097,8 +1183,8 @@ namespace bridge
                     return;
                 }
             }
-            Xfer& x = m_outgoing[key];
-            if (x.inflight.size() >= XferWindow && !x.inflight.count(static_cast<std::uint32_t>(*index)))
+            const auto existing = m_outgoing.find(key);
+            if (existing != m_outgoing.end() && existing->second.inflight.size() >= XferWindow && !existing->second.inflight.count(static_cast<std::uint32_t>(*index)))
             {
                 Result(*id, false, "window", "Window full; wait for xfer.ack.");
                 return;
@@ -1109,10 +1195,11 @@ namespace bridge
             m.payload = std::move(*bytes);
             if (!SendChunk(*conn, m))
             {
+                // Nothing was sent: don't leave an empty transfer behind.
                 Result(*id, false, "send-failed", "Steam did not accept the chunk.");
                 return;
             }
-            x.inflight.insert(m.index);
+            m_outgoing[key].inflight.insert(m.index); // the transfer exists from its first accepted chunk
             Result(*id, true);
         }
         else if (name == "xfer.cancel")
@@ -1147,8 +1234,43 @@ namespace bridge
 
     // --- call results -----------------------------------------------------
 
+    // Calls that timed out but may still complete: whatever Steam did late is undone.
+    void Bridge::PollLateCalls()
+    {
+        auto late = std::move(m_lateCalls);
+        m_lateCalls.clear();
+        for (auto& call : late)
+        {
+            bool failed = false;
+            std::uint64_t lobby = 0;
+            bool done = false;
+            if (call.kind == PendingCall::Kind::Create)
+            {
+                steamabi::LobbyCreated_t r{};
+                done = m_steam.PollCall(call.call, CbLobbyCreated, &r, sizeof(r), failed);
+                if (done && !failed && r.m_eResult == 1) lobby = r.m_ulSteamIDLobby;
+            }
+            else
+            {
+                LobbyEnter_t r{};
+                done = m_steam.PollCall(call.call, CbLobbyEnter, &r, sizeof(r), failed);
+                if (done && !failed && r.m_EChatRoomEnterResponse == 1) lobby = r.m_ulSteamIDLobby;
+            }
+            if (done)
+            {
+                if (IsLobbyId(lobby) && lobby != m_lobby)
+                {
+                    m_steam.MM_LeaveLobby(m_steam.mm, lobby);
+                    m_log("left lobby " + Redact(lobby) + " that Steam entered after the request timed out");
+                }
+            }
+            else if (Clock::now() < call.deadline) m_lateCalls.push_back(std::move(call));
+        }
+    }
+
     void Bridge::PollCalls()
     {
+        PollLateCalls();
         auto calls = std::move(m_calls);
         m_calls.clear();
         for (auto& call : calls)
@@ -1160,7 +1282,12 @@ namespace bridge
                 if (!m_steam.PollCall(call.call, CbLobbyCreated, &r, sizeof(r), failed))
                 {
                     if (Clock::now() < call.deadline) m_calls.push_back(std::move(call));
-                    else Result(call.commandId, false, "timeout", "Steam did not create the lobby in time.");
+                    else
+                    {
+                        Result(call.commandId, false, "timeout", "Steam did not create the lobby in time.");
+                        call.deadline = Clock::now() + 60s; // a late lobby is left as soon as it shows up
+                        m_lateCalls.push_back(std::move(call));
+                    }
                     continue;
                 }
                 if (failed || r.m_eResult != 1 || !IsLobbyId(r.m_ulSteamIDLobby))
@@ -1177,7 +1304,12 @@ namespace bridge
                 if (!m_steam.PollCall(call.call, CbLobbyEnter, &r, sizeof(r), failed))
                 {
                     if (Clock::now() < call.deadline) m_calls.push_back(std::move(call));
-                    else Result(call.commandId, false, "timeout", "Steam did not join the lobby in time.");
+                    else
+                    {
+                        Result(call.commandId, false, "timeout", "Steam did not join the lobby in time.");
+                        call.deadline = Clock::now() + 60s;
+                        m_lateCalls.push_back(std::move(call));
+                    }
                     continue;
                 }
                 if (failed || r.m_EChatRoomEnterResponse != 1 || r.m_ulSteamIDLobby != call.lobby)
@@ -1214,6 +1346,8 @@ namespace bridge
             m_steam.MM_SetLobbyData(m_steam.mm, lobby, KeyBridge, BridgeVersion);
             m_steam.MM_SetLobbyData(m_steam.mm, lobby, KeyToken, Hex(m_token).c_str());
             m_steam.MM_SetLobbyData(m_steam.mm, lobby, "aimmod.privacy", m_privacy.c_str());
+            m_tournamentToken = call->matchToken; // never written to lobby data
+            m_tournamentEntrant = call->entrant;
             for (const auto& [k, value] : call->data) m_steam.MM_SetLobbyData(m_steam.mm, lobby, k.c_str(), value.c_str());
             m_log("created lobby " + Redact(lobby));
         }
@@ -1222,7 +1356,8 @@ namespace bridge
             const char* token = m_steam.MM_GetLobbyData(m_steam.mm, lobby, KeyToken);
             m_token = FromHex(token ? token : "").value_or(0);
             const char* privacy = m_steam.MM_GetLobbyData(m_steam.mm, lobby, "aimmod.privacy");
-            m_privacy = privacy && std::strcmp(privacy, "invite") == 0 ? "invite" : "friends";
+            m_privacy = privacy && std::strcmp(privacy, "invite") == 0 ? "invite" : privacy && std::strcmp(privacy, "tournament") == 0 ? "tournament" : "friends";
+            m_joinToken = call ? call->matchToken : std::string();
             m_log("joined lobby " + Redact(lobby));
         }
         m_owner = 0;
@@ -1240,6 +1375,9 @@ namespace bridge
         const std::uint64_t left = m_lobby;
         const std::string why = reason;
         if (why == "left" || why == "kicked" || why == "switching lobby") ClearLast(); // closed/shutdown keep it for lobby.rejoin
+        m_tournamentToken.clear();
+        m_tournamentEntrant = 0;
+        m_joinToken.clear();
         m_spectators.clear();
         m_cameraRate = 0;
         if (!m_watchingDirect) m_watching = 0;
@@ -1325,6 +1463,14 @@ namespace bridge
             UpdateRole();
             SaveLast();
         }
+        // A tournament lobby locks as soon as the expected entrant is in.
+        if (IsHost() && m_privacy == "tournament" && m_joinable && m_tournamentEntrant && IsMember(m_tournamentEntrant))
+        {
+            m_joinable = false;
+            m_steam.MM_SetLobbyJoinable(m_steam.mm, m_lobby, false);
+            m_log("tournament lobby: entrant joined; lobby locked");
+            changed = true;
+        }
         if (changed)
         {
             UpdatePresence();
@@ -1349,10 +1495,23 @@ namespace bridge
                 m_steam.MM_SetLobbyData(m_steam.mm, m_lobby, KeyToken, Hex(m_token).c_str());
             }
             OpenListen();
+            // Members the previous host kicked stay refused.
+            if (const auto it = m_data.find(KeyBanned); it != m_data.end())
+                for (const auto banned : ParseBanList(it->second))
+                    if (banned != m_self) m_banned.insert(banned);
+            // Our own lobby spectate now routes through this host.
+            if (m_watching && !m_watchingDirect && m_watchRate > 0)
+            {
+                m_spectators[m_watching][m_self] = m_watchRate;
+                UpdateSpectateRoute(m_watching);
+            }
             m_log("this machine is the lobby host");
         }
         else
         {
+            // Routes kept as host are void now; the new host asks for our camera itself.
+            m_spectators.clear();
+            m_cameraRate = 0;
             CloseAllConns("host changed");
             EnsureListen(); // still listening when spectating is allowed
             m_nextConnect = Clock::now();
@@ -1470,9 +1629,10 @@ namespace bridge
                         drop.push_back(peer);
                         continue;
                     }
-                    WireMessage hello{WireType::Hello};
+                    WireMessage hello{m_joinToken.empty() ? WireType::Hello : WireType::TournamentHello};
                     hello.lobby = m_lobby;
                     hello.token = m_token;
+                    hello.matchToken = m_joinToken;
                     SendWire(conn, hello, true);
                     conn.state = ConnState::Handshaking;
                     conn.deadline = now + HandshakeTimeout;
@@ -1509,7 +1669,12 @@ namespace bridge
                 {
                     auto* msg = messages[i];
                     Conn* live = FindConn(peer);
-                    if (live && msg->m_cbSize > 0)
+                    if (live && live->dropped > 4000)
+                    {
+                        CloseConn(peer, false, "flooding");
+                        live = nullptr;
+                    }
+                    if (live && msg->m_cbSize > 0 && Admit(*live))
                     {
                         const auto decoded = Decode(static_cast<const std::uint8_t*>(msg->m_pData), static_cast<std::size_t>(msg->m_cbSize));
                         if (decoded) OnWire(*live, *decoded, (msg->m_nFlags & steamabi::k_nSteamNetworkingSend_Reliable) != 0);
@@ -1554,7 +1719,21 @@ namespace bridge
                     else RefuseWatcher(peer, decision.reason);
                     return;
                 }
-                if (m.type != WireType::Hello) return CloseConn(peer, false, "no hello");
+                if (m.type != WireType::Hello && m.type != WireType::TournamentHello) return CloseConn(peer, false, "no hello");
+                if (m_privacy == "tournament" || m.type == WireType::TournamentHello)
+                {
+                    // Only the Hub's expected entrant, with its match token, gets into a tournament lobby.
+                    const bool ok = m_privacy == "tournament" && m.type == WireType::TournamentHello && peer == m_tournamentEntrant &&
+                                    SameToken(m.matchToken, m_tournamentToken);
+                    if (!ok)
+                    {
+                        WireMessage reject{WireType::Reject};
+                        reject.code = static_cast<std::uint16_t>(RejectCode::NotEntrant);
+                        SendWire(conn, reject, true);
+                        m_log("tournament lobby: refused " + Redact(peer));
+                        return CloseConn(peer, false, "not the entrant", true);
+                    }
+                }
                 if (!IsHost())
                 {
                     WireMessage notHost{WireType::Reject};
@@ -1588,6 +1767,8 @@ namespace bridge
                     again->lanes = m_steam.sockets->ConfigureConnectionLanes(again->handle, 2, priorities, weights) == 1;
                 }
                 again->nextPing = Clock::now();
+                // Someone already watches this member (host changed): ask for its camera.
+                if (m_spectators.count(peer)) UpdateSpectateRoute(peer);
                 Emit(json::Object().Int("v", ContractVersion).Str("ev", "p2p.connected").Str("peer", Id(peer)).Bool("host", false).Done());
                 EmitLobby();
                 return;
@@ -1611,6 +1792,14 @@ namespace bridge
                 conn.lanes = m_steam.sockets->ConfigureConnectionLanes(conn.handle, 2, priorities, weights) == 1;
             }
             m_log("p2p connected: " + Redact(peer) + " (lobby host)");
+            // A lobby spectate outlives a host link drop: subscribe again on the new link.
+            if (m_watching && !m_watchingDirect && m_watchRate > 0)
+            {
+                WireMessage sub{WireType::SpectateSub};
+                sub.lobby = m_watching;
+                sub.rate = static_cast<std::uint8_t>(m_watchRate);
+                SendWire(conn, sub, true);
+            }
             Emit(json::Object().Int("v", ContractVersion).Str("ev", "p2p.connected").Str("peer", Id(peer)).Bool("host", conn.outgoing).Done());
             EmitLobby();
             return;
@@ -1713,6 +1902,7 @@ namespace bridge
                     if (spectator == m_self)
                     {
                         m_spectate.scenario = m.scenario, m_spectate.map = m.map, m_spectate.scale = m.camera.fov;
+                        m_lastSpectateFrame = Clock::now(); // the 1 s meta doubles as a keepalive
                     }
                     else if (Conn* s = FindConn(spectator); s && s->state == ConnState::Ready) SendWire(*s, m, true);
                 }
@@ -1720,15 +1910,35 @@ namespace bridge
             else if (conn.outgoing && peer == m_owner && m.lobby == m_watching)
             {
                 m_spectate.scenario = m.scenario, m_spectate.map = m.map, m_spectate.scale = m.camera.fov;
+                m_lastSpectateFrame = Clock::now(); // the 1 s meta doubles as a keepalive
             }
             break;
         default: break; // handshake frames after the handshake are ignored
         }
     }
 
+    bool Bridge::Admit(Conn& conn)
+    {
+        // 400 frames/s sustained per peer (poses, camera, score and service frames together), burst 400.
+        constexpr double Rate = 400, Burst = 400;
+        const auto now = Clock::now();
+        if (conn.budgetAt != Clock::time_point{})
+            conn.budget = std::min(Burst, conn.budget + std::chrono::duration<double>(now - conn.budgetAt).count() * Rate);
+        conn.budgetAt = now;
+        if (conn.budget < 1)
+        {
+            ++conn.dropped;
+            return false;
+        }
+        conn.budget -= 1;
+        if (conn.dropped > 0) conn.dropped -= 1; // recovers when the peer behaves
+        return true;
+    }
+
     bool Bridge::SendWire(Conn& conn, const WireMessage& m, bool reliable)
     {
         const auto bytes = Encode(m);
+        if (bytes.empty()) return false; // not encodable: never sent
         std::int64_t number = 0;
         const int flags = reliable ? steamabi::k_nSteamNetworkingSend_Reliable : steamabi::k_nSteamNetworkingSend_UnreliableNoDelay;
         return m_steam.sockets->SendMessageToConnection(conn.handle, bytes.data(), static_cast<std::uint32_t>(bytes.size()), flags, &number) == 1;
@@ -2204,6 +2414,7 @@ namespace bridge
     bool Bridge::SendChunk(Conn& conn, const WireMessage& m)
     {
         const auto bytes = Encode(m);
+        if (bytes.empty()) return false;
         if (!conn.lanes) return SendWire(conn, m, true);
         // Lane 1 has lower priority than lane 0, so match traffic overtakes bulk data.
         steamabi::SteamNetworkingMessage_t* msg = m_steam.netUtils->AllocateMessage(static_cast<int>(bytes.size()));
@@ -2568,6 +2779,7 @@ namespace bridge
 
     void Bridge::OnSpectateFrame(const CameraFrame& c)
     {
+        m_lastSpectateFrame = Clock::now();
         EmitCamera(c);
         if (m_options.stateDir.empty()) return;
         // Map the sender's clock onto ours with the lowest observed latency.
@@ -2890,7 +3102,13 @@ namespace bridge
                 for (int i = 0; i < n; ++i)
                 {
                     auto* msg = messages[i];
-                    if (m_direct.count(peer) && msg->m_cbSize > 0)
+                    auto live = m_direct.find(peer);
+                    if (live != m_direct.end() && live->second.dropped > 4000)
+                    {
+                        CloseDirect(peer, "flooding");
+                        live = m_direct.end();
+                    }
+                    if (live != m_direct.end() && msg->m_cbSize > 0 && Admit(live->second))
                     {
                         const auto decoded = Decode(static_cast<const std::uint8_t*>(msg->m_pData), static_cast<std::size_t>(msg->m_cbSize));
                         if (decoded) OnDirectWire(peer, *decoded, (msg->m_nFlags & steamabi::k_nSteamNetworkingSend_Reliable) != 0);
@@ -2935,7 +3153,7 @@ namespace bridge
             if (m.camera.origin == peer) OnSpectateFrame(m.camera);
             break;
         case WireType::CameraMeta:
-            if (m.lobby == peer) m_spectate.scenario = m.scenario, m_spectate.map = m.map, m_spectate.scale = m.camera.fov;
+            if (m.lobby == peer) m_spectate.scenario = m.scenario, m_spectate.map = m.map, m_spectate.scale = m.camera.fov, m_lastSpectateFrame = Clock::now();
             break;
         case WireType::Score:
             if (m.score.origin == peer) EmitScore(m.score);

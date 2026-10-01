@@ -63,8 +63,17 @@ markerText = marker('lobby'); assertUntouched('lobby is preview only')
 -- 2. AimMod match: avatar gets the tint, own weapon and arms get the finish.
 markerText = marker('match')
 mock.calls = {}
+world.midNames = {}
 applier.tick()
 local m = originals()
+-- A named instance replaces an existing one of the same name and owner.
+for i, a in ipairs(world.midNames) do
+    for j = i + 1, #world.midNames do
+        local b = world.midNames[j]
+        assert(a.name == 'None' or not (a.owner == b.owner and a.name == b.name), 'material instance names collide under one owner')
+    end
+end
+assert(#world.midNames >= 3, 'instances created')
 assert(m[1] ~= base[1] and m[2] ~= base[2], 'avatar slots dressed')
 assert(m[1].__params.Tint.G == 1 and m[1].Parent == base[1], 'tint on an instance parented on the game material')
 assert(m[3] ~= base[3] and m[3].__params.Roughness == 0.2, 'own weapon finish')

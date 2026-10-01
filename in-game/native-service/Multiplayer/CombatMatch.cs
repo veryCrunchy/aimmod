@@ -225,9 +225,12 @@ sealed class CombatMatch
             if (teammate && c.TargetX is null) continue; // friendly fire is off
             if (c.TargetX is { } tx)
             {
+                // The drawn hull must also sit at the victim's own height, and its size is the avatar's
+                // (at most the hull plus 8 cm), so a claim can't enlarge or move the target onto the ray.
                 for (long lag = 0; lag <= TrackingRound.RewindCapMs && victim is null; lag += 5)
-                    if (At(p.Track, c.T - lag) is { } d && Math.Sqrt((d.X - tx) * (d.X - tx) + (d.Y - c.TargetY!.Value) * (d.Y - c.TargetY.Value)) <= TrackingRound.MatchToleranceCm)
-                    { victim = p; cx = tx; cy = c.TargetY.Value; cz = c.TargetZ!.Value; radius = c.TargetRadius!.Value; half = c.TargetHalfHeight!.Value; }
+                    if (At(p.Track, c.T - lag) is { } d && Math.Sqrt((d.X - tx) * (d.X - tx) + (d.Y - c.TargetY!.Value) * (d.Y - c.TargetY.Value)) <= TrackingRound.MatchToleranceCm
+                        && TrackingRound.PlausibleHeight(d.Z - c.TargetZ!.Value))
+                    { victim = p; cx = tx; cy = c.TargetY.Value; cz = c.TargetZ.Value; radius = TrackingRound.HullRadius(c.TargetRadius!.Value); half = TrackingRound.HullHalfHeight(c.TargetHalfHeight!.Value); }
             }
             else
             {

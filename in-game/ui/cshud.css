@@ -1,0 +1,63 @@
+/* CS HUD (cshud.js): everything sits at the screen edges, never near the crosshair. Solid palette. */
+#cs-hud{display:none;position:absolute;left:0;top:0;width:100%;height:100%}
+#cs-hud.show{display:block}
+.cs-top{position:absolute;top:10px;left:0;right:0;display:flex;flex-direction:row;justify-content:center;align-items:stretch}
+.cs-score{display:flex;flex-direction:row;align-items:center;width:110px;padding:0 12px;background:#0f1714;border:1px solid #22302a}
+.cs-score.t{justify-content:flex-end;border-radius:8px 0 0 8px}.cs-score.ct{justify-content:flex-start;border-radius:0 8px 8px 0}
+.cs-score.mine{border-color:#27e4a1}
+.cs-team{font-size:12px;font-weight:700;letter-spacing:.8px;color:#a7bab0;margin:0 8px}
+.cs-score.t .cs-team,.cs-score.t .cs-points{color:#f0b45a}.cs-score.ct .cs-team,.cs-score.ct .cs-points{color:#66ccff}
+.cs-points{font-size:26px;font-weight:700}
+.cs-clock{display:flex;flex-direction:column;align-items:center;width:150px;padding:4px 0 6px;background:#121c19;border-top:1px solid #22302a;border-bottom:1px solid #22302a}
+.cs-clock-label{font-size:11px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:#a7bab0}
+.cs-clock-time{font-size:24px;font-weight:700;color:#eef5f1;line-height:28px}
+.cs-clock-round{font-size:11px;color:#7f968a}
+.cs-clock.bomb{background:#3a1d25}.cs-clock.bomb .cs-clock-time,.cs-clock.bomb .cs-clock-label{color:#ff8fa3}
+.cs-banner{position:absolute;top:21%;left:0;right:0;margin:0 auto;width:520px;padding:12px 18px;text-align:center;background:#0f1714;border:1px solid #22302a;border-top:3px solid #a7bab0;border-radius:8px}
+.cs-banner strong{display:block;font-size:22px;font-weight:700}.cs-banner span{display:block;font-size:14px;color:#c9d8d0;margin-top:2px}
+.cs-banner.team1{border-top-color:#f0b45a}.cs-banner.team1 strong{color:#f0b45a}.cs-banner.team2{border-top-color:#66ccff}.cs-banner.team2 strong{color:#66ccff}
+.cs-notice{position:absolute;top:31%;left:0;right:0;margin:0 auto;width:360px;padding:8px 14px;text-align:center;font-size:15px;font-weight:700;color:#27e4a1;background:#0f1714;border:1px solid #2c6b52;border-radius:8px}
+.cs-feed{position:absolute;top:96px;right:16px;width:380px}
+.cs-kill{display:flex;flex-direction:row;align-items:center;justify-content:flex-end;margin-bottom:4px;padding:4px 10px;background:#0f1714;border:1px solid #22302a;border-radius:6px;font-size:13px}
+.cs-kill.killer{border-color:#27e4a1}.cs-kill.victim{border-color:#ff8fa3}
+.cs-k{font-weight:700}.cs-k.team1{color:#f0b45a}.cs-k.team2{color:#66ccff}
+.cs-w{margin:0 8px;font-size:12px;color:#a7bab0}.cs-v{font-weight:600;color:#eef5f1}
+.cs-use{position:absolute;top:72%;left:0;right:0;margin:0 auto;width:320px;text-align:center}
+.cs-use-text{display:block;font-size:14px;font-weight:700;color:#eef5f1;margin-bottom:6px}
+.cs-bar{height:8px;border-radius:4px;background:#22302a;overflow:hidden}.cs-fill{height:8px;border-radius:4px;background:#27e4a1}
+.cs-me{position:absolute;left:20px;bottom:20px;width:300px;padding:10px 14px;background:#0f1714;border:1px solid #22302a;border-radius:8px}
+.cs-money{display:flex;flex-direction:row;align-items:baseline;font-size:22px;font-weight:700;color:#27e4a1}
+.cs-delta{margin-left:10px;font-size:14px;color:#a7bab0}
+.cs-vitals{display:flex;flex-direction:row;align-items:center;margin-top:4px}
+.cs-hp{font-size:26px;font-weight:700;color:#eef5f1;margin-right:12px}.cs-hp.low{color:#ff8fa3}.cs-hp.down{font-size:18px;color:#7f968a}
+.cs-icon{display:block;width:18px;height:18px;margin-right:4px}
+.cs-armor{font-size:16px;font-weight:700;color:#66ccff;margin-right:10px}
+.cs-guns{margin-top:4px;font-size:12px;color:#a7bab0}
+.cs-key-hint{margin-top:6px;font-size:12px;font-weight:700;color:#27e4a1}
+.cs-clash{margin-top:4px;font-size:11px;color:#f0b45a}
+/* Buy menu: left side, away from the crosshair, clickable while the cursor shows. */
+.cs-buy{position:absolute;left:20px;top:104px;width:640px;padding:0 0 8px;background:#0f1714;border:1px solid #2c6b52;border-top:3px solid #27e4a1;border-radius:8px;pointer-events:auto}
+.cs-buy-head{display:flex;flex-direction:row;align-items:center;padding:10px 14px;background:#121c19}
+.cs-buy-head strong{font-size:16px;font-weight:700;margin-right:10px}
+.cs-buy-money{font-size:16px;font-weight:700;color:#27e4a1;margin-right:10px}.cs-buy-left{flex:1;font-size:12px;color:#a7bab0}
+.cs-buy-close{height:26px;padding:0 10px;border:1px solid #30433a;border-radius:6px;background:#1d2b26;color:#dcebe3;font-size:12px;font-weight:600}
+.cs-buy-group{padding:4px 10px 0}
+.cs-buy-cat{padding:6px 4px 4px;font-size:11px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:#7f968a}
+.cs-buy-none{padding:2px 4px 6px;font-size:12px;color:#5f7369}
+.cs-item{display:flex;flex-direction:row;align-items:center;width:100%;margin-bottom:3px;padding:4px 8px;text-align:left;background:#16211d;border:1px solid #22302a;border-radius:6px;color:#eef5f1}
+.cs-item.ok{border-color:#2c6b52}.cs-item.ok:hover{background:#173b2f}
+.cs-item.off{color:#7f968a}.cs-item.owned{background:#173b2f;border-color:#27e4a1}
+.cs-item-key{display:block;width:18px;flex-shrink:0;font-size:12px;font-weight:700;color:#27e4a1}
+.cs-item-text{flex:1;min-width:0}.cs-item-name{display:block;font-size:13px;font-weight:600;line-height:16px}.cs-item-why{display:block;font-size:11px;line-height:13px;color:#a7bab0}
+.cs-item.off .cs-item-why{color:#f0b45a}
+.cs-item-price{font-size:14px;font-weight:700}.cs-item.ok .cs-item-price{color:#27e4a1}
+.cs-buy-cols{display:flex;flex-direction:row}.cs-buy-col{width:50%}
+.cs-use-text{padding:4px 12px;background:#0f1714;border:1px solid #22302a;border-radius:6px}
+@media(max-height:760px){.cs-buy{top:96px;left:12px;width:600px}.cs-banner{top:18%}.cs-feed{top:86px}}
+.cs-item-key{width:18px;flex-shrink:0}.cs-item-text{display:flex;flex-direction:column;flex:1;min-width:0;padding-right:8px}
+.cs-item-name{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.cs-item-why{display:block;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cs-item-price{display:block;width:64px;flex-shrink:0;text-align:right}
+/* 1440p and up: the HUD scales as a whole, each block from the edge it sits on. */
+@media(min-height:1300px){.cs-top{transform:scale(1.33);transform-origin:50% 0}.cs-buy{top:136px;transform:scale(1.33);transform-origin:0 0}
+.cs-me{transform:scale(1.33);transform-origin:0 100%}.cs-feed{top:128px;transform:scale(1.33);transform-origin:100% 0}
+.cs-banner,.cs-notice,.cs-use{transform:scale(1.33);transform-origin:50% 0}}

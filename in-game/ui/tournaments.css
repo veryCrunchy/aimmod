@@ -1,0 +1,35 @@
+/* Tournaments page. Gameface: flex only, no gap, grid, var() or calc(). */
+.tn-top{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-bottom:10px}
+.tn-top .subtle{margin:0 12px 6px 0;max-width:560px}
+.tn-card{margin-bottom:14px;padding:16px 18px}
+.tn-card h2{margin:4px 0 10px 0;font-size:18px}
+.tn-chip{display:block;padding:2px 9px;border:1px solid #2a3631;border-radius:10px;font-size:12px;color:#b9c8c1;margin-right:8px}
+.tn-chip.mint{border-color:#27e4a1;color:#27e4a1}
+.tn-chip.warn{border-color:#f0b45a;color:#f0b45a}
+.tn-score{display:flex;align-items:center;margin-bottom:10px}
+.tn-big{font-size:34px;font-weight:600;color:#eef5f1}
+.tn-dash{font-size:28px;color:#5d6d66;margin:0 10px}
+.tn-meta{display:flex;align-items:center;flex-wrap:wrap;margin-left:18px}
+.tn-block{border-top:1px solid #222c28;margin-top:12px;padding-top:10px}
+.tn-block h3{margin:0 0 8px 0;font-size:14px;color:#b9c8c1}
+.tn-veto{margin:0 0 8px 0;padding-left:20px;color:#b9c8c1}
+.tn-veto li{margin-bottom:3px}
+.tn-game{display:flex;align-items:center;padding:6px 0;border-bottom:1px solid #1c2522}
+.tn-game.current{color:#27e4a1}
+.tn-game-n{width:26px;color:#8fa69b}
+.tn-game-name{flex:1}
+.tn-game-score{width:150px;text-align:right;color:#b9c8c1}
+.tn-game-score.won{color:#27e4a1;font-weight:600}
+.tn-players{display:flex;flex-wrap:wrap}
+.tn-player{width:200px;margin:0 10px 10px 0;padding:10px 12px;border:1px solid #2a3631;border-radius:10px;background:#141b18}
+.tn-player.self{border-color:#3fb7d9}
+.tn-player-name{font-weight:600;margin-bottom:2px}
+.tn-player-score{font-size:24px;font-weight:600;color:#eef5f1}
+.tn-ok{color:#27e4a1}
+.tn-warn{color:#f0b45a}
+.tn-input{width:100%;min-height:34px}
+.tn-row{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid #1c2522}
+.tn-row-name{font-weight:600}
+.tn-bracket-wrap{overflow-x:auto;margin:6px 0 10px 0}
+.tn-bracket{display:block}
+.tn-toast{position:fixed;bottom:18px;right:18px;padding:10px 14px;border-radius:8px;background:#17201c;border:1px solid #2a3631;color:#eef5f1}

@@ -14,9 +14,9 @@ sealed class LobbyCore
     {
         public required string Id; public required string Name; public string Role = MemberRoles.Player;
         public bool Ready; public int? Ping; public string Scenario = ContentStates.Unknown, Map = ContentStates.Unknown, Profiles = ContentStates.None;
-        public string Connection = Connections.Connected, Link = "local"; public long JoinedAt; public long? LostAt; public bool Simulated; public string Avatar = AvatarProfiles.Default; public string? Version; public bool Away; public IReadOnlyList<CosmeticRef> Cosmetics = [];
+        public string Connection = Connections.Connected, Link = "local"; public long JoinedAt; public long? LostAt; public bool Simulated; public string Avatar = AvatarProfiles.Default; public string? Version; public bool Away; public IReadOnlyList<CosmeticRef> Cosmetics = []; public int Team;
         public readonly Queue<long> ChatTimes = new();
-        public LobbyMember View() => new(Id, Name, Role, Ready, Ping, Scenario, Map, Profiles, Connection, Link, JoinedAt, Simulated, Avatar, Version, Away, Cosmetics);
+        public LobbyMember View() => new(Id, Name, Role, Ready, Ping, Scenario, Map, Profiles, Connection, Link, JoinedAt, Simulated, Avatar, Version, Away, Cosmetics, Team);
     }
     sealed class Line
     {
@@ -132,6 +132,8 @@ sealed class LobbyCore
         // A player of the running match who dropped out (crash, lost connection) rejoins as a player.
         var returning = match is not null && match.Players.Contains(id);
         if (!returning && (PlayerCount >= Settings.MaxPlayers || (inMatch && !Settings.LateJoin))) role = MemberRoles.Spectator;
+        // Tournament lobbies: only the match's players play; anyone else can only watch.
+        if (Settings.Tournament is { Players.Count: > 0 } locked && !locked.Players.Contains(id)) role = MemberRoles.Spectator;
         if (role == MemberRoles.Spectator && (!Settings.Spectators || members.Count(m => m.Role == MemberRoles.Spectator) >= LobbySettings.MaxSpectators))
             return LobbyResult.Fail(inMatch ? "in-match" : "full", inMatch ? "A match is in progress and late join is off." : "This lobby is full.");
         var member = new Member { Id = id, Name = UniqueName(LobbyRules.CleanName(name, "Player")), Role = role, JoinedAt = clock(), Simulated = simulated, Link = simulated ? "simulated" : "relay", Version = version };
@@ -348,6 +350,22 @@ sealed class LobbyCore
                 if (AvatarProfiles.Find(Text("avatar")) is not { } look) return LobbyResult.Fail("invalid", "Unknown look.");
                 if (member.Avatar != look.Id) { member.Avatar = look.Id; Changed(); }
                 return LobbyResult.Success;
+            // CS teams: the host places anyone, a member themselves; 0 is "either team".
+            case "team":
+                var who = Text("member") ?? from;
+                if (who != from && from != HostId) return LobbyResult.Fail("host", "Only the host places other players.");
+                if (Find(who) is not { } placed) return LobbyResult.Fail("invalid", "That player isn’t here.");
+                if (match is { Phase: not MatchPhases.Final }) return LobbyResult.Fail("in-match", "Teams are locked during a match.");
+                if (!args.TryGetProperty("team", out var tv) || !tv.TryGetInt32(out var team) || team is < 0 or > 2) return LobbyResult.Fail("invalid", "Pick T, CT or either.");
+                if (placed.Team != team) { placed.Team = team; Changed(); }
+                return LobbyResult.Success;
+            case "balance":
+                if (from != HostId) return LobbyResult.Fail("host", "Only the host balances the teams.");
+                // Alternate in join order, so both teams get early and late joiners.
+                var squad = members.Where(x => x.Role == MemberRoles.Player).OrderBy(x => x.JoinedAt).ToList();
+                for (var i = 0; i < squad.Count; i++) squad[i].Team = i % 2 + 1;
+                Changed();
+                return LobbyResult.Success;
             case "ready-check":
                 // The host wants to start: ping everyone who isn't ready (shown outside the AimMod panel too).
                 if (!IsHost(from)) return HostOnly();
@@ -421,7 +439,8 @@ sealed class LobbyCore
         m.Tracking = null; m.TrackLast = null; m.Combat = null; m.CombatEvents = -1; m.Cs = null; m.CsKey = null;
         if (m.Settings.Mode == LobbyModes.Cs)
         {
-            m.Cs = new CsMatch(m.Players.Where(id => Find(id) is not null).ToList(), m.StartsAt.Value, m.Settings.HalfRounds, m.Settings.Overtime, csObjectives);
+            var csPlayers = m.Players.Where(id => Find(id) is not null).ToList();
+            m.Cs = new CsMatch(csPlayers, m.StartsAt.Value, m.Settings.HalfRounds, m.Settings.Overtime, csObjectives, LobbyRules.ResolveTeams(csPlayers.Select(id => (id, Find(id)!.Team)).ToList()));
             m.Combat = m.Cs.Combat;
         }
         if (LobbyModes.Combat(m.Settings.Mode))
@@ -434,6 +453,29 @@ sealed class LobbyCore
         if (m.Settings.LateJoin) foreach (var p in members.Where(x => x.Role == MemberRoles.Player && !m.Players.Contains(x.Id))) { m.Players.Add(p.Id); m.Names[p.Id] = p.Name; m.Live[p.Id] = new Line(); }
         Changed();
     }
+    // Tournament lobbies: the tournament (not a member) sets the game, scenario and
+    // seed. A finished game's results are cleared so the next game can start.
+    public LobbyResult LockTournament(LobbySettings settings)
+    {
+        if (settings.Tournament is null) return LobbyResult.Fail("invalid", "Not a tournament game.");
+        if (match is { Phase: not MatchPhases.Final }) return LobbyResult.Fail("in-match", "A game is still running.");
+        var next = LobbyRules.Normalize(settings, PlayerCount);
+        if (next == Settings && match is null) return LobbyResult.Success;
+        var newGame = Settings.Tournament is not { } was || was.MatchId != next.Tournament!.MatchId || was.Game != next.Tournament.Game;
+        var scenarioChanged = next.Scenario?.Hash != Settings.Scenario?.Hash;
+        Settings = next;
+        foreach (var m in members.Where(m => m.Role == MemberRoles.Player && next.Tournament!.Players.Count > 0 && !next.Tournament.Players.Contains(m.Id))) { m.Role = MemberRoles.Spectator; m.Ready = false; }
+        if (scenarioChanged) foreach (var m in members.Where(m => m.Id != HostId)) { m.Scenario = ContentStates.Unknown; m.Map = ContentStates.Unknown; }
+        if (newGame)
+        {
+            match = null;
+            foreach (var m in members) m.Ready = false;
+            System(next.Tournament!.Label + ": game " + (next.Tournament.Game + 1) + (Settings.Scenario is { } s ? " on " + s.Name : "") + ".");
+        }
+        Changed();
+        return LobbyResult.Success;
+    }
+
     void EndMatch()
     {
         match = null;
@@ -470,7 +512,9 @@ sealed class LobbyCore
         var limit = m.Settings.EffectiveTimeLimit;
         // Mutual checks from the design: the final score matches the stream and the run length matches the limit.
         var disputed = run.Seconds > limit + 5 || run.Seconds < limit - 5
-            || (line.Score is { } last && line.Remaining is < 2 && Math.Abs(run.Score - last) > Math.Max(5, Math.Abs(last) * 0.1));
+            || (line.Score is { } last && line.Remaining is < 2 && Math.Abs(run.Score - last) > Math.Max(5, Math.Abs(last) * 0.1))
+            // The run can't be longer than the round has been live on the host clock.
+            || (m.StartsAt is { } started && clock() - started < (run.Seconds - 5) * 1000);
         line.Score = run.Score; line.Seconds = run.Seconds; line.Remaining = 0; line.Shots = run.Shots; line.Hits = run.Hits; line.Kills = run.Kills;
         line.Status = LineStates.Finished; line.Disputed = disputed;
         Changed();
@@ -527,11 +571,12 @@ sealed class LobbyCore
         int TeamPlace(int team) => view.TeamFrags is { } tf && team is 1 or 2 ? (tf[team - 1] >= tf[2 - team] ? 1 : 2) : 0;
         var rows = view.Players.OrderBy(p => combat.Teams ? TeamPlace(p.Team) : 0).ThenByDescending(p => p.Frags).ThenBy(p => p.Deaths).ToArray();
         var results = new List<Placement>();
+        // Places are among the players still here: someone who left neither places nor pushes others down.
         foreach (var p in rows)
         {
             var present = Find(p.Member) is not null;
             if (m.Live.TryGetValue(p.Member, out var line) && line.Status is LineStates.Waiting or LineStates.Playing) line.Status = present ? LineStates.Finished : LineStates.Left;
-            var place = !present ? 0 : combat.Teams ? TeamPlace(p.Team) : 1 + rows.Count(o => o.Frags > p.Frags || (o.Frags == p.Frags && o.Deaths < p.Deaths));
+            var place = !present ? 0 : combat.Teams ? TeamPlace(p.Team) : 1 + rows.Count(o => Find(o.Member) is not null && (o.Frags > p.Frags || (o.Frags == p.Frags && o.Deaths < p.Deaths)));
             double? accuracy = p.Claims > 0 ? Math.Round((p.Claims - p.Rejected) * 100.0 / p.Claims, 1) : null;
             results.Add(new Placement(p.Member, m.Names.GetValueOrDefault(p.Member, "Player"), place, p.Frags, accuracy, p.Frags, present ? LineStates.Finished : LineStates.Left,
                 p.Claims >= 10 && p.Rejected > p.Claims * 0.2));
@@ -720,19 +765,26 @@ sealed class LobbyCore
         }
         if (finished.Length > 0 && finished.Count(f => f.Line.Score == finished[0].Line.Score) == 1) winner = finished[0].Id;
         m.Rounds.Add(new RoundResult(m.Round, results, LobbyModes.Scored(s.Mode) ? winner : null));
-        var standings = Standings(m);
-        m.Over = s.Mode switch
-        {
-            LobbyModes.Race or LobbyModes.Rounds => m.Round >= s.Rounds,
-            LobbyModes.Duel => standings.Any(x => x.Wins >= s.FirstTo) || m.Round >= s.FirstTo * 2 + 2 || m.Players.Count(id => Find(id) is not null) < 2,
-            LobbyModes.Tracking => m.Round >= s.Rounds || m.Players.Count(id => Find(id) is not null) < 2,
-            _ => false,
-        };
-        if (m.Players.Count(id => Find(id) is not null) == 0) m.Over = true;
+        m.Over = Decided(m);
         // A single deciding round goes straight to the final screen.
         if (m.Over && m.Rounds.Count == 1) { FinishMatch(); return; }
         m.Phase = MatchPhases.Round; m.NextAt = clock() + ResultsMs;
         Changed();
+    }
+
+    // Whether the rounds played so far decide the match (no further round).
+    bool Decided(Match m)
+    {
+        var s = m.Settings;
+        var present = m.Players.Count(id => Find(id) is not null);
+        if (present == 0 || LobbyModes.Shooting(s.Mode)) return true;
+        return s.Mode switch
+        {
+            LobbyModes.Race or LobbyModes.Rounds => m.Round >= s.Rounds,
+            LobbyModes.Duel => Standings(m).Any(x => x.Wins >= s.FirstTo) || m.Round >= s.FirstTo * 2 + 2 || present < 2,
+            LobbyModes.Tracking => m.Round >= s.Rounds || present < 2,
+            _ => false,
+        };
     }
 
     void FinishMatch()
@@ -756,10 +808,13 @@ sealed class LobbyCore
             return new Standing(id, m.Names.GetValueOrDefault(id, "Player"), 0, mine.Count(x => x.Round.WinnerId == id), mine.Sum(x => x.P.Points),
                 scores.Length > 0 ? scores.Max() : null, scores.Sum(), mine.Length);
         }).ToList();
+        var placed = m.Rounds.SelectMany(r => r.Results).Where(p => p.Place > 0).GroupBy(p => p.MemberId).ToDictionary(g => g.Key, g => g.Min(p => p.Place));
         Func<Standing, (double, double)> key = mode switch
         {
             LobbyModes.Duel => s => (s.Wins, s.Total),
             LobbyModes.Tracking => s => (s.Wins, s.Total),
+            // Combat: the match placement (frags, then fewer deaths, or the team); players who left come last.
+            var cm when LobbyModes.Combat(cm) => s => (-(double)placed.GetValueOrDefault(s.MemberId, 1000), m.Settings.Mode == LobbyModes.TeamDeathmatch ? 0 : s.Points),
             var cm when LobbyModes.Shooting(cm) => s => (s.Points, s.Total),
             LobbyModes.Rounds => s => (s.Points, s.Total),
             _ => s => (s.Best ?? double.MinValue, s.Total),
@@ -790,7 +845,7 @@ sealed class LobbyCore
             core.members.Add(new Member { Id = m.Id, Name = m.Name, Role = m.Role, Ready = m.Ready, Ping = m.Id == newHostId ? null : m.Ping, Scenario = m.Scenario, Map = m.Map, Profiles = m.Profiles,
                 // Everyone else must reconnect to the new host, so they start as reconnecting.
                 Connection = m.Id == newHostId ? Connections.Connected : Connections.Reconnecting, Link = m.Id == newHostId ? "local" : m.Link,
-                JoinedAt = m.JoinedAt, Simulated = m.Simulated, LostAt = m.Id == newHostId ? null : clock(), Avatar = AvatarProfiles.Find(m.Avatar)?.Id ?? AvatarProfiles.Default, Version = m.Version, Away = m.Away, Cosmetics = (m.Cosmetics ?? []).Take(CosmeticsCatalog.MaxEquipped).ToArray() });
+                JoinedAt = m.JoinedAt, Simulated = m.Simulated, LostAt = m.Id == newHostId ? null : clock(), Avatar = AvatarProfiles.Find(m.Avatar)?.Id ?? AvatarProfiles.Default, Version = m.Version, Away = m.Away, Cosmetics = (m.Cosmetics ?? []).Take(CosmeticsCatalog.MaxEquipped).ToArray(), Team = m.Team is 1 or 2 ? m.Team : 0 });
         core.chat.AddRange(snapshot.Chat); core.chatId = snapshot.Chat.Count > 0 ? snapshot.Chat.Max(c => c.Id) : 0; core.readyCheck = snapshot.ReadyCheck;
         foreach (var s in snapshot.Suggestions ?? []) core.suggestions.Add((s.Scenario, s.By, s.Votes.ToHashSet()));
         if (snapshot.Match is { } ms)
@@ -814,6 +869,8 @@ sealed class LobbyCore
             if (snapshot.Settings.Mode == LobbyModes.Tracking && ms.StartsAt is { } startsAt && ms.Phase is MatchPhases.Countdown or MatchPhases.Live && ms.Players.Count >= 2)
                 match.Tracking = new TrackingRound(ms.Players[0], ms.Players[1], startsAt, startsAt + (long)(snapshot.Settings.EffectiveTimeLimit * 1000), snapshot.Settings.RequireFire);
             core.match = match;
+            // Over is not in the snapshot: between rounds, decide again so the last results end the match.
+            if (ms.Phase == MatchPhases.Round) match.Over = core.Decided(match);
         }
         if (snapshot.HostId != newHostId) core.System(snapshot.Members.FirstOrDefault(m => m.Id == snapshot.HostId)?.Name + " (host) left. " + self.Name + " is now the host.");
         return core;
