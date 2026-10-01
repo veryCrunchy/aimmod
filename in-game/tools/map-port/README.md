@@ -19,7 +19,7 @@ Output in `<dir>`:
 | `aimmod_<mapid>_<game>.workshop-thumb.png/.jpg` (1024²), `-16x9` (1920 x 1080) | Workshop thumbnails; the `-16x9.jpg` ships in the Workshop item (aimmod-workshop) and AimMod's map select shows it, also when copied next to the map in `FPSAimTrainer/maps/` |
 | `aimmod_<mapid>_<game>.thumb-views.json` | not installed: camera views for AimModCore's `capture-thumbnail` |
 | `Capture/AimMod Capture - <file id>.sce` | install only to capture a thumbnail: the same map with no bots |
-| `aimmod_<mapid>_<game>.aimmod.json` | not installed: game-mode metadata for AimMod (see below) |
+| `aimmod_<mapid>_<game>.aimmod.json` | `FPSAimTrainer/maps/`, next to the map: game-mode metadata and the CS map spec AimMod reads (see below) |
 | `aimmod_<mapid>_<game>.report.json` | not installed: brush counts, drop reasons, material slots |
 | `aimmod_<mapid>_<game>.preview.png` | not installed: preview check (see below); `--no-preview` skips it |
 | `aimmod_<mapid>_<game>.views/` (`--views`) | not installed: first-person check renders |
