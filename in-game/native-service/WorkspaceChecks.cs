@@ -279,7 +279,8 @@ static class WorkspaceChecks
                 using (var state = JsonDocument.Parse(JsonSerializer.Serialize(player.Status)))
                     Check(started.Elapsed.TotalSeconds > 1 && state.RootElement.GetProperty("playing").GetBoolean()
                         && state.RootElement.GetProperty("time").GetDouble() > 1, "actual pump plays beyond one second across repeated publication gaps");
-                File.WriteAllText(pumpAckPath, "{\"state\":\"error\",\"mode\":\"main\"}");
+                // Replace atomically: the pump reads this file 30 times a second.
+                File.WriteAllText(pumpAckPath + ".next", "{\"state\":\"error\",\"mode\":\"main\"}"); File.Move(pumpAckPath + ".next", pumpAckPath, true);
                 await Task.Delay(200);
                 using (var state = JsonDocument.Parse(JsonSerializer.Serialize(player.Status)))
                     Check(!state.RootElement.GetProperty("visible").GetBoolean() && !state.RootElement.GetProperty("playing").GetBoolean(), "actual pump closes on explicit renderer error");

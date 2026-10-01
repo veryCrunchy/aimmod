@@ -5,7 +5,7 @@ namespace AimMod.InGame;
 
 /// <summary>A game command request (see in-game/native-mod/DESIGN.md "Game commands").</summary>
 sealed record GameCommandRequest(string? Action, string? Scenario, string? Mode, double? TimeScale, double? TargetSize, double? TargetSpeed, double? MapScale, string? Weapon,
-    int? Width = null, int? Height = null, string? Out = null, ThumbnailView[]? Views = null);
+    int? Width = null, int? Height = null, string? Out = null, ThumbnailView[]? Views = null, long? Seed = null);
 
 /// <summary>One thumbnail camera: location (cm), pitch/yaw (degrees), horizontal FOV.</summary>
 sealed record ThumbnailView(double X, double Y, double Z, double Pitch, double Yaw, double Fov);
@@ -59,6 +59,9 @@ sealed class GameCommands(string output)
         if (named && !SafeName(request.Scenario)) return (null, "invalid-scenario");
         if (request.Weapon is not null && !SafeName(request.Weapon)) return (null, "invalid-override");
         if (request.Mode is not (null or "freeplay" or "challenge")) return (null, "invalid-mode");
+        if (request.Seed is not null && (request.Action != "start-scenario" || request.Seed is < 0 or > uint.MaxValue)) return (null, "invalid-seed");
+        // Never in ranked play (AimModCore enforces the same rule).
+        if (request.Seed is not null && request.Mode == "challenge" && request.Scenario?.StartsWith("AimMod Match - ", StringComparison.Ordinal) != true) return (null, "seed-not-allowed");
         var text = new StringBuilder("AIMMOD_CORE_COMMAND_1\n");
         long sequence;
         lock (gate) { sequence = Math.Max(last + 1, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()); last = sequence; }
@@ -83,6 +86,7 @@ sealed class GameCommands(string output)
             Field("mode", request.Mode ?? "freeplay");
             Number("timeScale", request.TimeScale); Number("targetSize", request.TargetSize); Number("targetSpeed", request.TargetSpeed); Number("mapScale", request.MapScale);
             Field("weapon", request.Weapon);
+            if (request.Seed is long seed) Field("seed", seed.ToString(CultureInfo.InvariantCulture));
         }
         AtomicFile.WriteText(Path.Combine(output, "core-command.tsv"), text.ToString());
         return (sequence, null);

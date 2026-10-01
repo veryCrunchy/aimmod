@@ -330,6 +330,7 @@ targetSize	<0.1..10>                        (start, freeplay only)
 targetSpeed	<0.1..10>                       (start, freeplay only)
 mapScale	<0.1..10>                          (start, freeplay only)
 weapon	<weapon profile name>                (start, freeplay only)
+seed	<0..4294967295>                          (start; freeplay, or challenge of "AimMod Match - " scenarios)
 width	<64..3840> / height	<64..2160>       (capture-thumbnail)
 out	<name>.png                              (capture-thumbnail; plain file name)
 view1..view4	<x>,<y>,<z>,<pitch>,<yaw>,<fov> (capture-thumbnail; 1-4, in order)
@@ -388,6 +389,43 @@ Rules:
 - Every request and outcome is logged (`game command <seq>: ...`).
 - Target size/speed and time scale semantics (adaptive override profile,
   global time dilation) are the first live-verified items of test #4.
+
+## Match seeds (shared randomness)
+
+Findings (3.9.11 dumps and imports):
+- No reflected `FRandomStream` member or seed property on the scenario,
+  spawner (`CSpawnVolume`, `CSpawnVolumeManager`, `CSpawnTargetNPC`) or bot
+  classes; spawning and bot movement are native and not reflected (only
+  `Scenario:SpawnBots`). `BotBrainComponent` has `Get/SetRandomStream`
+  (action choice of the newer bot brain), the only stream in the API.
+- Blueprint randomness is marginal (KovLib, FPSCharacter, sky, pitch
+  modifier: `RandomInteger`/`RandomFloatInRange`, the global RNG).
+- The game imports `rand`/`srand` from the UCRT (api-ms-win-crt-utility), as
+  AimModCore does: `FMath::Rand/FRand/RandRange/RandInit` draw from the CRT
+  per-thread state of the game thread, which AimModCore can seed from its
+  game-thread callbacks. `FMath::SRand` (its own global) is not reachable.
+
+Strategy (b), prototype: `start-scenario` with `seed` seeds the game
+thread's CRT RNG with `SeedFor(seed, 0)` when the scenario has started
+(and again at each challenge attempt start), and with `SeedFor(seed, n)`
+in the pre-hook of the n-th target death/kill (`NotifyCharacterDeath`,
+`NotifyPlayerKillCredit`; one event per frame) - right before the game
+picks the respawn. Spawns drawn synchronously at a kill are then the same
+for every player whatever happened before. Limits: draws made every tick
+(continuous bot movement) depend on frame count, so movement can still
+diverge between players with different frame rates; a respawn delay lets
+per-tick draws run between the reseed and the spawn; `FRandomStream`
+users (bot brain) are not affected. Seeding never runs outside the seeded
+scenario (it stops on any scenario change or new request) and never in
+ranked play (freeplay, or challenge only for generated `AimMod Match - `
+scenarios; refused otherwise as `seed-not-allowed`).
+
+Verification: run the scenario twice with the same seed and different
+play, then `AimMod.InGame.exe --compare-spawns <rootA> <idA> <rootB> <idB>`
+lists both runs' target appearances (new target, reappearance after an
+absence, or a jump over 150 cm in one frame) and reports how many match
+within 5 cm and where they first differ. If spawns match but movement
+does not, the next step is (c): drive spawns from a pre-generated sequence.
 
 ## Native service
 
