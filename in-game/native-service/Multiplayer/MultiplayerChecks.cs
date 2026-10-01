@@ -1077,7 +1077,7 @@ static class MultiplayerChecks
     static void Blocked(string root)
     {
         long now = 4_000_000;
-        var control = new FakeGame("load", "start");
+        var control = new FakeGame("load", "start") { Root = Path.Combine(root, "game") };
         var service = new MultiplayerService(new OfflineTransport(), new ContentLibrary(Path.Combine(root, "game")), control, () => new LocalRun(false, null, null, null, null, 0, 0, 0, null), () => [], () => null, null, simulation: true, () => now, autoTick: false, seed: 5);
         JsonElement Round() => JsonSerializer.SerializeToElement(service.View(), Protocol.Json).GetProperty("lobby").GetProperty("round");
         string Phase() => JsonSerializer.SerializeToElement(service.View(), Protocol.Json).GetProperty("lobby").GetProperty("match").GetProperty("phase").GetString()!;
@@ -1475,7 +1475,20 @@ static class MultiplayerChecks
         public readonly List<string> Calls = [];
         public IReadOnlySet<string> Capabilities { get; } = caps.ToHashSet();
         long lastLoad, lastStart;
-        public long? Load(string scenario) { Calls.Add("load " + scenario); return lastLoad = Calls.Count; }
+        public long? Load(string scenario) { Calls.Add("load " + scenario); loadedScenario = scenario; return lastLoad = Calls.Count; }
+        // core-scene.json as AimModCore would publish it: the loaded scenario and the map its file names
+        // (read from the test game folder); StuckMap keeps an old map, like the live CS bug.
+        public string? Root; public string? StuckMap; string? loadedScenario;
+        public GameScene? Scene
+        {
+            get
+            {
+                if (loadedScenario is null || Root is null) return null;
+                var path = Path.Combine(Root, "Saved", "SaveGames", "Scenarios", loadedScenario + ".sce");
+                var (map, scale) = File.Exists(path) ? MatchScenario.MapOf(File.ReadAllText(path)) : (null, null);
+                return new GameScene(true, loadedScenario, StuckMap ?? map ?? "", StuckMap is null ? scale : 1, false, false, false, false);
+            }
+        }
         public long? Start(string scenario, string mode) { Calls.Add("start " + mode + " " + scenario); return lastStart = Calls.Count; }
         public long? Refresh() { Calls.Add("refresh"); return Calls.Count; }
         // A challenge still running in KovaaK's (core-scene.json); while true, loads answer challenge-active.
@@ -1495,7 +1508,7 @@ static class MultiplayerChecks
         var game = Path.Combine(root, "game");
         var output = Path.Combine(root, "output");
         Directory.CreateDirectory(output);
-        var control = new FakeGame("load", "start");
+        var control = new FakeGame("load", "start") { Root = game };
         var runs = new List<Run>();
         var service = new MultiplayerService(new OfflineTransport(), new ContentLibrary(game), control, () => new LocalRun(false, null, null, null, null, 0, 0, 0, null), () => runs,
             () => "Synthetic Player", output, simulation: true, () => now, autoTick: false, seed: 7);
@@ -1575,6 +1588,10 @@ static class MultiplayerChecks
         Run(12_000);
         Check(service.Act("start", default).Ok, "The duel starts with a simulated opponent");
         Run(300);
+        var waitingLoad = JsonDocument.Parse(service.NoticeText()).RootElement;
+        Check(waitingLoad.GetProperty("title").GetString()!.StartsWith("Waiting for everyone to load (", StringComparison.Ordinal), "Loading: the toast waits for everyone's map, counting who is ready");
+        static bool HasDuel(string notice) => JsonDocument.Parse(notice).RootElement.TryGetProperty("duel", out var d) && d.ValueKind == JsonValueKind.Object;
+        for (var i = 0; i < 100 && !HasDuel(service.NoticeText()); i++) Run(100);
         var countdown = JsonDocument.Parse(service.NoticeText()).RootElement;
         Check(countdown.GetProperty("duel").GetProperty("you").ValueKind == JsonValueKind.Null && countdown.GetProperty("duel").GetProperty("left").ValueKind == JsonValueKind.Null
             && countdown.GetProperty("body").GetString()!.Contains("dodge their aim", StringComparison.Ordinal), "Countdown: the toast says both players track and dodge");

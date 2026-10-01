@@ -804,11 +804,30 @@ sealed partial class MultiplayerService : IDisposable
                 { Actions = [new("Allow", "spectate-allow", ask.Peer), new("Deny", "spectate-deny", ask.Peer)] };
         if (Current is not { } lobby) return flash is { } f && now < f.Until ? f.Notice : null;
         var me = lobby.Members.FirstOrDefault(m => m.Id == SelfId);
+        // Load gate: waiting for everyone's map, or a failed load the host can retry or abort.
+        if (lobby.Match is { Phase: MatchPhases.Loading } loading && loading.Players.Contains(SelfId))
+        {
+            var present = loading.Players.Where(id => lobby.Members.Any(x => x.Id == id)).ToArray();
+            var ready = present.Count(id => loading.Loaded?.Contains(id) == true);
+            string Name(string id) => lobby.Members.FirstOrDefault(x => x.Id == id)?.Name ?? "Player";
+            if (loading.LoadFailed)
+            {
+                var issues = loading.LoadIssues ?? new Dictionary<string, string>();
+                var why = string.Join(" ", present.Where(id => loading.Loaded?.Contains(id) != true).Select(id => Name(id) + ": " + issues.GetValueOrDefault(id, "still loading.")));
+                var host = lobby.HostId == SelfId;
+                return new GameNotice("lf-" + loading.Id + "-" + loading.LoadAttempt, "invite", "Couldn’t load the match (" + ready + "/" + present.Length + ")",
+                    why + (host ? "" : " Waiting for the host to retry or end the match."), null, null, quiet ? "none" : "popup")
+                    { Actions = host ? [new("Retry", "retry-load", loading.Id), new("Abort", "end", loading.Id)] : null };
+            }
+            var mine = plan is { } mp && mp.Key == PlanKey(loading) ? mp.Message : "Loading…";
+            return new GameNotice("ld-" + loading.Id + "-" + loading.LoadAttempt, "countdown", "Waiting for everyone to load (" + ready + "/" + present.Length + ")",
+                loading.Loaded?.Contains(SelfId) == true ? "Your map is ready." : mine, null, null, "none");
+        }
         if (lobby.Match is { } match && match.Players.Contains(SelfId) && match.Phase is MatchPhases.Countdown && match.StartsAt is { } at)
         {
             var seconds = (int)Math.Max(0, Math.Ceiling((at - now) / 1000.0));
             var round = match.Round > 1 ? "Round " + match.Round + " starting" : "Match starting";
-            var how = plan is { } p && p.Key == match.Id + "#" + match.Round ? p.Message : "Get ready.";
+            var how = plan is { } p && p.Key == PlanKey(match) ? p.Message : "Get ready.";
             // Tracking duel: the countdown says who tracks (the duel HUD repeats it during the round).
             if (match.Mode == LobbyModes.Tracking)
             {
@@ -1553,10 +1572,14 @@ sealed partial class MultiplayerService : IDisposable
     // from a crash). The one the current lobby uses stays for Play again and rematches.
     string? cleanedFor = "\0";
     string? WantedMatchScenario() => Current is { Settings: { Scenario: not null } s } && MatchScenario.Needed(s) ? MatchScenario.Name(s) : null;
+    // A plan belongs to one load attempt of one round.
+    static string PlanKey(MatchSnapshot m) => m.Id + "#" + m.Round + "#" + m.LoadAttempt;
     void CleanMatchScenarios()
     {
         var wanted = WantedMatchScenario();
         if (wanted == cleanedFor || scenarios is null) return;
+        // A match scenario that failed to load is copied aside before it goes (match-debug).
+        KeepFailedScenario(wanted);
         cleanedFor = wanted;
         if (preparedName is not null && preparedName != wanted) { preparedKey = null; preparedName = null; preparedProblem = null; }
         // The cosmetics marker never names a scenario that is about to go.
@@ -1578,7 +1601,7 @@ sealed partial class MultiplayerService : IDisposable
     void PlanRound()
     {
         if (Current is not { Match: { } match } lobby || !match.Players.Contains(SelfId) || match.Phase is MatchPhases.Final) { plan = null; return; }
-        var key = match.Id + "#" + match.Round;
+        var key = PlanKey(match);
         var caps = game.Capabilities;
         if (plan?.Key != key && match.Phase is MatchPhases.Loading or MatchPhases.Countdown)
         {
@@ -1610,9 +1633,8 @@ sealed partial class MultiplayerService : IDisposable
             else if (match.Phase != MatchPhases.Live && game.Load(plan.Scenario) is long again)
                 plan = plan with { State = "loading", Message = "Loading “" + plan.Scenario + "” in KovaaK’s…", LoadSequence = again, StartSequence = null };
         }
-        // Tell the host once this machine has the scenario loaded (or will start it by hand).
-        if (match.Phase == MatchPhases.Loading && loadedSent != key && plan.State is "ready" or "manual" or "error" or "started")
-        { loadedSent = key; Command("loaded", JsonSerializer.SerializeToElement(new { match = match.Id, round = match.Round })); }
+        // Tell the host once this machine's game shows the scenario with its map (load gate).
+        if (match.Phase == MatchPhases.Loading) VerifyLoaded(match, key);
         if (match.Phase == MatchPhases.Live && plan.StartSequence is null && plan.State is "loading" or "ready" or "manual")
         {
             if (caps.Contains("start") && game.Start(plan.Scenario, MatchScenario.SafeMode(plan.Scenario, plan.Mode)) is long start) plan = plan with { State = "starting", Message = "Starting your run…", StartSequence = start };
@@ -1651,7 +1673,15 @@ sealed partial class MultiplayerService : IDisposable
             }
             if (s.WeaponProfile is { Preset: ProfilePresets.Custom, Custom: { } weapon }) weaponText = library.PathOf("weapon", weapon) is { } w ? File.ReadAllText(w) : null;
             if (s.CharacterProfile is { Preset: ProfilePresets.Custom, Custom: { } character }) characterText = library.PathOf("character", character) is { } c ? File.ReadAllText(c) : null;
-            var text = MatchScenario.Generate(new MatchScenario.Inputs(File.ReadAllText(basePath), s, mapFile, mapText, weaponText, characterText));
+            var baseText = File.ReadAllText(basePath);
+            var text = MatchScenario.Generate(new MatchScenario.Inputs(baseText, s, mapFile, mapText, weaponText, characterText));
+            // Never hand KovaaK's a match scenario that wouldn't load its base's map (or that loses profiles).
+            if (s.MapOverride is null && MatchScenario.Validate(baseText, text).Except(MatchScenario.Validate(baseText, baseText)).ToList() is { Count: > 0 } problems)
+            {
+                Console.Error.WriteLine("Match scenario " + name + " refused: " + string.Join("; ", problems));
+                return "AimMod couldn’t build a valid match scenario (" + problems[0] + ").";
+            }
+            expectedMaps[name] = MatchScenario.MapOf(text);
             if (LobbyModes.Combat(s.Mode)) { arenaSpawns = MatchScenario.Spawns(text); core?.SetCombatSpawns(arenaSpawns); }
             if (s.Mode == LobbyModes.Cs) { csObjectives = LoadObjectives(text); core?.SetCsObjectives(csObjectives); }
             var (ok, error) = scenarios.Write(name, text, clock());
@@ -1714,7 +1744,7 @@ sealed partial class MultiplayerService : IDisposable
             if (match.Cs is { } csv && csv.Spawns?.GetValueOrDefault(SelfId) is { Length: 4 } rs)
                 lastSpawn = new CombatEvent(1_000_000 + csv.Round, "respawn", 0, SelfId, null, 0, false, 100, null, rs); // one teleport per CS round
             // The match scenario's exact name: AimModCore applies play state only there.
-            var scenario = plan is { } pl && pl.Key == match.Id + "#" + match.Round ? pl.Scenario : Current is { } cur ? MatchScenario.Name(cur.Settings) : match.Scenario;
+            var scenario = plan is { } pl && pl.Key == PlanKey(match) ? pl.Scenario : Current is { } cur ? MatchScenario.Name(cur.Settings) : match.Scenario;
             var hostNow = clock() + HostOffset();
             var now = clock();
             var body = PlayState.Format(0, scenario, self, lastHit, hostNow, HostOffset());
@@ -1808,11 +1838,11 @@ sealed partial class MultiplayerService : IDisposable
             Simulation?.ResetSelf();
         }
         // Still in an earlier challenge: its result belongs to that run, not to this round.
-        if (plan is { State: "blocked" } && plan.Key == roundKey) { knownRuns.UnionWith(completedRuns().Take(10).Select(r => r.Id)); return; }
+        if (plan is { State: "blocked" } && plan.Key == PlanKey(match)) { knownRuns.UnionWith(completedRuns().Take(10).Select(r => r.Id)); return; }
         var line = match.Live.FirstOrDefault(l => l.MemberId == SelfId);
         if (line is null || line.Status is LineStates.Finished or LineStates.Left or LineStates.Dnf || match.Phase != MatchPhases.Live) return;
         var now = clock();
-        var expected = plan?.Key == roundKey ? plan.Scenario : match.Scenario;
+        var expected = plan?.Key == PlanKey(match) ? plan.Scenario : match.Scenario;
         var live = liveRun();
         var playing = live.Active && (string.Equals(live.Scenario, expected, StringComparison.OrdinalIgnoreCase) || string.Equals(live.Scenario, match.Scenario, StringComparison.OrdinalIgnoreCase));
         var simulated = false;
@@ -1905,7 +1935,7 @@ sealed partial class MultiplayerService : IDisposable
                     blockers = LobbyRules.StartBlockers(lobby), content = new { scenario, map, profiles },
                     simulated = lobby.Members.Any(m => m.Simulated),
                     generated = generated ? new { name = MatchScenario.Name(lobby.Settings), key = MatchScenario.Key(lobby.Settings)[..12], mode = "freeplay", saved = preparedName == MatchScenario.Name(lobby.Settings) && preparedProblem is null, problem = preparedName == MatchScenario.Name(lobby.Settings) ? preparedProblem : null } : null,
-                    round = plan is { } p && lobby.Match is { } mt && p.Key == mt.Id + "#" + mt.Round ? new { p.Scenario, p.Mode, p.Generated, p.State, p.Message } : null,
+                    round = plan is { } p && lobby.Match is { } mt && p.Key == PlanKey(mt) ? new { p.Scenario, p.Mode, p.Generated, p.State, p.Message } : null,
                     download = DownloadView(lobby),
                     spectate = SpectateView(lobby),
                     replays = ReplaysView(lobby.Match),

@@ -13,6 +13,8 @@ interface IGameControl
     GameCommandResult? Result { get; }
     // True while KovaaK's runs a challenge (core-scene.json); null when unknown.
     bool? ChallengeRunning => null;
+    // What KovaaK's shows now (core-scene.json); null when unknown.
+    GameScene? Scene => null;
 }
 
 sealed class CoreGameControl(string output) : IGameControl
@@ -27,6 +29,7 @@ sealed class CoreGameControl(string output) : IGameControl
     public long? Refresh() => Capabilities.Contains("refresh") || Capabilities.Contains("load") ? commands.Send(new("refresh-scenarios", null, null, null, null, null, null, null)).Sequence : null;
     public GameCommandResult? Result => commands.Result();
     public bool? ChallengeRunning => GameScene.Read(output) is { Available: true } scene ? scene.InChallenge : null;
+    public GameScene? Scene => GameScene.Read(output);
 }
 
 sealed class NoGameControl : IGameControl
