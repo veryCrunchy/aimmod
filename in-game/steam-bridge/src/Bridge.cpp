@@ -81,8 +81,8 @@ namespace bridge
         // Allowed top-level fields per command (besides v, cmd, id).
         const std::map<std::string, std::set<std::string>, std::less<>> CommandFields = {
             {"hello", {}},
-            {"lobby.create", {"privacy", "maxMembers", "data"}},
-            {"lobby.join", {"lobby"}},
+            {"lobby.create", {"privacy", "maxMembers", "data", "token", "entrant"}},
+            {"lobby.join", {"lobby", "token"}},
             {"lobby.leave", {}},
             {"lobby.setData", {"data"}},
             {"lobby.setJoinable", {"joinable"}},
@@ -508,10 +508,23 @@ namespace bridge
                 return;
             }
             const auto privacy = c.Str("privacy", 16).value_or("friends");
-            if (privacy != "friends" && privacy != "invite")
+            if (privacy != "friends" && privacy != "invite" && privacy != "tournament")
             {
-                Result(*id, false, "invalid", "privacy must be friends or invite (public lobbies go through the Hub).");
+                Result(*id, false, "invalid", "privacy must be friends, invite or tournament (public lobbies go through the Hub).");
                 return;
+            }
+            std::string matchToken;
+            std::uint64_t entrant = 0;
+            if (privacy == "tournament")
+            {
+                matchToken = c.Str("token", 64).value_or("");
+                const auto e = peerArg("entrant");
+                if (!ValidMatchToken(matchToken) || !e || *e == m_self)
+                {
+                    Result(*id, false, "invalid", "A tournament lobby needs the Hub match token and the entrant's SteamID64.");
+                    return;
+                }
+                entrant = *e;
             }
             const auto max = c.Int("maxMembers").value_or(4);
             if (max < 2 || max > MaxMembersLimit)
@@ -541,7 +554,10 @@ namespace bridge
                     call.data[k] = value.string;
                 }
             }
-            call.call = m_steam.MM_CreateLobby(m_steam.mm, privacy == "friends" ? LobbyFriendsOnly : LobbyPrivate, call.maxMembers);
+            call.matchToken = matchToken;
+            call.entrant = entrant;
+            const int type = privacy == "friends" ? LobbyFriendsOnly : privacy == "tournament" ? LobbyInvisible : LobbyPrivate;
+            call.call = m_steam.MM_CreateLobby(m_steam.mm, type, call.maxMembers);
             call.deadline = Clock::now() + CallTimeout;
             m_calls.push_back(std::move(call));
         }
@@ -567,6 +583,15 @@ namespace bridge
             PendingCall call{PendingCall::Kind::Join};
             call.commandId = *id;
             call.lobby = *lobby;
+            if (c.Get("token"))
+            {
+                call.matchToken = c.Str("token", 64).value_or("");
+                if (!ValidMatchToken(call.matchToken))
+                {
+                    Result(*id, false, "invalid", "token must be the Hub match token.");
+                    return;
+                }
+            }
             call.call = m_steam.MM_JoinLobby(m_steam.mm, *lobby);
             call.deadline = Clock::now() + CallTimeout;
             m_calls.push_back(std::move(call));
@@ -1214,6 +1239,8 @@ namespace bridge
             m_steam.MM_SetLobbyData(m_steam.mm, lobby, KeyBridge, BridgeVersion);
             m_steam.MM_SetLobbyData(m_steam.mm, lobby, KeyToken, Hex(m_token).c_str());
             m_steam.MM_SetLobbyData(m_steam.mm, lobby, "aimmod.privacy", m_privacy.c_str());
+            m_tournamentToken = call->matchToken; // never written to lobby data
+            m_tournamentEntrant = call->entrant;
             for (const auto& [k, value] : call->data) m_steam.MM_SetLobbyData(m_steam.mm, lobby, k.c_str(), value.c_str());
             m_log("created lobby " + Redact(lobby));
         }
@@ -1222,7 +1249,8 @@ namespace bridge
             const char* token = m_steam.MM_GetLobbyData(m_steam.mm, lobby, KeyToken);
             m_token = FromHex(token ? token : "").value_or(0);
             const char* privacy = m_steam.MM_GetLobbyData(m_steam.mm, lobby, "aimmod.privacy");
-            m_privacy = privacy && std::strcmp(privacy, "invite") == 0 ? "invite" : "friends";
+            m_privacy = privacy && std::strcmp(privacy, "invite") == 0 ? "invite" : privacy && std::strcmp(privacy, "tournament") == 0 ? "tournament" : "friends";
+            m_joinToken = call ? call->matchToken : std::string();
             m_log("joined lobby " + Redact(lobby));
         }
         m_owner = 0;
@@ -1240,6 +1268,9 @@ namespace bridge
         const std::uint64_t left = m_lobby;
         const std::string why = reason;
         if (why == "left" || why == "kicked" || why == "switching lobby") ClearLast(); // closed/shutdown keep it for lobby.rejoin
+        m_tournamentToken.clear();
+        m_tournamentEntrant = 0;
+        m_joinToken.clear();
         m_spectators.clear();
         m_cameraRate = 0;
         if (!m_watchingDirect) m_watching = 0;
@@ -1324,6 +1355,14 @@ namespace bridge
         {
             UpdateRole();
             SaveLast();
+        }
+        // A tournament lobby locks as soon as the expected entrant is in.
+        if (IsHost() && m_privacy == "tournament" && m_joinable && m_tournamentEntrant && IsMember(m_tournamentEntrant))
+        {
+            m_joinable = false;
+            m_steam.MM_SetLobbyJoinable(m_steam.mm, m_lobby, false);
+            m_log("tournament lobby: entrant joined; lobby locked");
+            changed = true;
         }
         if (changed)
         {
@@ -1470,9 +1509,10 @@ namespace bridge
                         drop.push_back(peer);
                         continue;
                     }
-                    WireMessage hello{WireType::Hello};
+                    WireMessage hello{m_joinToken.empty() ? WireType::Hello : WireType::TournamentHello};
                     hello.lobby = m_lobby;
                     hello.token = m_token;
+                    hello.matchToken = m_joinToken;
                     SendWire(conn, hello, true);
                     conn.state = ConnState::Handshaking;
                     conn.deadline = now + HandshakeTimeout;
@@ -1554,7 +1594,21 @@ namespace bridge
                     else RefuseWatcher(peer, decision.reason);
                     return;
                 }
-                if (m.type != WireType::Hello) return CloseConn(peer, false, "no hello");
+                if (m.type != WireType::Hello && m.type != WireType::TournamentHello) return CloseConn(peer, false, "no hello");
+                if (m_privacy == "tournament" || m.type == WireType::TournamentHello)
+                {
+                    // Only the Hub's expected entrant, with its match token, gets into a tournament lobby.
+                    const bool ok = m_privacy == "tournament" && m.type == WireType::TournamentHello && peer == m_tournamentEntrant &&
+                                    SameToken(m.matchToken, m_tournamentToken);
+                    if (!ok)
+                    {
+                        WireMessage reject{WireType::Reject};
+                        reject.code = static_cast<std::uint16_t>(RejectCode::NotEntrant);
+                        SendWire(conn, reject, true);
+                        m_log("tournament lobby: refused " + Redact(peer));
+                        return CloseConn(peer, false, "not the entrant", true);
+                    }
+                }
                 if (!IsHost())
                 {
                     WireMessage notHost{WireType::Reject};

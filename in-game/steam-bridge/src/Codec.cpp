@@ -104,6 +104,22 @@ namespace bridge
         return true;
     }
 
+    bool ValidMatchToken(std::string_view token)
+    {
+        if (token.size() < 8 || token.size() > 64) return false;
+        for (const char c : token)
+            if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-')) return false;
+        return true;
+    }
+
+    bool SameToken(std::string_view a, std::string_view b)
+    {
+        if (a.size() != b.size()) return false;
+        unsigned char diff = 0;
+        for (std::size_t i = 0; i < a.size(); ++i) diff |= static_cast<unsigned char>(a[i] ^ b[i]);
+        return diff == 0;
+    }
+
     std::string JoinString(std::uint64_t lobby) { return "aimmod:" + std::to_string(JoinStringVersion) + ":" + std::to_string(lobby); }
     std::string ConnectString(std::uint64_t lobby) { return "-aimmodjoin=" + JoinString(lobby); }
 
@@ -256,6 +272,15 @@ namespace bridge
             break;
         }
         case WireType::SpectateHello: out.push_back(m.rate); break;
+        case WireType::TournamentHello:
+        {
+            Put(out, m.lobby, 8);
+            Put(out, m.token, 8);
+            const std::size_t n = std::min<std::size_t>(m.matchToken.size(), 64);
+            out.push_back(static_cast<std::uint8_t>(n));
+            out.insert(out.end(), m.matchToken.begin(), m.matchToken.begin() + static_cast<std::ptrdiff_t>(n));
+            break;
+        }
         case WireType::SpectateAccept: break;
         case WireType::Score:
         {
@@ -397,6 +422,17 @@ namespace bridge
         case WireType::SpectateAccept:
             if (n != 0) return std::nullopt;
             break;
+        case WireType::TournamentHello:
+        {
+            if (n < 17) return std::nullopt;
+            const std::size_t len = body[16];
+            if (len < 1 || len > 64 || n != 17 + len) return std::nullopt;
+            m.lobby = Get(body, 8);
+            m.token = Get(body + 8, 8);
+            m.matchToken.assign(reinterpret_cast<const char*>(body + 17), len);
+            if (!ValidMatchToken(m.matchToken)) return std::nullopt;
+            break;
+        }
         case WireType::Score:
         {
             if (n != 8 + 1 + 12 + 12) return std::nullopt;

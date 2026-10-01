@@ -31,6 +31,9 @@ namespace bridge
 
     // Lobby data keys the service may set: "aimmod." + [a-z0-9._-]{1,32}.
     bool ValidLobbyKey(std::string_view key);
+    // Tournament match tokens from the Hub: [A-Za-z0-9_-]{8,64}.
+    bool ValidMatchToken(std::string_view token);
+    bool SameToken(std::string_view a, std::string_view b); // constant time for equal lengths
     constexpr std::size_t MaxLobbyValue = 256;
     constexpr std::size_t MaxServiceLobbyKeys = 24;
 
@@ -73,6 +76,7 @@ namespace bridge
         CameraMeta = 15,  // spectate: u64 origin, f32 map scale, u8 n, scenario, u8 m, map name
         SpectateHello = 16,  // lobby-less spectate request: u8 rate Hz (1..60)
         SpectateAccept = 17, // no body
+        TournamentHello = 19, // tournament lobby join: u64 lobby, u64 lobby token, u8 n, n bytes Hub match token
         Score = 18,          // live score: u64 origin, u8 flags (1 active, 2 paused), 3 x f32 (score seconds remaining), 3 x u32 (shots hits kills); -1 / 0xFFFFFFFF = unknown
     };
 
@@ -111,6 +115,7 @@ namespace bridge
         SpectateFull = 7, // too many spectators
         NotFriend = 8,    // only Steam friends may spectate
         Declined = 9,     // the target said no (or didn't answer)
+        NotEntrant = 10,  // tournament lobby: not the expected entrant, or a wrong match token
     };
     constexpr std::size_t WireHeader = 8;
 
@@ -140,6 +145,7 @@ namespace bridge
         Pose pose;
         CameraFrame camera;
         ScoreFrame score;
+        std::string matchToken; // TournamentHello
         std::string scenario, map; // CameraMeta (<= MaxPoseScene each); origin in lobby, scale in camera.fov
         std::uint8_t rate = 0; // SpectateSub (lobby/target reuse: lobby = target)
     };

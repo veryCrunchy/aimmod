@@ -847,8 +847,8 @@ be merged into it later. The stage-3 kit remains the fallback test tool.
 | Command | Fields | Notes |
 | --- | --- | --- |
 | `hello` | — | Replies `ready`, plus `lobby.updated` if in a lobby, plus any pending `join.requested`. |
-| `lobby.create` | `privacy` `friends`\|`invite`, `maxMembers` 2–16, `data` {aimmod.*: string} | Fails `busy` if already in a lobby. |
-| `lobby.join` | `lobby` | Fails `not-aimmod` for foreign lobbies, and `steam` with the enter response code. |
+| `lobby.create` | `privacy` `friends`\|`invite`\|`tournament` (with `token`, `entrant`), `maxMembers` 2–16, `data` {aimmod.*: string} | Fails `busy` if already in a lobby. |
+| `lobby.join` | `lobby`, `token`? (tournament) | Fails `not-aimmod` for foreign lobbies, and `steam` with the enter response code. |
 | `lobby.leave` | — | Always ok. |
 | `lobby.setData` | `data` {aimmod.*: string\|null} | Host only. `null` deletes the key. The bridge's own keys are read-only. |
 | `lobby.setJoinable` | `joinable` bool | Host only. It also removes or restores the friends-list "Join Game". |
@@ -969,6 +969,45 @@ messages: no second pipe frame type, so the pipe stays one simple framing.
 size bounds, and a chunk's base64 fitting in a pipe frame. The Workshop
 commands and a live transfer still need the game (for UGC) and two
 accounts (for P2P).
+### Contract addition: tournament lobbies (still version 1)
+
+Tournament opponents may not be Steam friends. The host's client creates a
+locked lobby and reports its id to the Hub, and the opponent's client joins
+it by that id.
+
+**Commands.**
+
+- `lobby.create {privacy:"tournament", token, entrant, maxMembers?, data?}`:
+  - `token` is the Hub match token, `[A-Za-z0-9_-]{8,64}`.
+  - `entrant` is the opponent's SteamID64, the only player let in.
+- `lobby.join {lobby, token}`: the opponent joins by id with the same token.
+
+**Lobby type.**
+
+- The lobby is a Steam **Invisible** lobby (`k_ELobbyTypeInvisible`).
+  Anyone holding the id can `JoinLobby` it, but it doesn't show for friends,
+  and there's no rich-presence "Join Game".
+- Friends-only lobbies need friendship, and Private lobbies need an invite,
+  which the opponent doesn't have.
+- Invisible lobbies can come up in lobby *searches* that match their keys.
+  Ours carry only `aimmod.*` keys, so the game's UE session search ignores
+  them.
+- **Verified on one account:** create, lobby data and leave. Joining by id
+  from a non-friend account still needs a two-account test.
+
+**Who gets in.**
+
+- The token is never written to lobby data, which anyone holding the id can
+  read. The joiner sends it in its AMP1 handshake as `TournamentHello(lobby,
+  lobby token, match token)` instead of `Hello`.
+- The host accepts only `peer == entrant`, with the token compared in
+  constant time. Anyone else gets `Reject(NotEntrant = 10)` and no P2P link.
+  A plain `Hello` into a tournament lobby is refused the same way.
+- As soon as the entrant is a lobby member, the host locks the lobby
+  (`SetLobbyJoinable(false)`).
+- `lobby.updated.privacy` is `tournament` on both sides.
+
+Friends and invite lobbies are unchanged.
 ### Invites: received vs accepted
 
 - **`invite.received`** means "someone invited you". It comes from
