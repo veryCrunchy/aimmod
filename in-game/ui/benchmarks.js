@@ -19,6 +19,8 @@
   function byline(item){return [root.AimModFormat.safeText(item.type,''),root.AimModFormat.safeText(item.author,'')].filter(Boolean).join(' · ');}
   function actionsRow(){var row=el('div','actions');container.appendChild(row);return row;}
   function notice(text){container.appendChild(el('p','benchmark-empty',text));}
+  // Same error pattern as the other pages: a panel with the problem, what to do, and Try again.
+  function failure(title,text,retry){var box=el('div','panel empty');box.appendChild(el('h3','',title));box.appendChild(el('p','',text));var row=el('div','actions');row.appendChild(button('Try again',retry,'button primary'));box.appendChild(row);container.appendChild(box);}
   function widthOf(node){return node.offsetWidth||node.clientWidth||0;}
   function list(){detailPage=null;cancel();clear();var card=el('div','benchmark-panel');container.appendChild(card);card.appendChild(el('h2','','Your benchmarks'));
     card.appendChild(el('p','subtle','Your rank on each benchmark. Open one to see the score for your next rank.'));
@@ -82,6 +84,6 @@
     search.oninput=function(){scenarioQuery=search.value;openScenario=-1;if(scenarioQuery){var q=scenarioQuery.toLowerCase();var current=page.categories[categoryIndex];if(!(current.scenarios||[]).some(function(s){return s.name.toLowerCase().indexOf(q)>=0;})){for(var i=0;i<page.categories.length;i++)if((page.categories[i].scenarios||[]).some(function(s){return s.name.toLowerCase().indexOf(q)>=0;})){categoryIndex=i;break;}}}drawBody();};drawBody();
   }
   function detail(item){cancel();clear();actionsRow().appendChild(button('Back to benchmarks',list,'button quiet'));notice('Loading benchmark…');get('benchmark?id='+encodeURIComponent(item.id),function(ok,page){if(!ok||!page||!Array.isArray(page.categories)){clear();actionsRow().appendChild(button('Back to benchmarks',list,'button quiet'));notice('Could not load this benchmark. Please try again.');actionsRow().appendChild(button('Try again',function(){detail(item);},'button primary'));return;}detailPage=page;categoryIndex=0;scenarioQuery='';openScenario=-1;drawDetail();});}
-  function load(){clear();notice('Loading benchmarks…');get('benchmarks',function(ok,data){if(!ok||!data||!Array.isArray(data.items)){clear();notice('Could not load benchmarks. Please try again.');actionsRow().appendChild(button('Try again',load,'button primary'));return;}linked=!!data.linked;items=data.items.filter(function(x){return x&&typeof x.id==='number'&&x.id>0&&typeof x.name==='string';});list();});}
+  function load(){clear();notice('Loading benchmarks…');get('benchmarks',function(ok,data){if(!ok||!data||!Array.isArray(data.items)){clear();failure('Could not load benchmarks','AimMod couldn’t reach AimMod Hub or its local service. Check your connection and try again.',load);return;}linked=!!data.linked;items=data.items.filter(function(x){return x&&typeof x.id==='number'&&x.id>0&&typeof x.name==='string';});list();});}
   root.AimModBenchmarks={enter:function(target,selectScenario){cancel();onScenario=typeof selectScenario==='function'?selectScenario:null;container=target;if(container)load();},resize:function(){if(container&&detailPage)drawDetail();},back:function(){if(container&&detailPage)list();},leave:function(){cancel();container=null;detailPage=null;}};
 })(window);
