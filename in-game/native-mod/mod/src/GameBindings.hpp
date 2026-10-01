@@ -203,6 +203,9 @@ namespace aimmod::game
 
     UClass* FindClass(const wchar_t* path);
     UFunction* FindFunction(const wchar_t* path);
+    // A loaded object by path, else the asset loaded through the asset
+    // registry (game thread only). Callers decide which paths are allowed.
+    UObject* FindOrLoadAsset(const std::wstring& path);
     // Live, non-template instances only.
     bool IsLiveInstance(UObject* object);
     std::string Narrow(const std::wstring& text);

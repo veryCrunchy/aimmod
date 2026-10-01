@@ -542,11 +542,11 @@ namespace aimmod
         if (now >= m_nextPackCheck && (!m_freeModels || m_freeModels->empty()))
         {
             m_nextPackCheck = now + 30;
+            // The game loads its Default packs only for the character menu: load
+            // them here when they are not resident (the game's own assets, fixed paths).
             const auto packs = std::wstring(STR("/Game/FirstPersonBP/Blueprints/Bodies/Characters/"));
-            UObject* modelPack = RC::Unreal::UObjectGlobals::StaticFindObject<UObject*>(
-                nullptr, nullptr, (packs + STR("CharacterModelPacks/Default_CharacterModelPack.Default_CharacterModelPack")).c_str());
-            UObject* skinPack = RC::Unreal::UObjectGlobals::StaticFindObject<UObject*>(
-                nullptr, nullptr, (packs + STR("CharacterSkinPacks/Default_CharacterSkinPack.Default_CharacterSkinPack")).c_str());
+            UObject* modelPack = FindOrLoadAsset(packs + STR("CharacterModelPacks/Default_CharacterModelPack.Default_CharacterModelPack"));
+            UObject* skinPack = FindOrLoadAsset(packs + STR("CharacterSkinPacks/Default_CharacterSkinPack.Default_CharacterSkinPack"));
             auto models = std::make_unique<std::set<std::string>>();
             auto skins = std::make_unique<std::set<std::string>>();
             std::vector<UObject*> assets;

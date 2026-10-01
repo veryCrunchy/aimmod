@@ -736,6 +736,75 @@ static void MatchPlayChecks()
     CHECK(FormatShot(shot) == "shot\t1790000000123\t4\t1\t2\t3\t1\t0\t0\t1\t9\t1\t0\n", "shot row layout");
 }
 
+// Cosmetics page preview frames: a synthetic capture pair. The "character" is
+// a dark, off-centre figure low in a black frame, like a badly lit capture.
+static PreviewPixels Solid(int w, int h, std::uint8_t r, std::uint8_t g, std::uint8_t b)
+{
+    PreviewPixels p;
+    p.width = w;
+    p.height = h;
+    p.rgba.resize(static_cast<std::size_t>(w) * h * 4);
+    for (std::size_t i = 0; i < p.rgba.size(); i += 4) p.rgba[i] = r, p.rgba[i + 1] = g, p.rgba[i + 2] = b, p.rgba[i + 3] = 255;
+    return p;
+}
+static void Paint(PreviewPixels& p, int x0, int y0, int x1, int y1, std::uint8_t r, std::uint8_t g, std::uint8_t b)
+{
+    for (int y = y0; y < y1; ++y)
+        for (int x = x0; x < x1; ++x)
+        {
+            std::uint8_t* o = &p.rgba[(static_cast<std::size_t>(y) * p.width + x) * 4];
+            o[0] = r, o[1] = g, o[2] = b;
+        }
+}
+static const std::uint8_t* PixelAt(const PreviewPixels& p, int x, int y) { return &p.rgba[(static_cast<std::size_t>(y) * p.width + x) * 4]; }
+
+static void PreviewComposeChecks()
+{
+    const int capture = PreviewSize * PreviewSupersample;
+    // Background normals decode the cleared G-buffer to one constant value.
+    PreviewPixels color = Solid(capture, capture, 0, 0, 0), normals = Solid(capture, capture, 54, 54, 54);
+    // Body 200x480 at the lower right, head above it; the colour is dark (a badly lit capture).
+    Paint(normals, 420, 260, 620, 740, 128, 128, 250);
+    Paint(normals, 470, 190, 570, 260, 200, 128, 200);
+    Paint(color, 420, 260, 620, 740, 40, 60, 50);
+    Paint(color, 470, 190, 570, 260, 60, 80, 70);
+    // Bloom/fog-like haze on the background colour must not matter: the mask comes from the normals.
+    Paint(color, 0, 0, 200, 200, 9, 9, 9);
+    const PreviewComposition c = ComposePreview(color, normals, PreviewSize);
+    CHECK(c.image.Valid() && c.image.width == PreviewSize && c.image.height == PreviewSize, "preview frame size");
+    CHECK(!c.empty && c.left == 420 && c.right == 619 && c.top == 190 && c.bottom == 739, "character bounds from the normal capture");
+    CHECK(c.gain > 4.0 && c.gain <= 5.0, "a dark capture is brightened (bounded gain)");
+    // The character is centred: find its columns/rows in the output (pixels far from the backdrop).
+    int minX = PreviewSize, maxX = -1, minY = PreviewSize, maxY = -1;
+    for (int y = 0; y < PreviewSize; ++y)
+        for (int x = 0; x < PreviewSize; ++x)
+        {
+            const std::uint8_t* p = PixelAt(c.image, x, y);
+            if (p[1] > 0x40) minX = std::min(minX, x), maxX = std::max(maxX, x), minY = std::min(minY, y), maxY = std::max(maxY, y);
+        }
+    CHECK(maxX > minX && std::abs((minX + maxX) - (PreviewSize - 1)) <= 4 && std::abs((minY + maxY) - (PreviewSize - 1)) <= 4, "character centred in the frame");
+    CHECK(maxY - minY > PreviewSize * 0.8 && maxY - minY < PreviewSize * 0.9, "character fills the frame height with a margin");
+    // Backdrop: the page's dark green-grey, never black, lighter towards the middle.
+    const std::uint8_t* corner = PixelAt(c.image, 0, 0);
+    CHECK(corner[0] >= 0x10 && corner[1] > corner[0] && corner[1] > corner[2] && corner[1] < 0x30, "backdrop is dark green-grey, not black");
+    CHECK(PixelAt(c.image, 40, PreviewSize / 2)[1] > corner[1], "backdrop is lighter towards the middle");
+    CHECK(PixelAt(c.image, 0, 0)[3] == 255, "frame is opaque");
+    // Turning the character (narrower silhouette) does not zoom: the height decides the scale.
+    PreviewPixels narrow = Solid(capture, capture, 54, 54, 54), narrowColor = Solid(capture, capture, 0, 0, 0);
+    Paint(narrow, 480, 190, 560, 740, 128, 128, 250);
+    Paint(narrowColor, 480, 190, 560, 740, 40, 60, 50);
+    const PreviewComposition turned = ComposePreview(narrowColor, narrow, PreviewSize);
+    int turnedMinY = PreviewSize, turnedMaxY = -1;
+    for (int y = 0; y < PreviewSize; ++y)
+        if (PixelAt(turned.image, PreviewSize / 2, y)[1] > 0x40) turnedMinY = std::min(turnedMinY, y), turnedMaxY = std::max(turnedMaxY, y);
+    CHECK(std::abs((turnedMaxY - turnedMinY) - (maxY - minY)) <= 2, "turning the character keeps its size");
+    // Nothing rendered: backdrop only, no shadow, no gain.
+    const PreviewComposition none = ComposePreview(Solid(capture, capture, 0, 0, 0), Solid(capture, capture, 54, 54, 54), PreviewSize);
+    CHECK(none.empty && none.gain == 1 && none.image.Valid() && PixelAt(none.image, 0, 0)[1] == corner[1], "an empty capture shows the backdrop");
+    CHECK(ComposePreview(PreviewPixels{}, normals, PreviewSize).empty, "missing capture is empty, not a crash");
+    CHECK(PreviewCameraDistance(95, 40, 30) > 450 && PreviewCameraDistance(95, 40, 30) < 560, "camera distance fits a standing character");
+}
+
 // Cosmetics page preview: request validation and where it may run.
 static void PreviewChecks()
 {
@@ -785,6 +854,7 @@ static void PreviewChecks()
     CHECK(!DecidePreview(r, {std::nullopt, false, false, false}).run, "unknown challenge state counts as a challenge");
     CHECK(!DecidePreview(r, {false, std::nullopt, false, false}).run, "unknown benchmark state counts as a benchmark");
     CHECK(FormatPreviewFrame(3, "preview-1.png", 384, 384) == "v=1\nseq=3\nfile=preview-1.png\nwidth=384\nheight=384\n", "frame record format");
+    PreviewComposeChecks();
 }
 
 int main(int argc, char** argv)

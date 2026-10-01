@@ -6,10 +6,13 @@
 // not in a challenge, benchmark, the scenario editor or loading, this spawns
 // the game's own character preview stage (CharacterSkinPreviewActorUserInterfaceBP_C)
 // far above the map, points its scene capture at an AimMod render target,
-// applies the requested Default-pack model and skin and the resolved catalog
-// parameters, and exports a PNG on every change. The service serves the PNG
-// to the page. Nothing else in the world is touched; the stage is destroyed
-// as soon as the request goes stale or the gate closes.
+// dresses its skeletal mesh with the requested Default-pack model and skin
+// (loaded from the game's Default packs) and the resolved catalog
+// parameters, lights it with its own short-range rig at a fixed exposure,
+// frames the camera on the character and, on every change, captures colour
+// and normals and composes the PNG the service serves (ComposePreview).
+// Nothing else in the world is touched; the stage is destroyed as soon as the
+// request goes stale or the gate closes.
 #include "GameBindings.hpp"
 
 #include <aimmod/CosmeticsPreview.hpp>
@@ -47,8 +50,18 @@ namespace aimmod
         void Teardown(const char* why);
         void ApplyLook(const PreviewRequest& request);
         void ApplyRotation(double yaw);
+        void Frame();
         bool Capture();
-        bool FreeLook(const std::string& model, const std::string& skin) const;
+        bool CaptureTo(std::uint8_t source, const std::wstring& file);
+
+        // The requested look, from the game's free Default packs only.
+        struct Look
+        {
+            UObject* mesh{};
+            UClass* anim{};
+            std::vector<UObject*> materials;
+        };
+        std::optional<Look> FreeLook(const std::string& model, const std::string& skin);
 
         game::Scene& m_scene;
         std::filesystem::path m_root, m_requestPath, m_framePath, m_frames;
@@ -58,9 +71,11 @@ namespace aimmod
         UClass* m_stageClass{};
 
         RC::Unreal::FWeakObjectPtr m_stage, m_target, m_capture, m_meshes, m_mesh;
+        std::vector<RC::Unreal::FWeakObjectPtr> m_lights; // key, fill, rim
         UObject* m_world{};
         double m_baseYaw{};
-        std::vector<UObject*> m_originals; // per material slot of the stage mesh
+        float m_cameraHome[3]{}; // the stage camera's own position: its front view
+        bool m_logPacks{true}, m_loggedEmpty{};
         std::string m_lookKey;
         double m_yaw{1e9};
         std::uint64_t m_seq{};

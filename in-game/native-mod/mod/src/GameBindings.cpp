@@ -4,8 +4,11 @@
 #include <Unreal/CoreUObject/UObject/FStrProperty.hpp>
 #include <Unreal/CoreUObject/UObject/UnrealType.hpp>
 #include <Unreal/Core/HAL/UnrealMemory.hpp>
+#include <Unreal/FAssetData.hpp>
 #include <Unreal/FProperty.hpp>
 #include <Unreal/Property/FEnumProperty.hpp>
+#include <Unreal/UAssetRegistry.hpp>
+#include <Unreal/UAssetRegistryHelpers.hpp>
 #include <Unreal/UClass.hpp>
 #include <Unreal/UFunction.hpp>
 #include <Unreal/UObject.hpp>
@@ -192,6 +195,22 @@ namespace aimmod::game
     UFunction* FindFunction(const wchar_t* path)
     {
         return UObjectGlobals::StaticFindObject<UFunction*>(nullptr, nullptr, path);
+    }
+
+    UObject* FindOrLoadAsset(const std::wstring& path)
+    {
+        if (path.empty()) return nullptr;
+        if (auto* found = UObjectGlobals::StaticFindObject<UObject*>(nullptr, nullptr, path.c_str())) return found;
+        auto* registry = static_cast<UAssetRegistry*>(UAssetRegistryHelpers::GetAssetRegistry().ObjectPointer);
+        if (!registry) return nullptr;
+        // A blueprint class ("/Game/X.X_C") is not in the registry: load its package by the asset, then find the class.
+        std::wstring asset = path;
+        if (asset.size() > 2 && asset.ends_with(L"_C")) asset.resize(asset.size() - 2);
+        FAssetData data = registry->GetAssetByObjectPath(FName(asset.c_str(), FNAME_Add));
+        if (!data.PackageName().GetComparisonIndex() && !data.ObjectPath().GetComparisonIndex()) return nullptr;
+        UObject* loaded = UAssetRegistryHelpers::GetAsset(data);
+        if (asset != path) return UObjectGlobals::StaticFindObject<UObject*>(nullptr, nullptr, path.c_str());
+        return loaded;
     }
 
     bool IsLiveInstance(UObject* object)
