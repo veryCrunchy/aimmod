@@ -6,7 +6,7 @@ function setup(){
   class El{constructor(tag){this.tag=tag;this.style={};this.children=[];this.attrs={};this.listeners={};this.value='';this.className='';}
     appendChild(c){c.parentNode=this;this.children.push(c);return c;}removeChild(c){this.children.splice(this.children.indexOf(c),1);}get firstChild(){return this.children[0];}
     setAttribute(k,v){this.attrs[k]=String(v);}getAttribute(k){return this.attrs[k];}addEventListener(e,f){(this.listeners[e]=this.listeners[e]||[]).push(f);}
-    getElementsByTagName(t){return walk(this).filter(e=>e!==this&&e.tag===t);}getContext(){return null;}focus(){}}
+    getElementsByTagName(t){return walk(this).filter(e=>e!==this&&e.tag===t);}getContext(){return null;}focus(){El.focused=this;}setSelectionRange(a){this.caret=a;}}
   function walk(e){return [e,...e.children.flatMap(walk)];}
   const requests=[],container=new El('section'),timers=[];
   class Xhr{constructor(){requests.push(this);this.headers={};}open(method,url){this.method=method;this.url=url;}setRequestHeader(k,v){this.headers[k]=v;}send(body){this.body=body;}abort(){this.aborted=true;}
@@ -17,7 +17,7 @@ function setup(){
   vm.runInContext(fs.readFileSync(path.join(__dirname,'multiplayer.js'),'utf8'),context);
   const api=window.AimModMultiplayer;
   return {api,container,requests,all:()=>walk(container),buttons:()=>walk(container).filter(e=>e.tag==='button'),text:()=>walk(container).map(e=>e.textContent||'').join('|'),
-    button:label=>walk(container).find(e=>e.tag==='button'&&e.textContent===label),last:()=>requests[requests.length-1]};
+    button:label=>walk(container).find(e=>e.tag==='button'&&e.textContent===label),last:()=>requests[requests.length-1],focused:()=>El.focused};
 }
 const base={v:1,now:1000,transport:{kind:'steam',online:true},simulation:false,capabilities:{invite:true,friends:true,gameLoad:true,gameStart:true},self:{id:'p1',name:'Synthetic One'},joining:null,
   friends:{source:'steam',items:[{id:'f1',name:'Synthetic Friend',status:'aimmod',detail:'Playing KovaaK’s with AimMod',joinable:false},{id:'f2',name:'Lobby Friend',status:'aimmod-lobby',detail:'In an AimMod lobby',joinable:true}]},
@@ -102,6 +102,23 @@ test('a missing player can download the content with progress, cancel and retry'
   assert.ok(s.text().includes('didn’t match'));s.button('Retry').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'download-retry'});
   s.api.leave();s.api.enter(s.container);s.requests[s.requests.length-1].finish(200,view({lobby:guest({view:{state:'ready',source:'workshop',total:40000,packed:20000,done:0,speed:0,files},conflicts:['Synthetic Scenario.sce']})}));
   assert.ok(s.text().includes('Steam Workshop'));assert.ok(s.text().includes('won’t replace your file'));assert.ok(!s.buttons().some(b=>/^Download/.test(b.textContent)),'no download over a conflicting file');
+});
+test('typing in a lobby search keeps focus and text when the view updates (keys never fall through to the game)',()=>{
+  const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view({lobby:lobby()}));
+  s.button('Edit').onclick();s.requests.find(r=>r.url==='/private/multiplayer?part=library').finish(200,{available:true,scenarios:[{name:'Synthetic Scenario',map:'synthetic_map',mapSource:'game',timeLimit:60},{name:'Other Scenario',map:'m',mapSource:'game',timeLimit:60}],maps:[],weapons:[],characters:[],presets:[]});
+  s.all().find(e=>e.tag==='button'&&e.className==='mp-pick').onclick();
+  let search=s.all().find(e=>e.tag==='input'&&e.attrs['data-draft']==='picker');assert.ok(search,'picker search is a tracked input');
+  search.onfocus();search.value='wasd';search.selectionStart=4;search.oninput();
+
+  // A ping update re-renders the page: deferred while typing, then focus and text come back.
+  const l2=lobby();l2.members[1].ping=77;
+
+  const before=s.requests.length;
+  s.api.resize();
+  const again=s.all().find(e=>e.tag==='input'&&e.attrs['data-draft']==='picker');
+  assert.ok(again,'the search survives a re-render');assert.equal(again.value,'wasd','typed text is kept');assert.equal(s.focused(),again,'focus returns to the rebuilt input');assert.equal(again.caret,4,'and the caret too');
+  assert.ok(s.text().includes('Other Scenario')===false,'the list stays filtered by the typed text');
+  assert.equal(before,s.requests.length);
 });
 test('leaving stops polling and ignores late answers',()=>{
   const s=setup();s.api.enter(s.container);s.api.leave();s.requests[0].finish(200,view());assert.equal(s.buttons().length,0);

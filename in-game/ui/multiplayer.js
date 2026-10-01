@@ -59,19 +59,20 @@
   function schedule(){clearTimeout(timer);if(container)timer=setTimeout(poll,fast()?250:1000);}
   function act(action,extra,done){
     var body={action:action};if(extra)for(var k in extra)if(Object.prototype.hasOwnProperty.call(extra,k))body[k]=extra[k];
-    xhr('POST','/multiplayer',body,function(ok,data){if(ok&&data&&data.v===1){accept(data);if(done)done(true);}else{toast(data&&data.error?data.error:'That didn’t work. Try again.');if(done)done(false);}});
+    xhr('POST','/multiplayer',body,function(ok,data){if(ok&&data&&data.v===1){accept(data,true);if(done)done(true);}else{toast(data&&data.error?data.error:'That didn’t work. Try again.');if(done)done(false);}});
   }
   function setting(key,value){var s={};s[key]=value;act('settings',{settings:s});}
   function loadLibrary(){if(libraryAsked)return;libraryAsked=true;xhr('GET','/multiplayer?part=library',null,function(ok,data){if(ok&&data){library=data;render();}else libraryAsked=false;});}
 
-  function accept(data){
+  function accept(data,force){
     view=data;receivedAt=Date.now();
     if(!view.lobby)editing=false;
     if(view.lobby&&!view.lobby.isHost)editing=false;
     // Re-render only when something visible changed (the server clock always moves).
     var copy={};for(var k in data)if(k!=='now')copy[k]=data[k];
     var key=JSON.stringify(copy)+'|'+editing+'|'+(picker||'')+'|'+(library?1:0);
-    if(key!==lastKey){lastKey=key;render();}
+    // While the player types, fold view changes (pings, chat) into one re-render every few seconds.
+    if(key!==lastKey){lastKey=key;var since=Date.now()-lastRender;if(focused&&!force&&since<3000){clearTimeout(deferred);deferred=setTimeout(function(){deferred=null;render();},3000-since);}else render();}
   }
   function toast(text){if(!toastNode)return;toastNode.textContent=text;toastNode.style.display='block';clearTimeout(toastTimer);toastTimer=setTimeout(function(){if(toastNode)toastNode.style.display='none';},3500);}
 
@@ -92,14 +93,33 @@
   }
   function multiplier(v){return F.number(v,2)+'×';}
   function field(input,hint,css){var box=F.field(input,hint,css);return box;}
-  function trackInput(input,key){input.value=drafts[key]||'';input.onfocus=function(){focused=key;};input.onblur=function(){if(focused===key)focused=null;};input.oninput=function(){drafts[key]=input.value;if(input.syncHint)input.syncHint();};return input;}
-  function restoreFocus(){if(!focused||!container)return;var inputs=container.getElementsByTagName?container.getElementsByTagName('input'):[];for(var i=0;i<inputs.length;i++)if(inputs[i].getAttribute('data-draft')===focused){try{inputs[i].focus();}catch(e){}return;}}
+  // Every text input here is rebuilt when the view re-renders. Its text, focus and caret
+  // are kept in drafts and put back afterwards; otherwise the next keys would go to the
+  // game instead (WASD and other bound keys seemed to "drop" in the lobby search).
+  var carets={},rendering=false,lastRender=0,deferred=null;
+  function trackInput(input,key){
+    input.value=drafts[key]||'';input.setAttribute('data-draft',key);
+    function remember(){drafts[key]=input.value;if(typeof input.selectionStart==='number')carets[key]=input.selectionStart;}
+    input.onfocus=function(){focused=key;};input.onblur=function(){if(focused===key&&!rendering)focused=null;};
+    input.oninput=function(){remember();if(input.syncHint)input.syncHint();if(input.onchanged)input.onchanged();};
+    input.onkeyup=function(){remember();};input.onclick=function(){remember();};
+    return input;
+  }
+  function restoreFocus(){
+    if(!focused||!container)return;var inputs=container.getElementsByTagName?container.getElementsByTagName('input'):[];
+    for(var i=0;i<inputs.length;i++)if(inputs[i].getAttribute('data-draft')===focused){
+      var input=inputs[i];try{input.focus();}catch(e){}
+      var at=carets[focused];if(typeof at==='number'&&input.setSelectionRange){try{input.setSelectionRange(at,at);}catch(e){}}
+      return;
+    }
+  }
 
   // ---- rendering -------------------------------------------------------
   function clear(){while(container.firstChild)container.removeChild(container.firstChild);countNodes=[];}
   function renderError(){if(!container)return;clear();var p=node('div','panel mp-card');add(p,node('h2','','Multiplayer'),node('p','subtle','AimMod can’t reach its local service right now. It keeps retrying.'));container.appendChild(p);}
   function render(){
     if(!container||!view)return;
+    rendering=true;lastRender=Date.now();clearTimeout(deferred);deferred=null;
     clear();
     var page=node('div','mp-page');container.appendChild(page);
     if(view.notice)page.appendChild(banner(view.notice.kind==='error'?'warn':'info',view.notice.text,true));
@@ -112,7 +132,7 @@
     else lobbyRoom(page,l);
     if(view.invites&&view.invites.length)container.appendChild(inviteModal(view.invites[0]));
     toastNode=node('div','mp-toast');toastNode.setAttribute('role','status');container.appendChild(toastNode);
-    restoreFocus();tick();
+    restoreFocus();rendering=false;tick();
   }
   function banner(kind,text,dismiss){
     var b=node('div','mp-banner '+kind);b.setAttribute('role','status');
@@ -247,6 +267,8 @@
   }
   function lobbyRoom(page,lobby){
     connectionBanners(page,lobby);
+    var mine=member(lobby.self);
+    if(lobby.readyCheck&&!lobby.isHost&&mine&&mine.role==='player'&&!mine.ready)page.appendChild(banner('warn',safe(nameOf(lobby.hostId))+' is starting. Ready up below'+(view.hotkey?', or press '+view.hotkey+' in game':'')+'.'));
     page.appendChild(lobbyHead(lobby));
     var row=node('div','mp-row');page.appendChild(row);
     var main=node('div','mp-col mp-main'),side=node('div','mp-col mp-side');row.appendChild(main);row.appendChild(side);
@@ -302,7 +324,11 @@
       add(text,node('strong','',blockers.length?'Not ready to start':'Everyone’s ready'),blockers.length?blockerList(blockers):node('span','subtle','Starts a '+F.number(lobby.settings.countdown,0)+'-second countdown for everyone.'));
       bar.appendChild(text);
       var start=button('Start match',function(){act('start');},'primary mp-big');if(blockers.length)start.disabled=true;
-      bar.appendChild(actions(start));
+      // Only readiness missing: ping everyone, in game too (they can press the hotkey).
+      var onlyReady=blockers.length>0&&blockers.every(function(b){return b.code==='ready';});
+      var ask=onlyReady?button(lobby.readyCheck?'Asked to ready up':'Ask everyone to ready up',function(){act('ready-check',null,function(ok){if(ok)toast('Everyone who isn’t ready got a notice.');});},'mp-big'):null;
+      if(ask&&lobby.readyCheck)ask.disabled=true;
+      bar.appendChild(actions(ask,start));
     }else if(me.role==='spectator'){
       add(text,node('strong','','You’re watching'),node('span','subtle','Spectators see live scores and results.'));bar.appendChild(text);
       if(lobby.settings.spectators)bar.appendChild(actions(button('Play instead',function(){act('role',{spectator:false});},'compact')));
@@ -456,8 +482,9 @@
     var box=node('div','mp-picker');
     if(!library){box.appendChild(node('div','mp-muted','Loading your library…'));return box;}
     if(!library.available){box.appendChild(node('div','mp-muted','AimMod couldn’t find your KovaaK’s folder.'));return box;}
-    var input=node('input','mp-picker-search');input.value=pickerQuery;input.setAttribute('autocomplete','off');
-    input.oninput=function(){pickerQuery=input.value;if(input.syncHint)input.syncHint();fill();};
+    drafts.picker=pickerQuery;
+    var input=trackInput(node('input','mp-picker-search'),'picker');input.setAttribute('autocomplete','off');
+    input.onchanged=function(){pickerQuery=input.value;fill();};
     box.appendChild(field(input,kind==='scenario'?'Find a scenario':kind==='map'?'Find a map':'Find a profile'));
     var list=node('div','mp-picker-list');box.appendChild(list);
     function items(){var src=kind==='scenario'?library.scenarios:kind==='map'?library.maps:kind==='weapon'?library.weapons:library.characters;return (src||[]).map(function(x){return typeof x==='string'?{name:x}:x;});}
@@ -597,6 +624,6 @@
   }
 
   function enter(element){leave();container=element;generation++;if(!container)return;clear();var p=node('div','panel mp-card');p.appendChild(node('p','subtle','Loading multiplayer…'));container.appendChild(p);lastKey='';poll();}
-  function leave(){generation++;clearTimeout(timer);clearTimeout(ticker);timer=null;ticker=null;inflight=false;again=false;if(container)clear();container=null;toastNode=null;}
+  function leave(){generation++;clearTimeout(deferred);deferred=null;clearTimeout(timer);clearTimeout(ticker);timer=null;ticker=null;inflight=false;again=false;if(container)clear();container=null;toastNode=null;}
   root.AimModMultiplayer={enter:enter,leave:leave,resize:function(){if(container&&view)render();},_state:function(){return {view:view,editing:editing,picker:picker};}};
 })(window);
