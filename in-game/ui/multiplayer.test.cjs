@@ -244,7 +244,10 @@ test('the curated set shows as finish swatches in its own colours, with no comin
   assert.equal(s.all().filter(e=>e.tag==='canvas'&&e.className==='mp-cos-preview').length,4,'one swatch per item');
   // Try-on is for what the preview shows (tints and accessories); weapon finishes are equipped directly.
   assert.equal(s.all().filter(e=>e.tag==='button'&&e.textContent==='Preview').length,2);
-  // Show others' cosmetics stays: the current choice is selected, and changes post.
+  // Show others' cosmetics stays: three buttons in their own group, the current choice selected, and changes post.
+  const show=s.all().find(e=>/mp-cos-show/.test(e.className||''));
+  assert.ok(show&&show.children.length===3&&show.children.map(b=>b.textContent).join()==='All,Friends,Off','the show-others control has its buttons');
+  assert.ok(show.children[1].className.includes('primary'),'the current choice is selected');
   s.button('Off').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'cosmetic-view',show:'off'});
   s.button('All').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'cosmetic-view',show:'all'});
   s.button('Remove').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'cosmetic-remove',id:'tint-gold'});

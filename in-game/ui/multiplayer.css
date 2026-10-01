@@ -277,6 +277,7 @@
 .mp-h2h .won{color:#27e4a1}.mp-h2h .lost{color:#ff8fa3}.mp-h2h .sep{color:#7f968a;margin:0 5px}
 /* Cosmetics */
 .mp-cos-setting{padding:6px 20px;margin-bottom:16px}
+.mp-cos-setting .mp-cos-show{flex-shrink:0;min-width:210px;max-width:none}
 .mp-cos-group{font-size:14px;font-weight:600;margin:6px 0 10px}
 .mp-cos-cell{width:25%}
 .mp-cos-art{display:block;height:120px;background:#121a17;text-align:center}

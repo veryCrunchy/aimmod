@@ -594,7 +594,9 @@
     var d=cosmeticsData;
     if(!d){page.appendChild(add(node('div','panel mp-card'),node('p','subtle','Loading the catalog…')));return;}
     var setting=node('div','panel mp-card mp-cos-setting');
-    setting.appendChild(settingRow('Show others’ cosmetics','',segmented([{id:'all',label:'All'},{id:'friends',label:'Friends'},{id:'off',label:'Off'}],d.show||'all',function(id){cosmeticAct('cosmetic-view',{show:id});},false,'show others')));
+    // Gameface lays an empty-note row out without its control: keep a note, and the buttons in their own non-shrinking group.
+    var showOthers=segmented([{id:'all',label:'All'},{id:'friends',label:'Friends'},{id:'off',label:'Off'}],d.show||'all',function(id){cosmeticAct('cosmetic-view',{show:id});},false,'show others');showOthers.className+=' mp-cos-show';
+    setting.appendChild(settingRow('Show others’ cosmetics','In AimMod matches.',showOthers));
     page.appendChild(setting);
     // No catalog yet, or only items still being made: say what's coming instead of an empty page.
     if(!d.available||!(d.items||[]).length){var soon=node('div','panel mp-cos-soon');add(soon,add(node('div','mp-cos-soon-art'),swatch({kind:'avatar_tint',swatch:['#27cb95','#eff3f1','#959e99']}),swatch({kind:'avatar_tint',swatch:['#f0c675','#3e3b37','#f9e2aa'],shine:0.9}),swatch({kind:'weapon_finish',swatch:['#7ccfff','#6fbcee']})),
