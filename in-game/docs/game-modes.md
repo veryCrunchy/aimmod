@@ -1322,7 +1322,11 @@ preset):
   `Law Bringer`, `Stud Gun`, `Spike`, ..., and `Blank` for none). Third-person
   models are `WeaponDeveloperSettings`' `WeaponMeshViewModels` (`AK47`, `M4`,
   `SMG`, `Pistol`, `Six Shooter`, `Bolt Action Sniper`, ...). The CS player
-  profile sets `HideWeapon=false`; avatars keep `HideWeapon=true`.
+  profile sets `HideWeapon=false`; avatars keep `HideWeapon=true`. With
+  KovaaK's own "Show Weapon" setting off, the first live test still showed no
+  arms or gun: that setting hides the whole view model. AimModCore now shows
+  the weapon in every AimMod match regardless (in memory only; the setting is
+  untouched outside matches).
 - **Profiles** (`CsRules`, `CsLook`): every CS item is a hitscan profile with
   the host's damage and fire rate, a viewmodel by class, the CS2 magazine and
   reload, and a view kick (`MaxRecoilUp`/`Horiz`, auto reset). Spread stays 0

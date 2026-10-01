@@ -616,6 +616,14 @@ bomb	<dropped|planted|defused>	<x>	<y>	<z>	<explodes at, local unix ms, 0>	<defu
   slots 2 and 3 are filled the same way (the bomb only for its carrier), and
   `CsGear` takes over the weapon in hand (below); without them the slots stay
   as the scenario has them.
+- **Weapon shown in matches:** KovaaK's "Show Weapon" setting off
+  (`weaponsettings.ini` `WeaponHidden=true`) hides the whole first-person
+  view model, arms and weapon. While the round state is engaged, each of the
+  player's weapons gets `WeaponSettingsNative.bWeaponHidden` (and the ADS
+  copy) cleared in memory, checked every 0.5 s, and the view model is
+  refreshed (`FPSPlayer_WeaponComponentActor:UpdateViewModel(false,
+  current weapon)`). Nothing is saved; outside matches the setting applies
+  as before.
 - **CS gear** (`CsGear`, `core` `CsGear.hpp`; only with a CS loadout):
   - Switching: KovaaK's own `Weapon1`..`Weapon4` keys switch the slots. The
     mouse wheel (`MouseScrollDown` next, `MouseScrollUp` previous slot with a
