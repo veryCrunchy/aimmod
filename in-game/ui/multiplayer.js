@@ -467,7 +467,42 @@
   // Cosmetics: curated catalog items, shown only in AimMod matches ------------
   var cosmeticsOpen=false,cosmeticsData=null;
   var COSMETIC_GROUPS=[['Tints and patterns',['avatar_tint','avatar_pattern','player_model']],['Weapon finishes',['weapon_finish','weapon_pattern','weapon_model','reload_animation']],['Accessories',['accessory']]];
-  function openCosmetics(){cosmeticsOpen=true;mapsOpen=false;historyOpen=false;loadCosmetics();render();}
+  function openCosmetics(){cosmeticsOpen=true;mapsOpen=false;historyOpen=false;loadCosmetics();render();previewTick();}
+  // Live character preview: while this page is open and visible, a heartbeat asks
+  // AimModCore to render the game's own preview stage (never during challenges);
+  // the newest PNG is shown and dragging turns the character. The heartbeat
+  // stops when the page closes or the workspace hides, and the request expires.
+  var preview={yaw:0,frame:0,img:null,note:null,timer:null,drag:null,item:null,sent:0,fastUntil:0,open:false};
+  function previewUrl(){return path()+'/cosmetic-preview.png?f='+preview.frame;}
+  function previewShow(){if(!preview.img)return;if(preview.frame>0){preview.img.src=previewUrl();preview.img.style.display='block';if(preview.note)preview.note.style.display='none';}else{preview.img.style.display='none';if(preview.note)preview.note.style.display='block';}}
+  function previewSend(){
+    preview.sent=Date.now();preview.open=true;var body={open:true,yaw:Math.round(preview.yaw*10)/10};if(preview.item)body.item=preview.item;
+    xhr('POST','/cosmetic-preview',body,function(ok,data){if(ok&&data&&typeof data.frame==='number'&&data.frame!==preview.frame){preview.frame=data.frame;previewShow();}});
+  }
+  function previewTick(){
+    clearTimeout(preview.timer);preview.timer=null;
+    if(!container||!cosmeticsOpen){previewStop();return;}
+    previewSend();preview.timer=setTimeout(previewTick,Date.now()<preview.fastUntil?250:1000);
+  }
+  function previewStop(){
+    clearTimeout(preview.timer);preview.timer=null;preview.drag=null;preview.item=null;preview.img=null;preview.note=null;
+    if(!preview.open)return;preview.open=false;
+    var x=new root.XMLHttpRequest();x.open('POST',path()+'/cosmetic-preview',true);x.setRequestHeader('X-AimMod-UI','1');x.setRequestHeader('Content-Type','application/json');x.send(JSON.stringify({open:false}));
+  }
+  function previewTurn(clientX){
+    if(!preview.drag)return;var yaw=preview.drag.yaw+(clientX-preview.drag.x)*0.5;yaw=((yaw+180)%360+360)%360-180;preview.yaw=yaw;preview.fastUntil=Date.now()+2000;
+    if(Date.now()-preview.sent>=100)previewSend();
+  }
+  function previewPanel(){
+    var pv=node('div','panel mp-card mp-cos-live');
+    var img=node('img','mp-cos-live-img');img.setAttribute('alt','Your character');img.draggable=false;
+    var note=node('p','mp-note','Your character appears here while this page is open. It isn’t shown during challenges, benchmarks or the scenario editor.');
+    img.onmousedown=function(e){preview.drag={x:e.clientX,yaw:preview.yaw};if(e.preventDefault)e.preventDefault();};
+    preview.img=img;preview.note=note;previewShow();
+    add(pv,node('h3','mp-cos-group','Preview'),img,note,node('p','mp-note','Drag to turn. The game renders it off to the side; your scenario doesn’t change.'));
+    return pv;
+  }
+  if(root.addEventListener){root.addEventListener('mousemove',function(e){previewTurn(e.clientX);});root.addEventListener('mouseup',function(e){if(preview.drag){previewTurn(e.clientX);preview.drag=null;previewSend();}});}
   function loadCosmetics(){xhr('GET','/multiplayer?part=cosmetics',null,function(ok,data){if(ok&&data){cosmeticsData=data;if(cosmeticsOpen)render();}});}
   function cosmeticAct(action,extra){act(action,extra,function(ok){if(ok)loadCosmetics();});}
   function swatch(item){
@@ -486,6 +521,7 @@
     add(t,node('div','eyebrow','Multiplayer'),node('h2','','Cosmetics'),node('p','subtle','Tints, finishes and accessories made by the AimMod team. Others see the ids you pick, never files.'));
     add(head,t,actions(button('Back',function(){cosmeticsOpen=false;render();},'primary')));page.appendChild(head);
     page.appendChild(banner('info','Cosmetics only show in AimMod matches and while spectating them. Normal scenarios, challenges, benchmarks and ranked runs always look like the base game.'));
+    page.appendChild(previewPanel());
     var d=cosmeticsData;
     if(!d){page.appendChild(add(node('div','panel mp-card'),node('p','subtle','Loading the catalog…')));return;}
     var setting=node('div','panel mp-card mp-cos-setting');
@@ -501,7 +537,8 @@
         card.appendChild(add(node('div','mp-cos-art'),swatch(i)));
         var info=node('div','mp-port-info');add(info,add(node('div','mp-port-title'),node('strong','',safe(i.name,i.id)),i.equipped?chip('Equipped','mint'):null),node('span','mp-port-facts',(i.models&&i.models.length?i.models.join(', ')+' · ':'')+'Version '+i.version));
         card.appendChild(info);
-        card.appendChild(actions(i.equipped?button('Remove',function(){cosmeticAct('cosmetic-remove',{id:i.id});},'compact quiet'):button('Equip',function(){cosmeticAct('cosmetic-equip',{id:i.id});},'compact primary')));
+        var tryOn=!i.equipped&&(i.kind==='avatar_tint'||i.kind==='avatar_pattern'||i.kind==='player_model')?button(preview.item===i.id?'Previewing':'Preview',function(){preview.item=preview.item===i.id?null:i.id;preview.fastUntil=Date.now()+2000;previewSend();render();},'compact quiet'):null;
+        card.appendChild(actions(i.equipped?button('Remove',function(){cosmeticAct('cosmetic-remove',{id:i.id});},'compact quiet'):button('Equip',function(){cosmeticAct('cosmetic-equip',{id:i.id});},'compact primary'),tryOn));
         grid.appendChild(cell);
       });
     });
@@ -1151,6 +1188,6 @@
   }
 
   function enter(element){leave();container=element;generation++;if(!container)return;clear();var p=node('div','panel mp-card mp-joining');add(p,node('div','mp-spinner'),node('p','subtle','Loading multiplayer…'));container.appendChild(p);lastKey='';poll();}
-  function leave(){generation++;clearTimeout(deferred);deferred=null;clearTimeout(timer);clearTimeout(ticker);timer=null;ticker=null;inflight=false;again=false;if(container)clear();container=null;toastNode=null;}
+  function leave(){previewStop();generation++;clearTimeout(deferred);deferred=null;clearTimeout(timer);clearTimeout(ticker);timer=null;ticker=null;inflight=false;again=false;if(container)clear();container=null;toastNode=null;}
   root.AimModMultiplayer={enter:enter,leave:leave,resize:function(){if(container&&view)render();},_state:function(){return {view:view,editing:editing,picker:picker};}};
 })(window);

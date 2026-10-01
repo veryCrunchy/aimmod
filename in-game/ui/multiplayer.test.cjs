@@ -192,6 +192,24 @@ test('the cosmetics page lists catalog items only, equips by id and sets who to 
   s.button('Equip').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'cosmetic-equip',id:'meso-tint-ember'});
   s.button('Friends').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'cosmetic-view',show:'friends'});
 });
+test('the cosmetics preview heartbeats only while the page is open, shows the newest frame and stops on leave',()=>{
+  const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view());
+  const previews=()=>s.requests.filter(r=>r.url==='/private/cosmetic-preview');
+  assert.equal(previews().length,0,'no preview request before the page opens');
+  s.button('Cosmetics').onclick();
+  const first=previews()[0];assert.ok(first,'opening the page starts the preview');
+  assert.equal(first.method,'POST');assert.equal(first.headers['X-AimMod-UI'],'1');assert.deepEqual(JSON.parse(first.body),{open:true,yaw:0});
+  s.requests.find(r=>r.url==='/private/multiplayer?part=cosmetics').finish(200,{available:true,problem:null,version:1,show:'all',unavailable:0,
+    items:[{id:'meso-tint-ember',version:1,kind:'avatar_tint',name:'Ember',models:['Meso'],color:[0.85,0.22,0.05],equipped:false}]});
+  const img=()=>s.all().find(e=>e.tag==='img'&&/mp-cos-live-img/.test(e.className));
+  assert.equal(img().style.display,'none','no frame yet: the note shows instead');
+  first.finish(200,{frame:3});
+  assert.equal(img().src,'/private/cosmetic-preview.png?f=3');assert.equal(img().style.display,'block');
+  s.button('Preview').onclick();assert.deepEqual(JSON.parse(previews().at(-1).body),{open:true,yaw:0,item:'meso-tint-ember'},'trying an item on sends its id only');
+  assert.ok(!previews().some(r=>/file|path|png/i.test(r.body)),'the preview never sends files or paths');
+  s.api.leave();
+  assert.deepEqual(JSON.parse(previews().at(-1).body),{open:false},'leaving the page (or hiding the workspace) ends the preview');
+});
 test('the map library lists ports with size, Shift and Workshop state, and installs or hosts them',()=>{
   const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view());
   s.button('Map library').onclick();const ask=s.requests.find(r=>r.url==='/private/multiplayer?part=maps');assert.ok(ask,'the library asks for ports');

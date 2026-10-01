@@ -312,3 +312,5 @@
 .mp-prefs.folded{padding-bottom:16px}.mp-prefs .panel-head .actions{margin:0 0 0 12px}.mp-prefs .panel-head .actions>.button{margin:0}.mp-prefs .panel-head p{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mp-prefs-warn{margin:10px 20px 0}
 .mp-rejoin .actions>.button+.button,.mp-watch .actions>.button+.button{margin-left:8px}.mp-error h2{margin-bottom:8px}
 .mp-live .panel-head .actions>.button{margin:0}
+/* Cosmetics: live character preview (PNG from AimModCore, shown only while the page is open) */
+.mp-cos-live{margin-bottom:16px}.mp-cos-live-img{display:none;width:384px;height:384px;max-width:100%;margin:6px 0 4px;border-radius:8px;background:#101814;border:1px solid #22302a;cursor:pointer}
