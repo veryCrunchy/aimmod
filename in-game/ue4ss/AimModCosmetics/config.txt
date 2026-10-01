@@ -1,0 +1,23 @@
+# AimModCosmetics. Every feature is off by default.
+# Lines are key=value; # or ; starts a comment. Booleans: 1/0, true/false.
+
+# Master switch.
+enabled=0
+
+# Read-only probe: logs character mesh components, material slots, material
+# parameter names, the first-person viewmodel and loaded skin data to
+# UE4SS.log and %LOCALAPPDATA%/AimMod/KovaaksNative/cosmetics-probe.txt.
+probe=0
+probe_limit=12
+
+# Prototype: apply items from the curated AimMod catalog. Takes effect only
+# inside an AimMod match or spectate session (service session marker plus an
+# AimMod match scenario in freeplay); never in normal scenarios, challenges,
+# benchmarks or the editor. There is no setting for your own files.
+cosmetics=0
+# Team testing only: catalog ids (see Scripts/CosmeticsCatalog.lua).
+avatar_item=
+weapon_item=
+# Team testing only: allow items still marked draft.
+allow_drafts=0
+interval_ms=1000

@@ -18,6 +18,9 @@ override its standard paths. Never put runtime data in source control.
 - DiscordPresence.lua: hands KovaaK's own Discord presence to the worker and back.
 - Native worker: local/Hub history, encrypted account linking, coaching, replay
   loading, snapshots, Discord presence and embedded UI resources.
+- AimModCosmetics (separate mod, off by default): read-only cosmetics probe
+  and a curated-catalog prototype that applies only inside AimMod matches.
+  See [cosmetics](../docs/cosmetics.md).
 
 The local server binds only a dynamic IPv4 loopback port. Routes require a
 random per-process capability path and expose no general file access. Account
