@@ -62,9 +62,12 @@
   // Names partly in a script the game font lacks (emoji, CJK) keep the part it can draw; only names with
   // nothing drawable fall back (a Steam name of only such characters showed as "Friend" / "?").
   function safe(text,fallback){var t=typeof text==='string'?text:'',out=F.safeText(t,'');if(out)return out;
-    var part=t.replace(/[^\u0000-\u024F\u0370-\u03FF\u0400-\u04FF\u1E00-\u1EFF\u2010-\u2027\u2030-\u205E]/g,'').replace(/\s+/g,' ').replace(/^[\s_.\-|()\[\]]+|[\s_.\-|()\[\]]+$/g,'');
-    return /[0-9A-Za-z\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF]/.test(part)?part:fallback||'Player';}
-  function initials(name){var parts=safe(name,'?').replace(/[_.()\[\]-]+/g,' ').trim().split(/\s+/);var a=(parts[0]||'?').charAt(0),b=parts.length>1?parts[parts.length-1].charAt(0):(parts[0]||'').charAt(1);return (a+(b||'')).toUpperCase();}
+    var part=t.replace(/[^\u0000-\u024F\u0370-\u03FF\u0400-\u04FF\u1E00-\u1EFF\u2010-\u2027\u2030-\u205E]/g,'').replace(/[\u0000-\u001F\u007F]/g,'').replace(/\s+/g,' ').trim();
+    // Letters left: drop the decoration around them. Only punctuation left (like "-.-"): keep it as it is.
+    if(/[0-9A-Za-z\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF]/.test(part))return part.replace(/^[\s_.\-|()\[\]]+|[\s_.\-|()\[\]]+$/g,'');
+    return part||fallback||'Player';}
+  // Up to two initials; a name of only punctuation ("-.-") shows its first two characters instead of "?".
+  function initials(name){var clean=safe(name,'?'),parts=clean.replace(/[_.()\[\]-]+/g,' ').trim().split(/\s+/);if(!parts[0])return clean.replace(/\s+/g,'').slice(0,2)||'?';var a=(parts[0]||'?').charAt(0),b=parts.length>1?parts[parts.length-1].charAt(0):(parts[0]||'').charAt(1);return (a+(b||'')).toUpperCase();}
   function tone(name){var h=0,s=String(name||'');for(var i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))%9973;return AVATAR[h%AVATAR.length];}
   // Initials in a coloured circle; with a Steam picture link (the service's /avatar/<id>.png) the picture
   // covers them once it loads, at the same size. Pictures seen before show at once, so re-renders don't flash.

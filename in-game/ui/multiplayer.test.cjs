@@ -379,3 +379,13 @@ test('the lobby lists the match keybinds and names the ones that differ; ready a
   s.api.leave();s.api.enter(s.container);s.requests[s.requests.length-1].finish(200,view({lobby:lobby({binds:{rows:binds.rows.filter(r=>r.standard),issues:[]}})}));
   assert.ok(!s.text().includes('usually'),'standard binds: just the row');
 });
+test('names of only punctuation keep their characters, in the name and the circle',()=>{
+  const s=setup();s.api.enter(s.container);
+  s.requests[0].finish(200,view({friends:{source:'steam',items:[{id:'f9',name:'-.-',status:'online',detail:'Online',joinable:false},{id:'f10',name:'\u30c4-.-\u30c4',status:'online',detail:'Online',joinable:false},
+    {id:'f11',name:'\u2605\u2605',status:'online',detail:'Online',joinable:false}]}}));
+  const t=s.text();
+  assert.equal(t.split('|-.-|').length-1,2,'"-.-" shows as "-.-", also when wrapped in symbols the font lacks');
+  const circles=s.all().filter(e=>/^mp-avatar\b/.test(e.className)).map(e=>e.textContent);
+  assert.equal(circles.filter(c=>c==='-.').length,2,'the circle shows the first two characters, not "?"');
+  assert.ok(t.includes('|Friend|')&&circles.includes('?'),'a name with nothing drawable still falls back (its Steam picture covers the circle)');
+});

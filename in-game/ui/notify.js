@@ -52,7 +52,7 @@
   }
   // Who the notice is about: initials in a circle, covered by their Steam picture once it loads.
   var who=null,whoImg=null,whoUrl=null,pictures={},TONES=['mint','cyan','amber','violet','rose'];
-  function initials(name){var parts=String(name||'?').replace(/[_.()\[\]-]+/g,' ').trim().split(/\s+/);var a=(parts[0]||'?').charAt(0),b=parts.length>1?parts[parts.length-1].charAt(0):(parts[0]||'').charAt(1);return (a+(b||'')).toUpperCase();}
+  function initials(name){var clean=String(name||'?'),parts=clean.replace(/[_.()\[\]-]+/g,' ').trim().split(/\s+/);if(!parts[0])return clean.replace(/\s+/g,'').slice(0,2)||'?';var a=(parts[0]||'?').charAt(0),b=parts.length>1?parts[parts.length-1].charAt(0):(parts[0]||'').charAt(1);return (a+(b||'')).toUpperCase();}
   function tone(name){var h=0,s=String(name||'');for(var i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))%9973;return TONES[h%TONES.length];}
   function person(p){var a=node('div','who '+tone(p.name),initials(p.name));a.setAttribute('aria-hidden','true');return a;}
   function picture(url){

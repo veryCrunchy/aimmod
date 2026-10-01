@@ -113,3 +113,7 @@ test('a notice can carry a short extra line, such as a keybind that differs',()=
   const k=setup();k.render({version:1,active:true,id:'keys-m1',kind:'info',eyebrow:'AimMod · Keybinds',title:'Walk is on Q here (usually Shift)',body:'',key:'F7'});
   assert.equal(k.box.all().find(e=>e.className==='brand').textContent,'AIMMOD · KEYBINDS');assert.ok(!k.box.all().some(e=>e.className==='note'));
 });
+test('a sender named only with punctuation keeps those characters in the circle',()=>{
+  const n=live();n.render({version:1,active:true,id:'inv-inv-1',kind:'invite',title:'-.- invited you',body:'',layout:'toast',interactive:true,actions:[{label:'Join',action:'accept-invite',id:'inv-1'}],person:{name:'-.-',avatar:null}});
+  assert.equal(n.box.all().find(e=>/^who /.test(e.className)).textContent,'-.');
+});
