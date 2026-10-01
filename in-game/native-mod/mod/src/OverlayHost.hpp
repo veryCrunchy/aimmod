@@ -47,6 +47,7 @@ namespace aimmod
         bool UiOnly(UObject* player);
         bool GameOnly(UObject* player);
         void HidePauseMenu(UObject* player, UObject* menu);
+        void ForwardPointer(double now);
         UObject* PauseMenu(UObject* player) const;
         bool CursorShown(UObject* player) const;
         std::string Name(UObject* object) const;
@@ -63,7 +64,12 @@ namespace aimmod
         bool m_layoutFull{}, m_layoutSet{}, m_fresh{};
         bool m_blocking{}, m_savedBlock{};
         int m_failures{}, m_resets{};
-        double m_nextCreate{}, m_nextCheck{}, m_nextInput{}, m_nextFocus{};
+        double m_nextCreate{}, m_nextCheck{}, m_nextInput{}, m_nextFocus{}, m_escapeAt{-10.0}, m_nextPointer{};
+        // Pointer fallback: the last position and button sent, and counts for the log.
+        long m_pointerX{-1}, m_pointerY{-1};
+        bool m_pointerDown{};
+        int m_pointerMoves{}, m_pointerPresses{};
+        double m_nextPointerLog{};
         std::uint64_t m_lastVersion{~0ull};
     };
 } // namespace aimmod

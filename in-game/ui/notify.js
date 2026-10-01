@@ -26,7 +26,7 @@
     strips=node('div','strips');card=node('div','toast-slot');box.appendChild(strips);box.appendChild(card);
   }
   function render(n){
-    boards(n);cs(n);parts();
+    boards(n);cs(n);parts();showDebug(!!(n&&n.cs&&n.cs.buyOpen));
     var body=root.document.body,page=root.document.documentElement;
     function input(on){if(body)body.className=on?'input':'';if(page)page.className=on?'input':'';}
     if(!n||(!n.active&&!n.badge&&!n.duel&&!n.combat&&!n.cs)){box.className='';input(false);clear(strips);clear(card);stripKey=toastKey='';return;}
@@ -158,6 +158,52 @@
   }
   // A missed poll keeps what is on screen, so a button doesn't vanish under the cursor; eight in a row (2 s) clear it.
   function miss(){misses++;if(misses>=8)render(null);}
+  // Pointer fallback: while the buy menu holds input AimModCore sends the cursor (game window
+  // client pixels) and the left button as AimModPointer(x, y, down, width, height). The button
+  // under it gets a hover state and is pressed on release, like a click, unless Gameface's own
+  // mouse events are arriving (then they do the clicking). Both are counted for the log.
+  var pointerState={hover:null,pressed:null,down:false},counts={gfMove:0,gfDown:0,gfClick:0,amMove:0,amDown:0,amClick:0},nativeDownAt=0,buying=false,debugNode=null,reportedAt=0,reported='';
+  function hasClass(el,c){return (' '+el.className+' ').indexOf(' '+c+' ')>=0;}
+  function addClass(el,c){if(!hasClass(el,c))el.className=(el.className?el.className+' ':'')+c;}
+  function dropClass(el,c){el.className=(' '+el.className+' ').replace(' '+c+' ',' ').replace(/^\s+|\s+$/g,'');}
+  function buttons(el,out){if(!el||!el.children)return out;for(var i=0;i<el.children.length;i++){var c=el.children[i];if(String(c.tagName).toUpperCase()==='BUTTON')out.push(c);buttons(c,out);}return out;}
+  function buttonAt(x,y){
+    var list=buttons(box,buttons(csRoot,[]));
+    for(var i=list.length-1;i>=0;i--){var r=list[i].getBoundingClientRect&&list[i].getBoundingClientRect();if(r&&x>=r.left&&x<r.right&&y>=r.top&&y<r.bottom)return list[i];}
+    return null;
+  }
+  function pointer(x,y,down,width,height){
+    counts.amMove++;
+    var px=x*((root.innerWidth||width)/(width||1)),py=y*((root.innerHeight||height)/(height||1));
+    var el=buttonAt(px,py);
+    if(el!==pointerState.hover){if(pointerState.hover)dropClass(pointerState.hover,'hover');pointerState.hover=el;if(el)addClass(el,'hover');}
+    // The HUD redraws when its data changes, so the press is remembered by the button's class and label.
+    if(down&&!pointerState.down){counts.amDown++;pointerState.pressed=el?el.className.replace(' hover','')+'|'+el.textContent:null;}
+    if(!down&&pointerState.down){
+      var target=pointerState.pressed;pointerState.pressed=null;
+      // Gameface delivered this click itself: don't press the button twice.
+      if(target&&el&&target===el.className.replace(' hover','')+'|'+el.textContent&&!el.disabled&&Date.now()-nativeDownAt>800&&typeof el.onclick==='function'){counts.amClick++;el.onclick();}
+    }
+    pointerState.down=!!down;debug();
+  }
+  function debug(){
+    var line='Gameface mouse '+counts.gfMove+' moves, '+counts.gfDown+' downs, '+counts.gfClick+' clicks; AimMod pointer '+counts.amMove+' updates, '+counts.amDown+' downs, '+counts.amClick+' presses';
+    if(debugNode)debugNode.textContent=line;
+    // Into the service log every few seconds while the buy menu is open, when it changed.
+    if(buying&&line!==reported&&Date.now()-reportedAt>3000){reported=line;reportedAt=Date.now();
+      var x=new root.XMLHttpRequest();x.open('POST',base()+'/multiplayer',true);x.setRequestHeader('X-AimMod-UI','1');x.setRequestHeader('Content-Type','application/json');x.send(JSON.stringify({action:'pointer-debug',counts:line}));}
+  }
+  function showDebug(on){
+    buying=on;var body=root.document.body;
+    if(on&&!debugNode&&body){debugNode=node('div','pointer-debug');body.appendChild(debugNode);debug();}
+    if(!on&&debugNode){if(debugNode.parentNode)debugNode.parentNode.removeChild(debugNode);debugNode=null;}
+  }
+  if(root.engine&&root.engine.on)root.engine.on('AimModPointer',pointer);
+  if(root.document.addEventListener){
+    root.document.addEventListener('mousemove',function(){counts.gfMove++;},true);
+    root.document.addEventListener('mousedown',function(){counts.gfDown++;nativeDownAt=Date.now();debug();},true);
+    root.document.addEventListener('click',function(){counts.gfClick++;debug();},true);
+  }
   function poll(){
     var x=new root.XMLHttpRequest();x.open('GET',base()+'/multiplayer-notify',true);x.timeout=2000;
     x.onreadystatechange=function(){if(x.readyState!==4)return;var n=null;if(x.status===200){try{n=JSON.parse(x.responseText);}catch(e){n=null;}}if(n){misses=0;render(n);}else miss();};
@@ -166,5 +212,5 @@
     clearTimeout(timer);timer=setTimeout(poll,250);
   }
   poll();
-  root.AimModNotify={render:render};
+  root.AimModNotify={render:render,pointer:pointer};
 })(window);

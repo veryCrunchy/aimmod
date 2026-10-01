@@ -42,7 +42,7 @@
 .cs-key-hint{margin-top:6px;font-size:12px;font-weight:700;color:#27e4a1}
 .cs-clash{margin-top:4px;font-size:11px;color:#f0b45a}
 /* Buy menu: left side, away from the crosshair, clickable while the cursor shows. */
-.cs-buy{position:absolute;left:20px;top:104px;width:640px;padding:0 0 8px;background:#0f1714;border:1px solid #2c6b52;border-top:3px solid #27e4a1;border-radius:8px;pointer-events:auto}
+.cs-buy{position:absolute;left:50%;top:50%;margin:-200px 0 0 -320px;width:640px;padding:0 0 8px;background:#0f1714;border:1px solid #2c6b52;border-top:3px solid #27e4a1;border-radius:8px;pointer-events:auto}
 .cs-buy-head{display:flex;flex-direction:row;align-items:center;padding:10px 14px;background:#121c19}
 .cs-buy-head strong{font-size:16px;font-weight:700;margin-right:10px}
 .cs-buy-money{font-size:16px;font-weight:700;color:#27e4a1;margin-right:10px}.cs-buy-left{flex:1;font-size:12px;color:#a7bab0}
@@ -59,14 +59,16 @@
 .cs-item-price{font-size:14px;font-weight:700}.cs-item.ok .cs-item-price{color:#27e4a1}
 .cs-buy-cols{display:flex;flex-direction:row}.cs-buy-col{width:50%}
 .cs-use-text{padding:4px 12px;background:#0f1714;border:1px solid #22302a;border-radius:6px}
-@media(max-height:760px){.cs-buy{top:96px;left:12px;width:600px}.cs-banner{top:18%}.cs-feed{top:86px}}
+@media(max-height:760px){.cs-buy{top:96px;margin:0 0 0 -300px;width:600px}.cs-banner{top:18%}.cs-feed{top:86px}}
 .cs-item-key{width:18px;flex-shrink:0}.cs-item-text{display:flex;flex-direction:column;flex:1;min-width:0;padding-right:8px}
 .cs-item-name{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.cs-item-why{display:block;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cs-item-price{display:block;width:64px;flex-shrink:0;text-align:right}
 /* 1440p and up: the HUD scales as a whole, each block from the edge it sits on. */
-@media(min-height:1300px){.cs-top{transform:scale(1.33);transform-origin:50% 0}.cs-buy{top:136px;transform:scale(1.33);transform-origin:0 0}
+@media(min-height:1300px){.cs-top{transform:scale(1.33);transform-origin:50% 0}.cs-buy{transform:scale(1.33);transform-origin:50% 50%}
 .cs-me{transform:scale(1.33);transform-origin:0 100%}.cs-feed{top:128px;transform:scale(1.33);transform-origin:100% 0}
 .cs-banner,.cs-notice,.cs-use{transform:scale(1.33);transform-origin:50% 0}}
 .cs-bomb{margin-top:4px;font-size:12px;color:#f0b45a}.cs-bomb.mate{color:#cfe0d8}
 .cs-bomb-icon{background:#f0b45a;color:#0f1714;font-weight:700;font-size:10px;padding:0 4px;margin-right:6px;border-radius:2px}
 .cs-refused{position:absolute;bottom:150px;left:50%;width:360px;margin-left:-180px;text-align:center;background:#3a1d25;color:#ff8fa3;border-radius:4px;padding:5px 0;font-size:14px}
+/* Hover and press from AimModCore's pointer fallback (notify.js adds .hover), like :hover. */
+.cs-item.hover{border-color:#3f5a4d}.cs-item.ok.hover{background:#173b2f}
