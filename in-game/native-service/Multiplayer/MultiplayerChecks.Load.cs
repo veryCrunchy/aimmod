@@ -177,6 +177,59 @@ static partial class MultiplayerChecks
         service.Dispose();
     }
 
+    // CS competitive only on maps with the AimMod CS map spec (the port's "cs" block).
+    static string CsSpec(int spawns = 5, bool siteB = true, bool ctBuy = true)
+    {
+        string Points(double x, double y) => string.Join(",", Enumerable.Range(0, spawns).Select(i => "[" + (x + i * 40) + "," + y + ",40,90]"));
+        var sites = "{\"name\":\"A\",\"min\":[250,-650,0],\"max\":[300,-600,40]}" + (siteB ? ",{\"name\":\"B\",\"min\":[-300,-650,0],\"max\":[-250,-600,40]}" : "");
+        return "{\"format\":\"aimmod.map-objectives\",\"version\":1,\"map_scale\":4,\"zones\":[],\"spawns\":[],\"cs\":{\"format\":\"aimmod.cs-map\",\"version\":1,"
+            + "\"spawns\":{\"T\":[" + Points(0, 600) + "],\"CT\":[" + Points(0, -600) + "]},\"bomb_sites\":[" + sites + "],"
+            + "\"buy_zones\":{\"T\":[{\"min\":[-50,550,-20],\"max\":[250,650,60]}],\"CT\":[" + (ctBuy ? "{\"min\":[-50,-650,-20],\"max\":[250,-550,60]}" : "") + "]},"
+            + "\"callouts\":[{\"name\":\"Long A\",\"min\":[240,-660,-10],\"max\":[310,-590,50]}]}}";
+    }
+    static void CsMaps(string root)
+    {
+        var spec = MapObjectives.Parse(CsSpec())!;
+        Check(spec.CsProblem is null && spec.BombSites.Select(z => z.Name).SequenceEqual(["A", "B"]) && spec.SpawnsFor(CsRules.T).Count == 5 && spec.BuyZones(CsRules.CT).Count == 1
+            && spec.BombSites[0].Min[0] == 1000 && spec.Callouts.Single().Name == "Long A", "The CS map spec gives sites A and B, team spawns and buy zones, in centimetres (map_scale)");
+        Check(MapObjectives.Parse(CsSpec(spawns: 4))!.CsProblem == "Fewer than 5 T spawns" && MapObjectives.Parse(CsSpec(siteB: false))!.CsProblem == "Needs bomb sites A and B"
+            && MapObjectives.Parse(CsSpec(ctBuy: false))!.CsProblem == "No CT buy zone", "Missing pieces say why the map isn't a CS map");
+        Check(MapObjectives.Parse("{\"format\":\"aimmod.map-objectives\",\"version\":1,\"zones\":[{\"type\":\"bomb_site\",\"aabb\":{\"min\":[0,0,0],\"max\":[1,1,1]}}],\"spawns\":[]}")!.CsProblem == MapObjectives.NoCsData,
+            "Bomb-site zones without the CS map spec don't make a CS map");
+        // The library marks scenarios by their map's spec; the host refuses others in CS.
+        var game = Path.Combine(root, "csgame");
+        WriteText(Path.Combine(game, "Saved", "SaveGames", "Scenarios", "Synthetic Dust.sce"), BaseScenario.Replace("Name=Synthetic A", "Name=Synthetic Dust").Replace("MapName=synthetic_map.map", "MapName=aimmod_de_synthetic_css.json"));
+        WriteText(Path.Combine(game, "Saved", "SaveGames", "Scenarios", "Synthetic Aim.sce"), BaseScenario.Replace("Name=Synthetic A", "Name=Synthetic Aim"));
+        WriteText(Path.Combine(game, "maps", "aimmod_de_synthetic_css.json"), "{}");
+        WriteText(Path.Combine(game, "maps", "aimmod_de_synthetic_css.aimmod.json"), CsSpec());
+        var library = new ContentLibrary(game);
+        Check(library.Scenario("Synthetic Dust")!.CsProblem is null && library.Scenario("Synthetic Aim")!.CsProblem == MapObjectives.NoCsData, "Scenarios carry whether their map is a CS map");
+        var cs = LobbyRules.Apply(new LobbySettings(Scenario: library.Scenario("Synthetic Dust")), J(new { mode = "cs" }), 6, library).Settings!;
+        var refused = LobbyRules.Apply(cs, J(new { scenario = "Synthetic Aim" }), 6, library);
+        Check(!refused.Result.Ok && refused.Result.Code == "cs-map" && refused.Result.Message!.Contains(MapObjectives.NoCsData, StringComparison.Ordinal), "In CS the host refuses a scenario whose map isn't a CS map, saying why");
+        var (core, _, _) = Lobby(LobbyRules.Apply(new LobbySettings(Scenario: library.Scenario("Synthetic Aim")), J(new { mode = "cs" }), 6, library).Settings);
+        Check(LobbyRules.StartBlockers(core.Snapshot()).Any(b => b.Code == "cs-map"), "Switching to CS with a non-CS map blocks the start until a CS map is picked");
+        // Runtime: plant only in a site, buy only in your zone, the site letter and callout on the HUD.
+        long t = 0;
+        var ids = new[] { "t1", "t2", "t3", "c1", "c2", "c3" };
+        var match = new CsMatch(ids, 0, 6, true, spec, ids.ToDictionary(id => id, id => id.StartsWith('t') ? 1 : 2));
+        void Track(string id, double x, double y, double z) => match.Combat.Track(id, new TrackBatch("m", 1, [new TrackSample(t, x, y, z + 64, 0, 0), new TrackSample(t + 200, x, y, z + 64, 0, 0)], []));
+        var tSpawn = match.View().Spawns!["t1"];
+        Check(tSpawn[1] == 2400 && match.View().Spawns!["c1"][1] == -2400, "Each round starts on your side's spawns");
+        Track("t1", 0, 2400, 160);
+        Check(match.Buy("t1", "kevlar", t) is null, "Buying works inside your buy zone during buy time");
+        Track("t2", 0, 0, 160);
+        Check(match.Buy("t2", "kevlar", t) == "buy-zone", "Outside your buy zone nothing can be bought");
+        t = CsRules.FreezeMs + 1; match.Tick(t);
+        var carrier = match.View().Bomb.Carrier!;
+        t += 300; Track(carrier, 0, 0, 160); Track(carrier, 0, 0, 160);
+        Check(match.Use(carrier, true, t) == "not-in-site", "The bomb can't be planted outside a site");
+        t += 300; Track(carrier, 1100, -2500, 40); t += 300; Track(carrier, 1100, -2500, 40);
+        var view = match.View();
+        Check(view.Players.First(p => p.Member == carrier) is { Site: "A", Callout: "Long A" } && view.Sites!.Select(s => s.Name).SequenceEqual(["A", "B"]), "Inside a site the HUD gets its letter (and the callout)");
+        Check(match.Use(carrier, true, t) is null && match.View().Bomb.Site == "A", "Inside site A, holding E plants at A");
+    }
+
     // A client whose KovaaK's keeps the previous map (the live CS bug): it loads again once,
     // then reports the problem; the host sees Retry and Abort; the scenario is kept for debugging.
     static void LoadGateService(string root)

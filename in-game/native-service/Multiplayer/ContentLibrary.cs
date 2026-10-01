@@ -34,7 +34,29 @@ sealed partial class ContentLibrary : IContentResolver
     public IReadOnlyList<LibraryItem> Characters { get { Refresh(); lock (gate) return characters; } }
 
     public ScenarioChoice? Scenario(string name) =>
-        Scenarios.FirstOrDefault(s => s.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) is { } s ? new ScenarioChoice(s.Name, s.Hash, s.Map, s.MapHash, s.TimeLimit, s.WorkshopId) : null;
+        Scenarios.FirstOrDefault(s => s.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) is { } s ? new ScenarioChoice(s.Name, s.Hash, s.Map, s.MapHash, s.TimeLimit, s.WorkshopId, CsMapProblem(s.Map)) : null;
+
+    // Why a map can't host CS competitive (null: it can): its CS map spec in
+    // <game>/maps/<map>.aimmod.json. Cached per file and write time.
+    readonly Dictionary<string, (DateTime Stamp, string? Problem)> csMaps = new(StringComparer.OrdinalIgnoreCase);
+    public string? CsMapProblem(string mapName)
+    {
+        if (root is null || string.IsNullOrWhiteSpace(mapName) || mapName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) return MapObjectives.NoCsData;
+        var path = Path.Combine(root, "maps", MapObjectives.FileFor(mapName));
+        try
+        {
+            var info = new FileInfo(path);
+            if (!info.Exists || info.Length > 4 << 20) return MapObjectives.NoCsData;
+            lock (csMaps)
+            {
+                if (csMaps.TryGetValue(path, out var known) && known.Stamp == info.LastWriteTimeUtc) return known.Problem;
+                var problem = MapObjectives.Parse(File.ReadAllText(path)) is { } parsed ? parsed.CsProblem : MapObjectives.NoCsData;
+                csMaps[path] = (info.LastWriteTimeUtc, problem);
+                return problem;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return MapObjectives.NoCsData; }
+    }
     public MapChoice? Map(string name) =>
         Maps.FirstOrDefault(m => m.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) is { } m ? new MapChoice(m.Name, m.Hash, m.Source) : null;
     public LibraryItem? Weapon(string name) => Weapons.FirstOrDefault(w => w.Name.Equals(name, StringComparison.OrdinalIgnoreCase));

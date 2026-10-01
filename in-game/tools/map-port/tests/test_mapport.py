@@ -210,6 +210,51 @@ class PropTests(unittest.TestCase):
         self.assertEqual(len(parts), 2)  # the 1-unit speck is dropped
 
 
+class CsMapTests(unittest.TestCase):
+    def _doc(self, n=5):
+        sp = [{"team": "terrorist", "origin": [-700.0 + i, 800.0, 170.0], "yaw": 0.0} for i in range(n)] +              [{"team": "counter_terrorist", "origin": [300.0 + i, -2300.0, -90.0], "yaw": 90.0} for i in range(n)]
+        return {"format": "aimmod.map-objectives", "map": "aimmod_de_test_css", "spawns": sp, "points": [], "zones": [
+            {"type": "bomb_site", "team": "any", "name": "", "aabb": {"min": [-1728.0, -2864.0, 0.0], "max": [-1288.0, -2496.0, 96.0]}},
+            {"type": "bomb_site", "team": "any", "name": "", "aabb": {"min": [1072.0, -2624.0, 96.0], "max": [1264.0, -2336.0, 192.0]}},
+            {"type": "buy_zone", "team": "terrorist", "name": "", "aabb": {"min": [-1088.0, 632.0, 0.0], "max": [-384.0, 1016.0, 288.0]}}]}
+
+    def test_dust2_like(self):
+        from mapport import csmap
+        cs = csmap.build(self._doc())
+        a = next(s for s in cs["bomb_sites"] if s["name"] == "A")
+        self.assertGreater(a["min"][0], 0, "A is the site farther from the T spawns (dust2)")
+        self.assertEqual(len(cs["buy_zones"]["T"]), 1)
+        self.assertEqual(len(cs["buy_zones"]["CT"]), 1, "a missing CT buy zone comes from the CT spawn area")
+        self.assertIn("CT buy zone from the CT spawn area", cs["derived"])
+        self.assertEqual(cs["problems"], [])
+        self.assertEqual(len(cs["spawns"]["T"][0]), 4)
+
+    def test_names_and_problems(self):
+        from mapport import csmap
+        doc = self._doc(4)
+        doc["zones"][0]["name"] = "bombsite_b"
+        doc["zones"][1]["name"] = "bombsite_a"
+        cs = csmap.build(doc)
+        self.assertEqual([s["name"] for s in cs["bomb_sites"]], ["A", "B"])
+        self.assertLess(next(s for s in cs["bomb_sites"] if s["name"] == "B")["min"][0], 0, "targetnames win over position")
+        self.assertIn("Fewer than 5 T spawns", cs["problems"])
+        doc["zones"] = doc["zones"][2:]
+        self.assertIn("No bomb sites", csmap.build(doc)["problems"])
+
+    def test_goldsrc_buyzone_teams_and_points(self):
+        from mapport import csmap
+        doc = self._doc()
+        doc["zones"] = [{"type": "buy_zone", "team": "terrorist", "name": "", "aabb": {"min": [0, 0, 0], "max": [10, 10, 10]}}]
+        doc["points"] = [{"type": "bomb_target", "name": "", "origin": [1000.0, -2500.0, 100.0]},
+                         {"type": "bomb_target", "name": "", "origin": [-1500.0, -2700.0, 0.0]}]
+        cs = csmap.build(doc, goldsrc=True)
+        self.assertEqual(len(cs["buy_zones"]["CT"]), 1, "GoldSrc team 2 is CT")
+        self.assertIn("T buy zone from the T spawn area", cs["derived"])
+        self.assertEqual(len(cs["bomb_sites"]), 2)
+        self.assertIn("bomb sites from info_bomb_target points", cs["derived"])
+        self.assertTrue(csmap.wanted("de_x", {}) and not csmap.wanted("aim_map", {"zones": [], "points": []}))
+
+
 class ObjectiveTests(unittest.TestCase):
     def test_zones_points_items(self):
         from mapport import objectives

@@ -2079,7 +2079,8 @@ sealed partial class MultiplayerService : IDisposable
     public object LibraryView() => new
     {
         available = library.Available,
-        scenarios = library.Scenarios.Select(s => new { s.Name, s.Map, s.MapSource, s.TimeLimit, hash = s.Hash[..12], s.DefaultWeapon, s.DefaultCharacter, s.Ported }),
+        // cs: why the scenario's map can't host CS competitive (null: it can).
+        scenarios = library.Scenarios.Select(s => new { s.Name, s.Map, s.MapSource, s.TimeLimit, hash = s.Hash[..12], s.DefaultWeapon, s.DefaultCharacter, s.Ported, cs = library.CsMapProblem(s.Map) }),
         maps = library.Maps.Select(m => new { m.Name, m.Source, hash = m.Hash[..12] }),
         weapons = library.Weapons.Select(w => w.Name),
         characters = library.Characters.Select(c => c.Name),
