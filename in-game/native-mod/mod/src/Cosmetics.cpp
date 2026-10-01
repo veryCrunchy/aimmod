@@ -1,6 +1,7 @@
 #include "Cosmetics.hpp"
 
 #include "Accessory.hpp"
+#include "Reflect.hpp"
 
 #include "Log.hpp"
 #include "Output.hpp"
@@ -124,6 +125,7 @@ namespace aimmod
         need(m_profileModel.ok() && m_profileSkin.ok(), "mCharacterProfileNative model/skin");
         need(m_miParent.ok() && m_miNames[0].ok() && m_miNames[1].ok() && m_materialInstance && m_material, "material parameter lists");
         need(m_packModels.ok() && m_packSkins.ok() && m_modelAsset.ok() && m_skinAsset.ok() && m_modelName.ok() && m_skinName.ok(), "Default look packs");
+        m_params.Bind();
         m_ready = missing.empty();
         m_accessories = m_ready && m_addComponent.ok() && m_setStaticMesh.ok() && m_setCollision.ok() && m_attach.ok() && m_relative.ok() && m_scale.ok() &&
                         m_destroyComponent.ok() && m_staticMeshComponent;
@@ -182,32 +184,7 @@ namespace aimmod
     // CosmeticsReflect.parameters: instance -> parent -> ... -> base material.
     void Cosmetics::ParameterNames(UObject* material, std::set<std::string>& vectors, std::set<std::string>& scalars, std::set<std::string>& textures)
     {
-        std::set<std::string>* sets[3] = {&scalars, &vectors, &textures};
-        UObject* current = material;
-        for (int depth = 0; depth < 8 && current; ++depth)
-        {
-            if (current->IsA(m_materialInstance))
-            {
-                for (int k = 0; k < 3; ++k)
-                {
-                    std::vector<const std::uint8_t*> entries;
-                    if (!m_miNames[k].ok() || !m_miArrays[k].Elements(current, entries, 128)) continue;
-                    for (const std::uint8_t* e : entries)
-                        if (std::string n; m_miNames[k].Name(e, n) && !n.empty() && n != "None") sets[k]->insert(n);
-                }
-                current = m_miParent.Object(current);
-                continue;
-            }
-            if (current->IsA(m_material) && m_infoName.ok())
-                for (int k = 0; k < 3; ++k)
-                {
-                    std::vector<const std::uint8_t*> infos;
-                    if (!m_materialEntries[k].ok() || !m_materialEntries[k].Elements(current, infos, 256)) continue;
-                    for (const std::uint8_t* e : infos)
-                        if (std::string n; m_infoName.Name(e, n) && !n.empty() && n != "None") sets[k]->insert(n);
-                }
-            break;
-        }
+        m_params.Names(material, vectors, scalars, textures);
     }
 
     bool Cosmetics::Fits(UObject* material, const cosmetics::Item& item)
@@ -274,7 +251,19 @@ namespace aimmod
                     return;
                 }
             }
-            if (!Fits(material, item)) continue;
+            // Avatar tints are a paint job on the model's own base material (the
+            // mesh's default for the slot): a skin's material may use another
+            // master without the probed parameters. Otherwise the slot's material.
+            UObject* parent = material;
+            if (want.scope == Scope::Avatar && item.textures.empty())
+            {
+                std::set<std::string> vectorNames, scalarNames;
+                for (const auto& [name, c] : item.vector) vectorNames.insert(name);
+                for (const auto& [name, v] : item.scalar) scalarNames.insert(name);
+                UObject* base = m_params.MeshDefault(component, index);
+                if (base && base != material && m_params.Has(base, vectorNames, scalarNames)) parent = base;
+            }
+            if (parent == material && !Fits(material, item)) continue;
             std::vector<std::pair<std::string, UObject*>> textures;
             bool texturesOk = true;
             for (const auto& [name, path] : item.textures)
@@ -288,7 +277,7 @@ namespace aimmod
             m_createMid.Call(
                 m_materialLibrary,
                 [&](std::uint8_t* value, const Param& p) {
-                    if (p.kind == Kind::Object) WriteObject(value, p.worldContext ? want.owner : material);
+                    if (p.kind == Kind::Object) WriteObject(value, p.worldContext ? want.owner : parent);
                     // OptionalName None: the engine picks a unique name; CreationFlags 0.
                 },
                 [&](const std::uint8_t* buffer, const std::vector<Param>& params) { mid = ReturnObject(buffer, params); });
@@ -343,7 +332,10 @@ namespace aimmod
             UObject* component = d.component.Get();
             UObject* mid = d.mid.Get();
             UObject* original = d.original.Get();
-            if (component && mid && original && Material(component, d.index) == mid) SetMaterial(component, d.index, original);
+            // Only on a live component of a live owner: a transition destroys the rest.
+            if (reflect::Alive(component) && reflect::Alive(component->GetOuterPrivate()) && reflect::Alive(mid) && reflect::Alive(original) &&
+                Material(component, d.index) == mid)
+                SetMaterial(component, d.index, original);
             m_ours.erase(mid);
         }
         m_dressed = std::move(kept);
@@ -449,7 +441,8 @@ namespace aimmod
                 kept.push_back(std::move(w));
                 continue;
             }
-            if (UObject* component = w.component.Get())
+            UObject* component = w.component.Get();
+            if (reflect::Alive(component) && reflect::Alive(w.actor.Get()) && reflect::Alive(component->GetOuterPrivate()))
                 m_destroyComponent.Call(component, [&](std::uint8_t* value, const Param& p) { if (p.kind == Kind::Object) WriteObject(value, component); });
         }
         m_worn = std::move(kept);
@@ -541,13 +534,27 @@ namespace aimmod
             m_reason = d.reason;
             Log("cosmetics: scope: " + d.reason);
         }
+        // While a level loads (or the state is unknown) no engine call is made:
+        // the transition may be destroying the avatars and their components.
+        // What died is forgotten; what survives is restored on the next settled
+        // tick (the gate is closed then), so nothing outlives a match.
+        if (state.loading != std::optional<bool>(false))
+        {
+            std::erase_if(m_dressed, [&](const Dressed& dressed) {
+                if (reflect::Alive(dressed.component.Get())) return false;
+                m_ours.erase(dressed.mid.Get());
+                return true;
+            });
+            std::erase_if(m_worn, [](const Worn& w) { return !reflect::Alive(w.component.Get()) || !reflect::Alive(w.actor.Get()); });
+            return;
+        }
         // Forget what the game destroyed (avatars leave, levels change).
         std::erase_if(m_dressed, [&](const Dressed& dressed) {
             if (dressed.component.Get()) return false;
             m_ours.erase(dressed.mid.Get());
             return true;
         });
-        std::erase_if(m_worn, [](const Worn& w) { return !w.component.Get() || !w.actor.Get(); });
+        std::erase_if(m_worn, [](const Worn& w) { return !reflect::Alive(w.component.Get()) || !reflect::Alive(w.actor.Get()); });
         if (!d.avatars)
         {
             Restore(nullptr, Scope::Avatar);

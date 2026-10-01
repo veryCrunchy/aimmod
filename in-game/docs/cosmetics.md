@@ -448,6 +448,17 @@ must never be enabled on the same install as the AimModCore applier.
   - a host toggle per AimMod mode.
 - Each viewer resolves ids against their own installed catalog. Unknown ids, newer versions or pak items without a matching pak fall back to the base look ("update AimMod to see this").
 
+## Looks offered
+
+The avatar looks the service offers (and the preview renders) are the free
+Default pack only: Meso in its Default, McCree, Tracer, Genji and Pharah
+skins, Endo, Ecto, Diver, Medusa, Pill, Pigeon, Pumpkin and JackOLantern, each
+in its default skin. The view lists each look's model and skin for the
+picker. Tints and accessories fit Meso and Endo.
+
+Outfits (clothing on a follower mesh, from an AimMod pak) are planned in
+[outfits.md](outfits.md).
+
 ## UI
 
 A **Cosmetics** page in the AimMod workspace, listing catalog items only:
@@ -523,8 +534,17 @@ The Cosmetics page shows your own character, live, while you customise it. Dragg
   live test). AimModCore applies the game's own defaults
   (`SkinFunctionLibrary:ApplyAllCustomPrimitiveDataDefaultsBatch`) and sets
   full opacity, on the character and on every accessory.
-- **Catalog parameters:** set on fresh dynamic instances of the look's own
-  materials.
+- **Catalog parameters (tints):** a paint job. The Meso skins' own materials
+  don't all use `MM_BaseDummy`'s parameters, so a tint is set on a fresh
+  dynamic instance of the mesh's own base material for each slot (the
+  skeletal mesh asset's default, `MM_BaseDummy`). It falls back to the
+  skin's material only if the base lacks the parameters. The match applier
+  does the same on avatars. The preview logs each slot's material and
+  parameter names once per look.
+- **Weapon view (`view=weapon`, `finish=<id>`):** the player's selected
+  viewmodel weapon (else the game's third-person pistol), alone on the
+  turntable, with the requested weapon finish. The service sends it when a
+  weapon finish is tried on, or on `{view: "weapon"}`.
 - **Accessories:** worn by id (`accessory=` lines), resolved in AimModCore's
   own catalog, and attached exactly as in matches.
 

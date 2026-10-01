@@ -292,6 +292,36 @@ namespace aimmod::reflect
         return o && e;
     }
 
+    bool Alive(UObject* object)
+    {
+        if (!object || !game::IsLiveInstance(object)) return false;
+        if (object->HasAnyFlags(static_cast<EObjectFlags>(RF_BeginDestroyed | RF_FinishDestroyed))) return false;
+        if (object->HasAnyInternalFlags(static_cast<EInternalObjectFlags>(static_cast<std::int32_t>(EInternalObjectFlags::PendingKill) |
+                                                                          static_cast<std::int32_t>(EInternalObjectFlags::Unreachable))))
+            return false;
+        UClass* type = object->GetClassPrivate();
+        return type && !type->IsUnreachable();
+    }
+
+    bool SafeToDestroy(UObject* actor, UObject* world)
+    {
+        if (!Alive(actor) || !Alive(world)) return false;
+        UObject* outer = actor;
+        // The actor's level must belong to `world` (its outer chain reaches it).
+        bool inWorld = false;
+        for (int depth = 0; depth < 8 && outer; ++depth)
+        {
+            outer = outer->GetOuterPrivate();
+            if (outer == world) inWorld = true;
+            if (outer && !Alive(outer)) return false;
+        }
+        if (!inWorld) return false;
+        for (const wchar_t* list : {STR("BlueprintCreatedComponents"), STR("InstanceComponents")})
+            for (UObject* component : GetObjects(actor, list, 256))
+                if (component && !Alive(component)) return false;
+        return true;
+    }
+
     bool ApplyMaterialDataDefaults(UObject* meshComponent)
     {
         if (!meshComponent) return false;

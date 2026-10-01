@@ -1356,6 +1356,12 @@ static partial class MultiplayerChecks
             "Game-mesh accessories need no pak, only from the curated folders, with a head, neck or back slot");
         Check(CosmeticPreviewFormat.Body("Meso", "McCree", 0, [mint, halo]) is { } worn && worn.Contains("accessory=ring-halo\n") && worn.Contains("vector=MetalPaint:0.02,0.6,0.3,1\n") && !worn.Contains("0.9,0.7,0.2"),
             "Preview wears accessories by id; their colours never mix into the tint");
+        var sand = loaded.Pickable.First(i => i.Id == "weapon-finish-sand");
+        Check(CosmeticPreviewFormat.Body("Meso", null, 0, [mint, sand], weaponView: true) is { } gun && gun.Contains("finish=weapon-finish-sand\n") && gun.EndsWith("view=weapon\n", StringComparison.Ordinal) && !gun.Contains("0.76,0.66"),
+            "The weapon view carries the finish by id");
+        Check(AvatarProfiles.All.Select(a => a.Id).Distinct().Count() == AvatarProfiles.All.Length && AvatarProfiles.All.All(a => CosmeticPreviewFormat.Body(a.Model, a.Skin, 0, []) is not null)
+              && AvatarProfiles.All.Any(a => a.Model == "Meso" && a.Skin == "Default") && AvatarProfiles.All.Count(a => a.Model == "Meso") == 5,
+            "Every offered look is a Default-pack model and skin the preview can render");
         Check(loaded.Pickable.First(i => i.Id == "weapon-finish-sand").Swatch.Count == 1 && loaded.Pickable.First(i => i.Id == "meso-tint-ember").Swatch.Count == 1, "Single-colour items get one swatch colour");
         Check(CosmeticPreviewFormat.Body("../Meso", null, 0, []) is null && CosmeticPreviewFormat.Body("Meso", "C:/me.png", 0, []) is null, "Preview names are look names, never paths");
         Check(CosmeticPreviewFormat.Body("Meso", null, 999, [])!.Contains("yaw=180\n"), "Preview rotation is clamped");
@@ -1473,7 +1479,7 @@ static partial class MultiplayerChecks
         var looks = JsonSerializer.SerializeToElement(service.LooksView(), Protocol.Json);
         var models = looks.GetProperty("models").EnumerateArray().ToArray();
         Check(looks.GetProperty("selected").GetString() == "meso-genji" && looks.GetProperty("model").GetString() == "Meso" && looks.GetProperty("default").GetString() == AvatarProfiles.Default
-            && models.Select(m => m.GetProperty("id").GetString()).SequenceEqual(["Meso", "Endo"])
+            && models.Select(m => m.GetProperty("id").GetString()).SequenceEqual(AvatarProfiles.All.Select(a => a.Model).Distinct())
             && models.SelectMany(m => m.GetProperty("skins").EnumerateArray().Select(k => k.GetProperty("id").GetString())).SequenceEqual(AvatarProfiles.All.Select(a => a.Id)),
             "The Look tab lists every offered profile once, by model, and shows the saved one");
         Check(!service.Act("avatar", J(new { avatar = "meso-locked-skin" })).Ok && JsonSerializer.SerializeToElement(service.LooksView(), Protocol.Json).GetProperty("selected").GetString() == "meso-genji",
