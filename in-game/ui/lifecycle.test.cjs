@@ -33,7 +33,7 @@ test('a staged update shows one toast with plain-text release notes and a banner
   const toast=t.body.children.find(c=>c.className==='lifecycle-toast');
   assert.ok(toast,'toast shown');
   assert.match(toast.text(),/Update ready/);assert.match(toast.text(),/applies when you close KovaaK’s/);
-  assert.match(toast.text(),/• Faster replays \(#12\)|• Faster replays #12|• Faster replays/);assert.doesNotMatch(toast.text(),/\*\*|##|\]\(/);
+  assert.match(toast.text(),/- Faster replays/);assert.doesNotMatch(toast.text(),/\*\*|##|\]\(/);
   assert.match(banner.text(),/Update ready: AimMod 1\.1\.0 applies when you close KovaaK’s/);
   t.buttons(toast).find(b=>b.textContent==='Details').onclick();assert.equal(opened,1);
   t.api.visible(true);t.requests.at(-1).finish(200,snapshot({update:{state:'ready',version:'1.1.0',notes:'x',applyOnClose:true}}));

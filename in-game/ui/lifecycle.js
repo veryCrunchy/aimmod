@@ -17,7 +17,7 @@
   }
   // Release notes come from the release body (Markdown); show them as text.
   function plain(notes){
-    return String(notes||'').replace(/\r/g,'').replace(/^#{1,6}\s*/gm,'').replace(/\*\*|__/g,'').replace(/\[([^\]]+)\]\([^)]*\)/g,'$1').replace(/^\s*[-*]\s+/gm,'• ').replace(/\n{3,}/g,'\n\n').trim();
+    return String(notes||'').replace(/\r/g,'').replace(/^#{1,6}\s*/gm,'').replace(/\*\*|__/g,'').replace(/\[([^\]]+)\]\([^)]*\)/g,'$1').replace(/^\s*[-*]\s+/gm,'- ').replace(/\n{3,}/g,'\n\n').trim();
   }
   function short(text,limit){return text.length>limit?text.slice(0,limit-1).replace(/\s+\S*$/,'')+'…':text;}
   function updateText(u){

@@ -19,3 +19,5 @@ local replayOk, replayReason = pcall(function() require('ReplayCapture').start(T
 if not replayOk then print('[AimMod] replay capture unavailable: ' .. tostring(replayReason) .. '\n') end
 local menuOk, menuReason = pcall(function() require('Menu').start() end)
 if not menuOk then print('[AimMod] menu unavailable: ' .. tostring(menuReason) .. '\n') end
+local discordOk, discordReason = pcall(function() require('DiscordPresence').start() end)
+if not discordOk then print('[AimMod] Discord handoff unavailable: ' .. tostring(discordReason) .. '\n') end

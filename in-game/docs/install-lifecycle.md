@@ -185,9 +185,10 @@ Repository configuration the workflow needs:
 | `AIMMOD_MINIMUM_STEAM_BUILD` | variable, optional | refuse updates on older game builds, default `0` |
 | `AIMMOD_INGAME_RELEASES` | variable | `true` lets release-please run the in-game release |
 
-The workflow needs AimModCore (`in-game/native-mod`, on its own branch) and AimModSteam
-(`in-game/steam-bridge`, branch `feat/kovaaks-steam-bridge`) merged; it stops with a clear message
-otherwise.
+The workflow builds AimModCore from `in-game/native-mod` (`Build-AimModPackage.ps1`, output
+`in-game/native-mod/out/package`) and AimModSteam from `in-game/steam-bridge` (`main.dll` of
+`AimModSteam`). AimModSteam's `config.txt` is user-editable and is not shipped, so updates and
+repairs never overwrite it; the mod uses its defaults until the user creates one.
 
 Building a release by hand (same steps, locally):
 

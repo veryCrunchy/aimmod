@@ -102,7 +102,7 @@ jobs:
       - name: Check the in-game sources
         shell: pwsh
         run: |
-          # AimModCore and AimModSteam live on their own branches until merged.
+          # The release packages AimModCore (in-game/native-mod) and AimModSteam (in-game/steam-bridge).
           foreach ($path in 'in-game/native-mod/install/Build-AimModPackage.ps1', 'in-game/steam-bridge/CMakeLists.txt', 'in-game/native-service/AimMod.InGame.csproj') {
             if (-not (Test-Path $path)) { throw "Missing $path: the in-game release needs AimModCore (in-game/native-mod) and AimModSteam (in-game/steam-bridge) merged." }
           }

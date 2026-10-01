@@ -72,3 +72,11 @@ in-game/**/account.bin*
 in-game/**/hub-cache.json*
 # In-game release build output (New-AimModInGameRelease.ps1)
 in-game/out/
+
+# Third-party UE4SS source (private UEPseudo); never commit
+external/RE-UE4SS/
+in-game/native-mod/build/
+in-game/native-mod/build-*/
+in-game/native-mod/out/
+in-game/steam-probe/build*/
+in-game/steam-bridge/build*/

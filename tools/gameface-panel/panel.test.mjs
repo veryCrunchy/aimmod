@@ -81,6 +81,21 @@ test('unexpected telemetry objects are never coerced', () => {
     const value = { toString() { throw new Error('Untrusted coercion'); } };
     app.emit('CountdownTimeSet', value); app.emit('DPSCountSet', value);
 });
+test('numeric telemetry is shown without float noise', () => {
+    const app = setup(); app.run();
+    app.emit('DPSCountSet', 123.456789); app.emit('CountdownTimeSet', 0.1 + 0.2);
+    const walk = node => [node, ...(node.children || []).flatMap(walk)];
+    const texts = walk(app.body).map(node => node.textContent);
+    assert.ok(texts.includes('123.5')); assert.ok(texts.includes('0.3'));
+});
+test('captures are refused inside the repository', async () => {
+    const { outsideRepository, repositoryRoot } = await import('./paths.mjs');
+    const { join, dirname } = await import('node:path');
+    assert.equal(outsideRepository(join(repositoryRoot, 'capture.png')), false);
+    assert.equal(outsideRepository(join(repositoryRoot, 'in-game', 'ui', 'capture.png')), false);
+    assert.equal(outsideRepository(''), false);
+    assert.equal(outsideRepository(join(dirname(repositoryRoot.replace(/[\\/]$/, '')), 'outside-capture.png')), true);
+});
 test('partial subscription failure clears earlier listeners', () => {
     const app = setup(); const on = app.engine.on;
     app.engine.on = (name, cb) => { if (name === 'DPSCountSet') throw new Error('Subscription failed'); return on(name, cb); };

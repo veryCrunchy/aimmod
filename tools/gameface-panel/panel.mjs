@@ -1,9 +1,10 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { connect } from './client.mjs';
+import { outsideRepository } from './paths.mjs';
 
 const [action = 'inspect', viewId = '0', output] = process.argv.slice(2);
 if (!['inspect', 'mount', 'open', 'close', 'remove', 'capture'].includes(action)) throw new Error('Use inspect, mount, open, close, remove, or capture.');
-if (action === 'capture' && !output) throw new Error('Capture requires an output filename outside the repository.');
+if (action === 'capture' && (!output || !outsideRepository(output))) throw new Error('Capture requires an output filename outside the repository.');
 const client = await connect(viewId);
 try {
     if (action === 'capture') {

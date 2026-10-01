@@ -189,7 +189,16 @@ static class WorkspaceChecks
                 using var state = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
                 Check(response.StatusCode == HttpStatusCode.OK && !state.RootElement.GetProperty("rendererReady").GetBoolean(), "native renderer defaults unavailable");
             }
-            Check(await ReplayCommand("{\"action\":\"load\",\"id\":\"http-synthetic\"}") == HttpStatusCode.Conflict, "native load requires fresh renderer readiness");
+            Check(await ReplayCommand("{\"action\":\"load\",\"id\":\"http-synthetic\"}") == HttpStatusCode.Accepted, "native load without a ready renderer waits instead of failing");
+            using (var response = await client.GetAsync(root + "/native-replay"))
+            {
+                using var state = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                var start = state.RootElement.GetProperty("start");
+                Check(start.GetProperty("pending").GetString() == "http-synthetic" && start.GetProperty("reason").GetString() == "game-unavailable"
+                    && start.GetProperty("message").GetString()!.Length > 10 && !state.RootElement.GetProperty("playback").GetProperty("visible").GetBoolean(),
+                    "pending start reports its reason and does not play");
+            }
+            Check(await ReplayCommand("{\"action\":\"cancel\"}") == HttpStatusCode.OK, "pending start can be cancelled");
             Check(await ReplayCommand("{\"action\":\"close\"}", false) == HttpStatusCode.Forbidden, "native command requires custom header");
             Check(await ReplayCommand(new string('x', 1025)) == HttpStatusCode.Forbidden, "native oversized body rejected");
             Check(await ReplayCommand("{") == HttpStatusCode.BadRequest, "native malformed JSON rejected");
@@ -214,7 +223,8 @@ static class WorkspaceChecks
             }
             Check(await ReplayCommand("{\"action\":\"close\"}") == HttpStatusCode.OK, "native close accepted");
             File.SetLastWriteTimeUtc(rendererPath, DateTime.UtcNow.AddSeconds(-10));
-            Check(await ReplayCommand("{\"action\":\"load\",\"id\":\"http-synthetic\"}") == HttpStatusCode.Conflict, "stale renderer readiness rejected");
+            Check(await ReplayCommand("{\"action\":\"load\",\"id\":\"http-synthetic\"}") == HttpStatusCode.Accepted, "stale renderer readiness waits instead of loading");
+            Check(await ReplayCommand("{\"action\":\"cancel\"}") == HttpStatusCode.OK, "stale wait cancelled");
             // Publication gaps reuse only the original fresh acknowledgement.
             var ackPath = Path.Combine(folder, "ack-race.json");
             var ackNow = DateTime.UtcNow;
@@ -269,7 +279,8 @@ static class WorkspaceChecks
                 using (var state = JsonDocument.Parse(JsonSerializer.Serialize(player.Status)))
                     Check(started.Elapsed.TotalSeconds > 1 && state.RootElement.GetProperty("playing").GetBoolean()
                         && state.RootElement.GetProperty("time").GetDouble() > 1, "actual pump plays beyond one second across repeated publication gaps");
-                File.WriteAllText(pumpAckPath, "{\"state\":\"error\",\"mode\":\"main\"}");
+                // Replace atomically: the pump reads this file 30 times a second.
+                File.WriteAllText(pumpAckPath + ".next", "{\"state\":\"error\",\"mode\":\"main\"}"); File.Move(pumpAckPath + ".next", pumpAckPath, true);
                 await Task.Delay(200);
                 using (var state = JsonDocument.Parse(JsonSerializer.Serialize(player.Status)))
                     Check(!state.RootElement.GetProperty("visible").GetBoolean() && !state.RootElement.GetProperty("playing").GetBoolean(), "actual pump closes on explicit renderer error");

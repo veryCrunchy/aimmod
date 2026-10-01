@@ -28,3 +28,9 @@ test('live metric updates reuse DOM rows and remove only unavailable optional me
  s.timers[0].fn();s.requests[1].finish(200,{live:{...live,score:101,damage:2},settings});assert.equal(s.ids['stats-values'].children[0],first);assert.equal(first.children[1].textContent,'101');assert.equal(s.ids['stats-values'].children.find(x=>x.children[0].textContent==='Damage'),damage);
  s.timers[1].fn();s.requests[2].finish(200,{live:{...live,damage:null},settings});assert.equal(s.ids['stats-values'].children[0],first);assert.ok(!s.ids['stats-values'].children.includes(damage));
 });
+test('large live values are grouped and an opponent named like a metric keeps its own row',()=>{
+ const s=setup();s.requests[0].finish(200,{live:{...live,score:123456,opponentName:'Current',opponentScore:-0.2,projectedDelta:1500},settings});
+ const vs=s.ids['vs-values'].children,captions=vs.map(x=>x.children[0].textContent),values=vs.map(x=>x.children[1].textContent);
+ assert.equal(captions.filter(c=>c==='Current').length,2);assert.equal(values[0],'123,456');assert.equal(values[1],'0');assert.ok(values.includes('+1,500'));
+ assert.equal(s.ids['stats-values'].children[0].children[1].textContent,'123,456');
+});
