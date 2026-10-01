@@ -794,6 +794,36 @@ namespace aimmod
         const bool fresh = !std::any_of(m_weapons.begin(), m_weapons.end(), [](const Part& p) { return p.key.rfind("view|", 0) == 0 && Alive(p.component.Get()); });
         UObject* weapon = MakeWeapon(request, true);
         if (!weapon) return;
+        // A finish only shows on a weapon whose material has accent parameters (the
+        // newer weapon masters have none): then the weapon view shows the game's pistol.
+        if (!request.finish.empty())
+        {
+            bool finishable = false;
+            for (const Part& part : m_weapons)
+                if (part.component.Get() == weapon)
+                    for (const FWeakObjectPtr& m : part.materials)
+                    {
+                        std::set<std::string> vectors, scalars, textures;
+                        m_params.Names(m.Get(), vectors, scalars, textures);
+                        finishable |= vectors.contains("AccentColor") || vectors.contains("Emissive");
+                    }
+            if (!finishable)
+            {
+                Log("cosmetics preview: the selected weapon's material has no accent parameters; the weapon view shows the game's pistol");
+                SetVisible(weapon, false, false);
+                weapon = MakeWeapon(request, false);
+                if (!weapon) return;
+                Call(weapon, STR("/Script/Engine.SceneComponent:K2_AttachToComponent"), [&](const std::wstring& n, FProperty*, std::uint8_t* v) {
+                    if (n == STR("Parent")) WriteObject(v, meshes);
+                });
+                float p0[3], o0[3], e0[3], a0[3];
+                if (Location(meshes, p0) && Bounds(weapon, o0, e0) && Location(weapon, a0))
+                {
+                    const float to[3] = {a0[0] + p0[0] - o0[0], a0[1] + p0[1] - o0[1], a0[2] + p0[2] + 100 - o0[2]};
+                    SetWorldLocation(weapon, to);
+                }
+            }
+        }
         float pivot[3], origin[3], extent[3], at[3];
         if (fresh || !Alive(GetObject(weapon, STR("AttachParent"))))
         {

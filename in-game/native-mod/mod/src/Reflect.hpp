@@ -41,7 +41,7 @@ namespace aimmod::reflect
     // TSoftObjectPtr / TSoftClassPtr members: the asset path.
     std::wstring SoftPath(UObject* object, const wchar_t* name);
     std::vector<std::wstring> SoftPaths(UObject* object, const wchar_t* name, std::size_t limit);
-    // The game's or engine's own content only ("/Game/", "/Engine/").
+    // The game's or engine's own content only ("/Game/", "/Engine/", "/MapCreator/").
     UObject* LoadGameAsset(const std::wstring& path);
 
     // One reflected call; `fill` writes each input parameter by name and

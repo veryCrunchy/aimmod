@@ -160,7 +160,9 @@ namespace aimmod::reflect
     }
     UObject* LoadGameAsset(const std::wstring& path)
     {
-        if ((path.rfind(STR("/Game/"), 0) != 0 && path.rfind(STR("/Engine/"), 0) != 0) || path.find(STR("..")) != std::wstring::npos) return nullptr;
+        // The game's content, the engine's, and the game's own map-editor plugin (/MapCreator/).
+        if ((path.rfind(STR("/Game/"), 0) != 0 && path.rfind(STR("/Engine/"), 0) != 0 && path.rfind(STR("/MapCreator/"), 0) != 0) || path.find(STR("..")) != std::wstring::npos)
+            return nullptr;
         return game::FindOrLoadAsset(path);
     }
 
