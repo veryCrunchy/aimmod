@@ -971,6 +971,64 @@ accounts (for P2P).
 
   The only thing to check first is `compatible: true`, which means the same
   join-string version.
+### Contract additions: rejoin, friend status, spectate (still version 1)
+
+**Rejoin after a crash or disconnect.**
+
+- On every lobby entry and host change, AimModSteam writes
+  `steam-last-lobby.json` (lobby id, host id, time) into the user's own
+  `%LOCALAPPDATA%\AimMod\KovaaksNative`. It never leaves the machine and is
+  never logged in full.
+- Leaving on purpose or being kicked clears it. A closed lobby, a shutdown or a
+  crash keeps it for 3 hours.
+- `ready.lastLobby` is `{lobby, host, hostName, ageSeconds}` or `null`. It's
+  only filled while not in a lobby.
+- `lobby.rejoin {}` joins it, and the handshake runs again. It fails with
+  `no-last-lobby`, `busy`, or the usual join errors when the lobby is gone.
+
+**Friend status.**
+
+- Every AimModSteam sets rich presence:
+  - `aimmod_state` = `lobby`, `playing` or `idle`;
+  - `aimmod_scenario` = the current scenario from AimModCore's
+    `core-scene.json`, empty when hidden;
+  - `aimmod_lobby` = `<members>/<max>/<j|->` while in a lobby, where `j`
+    means joinable from the friends list.
+- `presence.privacy {hideScenario}`, or `hide_scenario=1` in `config.txt`,
+  keeps the scenario out of rich presence.
+- `friends` entries for friends playing KovaaK's now also carry `aimmodState`,
+  `scenario`, `lobbySize`, `lobbyMax` and `lobbyJoinable` when present.
+
+**Spectate feed.**
+
+- `spectate.start {peer, rate 1..60 (default 60)}` and `spectate.stop {}`.
+  Switching targets stops the old stream.
+- Events: `spectate.frame {peer, seq, t, x, y, z, pitch, yaw, roll, fov,
+  fired}` at up to the requested rate, and `spectate.ended {peer, reason}`
+  when the target leaves.
+- **Routing (star topology).** A client spectator sends `SpectateSub(target,
+  rate)` to the host. The host keeps per-target subscribers and asks the
+  target for the highest requested rate. The target sends 49-byte `Camera`
+  frames, unreliable, only while subscribed. The host relays them only to
+  that target's subscribers, or emits them itself when the host is the
+  spectator.
+- **Bandwidth:** at most 60 × 49 B ≈ 3 KB/s per watched player, one stream
+  per target whatever the number of spectators. The target sends no camera
+  frames at all when nobody watches.
+- **Not done yet:** `fired` is always false, because the shot counters live in
+  AimModCore. The frame format will follow AimModCore's presenter input for
+  the follow camera once that's defined.
+
+**Pose frame: remote crouch and height.**
+
+- `Pose` now carries the sender's crouch flag (bit 0) and capsule half-height
+  (flag bit 1 plus a f32), and the receiver uses only those.
+- Frames without the half-height still decode, and use the default 88.
+- Remote transforms are computed in `src/GhostMath.hpp` from the received
+  samples alone. Local camera, capsule or crouch can't reach them, and unit
+  tests check that.
+- The sender reads the possessed pawn (`Controller.K2_GetPawn`, falling back
+  to `MyCharacter`). It sends the actor location with Z, plus velocity.
 ### Mapping to the service's `IMultiplayerTransport`
 
 This is the lobby UI agent's model on `feat/kovaaks-multiplayer-ui`

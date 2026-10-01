@@ -15,6 +15,7 @@
 #include <Unreal/World.hpp>
 
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <exception>
 #include <vector>
@@ -28,18 +29,9 @@ namespace aimmod
 
     namespace
     {
-        constexpr double InterpolationDelay = 0.1; // seconds behind the newest sample
-        constexpr double MaxExtrapolation = 0.1;
         constexpr int MaxSpawnFailures = 3;          // then this peer falls back to shapes
         constexpr std::uint64_t TestPeer = 1;         // synthetic peer for avatar_test
 
-        double WrapAngle(double a)
-        {
-            while (a > 180) a -= 360;
-            while (a < -180) a += 360;
-            return a;
-        }
-        double LerpAngle(double a, double b, double t) { return a + WrapAngle(b - a) * t; }
 
         void WriteFloats(std::uint8_t* value, const Param& p, double a, double b, double c)
         {
@@ -84,6 +76,9 @@ namespace aimmod
         ok &= m_cameraRotation.BindPath(STR("/Script/Engine.PlayerCameraManager:GetCameraRotation"), Shape::Vector);
         ok &= m_cameraManager.Bind(game::FindClass(STR("/Script/Engine.PlayerController")), STR("PlayerCameraManager"));
         ok &= m_myCharacter.Bind(game::FindClass(STR("/Script/GameSkillsTrainer.MetaPlayerController")), STR("MyCharacter"));
+        m_cameraLocation.BindPath(STR("/Script/Engine.PlayerCameraManager:GetCameraLocation"), Shape::Vector);
+        m_cameraFov.BindPath(STR("/Script/Engine.PlayerCameraManager:GetFOVAngle"), Shape::Number);
+        m_getPawn.BindPath(STR("/Script/Engine.Controller:K2_GetPawn"), Shape::Object);
         m_isCrouching.BindPath(STR("/Script/GameSkillsTrainer.MetaCharacter:IsCrouching"), Shape::Bool);
         m_capsuleHalfHeight.BindPath(STR("/Script/Engine.CapsuleComponent:GetScaledCapsuleHalfHeight"), Shape::Number);
         m_capsuleRadius.BindPath(STR("/Script/Engine.CapsuleComponent:GetScaledCapsuleRadius"), Shape::Number);
@@ -160,7 +155,13 @@ namespace aimmod
     UObject* GhostDemo::LocalCharacter(UObject*& controller)
     {
         controller = m_controller.Get();
-        UObject* character = controller ? m_myCharacter.Object(controller) : nullptr;
+        UObject* character = nullptr;
+        if (controller)
+        {
+            // The possessed pawn is the actor that actually moves (and jumps); MyCharacter is the fallback.
+            character = m_getPawn.ok() ? m_getPawn.Object(controller) : nullptr;
+            if (!character || !game::IsLiveInstance(character)) character = m_myCharacter.Object(controller);
+        }
         if (character && game::IsLiveInstance(character)) return character;
         const double now = bridge::Bridge::Now();
         if (now < m_nextFind) return nullptr;
@@ -366,10 +367,10 @@ namespace aimmod
             m_shapesFailed = true;
             return false;
         }
-        const double d = m_radius * 2 / 100.0; // basic shapes are 100 units
-        ghost.body = SpawnShape(world, m_cylinder, d, d, m_halfHeight * 1.6 / 100.0);
-        ghost.head = SpawnShape(world, m_sphere, d * 0.9, d * 0.9, d * 0.9);
-        ghost.visor = SpawnShape(world, m_cube, d * 0.35, d * 0.7, d * 0.2);
+        const auto l = bridge::ghost::Layout(Sample{}); // sizes are reset from the remote pose every frame
+        ghost.body = SpawnShape(world, m_cylinder, l.body.sx, l.body.sy, l.body.sz);
+        ghost.head = SpawnShape(world, m_sphere, l.head.sx, l.head.sy, l.head.sz);
+        ghost.visor = SpawnShape(world, m_cube, l.visor.sx, l.visor.sy, l.visor.sz);
         ghost.world = world;
         return ghost.body.Get() && ghost.head.Get() && ghost.visor.Get();
     }
@@ -386,17 +387,21 @@ namespace aimmod
 
     void GhostDemo::PlaceShapes(Ghost& ghost, const Sample& s)
     {
+        // Only remote values: location (with Z), yaw, crouch and the sender's capsule height.
+        const auto l = bridge::ghost::Layout(s);
         FHitResult hit{};
-        const double rad = s.yaw * 3.14159265358979 / 180.0;
-        const double headZ = s.z + m_halfHeight * 0.85;
-        if (UObject* a = ghost.body.Get())
-            static_cast<AActor*>(a)->K2_SetActorLocationAndRotation(FVector(s.x, s.y, s.z - m_halfHeight * 0.1), FRotator(0, s.yaw, 0), false, hit, true);
-        if (UObject* a = ghost.head.Get()) static_cast<AActor*>(a)->K2_SetActorLocationAndRotation(FVector(s.x, s.y, headZ), FRotator(0, s.yaw, 0), false, hit, true);
-        if (UObject* a = ghost.visor.Get())
-            static_cast<AActor*>(a)->K2_SetActorLocationAndRotation(FVector(s.x + std::cos(rad) * m_radius, s.y + std::sin(rad) * m_radius, headZ),
-                                                                    FRotator(0, s.yaw, 0), false, hit, true);
+        auto place = [&](FWeakObjectPtr& part, const bridge::ghost::ShapePart& p) {
+            if (UObject* a = part.Get())
+            {
+                auto* actor = static_cast<AActor*>(a);
+                actor->SetActorScale3D(FVector(p.sx, p.sy, p.sz));
+                actor->K2_SetActorLocationAndRotation(FVector(p.x, p.y, p.z), FRotator(0, s.yaw, 0), false, hit, true);
+            }
+        };
+        place(ghost.body, l.body);
+        place(ghost.head, l.head);
+        place(ghost.visor, l.visor);
     }
-
     // --- per peer ---------------------------------------------------------
 
     void GhostDemo::Remove(Ghost& ghost)
@@ -440,7 +445,10 @@ namespace aimmod
                 for (auto& [_, g] : m_ghosts) DestroyShapes(g); // avatars die with the world
                 return;
             }
-            // Local pose.
+            const double now = bridge::Bridge::Now();
+
+            // Local pose: the possessed pawn's actor location (capsule centre, Z included),
+            // velocity, view rotation, crouch and current capsule half-height.
             double location[3]{}, velocity[3]{}, rotation[3]{};
             UObject* camera = m_cameraManager.Object(controller);
             if (m_actorLocation.Vector(character, location) && camera && m_cameraRotation.Vector(camera, rotation))
@@ -455,18 +463,46 @@ namespace aimmod
                 pose.vx = static_cast<float>(velocity[0]);
                 pose.vy = static_cast<float>(velocity[1]);
                 pose.vz = static_cast<float>(velocity[2]);
+                bool crouch = false;
                 if (m_isCrouching.ok())
-                    if (auto crouch = m_isCrouching.Bool(character); crouch && *crouch) pose.flags |= 1;
+                    if (auto c = m_isCrouching.Bool(character); c && *c) crouch = true;
+                if (crouch) pose.flags |= bridge::PoseFlagCrouch;
+                if (UObject* capsule = m_capsule.ok() ? m_capsule.Object(character) : nullptr)
+                    if (auto h = m_capsuleHalfHeight.Number(capsule); h && *h > 5 && *h < 1000)
+                    {
+                        pose.halfHeight = static_cast<float>(*h);
+                        pose.flags |= bridge::PoseFlagHalfHeight;
+                    }
                 m_bridge.SubmitLocalPose(pose);
+                if (now >= m_nextDiagnostic && !m_bridge.Ghosts().empty())
+                {
+                    m_nextDiagnostic = now + 10;
+                    char line[160];
+                    std::snprintf(line, sizeof(line), "pose: z=%.1f vz=%.1f half=%.1f crouch=%d", pose.z, pose.vz, pose.halfHeight, crouch ? 1 : 0);
+                    m_log(line);
+                }
+                // Spectate feed: only while someone watches us.
+                if (m_bridge.CameraWanted())
+                {
+                    double eye[3]{};
+                    if (m_cameraLocation.Vector(camera, eye))
+                    {
+                        bridge::CameraFrame frame;
+                        frame.x = static_cast<float>(eye[0]);
+                        frame.y = static_cast<float>(eye[1]);
+                        frame.z = static_cast<float>(eye[2]);
+                        frame.pitch = static_cast<float>(rotation[0]);
+                        frame.yaw = static_cast<float>(rotation[1]);
+                        frame.roll = static_cast<float>(rotation[2]);
+                        const auto fov = m_cameraFov.ok() ? m_cameraFov.Number(camera) : std::nullopt;
+                        frame.fov = fov && *fov > 1 && *fov < 179 ? static_cast<float>(*fov) : 90.f;
+                        m_bridge.SubmitLocalCamera(frame);
+                    }
+                }
             }
-            if (UObject* capsule = m_capsule.ok() ? m_capsule.Object(character) : nullptr)
-            {
-                if (auto h = m_capsuleHalfHeight.Number(capsule); h && *h > 10 && *h < 1000) m_halfHeight = *h;
-                if (auto r = m_capsuleRadius.Number(capsule); r && *r > 5 && *r < 500) m_radius = *r;
-            }
+            if (!m_options.showRemote) return;
 
             UObject* world = static_cast<AActor*>(character)->GetWorld();
-            const double now = bridge::Bridge::Now();
             std::map<std::uint64_t, bool> seen;
 
             // Offline check: one avatar circling 4 m around the player.
@@ -478,18 +514,21 @@ namespace aimmod
                     m_log("avatars: offline test active (avatar_test=1)");
                 }
                 const double t = now - m_testStart, w = 0.6, r = 400;
-                Sample s{location[0] + std::cos(t * w) * r, location[1] + std::sin(t * w) * r, location[2], 0, 0, 0, 0, 0,
-                         std::fmod(t, 10.0) > 7.0};
+                Sample s;
+                s.x = location[0] + std::cos(t * w) * r;
+                s.y = location[1] + std::sin(t * w) * r;
+                s.z = location[2] + (std::fmod(t, 6.0) < 0.6 ? std::sin(std::fmod(t, 6.0) / 0.6 * 3.14159265358979) * 60 : 0); // a hop every 6 s
                 s.vx = -std::sin(t * w) * r * w;
                 s.vy = std::cos(t * w) * r * w;
                 s.yaw = std::atan2(s.vy, s.vx) * 180.0 / 3.14159265358979;
+                s.crouch = std::fmod(t, 10.0) > 7.0;
+                s.halfHeight = s.crouch ? bridge::ghost::DefaultHalfHeight * 0.6 : bridge::ghost::DefaultHalfHeight;
                 seen[TestPeer] = true;
                 Show(TestPeer, m_ghosts[TestPeer], s, world, character);
             }
 
-            // Remote players.
+            // Remote players: everything below comes from their samples only.
             const std::string localScene = m_bridge.LocalScene();
-            const double renderTime = now - InterpolationDelay;
             for (const auto& peer : m_bridge.Ghosts())
             {
                 if (peer.samples.empty()) continue;
@@ -505,39 +544,10 @@ namespace aimmod
                 }
                 if (!ghost.hiddenScene.empty()) m_log("ghost demo: peer " + bridge::Redact(peer.peer) + " is on this scenario");
                 ghost.hiddenScene.clear();
-
-                // Interpolate ~100 ms behind the newest sample.
-                const auto& v = peer.samples;
-                Sample s{};
-                const auto from = [&](const bridge::Pose& p) {
-                    return Sample{p.x, p.y, p.z, p.yaw, p.pitch, p.vx, p.vy, p.vz, (p.flags & 1) != 0};
-                };
-                if (renderTime <= v.front().time) s = from(v.front().pose);
-                else if (renderTime >= v.back().time)
-                {
-                    s = from(v.back().pose);
-                    const double dt = std::min(renderTime - v.back().time, MaxExtrapolation);
-                    s.x += s.vx * dt;
-                    s.y += s.vy * dt;
-                    s.z += s.vz * dt;
-                }
-                else
-                {
-                    std::size_t i = 1;
-                    while (i < v.size() && v[i].time < renderTime) ++i;
-                    const Sample a = from(v[i - 1].pose), b = from(v[i].pose);
-                    const double span = v[i].time - v[i - 1].time;
-                    const double t = span > 0 ? (renderTime - v[i - 1].time) / span : 1;
-                    s = b;
-                    s.x = a.x + (b.x - a.x) * t;
-                    s.y = a.y + (b.y - a.y) * t;
-                    s.z = a.z + (b.z - a.z) * t;
-                    s.yaw = LerpAngle(a.yaw, b.yaw, t);
-                    s.vx = a.vx + (b.vx - a.vx) * t;
-                    s.vy = a.vy + (b.vy - a.vy) * t;
-                    s.vz = a.vz + (b.vz - a.vz) * t;
-                }
-                Show(peer.peer, ghost, s, world, character);
+                std::vector<bridge::ghost::TimedPose> samples;
+                samples.reserve(peer.samples.size());
+                for (const auto& sample : peer.samples) samples.push_back({sample.time, sample.pose});
+                Show(peer.peer, ghost, bridge::ghost::Sample(samples, now), world, character);
             }
 
             // Peers that left, disconnected or went quiet.
@@ -558,7 +568,6 @@ namespace aimmod
             m_log(std::string("ghost demo: disabled after an error: ") + e.what());
         }
     }
-
     void GhostDemo::Shutdown()
     {
         try

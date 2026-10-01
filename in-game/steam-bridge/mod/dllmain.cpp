@@ -122,7 +122,9 @@ public:
         m_commandLine = GetCommandLineW();
         const auto config = ReadConfig();
         m_ghostDemo = Flag(config, "ghost_demo", false);
+        m_hideScenario = Flag(config, "hide_scenario", false);
         m_ghostOptions.avatars = Flag(config, "avatars", true);
+        m_ghostOptions.showRemote = m_ghostDemo;
         m_ghostOptions.avatarTest = Flag(config, "avatar_test", false);
         if (auto it = config.find("avatar_profile"); it != config.end()) m_ghostOptions.avatarProfile = it->second;
         if (auto it = config.find("avatar_drive"); it != config.end()) m_ghostOptions.driveWithUpdate = it->second != "teleport";
@@ -139,7 +141,7 @@ public:
                 if (m_gameThread.load(std::memory_order_relaxed) == 0) m_gameThread = GetCurrentThreadId();
                 DrainGameThreadJobs();
                 if (m_stop.load(std::memory_order_relaxed)) return;
-                if (!m_ghosts && m_ghostDemo)
+                if (!m_ghosts)
                     if (auto* b = m_ready.load()) m_ghosts = std::make_unique<aimmod::GhostDemo>(*b, Log, m_ghostOptions);
                 if (m_ghosts) m_ghosts->Tick();
             },
@@ -176,7 +178,12 @@ private:
             return;
         }
         auto bridge = std::make_unique<bridge::Bridge>(Log, [this](const std::function<void()>& fn) { RunOnGameThread(fn); });
-        bridge->SetOptions({m_ghostDemo, ScenePath()});
+        bridge::Bridge::Options options;
+        options.ghostDemo = m_ghostDemo;
+        options.scenePath = ScenePath();
+        options.stateDir = std::filesystem::path(ScenePath()).parent_path().wstring();
+        options.hideScenario = m_hideScenario;
+        bridge->SetOptions(options);
         if (!bridge->Start(module, m_commandLine)) return;
         m_bridge = std::move(bridge);
         m_ready = m_bridge.get();
@@ -228,6 +235,7 @@ private:
     std::atomic<bridge::Bridge*> m_ready{nullptr};
     std::unique_ptr<aimmod::GhostDemo> m_ghosts;
     bool m_ghostDemo = false;
+    bool m_hideScenario = false;
     aimmod::GhostOptions m_ghostOptions;
     std::thread m_starter;
     std::atomic<bool> m_stop{false};

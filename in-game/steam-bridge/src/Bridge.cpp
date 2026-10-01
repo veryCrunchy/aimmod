@@ -4,6 +4,9 @@
 #include <cstdio>
 #include <cstring>
 #include <random>
+#include <ctime>
+#include <filesystem>
+#include <fstream>
 
 namespace bridge
 {
@@ -97,6 +100,10 @@ namespace bridge
             {"ugc.download", {"item", "highPriority"}},
             {"xfer.chunk", {"peer", "transfer", "index", "data"}},
             {"xfer.cancel", {"peer", "transfer", "reason"}},
+            {"lobby.rejoin", {}},
+            {"presence.privacy", {"hideScenario"}},
+            {"spectate.start", {"peer", "rate"}},
+            {"spectate.stop", {}},
         };
 
         const char* XferReason(std::uint16_t code)
@@ -176,6 +183,8 @@ namespace bridge
         m_listenersRegistered = true;
 
         m_steam.F_SetRichPresence(m_steam.friends, "aimmod", std::to_string(ContractVersion).c_str());
+        m_hideScenario = m_options.hideScenario;
+        LoadLast();
 
         m_pipe = std::make_unique<PipeServer>(
             PipeName,
@@ -270,6 +279,13 @@ namespace bridge
             ReceiveAll();
         }
         if (m_options.ghostDemo) GhostTick();
+        if (Clock::now() >= m_nextScene)
+        {
+            m_nextScene = Clock::now() + 1s;
+            ReadScene();
+            UpdateStatusPresence();
+        }
+        SendCamera();
         // Avatars that were still loading.
         const auto now = Clock::now();
         auto avatars = std::move(m_avatars);
@@ -733,6 +749,106 @@ namespace bridge
                 Result(*id, true);
             }
         }
+        else if (name == "lobby.rejoin")
+        {
+            if (!m_last)
+            {
+                Result(*id, false, "no-last-lobby", "There is no lobby to rejoin.");
+                return;
+            }
+            if (m_lobby == m_last->lobby)
+            {
+                Result(*id, true);
+                return;
+            }
+            if (m_lobby || !m_calls.empty())
+            {
+                Result(*id, false, "busy", "Leave the current lobby first.");
+                return;
+            }
+            PendingCall call{PendingCall::Kind::Join};
+            call.commandId = *id;
+            call.lobby = m_last->lobby;
+            call.call = m_steam.MM_JoinLobby(m_steam.mm, call.lobby);
+            call.deadline = Clock::now() + CallTimeout;
+            m_calls.push_back(std::move(call));
+            m_log("rejoining lobby " + Redact(m_last->lobby));
+        }
+        else if (name == "presence.privacy")
+        {
+            const auto hide = c.Bool("hideScenario");
+            if (!hide)
+            {
+                Result(*id, false, "invalid", "hideScenario must be true or false.");
+                return;
+            }
+            m_hideScenario = *hide;
+            m_rpScenario = "\x01"; // force a refresh
+            UpdateStatusPresence();
+            Result(*id, true);
+        }
+        else if (name == "spectate.start" || name == "spectate.stop")
+        {
+            if (!requireLobby()) return;
+            std::uint64_t target = m_watching;
+            int rate = 0;
+            if (name == "spectate.start")
+            {
+                const auto peer = peerArg("peer");
+                const auto r = c.Int("rate").value_or(MaxSpectateRate);
+                if (!peer || *peer == m_self || !IsMember(*peer) || r < 1 || r > MaxSpectateRate)
+                {
+                    Result(*id, false, "invalid", "peer must be another member and rate 1..60.");
+                    return;
+                }
+                if (m_watching && m_watching != *peer)
+                {
+                    // Switch: stop the old stream first.
+                    const std::uint64_t old = m_watching;
+                    if (IsHost())
+                    {
+                        m_spectators[old].erase(m_self);
+                        UpdateSpectateRoute(old);
+                    }
+                    else if (Conn* host = FindConn(m_owner); host && host->state == ConnState::Ready)
+                    {
+                        WireMessage stop{WireType::SpectateSub};
+                        stop.lobby = old;
+                        SendWire(*host, stop, true);
+                    }
+                }
+                target = *peer;
+                rate = static_cast<int>(r);
+            }
+            if (!target)
+            {
+                Result(*id, true);
+                return;
+            }
+            if (IsHost())
+            {
+                if (rate) m_spectators[target][m_self] = rate;
+                else m_spectators[target].erase(m_self);
+                UpdateSpectateRoute(target);
+            }
+            else
+            {
+                Conn* host = FindConn(m_owner);
+                if (!host || host->state != ConnState::Ready)
+                {
+                    Result(*id, false, "not-connected", "Not connected to the lobby host.");
+                    return;
+                }
+                WireMessage sub{WireType::SpectateSub};
+                sub.lobby = target;
+                sub.rate = static_cast<std::uint8_t>(rate);
+                SendWire(*host, sub, true);
+            }
+            m_watching = rate ? target : 0;
+            m_watchRate = rate;
+            m_log(rate ? "spectating " + Redact(target) + " at " + std::to_string(rate) + " Hz" : std::string("spectating stopped"));
+            Result(*id, true);
+        }
         else if (name == "xfer.chunk")
         {
             const auto peer = peerArg("peer");
@@ -900,6 +1016,7 @@ namespace bridge
         m_members.clear();
         m_data.clear();
         PollLobby(true);
+        if (m_lobby) SaveLast();
     }
 
     void Bridge::LeaveLobby(const char* reason)
@@ -909,6 +1026,11 @@ namespace bridge
         CloseListen();
         m_steam.MM_LeaveLobby(m_steam.mm, m_lobby);
         const std::uint64_t left = m_lobby;
+        const std::string why = reason;
+        if (why == "left" || why == "kicked" || why == "switching lobby") ClearLast(); // closed/shutdown keep it for lobby.rejoin
+        m_spectators.clear();
+        m_cameraRate = 0;
+        m_watching = 0;
         m_lobby = m_owner = m_token = 0;
         m_members.clear();
         m_data.clear();
@@ -972,6 +1094,7 @@ namespace bridge
                 Emit(json::Object().Int("v", ContractVersion).Str("ev", "member.left").Str("peer", Id(m)).Done());
                 m_log("member left: " + Redact(m));
                 ForgetGhost(m);
+                ForgetSpectate(m);
                 if (FindConn(m)) CloseConn(m, false, "left the lobby");
             }
         const bool ownerChanged = owner != m_owner;
@@ -984,7 +1107,11 @@ namespace bridge
         }
         m_data = std::move(data);
         m_owner = owner;
-        if (ownerChanged) UpdateRole();
+        if (ownerChanged)
+        {
+            UpdateRole();
+            SaveLast();
+        }
         if (changed)
         {
             UpdatePresence();
@@ -1074,6 +1201,8 @@ namespace bridge
         Conn conn = it->second;
         m_conns.erase(it);
         CancelTransfersWith(peer, "disconnected");
+        if (conn.outgoing) m_cameraRate = 0; // our host link is gone
+        else ForgetSpectate(peer);
         if (bye && conn.state == ConnState::Ready) SendWire(conn, WireMessage{WireType::Bye}, true);
         m_steam.sockets->CloseConnection(conn.handle, 0, "aimmod", bye || linger);
         if (conn.state == ConnState::Ready) m_log("p2p disconnected from " + Redact(peer) + " (" + reason + ")");
@@ -1287,6 +1416,36 @@ namespace bridge
         case WireType::Pose:
             if (m_options.ghostDemo) OnPose(conn, m.pose);
             break;
+        case WireType::SpectateSub:
+            if (!conn.outgoing && IsHost())
+            {
+                // A client wants a stream (target = m.lobby).
+                if (m.lobby == peer || !IsMember(m.lobby)) break;
+                if (m.rate) m_spectators[m.lobby][peer] = m.rate;
+                else m_spectators[m.lobby].erase(peer);
+                UpdateSpectateRoute(m.lobby);
+            }
+            else if (conn.outgoing && peer == m_owner && m.lobby == m_self)
+            {
+                if (m.rate != m_cameraRate.load()) m_log(m.rate ? "camera stream requested at " + std::to_string(m.rate) + " Hz" : std::string("camera stream stopped"));
+                m_cameraRate = m.rate; // the host wants our camera
+            }
+            break;
+        case WireType::Camera:
+            if (!conn.outgoing && IsHost())
+            {
+                if (m.camera.origin != peer) break; // a client only streams itself
+                const auto it = m_spectators.find(peer);
+                if (it == m_spectators.end()) break;
+                for (const auto& [spectator, _] : it->second)
+                {
+                    if (spectator == m_self) EmitCamera(m.camera);
+                    else if (Conn* s = FindConn(spectator); s && s->state == ConnState::Ready) SendWire(*s, m, false);
+                }
+            }
+            else if (conn.outgoing && peer == m_owner && m.camera.origin == m_watching)
+                EmitCamera(m.camera);
+            break;
         case WireType::Chunk:
         {
             const auto key = std::make_pair(peer, m.transfer);
@@ -1467,6 +1626,12 @@ namespace bridge
             .Raw("features", R"(["lobby","p2p","ugc","xfer"])")
             .Int("maxChunk", static_cast<std::int64_t>(MaxChunk))
             .Int("xferWindow", static_cast<std::int64_t>(XferWindow));
+        if (m_last && !m_lobby)
+        {
+            const std::int64_t age = static_cast<std::int64_t>(std::time(nullptr)) - m_last->at;
+            o.Raw("lastLobby", json::Object().Str("lobby", Id(m_last->lobby)).Str("host", Id(m_last->host)).Str("hostName", Name(m_last->host)).Int("ageSeconds", age).Done());
+        }
+        else o.Null("lastLobby");
         Emit(o.Done());
         if (m_pendingJoin) EmitJoinRequest(*m_pendingJoin);
     }
@@ -1543,6 +1708,24 @@ namespace bridge
                 .Bool("playing", playing)
                 .Bool("aimmod", aimmod);
             if (joinLobby) o.Str("lobby", Id(joinLobby));
+            if (playing)
+            {
+                auto rp = [&](const char* key) {
+                    const char* v = m_steam.F_GetFriendRichPresence(m_steam.friends, f, key);
+                    std::string s = v ? v : "";
+                    if (s.size() > 96) s.resize(96);
+                    return s;
+                };
+                const std::string state = rp("aimmod_state");
+                if (!state.empty()) o.Str("aimmodState", state);
+                if (const std::string scenario = rp("aimmod_scenario"); !scenario.empty()) o.Str("scenario", scenario);
+                // aimmod_lobby = "<members>/<max>/<j|-">
+                const std::string lobby = rp("aimmod_lobby");
+                int members = 0, max = 0;
+                char joinable = '-';
+                if (sscanf_s(lobby.c_str(), "%d/%d/%c", &members, &max, &joinable, 1u) == 3 && members > 0 && max > 0 && members <= 64 && max <= 64)
+                    o.Int("lobbySize", members).Int("lobbyMax", max).Bool("lobbyJoinable", joinable == 'j');
+            }
             list.push_back(o.Done());
         }
         Emit(json::Object().Int("v", ContractVersion).Str("ev", "friends").Raw("friends", json::Array(list)).Done());
@@ -1726,6 +1909,194 @@ namespace bridge
                      .Str("by", "local")
                      .Done());
     }
+    // --- reconnect --------------------------------------------------------
+
+    namespace
+    {
+        constexpr std::int64_t LastLobbyMaxAge = 3 * 60 * 60; // offer a rejoin for 3 hours
+        std::filesystem::path LastLobbyFile(const std::wstring& dir) { return std::filesystem::path(dir) / L"steam-last-lobby.json"; }
+    } // namespace
+
+    void Bridge::LoadLast()
+    {
+        m_last.reset();
+        if (m_options.stateDir.empty()) return;
+        std::ifstream in(LastLobbyFile(m_options.stateDir), std::ios::binary);
+        std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        const auto doc = json::Parse(text, json::Limits{4096, 3, 256, 16});
+        if (!doc || !doc->IsObject()) return;
+        const auto lobby = ParseId(doc->Str("lobby", 20).value_or(""));
+        const auto host = ParseId(doc->Str("host", 20).value_or(""));
+        const auto at = doc->Int("at");
+        if (!lobby || !IsLobbyId(*lobby) || !host || !IsIndividualId(*host) || !at) return;
+        if (static_cast<std::int64_t>(std::time(nullptr)) - *at > LastLobbyMaxAge) return;
+        m_last = LastLobby{*lobby, *host, *at};
+        m_log("last lobby " + Redact(*lobby) + " can be rejoined");
+    }
+
+    void Bridge::SaveLast()
+    {
+        if (!m_lobby || m_options.stateDir.empty()) return;
+        m_last = LastLobby{m_lobby, m_owner, static_cast<std::int64_t>(std::time(nullptr))};
+        // Local only (the user's own KovaaksNative folder); never logged in full.
+        const auto file = LastLobbyFile(m_options.stateDir);
+        const auto temp = file.wstring() + L".tmp";
+        {
+            std::ofstream out(temp, std::ios::binary | std::ios::trunc);
+            out << json::Object().Str("lobby", Id(m_last->lobby)).Str("host", Id(m_last->host)).Int("at", m_last->at).Done();
+        }
+        MoveFileExW(temp.c_str(), file.c_str(), MOVEFILE_REPLACE_EXISTING);
+    }
+
+    void Bridge::ClearLast()
+    {
+        m_last.reset();
+        if (m_options.stateDir.empty()) return;
+        std::error_code error;
+        std::filesystem::remove(LastLobbyFile(m_options.stateDir), error);
+    }
+
+    // --- scene and status presence ----------------------------------------
+
+    void Bridge::ReadScene()
+    {
+        std::string scene;
+        bool running = false;
+        if (!m_options.scenePath.empty())
+        {
+            HANDLE file = CreateFileW(m_options.scenePath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
+            if (file != INVALID_HANDLE_VALUE)
+            {
+                char buffer[4096];
+                DWORD got = 0;
+                if (ReadFile(file, buffer, sizeof(buffer), &got, nullptr) && got > 0 && got < sizeof(buffer))
+                    if (const auto doc = json::Parse(std::string_view(buffer, got), json::Limits{4096, 4, 1024, 64}))
+                    {
+                        scene = doc->Str("scenario", MaxPoseScene).value_or("");
+                        running = doc->Bool("running").value_or(false) || doc->Bool("inChallenge").value_or(false);
+                    }
+                CloseHandle(file);
+            }
+        }
+        m_sceneRunning = running;
+        std::lock_guard lock(m_ghostMutex);
+        if (scene != m_scene) m_log("local scenario is \"" + scene + "\"");
+        m_scene = scene;
+    }
+
+    void Bridge::UpdateStatusPresence()
+    {
+        std::string scene;
+        {
+            std::lock_guard lock(m_ghostMutex);
+            scene = m_scene;
+        }
+        const std::string state = m_lobby ? "lobby" : !scene.empty() ? "playing" : "idle";
+        const std::string scenario = m_hideScenario ? std::string() : scene;
+        std::string lobby;
+        if (m_lobby)
+            lobby = std::to_string(m_members.size()) + "/" + std::to_string(m_steam.MM_GetLobbyMemberLimit(m_steam.mm, m_lobby)) + "/" +
+                    (m_joinable && m_privacy == "friends" ? "j" : "-");
+        if (state != m_rpState) m_steam.F_SetRichPresence(m_steam.friends, "aimmod_state", state.c_str());
+        if (scenario != m_rpScenario) m_steam.F_SetRichPresence(m_steam.friends, "aimmod_scenario", scenario.c_str());
+        if (lobby != m_rpLobby) m_steam.F_SetRichPresence(m_steam.friends, "aimmod_lobby", lobby.c_str());
+        m_rpState = state;
+        m_rpScenario = scenario;
+        m_rpLobby = lobby;
+    }
+
+    // --- spectate ---------------------------------------------------------
+
+    void Bridge::SubmitLocalCamera(const CameraFrame& camera)
+    {
+        std::lock_guard lock(m_ghostMutex);
+        m_localCamera = camera;
+    }
+
+    void Bridge::UpdateSpectateRoute(std::uint64_t target)
+    {
+        if (!IsHost()) return;
+        int rate = 0;
+        if (const auto it = m_spectators.find(target); it != m_spectators.end())
+        {
+            for (const auto& [_, hz] : it->second) rate = std::max(rate, hz);
+            if (it->second.empty()) m_spectators.erase(it);
+        }
+        if (target == m_self)
+        {
+            if (rate != m_cameraRate.load()) m_log(rate ? "camera stream requested at " + std::to_string(rate) + " Hz" : std::string("camera stream stopped"));
+            m_cameraRate = rate;
+            return;
+        }
+        if (Conn* conn = FindConn(target); conn && conn->state == ConnState::Ready)
+        {
+            WireMessage sub{WireType::SpectateSub};
+            sub.lobby = target;
+            sub.rate = static_cast<std::uint8_t>(rate);
+            SendWire(*conn, sub, true);
+        }
+    }
+
+    void Bridge::ForgetSpectate(std::uint64_t peer)
+    {
+        if (m_watching == peer)
+        {
+            m_watching = 0;
+            Emit(json::Object().Int("v", ContractVersion).Str("ev", "spectate.ended").Str("peer", Id(peer)).Str("reason", "left").Done());
+        }
+        if (!IsHost()) return;
+        m_spectators.erase(peer); // as a target
+        std::vector<std::uint64_t> targets;
+        for (auto& [target, spectators] : m_spectators)
+            if (spectators.erase(peer)) targets.push_back(target);
+        for (const auto target : targets) UpdateSpectateRoute(target);
+    }
+
+    void Bridge::SendCamera()
+    {
+        const int rate = m_cameraRate.load();
+        const auto now = Clock::now();
+        if (!m_lobby || rate <= 0 || now < m_nextCamera) return;
+        m_nextCamera = now + std::chrono::microseconds(1'000'000 / rate);
+        std::optional<CameraFrame> local;
+        {
+            std::lock_guard lock(m_ghostMutex);
+            local = m_localCamera;
+        }
+        if (!local) return;
+        WireMessage m{WireType::Camera};
+        m.camera = *local;
+        m.camera.origin = m_self;
+        m.camera.seq = ++m_cameraSeq;
+        if (IsHost())
+        {
+            const auto it = m_spectators.find(m_self);
+            if (it == m_spectators.end()) return;
+            for (const auto& [spectator, _] : it->second)
+                if (Conn* s = FindConn(spectator); s && s->state == ConnState::Ready) SendWire(*s, m, false);
+        }
+        else if (Conn* host = FindConn(m_owner); host && host->state == ConnState::Ready)
+            SendWire(*host, m, false);
+    }
+
+    void Bridge::EmitCamera(const CameraFrame& c)
+    {
+        Emit(json::Object()
+                 .Int("v", ContractVersion)
+                 .Str("ev", "spectate.frame")
+                 .Str("peer", Id(c.origin))
+                 .Int("seq", c.seq)
+                 .Num("t", Now())
+                 .Num("x", c.x)
+                 .Num("y", c.y)
+                 .Num("z", c.z)
+                 .Num("pitch", c.pitch)
+                 .Num("yaw", c.yaw)
+                 .Num("roll", c.roll)
+                 .Num("fov", c.fov)
+                 .Bool("fired", (c.flags & 1) != 0)
+                 .Done());
+    }
     // --- ghost demo -------------------------------------------------------
 
     double Bridge::Now() { return std::chrono::duration<double>(Clock::now().time_since_epoch()).count(); }
@@ -1782,27 +2153,6 @@ namespace bridge
     void Bridge::GhostTick()
     {
         const auto now = Clock::now();
-        if (now >= m_nextScene)
-        {
-            m_nextScene = now + 1s;
-            std::string scene;
-            if (!m_options.scenePath.empty())
-            {
-                HANDLE file = CreateFileW(m_options.scenePath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
-                if (file != INVALID_HANDLE_VALUE)
-                {
-                    char buffer[4096];
-                    DWORD got = 0;
-                    if (ReadFile(file, buffer, sizeof(buffer), &got, nullptr) && got > 0 && got < sizeof(buffer))
-                        if (const auto doc = json::Parse(std::string_view(buffer, got), json::Limits{4096, 4, 1024, 64}))
-                            scene = doc->Str("scenario", MaxPoseScene).value_or("");
-                    CloseHandle(file);
-                }
-            }
-            std::lock_guard lock(m_ghostMutex);
-            if (scene != m_scene) m_log("ghost demo: local scenario is \"" + scene + "\"");
-            m_scene = scene;
-        }
         if (!m_lobby || now < m_nextPose) return;
         m_nextPose = now + 33ms; // 30 Hz
         std::optional<Pose> local;

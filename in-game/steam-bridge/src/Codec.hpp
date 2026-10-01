@@ -64,10 +64,21 @@ namespace bridge
         Pong = 6,    // u32 seq, i64 echoed time
         Kick = 7,    // u64 lobby
         Bye = 8,     // no body
-        Pose = 9,    // ghost demo: u64 origin, u32 seq, 8 x f32 (x y z yaw pitch vx vy vz), u8 flags, u8 n, n bytes scene
+        Pose = 9,    // ghost demo: u64 origin, u32 seq, 8 x f32 (x y z yaw pitch vx vy vz), u8 flags, u8 n, [f32 half-height], n bytes scene
         Chunk = 10,  // bulk: u32 transfer, u32 index, 1..MaxChunk bytes (low-priority lane)
         ChunkAck = 11, // bulk: u32 transfer, u32 index
         Cancel = 12, // bulk: u32 transfer, u16 reason
+        SpectateSub = 13, // spectate: u64 target, u8 rate Hz (0 = stop)
+        Camera = 14,      // spectate: u64 origin, u32 seq, 7 x f32 (x y z pitch yaw roll fov), u8 flags
+    };
+
+    constexpr int MaxSpectateRate = 60;
+    struct CameraFrame
+    {
+        std::uint64_t origin = 0;
+        std::uint32_t seq = 0;
+        float x = 0, y = 0, z = 0, pitch = 0, yaw = 0, roll = 0, fov = 90;
+        std::uint8_t flags = 0; // bit 0: fired since the last frame
     };
 
     // Bulk transfers (host-to-joiner file streaming). A chunk's base64 fits a
@@ -86,12 +97,15 @@ namespace bridge
     constexpr std::size_t WireHeader = 8;
 
     constexpr std::size_t MaxPoseScene = 96;
+    constexpr std::uint8_t PoseFlagCrouch = 1;     // the sender is crouching
+    constexpr std::uint8_t PoseFlagHalfHeight = 2; // a f32 capsule half-height follows n (frames without it stay valid)
     struct Pose
     {
         std::uint64_t origin = 0;
         std::uint32_t seq = 0;
         float x = 0, y = 0, z = 0, yaw = 0, pitch = 0, vx = 0, vy = 0, vz = 0;
         std::uint8_t flags = 0;
+        float halfHeight = 0; // sender's current capsule half-height (with PoseFlagHalfHeight)
         std::string scene; // scenario name (<= MaxPoseScene bytes)
     };
 
@@ -106,6 +120,8 @@ namespace bridge
         std::vector<std::uint8_t> payload; // Data and Chunk bytes
         std::uint32_t transfer = 0, index = 0; // Chunk / ChunkAck / Cancel (code = reason)
         Pose pose;
+        CameraFrame camera;
+        std::uint8_t rate = 0; // SpectateSub (lobby/target reuse: lobby = target)
     };
     std::vector<std::uint8_t> Encode(const WireMessage& message);
     // Strict: exact sizes per type, version match, payload bounds.

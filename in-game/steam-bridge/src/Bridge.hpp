@@ -56,6 +56,8 @@ namespace bridge
         {
             bool ghostDemo = false;
             std::wstring scenePath; // AimModCore's core-scene.json
+            std::wstring stateDir;  // where steam-last-lobby.json lives (KovaaksNative)
+            bool hideScenario = false; // keep the scenario out of rich presence
         };
         void SetOptions(Options options) { m_options = std::move(options); } // before Start
         struct GhostSample
@@ -70,6 +72,8 @@ namespace bridge
         };
         // Thread-safe; called from the game thread.
         void SubmitLocalPose(const Pose& pose);
+        void SubmitLocalCamera(const CameraFrame& camera);
+        bool CameraWanted() const { return m_cameraRate.load() > 0; }
         std::vector<GhostPeer> Ghosts();
         std::string LocalScene();
         std::string LobbyValue(const std::string& key); // current lobby data, empty if unset
@@ -191,6 +195,21 @@ namespace bridge
         bool SendChunk(Conn& conn, const WireMessage& m);
         void CancelTransfersWith(std::uint64_t peer, const char* reason);
 
+        // Reconnect
+        void LoadLast();
+        void SaveLast();
+        void ClearLast();
+
+        // Presence and scene
+        void ReadScene();
+        void UpdateStatusPresence();
+
+        // Spectate
+        void UpdateSpectateRoute(std::uint64_t target);
+        void ForgetSpectate(std::uint64_t peer);
+        void SendCamera();
+        void EmitCamera(const CameraFrame& c);
+
         // Ghost demo
         void GhostTick();
         void OnPose(Conn& conn, const Pose& pose);
@@ -241,6 +260,24 @@ namespace bridge
         std::set<std::pair<std::uint64_t, std::uint32_t>> m_incoming;
         std::map<std::uint64_t, UgcWatch> m_ugcWatch;
         std::vector<UgcCall> m_ugcCalls;
+
+        struct LastLobby
+        {
+            std::uint64_t lobby = 0, host = 0;
+            std::int64_t at = 0; // unix seconds
+        };
+        std::optional<LastLobby> m_last;
+        bool m_sceneRunning = false;
+        bool m_hideScenario = false;
+        std::string m_rpState, m_rpScenario, m_rpLobby;
+        Clock::time_point m_nextPresence{};
+        std::map<std::uint64_t, std::map<std::uint64_t, int>> m_spectators; // host: target -> spectator -> Hz
+        std::atomic<int> m_cameraRate{0};                                    // as a target: Hz requested of us
+        std::uint64_t m_watching = 0;                                        // as a spectator
+        int m_watchRate = 0;
+        std::uint32_t m_cameraSeq = 0;
+        Clock::time_point m_nextCamera{};
+        std::optional<CameraFrame> m_localCamera; // guarded by m_ghostMutex
 
         Options m_options;
         std::mutex m_ghostMutex; // guards the four members below

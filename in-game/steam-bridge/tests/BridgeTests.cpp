@@ -2,9 +2,11 @@
 // lobby keys, join strings, launch command lines and the AMP1 wire format.
 // Synthetic ids only.
 #include "Codec.hpp"
+#include "GhostMath.hpp"
 #include "Json.hpp"
 
 #include <cstdio>
+#include <cmath>
 #include <limits>
 #include <string>
 
@@ -176,6 +178,56 @@ int main()
         Check(xd && xd->transfer == 7 && xd->code == 2, "cancel round-trips");
         Check(Base64Encode(chunk.payload.data(), MaxChunk).size() + 200 < MaxPipeFrame, "a chunk's base64 fits one pipe frame");
 
+        // Pose with the sender's capsule half-height; older frames without it stay valid.
+        {
+            WireMessage hp{WireType::Pose};
+            hp.pose.origin = Person;
+            hp.pose.seq = 3;
+            hp.pose.z = 160.5f;
+            hp.pose.vz = 420.f;
+            hp.pose.flags = PoseFlagCrouch | PoseFlagHalfHeight;
+            hp.pose.halfHeight = 55.f;
+            hp.pose.scene = "s";
+            auto he = Encode(hp);
+            Check(he.size() == WireHeader + 46 + 4 + 1, "pose with half-height size");
+            auto hd = Decode(he.data(), he.size());
+            Check(hd && hd->pose.halfHeight == 55.f && hd->pose.z == 160.5f && hd->pose.vz == 420.f && (hd->pose.flags & PoseFlagCrouch) && hd->pose.scene == "s",
+                  "pose with half-height round-trips (Z, vertical velocity, crouch)");
+            WireMessage old = hp;
+            old.pose.flags = PoseFlagCrouch; // a sender without the field
+            auto oe = Encode(old);
+            auto od = Decode(oe.data(), oe.size());
+            Check(od && od->pose.halfHeight == 0 && od->pose.scene == "s", "older pose frames without half-height still decode");
+        }
+
+        // Spectate frames
+        WireMessage sub{WireType::SpectateSub};
+        sub.lobby = Person;
+        sub.rate = 60;
+        auto se = Encode(sub);
+        auto sd = Decode(se.data(), se.size());
+        Check(sd && sd->type == WireType::SpectateSub && sd->lobby == Person && sd->rate == 60, "spectate subscription round-trips");
+        se.back() = 61;
+        Check(!Decode(se.data(), se.size()), "rejects a spectate rate above 60 Hz");
+        WireMessage cam{WireType::Camera};
+        cam.camera.origin = Person;
+        cam.camera.seq = 5;
+        cam.camera.x = 1;
+        cam.camera.y = 2;
+        cam.camera.z = 3;
+        cam.camera.pitch = -10;
+        cam.camera.yaw = 90;
+        cam.camera.fov = 103;
+        cam.camera.flags = 1;
+        auto ce2 = Encode(cam);
+        Check(ce2.size() == WireHeader + 41, "camera frame is 49 bytes");
+        auto cd2 = Decode(ce2.data(), ce2.size());
+        Check(cd2 && cd2->camera.origin == Person && cd2->camera.yaw == 90 && cd2->camera.fov == 103 && cd2->camera.flags == 1, "camera frame round-trips");
+        WireMessage badFov = cam;
+        badFov.camera.fov = 0;
+        auto bf = Encode(badFov);
+        Check(!Decode(bf.data(), bf.size()), "rejects an impossible field of view");
+
         // Ghost demo pose
         WireMessage pose{WireType::Pose};
         pose.pose.origin = Person;
@@ -208,6 +260,47 @@ int main()
         Check(ld && ld->pose.scene.size() == MaxPoseScene, "truncates long scene names");
     }
 
+    // Remote transforms come only from remote samples.
+    {
+        using namespace bridge::ghost;
+        auto pose = [](double z, double vz, bool crouch, float half) {
+            Pose p;
+            p.x = 100;
+            p.y = 200;
+            p.z = static_cast<float>(z);
+            p.vz = static_cast<float>(vz);
+            p.yaw = 90;
+            p.flags = static_cast<std::uint8_t>((crouch ? PoseFlagCrouch : 0) | (half > 0 ? PoseFlagHalfHeight : 0));
+            p.halfHeight = half;
+            return p;
+        };
+        // A jump: Z rises between samples, and interpolation keeps it.
+        std::vector<TimedPose> jump = {{10.0, pose(90, 0, false, 88)}, {10.1, pose(150, 400, false, 88)}, {10.2, pose(190, 200, false, 88)}};
+        auto mid = Sample(jump, 10.25); // render time 10.15, halfway between samples 2 and 3
+        Check(std::fabs(mid.z - 170) < 1e-6, "interpolation keeps Z (jumps show)");
+        Check(std::fabs(mid.vz - 300) < 1e-6, "interpolation keeps vertical velocity");
+        auto late = Sample(jump, 10.35); // 50 ms past the newest sample: extrapolate with vz
+        Check(std::fabs(late.z - (190 + 200 * 0.05)) < 1e-4, "extrapolation continues Z from velocity");
+        auto stale = Sample(jump, 20.0);
+        Check(std::fabs(stale.z - (190 + 200 * MaxExtrapolation)) < 1e-4, "extrapolation is capped");
+
+        // Crouch and capsule height are the remote player's, whatever the local player does.
+        std::vector<TimedPose> standing = {{1.0, pose(90, 0, false, 88)}, {1.1, pose(90, 0, false, 88)}};
+        std::vector<TimedPose> crouched = {{1.0, pose(60, 0, true, 55)}, {1.1, pose(60, 0, true, 55)}};
+        auto s = Sample(standing, 1.2), c = Sample(crouched, 1.2);
+        Check(!s.crouch && s.halfHeight == 88 && c.crouch && c.halfHeight == 55, "crouch and half-height come from the remote pose");
+        auto ls = Layout(s), lc = Layout(c);
+        Check(lc.head.z < ls.head.z && lc.body.sz < ls.body.sz, "a crouching remote player is drawn lower and shorter");
+        Check(ls.body.x == 100 && ls.body.y == 200 && std::fabs(ls.head.z - (90 + 88 * 0.85)) < 1e-9, "shape layout is placed from the remote location only");
+        std::vector<TimedPose> legacy = {{1.0, pose(90, 0, false, 0)}};
+        Check(Sample(legacy, 2.0).halfHeight == DefaultHalfHeight, "senders without a half-height use the default, not the local capsule");
+        auto ah = Sample(jump, 10.15);
+        Check(std::fabs(WrapAngle(ah.yaw - 90)) < 1e-9, "yaw comes from the samples");
+        std::vector<TimedPose> wrap = {{1.0, pose(0, 0, false, 88)}, {1.1, pose(0, 0, false, 88)}};
+        wrap[0].pose.yaw = 170;
+        wrap[1].pose.yaw = -170;
+        Check(std::fabs(WrapAngle(Sample(wrap, 1.15).yaw - 180)) < 1e-6, "yaw interpolates across +-180 the short way");
+    }
     std::printf("%d/%d checks passed\n", checks - failures, checks);
     return failures == 0 ? 0 : 1;
 }

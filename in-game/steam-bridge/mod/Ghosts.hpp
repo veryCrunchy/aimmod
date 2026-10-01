@@ -11,6 +11,7 @@
 // the local pose and spawns, drives and removes its own actors.
 #include "Bridge.hpp"
 #include "GameBindings.hpp"
+#include "GhostMath.hpp"
 
 #include <Unreal/FWeakObjectPtr.hpp>
 
@@ -28,6 +29,7 @@ namespace aimmod
         int moveMode = 5;          // EMovementMode while driven: 5 Flying (default), 1 Walking, 0 None
         bool driveWithUpdate = true; // UpdateClientLocAndRot(bPlayAnim) vs K2_SetActorLocationAndRotation
         bool avatarTest = false;   // offline check: one avatar circling the local player, no network
+        bool showRemote = true;    // show remote players (ghost demo); the local pose/camera is read either way
     };
 
     class GhostDemo
@@ -52,11 +54,7 @@ namespace aimmod
             std::string characterProfile; // applied character profile (appearance)
             std::string hiddenScene;      // non-empty while hidden because of a scenario mismatch
         };
-        struct Sample
-        {
-            double x, y, z, yaw, pitch, vx, vy, vz;
-            bool crouch;
-        };
+        using Sample = bridge::ghost::RemoteTransform; // remote values only
 
         bool Bind();
         bool BindAvatars();
@@ -84,7 +82,7 @@ namespace aimmod
         bool m_avatarsBound = false;
         bool m_avatarsFailed = false;
 
-        game::Getter m_actorLocation, m_velocity, m_cameraRotation, m_capsuleHalfHeight, m_capsuleRadius, m_isCrouching;
+        game::Getter m_actorLocation, m_velocity, m_cameraRotation, m_cameraLocation, m_cameraFov, m_capsuleHalfHeight, m_capsuleRadius, m_isCrouching, m_getPawn;
         game::Getter m_setStaticMesh, m_setMobility, m_setCollision, m_setCastShadow;
         game::Field m_cameraManager, m_myCharacter, m_meshComponent, m_capsule;
         RC::Unreal::UClass* m_meshActorClass = nullptr;
@@ -102,7 +100,7 @@ namespace aimmod
 
         RC::Unreal::FWeakObjectPtr m_controller;
         double m_nextFind = 0;
-        double m_halfHeight = 88, m_radius = 34;
+        double m_nextDiagnostic = 0;
         std::map<std::uint64_t, Ghost> m_ghosts;
         double m_testStart = -1;
     };

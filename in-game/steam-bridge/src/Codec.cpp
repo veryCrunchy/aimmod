@@ -174,6 +174,21 @@ namespace bridge
         case WireType::Chunk: Put(out, m.transfer, 4); Put(out, m.index, 4); out.insert(out.end(), m.payload.begin(), m.payload.end()); break;
         case WireType::ChunkAck: Put(out, m.transfer, 4); Put(out, m.index, 4); break;
         case WireType::Cancel: Put(out, m.transfer, 4); Put(out, m.code, 2); break;
+        case WireType::SpectateSub: Put(out, m.lobby, 8); out.push_back(m.rate); break;
+        case WireType::Camera:
+        {
+            const CameraFrame& c = m.camera;
+            Put(out, c.origin, 8);
+            Put(out, c.seq, 4);
+            for (const float f : {c.x, c.y, c.z, c.pitch, c.yaw, c.roll, c.fov})
+            {
+                std::uint32_t bits = 0;
+                std::memcpy(&bits, &f, 4);
+                Put(out, bits, 4);
+            }
+            out.push_back(c.flags);
+            break;
+        }
         case WireType::Pose:
         {
             const Pose& p = m.pose;
@@ -188,6 +203,12 @@ namespace bridge
             out.push_back(p.flags);
             const std::size_t n = std::min(p.scene.size(), MaxPoseScene);
             out.push_back(static_cast<std::uint8_t>(n));
+            if (p.flags & PoseFlagHalfHeight)
+            {
+                std::uint32_t bits = 0;
+                std::memcpy(&bits, &p.halfHeight, 4);
+                Put(out, bits, 4);
+            }
             out.insert(out.end(), p.scene.begin(), p.scene.begin() + static_cast<std::ptrdiff_t>(n));
             break;
         }
@@ -248,12 +269,35 @@ namespace bridge
             m.transfer = static_cast<std::uint32_t>(Get(body, 4));
             m.code = static_cast<std::uint16_t>(Get(body + 4, 2));
             break;
+        case WireType::SpectateSub:
+            if (n != 9 || body[8] > MaxSpectateRate) return std::nullopt;
+            m.lobby = Get(body, 8);
+            m.rate = body[8];
+            break;
+        case WireType::Camera:
+        {
+            if (n != 8 + 4 + 7 * 4 + 1) return std::nullopt;
+            CameraFrame& c = m.camera;
+            c.origin = Get(body, 8);
+            c.seq = static_cast<std::uint32_t>(Get(body + 8, 4));
+            float* fields[] = {&c.x, &c.y, &c.z, &c.pitch, &c.yaw, &c.roll, &c.fov};
+            for (int i = 0; i < 7; ++i)
+            {
+                const auto bits = static_cast<std::uint32_t>(Get(body + 12 + 4 * i, 4));
+                std::memcpy(fields[i], &bits, 4);
+                if (!std::isfinite(*fields[i]) || std::fabs(*fields[i]) > 1e7f) return std::nullopt;
+            }
+            if (c.fov <= 1 || c.fov >= 179) return std::nullopt;
+            c.flags = body[40];
+            break;
+        }
         case WireType::Pose:
         {
             constexpr std::size_t fixed = 8 + 4 + 8 * 4 + 2;
             if (n < fixed) return std::nullopt;
             const std::size_t sceneLength = body[fixed - 1];
-            if (sceneLength > MaxPoseScene || n != fixed + sceneLength) return std::nullopt;
+            const std::size_t extra = (body[fixed - 2] & PoseFlagHalfHeight) ? 4 : 0;
+            if (sceneLength > MaxPoseScene || n != fixed + extra + sceneLength) return std::nullopt;
             Pose& p = m.pose;
             p.origin = Get(body, 8);
             p.seq = static_cast<std::uint32_t>(Get(body + 8, 4));
@@ -265,7 +309,13 @@ namespace bridge
                 if (!std::isfinite(*fields[i]) || std::fabs(*fields[i]) > 1e7f) return std::nullopt;
             }
             p.flags = body[fixed - 2];
-            p.scene.assign(reinterpret_cast<const char*>(body + fixed), sceneLength);
+            if (extra)
+            {
+                const auto bits = static_cast<std::uint32_t>(Get(body + fixed, 4));
+                std::memcpy(&p.halfHeight, &bits, 4);
+                if (!std::isfinite(p.halfHeight) || p.halfHeight < 0 || p.halfHeight > 10000) return std::nullopt;
+            }
+            p.scene.assign(reinterpret_cast<const char*>(body + fixed + extra), sceneLength);
             for (const char c : p.scene)
                 if (static_cast<unsigned char>(c) < 0x20) return std::nullopt;
             break;
