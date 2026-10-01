@@ -166,6 +166,24 @@ test('first run shows the tour once: keys, privacy, Hub and Discord, then saves 
   s.button('Done').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'prefs',prefs:{onboarded:true}});
   assert.ok(!s.text().includes('Step 4 of 4'),'the tour closes');
 });
+test('a spectator follows a player or the leader during a live match, and can stop',()=>{
+  const live=[{memberId:'p2',score:5000,seconds:20,remaining:40,shots:10,hits:8,kills:8,status:'playing',disputed:false},{memberId:'p3',score:7000,seconds:20,remaining:40,shots:10,hits:9,kills:9,status:'playing',disputed:false}];
+  const match={id:'m1',phase:'live',mode:'score-race',scenario:'Synthetic Scenario',timeLimit:60,round:1,totalRounds:1,startsAt:0,players:['p2','p3'],live,rounds:[],standings:[],rematch:[]};
+  const l=lobby({match});l.members[0].role='spectator';l.members.push({id:'p3',name:'Synthetic Three',role:'player',ready:true,ping:30,scenario:'ok',map:'ok',profiles:'none',connection:'connected',link:'relay',joinedAt:3,simulated:false});
+  const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view({lobby:l}));
+  assert.ok(s.text().includes('You’re spectating')&&!s.text().includes('Your run'),'spectators get a spectator card, not Your run');
+  s.all().find(e=>e.tag==='button'&&e.attrs['aria-label']==='Follow the leader').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'spectate-follow',on:true});
+  const following=lobby({match,spectate:{member:'p3',name:'Synthetic Three',scenario:'Synthetic Scenario',mapName:'synthetic_map',mapScale:1,label:'Synthetic Three',score:null,follow:true,stream:'pose-p3',started:true}});following.members=l.members;
+  s.last().finish(200,view({lobby:following}));
+  const start=s.requests.filter(r=>r.url==='/private/native-replay').pop();assert.equal(JSON.parse(start.body).label,'Synthetic Three','the spectator view starts on the leader');assert.equal(JSON.parse(start.body).stream,'pose-p3','with the bridge stream id');
+  assert.ok(s.text().includes('Following whoever leads, now Synthetic Three')&&s.text().includes('Score 7,000'));
+  assert.ok(s.all().some(e=>e.className==='mp-hud-row watched'||/ watched$/.test(e.className||'')),'the followed player is marked on the scoreboard');
+  // The leader changes: the view quietly takes the new player.
+  const next=JSON.parse(JSON.stringify(following));next.spectate.member='p2';next.spectate.name=next.spectate.label='Synthetic Two';next.spectate.stream='pose-p2';next.revision=4;
+  s.api.leave();s.api.enter(s.container);s.requests[s.requests.length-1].finish(200,view({lobby:next}));
+  const sw=JSON.parse(s.requests.filter(r=>r.url==='/private/native-replay').pop().body);assert.equal(sw.label,'Synthetic Two');assert.equal(sw.stream,'pose-p2');assert.equal(sw.scenario,'Synthetic Scenario','same scenario, so the view switches in place');
+  s.button('Stop spectating').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'spectate-stop'});
+});
 test('the map library lists ports with size, Shift and Workshop state, and installs or hosts them',()=>{
   const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view());
   s.button('Map library').onclick();const ask=s.requests.find(r=>r.url==='/private/multiplayer?part=maps');assert.ok(ask,'the library asks for ports');

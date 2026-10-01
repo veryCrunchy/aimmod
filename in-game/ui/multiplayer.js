@@ -240,8 +240,9 @@
   var watchTried=0,watchStartedFor='';
   function startWatchView(w){
     // Retried every few seconds until AimModCore's spectator view accepts (same scenario, pause menu).
-    var key=w.peer+'|'+w.scenario;if(watchStartedFor===key||Date.now()-watchTried<3000||!w.scenario)return;watchTried=Date.now();
-    xhr('POST','/native-replay',{action:'spectate',scenario:w.scenario,mapName:w.mapName||'',mapScale:w.mapScale||1,label:w.name},function(ok,data){
+    var key=w.peer+'|'+w.scenario+'|'+(w.stream||'');if(watchStartedFor===key||Date.now()-watchTried<3000||!w.scenario)return;watchTried=Date.now();
+    var body={action:'spectate',scenario:w.scenario,mapName:w.mapName||'',mapScale:w.mapScale||1,label:w.name};if(w.stream)body.stream=w.stream;
+    xhr('POST','/native-replay',body,function(ok,data){
       if(ok){watchStartedFor=key;act('watch-started');}
       else if(data&&data.message)lastWatchReason=String(data.message);
     });
@@ -284,14 +285,41 @@
     p.appendChild(body);return p;
   }
   // Follow a player's camera in AimModCore's spectator view (pause menu, same scenario).
-  function spectate(id){
-    act('spectate',{member:id},function(ok){
-      if(!ok||!view.lobby||!view.lobby.spectate)return;var s=view.lobby.spectate;
-      xhr('POST','/native-replay',{action:'spectate',scenario:s.scenario,mapName:s.mapName,mapScale:s.mapScale,label:s.label},function(started,data,status){
-        if(started)toast('Watching '+safe(s.name)+'. Return to the pause menu to see their view.');
-        else toast(data&&(data.reason||data.error)?'Can’t spectate yet: '+safe(String(data.reason||data.error),'')+'.':status===409?'Open the pause menu in the same scenario to spectate.':'Spectating isn’t available in this build.');
-      });
+  // AimModCore follows the bridge's pose stream (stream id from spectate.started). Switching
+  // players resends the same call with only stream and label changed; the view cuts in place.
+  var spectateShown='',spectateWanted=false,spectateLoud=false,spectateAskedAt=0;
+  function want(loud){spectateWanted=true;spectateLoud=loud;spectateAskedAt=Date.now();if(view&&view.lobby)keepSpectateView(view.lobby);}
+  function spectate(id){act('spectate',{member:id},function(ok){if(ok)want(true);});}
+  function followLeader(on){act('spectate-follow',{on:on},function(ok){if(ok&&on)want(true);});}
+  function stopSpectate(){spectateShown='';spectateWanted=false;act('spectate-stop');}
+  function startSpectateView(loud){
+    var s=view&&view.lobby&&view.lobby.spectate;if(!s)return;spectateShown=s.member+'|'+(s.stream||'');
+    var body={action:'spectate',scenario:s.scenario,mapName:s.mapName,mapScale:s.mapScale,label:s.label};if(s.stream)body.stream=s.stream;
+    xhr('POST','/native-replay',body,function(started,data,status){
+      if(!loud)return;
+      if(started)toast((s.follow?'Following the leader, now ':'Watching ')+safe(s.name)+'. Return to the pause menu to see their view.');
+      else toast(data&&(data.reason||data.error)?'Can’t spectate yet: '+safe(String(data.reason||data.error),'')+'.':status===409?'Open the pause menu in the same scenario to spectate.':'Spectating isn’t available in this build.');
     });
+  }
+  // Follow the leader moves the camera in the service; the spectator view takes the new name quietly.
+  function keepSpectateView(lobby){
+    var s=lobby.spectate;if(!s){spectateShown='';spectateWanted=false;return;}
+    if(s.follow&&spectateShown)spectateWanted=true;
+    var key=s.member+'|'+(s.stream||'');if(!spectateWanted||key===spectateShown)return;
+    // Wait for the bridge's stream id (a few seconds at most; older bridges don't send one).
+    if(!s.stream&&!s.started&&Date.now()-spectateAskedAt<3000){clearTimeout(streamTimer);streamTimer=setTimeout(function(){if(view&&view.lobby)keepSpectateView(view.lobby);},3100);return;}
+    var loud=spectateLoud;spectateLoud=false;startSpectateView(loud);
+  }
+  var streamTimer=null;
+  function spectatePanel(lobby,match,others){
+    var s=lobby.spectate,watching=!!s,me=match.players.indexOf(lobby.self)<0;
+    var sp=node('div','panel mp-spectate');var sh=node('div','panel-head');var st=node('div','head-text');
+    add(st,node('h2','',me?'You’re spectating':'Spectate'),node('p','',watching?(s.follow?'Following whoever leads, now ':'Watching ')+safe(s.name)+'. Their view is in the pause menu.':'Follow a player from the pause menu in the same scenario.'));sh.appendChild(st);sp.appendChild(sh);
+    if(watching){var line=match.live.filter(function(l){return l.memberId===s.member;})[0];sp.appendChild(add(node('div','mp-watch-hud'),node('span','',line?statLine({active:true,score:line.score,accuracy:line.shots?line.hits*100/line.shots:null,remaining:line.remaining}):'Waiting for their run…')));}
+    sp.appendChild(settingRow('Follow the leader','Switch to whoever has the top score.',toggleSwitch(!!(s&&s.follow),'Follow the leader',function(){followLeader(!(s&&s.follow));})));
+    others.forEach(function(id){var on=watching&&s.member===id;var row=node('div','mp-friend'+(on?' on':''));add(row,avatar(nameOf(id),true),add(node('div','mp-friend-info'),node('strong','',nameOf(id)),node('span','',on?'Watching':'Player')));row.appendChild(actions(button(on?'Watching':'Spectate',function(){if(!on)spectate(id);},on?'compact primary':'compact')));sp.appendChild(row);});
+    if(watching)sp.appendChild(actions(button('Stop spectating',stopSpectate,'compact quiet danger')));
+    return sp;
   }
   // This player's own multiplayer preferences (saved on this PC).
   function prefsPanel(){
@@ -909,7 +937,7 @@
     var stage=node('div','mp-stage');page.appendChild(stage);
     var ring=node('div','mp-count');var digits=node('div','mp-count-num',String(seconds(match.startsAt-now())));ring.appendChild(digits);
     countNodes.push({node:digits,at:match.startsAt,format:function(ms){return String(Math.max(1,seconds(ms)));}});
-    add(stage,node('div','eyebrow',mode(match.mode).label+' · '+roundLabel(match)),ring,node('h2','',safe(match.scenario,'Scenario')),node('p','subtle','Get your hand on the mouse. Everyone starts together.'));
+    add(stage,node('div','eyebrow',mode(match.mode).label+' · '+roundLabel(match)),ring,node('h2','',safe(match.scenario,'Scenario')),node('p','subtle',match.players.indexOf(lobby.self)>=0?'Get your hand on the mouse. Everyone starts together.':'You’re spectating this round. Pick who to follow once it starts.'));
     var plan=planBox(lobby);if(plan)stage.appendChild(plan);
     var who=node('div','mp-stage-players');match.players.forEach(function(id){var m=member(id);add(who,add(node('div','mp-stage-player'),avatar(nameOf(id),true),node('span','',nameOf(id)),m&&m.connection==='reconnecting'?chip('Reconnecting','amber'):null));});
     stage.appendChild(who);
@@ -927,7 +955,7 @@
     add(head,node('span','mp-hud-brand','AIMMOD · '+mode(match.mode).short.toUpperCase()),node('span','mp-hud-round',roundLabel(match)),left);card.appendChild(head);
     var limit=match.timeLimit||60;
     liveRows(lobby,match).forEach(function(r){
-      var l=r.line;var row=node('div','mp-hud-row'+(l.memberId===lobby.self?' self':'')+(r.rank===1&&l.score?' lead':''));
+      var l=r.line;var row=node('div','mp-hud-row'+(l.memberId===lobby.self?' self':'')+(r.rank===1&&l.score?' lead':'')+(lobby.spectate&&lobby.spectate.member===l.memberId?' watched':''));
       var status=l.status==='finished'?'Done':l.status==='left'?'Left':l.status==='dnf'?'DNF':l.status==='waiting'?'Starting':null;
       add(row,node('span','mp-hud-rank',String(r.rank)),node('span','mp-hud-name',nameOf(l.memberId)),status?node('span','mp-hud-status',status):null,node('span','mp-hud-score',l.score===null?'—':F.number(l.score,0)),node('span','mp-hud-gap',r.gap===null?'':F.signed(r.gap,0)));
       var track=node('div','mp-hud-track');var fill=node('div','mp-hud-fill');fill.style.width=Math.min(100,Math.max(0,(l.seconds||0)/limit*100))+'%';track.appendChild(fill);
@@ -939,13 +967,14 @@
     var row=node('div','mp-row');page.appendChild(row);var main=node('div','mp-col mp-main'),side=node('div','mp-col mp-side');row.appendChild(main);row.appendChild(side);
     var p=node('div','panel mp-live');var head=node('div','panel-head');var text=node('div','head-text');add(text,node('h2','','Live scores'),node('p','',safe(match.scenario,'Scenario')+' · '+roundLabel(match)));head.appendChild(text);p.appendChild(head);
     var body=node('div','mp-live-body');body.appendChild(hud(lobby,match));p.appendChild(body);main.appendChild(p);
-    var you=node('div','panel mp-card');add(you,node('h2','','Your run'));var plan=planBox(lobby);if(plan)you.appendChild(plan);else you.appendChild(node('p','subtle','Play the round in KovaaK’s. Your score streams to the lobby as you play.'));
-    you.appendChild(node('p','mp-note','Scores come from each player’s own run and are checked against the live stream at the end.'));
-    side.appendChild(you);
+    var playing=match.players.indexOf(lobby.self)>=0;
+    if(playing){var you=node('div','panel mp-card');add(you,node('h2','','Your run'));var plan=planBox(lobby);if(plan)you.appendChild(plan);else you.appendChild(node('p','subtle','Play the round in KovaaK’s. Your score streams to the lobby as you play.'));
+      you.appendChild(node('p','mp-note','Scores come from each player’s own run and are checked against the live stream at the end.'));
+      side.appendChild(you);}
     var others=match.players.filter(function(id){var m=member(id);return id!==lobby.self&&m&&!m.simulated;});
-    if(others.length){var sp=node('div','panel mp-spectate');var sh=node('div','panel-head');var st=node('div','head-text');add(st,node('h2','','Spectate'),node('p','','Follow a player from the pause menu in the same scenario.'));sh.appendChild(st);sp.appendChild(sh);
-      others.forEach(function(id){var row=node('div','mp-friend');add(row,avatar(nameOf(id),true),add(node('div','mp-friend-info'),node('strong','',nameOf(id))));row.appendChild(actions(button(lobby.spectate&&lobby.spectate.member===id?'Watching':'Spectate',function(){spectate(id);},'compact')));sp.appendChild(row);});
-      side.appendChild(sp);}
+    keepSpectateView(lobby);
+    if(others.length)side.appendChild(spectatePanel(lobby,match,others));
+    else if(!playing)side.appendChild(add(node('div','panel mp-card'),node('h2','','You’re spectating'),node('p','subtle','The players here are simulated, so there’s no camera to follow. Their scores update live.')));
     if(match.rounds.length&&match.mode!=='practice'){var st=node('div','panel');var sh=node('div','panel-head');add(sh,node('h2','','Standings so far'));st.appendChild(sh);var sb=node('div','panel-body');sb.appendChild(standingsTable(match));st.appendChild(sb);side.appendChild(st);}
     if(lobby.isHost)side.appendChild(actions(button('End match',function(){act('end');},'compact quiet danger')));
   }

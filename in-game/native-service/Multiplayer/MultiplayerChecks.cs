@@ -29,6 +29,7 @@ static class MultiplayerChecks
         ProtocolFrames();
         Peers();
         SteamPipe();
+        Follow();
         var root = Path.Combine(Path.GetTempPath(), "aimmod-mp-test-" + Guid.NewGuid().ToString("N"));
         try { Content(root); Generator(root); Service(root); Transfers(root); Replays(root); Maps(root); }
         finally { try { Directory.Delete(root, true); } catch (IOException) { } }
@@ -528,11 +529,11 @@ static class MultiplayerChecks
         Check(!b.Act("watch", J(new { friend = "f1" })).Ok, "Friends who don't allow spectators can't be watched");
         bt.AllowSpectate = true;
         Check(b.Act("watch", J(new { friend = "f2" })).Ok && View(b).GetProperty("watch").GetProperty("state").GetString() == "requesting", "Asking to watch a friend");
-        bt.Inbox.Enqueue(new TransportEvent("f2", TransportEvent.SpectateStarted, Reason: "Watchable Friend"));
+        bt.Inbox.Enqueue(new TransportEvent("f2", TransportEvent.SpectateStarted, Reason: "Watchable Friend", Stream: "pose-f2"));
         bt.Inbox.Enqueue(new TransportEvent("f2", TransportEvent.SpectateScore, Frame: Encoding.UTF8.GetBytes("{\"active\":true,\"score\":1234,\"accuracy\":85.5,\"remaining\":20}")));
         Pump();
         var watching = View(b).GetProperty("watch");
-        Check(watching.GetProperty("scenario").GetString() == "Synthetic A" && watching.GetProperty("state").GetString() == "missing" && watching.GetProperty("message").GetString()!.Contains("don’t have"), "The friend's scenario is known, and missing content is explained");
+        Check(watching.GetProperty("scenario").GetString() == "Synthetic A" && watching.GetProperty("state").GetString() == "missing" && watching.GetProperty("stream").GetString() == "pose-f2" && watching.GetProperty("message").GetString()!.Contains("don’t have"), "The friend's scenario is known, and missing content is explained");
         b.Act("watch-started", default);
         Check(JsonDocument.Parse(b.NoticeText()).RootElement.GetProperty("badge").GetString() == "Watching Watchable Friend · 1,234 · 85.5% · 20 s left", "The spectator sees the friend's live stats over their view");
         bt.Inbox.Enqueue(new TransportEvent("f2", TransportEvent.SpectateEnded, Reason: "declined"));
@@ -641,7 +642,7 @@ static class MultiplayerChecks
         Check(Expect("xfer.cancel").GetProperty("reason").GetString() == "complete", "Finished transfers are closed as complete");
         // Spectating without a lobby (contract §6).
         Check(steam.RequestSpectate(friend) && Expect("spectate.request").GetProperty("rate").GetInt32() == 60, "Spectate requests go to the bridge");
-        Write(new { v = 1, ev = "spectate.started", peer = friend, name = "Synthetic Friend", direct = true });
+        Write(new { v = 1, ev = "spectate.started", peer = friend, name = "Synthetic Friend", direct = true, stream = "pose-7" });
         Write(new { v = 1, ev = "spectate.score", active = true, paused = false, score = 10, seconds = 5, remaining = 55, shots = 4, hits = 3, kills = 2, accuracy = 75 });
         Write(new { v = 1, ev = "spectate.asked", from = "76561190000000008", fromName = "Synthetic Asker" });
         Write(new { v = 1, ev = "spectator.joined", peer = "76561190000000009", name = "Synthetic Viewer" });
@@ -650,7 +651,7 @@ static class MultiplayerChecks
         Write(new { v = 1, ev = "spectate.ended", peer = friend, reason = "stopped" });
         var spectateEvents = new List<TransportEvent>();
         Check(Until(() => { spectateEvents.AddRange(steam.Drain()); return spectateEvents.Any(e => e.Kind == TransportEvent.SpectateEnded); }), "Spectate events arrive");
-        Check(spectateEvents.Any(e => e.Kind == TransportEvent.SpectateStarted && e.Reason == "Synthetic Friend" && e.Host) && spectateEvents.Any(e => e.Kind == TransportEvent.SpectateScore)
+        Check(spectateEvents.Any(e => e.Kind == TransportEvent.SpectateStarted && e.Reason == "Synthetic Friend" && e.Host && e.Stream == "pose-7") && spectateEvents.Any(e => e.Kind == TransportEvent.SpectateScore)
             && spectateEvents.Any(e => e.Kind == TransportEvent.SpectateAsked && e.Peer == "76561190000000008" && e.Reason == "Synthetic Asker")
             && spectateEvents.Any(e => e.Kind == TransportEvent.SpectatorJoined && e.Peer == "76561190000000010" && e.Host) && spectateEvents.Any(e => e.Kind == TransportEvent.SpectatorLeft), "started, score, asked, joined, the quiet list sync and left all map");
         steam.AnswerSpectate("76561190000000008", true); steam.SetSpectatePrivacy("ask"); steam.RemoveSpectator("76561190000000010");
@@ -744,6 +745,16 @@ static class MultiplayerChecks
         Picks(root, library);
     }
 
+    static void Follow()
+    {
+        LobbyMember M(string id, bool sim = false) => new(id, id, MemberRoles.Player, true, null, ContentStates.Ok, ContentStates.Ok, ContentStates.None, Connections.Connected, "relay", 1, sim);
+        ScoreLine L(string id, double? score, string status = "playing") => new(id, score, 10, 50, 10, 5, 5, status, false);
+        MatchSnapshot Match(params ScoreLine[] live) => new("m", MatchPhases.Live, LobbyModes.Race, "Synthetic A", 60, 1, null, null, 0, null, null, live.Select(l => l.MemberId).ToArray(), live, [], [], null, []);
+        var members = new[] { M("me"), M("a"), M("b"), M("bot", sim: true) };
+        Check(MultiplayerService.LeaderOf(Match(L("me", 9000), L("a", 4000), L("b", 5000), L("bot", 8000)), members, "me") == "b", "Follow the leader skips yourself and simulated players");
+        Check(MultiplayerService.LeaderOf(Match(L("a", 4000), L("b", 6000, "left")), members, "me") == "a" && MultiplayerService.LeaderOf(Match(L("a", null)), members, "me") is null, "Players who left or have no score yet aren't followed");
+    }
+
     static void Picks(string root, ContentLibrary library)
     {
         long now = 6_000_000;
@@ -818,6 +829,19 @@ static class MultiplayerChecks
         Check(!store.Write("My Scenario", "x", 4).Ok, "Only reserved names are written");
         for (var i = 0; i < 3; i++) store.Write(MatchScenario.Prefix + "Synthetic A - CS - 1111111" + i, "g" + i, 10 + i);
         Check(store.Files().Count == 2 && !File.Exists(Path.Combine(folder, MatchScenario.Name(cs) + ".sce")) && File.Exists(Path.Combine(folder, taken + ".sce")), "Old match scenarios are cleaned up, user files kept");
+        // Temporary and marked: own tag, marker description; cleanup removes only marked, generated names.
+        Check(one.Contains("SearchTags=" + MatchScenario.Tag + "\n") && one.Contains("Description=" + MatchScenario.Marker + "Synthetic A.") && !BaseScenario.Contains("SearchTags"), "Match scenarios carry only the AimMod Match tag and the generated marker");
+        var marked = MatchScenario.Prefix + "Old Base - Timed - ab93b242";
+        WriteText(Path.Combine(folder, marked + ".sce"), "Name=" + marked + "\nDescription=" + MatchScenario.Marker + "Old Base. Played in freeplay; not a published scenario.\nSearchTags=KovaaK, Reflex\n\n[Map Data]\n");
+        var lookalike = MatchScenario.Prefix + "Mine - Timed - 12345678";
+        WriteText(Path.Combine(folder, lookalike + ".sce"), "Name=" + lookalike + "\nDescription=My own scenario\n");
+        WriteText(Path.Combine(folder, "AimMod Match - notes.sce"), "Description=" + MatchScenario.Marker + "x\n");
+        var keepName = MatchScenario.Prefix + "Synthetic A - CS - 11111112";
+        WriteText(Path.Combine(folder, keepName + ".sce"), "Name=" + keepName + "\nDescription=" + MatchScenario.Marker + "Synthetic A.\n");
+        Check(store.Clean(keepName) == 2 && !File.Exists(Path.Combine(folder, marked + ".sce")) && File.Exists(Path.Combine(folder, keepName + ".sce")), "Cleanup removes leftover match scenarios (including older builds') but keeps the current lobby's");
+        Check(File.Exists(Path.Combine(folder, lookalike + ".sce")) && File.Exists(Path.Combine(folder, taken + ".sce")) && File.Exists(Path.Combine(folder, "AimMod Match - notes.sce")), "Files without the marker or the generated name pattern are never deleted");
+        Check(store.Clean(null) == 1 && !File.Exists(Path.Combine(folder, keepName + ".sce")) && store.Files().Count == 0, "Leaving removes the last one too");
+        Check(MatchScenario.SafeMode(MatchScenario.Name(cs), "challenge") == "freeplay" && MatchScenario.SafeMode("Synthetic A", "challenge") == "challenge", "Match scenarios never start as challenges");
     }
 
     // Synthetic format 2 replay (same fixture as CoreFormatChecks).
@@ -1046,8 +1070,13 @@ static class MultiplayerChecks
         Check(control.Calls.Last() == "load " + name && File.Exists(Path.Combine(game, "Saved", "SaveGames", "Scenarios", name + ".sce")), "The generated scenario is written and loaded");
         Run(6000);
         Check(control.Calls.Last() == "start freeplay " + name, "Generated scenarios run in freeplay");
+        Run(200);
+        Check(File.Exists(Path.Combine(game, "Saved", "SaveGames", "Scenarios", name + ".sce")), "The lobby's match scenario stays while the lobby needs it (play again, rematch)");
         // Host leaving a simulated lobby hands it over; invites and launch joins.
         service.Act("leave", default);
+        var refreshes = control.Calls.Count(c => c == "refresh");
+        Run(200);
+        Check(!File.Exists(Path.Combine(game, "Saved", "SaveGames", "Scenarios", name + ".sce")) && control.Calls.Count(c => c == "refresh") == refreshes + 1, "Leaving removes the match scenario and refreshes KovaaK's list");
         Check(service.Act("join", J(new { code = "SAMPLE" })).Ok && !View().GetProperty("lobby").GetProperty("isHost").GetBoolean(), "Joining a simulated room shows a read-only lobby");
         Run(1000);
         service.Act("sim", J(new { op = "host-leave" }));
