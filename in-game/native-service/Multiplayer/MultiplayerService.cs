@@ -229,6 +229,13 @@ sealed partial class MultiplayerService : IDisposable
                         simulatedMissing = true; download?.Reset(); ReportContent(force: true); return LobbyResult.Success;
                     }
                     return Simulation.Control(core, op, Text("member"));
+                case "favourite":
+                    return Favourite(Text("scenario"), !(args.TryGetProperty("on", out var favOn) && favOn.ValueKind == JsonValueKind.False));
+                case "settings" when core is not null && args.ValueKind == JsonValueKind.Object && args.TryGetProperty("settings", out var pickedSettings) && pickedSettings.ValueKind == JsonValueKind.Object
+                        && pickedSettings.TryGetProperty("scenario", out var pickedScenario) && pickedScenario.ValueKind == JsonValueKind.String:
+                    var pickResult = Command(action, args);
+                    if (pickResult.Ok) RecordRecent(core.Settings.Scenario?.Name);
+                    return pickResult;
                 case "map-install" or "map-load":
                     return MapAction(action, KeyArg(args));
                 case "score" or "finish" or "content":
@@ -1463,6 +1470,7 @@ sealed partial class MultiplayerService : IDisposable
                 // Usually written already while the lobby was set up; this only fills gaps.
                 problem = preparedName == scenario && preparedProblem is null ? null : BuildMatchScenario(s, scenario);
             }
+            RecordRecent(s.Scenario?.Name);
             if (problem is not null) plan = new RoundPlan(key, scenario, mode, generated, "error", problem + " " + FindIt(s.Scenario?.Name ?? scenario, false));
             else if (caps.Contains("load") && game.Load(scenario) is long load)
                 plan = new RoundPlan(key, scenario, mode, generated, "loading", "Loading “" + scenario + "” in KovaaK’s…", LoadSequence: load);
@@ -1633,6 +1641,7 @@ sealed partial class MultiplayerService : IDisposable
                 prefs,
                 rejoin = RejoinOffer(),
                 keys = KeysView(),
+                picks = PicksView(),
                 presets = presetNames ??= LoadPresets().Presets.Select(p => p.Name).ToArray(),
                 watch = WatchView(),
                 watchers = watchers.Select(w => new { peer = w.Peer, name = w.Name }),

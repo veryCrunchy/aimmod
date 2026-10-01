@@ -713,22 +713,47 @@
     box.appendChild(field(input,kind==='scenario'?'Find a scenario':kind==='map'?'Find a map':'Find a profile'));
     var list=node('div','mp-picker-list');box.appendChild(list);
     function items(){var src=kind==='scenario'||kind==='suggest'?library.scenarios:kind==='map'?library.maps:kind==='weapon'?library.weapons:library.characters;return (src||[]).map(function(x){return typeof x==='string'?{name:x}:x;});}
+    var scen=kind==='scenario'||kind==='suggest',picks=(view&&view.picks)||{favourites:[],recent:[]};
+    function isFav(name){return (picks.favourites||[]).indexOf(name)>=0;}
     function fill(){
       while(list.firstChild)list.removeChild(list.firstChild);
-      var q=(pickerQuery||'').toLowerCase(),shown=0,all=items();
-      all.forEach(function(x){if(shown>=80||(q&&String(x.name).toLowerCase().indexOf(q)<0))return;shown++;
+      var q=(pickerQuery||'').toLowerCase(),shown=0,all=items(),byName={};
+      all.forEach(function(x){byName[x.name]=x;});
+      // Without a search, favourites and recent scenarios come first.
+      if(scen&&!q){
+        [['Favourites',picks.favourites||[]],['Recent',picks.recent||[]]].forEach(function(g){
+          var found=g[1].filter(function(n){return !!byName[n];}).slice(0,g[0]==='Recent'?6:20);
+          if(!found.length)return;list.appendChild(node('div','mp-pick-group',g[0]));
+          found.forEach(function(n){list.appendChild(entry(byName[n]));});
+        });
+        if(list.firstChild)list.appendChild(node('div','mp-pick-group','All scenarios'));
+      }
+      all.forEach(function(x){if(shown>=80||(q&&String(x.name).toLowerCase().indexOf(q)<0))return;shown++;list.appendChild(entry(x));});
+      if(!shown)list.appendChild(node('div','mp-muted',all.length?'Nothing matches. Try a shorter search.':'Nothing in your library yet.'));
+      else if(all.length>shown&&!q)list.appendChild(node('div','mp-muted','Showing '+shown+' of '+F.number(all.length,0)+'. Type to narrow the list.'));
+    }
+    function entry(x){
         var b=node('button','mp-pick-item');b.type='button';
         var info=node('span','mp-pick-info');add(info,node('strong','',safe(x.name,'Untitled')));
         if(kind==='scenario'||kind==='suggest')info.appendChild(node('span','','Map '+safe(x.map,'')+' · '+F.duration(x.timeLimit)+(x.defaultWeapon?' · '+safe(x.defaultWeapon,''):'')));
         b.appendChild(info);
         if(kind==='map'||kind==='scenario'||kind==='suggest'){var src=kind==='map'?x.source:x.mapSource;b.appendChild(chip(src==='ported'?'Ported':src==='custom'?'Custom map':'Built-in',src==='ported'?'mint':''));}
         b.onclick=function(){picker=null;if(kind==='suggest'){suggesting=false;act('suggest',{scenario:x.name});return;}if(kind==='scenario'||kind==='map')setting(kind==='map'?'mapOverride':'scenario',x.name);else setting(kind,{preset:'custom',custom:x.name});};
-        list.appendChild(b);});
-      if(!shown)list.appendChild(node('div','mp-muted',all.length?'Nothing matches. Try a shorter search.':'Nothing in your library yet.'));
-      else if(all.length>shown&&!q)list.appendChild(node('div','mp-muted','Showing '+shown+' of '+F.number(all.length,0)+'. Type to narrow the list.'));
+        if(!scen)return b;
+        var row=node('div','mp-pick-row');row.appendChild(b);
+        var fav=isFav(x.name),star=button('',function(){act('favourite',{scenario:x.name,on:!fav},function(ok){if(ok){picks=view.picks||picks;fill();}});},'compact quiet mp-fav'+(fav?' on':''));
+        star.appendChild(starIcon(fav));star.setAttribute('aria-label',fav?'Remove from favourites':'Add to favourites');star.setAttribute('aria-pressed',String(fav));
+        row.appendChild(actions(star));
+        return row;
     }
     fill();
     return box;
+  }
+  function starIcon(on){
+    var c=node('canvas','mp-star');c.width=28;c.height=28;var x=c.getContext&&c.getContext('2d');
+    if(x){x.scale(2,2);x.beginPath();for(var i=0;i<10;i++){var r=i%2?2.6:6.2,a=-Math.PI/2+i*Math.PI/5;x.lineTo(7+r*Math.cos(a),7.4+r*Math.sin(a));}x.closePath();
+      if(on){x.fillStyle='#f0b45a';x.fill();}else{x.strokeStyle='#7f968a';x.lineWidth=1.2;x.stroke();}}
+    return c;
   }
   function contentTable(lobby){
     var box=node('div','mp-content-table');

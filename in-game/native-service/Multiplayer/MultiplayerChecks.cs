@@ -604,6 +604,27 @@ static class MultiplayerChecks
         Check(mirage.GetProperty("installed").GetBoolean() && mirage.GetProperty("simulated").GetBoolean() && mirage.GetProperty("download").ValueKind == JsonValueKind.Null && !Directory.EnumerateFiles(scenarios).Any(f => f.Contains("Mirage")), "Simulated installs finish without writing to the game");
         Check(!service.Act("map-load", J(new { key = mirage.GetProperty("key").GetString() })).Ok && !service.Act("map-install", J(new { key = "nope" })).Ok, "Simulated installs can't be loaded and unknown maps are refused");
         service.Dispose();
+        Picks(root, library);
+    }
+
+    static void Picks(string root, ContentLibrary library)
+    {
+        long now = 6_000_000;
+        var output = Path.Combine(root, "picks-output");
+        Directory.CreateDirectory(output);
+        MultiplayerService Make() => new(new OfflineTransport(), library, new NoGameControl(), () => new LocalRun(false, null, null, null, null, 0, 0, 0, null), () => [], () => null, output, simulation: false, () => now, autoTick: false);
+        var service = Make();
+        JsonElement Picks() => JsonSerializer.SerializeToElement(service.View(), Protocol.Json).GetProperty("picks");
+        const string port = "AimMod - Dust2 (CSGO) - CS Movement";
+        Check(service.Act("favourite", J(new { scenario = port })).Ok && !service.Act("favourite", J(new { scenario = "Not In Library" })).Ok, "Favourites take scenarios from the library only");
+        Check(service.Act("create", J(new { mode = "practice", scenario = "Synthetic Plain" })).Ok && service.Act("settings", J(new { settings = new { scenario = port } })).Ok, "The host picks scenarios");
+        var picks = Picks();
+        Check(picks.GetProperty("favourites")[0].GetString() == port && picks.GetProperty("recent")[0].GetString() == port, "Picked scenarios become recent, newest first");
+        service.Dispose();
+        service = Make();
+        Check(Picks().GetProperty("favourites").GetArrayLength() == 1, "Favourites survive a restart");
+        Check(service.Act("favourite", J(new { scenario = port, on = false })).Ok && Picks().GetProperty("favourites").GetArrayLength() == 0, "Favourites can be removed");
+        service.Dispose();
     }
 
     static void Generator(string root)

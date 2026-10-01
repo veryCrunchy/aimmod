@@ -236,6 +236,11 @@
 .mp-watch .actions{margin-top:10px}
 .mp-quick{display:flex;flex-direction:row;flex-wrap:wrap;padding:0 16px 12px}.mp-quick .button{margin:0 4px 4px 0;height:26px;line-height:24px;font-size:12px}
 .mp-ready.away{background:#272040;color:#b9a3ff}.mp-stage-player.ok{border-color:#2c6b52}.mp-setups{max-width:none}.mp-setups-body{padding:0 20px 8px}.mp-setups .mp-chat-row{padding:8px 0 4px;border-top:0}
+/* Picker favourites and recents */
+.mp-pick-row{display:flex;flex-direction:row;align-items:center}.mp-pick-row .mp-pick-item{flex:1;min-width:0;width:auto}
+.mp-pick-row .actions{margin-left:4px}.mp-pick-row .actions>.button.mp-fav{margin:0;width:30px;height:30px;padding:0}
+.mp-star{display:block;width:14px;height:14px;margin:0 auto}
+.mp-pick-group{padding:10px 10px 4px;font-size:11px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:#7f968a}
 /* Map library */
 .mp-hero-link{margin-top:18px;padding-top:14px;border-top:1px solid #22302a;font-size:12px;color:#a7bab0;line-height:1.5}
 .mp-hero-link .actions{margin-top:8px}.mp-hero-link .actions>.button{margin:0}
