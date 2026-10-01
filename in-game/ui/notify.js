@@ -32,7 +32,9 @@
     if(!n.active)return;
     box.className='show '+(n.kind||'info')+extra;
     var card=node('div','toast');
-    var top=node('div','brand','AIMMOD · MULTIPLAYER');card.appendChild(top);
+    // The eyebrow says what kind of notice this is (the service can name it; otherwise by kind).
+    var brands={invite:'AIMMOD · INVITE',ready:'AIMMOD · LOBBY',countdown:'AIMMOD · MATCH',friend:'AIMMOD · FRIENDS'};
+    var top=node('div','brand',n.eyebrow?String(n.eyebrow).toUpperCase():brands[n.kind]||'AIMMOD · MULTIPLAYER');card.appendChild(top);
     var row=node('div','row');
     if(typeof n.countdown==='number')row.appendChild(node('div','count',String(n.countdown)));
     var text=node('div','text');text.appendChild(node('div','title',n.title||''));text.appendChild(node('div','body',n.body||''));row.appendChild(text);

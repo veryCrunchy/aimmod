@@ -149,7 +149,7 @@
     line('Simulation',st.simulation?(st.simulationForced?'On (started with --multiplayer-sim)':'On'):'Off',!!st.simulation);
     line('Discord',discord&&discord.settings?(discord.settings.discordPresenceEnabled?'On':'Off')+(discord.status&&discord.status.state?' · '+discord.status.state:''):'Not in this build');
     var logs=tools.logs||{};
-    [['Service log',logs.service],['Game log (AimMod lines)',logs.game]].forEach(function(g){var lg=section(g[0],'Newest last. Ids and user names are hidden.');right.appendChild(lg.panel);var box=node('div','dev-log');(g[1]||[]).forEach(function(t){box.appendChild(node('div','dev-log-line',t));});if(!(g[1]||[]).length)box.appendChild(node('div','dev-log-line','Nothing yet.'));lg.body.appendChild(box);});
+    [['Service log',logs.service],['Game log (AimMod lines)',logs.game]].forEach(function(g){var lg=section(g[0],'Newest first. Ids and user names are hidden.');right.appendChild(lg.panel);var box=node('div','dev-log');(g[1]||[]).slice().reverse().forEach(function(t){box.appendChild(node('div','dev-log-line',t));});if(!(g[1]||[]).length)box.appendChild(node('div','dev-log-line','Nothing yet.'));lg.body.appendChild(box);});
     toastNode=node('div','dev-toast');toastNode.setAttribute('role','status');container.appendChild(toastNode);
   }
   function visible(d){var c={};for(var k in d)if(k!=='camera')c[k]=d[k];return JSON.stringify(c);}

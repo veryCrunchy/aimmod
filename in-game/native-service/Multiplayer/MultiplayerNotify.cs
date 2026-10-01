@@ -15,6 +15,8 @@ sealed record NoticeAction(string Label, string Action, string Id);
 sealed record GameNotice(string Id, string Kind, string Title, string Body, string? Key, int? Countdown, string Sound)
 {
     public string? Invite { get; init; }
+    // The small label above the title; the notice layer picks one by kind when it's empty.
+    public string? Eyebrow { get; init; }
     public IReadOnlyList<NoticeAction>? Actions { get; init; }
 }
 

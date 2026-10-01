@@ -93,7 +93,7 @@
 .mp-content.ok{color:#27e4a1}.mp-content.warn{color:#f0b45a}.mp-content.bad{color:#ff8f8f}
 .mp-link{display:block;min-width:0;color:#7f968a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mp-link.warn{color:#f0b45a}
 .mp-ready{display:block;flex-shrink:0;width:84px;height:26px;line-height:26px;border-radius:13px;text-align:center;font-size:12px;font-weight:700;background:#1d2b26;color:#7f968a}
-.mp-ready.on{background:#173b2f;color:#27e4a1}.mp-ready.host{background:#3a2c17;color:#f0b45a}
+.mp-ready.on{background:#173b2f;color:#27e4a1}.mp-ready.host{background:#173b2f;color:#27e4a1;border:1px solid #2c6b52}
 .mp-member-tools{margin-left:10px;flex-wrap:nowrap}.mp-member-tools>.button{margin:0 0 0 4px}
 .button.quiet.danger{color:#ffb3b3;background:none;border-color:transparent}.button.quiet.danger:hover{background:#2a1919}
 .mp-start{display:flex;flex-direction:row;align-items:center;padding:16px 20px}
@@ -281,7 +281,7 @@
 .mp-cos.on{border-color:#2c6b52}
 /* Map library */
 .mp-hero-link{margin-top:18px;padding-top:14px;border-top:1px solid #22302a;font-size:12px;color:#a7bab0;line-height:1.5}
-.mp-hero-link .actions{margin-top:8px}.mp-hero-link .actions>.button{margin:0}
+.mp-hero-link .actions{margin-top:8px}.mp-hero-link .actions>.button{margin:0 8px 0 0}
 .mp-maps-bar{display:flex;flex-direction:row;align-items:center;margin-bottom:14px}
 .mp-maps-search{width:320px;margin-right:14px}
 .mp-ports{display:flex;flex-direction:row;flex-wrap:wrap;margin:0 -8px}
@@ -349,3 +349,7 @@
 .mp-team-row .actions>.button{margin:0 0 0 4px;height:24px;line-height:22px;padding:0 7px;font-size:11px}
 .mp-team-empty{padding:8px 4px;font-size:12px;color:#5f7369}
 .mp-teams .panel-head .actions>.button{margin:0}
+/* Audit: six PvP modes three per row; side standings keep names readable at 720p. */
+.mp-mode-pick.pvp .mp-mode{width:33.333%}
+.mp-side .mp-td.num{width:58px;padding:0 4px}.mp-side .mp-td.place{width:34px}.mp-side .mp-td.name .mp-avatar{display:none}
+.mp-side .mp-td.name span{white-space:normal;line-height:16px}
