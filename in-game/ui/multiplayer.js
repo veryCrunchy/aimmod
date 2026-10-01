@@ -134,6 +134,7 @@
     else if(editing)settingsEditor(page,l);
     else lobbyRoom(page,l);
     if(view.invites&&view.invites.length)container.appendChild(inviteModal(view.invites[0]));
+    else if(touring||(view.prefs&&view.prefs.onboarded===false&&!l&&!view.joining&&!tourSkipped))container.appendChild(onboarding());
     toastNode=node('div','mp-toast');toastNode.setAttribute('role','status');container.appendChild(toastNode);
     restoreFocus();rendering=false;tick();
   }
@@ -313,7 +314,62 @@
     var ks=view.keys||{};var clipOptions=['F6','F8','F9','F10','F11','Insert','Home','PageUp'].map(function(k){return {id:k,label:keyLabel(k)};});
     body.appendChild(settingRow('Clip key','Marks a moment of a recorded run as a clip.',segmented(clipOptions,ks.clip||'F8',function(id){pref('clipKey',id);},false,'clip key')));
     (ks.conflicts||[]).forEach(function(c){body.appendChild(node('p','mp-warn-text',safe(c,'')));});
+    body.appendChild(actions(button('Show the tour again',function(){touring=true;tourStep=0;render();},'compact quiet')));
     return p;
+  }
+  // First-run tour: what multiplayer does, your keys, privacy, and the Hub and Discord links.
+  var touring=false,tourStep=0,tourSkipped=false,discord=null,discordAsked=false;
+  function loadDiscord(){
+    if(discordAsked)return;discordAsked=true;
+    // Present only in builds with Discord presence; otherwise the step leaves it out.
+    xhr('GET','/discord-settings',null,function(ok,data){if(ok&&data&&data.settings&&typeof data.settings.discordPresenceEnabled==='boolean'){discord=data;render();}});
+  }
+  function setDiscord(on){
+    var x=new root.XMLHttpRequest();x.open('POST',path()+'/discord-settings',true);x.timeout=8000;x.setRequestHeader('X-AimMod-UI','1');x.setRequestHeader('Content-Type','application/json');
+    x.onreadystatechange=function(){if(x.readyState!==4)return;var data=null;try{data=JSON.parse(x.responseText);}catch(e){data=null;}if(x.status===200&&data&&data.settings){discord=data;render();}else toast('Couldn’t change the Discord setting.');};
+    x.send(JSON.stringify({discordPresenceEnabled:on}));
+  }
+  function finishTour(){touring=false;tourSkipped=true;tourStep=0;if(view.prefs&&!view.prefs.onboarded)act('prefs',{prefs:{onboarded:true}});render();}
+  function openAccount(){finishTour();var nav=root.document.getElementById('nav-account');if(nav&&nav.click)nav.click();}
+  var TOUR=[
+    {title:'Play KovaaK’s together',text:'Race friends on the same scenario, duel first to three, or practise side by side with live scores. Results stay in AimMod and never touch KovaaK’s leaderboards.',points:[
+      ['Lobbies','Create one, invite Steam friends or share the room code. AimMod checks everyone has the same scenario and sends what’s missing.'],
+      ['Map library','Counter-Strike maps ported to KovaaK’s with CS movement, installed from the Steam Workshop.'],
+      ['Spectate','Watch a friend play from your own game, with or without a lobby.'],
+      ['History and rivals','Every match is kept on this PC, with replays to compare runs.']]},
+    {title:'Your keys',text:'These work while KovaaK’s has focus. AimMod warns when a key clashes with your KovaaK’s binds.',keys:true},
+    {title:'Privacy',text:'Choose what friends see. You can change this later under Your multiplayer settings.',privacy:true},
+    {title:'Connect your accounts',text:'Both are optional.',connect:true}
+  ];
+  function onboarding(){
+    var step=TOUR[Math.min(tourStep,TOUR.length-1)],last=tourStep>=TOUR.length-1,pr=view.prefs||{};
+    var shade=node('div','mp-modal');var card=node('div','mp-modal-card mp-tour');card.setAttribute('role','dialog');card.setAttribute('aria-label','Multiplayer tour');shade.appendChild(card);
+    var dots=node('div','mp-tour-dots');TOUR.forEach(function(x,i){dots.appendChild(node('span','mp-tour-dot'+(i===tourStep?' on':'')));});
+    add(card,add(node('div','mp-tour-top'),node('div','eyebrow','Step '+(tourStep+1)+' of '+TOUR.length),dots),node('h2','mp-tour-title',step.title),node('p','subtle mp-tour-text',step.text));
+    if(step.points){var list=node('div','mp-tour-points');step.points.forEach(function(x){list.appendChild(add(node('div','mp-tour-point'),node('strong','',x[0]),node('span','',x[1])));});card.appendChild(list);}
+    if(step.keys){
+      var taken=(view.keys&&view.keys.taken)||[];function label(k){return k+(taken.indexOf(k)>=0?' (in use)':'');}
+      var keys=[];for(var i=5;i<=10;i++)keys.push({id:'F'+i,label:label('F'+i)});
+      card.appendChild(settingRow('Lobby key','Ready up, answer invites or open the lobby.',segmented(keys,pr.hotkey||'F7',function(id){act('prefs',{prefs:{hotkey:id}});},false,'lobby key')));
+      var ks=view.keys||{};var clips=['F6','F8','F9','F10','F11','Insert'].map(function(k){return {id:k,label:label(k)};});
+      card.appendChild(settingRow('Clip key','Marks a moment of a recorded run as a clip.',segmented(clips,ks.clip||'F8',function(id){act('prefs',{prefs:{clipKey:id}});},false,'clip key')));
+      (ks.conflicts||[]).forEach(function(c){card.appendChild(node('p','mp-warn-text',safe(c,'')));});
+    }
+    if(step.privacy){
+      card.appendChild(settingRow('Who can spectate me','Friends watch from their own game.',segmented([{id:'friends',label:'Friends'},{id:'ask',label:'Ask me'},{id:'off',label:'Nobody'}],pr.spectatePrivacy||'friends',function(id){act('prefs',{prefs:{spectatePrivacy:id}});},false,'spectate privacy')));
+      card.appendChild(settingRow('Hide my scenario from friends','They see you’re in AimMod, not what you play.',toggleSwitch(!!pr.hideScenario,'Hide my scenario',function(){act('prefs',{prefs:{hideScenario:!pr.hideScenario}});})));
+    }
+    if(step.connect){
+      loadDiscord();
+      card.appendChild(settingRow('AimMod Hub','Link your account to add Hub scores to your history and benchmarks.',actions(button('Open Account',openAccount,'compact'))));
+      if(discord)card.appendChild(settingRow('Discord status','Show your AimMod session on your Discord profile.',toggleSwitch(!!discord.settings.discordPresenceEnabled,'Discord status',function(){setDiscord(!discord.settings.discordPresenceEnabled);})));
+    }
+    var nav=[];
+    if(tourStep>0)nav.push(button('Back',function(){tourStep--;render();},'quiet'));
+    else nav.push(button('Skip',finishTour,'quiet'));
+    nav.push(button(last?'Done':'Next',function(){if(last)finishTour();else{tourStep++;render();}},'primary'));
+    card.appendChild(actions.apply(null,nav));
+    return shade;
   }
   function joinCode(){var code=(drafts.code||'').toUpperCase().replace(/[^A-Z0-9]/g,'');if(code.length!==6){toast('Room codes are six letters and numbers.');return;}act('join',{code:code},function(ok){if(ok)drafts.code='';});}
   function steamState(){

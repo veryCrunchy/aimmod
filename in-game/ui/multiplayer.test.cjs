@@ -152,6 +152,20 @@ test('match history shows opponents, scores and replay links, and rivals filter 
   s.button('Me vs Synthetic Rival').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'load',id:'run-1',compareId:'run-2'});assert.equal(s.last().url,'/private/native-replay');
   s.button('Matches').onclick();assert.ok(s.text().includes('Matches with Synthetic Rival')&&!s.text().includes('Other Scenario'),'rival filter');
 });
+test('first run shows the tour once: keys, privacy, Hub and Discord, then saves onboarded',()=>{
+  const s=setup();s.api.enter(s.container);
+  s.requests[0].finish(200,view({prefs:{onboarded:false,hotkey:'F7',spectatePrivacy:'friends'},keys:{clip:'F8',taken:['F9'],conflicts:[]}}));
+  assert.ok(s.text().includes('Play KovaaK’s together')&&s.text().includes('Step 1 of 4'));
+  s.button('Next').onclick();assert.ok(s.text().includes('Your keys')&&s.text().includes('F9 (in use)'));
+  s.button('F6').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'prefs',prefs:{hotkey:'F6'}});
+  s.button('Next').onclick();s.button('Next').onclick();
+  const ask=s.requests.find(r=>r.url==='/private/discord-settings');assert.ok(ask,'asks whether Discord presence exists');
+  ask.finish(200,{settings:{discordPresenceEnabled:false,discordShowScore:true,discordShowPersonalBest:true,discordShowHubButton:true},status:{state:'off'}});
+  assert.ok(s.text().includes('Discord status')&&s.text().includes('AimMod Hub'));
+  s.all().find(e=>e.tag==='button'&&e.attrs['aria-label']==='Discord status').onclick();assert.deepEqual(JSON.parse(s.last().body),{discordPresenceEnabled:true});
+  s.button('Done').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'prefs',prefs:{onboarded:true}});
+  assert.ok(!s.text().includes('Step 4 of 4'),'the tour closes');
+});
 test('the map library lists ports with size, Shift and Workshop state, and installs or hosts them',()=>{
   const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view());
   s.button('Map library').onclick();const ask=s.requests.find(r=>r.url==='/private/multiplayer?part=maps');assert.ok(ask,'the library asks for ports');

@@ -777,6 +777,7 @@ static class MultiplayerChecks
         Check(View(host).GetProperty("lobby").GetProperty("members").EnumerateArray().First(m => m.GetProperty("id").GetString() == "xfer-join").GetProperty("ready").GetBoolean(), "The joiner readies up once the content is there (default preference)");
         // Preferences are checked and saved.
         Check(joiner.Act("prefs", J(new { prefs = new { volume = 5, hotkey = "f9", readyOnJoin = true, unknown = 1 } })).Ok && View(joiner).GetProperty("prefs").GetProperty("volume").GetDouble() == 1 && View(joiner).GetProperty("hotkey").GetString() == "F9", "Preferences are clamped and applied");
+        Check(!View(joiner).GetProperty("prefs").GetProperty("onboarded").GetBoolean() && joiner.Act("prefs", J(new { prefs = new { onboarded = true } })).Ok && View(joiner).GetProperty("prefs").GetProperty("onboarded").GetBoolean(), "The first-run tour is shown until it is finished once");
         Check(MultiplayerPrefs.Load(Path.Combine(root, "xfer", "xfer-join", "out", "multiplayer-settings.json")).ReadyOnJoin, "Preferences persist");
         var clipFile = Path.Combine(root, "xfer", "xfer-join", "out", "clip-settings.tsv");
         File.WriteAllText(clipFile, "AIMMOD_CLIPS_1\nkey\tF8\nbefore\t12\nafter\t3\n");
