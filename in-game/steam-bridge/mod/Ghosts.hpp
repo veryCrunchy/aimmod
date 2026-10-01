@@ -13,6 +13,7 @@
 #include "Bridge.hpp"
 #include "GameBindings.hpp"
 #include "GhostMath.hpp"
+#include "AvatarState.hpp"
 
 #include <Unreal/FWeakObjectPtr.hpp>
 
@@ -36,7 +37,8 @@ namespace aimmod
         // service with --export-avatar-path) replaces the circle when its scenario is loaded.
         std::filesystem::path avatarTestPath;
         std::wstring stateDir;     // KovaaksNative: avatars.tsv for AimModCore
-        bool showRemote = true;    // show remote players (ghost demo); the local pose/camera is read either way
+        bool showRemote = true;
+        bool nativeDeath = false;  // avatar_death=native: the game's Death/Respawn; default hides the avatar    // show remote players (ghost demo); the local pose/camera is read either way
     };
 
     class GhostDemo
@@ -62,6 +64,10 @@ namespace aimmod
             std::string botProfile;       // bot profile the game reports for it now
             std::string spawnedFrom;      // bot profile we asked for
             std::uint64_t peer = 0;       // remote player (actor tag AimMod.Peer.<id>)
+            int spawnTeam = 2;            // team the bot spawned on (the enemy team)
+            int team = -1;                // team we last applied
+            bool dead = false;            // from avatar-state.tsv
+            double health = -1;           // last health applied to the bar
             std::string hiddenScene;      // non-empty while hidden because of a scenario mismatch
         };
         using Sample = bridge::ghost::RemoteTransform; // remote values only
@@ -103,7 +109,11 @@ namespace aimmod
         // Avatars
         game::Getter m_spawnBot, m_getMetaCharacter, m_setUseWeapons, m_stopAiming, m_removeSelf;
         game::Getter m_updateClientLocAndRot, m_overrideInvulnerable, m_startCrouching, m_startUncrouch, m_getTeam, m_loadCharacterProfile;
-        game::Getter m_setMovementMode, m_updateVisibility;
+        game::Getter m_setMovementMode, m_updateVisibility, m_death, m_respawn, m_setTeam, m_setHealth;
+        std::optional<bridge::avatarstate::File> m_avatarState;
+        double m_nextStateRead = 0;
+        void ReadAvatarState();
+        void ApplyCombatState(Ghost& ghost, RC::Unreal::UObject* localCharacter);
         std::string m_lastScene; // re-apply looks and AI-off when the scenario changes
         bool m_avatarMapDirty = true;
         void WriteAvatarMap();

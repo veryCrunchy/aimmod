@@ -128,6 +128,7 @@ public:
             if (auto p = bridge::ParseSpectatePrivacy(it->second)) m_spectatePrivacy = *p;
         m_ghostOptions.avatars = Flag(config, "avatars", true);
         m_lobbyAvatars = Flag(config, "lobby_avatars", true);
+        if (auto it = config.find("avatar_death"); it != config.end()) m_ghostOptions.nativeDeath = it->second == "native";
         m_ghostOptions.showRemote = m_ghostDemo || m_lobbyAvatars;
         m_ghostOptions.stateDir = std::filesystem::path(ScenePath()).parent_path().wstring();
         m_ghostOptions.avatarTest = Flag(config, "avatar_test", false);

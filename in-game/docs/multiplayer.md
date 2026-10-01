@@ -1386,6 +1386,28 @@ controller's `MyProfileName` changes, the avatar re-applies:
 - visibility;
 - its character profile.
 
+**Combat state from the service (`avatar-state.tsv`).** During combat
+matches the service writes `%LOCALAPPDATA%\AimMod\KovaaksNative\avatar-state.tsv`
+(format in `game-modes.md`, ce64a31). AimModSteam reads it 5 times a second
+and ignores it when it's older than 10 s. Per avatar:
+
+- **Down** (`alive` 0): the avatar is hidden (`SetActorHiddenInGame(true)`)
+  and its collision is turned off, so it can't be hit while down.
+  `avatar_death=native` also calls the game's `Death` with no killer, so no
+  kill credit, but this is unverified and off by default. Hiding is the
+  safe path.
+- **Respawn** (`alive` 1 again): shown again with collision back on.
+  `Respawn(false)` is used in native mode. AI-off and invulnerability are
+  re-applied immediately.
+- **Teams:** `friend` avatars are put on the local player's team
+  (`SetTeam`). Enemies go on the bot's spawn team, or on the other team if
+  that's the local one. So team colours and the game's team checks are
+  right from each viewer's side.
+- **Health bar:** `SetHealth(health)` on the invulnerable avatar, clamped to
+  at least 1 while alive.
+- Nothing here touches the local player or scoring. The avatar stays
+  invulnerable and inert throughout.
+- The parser is strict and unit tested.
 **Actor tag.** Each avatar actor carries the tag `AimMod.Peer.<SteamID64>` in `Actor.Tags`, which AimModCore uses to find avatars (for example for cosmetics). It's re-applied on every refresh, so re-acquired or re-profiled bots keep it. It stays in-process: it's never logged or written to a file.
 
 **`avatars.tsv` for AimModCore** (ef6b259). The file lives in
