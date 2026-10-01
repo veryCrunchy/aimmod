@@ -696,6 +696,19 @@ static class MultiplayerChecks
         Check(!store.Write("My Scenario", "x", 4).Ok, "Only reserved names are written");
         for (var i = 0; i < 3; i++) store.Write(MatchScenario.Prefix + "Synthetic A - CS - 1111111" + i, "g" + i, 10 + i);
         Check(store.Files().Count == 2 && !File.Exists(Path.Combine(folder, MatchScenario.Name(cs) + ".sce")) && File.Exists(Path.Combine(folder, taken + ".sce")), "Old match scenarios are cleaned up, user files kept");
+        // Temporary and marked: own tag, marker description; cleanup removes only marked, generated names.
+        Check(one.Contains("SearchTags=" + MatchScenario.Tag + "\n") && one.Contains("Description=" + MatchScenario.Marker + "Synthetic A.") && !BaseScenario.Contains("SearchTags"), "Match scenarios carry only the AimMod Match tag and the generated marker");
+        var marked = MatchScenario.Prefix + "Old Base - Timed - ab93b242";
+        WriteText(Path.Combine(folder, marked + ".sce"), "Name=" + marked + "\nDescription=" + MatchScenario.Marker + "Old Base. Played in freeplay; not a published scenario.\nSearchTags=KovaaK, Reflex\n\n[Map Data]\n");
+        var lookalike = MatchScenario.Prefix + "Mine - Timed - 12345678";
+        WriteText(Path.Combine(folder, lookalike + ".sce"), "Name=" + lookalike + "\nDescription=My own scenario\n");
+        WriteText(Path.Combine(folder, "AimMod Match - notes.sce"), "Description=" + MatchScenario.Marker + "x\n");
+        var keepName = MatchScenario.Prefix + "Synthetic A - CS - 11111112";
+        WriteText(Path.Combine(folder, keepName + ".sce"), "Name=" + keepName + "\nDescription=" + MatchScenario.Marker + "Synthetic A.\n");
+        Check(store.Clean(keepName) == 2 && !File.Exists(Path.Combine(folder, marked + ".sce")) && File.Exists(Path.Combine(folder, keepName + ".sce")), "Cleanup removes leftover match scenarios (including older builds') but keeps the current lobby's");
+        Check(File.Exists(Path.Combine(folder, lookalike + ".sce")) && File.Exists(Path.Combine(folder, taken + ".sce")) && File.Exists(Path.Combine(folder, "AimMod Match - notes.sce")), "Files without the marker or the generated name pattern are never deleted");
+        Check(store.Clean(null) == 1 && !File.Exists(Path.Combine(folder, keepName + ".sce")) && store.Files().Count == 0, "Leaving removes the last one too");
+        Check(MatchScenario.SafeMode(MatchScenario.Name(cs), "challenge") == "freeplay" && MatchScenario.SafeMode("Synthetic A", "challenge") == "challenge", "Match scenarios never start as challenges");
     }
 
     // Synthetic format 2 replay (same fixture as CoreFormatChecks).
@@ -924,8 +937,13 @@ static class MultiplayerChecks
         Check(control.Calls.Last() == "load " + name && File.Exists(Path.Combine(game, "Saved", "SaveGames", "Scenarios", name + ".sce")), "The generated scenario is written and loaded");
         Run(6000);
         Check(control.Calls.Last() == "start freeplay " + name, "Generated scenarios run in freeplay");
+        Run(200);
+        Check(File.Exists(Path.Combine(game, "Saved", "SaveGames", "Scenarios", name + ".sce")), "The lobby's match scenario stays while the lobby needs it (play again, rematch)");
         // Host leaving a simulated lobby hands it over; invites and launch joins.
         service.Act("leave", default);
+        var refreshes = control.Calls.Count(c => c == "refresh");
+        Run(200);
+        Check(!File.Exists(Path.Combine(game, "Saved", "SaveGames", "Scenarios", name + ".sce")) && control.Calls.Count(c => c == "refresh") == refreshes + 1, "Leaving removes the match scenario and refreshes KovaaK's list");
         Check(service.Act("join", J(new { code = "SAMPLE" })).Ok && !View().GetProperty("lobby").GetProperty("isHost").GetBoolean(), "Joining a simulated room shows a read-only lobby");
         Run(1000);
         service.Act("sim", J(new { op = "host-leave" }));

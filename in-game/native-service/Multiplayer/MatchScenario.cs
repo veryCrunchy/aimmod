@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace AimMod.InGame.Multiplayer;
 
@@ -39,10 +40,18 @@ static class MatchPresets
 // so they get the same bytes. The result is written next to the user's
 // scenarios under a reserved name and played in freeplay, so nothing reaches
 // KovaaK's ranked leaderboards.
-static class MatchScenario
+static partial class MatchScenario
 {
-    public const int GeneratorVersion = 2;
+    public const int GeneratorVersion = 3;
     public const string Prefix = "AimMod Match - ";
+    // Written into every generated scenario; cleanup removes only files that carry it.
+    public const string Marker = "AimMod multiplayer match generated from ";
+    public const string Tag = "AimMod Match";
+    [GeneratedRegex(@"^AimMod Match - .{1,80} - [0-9a-f]{8}\.sce$")] private static partial Regex FilePattern();
+    public static bool IsGeneratedName(string fileName) => FilePattern().IsMatch(fileName);
+
+    // Match scenarios never run as challenges, so nothing can reach KovaaK's leaderboards.
+    public static string SafeMode(string scenario, string mode) => scenario.StartsWith(Prefix, StringComparison.Ordinal) ? "freeplay" : mode;
     static readonly CultureInfo Invariant = CultureInfo.InvariantCulture;
 
     // Anything that changes what is played means a generated scenario.
@@ -120,7 +129,9 @@ static class MatchScenario
         var (header, sections, mapData, nl) = Parse(input.BaseText);
         var name = Name(s);
         header.Set("Name", name);
-        header.Set("Description", "AimMod multiplayer match generated from " + (s.Scenario?.Name ?? "a scenario") + ". Played in freeplay; not a published scenario.");
+        header.Set("Description", Marker + (s.Scenario?.Name ?? "a scenario") + ". Temporary: AimMod removes it after the match. Played in freeplay; not a published scenario.");
+        // Only our own tag, so match scenarios stay out of the player's usual tag filters.
+        header.Set("SearchTags", Tag);
         if (s.TimeLimit is { } limit) header.Set("Timelimit", Num(limit));
         var playerName = header.Get("PlayerProfile");
         var characters = sections.Where(x => x.Title == "[Character Profile]").ToList();
@@ -255,5 +266,51 @@ sealed class MatchScenarioStore(string scenariosFolder, string manifestPath, int
         }
     }
     static void Touch(List<Entry> entries, string file, string hash, long now) { entries.RemoveAll(e => e.File == file); entries.Add(new Entry(file, hash, now)); }
+
+    // Remove every match scenario except the one the current lobby needs. A file goes only
+    // if its name has the generated pattern and its header carries the generated marker,
+    // so a user's own scenario is never touched. Returns how many were removed.
+    public int Clean(string? keepName)
+    {
+        lock (gate)
+        {
+            if (!Directory.Exists(scenariosFolder)) return 0;
+            var keep = keepName is null ? null : keepName + ".sce";
+            var removed = 0;
+            var written = Read();
+            foreach (var path in Directory.EnumerateFiles(scenariosFolder, MatchScenario.Prefix + "*.sce").Take(500).ToArray())
+            {
+                var file = Path.GetFileName(path);
+                if (file == keep || !MatchScenario.IsGeneratedName(file)) continue;
+                // Ours: it carries the marker, or it is still exactly what this store wrote.
+                if (!Marked(path) && !written.Any(e => e.File == file && Unchanged(path, e.Hash))) continue;
+                try { File.Delete(path); removed++; }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            }
+            var entries = Read();
+            if (entries.RemoveAll(e => e.File != keep && !File.Exists(Path.Combine(scenariosFolder, e.File))) > 0 || removed > 0) Save(entries);
+            return removed;
+        }
+    }
+    static bool Unchanged(string path, string hash)
+    {
+        try { return new FileInfo(path).Length <= 32L << 20 && MatchScenario.Hash(File.ReadAllText(path)) == hash; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
+    }
+    static bool Marked(string path)
+    {
+        try
+        {
+            if (new FileInfo(path).Length > 32L << 20) return false;
+            using var reader = new StreamReader(path);
+            for (var i = 0; i < 400 && reader.ReadLine() is { } line; i++)
+            {
+                if (line.StartsWith('[')) return false;
+                if (line.StartsWith("Description=" + MatchScenario.Marker, StringComparison.Ordinal)) return true;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        return false;
+    }
     public IReadOnlyList<string> Files() { lock (gate) return Read().OrderByDescending(e => e.Written).Select(e => e.File).ToArray(); }
 }

@@ -1080,6 +1080,7 @@ sealed partial class MultiplayerService : IDisposable
             MapTick();
             var now = clock();
             WatchFriends(now);
+            CleanMatchScenarios();
             FollowLeader(now);
             if (core is not null)
             {
@@ -1434,6 +1435,20 @@ sealed partial class MultiplayerService : IDisposable
         if (preparedProblem is null) refreshSequence = game.Refresh();
     }
 
+    // Match scenarios live only as long as a lobby needs them: they are removed when the
+    // lobby's settings move on, when you leave or the lobby closes, and at startup (leftovers
+    // from a crash). The one the current lobby uses stays for Play again and rematches.
+    string? cleanedFor = "\0";
+    string? WantedMatchScenario() => Current is { Settings: { Scenario: not null } s } && MatchScenario.Needed(s) ? MatchScenario.Name(s) : null;
+    void CleanMatchScenarios()
+    {
+        var wanted = WantedMatchScenario();
+        if (wanted == cleanedFor || scenarios is null) return;
+        cleanedFor = wanted;
+        if (preparedName is not null && preparedName != wanted) { preparedKey = null; preparedName = null; preparedProblem = null; }
+        if (scenarios.Clean(wanted) > 0) game.Refresh();
+    }
+
     static string FindIt(string scenario, bool generated) =>
         "In KovaaK’s, open Play > Scenarios, search for “" + scenario + "”" + (generated ? " (it’s one of your local scenarios) and play it in Freeplay." : " and start it.") +
         (generated ? " If it’s not listed yet, restart KovaaK’s once; AimMod saved it to your Scenarios folder." : "");
@@ -1452,7 +1467,7 @@ sealed partial class MultiplayerService : IDisposable
             var s = lobby.Settings;
             var generated = MatchScenario.Needed(s);
             var scenario = s.Scenario?.Name ?? "";
-            var mode = generated ? "freeplay" : "challenge";
+            var mode = MatchScenario.SafeMode(generated ? MatchScenario.Name(s) : s.Scenario?.Name ?? "", generated ? "freeplay" : "challenge");
             string? problem = null;
             if (generated)
             {
@@ -1472,7 +1487,7 @@ sealed partial class MultiplayerService : IDisposable
         { loadedSent = key; Command("loaded", JsonSerializer.SerializeToElement(new { match = match.Id, round = match.Round })); }
         if (match.Phase == MatchPhases.Live && plan.StartSequence is null && plan.State is "loading" or "ready" or "manual")
         {
-            if (caps.Contains("start") && game.Start(plan.Scenario, plan.Mode) is long start) plan = plan with { State = "starting", Message = "Starting your run…", StartSequence = start };
+            if (caps.Contains("start") && game.Start(plan.Scenario, MatchScenario.SafeMode(plan.Scenario, plan.Mode)) is long start) plan = plan with { State = "starting", Message = "Starting your run…", StartSequence = start };
             else plan = plan with { State = "manual", Message = "Go! " + FindIt(plan.Scenario, plan.Generated) };
         }
         if (game.Result is { } result && (result.Sequence == plan.LoadSequence || result.Sequence == plan.StartSequence))
