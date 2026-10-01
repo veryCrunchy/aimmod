@@ -1,6 +1,7 @@
 #include "Cosmetics.hpp"
 
 #include "Accessory.hpp"
+#include "Reflect.hpp"
 
 #include "Log.hpp"
 #include "Output.hpp"
@@ -331,7 +332,10 @@ namespace aimmod
             UObject* component = d.component.Get();
             UObject* mid = d.mid.Get();
             UObject* original = d.original.Get();
-            if (component && mid && original && Material(component, d.index) == mid) SetMaterial(component, d.index, original);
+            // Only on a live component of a live owner: a transition destroys the rest.
+            if (reflect::Alive(component) && reflect::Alive(component->GetOuterPrivate()) && reflect::Alive(mid) && reflect::Alive(original) &&
+                Material(component, d.index) == mid)
+                SetMaterial(component, d.index, original);
             m_ours.erase(mid);
         }
         m_dressed = std::move(kept);
@@ -437,7 +441,8 @@ namespace aimmod
                 kept.push_back(std::move(w));
                 continue;
             }
-            if (UObject* component = w.component.Get())
+            UObject* component = w.component.Get();
+            if (reflect::Alive(component) && reflect::Alive(w.actor.Get()) && reflect::Alive(component->GetOuterPrivate()))
                 m_destroyComponent.Call(component, [&](std::uint8_t* value, const Param& p) { if (p.kind == Kind::Object) WriteObject(value, component); });
         }
         m_worn = std::move(kept);
@@ -529,13 +534,27 @@ namespace aimmod
             m_reason = d.reason;
             Log("cosmetics: scope: " + d.reason);
         }
+        // While a level loads (or the state is unknown) no engine call is made:
+        // the transition may be destroying the avatars and their components.
+        // What died is forgotten; what survives is restored on the next settled
+        // tick (the gate is closed then), so nothing outlives a match.
+        if (state.loading != std::optional<bool>(false))
+        {
+            std::erase_if(m_dressed, [&](const Dressed& dressed) {
+                if (reflect::Alive(dressed.component.Get())) return false;
+                m_ours.erase(dressed.mid.Get());
+                return true;
+            });
+            std::erase_if(m_worn, [](const Worn& w) { return !reflect::Alive(w.component.Get()) || !reflect::Alive(w.actor.Get()); });
+            return;
+        }
         // Forget what the game destroyed (avatars leave, levels change).
         std::erase_if(m_dressed, [&](const Dressed& dressed) {
             if (dressed.component.Get()) return false;
             m_ours.erase(dressed.mid.Get());
             return true;
         });
-        std::erase_if(m_worn, [](const Worn& w) { return !w.component.Get() || !w.actor.Get(); });
+        std::erase_if(m_worn, [](const Worn& w) { return !reflect::Alive(w.component.Get()) || !reflect::Alive(w.actor.Get()); });
         if (!d.avatars)
         {
             Restore(nullptr, Scope::Avatar);

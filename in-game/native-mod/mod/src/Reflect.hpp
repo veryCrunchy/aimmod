@@ -69,6 +69,14 @@ namespace aimmod::reflect
     // World bounds of a primitive: origin and box extent.
     bool Bounds(UObject* component, float origin[3], float extent[3]);
 
+    // A live object that is safe to call into: not a template, not being
+    // destroyed, not pending kill or unreachable, with a class.
+    bool Alive(UObject* object);
+    // An actor AimModCore may destroy now: alive, in `world` (the current
+    // world, itself alive), and every component it owns alive. Anything else
+    // is left to the level (a transition destroys it).
+    bool SafeToDestroy(UObject* actor, UObject* world);
+
     // The game's material data defaults (opacity, colours) on a mesh
     // component: without them its materials read zeros and dither away.
     bool ApplyMaterialDataDefaults(UObject* meshComponent);

@@ -50,7 +50,11 @@ namespace aimmod
         std::optional<PreviewRequest> ReadRequest();
         PreviewGameState GameState(bool inChallenge, bool loading) const;
         bool EnsureStage(UObject* world);
-        void Teardown(const char* why);
+        // Ends the preview. With `destroy`, the stage is destroyed now if that is
+        // safe (reflect::SafeToDestroy); otherwise it is only forgotten here and
+        // destroyed later in a safe tick, or left to the level when the world goes.
+        void Teardown(const char* why, bool destroy = true);
+        void DestroyOrphans(UObject* world);
         void ApplyLook(const PreviewRequest& request);
         void ApplyRotation(double yaw);
         void Frame(UObject* target);
@@ -82,6 +86,12 @@ namespace aimmod
         std::vector<RC::Unreal::FWeakObjectPtr> m_lights;      // key, fill, rim
         std::vector<RC::Unreal::FWeakObjectPtr> m_accessories; // worn on the stage
         RC::Unreal::FWeakObjectPtr m_weapon;                   // the weapon view's mesh
+        struct Orphan
+        {
+            RC::Unreal::FWeakObjectPtr stage, target;
+            UObject* world{};
+        };
+        std::vector<Orphan> m_orphans; // stages left alive during a transition
         MaterialParams m_params;
         UObject* m_world{};
         double m_baseYaw{};

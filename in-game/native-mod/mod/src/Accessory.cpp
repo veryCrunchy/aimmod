@@ -183,7 +183,8 @@ namespace aimmod
 
     void RemoveAccessory(UObject* component)
     {
-        if (!component) return;
+        // Only a live component of a live owner; during a level transition the level destroys it.
+        if (!Alive(component) || !Alive(component->GetOuterPrivate())) return;
         Call(component, STR("/Script/Engine.ActorComponent:K2_DestroyComponent"), [&](const std::wstring& n, FProperty*, std::uint8_t* v) {
             if (n == STR("Object")) WriteObject(v, component);
         });

@@ -175,6 +175,8 @@ namespace aimmod
         return {true, "Cosmetics page open"};
     }
 
+    bool PreviewMayDestroy(const PreviewGameState& s) { return s.inChallenge == false && s.loading == false; }
+
     std::string FormatPreviewFrame(std::uint64_t seq, std::string_view file, int width, int height)
     {
         return "v=1\nseq=" + std::to_string(seq) + "\nfile=" + std::string(file) + "\nwidth=" + std::to_string(width) + "\nheight=" + std::to_string(height) + "\n";

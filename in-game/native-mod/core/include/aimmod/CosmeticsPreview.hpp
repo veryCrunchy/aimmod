@@ -65,6 +65,11 @@ namespace aimmod
         const char* reason{};
     };
     PreviewDecision DecidePreview(const std::optional<PreviewRequest>& request, const PreviewGameState& state);
+    // Whether AimModCore may destroy its preview stage now: only in a settled
+    // state (known not loading, not in a challenge). A challenge start or a
+    // load usually changes the level, and destroying an actor the level is
+    // tearing down crashes the game; then the stage is left to the level.
+    bool PreviewMayDestroy(const PreviewGameState& state);
 
     // cosmetics-preview-frame.txt: "v=1\nseq=<n>\nfile=<name>\nwidth=<w>\nheight=<h>\n".
     std::string FormatPreviewFrame(std::uint64_t seq, std::string_view file, int width, int height);

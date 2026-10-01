@@ -267,7 +267,8 @@ namespace aimmod
                 m_lastReason = reason;
                 Log(std::string("cosmetics preview: off (") + reason + ")");
             }
-            return Teardown(reason);
+            // A challenge or load usually changes the level: never destroy then.
+            return Teardown(reason, false);
         }
         const auto request = ReadRequest();
         const PreviewDecision decision = DecidePreview(request, state);
@@ -277,8 +278,11 @@ namespace aimmod
             Log(std::string("cosmetics preview: ") + decision.reason);
         }
         UObject* player = m_scene.Player();
-        UObject* world = player ? static_cast<AActor*>(player)->GetWorld() : nullptr;
-        if (!decision.run || !world) return Teardown(decision.run ? "no world" : decision.reason);
+        UObject* world = Alive(player) ? static_cast<AActor*>(player)->GetWorld() : nullptr;
+        if (!Alive(world)) world = nullptr;
+        if (!world) return Teardown("no world", false);
+        if (PreviewMayDestroy(state)) DestroyOrphans(world);
+        if (!decision.run) return Teardown(decision.reason, PreviewMayDestroy(state));
         if (!EnsureStage(world)) return;
 
         const std::string key = request->LookKey();
@@ -308,11 +312,12 @@ namespace aimmod
 
     bool CosmeticsPreview::EnsureStage(UObject* world)
     {
-        if (m_stage.Get() && m_world == world) return true;
-        if (m_stage.Get() || m_target.Get()) Teardown("world changed");
-        if (!m_stageClass) m_stageClass = UObjectGlobals::StaticFindObject<UClass*>(nullptr, nullptr, StageClass);
+        if (m_stage.Get() && m_world == world && Alive(m_stage.Get())) return true;
+        if (m_stage.Get() || m_target.Get() || m_world) Teardown(m_world == world ? "stage gone" : "world changed", m_world == world);
+        // Found again for every spawn, never cached: the class can be unloaded with the menu.
+        m_stageClass = UObjectGlobals::StaticFindObject<UClass*>(nullptr, nullptr, StageClass);
         if (!m_stageClass) m_stageClass = static_cast<UClass*>(LoadGameAsset(StageClass));
-        if (!m_stageClass) { Teardown("the game's preview stage class is not loaded"); return false; }
+        if (!Alive(m_stageClass)) { m_stageClass = nullptr; Teardown("the game's preview stage class is not loaded", false); return false; }
 
         UObject* rendering = Default(STR("/Script/Engine.Default__KismetRenderingLibrary"));
         UObject* target = nullptr;
@@ -870,15 +875,28 @@ namespace aimmod
         return true;
     }
 
-    void CosmeticsPreview::Teardown(const char* why)
+    void CosmeticsPreview::Teardown(const char* why, bool destroy)
     {
-        const bool had = m_stage.Get() || m_target.Get();
-        if (AActor* stage = static_cast<AActor*>(m_stage.Get())) stage->K2_DestroyActor(); // takes its accessories with it
-        if (UObject* target = m_target.Get())
-            Call(Default(STR("/Script/Engine.Default__KismetRenderingLibrary")), STR("/Script/Engine.KismetRenderingLibrary:ReleaseRenderTarget2D"),
-                 [&](const std::wstring& n, FProperty*, std::uint8_t* v) {
-                     if (n == STR("TextureRenderTarget")) WriteObject(v, target);
-                 });
+        UObject* stage = m_stage.Get();
+        UObject* target = m_target.Get();
+        const bool had = stage || target;
+        if (had)
+        {
+            if (destroy && SafeToDestroy(stage, m_world))
+            {
+                // Our own components first, then the stage (it was spawned by AimModCore).
+                RemoveAccessories();
+                RemoveWeapon();
+                static_cast<AActor*>(stage)->K2_DestroyActor();
+                if (Alive(target))
+                    Call(Default(STR("/Script/Engine.Default__KismetRenderingLibrary")), STR("/Script/Engine.KismetRenderingLibrary:ReleaseRenderTarget2D"),
+                         [&](const std::wstring& n, FProperty*, std::uint8_t* v) {
+                             if (n == STR("TextureRenderTarget")) WriteObject(v, target);
+                         });
+            }
+            else if (m_orphans.size() < 16)
+                m_orphans.push_back({m_stage, m_target, m_world}); // destroyed later in a safe tick, or by the level
+        }
         m_stage = m_target = m_capture = m_meshes = m_mesh = FWeakObjectPtr{};
         m_lights.clear();
         m_accessories.clear();
@@ -892,14 +910,40 @@ namespace aimmod
             std::error_code error;
             std::filesystem::remove(m_framePath, error);
             for (const wchar_t* file : {L"capture-color.png", L"capture-mask.png", L"capture-normal.png"}) std::filesystem::remove(m_frames / file, error);
-            Log(std::string("cosmetics preview stage removed (") + why + ")");
+            Log(std::string("cosmetics preview stage ") + (destroy ? "removed" : "left to the level") + " (" + why + ")");
         }
+    }
+
+    // Stages forgotten during a transition: destroyed once the same world is
+    // current and safe again; dropped when their world is gone (the level took them).
+    void CosmeticsPreview::DestroyOrphans(UObject* world)
+    {
+        std::vector<Orphan> keep;
+        for (Orphan& o : m_orphans)
+        {
+            UObject* stage = o.stage.Get();
+            if (!stage || !world || o.world != world || !Alive(stage)) continue;
+            if (!SafeToDestroy(stage, world))
+            {
+                keep.push_back(o);
+                continue;
+            }
+            static_cast<AActor*>(stage)->K2_DestroyActor();
+            if (UObject* target = o.target.Get(); Alive(target))
+                Call(Default(STR("/Script/Engine.Default__KismetRenderingLibrary")), STR("/Script/Engine.KismetRenderingLibrary:ReleaseRenderTarget2D"),
+                     [&](const std::wstring& n, FProperty*, std::uint8_t* v) {
+                         if (n == STR("TextureRenderTarget")) WriteObject(v, target);
+                     });
+            Log("cosmetics preview: an earlier stage was removed");
+        }
+        m_orphans = std::move(keep);
     }
 
     // May run off the game thread (mod unload): no engine calls. The stage is
     // inert without the tick (capture on demand only) and goes with the level.
     void CosmeticsPreview::Shutdown()
     {
+        m_orphans.clear();
         m_stage = m_target = m_capture = m_meshes = m_mesh = FWeakObjectPtr{};
         m_lights.clear();
         m_accessories.clear();
