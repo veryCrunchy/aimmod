@@ -284,6 +284,12 @@ static class MultiplayerChecks
         public void SetPresencePrivacy(bool hideScenario) { }
         public bool StartSpectate(string peer, int rate) => false;
         public void StopSpectate() { }
+        public bool AllowSpectate;
+        public readonly List<string> SpectateLog = [];
+        public bool RequestSpectate(string peer) { SpectateLog.Add("request " + peer); return AllowSpectate; }
+        public void AnswerSpectate(string peer, bool allow) => SpectateLog.Add((allow ? "allow " : "deny ") + peer);
+        public void SetSpectatePrivacy(string mode) { }
+        public void RemoveSpectator(string peer) { }
         public bool WorkshopDownload(string item) => false;
         // Bulk lane stand-in: chunks arrive in order; DropAfter cuts a transfer short like a lost link.
         public int BulkChunkBytes { get; set; }
@@ -313,7 +319,7 @@ static class MultiplayerChecks
         public bool InviteOverlay(LobbySnapshot lobby) => true;
         public bool InviteFriend(string friendId, LobbySnapshot lobby) => true;
         public bool Invited(string peer) => peer == "invited";
-        public IReadOnlyList<FriendEntry> Friends() => [new("f1", "Synthetic Friend", "aimmod", null, null, false)];
+        public IReadOnlyList<FriendEntry> Friends() => [new("f1", "Synthetic Friend", "aimmod", null, null, false), new("f2", "Watchable Friend", "aimmod", "Playing Synthetic A", null, false, Spectatable: true, Watchers: 1, Scenario: "Synthetic A")];
         public PeerLink? Link(string peer) => new("connected", "relay", 42);
         public void Dispose() { }
     }
@@ -359,7 +365,31 @@ static class MultiplayerChecks
         net.Peers["peer-c"].Inbox.Enqueue(new TransportEvent("steam", TransportEvent.InviteReceived, Invite: new IncomingInvite("i1", "Synthetic Host", "incoming", "token", new LobbySummary(LobbyModes.Duel, "Synthetic A", 1, 2), now)));
         Pump();
         Check(View(c).GetProperty("invites").GetArrayLength() == 1 && c.Act("decline-invite", J(new { id = "i1" })).Ok && View(c).GetProperty("invites").GetArrayLength() == 0, "Invites can be declined");
-        Check(View(b).GetProperty("friends").GetProperty("items").GetArrayLength() == 1 && b.Act("invite-friend", J(new { friend = "f1" })).Ok && !b.Act("invite-friend", J(new { friend = "steam:123" })).Ok, "Friends come from the transport; unknown ids are refused");
+        Check(View(b).GetProperty("friends").GetProperty("items").GetArrayLength() == 2 && b.Act("invite-friend", J(new { friend = "f1" })).Ok && !b.Act("invite-friend", J(new { friend = "steam:123" })).Ok, "Friends come from the transport; unknown ids are refused");
+        // Spectating a friend without a lobby, and being watched.
+        var bt = (MemoryTransport)net.Peers["peer-b"];
+        Check(!b.Act("watch", J(new { friend = "f1" })).Ok, "Friends who don't allow spectators can't be watched");
+        bt.AllowSpectate = true;
+        Check(b.Act("watch", J(new { friend = "f2" })).Ok && View(b).GetProperty("watch").GetProperty("state").GetString() == "requesting", "Asking to watch a friend");
+        bt.Inbox.Enqueue(new TransportEvent("f2", TransportEvent.SpectateStarted, Reason: "Watchable Friend"));
+        bt.Inbox.Enqueue(new TransportEvent("f2", TransportEvent.SpectateScore, Frame: Encoding.UTF8.GetBytes("{\"active\":true,\"score\":1234,\"accuracy\":85.5,\"remaining\":20}")));
+        Pump();
+        var watching = View(b).GetProperty("watch");
+        Check(watching.GetProperty("scenario").GetString() == "Synthetic A" && watching.GetProperty("state").GetString() == "missing" && watching.GetProperty("message").GetString()!.Contains("don’t have"), "The friend's scenario is known, and missing content is explained");
+        b.Act("watch-started", default);
+        Check(JsonDocument.Parse(b.NoticeText()).RootElement.GetProperty("badge").GetString() == "Watching Watchable Friend · 1,234 · 85.5% · 20 s left", "The spectator sees the friend's live stats over their view");
+        bt.Inbox.Enqueue(new TransportEvent("f2", TransportEvent.SpectateEnded, Reason: "declined"));
+        Pump();
+        Check(View(b).GetProperty("watch").GetProperty("message").GetString()!.Contains("said no"), "An end reason is explained");
+        b.Act("watch-stop", default);
+        var ct = (MemoryTransport)net.Peers["peer-c"];
+        ct.Inbox.Enqueue(new TransportEvent("f9", TransportEvent.SpectatorJoined, Reason: "Synthetic Watcher"));
+        ct.Inbox.Enqueue(new TransportEvent("f8", TransportEvent.SpectatorJoined, Reason: "Quiet Sync", Host: true));
+        ct.Inbox.Enqueue(new TransportEvent("f7", TransportEvent.SpectateAsked, Reason: "Synthetic Asker"));
+        Pump();
+        var cn = JsonDocument.Parse(c.NoticeText()).RootElement.GetRawText(); var cnBadge = JsonDocument.Parse(c.NoticeText()).RootElement.GetProperty("badge").GetString() ?? ""; var cnTitle = JsonDocument.Parse(c.NoticeText()).RootElement.GetProperty("title").GetString() ?? "";
+        Check(cnBadge == "2 watching: Synthetic Watcher, Quiet Sync" && cnTitle == "Synthetic Asker wants to watch you" && cn.Contains("spectate-allow"), "The watched player sees who watches and can allow a request");
+        Check(c.Act("spectate-allow", J(new { id = "f7" })).Ok && ct.SpectateLog.Contains("allow f7") && !c.NoticeText().Contains("wants to watch"), "Allowing answers the bridge and clears the popup");
         // A Steam join (invite accepted in Steam) joins asynchronously: the host arrives as a Connected event.
         var d = Make("peer-d");
         net.Peers["peer-d"].Inbox.Enqueue(new TransportEvent("peer-b", TransportEvent.InviteReceived, Invite: new IncomingInvite("i2", "Synthetic Host", "invite", net.Codes.Single().Key, null, now)));
@@ -452,6 +482,22 @@ static class MultiplayerChecks
         Check(Until(() => { bulkEvents.AddRange(steam.Drain()); return bulkEvents.Any(e => e.Kind == TransportEvent.BulkEnd); }) && bulkEvents.Any(e => e.Kind == TransportEvent.BulkData && e.Transfer == 9 && e.Frame!.Length == 100) && bulkEvents.First(e => e.Kind == TransportEvent.BulkEnd).Reason == "disconnected", "Incoming bulk chunks and transfer ends map to events");
         steam.BulkCancel(friend, 7, "complete");
         Check(Expect("xfer.cancel").GetProperty("reason").GetString() == "complete", "Finished transfers are closed as complete");
+        // Spectating without a lobby (contract §6).
+        Check(steam.RequestSpectate(friend) && Expect("spectate.request").GetProperty("rate").GetInt32() == 60, "Spectate requests go to the bridge");
+        Write(new { v = 1, ev = "spectate.started", peer = friend, name = "Synthetic Friend", direct = true });
+        Write(new { v = 1, ev = "spectate.score", active = true, paused = false, score = 10, seconds = 5, remaining = 55, shots = 4, hits = 3, kills = 2, accuracy = 75 });
+        Write(new { v = 1, ev = "spectate.asked", from = "76561190000000008", fromName = "Synthetic Asker" });
+        Write(new { v = 1, ev = "spectator.joined", peer = "76561190000000009", name = "Synthetic Viewer" });
+        Write(new { v = 1, ev = "spectators", list = new[] { new { peer = "76561190000000009", name = "Synthetic Viewer" }, new { peer = "76561190000000010", name = "Already Watching" } } });
+        Write(new { v = 1, ev = "spectator.left", peer = "76561190000000009", reason = "stopped" });
+        Write(new { v = 1, ev = "spectate.ended", peer = friend, reason = "stopped" });
+        var spectateEvents = new List<TransportEvent>();
+        Check(Until(() => { spectateEvents.AddRange(steam.Drain()); return spectateEvents.Any(e => e.Kind == TransportEvent.SpectateEnded); }), "Spectate events arrive");
+        Check(spectateEvents.Any(e => e.Kind == TransportEvent.SpectateStarted && e.Reason == "Synthetic Friend" && e.Host) && spectateEvents.Any(e => e.Kind == TransportEvent.SpectateScore)
+            && spectateEvents.Any(e => e.Kind == TransportEvent.SpectateAsked && e.Peer == "76561190000000008" && e.Reason == "Synthetic Asker")
+            && spectateEvents.Any(e => e.Kind == TransportEvent.SpectatorJoined && e.Peer == "76561190000000010" && e.Host) && spectateEvents.Any(e => e.Kind == TransportEvent.SpectatorLeft), "started, score, asked, joined, the quiet list sync and left all map");
+        steam.AnswerSpectate("76561190000000008", true); steam.SetSpectatePrivacy("ask"); steam.RemoveSpectator("76561190000000010");
+        Check(Expect("spectate.answer").GetProperty("allow").GetBoolean() && Expect("spectate.privacy").GetProperty("mode").GetString() == "ask" && Expect("spectate.remove").GetProperty("peer").GetString() == "76561190000000010", "Answers, privacy and removal reach the bridge");
         // Rich-presence friend status and the bridge build.
         Check(steam.BridgeVersion == "test", "The bridge build comes from ready");
         Write(new { v = 1, ev = "friends", friends = new object[] {

@@ -55,7 +55,7 @@
     if(!container)return;if(inflight){again=true;return;}inflight=true;
     xhr('GET','/multiplayer',null,function(ok,data){inflight=false;if(ok&&data&&data.v===1)accept(data);else if(!view)renderError();schedule();if(again){again=false;poll();}});
   }
-  function fast(){var m=view&&view.lobby&&view.lobby.match;return !!(view&&(view.joining||(m&&(m.phase==='countdown'||m.phase==='live'))));}
+  function fast(){var m=view&&view.lobby&&view.lobby.match;return !!(view&&(view.joining||view.watch||(m&&(m.phase==='countdown'||m.phase==='live'))));}
   function schedule(){clearTimeout(timer);if(container)timer=setTimeout(poll,fast()?250:1000);}
   function act(action,extra,done){
     var body={action:action};if(extra)for(var k in extra)if(Object.prototype.hasOwnProperty.call(extra,k))body[k]=extra[k];
@@ -143,6 +143,7 @@
 
   // Home ------------------------------------------------------------------
   function home(page){
+    if(view.watch)page.appendChild(watchPanel());
     if(view.rejoin)page.appendChild(add(node('div','panel mp-rejoin'),add(node('div','mp-rejoin-text'),node('strong','','Rejoin '+safe(view.rejoin.hostName,'your host')+'’s lobby?'),node('span','','You left it '+(view.rejoin.minutes<1?'just now':view.rejoin.minutes+' min ago')+' when KovaaK’s closed.')),actions(button('Rejoin',function(){act('rejoin');},'primary'))));
     var hero=node('div','panel mp-hero');page.appendChild(hero);
     var left=node('div','mp-hero-main');
@@ -163,6 +164,7 @@
     hero.appendChild(left);hero.appendChild(right);
     var row=node('div','mp-row');page.appendChild(row);
     var main=node('div','mp-col mp-main'),side=node('div','mp-col mp-side');row.appendChild(main);row.appendChild(side);
+    if((view.watchers&&view.watchers.length)||(view.watchAsks&&view.watchAsks.length))side.appendChild(watchersPanel());
     main.appendChild(friendsPanel(false));
     side.appendChild(recentPanel());
     side.appendChild(prefsPanel());
@@ -193,6 +195,43 @@
       clips.forEach(function(c){var row=node('div','mp-clip-row');add(row,node('span','mp-clip-name',safe(c.scenario,'Clip')+' · '+F.relative(c.recordedAt)));row.appendChild(actions(button('Share',function(){act('share-clip',{id:c.id,label:safe(c.scenario,'')},function(done){if(done&&box.parentNode)box.parentNode.removeChild(box);});},'compact')));box.appendChild(row);});
       panel.appendChild(box);
     });
+  }
+  // Spectating a friend without a lobby: status, their live stats, stop and switch.
+  var watchTried=0,watchStartedFor='';
+  function startWatchView(w){
+    // Retried every few seconds until AimModCore's spectator view accepts (same scenario, pause menu).
+    var key=w.peer+'|'+w.scenario;if(watchStartedFor===key||Date.now()-watchTried<3000||!w.scenario)return;watchTried=Date.now();
+    xhr('POST','/native-replay',{action:'spectate',scenario:w.scenario,mapName:w.mapName||'',mapScale:w.mapScale||1,label:w.name},function(ok,data){
+      if(ok){watchStartedFor=key;act('watch-started');}
+      else if(data&&data.message)lastWatchReason=String(data.message);
+    });
+  }
+  var lastWatchReason='';
+  function statLine(sc){
+    if(!sc||sc.active===false)return 'Waiting for their run…';
+    var parts=[];if(F.known(sc.score))parts.push('Score '+F.number(sc.score,0));if(F.known(sc.accuracy))parts.push(F.percent(sc.accuracy));if(F.known(sc.remaining))parts.push(F.duration(sc.remaining)+' left');
+    return (sc.paused?'Paused · ':'')+(parts.join(' · ')||'Playing');
+  }
+  function watchPanel(){
+    var w=view.watch;var p=node('div','panel mp-watch '+(w.state==='ended'||w.state==='missing'?'warn':''));
+    var head=node('div','mp-watch-head');add(head,avatar(w.name),add(node('div','mp-watch-text'),node('div','eyebrow',w.state==='watching'?'Spectating':'Spectate'),node('h2','',safe(w.name,'Friend')),node('p','subtle',(w.scenario?safe(w.scenario,'')+' · ':'')+safe(w.message,''))));
+    p.appendChild(head);
+    if(w.state!=='ended'&&w.state!=='missing'){
+      var hud=node('div','mp-watch-hud');hud.appendChild(node('span','',statLine(w.score)));p.appendChild(hud);
+      if(w.state!=='watching')p.appendChild(node('p','mp-note',lastWatchReason?'Not yet: '+safe(lastWatchReason,'')+'.':'Their view starts in the pause menu once you’re in the same scenario.'));
+      if(w.state==='loading'||w.state==='manual'||w.state==='watching')startWatchView(w);
+    }
+    var row=actions(button(w.state==='ended'?'Close':'Stop spectating',function(){watchStartedFor='';act('watch-stop');},w.state==='ended'?'compact':'compact quiet danger'));
+    (w.others||[]).forEach(function(o){row.appendChild(button('Switch to '+safe(o.name),function(){watchStartedFor='';act('watch',{friend:o.id});},'compact'));});
+    p.appendChild(row);return p;
+  }
+  // Who is watching you, and requests to allow or deny (privacy "Ask me").
+  function watchersPanel(){
+    var p=node('div','panel mp-watchers');var head=node('div','panel-head');var text=node('div','head-text');
+    add(text,node('h2','','Watching you'),node('p','','They see your view from their game.'));head.appendChild(text);p.appendChild(head);
+    (view.watchAsks||[]).forEach(function(a){var row=node('div','mp-friend');add(row,avatar(a.name,true),add(node('div','mp-friend-info'),node('strong','',safe(a.name,'Friend')),node('span','','Wants to watch you')));row.appendChild(actions(button('Allow',function(){act('spectate-allow',{id:a.peer});},'compact primary'),button('Deny',function(){act('spectate-deny',{id:a.peer});},'compact')));p.appendChild(row);});
+    (view.watchers||[]).forEach(function(w){var row=node('div','mp-friend');add(row,avatar(w.name,true),add(node('div','mp-friend-info'),node('strong','',safe(w.name,'Friend')),node('span','','Watching')));row.appendChild(actions(button('Remove',function(){act('spectator-remove',{id:w.peer});},'compact quiet danger')));p.appendChild(row);});
+    return p;
   }
   // How you appear in the other players' games.
   function lookPanel(lobby){
@@ -225,6 +264,8 @@
     flag('quietDuringRanked','Quiet during ranked runs','No popups or hotkey while you play a scenario of your own.');
     flag('sounds','Sounds','Uses KovaaK’s own menu sounds.');
     flag('hideScenario','Hide my scenario from friends','Friends see you’re in AimMod, not what you play.');
+    body.appendChild(settingRow('Who can spectate me','Friends watch from their own game, osu!-style.',segmented([{id:'friends',label:'Friends'},{id:'ask',label:'Ask me'},{id:'off',label:'Nobody'}],pr.spectatePrivacy||'friends',function(id){pref('spectatePrivacy',id);},false,'spectate privacy')));
+    flag('showWatchers','Show who’s watching while I play','A small line at the top of the screen.');
     if(pr.sounds)body.appendChild(settingRow('Volume','',stepper(typeof pr.volume==='number'?pr.volume:0.8,0,1,0.1,function(v){return F.number(v*100,0)+'%';},function(v){pref('volume',v);},false,'volume')));
     var keys=[];for(var i=5;i<=10;i++)keys.push({id:'F'+i,label:'F'+i});
     body.appendChild(settingRow('Hotkey','Ready up or open the lobby from in game.',segmented(keys,pr.hotkey||'F7',function(id){pref('hotkey',id);},false,'hotkey')));
@@ -251,6 +292,7 @@
       var b=null;
       if(inLobby&&f.status!=='aimmod-lobby')b=button('Invite',function(){act('invite-friend',{friend:f.id},function(ok){if(ok)toast('Invite sent to '+safe(f.name,'your friend')+'.');});},'compact');
       else if(!inLobby&&f.joinable)b=button('Join',function(){act('join-friend',{friend:f.id});},'compact primary');
+      if(f.spectatable&&!(view.watch&&view.watch.peer===f.id)){var spec=button('Spectate',function(){act('watch',{friend:f.id},function(ok){if(ok)toast('Asking '+safe(f.name,'your friend')+' to let you watch…');});},'compact quiet');row.appendChild(actions(spec));}
       if(b)row.appendChild(actions(b));
       list.appendChild(row);
     });
@@ -341,6 +383,7 @@
     main.appendChild(playersPanel(lobby));
     main.appendChild(startBar(lobby));
     if(view.simulation)main.appendChild(devPanel(true));
+    if((view.watchers&&view.watchers.length)||(view.watchAsks&&view.watchAsks.length))side.appendChild(watchersPanel());
     side.appendChild(lookPanel(lobby));
     side.appendChild(summaryCard(lobby));
     // While the host is alone, inviting matters more than chat.
@@ -582,7 +625,7 @@
   // Match screens ------------------------------------------------------------
   function roundLabel(match){return match.mode==='duel'?'Round '+match.round+' · first to '+match.firstTo:match.totalRounds?'Round '+match.round+' of '+match.totalRounds:'Run '+match.round;}
   function matchScreen(page,lobby){
-    if(lobby.spectate)page.appendChild(add(banner('info','Spectating '+safe(lobby.spectate.name)+'. Their view plays in the pause menu.'),actions(button('Stop',function(){act('spectate-stop');},'compact quiet'))));
+    if(lobby.spectate)page.appendChild(add(banner('info','Spectating '+safe(lobby.spectate.name)+' · '+statLine(lobby.spectate.score)+'. Their view plays in the pause menu.'),actions(button('Stop',function(){act('spectate-stop');},'compact quiet'))));
     var match=lobby.match;
     connectionBanners(page,lobby);
     if(match.phase==='countdown')countdown(page,lobby,match);

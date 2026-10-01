@@ -9,7 +9,10 @@
   function render(n){
     var key=n?JSON.stringify(n):'';if(key===last)return;last=key;
     while(box.firstChild)box.removeChild(box.firstChild);
-    if(!n||!n.active){box.className='';return;}
+    if(!n||(!n.active&&!n.badge)){box.className='';return;}
+    box.className='show';
+    if(n.badge){var b=node('div','badge');b.appendChild(node('span','eye'));b.appendChild(node('span','',n.badge));box.appendChild(b);}
+    if(!n.active)return;
     box.className='show '+(n.kind||'info');
     var card=node('div','toast');
     var top=node('div','brand','AIMMOD · MULTIPLAYER');card.appendChild(top);
@@ -19,7 +22,7 @@
     if(n.key)row.appendChild(node('div','key',n.key));
     card.appendChild(row);
     // An incoming invite can be answered right here (the layer takes clicks only for these).
-    if(n.invite){var row2=node('div','actions');row2.appendChild(button('Join','primary',function(){answer('accept-invite',n.invite);}));row2.appendChild(button('Dismiss','',function(){answer('decline-invite',n.invite);}));card.appendChild(row2);}
+    if(n.actions&&n.actions.length){var row2=node('div','actions');n.actions.forEach(function(a,i){row2.appendChild(button(a.label,i===0?'primary':'',function(){answer(a.action,a.id);}));});card.appendChild(row2);}
     box.appendChild(card);
   }
   function button(label,css,action){var b=node('button','button'+(css?' '+css:''),label);b.type='button';b.onclick=action;return b;}

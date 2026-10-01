@@ -230,3 +230,7 @@
 .mp-rejoin{display:flex;flex-direction:row;align-items:center;padding:14px 20px;border-color:#2c6b52}.mp-rejoin-text{flex:1;min-width:0}.mp-rejoin-text strong{display:block;font-size:15px}.mp-rejoin-text span{display:block;font-size:13px;color:#a7bab0}.mp-rejoin .actions>.button{margin:0}
 .mp-line.clip{display:flex;flex-direction:row;align-items:center}.mp-line .mp-clip-watch{margin-right:8px;height:24px;line-height:22px}
 .mp-clip-picker{margin:0 20px 12px;padding:8px 10px;background:#101916;border:1px solid #22302a;border-radius:6px}.mp-clip-row{display:flex;flex-direction:row;align-items:center;min-height:34px}.mp-clip-name{flex:1;min-width:0;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mp-clip-row .actions>.button{margin:0}
+.mp-watch{padding:16px 20px 12px;border-color:#245066}.mp-watch.warn{border-color:#5a4524}
+.mp-watch-head{display:flex;flex-direction:row;align-items:center}.mp-watch-text{flex:1;min-width:0;margin-left:14px}.mp-watch-text h2{font-size:20px;font-weight:600;margin:2px 0}.mp-watch-text .subtle{font-size:13px}
+.mp-watch-hud{margin:12px 0 4px;padding:8px 12px;background:#0b1110;border:1px solid #2c4a3d;border-top:2px solid #66ccff;border-radius:6px;font-size:15px;font-weight:600}
+.mp-watch .actions{margin-top:10px}

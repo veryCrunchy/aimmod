@@ -113,6 +113,11 @@ interface IMultiplayerTransport : IDisposable
     // Follow a player's camera; AimModSteam writes the frames for AimModCore's spectator view.
     bool StartSpectate(string peer, int rate);
     void StopSpectate();
+    // Lobby-less spectating (osu!-style): ask to watch a friend, answer requests, set who may watch.
+    bool RequestSpectate(string peer);
+    void AnswerSpectate(string peer, bool allow);
+    void SetSpectatePrivacy(string mode);
+    void RemoveSpectator(string peer);
     void Send(string peer, byte[] frame, bool reliable);
     void Close(string peer);
     // Events since the last call: connected, disconnected, a frame, an incoming
@@ -141,7 +146,8 @@ interface IMultiplayerTransport : IDisposable
 // Bulk events carry Transfer and Index (BulkData: the chunk in Frame; BulkEnd: Reason).
 sealed record TransportEvent(string Peer, string Kind, byte[]? Frame = null, IncomingInvite? Invite = null, bool Host = false, string? Reason = null, WorkshopProgress? Workshop = null, int Transfer = 0, int Index = 0)
 {
-    public const string Connected = "connected", Disconnected = "disconnected", Left = "left", Message = "message", InviteReceived = "invite", Error = "error", WorkshopUpdate = "workshop", BulkData = "bulk-chunk", BulkAck = "bulk-ack", BulkEnd = "bulk-end";
+    public const string Connected = "connected", Disconnected = "disconnected", Left = "left", Message = "message", InviteReceived = "invite", Error = "error", WorkshopUpdate = "workshop", BulkData = "bulk-chunk", BulkAck = "bulk-ack", BulkEnd = "bulk-end",
+        SpectateAsked = "spectate-asked", SpectateStarted = "spectate-started", SpectateEnded = "spectate-ended", SpectatorJoined = "spectator-joined", SpectatorLeft = "spectator-left", SpectateScore = "spectate-score";
 }
 // Sent, the window is full (try again after an ack), or the lane is unavailable.
 enum BulkSend { Sent, WindowFull, Unavailable }
@@ -177,6 +183,10 @@ sealed class OfflineTransport : IMultiplayerTransport
     public void SetPresencePrivacy(bool hideScenario) { }
     public bool StartSpectate(string peer, int rate) => false;
     public void StopSpectate() { }
+    public bool RequestSpectate(string peer) => false;
+    public void AnswerSpectate(string peer, bool allow) { }
+    public void SetSpectatePrivacy(string mode) { }
+    public void RemoveSpectator(string peer) { }
     public void Send(string peer, byte[] frame, bool reliable) { }
     public void Close(string peer) { }
     public IReadOnlyList<TransportEvent> Drain() => [];

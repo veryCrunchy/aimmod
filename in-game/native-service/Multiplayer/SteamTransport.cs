@@ -34,6 +34,7 @@ sealed class SteamTransport : IMultiplayerTransport
     bool ugc; int bulkBytes, bulkWindow = 4;
     string? bridgeVersion; RejoinPoint? lastLobby;
     HashSet<string> lastCharKeys = new();
+    readonly Dictionary<string, string> spectators = new();
     IReadOnlyList<FriendEntry> friends = [];
     long friendsAt;
     string? lastData, lastStatus; bool? lastJoinable;
@@ -233,7 +234,11 @@ sealed class SteamTransport : IMultiplayerTransport
                                 "away" => "Away",
                                 _ => "Online",
                             };
-                            items.Add(new FriendEntry(peer, LobbyRules.CleanName(name, "Friend"), status, detail, joinLobby, joinable));
+                            // Provisional (lobby-less spectating): spectatable and spectators.
+                            var spectatable = Bool(f, "spectatable") || Bool(f, "spectateAsks");
+                            var watchers = Int(f, "spectators") ?? 0;
+                            if (watchers > 0) detail += " · " + watchers + " watching";
+                            items.Add(new FriendEntry(peer, LobbyRules.CleanName(name, "Friend"), status, detail, joinLobby, joinable, spectatable, watchers, shown));
                         }
                     // AimMod players first, then KovaaK's players, then everyone else online.
                     friends = items.OrderBy(f => f.Status switch { "aimmod-lobby" => 0, "aimmod" => 1, "kovaaks" => 2, "online" => 3, _ => 4 }).ThenBy(f => f.Name, StringComparer.OrdinalIgnoreCase).Take(200).ToArray();
@@ -246,6 +251,35 @@ sealed class SteamTransport : IMultiplayerTransport
                         events.Enqueue(new TransportEvent("", TransportEvent.WorkshopUpdate, Reason: Str(e, "message"), Workshop: new WorkshopProgress(item, ugcState,
                             e.TryGetProperty("downloaded", out var d) && d.TryGetInt64(out var dn) ? dn : 0, e.TryGetProperty("total", out var t) && t.TryGetInt64(out var tn) ? tn : 0)));
                     }
+                    break;
+                // Spectating a friend without a lobby (contract §6, "spectating a friend without a lobby").
+                case "spectate.asked":
+                    if (Str(e, "from") is { } asker) events.Enqueue(new TransportEvent(asker, TransportEvent.SpectateAsked, Reason: Str(e, "fromName")));
+                    break;
+                case "spectate.started":
+                    if (Str(e, "peer") is { } watched) events.Enqueue(new TransportEvent(watched, TransportEvent.SpectateStarted, Reason: Str(e, "name"), Host: Bool(e, "direct")));
+                    break;
+                case "spectate.ended" when Str(e, "peer") is { } endedPeer:
+                    events.Enqueue(new TransportEvent(endedPeer, TransportEvent.SpectateEnded, Reason: Str(e, "reason")));
+                    break;
+                case "spectate.score":
+                    // The watched player's live stats, every 250 ms while fresh.
+                    events.Enqueue(new TransportEvent(Str(e, "peer") ?? "", TransportEvent.SpectateScore, Frame: Encoding.UTF8.GetBytes(e.GetRawText())));
+                    break;
+                case "spectator.joined":
+                    if (Str(e, "peer") is { } viewer) { spectators[viewer] = Str(e, "name") ?? "A friend"; events.Enqueue(new TransportEvent(viewer, TransportEvent.SpectatorJoined, Reason: spectators[viewer])); }
+                    break;
+                case "spectator.left":
+                    if (Str(e, "peer") is { } gonePeer) { spectators.Remove(gonePeer); events.Enqueue(new TransportEvent(gonePeer, TransportEvent.SpectatorLeft, Reason: Str(e, "reason"))); }
+                    break;
+                case "spectators":
+                    // Full list: sync quietly (no "is watching you" toasts for people already there).
+                    var now = new Dictionary<string, string>();
+                    if (e.TryGetProperty("list", out var sl) && sl.ValueKind == JsonValueKind.Array)
+                        foreach (var s in sl.EnumerateArray()) if (Str(s, "peer") is { } sp) now[sp] = Str(s, "name") ?? "A friend";
+                    foreach (var old in spectators.Keys.Where(k => !now.ContainsKey(k)).ToArray()) events.Enqueue(new TransportEvent(old, TransportEvent.SpectatorLeft, Reason: "sync"));
+                    foreach (var (sp, sn) in now.Where(kv => !spectators.ContainsKey(kv.Key))) events.Enqueue(new TransportEvent(sp, TransportEvent.SpectatorJoined, Reason: sn, Host: true));
+                    spectators.Clear(); foreach (var kv in now) spectators[kv.Key] = kv.Value;
                     break;
                 case "xfer.chunk":
                     if (Str(e, "peer") is { } xpeer && Int(e, "transfer") is { } xid && Int(e, "index") is { } xindex && Str(e, "data") is { } xdata)
@@ -367,6 +401,10 @@ sealed class SteamTransport : IMultiplayerTransport
         return Command("spectate.start", new JsonObject { ["peer"] = peer, ["rate"] = Math.Clamp(rate, 1, 60) }) >= 0;
     }
     public void StopSpectate() { if (Available) Command("spectate.stop", null); }
+    public bool RequestSpectate(string peer) => Available && Steam(peer) && Command("spectate.request", new JsonObject { ["peer"] = peer, ["rate"] = 60 }, withId: true) >= 0;
+    public void RemoveSpectator(string peer) { if (Available && Steam(peer)) Command("spectate.remove", new JsonObject { ["peer"] = peer }); }
+    public void AnswerSpectate(string peer, bool allow) { if (Available && Steam(peer)) Command("spectate.answer", new JsonObject { ["peer"] = peer, ["allow"] = allow }); }
+    public void SetSpectatePrivacy(string mode) { if (Available && mode is "friends" or "ask" or "off") Command("spectate.privacy", new JsonObject { ["mode"] = mode }); }
     // Contract additions: ugc.download {item, highPriority}, answered by ugc.progress,
     // ugc.installed or ugc.error. A failed result falls back to the host transfer.
     public bool WorkshopDownload(string item)

@@ -120,6 +120,17 @@ test('typing in a lobby search keeps focus and text when the view updates (keys 
   assert.ok(s.text().includes('Other Scenario')===false,'the list stays filtered by the typed text');
   assert.equal(before,s.requests.length);
 });
+test('spectating a friend shows their stats with stop and switch; being watched shows who, with allow and deny',()=>{
+  const s=setup();s.api.enter(s.container);
+  s.requests[0].finish(200,view({friends:{source:'steam',items:[{id:'f1',name:'Synthetic Friend',status:'aimmod',detail:'Playing Synthetic A · 1 watching',joinable:false,spectatable:true,watchers:1}]},
+    watch:{peer:'f9',name:'Watched Friend',scenario:'Synthetic A',state:'watching',message:'Watching Watched Friend.',mapName:'m',mapScale:1,score:{active:true,score:1234,accuracy:85,remaining:20},others:[{id:'f1',name:'Synthetic Friend'}]},
+    watchers:[{peer:'w1',name:'Synthetic Viewer'}],watchAsks:[{peer:'w2',name:'Synthetic Asker'}]}));
+  const t=s.text();assert.ok(t.includes('Watched Friend'));assert.ok(t.includes('Score 1,234 · 85% · 20s left'));assert.ok(t.includes('Synthetic Viewer'));assert.ok(t.includes('Wants to watch you'));
+  s.button('Switch to Synthetic Friend').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'watch',friend:'f1'});
+  s.button('Allow').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'spectate-allow',id:'w2'});
+  s.button('Remove').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'spectator-remove',id:'w1'});
+  s.button('Stop spectating').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'watch-stop'});
+});
 test('leaving stops polling and ignores late answers',()=>{
   const s=setup();s.api.enter(s.container);s.api.leave();s.requests[0].finish(200,view());assert.equal(s.buttons().length,0);
 });
