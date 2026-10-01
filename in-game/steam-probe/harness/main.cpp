@@ -49,46 +49,104 @@ namespace
         return std::filesystem::path(path).parent_path();
     }
 
-    std::wstring SteamPath()
+    std::wstring RegString(HKEY root, const wchar_t* key, const wchar_t* name, DWORD flags = 0)
     {
         wchar_t value[MAX_PATH * 2]{};
         DWORD size = sizeof(value);
-        if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\Valve\\Steam", L"SteamPath", RRF_RT_REG_SZ, nullptr, value, &size) != ERROR_SUCCESS)
-            return {};
+        if (RegGetValueW(root, key, name, RRF_RT_REG_SZ | flags, nullptr, value, &size) != ERROR_SUCCESS) return {};
         return value;
     }
 
-    // Finds <library>\steamapps\common\FPSAimTrainer\...\steam_api64.dll.
-    std::filesystem::path FindGameSteamApi()
+    std::string ReadText(const std::filesystem::path& file)
     {
-        const std::filesystem::path steam = SteamPath();
-        if (steam.empty()) return {};
-        std::vector<std::filesystem::path> libraries{steam};
-        std::ifstream vdf(steam / "steamapps" / "libraryfolders.vdf");
-        const std::regex pathLine(R"re("path"\s+"([^"]+)")re");
-        for (std::string raw; std::getline(vdf, raw);)
+        std::ifstream in(file, std::ios::binary);
+        std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        return text.size() > 4 * 1024 * 1024 ? std::string() : text;
+    }
+
+    std::string Unescape(const std::string& p)
+    {
+        std::string out;
+        for (std::size_t i = 0; i < p.size(); ++i)
         {
-            std::smatch m;
-            if (!std::regex_search(raw, m, pathLine)) continue;
-            std::string p = m[1].str();
-            std::string unescaped;
-            for (std::size_t i = 0; i < p.size(); ++i)
+            if (p[i] == '\\' && i + 1 < p.size() && p[i + 1] == '\\') ++i;
+            out.push_back(p[i]);
+        }
+        return out;
+    }
+
+    std::filesystem::path Utf8Path(const std::string& utf8)
+    {
+        const int n = MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), nullptr, 0);
+        std::wstring w(static_cast<std::size_t>(n > 0 ? n : 0), L'\0');
+        if (n > 0) MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), w.data(), n);
+        return w;
+    }
+
+    // Finds the game's steam_api64.dll: Steam roots from the registry, every
+    // library in libraryfolders.vdf (old "1" "path" and new "path" formats),
+    // appmanifest_824270.acf installdir, then the known folder name.
+    std::filesystem::path FindGameSteamApi(std::vector<std::wstring>& tried)
+    {
+        std::vector<std::filesystem::path> roots;
+        auto addRoot = [&](const std::filesystem::path& p) {
+            if (p.empty()) return;
+            std::error_code e;
+            auto norm = std::filesystem::weakly_canonical(p, e);
+            if (e) norm = p;
+            for (const auto& r : roots)
+                if (_wcsicmp(r.c_str(), norm.c_str()) == 0) return;
+            roots.push_back(norm);
+        };
+        addRoot(RegString(HKEY_CURRENT_USER, L"Software\\Valve\\Steam", L"SteamPath"));
+        addRoot(RegString(HKEY_LOCAL_MACHINE, L"SOFTWARE\\WOW6432Node\\Valve\\Steam", L"InstallPath"));
+        addRoot(RegString(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Valve\\Steam", L"InstallPath"));
+        addRoot(L"C:\\Program Files (x86)\\Steam");
+
+        std::vector<std::filesystem::path> libraries;
+        auto addLibrary = [&](const std::filesystem::path& p) {
+            for (const auto& l : libraries)
+                if (_wcsicmp(l.c_str(), p.c_str()) == 0) return;
+            libraries.push_back(p);
+        };
+        const std::regex entry(R"re("(path|\d+)"\s+"([^"]+)")re");
+        const auto rootCount = roots.size();
+        for (std::size_t r = 0; r < rootCount; ++r)
+        {
+            addLibrary(roots[r]);
+            for (const auto* vdfName : {L"steamapps\\libraryfolders.vdf", L"config\\libraryfolders.vdf"})
             {
-                if (p[i] == '\\' && i + 1 < p.size() && p[i + 1] == '\\') ++i;
-                unescaped.push_back(p[i]);
+                const std::string text = ReadText(roots[r] / vdfName);
+                for (auto it = std::sregex_iterator(text.begin(), text.end(), entry); it != std::sregex_iterator(); ++it)
+                {
+                    const std::string value = Unescape((*it)[2].str());
+                    // Old format: "1" "D:\\Games\\Steam"; new: "path" "...". Skip numeric values like sizes.
+                    if (value.find(':') == std::string::npos && value.rfind("\\\\", 0) != 0) continue;
+                    addLibrary(Utf8Path(value));
+                }
             }
-            libraries.emplace_back(unescaped);
         }
         for (const auto& library : libraries)
         {
-            const auto candidate =
-                library / "steamapps" / "common" / "FPSAimTrainer" / "FPSAimTrainer" / "Binaries" / "Win64" / "steam_api64.dll";
-            std::error_code error;
-            if (std::filesystem::is_regular_file(candidate, error)) return candidate;
+            std::vector<std::wstring> folders{L"FPSAimTrainer"};
+            const std::string acf = ReadText(library / "steamapps" / "appmanifest_824270.acf");
+            std::smatch m;
+            const std::regex installdir(R"re("installdir"\s+"([^"]+)")re");
+            if (std::regex_search(acf, m, installdir))
+            {
+                const auto dir = Utf8Path(Unescape(m[1].str())).wstring();
+                if (_wcsicmp(dir.c_str(), L"FPSAimTrainer") != 0) folders.insert(folders.begin(), dir);
+            }
+            for (const auto& folder : folders)
+            {
+                const auto candidate = library / "steamapps" / "common" / folder / "FPSAimTrainer" / "Binaries" / "Win64" / "steam_api64.dll";
+                tried.push_back(candidate.wstring());
+                std::error_code error;
+                if (std::filesystem::is_regular_file(candidate, error)) return candidate;
+            }
         }
         return {};
     }
-
     std::string YesNo(bool value) { return value ? "yes" : "no"; }
 
     // Short, shareable result. No SteamIDs and no addresses.
@@ -268,12 +326,14 @@ int wmain(int argc, wchar_t** argv)
     const bool stage3 = !options.stage3Role.empty();
     if (stage3 || inviteTest) options.observeCallbacks = false; // keep the tests short
 
+    std::vector<std::wstring> tried;
     if (dll.empty())
     {
         const auto local = ExeDirectory() / L"steam_api64.dll";
+        tried.push_back(local.wstring());
         std::error_code error;
         if (std::filesystem::is_regular_file(local, error)) dll = local.wstring();
-        else if (const auto game = FindGameSteamApi(); !game.empty())
+        else if (const auto game = FindGameSteamApi(tried); !game.empty())
         {
             dll = game.wstring();
             Print("using steam_api64.dll from the local KovaaK's install");
@@ -281,7 +341,9 @@ int wmain(int argc, wchar_t** argv)
     }
     if (dll.empty())
     {
-        Print("steam_api64.dll not found. Install KovaaK's through Steam, or pass --steam-api <path>.");
+        Print("steam_api64.dll not found. Looked in:");
+        for (const auto& path : tried) std::wprintf(L"    %s\n", path.c_str());
+        Print("Copy steam_api64.dll from <your KovaaK's folder>\\FPSAimTrainer\\Binaries\\Win64 next to this program, or pass --steam-api <path>.");
         return 1;
     }
 
