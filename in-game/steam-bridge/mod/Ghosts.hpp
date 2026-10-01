@@ -1,0 +1,120 @@
+#pragma once
+// Ghost demo (config ghost_demo=1), game thread only.
+//  - Reads the local player's position, view rotation, velocity and crouch
+//    each tick and hands them to the bridge (sent at 30 Hz).
+//  - Shows each remote lobby member on the same scenario as a real KovaaK's
+//    character: a bot spawned through the game's own spawn path
+//    (ATheMetaAIController::Spawn) with its AI switched off, invulnerable,
+//    driven from the pose stream with ~100 ms interpolation. When bots can't
+//    be spawned, it falls back to engine basic shapes (no collision).
+// It never touches ranked, leaderboards or the local player; it only reads
+// the local pose and spawns, drives and removes its own actors.
+#include "AvatarPath.hpp"
+#include "Bridge.hpp"
+#include "GameBindings.hpp"
+#include "GhostMath.hpp"
+
+#include <Unreal/FWeakObjectPtr.hpp>
+
+#include <cstdint>
+#include <filesystem>
+#include <map>
+#include <optional>
+#include <set>
+#include <string>
+
+namespace aimmod
+{
+    struct GhostOptions
+    {
+        bool avatars = true;       // real characters; shapes are the fallback
+        std::string avatarProfile; // bot profile to spawn; empty = the scenario's own bot profile
+        int moveMode = 5;          // EMovementMode while driven: 5 Flying (default), 1 Walking, 0 None
+        bool driveWithUpdate = true; // UpdateClientLocAndRot(bPlayAnim) vs K2_SetActorLocationAndRotation
+        bool avatarTest = false;   // offline check: one avatar circling the local player, no network
+        // Offline avatar spike: with avatar_test=1, a recorded path in this file (exported by the
+        // service with --export-avatar-path) replaces the circle when its scenario is loaded.
+        std::filesystem::path avatarTestPath;
+        bool showRemote = true;    // show remote players (ghost demo); the local pose/camera is read either way
+    };
+
+    class GhostDemo
+    {
+    public:
+        GhostDemo(bridge::Bridge& bridge, bridge::LogFn log, GhostOptions options);
+        void Tick();     // engine tick (game thread)
+        void Shutdown(); // removes every ghost and avatar (game thread)
+
+    private:
+        struct Ghost
+        {
+            // Shapes fallback
+            RC::Unreal::FWeakObjectPtr body, head, visor;
+            RC::Unreal::UObject* world = nullptr;
+            // Avatar bot
+            RC::Unreal::FWeakObjectPtr pawn, controller;
+            double nextSpawn = 0, nextInert = 0;
+            int spawnFailures = 0;
+            bool crouching = false;
+            bool avatarLogged = false;
+            std::string characterProfile; // applied character profile (appearance)
+            std::string hiddenScene;      // non-empty while hidden because of a scenario mismatch
+        };
+        using Sample = bridge::ghost::RemoteTransform; // remote values only
+
+        bool Bind();
+        bool BindAvatars();
+        RC::Unreal::UObject* LocalCharacter(RC::Unreal::UObject*& controller);
+        RC::Unreal::UObject* LoadMesh(const wchar_t* path);
+        RC::Unreal::UObject* SpawnShape(RC::Unreal::UObject* world, RC::Unreal::UObject* mesh, double sx, double sy, double sz);
+        bool EnsureShapes(Ghost& ghost, RC::Unreal::UObject* world);
+        void DestroyShapes(Ghost& ghost);
+        void PlaceShapes(Ghost& ghost, const Sample& s);
+
+        bool EnsureAvatar(std::uint64_t peer, Ghost& ghost, RC::Unreal::UObject* localCharacter);
+        void KeepInert(Ghost& ghost);
+        void DriveAvatar(Ghost& ghost, const Sample& s);
+        void RemoveAvatar(Ghost& ghost);
+        std::string ScenarioBotProfile(int& team);
+        void Remove(Ghost& ghost);
+        void Show(std::uint64_t peer, Ghost& ghost, const Sample& s, RC::Unreal::UObject* world, RC::Unreal::UObject* character);
+
+        bridge::Bridge& m_bridge;
+        bridge::LogFn m_log;
+        GhostOptions m_options;
+        bool m_bound = false;
+        bool m_failed = false;
+        bool m_shapesFailed = false;
+        bool m_avatarsBound = false;
+        bool m_avatarsFailed = false;
+
+        game::Getter m_actorLocation, m_velocity, m_cameraRotation, m_cameraLocation, m_cameraFov, m_capsuleHalfHeight, m_capsuleRadius, m_isCrouching, m_getPawn;
+        game::Getter m_setStaticMesh, m_setMobility, m_setCollision, m_setCastShadow;
+        game::Field m_cameraManager, m_myCharacter, m_meshComponent, m_capsule;
+        RC::Unreal::UClass* m_meshActorClass = nullptr;
+        RC::Unreal::UObject* m_cylinder = nullptr;
+        RC::Unreal::UObject* m_sphere = nullptr;
+        RC::Unreal::UObject* m_cube = nullptr;
+
+        // Avatars
+        game::Getter m_spawnBot, m_getMetaCharacter, m_setUseWeapons, m_stopAiming, m_removeSelf;
+        game::Getter m_updateClientLocAndRot, m_overrideInvulnerable, m_startCrouching, m_startUncrouch, m_getTeam, m_loadCharacterProfile;
+        game::Getter m_setMovementMode;
+        game::Field m_movementComponent;
+        RC::Unreal::UObject* m_aiControllerDefault = nullptr;
+        std::set<RC::Unreal::UObject*> m_ownControllers; // controllers we spawned (identity only)
+
+        RC::Unreal::FWeakObjectPtr m_controller;
+        double m_nextFind = 0;
+        double m_nextDiagnostic = 0;
+        std::map<std::uint64_t, Ghost> m_ghosts;
+        double m_testStart = -1;
+        // Offline avatar spike (recorded path).
+        std::optional<bridge::ghost::AvatarPath> m_testPath;
+        bool m_testPathTried = false;
+        std::string m_testPathScene; // the scenario last reported as not matching the path
+        double m_eyeAboveCentre = 64; // local camera height above the capsule centre, measured live
+        double m_testPathStart = -1;
+        bool LoadTestPath();
+    };
+} // namespace aimmod

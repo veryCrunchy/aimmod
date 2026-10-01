@@ -33,6 +33,7 @@
     left.appendChild(panel);
     if(root.AimModHistoryImport)root.AimModHistoryImport.render(right,typeof value.statsFolder==='string'?value.statsFolder:'');
     var storage=node('div','panel settings-card');storage.appendChild(node('h2','','Replay library'));storage.appendChild(node('p','subtle','Favorite, export or delete replays from Replays. Exports are saved in Documents / AimMod / Replays.'));if(root.AimModWorkspace){var openRow=node('div','actions');var open=node('button','button','Open replays');open.type='button';open.onclick=function(){root.AimModWorkspace.open('replays');};openRow.appendChild(open);storage.appendChild(openRow);}left.appendChild(storage);
+    if(root.AimModDeveloper)root.AimModDeveloper.renderSettings(left);
   }
   function load(){send(null,function(ok,data){if(ok)value=data;render(ok?'':'Could not load your settings. Please try again.');});}
   root.AimModSettings={enter:function(element){leave();container=element;value=null;if(container){container.textContent='';var loading=node('div','panel settings-card');loading.appendChild(node('p','subtle','Loading settings…'));container.appendChild(loading);load();}},leave:leave};

@@ -11,8 +11,13 @@
     {id:'score-race',label:'Score race',short:'Race',text:'Same scenario, best score wins.'},
     {id:'duel',label:'Duel',short:'Duel',text:'One on one, first to the set round wins.'},
     {id:'ffa-rounds',label:'Free-for-all',short:'FFA',text:'Several rounds, points for placing.'},
-    {id:'practice',label:'Practice together',short:'Practice',text:'Side by side, live scores, no ranking.'}
+    {id:'practice',label:'Practice together',short:'Practice',text:'Side by side, live scores, no ranking.'},
+    {id:'tracking-duel',label:'Tracking duel',short:'Tracking',text:'Take turns tracking. Most time on target wins.'},
+    {id:'deathmatch',label:'Deathmatch',short:'DM',text:'Everyone against everyone, first to the frag limit.'},
+    {id:'vampiric',label:'Vampiric 1v1',short:'Vampiric',text:'One on one. Damage heals you, health drains.'},
+    {id:'instagib',label:'Instagib',short:'Instagib',text:'Every hit kills. First to the frag limit.'}
   ];
+  function combat(m){return m==='deathmatch'||m==='vampiric'||m==='instagib';}
   var PRIVACY={friends:'Friends only',invite:'Invite only',public:'Public (room code)'};
   var PRESETS=[{id:'default',label:'Scenario default'},{id:'cs',label:'Counter-Strike-like'},{id:'valorant',label:'Valorant-like'},{id:'apex',label:'Apex-like'},{id:'quake',label:'Quake-like'},{id:'custom',label:'Custom'}];
   var AVATAR=['mint','cyan','amber','violet','rose'];
@@ -55,7 +60,8 @@
   }
   function poll(){
     if(!container)return;if(inflight){again=true;return;}inflight=true;
-    if(mapsOpen&&maps&&(maps.ports||[]).some(function(p){return !!p.download;}))loadMaps();
+    // The library refreshes with the main view while it's open (installs and Workshop listings change).
+    if(mapsOpen)loadMaps();
     xhr('GET','/multiplayer',null,function(ok,data){inflight=false;if(ok&&data&&data.v===1)accept(data);else if(!view)renderError();schedule();if(again){again=false;poll();}});
   }
   function fast(){var m=view&&view.lobby&&view.lobby.match;return !!(view&&(view.joining||view.watch||(m&&(m.phase==='countdown'||m.phase==='live'))));}
@@ -139,6 +145,7 @@
     else if(editing)settingsEditor(page,l);
     else lobbyRoom(page,l);
     if(view.invites&&view.invites.length)container.appendChild(inviteModal(view.invites[0]));
+    else if(touring||(view.prefs&&view.prefs.onboarded===false&&!l&&!view.joining&&!tourSkipped))container.appendChild(onboarding());
     toastNode=node('div','mp-toast');toastNode.setAttribute('role','status');container.appendChild(toastNode);
     restoreFocus();rendering=false;tick();
   }
@@ -246,8 +253,9 @@
   var watchTried=0,watchStartedFor='';
   function startWatchView(w){
     // Retried every few seconds until AimModCore's spectator view accepts (same scenario, pause menu).
-    var key=w.peer+'|'+w.scenario;if(watchStartedFor===key||Date.now()-watchTried<3000||!w.scenario)return;watchTried=Date.now();
-    xhr('POST','/native-replay',{action:'spectate',scenario:w.scenario,mapName:w.mapName||'',mapScale:w.mapScale||1,label:w.name},function(ok,data){
+    var key=w.peer+'|'+w.scenario+'|'+(w.stream||'');if(watchStartedFor===key||Date.now()-watchTried<3000||!w.scenario)return;watchTried=Date.now();
+    var body={action:'spectate',scenario:w.scenario,mapName:w.mapName||'',mapScale:w.mapScale||1,label:w.name};if(w.stream)body.stream=w.stream;
+    xhr('POST','/native-replay',body,function(ok,data){
       if(ok){watchStartedFor=key;act('watch-started');}
       else if(data&&data.message)lastWatchReason=String(data.message);
     });
@@ -289,14 +297,41 @@
     p.appendChild(body);return p;
   }
   // Follow a player's camera in AimModCore's spectator view (pause menu, same scenario).
-  function spectate(id){
-    act('spectate',{member:id},function(ok){
-      if(!ok||!view.lobby||!view.lobby.spectate)return;var s=view.lobby.spectate;
-      xhr('POST','/native-replay',{action:'spectate',scenario:s.scenario,mapName:s.mapName,mapScale:s.mapScale,label:s.label},function(started,data,status){
-        if(started)toast('Watching '+safe(s.name)+'. Return to the pause menu to see their view.');
-        else toast(data&&(data.reason||data.error)?'Can’t spectate yet: '+safe(String(data.reason||data.error),'')+'.':status===409?'Open the pause menu in the same scenario to spectate.':'Spectating isn’t available in this build.');
-      });
+  // AimModCore follows the bridge's pose stream (stream id from spectate.started). Switching
+  // players resends the same call with only stream and label changed; the view cuts in place.
+  var spectateShown='',spectateWanted=false,spectateLoud=false,spectateAskedAt=0;
+  function want(loud){spectateWanted=true;spectateLoud=loud;spectateAskedAt=Date.now();if(view&&view.lobby)keepSpectateView(view.lobby);}
+  function spectate(id){act('spectate',{member:id},function(ok){if(ok)want(true);});}
+  function followLeader(on){act('spectate-follow',{on:on},function(ok){if(ok&&on)want(true);});}
+  function stopSpectate(){spectateShown='';spectateWanted=false;act('spectate-stop');}
+  function startSpectateView(loud){
+    var s=view&&view.lobby&&view.lobby.spectate;if(!s)return;spectateShown=s.member+'|'+(s.stream||'');
+    var body={action:'spectate',scenario:s.scenario,mapName:s.mapName,mapScale:s.mapScale,label:s.label};if(s.stream)body.stream=s.stream;
+    xhr('POST','/native-replay',body,function(started,data,status){
+      if(!loud)return;
+      if(started)toast((s.follow?'Following the leader, now ':'Watching ')+safe(s.name)+'. Return to the pause menu to see their view.');
+      else toast(data&&(data.reason||data.error)?'Can’t spectate yet: '+safe(String(data.reason||data.error),'')+'.':status===409?'Open the pause menu in the same scenario to spectate.':'Spectating isn’t available in this build.');
     });
+  }
+  // Follow the leader moves the camera in the service; the spectator view takes the new name quietly.
+  function keepSpectateView(lobby){
+    var s=lobby.spectate;if(!s){spectateShown='';spectateWanted=false;return;}
+    if(s.follow&&spectateShown)spectateWanted=true;
+    var key=s.member+'|'+(s.stream||'');if(!spectateWanted||key===spectateShown)return;
+    // Wait for the bridge's stream id (a few seconds at most; older bridges don't send one).
+    if(!s.stream&&!s.started&&Date.now()-spectateAskedAt<3000){clearTimeout(streamTimer);streamTimer=setTimeout(function(){if(view&&view.lobby)keepSpectateView(view.lobby);},3100);return;}
+    var loud=spectateLoud;spectateLoud=false;startSpectateView(loud);
+  }
+  var streamTimer=null;
+  function spectatePanel(lobby,match,others){
+    var s=lobby.spectate,watching=!!s,me=match.players.indexOf(lobby.self)<0;
+    var sp=node('div','panel mp-spectate');var sh=node('div','panel-head');var st=node('div','head-text');
+    add(st,node('h2','',me?'You’re spectating':'Spectate'),node('p','',watching?(s.follow?'Following whoever leads, now ':'Watching ')+safe(s.name)+'. Their view is in the pause menu.':'Follow a player from the pause menu in the same scenario.'));sh.appendChild(st);sp.appendChild(sh);
+    if(watching){var line=match.live.filter(function(l){return l.memberId===s.member;})[0];sp.appendChild(add(node('div','mp-watch-hud'),node('span','',line?statLine({active:true,score:line.score,accuracy:line.shots?line.hits*100/line.shots:null,remaining:line.remaining}):'Waiting for their run…')));}
+    sp.appendChild(settingRow('Follow the leader','Switch to whoever has the top score.',toggleSwitch(!!(s&&s.follow),'Follow the leader',function(){followLeader(!(s&&s.follow));})));
+    others.forEach(function(id){var on=watching&&s.member===id;var row=node('div','mp-friend'+(on?' on':''));add(row,avatar(nameOf(id),true),add(node('div','mp-friend-info'),node('strong','',nameOf(id)),node('span','',on?'Watching':'Player')));row.appendChild(actions(button(on?'Watching':'Spectate',function(){if(!on)spectate(id);},on?'compact primary':'compact')));sp.appendChild(row);});
+    if(watching)sp.appendChild(actions(button('Stop spectating',stopSpectate,'compact quiet danger')));
+    return sp;
   }
   // This player's own multiplayer preferences (saved on this PC).
   var prefsOpen=false;
@@ -316,6 +351,7 @@
     flag('quietDuringRanked','Quiet during ranked runs','No popups or hotkey while you play a scenario of your own.');
     flag('sounds','Sounds','Uses KovaaK’s own menu sounds.');
     flag('hideScenario','Hide my scenario from friends','Friends see you’re in AimMod, not what you play.');
+    flag('friendToasts','Tell me when friends start AimMod','A short note in game with Join or Watch. Never during a run.');
     body.appendChild(settingRow('Who can spectate me','Friends watch from their own game, osu!-style.',segmented([{id:'friends',label:'Friends'},{id:'ask',label:'Ask me'},{id:'off',label:'Nobody'}],pr.spectatePrivacy||'friends',function(id){pref('spectatePrivacy',id);},false,'spectate privacy')));
     flag('showWatchers','Show who’s watching while I play','A small line at the top of the screen.');
     if(pr.sounds)body.appendChild(settingRow('Volume','',stepper(typeof pr.volume==='number'?pr.volume:0.8,0,1,0.1,function(v){return F.number(v*100,0)+'%';},function(v){pref('volume',v);},false,'volume')));
@@ -325,7 +361,62 @@
     var ks=view.keys||{};var clipOptions=['F6','F8','F9','F10','F11','Insert','Home','PageUp'].map(function(k){return {id:k,label:keyLabel(k)};});
     body.appendChild(settingRow('Clip key','Marks a moment of a recorded run as a clip.',segmented(clipOptions,ks.clip||'F8',function(id){pref('clipKey',id);},false,'clip key')));
     (ks.conflicts||[]).forEach(function(c){body.appendChild(node('p','mp-warn-text',safe(c,'')));});
+    body.appendChild(actions(button('Show the tour again',function(){touring=true;tourStep=0;render();},'compact quiet')));
     return p;
+  }
+  // First-run tour: what multiplayer does, your keys, privacy, and the Hub and Discord links.
+  var touring=false,tourStep=0,tourSkipped=false,discord=null,discordAsked=false;
+  function loadDiscord(){
+    if(discordAsked)return;discordAsked=true;
+    // Present only in builds with Discord presence; otherwise the step leaves it out.
+    xhr('GET','/discord-settings',null,function(ok,data){if(ok&&data&&data.settings&&typeof data.settings.discordPresenceEnabled==='boolean'){discord=data;render();}});
+  }
+  function setDiscord(on){
+    var x=new root.XMLHttpRequest();x.open('POST',path()+'/discord-settings',true);x.timeout=8000;x.setRequestHeader('X-AimMod-UI','1');x.setRequestHeader('Content-Type','application/json');
+    x.onreadystatechange=function(){if(x.readyState!==4)return;var data=null;try{data=JSON.parse(x.responseText);}catch(e){data=null;}if(x.status===200&&data&&data.settings){discord=data;render();}else toast('Couldn’t change the Discord setting.');};
+    x.send(JSON.stringify({discordPresenceEnabled:on}));
+  }
+  function finishTour(){touring=false;tourSkipped=true;tourStep=0;if(view.prefs&&!view.prefs.onboarded)act('prefs',{prefs:{onboarded:true}});render();}
+  function openAccount(){finishTour();var nav=root.document.getElementById('nav-account');if(nav&&nav.click)nav.click();}
+  var TOUR=[
+    {title:'Play KovaaK’s together',text:'Race friends on the same scenario, duel first to three, or practise side by side with live scores. Results stay in AimMod and never touch KovaaK’s leaderboards.',points:[
+      ['Lobbies','Create one, invite Steam friends or share the room code. AimMod checks everyone has the same scenario and sends what’s missing.'],
+      ['Map library','Counter-Strike maps ported to KovaaK’s with CS movement, installed from the Steam Workshop.'],
+      ['Spectate','Watch a friend play from your own game, with or without a lobby.'],
+      ['History and rivals','Every match is kept on this PC, with replays to compare runs.']]},
+    {title:'Your keys',text:'These work while KovaaK’s has focus. AimMod warns when a key clashes with your KovaaK’s binds.',keys:true},
+    {title:'Privacy',text:'Choose what friends see. You can change this later under Your multiplayer settings.',privacy:true},
+    {title:'Connect your accounts',text:'Both are optional.',connect:true}
+  ];
+  function onboarding(){
+    var step=TOUR[Math.min(tourStep,TOUR.length-1)],last=tourStep>=TOUR.length-1,pr=view.prefs||{};
+    var shade=node('div','mp-modal');var card=node('div','mp-modal-card mp-tour');card.setAttribute('role','dialog');card.setAttribute('aria-label','Multiplayer tour');shade.appendChild(card);
+    var dots=node('div','mp-tour-dots');TOUR.forEach(function(x,i){dots.appendChild(node('span','mp-tour-dot'+(i===tourStep?' on':'')));});
+    add(card,add(node('div','mp-tour-top'),node('div','eyebrow','Step '+(tourStep+1)+' of '+TOUR.length),dots),node('h2','mp-tour-title',step.title),node('p','subtle mp-tour-text',step.text));
+    if(step.points){var list=node('div','mp-tour-points');step.points.forEach(function(x){list.appendChild(add(node('div','mp-tour-point'),node('strong','',x[0]),node('span','',x[1])));});card.appendChild(list);}
+    if(step.keys){
+      var taken=(view.keys&&view.keys.taken)||[];function label(k){return k+(taken.indexOf(k)>=0?' (in use)':'');}
+      var keys=[];for(var i=5;i<=10;i++)keys.push({id:'F'+i,label:label('F'+i)});
+      card.appendChild(settingRow('Lobby key','Ready up, answer invites or open the lobby.',segmented(keys,pr.hotkey||'F7',function(id){act('prefs',{prefs:{hotkey:id}});},false,'lobby key')));
+      var ks=view.keys||{};var clips=['F6','F8','F9','F10','F11','Insert'].map(function(k){return {id:k,label:label(k)};});
+      card.appendChild(settingRow('Clip key','Marks a moment of a recorded run as a clip.',segmented(clips,ks.clip||'F8',function(id){act('prefs',{prefs:{clipKey:id}});},false,'clip key')));
+      (ks.conflicts||[]).forEach(function(c){card.appendChild(node('p','mp-warn-text',safe(c,'')));});
+    }
+    if(step.privacy){
+      card.appendChild(settingRow('Who can spectate me','Friends watch from their own game.',segmented([{id:'friends',label:'Friends'},{id:'ask',label:'Ask me'},{id:'off',label:'Nobody'}],pr.spectatePrivacy||'friends',function(id){act('prefs',{prefs:{spectatePrivacy:id}});},false,'spectate privacy')));
+      card.appendChild(settingRow('Hide my scenario from friends','They see you’re in AimMod, not what you play.',toggleSwitch(!!pr.hideScenario,'Hide my scenario',function(){act('prefs',{prefs:{hideScenario:!pr.hideScenario}});})));
+    }
+    if(step.connect){
+      loadDiscord();
+      card.appendChild(settingRow('AimMod Hub','Link your account to add Hub scores to your history and benchmarks.',actions(button('Open Account',openAccount,'compact'))));
+      if(discord)card.appendChild(settingRow('Discord status','Show your AimMod session on your Discord profile.',toggleSwitch(!!discord.settings.discordPresenceEnabled,'Discord status',function(){setDiscord(!discord.settings.discordPresenceEnabled);})));
+    }
+    var nav=[];
+    if(tourStep>0)nav.push(button('Back',function(){tourStep--;render();},'quiet'));
+    else nav.push(button('Skip',finishTour,'quiet'));
+    nav.push(button(last?'Done':'Next',function(){if(last)finishTour();else{tourStep++;render();}},'primary'));
+    card.appendChild(actions.apply(null,nav));
+    return shade;
   }
   function joinCode(){var code=(drafts.code||'').toUpperCase().replace(/[^A-Z0-9]/g,'');if(code.length!==6){toast('Room codes are six letters and numbers.');return;}act('join',{code:code},function(ok){if(ok)drafts.code='';});}
   function steamState(){
@@ -405,7 +496,7 @@
     var detail=node('div','mp-history-detail');box.appendChild(detail);
     var table=node('div','mp-table');
     add(table,add(node('div','mp-tr head'),node('span','mp-td place','#'),node('span','mp-td name','Player'),node('span','mp-td num','Best'),node('span','mp-td num',m.mode==='duel'?'Wins':m.mode==='ffa-rounds'?'Points':'Total')));
-    (m.standings||[]).forEach(function(p){add(table,add(node('div','mp-tr'+(p.self?' self':'')),node('span','mp-td place',String(p.place)),node('span','mp-td name',safe(p.name)+(p.self?' (you)':'')),node('span','mp-td num',typeof p.best==='number'?F.number(p.best,0):'-'),node('span','mp-td num',m.mode==='duel'?String(p.wins):m.mode==='ffa-rounds'?String(p.points):F.number(p.total||0,0))));});
+    (m.standings||[]).forEach(function(p){add(table,add(node('div','mp-tr'+(p.self?' self':'')),node('span','mp-td place',String(p.place)),node('span','mp-td name',safe(p.name)+(p.self&&safe(p.name)!=='You'?' (you)':'')),node('span','mp-td num',typeof p.best==='number'?F.number(p.best,0):'-'),node('span','mp-td num',m.mode==='duel'?String(p.wins):m.mode==='ffa-rounds'?String(p.points):F.number(p.total||0,0))));});
     detail.appendChild(table);
     var reps=m.replays||[];
     if(!reps.length){detail.appendChild(node('p','mp-note','No replays from this match on this PC.'));return box;}
@@ -483,7 +574,7 @@
     var info=node('div','mp-port-info');
     var title=node('div','mp-port-title');add(title,node('strong','',safe(p.display,'Map')),p.game?chip(p.game,'cyan'):null);
     add(info,title,node('span','mp-port-variant',safe(p.variant||p.scenario,'')));
-    var facts=[shiftText(p)];if(p.bytes>0)facts.push(mb(p.bytes));if(p.mapScale>0)facts.push('Scale '+F.number(p.mapScale,1));
+    var facts=[shiftText(p)];if(p.bytes>0)facts.push(p.bytes<1048576?Math.max(1,Math.round(p.bytes/1024))+' KB':mb(p.bytes));if(p.mapScale>0)facts.push('Scale '+F.number(p.mapScale,1));
     info.appendChild(node('span','mp-port-facts',facts.join(' · ')));
     info.appendChild(node('div','mp-port-state'+(p.needsUpdate?' warn':p.installed?' ok':''),portState(p)));
     if(p.download&&p.download.total>0){var bar=node('div','mp-progress');var fillBar=node('div','mp-progress-fill');fillBar.style.width=Math.min(100,Math.floor(p.download.done*100/p.download.total))+'%';bar.appendChild(fillBar);info.appendChild(bar);}
@@ -504,7 +595,7 @@
     var row=node('div','actions');
     function sim(label,op){return button(label,function(){act('sim',{op:op});},'compact quiet');}
     if(inLobby){if(view.lobby&&!view.lobby.isHost)row.appendChild(sim('Pretend I’m missing the map','self-missing'));add(row,sim('Add player','add'),sim('Add player without the map','add-missing'),sim('Drop a player','drop'),sim('Reconnect','reconnect'),sim('Remove a player','remove'));if(view.lobby&&!view.lobby.isHost)row.appendChild(sim('Host leaves','host-leave'));}
-    else add(row,sim('Incoming invite','invite'),sim('Launched from an invite','launch'));
+    else add(row,sim('Incoming invite','invite'),sim('Launched from an invite','launch'),sim('A friend starts AimMod','friend-online'));
     p.appendChild(row);return p;
   }
   function joining(){
@@ -685,8 +776,9 @@
     kv('Mode',mode(s.mode).label);
     kv('Scenario',s.scenario?safe(s.scenario.name,'Scenario'):'Not chosen');
     kv('Map',s.mapOverride?safe(s.mapOverride.name,'Map')+(s.mapOverride.source==='ported'?' (ported)':''):'Scenario map');
-    kv(s.mode==='duel'?'First to':s.mode==='score-race'?'Attempts':'Rounds',s.mode==='duel'?F.number(s.firstTo,0)+' wins':s.mode==='practice'?'As many as you like':F.number(s.rounds,0));
-    kv('Time limit',s.timeLimit?F.duration(s.timeLimit):'Scenario ('+F.duration(s.scenario?s.scenario.timeLimit:60)+')');
+    if(combat(s.mode)){kv('Frag limit',F.number(s.fragLimit||(s.mode==='vampiric'?10:s.mode==='instagib'?25:20),0)+' kills');if(s.mode==='vampiric')kv('Lifesteal',F.number(typeof s.lifesteal==='number'?s.lifesteal:50,0)+' %');}
+    else kv(s.mode==='duel'?'First to':s.mode==='score-race'?'Attempts':s.mode==='tracking-duel'?'Rounds each':'Rounds',s.mode==='duel'?F.number(s.firstTo,0)+' wins':s.mode==='practice'?'As many as you like':F.number(s.rounds,0));
+    kv(combat(s.mode)?'Match length':s.mode==='tracking-duel'?'Round length':'Time limit',s.timeLimit?F.duration(s.timeLimit):'Scenario ('+F.duration(s.scenario?s.scenario.timeLimit:60)+')');
     kv('Loadout',profileText(s.weapon,'weapon')+' · '+profileText(s.movement,'movement'));
     if(s.character&&s.character.preset!=='default')kv('Character',profileText(s.character,'character'));
     if(s.targetSpeed!==1||s.targetSize!==1)kv('Targets','Speed '+multiplier(s.targetSpeed)+' · size '+multiplier(s.targetSize));
@@ -749,14 +841,24 @@
     if(picker==='scenario')sc.appendChild(pickerList('scenario',s));
     sc.appendChild(contentTable(lobby));
     left.appendChild(sc);
-    // Players, rounds and time
+    // Players, rounds and time. The settings that define the chosen mode (frag limit,
+    // lifesteal, rounds each, match or round length) are basics; the rest is More options.
     var pl=section('Players and rounds');
-    pl.appendChild(settingRow('Max players',s.mode==='duel'?'A duel is always one against one.':'Including you.',stepper(s.maxPlayers,2,8,1,function(v){return F.number(v,0);},function(v){setting('maxPlayers',v);},s.mode==='duel','max players')));
+    var oneOnOne=s.mode==='duel'||s.mode==='tracking-duel'||s.mode==='vampiric';
+    pl.appendChild(settingRow('Max players',oneOnOne?'Always one against one in this mode.':'Including you.',stepper(s.maxPlayers,2,8,1,function(v){return F.number(v,0);},function(v){setting('maxPlayers',v);},oneOnOne,'max players')));
     if(s.mode==='duel')pl.appendChild(settingRow('First to','Round wins needed to take the duel.',stepper(s.firstTo,1,7,1,function(v){return F.number(v,0)+(v===1?' win':' wins');},function(v){setting('firstTo',v);},false,'first to')));
+    else if(combat(s.mode)){
+      var fragDefault=s.mode==='vampiric'?10:s.mode==='instagib'?25:20;
+      pl.appendChild(settingRow('Frag limit','First to this many kills wins.',stepper(s.fragLimit||fragDefault,1,100,1,function(v){return F.number(v,0);},function(v){setting('fragLimit',v);},false,'frag limit')));
+      if(s.mode==='vampiric')pl.appendChild(settingRow('Lifesteal','How much of the damage you deal heals you.',stepper(typeof s.lifesteal==='number'?s.lifesteal:50,0,200,5,function(v){return F.number(v,0)+' %';},function(v){setting('lifesteal',v);},false,'lifesteal')));
+    }
+    else if(s.mode==='tracking-duel')pl.appendChild(settingRow('Rounds each','How many times each player tracks. Roles swap every round.',stepper(s.rounds,1,5,1,function(v){return F.number(v,0);},function(v){setting('rounds',v);},false,'rounds')));
     else if(s.mode==='practice')pl.appendChild(settingRow('Rounds','Practice runs until you end it.',node('span','mp-muted','Unlimited')));
     else pl.appendChild(settingRow(s.mode==='score-race'?'Attempts':'Rounds',s.mode==='score-race'?'Each player’s best attempt counts.':'Each round gives points by placing.',stepper(s.rounds,1,s.mode==='score-race'?5:10,1,function(v){return F.number(v,0);},function(v){setting('rounds',v);},false,'rounds')));
     var limits=[{id:'default',label:'Scenario'},{id:'30',label:'30 s'},{id:'60',label:'60 s'},{id:'90',label:'90 s'},{id:'120',label:'2 min'}];
-    pl.appendChild(settingRow('Time limit',overrides?'The scenario’s own is '+F.duration(s.scenario?s.scenario.timeLimit:60)+'.':locked,segmented(limits,s.timeLimit?String(s.timeLimit):'default',function(id){setting('timeLimit',id==='default'?null:Number(id));},!overrides,'time limit')));
+    if(combat(s.mode))pl.appendChild(settingRow('Match length','Ends here if nobody reaches the frag limit.',segmented([{id:'180',label:'3 min'},{id:'300',label:'5 min'},{id:'600',label:'10 min'}],String(s.timeLimit||300),function(id){setting('timeLimit',Number(id));},false,'match length')));
+    else if(s.mode==='tracking-duel')pl.appendChild(settingRow('Round length','Seconds of tracking per round.',segmented([{id:'10',label:'10 s'},{id:'15',label:'15 s'},{id:'20',label:'20 s'},{id:'30',label:'30 s'}],String(s.timeLimit||10),function(id){setting('timeLimit',Number(id));},false,'round length')));
+    else pl.appendChild(settingRow('Time limit',overrides?'The scenario’s own is '+F.duration(s.scenario?s.scenario.timeLimit:60)+'.':locked,segmented(limits,s.timeLimit?String(s.timeLimit):'default',function(id){setting('timeLimit',id==='default'?null:Number(id));},!overrides,'time limit')));
     right.appendChild(pl);
     // Privacy
     var pv=section('Who can join');
@@ -878,7 +980,7 @@
   }
 
   // Match screens ------------------------------------------------------------
-  function roundLabel(match){return match.mode==='duel'?'Round '+match.round+' · first to '+match.firstTo:match.totalRounds?'Round '+match.round+' of '+match.totalRounds:'Run '+match.round;}
+  function roundLabel(match){if(match.mode==='tracking-duel')return 'Round '+match.round+' of '+match.totalRounds+(match.attacker?' · '+(match.attacker===(view&&view.lobby&&view.lobby.self)?'you track':nameOf(match.attacker)+' tracks'):'');return match.mode==='duel'?'Round '+match.round+' · first to '+match.firstTo:match.totalRounds?'Round '+match.round+' of '+match.totalRounds:'Run '+match.round;}
   function matchScreen(page,lobby){
     if(lobby.spectate)page.appendChild(add(banner('info','Spectating '+safe(lobby.spectate.name)+' · '+statLine(lobby.spectate.score)+'. Their view plays in the pause menu.'),actions(button('Stop',function(){act('spectate-stop');},'compact quiet'))));
     var match=lobby.match;
@@ -890,15 +992,15 @@
   }
   function planBox(lobby){
     var r=lobby.round;if(!r)return null;
-    var box=node('div','mp-plan '+(r.state==='error'?'warn':r.state==='manual'?'manual':'ok'));
-    add(box,node('strong','',r.state==='manual'?'Start it yourself':r.state==='error'?'Start it yourself':r.mode==='freeplay'?'Match scenario, freeplay':'Normal KovaaK’s run'),node('span','',safe(r.message,'')));
+    var box=node('div','mp-plan '+(r.state==='error'?'warn':r.state==='manual'||r.state==='blocked'?'manual':'ok'));
+    add(box,node('strong','',r.state==='blocked'?'Finish your current run':r.state==='manual'?'Start it yourself':r.state==='error'?'Start it yourself':r.mode==='freeplay'?'Match scenario, freeplay':'Normal KovaaK’s run'),node('span','',safe(r.message,'')));
     return box;
   }
   function countdown(page,lobby,match){
     var stage=node('div','mp-stage');page.appendChild(stage);
     var ring=node('div','mp-count');var digits=node('div','mp-count-num',String(seconds(match.startsAt-now())));ring.appendChild(digits);
     countNodes.push({node:digits,at:match.startsAt,format:function(ms){return String(Math.max(1,seconds(ms)));}});
-    add(stage,node('div','eyebrow',mode(match.mode).label+' · '+roundLabel(match)),ring,node('h2','',safe(match.scenario,'Scenario')),node('p','subtle','Get your hand on the mouse. Everyone starts together.'));
+    add(stage,node('div','eyebrow',mode(match.mode).label+' · '+roundLabel(match)),ring,node('h2','',safe(match.scenario,'Scenario')),node('p','subtle',match.players.indexOf(lobby.self)>=0?'Get your hand on the mouse. Everyone starts together.':'You’re spectating this round. Pick who to follow once it starts.'));
     var plan=planBox(lobby);if(plan)stage.appendChild(plan);
     var who=node('div','mp-stage-players');match.players.forEach(function(id){var m=member(id);add(who,add(node('div','mp-stage-player'),avatar(nameOf(id),true),node('span','',nameOf(id)),m&&m.connection==='reconnecting'?chip('Reconnecting','amber'):null));});
     stage.appendChild(who);
@@ -916,7 +1018,7 @@
     add(head,node('span','mp-hud-brand','AIMMOD · '+mode(match.mode).short.toUpperCase()),node('span','mp-hud-round',roundLabel(match)),left);card.appendChild(head);
     var limit=match.timeLimit||60;
     liveRows(lobby,match).forEach(function(r){
-      var l=r.line;var row=node('div','mp-hud-row'+(l.memberId===lobby.self?' self':'')+(r.rank===1&&l.score?' lead':''));
+      var l=r.line;var row=node('div','mp-hud-row'+(l.memberId===lobby.self?' self':'')+(r.rank===1&&l.score?' lead':'')+(lobby.spectate&&lobby.spectate.member===l.memberId?' watched':''));
       var status=l.status==='finished'?'Done':l.status==='left'?'Left':l.status==='dnf'?'DNF':l.status==='waiting'?'Starting':null;
       add(row,node('span','mp-hud-rank',String(r.rank)),node('span','mp-hud-name',nameOf(l.memberId)),status?node('span','mp-hud-status',status):null,node('span','mp-hud-score',l.score===null?'—':F.number(l.score,0)),node('span','mp-hud-gap',r.gap===null?'':F.signed(r.gap,0)));
       var track=node('div','mp-hud-track');var fill=node('div','mp-hud-fill');fill.style.width=Math.min(100,Math.max(0,(l.seconds||0)/limit*100))+'%';track.appendChild(fill);
@@ -930,13 +1032,14 @@
     // The host's End match lives with the scores, not under a long spectate list.
     if(lobby.isHost)head.appendChild(actions(button('End match',function(){act('end');},'compact quiet danger')));p.appendChild(head);
     var body=node('div','mp-live-body');body.appendChild(hud(lobby,match));p.appendChild(body);main.appendChild(p);
-    var you=node('div','panel mp-card');add(you,node('h2','','Your run'));var plan=planBox(lobby);if(plan)you.appendChild(plan);else you.appendChild(node('p','subtle','Play the round in KovaaK’s. Your score streams to the lobby as you play.'));
-    you.appendChild(node('p','mp-note','Each score comes from that player’s own run in their game.'));
-    side.appendChild(you);
+    var playing=match.players.indexOf(lobby.self)>=0;
+    if(playing){var you=node('div','panel mp-card');add(you,node('h2','','Your run'));var plan=planBox(lobby);if(plan)you.appendChild(plan);else you.appendChild(node('p','subtle','Play the round in KovaaK’s. Your score streams to the lobby as you play.'));
+      you.appendChild(node('p','mp-note','Each score comes from that player’s own run in their game.'));
+      side.appendChild(you);}
     var others=match.players.filter(function(id){var m=member(id);return id!==lobby.self&&m&&!m.simulated;});
-    if(others.length){var sp=node('div','panel mp-spectate');var sh=node('div','panel-head');var st=node('div','head-text');add(st,node('h2','','Spectate'),node('p','','Follow a player from the pause menu in the same scenario.'));sh.appendChild(st);sp.appendChild(sh);
-      others.forEach(function(id){var row=node('div','mp-friend');add(row,avatar(nameOf(id),true),add(node('div','mp-friend-info'),node('strong','',nameOf(id))));row.appendChild(actions(button(lobby.spectate&&lobby.spectate.member===id?'Watching':'Spectate',function(){spectate(id);},'compact')));sp.appendChild(row);});
-      side.appendChild(sp);}
+    keepSpectateView(lobby);
+    if(others.length)side.appendChild(spectatePanel(lobby,match,others));
+    else if(!playing)side.appendChild(add(node('div','panel mp-card'),node('h2','','You’re spectating'),node('p','subtle','The players here are simulated, so there’s no camera to follow. Their scores update live.')));
     if(match.rounds.length&&match.mode!=='practice'){var st=node('div','panel');var sh=node('div','panel-head');add(sh,node('h2','','Standings so far'));st.appendChild(sh);var sb=node('div','panel-body');sb.appendChild(standingsTable(match));st.appendChild(sb);side.appendChild(st);}
   }
   function placementTable(results,mode,showPoints){
@@ -958,7 +1061,8 @@
   function roundResults(page,lobby,match){
     var last=match.rounds[match.rounds.length-1];if(!last)return;
     var hero=node('div','panel mp-result-hero');var winner=last.winnerId;
-    add(hero,node('div','eyebrow',mode(match.mode).label+' · '+roundLabel(match)),node('h2','',match.mode==='practice'?'Run '+match.round+' done':winner?(winner===lobby.self?'You take the round':nameOf(winner)+' takes the round'):'Round drawn'));
+    var tracked=match.mode==='tracking-duel'&&last.results[0]?last.results[0]:null;
+    add(hero,node('div','eyebrow',mode(match.mode).label+' · '+roundLabel(match)),node('h2','',tracked?(tracked.memberId===lobby.self?'You':nameOf(tracked.memberId))+' tracked '+(tracked.score===null?'—':F.number(tracked.score,1)+' %'):match.mode==='practice'?'Run '+match.round+' done':winner?(winner===lobby.self?'You take the round':nameOf(winner)+' takes the round'):'Round drawn'));
     var next=node('p','subtle','');countNodes.push({node:next,at:match.nextAt,format:function(ms){return 'Next round in '+seconds(ms)+' s';}});hero.appendChild(next);
     if(lobby.isHost)hero.appendChild(actions(button('Next round now',function(){act('next');},'compact primary'),button(match.mode==='practice'?'End session':'End match',function(){act('end');},'compact quiet danger')));
     page.appendChild(hero);

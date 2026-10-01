@@ -243,6 +243,23 @@
 .mp-pick-row .actions{margin-left:4px}.mp-pick-row .actions>.button.mp-fav{margin:0;width:30px;height:30px;padding:0}
 .mp-star{display:block;width:14px;height:14px;margin:0 auto}
 .mp-pick-group{padding:10px 10px 4px;font-size:11px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:#7f968a}
+/* Spectating in a lobby */
+.mp-hud-row.watched .mp-hud-name{color:#66ccff;font-weight:600}
+.mp-spectate .mp-watch-hud{margin:0 20px 6px}
+.mp-spectate .mp-setting{padding:8px 20px;border-top:1px solid #22302a}
+.mp-spectate>.actions{padding:8px 20px 14px}.mp-spectate>.actions>.button{margin:0}
+/* First-run tour */
+.mp-tour{width:600px}
+.mp-tour-top{display:flex;flex-direction:row;align-items:center}
+.mp-tour-dots{display:flex;flex-direction:row;margin-left:auto}
+.mp-tour-dot{display:block;width:8px;height:8px;border-radius:4px;margin-left:6px;background:#30433a}.mp-tour-dot.on{background:#27e4a1}
+.mp-tour-title{font-size:22px;line-height:28px;font-weight:600;margin:10px 0 6px}
+.mp-tour-text{font-size:13px;line-height:1.55;margin-bottom:14px}
+.mp-tour-points{margin-bottom:10px}
+.mp-tour-point{padding:10px 12px;margin-bottom:8px;background:#101916;border:1px solid #22302a;border-radius:6px}
+.mp-tour-point strong{display:block;font-size:14px;font-weight:600;color:#27e4a1;margin-bottom:2px}.mp-tour-point span{display:block;font-size:12px;line-height:1.5;color:#a7bab0}
+.mp-tour .mp-setting{padding:10px 0;border-top:1px solid #22302a}
+.mp-tour>.actions{margin-top:14px;text-align:right}
 /* Match history and rivals */
 .mp-recent .panel-head .actions>.button,.mp-history .panel-head .actions>.button{margin:0}
 .mp-history-item{border-top:1px solid #22302a}.mp-history-item:first-of-type{border-top:0}

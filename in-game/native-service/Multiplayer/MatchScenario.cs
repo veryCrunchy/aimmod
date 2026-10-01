@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace AimMod.InGame.Multiplayer;
 
@@ -39,28 +40,37 @@ static class MatchPresets
 // so they get the same bytes. The result is written next to the user's
 // scenarios under a reserved name and played in freeplay, so nothing reaches
 // KovaaK's ranked leaderboards.
-static class MatchScenario
+static partial class MatchScenario
 {
-    public const int GeneratorVersion = 2;
+    public const int GeneratorVersion = 3;
     public const string Prefix = "AimMod Match - ";
+    // Written into every generated scenario; cleanup removes only files that carry it.
+    public const string Marker = "AimMod multiplayer match generated from ";
+    public const string Tag = "AimMod Match";
+    [GeneratedRegex(@"^AimMod Match - .{1,80} - [0-9a-f]{8}\.sce$")] private static partial Regex FilePattern();
+    public static bool IsGeneratedName(string fileName) => FilePattern().IsMatch(fileName);
+
+    // Match scenarios never run as challenges, so nothing can reach KovaaK's leaderboards.
+    public static string SafeMode(string scenario, string mode) => scenario.StartsWith(Prefix, StringComparison.Ordinal) ? "freeplay" : mode;
     static readonly CultureInfo Invariant = CultureInfo.InvariantCulture;
 
     // Anything that changes what is played means a generated scenario.
     public static bool Needed(LobbySettings s) =>
-        s.MapOverride is not null || s.TimeLimit is not null || s.TargetSpeed != 1 || s.TargetSize != 1
+        s.Mode == LobbyModes.Tracking || LobbyModes.Combat(s.Mode) || s.MapOverride is not null || s.TimeLimit is not null || s.TargetSpeed != 1 || s.TargetSize != 1
         || s.WeaponProfile.Preset != ProfilePresets.Default || s.MovementProfile.Preset != ProfilePresets.Default || s.CharacterProfile.Preset != ProfilePresets.Default;
 
     // A pure function of the lobby settings, which carry every input's content hash.
     public static string Key(LobbySettings s)
     {
-        var parts = new object?[] { GeneratorVersion, s.Scenario?.Hash, s.Scenario?.MapHash, s.MapOverride?.Hash, s.TimeLimit,
+        var parts = new object?[] { GeneratorVersion, s.Mode == LobbyModes.Tracking || LobbyModes.Combat(s.Mode) ? s.Mode : null, s.Scenario?.Hash, s.Scenario?.MapHash, s.MapOverride?.Hash, s.TimeLimit,
             Num(s.TargetSpeed), Num(s.TargetSize), s.WeaponProfile.Preset, s.WeaponProfile.Hash, s.MovementProfile.Preset, s.CharacterProfile.Preset, s.CharacterProfile.Hash };
         return ContentLibrary.TextHash(JsonSerializer.Serialize(parts));
     }
 
     public static string Name(LobbySettings s)
     {
-        var label = MatchPresets.Movement.FirstOrDefault(m => m.Id == s.MovementProfile.Preset)?.Label
+        var label = s.Mode switch { LobbyModes.Tracking => "Tracking duel", LobbyModes.Deathmatch => "Deathmatch", LobbyModes.Vampiric => "Vampiric 1v1", LobbyModes.Instagib => "Instagib", _ => null }
+            ?? MatchPresets.Movement.FirstOrDefault(m => m.Id == s.MovementProfile.Preset)?.Label
             ?? MatchPresets.Weapons.FirstOrDefault(w => w.Id == s.WeaponProfile.Preset)?.Label
             ?? (s.CharacterProfile.Preset == ProfilePresets.Custom || s.WeaponProfile.Preset == ProfilePresets.Custom ? "Custom"
             : s.MapOverride is not null ? "Map" : s.TargetSpeed != 1 || s.TargetSize != 1 ? "Targets" : "Timed");
@@ -120,7 +130,9 @@ static class MatchScenario
         var (header, sections, mapData, nl) = Parse(input.BaseText);
         var name = Name(s);
         header.Set("Name", name);
-        header.Set("Description", "AimMod multiplayer match generated from " + (s.Scenario?.Name ?? "a scenario") + ". Played in freeplay; not a published scenario.");
+        header.Set("Description", Marker + (s.Scenario?.Name ?? "a scenario") + ". Temporary: AimMod removes it after the match. Played in freeplay; not a published scenario.");
+        // Only our own tag, so match scenarios stay out of the player's usual tag filters.
+        header.Set("SearchTags", Tag);
         if (s.TimeLimit is { } limit) header.Set("Timelimit", Num(limit));
         var playerName = header.Get("PlayerProfile");
         var characters = sections.Where(x => x.Title == "[Character Profile]").ToList();
@@ -190,6 +202,8 @@ static class MatchScenario
         foreach (var look in AvatarProfiles.All)
             if (!sections.Any(x => x.Title == "[Character Profile]" && x.Get("Name") == look.ProfileName))
                 sections.Add(new Section { Title = "[Character Profile]", Lines = AvatarProfiles.Lines(look).ToList() });
+        if (s.Mode == LobbyModes.Tracking) TrackingDuelScenario(header, sections, s);
+        else if (LobbyModes.Combat(s.Mode)) CombatArena(header, sections, s, player);
         // Canonical layout: header, then each section after one blank line.
         var output = new StringBuilder();
         foreach (var line in header.Lines.Where(l => l.Trim().Length > 0)) output.Append(line).Append(nl);
@@ -203,6 +217,86 @@ static class MatchScenario
     }
 
     public static string Hash(string text) => ContentLibrary.TextHash(text);
+
+    // Tracking duel arena: no targets of its own, nobody can be hurt, nothing scores
+    // natively (AimMod scores time on target). One invisible, inert helper bot stays,
+    // because AimModSteam spawns each opponent's avatar from a bot the scenario has
+    // (the avatar then loads the player's look, aimmod.char.<id>). The KovaaK's run
+    // outlasts the round; the host ends the round.
+    public const string HiddenBot = "AimMod Hidden Bot", HiddenBody = "AimMod Hidden";
+    static void TrackingDuelScenario(Section header, List<Section> sections, LobbySettings s)
+    {
+        header.Set("Timelimit", Num(s.EffectiveTimeLimit + 10));
+        header.Set("InvinciblePlayer", "true");
+        HelperBot(header, sections);
+    }
+
+    // Combat arena (deathmatch, vampiric 1v1, instagib): the host owns health and
+    // deaths, AimModCore applies them (play-state.tsv), so the player can be hurt;
+    // avatars stay invulnerable; nothing heals, regenerates or scores natively. The
+    // player carries exactly the mode's weapon, which the host validates claims against.
+    static void CombatArena(Section header, List<Section> sections, LobbySettings s, Section? player)
+    {
+        header.Set("Timelimit", Num(s.EffectiveTimeLimit + 30));
+        header.Set("InvinciblePlayer", "false");
+        header.Set("PlayerMaxLives", "0");
+        HelperBot(header, sections);
+        var weapon = CombatRules.Weapon(s.Mode);
+        sections.RemoveAll(x => x.Title == "[Weapon Profile]" && x.Get("Name") == weapon.Name);
+        sections.Add(new Section { Title = "[Weapon Profile]", Lines = WeaponLines(weapon) });
+        if (player is null) return;
+        var slots = (player.Get("WeaponProfileNames") ?? ";;;;;;;").Split(';');
+        if (slots.Length < 8) slots = slots.Concat(Enumerable.Repeat("", 8 - slots.Length)).ToArray();
+        for (var i = 0; i < slots.Length; i++) slots[i] = i == 0 ? weapon.Name : "";
+        player.Set("WeaponProfileNames", string.Join(';', slots));
+        player.Set("MaxHealth", Num(CombatRules.MaxHealth));
+        player.Set("LifeStealPercent", "0.0"); player.Set("HealthRegainedonkill", "0.0"); player.Set("HealthRegenPerSec", "0.0");
+        player.Set("RespawnInvulnTime", "0.0");
+        var respawn = Num(CombatRules.RespawnMs(s.Mode) / 1000.0);
+        player.Set("MinRespawnDelay", respawn); player.Set("MaxRespawnDelay", respawn);
+    }
+
+    static List<string> WeaponLines(CombatWeapon w) =>
+    [
+        "Name=" + w.Name, "Type=Hitscan", "ShotsPerClick=1", "DamagePerShot=" + Num(w.Damage), "KnockbackFactor=0.0", "TimeBetweenShots=" + Num(w.TimeBetweenShots),
+        "Pierces=false", "Category=" + (w.FullyAuto ? "FullyAuto" : "SemiAuto"), "BurstShotCount=1", "MaxHitscanRange=1000000.0",
+        "HeadshotCapable=" + (w.HeadMultiplier > 1 ? "true" : "false"), "HeadshotMultiplier=" + Num(w.HeadMultiplier), "CooldownType=InfiniteUse", "MagazineMax=0", "AmmoPerShot=0",
+        "DamageFalloffStartDistance=100000.0", "DamageFalloffStopDistance=100000.0", "DamageAtMaxRange=" + Num(w.Damage), "DelayBeforeShot=0.0",
+        "VisualLifetime=" + (w.FullyAuto ? "0.05" : "0.4"), "BlockedByWorld=true", "CanAimDownSight=false",
+        "SpreadSSA=0.0,0.0,0.0,0.0", "SpreadSCA=0.0,0.0,0.0,0.0", "SpreadMSA=0.0,0.0,0.0,0.0", "SpreadMCA=0.0,0.0,0.0,0.0",
+        "MaxRecoilUp=0.0", "MinRecoilUp=0.0", "MinRecoilHoriz=0.0", "MaxRecoilHoriz=0.0", "FlatKnockbackVertical=" + Num(w.KnockbackVertical),
+        "WeaponModel=Rifle", "WeaponSkin=Default", "FullyAutomatic=" + (w.FullyAuto ? "true" : "false"),
+    ];
+
+    // Shared by the AimMod arenas: no targets, nothing scored natively, and one invisible,
+    // passable, inert helper bot that AimModSteam spawns avatars from.
+    static void HelperBot(Section header, List<Section> sections)
+    {
+        header.Set("IsChallenge", "false");
+        header.Set("BotCharacters", HiddenBot + ".bot"); header.Set("AddedBots", HiddenBot + ".bot");
+        header.Set("BotMaxLives", "0"); header.Set("BotTeams", "2");
+        if (header.Get("PlayerTeam") is null) header.Set("PlayerTeam", "1");
+        header.Set("InvincibleBots", "true");
+        header.Set("ScorePerHit", "0.0"); header.Set("ScorePerDamage", "0.0"); header.Set("ScorePerKill", "0.0");
+        header.Set("TimeRefilledByKill", "0.0");
+        sections.RemoveAll(x => (x.Title == "[Bot Profile]" && x.Get("Name") == HiddenBot) || (x.Title == "[Character Profile]" && x.Get("Name") == HiddenBody) || (x.Title is "[Dodge Profile]" or "[Aim Profile]" && x.Get("Name") == HiddenBot));
+        sections.Add(new Section { Title = "[Bot Profile]", Lines =
+        [
+            "Name=" + HiddenBot, "DodgeProfileNames=" + HiddenBot, "DodgeProfileWeights=1.0", "DodgeProfileMaxChangeTime=5.0", "DodgeProfileMinChangeTime=1.0",
+            "WeaponsProfileNames=;;;;;;;", "WeaponProfileWeights=1.0;1.0;1.0;1.0;1.0;1.0;1.0;1.0", "AimingProfileNames=" + string.Join(';', Enumerable.Repeat(HiddenBot, 8)),
+            "WeaponSwitchTime=3.0", "UseWeapons=false", "CharacterProfile=" + HiddenBody, "SeeThroughWalls=false", "NoDodging=true", "StandStillUntilHurt=true",
+            "NoAiming=true", "SpawnGroup=0", "UseMinimumRespawnTime=true", "DisableScoring=true",
+        ] });
+        sections.Add(new Section { Title = "[Aim Profile]", Lines = ["Name=" + HiddenBot, "MinReactionTime=0.3", "MaxReactionTime=0.4", "AimingStyle=Simple"] });
+        sections.Add(new Section { Title = "[Dodge Profile]", Lines =
+        [
+            "Name=" + HiddenBot, "MaxTargetDistance=0.0", "MinTargetDistance=0.0", "ToggleLeftRight=false", "ToggleForwardBack=false", "JumpFrequency=0.0",
+            "CrouchInAirFrequency=0.0", "CrouchOnGroundFrequency=0.0",
+        ] });
+        var body = AvatarProfiles.Lines(AvatarProfiles.All[0]).Where(l => !l.StartsWith("Name=", StringComparison.Ordinal) && !l.StartsWith("CharacterModel=", StringComparison.Ordinal) && !l.StartsWith("CharacterSkin=", StringComparison.Ordinal) && !l.StartsWith("MainBBHide=", StringComparison.Ordinal) && !l.StartsWith("ProjBBHide=", StringComparison.Ordinal)).ToList();
+        body.InsertRange(0, ["Name=" + HiddenBody, "CharacterModel=None", "CharacterSkin=Default", "MainBBHide=true", "ProjBBHide=true"]);
+        sections.Add(new Section { Title = "[Character Profile]", Lines = body });
+    }
 }
 
 // Writes match scenarios into the game's Scenarios folder. Only files AimMod
@@ -255,5 +349,51 @@ sealed class MatchScenarioStore(string scenariosFolder, string manifestPath, int
         }
     }
     static void Touch(List<Entry> entries, string file, string hash, long now) { entries.RemoveAll(e => e.File == file); entries.Add(new Entry(file, hash, now)); }
+
+    // Remove every match scenario except the one the current lobby needs. A file goes only
+    // if its name has the generated pattern and its header carries the generated marker,
+    // so a user's own scenario is never touched. Returns how many were removed.
+    public int Clean(string? keepName)
+    {
+        lock (gate)
+        {
+            if (!Directory.Exists(scenariosFolder)) return 0;
+            var keep = keepName is null ? null : keepName + ".sce";
+            var removed = 0;
+            var written = Read();
+            foreach (var path in Directory.EnumerateFiles(scenariosFolder, MatchScenario.Prefix + "*.sce").Take(500).ToArray())
+            {
+                var file = Path.GetFileName(path);
+                if (file == keep || !MatchScenario.IsGeneratedName(file)) continue;
+                // Ours: it carries the marker, or it is still exactly what this store wrote.
+                if (!Marked(path) && !written.Any(e => e.File == file && Unchanged(path, e.Hash))) continue;
+                try { File.Delete(path); removed++; }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            }
+            var entries = Read();
+            if (entries.RemoveAll(e => e.File != keep && !File.Exists(Path.Combine(scenariosFolder, e.File))) > 0 || removed > 0) Save(entries);
+            return removed;
+        }
+    }
+    static bool Unchanged(string path, string hash)
+    {
+        try { return new FileInfo(path).Length <= 32L << 20 && MatchScenario.Hash(File.ReadAllText(path)) == hash; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
+    }
+    static bool Marked(string path)
+    {
+        try
+        {
+            if (new FileInfo(path).Length > 32L << 20) return false;
+            using var reader = new StreamReader(path);
+            for (var i = 0; i < 400 && reader.ReadLine() is { } line; i++)
+            {
+                if (line.StartsWith('[')) return false;
+                if (line.StartsWith("Description=" + MatchScenario.Marker, StringComparison.Ordinal)) return true;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        return false;
+    }
     public IReadOnlyList<string> Files() { lock (gate) return Read().OrderByDescending(e => e.Written).Select(e => e.File).ToArray(); }
 }

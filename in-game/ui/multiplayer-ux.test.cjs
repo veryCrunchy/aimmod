@@ -108,3 +108,15 @@ test('live: the round label shows once and the host ends the match from the scor
   assert.equal(s.all().filter(e=>e.textContent==='Round 2 of 3').length,1);
   const end=s.button('End match');let el=end;while(el&&!/mp-live/.test(el.className))el=el.parentNode;assert.ok(el,'End match sits in the live panel');
 });
+test('settings editor: the settings that define a mode are basics, the rest stay under More options',()=>{
+  function edit(extra){const s=setup().open(view({lobby:lobby({settings:Object.assign({},settings,extra)})}));s.button('Edit').onclick();return s;}
+  const dm=edit({mode:'deathmatch',fragLimit:30,timeLimit:600});
+  assert.ok(dm.text().includes('Frag limit')&&dm.text().includes('Match length'),'deathmatch basics');assert.ok(!dm.text().includes('Lifesteal'));assert.ok(!dm.text().includes('Target speed'),'targets stay folded');
+  const frag=dm.all().find(e=>e.attrs&&e.attrs['aria-label']==='Increase frag limit');frag.onclick();assert.deepEqual(JSON.parse(dm.last().body),{action:'settings',settings:{fragLimit:31}});
+  assert.equal(dm.button('10 min').attrs['aria-checked'],'true');
+  const vamp=edit({mode:'vampiric',maxPlayers:2,lifesteal:75});assert.ok(vamp.text().includes('Lifesteal')&&vamp.text().includes('75 %'));
+  const track=edit({mode:'tracking-duel',maxPlayers:2,rounds:2,timeLimit:15});assert.ok(track.text().includes('Rounds each')&&track.text().includes('Round length'));assert.ok(!track.text().includes('Time limit'));
+  assert.ok(track.text().includes('Always one against one in this mode.'));
+  const sum=setup().open(view({lobby:lobby({settings:Object.assign({},settings,{mode:'vampiric',fragLimit:12,lifesteal:60,timeLimit:300})})}));
+  assert.ok(sum.text().includes('12 kills')&&sum.text().includes('60 %')&&sum.text().includes('Match length'),'the summary card shows the mode settings');
+});

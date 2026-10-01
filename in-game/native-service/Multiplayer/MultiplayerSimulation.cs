@@ -11,6 +11,7 @@ sealed class MultiplayerSimulation(Func<long> clock, ContentLibrary library, Fun
 {
     static readonly string[] Names = ["Nova", "Kestrel", "Juniper", "Orbit", "Vesper", "Talon", "Mako"];
     static readonly string[] Hellos = ["hey!", "hi all", "ready when you are", "o/"];
+    static readonly string[] Chatter = ["gg", "one more?", "that was close", "nice shot!", "lag spike, sorry", "brb"];
     sealed class Bot
     {
         public required string Id; public double Skill; public long ContentAt, ReadyAt, StartAt, FrameAt, RematchAt, ChatAt;
@@ -65,6 +66,7 @@ sealed class MultiplayerSimulation(Func<long> clock, ContentLibrary library, Fun
 
     public LobbyResult Control(LobbyCore? core, string op, string? member)
     {
+        if (op == "friend-online") { FriendOnline = !FriendOnline; return LobbyResult.Success; }
         if (op is "invite" or "request" or "launch")
         {
             var from = Names[random.Next(Names.Length)];
@@ -94,11 +96,34 @@ sealed class MultiplayerSimulation(Func<long> clock, ContentLibrary library, Fun
             case "host-leave":
                 if (!fakes.Any(m => m.Id == core.HostId)) return LobbyResult.Fail("not-sim-host", "The host isn’t simulated.");
                 bots.Remove(core.HostId); return core.Leave(core.HostId);
+            // Developer menu: make a simulated member do one thing now.
+            case "chat":
+                if (Pick(m => m.Connection == Connections.Connected) is not { } talker) return LobbyResult.Fail("none", "No simulated member to talk.");
+                return core.Apply(talker, "chat", Args(new { text = Chatter[random.Next(Chatter.Length)] }), library);
+            case "away":
+                if (Pick(m => m.Role == MemberRoles.Player && m.Id != core.HostId) is not { } idler) return LobbyResult.Fail("none", "No simulated player to send away.");
+                var isAway = core.Members.First(m => m.Id == idler).Away;
+                if (isAway && bots.TryGetValue(idler, out var back2)) back2.ReadyAt = Jitter(800, 1600);
+                return core.Apply(idler, "away", Args(new { away = !isAway }), library);
+            case "unready":
+                if (Pick(m => m.Ready && m.Id != core.HostId) is not { } waverer) return LobbyResult.Fail("none", "No simulated player is ready.");
+                if (bots.TryGetValue(waverer, out var w)) w.ReadyAt = Jitter(4000, 7000);
+                return core.Apply(waverer, "ready", Args(new { ready = false }), library);
+            case "suggest":
+                if (Pick(m => m.Connection == Connections.Connected) is not { } suggester) return LobbyResult.Fail("none", "No simulated member to suggest.");
+                if (library.Scenarios.Count == 0) return LobbyResult.Fail("none", "Your library has no scenarios to suggest.");
+                var pick = library.Scenarios[random.Next(Math.Min(library.Scenarios.Count, 20))].Name;
+                var made = core.Apply(suggester, "suggest", Args(new { scenario = pick }), library);
+                // Everyone else simulated votes for it.
+                if (made.Ok) foreach (var voter in fakes.Where(m => m.Id != suggester)) core.Apply(voter.Id, "vote", Args(new { scenario = pick }), library);
+                return made;
             default:
                 return LobbyResult.Fail("invalid", "Unknown simulation step.");
         }
     }
 
+    // Dev control: Vesper starts AimMod (or quits it again), for the friend-online toast.
+    public bool FriendOnline;
     public IReadOnlyList<FriendEntry> Friends(long now)
     {
         var scenario = library.Scenarios.Count > 1 ? library.Scenarios[1].Name : "a scenario";
@@ -107,7 +132,7 @@ sealed class MultiplayerSimulation(Func<long> clock, ContentLibrary library, Fun
             new("sim-f1", "Juniper", "aimmod-lobby", "In a lobby · Duel", "JUNPER", true),
             new("sim-f2", "Kestrel", "aimmod", "Playing " + scenario, null, false),
             new("sim-f3", "Talon", "kovaaks", "In KovaaK’s, no AimMod", null, false),
-            new("sim-f4", "Vesper", "online", "Online", null, false),
+            FriendOnline ? new("sim-f4", "Vesper", "aimmod", "Playing " + scenario, null, false, Spectatable: true) : new("sim-f4", "Vesper", "online", "Online", null, false),
         ];
     }
 

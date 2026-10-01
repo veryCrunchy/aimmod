@@ -11,6 +11,8 @@ interface IGameControl
     // Re-index local scenarios after AimMod wrote one ("refresh" capability).
     long? Refresh();
     GameCommandResult? Result { get; }
+    // True while KovaaK's runs a challenge (core-scene.json); null when unknown.
+    bool? ChallengeRunning => null;
 }
 
 sealed class CoreGameControl(string output) : IGameControl
@@ -20,10 +22,11 @@ sealed class CoreGameControl(string output) : IGameControl
     // Lobby overrides are baked into the generated match scenario, so the
     // runtime override fields stay empty and ranked rules stay simple.
     public long? Load(string scenario) => Capabilities.Contains("load") ? commands.Send(new("load-scenario", scenario, null, null, null, null, null, null)).Sequence : null;
-    public long? Start(string scenario, string mode) => Capabilities.Contains("start") ? commands.Send(new("start-scenario", scenario, mode, null, null, null, null, null)).Sequence : null;
+    public long? Start(string scenario, string mode) => Capabilities.Contains("start") ? commands.Send(new("start-scenario", scenario, MatchScenario.SafeMode(scenario, mode), null, null, null, null, null)).Sequence : null;
     // AimModCore accepts refresh-scenarios wherever it can load scenarios ("load"; "refresh" if advertised).
     public long? Refresh() => Capabilities.Contains("refresh") || Capabilities.Contains("load") ? commands.Send(new("refresh-scenarios", null, null, null, null, null, null, null)).Sequence : null;
     public GameCommandResult? Result => commands.Result();
+    public bool? ChallengeRunning => GameScene.Read(output) is { Available: true } scene ? scene.InChallenge : null;
 }
 
 sealed class NoGameControl : IGameControl
