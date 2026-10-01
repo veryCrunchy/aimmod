@@ -76,6 +76,8 @@ sealed partial class MultiplayerService : IDisposable
         if (output is not null && library.Root is { } root) download = new ContentDownload(root, Path.Combine(output, "downloads"), this.clock);
         simulationSeed = seed; simulationForced = simulation;
         if (simulation) Simulation = new MultiplayerSimulation(this.clock, library, completedRuns, seed);
+        // A marker left by a crash never outlives the session it described.
+        DeleteSessionMarker();
         // A failure in one tick must never take the whole service down: log it and keep going.
         if (autoTick) timer = new Timer(_ => { try { Tick(); } catch (Exception ex) { Console.Error.WriteLine("Multiplayer tick failed: " + ex.GetType().Name + ": " + ex.Message); } }, null, 100, 100);
     }
@@ -1026,6 +1028,7 @@ sealed partial class MultiplayerService : IDisposable
         if (spectating is not null) { transport.StopSpectate(); spectating = null; }
         transport.Withdraw();
         core = null; mirror = null; hostPeer = null; pendingHeir = null; joinPendingSince = null; clocks.Clear();
+        DeleteSessionMarker();
         // Leaving on purpose (not a crash) forgets the rejoin point.
         if (reason is "left" or "kicked" or "closed") { rejoin = null; lastSessionJson = null; try { if (sessionPath is not null && File.Exists(sessionPath)) File.Delete(sessionPath); } catch (IOException) { } }
         Reset();
@@ -1083,6 +1086,7 @@ sealed partial class MultiplayerService : IDisposable
             MapTick();
             var now = clock();
             WatchFriends(now);
+            UpdateSessionMarker();
             CleanMatchScenarios();
             FollowLeader(now);
             if (core is not null)
@@ -1455,6 +1459,8 @@ sealed partial class MultiplayerService : IDisposable
         if (wanted == cleanedFor || scenarios is null) return;
         cleanedFor = wanted;
         if (preparedName is not null && preparedName != wanted) { preparedKey = null; preparedName = null; preparedProblem = null; }
+        // The cosmetics marker never names a scenario that is about to go.
+        UpdateSessionMarker(force: true);
         if (scenarios.Clean(wanted) > 0) game.Refresh();
     }
 
@@ -1722,7 +1728,7 @@ sealed partial class MultiplayerService : IDisposable
 
     // Disposed with the service (the hotkey reader).
     public IDisposable? Companion { get; set; }
-    public void Dispose() { timer?.Dispose(); Companion?.Dispose(); lock (gate) Leave("closed"); transport.Dispose(); }
+    public void Dispose() { timer?.Dispose(); Companion?.Dispose(); lock (gate) { Leave("closed"); DeleteSessionMarker(); } transport.Dispose(); }
 }
 
 static class WindowsClipboard

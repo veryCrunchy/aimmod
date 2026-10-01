@@ -29,6 +29,7 @@ static class MultiplayerChecks
         Peers();
         SteamPipe();
         Follow();
+        Marker();
         var root = Path.Combine(Path.GetTempPath(), "aimmod-mp-test-" + Guid.NewGuid().ToString("N"));
         try { Content(root); Generator(root); Service(root); Transfers(root); Replays(root); Maps(root); }
         finally { try { Directory.Delete(root, true); } catch (IOException) { } }
@@ -623,6 +624,21 @@ static class MultiplayerChecks
         Check(MultiplayerService.LeaderOf(Match(L("a", 4000), L("b", 6000, "left")), members, "me") == "a" && MultiplayerService.LeaderOf(Match(L("a", null)), members, "me") is null, "Players who left or have no score yet aren't followed");
     }
 
+    static void Marker()
+    {
+        const long now = 1_790_000_000;
+        const string name = "AimMod Match - Cata IC Long Strafes - Timed - ab93b242";
+        string Text(string mode = "match", string scenario = name, string expires = "1790000060", string v = "1") => "v=" + v + "\nmode=" + mode + "\nscenario=" + scenario + "\nexpires=" + expires + "\n";
+        Check(SessionMarker.Read(Text(), now) is { Mode: "match", Scenario: name, Expires: now + 60 }, "The reader accepts the example marker (expires = now + 60)");
+        Check(SessionMarker.Read(SessionMarker.Format("match", name, now + SessionMarker.LifetimeSeconds), now) is { Mode: "match" } && SessionMarker.Read(SessionMarker.Format("lobby", null, now + 90), now) is { Mode: "lobby", Scenario: "" }, "What the service writes, the reader accepts");
+        Check(SessionMarker.Read(Text(v: "2"), now) is null && SessionMarker.Read(Text(mode: "ranked"), now) is null && SessionMarker.Read(Text(expires: "soon"), now) is null, "Version 2, mode ranked and a non-numeric expiry are rejected");
+        Check(SessionMarker.Read(Text(expires: now.ToString()), now) is null && SessionMarker.Read(Text(expires: (now - 5).ToString()), now) is null && SessionMarker.Read(Text(expires: (now + 3600).ToString()), now) is null, "Expired markers and ones too far ahead are rejected");
+        Check(SessionMarker.Read(Text() + new string('x', 1100), now) is null, "Markers over 1 KiB are rejected");
+        Check(SessionMarker.Read(Text(scenario: "AimMod Match - Cata IC Long Strafes - Timed - AB93B242"), now) is null && SessionMarker.Read(Text(scenario: "AimMod Match - Cata - Timed - ab93b24"), now) is null
+            && SessionMarker.Read(Text(scenario: "AimMod Match - Cata - Timed - ab93b2421"), now) is null && SessionMarker.Read(Text(scenario: "Cata IC Long Strafes - Timed - ab93b242"), now) is null, "Uppercase, 7- or 9-digit keys and a missing prefix are rejected");
+        Check(SessionMarker.Format("match", "AimMod Match - Bad\nmode=match - ab93b242", now) is null && SessionMarker.Format("match", "Cata IC Long Strafes", now) is null && SessionMarker.Format("ranked", name, now) is null, "Nothing is written for control characters, normal scenarios or unknown modes");
+    }
+
     static void Developer(string root, ContentLibrary library)
     {
         long now = 7_000_000;
@@ -941,7 +957,13 @@ static class MultiplayerChecks
         Check(!JsonDocument.Parse(service.NoticeText()).RootElement.GetProperty("active").GetBoolean(), "The same friend doesn't toast again within half an hour");
         service.Act("sim", J(new { op = "friend-online" }));
         Check(!service.Act("join", J(new { code = "bad" })).Ok, "Bad room codes are refused");
+        WriteText(Path.Combine(output, SessionMarker.FileName), "v=1\nmode=match\nscenario=AimMod Match - Old - Timed - ab93b242\nexpires=9999999999\n");
+        var markerService = new MultiplayerService(new OfflineTransport(), new ContentLibrary(game), new NoGameControl(), () => new LocalRun(false, null, null, null, null, 0, 0, 0, null), () => [], () => null, output, simulation: false, () => now, autoTick: false);
+        Check(!File.Exists(Path.Combine(output, SessionMarker.FileName)), "A marker left by a crash is deleted at startup");
+        markerService.Dispose();
         Check(service.Act("create", J(new { mode = "score-race", scenario = "Synthetic A" })).Ok && !service.Act("create", default).Ok, "One lobby at a time");
+        service.Tick();
+        Check(SessionMarker.Read(File.ReadAllText(Path.Combine(output, SessionMarker.FileName)), now / 1000) is { Mode: "lobby", Scenario: "" }, "In a lobby the marker says lobby, with no scenario");
         service.Act("sim", J(new { op = "add" })); service.Act("sim", J(new { op = "add-missing" }));
         void Run(int ms) { for (var t = 0; t < ms; t += 100) { now += 100; service.Tick(); } }
         Run(4000);
@@ -955,6 +977,7 @@ static class MultiplayerChecks
         Check(control.Calls.SequenceEqual(["load Synthetic A"]) && View().GetProperty("lobby").GetProperty("round").GetProperty("mode").GetString() == "challenge", "Unmodified scenario loads for a normal run during the countdown");
         Run(6000);
         Check(control.Calls.Contains("start challenge Synthetic A"), "The run starts at zero through AimModCore");
+        Check(!File.Exists(Path.Combine(output, SessionMarker.FileName)), "No marker while a normal scenario plays");
         Check(View().GetProperty("lobby").GetProperty("match").GetProperty("live").EnumerateArray().Count(l => l.GetProperty("status").GetString() == "playing") >= 2, "Live score frames arrive");
         Run(62_000);
         var match = View().GetProperty("lobby").GetProperty("match");
@@ -982,8 +1005,12 @@ static class MultiplayerChecks
         Check(control.Calls.Last() == "start freeplay " + name, "Generated scenarios run in freeplay");
         Run(200);
         Check(File.Exists(Path.Combine(game, "Saved", "SaveGames", "Scenarios", name + ".sce")), "The lobby's match scenario stays while the lobby needs it (play again, rematch)");
+        var markerFile = Path.Combine(output, SessionMarker.FileName);
+        var marker = SessionMarker.Read(File.ReadAllText(markerFile), now / 1000);
+        Check(marker is { Mode: "match" } && marker.Scenario == name && !File.ReadAllBytes(markerFile).Take(3).SequenceEqual(new byte[] { 0xEF, 0xBB, 0xBF }), "While the match scenario plays, the cosmetics marker says match with its exact name (UTF-8, no BOM)");
         // Host leaving a simulated lobby hands it over; invites and launch joins.
         service.Act("leave", default);
+        Check(!File.Exists(markerFile), "Leaving deletes the cosmetics marker");
         var refreshes = control.Calls.Count(c => c == "refresh");
         Run(200);
         Check(!File.Exists(Path.Combine(game, "Saved", "SaveGames", "Scenarios", name + ".sce")) && control.Calls.Count(c => c == "refresh") == refreshes + 1, "Leaving removes the match scenario and refreshes KovaaK's list");
