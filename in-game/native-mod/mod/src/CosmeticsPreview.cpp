@@ -281,8 +281,8 @@ namespace aimmod
         UObject* world = Alive(player) ? static_cast<AActor*>(player)->GetWorld() : nullptr;
         if (!Alive(world)) world = nullptr;
         if (!world) return Teardown("no world", false);
-        if (PreviewMayDestroy(state)) DestroyOrphans(world);
-        if (!decision.run) return Teardown(decision.reason, PreviewMayDestroy(state));
+        // Hotfix: runtime teardown crashed (access violations in K2_DestroyActor); stages are left to the level.
+        if (!decision.run) return Teardown(decision.reason, false);
         if (!EnsureStage(world)) return;
 
         const std::string key = request->LookKey();
@@ -953,7 +953,9 @@ namespace aimmod
         const bool had = stage || target;
         if (had)
         {
-            if (destroy && SafeToDestroy(stage, m_world))
+            // Hotfix: runtime destruction crashed the game; until it is safe, every stage is left to the level.
+            constexpr bool DestroyAtRuntime = false;
+            if (DestroyAtRuntime && destroy && SafeToDestroy(stage, m_world))
             {
                 // Our own components first, then the stage (it was spawned by AimModCore).
                 RemoveAccessories();
