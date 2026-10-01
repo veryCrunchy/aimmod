@@ -78,3 +78,27 @@ test('malformed responses are ignored',()=>{
   const t=setup(),banner=new t.El('div');t.api.start({banner});t.requests[0].finish(200,{update:null});
   assert.equal(banner.children.length,0);
 });
+test('a scheduled repair can be cancelled from the banner and Settings',()=>{
+  const t=setup(),banner=new t.El('div'),box=new t.El('div');t.api.start({banner});
+  t.requests[0].finish(200,snapshot({repair:{needed:true,requested:true,problems:['x']}}));
+  const cancel=t.buttons(banner).find(b=>b.textContent==='Cancel repair');assert.ok(cancel,'banner offers Cancel repair');
+  assert.equal(t.buttons(banner).filter(b=>/Repair when I close/.test(b.textContent)).length,0);
+  cancel.onclick();assert.deepEqual(JSON.parse(t.requests.at(-1).body),{action:'cancel-repair'});
+  t.requests.at(-1).finish(200,snapshot({repair:{needed:true,requested:true,problems:['x']}}));
+  t.api.renderSettings(box);t.requests.at(-1).finish(200,snapshot({repair:{needed:true,requested:true,problems:['x']}}));
+  assert.ok(t.buttons(box).some(b=>b.textContent==='Cancel repair'),'Settings offers Cancel repair');
+});
+test('update controls use the shared switch and segmented control',()=>{
+  const t=setup(),box=new t.El('div');t.api.start({});t.requests[0].finish(200,snapshot());
+  t.api.renderSettings(box);t.requests.at(-1).finish(200,snapshot());
+  const toggle=t.buttons(box).find(b=>b.attrs['aria-label']==='Automatic updates');
+  assert.equal(toggle.className,'switch on');assert.equal(toggle.attrs.role,'switch');
+  const channels=box.all().find(c=>/\bsegmented\b/.test(c.className));assert.ok(channels,'channel is a segmented control');
+  assert.deepEqual(channels.children.map(b=>[b.textContent,b.attrs['aria-checked']]),[['Stable','true'],['Beta','false']]);
+});
+test('failed saves use the warning notice, not the success style',()=>{
+  const t=setup(),box=new t.El('div');t.api.start({});t.requests[0].finish(200,snapshot());
+  t.api.renderSettings(box);t.requests.at(-1).finish(200,snapshot());
+  t.buttons(box).find(b=>b.attrs['aria-label']==='Automatic updates').onclick();t.requests.at(-1).finish(500,{});
+  assert.ok(box.all().some(c=>c.className==='notice warn'&&/Could not save/.test(c.textContent)));
+});

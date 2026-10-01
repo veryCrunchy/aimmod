@@ -51,3 +51,9 @@ test('reports the shown workspace page',()=>{
 test('Gameface-safe source',()=>{
   for(const banned of ['grid','gap:','var(--','calc(','inline-block','placeholder'])assert.ok(!source.includes(banned),banned);
 });
+test('uses the shared switch and disables detail options while Discord is off',()=>{
+  const s=setup();s.api.render(s.container);s.requests[0].finish(200,{settings:{...all,discordPresenceEnabled:false},status:{state:'off'}});
+  const b=s.buttons();assert.ok(b.every(x=>/^switch/.test(x.className)),'every option is a switch');
+  assert.equal(b[0].disabled,false,'the main switch stays usable');assert.ok(b.slice(1).every(x=>x.disabled===true),'details are disabled while off');
+  b[1].onclick();assert.equal(s.requests.length,1,'a disabled detail sends nothing');
+});

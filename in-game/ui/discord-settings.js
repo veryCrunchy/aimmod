@@ -31,13 +31,17 @@
     while(panel.firstChild)panel.removeChild(panel.firstChild);
     panel.appendChild(node('h2','','Discord'));
     panel.appendChild(node('p','subtle','Show your AimMod session on your Discord profile in place of KovaaK’s own status.'));
-    if(message)panel.appendChild(node('p','notice',message));
-    if(!value){var retry=node('button','button','Try again');retry.type='button';retry.onclick=function(){load(panel);};panel.appendChild(retry);return;}
+    if(message)panel.appendChild(node('p',message==='Saved.'?'saved-note':'notice warn',message));
+    if(!value){var retryRow=node('div','actions'),retry=node('button','button primary','Try again');retry.type='button';retry.onclick=function(){load(panel);};retryRow.appendChild(retry);panel.appendChild(retryRow);return;}
     if(status&&states[status])panel.appendChild(node('p','subtle',states[status]));
+    // Same switch as the rest of Settings. The detail options only apply while
+    // AimMod is shown on Discord, so they are disabled while it is off.
     function toggle(key,title,description){
-      var row=node('div','settings-row'),info=node('div','settings-info');info.appendChild(node('h3','',title));info.appendChild(node('p','subtle',description));row.appendChild(info);
-      var on=value[key],control=node('button','button'+(on?' primary':''),on?'On':'Off');control.type='button';control.setAttribute('role','switch');control.setAttribute('aria-checked',String(on));control.setAttribute('aria-label',title);
-      control.onclick=function(){if(request)return;var patch={};patch[key]=!value[key];var controls=panel.querySelectorAll('button');for(var i=0;i<controls.length;i++)controls[i].disabled=true;send(patch,function(ok,data){if(ok)accept(data);draw(panel,ok?'Saved.':'Could not save your settings. Please try again.');});};
+      var inactive=key!=='discordPresenceEnabled'&&!value.discordPresenceEnabled;
+      var row=node('div','settings-row'+(inactive?' disabled':'')),info=node('div','settings-info');info.appendChild(node('h3','',title));info.appendChild(node('p','subtle',description));row.appendChild(info);
+      var on=value[key];row.appendChild(node('span','switch-state',on?'On':'Off'));
+      var control=node('button','switch'+(on?' on':''),on?'On':'Off');control.type='button';control.setAttribute('role','switch');control.setAttribute('aria-checked',String(on));control.setAttribute('aria-label',title);control.appendChild(node('span','knob'));control.disabled=inactive;
+      control.onclick=function(){if(request||inactive)return;var patch={};patch[key]=!value[key];var controls=panel.querySelectorAll('button');for(var i=0;i<controls.length;i++)controls[i].disabled=true;send(patch,function(ok,data){if(ok)accept(data);draw(panel,ok?'Saved.':'Could not save your settings. Please try again.');});};
       row.appendChild(control);panel.appendChild(row);
     }
     toggle('discordPresenceEnabled','Show AimMod on Discord','Your scenario, run timer and session progress. Turn this off to show KovaaK’s own status again.');

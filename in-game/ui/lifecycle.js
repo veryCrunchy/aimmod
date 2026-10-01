@@ -58,7 +58,8 @@
     if(s.repair.interrupted)add('An AimMod install was interrupted. It is undone when you close KovaaK’s.','warn');
     else if(s.repair.needed&&s.installed.managed){
       var p=add(s.repair.requested?'Repair scheduled: AimMod repairs itself when you close KovaaK’s.':'AimMod needs a repair. '+(s.repair.problems[0]||''),'warn');
-      if(!s.repair.requested&&s.repair.available)p.appendChild(button('Repair when I close KovaaK’s',true,function(){act('repair');}));
+      if(s.repair.requested)p.appendChild(button('Cancel repair',false,function(){act('cancel-repair');}));
+      else if(s.repair.available)p.appendChild(button('Repair when I close KovaaK’s',true,function(){act('repair');}));
     }
     if(s.update.state==='ready'){var b=add('Update ready: AimMod '+s.update.version+(s.update.applyOnClose?' applies when you close KovaaK’s.':' is downloaded.'));b.appendChild(button('What’s new',false,function(){if(options.openSettings)options.openSettings();}));}
     if(s.game.warning)add(s.game.warning,'warn');
@@ -71,15 +72,17 @@
     if(!state){panel.appendChild(node('p','subtle','Loading update status…'));return;}
     var s=state,u=s.update;
     panel.appendChild(node('p','subtle',(s.installed.version?'Installed: AimMod '+s.installed.version+'. ':'')+updateText(u)));
-    if(message)panel.appendChild(node('p','notice',message));
+    if(message)panel.appendChild(node('p',message==='Saved.'?'saved-note':'notice warn',message));
     var managed=u.state!=='unmanaged';
     function row(title,description,control){var r=node('div','settings-row'),info=node('div','settings-info');info.appendChild(node('h3','',title));info.appendChild(node('p','subtle',description));r.appendChild(info);if(control)r.appendChild(control);panel.appendChild(r);return r;}
     if(managed){
-      var toggle=button(s.settings.autoUpdate?'On':'Off',s.settings.autoUpdate,function(){save({autoUpdate:!s.settings.autoUpdate});});
-      toggle.setAttribute('role','switch');toggle.setAttribute('aria-checked',String(s.settings.autoUpdate));toggle.setAttribute('aria-label','Automatic updates');
+      // Same switch and segmented control as the rest of Settings.
+      var auto=!!s.settings.autoUpdate,toggle=node('div','lifecycle-switch');toggle.appendChild(node('span','switch-state',auto?'On':'Off'));
+      var control=button(auto?'On':'Off',false,function(){save({autoUpdate:!auto});});control.className='switch'+(auto?' on':'');control.appendChild(node('span','knob'));
+      control.setAttribute('role','switch');control.setAttribute('aria-checked',String(auto));control.setAttribute('aria-label','Automatic updates');toggle.appendChild(control);
       row('Automatic updates','Download updates in the background, check every file and install them when you close KovaaK’s. Your history, replays and settings are kept.',toggle);
-      var channels=node('div','lifecycle-channels');
-      ['stable','beta'].forEach(function(name){var b=button(name==='stable'?'Stable':'Beta',s.settings.channel===name,function(){if(s.settings.channel!==name)save({channel:name});});b.setAttribute('aria-pressed',String(s.settings.channel===name));channels.appendChild(b);});
+      var channels=node('div','segmented lifecycle-channels');channels.setAttribute('role','radiogroup');channels.setAttribute('aria-label','Update channel');
+      ['stable','beta'].forEach(function(name){var b=button(name==='stable'?'Stable':'Beta',s.settings.channel===name,function(){if(s.settings.channel!==name)save({channel:name});});b.setAttribute('role','radio');b.setAttribute('aria-checked',String(s.settings.channel===name));channels.appendChild(b);});
       row('Update channel','Beta gets new features first and may be less stable.',channels);
       var actions=node('div','lifecycle-actions');
       actions.appendChild(button(u.state==='checking'?'Checking…':'Check for updates',false,function(){message='';act('check',function(){root.setTimeout(load,4000);});}));
@@ -88,7 +91,7 @@
       if(u.state==='ready'&&u.notes){panel.appendChild(node('h3','lifecycle-heading','What’s new in '+u.version));panel.appendChild(node('p','lifecycle-notes',plain(u.notes)));}
     }
     var repairText=s.repair.requested?'A repair is scheduled for when you close KovaaK’s.':s.repair.needed?'Something is wrong with the install: '+s.repair.problems.join(' '):'Your AimMod install is complete.';
-    var repairButton=s.repair.available&&!s.repair.requested?button('Repair when I close KovaaK’s',s.repair.needed,function(){act('repair');}):null;
+    var repairButton=s.repair.requested?button('Cancel repair',false,function(){act('cancel-repair');}):s.repair.available?button('Repair when I close KovaaK’s',s.repair.needed,function(){act('repair');}):null;
     row('Repair',repairText+' If AimMod does not load at all after a KovaaK’s update, run Repair-AimMod.cmd from %LOCALAPPDATA%\\AimMod with the game closed.',repairButton);
     if(s.rollback.available)row('Previous version','AimMod '+s.rollback.version+' is kept. To go back, close KovaaK’s and run Repair-AimMod.cmd -Rollback.',null);
     if(s.game.steamBuildId)row('Game build',s.game.tested?'KovaaK’s '+s.game.testedVersion+' (Steam build '+s.game.steamBuildId+'), tested with this AimMod release.':(s.game.warning||'Steam build '+s.game.steamBuildId+'.'),null);
@@ -100,9 +103,9 @@
   }
   function style(){
     if(doc.getElementById('lifecycle-style'))return;var css=node('style','');css.id='lifecycle-style';
-    css.textContent='.lifecycle-banner{display:flex;align-items:center;padding:12px 16px;margin:0 0 12px;border:1px solid #3a7450;border-radius:9px;background:#183a26;color:#dff3e6;font-size:13px}.lifecycle-banner.warn{border-color:#8a6a2c;background:#3a2f17;color:#f5e6c4}.lifecycle-banner>span{flex:1;min-width:0;line-height:1.6}.lifecycle-banner>.button{margin-left:12px;flex-shrink:0}'+
-      '.lifecycle-toast{position:absolute;right:30px;bottom:80px;z-index:30;max-width:420px;padding:18px 20px;border:1px solid #4c7b59;border-radius:10px;background:#1d3d29;color:#edf8f1;font-size:13px}.lifecycle-toast strong{display:block;font-size:15px;margin-bottom:6px}.lifecycle-toast p{margin:0 0 10px;line-height:1.6;color:#cfe6d7}'+
-      '.lifecycle-notes{white-space:pre-wrap;color:#a9c7b3;font-size:12px;line-height:1.6;max-height:260px;overflow-y:auto}.lifecycle-actions{display:flex;flex-wrap:wrap;margin-top:14px}.lifecycle-actions>.button,.lifecycle-channels>.button{margin-right:8px}.lifecycle-heading{font-size:14px;font-weight:500;margin:20px 0 8px}';
+    css.textContent='.lifecycle-banner{display:flex;align-items:center;padding:12px 16px;margin:0 0 12px;border:1px solid #2c6b52;border-left:3px solid #27e4a1;border-radius:6px;background:#173b2f;color:#dcebe3;font-size:13px}.lifecycle-banner.warn{border-color:#6b5426;border-left-color:#f0b45a;background:#3a2f17;color:#f5e6c4}.lifecycle-banner>span{flex:1;min-width:0;line-height:1.6}.lifecycle-banner>.button{margin-left:12px;flex-shrink:0}'+
+      '.lifecycle-toast{position:absolute;right:30px;bottom:80px;z-index:30;max-width:420px;padding:18px 20px;border:1px solid #2c6b52;border-top:2px solid #27e4a1;border-radius:8px;background:#151f1c;color:#eef5f1;font-size:13px}.lifecycle-toast strong{display:block;font-size:15px;margin-bottom:6px}.lifecycle-toast p{margin:0 0 10px;line-height:1.6;color:#a7bab0}'+
+      '.lifecycle-notes{white-space:pre-wrap;color:#a7bab0;font-size:12px;line-height:1.6;max-height:260px;overflow-y:auto}.lifecycle-actions{display:flex;flex-wrap:wrap;margin-top:14px}.lifecycle-actions>.button{margin:0 8px 0 0}.lifecycle-actions>.button+.button{margin-left:0}.lifecycle-channels{margin:0}.lifecycle-channels>.button+.button{margin-left:0}.lifecycle-switch{display:flex;flex-direction:row;align-items:center;flex-shrink:0}.lifecycle-heading{font-size:14px;font-weight:500;margin:20px 0 8px}';
     (doc.head||doc.body).appendChild(css);
   }
   root.AimModLifecycle={
