@@ -123,6 +123,18 @@ static class CoreFormatChecks
             Check(liveLines[0].EndsWith("\t1") && liveMotion.Length >= 2 && Math.Abs(liveMotion[0] - liveTime) < 1e-9 && Math.Abs(liveMotion[^1] - liveTime - LivePoseFeed.Delay) < 0.002
                 && liveLines.Any(l => l.StartsWith("actor\t1\t")) && liveLines.Any(l => l.StartsWith("clock\t")), "live frames: delayed display time, window to the newest pose, targets");
             Check(!spectate.Command("seek", 1), "live view cannot be seeked");
+            // Follow the leader: switching the watched player in place cuts to the new stream.
+            string Stream(string id, long start, int yaw) => $"AIMMOD_POSE_1\t1\t{id}\nmeta\tSynthetic%20target%20test\tMap_A\t1\n" + string.Concat(Enumerable.Range(0, 6).Select(i => $"pose\t{start + i * 33}\t0\t0\t0\t0\t{yaw}\t0\t90\n"));
+            var followFeed = new LivePoseFeed(posePath, "playerA");
+            File.WriteAllText(posePath, Stream("playerA", poseMs + 10_000, 10));
+            Check(followFeed.Update() && followFeed.Window().Window[^1].Camera[4] == 10, "named stream followed");
+            File.WriteAllText(posePath, Stream("playerB", poseMs - 50_000, 70)); // another machine's clock
+            Check(followFeed.Update() && followFeed.Window().Window[^1].Camera[4] == 10, "an unrequested stream is ignored without ending the view");
+            followFeed.Follow("playerB");
+            Check(followFeed.Update() && followFeed.Switches == 1 && followFeed.Window().Window.All(p => p.Camera[4] == 70), "switch cuts to the new stream, no blend across the old buffer");
+            var followView = new NativeReplayPlayback(root, () => true, () => 6);
+            followView.Spectate(new LivePoseFeed(posePath, "playerB"), "Synthetic target test", "Map_A", 1, "b");
+            Check(followView.FollowStream("Synthetic target test", "Map_A", "playerC") && !followView.FollowStream("Other", "Map_A", "playerC"), "in-place switch only for the same world");
 
             // Protocol 6 publishes a render-rate motion window while playing.
             var playback = new NativeReplayPlayback(root, () => true, () => 6);

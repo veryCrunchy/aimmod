@@ -220,7 +220,10 @@ sealed class WorkspaceHost : IAsyncDisposable
                     // Follow a live view (multiplayer bridge -> spectate-pose.tsv) in this world.
                     if (string.IsNullOrWhiteSpace(command.Scenario) || command.Scenario.Length > 512 || string.IsNullOrWhiteSpace(command.MapName) || command.MapScale is not > 0)
                         return Results.BadRequest();
-                    var feed = new LivePoseFeed(Path.Combine(outputFolder, "spectate-pose.tsv"));
+                    if (command.Stream is not null && !LivePoseFrame.IsStreamId(command.Stream)) return Results.BadRequest();
+                    // Already watching this world: switch the followed player in place.
+                    if (playback.FollowStream(command.Scenario, command.MapName, command.Stream)) return Results.Json(PlaybackStatus());
+                    var feed = new LivePoseFeed(Path.Combine(outputFolder, "spectate-pose.tsv"), command.Stream);
                     if (!feed.Update()) return Results.Json(new { error = "stream-unavailable", message = "No live view is being received." }, statusCode: 409);
                     var placeholder = new NativeReplay(2, "live", command.Scenario, "", "live", 0, [], [], command.MapName, command.MapScale);
                     var ack = renderer.Read();
@@ -355,7 +358,7 @@ sealed class WorkspaceHost : IAsyncDisposable
     // An HttpClient timeout surfaces as a cancellation that the caller did not request.
     static bool HubUnavailable(Exception ex, CancellationToken token) => ex is IOException or HttpRequestException or System.Text.Json.JsonException
         || ex is OperationCanceledException && !token.IsCancellationRequested;
-    sealed record PlaybackCommand(string? Action, string? Id, double? Value, double[]? Area, string? CompareId = null, string? Scenario = null, string? MapName = null, double? MapScale = null, string? Label = null);
+    sealed record PlaybackCommand(string? Action, string? Id, double? Value, double[]? Area, string? CompareId = null, string? Scenario = null, string? MapName = null, double? MapScale = null, string? Label = null, string? Stream = null);
     sealed record LibraryCommand(string? Action, string? Id, bool? Favorite);
 }
 

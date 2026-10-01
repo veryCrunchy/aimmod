@@ -46,11 +46,22 @@ sealed class NativeReplayPlayback : IAsyncDisposable
         if (compareWith is not null && (compareWith.Frames.Count < 2 || compareWith.Scenario != value.Scenario)) throw new ArgumentException("Comparison replay must be of the same scenario.");
         lock (gate) { keyboardSession++; keyboardRevision = revision + 1; replay = value; compare = compareWith; live = null; position = 0; speed = 1; playing = false; visible = true; anchor = Stopwatch.GetTimestamp(); revision++; }
     }
+    /// <summary>Switches an active live view to another stream of the same world; false if not spectating it.</summary>
+    public bool FollowStream(string scenario, string mapName, string? stream)
+    {
+        lock (gate)
+        {
+            if (live is null || replay is null || replay.Scenario != scenario || replay.MapName != mapName) return false;
+            live.Follow(stream);
+            return true;
+        }
+    }
     /// <summary>Follows a live view (spectating) from `feed` in the given world.</summary>
     public void Spectate(LivePoseFeed feed, string scenario, string mapName, double mapScale, string label)
     {
         var camera = new double[] { 0, 0, 0, 0, 0, 0, 90 };
-        var placeholder = new NativeReplay(2, "live-" + label, scenario, DateTimeOffset.UtcNow.ToString("O"), "live", 86400,
+        // A constant identity: switching the watched player keeps the scene.
+        var placeholder = new NativeReplay(2, "live", scenario, DateTimeOffset.UtcNow.ToString("O"), "live", 86400,
             [new(0, camera, []), new(86400, camera, [])], [], mapName, mapScale);
         lock (gate) { keyboardSession++; keyboardRevision = revision + 1; replay = placeholder; compare = null; live = feed; position = 0; speed = 1; playing = true; visible = true; anchor = Stopwatch.GetTimestamp(); revision++; }
     }

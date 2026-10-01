@@ -257,6 +257,13 @@ presenter); none touch a running challenge.
   `error`/`message` when the stream is missing or the start gate refuses:
   the spectator must be in the same scenario, in the pause menu). The view is
   shown 120 ms behind the newest pose; it ends when the stream stops for 2 s.
+  Follow the leader: send the same spectate request again with the new
+  `"stream"` (same scenario and map): the view switches in place (no stop,
+  no new 2 s window); until poses of that stream arrive the current view
+  continues, then it cuts to the new player (fresh 120 ms buffer, no
+  blend). Another scenario/map starts a new view. With `stream` set, poses
+  of other streams are ignored; without it, a stream id change or a clock
+  jumping back by more than 1 s also starts a fresh buffer.
   AimModCore writes the local player's view in the same format to
   `self-pose.tsv` (60 Hz samples, rewritten at 30 Hz) only while
   `self-pose.request` was touched within the last 5 s.
@@ -264,7 +271,7 @@ presenter); none touch a running challenge.
 Pose format 1 (UTF-8, LF):
 
 ```
-AIMMOD_POSE_1\t<sequence>
+AIMMOD_POSE_1\t<sequence>[\t<stream id>]     (stream id: [A-Za-z0-9_-]{1,64}, e.g. the watched player)
 meta\t<%-escaped scenario>\t<%-escaped map name>\t<map scale>
 pose\t<unix ms>\t<x>\t<y>\t<z>\t<pitch>\t<yaw>\t<roll>\t<fov>     (1-64 rows, increasing ms)
 target\t<id>\t<x>\t<y>\t<z>\t<capsule radius>\t<capsule half height> (optional, latest positions)
