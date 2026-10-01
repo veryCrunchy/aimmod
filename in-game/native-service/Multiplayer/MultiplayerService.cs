@@ -7,7 +7,7 @@ namespace AimMod.InGame.Multiplayer;
 
 // Status: aimmod-lobby (in an AimMod lobby), aimmod (AimMod running), kovaaks (game without AimMod), online.
 // Spectatable: they allow watching right now; Watchers: how many already watch.
-sealed record FriendEntry(string Id, string Name, string Status, string? Detail, string? Code, bool Joinable, bool Spectatable = false, int Watchers = 0, string? Scenario = null);
+sealed record FriendEntry(string Id, string Name, string Status, string? Detail, string? Code, bool Joinable, bool Spectatable = false, int Watchers = 0, string? Scenario = null, string? Workshop = null);
 sealed record RecentMatch(string Id, long EndedAt, string Mode, string Scenario, int? Place, int Players, string? Winner, bool Won, bool Simulated, IReadOnlyList<RecentPlayer> Standings);
 sealed record RecentPlayer(string Name, int Place, double? Best, int Wins, int Points, bool Self);
 sealed record LocalRun(bool Active, string? Scenario, double? Score, double? Seconds, double? Remaining, int Shots, int Hits, int Kills, string? Attempt);
@@ -68,6 +68,8 @@ sealed class MultiplayerService : IDisposable
         LoadHistory();
         server = new ContentServer(library, this.clock);
         swap = new ReplaySwap(output, this.clock);
+        watchServer = new ContentServer(library, this.clock);
+        if (output is not null && library.Root is { } watchRoot) watchDownload = new ContentDownload(watchRoot, Path.Combine(output, "downloads"), this.clock);
         if (output is not null && library.Root is { } root) download = new ContentDownload(root, Path.Combine(output, "downloads"), this.clock);
         if (simulation) Simulation = new MultiplayerSimulation(this.clock, library, completedRuns, seed);
         // A failure in one tick must never take the whole service down: log it and keep going.
@@ -145,6 +147,13 @@ sealed class MultiplayerService : IDisposable
                 case "watch-stop":
                     if (watch is not null) { transport.StopSpectate(); watch = null; }
                     return LobbyResult.Success;
+                case "watch-download-cancel":
+                    watchDownload?.Cancel(); return LobbyResult.Success;
+                case "watch-download-retry":
+                    if (watch is { } wr) watch = wr with { State = "downloading" };
+                    return WatchDownload();
+                case "watch-download":
+                    return WatchDownload();
                 case "watch-started":
                     if (watch is not null) watch = watch with { State = "watching", Message = "Watching " + watch.Name + "." };
                     return LobbyResult.Success;
@@ -271,7 +280,7 @@ sealed class MultiplayerService : IDisposable
         scenario ??= watch.Scenario;
         if (scenario is null) { watch = watch with { State = "waiting", Message = who + " isn’t in a scenario yet.", Scenario = null }; return; }
         var info = library.Scenarios.FirstOrDefault(s => s.Name.Equals(scenario, StringComparison.OrdinalIgnoreCase));
-        if (info is null) { watch = watch with { Scenario = scenario, State = "missing", Message = "You don’t have “" + scenario + "”. Get it from the Workshop, then watch again." }; return; }
+        if (info is null) { watch = watch with { Scenario = scenario, State = "missing", Message = "You don’t have “" + scenario + "”. Download it to watch." }; return; }
         var loading = game.Capabilities.Contains("load") && game.Load(info.Name) is not null;
         watch = watch with { Scenario = info.Name, State = loading ? "loading" : "manual", Message = loading ? "Loading “" + info.Name + "”…" : "Open “" + info.Name + "” in KovaaK’s and pause to watch." };
     }
@@ -306,6 +315,100 @@ sealed class MultiplayerService : IDisposable
     }
     JsonElement? watchScore;
 
+    // Content over the spectate link: the spectator asks; the watched player serves only
+    // the scenario they are playing now (the bridge enforces who may send chunks).
+    ContentServer watchServer = null!;
+    ContentDownload? watchDownload;
+    string? watchWorkshop;
+    string? OwnScenario() => liveRun() is { Active: true, Scenario: { Length: > 0 } s } ? s : completedRuns().FirstOrDefault()?.Scenario;
+    LobbySettings? OwnContent() => OwnScenario() is { } name && library.Scenario(name) is { } s ? new LobbySettings(Mode: LobbyModes.Practice, Scenario: s) : null;
+
+    bool HandleSpectateContent(string peer, Envelope m)
+    {
+        if (watchers.Any(w => w.Peer == peer))
+        {
+            var mine = OwnContent();
+            switch (m.T)
+            {
+                case "content.request":
+                    if (mine is not null && watchServer.Manifest(mine) is { } manifest) Send(peer, "content.manifest", new { key = manifest.Key, files = manifest.Files, workshop = manifest.Workshop });
+                    else Send(peer, "content.error", new { hash = "", code = "none" });
+                    return true;
+                case "content.get":
+                    try
+                    {
+                        var hash = m.Body.GetProperty("hash").GetString() ?? "";
+                        var transfer = m.Body.TryGetProperty("transfer", out var tr) && tr.TryGetInt32(out var tv) && transport.BulkChunkBytes > 0 ? tv : 0;
+                        var chunk = m.Body.TryGetProperty("chunk", out var ch) && ch.TryGetInt32(out var cv) ? Math.Min(cv, transport.BulkChunkBytes) : 0;
+                        var problem = mine is null ? "not-offered" : watchServer.Request(peer, mine, hash, m.Body.GetProperty("offset").GetInt64(), m.Body.GetProperty("length").GetInt64(), transfer, chunk);
+                        if (problem is not null) Send(peer, "content.error", new { hash, code = problem });
+                    }
+                    catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or FormatException) { }
+                    return true;
+                case "content.done":
+                    if (m.Body.TryGetProperty("transfer", out var dt) && dt.TryGetInt32(out var done)) { watchServer.Ended(peer, done); transport.BulkCancel(peer, done, "complete"); }
+                    return true;
+            }
+        }
+        if (watch is { } w && w.Peer == peer && watchDownload is not null)
+        {
+            switch (m.T)
+            {
+                case "content.manifest":
+                    if (ContentDownload.ReadManifest(m.Body) is { } offered) { watchDownload.Source = "friend"; watchDownload.Offer(offered); }
+                    return true;
+                case "content.chunk":
+                    try
+                    {
+                        if (m.Body.GetProperty("hash").GetString() is { } h)
+                            watchDownload.Chunk(h, m.Body.GetProperty("offset").GetInt64(), m.Body.GetProperty("total").GetInt64(), Convert.FromBase64String(m.Body.GetProperty("data").GetString() ?? ""));
+                    }
+                    catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or FormatException) { }
+                    return true;
+                case "content.error":
+                    var code = m.Body.TryGetProperty("code", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString() ?? "" : "";
+                    if (code == "none") { watchDownload.Reset(); watch = w with { State = "missing", Message = w.Name + " can’t send this scenario. Get it from the Workshop." }; }
+                    else watchDownload.Refused(m.Body.TryGetProperty("hash", out var rh) ? rh.GetString() ?? "" : "", code);
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    // Missing the friend's scenario: the Workshop first (their presence names the item), otherwise ask them.
+    LobbyResult WatchDownload()
+    {
+        if (watch is not { } w || watchDownload is null) return LobbyResult.Fail("none", "There’s nothing to download.");
+        var item = Friends().FirstOrDefault(f => f.Id == w.Peer)?.Workshop;
+        if (item is not null && watchWorkshop is null && transport.WorkshopDownload(item))
+        {
+            watchWorkshop = item;
+            watch = w with { State = "downloading", Message = "Downloading “" + w.Scenario + "” from the Steam Workshop…" };
+            return LobbyResult.Success;
+        }
+        if (watchDownload.Manifest is null) { watchDownload.Asked(); Send(w.Peer, "content.request", new { }); watch = w with { State = "downloading", Message = "Asking " + w.Name + " for the files…" }; return LobbyResult.Success; }
+        if (!watchDownload.Start()) return LobbyResult.Fail(watchDownload.Code ?? "download", watchDownload.Error ?? "Couldn’t start the download.");
+        watch = w with { State = "downloading", Message = "Getting “" + w.Scenario + "” from " + w.Name + "…" };
+        return LobbyResult.Success;
+    }
+
+    void PumpWatchContent()
+    {
+        // Watched side: serve the people watching us, gently while we play.
+        if (watchers.Count > 0) watchServer.Pump(liveRun().Active, (peer, body) => Send(peer, "content.chunk", body), transport, (peer, hash, code) => Send(peer, "content.error", new { hash, code }));
+        if (watch is not { } w || watchDownload is null) return;
+        watchDownload.BulkBytes = transport.BulkChunkBytes;
+        foreach (var finished in watchDownload.TakeCompleted()) Send(w.Peer, "content.done", new { transfer = finished });
+        if (watchDownload.State == "ready" && w.State == "downloading") WatchDownload();
+        if (watchDownload.State == "downloading" && watchDownload.Next() is { } want)
+        {
+            if (want.Transfer > 0) Send(w.Peer, "content.get", new { hash = want.Hash, offset = want.Offset, length = want.Length, transfer = want.Transfer, chunk = want.Chunk });
+            else Send(w.Peer, "content.get", new { hash = want.Hash, offset = want.Offset, length = want.Length });
+        }
+        if (watchDownload.State == "done") { watchDownload.Reset(); library.Refresh(force: true); WatchStarted(w.Peer, w.Name, w.Scenario); }
+        else if (watchDownload.State == "error" && w.State == "downloading") watch = w with { State = "missing", Message = watchDownload.Error ?? "The download stopped." };
+    }
+
     object? WatchView()
     {
         if (watch is not { } w) return null;
@@ -313,6 +416,8 @@ sealed class MultiplayerService : IDisposable
         var meta = poseMeta is { } m && string.Equals(m.Scenario, w.Scenario, StringComparison.OrdinalIgnoreCase) ? m : ((string, string, double)?)null;
         return new { peer = w.Peer, name = w.Name, scenario = w.Scenario, state = w.State, message = w.Message,
             mapName = meta?.Item2 ?? info?.Map, mapScale = meta?.Item3 ?? info?.MapScale ?? 1, score = watchScore,
+            workshop = Friends().FirstOrDefault(f => f.Id == w.Peer)?.Workshop is not null,
+            download = watchDownload is { State: not "idle" } d && w.State is "downloading" or "missing" ? d.View() : null,
             others = Friends().Where(f => f.Spectatable && f.Id != w.Peer).Take(5).Select(f => new { f.Id, f.Name }) };
     }
     static string EndedReason(string name, string? reason) => reason switch
@@ -509,8 +614,24 @@ sealed class MultiplayerService : IDisposable
     }
 
     public object PrefsView() => prefs;
+    object KeysView()
+    {
+        var clip = KeyBinds.ReadClipKey(outputFolder);
+        return new { hotkey = prefs.Hotkey, clip, clipKeys = KeyBinds.ClipKeys, conflicts = KeyBinds.Conflicts(prefs.Hotkey, clip, KeyBinds.GameKeys(library.Root)) };
+    }
     LobbyResult SetPrefs(JsonElement args)
     {
+        // The clip key belongs to AimModCore's clip-settings.tsv.
+        if (args.TryGetProperty("prefs", out var clipPatch) && clipPatch.ValueKind == JsonValueKind.Object && clipPatch.TryGetProperty("clipKey", out var ck) && ck.ValueKind == JsonValueKind.String)
+        {
+            if (!KeyBinds.ClipKeys.Contains(ck.GetString()) || outputFolder is null) return LobbyResult.Fail("invalid", "Pick one of the offered clip keys.");
+            if (ck.GetString() == prefs.Hotkey) return LobbyResult.Fail("conflict", "That’s your lobby key. Pick a different clip key.");
+            try { KeyBinds.WriteClipKey(outputFolder, ck.GetString()!); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return LobbyResult.Fail("save", "Couldn’t save the clip key."); }
+            return LobbyResult.Success;
+        }
+        if (args.TryGetProperty("prefs", out var hk) && hk.ValueKind == JsonValueKind.Object && hk.TryGetProperty("hotkey", out var hv) && hv.ValueKind == JsonValueKind.String
+            && MultiplayerHotkey.Parse(hv.GetString()).Name == KeyBinds.ReadClipKey(outputFolder))
+            return LobbyResult.Fail("conflict", "That’s your clip key. Pick a different lobby key.");
         if (!args.TryGetProperty("prefs", out var patch) || MultiplayerPrefs.Apply(prefs, patch) is not { } next) return LobbyResult.Fail("invalid", "Unknown preferences.");
         prefs = next; HotkeyName = next.Hotkey;
         try { if (prefsPath is not null) prefs.Save(prefsPath); }
@@ -683,6 +804,15 @@ sealed class MultiplayerService : IDisposable
 
     void WorkshopUpdate(WorkshopProgress? progress)
     {
+        // A spectator's Workshop download: done means watch; failed means ask the friend instead.
+        if (progress is not null && progress.Item == watchWorkshop && watch is { } w)
+        {
+            if (progress.State == "installed") { library.Refresh(force: true); WatchStarted(w.Peer, w.Name, w.Scenario); }
+            else if (progress.State is "failed" or "unavailable" && watchDownload is not null)
+            { watchDownload.Asked(); Send(w.Peer, "content.request", new { }); watch = w with { State = "downloading", Message = "The Workshop didn’t work. Asking " + w.Name + " for the files…" }; }
+            else watch = w with { Message = "Downloading from the Steam Workshop… " + (progress.Total > 0 ? (int)(progress.Done * 100 / progress.Total) + "%" : "") };
+            return;
+        }
         if (progress is null || download is null || progress.Item != workshopItem) return;
         if (progress.State is "installed")
         {
@@ -888,6 +1018,7 @@ sealed class MultiplayerService : IDisposable
             TryRejoin();
             SyncSelf();
             FollowWatch();
+            PumpWatchContent();
             PlanRound();
             TrackLocalRun();
             Remember();
@@ -919,7 +1050,7 @@ sealed class MultiplayerService : IDisposable
         }
         if (e.Kind == TransportEvent.SpectatorLeft) { watchers.RemoveAll(w => w.Peer == e.Peer); return; }
         if (e.Kind == TransportEvent.SpectateAsked) { watchAsks.RemoveAll(a => a.Peer == e.Peer); watchAsks.Add((e.Peer, LobbyRules.CleanName(e.Reason, "A friend"), clock())); return; }
-        if (e.Kind == TransportEvent.BulkData) { if (core is null && e.Peer == hostPeer && e.Frame is not null) download?.Bulk(e.Transfer, e.Index, e.Frame); return; }
+        if (e.Kind == TransportEvent.BulkData) { if (e.Frame is null) return; if (watch?.Peer == e.Peer) watchDownload?.Bulk(e.Transfer, e.Index, e.Frame); else if (core is null && e.Peer == hostPeer) download?.Bulk(e.Transfer, e.Index, e.Frame); return; }
         if (e.Kind == TransportEvent.BulkAck) return;
         if (e.Kind == TransportEvent.BulkEnd)
         {
@@ -969,6 +1100,8 @@ sealed class MultiplayerService : IDisposable
             else mirrorAt = Math.Max(mirrorAt, now);
             return;
         }
+        // Content over a spectate link, in either direction.
+        if (m.T.StartsWith("content.", StringComparison.Ordinal) && HandleSpectateContent(e.Peer, m)) return;
         if (core is not null) HandleAsHost(e.Peer, m);
         else HandleAsClient(e.Peer, m);
     }
@@ -1378,6 +1511,7 @@ sealed class MultiplayerService : IDisposable
                 hotkey = HotkeyName,
                 prefs,
                 rejoin = RejoinOffer(),
+                keys = KeysView(),
                 watch = WatchView(),
                 watchers = watchers.Select(w => new { peer = w.Peer, name = w.Name }),
                 watchAsks = watchAsks.Select(a => new { peer = a.Peer, name = a.Name }),

@@ -319,7 +319,8 @@ static class MultiplayerChecks
         public bool InviteOverlay(LobbySnapshot lobby) => true;
         public bool InviteFriend(string friendId, LobbySnapshot lobby) => true;
         public bool Invited(string peer) => peer == "invited";
-        public IReadOnlyList<FriendEntry> Friends() => [new("f1", "Synthetic Friend", "aimmod", null, null, false), new("f2", "Watchable Friend", "aimmod", "Playing Synthetic A", null, false, Spectatable: true, Watchers: 1, Scenario: "Synthetic A")];
+        public IReadOnlyList<FriendEntry>? FriendList;
+        public IReadOnlyList<FriendEntry> Friends() => FriendList ?? (IReadOnlyList<FriendEntry>)[new("f1", "Synthetic Friend", "aimmod", null, null, false), new("f2", "Watchable Friend", "aimmod", "Playing Synthetic A", null, false, Spectatable: true, Watchers: 1, Scenario: "Synthetic A")];
         public PeerLink? Link(string peer) => new("connected", "relay", 42);
         public void Dispose() { }
     }
@@ -634,11 +635,11 @@ static class MultiplayerChecks
         WriteText(Path.Combine(hostGame, "Saved", "SaveGames", "Abilities", "Synthetic Walk.abilsprint"), "Name=Synthetic Walk\n");
         WriteText(Path.Combine(hostGame, "Saved", "SaveGames", "Scenarios", "Synthetic Port.sce"), "Name=Synthetic Port\nMapName=synthetic_port.json\nTimelimit=30\n\n[Character Profile]\nName=Player\nAbilityProfileNames=Synthetic Walk;;;\n\n[Map Data]\n{}\n");
         Directory.CreateDirectory(Path.Combine(Game("join"), "Saved", "SaveGames"));
-        MultiplayerService Make(string id, string game, out MemoryTransport t)
+        MultiplayerService Make(string id, string game, out MemoryTransport t, LocalRun? live = null)
         {
             t = new MemoryTransport(net, id); net.Peers[id] = t;
             var output = Path.Combine(root, "xfer", id, "out"); Directory.CreateDirectory(output);
-            var service = new MultiplayerService(t, new ContentLibrary(game, () => new DateTime(2026, 1, 1).AddMilliseconds(now)), new NoGameControl(), () => new LocalRun(false, null, null, null, null, 0, 0, 0, null), () => [], () => null, output, false, () => now, autoTick: false);
+            var service = new MultiplayerService(t, new ContentLibrary(game, () => new DateTime(2026, 1, 1).AddMilliseconds(now)), new NoGameControl(), () => live ?? new LocalRun(false, null, null, null, null, 0, 0, 0, null), () => [], () => null, output, false, () => now, autoTick: false);
             all.Add(service); return service;
         }
         void Pump(int rounds = 10) { for (var i = 0; i < rounds; i++) { now += 100; foreach (var s in all) s.Tick(); } }
@@ -673,12 +674,36 @@ static class MultiplayerChecks
         // Preferences are checked and saved.
         Check(joiner.Act("prefs", J(new { prefs = new { volume = 5, hotkey = "f9", readyOnJoin = true, unknown = 1 } })).Ok && View(joiner).GetProperty("prefs").GetProperty("volume").GetDouble() == 1 && View(joiner).GetProperty("hotkey").GetString() == "F9", "Preferences are clamped and applied");
         Check(MultiplayerPrefs.Load(Path.Combine(root, "xfer", "xfer-join", "out", "multiplayer-settings.json")).ReadyOnJoin, "Preferences persist");
+        var clipFile = Path.Combine(root, "xfer", "xfer-join", "out", "clip-settings.tsv");
+        File.WriteAllText(clipFile, "AIMMOD_CLIPS_1\nkey\tF8\nbefore\t12\nafter\t3\n");
+        Check(joiner.Act("prefs", J(new { prefs = new { clipKey = "F9" } })).Code == "conflict" && joiner.Act("prefs", J(new { prefs = new { clipKey = "Tab" } })).Code == "invalid", "The clip key can't clash with the lobby key and must be an offered key");
+        Check(joiner.Act("prefs", J(new { prefs = new { clipKey = "F10" } })).Ok && File.ReadAllText(clipFile) == "AIMMOD_CLIPS_1\nkey\tF10\nbefore\t12\nafter\t3\n", "The clip key is saved in clip-settings.tsv, keeping its other values");
+        Check(KeyBinds.Conflicts("F7", "F7", new HashSet<string>()).Count == 1 && KeyBinds.Conflicts("F7", "F8", new HashSet<string>(["F8"])).Single().Contains("KovaaK’s already uses F8"), "Key conflicts are reported");
         // A crashed or restarted client rejoins its lobby.
         Check(File.Exists(Path.Combine(root, "xfer", "xfer-join", "out", "multiplayer-session.json")), "The client remembers its lobby");
         all.Remove(joiner);
         var reborn = Make("xfer-join", Game("join"), out _);
         Pump(5);
         Check(View(reborn).GetProperty("lobby").ValueKind == JsonValueKind.Object && View(host).GetProperty("lobby").GetProperty("members").GetArrayLength() == 2, "After a restart the client rejoins the same lobby");
+        // Spectating without the scenario: the watched player sends their current scenario's files.
+        var watched = Make("xfer-watched", hostGame, out var watchedLink, new LocalRun(true, "Synthetic Port", 10, 5, 25, 3, 2, 2, "a1"));
+        var viewer = Make("xfer-viewer", Game("viewer"), out var viewerLink);
+        Directory.CreateDirectory(Path.Combine(Game("viewer"), "Saved", "SaveGames"));
+        viewerLink.AllowSpectate = true;
+        viewerLink.FriendList = [new("xfer-watched", "Watched Host", "aimmod", "Playing Synthetic Port", null, false, Spectatable: true, Scenario: "Synthetic Port")];
+        Check(viewer.Act("watch", J(new { friend = "xfer-watched" })).Ok, "Spectate a friend");
+        viewerLink.Inbox.Enqueue(new TransportEvent("xfer-watched", TransportEvent.SpectateStarted, Reason: "Watched Host"));
+        watchedLink.Inbox.Enqueue(new TransportEvent("xfer-viewer", TransportEvent.SpectatorJoined, Reason: "Viewer"));
+        Pump(2);
+        Check(View(viewer).GetProperty("watch").GetProperty("state").GetString() == "missing", "A spectator without the scenario is offered the download");
+        Check(viewer.Act("watch-download", default).Ok, "Download from the friend (no Workshop item)");
+        for (var i = 0; i < 30 && View(viewer).GetProperty("watch").GetProperty("state").GetString() is "downloading" or "missing"; i++) Pump(3);
+        Check(File.Exists(Path.Combine(Game("viewer"), "Saved", "SaveGames", "Scenarios", "Synthetic Port.sce")) && File.ReadAllText(Path.Combine(Game("viewer"), "maps", "synthetic_port.json")) == big, "The friend's scenario and map arrive verified over the spectate link");
+        Check(View(viewer).GetProperty("watch").GetProperty("state").GetString() == "manual", "With the content in place, watching continues");
+        var stranger = Make("xfer-stranger", Game("viewer"), out _);
+        net.Peers["xfer-watched"].Inbox.Enqueue(new TransportEvent("xfer-stranger", TransportEvent.Message, Protocol.Encode(Protocol.Create("content.request", "", "xfer-stranger", 1, now, new { }))));
+        Pump(2);
+        Check(View(stranger).GetProperty("watch").ValueKind == JsonValueKind.Null, "Only people watching you can ask for your files");
         // The host only serves current lobby content.
         var server = new ContentServer(new ContentLibrary(hostGame), () => now);
         var settings = new LobbySettings(Scenario: new ContentLibrary(hostGame).Scenario("Synthetic Port"));

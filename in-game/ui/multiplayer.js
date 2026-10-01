@@ -216,7 +216,9 @@
     var w=view.watch;var p=node('div','panel mp-watch '+(w.state==='ended'||w.state==='missing'?'warn':''));
     var head=node('div','mp-watch-head');add(head,avatar(w.name),add(node('div','mp-watch-text'),node('div','eyebrow',w.state==='watching'?'Spectating':'Spectate'),node('h2','',safe(w.name,'Friend')),node('p','subtle',(w.scenario?safe(w.scenario,'')+' · ':'')+safe(w.message,''))));
     p.appendChild(head);
-    if(w.state!=='ended'&&w.state!=='missing'){
+    if(w.state==='missing'&&!w.download)p.appendChild(actions(button(w.workshop?'Download from the Workshop':'Get it from '+safe(w.name,'your friend'),function(){act('watch-download');},'primary compact')));
+    if(w.download){var dp=downloadPanel({download:{view:w.download,conflicts:[]}},'watch-');if(dp)p.appendChild(dp);}
+    if(w.state!=='ended'&&w.state!=='missing'&&w.state!=='downloading'){
       var hud=node('div','mp-watch-hud');hud.appendChild(node('span','',statLine(w.score)));p.appendChild(hud);
       if(w.state!=='watching')p.appendChild(node('p','mp-note',lastWatchReason?'Not yet: '+safe(lastWatchReason,'')+'.':'Their view starts in the pause menu once you’re in the same scenario.'));
       if(w.state==='loading'||w.state==='manual'||w.state==='watching')startWatchView(w);
@@ -269,6 +271,9 @@
     if(pr.sounds)body.appendChild(settingRow('Volume','',stepper(typeof pr.volume==='number'?pr.volume:0.8,0,1,0.1,function(v){return F.number(v*100,0)+'%';},function(v){pref('volume',v);},false,'volume')));
     var keys=[];for(var i=5;i<=10;i++)keys.push({id:'F'+i,label:'F'+i});
     body.appendChild(settingRow('Hotkey','Ready up or open the lobby from in game.',segmented(keys,pr.hotkey||'F7',function(id){pref('hotkey',id);},false,'hotkey')));
+    var ks=view.keys||{};var clipOptions=['F6','F8','F9','F10','F11','Insert','Home','PageUp'].map(function(k){return {id:k,label:k};});
+    body.appendChild(settingRow('Clip key','Marks a moment of a recorded run as a clip.',segmented(clipOptions,ks.clip||'F8',function(id){pref('clipKey',id);},false,'clip key')));
+    (ks.conflicts||[]).forEach(function(c){body.appendChild(node('p','mp-warn-text',safe(c,'')));});
     return p;
   }
   function joinCode(){var code=(drafts.code||'').toUpperCase().replace(/[^A-Z0-9]/g,'');if(code.length!==6){toast('Room codes are six letters and numbers.');return;}act('join',{code:code},function(ok){if(ok)drafts.code='';});}
@@ -453,13 +458,14 @@
   }
   function mb(bytes){return F.number((bytes||0)/1048576,bytes<10485760?1:0)+' MB';}
   // Download what this player is missing: Workshop first, otherwise from the host.
-  function downloadPanel(lobby){
+  function downloadPanel(lobby,prefix){
+    var pre=prefix||'';
     var d=lobby.download;if(!d)return null;var v=d.view||{};var p=node('div','panel mp-download '+(v.state==='error'?'warn':v.state==='done'?'ok':''));
-    var workshop=v.source==='workshop';
+    var workshop=v.source==='workshop';var fromFriend=v.source==='friend';
     var head=node('div','mp-download-head');var text=node('div','mp-download-text');
     var title=v.state==='manifest'?'Checking what you need…':v.state==='done'?'Content installed and verified':v.state==='verifying'?'Verifying files…':v.state==='installing'?'Installing…':v.state==='downloading'?(workshop?'Downloading from the Steam Workshop':'Downloading from the host'):v.state==='error'?'Download stopped':v.state==='cancelled'?'Download paused':'Get the content for this lobby';
     add(text,node('strong','',title),node('span','',v.state==='error'?safe(v.error,'Something went wrong.'):v.state==='done'?'You can ready up now.':workshop?'Official Workshop copy, verified against the lobby.':'Sent by the host over Steam’s relay and checked against the lobby’s hashes.'));
-    add(head,text,chip(workshop?'Steam Workshop':'From the host',workshop?'cyan':'mint'));p.appendChild(head);
+    add(head,text,chip(workshop?'Steam Workshop':fromFriend?'From your friend':'From the host',workshop?'cyan':'mint'));p.appendChild(head);
     if(d.conflicts&&d.conflicts.length)p.appendChild(node('p','mp-warn-text','You already have a different “'+safe(d.conflicts[0],'file')+'”. AimMod won’t replace your file. Rename or move it, then download.'));
     var files=node('div','mp-download-files');(v.files||[]).forEach(function(f){add(files,add(node('div','mp-download-file'),node('span','mp-download-kind',f.kind==='scenario'?'Scenario':f.kind==='map'?'Map':f.kind==='ability'?'Ability':f.kind==='weapon'?'Weapon':'Character'),node('span','mp-download-name',safe(f.name,'file')),node('span','mp-muted',mb(f.size))));});
     if((v.files||[]).length&&v.state!=='done')p.appendChild(files);
@@ -470,9 +476,9 @@
       p.appendChild(node('div','mp-progress-text',mb(done)+' of '+mb(total)+(v.speed>0?' · '+mb(v.speed)+'/s':'')+(left?' · '+left+' left':'')));
     }
     var row=null;
-    if(v.state==='ready')row=actions(button('Download'+(v.total?' ('+mb(v.total)+')':''),function(){act('download');},'primary'));
-    else if(v.state==='downloading')row=actions(button('Cancel',function(){act('download-cancel');},'compact quiet'));
-    else if(v.state==='error'||v.state==='cancelled')row=actions(button(v.state==='cancelled'?'Resume':'Retry',function(){act('download-retry');},'primary compact'));
+    if(v.state==='ready')row=actions(button('Download'+(v.total?' ('+mb(v.total)+')':''),function(){act(pre+'download');},'primary'));
+    else if(v.state==='downloading')row=actions(button('Cancel',function(){act(pre+'download-cancel');},'compact quiet'));
+    else if(v.state==='error'||v.state==='cancelled')row=actions(button(v.state==='cancelled'?'Resume':'Retry',function(){act(pre+'download-retry');},'primary compact'));
     if(row&&!(d.conflicts&&d.conflicts.length))p.appendChild(row);
     return p;
   }

@@ -1,7 +1,7 @@
 /* Replay library for the owned Gameface workspace. No gameplay commands. */
 (function (root) {
   'use strict';
-  var container = null, request = null, generation = 0, rows = [], active = false, nativeOpen=false, favoritesOnly=false, query='', message='', busy=false, total=0, pendingStart=null;
+  var container = null, request = null, generation = 0, rows = [], active = false, nativeOpen=false, favoritesOnly=false, clipsOnly=false, query='', message='', busy=false, total=0, pendingStart=null;
   function node(tag, css, text) {
     var el = root.document.createElement(tag);
     if (css) el.className = css;
@@ -77,17 +77,20 @@
     var search=node('input','replay-search');search.type='search';search.value=query;search.setAttribute&&search.setAttribute('aria-label','Find a replay by scenario');
     toolbar.appendChild(root.AimModFormat&&root.AimModFormat.field?root.AimModFormat.field(search,'Find a scenario','replay-search-field'):search);
     // A segmented toggle makes the favorites filter state visible.
-    var scope=node('div','segmented replay-scope'),everything=button('All replays',function(){setFavorites(false);},!favoritesOnly),favorite=button('Favorites',function(){setFavorites(true);},favoritesOnly);
-    function setFavorites(value){favoritesOnly=value;everything.className='button'+(favoritesOnly?'':' primary');favorite.className='button'+(favoritesOnly?' primary':'');everything.setAttribute&&everything.setAttribute('aria-pressed',String(!favoritesOnly));favorite.setAttribute&&favorite.setAttribute('aria-pressed',String(favoritesOnly));draw();}
-    scope.appendChild(everything);scope.appendChild(favorite);toolbar.appendChild(scope);toolbar.appendChild(button('Refresh', refresh));
+    var scope=node('div','segmented replay-scope'),everything=button('All replays',function(){setFavorites(false);},!favoritesOnly&&!clipsOnly),favorite=button('Favorites',function(){setFavorites(true);},favoritesOnly),clipScope=button('Clips',function(){clipsOnly=true;favoritesOnly=false;mark();draw();},clipsOnly);
+    function mark(){everything.className='button'+(favoritesOnly||clipsOnly?'':' primary');favorite.className='button'+(favoritesOnly?' primary':'');clipScope.className='button'+(clipsOnly?' primary':'');everything.setAttribute&&everything.setAttribute('aria-pressed',String(!favoritesOnly&&!clipsOnly));favorite.setAttribute&&favorite.setAttribute('aria-pressed',String(favoritesOnly));clipScope.setAttribute&&clipScope.setAttribute('aria-pressed',String(clipsOnly));}
+    function setFavorites(value){favoritesOnly=value;clipsOnly=false;mark();draw();}
+    scope.appendChild(everything);scope.appendChild(favorite);scope.appendChild(clipScope);toolbar.appendChild(scope);toolbar.appendChild(button('Refresh', refresh));
     var panel = node('div', 'replay-cards');container.appendChild(panel);
     // Search redraws only the cards, so the field keeps focus while typing.
     search.oninput=function(){if(searchTimer)root.clearTimeout(searchTimer);searchTimer=root.setTimeout(function(){searchTimer=null;if(!busy&&query!==search.value){query=search.value;draw();}},150);};
     search.onchange=function(){if(busy)return;if(searchTimer){root.clearTimeout(searchTimer);searchTimer=null;}query=search.value;draw();};
     function draw(){
     while(panel.firstChild)panel.removeChild(panel.firstChild);
-    var shown=rows.filter(function(row){return (!favoritesOnly||row.favorite)&&(!query||(row.scenario||'').toLowerCase().indexOf(query.toLowerCase())>=0);});
-    if(!shown.length){var none=node('div','empty');none.style.width='100%';none.appendChild(node('p','',favoritesOnly&&!query?'No favorite replays yet. Mark a replay as a favorite to keep it here.':'No replays match your filters.'));none.appendChild(button('Clear filters',function(){query='';favoritesOnly=false;list();}));panel.appendChild(none);}
+    // Clips (F8 marks) are saved as <run>-clipN replays.
+    function isClip(row){return /-clip[0-9]+$/.test(row.id||'');}
+    var shown=rows.filter(function(row){return (!favoritesOnly||row.favorite)&&(!clipsOnly||isClip(row))&&(!query||(row.scenario||'').toLowerCase().indexOf(query.toLowerCase())>=0);});
+    if(!shown.length){var none=node('div','empty');none.style.width='100%';none.appendChild(node('p','',clipsOnly&&!query?'No clips yet. Press your clip key (F8 by default) during a recorded run to mark a moment.':favoritesOnly&&!query?'No favorite replays yet. Mark a replay as a favorite to keep it here.':'No replays match your filters.'));none.appendChild(button('Clear filters',function(){query='';favoritesOnly=false;list();}));panel.appendChild(none);}
     shown.forEach(function (row) {
       var card=node('div','replay-card'),group=node('div','replay-card-inner');card.appendChild(group);
       // One primary action: the whole card plays the replay in game.
@@ -96,6 +99,7 @@
       var titleRow = node('div', 'replay-title-row'); if (row.favorite) titleRow.appendChild(node('span', 'replay-fav', 'Favorite')); titleRow.appendChild(node('div', 'replay-title', row.scenario || 'Untitled scenario'));
       var sub = node('div', 'replay-meta', date(row.recordedAt) || 'Date unknown');
       if (row.reason !== 'completed') sub.appendChild(node('span', 'replay-badge', 'Partial run'));
+      if (isClip(row)) sub.appendChild(node('span', 'replay-badge', 'Clip'));
       info.appendChild(titleRow); info.appendChild(sub);
       // Score, length and accuracy appear when the library provides them.
       var facts = [['Score', known(row.score) ? fmt(row.score) : null], ['Accuracy', known(row.accuracy) ? fmt(row.accuracy) + '%' : null], ['Length', known(row.duration) ? Math.round(row.duration) + 's' : null]].filter(function (f) { return f[1] !== null; });
