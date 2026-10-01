@@ -354,12 +354,16 @@ reload finished, or `end-failed` when no reload began within 5 s. Refused
 during a challenge and for any other scenario (`not-a-match`, `not-current`).
 
 `quit-run` (no fields; capability `quit`; any scenario): what the player does
-with pause, then Quit. In a challenge it calls the pause menu's own Quit
-Challenge handler (`PauseBox_C`, `BndEvt__QuitChallenge_..._OnClicked`) on the
-live widget, or `ScenarioManager:CancelChallenge` when that widget or
-function is missing, and again after 2.5 s if the challenge is still running.
-The run is abandoned and no score is submitted. Answered `accepted quitting`,
-then `done quit` once the challenge has ended, or `quit-failed` after 6 s.
+to leave a run. In a challenge it calls `ScenarioManager:CancelChallenge`
+(again after 2.5 s if the challenge is still running), the game's cancel
+path: it ends in the `ChallengeCanceled` broadcast, while the stats CSV and
+leaderboard uploads follow `ChallengeComplete`. The 3.9.11 pause menu shows
+no Quit Challenge button, so its leftover Blueprint handler is not used.
+Answered `accepted quitting`, then `done quit` once the challenge has ended,
+or `quit-failed` after 6 s. For 15 s after a quit, AimModCore audits and logs
+any challenge-complete broadcast, leaderboard upload (UWorks and
+Experiments upload nodes) or new stats CSV for the scenario; none is
+expected.
 Outside a challenge it resets the freeplay session (`Reset_FreeplaySession`)
 and answers `done quit` right away. Overrides and the match seed are reset
 either way, and every step is logged.
