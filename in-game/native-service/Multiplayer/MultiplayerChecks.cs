@@ -515,7 +515,7 @@ static class MultiplayerChecks
         foreach (var bad in new[] { Swap("aimmod.mp", "other"), Swap("\"v\":1", "\"v\":2"), Swap("\"command\"", "\"teleport\""), Swap("\"seq\":7", "\"seq\":-1"), "[]", "{", Swap("\"body\":{", "\"body\":[{").Replace("}}}", "}}]}") })
             Check(Protocol.Decode(Encoding.UTF8.GetBytes(bad)) is null, "Rejected frame: " + bad[..Math.Min(40, bad.Length)]);
         Check(Protocol.Decode(new byte[Protocol.MaxBytes + 1]) is null, "Oversized frames are rejected");
-        Check(!Protocol.Reliable("score") && Protocol.Reliable("snapshot") && Protocol.Reliable("track") && Protocol.Reliable("hit") && Protocol.Types.Length == 20, "Score frames are unreliable; state and tracking samples are reliable");
+        Check(!Protocol.Reliable("score") && Protocol.Reliable("snapshot") && Protocol.Reliable("track") && Protocol.Reliable("hit") && Protocol.Reliable("cosmetic.look") && Protocol.Types.Length == 21, "Score frames are unreliable; state and tracking samples are reliable");
         var sync = new ClockSync();
         sync.Add(0, 1050, 200); sync.Add(1000, 2010, 1020); sync.Add(2000, 3100, 2300);
         Check(sync.Rtt == 20 && sync.Offset == 1000, "Clock sync uses the minimum round-trip sample");
@@ -853,6 +853,7 @@ static class MultiplayerChecks
         service.Dispose();
         Picks(root, library);
         Developer(root, library);
+        Cosmetics(root, library);
     }
 
     static void Follow()
@@ -910,6 +911,53 @@ static class MultiplayerChecks
         Check(SessionMarker.Read(Text(scenario: "AimMod Match - Cata IC Long Strafes - Timed - AB93B242"), now) is null && SessionMarker.Read(Text(scenario: "AimMod Match - Cata - Timed - ab93b24"), now) is null
             && SessionMarker.Read(Text(scenario: "AimMod Match - Cata - Timed - ab93b2421"), now) is null && SessionMarker.Read(Text(scenario: "Cata IC Long Strafes - Timed - ab93b242"), now) is null, "Uppercase, 7- or 9-digit keys and a missing prefix are rejected");
         Check(SessionMarker.Format("match", "AimMod Match - Bad\nmode=match - ab93b242", now) is null && SessionMarker.Format("match", "Cata IC Long Strafes", now) is null && SessionMarker.Format("ranked", name, now) is null, "Nothing is written for control characters, normal scenarios or unknown modes");
+    }
+
+    static void Cosmetics(string root, ContentLibrary library)
+    {
+        var folder = Path.Combine(root, "cosmetics");
+        Directory.CreateDirectory(folder);
+        const string catalog = """
+            {"version":1,"items":[
+              {"id":"meso-tint-ember","version":1,"kind":"avatar_tint","name":"Ember","models":["Meso"],"parts":["body"],"vector":{"PrimaryColor":{"R":0.85,"G":0.22,"B":0.05,"A":1}}},
+              {"id":"weapon-finish-sand","version":2,"kind":"weapon_finish","name":"Sand","parts":["weapon"],"vector":{"PrimaryColor":{"R":0.76,"G":0.66,"B":0.48,"A":1}}},
+              {"id":"meso-tint-draft","version":1,"kind":"avatar_tint","name":"Draft","models":["Meso"],"parts":["body"],"vector":{"PrimaryColor":{"R":1,"G":0,"B":0,"A":1}},"draft":true},
+              {"id":"accessory-halo","version":1,"kind":"accessory","name":"Halo","models":["Meso"],"parts":["body"],"pak":{"file":"AimModCosmetics-1.pak"}},
+              {"id":"bad-kind","version":1,"kind":"rocket","parts":["body"],"models":["Meso"],"vector":{"PrimaryColor":{"R":1,"G":1,"B":1,"A":1}}},
+              {"id":"Bad-Id","version":1,"kind":"avatar_tint","parts":["body"],"models":["Meso"],"vector":{"PrimaryColor":{"R":1,"G":1,"B":1,"A":1}}},
+              {"id":"twice","version":1,"kind":"weapon_finish","parts":["weapon"],"vector":{"PrimaryColor":{"R":1,"G":1,"B":1,"A":1}}},
+              {"id":"twice","version":1,"kind":"weapon_finish","parts":["weapon"],"vector":{"PrimaryColor":{"R":0,"G":0,"B":0,"A":1}}},
+              {"id":"meso-tint-hot","version":1,"kind":"avatar_tint","parts":["body"],"models":["Meso"],"vector":{"PrimaryColor":{"R":2,"G":0,"B":0,"A":1}}}]}
+            """;
+        File.WriteAllText(Path.Combine(folder, CosmeticsCatalog.CatalogFile), catalog);
+        void Manifest(string sha) => File.WriteAllText(Path.Combine(folder, CosmeticsCatalog.ManifestFile), JsonSerializer.Serialize(new { version = 1, files = new[] { new { name = CosmeticsCatalog.CatalogFile, size = new FileInfo(Path.Combine(folder, CosmeticsCatalog.CatalogFile)).Length, sha256 = sha } } }));
+        Manifest("00");
+        Check(!CosmeticsCatalog.Load(folder, null).Available && CosmeticsCatalog.Load(folder, null).Problem == "manifest-mismatch", "A catalog that doesn't match its manifest is not used");
+        Manifest(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(Path.Combine(folder, CosmeticsCatalog.CatalogFile)))));
+        var loaded = CosmeticsCatalog.Load(folder, null);
+        Check(loaded.Available && loaded.Pickable.Select(i => i.Id).OrderBy(x => x).SequenceEqual(["meso-tint-ember", "weapon-finish-sand"]), "Only valid, non-draft items with their paks are pickable; bad kinds, ids, ranges and duplicates are dropped");
+        Check(loaded.Filter([new("meso-tint-ember", 1), new("unknown-item", 1), new("weapon-finish-sand", 1), new("accessory-halo", 1)]).Select(r => r.Id).SequenceEqual(["meso-tint-ember"]), "Shared looks resolve only to the same id and version in the viewer's own catalog");
+        Check(CosmeticLooks.Format([new("meso-tint-ember", 1)], [("76561190000000001", [new CosmeticRef("weapon-finish-sand", 2)]), ("sim-bot", [new CosmeticRef("meso-tint-ember", 1)])])
+            == "v=1\npeer=76561190000000001 items=weapon-finish-sand@2\nself=meso-tint-ember@1\n", "cosmetic-looks.txt has v=1, Steam peers only, and a self line");
+        // Service: equip, view, the looks file with the session marker.
+        long now = 8_000_000;
+        var output = Path.Combine(root, "cos-output"); Directory.CreateDirectory(output);
+        var service = new MultiplayerService(new OfflineTransport(), library, new NoGameControl(), () => new LocalRun(false, null, null, null, null, 0, 0, 0, null), () => [], () => null, output, simulation: true, () => now, autoTick: false) { CosmeticsFolder = folder };
+        Check(service.Act("cosmetic-equip", J(new { id = "meso-tint-ember" })).Ok && !service.Act("cosmetic-equip", J(new { id = "accessory-halo" })).Ok && !service.Act("cosmetic-equip", J(new { id = "unknown-item" })).Ok, "Only pickable catalog items can be equipped");
+        var view = JsonSerializer.SerializeToElement(service.CosmeticsView(), Protocol.Json);
+        Check(view.GetProperty("items").EnumerateArray().Single(i => i.GetProperty("id").GetString() == "meso-tint-ember").GetProperty("equipped").GetBoolean() && view.GetProperty("show").GetString() == "all", "The Cosmetics page shows what's equipped; others' cosmetics default to all");
+        var looksFile = Path.Combine(output, CosmeticLooks.FileName);
+        Check(!File.Exists(looksFile), "No looks file outside an AimMod session");
+        service.Act("create", J(new { mode = "practice", scenario = "Synthetic Plain" }));
+        service.Act("sim", J(new { op = "add" }));
+        for (var i = 0; i < 5; i++) { now += 100; service.Tick(); }
+        var lobby = JsonSerializer.SerializeToElement(service.View(), Protocol.Json).GetProperty("lobby");
+        Check(lobby.GetProperty("members").EnumerateArray().Single(m => m.GetProperty("id").GetString() == service.SelfId).GetProperty("cosmetics")[0].GetProperty("id").GetString() == "meso-tint-ember", "My look is in the lobby snapshot (cosmetic.look)");
+        Check(File.ReadAllText(looksFile) == "v=1\nself=meso-tint-ember@1\n", "The looks file is written with the session marker");
+        Check(service.Act("cosmetic-view", J(new { show = "off" })).Ok && !service.Act("cosmetic-view", J(new { show = "everyone" })).Ok, "Show others' cosmetics: all, friends or off");
+        service.Act("leave", default);
+        Check(!File.Exists(looksFile) && !File.Exists(Path.Combine(output, SessionMarker.FileName)), "The looks file goes with the session marker");
+        service.Dispose();
     }
 
     static void Developer(string root, ContentLibrary library)

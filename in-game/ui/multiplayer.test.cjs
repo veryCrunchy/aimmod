@@ -184,6 +184,14 @@ test('a spectator follows a player or the leader during a live match, and can st
   const sw=JSON.parse(s.requests.filter(r=>r.url==='/private/native-replay').pop().body);assert.equal(sw.label,'Synthetic Two');assert.equal(sw.stream,'pose-p2');assert.equal(sw.scenario,'Synthetic Scenario','same scenario, so the view switches in place');
   s.button('Stop spectating').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'spectate-stop'});
 });
+test('the cosmetics page lists catalog items only, equips by id and sets who to show',()=>{
+  const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view());
+  s.button('Cosmetics').onclick();const ask=s.requests.find(r=>r.url==='/private/multiplayer?part=cosmetics');
+  ask.finish(200,{available:true,problem:null,version:1,show:'all',unavailable:1,items:[{id:'meso-tint-ember',version:1,kind:'avatar_tint',name:'Ember',models:['Meso'],color:[0.85,0.22,0.05],equipped:false},{id:'weapon-finish-sand',version:2,kind:'weapon_finish',name:'Sand',models:[],color:[0.76,0.66,0.48],equipped:true}]});
+  const t=s.text();assert.ok(t.includes('only show in AimMod matches')&&t.includes('Tints and patterns')&&t.includes('Weapon finishes')&&t.includes('1 more need a newer AimMod'));
+  s.button('Equip').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'cosmetic-equip',id:'meso-tint-ember'});
+  s.button('Friends').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'cosmetic-view',show:'friends'});
+});
 test('the map library lists ports with size, Shift and Workshop state, and installs or hosts them',()=>{
   const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view());
   s.button('Map library').onclick();const ask=s.requests.find(r=>r.url==='/private/multiplayer?part=maps');assert.ok(ask,'the library asks for ports');

@@ -270,6 +270,13 @@
 .mp-friend.on{background:#173b2f}
 .mp-h2h{display:flex;flex-direction:row;align-items:center;margin-left:10px;font-size:15px;font-weight:700}
 .mp-h2h .won{color:#27e4a1}.mp-h2h .lost{color:#ff8fa3}.mp-h2h .sep{color:#7f968a;margin:0 5px}
+/* Cosmetics */
+.mp-cos-setting{padding:6px 20px;margin-bottom:16px}
+.mp-cos-group{font-size:14px;font-weight:600;margin:6px 0 10px}
+.mp-cos-cell{width:25%}
+.mp-cos-art{display:block;height:120px;background:#101916;text-align:center}
+.mp-cos-preview{display:block;width:160px;height:120px;margin:0 auto}
+.mp-cos.on{border-color:#2c6b52}
 /* Map library */
 .mp-hero-link{margin-top:18px;padding-top:14px;border-top:1px solid #22302a;font-size:12px;color:#a7bab0;line-height:1.5}
 .mp-hero-link .actions{margin-top:8px}.mp-hero-link .actions>.button{margin:0}
