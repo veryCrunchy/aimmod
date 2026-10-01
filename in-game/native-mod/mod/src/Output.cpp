@@ -233,6 +233,45 @@ namespace aimmod
         m_quitStats.reset();
     }
 
+    Output::RoundStateSnapshot Output::roundState() const
+    {
+        std::lock_guard lock(const_cast<std::mutex&>(m_mutex));
+        return {m_roundState, m_roundStateVersion};
+    }
+
+    void Output::ReadRoundState(std::uint64_t now)
+    {
+        WIN32_FILE_ATTRIBUTE_DATA data{};
+        const auto path = m_root / L"round-state.tsv";
+        std::uint64_t stamp = 0;
+        if (GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &data))
+            stamp = (static_cast<std::uint64_t>(data.ftLastWriteTime.dwHighDateTime) << 32) | data.ftLastWriteTime.dwLowDateTime;
+        FILETIME nowFile{};
+        GetSystemTimeAsFileTime(&nowFile);
+        const std::uint64_t nowStamp = (static_cast<std::uint64_t>(nowFile.dwHighDateTime) << 32) | nowFile.dwLowDateTime;
+        if (stamp == 0 || nowStamp - stamp >= 5ull * 10000000ull)
+        {
+            std::lock_guard lock(m_mutex);
+            if (m_roundState)
+            {
+                m_roundState.reset();
+                ++m_roundStateVersion;
+            }
+            m_roundStateStamp = stamp;
+            return;
+        }
+        m_playStateSeenAt = now; // keeps the writer on its fast cadence
+        if (stamp == m_roundStateStamp) return;
+        std::string text;
+        if (!ReadSmall(path, text, 4097)) return;
+        auto parsed = ParseRoundState(text);
+        std::lock_guard lock(m_mutex);
+        m_roundStateStamp = stamp;
+        if (parsed) m_roundState = std::make_shared<const RoundState>(std::move(*parsed));
+        else m_roundState.reset();
+        ++m_roundStateVersion;
+    }
+
     Output::PlayStateSnapshot Output::playState() const
     {
         std::lock_guard lock(const_cast<std::mutex&>(m_mutex));
@@ -722,6 +761,7 @@ namespace aimmod
         {
             m_lastPlayStateCheck = now;
             ReadPlayState(now);
+            ReadRoundState(now);
         }
         if (force || now - m_lastClipCheck >= 2000)
         {

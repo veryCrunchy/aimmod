@@ -695,6 +695,22 @@ static void MatchPlayChecks()
     const double body[3] = {0, 0, 0};
     CHECK(!IsHeadHit(body, c, 90), "centre is a body hit");
 
+    auto round = ParseRoundState("AIMMOD_ROUND_1\t12\nmatch\tAimMod Match - Arena - 0a1b2c3d\nspawn\tr3-t\t100.5\t-20\t30\t90\n"
+                                 "phase\tfreeze\t1\t1\t1790000005000\nloadout\tAK-47 Rifle\t-\t100\t1\t0\n");
+    CHECK(round && round->sequence == 12 && round->spawn && round->spawn->id == "r3-t" && round->spawn->x == 100.5 && round->spawn->yaw == 90 &&
+              round->phase && round->phase->name == "freeze" && round->phase->frozen && round->phase->buy && round->phase->endsMs == 1790000005000 &&
+              round->loadout && round->loadout->primary == "AK-47 Rifle" && round->loadout->pistol == "-" && round->loadout->helmet && !round->loadout->kit,
+          "round state parses");
+    auto dmRound = ParseRoundState("AIMMOD_ROUND_1\t1\r\nmatch\tAimMod Match - X - 0a1b2c3d\r\nspawn\t7\t0\t0\t0\t0\r\n");
+    CHECK(dmRound && dmRound->spawn && !dmRound->phase && !dmRound->loadout, "deathmatch round state: spawn only");
+    CHECK(!ParseRoundState("AIMMOD_ROUND_1\t1\nspawn\t7\t0\t0\t0\t0\n") && !ParseRoundState("AIMMOD_ROUND_2\t1\nmatch\tA\n") &&
+              !ParseRoundState("AIMMOD_ROUND_1\t1\nmatch\tA\nphase\twarmup\t0\t0\t0\n") &&
+              !ParseRoundState("AIMMOD_ROUND_1\t1\nmatch\tA\nspawn\tbad id\t0\t0\t0\t0\n") &&
+              !ParseRoundState("AIMMOD_ROUND_1\t1\nmatch\tA\nloadout\t\t-\t0\t0\t0\n") &&
+              !ParseRoundState("AIMMOD_ROUND_1\t1\nmatch\tA\nspawn\t1\t0\t0\t0\t0\nspawn\t2\t0\t0\t0\t0\n") &&
+              !ParseRoundState("AIMMOD_ROUND_1\t1\nmatch\tA\nteleport\t0\n"),
+          "malformed round states are rejected whole");
+
     ShotRecord shot{1790000000123, 4, {1, 2, 3}, {1, 0, 0}, 1, 9, true, false};
     CHECK(FormatShot(shot) == "shot\t1790000000123\t4\t1\t2\t3\t1\t0\t0\t1\t9\t1\t0\n", "shot row layout");
 }
