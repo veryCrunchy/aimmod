@@ -28,6 +28,7 @@ static class MultiplayerChecks
         ProtocolFrames();
         Peers();
         SteamPipe();
+        Follow();
         var root = Path.Combine(Path.GetTempPath(), "aimmod-mp-test-" + Guid.NewGuid().ToString("N"));
         try { Content(root); Generator(root); Service(root); Transfers(root); Replays(root); Maps(root); }
         finally { try { Directory.Delete(root, true); } catch (IOException) { } }
@@ -609,6 +610,16 @@ static class MultiplayerChecks
         Check(!service.Act("map-load", J(new { key = mirage.GetProperty("key").GetString() })).Ok && !service.Act("map-install", J(new { key = "nope" })).Ok, "Simulated installs can't be loaded and unknown maps are refused");
         service.Dispose();
         Picks(root, library);
+    }
+
+    static void Follow()
+    {
+        LobbyMember M(string id, bool sim = false) => new(id, id, MemberRoles.Player, true, null, ContentStates.Ok, ContentStates.Ok, ContentStates.None, Connections.Connected, "relay", 1, sim);
+        ScoreLine L(string id, double? score, string status = "playing") => new(id, score, 10, 50, 10, 5, 5, status, false);
+        MatchSnapshot Match(params ScoreLine[] live) => new("m", MatchPhases.Live, LobbyModes.Race, "Synthetic A", 60, 1, null, null, 0, null, null, live.Select(l => l.MemberId).ToArray(), live, [], [], null, []);
+        var members = new[] { M("me"), M("a"), M("b"), M("bot", sim: true) };
+        Check(MultiplayerService.LeaderOf(Match(L("me", 9000), L("a", 4000), L("b", 5000), L("bot", 8000)), members, "me") == "b", "Follow the leader skips yourself and simulated players");
+        Check(MultiplayerService.LeaderOf(Match(L("a", 4000), L("b", 6000, "left")), members, "me") == "a" && MultiplayerService.LeaderOf(Match(L("a", null)), members, "me") is null, "Players who left or have no score yet aren't followed");
     }
 
     static void Picks(string root, ContentLibrary library)

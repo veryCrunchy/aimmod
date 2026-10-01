@@ -241,6 +241,11 @@
 .mp-pick-row .actions{margin-left:4px}.mp-pick-row .actions>.button.mp-fav{margin:0;width:30px;height:30px;padding:0}
 .mp-star{display:block;width:14px;height:14px;margin:0 auto}
 .mp-pick-group{padding:10px 10px 4px;font-size:11px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:#7f968a}
+/* Spectating in a lobby */
+.mp-hud-row.watched .mp-hud-name{color:#66ccff;font-weight:600}
+.mp-spectate .mp-watch-hud{margin:0 20px 6px}
+.mp-spectate .mp-setting{padding:8px 20px;border-top:1px solid #22302a}
+.mp-spectate>.actions{padding:8px 20px 14px}.mp-spectate>.actions>.button{margin:0}
 /* First-run tour */
 .mp-tour{width:600px}
 .mp-tour-top{display:flex;flex-direction:row;align-items:center}
