@@ -818,7 +818,7 @@ static partial class MultiplayerChecks
         public RejoinPoint? LastLobby => null;
         public void SetPresencePrivacy(bool hideScenario) { }
         public bool StartSpectate(string peer, int rate) => false;
-        public void StopSpectate() { }
+        public void StopSpectate() => SpectateLog.Add("stop");
         public bool AllowSpectate;
         public readonly List<string> SpectateLog = [];
         public bool RequestSpectate(string peer) { SpectateLog.Add("request " + peer); return AllowSpectate; }
@@ -927,6 +927,12 @@ static partial class MultiplayerChecks
         Pump();
         Check(View(b).GetProperty("watch").GetProperty("message").GetString()!.Contains("said no"), "An end reason is explained");
         b.Act("watch-stop", default);
+        // Switching to another friend: the bridge replaces the stream; nothing may stop the new one.
+        bt.FriendList = [new("f2", "Watchable Friend", "aimmod", null, null, false, Spectatable: true, Scenario: "Synthetic A"), new("f3", "Other Friend", "aimmod", null, null, false, Spectatable: true, Scenario: "Synthetic A")];
+        b.Act("watch", J(new { friend = "f2" })); bt.SpectateLog.Clear();
+        Check(b.Act("watch", J(new { friend = "f3" })).Ok && bt.SpectateLog.SequenceEqual(["request f3"]) && View(b).GetProperty("watch").GetProperty("peer").GetString() == "f3",
+            "Switching friends asks for the new stream without stopping it right after");
+        b.Act("watch-stop", default); bt.FriendList = null;
         var ct = (MemoryTransport)net.Peers["peer-c"];
         ct.Inbox.Enqueue(new TransportEvent("f9", TransportEvent.SpectatorJoined, Reason: "Synthetic Watcher"));
         ct.Inbox.Enqueue(new TransportEvent("f8", TransportEvent.SpectatorJoined, Reason: "Quiet Sync", Host: true));
