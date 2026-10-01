@@ -285,7 +285,10 @@ static class LifecycleChecks
             await Rejected("downgrade ignored", Feed("0.9.0", Sha256Hex.Of(zipBytes), zipBytes.Length, "https://example.invalid/AimMod-InGame-1.1.0.zip"));
             await Rejected("update needing a newer game is held", Feed("1.1.0", Sha256Hex.Of(zipBytes), zipBytes.Length, "https://example.invalid/AimMod-InGame-1.1.0.zip", minimum: 1001));
             await Rejected("developer installs are not updated", Feed("1.1.0", Sha256Hex.Of(zipBytes), zipBytes.Length, "https://example.invalid/AimMod-InGame-1.1.0.zip"), current: InstallManifest.Parse("{\"files\":[]}"));
-            var signedPackageWrongKey = Zip(Package(Path.Combine(temp, "pkg-wrongkey"), "1.1.0", files2, OtherSeed, mods: ["AimModCore", "AimModNativeUI"]).Root);
+            Publish(Feed("1.1.0", Sha256Hex.Of(zipBytes), zipBytes.Length, "https://example.invalid/AimMod-InGame-1.1.0.zip", channel: "beta"));
+            Check((await updater.Check(new UpdatePreferences(true, "beta"), feedUrl, installed1, 1000, CancellationToken.None)).State == UpdateState.Ready, "stable release offered on the beta channel");
+            updater.ClearStaged();
+            var signedPackageWrongKey =Zip(Package(Path.Combine(temp, "pkg-wrongkey"), "1.1.0", files2, OtherSeed, mods: ["AimModCore", "AimModNativeUI"]).Root);
             handler.Content["https://example.invalid/wrongkey.zip"] = signedPackageWrongKey;
             var wrongManifest = Sha256Hex.Of(File.ReadAllBytes(Path.Combine(temp, "pkg-wrongkey", InstallLayout.PackageManifest)));
             await Rejected("package signed by another key rejected", Feed("1.1.0", Sha256Hex.Of(signedPackageWrongKey), signedPackageWrongKey.Length, "https://example.invalid/wrongkey.zip", manifestSha: wrongManifest));
@@ -308,7 +311,7 @@ static class LifecycleChecks
             var settingsDir = Path.Combine(temp, "settings");
             Directory.CreateDirectory(settingsDir);
             var settings = new UpdateSettings(settingsDir);
-            Check(settings.Current == new UpdatePreferences() && settings.FeedUrl(settings.Current).StartsWith("https://github.com/verycrunchy/aimmod/releases/download/aimmod-ingame-feed/aimmod-ingame-stable.json"), "defaults: on, stable, GitHub feed");
+            Check(settings.Current == new UpdatePreferences() && settings.FeedUrl(settings.Current).StartsWith("https://github.com/verycrunchy/aimmod/releases/download/aimmod-ingame-stable/aimmod-ingame-stable.json"), "defaults: on, stable, GitHub feed");
             Check(settings.ApplyJson("{\"channel\":\"beta\"}"u8.ToArray()) == new UpdatePreferences(true, "beta") && new UpdateSettings(settingsDir).Current.Channel == "beta", "channel saved");
             Check(settings.FeedUrl(settings.Current).EndsWith("aimmod-ingame-beta.json"), "beta feed");
             foreach (var bad in new[] { "{}", "[]", "{\"channel\":\"nightly\"}", "{\"autoUpdate\":1}", "{\"feedUrl\":\"https://x\"}", "{\"autoUpdate\":true,\"autoUpdate\":false}" })

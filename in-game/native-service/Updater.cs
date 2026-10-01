@@ -16,7 +16,7 @@ sealed record UpdatePreferences(
 // %LOCALAPPDATA%\AimMod\KovaaksNative\update-settings.json
 sealed class UpdateSettings
 {
-    public const string DefaultFeed = "https://github.com/verycrunchy/aimmod/releases/download/aimmod-ingame-feed/aimmod-ingame-{channel}.json";
+    public const string DefaultFeed = "https://github.com/verycrunchy/aimmod/releases/download/aimmod-ingame-{channel}/aimmod-ingame-{channel}.json";
     const int Limit = 4096;
     readonly object gate = new();
     readonly string path;
@@ -198,7 +198,8 @@ sealed class Updater(string stateRoot, ReleaseTrust trust, HttpMessageHandler? h
             ExtractVerified(zip, folder, feed.ManifestSha256);
             // Signature, manifest hash and every file are checked again here.
             var package = VerifiedPackage.Open(folder, trust, requireSignature: true, feed.ManifestSha256);
-            if (package.Manifest.Version != feed.Version || package.Manifest.Channel != feed.Channel) throw new ReleaseFormatException("The package version does not match the feed.");
+            // The beta feed also carries stable releases.
+            if (package.Manifest.Version != feed.Version || (package.Manifest.Channel != feed.Channel && package.Manifest.Channel != "stable")) throw new ReleaseFormatException("The package version does not match the feed.");
             var staged = new StagedUpdate(feed.Version, feed.Channel, name, package.ManifestSha256, feed.Notes, DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"));
             AtomicFile.WriteBytes(StagedPointer, JsonSerializer.SerializeToUtf8Bytes(staged), durable: true);
             CleanStaging(keep: name);
