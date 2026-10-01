@@ -210,6 +210,11 @@ test('the cosmetics preview heartbeats only while the page is open, shows the ne
   s.api.leave();
   assert.deepEqual(JSON.parse(previews().at(-1).body),{open:false},'leaving the page (or hiding the workspace) ends the preview');
 });
+test('the cosmetics page says cosmetics are coming soon while the catalog has nothing to pick',()=>{
+  const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view());
+  s.button('Cosmetics').onclick();s.requests.find(r=>r.url==='/private/multiplayer?part=cosmetics').finish(200,{available:true,problem:null,version:1,show:'all',unavailable:0,items:[]});
+  assert.ok(s.text().includes('Cosmetics are coming soon')&&s.text().includes('next AimMod update')&&s.text().includes('Show others’ cosmetics'));
+});
 test('the map library lists ports with size, Shift and Workshop state, and installs or hosts them',()=>{
   const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view());
   s.button('Map library').onclick();const ask=s.requests.find(r=>r.url==='/private/multiplayer?part=maps');assert.ok(ask,'the library asks for ports');

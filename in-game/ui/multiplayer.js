@@ -574,7 +574,9 @@
     var setting=node('div','panel mp-card mp-cos-setting');
     setting.appendChild(settingRow('Show others’ cosmetics','Only applies inside AimMod matches.',segmented([{id:'all',label:'All'},{id:'friends',label:'Friends'},{id:'off',label:'Off'}],d.show||'all',function(id){cosmeticAct('cosmetic-view',{show:id});},false,'show others')));
     page.appendChild(setting);
-    if(!d.available){page.appendChild(add(node('div','panel mp-empty'),node('span','','The cosmetics catalog isn’t installed yet. It ships with AimMod updates.')));return;}
+    // No catalog yet, or only items still being made: say what's coming instead of an empty page.
+    if(!d.available||!(d.items||[]).length){var soon=node('div','panel mp-cos-soon');add(soon,add(node('div','mp-cos-soon-art'),swatch({kind:'avatar_tint',color:[0.15,0.89,0.63]}),swatch({kind:'weapon_finish',color:[0.4,0.8,1]}),swatch({kind:'accessory',color:[0.94,0.71,0.35]})),
+      add(node('div','mp-cos-soon-text'),node('strong','','Cosmetics are coming soon'),node('span','','The first tints, finishes and accessories arrive with the next AimMod update. Everything here is made by the AimMod team.')));page.appendChild(soon);return;}
     COSMETIC_GROUPS.forEach(function(g){
       var list=(d.items||[]).filter(function(i){return g[1].indexOf(i.kind)>=0;});if(!list.length)return;
       page.appendChild(node('h3','mp-cos-group',g[0]));

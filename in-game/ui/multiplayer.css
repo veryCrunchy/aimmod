@@ -334,3 +334,6 @@
 .mp-mode span.mp-mode-pic{flex:none;min-height:0;padding:0;background:#16211d;border:1px solid #30433a;border-bottom:0;border-radius:8px 8px 0 0}
 .mp-mode.on span.mp-mode-pic{background:#123027;border-color:#27e4a1}
 .mp-mode-hero span.mp-mode-pic{border:0;border-radius:0;background:#123027}
+.mp-cos-soon{display:flex;flex-direction:row;align-items:center;padding:18px 22px}
+.mp-cos-soon-art{display:flex;flex-direction:row;flex-shrink:0;margin-right:20px}.mp-cos-soon-art .mp-cos-preview{width:120px;height:90px;margin:0 6px 0 0;border-radius:8px}
+.mp-cos-soon-text{flex:1;min-width:0}.mp-cos-soon-text strong{display:block;font-size:17px;font-weight:600;color:#27e4a1;margin-bottom:4px}.mp-cos-soon-text span{display:block;font-size:13px;line-height:1.5;color:#dcebe3}
