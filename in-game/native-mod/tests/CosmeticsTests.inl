@@ -370,6 +370,14 @@ namespace cosmetics_checks
         CHECK(plan.head && plan.head->id == "ring" && plan.neck && plan.neck->id == "collar" && plan.skipped.empty(), "one head and one neck accessory");
     }
 
+    void HeadChecks()
+    {
+        const HeadPoints h = HeadGeometry(100, 180, 22);
+        CHECK(h.valid && Near(h.top, 280) && Near(h.centre, 269) && Near(h.chin, 258) && Near(h.scale, 1), "head anchors from the model's height and head diameter");
+        CHECK(Near(HeadGeometry(0, 180, 33).scale, 1.5) && Near(HeadGeometry(0, 180, 60).scale, 1.6) && Near(HeadGeometry(0, 180, 8).scale, 0.6), "head scale is clamped");
+        CHECK(!HeadGeometry(0, 0, 22).valid && !HeadGeometry(0, 180, 0).valid && !HeadGeometry(0, 1e9, 22).valid, "implausible model data is no head");
+    }
+
     void ColourChecks()
     {
         std::string error;
@@ -428,6 +436,7 @@ namespace cosmetics_checks
         LooksChecks();
         AccessoryChecks();
         ColourChecks();
+        HeadChecks();
         PlanChecks();
     }
 } // namespace cosmetics_checks
