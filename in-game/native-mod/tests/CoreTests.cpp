@@ -873,6 +873,11 @@ static void PreviewChecks()
     CHECK(!ParsePreviewRequest(many, now), "at most 8 scalars");
     CHECK(!ParsePreviewRequest(std::string(MaxPreviewRequestBytes + 1, 'x'), now), "oversized request");
     auto worn = ParsePreviewRequest("v=1\nexpires=1790000005\nseq=1\nmodel=Meso\naccessory=accessory-halo\naccessory=accessory-collar\n", now);
+    auto weapon = ParsePreviewRequest("v=1\nexpires=1790000005\nseq=1\nmodel=Meso\nfinish=finish-gold\nview=weapon\n", now);
+    CHECK(weapon && weapon->weaponView && weapon->finish == "finish-gold" && other && weapon->LookKey() != other->LookKey() && !other->weaponView, "weapon view and finish parse");
+    CHECK(!ParsePreviewRequest("v=1\nexpires=1790000005\nseq=1\nmodel=Meso\nview=arms\n", now) &&
+              !ParsePreviewRequest("v=1\nexpires=1790000005\nseq=1\nmodel=Meso\nfinish=a\nfinish=b\n", now),
+          "unknown views and two finishes are rejected");
     CHECK(worn && worn->accessories.size() == 2 && worn->accessories[1] == "accessory-collar" && worn->LookKey() != other->LookKey(), "accessories parse and change the look");
     for (const char* text : {"v=1\nexpires=1790000005\nseq=1\nmodel=Meso\naccessory=../halo\n", "v=1\nexpires=1790000005\nseq=1\nmodel=Meso\naccessory=Halo\n",
                              "v=1\nexpires=1790000005\nseq=1\nmodel=Meso\naccessory=a\naccessory=b\naccessory=c\naccessory=d\n"})

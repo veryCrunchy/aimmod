@@ -25,15 +25,22 @@ static partial class CosmeticPreviewFormat
     static string N(double v) => v.ToString("0.####", CultureInfo.InvariantCulture);
 
     // The request body without the expiry (that is what "changed" compares).
-    public static string? Body(string model, string? skin, double yaw, IEnumerable<CosmeticItem> items)
+    public static string? Body(string model, string? skin, double yaw, IEnumerable<CosmeticItem> items, bool weaponView = false)
     {
         if (!LookName().IsMatch(model) || (skin is { Length: > 0 } && !LookName().IsMatch(skin)) || !double.IsFinite(yaw)) return null;
         yaw = Math.Clamp(yaw, -180, 180);
         var vectors = new Dictionary<string, double[]>(StringComparer.Ordinal);
         var scalars = new Dictionary<string, double>(StringComparer.Ordinal);
         var accessories = new List<string>();
+        string? finish = null;
         foreach (var item in items)
         {
+            // A weapon finish is shown on the weapon view's weapon, by id.
+            if (item.Kind == "weapon_finish")
+            {
+                if (finish is null && CosmeticsCatalog.ValidId(item.Id)) finish = item.Id;
+                continue;
+            }
             // Accessories are worn by id (AimModCore resolves them in its own catalog); their colours are their own.
             if (item.Kind == "accessory")
             {
@@ -52,6 +59,8 @@ static partial class CosmeticPreviewFormat
         foreach (var (name, v) in vectors.Take(MaxParams)) text.Append("vector=").Append(name).Append(':').Append(string.Join(',', v.Select(N))).Append('\n');
         foreach (var (name, v) in scalars.Take(MaxParams)) text.Append("scalar=").Append(name).Append(':').Append(N(v)).Append('\n');
         foreach (var id in accessories) text.Append("accessory=").Append(id).Append('\n');
+        if (finish is not null) text.Append("finish=").Append(finish).Append('\n');
+        if (weaponView) text.Append("view=weapon\n");
         return text.ToString();
     }
     public static string Request(string body, long seq, long now) => $"v=1\nexpires={now + Lifetime}\nseq={seq}\n" + body;
@@ -77,7 +86,7 @@ sealed partial class MultiplayerService
 
     string? PreviewPath(string name) => outputFolder is null ? null : Path.Combine(outputFolder, name);
 
-    // Body: {open: bool, yaw: number, item?: id to try on before equipping}.
+    // Body: {open: bool, yaw: number, item?: id to try on before equipping, view?: "character" | "weapon"}.
     object CosmeticPreview(JsonElement args)
     {
         lock (gate)
@@ -92,8 +101,13 @@ sealed partial class MultiplayerService
             var ids = OwnLook().Select(r => r.Id).ToList();
             if (args.TryGetProperty("item", out var t) && t.ValueKind == JsonValueKind.String && CosmeticsCatalog.ValidId(t.GetString())) ids.Add(t.GetString()!);
             var items = ids.Select(id => catalog.Pickable.FirstOrDefault(i => i.Id == id))
-                .OfType<CosmeticItem>().Where(i => i.Pak is null && i.Parts.Contains("body") && i.Models.Contains(look.Model)).ToList();
-            var body = CosmeticPreviewFormat.Body(look.Model, look.Skin, yaw, items);
+                .OfType<CosmeticItem>().Where(i => i.Pak is null && ((i.Parts.Contains("body") && i.Models.Contains(look.Model)) || i.Kind == "weapon_finish")).ToList();
+            // The weapon view on request ({view: "weapon"}), or when a weapon finish is being tried on.
+            var tried = args.TryGetProperty("item", out var ti) && ti.ValueKind == JsonValueKind.String ? catalog.Pickable.FirstOrDefault(i => i.Id == ti.GetString()) : null;
+            var weaponView = (args.TryGetProperty("view", out var vw) && vw.ValueKind == JsonValueKind.String && vw.GetString() == "weapon") || tried?.Kind == "weapon_finish";
+            // A tried-on finish wins over the equipped one.
+            if (tried?.Kind == "weapon_finish") items = items.Where(i => i.Kind != "weapon_finish" || i.Id == tried.Id).OrderBy(i => i.Id == tried.Id ? 0 : 1).ToList();
+            var body = CosmeticPreviewFormat.Body(look.Model, look.Skin, yaw, items, weaponView);
             if (body is null || PreviewPath(CosmeticPreviewFormat.RequestFile) is not { } path) return new { frame = 0L };
             if (body != previewBody) { previewBody = body; previewSeq++; }
             try { AtomicFile.WriteText(path, CosmeticPreviewFormat.Request(body, previewSeq, DateTimeOffset.UtcNow.ToUnixTimeSeconds())); }

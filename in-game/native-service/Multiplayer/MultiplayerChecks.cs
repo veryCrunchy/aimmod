@@ -1356,6 +1356,12 @@ static partial class MultiplayerChecks
             "Game-mesh accessories need no pak, only from the curated folders, with a head, neck or back slot");
         Check(CosmeticPreviewFormat.Body("Meso", "McCree", 0, [mint, halo]) is { } worn && worn.Contains("accessory=ring-halo\n") && worn.Contains("vector=MetalPaint:0.02,0.6,0.3,1\n") && !worn.Contains("0.9,0.7,0.2"),
             "Preview wears accessories by id; their colours never mix into the tint");
+        var sand = loaded.Pickable.First(i => i.Id == "weapon-finish-sand");
+        Check(CosmeticPreviewFormat.Body("Meso", null, 0, [mint, sand], weaponView: true) is { } gun && gun.Contains("finish=weapon-finish-sand\n") && gun.EndsWith("view=weapon\n", StringComparison.Ordinal) && !gun.Contains("0.76,0.66"),
+            "The weapon view carries the finish by id");
+        Check(AvatarProfiles.All.Select(a => a.Id).Distinct().Count() == AvatarProfiles.All.Length && AvatarProfiles.All.All(a => CosmeticPreviewFormat.Body(a.Model, a.Skin, 0, []) is not null)
+              && AvatarProfiles.All.Any(a => a.Model == "Meso" && a.Skin == "Default") && AvatarProfiles.All.Count(a => a.Model == "Meso") == 5,
+            "Every offered look is a Default-pack model and skin the preview can render");
         Check(loaded.Pickable.First(i => i.Id == "weapon-finish-sand").Swatch.Count == 1 && loaded.Pickable.First(i => i.Id == "meso-tint-ember").Swatch.Count == 1, "Single-colour items get one swatch colour");
         Check(CosmeticPreviewFormat.Body("../Meso", null, 0, []) is null && CosmeticPreviewFormat.Body("Meso", "C:/me.png", 0, []) is null, "Preview names are look names, never paths");
         Check(CosmeticPreviewFormat.Body("Meso", null, 999, [])!.Contains("yaw=180\n"), "Preview rotation is clamped");

@@ -12,6 +12,9 @@
 //   vector=<Param>:r,g,b,a           up to 8, each 0..1 (resolved catalog items)
 //   scalar=<Param>:value             up to 8, -10..10
 //   accessory=<catalog item id>      up to 3, worn accessories (resolved by AimModCore)
+//   finish=<catalog item id>         optional weapon finish (resolved by AimModCore)
+//   view=character|weapon            optional, default character: the weapon view
+//                                    shows the selected weapon alone
 // AimModCore renders the preview only while a fresh request exists and the
 // game is not in a challenge, benchmark, the scenario editor or loading, and
 // answers with cosmetics-preview-frame.txt naming the newest PNG.
@@ -38,6 +41,8 @@ namespace aimmod
         double yaw{};
         std::vector<PreviewParam> vectors, scalars;
         std::vector<std::string> accessories; // catalog item ids
+        std::string finish;                   // weapon finish item id
+        bool weaponView{};
         // Everything but the rotation: a change re-applies the look.
         std::string LookKey() const;
     };

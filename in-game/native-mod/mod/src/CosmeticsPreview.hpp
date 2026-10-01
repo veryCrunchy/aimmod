@@ -15,6 +15,7 @@
 // Nothing else in the world is touched; the stage is destroyed as soon as the
 // request goes stale or the gate closes.
 #include "GameBindings.hpp"
+#include "MaterialParams.hpp"
 
 #include <aimmod/CosmeticsPreview.hpp>
 
@@ -52,7 +53,9 @@ namespace aimmod
         void Teardown(const char* why);
         void ApplyLook(const PreviewRequest& request);
         void ApplyRotation(double yaw);
-        void Frame();
+        void Frame(UObject* target);
+        void ShowWeapon(const PreviewRequest& request);
+        void RemoveWeapon();
         bool Capture();
         bool CaptureTo(std::uint8_t source, const std::wstring& file);
         void WearAccessories(const PreviewRequest& request);
@@ -78,6 +81,8 @@ namespace aimmod
         RC::Unreal::FWeakObjectPtr m_stage, m_target, m_capture, m_meshes, m_mesh;
         std::vector<RC::Unreal::FWeakObjectPtr> m_lights;      // key, fill, rim
         std::vector<RC::Unreal::FWeakObjectPtr> m_accessories; // worn on the stage
+        RC::Unreal::FWeakObjectPtr m_weapon;                   // the weapon view's mesh
+        MaterialParams m_params;
         UObject* m_world{};
         double m_baseYaw{};
         float m_cameraHome[3]{}; // the stage camera's own position: its front view

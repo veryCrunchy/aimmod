@@ -19,6 +19,11 @@ namespace aimmod
                 if (!alpha(c) && !(c >= '0' && c <= '9') && c != '_') return false;
             return true;
         }
+        bool IsItemIdText(std::string_view v)
+        {
+            return !v.empty() && v.size() <= 48 && v[0] != '-' &&
+                   std::all_of(v.begin(), v.end(), [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-'; });
+        }
         bool Number(std::string_view s, double& out)
         {
             if (s.empty() || s.size() > 32) return false;
@@ -67,6 +72,7 @@ namespace aimmod
             key += "|" + s.name + buffer;
         }
         for (const auto& a : accessories) key += "|a:" + a;
+        key += "|f:" + finish + (weaponView ? "|weapon" : "");
         return key;
     }
 
@@ -78,7 +84,7 @@ namespace aimmod
         };
         if (text.empty() || text.size() > MaxPreviewRequestBytes) return bad("size");
         PreviewRequest r;
-        bool version = false, expires = false, seq = false, model = false, skin = false, yaw = false;
+        bool version = false, expires = false, seq = false, model = false, skin = false, yaw = false, finish = false, view = false;
         while (!text.empty())
         {
             auto nl = text.find('\n');
@@ -132,10 +138,18 @@ namespace aimmod
             }
             else if (key == "accessory")
             {
-                const bool id = !value.empty() && value.size() <= 48 && value[0] != '-' &&
-                                std::all_of(value.begin(), value.end(), [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-'; });
-                if (r.accessories.size() >= MaxPreviewAccessories || !id) return bad("accessory");
+                if (r.accessories.size() >= MaxPreviewAccessories || !IsItemIdText(value)) return bad("accessory");
                 r.accessories.emplace_back(value);
+            }
+            else if (key == "finish")
+            {
+                if (!once(finish) || !IsItemIdText(value)) return bad("finish");
+                r.finish = std::string(value);
+            }
+            else if (key == "view")
+            {
+                if (!once(view) || (value != "character" && value != "weapon")) return bad("view");
+                r.weaponView = value == "weapon";
             }
             else if (key == "scalar")
             {

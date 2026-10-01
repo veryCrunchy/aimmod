@@ -2047,7 +2047,7 @@ sealed partial class MultiplayerService : IDisposable
                 watch = WatchView(),
                 watchers = watchers.Select(w => new { peer = w.Peer, name = w.Name }),
                 watchAsks = watchAsks.Select(a => new { peer = a.Peer, name = a.Name }),
-                avatars = AvatarProfiles.All.Select(a => new { a.Id, a.Label }),
+                avatars = AvatarProfiles.All.Select(a => new { a.Id, a.Label, a.Model, a.Skin }),
                 capabilities = new { invite = transport.Available, friends = friendsSource != "unavailable", gameLoad = caps.Contains("load"), gameStart = caps.Contains("start") },
                 self = new { id = SelfId, name = LocalName() },
                 joining = (hostPeer is not null && mirror is null) || joinPendingSince is not null ? new { since = joinPendingSince ?? connectAt, stage = hostPeer is null ? "lobby" : "host" } : null,
