@@ -122,6 +122,11 @@ static class CoreFormatChecks
             var frame = LivePoseFrame.Parse(File.ReadAllText(posePath));
             Check(frame is { Poses.Count: 10, Targets.Count: 1, Scenario: "Synthetic target test" }, "pose stream parsed");
             Check(LivePoseFrame.Parse("AIMMOD_POSE_1\t1\npose\t5\t0\t0\t0\t0\t0\t0\t90\npose\t4\t0\t0\t0\t0\t0\t0\t90\n") is null, "pose times must increase");
+            var duel = LivePoseFrame.Parse("AIMMOD_POSE_1\t2\tsender\npose\t5\t0\t0\t0\t0\t0\t0\t90\ntarget\t3\t100\t0\t0\t40\t90\ntag\t3\t76561190000000001\n"
+                + "self\t5\t10\t20\t30\t35\t88\t1\nfire\t5\t42\t1\nfuture\tanything\n");
+            Check(duel is { Self: [5, 10, 20, 30, 35, 88, 1], Fire: [5, 42, 1] } && duel.Tags[3] == "76561190000000001", "avatar tags, own body and firing parsed; unknown rows ignored");
+            Check(LivePoseFrame.Parse("AIMMOD_POSE_1\t2\npose\t5\t0\t0\t0\t0\t0\t0\t90\nself\t5\t1\t2\t3\t40\t30\t0\n") is null
+                && LivePoseFrame.Parse("AIMMOD_POSE_1\t2\npose\t5\t0\t0\t0\t0\t0\t0\t90\nfire\t5\t-1\t0\n") is null, "malformed optional rows rejected");
             var spectate = new NativeReplayPlayback(root, () => true, () => 6);
             var feed = new LivePoseFeed(posePath);
             Check(feed.Update(), "live feed reads the stream");

@@ -90,6 +90,9 @@ namespace aimmod
         int m_freeplayProbes{};
         std::uint64_t m_poseSequence{};
         std::unordered_map<std::uint64_t, std::uint32_t> m_poseIds;
+        std::unordered_map<std::uint32_t, std::string> m_poseNames; // target id -> actor name
+        std::optional<double> m_poseShots;
+        game::Field m_crouched;
         std::uint32_t m_nextPoseId{};
         std::vector<std::pair<std::int64_t, std::array<double, 7>>> m_poses;
         void PollClipKey();

@@ -189,6 +189,12 @@ namespace aimmod
         m_selfPoseDirty = true;
     }
 
+    std::shared_ptr<const std::unordered_map<std::string, std::string>> Output::avatars() const
+    {
+        std::lock_guard lock(const_cast<std::mutex&>(m_mutex));
+        return m_avatars;
+    }
+
     ClipSettings Output::clipSettings() const
     {
         std::lock_guard lock(const_cast<std::mutex&>(m_mutex));
@@ -482,6 +488,36 @@ namespace aimmod
                 requested = !error && std::chrono::system_clock::now() - written < std::chrono::seconds(5);
             }
             if (m_poseRequested.exchange(requested) && !requested) DeleteFileW((m_root / L"self-pose.tsv").c_str());
+            // AIMMOD_AVATARS_1 / <actor name>\t<stream id>: which drawn hull is which player.
+            std::string text;
+            if (requested && ReadSmall(m_root / L"avatars.tsv", text, 16384) && text != m_avatarText)
+            {
+                m_avatarText = text;
+                auto map = std::make_shared<std::unordered_map<std::string, std::string>>();
+                std::size_t at = 0;
+                bool header = true;
+                while (at < text.size())
+                {
+                    auto end = text.find('\n', at);
+                    std::string line = text.substr(at, end == std::string::npos ? std::string::npos : end - at);
+                    at = end == std::string::npos ? text.size() : end + 1;
+                    if (!line.empty() && line.back() == '\r') line.pop_back();
+                    if (header)
+                    {
+                        header = false;
+                        if (line != "AIMMOD_AVATARS_1") break;
+                        continue;
+                    }
+                    auto tab = line.find('\t');
+                    if (tab == std::string::npos || tab == 0 || map->size() >= 64) continue;
+                    std::string stream = line.substr(tab + 1);
+                    bool ok = !stream.empty() && stream.size() <= 64;
+                    for (char ch : stream) ok &= std::isalnum(static_cast<unsigned char>(ch)) || ch == '-' || ch == '_';
+                    if (ok) (*map)[line.substr(0, tab)] = stream;
+                }
+                std::lock_guard lock(m_mutex);
+                m_avatars = std::move(map);
+            }
         }
         {
             std::string pose;

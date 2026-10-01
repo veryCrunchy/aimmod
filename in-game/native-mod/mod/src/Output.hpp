@@ -46,6 +46,10 @@ namespace aimmod
         // self-pose.tsv: the local view for spectators, only while requested
         // (self-pose.request touched within the last 5 s).
         bool poseRequested() const { return m_poseRequested.load(std::memory_order_relaxed); }
+        // avatars.tsv (multiplayer bridge): actor name -> stream id of the
+        // player that actor represents, for `tag` rows. Returns an empty map
+        // when absent.
+        std::shared_ptr<const std::unordered_map<std::string, std::string>> avatars() const;
         void PublishSelfPose(std::string body);
         // Clip hotkey and window (clip-settings.tsv, defaults F8 / 8 s / 2 s).
         ClipSettings clipSettings() const;
@@ -116,6 +120,8 @@ namespace aimmod
         std::string m_selfPose;
         bool m_selfPoseDirty{};
         std::uint64_t m_lastPoseCheck{}, m_lastClipCheck{};
+        std::shared_ptr<const std::unordered_map<std::string, std::string>> m_avatars = std::make_shared<std::unordered_map<std::string, std::string>>();
+        std::string m_avatarText;
 
         // Writer-thread state.
         std::string m_lastLive, m_writtenCaps;
