@@ -234,10 +234,18 @@ KovaaK's bundled "Counter-Striker" profile uses roughly the same scale (MaxSpeed
 Every conversion runs these checks; a failure makes `map-port` exit with code 3 (use
 `--allow-check-fail` to accept the output anyway). The results are in the report under `checks`.
 
-- **Walk graph:** player-hull-sized samples every 32 units on walkable faces. Edges use the
-  preset's step and jump height, drops of up to 300 units, and jump pads / teleporters. Every spawn
-  must be able to walk to at least half of its own team; walled-off teams (awp maps) are allowed and
-  reported as `teams_connected`.
+- **Walk graph:**
+  - Samples every 32 units on walkable faces, each with room for a crouched player hull. The
+    outside of the skybox shell is not walkable.
+  - Edges use the preset's step and jump height and drops of up to 300 units. A vertical sweep at
+    the lower spot stops drops through floors and jumps through ceilings.
+  - Running jumps reach up to 128 units (224 for strafe-jumping presets) over a clear arc.
+  - Jump pads and teleporters also add edges.
+- **Spawns:** every spawn must walk to at least half of its own team. Walled-off teams (awp maps)
+  are allowed and reported as `teams_connected`. One cut-off spawn is reported (the walk graph can
+  miss a precise jump); two or more fail the run.
+- **Hurt volumes:** `trigger_hurt` (Source, GoldSrc, Quake 3) becomes a Hurt volume; 100+ damage
+  kills.
 - **Spawns** need ground under them.
 - **Stuck spots:** walk-graph spots you can reach but never leave again (no way back to any spawn),
   outside water. They fail the run when there are more than 8, or more than 2 % of the reachable

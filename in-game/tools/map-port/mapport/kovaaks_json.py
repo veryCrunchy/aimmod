@@ -181,8 +181,10 @@ def _volume_object(go: dict, unit: float) -> dict:
         props += [{"name": "WaveSpeed", "value": 1.0}, {"name": "WaveHeight", "value": 1.0}]
         name = "Water"
     else:
-        lava = go.get("liquid") == "lava"
-        props = [{"name": "Kill", "value": lava}, {"name": "Damage", "value": 100.0 if lava else 10.0},
+        dmg = go.get("damage")
+        kill = go.get("liquid") == "lava" or (dmg is not None and dmg >= 100)
+        props = [{"name": "Kill", "value": kill},
+                 {"name": "Damage", "value": float(dmg if dmg is not None else (100.0 if kill else 10.0))},
                  {"name": "Cooldown", "value": 1.0}]
         name = "Hurt"
     return {"location": _f(to_ue(go["origin"], unit), 3), "name": name, "properties": props,

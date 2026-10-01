@@ -129,6 +129,13 @@ def _patch_level(ctrl) -> int:
     return max(2, min(6, int(math.ceil(worst / 16.0)) + 1))
 
 
+def _float(s, default: float) -> float:
+    try:
+        return float(s)
+    except (TypeError, ValueError):
+        return default
+
+
 def _vec(s: str) -> Vec:
     try:
         x, y, z = (float(v) for v in s.split()[:3])
@@ -181,6 +188,10 @@ def load(data: bytes, name: str, patch_thickness: float = PATCH_THICKNESS) -> sc
             pts_all += [p for poly in polys if poly for p in poly]
             if cls.lower() in objectives.VOLUME_CLASSES:
                 sc.volumes.append((ent, [p for poly in polys if poly for p in poly]))
+            if cls.lower() == "trigger_hurt":
+                scene.add_liquid(sc, "hurt", [p for poly in polys if poly for p in poly],
+                                 damage=_float(ent.get("dmg"), 5.0))
+                continue
             if bcont & (C_WATER | C_SLIME | C_LAVA) and not bcont & C_SOLID:
                 liquid = "lava" if bcont & C_LAVA else "slime" if bcont & C_SLIME else "water"
                 scene.add_liquid(sc, liquid, [p for poly in polys if poly for p in poly])

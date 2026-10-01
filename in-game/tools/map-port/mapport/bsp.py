@@ -235,6 +235,17 @@ def load(data: bytes, name: str, disp_step: int = 1, disp_thickness: float = 8.0
                     ang = _vec(ent.get("angles", ""))
                     pts = [geometry.add(geometry.rotate_zyx(q, *ang), org) for q in pts]
                 sc.volumes.append((ent, pts))
+        if cls.lower() == "trigger_hurt":
+            pts = [q for poly in geometry.brush_faces(planes) if poly for q in poly]
+            if mi:
+                org = _vec(ent.get("origin", ""))
+                pts = [geometry.add(q, org) for q in pts]
+            try:
+                dmg = float(ent.get("damage", "10") or 10)
+            except ValueError:
+                dmg = 10.0
+            scene.add_liquid(sc, "hurt", pts, damage=dmg)
+            continue
         if contents & (classify.CONTENTS_WATER | classify.CONTENTS_SLIME) and not contents & classify.CONTENTS_SOLID:
             liquid = "slime" if contents & classify.CONTENTS_SLIME else "water"
             pts = [q for poly in geometry.brush_faces(planes) if poly for q in poly]

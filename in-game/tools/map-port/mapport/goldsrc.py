@@ -237,6 +237,13 @@ def load(data: bytes, name: str, folder: str = "") -> scene.Scene:
             if contents in LIQUIDS:
                 scene.add_liquid(sc, LIQUIDS[contents], [p for f in faces for p in f.polygon])
                 continue
+            if cls.lower() == "trigger_hurt":
+                try:
+                    dmg = float(ent.get("dmg", "10") or 10)
+                except ValueError:
+                    dmg = 10.0
+                scene.add_liquid(sc, "hurt", [p for f in faces for p in f.polygon], damage=dmg)
+                continue
             if cls.lower() == "func_water":
                 scene.add_liquid(sc, "water", [p for f in faces for p in f.polygon])
                 continue

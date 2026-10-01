@@ -66,7 +66,7 @@ def convert_file(path: str, out: str, args) -> dict:
     display = args.display_name or naming.display_name(mapid)
     sce_name = naming.scenario_name(display, game, variant)
     base = naming.file_id(mapid, game)
-    spawns.configure(mv.hull_radius, mv.hull_height)
+    spawns.configure(mv.hull_radius, mv.hull_height, mv.crouch_height)
     if not args.keep_skybox:
         cleanup.remove_3d_skybox(sc)
         cleanup.remove_detached(sc)
@@ -122,7 +122,9 @@ def convert_file(path: str, out: str, args) -> dict:
             fh.write(preview.render(sc, slots, tex_slot))
         report["files"]["preview_check"] = os.path.relpath(pp, out)
         report["files"].setdefault("preview", report["files"]["preview_check"])
-    result = checks.run(sc, slots, tex_slot, jump_up=mv.jump_height * 0.95)
+    # strafe-jumping presets cover longer gaps than CS's capped air speed
+    result = checks.run(sc, slots, tex_slot, jump_up=mv.jump_height * 0.95,
+                        gap_cells=checks.GAP_CELLS if mv.clamp_air_speed else checks.GAP_CELLS + 3)
     reached = result.pop("_reached")
     report["checks"] = result
     if not args.no_thumbnail:
