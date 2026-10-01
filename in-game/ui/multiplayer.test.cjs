@@ -264,6 +264,22 @@ test('the map library lists ports with size, Shift and Workshop state, and insta
   s.button('Update').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'map-install',key:'aaaaaaaaaaaa'});
   s.button('Host a lobby').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'create',mode:'practice',scenario:'AimMod - Dust2 (CSGO) - CS Movement'});
 });
+test('mode cards show the line icon in a panel, mint when selected, and every mode ships its icons',()=>{
+  const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view());
+  const card=label=>s.all().find(e=>e.tag==='button'&&/^mp-mode( |$)/.test(e.className)&&e.children.some(c=>c.tag==='strong'&&c.textContent===label));
+  card('Score duel').onclick();
+  const icon=label=>card(label).getElementsByTagName('img').find(e=>e.className==='mp-mode-icon');
+  assert.equal(icon('Score duel').src,'art/modes/duel-on@2x.png');assert.equal(icon('Free-for-all').src,'art/modes/ffa-rounds@2x.png');
+  assert.equal(card('Score duel').getElementsByTagName('canvas').length,0,'no canvas art on the cards');
+  const dir=path.join(__dirname,'art','modes');
+  const ids=fs.readFileSync(path.join(__dirname,'multiplayer.js'),'utf8').match(/MODE_ICONS=\[([^\]]+)\]/)[1].match(/[a-z-]+/g);
+  assert.equal(ids.length,10);
+  for(const id of ids){
+    assert.match(fs.readFileSync(path.join(dir,id+'.svg'),'utf8'),/viewBox="0 0 48 48"[^>]*stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/,id+' is a 48 px line icon');
+    for(const f of [id+'@2x.png',id+'@3x.png',id+'-on@2x.png',id+'-on@3x.png'])assert.ok(fs.statSync(path.join(dir,'png',f)).size>200,f+' is built');
+  }
+  assert.match(fs.readFileSync(path.join(__dirname,'..','native-service','AimMod.InGame.csproj'),'utf8'),/ui\/art\/modes\/png\/\*\.png" LogicalName="AimMod\.ModeIcon\./,'the PNGs are embedded');
+});
 test('leaving stops polling and ignores late answers',()=>{
   const s=setup();s.api.enter(s.container);s.api.leave();s.requests[0].finish(200,view());assert.equal(s.buttons().length,0);
 });

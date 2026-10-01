@@ -20,36 +20,15 @@
     {id:'cs',label:'CS competitive',short:'CS',text:'3v3 to 5v5. Buy, plant and defuse; halves and sides like CS2.',group:'pvp',detail:'3v3 to 5v5 · CS2 economy · plant and defuse'}
   ];
   var MODE_GROUPS=[{id:'score',label:'Score modes',text:'Play the scenario’s targets and compare scores.'},{id:'pvp',label:'PvP modes',text:'Fight each other in an arena. No targets.'}];
-  // Card art, drawn on canvas (solid colours only): mint when selected, green-grey otherwise.
+  // Card art: the mode's line icon (ui/art/modes, rasterised by tools/mode-icons) centred in a
+  // subtle panel. Mint when selected, green-grey otherwise; 44 px on cards, 96 px on the hero.
+  var MODE_ICONS=['score-race','duel','ffa-rounds','practice','tracking-duel','deathmatch','vampiric','instagib','team-deathmatch','cs'];
   function modeArt(id,on,big){
-    var w=big?240:160,h=big?90:56,c=node('canvas','mp-mode-art');c.width=w*2;c.height=h*2;c.setAttribute('aria-hidden','true');
-    var x=c.getContext&&c.getContext('2d');if(!x)return c;x.scale(2,2);
-    var bg=on?'#123027':'#16211d',ink=on?'#27e4a1':'#7f968a',soft=on?'#1f5a45':'#2a3a33',alt=on?'#66ccff':'#a7bab0',hot=on?'#ff8fa3':'#8e7a7f';
-    x.fillStyle=bg;x.fillRect(0,0,w,h);var u=h/56,cx=w/2;
-    function circle(px,py,r,fill){x.beginPath();x.arc(px,py,r*u,0,Math.PI*2);if(fill){x.fillStyle=fill;x.fill();}else x.stroke();}
-    function line(a){x.beginPath();for(var i=0;i<a.length;i++){if(i)x.lineTo(a[i][0],a[i][1]);else x.moveTo(a[i][0],a[i][1]);}x.stroke();}
-    function cross(px,py,r,col){x.strokeStyle=col;x.lineWidth=1.6*u;circle(px,py,r);line([[px-r*u*1.5,py],[px-r*u*0.45,py]]);line([[px+r*u*0.45,py],[px+r*u*1.5,py]]);line([[px,py-r*u*1.5],[px,py-r*u*0.45]]);line([[px,py+r*u*0.45],[px,py+r*u*1.5]]);}
-    x.lineCap='round';x.lineJoin='round';
-    if(id==='score-race'){[[-30,30,soft],[-10,42,ink],[10,22,soft]].forEach(function(b){x.fillStyle=b[2];x.fillRect(cx+b[0]*u,h-8*u-b[1]*u*0.95,18*u,b[1]*u*0.95);});}
-    else if(id==='duel'){cross(cx-26*u,h/2,8,ink);cross(cx+26*u,h/2,8,alt);x.fillStyle=soft;x.fillRect(cx-2*u,h/2-10*u,4*u,20*u);}
-    else if(id==='ffa-rounds'){[[-40,-10,ink],[-18,12,alt],[4,-14,ink],[24,8,hot],[42,-6,alt]].forEach(function(d){circle(cx+d[0]*u,h/2+d[1]*u,5,d[2]);});}
-    else if(id==='practice'){x.strokeStyle=soft;x.lineWidth=1.6*u;x.strokeRect(cx-46*u,10*u,40*u,36*u);x.strokeRect(cx+6*u,10*u,40*u,36*u);circle(cx-26*u,28*u,6,ink);circle(cx+26*u,28*u,6,alt);}
-    else if(id==='tracking-duel'){x.strokeStyle=soft;x.lineWidth=2*u;x.beginPath();x.moveTo(cx-50*u,40*u);x.bezierCurveTo(cx-30*u,10*u,cx-6*u,46*u,cx+6*u,22*u);x.stroke();circle(cx+6*u,22*u,4,ink);cross(cx+6*u,22*u,7,ink);
-      x.strokeStyle=soft;x.beginPath();x.moveTo(cx+50*u,14*u);x.bezierCurveTo(cx+36*u,42*u,cx+22*u,10*u,cx+14*u,40*u);x.stroke();circle(cx+40*u,30*u,3.5,alt);cross(cx+40*u,30*u,6,alt);}
-    else if(id==='deathmatch'){x.fillStyle=ink;circle(cx,h/2-4*u,14,ink);x.fillRect(cx-8*u,h/2+6*u,16*u,8*u);x.fillStyle=bg;circle(cx-5*u,h/2-5*u,3.5,bg);circle(cx+5*u,h/2-5*u,3.5,bg);x.fillRect(cx-1*u,h/2+6*u,2*u,8*u);
-      x.strokeStyle=hot;x.lineWidth=2*u;line([[cx-44*u,14*u],[cx-32*u,26*u]]);line([[cx-32*u,14*u],[cx-44*u,26*u]]);line([[cx+32*u,30*u],[cx+44*u,42*u]]);line([[cx+44*u,30*u],[cx+32*u,42*u]]);}
-    else if(id==='vampiric'){function heart(px,py,r,col){x.fillStyle=col;x.beginPath();x.moveTo(px,py+r*0.9);x.bezierCurveTo(px-r*1.4,py-r*0.2,px-r*0.7,py-r*1.2,px,py-r*0.4);x.bezierCurveTo(px+r*0.7,py-r*1.2,px+r*1.4,py-r*0.2,px,py+r*0.9);x.fill();}
-      heart(cx-22*u,h/2,16*u,hot);heart(cx+30*u,h/2+2*u,9*u,soft);x.strokeStyle=ink;x.lineWidth=2*u;line([[cx+18*u,h/2+2*u],[cx-2*u,h/2+2*u]]);line([[cx+4*u,h/2-3*u],[cx-2*u,h/2+2*u],[cx+4*u,h/2+7*u]]);}
-    else if(id==='instagib'){x.strokeStyle=alt;x.lineWidth=3*u;line([[cx-54*u,h/2+8*u],[cx+54*u,h/2-8*u]]);x.strokeStyle=ink;x.lineWidth=1.2*u;line([[cx-54*u,h/2+8*u],[cx+54*u,h/2-8*u]]);
-      x.fillStyle=ink;x.beginPath();x.moveTo(cx-4*u,6*u);x.lineTo(cx-12*u,h/2+2*u);x.lineTo(cx-2*u,h/2+2*u);x.lineTo(cx-8*u,h-6*u);x.lineTo(cx+10*u,h/2-6*u);x.lineTo(cx,h/2-6*u);x.lineTo(cx+6*u,6*u);x.closePath();x.fill();}
-    else if(id==='cs'){
-      // Two teams around a bomb on its plant site.
-      function body(px,py,col){x.fillStyle=col;circle(px,py-7*u,3.5,col);x.fillRect(px-3.5*u,py-3*u,7*u,11*u);}
-      body(cx-44*u,h/2+2*u,ink);body(cx-32*u,h/2+6*u,ink);body(cx+32*u,h/2+6*u,hot);body(cx+44*u,h/2+2*u,hot);
-      x.strokeStyle=soft;x.lineWidth=1.6*u;x.strokeRect(cx-15*u,h/2-12*u,30*u,24*u);
-      x.fillStyle=alt;x.fillRect(cx-9*u,h/2-4*u,18*u,10*u);x.fillStyle=bg;x.fillRect(cx-6*u,h/2-1*u,12*u,2*u);x.fillStyle=hot;circle(cx+6*u,h/2-6*u,2,hot);}
-    else if(id==='team-deathmatch'){[[-44,-10],[-36,10],[-24,-2]].forEach(function(d){circle(cx+d[0]*u,h/2+d[1]*u,5,ink);});[[44,-10],[36,10],[24,-2]].forEach(function(d){circle(cx+d[0]*u,h/2+d[1]*u,5,hot);});x.fillStyle=soft;x.fillRect(cx-1*u,8*u,2*u,h-16*u);}
-    return c;
+    var box=node('div','mp-mode-art');box.setAttribute('aria-hidden','true');
+    if(MODE_ICONS.indexOf(id)<0)return box;
+    var img=node('img','mp-mode-icon');img.setAttribute('alt','');img.draggable=false;
+    img.src='art/modes/'+id+(on?'-on':'')+(big?'@3x':'@2x')+'.png';
+    box.appendChild(img);return box;
   }
   // The mode picker: score modes and PvP modes under their own headings, with art on every card.
   function modePicker(selected,choose,compact){
