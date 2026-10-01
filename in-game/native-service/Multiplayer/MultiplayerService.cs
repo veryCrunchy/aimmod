@@ -1770,7 +1770,7 @@ sealed partial class MultiplayerService : IDisposable
                 Console.Error.WriteLine("Match scenario " + name + " refused: " + string.Join("; ", problems));
                 return "AimMod couldn’t build a valid match scenario (" + problems[0] + ").";
             }
-            expectedMaps[name] = MatchScenario.MapOf(text);
+            LoadGate.Expect(name, MatchScenario.MapOf(text));
             if (LobbyModes.Combat(s.Mode)) { arenaSpawns = MatchScenario.Spawns(text); core?.SetCombatSpawns(arenaSpawns); }
             if (s.Mode == LobbyModes.Cs) { csObjectives = LoadObjectives(text); core?.SetCsObjectives(csObjectives); }
             var (ok, error) = scenarios.Write(name, text, clock());

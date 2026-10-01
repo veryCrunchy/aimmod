@@ -27,30 +27,38 @@ sealed record GameScene(bool Available, string Scenario, string MapName, double?
 /// <summary>Why an in-game replay cannot start right now, in words for the player.</summary>
 sealed record ReplayStartBlock(string Reason, string Message);
 
+/// <summary>A pending start as the automatic scenario load sees it. Attempt grows with every press of play or Retry.</summary>
+sealed record PendingReplayStart(string Id, string Scenario, int Attempt, string? Reason, string? MapName, double? MapScale);
+
 /// <summary>
 /// Replay start gate. A replay plays in the world it was recorded in, from the
 /// pause menu. A start request that cannot be honoured yet stays pending (with
 /// a reason the workspace shows) and starts by itself once the game is ready.
+/// While ReplayAutoLoad loads the replay's scenario, its progress is shown
+/// instead of "load that scenario".
 /// </summary>
 sealed class ReplayStartGate
 {
     static readonly TimeSpan PendingLimit = TimeSpan.FromMinutes(10);
     readonly object gate = new();
     string? pendingId;
-    string? pendingScenario;
+    string? pendingScenario, pendingMap;
+    double? pendingScale;
     DateTime pendingSince;
-    ReplayStartBlock? block;
-    long? loadSequence;
+    int attempt;
+    // reason: what the game shows against the replay (Evaluate); progress: the automatic load's.
+    ReplayStartBlock? reason, progress;
+    object? download;
     string? pendingCompare, startedCompare;
 
     /// <summary>The comparison replay of the start that Poll just released.</summary>
     public string? TakeCompare() { lock (gate) { var id = startedCompare; startedCompare = null; return id; } }
 
-    /// <summary>The scenario-load request issued for the pending start, if any.</summary>
-    public long? LoadSequence { get { lock (gate) return loadSequence; } }
-    public void LoadRequested(string id, long sequence) { lock (gate) if (pendingId == id) loadSequence = sequence; }
-    /// <summary>Progress or failure of the automatic scenario load, shown instead of the gate reason.</summary>
-    public void Report(string id, ReplayStartBlock reason) { lock (gate) if (pendingId == id) block = reason; }
+    /// <summary>Progress or failure of the automatic scenario load (null: none to show), with its download offer.</summary>
+    public void Report(string id, int forAttempt, ReplayStartBlock? state, object? offer = null)
+    {
+        lock (gate) if (pendingId == id && attempt == forAttempt) { progress = state; download = offer; }
+    }
 
     internal static ReplayStartBlock? Evaluate(NativeReplay replay, GameScene? scene, bool rendererReady, string rendererReason)
     {
@@ -74,29 +82,42 @@ sealed class ReplayStartGate
         return null;
     }
 
-    public ReplayStartBlock? Block { get { lock (gate) return block; } }
+    // The automatic load speaks for the scenario and its map; anything else (pause menu, a run) is the game's.
+    ReplayStartBlock? Shown => progress is not null && reason?.Reason is null or "scenario-mismatch" or "scenario-loading" or "map-mismatch" ? progress : reason;
+
+    /// <summary>What the workspace shows for the pending start.</summary>
+    public ReplayStartBlock? Block { get { lock (gate) return Shown; } }
     public string? PendingId { get { lock (gate) return pendingId; } }
     public string? PendingScenario { get { lock (gate) return pendingScenario; } }
+    public PendingReplayStart? Pending
+    {
+        get { lock (gate) return pendingId is null ? null : new(pendingId, pendingScenario!, attempt, reason?.Reason, pendingMap, pendingScale); }
+    }
     public object Status
     {
         get
         {
             lock (gate)
-                return new { pending = pendingId, scenario = pendingScenario, reason = block?.Reason, message = block?.Message,
-                    waitingSeconds = pendingId is null ? 0 : (int)(DateTime.UtcNow - pendingSince).TotalSeconds };
+            {
+                var shown = Shown;
+                return new { pending = pendingId, scenario = pendingScenario, reason = shown?.Reason, message = shown?.Message,
+                    waitingSeconds = pendingId is null ? 0 : (int)(DateTime.UtcNow - pendingSince).TotalSeconds, download = pendingId is null ? null : download };
+            }
         }
     }
 
-    public void Wait(string id, string scenario, ReplayStartBlock reason, string? compareId = null)
+    /// <summary>Holds a start until the game is ready. Every call (play, Retry) is a new attempt of the automatic load.</summary>
+    public void Wait(string id, string scenario, ReplayStartBlock why, string? compareId = null, string? mapName = null, double? mapScale = null)
     {
         lock (gate)
         {
             pendingCompare = compareId;
-            if (pendingId != id) { pendingSince = DateTime.UtcNow; loadSequence = null; }
-            pendingId = id; pendingScenario = scenario; block = reason;
+            if (pendingId != id) pendingSince = DateTime.UtcNow;
+            pendingId = id; pendingScenario = scenario; pendingMap = mapName; pendingScale = mapScale;
+            reason = why; progress = null; download = null; attempt++;
         }
     }
-    public void Clear(ReplayStartBlock? reason = null) { lock (gate) { pendingId = null; pendingScenario = null; block = reason; loadSequence = null; } }
+    public void Clear(ReplayStartBlock? why = null) { lock (gate) { pendingId = null; pendingScenario = null; reason = why; progress = null; download = null; } }
 
     /// <summary>Re-evaluates a pending start; returns the replay to load when it may start now.</summary>
     public NativeReplay? Poll(Func<string, NativeReplay?> read, Func<GameScene?> scene, Func<(bool Ready, string Reason)> renderer)
@@ -108,21 +129,21 @@ sealed class ReplayStartGate
             if (id is null) return null;
             if (DateTime.UtcNow - pendingSince > PendingLimit)
             {
-                pendingId = null;
-                block = new("timed-out", "The replay did not start within 10 minutes. Press play to try again.");
+                pendingId = null; progress = null; download = null;
+                reason = new("timed-out", "The replay did not start within 10 minutes. Press play to try again.");
                 return null;
             }
         }
         var replay = read(id);
         if (replay is null) { Clear(new("replay-unavailable", "This replay can no longer be read.")); return null; }
         var state = renderer();
-        var reason = Evaluate(replay, scene(), state.Ready, state.Reason);
+        var why = Evaluate(replay, scene(), state.Ready, state.Reason);
         lock (gate)
         {
             if (pendingId != id) return null;
-            // While an automatic load is in flight its progress message stays.
-            if (reason is not null) { if (loadSequence is null || reason.Reason != "scenario-mismatch") block = reason; return null; }
-            pendingId = null; block = null; loadSequence = null; startedCompare = pendingCompare; pendingCompare = null;
+            reason = why;
+            if (why is not null) return null;
+            pendingId = null; progress = null; download = null; startedCompare = pendingCompare; pendingCompare = null;
         }
         return replay;
     }

@@ -10,6 +10,7 @@ sealed class WorkspaceHost : IAsyncDisposable
     readonly WebApplication app;
     readonly NativeReplayPlayback playback;
     readonly ReplayStartGate startGate = new();
+    readonly ReplayAutoLoad autoLoad;
     readonly GameCommands gameCommands;
     readonly CancellationTokenSource startLoop = new();
     ReplayCatalog? replayCatalog;
@@ -90,6 +91,9 @@ sealed class WorkspaceHost : IAsyncDisposable
         new CoachingFeedback(output).MapEndpoints(app, prefix);
         multiplayer = Multiplayer.MultiplayerHosting.Create(hub, output, args, () => liveFeed.Read(outputFolder, Volatile.Read(ref overlayRuns)), () => Volatile.Read(ref overlayRuns));
         multiplayer.MapEndpoints(app, prefix);
+        // A pending replay's scenario loads by itself, through the lobby's load path (ScenarioLoader).
+        var lobby = multiplayer;
+        autoLoad = new ReplayAutoLoad(startGate, new Multiplayer.CoreGameControl(output), () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), lobby.Library, lobby.SourceOf);
         Multiplayer.MultiplayerHosting.MapAssets(app, prefix);
         // Tournaments come from AimMod Hub as the linked account; developer mode can simulate one.
         var live = multiplayer;
@@ -283,10 +287,16 @@ sealed class WorkspaceHost : IAsyncDisposable
                     // menu; otherwise wait (with the reason) and start by itself.
                     var acknowledgement = renderer.Read();
                     var blocked = ReplayStartGate.Evaluate(replay, GameScene.Read(outputFolder), acknowledgement.Ready, acknowledgement.Reason);
-                    if (blocked is not null) { startGate.Wait(replay.Id, replay.Scenario, blocked, compareWith?.Id); return Results.Json(PlaybackStatus(), statusCode: 202); }
+                    if (blocked is not null) { startGate.Wait(replay.Id, replay.Scenario, blocked, compareWith?.Id, replay.MapName, replay.MapScale); return Results.Json(PlaybackStatus(), statusCode: 202); }
                     startGate.Clear();
                     playback.Load(replay, compareWith);
                 } else if (command.Action == "cancel") startGate.Clear();
+                // The pending replay's scenario from the Steam Workshop (the Map Library's install).
+                else if (command.Action == "download") {
+                    if (startGate.PendingScenario is not { } missing) return Results.Json(new { error = "none", message = "No replay is waiting for a scenario." }, statusCode: 409);
+                    var download = multiplayer.DownloadScenario(missing);
+                    if (!download.Ok) return Results.Json(new { error = download.Code, message = download.Message }, statusCode: 409);
+                }
                 else {
                     if (command.Action == "close") startGate.Clear();
                     if (!playback.Command(command.Action ?? "", command.Value, command.Area)) return Results.BadRequest();
@@ -339,7 +349,7 @@ sealed class WorkspaceHost : IAsyncDisposable
                             var compareWith = compareId is null ? null : replayCatalog?.Read(compareId);
                             playback.Load(ready, compareWith is not null && compareWith.Scenario == ready.Scenario ? compareWith : null);
                         }
-                        else AutoLoadScenario();
+                        else autoLoad.Tick();
                     } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { }
                 }
             } catch (OperationCanceledException) { }
@@ -354,30 +364,6 @@ sealed class WorkspaceHost : IAsyncDisposable
         catch (Exception ex) when (ex is IOException or InvalidDataException or System.Text.Json.JsonException or UnauthorizedAccessException) {
             await obs.DisposeAsync(); Console.Error.WriteLine("OBS browser source could not start (" + ex.GetType().Name + ").");
         }
-    }
-    // A pending replay in another scenario: ask AimModCore to load that
-    // scenario (once per pending start) and show its progress or refusal.
-    void AutoLoadScenario()
-    {
-        var id = startGate.PendingId;
-        if (id is null || startGate.Block?.Reason is not ("scenario-mismatch" or "scenario-loading")) return;
-        var scenario = startGate.PendingScenario;
-        if (startGate.LoadSequence is not long sequence)
-        {
-            if (startGate.Block?.Reason != "scenario-mismatch" || scenario is null || !GameCommands.Capabilities(outputFolder).Contains("load")) return;
-            var sent = gameCommands.Send(new("load-scenario", scenario, null, null, null, null, null, null));
-            if (sent.Sequence is long s) {
-                startGate.LoadRequested(id, s);
-                startGate.Report(id, new("scenario-loading", $"Loading \"{scenario}\" in KovaaK's; the replay starts when it is ready."));
-            }
-            return;
-        }
-        var result = gameCommands.ResultFor(sequence);
-        if (result is null) return;
-        if (result.State == "error")
-            startGate.Report(id, new(result.Code == "challenge-active" ? "challenge-active" : "scenario-mismatch",
-                result.Code == "challenge-active" ? "A challenge is running. Finish or quit it; then load the replay's scenario."
-                    : $"Could not load \"{scenario}\" automatically ({result.Message}). Load it in KovaaK's; the replay starts when it is ready."));
     }
     public async ValueTask DisposeAsync()
     {

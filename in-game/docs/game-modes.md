@@ -441,8 +441,9 @@ AimModCore now loads the map itself with KovaaK's own apply step. After
 every load, start or end-run of an AimMod scenario outside a challenge, and
 on an explicit `ensure-map` command, it reads the map the game parsed from
 the scenario and calls `SetCurrentMapName` and `SetMapData`. The service
-calls ensure-map from one place, `FixWrongMap` in
-`MultiplayerService.Load.cs`.
+calls ensure-map from one place, `ScenarioLoader.FixWrongMap`
+(`native-service/ScenarioLoader.cs`), the load check that the match load gate
+(`MultiplayerService.Load.cs`) and replay playback share.
 
 To find which part of an arena KovaaK's trips on:
 
