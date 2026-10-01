@@ -33,7 +33,8 @@ FindFirstOf=function()return perm()end
 FName=function()return perm()end;FText=function()return perm()end
 RegisterHook=function(_,_,post)hook=post end
 LoopInGameThreadWithDelay=function(ms,fn)loops[ms]=fn end
-package.preload.Workspace=function()return {create=function()return perm()end,update=function()end,closeRequested=function()return false end}end
+package.preload.Workspace=function()return {create=function()return perm()end,update=function()end,closeRequested=function()return false end,openRequest=function()return nil end,consumeOpenRequest=function()end,openPage=function()end,deliverPage=function()end}end
+package.preload.Notify=function()return {attach=function()end,update=function()end,hide=function()end}end
 package.preload.LiveHUD=function()return {attach=function()end,hide=function()end,update=function()end}end
 package.preload.Telemetry=function()return {liveSnapshot=function()return {}end}end
 package.preload.ReplayMainBridge=function()return {attach=function(_,enter,leave)bridgeEnter=enter;bridgeLeave=leave end,active=function()return false end}end
