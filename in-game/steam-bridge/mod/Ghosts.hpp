@@ -111,6 +111,9 @@ namespace aimmod
         game::Getter m_setMovementMode, m_updateVisibility, m_death, m_respawn, m_setTeam, m_setHealth;
         std::optional<bridge::avatarstate::File> m_avatarState;
         double m_nextStateRead = 0;
+        double m_nextHelperPark = 0;
+        std::set<RC::Unreal::UObject*> m_parkedHelpers; // identity only: logged once each
+        void ParkHelperBots();
         void ReadAvatarState();
         void ApplyCombatState(Ghost& ghost, RC::Unreal::UObject* localCharacter);
         std::string m_lastScene; // re-apply looks and AI-off when the scenario changes

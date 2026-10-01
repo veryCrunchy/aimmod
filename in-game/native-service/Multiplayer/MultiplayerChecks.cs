@@ -39,7 +39,7 @@ static partial class MultiplayerChecks
         CsTeams();
         Marker();
         var root = Path.Combine(Path.GetTempPath(), "aimmod-mp-test-" + Guid.NewGuid().ToString("N"));
-        try { Content(root); Generator(root); Blocked(root); AutoLeave(root); LoadGateService(root); LoadGateEnsureMap(root); Binds(root); Service(root); Transfers(root); Replays(root); Maps(root); Tournaments(root); }
+        try { Content(root); Generator(root); Blocked(root); AutoLeave(root); LoadGateService(root); StandInStream(root); LoadGateEnsureMap(root); Binds(root); Service(root); Transfers(root); Replays(root); Maps(root); Tournaments(root); }
         finally { try { Directory.Delete(root, true); } catch (IOException) { } }
         Console.WriteLine($"{count} multiplayer checks passed.");
     }
@@ -1475,6 +1475,15 @@ static partial class MultiplayerChecks
         Check(service.DevAvatar(true, "circle").Ok && service.DevAvatar(true, "circle").Ok && service.DevAvatar(true, "circle").Ok && t.DevAvatars.SequenceEqual(["on circle AimMod Meso Tracer"]), "Repeated spawn clicks send one dev.avatar, wearing the chosen look");
         service.Act("avatar", J(new { avatar = "meso-genji" }));
         Check(t.DevAvatars.Last() == "on circle AimMod Meso Genji", "Changing the look re-dresses the running test avatar");
+        // The Look tab's models and skins: AimMod's own free profiles, grouped by model, with the saved choice.
+        var looks = JsonSerializer.SerializeToElement(service.LooksView(), Protocol.Json);
+        var models = looks.GetProperty("models").EnumerateArray().ToArray();
+        Check(looks.GetProperty("selected").GetString() == "meso-genji" && looks.GetProperty("model").GetString() == "Meso" && looks.GetProperty("default").GetString() == AvatarProfiles.Default
+            && models.Select(m => m.GetProperty("id").GetString()).SequenceEqual(["Meso", "Endo"])
+            && models.SelectMany(m => m.GetProperty("skins").EnumerateArray().Select(k => k.GetProperty("id").GetString())).SequenceEqual(AvatarProfiles.All.Select(a => a.Id)),
+            "The Look tab lists every offered profile once, by model, and shows the saved one");
+        Check(!service.Act("avatar", J(new { avatar = "meso-locked-skin" })).Ok && JsonSerializer.SerializeToElement(service.LooksView(), Protocol.Json).GetProperty("selected").GetString() == "meso-genji",
+            "A look outside the offered profiles is refused and the saved one stays");
         Check(service.DevAvatar(false, "circle").Ok && service.DevAvatar(false, "circle").Ok && t.DevAvatars.Count(x => x.StartsWith("off", StringComparison.Ordinal)) == 1, "Repeated despawn clicks send one off");
         now += 4000;
         Check(service.DevAvatar(false, "circle").Ok && t.DevAvatars.Count(x => x.StartsWith("off", StringComparison.Ordinal)) == 2, "A later request goes out again, in case the game lost track");
@@ -1957,6 +1966,8 @@ static partial class MultiplayerChecks
         var avatars = File.ReadAllText(Path.Combine(output, "avatar-state.tsv"));
         Check(avatars.StartsWith("AIMMOD_AVATARS_1\t", StringComparison.Ordinal) && avatars.Contains("\t1\tenemy\t100\t0\t0\n", StringComparison.Ordinal) && !avatars.Contains("peer\t" + service.SelfId, StringComparison.Ordinal),
             "avatar-state.tsv lists the other players' avatars (alive, enemy, health) for AimModSteam");
+        Check(avatars.Contains("peer	" + MultiplayerService.StandInPeer + "	1	enemy", StringComparison.Ordinal) && service.StandInMember is { } standIn && !avatars.Contains("peer	" + standIn + "	", StringComparison.Ordinal),
+            "Developer mode: the simulated opponent is AimModSteam's test avatar (peer 1), so it is drawn and its team and deaths apply");
         service.Act("end", default);
         // Host leaving a simulated lobby hands it over; invites and launch joins.
         service.Act("leave", default);

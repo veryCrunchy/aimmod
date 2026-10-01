@@ -198,64 +198,94 @@ test('a spectator follows a player or the leader during a live match, and can st
   const sw=JSON.parse(s.requests.filter(r=>r.url==='/private/native-replay').pop().body);assert.equal(sw.label,'Synthetic Two');assert.equal(sw.stream,'pose-p2');assert.equal(sw.scenario,'Synthetic Scenario','same scenario, so the view switches in place');
   s.button('Stop spectating').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'spectate-stop'});
 });
-test('the cosmetics page lists catalog items only, equips by id and sets who to show',()=>{
+// The Look tab (it replaced the Cosmetics page). Synthetic catalog items only.
+const LOOKS={selected:'meso-mccree',model:'Meso',default:'meso-mccree',models:[
+  {id:'Meso',label:'Meso',skins:[{id:'meso-mccree',skin:'McCree',label:'McCree'},{id:'meso-genji',skin:'Genji',label:'Genji'}]},
+  {id:'Endo',label:'Endo',skins:[{id:'endo',skin:'Default',label:'Default'}]}]};
+const CATALOG=()=>({available:true,problem:null,version:2,show:'all',unavailable:1,items:[
+  {id:'tint-ember',version:1,kind:'avatar_tint',name:'Ember',models:['Meso'],swatch:['#f08a3c','#2b2a28','#ffd08a'],shine:0.4,equipped:false},
+  {id:'tint-gold',version:1,kind:'avatar_tint',name:'Gold',models:['Meso','Endo'],swatch:['#f0c675','red;x','#f9e2aa'],shine:0.9,equipped:true},
+  {id:'tint-endo',version:1,kind:'avatar_tint',name:'Chrome',models:['Endo'],swatch:['#d7e0e6'],shine:0.9,equipped:false},
+  {id:'acc-halo',version:1,kind:'accessory',name:'Halo',models:['Meso','Endo'],role:'head',swatch:['#f9dc8a'],shine:0.9,equipped:false},
+  {id:'acc-scarf',version:1,kind:'accessory',name:'Scarf',models:['Meso'],role:'neck',swatch:['#ef6b6b'],shine:0,equipped:false},
+  {id:'finish-ice',version:1,kind:'weapon_finish',name:'Ice',models:[],swatch:['#7ccfff','#6fbcee'],shine:0,equipped:false}]});
+function openLook(s,catalog){
+  s.button('Look').onclick();
+  s.requests.find(r=>r.url==='/private/multiplayer?part=cosmetics').finish(200,catalog||CATALOG());
+  s.requests.find(r=>r.url==='/private/multiplayer?part=looks').finish(200,LOOKS);
+}
+const tileOf=(s,name)=>s.all().find(e=>e.tag==='button'&&/^mp-look-tile/.test(e.className)&&e.children.some(c=>c.className==='mp-look-name'&&c.textContent===name));
+const category=(s,name)=>s.all().find(e=>e.tag==='button'&&/^mp-look-cat/.test(e.className)&&e.children.some(c=>c.textContent===name)).onclick();
+test('Look is a tab beside Play: models and skins pick a free look, and changes save at once',()=>{
   const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view());
-  s.button('Cosmetics').onclick();const ask=s.requests.find(r=>r.url==='/private/multiplayer?part=cosmetics');
-  ask.finish(200,{available:true,problem:null,version:1,show:'all',unavailable:1,items:[{id:'meso-tint-ember',version:1,kind:'avatar_tint',name:'Ember',models:['Meso'],color:[0.85,0.22,0.05],equipped:false},{id:'weapon-finish-sand',version:2,kind:'weapon_finish',name:'Sand',models:[],color:[0.76,0.66,0.48],equipped:true}]});
-  const t=s.text();assert.ok(t.includes('only show in AimMod matches')&&t.includes('Tints and patterns')&&t.includes('Weapon finishes')&&t.includes('1 more need a newer AimMod'));
-  s.button('Equip').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'cosmetic-equip',id:'meso-tint-ember'});
-  s.button('Friends').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'cosmetic-view',show:'friends'});
+  assert.ok(s.button('Play')&&s.button('Look'),'Play and Look tabs');
+  assert.ok(!s.button('Cosmetics'),'no separate Cosmetics page link');
+  openLook(s);
+  const t=s.text();
+  assert.ok(t.includes('Meso · McCree')&&t.includes('Changes save automatically'));
+  assert.equal(t.split('only in AimMod matches').length-1,1,'the policy line appears once');
+  assert.equal(tileOf(s,'Meso').className,'mp-look-tile on','the current model is selected');
+  tileOf(s,'Endo').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'avatar',avatar:'endo'},'a model saves its look');
+  assert.ok(s.text().includes('Saving…'));
+  s.last().finish(200,view());assert.ok(s.text().includes('Saved'),'then says it saved');
+  category(s,'Skin');
+  assert.ok(tileOf(s,'McCree')&&tileOf(s,'Genji')&&!tileOf(s,'Default'),'skins of the current model only');
+  tileOf(s,'Genji').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'avatar',avatar:'meso-genji'});
 });
-test('the cosmetics preview heartbeats only while the page is open, shows the newest frame and stops on leave',()=>{
+test('Look categories show compact tiles: equip on click, None takes it off, items for another model are locked',()=>{
+  const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view());openLook(s);
+  category(s,'Tint');
+  assert.equal(tileOf(s,'Gold').className,'mp-look-tile on','equipped item selected');
+  assert.ok(tileOf(s,'Chrome').disabled&&/locked/.test(tileOf(s,'Chrome').className),'an Endo-only tint is locked on Meso');
+  assert.ok(s.text().includes('Not on Meso')&&s.text().includes('1 more')&&s.text().includes('Update AimMod'));
+  tileOf(s,'Ember').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'cosmetic-equip',id:'tint-ember'});
+  s.last().finish(200,view());
+  tileOf(s,'None').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'cosmetic-remove',id:'tint-gold'});
+  category(s,'Head');assert.ok(tileOf(s,'Halo')&&!tileOf(s,'Scarf'),'accessories by slot');
+  category(s,'Neck');assert.ok(tileOf(s,'Scarf'));
+  category(s,'Weapon');tileOf(s,'Ice').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'cosmetic-equip',id:'finish-ice'});
+  category(s,'Outfits');assert.ok(s.text().includes('Coming soon')&&tileOf(s,'Coming soon').disabled);
+  // Show others' cosmetics sits at the bottom of the tab.
+  s.button('Friends').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'cosmetic-view',show:'friends'});
+  // Reset: the default look and nothing equipped.
+  s.last().finish(200,view());
+  const before=s.requests.length;s.button('Reset to default').onclick();
+  assert.deepEqual(s.requests.slice(before).filter(r=>r.method==='POST').map(r=>JSON.parse(r.body)),[{action:'cosmetic-remove',id:'tint-gold'}],'the default model is kept; worn items come off');
+});
+test('the Look preview heartbeats only while the tab is open, turns with the arrows and stops on Play or leave',()=>{
   const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view());
   const previews=()=>s.requests.filter(r=>r.url==='/private/cosmetic-preview');
-  assert.equal(previews().length,0,'no preview request before the page opens');
-  s.button('Cosmetics').onclick();
-  const first=previews()[0];assert.ok(first,'opening the page starts the preview');
+  assert.equal(previews().length,0,'no preview request before the tab opens');
+  openLook(s);
+  const first=previews()[0];assert.ok(first,'opening the tab starts the preview');
   assert.equal(first.method,'POST');assert.equal(first.headers['X-AimMod-UI'],'1');assert.deepEqual(JSON.parse(first.body),{open:true,yaw:0});
-  s.requests.find(r=>r.url==='/private/multiplayer?part=cosmetics').finish(200,{available:true,problem:null,version:1,show:'all',unavailable:0,
-    items:[{id:'meso-tint-ember',version:1,kind:'avatar_tint',name:'Ember',models:['Meso'],color:[0.85,0.22,0.05],equipped:false}]});
-  const img=()=>s.all().find(e=>e.tag==='img'&&/mp-cos-live-img/.test(e.className));
+  const img=()=>s.all().find(e=>e.tag==='img'&&e.className==='mp-look-img');
   assert.equal(img().style.display,'none','no frame yet: the note shows instead');
   first.finish(200,{frame:3});
   assert.equal(img().src,'/private/cosmetic-preview.png?f=3');assert.equal(img().style.display,'block');
-  s.button('Preview').onclick();assert.deepEqual(JSON.parse(previews().at(-1).body),{open:true,yaw:0,item:'meso-tint-ember'},'trying an item on sends its id only');
+  s.all().find(e=>e.tag==='button'&&e.getAttribute('aria-label')==='Turn right').onclick();
+  assert.deepEqual(JSON.parse(previews().at(-1).body),{open:true,yaw:45},'the arrows turn the character');
+  s.button('Close-up').onclick();assert.ok(s.all().some(e=>e.className==='mp-look-view zoomed'),'close-up view');
   assert.ok(!previews().some(r=>/file|path|png/i.test(r.body)),'the preview never sends files or paths');
-  s.api.leave();
-  assert.deepEqual(JSON.parse(previews().at(-1).body),{open:false},'leaving the page (or hiding the workspace) ends the preview');
+  s.button('Play').onclick();
+  assert.deepEqual(JSON.parse(previews().at(-1).body),{open:false},'leaving the tab ends the preview');
+  openLook(s);s.api.leave();
+  assert.deepEqual(JSON.parse(previews().at(-1).body),{open:false},'hiding the workspace ends it too');
 });
-test('the curated set shows as finish swatches in its own colours, with no coming-soon state',()=>{
+test('Look tiles paint the curated set in its own colours',()=>{
   const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view());
-  // Record what the card canvases paint.
-  const painted=[];const ctx={scale(){},fillRect(){},beginPath(){},arc(){},fill(){painted.push(this.fillStyle);},stroke(){painted.push(this.strokeStyle);},moveTo(){},lineTo(){},closePath(){}};
+  const painted=[];const ctx={scale(){},translate(){},fillRect(){},beginPath(){},arc(){},fill(){painted.push(this.fillStyle);},stroke(){painted.push(this.strokeStyle);},moveTo(){},lineTo(){},closePath(){}};
   s.all()[0].constructor.prototype.getContext=()=>ctx;
-  s.button('Cosmetics').onclick();
-  s.requests.find(r=>r.url==='/private/multiplayer?part=cosmetics').finish(200,{available:true,problem:null,version:2,show:'friends',unavailable:0,items:[
-    {id:'tint-mint',version:1,kind:'avatar_tint',name:'AimMod Mint',models:['Meso','Endo'],color:[0.02,0.6,0.3],swatch:['#27cb95','#eff3f1','#959e99'],shine:0.1,equipped:false},
-    {id:'tint-gold',version:1,kind:'avatar_tint',name:'Gold',models:['Meso','Endo'],swatch:['#f0c675','red;x','#f9e2aa'],shine:0.9,equipped:true},
-    {id:'finish-ice',version:1,kind:'weapon_finish',name:'Ice',models:[],swatch:['#7ccfff','#6fbcee'],shine:0,equipped:false},
-    {id:'accessory-halo',version:1,kind:'accessory',name:'Halo',models:['Meso','Endo'],role:'head',swatch:['#f9dc8a'],shine:0.9,equipped:false}]});
-  const t=s.text();
-  assert.ok(!t.includes('coming soon'),'items replace the coming-soon state');
-  assert.ok(t.includes('AimMod Mint')&&t.includes('Gold')&&t.includes('Ice')&&t.includes('Tints and patterns')&&t.includes('Weapon finishes'));
-  assert.ok(t.includes('Accessories')&&t.includes('Halo')&&t.includes('Head · Meso, Endo'),'accessories list with their slot');
-  for(const hex of ['#27cb95','#eff3f1','#959e99','#f0c675','#7ccfff','#6fbcee','#f9dc8a'])assert.ok(painted.includes(hex),'swatch paints '+hex);
+  openLook(s);category(s,'Tint');category(s,'Head');category(s,'Weapon');
+  for(const hex of ['#f08a3c','#f0c675','#f9e2aa','#f9dc8a','#7ccfff','#6fbcee'])assert.ok(painted.includes(hex),'swatch paints '+hex);
   assert.ok(!painted.some(p=>/red|;/.test(p)),'only hex colours reach the canvas');
-  assert.equal(s.all().filter(e=>e.tag==='canvas'&&e.className==='mp-cos-preview').length,4,'one swatch per item');
-  // Try-on is for what the preview shows (tints and accessories); weapon finishes are equipped directly.
-  assert.equal(s.all().filter(e=>e.tag==='button'&&e.textContent==='Preview').length,2);
-  // Show others' cosmetics stays: three buttons in their own group, the current choice selected, and changes post.
-  const show=s.all().find(e=>/mp-cos-show/.test(e.className||''));
-  assert.ok(show&&show.children.length===3&&show.children.map(b=>b.textContent).join()==='All,Friends,Off','the show-others control has its buttons');
-  assert.ok(show.children[1].className.includes('primary'),'the current choice is selected');
-  s.button('Off').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'cosmetic-view',show:'off'});
-  s.button('All').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'cosmetic-view',show:'all'});
-  s.button('Remove').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'cosmetic-remove',id:'tint-gold'});
 });
-test('the cosmetics page says cosmetics are coming soon while the catalog has nothing to pick',()=>{
+test('an empty catalog says what is coming instead of an empty grid',()=>{
   const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view());
-  s.button('Cosmetics').onclick();s.requests.find(r=>r.url==='/private/multiplayer?part=cosmetics').finish(200,{available:true,problem:null,version:1,show:'all',unavailable:0,items:[]});
-  assert.ok(s.text().includes('Cosmetics are coming soon')&&s.text().includes('next AimMod update')&&s.text().includes('Show others’ cosmetics'));
+  openLook(s,{available:false,problem:null,version:0,show:'all',unavailable:0,items:[]});
+  category(s,'Tint');
+  assert.ok(s.text().includes('Nothing here yet')&&s.text().includes('next AimMod update')&&s.text().includes('Show others’ cosmetics'));
+  category(s,'Model');assert.ok(tileOf(s,'Meso'),'models work without a catalog');
 });
 test('the map library lists ports with size, Shift and Workshop state, and installs or hosts them',()=>{
   const s=setup();s.api.enter(s.container);s.requests[0].finish(200,view());

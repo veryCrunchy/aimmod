@@ -163,10 +163,11 @@
     var page=node('div','mp-page');container.appendChild(page);
     if(view.notice)page.appendChild(banner(view.notice.kind==='error'?'warn':'info',view.notice.text,true));
     var l=view.lobby;
-    if(view.joining&&!l)page.appendChild(joining());
+    page.appendChild(tabStrip());
+    if(tab==='look')lookPage(page);
+    else if(view.joining&&!l)page.appendChild(joining());
     else if(mapsOpen)mapLibrary(page);
     else if(historyOpen)historyPage(page);
-    else if(cosmeticsOpen)cosmeticsPage(page);
     else if(!l)home(page);
     else if(l.match&&l.match.phase!=='final'&&!editing)matchScreen(page,l);
     else if(l.match&&l.match.phase==='final')finalScreen(page,l);
@@ -206,7 +207,7 @@
     var codeRow=node('div','mp-code-row');add(codeRow,field(input,'Room code','mp-code-field'),actions(button('Join',joinCode)));
     right.appendChild(codeRow);
     right.appendChild(steamState());
-    right.appendChild(add(node('div','mp-hero-link'),actions(button('Map library',openMaps,'compact'),button('Cosmetics',openCosmetics,'compact'))));
+    right.appendChild(add(node('div','mp-hero-link'),actions(button('Map library',openMaps,'compact'))));
     hero.appendChild(left);hero.appendChild(right);
     var row=node('div','mp-row');page.appendChild(row);
     var main=node('div','mp-col mp-main'),side=node('div','mp-col mp-side');row.appendChild(main);row.appendChild(side);
@@ -331,7 +332,7 @@
   function lookPanel(lobby){
     var me=member(lobby.self)||{};var p=node('div','panel mp-look');var head=node('div','panel-head');var text=node('div','head-text');
     add(text,node('h2','','Your look'));head.appendChild(text);
-    head.appendChild(actions(button('Cosmetics',function(){openCosmetics();},'compact quiet')));p.appendChild(head);
+    head.appendChild(actions(button('Change look',function(){openCosmetics();},'compact quiet')));p.appendChild(head);
     var body=node('div','mp-look-body');
     body.appendChild(segmented((view.avatars||[]).map(function(a){return {id:a.id,label:safe(a.label,a.id)};}),me.avatar||'meso-mccree',function(id){act('avatar',{avatar:id});},false,'look'));
     p.appendChild(body);return p;
@@ -506,15 +507,16 @@
     return p;
   }
   // Cosmetics: curated catalog items, shown only in AimMod matches ------------
-  var cosmeticsOpen=false,cosmeticsData=null;
+  var cosmeticsData=null;
   var COSMETIC_SLOTS={head:'Head',neck:'Neck',spine:'Back'};
   var COSMETIC_GROUPS=[['Tints and patterns',['avatar_tint','avatar_pattern','player_model']],['Weapon finishes',['weapon_finish','weapon_pattern','weapon_model','reload_animation']],['Accessories',['accessory']]];
-  function openCosmetics(){cosmeticsOpen=true;mapsOpen=false;historyOpen=false;loadCosmetics();render();previewTick();}
+  // The old Cosmetics page now lives in the Look tab; anything that opened it lands there.
+  function openCosmetics(){openTab('look');}
   // Live character preview: while this page is open and visible, a heartbeat asks
   // AimModCore to render the game's own preview stage (never during challenges);
   // the newest PNG is shown and dragging turns the character. The heartbeat
   // stops when the page closes or the workspace hides, and the request expires.
-  var preview={yaw:0,frame:0,img:null,note:null,timer:null,drag:null,item:null,sent:0,fastUntil:0,open:false};
+  var preview={yaw:0,frame:0,img:null,note:null,timer:null,drag:null,item:null,sent:0,fastUntil:0,open:false,close:false};
   function previewUrl(){return path()+'/cosmetic-preview.png?f='+preview.frame;}
   function previewShow(){if(!preview.img)return;if(preview.frame>0){preview.img.src=previewUrl();preview.img.style.display='block';if(preview.note)preview.note.style.display='none';}else{preview.img.style.display='none';if(preview.note)preview.note.style.display='block';}}
   function previewSend(){
@@ -523,7 +525,7 @@
   }
   function previewTick(){
     clearTimeout(preview.timer);preview.timer=null;
-    if(!container||!cosmeticsOpen){previewStop();return;}
+    if(!container||tab!=='look'){previewStop();return;}
     previewSend();preview.timer=setTimeout(previewTick,Date.now()<preview.fastUntil?250:1000);
   }
   function previewStop(){
@@ -535,18 +537,14 @@
     if(!preview.drag)return;var yaw=preview.drag.yaw+(clientX-preview.drag.x)*0.5;yaw=((yaw+180)%360+360)%360-180;preview.yaw=yaw;preview.fastUntil=Date.now()+2000;
     if(Date.now()-preview.sent>=100)previewSend();
   }
-  function previewPanel(){
-    var pv=node('div','panel mp-card mp-cos-live');
-    var img=node('img','mp-cos-live-img');img.setAttribute('alt','Your character');img.draggable=false;
-    var note=node('p','mp-note','The preview pauses during challenges, benchmarks and the scenario editor.');img.title='Drag to turn';
-    img.onmousedown=function(e){preview.drag={x:e.clientX,yaw:preview.yaw};if(e.preventDefault)e.preventDefault();};
-    preview.img=img;preview.note=note;previewShow();
-    add(pv,node('h3','mp-cos-group','Preview'),img,note);
-    return pv;
-  }
   if(root.addEventListener){root.addEventListener('mousemove',function(e){previewTurn(e.clientX);});root.addEventListener('mouseup',function(e){if(preview.drag){previewTurn(e.clientX);preview.drag=null;previewSend();}});}
-  function loadCosmetics(){xhr('GET','/multiplayer?part=cosmetics',null,function(ok,data){if(ok&&data){cosmeticsData=data;if(cosmeticsOpen)render();}});}
-  function cosmeticAct(action,extra){act(action,extra,function(ok){if(ok)loadCosmetics();});}
+  function loadCosmetics(){xhr('GET','/multiplayer?part=cosmetics',null,function(ok,data){if(ok&&data){cosmeticsData=data;if(tab==='look')render();}});}
+  function loadLooks(){xhr('GET','/multiplayer?part=looks',null,function(ok,data){if(ok&&data&&data.models){looksData=data;if(tab==='look')render();}});}
+  // Every change saves at once; the stage says so ("Saving..." then "Saved").
+  function saving(){lookSave={state:'saving',at:Date.now()};}
+  function saved(ok){lookSave={state:ok?'saved':'failed',at:Date.now()};if(tab==='look')render();clearTimeout(lookSave.timer);lookSave.timer=setTimeout(function(){if(lookSave.state==='saved'){lookSave={state:'',at:0};if(tab==='look')render();}},4000);}
+  function cosmeticAct(action,extra){saving();render();act(action,extra,function(ok){saved(ok);if(ok)loadCosmetics();});}
+  function lookAct(avatar){saving();render();act('avatar',{avatar:avatar},function(ok){saved(ok);if(ok){loadLooks();preview.fastUntil=Date.now()+3000;previewSend();}});}
   // Card swatches: the item's own colours as a finish chip. The service sends
   // sRGB hex (main colour first); older services sent one linear colour.
   var HEX=/^#[0-9a-f]{6}$/;
@@ -585,42 +583,150 @@
     }
     c.setAttribute('aria-hidden','true');return c;
   }
-  function cosmeticsPage(page){
-    var head=node('div','mp-editor-top');var t=node('div','mp-editor-title');
-    add(t,node('div','eyebrow','Multiplayer'),node('h2','','Cosmetics'));
-    add(head,t,actions(button('Back',function(){cosmeticsOpen=false;render();},'quiet')));page.appendChild(head);
-    page.appendChild(banner('info','Cosmetics only show in AimMod matches and while spectating them.'));
-    page.appendChild(previewPanel());
-    var d=cosmeticsData;
-    if(!d){page.appendChild(add(node('div','panel mp-card'),node('p','subtle','Loading the catalog…')));return;}
-    var setting=node('div','panel mp-card mp-cos-setting');
-    // Gameface lays an empty-note row out without its control: keep a note, and the buttons in their own non-shrinking group.
-    var showOthers=segmented([{id:'all',label:'All'},{id:'friends',label:'Friends'},{id:'off',label:'Off'}],d.show||'all',function(id){cosmeticAct('cosmetic-view',{show:id});},false,'show others');showOthers.className+=' mp-cos-show';
-    setting.appendChild(settingRow('Show others’ cosmetics','In AimMod matches.',showOthers));
-    page.appendChild(setting);
-    // No catalog yet, or only items still being made: say what's coming instead of an empty page.
-    if(!d.available||!(d.items||[]).length){var soon=node('div','panel mp-cos-soon');add(soon,add(node('div','mp-cos-soon-art'),swatch({kind:'avatar_tint',swatch:['#27cb95','#eff3f1','#959e99']}),swatch({kind:'avatar_tint',swatch:['#f0c675','#3e3b37','#f9e2aa'],shine:0.9}),swatch({kind:'weapon_finish',swatch:['#7ccfff','#6fbcee']})),
-      add(node('div','mp-cos-soon-text'),node('strong','','Cosmetics are coming soon'),node('span','','Tints, finishes and accessories arrive with the next AimMod update.')));page.appendChild(soon);return;}
-    COSMETIC_GROUPS.forEach(function(g){
-      var list=(d.items||[]).filter(function(i){return g[1].indexOf(i.kind)>=0;});if(!list.length)return;
-      page.appendChild(node('h3','mp-cos-group',g[0]));
-      var grid=node('div','mp-ports');page.appendChild(grid);
-      list.forEach(function(i){
-        var cell=node('div','mp-port-cell mp-cos-cell');var card=node('div','panel mp-port mp-cos'+(i.equipped?' on':''));cell.appendChild(card);
-        card.appendChild(add(node('div','mp-cos-art'),swatch(i)));
-        card.title=safe(i.name,i.id);
-        var info=node('div','mp-port-info');add(info,add(node('div','mp-port-title'),node('strong','',safe(i.name,i.id)),i.equipped?chip('Equipped','mint'):null),node('span','mp-port-facts',(COSMETIC_SLOTS[i.role]?COSMETIC_SLOTS[i.role]+' · ':'')+(i.models&&i.models.length?i.models.join(', ')+' · ':'')+'Version '+i.version));
-        card.appendChild(info);
-        var tryOn=!i.equipped&&(i.kind==='avatar_tint'||i.kind==='avatar_pattern'||i.kind==='player_model'||i.kind==='accessory')?button(preview.item===i.id?'Previewing':'Preview',function(){preview.item=preview.item===i.id?null:i.id;preview.fastUntil=Date.now()+2000;previewSend();render();},'compact quiet'):null;
-        card.appendChild(actions(i.equipped?button('Remove',function(){cosmeticAct('cosmetic-remove',{id:i.id});},'compact quiet'):button('Equip',function(){cosmeticAct('cosmetic-equip',{id:i.id});},'compact primary'),tryOn));
-        grid.appendChild(cell);
-      });
+  // Play / Look tabs ----------------------------------------------------------
+  var tab='play';
+  function openTab(id){
+    if(id===tab)return;tab=id;
+    if(tab==='look'){mapsOpen=false;historyOpen=false;loadCosmetics();loadLooks();render();previewTick();}
+    else{previewStop();render();}
+  }
+  function tabStrip(){
+    var bar=node('div','mp-tabs');bar.setAttribute('role','tablist');
+    [{id:'play',label:'Play'},{id:'look',label:'Look'}].forEach(function(t){
+      var b=node('button','mp-tab'+(tab===t.id?' on':''),t.label);b.type='button';b.setAttribute('role','tab');b.setAttribute('aria-selected',String(tab===t.id));
+      b.onclick=function(){openTab(t.id);};bar.appendChild(b);
     });
-    if(d.unavailable)page.appendChild(node('p','mp-note',d.unavailable+' more need a newer AimMod. Update to see them.'));
+    return bar;
+  }
+
+  // Look: a character customiser. The live preview on the left (drag or the arrows to turn,
+  // full body or close-up), categories and their tiles on the right. A click saves at once.
+  var looksData=null,lookCat='model',lookSave={state:'',at:0};
+  var LOOK_CATS=[
+    {id:'model',label:'Model',text:'The body other players see you as.'},
+    {id:'skin',label:'Skin',text:'Free KovaaK’s skins for this model.'},
+    {id:'tint',label:'Tint',kinds:['avatar_tint','avatar_pattern','player_model'],text:'Body paint and patterns.'},
+    {id:'head',label:'Head',kinds:['accessory'],role:'head',text:'Worn on the head.'},
+    {id:'neck',label:'Neck',kinds:['accessory'],role:'neck',text:'Worn around the neck.'},
+    {id:'back',label:'Back',kinds:['accessory'],role:'spine',text:'Worn on the back.'},
+    {id:'weapon',label:'Weapon',kinds:['weapon_finish','weapon_pattern','weapon_model','reload_animation'],text:'Weapon finishes show on your gun in AimMod matches. The preview shows your character.'},
+    {id:'outfit',label:'Outfits',soon:true,text:'Full outfits arrive in a later AimMod update.'}];
+  function lookCatOf(id){for(var i=0;i<LOOK_CATS.length;i++)if(LOOK_CATS[i].id===id)return LOOK_CATS[i];return LOOK_CATS[0];}
+  function catItems(c){var d=cosmeticsData;if(!c.kinds||!d||!d.items)return [];return d.items.filter(function(i){return c.kinds.indexOf(i.kind)>=0&&(!c.role||i.role===c.role);});}
+  function currentLook(){
+    var id=(view.prefs&&view.prefs.avatar)||(looksData&&looksData.selected)||'meso-mccree',models=looksData&&looksData.models||[];
+    for(var i=0;i<models.length;i++)for(var k=0;k<models[i].skins.length;k++)if(models[i].skins[k].id===id)return {id:id,model:models[i],skin:models[i].skins[k]};
+    return {id:id,model:models[0]||null,skin:models[0]?models[0].skins[0]:null};
+  }
+  // Tile art, drawn (solid colours only): a figure for models and skins, the item's swatch otherwise.
+  var SKIN_TONES={McCree:'#d08f4f',Tracer:'#f08a3c',Genji:'#7fd26a',Pharah:'#5f93dc',Default:'#a7bab0'};
+  function figure(model,skin,on){
+    var c=node('canvas','mp-look-art');c.width=176;c.height=176;c.setAttribute('aria-hidden','true');var x=c.getContext&&c.getContext('2d');if(!x)return c;
+    // Drawn on an 88-unit square, a little larger than the tile so the figure fills it.
+    x.translate(-17.6,-17.6);x.scale(2.4,2.4);
+    var body=on?'#eef5f1':'#a7bab0',dark=on?'#173b2f':'#22302a',accent=SKIN_TONES[skin]||SKIN_TONES.Default,robot=model==='Endo';
+    x.fillStyle=body;
+    if(robot){x.fillRect(34,10,20,19);x.fillStyle=accent;x.fillRect(37,16,14,5);x.fillStyle=body;x.fillRect(29,33,30,25);x.fillRect(24,34,5,22);x.fillRect(59,34,5,22);x.fillRect(32,60,10,22);x.fillRect(46,60,10,22);}
+    else{x.beginPath();x.arc(44,19,9,0,Math.PI*2);x.fill();x.fillStyle=accent;x.fillRect(38,16,12,4);x.fillStyle=body;
+      x.beginPath();x.moveTo(30,32);x.lineTo(58,32);x.lineTo(54,58);x.lineTo(34,58);x.closePath();x.fill();
+      x.fillRect(25,33,5,21);x.fillRect(58,33,5,21);x.fillRect(34,60,8,22);x.fillRect(46,60,8,22);}
+    x.fillStyle=accent;x.fillRect(robot?29:32,44,robot?30:24,4);
+    x.fillStyle=dark;x.fillRect(robot?42:42,60,4,22);
+    return c;
+  }
+  function noneArt(){var c=node('canvas','mp-look-art');c.width=176;c.height=176;c.setAttribute('aria-hidden','true');var x=c.getContext&&c.getContext('2d');if(!x)return c;x.scale(2,2);
+    x.strokeStyle='#5d7268';x.lineWidth=3;x.beginPath();x.arc(44,44,17,0,Math.PI*2);x.stroke();x.beginPath();x.moveTo(32,56);x.lineTo(56,32);x.stroke();return c;}
+  function lockArt(){var c=node('canvas','mp-look-art');c.width=176;c.height=176;c.setAttribute('aria-hidden','true');var x=c.getContext&&c.getContext('2d');if(!x)return c;x.scale(2,2);
+    x.strokeStyle='#5d7268';x.lineWidth=3;x.beginPath();x.arc(44,38,8,Math.PI,0);x.stroke();x.fillStyle='#5d7268';x.fillRect(32,38,24,18);x.fillStyle='#16211d';x.fillRect(42,43,4,7);return c;}
+  // An arrow turning left or right, for the stage buttons (the game font has no arrow glyphs).
+  function turnArt(dir){var c=node('canvas','mp-look-turn');c.width=36;c.height=36;c.setAttribute('aria-hidden','true');var x=c.getContext&&c.getContext('2d');if(!x)return c;x.scale(2,2);
+    x.strokeStyle='#dcebe3';x.fillStyle='#dcebe3';x.lineWidth=2;x.beginPath();
+    if(dir<0){x.arc(9,10,6,-0.2,Math.PI*1.25,false);x.stroke();x.beginPath();x.moveTo(1,6);x.lineTo(5,11);x.lineTo(8,5);x.closePath();x.fill();}
+    else{x.arc(9,10,6,Math.PI+0.2,-Math.PI*0.25,true);x.stroke();x.beginPath();x.moveTo(17,6);x.lineTo(13,11);x.lineTo(10,5);x.closePath();x.fill();}
+    return c;}
+  function tile(name,art,state,click,tag){
+    var b=node('button','mp-look-tile'+(state?' '+state:''));b.type='button';b.title=name+(tag?' · '+tag:'');
+    if(state==='on')b.setAttribute('aria-pressed','true');
+    add(b,add(node('span','mp-look-thumb'),art),node('span','mp-look-name',name),tag?node('span','mp-look-tag',tag):null,state==='on'?node('span','mp-look-check'):null);
+    if(state==='locked')b.disabled=true;else b.onclick=click;
+    return add(node('div','mp-look-cell'),b);
+  }
+  function lookTiles(c,look){
+    var grid=node('div','mp-look-tiles');var d=cosmeticsData;
+    if(c.id==='model'){(looksData&&looksData.models||[]).forEach(function(m){
+      var on=look.model&&look.model.id===m.id;
+      grid.appendChild(tile(safe(m.label,m.id),figure(m.id,on&&look.skin?look.skin.skin:m.skins[0].skin,on),on?'on':'',function(){
+        if(on)return;var keep=null;for(var i=0;i<m.skins.length;i++)if(look.skin&&m.skins[i].skin===look.skin.skin)keep=m.skins[i];lookAct((keep||m.skins[0]).id);
+      }));});}
+    else if(c.id==='skin'){(look.model?look.model.skins:[]).forEach(function(k){
+      var on=k.id===look.id;grid.appendChild(tile(safe(k.label,k.skin),figure(look.model.id,k.skin,on),on?'on':'',function(){if(!on)lookAct(k.id);}));});}
+    else if(c.soon){for(var n=0;n<3;n++)grid.appendChild(tile('Coming soon',lockArt(),'locked',null,'Soon'));}
+    else{
+      var list=catItems(c),wearing=list.filter(function(i){return i.equipped;});
+      grid.appendChild(tile('None',noneArt(),wearing.length?'':'on',function(){wearing.forEach(function(i){cosmeticAct('cosmetic-remove',{id:i.id});});}));
+      list.forEach(function(i){
+        var fits=c.id==='weapon'||!i.models||!i.models.length||!look.model||i.models.indexOf(look.model.id)>=0;
+        grid.appendChild(tile(safe(i.name,i.id),swatch(i),!fits?'locked':i.equipped?'on':'',function(){if(!i.equipped)cosmeticAct('cosmetic-equip',{id:i.id});},!fits?'Not on '+look.model.label:null));
+      });
+      if(d&&d.unavailable&&c.id==='tint')grid.appendChild(tile(d.unavailable+' more',lockArt(),'locked',null,'Update AimMod'));
+    }
+    return grid;
+  }
+  function lookStage(look){
+    var stage=node('div','panel mp-look-stage');
+    var head=node('div','mp-look-head');
+    var title=node('div','mp-look-title');add(title,node('strong','',look.model?safe(look.model.label,'Model')+(look.skin&&look.skin.skin!=='Default'?' · '+safe(look.skin.label,''):''):'Your look'),node('span','',wornLine()));
+    var status=lookSave.state==='saving'?chip('Saving…'):lookSave.state==='saved'?chip('Saved','mint'):lookSave.state==='failed'?chip('Not saved','amber'):node('span','mp-look-auto','Changes save automatically');
+    add(head,title,status);stage.appendChild(head);
+    var shot=node('div','mp-look-view'+(preview.close?' zoomed':''));
+    var img=node('img','mp-look-img');img.setAttribute('alt','Your character');img.draggable=false;img.title='Drag to turn';
+    img.onmousedown=function(e){preview.drag={x:e.clientX,yaw:preview.yaw};if(e.preventDefault)e.preventDefault();};
+    var note=node('div','mp-look-wait');add(note,node('strong','','Preview paused'),node('span','','It shows in KovaaK’s menus, not during challenges, benchmarks or the editor.'));
+    preview.img=img;preview.note=note;previewShow();
+    add(shot,img,note);stage.appendChild(shot);
+    var turn=function(by){preview.yaw=((preview.yaw+by+180)%360+360)%360-180;preview.fastUntil=Date.now()+2000;previewSend();};
+    var left=button('',function(){turn(-45);},'compact quiet icon');left.appendChild(turnArt(-1));left.setAttribute('aria-label','Turn left');
+    var right=button('',function(){turn(45);},'compact quiet icon');right.appendChild(turnArt(1));right.setAttribute('aria-label','Turn right');
+    var bar=node('div','mp-look-bar');
+    add(bar,actions(left,right),node('span','mp-look-hint','Drag to turn'),segmented([{id:'body',label:'Full body'},{id:'close',label:'Close-up'}],preview.close?'close':'body',function(id){preview.close=id==='close';render();},false,'view'));
+    stage.appendChild(bar);
+    return stage;
+  }
+  function wornLine(){var d=cosmeticsData;var n=d&&d.items?d.items.filter(function(i){return i.equipped;}).length:0;return n?n+(n===1?' item':' items')+' on':'No items on';}
+  function resetLook(){
+    var d=cosmeticsData;var worn=d&&d.items?d.items.filter(function(i){return i.equipped;}):[];
+    var def=looksData&&looksData.default||'meso-mccree';if(currentLook().id!==def)lookAct(def);
+    worn.forEach(function(i){cosmeticAct('cosmetic-remove',{id:i.id});});
+    toast('Back to the default look.');
+  }
+  function lookPage(page){
+    var look=currentLook(),c=lookCatOf(lookCat),d=cosmeticsData;
+    var wrap=node('div','mp-look');page.appendChild(wrap);
+    wrap.appendChild(lookStage(look));
+    var side=node('div','panel mp-look-side');wrap.appendChild(side);
+    var rail=node('div','mp-look-rail');rail.setAttribute('role','tablist');
+    LOOK_CATS.forEach(function(k){
+      var worn=k.kinds?catItems(k).filter(function(i){return i.equipped;}).length:0;
+      var b=node('button','mp-look-cat'+(k.id===c.id?' on':'')+(k.soon?' soon':''));b.type='button';b.setAttribute('role','tab');b.setAttribute('aria-selected',String(k.id===c.id));
+      add(b,node('span','mp-look-cat-name',k.label),k.soon?node('span','mp-look-cat-note','Soon'):worn?node('span','mp-look-dot'):null);
+      b.onclick=function(){lookCat=k.id;render();};rail.appendChild(b);
+    });
+    var body=node('div','mp-look-body');
+    add(body,node('h3','mp-look-cat-title',c.label),node('p','mp-look-cat-text',c.text));
+    if(!looksData&&(c.id==='model'||c.id==='skin'))body.appendChild(node('p','subtle','Loading looks…'));
+    else if(c.kinds&&!d)body.appendChild(node('p','subtle','Loading the catalog…'));
+    else if(c.kinds&&(!d.available||!catItems(c).length)&&!c.soon)body.appendChild(add(node('div','mp-look-empty'),node('strong','','Nothing here yet'),node('span','',d.available?'New items arrive with AimMod updates.':'Cosmetics arrive with the next AimMod update.')));
+    else body.appendChild(lookTiles(c,look));
+    add(side,add(node('div','mp-look-pick'),rail,body));
+    var foot=node('div','mp-look-foot');
+    add(foot,add(node('div','mp-look-others'),node('span','mp-look-others-label','Show others’ cosmetics'),segmented([{id:'all',label:'All'},{id:'friends',label:'Friends'},{id:'off',label:'Off'}],d&&d.show||'all',function(id){cosmeticAct('cosmetic-view',{show:id});},!d,'show others')),
+      actions(button('Reset to default',resetLook,'compact quiet')));
+    side.appendChild(foot);
+    side.appendChild(node('p','mp-look-policy','Cosmetics show only in AimMod matches and while spectating them.'));
   }
   // Match history and rivals --------------------------------------------------
   var historyOpen=false,history=null,openMatch=null,rivalFilter=null;
-  function openHistory(){historyOpen=true;mapsOpen=false;cosmeticsOpen=false;rivalFilter=null;openMatch=null;history=null;render();xhr('GET','/multiplayer?part=history',null,function(ok,data){if(ok&&data){history=data;if(historyOpen)render();}});}
+  function openHistory(){historyOpen=true;mapsOpen=false;tab='play';rivalFilter=null;openMatch=null;history=null;render();xhr('GET','/multiplayer?part=history',null,function(ok,data){if(ok&&data){history=data;if(historyOpen)render();}});}
   function resultText(r){return r.mode==='practice'?'Practice':r.won?'Won':r.place?ordinal(r.place)+' of '+r.players:r.winner?safe(r.winner)+' won':'Draw';}
   function historyPage(page){
     var head=node('div','mp-editor-top');var t=node('div','mp-editor-title');
@@ -684,7 +790,7 @@
   }
   // Map Library: AimMod map ports here and on the Steam Workshop --------------
   var mapsOpen=false,maps=null,mapsBusy=false,mapsFilter='all';
-  function openMaps(){mapsOpen=true;historyOpen=false;cosmeticsOpen=false;picker=null;drafts.maps='';loadMaps();render();}
+  function openMaps(){mapsOpen=true;historyOpen=false;tab='play';picker=null;drafts.maps='';loadMaps();render();}
   function loadMaps(){if(mapsBusy)return;mapsBusy=true;xhr('GET','/multiplayer?part=maps',null,function(ok,data){mapsBusy=false;if(!ok||!data)return;var changed=JSON.stringify(data)!==JSON.stringify(maps);maps=data;if(mapsOpen&&changed&&!focused)render();});}
   function shiftText(p){return p.shift==='walk'?'Shift walks':p.shift==='sprint'?'Shift sprints':'No Shift ability';}
   function portState(p){

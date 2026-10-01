@@ -20,9 +20,11 @@ sealed class UpdateSettings
     readonly object gate = new();
     readonly string path;
     UpdatePreferences current = new();
-    public UpdateSettings(string directory)
+    // Without saved preferences the channel follows the installed package, so a beta install keeps getting betas.
+    public UpdateSettings(string directory, string? installedChannel = null)
     {
         path = Path.Combine(directory, "update-settings.json");
+        if (installedChannel is "beta") current = current with { Channel = "beta" };
         try
         {
             if (File.Exists(path) && new FileInfo(path).Length <= Limit) current = Validate(JsonSerializer.Deserialize<UpdatePreferences>(File.ReadAllBytes(path)) ?? new());
