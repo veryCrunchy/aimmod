@@ -113,6 +113,14 @@ namespace aimmod
         void PollClipKey();
         void PublishSelfPose(double now);
         std::uint32_t PoseId(UObject* actor);
+        struct QuitAudit
+        {
+            double until{};
+            std::uint64_t completes{}, uploads{};
+            std::string scenario;
+        };
+        std::optional<QuitAudit> m_quitAudit;
+        void AuditQuit(double now);
         MatchPlay m_match;
         Cosmetics m_cosmetics;
 

@@ -199,6 +199,40 @@ namespace aimmod
         m_wake.notify_one();
     }
 
+    void Output::AuditQuitStats(std::string scenario)
+    {
+        std::lock_guard lock(m_mutex);
+        m_quitStats = QuitStats{std::move(scenario), std::filesystem::file_time_type::clock::now() - std::chrono::seconds(2), NowMs() + 15000, false};
+    }
+
+    void Output::CheckQuitStats(std::uint64_t now)
+    {
+        std::optional<QuitStats> audit;
+        {
+            std::lock_guard lock(m_mutex);
+            audit = m_quitStats;
+        }
+        if (!audit || m_stats.empty()) return;
+        std::error_code error;
+        for (const auto& entry : std::filesystem::directory_iterator(m_stats, error))
+        {
+            std::error_code itemError;
+            if (!entry.is_regular_file(itemError) || entry.last_write_time(itemError) < audit->since || itemError) continue;
+            const std::string name = entry.path().filename().string();
+            if (IsChallengeStatsFile(name) && name.rfind(audit->scenario + " - Challenge - ", 0) == 0) audit->found = true;
+        }
+        if (!audit->found && now < audit->until)
+        {
+            std::lock_guard lock(m_mutex);
+            if (m_quitStats) m_quitStats->found = false;
+            return;
+        }
+        Log(audit->found ? "quit-run audit: the game wrote a challenge stats CSV after the quit - UNEXPECTED, please report"
+                         : "quit-run audit: no challenge stats CSV written (as expected)");
+        std::lock_guard lock(m_mutex);
+        m_quitStats.reset();
+    }
+
     Output::PlayStateSnapshot Output::playState() const
     {
         std::lock_guard lock(const_cast<std::mutex&>(m_mutex));
@@ -682,6 +716,7 @@ namespace aimmod
         {
             m_lastCosmeticsCheck = now;
             ReadCosmeticsInputs();
+            CheckQuitStats(now);
         }
         if (force || now - m_lastPlayStateCheck >= 15)
         {
