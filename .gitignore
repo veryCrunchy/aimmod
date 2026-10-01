@@ -70,3 +70,5 @@ in-game/native-service/bin/
 in-game/native-service/obj/
 in-game/**/account.bin*
 in-game/**/hub-cache.json*
+# In-game release build output (New-AimModInGameRelease.ps1)
+in-game/out/
