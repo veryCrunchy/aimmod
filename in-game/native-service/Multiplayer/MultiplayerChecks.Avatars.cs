@@ -199,6 +199,11 @@ static partial class MultiplayerChecks
             && pictures[1].Picture is { Unchanged: true, Png: null } && pictures[2].Picture is null && pictures[3].Picture is null, "PNG, unchanged and missing answers map to events; bad base64 counts as missing");
         var persona = events.Single(e => e.Kind == TransportEvent.Persona);
         Check(persona.Peer == PersonC && persona.Host && Until(() => steam.Friends().Any(f => f.Id == PersonC && f.Name == "Synthetic Renamed")), "A persona event fixes a friend's placeholder name and flags a new picture");
+        // A long friends list arrives in parts (seq, part, parts); it replaces the list once complete.
+        Write(new { v = 1, ev = "friends", seq = 7, part = 1, parts = 2, total = 2, friends = new object[] { new { peer = PersonB, name = "Second Part", initials = "SP", state = "online", playing = false, aimmod = false } } });
+        Check(!Until(() => steam.Friends().Any(f => f.Id == PersonB)), "Half a friends list never replaces the list");
+        Write(new { v = 1, ev = "friends", seq = 7, part = 0, parts = 2, total = 2, friends = new object[] { new { peer = "76561190000000106", name = "First Part", initials = "FP", state = "online", playing = false, aimmod = false } } });
+        Check(Until(() => steam.Friends().Count == 2 && steam.Friends().Any(f => f.Id == PersonB)), "Both parts make up the list, in any order");
     }
 
     // Two machines in one lobby each ask their own Steam for the other's picture; the view and

@@ -857,7 +857,7 @@ be merged into it later. The stage-3 kit remains the fallback test tool.
 | `lobby.kick` | `peer` | Host only. |
 | `lobby.transfer` | `peer` | Host only; calls `SetLobbyOwner`. |
 | `join.dismiss` | — | Drops the pending join request. |
-| `friends.list` | — | Replies `friends`. |
+| `friends.list` | `offline`? (default false) | Replies `friends`: online friends only unless `offline` is true. |
 | `avatar.get` | `peer` | Replies `avatar`, after up to 5 s while Steam loads it. |
 | `presence.set` | `status` ≤ 64 bytes | The rich presence `status` key. |
 | `p2p.send` | `peer`, `reliable` (default true), `data` base64 (1–16384 bytes) | Fails `not-connected` without a ready connection. A client can only reach the host. |
@@ -874,7 +874,7 @@ be merged into it later. The stage-3 kit remains the fallback test tool.
 | `p2p.connected` / `p2p.disconnected` | `peer`, `host` (true when that peer is our host) / `peer`, `reason` |
 | `p2p.message` | `peer`, `reliable`, `data` base64 (one service frame) |
 | `p2p.ping` | `peer`, `rtt` ms |
-| `friends` | `friends` [{peer, name, initials, state, playing, aimmod, lobby?}] |
+| `friends` | `friends` [{peer, name, initials, state, playing, aimmod, lobby?}], `part`, `parts`, `seq`, `total`. A list larger than 48 KiB comes as several events with the same `seq` (`part` 0 to `parts`-1); the service replaces its list only once every part has arrived. An entry that can't fit on its own is logged and left out. |
 | `avatar` | `peer`, then either `w`, `h`, `rgba` (base64, w·h·4 bytes) or `missing` true |
 | `error` | `code`, `message`: for example `rejected` (a host refused us) or `p2p` |
 
@@ -1216,6 +1216,9 @@ they simply play KovaaK's, and the watched player sees who is watching.
   (`Saved\SaveGames\Scenarios`), an unknown one, or with `hide_scenario=1`.
   `friends` entries carry it as `workshop`, so the spectator's UI can try
   `ugc.download` first.
+Any event larger than the 64 KiB pipe frame is never sent; the bridge logs its name and size instead
+of dropping it silently.
+
 ### Contract addition: Steam profile pictures (still version 1)
 
 `ready.features` includes `avatar` when the bridge can send 64×64 pictures as

@@ -36,6 +36,8 @@ sealed class SteamTransport : IMultiplayerTransport
     HashSet<string> lastCharKeys = new();
     readonly Dictionary<string, string> spectators = new();
     IReadOnlyList<FriendEntry> friends = [];
+    // friends {part, parts, seq}: a long list arrives in parts, joined here before it replaces the list.
+    readonly List<FriendEntry> friendParts = []; readonly HashSet<int> friendPartsSeen = []; int friendSeq = -1;
     long friendsAt;
     string? lastData, lastStatus; bool? lastJoinable;
     // aimmod.banned: comma-separated SteamID64s the hosts kicked (written by the bridge only).
@@ -252,6 +254,17 @@ sealed class SteamTransport : IMultiplayerTransport
                             if (workshopItem is not { Length: > 0 and <= 20 } || !workshopItem.All(char.IsAsciiDigit)) workshopItem = null;
                             items.Add(new FriendEntry(peer, LobbyRules.CleanName(name, "Friend"), status, detail, joinLobby, joinable, spectatable, watchers, shown, workshopItem));
                         }
+                    var parts = Math.Clamp(Int(e, "parts") ?? 1, 1, 64);
+                    if (parts > 1)
+                    {
+                        var part = Int(e, "part") ?? 0; var partSeq = Int(e, "seq") ?? 0;
+                        if (part < 0 || part >= parts) break;
+                        if (partSeq != friendSeq) { friendSeq = partSeq; friendParts.Clear(); friendPartsSeen.Clear(); }
+                        if (!friendPartsSeen.Add(part)) break;
+                        friendParts.AddRange(items);
+                        if (friendPartsSeen.Count < parts) break;
+                        items = [.. friendParts]; friendParts.Clear(); friendPartsSeen.Clear();
+                    }
                     // AimMod players first, then KovaaK's players, then everyone else online.
                     friends = items.OrderBy(f => f.Status switch { "aimmod-lobby" => 0, "aimmod" => 1, "kovaaks" => 2, "online" => 3, _ => 4 }).ThenBy(f => f.Name, StringComparer.OrdinalIgnoreCase).Take(200).ToArray();
                     break;

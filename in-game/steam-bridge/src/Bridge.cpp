@@ -24,6 +24,7 @@ namespace bridge
         constexpr auto LobbyPollInterval = 250ms;
         constexpr auto ReconnectInterval = 3s;
         constexpr auto CallTimeout = 20s;
+        constexpr std::size_t FriendsPartBytes = 48 * 1024; // friends JSON per event, leaving room for the envelope
         // Keys the bridge owns; the service can read but not set them.
         constexpr const char* KeyVersion = "aimmod.v";
         constexpr const char* KeyToken = "aimmod.token";
@@ -93,7 +94,7 @@ namespace bridge
             {"lobby.kick", {"peer"}},
             {"lobby.transfer", {"peer"}},
             {"join.dismiss", {}},
-            {"friends.list", {}},
+            {"friends.list", {"offline"}},
             {"avatar.get", {"peer", "format", "have"}},
             {"presence.set", {"status"}},
             {"p2p.send", {"peer", "reliable", "data"}},
@@ -783,7 +784,8 @@ namespace bridge
         }
         else if (name == "friends.list")
         {
-            EmitFriends();
+            // Online friends only, unless the service asks for offline ones too.
+            EmitFriends(c.Bool("offline").value_or(false));
             Result(*id, true);
         }
         else if (name == "avatar.get")
@@ -2020,7 +2022,17 @@ namespace bridge
 
     void Bridge::Emit(const std::string& text)
     {
-        if (m_pipe) m_pipe->Send(text);
+        if (!m_pipe) return;
+        // Never drop an event silently: name what didn't fit the frame.
+        if (text.size() > MaxPipeFrame)
+        {
+            const auto at = text.find("\"ev\":\"");
+            const auto end = at == std::string::npos ? at : text.find('"', at + 6);
+            const std::string ev = at == std::string::npos || end == std::string::npos ? "?" : text.substr(at + 6, std::min<std::size_t>(end - at - 6, 32));
+            m_log("pipe: " + ev + " event of " + std::to_string(text.size()) + " bytes is over the " + std::to_string(MaxPipeFrame) + "-byte frame; not sent");
+            return;
+        }
+        m_pipe->Send(text);
     }
 
     void Bridge::Result(std::int64_t id, bool ok, const char* code, const std::string& message)
@@ -2158,7 +2170,7 @@ namespace bridge
         Emit(o.Done());
     }
 
-    void Bridge::EmitFriends()
+    void Bridge::EmitFriends(bool offline)
     {
         constexpr int FlagImmediate = 4;
         const int count = std::min(m_steam.F_GetFriendCount(m_steam.friends, FlagImmediate), static_cast<int>(MaxFriends));
@@ -2168,6 +2180,7 @@ namespace bridge
         {
             const std::uint64_t f = m_steam.F_GetFriendByIndex(m_steam.friends, i, FlagImmediate);
             if (!IsIndividualId(f)) continue;
+            if (!offline && m_steam.F_GetFriendPersonaState(m_steam.friends, f) == 0) continue;
             FriendGameInfo_t game{};
             const bool inGame = m_steam.F_GetFriendGamePlayed(m_steam.friends, f, &game);
             const bool playing = inGame && (game.m_gameID & 0xFFFFFFull) == KovaaksAppId && ((game.m_gameID >> 24) & 0xFF) == 0;
@@ -2230,7 +2243,21 @@ namespace bridge
             }
             list.push_back(o.Done());
         }
-        Emit(json::Object().Int("v", ContractVersion).Str("ev", "friends").Raw("friends", json::Array(list)).Done());
+        // A long friends list doesn't fit one pipe frame: send it in parts the service joins by seq.
+        std::size_t skipped = 0;
+        const auto parts = json::Chunks(list, FriendsPartBytes, skipped);
+        if (skipped) m_log("friends: " + std::to_string(skipped) + " entries too large to send");
+        const std::int64_t seq = ++m_friendsSeq;
+        for (std::size_t i = 0; i < parts.size(); ++i)
+            Emit(json::Object()
+                     .Int("v", ContractVersion)
+                     .Str("ev", "friends")
+                     .Raw("friends", parts[i])
+                     .Int("part", static_cast<std::int64_t>(i))
+                     .Int("parts", static_cast<std::int64_t>(parts.size()))
+                     .Int("seq", seq)
+                     .Int("total", static_cast<std::int64_t>(list.size() - skipped))
+                     .Done());
     }
 
     void Bridge::EmitAvatar(std::uint64_t peer, bool)

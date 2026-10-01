@@ -214,7 +214,8 @@ namespace bridge
         void Error(const char* code, const std::string& message);
         void EmitReady();
         void EmitLobby();
-        void EmitFriends();
+        void EmitFriends(bool offline = false);
+        std::int64_t m_friendsSeq = 0;
         void EmitAvatar(std::uint64_t peer, bool final);
         void PollAvatars(const std::set<std::uint64_t>& loaded);
         void EmitPngAvatar(const AvatarWant& want);

@@ -198,6 +198,26 @@ int main()
         const auto out = json::Object().Str("a", "x\"y\n").Int("b", -3).Bool("c", true).Null("d").Done();
         Check(out == R"({"a":"x\"y\n","b":-3,"c":true,"d":null})", "builds escaped objects");
         Check(json::Parse(out).has_value(), "round-trips builder output");
+        // Friends lists are sent in parts that each fit the pipe frame.
+        {
+            std::vector<std::string> friends;
+            for (int i = 0; i < 500; ++i)
+                friends.push_back(json::Object().Str("peer", std::to_string(Person + static_cast<std::uint64_t>(i))).Str("name", "Synthetic Friend " + std::to_string(i)).Str("detail", std::string(120, 'x')).Done());
+            std::size_t skipped = 99, total = 0;
+            const auto parts = json::Chunks(friends, 48 * 1024, skipped);
+            bool fit = parts.size() > 1 && skipped == 0;
+            for (const auto& part : parts)
+            {
+                const auto parsed = json::Parse("{\"f\":" + part + "}", json::Limits{64 * 1024, 8, 32 * 1024, 4096});
+                fit = fit && part.size() <= 48 * 1024 && parsed && parsed->Get("f")->type == json::Value::Type::Array;
+                if (parsed) total += parsed->Get("f")->array.size();
+            }
+            Check(fit && total == friends.size(), "a long friends list splits into valid parts under the frame, keeping every entry");
+            const auto one = json::Chunks({R"({"a":1})", std::string(200, 'y'), R"({"b":2})"}, 100, skipped);
+            Check(one.size() == 1 && one[0] == R"([{"a":1},{"b":2}])" && skipped == 1, "an entry too large on its own is counted, not sent");
+            const auto none = json::Chunks({}, 100, skipped);
+            Check(none.size() == 1 && none[0] == "[]" && skipped == 0, "no friends still sends one empty part");
+        }
     }
 
     // Base64
