@@ -29,6 +29,7 @@ sealed class SteamTransport : IMultiplayerTransport
     string? self, selfName, lobby, owner;
     bool isHost;
     int nextId = 1, createId = -1, joinId = -1;
+    readonly Dictionary<int, string> workshopIds = new();
     IReadOnlyList<FriendEntry> friends = [];
     long friendsAt;
     string? lastData, lastStatus; bool? lastJoinable;
@@ -140,6 +141,7 @@ sealed class SteamTransport : IMultiplayerTransport
                         if (id == createId) creating = false;
                         var text = Str(e, "message") ?? Str(e, "code") ?? "The Steam bridge refused that.";
                         if (id == createId || id == joinId) events.Enqueue(new TransportEvent("", TransportEvent.Error, Reason: id == joinId ? "Couldn’t join the Steam lobby: " + text : "Couldn’t create the Steam lobby: " + text));
+                        if (id is { } wid && workshopIds.Remove(wid, out var failed)) events.Enqueue(new TransportEvent("", TransportEvent.WorkshopUpdate, Workshop: new WorkshopProgress(failed, "unavailable", 0, 0)));
                     }
                     break;
                 case "lobby.updated":
@@ -204,6 +206,11 @@ sealed class SteamTransport : IMultiplayerTransport
                         }
                     // AimMod players first, then KovaaK's players, then everyone else online.
                     friends = items.OrderBy(f => f.Status switch { "aimmod-lobby" => 0, "aimmod" => 1, "kovaaks" => 2, "online" => 3, _ => 4 }).ThenBy(f => f.Name, StringComparer.OrdinalIgnoreCase).Take(200).ToArray();
+                    break;
+                case "ugc.progress" or "ugc.state":
+                    if (Str(e, "item") is { } item)
+                        events.Enqueue(new TransportEvent("", TransportEvent.WorkshopUpdate, Workshop: new WorkshopProgress(item, Str(e, "state") ?? "downloading",
+                            e.TryGetProperty("downloaded", out var d) && d.TryGetInt64(out var dn) ? dn : 0, e.TryGetProperty("total", out var t) && t.TryGetInt64(out var tn) ? tn : 0)));
                     break;
                 case "error":
                     var code = Str(e, "code");
@@ -285,6 +292,15 @@ sealed class SteamTransport : IMultiplayerTransport
         return id >= 0;
     }
     public void DismissJoin() { if (Available) Command("join.dismiss", null); }
+    // Proposed bridge commands (not in contract v1 yet): ugc.download {item} answered by
+    // ugc.progress {item, state, downloaded, total}. An unknown-command result falls back to the host.
+    public bool WorkshopDownload(string item)
+    {
+        if (!Available || item.Length is < 1 or > 20 || !item.All(char.IsAsciiDigit)) return false;
+        var id = Command("ugc.download", new JsonObject { ["item"] = item }, withId: true);
+        lock (gate) { if (id >= 0) workshopIds[id] = item; }
+        return id >= 0;
+    }
     public void Kick(string peer) { if (Steam(peer)) Command("lobby.kick", new JsonObject { ["peer"] = peer }); }
     public void Transfer(string peer) { if (Steam(peer)) Command("lobby.transfer", new JsonObject { ["peer"] = peer }); }
     static bool Steam(string peer) => peer.Length is > 0 and <= 20 && peer.All(char.IsAsciiDigit);

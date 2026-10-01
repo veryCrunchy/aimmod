@@ -38,7 +38,8 @@ static class ProfilePresets
     public static bool Known(string id) => All.Any(p => p.Id == id);
 }
 
-sealed record ScenarioChoice(string Name, string Hash, string Map, string MapHash, double TimeLimit);
+// WorkshopId is set when the host's copy is a Steam Workshop item, so members can download it there.
+sealed record ScenarioChoice(string Name, string Hash, string Map, string MapHash, double TimeLimit, string? WorkshopId = null);
 sealed record MapChoice(string Name, string Hash, string Source);
 sealed record ProfileChoice(string Preset, string? Custom = null, string? Hash = null)
 {
@@ -221,6 +222,8 @@ static class LobbyRules
         if (!LobbyModes.AllowsOverrides(s.Mode))
             s = s with { MapOverride = null, TimeLimit = null, Weapon = ProfileChoice.Default, Movement = ProfileChoice.Default, Character = ProfileChoice.Default, TargetSpeed = 1, TargetSize = 1 };
         if (!LobbyModes.AllowsLateJoin(s.Mode)) s = s with { LateJoin = false };
+        // Picking the scenario's own length is no override, so no match scenario is generated for it.
+        if (s.TimeLimit is { } limit && s.Scenario is { } scenario && Math.Abs(limit - scenario.TimeLimit) < 0.5) s = s with { TimeLimit = null };
         if (s.Mode == LobbyModes.Race) s = s with { Rounds = Math.Clamp(s.Rounds, 1, 5) };
         if (s.MaxPlayers < Math.Max(LobbySettings.MinPlayers, players)) s = s with { MaxPlayers = Math.Min(LobbySettings.MaxPlayerLimit, Math.Max(LobbySettings.MinPlayers, players)) };
         return s with { Weapon = s.WeaponProfile, Movement = s.MovementProfile, Character = s.CharacterProfile };

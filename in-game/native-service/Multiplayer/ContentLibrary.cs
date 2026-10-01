@@ -4,7 +4,7 @@ using System.Text.RegularExpressions;
 
 namespace AimMod.InGame.Multiplayer;
 
-sealed record ScenarioInfo(string Name, string Hash, string Map, string MapHash, string MapSource, double TimeLimit, string? DefaultWeapon, string? DefaultCharacter, bool Ported);
+sealed record ScenarioInfo(string Name, string Hash, string Map, string MapHash, string MapSource, double TimeLimit, string? DefaultWeapon, string? DefaultCharacter, bool Ported, string? WorkshopId = null);
 sealed record MapInfo(string Name, string Hash, string Source);
 
 // Read-only view of the player's KovaaK's library, used to pick lobby content
@@ -34,7 +34,7 @@ sealed partial class ContentLibrary : IContentResolver
     public IReadOnlyList<LibraryItem> Characters { get { Refresh(); lock (gate) return characters; } }
 
     public ScenarioChoice? Scenario(string name) =>
-        Scenarios.FirstOrDefault(s => s.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) is { } s ? new ScenarioChoice(s.Name, s.Hash, s.Map, s.MapHash, s.TimeLimit) : null;
+        Scenarios.FirstOrDefault(s => s.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) is { } s ? new ScenarioChoice(s.Name, s.Hash, s.Map, s.MapHash, s.TimeLimit, s.WorkshopId) : null;
     public MapChoice? Map(string name) =>
         Maps.FirstOrDefault(m => m.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) is { } m ? new MapChoice(m.Name, m.Hash, m.Source) : null;
     public LibraryItem? Weapon(string name) => Weapons.FirstOrDefault(w => w.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
@@ -74,6 +74,51 @@ sealed partial class ContentLibrary : IContentResolver
     // Local file for a library item, for the match scenario generator. Never sent to the UI.
     internal string? PathOf(string kind, string name) { Refresh(); lock (gate) return paths.GetValueOrDefault(kind + ":" + name); }
     internal string? ScenarioFolder => root is null ? null : Path.Combine(root, "Saved", "SaveGames", "Scenarios");
+    internal string? Root => root;
+    // <library>/steamapps/common/FPSAimTrainer/FPSAimTrainer -> <library>/steamapps/workshop/content/824270
+    string? WorkshopFolder => root is null ? null : Path.GetFullPath(Path.Combine(root, "..", "..", "..", "workshop", "content", "824270"));
+    IEnumerable<(string File, string? Workshop)> WorkshopFiles()
+    {
+        if (WorkshopFolder is not { } folder || !Directory.Exists(folder)) yield break;
+        foreach (var item in Directory.EnumerateDirectories(folder).Take(MaxItems))
+        {
+            var id = Path.GetFileName(item);
+            if (id.Length is 0 or > 20 || !id.All(char.IsAsciiDigit)) continue;
+            foreach (var file in Files(item, "*.sce").Take(8)) yield return (file, id);
+        }
+    }
+
+    // The files that make up a lobby's content on this machine, for the host to offer:
+    // the scenario, a custom or ported map, ability files the scenario names and custom profiles.
+    internal IReadOnlyList<(string Kind, string Path)> ContentFiles(LobbySettings s)
+    {
+        var list = new List<(string, string)>();
+        if (s.Scenario is null) return list;
+        var info = Scenarios.FirstOrDefault(x => x.Hash == s.Scenario.Hash);
+        if (info is null || PathOf("scenario", info.Name) is not { } scenarioPath) return list;
+        list.Add(("scenario", scenarioPath));
+        var map = s.MapOverride?.Name ?? (info.MapSource == "game" ? null : info.Map);
+        if (map is not null && PathOf("map", map) is { } mapPath) list.Add(("map", mapPath));
+        foreach (var ability in AbilityNames(scenarioPath)) if (PathOf("ability", ability) is { } abilityPath) list.Add(("ability", abilityPath));
+        if (s.WeaponProfile is { Preset: ProfilePresets.Custom, Custom: { } w } && PathOf("weapon", w) is { } weaponPath) list.Add(("weapon", weaponPath));
+        if (s.CharacterProfile is { Preset: ProfilePresets.Custom, Custom: { } c } && PathOf("character", c) is { } characterPath) list.Add(("character", characterPath));
+        return list;
+    }
+    static IEnumerable<string> AbilityNames(string scenarioPath)
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            foreach (var line in File.ReadLines(scenarioPath).Take(200_000))
+            {
+                if (line == "[Map Data]") break;
+                if (!line.StartsWith("AbilityProfileNames=", StringComparison.Ordinal)) continue;
+                foreach (var n in line["AbilityProfileNames=".Length..].Split(';')) if (n.Trim().Length is > 0 and <= 128) names.Add(n.Trim());
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        return names;
+    }
 
     public void Refresh(bool force = false)
     {
@@ -89,7 +134,9 @@ sealed partial class ContentLibrary : IContentResolver
                 var found = new List<(ScenarioInfo Info, string File)>();
                 var portedMaps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 var nextPaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                foreach (var file in Files(Path.Combine(games, "Scenarios"), "*.sce"))
+                // Local scenarios first, then Workshop items (steamapps/workshop/content/824270/<id>/*.sce).
+                var sources = Files(Path.Combine(games, "Scenarios"), "*.sce").Select(f => (File: f, Workshop: (string?)null)).Concat(WorkshopFiles());
+                foreach (var (file, workshop) in sources)
                 {
                     // Match scenarios AimMod generated are not offered as lobby content.
                     if (Path.GetFileName(file).StartsWith(MatchScenario.Prefix, StringComparison.OrdinalIgnoreCase)) continue;
@@ -102,7 +149,7 @@ sealed partial class ContentLibrary : IContentResolver
                     var limit = double.TryParse(header.GetValueOrDefault("Timelimit"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var t) && t is > 0 and <= 3600 ? t : 60;
                     var ported = (header.GetValueOrDefault("Description") ?? "").StartsWith("Ported Source map", StringComparison.OrdinalIgnoreCase);
                     if (ported && mapName.Length > 0) portedMaps.Add(Path.GetFileNameWithoutExtension(mapName));
-                    found.Add((new ScenarioInfo(name, hash, Path.GetFileNameWithoutExtension(mapName), "", "game", limit, header.GetValueOrDefault("~weapon"), header.GetValueOrDefault("PlayerProfile"), ported), file));
+                    found.Add((new ScenarioInfo(name, hash, Path.GetFileNameWithoutExtension(mapName), "", "game", limit, header.GetValueOrDefault("~weapon"), header.GetValueOrDefault("PlayerProfile"), ported, workshop), file));
                 }
                 var mapList = new List<MapInfo>();
                 foreach (var file in Files(mapFolder, "*.map").Concat(Files(mapFolder, "*.json")))
@@ -124,6 +171,8 @@ sealed partial class ContentLibrary : IContentResolver
                 maps = mapList.OrderBy(m => m.Source == "ported" ? 0 : 1).ThenBy(m => m.Name, StringComparer.OrdinalIgnoreCase).ToArray();
                 weapons = Profiles(Path.Combine(games, "Weapons"), "*.wep", "weapon", nextPaths);
                 characters = Profiles(Path.Combine(games, "Characters"), "*.chr", "character", nextPaths);
+                foreach (var ext in ContentRules.AbilityExtensions)
+                    foreach (var file in Files(Path.Combine(games, "Abilities"), "*" + ext)) nextPaths.TryAdd("ability:" + Path.GetFileNameWithoutExtension(file), file);
                 paths = nextPaths;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }

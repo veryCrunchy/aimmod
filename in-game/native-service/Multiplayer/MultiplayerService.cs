@@ -43,6 +43,12 @@ sealed class MultiplayerService : IDisposable
     string selfName = "You";
     (string Kind, string Text, long At)? notice;
     RoundPlan? plan;
+    // Content download: the host serves lobby files; this machine downloads what it lacks.
+    readonly ContentServer server;
+    readonly ContentDownload? download;
+    string? downloadKey, workshopItem;
+    bool autoDownload, simulatedMissing;
+    long manifestAskedAt;
     string? trackedRound, lastContentKey; HashSet<string> knownRuns = new(StringComparer.Ordinal); double lastFrameSeconds = -1; long lastFrameAt; ScoreFrame? lastFrame;
     public MultiplayerSimulation? Simulation { get; }
     public string SelfId => transport.LocalPeer;
@@ -55,6 +61,8 @@ sealed class MultiplayerService : IDisposable
         historyPath = output is null ? null : Path.Combine(output, "multiplayer-matches.json");
         if (output is not null && library.ScenarioFolder is { } folder) scenarios = new MatchScenarioStore(folder, Path.Combine(output, "multiplayer-scenarios.json"));
         LoadHistory();
+        server = new ContentServer(library, this.clock);
+        if (output is not null && library.Root is { } root) download = new ContentDownload(root, Path.Combine(output, "downloads"), this.clock);
         if (simulation) Simulation = new MultiplayerSimulation(this.clock, library, completedRuns, seed);
         if (autoTick) timer = new Timer(_ => { try { Tick(); } catch (Exception ex) when (ex is IOException or InvalidOperationException or JsonException or UnauthorizedAccessException) { } }, null, 100, 100);
     }
@@ -148,6 +156,10 @@ sealed class MultiplayerService : IDisposable
                 case "copy-code":
                     if (Current is not { } room) return LobbyResult.Fail("no-lobby", "Create a lobby first.");
                     return WindowsClipboard.SetText(room.Code) ? LobbyResult.Success : LobbyResult.Fail("clipboard", "Couldn’t copy. The room code is " + room.Code + ".");
+                case "download" or "download-retry":
+                    return StartDownload();
+                case "download-cancel":
+                    download?.Cancel(); return LobbyResult.Success;
                 case "sim":
                     if (Simulation is null) return LobbyResult.Fail("sim-off", "The simulation is off in this build.");
                     var op = Text("op") ?? "";
@@ -181,6 +193,116 @@ sealed class MultiplayerService : IDisposable
     }
 
     IReadOnlyList<FriendEntry> Friends() => Simulation is not null && !transport.Available ? Simulation.Friends(clock()) : transport.Friends();
+
+    // ---- content download ------------------------------------------------
+
+    (string Scenario, string Map, string Profiles) LocalContent(LobbySettings s)
+    {
+        var have = library.Check(s);
+        // Developer simulation: pretend this machine lacks the content until it downloads it.
+        return simulatedMissing && have.Scenario != ContentStates.None ? (ContentStates.Ok, ContentStates.Missing, have.Profiles) : have;
+    }
+
+    LobbyResult StartDownload()
+    {
+        if (Current is not { } lobby || download is null) return LobbyResult.Fail("unavailable", "Downloads need your KovaaK’s folder.");
+        if (lobby.HostId == SelfId) return LobbyResult.Fail("host", "You’re the host; you already have the content.");
+        autoDownload = true;
+        // Workshop first when the lobby names an item and Steam can fetch it.
+        var item = download.Manifest?.Workshop ?? lobby.Settings.Scenario?.WorkshopId;
+        if (item is not null && download.Source != "host-fallback" && transport.WorkshopDownload(item))
+        {
+            workshopItem = item; download.Source = "workshop";
+            if (download.Manifest is null) download.Asked();
+            return LobbyResult.Success;
+        }
+        download.Source = "host";
+        if (download.Manifest is null || download.State is "error" && download.Code is "changed" or "invalid")
+        {
+            download.Reset(); download.Asked(); manifestAskedAt = clock();
+            AskManifest();
+            return LobbyResult.Success;
+        }
+        if (!download.Start()) return LobbyResult.Fail(download.Code ?? "download", download.Error ?? "Couldn’t start the download.");
+        return LobbyResult.Success;
+    }
+
+    void AskManifest()
+    {
+        if (core is not null && simulatedMissing && server.Manifest(core.Settings) is { } local) download?.Offer(local);
+        else if (hostPeer is not null) Send(hostPeer, "content.request", new { });
+    }
+
+    void WorkshopUpdate(WorkshopProgress? progress)
+    {
+        if (progress is null || download is null || progress.Item != workshopItem) return;
+        if (progress.State is "installed")
+        {
+            workshopItem = null; library.Refresh(force: true); ReportContent(force: true);
+            notice = ("info", "Downloaded from the Steam Workshop.", clock());
+        }
+        else if (progress.State is "failed" or "unavailable")
+        {
+            // Fall back to the host transfer.
+            workshopItem = null; download.Source = "host-fallback";
+            StartDownload();
+            if (download.Source == "host") notice = ("info", "The Workshop download didn’t work, so the host is sending the files.", clock());
+        }
+        workshopState = progress;
+    }
+    WorkshopProgress? workshopState;
+
+    void PumpContent()
+    {
+        if (download is null || Current is not { } lobby) return;
+        var key = lobby.Id + "|" + lobby.Settings.Scenario?.Hash + "|" + lobby.Settings.MapOverride?.Hash + "|" + lobby.Settings.WeaponProfile.Hash + "|" + lobby.Settings.CharacterProfile.Hash;
+        if (key != downloadKey) { downloadKey = key; download.Reset(); autoDownload = false; workshopItem = null; workshopState = null; }
+        var now = clock();
+        // Host side: serve queued chunks; a running match keeps most of the bandwidth.
+        if (core is not null && !simulatedMissing)
+            server.Pump(lobby.Match is { Phase: MatchPhases.Live or MatchPhases.Countdown }, (peer, body) => Send(peer, "content.chunk", body));
+        if (lobby.HostId == SelfId && !simulatedMissing) return;
+        var (scenario, map, profiles) = LocalContent(lobby.Settings);
+        var missing = scenario is ContentStates.Missing or ContentStates.Mismatch || map is ContentStates.Missing or ContentStates.Mismatch || profiles is ContentStates.Missing or ContentStates.Mismatch;
+        // Ask for the manifest as soon as something is missing, so the size can be shown.
+        if (missing && download.State == "idle") { download.Asked(); manifestAskedAt = now; AskManifest(); }
+        if (download.State == "manifest" && now - manifestAskedAt > 10_000) { manifestAskedAt = now; AskManifest(); }
+        if (download.State == "downloading" && download.Next() is { } want)
+        {
+            if (core is not null && simulatedMissing)
+            {
+                // Simulated host: serve from this machine's own library at a visible pace.
+                server.RateIdle = 600 * 1024;
+                server.Request(SelfId, lobby.Settings, want.Hash, want.Offset, want.Length);
+            }
+            else if (hostPeer is not null) Send(hostPeer, "content.get", new { hash = want.Hash, offset = want.Offset, length = want.Length });
+        }
+        if (core is not null && simulatedMissing)
+            server.Pump(false, (_, body) =>
+            {
+                var b = JsonSerializer.SerializeToElement(body, Protocol.Json);
+                download.Chunk(b.GetProperty("hash").GetString()!, b.GetProperty("offset").GetInt64(), b.GetProperty("total").GetInt64(), Convert.FromBase64String(b.GetProperty("data").GetString()!));
+            });
+        if (download.State == "done" && (missing || simulatedMissing))
+        {
+            simulatedMissing = false; library.Refresh(force: true); ReportContent(force: true);
+            notice = ("info", "Content downloaded and verified. You can ready up.", now);
+        }
+    }
+
+    object? DownloadView(LobbySnapshot lobby)
+    {
+        if (download is null || lobby.HostId == SelfId && !simulatedMissing) return null;
+        if (download.State == "idle" && workshopItem is null) return null;
+        var conflicts = download.Manifest is not null && download.State is "ready" ? download.Conflicts().Select(c => c.Name).ToArray() : [];
+        return new
+        {
+            view = download.View(),
+            workshop = lobby.Settings.Scenario?.WorkshopId ?? download.Manifest?.Workshop,
+            workshopProgress = workshopState is { } w ? new { w.State, w.Done, w.Total } : null,
+            conflicts,
+        };
+    }
 
     void Reset() { trackedRound = null; lastContentKey = null; lastBroadcast = -1; plan = null; lastFrame = null; }
 
@@ -290,6 +412,8 @@ sealed class MultiplayerService : IDisposable
                 Leave("timeout"); notice = ("error", "Joining the Steam lobby took too long. Try the invite again.", now);
             }
             ReportContent(force: false);
+            PumpContent();
+            PrepareMatchScenario();
             PlanRound();
             TrackLocalRun();
             Remember();
@@ -308,6 +432,7 @@ sealed class MultiplayerService : IDisposable
     void Handle(TransportEvent e)
     {
         if (e.Kind == TransportEvent.InviteReceived) { if (e.Invite is not null) AddInvite(e.Invite); return; }
+        if (e.Kind == TransportEvent.WorkshopUpdate) { WorkshopUpdate(e.Workshop); return; }
         if (e.Kind == TransportEvent.Error)
         {
             if (joinPendingSince is not null) joinPendingSince = null;
@@ -381,7 +506,21 @@ sealed class MultiplayerService : IDisposable
             case "finish":
                 if (ReadFinish(m.Body) is { } run) core!.Finish(peer, run);
                 break;
+            case "content.request":
+                if (server.Manifest(core!.Settings) is { } manifest) Send(peer, "content.manifest", new { key = manifest.Key, files = manifest.Files, workshop = manifest.Workshop });
+                else Send(peer, "content.error", new { hash = "", code = "none" });
+                break;
+            case "content.get":
+                try
+                {
+                    var hash = m.Body.GetProperty("hash").GetString() ?? "";
+                    var problem = server.Request(peer, core!.Settings, hash, m.Body.GetProperty("offset").GetInt64(), m.Body.GetProperty("length").GetInt64());
+                    if (problem is not null) Send(peer, "content.error", new { hash, code = problem });
+                }
+                catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or FormatException) { }
+                break;
             case "bye":
+                server.Forget(peer);
                 core!.Leave(peer); transport.Close(peer);
                 break;
         }
@@ -415,6 +554,23 @@ sealed class MultiplayerService : IDisposable
             case "result":
                 if (m.Body.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.False && m.Body.TryGetProperty("message", out var text) && text.ValueKind == JsonValueKind.String)
                     notice = ("error", text.GetString() ?? "The host refused that.", clock());
+                break;
+            case "content.manifest":
+                if (download is not null && ContentDownload.ReadManifest(m.Body) is { } offered) { download.Offer(offered); if (download.State == "ready" && autoDownload) StartDownload(); }
+                break;
+            case "content.chunk":
+                try
+                {
+                    if (download is not null && m.Body.GetProperty("hash").GetString() is { } chunkHash)
+                        download.Chunk(chunkHash, m.Body.GetProperty("offset").GetInt64(), m.Body.GetProperty("total").GetInt64(), Convert.FromBase64String(m.Body.GetProperty("data").GetString() ?? ""));
+                }
+                catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or FormatException) { }
+                break;
+            case "content.error":
+                var refusedHash = m.Body.TryGetProperty("hash", out var rh) && rh.ValueKind == JsonValueKind.String ? rh.GetString() ?? "" : "";
+                var refusedCode = m.Body.TryGetProperty("code", out var rc) && rc.ValueKind == JsonValueKind.String ? rc.GetString() ?? "" : "";
+                if (download is not null && refusedCode == "none") { download.Reset(); notice = ("error", "The host can’t send this content. Get it from the Workshop or ask the host.", clock()); }
+                else download?.Refused(refusedHash, refusedCode);
                 break;
             case "bye":
                 var why = m.Body.TryGetProperty("reason", out var r) && r.ValueKind == JsonValueKind.String ? r.GetString() : null;
@@ -491,12 +647,35 @@ sealed class MultiplayerService : IDisposable
         if (self is null) return;
         if (!force && key == lastContentKey && self.Scenario != ContentStates.Unknown) return;
         lastContentKey = key;
-        var (scenario, map, profiles) = library.Check(s);
+        var (scenario, map, profiles) = LocalContent(s);
         if (scenario == ContentStates.None) return;
         var args = JsonSerializer.SerializeToElement(new { scenario, map, profiles });
         if (core is not null) core.Apply(SelfId, "content", args, library);
         else if (hostPeer is not null) Send(hostPeer, "command", new { id = ++seq, action = "content", args });
     }
+
+    // A match scenario is written while the lobby is still being set up, as soon
+    // as the settings call for one, so KovaaK's has time to index it before the
+    // countdown. After writing, AimModCore is asked to refresh its scenario list.
+    string? preparedKey, preparedName, preparedProblem;
+    long? refreshSequence;
+    void PrepareMatchScenario()
+    {
+        if (Current is not { } lobby || lobby.Match is { Phase: not MatchPhases.Final } || lobby.Settings.Scenario is null) return;
+        var s = lobby.Settings;
+        if (!MatchScenario.Needed(s)) { preparedKey = null; preparedName = null; preparedProblem = null; return; }
+        var key = MatchScenario.Key(s);
+        if (key == preparedKey) return;
+        var (scenario, map, profiles) = LocalContent(s);
+        if (scenario != ContentStates.Ok || map != ContentStates.Ok || profiles is ContentStates.Missing or ContentStates.Mismatch) return;
+        preparedKey = key; preparedName = MatchScenario.Name(s);
+        preparedProblem = BuildMatchScenario(s, preparedName);
+        if (preparedProblem is null) refreshSequence = game.Refresh();
+    }
+
+    static string FindIt(string scenario, bool generated) =>
+        "In KovaaK’s, open Play > Scenarios, search for “" + scenario + "”" + (generated ? " (it’s one of your local scenarios) and play it in Freeplay." : " and start it.") +
+        (generated ? " If it’s not listed yet, restart KovaaK’s once; AimMod saved it to your Scenarios folder." : "");
 
     // Load the round's scenario during the countdown and start it at zero
     // through AimModCore. Unmodified scenarios run as normal challenges (the
@@ -517,24 +696,26 @@ sealed class MultiplayerService : IDisposable
             if (generated)
             {
                 scenario = MatchScenario.Name(s);
-                problem = BuildMatchScenario(s, scenario);
+                // Usually written already while the lobby was set up; this only fills gaps.
+                problem = preparedName == scenario && preparedProblem is null ? null : BuildMatchScenario(s, scenario);
             }
-            if (problem is not null) plan = new RoundPlan(key, scenario, mode, generated, "error", problem);
+            if (problem is not null) plan = new RoundPlan(key, scenario, mode, generated, "error", problem + " " + FindIt(s.Scenario?.Name ?? scenario, false));
             else if (caps.Contains("load") && game.Load(scenario) is long load)
-                plan = new RoundPlan(key, scenario, mode, generated, "loading", "Loading " + scenario + " in KovaaK’s…", LoadSequence: load);
-            else plan = new RoundPlan(key, scenario, mode, generated, "manual", "Open " + scenario + " in KovaaK’s" + (generated ? " (freeplay)" : "") + " and start it when the countdown ends.");
+                plan = new RoundPlan(key, scenario, mode, generated, "loading", "Loading “" + scenario + "” in KovaaK’s…", LoadSequence: load);
+            else plan = new RoundPlan(key, scenario, mode, generated, "manual", FindIt(scenario, generated) + " Start when the countdown ends.");
         }
         if (plan is null || plan.Key != key) return;
         if (match.Phase == MatchPhases.Live && plan.StartSequence is null && plan.State is "loading" or "ready" or "manual")
         {
             if (caps.Contains("start") && game.Start(plan.Scenario, plan.Mode) is long start) plan = plan with { State = "starting", Message = "Starting your run…", StartSequence = start };
-            else plan = plan with { State = "manual", Message = "Go! Start " + plan.Scenario + " now." };
+            else plan = plan with { State = "manual", Message = "Go! " + FindIt(plan.Scenario, plan.Generated) };
         }
         if (game.Result is { } result && (result.Sequence == plan.LoadSequence || result.Sequence == plan.StartSequence))
         {
             var state = result.State == "error" ? "error" : result.Code is "loaded" or "already-loaded" ? "ready" : result.Code == "started" ? "started" : plan.State;
-            var text = result.State == "error" ? "KovaaK’s couldn’t " + (result.Sequence == plan.StartSequence ? "start" : "load") + " the scenario (" + result.Code + "). Start it yourself." :
-                state == "ready" ? "Loaded. Your run starts when the countdown ends." : state == "started" ? "Your run has started." : plan.Message;
+            var text = result.State == "error"
+                ? (result.Code == "unknown-scenario" ? "KovaaK’s hasn’t picked up “" + plan.Scenario + "” yet. " : "KovaaK’s couldn’t " + (result.Sequence == plan.StartSequence ? "start" : "load") + " the scenario (" + result.Code + "). ") + FindIt(plan.Scenario, plan.Generated)
+                : state == "ready" ? "Loaded. Your run starts when the countdown ends." : state == "started" ? "Your run has started." : plan.Message;
             plan = plan with { State = state, Message = text };
         }
     }
@@ -666,8 +847,9 @@ sealed class MultiplayerService : IDisposable
                     self = SelfId, isHost = lobby.HostId == SelfId, authority = core is not null ? "local" : "remote",
                     blockers = LobbyRules.StartBlockers(lobby), content = new { scenario, map, profiles },
                     simulated = lobby.Members.Any(m => m.Simulated),
-                    generated = generated ? new { name = MatchScenario.Name(lobby.Settings), key = MatchScenario.Key(lobby.Settings)[..12], mode = "freeplay" } : null,
+                    generated = generated ? new { name = MatchScenario.Name(lobby.Settings), key = MatchScenario.Key(lobby.Settings)[..12], mode = "freeplay", saved = preparedName == MatchScenario.Name(lobby.Settings) && preparedProblem is null, problem = preparedName == MatchScenario.Name(lobby.Settings) ? preparedProblem : null } : null,
                     round = plan is { } p && lobby.Match is { } mt && p.Key == mt.Id + "#" + mt.Round ? new { p.Scenario, p.Mode, p.Generated, p.State, p.Message } : null,
+                    download = DownloadView(lobby),
                 };
             }
             var friendsSource = Simulation is not null && !transport.Available ? "simulation" : transport.Available ? "steam" : "unavailable";
