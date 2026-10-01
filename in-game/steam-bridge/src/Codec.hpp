@@ -157,6 +157,9 @@ namespace bridge
         std::string scenario, map; // CameraMeta (<= MaxPoseScene each); origin in lobby, scale in camera.fov
         std::uint8_t rate = 0; // SpectateSub (lobby/target reuse: lobby = target)
     };
+    // True when Decode would accept what Encode produces for message.
+    bool Encodable(const WireMessage& message);
+    // Empty when the message isn't Encodable: the sender never emits what a receiver must reject.
     std::vector<std::uint8_t> Encode(const WireMessage& message);
     // Strict: exact sizes per type, version match, payload bounds.
     std::optional<WireMessage> Decode(const std::uint8_t* data, std::size_t size);

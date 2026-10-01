@@ -1163,11 +1163,28 @@ they simply play KovaaK's, and the watched player sees who is watching.
 | Event | Fields |
 | --- | --- |
 | `spectate.started` | `peer`, `name`, `direct`, `stream` (spectator side; also sent for lobby spectating) |
-| `spectate.ended` | `peer`, `reason`: `off`, `not-friend`, `full`, `declined`, `refused`, `no-answer`, `timeout`, `unreachable`, `ended`, `stopped`, `switched`, `left`, `closed` or `shutdown` |
+| `spectate.ended` | `peer`, `reason`: `off`, `not-friend`, `full`, `declined`, `refused`, `no-answer`, `timeout`, `unreachable`, `ended`, `stopped`, `switched`, `left`, `lost`, `closed` or `shutdown` |
 | `spectate.score` | `peer`, `active`, `paused`, `score`?, `seconds`?, `remainingSeconds`?, `shots`?, `hits`?, `kills`?, `accuracy`? |
 | `spectate.asked` | `from`, `fromName` (watched side, `ask` mode) |
 | `spectator.joined` / `spectator.left` | `peer`, `name` / `peer`, `reason` |
 | `spectators` | `spectators` [{peer, name, initials}], sent on every change |
+
+**Robustness.**
+
+- `lost`: the watched player's stream went silent for 8 s. The 1 s
+  `CameraMeta` counts as a keepalive, so a player idling in menus is not
+  cut off. The spectator unsubscribes and gets `spectate.ended`.
+- Every peer has an inbound budget of 400 frames per second (burst 400).
+  Frames over it are dropped before decoding, forwarding or relaying, and a
+  peer that keeps flooding is disconnected (`flooding`).
+- The encoder refuses anything the decoder would reject (empty or oversized
+  payloads, rates out of range, invalid match tokens, non-finite poses and
+  cameras). Such a send fails instead of going out.
+- A failed `xfer.chunk` send leaves no transfer behind. Its window starts
+  with the first accepted chunk.
+- A lobby create or join that Steam completes after its 20 s timeout is
+  watched for 60 s more. If Steam entered that lobby late, the bridge leaves
+  it.
 
 **Presence.**
 
