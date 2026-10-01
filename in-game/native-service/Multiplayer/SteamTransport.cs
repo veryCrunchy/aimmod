@@ -32,6 +32,8 @@ sealed class SteamTransport : IMultiplayerTransport
     readonly Dictionary<int, string> workshopIds = new();
     readonly Dictionary<(string Peer, int Transfer), int> outstanding = new();
     bool ugc; int bulkBytes, bulkWindow = 4;
+    string? bridgeVersion; RejoinPoint? lastLobby;
+    HashSet<string> lastCharKeys = new();
     IReadOnlyList<FriendEntry> friends = [];
     long friendsAt;
     string? lastData, lastStatus; bool? lastJoinable;
@@ -50,6 +52,7 @@ sealed class SteamTransport : IMultiplayerTransport
     public string? LocalName { get { lock (gate) return selfName; } }
     public string? HostHint { get { lock (gate) return lobby is null ? null : owner; } }
     public string? JoinToken { get { lock (gate) return lobby; } }
+    public string? LobbyToken { get { lock (gate) return lobby; } }
 
     // ---- pipe ------------------------------------------------------------
 
@@ -92,7 +95,7 @@ sealed class SteamTransport : IMultiplayerTransport
                 if (!isHost && owner is not null && owner != self) events.Enqueue(new TransportEvent(owner, TransportEvent.Disconnected, Reason: "shutdown"));
             }
             ready = false; creating = false; lobby = null; owner = null; isHost = false; members.Clear(); rtt.Clear(); outstanding.Clear();
-            lastData = null; lastStatus = null; lastJoinable = null;
+            lastData = null; lastStatus = null; lastJoinable = null; lastCharKeys.Clear();
         }
     }
 
@@ -139,6 +142,9 @@ sealed class SteamTransport : IMultiplayerTransport
                     // Contract additions: feature list, bulk chunk size and send window.
                     var features = e.TryGetProperty("features", out var fl) && fl.ValueKind == JsonValueKind.Array ? fl.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!).ToHashSet() : [];
                     ugc = features.Contains("ugc");
+                    bridgeVersion = Str(e, "bridge");
+                    lastLobby = e.TryGetProperty("lastLobby", out var ll) && ll.ValueKind == JsonValueKind.Object && Str(ll, "lobby") is { } lastId
+                        ? new RejoinPoint(lastId, Str(ll, "hostName") ?? "your host", ll.TryGetProperty("ageSeconds", out var age) && age.TryGetInt64(out var ag) ? ag : 0) : null;
                     bulkBytes = features.Contains("xfer") ? Math.Clamp(Int(e, "maxChunk") ?? 0, 0, 32768) : 0;
                     bulkWindow = Math.Clamp(Int(e, "xferWindow") ?? 4, 1, 64);
                     break;
@@ -153,7 +159,7 @@ sealed class SteamTransport : IMultiplayerTransport
                     }
                     break;
                 case "lobby.updated":
-                    lobby = Str(e, "lobby"); owner = Str(e, "owner"); isHost = Bool(e, "isHost"); creating = false;
+                    lobby = Str(e, "lobby"); owner = Str(e, "owner"); isHost = Bool(e, "isHost"); creating = false; lastLobby = null;
                     members.Clear();
                     if (e.TryGetProperty("members", out var list) && list.ValueKind == JsonValueKind.Array)
                         foreach (var m in list.EnumerateArray()) if (Str(m, "peer") is { } peer) members[peer] = (Bool(m, "connected"), Int(m, "rtt"));
@@ -214,9 +220,21 @@ sealed class SteamTransport : IMultiplayerTransport
                             var peer = Str(f, "peer"); var name = Str(f, "name"); var persona = Str(f, "state") ?? "offline";
                             if (peer is null || string.IsNullOrWhiteSpace(name) || persona == "offline") continue;
                             var aimmod = Bool(f, "aimmod"); var playing = Bool(f, "playing"); var joinLobby = Str(f, "lobby");
-                            var status = joinLobby is not null && aimmod ? "aimmod-lobby" : aimmod ? "aimmod" : playing ? "kovaaks" : persona == "online" ? "online" : "away";
-                            var detail = status switch { "aimmod-lobby" => "In an AimMod lobby", "aimmod" => "Playing KovaaK’s with AimMod", "kovaaks" => "Playing KovaaK’s, no AimMod", "away" => "Away", _ => "Online" };
-                            items.Add(new FriendEntry(peer, LobbyRules.CleanName(name, "Friend"), status, detail, joinLobby, joinLobby is not null && aimmod));
+                            // aimmodState: lobby, playing or idle (rich presence from every AimModSteam).
+                            var state = Str(f, "aimmodState"); var scenario = Str(f, "scenario");
+                            int? size = Int(f, "lobbySize"), maxSize = Int(f, "lobbyMax");
+                            var joinable = joinLobby is not null && aimmod && (!f.TryGetProperty("lobbyJoinable", out var lj) || lj.ValueKind != JsonValueKind.False);
+                            var status = joinLobby is not null && aimmod || state == "lobby" ? "aimmod-lobby" : aimmod ? "aimmod" : playing ? "kovaaks" : persona == "online" ? "online" : "away";
+                            var shown = scenario is { Length: > 0 } ? LobbyRules.CleanName(scenario, "a scenario") : null;
+                            var detail = status switch
+                            {
+                                "aimmod-lobby" => "In AimMod lobby" + (size is { } s && maxSize is { } mx ? " (" + s + "/" + mx + ")" : ""),
+                                "aimmod" => state == "playing" && shown is not null ? "Playing " + shown : state == "idle" ? "Idle" : "Playing KovaaK’s with AimMod",
+                                "kovaaks" => "Playing KovaaK’s, no AimMod",
+                                "away" => "Away",
+                                _ => "Online",
+                            };
+                            items.Add(new FriendEntry(peer, LobbyRules.CleanName(name, "Friend"), status, detail, joinLobby, joinable));
                         }
                     // AimMod players first, then KovaaK's players, then everyone else online.
                     friends = items.OrderBy(f => f.Status switch { "aimmod-lobby" => 0, "aimmod" => 1, "kovaaks" => 2, "online" => 3, _ => 4 }).ThenBy(f => f.Name, StringComparer.OrdinalIgnoreCase).Take(200).ToArray();
@@ -287,9 +305,17 @@ sealed class SteamTransport : IMultiplayerTransport
             ["aimmod.players"] = players + "/" + s.Settings.MaxPlayers,
             ["aimmod.state"] = s.Match is null ? "lobby" : s.Match.Phase == MatchPhases.Final ? "results" : "match",
         };
+        // How each player looks in the others' games: aimmod.char.<SteamID> = character profile.
+        foreach (var m in s.Members.Where(m => Steam(m.Id)).Take(16))
+            data["aimmod.char." + m.Id] = (AvatarProfiles.Find(m.Avatar) ?? AvatarProfiles.All[0]).ProfileName;
+        // Keys of members who left are removed (null deletes a lobby key).
+        string[] gone;
+        lock (gate) { gone = lastCharKeys.Where(k => !data.ContainsKey(k)).ToArray(); lastCharKeys = data.Select(kv => kv.Key).Where(k => k.StartsWith("aimmod.char.", StringComparison.Ordinal)).ToHashSet(); }
+        foreach (var key in gone) data[key] = null;
         if (create)
         {
             var max = Math.Clamp(s.Settings.MaxPlayers + (s.Settings.Spectators ? LobbySettings.MaxSpectators : 0), 2, 16);
+            foreach (var empty in data.Where(kv => kv.Value is null).Select(kv => kv.Key).ToArray()) data.Remove(empty);
             var id = Command("lobby.create", new JsonObject { ["privacy"] = s.Settings.Privacy == LobbyPrivacy.Invite ? "invite" : "friends", ["maxMembers"] = max, ["data"] = data }, withId: true);
             lock (gate) { createId = id; if (id < 0) creating = false; }
             return;
@@ -318,7 +344,7 @@ sealed class SteamTransport : IMultiplayerTransport
     public void Withdraw()
     {
         bool leave;
-        lock (gate) { leave = lobby is not null || creating; lobby = null; owner = null; isHost = false; creating = false; members.Clear(); rtt.Clear(); lastData = null; lastJoinable = null; lastStatus = null; }
+        lock (gate) { leave = lobby is not null || creating; lobby = null; owner = null; isHost = false; creating = false; members.Clear(); rtt.Clear(); lastData = null; lastJoinable = null; lastStatus = null; lastCharKeys.Clear(); }
         if (leave) Command("lobby.leave", null);
     }
 
@@ -333,6 +359,15 @@ sealed class SteamTransport : IMultiplayerTransport
         return id >= 0;
     }
     public void DismissJoin() { if (Available) Command("join.dismiss", null); }
+    public string? BridgeVersion { get { lock (gate) return ready ? bridgeVersion : null; } }
+    public RejoinPoint? LastLobby { get { lock (gate) return ready && lobby is null ? lastLobby : null; } }
+    public void SetPresencePrivacy(bool hideScenario) { if (Available) Command("presence.privacy", new JsonObject { ["hideScenario"] = hideScenario }); }
+    public bool StartSpectate(string peer, int rate)
+    {
+        if (!Available || !Steam(peer)) return false;
+        return Command("spectate.start", new JsonObject { ["peer"] = peer, ["rate"] = Math.Clamp(rate, 1, 60) }) >= 0;
+    }
+    public void StopSpectate() { if (Available) Command("spectate.stop", null); }
     // Contract additions: ugc.download {item, highPriority}, answered by ugc.progress,
     // ugc.installed or ugc.error. A failed result falls back to the host transfer.
     public bool WorkshopDownload(string item)

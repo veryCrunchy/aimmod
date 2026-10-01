@@ -14,6 +14,39 @@ sealed record GameNotice(string Id, string Kind, string Title, string Body, stri
     public string? Invite { get; init; }
 }
 
+// Per-player multiplayer preferences in multiplayer-settings.json (local only).
+// AutoReady: ready up on joining, when the content arrives, and after each match.
+sealed record MultiplayerPrefs(string Hotkey = "F7", bool ReadyOnJoin = false, bool ReadyOnContent = true, bool ReadyAfterMatch = false,
+    bool QuietDuringRanked = true, bool Sounds = true, double Volume = 0.8, string Avatar = AvatarProfiles.Default, bool HideScenario = false)
+{
+    public static MultiplayerPrefs Load(string? path)
+    {
+        try
+        {
+            if (path is null || !File.Exists(path) || new FileInfo(path).Length > 2048) return new();
+            return Apply(new(), JsonDocument.Parse(File.ReadAllText(path)).RootElement) ?? new();
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException) { return new(); }
+    }
+    // Known keys only, each checked; anything else is ignored rather than trusted.
+    public static MultiplayerPrefs? Apply(MultiplayerPrefs p, JsonElement e)
+    {
+        if (e.ValueKind != JsonValueKind.Object) return null;
+        bool? Flag(string k) => e.TryGetProperty(k, out var v) && v.ValueKind is JsonValueKind.True or JsonValueKind.False ? v.GetBoolean() : null;
+        if (e.TryGetProperty("hotkey", out var h) && h.ValueKind == JsonValueKind.String) p = p with { Hotkey = MultiplayerHotkey.Parse(h.GetString()).Name };
+        if (Flag("readyOnJoin") is { } a) p = p with { ReadyOnJoin = a };
+        if (Flag("readyOnContent") is { } b) p = p with { ReadyOnContent = b };
+        if (Flag("readyAfterMatch") is { } c) p = p with { ReadyAfterMatch = c };
+        if (Flag("quietDuringRanked") is { } d) p = p with { QuietDuringRanked = d };
+        if (Flag("sounds") is { } s) p = p with { Sounds = s };
+        if (Flag("hideScenario") is { } hide) p = p with { HideScenario = hide };
+        if (e.TryGetProperty("avatar", out var av) && av.ValueKind == JsonValueKind.String && AvatarProfiles.Find(av.GetString()) is { } look) p = p with { Avatar = look.Id };
+        if (e.TryGetProperty("volume", out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetDouble(out var vol) && double.IsFinite(vol)) p = p with { Volume = Math.Round(Math.Clamp(vol, 0, 1), 2) };
+        return p;
+    }
+    public void Save(string path) => AtomicFile.WriteText(path, JsonSerializer.Serialize(this, Protocol.Json));
+}
+
 // The global multiplayer hotkey (default F7). Keys are read only while the game
 // window has focus and only while this machine is in a lobby or has an invite,
 // the same way the replay shortcuts are read; nothing is hooked or injected.

@@ -9,14 +9,14 @@ namespace AimMod.InGame.Multiplayer;
 sealed class LobbyCore
 {
     public const int ChatLimit = 60;
-    public const long RoundGraceMs = 10_000, ResultsMs = 8_000, MemberGraceMs = 30_000, HostGraceMs = 10_000;
+    public const long RoundGraceMs = 10_000, ResultsMs = 8_000, MemberGraceMs = 30_000, HostGraceMs = 10_000, RematchMs = 20_000, AutoStartMs = 3_000;
     sealed class Member
     {
         public required string Id; public required string Name; public string Role = MemberRoles.Player;
         public bool Ready; public int? Ping; public string Scenario = ContentStates.Unknown, Map = ContentStates.Unknown, Profiles = ContentStates.None;
-        public string Connection = Connections.Connected, Link = "local"; public long JoinedAt; public long? LostAt; public bool Simulated;
+        public string Connection = Connections.Connected, Link = "local"; public long JoinedAt; public long? LostAt; public bool Simulated; public string Avatar = AvatarProfiles.Default; public string? Version;
         public readonly Queue<long> ChatTimes = new();
-        public LobbyMember View() => new(Id, Name, Role, Ready, Ping, Scenario, Map, Profiles, Connection, Link, JoinedAt, Simulated);
+        public LobbyMember View() => new(Id, Name, Role, Ready, Ping, Scenario, Map, Profiles, Connection, Link, JoinedAt, Simulated, Avatar, Version);
     }
     sealed class Line
     {
@@ -28,7 +28,7 @@ sealed class LobbyCore
         public required string Id; public required LobbySettings Settings; public string Phase = MatchPhases.Countdown;
         public int Round = 1; public long? StartsAt, EndsAt, NextAt; public List<string> Players = [];
         public Dictionary<string, Line> Live = new(); public List<RoundResult> Rounds = []; public HashSet<string> Rematch = [];
-        public Dictionary<string, string> Names = new(); public string? WinnerId; public bool Over;
+        public Dictionary<string, string> Names = new(); public string? WinnerId; public bool Over; public long? RematchDeadline;
     }
 
     readonly Func<long> clock;
@@ -80,27 +80,32 @@ sealed class LobbyCore
 
     public IReadOnlyList<LobbyMember> Members => members.Select(m => m.View()).ToArray();
     public const long ReadyCheckMs = 30_000;
-    long? readyCheck;
-    public LobbySnapshot Snapshot() => new(Protocol.Version, Id, Code, Revision, HostId, Settings, Members, MatchView(), chat.ToArray(), clock(), readyCheck);
+    long? readyCheck, autoStartAt;
+    public LobbySnapshot Snapshot() => new(Protocol.Version, Id, Code, Revision, HostId, Settings, Members, MatchView(), chat.ToArray(), clock(), readyCheck, autoStartAt);
 
-    public LobbyResult Join(string id, string name, bool simulated = false)
+    public LobbyResult Join(string id, string name, bool simulated = false, string? version = null)
     {
         if (Closed) return LobbyResult.Fail("closed", "This lobby has closed.");
         if (banned.Contains(id)) return LobbyResult.Fail("kicked", "The host removed you from this lobby.");
         if (Find(id) is { } existing)
         {
+            if (version is not null && existing.Version != version) { existing.Version = version; Changed(); }
             if (existing.Connection != Connections.Connected) { existing.Connection = Connections.Connected; existing.LostAt = null; System(existing.Name + " reconnected."); }
             return LobbyResult.Success;
         }
         var role = MemberRoles.Player;
         var inMatch = match is { Phase: not MatchPhases.Final };
-        if (PlayerCount >= Settings.MaxPlayers || (inMatch && !Settings.LateJoin)) role = MemberRoles.Spectator;
+        // A player of the running match who dropped out (crash, lost connection) rejoins as a player.
+        var returning = match is not null && match.Players.Contains(id);
+        if (!returning && (PlayerCount >= Settings.MaxPlayers || (inMatch && !Settings.LateJoin))) role = MemberRoles.Spectator;
         if (role == MemberRoles.Spectator && (!Settings.Spectators || members.Count(m => m.Role == MemberRoles.Spectator) >= LobbySettings.MaxSpectators))
             return LobbyResult.Fail(inMatch ? "in-match" : "full", inMatch ? "A match is in progress and late join is off." : "This lobby is full.");
-        var member = new Member { Id = id, Name = UniqueName(LobbyRules.CleanName(name, "Player")), Role = role, JoinedAt = clock(), Simulated = simulated, Link = simulated ? "simulated" : "relay" };
+        var member = new Member { Id = id, Name = UniqueName(LobbyRules.CleanName(name, "Player")), Role = role, JoinedAt = clock(), Simulated = simulated, Link = simulated ? "simulated" : "relay", Version = version };
         members.Add(member);
         if (match is not null) match.Names[id] = member.Name;
-        System(member.Name + (role == MemberRoles.Spectator ? " is watching." : " joined."));
+        if (returning && match!.Live.TryGetValue(id, out var line) && line.Status == LineStates.Left && match.Phase is MatchPhases.Countdown or MatchPhases.Live)
+            line.Status = line.Score is null ? LineStates.Waiting : LineStates.Playing;
+        System(member.Name + (returning ? " is back." : role == MemberRoles.Spectator ? " is watching." : " joined."));
         return LobbyResult.Success;
     }
     string UniqueName(string name)
@@ -141,6 +146,7 @@ sealed class LobbyCore
         System(m.Name + (IsHost(id) ? " (host) lost connection." : " lost connection."));
     }
 
+    public void SetVersion(string id, string? version) { if (Find(id) is { } m && version is not null && m.Version != version) { m.Version = version; Changed(); } }
     public void SetLink(string id, string? route, int? ping)
     {
         if (Find(id) is not { } m) return;
@@ -223,6 +229,11 @@ sealed class LobbyCore
                 var role = spectate ? MemberRoles.Spectator : MemberRoles.Player;
                 if (member.Role != role) { member.Role = role; member.Ready = false; Changed(); }
                 return LobbyResult.Success;
+            case "avatar":
+                // How this member looks in other players' games (any member, any time).
+                if (AvatarProfiles.Find(Text("avatar")) is not { } look) return LobbyResult.Fail("invalid", "Unknown look.");
+                if (member.Avatar != look.Id) { member.Avatar = look.Id; Changed(); }
+                return LobbyResult.Success;
             case "ready-check":
                 // The host wants to start: ping everyone who isn't ready (shown outside the AimMod panel too).
                 if (!IsHost(from)) return HostOnly();
@@ -248,25 +259,39 @@ sealed class LobbyCore
                 if (match.Phase == MatchPhases.Final || match.Rounds.Count == 0) { EndMatch(); return LobbyResult.Success; }
                 FinishMatch(); return LobbyResult.Success;
             case "rematch":
+                // Play again: the first vote opens a short window; everyone who confirms plays,
+                // and players who don't answer in time sit the rematch out (they stay in the lobby).
                 if (match is not { Phase: MatchPhases.Final }) return LobbyResult.Fail("invalid", "Rematch is available after the final results.");
                 if (!match.Players.Contains(from)) return LobbyResult.Fail("spectator", "Only players from the last match can ask for a rematch.");
-                if (match.Rematch.Add(from)) Changed();
-                var present = match.Players.Where(id => Find(id) is { Connection: Connections.Connected }).ToArray();
-                if (present.Length >= LobbySettings.MinPlayers && present.All(match.Rematch.Contains))
-                {
-                    foreach (var m in members) m.Ready = m.Role == MemberRoles.Player && present.Contains(m.Id);
-                    var rematchBlockers = LobbyRules.StartBlockers(Snapshot() with { Match = null });
-                    if (rematchBlockers.Count == 0) { System("Rematch!"); BeginMatch(); }
-                    else { EndMatch(); System("Rematch needs everyone back in the lobby: " + rematchBlockers[0].Text); }
-                }
-                return LobbyResult.Success;
-            default:
+                if (match.Rematch.Add(from)) { match.RematchDeadline ??= clock() + RematchMs; Changed(); }
+                TryRematch(timedOut: false);
+                return LobbyResult.Success;            default:
                 return LobbyResult.Fail("invalid", "Unknown action.");
         }
     }
 
+    void TryRematch(bool timedOut)
+    {
+        if (match is not { Phase: MatchPhases.Final } m) return;
+        var present = m.Players.Where(id => Find(id) is { Connection: Connections.Connected }).ToArray();
+        var voters = present.Where(m.Rematch.Contains).ToArray();
+        if (!(present.Length >= LobbySettings.MinPlayers && voters.Length == present.Length) && !timedOut) return;
+        if (voters.Length < LobbySettings.MinPlayers)
+        {
+            if (timedOut) { m.RematchDeadline = null; m.Rematch.Clear(); System("Not enough players wanted a rematch."); }
+            return;
+        }
+        foreach (var id in present.Except(voters))
+            if (Find(id) is { } sitting) { sitting.Role = MemberRoles.Spectator; sitting.Ready = false; System(sitting.Name + " sat out the rematch."); }
+        foreach (var mem in members) mem.Ready = mem.Role == MemberRoles.Player && voters.Contains(mem.Id);
+        var blockers = LobbyRules.StartBlockers(Snapshot() with { Match = null });
+        if (blockers.Count == 0) { System("Rematch!"); BeginMatch(); }
+        else { EndMatch(); System("Rematch needs everyone back in the lobby: " + blockers[0].Text); }
+    }
+
     void BeginMatch()
     {
+        autoStartAt = null;
         var players = members.Where(m => m.Role == MemberRoles.Player && m.Connection == Connections.Connected).ToArray();
         match = new Match { Id = "m-" + Convert.ToHexString(RandomNumberGenerator.GetBytes(6)).ToLowerInvariant(), Settings = Settings, Players = players.Select(p => p.Id).ToList() };
         foreach (var p in players) match.Names[p.Id] = p.Name;
@@ -328,6 +353,14 @@ sealed class LobbyCore
             if (now - m.LostAt!.Value >= (IsHost(m.Id) ? HostGraceMs : MemberGraceMs)) Leave(m.Id, "timeout");
         // A ready check closes once everyone is ready, after 30 s, or when the match starts.
         if (readyCheck is { } asked && (now - asked > ReadyCheckMs || match is { Phase: not MatchPhases.Final } || members.All(m => m.Id == HostId || m.Role != MemberRoles.Player || m.Ready))) { readyCheck = null; Changed(); }
+        // Auto start: once nothing blocks the start for a moment, the host's lobby starts itself.
+        if (Settings.AutoStart && match is null && !Closed)
+        {
+            if (LobbyRules.StartBlockers(Snapshot()).Count == 0) { if (autoStartAt is null) { autoStartAt = now + AutoStartMs; Changed(); } else if (now >= autoStartAt) BeginMatch(); }
+            else if (autoStartAt is not null) { autoStartAt = null; Changed(); }
+        }
+        else if (autoStartAt is not null) { autoStartAt = null; Changed(); }
+        if (match is { Phase: MatchPhases.Final, RematchDeadline: { } deadline } && now >= deadline) TryRematch(timedOut: true);
         if (match is null) return;
         if (match.Phase == MatchPhases.Countdown && now >= match.StartsAt)
         {
@@ -427,7 +460,7 @@ sealed class LobbyCore
         var s = m.Settings;
         return new MatchSnapshot(m.Id, m.Phase, s.Mode, s.Scenario?.Name ?? "", s.EffectiveTimeLimit, m.Round, s.TotalRounds,
             s.Mode == LobbyModes.Duel ? s.FirstTo : null, m.StartsAt, m.EndsAt, m.NextAt, m.Players.ToArray(),
-            m.Live.Select(kv => kv.Value.View(kv.Key)).ToArray(), m.Rounds.ToArray(), Standings(m), m.WinnerId, m.Rematch.ToArray());
+            m.Live.Select(kv => kv.Value.View(kv.Key)).ToArray(), m.Rounds.ToArray(), Standings(m), m.WinnerId, m.Rematch.ToArray(), m.RematchDeadline);
     }
 
     // A client that becomes host rebuilds the authority from the last snapshot it mirrored.
@@ -440,7 +473,7 @@ sealed class LobbyCore
             core.members.Add(new Member { Id = m.Id, Name = m.Name, Role = m.Role, Ready = m.Ready, Ping = m.Id == newHostId ? null : m.Ping, Scenario = m.Scenario, Map = m.Map, Profiles = m.Profiles,
                 // Everyone else must reconnect to the new host, so they start as reconnecting.
                 Connection = m.Id == newHostId ? Connections.Connected : Connections.Reconnecting, Link = m.Id == newHostId ? "local" : m.Link,
-                JoinedAt = m.JoinedAt, Simulated = m.Simulated, LostAt = m.Id == newHostId ? null : clock() });
+                JoinedAt = m.JoinedAt, Simulated = m.Simulated, LostAt = m.Id == newHostId ? null : clock(), Avatar = AvatarProfiles.Find(m.Avatar)?.Id ?? AvatarProfiles.Default, Version = m.Version });
         core.chat.AddRange(snapshot.Chat); core.chatId = snapshot.Chat.Count > 0 ? snapshot.Chat.Max(c => c.Id) : 0; core.readyCheck = snapshot.ReadyCheck;
         if (snapshot.Match is { } ms)
         {

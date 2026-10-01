@@ -16,6 +16,8 @@ static class MultiplayerHosting
         var list = args ?? [];
         for (var i = 0; i + 1 < list.Length; i++) if (list[i] == "--game") gameRoot = list[i + 1];
         var library = new ContentLibrary(args is null ? null : ContentLibrary.Locate(gameRoot));
+        // The bodies other players appear as, for any scenario (AimMod's own profiles only).
+        if (library.Root is { } root) AvatarFiles.Install(ContentRules.Folder(root, "character"));
         // The AimModSteam bridge is used as soon as it answers on its pipe; until then
         // (or without the bridge) lobbies stay on this machine.
         IMultiplayerTransport transport = args is null || list.Contains("--no-steam") ? new OfflineTransport() : new SteamTransport();

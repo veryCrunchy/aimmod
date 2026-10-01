@@ -41,7 +41,7 @@ static class MatchPresets
 // KovaaK's ranked leaderboards.
 static class MatchScenario
 {
-    public const int GeneratorVersion = 1;
+    public const int GeneratorVersion = 2;
     public const string Prefix = "AimMod Match - ";
     static readonly CultureInfo Invariant = CultureInfo.InvariantCulture;
 
@@ -185,6 +185,11 @@ static class MatchScenario
             header.Set("MapName", mapFile);
             mapData = mapText.Replace("\r\n", "\n", StringComparison.Ordinal).TrimEnd('\n').Replace("\n", nl, StringComparison.Ordinal) + nl;
         }
+        // Bodies for the other players (AimModSteam spawns them as inert bots): one
+        // character profile per offered look, never scoring and never replacing the scenario's own.
+        foreach (var look in AvatarProfiles.All)
+            if (!sections.Any(x => x.Title == "[Character Profile]" && x.Get("Name") == look.ProfileName))
+                sections.Add(new Section { Title = "[Character Profile]", Lines = AvatarProfiles.Lines(look).ToList() });
         // Canonical layout: header, then each section after one blank line.
         var output = new StringBuilder();
         foreach (var line in header.Lines.Where(l => l.Trim().Length > 0)) output.Append(line).Append(nl);

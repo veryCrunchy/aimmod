@@ -105,6 +105,16 @@ interface IMultiplayerTransport : IDisposable
     // The current Steam lobby token, for the hashed Discord join secret. It never
     // leaves the service as text. Null when the transport has no such lobby.
     string? JoinToken => null;
+    // The current Steam lobby, kept so a crashed or restarted client can rejoin it.
+    string? LobbyToken { get; }
+    // Bridge build (ready.bridge): players on different builds can't see each other.
+    string? BridgeVersion { get; }
+    // The lobby left by a crash or shutdown (ready.lastLobby), for a rejoin offer.
+    RejoinPoint? LastLobby { get; }
+    void SetPresencePrivacy(bool hideScenario);
+    // Follow a player's camera; AimModSteam writes the frames for AimModCore's spectator view.
+    bool StartSpectate(string peer, int rate);
+    void StopSpectate();
     void Send(string peer, byte[] frame, bool reliable);
     void Close(string peer);
     // Events since the last call: connected, disconnected, a frame, an incoming
@@ -144,6 +154,7 @@ sealed record WorkshopProgress(string Item, string State, long Done, long Total)
 // Kind is invite (they invite you), request (they ask to join yours) or launch.
 sealed record IncomingInvite(string Id, string FromName, string Kind, string Token, LobbySummary? Summary, long At, bool Compatible = true);
 sealed record LobbySummary(string Mode, string? Scenario, int Players, int MaxPlayers);
+sealed record RejoinPoint(string Token, string HostName, long AgeSeconds);
 // State is connecting or connected; Route is relay, direct or local.
 sealed record PeerLink(string State, string Route, int? Ping);
 
@@ -162,6 +173,12 @@ sealed class OfflineTransport : IMultiplayerTransport
     public void Kick(string peer) { }
     public void Transfer(string peer) { }
     public string? HostHint => null;
+    public string? LobbyToken => null;
+    public string? BridgeVersion => null;
+    public RejoinPoint? LastLobby => null;
+    public void SetPresencePrivacy(bool hideScenario) { }
+    public bool StartSpectate(string peer, int rate) => false;
+    public void StopSpectate() { }
     public void Send(string peer, byte[] frame, bool reliable) { }
     public void Close(string peer) { }
     public IReadOnlyList<TransportEvent> Drain() => [];
