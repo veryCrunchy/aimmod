@@ -18,14 +18,12 @@ sealed class ReplayLibrary
     {
         if (!File.Exists(metadata)) return new(StringComparer.Ordinal);
         if (new FileInfo(metadata).Length > 256 * 1024) throw new IOException("Replay favorites exceed size limit.");
-        return JsonSerializer.Deserialize<HashSet<string>>(File.ReadAllText(metadata)) ?? new(StringComparer.Ordinal);
+        // A damaged favorites file must not block listing, export or deletion.
+        // It is replaced on the next explicit favorite change.
+        try { return new((JsonSerializer.Deserialize<string[]>(File.ReadAllText(metadata)) ?? []).Where(id => id is { Length: > 0 and <= 100 }), StringComparer.Ordinal); }
+        catch (JsonException) { return new(StringComparer.Ordinal); }
     }
-    void Save(HashSet<string> favorites)
-    {
-        var temp = metadata + ".next";
-        File.WriteAllText(temp, JsonSerializer.Serialize(favorites));
-        File.Move(temp, metadata, true);
-    }
+    void Save(HashSet<string> favorites) => AtomicFile.WriteText(metadata, JsonSerializer.Serialize(favorites));
     public object List()
     {
         lock (gate)

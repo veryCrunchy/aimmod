@@ -5,13 +5,27 @@ local hooked=false
 local sliderRoutes={}
 local sliderHooked=false
 local function valid(o)return o and o:IsValid()end
+local build
 function M.create(owner,send)
+    -- A partially built HUD must not leave click routes (and the widgets their
+    -- closures reference) registered, or an orphaned frame in the viewport.
+    local registered={routes={},sliders={}}
+    local ok,result=pcall(build,owner,send,registered)
+    if not ok then
+        for _,key in ipairs(registered.routes)do routes[key]=nil end
+        for _,key in ipairs(registered.sliders)do sliderRoutes[key]=nil end
+        pcall(function()if valid(registered.frame)then registered.frame:RemoveFromParent()end end)
+        error(result,0)
+    end
+    return result
+end
+build=function(owner,send,registered)
     local lib=StaticFindObject('/Script/UMG.Default__WidgetBlueprintLibrary')
     local function widget(name)
         local class=StaticFindObject('/Game/FirstPersonBP/Blueprints/UI/Palette/'..name..'.'..name..'_C')
         local value=lib:Create(owner,class,owner:GetOwningPlayer());assert(valid(value),'replay control unavailable');return value
     end
-    local frame=widget('PalettedBorderWidget')
+    local frame=widget('PalettedBorderWidget');registered.frame=frame
     assert(valid(frame.WidgetTree),'replay control tree unavailable')
     local function make(name)
         local value=StaticConstructObject(StaticFindObject('/Script/UMG.'..name),frame.WidgetTree)
@@ -83,7 +97,8 @@ function M.create(owner,send)
         local label=text(value,16,primary and colors.panel or colors.paper);label:SetJustification(1)
         item.ButtonContentsSlot:SetContent(label)
         place(body,item,x,96,w,42)
-        routes[item:GetFullName()]=function()frame:SetUserFocus(owner:GetOwningPlayer());callback()end;buttons[#buttons+1]=item
+        local key=item:GetFullName();registered.routes[#registered.routes+1]=key
+        routes[key]=function()frame:SetUserFocus(owner:GetOwningPlayer());callback()end;buttons[#buttons+1]=item
         return label
     end
     local play=button('Play',24,112,function()send('toggle')end,true)
@@ -109,7 +124,8 @@ function M.create(owner,send)
             send('seek',value);lastSeekTime=now
         end
     end
-    sliderRoutes[seek:GetFullName()]=function(value)
+    local seekKey=seek:GetFullName();registered.sliders[#registered.sliders+1]=seekKey
+    sliderRoutes[seekKey]=function(value)
         if syncingSlider or seekDuration<=0 or type(value)~='number' or value~=value or math.abs(value)==math.huge then return end
         dragFraction=math.max(0,math.min(1,value))
         pendingSeekValue=dragFraction*seekDuration

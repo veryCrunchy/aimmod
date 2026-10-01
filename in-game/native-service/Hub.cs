@@ -24,7 +24,20 @@ sealed partial class Hub : IDisposable
     bool partial;
     long expectedRuns;
     DateTimeOffset nextHistory;
-    DateTimeOffset retryAfter;
+    // Written by HTTP handlers (leaderboard/benchmark requests) and the refresh
+    // loop; stored as UTC ticks so reads and writes are never torn. Only extended.
+    long retryAfterTicks;
+    DateTimeOffset retryAfter => new(Interlocked.Read(ref retryAfterTicks), TimeSpan.Zero);
+    void DeferUntil(DateTimeOffset value)
+    {
+        long observed, next = value.UtcTicks;
+        do { observed = Interlocked.Read(ref retryAfterTicks); if (observed >= next) return; }
+        while (Interlocked.CompareExchange(ref retryAfterTicks, next, observed) != observed);
+    }
+    // Consecutive refresh failures: 2, 4, 8, 16 then 30 minutes between retries.
+    int failures;
+    DateTimeOffset lastCacheSave;
+    internal static TimeSpan Backoff(int failures) => TimeSpan.FromMinutes(Math.Min(30, 2 << Math.Clamp(failures - 1, 0, 4)));
     readonly Dictionary<string, long> syncedCounts = new(StringComparer.Ordinal);
     readonly Dictionary<string, long> desiredCounts = new(StringComparer.Ordinal);
     readonly System.Collections.Concurrent.ConcurrentQueue<string> commands = new();
@@ -55,9 +68,13 @@ sealed partial class Hub : IDisposable
         http = handler is null ? new(new HttpClientHandler { AllowAutoRedirect = false }) : new(handler);
         http.Timeout = TimeSpan.FromSeconds(12);
         http.DefaultRequestHeaders.Add("User-Agent", "AimMod-InGame/0.1");
-        try { account = AccountVault.Read(vault); if (account is not null) LoadCache(); }
-        catch (Exception ex) when (ex is IOException or JsonException)
-        { status = "Saved account unavailable. Link your account again."; }
+        try { account = AccountVault.Read(vault); }
+        catch (Exception ex) when (ex is IOException or JsonException or NotSupportedException)
+        { account = null; status = "Saved account unavailable. Link your account again."; }
+        // A damaged offline cache is only a cache: keep the account linked and re-download.
+        try { if (account is not null) LoadCache(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or NotSupportedException)
+        { downloaded.Clear(); benchmarks = []; benchmarkItems = []; syncedCounts.Clear(); expectedRuns = 0; partial = false; status = "Saved Hub history could not be read. Downloading it again…"; }
         try
         {
             var pending = AccountVault.ReadRecord<PendingLink>(Path.Combine(folder, "pending-link.bin"));
@@ -113,8 +130,11 @@ sealed partial class Hub : IDisposable
                         break;
                     case "cancel-link": ClearPending(); status = account is null ? "Account linking cancelled." : "Account linked."; Revision++; break;
                     case "unlink":
+                        // Forget the credential in memory first, so a locked file can never
+                        // leave the account usable for the rest of this session.
+                        account = null;
                         File.Delete(vault); File.Delete(Path.Combine(folder, "hub-cache.json"));
-                        account = null; ClearPending(); scenarios.Clear(); historyPage = new(); downloaded.Clear(); benchmarks.Clear(); benchmarkItems = []; syncedCounts.Clear(); desiredCounts.Clear(); expectedRuns = 0; partial = false;
+                        ClearPending(); scenarios.Clear(); historyPage = new(); downloaded.Clear(); benchmarks.Clear(); benchmarkItems = []; syncedCounts.Clear(); desiredCounts.Clear(); expectedRuns = 0; partial = false;
                         status = "Account unlinked from this device."; Revision++; break;
                     case "refresh-hub": if (account is not null && downloadsEnabled) { scenarios.Clear(); historyPage = new(); nextSync = default; } break;
                     default:
@@ -149,7 +169,11 @@ sealed partial class Hub : IDisposable
                 foreach (var run in rows) downloaded[run.Id] = run;
                 partial = expectedRuns > downloaded.Count;
                 status = scenarios.Count > 0 ? $"Downloading history · {scenarios.Count} scenarios remaining" : "Hub history refreshed.";
-                SaveCache(); Revision++; return;
+                // Serializing up to 40,000 runs after every 2 s page is wasteful; persist
+                // at most every 30 s while downloading and always when the queue drains.
+                // Unsaved pages are simply requested again after a restart.
+                if (scenarios.Count == 0 || now - lastCacheSave >= TimeSpan.FromSeconds(30)) SaveCache();
+                Revision++; return;
             }
             if (now >= nextSync)
             {
@@ -205,7 +229,8 @@ sealed partial class Hub : IDisposable
         {
             // Never include response bodies, device codes, or tokens in logs/UI.
             status = "Hub unavailable. Your saved history is still available. Select Refresh to retry.";
-            var retry = clock.GetUtcNow().AddMinutes(2);
+            failures = Math.Min(failures + 1, 16);
+            var retry = clock.GetUtcNow().Add(Backoff(failures));
             nextSync = retryAfter > retry ? retryAfter : retry;
             nextPoll = retryAfter > clock.GetUtcNow().AddSeconds(15) ? retryAfter : clock.GetUtcNow().AddSeconds(15);
             nextHistory = nextSync; Revision++;
@@ -222,9 +247,10 @@ sealed partial class Hub : IDisposable
         if ((int)response.StatusCode is 429 or 503)
         {
             var delay = response.Headers.RetryAfter?.Delta ?? (response.Headers.RetryAfter?.Date - clock.GetUtcNow()) ?? TimeSpan.FromMinutes(2);
-            retryAfter = clock.GetUtcNow().AddSeconds(Math.Clamp(delay.TotalSeconds, 2, 3600));
+            DeferUntil(clock.GetUtcNow().AddSeconds(Math.Clamp(delay.TotalSeconds, 2, 3600)));
         }
         response.EnsureSuccessStatusCode();
+        failures = 0; // Hub reachable again: the next failure starts a fresh backoff.
         if (response.Content.Headers.ContentLength > 4 * 1024 * 1024) throw new IOException("Oversized Hub response.");
         using var stream = await response.Content.ReadAsStreamAsync(token);
         using var memory = new MemoryStream(); var buffer = new byte[16384]; int read;
@@ -287,8 +313,8 @@ sealed partial class Hub : IDisposable
             partial = true;
         }
         var path = Path.Combine(folder, "hub-cache.json");
-        File.WriteAllText(path + ".next", JsonSerializer.Serialize(new Cache(account.Handle, downloaded.Values.ToArray(), benchmarks, partial, syncedCounts, expectedRuns, benchmarkItems)));
-        File.Move(path + ".next", path, true);
+        AtomicFile.WriteBytes(path, JsonSerializer.SerializeToUtf8Bytes(new Cache(account.Handle, downloaded.Values.ToArray(), benchmarks, partial, syncedCounts, expectedRuns, benchmarkItems)));
+        lastCacheSave = clock.GetUtcNow();
     }
     void LoadCache()
     {
@@ -297,11 +323,11 @@ sealed partial class Hub : IDisposable
         var cache = JsonSerializer.Deserialize<Cache>(File.ReadAllText(path));
         if (cache is null || !string.Equals(cache.Handle, account?.Handle, StringComparison.OrdinalIgnoreCase) || cache.Runs is null || cache.Benchmarks is null) return;
         foreach (var run in cache.Runs)
-            if (run is not null && !string.IsNullOrEmpty(run.Id) && !string.IsNullOrEmpty(run.Scenario) && double.IsFinite(run.Score) && double.IsFinite(run.Duration) && run.Duration > 0 && downloaded.Count < 40000) downloaded[run.Id] = run;
+            if (run is not null && !string.IsNullOrEmpty(run.Id) && run.Id.Length <= 512 && !string.IsNullOrEmpty(run.Scenario) && run.Timestamp is not null && double.IsFinite(run.Score) && double.IsFinite(run.Duration) && run.Duration > 0 && downloaded.Count < 40000) downloaded[run.Id] = run;
         benchmarkItems = (cache.BenchmarkItems ?? []).Where(x => x is not null && x.Id > 0 && !string.IsNullOrWhiteSpace(x.Name)).Take(512).ToArray();
-        benchmarks = cache.Benchmarks; partial = cache.Partial;
+        benchmarks = cache.Benchmarks.Where(r => r is not null && r.Page == "Benchmarks" && r.Heading is { Length: > 0 and <= 512 } && r.Body is { Length: <= 512 }).Take(512).ToList(); partial = cache.Partial;
         expectedRuns = cache.ExpectedRuns;
-        if (cache.SyncedCounts is not null) foreach (var entry in cache.SyncedCounts) syncedCounts[entry.Key] = entry.Value;
+        if (cache.SyncedCounts is not null) foreach (var entry in cache.SyncedCounts.Take(4096)) if (entry.Key is { Length: > 0 and <= 512 }) syncedCounts[entry.Key] = entry.Value;
         status = "Saved Hub history is available. Checking for new scores…";
     }
     public void Dispose() => http.Dispose();

@@ -16,7 +16,7 @@ end
 local probe = dofile('../ue4ss/AimModNativeUI/Scripts/ReplaySafetyProbe.lua')
 assert(registrationCount == 0 and #writes == 0, 'requiring module must not enable probe')
 probe.start(); probe.start()
-assert(registrationCount == 10, 'idempotent start registers only available hooks')
+assert(registrationCount == 13, 'idempotent start registers only available hooks')
 local before, saved = probe.snapshot()
 assert(saved and before.started and not before.counters.experiments_upload.available)
 local sentinel = setmetatable({}, {
@@ -36,7 +36,7 @@ for key, value in pairs(after.counters) do
     assert(value.count == (value.available and 1 or 0))
     count = count + value.count
 end
-assert(count == 10 and #writes[2] < 8192 and not writes[2]:find('private-value',1,true))
+assert(count == 13 and #writes[2] < 8192 and not writes[2]:find('private-value',1,true))
 after.counters.stats_saved.count = 999
 local fresh = probe.snapshot(); assert(fresh.counters.stats_saved.count == 1, 'snapshot mutation must not change counters')
 io.open = function() return nil end

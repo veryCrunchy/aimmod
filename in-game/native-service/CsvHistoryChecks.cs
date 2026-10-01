@@ -17,6 +17,15 @@ static class CsvHistoryChecks
   var second=new CsvHistory(Path.Combine(folder,"second"));Check(second.Import(input,[run with{Id="desktop-existing"}]) is{Imported:0,Skipped:1},"Matches desktop history independent id");
   var third=new CsvHistory(Path.Combine(folder,"third"));Check(third.Import(input,[run with{Score=13}]).Imported==1,"Different actual score remains distinct");
   Check(!File.ReadAllText(Path.Combine(folder,"imported-history.json")).Contains(input,StringComparison.Ordinal),"No source paths persisted");
+  foreach(var remote in new[]{@"\\synthetic-host\share",@"\\?\C:\stats",@"\\.\C:\stats","//synthetic-host/share","relative\\stats",""})
+   Check(!CsvHistory.AcceptableDirectory(remote),"Remote, device and relative import paths refused");
+  Check(CsvHistory.AcceptableDirectory(input),"Local absolute import path accepted");
+  try{store.Import(@"\\synthetic-host\share",[]);throw new Exception("Accepted UNC import");}catch(ArgumentException){count++;}
+  var damaged=Path.Combine(folder,"damaged");Directory.CreateDirectory(damaged);
+  File.WriteAllText(Path.Combine(damaged,"imported-history.json"),System.Text.Json.JsonSerializer.Serialize(new[]{run,run with{Id=null!},run with{Id="desktop-id"}}));
+  Check(new CsvHistory(damaged).Runs.Count==1,"Damaged stored rows without csv identity dropped on load");
+  var readers=new CsvHistory(Path.Combine(folder,"concurrent"));var snapshot=readers.Runs;readers.Import(input,[]);
+  Check(snapshot.Count==0&&readers.Runs.Count==1,"Import publishes a new snapshot without mutating readers' copy");
  }finally{Directory.Delete(folder,true);}
  Console.WriteLine(count+" CSV history checks passed.");
  }

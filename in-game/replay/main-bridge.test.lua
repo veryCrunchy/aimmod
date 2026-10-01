@@ -84,4 +84,20 @@ assert(not bridge.active(),'new visible revision also remains fenced until hidde
 files[base..'replay-frame.tsv']='AIMMOD_REPLAY_2\t5\t0\n';tick()
 files[base..'replay-frame.tsv']=data:gsub('\t1\t1\n','\t6\t1\n',1);tick()
 assert(bridge.active(),'fresh load after close acknowledgement recovers')
+-- Rejected frames are evaluated once per change, not on every idle poll.
+local realPrint,diagnostics=print,0
+print=function(s)if tostring(s):find('main renderer diagnostic',1,true)then diagnostics=diagnostics+1 end end
+local realParse,parses=bridge.parse,0
+bridge.parse=function(value)parses=parses+1;return realParse(value)end
+files[base..'replay-frame.tsv']='AIMMOD_REPLAY_2\t7\t1\nmalformed\n';for _=1,5 do tick()end
+assert(diagnostics==1 and not bridge.active(),'malformed frame logged once and fails closed')
+parses=0;for _=1,5 do tick()end
+assert(parses==0,'unchanged malformed frame is not re-parsed')
+files[base..'replay-frame.tsv']=data:gsub('\t1\t1\n','\t8\t1\n',1);parses=0;for _=1,5 do tick()end
+assert(parses==1 and not bridge.active(),'fenced visible frame parsed once while awaiting close acknowledgement')
+now=1006;files[base..'native-replay-worker.txt']='1006'
+files[base..'replay-frame.tsv']='AIMMOD_REPLAY_2\t9\t0\n';tick()
+files[base..'replay-frame.tsv']=data:gsub('\t1\t1\n','\t10\t1\n',1);tick()
+assert(bridge.active(),'hidden acknowledgement clears the rejection cache')
+bridge.parse=realParse;print=realPrint
 print('Main replay lifecycle checks passed: automatic preflight, transient recovery, transfer, close acknowledgement, worker timeout, stale-frame fence, restoration.')

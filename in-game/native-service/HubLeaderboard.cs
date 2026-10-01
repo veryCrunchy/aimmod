@@ -15,6 +15,8 @@ sealed partial class Hub
   try{
    var now=clock.GetUtcNow();
    if(leaderboardPages.TryGetValue(scenarioType,out var saved)&&now-saved.RetrievedAt<TimeSpan.FromMinutes(5))return saved with{Cached=true};
+   // Honor a Hub Retry-After for UI-driven requests too; serve stale data if any.
+   if(now<retryAfter){if(saved is not null)return saved with{Cached=true};throw new HttpRequestException("Hub requested a retry delay.");}
    try{
     using var doc=await Rpc("GetLeaderboard",new{scenarioType},token);
     var page=new HubLeaderboardPage(scenarioType,LeaderboardEntries(doc.RootElement,"records",4096),LeaderboardEntries(doc.RootElement,"topScores",100),now);

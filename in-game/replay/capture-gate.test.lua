@@ -1,4 +1,5 @@
 local index=0
+local completion
 local function obj(t)index=index+1;local address=index;t=t or {};t.IsValid=function()return true end;t.GetAddress=function()return address end;return t end
 local gameTime,elapsed,queue,nativeActive=0,0,2,false
 local intent={active=false,id='prelude',scenario='Synthetic scenario'}
@@ -24,14 +25,14 @@ end
 os.getenv=function()return 'test-private-root'end
 os.remove=function(path)files[path]=nil;return true end
 os.rename=function(a,b)files[b]=files[a];files[a]=nil;return true end
-local M=dofile('../ue4ss/AimModNativeUI/Scripts/ReplayCapture.lua');M.start({state=function()return intent end})
+local M=dofile('../ue4ss/AimModNativeUI/Scripts/ReplayCapture.lua');M.start({state=function()return intent end,onCompleted=function(fn)completion=fn end})
 local checks=0;local function check(v,msg)assert(v,msg);checks=checks+1 end
 intent.active=true;tick();gameTime=1.477;queue=.523;tick()
 check(opens==0 and M.status().state=='awaiting','UI prelude never creates partial or completed replay')
 intent.id='actual';nativeActive=true;queue=-1;elapsed=0;tick()
 check(opens==0,'replacement intent requires observed timer advancement')
 elapsed=.016;gameTime=1.493;tick();check(opens==1 and M.status().state=='recording','one file starts for real advancing challenge')
-gameTime=1.51;elapsed=.033;tick();hooks['/Script/GameSkillsTrainer.AnalyticsManager:OnChallengeCompleted']({}, {get=function()return {ToString=function()return intent.scenario end}end});intent.active=false;tick()
+gameTime=1.51;elapsed=.033;tick();completion({scenario=intent.scenario,id=intent.id});intent.active=false;tick()
 check(files['test-private-root/AimMod/KovaaksNative/replays/actual.amreplay']~=nil,'real completed replay published')
 check(files['test-private-root/AimMod/KovaaksNative/replays/prelude.partial']==nil and files['test-private-root/AimMod/KovaaksNative/replays/prelude.amreplay']==nil,'no prelude archive to hide or merge')
 intent={active=true,id='short',scenario='Synthetic scenario'};elapsed=0;tick();elapsed=.016;gameTime=2;tick();elapsed=.04;gameTime=2.024;tick();intent.active=false;tick()

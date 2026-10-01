@@ -21,7 +21,8 @@ function M.start()
     count=count+1;if count>128 then return end
     if not pcall(function()return row.Score end)then row=row:get()end
     local name=text(row.PlayerName);local score,rank=row.Score,row.rank
-    if row.ScoreInvalid or type(score)~='number'or score~=score or math.abs(score)>=1e12 or type(rank)~='number'or rank<1 or #name<1 or #name>256 then return end
+    -- tostring(inf/nan) is not JSON, and the worker reads rank as a 32-bit integer.
+    if row.ScoreInvalid or type(score)~='number'or score~=score or math.abs(score)>=1e12 or type(rank)~='number'or rank~=rank or rank<1 or rank>2147483647 or rank%1~=0 or #name<1 or #name>256 then return end
     local steam=''
     pcall(function()
      if valid(steamConverter)then
@@ -33,6 +34,7 @@ function M.start()
    end
    local players=widget.CurrentLeaderboardPlayers
    if type(players)=='table'and players.ForEach==nil then for i=1,math.min(#players,128)do add(players[i])end else players:ForEach(function(_,row)if count<128 then add(row:get())end end)end
+   -- Rewritten once per second: the worker only accepts rows written in the last five seconds.
    local path=(os.getenv('LOCALAPPDATA')or'')..'/AimMod/KovaaksNative/live-opponents.json';local file=io.open(path..'.next','wb')
    if file then local ok=file:write('{"scenario":'..quote(scenario)..',"source":'..quote(source)..',"rows":['..table.concat(rows,',')..']}');file:close();if ok then os.remove(path);os.rename(path..'.next',path)end end
   end)

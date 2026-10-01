@@ -225,7 +225,9 @@ function M.create(owner)
         if not ok then s.close();error(err)end
         return true
     end
-    function s.frame(frame)
+    -- presented: the native presenter owns the view and target locations this
+    -- frame (it applies them every engine frame); only spawn, style, rotate.
+    function s.frame(frame,presented)
         local ok,err=pcall(function()
             s.verify();local camera=frame.camera
             assert(type(camera)=='table' and #camera==7 and type(frame.actors)=='table' and #frame.actors<=128,'invalid replay frame')
@@ -248,15 +250,18 @@ function M.create(owner)
                 if skin then partBudget=partBudget+#skin.parts end
             end
             assert(partBudget<=512,'native replay skin component budget exceeded')
-            s.camera:K2_SetActorLocationAndRotation(vector(camera[1],camera[2],camera[3]),{Pitch=camera[4],Yaw=camera[5],Roll=camera[6]},false,{},true)
-            s.camera.CameraComponent:SetFieldOfView(camera[7])
+            if not presented then
+                s.camera:K2_SetActorLocationAndRotation(vector(camera[1],camera[2],camera[3]),{Pitch=camera[4],Yaw=camera[5],Roll=camera[6]},false,{},true)
+                s.camera.CameraComponent:SetFieldOfView(camera[7])
+            end
             for _,a in ipairs(frame.actors)do
                 local proxy=s.actors[a[1]]
                 local metadata=appearance[a[1]];local skin=metadata and templates[metadata.profile] or (not metadata and legacyTemplate or nil)
                 local old=presentations[a[1]]
                 if valid(proxy) and ((old and old.skin)~=skin)then s.owned[proxy:GetAddress()]=nil;destroy(proxy);proxy=nil end
+                local fresh=not valid(proxy)
                 if not valid(proxy)then
-                    proxy=spawn('StaticMeshActor');s.actors[a[1]]=proxy;local component=proxy.StaticMeshComponent
+                    proxy=spawn('StaticMeshActor');s.actors[a[1]]=proxy;s.proxyVersion=(s.proxyVersion or 0)+1;local component=proxy.StaticMeshComponent
                     component:SetMobility(2);component:SetCollisionEnabled(0);component:SetSimulatePhysics(false);component:SetComponentTickEnabled(false)
                     if skin then
                         -- Copy native configured components onto an inert owned
@@ -280,14 +285,72 @@ function M.create(owner)
                 presentations[a[1]]={actor=proxy,skin=skin,profile=skin and skin.profile,health=skin and skin.health,localSkinFallback=not metadata and skin~=nil}
                 if skin then
                     local r=metadata and metadata.rotation or skin.rotation
-                    proxy:K2_SetActorLocationAndRotation(vector(a[2],a[3],a[4]),{Pitch=r[1],Yaw=r[2],Roll=r[3]},false,{},true)
+                    if presented and not fresh then proxy:K2_SetActorRotation({Pitch=r[1],Yaw=r[2],Roll=r[3]},true)
+                    else proxy:K2_SetActorLocationAndRotation(vector(a[2],a[3],a[4]),{Pitch=r[1],Yaw=r[2],Roll=r[3]},false,{},true)end
                     proxy:SetActorScale3D(vector(skin.scale.X*a[5]/skin.radius,skin.scale.Y*a[5]/skin.radius,skin.scale.Z*a[6]/skin.half))
-                else proxy:K2_SetActorLocation(vector(a[2],a[3],a[4]),false,{},true);proxy:SetActorScale3D(vector(a[5]/50,a[5]/50,a[6]/50))end
+                else
+                    if not (presented and not fresh) then proxy:K2_SetActorLocation(vector(a[2],a[3],a[4]),false,{},true)end
+                    proxy:SetActorScale3D(vector(a[5]/50,a[5]/50,a[6]/50))
+                end
             end
-            for id,proxy in pairs(s.actors)do if not seen[id]then s.owned[proxy:GetAddress()]=nil;destroy(proxy);s.actors[id]=nil;presentations[id]=nil end end
+            for id,proxy in pairs(s.actors)do if not seen[id]then s.owned[proxy:GetAddress()]=nil;destroy(proxy);s.actors[id]=nil;presentations[id]=nil;s.proxyVersion=(s.proxyVersion or 0)+1 end end
         end)
         if not ok then s.close();error(err)end
         return true
+    end
+    -- Render-rate pose between published frames: camera and target locations
+    -- only, on proxies this scene already owns. Never spawns or destroys.
+    function s.pose(camera,moves)
+        local ok,err=pcall(function()
+            assert(type(camera)=='table' and #camera==7,'invalid replay pose')
+            for _,n in ipairs(camera)do assert(finite(n),'invalid replay pose')end
+            assert(camera[7]>1 and camera[7]<179,'invalid replay FOV')
+            assert(valid(s.camera),'replay camera unavailable')
+            s.camera:K2_SetActorLocationAndRotation(vector(camera[1],camera[2],camera[3]),{Pitch=camera[4],Yaw=camera[5],Roll=camera[6]},false,{},true)
+            s.camera.CameraComponent:SetFieldOfView(camera[7])
+            for _,m in ipairs(moves or {})do
+                local proxy=s.actors[m[1]]
+                if valid(proxy) and finite(m[2]) and finite(m[3]) and finite(m[4]) then proxy:K2_SetActorLocation(vector(m[2],m[3],m[4]),false,{},true)end
+            end
+        end)
+        if not ok then s.close();error(err)end
+        return true
+    end
+    -- Ghost: a small inert marker where the comparison run aims (800 cm along
+    -- its view). nil hides it.
+    function s.ghost(camera)
+        local ok,err=pcall(function()
+            if camera==nil then
+                if valid(s.ghostMarker)then s.owned[s.ghostMarker:GetAddress()]=nil;destroy(s.ghostMarker);s.ghostMarker=nil;s.proxyVersion=(s.proxyVersion or 0)+1 end
+                return
+            end
+            assert(type(camera)=='table' and #camera==7,'invalid ghost pose')
+            for _,n in ipairs(camera)do assert(finite(n),'invalid ghost pose')end
+            if not valid(s.ghostMarker)then
+                local marker=spawn('StaticMeshActor');local component=marker.StaticMeshComponent
+                component:SetMobility(2);component:SetCollisionEnabled(0);component:SetSimulatePhysics(false);component:SetComponentTickEnabled(false)
+                assert(component:SetStaticMesh(StaticFindObject('/Engine/BasicShapes/Sphere.Sphere')),'ghost mesh unavailable')
+                marker:SetActorScale3D(vector(0.12,0.12,0.12))
+                s.ghostMarker=marker;s.proxyVersion=(s.proxyVersion or 0)+1
+            end
+            local p,y=math.rad(camera[4]),math.rad(camera[5])
+            local d=800
+            s.ghostMarker:K2_SetActorLocation(vector(camera[1]+d*math.cos(p)*math.cos(y),camera[2]+d*math.cos(p)*math.sin(y),camera[3]+d*math.sin(p)),false,{},true)
+        end)
+        if not ok then s.close();error(err)end
+    end
+    -- Object paths of the replay-owned camera and target proxies, for the
+    -- native presenter (which moves nothing else).
+    function s.proxies()
+        local function path(o)local ok,name=pcall(function()return o:GetFullName()end);return ok and type(name)=='string' and name:match('^%S+%s+(%S.*)$') or nil end
+        local lines={'AIMMOD_PROXIES_1'}
+        local camera=valid(s.camera) and path(s.camera)
+        if camera then lines[#lines+1]='camera\t'..camera end
+        local ghost=valid(s.ghostMarker) and path(s.ghostMarker)
+        if ghost then lines[#lines+1]='ghost\t'..ghost end
+        local ids={};for id in pairs(s.actors)do ids[#ids+1]=id end;table.sort(ids)
+        for _,id in ipairs(ids)do local p=valid(s.actors[id]) and path(s.actors[id]);if p then lines[#lines+1]='actor\t'..id..'\t'..p end end
+        return table.concat(lines,'\n')..'\n'
     end
     function s.isReady()local ok=pcall(s.verify);if not ok and s.ready then s.close()end;return ok end
     function s.presentation(id)return presentations[id]end

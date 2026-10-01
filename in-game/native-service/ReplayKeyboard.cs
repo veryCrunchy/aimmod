@@ -21,18 +21,42 @@ sealed class ReplayKeyboard(NativeReplayPlayback playback, string output) : IAsy
     [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
 
     internal static bool IsGameExecutable(string? path) => path?.Replace('\\', '/').EndsWith("/FPSAimTrainer/Binaries/Win64/FPSAimTrainer-Win64-Shipping.exe", StringComparison.OrdinalIgnoreCase) == true;
+    // Foreground checks run at 60 Hz during playback. Opening another process
+    // and enumerating its modules or windows is comparatively expensive, so a
+    // rejected foreground process and a confirmed game window are remembered
+    // until the foreground window or process changes.
+    uint rejectedPid;
+    DateTime rejectedStart;
+    nint confirmedWindow;
     bool GameForeground()
     {
         var window = GetForegroundWindow();
         if (window == 0 || GetWindowThreadProcessId(window, out var pid) == 0) return false;
+        if (game is not null && game.Id == pid && window == confirmedWindow && !game.HasExited) return true;
+        if (pid == rejectedPid && Stopwatch.GetElapsedTime(rejectedChecked).TotalSeconds < 2) return false;
         if (game is null || game.Id != pid || game.HasExited) {
-            game?.Dispose(); game = null;
+            game?.Dispose(); game = null; confirmedWindow = 0;
             var candidate = Process.GetProcessById(checked((int)pid));
-            try { if (!IsGameExecutable(candidate.MainModule?.FileName)) return false; game = candidate; }
+            try {
+                DateTime started = default;
+                try { started = candidate.StartTime; } catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException) { }
+                if (pid == rejectedPid && started == rejectedStart) { rejectedChecked = Stopwatch.GetTimestamp(); return false; }
+                if (!IsGameExecutable(ModulePath(candidate))) { rejectedPid = pid; rejectedStart = started; rejectedChecked = Stopwatch.GetTimestamp(); return false; }
+                game = candidate; rejectedPid = 0;
+            }
             finally { if (game != candidate) candidate.Dispose(); }
         }
         game.Refresh();
-        return !game.HasExited && game.MainWindowHandle == window;
+        var ok = !game.HasExited && game.MainWindowHandle == window;
+        confirmedWindow = ok ? window : 0;
+        return ok;
+    }
+    long rejectedChecked;
+    static string? ModulePath(Process process)
+    {
+        // Access denied (elevated or protected processes) is simply "not the game".
+        try { return process.MainModule?.FileName; }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or NotSupportedException) { return null; }
     }
     internal static bool IsAcknowledged(string text, DateTime stamp, DateTime now, string id, long revision)
     {
