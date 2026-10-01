@@ -28,9 +28,11 @@ sealed record GameNotice(string Id, string Kind, string Title, string Body, stri
 
 // Per-player multiplayer preferences in multiplayer-settings.json (local only).
 // AutoReady: ready up on joining, when the content arrives, and after each match.
+// RoundVolume: the bomb and round sounds of CS matches (BombAudio), 0 silences them.
 sealed record MultiplayerPrefs(string Hotkey = "F7", bool ReadyOnJoin = false, bool ReadyOnContent = true, bool ReadyAfterMatch = false,
     bool QuietDuringRanked = true, bool Sounds = true, double Volume = 0.8, string Avatar = AvatarProfiles.Default, bool HideScenario = false,
-    string SpectatePrivacy = "friends", bool ShowWatchers = true, bool Onboarded = false, bool FriendToasts = true, bool LeaveRun = true, bool ShowBoard = true, string ScoreboardKey = "Tab")
+    string SpectatePrivacy = "friends", bool ShowWatchers = true, bool Onboarded = false, bool FriendToasts = true, bool LeaveRun = true, bool ShowBoard = true, string ScoreboardKey = "Tab",
+    double RoundVolume = 0.7)
 {
     public static MultiplayerPrefs Load(string? path)
     {
@@ -62,6 +64,7 @@ sealed record MultiplayerPrefs(string Hotkey = "F7", bool ReadyOnJoin = false, b
         if (e.TryGetProperty("spectatePrivacy", out var sp) && sp.GetString() is "friends" or "ask" or "off") p = p with { SpectatePrivacy = sp.GetString()! };
         if (e.TryGetProperty("avatar", out var av) && av.ValueKind == JsonValueKind.String && AvatarProfiles.Find(av.GetString()) is { } look) p = p with { Avatar = look.Id };
         if (e.TryGetProperty("volume", out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetDouble(out var vol) && double.IsFinite(vol)) p = p with { Volume = Math.Round(Math.Clamp(vol, 0, 1), 2) };
+        if (e.TryGetProperty("roundVolume", out var rv) && rv.ValueKind == JsonValueKind.Number && rv.TryGetDouble(out var round) && double.IsFinite(round)) p = p with { RoundVolume = Math.Round(Math.Clamp(round, 0, 1), 2) };
         return p;
     }
     public void Save(string path) => AtomicFile.WriteText(path, JsonSerializer.Serialize(this, Protocol.Json));

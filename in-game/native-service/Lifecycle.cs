@@ -4,20 +4,9 @@ using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using static AimMod.InGame.InstallState;
 
 namespace AimMod.InGame;
-
-sealed record LifecycleRequests(
-    [property: JsonPropertyName("repair")] bool Repair = false,
-    [property: JsonPropertyName("install")] bool Install = false,
-    [property: JsonPropertyName("skipVersion")] string? SkipVersion = null);
-sealed record LifecycleResult(
-    [property: JsonPropertyName("kind")] string Kind,
-    [property: JsonPropertyName("ok")] bool Ok,
-    [property: JsonPropertyName("version")] string? Version,
-    [property: JsonPropertyName("message")] string Message,
-    [property: JsonPropertyName("at")] string At,
-    [property: JsonPropertyName("seen")] bool Seen = false);
 
 // Install lifecycle inside the service: periodic update checks,
 // staging, install-health checks, and the hand-off that applies a staged
@@ -49,20 +38,7 @@ sealed class Lifecycle : IAsyncDisposable
         updater = new Updater(updatesRoot, handler);
         applier = new PackageApplier(updatesRoot, this.gameRunning);
     }
-    public static string PackageCache(string output) => Path.Combine(output, "package", "current");
-    public static string PreviousPackageCache(string output) => Path.Combine(output, "package", "previous");
-    static string Now() => DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
-
-    // ---- persisted request/result files ----
-    static T? ReadJson<T>(string path) where T : class
-    {
-        try { return File.Exists(path) && new FileInfo(path).Length <= 64 * 1024 ? JsonSerializer.Deserialize<T>(File.ReadAllBytes(path)) : null; }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { return null; }
-    }
-    static void WriteJson<T>(string path, T value) => AtomicFile.WriteBytes(path, JsonSerializer.SerializeToUtf8Bytes(value), durable: true);
-    static string RequestsPath(string root) => Path.Combine(root, "requests.json");
-    static string ResultPath(string root) => Path.Combine(root, "last-result.json");
-    static string ConfirmPath(string root) => Path.Combine(root, "pending-confirmation.json");
+    // ---- persisted request/result files (InstallState) ----
     LifecycleRequests Requests => ReadJson<LifecycleRequests>(RequestsPath(updatesRoot)) ?? new();
     void UpdateRequests(Func<LifecycleRequests, LifecycleRequests> change) { lock (gate) WriteJson(RequestsPath(updatesRoot), change(Requests)); }
 
@@ -71,15 +47,7 @@ sealed class Lifecycle : IAsyncDisposable
         if (win64 is null) return null;
         try { return InstallManifest.Read(win64); } catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException) { return null; }
     }
-    ReleaseManifest? CachedRelease()
-    {
-        try
-        {
-            var path = Path.Combine(PackageCache(output), InstallLayout.PackageManifest);
-            return File.Exists(path) ? ReleaseManifest.Parse(File.ReadAllBytes(path)) : null;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ReleaseFormatException) { return null; }
-    }
+    ReleaseManifest? CachedRelease() => InstallState.CachedRelease(output);
 
     // ---- service side ----
     public void Start()
@@ -294,12 +262,12 @@ sealed class Lifecycle : IAsyncDisposable
     public static int RunCommand(string[] args, Func<string, bool>? gameRunningOverride = null, string? serviceFolder = null)
     {
         var self = serviceFolder ?? AppContext.BaseDirectory;
-        var output = Arg(args, "--output") is { } o ? Path.GetFullPath(o) : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AimMod", "KovaaksNative");
+        var output = Arg(args, "--output") is { } o ? Path.GetFullPath(o) : DefaultOutput;
         var updatesRoot = Path.Combine(output, "updates");
         Directory.CreateDirectory(updatesRoot);
         var running = gameRunningOverride ?? InstallLayout.GameRunning;
         using var log = new Log(Path.Combine(updatesRoot, "install.log"));
-        using var mutex = new Mutex(false, "Local\\AimMod.KovaaksNative.Installer");
+        using var mutex = new Mutex(false, MutexName);
         bool owned;
         try { owned = mutex.WaitOne(TimeSpan.FromMinutes(2)); } catch (AbandonedMutexException) { owned = true; }
         if (!owned) { log.Line("Another AimMod install is running."); return 1; }
@@ -311,24 +279,21 @@ sealed class Lifecycle : IAsyncDisposable
             var applier = new PackageApplier(updatesRoot, running);
             if (args.Contains("--install-status"))
             {
-                var report = InstallHealth.Inspect(win64, InstallManifest.Read(win64), CachedRelease(output));
+                var report = InstallHealth.Inspect(win64, InstallManifest.Read(win64), InstallState.CachedRelease(output));
                 Console.WriteLine(JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));
                 return report.NeedsRepair ? 3 : 0;
             }
             if (running(win64)) { log.Line("KovaaK's is running. Close the game, then try again."); return 2; }
             if (args.Contains("--uninstall"))
             {
-                var kept = applier.Uninstall(win64, args.Contains("--force"));
-                foreach (var dir in new[] { Path.Combine(output, "package"), Path.Combine(output, "updates", "staged") })
-                    try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch (IOException) { }
-                try { File.Delete(Path.Combine(output, "updates", "staged.json")); File.Delete(RepairShortcut(output)); } catch (IOException) { }
+                var kept = InstallOperations.Uninstall(win64, output, args.Contains("--force"), running);
                 log.Line($"AimMod was removed from {win64}." + (kept > 0 ? $" {kept} changed file(s) were kept." : "") + " Your history and replays were kept.");
                 return 0;
             }
             if (args.Contains("--rollback"))
             {
                 var version = applier.RollbackLast();
-                SwapCache(output, toPrevious: true);
+                InstallOperations.RestorePreviousCache(output);
                 Record(updatesRoot, new("rollback", true, version, $"AimMod was rolled back to {version}.", Now()));
                 log.Line($"AimMod was rolled back to {version}.");
                 return 0;
@@ -342,10 +307,8 @@ sealed class Lifecycle : IAsyncDisposable
             var package = VerifiedPackage.Open(root);
             log.Line($"AimMod {package.Manifest.Version}: all {package.Manifest.Files.Length} files match the release manifest.");
             var kind = args.Contains("--install") ? "install" : "repair";
-            var result = applier.Apply(win64, package, kind);
-            CachePackage(output, package);
-            InstallRepairShortcut(output, package);
-            UpdateRequestsFile(updatesRoot, r => r with { Repair = false });
+            var result = InstallOperations.Apply(win64, output, package, kind, running);
+            InstallState.UpdateRequests(updatesRoot, r => r with { Repair = false });
             Record(updatesRoot, new(kind, true, package.Manifest.Version, kind == "install" ? $"AimMod {package.Manifest.Version} was installed." : "AimMod was repaired.", Now()));
             log.Line($"AimMod {package.Manifest.Version} {(kind == "install" ? "installed" : "repaired")} in {win64} ({result.Changed} file(s) placed).");
             var game = InstallHealth.CheckBuild(InstallLayout.SteamBuildId(win64), package.Manifest.Game);
@@ -382,63 +345,6 @@ sealed class Lifecycle : IAsyncDisposable
         { Console.Error.WriteLine("Invalid release: " + ex.Message); return 1; }
         finally { try { if (Directory.Exists(temp)) Directory.Delete(temp, true); } catch (IOException) { } }
     }
-    static string ResolveGameDir(string path)
-    {
-        var full = Path.GetFullPath(path);
-        foreach (var candidate in new[] { full, Path.Combine(full, "FPSAimTrainer", "Binaries", "Win64"), Path.Combine(full, "Binaries", "Win64") })
-            if (InstallLayout.IsWin64(candidate)) return candidate;
-        return full;
-    }
-    static ReleaseManifest? CachedRelease(string output)
-    {
-        try { var path = Path.Combine(PackageCache(output), InstallLayout.PackageManifest); return File.Exists(path) ? ReleaseManifest.Parse(File.ReadAllBytes(path)) : null; }
-        catch (ReleaseFormatException) { return null; }
-    }
-    static void Record(string root, LifecycleResult result) => WriteJson(ResultPath(root), result);
-    static void UpdateRequestsFile(string root, Func<LifecycleRequests, LifecycleRequests> change) =>
-        WriteJson(RequestsPath(root), change(ReadJson<LifecycleRequests>(RequestsPath(root)) ?? new()));
-
-    // package\current is the verified copy used for repairs; package\previous
-    // is kept for a rollback.
-    static void CachePackage(string output, VerifiedPackage package)
-    {
-        var current = PackageCache(output);
-        if (string.Equals(Path.GetFullPath(package.Root).TrimEnd('\\'), Path.GetFullPath(current).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase)) return;
-        var previous = PreviousPackageCache(output);
-        var incoming = current + ".incoming";
-        if (Directory.Exists(incoming)) Directory.Delete(incoming, true);
-        CopyTree(package.Root, incoming);
-        if (Directory.Exists(current))
-        {
-            if (Directory.Exists(previous)) Directory.Delete(previous, true);
-            Directory.Move(current, previous);
-        }
-        Directory.Move(incoming, current);
-    }
-    static void SwapCache(string output, bool toPrevious)
-    {
-        var current = PackageCache(output); var previous = PreviousPackageCache(output);
-        if (!toPrevious || !Directory.Exists(previous)) return;
-        if (Directory.Exists(current)) Directory.Delete(current, true);
-        Directory.Move(previous, current);
-    }
-    static void CopyTree(string from, string to)
-    {
-        foreach (var dir in Directory.GetDirectories(from, "*", SearchOption.AllDirectories)) Directory.CreateDirectory(Path.Combine(to, Path.GetRelativePath(from, dir)));
-        Directory.CreateDirectory(to);
-        foreach (var file in Directory.GetFiles(from, "*", SearchOption.AllDirectories)) File.Copy(file, Path.Combine(to, Path.GetRelativePath(from, file)), true);
-    }
-    // Next to the data folder: %LOCALAPPDATA%\AimMod\Repair-AimMod.cmd by default.
-    static string RepairShortcut(string output) => Path.Combine(Path.GetDirectoryName(output.TrimEnd('\\'))!, "Repair-AimMod.cmd");
-    static void InstallRepairShortcut(string output, VerifiedPackage package)
-    {
-        // %LOCALAPPDATA%\AimMod\Repair-AimMod.cmd: works after a game update
-        // even when the mod no longer loads (it runs the cached package).
-        var source = Path.Combine(package.Root, "Repair-AimMod.cmd");
-        try { if (File.Exists(source)) File.Copy(source, RepairShortcut(output), true); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-    }
-
     static int ApplyPending(string[] args, string output, Func<string, bool> running, Log log)
     {
         var updatesRoot = Path.Combine(output, "updates");
@@ -452,7 +358,7 @@ sealed class Lifecycle : IAsyncDisposable
         var applier = new PackageApplier(updatesRoot, running);
         if (applier.RecoverInterrupted()) log.Line("An interrupted install was undone.");
         var updater = new Updater(updatesRoot);
-        var prefs = new UpdateSettings(output, CachedRelease(output)?.Channel).Current;
+        var prefs = new UpdateSettings(output, InstallState.CachedRelease(output)?.Channel).Current;
         var requests = ReadJson<LifecycleRequests>(RequestsPath(updatesRoot)) ?? new();
         var staged = updater.Staged();
         if (staged is not null && (prefs.AutoUpdate || requests.Install) && requests.SkipVersion != staged.Version)
@@ -460,11 +366,9 @@ sealed class Lifecycle : IAsyncDisposable
             try
             {
                 var package = updater.OpenStaged(staged);
-                var result = applier.Apply(win64, package, "update");
-                CachePackage(output, package);
-                InstallRepairShortcut(output, package);
+                var result = InstallOperations.Apply(win64, output, package, "update", running);
                 updater.ClearStaged();
-                UpdateRequestsFile(updatesRoot, r => new());
+                InstallState.UpdateRequests(updatesRoot, r => new());
                 WriteJson(ConfirmPath(updatesRoot), new LifecycleResult("update", true, package.Manifest.Version, "", Now()));
                 Record(updatesRoot, new("update", true, package.Manifest.Version, $"AimMod was updated to {package.Manifest.Version}" + (result.PreviousVersion is { } p ? $" (from {p})." : "."), Now()));
                 log.Line($"AimMod updated to {package.Manifest.Version}.");
@@ -473,7 +377,7 @@ sealed class Lifecycle : IAsyncDisposable
             catch (Exception ex) when (ex is InstallException or ReleaseFormatException or IOException or UnauthorizedAccessException)
             {
                 // Rolled back by the applier. Do not retry this version on every close.
-                UpdateRequestsFile(updatesRoot, r => r with { Install = false, SkipVersion = staged.Version });
+                InstallState.UpdateRequests(updatesRoot, r => r with { Install = false, SkipVersion = staged.Version });
                 if (ex is ReleaseFormatException) updater.ClearStaged();
                 Record(updatesRoot, new("update", false, staged.Version, $"AimMod {staged.Version} could not be installed: {ex.Message}", Now()));
                 log.Line($"Update to {staged.Version} failed: {ex.Message}");
@@ -486,14 +390,14 @@ sealed class Lifecycle : IAsyncDisposable
             {
                 var package = VerifiedPackage.Open(PackageCache(output));
                 applier.Apply(win64, package, "repair");
-                UpdateRequestsFile(updatesRoot, r => r with { Repair = false });
+                InstallState.UpdateRequests(updatesRoot, r => r with { Repair = false });
                 Record(updatesRoot, new("repair", true, package.Manifest.Version, "AimMod was repaired.", Now()));
                 log.Line("AimMod was repaired.");
                 return 0;
             }
             catch (Exception ex) when (ex is InstallException or ReleaseFormatException or IOException or UnauthorizedAccessException)
             {
-                UpdateRequestsFile(updatesRoot, r => r with { Repair = false });
+                InstallState.UpdateRequests(updatesRoot, r => r with { Repair = false });
                 Record(updatesRoot, new("repair", false, null, $"The repair failed: {ex.Message} Run Repair-AimMod.cmd with KovaaK's closed.", Now()));
                 log.Line($"Repair failed: {ex.Message}");
                 return 1;

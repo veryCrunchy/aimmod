@@ -29,7 +29,7 @@ static class DiscordPresenceChecks
         }
         public string? ClientId;
         public int Connections, Closes, Pongs;
-        public bool RejectSteamButtons, PingFirst, RejectHandshake;
+        public bool RejectSteamButtons, PingFirst, RejectHandshake, RejectInviteCover;
         readonly CancellationTokenSource stop = new();
         NamedPipeServerStream? current;
         readonly Task server;
@@ -79,6 +79,7 @@ static class DiscordPresenceChecks
                 }
                 var activity = message["args"]!["activity"] as JsonObject;
                 var rejected = RejectSteamButtons && activity?["buttons"]?.AsArray().Any(b => b!["url"]!.GetValue<string>().StartsWith("steam:")) == true;
+                rejected |= RejectInviteCover && activity?["assets"]?["invite_cover_image"] is not null;
                 if (!rejected) lock (Activities) { Activities.Add(activity?.DeepClone().AsObject()); Pids.Add(message["args"]!["pid"]!.GetValue<int>()); }
                 await Send(s, DiscordFrames.Frame, rejected
                     ? "{\"cmd\":\"SET_ACTIVITY\",\"evt\":\"ERROR\",\"data\":{\"code\":4000,\"message\":\"invalid url\"},\"nonce\":\"" + nonce + "\"}"
@@ -124,8 +125,9 @@ static class DiscordPresenceChecks
         Check(playing.Phase == "playing" && playing.Details == "Synthetic Track", "Playing shows the scenario");
         Check(playing.State == "Score 812.5 · 94.3% acc · Pace +56 vs PB", "Playing shows score, accuracy and PB pace");
         Check(playing.End == now.ToUnixTimeSeconds() + 42 && playing.Start is null, "Remaining time counts down");
-        Check(playing.Buttons.Count == 2 && playing.Buttons[0].Url == "steam://run/824270//?action=jump-to-scenario&name=Synthetic%20Track&mode=challenge", "Keeps KovaaK's play-this-scenario link");
-        Check(playing.Buttons[1] == new DiscordButton("AimMod Hub profile", "https://aimmod.app/profiles/synthetic-player"), "Hub profile button for a linked account");
+        Check(playing.Buttons.Count == 3 && playing.Buttons[0].Url == "steam://run/824270//?action=jump-to-scenario&name=Synthetic%20Track&mode=challenge", "Keeps KovaaK's play-this-scenario link");
+        Check(playing.Buttons[1] == new DiscordButton("Get AimMod", "https://aimmod.app") && playing.Buttons[2] == new DiscordButton("AimMod Hub profile", "https://aimmod.app/profiles/synthetic-player"), "Get AimMod, then the Hub profile for a linked account");
+        Check(playing.ToJson()["buttons"]!.AsArray().Select(b => b!["label"]!.GetValue<string>()).SequenceEqual(["Play this scenario", "Get AimMod"]), "Two buttons at most: the scenario link and Get AimMod");
         Check(playing.Buttons.All(b => b.Label.Length <= 32 && b.Url.Length <= 512), "Buttons stay within Discord limits");
         var json = playing.ToJson();
         Check(json["timestamps"]!["end"]!.GetValue<long>() == playing.End && json["assets"]!["large_image"]!.GetValue<string>().StartsWith("https://"), "Activity JSON carries timer and assets");
@@ -133,18 +135,18 @@ static class DiscordPresenceChecks
         Check(playing.LargeText == "5 kills · 38/40 hits · On pace for 1,076", "Run counters on the image hover text");
         Check(json["assets"]!["large_text"]!.GetValue<string>() == playing.LargeText, "Hover text is sent");
         Check(new[] { playing.Details, playing.State, playing.LargeText }.All(t => t.Length is >= 2 and <= 128), "Text fields stay within Discord limits");
-        Check(playing.ToJson(scenarioButton: false)["buttons"]!.AsArray().Count == 1, "Game link can be dropped when Discord rejects it");
+        Check(playing.ToJson(scenarioButton: false)["buttons"]!.AsArray().Select(b => b!["label"]!.GetValue<string>()).SequenceEqual(["Get AimMod", "AimMod Hub profile"]), "Game link can be dropped when Discord rejects it; the profile takes its place");
         var elapsed = DiscordActivityBuilder.Build(new(Live(remaining: null), false, emptySession, null, now), defaults);
         Check(elapsed.Start == now.ToUnixTimeSeconds() - 18 && elapsed.End is null, "Without remaining time the elapsed time counts up");
-        Check(elapsed.Buttons.Count == 1, "No Hub button without a linked account");
+        Check(elapsed.Buttons.Count == 2 && elapsed.Buttons.All(b => b.Label != "AimMod Hub profile"), "No Hub button without a linked account");
         var hidden = DiscordActivityBuilder.Build(new(Live(), false, emptySession, "synthetic-player", now), new DiscordSettingsValue(true, false, false, false));
-        Check(hidden.State == "In a challenge" && hidden.Buttons.Count == 1, "Score, PB and Hub button can each be hidden");
+        Check(hidden.State == "In a challenge" && hidden.Buttons.Count == 2 && hidden.Buttons.All(b => b.Label != "AimMod Hub profile"), "Score, PB and Hub button can each be hidden");
         var pbOnly = DiscordActivityBuilder.Build(new(Live(delta: null), false, emptySession, null, now), new DiscordSettingsValue(true, false, true, false));
         Check(pbOnly.State == "PB 1,020", "PB without a projection shows the PB");
         var paused = DiscordActivityBuilder.Build(new(Live(paused: true), false, emptySession, null, now), defaults);
         Check(paused.Phase == "paused" && paused.State == "Paused · Score 812.5 · 94.3% acc · PB 1,020" && paused.Start is null && paused.End is null, "Paused stops the timer");
         var replay = DiscordActivityBuilder.Build(new(Menu with { Replay = true }, true, emptySession, "synthetic-player", now), defaults);
-        Check(replay.Phase == "replay" && replay.Details == "Watching a replay" && replay.State == "In AimMod" && replay.Buttons.Single().Label == "AimMod Hub profile", "Replay viewing");
+        Check(replay.Phase == "replay" && replay.Details == "Watching a replay" && replay.State == "In AimMod" && replay.Buttons.Select(b => b.Label).SequenceEqual(["Get AimMod", "AimMod Hub profile"]), "Replay viewing");
         var replayNamed = DiscordActivityBuilder.Build(new(Menu, true, emptySession, null, now, ReplayScenario: "Synthetic Track"), defaults);
         Check(replayNamed.Details == "Synthetic Track" && replayNamed.State == "Watching a replay", "Replay names its scenario");
         // AimMod panel pages.
@@ -155,7 +157,7 @@ static class DiscordPresenceChecks
         Check(DiscordActivityBuilder.Build(new(Menu, false, emptySession, null, now, Page: "coaching"), defaults).Details == "In AimMod · Coaching", "Coaching page");
         Check(DiscordActivityBuilder.Build(new(Menu, false, emptySession, null, now, Page: "future-page"), defaults).Details == "In AimMod", "Unknown page stays generic");
         var pausedPanel = DiscordActivityBuilder.Build(new(Live(paused: true), false, emptySession, null, now, Page: "coaching"), defaults);
-        Check(pausedPanel.State == "Paused · Synthetic Track · Score 812.5 · 94.3% acc · PB 1,020" && pausedPanel.Buttons.Count == 1, "Panel over a paused run keeps the run");
+        Check(pausedPanel.State == "Paused · Synthetic Track · Score 812.5 · 94.3% acc · PB 1,020" && pausedPanel.Buttons.Count == 2, "Panel over a paused run keeps the run");
         Check(DiscordActivityBuilder.Build(new(Live(), false, emptySession, null, now, Page: "coaching"), defaults).Phase == "playing", "A running challenge wins over a stale page");
         var view = new DiscordWorkspaceView();
         view.Report("history", true, now);
@@ -165,7 +167,7 @@ static class DiscordPresenceChecks
         var redacted = DiscordDiagnostics.Redact("{\"cmd\":\"DISPATCH\",\"evt\":\"READY\",\"data\":{\"v\":1,\"user\":{\"id\":\"1\",\"username\":\"synthetic\"}}}");
         Check(redacted.Contains("\"user\":\"[redacted]\"") && !redacted.Contains("synthetic"), "Diagnostics redact the Discord user");
         var menu = DiscordActivityBuilder.Build(new(Menu, false, emptySession, null, now), defaults);
-        Check(menu.Phase == "menu" && menu.Start == started.ToUnixTimeSeconds() && menu.Buttons.Count == 0, "Menu shows the session timer");
+        Check(menu.Phase == "menu" && menu.Start == started.ToUnixTimeSeconds() && menu.Buttons.Single() == new DiscordButton("Get AimMod", "https://aimmod.app"), "Menu shows the session timer and Get AimMod");
         var control = DiscordActivityBuilder.Build(new(Live(scenario: "Bad\nName\u0001 " + new string('x', 300)), false, emptySession, null, now), defaults);
         Check(control.Details.Length <= 128 && !control.Details.Any(char.IsControl) && control.Details.StartsWith("Bad Name"), "Text is cleaned and bounded");
         Check(DiscordActivityBuilder.Build(new(Live(scenario: "X"), false, emptySession, null, now), defaults).Details == "In a challenge", "Too-short text uses a fallback");
@@ -201,12 +203,74 @@ static class DiscordPresenceChecks
         // Multiplayer: lobby, match and results.
         var lobbyInfo = new DiscordLobbyInfo("aimmod-0123456789abcdef01234567", 2, 4, "Score race", "Synthetic Track", "lobby", null, null, null, null, null, null, "aimmod1:" + new string('a', 40));
         var inLobby = DiscordActivityBuilder.Build(new(Live(active: false), false, emptySession, "synthetic-player", now, Lobby: lobbyInfo), defaults);
-        Check(inLobby.Details == "In lobby · 2/4 · Score race" && inLobby.State == "Synthetic Track" && inLobby.Party == new DiscordParty(lobbyInfo.PartyId, 2, 4), "Lobby shows size, mode and scenario with a party");
+        Check(inLobby.Details == "Score race · Synthetic Track" && inLobby.State == "Open to join · AimMod required" && inLobby.Party == new DiscordParty(lobbyInfo.PartyId, 2, 4), "Lobby shows mode, scenario and an open join, with a party");
         var lobbyJson = inLobby.ToJson();
         Check(lobbyJson["party"]!["size"]!.AsArray().Select(n => n!.GetValue<int>()).SequenceEqual([2, 4]) && lobbyJson["secrets"]!["join"]!.GetValue<string>() == lobbyInfo.JoinSecret, "Party size and join secret are sent");
-        Check(lobbyJson["buttons"] is null, "No buttons alongside a join secret");
+        Check(lobbyJson["buttons"] is null && lobbyJson["instance"]!.GetValue<bool>() == false, "No buttons alongside a join secret");
+        Check(inLobby.Art is null && lobbyJson["assets"]!["large_image"]!.GetValue<string>() == DiscordActivity.LargeImage && lobbyJson["assets"]!["invite_cover_image"] is null, "Without a mode key the lobby keeps the logo");
+
+        // Lobby art: AimMod Hub's invite card as the presence image and invite banner.
+        var csLobby = new DiscordLobbyInfo("aimmod-0123456789abcdef01234567", 2, 6, "CS competitive", "Synthetic CS Scenario", "lobby", null, null, null, null, null, null, "aimmod1:" + new string('a', 40),
+            ModeKey: "cs", Map: "synthetic_dust", WorkshopId: "3000000001", Host: true);
+        var csActivity = DiscordActivityBuilder.Build(new(Menu, false, emptySession, "synthetic-player", now, Lobby: csLobby), defaults);
+        Check(csActivity.Details == "CS competitive · synthetic_dust" && csActivity.State == "Open to join · AimMod required", "CS lobby names the map and says AimMod is needed");
+        Check(csActivity.LargeText == "CS competitive · synthetic_dust · 2/6 players · AimMod required", "Card hover text names mode, map, players and the requirement");
+        var csJson = csActivity.ToJson();
+        var csAssets = csJson["assets"]!;
+        const string cardQuery = "mode=cs&map=synthetic_dust&n=2&max=6&state=lobby&host=synthetic-player&ws=3000000001";
+        Check(csAssets["large_image"]!.GetValue<string>() == "https://aimmod.app/og/invite.png?v=1&layout=square&" + cardQuery, "Large image is the square lobby card");
+        Check(csAssets["invite_cover_image"]!.GetValue<string>() == "https://aimmod.app/og/invite.png?v=1&layout=banner&" + cardQuery, "Invite banner is the wide lobby card");
+        Check(csAssets["small_image"]!.GetValue<string>() == DiscordActivity.LargeImage && csAssets["small_text"]!.GetValue<string>() == "AimMod for KovaaK's · aimmod.app", "Small image is the AimMod logo with a tooltip");
+        Check(csAssets.AsObject().Where(a => a.Key.EndsWith("_image")).All(a => a.Value!.GetValue<string>().Length <= DiscordActivityBuilder.AssetLimit), "Image strings fit Discord's limit");
+        Check(csJson["secrets"]!["join"] is not null && csJson["party"]!["size"]!.AsArray().Select(n => n!.GetValue<int>()).SequenceEqual([2, 6]), "Lobby with art keeps party and join secret");
+        var noCover = csActivity.ToJson(art: DiscordActivity.ArtLevel.NoCover)["assets"]!;
+        Check(noCover["invite_cover_image"] is null && noCover["large_image"]!.GetValue<string>().Contains("layout=square"), "Art fallback without the invite banner");
+        var logoOnly = csActivity.ToJson(art: DiscordActivity.ArtLevel.Logo)["assets"]!;
+        Check(logoOnly["large_image"]!.GetValue<string>() == DiscordActivity.LargeImage && logoOnly["small_image"] is null && logoOnly["invite_cover_image"] is null, "Art fallback to the logo only");
+        var guestCard = DiscordActivityBuilder.Build(new(Menu, false, emptySession, "synthetic-player", now, Lobby: csLobby with { Host = false }), defaults).Art!;
+        Check(!guestCard.Large.Contains("host=") && !guestCard.Cover.Contains("host="), "A guest's card never names a host");
+        Check(!DiscordActivityBuilder.Build(new(Menu, false, emptySession, "synthetic-player", now, Lobby: csLobby), defaults with { ShowHubButton = false }).Art!.Cover.Contains("host="), "Host handle follows the Hub button setting");
+        Check(!DiscordActivityBuilder.Build(new(Menu, false, emptySession, "Not A Handle", now, Lobby: csLobby), defaults).Art!.Cover.Contains("host="), "Only a valid Hub handle is sent");
+        Check(!DiscordActivityBuilder.Build(new(Menu, false, emptySession, null, now, Lobby: csLobby with { WorkshopId = "12ab" }), defaults).Art!.Cover.Contains("ws="), "Malformed Workshop ids are dropped");
+        var grown = DiscordActivityBuilder.Build(new(Menu, false, emptySession, "synthetic-player", now, Lobby: csLobby with { Players = 3 }), defaults);
+        Check(grown.Structural(csActivity) && grown.Art!.Cover.Contains("&n=3&max=6&"), "A player joining updates party and card promptly");
+        var full = DiscordActivityBuilder.Build(new(Menu, false, emptySession, null, now, Lobby: csLobby with { Players = 6, JoinSecret = null, Closed = "full" }), defaults);
+        Check(full.State == "In lobby · Full" && full.JoinSecret is null && full.ToJson()["secrets"] is null && full.Party == new DiscordParty(csLobby.PartyId, 6, 6), "Full lobby: no join secret, party still shown");
+        Check(DiscordActivityBuilder.Build(new(Menu, false, emptySession, null, now, Lobby: csLobby with { JoinSecret = null, Closed = "invite-only" }), defaults).State == "In lobby · Invite only", "Invite-only lobby says so");
+        var csMatch = DiscordActivityBuilder.Build(new(Live(), false, emptySession, null, now, Lobby: csLobby with { State = "match", Round = 4, TotalRounds = 24, JoinSecret = null, Closed = "in-match" }), defaults);
+        Check(csMatch.Details == "CS competitive · synthetic_dust" && csMatch.Art!.Cover.Contains("state=match") && csMatch.ToJson()["secrets"] is null, "Match card; no join while a match runs");
+        Check(DiscordActivityBuilder.Build(new(Menu, false, emptySession, null, now, Lobby: csLobby with { State = "results", Won = true }), defaults).Art!.Large.Contains("state=results"), "Results card");
+        Check(DiscordActivityBuilder.Build(new(Menu, false, emptySession, null, now, Lobby: csLobby with { Map = null, Scenario = null }), defaults).Details == "CS competitive · Choosing a map", "CS lobby before a map is chosen");
+        var longName = DiscordActivityBuilder.Build(new(Menu, false, emptySession, "synthetic-player", now, Lobby: csLobby with { Map = new string('m', 90) + " ü & ?" + new string('é', 60) }), defaults).Art!;
+        Check(longName.Large.Length <= DiscordActivityBuilder.AssetLimit && longName.Cover.Length <= DiscordActivityBuilder.AssetLimit && longName.Cover.Contains("&map=mmm") && longName.Cover.Contains("&n=2&max=6&state=lobby"), "A long map name is shortened to fit, keeping the rest");
+        Check(DiscordActivityBuilder.InviteCard("banner", "duel", "A/B?c=d&e", 1, 2, "lobby", null, null) == "https://aimmod.app/og/invite.png?v=1&layout=banner&mode=duel&map=A%2FB%3Fc%3Dd%26e&n=1&max=2&state=lobby", "Card parameters are escaped");
+        // Port names: pretty names, game tags and the Hub's map art key.
+        Check(DiscordMapNames.FromMapFile("aimmod_de_d2_remake_css") == ("aimmod_de_d2_remake_css", "Dust2 Remake", "css")
+            && DiscordMapNames.FromMapFile("AIMMOD_ztn3dm1_q3.json") == ("aimmod_ztn3dm1_q3", "Blood Run", "q3")
+            && DiscordMapNames.FromMapFile("aimmod_aim_newport_cs16.map") == ("aimmod_aim_newport_cs16", "aim_newport", "cs16")
+            && DiscordMapNames.FromMapFile("de_dust2") is null && DiscordMapNames.FromMapFile("aimmod_x_doom") is null, "Port map files give key, pretty name and game");
+        Check(DiscordMapNames.FromScenario("AimMod - de_d2_remake (CSS) - CS Movement") == ("Dust2 Remake", "css") && DiscordMapNames.FromScenario("AimMod - Blood Run (Q3) - Quake Movement") == ("Blood Run", "q3")
+            && DiscordMapNames.FromScenario("Synthetic Track") is null, "Port scenario names give the pretty name and game");
+        var portLobby = csLobby with { Map = "aimmod_de_d2_remake_css", MapKey = "aimmod_de_d2_remake_css", Scenario = "AimMod - de_d2_remake (CSS) - CS Movement" };
+        var port = DiscordActivityBuilder.Build(new(Menu, false, emptySession, "synthetic-player", now, Lobby: portLobby), defaults);
+        Check(port.Details == "CS competitive · Dust2 Remake" && port.LargeText == "CS competitive · Dust2 Remake (CS:S) · 2/6 players · AimMod required", "A port map reads by its pretty name");
+        Check(port.Art!.Cover == "https://aimmod.app/og/invite.png?v=1&layout=banner&mode=cs&map=Dust2%20Remake&game=css&art=aimmod_de_d2_remake_css&n=2&max=6&state=lobby&host=synthetic-player&ws=3000000001", "Card asks for the Hub's map art and game chip");
+        var portScenario = DiscordActivityBuilder.Build(new(Menu, false, emptySession, null, now, Lobby: lobbyInfo with { ModeKey = "deathmatch", Mode = "Deathmatch", Scenario = "AimMod - Blood Run (Q3) - Quake Movement", MapKey = "aimmod_ztn3dm1_q3" }), defaults);
+        Check(portScenario.Details == "Deathmatch · Blood Run" && portScenario.Art!.Large.Contains("&map=Blood%20Run&game=q3&art=aimmod_ztn3dm1_q3&"), "A port scenario reads by its map's pretty name");
+        Check(DiscordActivityBuilder.Build(new(Menu, false, emptySession, null, now, Lobby: csLobby with { MapKey = "../x" }), defaults).Art!.Cover.Contains("art=") == false, "Malformed map keys are dropped");
+        var longTip = DiscordActivityBuilder.Build(new(Menu, false, emptySession, null, now, Lobby: csLobby with { Map = new string('m', 120) }), defaults);
+        Check(longTip.LargeText.Length <= 128 && longTip.LargeText.StartsWith("CS competitive · mmm"), "A long name shortens the tooltip from the end");
+        // Get AimMod: shown whenever there is no join secret, never beside one.
+        var csMatchJson = DiscordActivityBuilder.Build(new(Menu, false, emptySession, "synthetic-player", now, Lobby: csLobby with { State = "match", Round = 2, JoinSecret = null, Closed = "in-match" }), defaults).ToJson();
+        Check(csMatchJson["secrets"] is null && csMatchJson["buttons"]!.AsArray().Select(b => b!["label"]!.GetValue<string>()).SequenceEqual(["Get AimMod", "AimMod Hub profile"])
+            && csMatchJson["buttons"]![0]!["url"]!.GetValue<string>() == "https://aimmod.app", "A match without late join shows Get AimMod and the profile");
+        var resultsJson = DiscordActivityBuilder.Build(new(Menu, false, emptySession, null, now, Lobby: csLobby with { State = "results", JoinSecret = null, Closed = "no-steam-lobby" }), defaults).ToJson();
+        Check(resultsJson["buttons"]!.AsArray().Single()!["label"]!.GetValue<string>() == "Get AimMod", "Results without a join show Get AimMod");
+        Check(csActivity.ToJson()["buttons"] is null && csActivity.ToJson()["secrets"] is not null, "A joinable lobby keeps Join instead of buttons");
+        Check(DiscordActivityBuilder.Build(new(Menu, false, emptySession, null, now, Lobby: csLobby with { JoinSecret = null, Closed = "full" }), defaults).State == "In lobby · Full", "A full lobby does not claim to be open");
+        Check(DiscordActivityBuilder.HubHandle("synthetic-player") && !DiscordActivityBuilder.HubHandle("-x") && !DiscordActivityBuilder.HubHandle("a--b") && !DiscordActivityBuilder.HubHandle("Upper") && !DiscordActivityBuilder.HubHandle(new string('a', 33)), "Hub handle validation matches the Hub");
         var noJoin = DiscordActivityBuilder.Build(new(Live(active: false), false, emptySession, "synthetic-player", now, Lobby: lobbyInfo), defaults with { ShowJoin = false }).ToJson();
-        Check(noJoin["secrets"] is null && noJoin["buttons"]!.AsArray().Count == 1 && noJoin["party"] is not null, "Join can be turned off; the Hub button returns");
+        Check(noJoin["secrets"] is null && noJoin["buttons"]!.AsArray().Select(b => b!["label"]!.GetValue<string>()).SequenceEqual(["Get AimMod", "AimMod Hub profile"]) && noJoin["party"] is not null, "Join can be turned off; Get AimMod and the Hub button return");
         Check(DiscordActivityBuilder.Build(new(Live(), false, emptySession, null, now, Lobby: lobbyInfo), defaults with { ShowLobby = false }) is { Phase: "playing", Party: null, JoinSecret: null }, "Lobby details can be hidden");
         var leading = DiscordActivityBuilder.Build(new(Live(), false, emptySession, null, now, Lobby: lobbyInfo with { State = "match", Round = 2, TotalRounds = 4, Lead = 1200, JoinSecret = null }), defaults);
         Check(leading.Phase == "match:2" && leading.Details == "Score race · Synthetic Track" && leading.State == "Round 2/4 · Leading by 1,200" && leading.End == now.ToUnixTimeSeconds() + 42, "Match: round, lead, mode and scenario with the round timer");
@@ -227,9 +291,14 @@ static class DiscordPresenceChecks
         var exposed = string.Join("|", summarized.PartyId, summarized.JoinSecret);
         Check(!exposed.Contains(steamLobby) && !exposed.Contains(hostPeer) && !exposed.Contains(guest) && !exposed.Contains("00112233aabbccdd") && !exposed.Contains("ABC234"), "Party id and secret carry no Steam id, lobby id or room code");
         Check(summarized.PartyId == MultiplayerDiscord.Summarize(lobbySnap, hostPeer, steamLobby).PartyId && summarized.PartyId.Length <= 128, "Party id is stable for every member");
-        Check(MultiplayerDiscord.Summarize(lobbySnap with { Settings = settingsMp with { Privacy = LobbyPrivacy.Invite } }, guest, steamLobby).JoinSecret is null, "Invite-only lobbies offer no join");
-        Check(MultiplayerDiscord.Summarize(lobbySnap with { Settings = settingsMp with { MaxPlayers = 2 } }, guest, steamLobby).JoinSecret is null, "Full lobbies offer no join");
-        Check(MultiplayerDiscord.Summarize(lobbySnap, guest, null).JoinSecret is null, "No Steam lobby, no join");
+        Check(summarized is { ModeKey: LobbyModes.Race, Map: null, Host: false, Closed: null } && MultiplayerDiscord.Summarize(lobbySnap, hostPeer, steamLobby).Host, "Summary carries the mode key and who hosts");
+        Check(MultiplayerDiscord.Summarize(lobbySnap with { Settings = settingsMp with { Privacy = LobbyPrivacy.Invite } }, guest, steamLobby) is { JoinSecret: null, Closed: "invite-only" }, "Invite-only lobbies offer no join");
+        Check(MultiplayerDiscord.Summarize(lobbySnap with { Settings = settingsMp with { MaxPlayers = 2 } }, guest, steamLobby) is { JoinSecret: null, Closed: "full" }, "Full lobbies offer no join");
+        Check(MultiplayerDiscord.Summarize(lobbySnap, guest, null) is { JoinSecret: null, Closed: "no-steam-lobby" }, "No Steam lobby, no join");
+        var csSettings = settingsMp with { Mode = LobbyModes.Cs, MaxPlayers = 6, Scenario = settingsMp.Scenario! with { Map = "synthetic_dust", WorkshopId = "3000000001" } };
+        Check(MultiplayerDiscord.Summarize(lobbySnap with { Settings = csSettings }, guest, steamLobby) is { Mode: "CS competitive", ModeKey: LobbyModes.Cs, Map: "synthetic_dust", WorkshopId: "3000000001", MaxPlayers: 6 }, "CS lobby summary names the map and Workshop item");
+        Check(MultiplayerDiscord.Summarize(lobbySnap with { Settings = csSettings with { MapOverride = new MapChoice("synthetic_port", "0123456789abcdef", "ported") } }, guest, steamLobby).Map == "synthetic_port", "A map override is the CS map");
+        Check(LobbyModes.All.All(m => MultiplayerDiscord.ModeLabel(m) != "Match"), "Every lobby mode has a presence label");
         var friends = new[] { new FriendEntry("f1", "Friend", "aimmod-lobby", null, "109775240000000999", true), new FriendEntry("f2", "Friend 2", "aimmod-lobby", null, steamLobby, true) };
         Check(MultiplayerDiscord.Resolve(summarized.JoinSecret!, friends) == steamLobby, "Join secret resolves to the friend's Steam lobby");
         Check(MultiplayerDiscord.Resolve(summarized.JoinSecret!, [friends[0], friends[1] with { Joinable = false }]) is null, "Only joinable friend lobbies resolve");
@@ -237,7 +306,8 @@ static class DiscordPresenceChecks
         var live2 = new MatchSnapshot("m-1", MatchPhases.Live, LobbyModes.Race, "Synthetic Track", 60, 2, 3, null, null, null, null, [hostPeer, guest],
             [new ScoreLine(hostPeer, 1000, 30, 30, 10, 9, 3, LineStates.Playing, false), new ScoreLine(guest, 2200, 30, 30, 10, 9, 3, LineStates.Playing, false)], [], [], null, []);
         var inMatch = MultiplayerDiscord.Summarize(lobbySnap with { Match = live2 }, guest, steamLobby);
-        Check(inMatch is { State: "match", Round: 2, TotalRounds: 3, Lead: 1200 } && inMatch.JoinSecret is null, "Live round lead against the best other player; no join mid-match");
+        Check(inMatch is { State: "match", Round: 2, TotalRounds: 3, Lead: 1200, Closed: "in-match" } && inMatch.JoinSecret is null, "Live round lead against the best other player; no join mid-match");
+        Check(MultiplayerDiscord.Summarize(lobbySnap with { Settings = settingsMp with { Mode = LobbyModes.Rounds, LateJoin = true }, Match = live2 }, guest, steamLobby) is { JoinSecret: not null, Closed: null }, "Late join keeps the join open mid-match");
         Check(MultiplayerDiscord.Summarize(lobbySnap with { Match = live2 }, hostPeer, steamLobby).Lead == -1200, "The other side trails");
         var final = live2 with { Phase = MatchPhases.Final, WinnerId = guest, Standings = [new Standing(guest, "Guest", 1, 2, 6, 2200, 4000, 3), new Standing(hostPeer, "Host", 2, 1, 3, 1500, 3000, 3)] };
         Check(MultiplayerDiscord.Summarize(lobbySnap with { Match = final }, guest, steamLobby) is { State: "results", Won: true, Place: 1 }, "Final standing");
@@ -331,7 +401,7 @@ static class DiscordPresenceChecks
             Ack("released"); await host.Step(CancellationToken.None);
             Check(fake.Connections == 1 && host.Status == "showing" && fake.Activities.Count == 0, "Connects once the game has released its presence");
             await host.Step(CancellationToken.None);
-            Check(fake.Activities.Count == 1 && fake.Activities[0]!["buttons"]!.AsArray().Count == 1 && fake.Pids[0] == 4242, "Rejected game link is dropped and the rest is shown");
+            Check(fake.Activities.Count == 1 && fake.Activities[0]!["buttons"]!.AsArray().Count == 2 && fake.Pids[0] == 4242, "Rejected game link is dropped and the rest is shown");
             snapshot = Live(score: 850); clock = clock.AddSeconds(2); Ack("released"); await host.Step(CancellationToken.None);
             Check(fake.Activities.Count == 1, "Score-only change waits for the refresh interval");
             clock = clock.AddSeconds(15); Ack("released"); await host.Step(CancellationToken.None);
@@ -387,6 +457,43 @@ static class DiscordPresenceChecks
             lock (lines) Check(!lines.Any(l => l.Contains("123456789012345678") || l.Contains("synthetic")) && lines.Any(l => l.StartsWith("ask-to-join request (user redacted)")), "Join requests are logged without the Discord user");
         }
         finally { Directory.Delete(mpOutput, true); }
+
+        // Host: lobby art, updates while the lobby changes, and the art fallback.
+        var artOutput = Path.Combine(Path.GetTempPath(), "aimmod-discord-art-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(artOutput);
+        try
+        {
+            await using var fake = new FakeDiscord { RejectInviteCover = true };
+            var artClock = now; var lines = new List<string>();
+            DiscordLobbyInfo? current = new("aimmod-0123456789abcdef01234567", 2, 6, "CS competitive", "Synthetic CS Scenario", "lobby", null, null, null, null, null, null, "aimmod1:" + new string('d', 40),
+                ModeKey: "cs", Map: "synthetic_dust", Host: true);
+            await using var host = new DiscordPresenceHost(artOutput, new DiscordSettings(artOutput), () => Menu, () => false, () => "synthetic-player",
+                new DiscordNamedPipe(fake.Prefix, 1), () => artClock, () => 4242, TimeSpan.FromHours(1), log: l => { lock (lines) lines.Add(l); }, lobby: () => current);
+            async Task Step(int seconds)
+            {
+                artClock = artClock.AddSeconds(seconds);
+                File.WriteAllText(Path.Combine(artOutput, DiscordHandoff.GameFile), $"AIMMOD_DISCORD_GAME_1\treleased\t{artClock.ToUnixTimeSeconds()}\n");
+                await host.Step(CancellationToken.None);
+            }
+            await Step(0);
+            Check(fake.Activities.Count == 0 && lines.Any(l => l.Contains("rejected") && l.Contains("retrying with no invite banner")), "A rejected invite banner is logged and retried without it");
+            await Step(1);
+            Check(fake.Activities.Count == 1 && fake.Activities[0]!["assets"]!["invite_cover_image"] is null && fake.Activities[0]!["assets"]!["large_image"]!.GetValue<string>().Contains("layout=square")
+                && fake.Activities[0]!["secrets"]!["join"] is not null, "Lobby card shown without the banner, join still offered");
+            lock (lines) Check(lines.Any(l => l.StartsWith("SET_ACTIVITY lobby") && l.Contains("join=on") && l.Contains("party=2/6") && l.EndsWith("art=nocover: ok")), "Log records join, party and art level");
+            current = current with { Players = 3 };
+            await Step(1);
+            Check(fake.Activities.Count == 2 && fake.Activities[1]!["party"]!["size"]![0]!.GetValue<int>() == 3 && fake.Activities[1]!["assets"]!["large_image"]!.GetValue<string>().Contains("&n=3&"), "A joining player updates party and card at once");
+            current = current with { State = "match", Round = 1, TotalRounds = 24, JoinSecret = null, Closed = "in-match" };
+            await Step(1);
+            Check(fake.Activities.Count == 3 && fake.Activities[2]!["secrets"] is null && fake.Activities[2]!["party"] is not null, "Match start withdraws the join secret, keeps the party");
+            lock (lines) Check(lines.Any(l => l.Contains("join=off(in-match)")), "Log says why join is off");
+            current = null;
+            await Step(1);
+            Check(fake.Activities.Count == 4 && fake.Activities[3]!["party"] is null && fake.Activities[3]!["secrets"] is null && fake.Activities[3]!["assets"]!["invite_cover_image"] is null
+                && fake.Activities[3]!["assets"]!["large_image"]!.GetValue<string>() == DiscordActivity.LargeImage, "Leaving the lobby clears party, join and lobby art");
+        }
+        finally { Directory.Delete(artOutput, true); }
 
         // Workspace endpoints.
         var web = Path.Combine(Path.GetTempPath(), "aimmod-discord-web-" + Guid.NewGuid().ToString("N"));

@@ -49,14 +49,16 @@ test('standings show unknown values as a dash and spell out the frag limit',()=>
 function live(){
   class El{constructor(tag){this.tag=tag;this.children=[];this.style={};this.className='';this.textContent='';}
     appendChild(c){this.children.push(c);return c;}removeChild(c){this.children.splice(this.children.indexOf(c),1);}get firstChild(){return this.children[0];}
-    setAttribute(){}all(){return this.children.flatMap(c=>[c,...c.all()]);}}
-  const box=new El('main'),body=new El('body'),html=new El('html');const polls=[],posts=[];let next=null;
+    setAttribute(){}all(){return this.children.flatMap(c=>[c,...c.all()]);}get tagName(){return this.tag.toUpperCase();}
+    getBoundingClientRect(){return this.rect||{left:-1,top:-1,right:-1,bottom:-1};}}
+  const box=new El('main'),body=new El('body'),html=new El('html');const polls=[],posts=[];let next=null;const listeners={},engineOn={};
   class Xhr{open(m){this.m=m;}setRequestHeader(){}send(b){if(this.m==='GET')polls.push(this);else posts.push(JSON.parse(b));}}
-  const window={document:{createElement:t=>new El(t),getElementById:id=>id==='notice'?box:null,body,documentElement:html},XMLHttpRequest:Xhr,location:{pathname:'/cap/notify'}};
+  const window={document:{createElement:t=>new El(t),getElementById:id=>id==='notice'?box:null,body,documentElement:html,addEventListener:(t,f)=>{listeners[t]=f;}},XMLHttpRequest:Xhr,location:{pathname:'/cap/notify'},
+    engine:{on:(name,f)=>{engineOn[name]=f;}}};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'notify.js'),'utf8'),{window,setTimeout:f=>{next=f;return 1;},clearTimeout:()=>{}});
   // Answers the oldest poll, then lets the next one go out.
   const reply=(status,n)=>{const x=polls.shift();x.readyState=4;x.status=status;x.responseText=n?JSON.stringify(n):'';x.onreadystatechange();if(!polls.length&&next)next();};
-  return {render:window.AimModNotify.render,box,body,html,posts,reply,buttons:()=>box.all().filter(e=>/\bbutton\b/.test(e.className))};
+  return {render:window.AimModNotify.render,box,body,html,posts,reply,listeners,engineOn,buttons:()=>box.all().filter(e=>/\bbutton\b/.test(e.className))};
 }
 const failed={version:1,active:true,id:'lf-m1-1',kind:'invite',eyebrow:'AimMod · Match',title:'Couldn’t load the match (1/2)',body:'Synthetic Two: still loading.',layout:'toast',interactive:true,
   actions:[{label:'Retry',action:'retry-load',id:'m1'},{label:'Abort',action:'end',id:'m1'}]};
@@ -120,4 +122,18 @@ test('a notice can carry a short extra line, such as a keybind that differs',()=
 test('a sender named only with punctuation keeps those characters in the circle',()=>{
   const n=live();n.render({version:1,active:true,id:'inv-inv-1',kind:'invite',title:'-.- invited you',body:'',layout:'toast',interactive:true,actions:[{label:'Join',action:'accept-invite',id:'inv-1'}],person:{name:'-.-',avatar:null}});
   assert.equal(n.box.all().find(e=>/^who /.test(e.className)).textContent,'-.');
+});
+test('AimModCore\'s pointer fallback hovers and presses the button under the cursor, once, and stands aside for Gameface clicks',()=>{
+  const n=live();n.render(failed);
+  const [retry,abort]=n.buttons();retry.rect={left:100,top:200,right:180,bottom:232};abort.rect={left:190,top:200,right:270,bottom:232};
+  const pointer=n.engineOn.AimModPointer;assert.equal(typeof pointer,'function','listens for AimModPointer');
+  pointer(120,210,false,1920,1080);assert.ok(/\bhover\b/.test(retry.className),'hover over Retry');
+  pointer(120,210,true,1920,1080);pointer(121,211,false,1920,1080);
+  assert.deepEqual(n.posts.filter(p=>p.action==='retry-load'),[{action:'retry-load',id:'m1'}],'released over Retry: pressed once');
+  pointer(200,210,false,1920,1080);assert.ok(!/\bhover\b/.test(retry.className)&&/\bhover\b/.test(abort.className),'hover moves to Abort');
+  pointer(200,210,true,1920,1080);pointer(20,20,false,1920,1080);
+  assert.equal(n.posts.filter(p=>p.action==='end').length,0,'released elsewhere: nothing pressed');
+  // Gameface's own click arrived: the fallback doesn't press a second time.
+  n.listeners.mousedown();pointer(120,210,true,1920,1080);pointer(120,210,false,1920,1080);
+  assert.equal(n.posts.filter(p=>p.action==='retry-load').length,1,'no double press');
 });

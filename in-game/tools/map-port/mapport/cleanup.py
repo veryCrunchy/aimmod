@@ -164,9 +164,10 @@ def remove_buried_liquids(sc: scene.Scene, cover: float = 0.8) -> int:
             if b.kind != scene.SOLID:
                 continue
             (bx0, by0, bz0), (bx1, by1, bz1) = b.bounds()
-            # A lid: solid starting at the water line (or just under it) and above. A floor around or
-            # under a pool also has its top near the water line, but it isn't over the water.
-            if not -8.0 <= bz0 - top <= 96.0:
+            # Over the water: a lid starting at (or just under) the water line, or a floor whose top is
+            # flush with it (the liquid fills the floor slab itself). A pool's own floor is far below
+            # its water line and its rim lies beside it, so neither covers it.
+            if not (-8.0 <= bz0 - top <= 96.0 or -8.0 <= bz1 - top <= 8.0):
                 continue
             ix = min(hi[0], bx1) - max(lo[0], bx0)
             iy = min(hi[1], by1) - max(lo[1], by0)

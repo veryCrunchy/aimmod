@@ -54,8 +54,20 @@ namespace aimmod
             std::string primary, pistol; // weapon profile names; "-" = empty slot
             double armour{};
             bool helmet{}, kit{};
+            // CS slots 2 and 3 (game-modes.md 6.6.2): the knife, and the bomb for its carrier.
+            // Empty when the line has no such columns (the slot is left as the scenario has it).
+            std::string knife, bomb;
         };
         std::optional<Loadout> loadout;
+        // CS: the bomb while it lies in the world (dropped, planted or defused), where AimModCore draws it.
+        struct Bomb
+        {
+            std::string state; // dropped | planted | defused
+            double x{}, y{}, z{};
+            std::int64_t explodesMs{}; // local unix ms; 0 unless planted
+            bool defusing{};
+        };
+        std::optional<Bomb> bomb;
     };
     std::optional<RoundState> ParseRoundState(std::string_view text);
 

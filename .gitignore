@@ -68,6 +68,10 @@ codex-clipboard-*
 # Native worker build products and private runtime state
 in-game/native-service/bin/
 in-game/native-service/obj/
+in-game/install-core/bin/
+in-game/install-core/obj/
+in-game/installer/**/bin/
+in-game/installer/**/obj/
 in-game/**/account.bin*
 in-game/**/hub-cache.json*
 # In-game release build output (New-AimModInGameRelease.ps1)

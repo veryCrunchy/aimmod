@@ -15,7 +15,10 @@ package and publish on Linux):
   -Step Finish  Zip the folder
                 into AimMod-InGame-<version>.zip and write
                 aimmod-ingame-<channel>.json: version, channel, notes,
-                package URL, size and SHA-256, and the manifest SHA-256.
+                package URL, size and SHA-256, the manifest SHA-256, and
+                the installer fields (minimumInstallerVersion, installerUrl)
+                read by AimMod-Setup.exe. -SetupExe adds the installer's
+                SHA-256 to the .sha256 file.
 
 Inputs for Stage:
   -Package    AimModCore package from in-game/native-mod/install/Build-AimModPackage.ps1
@@ -47,13 +50,22 @@ param(
     # feed already offers a newer version. Pass the downloaded beta feed, or
     # -WriteBetaFeed alone when there is none yet.
     [switch]$WriteBetaFeed,
-    [string]$ExistingBetaFeed
+    [string]$ExistingBetaFeed,
+    # Installer fields of the feed (see AimModRelease.ps1). {channel} is replaced per feed.
+    [string]$MinimumInstallerVersion,
+    [string]$InstallerUrl,
+    # The built AimMod-Setup.exe, listed in the .sha256 file; optional.
+    [string]$SetupExe
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'AimModRelease.ps1')
 
 if ($Version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$') { throw "Invalid version $Version." }
 if ($Channel -eq 'stable' -and $Version.Contains('-')) { throw 'A prerelease version belongs on the beta channel.' }
+if (-not $MinimumInstallerVersion) { $MinimumInstallerVersion = $script:DefaultMinimumInstallerVersion }
+if (-not $InstallerUrl) { $InstallerUrl = $script:DefaultInstallerUrl }
+if ($MinimumInstallerVersion -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$') { throw "Invalid installer version $MinimumInstallerVersion." }
+if (-not $InstallerUrl.StartsWith('https://')) { throw 'The installer link must use HTTPS.' }
 $name = "AimMod-InGame-$Version"
 New-Item -ItemType Directory -Force -Path $Output | Out-Null
 $Output = (Resolve-Path -LiteralPath $Output).Path
@@ -161,6 +173,9 @@ function Invoke-Finish {
         minimumSteamBuildId = [long]$manifest.game.minimumSteamBuildId
         manifestSha256 = Get-Sha256 $manifestPath
         package = [ordered]@{ url = "$DownloadBaseUrl/$name.zip"; sha256 = Get-Sha256 $zip; size = (Get-Item -LiteralPath $zip).Length }
+        # Read by AimMod-Setup.exe; the service ignores both.
+        minimumInstallerVersion = $MinimumInstallerVersion
+        installerUrl = $InstallerUrl.Replace('{channel}', $Channel)
     }
     $feedPath = Join-Path $Output "aimmod-ingame-$Channel.json"
     Write-Utf8 $feedPath ($feed | ConvertTo-Json -Depth 4)
@@ -172,13 +187,19 @@ function Invoke-Finish {
         }
         if ($write) {
             $feed.channel = 'beta'
+            $feed.installerUrl = $InstallerUrl.Replace('{channel}', 'beta')
             $betaPath = Join-Path $Output 'aimmod-ingame-beta.json'
             Write-Utf8 $betaPath ($feed | ConvertTo-Json -Depth 4)
             Write-Host "The beta feed also offers $Version."
         }
     }
     Copy-Item -LiteralPath $manifestPath -Destination (Join-Path $Output "$name.manifest.json") -Force
-    $sums = foreach ($f in @($zip, (Join-Path $Output "$name.manifest.json"))) { "$(Get-Sha256 $f)  $(Split-Path -Leaf $f)" }
+    $listed = @($zip, (Join-Path $Output "$name.manifest.json"))
+    if ($SetupExe) {
+        if (-not (Test-Path -LiteralPath $SetupExe)) { throw "AimMod-Setup.exe not found: $SetupExe" }
+        $listed += (Resolve-Path -LiteralPath $SetupExe).Path
+    }
+    $sums = foreach ($f in $listed) { "$(Get-Sha256 $f)  $(Split-Path -Leaf $f)" }
     Write-Utf8 (Join-Path $Output "$name.sha256") (($sums -join "`n") + "`n")
     Write-Host "Release ready in ${Output}: $name.zip, $name.manifest.json, aimmod-ingame-$Channel.json."
 }

@@ -414,9 +414,13 @@ def run(sc: scene.Scene, slots: List[Slot], tex_slot: Dict[str, int], jump_up: f
         problems.append("some spawns cannot walk to the rest of their team")
     if dark:
         problems.append(f"{dark} near-black faces in the playable area")
+    from .spawns import floating_spawns
+    floating_count = floating_spawns(sc)
+    if floating_count:
+        problems.append(f"{floating_count} spawns float above the floor (no ground within 8 units below their feet)")
     if reach.get("trapped_spots", 0) > max(8, 0.02 * max(1, reach.get("reached", 0))):
         problems.append(f"{reach['trapped_spots']} spots where a player gets stuck (cannot walk back to a "
                         f"spawn), e.g. {reach.get('trapped_examples')}")
-    return {"pass": not problems, "problems": problems, "reachability": reach, "dark_faces": dark,
+    return {"pass": not problems, "problems": problems, "reachability": reach, "dark_faces": dark, "floating_spawns": floating_count,
             "_reached": reached,
             "props_kept": floating, "view_spots": [list(map(lambda v: round(v, 1), p)) for p in spread(_playable(sc, reached), 8, [s.origin for s in sc.spawns[:1]])]}

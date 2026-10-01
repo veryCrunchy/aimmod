@@ -29,6 +29,7 @@ static partial class MultiplayerChecks
         CombatModes();
         TeamsAndSpawns();
         CsMode();
+        CsWeapons();
         LoadGate();
         ProtocolFrames();
         Peers();
@@ -700,8 +701,8 @@ static partial class MultiplayerChecks
         Check(LobbyRules.Apply(start, J(new { mode = "deathmatch", maxPlayers = 10 }), 2, content).Settings!.MaxPlayers == 8, "Other modes stay at 8 players");
         Check(MatchScenario.Name(cs).Contains(" - CS competitive - ", StringComparison.Ordinal) && MatchScenario.Needed(cs), "CS plays its own arena");
         var arena = MatchScenario.Generate(new(BaseScenario, cs with { Scenario = new ScenarioChoice("Synthetic A", ContentLibrary.TextHash(BaseScenario), "synthetic_map", ContentLibrary.TextHash("m"), 60) }));
-        Check(CsRules.Weapons.All(w => arena.Contains("Name=" + w.Combat.Name + "\nType=Hitscan\n")) && arena.Contains("WeaponProfileNames=AimMod CS USP-S;AimMod CS Glock-18;;;;;;\n") && arena.Contains("InvinciblePlayer=false\n") && arena.Contains("MinRespawnDelay=600.0\n"),
-            "CS arena: every buyable weapon, the pistols in the first slots, no native respawn");
+        Check(CsRules.Weapons.All(w => arena.Contains("Name=" + w.Combat.Name + "\nType=Hitscan\n")) && arena.Contains("WeaponProfileNames=AimMod CS USP-S;AimMod CS Glock-18;AimMod CS Knife;AimMod CS C4;;;;\n") && arena.Contains("InvinciblePlayer=false\n") && arena.Contains("MinRespawnDelay=600.0\n"),
+            "CS arena: every buyable weapon, the pistols in the first slots, the knife and bomb, no native respawn");
         Check(MultiplayerService.CsKeyClashes(new HashSet<string> { "E", "F" }).Single().Contains("E (use", StringComparison.Ordinal) && MultiplayerService.CsKeyClashes(new HashSet<string>()).Count == 0, "B and E are checked against KovaaK's binds");
 
         // Map-port metadata: zones and spawns times map_scale.

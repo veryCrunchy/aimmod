@@ -48,7 +48,9 @@ namespace overlay_checks
         CHECK(p.holdMenuInput && !p.enterMenuInput && !p.releaseMenuInput, "held, not re-entered, while open");
         // Escape: KovaaK's pause menu opens over the buy menu; it closes again and the hold continues.
         f.pauseMenuVisible = true;
+        f.escapeRecent = true;
         p = m.Next(f);
+        f.escapeRecent = false;
         CHECK(p.hidePauseMenu && p.holdMenuInput && !p.releaseMenuInput && !p.forgetMenuInput, "pause menu over the buy menu closes, input stays ours");
         f.pauseMenuVisible = false;
         // The buy menu closes (Escape or B): input goes back to the game once.
@@ -65,7 +67,9 @@ namespace overlay_checks
         closed.swallowMenu = true;
         f.notice = closed;
         f.pauseMenuVisible = true;
+        f.escapeRecent = true;
         p = m.Next(f);
+        f.escapeRecent = false;
         CHECK(p.hidePauseMenu && p.releaseMenuInput && !p.holdMenuInput, "Escape's pause menu closes after the buy menu did");
         // A deliberate Escape later (no buy menu, no swallow): KovaaK's menu is the player's.
         closed.swallowMenu = false;
@@ -116,6 +120,49 @@ namespace overlay_checks
         v.notice = buy;
         p = m5.Next(v);
         CHECK(p.holdMenuInput && !p.clickable, "no view: hold, not clickable yet");
+        // Alt-tab with the buy menu open: input is let go at once (never set to game-only while
+        // KovaaK's may be opening its menu), and the pause menu focus loss opens is never hidden.
+        aimmod::overlay::Machine m7;
+        aimmod::overlay::Frame a;
+        a.haveView = true;
+        a.notice = buy;
+        p = m7.Next(a);
+        CHECK(p.enterMenuInput && p.forwardPointer, "buy menu holds input and forwards the mouse");
+        a.focused = false;
+        p = m7.Next(a);
+        CHECK(p.forgetMenuInput && !p.releaseMenuInput && !p.holdMenuInput && !p.forwardPointer, "focus lost: let go without touching input");
+        a.pauseMenuVisible = true; // KovaaK's opened its menu on focus loss
+        p = m7.Next(a);
+        CHECK(!p.hidePauseMenu && !p.releaseMenuInput, "a menu opened by focus loss is left alone");
+        a.focused = true;
+        p = m7.Next(a);
+        CHECK(!p.hidePauseMenu && !p.holdMenuInput && !p.releaseMenuInput, "back in front: KovaaK's menu stays, its Escape or Resume returns to the game");
+        a.pauseMenuVisible = false; // the player closed it
+        p = m7.Next(a);
+        CHECK(p.enterMenuInput, "menu closed and the buy menu still open: input taken again");
+        // Alt-tab, the buy menu closes meanwhile, no KovaaK's menu: input goes back to the game on return.
+        aimmod::overlay::Machine m8;
+        aimmod::overlay::Frame b;
+        b.haveView = true;
+        b.notice = buy;
+        m8.Next(b);
+        b.focused = false;
+        m8.Next(b);
+        b.notice = closed;
+        p = m8.Next(b);
+        CHECK(!p.releaseMenuInput, "nothing while away");
+        b.focused = true;
+        p = m8.Next(b);
+        CHECK(p.releaseMenuInput && !p.holdMenuInput, "on return: game-only, cursor off");
+        // Without an Escape press a pause menu over the buy menu is the game's own: never hidden.
+        aimmod::overlay::Machine m9;
+        aimmod::overlay::Frame c;
+        c.haveView = true;
+        c.notice = buy;
+        m9.Next(c);
+        c.pauseMenuVisible = true;
+        p = m9.Next(c);
+        CHECK(!p.hidePauseMenu && p.forgetMenuInput, "no Escape: KovaaK's menu is left alone and input handed to it");
         // One log line per change.
         aimmod::overlay::Machine m6;
         aimmod::overlay::Plan before{}, after = m6.Next(f);

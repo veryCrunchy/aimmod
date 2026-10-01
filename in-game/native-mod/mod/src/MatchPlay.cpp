@@ -577,19 +577,25 @@ namespace aimmod
     {
         UObject* handler = Describe(character).weaponHandler.Object(character);
         if (!handler) return;
-        const std::string key = l.primary + "\t" + l.pistol;
+        const std::string key = l.primary + "\t" + l.pistol + "\t" + l.knife + "\t" + l.bomb;
         // A new handler (respawn) starts from the scenario loadout again.
         if (handler == m_loadoutHandler && key == m_loadoutKey) return;
-        if (handler != m_loadoutHandler) m_selectableBefore.clear();
+        if (handler != m_loadoutHandler)
+        {
+            m_selectableBefore.clear();
+            m_csLoadout.reset();
+        }
         m_loadoutHandler = handler;
         m_loadoutKey = key;
         m_loadoutChanged = true;
         std::vector<const std::uint8_t*> slots;
         const bool canEmpty = m_selectable.ok() && m_selectable.Elements(handler, slots, 8);
-        const std::string names[2] = {l.primary, l.pistol};
+        // Slots 0-3: primary, pistol, and in CS the knife and the bomb (an empty name leaves the slot as it is).
+        const std::string names[cs::Slots] = {l.primary, l.pistol, l.knife, l.bomb};
         std::string result;
-        for (int slot = 0; slot < 2; ++slot)
+        for (int slot = 0; slot < cs::Slots; ++slot)
         {
+            if (names[slot].empty()) continue;
             const bool empty = names[slot] == "-";
             if (canEmpty && static_cast<std::size_t>(slot) < slots.size())
             {
@@ -616,6 +622,15 @@ namespace aimmod
                 });
             result += " slot" + std::to_string(slot) + "=\"" + names[slot] + "\"->" + std::to_string(code);
         }
+        Log("match play: loadout" + result);
+        if (!l.knife.empty())
+        {
+            // CS: CsGear draws what CS would (a purchase, the best weapon when the slot in hand emptied).
+            const cs::Loadout now = cs::FromRound(l);
+            m_gear.LoadoutApplied(m_csLoadout ? &*m_csLoadout : nullptr, now);
+            m_csLoadout = now;
+            return;
+        }
         // Never leave an emptied slot selected.
         if (canEmpty && m_selectWeapon.ok() && m_selectedWeapon.ok())
         {
@@ -626,7 +641,6 @@ namespace aimmod
                 m_selectWeapon.Call(handler, [&](std::uint8_t* value, const Param& p) { if (p.kind == Kind::Int32) std::memcpy(value, &other, 4); });
             }
         }
-        Log("match play: loadout" + result);
     }
 
     void MatchPlay::ReleaseRound(const char* why)
@@ -648,6 +662,8 @@ namespace aimmod
                 m_loadWeapons.Call(handler, [](std::uint8_t*, const Param&) {}); // the scenario's own loadout
             }
         }
+        m_gear.Release(player, why);
+        m_csLoadout.reset();
         Log(std::string("match play: round state released (") + why + ")" + (m_frozen ? "; movement restored" : "") +
             (m_loadoutChanged ? "; scenario loadout restored" : ""));
         m_roundEngaged = m_frozen = m_loadoutChanged = false;
@@ -760,5 +776,7 @@ namespace aimmod
         else if (m_frozen && m_moveIgnored.ok() && !m_moveIgnored.Bool(player).value_or(true)) setIgnore(true);
         FreezeBody(character, m_frozen);
         if (r->loadout) ApplyLoadout(character, *r->loadout);
+        // CS: switching (wheel, Q, purchases), the knife and bomb in the hand, the bomb in the world.
+        if (r->loadout && !r->loadout->knife.empty()) m_gear.Tick(now, player, character, Describe(character).weaponHandler.Object(character), *r);
     }
 } // namespace aimmod

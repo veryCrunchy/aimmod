@@ -648,6 +648,22 @@ int main()
         bool fell = false;
         for (int i = 0; i < 60 * 30; ++i) fell |= l.Step(i / 60.0, 1 / 60.0, half, ledge, open).x >= 300;
         Check(!fell, "the walker never steps off a ledge");
+        // Placed while no trace finds the floor (spawn height 500): it stands still, then snaps down
+        // as soon as one does, and is never shown walking in the air.
+        int calls = 0;
+        auto late = [&](double, double, double) -> std::optional<double> { return ++calls > 5 ? std::optional<double>(0.0) : std::nullopt; };
+        ghost::Walker f;
+        f.spawns = {{0, 0, 500}, {1000, 0, 500}};
+        f.Place(0, half, late);
+        bool airWalk = false;
+        double lastZ = 0;
+        for (int i = 0; i < 60 * 5; ++i)
+        {
+            const auto s = f.Step(i / 60.0, 1 / 60.0, half, late, open);
+            airWalk |= s.z > 400 && (std::fabs(s.x) > 0.01 || std::fabs(s.y) > 0.01);
+            lastZ = s.z;
+        }
+        Check(!airWalk && lastZ <= half + ghost::Walker::JumpHeight + 0.01, "without a floor yet the walker waits at its spawn, then stands on the floor");
     }
     Check(ghost::IsHelperBot("AimMod Hidden Bot") && !ghost::IsHelperBot("AimMod Hidden") && !ghost::IsHelperBot("target") &&
               std::hypot(ghost::HelperParkX, ghost::HelperParkY) > 100000 && std::hypot(ghost::HelperParkX, ghost::HelperParkY) < 1048576,
@@ -669,6 +685,18 @@ int main()
         Check(!bridge::avatarstate::Parse("AIMMOD_AVATARS_1\t9999999999999999999\n"), "rejects a sequence past INT64_MAX");
         auto empty = bridge::avatarstate::Parse("AIMMOD_AVATARS_1\t2\n");
         Check(empty && empty->peers.empty(), "an empty state file is valid");
+        // CS: the weapon in their hands, by KovaaK's third-person model name.
+        auto armed = bridge::avatarstate::Parse("AIMMOD_AVATARS_1\t3\npeer\t" + id + "\t1\tenemy\t100\t0\t0\tSix Shooter\n");
+        Check(armed && armed->peers[Person].weapon == "Six Shooter" && st->peers[Person].weapon.empty(), "parses the held weapon (none without the column)");
+        auto bare = bridge::avatarstate::Parse("AIMMOD_AVATARS_1\t3\npeer\t" + id + "\t1\tenemy\t100\t0\t0\t-\n");
+        Check(bare && bare->peers[Person].weapon.empty(), "\"-\": nothing in their hands to show");
+        Check(!bridge::avatarstate::Parse("AIMMOD_AVATARS_1\t3\npeer\t" + id + "\t1\tenemy\t100\t0\t0\t/Game/Other\n") &&
+                  !bridge::avatarstate::Parse("AIMMOD_AVATARS_1\t3\npeer\t" + id + "\t1\tenemy\t100\t0\t0\tAK47\textra\n"),
+              "only KovaaK's own weapon models, and no further columns");
+        Check(bridge::avatarstate::ThirdPersonMesh("AK47") == L"/Game/SourceArt/Weapons/FN_AK47/FN_AK47.FN_AK47" &&
+                  bridge::avatarstate::ThirdPersonMesh("Bolt Action Sniper") == L"/Game/SourceArt/Weapons/FN_Sniper_BoltAction/FN_Sniper_BoltAction.FN_Sniper_BoltAction" &&
+                  bridge::avatarstate::ThirdPersonMesh("Knife").empty(),
+              "third-person models map to KovaaK's FN_ weapon meshes");
     }
     // Tournament lobbies
     {

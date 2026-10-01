@@ -350,7 +350,7 @@ sealed class LobbyCore
                 rm.Loaded.Clear(); rm.LoadIssues.Clear(); rm.LoadWaiting.Clear(); rm.LoadFailed = false; rm.LoadAttempt++; rm.NextAt = clock() + LoadingMs;
                 System("Loading again.");
                 return LobbyResult.Success;
-            case "buy" or "use" or "drop":
+            case "buy" or "use" or "drop" or "hold":
                 return CsAction(member, action, args);
             case "avatar":
                 // How this member looks in other players' games (any member, any time).
@@ -613,7 +613,8 @@ sealed class LobbyCore
         FinishMatch();
     }
 
-    // CS actions from a player's own client: buy an item, hold or release the use key.
+    // CS actions from a player's own client: buy an item, hold or release the use key, drop the bomb,
+    // and which weapon slot they hold (what the others see in their hands).
     LobbyResult CsAction(Member member, string action, JsonElement args)
     {
         if (match is not { Phase: MatchPhases.Live, Cs: { } cs } m || !m.Players.Contains(member.Id)) return LobbyResult.Fail("invalid", "No CS round is running.");
@@ -621,6 +622,8 @@ sealed class LobbyCore
         if (action == "buy")
             refused = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("item", out var item) && item.ValueKind == JsonValueKind.String ? cs.Buy(member.Id, item.GetString() ?? "", clock()) : "unknown-item";
         else if (action == "drop") refused = cs.Drop(member.Id, clock());
+        else if (action == "hold")
+            refused = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("slot", out var slot) && slot.TryGetInt32(out var heldSlot) ? cs.Hold(member.Id, heldSlot) : "invalid";
         else
             refused = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("held", out var held) && held.ValueKind is JsonValueKind.True or JsonValueKind.False ? cs.Use(member.Id, held.GetBoolean(), clock()) : "invalid";
         Changed();

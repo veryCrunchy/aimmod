@@ -18,6 +18,8 @@ sealed record LivePoseFrame(long Sequence, string Stream, string Scenario, strin
     public double[]? Self { get; init; }
     /// <summary>Optional: the sender's weapon (unix ms, shots fired total, fired since the previous publication 0/1).</summary>
     public double[]? Fire { get; init; }
+    /// <summary>Optional: the weapon slot the sender holds (0-7, KovaaK's Weapon1..Weapon8).</summary>
+    public int? Weapon { get; init; }
     public static LivePoseFrame? Parse(string text)
     {
         var lines = text.Replace("\r\n", "\n").Split('\n', StringSplitOptions.RemoveEmptyEntries);
@@ -29,7 +31,7 @@ sealed record LivePoseFrame(long Sequence, string Stream, string Scenario, strin
         if (!IsStreamId(stream)) return null;
         string scenario = "", map = ""; double? scale = null;
         var poses = new List<LivePose>(); var targets = new List<double[]>(); var tags = new Dictionary<int, string>();
-        double[]? self = null, fire = null;
+        double[]? self = null, fire = null; int? weapon = null;
         static bool Num(string s, out double v) => double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out v) && double.IsFinite(v) && Math.Abs(v) < 1e12;
         foreach (var line in lines.Skip(1))
         {
@@ -73,11 +75,16 @@ sealed record LivePoseFrame(long Sequence, string Stream, string Scenario, strin
                     for (int i = 1; i < 3; i++) if (!Num(c[i + 1], out fire[i])) return null;
                     if (fire[1] < 0 || fire[2] is not (0 or 1)) return null;
                     break;
-                case "meta" or "pose" or "target" or "tag" or "self" or "fire": return null; // known row, wrong shape
+                case "weapon" when c.Length == 3:
+                    // weapon\t<unix ms>\t<slot>: the slot the sender switched to.
+                    if (!long.TryParse(c[1], NumberStyles.None, CultureInfo.InvariantCulture, out _) || !int.TryParse(c[2], NumberStyles.None, CultureInfo.InvariantCulture, out var slot) || slot > 7) return null;
+                    weapon = slot;
+                    break;
+                case "meta" or "pose" or "target" or "tag" or "self" or "fire" or "weapon": return null; // known row, wrong shape
                 default: break; // rows added later are ignored, never fatal
             }
         }
-        return poses.Count == 0 ? null : new(sequence, stream, scenario, map, scale, poses, targets) { Tags = tags, Self = self, Fire = fire };
+        return poses.Count == 0 ? null : new(sequence, stream, scenario, map, scale, poses, targets) { Tags = tags, Self = self, Fire = fire, Weapon = weapon };
     }
 
     /// <summary>Empty (unnamed stream) or [A-Za-z0-9_-]{1,64}.</summary>

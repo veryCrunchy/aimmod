@@ -173,6 +173,7 @@ namespace aimmod
         m_b.hidden.Bind(game::FindClass(STR("/Script/Engine.Actor")), STR("bHidden"));
         m_b.capsule.Bind(game::FindClass(STR("/Script/Engine.Character")), STR("CapsuleComponent"));
         m_crouched.Bind(game::FindClass(STR("/Script/Engine.Character")), STR("bIsCrouched"));
+        m_currentWeapon.BindPath(STR("/Script/GameSkillsTrainer.WeaponHandler:GetCurrentWeaponNum"), game::Shape::Number);
         const wchar_t* state = STR("/Script/GameSkillsTrainer.MetaGameState:");
         m_b.characters.BindPath(path(state, STR("GetCharacters")).c_str(), Shape::ObjectArray);
         m_b.mapName.BindPath(path(state, STR("GetCurrentMapName")).c_str(), Shape::String);
@@ -763,6 +764,10 @@ namespace aimmod
                 m_poseShots = counters.shots;
                 body += "fire\t" + std::to_string(ms) + "\t" + FormatNumber(*counters.shots, 0) + "\t" + (fired ? "1" : "0") + "\n";
             }
+            // The weapon slot in hand (CS: what the others see in this player's hands).
+            if (UObject* handler = game::Describe(character).weaponHandler.Object(character))
+                if (const auto slot = m_currentWeapon.Number(handler); slot && *slot >= 0 && *slot < 8)
+                    body += "weapon\t" + std::to_string(ms) + "\t" + std::to_string(static_cast<int>(*slot)) + "\n";
         }
         const auto avatars = m_output.avatars();
         std::string tags;

@@ -42,7 +42,7 @@ static class MatchPresets
 // KovaaK's ranked leaderboards.
 static partial class MatchScenario
 {
-    public const int GeneratorVersion = 4;
+    public const int GeneratorVersion = 5;
     public const string Prefix = "AimMod Match - ";
     // Written into every generated scenario; cleanup removes only files that carry it.
     public const string Marker = "AimMod multiplayer match generated from ";
@@ -404,21 +404,24 @@ static partial class MatchScenario
         player.Set("MinRespawnDelay", respawn); player.Set("MaxRespawnDelay", respawn);
     }
 
-    // CS arena: every buyable weapon profile is in the scenario, so AimModCore can switch
-    // slot 0 (primary) and 1 (pistol) to what the host's loadout says each round.
+    // CS arena: every CS profile is in the scenario (the buyable weapons, the knife and the bomb),
+    // so AimModCore can fill the slots the CS way each round from the host's loadout: 0 primary,
+    // 1 pistol, 2 knife, 3 bomb (the carrier's). KovaaK's own Weapon1..Weapon4 keys switch them.
     static void CsArena(Section header, List<Section> sections, Section? player)
     {
         header.Set("Timelimit", Num(3 * 3600));
         header.Set("InvinciblePlayer", "false");
         header.Set("PlayerMaxLives", "0");
         HelperBot(header, sections);
-        foreach (var w in CsRules.Weapons)
+        foreach (var w in CsRules.Profiles)
         {
             sections.RemoveAll(x => x.Title == "[Weapon Profile]" && x.Get("Name") == w.Combat.Name);
-            sections.Add(new Section { Title = "[Weapon Profile]", Lines = WeaponLines(w.Combat) });
+            sections.Add(new Section { Title = "[Weapon Profile]", Lines = CsWeaponLines(w) });
         }
         if (player is null) return;
-        player.Set("WeaponProfileNames", CsRules.Weapons[1].Combat.Name + ";" + CsRules.Weapons[0].Combat.Name + ";;;;;;");
+        // Until AimModCore applies the round's loadout: a pistol in each of the first two slots, the knife, the bomb.
+        player.Set("WeaponProfileNames", string.Join(';', CsRules.Weapons[1].Combat.Name, CsRules.Weapons[0].Combat.Name, CsRules.Knife.Combat.Name, CsRules.Bomb.Combat.Name, "", "", "", ""));
+        player.Set("HideWeapon", "false");
         player.Set("MaxHealth", Num(CsRules.MaxHealth));
         player.Set("LifeStealPercent", "0.0"); player.Set("HealthRegainedonkill", "0.0"); player.Set("HealthRegenPerSec", "0.0");
         player.Set("RespawnInvulnTime", "0.0");
@@ -426,17 +429,48 @@ static partial class MatchScenario
         player.Set("MinRespawnDelay", "600.0"); player.Set("MaxRespawnDelay", "600.0");
     }
 
-    static List<string> WeaponLines(CombatWeapon w) =>
-    [
-        "Name=" + w.Name, "Type=Hitscan", "ShotsPerClick=1", "DamagePerShot=" + Num(w.Damage), "KnockbackFactor=0.0", "TimeBetweenShots=" + Num(w.TimeBetweenShots),
-        "Pierces=false", "Category=" + (w.FullyAuto ? "FullyAuto" : "SemiAuto"), "BurstShotCount=1", "MaxHitscanRange=1000000.0",
-        "HeadshotCapable=" + (w.HeadMultiplier > 1 ? "true" : "false"), "HeadshotMultiplier=" + Num(w.HeadMultiplier), "CooldownType=InfiniteUse", "MagazineMax=0", "AmmoPerShot=0",
-        "DamageFalloffStartDistance=100000.0", "DamageFalloffStopDistance=100000.0", "DamageAtMaxRange=" + Num(w.Damage), "DelayBeforeShot=0.0",
-        "VisualLifetime=" + (w.FullyAuto ? "0.05" : "0.4"), "BlockedByWorld=true", "CanAimDownSight=false",
-        "SpreadSSA=0.0,0.0,0.0,0.0", "SpreadSCA=0.0,0.0,0.0,0.0", "SpreadMSA=0.0,0.0,0.0,0.0", "SpreadMCA=0.0,0.0,0.0,0.0",
-        "MaxRecoilUp=0.0", "MinRecoilUp=0.0", "MinRecoilHoriz=0.0", "MaxRecoilHoriz=0.0", "FlatKnockbackVertical=" + Num(w.KnockbackVertical),
-        "WeaponModel=Rifle", "WeaponSkin=Default", "FullyAutomatic=" + (w.FullyAuto ? "true" : "false"),
-    ];
+    // KovaaK's 3.9.11 first-person viewmodels (FPSPlayer_WeaponComponent's WeaponMeshLookup) and
+    // third-person weapon models (WeaponDeveloperSettings' WeaponMeshViewModels), by the names weapon
+    // profiles use (WeaponModel=, 3rdPersonWeaponModel=). From the game's own weapon settings lists.
+    public static readonly string[] ViewModels = ["Blank", "Heal Rifle", "Spike", "Wave Booster", "Throwing Stars", "Asp", "Law Bringer", "Fission Dealer", "Rocket Launcher",
+        "Heavy Surge Rifle", "Machine Pistol", "Beam Thrower", "Stud Gun", "Surge Pistols", "Spider", "Healing Baller", "Tempest Bow", "Molecule Cannon", "Triple Tap Rifle", "KovaaKs Rifle", "Outlaws AR"];
+    public static readonly string[] ThirdPersonModels = ["AK47", "Dual Pistols", "Famas", "Heavy Shotgun", "M4", "Minigun", "Pistol", "Pump Shotgun", "SCAR", "Six Shooter", "SMG",
+        "Bolt Action Sniper", "Heavy Sniper", "Hunting Rifle", "Tactical Shotgun"];
+
+    // The combat modes' weapons: KovaaK's own rifle viewmodel, and a long rifle for the railgun.
+    // (A name outside KovaaK's viewmodel list, like the "Rifle" earlier builds wrote, shows no weapon.)
+    public const string CombatRifleModel = "KovaaKs Rifle", RailgunModel = "Heal Rifle";
+    static List<string> WeaponLines(CombatWeapon w) => WeaponLines(w, w == CombatRules.Railgun ? new CsLook(RailgunModel, "Bolt Action Sniper", 0, 0, 0, 0) : new CsLook(CombatRifleModel, "AK47", 0, 0, 0, 0));
+
+    static List<string> CsWeaponLines(CsWeapon w) => WeaponLines(w.Combat, w.Look);
+
+    // One hitscan profile: the host's damage and fire rate, the look's viewmodel, magazine and
+    // reload, and a view kick (the camera climbs while firing and settles back; the claim is the
+    // camera ray, so the kick moves hits as it moves the crosshair). No spread.
+    static List<string> WeaponLines(CombatWeapon w, CsLook look)
+    {
+        var range = w.Range > 0 ? w.Range : 1000000.0;
+        var lines = new List<string>
+        {
+            "Name=" + w.Name, "Type=Hitscan", "ShotsPerClick=1", "DamagePerShot=" + Num(w.Damage), "KnockbackFactor=0.0", "TimeBetweenShots=" + Num(w.TimeBetweenShots),
+            "Pierces=false", "Category=" + (w.FullyAuto ? "FullyAuto" : "SemiAuto"), "BurstShotCount=1", "MaxHitscanRange=" + Num(range),
+            "HeadshotCapable=" + (w.HeadMultiplier > 1 ? "true" : "false"), "HeadshotMultiplier=" + Num(w.HeadMultiplier), "CooldownType=InfiniteUse",
+            "MagazineMax=" + look.Magazine.ToString(Invariant), "AmmoPerShot=" + (look.Magazine > 0 ? "1" : "0"),
+            "ReloadTimeFromEmpty=" + Num(look.Reload), "ReloadTimeFromPartial=" + Num(look.Reload),
+            "DamageFalloffStartDistance=" + Num(range), "DamageFalloffStopDistance=" + Num(range), "DamageAtMaxRange=" + Num(w.Damage), "DelayBeforeShot=0.0",
+            "VisualLifetime=" + (w.FullyAuto ? "0.05" : "0.4"), "BlockedByWorld=true",
+            "SpreadSSA=0.0,0.0,0.0,0.0", "SpreadSCA=0.0,0.0,0.0,0.0", "SpreadMSA=0.0,0.0,0.0,0.0", "SpreadMCA=0.0,0.0,0.0,0.0",
+            "MaxRecoilUp=" + Num(look.KickUp), "MinRecoilUp=" + Num(look.KickUp * 0.8), "MinRecoilHoriz=" + Num(-look.KickSide), "MaxRecoilHoriz=" + Num(look.KickSide),
+            "FirstShotRecoilMult=1.0", "RecoilAutoReset=true", "TimeToRecoilPeak=0.03", "TimeToRecoilReset=" + Num(Math.Max(0.12, w.TimeBetweenShots * 1.5)), "RecoilNegatable=false",
+            "FlatKnockbackVertical=" + Num(w.KnockbackVertical),
+            "WeaponModel=" + look.Model, "WeaponAnimation=Primary", "WeaponSkin=Default", "3rdPersonWeaponModel=" + (look.ThirdPerson == "-" ? "None" : look.ThirdPerson), "3rdPersonWeaponSkin=Default",
+            "QuickSwitchTime=0.25", "FullyAutomatic=" + (w.FullyAuto ? "true" : "false"),
+        };
+        // The sniper scopes in on the right mouse button (KovaaK's own scope).
+        if (look.Scope) lines.AddRange(["CanAimDownSight=true", "ADSScope=No Scope", "ADSZoomSensFactor=0.444", "ADSMoveFactor=0.52", "ADSFOVOverride=40.0", "ADSAllowUserOverrideFOV=false", "ADSZoomInDuration=0.08", "ADSZoomOutDuration=0.05"]);
+        else lines.Add("CanAimDownSight=false");
+        return lines;
+    }
 
     // Shared by the AimMod arenas: no targets, nothing scored natively, and one invisible,
     // passable, inert helper bot that AimModSteam spawns avatars from.

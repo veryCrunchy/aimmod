@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- AimMod-Setup.exe: installs, updates, repairs and removes AimMod for
+       KovaaK's from the GitHub release feed. Release builds:
+       dotnet publish in-game/installer/app -c Release -r win-x64 -o <folder>
+       (one self-contained file, no .NET install needed). -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>AimMod-Setup</AssemblyName>
+    <RootNamespace>AimMod.Setup</RootNamespace>
+    <Product>AimMod Setup</Product>
+    <Company>AimMod</Company>
+    <Description>AimMod for KovaaK's setup</Description>
+    <!-- The installer has its own version (in-game/installer/version.txt). Raise
+         minimumInstallerVersion in the release script when a package needs it. -->
+    <SetupVersion>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)../version.txt').Trim())</SetupVersion>
+    <Version>$(SetupVersion)</Version>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <ApplicationIcon>../../../src-tauri/icons/icon.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' != ''">
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>none</DebugType>
+    <CopyOutputSymbolsToPublishDirectory>false</CopyOutputSymbolsToPublishDirectory>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- WPF projects leave these out of the implicit usings. -->
+    <Using Include="System.IO" />
+    <Using Include="System.Net.Http" />
+    <ProjectReference Include="../../install-core/AimMod.Install.csproj" />
+    <InternalsVisibleTo Include="AimMod.Setup.Checks" />
+    <Resource Include="../../ue4ss/AimModNativeUI/Assets/aimmod-horizontal.png" Link="Assets/aimmod-horizontal.png" />
+    <Resource Include="../../../src-tauri/icons/128x128.png" Link="Assets/aimmod-icon.png" />
+  </ItemGroup>
+</Project>

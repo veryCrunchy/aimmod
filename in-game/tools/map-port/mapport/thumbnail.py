@@ -325,6 +325,12 @@ def write_thumbnails(out: str, base: str, image, display: str, game: str, varian
         _save_small(img, png, jpg)
         files[f"workshop_thumb{suffix.replace('-', '_')}"] = os.path.relpath(png, out)
         files[f"workshop_thumb{suffix.replace('-', '_')}_jpg"] = os.path.relpath(jpg, out)
+    # The same view without the template, for AimMod Hub's Discord invite cards (mapport.cardart).
+    from . import cardart
+    art = os.path.join(out, f"{base}.card-art.jpg")
+    with open(art, "wb") as fh:
+        fh.write(cardart.encode(image))
+    files["card_art_jpg"] = os.path.relpath(art, out)
     return files
 
 

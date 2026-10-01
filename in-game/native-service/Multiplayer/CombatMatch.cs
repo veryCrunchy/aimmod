@@ -12,7 +12,13 @@ namespace AimMod.InGame.Multiplayer;
 
 // The weapon each mode plays with. The generated arena ships exactly this
 // profile, so the host knows the fire rate and damage without trusting a client.
-sealed record CombatWeapon(string Name, double Damage, double HeadMultiplier, double TimeBetweenShots, bool FullyAuto, double KnockbackVertical = 0);
+// Range: the reach in cm (a knife), 0 for hitscan across the map.
+sealed record CombatWeapon(string Name, double Damage, double HeadMultiplier, double TimeBetweenShots, bool FullyAuto, double KnockbackVertical = 0, double Range = 0)
+{
+    // Reach the host allows past Range: the 200 ms rewind at a run.
+    public const double RangeToleranceCm = 60;
+    public double RayLength => Range > 0 ? Range + RangeToleranceCm : TrackingRound.RayLengthCm;
+}
 
 static class CombatRules
 {
@@ -243,6 +249,8 @@ sealed class CombatMatch
         if (victim is null) return Reject(c.TargetX is null ? "miss" : "target-mismatch");
         if (shooter.Team != 0 && victim.Team == shooter.Team) return Reject("teammate");
         if (!TrackGeometry.HitsCapsule(c.X, c.Y, c.Z, dx, dy, dz, TrackingRound.RayLengthCm, cx, cy, cz, radius, half)) return Reject("ray-miss");
+        // A knife reaches only so far.
+        if (weapon.Range > 0 && !TrackGeometry.HitsCapsule(c.X, c.Y, c.Z, dx, dy, dz, weapon.RayLength, cx, cy, cz, radius, half)) return Reject("range");
         if (c.T < victim.ProtectedUntil) return Reject("spawn-protected");
         shooter.LastShot = c.T;
         shooter.ProtectedUntil = Math.Min(shooter.ProtectedUntil, c.T); // firing ends your own spawn protection

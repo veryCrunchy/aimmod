@@ -205,7 +205,12 @@ Outlaws, Pixel, Christmas, N0ted, Timmy). The Anime pack is DLC.
   hull overlaps a brush, the spawn is moved upwards, then sideways in growing rings. The report
   lists `spawns_nudged` and `spawns_stuck`.
 - Spawns come from `info_player_terrorist` (team 1), `info_player_counterterrorist` (team 2) and
-  deathmatch/start spawns (both teams). They are lifted 40 units so the player drops onto the floor.
+  deathmatch/start spawns (both teams).
+- Spawn feet are first put on the floor below the origin. Mappers place the origins well above the
+  floor: 40 to 48 units in de_d2_remake, and at the hull centre in GoldSrc. The KovaaK's
+  SpawnPoint is then the capsule centre: the feet plus half a hull plus 4 units. The `.aimmod.json`
+  spawns are the feet. The report counts `spawns_dropped_to_floor`, and a spawn whose feet are more
+  than 8 units above the floor fails the checks ("spawns float above the floor").
 - Supported inputs: BSP versions 19 to 21, LZMA-compressed lumps and the L4D2-style lump header.
   Also `.vmf`, GMod `.gma` (including LZMA-wrapped workshop downloads), `.zip`, and `.rar`/`.7z`
   through `7z` or the system `tar` (bsdtar).
@@ -336,6 +341,21 @@ The first-person check views (`--views`) use 8 well-spread spots from the walk g
   in-game capture.
 - The report's `files.preview` points at the 1024² thumbnail, which the Workshop bundle helper uses.
   The top-down check image is `files.preview_check`.
+
+## Discord invite card art
+
+AimMod Hub draws a lobby's Discord invite card over a picture of its map (`/og/maps/<map>.jpg`).
+`<map>.card-art.jpg` is the thumbnail view without the template (1280 x 720). To publish ports:
+
+    python -m mapport.cardart <port-dir> [<port-dir> ...] --out <dir>
+
+writes `<dir>/<map>.jpg` (1280 x 720 JPEG, quality 80, at most 200 KB, no metadata) and adds each
+map's pretty name and game label to `<dir>/maps.json`. Copy both into the Hub's
+`api/internal/http/og_maps/`. Older ports without `card-art.jpg` use the middle of their 16:9
+Workshop thumbnail, between the logo and the title; `--capture shot.png` uses an in-game capture
+instead. Only add ports that are published. Pretty names for ports that keep their original map id
+(`de_d2_remake` → "Dust2 Remake") are in `PRETTY_NAMES` in `mapport/cardart.py`, mirrored by
+`DiscordMapNames` in the native service.
 
 ## Preview check
 

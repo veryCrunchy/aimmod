@@ -66,8 +66,13 @@ html.input,body.input,body.input #notice,.toast.has-actions{pointer-events:auto}
 .eye{display:block;position:relative;width:16px;height:10px;margin-right:8px;border:2px solid #27e4a1;border-radius:8px/5px}
 .eye:after{content:"";position:absolute;left:4px;top:1px;width:4px;height:4px;border-radius:2px;background:#27e4a1}
 #board-corner{display:none;position:absolute;top:12px;right:12px}#board-corner.show{display:block}
-#board-full{display:none;position:absolute;top:120px;left:0;right:0}#board-full.show{display:flex;flex-direction:row;justify-content:center}
+/* The full scoreboard sits at the centre of the screen. */
+#board-full{display:none;position:absolute;top:0;bottom:0;left:0;right:0}#board-full.show{display:flex;flex-direction:row;justify-content:center;align-items:center}
 #notice.cs-on{padding-top:96px}
 /* With the buy menu open on the left, notices move to the right side. */
-#notice.cs-on.cs-buying{align-items:flex-end;padding-right:20px}
+/* The buy menu is in the middle: notices move to the bottom right meanwhile. */
+#notice.cs-on.cs-buying{align-items:flex-end;justify-content:flex-end;height:100%;padding:0 20px 150px 0}
 @media(min-height:1300px){#notice.cs-on{padding-top:128px}}
+.button.hover{background:#263a32}.button.primary.hover{background:#5bedb9}
+/* Mouse event counts while the buy menu is open (diagnostics). */
+.pointer-debug{position:absolute;right:8px;bottom:6px;padding:2px 8px;border-radius:4px;background:#0b1110;color:#7f968a;font-size:11px;pointer-events:none}
