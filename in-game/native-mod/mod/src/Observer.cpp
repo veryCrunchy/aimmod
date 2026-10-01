@@ -103,7 +103,7 @@ namespace aimmod
           m_lifecycle(std::to_string(static_cast<long long>(std::time(nullptr))) + "-" + std::to_string(GetCurrentProcessId())),
           m_sampler(m_b, m_scene, output), m_presenter(m_b, m_scene, output), m_control(m_b, m_scene, output),
           m_match(m_b, m_scene, output), m_cosmetics(m_b, m_scene, output),
-          m_preview(m_scene, output.root())
+          m_preview(m_scene, output)
     {
     }
 

@@ -69,6 +69,8 @@ if(AIMMOD_BUILD_MOD)
         mod/src/MatchPlay.cpp
         mod/src/Cosmetics.cpp
         mod/src/CosmeticsPreview.cpp
+        mod/src/Reflect.cpp
+        mod/src/Accessory.cpp
     )
     target_include_directories(AimModCore PRIVATE mod/src)
     target_link_libraries(AimModCore PRIVATE aimmod_core windowscodecs ole32)

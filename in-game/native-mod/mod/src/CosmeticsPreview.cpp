@@ -1,18 +1,15 @@
 #include "CosmeticsPreview.hpp"
 
+#include "Accessory.hpp"
 #include "Log.hpp"
+#include "Output.hpp"
+#include "Reflect.hpp"
 #include "World.hpp"
 
 #include <Unreal/AActor.hpp>
 #include <Unreal/CoreUObject/UObject/Class.hpp>
 #include <Unreal/CoreUObject/UObject/UnrealType.hpp>
-#include <Unreal/Core/HAL/UnrealMemory.hpp>
 #include <Unreal/FProperty.hpp>
-#include <Unreal/Property/FArrayProperty.hpp>
-#include <Unreal/Property/FBoolProperty.hpp>
-#include <Unreal/Property/FNameProperty.hpp>
-#include <Unreal/Property/FObjectProperty.hpp>
-#include <Unreal/Property/FStrProperty.hpp>
 #include <Unreal/Property/FStructProperty.hpp>
 #include <Unreal/GameplayStatics.hpp>
 #include <Unreal/NameTypes.hpp>
@@ -33,13 +30,12 @@
 #include <cstring>
 #include <ctime>
 #include <fstream>
-#include <functional>
 #include <iterator>
-#include <set>
 
 namespace aimmod
 {
     using namespace RC::Unreal;
+    using namespace reflect;
 
     namespace
     {
@@ -54,10 +50,11 @@ namespace aimmod
         constexpr int Size = PreviewSize, CaptureSize = PreviewSize * PreviewSupersample;
         constexpr double ReadInterval = 0.2, MinCaptureInterval = 0.15;
         constexpr float Fov = 30.0f, LightReach = 900.0f;
-        constexpr std::uint8_t SourceFinalColor = 2, SourceNormal = 6; // ESceneCaptureSource
-        constexpr std::uint8_t Movable = 2;                              // EComponentMobility
-        constexpr std::uint8_t ExposureBasic = 1;                        // EAutoExposureMethod
-        constexpr std::uint8_t Unitless = 0, Candelas = 1, Lumens = 2;   // ELightUnits
+        // ESceneCaptureSource: tone-mapped colour; scene colour with inverse opacity in alpha; normals.
+        constexpr std::uint8_t SourceFinalColor = 2, SourceSceneColor = 0, SourceNormal = 6;
+        constexpr std::uint8_t Movable = 2;                            // EComponentMobility
+        constexpr std::uint8_t ExposureBasic = 1;                      // EAutoExposureMethod
+        constexpr std::uint8_t Unitless = 0, Candelas = 1, Lumens = 2; // ELightUnits
         constexpr double Pi = 3.14159265358979;
 
         // The preview's own light rig, placed around the character relative to
@@ -74,213 +71,10 @@ namespace aimmod
             {200, 130, 170, {0.70f, 1.00f, 0.86f}, 26},   // rim: behind, mint
         };
         // Stage parts that are not the character: never rendered by the preview.
-        constexpr const wchar_t* HiddenParts[] = {STR("StaticMeshes"), STR("Cylinder"),       STR("Cube"),         STR("Sphere"),       STR("SphereBody"),
-                                                  STR("SphereHead"),   STR("CubeBody"),       STR("CubeHead"),     STR("CylinderBody"), STR("CylinderBottom"),
-                                                  STR("CylinderTop"),  STR("CylinderHead"),   STR("Weapon1"),      STR("Weapon2"),      STR("Wall"),
+        constexpr const wchar_t* HiddenParts[] = {STR("StaticMeshes"), STR("Cylinder"),     STR("Cube"),           STR("Sphere"),      STR("SphereBody"),
+                                                  STR("SphereHead"),   STR("CubeBody"),     STR("CubeHead"),       STR("CylinderBody"), STR("CylinderBottom"),
+                                                  STR("CylinderTop"),  STR("CylinderHead"), STR("Weapon1"),        STR("Weapon2"),     STR("Wall"),
                                                   STR("Floor")};
-
-        struct RawArray
-        {
-            void* data;
-            std::int32_t num;
-            std::int32_t max;
-        };
-
-        bool Guarded(UObject* self, UFunction* function, void* parms)
-        {
-            __try
-            {
-                self->ProcessEvent(function, parms);
-                return true;
-            }
-            __except (EXCEPTION_EXECUTE_HANDLER)
-            {
-                return false;
-            }
-        }
-
-        FProperty* PropertyOf(UStruct* type, const wchar_t* name)
-        {
-            if (!type) return nullptr;
-            FName fname(name, FNAME_Find);
-            if (fname == FName()) return nullptr;
-            for (FProperty* p : type->ForEachPropertyInChain())
-                if (p->GetFName() == fname) return p;
-            return nullptr;
-        }
-        std::uint8_t* At(UObject* object, FProperty* p) { return reinterpret_cast<std::uint8_t*>(object) + p->GetOffset_Internal(); }
-
-        UObject* GetObject(UObject* object, const wchar_t* name)
-        {
-            FProperty* p = object ? PropertyOf(object->GetClassPrivate(), name) : nullptr;
-            if (!p || !CastField<FObjectPropertyBase>(p)) return nullptr;
-            UObject* value;
-            std::memcpy(&value, At(object, p), sizeof(value));
-            return value;
-        }
-        bool SetObject(UObject* object, const wchar_t* name, UObject* value)
-        {
-            FProperty* p = object ? PropertyOf(object->GetClassPrivate(), name) : nullptr;
-            if (!p || !CastField<FObjectPropertyBase>(p)) return false;
-            std::memcpy(At(object, p), &value, sizeof(value));
-            return true;
-        }
-        bool SetBool(UObject* object, const wchar_t* name, bool value)
-        {
-            auto* p = object ? CastField<FBoolProperty>(PropertyOf(object->GetClassPrivate(), name)) : nullptr;
-            if (!p) return false;
-            p->SetPropertyValueInContainer(object, value);
-            return true;
-        }
-        bool SetByte(UObject* object, const wchar_t* name, std::uint8_t value)
-        {
-            FProperty* p = object ? PropertyOf(object->GetClassPrivate(), name) : nullptr;
-            if (!p || p->GetSize() != 1) return false;
-            *At(object, p) = value;
-            return true;
-        }
-        std::optional<std::uint8_t> GetByte(UObject* object, const wchar_t* name)
-        {
-            FProperty* p = object ? PropertyOf(object->GetClassPrivate(), name) : nullptr;
-            if (!p || p->GetSize() != 1) return std::nullopt;
-            return *At(object, p);
-        }
-        bool SetFloat(UObject* object, const wchar_t* name, float value)
-        {
-            FProperty* p = object ? PropertyOf(object->GetClassPrivate(), name) : nullptr;
-            if (!p || p->GetSize() != 4) return false;
-            std::memcpy(At(object, p), &value, 4);
-            return true;
-        }
-        std::optional<float> GetFloat(UObject* object, const wchar_t* name)
-        {
-            FProperty* p = object ? PropertyOf(object->GetClassPrivate(), name) : nullptr;
-            if (!p || p->GetSize() != 4) return std::nullopt;
-            float value;
-            std::memcpy(&value, At(object, p), 4);
-            return value;
-        }
-        std::vector<UObject*> GetObjects(UObject* object, const wchar_t* name, std::size_t limit)
-        {
-            std::vector<UObject*> out;
-            auto* p = object ? CastField<FArrayProperty>(PropertyOf(object->GetClassPrivate(), name)) : nullptr;
-            if (!p || !CastField<FObjectPropertyBase>(p->GetInner())) return out;
-            RawArray raw;
-            std::memcpy(&raw, At(object, p), sizeof(raw));
-            if (!raw.data || raw.num < 0) return out;
-            for (std::int32_t i = 0; i < raw.num && out.size() < limit; ++i) out.push_back(static_cast<UObject**>(raw.data)[i]);
-            return out;
-        }
-        std::wstring GetName(UObject* object, const wchar_t* name)
-        {
-            FProperty* p = object ? PropertyOf(object->GetClassPrivate(), name) : nullptr;
-            if (!p || !CastField<FNameProperty>(p)) return {};
-            FName value;
-            std::memcpy(&value, At(object, p), sizeof(value));
-            return value.ToString();
-        }
-
-        // TSoftObjectPtr / TSoftClassPtr (UE 4.26: weak pointer, tag, then
-        // FSoftObjectPath{FName AssetPathName, FString SubPath}): the asset path.
-        constexpr std::int32_t SoftPtrSize = 0x28, SoftPathOffset = 0x10;
-        std::wstring SoftPathAt(const std::uint8_t* value)
-        {
-            FName name;
-            std::memcpy(&name, value + SoftPathOffset, sizeof(name));
-            std::wstring path = name.ToString();
-            return path == STR("None") ? std::wstring{} : path;
-        }
-        std::wstring SoftPath(UObject* object, const wchar_t* name)
-        {
-            FProperty* p = object ? PropertyOf(object->GetClassPrivate(), name) : nullptr;
-            if (!p || p->GetSize() != SoftPtrSize) return {};
-            return SoftPathAt(At(object, p));
-        }
-        std::vector<std::wstring> SoftPaths(UObject* object, const wchar_t* name, std::size_t limit)
-        {
-            std::vector<std::wstring> out;
-            auto* p = object ? CastField<FArrayProperty>(PropertyOf(object->GetClassPrivate(), name)) : nullptr;
-            if (!p || p->GetInner()->GetSize() != SoftPtrSize) return out;
-            RawArray raw;
-            std::memcpy(&raw, At(object, p), sizeof(raw));
-            if (!raw.data || raw.num < 0) return out;
-            for (std::int32_t i = 0; i < raw.num && out.size() < limit; ++i) out.push_back(SoftPathAt(static_cast<const std::uint8_t*>(raw.data) + i * SoftPtrSize));
-            return out;
-        }
-        // Only the game's own content, reached through its Default packs.
-        UObject* LoadGameAsset(const std::wstring& path)
-        {
-            if (path.rfind(STR("/Game/"), 0) != 0 || path.find(STR("..")) != std::wstring::npos) return nullptr;
-            return game::FindOrLoadAsset(path);
-        }
-
-        // One reflected call; `fill` writes each input parameter by name and
-        // `read` sees every parameter (outputs, return value) afterwards.
-        using Fill = std::function<void(const std::wstring& name, FProperty* p, std::uint8_t* value)>;
-        using Read = std::function<void(const std::wstring& name, FProperty* p, const std::uint8_t* value)>;
-        bool Call(UObject* self, const wchar_t* path, const Fill& fill = {}, UObject** returned = nullptr, const Read& read = {})
-        {
-            auto* fn = self ? UObjectGlobals::StaticFindObject<UFunction*>(nullptr, nullptr, path) : nullptr;
-            if (!fn || fn->GetParmsSize() > 1024) return false;
-            alignas(16) std::uint8_t buffer[1024];
-            std::memset(buffer, 0, fn->GetParmsSize());
-            std::vector<std::uint8_t*> strings;
-            FProperty* ret = nullptr;
-            for (FProperty* p : fn->ForEachProperty())
-            {
-                if (!p->HasAnyPropertyFlags(CPF_Parm)) continue;
-                if (p->HasAnyPropertyFlags(CPF_ReturnParm)) { ret = p; continue; }
-                std::uint8_t* value = buffer + p->GetOffset_Internal();
-                if (fill) fill(p->GetName(), p, value);
-                if (CastField<FStrProperty>(p)) strings.push_back(value);
-            }
-            const bool ok = Guarded(self, fn, buffer);
-            if (ok && read)
-                for (FProperty* p : fn->ForEachProperty())
-                    if (p->HasAnyPropertyFlags(CPF_Parm)) read(p->GetName(), p, buffer + p->GetOffset_Internal());
-            for (std::uint8_t* s : strings)
-            {
-                RawArray raw;
-                std::memcpy(&raw, s, sizeof(raw));
-                if (raw.data) FMemory::Free(raw.data);
-            }
-            if (ok && returned && ret && CastField<FObjectPropertyBase>(ret)) std::memcpy(returned, buffer + ret->GetOffset_Internal(), sizeof(UObject*));
-            return ok;
-        }
-        UObject* Default(const wchar_t* path) { return UObjectGlobals::StaticFindObject<UObject*>(nullptr, nullptr, path); }
-
-        void WriteFString(std::uint8_t* value, const std::wstring& text)
-        {
-            const auto length = static_cast<std::int32_t>(text.size());
-            auto* chars = static_cast<wchar_t*>(FMemory::Malloc(static_cast<SIZE_T>(length + 1) * sizeof(wchar_t)));
-            if (!chars) return;
-            std::memcpy(chars, text.c_str(), static_cast<std::size_t>(length + 1) * sizeof(wchar_t));
-            RawArray raw{chars, length + 1, length + 1};
-            std::memcpy(value, &raw, sizeof(raw));
-        }
-        void WriteFName(std::uint8_t* value, FProperty* p, const std::wstring& text)
-        {
-            FName name(text.c_str(), FNAME_Add);
-            if (p->GetSize() == sizeof(name)) std::memcpy(value, &name, sizeof(name));
-        }
-        void WriteFloats(std::uint8_t* value, FProperty* p, std::initializer_list<float> numbers)
-        {
-            if (static_cast<std::size_t>(p->GetSize()) < numbers.size() * sizeof(float)) return;
-            std::size_t i = 0;
-            for (float n : numbers) std::memcpy(value + sizeof(float) * i++, &n, sizeof(float));
-        }
-        bool ReadFloats(const std::uint8_t* value, FProperty* p, float* out, std::size_t count)
-        {
-            if (static_cast<std::size_t>(p->GetSize()) < count * sizeof(float)) return false;
-            std::memcpy(out, value, count * sizeof(float));
-            return true;
-        }
-        void WriteObject(std::uint8_t* value, UObject* object) { std::memcpy(value, &object, sizeof(object)); }
-        // Bool parameter (plain or bitfield) by property.
-        void WriteBoolParam(std::uint8_t* value, FProperty* p, bool on)
-        {
-            if (auto* b = CastField<FBoolProperty>(p)) b->SetPropertyValue(value, on);
-        }
 
         // Members of the capture's PostProcessSettings struct, by name.
         struct PostProcess
@@ -380,36 +174,25 @@ namespace aimmod
             MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING);
         }
 
-        bool Location(UObject* component, float out[3])
+        // Mean sRGB luminance of the character pixels in a composed frame's
+        // source, for the log (is the character lit?).
+        double MeanLuminance(const PreviewPixels& color, const PreviewComposition& c)
         {
-            bool ok = false;
-            Call(component, STR("/Script/Engine.SceneComponent:K2_GetComponentLocation"), {}, nullptr, [&](const std::wstring& n, FProperty* p, const std::uint8_t* v) {
-                if (n == STR("ReturnValue")) ok = ReadFloats(v, p, out, 3);
-            });
-            return ok;
-        }
-        bool SetWorldLocation(UObject* component, const float at[3])
-        {
-            return Call(component, STR("/Script/Engine.SceneComponent:K2_SetWorldLocation"), [&](const std::wstring& n, FProperty* p, std::uint8_t* v) {
-                if (n == STR("NewLocation")) WriteFloats(v, p, {at[0], at[1], at[2]});
-                else if (n == STR("bTeleport")) WriteBoolParam(v, p, true);
-            });
-        }
-        bool SetVisible(UObject* component, bool visible, bool propagate)
-        {
-            const bool a = Call(component, STR("/Script/Engine.SceneComponent:SetVisibility"), [&](const std::wstring& n, FProperty* p, std::uint8_t* v) {
-                if (n == STR("bNewVisibility")) WriteBoolParam(v, p, visible);
-                else if (n == STR("bPropagateToChildren")) WriteBoolParam(v, p, propagate);
-            });
-            const bool b = Call(component, STR("/Script/Engine.SceneComponent:SetHiddenInGame"), [&](const std::wstring& n, FProperty* p, std::uint8_t* v) {
-                if (n == STR("NewHidden")) WriteBoolParam(v, p, !visible);
-                else if (n == STR("bPropagateToChildren")) WriteBoolParam(v, p, propagate);
-            });
-            return a && b;
+            if (c.empty || !color.Valid()) return 0;
+            double sum = 0;
+            long long n = 0;
+            for (int y = c.top; y <= c.bottom; y += 4)
+                for (int x = c.left; x <= c.right; x += 4)
+                {
+                    const std::uint8_t* p = &color.rgba[(static_cast<std::size_t>(y) * color.width + x) * 4];
+                    sum += 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2];
+                    ++n;
+                }
+            return n ? sum / n / 255.0 : 0;
         }
     } // namespace
 
-    CosmeticsPreview::CosmeticsPreview(game::Scene& scene, std::filesystem::path root) : m_scene(scene), m_root(std::move(root))
+    CosmeticsPreview::CosmeticsPreview(game::Scene& scene, Output& output) : m_scene(scene), m_output(output), m_root(output.root())
     {
         m_requestPath = m_root / L"cosmetics-preview.txt";
         m_framePath = m_root / L"cosmetics-preview-frame.txt";
@@ -500,6 +283,7 @@ namespace aimmod
             m_lookKey = key;
             ApplyLook(*request);
             m_dirty = true;
+            m_logFrame = true;
             m_followUps = {now + 0.35, now + 1.2}; // meshes and textures stream in
         }
         if (request->yaw != m_yaw)
@@ -529,7 +313,7 @@ namespace aimmod
         UObject* rendering = Default(STR("/Script/Engine.Default__KismetRenderingLibrary"));
         UObject* target = nullptr;
         Call(rendering, STR("/Script/Engine.KismetRenderingLibrary:CreateRenderTarget2D"), [&](const std::wstring& n, FProperty* p, std::uint8_t* v) {
-            if (n == STR("WorldContextObject")) std::memcpy(v, &world, sizeof(world));
+            if (n == STR("WorldContextObject")) WriteObject(v, world);
             else if (n == STR("Width") || n == STR("Height")) { const std::int32_t s = CaptureSize; std::memcpy(v, &s, sizeof(s)); }
             else if (n == STR("Format")) *v = 2; // RTF_RGBA8: exported as PNG
             else if (n == STR("ClearColor")) WriteFloats(v, p, {0, 0, 0, 1});
@@ -554,21 +338,23 @@ namespace aimmod
         if (!capture || !meshes || !mesh) { Teardown("preview stage layout changed"); return false; }
 
         // Our render target, never the game's shared one; capture on demand only;
-        // render the stage and nothing else.
+        // render the stage and nothing else. Pixels nothing rendered count as
+        // empty (alpha 1) in the scene-colour mask capture.
         SetObject(capture, STR("TextureTarget"), target);
         SetBool(capture, STR("bCaptureEveryFrame"), false);
         SetBool(capture, STR("bCaptureOnMovement"), false);
+        SetBool(capture, STR("bConsiderUnrenderedOpaquePixelAsFullyTranslucent"), true);
         SetByte(capture, STR("PrimitiveRenderMode"), 2); // PRM_UseShowOnlyList
         SetByte(capture, STR("CaptureSource"), SourceFinalColor);
         SetFloat(capture, STR("FOVAngle"), Fov);
         SetFloat(capture, STR("PostProcessBlendWeight"), 1.0f);
         Call(capture, STR("/Script/Engine.SceneCaptureComponent:ShowOnlyActorComponents"), [&](const std::wstring& n, FProperty*, std::uint8_t* v) {
-            if (n == STR("InActor")) std::memcpy(v, &stage, sizeof(stage));
+            if (n == STR("InActor")) WriteObject(v, stage);
         });
         // Fixed exposure: a scene capture keeps no eye-adaptation history, so
-        // auto exposure starts from nothing and leaves the capture near black.
-        // Min = max brightness pins it. The unit is luminance, or EV100 when the
-        // project extends the luminance range (then the defaults are negative).
+        // auto exposure starts from nothing. Min = max brightness pins it. The
+        // unit is luminance, or EV100 when the project extends the luminance
+        // range (then the defaults are negative).
         const PostProcess post(capture);
         const bool ev100 = post.Get("AutoExposureMinBrightness").value_or(0) < 0;
         const double brightness = ev100 ? 3.0 : 1.0; // average luminance 1 (EV100 3 = 0.125 * 2^3)
@@ -580,7 +366,6 @@ namespace aimmod
         post.Override("MotionBlurAmount", 0);
         post.Override("LensFlareIntensity", 0);
         post.Override("GrainIntensity", 0);
-        if (!exposure) Log("cosmetics preview: fixed exposure unavailable; the frame is levelled after capture only");
 
         // The stage's directional light would light the whole map: switch it
         // off. The preview has its own short-range rig instead (Frame()).
@@ -606,7 +391,6 @@ namespace aimmod
             }, &added);
             if (added && added->IsA(pointLight)) lights.push_back(added);
         }
-        bool channels = true;
         for (UObject* light : lights)
         {
             Call(light, STR("/Script/Engine.SceneComponent:SetMobility"), [](const std::wstring&, FProperty*, std::uint8_t* v) { *v = Movable; });
@@ -620,32 +404,18 @@ namespace aimmod
                 SetVisible(light, false, false);
                 continue;
             }
-            // Channel 1 only, as the character below: the map's own lights (channel 0) leave it alone.
-            channels &= Call(light, STR("/Script/Engine.LightComponent:SetLightingChannels"), [](const std::wstring& n, FProperty* p, std::uint8_t* v) {
-                WriteBoolParam(v, p, n == STR("bChannel1"));
-            });
             m_lights.push_back(FWeakObjectPtr(light));
         }
-        if (m_lights.empty()) Log("cosmetics preview: no light rig; the frame is levelled after capture only");
-        // The character joins the rig's channel only if every rig light is on it;
-        // otherwise everything stays on the default channel.
-        const bool meshChannel = channels && !m_lights.empty() &&
-                                 Call(mesh, STR("/Script/Engine.PrimitiveComponent:SetLightingChannels"), [](const std::wstring& n, FProperty* p, std::uint8_t* v) {
-                                     WriteBoolParam(v, p, n == STR("bChannel1"));
-                                 });
-        if (!meshChannel)
-            for (const FWeakObjectPtr& weak : m_lights)
-                Call(weak.Get(), STR("/Script/Engine.LightComponent:SetLightingChannels"), [](const std::wstring& n, FProperty* p, std::uint8_t* v) {
-                    WriteBoolParam(v, p, n == STR("bChannel0"));
-                });
 
         // Only the character is rendered: the shape models, weapons, wall and
         // floor are hidden (the backdrop is composed after capture). No part
         // of the stage casts a shadow onto the map.
         for (const wchar_t* name : HiddenParts)
-            if (UObject* part = GetObject(stage, name)) SetVisible(part, false, true);
-        for (const wchar_t* name : HiddenParts)
-            if (UObject* part = GetObject(stage, name)) Call(part, STR("/Script/Engine.PrimitiveComponent:SetCastShadow"), [](const std::wstring&, FProperty* p, std::uint8_t* v) { WriteBoolParam(v, p, false); });
+            if (UObject* part = GetObject(stage, name))
+            {
+                SetVisible(part, false, true);
+                Call(part, STR("/Script/Engine.PrimitiveComponent:SetCastShadow"), [](const std::wstring&, FProperty* p, std::uint8_t* v) { WriteBoolParam(v, p, false); });
+            }
         Call(mesh, STR("/Script/Engine.PrimitiveComponent:SetCastShadow"), [](const std::wstring&, FProperty* p, std::uint8_t* v) { WriteBoolParam(v, p, false); });
 
         m_baseYaw = 0;
@@ -665,7 +435,8 @@ namespace aimmod
         m_yaw = 1e9;
         std::error_code error;
         std::filesystem::create_directories(m_frames, error);
-        Log("cosmetics preview stage spawned (" + std::to_string(m_lights.size()) + " rig lights" + (exposure ? ", fixed exposure" : "") + ")");
+        Log("cosmetics preview stage spawned (" + std::to_string(m_lights.size()) + " rig lights" + (exposure ? ", fixed exposure" : ", exposure not pinned") +
+            (ev100 ? ", EV100" : "") + ")");
         return true;
     }
 
@@ -728,6 +499,7 @@ namespace aimmod
         AActor* stage = static_cast<AActor*>(m_stage.Get());
         UObject* mesh = m_mesh.Get();
         if (!stage || !mesh) return;
+        RemoveAccessories();
         // The requested model and skin go straight onto the stage's skeletal
         // mesh: mesh, animation (one evaluation gives a standing pose, even
         // paused) and the skin's materials.
@@ -764,6 +536,10 @@ namespace aimmod
         else Log("cosmetics preview: look is not a free Default-pack look; showing the stage default");
         SetVisible(mesh, true, false);
         Call(mesh, STR("/Script/Engine.ActorComponent:SetTickableWhenPaused"), [](const std::wstring&, FProperty* p, std::uint8_t* v) { WriteBoolParam(v, p, true); });
+        // The game's character materials read opacity and colours from the
+        // component's material data. A fresh component has zeros there: the
+        // model dithers away to scattered pixels. Apply the game's defaults.
+        if (!ApplyMaterialDataDefaults(mesh)) Log("cosmetics preview: material data defaults unavailable; the model may look faded");
 
         // Catalog parameters on fresh dynamic instances parented on the look's
         // own materials (the stage is AimMod's; nothing to restore elsewhere).
@@ -780,8 +556,8 @@ namespace aimmod
                 if (!material) break;
                 UObject* mid = nullptr;
                 Call(materials, STR("/Script/Engine.KismetMaterialLibrary:CreateDynamicMaterialInstance"), [&](const std::wstring& n, FProperty*, std::uint8_t* v) {
-                    if (n == STR("WorldContextObject")) std::memcpy(v, &world, sizeof(world));
-                    else if (n == STR("Parent")) std::memcpy(v, &material, sizeof(material));
+                    if (n == STR("WorldContextObject")) WriteObject(v, world);
+                    else if (n == STR("Parent")) WriteObject(v, material);
                 }, &mid);
                 if (!mid) continue;
                 for (const PreviewParam& param : request.vectors)
@@ -797,11 +573,44 @@ namespace aimmod
                     });
                 Call(mesh, STR("/Script/Engine.PrimitiveComponent:SetMaterial"), [&](const std::wstring& n, FProperty*, std::uint8_t* v) {
                     if (n == STR("ElementIndex")) std::memcpy(v, &slot, sizeof(slot));
-                    else if (n == STR("Material")) std::memcpy(v, &mid, sizeof(mid));
+                    else if (n == STR("Material")) WriteObject(v, mid);
                 });
             }
         }
         Frame();
+        WearAccessories(request);
+    }
+
+    // Accessories from the installed catalog, by id: only released fit
+    // accessories (game meshes, curated). Attached in the pose the camera sees.
+    void CosmeticsPreview::WearAccessories(const PreviewRequest& request)
+    {
+        if (request.accessories.empty()) return;
+        const Output::CosmeticsInputs inputs = m_output.cosmetics();
+        UObject* stage = m_stage.Get();
+        UObject* mesh = m_mesh.Get();
+        if (!inputs.library || !stage || !mesh) return;
+        cosmetics::ResolveOptions options;
+        options.allowDrafts = inputs.allowDrafts;
+        options.verifiedPaks = inputs.library->verifiedPaks;
+        for (const std::string& id : request.accessories)
+        {
+            std::string why;
+            const cosmetics::Item* item = cosmetics::Resolve(inputs.library->index, id, options, &why);
+            if (!item || item->kind != "accessory" || !item->fit)
+            {
+                Log("cosmetics preview: accessory " + id + " not shown (" + (item ? std::string("not a game-mesh accessory") : why) + ")");
+                continue;
+            }
+            if (UObject* worn = AttachFitAccessory(stage, mesh, *item, why)) m_accessories.push_back(FWeakObjectPtr(worn));
+            else Log("cosmetics preview: accessory " + id + " not shown (" + why + ")");
+        }
+    }
+
+    void CosmeticsPreview::RemoveAccessories()
+    {
+        for (FWeakObjectPtr& weak : m_accessories) RemoveAccessory(weak.Get());
+        m_accessories.clear();
     }
 
     // Camera and lights on the character: the camera keeps the stage's own
@@ -815,16 +624,7 @@ namespace aimmod
         UObject* capture = m_capture.Get();
         if (!mesh || !meshes || !capture) return;
         float origin[3]{}, extent[3]{}, pivot[3]{};
-        bool bounds = false;
-        Call(Default(STR("/Script/Engine.Default__KismetSystemLibrary")), STR("/Script/Engine.KismetSystemLibrary:GetComponentBounds"),
-             [&](const std::wstring& n, FProperty*, std::uint8_t* v) {
-                 if (n == STR("Component")) WriteObject(v, mesh);
-             },
-             nullptr,
-             [&](const std::wstring& n, FProperty* p, const std::uint8_t* v) {
-                 if (n == STR("Origin")) bounds = ReadFloats(v, p, origin, 3);
-                 else if (n == STR("BoxExtent")) bounds = bounds && ReadFloats(v, p, extent, 3);
-             });
+        const bool bounds = Bounds(mesh, origin, extent);
         if (!Location(meshes, pivot)) Location(mesh, pivot);
         const auto sane = [](float e) { return std::isfinite(e) && e >= 5.0f && e <= 600.0f; };
         if (!bounds || !sane(extent[0]) || !sane(extent[1]) || !sane(extent[2]) || std::abs(origin[2] - pivot[2]) > 600)
@@ -843,12 +643,11 @@ namespace aimmod
         const double halfWidth = std::hypot(extent[0], extent[1]) + std::hypot(origin[0] - pivot[0], origin[1] - pivot[1]);
         const auto distance = static_cast<float>(PreviewCameraDistance(halfHeight, halfWidth, Fov));
         const float lift = static_cast<float>(halfHeight * 0.08);
-        const float camera[3] = {centre[0] - dir[0] * distance, centre[1] - dir[1] * distance, centre[2] + lift};
-        const auto yaw = static_cast<float>(std::atan2(dir[1], dir[0]) * 180.0 / Pi);
-        const auto pitch = static_cast<float>(-std::atan2(lift, distance) * 180.0 / Pi);
+        const double camera[3] = {centre[0] - dir[0] * distance, centre[1] - dir[1] * distance, centre[2] + lift};
+        const double rotation[3] = {-std::atan2(lift, distance) * 180.0 / Pi, std::atan2(dir[1], dir[0]) * 180.0 / Pi, 0};
         Call(capture, STR("/Script/Engine.SceneComponent:K2_SetWorldLocationAndRotation"), [&](const std::wstring& n, FProperty* p, std::uint8_t* v) {
-            if (n == STR("NewLocation")) WriteFloats(v, p, {camera[0], camera[1], camera[2]});
-            else if (n == STR("NewRotation")) WriteFloats(v, p, {pitch, yaw, 0.0f});
+            if (n == STR("NewLocation")) WriteFloats(v, p, {static_cast<float>(camera[0]), static_cast<float>(camera[1]), static_cast<float>(camera[2])});
+            else if (n == STR("NewRotation")) WriteFloats(v, p, {static_cast<float>(rotation[0]), static_cast<float>(rotation[1]), 0.0f});
             else if (n == STR("bTeleport")) WriteBoolParam(v, p, true);
         });
 
@@ -896,8 +695,8 @@ namespace aimmod
         std::filesystem::remove(m_frames / file, error);
         if (!Call(Default(STR("/Script/Engine.Default__KismetRenderingLibrary")), STR("/Script/Engine.KismetRenderingLibrary:ExportRenderTarget"),
                   [&](const std::wstring& n, FProperty*, std::uint8_t* v) {
-                      if (n == STR("WorldContextObject")) std::memcpy(v, &world, sizeof(world));
-                      else if (n == STR("TextureRenderTarget")) std::memcpy(v, &target, sizeof(target));
+                      if (n == STR("WorldContextObject")) WriteObject(v, world);
+                      else if (n == STR("TextureRenderTarget")) WriteObject(v, target);
                       else if (n == STR("FilePath")) WriteFString(v, folder);
                       else if (n == STR("FileName") || n == STR("Filename")) WriteFString(v, file);
                   }))
@@ -907,16 +706,28 @@ namespace aimmod
 
     bool CosmeticsPreview::Capture()
     {
-        // Colour, then normals (the cut-out mask), then back to colour.
-        const bool captured = CaptureTo(SourceFinalColor, L"capture-color.png") && CaptureTo(SourceNormal, L"capture-normal.png");
-        SetByte(m_capture.Get(), STR("CaptureSource"), SourceFinalColor);
-        PreviewPixels color, normals;
-        if (!captured || !ReadPng(m_frames / L"capture-color.png", color) || !ReadPng(m_frames / L"capture-normal.png", normals)) return false;
-        const PreviewComposition frame = ComposePreview(color, normals, Size);
-        if (frame.empty && !m_loggedEmpty)
+        // Colour (tone-mapped, fixed exposure), then the mask: scene colour's
+        // inverse-opacity alpha; world normals only if that alpha is unusable.
+        PreviewPixels color, mask;
+        bool ok = CaptureTo(SourceFinalColor, L"capture-color.png") && ReadPng(m_frames / L"capture-color.png", color) &&
+                  CaptureTo(SourceSceneColor, L"capture-mask.png") && ReadPng(m_frames / L"capture-mask.png", mask);
+        PreviewComposition frame = ok ? ComposePreview(color, mask, PreviewMask::InverseAlpha, Size) : PreviewComposition{};
+        const char* used = "alpha";
+        if (ok && frame.empty && CaptureTo(SourceNormal, L"capture-mask.png") && ReadPng(m_frames / L"capture-mask.png", mask))
         {
-            m_loggedEmpty = true;
-            Log("cosmetics preview: the capture shows no character");
+            frame = ComposePreview(color, mask, PreviewMask::Background, Size);
+            used = "normals";
+        }
+        SetByte(m_capture.Get(), STR("CaptureSource"), SourceFinalColor);
+        if (!ok) return false;
+        if (m_logFrame)
+        {
+            // Once per look: enough to tell a lighting problem from a mask problem.
+            m_logFrame = false;
+            char line[200];
+            std::snprintf(line, sizeof line, "cosmetics preview frame: %s mask, character %.1f%% of the capture, mean brightness %.2f, gain %.2f%s", used,
+                          frame.coverage * 100, MeanLuminance(color, frame), frame.gain, frame.empty ? " (no character found)" : "");
+            Log(line);
         }
         // Alternate two files so the service never serves a half-written PNG.
         const std::wstring file = m_frameIndex == 0 ? L"preview-0.png" : L"preview-1.png";
@@ -930,14 +741,15 @@ namespace aimmod
     void CosmeticsPreview::Teardown(const char* why)
     {
         const bool had = m_stage.Get() || m_target.Get();
-        if (AActor* stage = static_cast<AActor*>(m_stage.Get())) stage->K2_DestroyActor();
+        if (AActor* stage = static_cast<AActor*>(m_stage.Get())) stage->K2_DestroyActor(); // takes its accessories with it
         if (UObject* target = m_target.Get())
             Call(Default(STR("/Script/Engine.Default__KismetRenderingLibrary")), STR("/Script/Engine.KismetRenderingLibrary:ReleaseRenderTarget2D"),
                  [&](const std::wstring& n, FProperty*, std::uint8_t* v) {
-                     if (n == STR("TextureRenderTarget")) std::memcpy(v, &target, sizeof(target));
+                     if (n == STR("TextureRenderTarget")) WriteObject(v, target);
                  });
         m_stage = m_target = m_capture = m_meshes = m_mesh = FWeakObjectPtr{};
         m_lights.clear();
+        m_accessories.clear();
         m_world = nullptr;
         m_lookKey.clear();
         m_followUps.clear();
@@ -946,7 +758,7 @@ namespace aimmod
         {
             std::error_code error;
             std::filesystem::remove(m_framePath, error);
-            for (const wchar_t* file : {L"capture-color.png", L"capture-normal.png"}) std::filesystem::remove(m_frames / file, error);
+            for (const wchar_t* file : {L"capture-color.png", L"capture-mask.png", L"capture-normal.png"}) std::filesystem::remove(m_frames / file, error);
             Log(std::string("cosmetics preview stage removed (") + why + ")");
         }
     }
@@ -957,6 +769,7 @@ namespace aimmod
     {
         m_stage = m_target = m_capture = m_meshes = m_mesh = FWeakObjectPtr{};
         m_lights.clear();
+        m_accessories.clear();
         m_world = nullptr;
         std::error_code error;
         std::filesystem::remove(m_framePath, error);

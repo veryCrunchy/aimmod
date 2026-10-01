@@ -10,9 +10,12 @@ sealed record CosmeticRef(string Id, int Version);
 
 // One curated catalog item (in-game/docs/cosmetics.md, CosmeticsCatalog.lua).
 // Color is the item's main colour (linear 0..1 RGB) for the 2D preview, when it has one.
+// Role is an accessory's slot (head, neck or spine): one accessory per slot.
 sealed record CosmeticItem(string Id, int Version, string Kind, string Name, IReadOnlyList<string> Models, IReadOnlyList<string> Parts, double[]? Color, string? Pak, bool Draft,
-    IReadOnlyDictionary<string, double[]>? Vectors = null, IReadOnlyDictionary<string, double>? Scalars = null)
+    IReadOnlyDictionary<string, double[]>? Vectors = null, IReadOnlyDictionary<string, double>? Scalars = null, string? Role = null)
 {
+    // What equipping replaces: the same kind, and for accessories the same slot.
+    public string Slot => Role is null ? Kind : Kind + "/" + Role;
     // Card swatch, main colour first: body paint, panels and bare metal, or a
     // weapon's accent and glow. Material colours are linear; the page gets sRGB hex.
     static readonly string[][] SwatchParams = [["MetalPaint", "AccentColor", "PrimaryColor", "Color"], ["TriangularPaint", "Emissive"], ["RawMetal"]];
@@ -44,6 +47,11 @@ sealed partial class CosmeticsCatalog
         ["reload_animation"] = (["arms"], true), ["player_model"] = (["body"], true),
     };
     [GeneratedRegex("^[a-z0-9][a-z0-9-]{0,47}$")] private static partial Regex IdPattern();
+    // Curated game and engine assets an accessory may use without a pak
+    // (AimModCore's IsGameAccessoryAsset): one asset directly in these folders.
+    [GeneratedRegex("^(/Engine/BasicShapes/|/Game/Art/StaticMeshes/KMC/Brushes/)[A-Za-z0-9_.-]{1,96}$")] private static partial Regex GameMesh();
+    [GeneratedRegex("^/Game/Materials/Instances/Characters/S_(Meso|Endo)/Base/MI_PaintedMetal_[A-Za-z0-9_.-]{1,96}$")] private static partial Regex GameMaterial();
+    static bool GameAsset(string? path, Regex rule) => path is { Length: <= 200 } && !path.Contains("..") && rule.IsMatch(path);
     public static bool ValidId(string? id) => id is not null && IdPattern().IsMatch(id);
 
     public int Version { get; private init; }
@@ -132,10 +140,21 @@ sealed partial class CosmeticsCatalog
         foreach (var main in new[] { "MetalPaint", "AccentColor", "PrimaryColor", "Color" })
             if (color is null && vectors.TryGetValue(main, out var mc)) color = mc[..3];
         string? pak = e.TryGetProperty("pak", out var pk) && pk.ValueKind == JsonValueKind.Object && pk.TryGetProperty("file", out var file) && file.ValueKind == JsonValueKind.String ? file.GetString() : null;
-        if (rules.NeedsPak && pak is null) return null;
+        string? role = null;
+        var fitted = false;
+        if (e.TryGetProperty("attach", out var attach))
+        {
+            role = attach.ValueKind == JsonValueKind.String ? attach.GetString() : attach.ValueKind == JsonValueKind.Object && attach.TryGetProperty("role", out var r) && r.ValueKind == JsonValueKind.String ? r.GetString() : null;
+            fitted = attach.ValueKind == JsonValueKind.Object && attach.TryGetProperty("fit", out var fit) && fit.ValueKind == JsonValueKind.Object;
+        }
+        if (kind == "accessory" && role is not ("head" or "neck" or "spine")) return null;
+        // Accessories fitted from the game's own meshes need no pak.
+        var gameAccessory = kind == "accessory" && pak is null && fitted && GameAsset(Text("mesh"), GameMesh()) && GameAsset(Text("material"), GameMaterial());
+        if (rules.NeedsPak && pak is null && !gameAccessory) return null;
         if (!rules.NeedsPak && !hasParameters) return null;
+        if (kind != "accessory") role = null;
         var name = Text("name") is { Length: > 0 and <= 40 } n && !n.Any(char.IsControl) ? n : id!;
-        return new CosmeticItem(id!, version, kind, name, models, parts, color, pak, e.TryGetProperty("draft", out var d) && d.ValueKind == JsonValueKind.True, vectors, scalars);
+        return new CosmeticItem(id!, version, kind, name, models, parts, color, pak, e.TryGetProperty("draft", out var d) && d.ValueKind == JsonValueKind.True, vectors, scalars, role);
     }
 
     // Items players can pick: valid, not drafts, and (for pak items) with a matching pak.

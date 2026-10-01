@@ -63,9 +63,9 @@ sealed partial class MultiplayerService
             case "cosmetic-equip" or "cosmetic-remove":
                 var item = CosmeticCatalog.Pickable.FirstOrDefault(i => i.Id == Text("id"));
                 if (item is null) return LobbyResult.Fail("invalid", "That item isn’t in your AimMod catalog.");
-                // One item per kind: equipping replaces what that slot had.
-                var kinds = CosmeticCatalog.Items.ToDictionary(i => i.Id, i => i.Kind);
-                equipped!.RemoveAll(r => r.Id == item.Id || (action == "cosmetic-equip" && kinds.GetValueOrDefault(r.Id) == item.Kind));
+                // One item per slot (kind, and an accessory's head, neck or back): equipping replaces what that slot had.
+                var slots = CosmeticCatalog.Items.ToDictionary(i => i.Id, i => i.Slot);
+                equipped!.RemoveAll(r => r.Id == item.Id || (action == "cosmetic-equip" && slots.GetValueOrDefault(r.Id) == item.Slot));
                 if (action == "cosmetic-equip") { if (equipped.Count >= CosmeticsCatalog.MaxEquipped) return LobbyResult.Fail("full", "Remove an item first."); equipped.Add(new CosmeticRef(item.Id, item.Version)); }
                 SaveCosmetics(); AnnounceLook(force: true); WriteLooks(force: true);
                 return LobbyResult.Success;
@@ -129,7 +129,7 @@ sealed partial class MultiplayerService
             return new
             {
                 available = catalog.Available, problem = catalog.Problem, version = catalog.Version, show = cosmeticView,
-                items = catalog.Pickable.Select(i => new { i.Id, i.Version, i.Kind, i.Name, i.Models, i.Color, i.Swatch, i.Shine, equipped = mine.Contains(i.Id) }),
+                items = catalog.Pickable.Select(i => new { i.Id, i.Version, i.Kind, i.Name, i.Models, i.Color, i.Swatch, i.Shine, i.Role, equipped = mine.Contains(i.Id) }),
                 unavailable = catalog.Items.Count(i => !i.Draft) - catalog.Pickable.Count,
             };
         }

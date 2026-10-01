@@ -792,10 +792,10 @@ static void PreviewComposeChecks()
     Paint(color, 470, 190, 570, 260, 60, 80, 70);
     // Bloom/fog-like haze on the background colour must not matter: the mask comes from the normals.
     Paint(color, 0, 0, 200, 200, 9, 9, 9);
-    const PreviewComposition c = ComposePreview(color, normals, PreviewSize);
+    const PreviewComposition c = ComposePreview(color, normals, PreviewMask::Background, PreviewSize);
     CHECK(c.image.Valid() && c.image.width == PreviewSize && c.image.height == PreviewSize, "preview frame size");
     CHECK(!c.empty && c.left == 420 && c.right == 619 && c.top == 190 && c.bottom == 739, "character bounds from the normal capture");
-    CHECK(c.gain > 4.0 && c.gain <= 5.0, "a dark capture is brightened (bounded gain)");
+    CHECK(c.gain == 2.0, "a dark capture is brightened, but only mildly (gain at most 2)");
     // The character is centred: find its columns/rows in the output (pixels far from the backdrop).
     int minX = PreviewSize, maxX = -1, minY = PreviewSize, maxY = -1;
     for (int y = 0; y < PreviewSize; ++y)
@@ -815,15 +815,23 @@ static void PreviewComposeChecks()
     PreviewPixels narrow = Solid(capture, capture, 54, 54, 54), narrowColor = Solid(capture, capture, 0, 0, 0);
     Paint(narrow, 480, 190, 560, 740, 128, 128, 250);
     Paint(narrowColor, 480, 190, 560, 740, 40, 60, 50);
-    const PreviewComposition turned = ComposePreview(narrowColor, narrow, PreviewSize);
+    const PreviewComposition turned = ComposePreview(narrowColor, narrow, PreviewMask::Background, PreviewSize);
     int turnedMinY = PreviewSize, turnedMaxY = -1;
     for (int y = 0; y < PreviewSize; ++y)
         if (PixelAt(turned.image, PreviewSize / 2, y)[1] > 0x40) turnedMinY = std::min(turnedMinY, y), turnedMaxY = std::max(turnedMaxY, y);
     CHECK(std::abs((turnedMaxY - turnedMinY) - (maxY - minY)) <= 2, "turning the character keeps its size");
     // Nothing rendered: backdrop only, no shadow, no gain.
-    const PreviewComposition none = ComposePreview(Solid(capture, capture, 0, 0, 0), Solid(capture, capture, 54, 54, 54), PreviewSize);
+    const PreviewComposition none = ComposePreview(Solid(capture, capture, 0, 0, 0), Solid(capture, capture, 54, 54, 54), PreviewMask::Background, PreviewSize);
     CHECK(none.empty && none.gain == 1 && none.image.Valid() && PixelAt(none.image, 0, 0)[1] == corner[1], "an empty capture shows the backdrop");
-    CHECK(ComposePreview(PreviewPixels{}, normals, PreviewSize).empty, "missing capture is empty, not a crash");
+    CHECK(ComposePreview(PreviewPixels{}, normals, PreviewMask::Background, PreviewSize).empty, "missing capture is empty, not a crash");
+    // Scene-colour alpha as the mask: inverse opacity, 255 where nothing rendered, 0 on the character.
+    PreviewPixels alpha = Solid(capture, capture, 0, 0, 0);
+    for (std::size_t i = 3; i < alpha.rgba.size(); i += 4) alpha.rgba[i] = 255;
+    for (int y = 190; y < 740; ++y)
+        for (int x = (y < 260 ? 470 : 420); x < (y < 260 ? 570 : 620); ++x) alpha.rgba[(static_cast<std::size_t>(y) * capture + x) * 4 + 3] = 0;
+    const PreviewComposition a = ComposePreview(color, alpha, PreviewMask::InverseAlpha, PreviewSize);
+    CHECK(!a.empty && a.left == 420 && a.right == 619 && a.top == 190 && a.bottom == 739 && a.image.rgba == c.image.rgba, "the alpha mask cuts out the same character");
+    CHECK(ComposePreview(color, Solid(capture, capture, 0, 0, 0), PreviewMask::InverseAlpha, PreviewSize).empty, "an alpha that marks everything is no mask");
     CHECK(PreviewCameraDistance(95, 40, 30) > 450 && PreviewCameraDistance(95, 40, 30) < 560, "camera distance fits a standing character");
 }
 
@@ -864,6 +872,11 @@ static void PreviewChecks()
     for (int i = 0; i < 9; ++i) many += "scalar=S" + std::to_string(i) + ":1\n";
     CHECK(!ParsePreviewRequest(many, now), "at most 8 scalars");
     CHECK(!ParsePreviewRequest(std::string(MaxPreviewRequestBytes + 1, 'x'), now), "oversized request");
+    auto worn = ParsePreviewRequest("v=1\nexpires=1790000005\nseq=1\nmodel=Meso\naccessory=accessory-halo\naccessory=accessory-collar\n", now);
+    CHECK(worn && worn->accessories.size() == 2 && worn->accessories[1] == "accessory-collar" && worn->LookKey() != other->LookKey(), "accessories parse and change the look");
+    for (const char* text : {"v=1\nexpires=1790000005\nseq=1\nmodel=Meso\naccessory=../halo\n", "v=1\nexpires=1790000005\nseq=1\nmodel=Meso\naccessory=Halo\n",
+                             "v=1\nexpires=1790000005\nseq=1\nmodel=Meso\naccessory=a\naccessory=b\naccessory=c\naccessory=d\n"})
+        CHECK(!ParsePreviewRequest(text, now), text);
 
     // Never in challenges (ranked), benchmarks, the editor or while loading; unknown counts as no.
     const PreviewGameState menu{false, false, false, false};

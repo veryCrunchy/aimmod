@@ -17,14 +17,18 @@
 --            pak (textures, meshes, animations). Usable only when the pak's
 --            size and SHA-256 match the catalog manifest shipped with the
 --            install (AimModCore, phase 2).
---   attach   accessories: bone or socket role; per-model names and offsets
---            are filled in from the probe.
+--   attach   accessories: role ('head', 'neck' or 'spine'), and for
+--            accessories built from game meshes a fit: a bone name part, an
+--            anchor ('bone', 'top' or 'crown'), an offset and a size in cm
+--            (forward, right, up)
+--   mesh / material  accessory assets: an AimMod pak's, or the curated game
+--            and engine assets (see gameAsset)
 --   draft    true while the item is not ready (its pak has not shipped).
 --            Drafts never appear in the picker and apply only for team tests
 --            with allow_drafts=1.
 local M = {}
 
-M.version = 2
+M.version = 3
 
 M.kinds = {
     avatar_tint = {parts={body=true}, needsPak=false},
@@ -78,16 +82,52 @@ M.items = {
         vector={AccentColor=rgba(0.75, 0.78, 0.8, 0), Emissive=rgba(0.55, 0.58, 0.6, 0)}},
     {id='meso-pattern-stripes', version=1, kind='avatar_pattern', name='Racing stripes', models={'Meso'}, parts={'body'},
         pak={file='AimModCosmetics-1.pak', sha256=''}, draft=true},
-    -- Proof accessories: rigid head items, no cloth or physics.
+    -- Accessories from the game's own map-editor brushes and the free Meso material,
+    -- tinted through its probed parameters and fitted to any rig (no pak).
     {id='accessory-halo', version=1, kind='accessory', name='Halo', models={'Meso', 'Endo'}, parts={'body'},
-        attach='head', pak={file='AimModCosmetics-1.pak', sha256=''}, draft=true},
-    {id='accessory-visor', version=1, kind='accessory', name='Visor', models={'Meso', 'Endo'}, parts={'body'},
-        attach='head', pak={file='AimModCosmetics-1.pak', sha256=''}, draft=true},
+        mesh='/Game/Art/StaticMeshes/KMC/Brushes/SM_Torus.SM_Torus', material='/Game/Materials/Instances/Characters/S_Meso/Base/MI_PaintedMetal_Meso_TS1.MI_PaintedMetal_Meso_TS1',
+        vector={MetalPaint=rgba(0.95, 0.7, 0.25), TriangularPaint=rgba(0.95, 0.7, 0.25), RawMetal=rgba(0.95, 0.7, 0.25), Silicone=rgba(0.95, 0.7, 0.25)}, scalar={Roughness=0.25, Metallic=0.9},
+        attach={role='head', fit={bone='Head', anchor='top', offset={0, 0, 14}, size={28, 28, 3}}}},
     {id='accessory-headband', version=1, kind='accessory', name='Headband', models={'Meso', 'Endo'}, parts={'body'},
-        attach='head', pak={file='AimModCosmetics-1.pak', sha256=''}, draft=true},
+        mesh='/Game/Art/StaticMeshes/KMC/Brushes/SM_Torus.SM_Torus', material='/Game/Materials/Instances/Characters/S_Meso/Base/MI_PaintedMetal_Meso_TS1.MI_PaintedMetal_Meso_TS1',
+        vector={MetalPaint=rgba(0.02, 0.6, 0.3), TriangularPaint=rgba(0.02, 0.6, 0.3), RawMetal=rgba(0.02, 0.6, 0.3), Silicone=rgba(0.02, 0.6, 0.3)}, scalar={Roughness=0.4, Metallic=0.1},
+        attach={role='head', fit={bone='Head', anchor='crown', offset={0, 0, 0}, size={27, 27, 5}}}},
+    {id='accessory-crown', version=1, kind='accessory', name='Crown band', models={'Meso', 'Endo'}, parts={'body'},
+        mesh='/Game/Art/StaticMeshes/KMC/Brushes/SM_Tube.SM_Tube', material='/Game/Materials/Instances/Characters/S_Meso/Base/MI_PaintedMetal_Meso_TS1.MI_PaintedMetal_Meso_TS1',
+        vector={MetalPaint=rgba(0.9, 0.62, 0.2), TriangularPaint=rgba(0.9, 0.62, 0.2), RawMetal=rgba(0.9, 0.62, 0.2), Silicone=rgba(0.9, 0.62, 0.2)}, scalar={Roughness=0.2, Metallic=0.9},
+        attach={role='head', fit={bone='Head', anchor='top', offset={0, 0, 3}, size={20, 20, 8}}}},
+    {id='accessory-collar', version=1, kind='accessory', name='Collar', models={'Meso', 'Endo'}, parts={'body'},
+        mesh='/Game/Art/StaticMeshes/KMC/Brushes/SM_Torus.SM_Torus', material='/Game/Materials/Instances/Characters/S_Meso/Base/MI_PaintedMetal_Meso_TS1.MI_PaintedMetal_Meso_TS1',
+        vector={MetalPaint=rgba(0.03, 0.032, 0.035), TriangularPaint=rgba(0.03, 0.032, 0.035), RawMetal=rgba(0.03, 0.032, 0.035), Silicone=rgba(0.03, 0.032, 0.035)}, scalar={Roughness=0.5, Metallic=0.3},
+        attach={role='neck', fit={bone='Neck', anchor='bone', offset={0, 0, 0}, size={26, 26, 6}}}},
+    {id='accessory-back-ring', version=1, kind='accessory', name='Back ring', models={'Meso', 'Endo'}, parts={'body'},
+        mesh='/Game/Art/StaticMeshes/KMC/Brushes/SM_Torus.SM_Torus', material='/Game/Materials/Instances/Characters/S_Meso/Base/MI_PaintedMetal_Meso_TS1.MI_PaintedMetal_Meso_TS1',
+        vector={MetalPaint=rgba(0.02, 0.6, 0.3), TriangularPaint=rgba(0.02, 0.6, 0.3), RawMetal=rgba(0.02, 0.6, 0.3), Silicone=rgba(0.02, 0.6, 0.3)}, scalar={Roughness=0.3, Metallic=0.2},
+        attach={role='spine', fit={bone='Chest', anchor='bone', offset={-18, 0, 4}, size={3, 24, 24}}}},
 }
 
 local function finite(n, lo, hi) return type(n) == 'number' and n == n and n >= lo and n <= hi end
+
+-- Curated game and engine assets an accessory may use without a pak (the
+-- same allow-list as AimModCore's IsGameAccessoryAsset).
+local gameMeshes = {'/Engine/BasicShapes/', '/Game/Art/StaticMeshes/KMC/Brushes/'}
+local gameMaterials = {'/Game/Materials/Instances/Characters/S_Meso/Base/MI_PaintedMetal_', '/Game/Materials/Instances/Characters/S_Endo/Base/MI_PaintedMetal_'}
+local function gameAsset(path, roots)
+    if type(path) ~= 'string' or #path > 200 or path:find('..', 1, true) or path:find('//', 1, true) or path:find('[^%w_/%.%-]') then return false end
+    for _, root in ipairs(roots) do
+        if #path > #root and path:sub(1, #root) == root and not path:find('/', #root + 1, true) then return true end
+    end
+    return false
+end
+
+-- Pak kinds need a verified pak, except accessories fitted from game meshes.
+function M.needsPak(item)
+    local kind = M.kinds[item.kind]
+    if not kind or not kind.needsPak then return false end
+    local fit = type(item.attach) == 'table' and item.attach.fit
+    return not (item.kind == 'accessory' and item.pak == nil and type(fit) == 'table'
+        and gameAsset(item.mesh, gameMeshes) and gameAsset(item.material, gameMaterials))
+end
 
 -- Structural check of one item. Returns true or nil, reason.
 function M.validate(item)
@@ -112,7 +152,7 @@ function M.validate(item)
     for name, v in pairs(item.scalar or {}) do
         if type(name) ~= 'string' or not finite(v, -10, 10) then return nil, item.id .. ': bad scalar ' .. tostring(name) end
     end
-    if kind.needsPak and type(item.pak) ~= 'table' then return nil, item.id .. ': needs a pak' end
+    if M.needsPak(item) and type(item.pak) ~= 'table' then return nil, item.id .. ': needs a pak' end
     if not kind.needsPak and next(item.vector or {}) == nil and next(item.scalar or {}) == nil then
         return nil, item.id .. ': no parameters'
     end
@@ -141,7 +181,7 @@ function M.resolve(byId, id, options)
     local item = byId[id]
     if not item then return nil, 'not in the catalog: ' .. id end
     if item.draft and not options.allowDrafts then return nil, id .. ' is a draft' end
-    if M.kinds[item.kind].needsPak and not (options.verifiedPaks and options.verifiedPaks[item.pak.file]) then
+    if M.needsPak(item) and not (options.verifiedPaks and options.verifiedPaks[item.pak.file]) then
         return nil, id .. ' needs an AimMod pak matching the manifest'
     end
     return item
