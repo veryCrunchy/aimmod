@@ -9,7 +9,7 @@ Install (once)
 3. Start KovaaK's from Steam. You can delete this folder afterwards.
 
 Updates
-AimMod checks for signed updates when the game starts and every few hours,
+AimMod checks for updates when the game starts and every few hours,
 downloads them in the background and installs them after you close KovaaK's.
 You see "Update ready" in the AimMod workspace. Turn updates off or pick the
 Beta channel in AimMod > Settings > Updates & repair.

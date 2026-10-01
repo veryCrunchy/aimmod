@@ -58,7 +58,7 @@ jobs:
           fi
           if [ -n "$ingame" ]; then
             gh release download "$ingame" -R "$REPO" -D assets \
-              -p "AimMod-InGame-*.zip" -p "AimMod-InGame-*.manifest.json*" -p "AimMod-InGame-*.sha256"
+              -p "AimMod-InGame-*.zip" -p "AimMod-InGame-*.manifest.json" -p "AimMod-InGame-*.sha256"
           fi
           ls -la assets
           echo "kovaaks=$kovaaks" >> "$GITHUB_OUTPUT"

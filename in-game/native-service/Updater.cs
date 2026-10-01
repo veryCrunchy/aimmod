@@ -9,8 +9,7 @@ namespace AimMod.InGame;
 sealed record UpdatePreferences(
     [property: JsonPropertyName("autoUpdate")] bool AutoUpdate = true,
     [property: JsonPropertyName("channel")] string Channel = "stable",
-    // Override for the feed location (HTTPS only), e.g. a Hub mirror. The
-    // feed must still be signed by a trusted key.
+    // Override for the feed location (HTTPS only), e.g. a Hub mirror.
     [property: JsonPropertyName("feedUrl")] string? FeedUrl = null);
 
 // %LOCALAPPDATA%\AimMod\KovaaksNative\update-settings.json
@@ -77,14 +76,14 @@ sealed record StagedUpdate(
     [property: JsonPropertyName("notes")] string? Notes,
     [property: JsonPropertyName("stagedAt")] string StagedAt);
 
-enum UpdateState { Unconfigured, Disabled, Unmanaged, Idle, Checking, UpToDate, Downloading, Ready, NeedsNewerGame, Failed }
+enum UpdateState { Disabled, Unmanaged, Idle, Checking, UpToDate, Downloading, Ready, NeedsNewerGame, Failed }
 
 sealed record UpdateCheck(UpdateState State, string? Version = null, string? Notes = null, string? Message = null);
 
-// Checks the signed feed, downloads and verifies a newer package and stages
+// Checks the feed, downloads and verifies a newer package and stages
 // it under updates\staged. Nothing here runs or installs what it downloads;
 // PackageApplier applies a staged update after the game has closed.
-sealed class Updater(string stateRoot, ReleaseTrust trust, HttpMessageHandler? handler = null)
+sealed class Updater(string stateRoot, HttpMessageHandler? handler = null)
 {
     readonly HttpClient http = CreateClient(handler);
     public string Root => stateRoot;
@@ -112,8 +111,8 @@ sealed class Updater(string stateRoot, ReleaseTrust trust, HttpMessageHandler? h
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { return null; }
     }
     public string StagedFolder(StagedUpdate staged) => Path.Combine(stateRoot, "staged", staged.Folder);
-    // Re-verified just before it is applied: signature required.
-    public VerifiedPackage OpenStaged(StagedUpdate staged) => VerifiedPackage.Open(StagedFolder(staged), trust, requireSignature: true, staged.ManifestSha256);
+    // Re-verified (manifest hash and every file) just before it is applied.
+    public VerifiedPackage OpenStaged(StagedUpdate staged) => VerifiedPackage.Open(StagedFolder(staged), staged.ManifestSha256);
     public void ClearStaged()
     {
         try { File.Delete(StagedPointer); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
@@ -149,12 +148,9 @@ sealed class Updater(string stateRoot, ReleaseTrust trust, HttpMessageHandler? h
 
     public async Task<UpdateCheck> Check(UpdatePreferences preferences, string feedUrl, InstallManifest? installed, long? steamBuildId, CancellationToken token)
     {
-        if (!trust.Configured) return new(UpdateState.Unconfigured, Message: "Updates are not configured in this build.");
         if (installed is null || !installed.Managed) return new(UpdateState.Unmanaged, Message: "This install was not made from an AimMod release.");
         var current = SemanticVersion.Parse(installed.Version);
         var feedBytes = await Fetch(feedUrl, UpdateFeed.MaximumBytes, token);
-        var signature = await Fetch(feedUrl + ".sig", 512, token);
-        if (!trust.Verify(feedBytes, signature)) throw new ReleaseFormatException("The update feed signature is not valid.");
         var feed = UpdateFeed.Parse(feedBytes);
         if (feed.Channel != preferences.Channel) throw new ReleaseFormatException("The update feed is for another channel.");
         var version = feed.SemVer;
@@ -193,11 +189,11 @@ sealed class Updater(string stateRoot, ReleaseTrust trust, HttpMessageHandler? h
                     await target.WriteAsync(chunk.AsMemory(0, read), token);
                 }
                 if (total != feed.Package.Size || !Sha256Hex.Same(Convert.ToHexString(sha.GetHashAndReset()), feed.Package.Sha256))
-                    throw new ReleaseFormatException("The update package does not match the signed feed.");
+                    throw new ReleaseFormatException("The update package does not match the update feed.");
             }
             ExtractVerified(zip, folder, feed.ManifestSha256);
-            // Signature, manifest hash and every file are checked again here.
-            var package = VerifiedPackage.Open(folder, trust, requireSignature: true, feed.ManifestSha256);
+            // The manifest hash and every file are checked again here.
+            var package = VerifiedPackage.Open(folder, feed.ManifestSha256);
             // The beta feed also carries stable releases.
             if (package.Manifest.Version != feed.Version || (package.Manifest.Channel != feed.Channel && package.Manifest.Channel != "stable")) throw new ReleaseFormatException("The package version does not match the feed.");
             var staged = new StagedUpdate(feed.Version, feed.Channel, name, package.ManifestSha256, feed.Notes, DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"));
@@ -212,10 +208,10 @@ sealed class Updater(string stateRoot, ReleaseTrust trust, HttpMessageHandler? h
         finally { try { File.Delete(zip); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { } }
     }
 
-    // Extracts only the release manifest, its signature, the helper scripts
-    // and the files the (signed, hash-pinned) manifest lists, each capped at
+    // Extracts only the release manifest, the helper scripts and the files
+    // the (hash-pinned) manifest lists, each capped at
     // its declared size. Anything else in the zip is ignored.
-    internal static readonly string[] TopLevel = ["aimmod-release.json", "aimmod-release.json.sig", "Install-AimMod.cmd", "Repair-AimMod.cmd", "Uninstall-AimMod.cmd", "README.txt"];
+    internal static readonly string[] TopLevel = ["aimmod-release.json", "Install-AimMod.cmd", "Repair-AimMod.cmd", "Uninstall-AimMod.cmd", "README.txt"];
     internal static void ExtractVerified(string zipPath, string folder, string manifestSha256)
     {
         using var archive = ZipFile.OpenRead(zipPath);
@@ -243,7 +239,7 @@ sealed class Updater(string stateRoot, ReleaseTrust trust, HttpMessageHandler? h
         if (!Sha256Hex.Same(Sha256Hex.Of(bytes), manifestSha256)) throw new ReleaseFormatException("The release manifest does not match the update feed.");
         var manifest = ReleaseManifest.Parse(bytes);
         foreach (var name in TopLevel.Skip(1))
-            if (Find(name) is { } entry) Copy(entry, Path.Combine(folder, name), name.EndsWith(".sig") ? 512 : 256 * 1024);
+            if (Find(name) is { } entry) Copy(entry, Path.Combine(folder, name), 256 * 1024);
         var files = Path.Combine(folder, "files");
         foreach (var file in manifest.Files)
         {

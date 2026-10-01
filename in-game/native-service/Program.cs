@@ -5,7 +5,7 @@ using AimMod.InGame;
 
 CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
 // Install, repair, update hand-off and uninstall (Install/Repair-AimMod.cmd).
-if (args.Contains("--verify-signature")) { Environment.ExitCode = Lifecycle.VerifySignature(args); return; }
+if (args.Contains("--verify-release")) { Environment.ExitCode = Lifecycle.VerifyRelease(args); return; }
 if (Lifecycle.Commands.Any(args.Contains)) { Environment.ExitCode = Lifecycle.RunCommand(args); return; }
 if (args.Contains("--self-test-lifecycle")) { await LifecycleChecks.Run(); return; }
 if (args.Contains("--self-test")) { Checks.Run(); HistoryCompletenessChecks.Run(); CsvHistoryChecks.Run(); await HubChecks.Run(); HubPaginationChecks.Run(); await HubLeaderboardChecks.Run(); Coaching.SelfTest(); CoachingFeedbackChecks.Run(); StatsChecks.Run(); WarmupChecks.Run(); RunInspectionChecks.Run(); NativeSettingsChecks.Run(); LiveOverlayChecks.Run(); LiveOverlayFeedChecks.Run(); OverlaySettingsChecks.Run(); await ObsOverlayChecks.Run(); BenchmarkChecks.Run(); ReplayLibraryChecks.Run(); await WorkspaceChecks.Run(); ReplayChecks.Run(); ReplayKeyboardChecks.Run(); await NativeReplayPlaybackChecks.Run(); await HardeningChecks.Run(); await LifecycleChecks.Run(); return; }
@@ -47,7 +47,7 @@ using var hub = new Hub(output, historyEnabled: () => settings.Current.HubHistor
 var csvHistory = new CsvHistory(output);
 var failures = 0;
 var gameExited = false;
-await using var lifecycle = new Lifecycle(output, InstallLayout.FindWin64FromService(AppContext.BaseDirectory), ReleaseTrust.Embedded());
+await using var lifecycle = new Lifecycle(output, InstallLayout.FindWin64FromService(AppContext.BaseDirectory));
 lifecycle.Start();
 try
 {

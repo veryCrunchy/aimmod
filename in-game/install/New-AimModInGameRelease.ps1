@@ -1,20 +1,20 @@
 <#
 .SYNOPSIS
-Builds an AimMod in-game release: the versioned package zip, its signed
-release manifest and the signed update feed for one channel.
+Builds an AimMod in-game release: the versioned package zip, its release
+manifest and the update feed for one channel.
 
 .DESCRIPTION
-Two steps, run together locally or separately in CI (build on Windows, sign
-in the protected "ingame-release" environment):
+Two steps, run together locally or separately in CI (build on Windows,
+package and publish on Linux):
 
   -Step Stage   Lay out out\<name>\ from the build outputs:
                   files\<path relative to FPSAimTrainer\Binaries\Win64>
                   aimmod-release.json (version, every file with SHA-256 and
                   size, UE4SS version, minimum and tested game builds)
                   Install-AimMod.cmd, Repair-AimMod.cmd, Uninstall-AimMod.cmd, README.txt
-  -Step Finish  Sign aimmod-release.json (when -Key is given), zip the folder
+  -Step Finish  Zip the folder
                 into AimMod-InGame-<version>.zip and write
-                aimmod-ingame-<channel>.json (+ .sig): version, notes,
+                aimmod-ingame-<channel>.json: version, channel, notes,
                 package URL, size and SHA-256, and the manifest SHA-256.
 
 Inputs for Stage:
@@ -25,7 +25,7 @@ Inputs for Stage:
 Nothing is downloaded or published.
 
 .EXAMPLE
-.\New-AimModInGameRelease.ps1 -Version 0.2.0 -Package ..\native-mod\out\package -SteamDll <main.dll> -Ue4ssZip <zip> -TestedBuild 3.9.11=25635011 -Key C:\keys\aimmod.pem
+.\New-AimModInGameRelease.ps1 -Version 0.2.0 -Package ..\native-mod\out\package -SteamDll <main.dll> -Ue4ssZip <zip> -TestedBuild 3.9.11=25635011
 #>
 [CmdletBinding()]
 param(
@@ -43,8 +43,6 @@ param(
     [string]$Commit = '',
     [string]$NotesFile,
     [string]$DownloadBaseUrl,
-    [string]$Key,
-    [string]$OpenSsl,
     # Stable releases also become the beta feed unless this (current) beta
     # feed already offers a newer version. Pass the downloaded beta feed, or
     # -WriteBetaFeed alone when there is none yet.
@@ -136,9 +134,6 @@ function Invoke-Finish {
     if (-not (Test-Path -LiteralPath $manifestPath)) { throw "Nothing staged at $stage." }
     $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
     if ($manifest.version -ne $Version -or $manifest.channel -ne $Channel) { throw 'The staged manifest is for another version or channel.' }
-    $openssl = if ($Key) { Find-OpenSsl $OpenSsl } else { $null }
-    if ($Key) { New-Ed25519Signature -OpenSsl $openssl -Key $Key -File $manifestPath }
-    else { Write-Warning 'No -Key: the release is unsigned. Installs from it work; auto-update will not accept it.' }
 
     $zip = Join-Path $Output "$name.zip"
     if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
@@ -159,7 +154,6 @@ function Invoke-Finish {
     }
     $feedPath = Join-Path $Output "aimmod-ingame-$Channel.json"
     Write-Utf8 $feedPath ($feed | ConvertTo-Json -Depth 4)
-    if ($Key) { New-Ed25519Signature -OpenSsl $openssl -Key $Key -File $feedPath }
     if ($Channel -eq 'stable' -and $WriteBetaFeed) {
         $write = $true
         if ($ExistingBetaFeed -and (Test-Path -LiteralPath $ExistingBetaFeed)) {
@@ -170,15 +164,13 @@ function Invoke-Finish {
             $feed.channel = 'beta'
             $betaPath = Join-Path $Output 'aimmod-ingame-beta.json'
             Write-Utf8 $betaPath ($feed | ConvertTo-Json -Depth 4)
-            if ($Key) { New-Ed25519Signature -OpenSsl $openssl -Key $Key -File $betaPath }
             Write-Host "The beta feed also offers $Version."
         }
     }
     Copy-Item -LiteralPath $manifestPath -Destination (Join-Path $Output "$name.manifest.json") -Force
-    if (Test-Path -LiteralPath "$manifestPath.sig") { Copy-Item -LiteralPath "$manifestPath.sig" -Destination (Join-Path $Output "$name.manifest.json.sig") -Force }
     $sums = foreach ($f in @($zip, (Join-Path $Output "$name.manifest.json"))) { "$(Get-Sha256 $f)  $(Split-Path -Leaf $f)" }
     Write-Utf8 (Join-Path $Output "$name.sha256") (($sums -join "`n") + "`n")
-    Write-Host "Release ready in ${Output}: $name.zip, $name.manifest.json, aimmod-ingame-$Channel.json$(if ($Key) { ' (signed)' })."
+    Write-Host "Release ready in ${Output}: $name.zip, $name.manifest.json, aimmod-ingame-$Channel.json."
 }
 
 if ($Step -in 'All', 'Stage') { Invoke-Stage }

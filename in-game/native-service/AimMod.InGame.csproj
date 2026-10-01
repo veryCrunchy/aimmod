@@ -35,6 +35,5 @@
   <ItemGroup><EmbeddedResource Include="../ui/history-import.js" LogicalName="AimMod.HistoryImport" /></ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="../ui/lifecycle.js" LogicalName="AimMod.LifecycleScript" />
-    <EmbeddedResource Include="../install/aimmod-update-public-key.txt" LogicalName="AimMod.UpdateKeys" />
   </ItemGroup>
 </Project>

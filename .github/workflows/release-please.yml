@@ -117,8 +117,8 @@ jobs:
       contents: write
       id-token: write
 
-  # Build, sign and publish the in-game package and its update feed. Off until the repository
-  # variable AIMMOD_INGAME_RELEASES is "true" (signing key and UE4SS zip configured; see
+  # Build and publish the in-game package and its update feed. Off until the repository
+  # variable AIMMOD_INGAME_RELEASES is "true" (UE4SS zip mirror configured; see
   # in-game/docs/install-lifecycle.md); the release itself is still created by release-please.
   ingame-build:
     needs: release-please

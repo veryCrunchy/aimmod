@@ -28,7 +28,7 @@
       case 'disabled':return 'Automatic updates are off.';
       case 'needs-newer-game':return u.message||'This update needs a newer KovaaK’s.';
       case 'failed':return u.message||'Could not check for updates. AimMod will try again later.';
-      case 'unmanaged':case 'unconfigured':return u.message||'Updates are not available for this install.';
+      case 'unmanaged':return u.message||'Updates are not available for this install.';
       default:return 'AimMod checks for updates when the game starts and every few hours.';
     }
   }
@@ -72,12 +72,12 @@
     var s=state,u=s.update;
     panel.appendChild(node('p','subtle',(s.installed.version?'Installed: AimMod '+s.installed.version+'. ':'')+updateText(u)));
     if(message)panel.appendChild(node('p','notice',message));
-    var managed=u.state!=='unmanaged'&&u.state!=='unconfigured';
+    var managed=u.state!=='unmanaged';
     function row(title,description,control){var r=node('div','settings-row'),info=node('div','settings-info');info.appendChild(node('h3','',title));info.appendChild(node('p','subtle',description));r.appendChild(info);if(control)r.appendChild(control);panel.appendChild(r);return r;}
     if(managed){
       var toggle=button(s.settings.autoUpdate?'On':'Off',s.settings.autoUpdate,function(){save({autoUpdate:!s.settings.autoUpdate});});
       toggle.setAttribute('role','switch');toggle.setAttribute('aria-checked',String(s.settings.autoUpdate));toggle.setAttribute('aria-label','Automatic updates');
-      row('Automatic updates','Download signed updates in the background and install them when you close KovaaK’s. Your history, replays and settings are kept.',toggle);
+      row('Automatic updates','Download updates in the background, check every file and install them when you close KovaaK’s. Your history, replays and settings are kept.',toggle);
       var channels=node('div','lifecycle-channels');
       ['stable','beta'].forEach(function(name){var b=button(name==='stable'?'Stable':'Beta',s.settings.channel===name,function(){if(s.settings.channel!==name)save({channel:name});});b.setAttribute('aria-pressed',String(s.settings.channel===name));channels.appendChild(b);});
       row('Update channel','Beta gets new features first and may be less stable.',channels);

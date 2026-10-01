@@ -4,14 +4,14 @@ using System.Text.Json.Serialization;
 namespace AimMod.InGame;
 
 // A package folder (an unzipped release or a staged update):
-//   aimmod-release.json, aimmod-release.json.sig, files\<Win64-relative path>
-// Opening it checks the signature when one is present (and requires it when
-// asked) and checks every file's size and SHA-256 against the manifest.
-sealed record VerifiedPackage(string Root, ReleaseManifest Manifest, string ManifestSha256, bool Signed)
+//   aimmod-release.json, files\<Win64-relative path>
+// Opening it checks the manifest (against the feed's SHA-256 when given) and
+// every file's size and SHA-256 against the manifest.
+sealed record VerifiedPackage(string Root, ReleaseManifest Manifest, string ManifestSha256)
 {
     public string FilePath(ReleaseFile file) => ReleasePaths.Combine(Path.Combine(Root, "files"), file.Path);
 
-    public static VerifiedPackage Open(string root, ReleaseTrust trust, bool requireSignature, string? expectedManifestSha256 = null)
+    public static VerifiedPackage Open(string root, string? expectedManifestSha256 = null)
     {
         var manifestPath = Path.Combine(root, InstallLayout.PackageManifest);
         if (!File.Exists(manifestPath)) throw new ReleaseFormatException("The package has no release manifest.");
@@ -19,19 +19,8 @@ sealed record VerifiedPackage(string Root, ReleaseManifest Manifest, string Mani
         var bytes = File.ReadAllBytes(manifestPath);
         var sha = Sha256Hex.Of(bytes);
         if (expectedManifestSha256 is not null && !Sha256Hex.Same(sha, expectedManifestSha256)) throw new ReleaseFormatException("The release manifest does not match the update feed.");
-        var signaturePath = manifestPath + ".sig";
-        var signed = false;
-        if (File.Exists(signaturePath) && new FileInfo(signaturePath).Length <= 512)
-        {
-            if (trust.Configured)
-            {
-                if (!trust.Verify(bytes, File.ReadAllBytes(signaturePath))) throw new ReleaseFormatException("The release signature is not valid.");
-                signed = true;
-            }
-        }
-        if (requireSignature && !signed) throw new ReleaseFormatException("The release is not signed by a trusted AimMod key.");
         var manifest = ReleaseManifest.Parse(bytes);
-        var package = new VerifiedPackage(Path.GetFullPath(root), manifest, sha, signed);
+        var package = new VerifiedPackage(Path.GetFullPath(root), manifest, sha);
         foreach (var file in manifest.Files)
         {
             var path = package.FilePath(file);

@@ -9,7 +9,7 @@ Steam Workshop.
 1. **Once:** download `AimMod-InGame-<version>.zip` (the version release, or the rolling
    `aimmod-latest` release), unzip it, close KovaaK's and run `Install-AimMod.cmd`. The folder can be
    deleted afterwards.
-2. **From then on, automatically:** the service checks the signed update feed when the game starts
+2. **From then on, automatically:** the service checks the update feed when the game starts
    and every four hours, downloads a newer release in the background, verifies it and stages it.
    The workspace shows *"Update ready: AimMod x.y.z applies when you close KovaaK's"* with the
    release notes. When the game closes, the update is installed; the next start runs the new
@@ -26,10 +26,9 @@ Settings > **Updates & repair** has automatic updates on/off and the channel (St
 
 | What | Where |
 | --- | --- |
-| Release scripts | `in-game/install/` (`New-AimModInGameRelease.ps1`, `New-AimModSigningKey.ps1`, `New-AimModSignature.ps1`, `AimModRelease.ps1`) |
+| Release scripts | `in-game/install/` (`New-AimModInGameRelease.ps1`, `AimModRelease.ps1`) |
 | Package helper scripts | `in-game/install/package/` (`Install-AimMod.cmd`, `Repair-AimMod.cmd`, `Uninstall-AimMod.cmd`, `README.txt`) |
-| Trusted public keys | `in-game/install/aimmod-update-public-key.txt` (embedded into the service at build time) |
-| Service code | `in-game/native-service/`: `ReleaseFormat.cs`, `Ed25519.cs`, `Updater.cs`, `PackageApplier.cs`, `InstallHealth.cs`, `InstallLayout.cs`, `Lifecycle.cs` |
+| Service code | `in-game/native-service/`: `ReleaseFormat.cs`, `Updater.cs`, `PackageApplier.cs`, `InstallHealth.cs`, `InstallLayout.cs`, `Lifecycle.cs` |
 | Workspace UI | `in-game/ui/lifecycle.js` (toast, banner, Settings section) |
 | Workflow | `.github/workflows/aimmod-ingame-release.yml` |
 | Workshop helper | `in-game/tools/workshop/` |
@@ -59,16 +58,15 @@ A release is three files on the `aimmod-ingame-v<version>` GitHub release plus a
 channel release:
 
 - `AimMod-InGame-<version>.zip`: the package.
-- `AimMod-InGame-<version>.manifest.json` (+ `.sig`): copy of the manifest inside the zip.
+- `AimMod-InGame-<version>.manifest.json`: copy of the manifest inside the zip.
 - `AimMod-InGame-<version>.sha256`: SHA-256 of the zip and the manifest.
-- `aimmod-ingame-<channel>.json` (+ `.sig`) on the `aimmod-ingame-stable` / `aimmod-ingame-beta`
+- `aimmod-ingame-<channel>.json` on the `aimmod-ingame-stable` / `aimmod-ingame-beta`
   release: the update feed.
 
 Package layout (zip root):
 
 ```
 aimmod-release.json            release manifest
-aimmod-release.json.sig        its signature
 files\dwmapi.dll               paths relative to FPSAimTrainer\Binaries\Win64
 files\ue4ss\UE4SS.dll
 files\ue4ss\UE4SS-settings.ini
@@ -118,39 +116,36 @@ stream, reserved device name or trailing dot/space; paths are unique; every list
 }
 ```
 
-Signatures: `<file>.sig` holds one base64 Ed25519 signature (RFC 8032, pure Ed25519) over the exact
-bytes of `<file>`. Any key listed in `aimmod-update-public-key.txt` may have produced it, so a key
-can be rotated by listing the old and new key for one release. The scripts write the JSON as UTF-8
-without BOM and with LF line endings.
+Integrity is hash pinning, without signatures: the feed is fetched over HTTPS from the configured
+release host and pins the zip (SHA-256 and size) and the manifest (SHA-256); the manifest pins every
+file (SHA-256 and size). The scripts write the JSON as UTF-8 without BOM and with LF line endings,
+so the hashes are stable.
 
 A stable release is also published as the beta feed unless the beta feed already offers a newer
 version, so beta users never fall behind stable.
 
-## Signing key
+## Trust model
 
-- Create it once: `in-game/install/New-AimModSigningKey.ps1 -OutFile <path outside the repo>`
-  (OpenSSL 3; Git for Windows ships one). It refuses to write inside the repository and prints the
-  public key.
-- Add the printed public key as a line in `in-game/install/aimmod-update-public-key.txt` and commit
-  it. Only the public key is ever committed.
-- Store the private key PEM as the `AIMMOD_UPDATE_SIGNING_KEY` secret of a GitHub environment named
-  `ingame-release` (`gh secret set AIMMOD_UPDATE_SIGNING_KEY --env ingame-release < key.pem`), and
-  give that environment required reviewers so every signing run needs an approval. Keep an offline
-  copy (password manager or encrypted drive). `*.key` and `*.key.pub` are already git-ignored; PEM
-  files must never be placed in the working tree.
-- **Until a public key is committed, updates are off**: the service never contacts the feed and the
-  UI says updates are not configured. Installs and repairs from a local zip still work; they check
-  every file hash but cannot check authenticity (the same trust as running the zip's own installer).
-- The publish job verifies the new signatures with the service and the committed key, so a secret
-  that does not match the committed key fails the release before anything is uploaded.
-- Rotation: ship a release (signed with the current key) whose key file lists both the current and
-  the next key; once friends have updated, sign with the next key and drop the old line.
-- If the private key leaks: remove its line, add a new key and publish with the new key. Installs
-  that still trust only the leaked key cannot verify that release and stay on their version until
-  the friend reinstalls once from the new zip; until then, whoever holds the leaked key could sign
-  updates for them (they would still have to be served from the configured feed URL).
-- The desktop app's Tauri updater uses its own minisign key (`TAURI_SIGNING_PRIVATE_KEY`). The
-  in-game key is deliberately separate.
+There is no signing key (a deliberate decision). What protects friends:
+
+- **Transport and host:** the feed and the package are fetched only over HTTPS, from the configured
+  feed URL (GitHub releases of this repository by default); HTTPS-to-HTTP redirects are refused.
+  Whoever can publish releases on the host can publish updates, so release access on the repository
+  is the trust boundary.
+- **Hash pinning:** the zip must match the feed's SHA-256 and size before it is opened, the manifest
+  must match the feed's SHA-256, and every installed file must match the manifest. A corrupted or
+  swapped download, a truncated file, or a zip whose content differs from its manifest is rejected
+  and nothing is installed.
+- **Policy checks:** no downgrades, the feed must be for the selected channel, size limits, game build
+  requirements, and only files the manifest lists (under `dwmapi.dll` or `ue4ss/`) are extracted.
+- **Nothing downloaded is executed before it is applied:** the applier is a copy of the
+  already-installed service; the new files only run when the game next starts.
+- The publish job runs the service's own check (`--verify-release`) on the built feed and zip before
+  uploading, and attests the zip and manifest (GitHub artifact attestations), so a release can also be
+  checked with `gh attestation verify` by anyone who wants to.
+
+A signature layer can be added later without changing the feed format: an extra `.sig` next to the
+feed, checked by a client that knows the public key.
 
 ## Release pipeline
 
@@ -164,9 +159,9 @@ version, so beta users never fall behind stable.
    `af8ea9d8...17252`); `in-game/native-mod/install/Build-AimModPackage.ps1` with
    `AimModVersion` set; AimModSteam (`in-game/steam-bridge`, `Game__Shipping__Win64`) and its tests;
    `New-AimModInGameRelease.ps1 -Step Stage`. Uploads the staged folder as an artifact.
-3. **publish** (only with `publish: true`; environment `ingame-release`): takes the release body as
-   notes, `-Step Finish` (sign the manifest, zip, write and sign the feed), verifies the signatures
-   with the committed public key, attests the zip and manifest, then uploads to the version release
+3. **publish** (only with `publish: true`, no secrets): takes the release body as
+   notes, `-Step Finish` (zip and write the feed), checks the feed and zip with
+   `--verify-release` as the updater would, attests the zip and manifest, then uploads to the version release
    and the channel feed release. Releases are created with `--latest=false`; the repository-wide
    latest release stays the rolling `aimmod-latest` downloads. The package is uploaded before the
    feed, so a feed never points at a missing file.
@@ -184,7 +179,6 @@ Repository configuration the workflow needs:
 
 | Name | Kind | Purpose |
 | --- | --- | --- |
-| `AIMMOD_UPDATE_SIGNING_KEY` | secret, environment `ingame-release` | Ed25519 private key (PEM) |
 | `UE4SS_GITHUB_TOKEN` | secret | UEPseudo access (exists for the desktop release) |
 | `AIMMOD_UE4SS_ZIP_URL` | variable | HTTPS URL of `UE4SS_v3.0.1-1152-ge3ba1016.zip` |
 | `AIMMOD_TESTED_BUILDS` | variable, optional | `version=buildid[,...]`, default `3.9.11=25635011` |
@@ -200,7 +194,7 @@ Building a release by hand (same steps, locally):
 ```
 pwsh in-game/install/New-AimModInGameRelease.ps1 -Version 0.2.0 -Channel stable `
   -Package in-game/native-mod/out/package -SteamDll <AimModSteam main.dll> -Ue4ssZip <UE4SS zip> `
-  -TestedBuild 3.9.11=25635011 -Key <private key PEM> -NotesFile notes.md -Output in-game/out/release
+  -TestedBuild 3.9.11=25635011 -NotesFile notes.md -Output in-game/out/release
 ```
 
 `in-game/out/` is a build output; do not commit it.
@@ -212,23 +206,23 @@ pwsh in-game/install/New-AimModInGameRelease.ps1 -Version 0.2.0 -Channel stable 
   Settings checks immediately. With automatic updates off there are no network requests unless the
   user clicks *Check for updates*.
 - **Where:** `https://github.com/verycrunchy/aimmod/releases/download/aimmod-ingame-<channel>/aimmod-ingame-<channel>.json`
-  (and `.sig`). `feedUrl` in `update-settings.json` overrides it (HTTPS only, `{channel}` is
+  `feedUrl` in `update-settings.json` overrides it (HTTPS only, `{channel}` is
   replaced), for example a Hub mirror. A non-HTTPS override turns updates off.
-- **Checks, in order:** a trusted public key exists; the install was made from a release (installs
+- **Checks, in order:** the install was made from a release (installs
   from `Install-AimModCore.ps1` have no version and are never auto-updated); the feed is at most 256
-  KB and its signature verifies; the feed is for the selected channel; the version is newer than
+  KB and parses; the feed is for the selected channel; the version is newer than
   the installed one (no downgrades); the game build is not older than `minimumSteamBuildId`.
 - **Download:** HTTPS only (redirects to HTTP are refused and the final URL is checked), size capped
-  by the signed feed (at most 512 MB), SHA-256 compared with the feed before anything is extracted.
-- **Extraction:** only `aimmod-release.json`, its signature, the four helper files and the files the
+  by the feed (at most 512 MB), SHA-256 compared with the feed before anything is extracted.
+- **Extraction:** only `aimmod-release.json`, the four helper files and the files the
   manifest lists are extracted, each capped at its declared size; other entries (including
-  `..\` paths) are ignored. The manifest's SHA-256 must match the feed, its signature must verify,
+  `..\` paths) are ignored. The manifest's SHA-256 must match the feed,
   and every file's size and SHA-256 must match.
 - **Staging:** the verified folder is kept under `updates\staged\` and `staged.json` is written last.
   Older staged versions are removed.
 
 Nothing that was downloaded is executed before it has been verified, and the staged package is
-verified again (signature and every file) immediately before it is applied. The applier itself is a
+verified again (manifest hash and every file) immediately before it is applied. The applier itself is a
 copy of the already-installed service, not the downloaded one.
 
 ## Applying updates and repairs
@@ -301,7 +295,7 @@ in-game install until it is repaired.
 | `--uninstall [--force]` | remove what AimMod placed and restore backups; `--force` also removes changed files |
 | `--install-status` | print the health report; exit code 3 means a repair is needed |
 | `--apply-pending --wait-pid <pid>` | the post-exit hand-off (started by the service) |
-| `--verify-signature <file> [--public-key <base64>]` | check `<file>.sig` and the file's schema |
+| `--verify-release <feed.json> --zip <zip>` | check a built release as the updater would (feed, zip hash and size, manifest, every file) |
 | `--self-test-lifecycle` | run the lifecycle checks only |
 
 Common options: `--game-dir <FPSAimTrainer or Win64 folder>` (default: from the exe location, then
@@ -389,13 +383,12 @@ publishing items the game does not recognise, so the design is:
 
 ## Tests
 
-- `AimMod.InGame.exe --self-test-lifecycle` (also part of `--self-test`): RFC 8032 vectors and
-  malleability, trust and signature files, SemVer order, path rules, manifest and feed validation,
+- `AimMod.InGame.exe --self-test-lifecycle` (also part of `--self-test`): SemVer order, path rules, manifest and feed validation,
   package verification and tampering, a fresh install over a foreign UE4SS, repair detection
   (missing proxy, changed settings, disabled or missing mod entries, changed mod files, unknown and
   old game builds), repair, a failing update rolled back exactly, crash recovery, update, rollback,
   uninstall restoring the original folder, the updater against a fake HTTPS server (staging,
-  re-verification, wrong key, hash and size mismatch, HTTP, wrong channel, downgrade, newer game
+  re-verification, malformed feed, zip files not matching their manifest, hash and size mismatch, HTTP, wrong channel, downgrade, newer game
   needed, developer installs, zip entries outside the manifest), update preferences and the
   command-line hand-off.
 - `node --test in-game/ui/lifecycle.test.cjs`: toast, banner, repair request, settings patches,
@@ -405,9 +398,9 @@ publishing items the game does not recognise, so the design is:
 
 ## Open decisions
 
-- The signing key (who holds it, the `ingame-release` reviewers) and committing its public key.
 - Hosting: GitHub releases by default; `feedUrl` can point at a Hub mirror later without a client
   change.
 - Channels: Stable and Beta exist; whether friends start on Beta.
-- Where the verified UE4SS zip is mirrored for CI (`AIMMOD_UE4SS_ZIP_URL`).
+- Where the verified UE4SS zip is mirrored for CI (`AIMMOD_UE4SS_ZIP_URL`), and setting
+  `AIMMOD_INGAME_RELEASES=true` when release-please should publish.
 - The tested Steam build list (`3.9.11=25635011` is the build this was developed against).

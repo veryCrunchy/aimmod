@@ -1,12 +1,12 @@
 name: AimMod in-game Release
 
 # Builds the AimMod in-game package for KovaaK's (UE4SS + AimModCore with its
-# service + AimModNativeUI + AimModSteam), signs its release manifest and
-# update feed with the Ed25519 release key, and publishes:
-#   aimmod-ingame-v<version>   AimMod-InGame-<version>.zip, .manifest.json(.sig), .sha256
-#   aimmod-ingame-<channel>    aimmod-ingame-<channel>.json(.sig), read by the service updater
-# See in-game/docs/install-lifecycle.md. Nothing is published unless `publish`
-# is true, and signing runs in the protected "ingame-release" environment.
+# service + AimModNativeUI + AimModSteam) and publishes:
+#   aimmod-ingame-v<version>   AimMod-InGame-<version>.zip, .manifest.json, .sha256
+#   aimmod-ingame-<channel>    aimmod-ingame-<channel>.json, read by the service updater
+# The feed pins the zip's and the manifest's SHA-256; the manifest pins every
+# file. See in-game/docs/install-lifecycle.md. Nothing is published unless
+# `publish` is true. No secrets are needed beyond UE4SS_GITHUB_TOKEN.
 
 on:
   push:
@@ -192,8 +192,6 @@ jobs:
     needs: [metadata, build]
     if: needs.metadata.outputs.publish == 'true'
     runs-on: ubuntu-latest
-    # Holds AIMMOD_UPDATE_SIGNING_KEY; add required reviewers to approve each release.
-    environment: ingame-release
     permissions:
       attestations: write
       contents: write
@@ -227,37 +225,28 @@ jobs:
             echo "AimMod for KovaaK's (in-game) ${VERSION}." > notes.md
           fi
 
-      - name: Sign, zip and write the update feed
+      - name: Zip and write the update feed
         shell: pwsh
-        env:
-          SIGNING_KEY: ${{ secrets.AIMMOD_UPDATE_SIGNING_KEY }}
         run: |
-          if (-not $env:SIGNING_KEY) { throw 'AIMMOD_UPDATE_SIGNING_KEY is not set in the ingame-release environment.' }
-          $key = Join-Path $env:RUNNER_TEMP 'aimmod-signing.pem'
-          try {
-            [IO.File]::WriteAllText($key, $env:SIGNING_KEY)
-            chmod 600 $key
-            # A stable release also becomes the newest beta unless a newer beta exists.
-            $beta = @{}
-            if ($env:CHANNEL -eq 'stable') {
-              gh release download aimmod-ingame-beta -p aimmod-ingame-beta.json -D beta-feed 2>$null
-              $beta.WriteBetaFeed = $true
-              if (Test-Path beta-feed/aimmod-ingame-beta.json) { $beta.ExistingBetaFeed = 'beta-feed/aimmod-ingame-beta.json' }
-            }
-            ./in-game/install/New-AimModInGameRelease.ps1 -Step Finish -Version $env:VERSION -Channel $env:CHANNEL `
-              -Output out/release -NotesFile notes.md -Key $key `
-              -DownloadBaseUrl "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/download/$env:TAG" @beta
-          } finally { Remove-Item $key -Force -ErrorAction SilentlyContinue }
+          # A stable release also becomes the newest beta unless a newer beta exists.
+          $beta = @{}
+          if ($env:CHANNEL -eq 'stable') {
+            gh release download aimmod-ingame-beta -p aimmod-ingame-beta.json -D beta-feed 2>$null
+            $beta.WriteBetaFeed = $true
+            if (Test-Path beta-feed/aimmod-ingame-beta.json) { $beta.ExistingBetaFeed = 'beta-feed/aimmod-ingame-beta.json' }
+          }
+          ./in-game/install/New-AimModInGameRelease.ps1 -Step Finish -Version $env:VERSION -Channel $env:CHANNEL `
+            -Output out/release -NotesFile notes.md `
+            -DownloadBaseUrl "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/download/$env:TAG" @beta
 
-      - name: Verify the signatures with the committed public key
+      - name: Verify the release the way the updater will
         shell: bash
         run: |
           set -euo pipefail
           dotnet build in-game/native-service -c Release -v q -nologo
-          verify() { dotnet in-game/native-service/bin/Release/net8.0/AimMod.InGame.dll --verify-signature "$1"; }
-          verify "out/release/AimMod-InGame-${VERSION}.manifest.json"
+          verify() { dotnet in-game/native-service/bin/Release/net8.0/AimMod.InGame.dll --verify-release "$1" --zip "out/release/AimMod-InGame-${VERSION}.zip"; }
           verify "out/release/aimmod-ingame-${CHANNEL}.json"
-          if [ -f out/release/aimmod-ingame-beta.json ] && [ "$CHANNEL" = stable ]; then verify out/release/aimmod-ingame-beta.json; fi
+          if [ "$CHANNEL" = stable ] && [ -f out/release/aimmod-ingame-beta.json ]; then verify out/release/aimmod-ingame-beta.json; fi
 
       - name: Attest release artifacts
         uses: actions/attest@v4
@@ -282,7 +271,6 @@ jobs:
           gh release upload "$TAG" --clobber \
             "out/release/AimMod-InGame-${VERSION}.zip" \
             "out/release/AimMod-InGame-${VERSION}.manifest.json" \
-            "out/release/AimMod-InGame-${VERSION}.manifest.json.sig" \
             "out/release/AimMod-InGame-${VERSION}.sha256"
 
           # The package is uploaded first, so a feed never points at a missing zip.
@@ -293,8 +281,7 @@ jobs:
               gh release create "$channel_tag" --target "$GITHUB_SHA" --title "AimMod in-game ${channel} channel" \
                 --notes "Machine-readable update feed for the AimMod in-game ${channel} channel." --latest=false --prerelease
             fi
-            gh release upload "$channel_tag" --clobber \
-              "out/release/aimmod-ingame-${channel}.json" "out/release/aimmod-ingame-${channel}.json.sig"
+            gh release upload "$channel_tag" --clobber "out/release/aimmod-ingame-${channel}.json"
           }
           publish_feed "$CHANNEL"
           if [ "$CHANNEL" = stable ] && [ -f out/release/aimmod-ingame-beta.json ]; then publish_feed beta; fi

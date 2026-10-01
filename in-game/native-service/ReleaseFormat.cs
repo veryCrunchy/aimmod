@@ -7,13 +7,14 @@ using System.Text.RegularExpressions;
 namespace AimMod.InGame;
 
 // The in-game release format (see in-game/docs/install-lifecycle.md):
-//   aimmod-release.json (+ .sig)   inside every package zip: version, every
+//   aimmod-release.json            inside every package zip: version, every
 //                                  installed file with its SHA-256 and size,
 //                                  UE4SS version and the tested game builds.
-//   aimmod-ingame-<channel>.json   the update feed (+ .sig): newest version
-//                                  of a channel, the package URL and SHA-256,
-//                                  the release manifest SHA-256 and notes.
-// Signatures are Ed25519 over the exact file bytes, base64 in <file>.sig.
+//   aimmod-ingame-<channel>.json   the update feed: newest version of a
+//                                  channel, the package URL and SHA-256, the
+//                                  release manifest SHA-256 and notes.
+// Integrity is hash pinning: the feed (fetched over HTTPS from the configured
+// release host) pins the zip and the manifest, the manifest pins every file.
 sealed class ReleaseFormatException(string message) : Exception(message);
 
 readonly record struct SemanticVersion(int Major, int Minor, int Patch, string Prerelease) : IComparable<SemanticVersion>
@@ -56,49 +57,6 @@ readonly record struct SemanticVersion(int Major, int Minor, int Patch, string P
     public static bool operator >=(SemanticVersion a, SemanticVersion b) => a.CompareTo(b) >= 0;
     public static bool operator <=(SemanticVersion a, SemanticVersion b) => a.CompareTo(b) <= 0;
     public override string ToString() => $"{Major}.{Minor}.{Patch}" + (IsPrerelease ? "-" + Prerelease : "");
-}
-
-// Public keys allowed to sign releases. The release key's public half is
-// committed in in-game/install/aimmod-update-public-key.txt and embedded at
-// build time; with no key, network updates stay off (nothing unverified runs).
-sealed class ReleaseTrust
-{
-    readonly List<byte[]> keys;
-    public ReleaseTrust(IEnumerable<byte[]> keys) { this.keys = keys.Where(k => k.Length == 32).Select(k => k.ToArray()).ToList(); }
-    public bool Configured => keys.Count > 0;
-    public static ReleaseTrust Parse(string text)
-    {
-        var keys = new List<byte[]>();
-        foreach (var raw in text.Split('\n'))
-        {
-            var line = raw.Trim();
-            if (line.Length == 0 || line.StartsWith('#')) continue;
-            byte[] key;
-            try { key = Convert.FromBase64String(line); } catch (FormatException) { throw new ReleaseFormatException("Invalid public key line."); }
-            if (key.Length != 32) throw new ReleaseFormatException("Ed25519 public keys are 32 bytes.");
-            keys.Add(key);
-        }
-        return new(keys);
-    }
-    public static ReleaseTrust Embedded()
-    {
-        using var stream = typeof(ReleaseTrust).Assembly.GetManifestResourceStream("AimMod.UpdateKeys");
-        if (stream is null) return new([]);
-        using var reader = new StreamReader(stream, Encoding.UTF8);
-        try { return Parse(reader.ReadToEnd()); } catch (ReleaseFormatException) { return new([]); }
-    }
-    // A signature file holds one base64 Ed25519 signature (surrounding white
-    // space allowed). Any trusted key may have produced it (key rotation).
-    public bool Verify(ReadOnlySpan<byte> message, ReadOnlySpan<byte> signatureFile)
-    {
-        if (!Configured || signatureFile.Length is 0 or > 512) return false;
-        byte[] signature;
-        try { signature = Convert.FromBase64String(Encoding.ASCII.GetString(signatureFile).Trim()); }
-        catch (FormatException) { return false; }
-        if (signature.Length != 64) return false;
-        foreach (var key in keys) if (Ed25519.Verify(key, message, signature)) return true;
-        return false;
-    }
 }
 
 static class ReleasePaths

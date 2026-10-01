@@ -19,7 +19,7 @@ sealed record LifecycleResult(
     [property: JsonPropertyName("at")] string At,
     [property: JsonPropertyName("seen")] bool Seen = false);
 
-// Install lifecycle inside the service: periodic signed update checks,
+// Install lifecycle inside the service: periodic update checks,
 // staging, install-health checks, and the hand-off that applies a staged
 // update or a repair once KovaaK's has closed. See install-lifecycle.md.
 sealed class Lifecycle : IAsyncDisposable
@@ -27,7 +27,6 @@ sealed class Lifecycle : IAsyncDisposable
     public static readonly TimeSpan CheckInterval = TimeSpan.FromHours(4);
     readonly string output, updatesRoot;
     readonly string? win64;
-    readonly ReleaseTrust trust;
     readonly Func<string, bool> gameRunning;
     readonly UpdateSettings settings;
     readonly Updater updater;
@@ -40,14 +39,14 @@ sealed class Lifecycle : IAsyncDisposable
     DateTime? checkedAt;
     HealthReport? health;
 
-    public Lifecycle(string output, string? win64, ReleaseTrust trust, HttpMessageHandler? handler = null, Func<string, bool>? gameRunning = null)
+    public Lifecycle(string output, string? win64, HttpMessageHandler? handler = null, Func<string, bool>? gameRunning = null)
     {
-        this.output = output; this.win64 = win64; this.trust = trust;
+        this.output = output; this.win64 = win64;
         this.gameRunning = gameRunning ?? InstallLayout.GameRunning;
         updatesRoot = Path.Combine(output, "updates");
         Directory.CreateDirectory(updatesRoot);
         settings = new UpdateSettings(output);
-        updater = new Updater(updatesRoot, trust, handler);
+        updater = new Updater(updatesRoot, handler);
         applier = new PackageApplier(updatesRoot, this.gameRunning);
     }
     public static string PackageCache(string output) => Path.Combine(output, "package", "current");
@@ -166,7 +165,6 @@ sealed class Lifecycle : IAsyncDisposable
         lock (gate) { current = check; report = health; at = checkedAt; }
         if (staged is not null && current.State is not UpdateState.Ready) current = new(UpdateState.Ready, staged.Version, staged.Notes, current.Message);
         if (installed is not null && !installed.Managed) current = new(UpdateState.Unmanaged, Message: "This install was made with the developer installer; updates are off.");
-        if (!trust.Configured) current = new(UpdateState.Unconfigured, Message: "Updates are not configured in this build.");
         var applyOnClose = staged is not null && (prefs.AutoUpdate || requests.Install) && requests.SkipVersion != staged.Version;
         var result = ReadJson<LifecycleResult>(ResultPath(updatesRoot));
         var rollback = applier.RollbackTarget;
@@ -190,7 +188,7 @@ sealed class Lifecycle : IAsyncDisposable
     }
     static string State(UpdateState state) => state switch
     {
-        UpdateState.Unconfigured => "unconfigured", UpdateState.Disabled => "disabled", UpdateState.Unmanaged => "unmanaged",
+        UpdateState.Disabled => "disabled", UpdateState.Unmanaged => "unmanaged",
         UpdateState.Checking => "checking", UpdateState.UpToDate => "up-to-date", UpdateState.Downloading => "downloading",
         UpdateState.Ready => "ready", UpdateState.NeedsNewerGame => "needs-newer-game", UpdateState.Failed => "failed", _ => "idle",
     };
@@ -290,12 +288,11 @@ sealed class Lifecycle : IAsyncDisposable
     static string? Arg(string[] args, string name) { var i = Array.IndexOf(args, name); return i >= 0 && i + 1 < args.Length ? args[i + 1] : null; }
     public static readonly string[] Commands = ["--install", "--repair", "--apply-pending", "--rollback", "--uninstall", "--install-status"];
 
-    public static int RunCommand(string[] args, ReleaseTrust? trustOverride = null, Func<string, bool>? gameRunningOverride = null)
+    public static int RunCommand(string[] args, Func<string, bool>? gameRunningOverride = null)
     {
         var output = Arg(args, "--output") is { } o ? Path.GetFullPath(o) : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AimMod", "KovaaksNative");
         var updatesRoot = Path.Combine(output, "updates");
         Directory.CreateDirectory(updatesRoot);
-        var trust = trustOverride ?? ReleaseTrust.Embedded();
         var running = gameRunningOverride ?? InstallLayout.GameRunning;
         using var log = new Log(Path.Combine(updatesRoot, "install.log"));
         using var mutex = new Mutex(false, "Local\\AimMod.KovaaksNative.Installer");
@@ -304,7 +301,7 @@ sealed class Lifecycle : IAsyncDisposable
         if (!owned) { log.Line("Another AimMod install is running."); return 1; }
         try
         {
-            if (args.Contains("--apply-pending")) return ApplyPending(args, output, trust, running, log);
+            if (args.Contains("--apply-pending")) return ApplyPending(args, output, running, log);
             var win64 = Arg(args, "--game-dir") is { } g ? ResolveGameDir(g) : InstallLayout.FindWin64FromService(AppContext.BaseDirectory) ?? InstallLayout.FindWin64FromSteam();
             if (win64 is null) { log.Line("KovaaK's was not found. Pass --game-dir <FPSAimTrainer folder>."); return 1; }
             var applier = new PackageApplier(updatesRoot, running);
@@ -338,8 +335,8 @@ sealed class Lifecycle : IAsyncDisposable
             else if (args.Contains("--install")) root = InstallLayout.FindPackageRoot(AppContext.BaseDirectory);
             else root = Directory.Exists(PackageCache(output)) ? PackageCache(output) : InstallLayout.FindPackageRoot(AppContext.BaseDirectory);
             if (root is null) { log.Line("No AimMod package was found. Download AimMod again and run Install-AimMod.cmd."); return 1; }
-            var package = VerifiedPackage.Open(root, trust, requireSignature: false);
-            log.Line($"AimMod {package.Manifest.Version} ({(package.Signed ? "signed release" : "unsigned package, files checked")}).");
+            var package = VerifiedPackage.Open(root);
+            log.Line($"AimMod {package.Manifest.Version}: all {package.Manifest.Files.Length} files match the release manifest.");
             var kind = args.Contains("--install") ? "install" : "repair";
             var result = applier.Apply(win64, package, kind);
             CachePackage(output, package);
@@ -358,30 +355,28 @@ sealed class Lifecycle : IAsyncDisposable
         }
         finally { mutex.ReleaseMutex(); }
     }
-    // --verify-signature <file> [--public-key <base64>]: checks <file>.sig with
-    // the given key or the keys built into this service (used by the release
-    // workflow to prove the signing secret matches the committed public key).
-    public static int VerifySignature(string[] args)
+    // --verify-release <feed.json> --zip <package.zip>: checks a built release
+    // the way the updater will (feed format, zip size and SHA-256, manifest
+    // SHA-256, every file). Used by the release workflow before uploading.
+    public static int VerifyRelease(string[] args)
     {
-        var file = Arg(args, "--verify-signature");
-        if (file is null || !File.Exists(file) || !File.Exists(file + ".sig")) { Console.Error.WriteLine("Usage: --verify-signature <file> (with <file>.sig) [--public-key <base64>]"); return 1; }
-        ReleaseTrust trust;
-        try { trust = Arg(args, "--public-key") is { } key ? ReleaseTrust.Parse(key) : ReleaseTrust.Embedded(); }
-        catch (ReleaseFormatException ex) { Console.Error.WriteLine(ex.Message); return 1; }
-        if (!trust.Configured) { Console.Error.WriteLine("No public key is configured."); return 1; }
-        var bytes = File.ReadAllBytes(file);
-        var ok = trust.Verify(bytes, File.ReadAllBytes(file + ".sig"));
-        Console.WriteLine(ok ? $"Valid signature: {Path.GetFileName(file)}" : $"INVALID signature: {Path.GetFileName(file)}");
-        if (!ok) return 1;
-        // Feeds and release manifests are also checked against their schema.
+        var feedPath = Arg(args, "--verify-release");
+        var zip = Arg(args, "--zip");
+        if (feedPath is null || zip is null || !File.Exists(feedPath) || !File.Exists(zip)) { Console.Error.WriteLine("Usage: --verify-release <feed.json> --zip <package.zip>"); return 1; }
+        var temp = Path.Combine(Path.GetTempPath(), "aimmod-verify-" + Guid.NewGuid().ToString("N"));
         try
         {
-            var text = System.Text.Encoding.UTF8.GetString(bytes);
-            if (text.Contains(UpdateFeed.SchemaName)) Console.WriteLine($"Valid {UpdateFeed.Parse(bytes).Channel} feed for {UpdateFeed.Parse(bytes).Version}.");
-            else if (text.Contains(ReleaseManifest.SchemaName)) Console.WriteLine($"Valid release manifest for {ReleaseManifest.Parse(bytes).Version} ({ReleaseManifest.Parse(bytes).Files.Length} files).");
+            var feed = UpdateFeed.Parse(File.ReadAllBytes(feedPath));
+            if (new FileInfo(zip).Length != feed.Package.Size || !Sha256Hex.Same(Sha256Hex.OfFile(zip), feed.Package.Sha256)) throw new ReleaseFormatException("The zip does not match the feed's size and SHA-256.");
+            Updater.ExtractVerified(zip, temp, feed.ManifestSha256);
+            var package = VerifiedPackage.Open(temp, feed.ManifestSha256);
+            if (package.Manifest.Version != feed.Version) throw new ReleaseFormatException("The manifest version does not match the feed.");
+            Console.WriteLine($"Valid {feed.Channel} release {feed.Version}: {package.Manifest.Files.Length} files, mods {string.Join(", ", package.Manifest.Mods)}.");
+            return 0;
         }
-        catch (ReleaseFormatException ex) { Console.Error.WriteLine("Signed, but not a valid release file: " + ex.Message); return 1; }
-        return 0;
+        catch (Exception ex) when (ex is ReleaseFormatException or IOException or InvalidDataException or InvalidOperationException)
+        { Console.Error.WriteLine("Invalid release: " + ex.Message); return 1; }
+        finally { try { if (Directory.Exists(temp)) Directory.Delete(temp, true); } catch (IOException) { } }
     }
     static string ResolveGameDir(string path)
     {
@@ -440,7 +435,7 @@ sealed class Lifecycle : IAsyncDisposable
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
 
-    static int ApplyPending(string[] args, string output, ReleaseTrust trust, Func<string, bool> running, Log log)
+    static int ApplyPending(string[] args, string output, Func<string, bool> running, Log log)
     {
         var updatesRoot = Path.Combine(output, "updates");
         if (int.TryParse(Arg(args, "--wait-pid"), out var pid))
@@ -452,7 +447,7 @@ sealed class Lifecycle : IAsyncDisposable
         if (running(win64)) { log.Line("KovaaK's is running again; the update waits for the next time it closes."); return 2; }
         var applier = new PackageApplier(updatesRoot, running);
         if (applier.RecoverInterrupted()) log.Line("An interrupted install was undone.");
-        var updater = new Updater(updatesRoot, trust);
+        var updater = new Updater(updatesRoot);
         var prefs = new UpdateSettings(output).Current;
         var requests = ReadJson<LifecycleRequests>(RequestsPath(updatesRoot)) ?? new();
         var staged = updater.Staged();
@@ -485,7 +480,7 @@ sealed class Lifecycle : IAsyncDisposable
         {
             try
             {
-                var package = VerifiedPackage.Open(PackageCache(output), trust, requireSignature: false);
+                var package = VerifiedPackage.Open(PackageCache(output));
                 applier.Apply(win64, package, "repair");
                 UpdateRequestsFile(updatesRoot, r => r with { Repair = false });
                 Record(updatesRoot, new("repair", true, package.Manifest.Version, "AimMod was repaired.", Now()));
