@@ -231,6 +231,10 @@ static void GameStatsChecks()
     CHECK(s && s->challengeStartSeconds && std::fabs(*s->challengeStartSeconds - (3600 + 11 * 60 + 40.178)) < 1e-6, "challenge start parsed");
     CHECK(!ParseGameStats("Scenario:,x\n") && !ParseGameStats("Score:,nan\nScenario:,x\n"), "incomplete stats rejected");
     CHECK(IsChallengeStatsFile("Synthetic - Challenge - 2026.10.01-01.12.40 Stats.csv") && !IsChallengeStatsFile("notes.csv"), "stats file name");
+    // Scenario names outside the ANSI code page (stars, CJK) in the stats folder.
+    CHECK(IsChallengeStatsFile(std::wstring_view(L"Synthetic ★ 練習 - Challenge - 2026.10.01-01.12.40 Stats.csv")) &&
+              !IsChallengeStatsFile(std::wstring_view(L"★ notes.csv")),
+          "wide stats file names");
 }
 
 static void PlaybackChecks()
@@ -284,6 +288,9 @@ static void CommandChecks()
               code("AIMMOD_CORE_COMMAND_1\nseq\t11\naction\tload-scenario\nscenario\tX\nseed\t5\n") == "invalid-seed",
           "seed range and action checked");
     CHECK(SeedFor(7, 0) == SeedFor(7, 0) && SeedFor(7, 0) != SeedFor(7, 1) && SeedFor(7, 1) != SeedFor(8, 1), "per-event seeds reproducible and distinct");
+    // A freeplay seed must stop when a challenge starts in the same scenario.
+    CHECK(SeedAllowed("Synthetic Clicking", false) && !SeedAllowed("Synthetic Clicking", true) && SeedAllowed("AimMod Match - Cata - ab93", true),
+          "freeplay seeds never drive a ranked challenge");
     const char* thumb = "AIMMOD_CORE_COMMAND_1\nseq\t10\naction\tcapture-thumbnail\nscenario\tAimMod - Dust2 (CSGO) - CS Movement\nwidth\t1920\nheight\t1080\n"
                         "out\tdust2 thumb.png\nview1\t100,-20.5,300,-10,45,90\nview2\t0,0,0,0,180,70\n";
     auto t = parse(thumb);

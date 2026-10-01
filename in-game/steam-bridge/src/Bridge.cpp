@@ -26,6 +26,7 @@ namespace bridge
         constexpr const char* KeyVersion = "aimmod.v";
         constexpr const char* KeyToken = "aimmod.token";
         constexpr const char* KeyBridge = "aimmod.bridge";
+        constexpr const char* KeyBanned = "aimmod.banned"; // kicked members (host-owned)
 
         std::string Id(std::uint64_t id) { return std::to_string(id); }
 
@@ -255,13 +256,26 @@ namespace bridge
 
     void Bridge::Run()
     {
+        std::string lastError;
         while (!m_stop.load())
         {
             {
                 std::unique_lock lock(m_mutex);
                 m_wake.wait_for(lock, 5ms, [this] { return m_stop.load() || !m_commands.empty() || !m_callbacks.empty() || !m_pipeStates.empty(); });
             }
-            Tick();
+            // An exception must never leave this thread: it would terminate the game.
+            try
+            {
+                Tick();
+            }
+            catch (const std::exception& e)
+            {
+                if (lastError != e.what()) m_log(std::string("worker: tick failed: ") + e.what());
+                lastError = e.what();
+            }
+            catch (...)
+            {
+            }
         }
         // Shutdown: leave cleanly, clear what we set (skip if the game already shut Steam down).
         if (!m_steam.Initialised())
@@ -532,7 +546,7 @@ namespace bridge
                 }
                 for (const auto& [k, value] : data->object)
                 {
-                    if (!ValidLobbyKey(k) || k == KeyVersion || k == KeyToken || k == KeyBridge || value.type != json::Value::Type::String ||
+                    if (!ValidLobbyKey(k) || k == KeyVersion || k == KeyToken || k == KeyBridge || k == KeyBanned || value.type != json::Value::Type::String ||
                         value.string.size() > MaxLobbyValue)
                     {
                         Result(*id, false, "invalid", "Bad lobby data key or value: " + k.substr(0, 48));
@@ -587,7 +601,7 @@ namespace bridge
                 return;
             }
             for (const auto& [k, value] : data->object)
-                if (!ValidLobbyKey(k) || k == KeyVersion || k == KeyToken || k == KeyBridge ||
+                if (!ValidLobbyKey(k) || k == KeyVersion || k == KeyToken || k == KeyBridge || k == KeyBanned ||
                     !(value.type == json::Value::Type::Null || (value.type == json::Value::Type::String && value.string.size() <= MaxLobbyValue)))
                 {
                     Result(*id, false, "invalid", "Bad lobby data key or value: " + k.substr(0, 48));
@@ -656,6 +670,8 @@ namespace bridge
                 return;
             }
             m_banned.insert(*peer);
+            // In lobby data too: a new host keeps refusing the kicked member.
+            m_steam.MM_SetLobbyData(m_steam.mm, m_lobby, KeyBanned, FormatBanList({m_banned.begin(), m_banned.end()}).c_str());
             if (Conn* conn = FindConn(*peer))
             {
                 WireMessage kick{WireType::Kick};
@@ -958,6 +974,18 @@ namespace bridge
                 {
                     Result(*id, false, "invalid", "peer must be another member and rate 1..60.");
                     return;
+                }
+                // From a direct (friend) stream: close it, or the next spectate.stop
+                // would only look for the direct link and leave both running.
+                if (m_watchingDirect)
+                {
+                    CloseDirect(m_watching, "switched");
+                    if (m_watchingDirect) // the link was already gone
+                    {
+                        m_watching = 0;
+                        m_watchingDirect = false;
+                        ResetSpectator();
+                    }
                 }
                 if (m_watching && m_watching != *peer)
                 {
@@ -1349,10 +1377,23 @@ namespace bridge
                 m_steam.MM_SetLobbyData(m_steam.mm, m_lobby, KeyToken, Hex(m_token).c_str());
             }
             OpenListen();
+            // Members the previous host kicked stay refused.
+            if (const auto it = m_data.find(KeyBanned); it != m_data.end())
+                for (const auto banned : ParseBanList(it->second))
+                    if (banned != m_self) m_banned.insert(banned);
+            // Our own lobby spectate now routes through this host.
+            if (m_watching && !m_watchingDirect && m_watchRate > 0)
+            {
+                m_spectators[m_watching][m_self] = m_watchRate;
+                UpdateSpectateRoute(m_watching);
+            }
             m_log("this machine is the lobby host");
         }
         else
         {
+            // Routes kept as host are void now; the new host asks for our camera itself.
+            m_spectators.clear();
+            m_cameraRate = 0;
             CloseAllConns("host changed");
             EnsureListen(); // still listening when spectating is allowed
             m_nextConnect = Clock::now();
@@ -1588,6 +1629,8 @@ namespace bridge
                     again->lanes = m_steam.sockets->ConfigureConnectionLanes(again->handle, 2, priorities, weights) == 1;
                 }
                 again->nextPing = Clock::now();
+                // Someone already watches this member (host changed): ask for its camera.
+                if (m_spectators.count(peer)) UpdateSpectateRoute(peer);
                 Emit(json::Object().Int("v", ContractVersion).Str("ev", "p2p.connected").Str("peer", Id(peer)).Bool("host", false).Done());
                 EmitLobby();
                 return;
@@ -1611,6 +1654,14 @@ namespace bridge
                 conn.lanes = m_steam.sockets->ConfigureConnectionLanes(conn.handle, 2, priorities, weights) == 1;
             }
             m_log("p2p connected: " + Redact(peer) + " (lobby host)");
+            // A lobby spectate outlives a host link drop: subscribe again on the new link.
+            if (m_watching && !m_watchingDirect && m_watchRate > 0)
+            {
+                WireMessage sub{WireType::SpectateSub};
+                sub.lobby = m_watching;
+                sub.rate = static_cast<std::uint8_t>(m_watchRate);
+                SendWire(conn, sub, true);
+            }
             Emit(json::Object().Int("v", ContractVersion).Str("ev", "p2p.connected").Str("peer", Id(peer)).Bool("host", conn.outgoing).Done());
             EmitLobby();
             return;

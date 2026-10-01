@@ -275,7 +275,7 @@
 /* Cosmetics */
 .mp-cos-setting{padding:6px 20px;margin-bottom:16px}
 .mp-cos-group{font-size:14px;font-weight:600;margin:6px 0 10px}
-.mp-port-cell.mp-cos-cell{width:25%}
+.mp-cos-cell{width:25%}
 .mp-cos-art{display:block;height:120px;background:#101916;text-align:center}
 .mp-cos-preview{display:block;width:160px;height:120px;margin:0 auto}
 .mp-cos.on{border-color:#2c6b52}

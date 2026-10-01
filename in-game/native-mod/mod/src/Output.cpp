@@ -479,8 +479,8 @@ namespace aimmod
             if (m_consumed.contains(name) || !entry.is_regular_file(itemError)) continue;
             const auto written = std::chrono::clock_cast<std::chrono::system_clock>(entry.last_write_time(itemError));
             if (itemError || written < since) continue;
-            const std::string narrow = entry.path().filename().string();
-            if (!IsChallengeStatsFile(narrow)) continue;
+            // Never path::string(): it throws for names outside the ANSI code page.
+            if (!IsChallengeStatsFile(std::wstring_view(name))) continue;
             std::string text;
             if (!ReadSmall(entry.path(), text, 256 * 1024)) continue;
             auto stats = ParseGameStats(text);
@@ -773,7 +773,8 @@ namespace aimmod
             std::lock_guard lock(m_mutex);
             m_clips = clips;
         }
-        if (!m_commandPrimed && now - m_lastCommandCheck >= 100 && !std::filesystem::exists(m_root / L"core-command.tsv")) m_commandPrimed = true;
+        if (std::error_code missing; !m_commandPrimed && now - m_lastCommandCheck >= 100 && !std::filesystem::exists(m_root / L"core-command.tsv", missing))
+            m_commandPrimed = true;
         ReadCommand(now);
         {
             std::deque<std::string> results;
@@ -799,6 +800,7 @@ namespace aimmod
 
     void Output::Run()
     {
+        std::string lastError;
         for (;;)
         {
             std::deque<Job> jobs;
@@ -815,14 +817,41 @@ namespace aimmod
             std::deque<Job> retry;
             for (Job& job : jobs)
             {
-                if (!Execute(job) && ++job.attempts < 50) retry.push_back(std::move(job));
+                // An exception must never leave this thread: it would terminate the game.
+                bool done = false;
+                try
+                {
+                    done = Execute(job);
+                }
+                catch (const std::exception& e)
+                {
+                    Warn(std::string("writer: job failed: ") + e.what());
+                    done = true;
+                }
+                catch (...)
+                {
+                    done = true;
+                }
+                if (!done && ++job.attempts < 50) retry.push_back(std::move(job));
             }
             if (!retry.empty())
             {
                 std::lock_guard lock(m_mutex);
                 for (auto it = retry.rbegin(); it != retry.rend(); ++it) m_jobs.push_front(std::move(*it));
             }
-            Periodic(false);
+            try
+            {
+                Periodic(false);
+            }
+            catch (const std::exception& e)
+            {
+                // Logged once per distinct error: the pass repeats every few ms.
+                if (lastError != e.what()) Warn(std::string("writer: periodic pass failed: ") + e.what());
+                lastError = e.what();
+            }
+            catch (...)
+            {
+            }
             if (stop)
             {
                 std::lock_guard lock(m_mutex);

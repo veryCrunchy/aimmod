@@ -476,9 +476,22 @@ namespace aimmod
         if (index < 4 || index % 25 == 0) Log("match seed: event " + std::to_string(index) + " (" + why + ")");
     }
 
+    void GameControl::StopSeeding(const char* why)
+    {
+        if (!m_seeding) return;
+        m_seeding.reset();
+        // The game's RNG must not stay on a predictable sequence.
+        LARGE_INTEGER counter{};
+        QueryPerformanceCounter(&counter);
+        std::srand(static_cast<unsigned>(counter.QuadPart ^ (counter.QuadPart >> 32) ^ GetCurrentThreadId()));
+        Log(std::string("match seed: off (") + why + ")");
+    }
+
     void GameControl::OnAttemptStarted(const std::string& scenario)
     {
         if (!m_seeding || !m_seeding->active || scenario != m_seeding->scenario) return;
+        // Attempts are challenges: a freeplay seed never reaches a ranked one.
+        if (!SeedAllowed(scenario, true)) return StopSeeding("challenge started in a seeded freeplay scenario");
         m_seeding->events = 0;
         Reseed(0, "attempt start");
     }
@@ -486,6 +499,7 @@ namespace aimmod
     void GameControl::OnSpawnEvent()
     {
         if (!m_seeding || !m_seeding->active || m_lastScenario != m_seeding->scenario) return;
+        if (!SeedAllowed(m_seeding->scenario, m_inChallenge)) return StopSeeding("challenge in a seeded freeplay scenario");
         // Kill credit and character death can both fire for one death: one event per frame.
         if (m_seeding->lastEventTick == m_tick) return;
         m_seeding->lastEventTick = m_tick;
@@ -654,11 +668,9 @@ namespace aimmod
     void GameControl::Tick(double now, const std::string& current, bool inChallenge, bool loading)
     {
         ++m_tick;
-        if (m_seeding && m_seeding->active && current != m_seeding->scenario)
-        {
-            Log("match seed: off (scenario changed)");
-            m_seeding.reset();
-        }
+        m_inChallenge = inChallenge;
+        if (m_seeding && m_seeding->active && current != m_seeding->scenario) StopSeeding("scenario changed");
+        if (m_seeding && !SeedAllowed(m_seeding->scenario, inChallenge)) StopSeeding("challenge in a seeded freeplay scenario");
         if (auto request = m_output.TakeCommand())
         {
             if (auto* error = std::get_if<CommandError>(&*request)) Answer(error->sequence, "error", error->code, error->message);

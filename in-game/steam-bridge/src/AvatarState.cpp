@@ -3,6 +3,7 @@
 #include "Codec.hpp"
 #include "PoseFile.hpp"
 
+#include <charconv>
 #include <cmath>
 #include <cstdlib>
 #include <vector>
@@ -26,13 +27,11 @@ namespace bridge::avatarstate
         }
         std::optional<std::int64_t> Integer(std::string_view s)
         {
-            if (s.empty() || s.size() > 19) return std::nullopt;
+            if (s.empty() || s.size() > 19 || s.front() < '0' || s.front() > '9') return std::nullopt;
+            // from_chars refuses values past INT64_MAX (19 digits can overflow).
             std::int64_t v = 0;
-            for (const char c : s)
-            {
-                if (c < '0' || c > '9') return std::nullopt;
-                v = v * 10 + (c - '0');
-            }
+            const auto r = std::from_chars(s.data(), s.data() + s.size(), v);
+            if (r.ec != std::errc() || r.ptr != s.data() + s.size()) return std::nullopt;
             return v;
         }
         std::optional<double> Number(std::string_view s)

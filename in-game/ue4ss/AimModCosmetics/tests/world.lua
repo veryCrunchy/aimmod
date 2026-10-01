@@ -91,6 +91,7 @@ function W.build()
     })
 
     local self = {
+        midNames = {},
         all = {MetaCharacter = {player, bot, avatar, paid}, MetaPlayerController = {pc}},
         player = player, bot = bot, avatar = avatar, paid = paid,
         playerMesh = playerMesh, botMesh = botMesh, avatarMesh = avatarMesh, paidMesh = paidMesh,
@@ -114,7 +115,10 @@ function W.build()
     self.all.ScenarioManager = {manager}
 
     local materialLib = mock.object({path = '/Script/Engine.KismetMaterialLibrary'}, '/Script/Engine.Default__KismetMaterialLibrary', {}, {
-        CreateDynamicMaterialInstance = function(_, _, parent) return makeMid(parent) end,
+        CreateDynamicMaterialInstance = function(_, owner, parent, name)
+            self.midNames[#self.midNames + 1] = {owner = owner, name = name}
+            return makeMid(parent)
+        end,
     })
 
     local function getter(field)
