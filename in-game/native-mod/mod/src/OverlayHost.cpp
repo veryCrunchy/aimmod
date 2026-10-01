@@ -9,6 +9,8 @@
 #include <Unreal/UObject.hpp>
 #include <Unreal/UObjectGlobals.hpp>
 
+#include <Windows.h>
+
 #include <cstring>
 
 namespace aimmod
@@ -116,7 +118,15 @@ namespace aimmod
             if (lua) Warn("overlay: AimModNativeUI's Lua notice layer is on screen too (lua-notice.tsv is fresh); two layers will show and fight over input");
             else Log("overlay: the Lua notice layer is off; only AimModCore's shows");
         }
+        // KovaaK's window in front, and a real Escape press (for the pause menu it opens).
+        HWND foreground = GetForegroundWindow();
+        DWORD owner = 0;
+        if (foreground) GetWindowThreadProcessId(foreground, &owner);
+        const bool focused = foreground && owner == GetCurrentProcessId();
+        if (focused && (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0) m_escapeAt = now;
         overlay::Frame frame;
+        frame.focused = focused;
+        frame.escapeRecent = now - m_escapeAt < 0.6;
         frame.notice = in.notice;
         frame.panelOpen = in.panelOpen;
         frame.replay = replayActive;
@@ -219,10 +229,8 @@ namespace aimmod
         Call(view, STR("/Script/UMG.UserWidget:SetAlignmentInViewport"), [&](const std::wstring&, FProperty* p, std::uint8_t* v) {
             WriteFloats(v, p, {full ? 0.0f : 0.5f, 0.0f});
         });
-        Call(view, STR("/Script/UMG.UserWidget:SetPositionInViewport"), [](const std::wstring& n, FProperty* p, std::uint8_t* v) {
-            if (n == STR("Position")) WriteFloats(v, p, {0.0f, 0.0f});
-            else if (n == STR("bRemoveDPIScale")) WriteBoolParam(v, p, false);
-        });
+        // No SetPositionInViewport: in UE 4.26 it also resets the anchors to the top-left corner
+        // (which shrank the full-screen layout to the view's desired size). The position is (0, 0).
         Call(view, STR("/Script/UMG.UserWidget:SetDesiredSizeInViewport"), [&](const std::wstring&, FProperty* p, std::uint8_t* v) {
             if (full) WriteFloats(v, p, {0.0f, 0.0f});
             else WriteFloats(v, p, {ToastWidth, ToastHeight});
@@ -254,6 +262,12 @@ namespace aimmod
         if (plan.releaseMenuInput) ReleaseMenuInput(player);
         if (plan.forgetMenuInput) BlockFire(player, false);
         if (plan.holdMenuInput) Reassert(player, now);
+        if (plan.forwardPointer) ForwardPointer(now);
+        else if (m_plan.forwardPointer)
+        {
+            m_pointerX = m_pointerY = -1;
+            m_pointerDown = false;
+        }
         if (plan.focusViewport && now >= m_nextFocus)
         {
             m_nextFocus = now + FocusInterval;
@@ -356,6 +370,55 @@ namespace aimmod
         {
             m_nextInput = now + InputInterval;
             UiOnly(player);
+        }
+    }
+
+    // Pointer fallback (the buy menu works even if Gameface delivers no mouse events): the cursor
+    // in the game window's client pixels and the left button, sent to the page as
+    // AimModPointer(x, y, down, width, height) when they change. The page finds the button under
+    // it and presses it (ui/notify.js); it ignores this while Gameface's own clicks arrive.
+    void OverlayHost::ForwardPointer(double now)
+    {
+        if (now < m_nextPointer) return;
+        m_nextPointer = now + 1.0 / 120.0;
+        UObject* widget = m_widget.Get();
+        HWND window = GetForegroundWindow();
+        DWORD owner = 0;
+        if (window) GetWindowThreadProcessId(window, &owner);
+        if (!widget || !window || owner != GetCurrentProcessId()) return;
+        POINT at{};
+        RECT client{};
+        if (!GetCursorPos(&at) || !ScreenToClient(window, &at) || !GetClientRect(window, &client)) return;
+        const long width = client.right - client.left, height = client.bottom - client.top;
+        if (width <= 0 || height <= 0) return;
+        const bool down = (GetAsyncKeyState(GetSystemMetrics(SM_SWAPBUTTON) ? VK_RBUTTON : VK_LBUTTON) & 0x8000) != 0;
+        if (at.x == m_pointerX && at.y == m_pointerY && down == m_pointerDown) return;
+        const bool pressed = down && !m_pointerDown;
+        m_pointerX = at.x;
+        m_pointerY = at.y;
+        m_pointerDown = down;
+        UObject* event = nullptr;
+        if (!Call(widget, STR("/Script/CohtmlPlugin.CohtmlWidget:CreateJSEvent"), {}, &event) || !Alive(event)) return;
+        auto addFloat = [event](float number) {
+            Call(event, STR("/Script/CohtmlPlugin.CohtmlJSEvent:AddFloat"), [number](const std::wstring&, FProperty*, std::uint8_t* v) { std::memcpy(v, &number, sizeof number); });
+        };
+        addFloat(static_cast<float>(at.x));
+        addFloat(static_cast<float>(at.y));
+        Call(event, STR("/Script/CohtmlPlugin.CohtmlJSEvent:AddBool"), [down](const std::wstring&, FProperty* p, std::uint8_t* v) { WriteBoolParam(v, p, down); });
+        addFloat(static_cast<float>(width));
+        addFloat(static_cast<float>(height));
+        const bool sent = Call(widget, STR("/Script/CohtmlPlugin.CohtmlWidget:TriggerJSEvent"), [event](const std::wstring& n, FProperty*, std::uint8_t* v) {
+            if (n == STR("Name")) WriteFString(v, L"AimModPointer");
+            else if (n == STR("EventData")) WriteObject(v, event);
+        });
+        if (sent) ++m_pointerMoves;
+        if (sent && pressed) ++m_pointerPresses;
+        if (pressed || now >= m_nextPointerLog)
+        {
+            m_nextPointerLog = now + 5.0;
+            Log("overlay: pointer fallback: " + std::string(sent ? "sent" : "FAILED to send") + " AimModPointer (" + std::to_string(m_pointerMoves) + " updates, " +
+                std::to_string(m_pointerPresses) + " presses so far) at " + std::to_string(at.x) + "," + std::to_string(at.y) + " of " + std::to_string(width) + "x" +
+                std::to_string(height) + (down ? ", button down" : ""));
         }
     }
 

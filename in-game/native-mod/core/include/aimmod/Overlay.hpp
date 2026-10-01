@@ -54,6 +54,8 @@ namespace aimmod::overlay
         bool pauseMenuVisible{}; // KovaaK's own menus are up (they own input and the cursor)
         bool gameCursor{};       // the game shows its cursor anyway
         bool haveView{};         // the Gameface view exists
+        bool focused{true};      // KovaaK's window is in front (alt-tab: it isn't)
+        bool escapeRecent{};     // Escape went down in the last half second (with the window in front)
     };
     // What the host does.
     struct Plan
@@ -67,6 +69,8 @@ namespace aimmod::overlay
         bool forgetMenuInput{}; // this frame: stop holding without touching input (KovaaK's menu or the panel took over)
         bool hidePauseMenu{};   // KovaaK's pause menu opened by the Escape that closed (or was over) the buy menu
         bool focusViewport{};   // scoreboard held in game: keyboard focus back to the game viewport
+        bool forwardPointer{};  // the buy menu holds input: AimModCore forwards the mouse to the page too
+        bool focused{true};
         Visibility viewVisibility{Visibility::Collapsed};
         Visibility widgetVisibility{Visibility::HitTestInvisible};
         std::int32_t zOrder{};
@@ -82,6 +86,7 @@ namespace aimmod::overlay
     private:
         bool m_holding{};
         bool m_pauseWasVisible{};
+        bool m_suspended{}; // the window lost focus while the buy menu held input
     };
 
     // One "[AimModCore] overlay: ..." line for a change of plan (empty when nothing changed that matters).

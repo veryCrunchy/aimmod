@@ -141,26 +141,48 @@ namespace aimmod::overlay
         const Notice n = f.notice.value_or(Notice{});
         p.visible = f.notice.has_value() && n.content && !blocked;
         p.full = n.full;
-        // Escape over the buy menu: KovaaK's pause menu opened while the buy menu held input, or
-        // right after Escape closed it (swallowMenu). It closes again and the game keeps its input.
+        p.focused = f.focused;
+        // Escape over the buy menu: KovaaK's pause menu opened by an Escape press (window in front)
+        // while the buy menu held input, or right after Escape closed it (swallowMenu). It closes
+        // again and the game keeps its input. A menu KovaaK's opened for anything else (focus
+        // loss, its own keys, the player later) is never touched.
         bool pause = f.pauseMenuVisible;
-        if (f.pauseMenuVisible && !m_pauseWasVisible && !blocked && (m_holding || n.swallowMenu))
+        if (f.pauseMenuVisible && !m_pauseWasVisible && f.focused && f.escapeRecent && !blocked && (m_holding || n.swallowMenu))
         {
             p.hidePauseMenu = true;
             pause = false;
         }
         m_pauseWasVisible = pause;
-        const bool menu = p.visible && n.cursor && !pause;
+        // The buy menu holds input only while KovaaK's is in front: alt-tab lets go at once.
+        const bool menu = p.visible && n.cursor && !pause && f.focused;
         p.holdMenuInput = menu;
-        if (menu && !m_holding) p.enterMenuInput = true;
+        p.forwardPointer = menu && f.haveView;
+        if (menu && !m_holding)
+        {
+            p.enterMenuInput = true;
+            m_suspended = false;
+        }
         if (!menu && m_holding)
         {
-            // KovaaK's menu or the AimMod panel took over: leave their input alone.
+            // KovaaK's menu or the AimMod panel took over: leave their input alone. Focus loss: let
+            // go without touching input (KovaaK's may open its menu now); settled when focus returns.
             if (pause || blocked) p.forgetMenuInput = true;
+            else if (!f.focused)
+            {
+                p.forgetMenuInput = true;
+                m_suspended = true;
+            }
             else p.releaseMenuInput = true;
         }
         // The pause menu Escape opened is gone again and the buy menu is closed: the game gets its input back.
         if (p.hidePauseMenu && !menu) p.releaseMenuInput = true;
+        // Back from alt-tab with the buy menu closed and no KovaaK's menu up: the game gets its input back.
+        if (m_suspended && !menu && f.focused && !pause && !blocked)
+        {
+            p.releaseMenuInput = true;
+            m_suspended = false;
+        }
+        if (pause || blocked) m_suspended = false; // KovaaK's menu or the panel owns input now
         m_holding = menu;
         p.clickable = p.visible && f.haveView && n.interactive && (pause || menu || f.gameCursor);
         // The scoreboard is display-only: when Tab moved keyboard focus off the game, it goes back.
@@ -187,6 +209,7 @@ namespace aimmod::overlay
         if (b.releaseMenuInput) add("input back to the game: game-only, cursor off, fire unblocked");
         if (b.forgetMenuInput) add("buy menu input handed to KovaaK's menu or the AimMod panel (input left as they set it)");
         if (b.hidePauseMenu) add("closed KovaaK's pause menu opened by Escape over the buy menu");
+        if (a.focused != b.focused) add(b.focused ? "KovaaK's window is in front again" : "KovaaK's window lost focus (alt-tab): held input let go");
         if (a.focusViewport != b.focusViewport) add(b.focusViewport ? "scoreboard held: keeping keyboard focus on the game viewport" : "scoreboard released");
         return out;
     }
