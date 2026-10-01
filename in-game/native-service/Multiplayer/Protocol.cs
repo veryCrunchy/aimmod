@@ -31,9 +31,10 @@ static class Protocol
         new("bye", true, "any", "{reason}: leaving, or the host closing the lobby"),
         new("content.request", true, "client>host", "{}: ask for the lobby content manifest"),
         new("content.manifest", true, "host>client", "{key, files:[{kind, name, size, hash, packed}], workshop}: what the host can send"),
-        new("content.get", true, "client>host", "{hash, offset, length}: request part of a packed file (resumable)"),
+        new("content.get", true, "client>host", "{hash, offset, length, transfer?, chunk?}: request part of a packed file (resumable); with transfer, the rest arrives on the bulk lane"),
         new("content.chunk", true, "host>client", "{hash, offset, total, data}: up to 8 KiB of a Brotli-packed file, base64"),
         new("content.error", true, "host>client", "{hash, code}: not-offered, unavailable, invalid or none"),
+        new("content.done", true, "client>host", "{transfer}: the receiver has the whole file; the host ends the bulk transfer as complete"),
     ];
     public static bool Reliable(string type) => Types.First(t => t.Type == type).Reliable;
     public static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, DefaultIgnoreCondition = JsonIgnoreCondition.Never, MaxDepth = 16 };
@@ -118,13 +119,21 @@ interface IMultiplayerTransport : IDisposable
     // Download a Steam Workshop item through the bridge (ugc.*). Progress arrives as
     // Workshop events. False when the bridge can't, so the host transfer is used instead.
     bool WorkshopDownload(string item);
+    // Bulk file lane (bridge xfer.*): low-priority, in-order chunks of BulkChunkBytes, with a
+    // small send window. BulkChunkBytes is 0 when the lane is missing; content then uses frames.
+    int BulkChunkBytes { get; }
+    BulkSend BulkChunk(string peer, int transfer, int index, byte[] data);
+    void BulkCancel(string peer, int transfer, string reason);
 }
 // Host is true on Connected when that peer is our host. Reason explains a
 // Disconnected (for the lobby itself: left, kicked, closed or shutdown) or an Error.
-sealed record TransportEvent(string Peer, string Kind, byte[]? Frame = null, IncomingInvite? Invite = null, bool Host = false, string? Reason = null, WorkshopProgress? Workshop = null)
+// Bulk events carry Transfer and Index (BulkData: the chunk in Frame; BulkEnd: Reason).
+sealed record TransportEvent(string Peer, string Kind, byte[]? Frame = null, IncomingInvite? Invite = null, bool Host = false, string? Reason = null, WorkshopProgress? Workshop = null, int Transfer = 0, int Index = 0)
 {
-    public const string Connected = "connected", Disconnected = "disconnected", Left = "left", Message = "message", InviteReceived = "invite", Error = "error", WorkshopUpdate = "workshop";
+    public const string Connected = "connected", Disconnected = "disconnected", Left = "left", Message = "message", InviteReceived = "invite", Error = "error", WorkshopUpdate = "workshop", BulkData = "bulk-chunk", BulkAck = "bulk-ack", BulkEnd = "bulk-end";
 }
+// Sent, the window is full (try again after an ack), or the lane is unavailable.
+enum BulkSend { Sent, WindowFull, Unavailable }
 // Steam Workshop download state from the bridge: queued, downloading, installed or failed.
 sealed record WorkshopProgress(string Item, string State, long Done, long Total);
 // An invite or join request from Steam. Token is opaque (the connect string
@@ -159,6 +168,9 @@ sealed class OfflineTransport : IMultiplayerTransport
     public IReadOnlyList<FriendEntry> Friends() => [];
     public PeerLink? Link(string peer) => null;
     public bool WorkshopDownload(string item) => false;
+    public int BulkChunkBytes => 0;
+    public BulkSend BulkChunk(string peer, int transfer, int index, byte[] data) => BulkSend.Unavailable;
+    public void BulkCancel(string peer, int transfer, string reason) { }
     public void Dispose() { }
 }
 

@@ -89,6 +89,20 @@ test('countdown, live scoreboard and final results render from the match',()=>{
   assert.ok(s.text().includes('Synthetic Two wins'));assert.ok(s.text().includes('1 of 2 want a rematch.'));assert.ok(s.text().includes('You finished 2nd of 2.'));
   s.button('Rematch').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'rematch'});
 });
+test('a missing player can download the content with progress, cancel and retry',()=>{
+  const s=setup();s.api.enter(s.container);
+  const files=[{kind:'scenario',name:'Synthetic Scenario.sce',size:40000,done:0,state:'waiting'},{kind:'map',name:'synthetic_port.json',size:5000000,done:0,state:'waiting'}];
+  const guest=d=>lobby({self:'p2',isHost:false,content:{scenario:'missing',map:'missing',profiles:'none'},download:d});
+  s.requests[0].finish(200,view({lobby:guest({view:{state:'ready',source:'host',total:5040000,packed:1200000,done:0,speed:0,files},workshop:null,workshopProgress:null,conflicts:[]})}));
+  assert.ok(s.text().includes('From the host'));assert.ok(s.text().includes('synthetic_port.json'));
+  s.button('Download (4.8 MB)').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'download'});
+  s.api.leave();s.api.enter(s.container);s.requests[s.requests.length-1].finish(200,view({lobby:guest({view:{state:'downloading',source:'host',total:5040000,packed:1200000,done:600000,speed:300000,files},conflicts:[]})}));
+  assert.ok(s.text().includes('0.6 MB of 1.1 MB · 0.3 MB/s'));s.button('Cancel').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'download-cancel'});
+  s.api.leave();s.api.enter(s.container);s.requests[s.requests.length-1].finish(200,view({lobby:guest({view:{state:'error',source:'host',error:'“synthetic_port.json” didn’t match the lobby’s copy, so it was discarded.',code:'hash',total:5040000,packed:1200000,done:0,speed:0,files},conflicts:[]})}));
+  assert.ok(s.text().includes('didn’t match'));s.button('Retry').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'download-retry'});
+  s.api.leave();s.api.enter(s.container);s.requests[s.requests.length-1].finish(200,view({lobby:guest({view:{state:'ready',source:'workshop',total:40000,packed:20000,done:0,speed:0,files},conflicts:['Synthetic Scenario.sce']})}));
+  assert.ok(s.text().includes('Steam Workshop'));assert.ok(s.text().includes('won’t replace your file'));assert.ok(!s.buttons().some(b=>/^Download/.test(b.textContent)),'no download over a conflicting file');
+});
 test('leaving stops polling and ignores late answers',()=>{
   const s=setup();s.api.enter(s.container);s.api.leave();s.requests[0].finish(200,view());assert.equal(s.buttons().length,0);
 });

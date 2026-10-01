@@ -64,7 +64,8 @@ sealed class MultiplayerService : IDisposable
         server = new ContentServer(library, this.clock);
         if (output is not null && library.Root is { } root) download = new ContentDownload(root, Path.Combine(output, "downloads"), this.clock);
         if (simulation) Simulation = new MultiplayerSimulation(this.clock, library, completedRuns, seed);
-        if (autoTick) timer = new Timer(_ => { try { Tick(); } catch (Exception ex) when (ex is IOException or InvalidOperationException or JsonException or UnauthorizedAccessException) { } }, null, 100, 100);
+        // A failure in one tick must never take the whole service down: log it and keep going.
+        if (autoTick) timer = new Timer(_ => { try { Tick(); } catch (Exception ex) { Console.Error.WriteLine("Multiplayer tick failed: " + ex.GetType().Name + ": " + ex.Message); } }, null, 100, 100);
     }
 
     // The simulation is a developer tool: on in Debug builds, and in Release only with
@@ -165,6 +166,11 @@ sealed class MultiplayerService : IDisposable
                     var op = Text("op") ?? "";
                     if (op is "invite" or "request" or "launch") { var made = Simulation.Control(null, op, null); TakeSimulatedInvites(); return made; }
                     if (core is null) return LobbyResult.Fail("no-lobby", "Create or join a lobby first.");
+                    if (op == "self-missing")
+                    {
+                        if (core.HostId == SelfId) return LobbyResult.Fail("host", "Join a simulated room first; the host always has the content.");
+                        simulatedMissing = true; download?.Reset(); ReportContent(force: true); return LobbyResult.Success;
+                    }
                     return Simulation.Control(core, op, Text("member"));
                 case "score" or "finish" or "content":
                     return LobbyResult.Fail("invalid", "That comes from your runs.");
@@ -260,13 +266,16 @@ sealed class MultiplayerService : IDisposable
         var now = clock();
         // Host side: serve queued chunks; a running match keeps most of the bandwidth.
         if (core is not null && !simulatedMissing)
-            server.Pump(lobby.Match is { Phase: MatchPhases.Live or MatchPhases.Countdown }, (peer, body) => Send(peer, "content.chunk", body));
+            server.Pump(lobby.Match is { Phase: MatchPhases.Live or MatchPhases.Countdown }, (peer, body) => Send(peer, "content.chunk", body), transport,
+                (peer, hash, code) => Send(peer, "content.error", new { hash, code }));
         if (lobby.HostId == SelfId && !simulatedMissing) return;
         var (scenario, map, profiles) = LocalContent(lobby.Settings);
         var missing = scenario is ContentStates.Missing or ContentStates.Mismatch || map is ContentStates.Missing or ContentStates.Mismatch || profiles is ContentStates.Missing or ContentStates.Mismatch;
         // Ask for the manifest as soon as something is missing, so the size can be shown.
         if (missing && download.State == "idle") { download.Asked(); manifestAskedAt = now; AskManifest(); }
         if (download.State == "manifest" && now - manifestAskedAt > 10_000) { manifestAskedAt = now; AskManifest(); }
+        download.BulkBytes = core is null && hostPeer is not null ? transport.BulkChunkBytes : 0;
+        if (hostPeer is not null) foreach (var finished in download.TakeCompleted()) Send(hostPeer, "content.done", new { transfer = finished });
         if (download.State == "downloading" && download.Next() is { } want)
         {
             if (core is not null && simulatedMissing)
@@ -275,6 +284,7 @@ sealed class MultiplayerService : IDisposable
                 server.RateIdle = 600 * 1024;
                 server.Request(SelfId, lobby.Settings, want.Hash, want.Offset, want.Length);
             }
+            else if (hostPeer is not null && want.Transfer > 0) Send(hostPeer, "content.get", new { hash = want.Hash, offset = want.Offset, length = want.Length, transfer = want.Transfer, chunk = want.Chunk });
             else if (hostPeer is not null) Send(hostPeer, "content.get", new { hash = want.Hash, offset = want.Offset, length = want.Length });
         }
         if (core is not null && simulatedMissing)
@@ -433,6 +443,14 @@ sealed class MultiplayerService : IDisposable
     {
         if (e.Kind == TransportEvent.InviteReceived) { if (e.Invite is not null) AddInvite(e.Invite); return; }
         if (e.Kind == TransportEvent.WorkshopUpdate) { WorkshopUpdate(e.Workshop); return; }
+        if (e.Kind == TransportEvent.BulkData) { if (core is null && e.Peer == hostPeer && e.Frame is not null) download?.Bulk(e.Transfer, e.Index, e.Frame); return; }
+        if (e.Kind == TransportEvent.BulkAck) return;
+        if (e.Kind == TransportEvent.BulkEnd)
+        {
+            if (core is not null) server.Ended(e.Peer, e.Transfer);
+            else if (e.Reason != "complete") download?.Ended(e.Transfer);
+            return;
+        }
         if (e.Kind == TransportEvent.Error)
         {
             if (joinPendingSince is not null) joinPendingSince = null;
@@ -514,10 +532,15 @@ sealed class MultiplayerService : IDisposable
                 try
                 {
                     var hash = m.Body.GetProperty("hash").GetString() ?? "";
-                    var problem = server.Request(peer, core!.Settings, hash, m.Body.GetProperty("offset").GetInt64(), m.Body.GetProperty("length").GetInt64());
+                    var transfer = m.Body.TryGetProperty("transfer", out var tr) && tr.TryGetInt32(out var tv) && transport.BulkChunkBytes > 0 ? tv : 0;
+                    var chunk = m.Body.TryGetProperty("chunk", out var ch) && ch.TryGetInt32(out var cv) ? Math.Min(cv, transport.BulkChunkBytes) : 0;
+                    var problem = server.Request(peer, core!.Settings, hash, m.Body.GetProperty("offset").GetInt64(), m.Body.GetProperty("length").GetInt64(), transfer, chunk);
                     if (problem is not null) Send(peer, "content.error", new { hash, code = problem });
                 }
                 catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or FormatException) { }
+                break;
+            case "content.done":
+                if (m.Body.TryGetProperty("transfer", out var dt) && dt.TryGetInt32(out var done)) { server.Ended(peer, done); transport.BulkCancel(peer, done, "complete"); }
                 break;
             case "bye":
                 server.Forget(peer);
@@ -584,6 +607,7 @@ sealed class MultiplayerService : IDisposable
     // snapshot, so the heir restores the authority and the rest connect to it.
     void HostLost()
     {
+        download?.HostGone();
         if (mirror is not { } last) { hostPeer = null; return; }
         // Steam picks the new lobby owner and every bridge follows it, so its choice wins.
         var hint = transport.HostHint;
@@ -839,7 +863,7 @@ sealed class MultiplayerService : IDisposable
             object? lobbyView = null;
             if (lobby is not null)
             {
-                var (scenario, map, profiles) = library.Check(lobby.Settings);
+                var (scenario, map, profiles) = LocalContent(lobby.Settings);
                 var generated = MatchScenario.Needed(lobby.Settings) && lobby.Settings.Scenario is not null;
                 lobbyView = new
                 {

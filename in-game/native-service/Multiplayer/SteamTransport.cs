@@ -30,6 +30,8 @@ sealed class SteamTransport : IMultiplayerTransport
     bool isHost;
     int nextId = 1, createId = -1, joinId = -1;
     readonly Dictionary<int, string> workshopIds = new();
+    readonly Dictionary<(string Peer, int Transfer), int> outstanding = new();
+    bool ugc; int bulkBytes, bulkWindow = 4;
     IReadOnlyList<FriendEntry> friends = [];
     long friendsAt;
     string? lastData, lastStatus; bool? lastJoinable;
@@ -88,7 +90,7 @@ sealed class SteamTransport : IMultiplayerTransport
                 foreach (var peer in members.Where(m => m.Value.Connected && m.Key != self).Select(m => m.Key)) events.Enqueue(new TransportEvent(peer, TransportEvent.Disconnected, Reason: "bridge"));
                 if (!isHost && owner is not null && owner != self) events.Enqueue(new TransportEvent(owner, TransportEvent.Disconnected, Reason: "shutdown"));
             }
-            ready = false; creating = false; lobby = null; owner = null; isHost = false; members.Clear(); rtt.Clear();
+            ready = false; creating = false; lobby = null; owner = null; isHost = false; members.Clear(); rtt.Clear(); outstanding.Clear();
             lastData = null; lastStatus = null; lastJoinable = null;
         }
     }
@@ -133,6 +135,11 @@ sealed class SteamTransport : IMultiplayerTransport
                     if (Int(e, "contract") != 1) { events.Enqueue(new TransportEvent("", TransportEvent.Error, Reason: "The Steam bridge speaks a different version. Update AimMod.")); return; }
                     if (e.TryGetProperty("self", out var me)) { self = Str(me, "peer"); selfName = Str(me, "name"); }
                     ready = Bool(e, "steam") && self is not null;
+                    // Contract additions: feature list, bulk chunk size and send window.
+                    var features = e.TryGetProperty("features", out var fl) && fl.ValueKind == JsonValueKind.Array ? fl.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!).ToHashSet() : [];
+                    ugc = features.Contains("ugc");
+                    bulkBytes = features.Contains("xfer") ? Math.Clamp(Int(e, "maxChunk") ?? 0, 0, 32768) : 0;
+                    bulkWindow = Math.Clamp(Int(e, "xferWindow") ?? 4, 1, 64);
                     break;
                 case "result":
                     var id = Int(e, "id");
@@ -207,10 +214,37 @@ sealed class SteamTransport : IMultiplayerTransport
                     // AimMod players first, then KovaaK's players, then everyone else online.
                     friends = items.OrderBy(f => f.Status switch { "aimmod-lobby" => 0, "aimmod" => 1, "kovaaks" => 2, "online" => 3, _ => 4 }).ThenBy(f => f.Name, StringComparer.OrdinalIgnoreCase).Take(200).ToArray();
                     break;
-                case "ugc.progress" or "ugc.state":
+                case "ugc.progress" or "ugc.state" or "ugc.installed" or "ugc.error":
                     if (Str(e, "item") is { } item)
-                        events.Enqueue(new TransportEvent("", TransportEvent.WorkshopUpdate, Workshop: new WorkshopProgress(item, Str(e, "state") ?? "downloading",
+                    {
+                        var ev = evProperty.GetString();
+                        var ugcState = ev == "ugc.installed" ? "installed" : ev == "ugc.error" ? "failed" : ev == "ugc.progress" ? "downloading" : Str(e, "state") ?? "queued";
+                        events.Enqueue(new TransportEvent("", TransportEvent.WorkshopUpdate, Reason: Str(e, "message"), Workshop: new WorkshopProgress(item, ugcState,
                             e.TryGetProperty("downloaded", out var d) && d.TryGetInt64(out var dn) ? dn : 0, e.TryGetProperty("total", out var t) && t.TryGetInt64(out var tn) ? tn : 0)));
+                    }
+                    break;
+                case "xfer.chunk":
+                    if (Str(e, "peer") is { } xpeer && Int(e, "transfer") is { } xid && Int(e, "index") is { } xindex && Str(e, "data") is { } xdata)
+                    {
+                        try { events.Enqueue(new TransportEvent(xpeer, TransportEvent.BulkData, Convert.FromBase64String(xdata), Transfer: xid, Index: xindex)); }
+                        catch (FormatException) { }
+                    }
+                    break;
+                case "xfer.ack":
+                    if (Str(e, "peer") is { } apeer && Int(e, "transfer") is { } aid)
+                    {
+                        var k = (apeer, aid);
+                        var credit = Int(e, "credit");
+                        outstanding[k] = credit is { } c ? Math.Max(0, bulkWindow - c) : Math.Max(0, outstanding.GetValueOrDefault(k) - 1);
+                        events.Enqueue(new TransportEvent(apeer, TransportEvent.BulkAck, Transfer: aid, Index: Int(e, "index") ?? 0));
+                    }
+                    break;
+                case "xfer.end":
+                    if (Str(e, "peer") is { } epeer && Int(e, "transfer") is { } eid)
+                    {
+                        outstanding.Remove((epeer, eid));
+                        events.Enqueue(new TransportEvent(epeer, TransportEvent.BulkEnd, Reason: Str(e, "reason"), Transfer: eid));
+                    }
                     break;
                 case "error":
                     var code = Str(e, "code");
@@ -292,12 +326,13 @@ sealed class SteamTransport : IMultiplayerTransport
         return id >= 0;
     }
     public void DismissJoin() { if (Available) Command("join.dismiss", null); }
-    // Proposed bridge commands (not in contract v1 yet): ugc.download {item} answered by
-    // ugc.progress {item, state, downloaded, total}. An unknown-command result falls back to the host.
+    // Contract additions: ugc.download {item, highPriority}, answered by ugc.progress,
+    // ugc.installed or ugc.error. A failed result falls back to the host transfer.
     public bool WorkshopDownload(string item)
     {
-        if (!Available || item.Length is < 1 or > 20 || !item.All(char.IsAsciiDigit)) return false;
-        var id = Command("ugc.download", new JsonObject { ["item"] = item }, withId: true);
+        bool can; lock (gate) can = ready && ugc;
+        if (!can || item.Length is < 1 or > 20 || !item.All(char.IsAsciiDigit)) return false;
+        var id = Command("ugc.download", new JsonObject { ["item"] = item, ["highPriority"] = true }, withId: true);
         lock (gate) { if (id >= 0) workshopIds[id] = item; }
         return id >= 0;
     }
@@ -311,6 +346,24 @@ sealed class SteamTransport : IMultiplayerTransport
         Command("p2p.send", new JsonObject { ["peer"] = peer, ["reliable"] = reliable, ["data"] = Convert.ToBase64String(frame) });
     }
     public void Close(string peer) { if (Steam(peer)) Command("p2p.close", new JsonObject { ["peer"] = peer }); }
+
+    // Bulk lane (xfer.*): the bridge allows bulkWindow unacknowledged chunks per transfer.
+    public int BulkChunkBytes { get { lock (gate) return ready ? bulkBytes : 0; } }
+    public BulkSend BulkChunk(string peer, int transfer, int index, byte[] data)
+    {
+        lock (gate)
+        {
+            if (!ready || bulkBytes == 0 || !Steam(peer) || transfer < 1 || data.Length is 0 || data.Length > bulkBytes) return BulkSend.Unavailable;
+            if (outstanding.GetValueOrDefault((peer, transfer)) >= bulkWindow) return BulkSend.WindowFull;
+            outstanding[(peer, transfer)] = outstanding.GetValueOrDefault((peer, transfer)) + 1;
+        }
+        return Command("xfer.chunk", new JsonObject { ["peer"] = peer, ["transfer"] = transfer, ["index"] = index, ["data"] = Convert.ToBase64String(data) }) >= 0 ? BulkSend.Sent : BulkSend.Unavailable;
+    }
+    public void BulkCancel(string peer, int transfer, string reason)
+    {
+        lock (gate) outstanding.Remove((peer, transfer));
+        if (Steam(peer) && transfer > 0) Command("xfer.cancel", new JsonObject { ["peer"] = peer, ["transfer"] = transfer, ["reason"] = reason is "complete" or "error" ? reason : "cancel" });
+    }
 
     public bool InviteOverlay(LobbySnapshot lobbySnapshot)
     {

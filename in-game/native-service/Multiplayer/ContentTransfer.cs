@@ -74,7 +74,8 @@ static class ContentRules
 // Host side: answers manifest and chunk requests from lobby members.
 sealed class ContentServer(ContentLibrary library, Func<long> clock)
 {
-    sealed record Pending(string Peer, string Hash, long Offset, long End);
+    // Transfer > 0 uses the bulk lane (chunks numbered from 0); 0 uses content.chunk frames.
+    sealed record Pending(string Peer, string Hash, long Offset, long End, int Transfer = 0, int Index = 0, int Chunk = ContentRules.ChunkBytes);
     readonly Dictionary<string, (string Path, ContentFile File, byte[]? Packed)> files = new();
     readonly List<Pending> queue = [];
     string? key;
@@ -129,35 +130,53 @@ sealed class ContentServer(ContentLibrary library, Func<long> clock)
     }
 
     // A member asks for part of one file; only current lobby content is served.
-    public string? Request(string peer, LobbySettings settings, string hash, long offset, long length)
+    // With a transfer id the rest of the file goes over the bulk lane in chunk-sized pieces.
+    public string? Request(string peer, LobbySettings settings, string hash, long offset, long length, int transfer = 0, int chunk = 0)
     {
         if (Manifest(settings) is not { } m || m.Files.All(f => f.Hash != hash)) return "not-offered";
         var packed = PackedOf(hash);
         if (packed is null) return "unavailable";
-        if (offset < 0 || offset > packed.Length || length <= 0) return "invalid";
+        if (offset < 0 || offset > packed.Length || length <= 0 || transfer < 0) return "invalid";
         // A newer request for the same file replaces the older one (the receiver resumed).
         queue.RemoveAll(p => p.Peer == peer && p.Hash == hash);
-        queue.Add(new Pending(peer, hash, offset, Math.Min(packed.Length, offset + Math.Min(length, 512 * 1024))));
+        if (transfer > 0) queue.Add(new Pending(peer, hash, offset, packed.Length, transfer, 0, Math.Clamp(chunk, 1024, 32768)));
+        else queue.Add(new Pending(peer, hash, offset, Math.Min(packed.Length, offset + Math.Min(length, 512 * 1024))));
         return null;
     }
     public void Forget(string peer) => queue.RemoveAll(p => p.Peer == peer);
+    public void Ended(string peer, int transfer) => queue.RemoveAll(p => p.Peer == peer && p.Transfer == transfer);
 
     // Sends chunks within the rate budget; live matches get a small share so score frames keep flowing.
-    public void Pump(bool matchLive, Action<string, object> send)
+    public void Pump(bool matchLive, Action<string, object> send, IMultiplayerTransport? bulk = null, Action<string, string, string>? refuse = null)
     {
         var now = clock();
         var rate = matchLive ? RateLive : RateIdle;
-        budget = Math.Min(rate / 2.0, budget + (last == 0 ? rate / 10.0 : (now - last) * rate / 1000.0));
+        budget = Math.Min(Math.Max(rate / 2.0, 65536), budget + (last == 0 ? rate / 10.0 : (now - last) * rate / 1000.0));
         last = now;
-        while (budget >= ContentRules.ChunkBytes && queue.Count > 0)
+        var blocked = new HashSet<(string, int)>();
+        var i = 0;
+        while (budget >= ContentRules.ChunkBytes && i < queue.Count)
         {
-            var p = queue[0]; queue.RemoveAt(0);
+            var p = queue[i];
             var packed = PackedOf(p.Hash);
-            if (packed is null || p.Offset >= p.End) continue;
+            if (packed is null || p.Offset >= p.End) { queue.RemoveAt(i); continue; }
+            if (p.Transfer > 0)
+            {
+                if (bulk is null || blocked.Contains((p.Peer, p.Transfer))) { i++; continue; }
+                var size = (int)Math.Min(p.Chunk, p.End - p.Offset);
+                var data = new byte[size];
+                Array.Copy(packed, p.Offset, data, 0, size);
+                var result = bulk.BulkChunk(p.Peer, p.Transfer, p.Index, data);
+                if (result == BulkSend.WindowFull) { blocked.Add((p.Peer, p.Transfer)); i++; continue; }
+                if (result == BulkSend.Unavailable) { queue.RemoveAt(i); refuse?.Invoke(p.Peer, p.Hash, "unavailable"); continue; }
+                budget -= size;
+                queue[i] = p with { Offset = p.Offset + size, Index = p.Index + 1 };
+                continue;
+            }
             var length = (int)Math.Min(ContentRules.ChunkBytes, p.End - p.Offset);
             send(p.Peer, new { hash = p.Hash, offset = p.Offset, total = packed.Length, data = Convert.ToBase64String(packed, (int)p.Offset, length) });
             budget -= length;
-            if (p.Offset + length < p.End) queue.Insert(0, p with { Offset = p.Offset + length });
+            queue[i] = p with { Offset = p.Offset + length };
         }
     }
 }
@@ -235,31 +254,61 @@ sealed class ContentDownload(string root, string temp, Func<long> clock)
     static long FreeBytes(string path) { try { return new DriveInfo(Path.GetPathRoot(Path.GetFullPath(path))!).AvailableFreeSpace; } catch (Exception ex) when (ex is IOException or ArgumentException or UnauthorizedAccessException) { return -1; } }
     public static string Megabytes(long bytes) => (bytes / 1048576.0).ToString(bytes < 10 << 20 ? "0.0" : "0", System.Globalization.CultureInfo.InvariantCulture) + " MB";
 
-    // Next window request, or null. Re-requests from the current offset after a stall (resume).
-    public (string Hash, long Offset, long Length)? Next()
+    // Bulk lane chunk size when both sides have it (0: content.chunk frames).
+    public int BulkBytes { get; set; }
+    readonly Dictionary<int, (string Hash, long Start, int Chunk)> transfers = new();
+    readonly List<int> completed = [];
+    int nextTransfer = (int)(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() % 1_000_000) + 1;
+
+    // Next request, or null. Frames go in windows; the bulk lane asks for the rest of
+    // the file in one transfer. A stall re-requests from what is on disk (resume).
+    public (string Hash, long Offset, long Length, int Transfer, int Chunk)? Next()
     {
         if (State != "downloading" || Manifest is null) return null;
         var now = clock();
         var file = Manifest.Files.FirstOrDefault(f => received.GetValueOrDefault(f.Hash) < f.Packed);
         if (file is null) { Finish(); return null; }
         var have = received.GetValueOrDefault(file.Hash);
-        if (current != file.Hash) { current = file.Hash; requestedTo = have; }
         var stalled = now - lastChunkAt > 8000;
-        if (stalled) { requestedTo = have; lastChunkAt = now; }
-        if (requestedTo - have > Window / 2 && !stalled) return null;
+        if (current != file.Hash || stalled) { current = file.Hash; requestedTo = have; lastChunkAt = now; transfers.Clear(); }
+        if (BulkBytes > 0)
+        {
+            if (transfers.Count > 0) return null;
+            var id = nextTransfer++; if (nextTransfer > 2_000_000_000) nextTransfer = 1;
+            transfers[id] = (file.Hash, have, BulkBytes);
+            requestedTo = file.Packed;
+            return (file.Hash, have, file.Packed - have, id, BulkBytes);
+        }
+        if (requestedTo - have > Window / 2) return null;
         var from = Math.Max(have, requestedTo);
         if (from >= file.Packed) return null;
         requestedTo = Math.Min(file.Packed, from + Window);
-        return (file.Hash, from, requestedTo - from);
+        return (file.Hash, from, requestedTo - from, 0, 0);
     }
 
+    // Bulk chunks arrive in order; their offset follows from the transfer's start.
+    public void Bulk(int transfer, int index, byte[] data)
+    {
+        if (!transfers.TryGetValue(transfer, out var t) || index < 0) return;
+        var file = Manifest?.Files.FirstOrDefault(f => f.Hash == t.Hash);
+        if (file is null) return;
+        var before = received.GetValueOrDefault(t.Hash);
+        Chunk(t.Hash, t.Start + (long)index * t.Chunk, file.Packed, data, t.Chunk);
+        if (received.GetValueOrDefault(t.Hash) >= file.Packed && before < file.Packed) { transfers.Remove(transfer); completed.Add(transfer); }
+    }
+    // Transfers whose file is complete; the host closes them with reason complete.
+    public IReadOnlyList<int> TakeCompleted() { var list = completed.ToArray(); completed.Clear(); return list; }
+    // The bridge ended a transfer early: resume from disk on the next request.
+    public void Ended(int transfer) { if (transfers.Remove(transfer)) lastChunkAt = 0; }
+
     // A chunk from the host: only the expected file at the expected offset is written.
-    public void Chunk(string hash, long offset, long total, byte[] data)
+    public void Chunk(string hash, long offset, long total, byte[] data, int limit = ContentRules.ChunkBytes)
     {
         if (State != "downloading" || Manifest?.Files.FirstOrDefault(f => f.Hash == hash) is not { } file) return;
-        if (total != file.Packed || data.Length is 0 or > ContentRules.ChunkBytes || offset < 0 || offset + data.Length > file.Packed) { Fail("invalid", "The host sent a bad chunk."); return; }
+        if (total != file.Packed || data.Length == 0 || data.Length > Math.Max(limit, ContentRules.ChunkBytes) || offset < 0 || offset + data.Length > file.Packed) { Fail("invalid", "The host sent a bad chunk."); return; }
         var have = received.GetValueOrDefault(hash);
         if (offset != have) return;
+        Directory.CreateDirectory(temp);
         using (var stream = new FileStream(Part(hash), FileMode.OpenOrCreate, FileAccess.Write, FileShare.None)) { stream.Seek(offset, SeekOrigin.Begin); stream.Write(data); stream.SetLength(offset + data.Length); }
         received[hash] = offset + data.Length;
         lastChunkAt = clock(); samples.Enqueue((lastChunkAt, data.Length));

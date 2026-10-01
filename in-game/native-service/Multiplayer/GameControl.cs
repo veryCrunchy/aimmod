@@ -21,7 +21,7 @@ sealed class CoreGameControl(string output) : IGameControl
     // runtime override fields stay empty and ranked rules stay simple.
     public long? Load(string scenario) => Capabilities.Contains("load") ? commands.Send(new("load-scenario", scenario, null, null, null, null, null, null)).Sequence : null;
     public long? Start(string scenario, string mode) => Capabilities.Contains("start") ? commands.Send(new("start-scenario", scenario, mode, null, null, null, null, null)).Sequence : null;
-    // Needs AimModCore's refresh-scenarios command; until it exists the capability is absent and nothing is sent.
+    // AimModCore accepts refresh-scenarios wherever it can load scenarios ("load"; "refresh" if advertised).
     public long? Refresh() => Capabilities.Contains("refresh") || Capabilities.Contains("load") ? commands.Send(new("refresh-scenarios", null, null, null, null, null, null, null)).Sequence : null;
     public GameCommandResult? Result => commands.Result();
 }
