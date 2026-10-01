@@ -1760,6 +1760,14 @@ static partial class MultiplayerChecks
         // Setups: save one, and the next lobby starts from the last setup.
         Check(service.Act("preset-save", J(new { name = "Synthetic setup" })).Ok && View().GetProperty("presets").EnumerateArray().Any(p => p.GetString() == "Synthetic setup"), "The host saves a setup");
         Check(service.Act("preset-load", J(new { name = "Synthetic setup" })).Ok && !service.Act("preset-load", J(new { name = "Nope" })).Ok, "Saved setups load; missing ones are refused");
+        JsonElement SetupSettings() => View().GetProperty("lobby").GetProperty("settings");
+        service.Act("settings", Patch(new { mode = "deathmatch", fragLimit = 7, lifesteal = 75 }));
+        Check(service.Act("preset-save", J(new { name = "Synthetic combat" })).Ok, "The host saves a combat setup");
+        service.Act("settings", Patch(new { fragLimit = 3, lifesteal = 25 }));
+        Check(service.Act("preset-load", J(new { name = "Synthetic combat" })).Ok && SetupSettings().GetProperty("fragLimit").GetInt32() == 7 && SetupSettings().GetProperty("lifesteal").GetInt32() == 75,
+            "A saved setup keeps its frag limit and lifesteal");
+        service.Act("preset-load", J(new { name = "Synthetic setup" }));
+        Check(SetupSettings().GetProperty("mode").GetString() == "score-race" && SetupSettings().GetProperty("fragLimit").ValueKind == JsonValueKind.Null, "Loading the race setup again clears the frag limit");
         // Overrides build a match scenario and run it in freeplay.
         service.Act("end", default);
         service.Act("settings", Patch(new { mode = "ffa-rounds", rounds = 1, movement = "cs", targetSize = 1.5 }));
