@@ -45,10 +45,10 @@ sealed class DeveloperMode
 // is refused while developer mode is off.
 static class DeveloperEndpoints
 {
-    public static void Map(IEndpointRouteBuilder routes, string prefix, DeveloperMode mode, MultiplayerService multiplayer)
+    public static void Map(IEndpointRouteBuilder routes, string prefix, DeveloperMode mode, MultiplayerService multiplayer, DeveloperTools? tools = null)
     {
         if (mode.Enabled) multiplayer.SetSimulation(true);
-        routes.MapGet(prefix + "/developer", () => Results.Json(View(mode, multiplayer), Protocol.Json));
+        routes.MapGet(prefix + "/developer", () => Results.Json(View(mode, multiplayer, tools), Protocol.Json));
         routes.MapPost(prefix + "/developer", async (HttpRequest request, CancellationToken token) =>
         {
             if (request.Headers["X-AimMod-UI"] != "1") return Results.StatusCode(403);
@@ -58,22 +58,25 @@ static class DeveloperEndpoints
             {
                 var bytes = new byte[(int)length]; await request.Body.ReadExactlyAsync(bytes, token);
                 using var doc = JsonDocument.Parse(bytes, new JsonDocumentOptions { MaxDepth = 4 });
-                var result = Act(mode, multiplayer, doc.RootElement);
-                return result.Ok ? Results.Json(View(mode, multiplayer), Protocol.Json) : Results.Json(new { error = result.Message, code = result.Code }, Protocol.Json, statusCode: 409);
+                var result = Act(mode, multiplayer, doc.RootElement, tools);
+                return result.Ok ? Results.Json(View(mode, multiplayer, tools), Protocol.Json) : Results.Json(new { error = result.Message, code = result.Code }, Protocol.Json, statusCode: 409);
             }
             catch (JsonException) { return Results.BadRequest(new { error = "Invalid request." }); }
             catch (EndOfStreamException) { return Results.BadRequest(new { error = "Incomplete request." }); }
         });
     }
 
-    internal static object View(DeveloperMode mode, MultiplayerService multiplayer) => new
+    internal static object View(DeveloperMode mode, MultiplayerService multiplayer, DeveloperTools? tools = null) => new
     {
         enabled = mode.Enabled,
         notices = MultiplayerService.DevNotices,
         status = mode.Enabled ? multiplayer.DevStatus() : null,
+        tools = mode.Enabled ? tools?.View() : null,
+        camera = mode.Enabled ? tools?.Camera() : null,
+        workshop = mode.Enabled ? multiplayer.DevWorkshopItems() : null,
     };
 
-    internal static LobbyResult Act(DeveloperMode mode, MultiplayerService multiplayer, JsonElement root)
+    internal static LobbyResult Act(DeveloperMode mode, MultiplayerService multiplayer, JsonElement root, DeveloperTools? tools = null)
     {
         if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("action", out var a) || a.ValueKind != JsonValueKind.String) return LobbyResult.Fail("invalid", "Missing action.");
         string? Text(string key) => root.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
@@ -97,6 +100,20 @@ static class DeveloperEndpoints
                 return multiplayer.DevNotice(Text("kind") ?? "");
             case "leave":
                 return multiplayer.Act("leave", default);
+            case "avatar":
+                return multiplayer.DevAvatar(root.TryGetProperty("on", out var av) && av.ValueKind == JsonValueKind.True, Text("mode"));
+            case "workshop":
+                return multiplayer.DevWorkshop(Text("text"));
+            case "avatar-path" or "loopback" or "content" or "import" when tools is null:
+                return LobbyResult.Fail("unavailable", "This tool needs the AimMod output folder.");
+            case "avatar-path":
+                return tools!.AvatarPath(Text("replay"));
+            case "loopback":
+                return tools!.Loopback(Text("source"), Text("replay"), root.TryGetProperty("delay", out var d) && d.TryGetDouble(out var delay) ? delay : 2);
+            case "content":
+                return tools!.ContentLoop(Text("scenario"), Text("map"), root.TryGetProperty("fail", out var f) && f.ValueKind == JsonValueKind.True);
+            case "import":
+                return tools!.Import(Text("path"));
             default:
                 return LobbyResult.Fail("invalid", "Unknown developer action.");
         }

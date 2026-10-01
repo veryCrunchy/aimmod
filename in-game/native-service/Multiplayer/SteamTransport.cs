@@ -31,7 +31,7 @@ sealed class SteamTransport : IMultiplayerTransport
     int nextId = 1, createId = -1, joinId = -1;
     readonly Dictionary<int, string> workshopIds = new();
     readonly Dictionary<(string Peer, int Transfer), int> outstanding = new();
-    bool ugc, ugcQuery; IReadOnlyList<WorkshopItem> workshopItems = []; int bulkBytes, bulkWindow = 4;
+    bool ugc, ugcQuery, devAvatar; IReadOnlyList<WorkshopItem> workshopItems = []; int bulkBytes, bulkWindow = 4;
     string? bridgeVersion; RejoinPoint? lastLobby;
     HashSet<string> lastCharKeys = new();
     readonly Dictionary<string, string> spectators = new();
@@ -144,6 +144,7 @@ sealed class SteamTransport : IMultiplayerTransport
                     var features = e.TryGetProperty("features", out var fl) && fl.ValueKind == JsonValueKind.Array ? fl.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!).ToHashSet() : [];
                     ugc = features.Contains("ugc");
                     ugcQuery = ugc && features.Contains("ugc-query");
+                    devAvatar = features.Contains("dev-avatar");
                     bridgeVersion = Str(e, "bridge");
                     lastLobby = e.TryGetProperty("lastLobby", out var ll) && ll.ValueKind == JsonValueKind.Object && Str(ll, "lobby") is { } lastId
                         ? new RejoinPoint(lastId, Str(ll, "hostName") ?? "your host", ll.TryGetProperty("ageSeconds", out var age) && age.TryGetInt64(out var ag) ? ag : 0) : null;
@@ -442,6 +443,12 @@ sealed class SteamTransport : IMultiplayerTransport
         return Command("ugc.query", fields, withId: true) >= 0;
     }
     public IReadOnlyList<WorkshopItem> WorkshopItems { get { lock (gate) return workshopItems; } }
+    // Contract addition: dev.avatar {on, mode: circle|path}, answered by a result.
+    public bool DevAvatar(bool on, string mode)
+    {
+        bool can; lock (gate) can = ready && devAvatar;
+        return can && mode is "circle" or "path" && Command("dev.avatar", new JsonObject { ["on"] = on, ["mode"] = mode }, withId: true) >= 0;
+    }
     public void Kick(string peer) { if (Steam(peer)) Command("lobby.kick", new JsonObject { ["peer"] = peer }); }
     public void Transfer(string peer) { if (Steam(peer)) Command("lobby.transfer", new JsonObject { ["peer"] = peer }); }
     static bool Steam(string peer) => peer.Length is > 0 and <= 20 && peer.All(char.IsAsciiDigit);

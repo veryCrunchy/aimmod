@@ -14,6 +14,33 @@ sealed partial class MultiplayerService
     long devWatcherUntil;
 
     public bool SimulationOn { get { lock (gate) return Simulation is not null; } }
+    public ContentLibrary Library => library;
+    public string? OutputFolder => outputFolder;
+    // Spectating someone for real: the bridge owns spectate-pose.tsv then.
+    public bool WatchingSomeone { get { lock (gate) return watch is not null || spectating is not null; } }
+
+    public LobbyResult DevAvatar(bool on, string? mode)
+    {
+        lock (gate)
+        {
+            if (Simulation is null) return LobbyResult.Fail("dev-off", "Turn on developer mode first.");
+            if (mode is not ("circle" or "path")) return LobbyResult.Fail("invalid", "Pick circle or path.");
+            return transport.DevAvatar(on, mode) ? LobbyResult.Success
+                : LobbyResult.Fail("bridge", "The Steam bridge can’t switch the test avatar yet. Set avatar_test=1 in AimModSteam’s config.txt and restart KovaaK’s.");
+        }
+    }
+
+    // The Workshop search the Map Library uses, on demand; items arrive with the next view.
+    public LobbyResult DevWorkshop(string? text)
+    {
+        lock (gate)
+        {
+            if (Simulation is null) return LobbyResult.Fail("dev-off", "Turn on developer mode first.");
+            if (!transport.Available) return LobbyResult.Success; // the simulated catalog answers
+            return transport.QueryWorkshop(string.IsNullOrWhiteSpace(text) ? MapPorts.TitlePrefix : text.Trim()) ? LobbyResult.Success : LobbyResult.Fail("bridge", "The Steam bridge can’t list Workshop items (feature ugc-query).");
+        }
+    }
+    public object DevWorkshopItems() { lock (gate) return Catalog().Take(50).Select(i => new { i.Item, i.Title, i.Bytes, i.Installed, i.NeedsUpdate, port = MapPorts.Parse(i.Title) is not null }).ToArray(); }
 
     // Developer mode on: the simulation runs alongside the real transport (simulated
     // friends only show while Steam is off). Off: a simulated lobby is left.
@@ -71,6 +98,7 @@ sealed partial class MultiplayerService
                 transport = transport.Kind, online = transport.Available, bridge = transport.BridgeVersion,
                 capabilities = game.Capabilities.OrderBy(c => c, StringComparer.Ordinal).ToArray(),
                 simulation = Simulation is not null, simulationForced,
+                looks = AvatarProfiles.All.Select(a => new { a.Id, a.Label }), look = prefs.Avatar,
                 lobby = lobby is null ? null : new { lobby.Code, members = lobby.Members.Count, simulated = lobby.Members.Count(m => m.Simulated), isHost = lobby.HostId == SelfId, phase = lobby.Match?.Phase ?? "lobby" },
             };
         }

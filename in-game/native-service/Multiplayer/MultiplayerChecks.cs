@@ -1016,6 +1016,26 @@ static class MultiplayerChecks
             now += 21_000; service.Tick();
         }
         Check(!Dev(new { action = "notice", kind = "nope" }).Ok, "Unknown notices are refused");
+        // Tools: content loopback into a scratch folder (and a forced hash failure), the delayed self stream, redaction.
+        using (var tools = new AimMod.InGame.Developer.DeveloperTools(output, library, service))
+        {
+            LobbyResult Tool(object body) => AimMod.InGame.Developer.DeveloperEndpoints.Act(mode, service, JsonSerializer.SerializeToElement(body), tools);
+            JsonElement ToolView() => JsonSerializer.SerializeToElement(tools.View(), Protocol.Json);
+            bool Wait(Func<bool> done) { for (var i = 0; i < 80 && !done(); i++) Thread.Sleep(50); return done(); }
+            const string port = "AimMod - Dust2 (CSGO) - CS Movement";
+            Check(Tool(new { action = "content", scenario = port }).Ok && Wait(() => ToolView().GetProperty("content").GetProperty("state").GetString() == "done")
+                && File.Exists(Path.Combine(output, "dev-loopback", "game", "Saved", "SaveGames", "Scenarios", port + ".sce")), "The content loopback copies the scenario through the transfer pipeline into a scratch folder");
+            Check(Tool(new { action = "content", scenario = port, fail = true }).Ok && Wait(() => ToolView().GetProperty("content").GetProperty("state").GetString() == "error")
+                && ToolView().GetProperty("content").GetProperty("code").GetString() == "hash", "A corrupted chunk is caught by the hash check");
+            var now0 = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            File.WriteAllText(Path.Combine(output, "self-pose.tsv"), "AIMMOD_POSE_1\t1\nmeta\tSynthetic%20A\tsynthetic_map\t4\npose\t" + (now0 - 900) + "\t1\t2\t3\t-5\t90\t0\t100\npose\t" + (now0 - 800) + "\t1\t2\t3\t-5\t91\t0\t100\n");
+            Check(Tool(new { action = "loopback", source = "self", delay = 0.5 }).Ok && Wait(() => File.Exists(Path.Combine(output, "spectate-pose.tsv"))), "Spectate yourself writes the loopback stream");
+            var looped = LivePoseFrame.Parse(File.ReadAllText(Path.Combine(output, "spectate-pose.tsv")));
+            Check(looped is { Scenario: "Synthetic A" } && looped.Poses[^1].UnixMs == now0 - 800 + 500, "Your own view comes back delayed, re-stamped as live, with its scenario");
+            Check(Tool(new { action = "loopback", source = "off" }).Ok && !File.Exists(Path.Combine(output, "spectate-pose.tsv")), "Stopping the loopback removes its stream");
+            Check(AimMod.InGame.Developer.DeveloperTools.Redact(@"peer 76561198000000001 token 0123456789abcdef0123456789abcdef at C:\Users\Someone\AppData") == @"peer <steam id> token <id> at C:\Users\<user>\AppData", "Logs shown on the page have ids and user names redacted");
+            Check(!Tool(new { action = "import", path = Path.Combine(output, "nope.amreplay") }).Ok && !Tool(new { action = "avatar-path", replay = "missing" }).Ok, "Missing replays are refused");
+        }
         Check(Dev(new { action = "enable", on = false }).Ok && !service.SimulationOn && !Dev(new { action = "notice", kind = "ready" }).Ok, "Turning developer mode off stops the simulation and the tools");
         service.Dispose();
         static void Act(MultiplayerService s, JsonElement n)
