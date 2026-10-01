@@ -648,6 +648,15 @@ int main()
         bool fell = false;
         for (int i = 0; i < 60 * 30; ++i) fell |= l.Step(i / 60.0, 1 / 60.0, half, ledge, open).x >= 300;
         Check(!fell, "the walker never steps off a ledge");
+        // A 3 m wall at x = 0 whose top the floor trace sees: the walker never stands on top of it.
+        auto wallTop = [](double x, double, double z) -> std::optional<double> { return std::fabs(x) < 20 && z > 300 ? 300.0 : 0.0; };
+        auto footWall = [](double ax, double, double az, double bx, double, double bz) { return (ax < -20) == (bx < -20) || (az > 300 && bz > 300); };
+        ghost::Walker top;
+        top.spawns = {{-1000, 0, 0}, {-1000, 600, 0}, {1000, 0, 0}, {1000, 600, 0}};
+        top.Place(0, half, wallTop);
+        bool onWall = false;
+        for (int i = 0; i < 60 * 40; ++i) onWall |= top.Step(i / 60.0, 1 / 60.0, half, wallTop, footWall).z > half + ghost::Walker::JumpHeight + 1;
+        Check(!onWall, "the walker never climbs onto a wall top");
         // Placed while no trace finds the floor (spawn height 500): it stands still, then snaps down
         // as soon as one does, and is never shown walking in the air.
         int calls = 0;

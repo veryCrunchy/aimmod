@@ -163,6 +163,9 @@ namespace aimmod
         bool m_traceBound = false;
         bool m_traceForObjects = false; // LineTraceSingleForObjects (WorldStatic + WorldDynamic) rather than the Visibility channel
         int m_traceCount = 0, m_traceHits = 0;
+        int m_floorTraces = 0, m_floorHits = 0, m_wallTraces = 0, m_wallHits = 0; // walker diagnostics
+        double m_nextTraceLog = 0;
+        game::Getter m_lineTraceChannel; // Visibility channel fallback when the object trace finds nothing
         // Line trace on Visibility from a to b, ignoring both bodies; the impact point, or nullopt.
         std::optional<std::array<double, 3>> Trace(RC::Unreal::UObject* context, const double a[3], const double b[3], RC::Unreal::UObject* ignore1, RC::Unreal::UObject* ignore2);
         bool LoadTestPath();
