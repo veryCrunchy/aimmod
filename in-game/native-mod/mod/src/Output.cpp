@@ -359,18 +359,28 @@ namespace aimmod
             }
         }
         std::string url;
-        bool panel = false, native = true, lua = false, slowRead = false;
+        bool panel = false, native = true, lua = false, slowRead = false, gameEnabled = false, hudNative = true;
+        std::string hudUrl;
         if (now - m_lastOverlayCheck >= 500)
         {
             m_lastOverlayCheck = now;
             slowRead = true;
             std::string text;
             if (ReadSmall(m_root / L"live-overlay-url.txt", text, 513))
+            {
                 if (auto u = overlay::NoticeUrl(text)) url = *u;
+                if (auto h = overlay::HudUrl(text)) hudUrl = *h;
+            }
+            text.clear();
+            if (ReadSmall(m_root / L"overlay-settings.json", text, (64u << 10) + 1)) gameEnabled = overlay::GameEnabled(text);
             text.clear();
             if (ReadSmall(m_root / L"aimmod-panel.tsv", text, 128)) panel = overlay::PanelOpen(text, static_cast<std::int64_t>(std::time(nullptr)));
             text.clear();
-            if (ReadSmall(m_root / L"ui-host.tsv", text, 512)) native = overlay::ParseUiHost(text) == overlay::Host::Native;
+            if (ReadSmall(m_root / L"ui-host.tsv", text, 512))
+            {
+                native = overlay::ParseUiHost(text) == overlay::Host::Native;
+                hudNative = overlay::ParseUiHost(text, "hud") == overlay::Host::Native;
+            }
             text.clear();
             if (ReadSmall(m_root / L"lua-notice.tsv", text, 128)) lua = overlay::LuaLayerActive(text, static_cast<std::int64_t>(std::time(nullptr)));
         }
@@ -387,8 +397,12 @@ namespace aimmod
                 changed = true;
             }
         }
-        if (slowRead && (url != m_overlay.url || panel != m_overlay.panelOpen || native != m_overlay.native || lua != m_overlay.luaLayer))
+        if (slowRead && (url != m_overlay.url || panel != m_overlay.panelOpen || native != m_overlay.native || lua != m_overlay.luaLayer ||
+                         hudUrl != m_overlay.hudUrl || gameEnabled != m_overlay.gameEnabled || hudNative != m_overlay.hudNative))
         {
+            m_overlay.hudUrl = std::move(hudUrl);
+            m_overlay.gameEnabled = gameEnabled;
+            m_overlay.hudNative = hudNative;
             m_overlay.luaLayer = lua;
             m_overlay.url = std::move(url);
             m_overlay.panelOpen = panel;

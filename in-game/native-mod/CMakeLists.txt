@@ -80,6 +80,7 @@ if(AIMMOD_BUILD_MOD)
         mod/src/MaterialParams.cpp
         mod/src/Water.cpp
         mod/src/OverlayHost.cpp
+        mod/src/HudHost.cpp
         mod/src/WorldTags.cpp
     )
     target_include_directories(AimModCore PRIVATE mod/src)

@@ -5,6 +5,7 @@
 #include "Cosmetics.hpp"
 #include "CosmeticsPreview.hpp"
 #include "OverlayHost.hpp"
+#include "HudHost.hpp"
 #include "WorldTags.hpp"
 #include "GameControl.hpp"
 #include "MatchPlay.hpp"
@@ -104,6 +105,7 @@ namespace aimmod
         GameControl m_control;
         CosmeticsPreview m_preview;
         OverlayHost m_overlay;
+        HudHost m_hud;
         WorldTags m_tags;
         bool m_inChallenge{}, m_loading{};
         // Clip hotkey edge detection; self-pose stream; freeplay timer probe.
