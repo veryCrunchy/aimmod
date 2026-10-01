@@ -979,6 +979,12 @@ static partial class MultiplayerChecks
         Pump(); Pump();
         Check(View(d).GetProperty("lobby").ValueKind == JsonValueKind.Null && View(c).GetProperty("lobby").GetProperty("members").EnumerateArray().All(m => m.GetProperty("id").GetString() != "peer-d"),
             "A kick outlives a host change: the new host refuses the kicked player");
+        // A hosted lobby that closes (its last member, this machine, left the Steam lobby) is no longer advertised.
+        var alone = Make("peer-z");
+        Check(alone.Act("create", J(new { mode = "practice" })).Ok && net.Codes.ContainsValue("peer-z"), "A lone host advertises its lobby");
+        net.Peers["peer-z"].Inbox.Enqueue(new TransportEvent("peer-z", TransportEvent.Left));
+        Pump();
+        Check(View(alone).GetProperty("lobby").ValueKind == JsonValueKind.Null && !net.Codes.ContainsValue("peer-z"), "A lobby that closes withdraws its advertisement");
     }
 
     // A fake AimModSteam on a private pipe name checks the v1 contract both ways.

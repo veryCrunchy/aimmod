@@ -1196,7 +1196,8 @@ sealed partial class MultiplayerService : IDisposable
                 foreach (var kicked in transport.Banned) core.Ban(kicked);
                 Simulation?.Step(core, SelfId);
                 core.Tick();
-                if (core.Closed) { core = null; Reset(); return; }
+                // Closed (its last member left): withdraw the advert and drop the session like a leave.
+                if (core.Closed) { Leave("closed"); return; }
                 var snapshot = core.Snapshot();
                 // Transfer to a real remote member moves the authority to that machine.
                 if (snapshot.HostId != SelfId && snapshot.Members.FirstOrDefault(m => m.Id == snapshot.HostId) is { Simulated: false } heir)
