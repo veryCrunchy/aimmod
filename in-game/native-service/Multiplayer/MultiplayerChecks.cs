@@ -4,7 +4,7 @@ using System.Text.Json;
 namespace AimMod.InGame.Multiplayer;
 
 // Synthetic identities and content only; everything runs in temporary folders.
-static class MultiplayerChecks
+static partial class MultiplayerChecks
 {
     static int count;
     static void Check(bool value, string name) { count++; if (Environment.GetEnvironmentVariable("AIMMOD_CHECK_TRACE") == "1") Console.Error.WriteLine(name); if (!value) throw new Exception("Multiplayer check failed: " + name); }
@@ -34,7 +34,7 @@ static class MultiplayerChecks
         Follow();
         Marker();
         var root = Path.Combine(Path.GetTempPath(), "aimmod-mp-test-" + Guid.NewGuid().ToString("N"));
-        try { Content(root); Generator(root); Blocked(root); Service(root); Transfers(root); Replays(root); Maps(root); }
+        try { Content(root); Generator(root); Blocked(root); Service(root); Transfers(root); Replays(root); Maps(root); Tournaments(root); }
         finally { try { Directory.Delete(root, true); } catch (IOException) { } }
         Console.WriteLine($"{count} multiplayer checks passed.");
     }
@@ -1344,7 +1344,7 @@ static class MultiplayerChecks
         public IReadOnlySet<string> Capabilities { get; } = caps.ToHashSet();
         long lastLoad, lastStart;
         public long? Load(string scenario) { Calls.Add("load " + scenario); return lastLoad = Calls.Count; }
-        public long? Start(string scenario, string mode) { Calls.Add("start " + mode + " " + scenario); return lastStart = Calls.Count; }
+        public long? Start(string scenario, string mode, long? seed = null) { Calls.Add("start " + mode + " " + scenario + (seed is long s ? " seed " + s : "")); return lastStart = Calls.Count; }
         public long? Refresh() { Calls.Add("refresh"); return Calls.Count; }
         // A challenge still running in KovaaK's (core-scene.json); while true, loads answer challenge-active.
         public bool? ChallengeRunning { get; set; }

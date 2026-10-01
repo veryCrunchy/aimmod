@@ -239,6 +239,8 @@ sealed partial class MultiplayerService : IDisposable
                         simulatedMissing = true; download?.Reset(); ReportContent(force: true); return LobbyResult.Success;
                     }
                     return Simulation.Control(core, op, Text("member"));
+                case "tournament-ready" or "tournament-checkin" or "tournament-confirm" or "tournament-open" or "tournament-dismiss":
+                    return Tournaments?.NoticeAction(action, Text("id")) ?? LobbyResult.Fail("unavailable", "Tournaments aren’t available.");
                 case "friend-join" or "friend-invite" or "friend-watch" or "friend-dismiss":
                     return FriendNotice(action, Text("id"));
                 case "cosmetic-equip" or "cosmetic-remove" or "cosmetic-view":
@@ -660,6 +662,8 @@ sealed partial class MultiplayerService : IDisposable
         if (!fresh && contentOk && !autoContentOk) want |= prefs.ReadyOnContent;
         if (!fresh && autoInMatch && !inMatch && contentOk) want |= prefs.ReadyAfterMatch;
         autoContentOk = contentOk; autoInMatch = inMatch;
+        // A tournament game starts as soon as both players have the scenario.
+        if (lobby.Settings.Tournament is not null && contentOk && !inMatch) want = true;
         if (want && !me.Ready && !inMatch) Command("ready", JsonSerializer.SerializeToElement(new { ready = true }));
     }
 
@@ -802,6 +806,8 @@ sealed partial class MultiplayerService : IDisposable
         if (watchAsks.FirstOrDefault(a => now - a.At < 60_000) is { Peer: not null } ask)
             return new GameNotice("ask-" + ask.Peer + "-" + ask.At, "invite", ask.Name + " wants to watch you", "They would see your view from their game.", null, null, quiet ? "none" : "popup")
                 { Actions = [new("Allow", "spectate-allow", ask.Peer), new("Deny", "spectate-deny", ask.Peer)] };
+        // Tournament calls (match ready, check-in, your ban, confirm the result), unless a game is running.
+        if (!quiet && Current is null or { Match: null or { Phase: MatchPhases.Final } } && Tournaments?.Notice() is { } tournamentNotice) return tournamentNotice;
         if (Current is not { } lobby) return flash is { } f && now < f.Until ? f.Notice : null;
         var me = lobby.Members.FirstOrDefault(m => m.Id == SelfId);
         if (lobby.Match is { } match && match.Players.Contains(SelfId) && match.Phase is MatchPhases.Countdown && match.StartsAt is { } at)
@@ -1578,6 +1584,8 @@ sealed partial class MultiplayerService : IDisposable
             var generated = MatchScenario.Needed(s);
             var scenario = s.Scenario?.Name ?? "";
             var mode = MatchScenario.SafeMode(generated ? MatchScenario.Name(s) : s.Scenario?.Name ?? "", generated ? "freeplay" : "challenge");
+            // Tournament games never touch KovaaK's ranked leaderboards: always freeplay.
+            if (s.Tournament is not null) mode = "freeplay";
             string? problem = null;
             if (generated)
             {
@@ -1597,7 +1605,7 @@ sealed partial class MultiplayerService : IDisposable
         // The challenge that blocked the load is over: load now, or start if the round already runs.
         if (plan.State == "blocked" && game.ChallengeRunning != true && clock() >= blockedRetryAt)
         {
-            if (match.Phase == MatchPhases.Live && caps.Contains("start") && game.Start(plan.Scenario, MatchScenario.SafeMode(plan.Scenario, plan.Mode)) is long late)
+            if (match.Phase == MatchPhases.Live && caps.Contains("start") && game.Start(plan.Scenario, MatchScenario.SafeMode(plan.Scenario, plan.Mode), lobby.Settings.Tournament?.Seed) is long late)
                 plan = plan with { State = "starting", Message = "Starting your run…", StartSequence = late, LoadSequence = null };
             else if (match.Phase != MatchPhases.Live && game.Load(plan.Scenario) is long again)
                 plan = plan with { State = "loading", Message = "Loading “" + plan.Scenario + "” in KovaaK’s…", LoadSequence = again, StartSequence = null };
@@ -1607,7 +1615,7 @@ sealed partial class MultiplayerService : IDisposable
         { loadedSent = key; Command("loaded", JsonSerializer.SerializeToElement(new { match = match.Id, round = match.Round })); }
         if (match.Phase == MatchPhases.Live && plan.StartSequence is null && plan.State is "loading" or "ready" or "manual")
         {
-            if (caps.Contains("start") && game.Start(plan.Scenario, MatchScenario.SafeMode(plan.Scenario, plan.Mode)) is long start) plan = plan with { State = "starting", Message = "Starting your run…", StartSequence = start };
+            if (caps.Contains("start") && game.Start(plan.Scenario, MatchScenario.SafeMode(plan.Scenario, plan.Mode), lobby.Settings.Tournament?.Seed) is long start) plan = plan with { State = "starting", Message = "Starting your run…", StartSequence = start };
             else plan = plan with { State = "manual", Message = "Go! " + FindIt(plan.Scenario, plan.Generated) };
         }
         if (game.Result is { } refused && (refused.Sequence == plan.LoadSequence || refused.Sequence == plan.StartSequence) && refused.Code == "challenge-active")
