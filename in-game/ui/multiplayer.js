@@ -272,7 +272,10 @@
     var list=node('div','mp-members');p.appendChild(list);
     var ordered=lobby.members.slice().sort(function(a,b){if(a.id===lobby.hostId)return -1;if(b.id===lobby.hostId)return 1;if(a.role!==b.role)return a.role==='player'?-1:1;return a.joinedAt-b.joinedAt;});
     ordered.forEach(function(m){list.appendChild(memberRow(m,lobby));});
-    for(var i=players;i<s.maxPlayers;i++){var open=node('div','mp-member open');add(open,node('div','mp-avatar empty'),node('div','mp-member-info',i===players?'Open slot · invite a friend':'Open slot'));list.appendChild(open);}
+    // One summary row for the free slots, with an invite shortcut.
+    var free=s.maxPlayers-players;
+    if(free>0){var open=node('div','mp-member open');add(open,node('div','mp-avatar empty','+'),node('div','mp-member-info',free===1?'1 open slot':free+' open slots'));
+      open.appendChild(actions(button('Invite friends',function(){act('invite',null,function(ok){if(ok)toast('Steam invite dialog opened.');});},'compact quiet')));list.appendChild(open);}
     return p;
   }
   function memberRow(m,lobby){
@@ -507,6 +510,7 @@
     var you=node('div','panel mp-card');add(you,node('h2','','Your run'));var plan=planBox(lobby);if(plan)you.appendChild(plan);else you.appendChild(node('p','subtle','Play the round in KovaaK’s. Your score streams to the lobby as you play.'));
     you.appendChild(node('p','mp-note','Scores come from each player’s own run and are checked against the live stream at the end.'));
     side.appendChild(you);
+    if(match.rounds.length&&match.mode!=='practice'){var st=node('div','panel');var sh=node('div','panel-head');add(sh,node('h2','','Standings so far'));st.appendChild(sh);var sb=node('div','panel-body');sb.appendChild(standingsTable(match));st.appendChild(sb);side.appendChild(st);}
     if(lobby.isHost)side.appendChild(actions(button('End match',function(){act('end');},'compact quiet danger')));
   }
   function placementTable(results,mode,showPoints){
@@ -553,7 +557,8 @@
     var row=node('div','mp-row');page.appendChild(row);var main=node('div','mp-col mp-main'),side=node('div','mp-col mp-side');row.appendChild(main);row.appendChild(side);
     var st=node('div','panel');var sh=node('div','panel-head');var shText=node('div','head-text');add(shText,node('h2','','Final standings'),node('p','','Kept in AimMod only. KovaaK’s leaderboards are never changed.'));sh.appendChild(shText);st.appendChild(sh);var sb=node('div','panel-body');sb.appendChild(standingsTable(match));st.appendChild(sb);main.appendChild(st);
     var rounds=node('div','panel');var rh=node('div','panel-head');add(rh,node('h2','','Rounds'));rounds.appendChild(rh);var list=node('div','mp-list');
-    match.rounds.forEach(function(r){var line=node('div','mp-round-line');add(line,node('span','mp-round-no','R'+r.round),node('span','mp-round-win',r.winnerId?nameOf(r.winnerId):practice?'Practice':'Draw'),node('span','mp-muted',r.results.length&&r.results[0].score!==null?F.number(r.results[0].score,0):''));list.appendChild(line);});
+    match.rounds.forEach(function(r){var best=r.results[0];var line=node('div','mp-round-line');
+      add(line,node('span','mp-round-no','R'+r.round),avatar(best?best.name:'?',true),node('span','mp-round-win',r.winnerId?nameOf(r.winnerId):practice&&best?safe(best.name)+' (best run)':'Draw'),node('span','mp-round-score',best&&best.score!==null?F.number(best.score,0):'—'));list.appendChild(line);});
     rounds.appendChild(list);side.appendChild(rounds);
     if(top&&!top.name)return;
   }
