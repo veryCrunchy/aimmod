@@ -452,6 +452,22 @@ int main()
         auto empty = bridge::avatarstate::Parse("AIMMOD_AVATARS_1\t2\n");
         Check(empty && empty->peers.empty(), "an empty state file is valid");
     }
+    // Tournament lobbies
+    {
+        WireMessage th{WireType::TournamentHello};
+        th.lobby = Lobby;
+        th.token = 0x55aa;
+        th.matchToken = "tm_9fK2-xQ7Lp";
+        auto te = Encode(th);
+        auto td = Decode(te.data(), te.size());
+        Check(td && td->type == WireType::TournamentHello && td->lobby == Lobby && td->token == 0x55aa && td->matchToken == "tm_9fK2-xQ7Lp", "tournament hello round-trips");
+        WireMessage bad = th;
+        bad.matchToken = "short";
+        auto be = Encode(bad);
+        Check(!Decode(be.data(), be.size()), "rejects an invalid match token");
+        Check(ValidMatchToken("abcdEFGH_1-2") && !ValidMatchToken("abc") && !ValidMatchToken("has space!") && !ValidMatchToken(std::string(65, 'a')), "validates match tokens");
+        Check(SameToken("abcdefgh", "abcdefgh") && !SameToken("abcdefgh", "abcdefgx") && !SameToken("abcdefgh", "abcdefg"), "compares tokens");
+    }
     std::printf("%d/%d checks passed\n", checks - failures, checks);
     return failures == 0 ? 0 : 1;
 }

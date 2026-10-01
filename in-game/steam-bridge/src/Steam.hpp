@@ -19,6 +19,7 @@ namespace bridge
     // ELobbyType
     constexpr int LobbyPrivate = 0;
     constexpr int LobbyFriendsOnly = 1;
+    constexpr int LobbyInvisible = 3; // joinable by id, hidden from friends (tournament lobbies)
 
     // Callback ids handled by the bridge.
     constexpr int CbGameLobbyJoinRequested = 333;

@@ -149,6 +149,8 @@ namespace bridge
             std::string privacy;
             int maxMembers = 0;
             std::map<std::string, std::string> data;
+            std::string matchToken;    // tournament: Hub match token
+            std::uint64_t entrant = 0; // tournament host: the one SteamID allowed in
             Clock::time_point deadline;
         };
 
@@ -296,6 +298,9 @@ namespace bridge
         Clock::time_point m_nextConnect{};
         std::map<std::uint64_t, Clock::time_point> m_presenceRequested;
         std::string m_status;
+        std::string m_tournamentToken;      // host: token the entrant must present
+        std::uint64_t m_tournamentEntrant = 0;
+        std::string m_joinToken;            // joiner: token to present to the host
 
         std::map<std::pair<std::uint64_t, std::uint32_t>, Xfer> m_outgoing; // (peer, transfer)
         std::set<std::pair<std::uint64_t, std::uint32_t>> m_incoming;
