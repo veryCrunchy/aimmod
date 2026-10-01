@@ -510,9 +510,10 @@
     var who=safe(inv.fromName,'A friend');
     var title=inv.kind==='launch'?'Join from Steam':inv.kind==='request'?who+' wants to join':who+' invited you';
     var line=inv.kind==='launch'?'KovaaK’s was started from a Steam invite. Join that lobby now?':inv.kind==='request'?'Let them into your lobby?':'Join their AimMod lobby?';
-    add(card,node('div','eyebrow','Steam invite'),add(node('div','mp-modal-head'),avatar(who),add(node('div',''),node('h2','',title),node('p','subtle',line))));
+    add(card,node('div','eyebrow',inv.kind==='request'?'Join request':'Steam invite'),add(node('div','mp-modal-head'),avatar(who),add(node('div',''),node('h2','',title),node('p','subtle',line))));
     if(inv.summary){var s=inv.summary;var sum=node('div','mp-modal-summary');add(sum,chip(mode(s.mode).label,'mint'),node('span','',safe(s.scenario,'Scenario to be chosen')),node('span','mp-muted',s.players+' / '+s.maxPlayers+' players'));card.appendChild(sum);}
-    if(inv.compatible===false)card.appendChild(node('p','mp-warn-text','This invite comes from a different AimMod version. Update AimMod on both PCs to play together.'));
+    // A different AimMod version can't join (the service refuses), so don't offer Accept.
+    if(inv.compatible===false){card.appendChild(node('p','mp-warn-text',who+' has a different AimMod version, so you can’t play together yet. Both of you need the latest AimMod.'));card.appendChild(actions(button('Close',function(){act('decline-invite',{id:inv.id});},'primary')));return shade;}
     if(view.lobby&&inv.kind!=='request')card.appendChild(node('p','mp-note','Accepting leaves your current lobby.'));
     card.appendChild(actions(button(inv.kind==='request'?'Let them in':'Accept',function(){act('accept-invite',{id:inv.id});},'primary'),button('Decline',function(){act('decline-invite',{id:inv.id});})));
     return shade;

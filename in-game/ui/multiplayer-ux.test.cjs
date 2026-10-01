@@ -53,3 +53,10 @@ test('toasts and the invite card follow the scroll position, so they are never o
   const s2=setup();s2.scroller.scrollTop=500;s2.open(view({invites:[{id:'i1',fromName:'Synthetic Host',kind:'invite',summary:null,at:900,compatible:true}]}));
   assert.equal(s2.find('mp-modal').style.paddingTop,'570px');
 });
+test('an invite from a different AimMod version explains why and offers no Accept',()=>{
+  const s=setup().open(view({invites:[{id:'i2',fromName:'Synthetic Host',kind:'invite',summary:null,at:900,compatible:false}]}));
+  assert.ok(!s.button('Accept'),'accepting would only fail');assert.ok(s.text().includes('Synthetic Host has a different AimMod version'));
+  s.button('Close').onclick();assert.deepEqual(JSON.parse(s.last().body),{action:'decline-invite',id:'i2'});
+  const r=setup().open(view({invites:[{id:'i3',fromName:'Synthetic Host',kind:'request',summary:null,at:900,compatible:true}]}));
+  assert.ok(r.text().includes('Join request'));assert.ok(r.button('Let them in'));
+});
