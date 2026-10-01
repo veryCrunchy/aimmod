@@ -263,6 +263,13 @@ namespace aimmod
                 m_params.Names(material, vectors, scalars, textureNames);
                 colours = cosmetics::MapColours(item, vectors);
                 baseScheme = vectors.contains("MetalPaint") && vectors.contains("TriangularPaint");
+                // A weapon master whose parameters are unreadable: the usual accent names anyway (no-ops where absent).
+                if (colours.empty() && item.kind == "weapon_finish")
+                {
+                    const cosmetics::Colours c = cosmetics::ItemColours(item);
+                    for (const char* name : {"AccentColor", "Color", "Accent", "AccentColour"}) colours.push_back({name, c.main});
+                    for (const char* name : {"Emissive", "EmissiveColor", "EmmisiveColor", "GlowColor"}) colours.push_back({name, c.glow});
+                }
                 if (colours.empty())
                 {
                     Once("nothing|" + item.id + "|" + ObjectName(material), item.id + ": nothing to recolour on " + ObjectName(material));
@@ -364,7 +371,7 @@ namespace aimmod
             const mesh::Mesh* shape = nullptr;
             if (!item.shape.empty() && inputs.library)
                 if (auto it = inputs.library->meshes.find(item.shape); it != inputs.library->meshes.end()) shape = it->second.get();
-            UObject* component = AttachFitAccessory(want.actor, want.mesh, item, shape, why);
+            UObject* component = AttachFitAccessory(want.actor, want.mesh, item, shape, want.model, why);
             if (!component)
             {
                 m_failedAssets.insert(key);
@@ -502,7 +509,7 @@ namespace aimmod
             if (plan.body) wants.push_back({mesh, actor, plan.body, Scope::Avatar});
             if (m_accessories)
                 for (const cosmetics::Item* item : {plan.head, plan.neck, plan.spine})
-                    if (item) accessories.push_back({actor, mesh, item, item->AttachmentFor(model)});
+                    if (item) accessories.push_back({actor, mesh, item, item->AttachmentFor(model), model});
         }
     }
 

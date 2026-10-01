@@ -1,11 +1,13 @@
 #include "Accessory.hpp"
 
 #include "Log.hpp"
+#include "MaterialParams.hpp"
 #include "Reflect.hpp"
 
 #include <Unreal/Core/HAL/UnrealMemory.hpp>
 #include <Unreal/FProperty.hpp>
 #include <Unreal/NameTypes.hpp>
+#include <Unreal/Property/FArrayProperty.hpp>
 #include <Unreal/Property/FStructProperty.hpp>
 #include <Unreal/UClass.hpp>
 #include <Unreal/UObject.hpp>
@@ -16,6 +18,7 @@
 #include <cmath>
 #include <cstring>
 #include <optional>
+#include <set>
 
 namespace aimmod
 {
@@ -109,6 +112,18 @@ namespace aimmod
             std::vector<float> colours;
             colours.reserve(m.colours.size());
             for (std::uint8_t c : m.colours) colours.push_back(c / 255.0f);
+            // Tangents (FProcMeshTangent: TangentX, bFlipTangentY): without them the
+            // material's normal map shades the piece near black.
+            std::vector<std::uint8_t> tangents(m.normals.size() * 16, 0);
+            for (std::size_t i = 0; i < m.normals.size(); ++i)
+            {
+                const mesh::Vec3& n = m.normals[i];
+                float t[3] = {-n.y, n.x, 0}; // up x normal: along the ring
+                float l = std::sqrt(t[0] * t[0] + t[1] * t[1]);
+                if (l < 1e-3f) t[0] = 1, t[1] = 0, l = 1;
+                t[0] /= l, t[1] /= l;
+                std::memcpy(&tangents[i * 16], t, 12);
+            }
             std::vector<void*> owned;
             const bool ok = Call(component, STR("/Script/ProceduralMeshComponent.ProceduralMeshComponent:CreateMeshSection_LinearColor"),
                                  [&](const std::wstring& n, FProperty* p, std::uint8_t* v) {
@@ -118,6 +133,8 @@ namespace aimmod
                                      else if (n == STR("Normals")) data = WriteArray(v, m.normals.data(), m.normals.size(), 12);
                                      else if (n == STR("UV0")) data = WriteArray(v, m.uvs.data(), m.uvs.size() / 2, 8);
                                      else if (n == STR("VertexColors")) data = WriteArray(v, colours.data(), colours.size() / 4, 16);
+                                     else if (n == STR("Tangents") && RC::Unreal::CastField<RC::Unreal::FArrayProperty>(p) && RC::Unreal::CastField<RC::Unreal::FArrayProperty>(p)->GetInner()->GetSize() == 16)
+                                         data = WriteArray(v, tangents.data(), m.normals.size(), 16);
                                      else if (n == STR("bCreateCollision")) WriteBoolParam(v, p, false);
                                      if (data) owned.push_back(data);
                                  });
@@ -126,7 +143,23 @@ namespace aimmod
         }
     } // namespace
 
-    UObject* AttachFitAccessory(UObject* actor, UObject* skeletalMesh, const cosmetics::Item& item, const mesh::Mesh* shape, std::string& why)
+    cosmetics::HeadPoints ModelHead(UObject* skeletalMesh, const std::string& model)
+    {
+        UObject* pack = LoadGameAsset(STR("/Game/FirstPersonBP/Blueprints/Bodies/Characters/CharacterModelPacks/Default_CharacterModelPack.Default_CharacterModelPack"));
+        const std::wstring want = Widen(model);
+        for (UObject* asset : GetObjects(pack, STR("Models"), 64))
+        {
+            UObject* data = GetObject(asset, STR("CharacterModel"));
+            if (!Alive(data) || GetName(data, STR("Name")) != want) continue;
+            float feet[3];
+            const auto height = GetFloat(data, STR("MeshFullHeight")), diameter = GetFloat(data, STR("MeshHeadDiameter"));
+            if (!height || !diameter || !Location(skeletalMesh, feet)) break;
+            return cosmetics::HeadGeometry(feet[2], *height, *diameter);
+        }
+        return {};
+    }
+
+    UObject* AttachFitAccessory(UObject* actor, UObject* skeletalMesh, const cosmetics::Item& item, const mesh::Mesh* shape, const std::string& model, std::string& why)
     {
         if (!item.fit) return (why = "not a fit accessory", nullptr);
         if (!Alive(actor) || !Alive(skeletalMesh)) return (why = "the character is not valid", nullptr);
@@ -137,28 +170,27 @@ namespace aimmod
         UObject* meshAsset = runtime ? nullptr : LoadGameAsset(Widen(item.mesh));
         UObject* material = LoadGameAsset(Widen(item.material));
         if ((!runtime && !Alive(meshAsset)) || !Alive(material)) return (why = "mesh or material not found", nullptr);
+        static MaterialParams params;
+        static bool bound = params.Bind();
+        (void)bound;
+        // The material's parameters, once per item: what the piece can be tinted with.
+        static std::set<std::string> described;
+        if (described.size() < 64 && described.insert(item.id).second) Log("cosmetics: " + item.id + " material " + params.Describe(material));
 
         // Anchor and the character's own frame.
         const auto bone = FindBone(skeletalMesh, fit.bone);
         if (!bone) return (why = "no bone like " + fit.bone, nullptr);
         double anchor[3];
         if (!SocketLocation(skeletalMesh, *bone, anchor)) return (why = "bone position unavailable", nullptr);
-        float origin[3], extent[3];
-        if (!Bounds(skeletalMesh, origin, extent)) return (why = "character bounds unavailable", nullptr);
-        const double top = origin[2] + extent[2];
-        // Sized to this model's head: the head bone to the top of the model, against
-        // the 25 cm the catalog sizes assume (Meso and Endo); clamped so no model
-        // gets a tiny or huge piece.
-        if (const auto head = FindBone(skeletalMesh, "Head"))
-        {
-            double at[3];
-            if (SocketLocation(skeletalMesh, *head, at))
-            {
-                const double scale = std::clamp((top - at[2]) / 25.0, 0.6, 1.6);
-                for (int i = 0; i < 3; ++i) fit.size[i] *= scale, fit.offset[i] *= scale;
-            }
-        }
-        if (fit.anchor != "bone") anchor[2] = fit.anchor == "top" ? top : (anchor[2] + top) / 2;
+        // The model's own head (its data: full height and head diameter): where
+        // the head anchors sit, and the scale for pieces made for a 22 cm head.
+        const cosmetics::HeadPoints head = ModelHead(skeletalMesh, model);
+        if (fit.anchor != "bone" && !head.valid) return (why = "no head data for " + model, nullptr);
+        if (head.valid)
+            for (int i = 0; i < 3; ++i) fit.size[i] *= head.scale, fit.offset[i] *= head.scale;
+        if (fit.anchor == "top") anchor[2] = head.top;
+        else if (fit.anchor == "crown") anchor[2] = head.centre;
+        else if (fit.anchor == "chin") anchor[2] = head.chin;
         // Forward from the shoulders: right = left to right shoulder, forward = right x up.
         double forward[3] = {1, 0, 0};
         CharacterForward(skeletalMesh, forward);
@@ -210,7 +242,9 @@ namespace aimmod
             // brush's UVs land on arbitrary mask regions of the character material.
             std::vector<std::pair<std::string, cosmetics::Color>> colours(item.vector.begin(), item.vector.end());
             const cosmetics::Colours c = cosmetics::ItemColours(item);
-            for (const char* name : {"Color", "BodyColor", "HeadColor", "AccentColor"})
+            // Common colour parameter names of flat game and engine materials too
+            // (no-ops where the material lacks them).
+            for (const char* name : {"Color", "BodyColor", "HeadColor", "AccentColor", "BaseColor", "Base Color", "Tint", "TintColor", "GizmoColor", "EmissiveColor", "Emissive"})
                 if (std::none_of(colours.begin(), colours.end(), [&](const auto& v) { return v.first == name; })) colours.push_back({name, c.main});
             for (const auto& [name, col] : colours)
                 Call(mid, STR("/Script/Engine.MaterialInstanceDynamic:SetVectorParameterValue"), [&](const std::wstring& n, FProperty* p, std::uint8_t* v) {

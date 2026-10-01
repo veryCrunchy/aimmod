@@ -741,7 +741,15 @@ namespace aimmod
             if (!Alive(material)) continue;
             std::set<std::string> vectors, scalars, textures;
             m_params.Names(material, vectors, scalars, textures);
-            const auto colours = finish ? cosmetics::MapColours(*finish, vectors) : std::vector<std::pair<std::string, cosmetics::Color>>{};
+            auto colours = finish ? cosmetics::MapColours(*finish, vectors) : std::vector<std::pair<std::string, cosmetics::Color>>{};
+            // Unreadable or unknown parameters (the newer weapon masters list none): set the
+            // usual accent names anyway; a name the material lacks is a no-op.
+            if (finish && colours.empty())
+            {
+                const cosmetics::Colours c = cosmetics::ItemColours(*finish);
+                for (const char* name : {"AccentColor", "Color", "Accent", "AccentColour"}) colours.push_back({name, c.main});
+                for (const char* name : {"Emissive", "EmissiveColor", "EmmisiveColor", "GlowColor"}) colours.push_back({name, c.glow});
+            }
             if (finish)
             {
                 std::string recoloured;
@@ -884,7 +892,7 @@ namespace aimmod
             }
             const mesh::Mesh* shape = nullptr;
             if (auto it = inputs.library->meshes.find(item->shape); !item->shape.empty() && it != inputs.library->meshes.end()) shape = it->second.get();
-            UObject* worn = AttachFitAccessory(stage, mesh, *item, shape, why);
+            UObject* worn = AttachFitAccessory(stage, mesh, *item, shape, request.model, why);
             if (!Alive(worn))
             {
                 Log("cosmetics preview: accessory " + id + " not shown (" + why + ")");

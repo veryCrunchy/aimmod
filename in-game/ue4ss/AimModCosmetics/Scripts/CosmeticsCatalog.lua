@@ -28,7 +28,7 @@
 --            with allow_drafts=1.
 local M = {}
 
-M.version = 5
+M.version = 6
 
 M.kinds = {
     avatar_tint = {parts={body=true}, needsPak=false},
@@ -84,18 +84,18 @@ M.items = {
         pak={file='AimModCosmetics-1.pak', sha256=''}, draft=true},
     -- Accessories from AimMod runtime meshes (.amsh, manifest-pinned) and the free Meso
     -- material, tinted through its probed parameters and fitted to any rig (no pak).
-    {id='accessory-halo', version=3, kind='accessory', name='Halo', models={'Meso', 'Endo'}, parts={'body'},
-        shape='halo.amsh', material='/Game/Materials/Instances/Characters/S_Meso/Base/MI_PaintedMetal_Meso_TS1.MI_PaintedMetal_Meso_TS1',
-        vector={MetalPaint=rgba(0.95, 0.72, 0.28), TriangularPaint=rgba(0.95, 0.72, 0.28), RawMetal=rgba(0.95, 0.72, 0.28), Silicone=rgba(0.95, 0.72, 0.28)}, scalar={Roughness=0.2, Metallic=0.8, FullBright=1},
+    {id='accessory-halo', version=4, kind='accessory', name='Halo', models={'Meso', 'Endo'}, parts={'body'},
+        shape='halo.amsh', material='/Game/Materials/Masters/Environment/MM_Glow.MM_Glow',
+        vector={MetalPaint=rgba(0.95, 0.72, 0.28), TriangularPaint=rgba(0.95, 0.72, 0.28), RawMetal=rgba(0.95, 0.72, 0.28), Silicone=rgba(0.95, 0.72, 0.28)}, scalar={Roughness=0.2, Metallic=0.8},
         attach={role='head', fit={bone='Head', anchor='top', offset={0, 0, 3}, size={23.5, 23.5, 1.0}, keepAxes=true}}},
-    {id='accessory-visor', version=2, kind='accessory', name='Visor', models={'Meso', 'Endo'}, parts={'body'},
-        shape='visor.amsh', material='/Game/Materials/Instances/Characters/S_Meso/Base/MI_PaintedMetal_Meso_TS1.MI_PaintedMetal_Meso_TS1',
+    {id='accessory-visor', version=3, kind='accessory', name='Visor', models={'Meso', 'Endo'}, parts={'body'},
+        shape='visor.amsh', material='/MapCreator/Materials/MM_G_Basic.MM_G_Basic',
         vector={MetalPaint=rgba(0.04, 0.55, 0.42), TriangularPaint=rgba(0.04, 0.55, 0.42), RawMetal=rgba(0.04, 0.55, 0.42), Silicone=rgba(0.04, 0.55, 0.42)}, scalar={Roughness=0.15, Metallic=0.6},
-        attach={role='head', fit={bone='Head', anchor='crown', offset={0, 0, 0}, size={9.5, 23.1, 4.5}, keepAxes=true}}},
-    {id='accessory-collar', version=3, kind='accessory', name='Collar', models={'Meso', 'Endo'}, parts={'body'},
-        shape='collar.amsh', material='/Game/Materials/Instances/Characters/S_Meso/Base/MI_PaintedMetal_Meso_TS1.MI_PaintedMetal_Meso_TS1',
+        attach={role='head', fit={bone='Head', anchor='crown', offset={0, 0, 0}, size={9.8, 25.0, 4.5}, keepAxes=true}}},
+    {id='accessory-collar', version=4, kind='accessory', name='Collar', models={'Meso', 'Endo'}, parts={'body'},
+        shape='collar.amsh', material='/MapCreator/Materials/MM_G_Basic.MM_G_Basic',
         vector={MetalPaint=rgba(0.03, 0.032, 0.035), TriangularPaint=rgba(0.03, 0.032, 0.035), RawMetal=rgba(0.03, 0.032, 0.035), Silicone=rgba(0.03, 0.032, 0.035)}, scalar={Roughness=0.45, Metallic=0.4},
-        attach={role='neck', fit={bone='Neck', anchor='bone', offset={0, 0, 0}, size={23.6, 23.6, 4.4}, keepAxes=true}}},
+        attach={role='neck', fit={bone='Neck', anchor='chin', offset={0, 0, -2}, size={23.6, 23.6, 4.4}, keepAxes=true}}},
 }
 
 local function finite(n, lo, hi) return type(n) == 'number' and n == n and n >= lo and n <= hi end
@@ -104,8 +104,11 @@ local function finite(n, lo, hi) return type(n) == 'number' and n == n and n >= 
 -- same allow-list as AimModCore's IsGameAccessoryAsset).
 local gameMeshes = {'/Engine/BasicShapes/', '/Game/Art/StaticMeshes/KMC/Brushes/'}
 local gameMaterials = {'/Game/Materials/Instances/Characters/S_Meso/Base/MI_PaintedMetal_', '/Game/Materials/Instances/Characters/S_Endo/Base/MI_PaintedMetal_'}
+local flatMaterials = {['/MapCreator/Materials/MM_G_Basic.MM_G_Basic']=true, ['/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial']=true,
+    ['/Game/Materials/Masters/Environment/MM_Glow.MM_Glow']=true, ['/MapCreator/Materials/DefaultManipulationMaterial.DefaultManipulationMaterial']=true}
 local function gameAsset(path, roots)
     if type(path) ~= 'string' or #path > 200 or path:find('..', 1, true) or path:find('//', 1, true) or path:find('[^%w_/%.%-]') then return false end
+    if roots == gameMaterials and flatMaterials[path] then return true end
     for _, root in ipairs(roots) do
         if #path > #root and path:sub(1, #root) == root and not path:find('/', #root + 1, true) then return true end
     end

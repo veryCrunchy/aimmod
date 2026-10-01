@@ -108,7 +108,7 @@ namespace cosmetics_checks
         // pak items stay drafts until the pak ships.
         std::string error;
         auto shipped = ParseCatalog(ReadText(std::filesystem::path(AIMMOD_SOURCE_DIR) / "cosmetics" / "catalog.json"), &error);
-        CHECK(shipped && shipped->errors.empty() && shipped->version == 5, "shipped catalog parses");
+        CHECK(shipped && shipped->errors.empty() && shipped->version == 6, "shipped catalog parses");
         std::vector<std::string> errors;
         Index byId = BuildIndex(shipped ? shipped->items : std::vector<Item>{}, errors);
         CHECK(errors.empty() && byId.size() == 16 && shipped && byId.size() == shipped->items.size(), "shipped catalog validates");
@@ -131,10 +131,10 @@ namespace cosmetics_checks
         CHECK(Resolve(byId, "meso-pattern-stripes", paks) != nullptr, "pak item with a verified pak");
         ResolveOptions meshes;
         meshes.verifiedMeshes = {"halo.amsh", "visor.amsh", "collar.amsh"};
-        Plan dressed = PlanAvatar(byId, {{"accessory-halo", 3}, {"accessory-collar", 3}, {"accessory-visor", 2}}, meshes, "Endo");
+        Plan dressed = PlanAvatar(byId, {{"accessory-halo", 4}, {"accessory-collar", 4}, {"accessory-visor", 3}}, meshes, "Endo");
         CHECK(dressed.head && dressed.head->id == "accessory-halo" && dressed.neck && dressed.skipped.size() == 1,
               "shipped accessories: one per head and neck");
-        CHECK(!PlanAvatar(byId, {{"accessory-halo", 3}}, none, "Endo").head, "a runtime-mesh accessory without its verified mesh is not worn");
+        CHECK(!PlanAvatar(byId, {{"accessory-halo", 4}}, none, "Endo").head, "a runtime-mesh accessory without its verified mesh is not worn");
         Plan meso = PlanAvatar(byId, {{"tint-gold", 1}}, none, "Meso"), endo = PlanAvatar(byId, {{"tint-gold", 1}}, none, "Endo");
         CHECK(meso.body && meso.body->id == "tint-gold" && endo.body && endo.body->id == "tint-gold", "tints fit both free models");
         Plan own = PlanLocal(byId, {{"finish-ice", 1}}, none, "Rifle");
@@ -325,7 +325,9 @@ namespace cosmetics_checks
                   !IsGameAccessoryAsset("/Game/Art/StaticMeshes/KMC/Props/Anime/SM_Bell.SM_Bell", false) &&
                   !IsGameAccessoryAsset("/Game/Art/StaticMeshes/KMC/Brushes/../Props/X.X", false) &&
                   IsGameAccessoryAsset("/Game/Materials/Instances/Characters/S_Meso/Base/MI_PaintedMetal_Meso_TS1.MI_PaintedMetal_Meso_TS1", true) &&
-                  !IsGameAccessoryAsset("/Game/Materials/Instances/Characters/S_Meso/Base/MI_PaintedMetal_Meso_TS1.MI_PaintedMetal_Meso_TS1", false),
+                  !IsGameAccessoryAsset("/Game/Materials/Instances/Characters/S_Meso/Base/MI_PaintedMetal_Meso_TS1.MI_PaintedMetal_Meso_TS1", false) &&
+                  IsGameAccessoryAsset("/MapCreator/Materials/MM_G_Basic.MM_G_Basic", true) && IsGameAccessoryAsset("/Game/Materials/Masters/Environment/MM_Glow.MM_Glow", true) &&
+                  !IsGameAccessoryAsset("/MapCreator/Materials/GridMaterial.GridMaterial", true),
               "game accessory asset allow-list");
         std::vector<std::string> errors;
         auto catalog = ParseCatalog(R"({"version":1,"items":[
@@ -366,6 +368,14 @@ namespace cosmetics_checks
         CHECK(kept && Near(kx[1], 1, 1e-6) && Near(kz[2], 1, 1e-6) && Near(kept->scale[0], 1) && Near(kept->scale[1], 1), "keepAxes: the mesh's X follows the character's forward, never turned");
         Plan plan = PlanAvatar(index, {{"ring", 1}, {"collar", 1}}, ResolveOptions{}, "Meso");
         CHECK(plan.head && plan.head->id == "ring" && plan.neck && plan.neck->id == "collar" && plan.skipped.empty(), "one head and one neck accessory");
+    }
+
+    void HeadChecks()
+    {
+        const HeadPoints h = HeadGeometry(100, 180, 22);
+        CHECK(h.valid && Near(h.top, 280) && Near(h.centre, 269) && Near(h.chin, 258) && Near(h.scale, 1), "head anchors from the model's height and head diameter");
+        CHECK(Near(HeadGeometry(0, 180, 33).scale, 1.5) && Near(HeadGeometry(0, 180, 60).scale, 1.6) && Near(HeadGeometry(0, 180, 8).scale, 0.6), "head scale is clamped");
+        CHECK(!HeadGeometry(0, 0, 22).valid && !HeadGeometry(0, 180, 0).valid && !HeadGeometry(0, 1e9, 22).valid, "implausible model data is no head");
     }
 
     void ColourChecks()
@@ -426,6 +436,7 @@ namespace cosmetics_checks
         LooksChecks();
         AccessoryChecks();
         ColourChecks();
+        HeadChecks();
         PlanChecks();
     }
 } // namespace cosmetics_checks

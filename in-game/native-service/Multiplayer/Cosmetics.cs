@@ -50,7 +50,7 @@ sealed partial class CosmeticsCatalog
     // Curated game and engine assets an accessory may use without a pak
     // (AimModCore's IsGameAccessoryAsset): one asset directly in these folders.
     [GeneratedRegex("^(/Engine/BasicShapes/|/Game/Art/StaticMeshes/KMC/Brushes/)[A-Za-z0-9_.-]{1,96}$")] private static partial Regex GameMesh();
-    [GeneratedRegex("^/Game/Materials/Instances/Characters/S_(Meso|Endo)/Base/MI_PaintedMetal_[A-Za-z0-9_.-]{1,96}$")] private static partial Regex GameMaterial();
+    [GeneratedRegex("^(/Game/Materials/Instances/Characters/S_(Meso|Endo)/Base/MI_PaintedMetal_[A-Za-z0-9_.-]{1,96}|/MapCreator/Materials/MM_G_Basic\\.MM_G_Basic|/Engine/BasicShapes/BasicShapeMaterial\\.BasicShapeMaterial|/Game/Materials/Masters/Environment/MM_Glow\\.MM_Glow|/MapCreator/Materials/DefaultManipulationMaterial\\.DefaultManipulationMaterial)$")] private static partial Regex GameMaterial();
     [GeneratedRegex("^[a-z0-9][a-z0-9-]{0,42}\\.amsh$")] private static partial Regex MeshName();
     static bool GameAsset(string? path, Regex rule) => path is { Length: <= 200 } && !path.Contains("..") && rule.IsMatch(path);
     public static bool ValidId(string? id) => id is not null && IdPattern().IsMatch(id);

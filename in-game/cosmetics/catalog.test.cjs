@@ -95,11 +95,15 @@ test('accessories are built from curated game meshes, fitted to a slot within th
       assert.ok(fs.existsSync(path.join(__dirname, 'meshes', item.shape)), `${item.id}: ships ${item.shape}`);
       assert.ok(!item.mesh, `${item.id}: a shape or a game mesh, not both`);
     } else assert.match(item.mesh, /^(\/Engine\/BasicShapes\/|\/Game\/Art\/StaticMeshes\/KMC\/Brushes\/)[A-Za-z0-9_.-]+$/, `${item.id}: curated mesh`);
-    assert.match(item.material, /^\/Game\/Materials\/Instances\/Characters\/S_(Meso|Endo)\/Base\/MI_PaintedMetal_[A-Za-z0-9_.-]+$/, `${item.id}: curated material`);
+    // A free character material, or (for runtime meshes) a flat material without per-primitive data.
+    const flat = ['/MapCreator/Materials/MM_G_Basic.MM_G_Basic', '/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial',
+      '/Game/Materials/Masters/Environment/MM_Glow.MM_Glow', '/MapCreator/Materials/DefaultManipulationMaterial.DefaultManipulationMaterial'];
+    assert.ok(/^\/Game\/Materials\/Instances\/Characters\/S_(Meso|Endo)\/Base\/MI_PaintedMetal_[A-Za-z0-9_.-]+$/.test(item.material) || flat.includes(item.material), `${item.id}: curated material`);
+    if (item.shape) assert.ok(flat.includes(item.material), `${item.id}: runtime meshes use a flat material (the character masters dither away without per-primitive data)`);
     const { role, fit } = item.attach;
     assert.ok(['head', 'neck', 'spine'].includes(role), `${item.id}: slot`);
     roles.add(role);
-    assert.ok(['bone', 'top', 'crown'].includes(fit.anchor ?? 'bone') && /^[A-Za-z]+$/.test(fit.bone), `${item.id}: anchor`);
+    assert.ok(['bone', 'top', 'crown', 'chin'].includes(fit.anchor ?? 'bone') && /^[A-Za-z]+$/.test(fit.bone), `${item.id}: anchor`);
     // Head items inside 35 x 35 x 30 cm, others inside 45 x 30 x 50 cm (docs, Accessories).
     const [f, r, u] = fit.size, limit = role === 'head' ? [35, 35, 30] : [45, 45, 50];
     assert.ok(f <= limit[0] && r <= limit[1] && u <= limit[2] && Math.min(f, r, u) >= 1, `${item.id}: size budget`);

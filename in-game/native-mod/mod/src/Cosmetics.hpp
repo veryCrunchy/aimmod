@@ -72,6 +72,7 @@ namespace aimmod
             game::UObject* mesh{};
             const cosmetics::Item* item{};
             const cosmetics::Attachment* attachment{};
+            std::string model; // the avatar's Default-pack model
         };
 
         void Restore(const std::vector<Want>* keep, std::optional<Scope> scope);
