@@ -254,6 +254,9 @@ namespace aimmod
 
     void CosmeticsPreview::Tick(double now, bool inChallenge, bool loading)
     {
+        // Off until the stage reads are validated: it crashed the game in EnsureStage.
+        constexpr bool PreviewEnabled = false;
+        if (!PreviewEnabled) return;
         if (!m_bound) Bind();
         if (!m_available || now < m_nextRead) return;
         m_nextRead = now + ReadInterval;
