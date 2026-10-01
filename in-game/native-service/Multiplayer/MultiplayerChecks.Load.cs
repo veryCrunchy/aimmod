@@ -136,11 +136,19 @@ static partial class MultiplayerChecks
         Check(failed.GetProperty("eyebrow").GetString() == "AimMod · Match" && failed.GetProperty("interactive").GetBoolean() && failed.GetProperty("layout").GetString() == "toast",
             "The load failure is labelled as a match notice and asks for clicks in the toast layer");
         Check(File.Exists(Path.Combine(game, "Saved", "SaveGames", "Scenarios", name + ".sce")), "A failed match scenario stays on disk while the match is open");
+        static string? PlayId(JsonElement n) => n.TryGetProperty("play", out var p) && p.ValueKind == JsonValueKind.Object ? p.GetProperty("id").GetString() : null;
+        Check(PlayId(failed) is null, "No play request while the match is still loading");
         control.StuckMap = null;
+        var retryAt = now;
         Check(service.Act("retry-load", J(new { id = failed.GetProperty("actions")[0].GetProperty("id").GetString() })).Ok, "The host retries the load");
         Run(1500);
         Check(Round().GetProperty("map").GetString() == "ok", "After the retry the map check passes");
         Check(control.Calls.Count(c => c == "load " + name) == 3 && Phase() is MatchPhases.Countdown or MatchPhases.Live, "With the map there, the retried load starts the match");
+        var started = Notice();
+        Check(PlayId(started) is { } playId && playId.EndsWith("-1", StringComparison.Ordinal) && started.GetProperty("play").GetProperty("since").GetInt64() is var since && since >= retryAt && since <= now,
+            "Once the retried load starts the match, the game is asked to take input back (one id per attempt, since the Retry)");
+        Run(300);
+        Check(PlayId(Notice()) == PlayId(started), "The request keeps its id while it's sent, so it's handled once");
         service.Act("leave", default);
         Run(300);
         Check(!File.Exists(Path.Combine(game, "Saved", "SaveGames", "Scenarios", name + ".sce")) && File.Exists(Path.Combine(output, "match-debug", name + ".sce")),

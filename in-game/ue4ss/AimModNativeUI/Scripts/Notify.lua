@@ -11,6 +11,8 @@ local shown=false
 local text
 local lastId,lastCount
 local interactive=false
+local playId,playSince
+local tookCursor=false
 local base=(os.getenv('LOCALAPPDATA') or '')..'/AimMod/KovaaksNative/'
 local Width,Height=620,340
 -- Two sizes: the toast (top centre, 620 x 340, room for a card with buttons) for notices, and the whole screen for
@@ -66,6 +68,22 @@ local function setInteractive(on)
     host:SetVisibility(on and 4 or 3);view:SetVisibility(on and 0 or 3);renderer:SetVisibility(on and 0 or 3)
     renderer.bReceiveInput=on
 end
+-- The CS buy menu wants a cursor in game: show it (game and UI input, so movement keys still
+-- work) and hand input back to the game once it closes. Only a cursor this layer took is given
+-- back; while KovaaK's menus, the AimMod panel or a replay own input, it isn't touched.
+local function cursorFor(want,blocked)
+    if blocked then tookCursor=false;return end
+    if want==tookCursor or not valid(owner) then return end
+    local player=owner:GetOwningPlayer()
+    local lib=StaticFindObject('/Script/UMG.Default__WidgetBlueprintLibrary')
+    if not valid(player) or not valid(lib) then return end
+    tookCursor=want
+    pcall(function()player.bShowMouseCursor=want end)
+    if want then pcall(function()lib:SetInputMode_GameAndUIEx(player,nil,0,false)end)
+    else pcall(function()lib:SetInputMode_GameOnly(player)end) end
+end
+-- The service's "match is starting" request: an id per load attempt and when it began (ms).
+function M.playRequest()return playId,playSince end
 function M.hide()
     if valid(host) then host:SetVisibility(1) end
     if valid(renderer) then renderer.bReceiveInput=false end
@@ -109,6 +127,12 @@ function M.update(panelOpen,replayActive,menuVisible)
     if not valid(owner) then M.close();owner=nil;return end
     -- A few hundred bytes, read on every 100 ms tick so countdowns stay in step.
     text=read('multiplayer-notify.json',16385)
+    playId,playSince=nil,nil
+    if text and #text<=16384 then
+        local id,since=text:match('"play":{"id":"([^"]+)","since":(%d+)')
+        if id then playId=id;playSince=tonumber(since) end
+    end
+    cursorFor(text~=nil and text:find('"cursor":true',1,true)~=nil,panelOpen or replayActive or menuVisible==true)
     -- A notice, only the watcher badge ("2 watching: ..."), a mode HUD (tracking duel, combat),
     -- or the match standings (corner panel, or the scoreboard while its key is held).
     local active=text~=nil and #text<=16384 and (text:find('"active":true',1,true)~=nil or text:find('"badge":"',1,true)~=nil or text:find('"duel":{',1,true)~=nil or text:find('"combat":{',1,true)~=nil or text:find('"cs":{',1,true)~=nil or text:find('"board":{',1,true)~=nil or text:find('"boardFull":{',1,true)~=nil)

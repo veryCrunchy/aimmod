@@ -29,7 +29,36 @@ local function removeOwned(parent, marker)
         if (ok and tip==marker) or (marker=='AimMod workspace' and child:GetFName():ToString():find('AimModWorkspace',1,true)==1) then child:RemoveFromParent() end
     end
 end
-local function show(value)
+-- A match is starting (the service's play request): close the AimMod panel and KovaaK's menu and
+-- give input to the game (game-only input, no cursor, viewport focus with mouse capture), so the
+-- player can move and look without clicking in first. A KovaaK's menu the player opened after the
+-- start, join or Retry (Escape while loading) is theirs and stays. One hand-back per request id.
+local handled,menuShownAt,menuSeen,menuWasUp
+local show -- defined below; handBack closes the AimMod panel through it
+local function trackMenu()
+    local up=valid(menu) and menu:IsVisible()
+    -- A new menu object (level load) has no known opening time.
+    if menuSeen~=menu then menuSeen=menu;menuWasUp=up;menuShownAt=nil;return end
+    if up and not menuWasUp then menuShownAt=os.time() end
+    menuWasUp=up
+end
+local function handBack(since)
+    if not valid(menu) then return 'no-menu' end
+    local player=menu:GetOwningPlayer()
+    if not valid(player) then return 'no-player' end
+    local up=menu:IsVisible()
+    if up and not opened and menuShownAt and since and menuShownAt*1000>since+1000 then return 'kept' end
+    if opened then show(false) end
+    if up then menu:SetVisibility(1) end
+    local lib=StaticFindObject('/Script/UMG.Default__WidgetBlueprintLibrary')
+    local api=StaticFindObject('/Script/Engine.Default__GameplayStatics')
+    pcall(function()if valid(api) and api:IsGamePaused(player) then api:SetGamePaused(player,false) end end)
+    pcall(function()player.bShowMouseCursor=false end)
+    lib:SetInputMode_GameOnly(player)
+    return 'played'
+end
+M.handBack=handBack
+function show(value)
     opened=value
     if opened then LiveHUD.hide() end
     if valid(frame) then frame:SetVisibility(opened and 0 or 1) end
@@ -160,8 +189,14 @@ function M.start()
         if not ok then pcall(LiveHUD.hide) end
         -- Multiplayer notices, shown while the AimMod panel itself is not on screen.
         local noticeOk=pcall(function()
+            trackMenu()
             local menuUp=valid(menu) and menu:IsVisible()
             Notify.update(opened and menuUp,ReplayMainBridge.active(),menuUp)
+            local id,since=Notify.playRequest()
+            if id and id~=handled and not ReplayMainBridge.active() then
+                handled=id;local okPlay,result=pcall(handBack,since)
+                if not okPlay then log(result) end
+            end
         end)
         if not noticeOk then pcall(Notify.hide) end
     end)
