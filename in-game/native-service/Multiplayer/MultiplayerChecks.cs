@@ -1253,6 +1253,23 @@ static partial class MultiplayerChecks
         control.Accept(); Run(2500);
         Check(control.Calls.Count(c => c == "load Synthetic A") == 3 && Round().GetProperty("state").GetString() is "loading" or "ready", "The load is retried once the game is free");
         service.Dispose();
+
+        // A game that can load scenarios but not start them: a challenge that ends after the round
+        // went live leaves the player to start it by hand, instead of holding the round forever.
+        var loadOnly = new FakeGame("load");
+        service = new MultiplayerService(new OfflineTransport(), new ContentLibrary(Path.Combine(root, "game")), loadOnly, () => new LocalRun(false, null, null, null, null, 0, 0, 0, null), () => [], () => null, null, simulation: true, () => now, autoTick: false, seed: 5);
+        service.Act("create", J(new { mode = "score-race", scenario = "Synthetic A" }));
+        service.Act("sim", J(new { op = "add" }));
+        Run(9000);
+        loadOnly.ChallengeRunning = true;
+        Check(service.Act("start", default).Ok, "The host starts while still in a challenge run (load only)");
+        Run(30_000);
+        Check(Phase() == MatchPhases.Live && Round().GetProperty("state").GetString() == "blocked", "The round goes live while the challenge still runs");
+        loadOnly.ChallengeRunning = false;
+        Run(2500);
+        Check(Round().GetProperty("state").GetString() == "manual" && Round().GetProperty("message").GetString()!.StartsWith("Go!", StringComparison.Ordinal),
+            "Once the challenge ends a game without start asks the player to start the round");
+        service.Dispose();
     }
 
     static void Marker()

@@ -1661,6 +1661,9 @@ sealed partial class MultiplayerService : IDisposable
         {
             if (match.Phase == MatchPhases.Live && caps.Contains("start") && game.Start(plan.Scenario, MatchScenario.SafeMode(plan.Scenario, plan.Mode), lobby.Settings.Tournament?.Seed) is long late)
                 plan = plan with { State = "starting", Message = "Starting your run…", StartSequence = late, LoadSequence = null };
+            // The game can't start runs: the player starts this one by hand.
+            else if (match.Phase == MatchPhases.Live && !caps.Contains("start"))
+                plan = plan with { State = "manual", Message = "Go! " + FindIt(plan.Scenario, plan.Generated), LoadSequence = null, StartSequence = null };
             else if (match.Phase != MatchPhases.Live && game.Load(plan.Scenario) is long again)
                 plan = plan with { State = "loading", Message = "Loading “" + plan.Scenario + "” in KovaaK’s…", LoadSequence = again, StartSequence = null };
         }
