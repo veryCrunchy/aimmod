@@ -127,6 +127,7 @@
     var l=view.lobby;
     if(view.joining&&!l)page.appendChild(joining());
     else if(mapsOpen)mapLibrary(page);
+    else if(historyOpen)historyPage(page);
     else if(!l)home(page);
     else if(l.match&&l.match.phase!=='final'&&!editing)matchScreen(page,l);
     else if(l.match&&l.match.phase==='final')finalScreen(page,l);
@@ -344,6 +345,7 @@
   function recentPanel(){
     var p=node('div','panel mp-recent');var head=node('div','panel-head');add(head,node('h2','','Recent matches'));p.appendChild(head);
     var items=view.recent||[];
+    if(items.length)head.appendChild(actions(button('All matches',openHistory,'compact quiet')));
     if(!items.length){p.appendChild(node('div','mp-empty','Your matches show up here. They stay in AimMod.'));return p;}
     var list=node('div','mp-list');p.appendChild(list);
     items.slice(0,6).forEach(function(r){
@@ -356,9 +358,73 @@
     });
     return p;
   }
+  // Match history and rivals --------------------------------------------------
+  var historyOpen=false,history=null,openMatch=null,rivalFilter=null;
+  function openHistory(){historyOpen=true;mapsOpen=false;rivalFilter=null;openMatch=null;history=null;render();xhr('GET','/multiplayer?part=history',null,function(ok,data){if(ok&&data){history=data;if(historyOpen)render();}});}
+  function resultText(r){return r.mode==='practice'?'Practice':r.won?'Won':r.place?ordinal(r.place)+' of '+r.players:r.winner?safe(r.winner)+' won':'Draw';}
+  function historyPage(page){
+    var head=node('div','mp-editor-top');var t=node('div','mp-editor-title');
+    add(t,node('div','eyebrow','Multiplayer'),node('h2','','Match history'),node('p','subtle','Every match you finished, kept on this PC. Results never touch KovaaK’s leaderboards.'));
+    add(head,t,actions(button('Back',function(){historyOpen=false;render();},'primary')));page.appendChild(head);
+    if(!history){page.appendChild(add(node('div','panel mp-card'),node('p','subtle','Loading your matches…')));return;}
+    var row=node('div','mp-row');page.appendChild(row);
+    var main=node('div','mp-col mp-main'),side=node('div','mp-col mp-side');row.appendChild(main);row.appendChild(side);
+    var list=node('div','panel mp-history');main.appendChild(list);
+    var lh=node('div','panel-head');var rival=rivalFilter&&(history.rivals||[]).filter(function(r){return r.key===rivalFilter;})[0];
+    add(lh,node('h2','',rival?'Matches with '+safe(rival.name):'All matches'));
+    if(rival)lh.appendChild(actions(button('Show all',function(){rivalFilter=null;render();},'compact quiet')));
+    list.appendChild(lh);
+    var shown=(history.matches||[]).filter(function(m){return !rivalFilter||(m.standings||[]).some(function(p){return p.key===rivalFilter;});});
+    if(!shown.length)list.appendChild(node('div','mp-empty','No matches yet. Finished matches show up here.'));
+    shown.slice(0,100).forEach(function(m){list.appendChild(historyRow(m));});
+    side.appendChild(rivalsPanel());
+  }
+  function historyRow(m){
+    var box=node('div','mp-history-item'+(openMatch===m.id?' open':''));
+    var top=node('div','mp-recent-row');var info=node('div','mp-recent-info');
+    var others=(m.standings||[]).filter(function(p){return !p.self;}).map(function(p){return safe(p.name);});
+    add(info,node('strong','',safe(m.scenario,'Scenario')),node('span','',mode(m.mode).label+' · '+(others.length?'vs '+others.slice(0,3).join(', ')+(others.length>3?' and '+(others.length-3)+' more':''):m.players+' players')+' · '+F.relative(m.endedAt)));
+    add(top,node('span','mp-result'+(m.won||m.place===1?' won':''),resultText(m)),info);
+    if(m.simulated)top.appendChild(chip('Sim',''));
+    top.appendChild(actions(button(openMatch===m.id?'Hide':'Details',function(){openMatch=openMatch===m.id?null:m.id;render();},'compact quiet')));
+    box.appendChild(top);
+    if(openMatch!==m.id)return box;
+    var detail=node('div','mp-history-detail');box.appendChild(detail);
+    var table=node('div','mp-table');
+    add(table,add(node('div','mp-tr head'),node('span','mp-td place','#'),node('span','mp-td name','Player'),node('span','mp-td num','Best'),node('span','mp-td num',m.mode==='duel'?'Wins':m.mode==='ffa-rounds'?'Points':'Total')));
+    (m.standings||[]).forEach(function(p){add(table,add(node('div','mp-tr'+(p.self?' self':'')),node('span','mp-td place',String(p.place)),node('span','mp-td name',safe(p.name)+(p.self?' (you)':'')),node('span','mp-td num',typeof p.best==='number'?F.number(p.best,0):'-'),node('span','mp-td num',m.mode==='duel'?String(p.wins):m.mode==='ffa-rounds'?String(p.points):F.number(p.total||0,0))));});
+    detail.appendChild(table);
+    var reps=m.replays||[];
+    if(!reps.length){detail.appendChild(node('p','mp-note','No replays from this match on this PC.'));return box;}
+    reps.forEach(function(r){
+      var line=node('div','mp-history-replays');line.appendChild(node('span','mp-history-round',(m.rounds>1?'Round '+r.round:'Replays')));
+      var row=[];
+      if(r.mine)row.push(button('My run',function(){watch(r.mine);},'compact'));
+      (r.others||[]).forEach(function(o){
+        if(r.mine)row.push(button('Me vs '+safe(o.name),function(){watch(r.mine,o.id);},'compact'));
+        else row.push(button('Watch '+safe(o.name),function(){watch(o.id);},'compact'));
+      });
+      line.appendChild(actions.apply(null,row));detail.appendChild(line);
+    });
+    return box;
+  }
+  function rivalsPanel(){
+    var p=node('div','panel mp-rivals');var head=node('div','panel-head');var text=node('div','head-text');
+    add(text,node('h2','','Rivals'),node('p','','Head to head with the players you meet most.'));head.appendChild(text);p.appendChild(head);
+    var list=history.rivals||[];
+    if(!list.length){p.appendChild(node('div','mp-empty','Play someone twice in a scored match and they show up here.'));return p;}
+    list.forEach(function(r){
+      var row=node('div','mp-friend'+(rivalFilter===r.key?' on':''));
+      var info=node('div','mp-friend-info');add(info,node('strong','',safe(r.name)),node('span','',r.played+' matches · last '+F.relative(r.lastAt)));
+      var score=node('div','mp-h2h');add(score,node('span','won',String(r.won)),node('span','sep','-'),node('span','lost',String(r.lost)));
+      add(row,avatar(r.name,true),info,score,actions(button(rivalFilter===r.key?'All':'Matches',function(){rivalFilter=rivalFilter===r.key?null:r.key;openMatch=null;render();},'compact quiet')));
+      p.appendChild(row);
+    });
+    return p;
+  }
   // Map Library: AimMod map ports here and on the Steam Workshop --------------
   var mapsOpen=false,maps=null,mapsBusy=false,mapsFilter='all';
-  function openMaps(){mapsOpen=true;picker=null;drafts.maps='';loadMaps();render();}
+  function openMaps(){mapsOpen=true;historyOpen=false;picker=null;drafts.maps='';loadMaps();render();}
   function loadMaps(){if(mapsBusy)return;mapsBusy=true;xhr('GET','/multiplayer?part=maps',null,function(ok,data){mapsBusy=false;if(!ok||!data)return;var changed=JSON.stringify(data)!==JSON.stringify(maps);maps=data;if(mapsOpen&&changed&&!focused)render();});}
   function shiftText(p){return p.shift==='walk'?'Shift walks':p.shift==='sprint'?'Shift sprints':'No Shift ability';}
   function portState(p){

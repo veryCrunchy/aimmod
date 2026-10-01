@@ -625,6 +625,23 @@ static class MultiplayerChecks
         Check(Picks().GetProperty("favourites").GetArrayLength() == 1, "Favourites survive a restart");
         Check(service.Act("favourite", J(new { scenario = port, on = false })).Ok && Picks().GetProperty("favourites").GetArrayLength() == 0, "Favourites can be removed");
         service.Dispose();
+        // Rivals: head-to-head over saved matches, by key, with the newest name.
+        RecentPlayer P(string name, int place, bool self, string key) => new(name, place, 100 - place, 0, 0, self, key);
+        var saved = new[]
+        {
+            new RecentMatch("m3", 3000, LobbyModes.Race, "Synthetic A", 1, 2, "Synthetic One", true, false, [P("Synthetic One", 1, true, "me0000000000"), P("Rival Renamed", 2, false, "rival0000000")]),
+            new RecentMatch("m2", 2000, LobbyModes.Race, "Synthetic A", 2, 2, "Synthetic Rival", false, false, [P("Synthetic Rival", 1, false, "rival0000000"), P("Synthetic One", 2, true, "me0000000000")]),
+            new RecentMatch("m1", 1000, LobbyModes.Duel, "Synthetic A", 1, 2, "Synthetic One", true, false, [P("Synthetic One", 1, true, "me0000000000"), P("Synthetic Rival", 2, false, "rival0000000")]),
+            new RecentMatch("m0", 900, LobbyModes.Practice, "Synthetic A", null, 2, null, false, false, [P("Synthetic One", 1, true, "me0000000000"), P("Synthetic Rival", 2, false, "rival0000000")]),
+            new RecentMatch("mx", 800, LobbyModes.Race, "Synthetic A", 1, 2, "Synthetic One", true, false, [P("Synthetic One", 1, true, "me0000000000"), P("Once Only", 2, false, "once00000000")]),
+        };
+        File.WriteAllText(Path.Combine(output, "multiplayer-matches.json"), JsonSerializer.Serialize(saved, Protocol.Json));
+        service = Make();
+        var rivals = JsonSerializer.SerializeToElement(service.HistoryView(), Protocol.Json).GetProperty("rivals");
+        Check(rivals.GetArrayLength() == 1 && rivals[0].GetProperty("name").GetString() == "Rival Renamed" && rivals[0].GetProperty("played").GetInt32() == 3 && rivals[0].GetProperty("won").GetInt32() == 2 && rivals[0].GetProperty("lost").GetInt32() == 1,
+            "Rivals count scored matches only, keep the newest name and need two meetings");
+        Check(JsonSerializer.SerializeToElement(service.View(), Protocol.Json).GetProperty("recent").GetArrayLength() == 5, "Older history files still load");
+        service.Dispose();
     }
 
     static void Generator(string root)
@@ -861,6 +878,10 @@ static class MultiplayerChecks
         var match = View().GetProperty("lobby").GetProperty("match");
         Check(match.GetProperty("phase").GetString() == MatchPhases.Final && match.GetProperty("standings").GetArrayLength() == 3, "The simulated race reaches its final results");
         Check(View().GetProperty("recent").GetArrayLength() == 1 && File.Exists(Path.Combine(output, "multiplayer-matches.json")), "Finished matches are kept locally, apart from KovaaK's leaderboards");
+        var history = JsonSerializer.SerializeToElement(service.HistoryView(), Protocol.Json);
+        var kept = history.GetProperty("matches")[0];
+        Check(kept.GetProperty("standings").EnumerateArray().All(p => p.GetProperty("key").GetString()!.Length == 12) && !history.ToString().Contains(service.SelfId, StringComparison.Ordinal) && kept.GetProperty("rounds").GetInt32() == 1,
+            "History keeps opponents by a hashed key, never by their id");
         // Setups: save one, and the next lobby starts from the last setup.
         Check(service.Act("preset-save", J(new { name = "Synthetic setup" })).Ok && View().GetProperty("presets").EnumerateArray().Any(p => p.GetString() == "Synthetic setup"), "The host saves a setup");
         Check(service.Act("preset-load", J(new { name = "Synthetic setup" })).Ok && !service.Act("preset-load", J(new { name = "Nope" })).Ok, "Saved setups load; missing ones are refused");
