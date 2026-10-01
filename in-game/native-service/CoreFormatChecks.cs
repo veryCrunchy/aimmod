@@ -125,6 +125,31 @@ static class CoreFormatChecks
             Check(ReplayImport.Import(Path.Combine(root, "import2"), damagedReplay).Error == "invalid-replay" && ReplayImport.Import(importRoot, "{\"kind\":\"header\"}"u8.ToArray()).Error == "unsupported-format",
                 "damaged or format 1 transfers rejected");
 
+            // Import from Downloads or Documents/AimMod/Replays: listed bare names only.
+            var inboxRoot = Path.Combine(root, "inbox-output");
+            var downloads = Path.Combine(root, "inbox-downloads"); var exportsDir = Path.Combine(root, "inbox-exports");
+            Directory.CreateDirectory(downloads); Directory.CreateDirectory(exportsDir);
+            File.WriteAllBytes(Path.Combine(downloads, "from a friend.amreplay"), Convert.FromBase64String(Compact));
+            File.WriteAllText(Path.Combine(downloads, "old.amreplay"), "{\"kind\":\"header\",\"version\":1,\"id\":\"old\"}\n");
+            File.WriteAllText(Path.Combine(downloads, "notes.txt"), "not a replay");
+            File.WriteAllText(Path.Combine(root, "outside.amreplay"), "outside replay bytes here");
+            var inbox = new ReplayInbox(inboxRoot, new ReplayCatalog(inboxRoot), downloads, exportsDir);
+            var listed = inbox.List();
+            Check(listed.Count == 2 && listed.All(e => e.Source == ReplayInbox.Downloads) && listed.Single(e => e.Supported).Scenario == "Synthetic target test"
+                && listed.Single(e => e.Supported).Id == "1790000000-42-2" && !listed.Single(e => e.Supported).InLibrary && !listed.Single(e => e.Name == "old.amreplay").Supported, "inbox lists replays only, with their scenario");
+            var drive = Path.GetPathRoot(root) + "outside.amreplay";
+            Check(inbox.Import("downloads", "../outside.amreplay").Error == "invalid-name" && inbox.Import("downloads", "..\\outside.amreplay").Error == "invalid-name"
+                && inbox.Import("downloads", drive).Error == "invalid-name" && inbox.Import("anywhere", "from a friend.amreplay").Error == "unknown-source"
+                && inbox.Import("downloads", "notes.txt").Error == "invalid-name" && inbox.Import("downloads", "gone.amreplay").Error == "missing", "inbox accepts only bare listed names");
+            Check(inbox.Import("downloads", "old.amreplay").Error == "unsupported-format", "inbox rejects format 1 files");
+            var fromInbox = inbox.Import("downloads", "from a friend.amreplay");
+            Check(fromInbox.Id == "1790000000-42-2" && new ReplayCatalog(inboxRoot).Resolve("1790000000-42-2") is not null && inbox.List().Single(e => e.Supported).InLibrary, "inbox import adds the replay to the library");
+            Check(File.Exists(Path.Combine(downloads, "from a friend.amreplay")), "inbox import leaves the source file in place");
+            var linked = new ReplayCatalog(inboxRoot);
+            Check(WorkspaceHost.ReplayFor(linked, "native:1790000000-42-2") == "1790000000-42-2" && WorkspaceHost.ReplayFor(linked, "native:1790000000-42-9") is null
+                && WorkspaceHost.ReplayFor(linked, "hub:1790000000-42-2") is null && WorkspaceHost.ReplayFor(linked, "native:../completed") is null && WorkspaceHost.ReplayFor(linked, "native:") is null,
+                "run analysis links a completed run to its saved replay only");
+
             // Run vs run: the comparison replay's camera on the same timeline.
             var versus = new NativeReplayPlayback(root, () => true, () => 6);
             versus.Load(compact, compact);

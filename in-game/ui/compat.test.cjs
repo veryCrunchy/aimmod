@@ -127,3 +127,11 @@ test('count axes use whole-number ticks only',()=>{
 test('pages never send the capability path as a referrer',()=>{
   for(const file of ['index.html','overlay.html'])assert.match(fs.readFileSync(path.join(__dirname,file),'utf8'),/<meta name="referrer" content="no-referrer">/,file);
 });
+test('workspace problems use the warning notice and the account needs confirming before unlink',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'index.html'),'utf8');
+  assert.match(html,/\.notice\.warn\{/,'warning notice style exists');
+  assert.match(html,/el\('notice'\)\.className='notice warn'/,'the offline notice uses the warning style');
+  const unlinks=html.match(/command\('unlink'\)/g)||[];assert.equal(unlinks.length,1,'one unlink command');
+  assert.match(html,/button\('Unlink',function\(\)\{confirmUnlink=false;clearTimeout\(confirmTimer\);command\('unlink'\)/,'unlink only runs from the confirmation');
+  assert.match(html,/id="account-shortcut" type="button" style="display:none"/,'the account button waits for data');
+});

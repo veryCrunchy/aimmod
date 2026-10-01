@@ -35,3 +35,17 @@ test('failure without a history preview offers retry',()=>{
   const s=setup();let calls=0;s.api.open(s.root,'a',(u,m,b,done)=>{calls++;done(false,'')},null);
   s.all().find(e=>e.tag==='button'&&e.textContent==='Try again').onclick();assert.equal(calls,2);
 });
+test('run analysis links to its replay and to the scenario statistics',()=>{
+  const plain=setup();plain.api.open(plain.root,'a',(u,m,b,done)=>done(true,JSON.stringify(Object.assign(fixture(),{ReplayId:'r1'}))));
+  assert.ok(!plain.all().some(e=>e.textContent==='Watch replay'),'no workspace, no links');
+  const calls=[];
+  function element(tag){let text='';return{tag,children:[],style:{},offsetWidth:600,appendChild(e){this.children.push(e);return e},setAttribute(){},getContext(){return new Proxy({},{get(){return()=>{}},set(){return true}})},get textContent(){return text},set textContent(v){text=String(v);this.children=[]}}}
+  const c=vm.createContext({window:{AimModWorkspace:{openReplay:id=>calls.push(['replay',id]),openScenario:n=>calls.push(['scenario',n])}},document:{createElement:element},setTimeout:fn=>fn()});
+  require('./test-format.cjs').loadFormat(c);vm.runInContext(fs.readFileSync(path.join(__dirname,'run-details.js'),'utf8'),c);
+  const root=element('div'),all=(e=root)=>[e,...e.children.flatMap(all)];
+  c.window.AimModRunDetails.open(root,'a',(u,m,b,done)=>done(true,JSON.stringify(Object.assign(fixture(),{ReplayId:'r1'}))));
+  all().find(e=>e.tag==='button'&&e.textContent==='Watch replay').onclick();all().find(e=>e.tag==='button'&&e.textContent==='Scenario statistics').onclick();
+  assert.deepEqual(calls,[['replay','r1'],['scenario','<script>synthetic</script>']]);
+  c.window.AimModRunDetails.open(root,'b',(u,m,b,done)=>done(true,JSON.stringify(fixture())));
+  assert.ok(!all().some(e=>e.textContent==='Watch replay'));assert.ok(all().some(e=>e.textContent==='Scenario statistics'));
+});

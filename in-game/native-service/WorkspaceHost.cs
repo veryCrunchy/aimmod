@@ -137,6 +137,7 @@ sealed class WorkspaceHost : IAsyncDisposable
         var replays = new ReplayCatalog(output);
         replayCatalog = replays;
         var library = new ReplayLibrary(replays, output);
+        var inbox = new ReplayInbox(output, replays);
         app.MapGet(prefix + "/ui", () => Results.Content(html, "text/html", Encoding.UTF8));
         app.MapGet(prefix + "/settings.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.SettingsScript")!, "application/javascript"));
         app.MapGet(prefix + "/coaching.js", () => Results.Stream(typeof(WorkspaceHost).Assembly.GetManifestResourceStream("AimMod.CoachingScript")!, "application/javascript"));
@@ -166,6 +167,8 @@ sealed class WorkspaceHost : IAsyncDisposable
             if (historyPath is null) return Results.NotFound();
             try {
                 var inspection = RunInspection.Read(historyPath, id, shotPage ?? 0);
+                // Completed runs and their replays share an id: native:<replayId> and replays/<replayId>.amreplay.
+                if (inspection.Run is not null) inspection = inspection with { ReplayId = ReplayFor(replays, inspection.Run.Id) };
                 return inspection.Run is null ? Results.NotFound() : Results.Content(System.Text.Json.JsonSerializer.Serialize(inspection), "application/json", Encoding.UTF8);
             } catch (IOException) { return Results.StatusCode(503); }
         });
@@ -202,6 +205,22 @@ sealed class WorkspaceHost : IAsyncDisposable
             await context.Request.Body.CopyToAsync(body, context.RequestAborted);
             var result = ReplayImport.Import(outputFolder, body.ToArray());
             return result.Id is null ? Results.Json(new { error = result.Error }, statusCode: 422) : Results.Json(new { id = result.Id, scenario = result.Scenario });
+        });
+        // Gameface has no file picker or file drop, so the Replays page offers the
+        // .amreplay files in Downloads and Documents\AimMod\Replays instead.
+        app.MapGet(prefix + "/replays/importable", () => {
+            try { return Results.Json(inbox.List()); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return Results.StatusCode(503); }
+        });
+        app.MapPost(prefix + "/replays/import-file", async (HttpContext context) => {
+            if (context.Request.Headers["X-AimMod-UI"] != "1" || context.Request.ContentLength is null or > 1024) return Results.StatusCode(403);
+            if (!context.Request.HasJsonContentType()) return Results.StatusCode(415);
+            try {
+                var pick = await context.Request.ReadFromJsonAsync<ImportPick>(context.RequestAborted);
+                var result = inbox.Import(pick?.Source, pick?.Name);
+                return result.Id is null ? Results.Json(new { error = result.Error }, statusCode: result.Error is "unknown-source" or "invalid-name" ? 400 : result.Error == "missing" ? 404 : 422) : Results.Json(new { id = result.Id, scenario = result.Scenario });
+            } catch (Exception ex) when (ex is System.Text.Json.JsonException or BadHttpRequestException) { return Results.BadRequest(); }
+              catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return Results.StatusCode(503); }
         });
         // Game control (multiplayer lobby, replay scenario load). AimModCore
         // validates again and refuses while a challenge runs.
@@ -368,10 +387,13 @@ sealed class WorkspaceHost : IAsyncDisposable
         if (overlayUrl is not null) AtomicFile.DeleteIfContent(Path.Combine(outputFolder, "live-overlay-url.txt"), overlayUrl);
     }
     // An HttpClient timeout surfaces as a cancellation that the caller did not request.
+    internal static string? ReplayFor(ReplayCatalog catalog, string runId) =>
+        runId.StartsWith("native:", StringComparison.Ordinal) && runId.Length > 7 && catalog.Resolve(runId[7..]) is not null ? runId[7..] : null;
     static bool HubUnavailable(Exception ex, CancellationToken token) => ex is IOException or HttpRequestException or System.Text.Json.JsonException
         || ex is OperationCanceledException && !token.IsCancellationRequested;
     sealed record PlaybackCommand(string? Action, string? Id, double? Value, double[]? Area, string? CompareId = null, string? Scenario = null, string? MapName = null, double? MapScale = null, string? Label = null, string? Stream = null);
     sealed record LibraryCommand(string? Action, string? Id, bool? Favorite);
+    sealed record ImportPick(string? Source, string? Name);
 }
 
 // Lua replaces this acknowledgement once a second. A missing file or sharing

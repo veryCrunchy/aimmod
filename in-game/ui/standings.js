@@ -4,20 +4,20 @@
 (function(root){
   'use strict';
   function node(tag,css,text){var el=root.document.createElement(tag);if(css)el.className=css;if(text!==undefined&&text!==null)el.textContent=String(text);return el;}
-  function num(v,d){if(typeof v!=='number'||!isFinite(v))return '-';var f=Math.pow(10,d||0);var r=Math.round(v*f)/f;var s=r.toFixed(d||0).split('.');s[0]=s[0].replace(/\B(?=(\d{3})+(?!\d))/g,',');return s.join('.');}
+  function num(v,d){if(typeof v!=='number'||!isFinite(v))return '—';var f=Math.pow(10,d||0);var r=Math.round(v*f)/f;var s=r.toFixed(d||0).split('.');s[0]=s[0].replace(/\B(?=(\d{3})+(?!\d))/g,',');return s.join('.');}
   function signed(v){return typeof v==='number'&&isFinite(v)?(v>0?'+':'')+num(v,0):'';}
   function clock(sec){if(typeof sec!=='number')return '';var m=Math.floor(sec/60),s=sec%60;return m+':'+(s<10?'0':'')+s;}
   function columns(b){
     var hp=b.mode==='vampiric'||b.kind==='team'&&b.rows.some(function(r){return typeof r.health==='number';});
     if(b.kind==='duel')return [['Wins',function(r){return num(r.wins);}],['Score',function(r){return num(r.score);}]];
-    if(b.kind==='tracking')return [['Wins',function(r){return num(r.wins);}],['On target',function(r){return typeof r.percent==='number'?num(r.percent,1)+'%':'-';}]];
+    if(b.kind==='tracking')return [['Wins',function(r){return num(r.wins);}],['On target',function(r){return typeof r.percent==='number'?num(r.percent,1)+'%':'—';}]];
     if(b.kind==='combat'||b.kind==='team'){var c=[['K',function(r){return num(r.frags);}],['D',function(r){return num(r.deaths);}],['K/D',function(r){return num(r.kd,2);}]];if(hp)c.push(['HP',function(r){return num(r.health);}]);return c;}
     return [['Score',function(r){return num(r.score);}],['Gap',function(r){return signed(r.gap);}]];
   }
   function header(b){
     var h=node('div','sb-head');h.appendChild(node('span','sb-title',b.title));
     var parts=[];if(b.rounds&&b.rounds>1)parts.push('Round '+b.round+' of '+b.rounds);else if(b.firstTo)parts.push('First to '+b.firstTo);
-    if(b.fragLimit)parts.push('To '+b.fragLimit);if(b.phase==='countdown')parts.push('Starting');if(b.phase==='round')parts.push('Round over');if(b.phase==='final')parts.push('Final');
+    if(b.fragLimit&&!b.firstTo)parts.push('First to '+b.fragLimit+' frags');if(b.phase==='countdown')parts.push('Starting');if(b.phase==='round')parts.push('Round over');if(b.phase==='final')parts.push('Final');
     h.appendChild(node('span','sb-sub',parts.join(' · ')));if(typeof b.left==='number')h.appendChild(node('span','sb-time',clock(b.left)));
     return h;
   }

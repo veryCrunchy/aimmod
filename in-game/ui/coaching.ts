@@ -65,7 +65,7 @@ function rankScenarios(input:any[],names?:Record<string,string>){
   const usual=mean(accuracy),now=mean(recentAccuracy);let issue:string,detail:string,kind:string;
   if(accuracy.length>=8&&recentAccuracy.length>=3&&usual-now>=3){kind='accuracy';issue='Accuracy is down';detail=fmt(now)+'% in your last 5 runs vs '+fmt(usual)+'% usually';}
   else if(last.length>=8&&spread>=0.08){kind='consistency';issue='Scores swing a lot';detail='Your last '+last.length+' runs vary by ±'+fmt(spread*100)+'% around '+fmt(mean(last));}
-  else if(gap>=0.05){kind='gap';issue='Below your best';detail='Last 5 average '+fmt(recentAvg)+' is '+fmt(gap*100)+'% under your best '+fmt(best);}
+  else if(gap>=0.05){kind='gap';issue='Below your best';detail='Last 5 average '+fmt(recentAvg)+' · best '+fmt(best);}
   else {kind='close';issue='Close to your best';detail='Last 5 average is within '+Math.max(1,Math.ceil(gap*100))+'% of your best '+fmt(best);}
   rows.push({key,name:names&&names[key]||key,runs:runs.length,best,recentAvg,gap,spread,kind,issue,detail,recent:last,lastPlayed:runs[runs.length-1].timestampMs});});
  rows.sort((a,b)=>b.gap-a.gap||b.runs-a.runs);return rows;

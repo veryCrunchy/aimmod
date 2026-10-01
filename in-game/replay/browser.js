@@ -1,7 +1,7 @@
 /* Replay library for the owned Gameface workspace. No gameplay commands. */
 (function (root) {
   'use strict';
-  var container = null, request = null, generation = 0, rows = [], active = false, nativeOpen=false, favoritesOnly=false, clipsOnly=false, query='', message='', busy=false, total=0, pendingStart=null;
+  var container = null, request = null, generation = 0, rows = [], active = false, nativeOpen=false, favoritesOnly=false, clipsOnly=false, query='', message='', busy=false, total=0, pendingStart=null, openAfterLoad=null;
   function node(tag, css, text) {
     var el = root.document.createElement(tag);
     if (css) el.className = css;
@@ -26,14 +26,14 @@
     xhr.open(body ? 'POST' : 'GET', prefix() + '/' + path, true); xhr.timeout = 20000;
     if(body){xhr.setRequestHeader('X-AimMod-UI','1');xhr.setRequestHeader('Content-Type','application/json');}
     var done = false;
-    function finish(ok, value) {
+    function finish(ok, value, detail) {
       if (done) return; done = true;
       if (ticket !== generation || !active) return;
-      request = null; callback(ok, value);
+      request = null; callback(ok, value, detail);
     }
     xhr.onreadystatechange = function () {
       if (xhr.readyState !== 4) return;
-      if (xhr.status !== 200) { finish(false, xhr.status); return; }
+      if (xhr.status !== 200) { var detail = null; try { detail = JSON.parse(xhr.responseText); } catch (e) {} finish(false, xhr.status, detail); return; }
       try { finish(true, JSON.parse(xhr.responseText)); } catch (e) { finish(false, 0); }
     };
     xhr.onerror = xhr.ontimeout = function () { finish(false, 0); };
@@ -69,9 +69,10 @@
     var waitingRow=pendingStart&&rows.filter(function(r){return r.id===pendingStart.pending;})[0];
     if(waitingRow){var banner=node('div','replay-waiting');var text=node('div','replay-waiting-text');text.appendChild(node('strong','','Waiting to start: '+(waitingRow.scenario||'replay')));text.appendChild(node('span','',pendingStart.message||'Load the scenario, then open the pause menu (Esc).'));banner.appendChild(text);banner.appendChild(button('Show',function(){pendingStart=null;open(waitingRow);},true));container.appendChild(banner);}
     if (!rows.length) {
-      toolbar.appendChild(button('Refresh', refresh));
+      toolbar.appendChild(button('Import replays', importer)); toolbar.appendChild(button('Refresh', refresh));
       var empty = node('div', 'empty'); empty.appendChild(node('h3', '', 'No replays saved yet'));
-      empty.appendChild(node('p', '', 'Play a run with replay recording on and it will appear here. Older score history may not include a replay.'));
+      empty.appendChild(node('p', '', 'Play a run with replay recording on and it will appear here. Older score history may not include a replay. Someone sent you a replay? Save it to Downloads, then import it.'));
+      var emptyActions = node('div', 'actions center'); emptyActions.appendChild(button('Import replays', importer)); empty.appendChild(emptyActions);
       container.appendChild(empty); return;
     }
     var search=node('input','replay-search');search.type='search';search.value=query;search.setAttribute&&search.setAttribute('aria-label','Find a replay by scenario');
@@ -80,7 +81,7 @@
     var scope=node('div','segmented replay-scope'),everything=button('All replays',function(){setFavorites(false);},!favoritesOnly&&!clipsOnly),favorite=button('Favorites',function(){setFavorites(true);},favoritesOnly),clipScope=button('Clips',function(){clipsOnly=true;favoritesOnly=false;mark();draw();},clipsOnly);
     function mark(){everything.className='button'+(favoritesOnly||clipsOnly?'':' primary');favorite.className='button'+(favoritesOnly?' primary':'');clipScope.className='button'+(clipsOnly?' primary':'');everything.setAttribute&&everything.setAttribute('aria-pressed',String(!favoritesOnly&&!clipsOnly));favorite.setAttribute&&favorite.setAttribute('aria-pressed',String(favoritesOnly));clipScope.setAttribute&&clipScope.setAttribute('aria-pressed',String(clipsOnly));}
     function setFavorites(value){favoritesOnly=value;clipsOnly=false;mark();draw();}
-    scope.appendChild(everything);scope.appendChild(favorite);scope.appendChild(clipScope);toolbar.appendChild(scope);toolbar.appendChild(button('Refresh', refresh));
+    scope.appendChild(everything);scope.appendChild(favorite);scope.appendChild(clipScope);toolbar.appendChild(scope);toolbar.appendChild(button('Import replays', importer));toolbar.appendChild(button('Refresh', refresh));
     var panel = node('div', 'replay-cards');container.appendChild(panel);
     // Search redraws only the cards, so the field keeps focus while typing.
     search.oninput=function(){if(searchTimer)root.clearTimeout(searchTimer);searchTimer=root.setTimeout(function(){searchTimer=null;if(!busy&&query!==search.value){query=search.value;draw();}},150);};
@@ -134,6 +135,43 @@
     var nativeTarget=node('div','native-replay');container.appendChild(nativeTarget);
     nativeOpen=true;root.AimModNativeReplayBrowser.enter(nativeTarget,row);
   }
+  // Gameface has no file picker or file drop, so imports come from two known folders.
+  var IMPORT_ERRORS = { 'replay-exists': 'A different replay with the same id is already in your library.', 'invalid-replay': 'This file is not a complete AimMod replay.',
+    'unsupported-format': 'This replay was saved by an older AimMod and can’t be imported.', 'missing': 'That file is no longer there. Check the folder again.' };
+  var SOURCES = { downloads: 'Downloads', exports: 'Documents / AimMod / Replays' };
+  function importer() {
+    if (busy || !active) return;
+    status('Looking for replays', 'Checking Downloads and Documents / AimMod / Replays…');
+    get('replays/importable', function (ok, files) {
+      if (!ok || !Array.isArray(files)) { status('Could not look for replays', 'Please try again in a moment.', importer); return; }
+      clear(); container.className = 'replay-library';
+      var bar = node('div', 'replay-toolbar'); bar.appendChild(node('h2', '', 'Import a replay')); bar.appendChild(button('Check again', importer)); bar.appendChild(button('Back to replays', refresh)); container.appendChild(bar);
+      container.appendChild(node('p', 'replay-import-help', 'AimMod looks for .amreplay files in your Downloads folder and in Documents / AimMod / Replays. Save a replay someone sent you to one of them, then import it here.'));
+      if (message) { container.appendChild(node('p', 'notice replay-message' + (/^Imported/.test(message) ? '' : ' warn'), message)); message = ''; }
+      if (!files.length) { var none = node('div', 'empty'); none.appendChild(node('h3', '', 'No replay files found')); none.appendChild(node('p', '', 'There are no .amreplay files in Downloads or Documents / AimMod / Replays.')); container.appendChild(none); return; }
+      var listBox = node('div', 'panel replay-import-list'); container.appendChild(listBox);
+      files.slice(0, 200).forEach(function (f) {
+        if (!f || typeof f.name !== 'string') return;
+        var line = node('div', 'replay-import-row'), text = node('div', 'replay-import-text');
+        text.appendChild(node('strong', '', f.scenario || f.name));
+        text.appendChild(node('span', '', (f.scenario ? f.name + ' · ' : '') + (SOURCES[f.source] || 'Folder') + (date(f.recordedAt) ? ' · ' + date(f.recordedAt) : '')));
+        line.appendChild(text);
+        if (!f.supported) line.appendChild(node('span', 'replay-import-state', 'Not a supported replay'));
+        else if (f.inLibrary) line.appendChild(node('span', 'replay-import-state', 'In your library'));
+        else line.appendChild(button('Import', function () { take(f); }, true));
+        listBox.appendChild(line);
+      });
+    });
+  }
+  function take(f) {
+    if (busy || !active) return;
+    busy = true; disableControls(container);
+    get('replays/import-file', function (ok, value, detail) {
+      busy = false;
+      if (ok && value && value.id) { message = 'Imported ' + (value.scenario || 'the replay') + '. It is in your library now.'; refresh(); return; }
+      message = IMPORT_ERRORS[detail && detail.error] || 'Could not import this replay. Please try again.'; importer();
+    }, { source: f.source, name: f.name });
+  }
   function refresh() {
     if (busy || !active) return;
     status('Loading replays', '');
@@ -141,6 +179,8 @@
       if (!ok || !Array.isArray(data)) { status('Could not load replays', 'Please try again in a moment.', refresh); return; }
       var valid = data.filter(function (row) { return row && typeof row.id === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(row.id); });
       total = valid.length; rows = valid.slice(0, LIMIT);
+      // Run analysis can ask for one replay; open it once the library has loaded.
+      if (openAfterLoad) { var wanted = openAfterLoad; openAfterLoad = null; var match = valid.filter(function (r) { return r.id === wanted; })[0]; if (match) { open(match); return; } message = 'That replay is no longer in your library.'; }
       list();
       // A start may still be waiting from before the workspace was hidden.
       var native = root.AimModNativeReplayBrowser, ticket = generation;
@@ -154,6 +194,8 @@
       busy=false; active = true; refresh();
     },
     leave: function () { active = false; busy=false; cancel(); if(nativeOpen&&root.AimModNativeReplayBrowser){root.AimModNativeReplayBrowser.leave();nativeOpen=false;} },
-    refresh: refresh
+    refresh: refresh,
+    // Opens one replay the next time the library loads (from Run analysis).
+    openWhenLoaded: function (id) { openAfterLoad = typeof id === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(id) ? id : null; }
   };
 })(window);

@@ -34,7 +34,7 @@
     var card=node('div','toast');
     // The eyebrow says what kind of notice this is (the service can name it; otherwise by kind).
     var brands={invite:'AIMMOD · INVITE',ready:'AIMMOD · LOBBY',countdown:'AIMMOD · MATCH',friend:'AIMMOD · FRIENDS'};
-    var top=node('div','brand',n.eyebrow?String(n.eyebrow).toUpperCase():brands[n.kind]||'AIMMOD · MULTIPLAYER');card.appendChild(top);
+    var top=node('div','brand',n.eyebrow?String(n.eyebrow).toUpperCase():(/^(t(ci|m[a-z])|fr|dev)-/.test(String(n.id||''))?brand(n):brands[n.kind]||brand(n)));card.appendChild(top);
     var row=node('div','row');
     if(typeof n.countdown==='number')row.appendChild(node('div','count',String(n.countdown)));
     var text=node('div','text');text.appendChild(node('div','title',n.title||''));text.appendChild(node('div','body',n.body||''));row.appendChild(text);
@@ -44,6 +44,9 @@
     if(n.actions&&n.actions.length){var row2=node('div','actions');n.actions.forEach(function(a,i){row2.appendChild(button(a.label,i===0?'primary':'',function(){answer(a.action,a.id);}));});card.appendChild(row2);}
     box.appendChild(card);
   }
+  // The small label above the title says where the notice comes from.
+  function brand(n){var id=String(n.id||'');return 'AIMMOD · '+(/^t(ci|m[a-z])-/.test(id)?'TOURNAMENT':/^fr-/.test(id)?'FRIENDS':/^dev-/.test(id)?'DEVELOPER TEST':'MULTIPLAYER');}
+  function feedLine(css,text){var line=node('div','feed'+(css?' '+css:''));line.appendChild(node('span','feed-text',text));return line;}
   // Tracking duel strip at the top edge: your bar and theirs (time on target), round wins and
   // time left. Both players track and dodge at once. Never near the crosshair.
   function pct(v){return typeof v==='number'?v.toFixed(1)+' %':'—';}
@@ -55,7 +58,7 @@
     var them=node('div','duel-row');them.appendChild(node('div','duel-who',d.opponent));them.appendChild(bar('them',d.themShare));them.appendChild(node('div','duel-pct',pct(d.them)));mid.appendChild(them);
     strip.appendChild(mid);
     var side=node('div','duel-side');
-    side.appendChild(node('div','duel-time',typeof d.left==='number'?d.left+' s':'R'+d.round+'/'+d.rounds));
+    side.appendChild(node('div','duel-time',typeof d.left==='number'?d.left+' s':'Round '+d.round+'/'+d.rounds));
     side.appendChild(node('div','duel-sub',d.wins+' – '+d.theirWins+(d.requireFire?' · fire':'')+(d.disputed?' · disputed':'')));
     strip.appendChild(side);
     return strip;
@@ -69,16 +72,17 @@
     if(c.alive){
       hp.appendChild(node('div','hp-num',String(Math.max(0,Math.round(c.health)))));
       var bar=node('div','hp-bar');var fill=node('div','hp-fill'+(c.health<30?' low':''));fill.style.width=Math.max(0,Math.min(100,c.health*100/(c.max||100)))+'%';bar.appendChild(fill);hp.appendChild(bar);
-    }else hp.appendChild(node('div','hp-num down',typeof c.respawnIn==='number'?'Back in '+c.respawnIn:'Down'));
+    }else hp.appendChild(node('div','hp-num down',typeof c.respawnIn==='number'?'Back in '+c.respawnIn+' s':'Down'));
     strip.appendChild(hp);
     var mid=node('div','duel-mid');
     mid.appendChild(node('div','duel-line',c.frags+' / '+c.fragLimit+' frags'+(c.protected?' · protected':'')));
-    var other=typeof c.team==='number'?'Team '+c.team+' '+c.teamFrags+' · '+c.otherFrags+' them':(c.leader?'Best: '+c.leader+' '+c.leaderFrags:'');
+    var other=typeof c.team==='number'?'Your team '+c.teamFrags+' · Other team '+c.otherFrags:(c.leader?'Best: '+c.leader+' '+c.leaderFrags:'');
     if(other)mid.appendChild(node('div','duel-sub',other));
     strip.appendChild(mid);
     strip.appendChild(node('div','duel-time',typeof c.left==='number'?Math.floor(c.left/60)+':'+(c.left%60<10?'0':'')+(c.left%60):''));
     wrap.appendChild(strip);
-    (c.feed||[]).forEach(function(f){var line=node('div','feed'+(f.you?' '+f.you:''),f.killer+' fragged '+f.victim+(f.head?' · headshot':''));wrap.appendChild(line);});
+    // Kill feed lines sit on a dark backing so they stay readable over bright maps.
+    (c.feed||[]).forEach(function(f){wrap.appendChild(feedLine(f.you,f.killer+' fragged '+(f.you==='victim'&&f.victim==='You'?'you':f.victim)+(f.head?' · headshot':'')));});
     return wrap;
   }
   // CS strip: health and armour (or down), money, score, round clock and phase, bomb state
@@ -102,8 +106,8 @@
     strip.appendChild(mid);
     strip.appendChild(node('div','duel-time',typeof c.bombIn==='number'?c.bombIn+' s':typeof c.left==='number'?Math.floor(c.left/60)+':'+(c.left%60<10?'0':'')+(c.left%60):''));
     wrap.appendChild(strip);
-    if(c.buy)c.buy.forEach(function(b){wrap.appendChild(node('div','feed'+(b.affordable?'':' victim'),b.key+'  '+b.label+'  $'+b.price));});
-    (c.keyClashes||[]).forEach(function(t){wrap.appendChild(node('div','feed victim',t));});
+    if(c.buy)c.buy.forEach(function(b){wrap.appendChild(feedLine(b.affordable?'':'victim',b.key+'  '+b.label+'  $'+b.price));});
+    (c.keyClashes||[]).forEach(function(t){wrap.appendChild(feedLine('victim',t));});
     return wrap;
   }
   function button(label,css,action){var b=node('button','button'+(css?' '+css:''),label);b.type='button';b.onclick=action;return b;}

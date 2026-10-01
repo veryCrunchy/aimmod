@@ -112,7 +112,7 @@
   function draw() {
     if (!root || !report || !report.Periods) return; root.textContent = '';
     var period = report.Periods.filter(function (p) { return p.Key === periodKey; })[0] || report.Periods[0];
-    if (!period) { var none = append(root, node('div', undefined, 'panel empty')); append(none, node('h3', 'No practice to show yet')); append(none, node('p', 'Complete a few runs and your trends will appear here.')); return; }
+    if (!period) { var none = append(root, node('div', undefined, 'panel empty')); append(none, node('h3', 'No practice to show yet')); append(none, node('p', 'Complete a few runs and your trends will appear here, or import the runs already in your KovaaK’s stats folder.')); if (global.AimModWorkspace && global.AimModWorkspace.openImport) append(append(none, node('div', undefined, 'actions center')), button('Import past runs', function () { global.AimModWorkspace.openImport(); })); return; }
     var selected = runFilter==='warmup'&&period.Warmup?period.Warmup:runFilter==='settled'&&period.Settled?period.Settled:period.Selected;
     var toolbar = append(root, node('div', undefined, 'toolbar stats-toolbar'));
     var heading = append(toolbar, node('div', undefined, 'stats-heading')); append(heading, node('h2', selected && selected.Name || 'Choose a scenario'));
@@ -128,7 +128,7 @@
     metric(stats, 'Best score', number(selected.Best), 'Best in this period');
     metric(stats, 'Average score', number(selected.Average, 0), period.Days ? changeNote(selected.ScoreChange) : number(selected.Runs, 0) + (selected.Runs === 1 ? ' run' : ' runs'), period.Days ? selected.ScoreChange : null);
     metric(stats, 'Consistency', F().percent(selected.VariationPercent), 'Run-to-run spread · lower is steadier');
-    metric(stats, 'Practice', F().hours(period.Hours), number(period.Runs, 0) + ' runs · ' + number(period.ActiveDays, 0) + ' active days', period.Days ? period.PracticeChange : null);
+    metric(stats, 'All practice', F().hours(period.Hours), 'Every scenario · ' + number(period.Runs, 0) + ' runs · ' + number(period.ActiveDays, 0) + ' active days', period.Days ? period.PracticeChange : null);
     var charts = append(root, node('div', undefined, 'stats-columns'));
     var trend = append(charts, panel(chartMetric === 'Score' ? 'Score trend' : ((availableMetrics.filter(function (m) { return m[0] === chartMetric; })[0] || [0, chartMetric])[1]) + ' trend'));
     var chartButtons = append(trend, node('div', undefined, 'stats-chart-controls'));
@@ -172,7 +172,7 @@
     var scenarios = append(details, panel('Scenario comparison')); empty(scenarios, 'Change compares each scenario’s average with its own previous period.');
     var search = node('input', undefined, 'stats-search'); search.type = 'search'; search.setAttribute('aria-label', 'Find a scenario'); search.value = scenarioQuery; append(scenarios, F().field(search, 'Find a scenario', 'stats-search-field'));
     var table = append(scenarios, node('div', undefined, 'stats-table')); table.setAttribute('role','table'); var row = append(table, node('div', undefined, 'stats-row stats-head')); row.setAttribute('role','row');
-    ['Scenario', 'Runs', 'Hours', 'Best', 'Average', 'Change', 'Accuracy'].forEach(function (v, i) { var cell=append(row,node('div',v,'stats-cell stats-col-'+i)); cell.setAttribute('role','columnheader'); });
+    ['Scenario', 'Runs', 'Time', 'Best', 'Average', 'Change', 'Accuracy'].forEach(function (v, i) { var cell=append(row,node('div',v,'stats-cell stats-col-'+i)); cell.setAttribute('role','columnheader'); });
     var body=append(table,node('div',undefined,'stats-table-body')); body.setAttribute('role','rowgroup');
     var footer=append(scenarios,node('div',undefined,'stats-table-footer'));
     // Bounded rendering keeps very large libraries responsive in Gameface.
@@ -180,7 +180,7 @@
       matches.slice(0, scenarioLimit).forEach(function (s) {
         var r=append(body,node('div',undefined,'stats-row'));r.setAttribute('role','row');var name=append(r,node('div',undefined,'stats-cell stats-col-0'));name.setAttribute('role','cell'); var open=append(name, button(s.Name, function () { if (selectScenario) selectScenario(s.Name); })); open.title='Show '+s.Name;
         var change = s.ScoreChange && typeof s.ScoreChange.ChangePercent === 'number' ? F().signed(s.ScoreChange.ChangePercent) + '%' : '—';
-        [number(s.Runs, 0), number(s.Hours), number(s.Best), number(s.Average), change, F().percent(s.Accuracy)].forEach(function (v, i) { var cell=append(r,node('div',v,'stats-cell stats-col-'+(i+1)+(i===4&&change!=='—'?(change.charAt(0)==='-'?' is-down':' is-up'):'')));cell.setAttribute('role','cell'); });
+        [number(s.Runs, 0), F().hours(s.Hours), number(s.Best), number(s.Average), change, F().percent(s.Accuracy)].forEach(function (v, i) { var cell=append(r,node('div',v,'stats-cell stats-col-'+(i+1)+(i===4&&change!=='—'?(change.charAt(0)==='-'?' is-down':' is-up'):'')));cell.setAttribute('role','cell'); });
       });
       if (!matches.length) empty(footer, (period.ScenarioTable || []).length ? 'No scenarios match “' + scenarioQuery + '”.' : 'No scenarios in this period.');
       else if (matches.length > scenarioLimit) { empty(footer, 'Showing ' + number(scenarioLimit, 0) + ' of ' + number(matches.length, 0) + ' scenarios.'); append(append(footer, node('div', undefined, 'actions')), button('Show more', function () { scenarioLimit += 200; rows(); })); }

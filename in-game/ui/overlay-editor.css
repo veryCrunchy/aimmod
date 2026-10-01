@@ -11,3 +11,6 @@
 .overlay-visibility{display:flex;align-items:center;margin:0 22px 12px 0}.overlay-visibility .switch-state{margin:0 0 0 10px;text-align:left;width:auto}
 .overlay-preview-sky{position:absolute;left:0;top:0;width:100%;background:#4a5761}.overlay-preview-floor{position:absolute;left:0;width:100%;background:#3a4438}.overlay-preview-card{padding:0 4px!important;overflow:hidden;background:#0b1110;border:1px solid #27e4a1;border-top:2px solid #27e4a1}.overlay-surface-row{margin:14px 0 4px}.overlay-inline-row .overlay-number{margin-bottom:12px}.overlay-saved-field .field{width:100%}
 .overlay-saved-layouts select,.overlay-saved-field input{height:38px}
+
+/* Each placement: name and Shown switch on one line, then its three fields. */
+.overlay-layout-head{display:flex;flex-direction:row;align-items:center;width:100%;margin-bottom:12px}.overlay-layout-head>h3{width:100px;flex-shrink:0;margin:0}.overlay-layout-head .overlay-visibility{margin:0}
